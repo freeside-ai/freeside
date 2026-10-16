@@ -15,7 +15,6 @@ import (
 	"github.com/freeside-ai/freeside/daemon/internal/domain"
 	"github.com/freeside-ai/freeside/daemon/internal/engine"
 	"github.com/freeside-ai/freeside/daemon/internal/operations"
-	"github.com/freeside-ai/freeside/daemon/internal/publish"
 	"github.com/freeside-ai/freeside/daemon/internal/signet"
 	"github.com/freeside-ai/freeside/daemon/internal/store"
 )
@@ -121,7 +120,7 @@ func runDoctorCommand(
 		health, err := files.NewCheckpointHealthSource(
 			blobs,
 			approvedRecipes,
-			backupPayloadExtractors(),
+			engine.BackupPayloadExtractors(),
 		)
 		if err != nil {
 			return err
@@ -175,28 +174,4 @@ func (f *digestSetFlag) Set(raw string) error {
 	}
 	(*f)[domain.Digest(raw)] = true
 	return nil
-}
-
-func backupPayloadExtractors() map[string]store.BackupPayloadDigestExtractor {
-	return map[string]store.BackupPayloadDigestExtractor{
-		engine.FakePublicationTaskKind:                 engine.FakePublicationBackupPayloadDigests,
-		engine.FakePublicationInvocationOwnerKind:      engine.FakePublicationInvocationOwnerBackupPayloadDigests,
-		signet.AgentInvocationRequestedKind:            signet.AgentInvocationBackupPayloadDigests,
-		signet.PublicationReevaluationRequestedKind:    signet.PublicationReevaluationBackupPayloadDigests,
-		signet.PublicationReevaluationCompletedKind:    signet.PublicationReevaluationCompletionBackupPayloadDigests,
-		engine.KindProductionInvocationRequested:       engine.ProductionInvocationBackupPayloadDigests,
-		engine.KindProductionPublicationRequested:      engine.ProductionPublicationBackupPayloadDigests,
-		engine.KindProductionClosureWait:               engine.ProductionClosureWaitBackupPayloadDigests,
-		engine.KindRemediationInvocationRequested:      engine.RemediationInvocationBackupPayloadDigests,
-		engine.KindOperatorFeedbackInvocationRequested: engine.OperatorFeedbackInvocationBackupPayloadDigests,
-		domain.PublicationSuccessorKind:                engine.PublicationSuccessorBackupPayloadDigests,
-		domain.PublicationContinuationRequestedKind:    engine.PublicationContinuationBackupPayloadDigests,
-		engine.KindSpecificationInvocationRequested:    engine.SpecificationInvocationBackupPayloadDigests,
-		engine.KindSpecificationDiscussionRequested:    engine.SpecificationDiscussionBackupPayloadDigests,
-		engine.KindSpecificationImplementationClaim:    engine.SpecificationImplementationClaimBackupPayloadDigests,
-		publish.ExternalReplyIntentKind:                publish.ExternalReplyBackupPayloadDigests,
-		publish.ExternalReplyOutcomeKind:               publish.ExternalReplyBackupPayloadDigests,
-		publish.IntentKindReservation:                  publish.ReservationBackupPayloadDigests,
-		publish.IntentKindPublication:                  publish.PublicationBackupPayloadDigests,
-	}
 }

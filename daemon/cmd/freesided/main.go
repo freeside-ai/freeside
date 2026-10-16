@@ -889,7 +889,7 @@ func run(parent context.Context, stop func(), cfg config) (_ *daemon, err error)
 	}
 	backupHealth, err := localBackupFiles.NewCheckpointHealthSource(
 		blobs, storeOptions.ApprovedRecipes,
-		backupPayloadExtractors())
+		engine.BackupPayloadExtractors())
 	if err != nil {
 		return nil, err
 	}

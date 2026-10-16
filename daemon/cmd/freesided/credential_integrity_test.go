@@ -15,6 +15,7 @@ import (
 
 	"github.com/freeside-ai/freeside/daemon/internal/contentaddr"
 	"github.com/freeside-ai/freeside/daemon/internal/domain"
+	"github.com/freeside-ai/freeside/daemon/internal/engine"
 	"github.com/freeside-ai/freeside/daemon/internal/operations"
 	"github.com/freeside-ai/freeside/daemon/internal/signet"
 	"github.com/freeside-ai/freeside/daemon/internal/store"
@@ -119,7 +120,7 @@ func TestDoctorCommandProbesStoredCredentialsWithoutLeakingThem(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	backupHealth, err := backupFiles.NewCheckpointHealthSource(blobs, nil, backupPayloadExtractors())
+	backupHealth, err := backupFiles.NewCheckpointHealthSource(blobs, nil, engine.BackupPayloadExtractors())
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -16,7 +16,6 @@ import (
 	"github.com/freeside-ai/freeside/daemon/internal/domain"
 	"github.com/freeside-ai/freeside/daemon/internal/engine"
 	"github.com/freeside-ai/freeside/daemon/internal/projectimage"
-	"github.com/freeside-ai/freeside/daemon/internal/publish"
 	"github.com/freeside-ai/freeside/daemon/internal/signet"
 	"github.com/freeside-ai/freeside/daemon/internal/store"
 )
@@ -371,7 +370,7 @@ func TestRealWorkItemCompletesProductionPipeline(t *testing.T) {
 		t.Fatalf("open blob store: %v", err)
 	}
 	health, err := backupFiles.NewCheckpointHealthSource(
-		blobs, opts.ApprovedRecipes, realRunBackupPayloadExtractors(),
+		blobs, opts.ApprovedRecipes, engine.BackupPayloadExtractors(),
 	)
 	if err != nil {
 		t.Fatalf("build checkpoint health source: %v", err)
@@ -650,41 +649,6 @@ func TestRealWorkItemCompletesProductionPipeline(t *testing.T) {
 
 	t.Logf("real production pipeline verified: PR #%d at head %s over base %s",
 		outcome.PRNumber, export.HeadSHA, export.ObservedBaseSHA)
-}
-
-func realRunBackupPayloadExtractors() map[string]store.BackupPayloadDigestExtractor {
-	return map[string]store.BackupPayloadDigestExtractor{
-		engine.FakePublicationTaskKind:                 engine.FakePublicationBackupPayloadDigests,
-		engine.FakePublicationInvocationOwnerKind:      engine.FakePublicationInvocationOwnerBackupPayloadDigests,
-		signet.AgentInvocationRequestedKind:            signet.AgentInvocationBackupPayloadDigests,
-		signet.PublicationReevaluationRequestedKind:    signet.PublicationReevaluationBackupPayloadDigests,
-		signet.PublicationReevaluationCompletedKind:    signet.PublicationReevaluationCompletionBackupPayloadDigests,
-		engine.KindProductionInvocationRequested:       engine.ProductionInvocationBackupPayloadDigests,
-		engine.KindProductionPublicationRequested:      engine.ProductionPublicationBackupPayloadDigests,
-		engine.KindRemediationInvocationRequested:      engine.RemediationInvocationBackupPayloadDigests,
-		engine.KindOperatorFeedbackInvocationRequested: engine.OperatorFeedbackInvocationBackupPayloadDigests,
-		domain.PublicationSuccessorKind:                engine.PublicationSuccessorBackupPayloadDigests,
-		domain.PublicationContinuationRequestedKind:    engine.PublicationContinuationBackupPayloadDigests,
-		engine.KindSpecificationInvocationRequested:    engine.SpecificationInvocationBackupPayloadDigests,
-		engine.KindSpecificationDiscussionRequested:    engine.SpecificationDiscussionBackupPayloadDigests,
-		engine.KindSpecificationImplementationClaim:    engine.SpecificationImplementationClaimBackupPayloadDigests,
-		publish.IntentKindReservation:                  publish.ReservationBackupPayloadDigests,
-		publish.IntentKindPublication:                  publish.PublicationBackupPayloadDigests,
-	}
-}
-
-func TestRealRunBackupPayloadExtractorsIncludeSpecificationMarkers(t *testing.T) {
-	t.Parallel()
-	extractors := realRunBackupPayloadExtractors()
-	for _, kind := range []string{
-		engine.KindSpecificationInvocationRequested,
-		engine.KindSpecificationImplementationClaim,
-		signet.PublicationReevaluationRequestedKind,
-	} {
-		if extractors[kind] == nil {
-			t.Errorf("backup payload extractor %q is not registered", kind)
-		}
-	}
 }
 
 func realRunSpecificationFailure(
