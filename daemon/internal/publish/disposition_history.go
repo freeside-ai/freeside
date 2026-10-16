@@ -373,8 +373,14 @@ func currentDispositionLineage(
 }
 
 // newDispositionHistory validates and canonicalizes one publication snapshot.
-// It fails closed unless the latest review is clean and bound to the published
-// head and every finding-bearing round has exactly one final disposition.
+// It fails closed unless the latest review is bound to the published head and
+// the approved instructions and every finding-bearing round has exactly one
+// final disposition. Review completion is disposition-aware (plan, "Review
+// completion is disposition-aware"): the latest round may carry findings when
+// each one is declined or deferred, because a fully dispositioned round
+// publishes without re-reviewing the unchanged head (#2055). A `fixed`
+// disposition still needs a later remediation review, so it cannot sit on the
+// latest round.
 func newDispositionHistory(
 	in dispositionHistoryInput, sourceStore *store.Store,
 ) (DispositionHistory, error) {
@@ -462,8 +468,8 @@ func (h DispositionHistory) validate() error {
 	}
 	latest := h.reviews[len(h.reviews)-1]
 	if h.expectedInstructionDigest == "" || latest.InstructionDigest != h.expectedInstructionDigest ||
-		latest.HeadSHA != h.headSHA || latest.Outcome != domain.ReviewClean {
-		return fmt.Errorf("latest review is not clean at published head: %w", domain.ErrParentKeyMismatch)
+		latest.HeadSHA != h.headSHA {
+		return fmt.Errorf("latest review is not bound to the published head: %w", domain.ErrParentKeyMismatch)
 	}
 
 	findingsByID := make(map[domain.FindingID]domain.Finding, len(h.findings))
