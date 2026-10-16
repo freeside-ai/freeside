@@ -1744,24 +1744,6 @@ func TestJanitorSessionReportsEveryMissingCoverageCause(t *testing.T) {
 	}
 }
 
-func TestBackupPayloadExtractorsIncludeAgentWorkflowMarkers(t *testing.T) {
-	extractors := backupPayloadExtractors()
-	for _, kind := range []string{
-		publish.ExternalReplyIntentKind,
-		publish.ExternalReplyOutcomeKind,
-		engine.KindSpecificationInvocationRequested,
-		engine.KindSpecificationImplementationClaim,
-		engine.KindRemediationInvocationRequested,
-		engine.KindOperatorFeedbackInvocationRequested,
-		signet.PublicationReevaluationRequestedKind,
-		signet.PublicationReevaluationCompletedKind,
-	} {
-		if extractors[kind] == nil {
-			t.Errorf("backup payload extractor %q is not registered", kind)
-		}
-	}
-}
-
 // faultyCoverageRunner completes its pass without activating coverage,
 // modeling a per-registration fault.
 type faultyCoverageRunner struct{ *stubJanitorRunner }

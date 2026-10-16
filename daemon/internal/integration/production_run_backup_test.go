@@ -9,6 +9,7 @@ import (
 	"github.com/freeside-ai/freeside/daemon/internal/contentaddr"
 	"github.com/freeside-ai/freeside/daemon/internal/domain"
 	"github.com/freeside-ai/freeside/daemon/internal/engine"
+	"github.com/freeside-ai/freeside/daemon/internal/publish"
 	"github.com/freeside-ai/freeside/daemon/internal/store"
 	"github.com/freeside-ai/freeside/daemon/internal/store/storetest"
 )
@@ -56,6 +57,15 @@ func TestRealRunBackupVerificationWorkflowClosure(t *testing.T) {
 		ItemID: "spec-approval", ItemVersion: 2, SpecArtifactID: "specification", PolicyArtifactID: "policy",
 		InputArtifactIDs: []domain.ArtifactID{"specification", "spec-discussion-command"},
 	}
+	// These rows' payload types are package-private, so their fixtures are the
+	// wire form the daemon writes. Run 117 stalled on them (#2053).
+	closureWait := json.RawMessage(`{"version":"freeside.production-closure-wait/v1",` +
+		`"task_key":"production-publication/run","ready_item_id":"ready","instance_id":"instance"}`)
+	replyIntent := json.RawMessage(`{"item_id":"ready","finding_id":"finding","run_id":"run","round":1,` +
+		`"repo":"owner/name","pr_number":7,"thread":"review_comment/11","disposition":"","head_sha":"",` +
+		`"text_digest":"` + string(digest) + `","ruleset":"` + string(domain.IssueTextRulesetGitHubIssue1) + `",` +
+		`"bot_id":5,"before":null,"created_at":"2026-10-16T00:00:00Z"}`)
+	replyOutcome := json.RawMessage(`{"finding_id":"finding","round":1,"comment_id":12,"code":""}`)
 	for _, fixture := range []struct {
 		kind    string
 		key     string
@@ -67,6 +77,9 @@ func TestRealRunBackupVerificationWorkflowClosure(t *testing.T) {
 		{engine.KindRemediationInvocationRequested, string(remediation.InvocationID), remediation, engine.RemediationInvocationBackupPayloadDigests},
 		{domain.PublicationContinuationRequestedKind, continuation.Key(), continuation, engine.PublicationContinuationBackupPayloadDigests},
 		{engine.KindSpecificationDiscussionRequested, string(discussion.InvocationID), discussion, engine.SpecificationDiscussionBackupPayloadDigests},
+		{engine.KindProductionClosureWait, "production-closure-wait/production-publication/run", closureWait, engine.ProductionClosureWaitBackupPayloadDigests},
+		{publish.ExternalReplyIntentKind, "external-review-reply/finding/1", replyIntent, publish.ExternalReplyBackupPayloadDigests},
+		{publish.ExternalReplyOutcomeKind, "external-review-reply/finding/1/outcome", replyOutcome, publish.ExternalReplyBackupPayloadDigests},
 	} {
 		t.Run(fixture.kind, func(t *testing.T) {
 			payload, err := json.Marshal(fixture.payload)
@@ -131,7 +144,7 @@ func TestRealRunBackupVerificationWorkflowClosure(t *testing.T) {
 					if err != nil {
 						t.Fatal(err)
 					}
-					verifierSource, err := verifierFiles.NewCheckpointHealthSource(blobs, nil, realRunBackupPayloadExtractors())
+					verifierSource, err := verifierFiles.NewCheckpointHealthSource(blobs, nil, engine.BackupPayloadExtractors())
 					if err != nil {
 						t.Fatal(err)
 					}
