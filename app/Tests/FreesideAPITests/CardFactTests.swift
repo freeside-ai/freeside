@@ -33,6 +33,12 @@ import Testing
         var attribution = seed
         attribution.review_dispute?.value1.findings?[0].external?.reviewer_login = ""
         #expect(MockContractValidation.itemValidityBreach(attribution) != nil)
+        var rationale = seed
+        rationale.review_dispute?.value1.findings?[0].adjudication?.rationale = " \n"
+        #expect(MockContractValidation.itemValidityBreach(rationale) != nil)
+        var unadjudicated = seed
+        unadjudicated.review_dispute?.value1.findings?[0].adjudication = nil
+        #expect(MockContractValidation.itemValidityBreach(unadjudicated) == nil)
     }
 
     @Test func fixturesCarryEveryCardFactAndRoundTripNullablePayloads() throws {

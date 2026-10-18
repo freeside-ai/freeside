@@ -1051,3 +1051,160 @@ func TestAdjudicationRouteLabelsNameOutcomes(t *testing.T) {
 		}
 	}
 }
+
+func demotedRemediationFixture(t *testing.T) domain.FindingAdjudicationEntry {
+	t.Helper()
+	answer, err := domain.NewEngineModelAdjudicationEntry(
+		"finding-demoted", domain.GoalRequired, domain.ConfidenceMedium,
+		"the finding names a defect the spec's acceptance criteria require fixed",
+		[]string{"approved spec §3"}, []string{"AGENTS.md scope discipline"},
+		[]string{"the location is the defect site"}, []string{"park as separate work"},
+		[]string{"does the fix widen the declared paths?"})
+	if err != nil {
+		t.Fatalf("engine-model answer: %v", err)
+	}
+	demoted, err := domain.NewDemotedModelAdjudicationEntry(answer)
+	if err != nil {
+		t.Fatalf("demote: %v", err)
+	}
+	return demoted
+}
+
+// TestDemotedModelAdjudicationEntryKeepsLean pins the #2059 demotion: the
+// entry parks as `unknown` with the model's reasoning intact and records the
+// route the answer implied, unless the answer was itself `unknown`.
+func TestDemotedModelAdjudicationEntryKeepsLean(t *testing.T) {
+	t.Parallel()
+	demoted := demotedRemediationFixture(t)
+	if demoted.Producer != domain.AdjudicationProducerModel || demoted.Route != domain.RouteParkUnknown ||
+		demoted.Compatibility == nil || *demoted.Compatibility != domain.CompatibilityUnknown {
+		t.Fatalf("demoted row = %s/%v/%s, want model/unknown/park_unknown",
+			demoted.Producer, demoted.Compatibility, demoted.Route)
+	}
+	if demoted.ProposedRoute == nil || *demoted.ProposedRoute != domain.RouteRemediate {
+		t.Fatalf("proposed_route = %v, want remediate", demoted.ProposedRoute)
+	}
+	if *demoted.Confidence != domain.ConfidenceMedium || len(demoted.Alternatives) != 1 ||
+		len(demoted.OpenQuestions) != 1 || demoted.Rationale == "" {
+		t.Fatalf("demotion dropped the model's reasoning: %+v", demoted)
+	}
+	if demoted.OfferedAlternatives != nil {
+		t.Fatalf("offered_alternatives = %v, want none on the unknown park", demoted.OfferedAlternatives)
+	}
+
+	for _, compat := range []domain.ProposedCompatibility{
+		domain.ProposedWorkUnitRevision, domain.ProposedSeparateWork, domain.ProposedHumanDecision,
+	} {
+		route := map[domain.ProposedCompatibility]domain.AdjudicationRoute{
+			domain.ProposedWorkUnitRevision: domain.RouteParkRevision,
+			domain.ProposedSeparateWork:     domain.RouteParkSeparateWork,
+			domain.ProposedHumanDecision:    domain.RouteAttentionHumanDecision,
+		}[compat]
+		answer, err := domain.NewModelAdjudicationEntry("f", domain.GoalRequired, &compat, route,
+			domain.ConfidenceLow, "x", nil, nil, nil, nil, nil)
+		if err != nil {
+			t.Fatalf("%s answer: %v", compat, err)
+		}
+		got, err := domain.NewDemotedModelAdjudicationEntry(answer)
+		if err != nil || got.ProposedRoute == nil || *got.ProposedRoute != route {
+			t.Fatalf("%s demotion = %v, %v; want proposed_route %s", compat, got.ProposedRoute, err, route)
+		}
+	}
+
+	unknown := domain.ProposedUnknown
+	noLean, err := domain.NewModelAdjudicationEntry("f", domain.GoalRequired, &unknown,
+		domain.RouteParkUnknown, domain.ConfidenceLow, "x", nil, nil, nil, nil, nil)
+	if err != nil {
+		t.Fatalf("unknown answer: %v", err)
+	}
+	got, err := domain.NewDemotedModelAdjudicationEntry(noLean)
+	if err != nil || got.ProposedRoute != nil {
+		t.Fatalf("unknown answer demotion = %v, %v; want no proposed_route", got.ProposedRoute, err)
+	}
+
+	adjacent, err := domain.NewModelAdjudicationEntry("f", domain.GoalAdjacent, nil,
+		domain.RouteDefer, domain.ConfidenceLow, "x", nil, nil, nil, nil, nil)
+	if err != nil {
+		t.Fatalf("adjacent answer: %v", err)
+	}
+	if _, err := domain.NewDemotedModelAdjudicationEntry(adjacent); !errors.Is(err, domain.ErrProposedRouteMisplaced) {
+		t.Fatalf("adjacent demotion: got %v, want ErrProposedRouteMisplaced", err)
+	}
+}
+
+func TestAdjudicationEntryRejectsMisplacedProposedRoute(t *testing.T) {
+	t.Parallel()
+	demoted := demotedRemediationFixture(t)
+	for _, tc := range []struct {
+		name   string
+		mutate func(*domain.FindingAdjudicationEntry)
+	}{
+		{"park_unknown value", func(e *domain.FindingAdjudicationEntry) { e.ProposedRoute = ptr(domain.RouteParkUnknown) }},
+		{"non-required route value", func(e *domain.FindingAdjudicationEntry) { e.ProposedRoute = ptr(domain.RouteDefer) }},
+		{"invalid value", func(e *domain.FindingAdjudicationEntry) { e.ProposedRoute = ptr(domain.AdjudicationRoute("ship")) }},
+		{"engine-model producer", func(e *domain.FindingAdjudicationEntry) {
+			e.Producer = domain.AdjudicationProducerEngineModel
+			e.Compatibility = ptr(domain.CompatibilityAllowed)
+			e.Route = domain.RouteRemediate
+		}},
+		{"non-demoted model row", func(e *domain.FindingAdjudicationEntry) {
+			e.Compatibility = ptr(domain.CompatibilitySeparateWork)
+			e.Route = domain.RouteParkSeparateWork
+		}},
+		{"human producer", func(e *domain.FindingAdjudicationEntry) {
+			human, err := domain.NewHumanAdjudicationEntry(e.FindingID, domain.RouteDecline)
+			if err != nil {
+				t.Fatalf("human entry: %v", err)
+			}
+			human.ProposedRoute = ptr(domain.RouteRemediate)
+			*e = human
+		}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			entry := demoted
+			tc.mutate(&entry)
+			if err := entry.Validate(); !errors.Is(err, domain.ErrProposedRouteMisplaced) {
+				t.Fatalf("got %v, want ErrProposedRouteMisplaced", err)
+			}
+		})
+	}
+}
+
+// TestDemotedEntryGoldenAndRoundTrip pins the demoted entry's encoding and
+// proves proposed_route is part of the artifact's content digest. The
+// pre-existing artifact goldens stay byte-identical because the field is
+// omitted when nil.
+func TestDemotedEntryGoldenAndRoundTrip(t *testing.T) {
+	t.Parallel()
+	demoted := demotedRemediationFixture(t)
+	body, err := json.MarshalIndent(demoted, "", "  ")
+	if err != nil {
+		t.Fatalf("marshal demoted entry: %v", err)
+	}
+	golden.Assert(t, "finding_adjudication_entry_model_demoted", append(body, '\n'))
+
+	artifact, err := domain.NewFindingAdjudication("run-abc", 1,
+		adjDigest("approved-spec"), adjDigest("instruction-snapshot"), adjDigest("resolved-policy"),
+		[]domain.FindingAdjudicationEntry{demoted}, "", time.Date(2026, 10, 18, 15, 0, 0, 0, time.UTC))
+	if err != nil {
+		t.Fatalf("artifact: %v", err)
+	}
+	encoded, err := artifact.Encode()
+	if err != nil {
+		t.Fatalf("encode: %v", err)
+	}
+	decoded, err := domain.DecodeFindingAdjudication(encoded)
+	if err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if got := decoded.Entries[0].ProposedRoute; got == nil || *got != domain.RouteRemediate {
+		t.Fatalf("decoded proposed_route = %v, want remediate", got)
+	}
+	stripped := strings.Replace(string(encoded), `,"proposed_route":"remediate"`, "", 1)
+	if stripped == string(encoded) {
+		t.Fatal("encoded artifact does not carry proposed_route")
+	}
+	if _, err := domain.DecodeFindingAdjudication([]byte(stripped)); !errors.Is(err, domain.ErrFindingAdjudicationDigestMismatch) {
+		t.Fatalf("stripped proposed_route: got %v, want ErrFindingAdjudicationDigestMismatch", err)
+	}
+}

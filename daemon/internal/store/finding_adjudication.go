@@ -476,6 +476,35 @@ func scanFindingAdjudicationRow(sc scanner) (findingAdjudicationRow, error) {
 func (tx *ReadTx) reconstructFindingAdjudication(
 	ctx context.Context, row findingAdjudicationRow,
 ) (domain.FindingAdjudication, error) {
+	artifact, err := decodeFindingAdjudicationRow(row)
+	if err != nil {
+		return domain.FindingAdjudication{}, err
+	}
+	key := row.validationKey(publicationReadPath(ctx))
+	marks := tx.reviewValidation.marks
+	if marks != nil && marks.adjudications[key] {
+		if err := ctx.Err(); err != nil {
+			return domain.FindingAdjudication{}, err
+		}
+		return artifact, nil
+	}
+	tx.reviewValidation.adjudicationChecks++
+	if err := tx.validateFindingAdjudicationBinding(ctx, artifact); err != nil {
+		return domain.FindingAdjudication{}, err
+	}
+	if err := tx.validateFindingAdjudicationSuccessor(ctx, artifact, false); err != nil {
+		return domain.FindingAdjudication{}, err
+	}
+	if marks != nil {
+		marks.adjudications[key] = true
+	}
+	return artifact, nil
+}
+
+// decodeFindingAdjudicationRow runs the row-local half of reconstruction: the
+// body integrity digest, the validation backstop, and the agreement of every
+// extracted column with the decoded body. It reads no other state.
+func decodeFindingAdjudicationRow(row findingAdjudicationRow) (domain.FindingAdjudication, error) {
 	if row.bodyDigest != reviewBodyDigest(string(row.body)) {
 		return domain.FindingAdjudication{}, errRowInconsistent
 	}
@@ -495,24 +524,6 @@ func (tx *ReadTx) reconstructFindingAdjudication(
 	if (artifact.PredecessorDigest != nil) != row.predecessorDigest.Valid ||
 		(artifact.PredecessorDigest != nil && string(*artifact.PredecessorDigest) != row.predecessorDigest.String) {
 		return domain.FindingAdjudication{}, errRowInconsistent
-	}
-	key := row.validationKey(publicationReadPath(ctx))
-	marks := tx.reviewValidation.marks
-	if marks != nil && marks.adjudications[key] {
-		if err := ctx.Err(); err != nil {
-			return domain.FindingAdjudication{}, err
-		}
-		return artifact, nil
-	}
-	tx.reviewValidation.adjudicationChecks++
-	if err := tx.validateFindingAdjudicationBinding(ctx, artifact); err != nil {
-		return domain.FindingAdjudication{}, err
-	}
-	if err := tx.validateFindingAdjudicationSuccessor(ctx, artifact, false); err != nil {
-		return domain.FindingAdjudication{}, err
-	}
-	if marks != nil {
-		marks.adjudications[key] = true
 	}
 	return artifact, nil
 }
@@ -594,6 +605,73 @@ func (tx *ReadTx) GetFindingAdjudicationForRound(
 		return domain.FindingAdjudication{}, fmt.Errorf("get finding adjudication %q round %d: %w", runID, round, err)
 	}
 	return artifact, nil
+}
+
+// LatestModelFindingAdjudication reconstructs the round's newest revision a
+// model authored, skipping human decisions. A review-dispute row's adjudication
+// block derives from it (#2059): a Discuss turn revises the model's answer, so
+// revision 1 can be stale, and a human revision is skipped because validating
+// its decision reads the dispute item whose rows this read derives. Each
+// skipped row still passes every check that reads no dispute item: the
+// row-local checks, the round binding, and the chain link to its
+// predecessor. A corrupt human row therefore fails closed instead of
+// exposing an older model revision. Like ListFindingAdjudications, it
+// enumerates the whole table and runs the row-local checks on every row
+// before filtering by the decoded run and round, so a corrupted run or round
+// column cannot move a revision out of this read unchecked.
+func (tx *ReadTx) LatestModelFindingAdjudication(
+	ctx context.Context, runID domain.RunID, round int,
+) (domain.FindingAdjudication, error) {
+	rows, err := tx.tx.QueryContext(ctx,
+		`SELECT `+selectFindingAdjudicationColumns+
+			` FROM finding_adjudications ORDER BY run_id, round, revision DESC`)
+	if err != nil {
+		return domain.FindingAdjudication{}, fmt.Errorf("latest model finding adjudication %q round %d: %w", runID, round, err)
+	}
+	var raw []findingAdjudicationRow
+	for rows.Next() {
+		row, err := scanFindingAdjudicationRow(rows)
+		if err != nil {
+			_ = rows.Close()
+			return domain.FindingAdjudication{}, fmt.Errorf("latest model finding adjudication %q round %d: %w", runID, round, err)
+		}
+		raw = append(raw, row)
+	}
+	if err := errors.Join(rows.Err(), rows.Close()); err != nil {
+		return domain.FindingAdjudication{}, fmt.Errorf("latest model finding adjudication %q round %d: %w", runID, round, err)
+	}
+	type roundRow struct {
+		row     findingAdjudicationRow
+		decoded domain.FindingAdjudication
+	}
+	var revisions []roundRow
+	for _, row := range raw {
+		decoded, err := decodeFindingAdjudicationRow(row)
+		if err != nil {
+			return domain.FindingAdjudication{}, fmt.Errorf("latest model finding adjudication %q round %d: %w", runID, round, err)
+		}
+		if decoded.RunID == runID && decoded.Round == round {
+			revisions = append(revisions, roundRow{row: row, decoded: decoded})
+		}
+	}
+	for _, revision := range revisions {
+		row, decoded := revision.row, revision.decoded
+		if decoded.Decision != nil {
+			if err := tx.validateFindingAdjudicationBinding(ctx, decoded); err != nil {
+				return domain.FindingAdjudication{}, fmt.Errorf("latest model finding adjudication %q round %d: %w", runID, round, err)
+			}
+			if _, err := tx.humanDecisionPredecessor(ctx, decoded); err != nil {
+				return domain.FindingAdjudication{}, fmt.Errorf("latest model finding adjudication %q round %d: %w", runID, round, err)
+			}
+			continue
+		}
+		artifact, err := tx.reconstructFindingAdjudication(ctx, row)
+		if err != nil {
+			return domain.FindingAdjudication{}, fmt.Errorf("latest model finding adjudication %q round %d: %w", runID, round, err)
+		}
+		return artifact, nil
+	}
+	return domain.FindingAdjudication{}, fmt.Errorf("latest model finding adjudication %q round %d: %w", runID, round, ErrNotFound)
 }
 
 // ListFindingAdjudications returns one run's adjudication artifacts in round,

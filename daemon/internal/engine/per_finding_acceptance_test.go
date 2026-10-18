@@ -142,6 +142,10 @@ func TestFindingAdjudicationRebuildsUnacceptedRequiredAnswer(t *testing.T) {
 	if got.Route != domain.RouteParkUnknown || got.Producer != domain.AdjudicationProducerModel || got.Compatibility == nil || *got.Compatibility != domain.CompatibilityUnknown || *got.Confidence != *entry.Confidence || got.Rationale != entry.Rationale || !slices.Equal(got.Evidence, entry.Evidence) {
 		t.Fatalf("rebuilt answer = %#v", got)
 	}
+	// The lean survives demotion for the operator (#2059) but carries no authority.
+	if got.ProposedRoute == nil || *got.ProposedRoute != domain.RouteRemediate {
+		t.Fatalf("proposed_route = %v, want remediate", got.ProposedRoute)
+	}
 }
 
 func TestFindingAdjudicationMixedBatchPreservesSeverityCeiling(t *testing.T) {

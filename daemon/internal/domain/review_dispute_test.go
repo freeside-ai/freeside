@@ -2,6 +2,7 @@ package domain_test
 
 import (
 	"encoding/json"
+	"reflect"
 	"slices"
 	"testing"
 	"time"
@@ -68,6 +69,10 @@ func TestHumanFindingAdjudicationGoldenAndRoundTrip(t *testing.T) {
 		Location:      &domain.FindingLocation{Path: "daemon/update.go", StartLine: 42, EndLine: 45},
 		External:      &domain.DisputedFindingExternal{ReviewerLogin: "reviewer", ThreadID: "thread-1"},
 		OfferedRoutes: []domain.AdjudicationRoute{domain.RouteRemediate, domain.RouteDecline, domain.RouteDefer},
+		Adjudication: &domain.DisputedFindingAdjudication{
+			Lean: ptr(domain.RouteRemediate), Confidence: domain.ConfidenceMedium,
+			Rationale: "The spec requires idempotent updates.", BelowThreshold: true,
+		},
 	}
 	binding := domain.ReviewDisputeBinding{RunID: "run-human", Round: 1, FindingIDs: []domain.FindingID{row.FindingID}, CompletionEvidence: adjDigest("completion"), Findings: []domain.DisputedFinding{row}}
 	if err := binding.Validate(); err != nil {
@@ -93,6 +98,17 @@ func TestHumanFindingAdjudicationGoldenAndRoundTrip(t *testing.T) {
 		"invalid route": func(b *domain.ReviewDisputeBinding) {
 			b.Findings[0].OfferedRoutes = []domain.AdjudicationRoute{domain.RouteDispute}
 		},
+		"empty rationale": func(b *domain.ReviewDisputeBinding) {
+			b.Findings[0].Adjudication = &domain.DisputedFindingAdjudication{Confidence: domain.ConfidenceLow, Rationale: " "}
+		},
+		"invalid confidence": func(b *domain.ReviewDisputeBinding) {
+			b.Findings[0].Adjudication = &domain.DisputedFindingAdjudication{Confidence: "certain", Rationale: "x"}
+		},
+		"invalid lean": func(b *domain.ReviewDisputeBinding) {
+			b.Findings[0].Adjudication = &domain.DisputedFindingAdjudication{
+				Lean: ptr(domain.AdjudicationRoute("ship")), Confidence: domain.ConfidenceLow, Rationale: "x",
+			}
+		},
 	} {
 		t.Run(name, func(t *testing.T) {
 			candidate := binding
@@ -102,5 +118,104 @@ func TestHumanFindingAdjudicationGoldenAndRoundTrip(t *testing.T) {
 				t.Fatal("invalid subset accepted")
 			}
 		})
+	}
+}
+
+func TestDisputedFindingAdjudicationFor(t *testing.T) {
+	t.Parallel()
+	unknown := domain.ProposedUnknown
+	noLean, err := domain.NewModelAdjudicationEntry("f", domain.GoalRequired, &unknown,
+		domain.RouteParkUnknown, domain.ConfidenceLow, "no route fits", nil, nil, nil, nil, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	decline, err := domain.NewModelAdjudicationEntry("f", domain.GoalContradictory, nil,
+		domain.RouteDecline, domain.ConfidenceHigh, "contradicts the spec", nil, nil, nil, nil, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	engine, err := domain.NewEngineAdjudicationEntry("f", domain.GoalRequired,
+		ptr(domain.CompatibilityAllowed), domain.RouteRemediate, "in scope", nil, nil, nil, nil, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	human, err := domain.NewHumanAdjudicationEntry("f", domain.RouteDefer)
+	if err != nil {
+		t.Fatal(err)
+	}
+	demoted := demotedRemediationFixture(t)
+	for _, tc := range []struct {
+		name  string
+		entry *domain.FindingAdjudicationEntry
+		want  *domain.DisputedFindingAdjudication
+	}{
+		{"no entry", nil, nil},
+		{"engine fact", &engine, nil},
+		{"human decision", &human, nil},
+		{"demoted lean", &demoted, &domain.DisputedFindingAdjudication{
+			Lean: ptr(domain.RouteRemediate), Confidence: domain.ConfidenceMedium,
+			Rationale: demoted.Rationale, BelowThreshold: true,
+		}},
+		{"unknown answer", &noLean, &domain.DisputedFindingAdjudication{
+			Confidence: domain.ConfidenceLow, Rationale: "no route fits", BelowThreshold: true,
+		}},
+		{"accepted decline", &decline, &domain.DisputedFindingAdjudication{
+			Lean: ptr(domain.RouteDecline), Confidence: domain.ConfidenceHigh,
+			Rationale: "contradicts the spec", BelowThreshold: false,
+		}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			got, err := domain.DisputedFindingAdjudicationFor(tc.entry, domain.DispatchThresholdHigh)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if !reflect.DeepEqual(got, tc.want) {
+				t.Fatalf("block = %+v, want %+v", got, tc.want)
+			}
+		})
+	}
+	if _, err := domain.DisputedFindingAdjudicationFor(&decline, "sometimes"); err == nil {
+		t.Fatal("invalid threshold accepted")
+	}
+}
+
+func TestReviewDisputeBindingMatchesToleratesOnlyLegacyRows(t *testing.T) {
+	t.Parallel()
+	block := &domain.DisputedFindingAdjudication{
+		Lean: ptr(domain.RouteRemediate), Confidence: domain.ConfidenceMedium, Rationale: "x", BelowThreshold: true,
+	}
+	derived := &domain.ReviewDisputeBinding{
+		RunID: "run", Round: 1, FindingIDs: []domain.FindingID{"f"}, CompletionEvidence: adjDigest("c"),
+		Findings: []domain.DisputedFinding{{
+			FindingID: "f", Message: "m", OfferedRoutes: []domain.AdjudicationRoute{domain.RouteDecline},
+			Adjudication: block,
+		}},
+	}
+	withRow := func(row domain.DisputedFinding) *domain.ReviewDisputeBinding {
+		out := *derived
+		out.Findings = []domain.DisputedFinding{row}
+		return &out
+	}
+	legacy := derived.Findings[0]
+	legacy.Adjudication = nil
+	if !domain.ReviewDisputeBindingMatches(withRow(legacy), derived) {
+		t.Fatal("legacy row without a block rejected")
+	}
+	if domain.ReviewDisputeBindingMatches(derived, withRow(legacy)) {
+		t.Fatal("stored block accepted where none is derived")
+	}
+	other := derived.Findings[0]
+	changed := *block
+	changed.BelowThreshold = false
+	other.Adjudication = &changed
+	if domain.ReviewDisputeBindingMatches(withRow(other), derived) {
+		t.Fatal("different block accepted")
+	}
+	legacy.OfferedRoutes = []domain.AdjudicationRoute{domain.RouteDefer}
+	if domain.ReviewDisputeBindingMatches(withRow(legacy), derived) {
+		t.Fatal("legacy tolerance relaxed another field")
+	}
+	if !domain.ReviewDisputeBindingMatches(nil, nil) || domain.ReviewDisputeBindingMatches(nil, derived) {
+		t.Fatal("nil bindings mismatched")
 	}
 }

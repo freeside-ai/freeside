@@ -47,6 +47,15 @@ func (tx *ReadTx) gateExecutableReviewDispute(ctx context.Context, item domain.A
 	if err != nil {
 		return err
 	}
+	var adjudication *domain.FindingAdjudication
+	latest, err := tx.LatestModelFindingAdjudication(ctx, binding.RunID, binding.Round)
+	switch {
+	case err == nil:
+		adjudication = &latest
+	case !errors.Is(err, ErrNotFound):
+		return err
+	}
+	threshold := domain.ResolvedDispatchThreshold(policy, domain.FindingConfidenceThresholdKey)
 	for _, row := range binding.Findings {
 		finding, err := tx.GetFinding(ctx, row.FindingID)
 		if err != nil {
@@ -59,6 +68,19 @@ func (tx *ReadTx) gateExecutableReviewDispute(ctx context.Context, item domain.A
 		if row.Message != finding.Message || !reflect.DeepEqual(row.Location, finding.Location) || row.Severity != finding.Severity ||
 			!reflect.DeepEqual(row.External, identity) || !slices.Equal(row.OfferedRoutes, domain.ReviewDisputeRoutes(finding, domain.CanonicalDeclaredPaths(policy))) {
 			return domain.ErrParentKeyMismatch
+		}
+		// The adjudication block is re-derived, never trusted. A row with no
+		// block passes as one written before the block existed (#2059): it
+		// carries no authority, since routes come only from offered_routes,
+		// and an item already open at the upgrade is never rebuilt to add it.
+		if row.Adjudication != nil {
+			derived, err := domain.DisputedFindingAdjudicationIn(adjudication, row.FindingID, threshold)
+			if err != nil {
+				return err
+			}
+			if !reflect.DeepEqual(row.Adjudication, derived) {
+				return domain.ErrParentKeyMismatch
+			}
 		}
 	}
 	if len(binding.Findings) < len(binding.FindingIDs) {
@@ -146,21 +168,9 @@ func (tx *ReadTx) validateHumanAdjudicationDecision(ctx context.Context, artifac
 	if string(body) != command.Message || len(choices) != len(item.ReviewDispute.Findings) {
 		return domain.ErrParentKeyMismatch
 	}
-	var prior *domain.FindingAdjudication
-	if artifact.Revision > 1 {
-		if artifact.PredecessorDigest == nil {
-			return domain.ErrParentKeyMismatch
-		}
-		got, err := tx.GetFindingAdjudication(ctx, *artifact.PredecessorDigest)
-		if err != nil {
-			return err
-		}
-		prior = &got
-		if prior.RunID != artifact.RunID || prior.Round != artifact.Round || prior.Revision+1 != artifact.Revision ||
-			prior.FindingBatchDigest != artifact.FindingBatchDigest || prior.ApprovedSpecDigest != artifact.ApprovedSpecDigest ||
-			prior.InstructionSnapshotDigest != artifact.InstructionSnapshotDigest || prior.ResolvedPolicyDigest != artifact.ResolvedPolicyDigest {
-			return domain.ErrParentKeyMismatch
-		}
+	prior, err := tx.humanDecisionPredecessor(ctx, artifact)
+	if err != nil {
+		return err
 	}
 	chosen := make(map[domain.FindingID]domain.AdjudicationRoute, len(choices))
 	for _, choice := range choices {
@@ -194,4 +204,29 @@ func (tx *ReadTx) validateHumanAdjudicationDecision(ctx context.Context, artifac
 		return domain.ErrParentKeyMismatch
 	}
 	return nil
+}
+
+// humanDecisionPredecessor reconstructs the revision a human decision
+// succeeds and checks the chain link between them; revision 1 has none. It
+// reads no dispute item, so a read that must skip a human revision's decision
+// gate can still hold the revision to its chain.
+func (tx *ReadTx) humanDecisionPredecessor(
+	ctx context.Context, artifact domain.FindingAdjudication,
+) (*domain.FindingAdjudication, error) {
+	if artifact.Revision == 1 {
+		return nil, nil
+	}
+	if artifact.PredecessorDigest == nil {
+		return nil, domain.ErrParentKeyMismatch
+	}
+	prior, err := tx.GetFindingAdjudication(ctx, *artifact.PredecessorDigest)
+	if err != nil {
+		return nil, err
+	}
+	if prior.RunID != artifact.RunID || prior.Round != artifact.Round || prior.Revision+1 != artifact.Revision ||
+		prior.FindingBatchDigest != artifact.FindingBatchDigest || prior.ApprovedSpecDigest != artifact.ApprovedSpecDigest ||
+		prior.InstructionSnapshotDigest != artifact.InstructionSnapshotDigest || prior.ResolvedPolicyDigest != artifact.ResolvedPolicyDigest {
+		return nil, domain.ErrParentKeyMismatch
+	}
+	return &prior, nil
 }

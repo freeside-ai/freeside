@@ -44,6 +44,15 @@ func (w *productionPublicationWorkflow) routedReviewDisputeBinding(ctx context.C
 		if err != nil {
 			return err
 		}
+		var adjudication *domain.FindingAdjudication
+		latest, err := tx.LatestModelFindingAdjudication(ctx, record.RunID, record.Round)
+		switch {
+		case err == nil:
+			adjudication = &latest
+		case !errors.Is(err, store.ErrNotFound):
+			return err
+		}
+		threshold := domain.ResolvedDispatchThreshold(policy, domain.FindingConfidenceThresholdKey)
 		for _, id := range binding.FindingIDs {
 			if listed != nil && !slices.Contains(listed, id) {
 				continue
@@ -58,6 +67,10 @@ func (w *productionPublicationWorkflow) routedReviewDisputeBinding(ctx context.C
 			}
 			if finding.External != nil {
 				row.External = &domain.DisputedFindingExternal{ReviewerLogin: finding.External.ReviewerLogin, ThreadID: finding.External.ThreadID}
+			}
+			row.Adjudication, err = domain.DisputedFindingAdjudicationIn(adjudication, id, threshold)
+			if err != nil {
+				return err
 			}
 			binding.Findings = append(binding.Findings, row)
 		}

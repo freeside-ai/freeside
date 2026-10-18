@@ -2484,12 +2484,15 @@ struct DecisionDetailView: View {
                     if let external = finding.external {
                         Text("\(external.reviewer_login) · \(external.thread_id)").font(.caption)
                     }
+                    disputedFindingAdjudication(finding)
                     ChoiceList<Components.Schemas.AdjudicationRoute?>(
                         accessibilityLabel: "Route for \(finding.message)",
                         options: finding.offered_routes.map {
                             .init(
                                 value: $0,
                                 label: AttentionDisplay.disputeRouteLabel($0, external: finding.external != nil),
+                                mark: $0 == finding.adjudication?.lean?.value1
+                                    ? AttentionDisplay.disputedFindingLeanMark : nil,
                                 register: .item)
                         },
                         selection: Binding(
@@ -2499,6 +2502,26 @@ struct DecisionDetailView: View {
                     .disabled(!model.actionsEnabled)
                 }
             }
+        }
+    }
+
+    /// The adjudicator's view of one disputed finding, in the model
+    /// proposal's unverified register: what it leaned toward and why, so the
+    /// operator does not decide blind. It never selects a route.
+    @ViewBuilder
+    private func disputedFindingAdjudication(_ finding: Components.Schemas.DisputedFinding) -> some View {
+        if let adjudication = finding.adjudication {
+            UnverifiedLabel(text: "Model proposal", carriesInfo: false, rendersInteractiveControls: true)
+            Text(AttentionDisplay.disputedFindingLean(adjudication, external: finding.external != nil))
+                .font(FreesideFont.cardBody)
+                .fixedSize(horizontal: false, vertical: true)
+            QuoteBlock {
+                Text(adjudication.rationale)
+                    .font(FreesideFont.cardBody)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+        } else {
+            Text(AttentionDisplay.disputedFindingNoAdjudication).font(.caption)
         }
     }
 

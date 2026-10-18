@@ -2587,6 +2587,29 @@ var AllDispatchThresholds = []DispatchThreshold{
 // enum member the registration ratchet would demand in AllDispatchThresholds.
 var DefaultDispatchThreshold = DispatchThresholdHigh
 
+// FindingConfidenceThresholdKey is the resolved-policy key whose threshold a
+// model-backed adjudication's confidence must meet to be accepted.
+const FindingConfidenceThresholdKey = "review.adjudication_confidence_threshold"
+
+// ResolvedDispatchThreshold reads the threshold a resolved-policy key selects.
+// An absent key or a value that is not a threshold falls back to the
+// bounded-below default rather than loosening dispatch.
+func ResolvedDispatchThreshold(policy ResolvedPolicy, keyName string) DispatchThreshold {
+	for _, key := range policy.Keys {
+		if key.Key != keyName {
+			continue
+		}
+		switch DispatchThreshold(key.Value) {
+		case DispatchThresholdMedium:
+			return DispatchThresholdMedium
+		case DispatchThresholdHigh:
+			return DispatchThresholdHigh
+		}
+		return DefaultDispatchThreshold
+	}
+	return DefaultDispatchThreshold
+}
+
 func (t DispatchThreshold) valid() bool {
 	switch t {
 	case DispatchThresholdMedium, DispatchThresholdHigh:

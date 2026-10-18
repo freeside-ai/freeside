@@ -258,13 +258,29 @@ type ReviewDisputeBinding struct {
 
 // DisputedFinding carries the authenticated finding and the routes the person
 // can execute. External identity is attribution, never routing authority.
+// Adjudication is the adjudicator's view of the finding, also never routing
+// authority; it is nil when the round has no model-authored adjudication for
+// the finding, and on a row stored before it existed (#2059).
 type DisputedFinding struct {
-	FindingID     FindingID                `json:"finding_id"`
-	Message       string                   `json:"message"`
-	Location      *FindingLocation         `json:"location"`
-	Severity      FindingSeverity          `json:"severity"`
-	External      *DisputedFindingExternal `json:"external"`
-	OfferedRoutes []AdjudicationRoute      `json:"offered_routes"`
+	FindingID     FindingID                    `json:"finding_id"`
+	Message       string                       `json:"message"`
+	Location      *FindingLocation             `json:"location"`
+	Severity      FindingSeverity              `json:"severity"`
+	External      *DisputedFindingExternal     `json:"external"`
+	OfferedRoutes []AdjudicationRoute          `json:"offered_routes"`
+	Adjudication  *DisputedFindingAdjudication `json:"adjudication"`
+}
+
+// DisputedFindingAdjudication is the adjudicator's proposal for one disputed
+// finding, shown so the person does not decide blind. Lean is the route the
+// model proposed, nil when it proposed none (the `unknown` park). It may name
+// a route the person is not offered, and nothing executes it: the person's
+// choice still comes only from OfferedRoutes.
+type DisputedFindingAdjudication struct {
+	Lean           *AdjudicationRoute     `json:"lean"`
+	Confidence     AdjudicationConfidence `json:"confidence"`
+	Rationale      string                 `json:"rationale"`
+	BelowThreshold bool                   `json:"below_threshold"`
 }
 
 type DisputedFindingExternal struct {
@@ -678,6 +694,12 @@ func (b ReviewDisputeBinding) Validate() error {
 			}
 			routes[route] = true
 		}
+		if block := finding.Adjudication; block != nil {
+			if !block.Confidence.valid() || strings.TrimSpace(block.Rationale) == "" ||
+				!utf8.ValidString(block.Rationale) || (block.Lean != nil && !block.Lean.valid()) {
+				return ErrCardFactInconsistent
+			}
+		}
 	}
 	return nil
 }
@@ -731,6 +753,14 @@ func cloneReviewDisputeBinding(in *ReviewDisputeBinding) *ReviewDisputeBinding {
 		if row.External != nil {
 			value := *row.External
 			row.External = &value
+		}
+		if row.Adjudication != nil {
+			value := *row.Adjudication
+			if value.Lean != nil {
+				lean := *value.Lean
+				value.Lean = &lean
+			}
+			row.Adjudication = &value
 		}
 	}
 	return &out

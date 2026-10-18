@@ -25,7 +25,7 @@ import (
 
 const (
 	findingMaterialityThresholdKey = "review.adjudication_materiality_threshold"
-	findingConfidenceThresholdKey  = "review.adjudication_confidence_threshold"
+	findingConfidenceThresholdKey  = domain.FindingConfidenceThresholdKey
 	maxAdjudicationAttachmentBytes = 1 << 20
 	maxAdjudicationAttachmentTotal = 1 << 20
 )
@@ -89,19 +89,7 @@ type findingAdjudicationDissent struct {
 }
 
 func resolvedFindingThreshold(policy domain.ResolvedPolicy, keyName string) domain.DispatchThreshold {
-	for _, key := range policy.Keys {
-		if key.Key != keyName {
-			continue
-		}
-		switch domain.DispatchThreshold(key.Value) {
-		case domain.DispatchThresholdMedium:
-			return domain.DispatchThresholdMedium
-		case domain.DispatchThresholdHigh:
-			return domain.DispatchThresholdHigh
-		}
-		return domain.DefaultDispatchThreshold
-	}
-	return domain.DefaultDispatchThreshold
+	return domain.ResolvedDispatchThreshold(policy, keyName)
 }
 
 func classificationMeets(value string, threshold domain.DispatchThreshold) bool {
@@ -867,11 +855,7 @@ func acceptedModelAdjudicationEntries(
 		if accepted || entry.GoalRelationship != domain.GoalRequired {
 			continue
 		}
-		unknown := domain.ProposedUnknown
-		result[i], err = domain.NewModelAdjudicationEntry(entry.FindingID,
-			entry.GoalRelationship, &unknown, domain.RouteParkUnknown, *entry.Confidence,
-			entry.Rationale, entry.Evidence, entry.CitedRules, entry.Assumptions,
-			entry.Alternatives, entry.OpenQuestions)
+		result[i], err = domain.NewDemotedModelAdjudicationEntry(entry)
 		if err != nil {
 			return nil, err
 		}

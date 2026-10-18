@@ -141,6 +141,30 @@ enum AttentionDisplay {
         }
     }
 
+    /// The adjudicator's view of a disputed finding as one line: the route
+    /// it leaned toward, or none, its confidence, and whether that fell
+    /// below the run's dispatch threshold. The lean is a model proposal and
+    /// may name a route the dispute does not offer; only an offered route
+    /// can be sent.
+    static func disputedFindingLean(
+        _ adjudication: Components.Schemas.DisputedFinding.adjudicationPayload, external: Bool
+    ) -> String {
+        var parts = [
+            adjudication.lean.map { "Leans: \(disputeRouteLabel($0.value1, external: external))" } ?? "No lean",
+            "\(label(adjudication.confidence)) confidence",
+        ]
+        if adjudication.below_threshold {
+            parts.append("below the dispatch threshold, so it can't act on its own")
+        }
+        return parts.joined(separator: " · ")
+    }
+
+    /// The mark on the offered route the adjudicator leaned toward. Nothing
+    /// is preselected: the mark informs the pick, it never makes it.
+    static let disputedFindingLeanMark = "Lean"
+
+    static let disputedFindingNoAdjudication = "No adjudicator view was recorded for this finding."
+
     static let externalDisputeConsequence =
         "For external findings, Fix starts remediation in this pull request. Decline and Defer each record an outcome and reply in the finding's thread. Defer files no follow-up issue. Declining every finding lets the cycle restore readiness for the unchanged head."
 

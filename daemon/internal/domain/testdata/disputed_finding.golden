@@ -15,5 +15,11 @@
     "remediate",
     "decline",
     "defer"
-  ]
+  ],
+  "adjudication": {
+    "lean": "remediate",
+    "confidence": "medium",
+    "rationale": "The spec requires idempotent updates.",
+    "below_threshold": true
+  }
 }
