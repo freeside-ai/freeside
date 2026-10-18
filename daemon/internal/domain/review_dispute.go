@@ -2,6 +2,7 @@ package domain
 
 import (
 	"math"
+	"reflect"
 	"slices"
 	"strings"
 	"time"
@@ -17,6 +18,57 @@ func ReviewDisputeRoutes(finding Finding, declaredPaths []string) []Adjudication
 		routes = append([]AdjudicationRoute{RouteRemediate}, routes...)
 	}
 	return routes
+}
+
+// DisputedFindingAdjudicationFor derives one dispute row's adjudication block
+// from the finding's entry in the round's latest model-authored artifact
+// revision. The engine and the store gate share it, so a stored block is
+// always re-derived rather than trusted. A nil entry, or one no model judged,
+// has no block. A demoted entry's lean is the route it proposed before the
+// demotion; an `unknown` park with none has no lean.
+func DisputedFindingAdjudicationFor(
+	entry *FindingAdjudicationEntry, threshold DispatchThreshold,
+) (*DisputedFindingAdjudication, error) {
+	if entry == nil || (entry.Producer != AdjudicationProducerModel &&
+		entry.Producer != AdjudicationProducerEngineModel) {
+		return nil, nil
+	}
+	accepted, err := entry.Accepted(threshold)
+	if err != nil {
+		return nil, err
+	}
+	var lean *AdjudicationRoute
+	switch {
+	case entry.ProposedRoute != nil:
+		value := *entry.ProposedRoute
+		lean = &value
+	case entry.Route != RouteParkUnknown:
+		value := entry.Route
+		lean = &value
+	}
+	return &DisputedFindingAdjudication{
+		Lean: lean, Confidence: *entry.Confidence, Rationale: entry.Rationale,
+		BelowThreshold: !accepted,
+	}, nil
+}
+
+// ReviewDisputeBindingMatches reports whether a stored binding agrees with the
+// one derived from current state. A stored row with no adjudication block
+// agrees with any derived block: such a row predates the block (#2059), the
+// block carries no authority, and an item written before the upgrade keeps
+// its version rather than being rebuilt to add it. Every other field, and any
+// block the stored row does carry, must match exactly.
+func ReviewDisputeBindingMatches(stored, derived *ReviewDisputeBinding) bool {
+	if stored == nil || derived == nil {
+		return stored == derived
+	}
+	comparable := cloneReviewDisputeBinding(derived)
+	for index := range comparable.Findings {
+		if index < len(stored.Findings) && stored.Findings[index].Adjudication == nil {
+			comparable.Findings[index].Adjudication = nil
+		}
+	}
+	return reflect.DeepEqual(stored, comparable)
 }
 
 // NewHumanAdjudicationEntry records a final route, without model confidence or
