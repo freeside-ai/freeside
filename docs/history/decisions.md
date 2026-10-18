@@ -2762,3 +2762,22 @@ The client work is #1798 to #1803.)
 
 (Owner-assigned #2009 and its approved persistence amendment;
 [decision note](../../devlog/2026-10-14-0815-routed-dispute-subsets.md).)
+
+
+---
+
+## Revision 88 ("Accept Each Adjudicated Finding Independently"):
+
+1. **Keep valid answers when another answer is below threshold.** A routed
+   dispute lists only findings needing a person, including any parking routes
+   that must be settled with them. A failed call or invalid answer set still
+   sends the whole batch to a person.
+2. **Record accepted declines and defers before raising that dispute.** Their
+   external thread replies can proceed immediately. A human successor keeps
+   recorded outcomes and their provenance unchanged.
+3. **Wait for the human answer before remediation.** One dispatch combines the
+   adjudicator's and the person's fixes. Rounds needing no dispute and Discuss
+   revisions keep their existing behavior and choices.
+
+(Owner decision in #1990;
+[decision note](../../devlog/2026-10-14-1140-per-finding-adjudication.md).)

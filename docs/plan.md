@@ -4304,10 +4304,12 @@ structurally mismatches base-dependent proofs and forces reruns. The re-gate
 never restores readiness from evidence bound to a prior base.
 
 A base-advance re-entry keeps the candidate head, which was built on the old
-base. Its base-dependent proofs therefore bind three commits: the new base, the
-unchanged candidate head, and the prospective merge of that head into that
-base. The daemon builds the merge locally and never pushes it, so the head the
-forge shows stays the candidate head. For a base-dependent requirement, a proof
+base. This holds whether the base advanced after publication or before it
+(Section [7](#7-review-policy)). Its base-dependent proofs therefore bind three
+commits: the new base, the unchanged candidate head, and the prospective merge
+of that head into that base. The daemon builds the merge locally and never
+pushes it, so the head the forge shows, or the head a pre-publication re-entry
+publishes, stays the candidate head. For a base-dependent requirement, a proof
 that names a merge satisfies only a target that names the same merge, and a
 proof that names none never satisfies a target that names one.
 
@@ -4386,8 +4388,53 @@ recomputes under the Section [6](#6-verification) re-gate before any ready state
 
 A base-advance re-entry reviews the prospective merge of the unchanged head
 into the new base (Section [6](#6-verification)), not the head against a base it was not built
-on. The pass still binds the head the forge shows and the new base, and its
-request records the merge it evaluated.
+on. The pass still binds the candidate head and the new base, and its request
+records the merge it evaluated.
+
+**A base advance before publication re-enters the run instead of ending it**
+(decider: user, 2026-10-16; revision 89; #2058). The publication-time workflow
+audit of the target branch stays the only base-freshness gate, and nothing
+weakens it. When that audit finds the base advanced and the run holds no
+committed publication intent, the daemon:
+
+- keeps the candidate head and seals a re-entry authority that names the
+  audited tip as the new base. The base comes only from the daemon's own
+  recorded audit, never from a task payload;
+- builds the prospective merge of the unchanged head into the new base in the
+  run's own checkout and verifies it under the admitted recipe;
+- reviews the merge as one ordinary round of the same convergence segment,
+  bound to the new base, the head, and the merge;
+- carries every finding disposition from the rounds at the admitted base
+  forward by finding identity (#702), under the re-emission rule below;
+- sends new findings through ordinary adjudication and remediation, since the
+  head is not yet public. A remediated head is a new candidate head whose
+  base-dependent proofs bind the new base and that head's prospective merge;
+  and
+- publishes against the new base once the round is clean or fully
+  dispositioned.
+
+The re-review rule above decides what is re-reviewed. Because an advanced base
+invalidates the review pass, a pre-publication advance always costs exactly one
+re-review, of the prospective merge, and nothing else is re-reviewed: findings
+already adjudicated keep their dispositions under the re-emission rule below,
+and a clean or fully dispositioned re-review adds no further round. The
+re-review counts toward `hard_round_limit`. A conflicting prospective merge, or
+a limit that leaves no room for the re-review, ends the run with the existing
+`publish_blocked` item and hold reason `base_advanced`, its reason naming the
+conflict or the limit. A further advance before publication re-enters again
+under the same bound.
+
+A carried disposition stays in the published history, but it never stands in
+for adjudication that the new base requires. A finding the re-review does not
+re-emit keeps its disposition. A re-emitted identity whose carried disposition
+is `fixed` re-enters adjudication as a failed prior fix, the rule Finding
+Adjudication (below) sets for any re-emitted identity. A re-emitted declined or
+deferred identity keeps its disposition only when its FindingAdjudication's
+bound inputs are unchanged at the new base: the approved specification digest,
+the repository-instruction snapshot digest, and the resolved policy digest.
+Otherwise it re-enters adjudication with the carried disposition as prior
+history, because the new base can change the repository instructions that
+decision rested on.
 
 The pass runs with fresh context independent of the implementing invocation, in
 a read-only workspace, with no publication credentials. It receives repository
@@ -6198,21 +6245,37 @@ Record material changes here by revision, with the decider in parentheses.
 - On first re-litigation, promote the decision to a `docs/decisions/` ADR that
   cites its history entry.
 
-Revision 88 ("Accept Each Adjudicated Finding Independently"):
+Revision 89 ("A Base Advance Before Publication Re-Enters The Run"):
 
-1. **Keep valid answers when another answer is below threshold.** A routed
-   dispute lists only findings needing a person, including any parking routes
-   that must be settled with them. A failed call or invalid answer set still
-   sends the whole batch to a person.
-2. **Record accepted declines and defers before raising that dispute.** Their
-   external thread replies can proceed immediately. A human successor keeps
-   recorded outcomes and their provenance unchanged.
-3. **Wait for the human answer before remediation.** One dispatch combines the
-   adjudicator's and the person's fixes. Rounds needing no dispute and Discuss
-   revisions keep their existing behavior and choices.
+1. **A pre-publication base advance re-enters instead of ending the run.**
+   When the publication audit finds the target base advanced and no
+   publication intent is committed, the daemon keeps the head, seals a
+   re-entry authority naming its own audited tip, verifies and reviews the
+   prospective merge, carries every adjudicated disposition forward by
+   finding identity, and publishes against the new base (Sections
+   [6](#6-verification) and [7](#7-review-policy)). The audit stays the only
+   base-freshness gate.
+2. **The advance costs exactly one re-review, of the prospective merge.**
+   It is an ordinary round that counts toward `hard_round_limit`. A
+   re-emitted finding keeps its carried disposition unless it was `fixed`
+   (a failed prior fix) or its adjudication's bound specification,
+   instruction, or policy digest changed at the new base; then it is
+   re-adjudicated, with the carried disposition as history. Only new and
+   re-adjudicated findings lead to further rounds, through ordinary
+   adjudication and remediation. A conflicting merge, or a limit with no room
+   for the round, ends the run in `publish_blocked` with hold reason
+   `base_advanced`.
+3. **Rejected options.** A `publish_blocked` card action that reruns from
+   the new base (it needs a person, so a human loop stays exposed to the next
+   merge); skipping re-review when the advance touches disjoint paths
+   (Section [6](#6-verification) binds base-dependent proofs to the base, and
+   disjoint files do not prove independence); publishing on the stale audit;
+   and a base watch during human gates (it shortens the loss window but adds
+   nothing once re-entry exists); and re-adjudicating every re-emitted
+   finding (it repeats decisions made under unchanged inputs).
 
-(Owner decision in #1990;
-[decision note](../devlog/2026-10-14-1140-per-finding-adjudication.md).)
+(Owner decision in #2058;
+[decision note](../devlog/2026-10-18-0940-pre-publication-base-advance.md).)
 
 ## 14. Risks
 
