@@ -2821,6 +2821,9 @@ func (w *productionPublicationWorkflow) reconcileTask(
 		if errors.Is(err, domain.ErrReviewConfigurationUnapproved) {
 			return w.holdReviewConfigurationMismatch(ctx, task, checkpoint.Imported, err)
 		}
+		if errors.Is(err, domain.ErrParentKeyMismatch) {
+			return w.holdDispositionHistoryMismatch(ctx, task, checkpoint.Imported)
+		}
 		return productionTaskOutcome{}, fmt.Errorf("load publication disposition history: %w", err)
 	}
 	candidate.DispositionHistory = &dispositionHistory
