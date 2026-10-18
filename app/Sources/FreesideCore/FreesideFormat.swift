@@ -75,7 +75,7 @@ extension View {
         #if os(macOS)
             help(exact)
         #elseif os(iOS)
-            contextMenu {
+            copyMenu {
                 Button("Copy \(exact)") {
                     UIPasteboard.general.string = exact
                 }

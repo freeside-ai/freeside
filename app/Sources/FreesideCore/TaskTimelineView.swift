@@ -165,7 +165,7 @@ struct TaskTimelineView: View {
                     label: TaskDisplay.detailStatus(lines.status, stage: stage),
                     cut: TaskDisplay.statusCut(task, position: position))
             )
-            .contextMenu {
+            .copyMenu {
                 Button("Copy task ID") { Clipboard.copy(snapshot.task.id) }
             }
             TaskNameLabel(

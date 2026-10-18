@@ -312,12 +312,17 @@ struct TaskRowView: View {
     @Environment(\.dynamicTypeSize) private var dynamicTypeSize
 
     var body: some View {
-        if let now {
-            row(at: now)
-        } else {
-            TimelineView(.periodic(from: .now, by: 60)) { context in
-                row(at: context.date)
+        Group {
+            if let now {
+                row(at: now)
+            } else {
+                TimelineView(.periodic(from: .now, by: 60)) { context in
+                    row(at: context.date)
+                }
             }
+        }
+        .contextMenu {
+            Button("Copy task name") { Clipboard.copy(task.display_names.task.text) }
         }
     }
 

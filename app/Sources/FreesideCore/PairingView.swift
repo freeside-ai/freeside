@@ -225,7 +225,7 @@ struct PairingView: View {
             #if os(macOS)
                 content.help(exact)
             #elseif os(iOS)
-                content.contextMenu {
+                content.copyMenu {
                     Button("Copy \(exact)") {
                         UIPasteboard.general.string = exact
                     }
