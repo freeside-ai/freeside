@@ -10617,6 +10617,99 @@ public enum Components {
             public var external: Components.Schemas.DisputedFinding.externalPayload?
             /// - Remark: Generated from `#/components/schemas/DisputedFinding/offered_routes`.
             public var offered_routes: [Components.Schemas.AdjudicationRoute]
+            /// The adjudicator's proposal for this finding, shown so the human does not decide blind. It is a model judgment, never a route the human can send: offered_routes alone are executable, and lean may name a route they do not include. Null when the round has no model-authored adjudication for the finding (the adjudicator was unconfigured or its batch failed validation, or the finding was never judged), and on an item stored before this field existed.
+            ///
+            ///
+            /// - Remark: Generated from `#/components/schemas/DisputedFinding/adjudication`.
+            public struct adjudicationPayload: Codable, Hashable, Sendable {
+                /// The route the adjudicator proposed; null when it proposed none.
+                ///
+                /// - Remark: Generated from `#/components/schemas/DisputedFinding/adjudication/lean`.
+                public struct leanPayload: Codable, Hashable, Sendable {
+                    /// - Remark: Generated from `#/components/schemas/DisputedFinding/adjudication/lean/value1`.
+                    public var value1: Components.Schemas.AdjudicationRoute
+                    /// Creates a new `leanPayload`.
+                    ///
+                    /// - Parameters:
+                    ///   - value1:
+                    public init(value1: Components.Schemas.AdjudicationRoute) {
+                        self.value1 = value1
+                    }
+                    public init(from decoder: any Swift.Decoder) throws {
+                        self.value1 = try decoder.decodeFromSingleValueContainer()
+                    }
+                    public func encode(to encoder: any Swift.Encoder) throws {
+                        try encoder.encodeToSingleValueContainer(self.value1)
+                    }
+                }
+                /// The route the adjudicator proposed; null when it proposed none.
+                ///
+                /// - Remark: Generated from `#/components/schemas/DisputedFinding/adjudication/lean`.
+                public var lean: Components.Schemas.DisputedFinding.adjudicationPayload.leanPayload?
+                /// - Remark: Generated from `#/components/schemas/DisputedFinding/adjudication/confidence`.
+                public var confidence: Components.Schemas.AdjudicationConfidence
+                /// - Remark: Generated from `#/components/schemas/DisputedFinding/adjudication/rationale`.
+                public var rationale: Swift.String
+                /// True when the confidence is below the run's dispatch threshold, so the proposal could not act on its own.
+                ///
+                ///
+                /// - Remark: Generated from `#/components/schemas/DisputedFinding/adjudication/below_threshold`.
+                public var below_threshold: Swift.Bool
+                /// Creates a new `adjudicationPayload`.
+                ///
+                /// - Parameters:
+                ///   - lean: The route the adjudicator proposed; null when it proposed none.
+                ///   - confidence:
+                ///   - rationale:
+                ///   - below_threshold: True when the confidence is below the run's dispatch threshold, so the proposal could not act on its own.
+                public init(
+                    lean: Components.Schemas.DisputedFinding.adjudicationPayload.leanPayload? = nil,
+                    confidence: Components.Schemas.AdjudicationConfidence,
+                    rationale: Swift.String,
+                    below_threshold: Swift.Bool
+                ) {
+                    self.lean = lean
+                    self.confidence = confidence
+                    self.rationale = rationale
+                    self.below_threshold = below_threshold
+                }
+                public enum CodingKeys: String, CodingKey {
+                    case lean
+                    case confidence
+                    case rationale
+                    case below_threshold
+                }
+                public init(from decoder: any Swift.Decoder) throws {
+                    let container = try decoder.container(keyedBy: CodingKeys.self)
+                    self.lean = try container.decodeIfPresent(
+                        Components.Schemas.DisputedFinding.adjudicationPayload.leanPayload.self,
+                        forKey: .lean
+                    )
+                    self.confidence = try container.decode(
+                        Components.Schemas.AdjudicationConfidence.self,
+                        forKey: .confidence
+                    )
+                    self.rationale = try container.decode(
+                        Swift.String.self,
+                        forKey: .rationale
+                    )
+                    self.below_threshold = try container.decode(
+                        Swift.Bool.self,
+                        forKey: .below_threshold
+                    )
+                    try decoder.ensureNoAdditionalProperties(knownKeys: [
+                        "lean",
+                        "confidence",
+                        "rationale",
+                        "below_threshold"
+                    ])
+                }
+            }
+            /// The adjudicator's proposal for this finding, shown so the human does not decide blind. It is a model judgment, never a route the human can send: offered_routes alone are executable, and lean may name a route they do not include. Null when the round has no model-authored adjudication for the finding (the adjudicator was unconfigured or its batch failed validation, or the finding was never judged), and on an item stored before this field existed.
+            ///
+            ///
+            /// - Remark: Generated from `#/components/schemas/DisputedFinding/adjudication`.
+            public var adjudication: Components.Schemas.DisputedFinding.adjudicationPayload?
             /// Creates a new `DisputedFinding`.
             ///
             /// - Parameters:
@@ -10626,13 +10719,15 @@ public enum Components {
             ///   - severity:
             ///   - external:
             ///   - offered_routes:
+            ///   - adjudication: The adjudicator's proposal for this finding, shown so the human does not decide blind. It is a model judgment, never a route the human can send: offered_routes alone are executable, and lean may name a route they do not include. Null when the round has no model-authored adjudication for the finding (the adjudicator was unconfigured or its batch failed validation, or the finding was never judged), and on an item stored before this field existed.
             public init(
                 finding_id: Swift.String,
                 message: Swift.String,
                 location: Components.Schemas.DisputedFinding.locationPayload? = nil,
                 severity: Components.Schemas.DisputedFinding.severityPayload,
                 external: Components.Schemas.DisputedFinding.externalPayload? = nil,
-                offered_routes: [Components.Schemas.AdjudicationRoute]
+                offered_routes: [Components.Schemas.AdjudicationRoute],
+                adjudication: Components.Schemas.DisputedFinding.adjudicationPayload? = nil
             ) {
                 self.finding_id = finding_id
                 self.message = message
@@ -10640,6 +10735,7 @@ public enum Components {
                 self.severity = severity
                 self.external = external
                 self.offered_routes = offered_routes
+                self.adjudication = adjudication
             }
             public enum CodingKeys: String, CodingKey {
                 case finding_id
@@ -10648,6 +10744,7 @@ public enum Components {
                 case severity
                 case external
                 case offered_routes
+                case adjudication
             }
             public init(from decoder: any Swift.Decoder) throws {
                 let container = try decoder.container(keyedBy: CodingKeys.self)
@@ -10675,13 +10772,18 @@ public enum Components {
                     [Components.Schemas.AdjudicationRoute].self,
                     forKey: .offered_routes
                 )
+                self.adjudication = try container.decodeIfPresent(
+                    Components.Schemas.DisputedFinding.adjudicationPayload.self,
+                    forKey: .adjudication
+                )
                 try decoder.ensureNoAdditionalProperties(knownKeys: [
                     "finding_id",
                     "message",
                     "location",
                     "severity",
                     "external",
-                    "offered_routes"
+                    "offered_routes",
+                    "adjudication"
                 ])
             }
         }

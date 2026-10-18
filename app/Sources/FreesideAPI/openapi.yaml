@@ -4911,7 +4911,7 @@ components:
       type: object
       description: A bound review finding and the routes the human may execute.
       additionalProperties: false
-      required: [finding_id, message, location, severity, external, offered_routes]
+      required: [finding_id, message, location, severity, external, offered_routes, adjudication]
       properties:
         finding_id:
           type: string
@@ -4944,6 +4944,35 @@ components:
           uniqueItems: true
           items:
             $ref: "#/components/schemas/AdjudicationRoute"
+        adjudication:
+          type: object
+          nullable: true
+          description: >
+            The adjudicator's proposal for this finding, shown so the human
+            does not decide blind. It is a model judgment, never a route the
+            human can send: offered_routes alone are executable, and lean may
+            name a route they do not include. Null when the round has no
+            model-authored adjudication for the finding (the adjudicator was
+            unconfigured or its batch failed validation, or the finding was
+            never judged), and on an item stored before this field existed.
+          additionalProperties: false
+          required: [lean, confidence, rationale, below_threshold]
+          properties:
+            lean:
+              description: The route the adjudicator proposed; null when it proposed none.
+              nullable: true
+              allOf:
+                - $ref: "#/components/schemas/AdjudicationRoute"
+            confidence:
+              $ref: "#/components/schemas/AdjudicationConfidence"
+            rationale:
+              type: string
+              minLength: 1
+            below_threshold:
+              type: boolean
+              description: >
+                True when the confidence is below the run's dispatch
+                threshold, so the proposal could not act on its own.
 
     AttentionItem:
       type: object
