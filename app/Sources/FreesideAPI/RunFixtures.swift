@@ -259,7 +259,7 @@ public enum RunFixtures {
         let findings = round.findings_count == 3
         let result =
             findings
-            ? #"{"findings":[{"severity":"P1","location":{"path":"Sources/Cache.swift","start_line":42,"end_line":45},"explanation":"A failed write clears the last saved value. Keep the previous value until the replacement succeeds."},{"severity":"P2","location":{"path":"Tests/CacheTests.swift","start_line":18,"end_line":22},"explanation":"Cover the failed-write path so a later change cannot silently lose the saved value."},{"severity":"P3","location":{"path":"README.md","whole_file":true},"explanation":"Document whether a failed refresh keeps the last saved value."}]}"#
+            ? #"{"findings":[{"severity":"P1","location":{"path":"Sources/Cache.swift","start_line":42,"end_line":45},"explanation":"A failed write clears the last saved value. Keep the previous value until `save(_:)` returns."},{"severity":"P2","location":{"path":"Tests/CacheTests.swift","start_line":18,"end_line":22},"explanation":"Cover the failed-write path so a later change cannot silently lose the saved value."},{"severity":"P3","location":{"path":"README.md","whole_file":true},"explanation":"Document whether a failed refresh keeps the last saved value."}]}"#
             : #"{"findings":[]}"#
         let message =
             findings

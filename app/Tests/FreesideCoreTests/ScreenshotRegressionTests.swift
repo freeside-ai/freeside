@@ -3395,6 +3395,44 @@
                         .screenshotHovering(.showInbox)
                         .screenshotHighlighting(.control))))
             surfaces.append(contentsOf: try pendingStopsSurfaces())
+            // A finding whose message carries Markdown, on the dispute card
+            // and the adjudication card: the title, then a code span and a
+            // list as formatted blocks (#2060). Drawn last, for the reason
+            // given above (#1698).
+            let markdownDispute = AttentionFixtures.markdownReviewDispute()
+            let markdownDisputeStore = InboxStore(
+                client: APIClientFactory.mock(server: MockServer(items: [markdownDispute])),
+                now: { screenshotNow })
+            markdownDisputeStore.replaceAll(with: [markdownDispute])
+            await preloadReferences(markdownDispute.item, into: markdownDisputeStore)
+            let markdownDisputeModel = DecisionModel(store: markdownDisputeStore, itemID: markdownDispute.item.id)
+            await markdownDisputeModel.validate()
+            await markdownDisputeModel.refreshActionSurface()
+            #expect(markdownDisputeModel.validation == .validated)
+            let markdownDisputeDetail = DecisionDetailView(
+                store: markdownDisputeStore, itemID: markdownDispute.item.id,
+                loadsAttachments: false, showsValidationProgress: false,
+                now: screenshotNow, model: markdownDisputeModel)
+            let markdownFindings = AttentionFixtures.findingAdjudicationMarkdownMessages().item
+            let markdownFindingsDetail = DecisionDetailView(
+                store: store,
+                itemID: markdownFindings.id,
+                loadsAttachments: false,
+                showsValidationProgress: false)
+            for (suffix, width) in [("", canvasWidth), ("-phone", CGFloat(390))] {
+                surfaces.append(
+                    Surface(
+                        name: "decision-review_dispute-markdown\(suffix)", width: width,
+                        view: AnyView(
+                            markdownDisputeDetail.screenshotCard(
+                                markdownDispute.item, at: dynamicTypeSize, compactLayout: width < canvasWidth))))
+                surfaces.append(
+                    Surface(
+                        name: "decision-finding_adjudication-markdown\(suffix)", width: width,
+                        view: AnyView(
+                            markdownFindingsDetail.screenshotCard(
+                                markdownFindings, at: dynamicTypeSize, compactLayout: width < canvasWidth))))
+            }
             return surfaces
         }
 
