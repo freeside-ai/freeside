@@ -275,6 +275,12 @@ import Testing
             #expect(
                 infoSlot(.review_dispute, on: platform)
                     == (try module(.claims, of: .review_dispute)))
+            // A routed dispute carries no claim, so its findings keyword is
+            // the first unverified one in reading order.
+            #expect(
+                DecisionCardComposition.forType(.review_dispute).infoSlot(
+                    for: AttentionFixtures.routedReviewDispute().item, in: .init(platform: platform))
+                    == (try module(.findingFacts, of: .review_dispute)))
             // The failure card reads its diagnostic in the card on both
             // platforms (frame 5.3), so that keyword carries the control.
             #expect(

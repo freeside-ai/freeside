@@ -638,6 +638,10 @@ struct DecisionCardComposition: Equatable {
         case .recommendation:
             return context.platform == .phone && context.drawsUnverifiedRecommendation
         case .findingFacts:
+            // A routed dispute heads its findings with one
+            // `Findings (unverified)` keyword: the reviewer's messages and
+            // the model's routes are unchecked.
+            if item.review_dispute?.value1.findings?.isEmpty == false { return true }
             guard let binding = item.finding_adjudication?.value1 else { return false }
             return FindingCardPresentation.cards(binding)
                 .contains { $0.producerUnverifiedKeyword != nil }
