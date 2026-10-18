@@ -763,6 +763,11 @@ enum MockContractValidation {
                     {
                         return "invalid disputed finding attribution"
                     }
+                    if let adjudication = finding.adjudication,
+                        adjudication.rationale.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+                    {
+                        return "invalid disputed finding adjudication"
+                    }
                 }
             }
             guard case .run(let subject) = item.subject,

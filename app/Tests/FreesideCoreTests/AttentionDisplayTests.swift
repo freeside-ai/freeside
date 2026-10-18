@@ -16,6 +16,29 @@ import Testing
         #expect(!AttentionDisplay.hasExternalDisputedFindings(AttentionFixtures.fixture(type: .review_dispute).item))
     }
 
+    /// The adjudicator's lean reads as a proposal with its confidence and
+    /// threshold standing, and an absent lean says so rather than leaving
+    /// the line blank.
+    @Test func disputedFindingLeanNamesRouteConfidenceAndThreshold() throws {
+        let findings = try #require(AttentionFixtures.routedReviewDispute().item.review_dispute?.value1.findings)
+        let leaning = try #require(findings[0].adjudication)
+        #expect(
+            AttentionDisplay.disputedFindingLean(leaning, external: true)
+                == "Leans: Fix in This Pull Request · Medium confidence · below the dispatch threshold, so it can't act on its own"
+        )
+        let none = try #require(findings[1].adjudication)
+        #expect(
+            AttentionDisplay.disputedFindingLean(none, external: false)
+                == "No lean · Low confidence · below the dispatch threshold, so it can't act on its own")
+        var heldAbove = leaning
+        heldAbove.lean = .init(value1: .decline)
+        heldAbove.confidence = .high
+        heldAbove.below_threshold = false
+        #expect(
+            AttentionDisplay.disputedFindingLean(heldAbove, external: false)
+                == "Leans: Decline the finding · High confidence")
+    }
+
     /// Every card that asks for a decision asks it in one sentence. A
     /// retired blocked item, which only a closed row still carries, never
     /// asked for one: where its typed wait says what it waited on, it leads

@@ -119,10 +119,18 @@ public enum AttentionFixtures {
                 finding_id: "finding-1", message: "A retry can apply the same update twice.",
                 location: .init(value1: .init(path: "daemon/update.go", start_line: 42, end_line: 45)),
                 severity: .P1, external: .init(reviewer_login: "reviewer", thread_id: "review-thread-1"),
-                offered_routes: [.remediate, .decline, ._defer]),
+                offered_routes: [.remediate, .decline, ._defer],
+                adjudication: .init(
+                    lean: .init(value1: .remediate), confidence: .medium,
+                    rationale: "The retry path re-sends the update without the idempotency key the first attempt used.",
+                    below_threshold: true)),
             .init(
                 finding_id: "finding-2", message: "Document how operators recover interrupted updates.",
-                location: nil, severity: .P2, external: nil, offered_routes: [.decline, ._defer]),
+                location: nil, severity: .P2, external: nil, offered_routes: [.decline, ._defer],
+                adjudication: .init(
+                    lean: nil, confidence: .low,
+                    rationale: "The spec does not say whether recovery steps belong in this change.",
+                    below_threshold: true)),
         ]
         return snapshot
     }
