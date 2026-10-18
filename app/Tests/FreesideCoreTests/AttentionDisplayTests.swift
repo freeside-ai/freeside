@@ -75,6 +75,17 @@ import Testing
                 == "The model favors Fix in this PR, which this finding does not offer.")
     }
 
+    /// The face's one mono line says where the finding is and who raised
+    /// it, and drops whichever the finding lacks.
+    @Test func disputedFindingSourceJoinsLocationAndReviewer() throws {
+        let findings = try #require(AttentionFixtures.routedReviewDispute().item.review_dispute?.value1.findings)
+        #expect(AttentionDisplay.disputedFindingSource(findings[0]) == "daemon/update.go:42-45 · reviewer")
+        #expect(AttentionDisplay.disputedFindingSource(findings[1]) == nil)
+        var reviewerOnly = findings[0]
+        reviewerOnly.location = nil
+        #expect(AttentionDisplay.disputedFindingSource(reviewerOnly) == "reviewer")
+    }
+
     /// Apply counts the picks (R32), and keeps the generic label until the
     /// first one.
     @Test func applyFindingRoutesLabelCountsThePicks() {

@@ -201,6 +201,14 @@ enum AttentionDisplay {
         return "The model favors \(route), which this finding does not offer."
     }
 
+    /// Where a disputed finding is and who raised it, as one mono line on
+    /// its face. Nil when it has neither a location nor a reviewer.
+    static func disputedFindingSource(_ finding: Components.Schemas.DisputedFinding) -> String? {
+        let parts = [finding.location.map { findingLocation($0.value1) }, finding.external?.reviewer_login]
+            .compactMap { $0 }
+        return parts.isEmpty ? nil : parts.joined(separator: " · ")
+    }
+
     static let disputedFindingNoAdjudication = "No adjudicator view was recorded for this finding."
 
     /// The Apply label on a routed dispute, counting the picks (R32), so a
