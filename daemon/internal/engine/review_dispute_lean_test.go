@@ -1,6 +1,7 @@
 package engine
 
 import (
+	"database/sql"
 	"errors"
 	"reflect"
 	"slices"
@@ -136,6 +137,55 @@ func TestReviewDisputeCarriesAdjudicatorLean(t *testing.T) {
 	})
 }
 
+// TestLatestModelAdjudicationChecksSkippedHumanRow proves the read that skips
+// a human revision still checks that row's stored columns, so a corrupt one
+// fails closed instead of exposing the model revision before it.
+func TestLatestModelAdjudicationChecksSkippedHumanRow(t *testing.T) {
+	for name, tamper := range map[string]string{
+		"predecessor column": `UPDATE finding_adjudications SET predecessor_digest = 'forged' WHERE revision = 2`,
+		"spec column":        `UPDATE finding_adjudications SET approved_spec_digest = 'forged' WHERE revision = 2`,
+		// A corrupted key column would hide the row from a keyed read.
+		"round column": `UPDATE finding_adjudications SET round = 7 WHERE revision = 2`,
+		"run column":   `UPDATE finding_adjudications SET run_id = 'run-elsewhere' WHERE revision = 2`,
+	} {
+		t.Run(name, func(t *testing.T) {
+			f, command := parkedReviewDispute(t, true)
+			if _, err := f.signet.Submit(f.ctx, command); err != nil {
+				t.Fatal(err)
+			}
+			if _, err := f.workflow.reconcileFindingAdjudication(f.ctx, f.task, f.binding, f.record, f.baseRoot, f.headRoot); err != nil {
+				t.Fatal(err)
+			}
+			latest := func() (domain.FindingAdjudication, error) {
+				var artifact domain.FindingAdjudication
+				err := f.store.Read(f.ctx, func(tx *store.ReadTx) error {
+					var err error
+					artifact, err = tx.LatestModelFindingAdjudication(f.ctx, f.task.RunID, 1)
+					return err
+				})
+				return artifact, err
+			}
+			// The intact round reads through the human revision 2 to the
+			// model's revision 1, so the failure below is the tamper.
+			if artifact, err := latest(); err != nil || artifact.Revision != 1 || artifact.Decision != nil {
+				t.Fatalf("intact read = revision %d, decision %v, %v; want model revision 1",
+					artifact.Revision, artifact.Decision, err)
+			}
+			db, err := sql.Open("sqlite", f.dbPath)
+			if err != nil {
+				t.Fatal(err)
+			}
+			t.Cleanup(func() { _ = db.Close() })
+			if _, err := db.ExecContext(f.ctx, tamper); err != nil {
+				t.Fatal(err)
+			}
+			if _, err := latest(); !errors.Is(err, store.ErrRowInconsistent) {
+				t.Fatalf("corrupt human row = %v, want ErrRowInconsistent", err)
+			}
+		})
+	}
+}
+
 // TestReviewDisputeLeanNeverWidensChoices proves the signet gate still takes
 // only an offered route: the row's lean names a route the row does not
 // offer, and choosing it is refused.
@@ -176,4 +226,124 @@ func TestReviewDisputeLeanNeverWidensChoices(t *testing.T) {
 	if err := submit(domain.RouteDecline); err != nil {
 		t.Fatalf("offered route refused: %v", err)
 	}
+}
+
+// TestReviewDisputeGateRederivesAdjudication proves the store gate re-derives
+// each stored block on write and on reconstruction: any change to it fails
+// closed, and only a row with no block at all passes, as a pre-#2059 row.
+func TestReviewDisputeGateRederivesAdjudication(t *testing.T) {
+	put := func(f *findingAdjudicationFixture, itemID domain.ItemID, mutate func(*domain.DisputedFinding)) error {
+		return f.store.Write(f.ctx, func(tx *store.WriteTx) error {
+			item, err := tx.GetAttentionItem(f.ctx, itemID)
+			if err != nil {
+				return err
+			}
+			mutate(&item.ReviewDispute.Findings[0])
+			item.ItemVersion++
+			return tx.PutAttentionItem(f.ctx, item)
+		})
+	}
+	for name, mutate := range map[string]func(*domain.DisputedFinding){
+		"lean": func(row *domain.DisputedFinding) {
+			lean := domain.RouteRemediate
+			block := *row.Adjudication
+			block.Lean = &lean
+			row.Adjudication = &block
+		},
+		"no lean": func(row *domain.DisputedFinding) {
+			block := *row.Adjudication
+			block.Lean = nil
+			row.Adjudication = &block
+		},
+		"confidence": func(row *domain.DisputedFinding) {
+			block := *row.Adjudication
+			block.Confidence = domain.ConfidenceLow
+			row.Adjudication = &block
+		},
+		"rationale": func(row *domain.DisputedFinding) {
+			block := *row.Adjudication
+			block.Rationale = "forged"
+			row.Adjudication = &block
+		},
+		"threshold flag": func(row *domain.DisputedFinding) {
+			block := *row.Adjudication
+			block.BelowThreshold = !block.BelowThreshold
+			row.Adjudication = &block
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			f, command := parkedReviewDispute(t, true)
+			if err := put(f, command.Payload.ItemID, mutate); !errors.Is(err, domain.ErrParentKeyMismatch) {
+				t.Fatalf("tampered block = %v, want ErrParentKeyMismatch", err)
+			}
+		})
+	}
+	t.Run("block without adjudication", func(t *testing.T) {
+		f, command := parkedReviewDispute(t, false)
+		err := put(f, command.Payload.ItemID, func(row *domain.DisputedFinding) {
+			row.Adjudication = &domain.DisputedFindingAdjudication{
+				Confidence: domain.ConfidenceHigh, Rationale: "invented", BelowThreshold: false,
+			}
+		})
+		if !errors.Is(err, domain.ErrParentKeyMismatch) {
+			t.Fatalf("invented block = %v, want ErrParentKeyMismatch", err)
+		}
+	})
+	t.Run("tampered on reconstruction", func(t *testing.T) {
+		f, command := parkedReviewDispute(t, true)
+		db, err := sql.Open("sqlite", f.dbPath)
+		if err != nil {
+			t.Fatal(err)
+		}
+		t.Cleanup(func() { _ = db.Close() })
+		if _, err := db.ExecContext(f.ctx, `UPDATE attention_items
+			SET body = json_set(body, '$.review_dispute.findings[0].adjudication.lean', 'remediate') WHERE id = ?`,
+			command.Payload.ItemID); err != nil {
+			t.Fatal(err)
+		}
+		err = f.store.Read(f.ctx, func(tx *store.ReadTx) error {
+			_, err := tx.GetAttentionItem(f.ctx, command.Payload.ItemID)
+			return err
+		})
+		if !errors.Is(err, domain.ErrParentKeyMismatch) {
+			t.Fatalf("tampered stored block = %v, want ErrParentKeyMismatch", err)
+		}
+	})
+	t.Run("legacy row", func(t *testing.T) {
+		f, command := parkedReviewDispute(t, true)
+		// The binding is immutable once written, so a pre-#2059 row is
+		// reproduced in place: its stored body has no block at all.
+		db, err := sql.Open("sqlite", f.dbPath)
+		if err != nil {
+			t.Fatal(err)
+		}
+		t.Cleanup(func() { _ = db.Close() })
+		if _, err := db.ExecContext(f.ctx, `UPDATE attention_items
+			SET body = json_remove(body, '$.review_dispute.findings[0].adjudication') WHERE id = ?`,
+			command.Payload.ItemID); err != nil {
+			t.Fatal(err)
+		}
+		var version int
+		read := func() domain.AttentionItem {
+			var item domain.AttentionItem
+			if err := f.store.Read(f.ctx, func(tx *store.ReadTx) error {
+				var err error
+				item, err = tx.GetAttentionItem(f.ctx, command.Payload.ItemID)
+				return err
+			}); err != nil {
+				t.Fatal(err)
+			}
+			return item
+		}
+		version = read().ItemVersion
+		// Reconciling again keeps the legacy item as it is rather than
+		// rebuilding it under the person deciding it.
+		if _, err := f.workflow.reconcileFindingAdjudication(f.ctx, f.task, f.binding, f.record, f.baseRoot, f.headRoot); err != nil {
+			t.Fatal(err)
+		}
+		if item := read(); item.ItemVersion != version || item.ReviewDispute.Findings[0].Adjudication != nil {
+			t.Fatalf("legacy item rebuilt: version %d -> %d, block %+v",
+				version, item.ItemVersion, item.ReviewDispute.Findings[0].Adjudication)
+		}
+	})
 }

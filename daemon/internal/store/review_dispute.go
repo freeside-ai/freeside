@@ -47,6 +47,15 @@ func (tx *ReadTx) gateExecutableReviewDispute(ctx context.Context, item domain.A
 	if err != nil {
 		return err
 	}
+	var adjudication *domain.FindingAdjudication
+	latest, err := tx.LatestModelFindingAdjudication(ctx, binding.RunID, binding.Round)
+	switch {
+	case err == nil:
+		adjudication = &latest
+	case !errors.Is(err, ErrNotFound):
+		return err
+	}
+	threshold := domain.ResolvedDispatchThreshold(policy, domain.FindingConfidenceThresholdKey)
 	for _, row := range binding.Findings {
 		finding, err := tx.GetFinding(ctx, row.FindingID)
 		if err != nil {
@@ -59,6 +68,19 @@ func (tx *ReadTx) gateExecutableReviewDispute(ctx context.Context, item domain.A
 		if row.Message != finding.Message || !reflect.DeepEqual(row.Location, finding.Location) || row.Severity != finding.Severity ||
 			!reflect.DeepEqual(row.External, identity) || !slices.Equal(row.OfferedRoutes, domain.ReviewDisputeRoutes(finding, domain.CanonicalDeclaredPaths(policy))) {
 			return domain.ErrParentKeyMismatch
+		}
+		// The adjudication block is re-derived, never trusted. A row with no
+		// block passes as one written before the block existed (#2059): it
+		// carries no authority, since routes come only from offered_routes,
+		// and an item already open at the upgrade is never rebuilt to add it.
+		if row.Adjudication != nil {
+			derived, err := domain.DisputedFindingAdjudicationIn(adjudication, row.FindingID, threshold)
+			if err != nil {
+				return err
+			}
+			if !reflect.DeepEqual(row.Adjudication, derived) {
+				return domain.ErrParentKeyMismatch
+			}
 		}
 	}
 	if len(binding.Findings) < len(binding.FindingIDs) {

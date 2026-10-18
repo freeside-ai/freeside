@@ -59,6 +59,7 @@ type findingAdjudicationFixture struct {
 	finding   domain.Finding
 	baseRoot  string
 	headRoot  string
+	dbPath    string
 }
 
 type findingAdjudicationArtifactStore struct {
@@ -139,7 +140,8 @@ func newFindingAdjudicationFixtureWithOptions(
 	}
 	ctx := t.Context()
 	dir := t.TempDir()
-	st := storetest.Open(t, filepath.Join(dir, "freeside.db"), store.Options{})
+	dbPath := filepath.Join(dir, "freeside.db")
+	st := storetest.Open(t, dbPath, store.Options{})
 	runID := domain.RunID("run-adjudication")
 	specification := []byte("approved work-unit specification")
 	instructions := []byte("trusted repository instructions")
@@ -277,7 +279,7 @@ func newFindingAdjudicationFixtureWithOptions(
 	}
 	return &findingAdjudicationFixture{
 		ctx: ctx, store: st, workflow: workflow, artifacts: artifacts, driver: driver,
-		signet: signetService, blobs: blobs,
+		signet: signetService, blobs: blobs, dbPath: dbPath,
 		task: productionPublicationTask{
 			RunID: runID, ProjectID: run.ProjectID, HeadSHA: record.HeadSHA,
 		},
