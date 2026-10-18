@@ -3421,6 +3421,103 @@ func TestProductionPublishedWithoutCleanRecordFailsClosed(t *testing.T) {
 	p.assertHoldSurvivesRestart(t, map[domain.Digest]bool{p.recipeD: true})
 }
 
+func TestProductionDispositionHistoryMismatchHoldsTheTask(t *testing.T) {
+	t.Parallel()
+	// A disposition-history mismatch on the forward publication path is a
+	// per-run trust-record contradiction: it holds the one task, as the
+	// recovery path does, instead of returning a lane-fatal error that
+	// durably stops the daemon (issue #2057). A review failure recorded for a
+	// later round supersedes the clean record, so the loader rejects the
+	// history with ErrParentKeyMismatch. The failure lands while the
+	// publication author runs: after assertReviewedCandidate's failure read
+	// and before the forward loader, so the loader is the first check to see
+	// it.
+	metadata := productionPublicationMetadata()
+	metadata.Title, metadata.Body = "", ""
+	metadata.Recipe = "freeside.client-publication/v2"
+	p := newAuthoredMetadataHarness(t, metadata, nil)
+	injected := false
+	author := inferencefake.New()
+	author.Script(inference.PublicationAuthorExplainSiteID, inferencefake.Script{
+		Response: inference.Response{Output: []byte(authoredExplainOutput), ComputeUnits: 5},
+	})
+	driver := reviewFailureInjectingDriver{Driver: author, inject: func() error {
+		injected = true
+		return p.store.Write(p.ctx, func(tx *store.WriteTx) error {
+			return tx.PutReviewFailure(p.ctx, domain.ReviewFailure{
+				InvocationID: engine.ProductionReviewInvocationID(p.runID, 2),
+				RunID:        p.runID, Round: 2,
+				BaseSHA: p.baseSHA, HeadSHA: p.replay.HeadSHA,
+				Class:      domain.ReviewFailureContradiction,
+				Reason:     "review failure recorded after the clean record",
+				ObservedAt: p.now,
+			})
+		})
+	}}
+	advisoryStore, err := advisory.Open(
+		filepath.Join(t.TempDir(), "advisory.json"), 20, 16<<10,
+		advisory.WithClock(func() time.Time { return p.now }),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	limits := inference.Limits{Calls: 10, ComputeUnits: 100_000, AttentionItems: 10, Starvation: time.Hour}
+	p.judgments, err = inference.New(inference.Config{
+		StatePath: filepath.Join(t.TempDir(), "ledger.json"),
+		Roles:     inferencefake.Roles{Provider: "fake", Model: "author", Driver: driver},
+		Sites: []inference.Site{inference.PublicationAuthorExplainSite(inference.Budget{
+			Window: time.Hour, Site: limits, Project: limits, Global: limits,
+			MaxCallsPerRoot: 10, MaxStarvationPerRoot: time.Hour,
+		})},
+		Advisory: advisoryStore, Now: func() time.Time { return p.now },
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	p.workflow = p.newEngine(t, productionCrashSeams{}, true)
+	p.startAndRecordExport(t)
+	result, err := p.reconcileLanes()
+	if err != nil {
+		t.Fatalf("disposition-history mismatch stopped the lane instead of holding: %v", err)
+	}
+	if !injected {
+		t.Fatal("publication author was never called")
+	}
+	if result.BlockedItemsCreated != 1 || result.ReadyItemsCreated != 0 ||
+		result.PublicationTasksCompleted != 0 {
+		t.Fatalf("disposition-history mismatch outcome = %#v", result)
+	}
+	blocked, err := p.attention.GetAttentionItem(p.ctx, domain.ProductionBlockedItemID(p.runID))
+	if err != nil || blocked.Item.Status != domain.StatusOpen ||
+		!strings.Contains(blocked.Item.Reason, "disposition history no longer matches") {
+		t.Fatalf("disposition-history hold item = %#v, %v", blocked, err)
+	}
+	assertRunHoldReason(t, p, domain.HoldTrustBlocked)
+	if got := p.transport.pushCount(); got != 0 {
+		t.Fatalf("held run pushed %d times", got)
+	}
+	replay, err := p.reconcileLanes()
+	if err != nil || replay.BlockedItemsCreated != 0 || replay.ReadyItemsCreated != 0 {
+		t.Fatalf("lane did not survive the hold or was not idempotent = %#v, %v", replay, err)
+	}
+}
+
+// reviewFailureInjectingDriver runs inject before each completion, so a test
+// can land a durable write inside the publication author call.
+type reviewFailureInjectingDriver struct {
+	inference.Driver
+	inject func() error
+}
+
+func (d reviewFailureInjectingDriver) Complete(
+	ctx context.Context, request inference.Request, secret inference.Secret,
+) (inference.Response, error) {
+	if err := d.inject(); err != nil {
+		return inference.Response{}, err
+	}
+	return d.Driver.Complete(ctx, request, secret)
+}
+
 func TestProductionPublishedReviewConfigMustStayProfileApproved(t *testing.T) {
 	t.Parallel()
 	// Finding 5 (Codex round 4): the readiness recovery re-gate must be no
