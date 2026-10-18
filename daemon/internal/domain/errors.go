@@ -254,6 +254,7 @@ var (
 	ErrEngineModelEntryNonRemediationRow  = errors.New("engine-model adjudication entry must carry the required/allowed remediation row")
 	ErrAdjudicationConfidenceMisplaced    = errors.New("proposal confidence must be present exactly on model-backed adjudication entries")
 	ErrFindingAdjudicationInconsistent    = errors.New("finding adjudication fields are internally inconsistent")
+	ErrProposedRouteMisplaced             = errors.New("proposed route must appear only on a demoted required model adjudication entry")
 	ErrFindingAdjudicationDigestMismatch  = errors.New("finding adjudication digest does not match its canonical content")
 	ErrInvalidDriftVerdict                = errors.New("invalid drift-audit verdict")
 	ErrInvalidDriftAuditRoute             = errors.New("invalid drift-audit route")

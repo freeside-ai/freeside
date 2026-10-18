@@ -1,0 +1,26 @@
+{
+  "finding_id": "finding-demoted",
+  "producer": "model",
+  "goal_relationship": "required",
+  "compatibility": "unknown",
+  "route": "park_unknown",
+  "rationale": "the finding names a defect the spec's acceptance criteria require fixed",
+  "evidence": [
+    "approved spec §3"
+  ],
+  "cited_rules": [
+    "AGENTS.md scope discipline"
+  ],
+  "assumptions": [
+    "the location is the defect site"
+  ],
+  "alternatives": [
+    "park as separate work"
+  ],
+  "open_questions": [
+    "does the fix widen the declared paths?"
+  ],
+  "confidence": "medium",
+  "proposed_route": "remediate",
+  "offered_alternatives": null
+}

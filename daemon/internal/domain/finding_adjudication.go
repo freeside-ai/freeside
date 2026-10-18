@@ -68,6 +68,15 @@ type FindingAdjudicationEntry struct {
 	// threshold by Accepted; a below-threshold value is a not-accepted proposal,
 	// not an invalid entry.
 	Confidence *AdjudicationConfidence `json:"confidence"`
+	// ProposedRoute is the route a below-threshold `required` model answer
+	// implied before the engine demoted it to the `unknown` park (#2059). Only
+	// NewDemotedModelAdjudicationEntry sets it, and it is nil when the answer was
+	// itself `unknown`. It is the operator's view of the adjudicator's lean and
+	// carries no authority: routing, acceptance, and offered routes read Route
+	// alone. Unlike the project's explicit-null convention it is omitted when
+	// nil, because the entry is part of a digest-bound artifact and every
+	// artifact stored before this field must keep its bytes and digest.
+	ProposedRoute *AdjudicationRoute `json:"proposed_route,omitempty"`
 	// OfferedAlternatives is the digest-bound set of executable routes other than
 	// the recommendation, each with the consequence of choosing it (#893). It is
 	// empty on every row whose (goal, compatibility) admits a single route, and
@@ -272,6 +281,34 @@ func NewModelAdjudicationEntry(
 	return entry, nil
 }
 
+// NewDemotedModelAdjudicationEntry rebuilds a not-accepted `required` model
+// answer as the `unknown` park (plan §7: "unknown only where compatibility
+// exists"), keeping the model's confidence and reasoning and recording the
+// route it proposed as ProposedRoute. A mixed engine-model answer demotes to a
+// pure model entry, since the engine's `allowed` half is not an accepted fact
+// once the goal judgment is below threshold.
+func NewDemotedModelAdjudicationEntry(entry FindingAdjudicationEntry) (FindingAdjudicationEntry, error) {
+	if entry.GoalRelationship != GoalRequired || entry.Confidence == nil {
+		return FindingAdjudicationEntry{}, fmt.Errorf("demote adjudication entry %q: %w",
+			entry.FindingID, ErrProposedRouteMisplaced)
+	}
+	unknown := ProposedUnknown
+	demoted, err := NewModelAdjudicationEntry(entry.FindingID, entry.GoalRelationship,
+		&unknown, RouteParkUnknown, *entry.Confidence, entry.Rationale, entry.Evidence,
+		entry.CitedRules, entry.Assumptions, entry.Alternatives, entry.OpenQuestions)
+	if err != nil {
+		return FindingAdjudicationEntry{}, err
+	}
+	if entry.Route != RouteParkUnknown {
+		proposed := entry.Route
+		demoted.ProposedRoute = &proposed
+		if err := demoted.Validate(); err != nil {
+			return FindingAdjudicationEntry{}, err
+		}
+	}
+	return demoted, nil
+}
+
 // NewEngineModelAdjudicationEntry composes a model-produced goal judgment and
 // confidence with the engine's independently derived allowed-remediation
 // authority. The engine-owned half is deliberately not parameterized: this
@@ -371,6 +408,19 @@ func (e FindingAdjudicationEntry) Validate() error {
 	if e.Producer == AdjudicationProducerHuman &&
 		(len(e.OfferedAlternatives) != 0 || (e.Route != RouteRemediate && e.Route != RouteDecline && e.Route != RouteDefer)) {
 		return ErrFindingAdjudicationInconsistent
+	}
+	if e.ProposedRoute != nil {
+		demoted := e.Producer == AdjudicationProducerModel && e.GoalRelationship == GoalRequired &&
+			e.Route == RouteParkUnknown
+		switch *e.ProposedRoute {
+		case RouteRemediate, RouteParkRevision, RouteParkSeparateWork, RouteAttentionHumanDecision:
+		default:
+			demoted = false
+		}
+		if !demoted {
+			return fmt.Errorf("adjudication entry %q proposed_route %q: %w",
+				e.FindingID, *e.ProposedRoute, ErrProposedRouteMisplaced)
+		}
 	}
 	if strings.TrimSpace(e.Rationale) == "" {
 		return fmt.Errorf("adjudication entry %q rationale: %w", e.FindingID, ErrEmptyField)

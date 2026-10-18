@@ -867,11 +867,7 @@ func acceptedModelAdjudicationEntries(
 		if accepted || entry.GoalRelationship != domain.GoalRequired {
 			continue
 		}
-		unknown := domain.ProposedUnknown
-		result[i], err = domain.NewModelAdjudicationEntry(entry.FindingID,
-			entry.GoalRelationship, &unknown, domain.RouteParkUnknown, *entry.Confidence,
-			entry.Rationale, entry.Evidence, entry.CitedRules, entry.Assumptions,
-			entry.Alternatives, entry.OpenQuestions)
+		result[i], err = domain.NewDemotedModelAdjudicationEntry(entry)
 		if err != nil {
 			return nil, err
 		}
