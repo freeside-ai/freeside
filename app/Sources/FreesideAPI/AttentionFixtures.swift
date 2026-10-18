@@ -127,6 +127,20 @@ public enum AttentionFixtures {
         return snapshot
     }
 
+    /// The routed dispute with one finding whose message carries Markdown
+    /// as a reviewer writes it: a short first sentence, a code span, and a
+    /// list (#2060).
+    public static func markdownReviewDispute() -> Components.Schemas.AttentionItemSnapshot {
+        var snapshot = routedReviewDispute()
+        snapshot.item.review_dispute?.value1.findings?.removeLast()
+        snapshot.item.review_dispute?.value1.findings?[0].message =
+            "A retry can apply the same update twice. `applyUpdate` checks the version before "
+            + "the write commits, so a resend passes the check:\n\n"
+            + "- the first attempt commits and its response is lost\n"
+            + "- the resend still sees the old version and commits again"
+        return snapshot
+    }
+
     public static func subsetReviewDispute() -> Components.Schemas.AttentionItemSnapshot {
         var snapshot = routedReviewDispute()
         snapshot.item.review_dispute?.value1.findings?.removeLast()
@@ -1443,6 +1457,25 @@ public enum AttentionFixtures {
             "The change adds a retry path to the command handler, but no regression test covers "
             + "a resend after a lost response, so the write-once identity can break again "
             + "without any check failing."
+        snapshot.item.finding_adjudication = .init(value1: binding)
+        return snapshot
+    }
+
+    /// The realistic card with one message a reviewer split into a short
+    /// first sentence and a second one with a code span, so the head runs
+    /// in the title and the rest draws under it (#2060).
+    public static func findingAdjudicationMarkdownMessages()
+        -> Components.Schemas.AttentionItemSnapshot
+    {
+        var snapshot = findingAdjudicationRealisticMessages()
+        snapshot.item.id = "item-finding-markdown-messages"
+        guard var binding = snapshot.item.finding_adjudication?.value1 else {
+            preconditionFailure("finding_adjudication fixture does not bind a proposal")
+        }
+        binding.proposals[0].finding_message =
+            "The command handler re-derives the command id on every retry. A client that resends "
+            + "after losing the first response records a second `command_id` instead of resolving "
+            + "to the one already written."
         snapshot.item.finding_adjudication = .init(value1: binding)
         return snapshot
     }

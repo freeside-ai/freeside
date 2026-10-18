@@ -633,6 +633,9 @@ struct ReviewEvidenceContent: View {
     let evidence: Components.Schemas.ReviewEvidence
     let presentation: ReviewEvidencePresentation
     @State private var showsRaw = false
+    /// The system italic's size for emphasis in a finding's title
+    /// (`DecisionSummaryText.inline`).
+    @ScaledMetric(relativeTo: .body) private var findingEmphasisSize = FreesideLadder.current.body
 
     /// The sheet's header (R11), shared with the screenshot surfaces: whose
     /// claim this is, what it is, how far to trust it, and the round and
@@ -668,10 +671,17 @@ struct ReviewEvidenceContent: View {
                 case .findings(let findings):
                     Text("The reviewer reported \(findings.count) findings.")
                     ForEach(Array(findings.enumerated()), id: \.offset) { _, finding in
+                        let presentation = FindingPresentation(message: finding.explanation)
                         VStack(alignment: .leading, spacing: 6) {
-                            Text("\(finding.severity) · \(finding.location.label)")
+                            findingHead(severity: finding.severity, title: presentation.title)
+                                .fixedSize(horizontal: false, vertical: true)
+                                .accessibilityAddTraits(.isHeader)
+                            Text(finding.location.label)
                                 .font(FreesideFont.trailingSummary)
-                            Text(finding.explanation)
+                                .foregroundStyle(Color.inkDim)
+                            if !presentation.body.isEmpty {
+                                DecisionSummaryText(blocks: presentation.body, size: .body)
+                            }
                         }
                         .padding(12)
                         .frame(maxWidth: .infinity, alignment: .leading)
@@ -738,6 +748,24 @@ struct ReviewEvidenceContent: View {
 
     private func heading(_ title: String) -> some View {
         KeywordLabel(text: title).accessibilityAddTraits(.isHeader)
+    }
+
+    /// A reported finding's header: its severity, then its title in the
+    /// strong face, so the rating reads with the finding it rates (#2060).
+    private func findingHead(severity: String, title: AttributedString?) -> Text {
+        let rating = Text(FindingPresentation.severityLabel(severity))
+            .font(FreesideFont.keyword)
+            .tracking(FreesideFont.keywordTracking)
+            .foregroundStyle(Color.inkDim)
+        guard let title else { return rating }
+        return rating
+            + Text(
+                AttributedString("  ")
+                    + DecisionSummaryText.inline(
+                        title, size: .body, emphasisSize: findingEmphasisSize, heading: true)
+            )
+            .font(FreesideFont.cardBody(strong: true, code: false))
+            .foregroundStyle(Color.ink)
     }
 
     private func entryView(_ entry: ReviewEvidencePresentation.Entry) -> some View {
