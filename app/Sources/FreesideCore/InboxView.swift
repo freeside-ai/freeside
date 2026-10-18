@@ -492,6 +492,11 @@ struct SidebarRow<Badges: View, Title: View, Context: View, Closing: View>: View
             }
             closing
         }
+        // The row's click and long press belong to the row: on the Mac a
+        // selectable title takes the click that selects a task row, and on
+        // iOS it takes the long press from the row's menu. Each row's menu
+        // offers Copy for its text instead (app/README.md, Copyable Text).
+        .textSelection(.disabled)
         .modifier(SidebarRowSurface(isSelected: isSelected))
     }
 
@@ -674,6 +679,7 @@ struct InboxRowView: View {
     @ViewBuilder
     private var contextMenu: some View {
         let evidenceDigests = AttentionDisplay.uniqueEvidenceDigests(item)
+        Button("Copy summary") { copy(AttentionDisplay.rowSummary(item)) }
         Button("Copy item ID") { copy(item.id) }
         if let subject = AttentionDisplay.copyableSubjectReference(item) {
             Button(subject.label) { copy(subject.value) }
