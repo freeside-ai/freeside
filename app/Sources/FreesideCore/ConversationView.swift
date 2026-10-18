@@ -331,7 +331,7 @@ struct ConversationView: View {
     private func exactTime(_ message: Components.Schemas.Message, on content: some View) -> some View {
         #if os(iOS)
             let exact = FreesideFormat.exactTime(message.created_at)
-            content.contextMenu {
+            content.copyMenu {
                 Button("Copy Message") {
                     UIPasteboard.general.string = message.body
                 }

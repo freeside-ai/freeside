@@ -20,6 +20,17 @@ enum Clipboard {
     }
 }
 
+extension View {
+    /// A context menu that keeps its gesture. Selectable text claims the
+    /// long press on iOS for its own Copy, which would leave this menu
+    /// reachable only from the view's padding, so text under it opts out of
+    /// the window's selection default and the menu offers Copy for that
+    /// text instead (app/README.md, Copyable Text).
+    func copyMenu<MenuItems: View>(@ViewBuilder _ menuItems: () -> MenuItems) -> some View {
+        textSelection(.disabled).contextMenu(menuItems: menuItems)
+    }
+}
+
 /// Shortens an opaque identifier for primary text, where it appears only to
 /// disambiguate one row from another. A real run or campaign id is its kind
 /// prefix plus 64 hex characters and a task id its prefix plus 26 characters

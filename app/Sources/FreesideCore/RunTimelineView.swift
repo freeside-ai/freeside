@@ -308,7 +308,9 @@ struct RunTimelineView: View {
                 eyebrowName(lineLimit: 2)
             }
         }
-        .contextMenu {
+        // The menu keeps the run ID one gesture away; the task name it
+        // covers stays selectable on the task's own timeline.
+        .copyMenu {
             Button("Copy run ID") {
                 Clipboard.copy(snapshot.run.id)
             }
