@@ -2637,11 +2637,7 @@ func (w *productionPublicationWorkflow) reconcileTask(
 					return w.holdReviewConfigurationMismatch(ctx, task, checkpoint.Imported, err)
 				}
 				if errors.Is(err, domain.ErrParentKeyMismatch) {
-					return w.holdBlockedTask(
-						ctx, task, checkpoint.Imported,
-						"Publication is durably held because its disposition history no longer matches the current review and readiness authority.",
-						domain.HoldTrustBlocked,
-					)
+					return w.holdDispositionHistoryMismatch(ctx, task, checkpoint.Imported)
 				}
 				return productionTaskOutcome{}, fmt.Errorf("load recovered publication disposition history: %w", err)
 			}
@@ -5195,6 +5191,22 @@ func (w *productionPublicationWorkflow) holdReviewConfigurationMismatch(
 			"Publication is durably held because the reviewer configuration lacks approval under the current trust-approved reviewer configuration: %v. Restore the approved reviewer configuration or disposition the run manually.",
 			err,
 		),
+		domain.HoldTrustBlocked,
+	)
+}
+
+// holdDispositionHistoryMismatch holds one task whose disposition history
+// contradicts the current review and readiness authority. It is a per-run
+// trust-record contradiction, so it holds the task instead of stopping the
+// daemon; both disposition-history load sites share it so they cannot drift.
+func (w *productionPublicationWorkflow) holdDispositionHistoryMismatch(
+	ctx context.Context,
+	task productionPublicationTask,
+	imported importer.Result,
+) (productionTaskOutcome, error) {
+	return w.holdBlockedTask(
+		ctx, task, imported,
+		"Publication is durably held because its disposition history no longer matches the current review and readiness authority.",
 		domain.HoldTrustBlocked,
 	)
 }
