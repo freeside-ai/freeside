@@ -3002,6 +3002,13 @@
                     alternativeSelections: ["finding-1": .remediate, "finding-2": ._defer],
                     loadsAttachments: false, showsValidationProgress: false,
                     now: screenshotNow, model: routedModel)
+                // One route picked and its finding's Reason and Source fold
+                // open: the fold's contents, and Apply counting a partial pick.
+                let reasonRoutedDetail = DecisionDetailView(
+                    store: routedStore, itemID: routed.item.id, expandedFindings: ["finding-1"],
+                    alternativeSelections: ["finding-1": .remediate],
+                    loadsAttachments: false, showsValidationProgress: false,
+                    now: screenshotNow, model: routedModel)
                 for (suffix, width, scheme) in [
                     ("", canvasWidth, ColorScheme.light),
                     ("-dark", canvasWidth, ColorScheme.dark),
@@ -3021,6 +3028,15 @@
                             view: AnyView(
                                 selectedRoutedDetail.screenshotCard(
                                     routed.item, at: dynamicTypeSize, compactLayout: width < canvasWidth))))
+                    if variant == "routed" {
+                        surfaces.append(
+                            Surface(
+                                name: "decision-review_dispute-routed-reason\(suffix)", width: width,
+                                colorScheme: scheme,
+                                view: AnyView(
+                                    reasonRoutedDetail.screenshotCard(
+                                        routed.item, at: dynamicTypeSize, compactLayout: width < canvasWidth))))
+                    }
                     if variant == "subset" {
                         surfaces.append(
                             Surface(

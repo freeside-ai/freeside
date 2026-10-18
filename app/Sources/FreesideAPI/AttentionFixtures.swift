@@ -1469,6 +1469,29 @@ public enum AttentionFixtures {
         return snapshot
     }
 
+    /// The routed dispute with messages of the length a reviewer writes,
+    /// for the layout budget: both run to 180 characters or more, as the
+    /// finding-adjudication card's realistic messages do (#1141).
+    public static func routedReviewDisputeRealisticMessages()
+        -> Components.Schemas.AttentionItemSnapshot
+    {
+        var snapshot = routedReviewDispute()
+        snapshot.item.id = "production-review-run-review_dispute-realistic"
+        guard var findings = snapshot.item.review_dispute?.value1.findings, findings.count == 2 else {
+            preconditionFailure("routed review_dispute fixture does not carry two findings")
+        }
+        findings[0].message =
+            "A retry can apply the same update twice. The retry path re-sends the update after a "
+            + "lost response without the idempotency key the first attempt used, so the store "
+            + "records a second write."
+        findings[1].message =
+            "Document how operators recover interrupted updates. The change adds a resumable update, "
+            + "but nothing says what an operator checks or runs when one stops halfway through "
+            + "its batch of records."
+        snapshot.item.review_dispute?.value1.findings = findings
+        return snapshot
+    }
+
     /// The realistic card with one message a reviewer split into a short
     /// first sentence and a second one with a code span, so the head runs
     /// in the title and the rest draws under it (#2060).

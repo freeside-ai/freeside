@@ -50,6 +50,36 @@
             #expect(expanded > collapsed)
         }
 
+        /// The routed review dispute's budget, recorded from the render
+        /// rather than held to `actionRowBudget`: with every offered route and
+        /// its consequence drawn (R29), two realistic findings put the action
+        /// region at 800.5pt at 560pt width (measured 2026-10-18), rounded up
+        /// to the next 10pt. The owner chose to record a measured value over
+        /// dropping the consequence lines, because the route list is the
+        /// control the operator must use on every finding (#2068).
+        private let disputeActionRowBudget: CGFloat = 810
+
+        @Test func twoRoutedDisputeFindingsWithRealisticMessagesKeepTheirRecordedBudget() throws {
+            let snapshot = AttentionFixtures.routedReviewDisputeRealisticMessages()
+            let messages = snapshot.item.review_dispute?.value1.findings?.map(\.message) ?? []
+            #expect(messages.count == 2)
+            #expect(messages.allSatisfy { $0.count >= realisticMessageLength })
+
+            let offset = try actionRegionOffset(snapshot, expandedFindings: [])
+
+            #expect(offset <= disputeActionRowBudget)
+        }
+
+        /// A disputed finding's Reason and Source fold opens inside its own
+        /// item, above the actions.
+        @Test func expandingADisputedFindingOpensItAboveTheActionRegion() throws {
+            let snapshot = AttentionFixtures.routedReviewDispute()
+            let collapsed = try actionRegionOffset(snapshot, expandedFindings: [])
+            let expanded = try actionRegionOffset(snapshot, expandedFindings: ["finding-1"])
+
+            #expect(expanded > collapsed)
+        }
+
         private func actionRegionOffset(
             _ snapshot: Components.Schemas.AttentionItemSnapshot,
             expandedFindings: Set<String>
