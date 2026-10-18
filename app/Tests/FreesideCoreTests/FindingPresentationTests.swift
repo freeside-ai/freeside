@@ -20,6 +20,8 @@ import Testing
             message: "The retry loop never ends. It resets `attempt` on each pass.\n\n- Cap it\n- Log it")
         #expect(finding.title.map { String($0.characters) } == "The retry loop never ends.")
         #expect(finding.body.map(drawn) == ["It resets attempt on each pass.", "Cap it", "Log it"])
+        #expect(finding.titledBlocks.first.map(drawn) == "The retry loop never ends.")
+        #expect(Array(finding.titledBlocks.dropFirst()) == finding.body)
     }
 
     @Test func titleKeepsItsInlineMarkdownAsTypography() throws {

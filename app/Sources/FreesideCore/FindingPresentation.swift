@@ -31,6 +31,12 @@ struct FindingPresentation: Equatable {
             rest.isEmpty ? [] : DecisionSummaryPresentation.blocks(.init(media_type: .text_sol_markdown, content: rest))
     }
 
+    /// The title as a strong line above the body, for a surface that draws
+    /// the whole finding with one block renderer.
+    var titledBlocks: [SpecificationBlock] {
+        (title.map { [.heading(level: 3, $0)] } ?? []) + body
+    }
+
     /// A severity as a finding's header names it.
     static func severityLabel(_ severity: String) -> String {
         severity.isEmpty ? "Unrated" : severity

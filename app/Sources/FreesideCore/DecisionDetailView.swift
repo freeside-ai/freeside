@@ -2453,19 +2453,22 @@ struct DecisionDetailView: View {
                     .font(FreesideFont.cardBody)
                     .fixedSize(horizontal: false, vertical: true)
             }
-            ForEach(findings, id: \.finding_id) { finding in
+            ForEach(Array(findings.enumerated()), id: \.element.finding_id) { index, finding in
                 VStack(alignment: .leading, spacing: 8) {
-                    UnverifiedLabel(text: "Finding", carriesInfo: false, rendersInteractiveControls: true)
+                    // The severity rates the finding, so it rides in the
+                    // finding's own header rather than under its location.
+                    UnverifiedLabel(
+                        text: "Finding \(index + 1) · \(FindingPresentation.severityLabel(finding.severity.rawValue))",
+                        carriesInfo: false, rendersInteractiveControls: true)
                     QuoteBlock {
-                        Text(finding.message)
-                            .font(FreesideFont.cardBody)
-                            .fixedSize(horizontal: false, vertical: true)
+                        DecisionSummaryText(blocks: FindingPresentation(message: finding.message).titledBlocks)
                     }
                     if let location = finding.location?.value1 {
-                        Text(AttentionDisplay.findingLocation(location)).font(.caption)
+                        Text(AttentionDisplay.findingLocation(location))
+                            .font(FreesideFont.trailingSummary)
+                            .foregroundStyle(Color.inkDim)
+                            .fixedSize(horizontal: false, vertical: true)
                     }
-                    Text(finding.severity.rawValue.isEmpty ? "Unrated" : finding.severity.rawValue)
-                        .font(.caption)
                     if let external = finding.external {
                         Text("\(external.reviewer_login) · \(external.thread_id)").font(.caption)
                     }
