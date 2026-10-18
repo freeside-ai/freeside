@@ -1558,6 +1558,26 @@ import Testing
         #expect(engineModel.producerUnverifiedKeyword == nil)
     }
 
+    /// The head runs the message's title in with the heading, and the rest
+    /// of the message draws under it (#2060). A realistic message is one
+    /// long sentence, so it is all title and the card keeps its first
+    /// viewport (#1141).
+    @Test func aFindingCardSplitsItsMessageIntoTitleAndBody() throws {
+        var binding = try #require(
+            AttentionFixtures.findingAdjudicationRealisticMessages().item
+                .finding_adjudication?.value1)
+        for card in FindingCardPresentation.cards(binding) {
+            #expect(card.title.map { String($0.characters) } == card.message)
+            #expect(card.body.isEmpty)
+        }
+
+        binding.proposals[0].finding_message = "The retry is unbounded. Cap `attempts` at three."
+        let card = try #require(FindingCardPresentation.cards(binding).first)
+        #expect(card.title.map { String($0.characters) } == "The retry is unbounded.")
+        #expect(card.body.count == 1)
+        #expect(card.messageAccessibilityLabel == "Finding 1. \(binding.proposals[0].finding_message)")
+    }
+
     /// Every other proposal field has a destination inside that finding's
     /// own disclosure, so removing the rendering below the actions lost
     /// nothing. The daemon's coordinates sit under their own title, apart

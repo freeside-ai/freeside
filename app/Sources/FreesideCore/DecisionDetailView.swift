@@ -78,6 +78,9 @@ struct DecisionDetailView: View {
     @Environment(\.dynamicTypeSize) private var dynamicTypeSize
     @Environment(\.horizontalSizeClass) private var horizontalSizeClass
     @Environment(\.openURL) private var openURL
+    /// The system italic's size for emphasis in a finding's title, which runs
+    /// in at the card body's size (`DecisionSummaryText.inline`).
+    @ScaledMetric(relativeTo: .body) private var findingEmphasisSize = FreesideLadder.current.body
     @State private var model: DecisionModel
     @State private var proposalEditor: ProposalEditor?
     @State private var messageEditor: MessageEditor?
@@ -2215,15 +2218,20 @@ struct DecisionDetailView: View {
                 let card = FindingCardPresentation(proposal, number: index + 1, binding: binding)
                 let isExpanded = expandedFindings.contains(card.id)
                 VStack(alignment: .leading, spacing: 8) {
-                    // The heading runs in with the message instead of standing
-                    // on a line of its own: a line per finding is what two
-                    // realistic findings have to spare inside the first
-                    // viewport (#1141).
+                    // The heading runs in with the message's title instead of
+                    // standing on a line of its own: a line per finding is
+                    // what two realistic findings have to spare inside the
+                    // first viewport (#1141). The head speaks the whole
+                    // message, so the body under it is not read twice.
                     findingHead(card)
                         .fixedSize(horizontal: false, vertical: true)
                         .accessibilityElement(children: .ignore)
                         .accessibilityLabel(Text(card.messageAccessibilityLabel))
                         .accessibilityAddTraits(.isHeader)
+                    if !card.body.isEmpty {
+                        DecisionSummaryText(blocks: card.body, size: .body)
+                            .accessibilityHidden(true)
+                    }
                     VStack(alignment: .leading, spacing: 4) {
                         findingProducerLabel(
                             card, register: card.id == infoCardID ? register : register.withoutInfo)
@@ -2280,9 +2288,13 @@ struct DecisionDetailView: View {
             .font(FreesideFont.keyword)
             .tracking(FreesideFont.keywordTracking)
             .foregroundStyle(Color.inkDim)
-        guard !card.message.isEmpty else { return heading }
+        guard let title = card.title else { return heading }
         return heading
-            + Text("  \(card.message)")
+            + Text(
+                AttributedString("  ")
+                    + DecisionSummaryText.inline(
+                        title, size: .body, emphasisSize: findingEmphasisSize)
+            )
             .font(FreesideFont.cardBody)
             .foregroundStyle(Color.ink)
     }

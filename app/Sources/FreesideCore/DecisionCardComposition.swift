@@ -1010,6 +1010,12 @@ struct FindingCardPresentation: Equatable, Identifiable {
     let heading: String
     /// The daemon-authenticated finding text, exactly as bound.
     let message: String
+    /// The message's title, which runs in with the heading, and the rest of
+    /// it as Markdown blocks under the head (`FindingPresentation`). The
+    /// daemon normalizes the message's whitespace, so the body is at most
+    /// the rest of one paragraph.
+    let title: AttributedString?
+    let body: [SpecificationBlock]
     let producerLabel: String
     /// The producer label without its "(unverified)" word, where the label
     /// carries one; `UnverifiedLabel` draws the word with its explanation.
@@ -1057,6 +1063,9 @@ struct FindingCardPresentation: Equatable, Identifiable {
         id = proposal.finding_id
         heading = "Finding \(number)"
         message = proposal.finding_message
+        let finding = FindingPresentation(message: proposal.finding_message)
+        title = finding.title
+        body = finding.body
         producerLabel = producer.label
         producerUnverifiedKeyword = producer.unverifiedKeyword
         route = AttentionDisplay.label(proposal.route)

@@ -476,11 +476,18 @@ enum FreesideFont {
     /// smaller than an agent's reply in a thread (#1461). Strong text and
     /// headings take the semibold and code the mono, all at that one size.
     static func summary(strong: Bool = false, code: Bool = false) -> Font {
-        let name =
-            code
+        fixed(plexName(strong: strong, code: code), ladder.statement, relativeTo: .body)
+    }
+    /// Agent-authored Markdown among card-body lines, such as a review
+    /// finding on the adjudication card: the summary's faces at the card
+    /// body's size.
+    static func cardBody(strong: Bool, code: Bool) -> Font {
+        fixed(plexName(strong: strong, code: code), ladder.body, relativeTo: .body)
+    }
+    private static func plexName(strong: Bool, code: Bool) -> String {
+        code
             ? (strong ? "IBMPlexMono-SmBld" : "IBMPlexMono")
             : (strong ? "IBMPlexSans-SmBld" : "IBMPlexSans")
-        return fixed(name, ladder.statement, relativeTo: .body)
     }
     /// An agent's message in a thread: the statement face, as the frames
     /// draw it.
