@@ -2460,11 +2460,6 @@ struct DecisionDetailView: View {
 
     private func disputedFindingCards(_ findings: [Components.Schemas.DisputedFinding]) -> some View {
         VStack(alignment: .leading, spacing: 20) {
-            if findings.contains(where: { $0.external != nil }) {
-                Text(AttentionDisplay.externalDisputeConsequence)
-                    .font(FreesideFont.cardBody)
-                    .fixedSize(horizontal: false, vertical: true)
-            }
             ForEach(Array(findings.enumerated()), id: \.element.finding_id) { index, finding in
                 VStack(alignment: .leading, spacing: 8) {
                     // The severity rates the finding, so it rides in the
@@ -2491,8 +2486,10 @@ struct DecisionDetailView: View {
                             .init(
                                 value: $0,
                                 label: AttentionDisplay.disputeRouteLabel($0, external: finding.external != nil),
+                                consequence: AttentionDisplay.disputeRouteConsequence(
+                                    $0, external: finding.external != nil),
                                 mark: $0 == finding.adjudication?.lean?.value1
-                                    ? AttentionDisplay.disputedFindingLeanMark : nil,
+                                    ? AttentionDisplay.disputedFindingFavoredMark : nil,
                                 register: .item)
                         },
                         selection: Binding(
@@ -2512,9 +2509,16 @@ struct DecisionDetailView: View {
     private func disputedFindingAdjudication(_ finding: Components.Schemas.DisputedFinding) -> some View {
         if let adjudication = finding.adjudication {
             UnverifiedLabel(text: "Model proposal", carriesInfo: false, rendersInteractiveControls: true)
-            Text(AttentionDisplay.disputedFindingLean(adjudication, external: finding.external != nil))
-                .font(FreesideFont.cardBody)
-                .fixedSize(horizontal: false, vertical: true)
+            if let threshold = AttentionDisplay.disputedFindingThreshold(adjudication) {
+                Text(threshold)
+                    .font(FreesideFont.cardBody)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+            if let unoffered = AttentionDisplay.disputedFindingUnofferedFavorite(finding) {
+                Text(unoffered)
+                    .font(FreesideFont.cardBody)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
             QuoteBlock {
                 Text(adjudication.rationale)
                     .font(FreesideFont.cardBody)

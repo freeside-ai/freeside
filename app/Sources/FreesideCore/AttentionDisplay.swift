@@ -141,32 +141,75 @@ enum AttentionDisplay {
         }
     }
 
-    /// The adjudicator's view of a disputed finding as one line: the route
-    /// it leaned toward, or none, its confidence, and whether that fell
-    /// below the run's dispatch threshold. The lean is a model proposal and
-    /// may name a route the dispute does not offer; only an offered route
-    /// can be sent.
-    static func disputedFindingLean(
-        _ adjudication: Components.Schemas.DisputedFinding.adjudicationPayload, external: Bool
-    ) -> String {
-        var parts = [
-            adjudication.lean.map { "Leans: \(disputeRouteLabel($0.value1, external: external))" } ?? "No lean",
-            "\(label(adjudication.confidence)) confidence",
-        ]
-        if adjudication.below_threshold {
-            parts.append("below the dispatch threshold, so it can't act on its own")
+    /// What picking a route does to an external finding, drawn under the
+    /// route's label (R29). Nil on a finding with no review thread: the
+    /// reply these lines promise goes to that thread.
+    static func disputeRouteConsequence(
+        _ route: Components.Schemas.AdjudicationRoute, external: Bool
+    ) -> String? {
+        guard external else { return nil }
+        switch route {
+        case .remediate: return "Starts remediation in this pull request."
+        case .decline: return "Records the outcome and replies in the finding's thread."
+        case ._defer: return "Records the outcome and replies in the finding's thread; files no follow-up issue."
+        default: return nil
         }
+    }
+
+    /// The mark on the offered route the adjudicator favored. The model's
+    /// route is "favored", not "recommended": a recommendation is what an
+    /// accept-all action applies, and this one fell below the dispatch
+    /// threshold, so nothing preselects it. The mark informs the pick, it
+    /// never makes it. `adjudication.lean` keeps its schema name.
+    static let disputedFindingFavoredMark = "Favored"
+
+    /// The trailing summary on a disputed finding's closed Reason and
+    /// Source fold: whether the model favored a route, its confidence, and
+    /// the review thread, so the closed fold still says what it holds.
+    static func disputedFindingReasonSummary(_ finding: Components.Schemas.DisputedFinding) -> String {
+        var parts: [String] = []
+        if let adjudication = finding.adjudication {
+            if adjudication.lean == nil { parts.append("no favored route") }
+            parts.append("\(label(adjudication.confidence).lowercased()) confidence")
+        } else {
+            parts.append("no adjudication")
+        }
+        if let external = finding.external { parts.append(external.thread_id) }
         return parts.joined(separator: " · ")
     }
 
-    /// The mark on the offered route the adjudicator leaned toward. Nothing
-    /// is preselected: the mark informs the pick, it never makes it.
-    static let disputedFindingLeanMark = "Lean"
+    /// Why the model's route is only favored, inside the fold. Nil when the
+    /// confidence met the threshold, which says nothing about this.
+    static func disputedFindingThreshold(
+        _ adjudication: Components.Schemas.DisputedFinding.adjudicationPayload
+    ) -> String? {
+        guard adjudication.below_threshold else { return nil }
+        let confidence = label(adjudication.confidence)
+        return adjudication.lean == nil
+            ? "\(confidence) confidence is below the dispatch threshold, so the model favors no route."
+            : "\(confidence) confidence is below the dispatch threshold, so this is a favored route, not a recommendation."
+    }
+
+    /// The favored route when the finding does not offer it, which no
+    /// option can carry as a mark: the lean is a model proposal and may
+    /// name a route the dispute cannot send.
+    static func disputedFindingUnofferedFavorite(_ finding: Components.Schemas.DisputedFinding) -> String? {
+        guard let lean = finding.adjudication?.lean?.value1, !finding.offered_routes.contains(lean) else {
+            return nil
+        }
+        let route = disputeRouteLabel(lean, external: finding.external != nil)
+        return "The model favors \(route), which this finding does not offer."
+    }
 
     static let disputedFindingNoAdjudication = "No adjudicator view was recorded for this finding."
 
-    static let externalDisputeConsequence =
-        "For external findings, Fix starts remediation in this pull request. Decline and Defer each record an outcome and reply in the finding's thread. Defer files no follow-up issue. Declining every finding lets the cycle restore readiness for the unchanged head."
+    /// The Apply label on a routed dispute, counting the picks (R32), so a
+    /// disabled button says how many findings still need a route.
+    static func applyFindingRoutesLabel(selected: Int, of total: Int) -> String {
+        guard selected > 0 else { return label(.adjudicate_findings) }
+        guard selected == total else { return "Apply \(selected) of \(total) Routes" }
+        return total == 1 ? "Apply 1 Route" : "Apply \(total) Routes"
+    }
 
     static func ask(_ item: Components.Schemas.AttentionItem) -> String {
         switch item._type {
