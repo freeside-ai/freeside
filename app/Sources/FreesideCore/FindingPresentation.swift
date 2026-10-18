@@ -42,6 +42,20 @@ struct FindingPresentation: Equatable {
         severity.isEmpty ? "Unrated" : severity
     }
 
+    /// The severity chip's cut, by what the daemon does with the finding
+    /// (`daemon/internal/engine/per_finding_acceptance.go`): P0 and P1 hold
+    /// for a decision, so they draw in ink; P2 and P3 are advisory, so they
+    /// draw faint. An empty severity is a finding with no badge, dashed as
+    /// not rated. No accent: R23 keeps it for the fill, a link, and the
+    /// attention mark.
+    static func severityCut(_ severity: String) -> (cut: StateChip.Cut, dashed: Bool) {
+        switch severity {
+        case "P0", "P1": return (.ink, false)
+        case "": return (.faint, true)
+        default: return (.faint, false)
+        }
+    }
+
     /// The message's title source and the source left for the body.
     static func split(_ message: String) -> (title: String?, rest: String) {
         // Blank lines go, but not a line's indentation: four leading spaces

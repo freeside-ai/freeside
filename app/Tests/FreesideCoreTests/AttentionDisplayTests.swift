@@ -11,32 +11,89 @@ import Testing
         #expect(AttentionDisplay.disputeRouteLabel(.remediate, external: true) == "Fix in This Pull Request")
         #expect(AttentionDisplay.disputeRouteLabel(.decline, external: true) == "Decline and Reply")
         #expect(AttentionDisplay.disputeRouteLabel(._defer, external: true) == "Defer and Reply")
-        #expect(AttentionDisplay.externalDisputeConsequence.contains("Defer files no follow-up issue."))
-        #expect(AttentionDisplay.externalDisputeConsequence.contains("unchanged head"))
         #expect(!AttentionDisplay.hasExternalDisputedFindings(AttentionFixtures.fixture(type: .review_dispute).item))
     }
 
-    /// The adjudicator's lean reads as a proposal with its confidence and
-    /// threshold standing, and an absent lean says so rather than leaving
-    /// the line blank.
-    @Test func disputedFindingLeanNamesRouteConfidenceAndThreshold() throws {
+    /// Each external route carries its own consequence under its label
+    /// (R29); a finding with no review thread has no reply to promise.
+    @Test func externalDisputeRoutesCarryTheirConsequences() {
+        #expect(
+            AttentionDisplay.disputeRouteConsequence(.remediate, external: true)
+                == "Starts remediation in this pull request.")
+        #expect(
+            AttentionDisplay.disputeRouteConsequence(.decline, external: true)
+                == "Records the outcome and replies in the finding's thread.")
+        #expect(
+            AttentionDisplay.disputeRouteConsequence(._defer, external: true)
+                == "Records the outcome and replies in the finding's thread; files no follow-up issue.")
+        for route in [Components.Schemas.AdjudicationRoute.remediate, .decline, ._defer] {
+            #expect(AttentionDisplay.disputeRouteConsequence(route, external: false) == nil)
+        }
+    }
+
+    /// The model's route is favored, never recommended: the fold's closed
+    /// line says whether one is favored, at what confidence, on which
+    /// thread, and the sentence inside says why it is only favored.
+    @Test func disputedFindingFoldNamesTheFavoredRouteConfidenceAndThreshold() throws {
         let findings = try #require(AttentionFixtures.routedReviewDispute().item.review_dispute?.value1.findings)
-        let leaning = try #require(findings[0].adjudication)
+        #expect(AttentionDisplay.disputedFindingFavoredMark == "Favored")
+
+        let favoring = findings[0]
+        #expect(AttentionDisplay.disputedFindingReasonSummary(favoring) == "medium confidence · review-thread-1")
         #expect(
-            AttentionDisplay.disputedFindingLean(leaning, external: true)
-                == "Leans: Fix in This Pull Request · Medium confidence · below the dispatch threshold, so it can't act on its own"
+            AttentionDisplay.disputedFindingThreshold(try #require(favoring.adjudication))
+                == "Medium confidence is below the dispatch threshold, so this is a favored route, not a recommendation."
         )
-        let none = try #require(findings[1].adjudication)
+        #expect(AttentionDisplay.disputedFindingUnofferedFavorite(favoring) == nil)
+
+        var noRoute = favoring
+        noRoute.adjudication?.lean = nil
+        noRoute.adjudication?.confidence = .low
         #expect(
-            AttentionDisplay.disputedFindingLean(none, external: false)
-                == "No lean · Low confidence · below the dispatch threshold, so it can't act on its own")
-        var heldAbove = leaning
-        heldAbove.lean = .init(value1: .decline)
-        heldAbove.confidence = .high
+            AttentionDisplay.disputedFindingReasonSummary(noRoute)
+                == "no favored route · low confidence · review-thread-1")
+        #expect(
+            AttentionDisplay.disputedFindingThreshold(try #require(noRoute.adjudication))
+                == "Low confidence is below the dispatch threshold, so the model favors no route.")
+        // A finding with no review thread drops the thread segment.
+        #expect(AttentionDisplay.disputedFindingReasonSummary(findings[1]) == "no favored route · low confidence")
+
+        var noBlock = favoring
+        noBlock.adjudication = nil
+        #expect(AttentionDisplay.disputedFindingReasonSummary(noBlock) == "no adjudication · review-thread-1")
+
+        var heldAbove = try #require(favoring.adjudication)
         heldAbove.below_threshold = false
+        #expect(AttentionDisplay.disputedFindingThreshold(heldAbove) == nil)
+
+        // A favored route the finding does not offer has no option to mark,
+        // so the fold names it.
+        var unoffered = findings[1]
+        unoffered.adjudication?.lean = .init(value1: .remediate)
         #expect(
-            AttentionDisplay.disputedFindingLean(heldAbove, external: false)
-                == "Leans: Decline the finding · High confidence")
+            AttentionDisplay.disputedFindingUnofferedFavorite(unoffered)
+                == "The model favors Fix in this PR, which this finding does not offer.")
+    }
+
+    /// The face's one mono line says where the finding is and who raised
+    /// it, and drops whichever the finding lacks.
+    @Test func disputedFindingSourceJoinsLocationAndReviewer() throws {
+        let findings = try #require(AttentionFixtures.routedReviewDispute().item.review_dispute?.value1.findings)
+        #expect(AttentionDisplay.disputedFindingSource(findings[0]) == "daemon/update.go:42-45 · reviewer")
+        #expect(AttentionDisplay.disputedFindingSource(findings[1]) == nil)
+        var reviewerOnly = findings[0]
+        reviewerOnly.location = nil
+        #expect(AttentionDisplay.disputedFindingSource(reviewerOnly) == "reviewer")
+    }
+
+    /// Apply counts the picks (R32), and keeps the generic label until the
+    /// first one.
+    @Test func applyFindingRoutesLabelCountsThePicks() {
+        #expect(AttentionDisplay.applyFindingRoutesLabel(selected: 0, of: 2) == "Apply Finding Routes")
+        #expect(AttentionDisplay.applyFindingRoutesLabel(selected: 1, of: 2) == "Apply 1 of 2 Routes")
+        #expect(AttentionDisplay.applyFindingRoutesLabel(selected: 2, of: 2) == "Apply 2 Routes")
+        #expect(AttentionDisplay.applyFindingRoutesLabel(selected: 1, of: 1) == "Apply 1 Route")
+        #expect(AttentionDisplay.label(.adjudicate_findings) == "Apply Finding Routes")
     }
 
     /// Every card that asks for a decision asks it in one sentence. A

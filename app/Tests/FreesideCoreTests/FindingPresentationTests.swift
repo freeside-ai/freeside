@@ -114,4 +114,15 @@ import Testing
         #expect(FindingPresentation.severityLabel("") == "Unrated")
         #expect(FindingPresentation.severityLabel("P2") == "P2")
     }
+
+    /// The chip's weight says what the daemon will do with the finding:
+    /// ink where it holds for a decision, faint where it is advisory, and
+    /// dashed faint for a finding with no badge.
+    @Test func severityCutFollowsWhetherTheFindingHoldsForADecision() {
+        #expect(FindingPresentation.severityCut("P0") == (.ink, false))
+        #expect(FindingPresentation.severityCut("P1") == (.ink, false))
+        #expect(FindingPresentation.severityCut("P2") == (.faint, false))
+        #expect(FindingPresentation.severityCut("P3") == (.faint, false))
+        #expect(FindingPresentation.severityCut("") == (.faint, true))
+    }
 }

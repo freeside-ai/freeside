@@ -959,7 +959,7 @@ struct DecisionDetailView: View {
                 findingCards(adjudication, register: register)
             }
             if let findings = item.review_dispute?.value1.findings, !findings.isEmpty {
-                disputedFindingCards(findings)
+                disputedFindingCards(findings, register: register)
             }
         case .factBlock:
             factBlocks(item, register: register)
@@ -2458,70 +2458,152 @@ struct DecisionDetailView: View {
         Self.selectedAlternatives(binding, selections: alternativeSelections)
     }
 
-    private func disputedFindingCards(_ findings: [Components.Schemas.DisputedFinding]) -> some View {
-        VStack(alignment: .leading, spacing: 20) {
-            if findings.contains(where: { $0.external != nil }) {
-                Text(AttentionDisplay.externalDisputeConsequence)
-                    .font(FreesideFont.cardBody)
-                    .fixedSize(horizontal: false, vertical: true)
-            }
+    // A routed dispute draws each finding in the shape of findingCards: a
+    // bordered item whose face holds the severity and title, where the
+    // finding is and who raised it, and the routes the operator picks from,
+    // each with its consequence (R29). The model's reason and the review
+    // identifiers fold away under the item (#2068). One keyword heads the
+    // module, the card's one unverified marker outside the folds (R7) and,
+    // by reading order, its one info control (R25).
+    private func disputedFindingCards(
+        _ findings: [Components.Schemas.DisputedFinding],
+        register: UnverifiedRegister
+    ) -> some View {
+        VStack(alignment: .leading, spacing: CardScale.moduleGap) {
+            UnverifiedLabel(
+                text: "Findings", carriesInfo: register.carriesInfo,
+                rendersInteractiveControls: register.rendersInteractiveControls)
             ForEach(Array(findings.enumerated()), id: \.element.finding_id) { index, finding in
-                VStack(alignment: .leading, spacing: 8) {
-                    // The severity rates the finding, so it rides in the
-                    // finding's own header rather than under its location.
-                    UnverifiedLabel(
-                        text: "Finding \(index + 1) · \(FindingPresentation.severityLabel(finding.severity.rawValue))",
-                        carriesInfo: false, rendersInteractiveControls: true)
-                    QuoteBlock {
-                        DecisionSummaryText(blocks: FindingPresentation(message: finding.message).titledBlocks)
-                    }
-                    if let location = finding.location?.value1 {
-                        Text(AttentionDisplay.findingLocation(location))
-                            .font(FreesideFont.trailingSummary)
-                            .foregroundStyle(Color.inkDim)
-                            .fixedSize(horizontal: false, vertical: true)
-                    }
-                    if let external = finding.external {
-                        Text("\(external.reviewer_login) · \(external.thread_id)").font(.caption)
-                    }
-                    disputedFindingAdjudication(finding)
-                    ChoiceList<Components.Schemas.AdjudicationRoute?>(
-                        accessibilityLabel: "Route for \(finding.message)",
-                        options: finding.offered_routes.map {
-                            .init(
-                                value: $0,
-                                label: AttentionDisplay.disputeRouteLabel($0, external: finding.external != nil),
-                                mark: $0 == finding.adjudication?.lean?.value1
-                                    ? AttentionDisplay.disputedFindingLeanMark : nil,
-                                register: .item)
-                        },
-                        selection: Binding(
-                            get: { alternativeSelections[finding.finding_id] },
-                            set: { alternativeSelections[finding.finding_id] = $0 })
-                    )
-                    .disabled(!model.actionsEnabled)
-                }
+                disputedFindingItem(
+                    finding, number: index + 1, of: findings.count,
+                    rendersInteractiveControls: register.rendersInteractiveControls)
             }
         }
     }
 
-    /// The adjudicator's view of one disputed finding, in the model
-    /// proposal's unverified register: what it leaned toward and why, so the
-    /// operator does not decide blind. It never selects a route.
-    @ViewBuilder
-    private func disputedFindingAdjudication(_ finding: Components.Schemas.DisputedFinding) -> some View {
-        if let adjudication = finding.adjudication {
-            UnverifiedLabel(text: "Model proposal", carriesInfo: false, rendersInteractiveControls: true)
-            Text(AttentionDisplay.disputedFindingLean(adjudication, external: finding.external != nil))
-                .font(FreesideFont.cardBody)
+    private func disputedFindingItem(
+        _ finding: Components.Schemas.DisputedFinding,
+        number: Int,
+        of total: Int,
+        rendersInteractiveControls: Bool
+    ) -> some View {
+        let presentation = FindingPresentation(message: finding.message)
+        let external = finding.external != nil
+        return VStack(alignment: .leading, spacing: 8) {
+            // The head speaks the whole message, so the body under it is
+            // not read twice.
+            disputedFindingHead(finding, title: presentation.title)
                 .fixedSize(horizontal: false, vertical: true)
-            QuoteBlock {
-                Text(adjudication.rationale)
-                    .font(FreesideFont.cardBody)
+                .accessibilityElement(children: .ignore)
+                .accessibilityLabel(
+                    Text("\(FindingPresentation.severityLabel(finding.severity.rawValue)), \(finding.message)")
+                )
+                .accessibilityAddTraits(.isHeader)
+            if !presentation.body.isEmpty {
+                DecisionSummaryText(blocks: presentation.body, size: .body)
+                    .accessibilityHidden(true)
+            }
+            if let source = AttentionDisplay.disputedFindingSource(finding) {
+                Text(source)
+                    .font(FreesideFont.trailingSummary)
+                    .foregroundStyle(Color.inkDim)
                     .fixedSize(horizontal: false, vertical: true)
             }
-        } else {
-            Text(AttentionDisplay.disputedFindingNoAdjudication).font(.caption)
+            ChoiceList<Components.Schemas.AdjudicationRoute?>(
+                accessibilityLabel: "Route for \(finding.message)",
+                options: finding.offered_routes.map {
+                    .init(
+                        value: $0,
+                        label: AttentionDisplay.disputeRouteLabel($0, external: external),
+                        consequence: AttentionDisplay.disputeRouteConsequence($0, external: external),
+                        mark: $0 == finding.adjudication?.lean?.value1
+                            ? AttentionDisplay.disputedFindingFavoredMark : nil,
+                        register: .item)
+                },
+                selection: Binding(
+                    get: { alternativeSelections[finding.finding_id] },
+                    set: { alternativeSelections[finding.finding_id] = $0 })
+            )
+            .disabled(!model.actionsEnabled)
+            SentenceDisclosure(
+                label: "Reason and Source",
+                summary: AttentionDisplay.disputedFindingReasonSummary(finding),
+                spokenLabel: "Finding \(number) reason and source",
+                isExpanded: findingExpansion(finding.finding_id)
+            ) {
+                disputedFindingReason(finding, rendersInteractiveControls: rendersInteractiveControls)
+            }
+        }
+        .padding(.horizontal, 16)
+        .padding(.vertical, 10)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .overlay(RoundedRectangle(cornerRadius: 8).strokeBorder(Color.itemBorder, lineWidth: 1))
+        // The ordinal left the face; VoiceOver still names the item.
+        .accessibilityElement(children: .contain)
+        .accessibilityLabel(Text("Finding \(number) of \(total)"))
+    }
+
+    /// The severity chip with the message's title running in beside it.
+    private func disputedFindingHead(
+        _ finding: Components.Schemas.DisputedFinding,
+        title: AttributedString?
+    ) -> some View {
+        let severity = finding.severity.rawValue
+        let chip = FindingPresentation.severityCut(severity)
+        return HStack(alignment: .firstTextBaseline, spacing: 8) {
+            StateChip(
+                label: FindingPresentation.severityLabel(severity), color: chip.cut.text,
+                dashed: chip.dashed, cut: chip.cut)
+            if let title {
+                Text(DecisionSummaryText.inline(title, size: .body, emphasisSize: findingEmphasisSize, heading: true))
+                    .font(FreesideFont.cardBody)
+                    .foregroundStyle(Color.ink)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+            }
+        }
+    }
+
+    /// The adjudicator's view of one disputed finding, in the model's
+    /// unverified register, and the review identifiers: what the model
+    /// favored and why, so the operator does not decide blind. It never
+    /// selects a route.
+    private func disputedFindingReason(
+        _ finding: Components.Schemas.DisputedFinding,
+        rendersInteractiveControls: Bool
+    ) -> some View {
+        VStack(alignment: .leading, spacing: 6) {
+            if let adjudication = finding.adjudication {
+                UnverifiedLabel(
+                    text: "Adjudicator", carriesInfo: false,
+                    rendersInteractiveControls: rendersInteractiveControls)
+                QuoteBlock {
+                    Text(adjudication.rationale)
+                        .font(FreesideFont.cardBody)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+                ForEach(
+                    [
+                        AttentionDisplay.disputedFindingThreshold(adjudication),
+                        AttentionDisplay.disputedFindingUnofferedFavorite(finding),
+                    ].compactMap { $0 }, id: \.self
+                ) { sentence in
+                    Text(sentence)
+                        .font(FreesideFont.cardBody)
+                        .foregroundStyle(Color.inkDim)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+            } else {
+                Text(AttentionDisplay.disputedFindingNoAdjudication)
+                    .font(FreesideFont.cardBody)
+                    .foregroundStyle(Color.inkDim)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+            if let external = finding.external {
+                Text("\(external.reviewer_login) · \(external.thread_id)")
+                    .font(FreesideFont.trailingSummary)
+                    .foregroundStyle(Color.inkDim)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
         }
     }
 
@@ -3900,11 +3982,25 @@ struct DecisionDetailView: View {
         item: Components.Schemas.AttentionItem,
         showsIcon: Bool = true
     ) -> some View {
+        let label = actionLabelText(action, item: item)
         if showsIcon, let systemImage = AttentionDisplay.systemImage(action) {
-            Label(AttentionDisplay.label(action, for: item), systemImage: systemImage)
+            Label(label, systemImage: systemImage)
         } else {
-            Text(AttentionDisplay.label(action, for: item))
+            Text(label)
         }
+    }
+
+    /// The shared label, except that a routed dispute's Apply counts the
+    /// picks the card holds (R32).
+    private func actionLabelText(
+        _ action: Components.Schemas.Action,
+        item: Components.Schemas.AttentionItem
+    ) -> String {
+        guard action == .adjudicate_findings,
+            let findings = item.review_dispute?.value1.findings, !findings.isEmpty
+        else { return AttentionDisplay.label(action, for: item) }
+        return AttentionDisplay.applyFindingRoutesLabel(
+            selected: selectedFindingRoutes(findings).count, of: findings.count)
     }
 
     private var canPresentLaunchComposer: Bool {
