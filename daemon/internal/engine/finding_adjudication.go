@@ -25,7 +25,7 @@ import (
 
 const (
 	findingMaterialityThresholdKey = "review.adjudication_materiality_threshold"
-	findingConfidenceThresholdKey  = "review.adjudication_confidence_threshold"
+	findingConfidenceThresholdKey  = domain.FindingConfidenceThresholdKey
 	maxAdjudicationAttachmentBytes = 1 << 20
 	maxAdjudicationAttachmentTotal = 1 << 20
 )
@@ -89,19 +89,7 @@ type findingAdjudicationDissent struct {
 }
 
 func resolvedFindingThreshold(policy domain.ResolvedPolicy, keyName string) domain.DispatchThreshold {
-	for _, key := range policy.Keys {
-		if key.Key != keyName {
-			continue
-		}
-		switch domain.DispatchThreshold(key.Value) {
-		case domain.DispatchThresholdMedium:
-			return domain.DispatchThresholdMedium
-		case domain.DispatchThresholdHigh:
-			return domain.DispatchThresholdHigh
-		}
-		return domain.DefaultDispatchThreshold
-	}
-	return domain.DefaultDispatchThreshold
+	return domain.ResolvedDispatchThreshold(policy, keyName)
 }
 
 func classificationMeets(value string, threshold domain.DispatchThreshold) bool {

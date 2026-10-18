@@ -52,6 +52,23 @@ func DisputedFindingAdjudicationFor(
 	}, nil
 }
 
+// DisputedFindingAdjudicationIn derives the block for findingID from the
+// round's latest model-authored artifact, nil when there is none or it has no
+// entry for the finding (an external finding the batch never judged).
+func DisputedFindingAdjudicationIn(
+	artifact *FindingAdjudication, findingID FindingID, threshold DispatchThreshold,
+) (*DisputedFindingAdjudication, error) {
+	if artifact == nil {
+		return nil, nil
+	}
+	for index := range artifact.Entries {
+		if artifact.Entries[index].FindingID == findingID {
+			return DisputedFindingAdjudicationFor(&artifact.Entries[index], threshold)
+		}
+	}
+	return nil, nil
+}
+
 // ReviewDisputeBindingMatches reports whether a stored binding agrees with the
 // one derived from current state. A stored row with no adjudication block
 // agrees with any derived block: such a row predates the block (#2059), the
@@ -62,13 +79,14 @@ func ReviewDisputeBindingMatches(stored, derived *ReviewDisputeBinding) bool {
 	if stored == nil || derived == nil {
 		return stored == derived
 	}
-	comparable := cloneReviewDisputeBinding(derived)
+	comparable := *derived
+	comparable.Findings = slices.Clone(derived.Findings)
 	for index := range comparable.Findings {
 		if index < len(stored.Findings) && stored.Findings[index].Adjudication == nil {
 			comparable.Findings[index].Adjudication = nil
 		}
 	}
-	return reflect.DeepEqual(stored, comparable)
+	return reflect.DeepEqual(stored, &comparable)
 }
 
 // NewHumanAdjudicationEntry records a final route, without model confidence or

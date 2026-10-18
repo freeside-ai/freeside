@@ -4730,7 +4730,7 @@ func (w *productionPublicationWorkflow) putReviewAttentionWithListedFindings(
 		if agentClaims == nil {
 			if existing.Status == domain.StatusOpen &&
 				(!slices.Equal(existing.RequestedDecision, disputeActions) ||
-					(reviewBinding != nil && !reflect.DeepEqual(existing.ReviewDispute, reviewBinding))) {
+					(reviewBinding != nil && !domain.ReviewDisputeBindingMatches(existing.ReviewDispute, reviewBinding))) {
 				repaired := *existing
 				repaired.RequestedDecision = disputeActions
 				if reviewBinding != nil {
@@ -4761,7 +4761,7 @@ func (w *productionPublicationWorkflow) putReviewAttentionWithListedFindings(
 		claimsMatch := reflect.DeepEqual(existing.AgentClaims, desired.AgentClaims)
 		digestsMatch := slices.Equal(existing.ArtifactDigests, desired.ArtifactDigests)
 		presentationMatches := slices.Equal(existing.RequestedDecision, desired.RequestedDecision) &&
-			existing.Reason == desired.Reason && claimsMatch && digestsMatch && reflect.DeepEqual(existing.ReviewDispute, desired.ReviewDispute)
+			existing.Reason == desired.Reason && claimsMatch && digestsMatch && domain.ReviewDisputeBindingMatches(existing.ReviewDispute, desired.ReviewDispute)
 		if !presentationMatches && existing.Status != domain.StatusOpen {
 			return fmt.Errorf("review attention item %q presentation disagrees with run %q: %w",
 				itemID, task.RunID, domain.ErrParentKeyMismatch)
