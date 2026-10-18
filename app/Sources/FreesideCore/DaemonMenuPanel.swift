@@ -160,6 +160,9 @@
                 divider
                 row(.quit, "Quit Freeside", trailing: shortcutGloss("⌘Q")) { actions.quit() }
             }
+            // The menu-bar scene sits outside FreesideRootView, so the
+            // window root's copyable-text default doesn't reach the panel.
+            .textSelection(.enabled)
             .padding(6)
             .frame(width: 320)
             .background(RoundedRectangle(cornerRadius: 10).fill(Color.ground2))

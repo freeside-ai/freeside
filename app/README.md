@@ -536,6 +536,31 @@ Deliberate constant-input force unwraps on mock and fixture surfaces carry
 `// swift-format-ignore: NeverForceUnwrap` annotations; the rule stays on
 everywhere else.
 
+### Copyable Text
+
+Displayed text is copyable by default (#1917): drag or double-click and ⌘C
+on the Mac, long press and Copy on iOS. The default is set once per scene
+root: `FreesideRootView` for every window surface and its sheets,
+`DaemonMenuPanel` for the menu-bar scene, and `DecisionFlowSettingsView`
+for the Mac Settings scene. A new view needs no modifier of its own; a new
+scene sets the default at its root. Button labels, segments, and other
+controls stay unselectable, as the system draws them.
+
+A view opts out only with a reason in a comment beside its
+`.textSelection(.disabled)`, and its text stays copyable another way:
+
+- **Rows.** `SidebarRow` turns selection off, because a selectable title
+  takes the click that selects a Mac list row and the long press that opens
+  the row's menu. The inbox row's menu offers Copy summary, and the task
+  row's offers Copy task name; the card or timeline the row opens shows the
+  same text selectable.
+- **Context menus.** Selectable text claims the long press on iOS for its
+  own Copy, hiding a context menu over it. A view with a menu uses
+  `copyMenu`, which turns selection off under the menu. The menu offers
+  Copy for the text it covers, or that text is selectable elsewhere: the
+  task and run timeline headers keep their ID menus, and the task name they
+  cover is selectable on the task timeline.
+
 ## Task Cancellation Contract
 
 `stop_task` on `/commands` accepts a paired device's task ID, project ID,

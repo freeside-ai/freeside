@@ -92,6 +92,10 @@ public struct FreesideRootView: View {
             }
         }
         .dynamicTypeSize(launchDynamicTypeSize ?? systemDynamicTypeSize)
+        // Displayed text is copyable by default, so the operator can paste a
+        // diagnostic instead of retyping it (#1917). Set once here so a new
+        // surface inherits it; a view that opts out says why (app/README.md).
+        .textSelection(.enabled)
         .preferredColorScheme(launchColorScheme)
         .background(Color.ground)
         .tint(.accentText)

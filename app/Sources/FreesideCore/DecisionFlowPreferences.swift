@@ -50,6 +50,9 @@ public struct DecisionFlowSettingsView: View {
             }
         }
         .formStyle(.grouped)
+        // The Settings scene sits outside FreesideRootView, so the window
+        // root's copyable-text default doesn't reach this form.
+        .textSelection(.enabled)
         .padding()
         .frame(width: 440)
     }
