@@ -23,7 +23,7 @@ func (w *productionPublicationWorkflow) reviewRoundDiffMetrics(
 	reviewWorkspace string,
 	record domain.ReviewRecord,
 ) (*domain.ReviewRoundDiffMetrics, error) {
-	if task.reentersInPlace() {
+	if task.reentersInPlace() || task.reentersBeforePublication() {
 		// The round reviewed commits Freeside did not produce, possibly a
 		// prospective merge the record does not name. Counting the record's
 		// base to its head would not describe what was reviewed, so the

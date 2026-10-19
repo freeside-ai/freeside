@@ -60,6 +60,9 @@ const (
 	productionBlockVerification          = domain.PublicationBlockVerification
 	productionBlockTrust                 = domain.PublicationBlockTrust
 	productionBlockBaseAdvanced          = domain.PublicationBlockBaseAdvanced
+	productionBlockReentryConflict       = domain.PublicationBlockBaseAdvancedConflict
+	productionBlockReentryVerification   = domain.PublicationBlockBaseAdvancedVerification
+	productionBlockReentryRoundLimit     = domain.PublicationBlockBaseAdvancedRoundLimit
 	productionBlockExternal              = "Publication is durably held because the external service permanently refused the committed operation. Repair that external state to resume recovery."
 	productionBlockSuccessorPRNotListed  = "Publication is held because GitHub still lists no pull request on the successor branch after repeated checks. Confirm the pull request exists and is open on that branch; publication resumes once GitHub shows it."
 	productionBlockSuccessorHeadLagging  = "Publication is held because GitHub still shows the pull request at its previous head after repeated checks, although the branch is at the pushed head. Confirm the pull request tracks that branch; publication resumes once GitHub shows the pushed head."
@@ -198,6 +201,13 @@ type productionPublicationTask struct {
 	Publication           ProductionPublication        `json:"publication"`
 	Summary               string                       `json:"summary,omitempty"`
 	Successor             *domain.PublicationSuccessor `json:"successor,omitempty"`
+	// AuthorizingTaskKey names the task whose verification checkpoint holds
+	// this task's candidate authorization. Only a task that re-enters before
+	// publication sets it (reentersBeforePublication): it publishes the head
+	// an earlier task verified, under that task's checkpoint and stored
+	// authorization, and its own key differs. It selects which checkpoint to
+	// read; the checkpoint is still held to the stored authorization.
+	AuthorizingTaskKey string `json:"authorizing_task_key,omitempty"`
 	// reevaluation is reconstructed from a signet intent. It is never part of
 	// the original publication task row, whose bytes remain immutable.
 	reevaluation *productionReevaluation               `json:"-"`
@@ -484,9 +494,17 @@ func reentryCheckpointKey(runID domain.RunID, headSHA string, publicationID doma
 		"/reentry/" + string(publicationID)
 }
 
+// reentryCheckpointKey names the re-entry checkpoint of a task that
+// re-enters in place or before publication. The second kind keeps its
+// ordinary verificationCheckpointKey too: that names the checkpoint holding
+// its candidate authorization, at the base its head was imported over.
+func (task productionPublicationTask) reentryCheckpointKey() string {
+	return reentryCheckpointKey(task.RunID, task.HeadSHA, task.Successor.PublicationID())
+}
+
 func (task productionPublicationTask) verificationCheckpointKey() string {
 	if task.reentersInPlace() {
-		return reentryCheckpointKey(task.RunID, task.HeadSHA, task.Successor.PublicationID())
+		return task.reentryCheckpointKey()
 	}
 	commandID := ""
 	if task.reevaluation != nil {
@@ -1360,11 +1378,14 @@ func (t productionPublicationTask) validateWithPublication(validatePublication f
 		if err := t.Successor.Validate(); err != nil || t.Successor.RunID != t.RunID {
 			return errors.Join(err, domain.ErrParentKeyMismatch)
 		}
-		validProducer = t.ProducingInvocationID == t.Successor.FeedbackInvocationID || remediationProducer
+		if !t.Successor.RepublishesUnpublished() {
+			validProducer = t.ProducingInvocationID == t.Successor.FeedbackInvocationID || remediationProducer
+		}
 		wantPublication = t.Successor.PublicationID()
 	}
 	if t.Version != productionPublicationTaskVersion || t.RunID == "" || t.ProjectID == "" ||
 		!validProducer ||
+		(t.AuthorizingTaskKey != "") != t.reentersBeforePublication() ||
 		(t.LegacyRemediationNoop && !remediationProducer) ||
 		t.VerificationID != productionVerificationInvocationIDForProducer(t.RunID, t.ProducingInvocationID) ||
 		t.PublicationID != wantPublication ||
@@ -2493,16 +2514,22 @@ func (w *productionPublicationWorkflow) reconcileTask(
 	}
 	// FetchBase deliberately leaves the import worktree empty. Discover
 	// instructions in a separate materialization of its pinned base, before
-	// importing any candidate-controlled files into the original checkout.
-	reviewInstructions, held, err := w.exactBaseReviewInstructions(
-		ctx, task, checkout, filepath.Join(scratch, "base-instructions"),
-		binding.admission.Base.BaseSHA,
-	)
-	if err != nil || held != nil {
-		if held != nil {
-			return *held, nil
+	// importing any candidate-controlled files into the original checkout. A
+	// re-entry before publication reviews at a newer base and composes them
+	// there instead.
+	var reviewInstructions exec.ReviewInstructionBinding
+	if !task.reentersBeforePublication() {
+		var held *productionTaskOutcome
+		reviewInstructions, held, err = w.exactBaseReviewInstructions(
+			ctx, task, checkout, filepath.Join(scratch, "base-instructions"),
+			binding.admission.Base.BaseSHA,
+		)
+		if err != nil || held != nil {
+			if held != nil {
+				return *held, nil
+			}
+			return productionTaskOutcome{}, err
 		}
-		return productionTaskOutcome{}, err
 	}
 	handoffDir := filepath.Join(scratch, "handoff")
 	if err := w.materializeReplay(binding.replay, handoffDir); err != nil {
@@ -2542,6 +2569,10 @@ func (w *productionPublicationWorkflow) reconcileTask(
 	}
 	if task.continuation != nil {
 		return w.startPublicationContinuation(ctx, task, checkoutDir)
+	}
+	if task.reentersBeforePublication() {
+		return w.reconcileUnpublishedReentry(ctx, task, binding, checkout, checkoutDir, imported,
+			filepath.Join(scratch, "base-instructions"))
 	}
 	if binding.remediation != nil {
 		sourceTree, err := w.loadRemediationSourceTree(ctx, task, binding, checkoutDir)
@@ -2803,7 +2834,7 @@ func (w *productionPublicationWorkflow) reconcileTask(
 	// input is available (§7 order). It is idempotent and never blocks: a source
 	// that is not closable records a durable no-close answer (issue #1419 Part D).
 	if err := w.reconcilePublicationClosure(
-		ctx, task, binding, checkpoint, reviewInstructions, checkoutDir, report,
+		ctx, task, binding, binding.admission.Base.BaseSHA, checkpoint, reviewInstructions, checkoutDir, report,
 	); err != nil {
 		return productionTaskOutcome{}, productionPublicationRetryableError(err)
 	}
@@ -2889,6 +2920,13 @@ func (w *productionPublicationWorkflow) reconcileTask(
 			}
 			reason := productionBlockTrust
 			if errors.Is(err, publish.ErrTargetBaseAdvanced) {
+				outcome, handled, sealErr := w.sealUnpublishedReentry(ctx, task, binding.run, checkpoint)
+				if sealErr != nil {
+					return productionTaskOutcome{}, errors.Join(err, sealErr)
+				}
+				if handled {
+					return outcome, nil
+				}
 				reason = productionBlockBaseAdvanced
 			}
 			outcome, blockErr := w.completeBlockedTask(
@@ -3334,9 +3372,11 @@ func (w *productionPublicationWorkflow) reconcileReviewGate(
 			}
 		} else if latestAdmitted && latestRecord.InstructionDigest == reviewInstructions.ResultDigest {
 			var remediationOutcome remediationReviewOutcome
+			// A re-entry before publication reviews its head at a newer base;
+			// the remediation that produced the head was reviewed at the old one.
 			if _, remediated := remediationRoundForInvocation(
 				task.RunID, task.ProducingInvocationID,
-			); remediated {
+			); remediated && !task.reentersBeforePublication() {
 				findings, err := w.reviewRecordFindings(ctx, *latestRecord)
 				if err != nil {
 					return productionReviewPending, err
@@ -3384,7 +3424,7 @@ func (w *productionPublicationWorkflow) reconcileReviewGate(
 			// reaches adjudication there too.
 			if latestRecord.Outcome == domain.ReviewFindings || adjudicatesExternal {
 				candidateWorkspace, err := w.ensureReviewWorkspace(
-					ctx, latestRecord.InvocationID, workspace, task.HeadSHA)
+					ctx, latestRecord.InvocationID, workspace, reentryWorkspaceSHA(task, binding))
 				if err != nil {
 					return productionReviewPending, err
 				}
@@ -3798,10 +3838,13 @@ func (w *productionPublicationWorkflow) reconcileReviewGate(
 	if err != nil {
 		return productionReviewPending, err
 	}
-	remediationOutcome, err := w.reconcileRemediationReview(
-		ctx, task, record, result.Findings, checkpoint.Imported.Claims)
-	if err != nil {
-		return productionReviewPending, err
+	var remediationOutcome remediationReviewOutcome
+	if !task.reentersBeforePublication() {
+		remediationOutcome, err = w.reconcileRemediationReview(
+			ctx, task, record, result.Findings, checkpoint.Imported.Claims)
+		if err != nil {
+			return productionReviewPending, err
+		}
 	}
 	diffMetrics, err := w.reviewRoundDiffMetrics(ctx, task, binding, reviewWorkspace, record)
 	if err != nil {
@@ -6502,8 +6545,12 @@ func (w *productionPublicationWorkflow) loadCheckpoint(
 	if legacy {
 		versionMatches = checkpoint.Version == productionVerificationVersionV1 && checkpoint.HeadSHA == ""
 	}
+	authorizingTaskKey := task.intentKey()
+	if task.AuthorizingTaskKey != "" {
+		authorizingTaskKey = task.AuthorizingTaskKey
+	}
 	if !versionMatches ||
-		checkpoint.TaskKey != task.intentKey() ||
+		checkpoint.TaskKey != authorizingTaskKey ||
 		checkpoint.ProjectImage != binding.verificationImage().ID || authorization.Validate() != nil ||
 		authorization.Repo != binding.admission.Base.Repo ||
 		authorization.BaseSHA != binding.admission.Base.BaseSHA ||
@@ -7126,6 +7173,9 @@ func (w *productionPublicationWorkflow) recoverDefinitiveBlockedTask(
 		productionBlockVerification,
 		productionBlockTrust,
 		productionBlockBaseAdvanced,
+		productionBlockReentryConflict,
+		productionBlockReentryVerification,
+		productionBlockReentryRoundLimit,
 	}, current.Reason) {
 		return nil, fmt.Errorf("production blocked item %q has unexpected reason: %w",
 			current.ID, domain.ErrParentKeyMismatch)
@@ -7141,7 +7191,8 @@ func (w *productionPublicationWorkflow) recoverDefinitiveBlockedTask(
 				current.ID, domain.ErrParentKeyMismatch)
 		}
 		artifacts = checkpoint.Artifacts
-	case productionBlockTrust, productionBlockBaseAdvanced:
+	case productionBlockTrust, productionBlockBaseAdvanced, productionBlockReentryConflict,
+		productionBlockReentryVerification, productionBlockReentryRoundLimit:
 		if !checkpointFound || !checkpoint.Authorization.AuthorizesPublication {
 			return nil, fmt.Errorf("production blocked item %q has an impossible publication reason: %w",
 				current.ID, domain.ErrParentKeyMismatch)

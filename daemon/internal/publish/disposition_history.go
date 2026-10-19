@@ -200,7 +200,11 @@ func loadDispositionHistoryFromTx(
 	if err != nil {
 		return DispositionHistory{}, err
 	}
-	reviews, dispositions = currentDispositionLineage(reviews, dispositions)
+	evaluation, segments, err := dispositionReentryContext(ctx, tx, c, auth)
+	if err != nil {
+		return DispositionHistory{}, err
+	}
+	reviews, dispositions = currentDispositionLineage(reviews, dispositions, segments)
 	if len(reviews) == 0 {
 		return DispositionHistory{}, fmt.Errorf("no current review lineage: %w", domain.ErrParentKeyMismatch)
 	}
@@ -240,7 +244,7 @@ func loadDispositionHistoryFromTx(
 		)
 	}
 	if expectedInstructionDigest == "" || review.InstructionDigest != expectedInstructionDigest ||
-		review.BaseSHA != auth.BaseSHA {
+		review.BaseSHA != evaluation.BaseSHA {
 		return DispositionHistory{}, fmt.Errorf("review authority disagrees with current publication decision: %w", domain.ErrParentKeyMismatch)
 	}
 	run, err := tx.GetRun(ctx, c.RunID)
@@ -268,9 +272,18 @@ func loadDispositionHistoryFromTx(
 	}
 	base := domain.BaseRevision{
 		Repo: c.Repo, RepositoryID: profile.RepositoryID,
-		BaseRef: c.BaseRef, BaseSHA: auth.BaseSHA,
+		BaseRef: c.BaseRef, BaseSHA: evaluation.BaseSHA,
 	}
-	verificationProof, err := domain.NewCheckProof(resolutions[0], c.HeadSHA, &base, *c.RecipeDigest)
+	// A head an unpublished re-entry kept was verified and reviewed as its
+	// prospective merge into the re-entry base, so its proofs name the merge,
+	// exactly as the engine persisted them.
+	newProof := func(resolution domain.RequirementResolution, recipe domain.Digest) (domain.CheckProof, error) {
+		if evaluation.MergeSHA == "" {
+			return domain.NewCheckProof(resolution, c.HeadSHA, &base, recipe)
+		}
+		return domain.NewProspectiveMergeCheckProof(resolution, evaluation, base, recipe)
+	}
+	verificationProof, err := newProof(resolutions[0], *c.RecipeDigest)
 	if err != nil {
 		return DispositionHistory{}, err
 	}
@@ -282,7 +295,7 @@ func loadDispositionHistoryFromTx(
 		return DispositionHistory{}, err
 	}
 	reviewRecipe := domain.Digest(contentaddr.Sum(reviewRecipeBody))
-	reviewProof, err := domain.NewCheckProof(resolutions[1], c.HeadSHA, &base, reviewRecipe)
+	reviewProof, err := newProof(resolutions[1], reviewRecipe)
 	if err != nil {
 		return DispositionHistory{}, err
 	}
@@ -305,7 +318,7 @@ func loadDispositionHistoryFromTx(
 		},
 	}
 	readiness, err := domain.EvaluateReadiness(
-		domain.EvaluationTarget{CandidateHead: c.HeadSHA, Base: &base},
+		domain.EvaluationTarget{CandidateHead: c.HeadSHA, Base: &base, MergeSHA: evaluation.MergeSHA},
 		resolutions, []domain.CheckState{verificationState, reviewState}, nil,
 	)
 	if err != nil {
@@ -317,6 +330,63 @@ func loadDispositionHistoryFromTx(
 		findings: findings, dispositions: dispositions, readiness: readiness,
 		readinessProofs: readinessProofs,
 	}, st)
+}
+
+// lineageSegment says which base the rounds from FromRound on were reviewed
+// at, until the next segment begins. The run's unpublished re-entry chain
+// defines the segments (dispositionReentryContext).
+type lineageSegment struct {
+	FromRound int
+	BaseSHA   string
+}
+
+// dispositionReentryContext derives, from the store alone, what the run's
+// unpublished re-entries change about a disposition history (issue #2058).
+// The returned identity is what the candidate's head was evaluated as: its
+// base and, for a head an unpublished re-entry kept, the prospective merge
+// the cycle verified and reviewed. Without such a re-entry it is the head at
+// the authorization's base, as before. The segments name the base of each
+// stretch of rounds the run's re-entry chain links, so rounds at a base an
+// earlier cycle superseded keep their dispositions in the lineage; none is
+// returned for a run without an unpublished re-entry.
+func dispositionReentryContext(
+	ctx context.Context, tx *store.ReadTx, c Candidate, auth domain.CandidateAuthorization,
+) (domain.ProspectiveMergeIdentity, []lineageSegment, error) {
+	evaluation := domain.ProspectiveMergeIdentity{BaseSHA: auth.BaseSHA, HeadSHA: c.HeadSHA}
+	chain, err := tx.PublicationSuccessorChain(ctx, c.RunID)
+	if err != nil {
+		return evaluation, nil, err
+	}
+	var segments []lineageSegment
+	for _, successor := range chain {
+		if !successor.RepublishesUnpublished() {
+			continue
+		}
+		if len(segments) == 0 {
+			prior, err := tx.GetReviewRecord(ctx, successor.PriorReviewInvocationID)
+			if err != nil {
+				return evaluation, nil, err
+			}
+			segments = append(segments, lineageSegment{FromRound: 0, BaseSHA: prior.BaseSHA})
+		}
+		segments = append(segments, lineageSegment{FromRound: successor.ReviewRound, BaseSHA: successor.Reentry.BaseSHA})
+		if successor.PublicationID() != c.InvocationID || c.Successor != nil {
+			continue
+		}
+		evaluation.BaseSHA = successor.Reentry.BaseSHA
+		if c.HeadSHA == successor.Reentry.HeadSHA {
+			evaluation.MergeSHA = c.ProspectiveMergeSHA
+			if !successor.AllowsProspectiveMerge(evaluation) {
+				return evaluation, nil, fmt.Errorf("re-entry authority does not admit merge %q: %w",
+					c.ProspectiveMergeSHA, domain.ErrParentKeyMismatch)
+			}
+		}
+	}
+	if evaluation.MergeSHA == "" && c.ProspectiveMergeSHA != "" {
+		return evaluation, nil, fmt.Errorf("candidate names a prospective merge no re-entry admits: %w",
+			domain.ErrParentKeyMismatch)
+	}
+	return evaluation, segments, nil
 }
 
 // currentDispositionLineage keeps the review rounds that share the latest
@@ -333,18 +403,58 @@ func loadDispositionHistoryFromTx(
 // finished, and the admitted pass reviewed the same candidate again. A legacy
 // pass on an earlier head was remediated before the admitted pass ran, so it
 // stays in the lineage and its dispositions stay required.
+//
+// An unpublished re-entry moves the base mid-lineage (issue #2058): its round
+// reviews the same candidate merged into a newer base. When the latest round
+// sits in the last segment the run's re-entry chain links, at that segment's
+// base, each earlier round belongs if it was reviewed at the base of its own
+// segment. Only bases the chain names link, and the configuration equality
+// still applies to every round. Each segment's base composes its own
+// repository instructions, so a round answers to the instructions of the
+// latest round in its own segment, the way the single-base rule's rounds
+// answer to the latest pass: an advance that changes the instructions keeps
+// the earlier segment's dispositions in the history, while a pass superseded
+// within one segment stays out. Any other latest round, such as one at a base
+// a later published re-entry moved to, keeps the single-base rule.
 func currentDispositionLineage(
 	reviews []domain.ReviewRecord,
 	dispositions []domain.ReviewDispositionRecord,
+	segments []lineageSegment,
 ) ([]domain.ReviewRecord, []domain.ReviewDispositionRecord) {
 	if len(reviews) == 0 {
 		return nil, nil
 	}
 	latest := reviews[len(reviews)-1]
+	baseFor := func(int) string { return latest.BaseSHA }
+	instructionsFor := func(int) domain.Digest { return latest.InstructionDigest }
+	if len(segments) > 0 {
+		last := segments[len(segments)-1]
+		if latest.Round >= last.FromRound && latest.BaseSHA == last.BaseSHA {
+			segmentOf := func(round int) int {
+				index := 0
+				for i, segment := range segments {
+					if round >= segment.FromRound {
+						index = i
+					}
+				}
+				return index
+			}
+			baseFor = func(round int) string { return segments[segmentOf(round)].BaseSHA }
+			segmentInstructions := make([]domain.Digest, len(segments))
+			for _, review := range reviews {
+				index := segmentOf(review.Round)
+				if review.BaseSHA == segments[index].BaseSHA &&
+					review.ConfigurationDigest == latest.ConfigurationDigest {
+					segmentInstructions[index] = review.InstructionDigest
+				}
+			}
+			instructionsFor = func(round int) domain.Digest { return segmentInstructions[segmentOf(round)] }
+		}
+	}
 	sameAuthority := func(review domain.ReviewRecord) bool {
-		return review.BaseSHA == latest.BaseSHA &&
+		return review.BaseSHA == baseFor(review.Round) &&
 			review.ConfigurationDigest == latest.ConfigurationDigest &&
-			review.InstructionDigest == latest.InstructionDigest
+			review.InstructionDigest == instructionsFor(review.Round)
 	}
 	firstAdmittedHead := ""
 	for _, review := range reviews {

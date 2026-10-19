@@ -107,6 +107,10 @@ func (d *storePublicationDecision) prepare(
 		if err := validateSuccessorCandidate(ctx, &tx.ReadTx, c, producingInvocationID); err != nil {
 			return err
 		}
+		reentry, err := unpublishedReentryAuthority(ctx, &tx.ReadTx, c, producingInvocationID)
+		if err != nil {
+			return err
+		}
 		if err := validateCurrentScopeDecision(ctx, &tx.ReadTx, c); err != nil {
 			return err
 		}
@@ -214,12 +218,37 @@ func (d *storePublicationDecision) prepare(
 			// exact target tip observed by this audit. An already-committed
 			// intent may continue after a base advance: effects may have begun,
 			// and recovery must converge them instead of stranding a branch.
-			if reservationState == invocationReserved && audit.AuditedCommitSHA != auth.BaseSHA {
-				decisionErr = fmt.Errorf(
-					"fresh target %s is %s, execution was admitted at %s: %w",
-					c.BaseRef, audit.AuditedCommitSHA, auth.BaseSHA, ErrTargetBaseAdvanced,
-				)
-				return nil
+			// An unpublished re-entry publishes against its authority's base,
+			// the tip an earlier audit observed, and is held to the same rule.
+			requiredBase := auth.BaseSHA
+			if reentry != nil {
+				requiredBase, err = reentryPublicationBase(*reentry, c)
+				if err != nil {
+					decisionErr = err
+					return nil
+				}
+			}
+			if reservationState == invocationReserved {
+				// A first publication a later re-entry replaced may no longer
+				// commit an intent: its cycle sealed against the reservation
+				// this one would settle.
+				current, err := tx.CurrentPublicationSuccessor(ctx, c.RunID)
+				if err != nil {
+					return fmt.Errorf("read current publication successor: %w", err)
+				}
+				if c.Successor == nil && current != nil && current.RepublishesUnpublished() &&
+					current.PublicationID() != c.InvocationID {
+					decisionErr = fmt.Errorf("publication %s was replaced by %s: %w",
+						c.InvocationID, current.PublicationID(), ErrUnauthorizedPublication)
+					return nil
+				}
+				if audit.AuditedCommitSHA != requiredBase {
+					decisionErr = fmt.Errorf(
+						"fresh target %s is %s, execution was admitted at %s: %w",
+						c.BaseRef, audit.AuditedCommitSHA, requiredBase, ErrTargetBaseAdvanced,
+					)
+					return nil
+				}
 			}
 		}
 		stored, inserted, err := commitReservedIntent(ctx, tx, key, IntentKindPublication, payload, claim)

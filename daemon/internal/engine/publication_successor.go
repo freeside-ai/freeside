@@ -79,12 +79,29 @@ func productionTaskForInvocation(ctx context.Context, tx *store.ReadTx, runID do
 			publication = (domain.PublicationSuccessor{CommandID: returned.CommandID}).PublicationID()
 		}
 	}
-	if publication == "" {
-		return tx.GetOutbox(ctx, productionPublicationTaskKey(runID))
+	var successor *domain.PublicationSuccessor
+	if publication != "" {
+		sealed, err := tx.GetPublicationSuccessor(ctx, runID, publication)
+		if err != nil {
+			return store.QueueEntry{}, err
+		}
+		successor = &sealed
 	}
-	successor, err := tx.GetPublicationSuccessor(ctx, runID, publication)
-	if err != nil {
-		return store.QueueEntry{}, err
+	// An unpublished re-entry moves a run's one task to its own key and
+	// retires the row it replaced (issue #2058). An invocation behind the
+	// replaced row resolves to the run's current row, the one that now carries
+	// its candidate.
+	if successor == nil || successor.RepublishesUnpublished() {
+		current, err := tx.CurrentPublicationSuccessor(ctx, runID)
+		if err != nil {
+			return store.QueueEntry{}, err
+		}
+		if current != nil && current.RepublishesUnpublished() {
+			successor = current
+		}
+	}
+	if successor == nil {
+		return tx.GetOutbox(ctx, productionPublicationTaskKey(runID))
 	}
 	return tx.GetOutbox(ctx, successor.TaskKey())
 }
@@ -150,6 +167,11 @@ func authenticateTaskSuccessor(ctx context.Context, tx *store.ReadTx, task produ
 		// that covered it, and the read above re-ran that gate.
 		return nil
 	}
+	if task.reentersBeforePublication() {
+		// The producer is the invocation that exported the head at an earlier
+		// base; the store proves it from that export.
+		return tx.AuthenticateSuccessorProducer(ctx, successor, task.ProducingInvocationID)
+	}
 	if task.ProducingInvocationID == successor.FeedbackInvocationID {
 		entry, err := tx.GetOutbox(ctx, string(task.ProducingInvocationID))
 		if err != nil {
@@ -174,7 +196,9 @@ func authenticateTaskSuccessor(ctx context.Context, tx *store.ReadTx, task produ
 }
 
 func (w *productionPublicationWorkflow) bindSuccessorCandidate(ctx context.Context, task productionPublicationTask, candidate *publish.Candidate) error {
-	if task.Successor == nil {
+	// An unpublished re-entry has no pull request to update: it is still the
+	// run's first publication, under its authority's publication identity.
+	if task.Successor == nil || task.Successor.RepublishesUnpublished() {
 		return nil
 	}
 	return w.store.Read(ctx, func(tx *store.ReadTx) error {
@@ -190,7 +214,7 @@ func (w *productionPublicationWorkflow) bindSuccessorCandidate(ctx context.Conte
 
 func (w *productionPublicationWorkflow) publishCandidate(ctx context.Context, task productionPublicationTask, candidate publish.Candidate, checkout PublicationCheckout) (publish.Result, error) {
 	execution := publish.ExecutionCandidate{Candidate: candidate, ProducingInvocationID: task.ProducingInvocationID}
-	if task.Successor != nil {
+	if task.Successor != nil && !task.Successor.RepublishesUnpublished() {
 		transport, ok := w.transport.(interface {
 			UpdateHead(context.Context, PublicationCheckout, publish.GatedUpdate) (publish.PushResult, error)
 		})

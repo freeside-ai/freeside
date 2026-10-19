@@ -534,7 +534,16 @@ func (tr *integrationTransport) FetchBase(
 		}
 		runGit(tr.t, tr.baseDir, append(args, ".", dir)...)
 		if got := runGit(tr.t, dir, "rev-parse", "HEAD"); got != baseSHA {
-			return nil, fmt.Errorf("cloned base %s, want %s", got, baseSHA)
+			// The branch advanced past the exact base, as the real transport
+			// allows: the base must still be on the fetched branch.
+			if _, code, err := tryGit(dir, "merge-base", "--is-ancestor", baseSHA, "HEAD"); err != nil || code != 0 {
+				return nil, fmt.Errorf("cloned base %s, want %s", got, baseSHA)
+			}
+			if tr.noCheckout {
+				runGit(tr.t, dir, "update-ref", "--no-deref", "HEAD", baseSHA)
+			} else {
+				runGit(tr.t, dir, "checkout", "-q", "--detach", baseSHA)
+			}
 		}
 	}
 	checkoutDir := dir

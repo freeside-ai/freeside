@@ -382,6 +382,47 @@ func TestProspectiveMergeBuildsDeterministicMerge(t *testing.T) {
 	}
 }
 
+// A run whose base advanced before its first publication keeps the checkout
+// it was imported over and merges into the newer tip that checkout's fetch
+// of the base branch already holds (issue #2058).
+func TestProspectiveMergeOntoTheAdvancedBase(t *testing.T) {
+	t.Parallel()
+	remote, head, advanced := baseAdvance(t, "pr\n", "main\n")
+	co := mergeFixtureCheckout(t, remote, head, remote.baseSHA)
+
+	merge, err := remote.transport.ProspectiveMergeOnto(t.Context(), co, advanced, head)
+	if err != nil {
+		t.Fatalf("ProspectiveMergeOnto: %v", err)
+	}
+	// The commit is the one a checkout of the advanced base builds.
+	want, err := remote.transport.ProspectiveMerge(t.Context(), mergeFixtureCheckout(t, remote, head, advanced), head)
+	if err != nil || merge != want {
+		t.Errorf("merge onto the advanced base = %s, want %s (%v)", merge, want, err)
+	}
+	if at := gitOut(t, co.Dir(), "rev-parse", "HEAD"); at != remote.baseSHA {
+		t.Errorf("HEAD = %s, want the checkout's own base %s", at, remote.baseSHA)
+	}
+}
+
+func TestProspectiveMergeOntoRefusesABaseTheBranchNeverHeld(t *testing.T) {
+	t.Parallel()
+	remote, head, _ := baseAdvance(t, "pr\n", "main\n")
+	next := remote.commitOn(t, "feat/pr", "next.txt", "next\n")
+	co := mergeFixtureCheckout(t, remote, next, remote.baseSHA)
+
+	if _, err := remote.transport.ProspectiveMergeOnto(t.Context(), co, strings.Repeat("e", 40), next); !errors.Is(err, ErrRemoteMissingBase) {
+		t.Errorf("merge onto a commit the checkout lacks: %v, want ErrRemoteMissingBase", err)
+	}
+	// The head's parent is in the checkout but only on the pull request's
+	// branch: it was never a tip of the base branch.
+	if _, err := remote.transport.ProspectiveMergeOnto(t.Context(), co, head, next); !errors.Is(err, ErrRemoteMissingBase) {
+		t.Errorf("merge onto a commit off the base branch: %v, want ErrRemoteMissingBase", err)
+	}
+	if _, err := remote.transport.ProspectiveMergeOnto(t.Context(), co, "main", next); err == nil {
+		t.Error("merge accepted a non-SHA base")
+	}
+}
+
 func TestProspectiveMergeReportsConflictWithoutCommit(t *testing.T) {
 	t.Parallel()
 	remote := newLocalRemote(t)

@@ -57,6 +57,53 @@ func validateSuccessorCandidate(ctx context.Context, tx *store.ReadTx, candidate
 	return nil
 }
 
+// unpublishedReentryAuthority returns the authority a first-publication
+// candidate publishes under when its invocation is an unpublished re-entry's
+// (issue #2058), and nil when it is the run's ordinary first publication. The
+// authority is read through the store's gate by the candidate's invocation,
+// never taken from the candidate, so the base it names is the daemon's own
+// audit tip. The candidate must be the run's current cycle, its producer one
+// the authority admits, and its head the latest review's.
+func unpublishedReentryAuthority(
+	ctx context.Context, tx *store.ReadTx, c Candidate, producer *domain.InvocationID,
+) (*domain.PublicationSuccessor, error) {
+	if c.Successor != nil || producer == nil {
+		return nil, nil
+	}
+	successor, err := tx.GetPublicationSuccessor(ctx, c.RunID, c.InvocationID)
+	if errors.Is(err, store.ErrNotFound) {
+		return nil, nil
+	}
+	if err != nil || !successor.RepublishesUnpublished() || c.DispositionHistory == nil {
+		return nil, errors.Join(err, ErrUnauthorizedPublication)
+	}
+	if err := tx.AuthenticateSuccessorProducer(ctx, successor, *producer); err != nil {
+		return nil, errors.Join(err, ErrUnauthorizedPublication)
+	}
+	current, err := tx.CurrentPublicationSuccessor(ctx, c.RunID)
+	if err != nil || current == nil || current.PublicationID() != c.InvocationID {
+		return nil, errors.Join(err, ErrUnauthorizedPublication)
+	}
+	review, err := tx.LatestReviewRecord(ctx, c.RunID)
+	if err != nil || review.Round < successor.ReviewRound || review.HeadSHA != c.HeadSHA {
+		return nil, errors.Join(err, ErrUnauthorizedPublication)
+	}
+	return &successor, nil
+}
+
+// reentryPublicationBase is the base an unpublished re-entry's candidate
+// publishes against: the authority's. The head the cycle kept was authorized
+// at the superseded base, which is why that authorization's base does not
+// decide here. The cycle admits no remediation, so a candidate at any other
+// head is not its own.
+func reentryPublicationBase(successor domain.PublicationSuccessor, c Candidate) (string, error) {
+	if c.HeadSHA != successor.Reentry.HeadSHA {
+		return "", fmt.Errorf("candidate head %s is not the re-entry head %s: %w",
+			c.HeadSHA, successor.Reentry.HeadSHA, ErrUnauthorizedPublication)
+	}
+	return successor.Reentry.BaseSHA, nil
+}
+
 // PublishSuccessorAfterGateAndFinalize updates the one predecessor PR. It uses
 // the same candidate/readiness/trust gates as initial publication, but never
 // grants ordinary create-only transport authority to replace a branch.

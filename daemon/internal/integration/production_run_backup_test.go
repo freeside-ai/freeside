@@ -32,6 +32,15 @@ func TestRealRunBackupVerificationWorkflowClosure(t *testing.T) {
 		CommandID: feedback.CommandID, FeedbackInvocationID: feedback.InvocationID,
 		PredecessorItemID: feedback.ItemID, PriorReviewInvocationID: "review", ReviewRound: 2,
 	}
+	// A run whose base advanced before its first publication seals this
+	// commandless authority (issue #2058).
+	unpublished := domain.PublicationSuccessor{
+		Version: domain.PublicationUnpublishedReentryVersion, Origin: domain.PublicationSuccessorUnpublishedBaseAdvance,
+		RunID: "run", PredecessorItemID: domain.ProductionReadyItemID("run"), PriorReviewInvocationID: "review", ReviewRound: 2,
+		Reentry: &domain.PublicationSuccessorReentry{
+			Reason: domain.ReadinessInvalidationBaseAdvanced, BaseSHA: strings.Repeat("3", 40), HeadSHA: strings.Repeat("2", 40),
+		},
+	}
 	remediation := domain.RemediationInvocationIntent{
 		Version: "freeside.remediation-request/v1", RunID: "run", Round: 1,
 		InvocationID: "inv-remediate-1-run", StageID: "remediate-1-run",
@@ -74,6 +83,7 @@ func TestRealRunBackupVerificationWorkflowClosure(t *testing.T) {
 	}{
 		{engine.KindOperatorFeedbackInvocationRequested, string(feedback.InvocationID), feedback, engine.OperatorFeedbackInvocationBackupPayloadDigests},
 		{domain.PublicationSuccessorKind, successor.Key(), successor, engine.PublicationSuccessorBackupPayloadDigests},
+		{domain.PublicationSuccessorKind, unpublished.Key(), unpublished, engine.PublicationSuccessorBackupPayloadDigests},
 		{engine.KindRemediationInvocationRequested, string(remediation.InvocationID), remediation, engine.RemediationInvocationBackupPayloadDigests},
 		{domain.PublicationContinuationRequestedKind, continuation.Key(), continuation, engine.PublicationContinuationBackupPayloadDigests},
 		{engine.KindSpecificationDiscussionRequested, string(discussion.InvocationID), discussion, engine.SpecificationDiscussionBackupPayloadDigests},

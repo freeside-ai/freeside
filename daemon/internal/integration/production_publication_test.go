@@ -2982,15 +2982,16 @@ func TestProductionClassifierPersistsAnnotationAndEscalatesLowConfidenceP1(t *te
 	}
 }
 
-func TestProductionBaseAdvanceAfterReviewBlocksAtPublisher(t *testing.T) {
+func TestProductionTrustBlockAfterReviewBlocksAtPublisher(t *testing.T) {
 	t.Parallel()
 	// Under pre-publication review (issue #527, decision 1) the §7 review runs
-	// against the admitted base, so a base advance discovered at publication is
-	// owned by the publisher's exact-base gate, not a review dispute: the
-	// candidate reviews clean, then the publisher refuses the moved base and the
-	// run blocks with no forge effect.
+	// before the publisher's trust gate, so trust drift discovered at
+	// publication is owned by that gate, not a review dispute: the candidate
+	// reviews clean, then the publisher refuses the drifted trust state and
+	// the run blocks with no forge effect. (A base advance there re-enters
+	// instead, issue #2058.)
 	p := newProductionPublicationHarness(t, "")
-	p.audit.AuditedCommitSHA = strings.Repeat("f", 40)
+	p.audit.EffectiveTokenPerms = domain.TokenPermissionsReadWrite
 	p.workflow = p.newEngine(t, productionCrashSeams{}, true)
 	p.startAndRecordExport(t)
 	result, err := p.reconcileLanes()
@@ -2998,18 +2999,18 @@ func TestProductionBaseAdvanceAfterReviewBlocksAtPublisher(t *testing.T) {
 		t.Fatal(err)
 	}
 	if result.ReadyItemsCreated != 0 || result.BlockedItemsCreated != 1 {
-		t.Fatalf("base-advanced result = %#v", result)
+		t.Fatalf("trust-blocked result = %#v", result)
 	}
 	if refs, prs := p.forge.counts(); refs != 0 || prs != 0 {
-		t.Fatalf("base advance produced forge effects = %d refs, %d prs", refs, prs)
+		t.Fatalf("trust block produced forge effects = %d refs, %d prs", refs, prs)
 	}
 	blocked, err := p.attention.GetAttentionItem(p.ctx,
 		domain.ItemID("production-publish-blocked-"+string(p.runID)))
 	if err != nil {
 		t.Fatal(err)
 	}
-	if blocked.Item.Reason != "The target base advanced after admission; rerun and reverify against the current base." {
-		t.Fatalf("base-advance block reason = %q", blocked.Item.Reason)
+	if blocked.Item.Reason != domain.PublicationBlockTrust {
+		t.Fatalf("trust block reason = %q", blocked.Item.Reason)
 	}
 	// The candidate was reviewed clean before publication was attempted.
 	if err := p.store.Read(p.ctx, func(tx *store.ReadTx) error {
@@ -3028,7 +3029,7 @@ func TestProductionBaseAdvanceAfterReviewBlocksAtPublisher(t *testing.T) {
 	// A command-authorized reevaluation has fresh verification evidence, so it
 	// must start the next review round rather than reuse round 1's authority.
 	repairPublicationTrustProfile(t, p)
-	p.audit.AuditedCommitSHA = p.baseSHA
+	p.audit.EffectiveTokenPerms = domain.TokenPermissionsReadOnly
 	p.workflow = p.newEngine(t, productionCrashSeams{}, true)
 	secondReviewID := engine.ProductionReviewInvocationID(p.runID, 2)
 	p.reviewer.Script(secondReviewID, fake.ReviewScript{
@@ -3039,7 +3040,7 @@ func TestProductionBaseAdvanceAfterReviewBlocksAtPublisher(t *testing.T) {
 			CompletionEvidence: productionDigest([]byte("clean reevaluation review")),
 		},
 	})
-	submitPublicationRerun(t, p, blocked, "rerun-after-base-advance")
+	submitPublicationRerun(t, p, blocked, "rerun-after-trust-block")
 	var reevaluated engine.ReconcileResult
 	for range 4 {
 		reevaluated, err = p.reconcileLanes()
@@ -3069,11 +3070,11 @@ func TestProductionBaseAdvanceAfterReviewBlocksAtPublisher(t *testing.T) {
 
 func TestProductionReevaluationReviewEscalationRemainsBlocked(t *testing.T) {
 	p := newProductionPublicationHarness(t, "")
-	p.audit.AuditedCommitSHA = strings.Repeat("f", 40)
+	p.audit.EffectiveTokenPerms = domain.TokenPermissionsReadWrite
 	p.workflow = p.newEngine(t, productionCrashSeams{}, true)
 	p.startAndRecordExport(t)
 	if result, err := p.reconcileLanes(); err != nil || result.BlockedItemsCreated != 1 {
-		t.Fatalf("initial base-advance block = %#v, %v", result, err)
+		t.Fatalf("initial trust block = %#v, %v", result, err)
 	}
 	blocked, err := p.attention.GetAttentionItem(
 		p.ctx, domain.ProductionBlockedItemID(p.runID),
@@ -3083,7 +3084,7 @@ func TestProductionReevaluationReviewEscalationRemainsBlocked(t *testing.T) {
 	}
 
 	repairPublicationTrustProfile(t, p)
-	p.audit.AuditedCommitSHA = p.baseSHA
+	p.audit.EffectiveTokenPerms = domain.TokenPermissionsReadOnly
 	round := engine.ProductionReviewInvocationID(p.runID, 2)
 	p.reviewer.Script(round, fake.ReviewScript{
 		Outcome: fake.OutcomeComplete,
@@ -3143,11 +3144,11 @@ func TestProductionReevaluationHardLimitEscalationUsesPolicyRound(t *testing.T) 
 			Digest: submissionDigest("run-production-publication", "reevaluation-hard-round-limit"),
 		},
 	}})
-	p.audit.AuditedCommitSHA = strings.Repeat("f", 40)
+	p.audit.EffectiveTokenPerms = domain.TokenPermissionsReadWrite
 	p.workflow = p.newEngine(t, productionCrashSeams{}, true)
 	p.startAndRecordExport(t)
 	if result, err := p.reconcileLanes(); err != nil || result.BlockedItemsCreated != 1 {
-		t.Fatalf("initial base-advance block = %#v, %v", result, err)
+		t.Fatalf("initial trust block = %#v, %v", result, err)
 	}
 	blocked, err := p.attention.GetAttentionItem(
 		p.ctx, domain.ProductionBlockedItemID(p.runID),
@@ -3157,7 +3158,7 @@ func TestProductionReevaluationHardLimitEscalationUsesPolicyRound(t *testing.T) 
 	}
 
 	repairPublicationTrustProfile(t, p)
-	p.audit.AuditedCommitSHA = p.baseSHA
+	p.audit.EffectiveTokenPerms = domain.TokenPermissionsReadOnly
 	p.workflow = p.newEngine(t, productionCrashSeams{}, true)
 	submitPublicationRerun(t, p, blocked, "rerun-review-hard-limit")
 	var escalated engine.ReconcileResult
@@ -3197,11 +3198,11 @@ func TestProductionReevaluationHardLimitEscalationUsesPolicyRound(t *testing.T) 
 func TestProductionReevaluationConfigurationFailureUsesPinnedRound(t *testing.T) {
 	t.Parallel()
 	p := newProductionPublicationHarness(t, "")
-	p.audit.AuditedCommitSHA = strings.Repeat("f", 40)
+	p.audit.EffectiveTokenPerms = domain.TokenPermissionsReadWrite
 	p.workflow = p.newEngine(t, productionCrashSeams{}, true)
 	p.startAndRecordExport(t)
 	if result, err := p.reconcileLanes(); err != nil || result.BlockedItemsCreated != 1 {
-		t.Fatalf("base-advance block = %#v, %v", result, err)
+		t.Fatalf("trust block = %#v, %v", result, err)
 	}
 	blocked, err := p.attention.GetAttentionItem(
 		p.ctx, domain.ItemID("production-publish-blocked-"+string(p.runID)),
@@ -3241,7 +3242,7 @@ func TestProductionReevaluationConfigurationFailureUsesPinnedRound(t *testing.T)
 	}); err != nil {
 		t.Fatal(err)
 	}
-	p.audit.AuditedCommitSHA = p.baseSHA
+	p.audit.EffectiveTokenPerms = domain.TokenPermissionsReadOnly
 	p.workflow = p.newEngine(t, productionCrashSeams{}, true)
 	submitPublicationRerun(t, p, blocked, "rerun-review-config-round")
 	if result, err := p.reconcileLanes(); err != nil || result.PublicationTasksCompleted != 0 {
@@ -6897,6 +6898,8 @@ func TestProductionVerificationAndHeadMismatchNeverReachExternalEffects(t *testi
 		}
 	})
 	t.Run("target base advanced before publication", func(t *testing.T) {
+		// The audited tip is not on the fetched branch, so the re-entry the
+		// refusal seals cannot merge the head into it and stops there.
 		p := newProductionPublicationHarness(t, "")
 		p.audit.AuditedCommitSHA = strings.Repeat("9", 40)
 		p.workflow = p.newEngine(t, productionCrashSeams{}, true)
@@ -6905,13 +6908,18 @@ func TestProductionVerificationAndHeadMismatchNeverReachExternalEffects(t *testi
 		if err != nil {
 			t.Fatal(err)
 		}
-		if result.ResultsAccepted != 1 || result.BlockedItemsCreated != 1 ||
-			result.ReadyItemsCreated != 0 {
+		if result.BlockedItemsCreated != 0 || result.ReadyItemsCreated != 0 {
 			t.Fatalf("advanced-base result = %#v", result)
 		}
-		blocked, err := p.attention.GetAttentionItem(
-			p.ctx, domain.ItemID("production-publish-blocked-"+string(p.runID)),
-		)
+		result, err = p.reconcileLanes()
+		if err != nil {
+			t.Fatal(err)
+		}
+		if result.ResultsAccepted != 1 || result.BlockedItemsCreated != 1 || result.ReadyItemsCreated != 0 {
+			t.Fatalf("advanced-base re-entry result = %#v", result)
+		}
+		successor := p.unpublishedReentry(t, strings.Repeat("9", 40))
+		blocked, err := p.attention.GetAttentionItem(p.ctx, successor.BlockedItemID())
 		if err != nil {
 			t.Fatal(err)
 		}

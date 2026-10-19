@@ -161,6 +161,12 @@ const (
 	PublicationBlockVerification  = "Verification or current policy findings blocked production publication."
 	PublicationBlockTrust         = "Current trust state definitively blocked publication."
 	PublicationBlockBaseAdvanced  = "The target base advanced after admission; rerun and reverify against the current base."
+	// A base advance before the first publication re-enters the run (plan §7,
+	// revision 89). These end that re-entry on a cause no retry clears, and
+	// each names its cause.
+	PublicationBlockBaseAdvancedConflict     = "The target base advanced after admission, and the candidate conflicts with the new base; resolve the conflict and start a new run against the current base."
+	PublicationBlockBaseAdvancedVerification = "The target base advanced after admission, and the candidate merged into the new base did not pass verification; inspect the verification evidence and start a new run against the current base."
+	PublicationBlockBaseAdvancedRoundLimit   = "The target base advanced after admission, and the review hard round limit leaves no round to re-review the candidate against the new base; start a new run against the current base."
 )
 
 const (
@@ -262,7 +268,8 @@ func DefinitivePublicationBlockReason(reason string) (RunHoldReason, bool) {
 		return HoldVerificationFindings, true
 	case PublicationBlockTrust:
 		return HoldTrustBlocked, true
-	case PublicationBlockBaseAdvanced:
+	case PublicationBlockBaseAdvanced, PublicationBlockBaseAdvancedConflict,
+		PublicationBlockBaseAdvancedVerification, PublicationBlockBaseAdvancedRoundLimit:
 		return HoldBaseAdvanced, true
 	}
 	return "", false

@@ -90,10 +90,12 @@ type productionReentryCheckpoint struct {
 	TaskKey string `json:"task_key"`
 	BaseSHA string `json:"base_sha"`
 	HeadSHA string `json:"head_sha"`
-	// TreeSHA is the head's tree, resolved in the cycle's checkout. The
-	// remediation an external review cycle starts compares the remediator's
-	// imported tree with it, as an ordinary round compares with the tree its
-	// importer recorded (issue #1767).
+	// TreeSHA is the tree of the commit the cycle verified, resolved in the
+	// cycle's checkout: the head's, or the prospective merge's for a base
+	// advance (issue #2058). The remediation an external review cycle starts
+	// compares the remediator's imported tree with it, as an ordinary round
+	// compares with the tree its importer recorded (issue #1767); that cycle
+	// verifies its head.
 	TreeSHA string `json:"tree_sha"`
 	// EvaluatedSHA is the prospective merge a base advance verified in place
 	// of its head, and empty for a head change.
@@ -141,15 +143,25 @@ func (t productionPublicationTask) reentersInPlace() bool {
 
 // admittedBaseSHA is the base the task's candidate was admitted at: the
 // replay's observed base, and for a cycle that re-enters in place, which has
-// no replay, the base its sealed authority names. A remediation the cycle
-// starts is admitted at that base; externalReviewMayAdjudicate lets the cycle
-// start one only while it is the base the predecessor's producer was admitted
-// at.
+// no replay, or one that re-enters before publication, which reviews its head
+// at a newer base, the base its sealed authority names. A remediation an
+// in-place cycle starts is admitted at that base; externalReviewMayAdjudicate
+// lets the cycle start one only while it is the base the predecessor's
+// producer was admitted at. A re-entry before publication starts none.
 func (t productionPublicationTask) admittedBaseSHA() string {
-	if t.reentersInPlace() {
+	if t.reentersInPlace() || t.reentersBeforePublication() {
 		return t.Successor.Reentry.BaseSHA
 	}
 	return t.Replay.ObservedBaseSHA
+}
+
+// reentersBeforePublication reports whether the task publishes, against a
+// newer base, the head a task before it verified and reviewed but could not
+// publish because the target base advanced (issue #2058). Such a cycle starts
+// no remediation, so every task under its authority carries that head.
+func (t productionPublicationTask) reentersBeforePublication() bool {
+	return t.Successor != nil && t.Successor.RepublishesUnpublished() &&
+		t.HeadSHA == t.Successor.Reentry.HeadSHA
 }
 
 func reentryVerificationInvocationID(successor domain.PublicationSuccessor) domain.InvocationID {
@@ -757,7 +769,7 @@ func (w *productionPublicationWorkflow) verifyReentry(
 	if err != nil {
 		return productionReentryCheckpoint{}, err
 	}
-	treeSHA, err := w.reentryTreeSHA(ctx, checkoutDir, task.HeadSHA)
+	treeSHA, err := w.reentryTreeSHA(ctx, checkoutDir, workspaceSHA)
 	if err != nil {
 		return productionReentryCheckpoint{}, err
 	}
@@ -842,10 +854,10 @@ func reentryOutcome(outcome verify.Outcome) domain.VerificationOutcome {
 	return domain.VerificationFailed
 }
 
-// reentryTreeSHA resolves the tree of the cycle's head in its checkout, which
-// already holds that commit.
+// reentryTreeSHA resolves the tree of the cycle's workspace commit in its
+// checkout, which already holds that commit.
 func (w *productionPublicationWorkflow) reentryTreeSHA(
-	ctx context.Context, checkoutDir, headSHA string,
+	ctx context.Context, checkoutDir, commitSHA string,
 ) (string, error) {
 	scratch, err := os.MkdirTemp(w.workDir, ".reentry-tree-")
 	if err != nil {
@@ -859,7 +871,7 @@ func (w *productionPublicationWorkflow) reentryTreeSHA(
 	if _, err := runner.PinCheckout(ctx, checkoutDir); err != nil {
 		return "", fmt.Errorf("bind re-entry tree checkout: %w", err)
 	}
-	out, err := runner.Run(ctx, nil, "rev-parse", "--verify", headSHA+"^{tree}")
+	out, err := runner.Run(ctx, nil, "rev-parse", "--verify", commitSHA+"^{tree}")
 	if err != nil {
 		return "", fmt.Errorf("resolve re-entry head tree: %w", err)
 	}
@@ -970,7 +982,7 @@ func (w *productionPublicationWorkflow) persistReentryCheckpoint(
 			}
 		}
 		entry, _, err := tx.RecordInbox(
-			ctx, task.verificationCheckpointKey(), productionReentryCheckpointKind, payload)
+			ctx, task.reentryCheckpointKey(), productionReentryCheckpointKind, payload)
 		if err != nil {
 			return err
 		}
@@ -994,7 +1006,7 @@ func (w *productionPublicationWorkflow) loadReentryCheckpoint(
 	var entry store.QueueEntry
 	err := w.store.Read(ctx, func(tx *store.ReadTx) error {
 		var err error
-		entry, err = tx.GetInbox(ctx, task.verificationCheckpointKey())
+		entry, err = tx.GetInbox(ctx, task.reentryCheckpointKey())
 		return err
 	})
 	if errors.Is(err, store.ErrNotFound) {

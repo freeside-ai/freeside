@@ -34,7 +34,8 @@ func definitivePublishBlockFacts(reason string) (*domain.PublishBlockFacts, erro
 		return publishBlockTrustRule(domain.TrustRuleVerificationFailed), nil
 	case productionBlockTrust:
 		return publishBlockTrustRule(domain.TrustRuleTrustProfileDrift), nil
-	case productionBlockBaseAdvanced:
+	case productionBlockBaseAdvanced, productionBlockReentryConflict,
+		productionBlockReentryVerification, productionBlockReentryRoundLimit:
 		return publishBlockTrustRule(domain.TrustRuleTargetBaseAdvanced), nil
 	default:
 		return nil, domain.ErrParentKeyMismatch
