@@ -1,18 +1,14 @@
 name: daemon CI
 
-# Dual-platform per plan §5.2: Linux runs the full gate (build, test,
-# vet, lint); macOS stays lean (build and test only) so portability is
-# continuously verified without duplicating the slow checks.
-
 on:
   push:
     branches: [main]
     paths:
       - "daemon/**"
       - "scripts/check.sh"
+      - "scripts/daemon-test-shards.py"
+      - "scripts/daemon-test-shards.json"
       - ".github/workflows/daemon-ci.yml"
-  # Pull requests run this through pull-request.yml, which selects it
-  # from the changed paths and reports the required check.
   workflow_call:
 
 permissions:
@@ -22,44 +18,30 @@ concurrency:
   group: daemon-ci-${{ github.event.pull_request.number || github.ref }}
   cancel-in-progress: true
 
-defaults:
-  run:
-    working-directory: daemon
-
 jobs:
-  linux:
-    name: linux (build, test, vet, lint)
+  linux-build:
+    name: linux (build, vet, lint)
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - uses: actions/setup-go@v5
         with:
-          # go-version-file is resolved from the workspace root, not the
-          # working-directory default above.
+          fetch-depth: 2
+      - uses: actions/setup-go@v5
+        id: go
+        with:
           go-version-file: daemon/go.mod
-          # Superseded by the two caches below; see the rationale there.
           cache: false
       - name: Resolve Go cache paths
         id: go-cache
-        # go env, not literal paths: GOCACHE is ~/.cache/go-build on
-        # Linux but ~/Library/Caches/go-build on macOS, and this job's
-        # cache block then stays identical to its macOS sibling's.
+        working-directory: daemon
         run: |
           echo "build=$(go env GOCACHE)" >>"$GITHUB_OUTPUT"
           echo "mod=$(go env GOMODCACHE)" >>"$GITHUB_OUTPUT"
+          mkdir -p "$(go env GOCACHE)" "$(go env GOMODCACHE)"
       - name: Cache Go modules
         uses: actions/cache@v4
         with:
           path: ${{ steps.go-cache.outputs.mod }}
-          # Content is fully determined by go.sum, so a primary hit is a
-          # complete cache and skipping the save is correct. Kept apart
-          # from the build cache below so the rolling key does not
-          # re-upload ~80 MB of unchanged modules on every push. The key
-          # is deliberately shared with the other Go jobs on this runner
-          # OS: on the one run per go.sum that populates it, the loser of
-          # that race logs "Failed to save: Unable to reserve cache with
-          # key ..., another job may be creating this cache", which is
-          # the intended outcome, since the winner's entry is identical.
           key: go-mod-${{ runner.os }}-${{ hashFiles('daemon/go.sum') }}
           restore-keys: go-mod-${{ runner.os }}-
       - name: Cache Go build output
@@ -67,50 +49,41 @@ jobs:
         uses: actions/cache/restore@v4
         with:
           path: ${{ steps.go-cache.outputs.build }}
-          # Rolling key: setup-go's cache keys on go.sum alone, so once
-          # an entry existed every run restored it and skipped the save
-          # ("Cache hit occurred on the primary key ..., not saving
-          # cache"), leaving the daemon's own packages to recompile from
-          # scratch each time. The commit suffix makes every run's
-          # primary key miss, so each run saves a cache refreshed with
-          # what it just compiled, while restore-keys fall back to the
-          # newest sibling entry. The job segment keeps the three Go jobs
-          # across the two workflows from racing to save one key on a
-          # single commit.
-          #
-          # Split into restore here and a push-only "Save Go build
-          # output" step at the end of the job (#1161): a PR run restores
-          # main's newest entry through the restore-keys prefix and skips
-          # the upload, which took 15 to 32s on macOS and 5 to 11s on
-          # Linux per PR push. A PR's later pushes then recompile only
-          # what the PR changed since main. Only pushes to main refresh
-          # the per-commit entry.
-          key: go-build-${{ runner.os }}-${{ github.job }}-${{ hashFiles('daemon/go.sum') }}-${{ github.sha }}
+          # Integration shards share one restore namespace and one main-push
+          # writer. Go's content-addressed entries also make the old monolithic
+          # cache a safe migration source; no test-result cache is reused.
+          key: daemon-build-v2-${{ runner.os }}-${{ runner.arch }}-${{ steps.go.outputs.go-version }}-static-${{ hashFiles('daemon/go.sum') }}-${{ github.sha }}
           restore-keys: |
-            go-build-${{ runner.os }}-${{ github.job }}-${{ hashFiles('daemon/go.sum') }}-
-            go-build-${{ runner.os }}-${{ github.job }}-
-      - name: build, test, vet (scripts/check.sh)
-        # The step list lives in scripts/check.sh so local runs and CI
-        # cannot drift; the exporter cross-compile guard (#73 acceptance
-        # 4) is part of its build step.
-        working-directory: .
-        run: bash scripts/check.sh daemon build test vet
+            daemon-build-v2-${{ runner.os }}-${{ runner.arch }}-${{ steps.go.outputs.go-version }}-static-${{ hashFiles('daemon/go.sum') }}-
+            go-build-${{ runner.os }}-linux-${{ hashFiles('daemon/go.sum') }}-
+      - name: Record static-job identity and cache conditions
+        env:
+          PR_HEAD: ${{ github.event.pull_request.head.sha }}
+          PR_BASE: ${{ github.event.pull_request.base.sha }}
+          CACHE_HIT: ${{ steps.go-build-cache.outputs.cache-hit }}
+          CACHE_KEY: ${{ steps.go-build-cache.outputs.cache-matched-key }}
+        run: |
+          python3 scripts/daemon-test-shards.py metadata --evidence-dir evidence
+          du -sk "$(cd daemon && go env GOCACHE)" "$(cd daemon && go env GOMODCACHE)" >evidence/cache-before.txt
+      - name: build, vet (scripts/check.sh)
+        run: bash scripts/check.sh daemon build vet
       - name: golangci-lint
         uses: golangci/golangci-lint-action@v8
         with:
-          # Pinned like every other tool: a floating linter is
-          # nondeterministic verification, and upgrades are deliberate PRs.
-          # The action owns the invocation, so this is the one step CI does
-          # not take from scripts/check.sh: golangci-lint-action@v8 has no
-          # install-only input, and routing the run through the script would
-          # mean replacing the pinned action. scripts/check.sh daemon lint
-          # runs the same `golangci-lint run` in daemon/.
           version: v2.12.2
           working-directory: daemon
-      # Last step so a job that fails anywhere above saves nothing, and
-      # push-only so PR runs skip the upload (restore-only; see the
-      # build-cache step above). The key is the restore's resolved
-      # primary key, so main's push saves the per-commit entry.
+      - name: Record static-job cache size
+        if: always()
+        run: |
+          mkdir -p evidence
+          du -sk "$(cd daemon && go env GOCACHE)" "$(cd daemon && go env GOMODCACHE)" >evidence/cache-after.txt
+      - name: Upload static-job evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: daemon-linux-static-${{ github.run_id }}-${{ github.run_attempt }}
+          path: evidence/
+          if-no-files-found: error
       - name: Save Go build output
         if: github.event_name == 'push'
         uses: actions/cache/save@v4
@@ -118,21 +91,33 @@ jobs:
           path: ${{ steps.go-cache.outputs.build }}
           key: ${{ steps.go-build-cache.outputs.cache-primary-key }}
 
-  macos:
-    name: macos (build, test)
-    runs-on: macos-latest
+  linux-tests:
+    name: linux (test, ${{ matrix.kind }} ${{ matrix.index }}/${{ matrix.count }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - {kind: rest, index: 1, count: 1}
+          - {kind: integration, index: 1, count: 3}
+          - {kind: integration, index: 2, count: 3}
+          - {kind: integration, index: 3, count: 3}
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 2
       - uses: actions/setup-go@v5
+        id: go
         with:
           go-version-file: daemon/go.mod
           cache: false
-      # Same two caches as the linux job, which carries the rationale.
       - name: Resolve Go cache paths
         id: go-cache
+        working-directory: daemon
         run: |
           echo "build=$(go env GOCACHE)" >>"$GITHUB_OUTPUT"
           echo "mod=$(go env GOMODCACHE)" >>"$GITHUB_OUTPUT"
+          mkdir -p "$(go env GOCACHE)" "$(go env GOMODCACHE)"
       - name: Cache Go modules
         uses: actions/cache@v4
         with:
@@ -144,18 +129,165 @@ jobs:
         uses: actions/cache/restore@v4
         with:
           path: ${{ steps.go-cache.outputs.build }}
-          key: go-build-${{ runner.os }}-${{ github.job }}-${{ hashFiles('daemon/go.sum') }}-${{ github.sha }}
+          # Integration shards share one restore namespace and one main-push
+          # writer. Go's content-addressed entries also make the old monolithic
+          # cache a safe migration source; no test-result cache is reused.
+          key: daemon-build-v2-${{ runner.os }}-${{ runner.arch }}-${{ steps.go.outputs.go-version }}-${{ matrix.kind }}-${{ hashFiles('daemon/go.sum') }}-${{ github.sha }}
           restore-keys: |
-            go-build-${{ runner.os }}-${{ github.job }}-${{ hashFiles('daemon/go.sum') }}-
-            go-build-${{ runner.os }}-${{ github.job }}-
-      - name: build, test (scripts/check.sh)
-        working-directory: .
-        run: bash scripts/check.sh daemon build test
-      # Last step so a failed job saves nothing; push-only so PR runs are
-      # restore-only. See the linux job for the full rationale.
+            daemon-build-v2-${{ runner.os }}-${{ runner.arch }}-${{ steps.go.outputs.go-version }}-${{ matrix.kind }}-${{ hashFiles('daemon/go.sum') }}-
+            go-build-${{ runner.os }}-linux-${{ hashFiles('daemon/go.sum') }}-
+      - name: Record test identity and cache conditions
+        env:
+          PR_HEAD: ${{ github.event.pull_request.head.sha }}
+          PR_BASE: ${{ github.event.pull_request.base.sha }}
+          CACHE_HIT: ${{ steps.go-build-cache.outputs.cache-hit }}
+          CACHE_KEY: ${{ steps.go-build-cache.outputs.cache-matched-key }}
+        run: |
+          python3 scripts/daemon-test-shards.py metadata --evidence-dir evidence
+          du -sk "$(cd daemon && go env GOCACHE)" "$(cd daemon && go env GOMODCACHE)" >evidence/cache-before.txt
+      - name: test (scripts/check.sh)
+        env:
+          DAEMON_TEST_SHARD_KIND: ${{ matrix.kind }}
+          DAEMON_TEST_SHARD_INDEX: ${{ matrix.index }}
+          DAEMON_TEST_SHARD_COUNT: ${{ matrix.count }}
+          DAEMON_TEST_INTEGRATION_SHARDS: 3
+          DAEMON_TEST_EVIDENCE_DIR: ${{ github.workspace }}/evidence
+        run: bash scripts/check.sh daemon test
+      - name: Record cache size after tests
+        if: always()
+        run: |
+          mkdir -p evidence
+          du -sk "$(cd daemon && go env GOCACHE)" "$(cd daemon && go env GOMODCACHE)" >evidence/cache-after.txt
+      - name: Upload test evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: daemon-linux-${{ matrix.kind }}-${{ matrix.index }}-${{ github.run_id }}-${{ github.run_attempt }}
+          path: evidence/
+          if-no-files-found: error
       - name: Save Go build output
-        if: github.event_name == 'push'
+        if: github.event_name == 'push' && matrix.index == 1
         uses: actions/cache/save@v4
         with:
           path: ${{ steps.go-cache.outputs.build }}
           key: ${{ steps.go-build-cache.outputs.cache-primary-key }}
+
+  macos-tests:
+    name: macos (test, ${{ matrix.kind }} ${{ matrix.index }}/${{ matrix.count }})
+    runs-on: macos-26
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - {kind: rest, index: 1, count: 1}
+          - {kind: integration, index: 1, count: 3}
+          - {kind: integration, index: 2, count: 3}
+          - {kind: integration, index: 3, count: 3}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 2
+      - uses: actions/setup-go@v5
+        id: go
+        with:
+          go-version-file: daemon/go.mod
+          cache: false
+      - name: Resolve Go cache paths
+        id: go-cache
+        working-directory: daemon
+        run: |
+          echo "build=$(go env GOCACHE)" >>"$GITHUB_OUTPUT"
+          echo "mod=$(go env GOMODCACHE)" >>"$GITHUB_OUTPUT"
+          mkdir -p "$(go env GOCACHE)" "$(go env GOMODCACHE)"
+      - name: Cache Go modules
+        uses: actions/cache@v4
+        with:
+          path: ${{ steps.go-cache.outputs.mod }}
+          key: go-mod-${{ runner.os }}-${{ hashFiles('daemon/go.sum') }}
+          restore-keys: go-mod-${{ runner.os }}-
+      - name: Cache Go build output
+        id: go-build-cache
+        uses: actions/cache/restore@v4
+        with:
+          path: ${{ steps.go-cache.outputs.build }}
+          # Integration shards share one restore namespace and one main-push
+          # writer. Go's content-addressed entries also make the old monolithic
+          # cache a safe migration source; no test-result cache is reused.
+          key: daemon-build-v2-${{ runner.os }}-${{ runner.arch }}-${{ steps.go.outputs.go-version }}-${{ matrix.kind }}-${{ hashFiles('daemon/go.sum') }}-${{ github.sha }}
+          restore-keys: |
+            daemon-build-v2-${{ runner.os }}-${{ runner.arch }}-${{ steps.go.outputs.go-version }}-${{ matrix.kind }}-${{ hashFiles('daemon/go.sum') }}-
+            go-build-${{ runner.os }}-macos-${{ hashFiles('daemon/go.sum') }}-
+      - name: Record test identity and cache conditions
+        env:
+          PR_HEAD: ${{ github.event.pull_request.head.sha }}
+          PR_BASE: ${{ github.event.pull_request.base.sha }}
+          CACHE_HIT: ${{ steps.go-build-cache.outputs.cache-hit }}
+          CACHE_KEY: ${{ steps.go-build-cache.outputs.cache-matched-key }}
+        run: |
+          python3 scripts/daemon-test-shards.py metadata --evidence-dir evidence
+          du -sk "$(cd daemon && go env GOCACHE)" "$(cd daemon && go env GOMODCACHE)" >evidence/cache-before.txt
+      - name: build (scripts/check.sh)
+        if: matrix.kind == 'rest'
+        run: bash scripts/check.sh daemon build
+      - name: test (scripts/check.sh)
+        env:
+          DAEMON_TEST_SHARD_KIND: ${{ matrix.kind }}
+          DAEMON_TEST_SHARD_INDEX: ${{ matrix.index }}
+          DAEMON_TEST_SHARD_COUNT: ${{ matrix.count }}
+          DAEMON_TEST_INTEGRATION_SHARDS: 3
+          DAEMON_TEST_EVIDENCE_DIR: ${{ github.workspace }}/evidence
+        run: bash scripts/check.sh daemon test
+      - name: Record cache size after tests
+        if: always()
+        run: |
+          mkdir -p evidence
+          du -sk "$(cd daemon && go env GOCACHE)" "$(cd daemon && go env GOMODCACHE)" >evidence/cache-after.txt
+      - name: Upload test evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: daemon-macos-${{ matrix.kind }}-${{ matrix.index }}-${{ github.run_id }}-${{ github.run_attempt }}
+          path: evidence/
+          if-no-files-found: error
+      - name: Save Go build output
+        if: github.event_name == 'push' && matrix.index == 1
+        uses: actions/cache/save@v4
+        with:
+          path: ${{ steps.go-cache.outputs.build }}
+          key: ${{ steps.go-build-cache.outputs.cache-primary-key }}
+
+  linux:
+    name: linux (build, test, vet, lint)
+    runs-on: ubuntu-latest
+    if: always()
+    needs: [linux-build, linux-tests]
+    steps:
+      - uses: actions/checkout@v4
+      - name: Require every child to succeed
+        env:
+          NEEDS: ${{ toJSON(needs) }}
+        run: python3 scripts/daemon-test-shards.py gate --needs "$NEEDS" --expected linux-build linux-tests
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: daemon-linux-*-${{ github.run_id }}-${{ github.run_attempt }}
+          path: evidence
+      - name: Verify full default coverage
+        run: python3 scripts/daemon-test-shards.py verify evidence/*/execution.json
+
+  macos:
+    name: macos (build, test)
+    runs-on: ubuntu-latest
+    if: always()
+    needs: [macos-tests]
+    steps:
+      - uses: actions/checkout@v4
+      - name: Require every child to succeed
+        env:
+          NEEDS: ${{ toJSON(needs) }}
+        run: python3 scripts/daemon-test-shards.py gate --needs "$NEEDS" --expected macos-tests
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: daemon-macos-*-${{ github.run_id }}-${{ github.run_attempt }}
+          path: evidence
+      - name: Verify full default coverage
+        run: python3 scripts/daemon-test-shards.py verify evidence/*/execution.json

@@ -84,7 +84,8 @@ jobs:
             echo "$component=$selected" | tee -a "$GITHUB_OUTPUT"
           }
 
-          select_component daemon daemon/ scripts/check.sh
+          select_component daemon daemon/ scripts/check.sh \
+            scripts/daemon-test-shards.py scripts/daemon-test-shards.json
           select_component app app/ api/openapi.yaml scripts/check.sh
           select_component api api/ scripts/check.sh scripts/api-contract-digest.sh
           select_component docs docs/plan.md scripts/link-plan-section-refs.sh scripts/check.sh
@@ -154,9 +155,15 @@ jobs:
         run: |
           set -euo pipefail
           jq -r 'to_entries[] | "\(.key): \(.value.result)"' <<<"$NEEDS"
-          # A skipped job is an unselected component. Any other result
-          # (failure, cancelled, or one this gate does not know) fails it,
-          # and selection itself must have succeeded.
-          jq -e '.select.result == "success"
-            and all(.[]; .result == "success" or .result == "skipped")' \
+          # Only an explicitly unselected component may skip. A selected
+          # reusable workflow must propagate every failed or skipped child.
+          jq -e 'keys == (["select", "commit-messages", "daemon", "app", "api", "docs",
+                          "scripts", "convergence", "vocabulary"] | sort)
+            and .select.result == "success" and .["commit-messages"].result == "success"
+            and (. as $needs | all(["daemon", "app", "api", "docs", "scripts", "convergence", "vocabulary"][];
+              . as $component | if $needs.select.outputs[$component] == "true"
+              then $needs[$component].result == "success"
+              elif $needs.select.outputs[$component] == "false"
+              then $needs[$component].result == "skipped"
+              else false end))' \
             <<<"$NEEDS" >/dev/null

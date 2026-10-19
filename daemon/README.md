@@ -4,6 +4,103 @@
 
 Daemon CI builds and tests on **Linux as well as macOS from day one**: the daemon core takes no Apple-only dependencies, making portability continuously verified rather than aspirational (plan §3.3).
 
+## CI Shards And Coverage Evidence
+
+CI runs three integration shards and one rest shard on each platform. Linux
+build, vet, lint, and exporter cross-compilation run independently. The macOS
+rest job also builds. Both existing platform gate names remain stable, and a
+gate requires every child to succeed and verifies the combined test evidence.
+The PR's `required` check also rejects an unexpected skip of a selected
+component.
+
+`bash scripts/check.sh daemon test` still runs the full local suite with its
+existing slot limiter and Git wrapper. CI supplies all five shard settings:
+
+```sh
+DAEMON_TEST_SHARD_KIND=integration \
+DAEMON_TEST_SHARD_INDEX=1 DAEMON_TEST_SHARD_COUNT=3 \
+DAEMON_TEST_INTEGRATION_SHARDS=3 \
+DAEMON_TEST_EVIDENCE_DIR=/tmp/daemon-shard-1 \
+  bash scripts/check.sh daemon test
+```
+
+The rest shard uses `kind=rest`, index/count `1`, and integration count `3`.
+Each integration runner discovers its compiled Test, Example, and Fuzz
+families; the rest runner discovers every other package. The weight file is
+only a scheduling hint: new families receive weight `1`, and removed weights
+do not select tests. Every shard uses `-count=1`, default Go concurrency and
+timeouts, and the existing opt-in skips. No race job is added.
+
+Each test job uploads raw Go JSON, compiled inventories, assignments, execution
+reports, tested identities, tool/image versions, and cache sizes. The platform
+gate re-accounts the raw events, checks every assigned family and package,
+and rejects missing, duplicate, stale, or failed execution. Integration shards
+share a build-cache restore group keyed by OS, architecture, Go version, and
+dependencies. Shard 1 alone writes that group's cache on a successful main
+push; PR build caches remain restore-only. The old monolithic caches provide
+a compatible migration fallback. Empty cache directories are created before
+size reporting, so a cold miss still reaches compilation.
+
+For an independent unsharded coverage baseline, retain `go list ./...` as
+`packages.txt`, `go test -json -list . ./...` as `discovery.jsonl`, and
+`go test -json -count=1 ./...` as `tests.jsonl`, all from the same daemon
+checkout on the same platform. Retain `metadata.json` in the same directory,
+using the helper's `metadata` command from that checkout. Compare it with the
+four downloaded shard directories:
+
+```sh
+python3 scripts/daemon-test-shards.py compare \
+  --baseline evidence/baseline/tests.jsonl \
+  evidence/candidate/*/execution.json
+```
+
+The comparison checks the independent compiled inventory and the full case
+union, including nested cases, fuzz seeds, and default skips. A truncated or
+failed baseline cannot establish coverage.
+
+Timing reports accept an explicit JSON array of run/attempt identities:
+
+```json
+[
+  {"cohort": "baseline", "run": 12345, "attempt": 1},
+  {"cohort": "candidate", "run": 12346, "attempt": 1, "integration_shards": 3}
+]
+```
+
+Replace the example IDs with actual runs, include every failed or cancelled
+attempt, and keep the full matched cohort in that file. For a rerun, include
+`triggered_at` (UTC) and `trigger_source`, identifying the separately recorded
+rerun request. The original run's creation time is never a rerun trigger.
+An `excluded_reason` retains incident-affected samples without counting them
+in successful medians.
+
+```sh
+bash scripts/ci-run-durations.sh --cohort samples.json --out evidence/timing
+```
+
+The report retains raw API responses and reports trigger-to-both-daemon-gates,
+each platform, `required`, initial/internal queues, job/step durations, and
+runner-seconds. Missing children or timestamps make a sample incomplete. The
+existing workflow/branch/limit report remains available.
+
+**The owner accepted sharding as an incremental speed and reliability
+improvement on October 19, 2026.** Complete coverage is verified; a consistent
+whole-daemon speedup remains unproved. The isolated comparison reduced Linux
+gate time from 6:09 to 3:43, and the slowest macOS integration shard passed in
+3:07 while the unsharded baseline timed out at 10:00. The candidate's whole
+daemon span was 9:50, with macOS runner allocation and the rest job setting
+the critical path. See the [decision note](../devlog/2026-10-19-1115-daemon-ci-sharding.md).
+
+The original performance target remains open in #1877: at least three
+successful fresh baselines and three consecutive successful candidates on
+matched production, toolchain, image-family, and cache conditions, with a
+candidate median of at most 360 seconds and at least 50% below baseline.
+Every candidate integration execution must be at most 300 seconds. Weights
+use the larger observed family duration from Linux and macOS execution;
+revisit the three-shard layout as allocation and rest-job costs change.
+Review coverage, cache hit/miss/size evidence, and timing together. Other
+selected components can keep `required` running longer.
+
 ## Protected Prompt Delivery
 
 New Claude stage intents select `file_v2`. The renderer accepts at most 1 MiB
