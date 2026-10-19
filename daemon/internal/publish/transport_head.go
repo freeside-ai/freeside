@@ -218,13 +218,32 @@ func (t *Transport) FetchHead(ctx context.Context, co Checkout, branch, headSHA 
 // could name a driver or an attributes file, and the checkout's own
 // info/attributes, the one remaining source, is refused here.
 func (t *Transport) ProspectiveMerge(ctx context.Context, co Checkout, headSHA string) (string, error) {
+	return t.prospectiveMerge(ctx, co, co.baseSHA, headSHA)
+}
+
+// ProspectiveMergeOnto is ProspectiveMerge into baseSHA instead of the
+// checkout's own base. It serves a run whose target base advanced before its
+// first publication (issue #2058): the checkout stays bound to the base the
+// head was imported over, which PushHead requires, while the merge names the
+// newer base. baseSHA must already be in the checkout and reachable from the
+// base branch FetchBase fetched, so the merge is built only against a commit
+// the remote's branch held; one that is not fails with ErrRemoteMissingBase.
+// The commit is the one ProspectiveMerge builds in a checkout of baseSHA.
+func (t *Transport) ProspectiveMergeOnto(ctx context.Context, co Checkout, baseSHA, headSHA string) (string, error) {
+	if !validCommitSHA(baseSHA) {
+		return "", fmt.Errorf("base %q is not a full commit SHA", baseSHA)
+	}
+	return t.prospectiveMerge(ctx, co, baseSHA, headSHA)
+}
+
+func (t *Transport) prospectiveMerge(ctx context.Context, co Checkout, baseSHA, headSHA string) (string, error) {
 	if !validCommitSHA(headSHA) {
 		return "", fmt.Errorf("head %q is not a full commit SHA", headSHA)
 	}
 	// commit-tree drops a duplicate parent, so this would be a one-parent
 	// commit, not a merge.
-	if headSHA == co.baseSHA {
-		return "", fmt.Errorf("head %s is the checkout's base; there is nothing to merge", headSHA)
+	if headSHA == baseSHA {
+		return "", fmt.Errorf("head %s is the merge base; there is nothing to merge", headSHA)
 	}
 	scratch, err := os.MkdirTemp("", "freeside-transport-")
 	if err != nil {
@@ -251,8 +270,27 @@ func (t *Transport) ProspectiveMerge(ctx context.Context, co Checkout, headSHA s
 	if !present {
 		return "", fmt.Errorf("head %s is not a commit in the checkout: %w", headSHA, ErrGitTransport)
 	}
+	if baseSHA != co.baseSHA {
+		present, err := commitPresent(ctx, r, baseSHA)
+		if err != nil {
+			return "", err
+		}
+		if !present {
+			return "", fmt.Errorf("base %s is not a commit in the checkout: %w", baseSHA, ErrRemoteMissingBase)
+		}
+		// An ancestry verdict is the only structured answer here; a failure
+		// with any other exit status stays a plain transport failure.
+		if _, _, err := r.run(ctx, nil, "merge-base", "--is-ancestor", baseSHA, transportBaseRef); err != nil {
+			var gitErr *TransportGitError
+			if errors.As(err, &gitErr) && gitErr.ExitCode == 1 {
+				return "", fmt.Errorf("base %s is not reachable from the fetched base branch: %w: %w",
+					baseSHA, ErrRemoteMissingBase, err)
+			}
+			return "", err
+		}
+	}
 	listing := &truncatingBuffer{remaining: maxMergeConflictListingBytes}
-	mergeErr := r.runTo(ctx, listing, mergeTreeArgs(co.baseSHA, headSHA)...)
+	mergeErr := r.runTo(ctx, listing, mergeTreeArgs(baseSHA, headSHA)...)
 	tree, paths := parseMergeTreeListing(listing.buffer.Bytes(), listing.truncated)
 	if mergeErr != nil {
 		// merge-tree exits 1 for a conflict and anything else for a merge
@@ -263,7 +301,7 @@ func (t *Transport) ProspectiveMerge(ctx context.Context, co Checkout, headSHA s
 			return "", mergeErr
 		}
 		return "", &MergeConflictError{
-			BaseSHA: co.baseSHA, HeadSHA: headSHA, Paths: paths, Truncated: listing.truncated,
+			BaseSHA: baseSHA, HeadSHA: headSHA, Paths: paths, Truncated: listing.truncated,
 		}
 	}
 	if !validCommitSHA(tree) {
@@ -278,7 +316,7 @@ func (t *Transport) ProspectiveMerge(ctx context.Context, co Checkout, headSHA s
 		"GIT_COMMITTER_DATE="+prospectiveMergeDate,
 	)
 	out, _, err := r.run(ctx, nil,
-		"commit-tree", tree, "-p", co.baseSHA, "-p", headSHA, "-m", prospectiveMergeMessage,
+		"commit-tree", tree, "-p", baseSHA, "-p", headSHA, "-m", prospectiveMergeMessage,
 	)
 	if err != nil {
 		return "", err
