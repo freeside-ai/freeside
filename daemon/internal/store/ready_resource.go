@@ -377,6 +377,15 @@ func (tx *ReadTx) validateItemPRBindingAgainst(
 		!reflect.DeepEqual(outcome.Successor, intent.Successor) {
 		return errRowInconsistent
 	}
+	if intent.Successor == nil && strings.HasPrefix(string(binding.PublicationInvocationID), reentryPublicationPrefix) {
+		// A first publication under a re-entry invocation is an unpublished
+		// re-entry's: it opened the pull request, so it has no target, but
+		// its authority still decides which item it may make ready.
+		successor, err := tx.GetPublicationSuccessor(ctx, binding.RunID, binding.PublicationInvocationID)
+		if err != nil || !successor.RepublishesUnpublished() || (ready && successor.ReadyItemID() != item.ID) {
+			return errors.Join(err, domain.ErrParentKeyMismatch)
+		}
+	}
 	if intent.Successor != nil {
 		successor, err := tx.GetPublicationSuccessor(ctx, binding.RunID, binding.PublicationInvocationID)
 		if err != nil || (ready && successor.ReadyItemID() != item.ID) {

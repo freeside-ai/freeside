@@ -52,6 +52,9 @@ func (tx *WriteTx) RecordPublicationSuccessor(ctx context.Context, successor dom
 		if err := tx.requireCurrentExternalReviewAdmission(ctx, successor); err != nil {
 			return err
 		}
+		if err := tx.requireCurrentUnpublishedReentry(ctx, successor); err != nil {
+			return err
+		}
 	}
 	return tx.MarkOutboxDispatched(ctx, successor.Key())
 }
@@ -127,6 +130,8 @@ func (tx *ReadTx) validatePublicationSuccessor(ctx context.Context, successor do
 	switch successor.EffectiveOrigin() {
 	case domain.PublicationSuccessorReadinessInvalidation, domain.PublicationSuccessorExternalReview:
 		return tx.validateReentrySuccessor(ctx, successor)
+	case domain.PublicationSuccessorUnpublishedBaseAdvance:
+		return tx.validateUnpublishedReentrySuccessor(ctx, successor)
 	case domain.PublicationSuccessorRemediation:
 		if err := tx.requireUninvalidatedPredecessor(ctx, successor); err != nil {
 			return err
@@ -195,6 +200,139 @@ func (tx *ReadTx) requireCurrentExternalReviewAdmission(ctx context.Context, suc
 			successor.AdmittingProfileDigest, errors.Join(err, domain.ErrExternalReviewNotAdmitted))
 	}
 	return nil
+}
+
+// publicationReservationKind is publish.IntentKindReservation, the kind a
+// publication invocation's slot holds until its intent commits. The store
+// cannot import publish; TestPublicationReservationKind pins the two together.
+const publicationReservationKind = "publish.invocation_reservation"
+
+// validateUnpublishedReentrySuccessor is the every-read gate of an authority
+// that re-enters a run whose base advanced before its first publication
+// (issue #2058). Nothing was published, so no item, binding, or forge
+// observation proves its coordinates; the store proves each one instead:
+//
+//   - The head is the one the round before the cycle reviewed, and the
+//     cycle's round follows it. That review was at another base.
+//   - The authority extends the run's chain from its root ready item through
+//     unpublished re-entries only, and nothing on that chain published.
+//   - The base is the tip of a workflow audit the daemon itself recorded for
+//     the run's repository, never a value the engine or a task row supplied.
+//
+// Sealing adds the checks that only hold at that moment
+// (requireCurrentUnpublishedReentry). Audits record no ref, so this gate
+// cannot tell a tip of the target branch from a tip of another branch of the
+// same repository. It does not need to: the publication decision audits the
+// target branch again and refuses unless that fresh tip is this base.
+func (tx *ReadTx) validateUnpublishedReentrySuccessor(ctx context.Context, successor domain.PublicationSuccessor) error {
+	reentry := successor.Reentry
+	prior, err := tx.GetReviewRecord(ctx, successor.PriorReviewInvocationID)
+	if err != nil || prior.RunID != successor.RunID || prior.Round+1 != successor.ReviewRound ||
+		prior.HeadSHA != reentry.HeadSHA || prior.BaseSHA == "" || prior.BaseSHA == reentry.BaseSHA {
+		return errors.Join(err, domain.ErrParentKeyMismatch)
+	}
+	if successor.PredecessorItemID != domain.ProductionReadyItemID(successor.RunID) {
+		parent, err := tx.PublicationSuccessorForReadyItem(ctx, successor.RunID, successor.PredecessorItemID)
+		if err != nil || !parent.RepublishesUnpublished() {
+			return errors.Join(err, domain.ErrParentKeyMismatch)
+		}
+	}
+	var published bool
+	if err := tx.tx.QueryRowContext(ctx, `SELECT EXISTS (SELECT 1 FROM ready_item_pr_bindings WHERE item_id = ?)`,
+		successor.PredecessorItemID).Scan(&published); err != nil {
+		return err
+	}
+	if published {
+		return domain.ErrParentKeyMismatch
+	}
+	audits, err := tx.runWorkflowAudits(ctx, successor.RunID)
+	if err != nil {
+		return err
+	}
+	if !slices.ContainsFunc(audits, func(record WorkflowAuditRecord) bool {
+		return record.Audit.AuditedCommitSHA == reentry.BaseSHA
+	}) {
+		return fmt.Errorf("re-entry base %s is no recorded audit tip: %w", reentry.BaseSHA, domain.ErrParentKeyMismatch)
+	}
+	return nil
+}
+
+// requireCurrentUnpublishedReentry is the seal-time half of the unpublished
+// re-entry gate. A new cycle may start only from the run's current chain tip,
+// only toward the tip the daemon's latest audit of the repository observed,
+// and only while the publication it replaces still holds its reservation and
+// no committed intent: an intent may already have reached the forge, and
+// recovery must converge it instead of opening a second pull request.
+func (tx *ReadTx) requireCurrentUnpublishedReentry(ctx context.Context, successor domain.PublicationSuccessor) error {
+	if successor.EffectiveOrigin() != domain.PublicationSuccessorUnpublishedBaseAdvance {
+		return nil
+	}
+	chain, err := tx.PublicationSuccessorChain(ctx, successor.RunID)
+	if err != nil {
+		return err
+	}
+	current := domain.ProductionReadyItemID(successor.RunID)
+	replaced := domain.ProductionPublicationInvocationID(successor.RunID)
+	for _, sealed := range chain {
+		if sealed.PublicationID() == successor.PublicationID() {
+			continue
+		}
+		current, replaced = sealed.ReadyItemID(), sealed.PublicationID()
+	}
+	if current != successor.PredecessorItemID {
+		return domain.ErrParentKeyMismatch
+	}
+	tip, err := tx.LatestRunWorkflowAuditTip(ctx, successor.RunID)
+	if err != nil || tip != successor.Reentry.BaseSHA {
+		return fmt.Errorf("re-entry base %s is not the latest audit tip: %w",
+			successor.Reentry.BaseSHA, errors.Join(err, domain.ErrParentKeyMismatch))
+	}
+	key, err := publicationrecord.IntentKey(replaced, readyPublicationIntentKind)
+	if err != nil {
+		return err
+	}
+	slot, err := tx.GetOutbox(ctx, key)
+	if err != nil || slot.Kind != publicationReservationKind {
+		return fmt.Errorf("publication %s holds no open reservation: %w",
+			replaced, errors.Join(err, domain.ErrParentKeyMismatch))
+	}
+	return nil
+}
+
+// LatestRunWorkflowAuditTip returns the commit the daemon's latest workflow
+// audit of the run's repository observed. A base-advance refusal names that
+// tip only in its error text, so the engine reads the base it seals from here.
+func (tx *ReadTx) LatestRunWorkflowAuditTip(ctx context.Context, runID domain.RunID) (string, error) {
+	audits, err := tx.runWorkflowAudits(ctx, runID)
+	if err != nil {
+		return "", err
+	}
+	if len(audits) == 0 {
+		return "", ErrNotFound
+	}
+	return audits[len(audits)-1].Audit.AuditedCommitSHA, nil
+}
+
+// runWorkflowAudits lists the workflow audits recorded for the one repository
+// a run's admissions name, in insertion order. The repository comes from the
+// admission records, which are immutable facts, so a later policy change does
+// not hide audits the run already relied on.
+func (tx *ReadTx) runWorkflowAudits(ctx context.Context, runID domain.RunID) ([]WorkflowAuditRecord, error) {
+	admissions, err := tx.listRunExecutionAdmissions(ctx, runID, false)
+	if err != nil {
+		return nil, err
+	}
+	repo := ""
+	for _, admission := range admissions {
+		if repo != "" && admission.Base.Repo != repo {
+			return nil, domain.ErrParentKeyMismatch
+		}
+		repo = admission.Base.Repo
+	}
+	if repo == "" {
+		return nil, domain.ErrParentKeyMismatch
+	}
+	return tx.ListWorkflowAudits(ctx, repo)
 }
 
 // validateReentrySuccessor re-derives every coordinate of a re-entry authority
@@ -622,6 +760,24 @@ func (tx *ReadTx) AuthenticateSuccessorProducer(ctx context.Context, successor d
 	}
 	if producer == successor.FeedbackInvocationID {
 		return tx.validatePublicationSuccessor(ctx, successor)
+	}
+	if successor.RepublishesUnpublished() {
+		// The cycle publishes the head its predecessor reviewed and admits
+		// no remediation, so its only producer is the invocation that
+		// exported that head at an earlier base.
+		exported, err := tx.GetExecutionExportRecord(ctx, producer)
+		if err != nil && !errors.Is(err, ErrNotFound) {
+			return err
+		}
+		if err != nil || exported.HeadSHA != successor.Reentry.HeadSHA {
+			return domain.ErrParentKeyMismatch
+		}
+		admission, err := tx.GetExecutionAdmissionRecord(ctx, producer)
+		if err != nil || admission.RunID != successor.RunID ||
+			exported.ObservedBaseSHA == successor.Reentry.BaseSHA {
+			return errors.Join(err, domain.ErrParentKeyMismatch)
+		}
+		return nil
 	}
 	entry, err := tx.GetOutbox(ctx, string(producer))
 	if err != nil {

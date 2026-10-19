@@ -28,6 +28,7 @@ func TestPublicationSuccessorVersions(t *testing.T) {
 		{"publication-successor-v2", continuation},
 		{"publication-successor-v3", reentry},
 		{"publication-successor-v4", externalReviewSuccessor()},
+		{"publication-successor-v5", unpublishedReentrySuccessor()},
 	} {
 		t.Run(fixture.name, func(t *testing.T) {
 			if err := fixture.value.Validate(); err != nil {
@@ -64,6 +65,8 @@ func TestPublicationSuccessorVersions(t *testing.T) {
 			value = reentry
 		case domain.PublicationSuccessorExternalReview:
 			value = externalReviewSuccessor()
+		case domain.PublicationSuccessorUnpublishedBaseAdvance:
+			value = unpublishedReentrySuccessor()
 		case domain.PublicationSuccessorRemediation:
 		}
 		if err := value.Validate(); err != nil {
@@ -91,6 +94,8 @@ func TestPublicationSuccessorVersions(t *testing.T) {
 		func(s *domain.PublicationSuccessor) { s.Origin = domain.PublicationSuccessorExternalReview },
 		func(s *domain.PublicationSuccessor) { s.ExternalFindingID = "external-1" },
 		func(s *domain.PublicationSuccessor) { s.AdmittingProfileDigest = "sha256:profile" },
+		func(s *domain.PublicationSuccessor) { s.Origin = domain.PublicationSuccessorUnpublishedBaseAdvance },
+		func(s *domain.PublicationSuccessor) { s.Version = domain.PublicationUnpublishedReentryVersion },
 	} {
 		invalid := continuation
 		mutate(&invalid)
@@ -119,6 +124,16 @@ func TestPublicationSuccessorVersions(t *testing.T) {
 func reentrySuccessor() domain.PublicationSuccessor {
 	return domain.PublicationSuccessor{
 		Version: domain.PublicationReentryVersion, Origin: domain.PublicationSuccessorReadinessInvalidation,
+		RunID: "run-1", PredecessorItemID: "production-ready-run-1", PriorReviewInvocationID: "review-1", ReviewRound: 2,
+		Reentry: &domain.PublicationSuccessorReentry{
+			Reason: domain.ReadinessInvalidationBaseAdvanced, BaseSHA: "base-2", HeadSHA: "head-1",
+		},
+	}
+}
+
+func unpublishedReentrySuccessor() domain.PublicationSuccessor {
+	return domain.PublicationSuccessor{
+		Version: domain.PublicationUnpublishedReentryVersion, Origin: domain.PublicationSuccessorUnpublishedBaseAdvance,
 		RunID: "run-1", PredecessorItemID: "production-ready-run-1", PriorReviewInvocationID: "review-1", ReviewRound: 2,
 		Reentry: &domain.PublicationSuccessorReentry{
 			Reason: domain.ReadinessInvalidationBaseAdvanced, BaseSHA: "base-2", HeadSHA: "head-1",
@@ -315,6 +330,87 @@ func TestPublicationSuccessorReentryIdentities(t *testing.T) {
 	hostile.PredecessorItemID = "item/../with spaces"
 	if id := string(hostile.PublicationID()); len(id) != len("publish-reentry-")+64 || strings.ContainsAny(id, "/ .") {
 		t.Fatalf("publication id %q is not a path-safe digest key", id)
+	}
+}
+
+// An unpublished base-advance record is the v3 shape under its own version and
+// origin: a base advance with both coordinates, and no command, feedback,
+// reevaluation, or external-review field. Neither shape may wear the other's
+// version or origin, so a store reader can tell a run that never published
+// from one whose pull request needs updating.
+func TestPublicationSuccessorUnpublishedReentryValidation(t *testing.T) {
+	valid := unpublishedReentrySuccessor()
+	if err := valid.Validate(); err != nil {
+		t.Fatal(err)
+	}
+	if !valid.RepublishesUnpublished() || reentrySuccessor().RepublishesUnpublished() ||
+		externalReviewSuccessor().RepublishesUnpublished() {
+		t.Fatal("RepublishesUnpublished does not single out the unpublished origin")
+	}
+	for name, mutate := range map[string]func(*domain.PublicationSuccessor){
+		"head changed":         func(s *domain.PublicationSuccessor) { s.Reentry.Reason = domain.ReadinessInvalidationHeadChanged },
+		"retargeted":           func(s *domain.PublicationSuccessor) { s.Reentry.Reason = domain.ReadinessInvalidationRetargeted },
+		"no reason":            func(s *domain.PublicationSuccessor) { s.Reentry.Reason = "" },
+		"no base":              func(s *domain.PublicationSuccessor) { s.Reentry.BaseSHA = "" },
+		"no head":              func(s *domain.PublicationSuccessor) { s.Reentry.HeadSHA = "" },
+		"no reentry":           func(s *domain.PublicationSuccessor) { s.Reentry = nil },
+		"command":              func(s *domain.PublicationSuccessor) { s.CommandID = "return-1" },
+		"feedback invocation":  func(s *domain.PublicationSuccessor) { s.FeedbackInvocationID = "inv-feedback-1" },
+		"reevaluation command": func(s *domain.PublicationSuccessor) { s.ReevaluationCommandID = "rerun-1" },
+		"external finding":     func(s *domain.PublicationSuccessor) { s.ExternalFindingID = "external-1" },
+		"admitting profile":    func(s *domain.PublicationSuccessor) { s.AdmittingProfileDigest = "sha256:profile" },
+		"published origin":     func(s *domain.PublicationSuccessor) { s.Origin = domain.PublicationSuccessorReadinessInvalidation },
+		"external origin":      func(s *domain.PublicationSuccessor) { s.Origin = domain.PublicationSuccessorExternalReview },
+		"no origin":            func(s *domain.PublicationSuccessor) { s.Origin = "" },
+		"published version":    func(s *domain.PublicationSuccessor) { s.Version = domain.PublicationReentryVersion },
+		"external version":     func(s *domain.PublicationSuccessor) { s.Version = domain.PublicationExternalReviewVersion },
+		"continuation version": func(s *domain.PublicationSuccessor) { s.Version = domain.PublicationContinuationVersion },
+		"no predecessor":       func(s *domain.PublicationSuccessor) { s.PredecessorItemID = "" },
+		"no prior review":      func(s *domain.PublicationSuccessor) { s.PriorReviewInvocationID = "" },
+		"first round":          func(s *domain.PublicationSuccessor) { s.ReviewRound = 1 },
+		"no run":               func(s *domain.PublicationSuccessor) { s.RunID = "" },
+	} {
+		invalid := unpublishedReentrySuccessor()
+		mutate(&invalid)
+		if invalid.Validate() == nil {
+			t.Errorf("%s: invalid unpublished re-entry accepted: %#v", name, invalid)
+		}
+	}
+	published := reentrySuccessor()
+	published.Origin = domain.PublicationSuccessorUnpublishedBaseAdvance
+	if published.Validate() == nil {
+		t.Fatal("a published re-entry version accepted the unpublished origin")
+	}
+}
+
+// The unpublished re-entry shares the commandless identities and the
+// base-advance prospective-merge rule: it keys on its predecessor, reviews the
+// head on the new base, and only the head's prospective merge into that base
+// stands in for the head. It admits no remediation at any base.
+func TestPublicationSuccessorUnpublishedReentryRules(t *testing.T) {
+	unpublished, published := unpublishedReentrySuccessor(), reentrySuccessor()
+	if unpublished.PublicationID() != published.PublicationID() || unpublished.TaskKey() != published.TaskKey() ||
+		unpublished.ReadyItemID() != published.ReadyItemID() {
+		t.Fatal("unpublished re-entry does not take the commandless identities")
+	}
+	request := domain.RemediationInvocationIntent{
+		RunID: unpublished.RunID, SuccessorPublicationID: unpublished.PublicationID(), Round: unpublished.ReviewRound,
+		BaseSHA: unpublished.Reentry.BaseSHA, HeadSHA: unpublished.Reentry.HeadSHA,
+	}
+	if unpublished.AllowsRemediation(request) {
+		t.Fatal("unpublished re-entry admitted remediation at its base and head")
+	}
+	request.BaseSHA = "base-1"
+	if unpublished.AllowsRemediation(request) {
+		t.Fatal("unpublished re-entry admitted remediation at the superseded base")
+	}
+	merge := domain.ProspectiveMergeIdentity{BaseSHA: unpublished.Reentry.BaseSHA, HeadSHA: unpublished.Reentry.HeadSHA, MergeSHA: "merge-1"}
+	if !unpublished.AllowsProspectiveMerge(merge) {
+		t.Fatal("unpublished re-entry refused its prospective merge")
+	}
+	merge.BaseSHA = "base-1"
+	if unpublished.AllowsProspectiveMerge(merge) {
+		t.Fatal("unpublished re-entry admitted a merge into another base")
 	}
 }
 
