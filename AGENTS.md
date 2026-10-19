@@ -459,6 +459,30 @@ fix, fix the whole class), and filter later review activity by its login.
   pass** it posts a `COMMENTED` review whose inline comments each carry a
   priority badge (P1/P2/P3) and invite a 👍/👎 reaction.
 
+## Landing Record
+
+- **Land approved PRs by label.** This project has the following landing
+  record:
+
+  - **Mechanism:** `label`.
+  - **Approval:** `approved`, added only by the approver; agents never add
+    it.
+  - **Hand-back:** `needs-human`.
+  - **Approver:** `bennelsonweiss`.
+  - **Stale lock age:** `240` minutes.
+  - **Base-advance checks:** none.
+  - **Reviewer:** `chatgpt-codex-connector`.
+  - **Reviewer completion marker:** `codex-pull-request-review-summary`.
+  - **Consumer:** `land-approved-prs`.
+
+The record is read from `main`'s tip, so a change to it takes effect only
+once it merges. Base-advance checks stay empty because the required check
+already reruns on the branch updated to the tip, and the lander waits for it
+on that exact commit. The merge-result audit needs each PR's declared scope,
+so the lander runs it per PR (Integration Ordering and Merge-Result Audit);
+a fixed command here cannot. Decision record:
+`devlog/2026-10-19-1500-landing-record.md`.
+
 ## Freeside Review-Loop Bound
 
 The managed review-convergence guidance runs under Freeside's resolved policy:
