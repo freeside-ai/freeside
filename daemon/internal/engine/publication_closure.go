@@ -88,11 +88,15 @@ func closureProposalBatchID(runID domain.RunID) domain.ProposalBatchID {
 // and before the candidate body is composed. It never blocks publication: an
 // unavailable propose site, an inference fault, or a source that is no longer
 // closable records a durable no-close answer rather than failing the pass. Only
-// a store fault the daemon should retry propagates.
+// a store fault the daemon should retry propagates. targetBaseSHA is the base
+// the publication targets, which the bound merge names; it differs from the
+// admitted base only for a re-entry before publication (issue #2058), whose
+// decision inputs still come from the admitted binding.
 func (w *productionPublicationWorkflow) reconcilePublicationClosure(
 	ctx context.Context,
 	task productionPublicationTask,
 	binding productionBinding,
+	targetBaseSHA string,
 	checkpoint productionVerificationCheckpoint,
 	reviewInstructions exec.ReviewInstructionBinding,
 	checkoutDir string,
@@ -111,7 +115,7 @@ func (w *productionPublicationWorkflow) reconcilePublicationClosure(
 	// Bind the open card or the policy approval to the merge observed now, on
 	// every pass: a no-op for an unchanged merge, a supersession or re-record
 	// when the head or base moved (issue #1419 settled item 1).
-	merge, err := w.publicationClosureMerge(task, binding, checkpoint)
+	merge, err := w.publicationClosureMerge(task, binding, targetBaseSHA, checkpoint)
 	if err != nil {
 		return err
 	}
@@ -388,12 +392,14 @@ func verifyClosureInstanceRun(instance domain.ProposalInstance, runID domain.Run
 
 // publicationClosureMerge builds the merge the closure approval binds: the
 // publication identity derived from the same candidate material the publisher
-// derives, the candidate head, and the base ref and SHA. The publisher rebuilds
-// this exact merge from its own identity, head, and authorization base SHA, so
-// ClosureApproval.AuthorizesClose judges the same merge on both sides.
+// derives, the candidate head, and the base ref and the target base SHA. The
+// publisher rebuilds this exact merge from its own identity, head, and
+// candidate base SHA, so ClosureApproval.AuthorizesClose judges the same merge
+// on both sides.
 func (w *productionPublicationWorkflow) publicationClosureMerge(
 	task productionPublicationTask,
 	binding productionBinding,
+	targetBaseSHA string,
 	checkpoint productionVerificationCheckpoint,
 ) (domain.ProspectiveMerge, error) {
 	recipe := binding.image.RecipeDigest
@@ -408,7 +414,7 @@ func (w *productionPublicationWorkflow) publicationClosureMerge(
 		PublicationIdentity: identity.Digest(),
 		CandidateHeadSHA:    task.HeadSHA,
 		BaseRef:             binding.admission.Base.BaseRef,
-		BaseSHA:             binding.admission.Base.BaseSHA,
+		BaseSHA:             targetBaseSHA,
 	}
 	if err := merge.Validate(); err != nil {
 		return domain.ProspectiveMerge{}, err

@@ -1819,6 +1819,22 @@ func (w *productionPublicationWorkflow) executeFindingAdjudication(
 		}
 		return productionReviewEscalated, nil
 	}
+	// A remediation is admitted at the base the composition derives, which
+	// is the run's admitted base, not the advanced one a re-entry before
+	// publication reviews against. A fix built there would be a candidate on
+	// the stale base, so the round goes to a person instead, as a published
+	// re-entry's does (issue #1767 decision 1).
+	if task.reentersBeforePublication() && len(dispatchableRemediationFindingIDs(artifact, routes)) > 0 {
+		if err := w.putReviewAttentionWithID(
+			ctx, task, record,
+			"The re-review against the advanced target base routed findings to remediation. A re-entry before publication starts no remediation, so a person must decide.",
+			domain.AttentionReviewDispute,
+			productionReviewItemID(task.RunID, record.Round),
+		); err != nil {
+			return productionReviewPending, err
+		}
+		return productionReviewEscalated, nil
+	}
 	var remediation *preparedRemediationIntent
 	if w.artifacts != nil {
 		// A deterministic undeliverable-input refusal terminalized on a prior

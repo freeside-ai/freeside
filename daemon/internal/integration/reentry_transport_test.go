@@ -138,10 +138,32 @@ func (tr *integrationTransport) ProspectiveMerge(
 	if !ok || sealed.owner != tr {
 		return "", engine.ErrForeignPublicationCheckout
 	}
+	return tr.prospectiveMerge(ctx, sealed, sealed.baseSHA, headSHA)
+}
+
+// ProspectiveMergeOnto merges into a base the checkout's branch advanced to,
+// as the real transport does for a re-entry before publication.
+func (tr *integrationTransport) ProspectiveMergeOnto(
+	ctx context.Context, checkout engine.PublicationCheckout, baseSHA, headSHA string,
+) (string, error) {
+	sealed, ok := checkout.(integrationCheckout)
+	if !ok || sealed.owner != tr {
+		return "", engine.ErrForeignPublicationCheckout
+	}
+	if _, code, err := tryGit(sealed.dir, "merge-base", "--is-ancestor", baseSHA, "refs/remotes/origin/main"); err != nil || code != 0 {
+		return "", fmt.Errorf("base %s is not on the fetched branch: %w",
+			baseSHA, errors.Join(err, publish.ErrRemoteMissingBase))
+	}
+	return tr.prospectiveMerge(ctx, sealed, baseSHA, headSHA)
+}
+
+func (tr *integrationTransport) prospectiveMerge(
+	ctx context.Context, sealed integrationCheckout, baseSHA, headSHA string,
+) (string, error) {
 	if err := ctx.Err(); err != nil {
 		return "", err
 	}
-	if headSHA == sealed.baseSHA {
+	if headSHA == baseSHA {
 		return "", errors.New("head is the base commit")
 	}
 	tr.mu.Lock()
@@ -152,7 +174,7 @@ func (tr *integrationTransport) ProspectiveMerge(
 		message = "prospective merge"
 	}
 	out, code, err := tryGit(sealed.dir, "merge-tree", "--write-tree", "--name-only",
-		"--no-messages", sealed.baseSHA, headSHA)
+		"--no-messages", baseSHA, headSHA)
 	if err != nil {
 		return "", err
 	}
@@ -161,13 +183,13 @@ func (tr *integrationTransport) ProspectiveMerge(
 	case 0:
 	case 1:
 		return "", &publish.MergeConflictError{
-			BaseSHA: sealed.baseSHA, HeadSHA: headSHA, Paths: lines[1:],
+			BaseSHA: baseSHA, HeadSHA: headSHA, Paths: lines[1:],
 		}
 	default:
 		return "", fmt.Errorf("merge-tree exited %d", code)
 	}
 	merge, code, err := tryGit(sealed.dir, "commit-tree", lines[0],
-		"-p", sealed.baseSHA, "-p", headSHA, "-m", message)
+		"-p", baseSHA, "-p", headSHA, "-m", message)
 	if err != nil || code != 0 {
 		return "", fmt.Errorf("commit-tree exited %d: %w", code, err)
 	}

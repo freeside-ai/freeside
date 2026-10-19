@@ -177,6 +177,20 @@ func (t *GitPublicationTransport) ProspectiveMerge(
 	return t.transport.ProspectiveMerge(ctx, sealed.checkout, headSHA)
 }
 
+// ProspectiveMergeOnto forwards to the sealed transport. Like UpdateHead it
+// is an optional seam the workflow asserts for: only a run whose base advanced
+// before its first publication needs a merge into a base other than the
+// checkout's own.
+func (t *GitPublicationTransport) ProspectiveMergeOnto(
+	ctx context.Context, checkout PublicationCheckout, baseSHA, headSHA string,
+) (string, error) {
+	sealed, ok := checkout.(gitPublicationCheckout)
+	if !ok || sealed.owner != t {
+		return "", ErrForeignPublicationCheckout
+	}
+	return t.transport.ProspectiveMergeOnto(ctx, sealed.checkout, baseSHA, headSHA)
+}
+
 // UpdateHead is a separate capability-bearing successor effect. Ordinary
 // publication transports remain create-only unless they implement this seam.
 func (t *GitPublicationTransport) UpdateHead(ctx context.Context, checkout PublicationCheckout, gated publish.GatedUpdate) (publish.PushResult, error) {
