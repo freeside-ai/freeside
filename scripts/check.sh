@@ -106,7 +106,13 @@ daemon_build() {
   in_dir "$ROOT/daemon" env CGO_ENABLED=0 GOOS=linux GOARCH=arm64 \
     go build -o /dev/null ./cmd/freeside-export
 }
-daemon_test_run() { in_dir "$ROOT/daemon" go test ./...; }
+daemon_test_run() {
+  if [[ -n ${DAEMON_BASELINE_EVIDENCE_DIR:-} ]]; then
+    in_dir "$ROOT/daemon" go test -json -count=1 ./... | tee "$DAEMON_BASELINE_EVIDENCE_DIR/tests.jsonl"
+  else
+    in_dir "$ROOT/daemon" go test ./...
+  fi
+}
 
 daemon_test_take_slot() {
   local limit=${DAEMON_TEST_MAX_RUNS-1}

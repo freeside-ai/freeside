@@ -32,6 +32,8 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 2
       - uses: actions/setup-go@v5
         with:
           # go-version-file is resolved from the workspace root, not the
@@ -47,6 +49,7 @@ jobs:
         run: |
           echo "build=$(go env GOCACHE)" >>"$GITHUB_OUTPUT"
           echo "mod=$(go env GOMODCACHE)" >>"$GITHUB_OUTPUT"
+          mkdir -p "$(go env GOCACHE)" "$(go env GOMODCACHE)"
       - name: Cache Go modules
         uses: actions/cache@v4
         with:
@@ -89,12 +92,34 @@ jobs:
           restore-keys: |
             go-build-${{ runner.os }}-${{ github.job }}-${{ hashFiles('daemon/go.sum') }}-
             go-build-${{ runner.os }}-${{ github.job }}-
+      - name: Record measured baseline identity
+        env:
+          PR_HEAD: ${{ github.event.pull_request.head.sha }}
+          PR_BASE: ${{ github.event.pull_request.base.sha }}
+          CACHE_HIT: ${{ steps.go-build-cache.outputs.cache-hit }}
+          CACHE_KEY: ${{ steps.go-build-cache.outputs.cache-matched-key }}
+        run: |
+          mkdir -p ../evidence
+          python3 ../scripts/daemon-test-shards.py metadata --evidence-dir ../evidence
+          git rev-parse HEAD HEAD^1 HEAD^2 >../evidence/commits.txt
+          go version >../evidence/toolchain.txt
+          go env GOOS GOARCH >>../evidence/toolchain.txt
+          git --version >>../evidence/toolchain.txt
+          printf '%s\n' "image=$ImageOS/$ImageVersion" "head=$PR_HEAD" "base=$PR_BASE" \
+            "cache_hit=$CACHE_HIT" "cache_key=$CACHE_KEY" "sample=1" >../evidence/environment.txt
+          du -sk "$(go env GOCACHE)" "$(go env GOMODCACHE)" >../evidence/cache-before.txt
       - name: build, test, vet (scripts/check.sh)
         # The step list lives in scripts/check.sh so local runs and CI
         # cannot drift; the exporter cross-compile guard (#73 acceptance
         # 4) is part of its build step.
         working-directory: .
-        run: bash scripts/check.sh daemon build test vet
+        run: |
+          set -euo pipefail
+          bash scripts/check.sh daemon build
+          (cd daemon && go list ./...) >evidence/packages.txt
+          (cd daemon && go test -json -list . ./...) >evidence/discovery.jsonl
+          DAEMON_BASELINE_EVIDENCE_DIR="$PWD/evidence" bash scripts/check.sh daemon test
+          bash scripts/check.sh daemon vet
       - name: golangci-lint
         uses: golangci/golangci-lint-action@v8
         with:
@@ -111,6 +136,18 @@ jobs:
       # push-only so PR runs skip the upload (restore-only; see the
       # build-cache step above). The key is the restore's resolved
       # primary key, so main's push saves the per-commit entry.
+      - name: Record cache size after tests
+        if: always()
+        run: |
+          mkdir -p ../evidence
+          du -sk "$(go env GOCACHE)" "$(go env GOMODCACHE)" >../evidence/cache-after.txt
+      - name: Upload baseline evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: daemon-baseline-${{ runner.os }}-${{ github.run_id }}-${{ github.run_attempt }}
+          path: evidence/
+          if-no-files-found: error
       - name: Save Go build output
         if: github.event_name == 'push'
         uses: actions/cache/save@v4
@@ -120,9 +157,11 @@ jobs:
 
   macos:
     name: macos (build, test)
-    runs-on: macos-latest
+    runs-on: macos-26
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 2
       - uses: actions/setup-go@v5
         with:
           go-version-file: daemon/go.mod
@@ -133,6 +172,7 @@ jobs:
         run: |
           echo "build=$(go env GOCACHE)" >>"$GITHUB_OUTPUT"
           echo "mod=$(go env GOMODCACHE)" >>"$GITHUB_OUTPUT"
+          mkdir -p "$(go env GOCACHE)" "$(go env GOMODCACHE)"
       - name: Cache Go modules
         uses: actions/cache@v4
         with:
@@ -148,11 +188,44 @@ jobs:
           restore-keys: |
             go-build-${{ runner.os }}-${{ github.job }}-${{ hashFiles('daemon/go.sum') }}-
             go-build-${{ runner.os }}-${{ github.job }}-
+      - name: Record measured baseline identity
+        env:
+          PR_HEAD: ${{ github.event.pull_request.head.sha }}
+          PR_BASE: ${{ github.event.pull_request.base.sha }}
+          CACHE_HIT: ${{ steps.go-build-cache.outputs.cache-hit }}
+          CACHE_KEY: ${{ steps.go-build-cache.outputs.cache-matched-key }}
+        run: |
+          mkdir -p ../evidence
+          python3 ../scripts/daemon-test-shards.py metadata --evidence-dir ../evidence
+          git rev-parse HEAD HEAD^1 HEAD^2 >../evidence/commits.txt
+          go version >../evidence/toolchain.txt
+          go env GOOS GOARCH >>../evidence/toolchain.txt
+          git --version >>../evidence/toolchain.txt
+          printf '%s\n' "image=$ImageOS/$ImageVersion" "head=$PR_HEAD" "base=$PR_BASE" \
+            "cache_hit=$CACHE_HIT" "cache_key=$CACHE_KEY" "sample=1" >../evidence/environment.txt
+          du -sk "$(go env GOCACHE)" "$(go env GOMODCACHE)" >../evidence/cache-before.txt
       - name: build, test (scripts/check.sh)
         working-directory: .
-        run: bash scripts/check.sh daemon build test
+        run: |
+          set -euo pipefail
+          bash scripts/check.sh daemon build
+          (cd daemon && go list ./...) >evidence/packages.txt
+          (cd daemon && go test -json -list . ./...) >evidence/discovery.jsonl
+          DAEMON_BASELINE_EVIDENCE_DIR="$PWD/evidence" bash scripts/check.sh daemon test
       # Last step so a failed job saves nothing; push-only so PR runs are
       # restore-only. See the linux job for the full rationale.
+      - name: Record cache size after tests
+        if: always()
+        run: |
+          mkdir -p ../evidence
+          du -sk "$(go env GOCACHE)" "$(go env GOMODCACHE)" >../evidence/cache-after.txt
+      - name: Upload baseline evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: daemon-baseline-${{ runner.os }}-${{ github.run_id }}-${{ github.run_attempt }}
+          path: evidence/
+          if-no-files-found: error
       - name: Save Go build output
         if: github.event_name == 'push'
         uses: actions/cache/save@v4
