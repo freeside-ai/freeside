@@ -196,71 +196,12 @@ func TestAuthenticateProductionRigLeaseRequiresTheManifest(t *testing.T) {
 	t.Parallel()
 	_, leaseRoot, tokenFile := acquireTestRig(t)
 	// prod reads only the manifest, so a live lease without one would not
-	// keep prod stopped.
+	// stop a prod starting with a driver.
 	if err := os.Remove(filepath.Join(leaseRoot, "production-rig.json")); err != nil {
 		t.Fatal(err)
 	}
 	if err := authenticateProductionRigLease(tokenFile, leaseRoot); err == nil || !strings.Contains(err.Error(), "no manifest") {
 		t.Fatalf("lease without a manifest error = %v", err)
-	}
-}
-
-func TestHoldProdDatabaseLock(t *testing.T) {
-	t.Parallel()
-	home := t.TempDir()
-	prodDaemonDir, _ := prodAppDirs(t, home)
-	prodLock, err := daemonlock.Acquire(filepath.Join(prodDaemonDir, "freeside.db"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	if _, err := holdProdDatabaseLock(home); err == nil || !errors.Is(err, daemonlock.ErrAlreadyRunning) {
-		t.Fatalf("running prod error = %v", err)
-	}
-	if err := prodLock.Close(); err != nil {
-		t.Fatal(err)
-	}
-	runLock, err := holdProdDatabaseLock(home)
-	if err != nil {
-		t.Fatalf("stopped prod: %v", err)
-	}
-	defer func() { _ = runLock.Close() }()
-	if _, err := daemonlock.Acquire(filepath.Join(prodDaemonDir, "freeside.db")); !errors.Is(err, daemonlock.ErrAlreadyRunning) {
-		t.Fatalf("prod starting during the run error = %v, want ErrAlreadyRunning", err)
-	}
-}
-
-func TestHoldProdLockForProdAppDirectories(t *testing.T) {
-	t.Parallel()
-	home := t.TempDir()
-	state, credentials := prodAppDirs(t, home)
-	homes := []string{t.TempDir(), home}
-
-	lock, err := holdProdLockForProdAppDirectoriesIn(homes, t.TempDir(), t.TempDir())
-	if err != nil || lock != nil {
-		t.Fatalf("other directories: lock = %v, err = %v; want no lock", lock, err)
-	}
-	for name, dirs := range map[string][2]string{
-		"state":       {state, t.TempDir()},
-		"credentials": {t.TempDir(), credentials},
-	} {
-		lock, err := holdProdLockForProdAppDirectoriesIn(homes, dirs[0], dirs[1])
-		if err != nil || lock == nil {
-			t.Fatalf("prod's %s directory: lock = %v, err = %v; want the lock", name, lock, err)
-		}
-		if _, err := daemonlock.Acquire(filepath.Join(state, "freeside.db")); !errors.Is(err, daemonlock.ErrAlreadyRunning) {
-			t.Fatalf("prod starting during preflight error = %v, want ErrAlreadyRunning", err)
-		}
-		if err := lock.Close(); err != nil {
-			t.Fatal(err)
-		}
-	}
-	prodLock, err := daemonlock.Acquire(filepath.Join(state, "freeside.db"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer func() { _ = prodLock.Close() }()
-	if _, err := holdProdLockForProdAppDirectoriesIn(homes, state, credentials); !errors.Is(err, daemonlock.ErrAlreadyRunning) {
-		t.Fatalf("running prod error = %v, want ErrAlreadyRunning", err)
 	}
 }
 
@@ -281,23 +222,45 @@ func TestRequireOtherDaemon(t *testing.T) {
 	}
 }
 
-func TestCheckProdRigLease(t *testing.T) {
+// TestCheckProdDriverUnderLease pins #2080: while a production rig lease,
+// live or stale, exists, prod starts only without a driver.
+func TestCheckProdDriverUnderLease(t *testing.T) {
 	t.Parallel()
-	lease, leaseRoot, _ := acquireTestRig(t)
-	if err := checkProdRigLease(leaseRoot); err == nil || !strings.Contains(err.Error(), "production rig lease") {
-		t.Fatalf("live lease error = %v", err)
-	}
-	if err := lease.Abandon(); err != nil {
+	liveLease, liveRoot, _ := acquireTestRig(t)
+	defer func() { _ = liveLease.Close() }()
+	staleLease, staleRoot, _ := acquireTestRig(t)
+	if err := staleLease.Abandon(); err != nil {
 		t.Fatal(err)
 	}
-	if err := checkProdRigLease(leaseRoot); err == nil || !strings.Contains(err.Error(), "rig recover") {
-		t.Fatalf("stale lease error = %v", err)
+	leaseRoots := map[string]string{
+		"live":    liveRoot,
+		"stale":   staleRoot,
+		"absent":  t.TempDir(),
+		"missing": filepath.Join(t.TempDir(), "missing"),
 	}
-	if err := checkProdRigLease(t.TempDir()); err != nil {
-		t.Fatalf("no lease: %v", err)
-	}
-	if err := checkProdRigLease(filepath.Join(t.TempDir(), "missing")); err != nil {
-		t.Fatalf("missing lease root: %v", err)
+	for name, leaseRoot := range leaseRoots {
+		leased := name == "live" || name == "stale"
+		for _, mode := range AllExecutionModes {
+			for _, fakePublication := range []bool{false, true} {
+				err := checkProdDriverUnderLease(leaseRoot, mode, fakePublication)
+				refused := leased && (mode != executionDisabled || fakePublication)
+				if !refused {
+					if err != nil {
+						t.Errorf("%s lease, -driver %s, fake publication %t: %v", name, mode, fakePublication, err)
+					}
+					continue
+				}
+				want := "-driver " + string(mode)
+				if fakePublication {
+					want = "-fake-publication"
+				}
+				if err == nil || !strings.Contains(err.Error(), leaseRoot) || !strings.Contains(err.Error(), want) ||
+					!strings.Contains(err.Error(), "rig recover") {
+					t.Errorf("%s lease, -driver %s, fake publication %t: error = %v, want a refusal naming %q, the lease root, and rig recover",
+						name, mode, fakePublication, err, want)
+				}
+			}
+		}
 	}
 }
 
@@ -383,5 +346,46 @@ func TestCheckProdPublicationFormats(t *testing.T) {
 	}
 	if err := checkProdPublicationFormats(context.Background(), filepath.Join(t.TempDir(), "missing")); err == nil {
 		t.Fatal("missing installed daemon accepted")
+	}
+}
+
+func TestCheckProdDriverless(t *testing.T) {
+	t.Parallel()
+	appStateDir := t.TempDir()
+	cases := []struct {
+		name    string
+		mode    executionMode
+		running bool
+		err     error
+		wantErr string
+	}{
+		{name: "prod stopped"},
+		{name: "prod driverless", mode: executionDisabled, running: true},
+		{name: "prod with fake driver", mode: executionFake, running: true, wantErr: "-driver fake"},
+		{name: "prod with claude driver", mode: executionClaude, running: true, wantErr: "-driver claude"},
+		{name: "prod unanswering", running: true, err: errors.New("connection refused"), wantErr: "cannot prove"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			var probed string
+			probe := func(_ context.Context, dbPath string) (executionMode, bool, error) {
+				probed = dbPath
+				return tc.mode, tc.running, tc.err
+			}
+			err := checkProdDriverless(context.Background(), probe, appStateDir)
+			if probed != filepath.Join(appStateDir, "freeside.db") {
+				t.Fatalf("probed %q, want prod's database in the App state directory", probed)
+			}
+			if tc.wantErr == "" {
+				if err != nil {
+					t.Fatalf("checkProdDriverless: %v", err)
+				}
+				return
+			}
+			if err == nil || !strings.Contains(err.Error(), tc.wantErr) {
+				t.Fatalf("checkProdDriverless error = %v, want %q", err, tc.wantErr)
+			}
+		})
 	}
 }

@@ -19,7 +19,10 @@ import (
 )
 
 type fakeRigHost struct {
-	supervised     bool
+	prodMode       executionMode
+	prodRunning    bool
+	prodErr        error
+	prodProbed     []string
 	live           bool
 	liveByAddr     map[string]bool // when set, overrides live per probed address
 	description    string
@@ -50,8 +53,9 @@ func (h *fakeRigHost) ProbeDaemon(
 	return h.description, h.live, nil
 }
 
-func (h *fakeRigHost) SupervisedDaemon(context.Context, string) (bool, error) {
-	return h.supervised, nil
+func (h *fakeRigHost) ProdExecution(_ context.Context, dbPath string) (executionMode, bool, error) {
+	h.prodProbed = append(h.prodProbed, dbPath)
+	return h.prodMode, h.prodRunning, h.prodErr
 }
 
 func (h *fakeRigHost) PresentContainers(
@@ -119,13 +123,12 @@ func rigHoldArgs(stateRoot, seedRoot, databasePath string) []string {
 	}
 }
 
-func TestRigHoldRefusesSupervisedAndListeningDaemonsBeforeReturningLease(t *testing.T) {
+func TestRigHoldRefusesListeningDaemonsBeforeReturningLease(t *testing.T) {
 	tests := []struct {
 		name string
 		host *fakeRigHost
 		want string
 	}{
-		{name: "supervised", host: &fakeRigHost{supervised: true}, want: `supervised daemon "ai.freeside.daemon" is loaded`},
 		{name: "listener", host: &fakeRigHost{live: true, description: "freesided version=test"}, want: `listen address "127.0.0.1:8677" is already occupied`},
 	}
 	for _, tt := range tests {
@@ -143,6 +146,30 @@ func TestRigHoldRefusesSupervisedAndListeningDaemonsBeforeReturningLease(t *test
 				t.Fatalf("refused hold left manifest: %v", err)
 			}
 		})
+	}
+}
+
+// TestRigHoldLeavesALoadedProdAlone pins #2080: prod serves its own database
+// and listener, so a loaded prod, even one with a driver, is no conflict for
+// the lease. The deputy's composition preflight checks prod's driver.
+func TestRigHoldLeavesALoadedProdAlone(t *testing.T) {
+	stateRoot, seedRoot, databasePath := rigCommandRoots(t)
+	host := &fakeRigHost{prodRunning: true, prodMode: executionClaude}
+	ctx, cancel := context.WithCancelCause(context.Background())
+	cancel(errRigCleanRelease)
+	var stdout bytes.Buffer
+	if err := runRigHoldWithLeaseRoot(
+		ctx, rigHoldArgs(stateRoot, seedRoot, databasePath),
+		&stdout, ioDiscard{}, host, filepath.Join(filepath.Dir(stateRoot), "rig-locks"),
+	); err != nil {
+		t.Fatalf("hold with a loaded prod: %v", err)
+	}
+	var output rigHoldOutput
+	if err := json.Unmarshal(stdout.Bytes(), &output); err != nil || output.Token == "" {
+		t.Fatalf("hold with a loaded prod published %q (%v), want an acquisition", stdout.String(), err)
+	}
+	if len(host.prodProbed) != 0 {
+		t.Fatalf("rig hold probed prod's execution at %v", host.prodProbed)
 	}
 }
 
@@ -762,7 +789,9 @@ func TestRigRecoverRequiresDeadListenerAndExplicitConfirmation(t *testing.T) {
 	if err := lease.Abandon(); err != nil {
 		t.Fatal(err)
 	}
-	host := &fakeRigHost{containers: map[string]bool{names[0]: true}}
+	// A loaded prod, even one with a driver, does not block recovery (#2080):
+	// prod never holds the run's database or listener.
+	host := &fakeRigHost{containers: map[string]bool{names[0]: true}, prodRunning: true, prodMode: executionClaude}
 	var inspection bytes.Buffer
 	err := runRigRecover(context.Background(), []string{
 		"-state-root", stateRoot, "-container-bin", "container-test",
@@ -776,17 +805,6 @@ func TestRigRecoverRequiresDeadListenerAndExplicitConfirmation(t *testing.T) {
 	if !strings.Contains(inspection.String(), names[0]) {
 		t.Fatalf("inspection = %q, want recorded live container", inspection.String())
 	}
-	host.supervised = true
-	err = runRigRecover(context.Background(), []string{
-		"-state-root", stateRoot, "-container-bin", "container-test", "-confirm",
-	}, ioDiscard{}, ioDiscard{}, host)
-	if err == nil || !strings.Contains(err.Error(), "supervised daemon") {
-		t.Fatalf("supervised-daemon recovery error = %v", err)
-	}
-	if len(host.deleted) != 0 {
-		t.Fatalf("supervised-daemon recovery deleted %v", host.deleted)
-	}
-	host.supervised = false
 	databaseLock, err := daemonlock.Acquire(lease.Manifest().Resources.DatabasePath)
 	if err != nil {
 		t.Fatal(err)
@@ -854,6 +872,9 @@ func TestRigRecoverRequiresDeadListenerAndExplicitConfirmation(t *testing.T) {
 	}
 	if _, err := daemonlock.ReadRigManifest(stateRoot); !errors.Is(err, os.ErrNotExist) {
 		t.Fatalf("confirmed recovery left manifest: %v", err)
+	}
+	if len(host.prodProbed) != 0 {
+		t.Fatalf("rig recover probed prod's execution at %v", host.prodProbed)
 	}
 }
 

@@ -43,8 +43,7 @@ func deputyLeaseFixture(t *testing.T) (deputyHost, deputyPaths, loadedDeputySett
 	settings.Listen = "127.0.0.1:8677"
 	settings.SeedRoot = filepath.Join(base, "seed")
 	host := deputyHost{
-		rig: &fakeRigHost{}, leaseRoot: leaseRoot,
-		launchAgentLabel: defaultRigLaunchAgentLabel, now: deputyTestNow,
+		rig: &fakeRigHost{}, leaseRoot: leaseRoot, now: deputyTestNow,
 		tailscaleIPs: func() ([]netip.Addr, error) { return nil, nil },
 	}
 	return host, newDeputyPaths(stateRoot), settings
@@ -64,6 +63,32 @@ func TestAcquireDeputyLeaseRefusesLiveHolder(t *testing.T) {
 	_, _, err = acquireDeputyLease(context.Background(), host, paths, settings, io.Discard)
 	if conflict := (*daemonlock.RigConflictError)(nil); !errors.As(err, &conflict) {
 		t.Fatalf("live holder: %v, want a rig conflict naming the holder", err)
+	}
+}
+
+// TestAcquireDeputyLeaseLeavesProdFreeToStart pins #2080: the deputy holds
+// no lock of prod's, so prod can start, driverless, while the lease is held.
+func TestAcquireDeputyLeaseLeavesProdFreeToStart(t *testing.T) {
+	host, paths, settings := deputyLeaseFixture(t)
+	lease, _, err := acquireDeputyLease(context.Background(), host, paths, settings, io.Discard)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = lease.Close() }()
+	home, err := os.UserHomeDir()
+	if err != nil {
+		t.Fatal(err)
+	}
+	prodDaemon := filepath.Join(supervisedRoots(home)[environmentProd], "daemon")
+	if err := os.MkdirAll(prodDaemon, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	prodLock, err := daemonlock.Acquire(filepath.Join(prodDaemon, "freeside.db"))
+	if err != nil {
+		t.Fatalf("prod's database lock under a held deputy lease: %v", err)
+	}
+	if err := prodLock.Close(); err != nil {
+		t.Fatal(err)
 	}
 }
 

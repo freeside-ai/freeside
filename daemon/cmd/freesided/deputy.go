@@ -81,23 +81,21 @@ func newDeputyPaths(stateRoot string) deputyPaths {
 // deputyHost is what a deputy start touches outside its root. Tests replace
 // the rig host and the lease root; production uses the real ones.
 type deputyHost struct {
-	rig              rigHost
-	preflight        preflightEnvironment
-	adopt            authAdoptDeps
-	leaseRoot        string
-	launchAgentLabel string
-	now              func() time.Time
-	tailscaleIPs     func() ([]netip.Addr, error)
+	rig          rigHost
+	preflight    preflightEnvironment
+	adopt        authAdoptDeps
+	leaseRoot    string
+	now          func() time.Time
+	tailscaleIPs func() ([]netip.Addr, error)
 }
 
 func productionDeputyHost() deputyHost {
 	return deputyHost{
-		rig:              newProductionRigHost(),
-		preflight:        newProductionPreflightEnvironment(),
-		adopt:            productionAuthAdoptDeps(),
-		launchAgentLabel: defaultRigLaunchAgentLabel,
-		now:              func() time.Time { return time.Now().UTC() },
-		tailscaleIPs:     readTailscaleIPs,
+		rig:          newProductionRigHost(),
+		preflight:    newProductionPreflightEnvironment(),
+		adopt:        productionAuthAdoptDeps(),
+		now:          func() time.Time { return time.Now().UTC() },
+		tailscaleIPs: readTailscaleIPs,
 	}
 }
 
@@ -220,11 +218,6 @@ func runDeputy(
 		return err
 	}
 
-	prodLock, err := holdProdDatabaseLock(home)
-	if err != nil {
-		return err
-	}
-	defer func() { err = errors.Join(err, prodLock.Close()) }()
 	logger, err := newLogger(stderr, defaultLogLevel)
 	if err != nil {
 		return err
@@ -317,8 +310,7 @@ func acquireDeputyLease(
 		_, _ = fmt.Fprintf(stderr, "freesided deputy: recovering the interrupted run's lease from %s@%s pid=%d acquired %s\n",
 			stale.Manifest.Owner.User, stale.Manifest.Owner.Host, stale.Manifest.Owner.PID,
 			stale.Manifest.AcquiredAt.Format(time.RFC3339))
-		if err := recoverStaleRig(ctx, stderr, host.rig, paths.StateRoot, deputyContainerBin,
-			host.launchAgentLabel, true); err != nil {
+		if err := recoverStaleRig(ctx, stderr, host.rig, paths.StateRoot, deputyContainerBin, true); err != nil {
 			return nil, nil, fmt.Errorf("recover the interrupted run's lease: %w", err)
 		}
 		manifest := stale.Manifest
@@ -328,7 +320,7 @@ func acquireDeputyLease(
 	if err != nil {
 		return nil, nil, err
 	}
-	if err := proveRigIdle(ctx, host.rig, lease.Manifest().Resources, host.launchAgentLabel); err != nil {
+	if err := proveRigIdle(ctx, host.rig, lease.Manifest().Resources); err != nil {
 		return nil, nil, errors.Join(err, lease.Close())
 	}
 	return lease, interrupted, nil
@@ -603,7 +595,6 @@ func deputyPreflightConfig(
 		ReviewWorkspaceSizeMB:     deputyReviewWorkspaceSizeMB,
 		ProjectID:                 settings.Repository.Project,
 		BuildProxy:                settings.Build.Proxy,
-		LaunchAgentLabel:          defaultRigLaunchAgentLabel,
 		AllowedPaths:              settings.Repository.AllowedPaths,
 		Launch:                    true,
 		SettingsDigest:            settings.Digest,

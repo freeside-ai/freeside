@@ -38,27 +38,23 @@ pass `prompts/phase-1a/implementer.md` as `FREESIDE_REAL_RUN_PROMPT_PACKAGE`,
 default-branch commit. The daemon admits the content digest of these exact
 bytes; a workspace copy is never prompt authority.
 
-Before acquiring the rig, stop the production daemon:
-
-```sh
-"$HOME/Applications/Freeside.app/Contents/MacOS/FreesideMac" daemon stop
-```
-
-Require exit 0 before continuing. A person may instead choose **Stop** in the
-installed Freeside menu and wait for **Stopped**. The operator may run the
-command, or a script or agent may run it inside this operator-started
-walkthrough or the exit run. Tests, dev scripts, and agents doing other work
-still never stop, unload, or re-register `ai.freeside.daemon`
-([plan §10](plan.md#environments-prod-dev-and-ephemeral)).
-
-The stop is still needed because `freesided rig hold` and preflight refuse
-while that label is loaded. It stays by owner decision (#1517): it keeps two
-daemons from publishing as the same GitHub App at once. Those checks run only
-when the run starts, so `freesided -environment prod` also refuses to start
-while a production rig lease exists, live or stale (#1583). If **Start** is
-chosen mid-run, launchd relaunches the refusing daemon about every 10 seconds
-and the app shows it unreachable until the run releases its lease; nothing
-else changes. Running both is deferred to #1568.
+The production daemon keeps running during the run; you no longer stop it
+before acquiring the rig (#2080). It must run without a driver, which the
+installed LaunchAgent does: it passes no `-driver`. A driverless `prod` never
+opens the App authority's files, so the run stays their only writer
+([plan §10](plan.md#environments-prod-dev-and-ephemeral)). Both sides check
+this. Preflight's `prod_execution` check reads `prod`'s execution mode over
+its control socket and fails when `prod` reports a driver or does not answer,
+so the installed app must include #2080 before the first run; an older
+installed build fails the check. And while a production rig lease exists,
+live or stale, `freesided -environment prod` refuses `-driver fake`,
+`-driver claude`, and `-fake-publication`. Choosing **Stop** or **Start**
+mid-run changes nothing for the run. This walkthrough's harness still runs
+its restore step when it finishes; the move onto `freesided deputy` drops it
+(#2081). One exception: resuming a retained session saved before #2080 runs
+that session's saved binary for preflight, which still refuses a loaded
+`prod` and takes `prod`'s database lock, so stop the production daemon before
+resuming one.
 
 The run uses `prod`'s own App authority, where the App's single authority
 lives ([plan §10](plan.md#environments-prod-dev-and-ephemeral)). Set
@@ -271,8 +267,9 @@ status file to claim completion.
 
 From a clean checkout of the reviewed replacement, export the same required
 configuration as the original run, including its state root, seed root, listener,
-base, images and review settings. Suspend the supervised service as described
-above, then run:
+base, images and review settings. Leave the supervised service running unless
+the old session was saved before #2080; then stop it as the start of this
+walkthrough describes. Then run:
 
 ```sh
 bash scripts/run-real-work.sh --resume-session /absolute/old-session
@@ -474,10 +471,9 @@ bash /absolute/session/real-work-session.sh recover /absolute/session
 
 The helper runs the retained binary's
 `rig recover -state-root <recorded-state-root> -confirm`, with bounded process
-group cancellation. A stale lease also keeps `prod` from starting, and
-`rig recover` refuses while `ai.freeside.daemon` is loaded, so if **Start**
-was chosen after the crash, choose **Stop** and wait for **Stopped** before
-recovering; restoration then starts it again. That command rejects a live holder, locked database, live
+group cancellation. A stale lease also keeps `prod` from starting with a
+driver; the driverless installed daemon starts and keeps running, and
+`rig recover` does not need it stopped. That command rejects a live holder, locked database, live
 listener or resources that cannot be cleaned. Interruption of `rig hold` itself
 deliberately leaves `.freeside-rig.json`; checked recovery is the expected path,
 not permission to delete the manifest manually. A live holder still owned by
@@ -533,8 +529,8 @@ re-enrollment hold. Recovery creates no task and starts no agent execution.
 
 ### Renew An Existing Store
 
-Complete or recover any prior harness session, then stop the supervised daemon
-as described above. Use a retained binary containing `renew-codex`, or build
+Complete or recover any prior harness session; the supervised daemon can keep
+running. Use a retained binary containing `renew-codex`, or build
 the current reviewed version with `go -C daemon build -o /tmp/freesided
 ./cmd/freesided`. With the exercise's approved environment loaded, run:
 
@@ -590,9 +586,9 @@ completion and interruption stop the daemon, release the rig, and restore the
 supervised service through the existing cleanup path. If cleanup fails, follow
 the printed recovery command before retrying.
 
-Before rerunning the exercise, stop the restored production daemon again with
-`"$HOME/Applications/Freeside.app/Contents/MacOS/FreesideMac" daemon stop`
-and require exit 0, or choose **Stop** in the Freeside menu.
+Before rerunning the exercise, leave the production daemon running; the
+rerun does not need it stopped, unless it resumes a retained session saved
+before #2080 (see the start of this walkthrough).
 Recovery has left the task count unchanged; for an exercise requiring its
 first task from the client composer, keep the database at zero tasks and use
 the client-submission path below. The ordinary harness invocation with source
@@ -773,7 +769,7 @@ outstanding if the approved inputs or either physical client are unavailable.
 
 For the #1211 exit run against `freeasinbird/gh-imgup#82`, with the exercise
 environment and the manual-submission file loaded and the supervised daemon
-suspended:
+left running:
 
 ```sh
 bash scripts/run-real-work.sh --client-target \

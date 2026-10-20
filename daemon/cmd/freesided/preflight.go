@@ -206,7 +206,6 @@ type preflightConfig struct {
 	WorkUnitPath      string
 	ProjectID         domain.ProjectID
 	BuildProxy        string
-	LaunchAgentLabel  string
 	AllowedPaths      []string
 	PublicationAuthor engine.ProductionCommitAuthor
 	// Launch composes a run rather than one submission: no task, policy,
@@ -289,8 +288,8 @@ type preflightEnvironment interface {
 	InspectRepositoryAuthority(context.Context, preflightConfig, time.Time) repositoryAuthorityInspection
 	CheckAuthVolume(context.Context, string, string, string, ward.RuntimeResourceAuthorizer) error
 	DatabaseIdle(string) error
-	SupervisedDaemon(context.Context, string) (bool, error)
 	ProbeDaemon(context.Context, string) (string, bool, error)
+	ProdExecution(context.Context, string) (executionMode, bool, error)
 }
 
 type productionPreflightEnvironment struct{ rig productionRigHost }
@@ -353,13 +352,6 @@ func composePreflight(
 	now time.Time,
 	daemonBuild string,
 ) (compositionManifest, error) {
-	// Before any authority access: a run's preflight reads prod's App
-	// authority before the run's daemon takes prod's lock (#1583).
-	prodLock, err := holdProdLockForProdAppDirectories(cfg.PublicationStateDir, cfg.PublicationCredentialsDir)
-	if err != nil {
-		return compositionManifest{}, err
-	}
-	defer func() { _ = prodLock.Close() }()
 	manifest := newCompositionManifest(cfg, daemonBuild, now)
 	rig, rigErr := readRigAcquisition(cfg.RigTokenFile)
 	if rigErr == nil {
@@ -477,7 +469,6 @@ func parsePreflightConfig(args []string, stderr io.Writer) (preflightConfig, err
 	flags.StringVar(&cfg.WorkUnitPath, "work-unit", "", "work-unit declaration file (required with -submission-id)")
 	flags.StringVar((*string)(&cfg.ProjectID), "project", "", "project id (required)")
 	flags.StringVar(&cfg.BuildProxy, "build-proxy", "", "image-build proxy URL overriding the managed build proxy")
-	flags.StringVar(&cfg.LaunchAgentLabel, "launch-agent-label", defaultRigLaunchAgentLabel, "supervised daemon label")
 	flags.Func("allowed-paths", "comma-separated explicit production path allowlist (required)", func(raw string) error {
 		cfg.AllowedPaths = engine.SplitNonEmpty(raw)
 		return nil
@@ -514,7 +505,7 @@ func parsePreflightConfig(args []string, stderr io.Writer) (preflightConfig, err
 func newCompositionManifest(cfg preflightConfig, daemonBuild string, now time.Time) compositionManifest {
 	names := []string{
 		"rig_manifest", "state_database", "topic_key", "daemon_build",
-		"listener_server_url", "daemon_conflict", "repository_base", "trust_profile", "agent_selection",
+		"listener_server_url", "daemon_conflict", "prod_execution", "repository_base", "trust_profile", "agent_selection",
 		"review_configuration", "shadow_review_configuration", "source_implementation_identity", "review_instructions", "seed_root",
 		"publication_authority",
 		"exporter_image", "implementer_image", "reviewer_image", "claude_credentials",
@@ -660,6 +651,7 @@ func evaluateComposition(
 		}
 		daemonIdle = evaluateDaemonConflict(ctx, manifest, cfg, environment)
 	}
+	prodDriverless := evaluateProdExecution(ctx, manifest, cfg, environment)
 	shadowReviewProtectedAccessBlocked := cfg.ShadowReviewImage != "" &&
 		(!shadowReviewAuthorityApproved || shadowReviewCredentialErr != nil)
 	var repositoryInspection repositoryAuthorityInspection
@@ -670,8 +662,8 @@ func evaluateComposition(
 		err := errors.New("approved shadow review configuration is required before repository observation")
 		repositoryInspection = repositoryAuthorityInspection{BaseError: err, AuthorityError: err}
 		repositoryInspectionNotRun = true
-	} else if cfg.DBPath == "" || database.OpenError != nil || !daemonIdle {
-		err := errors.New("production database and daemon must be idle for authenticated repository observation")
+	} else if cfg.DBPath == "" || database.OpenError != nil || !daemonIdle || !prodDriverless {
+		err := errors.New("production database and daemon must be idle, and prod driverless, for authenticated repository observation")
 		repositoryInspection = repositoryAuthorityInspection{BaseError: err, AuthorityError: err}
 		repositoryInspectionNotRun = true
 	} else {
@@ -942,12 +934,6 @@ func evaluateDaemonConflict(
 	if err := environment.DatabaseIdle(cfg.DBPath); err != nil {
 		failCheck(manifest, "daemon_conflict", "production database is already held by a daemon", "stop the conflicting daemon before submission (#796)")
 		return false
-	} else if supervised, err := environment.SupervisedDaemon(ctx, cfg.LaunchAgentLabel); err != nil {
-		failCheck(manifest, "daemon_conflict", "supervised-daemon state could not be inspected", "repair launchd inspection before submission (#796)")
-		return false
-	} else if supervised {
-		failCheck(manifest, "daemon_conflict", "a supervised daemon is loaded", "stop the supervised daemon before submission (#796)")
-		return false
 	} else if description, live, err := environment.ProbeDaemon(ctx, manifest.Rig.Resources.ListenAddress); err != nil {
 		failCheck(manifest, "daemon_conflict", "leased listener could not be probed", "repair listener access before submission (#796)")
 		return false
@@ -971,8 +957,39 @@ func evaluateDaemonConflict(
 			return false
 		}
 	}
-	passCheck(manifest, "daemon_conflict", "database, supervisor, and leased listener are idle")
+	passCheck(manifest, "daemon_conflict", "database and leased listener are idle")
 	return true
+}
+
+// evaluateProdExecution proves the prod daemon that owns the App authority
+// runs without a driver, so the run is the authority's only writer (#2080).
+// The App state directory is prod's -state-dir (requireProdAppDirectories
+// admits only prod's), so prod's database and its control advertisement sit
+// there. It runs under the lease, whose manifest keeps a prod started later
+// from taking a driver.
+func evaluateProdExecution(
+	ctx context.Context,
+	manifest *compositionManifest,
+	cfg preflightConfig,
+	environment preflightEnvironment,
+) bool {
+	mode, running, err := environment.ProdExecution(ctx, filepath.Join(cfg.PublicationStateDir, "freeside.db"))
+	switch {
+	case err != nil:
+		failCheck(manifest, "prod_execution", "prod advertises a control socket that did not report its execution mode",
+			"start prod so it rewrites its control advertisement, or update the installed build so it serves the execution read")
+		return false
+	case !running:
+		passCheck(manifest, "prod_execution", "prod is not running")
+		return true
+	case mode != executionDisabled:
+		failCheck(manifest, "prod_execution", "prod runs with -driver "+string(mode),
+			"stop that prod daemon or restart it without -driver; the installed LaunchAgent passes none")
+		return false
+	default:
+		passCheck(manifest, "prod_execution", "prod runs without a driver")
+		return true
+	}
 }
 
 func inspectCompositionIdentity(ctx context.Context, cfg preflightConfig) (compositionIdentity, error) {
@@ -1818,10 +1835,10 @@ func (productionPreflightEnvironment) DatabaseIdle(dbPath string) error {
 	return lock.Close()
 }
 
-func (e productionPreflightEnvironment) SupervisedDaemon(
-	ctx context.Context, label string,
-) (bool, error) {
-	return e.rig.SupervisedDaemon(ctx, label)
+func (e productionPreflightEnvironment) ProdExecution(
+	ctx context.Context, dbPath string,
+) (executionMode, bool, error) {
+	return e.rig.ProdExecution(ctx, dbPath)
 }
 
 func (e productionPreflightEnvironment) ProbeDaemon(

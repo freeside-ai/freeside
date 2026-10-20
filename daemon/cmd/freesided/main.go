@@ -367,15 +367,6 @@ func main() {
 		fmt.Fprintln(os.Stderr, "freesided:", err)
 		os.Exit(2)
 	}
-	if *prodAppAuthority {
-		prodLock, err := holdProdDatabaseLock(home)
-		if err != nil {
-			fmt.Fprintln(os.Stderr, "freesided:", err)
-			os.Exit(2)
-		}
-		// Held until the process exits; the deferred Close keeps it reachable.
-		defer func() { _ = prodLock.Close() }()
-	}
 	if env == environmentEphemeral {
 		accountHome, err := currentAccountHome()
 		if err != nil {
@@ -387,15 +378,22 @@ func main() {
 			os.Exit(2)
 		}
 	}
+	if *prodAppAuthority {
+		err := checkProdDriverless(context.Background(), newProductionRigHost().ProdExecution, paths.PublicationStateDir)
+		if err != nil {
+			fmt.Fprintln(os.Stderr, "freesided:", err)
+			os.Exit(2)
+		}
+	}
 	if env == environmentProd {
 		// Before anything opens the database: a real-work run may be using
-		// prod's App authority (#1583).
+		// prod's App authority (#1583), which only a driver would open (#2080).
 		leaseRoot, err := daemonlock.DefaultRigLeaseRoot()
 		if err != nil {
 			fmt.Fprintln(os.Stderr, "freesided:", err)
 			os.Exit(2)
 		}
-		if err := checkProdRigLease(leaseRoot); err != nil {
+		if err := checkProdDriverUnderLease(leaseRoot, execution, *fakePublication); err != nil {
 			fmt.Fprintln(os.Stderr, "freesided:", err)
 			os.Exit(2)
 		}

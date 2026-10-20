@@ -30,10 +30,6 @@ import (
 	"github.com/freeside-ai/freeside/daemon/internal/wardstore"
 )
 
-const defaultRigLaunchAgentLabel = "ai.freeside.daemon"
-
-const launchctlServiceNotFoundExitCode = 113
-
 var errRigUsage = errors.New("invalid rig command")
 
 var errRigCleanRelease = errors.New("clean rig release requested")
@@ -45,7 +41,7 @@ type rigHoldOutput struct {
 
 type rigHost interface {
 	ProbeDaemon(context.Context, string) (description string, live bool, err error)
-	SupervisedDaemon(context.Context, string) (bool, error)
+	ProdExecution(context.Context, string) (mode executionMode, running bool, err error)
 	PresentContainers(context.Context, string, []string) ([]string, error)
 	DeleteContainers(context.Context, string, []string) error
 	PresentPersistentResources(context.Context, string, []string, []string) ([]string, []string, error)
@@ -155,22 +151,42 @@ func probeListenAddressByBinding(ctx context.Context, address string) (string, b
 	return "", false, nil
 }
 
-func (productionRigHost) SupervisedDaemon(ctx context.Context, label string) (bool, error) {
-	uid := os.Getuid()
-	// #nosec G204 -- launchctl receives fixed arguments directly, without a shell;
-	// label selects the operator-supplied read-only service lookup.
-	command := osexec.CommandContext(ctx, "launchctl", "print", fmt.Sprintf("gui/%d/%s", uid, label))
-	command.Stdout = io.Discard
-	command.Stderr = io.Discard
-	err := procbound.Run(command, procbound.DefaultWaitDelay)
-	if err == nil {
-		return true, nil
+// prodExecutionProbeTimeout bounds the control-socket read of a loaded prod,
+// so a socket that accepts but never answers fails the check instead of
+// stalling the run's start.
+const prodExecutionProbeTimeout = 5 * time.Second
+
+// ProdExecution reads what the prod daemon serving dbPath may run, through
+// the control socket it advertises beside that database. No advertisement
+// means no prod daemon runs: a daemon publishes it once it serves and removes
+// it when it stops. An advertisement whose socket does not answer, or a
+// daemon that does not serve the read, is an error and never "not running",
+// because a live prod with a driver behind an unanswering socket must not
+// pass (#2080).
+func (productionRigHost) ProdExecution(ctx context.Context, dbPath string) (executionMode, bool, error) {
+	canonical, err := canonicalDatabasePath(dbPath)
+	if err != nil {
+		return "", false, err
 	}
-	var exitErr *osexec.ExitError
-	if errors.As(err, &exitErr) && exitErr.ExitCode() == launchctlServiceNotFoundExitCode {
-		return false, nil
+	client, err := newControlClient(canonical)
+	if errors.Is(err, os.ErrNotExist) {
+		return "", false, nil
 	}
-	return false, fmt.Errorf("inspect launchd service %q: %w", label, err)
+	if err != nil {
+		return "", false, fmt.Errorf("read prod's control advertisement for %q: %w", canonical, err)
+	}
+	defer client.Close()
+	ctx, cancel := context.WithTimeout(ctx, prodExecutionProbeTimeout)
+	defer cancel()
+	var report executionReport
+	if err := client.get(ctx, "/execution", nil, &report); err != nil {
+		return "", true, fmt.Errorf("read prod's execution mode for %q: %w", canonical, err)
+	}
+	if report.Version != executionReportVersion || !report.Execution.valid() {
+		return "", true, fmt.Errorf("prod answered an unrecognized execution report (version %q, execution %q)",
+			report.Version, report.Execution)
+	}
+	return report.Execution, true, nil
 }
 
 func (productionRigHost) PresentContainers(
@@ -392,7 +408,6 @@ func runRigHoldWithLeaseRoot(
 	listenAddress := flags.String("listen", "", "production daemon listen address (required)")
 	seedRoot := flags.String("seed-root", "", "production exact-base seed root (required)")
 	ownerNote := flags.String("owner-note", "production acceptance harness", "inspectable owner note")
-	launchAgentLabel := flags.String("launch-agent-label", defaultRigLaunchAgentLabel, "supervised daemon label")
 	if err := flags.Parse(args); err != nil {
 		return fmt.Errorf("%w: %w", errRigUsage, err)
 	}
@@ -429,7 +444,7 @@ func runRigHoldWithLeaseRoot(
 		}
 		err = errors.Join(err, lease.Abandon())
 	}()
-	if err := proveRigIdle(ctx, host, lease.Manifest().Resources, *launchAgentLabel); err != nil {
+	if err := proveRigIdle(ctx, host, lease.Manifest().Resources); err != nil {
 		return err
 	}
 	if err := json.NewEncoder(stdout).Encode(rigHoldOutput{
@@ -444,9 +459,11 @@ func runRigHoldWithLeaseRoot(
 }
 
 // proveRigIdle checks that nothing else uses a newly acquired lease's
-// resources: the database is unlocked, no supervised daemon is loaded, and
-// the listener and its loopback twin are free. rig hold and deputy share it.
-func proveRigIdle(ctx context.Context, host rigHost, resources daemonlock.RigResources, launchAgentLabel string) error {
+// resources: the database is unlocked and the listener and its loopback twin
+// are free. rig hold and deputy share it. A loaded prod is not a conflict: it
+// serves its own database and listener, and the deputy's composition preflight
+// proves it runs without a driver (#2080).
+func proveRigIdle(ctx context.Context, host rigHost, resources daemonlock.RigResources) error {
 	databaseLock, err := daemonlock.Acquire(resources.DatabasePath)
 	if errors.Is(err, daemonlock.ErrAlreadyRunning) {
 		return fmt.Errorf("database is already held by a daemon: %w", err)
@@ -456,11 +473,6 @@ func proveRigIdle(ctx context.Context, host rigHost, resources daemonlock.RigRes
 	}
 	if err := databaseLock.Close(); err != nil {
 		return fmt.Errorf("release rig database probe: %w", err)
-	}
-	if supervised, err := host.SupervisedDaemon(ctx, launchAgentLabel); err != nil {
-		return err
-	} else if supervised {
-		return fmt.Errorf("supervised daemon %q is loaded; stop it before starting the production rig", launchAgentLabel)
 	}
 	canonicalListen := resources.ListenAddress
 	if description, live, err := host.ProbeDaemon(ctx, canonicalListen); err != nil {
@@ -707,14 +719,13 @@ func runRigRecover(
 	stateRoot := flags.String("state-root", "", "production daemon state root (required)")
 	confirm := flags.Bool("confirm", false, "confirm cleanup of exactly the recorded stale resources")
 	containerBin := flags.String("container-bin", "container", "Apple container executable")
-	launchAgentLabel := flags.String("launch-agent-label", defaultRigLaunchAgentLabel, "supervised daemon label")
 	if err := flags.Parse(args); err != nil {
 		return fmt.Errorf("%w: %w", errRigUsage, err)
 	}
 	if flags.NArg() != 0 || *stateRoot == "" {
 		return fmt.Errorf("%w: -state-root is required", errRigUsage)
 	}
-	return recoverStaleRig(ctx, stdout, host, *stateRoot, *containerBin, *launchAgentLabel, *confirm)
+	return recoverStaleRig(ctx, stdout, host, *stateRoot, *containerBin, *confirm)
 }
 
 // recoverStaleRig is rig recover after its flags. Without confirm it prints
@@ -722,7 +733,7 @@ func runRigRecover(
 // root recorded, because that lease is the one its previous start left.
 func recoverStaleRig(
 	ctx context.Context, stdout io.Writer, host rigHost,
-	stateRoot, containerBin, launchAgentLabel string, confirm bool,
+	stateRoot, containerBin string, confirm bool,
 ) (err error) {
 	lease, err := daemonlock.AcquireStaleRig(stateRoot)
 	if err != nil {
@@ -735,11 +746,6 @@ func recoverStaleRig(
 		}
 	}()
 	manifest := lease.Manifest()
-	if supervised, err := host.SupervisedDaemon(ctx, launchAgentLabel); err != nil {
-		return err
-	} else if supervised {
-		return fmt.Errorf("supervised daemon %q is loaded; stop it before recovery", launchAgentLabel)
-	}
 	databaseLock, err := daemonlock.Acquire(manifest.Resources.DatabasePath)
 	if errors.Is(err, daemonlock.ErrAlreadyRunning) {
 		return fmt.Errorf("recorded database %q is still held by a daemon: %w",

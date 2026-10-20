@@ -785,10 +785,13 @@ and ports `7331` and `7332`. The bundled LaunchAgent plist passes
 `__FREESIDE_ENVIRONMENT__` placeholder with the tier. See the
 [environment rules](../docs/plan.md#environments-prod-dev-and-ephemeral).
 
-`-environment prod` refuses to start, before it opens its database, while a
-production rig manifest exists under `~/.freeside/rig-locks` (the account's
-passwd home), live or stale: an attended real-work run may be using `prod`'s
-App authority. A stale manifest keeps `prod` down until `freesided rig
+`-environment prod` refuses `-driver fake`, `-driver claude`, and
+`-fake-publication`, before it opens its database, while a production rig
+manifest exists under `~/.freeside/rig-locks` (the account's passwd home),
+live or stale: an attended real-work run may be using `prod`'s App authority,
+and only a driver would open it. With `-driver disabled`, the installed
+LaunchAgent's default, `prod` starts and serves pairing, state, and backups as
+usual (#2080). A stale manifest keeps that refusal until `freesided rig
 recover` clears it.
 
 `-prod-app-authority` is that run's one exception to the ephemeral guard
@@ -800,16 +803,14 @@ published under that same lease root; `$HOME` and the passwd home naming one
 `prod` root; and `-prod-daemon <path>`, the installed `prod` `freesided`
 and not this binary. The daemon runs `<path> publication-formats` and refuses
 to start unless that build accepts every App authority state format this
-build writes. It then holds `prod`'s database lock
-(`<root>/daemon/freeside.db`) until it exits, so a running `prod`, even one
-started outside launchd, refuses the run, and `prod` can't start during it.
-`freesided preflight` holds the same lock while it runs when its publication
-directories are `prod`'s, since the run's preflight reads that authority
-before the run's daemon starts.
-It also refuses when that build writes a version this build can't read.
+build writes. It also refuses when that build writes a version this build can't read.
 `freesided publication-formats` prints, per file, the version a build
 writes and every version it accepts:
 `{"installation_authority":{"writes":1,"accepts":[1]},"installation_janitor_journal":{"writes":1,"accepts":[1]}}`.
+It takes no lock of `prod`'s: `prod` may run during the run, without a
+driver. After its path checks the daemon reads `prod`'s `GET /execution` and
+refuses to start unless `prod` is not running or reports `disabled`, the same
+proof the run's preflight records as `prod_execution` (#2080).
 
 The long-running daemon defaults to `-driver disabled`. It serves pairing,
 health, stored state, and backups without starting an execution engine or
@@ -1904,9 +1905,11 @@ the same project; the refusal names the first task and the commands that
 settle it (`freesided reattempt`, `freesided abandon`, or a replay with
 `--retry-submission-id`).
 
-**`prod` stays stopped for now.** The deputy holds `prod`'s database lock
-like the script does, so the operator stops the `prod` daemon before a
-start and restores it after. A later unit removes that step.
+**`prod` keeps running.** The deputy takes no lock of `prod`'s, so the
+operator neither stops nor restores the `prod` daemon around a start. Its
+composition preflight, run under the lease, fails `prod_execution` unless
+`prod` is not running or reports `disabled` on its control socket, and the
+installed build must serve that read (#2080).
 
 ### Rebuild A Project Image For A Dependency Change
 
