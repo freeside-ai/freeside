@@ -436,8 +436,8 @@ interface tokens, not prose to retitle.
   - **Slug:** `freeside-ai/freeside`. Pass `--repo freeside-ai/freeside` to
     `gh`; never derive the owner from a sibling project.
   - **Consumers:** `await-pr-review`, `land-approved-prs`, `merge-cleanup`,
-    `self-merge`, and `visual-evidence` read this record before inferring a
-    repository from a remote.
+    and `visual-evidence` read this record before inferring a repository
+    from a remote.
 
 ## Automated Reviewer
 
@@ -465,10 +465,10 @@ fix, fix the whole class), and filter later review activity by its login.
   record:
 
   - **Mechanism:** `label`.
-  - **Approval:** `approved`, added only by the approver; agents never add
-    it.
+  - **Approval:** `approved`, added by a collaborator with the Approver
+    permission; agents never add it.
   - **Hand-back:** `needs-human`.
-  - **Approver:** `bennelsonweiss`.
+  - **Approver permission:** `write`.
   - **Stale lock age:** `240` minutes.
   - **Base-advance checks:** none.
   - **Reviewer:** `chatgpt-codex-connector`.
@@ -480,8 +480,9 @@ once it merges. Base-advance checks stay empty because the required check
 already reruns on the branch updated to the tip, and the lander waits for it
 on that exact commit. The merge-result audit needs each PR's declared scope,
 so the lander runs it per PR (Integration Ordering and Merge-Result Audit);
-a fixed command here cannot. Decision record:
-`devlog/2026-10-19-1500-landing-record.md`.
+a fixed command here cannot. Decision records:
+`devlog/2026-10-19-1500-landing-record.md` and
+`devlog/2026-10-19-1903-permission-based-approval.md`.
 
 ## Freeside Review-Loop Bound
 
