@@ -114,6 +114,77 @@ case $OUT in
   *) pass=$((pass + 1)) ;;
 esac
 
+lint_root_a=$TMP/lint-a
+lint_root_b=$TMP/lint\ b
+lint_cache_home=$TMP/cache\ home
+for lint_root in "$lint_root_a" "$lint_root_b"; do
+  mkdir -p "$lint_root/scripts" "$lint_root/daemon"
+  cp "$CHECK" "$lint_root/scripts/check.sh"
+done
+lint_stub=$TMP/golangci-lint
+cat >"$lint_stub" <<'STUB'
+#!/usr/bin/env bash
+printf '%s\n' "cache-set=${GOLANGCI_LINT_CACHE+yes}" \
+  "cache=${GOLANGCI_LINT_CACHE-}" "pwd=$PWD" "argc=$#" "$@" >"$LINT_RECORD"
+exit "${LINT_RC:-0}"
+STUB
+chmod +x "$lint_stub"
+
+run_lint_check() { # <fixture-root> <env-args...>; sets OUT and RC
+  local root=$1
+  shift
+  set +e
+  OUT=$(env "$@" GOLANGCI_LINT="$lint_stub --fixture-argument" \
+    LINT_RECORD="$TMP/lint.receipt" "$root/scripts/check.sh" daemon lint 2>&1)
+  RC=$?
+  set -e
+}
+
+assert_lint_receipt() { # <fixture-root> <expected-cache>
+  local expected
+  expected=$(printf '%s\n' 'cache-set=yes' "cache=$2" "pwd=$1/daemon" \
+    'argc=2' '--fixture-argument' 'run')
+  if [ "$(cat "$TMP/lint.receipt")" = "$expected" ]; then
+    pass=$((pass + 1))
+  else
+    OUT=$(cat "$TMP/lint.receipt")
+    report_failure "linter received unexpected environment, directory, or arguments"
+  fi
+}
+
+begin_case "daemon lint defaults are distinct across checkouts and stable on reuse"
+for lint_root in "$lint_root_a" "$lint_root_b" "$lint_root_a"; do
+  run_lint_check "$lint_root" -u GOLANGCI_LINT_CACHE XDG_CACHE_HOME="$lint_cache_home"
+  assert_rc 0
+  assert_lint_receipt "$lint_root" "$lint_cache_home/freeside/golangci-lint$lint_root"
+done
+
+begin_case "daemon lint falls back to HOME when XDG_CACHE_HOME is unset"
+run_lint_check "$lint_root_a" -u GOLANGCI_LINT_CACHE -u XDG_CACHE_HOME
+assert_rc 0
+assert_lint_receipt "$lint_root_a" "$HOME/.cache/freeside/golangci-lint$lint_root_a"
+
+begin_case "daemon lint preserves an explicit cache containing spaces"
+run_lint_check "$lint_root_b" XDG_CACHE_HOME="$lint_cache_home" \
+  GOLANGCI_LINT_CACHE="$TMP/explicit cache"
+assert_rc 0
+assert_lint_receipt "$lint_root_b" "$TMP/explicit cache"
+
+begin_case "daemon lint preserves an explicitly empty cache"
+run_lint_check "$lint_root_a" XDG_CACHE_HOME="$lint_cache_home" GOLANGCI_LINT_CACHE=
+assert_rc 0
+assert_lint_receipt "$lint_root_a" ''
+
+begin_case "daemon lint propagates the tool exit code"
+run_lint_check "$lint_root_b" -u GOLANGCI_LINT_CACHE \
+  XDG_CACHE_HOME="$lint_cache_home" LINT_RC=7
+assert_rc 7
+assert_lint_receipt "$lint_root_b" "$lint_cache_home/freeside/golangci-lint$lint_root_b"
+case $OUT in
+  *'PASS: daemon'*) report_failure "PASS printed after a failed lint step" ;;
+  *) pass=$((pass + 1)) ;;
+esac
+
 begin_case "scripts shellcheck covers scripts, app scripts, and hooks"
 stub=$(make_stub shellcheck 0)
 SHELLCHECK=$stub run_check scripts shellcheck
