@@ -98,6 +98,7 @@ type supervisionSnapshot struct {
 	State             SupervisionState                  `json:"state"`
 	Outcome           domain.RunOutcome                 `json:"outcome"`
 	Reason            *domain.RunHoldReason             `json:"outcome_reason,omitempty"`
+	HoldReason        *domain.RunHoldReason             `json:"hold_reason,omitempty"`
 	Terminal          *domain.ObservedInvocationStatus  `json:"terminal,omitempty"`
 	Lineage           *observedb.Lineage                `json:"lineage,omitempty"`
 	Admission         *observedb.Admission              `json:"admission,omitempty"`
@@ -119,6 +120,9 @@ func writeSnapshot(out io.Writer, current observedb.Snapshot) error {
 		AttentionItems: current.AttentionItems,
 		ShadowReviews:  current.ShadowReviews, ClassifierSamples: current.ClassifierSamples,
 		ReviewYield: current.ReviewYield, Adjudications: current.Adjudications,
+	}
+	if current.Observation.Hold != nil {
+		view.HoldReason = &current.Observation.Hold.Reason
 	}
 	if len(current.AttentionItems) > 0 {
 		last := current.AttentionItems[len(current.AttentionItems)-1]

@@ -2097,6 +2097,17 @@ at all.
   observation derive from the timeline. No percentage-complete field exists
   or can be added without a contract change.
 
+The machine-readable supervision snapshot (`freesided follow -snapshot`)
+includes the optional top-level string `hold_reason` exactly when the selected
+run's observation has a hold. It projects that hold's closed reason code,
+including `blocking_system_health` when another run's notice blocks admission;
+it does not infer holds from the selected run's attention items. Clearing the
+hold omits the field again. The lifecycle `state` can remain `pending` while
+held, and `outcome_reason` continues to describe a terminal publication block.
+The real-run harness pauses its executing-time budget while `hold_reason` is
+nonempty or a supported human gate applies. A missing field means no visible
+hold, preserving compatibility with older snapshots.
+
 ### Adjudication Dispatch Telemetry
 
 The machine-readable supervision snapshot (`freesided follow -snapshot`) carries a
