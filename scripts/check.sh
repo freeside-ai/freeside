@@ -38,6 +38,10 @@
 # xcrun's git through a stable directory containing only git on PATH, with
 # its helpers and config preserved. Other git installations and later steps
 # are unchanged.
+# CI shard runs require all of DAEMON_TEST_SHARD_KIND (rest or integration),
+# DAEMON_TEST_SHARD_INDEX, DAEMON_TEST_SHARD_COUNT, DAEMON_TEST_INTEGRATION_SHARDS,
+# and DAEMON_TEST_EVIDENCE_DIR. Indices are one-based; the rest shard uses 1/1.
+# Shards disable test-result caching and retain full execution evidence.
 #
 # The daemon's opt-in live suites are skipped by `go test` unless their
 # environment is set (FREESIDE_PUBLISH_LIVE_TEST, FREESIDE_WARD_LIVE_TEST,
@@ -106,7 +110,23 @@ daemon_build() {
   in_dir "$ROOT/daemon" env CGO_ENABLED=0 GOOS=linux GOARCH=arm64 \
     go build -o /dev/null ./cmd/freeside-export
 }
-daemon_test_run() { in_dir "$ROOT/daemon" go test ./...; }
+daemon_test_run() {
+  if [[ ! ${DAEMON_TEST_SHARD_KIND+x}${DAEMON_TEST_SHARD_INDEX+x}${DAEMON_TEST_SHARD_COUNT+x}${DAEMON_TEST_INTEGRATION_SHARDS+x}${DAEMON_TEST_EVIDENCE_DIR+x} ]]; then
+    in_dir "$ROOT/daemon" go test ./...
+    return
+  fi
+  local kind=${DAEMON_TEST_SHARD_KIND:-} index=${DAEMON_TEST_SHARD_INDEX:-}
+  local count=${DAEMON_TEST_SHARD_COUNT:-} integration=${DAEMON_TEST_INTEGRATION_SHARDS:-}
+  if [[ ! $kind =~ ^(rest|integration)$ || ! $index =~ ^[1-9][0-9]*$ ||
+        ! $count =~ ^[1-9][0-9]*$ || ! $integration =~ ^[1-9][0-9]*$ ||
+        -z ${DAEMON_TEST_EVIDENCE_DIR:-} ]]; then
+    echo 'daemon test: require shard kind, index, count, integration count, and evidence directory together' >&2
+    return 2
+  fi
+  in_dir "$ROOT" python3 scripts/daemon-test-shards.py run --kind "$kind" \
+    --index "$index" --count "$count" --integration-count "$integration" \
+    --evidence-dir "$DAEMON_TEST_EVIDENCE_DIR"
+}
 
 daemon_test_take_slot() {
   local limit=${DAEMON_TEST_MAX_RUNS-1}

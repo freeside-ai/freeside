@@ -383,6 +383,25 @@ else
   echo 'skip: git PATH fixtures require /usr/bin/git'
 fi
 
+begin_case "partial and empty shard configuration fail before go runs"
+DAEMON_TEST_SHARD_KIND='' run_check daemon test
+assert_rc 2
+DAEMON_TEST_EVIDENCE_DIR=$TMP/evidence run_check daemon test
+assert_rc 2
+DAEMON_TEST_SHARD_KIND=rest DAEMON_TEST_SHARD_INDEX=1 DAEMON_TEST_SHARD_COUNT=1 \
+  DAEMON_TEST_INTEGRATION_SHARDS=0 DAEMON_TEST_EVIDENCE_DIR=$TMP/evidence run_check daemon test
+assert_rc 2
+
+begin_case "complete shard configuration dispatches through the existing wrapper"
+stub=$(make_stub python3 0)
+PATH="$TMP:$PATH" DAEMON_TEST_SHARD_KIND=integration DAEMON_TEST_SHARD_INDEX=2 \
+  DAEMON_TEST_SHARD_COUNT=3 DAEMON_TEST_INTEGRATION_SHARDS=3 \
+  DAEMON_TEST_EVIDENCE_DIR=$TMP/evidence run_check daemon test
+assert_rc 0
+OUT=$(cat "$stub.args")
+assert_contains $'scripts/daemon-test-shards.py\nrun\n--kind\nintegration\n--index\n2\n--count\n3'
+assert_contains $'--integration-count\n3\n--evidence-dir'
+
 echo "assertions: $pass passed, $fail failed"
 if [ "$fail" -ne 0 ]; then
   exit 1
