@@ -1,8 +1,8 @@
 ---
 title: Freeside Project Plan
-revision: 88
+revision: 90
 status: active
-updated: 2026-10-14
+updated: 2026-10-20
 ---
 
 # Freeside
@@ -3762,8 +3762,9 @@ Four machine-enforced rules govern evidence:
    content and names neither the daemon nor the App, so two daemons that
    publish the same candidate for one repository to the same head branch
    converge on one PR. Section
-   [10](#10-operations-and-onboarding) prevents that: `prod` is stopped during an attended real-work run, and
-   the operator never runs one work unit in both while either has it active.
+   [10](#10-operations-and-onboarding) prevents that: `prod` runs without a
+   driver during an attended real-work run, so it never publishes, and the
+   operator never runs one work unit in both while either has it active.
    The publisher waits for 1B because the first repository is deliberately
    non-UI (Section [11](#11-roadmap-build-order-and-coordination)). Phase 1A
    ships the artifact schema, provenance enforcement, and client rendering; 1B
@@ -5549,16 +5550,22 @@ stay with that run.
   envelope, and janitor journal live in those directories, so a copy would be
   a second authority for one App (GitHub App Agent Identity below). This holds
   even while `prod` itself does not publish: `prod`'s directories are where
-  the App's single authority lives. `prod` stays stopped for the whole run;
-  the supervised `dev` label is unaffected. The rig lease refuses to be
-  acquired while `ai.freeside.daemon` is loaded, but it checks only then. A
-  real-work build must read and write the authority and janitor journal
-  formats that the installed `prod` build accepts. The daemon enforces the
-  exception (#1583): its `-prod-app-authority` flag admits exactly those two
-  directories, only with a live production rig lease, and only when the
-  installed `prod` daemon reports that it accepts every format this build
-  writes. `prod` refuses to start while a production rig lease, live or
-  stale, exists, which keeps it stopped for the rest of the run.
+  the App's single authority lives. `prod` keeps running for the whole run,
+  but without a driver: a driverless `prod` never opens those directories,
+  so the authority keeps one writer. Both sides enforce this, so neither
+  needs a lock on the other (#2080). The deputy checks the loaded `prod` once
+  it holds the lease and enables execution only when `prod` reports
+  `disabled` over its control socket or is not running; a `prod` that does
+  not answer that read fails the check. A `prod` that starts while a
+  production rig lease, live or stale, exists refuses `-driver fake`,
+  `-driver claude`, and the one-shot fake publication. The supervised `dev`
+  label is unaffected. A real-work build must read and write the authority
+  and janitor journal formats that the installed `prod` build accepts. The
+  daemon enforces the exception (#1583): its `-prod-app-authority` flag
+  admits exactly those two directories, only with a live production rig
+  lease, only when the installed `prod` daemon reports that it accepts
+  every format this build writes, and only when a running `prod` reports
+  `disabled`.
   The path rules fix where credentials live, not whose they are, so outside
   those directories this rule is operator discipline, not a check.
 - **A non-prod instance never names a prod root.** Provider credentials are
@@ -5602,9 +5609,10 @@ stay with that run.
   exists). The installed app's `daemon start|stop|status` command is the
   second. The operator may run it. A script or agent may run it against
   `prod` only inside a procedure the operator started that names the command:
-  the walkthrough's stop before the rig, its restore after the rig, and the
-  exit run. Tests, dev scripts, and agents doing other work still never stop,
-  unload, or re-register `ai.freeside.daemon`.
+  the walkthrough's restore after the rig, its stop before resuming a
+  retained session saved before #2080, and the exit run. Tests, dev
+  scripts, and agents doing other work still never stop, unload, or
+  re-register `ai.freeside.daemon`.
 
 `dev` ships with the first installer change, alongside `prod`: the installer's
 identity constants become parameters of the environment either way, so a
@@ -6245,37 +6253,30 @@ Record material changes here by revision, with the decider in parentheses.
 - On first re-litigation, promote the decision to a `docs/decisions/` ADR that
   cites its history entry.
 
-Revision 89 ("A Base Advance Before Publication Re-Enters The Run"):
+Revision 90 ("`prod` Runs Driverless During A Real-Work Run"):
 
-1. **A pre-publication base advance re-enters instead of ending the run.**
-   When the publication audit finds the target base advanced and no
-   publication intent is committed, the daemon keeps the head, seals a
-   re-entry authority naming its own audited tip, verifies and reviews the
-   prospective merge, carries every adjudicated disposition forward by
-   finding identity, and publishes against the new base (Sections
-   [6](#6-verification) and [7](#7-review-policy)). The audit stays the only
-   base-freshness gate.
-2. **The advance costs exactly one re-review, of the prospective merge.**
-   It is an ordinary round that counts toward `hard_round_limit`. A
-   re-emitted finding keeps its carried disposition unless it was `fixed`
-   (a failed prior fix) or its adjudication's bound specification,
-   instruction, or policy digest changed at the new base; then it is
-   re-adjudicated, with the carried disposition as history. Only new and
-   re-adjudicated findings lead to further rounds, through ordinary
-   adjudication and remediation. A conflicting merge, or a limit with no room
-   for the round, ends the run in `publish_blocked` with hold reason
-   `base_advanced`.
-3. **Rejected options.** A `publish_blocked` card action that reruns from
-   the new base (it needs a person, so a human loop stays exposed to the next
-   merge); skipping re-review when the advance touches disjoint paths
-   (Section [6](#6-verification) binds base-dependent proofs to the base, and
-   disjoint files do not prove independence); publishing on the stale audit;
-   and a base watch during human gates (it shortens the loss window but adds
-   nothing once re-entry exists); and re-adjudicating every re-emitted
-   finding (it repeats decisions made under unchanged inputs).
+1. **`prod` keeps running, without a driver, while a real-work run holds the
+   production rig lease.** A driverless `prod` never opens the App
+   authority's files, so the run stays their only writer and the operator no
+   longer stops and restores the installed daemon around a run (Section
+   [10](#10-operations-and-onboarding), Environments). This revises revision
+   71 item 2, which kept `prod` stopped and deferred running both to #1568.
+   A driverless `prod` runs no janitor, so the GitHub-side lease stays
+   declined on that item's basis.
+2. **Both sides enforce it, and neither locks the other.** A `prod` that
+   starts while a lease manifest, live or stale, exists refuses a driver and
+   the one-shot fake publication. The deputy, once it holds the lease, reads
+   the loaded `prod`'s execution mode over its control socket and enables
+   execution only for `disabled` or no running `prod`; a `prod` that does
+   not answer fails the check closed.
+3. **Rejected options.** Keeping the stop (the restore is the step that
+   failed the 2026-10-10 exit run); reporting the mode on `/health` (its
+   schema is closed and paired with generated clients, a contract change);
+   and reading an unanswering advertisement as "not running" (a live `prod`
+   with a driver behind a dead socket would pass).
 
-(Owner decision in #2058;
-[decision note](../devlog/2026-10-18-0940-pre-publication-base-advance.md).)
+(Owner decision in the #1938 plan comment of 2026-10-14, delivered by #2080;
+[decision note](../devlog/2026-10-20-1013-prod-runs-driverless.md).)
 
 ## 14. Risks
 

@@ -2781,3 +2781,35 @@ The client work is #1798 to #1803.)
 
 (Owner decision in #1990;
 [decision note](../../devlog/2026-10-14-1140-per-finding-adjudication.md).)
+
+## Revision 89 ("A Base Advance Before Publication Re-Enters The Run"):
+
+1. **A pre-publication base advance re-enters instead of ending the run.**
+   When the publication audit finds the target base advanced and no
+   publication intent is committed, the daemon keeps the head, seals a
+   re-entry authority naming its own audited tip, verifies and reviews the
+   prospective merge, carries every adjudicated disposition forward by
+   finding identity, and publishes against the new base (Sections
+   [6](../plan.md#6-verification) and [7](../plan.md#7-review-policy)). The audit stays the only
+   base-freshness gate.
+2. **The advance costs exactly one re-review, of the prospective merge.**
+   It is an ordinary round that counts toward `hard_round_limit`. A
+   re-emitted finding keeps its carried disposition unless it was `fixed`
+   (a failed prior fix) or its adjudication's bound specification,
+   instruction, or policy digest changed at the new base; then it is
+   re-adjudicated, with the carried disposition as history. Only new and
+   re-adjudicated findings lead to further rounds, through ordinary
+   adjudication and remediation. A conflicting merge, or a limit with no room
+   for the round, ends the run in `publish_blocked` with hold reason
+   `base_advanced`.
+3. **Rejected options.** A `publish_blocked` card action that reruns from
+   the new base (it needs a person, so a human loop stays exposed to the next
+   merge); skipping re-review when the advance touches disjoint paths
+   (Section [6](../plan.md#6-verification) binds base-dependent proofs to the base, and
+   disjoint files do not prove independence); publishing on the stale audit;
+   and a base watch during human gates (it shortens the loss window but adds
+   nothing once re-entry exists); and re-adjudicating every re-emitted
+   finding (it repeats decisions made under unchanged inputs).
+
+(Owner decision in #2058;
+[decision note](../../devlog/2026-10-18-0940-pre-publication-base-advance.md).)
