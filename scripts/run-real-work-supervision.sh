@@ -22,8 +22,7 @@ real_work_report_failure() {
 }
 
 # real_work_waits_on_human reports whether a supervision state is a decision
-# gate: the daemon is idle and only a human can advance the run. A hold is not
-# one here, because the follow snapshot does not show it.
+# gate: the daemon is idle and only a human can advance the run.
 real_work_waits_on_human() {
 	case "$1:$2" in
 	specification:waiting_for_specification_approval | implementation:attention_required)
@@ -42,13 +41,14 @@ real_work_waits_on_human() {
 # stays unreadable across FREESIDE_REAL_RUN_MAX_OBSERVATION_FAILURES
 # consecutive attempts (default 10), and 2 for an invalid numeric
 # configuration. The timeout bounds a runaway unattended run, so its clock
-# pauses while the run waits on a human (real_work_waits_on_human) and resumes
-# when the run leaves that state; startup, holds, and unreadable observations
-# still count. Liveness checks run on every observation, paused or not.
+# pauses while the run has a visible hold or waits on a human
+# (real_work_waits_on_human), and resumes when neither applies. Startup and
+# unreadable observations still count. Liveness checks run on every
+# observation, paused or not.
 real_work_supervise() {
 	local freesided=$1 db_path=$2 specification_run_id=$3 implementation_run_id=$4
 	local daemon_pid=$5 timeout_seconds=$6 snapshot_path=$7 interval_seconds=${8:-1}
-	local lane run_id state previous_state="" state_changed resolved
+	local lane run_id state hold_reason previous_state="" state_changed resolved
 	local spent=0 last_tick now gated=false waiting
 	local observation_failures=0
 	local max_observation_failures=${FREESIDE_REAL_RUN_MAX_OBSERVATION_FAILURES:-10}
@@ -77,7 +77,7 @@ real_work_supervise() {
 	last_tick=$SECONDS
 	while true; do
 		# Each interval is charged to the state observed at its start, so a
-		# gate's wait, including its sleeps, never reaches the budget.
+		# gate or hold's wait, including its sleeps, never reaches the budget.
 		now=$SECONDS
 		[[ "$gated" == true ]] || spent=$((spent + now - last_tick))
 		last_tick=$now
@@ -113,6 +113,7 @@ real_work_supervise() {
 		fi
 		observation_failures=0
 		state=$(real_work_snapshot_field "$snapshot_path" state)
+		hold_reason=$(real_work_snapshot_field "$snapshot_path" hold_reason)
 		if [[ -z "$state" ]]; then
 			echo "run-real-work: snapshot for $lane run=$run_id has no state" >&2
 			return 1
@@ -123,7 +124,7 @@ real_work_supervise() {
 			echo "run-real-work: $lane run=$run_id state=$state" >&2
 			previous_state=$state
 		fi
-		if real_work_waits_on_human "$lane" "$state"; then
+		if [[ -n "$hold_reason" ]] || real_work_waits_on_human "$lane" "$state"; then
 			waiting=true
 		else
 			waiting=false
@@ -131,7 +132,7 @@ real_work_supervise() {
 		if [[ "$waiting" != "$gated" ]]; then
 			gated=$waiting
 			if [[ "$gated" == true ]]; then
-				echo "run-real-work: supervision deadline paused at $lane run=$run_id state=$state; ${spent}s of ${timeout_seconds}s executing time used" >&2
+				echo "run-real-work: supervision deadline paused at $lane run=$run_id state=$state${hold_reason:+ hold_reason=$hold_reason}; ${spent}s of ${timeout_seconds}s executing time used" >&2
 			else
 				echo "run-real-work: supervision deadline resumed for $lane run=$run_id; ${spent}s of ${timeout_seconds}s executing time used" >&2
 			fi

@@ -301,6 +301,66 @@ func TestFollowCommandPrintsBoundedSupervisionSnapshot(t *testing.T) {
 	}
 }
 
+func TestFollowCommandSnapshotProjectsCurrentHoldWithoutAttention(t *testing.T) {
+	st, path := openFollowStore(t)
+	ctx := context.Background()
+	if err := st.Write(ctx, func(tx *store.WriteTx) error {
+		return tx.PutRun(ctx, domain.Run{
+			ID: followRun, ProjectID: "project-follow", SpecDigest: "sha256:spec",
+			PolicyDigest: "sha256:policy",
+		})
+	}); err != nil {
+		t.Fatalf("seed run: %v", err)
+	}
+	appendFollowMilestones(t, st, followMilestone(domain.MilestoneRunSubmitted, 0))
+
+	checkSnapshot := func(name string, want domain.RunHoldReason) {
+		t.Helper()
+		t.Run(name, func(t *testing.T) {
+			output, err := runFollowCLI(t, "-db", path, "-run", string(followRun), "-snapshot")
+			if err != nil {
+				t.Fatalf("snapshot: %v", err)
+			}
+			var got supervisionSnapshot
+			if err := json.Unmarshal([]byte(output), &got); err != nil {
+				t.Fatalf("decode snapshot: %v", err)
+			}
+			if got.RunID != followRun || got.State != SupervisionPending ||
+				got.Outcome != domain.RunOutcomePending || got.Reason != nil {
+				t.Fatalf("snapshot identity/state/outcome = %+v", got)
+			}
+			if len(got.AttentionItems) != 0 || got.LastAttentionItem != nil {
+				t.Fatalf("snapshot has own attention: %+v", got)
+			}
+			var fields map[string]json.RawMessage
+			if err := json.Unmarshal([]byte(output), &fields); err != nil {
+				t.Fatalf("decode snapshot fields: %v", err)
+			}
+			raw, present := fields["hold_reason"]
+			if want == "" {
+				if present || got.HoldReason != nil {
+					t.Fatalf("unheld snapshot has hold_reason: %s", output)
+				}
+			} else if !present || string(raw) != `"`+string(want)+`"` ||
+				got.HoldReason == nil || *got.HoldReason != want {
+				t.Fatalf("hold_reason = %s, want %q", raw, want)
+			}
+			if strings.Count(strings.TrimSpace(output), "\n") != 0 {
+				t.Fatalf("snapshot is not one JSON document line: %q", output)
+			}
+		})
+	}
+	checkSnapshot("never held", "")
+	recordFollowHold(t, st, domain.HoldBlockingSystemHealth, 5)
+	checkSnapshot("held without own attention", domain.HoldBlockingSystemHealth)
+	if err := st.Write(ctx, func(tx *store.WriteTx) error {
+		return tx.ClearRunHold(ctx, followRun)
+	}); err != nil {
+		t.Fatalf("clear hold: %v", err)
+	}
+	checkSnapshot("hold cleared", "")
+}
+
 // TestFollowCommandSnapshotProjectsAdjudications asserts the machine-readable
 // snapshot threads the bounded adjudication dispatch projection end to end and
 // leaks no adjudication prose: one engine fast-path entry emits its producer,

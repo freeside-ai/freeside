@@ -265,6 +265,70 @@ run_case gate-then-executing "" 1 124 0.1
 assert_contains "$fixture_root/gate-then-executing/stderr" 'supervision deadline resumed for implementation run=run-impl'
 assert_contains "$fixture_root/gate-then-executing/stderr" 'timed out supervising implementation run=run-impl'
 
+# A hold pauses even without attention items or a lifecycle-state change.
+hold_extra=',"hold_reason":"blocking_system_health"'
+write_gated_sequence run-impl 25 "$(snapshot pending pending "$hold_extra")" \
+	"$(snapshot published published)"
+started=$SECONDS
+run_case hold-pause "" 1 0 0.1
+assert_outlasted_budget hold-pause "$started" 1
+assert_count "$fixture_root/hold-pause/stderr" 'supervision deadline paused at implementation run=run-impl state=pending hold_reason=blocking_system_health' 1
+assert_count "$fixture_root/hold-pause/stderr" 'supervision deadline resumed for implementation run=run-impl' 1
+
+# A held specification still hands off to the selected implementation.
+write_gated_sequence run-spec 40 "$(snapshot pending pending "$hold_extra")" \
+	"$(snapshot implementation_bound pending)"
+write_sequence run-impl "$(snapshot published published)"
+started=$SECONDS
+run_case specification-hold run-spec 2 0 0.1
+assert_outlasted_budget specification-hold "$started" 2
+assert_count "$fixture_root/specification-hold/stderr" 'supervision deadline paused at specification run=run-spec state=pending hold_reason=blocking_system_health' 1
+assert_count "$fixture_root/specification-hold/stderr" 'supervision deadline resumed for specification run=run-spec' 1
+assert_contains "$fixture_root/specification-hold/stderr" 'implementation run=run-impl state=published'
+
+# Clearing a hold resumes charging even while the state stays pending.
+write_gated_sequence run-impl 10 "$(snapshot pending pending "$hold_extra")" \
+	"$(snapshot pending pending)"
+run_case hold-then-executing "" 1 124 0.1
+assert_count "$fixture_root/hold-then-executing/stderr" 'state=pending' 2
+assert_count "$fixture_root/hold-then-executing/stderr" 'supervision deadline resumed for implementation run=run-impl' 1
+assert_contains "$fixture_root/hold-then-executing/stderr" 'timed out supervising implementation run=run-impl'
+
+# Either pause cause can take over from the other, including an observation
+# with both. The clock resumes only once, after both have cleared.
+for transition in hold-to-human human-to-hold; do
+	if [[ "$transition" == hold-to-human ]]; then
+		first=$(snapshot pending pending "$hold_extra")
+		last=$(snapshot attention_required pending "$parked_extra")
+	else
+		first=$(snapshot attention_required pending "$parked_extra")
+		last=$(snapshot pending pending "$hold_extra")
+	fi
+	write_gated_sequence run-impl 25 "$first" \
+		"$(snapshot attention_required pending "$hold_extra$parked_extra")" \
+		"$last" "$(snapshot published published)"
+	started=$SECONDS
+	run_case "$transition" "" 1 0 0.1
+	assert_outlasted_budget "$transition" "$started" 1
+	assert_count "$fixture_root/$transition/stderr" 'supervision deadline paused at implementation run=run-impl' 1
+	assert_count "$fixture_root/$transition/stderr" 'supervision deadline resumed for implementation run=run-impl' 1
+done
+
+# A hold never takes precedence over a terminal result in either lane.
+for lane in specification implementation; do
+	specification=""
+	[[ "$lane" != specification ]] || specification=run-spec
+	for state in completed failed blocked; do
+		expected=1
+		[[ "$lane:$state" != implementation:completed ]] || expected=0
+		write_sequence run-spec "$(snapshot "$state" "$state" "$hold_extra")"
+		write_sequence run-impl "$(snapshot "$state" "$state" "$hold_extra")"
+		run_case "held-terminal-$lane-$state" "$specification" 3 "$expected"
+	done
+done
+write_sequence run-impl "$(snapshot published published "$hold_extra")"
+run_case held-published "" 3 0
+
 # Liveness still runs while the deadline is paused: a daemon that exits at a
 # gate ends supervision with status 1, after the 1 s budget would have expired.
 write_sequence run-impl "$(snapshot attention_required pending "$parked_extra")"
@@ -286,6 +350,69 @@ if [[ "$dead_daemon_status" -ne 1 ]]; then
 fi
 assert_outlasted_budget gate-dead-daemon "$started" 1
 assert_contains "$dead_daemon_dir/stderr" 'the daemon exited before implementation run=run-impl finished'
+
+# A daemon exit and a lost rig are still detected after observing a hold.
+write_sequence run-impl "$(snapshot pending pending "$hold_extra")"
+dead_daemon_dir=$fixture_root/hold-dead-daemon
+mkdir -p "$dead_daemon_dir"
+sleep 2 &
+daemon_pid=$!
+started=$SECONDS
+set +e
+real_work_supervise "$stub" /state/freeside.db "" run-impl "$daemon_pid" \
+	1 "$dead_daemon_dir/snapshot.json" 0.1 2>"$dead_daemon_dir/stderr"
+dead_daemon_status=$?
+set -e
+wait "$daemon_pid" || true
+if [[ "$dead_daemon_status" -ne 1 ]]; then
+	echo "hold-dead-daemon: status=$dead_daemon_status, want 1" >&2
+	cat "$dead_daemon_dir/stderr" >&2
+	exit 1
+fi
+assert_outlasted_budget hold-dead-daemon "$started" 1
+assert_contains "$dead_daemon_dir/stderr" 'hold_reason=blocking_system_health'
+assert_contains "$dead_daemon_dir/stderr" 'the daemon exited before implementation run=run-impl finished'
+
+require_live_rig() {
+	[[ ! -f "$stub_root/run-impl.count" ]]
+}
+write_sequence run-impl "$(snapshot pending pending "$hold_extra")"
+run_case hold-lost-rig "" 3 1
+assert_contains "$fixture_root/hold-lost-rig/stderr" 'hold_reason=blocking_system_health'
+assert_count "$fixture_root/hold-lost-rig/stderr" 'supervision deadline resumed' 0
+unset -f require_live_rig
+
+# An unreadable snapshot discards the pause. Both executing time and the
+# existing consecutive-failure limit still bound subsequent failed reads.
+for bound in timeout failures; do
+	case_dir=$fixture_root/hold-unreadable-$bound
+	mkdir -p "$case_dir"
+	write_sequence run-impl "$(snapshot pending pending "$hold_extra")" "__UNREADABLE__"
+	if [[ "$bound" == timeout ]]; then
+		budget=1
+		failure_limit=10
+		expected=124
+	else
+		budget=30
+		failure_limit=3
+		expected=1
+	fi
+	set +e
+	FREESIDE_REAL_RUN_MAX_OBSERVATION_FAILURES=$failure_limit \
+		real_work_supervise "$stub" /state/freeside.db "" run-impl "" \
+		"$budget" "$case_dir/snapshot.json" 0.5 2>"$case_dir/stderr"
+	status=$?
+	set -e
+	if [[ "$status" -ne "$expected" ]]; then
+		echo "hold-unreadable-$bound: status=$status, want $expected" >&2
+		cat "$case_dir/stderr" >&2
+		exit 1
+	fi
+	assert_contains "$case_dir/stderr" 'hold_reason=blocking_system_health'
+	assert_count "$case_dir/stderr" 'supervision deadline resumed for implementation run=run-impl' 1
+done
+assert_contains "$fixture_root/hold-unreadable-timeout/stderr" 'timed out supervising implementation run=run-impl'
+assert_contains "$fixture_root/hold-unreadable-failures/stderr" 'could not observe implementation run=run-impl after 3 consecutive attempts'
 
 # A lock collision against the live database is a transient, not a run
 # failure: the supervisor retries and the run still reaches publication.

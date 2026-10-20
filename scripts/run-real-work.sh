@@ -188,16 +188,16 @@
 #                                    3600). It bounds the supervised workflow up
 #                                    to publication but pauses while the run
 #                                    waits for specification approval or at an
-#                                    implementation attention card, and resumes
-#                                    when the run leaves that state (a
+#                                    implementation attention card, or has a
+#                                    visible hold. It resumes when neither a
+#                                    human gate nor a hold remains (a
 #                                    specification attention card still ends
-#                                    supervision). Startup, a hold (the
-#                                    follow snapshot does not show one), and
+#                                    supervision). Startup and
 #                                    unreadable observations still count. It
 #                                    must exceed
 #                                    FREESIDE_REAL_RUN_WRITER_STOP_TIMEOUT plus
 #                                    the other executing time (daemon
-#                                    startup, holds, publication), or
+#                                    startup and publication), or
 #                                    supervision returns 124 and stops the
 #                                    daemon before the writer budget is
 #                                    reached; raise both together. The clock
@@ -527,9 +527,10 @@ db_path="$FREESIDE_REAL_RUN_STATE_ROOT/freeside.db"
 listen_address="$FREESIDE_REAL_RUN_LISTEN"
 rig_release_timeout=${FREESIDE_REAL_RUN_RIG_RELEASE_TIMEOUT_SECONDS:-30}
 # Supervision bounds executing time up to publication: its clock pauses while
-# the run waits on a human (specification approval or an implementation
-# attention card), because a waiting run is idle, not runaway. A specification
-# attention card still ends supervision. Startup, a hold, and unreadable
+# the run has a visible hold or waits on a human (specification approval or an
+# implementation attention card), because a waiting run is idle, not runaway.
+# It resumes when neither applies. A specification attention card still ends
+# supervision. Startup and unreadable
 # observations still count. It must outlast the writer budget plus that other
 # executing time, or it returns 124 and cleanup stops the daemon before the
 # writer's own deadline can fire; `freesided submit` rejects a writer budget

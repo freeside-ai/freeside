@@ -10,11 +10,11 @@ the walkthrough.
 Before publication, the deadline (`FREESIDE_REAL_RUN_TIMEOUT_SECONDS`) counts
 only executing time, from the moment the harness starts supervising the run;
 preflight and a client-target selection wait come before that and are not
-bounded. It pauses while the run waits at the specification
+bounded. It pauses while the run has a visible hold or waits at the specification
 approval gate or at an implementation attention card such as a review dispute,
-so an operator who is away does not lose the run. It does not pause at a
-specification attention card, which still ends supervision and runs cleanup, or
-during a hold, because the harness's follow snapshot does not show one.
+so an operator who is away does not lose the run. Counting resumes when neither
+a hold nor a human gate remains. Startup and unreadable observations still
+count. A specification attention card still ends supervision and runs cleanup.
 
 Completed-history verification is different: it verifies the selected run's
 authenticated completion and remote merge, then exits through the ordinary
