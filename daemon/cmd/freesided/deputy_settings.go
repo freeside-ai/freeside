@@ -274,8 +274,8 @@ func (s *loadedDeputySettings) validate() error {
 	if s.AgentTree.AuthIdentity == s.AgentTree.ReviewAuthIdentity {
 		return errors.New("agent_tree.review_auth_identity must differ from agent_tree.auth_identity")
 	}
-	if s.Review.AuthMode != ward.CodexAuthSubscription && s.Review.AuthMode != ward.CodexAuthAPIKey {
-		return errors.New("review.auth_mode is not subscription or api_key")
+	if s.Review.AuthMode != ward.CodexAuthSubscription {
+		return errors.New("review.auth_mode must be subscription; api_key enrollment is not supported yet (#1677)")
 	}
 	if s.Review.Effort == "" {
 		return errors.New("review.effort is required")
@@ -317,6 +317,12 @@ func (s *loadedDeputySettings) validate() error {
 		if !filepath.IsAbs(path.value) {
 			return fmt.Errorf("%s must be an absolute path", path.name)
 		}
+		if filepath.Clean(path.value) != path.value {
+			return fmt.Errorf("%s must be a clean path", path.name)
+		}
+	}
+	if s.Prompts.VendorInstructions == string(filepath.Separator) {
+		return errors.New("prompts.vendor_instructions must not be the root directory")
 	}
 	var err error
 	if s.stopTime, err = nonNegativeDuration(s.Timeouts.WriterStop); err != nil {

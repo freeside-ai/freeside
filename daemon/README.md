@@ -1811,6 +1811,12 @@ refused, and each refusal is one line naming the field. The SHA-256 of the
 file bytes is the settings revision, printed at start and recorded in the
 composition manifest.
 
+Configured filesystem paths must be absolute and clean: no `.` or `..`
+components, repeated separators, or trailing separator. `prompts.vendor_instructions` cannot be
+`/`. Optional judgment paths are checked when configured;
+`manual_submission_config` may be empty. `agent_tree.auth_volume` is a named
+container volume, not a host path.
+
 | Group | Keys |
 | --- | --- |
 | top level | `listen`, `seed_root`, `approved_recipe`, `manual_submission_config` |
@@ -1818,7 +1824,7 @@ composition manifest.
 | `repository` | `repo`, `repository_id`, `base_ref`, `base_sha`, `allowed_paths`, `checkout`, `project` |
 | `prompts` | `prompt_package`, `specification_prompt_package`, `remediation_prompt_package`, `vendor_instructions` |
 | `agent_tree` | `checkout` and `commit` (the policy tree adoption must reproduce), and the `auth adopt` inputs: `auth_identity`, `review_auth_identity`, `cost_owner`, `review_cost_owner`, `claude_account`, `terms_basis_date`, `pricing_revision`, `offer_not_after`, `auth_volume` |
-| `review` | `input_root`, `auth_mode`, `auth_snapshot`, `instructions`, `model`, `effort` |
+| `review` | `input_root`, `auth_mode` (`subscription` only; API-key enrollment awaits #1677), `auth_snapshot`, `instructions`, `model`, `effort` |
 | `judgment` | `claude_bin`, `claude_sha256`, `model`, `publication_author_prompt`: all empty or all set |
 | `prod` | `app_state_dir`, `app_credentials_dir`, `installed_daemon` |
 | `timeouts` | `writer_stop`, `writer_stall`: Go durations |
@@ -1831,18 +1837,24 @@ an 8 GiB review workspace. The supervision deadline stays a `submit` flag.
 **Start-up order.**
 
 1. Print the build, the settings digest, and the repository it publishes to.
-2. Take the rig lease. A live holder refuses. A stale lease for this root is
+2. Validate the manual submission file, listener address policy, Claude
+   driver configuration, and all three prompt packages using the daemon's
+   own validators. Invalid settings exit with status 2 before the lease,
+   credential adoption, or composition evidence. This check binds no
+   listener and opens no database. Startup still revalidates files and
+   addresses when it uses them, since they can change after this check.
+3. Take the rig lease. A live holder refuses. A stale lease for this root is
    recovered as `freesided rig recover` would, and a `system_health` card
    (`deputy_run_interrupted`) names the run it interrupted. A stale lease
    for another root refuses and names the `rig recover` command.
-3. Check `prod`'s App authority against `prod.installed_daemon`, under the
+4. Check `prod`'s App authority against `prod.installed_daemon`, under the
    lease, and record the two auth identities from the settings once (a
    later file that names other ones is refused).
-4. Self-check: adopt the agent tree and compare the patch with
+5. Self-check: adopt the agent tree and compare the patch with
    `agent_tree.commit`, then run the composition preflight. Both need the
    database idle and the listener free, so they run before the daemon
    serves.
-5. Serve. On a passing self-check the Claude driver is composed and
+6. Serve. On a passing self-check the Claude driver is composed and
    execution is enabled. On a failure the daemon serves without it, and one
    blocking `system_health` card (`deputy_preflight_failed`) names the
    failed checks and the manifest; a later passing start resolves it.

@@ -254,23 +254,55 @@ func loadAgentSelection(ctx context.Context, cfg claudeDriverConfig) (*engine.Ag
 	}, nil
 }
 
-// ingestPromptPackage stores the prompt package's bytes and returns their
-// content address, so the digest the admission records and the bytes the
-// materializer resolves are the same object by construction.
-func ingestPromptPackage(blobs *signet.BlobStore, path string) (domain.Digest, []byte, error) {
+func readPromptPackage(path string) ([]byte, error) {
 	body, err := os.ReadFile(path) //nolint:gosec // G304: operator-configured control-plane prompt package
 	if err != nil {
-		return "", nil, fmt.Errorf("read prompt package: %w", err)
+		return nil, fmt.Errorf("read prompt package: %w", err)
 	}
 	if len(body) == 0 {
-		return "", nil, fmt.Errorf("prompt package %s is empty", path)
+		return nil, fmt.Errorf("prompt package %s is empty", path)
 	}
+	return body, nil
+}
+
+type promptPackages struct {
+	implementation []byte
+	specification  []byte
+	remediation    []byte
+}
+
+// readPromptPackages shares composition's file and role checks with the
+// deputy's early validation, without opening a store or writing blobs.
+func readPromptPackages(cfg claudeDriverConfig) (promptPackages, error) {
+	var packages promptPackages
+	var err error
+	if packages.implementation, err = readPromptPackage(cfg.PromptPackageFile); err != nil {
+		return promptPackages{}, fmt.Errorf("implementation prompt package: %w", err)
+	}
+	if packages.specification, err = readPromptPackage(cfg.SpecificationPromptPackageFile); err != nil {
+		return promptPackages{}, fmt.Errorf("specification prompt package: %w", err)
+	}
+	if err := claude.ValidatePromptPackageRoles(packages.implementation, packages.specification); err != nil {
+		return promptPackages{}, fmt.Errorf("prompt package roles: %w", err)
+	}
+	if packages.remediation, err = readPromptPackage(cfg.RemediationPromptPackageFile); err != nil {
+		return promptPackages{}, fmt.Errorf("remediation prompt package: %w", err)
+	}
+	if err := claude.ValidatePromptPackageRoles(packages.implementation, packages.remediation); err != nil {
+		return promptPackages{}, fmt.Errorf("remediation prompt package roles: %w", err)
+	}
+	return packages, nil
+}
+
+// storePromptPackage persists the exact validated bytes by content address;
+// composition must not re-read a mutable file after validating its role.
+func storePromptPackage(blobs *signet.BlobStore, body []byte) (domain.Digest, error) {
 	sum := sha256.Sum256(body)
 	digest := domain.Digest(contentaddr.Format(sum[:]))
 	if _, err := blobs.Put(digest, bytes.NewReader(body)); err != nil {
-		return "", nil, fmt.Errorf("store prompt package: %w", err)
+		return "", fmt.Errorf("store prompt package: %w", err)
 	}
-	return digest, body, nil
+	return digest, nil
 }
 
 // attendedAdmissionFloor is ward's honest base capability class before the
@@ -1544,27 +1576,21 @@ func composeClaudeDriver(
 	if err != nil {
 		return nil, err
 	}
-	promptPackage, promptPackageBody, err := ingestPromptPackage(blobs, cfg.PromptPackageFile)
+	packages, err := readPromptPackages(cfg)
 	if err != nil {
 		return nil, err
 	}
-	specificationPromptPackage, specificationPromptPackageBody, err := ingestPromptPackage(
-		blobs, cfg.SpecificationPromptPackageFile)
+	promptPackage, err := storePromptPackage(blobs, packages.implementation)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("implementation prompt package: %w", err)
 	}
-	if err := claude.ValidatePromptPackageRoles(
-		promptPackageBody, specificationPromptPackageBody); err != nil {
-		return nil, fmt.Errorf("prompt package roles: %w", err)
-	}
-	remediationPromptPackage, remediationPromptPackageBody, err := ingestPromptPackage(
-		blobs, cfg.RemediationPromptPackageFile)
+	specificationPromptPackage, err := storePromptPackage(blobs, packages.specification)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("specification prompt package: %w", err)
 	}
-	if err := claude.ValidatePromptPackageRoles(
-		promptPackageBody, remediationPromptPackageBody); err != nil {
-		return nil, fmt.Errorf("remediation prompt package roles: %w", err)
+	remediationPromptPackage, err := storePromptPackage(blobs, packages.remediation)
+	if err != nil {
+		return nil, fmt.Errorf("remediation prompt package: %w", err)
 	}
 	// Resolve the workspace-hydration command before any network-touching
 	// composition, so an image the record alone rules out fails at startup

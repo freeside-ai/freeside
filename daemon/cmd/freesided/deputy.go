@@ -10,6 +10,7 @@ import (
 	"io"
 	"io/fs"
 	"log/slog"
+	"net/netip"
 	"os"
 	"os/signal"
 	"os/user"
@@ -86,6 +87,7 @@ type deputyHost struct {
 	leaseRoot        string
 	launchAgentLabel string
 	now              func() time.Time
+	tailscaleIPs     func() ([]netip.Addr, error)
 }
 
 func productionDeputyHost() deputyHost {
@@ -95,6 +97,7 @@ func productionDeputyHost() deputyHost {
 		adopt:            productionAuthAdoptDeps(),
 		launchAgentLabel: defaultRigLaunchAgentLabel,
 		now:              func() time.Time { return time.Now().UTC() },
+		tailscaleIPs:     readTailscaleIPs,
 	}
 }
 
@@ -141,6 +144,9 @@ func runDeputy(
 	paths := newDeputyPaths(stateRoot)
 	_, _ = fmt.Fprintf(stderr, "freesided deputy: settings %s; publishes to %s (repository %d), base %s\n",
 		settings.Digest, settings.Repository.Repo, settings.Repository.RepositoryID, settings.Repository.BaseRef)
+	if err := checkDeputyDaemonSettings(settings, paths, host.tailscaleIPs); err != nil {
+		return fmt.Errorf("%w: %w", errDeputyUsage, err)
+	}
 
 	home, err := os.UserHomeDir()
 	if err != nil {
@@ -663,13 +669,21 @@ func deputyDaemonConfig(
 	if launch.ManifestDigest == "" {
 		return cfg
 	}
-	cfg.Claude = &claudeDriverConfig{
+	claudeConfig := deputyClaudeDriverConfig(settings, paths, launch.Manifest.JudgmentConfigurationDigest)
+	cfg.Claude = &claudeConfig
+	return cfg
+}
+
+func deputyClaudeDriverConfig(
+	settings loadedDeputySettings, paths deputyPaths, judgmentDigest string,
+) claudeDriverConfig {
+	return claudeDriverConfig{
 		AgentImage: domain.ImageRef(settings.Images.Agent), ExporterImage: settings.Images.Exporter,
 		ContainerBin: deputyContainerBin, SeedRoot: settings.SeedRoot,
 		WriterStopTimeout: settings.stopTime, WriterStallInterval: settings.stallFor,
 		Rebuild:  settings.rebuildInputs(),
 		StateDir: paths.StateRoot, RigTokenFile: paths.Acquisition,
-		Judgments:                      deputyJudgments(settings, launch.Manifest.JudgmentConfigurationDigest),
+		Judgments:                      deputyJudgments(settings, judgmentDigest),
 		ProviderEndpoints:              []string{deputyProviderEndpoints},
 		PromptPackageFile:              settings.Prompts.PromptPackage,
 		SpecificationPromptPackageFile: settings.Prompts.SpecificationPromptPackage,
@@ -687,7 +701,28 @@ func deputyDaemonConfig(
 		ReviewAuthSnapshot: settings.Review.AuthSnapshot, ReviewInstructions: settings.Review.Instructions,
 		ReviewWorkspaceSizeMB: deputyReviewWorkspaceSizeMB,
 	}
-	return cfg
+}
+
+// checkDeputyDaemonSettings refuses known startup failures before any lease,
+// credential adoption, or passing evidence. Startup still revalidates mutable
+// files and addresses when it uses them.
+func checkDeputyDaemonSettings(
+	settings loadedDeputySettings, paths deputyPaths, tailscaleIPs func() ([]netip.Addr, error),
+) error {
+	if _, err := loadManualSubmissionConfig(settings.ManualSubmissionConfig); err != nil {
+		return fmt.Errorf("settings: manual_submission_config: %w", err)
+	}
+	if _, err := resolveListenAddress(settings.Listen, tailscaleIPs); err != nil {
+		return fmt.Errorf("settings: listen: %w", err)
+	}
+	cfg := deputyClaudeDriverConfig(settings, paths, "")
+	if err := cfg.validate(); err != nil {
+		return fmt.Errorf("settings: Claude configuration: %w", err)
+	}
+	if _, err := readPromptPackages(cfg); err != nil {
+		return fmt.Errorf("settings: %w", err)
+	}
+	return nil
 }
 
 // convergeDeputyPreflightCard keeps one open card for a failed start-up
