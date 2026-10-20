@@ -28,6 +28,14 @@
 #   VACUUM         command for the OpenAPI linter (default: `go run`
 #                  of the pinned vacuum module, ~7 minutes cold)
 #
+# Local daemon lint runs:
+#   GOLANGCI_LINT_CACHE  defaults to
+#     ${XDG_CACHE_HOME:-$HOME/.cache}/freeside/golangci-lint<absolute checkout root>
+# Separate checkout caches prevent golangci-lint from reporting cached paths
+# from sibling worktrees. Explicit values pass through unchanged, including
+# an empty value (the linter's native default); shared or empty overrides give
+# up automatic isolation. CI lint runs separately through golangci-lint-action.
+#
 # Local daemon test runs:
 #   DAEMON_TEST_MAX_RUNS   simultaneous test steps (default: 1, or 0 when
 #                          CI is non-empty); 0 turns the limit off
@@ -248,8 +256,9 @@ daemon_test() (
 )
 daemon_vet() { in_dir "$ROOT/daemon" go vet ./...; }
 daemon_lint() {
+  local cache=${GOLANGCI_LINT_CACHE-${XDG_CACHE_HOME:-$HOME/.cache}/freeside/golangci-lint$ROOT}
   # shellcheck disable=SC2086 # GOLANGCI_LINT may carry arguments
-  in_dir "$ROOT/daemon" $GOLANGCI_LINT run
+  in_dir "$ROOT/daemon" env GOLANGCI_LINT_CACHE="$cache" $GOLANGCI_LINT run
 }
 
 # --- app -------------------------------------------------------------------
