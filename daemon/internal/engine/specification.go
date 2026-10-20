@@ -2826,7 +2826,7 @@ func (e *Engine) acceptResearchRequests(ctx context.Context, run domain.Run, req
 		}
 		return nil
 	})
-	if errors.Is(err, errReplay) || errors.Is(err, store.ErrTaskCancellationFenced) {
+	if errors.Is(err, errReplay) || workflowAdvancementFenced(err) {
 		return false, nil
 	}
 	if MutableAdmissionPolicyRefusal(err) {
@@ -3659,6 +3659,14 @@ func (e *Engine) reconcileSpecificationGates(ctx context.Context) (int, error) {
 	started := 0
 	for _, snapshot := range runs {
 		run := snapshot.Value
+		if err := e.store.Read(ctx, func(tx *store.ReadTx) error {
+			return tx.RequireRunWorkflowOpen(ctx, run.ID)
+		}); err != nil {
+			if errors.Is(err, store.ErrTaskWorkflowClosed) {
+				continue
+			}
+			return started, err
+		}
 		owned, err := e.ownsSpecificationRun(ctx, run)
 		if err != nil {
 			return started, err
@@ -3921,7 +3929,7 @@ func (e *Engine) startApprovedImplementation(ctx context.Context, request specif
 		WorkUnit:   cloneSpecificationWorkUnit(request.WorkUnit),
 		CampaignID: request.CampaignID, AttemptNumber: request.AttemptNumber,
 	}, &request)
-	if errors.Is(err, store.ErrTaskCancellationFenced) {
+	if workflowAdvancementFenced(err) {
 		return false, nil
 	}
 	if err == nil {
@@ -4003,7 +4011,7 @@ func (e *Engine) enqueueSpecRevision(ctx context.Context, run domain.Run, reques
 		}
 		return nil
 	})
-	if errors.Is(err, store.ErrTaskCancellationFenced) {
+	if workflowAdvancementFenced(err) {
 		return nil
 	}
 	return err

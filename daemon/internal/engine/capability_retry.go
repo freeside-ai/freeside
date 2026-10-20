@@ -31,6 +31,9 @@ func (e *Engine) reconcileCapabilityRetries(ctx context.Context) (int, error) {
 		}
 		seen[candidate.ItemID] = struct{}{}
 		made, err := e.reconcileCapabilityRetry(ctx, candidate)
+		if errors.Is(err, store.ErrTaskWorkflowClosed) {
+			continue
+		}
 		if err != nil {
 			joined = errors.Join(joined, fmt.Errorf("command %q: %w", candidate.CommandID, err))
 			continue

@@ -54,6 +54,9 @@ func (tx *WriteTx) AllocateProposalInstance(
 	if err != nil {
 		return domain.ProposalInstance{}, false, fmt.Errorf("allocate proposal instance gate: %w", err)
 	}
+	if err := tx.RequireRunWorkflowOpen(ctx, declaration.RunID); err != nil {
+		return domain.ProposalInstance{}, false, err
+	}
 	if proposal.Kind == domain.EffectFollowUpFiling {
 		if err := tx.gateFollowUpFilingSourceCurrent(ctx, declaration, proposal.FilingProposal.Source); err != nil {
 			return domain.ProposalInstance{}, false, fmt.Errorf("allocate proposal instance gate: %w", err)
@@ -313,7 +316,7 @@ func (tx *WriteTx) BindProposalItem(
 			return fmt.Errorf("bind proposal item %q: %w", itemID, ErrImmutableConflict)
 		}
 	}
-	return nil
+	return tx.RequireItemWorkflowOpen(ctx, item)
 }
 
 // gateEffectProposalItemMerge checks an effect_proposal item's prospective
@@ -1136,6 +1139,9 @@ func (tx *WriteTx) RecordProposalDecision(
 	selectedDigest *domain.Digest,
 	decidedAt time.Time,
 ) error {
+	if err := tx.RequireProposalWorkflowOpen(ctx, instanceID); err != nil {
+		return err
+	}
 	if commandID == "" || decidedAt.IsZero() {
 		return fmt.Errorf("record proposal decision: %w", domain.ErrEmptyField)
 	}
@@ -1261,6 +1267,9 @@ func (tx *WriteTx) RecordPolicyClosureApproval(
 	merge domain.ProspectiveMerge,
 	approvedAt time.Time,
 ) (domain.ClosureApproval, error) {
+	if err := tx.RequireProposalWorkflowOpen(ctx, instanceID); err != nil {
+		return domain.ClosureApproval{}, err
+	}
 	if approvedAt.IsZero() {
 		return domain.ClosureApproval{}, fmt.Errorf("record policy closure approval %q: %w", instanceID, domain.ErrEmptyField)
 	}

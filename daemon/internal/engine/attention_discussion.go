@@ -88,6 +88,13 @@ func (e *Engine) reconcileAttentionDiscussions(ctx context.Context) (int, error)
 			continue
 		}
 		reply, err := e.produceAttentionDiscussionReply(ctx, *discussion)
+		if errors.Is(err, store.ErrTaskWorkflowClosed) {
+			if _, err := e.retireClosedInvocationIntent(ctx, entry,
+				*discussion.item.Subject.RunID, discussion.item.ConversationID); err != nil {
+				return accepted, err
+			}
+			continue
+		}
 		if err != nil {
 			e.logger.Warn("attention discussion reply remains pending", "intent", entry.IdempotencyKey, "error", err)
 			continue
@@ -242,6 +249,9 @@ func (e *Engine) produceAttentionDiscussionReply(
 		return "", err
 	}
 	defer finish()
+	if err := e.claimRunDispatch(workCtx, *discussion.item.Subject.RunID); err != nil {
+		return "", err
+	}
 	reply, fallback, err := e.inference.DiscussAttentionItem(workCtx, inference.DiscussionInput{
 		Project: string(discussion.item.ProjectID), RootLineage: string(*discussion.item.Subject.RunID),
 		ItemType: string(discussion.item.Type), Reason: discussion.item.Reason,

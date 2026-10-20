@@ -686,7 +686,7 @@ func invocationDispatchHold(err error) bool {
 	// the refusal arrives from the store without ErrAgentNotAdmissible. It
 	// holds like the read-side refusal, and re-enrollment clears it.
 	return errors.Is(err, exec.ErrInputUnavailable) ||
-		errors.Is(err, store.ErrTaskCancellationFenced) ||
+		workflowAdvancementFenced(err) ||
 		errors.Is(err, domain.ErrIdentityParallelismExhausted) ||
 		errors.Is(err, ErrAgentNotAdmissible) ||
 		errors.Is(err, domain.ErrGenerationIntegrityMarked) ||
@@ -745,6 +745,9 @@ func (e *Engine) dispatchIntent(
 	ctx context.Context, entry store.QueueEntry, binding invocationBinding,
 	stage domain.Stage, invocationID domain.InvocationID,
 ) (bool, bool, error) {
+	if retired, err := e.retireClosedInvocationIntent(ctx, entry, binding.run.ID, binding.invocation.ConversationID); err != nil || retired {
+		return false, false, err
+	}
 	// Durable state decides first. The run snapshot already says whether
 	// this invocation has an attempt, and a recorded attempt starts under
 	// the admission stored beside it, so the live capability gate runs
@@ -870,6 +873,18 @@ func (e *Engine) acceptCompletedInvocations(ctx context.Context) (int, error) {
 	accepted := 0
 	for _, snapshotted := range runs {
 		run := snapshotted.Value
+		if err := e.store.Read(ctx, func(tx *store.ReadTx) error {
+			return tx.RequireRunWorkflowOpen(ctx, run.ID)
+		}); errors.Is(err, store.ErrTaskWorkflowClosed) {
+			collected, err := e.collectClosedRun(ctx, run)
+			accepted += collected
+			if err != nil {
+				e.logger.Warn("closed workflow execution observation remains unresolved", "run", run.ID, "error", err)
+			}
+			continue
+		} else if err != nil {
+			return accepted, err
+		}
 		owned, err := e.ownsFakeRun(ctx, run)
 		if err != nil {
 			return accepted, err
@@ -881,6 +896,9 @@ func (e *Engine) acceptCompletedInvocations(ctx context.Context) (int, error) {
 			}
 			for _, attempt := range stage.Attempts {
 				didAccept, err := e.acceptAttempt(ctx, run, attempt)
+				if errors.Is(err, store.ErrTaskWorkflowClosed) {
+					continue
+				}
 				if err != nil {
 					return accepted, fmt.Errorf("run %q invocation %q: %w", run.ID, attempt.InvocationID, err)
 				}
@@ -906,6 +924,9 @@ func (e *Engine) acceptCompletedInvocations(ctx context.Context) (int, error) {
 			}
 			for _, attempt := range stage.Attempts {
 				didAccept, err := e.acceptSpecificationAttempt(ctx, run, attempt)
+				if errors.Is(err, store.ErrTaskWorkflowClosed) {
+					continue
+				}
 				if err != nil {
 					return accepted, fmt.Errorf("run %q invocation %q: %w", run.ID, attempt.InvocationID, err)
 				}
@@ -923,6 +944,9 @@ func (e *Engine) acceptCompletedInvocations(ctx context.Context) (int, error) {
 			}
 			for _, attempt := range stage.Attempts {
 				didAccept, err := e.acceptProductionAttempt(ctx, run, attempt)
+				if errors.Is(err, store.ErrTaskWorkflowClosed) {
+					continue
+				}
 				if err != nil {
 					return accepted, fmt.Errorf("run %q invocation %q: %w", run.ID, attempt.InvocationID, err)
 				}
@@ -990,6 +1014,10 @@ func (e *Engine) acceptAttempt(ctx context.Context, run domain.Run, attempt doma
 // whether that is a loop failure (walking skeleton) or a terminal outcome
 // to record (production).
 func (e *Engine) collectTerminal(ctx context.Context, runID domain.RunID, attempt domain.Attempt) (exec.StageResult, bool, error) {
+	return e.collectWorkflowTerminal(ctx, runID, attempt, false)
+}
+
+func (e *Engine) collectWorkflowTerminal(ctx context.Context, runID domain.RunID, attempt domain.Attempt, closed bool) (exec.StageResult, bool, error) {
 	inspection, err := e.driver.Inspect(ctx, attempt.InvocationID)
 	if err != nil {
 		// An invocation the driver does not know is ambiguous: a pending
@@ -1005,6 +1033,9 @@ func (e *Engine) collectTerminal(ctx context.Context, runID domain.RunID, attemp
 		// of the intent's state: a stop halts new starts, never the
 		// acceptance of work already running.
 		if errors.Is(err, exec.ErrUnknownInvocation) {
+			if closed {
+				return exec.StageResult{}, false, nil
+			}
 			var pendingDispatch bool
 			if outboxErr := e.store.Read(ctx, func(tx *store.ReadTx) error {
 				entry, getErr := tx.GetOutbox(ctx, string(attempt.InvocationID))

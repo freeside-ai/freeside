@@ -1313,6 +1313,7 @@ func run(parent context.Context, stop func(), cfg config) (_ *daemon, err error)
 			return nil, fmt.Errorf("check judgment roles: %w", err)
 		}
 		claudeWiring.driver.SetRecoveryLauncher(workflow.ResumeTaskInvocation)
+		claudeWiring.driver.SetRecoveryObserver(workflow.RecoverTaskInvocation)
 		for _, source := range []exec.ReviewSource{claudeWiring.reviewSource, claudeWiring.shadowReviewSource} {
 			if guarded, ok := source.(interface {
 				SetTaskWorkGuard(func(context.Context, domain.RunID) (context.Context, func(), error))
@@ -1411,7 +1412,12 @@ func run(parent context.Context, stop func(), cfg config) (_ *daemon, err error)
 	d.pairing.configure(d.readiness().APIURL, attention.MintPairingCode)
 	d.pairing.registerControlRoutes(
 		d.pairing.mux, st, blobs, localBackupFiles, cfg.ApprovedRecipes, integrityProbe, cfg.Environment,
-		cfg.execution(), attention, cfg.DeputyLaunch)
+		cfg.execution(), attention, cfg.DeputyLaunch, func(ctx context.Context, id domain.TaskID, commit func() error) error {
+			if workflow == nil {
+				return commit()
+			}
+			return workflow.CommitTaskWorkflowClosure(ctx, id, commit)
+		})
 	var fakeSched *scheduler.Scheduler
 	var claudeSched *scheduler.Scheduler
 	var activeReconciler *activeResourceReconciler

@@ -435,7 +435,7 @@ func findingAdjudicationDecidedAt(ctx context.Context, tx *store.ReadTx, adjudic
 	if errors.Is(err, store.ErrNotFound) {
 		return nil, nil
 	}
-	if err != nil {
+	if err != nil && !errors.Is(err, store.ErrTaskWorkflowClosed) {
 		return nil, err
 	}
 	binding := item.FindingAdjudication

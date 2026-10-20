@@ -87,6 +87,7 @@ func TestProductionReviewUpgradePreservesRequestTime(t *testing.T) {
 				t.Fatal(err)
 			}
 			for _, query := range []string{
+				"DROP TABLE task_attention_workflow_origins", "DROP TABLE task_workflow_closures",
 				"DROP TABLE task_cancellation_acknowledgements", "DROP TABLE task_stop_commands", "DROP TABLE task_cancellations",
 				"DROP INDEX production_attempts_revises_run_id",
 				"ALTER TABLE production_attempts DROP COLUMN revises_run_id",

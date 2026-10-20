@@ -248,6 +248,7 @@ type productionPublicationWorkflow struct {
 	newBoundRoom                    func(domain.ProjectImage, ward.ContainerSize, domain.Run, domain.InvocationID) (ProductionVerificationRoom, error)
 	rebuild                         *ProjectImageRebuild
 	beginTaskWork                   func(context.Context, domain.RunID) (context.Context, func(), error)
+	claimDispatch                   func(context.Context, domain.RunID) error
 	reviewSource                    exec.ReviewSource
 	reviewAdmitter                  ReviewAdmitter
 	remediationPromptPackage        domain.Digest
@@ -1116,7 +1117,7 @@ func RecordProductionExecutionExport(
 			return err
 		}
 		if err := requireTaskExecutionOpen(ctx, &tx.ReadTx, task.RunID); err != nil {
-			if errors.Is(err, store.ErrTaskCancellationFenced) {
+			if workflowAdvancementFenced(err) {
 				return nil // Retain the late export without publication authority.
 			}
 			return err
@@ -1906,6 +1907,13 @@ func (w *productionPublicationWorkflow) reconcile(ctx context.Context) (producti
 			))
 			continue
 		}
+		if err := w.requireWorkflowOpen(ctx, task.RunID); err != nil {
+			if workflowAdvancementFenced(err) {
+				continue
+			}
+			joined = errors.Join(joined, err)
+			continue
+		}
 		// The task reads again, so its own hold has ended. It has to be
 		// retired here, while the row is still pending: a task that completes
 		// leaves the pending scan, and no later pass would reach its notice.
@@ -1977,7 +1985,7 @@ func (w *productionPublicationWorkflow) reconcile(ctx context.Context) (producti
 			w.deferHeldTask(task)
 		}
 		if reconcileErr != nil {
-			if errors.Is(reconcileErr, store.ErrTaskCancellationFenced) {
+			if workflowAdvancementFenced(reconcileErr) {
 				continue
 			}
 			if productionPublicationRetryableFailure(reconcileErr) {
@@ -3647,6 +3655,9 @@ func (w *productionPublicationWorkflow) reconcileReviewGate(
 		return w.retryOrRecordReviewFailure(ctx, task, id, round,
 			binding.admission.Base.BaseSHA, task.HeadSHA, err)
 	}
+	if err := w.claimProviderDispatch(ctx, task.RunID); err != nil {
+		return productionReviewPending, err
+	}
 	status, err := w.reviewSource.Inspect(ctx, id)
 	if errors.Is(err, exec.ErrUnknownInvocation) {
 		// Unknown is also the workspace-staleness signal: no live review
@@ -3675,11 +3686,17 @@ func (w *productionPublicationWorkflow) reconcileReviewGate(
 			DurableTransitionReviewRequest, DurableTransitionBefore); err != nil {
 			return productionReviewPending, err
 		}
+		if err := w.claimProviderDispatch(ctx, task.RunID); err != nil {
+			return productionReviewPending, err
+		}
 		if err := w.reviewSource.RequestReview(ctx, id, req); err != nil {
 			return w.retryOrRecordReviewFailure(ctx, task, id, round, req.BaseSHA, req.HeadSHA, err)
 		}
 		if err := runDurableTransitionHook(w.transitionHook,
 			DurableTransitionReviewRequest, DurableTransitionAfter); err != nil {
+			return productionReviewPending, err
+		}
+		if err := w.claimProviderDispatch(ctx, task.RunID); err != nil {
 			return productionReviewPending, err
 		}
 		status, err = w.reviewSource.Inspect(ctx, id)
@@ -4026,6 +4043,9 @@ func (w *productionPublicationWorkflow) classifyReviewFindings(
 			}
 			requiresAttention = requiresAttention || persistedAttention
 			continue
+		}
+		if err := w.claimProviderDispatch(ctx, task.RunID); err != nil {
+			return true, err
 		}
 		decision, err := w.inference.ClassifyFinding(
 			ctx, string(task.ProjectID), string(task.RunID), finding, record.Round,
@@ -5079,6 +5099,9 @@ func (w *productionPublicationWorkflow) completePublishedTask(
 	published publish.Result,
 	reviewInstructions exec.ReviewInstructionBinding,
 ) (productionTaskOutcome, error) {
+	if err := w.requireWorkflowOpen(ctx, task.RunID); err != nil {
+		return productionTaskOutcome{}, err
+	}
 	// Readiness reconstruction boundary: a published candidate reaches readiness
 	// only through a clean, candidate-bound review record under the current
 	// reviewer configuration, failing closed otherwise (issue #527, decision 2).

@@ -361,9 +361,33 @@ func (f *FollowUpFiler) view(ctx context.Context, id domain.ProposalInstanceID) 
 // drive advances one filing as far as its durable state and GitHub's answers
 // allow in this pass.
 func (f *FollowUpFiler) drive(ctx context.Context, filing approvedFiling, all []approvedFiling) error {
+	err := f.driveWorkflow(ctx, filing, all)
+	if errors.Is(err, store.ErrTaskWorkflowClosed) {
+		return nil
+	}
+	return err
+}
+
+func (f *FollowUpFiler) driveWorkflow(ctx context.Context, filing approvedFiling, all []approvedFiling) error {
 	view, err := f.view(ctx, filing.instanceID)
 	if err != nil {
 		return f.reportUnreadable(ctx, filing.filingRef, err)
+	}
+	fenceErr := f.store.Read(ctx, func(tx *store.ReadTx) error {
+		return tx.RequireRunWorkflowOpen(ctx, view.runID)
+	})
+	closed := errors.Is(fenceErr, store.ErrTaskWorkflowClosed)
+	if fenceErr != nil && !closed {
+		return fenceErr
+	}
+	if closed {
+		if view.intent == nil {
+			return nil
+		}
+		retired, err := f.retireClosed(ctx, filing.instanceID)
+		if err != nil || retired {
+			return err
+		}
 	}
 	if view.intent == nil {
 		intent, opened, err := f.open(ctx, filing, view, all)
@@ -412,6 +436,44 @@ func (f *FollowUpFiler) drive(ctx context.Context, filing approvedFiling, all []
 		return f.dispatch(ctx, filing, view, all)
 	}
 	return fmt.Errorf("attempt response class %q is not registered", class)
+}
+
+// retireClosed releases only proven-unsent reservations. Closure and the
+// latest attempt are re-read under the writer lock, so a winning dispatch
+// claim cannot be mistaken for the earlier unstarted intent.
+func (f *FollowUpFiler) retireClosed(ctx context.Context, id domain.ProposalInstanceID) (bool, error) {
+	var retired bool
+	err := f.store.WriteInternal(ctx, func(tx *store.InternalTx) error {
+		if err := tx.RequireProposalWorkflowOpen(ctx, id); !errors.Is(err, store.ErrTaskWorkflowClosed) {
+			return err
+		}
+		intent, err := tx.GetFollowUpFilingIntent(ctx, id)
+		if err != nil {
+			return err
+		}
+		if intent.Terminal != nil {
+			retired = true
+			return nil
+		}
+		reason := domain.FollowUpFilingRefusalPreconditionFailed
+		if len(intent.Attempts) != 0 {
+			last := intent.Attempts[len(intent.Attempts)-1]
+			if last.Response == nil {
+				return nil
+			}
+			switch last.Response.Class {
+			case domain.FollowUpFilingResponseDefiniteRejection:
+				reason = domain.FollowUpFilingRefusalDefiniteRejection
+			case domain.FollowUpFilingResponseTransientRejection:
+			case domain.FollowUpFilingResponseSuccess, domain.FollowUpFilingResponseUnproven:
+				return nil
+			}
+		}
+		_, err = tx.RefuseFollowUpFiling(ctx, id, reason, f.now())
+		retired = err == nil
+		return err
+	})
+	return retired, err
 }
 
 var retryBoundSpentReason = fmt.Sprintf(
@@ -954,6 +1016,9 @@ func (f *FollowUpFiler) reportUnreadable(ctx context.Context, ref filingRef, cau
 func (f *FollowUpFiler) putHealthItem(
 	ctx context.Context, tx *store.WriteTx, ref filingRef, code, reason string,
 ) error {
+	if err := tx.RequireProposalWorkflowOpen(ctx, ref.instanceID); errors.Is(err, store.ErrTaskWorkflowClosed) {
+		return nil
+	}
 	first := followUpFilingItemPrefix + string(ref.instanceID) + "/" + code
 	id := domain.ItemID(first)
 	for occurrence := 2; ; occurrence++ {
@@ -1030,6 +1095,11 @@ func (f *FollowUpFiler) clearedNotices(ctx context.Context, tx *store.ReadTx) ([
 	}
 	var cleared []domain.AttentionItem
 	for _, item := range items {
+		if err := tx.RequireItemWorkflowOpen(ctx, item); errors.Is(err, store.ErrTaskWorkflowClosed) {
+			continue
+		} else if err != nil {
+			return nil, err
+		}
 		if notice, ok := transientFilingNotice(item); ok && !f.holding[notice] {
 			cleared = append(cleared, item)
 		}

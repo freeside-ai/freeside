@@ -207,7 +207,7 @@ func (e *Engine) enqueueOperatorFeedbackRetry(ctx context.Context, command domai
 		inserted = made
 		return nil
 	})
-	if errors.Is(err, store.ErrTaskCancellationFenced) {
+	if workflowAdvancementFenced(err) {
 		return false, nil
 	}
 	if err != nil {

@@ -1,6 +1,6 @@
 ---
 title: Freeside Project Plan
-revision: 90
+revision: 91
 status: active
 updated: 2026-10-20
 ---
@@ -619,9 +619,13 @@ recommendation-led presentation.
 - Approvals bind to artifact digests and the PR head SHA. Changed inputs
   invalidate them.
 - Retries supersede failures.
-- Explicit abandonment expires the abandoned task's open specification
-  approvals and execution-failure recovery cards, leaving other item kinds and
-  quarantine notices open without certifying that execution stopped.
+- Explicit abandonment closes one admitted workflow episode. Its open
+  approvals, questions, recovery and review decisions, publication decisions,
+  and run/task notices expire without `decided_at`; proposal ownership comes
+  from the stored target binding. Independent system/project health and
+  proposals remain unchanged. Previously terminal cards retain their history.
+  Closure fences new work and effects for the episode's exact runs permanently,
+  including after a new episode starts. It does not certify execution stopped.
 - Resolutions are transactional and version-checked.
 - A stale submission receives a conflict and the replacement item.
 - Notifications are read-only hints, never authority.
@@ -2493,6 +2497,17 @@ decisions survive restart. Deterministic identities, reconciliation, and
 bounded retry make external effects converge on one intended result. Anything
 that cannot be safely retried waits for me.
 
+Administrative workflow closure is durable authority separate from slot
+release and provider termination. It binds the admitted start ordinal and
+authenticated run membership. Restart retires its pending work and decisions;
+it never reconstructs approval from an expired card. Engine dispatch claims
+serialize with live closure after engine preparation. A claim that wins may
+finish downstream preparation and launch; closure does not revoke it.
+Claimed work and dispatched effects retain authenticated results and resource
+observations as history only. An unresolved external outcome stays unresolved,
+and observation may not dispatch a repair or another effect. Closure never
+releases execution capacity before its existing release condition.
+
 A task Stop commits its exact decoded command, immutable receipt and result
 revision, and daemon-derived task fence in one client-visible transaction.
 The fence captures task/project identity, sync epoch, current start ordinal
@@ -2978,8 +2993,24 @@ the acknowledgement transaction, bound to the captured start ordinal. Exact
 replay changes neither facts nor revision. An explicit uncancelled reattempt
 that needs a new slot checks its authenticated policy cap, allocates the
 attempt, and records its new run and start in one write; a refusal persists
-none of them. A retry that still holds a slot keeps it. Administrative
-`freesided abandon` remains a slot release, not a provider-stop operation.
+none of them. A retry that still holds a slot keeps it.
+
+Administrative `freesided abandon` commits three independent outcomes: slot
+release, closure of that exact admitted episode, and retirement of its open
+cards. A closure-write failure leaves release committed but closure incomplete.
+A cleanup failure leaves the closure fence effective. The result reports the
+target episode and committed steps; `-episode N` repairs that historical
+episode without releasing a newer start. With no admitted start it is a no-op.
+Migration does not infer closures from old abandonment facts, whose callers
+include Stop and intake; an operator may explicitly repeat abandonment.
+
+An explicit reasoned reattempt may use an authenticated closed episode instead
+of a terminal parent. Approved specification, parent/lineage, cancellation,
+policy-cap, and execution-admission rules still apply. A specification-only
+task without an approved implementation input is ineligible. Ordinary submit,
+Resume, automatic retry, and previously accepted decisions cannot reopen the
+closed episode. Closure requests no provider cancellation and makes no claim
+that a running provider or dispatched forge request has stopped.
 
 Budgeting uses two clocks:
 
@@ -3691,6 +3722,12 @@ On agent completion, Freeside finalizes and fsyncs blobs, then commits the
 message, transition, and replacement item in one SQLite transaction. A failed
 transaction leaves only harmless orphan blobs. Live streaming and mid-turn
 steering wait until Phase 3.
+
+Workflow closure consumes an unstarted discussion intent and returns its
+conversation to idle without inventing an answer. A previously claimed,
+authenticated reply may append once as history. It neither advances the
+closed decision's version nor causes a new invocation, even if card cleanup
+has not finished.
 
 #### Permanent Phase 1A Sync and Device Tests
 
@@ -6253,30 +6290,28 @@ Record material changes here by revision, with the decider in parentheses.
 - On first re-litigation, promote the decision to a `docs/decisions/` ADR that
   cites its history entry.
 
-Revision 90 ("`prod` Runs Driverless During A Real-Work Run"):
+Revision 91 ("Abandonment Closes One Workflow Episode"):
 
-1. **`prod` keeps running, without a driver, while a real-work run holds the
-   production rig lease.** A driverless `prod` never opens the App
-   authority's files, so the run stays their only writer and the operator no
-   longer stops and restores the installed daemon around a run (Section
-   [10](#10-operations-and-onboarding), Environments). This revises revision
-   71 item 2, which kept `prod` stopped and deferred running both to #1568.
-   A driverless `prod` runs no janitor, so the GitHub-side lease stays
-   declined on that item's basis.
-2. **Both sides enforce it, and neither locks the other.** A `prod` that
-   starts while a lease manifest, live or stale, exists refuses a driver and
-   the one-shot fake publication. The deputy, once it holds the lease, reads
-   the loaded `prod`'s execution mode over its control socket and enables
-   execution only for `disabled` or no running `prod`; a `prod` that does
-   not answer fails the check closed.
-3. **Rejected options.** Keeping the stop (the restore is the step that
-   failed the 2026-10-10 exit run); reporting the mode on `/health` (its
-   schema is closed and paired with generated clients, a contract change);
-   and reading an unanswering advertisement as "not running" (a live `prod`
-   with a driver behind a dead socket would pass).
+1. **Abandonment closes decisions and advancement without certifying a stop.**
+   The operator's command commits slot release, durable episode closure, and
+   card cleanup separately. A closure fences its exact admitted start and
+   owned runs permanently, including after a later episode starts. Every open
+   decision owned by that episode expires without a fabricated decision.
+2. **Late results remain history.** Already-started providers and dispatched
+   effects keep their authenticated observation and resource-accounting paths.
+   Their results grant no readiness, completion, successor, or follow-on effect.
+   Closure requests no provider cancellation and releases no execution capacity.
+3. **Explicit reattempt remains possible.** An authenticated closed parent may
+   replace the terminal-parent prerequisite, with an approved specification,
+   operator reason, intact lineage, no cancellation fence, and atomic cap-checked
+   admission. Ordinary submission, Resume, and queued decisions cannot reopen it.
+4. **Partial failure stays visible.** The command reports each committed step
+   and an exact episode repair selector. A failed cleanup cannot undo closure;
+   a delayed repair cannot abandon newer work. Migration infers no closure
+   from old abandonment facts because Stop and intake share their writer.
 
-(Owner decision in the #1938 plan comment of 2026-10-14, delivered by #2080;
-[decision note](../devlog/2026-10-20-1013-prod-runs-driverless.md).)
+(Owner decision in #1993, 2026-10-20;
+[decision note](../devlog/2026-10-20-1030-workflow-episode-closure.md).)
 
 ## 14. Risks
 

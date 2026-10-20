@@ -735,16 +735,21 @@ func authenticateProductionAttempt(
 		if err != nil {
 			return fmt.Errorf("load retry parent %q: %w", attempt.ParentRunID, err)
 		}
-		observation, err := tx.ObserveRun(ctx, attempt.ParentRunID)
-		if err != nil {
-			return fmt.Errorf("observe retry parent %q: %w", attempt.ParentRunID, err)
-		}
-		conclusion, err := AuthenticatedProductionRunConclusion(ctx, &tx.ReadTx, parentRun, observation)
-		if err != nil {
-			return fmt.Errorf("conclude retry parent %q: %w", attempt.ParentRunID, err)
-		}
-		if !conclusion.Final {
-			return fmt.Errorf("retry parent %q is still live: %w", attempt.ParentRunID, domain.ErrParentKeyMismatch)
+		if err := tx.RequireRunWorkflowOpen(ctx, parentRun.ID); !errors.Is(err, store.ErrTaskWorkflowClosed) {
+			if err != nil {
+				return err
+			}
+			observation, err := tx.ObserveRun(ctx, attempt.ParentRunID)
+			if err != nil {
+				return fmt.Errorf("observe retry parent %q: %w", attempt.ParentRunID, err)
+			}
+			conclusion, err := AuthenticatedProductionRunConclusion(ctx, &tx.ReadTx, parentRun, observation)
+			if err != nil {
+				return fmt.Errorf("conclude retry parent %q: %w", attempt.ParentRunID, err)
+			}
+			if !conclusion.Final {
+				return fmt.Errorf("retry parent %q is still live: %w", attempt.ParentRunID, domain.ErrParentKeyMismatch)
+			}
 		}
 	}
 	if grant != nil {
@@ -1751,6 +1756,9 @@ func (e *Engine) recordProductionTerminalWithCompletion(
 			return inserted && terminal.Status == exec.StatusCompleted, nil
 		}
 		defer finish()
+		if err := e.claimRunDispatch(workCtx, run.ID); err != nil {
+			return inserted && terminal.Status == exec.StatusCompleted, nil
+		}
 		_ = e.inference.DiagnoseExecutionFailure(workCtx, inference.DiagnosticInput{
 			Project: string(run.ProjectID), RootLineage: string(run.ID), RunID: string(run.ID),
 			FailureClass: string(terminal.Status), FailingStep: string(terminal.StageID),
@@ -2052,6 +2060,14 @@ func recordProductionQuarantine(
 	projectID domain.ProjectID,
 	reason string,
 ) error {
+	if err := st.Read(ctx, func(tx *store.ReadTx) error {
+		return tx.RequireRunWorkflowOpen(ctx, runID)
+	}); err != nil {
+		if errors.Is(err, store.ErrTaskWorkflowClosed) {
+			return nil
+		}
+		return err
+	}
 	subject := domain.Subject{Type: domain.SubjectRun, ID: domain.SubjectID(runID), RunID: &runID}
 	names, err := displayNames(ctx, st, projectID, subject)
 	if err != nil {

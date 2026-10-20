@@ -27,6 +27,40 @@ func (e *Engine) ResumeTaskInvocation(ctx context.Context, id domain.RunID, laun
 	if errors.Is(err, store.ErrTaskCancellationFenced) {
 		return stage.ErrTaskCancelled
 	}
+	if errors.Is(err, store.ErrTaskWorkflowClosed) {
+		return errors.Join(stage.ErrWorkflowClosed, err)
+	}
+	return err
+}
+
+// RecoverTaskInvocation observes an existing handoff under Stop's registration.
+// Administrative closure grants no launch permission but does not prevent its
+// authenticated result and real resource release from being recovered.
+func (e *Engine) RecoverTaskInvocation(ctx context.Context, id domain.RunID, observe func(context.Context) error) error {
+	var run domain.Run
+	if err := e.store.Read(ctx, func(tx *store.ReadTx) error {
+		var err error
+		run, err = tx.GetRun(ctx, id)
+		return err
+	}); err != nil {
+		return err
+	}
+	workCtx, finish, err := e.registerTaskWork(ctx, run, true)
+	if errors.Is(err, store.ErrTaskCancellationFenced) {
+		return stage.ErrTaskCancelled
+	}
+	if err != nil {
+		return err
+	}
+	defer finish()
+	err = observe(stage.WithTaskCancellation(workCtx, e.taskExecution(run.TaskID).ctx))
+	if err != nil && workCtx.Err() != nil && ctx.Err() == nil {
+		if fence := e.store.Read(ctx, func(tx *store.ReadTx) error {
+			return requireTaskNotCancelled(ctx, tx, id)
+		}); errors.Is(fence, store.ErrTaskCancellationFenced) {
+			return stage.ErrTaskCancelled
+		}
+	}
 	return err
 }
 
@@ -38,9 +72,8 @@ type taskExecution struct {
 	idle   chan struct{}
 }
 
-// BeginRunWork registers an owned call before any external launch. Concrete
-// runtime adapters use the returned context through cleanup and always join
-// the call before releasing the registration.
+// BeginRunWork registers owned work for Stop and cleanup. Registration grants
+// no dispatch authority: engine preparation must finish before claimRunDispatch.
 func (e *Engine) BeginRunWork(ctx context.Context, id domain.RunID) (context.Context, func(), error) {
 	var run domain.Run
 	if err := e.store.Read(ctx, func(tx *store.ReadTx) error {
@@ -70,8 +103,8 @@ func (e *Engine) taskExecution(id domain.TaskID) *taskExecution {
 }
 
 // CommitTaskStop orders the accepting transaction against invocation launch.
-// Only launch registration holds this lock, never provider execution or
-// teardown. The database remains the durable authority after a restart.
+// Registration and dispatch claims hold this lock, never provider execution
+// or teardown. The database remains the durable authority after a restart.
 func (e *Engine) CommitTaskStop(ctx context.Context, id domain.TaskID, commit func() error) error {
 	running := e.taskExecution(id)
 	running.mu.Lock()
@@ -91,12 +124,48 @@ func (e *Engine) CommitTaskStop(ctx context.Context, id domain.TaskID, commit fu
 	})
 }
 
+// CommitTaskWorkflowClosure orders live closure against engine dispatch claims.
+// A winning claim remains valid through downstream preparation and execution;
+// closure neither revokes it nor cancels the registered work.
+func (e *Engine) CommitTaskWorkflowClosure(ctx context.Context, id domain.TaskID, commit func() error) error {
+	running := e.taskExecution(id)
+	running.mu.Lock()
+	defer running.mu.Unlock()
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	return commit()
+}
+
+// claimRunDispatch is the last engine step before each provider entry or stage
+// launch. The mutex orders the claim, never provider execution, against closure.
+// Every engine retry must claim again; the database fences claims after restart.
+func (e *Engine) claimRunDispatch(ctx context.Context, id domain.RunID) error {
+	var run domain.Run
+	if err := e.store.Read(ctx, func(tx *store.ReadTx) error {
+		var err error
+		run, err = tx.GetRun(ctx, id)
+		return err
+	}); err != nil {
+		return err
+	}
+	running := e.taskExecution(run.TaskID)
+	running.mu.Lock()
+	defer running.mu.Unlock()
+	return e.store.Read(ctx, func(tx *store.ReadTx) error {
+		return requireTaskExecutionOpen(ctx, tx, id)
+	})
+}
+
 func (e *Engine) launchTaskInvocation(ctx context.Context, run domain.Run, launch func(context.Context) error) error {
 	workCtx, finish, err := e.beginTaskWork(ctx, run)
 	if err != nil {
 		return err
 	}
 	defer finish()
+	if err := e.claimRunDispatch(workCtx, run.ID); err != nil {
+		return err
+	}
 	err = launch(stage.WithTaskCancellation(workCtx, e.taskExecution(run.TaskID).ctx))
 	if err != nil && workCtx.Err() != nil && ctx.Err() == nil {
 		// A task Stop is an ordinary hold, not failure of the shared loop.
@@ -110,10 +179,17 @@ func (e *Engine) launchTaskInvocation(ctx context.Context, run domain.Run, launc
 }
 
 func (e *Engine) beginTaskWork(ctx context.Context, run domain.Run) (context.Context, func(), error) {
+	return e.registerTaskWork(ctx, run, false)
+}
+
+func (e *Engine) registerTaskWork(ctx context.Context, run domain.Run, observationOnly bool) (context.Context, func(), error) {
 	running := e.taskExecution(run.TaskID)
 	running.mu.Lock()
 	defer running.mu.Unlock()
 	if err := e.store.Read(ctx, func(tx *store.ReadTx) error {
+		if observationOnly {
+			return requireTaskNotCancelled(ctx, tx, run.ID)
+		}
 		return requireTaskExecutionOpen(ctx, tx, run.ID)
 	}); err != nil {
 		return nil, nil, err

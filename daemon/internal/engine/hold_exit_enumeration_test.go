@@ -17,6 +17,7 @@ var pauseClassifiers = map[string]bool{
 	"dispatchHoldReason":            true,
 	"invocationDispatchHold":        true,
 	"unattendedDispatchRefusal":     true,
+	"workflowAdvancementFenced":     true,
 }
 
 // pauseSentinels are the errors whose errors.Is check marks a pause exit,
@@ -59,8 +60,15 @@ var holdlessPauseExits = map[string]string{
 	"specification.go:Engine.startApprovedImplementation":               cancellationInProgress,
 	"specification_discussion.go:Engine.enqueueSpecDiscussion":          cancellationInProgress,
 	"task_execution.go:Engine.ResumeTaskInvocation":                     cancellationInProgress,
+	"task_execution.go:Engine.RecoverTaskInvocation":                    cancellationInProgress,
 	"task_execution.go:Engine.launchTaskInvocation":                     cancellationInProgress,
 	"task_namer.go:Engine.nameTaskIfUnnamed":                            cancellationInProgress,
+
+	// Refused adjudication dispatch preserves the fence instead of converting
+	// it into an unavailable answer or another operator decision.
+	"finding_adjudication.go:productionPublicationWorkflow.reconcileFindingAdjudicationWithDissent": cancellationInProgress,
+	"finding_adjudication.go:productionPublicationWorkflow.reviseFindingAdjudication":               cancellationInProgress,
+	"finding_adjudication.go:productionPublicationWorkflow.revisedFindingAdjudicationEntries":       cancellationInProgress,
 
 	// An attention discussion is a reply to an operator, not a run, so there
 	// is no run to hold; the stop notice or the blocking item is already open.
@@ -80,7 +88,7 @@ var holdlessPauseExits = map[string]string{
 }
 
 const (
-	cancellationInProgress = "task cancellation in progress (store.ErrTaskCancellationFenced)"
+	cancellationInProgress = "task cancellation or durable workflow closure owns the stopped advancement"
 	shadowReviewItemWait   = "shadow review waits on its open attention item; no reason code fits"
 )
 

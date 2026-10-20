@@ -139,6 +139,13 @@ func stopTaskReview(ctx context.Context, st *store.Store, id domain.InvocationID
 }
 
 func requireTaskExecutionOpen(ctx context.Context, tx *store.ReadTx, runID domain.RunID) error {
+	if err := requireTaskNotCancelled(ctx, tx, runID); err != nil {
+		return err
+	}
+	return tx.RequireRunWorkflowOpen(ctx, runID)
+}
+
+func requireTaskNotCancelled(ctx context.Context, tx *store.ReadTx, runID domain.RunID) error {
 	run, err := tx.GetRun(ctx, runID)
 	if err != nil {
 		return err
@@ -151,6 +158,12 @@ func requireTaskExecutionOpen(ctx context.Context, tx *store.ReadTx, runID domai
 		return store.ErrTaskCancellationFenced
 	}
 	return nil
+}
+
+// workflowAdvancementFenced is a no-more-work outcome. Callers still preserve
+// observation; only the cancellation coordinator may request provider Stop.
+func workflowAdvancementFenced(err error) bool {
+	return errors.Is(err, store.ErrTaskCancellationFenced) || errors.Is(err, store.ErrTaskWorkflowClosed)
 }
 
 // ReconcileTaskCancellations discovers every committed Stop without waiting

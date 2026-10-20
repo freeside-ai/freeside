@@ -134,6 +134,9 @@ func (tx *ReadTx) validateShadowReviewRecordBinding(
 func (tx *WriteTx) PutShadowReviewRecord(
 	ctx context.Context, record domain.ShadowReviewRecord, findings []domain.Finding,
 ) error {
+	if err := tx.RequireRunWorkflowOpen(ctx, record.RunID); err != nil {
+		return err
+	}
 	if err := record.Validate(); err != nil {
 		return fmt.Errorf("put shadow review record %q: %w", record.InvocationID, err)
 	}

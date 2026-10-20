@@ -230,6 +230,12 @@ func (s *Service) AcceptAgentCompletion(
 		if err != nil {
 			return err
 		}
+		if err := tx.RequireItemWorkflowOpen(ctx, item); err != nil {
+			if errors.Is(err, store.ErrTaskWorkflowClosed) {
+				return nil // The authenticated reply is history, even before cleanup.
+			}
+			return err
+		}
 		if item.Status != domain.StatusOpen {
 			return nil
 		}

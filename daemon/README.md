@@ -2518,13 +2518,34 @@ needed to distinguish an accepted Stop from confirmed termination.
 A bound confirmed acknowledgement atomically releases
 any held episode and projects `stopped`; an already completed episode stays
 `finished`. Explicit abandonment projects `abandoned` without claiming that
-execution stopped. `freesided abandon` also expires the abandoned task's open
-specification approvals and execution-failure recovery cards, reporting their
-IDs in `retired_items` (an empty list when none were retired). Other item kinds
-and quarantine notices stay open. Slot release commits before retirement; if
-retirement fails, the error identifies that partial outcome and the command
-can be retried. The daemon can still raise new cards after abandonment;
-running `abandon` again retires eligible cards raised since the previous call.
+execution stopped. `freesided abandon -db <database> -task <task-id>` commits
+slot release, durable workflow closure, and card cleanup in that order, as
+separate transactions. The JSON result preserves `released` and
+`retired_items` and reports `episode`, `workflow_closed`, and `cleanup_complete`.
+A failure still reports committed steps. Repair the reported episode with
+`freesided abandon -db <database> -task <task-id> -episode <episode>`.
+This repair never releases a newer episode's slot.
+
+Closure expires all open decisions owned by that episode, including review,
+publication, proposal-target, quarantine, and held-work cards. It preserves
+terminal history, independent project/system health, and other episodes.
+Restart finishes cleanup; the closure fence is effective even when cleanup
+fails. Pending discussions settle without a fabricated reply. Engine dispatch
+claims serialize with live closure after engine preparation. A winning claim
+may finish downstream preparation and launch; closure does not revoke it.
+Claimed work and dispatched effects may finish, with authenticated late results
+retained as history. They cannot create another decision, successor, or effect.
+Provider cancellation and execution-capacity release still require their
+existing evidence; abandonment requests neither. Upgrading does not convert
+old abandonment facts into closures. Repeat abandonment explicitly to close
+an old admitted episode.
+
+An explicit `freesided reattempt` with a reason may use a closed parent that
+has an approved implementation specification, even while its provider remains
+live. It still checks lineage, cancellation, the policy cap, and execution
+admission. A closed specification-only task without approved implementation
+input is ineligible. Ordinary submission, Resume, and automatic retries cannot
+reopen the episode.
 Stopped and abandoned tasks leave Active filters and remain
 in Finished/All history. A confirmed queued task needs no run or position.
 Ordinary submission cannot reopen a terminal episode; an uncancelled explicit

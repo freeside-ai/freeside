@@ -466,7 +466,7 @@ func (e *Engine) enqueueSpecDiscussion(
 		inserted = created
 		return nil
 	})
-	if errors.Is(err, store.ErrTaskCancellationFenced) {
+	if workflowAdvancementFenced(err) {
 		return false, nil
 	}
 	if err != nil {

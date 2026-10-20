@@ -283,6 +283,9 @@ func (w *productionPublicationWorkflow) driftAuditForRound(
 	if err != nil {
 		return nil, err
 	}
+	if err := w.claimProviderDispatch(ctx, task.RunID); err != nil {
+		return nil, err
+	}
 	audit, err := w.inference.AuditDrift(ctx, project, string(task.RunID), input)
 	if err != nil {
 		// The site folds every failure into one sentinel, a cancelled context

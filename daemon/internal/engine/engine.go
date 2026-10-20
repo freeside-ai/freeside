@@ -182,6 +182,7 @@ func New(st *store.Store, attention *signet.Service, driver exec.StageDriver, op
 	if e.productionPublication != nil {
 		e.productionPublication.logger = e.logger
 		e.productionPublication.beginTaskWork = e.BeginRunWork
+		e.productionPublication.claimDispatch = e.claimRunDispatch
 		if e.admission != nil && !e.productionPublication.holdOnly &&
 			e.productionDeliveryValidator == nil {
 			return nil, errors.New("new engine: active production admission has no delivery validator")
@@ -194,6 +195,7 @@ func New(st *store.Store, attention *signet.Service, driver exec.StageDriver, op
 			e.productionPublication.findingAdjudicator = &productionFindingAdjudicator{
 				client: e.inference, store: e.store, artifacts: e.productionPublication.artifacts,
 				beginTaskWork: e.BeginRunWork,
+				claimDispatch: e.claimRunDispatch,
 			}
 		}
 	}
@@ -231,6 +233,9 @@ func (e *Engine) Reconcile(ctx context.Context) (ReconcileResult, error) {
 	defer e.reconcileMu.Unlock()
 	if e.inference != nil {
 		_ = e.inference.Maintain(ctx)
+	}
+	if err := e.reconcileWorkflowClosures(ctx); err != nil {
+		return ReconcileResult{}, err
 	}
 	if err := e.ConvergeLegacyFakePublicationPolicies(ctx); err != nil {
 		return ReconcileResult{}, fmt.Errorf("converge legacy fake-publication policies: %w", err)
@@ -306,6 +311,12 @@ func (e *Engine) ReconcileProductionPublications(ctx context.Context) (Reconcile
 	}
 	if e.inference != nil {
 		_ = e.inference.Maintain(ctx)
+	}
+	if err := e.reconcileWorkflowClosures(ctx); err != nil {
+		return ReconcileResult{}, err
+	}
+	if err := e.productionPublication.observeClosedWorkflows(ctx); err != nil {
+		return ReconcileResult{}, err
 	}
 	publication, err := e.productionPublication.reconcile(ctx)
 	result := ReconcileResult{

@@ -291,6 +291,9 @@ func (w *productionPublicationWorkflow) reconcileFindingAdjudicationWithDissent(
 		if w.findingAdjudicator == nil {
 			return w.parkUnacceptedFindingBatch(ctx, task, record, parkAdjudicatorUnconfigured, "")
 		}
+		if err := w.requireWorkflowOpen(ctx, task.RunID); err != nil {
+			return productionReviewPending, err
+		}
 		modelEntries, err := w.findingAdjudicator.Adjudicate(ctx, findingAdjudicationRequest{
 			RunID: record.RunID, Round: record.Round,
 			ApprovedSpecDigest:        binding.run.SpecDigest,
@@ -299,6 +302,9 @@ func (w *productionPublicationWorkflow) reconcileFindingAdjudicationWithDissent(
 			DeclaredPaths:             slices.Clone(declaredPaths), Dissent: dissent,
 			Findings: residue,
 		})
+		if workflowAdvancementFenced(err) {
+			return productionReviewPending, err
+		}
 		if err != nil {
 			cause, fallback := adjudicationErrorCause(err)
 			return w.parkUnacceptedFindingBatch(ctx, task, record, cause, fallback)
@@ -415,6 +421,9 @@ func (w *productionPublicationWorkflow) reviseFindingAdjudication(
 		}
 		entries, err = w.revisedFindingAdjudicationEntries(
 			ctx, binding, record, prior, baseRoot, candidateRoot, dissent, feedback)
+		if workflowAdvancementFenced(err) {
+			return prior, err
+		}
 		if errors.Is(err, inference.ErrAdjudicationNotAvailable) {
 			cause, fallback := adjudicationErrorCause(err)
 			w.logAdjudicationRefusal(ctx, task, record, cause, fallback)
@@ -722,6 +731,9 @@ func (w *productionPublicationWorkflow) revisedFindingAdjudicationEntries(
 		return nil, inference.ErrAdjudicationNotAvailable
 	}
 	declaredPaths := domain.CanonicalDeclaredPaths(binding.resolvedPolicy)
+	if err := w.requireWorkflowOpen(ctx, record.RunID); err != nil {
+		return nil, err
+	}
 	modelEntries, err := w.findingAdjudicator.Adjudicate(ctx, findingAdjudicationRequest{
 		RunID: record.RunID, Round: record.Round,
 		ApprovedSpecDigest: binding.run.SpecDigest, InstructionSnapshotDigest: record.InstructionDigest,
@@ -729,6 +741,9 @@ func (w *productionPublicationWorkflow) revisedFindingAdjudicationEntries(
 		Dissent: dissent, Feedback: &feedback, Findings: residue,
 		PriorEntries: slices.Clone(prior.Entries),
 	})
+	if workflowAdvancementFenced(err) {
+		return nil, err
+	}
 	if err != nil {
 		return nil, errors.Join(inference.ErrAdjudicationNotAvailable, err)
 	}

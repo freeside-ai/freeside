@@ -107,8 +107,10 @@ type WriteTx struct {
 	// asOfRevision is stamped into every row a Put touches: the revision the
 	// enclosing Write commits as (current+1). Only Write produces a WriteTx,
 	// so this is always a client-visible revision.
-	asOfRevision     int64
-	readyItemCreated bool
+	asOfRevision               int64
+	readyItemCreated           bool
+	workflowClosures           []TaskWorkflowClosure
+	workflowMembershipCaptured bool
 }
 
 // Write runs fn in a client-visible write transaction and increments
@@ -132,6 +134,9 @@ func (s *Store) Write(ctx context.Context, fn func(*WriteTx) error) error {
 		asOfRevision: current + 1,
 	}
 	if err := fn(wtx); err != nil {
+		return err
+	}
+	if err := wtx.validateClosedWorkflowMembership(ctx); err != nil {
 		return err
 	}
 	if _, err := tx.ExecContext(ctx,

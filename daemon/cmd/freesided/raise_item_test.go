@@ -7,11 +7,63 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/freeside-ai/freeside/daemon/internal/domain"
 	"github.com/freeside-ai/freeside/daemon/internal/signet"
 	"github.com/freeside-ai/freeside/daemon/internal/store"
 )
+
+func TestRaisedHeldWorkItemLegacyOwnershipUsesActualProducer(t *testing.T) {
+	ctx := t.Context()
+	st, err := store.Open(ctx, filepath.Join(t.TempDir(), "freeside.db"), store.Options{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = st.Close() }()
+	now := time.Date(2026, 10, 20, 12, 0, 0, 0, time.UTC)
+	if err := st.Write(ctx, func(tx *store.WriteTx) error {
+		if err := tx.PutRun(ctx, domain.Run{
+			ID: "old-raised-run", ProjectID: "project",
+			SpecDigest: "sha256:spec", PolicyDigest: "sha256:policy",
+		}); err != nil {
+			return err
+		}
+		run, err := tx.GetRun(ctx, "old-raised-run")
+		if err != nil {
+			return err
+		}
+		if err := tx.RecordTaskStart(ctx, run.ID, now); err != nil {
+			return err
+		}
+		item, err := raisedHeldWorkItem(ctx, tx, run.ID, now)
+		if err != nil {
+			return err
+		}
+		if err := tx.PutAttentionItem(ctx, item); err != nil {
+			return err
+		}
+		if _, err := tx.AbandonTask(ctx, run.TaskID, now); err != nil {
+			return err
+		}
+		if err := tx.PutRun(ctx, domain.Run{
+			ID: "new-raised-run", TaskID: run.TaskID, ProjectID: run.ProjectID,
+			SpecDigest: run.SpecDigest, PolicyDigest: run.PolicyDigest,
+		}); err != nil {
+			return err
+		}
+		if err := tx.AdmitTaskStart(ctx, "new-raised-run", now, 1); err != nil {
+			return err
+		}
+		owner, ordinal, err := tx.AttentionItemWorkflowEpisode(ctx, item)
+		if err != nil || owner != run.TaskID || ordinal != 1 {
+			t.Fatalf("raised notice ownership = (%s, %d, %v)", owner, ordinal, err)
+		}
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+}
 
 // The representative fixture's runs (daemon/internal/seedfixture/runs.go),
 // named by the outcome each stands for here.

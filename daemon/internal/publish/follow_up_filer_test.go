@@ -3,6 +3,7 @@ package publish_test
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"fmt"
 	"net/http"
 	"slices"
@@ -13,6 +14,7 @@ import (
 
 	"github.com/freeside-ai/freeside/daemon/internal/domain"
 	"github.com/freeside-ai/freeside/daemon/internal/publish"
+	"github.com/freeside-ai/freeside/daemon/internal/store"
 )
 
 // pastSettle outlasts the default settle interval.
@@ -57,6 +59,162 @@ func TestFollowUpFilerFilesAnApprovedFilingOnce(t *testing.T) {
 	h.mustPass()
 	if got := h.creates(); got != 1 {
 		t.Fatalf("create requests = %d, want 1", got)
+	}
+}
+
+func TestFollowUpFilerWorkflowClosureBoundaries(t *testing.T) {
+	for _, boundary := range []string{"before intent", "before dispatch", "in flight"} {
+		t.Run(boundary, func(t *testing.T) {
+			h := newFilingHarness(t)
+			run := h.seedRun("closed-run", nil, nil)
+			instance := h.approve(run, 0)
+			closeRun := func() {
+				h.step = nil
+				closePublicationWorkflow(t, h.store, run.id)
+			}
+			if boundary == "before intent" {
+				closeRun()
+			} else {
+				if boundary == "in flight" {
+					h.respond(unprovenCommitted)
+				}
+				h.step = func(name string) {
+					if boundary == "before dispatch" && name == "token" && h.intent(instance.ID) != nil ||
+						boundary == "in flight" && name == "receive POST "+testRepoPath+"/issues" {
+						closeRun()
+					}
+				}
+			}
+			h.mustPass()
+			if h.step != nil {
+				t.Fatal("fixture did not reach the closure boundary")
+			}
+			h.restart()
+			h.advance(pastSettle)
+			h.mustPass()
+			h.mustPass()
+			want := 0
+			if boundary == "in flight" {
+				want = 1
+				issues := h.forgeIssues()
+				if len(issues) != 1 {
+					t.Fatalf("lost already dispatched issue: %+v", issues)
+				}
+				h.assertLedgered(instance.ID, issues[0].Number)
+			}
+			if got := h.creates(); got != want {
+				t.Fatalf("create requests = %d, want %d", got, want)
+			}
+			if want == 0 {
+				if intent := h.intent(instance.ID); intent != nil && len(intent.Attempts) != 0 {
+					t.Fatalf("losing claim recorded dispatch: %+v", intent.Attempts)
+				}
+			}
+		})
+	}
+}
+
+func TestFollowUpFilerWorkflowClosureAfterDispatchClaim(t *testing.T) {
+	for _, response := range []string{"success", "unproven", "transient rejection"} {
+		t.Run(response, func(t *testing.T) {
+			h := newFilingHarness(t)
+			run := h.seedRun("closed-run", nil, nil)
+			instance := h.approve(run, 0)
+			publish.CloseWorkflowAtDispatchForTest(t, h.store, h.path, run.id, h.now, true)
+			h.open()
+			h.step = func(name string) {
+				if name == "receive POST "+testRepoPath+"/issues" {
+					retired, err := h.filer.RetireClosedForTest(t.Context(), instance.ID)
+					if err != nil || retired {
+						t.Fatalf("retirement took an active dispatch claim: %t, %v", retired, err)
+					}
+				}
+			}
+			switch response {
+			case "unproven":
+				h.respond(unprovenCommitted)
+			case "transient rejection":
+				h.respond(fakeCreateResponse{Status: http.StatusTooManyRequests})
+			}
+			h.mustPass()
+			h.step = nil
+			if got := h.creates(); got != 1 {
+				t.Fatalf("winning claim sent %d requests, want 1", got)
+			}
+			if err := h.store.Read(t.Context(), func(tx *store.ReadTx) error {
+				return tx.RequireRunWorkflowOpen(t.Context(), run.id)
+			}); !errors.Is(err, store.ErrTaskWorkflowClosed) {
+				t.Fatalf("dispatch did not restore an authentic closure: %v", err)
+			}
+			h.restart()
+			h.advance(pastSettle)
+			h.mustPass()
+			h.mustPass()
+			if got := h.creates(); got != 1 {
+				t.Fatalf("closure permitted a fresh dispatch: %d requests", got)
+			}
+			if response == "transient rejection" {
+				intent := h.intent(instance.ID)
+				if len(intent.Attempts) != 1 || intent.Attempts[0].Response == nil ||
+					intent.Attempts[0].Response.Class != domain.FollowUpFilingResponseTransientRejection ||
+					intent.Terminal == nil || intent.Terminal.Outcome != domain.FollowUpFilingRefused {
+					t.Fatalf("lost actual rejection or its terminal refusal: %+v", intent)
+				}
+			} else {
+				h.assertLedgered(instance.ID, h.forgeIssues()[0].Number)
+			}
+		})
+	}
+}
+
+func TestFollowUpFilerClosureRetiresProvenUnsentReservation(t *testing.T) {
+	for _, response := range []string{"never dispatched", "transient rejection", "recorded definite rejection"} {
+		t.Run(response, func(t *testing.T) {
+			h := newFilingHarness(t)
+			run := h.seedRun("old-run", nil, nil)
+			instance := h.approve(run, 0)
+			h.passUntilCreateToken(instance.ID)
+			if response == "transient rejection" {
+				h.respond(fakeCreateResponse{Status: http.StatusTooManyRequests})
+				h.mustPass()
+			}
+			if response == "recorded definite rejection" {
+				// Recover the durable state between a proven response and
+				// terminal refusal, without reclassifying an unknown send.
+				if err := h.store.WriteInternal(t.Context(), func(tx *store.InternalTx) error {
+					if _, err := tx.StartFollowUpFilingAttempt(t.Context(), instance.ID, h.now); err != nil {
+						return err
+					}
+					_, err := tx.RecordFollowUpFilingResponse(t.Context(), instance.ID, domain.FollowUpFilingResponseDefiniteRejection, h.now)
+					return err
+				}); err != nil {
+					t.Fatal(err)
+				}
+			}
+			closePublicationWorkflow(t, h.store, run.id)
+			h.restart()
+			before := h.creates()
+			later := h.approve(h.seedRun("later-run", nil, nil), 0)
+			h.advance(pastSettle)
+			h.mustPass()
+			h.mustPass()
+			if got := h.creates(); got != before+1 {
+				t.Fatalf("closed reservation blocked later workflow: creates = %d, want %d", got, before+1)
+			}
+			h.assertLedgered(later.ID, h.forgeIssues()[0].Number)
+			intent := h.intent(instance.ID)
+			if intent.Terminal == nil || intent.Terminal.Outcome != domain.FollowUpFilingRefused {
+				t.Fatalf("proven-unsent intent was not retired: %+v", intent)
+			}
+			if item := h.healthItem(instance.ID, "follow_up_filing_refused"); item != nil {
+				t.Fatalf("closed workflow acquired a notice: %+v", item)
+			}
+			h.restart()
+			h.mustPass()
+			if h.creates() != before+1 {
+				t.Fatal("restart retried retired work")
+			}
+		})
 	}
 }
 

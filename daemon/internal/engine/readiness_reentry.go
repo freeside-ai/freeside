@@ -48,7 +48,7 @@ func StartReadinessReentry(
 		return false, err
 	}
 	if err := requireTaskExecutionOpen(ctx, &tx.ReadTx, runID); err != nil {
-		if errors.Is(err, store.ErrTaskCancellationFenced) {
+		if workflowAdvancementFenced(err) {
 			return false, nil
 		}
 		return false, err

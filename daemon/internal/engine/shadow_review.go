@@ -157,6 +157,9 @@ func (w *productionPublicationWorkflow) reconcileShadowReview(
 			ctx, task, routed.Round, id, authorityVerifier, err,
 		)
 	}
+	if err := w.claimProviderDispatch(ctx, task.RunID); err != nil {
+		return false, err
+	}
 	status, err := w.shadowReviewSource.Inspect(ctx, id)
 	if errors.Is(err, exec.ErrUnknownInvocation) {
 		if !w.now().Before(routed.CompletedAt.Add(shadowReviewWait)) {
@@ -173,10 +176,16 @@ func (w *productionPublicationWorkflow) reconcileShadowReview(
 			return false, fmt.Errorf("retained shadow review workspace changed: %w",
 				domain.ErrPathBoundaryMismatch)
 		}
+		if err := w.claimProviderDispatch(ctx, task.RunID); err != nil {
+			return false, err
+		}
 		if err := w.shadowReviewSource.RequestReview(ctx, id, req); err != nil {
 			return w.abandonStartedShadowReview(
 				ctx, task, routed.Round, id, authorityVerifier, err,
 			)
+		}
+		if err := w.claimProviderDispatch(ctx, task.RunID); err != nil {
+			return false, err
 		}
 		status, err = w.shadowReviewSource.Inspect(ctx, id)
 	}
@@ -554,6 +563,9 @@ func (w *productionPublicationWorkflow) classifySampleFinding(
 			}
 			defer finish()
 			ctx = workCtx
+		}
+		if err := w.claimProviderDispatch(ctx, task.RunID); err != nil {
+			return domain.Finding{}, domain.Classification{}, err
 		}
 		decision, err = w.inference.ClassifyFinding(
 			ctx, string(task.ProjectID), string(task.RunID), finding, version)

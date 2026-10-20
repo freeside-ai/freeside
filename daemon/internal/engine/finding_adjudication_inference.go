@@ -20,6 +20,7 @@ type productionFindingAdjudicator struct {
 	store         *store.Store
 	artifacts     ArtifactStore
 	beginTaskWork func(context.Context, domain.RunID) (context.Context, func(), error)
+	claimDispatch func(context.Context, domain.RunID) error
 }
 
 func (a *productionFindingAdjudicator) Adjudicate(
@@ -106,6 +107,11 @@ func (a *productionFindingAdjudicator) Adjudicate(
 			ThroughSequence: request.Feedback.ThroughSequence, PrefixDigest: request.Feedback.PrefixDigest,
 			ConversationPrefix: json.RawMessage(append([]byte(nil), request.Feedback.ConversationPrefix...)),
 			Attachments:        attachments,
+		}
+	}
+	if a.claimDispatch != nil {
+		if err := a.claimDispatch(ctx, request.RunID); err != nil {
+			return nil, err
 		}
 	}
 	return a.client.AdjudicateFindings(ctx, string(run.ProjectID), string(request.RunID),

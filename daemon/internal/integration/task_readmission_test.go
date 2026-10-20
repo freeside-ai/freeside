@@ -15,14 +15,18 @@ func TestReattemptTaskAdmissionIsAtomicWithAllocation(t *testing.T) {
 	for _, tc := range []struct {
 		name, cap               string
 		abandon, occupy, cancel bool
+		closed, live            bool
 		want                    error
 	}{
-		{"held retry needs no new slot", "", false, false, false, nil},
-		{"released retry admitted", "1", true, false, false, nil},
-		{"released slot taken", "1", true, true, false, store.ErrTaskWIPCapExhausted},
-		{"missing cap", "", true, false, false, intake.ErrIntakePolicyMissing},
-		{"malformed cap", "unlimited", true, false, false, intake.ErrIntakePolicyMalformed},
-		{"pending cancellation", "1", false, false, true, store.ErrTaskCancellationFenced},
+		{"held retry needs no new slot", "", false, false, false, false, false, nil},
+		{"released retry admitted", "1", true, false, false, false, false, nil},
+		{"released slot taken", "1", true, true, false, false, false, store.ErrTaskWIPCapExhausted},
+		{"missing cap", "", true, false, false, false, false, intake.ErrIntakePolicyMissing},
+		{"malformed cap", "unlimited", true, false, false, false, false, intake.ErrIntakePolicyMalformed},
+		{"pending cancellation", "1", false, false, true, false, false, store.ErrTaskCancellationFenced},
+		{"closed live parent admitted", "1", true, false, false, true, true, nil},
+		{"closed live parent cap refusal", "1", true, true, false, true, true, store.ErrTaskWIPCapExhausted},
+		{"closed parent still cancelled", "1", true, false, true, true, true, store.ErrTaskCancellationFenced},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			f := openWideCapabilityRetryFixture(t, t.TempDir(), true)
@@ -31,7 +35,11 @@ func TestReattemptTaskAdmissionIsAtomicWithAllocation(t *testing.T) {
 				keys = []domain.PolicyKey{{Key: intake.PolicyRunWIPCap, Value: tc.cap, Provenance: domain.KeyProvenance{Source: domain.ProvenanceOverride, Digest: submissionDigest("readmission", "policy")}}}
 			}
 			campaign, _ := driveApprovedCampaign(t, f, keys...)
-			driveRunToFailureCard(t, f, attemptSweepRunID)
+			if !tc.live {
+				driveRunToFailureCard(t, f, attemptSweepRunID)
+			} else {
+				reconcileCapabilityRetryPass(t, f, "admit approved implementation")
+			}
 			var taskID domain.TaskID
 			if err := f.store.Write(t.Context(), func(tx *store.WriteTx) error {
 				run, err := tx.GetRun(t.Context(), attemptSweepRunID)
@@ -41,6 +49,15 @@ func TestReattemptTaskAdmissionIsAtomicWithAllocation(t *testing.T) {
 				taskID = run.TaskID
 				if tc.abandon {
 					if _, err := tx.AbandonTask(t.Context(), taskID, time.Now().UTC()); err != nil {
+						return err
+					}
+				}
+				if tc.closed {
+					task, err := tx.GetTask(t.Context(), taskID)
+					if err != nil {
+						return err
+					}
+					if _, _, err := tx.CloseTaskWorkflow(t.Context(), taskID, task.CurrentStart().Ordinal, time.Now().UTC()); err != nil {
 						return err
 					}
 				}
@@ -96,6 +113,14 @@ func TestReattemptTaskAdmissionIsAtomicWithAllocation(t *testing.T) {
 					}
 					if tc.abandon && task.CurrentStart().RunID != retry.Run.Run.ID {
 						t.Fatal("readmission not bound to new run")
+					}
+					if tc.closed {
+						if err := tx.RequireRunWorkflowOpen(t.Context(), attemptSweepRunID); !errors.Is(err, store.ErrTaskWorkflowClosed) {
+							t.Fatalf("new admission changed old fence: %v", err)
+						}
+						if err := tx.RequireRunWorkflowOpen(t.Context(), retry.Run.Run.ID); err != nil {
+							return err
+						}
 					}
 				}
 				return nil

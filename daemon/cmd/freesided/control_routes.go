@@ -134,6 +134,7 @@ func (p *pairingControl) registerControlRoutes(
 	mux *http.ServeMux, st *store.Store, blobs *signet.BlobStore, backupFiles *store.LocalBackupFiles,
 	approved map[domain.Digest]bool, integrityProbe credentialIntegrityProbe, env environment,
 	execution executionMode, attention *signet.Service, launch *deputyLaunch,
+	commitWorkflowClosure func(context.Context, domain.TaskID, func() error) error,
 ) {
 	p.registerNotifyTest(mux, st, attention)
 	p.handleGet(mux, "/execution", func(context.Context, *http.Request) (any, error) {
@@ -162,6 +163,7 @@ func (p *pairingControl) registerControlRoutes(
 		return context.WithValue(ctx, daemonStoreContextKey{}, daemonStoreContext{
 			store: st, blobs: blobs, backupFiles: backupFiles, dbPath: p.dbPath, approvedRecipes: approved,
 			credentialIntegrityProbe: integrityProbe,
+			commitWorkflowClosure:    commitWorkflowClosure,
 		})
 	}
 	command := func(route string, run func(context.Context, []string, io.Writer, io.Writer) error) {
@@ -206,7 +208,11 @@ func (p *pairingControl) registerControlRoutes(
 		if err != nil {
 			return nil, err
 		}
-		return runAbandonCommand(withStore(ctx), cfg)
+		result, err := runAbandonCommand(withStore(ctx), cfg)
+		if err != nil {
+			result.Error = err.Error()
+		}
+		return result, nil
 	})
 	p.handle(mux, "/tasks/reattempt", func(ctx context.Context, body json.RawMessage) (any, error) {
 		cfg, err := decodeControlPayload[reattemptCommandConfig](body)

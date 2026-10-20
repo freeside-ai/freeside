@@ -45,6 +45,13 @@ func TestAbandonedTaskReconcileAfterRetirement(t *testing.T) {
 				t.Fatal("AbandonTask alone retired the item")
 			}
 			if err := f.store.Write(ctx, func(tx *store.WriteTx) error {
+				task, err := tx.GetTask(ctx, taskID)
+				if err != nil {
+					return err
+				}
+				if _, _, err := tx.CloseTaskWorkflow(ctx, taskID, task.CurrentStart().Ordinal, time.Now().UTC()); err != nil {
+					return err
+				}
 				retired, err := engine.RetireAbandonedTaskItems(ctx, tx, taskID)
 				if err == nil && !slices.Contains(retired, itemID) {
 					t.Fatalf("retired = %v, missing %s", retired, itemID)

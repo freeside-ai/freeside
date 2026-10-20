@@ -1763,6 +1763,11 @@ func (d *Driver) reconcileIntent(ctx context.Context, in intent) error {
 	}()
 
 	if err := d.recoverIntent(ctx, in); err != nil {
+		if errors.Is(err, ErrWorkflowClosed) {
+			// No provider result exists for a suppressed restart. Keep the
+			// durable intent without manufacturing failure or cancellation.
+			return nil
+		}
 		if errors.Is(err, errExportAuthorityConflict) {
 			return err
 		}
@@ -1936,9 +1941,13 @@ func (d *Driver) recoverIntent(ctx context.Context, in intent) error {
 	case phaseCommitted, phaseLost:
 		return nil
 	}
-	if d.recoveryLauncher != nil {
+	observer := d.recoveryObserver
+	if observer == nil {
+		observer = d.recoveryLauncher
+	}
+	if observer != nil {
 		entered := false
-		err := d.recoveryLauncher(ctx, in.Spec.RunID, func(launchCtx context.Context) error {
+		err := observer(ctx, in.Spec.RunID, func(launchCtx context.Context) error {
 			entered = true
 			return d.recoverRunning(launchCtx, in)
 		})
