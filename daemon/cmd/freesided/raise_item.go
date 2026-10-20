@@ -228,6 +228,9 @@ func raiseItem(
 		if err := signet.ValidateItemIntake(item); err != nil {
 			return err
 		}
+		if item.Subject.Type == domain.SubjectTask {
+			return tx.PutTaskAttentionItem(ctx, item, req.RunID)
+		}
 		return tx.PutAttentionItem(ctx, item)
 	}); err != nil {
 		return raiseItemResult{}, fmt.Errorf("raise-item: %s: %w", req.Alert, err)

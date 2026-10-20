@@ -98,6 +98,9 @@ func (w *productionPublicationWorkflow) reconcilePublicationAuthoring(
 		}
 		return w.recordAuthoringFallback(ctx, key, base, "resolve author input failed")
 	}
+	if err := w.claimProviderDispatch(ctx, task.RunID); err != nil {
+		return err
+	}
 	authored, err := w.inference.AuthorPublication(ctx, input)
 	if err != nil {
 		// An error paired with a non-fallback result is a hard inference fault;

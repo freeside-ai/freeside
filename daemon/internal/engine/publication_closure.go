@@ -152,7 +152,10 @@ func (w *productionPublicationWorkflow) reconcileClosureDecision(
 		// answer so replay is stable and the propose site is never re-asked.
 		return want, w.putClosureCheckpoint(ctx, key, want)
 	}
-	origin, resolves, reason := w.proposeClosure(ctx, task, binding, checkpoint, reviewInstructions, checkoutDir, report)
+	origin, resolves, reason, err := w.proposeClosure(ctx, task, binding, checkpoint, reviewInstructions, checkoutDir, report)
+	if err != nil {
+		return productionClosureCheckpoint{}, err
+	}
 	decided, admitted, err := w.admitClosureProposal(ctx, key, want, task, source, proposedTarget, origin, resolves, reason)
 	if err != nil {
 		return productionClosureCheckpoint{}, err
@@ -227,19 +230,22 @@ func (w *productionPublicationWorkflow) proposeClosure(
 	reviewInstructions exec.ReviewInstructionBinding,
 	checkoutDir string,
 	report []byte,
-) (domain.ClosureFlagOrigin, bool, string) {
+) (domain.ClosureFlagOrigin, bool, string, error) {
 	if w.inference == nil || !w.inference.SupportsSite(inference.PublicationAuthorProposeSiteID) {
-		return domain.ClosureFlagOriginDaemonFallback, false, ""
+		return domain.ClosureFlagOriginDaemonFallback, false, "", nil
 	}
 	input, err := w.buildPublicationAuthorInput(ctx, task, binding, checkpoint, reviewInstructions, checkoutDir, report)
 	if err != nil {
-		return domain.ClosureFlagOriginDaemonFallback, false, ""
+		return domain.ClosureFlagOriginDaemonFallback, false, "", nil
+	}
+	if err := w.claimProviderDispatch(ctx, task.RunID); err != nil {
+		return "", false, "", err
 	}
 	proposed, err := w.inference.ProposeSourceIssueClosure(ctx, input)
 	if err != nil || proposed.Fallback {
-		return domain.ClosureFlagOriginDaemonFallback, false, proposed.InputRefusalReason
+		return domain.ClosureFlagOriginDaemonFallback, false, proposed.InputRefusalReason, nil
 	}
-	return domain.ClosureFlagOriginProposeSite, proposed.Resolves, ""
+	return domain.ClosureFlagOriginProposeSite, proposed.Resolves, "", nil
 }
 
 // admitClosureProposal builds and allocates the proposal under a once-per-run

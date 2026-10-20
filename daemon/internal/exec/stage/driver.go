@@ -106,6 +106,7 @@ type Config struct {
 // before an intent is committed.
 type Driver struct {
 	recoveryLauncher func(context.Context, domain.RunID, func(context.Context) error) error
+	recoveryObserver func(context.Context, domain.RunID, func(context.Context) error) error
 	errorPrefix      string
 	displayName      string
 	dir              string
@@ -612,10 +613,21 @@ type taskCancellationKey struct{}
 
 var ErrTaskCancelled = errors.New("task cancellation forbids invocation recovery")
 
+// ErrWorkflowClosed forbids restarting an unstarted pipeline without claiming
+// that a provider failed or stopped. Its retained intent remains history.
+var ErrWorkflowClosed = errors.New("workflow closure forbids invocation restart")
+
 // SetRecoveryLauncher installs the same task launch boundary the engine uses
 // for Start. Composition calls it before startup recovery or serving requests.
 func (d *Driver) SetRecoveryLauncher(launch func(context.Context, domain.RunID, func(context.Context) error) error) {
 	d.recoveryLauncher = launch
+}
+
+// SetRecoveryObserver registers recovery of an already-started handoff with
+// task Stop while allowing administrative workflow closure. It never guards
+// resumePipeline: the launcher alone owns permission to start new work.
+func (d *Driver) SetRecoveryObserver(observe func(context.Context, domain.RunID, func(context.Context) error) error) {
+	d.recoveryObserver = observe
 }
 
 // WithTaskCancellation binds an invocation to a task's cancellation signal

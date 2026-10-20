@@ -87,7 +87,7 @@ func planExternalReviewReentry(
 		return nil, err
 	}
 	if err := requireTaskExecutionOpen(ctx, tx, runID); err != nil {
-		if errors.Is(err, store.ErrTaskCancellationFenced) {
+		if workflowAdvancementFenced(err) {
 			return nil, nil
 		}
 		return nil, err

@@ -103,7 +103,7 @@ func (e *Engine) nameTaskIfUnnamed(ctx context.Context, run domain.Run) error {
 		return nil
 	}
 	ctx, finish, err := e.beginTaskWork(ctx, run)
-	if errors.Is(err, store.ErrTaskCancellationFenced) {
+	if workflowAdvancementFenced(err) {
 		return nil
 	}
 	if err != nil {
@@ -191,6 +191,12 @@ func (e *Engine) nameTaskIfUnnamed(ctx context.Context, run domain.Run) error {
 			*field = (*field)[:end]
 		}
 		remaining -= len(*field)
+	}
+	if err := e.claimRunDispatch(ctx, run.ID); err != nil {
+		if workflowAdvancementFenced(err) {
+			return nil
+		}
+		return err
 	}
 	name, fallback, err := e.inference.NameTask(ctx, input)
 	if err != nil || fallback {

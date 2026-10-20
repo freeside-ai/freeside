@@ -228,7 +228,7 @@ func (e *Engine) enqueuePublicationContinuation(ctx context.Context, command dom
 		created = made
 		return nil
 	})
-	if errors.Is(err, store.ErrTaskCancellationFenced) {
+	if workflowAdvancementFenced(err) {
 		return false, nil
 	}
 	if errors.Is(err, store.ErrPublicationCompleted) {

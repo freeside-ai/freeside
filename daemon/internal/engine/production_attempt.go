@@ -88,6 +88,19 @@ func ReattemptProductionRun(
 	)
 	var run ProductionRun
 	err := st.Write(ctx, func(tx *store.WriteTx) error {
+		if operatorBindings != 0 {
+			command, err := tx.GetCommand(ctx, spec.OperatorCommandID)
+			if err != nil {
+				return err
+			}
+			item, err := tx.GetAttentionItem(ctx, command.ItemID)
+			if err != nil {
+				return err
+			}
+			if err := tx.RequireItemWorkflowOpen(ctx, item); err != nil {
+				return err
+			}
+		}
 		allocate := func() error {
 			var latest domain.ProductionAttempt
 			var err error
@@ -158,17 +171,23 @@ func ReattemptProductionRun(
 				&parentPolicy, &request, &sourceArtifact, &policyArtifact); err != nil {
 				return err
 			}
-			observation, err := tx.ObserveRun(ctx, parentRun.ID)
-			if err != nil {
-				return err
+			closureErr := tx.RequireRunWorkflowOpen(ctx, parentRun.ID)
+			if closureErr != nil && !errors.Is(closureErr, store.ErrTaskWorkflowClosed) {
+				return closureErr
 			}
-			conclusion, err := AuthenticatedProductionRunConclusion(ctx, &tx.ReadTx, parentRun, observation)
-			if err != nil {
-				return err
-			}
-			if !conclusion.Final {
-				return fmt.Errorf("parent run %q is %s; use resume while it is live",
-					parentRun.ID, conclusion.Outcome)
+			if closureErr == nil {
+				observation, err := tx.ObserveRun(ctx, parentRun.ID)
+				if err != nil {
+					return err
+				}
+				conclusion, err := AuthenticatedProductionRunConclusion(ctx, &tx.ReadTx, parentRun, observation)
+				if err != nil {
+					return err
+				}
+				if !conclusion.Final {
+					return fmt.Errorf("parent run %q is %s; use resume while it is live",
+						parentRun.ID, conclusion.Outcome)
+				}
 			}
 			number := latest.AttemptNumber + 1
 			runID, err := ProductionAttemptRunID(latest.CampaignID, number)

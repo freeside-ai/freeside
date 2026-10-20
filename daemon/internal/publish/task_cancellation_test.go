@@ -32,6 +32,46 @@ func stopPublicationTask(t *testing.T, st *store.Store, runID domain.RunID) {
 }
 
 func TestTaskCancellationPublicationBoundaryOrder(t *testing.T) {
+	testTaskPublicationBoundaryOrder(t, false)
+}
+
+func TestTaskWorkflowClosurePublicationBoundaryOrder(t *testing.T) {
+	testTaskPublicationBoundaryOrder(t, true)
+}
+
+func closePublicationWorkflow(t *testing.T, st *store.Store, runID domain.RunID) {
+	t.Helper()
+	var taskID domain.TaskID
+	var ordinal int
+	if err := st.Write(t.Context(), func(tx *store.WriteTx) error {
+		run, err := tx.GetRun(t.Context(), runID)
+		if err != nil {
+			return err
+		}
+		taskID = run.TaskID
+		if err := tx.RecordTaskStart(t.Context(), runID, time.Now().UTC()); err != nil {
+			return err
+		}
+		task, err := tx.GetTask(t.Context(), taskID)
+		if err != nil {
+			return err
+		}
+		ordinal = task.CurrentStart().Ordinal
+		_, err = tx.AbandonTask(t.Context(), taskID, time.Now().UTC())
+		return err
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := st.Write(t.Context(), func(tx *store.WriteTx) error {
+		_, _, err := tx.CloseTaskWorkflow(t.Context(), taskID, ordinal, time.Now().UTC())
+		return err
+	}); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func testTaskPublicationBoundaryOrder(t *testing.T, workflowClosure bool) {
+	t.Helper()
 	for _, boundary := range []string{"before-intent", "after-intent", "before-pr", "in-flight-pr"} {
 		t.Run(boundary, func(t *testing.T) {
 			head := testHeadSHA
@@ -47,8 +87,18 @@ func TestTaskCancellationPublicationBoundaryOrder(t *testing.T) {
 			stop := func() {
 				if !stopped {
 					stopped = true
-					stopPublicationTask(t, st, candidate.RunID)
+					if workflowClosure {
+						closePublicationWorkflow(t, st, candidate.RunID)
+					} else {
+						stopPublicationTask(t, st, candidate.RunID)
+					}
 				}
+			}
+			fence := store.ErrTaskCancellationFenced
+			reconcile := p.ReconcileCancelledRun
+			if workflowClosure {
+				fence = store.ErrTaskWorkflowClosed
+				reconcile = p.ReconcileClosedWorkflowRun
 			}
 			if boundary == "before-intent" {
 				stop()
@@ -72,7 +122,7 @@ func TestTaskCancellationPublicationBoundaryOrder(t *testing.T) {
 					t.Fatalf("lost in-flight publication evidence: %+v, %v", result, err)
 				}
 				writes := len(gh.writeRequests())
-				if err := p.ReconcileCancelledRun(t.Context(), candidate.RunID); err != nil {
+				if err := reconcile(t.Context(), candidate.RunID); err != nil {
 					t.Fatal(err)
 				}
 				if len(gh.writeRequests()) != writes {
@@ -80,7 +130,7 @@ func TestTaskCancellationPublicationBoundaryOrder(t *testing.T) {
 				}
 				return
 			}
-			if !errors.Is(err, store.ErrTaskCancellationFenced) {
+			if !errors.Is(err, fence) {
 				t.Fatalf("publication crossed fence: %v", err)
 			}
 			for _, write := range gh.writeRequests() {
@@ -95,7 +145,7 @@ func TestTaskCancellationPublicationBoundaryOrder(t *testing.T) {
 			}
 			if boundary != "before-intent" {
 				before := len(gh.writeRequests())
-				if err := p.ReconcileCancelledRun(t.Context(), candidate.RunID); err == nil {
+				if err := reconcile(t.Context(), candidate.RunID); err == nil {
 					t.Fatal("missing external outcome claimed settled")
 				}
 				if len(gh.writeRequests()) != before {
@@ -115,6 +165,15 @@ func TestTaskCancellationPublicationBoundaryOrder(t *testing.T) {
 // mutation must re-check the durable fence and fail closed, never releasing the
 // hold on a cancelled task's PR after the batch's first fence check.
 func TestTaskCancellationFencesDraftMutationAfterContentPatch(t *testing.T) {
+	testTaskFenceDraftMutationAfterContentPatch(t, false)
+}
+
+func TestTaskWorkflowClosureFencesDraftMutationAfterContentPatch(t *testing.T) {
+	testTaskFenceDraftMutationAfterContentPatch(t, true)
+}
+
+func testTaskFenceDraftMutationAfterContentPatch(t *testing.T, workflowClosure bool) {
+	t.Helper()
 	managed := func(b bool) *bool { return &b }
 	head := testHeadSHA
 	st := newExecutionBoundStore(t, executionChainOptions{})
@@ -152,7 +211,11 @@ func TestTaskCancellationFencesDraftMutationAfterContentPatch(t *testing.T) {
 		}
 		if !stopped && method == http.MethodPatch && strings.HasPrefix(path, testRepoPath+"/pulls/") {
 			stopped = true
-			stopPublicationTask(t, st, candidate.RunID)
+			if workflowClosure {
+				closePublicationWorkflow(t, st, candidate.RunID)
+			} else {
+				stopPublicationTask(t, st, candidate.RunID)
+			}
 		}
 	}
 
@@ -163,7 +226,11 @@ func TestTaskCancellationFencesDraftMutationAfterContentPatch(t *testing.T) {
 	if !stopped {
 		t.Fatal("fixture never reached the in-flight content PATCH")
 	}
-	if !errors.Is(err, store.ErrTaskCancellationFenced) {
+	fence := store.ErrTaskCancellationFenced
+	if workflowClosure {
+		fence = store.ErrTaskWorkflowClosed
+	}
+	if !errors.Is(err, fence) {
 		t.Fatalf("draft repair crossed the fence: %v", err)
 	}
 	if draftMutationAfterStop {
@@ -172,6 +239,15 @@ func TestTaskCancellationFencesDraftMutationAfterContentPatch(t *testing.T) {
 }
 
 func TestTaskCancellationObservesUnrecordedPublishedPR(t *testing.T) {
+	testTaskFenceObservesUnrecordedPublishedPR(t, false)
+}
+
+func TestTaskWorkflowClosureObservesUnrecordedPublishedPR(t *testing.T) {
+	testTaskFenceObservesUnrecordedPublishedPR(t, true)
+}
+
+func testTaskFenceObservesUnrecordedPublishedPR(t *testing.T, workflowClosure bool) {
+	t.Helper()
 	head := testHeadSHA
 	st := newExecutionBoundStore(t, executionChainOptions{})
 	seedDecisionRecords(t, st)
@@ -190,9 +266,15 @@ func TestTaskCancellationObservesUnrecordedPublishedPR(t *testing.T) {
 	if len(pendingPublications(t, st)) != 1 {
 		t.Fatal("fixture did not retain an unresolved publication intent")
 	}
-	stopPublicationTask(t, st, candidate.RunID)
+	reconcile := p.ReconcileCancelledRun
+	if workflowClosure {
+		closePublicationWorkflow(t, st, candidate.RunID)
+		reconcile = p.ReconcileClosedWorkflowRun
+	} else {
+		stopPublicationTask(t, st, candidate.RunID)
+	}
 	writes := len(gh.writeRequests())
-	if err := p.ReconcileCancelledRun(t.Context(), candidate.RunID); err != nil {
+	if err := reconcile(t.Context(), candidate.RunID); err != nil {
 		t.Fatal(err)
 	}
 	if len(gh.writeRequests()) != writes || len(pendingPublications(t, st)) != 0 {

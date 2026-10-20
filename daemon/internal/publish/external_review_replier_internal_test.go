@@ -184,9 +184,10 @@ func (h *replyHarness) profile(admit bool) domain.AutomationTrustProfile {
 func (h *replyHarness) review(round int, head string) domain.ReviewRecord {
 	h.t.Helper()
 	digest := domain.Digest("sha256:" + strings.Repeat("c", 64))
+	invocationID := domain.InvocationID(fmt.Sprintf("reply-review-%s-%d", h.f.run.ID, round))
 	record, err := domain.NewReviewRecord(domain.ReviewRecord{
-		InvocationID: domain.InvocationID(fmt.Sprintf("reply-review-%d", round)), RunID: h.f.run.ID, Round: round,
-		Admission: fake.RecordAdmission(domain.RoleReviewer, h.f.run.ID, domain.InvocationID(fmt.Sprintf("reply-review-%d", round))), ConfigurationDigest: digest, InstructionDigest: digest,
+		InvocationID: invocationID, RunID: h.f.run.ID, Round: round,
+		Admission: fake.RecordAdmission(domain.RoleReviewer, h.f.run.ID, invocationID), ConfigurationDigest: digest, InstructionDigest: digest,
 		BaseSHA: h.f.admission.Base.BaseSHA, HeadSHA: head, CompletedAt: h.now, CompletionEvidence: digest, Outcome: domain.ReviewClean,
 	})
 	if err != nil {
@@ -202,8 +203,13 @@ func newReplyHarness(t *testing.T, thread string, disposition domain.ReviewDispo
 
 func newReplyHarnessThreads(t *testing.T, thread, secondThread string, disposition domain.ReviewDisposition, reason string) *replyHarness {
 	t.Helper()
-	h := &replyHarness{t: t, now: time.Date(2026, 10, 6, 12, 0, 0, 0, time.UTC), comments: []replyCommentWire{}}
-	h.f = seedReplyBinding(t, "feat/test-replies", strings.Repeat("1", 40), strings.Repeat("a", 40))
+	f := seedReplyBinding(t, "feat/test-replies", strings.Repeat("1", 40), strings.Repeat("a", 40))
+	return newReplyHarnessForBinding(t, f, thread, secondThread, disposition, reason)
+}
+
+func newReplyHarnessForBinding(t *testing.T, f replyBindingFixture, thread, secondThread string, disposition domain.ReviewDisposition, reason string) *replyHarness {
+	t.Helper()
+	h := &replyHarness{t: t, f: f, now: time.Date(2026, 10, 6, 12, 0, 0, 0, time.UTC), comments: []replyCommentWire{}}
 	prior := h.review(1, h.f.binding.HeadSHA)
 	profile := h.profile(true)
 	finding, err := domain.NewExternalFinding(domain.ExternalFindingInput{
@@ -508,6 +514,176 @@ func TestExternalReviewReplierRechecksAdmissionAfterTokenResolution(t *testing.T
 	h.pass()
 	if h.creates != 0 || h.outcome().Code != externalReplyRevoked {
 		t.Fatal("revocation during request preparation did not stop send")
+	}
+}
+
+func TestExternalReviewReplierWorkflowClosureBoundaries(t *testing.T) {
+	for _, boundary := range []string{"before intent", "before send", "in flight"} {
+		t.Run(boundary, func(t *testing.T) {
+			h := newReplyHarness(t, "review/42", domain.ReviewDispositionDeclined, "Already checked.")
+			closeRun := func() {
+				h.write(func(tx *store.WriteTx) error {
+					run, err := tx.GetRun(t.Context(), h.f.run.ID)
+					if err != nil {
+						return err
+					}
+					task, err := tx.GetTask(t.Context(), run.TaskID)
+					if err != nil {
+						return err
+					}
+					if task.CurrentStart() == nil {
+						if err := tx.RecordTaskStart(t.Context(), run.ID, h.now); err != nil {
+							return err
+						}
+						task, err = tx.GetTask(t.Context(), run.TaskID)
+						if err != nil {
+							return err
+						}
+					}
+					if _, err := tx.AbandonTask(t.Context(), task.ID, h.now); err != nil {
+						return err
+					}
+					_, _, err = tx.CloseTaskWorkflow(t.Context(), task.ID, task.CurrentStart().Ordinal, h.now)
+					return err
+				})
+			}
+			switch boundary {
+			case "before intent":
+				closeRun()
+			case "before send":
+				h.pass()
+				h.step = func(name string) {
+					if name == "token" {
+						h.step = nil
+						closeRun()
+					}
+				}
+			case "in flight":
+				h.pass()
+				h.beforeSend = closeRun
+			}
+			h.pass()
+			h.step, h.beforeSend = nil, nil
+			h.restart()
+			h.pass()
+			want := 0
+			if boundary == "in flight" {
+				want = 1
+				if h.outcome().CommentID == 0 {
+					t.Fatal("already dispatched reply outcome was lost")
+				}
+			}
+			if h.creates != want {
+				t.Fatalf("reply creates = %d, want %d", h.creates, want)
+			}
+			if boundary == "before send" {
+				h.read(func(tx *store.ReadTx) error {
+					entry, err := tx.GetOutbox(t.Context(), externalReplyKey(h.d.FindingID, h.d.Round))
+					if err == nil && !entry.Dispatched() {
+						t.Fatalf("losing claim left an active reservation: %s", entry.Status)
+					}
+					return err
+				})
+			}
+		})
+	}
+}
+
+func TestExternalReviewReplierWorkflowClosureAfterDispatchClaim(t *testing.T) {
+	for _, response := range []string{"success", "unproven", "transient rejection"} {
+		t.Run(response, func(t *testing.T) {
+			h := newReplyHarness(t, "review/42", domain.ReviewDispositionDeclined, "Already checked.")
+			h.pass()
+			CloseWorkflowAtDispatchForTest(t, h.f.st, h.f.path, h.f.run.ID, h.now, false)
+			h.restart()
+			h.beforeSend = func() {
+				if err := h.r.retireClosed(t.Context(), h.f.run, h.d); err != nil {
+					t.Fatal(err)
+				}
+				h.read(func(tx *store.ReadTx) error {
+					key := externalReplyKey(h.d.FindingID, h.d.Round)
+					entry, err := tx.GetOutbox(t.Context(), key)
+					if err == nil && entry.Status != "dispatching" {
+						t.Fatalf("retirement took an active dispatch claim: %s", entry.Status)
+					}
+					return err
+				})
+			}
+			switch response {
+			case "unproven":
+				h.status, h.commitUnknown = http.StatusInternalServerError, true
+			case "transient rejection":
+				h.status = http.StatusTooManyRequests
+			}
+			h.pass()
+			h.beforeSend = nil
+			if h.creates != 1 {
+				t.Fatalf("winning claim sent %d requests, want 1", h.creates)
+			}
+			if err := h.f.st.Read(t.Context(), func(tx *store.ReadTx) error {
+				return tx.RequireRunWorkflowOpen(t.Context(), h.f.run.ID)
+			}); !errors.Is(err, store.ErrTaskWorkflowClosed) {
+				t.Fatalf("dispatch did not restore an authentic closure: %v", err)
+			}
+			h.restart()
+			h.pass()
+			h.now = h.now.Add(11 * time.Minute)
+			h.pass()
+			h.pass()
+			if h.creates != 1 {
+				t.Fatalf("closure permitted a fresh dispatch: %d requests", h.creates)
+			}
+			if response == "transient rejection" {
+				if got := h.outcome(); got.Code != externalReplyRefused || got.CommentID != 0 {
+					t.Fatalf("actual rejection was not retired: %+v", got)
+				}
+			} else if got := h.outcome(); got.CommentID != 101 || got.Code != "" {
+				t.Fatalf("lost actual reply or recorded false ambiguity: %+v", got)
+			}
+		})
+	}
+}
+
+func TestExternalReviewReplierClosureRetiresProvenUnsentReservation(t *testing.T) {
+	for _, rejected := range []bool{false, true} {
+		t.Run(fmt.Sprintf("transient-rejection-%t", rejected), func(t *testing.T) {
+			h := newReplyHarness(t, "review/42", domain.ReviewDispositionDeclined, "Already checked.")
+			h.pass()
+			if rejected {
+				h.status = http.StatusTooManyRequests
+				h.pass()
+			}
+			closeWorkflowForTest(t, h.f.st, h.f.run.ID, h.now)
+			h.restart()
+			nextFixture := seedReplyBindingIn(t, h.f.st, replyBindingSeed{"later-run", "owner/repo", 424242, 450},
+				"feat/later-reply", strings.Repeat("1", 40), strings.Repeat("a", 40))
+			nextFixture.path = h.f.path
+			next := newReplyHarnessForBinding(t, nextFixture, "review/45", "review_comment/46", domain.ReviewDispositionDeclined, "Checked later.")
+			next.pass()
+			next.pass()
+			next.pass()
+			if next.creates != 1 {
+				t.Fatalf("closed reservation blocked later workflow: creates = %d", next.creates)
+			}
+			if got := h.outcome(); got.Code != externalReplyRefused || got.CommentID != 0 {
+				t.Fatalf("proven-unsent reply was not retired: %+v", got)
+			}
+			if got := next.outcome(); got.CommentID != 101 || got.Code != "" {
+				t.Fatalf("later workflow outcome = %+v", got)
+			}
+			next.read(func(tx *store.ReadTx) error {
+				items, err := tx.ListOpenAttentionItems(t.Context(), domain.AttentionSystemHealth)
+				if err == nil && len(items) != 0 {
+					t.Fatalf("closed workflow acquired notices: %+v", items)
+				}
+				return err
+			})
+			next.restart()
+			next.pass()
+			if next.creates != 1 {
+				t.Fatal("restart retried retired work")
+			}
+		})
 	}
 }
 

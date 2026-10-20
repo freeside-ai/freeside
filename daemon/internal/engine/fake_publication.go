@@ -879,6 +879,9 @@ func (w *fakePublicationWorkflow) reconcile(ctx context.Context) (fakePublicatio
 	for _, entry := range pending {
 		outcome, err := w.reconcileEntry(ctx, entry)
 		if err != nil {
+			if errors.Is(err, store.ErrTaskWorkflowClosed) {
+				continue
+			}
 			if errors.Is(err, publish.ErrJanitorInactive) {
 				continue
 			}
@@ -1035,6 +1038,11 @@ func (w *fakePublicationWorkflow) reconcileEntryLocked(
 ) (taskOutcome, error) {
 	task, err := decodeBoundFakePublicationTask(entry)
 	if err != nil {
+		return taskOutcome{}, err
+	}
+	if err := w.store.Read(ctx, func(tx *store.ReadTx) error {
+		return tx.RequireRunWorkflowOpen(ctx, task.RunID)
+	}); err != nil {
 		return taskOutcome{}, err
 	}
 	expectedHandoff, err := w.expectedHandoffDir(task)

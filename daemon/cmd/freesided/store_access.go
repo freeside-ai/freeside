@@ -111,6 +111,7 @@ type (
 		// when the daemon has no runtime to observe with. A command that
 		// opens the store itself never has one.
 		credentialIntegrityProbe credentialIntegrityProbe
+		commitWorkflowClosure    func(context.Context, domain.TaskID, func() error) error
 	}
 )
 

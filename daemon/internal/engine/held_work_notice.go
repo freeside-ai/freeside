@@ -65,6 +65,12 @@ func raiseHeldWorkNotice(
 	ctx context.Context, tx *store.WriteTx, runID domain.RunID,
 	reason domain.RunHoldReason, now time.Time,
 ) error {
+	if err := tx.RequireRunWorkflowOpen(ctx, runID); err != nil {
+		if errors.Is(err, store.ErrTaskWorkflowClosed) {
+			return nil
+		}
+		return err
+	}
 	if !slices.Contains(refusalHoldReasons, reason) {
 		return nil
 	}
@@ -90,7 +96,7 @@ func raiseHeldWorkNotice(
 	if err != nil {
 		return err
 	}
-	return tx.PutAttentionItem(ctx, item)
+	return tx.PutTaskAttentionItem(ctx, item, runID)
 }
 
 // HeldWorkNoticeItem builds the notice. The subject is the run's task, not
@@ -190,6 +196,14 @@ func (e *Engine) staleHeldWorkNotices(ctx context.Context, tx *store.ReadTx) ([]
 		runID, holdStart, ok := parseHeldWorkNoticeID(item.ID)
 		if !ok {
 			continue
+		}
+		// Closure retirement owns this card. It must never be rewritten as a
+		// resolved Stop merely because the hold later disappears.
+		if err := tx.RequireItemWorkflowOpen(ctx, item); err != nil {
+			if errors.Is(err, store.ErrTaskWorkflowClosed) {
+				continue
+			}
+			return nil, err
 		}
 		hold, found, err := tx.GetRunHold(ctx, runID)
 		if err != nil {

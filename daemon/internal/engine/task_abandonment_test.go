@@ -86,6 +86,14 @@ func TestRetireAbandonedTaskItemsLifecycle(t *testing.T) {
 			if err := st.Write(ctx, func(tx *store.WriteTx) error { return tx.PutAttentionItem(ctx, item) }); err != nil {
 				t.Fatal(err)
 			}
+			if lifecycle == "abandoned" {
+				if err := st.Write(ctx, func(tx *store.WriteTx) error {
+					_, _, err := tx.CloseTaskWorkflow(ctx, run.TaskID, 1, time.Now().UTC())
+					return err
+				}); err != nil {
+					t.Fatal(err)
+				}
+			}
 			var before domain.AttentionItem
 			if err := st.Read(ctx, func(tx *store.ReadTx) error {
 				var err error

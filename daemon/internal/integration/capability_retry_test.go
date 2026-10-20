@@ -421,6 +421,56 @@ func TestCapabilityRetryAdmitsUnderTheSelectedManifest(t *testing.T) {
 	assertAdmittedUnderManifest(t, restarted, selection)
 }
 
+func TestWorkflowClosurePreventsAcceptedCapabilityRetry(t *testing.T) {
+	t.Parallel()
+	root := t.TempDir()
+	f := openWideCapabilityRetryFixture(t, root, true)
+	selection := driveCapabilityRetrySelection(t, f)
+	if err := f.store.Write(t.Context(), func(tx *store.WriteTx) error {
+		run, err := tx.GetRun(t.Context(), capabilityRetryRunID)
+		if err != nil {
+			return err
+		}
+		if _, err := tx.AbandonTask(t.Context(), run.TaskID, time.Now().UTC()); err != nil {
+			return err
+		}
+		task, err := tx.GetTask(t.Context(), run.TaskID)
+		if err != nil {
+			return err
+		}
+		_, _, err = tx.CloseTaskWorkflow(t.Context(), task.ID, task.CurrentStart().Ordinal, time.Now().UTC())
+		return err
+	}); err != nil {
+		t.Fatal(err)
+	}
+	assertSuppressed := func(f *workflowFixture) {
+		t.Helper()
+		scriptCapabilityRetryStage(f, selection)
+		reconcileCapabilityRetryPass(t, f, "accepted retry after closure")
+		if _, started := f.driver.StartSpec(selection.retryInvocation); started {
+			t.Fatal("accepted command started a retry after closure")
+		}
+		if err := f.store.Read(t.Context(), func(tx *store.ReadTx) error {
+			latest, err := tx.LatestProductionAttempt(t.Context(), selection.campaignID)
+			if err != nil {
+				return err
+			}
+			if latest.AttemptNumber != 1 {
+				t.Fatalf("accepted command allocated attempt %d after closure", latest.AttemptNumber)
+			}
+			if _, err := tx.GetRun(t.Context(), selection.retryRunID); !errors.Is(err, store.ErrNotFound) {
+				t.Fatalf("retry run exists after closure: %v", err)
+			}
+			return nil
+		}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	assertSuppressed(f)
+	f.close(t)
+	assertSuppressed(openWideCapabilityRetryFixture(t, root, false))
+}
+
 // TestCapabilityRetryAdmitsOnceAcrossARestartBeforeAdmission covers the crash
 // window the allocation opens: attempt 2 is committed and its production
 // intent is pending when the daemon dies. The restarted engine resumes that

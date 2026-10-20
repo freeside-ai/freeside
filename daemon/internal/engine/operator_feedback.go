@@ -559,7 +559,7 @@ func (e *Engine) enqueueSpecificationAnswer(
 		}
 		return nil
 	})
-	if errors.Is(err, errReplay) || errors.Is(err, store.ErrTaskCancellationFenced) {
+	if errors.Is(err, errReplay) || workflowAdvancementFenced(err) {
 		return false, nil
 	}
 	if err != nil {
@@ -949,7 +949,7 @@ func (e *Engine) persistImplementationFeedback(
 		}
 		return nil
 	})
-	if errors.Is(err, errReplay) || errors.Is(err, store.ErrTaskCancellationFenced) {
+	if errors.Is(err, errReplay) || workflowAdvancementFenced(err) {
 		return false, nil
 	}
 	if err != nil {

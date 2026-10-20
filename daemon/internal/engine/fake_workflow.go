@@ -88,6 +88,13 @@ func (e *Engine) reconcileRuns(ctx context.Context) (int, error) {
 
 	transitions := 0
 	for _, snapshotted := range runs {
+		if err := e.store.Read(ctx, func(tx *store.ReadTx) error {
+			return tx.RequireRunWorkflowOpen(ctx, snapshotted.Value.ID)
+		}); errors.Is(err, store.ErrTaskWorkflowClosed) {
+			continue
+		} else if err != nil {
+			return transitions, err
+		}
 		// A Run has no workflow-kind discriminator. StartFakeRun's deterministic
 		// approval item is therefore the concrete 1A.0 ownership marker; never
 		// attach this walking skeleton to unrelated runs merely because they
@@ -100,6 +107,9 @@ func (e *Engine) reconcileRuns(ctx context.Context) (int, error) {
 			continue
 		}
 		advanced, err := e.reconcileRun(ctx, snapshotted.Value)
+		if errors.Is(err, store.ErrTaskWorkflowClosed) {
+			continue
+		}
 		if err != nil {
 			return transitions, fmt.Errorf("run %q: %w", snapshotted.Value.ID, err)
 		}

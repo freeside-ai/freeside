@@ -248,7 +248,7 @@ func (r *ExternalReviewReplier) pass(ctx context.Context) error {
 			if ctx.Err() != nil {
 				return ctx.Err()
 			}
-			if err := r.drive(ctx, run, d); err != nil {
+			if err := r.drive(ctx, run, d); err != nil && !errors.Is(err, store.ErrTaskWorkflowClosed) {
 				errs = append(errs, err)
 			}
 		}
@@ -319,6 +319,13 @@ func (r *ExternalReviewReplier) drive(ctx context.Context, run domain.Run, d dom
 		if err != nil && !errors.Is(err, store.ErrNotFound) {
 			return err
 		}
+		// Only a claimed request has an external outcome to observe after
+		// closure. A pending intent is never authority to send a new reply.
+		if entry.Status != "dispatching" {
+			if err := tx.RequireRunWorkflowOpen(ctx, run.ID); err != nil {
+				return err
+			}
+		}
 		source, err = replySource(ctx, tx, d)
 		if errors.Is(err, domain.ErrExternalReviewNotAdmitted) && entry.ID != 0 && entry.Status == "dispatching" {
 			source.finding, err = tx.GetFinding(ctx, d.FindingID)
@@ -339,6 +346,12 @@ func (r *ExternalReviewReplier) drive(ctx context.Context, run domain.Run, d dom
 	}
 	if errors.Is(err, store.ErrNotFound) {
 		return nil
+	}
+	if errors.Is(err, store.ErrTaskWorkflowClosed) {
+		if entry.ID == 0 {
+			return nil
+		}
+		return r.retireClosed(ctx, run, d)
 	}
 	if err != nil {
 		return err
@@ -361,6 +374,43 @@ func (r *ExternalReviewReplier) drive(ctx context.Context, run domain.Run, d dom
 		return r.settle(ctx, run, d, intent)
 	}
 	return r.send(ctx, run, d, source, intent)
+}
+
+// A pending reply was never sent or was released after a proven rejection.
+// Recheck its state with closure in one writer transaction: a dispatching
+// claim still belongs to its sender and may have an external outcome.
+func (r *ExternalReviewReplier) retireClosed(ctx context.Context, run domain.Run, d domain.ExternalFindingDisposition) error {
+	return r.store.Write(ctx, func(tx *store.WriteTx) error {
+		if err := tx.RequireRunWorkflowOpen(ctx, run.ID); !errors.Is(err, store.ErrTaskWorkflowClosed) {
+			return err
+		}
+		entry, err := tx.GetOutbox(ctx, externalReplyKey(d.FindingID, d.Round))
+		if errors.Is(err, store.ErrNotFound) {
+			return nil
+		}
+		if err != nil {
+			return err
+		}
+		if entry.Status != "pending" {
+			return nil
+		}
+		intent, err := decodeExternalReplyIntent(entry)
+		if err != nil {
+			return err
+		}
+		finding, err := tx.GetFinding(ctx, d.FindingID)
+		if err != nil {
+			return err
+		}
+		if intent.RunID != run.ID || intent.RunID != d.RunID ||
+			intent.Disposition != d.Disposition || intent.Thread != finding.External.ThreadID {
+			return errors.New("review reply: source identity changed")
+		}
+		if _, err := replyCollection(ctx, &tx.ReadTx, intent); err != nil {
+			return err
+		}
+		return r.finishInTx(ctx, tx, run, d, externalReplyRefused, 0, "")
+	})
 }
 
 // open serializes reservation by repository and PR inside the store write,
@@ -397,6 +447,9 @@ func (r *ExternalReviewReplier) open(ctx context.Context, run domain.Run, d doma
 		return err
 	}
 	return r.store.WriteInternal(ctx, func(tx *store.InternalTx) error {
+		if err := tx.RequireRunWorkflowOpen(ctx, run.ID); err != nil {
+			return err
+		}
 		collection, err := replyCollection(ctx, &tx.ReadTx, i)
 		if err != nil {
 			return err
@@ -503,6 +556,9 @@ func (r *ExternalReviewReplier) send(ctx context.Context, run domain.Run, d doma
 	err = r.store.WriteInternal(ctx, func(tx *store.InternalTx) error {
 		// Recheck after token and identity resolution, immediately before
 		// making the irreversible dispatch claim.
+		if err := tx.RequireRunWorkflowOpen(ctx, run.ID); err != nil {
+			return err
+		}
 		if _, err := tx.GetAdmittedExternalFinding(ctx, d.FindingID); err != nil {
 			return err
 		}
@@ -575,26 +631,30 @@ func (r *ExternalReviewReplier) settle(ctx context.Context, run domain.Run, d do
 }
 
 func (r *ExternalReviewReplier) finish(ctx context.Context, run domain.Run, d domain.ExternalFindingDisposition, code string, commentID int64, reason string) error {
+	return r.store.Write(ctx, func(tx *store.WriteTx) error {
+		return r.finishInTx(ctx, tx, run, d, code, commentID, reason)
+	})
+}
+
+func (r *ExternalReviewReplier) finishInTx(ctx context.Context, tx *store.WriteTx, run domain.Run, d domain.ExternalFindingDisposition, code string, commentID int64, reason string) error {
 	key := externalReplyKey(d.FindingID, d.Round)
 	payload, err := json.Marshal(externalReplyOutcome{d.FindingID, d.Round, commentID, code})
 	if err != nil {
 		return err
 	}
-	return r.store.Write(ctx, func(tx *store.WriteTx) error {
-		row, _, err := tx.RecordDispatchedOutbox(ctx, key+"/outcome", ExternalReplyOutcomeKind, payload)
-		if err != nil {
+	row, _, err := tx.RecordDispatchedOutbox(ctx, key+"/outcome", ExternalReplyOutcomeKind, payload)
+	if err != nil {
+		return err
+	}
+	if _, err := ExternalReplyBackupPayloadDigests(row); err != nil {
+		return err
+	}
+	if code != "" && code != externalReplyRevoked {
+		if err := r.putNotice(ctx, tx, run, key, code, reason); err != nil {
 			return err
 		}
-		if _, err := ExternalReplyBackupPayloadDigests(row); err != nil {
-			return err
-		}
-		if code != "" && code != externalReplyRevoked {
-			if err := r.putNotice(ctx, tx, run, key, code, reason); err != nil {
-				return err
-			}
-		}
-		return tx.MarkOutboxDispatched(ctx, key)
-	})
+	}
+	return tx.MarkOutboxDispatched(ctx, key)
 }
 
 func (r *ExternalReviewReplier) notice(ctx context.Context, run domain.Run, key, code, reason string) error {
@@ -602,6 +662,12 @@ func (r *ExternalReviewReplier) notice(ctx context.Context, run domain.Run, key,
 }
 
 func (r *ExternalReviewReplier) putNotice(ctx context.Context, tx *store.WriteTx, run domain.Run, key, code, reason string) error {
+	if err := tx.RequireRunWorkflowOpen(ctx, run.ID); err != nil {
+		if errors.Is(err, store.ErrTaskWorkflowClosed) {
+			return nil
+		}
+		return err
+	}
 	id := domain.ItemID("external-review-reply/" + string(run.ID) + "/" + key + "/" + code)
 	if _, err := tx.GetAttentionItem(ctx, id); err == nil {
 		return nil

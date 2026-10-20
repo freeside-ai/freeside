@@ -25,7 +25,7 @@ func requireTaskPublicationOpen(ctx context.Context, tx *store.ReadTx, id domain
 	if task.Cancellation != nil {
 		return store.ErrTaskCancellationFenced
 	}
-	return nil
+	return tx.RequireRunWorkflowOpen(ctx, id)
 }
 
 func (p *Publisher) taskEffectOpen(ctx context.Context, c Candidate) error {
@@ -44,13 +44,23 @@ func (p *Publisher) taskEffectOpen(ctx context.Context, c Candidate) error {
 // repairing, or closing anything on the forge. A missing PR is not proof that
 // an interrupted external request was rejected, so its intent remains pending.
 func (p *Publisher) ReconcileCancelledRun(ctx context.Context, runID domain.RunID) error {
+	return p.reconcileFencedRun(ctx, runID, store.ErrTaskCancellationFenced)
+}
+
+// ReconcileClosedWorkflowRun only observes effects dispatched before closure.
+// It certifies neither cancellation nor rollback.
+func (p *Publisher) ReconcileClosedWorkflowRun(ctx context.Context, runID domain.RunID) error {
+	return p.reconcileFencedRun(ctx, runID, store.ErrTaskWorkflowClosed)
+}
+
+func (p *Publisher) reconcileFencedRun(ctx context.Context, runID domain.RunID, fence error) error {
 	if p.storeDecision == nil {
 		return errors.New("cancelled publication has no durable decision store")
 	}
 	s := p.storeDecision.store
 	var pending []store.QueueEntry
 	if err := s.Read(ctx, func(tx *store.ReadTx) error {
-		if err := requireTaskPublicationOpen(ctx, tx, runID); !errors.Is(err, store.ErrTaskCancellationFenced) {
+		if err := requireTaskPublicationOpen(ctx, tx, runID); !errors.Is(err, fence) {
 			return errors.Join(err, errors.New("cancelled publication observation requires a task fence"))
 		}
 		var err error
