@@ -635,10 +635,18 @@ submission without it, because the daemon records completion against the
 declaration: a task accepted without one never finishes when its pull request
 merges, and it keeps its work-in-progress slot. A task the daemon accepted
 before this rule is left as it is and stays "Ready" after its merge. Release
-it with `freesided abandon -db <database> -task <task-id>`, which also expires
-its open specification approvals and execution-failure recovery cards. Other
-item kinds and quarantine notices stay open. Abandonment does not stop
-execution, so new cards may appear; repeat `abandon` to retire eligible ones.
+it with `freesided abandon -db <database> -task <task-id>`. The command releases
+the slot, closes that exact workflow episode, and expires its open decisions
+and notices. These steps commit separately. If one fails, inspect `episode`,
+`workflow_closed`, and `cleanup_complete`, then repair the reported episode
+with `freesided abandon -db <database> -task <task-id> -episode <episode>`.
+A delayed repair cannot release newer work. Closure refuses new engine dispatch
+claims and publication. A winning claim may finish downstream preparation and
+launch; closure neither revokes it nor undoes a dispatched effect.
+Their late results remain history and consume capacity until the
+normal release evidence exists. An explicit reasoned reattempt still needs
+an approved specification, valid lineage, no cancellation fence, and cap-checked
+admission. Upgrading does not infer closure from historical abandonment.
 
 A publication file with a literal `title` and `body` is still accepted for any
 other spec file. Its text is published as written, with no publisher-written

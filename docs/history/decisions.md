@@ -2813,3 +2813,30 @@ The client work is #1798 to #1803.)
 
 (Owner decision in #2058;
 [decision note](../../devlog/2026-10-18-0940-pre-publication-base-advance.md).)
+
+---
+
+## Revision 90 ("`prod` Runs Driverless During A Real-Work Run"):
+
+1. **`prod` keeps running, without a driver, while a real-work run holds the
+   production rig lease.** A driverless `prod` never opens the App
+   authority's files, so the run stays their only writer and the operator no
+   longer stops and restores the installed daemon around a run (Section
+   [10](../plan.md#10-operations-and-onboarding), Environments). This revises revision
+   71 item 2, which kept `prod` stopped and deferred running both to #1568.
+   A driverless `prod` runs no janitor, so the GitHub-side lease stays
+   declined on that item's basis.
+2. **Both sides enforce it, and neither locks the other.** A `prod` that
+   starts while a lease manifest, live or stale, exists refuses a driver and
+   the one-shot fake publication. The deputy, once it holds the lease, reads
+   the loaded `prod`'s execution mode over its control socket and enables
+   execution only for `disabled` or no running `prod`; a `prod` that does
+   not answer fails the check closed.
+3. **Rejected options.** Keeping the stop (the restore is the step that
+   failed the 2026-10-10 exit run); reporting the mode on `/health` (its
+   schema is closed and paired with generated clients, a contract change);
+   and reading an unanswering advertisement as "not running" (a live `prod`
+   with a driver behind a dead socket would pass).
+
+(Owner decision in the #1938 plan comment of 2026-10-14, delivered by #2080;
+[decision note](../../devlog/2026-10-20-1013-prod-runs-driverless.md).)
