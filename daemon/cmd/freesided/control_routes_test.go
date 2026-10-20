@@ -741,3 +741,48 @@ func TestControlDoctorUsesDaemonBlobStoreThroughSymlink(t *testing.T) {
 		t.Fatalf("Doctor created a canonical-path blob sidecar: %v", err)
 	}
 }
+
+// TestControlServesExecutionMode pins the read a real-work run uses to prove
+// prod runs no driver (#2080): every daemon answers it on its control socket.
+func TestControlServesExecutionMode(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		cfg  config
+		want executionMode
+	}{
+		{name: "driverless", want: executionDisabled},
+		{name: "fake driver", cfg: config{FakeDriverEnabled: true}, want: executionFake},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			dbPath := filepath.Join(t.TempDir(), "freeside.db")
+			cfg := tc.cfg
+			cfg.Environment, cfg.DBPath, cfg.ListenAddr = environmentEphemeral, dbPath, "127.0.0.1:0"
+			h, err := run(t.Context(), nil, cfg)
+			if err != nil {
+				t.Fatal(err)
+			}
+			t.Cleanup(func() {
+				if err := h.Close(); err != nil {
+					t.Error(err)
+				}
+			})
+			canonical, err := canonicalDatabasePath(dbPath)
+			if err != nil {
+				t.Fatal(err)
+			}
+			client, err := newControlClient(canonical)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer client.Close()
+			var report executionReport
+			if err := client.get(t.Context(), "/execution", nil, &report); err != nil {
+				t.Fatal(err)
+			}
+			want := executionReport{Version: executionReportVersion, Environment: environmentEphemeral, Execution: tc.want}
+			if report != want {
+				t.Fatalf("execution report = %+v, want %+v", report, want)
+			}
+		})
+	}
+}

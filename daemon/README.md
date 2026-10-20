@@ -351,6 +351,12 @@ daemon's checkpoint files and live closure-gap state without changing its
 ordinary health policy. Control operations use the caller's
 cancellation and deadline, including long-running Doctor scans.
 
+`GET /execution` on the socket reports what the daemon may run:
+`{"version":"freeside-execution-v1","environment":"<tier>","execution":"disabled"|"fake"|"claude"}`.
+A real-work run's preflight reads it from `prod` to prove `prod` runs without
+a driver (#2080). It is a same-host read, not part of the network API, so
+`/health` stays unchanged.
+
 If the startup code expires, run this command as the daemon's OS user:
 
 ```sh

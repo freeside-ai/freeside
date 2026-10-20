@@ -111,6 +111,19 @@ func openObservation(ctx context.Context, dbPath string, approvedRecipes ...doma
 	return &lockedObservation{Source: source, access: access}, nil
 }
 
+// executionReportVersion names the GET /execution answer's shape; a reader
+// refuses any other.
+const executionReportVersion = "freeside-execution-v1"
+
+// executionReport is what a daemon may run. The control socket serves it, not
+// /health, because /health's schema is closed and paired with generated
+// clients; a real-work run reads it to prove prod runs without a driver.
+type executionReport struct {
+	Version     string        `json:"version"`
+	Environment environment   `json:"environment"`
+	Execution   executionMode `json:"execution"`
+}
+
 func decodeControlPayload[T any](body json.RawMessage) (T, error) {
 	var value T
 	err := strictjson.Decode(body, &value, strictjson.RejectInvalidUTF8, maxControlRequestBytes)
@@ -120,9 +133,12 @@ func decodeControlPayload[T any](body json.RawMessage) (T, error) {
 func (p *pairingControl) registerControlRoutes(
 	mux *http.ServeMux, st *store.Store, blobs *signet.BlobStore, backupFiles *store.LocalBackupFiles,
 	approved map[domain.Digest]bool, integrityProbe credentialIntegrityProbe, env environment,
-	attention *signet.Service, launch *deputyLaunch,
+	execution executionMode, attention *signet.Service, launch *deputyLaunch,
 ) {
 	p.registerNotifyTest(mux, st, attention)
+	p.handleGet(mux, "/execution", func(context.Context, *http.Request) (any, error) {
+		return executionReport{Version: executionReportVersion, Environment: env, Execution: execution}, nil
+	})
 	observation := observedb.Borrow(st)
 	p.handleGet(mux, "/observe/runs/{run_id}", func(ctx context.Context, r *http.Request) (any, error) {
 		return observation.ObserveRun(ctx, domain.RunID(r.PathValue("run_id")))
