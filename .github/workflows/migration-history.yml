@@ -1,0 +1,31 @@
+name: migration history
+
+on:
+  # Run on every PR through pull-request.yml and report through required.
+  workflow_call:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: migration-history-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  check:
+    name: check
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Check exact pull-request migration history
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          set -euo pipefail
+          if [ "$(git rev-parse --is-shallow-repository)" = true ]; then
+            git fetch --no-tags --unshallow origin "$BASE_SHA" "$HEAD_SHA"
+          else
+            git fetch --no-tags origin "$BASE_SHA" "$HEAD_SHA"
+          fi
+          bash scripts/check-migration-history.sh "$BASE_SHA" "$HEAD_SHA"
