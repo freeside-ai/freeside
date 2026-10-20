@@ -436,8 +436,8 @@ interface tokens, not prose to retitle.
   - **Slug:** `freeside-ai/freeside`. Pass `--repo freeside-ai/freeside` to
     `gh`; never derive the owner from a sibling project.
   - **Consumers:** `await-pr-review`, `land-approved-prs`, `merge-cleanup`,
-    `self-merge`, and `visual-evidence` read this record before inferring a
-    repository from a remote.
+    and `visual-evidence` read this record before inferring a repository
+    from a remote.
 
 ## Automated Reviewer
 
