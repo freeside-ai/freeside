@@ -27,7 +27,12 @@ What each measure reads:
    latest run of any workflow on it concluded failure, timed_out, or
    startup_failure; cancelled runs (the concurrency groups cancel on the
    next push) do not count. Failing runs are grouped by workflow, job, and
-   first failing step, from the run's latest attempt.
+   first failing step, from the run's latest attempt. Also: every hand-back
+   by the lander (land-approved-prs), read as a `needs-human` label event
+   in the window on any PR, keyed by the reason in the hand-back comment
+   the same actor posted in the hour before the label: the first
+   backticked guard-shaped token (`rebase-conflict`, `checks-failed`), else
+   the comment's first line.
 2. Rebase conflicts. For each PR that merged in the window (the lander) and
    each other PR open, ready, and based on main at that moment (replayed
    from its closed and reopened, ready_for_review and convert_to_draft, and
@@ -38,20 +43,35 @@ What each measure reads:
    the landing is its latest push before it, read from its runs and its
    force-push events. Final heads are not used: under the rebase rule a PR
    that landed later already contains the earlier one, so its final head
-   would never conflict. Also: merged PR bodies whose Verification section
-   mentions range-diff, the provisional reading of #2020's rebase record.
+   would never conflict. Also, as two separate counts: merged PR bodies
+   whose Verification section mentions range-diff, the provisional reading
+   of #2020's rebase record, and merged PRs that carry a comment by a
+   non-bot user mentioning range-diff, the lander's record of a rebase it
+   resolved or reworked.
 3. Wait to land. Per merged PR, hours from ready-for-review (the last
-   ready_for_review event, else creation) to merge, and from the last push
-   (the push of the merged head) to merge.
+   ready_for_review event, else creation) to merge, from the last push
+   (the push of the merged head) to merge, and from approval (the latest
+   `approved` label event whose actor holds write, maintain, or admin on
+   the repository, the landing record's Approver permission, and whose
+   label was still on the PR at the merge; a removal, such as the lander's
+   hand-back, withdraws it) to merge.
 4. Discarded work. PRs closed unmerged in the window, with the last comment
-   before the close, for a human to classify.
+   before the close and the last hand-back reason when the lander handed
+   the PR back, for a human to classify.
 
 What it cannot see:
 
-- No required check is named until #2017 merges, so measure 1 counts every
-  workflow; filter to the required check's job once it exists.
+- Measure 1 counts every workflow, not only the `required` check #2017
+  added; filtering to that check's job is a later change.
 - The rebase record of #2020 has no fixed format yet; the range-diff matcher
-  is provisional until #2020 defines it.
+  is provisional until #2020 defines it. The lander's comments have no fixed
+  format either, so a comment that mentions range-diff for another reason
+  also matches.
+- A hand-back comment has no fixed format; the reason is a heuristic read of
+  it, and a `needs-human` label with no comment by the same actor in the
+  previous hour reads as "(no hand-back comment)".
+- A label actor's role is read when the script runs, not when the label was
+  added, the same reading the lander's list uses.
 - GitHub records no close reason for a PR; measure 4 lists, it does not
   classify.
 - `merge-tree --write-tree` writes tree and blob objects into the object
@@ -84,6 +104,7 @@ import datetime as dt
 import json
 import math
 import os
+import re
 import statistics
 import subprocess
 import sys
@@ -95,7 +116,16 @@ PR_FIELDS = ("number,title,author,isDraft,isCrossRepository,createdAt,closedAt,"
              "mergedAt,mergeCommit,headRefOid,headRefName,baseRefName,body")
 TIMELINE_EVENTS = {"ready_for_review", "convert_to_draft", "closed",
                    "reopened", "base_ref_changed", "head_ref_force_pushed",
-                   "commented"}
+                   "commented", "labeled", "unlabeled"}
+# The landing record in AGENTS.md: the lander takes PRs labelled APPROVAL by
+# a collaborator at or above the Approver permission and hands them back
+# with HAND_BACK after a comment that names the guard or reason.
+APPROVAL_LABEL = "approved"
+HAND_BACK_LABEL = "needs-human"
+BASE_ROLES = {"read", "triage", "write", "maintain", "admin"}
+APPROVER_ROLES = {"write", "maintain", "admin"}
+HAND_BACK_COMMENT_WINDOW = dt.timedelta(hours=1)
+GUARD_TOKEN = re.compile(r"`([a-z]+(?:-[a-z]+)+)`")
 BASE_CHANGES = """query($owner: String!, $name: String!, $number: Int!) {
   repository(owner: $owner, name: $name) { pullRequest(number: $number) {
     timelineItems(first: 100, itemTypes: [BASE_REF_CHANGED_EVENT]) {
@@ -162,7 +192,8 @@ def fetch_timeline(repo, number):
         f"repos/{repo}/issues/{number}/timeline?per_page=100") for event in page]
     kept = [{"event": e["event"], "created_at": e.get("created_at"),
              "commit_id": e.get("commit_id"), "body": e.get("body"),
-             "user": (e.get("user") or e.get("actor") or {}).get("login")}
+             "user": (e.get("user") or e.get("actor") or {}).get("login"),
+             "label": (e.get("label") or {}).get("name")}
             for e in events if e.get("event") in TIMELINE_EVENTS]
     if any(e["event"] == "base_ref_changed" for e in kept):
         # The REST timeline omits the branch names; GraphQL carries them.
@@ -181,9 +212,32 @@ def fetch_base_changes(repo, number):
         raise SystemExit(f"landing-measures: #{number} changed base more "
                          f"than {len(items['nodes'])} times")
     return [{"event": "base_ref_changed", "created_at": n["createdAt"],
-             "commit_id": None, "body": None, "user": None,
+             "commit_id": None, "body": None, "user": None, "label": None,
              "previous": n["previousRefName"], "current": n["currentRefName"]}
             for n in items["nodes"]]
+
+
+def fetch_roles(repo, logins):
+    """Each login's repository role, or "" for none, read as the lander
+    reads it: a custom role's name falls back to the base permission the
+    endpoint reports beside it. A login GitHub no longer knows is a 404 and
+    holds no role; any other failure aborts, like the other forge reads."""
+    roles = {}
+    for login in sorted(logins):
+        argv = ["gh", "api", f"repos/{repo}/collaborators/{login}/permission"]
+        result = subprocess.run(argv, capture_output=True, text=True)
+        if result.returncode != 0:
+            if "HTTP 404" in result.stderr:
+                roles[login] = ""
+                continue
+            raise SystemExit(f"landing-measures: {' '.join(argv)} failed "
+                             f"(exit {result.returncode}): "
+                             f"{result.stderr.strip()}")
+        data = json.loads(result.stdout)
+        role = data.get("role_name") or ""
+        roles[login] = (role if role in BASE_ROLES
+                        else data.get("permission") or "")
+    return roles
 
 
 def fetch_runs(repo, event, branch, first_day, last_day):
@@ -261,6 +315,11 @@ def fetch_snapshot(repo_path, since, until, jobs_cache):
         timelines[str(pr["number"])] = fetch_timeline(repo, pr["number"])
         if index % 25 == 0:
             progress(f"  timelines {index}/{len(prs)}")
+    approvers = {e["user"] for events in timelines.values() for e in events
+                 if e["event"] == "labeled" and e["label"] == APPROVAL_LABEL
+                 and e["user"]}
+    progress(f"reading the repository role of {len(approvers)} label actors")
+    roles = fetch_roles(repo, approvers)
     first_day, last_day = run_days(since, until)
     progress(f"reading workflow runs {first_day} to {last_day}")
     runs = (fetch_runs(repo, "pull_request", None, first_day, last_day)
@@ -274,7 +333,8 @@ def fetch_snapshot(repo_path, since, until, jobs_cache):
     snapshot = {"meta": {"repo": repo, "default_branch": default_branch,
                          "base_sha": base_sha, "since": iso(since),
                          "until": iso(until), "read_at": iso(now())},
-                "prs": prs, "timelines": timelines, "runs": runs, "jobs": jobs}
+                "prs": prs, "timelines": timelines, "runs": runs, "jobs": jobs,
+                "roles": roles}
     fetch_commits(repo_path, needed_commits(snapshot))
     return snapshot
 
@@ -455,6 +515,66 @@ def failing_steps(run_record, jobs):
     return rows or [(run_record["name"], "(no failing job)", "")]
 
 
+def hand_back_reason(body):
+    """The guard or reason a hand-back comment names: its first backticked
+    guard-shaped token that is not one of the two labels, else its first
+    line."""
+    for match in GUARD_TOKEN.finditer(body or ""):
+        if match.group(1) not in (APPROVAL_LABEL, HAND_BACK_LABEL):
+            return match.group(1)
+    lines = [line.strip() for line in (body or "").splitlines() if line.strip()]
+    return " ".join(lines[0].split())[:120] if lines else "(empty comment)"
+
+
+def pr_hand_backs(pr, events):
+    """Every HAND_BACK label event on one PR, whenever it happened, with the
+    reason from the comment the same actor posted in the hour before it,
+    oldest first."""
+    found = []
+    for e in events:
+        if e["event"] != "labeled" or e.get("label") != HAND_BACK_LABEL:
+            continue
+        at = parse_time(e["created_at"])
+        comments = [c for c in events if c["event"] == "commented"
+                    and c["user"] == e["user"] and c["created_at"]
+                    and at - HAND_BACK_COMMENT_WINDOW
+                    <= parse_time(c["created_at"]) <= at]
+        reason = (hand_back_reason(comments[-1]["body"]) if comments
+                  else "(no hand-back comment)")
+        found.append({"number": pr["number"], "at": at,
+                      "actor": e["user"], "reason": reason})
+    return sorted(found, key=lambda h: h["at"])
+
+
+def hand_backs(snapshot):
+    """Every hand-back in the window, oldest first."""
+    since, until = window(snapshot)
+    found = [h for pr in snapshot["prs"]
+             for h in pr_hand_backs(pr, snapshot["timelines"][str(pr["number"])])
+             if since <= h["at"] < until]
+    return sorted(found, key=lambda h: (h["at"], h["number"]))
+
+
+def approved_at(pr, events, roles):
+    """When the APPROVAL label still on the PR at the merge was last added
+    by a collaborator at or above the Approver permission, or None. A
+    removal withdraws the approval whoever removes it: the lander's
+    hand-back strips the label, and a merge without a fresh approval
+    after that was not a label-based landing."""
+    merged_at = parse_time(pr["mergedAt"])
+    changes = sorted((e for e in events if e.get("label") == APPROVAL_LABEL
+                      and e["event"] in ("labeled", "unlabeled")
+                      and parse_time(e["created_at"]) <= merged_at),
+                     key=lambda e: parse_time(e["created_at"]))
+    active = None
+    for e in changes:
+        if e["event"] == "unlabeled":
+            active = None
+        elif roles.get(e["user"]) in APPROVER_ROLES:
+            active = parse_time(e["created_at"])
+    return active
+
+
 def landing_failures(snapshot):
     since, until = window(snapshot)
     prs, timelines, jobs = snapshot["prs"], snapshot["timelines"], snapshot["jobs"]
@@ -489,11 +609,19 @@ def landing_failures(snapshot):
                 for row in failing_steps(r, jobs):
                     table[row] += 1
                     table_prs[row].add(n)
+    handed = hand_backs(snapshot)
+    reasons = collections.Counter(h["reason"] for h in handed)
+    reason_prs = collections.defaultdict(set)
+    for h in handed:
+        reason_prs[h["reason"]].add(h["number"])
     return {"merged": len(merged), "sent_back": sent_back,
             "merged_red": merged_red, "reran": reran,
             "red_after_landing": red_after, "no_runs": no_runs,
             "steps": [(row, count, sorted(table_prs[row]))
-                      for row, count in table.most_common()]}
+                      for row, count in table.most_common()],
+            "hand_backs": handed,
+            "hand_back_reasons": [(reason, count, sorted(reason_prs[reason]))
+                                  for reason, count in reasons.most_common()]}
 
 
 def merge_tree(repo_path, ours, theirs, cache):
@@ -594,13 +722,28 @@ def verification_section(body):
     return "\n".join(lines)
 
 
+def lander_rebase_comment(pr, events):
+    """Whether a non-bot comment before the merge mentions range-diff: the
+    lander comments the range-diff of a rebase it resolved or reworked."""
+    merged_at = parse_time(pr["mergedAt"])
+    return any(e["event"] == "commented" and e["created_at"]
+               and parse_time(e["created_at"]) <= merged_at
+               and not (e["user"] or "").endswith("[bot]")
+               and "range-diff" in (e["body"] or "").lower()
+               for e in events)
+
+
 def rebase_records(snapshot):
     since, until = window(snapshot)
     merged = merged_in(snapshot["prs"], since, until)
     return {"merged": len(merged),
             "with_range_diff": [pr["number"] for pr in merged
                                 if "range-diff" in
-                                verification_section(pr["body"]).lower()]}
+                                verification_section(pr["body"]).lower()],
+            "with_lander_comment": [
+                pr["number"] for pr in merged
+                if lander_rebase_comment(
+                    pr, snapshot["timelines"][str(pr["number"])])]}
 
 
 def percentile(values, fraction):
@@ -614,11 +757,18 @@ def wait_to_land(snapshot):
     prs, timelines = snapshot["prs"], snapshot["timelines"]
     by_pr = runs_by_pr(prs, timelines, snapshot["runs"],
                        snapshot["meta"]["repo"])
-    from_ready, from_push, unknown_push = {}, {}, []
+    roles = snapshot["roles"]
+    from_ready, from_push, from_approved = {}, {}, {}
+    unknown_push, unapproved = [], []
     for pr in merged_in(prs, since, until):
         n, merged_at = pr["number"], parse_time(pr["mergedAt"])
         events = timelines[str(n)]
         from_ready[n] = (merged_at - ready_at(pr, events)).total_seconds() / 3600
+        approved = approved_at(pr, events, roles)
+        if approved is None:
+            unapproved.append(n)
+        else:
+            from_approved[n] = (merged_at - approved).total_seconds() / 3600
         times = dict((sha, at) for at, sha in pushes(pr, events, by_pr.get(n, [])))
         # No commit date stands in: a commit can be pushed long after it
         # was made, so an unobserved push stays unknown.
@@ -628,7 +778,9 @@ def wait_to_land(snapshot):
         else:
             from_push[n] = (merged_at - pushed).total_seconds() / 3600
     return {"from_ready": summarize(from_ready),
-            "from_push": summarize(from_push), "unknown_push": unknown_push}
+            "from_push": summarize(from_push),
+            "from_approved": summarize(from_approved),
+            "unknown_push": unknown_push, "unapproved": unapproved}
 
 
 def summarize(hours_by_pr):
@@ -647,13 +799,18 @@ def discarded(snapshot):
         closed = closed_at(pr)
         if pr["mergedAt"] or closed is None or not since <= closed < until:
             continue
-        comments = [e for e in snapshot["timelines"][str(pr["number"])]
-                    if e["event"] == "commented" and e["created_at"]
-                    and parse_time(e["created_at"]) <= closed]
+        events = snapshot["timelines"][str(pr["number"])]
+        comments = [e for e in events if e["event"] == "commented"
+                    and e["created_at"] and parse_time(e["created_at"]) <= closed]
         last = " ".join((comments[-1]["body"] or "").split())[:160] if comments else ""
+        # The PR's own history up to the close, not the window: a hand-back
+        # before --since is still its last, and a label after the close is
+        # not a close reason.
+        handed = [h for h in pr_hand_backs(pr, events) if h["at"] <= closed]
         rows.append({"number": pr["number"], "title": pr["title"],
                      "author": (pr["author"] or {}).get("login", ""),
-                     "closed_at": pr["closedAt"], "last_comment": last})
+                     "closed_at": pr["closedAt"], "last_comment": last,
+                     "last_hand_back": handed[-1]["reason"] if handed else ""})
     return rows
 
 
@@ -685,18 +842,30 @@ def render(snapshot, failures, conflicts, records, waits, discards, top):
            f"{len(failures['merged_red'])} merged with a red head; "
            f"{len(failures['reran'])} needed a re-run on the merged head; "
            f"{len(failures['red_after_landing'])} merge commits went red on "
-           f"`{meta['default_branch']}`. No required check is named yet "
-           f"(#2017), so every workflow counts.", ""]
+           f"`{meta['default_branch']}`. Every workflow counts, not only "
+           f"the required check. The lander handed back "
+           f"{len(failures['hand_backs'])} times "
+           f"(`{HAND_BACK_LABEL}` label events in the window) on "
+           f"{len({h['number'] for h in failures['hand_backs']})} PRs.", ""]
     for label, key in (("Sent back", "sent_back"), ("Merged red", "merged_red"),
                        ("Re-run to green", "reran"),
                        ("Red after landing", "red_after_landing")):
         if failures[key]:
             out.append(f"- {label}: {pr_list(failures[key])}")
+    if failures["hand_backs"]:
+        handed = failures["hand_backs"]
+        out.append("- Handed back: " + ", ".join(
+            f"#{h['number']} ({cell(h['reason'])})" for h in handed[:30])
+            + (f", and {len(handed) - 30} more" if len(handed) > 30 else ""))
     out += ["", "| Failing runs | Workflow | Job | First failing step | PRs |",
             "| ---: | --- | --- | --- | --- |"]
     for (workflow, job, step), count, numbers in failures["steps"][:top]:
         out.append(f"| {count} | {cell(workflow)} | {cell(job)} | {cell(step)} "
                    f"| {pr_list(numbers, 8)} |")
+    if failures["hand_back_reasons"]:
+        out += ["", "| Hand-backs | Reason | PRs |", "| ---: | --- | --- |"]
+        for reason, count, numbers in failures["hand_back_reasons"][:top]:
+            out.append(f"| {count} | {cell(reason)} | {pr_list(numbers, 8)} |")
     out += ["", "## 2. Rebase conflicts", "",
             f"{len(conflicts['conflicting'])} of {conflicts['checked']} "
             f"landing pairs checked forced a conflict on the open PR "
@@ -707,8 +876,12 @@ def render(snapshot, failures, conflicts, records, waits, discards, top):
             f"Rebase records (provisional until #2020): "
             f"{len(records['with_range_diff'])} of {records['merged']} merged "
             f"PR bodies mention `range-diff` in Verification"
-            + (f" ({pr_list(records['with_range_diff'])})."
-               if records["with_range_diff"] else "."), "",
+            + (f" ({pr_list(records['with_range_diff'])})"
+               if records["with_range_diff"] else "")
+            + f"; {len(records['with_lander_comment'])} of {records['merged']} "
+            f"carry a lander comment mentioning `range-diff`"
+            + (f" ({pr_list(records['with_lander_comment'])})."
+               if records["with_lander_comment"] else "."), "",
             "| Path | Conflicting pairs | PRs |", "| --- | ---: | --- |"]
     for path, count, numbers in conflicts["files"][:top]:
         out.append(f"| `{cell(path)}` | {count} | {pr_list(numbers, 12)} |")
@@ -716,29 +889,47 @@ def render(snapshot, failures, conflicts, records, waits, discards, top):
         out.append(f"\n{len(conflicts['files']) - top} more paths not shown.")
     out += ["", "## 3. Wait to land", ""]
     for label, key in (("Ready to merge", "from_ready"),
-                       ("Last push to merge", "from_push")):
+                       ("Last push to merge", "from_push"),
+                       ("Approved to merge", "from_approved")):
         s = waits[key]
         if not s["count"]:
-            out.append(f"- {label}: no merged PRs.")
+            out.append(f"- {label}: 0 PRs.")
             continue
         longest = ", ".join(f"#{n} ({hours(h)})" for n, h in s["longest"])
         out.append(f"- {label}: {s['count']} PRs, median {hours(s['median'])}, "
                    f"p90 {hours(s['p90'])}; longest {longest}.")
+    out.append(f"- Merged without a collaborator's `{APPROVAL_LABEL}` label: "
+               f"{len(waits['unapproved'])} PRs"
+               + (f" ({pr_list(waits['unapproved'])})."
+                  if waits["unapproved"] else "."))
     out += ["", "## 4. Discarded work", "",
             f"{len(discards)} PRs closed unmerged. GitHub records no close "
-            f"reason; classify each by hand.", ""]
+            f"reason; classify each by hand. Last hand-back is the lander's "
+            f"reason for the last `{HAND_BACK_LABEL}` label before the close, "
+            "whenever it was added.",
+            ""]
     if discards:
-        out += ["| PR | Title | Author | Closed | Last comment before close |",
-                "| --- | --- | --- | --- | --- |"]
+        out += ["| PR | Title | Author | Closed | Last comment before close "
+                "| Last hand-back |",
+                "| --- | --- | --- | --- | --- | --- |"]
         for row in discards:
             out.append(f"| #{row['number']} | {cell(row['title'])} | "
                        f"{cell(row['author'])} | {row['closed_at'][:10]} | "
-                       f"{cell(row['last_comment'])} |")
+                       f"{cell(row['last_comment'])} | "
+                       f"{cell(row['last_hand_back'])} |")
     out += ["", "## What this cannot see", "",
-            "- Measure 1 counts every workflow until #2017 names the required "
-            "check.",
+            "- Measure 1 counts every workflow, not only the required check "
+            "#2017 added.",
             "- The range-diff matcher is provisional until #2020 fixes the "
-            "rebase record's format.",
+            "rebase record's format; the lander's comments have no fixed "
+            "format either, so any non-bot comment mentioning range-diff "
+            "counts.",
+            "- A hand-back comment has no fixed format: its reason is the "
+            "first backticked guard-shaped token, else its first line, and "
+            f"a `{HAND_BACK_LABEL}` label with no comment by the same actor "
+            "in the previous hour reads as no comment.",
+            "- A label actor's role is read when the script runs, not when "
+            "the label was added.",
             "- GitHub records no close reason, so measure 4 is unclassified.",
             "- A push that ran no workflow, or one more than "
             f"{RUN_LOOKBACK_DAYS} days before the window, leaves no head "
@@ -786,6 +977,10 @@ def main(argv):
         if not forge_file or not forge_file.is_file():
             parser.error("--offline needs --snapshot DIR holding forge.json")
         snapshot = json.loads(forge_file.read_text())
+        if "roles" not in snapshot:
+            # Written before the lander reads: no roles, no label events.
+            parser.error(f"{forge_file} predates the approval and hand-back "
+                         "reads; re-read it without --offline")
         since, until = window(snapshot)
         if (args.since and args.since != since) or (args.until and
                                                     args.until + dt.timedelta(days=1) != until):

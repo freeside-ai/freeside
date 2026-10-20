@@ -4,7 +4,10 @@
 set -euo pipefail
 root=$(cd "$(dirname "$0")/.." && pwd)
 PYTHONDONTWRITEBYTECODE=1 python3 - "$root/scripts/landing-measures.py" <<'PY'
+import contextlib
 import importlib.util
+import io
+import json
 import os
 import subprocess
 import sys
@@ -46,7 +49,7 @@ def run(run_id, number, head, created, conclusion, name="ci", attempt=1,
             "pull_requests": [number] if number and linked else []}
 
 
-def snapshot(prs, runs=(), timelines=None, jobs=None):
+def snapshot(prs, runs=(), timelines=None, jobs=None, roles=None):
     timelines = timelines or {}
     return {"meta": {"repo": "o/r", "default_branch": "main",
                      "base_sha": "0" * 40, "since": "2026-09-01T00:00:00Z",
@@ -54,7 +57,22 @@ def snapshot(prs, runs=(), timelines=None, jobs=None):
                      "read_at": "2026-09-02T00:00:00Z"},
             "prs": prs, "runs": list(runs), "jobs": jobs or {},
             "timelines": {str(p["number"]): timelines.get(p["number"], [])
-                          for p in prs}}
+                          for p in prs},
+            "roles": roles or {"owner": "admin", "dev": "write"}}
+
+
+def comment(hour, body, user="dev", minute=0):
+    return {"event": "commented", "created_at": f"2026-09-01T{hour:02d}:{minute:02d}:00Z",
+            "commit_id": None, "body": body, "user": user, "label": None}
+
+
+def labeled(hour, label, user="owner", minute=0, event="labeled"):
+    return {"event": event, "created_at": f"2026-09-01T{hour:02d}:{minute:02d}:00Z",
+            "commit_id": None, "body": None, "user": user, "label": label}
+
+
+def unlabeled(hour, label, user="owner", minute=0):
+    return labeled(hour, label, user, minute, event="unlabeled")
 
 
 def expect(label, got, want):
@@ -222,22 +240,146 @@ with tempfile.TemporaryDirectory() as repo:
            [(("ci", "(jobs not read)", ""), 1, [12]),
             (("ci", "build", "(no failing step)"), 1, [12]),
             (("ci", "test", "go test"), 1, [10])])
+    expect("no hand-backs", (failures["hand_backs"], failures["hand_back_reasons"]),
+           ([], []))
 
-    # Measure 2's rebase records and measure 4.
+    # Measure 1's hand-backs. #60 was handed back twice: once naming a guard
+    # in backticks, once with prose only, by a comment 40 minutes before the
+    # label. #61's label came with no comment within the hour; its earlier
+    # comment is a review reply. #62 was handed back before the window.
+    # Someone else's comment just before the label is not the hand-back.
+    handed = [pr(60, t(0), "a", closed=t(23)), pr(61, t(0), "a"),
+              pr(62, t(0), "a")]
+    handed_timelines = {
+        60: [comment(3, "Swapping `approved` for `needs-human`: landing "
+                        "stopped at `rebase-conflict` in `x.txt`; choose "
+                        "which rename wins.", user="owner"),
+             comment(3, "I can fix that", user="dev", minute=10),
+             labeled(3, "needs-human", minute=20),
+             labeled(5, "approved"),
+             comment(7, "Stopped at step 2.\nThe landed #99 removed the "
+                        "helper this PR calls.", user="owner", minute=20),
+             labeled(8, "needs-human")],
+        61: [comment(1, "replying to review", user="owner"),
+             labeled(9, "needs-human")],
+        62: [comment(1, "`checks-failed`", user="owner"),
+             {**labeled(1, "needs-human", minute=5),
+              "created_at": "2026-08-31T23:00:00Z"}]}
+    hand_back_failures = m.landing_failures(snapshot(handed, timelines=handed_timelines))
+    expect("hand-backs",
+           [(h["number"], h["reason"]) for h in hand_back_failures["hand_backs"]],
+           [(60, "rebase-conflict"), (60, "Stopped at step 2."),
+            (61, "(no hand-back comment)")])
+    expect("hand-back reasons", hand_back_failures["hand_back_reasons"],
+           [("rebase-conflict", 1, [60]), ("Stopped at step 2.", 1, [60]),
+            ("(no hand-back comment)", 1, [61])])
+
+    # Measure 2's rebase records and measure 4. #42 carries the lander's
+    # range-diff comment; #43's only range-diff mention is Codex's.
     records = m.rebase_records(snapshot([
         pr(40, t(0), "a", merged=t(1), merge="m",
            body="## Why\nrange-diff\n## Verification\n- Checked: git range-diff A...B"),
         pr(41, t(0), "a", merged=t(1), merge="m",
-           body="## Why\nrange-diff elsewhere\n## Verification\n- Passed: tests")]))
-    expect("rebase records", records, {"merged": 2, "with_range_diff": [40]})
+           body="## Why\nrange-diff elsewhere\n## Verification\n- Passed: tests"),
+        pr(42, t(0), "a", merged=t(2), merge="m"),
+        pr(43, t(0), "a", merged=t(2), merge="m")],
+        timelines={42: [comment(1, "Rebased onto #41. Renamed the call.\n\n"
+                                   "```\n$ git range-diff A B C\n1:  x = 1:  y\n```",
+                                user="owner")],
+                   43: [comment(1, "the range-diff looks fine",
+                                user="chatgpt-codex-connector[bot]"),
+                        comment(3, "range-diff after the merge", user="owner")]}))
+    expect("rebase records", records,
+           {"merged": 4, "with_range_diff": [40], "with_lander_comment": [42]})
+    # #53's only hand-back before its close predates the window; the label
+    # added after the close is not its close reason.
     closed = [pr(50, t(0), "a", closed=t(4), title="Probe | CI"),
-              pr(51, t(0), "a", merged=t(4), merge="m")]
-    comment = lambda hour, body: {"event": "commented", "created_at": t(hour),
-                                  "commit_id": None, "body": body, "user": "dev"}
+              pr(51, t(0), "a", merged=t(4), merge="m"),
+              pr(52, t(0), "a", closed=t(10)),
+              pr(53, t(0), "a", closed=t(4))]
     rows = m.discarded(snapshot(closed, timelines={
-        50: [comment(2, "superseded\nby #52"), comment(6, "after close")]}))
-    expect("discarded", [(r["number"], r["last_comment"]) for r in rows],
-           [(50, "superseded by #52")])
+        50: [comment(2, "superseded\nby #52"), comment(6, "after close")],
+        52: [comment(3, "`checks-failed`", user="owner"), labeled(3, "needs-human", minute=1),
+             comment(5, "`lease-failed`: someone pushed", user="owner"),
+             labeled(5, "needs-human", minute=1)],
+        53: [{**comment(1, "`stale-guard`", user="owner"),
+              "created_at": "2026-08-31T22:30:00Z"},
+             {**labeled(1, "needs-human"), "created_at": "2026-08-31T23:00:00Z"},
+             comment(6, "`late-guard`", user="owner"),
+             labeled(6, "needs-human", minute=1)]}))
+    expect("discarded", [(r["number"], r["last_comment"], r["last_hand_back"])
+                         for r in rows],
+           [(50, "superseded by #52", ""),
+            (52, "`lease-failed`: someone pushed", "lease-failed"),
+            (53, "`stale-guard`", "stale-guard")])
+
+    # --offline refuses a snapshot written before the approval reads instead
+    # of rendering every merged PR as unapproved.
+    with tempfile.TemporaryDirectory() as legacy:
+        legacy_snapshot = snapshot(closed)
+        del legacy_snapshot["roles"]
+        with open(os.path.join(legacy, "forge.json"), "w") as f:
+            json.dump(legacy_snapshot, f)
+        with contextlib.redirect_stderr(io.StringIO()) as err:
+            try:
+                m.main(["--offline", "--snapshot", legacy])
+            except SystemExit as refusal:
+                if refusal.code != 2 or "predates" not in err.getvalue():
+                    raise AssertionError(f"legacy snapshot: {refusal.code} "
+                                         f"{err.getvalue()!r}")
+            else:
+                raise AssertionError("--offline rendered a legacy snapshot")
+
+    # Measure 3's approved-to-merge wait: #70's latest collaborator approval
+    # is at 02:00 (the 03:00 label is a reader's, not an approver's); #71 was
+    # never labelled; #72's approval came from an unknown login; #73's was
+    # withdrawn (a hand-back removes the label) and never renewed; #74's was
+    # withdrawn and renewed at 02:00.
+    approvals = [pr(70, t(0), "a", merged=t(4), merge="m"),
+                 pr(71, t(0), "a", merged=t(4), merge="m"),
+                 pr(72, t(0), "a", merged=t(4), merge="m"),
+                 pr(73, t(0), "a", merged=t(4), merge="m"),
+                 pr(74, t(0), "a", merged=t(4), merge="m")]
+    approval_waits = m.wait_to_land(snapshot(approvals, timelines={
+        70: [labeled(1, "approved"), labeled(2, "approved"),
+             labeled(3, "approved", user="reader")],
+        72: [labeled(1, "approved", user="ghost")],
+        73: [labeled(1, "approved"), unlabeled(2, "approved", user="dev")],
+        74: [labeled(1, "approved"), unlabeled(1, "approved", minute=30),
+             labeled(2, "approved")]},
+        roles={"owner": "admin", "reader": "read", "ghost": ""}))
+    expect("approved wait", approval_waits["from_approved"],
+           {"count": 2, "median": 2.0, "p90": 2.0,
+            "longest": [(70, 2.0), (74, 2.0)]})
+    expect("unapproved", approval_waits["unapproved"], [71, 72, 73])
+
+    # fetch_roles reads the permission endpoint as the lander does: a custom
+    # role falls back to the base permission, a 404 is no role, and any
+    # other failure aborts instead of reporting every approval unqualified.
+    responses = {
+        "dev": (0, '{"permission": "write", "role_name": "write"}', ""),
+        "custom": (0, '{"permission": "write", "role_name": "releaser"}', ""),
+        "ghost": (1, '{"message": "ghost is not a user", "status": "404"}',
+                  "gh: ghost is not a user (HTTP 404)")}
+
+    def fake_gh(argv, **kwargs):
+        code, out, err = responses[argv[2].split("/")[-2]]
+        return subprocess.CompletedProcess(argv, code, out, err)
+    real_run = m.subprocess.run
+    m.subprocess.run = fake_gh
+    try:
+        expect("roles", m.fetch_roles("o/r", {"dev", "custom", "ghost"}),
+               {"dev": "write", "custom": "write", "ghost": ""})
+        responses["dev"] = (1, "", "gh: API rate limit exceeded (HTTP 403)")
+        try:
+            m.fetch_roles("o/r", {"dev"})
+        except SystemExit as failure:
+            if "HTTP 403" not in str(failure):
+                raise AssertionError(f"roles failure lost its cause: {failure}")
+        else:
+            raise AssertionError("fetch_roles swallowed a non-404 failure")
+    finally:
+        m.subprocess.run = real_run
 
     page = m.render(snap, failures, conflicts, records,
                     m.wait_to_land(snapshot(waits, wait_runs, wait_timelines)),
@@ -249,5 +391,21 @@ with tempfile.TemporaryDirectory() as repo:
             raise AssertionError(f"render lacks {heading}")
     if "| `x.txt` | 2 | #1, #2, #5 |" not in page or "Probe \\| CI" not in page:
         raise AssertionError("render lost the conflict table or a table escape")
+    for text in ("| lease-failed |", "1 of 4 carry a lander comment",
+                 "- Approved to merge: 0 PRs.",
+                 "label: 5 PRs (#20, #21, #22, #23, #24)."):
+        if text not in page:
+            raise AssertionError(f"render lacks {text!r}")
+    page = m.render(snapshot(handed), hand_back_failures, conflicts, records,
+                    approval_waits, [], top=20)
+    for text in ("handed back 3 times", "on 2 PRs.",
+                 "- Handed back: #60 (rebase-conflict), #60 (Stopped at step 2.), "
+                 "#61 ((no hand-back comment))",
+                 "| 1 | rebase-conflict | #60 |",
+                 "- Approved to merge: 2 PRs, median 2.0 h, p90 2.0 h; "
+                 "longest #70 (2.0 h), #74 (2.0 h).",
+                 "label: 3 PRs (#71, #72, #73)."):
+        if text not in page:
+            raise AssertionError(f"render lacks {text!r}")
 print("landing-measures: ok")
 PY
