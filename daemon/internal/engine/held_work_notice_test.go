@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"path/filepath"
 	"slices"
 	"strings"
 	"testing"
@@ -15,6 +16,60 @@ import (
 	specifyfake "github.com/freeside-ai/freeside/daemon/internal/specify/fake"
 	"github.com/freeside-ai/freeside/daemon/internal/store"
 )
+
+func TestHeldWorkNoticeLegacyOwnershipUsesActualProducer(t *testing.T) {
+	ctx := t.Context()
+	st, err := store.Open(ctx, filepath.Join(t.TempDir(), "freeside.db"), store.Options{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = st.Close() }()
+	now := time.Date(2026, 10, 20, 12, 0, 0, 0, time.UTC)
+	if err := st.Write(ctx, func(tx *store.WriteTx) error {
+		if err := tx.PutRun(ctx, domain.Run{
+			ID: "old-held-run", ProjectID: "project",
+			SpecDigest: "sha256:spec", PolicyDigest: "sha256:policy",
+		}); err != nil {
+			return err
+		}
+		run, err := tx.GetRun(ctx, "old-held-run")
+		if err != nil {
+			return err
+		}
+		if err := tx.RecordTaskStart(ctx, run.ID, now); err != nil {
+			return err
+		}
+		if _, err := tx.AbandonTask(ctx, run.TaskID, now); err != nil {
+			return err
+		}
+		if err := tx.PutRun(ctx, domain.Run{
+			ID: "new-held-run", TaskID: run.TaskID, ProjectID: run.ProjectID,
+			SpecDigest: run.SpecDigest, PolicyDigest: run.PolicyDigest,
+		}); err != nil {
+			return err
+		}
+		if err := tx.AdmitTaskStart(ctx, "new-held-run", now, 1); err != nil {
+			return err
+		}
+		for _, reason := range refusalHoldReasons {
+			first := now.Add(-heldWorkNoticeAfter)
+			item, err := HeldWorkNoticeItem(ctx, tx, heldWorkNoticeID(run.ID, first), run,
+				domain.RunHoldObservation{RunID: run.ID, Reason: reason, FirstObservedAt: first}, now)
+			if err != nil {
+				return err
+			}
+			// No origin or current hold exists, as after upgrading a notice
+			// whose hold projection has already cleared.
+			owner, ordinal, err := tx.AttentionItemWorkflowEpisode(ctx, item)
+			if err != nil || owner != run.TaskID || ordinal != 1 {
+				t.Fatalf("%s ownership = (%s, %d, %v)", reason, owner, ordinal, err)
+			}
+		}
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+}
 
 // heldWorkScenario is one hold path driven to a recorded refusal hold. Each
 // pass builds a fresh Engine over the scenario's current store, so a repeated

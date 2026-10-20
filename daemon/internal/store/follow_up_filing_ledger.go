@@ -82,6 +82,9 @@ func (tx *InternalTx) OpenFollowUpFilingIntent(
 	if !errors.Is(err, ErrNotFound) {
 		return fail(err)
 	}
+	if err := tx.RequireProposalWorkflowOpen(ctx, instanceID); err != nil {
+		return fail(err)
+	}
 	repositoryID, _, err := tx.approvedFollowUpFiling(ctx, instanceID)
 	if err != nil {
 		return fail(err)
@@ -140,6 +143,9 @@ func (tx *InternalTx) RecordFollowUpFilingPreDispatch(
 func (tx *InternalTx) StartFollowUpFilingAttempt(
 	ctx context.Context, instanceID domain.ProposalInstanceID, at time.Time,
 ) (domain.FollowUpFilingIntent, error) {
+	if err := tx.RequireProposalWorkflowOpen(ctx, instanceID); err != nil {
+		return domain.FollowUpFilingIntent{}, err
+	}
 	return tx.advanceFollowUpFiling(ctx, "start follow-up filing attempt", instanceID,
 		func(intent domain.FollowUpFilingIntent) (domain.FollowUpFilingIntent, error) {
 			return intent.StartAttempt(at)

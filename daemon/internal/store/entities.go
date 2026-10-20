@@ -60,6 +60,11 @@ func (tx *WriteTx) PutRun(ctx context.Context, run domain.Run) error {
 	if err != nil {
 		return fmt.Errorf("put run %q: %w", run.ID, err)
 	}
+	if existing == nil {
+		if err := tx.captureClosedWorkflowMembership(ctx); err != nil {
+			return err
+		}
+	}
 	if existing != nil {
 		old, err := decode[domain.Run](existing)
 		if err != nil {
@@ -70,6 +75,19 @@ func (tx *WriteTx) PutRun(ctx context.Context, run domain.Run) error {
 		}
 		if err := domain.ValidateRunTransition(old, run); err != nil {
 			return fmt.Errorf("put run %q: %w", run.ID, mapTransition(err))
+		}
+		advancing := len(run.Stages) > len(old.Stages)
+		for _, stage := range run.Stages {
+			for _, prior := range old.Stages {
+				if stage.ID == prior.ID && len(stage.Attempts) > len(prior.Attempts) {
+					advancing = true
+				}
+			}
+		}
+		if advancing {
+			if err := tx.RequireRunWorkflowOpen(ctx, run.ID); err != nil {
+				return err
+			}
 		}
 	}
 	if err := tx.AssignTask(ctx, &run, nil); err != nil {
@@ -459,7 +477,7 @@ ON CONFLICT (id) DO UPDATE SET
 // existing item it never changes timing: the stored summary stands whatever
 // the caller passed, and PutAttentionItemTiming is the one way to change it.
 func (tx *WriteTx) PutAttentionItem(ctx context.Context, item domain.AttentionItem) error {
-	return tx.putAttentionItem(ctx, item, false)
+	return tx.putAttentionItem(ctx, item, false, "")
 }
 
 // PutAttentionItemTiming replaces the stored item's timing summary and
@@ -476,14 +494,14 @@ func (tx *WriteTx) PutAttentionItemTiming(ctx context.Context, id domain.ItemID,
 		return fmt.Errorf("put attention item %q timing: %w", id, err)
 	}
 	item.Timing = timing
-	return tx.putAttentionItem(ctx, item, true)
+	return tx.putAttentionItem(ctx, item, true, "")
 }
 
 // putAttentionItem is the one item writer. timingUpdate selects the rule an
 // existing item's changed body must pass: a transition, which advances
 // item_version and keeps the stored timing, or a timing update, which changes
 // timing alone and keeps the version.
-func (tx *WriteTx) putAttentionItem(ctx context.Context, item domain.AttentionItem, timingUpdate bool) error {
+func (tx *WriteTx) putAttentionItem(ctx context.Context, item domain.AttentionItem, timingUpdate bool, taskRunID domain.RunID) error {
 	// Recommendation and DecisionSurface are daemon-derived fields. Normalize
 	// them before the caller boundary validation so a caller-supplied source,
 	// payload, epoch, or digest grants no authority and is overwritten below.
@@ -682,6 +700,19 @@ func (tx *WriteTx) putAttentionItem(ctx context.Context, item domain.AttentionIt
 			return fmt.Errorf("put attention item %q: %w", item.ID, mapTransition(err))
 		}
 	}
+	if !timingUpdate && item.Status != domain.StatusExpired {
+		// A new proposal gets its authoritative target at BindProposalItem.
+		// Immutable subject checks precede this gate; closure cannot retarget
+		// an existing item or change the established conflict classification.
+		if taskRunID != "" {
+			err = tx.RequireRunWorkflowOpen(ctx, taskRunID)
+		} else if existing != nil || (item.Type != domain.AttentionEffectProposal && item.Type != domain.AttentionTaskProposal) {
+			err = tx.RequireItemWorkflowOpen(ctx, item)
+		}
+		if err != nil {
+			return err
+		}
+	}
 	// A version-advancing write can restore an omitted fact from the stored
 	// body above. Authenticate that restored value only after normalization, so
 	// a tampered persisted binding cannot be carried into its successor.
@@ -766,6 +797,9 @@ func (tx *WriteTx) putAttentionItem(ctx context.Context, item domain.AttentionIt
 	}
 	if existing == nil && item.Type == domain.AttentionReadyForFinalReview && item.Status == domain.StatusOpen {
 		tx.readyItemCreated = true
+	}
+	if taskRunID != "" {
+		return tx.bindTaskAttentionWorkflow(ctx, item, taskRunID)
 	}
 	return nil
 }
@@ -2130,6 +2164,9 @@ func (tx *WriteTx) PutCommand(ctx context.Context, command domain.Command) error
 	item, err := tx.GetAttentionItem(ctx, command.ItemID)
 	if err != nil {
 		return fmt.Errorf("put command %q: %w", command.CommandID, err)
+	}
+	if err := tx.RequireItemWorkflowOpen(ctx, item); err != nil {
+		return err
 	}
 	if item.Status != domain.StatusOpen {
 		return fmt.Errorf("put command %q: %w", command.CommandID,

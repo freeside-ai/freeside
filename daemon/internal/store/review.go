@@ -51,6 +51,9 @@ func validatePersistedReviewRecord(record domain.ReviewRecord) error {
 func (tx *WriteTx) PutReviewRecord(
 	ctx context.Context, record domain.ReviewRecord, findings []domain.Finding,
 ) error {
+	if err := tx.RequireRunWorkflowOpen(ctx, record.RunID); err != nil {
+		return err
+	}
 	if err := record.Validate(); err != nil {
 		return fmt.Errorf("put review record %q: %w", record.InvocationID, err)
 	}

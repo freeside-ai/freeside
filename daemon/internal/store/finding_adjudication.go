@@ -26,6 +26,11 @@ func (tx *ReadTx) FindingAdjudicationDecision(
 	if item.Type != domain.AttentionFindingAdjudication || item.FindingAdjudication == nil {
 		return domain.AttentionItem{}, nil, domain.ErrParentKeyMismatch
 	}
+	if item.Status != domain.StatusResolved {
+		if err := tx.RequireItemWorkflowOpen(ctx, item); err != nil {
+			return item, nil, err
+		}
+	}
 	commands, err := tx.ListCommandsForItem(ctx, itemID)
 	if err != nil {
 		return domain.AttentionItem{}, nil, err
@@ -362,6 +367,9 @@ func (tx *ReadTx) reviewRecordForRound(
 func (tx *WriteTx) PutFindingAdjudication(
 	ctx context.Context, artifact domain.FindingAdjudication,
 ) error {
+	if err := tx.RequireRunWorkflowOpen(ctx, artifact.RunID); err != nil {
+		return err
+	}
 	if err := artifact.Validate(); err != nil {
 		return fmt.Errorf("put finding adjudication %q round %d: %w", artifact.RunID, artifact.Round, err)
 	}

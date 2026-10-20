@@ -116,6 +116,9 @@ func TestRetireBlockedItemsMigrationClosesOpenRows(t *testing.T) {
 // the recorded history stays contiguous.
 func forgetRetireBlockedItems(t *testing.T, ctx context.Context, db *sql.DB) {
 	t.Helper()
+	if _, err := db.ExecContext(ctx, `DROP TABLE task_workflow_closures; DROP TABLE task_attention_workflow_origins`); err != nil {
+		t.Fatal(err)
+	}
 	if _, err := db.ExecContext(ctx, `DROP TABLE publish_installation_mint_holds`); err != nil {
 		t.Fatal(err)
 	}
@@ -127,7 +130,7 @@ func forgetRetireBlockedItems(t *testing.T, ctx context.Context, db *sql.DB) {
 	}
 	if _, err := db.ExecContext(ctx, `DELETE FROM schema_migrations WHERE name IN
 		('0096_retire_blocked_items.sql', '0097_review_admissions.sql', '0098_review_dispute_rows.sql',
-		'0099_publish_installation_mint_holds.sql')`); err != nil {
+		'0099_publish_installation_mint_holds.sql', '0100_task_workflow_closures.sql')`); err != nil {
 		t.Fatal(err)
 	}
 }

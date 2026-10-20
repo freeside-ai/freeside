@@ -311,6 +311,13 @@ func (tx *WriteTx) RecordTaskLifecycleFact(ctx context.Context, taskID domain.Ta
 	if err := check.Validate(); err != nil {
 		return fmt.Errorf("record task lifecycle fact: %w", err)
 	}
+	if fact.Kind == domain.TaskLifecycleStarted {
+		// Admitting an already-reserved run can change episode membership
+		// without PutRun. Check the final transaction against the old closure.
+		if err := tx.captureClosedWorkflowMembership(ctx); err != nil {
+			return err
+		}
+	}
 	result, err := tx.tx.ExecContext(ctx, `INSERT INTO task_lifecycle_facts
 		(task_id, ordinal, kind, run_id, campaign_id, binding_unit_id, source_id, recorded_at)
 		SELECT ?, COALESCE(MAX(ordinal), 0) + 1, ?, ?, ?, ?, ?, ?
@@ -377,6 +384,11 @@ func (tx *WriteTx) recordTaskStart(ctx context.Context, runID domain.RunID, reco
 	if task.Cancellation != nil {
 		return ErrTaskCancellationFenced
 	}
+	if !admission {
+		if err := tx.RequireRunWorkflowOpen(ctx, runID); err != nil {
+			return err
+		}
+	}
 	if domain.TaskWIP(task) {
 		return nil
 	}
@@ -431,6 +443,9 @@ func (tx *ReadTx) CountProjectWIPTasks(ctx context.Context, projectID domain.Pro
 // completion is always recorded, even against a superseded campaign; whether it
 // releases the WIP slot is derived (D4). Idempotent on the completed unit.
 func (tx *WriteTx) RecordTaskCompletion(ctx context.Context, runID domain.RunID, unitID domain.WorkUnitID, recordedAt time.Time) error {
+	if err := tx.RequireRunWorkflowOpen(ctx, runID); err != nil {
+		return err
+	}
 	run, err := tx.GetRun(ctx, runID)
 	if err != nil {
 		return err

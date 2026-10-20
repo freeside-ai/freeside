@@ -424,6 +424,12 @@ func (tx *ReadTx) blockingSystemHealthItems(ctx context.Context) ([]domain.Unatt
 	backupHealthLoaded := false
 	var backupHealthErr error
 	for _, item := range items {
+		if err := tx.RequireItemWorkflowOpen(ctx, item); err != nil {
+			if errors.Is(err, ErrTaskWorkflowClosed) {
+				continue
+			}
+			return nil, err
+		}
 		if *item.Posture == domain.HealthPostureAdvisory {
 			continue
 		}

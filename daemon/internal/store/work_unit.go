@@ -381,6 +381,14 @@ func (tx *ReadTx) ListIssueStateFacts(ctx context.Context, repositoryID int64, i
 // observations, so a replay of the same facts converges byte-identically
 // while any disagreeing completion claim is a conflict.
 func (tx *InternalTx) RecordWorkUnitCompletion(ctx context.Context, c domain.WorkUnitCompletion) error {
+	declaration, err := tx.GetWorkUnitDeclaration(ctx, c.UnitID)
+	if err == nil {
+		if err := tx.RequireRunWorkflowOpen(ctx, declaration.RunID); err != nil {
+			return err
+		}
+	} else if !errors.Is(err, ErrNotFound) {
+		return err
+	}
 	body, err := encode(c)
 	if err != nil {
 		return fmt.Errorf("put work unit completion: %w", err)

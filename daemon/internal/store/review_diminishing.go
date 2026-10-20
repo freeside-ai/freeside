@@ -377,6 +377,11 @@ func (tx *ReadTx) reviewDiminishingDecisionUncached(
 	if err := tx.authenticateReviewDiminishingSummary(ctx, item, binding); err != nil {
 		return ReviewDiminishingDecision{}, err
 	}
+	if item.Status != domain.StatusResolved {
+		if err := tx.RequireItemWorkflowOpen(ctx, item); err != nil {
+			return ReviewDiminishingDecision{}, err
+		}
+	}
 	run, err := tx.GetRun(ctx, binding.RunID)
 	if err != nil {
 		return ReviewDiminishingDecision{}, err
