@@ -741,3 +741,84 @@ func TestControlDoctorUsesDaemonBlobStoreThroughSymlink(t *testing.T) {
 		t.Fatalf("Doctor created a canonical-path blob sidecar: %v", err)
 	}
 }
+
+// TestControlServesExecutionMode pins the read a real-work run uses to prove
+// prod runs no driver (#2080): every daemon answers it on its control socket,
+// and the rig host's probe reads it through the advertisement.
+func TestControlServesExecutionMode(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		cfg  config
+		want executionMode
+	}{
+		{name: "driverless", want: executionDisabled},
+		{name: "fake driver", cfg: config{FakeDriverEnabled: true}, want: executionFake},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			dbPath := filepath.Join(t.TempDir(), "freeside.db")
+			cfg := tc.cfg
+			cfg.Environment, cfg.DBPath, cfg.ListenAddr = environmentEphemeral, dbPath, "127.0.0.1:0"
+			h, err := run(t.Context(), nil, cfg)
+			if err != nil {
+				t.Fatal(err)
+			}
+			t.Cleanup(func() {
+				if err := h.Close(); err != nil {
+					t.Error(err)
+				}
+			})
+			canonical, err := canonicalDatabasePath(dbPath)
+			if err != nil {
+				t.Fatal(err)
+			}
+			client, err := newControlClient(canonical)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer client.Close()
+			var report executionReport
+			if err := client.get(t.Context(), "/execution", nil, &report); err != nil {
+				t.Fatal(err)
+			}
+			want := executionReport{Version: executionReportVersion, Environment: environmentEphemeral, Execution: tc.want}
+			if report != want {
+				t.Fatalf("execution report = %+v, want %+v", report, want)
+			}
+			mode, running, err := newProductionRigHost().ProdExecution(t.Context(), dbPath)
+			if err != nil || !running || mode != tc.want {
+				t.Fatalf("probe = %q, running %t, %v; want %q, running", mode, running, err, tc.want)
+			}
+		})
+	}
+}
+
+// TestProdExecutionProbeFailsClosed pins that only a missing advertisement
+// reads as "not running": an advertisement whose socket is gone, or a daemon
+// that does not serve the read, is an error the composition check fails on.
+func TestProdExecutionProbeFailsClosed(t *testing.T) {
+	host := newProductionRigHost()
+	t.Run("no advertisement", func(t *testing.T) {
+		mode, running, err := host.ProdExecution(t.Context(), filepath.Join(t.TempDir(), "freeside.db"))
+		if err != nil || running || mode != "" {
+			t.Fatalf("probe = %q, running %t, %v; want not running", mode, running, err)
+		}
+	})
+	t.Run("advertised socket is gone", func(t *testing.T) {
+		dbPath := filepath.Join(t.TempDir(), "freeside.db")
+		advertisement := `{"socket_path":"` + filepath.Join(t.TempDir(), "gone.sock") + `"}` + "\n"
+		if err := os.WriteFile(dbPath+".control.json", []byte(advertisement), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		if _, _, err := host.ProdExecution(t.Context(), dbPath); err == nil {
+			t.Fatal("probe accepted an advertisement whose socket is gone")
+		}
+	})
+	t.Run("daemon without the read", func(t *testing.T) {
+		// The pairing control serves the socket without the daemon's control
+		// routes, as an installed build older than the read does.
+		p, _ := startPairingControlTest(t, nil)
+		if _, _, err := host.ProdExecution(t.Context(), p.dbPath); err == nil {
+			t.Fatal("probe accepted a daemon that does not serve the execution read")
+		}
+	})
+}

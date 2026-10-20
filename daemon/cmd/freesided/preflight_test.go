@@ -39,7 +39,10 @@ type fakePreflightEnvironment struct {
 	authorityError       error
 	repositoryCalls      int
 	idleError            error
-	supervised           bool
+	prodMode             executionMode
+	prodRunning          bool
+	prodError            error
+	prodProbed           []string
 	live                 bool
 	liveByAddr           map[string]bool // when set, overrides live per probed address
 	probed               []string
@@ -151,8 +154,9 @@ func (e *fakePreflightEnvironment) CheckAuthVolume(
 
 func (e *fakePreflightEnvironment) DatabaseIdle(string) error { return e.idleError }
 
-func (e *fakePreflightEnvironment) SupervisedDaemon(context.Context, string) (bool, error) {
-	return e.supervised, nil
+func (e *fakePreflightEnvironment) ProdExecution(_ context.Context, dbPath string) (executionMode, bool, error) {
+	e.prodProbed = append(e.prodProbed, dbPath)
+	return e.prodMode, e.prodRunning, e.prodError
 }
 
 func (e *fakePreflightEnvironment) ProbeDaemon(
@@ -220,6 +224,67 @@ func TestEvaluateDaemonConflictProbesLoopbackTwin(t *testing.T) {
 				if !strings.Contains(evidence, tc.wantEvidence) {
 					t.Fatalf("daemon_conflict evidence = %q, want it to contain %q", evidence, tc.wantEvidence)
 				}
+			}
+		})
+	}
+}
+
+func TestEvaluateProdExecution(t *testing.T) {
+	for _, tc := range []struct {
+		name            string
+		env             fakePreflightEnvironment
+		wantPass        bool
+		wantEvidence    string
+		wantRemediation string
+	}{
+		{name: "not running", wantPass: true, wantEvidence: "prod is not running"},
+		{
+			name: "driverless", env: fakePreflightEnvironment{prodRunning: true, prodMode: executionDisabled},
+			wantPass: true, wantEvidence: "prod runs without a driver",
+		},
+		{
+			name: "fake driver", env: fakePreflightEnvironment{prodRunning: true, prodMode: executionFake},
+			wantEvidence: "prod runs with -driver fake", wantRemediation: "restart it without -driver",
+		},
+		{
+			name: "claude driver", env: fakePreflightEnvironment{prodRunning: true, prodMode: executionClaude},
+			wantEvidence: "prod runs with -driver claude", wantRemediation: "restart it without -driver",
+		},
+		{
+			name: "unanswering advertisement", env: fakePreflightEnvironment{prodError: errors.New("connection refused")},
+			wantEvidence:    "did not report its execution mode",
+			wantRemediation: "rewrites its control advertisement",
+		},
+		{
+			name: "older build", env: fakePreflightEnvironment{prodRunning: true, prodError: errors.New("404")},
+			wantEvidence:    "did not report its execution mode",
+			wantRemediation: "update the installed build",
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			env := tc.env
+			manifest := &compositionManifest{
+				Checks: []compositionCheck{{Name: "prod_execution", Status: compositionNotRun}},
+			}
+			appState := filepath.Join(t.TempDir(), "prod", "daemon")
+			cfg := preflightConfig{PublicationStateDir: appState}
+			if got := evaluateProdExecution(context.Background(), manifest, cfg, &env); got != tc.wantPass {
+				t.Fatalf("evaluateProdExecution = %v, want %v", got, tc.wantPass)
+			}
+			if want := []string{filepath.Join(appState, "freeside.db")}; !slices.Equal(env.prodProbed, want) {
+				t.Fatalf("probed = %v, want prod's database %v", env.prodProbed, want)
+			}
+			check := manifest.Checks[0]
+			wantStatus := compositionPassed
+			if !tc.wantPass {
+				wantStatus = compositionFailed
+			}
+			if check.Status != wantStatus || (manifest.Status == compositionFailed) == tc.wantPass {
+				t.Fatalf("prod_execution status = %s, manifest %s; want %s", check.Status, manifest.Status, wantStatus)
+			}
+			if !strings.Contains(check.Evidence, tc.wantEvidence) || !strings.Contains(check.Remediation, tc.wantRemediation) {
+				t.Fatalf("prod_execution evidence %q, remediation %q; want %q and %q",
+					check.Evidence, check.Remediation, tc.wantEvidence, tc.wantRemediation)
 			}
 		})
 	}
@@ -597,6 +662,12 @@ func TestPreflightFailureFixtures(t *testing.T) {
 		{"daemon conflict", func(_ *[]string, env *fakePreflightEnvironment) {
 			env.idleError = errors.New("held")
 		}, "daemon_conflict"},
+		{"prod with a driver", func(_ *[]string, env *fakePreflightEnvironment) {
+			env.prodRunning, env.prodMode = true, executionClaude
+		}, "prod_execution"},
+		{"prod that does not answer", func(_ *[]string, env *fakePreflightEnvironment) {
+			env.prodError = errors.New("connection refused")
+		}, "prod_execution"},
 		{"role with no resolving line", func(_ *[]string, env *fakePreflightEnvironment) {
 			env.agentsError = &roleAdmissionError{Role: domain.RoleReviewer, Err: engine.ErrAgentNotAdmissible}
 		}, "agent_selection"},
@@ -712,9 +783,9 @@ func TestPreflightFailureFixtures(t *testing.T) {
 			if tt.name == "unrecorded implementer image" && environment.imageCalls["claude"] != 0 {
 				t.Fatalf("unrecorded implementer image executed %d probes", environment.imageCalls["claude"])
 			}
-			if tt.name == "daemon conflict" {
+			if tt.name == "daemon conflict" || tt.name == "prod with a driver" || tt.name == "prod that does not answer" {
 				if environment.repositoryCalls != 0 {
-					t.Fatalf("repository authority inspection ran %d times while daemon was active", environment.repositoryCalls)
+					t.Fatalf("repository authority inspection ran %d times while a daemon could write", environment.repositoryCalls)
 				}
 				for _, name := range []string{"repository_base", "publication_authority"} {
 					if status := checkStatus(manifest, name); status != compositionNotRun {

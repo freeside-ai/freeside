@@ -91,7 +91,12 @@
     {
       "name": "daemon_conflict",
       "status": "passed",
-      "evidence": "database, supervisor, and leased listener are idle"
+      "evidence": "database and leased listener are idle"
+    },
+    {
+      "name": "prod_execution",
+      "status": "passed",
+      "evidence": "prod is not running"
     },
     {
       "name": "repository_base",

@@ -325,6 +325,11 @@ func main() {
 		fmt.Fprintln(os.Stderr, "freesided:", err)
 		os.Exit(2)
 	}
+	execution := executionMode(*driverMode)
+	if !execution.valid() {
+		fmt.Fprintf(os.Stderr, "freesided: -driver %q is not disabled, fake, or claude\n", *driverMode)
+		os.Exit(2)
+	}
 	home, err := os.UserHomeDir()
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "freesided:", err)
@@ -362,15 +367,6 @@ func main() {
 		fmt.Fprintln(os.Stderr, "freesided:", err)
 		os.Exit(2)
 	}
-	if *prodAppAuthority {
-		prodLock, err := holdProdDatabaseLock(home)
-		if err != nil {
-			fmt.Fprintln(os.Stderr, "freesided:", err)
-			os.Exit(2)
-		}
-		// Held until the process exits; the deferred Close keeps it reachable.
-		defer func() { _ = prodLock.Close() }()
-	}
 	if env == environmentEphemeral {
 		accountHome, err := currentAccountHome()
 		if err != nil {
@@ -382,15 +378,22 @@ func main() {
 			os.Exit(2)
 		}
 	}
+	if *prodAppAuthority {
+		err := checkProdDriverless(context.Background(), newProductionRigHost().ProdExecution, paths.PublicationStateDir)
+		if err != nil {
+			fmt.Fprintln(os.Stderr, "freesided:", err)
+			os.Exit(2)
+		}
+	}
 	if env == environmentProd {
 		// Before anything opens the database: a real-work run may be using
-		// prod's App authority (#1583).
+		// prod's App authority (#1583), which only a driver would open (#2080).
 		leaseRoot, err := daemonlock.DefaultRigLeaseRoot()
 		if err != nil {
 			fmt.Fprintln(os.Stderr, "freesided:", err)
 			os.Exit(2)
 		}
-		if err := checkProdRigLease(leaseRoot); err != nil {
+		if err := checkProdDriverUnderLease(leaseRoot, execution, *fakePublication); err != nil {
 			fmt.Fprintln(os.Stderr, "freesided:", err)
 			os.Exit(2)
 		}
@@ -441,11 +444,11 @@ func main() {
 		fmt.Fprintf(os.Stderr, "freesided: -operating-mode %q is not attended_dev or unattended\n", *operatingMode)
 		os.Exit(2)
 	}
-	switch *driverMode {
-	case "disabled":
-	case "fake":
+	switch execution {
+	case executionDisabled:
+	case executionFake:
 		daemonConfig.FakeDriverEnabled = true
-	case "claude":
+	case executionClaude:
 		id := int64(0)
 		if v := repositoryID.Value(); v != nil {
 			id = *v
@@ -491,9 +494,6 @@ func main() {
 			ShadowReviewWorkspaceSizeMB: review.ShadowWorkspaceSizeMB,
 			ShadowReviewRate:            review.ShadowRate,
 		}
-	default:
-		fmt.Fprintf(os.Stderr, "freesided: -driver %q is not disabled, fake, or claude\n", *driverMode)
-		os.Exit(2)
 	}
 	h, err := run(ctx, stop, daemonConfig)
 	if err != nil {
@@ -535,6 +535,32 @@ func serve(ctx context.Context, stop func(), h *daemon) error {
 	waitErr := h.Wait(ctx)
 	stop()
 	return errors.Join(waitErr, h.Close())
+}
+
+// executionMode is what a daemon's -driver lets it run. Every daemon reports
+// it on its control socket (GET /execution), so a real-work run can prove the
+// prod it shares an App authority with runs nothing (#2080).
+type executionMode string
+
+const (
+	executionDisabled executionMode = "disabled"
+	executionFake     executionMode = "fake"
+	executionClaude   executionMode = "claude"
+)
+
+var AllExecutionModes = []executionMode{
+	executionDisabled,
+	executionFake,
+	executionClaude,
+}
+
+func (mode executionMode) valid() bool {
+	switch mode {
+	case executionDisabled, executionFake, executionClaude:
+		return true
+	default:
+		return false
+	}
 }
 
 type config struct {
@@ -637,6 +663,19 @@ func enabledShadowReviewRate(source exec.ReviewSource, configured float64) float
 		return 0
 	}
 	return configured
+}
+
+// execution is the mode this configuration runs: a Claude driver, the fake
+// driver, or neither.
+func (cfg config) execution() executionMode {
+	switch {
+	case cfg.Claude != nil:
+		return executionClaude
+	case cfg.FakeDriverEnabled:
+		return executionFake
+	default:
+		return executionDisabled
+	}
 }
 
 func (cfg config) storeOptions() (store.Options, error) {
@@ -1371,8 +1410,8 @@ func run(parent context.Context, stop func(), cfg config) (_ *daemon, err error)
 	}
 	d.pairing.configure(d.readiness().APIURL, attention.MintPairingCode)
 	d.pairing.registerControlRoutes(
-		d.pairing.mux, st, blobs, localBackupFiles, cfg.ApprovedRecipes, integrityProbe, cfg.Environment, attention,
-		cfg.DeputyLaunch)
+		d.pairing.mux, st, blobs, localBackupFiles, cfg.ApprovedRecipes, integrityProbe, cfg.Environment,
+		cfg.execution(), attention, cfg.DeputyLaunch)
 	var fakeSched *scheduler.Scheduler
 	var claudeSched *scheduler.Scheduler
 	var activeReconciler *activeResourceReconciler

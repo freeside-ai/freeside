@@ -404,10 +404,10 @@ func requireProdAppDirectories(prodRoot string, paths environmentPaths) error {
 
 // checkProdAppAuthority gates -prod-app-authority before the path check
 // grants its exemption. The run must hold the live production rig lease,
-// which also keeps prod stopped (checkProdRigLease); $HOME and the account
-// home must name one prod root, so the run and a launchd-started prod can't
-// read different authorities; and the installed prod daemon must accept every
-// App authority state format this build writes.
+// whose manifest also keeps prod driverless (checkProdDriverUnderLease);
+// $HOME and the account home must name one prod root, so the run and a
+// launchd-started prod can't read different authorities; and the installed
+// prod daemon must accept every App authority state format this build writes.
 func checkProdAppAuthority(ctx context.Context, env environment, home, accountHome, rigTokenFile, leaseRoot, prodDaemon string) error {
 	if env != environmentEphemeral {
 		return fmt.Errorf("-prod-app-authority requires -environment ephemeral, not %s", env)
@@ -425,6 +425,28 @@ func checkProdAppAuthority(ctx context.Context, env environment, home, accountHo
 		return err
 	}
 	return checkProdPublicationFormats(ctx, prodDaemon)
+}
+
+// checkProdDriverless refuses -prod-app-authority unless the prod daemon that
+// owns the App authority is stopped or reports -driver disabled on its control
+// socket, so the run stays the authority's only writer (#2080). The deputy's
+// preflight records the same probe as prod_execution; this keeps a daemon
+// started by hand, without that preflight, under the same rule. main runs it
+// after the lease is authenticated, so a prod that starts later refuses a
+// driver on its own (checkProdDriverUnderLease).
+func checkProdDriverless(
+	ctx context.Context,
+	probe func(context.Context, string) (executionMode, bool, error),
+	appStateDir string,
+) error {
+	mode, running, err := probe(ctx, filepath.Join(appStateDir, "freeside.db"))
+	switch {
+	case err != nil:
+		return fmt.Errorf("-prod-app-authority cannot prove prod runs without a driver: %w", err)
+	case running && mode != executionDisabled:
+		return fmt.Errorf("-prod-app-authority refuses while prod runs with -driver %s; stop it or restart it without -driver", mode)
+	}
+	return nil
 }
 
 // authenticateProductionRigLease proves the caller holds the live rig lease
@@ -449,7 +471,7 @@ func authenticateProductionRigLease(rigTokenFile, leaseRoot string) error {
 		return fmt.Errorf("rig lease under %q is not the production rig lease under %q", manifest.Resources.LeaseRoot, resolvedLeaseRoot)
 	}
 	// prod checks the manifest, not the lock: a lease whose manifest is gone
-	// would not keep prod stopped.
+	// would not stop a prod starting with a driver.
 	present, err := daemonlock.RigManifestPresent(resolvedLeaseRoot)
 	if err != nil {
 		return fmt.Errorf("check the production rig manifest under %q: %w", resolvedLeaseRoot, err)
@@ -500,72 +522,27 @@ func requireOneProdRoot(home, accountHome string) error {
 	return nil
 }
 
-// holdProdDatabaseLock takes prod's own database lock, the one a prod daemon
-// takes before it opens its database, and holds it for the run. The rig lease
-// check in rig hold sees only a launchd-loaded prod; the lock also refuses a
-// prod started by hand, and keeps one from starting while the run holds it.
-func holdProdDatabaseLock(home string) (*daemonlock.Lock, error) {
-	path := filepath.Join(supervisedRoots(home)[environmentProd], "daemon", "freeside.db")
-	lock, err := daemonlock.Acquire(path)
-	if err != nil {
-		return nil, fmt.Errorf("-prod-app-authority requires prod to be stopped: take prod's database lock %q: %w", path, err)
-	}
-	return lock, nil
-}
-
-// holdProdLockForProdAppDirectories takes prod's database lock when state or
-// credentials is one of prod's App directories under $HOME or the passwd home,
-// and returns a nil lock otherwise. A command that reads the shared authority
-// before the run's daemon starts, such as preflight, holds it so a prod
-// started outside launchd can't use the authority at the same time.
-func holdProdLockForProdAppDirectories(state, credentials string) (*daemonlock.Lock, error) {
-	home, err := os.UserHomeDir()
-	if err != nil {
-		return nil, err
-	}
-	accountHome, err := currentAccountHome()
-	if err != nil {
-		return nil, err
-	}
-	return holdProdLockForProdAppDirectoriesIn([]string{home, accountHome}, state, credentials)
-}
-
-func holdProdLockForProdAppDirectoriesIn(homes []string, state, credentials string) (*daemonlock.Lock, error) {
-	for _, home := range homes {
-		root := supervisedRoots(home)[environmentProd]
-		if sameDirectory(state, filepath.Join(root, "daemon")) || sameDirectory(credentials, filepath.Join(root, "credentials")) {
-			return holdProdDatabaseLock(home)
-		}
-	}
-	return nil, nil
-}
-
-// sameDirectory reports whether both paths name one existing directory.
-func sameDirectory(a, b string) bool {
-	if a == "" || b == "" {
-		return false
-	}
-	aInfo, err := os.Stat(a)
-	if err != nil {
-		return false
-	}
-	bInfo, err := os.Stat(b)
-	if err != nil {
-		return false
-	}
-	return os.SameFile(aInfo, bInfo)
-}
-
-// checkProdRigLease keeps prod stopped while a production rig lease, live or
-// stale, exists: the run shares prod's App authority, and rig hold checks for
-// a loaded prod only when it acquires the lease.
-func checkProdRigLease(leaseRoot string) error {
+// checkProdDriverUnderLease keeps prod driverless while a production rig
+// lease, live or stale, exists: the run uses prod's App authority, and a prod
+// without a driver never opens it, so the authority keeps one writer. The
+// deputy checks a prod already running once it holds the lease; this is the
+// other side, for a prod that starts later (#2080).
+func checkProdDriverUnderLease(leaseRoot string, execution executionMode, fakePublication bool) error {
 	present, err := daemonlock.RigManifestPresent(leaseRoot)
 	if err != nil {
 		return fmt.Errorf("check for a production rig lease under %q: %w", leaseRoot, err)
 	}
-	if present {
-		return fmt.Errorf("a production rig lease (live or stale) exists under %q; prod may not start until the real-work run releases it, or until freesided rig recover clears a stale one", leaseRoot)
+	if !present {
+		return nil
 	}
-	return nil
+	var refused string
+	switch {
+	case fakePublication:
+		refused = "-fake-publication"
+	case execution != executionDisabled:
+		refused = "-driver " + string(execution)
+	default:
+		return nil
+	}
+	return fmt.Errorf("a production rig lease (live or stale) exists under %q, so prod may run only with -driver disabled and refuses %s until the real-work run releases the lease or freesided rig recover clears a stale one", leaseRoot, refused)
 }
