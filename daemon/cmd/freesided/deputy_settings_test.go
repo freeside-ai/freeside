@@ -120,6 +120,12 @@ func TestLoadDeputySettingsRefusesNamingTheField(t *testing.T) {
 		"bad auth mode": {func(s map[string]any) {
 			s["review"].(map[string]any)["auth_mode"] = "oauth"
 		}, "review.auth_mode"},
+		"unsupported api key": {func(s map[string]any) {
+			s["review"].(map[string]any)["auth_mode"] = "api_key"
+		}, "review.auth_mode must be subscription; api_key enrollment is not supported yet (#1677)"},
+		"root vendor instructions": {func(s map[string]any) {
+			s["prompts"].(map[string]any)["vendor_instructions"] = "/"
+		}, "prompts.vendor_instructions must not be the root directory"},
 		"bad duration": {func(s map[string]any) {
 			s["timeouts"].(map[string]any)["writer_stop"] = "twenty minutes"
 		}, "timeouts.writer_stop"},
@@ -132,6 +138,39 @@ func TestLoadDeputySettingsRefusesNamingTheField(t *testing.T) {
 		"match-everything paths": {func(s map[string]any) {
 			s["repository"].(map[string]any)["allowed_paths"] = []string{"**"}
 		}, "repository.allowed_paths must name explicit declared paths"},
+	}
+	for _, field := range []string{
+		"seed_root", "repository.checkout",
+		"prompts.prompt_package", "prompts.specification_prompt_package", "prompts.remediation_prompt_package",
+		"prompts.vendor_instructions", "agent_tree.checkout", "review.input_root", "review.auth_snapshot",
+		"review.instructions", "prod.app_state_dir", "prod.app_credentials_dir", "prod.installed_daemon",
+		"judgment.claude_bin", "judgment.publication_author_prompt", "manual_submission_config",
+	} {
+		for _, value := range []string{"relative/path", "/configured/../path", "/configured//path", "/configured/path/"} {
+			want := field + " must be a clean path"
+			if !filepath.IsAbs(value) {
+				want = field + " must be an absolute path"
+			}
+			cases[field+" "+value] = struct {
+				edit func(map[string]any)
+				want string
+			}{
+				edit: func(s map[string]any) {
+					if strings.HasPrefix(field, "judgment.") {
+						s["judgment"] = map[string]any{
+							"claude_bin": "/bin/claude", "claude_sha256": strings.Repeat("a", 64),
+							"model": "claude-opus", "publication_author_prompt": "/prompts/author.md",
+						}
+					}
+					object, key := s, field
+					if group, nested, ok := strings.Cut(field, "."); ok {
+						object, key = s[group].(map[string]any), nested
+					}
+					object[key] = value
+				},
+				want: want,
+			}
+		}
 	}
 	for name, tc := range cases {
 		t.Run(name, func(t *testing.T) {
@@ -147,6 +186,20 @@ func TestLoadDeputySettingsRefusesNamingTheField(t *testing.T) {
 				t.Fatalf("refusal spans lines: %q", err)
 			}
 		})
+	}
+}
+
+func TestLoadDeputySettingsAcceptsConfiguredOptionalPaths(t *testing.T) {
+	t.Parallel()
+	settings := deputySettingsFixture(t)
+	settings["judgment"] = map[string]any{
+		"claude_bin": "/bin/claude", "claude_sha256": strings.Repeat("a", 64),
+		"model": "claude-opus", "publication_author_prompt": "/prompts/author.md",
+	}
+	settings["manual_submission_config"] = "/config/manual.json"
+	path, _ := writeDeputySettings(t, settings, 0o600)
+	if _, err := loadDeputySettings(path); err != nil {
+		t.Fatal(err)
 	}
 }
 

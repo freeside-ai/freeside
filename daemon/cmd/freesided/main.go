@@ -1780,6 +1780,29 @@ func listenPrivilegedWith(
 	bind func(string, *net.TCPAddr) (net.Listener, error),
 	tailscaleIPs func() ([]netip.Addr, error),
 ) (net.Listener, error) {
+	resolved, err := resolveListenAddress(addr, tailscaleIPs)
+	if err != nil {
+		return nil, err
+	}
+	network := "tcp6"
+	if resolved.IP.To4() != nil {
+		network = "tcp4"
+	}
+	listener, err := bind(network, resolved)
+	if err != nil {
+		return nil, fmt.Errorf("listen %q: %w", addr, err)
+	}
+	bound, ok := listener.Addr().(*net.TCPAddr)
+	if !ok || !bound.IP.Equal(resolved.IP) {
+		_ = listener.Close()
+		return nil, fmt.Errorf("listen %q bound unexpected address %q", addr, listener.Addr())
+	}
+	return listener, nil
+}
+
+// resolveListenAddress checks listener policy without binding, so deputy
+// settings can be refused before taking a production rig lease.
+func resolveListenAddress(addr string, tailscaleIPs func() ([]netip.Addr, error)) (*net.TCPAddr, error) {
 	resolved, err := net.ResolveTCPAddr("tcp", addr)
 	if err != nil {
 		return nil, fmt.Errorf("resolve listen address %q: %w", addr, err)
@@ -1799,20 +1822,7 @@ func listenPrivilegedWith(
 			return nil, fmt.Errorf("listen %q resolved to address %q not reported by Tailscale", addr, resolved)
 		}
 	}
-	network := "tcp6"
-	if resolved.IP.To4() != nil {
-		network = "tcp4"
-	}
-	listener, err := bind(network, resolved)
-	if err != nil {
-		return nil, fmt.Errorf("listen %q: %w", addr, err)
-	}
-	bound, ok := listener.Addr().(*net.TCPAddr)
-	if !ok || !bound.IP.Equal(resolved.IP) {
-		_ = listener.Close()
-		return nil, fmt.Errorf("listen %q bound unexpected address %q", addr, listener.Addr())
-	}
-	return listener, nil
+	return resolved, nil
 }
 
 // loopbackTwinAddr returns the loopback address that mirrors a non-loopback

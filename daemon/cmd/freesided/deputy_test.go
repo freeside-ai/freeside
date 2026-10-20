@@ -1,12 +1,16 @@
 package main
 
 import (
+	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"io"
+	"net/netip"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"reflect"
 	"slices"
 	"strings"
 	"testing"
@@ -41,6 +45,7 @@ func deputyLeaseFixture(t *testing.T) (deputyHost, deputyPaths, loadedDeputySett
 	host := deputyHost{
 		rig: &fakeRigHost{}, leaseRoot: leaseRoot,
 		launchAgentLabel: defaultRigLaunchAgentLabel, now: deputyTestNow,
+		tailscaleIPs: func() ([]netip.Addr, error) { return nil, nil },
 	}
 	return host, newDeputyPaths(stateRoot), settings
 }
@@ -303,6 +308,223 @@ func TestDeputyDaemonConfigRunsAgentsOnlyAfterAPassingCheck(t *testing.T) {
 		enabled.OperatingMode != domain.ModeUnattended || enabled.StateRoot != "/prod/daemon" ||
 		enabled.WriterStopTimeout != 20*time.Minute || enabled.Judgments != (judgmentConfig{}) {
 		t.Fatalf("passing check: %+v", enabled)
+	}
+	// Exercise the configured judgment fields too: only the launch's digest
+	// differs between the prospective and enabled driver configurations.
+	settings.Judgment.ClaudeBin = "/bin/claude"
+	settings.Judgment.ClaudeSHA256 = strings.Repeat("e", 64)
+	settings.Judgment.Model = "claude-opus"
+	settings.Judgment.PublicationAuthorPrompt = "/prompts/author.md"
+	prospective := deputyClaudeDriverConfig(settings, paths, "")
+	passing = deputyDaemonConfig(settings, paths, deputyLaunch{
+		ManifestDigest: "sha256:m", Manifest: compositionManifest{JudgmentConfigurationDigest: "sha256:j"},
+	}, nil)
+	if passing.Claude.Judgments.ExpectedDigest != "sha256:j" {
+		t.Fatal("enabled driver lost the launch's judgment digest")
+	}
+	passing.Claude.Judgments.ExpectedDigest = ""
+	if !reflect.DeepEqual(prospective, *passing.Claude) {
+		t.Fatal("early validation and enabled driver configurations differ")
+	}
+}
+
+func deputyDaemonSettingsFixture(t *testing.T) loadedDeputySettings {
+	t.Helper()
+	path, _ := writeDeputySettings(t, deputySettingsFixture(t), 0o600)
+	settings, err := loadDeputySettings(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	prompts, _ := promptPackagesFixture(t)
+	settings.Prompts.PromptPackage = prompts.PromptPackageFile
+	settings.Prompts.SpecificationPromptPackage = prompts.SpecificationPromptPackageFile
+	settings.Prompts.RemediationPromptPackage = prompts.RemediationPromptPackageFile
+	return settings
+}
+
+func TestDeputyDaemonSettingsMatchesDownstreamRefusals(t *testing.T) {
+	t.Parallel()
+	noTailscale := func() ([]netip.Addr, error) { return nil, nil }
+	manual := func(s loadedDeputySettings, _ deputyPaths) error {
+		_, err := loadManualSubmissionConfig(s.ManualSubmissionConfig)
+		return err
+	}
+	listener := func(s loadedDeputySettings, _ deputyPaths) error {
+		_, err := resolveListenAddress(s.Listen, noTailscale)
+		return err
+	}
+	claudeConfig := func(s loadedDeputySettings, paths deputyPaths) error {
+		return deputyClaudeDriverConfig(s, paths, "").validate()
+	}
+	prompts := func(s loadedDeputySettings, paths deputyPaths) error {
+		_, err := readPromptPackages(deputyClaudeDriverConfig(s, paths, ""))
+		return err
+	}
+	type refusal struct {
+		name       string
+		edit       func(*testing.T, *loadedDeputySettings)
+		downstream func(loadedDeputySettings, deputyPaths) error
+		want       string
+	}
+	cases := []refusal{
+		{"malformed manual config", func(t *testing.T, s *loadedDeputySettings) {
+			s.ManualSubmissionConfig = filepath.Join(t.TempDir(), "manual.json")
+			if err := os.WriteFile(s.ManualSubmissionConfig, []byte("{"), 0o600); err != nil {
+				t.Fatal(err)
+			}
+		}, manual, "manual submission config: EOF"},
+		{"missing manual config", func(t *testing.T, s *loadedDeputySettings) {
+			s.ManualSubmissionConfig = filepath.Join(t.TempDir(), "missing.json")
+		}, manual, "no such file"},
+		{"unsupported listener", func(_ *testing.T, s *loadedDeputySettings) {
+			s.Listen = "192.0.2.10:7340"
+		}, listener, "non-loopback, non-Tailscale"},
+		{"unclean agent tree", func(_ *testing.T, s *loadedDeputySettings) {
+			s.AgentTree.Checkout = "/src/../tree"
+		}, claudeConfig, "-agent-tree must be a clean absolute path"},
+		{"unclean review input", func(_ *testing.T, s *loadedDeputySettings) {
+			s.Review.InputRoot = "/review/../inputs"
+		}, claudeConfig, "-review-input-root must be a clean absolute path"},
+		{"qualified base ref", func(_ *testing.T, s *loadedDeputySettings) {
+			s.Repository.BaseRef = "refs/heads/main"
+		}, claudeConfig, "-base-ref is not a valid transport branch"},
+	}
+	for _, field := range []struct {
+		name string
+		path func(*loadedDeputySettings) *string
+	}{
+		{"implementation", func(s *loadedDeputySettings) *string { return &s.Prompts.PromptPackage }},
+		{"specification", func(s *loadedDeputySettings) *string { return &s.Prompts.SpecificationPromptPackage }},
+		{"remediation", func(s *loadedDeputySettings) *string { return &s.Prompts.RemediationPromptPackage }},
+	} {
+		for _, failure := range []string{"missing", "unreadable", "empty", "wrong role"} {
+			want := field.name + " prompt package"
+			switch failure {
+			case "missing":
+				want = "no such file"
+			case "unreadable":
+				want = "is a directory"
+			case "empty":
+				want = "is empty"
+			case "wrong role":
+				switch field.name {
+				case "implementation":
+					want = "implementation prompt package enables"
+				case "specification":
+					want = "prompt package roles: specification prompt package does not enable"
+				default:
+					want = "remediation prompt package roles: specification prompt package does not enable"
+				}
+			}
+			cases = append(cases, refusal{
+				name: field.name + " " + failure, downstream: prompts, want: want,
+				edit: func(t *testing.T, s *loadedDeputySettings) {
+					path := field.path(s)
+					switch failure {
+					case "missing":
+						*path = filepath.Join(t.TempDir(), "missing.md")
+					case "unreadable":
+						*path = t.TempDir()
+					case "empty", "wrong role":
+						body := []byte{}
+						if failure == "wrong role" {
+							body = []byte("No prior artifacts.\n")
+							if field.name == "implementation" {
+								body = []byte(priorArtifactsTestDirective + "Wrong role.\n")
+							}
+						}
+						if err := os.WriteFile(*path, body, 0o600); err != nil {
+							t.Fatal(err)
+						}
+					}
+				},
+			})
+		}
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			settings := deputyDaemonSettingsFixture(t)
+			paths := newDeputyPaths(filepath.Join(t.TempDir(), "daemon"))
+			if err := checkDeputyDaemonSettings(settings, paths, noTailscale); err != nil {
+				t.Fatalf("valid fixture refused: %v", err)
+			}
+			tc.edit(t, &settings)
+			early := checkDeputyDaemonSettings(settings, paths, noTailscale)
+			downstream := tc.downstream(settings, paths)
+			for name, err := range map[string]error{"early": early, "downstream": downstream} {
+				if err == nil || !strings.Contains(err.Error(), tc.want) {
+					t.Fatalf("%s error %v, want %q", name, err, tc.want)
+				}
+			}
+			if !strings.HasPrefix(early.Error(), "settings: ") || !strings.Contains(early.Error(), downstream.Error()) {
+				t.Fatalf("early refusal %v lost downstream reason %v", early, downstream)
+			}
+		})
+	}
+}
+
+func TestDeputyDaemonSettingsAcceptsValidFiles(t *testing.T) {
+	t.Parallel()
+	for _, withManual := range []bool{false, true} {
+		settings := deputyDaemonSettingsFixture(t)
+		if withManual {
+			settings.ManualSubmissionConfig = filepath.Join(t.TempDir(), "manual.json")
+			writeManualConfig(t, settings.ManualSubmissionConfig, manualConfigFixture(t))
+		}
+		for _, address := range []string{"127.0.0.1:7340", "[::1]:7340", "100.64.0.7:7340"} {
+			settings.Listen = address
+			paths := newDeputyPaths(filepath.Join(t.TempDir(), "daemon"))
+			if err := checkDeputyDaemonSettings(settings, paths, func() ([]netip.Addr, error) {
+				return []netip.Addr{netip.MustParseAddr("100.64.0.7")}, nil
+			}); err != nil {
+				t.Fatalf("withManual=%v, listen=%s: %v", withManual, address, err)
+			}
+			if _, err := os.Stat(paths.StateRoot); !errors.Is(err, os.ErrNotExist) {
+				t.Fatalf("early validation created state: %v", err)
+			}
+		}
+	}
+}
+
+type deputyForbiddenLeaseHost struct {
+	fakeRigHost
+	t *testing.T
+}
+
+func (h *deputyForbiddenLeaseHost) ProbeDaemon(context.Context, string) (string, bool, error) {
+	h.t.Fatal("settings refusal reached the lease host")
+	return "", false, errors.New("unexpected lease probe")
+}
+
+func TestRunDeputyRefusesBeforeTheLease(t *testing.T) {
+	host, paths, _ := deputyLeaseFixture(t)
+	host.rig = &deputyForbiddenLeaseHost{t: t}
+	settings := deputyDaemonSettingsFixture(t)
+	settings.ManualSubmissionConfig = filepath.Join(t.TempDir(), "manual.json")
+	if err := os.WriteFile(settings.ManualSubmissionConfig, []byte("{"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	body, err := json.Marshal(settings.deputySettings)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(paths.Settings, body, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	var stdout, stderr bytes.Buffer
+	err = runDeputy(t.Context(), func() {}, []string{"-root", filepath.Dir(paths.StateRoot)}, &stdout, &stderr, host)
+	if !errors.Is(err, errDeputyUsage) || !strings.Contains(err.Error(), "manual_submission_config") {
+		t.Fatalf("got %v, want a manual_submission_config usage refusal", err)
+	}
+	for _, path := range []string{paths.Acquisition, paths.Manifest, paths.EvidenceDir, paths.DB, paths.DB + ".blobs"} {
+		if _, err := os.Stat(path); !errors.Is(err, os.ErrNotExist) {
+			t.Fatalf("early refusal left %s: %v", path, err)
+		}
+	}
+	entries, err := os.ReadDir(host.leaseRoot)
+	if err != nil || len(entries) != 0 {
+		t.Fatalf("early refusal touched lease root: %v, %v", entries, err)
 	}
 }
 
