@@ -432,9 +432,11 @@ Keep machine-read record headings exact, including
 **None.** The owner turned off automatic Codex review on 2026-10-21, so no
 bot reviews pull requests.
 
-- **No review watch:** skip step 1 of Handing Off the PR and do not invoke
-  `await-pr-review`. With no record, that skill scans recent PRs, finds
-  Codex's old reviews, and waits out its cap for a pass that never comes.
+- **Reviewer:** `none`, an owner decision. Only the owner changes it.
+- **Review watch:** invoke `await-pr-review` as step 1 of Handing Off the
+  PR. It reads the `none` record above, starts no review watch, scans no
+  past PRs, and waits on the PR's CI checks only. Keep the record here: the
+  skill doesn't treat the landing record's `Reviewer: none` as one.
 - **Before pushing:** follow `docs/agent-workflow.md` §pre-push-review, which
   asks for a fresh-context reviewer when delegation is available and
   otherwise relies on the owner. The owner's review is the final one.
@@ -442,7 +444,8 @@ bot reviews pull requests.
   on-demand `@codex review` is not a reviewer to record; a new record needs
   the owner to turn automatic review back on.
 
-Decision record: `devlog/2026-10-21-0848-retire-codex-reviewer.md`.
+Decision records: `devlog/2026-10-21-0848-retire-codex-reviewer.md` and
+`devlog/2026-10-21-1420-await-review-ci-only.md`.
 
 ## Landing Record
 
