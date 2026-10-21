@@ -1557,36 +1557,10 @@ struct DecisionStageRailPresentation: Equatable {
     struct Entry: Equatable, Identifiable {
         let id: String
         let title: String
-        let detail: String?
-        let context: String?
-        let timestamp: String?
-        /// The instant `timestamp` shortens, so the rail can keep the exact
-        /// value one gesture away. Not part of the spoken label.
-        let instant: Date?
         let state: State
 
-        init(
-            id: String,
-            title: String,
-            detail: String? = nil,
-            context: String? = nil,
-            timestamp: String? = nil,
-            instant: Date? = nil,
-            state: State
-        ) {
-            self.id = id
-            self.title = title
-            self.detail = detail
-            self.context = context
-            self.timestamp = timestamp
-            self.instant = instant
-            self.state = state
-        }
-
         var accessibilityLabel: String {
-            [title, state.accessibilityLabel, detail, context, timestamp]
-                .compactMap { $0 }
-                .joined(separator: ", ")
+            "\(title), \(state.accessibilityLabel)"
         }
     }
 
@@ -1613,19 +1587,6 @@ struct DecisionStageRailPresentation: Equatable {
             entries: entries,
             summary:
                 "\(stages[failedStageIndex]) failed, stage \(failedStageIndex + 1) of \(stages.count).")
-    }
-
-    static func timeline(entries: [Entry]) -> Self {
-        let summary =
-            entries.isEmpty
-            ? "No stage, round, or decision history recorded."
-            : "Stage history: "
-                + entries.map { entry in
-                    [entry.title, entry.detail, entry.context, entry.timestamp]
-                        .compactMap { $0 }
-                        .joined(separator: ", ")
-                }.joined(separator: "; ") + "."
-        return .init(entries: entries, summary: summary)
     }
 }
 
@@ -2003,11 +1964,6 @@ struct DecisionComparisonModuleView: View {
 }
 
 struct StageRail: View {
-    enum AccessibilityStyle {
-        case summary
-        case entries
-    }
-
     /// How much of each entry the rail draws. A run row has no room for
     /// headline labels under four dots, so `.compact` draws the dots
     /// alone and leaves the names to the accessibility summary and, on
@@ -2023,19 +1979,12 @@ struct StageRail: View {
     let presentation: DecisionStageRailPresentation
     let axis: Axis
     var showsSummaryText = true
-    var accessibilityStyle: AccessibilityStyle = .summary
     var labelStyle: LabelStyle = .full
 
-    @ViewBuilder
     var body: some View {
-        switch accessibilityStyle {
-        case .summary:
-            rail
-                .accessibilityElement(children: .ignore)
-                .accessibilityLabel(Text(presentation.summary))
-        case .entries:
-            rail
-        }
+        rail
+            .accessibilityElement(children: .ignore)
+            .accessibilityLabel(Text(presentation.summary))
     }
 
     private var rail: some View {
@@ -2140,39 +2089,13 @@ struct StageRail: View {
     }
 
     /// The entry the rail stands on (current, or failed in wax) reads
-    /// semibold; every other title recedes to regular ink-dim. The faces
-    /// are the refined scale's (frame 5.3): a 16pt title, and the context
-    /// and the time in the 13.5pt mono a trailing summary uses, so no
-    /// line a rail draws is under the 11.5pt floor on macOS.
+    /// semibold; every other title recedes to regular ink-dim, in the
+    /// refined scale's 16pt title (frame 5.3).
     private func entryLabel(_ entry: DecisionStageRailPresentation.Entry) -> some View {
         let emphasized = entry.state == .current || entry.state == .failed
-        return VStack(alignment: axis == .vertical ? .leading : .center, spacing: 4) {
-            Text(entry.title)
-                .font(FreesideFont.railTitle(emphasized: emphasized))
-                .foregroundStyle(
-                    entry.state == .failed ? Color.waxText : emphasized ? Color.ink : Color.inkDim)
-            if let detail = entry.detail {
-                // A receded title must not sit over a heavier detail.
-                Text(detail)
-                    .font(FreesideFont.railDetail(emphasized: emphasized))
-                    .foregroundStyle(emphasized ? AnyShapeStyle(.foreground) : AnyShapeStyle(Color.inkDim))
-            }
-            if let context = entry.context {
-                Text(context)
-                    .font(FreesideFont.trailingSummary)
-                    .foregroundStyle(Color.inkDim)
-            }
-            if let timestamp = entry.timestamp {
-                let text = Text(timestamp)
-                    .font(FreesideFont.trailingSummary)
-                    .foregroundStyle(Color.inkDim)
-                if let instant = entry.instant {
-                    text.exactInstant(instant)
-                } else {
-                    text
-                }
-            }
-        }
-        .frame(maxWidth: axis == .horizontal ? .infinity : nil, alignment: .leading)
+        return Text(entry.title)
+            .font(FreesideFont.railTitle(emphasized: emphasized))
+            .foregroundStyle(entry.state == .failed ? Color.waxText : emphasized ? Color.ink : Color.inkDim)
+            .frame(maxWidth: axis == .horizontal ? .infinity : nil, alignment: .leading)
     }
 }

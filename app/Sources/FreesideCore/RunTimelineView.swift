@@ -358,20 +358,19 @@ struct RunTimelineView: View {
     }
 
     private func timelineSection(_ timeline: Components.Schemas.RunTimeline) -> some View {
-        let entries = RunHistoryPresentation.entries(
+        let rows = RunHistoryPresentation.rows(
             milestones: timeline.milestones,
-            detail: milestoneDetail,
             context: { attemptContext(invocationID: $0, in: timeline) },
-            reviewRounds: timeline.review?.value1.rounds ?? [],
-            now: pinnedNow ?? Date(), locale: locale, timeZone: timeZone)
+            reviewRounds: timeline.review?.value1.rounds ?? [])
         return VStack(alignment: .leading, spacing: 11) {
             KeywordLabel(text: "Milestones")
-            StageRail(
-                title: nil,
-                presentation: .timeline(entries: entries),
-                axis: .vertical,
-                showsSummaryText: false,
-                accessibilityStyle: .entries)
+            if rows.isEmpty {
+                Text("No stage, round, or decision history recorded.")
+                    .font(FreesideFont.cardBody)
+                    .foregroundStyle(Color.inkDim)
+            } else {
+                TimelineRail(rows: rows)
+            }
         }
     }
 
@@ -440,10 +439,6 @@ struct RunTimelineView: View {
             stages: snapshot.run.stages,
             reviewRounds: timeline.review?.value1.rounds ?? [])
     }
-
-    private func milestoneDetail(_ milestone: Components.Schemas.RunMilestone) -> String? {
-        RunHistoryPresentation.detail(milestone)
-    }
 }
 
 /// Orders the run detail's history surfaces newest first without sorting by
@@ -453,69 +448,75 @@ struct RunTimelineView: View {
 /// deterministic, tie-stable order and keeping `.current` on the daemon's
 /// last-recorded milestone.
 enum RunHistoryPresentation {
-    /// Builds the decision-history rail entries in daemon order (last one
-    /// `.current`), adds the findings adjudications that started a
-    /// remediation, then returns them reversed so the newest leads. `detail`
-    /// and `context` stay the view's own closures over run state.
-    static func entries(
+    /// The run's milestones as rail rows, newest first: each milestone in
+    /// the words `RunDisplay.label` gives its kind, joined by its detail,
+    /// with `context` naming its attempt on the sub line. The milestones
+    /// come in daemon record order (oldest first) and are reversed, never
+    /// sorted by time.
+    ///
+    /// The markers follow the task's event rail. A stage start is the run's
+    /// submission and the start of a remediator a review round's findings
+    /// named, the instants that rail marks; a failure is a failed work
+    /// result or a blocked publication. One `Findings Adjudicated` row joins
+    /// for each round whose findings started a remediation, just before the
+    /// remediator's first milestone in record order, or at the newest end
+    /// while the remediator has none. It is an ordinary entry, the newest
+    /// when it leads.
+    static func rows(
         milestones: [Components.Schemas.RunMilestone],
-        detail: (Components.Schemas.RunMilestone) -> String?,
         context: (String?) -> String?,
-        reviewRounds: [Components.Schemas.RunReviewRound] = [],
-        now: Date = Date(), locale: Locale = .current, timeZone: TimeZone = .current
-    ) -> [DecisionStageRailPresentation.Entry] {
-        let ordered = milestones.enumerated().map { index, milestone in
-            DecisionStageRailPresentation.Entry(
-                id: "\(index)-\(milestone.kind.rawValue)-\(milestone.recorded_at.timeIntervalSince1970)",
-                title: RunDisplay.label(milestone.kind),
-                detail: detail(milestone),
-                context: context(milestone.invocation_id),
-                timestamp: FreesideFormat.shortTime(
-                    milestone.recorded_at, now: now, locale: locale, timeZone: timeZone),
-                instant: milestone.recorded_at,
-                state: index == milestones.count - 1 ? .current : .completed)
+        reviewRounds: [Components.Schemas.RunReviewRound] = []
+    ) -> [TimelineRail.Row] {
+        let remediators = Set(reviewRounds.compactMap { $0.remediation?.value1.invocation_id })
+        let adjudications = reviewRounds.compactMap { round -> (position: Int, row: TimelineRail.Row)? in
+            guard let remediation = round.remediation?.value1 else { return nil }
+            let position =
+                milestones.firstIndex { $0.invocation_id == remediation.invocation_id } ?? milestones.count
+            return (
+                position,
+                TimelineRail.Row(
+                    kind: .event,
+                    label: "Findings Adjudicated · Remediate "
+                        + "\(ReviewRoundPresentation.findingsPhrase(remediation.finding_ids.count)) "
+                        + "from Review \(round.round)",
+                    recordedAt: remediation.decided_at)
+            )
         }
-        return Array(
-            insertingAdjudications(
-                into: ordered, invocationIDs: milestones.map(\.invocation_id), reviewRounds: reviewRounds,
-                now: now, locale: locale, timeZone: timeZone
-            ).reversed())
+        var oldestFirst: [TimelineRail.Row] = []
+        for index in 0...milestones.count {
+            oldestFirst += adjudications.filter { $0.position == index }.map(\.row)
+            guard index < milestones.count else { break }
+            let milestone = milestones[index]
+            oldestFirst.append(
+                TimelineRail.Row(
+                    kind: kind(milestone, remediators: remediators),
+                    label: RunDisplay.label(milestone.kind) + (detail(milestone).map { " · \($0)" } ?? ""),
+                    recordedAt: milestone.recorded_at,
+                    context: context(milestone.invocation_id)))
+        }
+        var rows = Array(oldestFirst.reversed())
+        if !rows.isEmpty { rows[0].isNewest = true }
+        return rows
     }
 
-    /// Adds one `Findings Adjudicated` entry for each review round whose
-    /// findings started a remediation, to entries in daemon record order
-    /// (oldest first) whose milestones name `invocationIDs`. The entry goes
-    /// just before the remediator's first milestone, or at the newest end
-    /// while the remediator has none. It is placed by record order, never by
-    /// time, and is never `.current`.
-    static func insertingAdjudications(
-        into entries: [DecisionStageRailPresentation.Entry], invocationIDs: [String?],
-        reviewRounds: [Components.Schemas.RunReviewRound],
-        now: Date = Date(), locale: Locale = .current, timeZone: TimeZone = .current
-    ) -> [DecisionStageRailPresentation.Entry] {
-        typealias Placed = (position: Int, entry: DecisionStageRailPresentation.Entry)
-        let adjudications = reviewRounds.compactMap { round -> Placed? in
-            guard let remediation = round.remediation?.value1 else { return nil }
-            let entry = DecisionStageRailPresentation.Entry(
-                id: "adjudication-\(round.round)",
-                title: "Findings Adjudicated",
-                detail: "Remediate \(ReviewRoundPresentation.findingsPhrase(remediation.finding_ids.count)) "
-                    + "from Review \(round.round)",
-                timestamp: remediation.decided_at.map {
-                    FreesideFormat.shortTime($0, now: now, locale: locale, timeZone: timeZone)
-                },
-                instant: remediation.decided_at,
-                state: .completed)
-            let position = invocationIDs.firstIndex(of: remediation.invocation_id) ?? entries.count
-            return (position, entry)
+    private static func kind(
+        _ milestone: Components.Schemas.RunMilestone, remediators: Set<String>
+    ) -> TimelineRail.Row.Kind {
+        switch milestone.kind {
+        case .run_submitted:
+            return .stageStart(nil)
+        case .invocation_started:
+            // The daemon runs a remediation in an `implement` stage.
+            guard let invocation = milestone.invocation_id, remediators.contains(invocation) else { return .event }
+            return .stageStart(.implementation)
+        case .terminal_recorded:
+            return milestone.terminal?.value1 == .failed ? .failure : .event
+        case .publication_blocked:
+            return .failure
+        case .invocation_admitted, .execution_export_recorded, .execution_outcome_recorded, .publication_ready,
+            .work_unit_completed:
+            return .event
         }
-        guard !adjudications.isEmpty else { return entries }
-        var result: [DecisionStageRailPresentation.Entry] = []
-        for index in 0...entries.count {
-            result += adjudications.filter { $0.position == index }.map(\.entry)
-            if index < entries.count { result.append(entries[index]) }
-        }
-        return result
     }
 
     /// `Remediation for Review <n>` for the remediator a review round's

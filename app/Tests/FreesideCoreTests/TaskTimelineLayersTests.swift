@@ -209,14 +209,12 @@ import Testing
                 != TaskTimelineDisclosurePreferences.Section.campaign("outside-campaign").id)
     }
 
-    /// A rail entry keeps the instant its short timestamp stands for, so
-    /// the rail can offer the exact value; the spoken label is unchanged.
-    @Test func milestoneEntriesCarryTheirExactInstant() throws {
+    /// A rail row keeps its milestone's instant, which the rail shortens
+    /// and offers exactly, in the page's own clock and time zone.
+    @Test func milestoneRowsCarryTheirExactInstant() throws {
         let run = try #require(TaskHistoryFixtures.history(.retry).sections.first?.runs.first)
-        let entries = TaskTimelinePresentation.milestoneEntries(run, now: .now)
-        #expect(entries.map(\.instant) == run.milestones.map { Optional($0.recorded_at) })
-        let entry = try #require(entries.first)
-        #expect(!entry.accessibilityLabel.contains(FreesideFormat.exactTime(try #require(entry.instant))))
+        let rows = TaskTimelinePresentation.milestoneRows(run)
+        #expect(rows.map(\.recordedAt) == run.milestones.map { Optional($0.recorded_at) })
     }
 
     /// The guidance link leads to the very item whose lookup produced it.

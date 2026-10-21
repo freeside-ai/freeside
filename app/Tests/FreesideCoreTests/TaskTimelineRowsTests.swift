@@ -7,12 +7,15 @@ import Testing
 /// The task's event rail as rows: which daemon events it keeps, how each
 /// reads, and where a stage start is drawn.
 @Suite struct TaskTimelineRowsTests {
-    private typealias Row = TaskTimelinePresentation.Row
+    private typealias Row = TimelineRail.Row
 
     /// A row as one line: `>` for a stage start, `!` for a failure, and a
     /// trailing `*` on the rows that read as the head of the rail.
-    private func lines(_ timeline: Components.Schemas.TaskTimeline) -> [String] {
-        TaskTimelinePresentation.rows(timeline).map { row in
+    private func lines(
+        _ timeline: Components.Schemas.TaskTimeline,
+        reviewRounds: [String: [Components.Schemas.RunReviewRound]] = [:]
+    ) -> [String] {
+        TaskTimelinePresentation.rows(timeline, reviewRounds: reviewRounds).map { row in
             let mark: String
             switch row.kind {
             case .event: mark = ""
@@ -105,6 +108,191 @@ import Testing
             lines(script.timeline) == [
                 "Attempt 1 started *", "> Specification started *", "Attempt 1 started", "> Specification started",
             ])
+    }
+
+    private let firstReview = [
+        "Round 1 completed · Findings",
+        "Round 1 requested",
+        "> Review started",
+        "Attempt 1 started",
+        "> Implementation started",
+    ]
+
+    private func lines(_ script: TaskStageFixtures.Script) -> [String] {
+        lines(script.timeline, reviewRounds: script.reviewRounds)
+    }
+
+    @Test func aRemediationReadsAsAReturnToImplementation() {
+        var script = TaskStageFixtures.script(.remediation)
+        // The decision sits under the remediator's start, at its own time.
+        #expect(
+            lines(script)
+                == [
+                    "Remediation started · Round 1 *",
+                    "> Implementation started *",
+                    "Round 1 findings decided · 2 to remediation · 1 declined",
+                ] + firstReview + specificationPhase)
+        let rows = TaskTimelinePresentation.rows(script.timeline, reviewRounds: script.reviewRounds)
+        #expect(TaskTimelinePresentation.newestStage(rows) == .implementation)
+        #expect(
+            rows[2].recordedAt
+                == script.reviewRounds[TaskStageFixtures.implementationRun]?.first?.remediation?.value1.decided_at)
+        // The remediator's result is the remediation's, not a second pass
+        // of the attempt, and the re-review returns to Review.
+        script.wait(20)
+        script.milestone(
+            TaskStageFixtures.implementationRun, .terminal_recorded, invocation: TaskStageFixtures.remediator,
+            terminal: .completed)
+        script.wait(2)
+        script.review(TaskStageFixtures.implementationRun, round: 2, .review_requested)
+        #expect(
+            lines(script)
+                == [
+                    "Round 2 requested *",
+                    "> Review started *",
+                    "Remediation completed",
+                    "Remediation started · Round 1",
+                    "> Implementation started",
+                    "Round 1 findings decided · 2 to remediation · 1 declined",
+                ] + firstReview + specificationPhase)
+        // With no review facts loaded the rail reads as it did before them:
+        // the remediator's start is machinery and its result a work result.
+        #expect(
+            lines(script.timeline)
+                == ["Round 2 requested *", "Attempt 1 completed"] + firstReview + specificationPhase)
+    }
+
+    @Test func aFailedRemediationReadsInWax() {
+        var script = TaskStageFixtures.script(.remediation)
+        script.wait(20)
+        script.milestone(
+            TaskStageFixtures.implementationRun, .terminal_recorded, invocation: TaskStageFixtures.remediator,
+            terminal: .failed)
+        #expect(
+            lines(script).prefix(3) == [
+                "! Remediation failed *", "Remediation started · Round 1", "> Implementation started",
+            ])
+    }
+
+    @Test func aDecisionLeadsTheRailUntilTheRemediatorStarts() {
+        var script = TaskStageFixtures.script(.review)
+        script.wait(9)
+        script.review(TaskStageFixtures.implementationRun, round: 1, .review_completed, outcome: .findings)
+        script.wait(4)
+        script.decide(
+            TaskStageFixtures.implementationRun, round: 1, remediate: 3, declined: 0,
+            remediator: TaskStageFixtures.remediator)
+        // No declined count when nothing was declined, and no stage start:
+        // the task is still in Review until the remediator starts.
+        #expect(lines(script) == ["Round 1 findings decided · 3 to remediation *"] + firstReview + specificationPhase)
+        let rows = TaskTimelinePresentation.rows(script.timeline, reviewRounds: script.reviewRounds)
+        #expect(TaskTimelinePresentation.newestStage(rows) == .review)
+    }
+
+    @Test func aDecisionWhoseRemediatorNeverStartsKeepsItsPlace() {
+        var script = TaskStageFixtures.script(.review)
+        script.wait(9)
+        script.review(TaskStageFixtures.implementationRun, round: 1, .review_completed, outcome: .findings)
+        script.wait(4)
+        script.decide(
+            TaskStageFixtures.implementationRun, round: 1, remediate: 3, declined: 0,
+            remediator: TaskStageFixtures.remediator)
+        script.wait()
+        script.event(.stop_requested)
+        // The stop is newer than the decision, so it leads the rail.
+        #expect(
+            lines(script)
+                == ["Stop requested *", "Round 1 findings decided · 3 to remediation"] + firstReview
+                + specificationPhase)
+    }
+
+    @Test func aRemediatorThatStartsTwiceDrawsOneStart() {
+        var script = TaskStageFixtures.script(.remediation)
+        let once = lines(script)
+        script.wait()
+        script.milestone(
+            TaskStageFixtures.implementationRun, .invocation_started, invocation: TaskStageFixtures.remediator)
+        #expect(lines(script) == once)
+    }
+
+    @Test func aSecondRemediationInOneRunReadsAsItsOwnReturn() {
+        let run = TaskStageFixtures.implementationRun
+        let second = "\(run)-remediation-2"
+        var script = TaskStageFixtures.script(.remediation)
+        script.wait(20)
+        script.milestone(run, .terminal_recorded, invocation: TaskStageFixtures.remediator, terminal: .completed)
+        script.wait(2)
+        script.review(run, round: 2, .review_requested)
+        script.wait(9)
+        script.review(run, round: 2, .review_completed, outcome: .findings)
+        script.wait(3)
+        script.decide(run, round: 2, remediate: 1, declined: 0, remediator: second)
+        script.wait(2)
+        script.milestone(run, .invocation_started, invocation: second)
+        #expect(
+            lines(script)
+                == [
+                    "Remediation started · Round 2 *",
+                    "> Implementation started *",
+                    "Round 2 findings decided · 1 to remediation",
+                    "Round 2 completed · Findings",
+                    "Round 2 requested",
+                    "> Review started",
+                    "Remediation completed",
+                    "Remediation started · Round 1",
+                    "> Implementation started",
+                    "Round 1 findings decided · 2 to remediation · 1 declined",
+                ] + firstReview + specificationPhase)
+    }
+
+    @Test func anAllDeclinedRoundAddsNoRows() {
+        var script = TaskStageFixtures.script(.review)
+        script.wait(9)
+        script.review(TaskStageFixtures.implementationRun, round: 1, .review_completed, outcome: .findings)
+        script.wait(4)
+        script.decide(TaskStageFixtures.implementationRun, round: 1, remediate: 0, declined: 3)
+        #expect(lines(script) == lines(script.timeline))
+        #expect(lines(script) == ["Round 1 completed · Findings *"] + firstReview.dropFirst() + specificationPhase)
+    }
+
+    @Test func aSecondCampaignsRemediationIsDrawnInItsOwnCampaign() {
+        var script = TaskStageFixtures.Script()
+        for (campaign, round) in [("first", 1), ("second", 1)] {
+            script.campaign(campaign, specification: "\(campaign)-spec")
+            script.submit("\(campaign)-spec", role: .specification, attempt: 1, campaign: campaign)
+            script.wait()
+            script.approve(campaign, specification: "\(campaign)-spec", implementation: "\(campaign)-impl")
+            script.submit("\(campaign)-impl", role: .implementation, attempt: 1, campaign: campaign)
+            script.wait()
+            script.review("\(campaign)-impl", round: round, .review_requested)
+            script.wait()
+            script.review("\(campaign)-impl", round: round, .review_completed, outcome: .findings)
+            script.wait()
+        }
+        // The first campaign's round was declined outright; the second's
+        // went to a remediator, whose start is a return to the second
+        // campaign's Implementation.
+        script.decide("first-impl", round: 1, remediate: 0, declined: 2)
+        script.decide("second-impl", round: 1, remediate: 1, declined: 1, remediator: "second-remediation")
+        script.wait()
+        script.milestone("second-impl", .invocation_started, invocation: "second-remediation")
+        let campaign = [
+            "Round 1 completed · Findings",
+            "Round 1 requested",
+            "> Review started",
+            "Attempt 1 started",
+            "> Implementation started",
+            "Specification approved",
+            "Attempt 1 started",
+            "> Specification started",
+        ]
+        #expect(
+            lines(script)
+                == [
+                    "Remediation started · Round 1 *",
+                    "> Implementation started *",
+                    "Round 1 findings decided · 1 to remediation · 1 declined",
+                ] + campaign + campaign)
     }
 
     @Test func aRunWithNoRoleKeepsItsLabelsAndDrawsNoStart() {

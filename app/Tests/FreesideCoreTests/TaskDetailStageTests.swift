@@ -9,13 +9,18 @@ import Testing
 @Suite struct TaskDetailStageTests {
     private typealias Stage = Components.Schemas.StageName
 
-    private func stage(_ page: TaskProgressFixtures.Case) -> Stage? {
-        TaskDisplay.detailStage(page.task, runs: page.runs, history: page.history)
+    private func stage(
+        _ page: TaskProgressFixtures.Case, reviewRounds: [String: [Components.Schemas.RunReviewRound]] = [:]
+    ) -> Stage? {
+        TaskDisplay.detailStage(page.task, runs: page.runs, history: page.history, reviewRounds: reviewRounds)
     }
 
-    private func chip(_ page: TaskProgressFixtures.Case) -> String {
+    private func chip(
+        _ page: TaskProgressFixtures.Case, reviewRounds: [String: [Components.Schemas.RunReviewRound]] = [:]
+    ) -> String {
         TaskDisplay.detailStatus(
-            TaskDisplay.rowLines(page.task, position: page.position).status, stage: stage(page))
+            TaskDisplay.rowLines(page.task, position: page.position).status,
+            stage: stage(page, reviewRounds: reviewRounds))
     }
 
     private func holdCallout(_ page: TaskProgressFixtures.Case) -> TaskDisplay.HoldCallout? {
@@ -57,6 +62,13 @@ import Testing
         // A new attempt after review is implementation again.
         #expect(chip(TaskStageFixtures.page(.returned)) == "In Implementation")
         #expect(chip(TaskStageFixtures.page(.secondCampaign)) == "In Specification")
+        // A remediation is implementation again too, once the round's
+        // review facts say whose invocation it is; until then the round's
+        // start is the newest the events show.
+        let remediation = TaskStageFixtures.page(.remediation)
+        let rounds = TaskStageFixtures.script(.remediation).reviewRounds
+        #expect(chip(remediation, reviewRounds: rounds) == "In Implementation")
+        #expect(chip(remediation) == "In Review")
         // The row keeps its own words: the task list is unchanged.
         let review = TaskStageFixtures.page(.review)
         #expect(TaskDisplay.rowLines(review.task, position: review.position).status == "In Progress")

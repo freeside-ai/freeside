@@ -148,7 +148,11 @@ struct TaskTimelineView: View {
         let position = TaskDisplay.position(
             task, runs: coordinator.runs, attentionItems: coordinator.store.orderedSnapshots, history: timeline)
         let lines = TaskDisplay.rowLines(task, position: position)
-        let stage = TaskDisplay.detailStage(task, runs: coordinator.runs, history: timeline)
+        let stage = TaskDisplay.detailStage(
+            task, runs: coordinator.runs, history: timeline,
+            reviewRounds: timeline.map {
+                TaskTimelinePresentation.reviewRounds($0, runTimelines: coordinator.timelinesByRunID)
+            } ?? [:])
         return VStack(alignment: .leading, spacing: 12) {
             // The task id lives in the page's Identifiers footer; the copy
             // menu keeps a quick path to it.
@@ -260,7 +264,9 @@ struct TaskTimelineView: View {
     /// the current one included, is one folded disclosure row, and the
     /// page's exact identifiers close it under one hairline.
     private func content(_ timeline: Components.Schemas.TaskTimeline) -> some View {
-        let rows = TaskTimelinePresentation.rows(timeline)
+        let rows = TaskTimelinePresentation.rows(
+            timeline,
+            reviewRounds: TaskTimelinePresentation.reviewRounds(timeline, runTimelines: coordinator.timelinesByRunID))
         let disambiguate = TaskTimelinePresentation.campaignCount(timeline) > 1
         return VStack(alignment: .leading, spacing: 22) {
             VStack(alignment: .leading, spacing: 11) {
@@ -277,7 +283,7 @@ struct TaskTimelineView: View {
                         .font(FreesideFont.cardBody)
                         .foregroundStyle(Color.inkDim)
                 } else {
-                    eventRail(rows)
+                    TimelineRail(rows: rows)
                 }
             }
             if timeline.sections.isEmpty {
@@ -503,17 +509,11 @@ struct TaskTimelineView: View {
                     .font(FreesideFont.cardBody)
                     .foregroundStyle(Color.inkDim)
             } else {
-                StageRail(
-                    title: nil,
-                    presentation: .timeline(
-                        entries: TaskTimelinePresentation.milestoneEntries(
-                            run,
-                            reviewRounds: coordinator.timelinesByRunID[run.run_id]?.review?.value1.rounds ?? [],
-                            stages: stages(of: run.run_id),
-                            now: now, locale: locale, timeZone: timeZone)),
-                    axis: .vertical,
-                    showsSummaryText: false,
-                    accessibilityStyle: .entries)
+                TimelineRail(
+                    rows: TaskTimelinePresentation.milestoneRows(
+                        run,
+                        reviewRounds: coordinator.timelinesByRunID[run.run_id]?.review?.value1.rounds ?? [],
+                        stages: stages(of: run.run_id)))
             }
         }
         if TaskTimelinePresentation.hasRunDetails(run) {
@@ -562,88 +562,6 @@ struct TaskTimelineView: View {
         } else {
             FactRow(label: label, value: ShortIdentifier.short(runID))
         }
-    }
-
-    /// The gap under a row, and the wider one under a stage start, which
-    /// sets the start apart from the older entry beneath it.
-    private static let railGap: CGFloat = 10
-    private static let railGapUnderStageStart: CGFloat = 18
-    /// How far a connector is drawn from its marker before the row cuts it
-    /// off: longer than any row at any text size.
-    private static let connectorReach: CGFloat = 2000
-
-    /// The task's events as one rail, newest first: the newest entry leads
-    /// in ink, a stage start is marked in the diff green and a failure in
-    /// wax, and a connector joins every marker to the next. Rows touch, each
-    /// carrying its own gap, so the connector runs through the gap unbroken.
-    private func eventRail(_ rows: [TaskTimelinePresentation.Row]) -> some View {
-        VStack(alignment: .leading, spacing: 0) {
-            ForEach(Array(rows.enumerated()), id: \.offset) { index, row in
-                let isLast = index == rows.count - 1
-                HStack(alignment: .firstTextBaseline, spacing: 8) {
-                    ChronologyMarker(kind: TaskTimelinePresentation.marker(row))
-                        .background { connector(above: index > 0, below: !isLast) }
-                        .alignmentGuide(.firstTextBaseline) { $0[.bottom] - 1 }
-                    ViewThatFits(in: .horizontal) {
-                        HStack(alignment: .firstTextBaseline, spacing: 8) {
-                            railLabel(row)
-                            Spacer(minLength: 8)
-                            railTime(row)
-                        }
-                        VStack(alignment: .leading, spacing: 4) {
-                            railLabel(row)
-                            railTime(row)
-                        }
-                    }
-                }
-                .padding(.bottom, isLast ? 0 : row.isStageStart ? Self.railGapUnderStageStart : Self.railGap)
-                // Cuts the connector off at the row's edges, where the next
-                // row's connector takes over.
-                .clipped()
-                .accessibilityElement(children: .combine)
-            }
-        }
-    }
-
-    /// The connector's two halves, each drawn from the marker's edge out
-    /// past the row. The marker sits on the label's baseline, so its place
-    /// in the row is not known here; the row's bounds end each half instead.
-    /// Clipping hides the overflow without removing it from hit testing, so
-    /// the connector takes no hits: it would otherwise cover a strip of the
-    /// controls above and below the rail.
-    private func connector(above: Bool, below: Bool) -> some View {
-        let offset = (Self.connectorReach + ChronologyMarker.diameter) / 2
-        return ZStack {
-            if above { connectorHalf.offset(y: -offset) }
-            if below { connectorHalf.offset(y: offset) }
-        }
-        .allowsHitTesting(false)
-        .accessibilityHidden(true)
-    }
-
-    private var connectorHalf: some View {
-        Rectangle()
-            .fill(Color.milestoneConnector)
-            .frame(width: 2, height: Self.connectorReach)
-    }
-
-    /// The newest entry and the stage start drawn from it are semibold. A
-    /// stage start is full ink wherever it sits; an older event is dimmed.
-    private func railLabel(_ row: TaskTimelinePresentation.Row) -> some View {
-        Text(row.label)
-            .font(FreesideFont.sans(.callout, weight: row.isNewest ? .semibold : .regular))
-            .foregroundStyle(row.isNewest || row.isStageStart ? Color.ink : Color.inkDim)
-            .fixedSize(horizontal: false, vertical: true)
-    }
-
-    private func railTime(_ row: TaskTimelinePresentation.Row) -> some View {
-        Text(
-            FreesideFormat.shortTime(
-                row.recordedAt, now: now, locale: locale, timeZone: timeZone)
-        )
-        .font(FreesideFont.trailingSummary)
-        .foregroundStyle(Color.inkDim)
-        .exactInstant(row.recordedAt)
     }
 }
 
@@ -701,28 +619,6 @@ enum TaskTimelinePresentation {
         return entries
     }
 
-    /// One line on the task's event rail: a daemon event, or the start of a
-    /// stage drawn from one.
-    struct Row: Equatable {
-        enum Kind: Equatable {
-            case event
-            /// An event that records a failure. The rail marks it in wax.
-            case failure
-            case stageStart(Components.Schemas.StageName)
-        }
-
-        let kind: Kind
-        let label: String
-        let recordedAt: Date
-        /// The newest event, and the stage start drawn from it: the two
-        /// share one instant, so both read as the head of the rail.
-        var isNewest = false
-
-        var isStageStart: Bool {
-            if case .stageStart = kind { true } else { false }
-        }
-    }
-
     /// Where the walk in `rows(_:)` stands: a stage within one campaign. A
     /// new campaign is a new position even when its first stage repeats the
     /// last one, so a revised specification gets its own start point.
@@ -745,10 +641,22 @@ enum TaskTimelinePresentation {
     /// after the review of its work was requested, and must not read as a
     /// return to implementation.
     ///
+    /// A remediation is a return to Implementation. `reviewRounds` holds
+    /// each run's review rounds by run id; a round whose findings went to a
+    /// remediator names its invocation. That invocation's start draws
+    /// "Remediation started" with an Implementation start point under it,
+    /// and the decision that sent the findings there directly under both,
+    /// at the decision's own time. Until the remediator starts, the
+    /// decision sits where its time falls. The remediator's result reads as the
+    /// remediation's and is not counted as a pass of the attempt.
+    ///
     /// Three kinds of event are machinery and leave the rail: a campaign's
-    /// allocation, an invocation's start, and the result of a review
+    /// allocation, any other invocation's start, and the result of a review
     /// round's own invocation, which the round's entry already states.
-    static func rows(_ timeline: Components.Schemas.TaskTimeline) -> [Row] {
+    static func rows(
+        _ timeline: Components.Schemas.TaskTimeline,
+        reviewRounds: [String: [Components.Schemas.RunReviewRound]] = [:]
+    ) -> [TimelineRail.Row] {
         let events = events(timeline)
         var runs: [String: (run: Components.Schemas.TaskTimelineRun, campaignID: String?)] = [:]
         for section in timeline.sections {
@@ -757,16 +665,69 @@ enum TaskTimelinePresentation {
             }
         }
         let reviewInvocations = Set(events.compactMap { $0.review?.value1.invocation_id })
+        func remediated(_ milestone: Components.Schemas.RunMilestone?) -> Components.Schemas.RunReviewRound? {
+            guard let milestone, let invocation = milestone.invocation_id else { return nil }
+            return reviewRounds[milestone.run_id]?.first { $0.remediation?.value1.invocation_id == invocation }
+        }
+        let remediatorStarts = Set(
+            events.compactMap { event -> String? in
+                guard let milestone = event.milestone?.value1, milestone.kind == .invocation_started,
+                    remediated(milestone) != nil
+                else { return nil }
+                return milestone.invocation_id
+            })
+        // A decision whose remediator has not started sits where its own
+        // time falls among the events: the head of the rail at first, and
+        // under whatever happens after it, such as a stop that means the
+        // remediator never starts. One with no recorded time leads the rail.
+        var unstarted = timeline.sections.reversed().flatMap { $0.runs.reversed() }
+            .flatMap { run in
+                (reviewRounds[run.run_id] ?? []).compactMap { round in
+                    round.remediation.map { (round: round, remediation: $0.value1) }
+                }
+            }
+            .filter { !remediatorStarts.contains($0.remediation.invocation_id) }
+            .enumerated()
+            .sorted {
+                ($0.element.remediation.decided_at ?? .distantFuture, $0.offset)
+                    < ($1.element.remediation.decided_at ?? .distantFuture, $1.offset)
+            }
+            .map(\.element)
         var position: StagePosition?
         var results: [String: Int] = [:]
-        var oldestFirst: [Row] = []
+        var startedRemediations: Set<String> = []
+        var oldestFirst: [TimelineRail.Row] = []
         for event in events.reversed() {
+            while let next = unstarted.first, let decidedAt = next.remediation.decided_at,
+                decidedAt < event.recorded_at
+            {
+                oldestFirst.append(decidedRow(next.round, next.remediation))
+                unstarted.removeFirst()
+            }
             let milestone = event.milestone?.value1
             let source = (event.run_id ?? milestone?.run_id).flatMap { runs[$0] }
             var pass = 1
             var start: Components.Schemas.StageName?
             switch (event.kind, milestone?.kind) {
-            case (.campaign_allocated, _), (_, .invocation_started):
+            case (_, .invocation_started):
+                guard let round = remediated(milestone), let remediation = round.remediation?.value1,
+                    startedRemediations.insert(remediation.invocation_id).inserted
+                else { continue }
+                oldestFirst.append(decidedRow(round, remediation))
+                let next = StagePosition(stage: .implementation, campaignID: source?.campaignID)
+                if next != position {
+                    oldestFirst.append(
+                        TimelineRail.Row(
+                            kind: .stageStart(.implementation), label: "Implementation started",
+                            recordedAt: event.recorded_at))
+                }
+                position = next
+                oldestFirst.append(
+                    TimelineRail.Row(
+                        kind: .event, label: "Remediation started · Round \(round.round)",
+                        recordedAt: event.recorded_at))
+                continue
+            case (.campaign_allocated, _):
                 continue
             case (_, .run_submitted):
                 let next = source?.run.role.map {
@@ -777,6 +738,14 @@ enum TaskTimelinePresentation {
                 // one before it: what follows is not known to continue it.
                 position = next
             case (_, .terminal_recorded):
+                if let milestone, remediated(milestone) != nil {
+                    oldestFirst.append(
+                        TimelineRail.Row(
+                            kind: recordsFailure(event) ? .failure : .event,
+                            label: "Remediation " + (terminalWord(milestone) ?? "ended"),
+                            recordedAt: event.recorded_at))
+                    continue
+                }
                 if let invocation = milestone?.invocation_id, reviewInvocations.contains(invocation) { continue }
                 if let runID = milestone?.run_id {
                     pass = results[runID, default: 0] + 1
@@ -793,38 +762,51 @@ enum TaskTimelinePresentation {
             }
             if let start {
                 oldestFirst.append(
-                    Row(
+                    TimelineRail.Row(
                         kind: .stageStart(start), label: "\(AttentionDisplay.label(start)) started",
                         recordedAt: event.recorded_at))
             }
             oldestFirst.append(
-                Row(
+                TimelineRail.Row(
                     kind: recordsFailure(event) ? .failure : .event,
                     label: rowLabel(event, run: source?.run, pass: pass), recordedAt: event.recorded_at))
         }
+        oldestFirst += unstarted.map { decidedRow($0.round, $0.remediation) }
         var rows = Array(oldestFirst.reversed())
         if !rows.isEmpty { rows[0].isNewest = true }
         if rows.count > 1, case .stageStart = rows[1].kind { rows[1].isNewest = true }
         return rows
     }
 
-    /// The stage the rail's newest start point names, which the header's
-    /// chip and hold callout repeat.
-    static func newestStage(_ rows: [Row]) -> Components.Schemas.StageName? {
-        for row in rows {
-            if case .stageStart(let stage) = row.kind { return stage }
-        }
-        return nil
+    /// The decision that sent a round's findings to a remediator, with the
+    /// findings the operator declined when the record counts them.
+    private static func decidedRow(
+        _ round: Components.Schemas.RunReviewRound, _ remediation: Components.Schemas.ReviewRoundRemediation
+    ) -> TimelineRail.Row {
+        var label = "Round \(round.round) findings decided · \(remediation.finding_ids.count) to remediation"
+        if let declined = round.dispositions?.value1.declined, declined > 0 { label += " · \(declined) declined" }
+        return TimelineRail.Row(kind: .event, label: label, recordedAt: remediation.decided_at)
     }
 
-    /// A row's marker. A stage start keeps its green and a failure its wax
-    /// at the head of the rail, where any other entry takes the ink dot.
-    static func marker(_ row: Row) -> ChronologyMarker.Kind {
-        switch row.kind {
-        case .stageStart: .stageStart
-        case .failure: .failure
-        case .event: row.isNewest ? .current : .prior
+    /// Each run's review rounds by run id, for `rows(_:reviewRounds:)`:
+    /// the rounds of every run in `timeline` whose own timeline is loaded.
+    static func reviewRounds(
+        _ timeline: Components.Schemas.TaskTimeline, runTimelines: [String: Components.Schemas.RunTimeline]
+    ) -> [String: [Components.Schemas.RunReviewRound]] {
+        var rounds: [String: [Components.Schemas.RunReviewRound]] = [:]
+        for run in timeline.sections.flatMap(\.runs) {
+            if let review = runTimelines[run.run_id]?.review?.value1 { rounds[run.run_id] = review.rounds }
         }
+        return rounds
+    }
+
+    /// The stage the rail's newest start point names, which the header's
+    /// chip and hold callout repeat.
+    static func newestStage(_ rows: [TimelineRail.Row]) -> Components.Schemas.StageName? {
+        for row in rows {
+            if case .stageStart(let stage?) = row.kind { return stage }
+        }
+        return nil
     }
 
     private static func stage(_ role: Components.Schemas.TaskRunRole) -> Components.Schemas.StageName {
@@ -1058,34 +1040,23 @@ enum TaskTimelinePresentation {
         return nil
     }
 
-    /// The daemon's milestones as rail entries in the order received (newest
-    /// first), the first one current. Not reversed: the run rail reverses
-    /// because its source is oldest first; this source already leads with
-    /// the newest. With the run's review rounds loaded, each milestone names
-    /// its invocation's role and the findings adjudications that started a
+    /// The run card's milestones as rail rows, newest first, read the way
+    /// the run's own page reads them. The task history holds them newest
+    /// first, so they are reversed to the oldest-first order the run page's
+    /// rows take. With
+    /// the run's review rounds loaded, each milestone names its
+    /// invocation's role and the findings adjudications that started a
     /// remediation join the rail.
-    static func milestoneEntries(
+    static func milestoneRows(
         _ run: Components.Schemas.TaskTimelineRun, reviewRounds: [Components.Schemas.RunReviewRound] = [],
-        stages: [Components.Schemas.Stage] = [], now: Date = Date(), locale: Locale = .current,
-        timeZone: TimeZone = .current
-    ) -> [DecisionStageRailPresentation.Entry] {
-        let newestFirst = run.milestones.enumerated().map { index, milestone in
-            DecisionStageRailPresentation.Entry(
-                id: "\(index)-\(milestone.kind.rawValue)-\(milestone.recorded_at.timeIntervalSince1970)",
-                title: RunDisplay.label(milestone.kind),
-                detail: RunHistoryPresentation.detail(milestone),
-                context: RunHistoryPresentation.roleContext(
-                    invocationID: milestone.invocation_id, reviewRounds: reviewRounds, stages: stages),
-                timestamp: FreesideFormat.shortTime(
-                    milestone.recorded_at, now: now, locale: locale, timeZone: timeZone),
-                instant: milestone.recorded_at,
-                state: index == 0 ? .current : .completed)
-        }
-        return Array(
-            RunHistoryPresentation.insertingAdjudications(
-                into: newestFirst.reversed(), invocationIDs: run.milestones.reversed().map(\.invocation_id),
-                reviewRounds: reviewRounds, now: now, locale: locale, timeZone: timeZone
-            ).reversed())
+        stages: [Components.Schemas.Stage] = []
+    ) -> [TimelineRail.Row] {
+        RunHistoryPresentation.rows(
+            milestones: run.milestones.reversed(),
+            context: {
+                RunHistoryPresentation.roleContext(invocationID: $0, reviewRounds: reviewRounds, stages: stages)
+            },
+            reviewRounds: reviewRounds)
     }
 
     /// The header's one meta line: project, issue, lifecycle, source.

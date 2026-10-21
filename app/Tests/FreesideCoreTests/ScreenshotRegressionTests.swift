@@ -2128,6 +2128,28 @@
                                 disclosures: TaskHistoryFixtures.currentCampaignOpen(
                                     retryTimeline, identifiersOpen: true))
                     )))
+            // A remediation under way (#2100): the task's events return to
+            // Implementation at the remediator's start, under the decision
+            // that sent the findings there, and the open run card draws the
+            // same decision in its own Milestones rail.
+            let remediationScript = TaskStageFixtures.script(.remediation)
+            let remediation = try TaskStageFixtures.coordinator(
+                TaskStageFixtures.page(.remediation), runTimelines: remediationScript.runTimelines)
+            for (name, width) in [("task-timeline-remediation", CGFloat?.none), ("task-timeline-remediation-390", 390)]
+            {
+                surfaces.append(
+                    Surface(
+                        name: name,
+                        width: width,
+                        view: AnyView(
+                            TaskTimelineView(
+                                coordinator: remediation.coordinator, snapshot: remediation.task, onOpenRun: { _ in }
+                            )
+                            .screenshotContent(
+                                remediationScript.timeline,
+                                disclosures: TaskHistoryFixtures.currentCampaignOpen(remediationScript.timeline))
+                        )))
+            }
             surfaces.append(
                 Surface(
                     name: "operational-summary",
@@ -3457,18 +3479,14 @@
         /// The pieces the task surfaces share, by day and by dusk: the three
         /// status-chip cuts (one long enough to wrap), a sentence disclosure
         /// closed and open, the navigation link, and a newest-first rail with
-        /// its filled current marker over hollow prior rings.
+        /// its filled current marker over a hollow prior ring and a stage
+        /// start.
         private func taskStyleSurfaces() -> [Surface] {
-            let rail = DecisionStageRailPresentation.timeline(entries: [
-                .init(
-                    id: "2", title: "Review round 3", detail: "Findings",
-                    timestamp: FreesideFormat.shortTime(
-                        screenshotNow, now: screenshotNow, locale: Locale(identifier: "en_US_POSIX"),
-                        timeZone: screenshotTimeZone),
-                    state: .current),
-                .init(id: "1", title: "Implementation completed", detail: "Pass 2", state: .completed),
-                .init(id: "0", title: "Run submitted", state: .completed),
-            ])
+            let rail: [TimelineRail.Row] = [
+                .init(kind: .event, label: "Review round 3 · Findings", recordedAt: screenshotNow, isNewest: true),
+                .init(kind: .event, label: "Implementation completed · Pass 2", recordedAt: nil),
+                .init(kind: .stageStart(nil), label: "Run submitted", recordedAt: nil),
+            ]
             return [ColorScheme.light, .dark].map { scheme in
                 Surface(
                     name: "task-style-\(scheme)", width: 390, colorScheme: scheme,
@@ -3492,9 +3510,7 @@
                                     .frame(maxWidth: .infinity, alignment: .leading)
                             }
                             FreesideLink(title: "Open run history")
-                            StageRail(
-                                title: nil, presentation: rail, axis: .vertical, showsSummaryText: false,
-                                accessibilityStyle: .entries)
+                            TimelineRail(rows: rail)
                         }.padding(24).foregroundStyle(Color.ink).background(Color.ground)))
             }
         }

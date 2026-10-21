@@ -445,19 +445,6 @@ import Testing
         }
     }
 
-    @Test func milestoneDatesUseTheSameTimeZoneAsReviewAndEvents() throws {
-        let run = Self.timeline().sections[0].runs[0]
-        let locale = Locale(identifier: "en_US")
-        let utc = try #require(TimeZone(secondsFromGMT: 0))
-        let west = try #require(TimeZone(secondsFromGMT: -5 * 3_600))
-        let utcEntries = TaskTimelinePresentation.milestoneEntries(run, locale: locale, timeZone: utc)
-        let westEntries = TaskTimelinePresentation.milestoneEntries(run, locale: locale, timeZone: west)
-        #expect(utcEntries.map(\.timestamp) != westEntries.map(\.timestamp))
-        // The short-time grammar: the date and the clock joined by a comma,
-        // with the year because the milestone isn't from this one.
-        #expect(utcEntries[0].timestamp?.replacing("\u{202F}", with: " ") == "Nov 14, 2023, 10:13 PM")
-    }
-
     @Test(arguments: [false, true]) @MainActor
     func savedCompleteHistorySurvivesFailureButNotAnEpochReset(legacy: Bool) async throws {
         var history = TaskHistoryFixtures.history(.published)
@@ -598,40 +585,46 @@ import Testing
             ])
     }
 
-    @Test func milestoneEntriesLeadWithTheFirstReceivedAsCurrent() {
+    @Test func milestoneRowsLeadWithTheFirstReceivedAsNewest() {
         let run = Self.timeline().sections[0].runs[0]
 
-        let entries = TaskTimelinePresentation.milestoneEntries(run)
+        let rows = TaskTimelinePresentation.milestoneRows(run)
 
-        #expect(entries.map(\.title) == ["Run Submitted", "Invocation Started"])
-        #expect(entries.map(\.state) == [.current, .completed])
-        #expect(TaskTimelinePresentation.milestoneEntries(Self.timeline().sections[0].runs[1]).isEmpty)
+        #expect(rows.map(\.label) == ["Run Submitted", "Invocation Started"])
+        #expect(rows.map(\.isNewest) == [true, false])
+        // The submission is a stage start, as on the run's own page.
+        #expect(rows.map(\.kind) == [.stageStart(nil), .event])
+        #expect(TaskTimelinePresentation.milestoneRows(Self.timeline().sections[0].runs[1]).isEmpty)
     }
 
     @Test(arguments: [Components.Schemas.ReviewProgressState.running, .completed])
-    func milestoneEntriesNameEachInvocationsRole(state: Components.Schemas.ReviewProgressState) {
+    func milestoneRowsNameEachInvocationsRole(state: Components.Schemas.ReviewProgressState) {
         var run = Self.timeline().sections[0].runs[0]
         run.milestones = RemediationFixtures.milestones(remediatorStarted: true).reversed()
         let rounds = [RemediationFixtures.findingsRound(), RemediationFixtures.reReview(state)]
 
-        let entries = TaskTimelinePresentation.milestoneEntries(
+        let rows = TaskTimelinePresentation.milestoneRows(
             run, reviewRounds: rounds, stages: RemediationFixtures.stages)
 
         // The implementer reads as the attempt the review round's title names.
         let implementer = "Implementation · Pass 1 · Round 2"
         #expect(
-            entries.map(\.context) == [
+            rows.map(\.context) == [
                 "Remediation for Review 1", "Remediation for Review 1", nil, implementer, implementer, implementer,
             ])
         // Before the run's snapshot syncs, the implementer is named by kind.
         #expect(
-            TaskTimelinePresentation.milestoneEntries(run, reviewRounds: rounds).map(\.context).last
+            TaskTimelinePresentation.milestoneRows(run, reviewRounds: rounds).map(\.context).last
                 == "Implementation")
-        #expect(entries[2].title == "Findings Adjudicated")
-        #expect(entries[2].detail == "Remediate 1 finding from Review 1")
-        #expect(entries.map(\.state) == [.current] + Array(repeating: .completed, count: 5))
-        // Without the run timeline the rail reads as before.
-        #expect(TaskTimelinePresentation.milestoneEntries(run).map(\.context).allSatisfy { $0 == nil })
+        #expect(rows[2].label == "Findings Adjudicated · Remediate 1 finding from Review 1")
+        // The remediator's start is a stage start; the rest are entries.
+        #expect(rows.map(\.kind) == [.stageStart(.implementation)] + Array(repeating: .event, count: 5))
+        #expect(rows.map(\.isNewest) == [true] + Array(repeating: false, count: 5))
+        // Without the run timeline the rail reads as before, and the
+        // remediator's start is an ordinary entry.
+        let unloaded = TaskTimelinePresentation.milestoneRows(run)
+        #expect(unloaded.map(\.context).allSatisfy { $0 == nil })
+        #expect(unloaded.allSatisfy { $0.kind == .event })
     }
 
     @Test func retryTaskTimelineListsBothAttemptsNewestFirst() throws {

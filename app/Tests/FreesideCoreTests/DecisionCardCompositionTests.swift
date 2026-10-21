@@ -1303,28 +1303,6 @@ import Testing
         }
     }
 
-    @Test func timelineSummaryPreservesVisibleMilestoneDetails() {
-        let presentation = DecisionStageRailPresentation.timeline(entries: [
-            .init(
-                id: "build",
-                title: "Build",
-                detail: "Round 2",
-                context: "Attempt 3",
-                timestamp: "Aug 25 at 11:54 AM",
-                state: .current)
-        ])
-
-        #expect(
-            presentation.summary
-                == "Stage history: Build, Round 2, Attempt 3, Aug 25 at 11:54 AM.")
-        #expect(
-            presentation.entries[0].accessibilityLabel
-                == "Build, current, Round 2, Attempt 3, Aug 25 at 11:54 AM")
-        #expect(
-            DecisionStageRailPresentation.timeline(entries: []).summary
-                == "No stage, round, or decision history recorded.")
-    }
-
     @Test func yieldSummaryIsDerivedFromTheSameRoundCounts() throws {
         let presentation = try #require(
             DecisionYieldPresentation(

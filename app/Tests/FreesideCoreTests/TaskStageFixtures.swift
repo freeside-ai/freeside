@@ -27,12 +27,18 @@ enum TaskStageFixtures {
         case secondCampaign
         /// A run the daemon recorded without a role or an attempt number.
         case noRole
+        /// The first review's findings sent to a remediator that has
+        /// started, with one finding declined.
+        case remediation
     }
 
     static let taskID = "stage-task"
 
     struct Script {
         private(set) var sections: [Components.Schemas.TaskTimelineSection] = []
+        /// Each run's review rounds by run id, as its run timeline holds
+        /// them: the review facts the task's events do not carry.
+        private(set) var reviewRounds: [String: [Components.Schemas.RunReviewRound]] = [:]
         private var oldestFirst: [Components.Schemas.TaskEvent] = []
         private var minute = -240
 
@@ -121,6 +127,33 @@ enum TaskStageFixtures {
                     kind: kind, recorded_at: now, run_id: run))
         }
 
+        /// The decision on a completed round's findings, now: `remediate` of
+        /// them go to the invocation `remediator` and `declined` are
+        /// declined. A round whose every finding is declined has no
+        /// remediator and no remediation record. The round's times are its
+        /// review events'.
+        mutating func decide(
+            _ run: String, round: Int, remediate: Int, declined: Int, remediator: String? = nil
+        ) {
+            func recorded(_ kind: Components.Schemas.TaskEventKind) -> Date? {
+                oldestFirst.last { $0.kind == kind && $0.run_id == run && $0.review?.value1.round == round }?
+                    .recorded_at
+            }
+            var record = RunFixtures.reviewRound(.completed, round: round, findings: true)
+            record.invocation_id = "\(run)-review-\(round)"
+            record.requested_at = recorded(.review_requested)
+            record.completed_at = recorded(.review_completed)
+            record.findings_count = remediate + declined
+            record.dispositions = .init(value1: .init(fixed: 0, declined: declined, deferred: 0, open: remediate))
+            record.remediation = remediator.map {
+                .init(
+                    value1: .init(
+                        invocation_id: $0, finding_ids: (0..<remediate).map { "finding-\($0 + 1)" },
+                        decided_at: now))
+            }
+            reviewRounds[run, default: []].append(record)
+        }
+
         mutating func verify(_ run: String, clean: Bool) {
             oldestFirst.append(
                 .init(
@@ -146,12 +179,26 @@ enum TaskStageFixtures {
                 name: .init(text: "Update session handling across desktop and mobile clients", source: ._operator),
                 events: oldestFirst.reversed(), sections: sections)
         }
+
+        /// The run timelines a client caches for the runs with review
+        /// rounds, milestones oldest first.
+        var runTimelines: [Components.Schemas.RunTimeline] {
+            sections.flatMap(\.runs).compactMap { run in
+                reviewRounds[run.run_id].map {
+                    .init(
+                        as_of_revision: 12, as_of: RunFixtures.screenshotInstant, run_id: run.run_id,
+                        milestones: run.milestones.reversed(), invocations: [],
+                        review: .init(value1: .init(rounds: $0)))
+                }
+            }
+        }
     }
 
     static let specificationRun = "stage-spec-1"
     static let implementationRun = "stage-implementation-1"
     static let secondImplementationRun = "stage-implementation-2"
     static let campaign = "stage-campaign-1"
+    static let remediator = "\(implementationRun)-remediation-1"
 
     /// The task and its current run as a client holds them beside
     /// `history(scenario)`: the run is working, with no hold, except that a
@@ -181,11 +228,11 @@ enum TaskStageFixtures {
         return page
     }
 
-    /// A coordinator holding `page` as a confirmed-fresh sync would, and the
-    /// task's snapshot, for drawing the whole task page.
+    /// A coordinator holding `page` and `runTimelines` as a confirmed-fresh
+    /// sync would, and the task's snapshot, for drawing the whole task page.
     @MainActor
     static func coordinator(
-        _ page: TaskProgressFixtures.Case
+        _ page: TaskProgressFixtures.Case, runTimelines: [Components.Schemas.RunTimeline] = []
     ) throws -> (coordinator: SyncCoordinator, task: Components.Schemas.TaskSnapshot) {
         var task = TaskFixtures.approvedCampaign().task
         task.task = page.task
@@ -195,7 +242,7 @@ enum TaskStageFixtures {
                 cursors: .init(
                     syncEpoch: "stage-epoch", lastFullSnapshotRevision: task.as_of_revision,
                     highestObservedServerRevision: task.as_of_revision),
-                attentionItems: page.items, runs: page.runs, tasks: [task],
+                attentionItems: page.items, runs: page.runs, runTimelines: runTimelines, tasks: [task],
                 taskTimelines: [page.history].compactMap { $0 }))
         let coordinator = SyncCoordinator(client: APIClientFactory.mock(server: MockServer()), cache: cache)
         coordinator.store.freshness = .fresh
@@ -203,6 +250,10 @@ enum TaskStageFixtures {
     }
 
     static func history(_ scenario: Scenario) -> Components.Schemas.TaskTimeline {
+        script(scenario).timeline
+    }
+
+    static func script(_ scenario: Scenario) -> Script {
         var script = Script()
         script.event(.task_created)
         script.wait(2)
@@ -213,37 +264,45 @@ enum TaskStageFixtures {
             script.result("stage-legacy-1", .completed)
             script.wait()
             script.review("stage-legacy-1", round: 1, .review_requested)
-            return script.timeline
+            return script
         }
         script.event(.task_started, run: specificationRun)
         script.campaign(campaign, specification: specificationRun)
         script.wait(1)
         script.submit(specificationRun, role: .specification, attempt: 1, campaign: campaign)
-        if scenario == .specification { return script.timeline }
+        if scenario == .specification { return script }
         script.wait(18)
         script.result(specificationRun, .completed)
         script.wait(25)
         script.approve(campaign, specification: specificationRun, implementation: implementationRun)
         script.submit(implementationRun, role: .implementation, attempt: 1, campaign: campaign)
-        if scenario == .implementation { return script.timeline }
+        if scenario == .implementation { return script }
         script.wait(31)
         switch scenario {
         case .retry:
             script.result(implementationRun, .failed)
             script.wait()
             script.submit(secondImplementationRun, role: .implementation, attempt: 2, campaign: campaign)
-            return script.timeline
+            return script
         case .secondCampaign:
             script.campaign("stage-campaign-2", specification: "stage-spec-2")
             script.wait(1)
             script.submit("stage-spec-2", role: .specification, attempt: 1, campaign: "stage-campaign-2")
-            return script.timeline
+            return script
         default:
             break
         }
         script.review(implementationRun, round: 1, .review_requested)
-        if scenario == .review { return script.timeline }
+        if scenario == .review { return script }
         script.wait(9)
+        if scenario == .remediation {
+            script.review(implementationRun, round: 1, .review_completed, outcome: .findings)
+            script.wait(4)
+            script.decide(implementationRun, round: 1, remediate: 2, declined: 1, remediator: remediator)
+            script.wait(2)
+            script.milestone(implementationRun, .invocation_started, invocation: remediator)
+            return script
+        }
         if scenario == .returned {
             script.review(implementationRun, round: 1, .review_failed)
             script.wait(2)
@@ -265,7 +324,7 @@ enum TaskStageFixtures {
             script.result(implementationRun, .completed, pass: 2)
             script.wait(3)
             script.submit(secondImplementationRun, role: .implementation, attempt: 2, campaign: campaign)
-            return script.timeline
+            return script
         }
         script.review(implementationRun, round: 1, .review_completed, outcome: .clean)
         script.wait(6)
@@ -275,6 +334,6 @@ enum TaskStageFixtures {
         // cycle closes, after the review of its work.
         script.milestone(implementationRun, .publication_blocked, hold: .verification_findings)
         script.result(implementationRun, .completed)
-        return script.timeline
+        return script
     }
 }

@@ -448,50 +448,123 @@ import Testing
         #expect(RunDisplay.specificationHeaderLabel(specification, approval: .unavailable) == "Source specification")
     }
 
-    @Test func historyEntriesLeadWithTheNewestMilestoneMarkedCurrent() throws {
+    @Test func historyRowsLeadWithTheNewestMilestone() throws {
         let timeline = try #require(
             RunFixtures.defaultTimelines().first { $0.run_id == RunFixtures.activeRunID })
         let milestones = timeline.milestones
         #expect(milestones.count == 6)
 
-        let entries = RunHistoryPresentation.entries(
-            milestones: milestones, detail: { _ in nil }, context: { _ in nil })
+        let rows = RunHistoryPresentation.rows(milestones: milestones, context: { _ in nil })
 
-        #expect(entries.count == milestones.count)
-        #expect(entries.first?.state == .current)
-        #expect(entries.dropFirst().allSatisfy { $0.state == .completed })
-        #expect(entries.map(\.title) == milestones.reversed().map { RunDisplay.label($0.kind) })
+        #expect(rows.count == milestones.count)
+        #expect(rows.map(\.isNewest) == [true] + Array(repeating: false, count: milestones.count - 1))
+        #expect(rows.map(\.recordedAt) == milestones.reversed().map { Optional($0.recorded_at) })
+    }
+
+    /// One label line: the milestone's kind joined by its detail, with the
+    /// attempt it belongs to on the sub line.
+    @Test func historyRowsJoinTheDetailOntoTheLabelAndCarryTheContext() {
+        let stamp = Date(timeIntervalSinceReferenceDate: 5_000)
+        let milestones: [Components.Schemas.RunMilestone] = [
+            .init(run_id: "run-1", kind: .run_submitted, recorded_at: stamp),
+            .init(
+                run_id: "run-1", kind: .terminal_recorded, invocation_id: "inv-a",
+                terminal: .init(value1: .completed), recorded_at: stamp),
+            .init(
+                run_id: "run-1", kind: .publication_blocked, reason: .init(value1: .verification_findings),
+                recorded_at: stamp),
+        ]
+        let rows = RunHistoryPresentation.rows(milestones: milestones, context: { $0.map { "ctx-\($0)" } })
+
+        #expect(
+            rows.map(\.label) == [
+                "Publication Blocked · Recorded hold: Verification findings block publication"
+                    + " (verification_findings)",
+                "Invocation Ended · Completed", "Run Submitted",
+            ])
+        #expect(rows.map(\.context) == [nil, "ctx-inv-a", nil])
+    }
+
+    /// The markers follow the task's event rail: the run's submission and a
+    /// remediator's start are stage starts, a failed work result and a
+    /// blocked publication are failures, and the newest of the rest leads
+    /// in ink.
+    @Test func historyRowsMarkStageStartsAndFailures() {
+        let rounds = [RemediationFixtures.findingsRound()]
+        func milestone(
+            _ kind: Components.Schemas.RunMilestoneKind, _ invocation: String? = nil,
+            terminal: Components.Schemas.ObservedInvocationStatus? = nil
+        ) -> Components.Schemas.RunMilestone {
+            .init(
+                run_id: "run", kind: kind, invocation_id: invocation, terminal: terminal.map { .init(value1: $0) },
+                recorded_at: RemediationFixtures.decidedAt)
+        }
+        let milestones = [
+            milestone(.run_submitted),
+            milestone(.invocation_started, RemediationFixtures.implementer),
+            milestone(.terminal_recorded, RemediationFixtures.implementer, terminal: .failed),
+            milestone(.invocation_started, RemediationFixtures.remediator),
+            milestone(.terminal_recorded, RemediationFixtures.remediator, terminal: .completed),
+            milestone(.publication_blocked),
+            milestone(.publication_ready),
+        ]
+        let rows = RunHistoryPresentation.rows(milestones: milestones, context: { _ in nil }, reviewRounds: rounds)
+
+        #expect(
+            rows.map(\.kind) == [
+                .event, .failure, .event, .stageStart(.implementation), .event, .failure, .event, .stageStart(nil),
+            ])
+        #expect(
+            rows.map(TimelineRail.marker) == [
+                .current, .failure, .prior, .stageStart, .prior, .failure, .prior, .stageStart,
+            ])
+        // A failure keeps its wax and a stage start its green at the head.
+        #expect(
+            RunHistoryPresentation.rows(milestones: [milestone(.publication_blocked)], context: { _ in nil })
+                .map(TimelineRail.marker) == [.failure])
+        #expect(
+            RunHistoryPresentation.rows(milestones: [milestone(.run_submitted)], context: { _ in nil })
+                .map(TimelineRail.marker) == [.stageStart])
     }
 
     @Test(arguments: [Components.Schemas.ReviewProgressState.running, .completed])
     func historyRailNamesTheRemediationAndItsAdjudication(state: Components.Schemas.ReviewProgressState) {
         let rounds = [RemediationFixtures.findingsRound(), RemediationFixtures.reReview(state)]
         let milestones = RemediationFixtures.milestones(remediatorStarted: true)
-        let entries = RunHistoryPresentation.entries(
-            milestones: milestones, detail: { _ in nil },
+        let rows = RunHistoryPresentation.rows(
+            milestones: milestones,
             context: { RunHistoryPresentation.attemptContext(invocationID: $0, stages: [], reviewRounds: rounds) },
             reviewRounds: rounds)
 
         #expect(
-            entries.map(\.title) == [
-                "Invocation Started", "Invocation Admitted", "Findings Adjudicated",
+            rows.map(\.label) == [
+                "Invocation Started", "Invocation Admitted",
+                "Findings Adjudicated · Remediate 1 finding from Review 1",
                 "Execution Export Recorded", "Invocation Started", "Invocation Admitted",
             ])
-        #expect(entries.map(\.context)[0...1] == ["Remediation for Review 1", "Remediation for Review 1"])
-        #expect(entries[2].detail == "Remediate 1 finding from Review 1")
-        #expect(entries[2].instant == RemediationFixtures.decidedAt)
-        #expect(entries.map(\.state) == [.current] + Array(repeating: .completed, count: 5))
+        #expect(rows.map(\.context)[0...1] == ["Remediation for Review 1", "Remediation for Review 1"])
+        #expect(rows[2].context == nil)
+        #expect(rows[2].recordedAt == RemediationFixtures.decidedAt)
+        #expect(rows.map(\.isNewest) == [true] + Array(repeating: false, count: 5))
     }
 
     @Test func adjudicationLeadsTheRailUntilTheRemediatorHasAMilestone() {
         let rounds = [RemediationFixtures.findingsRound()]
-        let entries = RunHistoryPresentation.entries(
-            milestones: RemediationFixtures.milestones(remediatorStarted: false), detail: { _ in nil },
-            context: { _ in nil }, reviewRounds: rounds)
+        let rows = RunHistoryPresentation.rows(
+            milestones: RemediationFixtures.milestones(remediatorStarted: false), context: { _ in nil },
+            reviewRounds: rounds)
 
-        #expect(entries.map(\.title).first == "Findings Adjudicated")
-        // The daemon's last-recorded milestone stays current.
-        #expect(entries.map(\.state) == [.completed, .current, .completed, .completed])
+        // An ordinary entry: at the head it is the newest.
+        #expect(rows.map(\.label).first == "Findings Adjudicated · Remediate 1 finding from Review 1")
+        #expect(rows.map(\.isNewest) == [true, false, false, false])
+        // With no decision instant recorded, the row has no time.
+        var undated = RemediationFixtures.findingsRound()
+        undated.remediation?.value1.decided_at = nil
+        #expect(
+            RunHistoryPresentation.rows(
+                milestones: RemediationFixtures.milestones(remediatorStarted: false), context: { _ in nil },
+                reviewRounds: [undated]
+            ).first?.recordedAt == nil)
     }
 
     @Test func equalTimestampMilestonesKeepReverseDaemonOrder() {
@@ -504,37 +577,10 @@ import Testing
         // Reversal is index-based, so equal timestamps never depend on a
         // sort's stability: the later-recorded milestone leads every run.
         for _ in 0..<8 {
-            let entries = RunHistoryPresentation.entries(
-                milestones: [earlier, later], detail: { _ in nil }, context: { $0 })
-            #expect(entries.map(\.context) == ["inv-b", "inv-a"])
-            #expect(entries.first?.state == .current)
+            let rows = RunHistoryPresentation.rows(milestones: [earlier, later], context: { $0 })
+            #expect(rows.map(\.context) == ["inv-b", "inv-a"])
+            #expect(rows.first?.isNewest == true)
         }
-    }
-
-    @Test func reorderingPreservesEachEntrysFields() throws {
-        let timeline = try #require(
-            RunFixtures.defaultTimelines().first { $0.run_id == RunFixtures.activeRunID })
-        let milestones = timeline.milestones
-        let detail: (Components.Schemas.RunMilestone) -> String? = { "detail-\($0.kind.rawValue)" }
-        let context: (String?) -> String? = { $0.map { "ctx-\($0)" } }
-
-        // A fixed "now" in the milestones' own year, so the one short time
-        // format drops the year whatever year the suite runs in.
-        let now = try #require(milestones.last).recorded_at
-        let entries = RunHistoryPresentation.entries(
-            milestones: milestones, detail: detail, context: context, now: now)
-
-        let oldestFirst = milestones.enumerated().map { index, milestone in
-            DecisionStageRailPresentation.Entry(
-                id: "\(index)-\(milestone.kind.rawValue)-\(milestone.recorded_at.timeIntervalSince1970)",
-                title: RunDisplay.label(milestone.kind),
-                detail: detail(milestone),
-                context: context(milestone.invocation_id),
-                timestamp: FreesideFormat.shortTime(milestone.recorded_at, now: now),
-                instant: milestone.recorded_at,
-                state: index == milestones.count - 1 ? .current : .completed)
-        }
-        #expect(entries == Array(oldestFirst.reversed()))
     }
 
     @Test func reviewRoundsLeadWithTheHighestRound() {
@@ -674,13 +720,12 @@ import Testing
             RunHistoryPresentation.attemptContext(
                 invocationID: $0, stages: run.stages, reviewRounds: timeline.review?.value1.rounds ?? [])
         }
-        let entries = RunHistoryPresentation.entries(
-            milestones: timeline.milestones, detail: { _ in nil }, context: context)
+        let rows = RunHistoryPresentation.rows(milestones: timeline.milestones, context: context)
 
         // Each remediation-invocation milestone (admitted, started, terminal)
         // carries the Pass 2 context; attempt 2's two milestones carry Pass 1,
         // Round 2; and attempt 1's four milestones carry Pass 1, Round 1.
-        func count(_ label: String) -> Int { entries.filter { $0.context == label }.count }
+        func count(_ label: String) -> Int { rows.filter { $0.context == label }.count }
         #expect(count("Implementation · Pass 2 · Round 1") == 3)
         #expect(count("Implementation · Pass 1 · Round 2") == 2)
         #expect(count("Implementation · Pass 1 · Round 1") == 4)

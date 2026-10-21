@@ -512,11 +512,6 @@ enum FreesideFont {
     static func railTitle(emphasized: Bool) -> Font {
         fixed(emphasized ? "IBMPlexSans-SmBld" : "IBMPlexSans", ladder.label, relativeTo: .callout)
     }
-    /// A rail entry's detail: the card body's size, under the title and
-    /// over the mono lines, medium on the entry the rail stands on.
-    static func railDetail(emphasized: Bool) -> Font {
-        fixed(emphasized ? "IBMPlexSans-Medm" : "IBMPlexSans", ladder.body, relativeTo: .body)
-    }
     /// An attachment row's facts under its label, its media type, size,
     /// and digest: mono at the keyword's size, the ladder's floor (frame
     /// 6.9). The platform caption styles these lines used are 10pt on macOS.
