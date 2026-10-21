@@ -73,6 +73,9 @@ struct TechnicalDetailRow: View {
     /// Stacks the value under its label whatever its length, for a pane
     /// too narrow for a trailing column (`FactRow.stacksAlways`).
     var stacksAlways = false
+    /// Whose value this is, spoken after the label, where one section
+    /// holds several owners' rows of the same label.
+    var owner: String? = nil
 
     var body: some View {
         HStack(alignment: .firstTextBaseline, spacing: 10) {
@@ -91,10 +94,17 @@ struct TechnicalDetailRow: View {
                         .foregroundStyle(Color.accentText)
                 }
                 .buttonStyle(.plain)
-                .accessibilityLabel("Copy \(row.label)")
+                .accessibilityLabel("Copy \(row.label)\(owner.map { ", \($0)" } ?? "")")
             }
         }
     }
+}
+
+/// A run of identifiers under the name of the thing they belong to, for a
+/// page whose one technical-details section gathers several owners' rows.
+struct IdentifierGroup: Equatable {
+    let owner: String
+    let rows: [AttentionDisplay.BindingRow]
 }
 
 /// The one disclosure (R2), collapsed by default and labeled "Technical
@@ -103,12 +113,15 @@ struct TechnicalDetailRow: View {
 /// the values a reader occasionally needs to compare or paste live one
 /// disclosure from reach, unchanged from the daemon (#1379).
 struct TechnicalDetailsSection: View {
-    let rows: [AttentionDisplay.BindingRow]
+    /// Owner nil draws the rows with no heading: a surface with one owner.
+    private let groups: [(owner: String?, rows: [AttentionDisplay.BindingRow])]
     /// What the closed disclosure says it holds: the surface's identity
     /// line, so the facts a header used to print stay readable without
     /// opening it. Nil draws the label alone.
     var summary: String? = nil
     var rendersInteractiveControls = true
+    /// The caller's open state when it persists the fold; nil keeps it here.
+    private let isExpanded: Binding<Bool>?
     /// A screenshot captures the expanded state by starting open; live use
     /// starts collapsed, as the contract requires.
     @State private var expanded: Bool
@@ -119,18 +132,38 @@ struct TechnicalDetailsSection: View {
         rendersInteractiveControls: Bool = true,
         startsExpanded: Bool = false
     ) {
-        self.rows = rows
+        groups = [(nil, rows)]
         self.summary = summary
         self.rendersInteractiveControls = rendersInteractiveControls
+        isExpanded = nil
         _expanded = State(initialValue: startsExpanded)
     }
 
+    /// One section for a page with several owners, each group's rows under
+    /// its owner's name, its open state held by the caller.
+    init(groups: [IdentifierGroup], summary: String? = nil, isExpanded: Binding<Bool>) {
+        self.groups = groups.map { ($0.owner, $0.rows) }
+        self.summary = summary
+        self.isExpanded = isExpanded
+        _expanded = State(initialValue: false)
+    }
+
     var body: some View {
-        if !rows.isEmpty {
-            SentenceDisclosure(label: "Technical Details", summary: summary, isExpanded: $expanded) {
-                VStack(alignment: .leading, spacing: 6) {
-                    ForEach(Array(rows.enumerated()), id: \.offset) { _, row in
-                        TechnicalDetailRow(row: row, rendersInteractiveControls: rendersInteractiveControls)
+        if groups.contains(where: { !$0.rows.isEmpty }) {
+            SentenceDisclosure(label: "Technical Details", summary: summary, isExpanded: isExpanded ?? $expanded) {
+                VStack(alignment: .leading, spacing: 14) {
+                    ForEach(Array(groups.enumerated()), id: \.offset) { _, group in
+                        VStack(alignment: .leading, spacing: 6) {
+                            if let owner = group.owner {
+                                KeywordLabel(text: owner)
+                                    .accessibilityAddTraits(.isHeader)
+                            }
+                            ForEach(Array(group.rows.enumerated()), id: \.offset) { _, row in
+                                TechnicalDetailRow(
+                                    row: row, rendersInteractiveControls: rendersInteractiveControls,
+                                    owner: group.owner)
+                            }
+                        }
                     }
                 }
                 // A stacked row hugs its text, and a disclosure centers
