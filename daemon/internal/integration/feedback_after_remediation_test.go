@@ -1,6 +1,7 @@
 package integration_test
 
 import (
+	"errors"
 	"strings"
 	"testing"
 	"time"
@@ -270,6 +271,84 @@ func assertSuccessorReentryPublished(t *testing.T, p *productionPublicationHarne
 	}
 }
 
+// TestRerunOfAReevaluatedBaseAdvanceBlockNeedsANewProfile: a rerun re-enters
+// at a newer base only from its cycle's own base-advance block (#2111). A
+// block a rerun's reevaluation recorded at an advanced base names that rerun's
+// verification, which a re-entry does not reuse, so Signet still refuses its
+// rerun under the trust profile that already evaluated the head, and the item
+// stays open for a rerun under a new profile.
+func TestRerunOfAReevaluatedBaseAdvanceBlockNeedsANewProfile(t *testing.T) {
+	t.Parallel()
+	p, _, _, _ := returnToAgentAfterRemediation(t, true)
+	// The feedback cycle first blocks on a rerunnable refusal of its own.
+	p.room.fail = true
+	p.reconcileUntilBlocked(t, 8)
+	var feedback *domain.PublicationSuccessor
+	if err := p.store.Read(p.ctx, func(tx *store.ReadTx) error {
+		var err error
+		feedback, err = tx.CurrentPublicationSuccessor(p.ctx, p.runID)
+		return err
+	}); err != nil {
+		t.Fatal(err)
+	}
+	first, err := p.attention.GetAttentionItem(p.ctx, feedback.BlockedItemID())
+	if err != nil {
+		t.Fatal(err)
+	}
+	p.room.fail = false
+	repairPublicationTrustProfile(t, p)
+	submitPublicationRerun(t, p, first, "rerun-at-admitted-base")
+	p.reconcileUntilBlocked(t, 8)
+	blocked, err := p.attention.GetAttentionItem(p.ctx,
+		signet.ReevaluatedBlockedItemID(p.runID, "rerun-at-admitted-base"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if blocked.Item.Reason != domain.PublicationBlockBaseAdvanced || blocked.Item.Status != domain.StatusOpen ||
+		!blocked.Item.Offers(domain.ActionRerunTrustEvaluation) {
+		t.Fatalf("reevaluated block = %s %s offering %v, want an open base_advanced block with Rerun",
+			blocked.Item.Status, blocked.Item.Reason, blocked.Item.RequestedDecision)
+	}
+
+	const deviceID = domain.DeviceID("device-rerun-after-base-advance")
+	if err := p.store.Write(p.ctx, func(tx *store.WriteTx) error {
+		return tx.PutDevice(p.ctx, domain.Device{
+			ID: deviceID, DisplayName: "Publication reevaluation device",
+			Status: domain.DeviceActive, PairedAt: p.now,
+		})
+	}); err != nil {
+		t.Fatal(err)
+	}
+	_, err = p.attention.Submit(p.ctx, signet.ClientCommand{
+		CommandID: "rerun-after-base-advance", DeviceID: deviceID,
+		ExpectedEntityVersion: blocked.EntityVersion,
+		Payload: signet.DecisionPayload{
+			ItemID: blocked.Item.ID, ItemVersion: blocked.Item.ItemVersion,
+			PRHeadSHA: blocked.Item.PRHeadSHA, ArtifactDigests: blocked.Item.ArtifactDigests,
+			Action: domain.ActionRerunTrustEvaluation,
+		},
+	})
+	if !errors.Is(err, domain.ErrDuplicate) {
+		t.Fatalf("rerun under the evaluating profile = %v, want ErrDuplicate", err)
+	}
+	after, err := p.attention.GetAttentionItem(p.ctx, blocked.Item.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if after.Item.Status != domain.StatusOpen || after.Item.ItemVersion != blocked.Item.ItemVersion {
+		t.Fatalf("refused rerun moved the block to %s version %d", after.Item.Status, after.Item.ItemVersion)
+	}
+	if err := p.store.Read(p.ctx, func(tx *store.ReadTx) error {
+		current, err := tx.CurrentPublicationSuccessor(p.ctx, p.runID)
+		if err == nil && current.PublicationID() != feedback.PublicationID() {
+			t.Errorf("refused rerun changed the cycle to %s", current.PublicationID())
+		}
+		return err
+	}); err != nil {
+		t.Fatal(err)
+	}
+}
+
 // successorReentry reads the run's current successor and requires it to be a
 // successor re-entry at baseSHA, sealed for review round.
 func (p *productionPublicationHarness) successorReentry(
@@ -291,4 +370,21 @@ func (p *productionPublicationHarness) successorReentry(
 		t.Fatalf("current successor = %#v, want a successor re-entry at %s for round %d", successor, baseSHA, round)
 	}
 	return *successor
+}
+
+// reconcileUntilBlocked runs lane passes until one creates a blocked item,
+// and fails after maxPasses.
+func (p *productionPublicationHarness) reconcileUntilBlocked(t *testing.T, maxPasses int) {
+	t.Helper()
+	for pass := 1; pass <= maxPasses; pass++ {
+		p.now = p.now.Add(time.Minute)
+		result, err := p.reconcileLanes()
+		if err != nil {
+			t.Fatalf("pass %d/%d: %v", pass, maxPasses, err)
+		}
+		if result.BlockedItemsCreated > 0 {
+			return
+		}
+	}
+	t.Fatalf("no blocked item after %d passes", maxPasses)
 }

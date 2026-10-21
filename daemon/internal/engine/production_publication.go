@@ -2547,6 +2547,9 @@ func (w *productionPublicationWorkflow) reconcileTask(
 	if err := releaseProductionQuarantine(ctx, w.store, w.attention, productionScopeQuarantinePrefix, task.RunID); err != nil {
 		return productionTaskOutcome{}, err
 	}
+	if outcome, handled, err := w.reenterRerunBaseAdvance(ctx, task, binding); err != nil || handled {
+		return outcome, err
+	}
 	scratch, err := os.MkdirTemp(w.workDir, ".production-publication-")
 	if err != nil {
 		return productionTaskOutcome{}, err

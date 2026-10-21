@@ -509,3 +509,47 @@ func TestPublicationSuccessorSuccessorReentry(t *testing.T) {
 		t.Fatal("successor re-entry admitted a merge of another head")
 	}
 }
+
+// Only a cycle that updates a pull request with a head of its own re-enters
+// after a base advance, and a rerun re-enters only from that cycle's own
+// base-advance block.
+func TestPublicationSuccessorReentersOnRerun(t *testing.T) {
+	feedback := domain.PublicationSuccessor{
+		Version: domain.PublicationContinuationVersion, Origin: domain.PublicationSuccessorFeedback,
+		RunID: "run-1", CommandID: "return-1", FeedbackInvocationID: "inv-feedback-1",
+		PredecessorItemID: "production-ready-run-1", PriorReviewInvocationID: "review-2", ReviewRound: 3,
+	}
+	remediation := feedback
+	remediation.Origin, remediation.FeedbackInvocationID, remediation.ReevaluationCommandID = domain.PublicationSuccessorRemediation, "", "rerun-1"
+	for _, admits := range []domain.PublicationSuccessor{feedback, remediation, successorReentrySuccessor()} {
+		if !admits.AdmitsSuccessorReentry() {
+			t.Errorf("%s cycle does not admit a successor re-entry", admits.EffectiveOrigin())
+		}
+	}
+	for _, refuses := range []domain.PublicationSuccessor{
+		reentrySuccessor(), externalReviewSuccessor(), unpublishedReentrySuccessor(),
+	} {
+		if refuses.AdmitsSuccessorReentry() {
+			t.Errorf("%s cycle admits a successor re-entry", refuses.EffectiveOrigin())
+		}
+	}
+	own := domain.AttentionItem{ID: feedback.BlockedItemID(), Reason: domain.PublicationBlockBaseAdvanced}
+	if !feedback.ReentersOnRerunOf(own) {
+		t.Fatal("a rerun of the cycle's own base-advance block does not re-enter")
+	}
+	trust := own
+	trust.Reason = domain.PublicationBlockTrust
+	reevaluated := own
+	reevaluated.ID = "production-publish-blocked-reevaluation/cnVuLTE/rerun-1"
+	for name, item := range map[string]domain.AttentionItem{"trust block": trust, "reevaluated block": reevaluated} {
+		if feedback.ReentersOnRerunOf(item) {
+			t.Errorf("a rerun of the %s re-enters", name)
+		}
+	}
+	unpublished := unpublishedReentrySuccessor()
+	if unpublished.ReentersOnRerunOf(domain.AttentionItem{
+		ID: unpublished.BlockedItemID(), Reason: domain.PublicationBlockBaseAdvanced,
+	}) {
+		t.Fatal("an unpublished re-entry's own block re-enters as a successor")
+	}
+}

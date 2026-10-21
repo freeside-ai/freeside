@@ -45,15 +45,21 @@ const (
 	PublicationReevaluationPublished       PublicationReevaluationOutcome = "published"
 	PublicationReevaluationBlocked         PublicationReevaluationOutcome = "blocked"
 	PublicationReevaluationReviewEscalated PublicationReevaluationOutcome = "review_escalated"
+	// PublicationReevaluationReentered ends a rerun of a base_advanced block
+	// by sealing a successor re-entry at the newer base (issue #2111). The
+	// re-entry's own cycle then publishes or blocks under its own items.
+	PublicationReevaluationReentered PublicationReevaluationOutcome = "reentered"
 )
 
 var AllPublicationReevaluationOutcomes = []PublicationReevaluationOutcome{
 	PublicationReevaluationPublished, PublicationReevaluationBlocked, PublicationReevaluationReviewEscalated,
+	PublicationReevaluationReentered,
 }
 
 func (o PublicationReevaluationOutcome) valid() bool {
 	switch o {
-	case PublicationReevaluationPublished, PublicationReevaluationBlocked, PublicationReevaluationReviewEscalated:
+	case PublicationReevaluationPublished, PublicationReevaluationBlocked, PublicationReevaluationReviewEscalated,
+		PublicationReevaluationReentered:
 		return true
 	default:
 		return false

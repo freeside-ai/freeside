@@ -275,6 +275,18 @@ func (s PublicationSuccessor) ReentersUnpublishedHead() bool {
 		s.Origin == PublicationSuccessorBaseAdvance)
 }
 
+// ReentersOnRerunOf reports whether a rerun of item re-enters this cycle at a
+// newer base instead of reevaluating it (issue #2111): the item is the cycle's
+// own block, recorded because its base advanced, and the cycle admits a
+// successor re-entry. The re-entry reuses the cycle's own verification. Only a
+// daemon from before that re-entry recorded such a block, since the refusal
+// now seals the re-entry itself; a block a rerun recorded names the rerun's
+// verification instead and still reruns under a new trust profile.
+func (s PublicationSuccessor) ReentersOnRerunOf(item AttentionItem) bool {
+	return s.AdmitsSuccessorReentry() && item.ID == s.BlockedItemID() &&
+		item.Reason == PublicationBlockBaseAdvanced
+}
+
 // AdmitsSuccessorReentry reports whether a base-advance refusal of this
 // cycle's unpublished head may seal a successor re-entry (v6) after it. The
 // cycle must have built or kept a head of its own and update an existing pull
