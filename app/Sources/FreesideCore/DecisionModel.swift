@@ -50,6 +50,10 @@ public final class DecisionModel {
     public private(set) var proposalFacts: Components.Schemas.TaskProposalFactsSnapshot?
     public private(set) var effectProposalFacts: Components.Schemas.EffectProposalFactsSnapshot?
 
+    /// This device, which a closed card names as "This device" when it
+    /// made the concluding decision.
+    var deviceID: String { store.device.deviceID }
+
     private let store: InboxStore
     private let openURL: (URL) async -> Bool
     private let onConclusion: @MainActor (DecisionConclusion) -> Void

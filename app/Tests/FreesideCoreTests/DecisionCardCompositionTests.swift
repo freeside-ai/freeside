@@ -1846,14 +1846,24 @@ import Testing
     }
 
     /// The receipt draws in the control group, so a card that shows one must
-    /// have a group: a record-only command is always one its item requested.
-    @Test func everyItemRequestingARecordOnlyActionDrawsAControlGroup() {
-        for snapshot in AttentionFixtures.defaultInbox() {
+    /// have a group: a record-only command is always one its item requested,
+    /// and it leaves the item open.
+    @Test func everyOpenItemRequestingARecordOnlyActionDrawsAControlGroup() {
+        for snapshot in AttentionFixtures.defaultInbox() where snapshot.item.status == .open {
             let recordOnly = snapshot.item.requested_decision.filter {
                 ActionOutcome.of($0) == .records
             }
             guard !recordOnly.isEmpty else { continue }
             #expect(DecisionDetailView.drawsControlGroup(snapshot.item), "\(snapshot.item.id)")
+        }
+    }
+
+    /// A closed item takes no command, so its card draws no group of
+    /// disabled actions, whatever it once requested (#2097).
+    @Test func closedItemsDrawNoControlGroup() {
+        for snapshot in AttentionFixtures.closedInbox() {
+            #expect(!snapshot.item.requested_decision.isEmpty, "\(snapshot.item.id)")
+            #expect(!DecisionDetailView.drawsControlGroup(snapshot.item), "\(snapshot.item.id)")
         }
     }
 }

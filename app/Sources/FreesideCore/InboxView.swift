@@ -729,6 +729,8 @@ struct StatusBadge: View {
     let status: Components.Schemas.ItemStatus
 
     var body: some View {
-        StateChip(label: AttentionDisplay.label(status), color: .inkDim)
+        // A lifecycle status is history, so it takes the faint cut (#2097).
+        StateChip(label: AttentionDisplay.label(status), cut: .faint)
+            .fixedSize()
     }
 }

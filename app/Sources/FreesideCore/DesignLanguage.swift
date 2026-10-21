@@ -1068,6 +1068,10 @@ struct CompactMark: View {
 /// arrows move the pick, and the ring sits on the picked option. VoiceOver
 /// reads each option as a button with the selected trait, inside a group
 /// named by `accessibilityLabel`.
+///
+/// An inert list records a choice already made (a closed card, #2097): no
+/// mark column, no focus stop, and no buttons, so VoiceOver reads a plain
+/// list; the made choice keeps its ink outline and the selected trait.
 struct ChoiceList<Value: Hashable>: View {
     /// Whose words an option is, which decides its shape.
     enum Register {
@@ -1094,11 +1098,25 @@ struct ChoiceList<Value: Hashable>: View {
     let accessibilityLabel: String
     let options: [Option]
     @Binding var selection: Value
+    var isInert = false
 
     @FocusState private var isFocused: Bool
     @State private var hoveredOption: Value?
 
+    @ViewBuilder
     var body: some View {
+        if isInert {
+            VStack(alignment: .leading, spacing: 10) {
+                ForEach(options) { inertOption($0) }
+            }
+            .accessibilityElement(children: .contain)
+            .accessibilityLabel(accessibilityLabel)
+        } else {
+            interactiveList
+        }
+    }
+
+    private var interactiveList: some View {
         VStack(alignment: .leading, spacing: 10) {
             ForEach(options) { optionButton($0) }
         }
@@ -1111,21 +1129,36 @@ struct ChoiceList<Value: Hashable>: View {
         .accessibilityLabel(accessibilityLabel)
     }
 
+    private func inertOption(_ option: Option) -> some View {
+        let isSelected = option.value == selection
+        return ChoiceOptionSurface<Value, _>(
+            register: option.register, isSelected: isSelected, showsMark: false,
+            wash: option.register == .quote ? .quoteWash : .clear, isFocused: false,
+            label: optionContent(option)
+        )
+        .accessibilityElement(children: .combine)
+        .accessibilityAddTraits(isSelected ? .isSelected : [])
+    }
+
+    private func optionContent(_ option: Option) -> some View {
+        VStack(alignment: .leading, spacing: 3) {
+            optionLabel(option)
+            if let consequence = option.consequence {
+                Text(consequence)
+                    .font(FreesideFont.cardBody)
+                    .foregroundStyle(Color.inkDim)
+                    .multilineTextAlignment(.leading)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+        }
+    }
+
     private func optionButton(_ option: Option) -> some View {
         let isSelected = option.value == selection
         return Button {
             selection = option.value
         } label: {
-            VStack(alignment: .leading, spacing: 3) {
-                optionLabel(option)
-                if let consequence = option.consequence {
-                    Text(consequence)
-                        .font(FreesideFont.cardBody)
-                        .foregroundStyle(Color.inkDim)
-                        .multilineTextAlignment(.leading)
-                        .fixedSize(horizontal: false, vertical: true)
-                }
-            }
+            optionContent(option)
         }
         .buttonStyle(
             ChoiceOptionStyle(
@@ -1202,15 +1235,42 @@ private struct ChoiceOptionStyle<Value: Hashable>: ButtonStyle {
     let isFocused: Bool
 
     func makeBody(configuration: Configuration) -> some View {
+        ChoiceOptionSurface<Value, _>(
+            register: register, isSelected: isSelected, showsMark: true,
+            wash: fill(isPressed: configuration.isPressed), isFocused: isFocused,
+            label: configuration.label)
+    }
+
+    private func fill(isPressed: Bool) -> Color {
+        if isPressed { return .accentWashSoft }
+        if isHovered { return .hover }
+        return register == .quote ? .quoteWash : .clear
+    }
+}
+
+/// One option's drawing, shared by the list's buttons and an inert list's
+/// rows: the mark when the list takes a pick, then the option in its
+/// register, outlined in ink when it is the pick.
+private struct ChoiceOptionSurface<Value: Hashable, Label: View>: View {
+    let register: ChoiceList<Value>.Register
+    let isSelected: Bool
+    let showsMark: Bool
+    let wash: Color
+    let isFocused: Bool
+    let label: Label
+
+    var body: some View {
         HStack(alignment: .top, spacing: 10) {
-            mark
-                .padding(.top, 4)
+            if showsMark {
+                mark
+                    .padding(.top, 4)
+            }
             surface(
-                configuration.label
+                label
                     .frame(maxWidth: .infinity, alignment: .leading)
                     .padding(.horizontal, 14)
                     .padding(.vertical, 10),
-                wash: fill(isPressed: configuration.isPressed)
+                wash: wash
             )
             .overlay(shape.strokeBorder(border, lineWidth: 1))
             .overlay(
@@ -1249,12 +1309,6 @@ private struct ChoiceOptionStyle<Value: Hashable>: ButtonStyle {
     private var border: Color {
         if isSelected { return .ink }
         return register == .quote ? .clear : .itemBorder
-    }
-
-    private func fill(isPressed: Bool) -> Color {
-        if isPressed { return .accentWashSoft }
-        if isHovered { return .hover }
-        return register == .quote ? .quoteWash : .clear
     }
 }
 
