@@ -507,6 +507,14 @@ func (task productionPublicationTask) verificationCheckpointKey() string {
 	if task.reentersInPlace() {
 		return task.reentryCheckpointKey()
 	}
+	// A successor re-entry reads the checkpoint of the task it replaced,
+	// which for a remediation continuation is keyed by its command.
+	if task.reentersBeforePublication() {
+		prefix := "production-publication-continuation/" + url.PathEscape(string(task.RunID)) + "/"
+		if commandID, ok := strings.CutPrefix(task.AuthorizingTaskKey, prefix); ok {
+			return productionVerificationCheckpointKey(task.RunID, task.HeadSHA, "") + "/continuation/" + commandID
+		}
+	}
 	commandID := ""
 	if task.reevaluation != nil {
 		commandID = task.reevaluation.CommandID
@@ -1292,10 +1300,21 @@ func (w *productionPublicationWorkflow) quarantineTaskMarkers(
 		}
 		producerRound, priorRemediation := remediationRoundForInvocation(
 			task.RunID, task.ProducingInvocationID)
-		feedback := task.Successor != nil &&
-			task.ProducingInvocationID == task.Successor.FeedbackInvocationID
+		// A successor re-entry keeps the producer of the cycle it replaced
+		// (issue #2111), so the feedback that produced its head belongs to
+		// the first successor behind it that is not one.
+		producing := task.Successor
+		for producing != nil && producing.ReentersUnpublishedHead() && !producing.RepublishesUnpublished() {
+			parent, err := tx.PublicationSuccessorForReadyItem(ctx, task.RunID, producing.PredecessorItemID)
+			if err != nil {
+				return taskMarkerMismatch(errors.Join(err, domain.ErrParentKeyMismatch))
+			}
+			producing = &parent
+		}
+		feedback := producing != nil &&
+			task.ProducingInvocationID == producing.FeedbackInvocationID
 		priorFeedback := feedback &&
-			verified.request.SuccessorPublicationID == task.PublicationID
+			verified.request.SuccessorPublicationID == producing.PublicationID()
 		// Feedback returned on a head reviewed after this remediation is a
 		// later producer: a round-N remediation answers review N, so its
 		// head is reviewed at N+1 or later, and the successor's review
@@ -1303,7 +1322,7 @@ func (w *productionPublicationWorkflow) quarantineTaskMarkers(
 		// exceeds N+1. Its head is the feedback's own, not the head the
 		// remediation was asked to fix.
 		laterFeedback := feedback && !priorFeedback &&
-			task.Successor.ReviewRound > verified.request.Round+1
+			producing.ReviewRound > verified.request.Round+1
 		if priorFeedback || laterFeedback {
 			if err := authenticateTaskSuccessor(ctx, tx, task); err != nil {
 				return taskMarkerMismatch(err)
@@ -1418,7 +1437,14 @@ func (t productionPublicationTask) validateWithPublication(validatePublication f
 		if err := t.Successor.Validate(); err != nil || t.Successor.RunID != t.RunID {
 			return errors.Join(err, domain.ErrParentKeyMismatch)
 		}
-		if !t.Successor.RepublishesUnpublished() {
+		switch {
+		case t.Successor.RepublishesUnpublished():
+		case t.Successor.ReentersUnpublishedHead():
+			// A successor re-entry keeps the head its predecessor's producer
+			// exported: an operator feedback return or a remediation.
+			validProducer = remediationProducer ||
+				strings.HasPrefix(string(t.ProducingInvocationID), "inv-operator-feedback-")
+		default:
 			validProducer = t.ProducingInvocationID == t.Successor.FeedbackInvocationID || remediationProducer
 		}
 		wantPublication = t.Successor.PublicationID()

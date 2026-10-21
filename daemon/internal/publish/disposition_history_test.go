@@ -595,3 +595,83 @@ func TestCurrentDispositionLineageExcludesSupersededAuthorityOnly(t *testing.T) 
 		t.Fatal("current-authority finding without a disposition was silently filtered")
 	}
 }
+
+// TestReentryLineageSegmentsKeepTheReplacedCycle: an unpublished re-entry at
+// base-b publishes, a feedback cycle then works at the admitted base-a, and a
+// successor re-entry replaces it at base-c (issue #2111). The feedback's own
+// rounds keep their base-a segment, so a disposition recorded there stays in
+// the history the successor re-entry publishes.
+func TestReentryLineageSegmentsKeepTheReplacedCycle(t *testing.T) {
+	t.Parallel()
+	runID := domain.RunID("run-successor-segments")
+	reentry := func(version string, origin domain.PublicationSuccessorOrigin, predecessor domain.ItemID,
+		prior domain.InvocationID, round int, base string,
+	) domain.PublicationSuccessor {
+		return domain.PublicationSuccessor{
+			Version: version, Origin: origin, RunID: runID, PredecessorItemID: predecessor,
+			PriorReviewInvocationID: prior, ReviewRound: round,
+			Reentry: &domain.PublicationSuccessorReentry{
+				Reason: domain.ReadinessInvalidationBaseAdvanced, BaseSHA: base, HeadSHA: "head-1",
+			},
+		}
+	}
+	unpublished := reentry(domain.PublicationUnpublishedReentryVersion, domain.PublicationSuccessorUnpublishedBaseAdvance,
+		domain.ProductionReadyItemID(runID), "review-2", 3, "base-b")
+	feedback := domain.PublicationSuccessor{
+		Version: domain.PublicationContinuationVersion, Origin: domain.PublicationSuccessorFeedback,
+		RunID: runID, CommandID: "return-1", FeedbackInvocationID: "inv-feedback-1",
+		PredecessorItemID: unpublished.ReadyItemID(), PriorReviewInvocationID: "review-3", ReviewRound: 4,
+	}
+	successor := reentry(domain.PublicationSuccessorReentryVersion, domain.PublicationSuccessorBaseAdvance,
+		feedback.ReadyItemID(), "review-5", 6, "base-c")
+	further := reentry(domain.PublicationSuccessorReentryVersion, domain.PublicationSuccessorBaseAdvance,
+		successor.ReadyItemID(), "review-6", 7, "base-d")
+	priorBases := map[domain.InvocationID]string{
+		"review-2": "base-a", "review-5": "base-a", "review-6": "base-c",
+	}
+	segments := reentryLineageSegments(
+		[]domain.PublicationSuccessor{unpublished, feedback, successor, further}, priorBases)
+	want := []lineageSegment{
+		{FromRound: 0, BaseSHA: "base-a"},
+		{FromRound: 3, BaseSHA: "base-b"},
+		{FromRound: 4, BaseSHA: "base-a"},
+		{FromRound: 6, BaseSHA: "base-c"},
+		{FromRound: 7, BaseSHA: "base-d"},
+	}
+	if !slices.Equal(segments, want) {
+		t.Fatalf("segments = %#v, want %#v", segments, want)
+	}
+	if segments := reentryLineageSegments([]domain.PublicationSuccessor{feedback}, priorBases); segments != nil {
+		t.Fatalf("a chain without a re-entry has segments %#v", segments)
+	}
+
+	at := func(round int, base string, findings ...domain.FindingID) domain.ReviewRecord {
+		invocation := domain.InvocationID(fmt.Sprintf("review-%d", round))
+		outcome := domain.ReviewClean
+		if len(findings) > 0 {
+			outcome = domain.ReviewFindings
+		}
+		record, err := domain.NewReviewRecord(domain.ReviewRecord{
+			InvocationID: invocation, RunID: runID, Round: round,
+			Admission: fake.RecordAdmission(domain.RoleReviewer, runID, invocation), ConfigurationDigest: dispositionDigestA,
+			InstructionDigest: dispositionDigestA, BaseSHA: base, HeadSHA: "head-1",
+			CompletedAt: time.Date(2026, 10, 21, 2, round, 0, 0, time.UTC), CompletionEvidence: dispositionDigestC,
+			Outcome: outcome, FindingIDs: findings,
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		return record
+	}
+	declined := domain.ReviewDispositionRecord{FindingID: "feedback-finding", Round: 5, Disposition: domain.ReviewDispositionDeclined}
+	reviews, dispositions := currentDispositionLineage(
+		[]domain.ReviewRecord{
+			at(1, "base-a"), at(2, "base-a"), at(3, "base-b"), at(4, "base-a"),
+			at(5, "base-a", "feedback-finding"), at(6, "base-c"),
+		},
+		[]domain.ReviewDispositionRecord{declined}, segments[:4],
+	)
+	if len(reviews) != 6 || len(dispositions) != 1 {
+		t.Fatalf("successor re-entry lineage dropped the feedback cycle's rounds: %#v, %#v", reviews, dispositions)
+	}
+}

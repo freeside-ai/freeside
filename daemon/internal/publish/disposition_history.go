@@ -341,7 +341,8 @@ type lineageSegment struct {
 }
 
 // dispositionReentryContext derives, from the store alone, what the run's
-// unpublished re-entries change about a disposition history (issue #2058).
+// unpublished re-entries change about a disposition history (issue #2058),
+// counting a successor's re-entry of its unpublished head (issue #2111).
 // The returned identity is what the candidate's head was evaluated as: its
 // base and, for a head an unpublished re-entry kept, the prospective merge
 // the cycle verified and reviewed. Without such a re-entry it is the head at
@@ -357,20 +358,20 @@ func dispositionReentryContext(
 	if err != nil {
 		return evaluation, nil, err
 	}
-	var segments []lineageSegment
+	priorBases := make(map[domain.InvocationID]string)
 	for _, successor := range chain {
-		if !successor.RepublishesUnpublished() {
+		if !successor.ReentersUnpublishedHead() {
 			continue
 		}
-		if len(segments) == 0 {
-			prior, err := tx.GetReviewRecord(ctx, successor.PriorReviewInvocationID)
-			if err != nil {
-				return evaluation, nil, err
-			}
-			segments = append(segments, lineageSegment{FromRound: 0, BaseSHA: prior.BaseSHA})
+		prior, err := tx.GetReviewRecord(ctx, successor.PriorReviewInvocationID)
+		if err != nil {
+			return evaluation, nil, err
 		}
-		segments = append(segments, lineageSegment{FromRound: successor.ReviewRound, BaseSHA: successor.Reentry.BaseSHA})
-		if successor.PublicationID() != c.InvocationID || c.Successor != nil {
+		priorBases[successor.PriorReviewInvocationID] = prior.BaseSHA
+	}
+	segments := reentryLineageSegments(chain, priorBases)
+	for _, successor := range chain {
+		if !successor.ReentersUnpublishedHead() || successor.PublicationID() != c.InvocationID {
 			continue
 		}
 		evaluation.BaseSHA = successor.Reentry.BaseSHA
@@ -387,6 +388,36 @@ func dispositionReentryContext(
 			domain.ErrParentKeyMismatch)
 	}
 	return evaluation, segments, nil
+}
+
+// reentryLineageSegments derives the lineage segments from the run's
+// successor chain, root first, and the base each re-entry's prior review ran
+// at, keyed by that review's invocation. The first re-entry opens the
+// segment its prior rounds share. A successor re-entry (issue #2111) can
+// replace a feedback or remediation cycle that worked at another base than
+// the re-entry before it, so that cycle's rounds open a segment of their own
+// from its first round. Each re-entry then opens its own segment at its base.
+func reentryLineageSegments(
+	chain []domain.PublicationSuccessor, priorBases map[domain.InvocationID]string,
+) []lineageSegment {
+	var segments []lineageSegment
+	var replaced domain.PublicationSuccessor
+	for _, successor := range chain {
+		if !successor.ReentersUnpublishedHead() {
+			replaced = successor
+			continue
+		}
+		prior := priorBases[successor.PriorReviewInvocationID]
+		switch {
+		case len(segments) == 0:
+			segments = append(segments, lineageSegment{FromRound: 0, BaseSHA: prior})
+		case prior != segments[len(segments)-1].BaseSHA:
+			segments = append(segments, lineageSegment{FromRound: replaced.ReviewRound, BaseSHA: prior})
+		}
+		segments = append(segments, lineageSegment{FromRound: successor.ReviewRound, BaseSHA: successor.Reentry.BaseSHA})
+		replaced = successor
+	}
+	return segments
 }
 
 // currentDispositionLineage keeps the review rounds that share the latest

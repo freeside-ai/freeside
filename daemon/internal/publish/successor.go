@@ -57,25 +57,37 @@ func validateSuccessorCandidate(ctx context.Context, tx *store.ReadTx, candidate
 	return nil
 }
 
-// unpublishedReentryAuthority returns the authority a first-publication
-// candidate publishes under when its invocation is an unpublished re-entry's
-// (issue #2058), and nil when it is the run's ordinary first publication. The
-// authority is read through the store's gate by the candidate's invocation,
-// never taken from the candidate, so the base it names is the daemon's own
-// audit tip. The candidate must be the run's current cycle, its producer one
-// the authority admits, and its head the latest review's.
+// unpublishedReentryAuthority returns the authority a candidate publishes
+// under when its invocation re-enters an unpublished head at a newer base:
+// an unpublished re-entry's first publication (issue #2058), or a successor
+// re-entry's update of the existing pull request (issue #2111). It is nil for
+// any other candidate. The authority is read through the store's gate by the
+// candidate's invocation, never taken from the candidate, so the base it
+// names is the daemon's own audit tip. The candidate must be the run's
+// current cycle, its producer one the authority admits, and its head the
+// latest review's; a first publication must be under v5 and an update under
+// v6.
 func unpublishedReentryAuthority(
 	ctx context.Context, tx *store.ReadTx, c Candidate, producer *domain.InvocationID,
 ) (*domain.PublicationSuccessor, error) {
-	if c.Successor != nil || producer == nil {
+	if producer == nil {
 		return nil, nil
 	}
 	successor, err := tx.GetPublicationSuccessor(ctx, c.RunID, c.InvocationID)
-	if errors.Is(err, store.ErrNotFound) {
+	if errors.Is(err, store.ErrNotFound) && c.Successor == nil {
 		return nil, nil
 	}
-	if err != nil || !successor.RepublishesUnpublished() || c.DispositionHistory == nil {
+	if err != nil {
 		return nil, errors.Join(err, ErrUnauthorizedPublication)
+	}
+	if !successor.ReentersUnpublishedHead() {
+		if c.Successor != nil {
+			return nil, nil
+		}
+		return nil, ErrUnauthorizedPublication
+	}
+	if (c.Successor == nil) != successor.RepublishesUnpublished() || c.DispositionHistory == nil {
+		return nil, ErrUnauthorizedPublication
 	}
 	if err := tx.AuthenticateSuccessorProducer(ctx, successor, *producer); err != nil {
 		return nil, errors.Join(err, ErrUnauthorizedPublication)
