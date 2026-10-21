@@ -1603,6 +1603,42 @@ different review, as does replacement of the bounded pending intent, and
 invalidates the earlier approval. That is the one Freeside manual review; a
 GitHub organization approval remains a separate native prerequisite.
 
+**Each project image bakes one toolchain.** `-go-module-dir <dir>`, on both
+`freesided onboard` and `freeside-project-image`, declares a
+repository-relative Go module directory, which the review shows and the
+approval digest binds. Without it, a root `package.json` selects npm, and
+otherwise a root `go.mod` selects Go at the root. A root `package.json` beside
+a declared module is refused.
+
+A Go image bakes Go 1.26.10 and golangci-lint 2.12.2 from pinned archives,
+and a module cache warmed from the commit's `go.mod` and `go.sum` at
+`/opt/freeside/go-mod-cache`. It bakes no build cache, so every room compiles
+from scratch. `go`, `gofmt`, and `golangci-lint` are launchers that extract
+the toolchain once per process tree and set:
+
+| Variable | Value |
+| --- | --- |
+| `GOTOOLCHAIN` | `local`: never fetch another toolchain. |
+| `GOPROXY` | `off`: resolve modules only from the baked cache. |
+| `GOWORK` | `off`: ignore any `go.work`. |
+| `GOMODCACHE` | `/opt/freeside/go-mod-cache` |
+| `GOCACHE` | The caller's, else `$HOME/.cache/go-build`, else `/tmp/.cache/go-build`. |
+
+`GOFLAGS` is left to the recipe. The build refuses, and admission and the
+rebuild gate report, the Go inputs no image serves:
+
+- A `vendor` directory in the module.
+- A `go.work` file or directory in the module directory or any directory
+  above it, up to the root.
+- A `replace` in `go.mod` whose target is a local path, inside the module or
+  not: the seed holds only `go.mod` and `go.sum`, so no image can warm it.
+- A `go` directive above 1.26.10, or a `toolchain` directive naming any other
+  toolchain.
+
+A `go.mod` or `go.sum` that is missing or not a regular file is refused too.
+The masked-cache probe runs `go mod download` from the module directory and
+passes only on Go's offline refusal.
+
 If the installation was terminally quarantined, start a fresh native
 installation with `-recover-installation <quarantined-id> -installation-id 0`
 and the ordinary onboarding arguments. Do not combine recovery with `-resume`
@@ -1965,6 +2001,12 @@ the publication lane immediately before verification, on first publication
 and on every re-entered cycle. A head that keeps the manifests the image
 baked takes no gate.
 
+**A Go image refuses every dependency change.** No rule yet bounds a change
+to a Go module's `go.mod` or `go.sum`, so the gate refuses it under
+`go_dependency_changed`, as it does a candidate that adds a Go input no image
+serves, and a person builds and approves a new image. The rest of this
+section describes npm images.
+
 Three flags give the daemon the host-specific build inputs no image record
 carries:
 
@@ -2044,6 +2086,7 @@ A refused gate names one clause:
 | `recipe_changed` | Changes the verification recipe along with its dependencies. |
 | `lockfile_inconsistent` | Has a lockfile that is unreadable, repeats a key or holds two that differ only by case, is not v2 or v3, disagrees with `package.json`, lacks an entry for a dependency, or nests a peer dependency under its dependent; or its base's manifests cannot be read to compare with. |
 | `unsupported_npm_input` | Holds `npm-shrinkwrap.json` or `.npmrc`, or changes `package.json`'s `overrides`, `workspaces`, or `packageManager`. |
+| `go_dependency_changed` | Changes a Go image's module `go.mod` or `go.sum`, holds one no build can read, or holds a Go input no image serves (`vendor`, `go.work`). The detail names the changed files and the unsupported inputs. |
 | `no_registry_set` | Runs under a policy with no registry set, or a malformed one. |
 | `rebuild_not_configured` | Passed the gate, but the daemon has no `-base-build-ref`. |
 | `build_or_proof_failed` | Passed the gate, but the image failed its build-time proof, or the build did not finish within one hour. |
