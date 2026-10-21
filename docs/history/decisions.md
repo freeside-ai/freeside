@@ -2840,3 +2840,28 @@ The client work is #1798 to #1803.)
 
 (Owner decision in the #1938 plan comment of 2026-10-14, delivered by #2080;
 [decision note](../../devlog/2026-10-20-1013-prod-runs-driverless.md).)
+
+---
+
+## Revision 91 ("Abandonment Closes One Workflow Episode"):
+
+1. **Abandonment closes decisions and advancement without certifying a stop.**
+   The operator's command commits slot release, durable episode closure, and
+   card cleanup separately. A closure fences its exact admitted start and
+   owned runs permanently, including after a later episode starts. Every open
+   decision owned by that episode expires without a fabricated decision.
+2. **Late results remain history.** Already-started providers and dispatched
+   effects keep their authenticated observation and resource-accounting paths.
+   Their results grant no readiness, completion, successor, or follow-on effect.
+   Closure requests no provider cancellation and releases no execution capacity.
+3. **Explicit reattempt remains possible.** An authenticated closed parent may
+   replace the terminal-parent prerequisite, with an approved specification,
+   operator reason, intact lineage, no cancellation fence, and atomic cap-checked
+   admission. Ordinary submission, Resume, and queued decisions cannot reopen it.
+4. **Partial failure stays visible.** The command reports each committed step
+   and an exact episode repair selector. A failed cleanup cannot undo closure;
+   a delayed repair cannot abandon newer work. Migration infers no closure
+   from old abandonment facts because Stop and intake share their writer.
+
+(Owner decision in #1993, 2026-10-20;
+[decision note](../../devlog/2026-10-20-1030-workflow-episode-closure.md).)
