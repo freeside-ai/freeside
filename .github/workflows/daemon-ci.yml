@@ -22,6 +22,8 @@ jobs:
   linux-build:
     name: linux (build, vet, lint)
     runs-on: ubuntu-latest
+    env:
+      GOLANGCI_LINT_VERSION: v2.12.2
     steps:
       - uses: actions/checkout@v4
         with:
@@ -67,11 +69,30 @@ jobs:
           du -sk "$(cd daemon && go env GOCACHE)" "$(cd daemon && go env GOMODCACHE)" >evidence/cache-before.txt
       - name: build, vet (scripts/check.sh)
         run: bash scripts/check.sh daemon build vet
+      - name: Restore golangci-lint cache
+        id: lint-cache
+        uses: actions/cache/restore@v4
+        with:
+          path: ~/.cache/golangci-lint
+          # golangci-lint salts every entry with its version, its linter
+          # settings, and go.mod, and hashes dependency packages by their
+          # source paths, so an entry saved under other inputs or another
+          # Go toolchain holds no valid hit. Restoring one is harmful:
+          # outputs are content-addressed, a rewrite of an identical output
+          # keeps the restored file's old mtime, and the run's trim then
+          # deletes outputs that its new entries point to. The next run reads
+          # that cache and staticcheck reports false SA5011 issues (#2127).
+          # So the key covers all of those inputs and never falls back across
+          # them; only main pushes save, like the build cache.
+          key: daemon-lint-v1-${{ runner.os }}-${{ runner.arch }}-${{ steps.go.outputs.go-version }}-${{ env.GOLANGCI_LINT_VERSION }}-${{ hashFiles('daemon/go.mod', 'daemon/.golangci.yml') }}-${{ github.sha }}
+          restore-keys: |
+            daemon-lint-v1-${{ runner.os }}-${{ runner.arch }}-${{ steps.go.outputs.go-version }}-${{ env.GOLANGCI_LINT_VERSION }}-${{ hashFiles('daemon/go.mod', 'daemon/.golangci.yml') }}-
       - name: golangci-lint
         uses: golangci/golangci-lint-action@v8
         with:
-          version: v2.12.2
+          version: ${{ env.GOLANGCI_LINT_VERSION }}
           working-directory: daemon
+          skip-cache: true
       - name: Record static-job cache size
         if: always()
         run: |
@@ -90,6 +111,12 @@ jobs:
         with:
           path: ${{ steps.go-cache.outputs.build }}
           key: ${{ steps.go-build-cache.outputs.cache-primary-key }}
+      - name: Save golangci-lint cache
+        if: github.event_name == 'push'
+        uses: actions/cache/save@v4
+        with:
+          path: ~/.cache/golangci-lint
+          key: ${{ steps.lint-cache.outputs.cache-primary-key }}
 
   linux-tests:
     name: linux (test, ${{ matrix.kind }} ${{ matrix.index }}/${{ matrix.count }})
