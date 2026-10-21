@@ -13,6 +13,11 @@ follow this full sequence:
    or observed automated reviewer before waiting for checks. This prevents the
    checks wait from delaying review.
 
+   When the project's reviewer record is `none` (§reviewer-record), start no
+   watch, so steps 2 and 6 have none to anchor or close. Don't scan past PRs
+   for a reviewer; the human reviewer reviews at handoff. Say in the handoff
+   summary that the record skipped the watch.
+
    Before choosing a method, check whether a review-watch skill is installed,
    such as `await-pr-review`: list the available skills or look in the
    platform's skill directories. Check even when you recall none; a skill
@@ -49,18 +54,23 @@ follow this full sequence:
    Verification section.
 
    Record the base commit in the PR's Verification section or in the handoff.
-   If the base moves again before merge, the landing check reruns CI. Under a
-   required check that must pass on the branch updated to the tip (on GitHub,
-   the up-to-date rule), refresh again and the check reruns on the push. A
-   merge queue or land command refreshes and reruns for you. Don't repeat CI
-   by hand; read `git range-diff` only when a rebase conflicts. A project
-   without a landing check needs another integration pass by hand.
+   If the base moves before approval, the landing check decides who refreshes.
+   A merge queue or land command tests the PR combined with the tip it selects
+   and reruns CI there, so leave the PR waiting. Refresh only when the lander
+   hands it back (a merge queue does so by removing it) or the owner asks. With
+   only a required check that must pass on the branch updated to the tip (on
+   GitHub, the up-to-date rule), nobody else pushes that update, so refresh
+   again and the check reruns on the push.
+
+   Don't repeat CI by hand; read `git range-diff` only when a rebase conflicts.
+   A project without a landing check needs another integration pass by hand.
+   After approval, step 7 applies, and whoever lands the PR updates the branch.
 
    A landing check reruns CI, not review. A clean rebase can still change the
    diff, for example by following an upstream rename. When you push a refresh,
    the recorded automated reviewer's pass on that push reads the new diff;
    without one, self-review the refreshed diff. Either way, the push restarts
-   the review watch (step 2), and handoff waits for it to close (step 6).
+   any review watch (step 2), and handoff waits for it to close (step 6).
 
    If you can't update the branch, report that it's stale. Do not rewrite a
    branch you don't own.
@@ -288,8 +298,8 @@ an external bot reviewer. Risky work touches a destructive path, a
 credential-leak surface, or a returned-object trust boundary, changes a
 contract or public interface, or changes behavior without tests. A large
 mechanical change (a rename, move, format, or generated update) that does
-none of those relies on CI and the recorded bot reviewer, however many files
-it touches.
+none of those relies on CI and the recorded bot reviewer, or the human
+reviewer when there is none, however many files it touches.
 
 - When the platform supports delegation and session policy permits it, ask a
   reviewer in a fresh session to look for reasons the change may be wrong. Give
@@ -326,6 +336,29 @@ across PRs.
 
 Update an existing record when you observe a missing status signal or changed
 trigger. Record only what you observed. Never record an absence as a signal.
+The owner's `none` record below is the one recorded absence.
+
+A project's owner may instead decide that it has no automated reviewer. Record
+that decision as a reviewer record whose reviewer is `none`:
+
+```markdown
+- **Expect no automated reviewer.** This project has the following reviewer
+  record:
+
+  - **Reviewer:** `none`, an owner decision. Only the owner changes it.
+```
+
+Only the owner writes, replaces, or removes this record. Never infer it from
+silence, a quiet PR, or a reviewer that stopped posting. A landing record's
+`Reviewer: none` alone isn't this record: it also covers a project whose
+reviewer isn't recorded yet.
+
+A `none` record differs from having no record:
+
+- **No record:** detect a reviewer, watch for it, and record it once observed.
+- **A `none` record:** start no review watch and don't scan past PRs for a
+  reviewer. Don't record a reviewer seen on older PRs or a manual run; tell
+  the owner instead. The human reviewer reviews at handoff.
 
 ## pr-body
 
