@@ -1,0 +1,19 @@
+{
+  "id": "sha256:cf4ef330e4ba0344f3c09d936a8722691f2ef304d472c53569a15409f98513a5",
+  "repository": "freeside-ai/freeside",
+  "repository_id": 1023456789,
+  "commit_sha": "6ab4e3dff2be53f74bde9b8b3150290775152f9f",
+  "recipe_digest": "sha256:efefefefefefefefefefefefefefefefefefefefefefefefefefefefefefefef",
+  "preparation_command": [
+    "/usr/local/bin/freeside-project-prepare"
+  ],
+  "base_image_ref": "ghcr.io/freeside-ai/agent-claude@sha256:abababababababababababababababababababababababababababababababab",
+  "image_ref": "127.0.0.1:5100/freeside-project-freeside-ai-freeside@sha256:cdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcd",
+  "environment": {
+    "toolchain": "go",
+    "go_module_dir": "daemon",
+    "go_mod_sha256": "7878787878787878787878787878787878787878787878787878787878787878",
+    "go_sum_sha256": "9a9a9a9a9a9a9a9a9a9a9a9a9a9a9a9a9a9a9a9a9a9a9a9a9a9a9a9a9a9a9a9a",
+    "preparation_digest": "sha256:5656565656565656565656565656565656565656565656565656565656565656"
+  }
+}
