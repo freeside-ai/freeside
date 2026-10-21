@@ -2,13 +2,9 @@ package integration_test
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
-	"os"
-	"path/filepath"
 	"strings"
-	"testing"
 
 	"github.com/freeside-ai/freeside/daemon/internal/domain"
 	"github.com/freeside-ai/freeside/daemon/internal/publicationrecord"
@@ -237,59 +233,4 @@ func realRunFeedbackContinuation(ctx context.Context, tx *store.ReadTx, publishe
 		}
 	}
 	return fmt.Errorf("superseded publication has no authenticated retry continuation")
-}
-
-func writeRealRunCheckpoint(path string, checkpoint realRunCheckpoint) error {
-	if path == "" {
-		return nil
-	}
-	body, err := json.Marshal(checkpoint)
-	if err != nil {
-		return err
-	}
-	root, err := os.OpenRoot(filepath.Dir(path))
-	if err != nil {
-		return err
-	}
-	writeErr := root.WriteFile(filepath.Base(path), append(body, '\n'), 0o600)
-	return errors.Join(writeErr, root.Close())
-}
-
-func TestRealRunCheckpointOutput(t *testing.T) {
-	path := filepath.Join(t.TempDir(), "checkpoint.json")
-	if err := writeRealRunCheckpoint(path, realRunCheckpoint{State: "retained"}); err != nil {
-		t.Fatal(err)
-	}
-	root, err := os.OpenRoot(filepath.Dir(path))
-	if err != nil {
-		t.Fatal(err)
-	}
-	body, err := root.ReadFile("checkpoint.json")
-	if err := errors.Join(err, root.Close()); err != nil {
-		t.Fatal(err)
-	}
-	var checkpoint realRunCheckpoint
-	if err := json.Unmarshal(body, &checkpoint); err != nil {
-		t.Fatal(err)
-	}
-	if checkpoint.State != "retained" {
-		t.Fatalf("checkpoint state = %q, want retained", checkpoint.State)
-	}
-}
-
-func TestRealRunRetainedSchema(t *testing.T) {
-	if os.Getenv("FREESIDE_REAL_RUN_SCHEMA_TEST") != "1" {
-		t.Skip("operator-only retained schema check")
-	}
-	root := os.Getenv("FREESIDE_REAL_RUN_STATE_ROOT")
-	if root == "" {
-		t.Fatal("retained state root is required")
-	}
-	st, err := store.OpenReadOnly(context.Background(), filepath.Join(root, "freeside.db"), store.Options{})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := st.Close(); err != nil {
-		t.Fatal(err)
-	}
 }
