@@ -1,6 +1,6 @@
 ---
 name: exit-run
-description: Run a live exit run, the real-backlog production exercise that closes a wave tracker or an ad hoc tracker. Drive scripts/run-real-work.sh against a real issue in a real project from the default-branch tip, walk the operator through the Mac and iPhone checks, file an issue per finding, propose exit dispositions and which findings to block exit on, and record the run, the dispositions, and the start order as a tracking comment on the tracker. Use when the user asks to "run the exit run", "run the exit exercise", "do the exit run for #N", "close out wave N with a real run", "prove the close condition", "run gh-imgup#<n> through production for #1211", or names a tracker plus a target issue to run, even without the words "exit run". Also use to re-run a prior exit run or to file and disposition a finished run's findings. Not for the fresh-context adversarial review (review-wave), wave planning (plan-wave), implementing an exit-required unit (ordinary work-unit flow), or a hermetic test run.
+description: Run a live exit run, the real-backlog production exercise that closes a wave tracker or an ad hoc tracker. Drive freesided deputy against a real issue in a real project from the default-branch tip, walk the operator through the Mac and iPhone checks, file an issue per finding, propose exit dispositions and which findings to block exit on, and record the run, the dispositions, and the start order as a tracking comment on the tracker. Use when the user asks to "run the exit run", "run the exit exercise", "do the exit run for #N", "close out wave N with a real run", "prove the close condition", "run gh-imgup#<n> through production for #1211", or names a tracker plus a target issue to run, even without the words "exit run". Also use to re-run a prior exit run or to file and disposition a finished run's findings. Not for the fresh-context adversarial review (review-wave), wave planning (plan-wave), implementing an exit-required unit (ordinary work-unit flow), or a hermetic test run.
 ---
 
 # Exit Run (Spine)
@@ -9,22 +9,22 @@ You are the spine role (AGENTS.md, Coordination). An exit run is the
 close-condition proof for a tracker: the production pipeline runs on a real
 issue in a real project, from the current default-branch tip, and the run's
 evidence and findings decide whether the tracker can close. This session
-owns the whole run: preparation, driving the harness, collecting evidence,
+owns the whole run: preparation, driving the deputy, collecting evidence,
 filing findings, proposing exit dispositions, and recording everything on the
 tracker. Three parties share it:
 
-- **You** drive the harness and the forge, and write every record.
-- **The operator** does what needs a human or a physical device: stops the
-  supervised daemon, pairs the Mac and iPhone, approves the specification in
-  a client, and exercises cards. Hand each of these over as an explicit
+- **You** drive the deputy and the forge, and write every record.
+- **The operator** does what needs a human or a physical device: pairs the
+  Mac and iPhone, approves the specification in a client, and exercises
+  cards. Hand each of these over as an explicit
   checkpoint and wait; never assume it happened.
 - **The owner** decides which findings block exit and merges the run's pull
   request. You propose dispositions; the owner adopts, amends, or rejects;
   only then do you record them as decided. The owner merges every real-work
   pull request: never merge one, and don't ask who will.
 
-Stop and report when a precondition fails, when the harness fails before the
-first daemon launch, when a fix would need a production store mutation, or
+Stop and report when a precondition fails, when the deputy's self-check
+fails before its daemon serves, when a fix would need a production store mutation, or
 when an exit disposition needs a call only the owner can make. A partial
 record on the tracker is better than a guessed one.
 
@@ -37,8 +37,8 @@ URL in the managed repository (for example
 never pick a target by browsing the target repository's backlog.
 
 The run **mode** is derived, not chosen: CLI mode (`freesided submit` seeds
-the task) or client-target mode (`--client-target`, the task comes from the
-client composer). Read it from the tracker's Exit section and its latest
+the task) or client-target mode (the task comes from the client composer,
+with the settings naming a manual-submission file). Read it from the tracker's Exit section and its latest
 exit-gate comment, which may also pin daemon flags or target properties
 (`references/prior-runs.md` lists the ones past trackers required). State
 the derived mode, its reason, and the expected spend, then wait for the
@@ -112,40 +112,44 @@ with a partial run.
   implementation that never linked the issue; not from memory. The target
   usually lives in another repository (gh-imgup), and a bare `gh` call
   queries the current checkout's repository instead.
-- **The environment is loaded** per the `scripts/run-real-work.sh` header:
-  every required variable, prompt packages from the approved default-branch
-  commit (a stale package reused from an earlier run cost run-70 its
-  publication), the approved recipe digest, and for client-target mode the
-  manual-submission file. Read the header in this session; it is the
-  authority and it changes.
+- **The settings are written:** `<root>/daemon/settings.json`, mode `0600`,
+  with every key the daemon guide's settings table lists (daemon/README.md,
+  Run Real Work With The Deputy): prompt packages from the approved
+  default-branch commit (a stale package reused from an earlier run cost
+  run-70 its publication), the approved recipe digest, and for
+  client-target mode `manual_submission_config`. Read the table in this
+  session; it is the authority and it changes.
 - **A CLI-mode publication file names the target.** When the spec file is
   the target's bare canonical issue URL, the publication file must be the
   client record with `source_issue` set to that same URL
-  (`scripts/run-real-work.sh` header); composition preflight refuses it
-  otherwise. A target in the managed repository then becomes the pull
+  (docs/production-walkthrough.md, The Publication File And Work-Unit
+  Declaration); composition preflight refuses it otherwise. A target in the managed repository then becomes the pull
   request's closing reference; one in another repository is linked and
   stays open.
 - **The work-unit declaration is written.** It is the required fourth
   argument in both modes: the task's own input in CLI mode, and the seed's
   in client-target mode. The smallest file is
   `{"completion_criterion": "bound_pr_merged"}`, which finishes the task
-  when its pull request merges. The harness, composition preflight, and
-  `freesided submit` refuse a submission without it, because a task accepted
+  when its pull request merges. Composition preflight and `freesided
+  submit` refuse a submission without it, because a task accepted
   with no declaration never records completion.
 - **Credentials are live:** the Codex reviewer token and the provider auth
   identity. An expired token fails at composition preflight, after
   onboarding and image work are already spent (#1363).
-- **The supervised daemon is stopped** with
-  `"$HOME/Applications/Freeside.app/Contents/MacOS/FreesideMac" daemon stop`
-  (require exit 0), or by the operator through the Freeside menu, before the
-  harness acquires the rig. This operator-started exit run authorizes the
-  lifecycle command under plan §10. The restore path is
-  known (docs/production-walkthrough.md, Restore The Supervised Daemon).
+- **The installed production daemon runs driverless** from an app that
+  includes #2080, and the App authority lives in its directories
+  (docs/production-walkthrough.md, Start And Verify). Leave it running: the
+  deputy never stops or restarts it. Preflight's `prod_execution` check
+  fails when it reports a driver, but a stopped `prod` passes, so have the
+  operator confirm it runs:
+  `"$HOME/Applications/Freeside.app/Contents/MacOS/FreesideMac" daemon
+  status` exits 0 and prints `health=reachable`. The command is the
+  operator's (plan §10); ask for its output rather than running it.
 - **Clients are rebuilt and installed from the tip** on both the Mac and the
   physical iPhone, and both are on the tailnet the daemon will listen on. A
   VPN on the Mac can block the tailnet range; a client built from an older
   commit proves the older commit. Pairing itself happens after launch,
-  against the active campaign (the pairing checkpoint below); a fresh state
+  against the deputy's `api_url` (the pairing checkpoint below); a fresh state
   root has no paired endpoint to check here.
 - **The state root is usable:** a fresh root, or a retained one the current
   daemon can open. Clean-break migrations retire old roots at startup; don't
@@ -156,27 +160,36 @@ with a partial run.
   them in a client. No `freesided` read lists them before launch:
   `inspect task` keeps only a task's own items, and a notice such as a
   durable stop names the daemon, not a task. Plan to resolve them at the pairing
-  checkpoint (Run the Harness, step 2), or record why one stays open.
+  checkpoint (Run the Deputy, step 2), or record why one stays open.
 - **Nothing else holds the rig** or an execution slot: no stranded
-  dispatched invocation, no orphaned cleanup reservation (#1181, #1465).
+  dispatched invocation, no orphaned cleanup reservation (#1181, #1465). A
+  stale lease for this root is recovered at start; one for another root
+  refuses the start (docs/production-walkthrough.md, Recover An Interrupted
+  Deputy).
 
-## Run the Harness
+## Run the Deputy
 
 Follow docs/production-walkthrough.md; this section only says where to stop
-and what to write down. Keep the harness shell open the whole time. Say in a
+and what to write down. Keep the deputy's shell open the whole time. Say in a
 line what you are about to start, because a run can take an hour and the
 operator needs to know when their step is next.
 
-1. Start `scripts/run-real-work.sh` in the derived mode. Record the session
-   directory, the submission id, and the composition-preflight result. In
-   CLI mode, read any publication warning the harness prints before going
-   on: it says when the pull request will carry no issue reference or will
-   not close the issue.
+1. Build `freesided` from a clean checkout of the tip and start
+   `freesided deputy -root <root>` as a tracked background task. Record the
+   root, the build, the settings digest, and the composition-preflight
+   result it prints; a failed self-check leaves execution disabled and
+   stops the run. Then submit with `freesided submit --require-composition`
+   from a second shell: the target in CLI mode, or the visibility seed on a
+   fresh root in client-target mode (docs/production-walkthrough.md, The
+   Visibility Seed). Record the submission id and task id. In CLI mode,
+   check the publication file against what the pull request will carry
+   (The Publication File And Work-Unit Declaration) before going on.
 2. **Checkpoint: pairing.** Once the daemon is up, pair both clients against
-   the active campaign's endpoint (a fresh state root) or confirm both still
+   the deputy's `api_url` (a fresh state root) or confirm both still
    reach the retained root's paired endpoint. A startup code that expires
-   before the iPhone pairs is renewed from the session's retained binary
-   (docs/production-walkthrough.md, the `pairing-code` command). Record a
+   before the iPhone pairs is renewed with
+   `freesided pairing-code -state-dir <root>/daemon`
+   (docs/production-walkthrough.md, Start And Verify). Record a
    redacted receipt and which device paired, never the code.
 
    On a retained root, before the first approval, open Inbox > System health
@@ -188,16 +201,14 @@ operator needs to know when their step is next.
    admission; record why. A blocking item that no offered action closes
    holds every run at admission: it is a defect that stops the run (below),
    so file it and stop rather than going on. A missed blocking item shows
-   as the run's hold reason `blocking_system_health`. In CLI mode the seed
+   as the run's hold reason `blocking_system_health`. In CLI mode the submitted
    task's specification run is already waiting for admission, so that hold
    can show now; in client-target mode nothing waits until the operator
    composes a task.
-3. **Checkpoint (client-target mode):** when the harness prints its
-   awaiting-target line, hand the operator the exact source text to enter in
-   the composer. Then run
-   `real-work-session.sh select-target <session-directory> <task-id>` with
-   the retained session directory and the task id they report, and record
-   the acceptance. If the derived exit contract requires source-issue closure,
+3. **Checkpoint (client-target mode):** once the clients are paired, hand
+   the operator the exact source text to enter in the composer. Read the
+   task id they report with `freesided inspect task`, confirm it is the
+   client's task and not the seed's, and record it as the one target. If the derived exit contract requires source-issue closure,
    give the exact bare canonical GitHub issue URL before submission, with no
    prose or trailing punctuation. `Please handle <URL>.` creates valid work
    without a saved publication source reference.
@@ -205,30 +216,24 @@ operator needs to know when their step is next.
    in a client; record which device and which actions the card offered.
    Leave the human gate on unless the contract says otherwise.
 
-   **For closure-specific client-target runs, first run**
-   `real-work-session.sh verify-source <session-directory> <expected-issue-url>`
-   after target acceptance and before asking for specification approval.
-   Record the successful local receipt: task ID, specification-run ID,
-   repository, source issue, and `recommended` provenance. The command reads
-   the selected task's saved specification/publication input; neither displayed
-   spec prose nor the seed's publication file is evidence of this binding.
-   A refusal blocks this proof and leaves approval pending. If implementation
-   already exists, the check cannot count as a pre-implementation proof.
-   A corrected source needs a fresh task/session under the one-target rule;
-   never repair the retained task or clear its checkpoint. An older verifier
-   without this mode needs a reviewed runtime/session, not a reused receipt.
+   **For closure-specific client-target runs,** no `freesided` read shows
+   the selected task's saved source binding before approval: `inspect task`
+   does not report it, and the retired harness's `verify-source` receipt
+   has no deputy equivalent. Record the pre-approval source proof as not
+   run; neither displayed spec prose nor the seed's publication file is
+   evidence of that binding. A corrected source needs a fresh task under the
+   one-target rule; never repair the target task or clear its checkpoint.
 
-   This is an operator procedure gate for closure-specific runs. A pass proves
-   eligibility at that read, not verified issue provenance, closing authority,
-   or a later proposal. In the live proof on the merged runtime, record the
-   same task/run's actual closure proposal path, including its `propose_site`
-   result; fallback or `has_proposal=false` does not satisfy that proof. The
-   later proposal, policy/human approval, and publisher checks remain required.
+   The closure proof is then the live one: record the same task's actual
+   closure proposal path, including its `propose_site` result; fallback or
+   `has_proposal=false` does not satisfy that proof. The later proposal,
+   policy or human approval, and publisher checks remain required.
 5. Follow implementation to publication. Record the specification and
    implementation run ids, the campaign and attempt, base and head SHAs, the
-   review id, model, and outcome, the verifier result, and the spend.
+   review id, model, and outcome, the publication outcome the task record
+   shows, and the spend.
 6. If submit's output is lost or the submission looks stranded, recover it
-   by its saved identity: each session mints a `submission-id`, and
+   by its saved identity: each submission saves a `submission-id`, and
    `freesided submit --db <database> --retry-submission-id <id>` reloads
    the saved inputs (docs/production-walkthrough.md). Don't mutate the
    store, and don't
@@ -246,7 +251,7 @@ report. Running this skill authorizes no implementation.
   is verified before the run resumes. The run record marks the finding
   **Fixed in-run** only when the fix is merged and the exercised runtime
   carries it: the daemon rebuilt or restarted from the new `main` SHA
-  (docs/production-walkthrough.md, Replace A Retained Runtime) and the
+  (docs/production-walkthrough.md, Replace The Runtime) and the
   affected evidence repeated on it. Otherwise the finding is suggested to
   block on with its PR named, and the run's evidence stays attributed to
   the SHA that ran. Both prior in-run fixes met this bar
@@ -291,15 +296,14 @@ merge, and an external review can only be posted before it. So:
   for the client-composed task in client-target mode.
 - Then raise the alert gates, while the run's daemon is still up. The
   review-growth alert is refused until the completion fact is recorded, and
-  the session's `complete` command stops the daemon, so this is the only
-  point where all three work. Use the session's retained binary and the
-  implementation run's id:
+  ending the deputy stops the daemon, so this is the only point where all
+  three work. Use the deputy's build and the implementation run's id:
 
   ```sh
-  db="$(cat /absolute/session/state-root)/freeside.db"
-  /absolute/session/freesided raise-item -db "$db" -alert stall
-  /absolute/session/freesided raise-item -db "$db" -alert held-work -run <run-id>
-  /absolute/session/freesided raise-item -db "$db" -alert review-growth -run <run-id>
+  db=<root>/daemon/freeside.db
+  freesided raise-item -db "$db" -alert stall
+  freesided raise-item -db "$db" -alert held-work -run <run-id>
+  freesided raise-item -db "$db" -alert review-growth -run <run-id>
   ```
 
   Each prints the raised item's ID and type. Have the operator report, per
@@ -311,16 +315,17 @@ merge, and an external review can only be posted before it. So:
   names the alerts the binary can raise; a refusal (a daemon that is not
   `ephemeral`, no daemon, a run with no completion) is a finding, not
   something to work around.
-- Complete the session deliberately with its printed `complete` command. If
-  the harness died first, use `real-work-session.sh recover` rather than a
-  fresh session; a session the host killed is recoverable and a second
-  session would not be this run's evidence.
-- Verify the restore helper completed: it now runs the installed app's
-  `daemon start` after rig release and checks registration and health. Run
-  `"$HOME/Applications/Freeside.app/Contents/MacOS/FreesideMac" daemon status`
-  and require `registration=enabled health=reachable` with exit 0. Handle
-  pending Login Items approval or a missing/current-app diagnostic before
-  retrying; do not start production before the campaign has released its rig.
+- Read the final task record with `freesided inspect task` while the
+  deputy still serves and apply the record checks in
+  docs/production-walkthrough.md, Start And Verify:
+  no read errors, both evidence fields true, matching heads, and the
+  forge's pull request on that head and base. A record that fails one is a
+  finding, not proof. Then end the deputy deliberately with Ctrl-C
+  (docs/production-walkthrough.md, Complete Deliberately) and record that
+  its cleanup proof passed. If the deputy died first, start it again on the
+  same root rather than a fresh one: it recovers the stale lease
+  (Recover An Interrupted Deputy), and a fresh root would not be this run's
+  evidence.
 - Ask the operator for screenshots of anything visually wrong; they attach
   to the finding issue and are the only evidence a client defect leaves.
 
@@ -356,7 +361,7 @@ contract someone can pick up by fiat.
   used. Leave the disposition to the next section.
 - **In-run fixes** are still findings: file the issue, link the PR, mark it
   fixed in the table.
-- **Harness and exercise defects** (the script, the session tooling, the
+- **Deputy and exercise defects** (the deputy command, its settings, the
   walkthrough procedure) are findings too, labeled by their lane. A
   procedure that lost evidence is a defect in the procedure, not operator
   error; say so and file it.
@@ -389,7 +394,7 @@ that reason. Use these rules:
   is a legitimate boundary; name it in the record instead of proving
   through it.
 - A finding whose fix is cheap and sits on the path the next run will take
-  (a prompt rule, a harness flag) is worth suggesting even when it doesn't
+  (a prompt rule, a settings key) is worth suggesting even when it doesn't
   contradict the outcome; say which it is.
 - A cosmetic or ergonomic defect with no functional loss carries no marker;
   give the trigger that would promote it.
@@ -410,8 +415,8 @@ note.
 - **Bottom line first:** can the tracker close, and if not, what stands
   between here and closure, in two sentences.
 - **Run record** as a table: state root, clients and their commit, each
-  campaign and attempt with its result, review, verifier, spend, PR, base
-  and head.
+  campaign and attempt with its result, review, task record, spend, PR,
+  base and head.
 - **Actions exercised** on real items, per device, and the ones not
   evidenced with why.
 - **Synthetic-trigger proofs**, apart from the real items: per raised alert,
@@ -469,8 +474,8 @@ the derivation step can read every prior run newest first.
 ## Synchronization Obligation
 
 This skill restates rules that live elsewhere: the tracking-issue format and
-lane table (docs/coordination.md), the harness environment
-(`scripts/run-real-work.sh` header), the walkthrough and recovery steps
+lane table (docs/coordination.md), the deputy's settings (daemon/README.md,
+Run Real Work With The Deputy), the walkthrough and recovery steps
 (docs/production-walkthrough.md), the Stop check
 (docs/task-cancellation-check.md), the `raise-item` command
 (daemon/README.md, Operational Commands), and the Forge Edits and label

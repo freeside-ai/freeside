@@ -37,7 +37,7 @@ Look for each of these before and during the run; most have bitten twice.
   attempt 2, and run-70 validated #1456 on a resumed implementation. A fix
   that is only an open PR leaves the finding suggested to block on and the
   evidence on the SHA that ran.
-- **Stale inputs.** A prompt package, harness flag, or client build from an
+- **Stale inputs.** A prompt package, settings file, or client build from an
   earlier run proves the earlier run. Take prompts from the approved
   default-branch commit and rebuild both clients from the tip.
 - **Credentials that expire between runs.** Check the Codex token and the
@@ -67,18 +67,11 @@ Look for each of these before and during the run; most have bitten twice.
 - **Store mutations taint evidence.** A direct write to the production store
   leaves the state root inconsistent; back it up, record the edit, and carry
   the caveat in the tracker comment.
-- **Restore is not proved by asking.** Supervised restoration has timed out
-  with `registered=false` more than once; verify registration and `/health`
-  on the normal port before calling the session complete.
-- **Watch the automatic restore result.** `complete` only requests completion;
-  the foreground harness then stops the campaign daemon, releases the rig,
-  and runs the restore helper. Run-114 stalled at the former menu Start
-  handoff with `registered=false`. The helper now runs the installed app's
-  `daemon start` itself, with one stop/start retry for an unresponsive
-  registered daemon. Watch for a nonzero result: approval requires the
-  operator, and a missing or old app requires an install. Verify registration
-  and health after the helper returns. Never start production before rig
-  release.
+- **Supervised restore is gone.** The retired harness stopped the
+  supervised daemon for each run and restored it afterwards, and
+  restoration stalled at `registered=false` more than once (run-114,
+  run-113). Since #2080 the production daemon keeps running driverless
+  through a deputy run, so nothing is stopped or restored.
 - **Auto-update prunes a pinned CLI.** A judgment pin that points into
   Claude Code's auto-updated `versions/` directory disappears between runs.
   Copy the binary into the run root and pin that copy by path and SHA256.
@@ -86,12 +79,9 @@ Look for each of these before and during the run; most have bitten twice.
   bundle ID, and `open -b ai.freeside.app.macos` once launched an old wave7
   build whose daemon refused the current store. Launch
   `~/Applications/Freeside.app` by path.
-- **Restoring from `registered=false`.** Reinstalling the Mac app from the
-  run's commit into a fresh build directory, launching it by path, and
-  then running `real-work-session.sh recover` restored the normal daemon.
-- **Run the harness as a tracked background task.** Started that way (not
-  with `nohup` or `disown`), it kept its rig holder for the whole
-  multi-hour run.
+- **Run the deputy as a tracked background task.** Started that way (not
+  with `nohup` or `disown`), the retired harness kept its rig holder for
+  the whole multi-hour run; start the deputy the same way.
 - **Clean review doesn't mean the repository's rules were followed.** The
   reviewer is told the target's AGENTS.md but admits only defects with a
   failure path, so a missing required note or doc passes. Check the
@@ -99,12 +89,11 @@ Look for each of these before and during the run; most have bitten twice.
 - **The operator's Mac is shared.** When the operator is working on the Mac,
   windows move and a synthetic click can land in their terminal. Hand the
   Mac actions to them instead.
-- **A killed harness is recoverable.** `real-work-session.sh recover`
-  completes a session the host killed; a fresh session would be a different
-  run.
-- **The normal daemon can come back mid-run.** Relaunching the installed Mac
-  client re-registers its LaunchAgent, so the normal daemon runs beside the
-  campaign daemon. Stop it again and record it.
+- **A killed run is recoverable.** The retired harness's `recover`
+  completed a session the host killed. A deputy the host killed leaves a
+  stale lease that its next start on the same root recovers
+  (`docs/production-walkthrough.md`, Recover An Interrupted Deputy); a fresh
+  root would be a different run.
 - **Inherited approvals get rejected.** Preflight refuses a reviewer
   configuration approval from an earlier deployment; expect to approve the
   current proposal before the first submission. A review-prompt version bump
@@ -157,8 +146,8 @@ Look for each of these before and during the run; most have bitten twice.
   control drives the Ephemeral client's cards without taking the pointer,
   so it is safe on a shared Mac. The card's More Actions menu and the
   menu-bar Start and Stop need full-screen control, which the owner
-  approves each time. Use the installed app's `daemon stop` and `daemon
-  start` commands for the exit run's supervised lifecycle steps (#1988).
+  approves each time; a deputy run needs neither, since `prod` keeps
+  running (#2080).
   Record that the spine, not the operator, drove: a card the spine reads
   is not an operator's unprompted reading.
 - **The liveness probe logs its own notices.** `probe.log` beside the
@@ -168,27 +157,21 @@ Look for each of these before and during the run; most have bitten twice.
   posted a tailnet address and a device name; the template now asks for
   build commits only.
 - **Session logs carry the pairing code.** The daemon log prints the startup
-  pairing code on one line. Filter it out (`grep -v pairing_code`) before
-  tailing or grepping the log into a transcript. The harness's own failure
-  paths dump an unfiltered `tail -50` of that log until #1559 lands, so
-  keep a failure's stderr out of the record too.
+  pairing code on one line, and so does the deputy's readiness line on
+  stdout. Filter it out (`grep -v pairing_code`) before tailing or grepping
+  either into a transcript. The retired harness's failure paths dumped an
+  unfiltered `tail -50` of that log (#1559).
 - **Reading the store after the daemon stops.** A `?mode=ro` open fails once
   the daemon is gone. Copy `freeside.db` with its `-wal` and `-shm` files,
   if present (never the neighboring key files), to scratch and open the
   copy normally. Copying the database alone, or opening it with
   `?immutable=1`, skips commits still in the WAL after an unclean exit.
-- **The observation deadline pauses only at decision gates.** Before
-  #2041 (PR #2046), `FREESIDE_REAL_RUN_TIMEOUT_SECONDS` ran through the
-  specification approval and every review-dispute card, and expired while
-  the operator was away. It now pauses at the specification approval gate
-  and at implementation attention cards such as a review dispute, but it
-  still runs through a hold, and a specification attention card still ends
-  supervision (`docs/production-walkthrough.md`). An admitted run
-  interrupted before it publishes can be resumed (#2040, PR #2051;
-  exercised live on gh-imgup#117); a run interrupted at the specification
-  approval has no implementation admission and still cannot. Decide cards
-  promptly anyway: a run that waits also gives the target's `main` time to
-  move (next item).
+- **Decide cards promptly; nothing times out now.** The retired harness's
+  observation deadline (`FREESIDE_REAL_RUN_TIMEOUT_SECONDS`) once ran
+  through the specification approval and every review-dispute card and
+  expired while the operator was away (#2041). The deputy has no deadline
+  and serves until it is ended. A run that waits still gives the target's
+  `main` time to move (next item).
 - **The target's `main` must hold still until publication.** The
   publisher audits the target's base when it decides to publish. A merge to
   the target's default branch after admission ends an unpublished run final
@@ -198,42 +181,23 @@ Look for each of these before and during the run; most have bitten twice.
   the run's base before every resume. Run 117 lost its publication to a
   merge (gh-imgup#128) made the day before its resume.
 - **Watch the items, not the log.** A `review_dispute` card after a re-review
-  leaves no daemon log line, and the harness prints its state line once. A
-  watch armed on new log lines can miss it; poll the task's attention items
-  (or re-read the harness tail after every wake) so a card never sits
-  unattended.
+  leaves no daemon log line. A watch armed on new log lines can miss it;
+  read the task's attention items with `freesided inspect task` after every
+  wake, comparing `as_of_revision`, so a card never sits unattended.
 - **A retained root holds admission on old health items.** Open blocking
   system-health notices from earlier runs (a durable stop, for one) hold the
   next run at admission with `blocking_system_health` until an operator
   resolves them in a client; advisory notices never hold it. No read lists
   them before launch, and resolving one needs a client on the running
   daemon, so the SKILL.md Preflight bullet "The state root is usable" sets
-  the expectation and Run the Harness step 2 (the pairing checkpoint) says
+  the expectation and Run the Deputy step 2 (the pairing checkpoint) says
   how to resolve and record them before the first approval (#2043).
-- **Resume replaces the production daemon.** A failed `--resume-session`
-  leaves its session `recovery-required`, and its `recover` restores the
-  supervised daemon only after the build the restore gate expects is
-  installed with `install-mac-app.sh prod --prod --daemon-path <binary>`
-  (the `--prod` flag is the non-interactive confirmation). The gate's
-  diagnostic does not name the binary; the session's markers do: a session
-  that started its own upgrade (`runtime-upgrade-started` present) expects
-  `<session>/freesided`, and one that only inherited an earlier interrupted
-  upgrade (`runtime-upgrade-inherited` without `runtime-upgrade-started`,
-  the second consecutive failed resume) expects `<session>/restore-freesided`
-  (`scripts/real-work-lifecycle.sh`, `real_work_restore_supervised`).
-- **Recover before resuming on a new build.** An interrupted upgrade must
-  retry the same build, so `--resume-session` from a `recovery-required`
-  session onto a newer tip refuses at composition, and leaves a second
-  `recovery-required` session behind. A same-build retry from a session
-  whose rig release was verified is accepted; resuming onto a different
-  build needs a completed predecessor (`scripts/real-work-retained.py`,
-  `validate_session`). After an in-run fix merges: install the binary the
-  stopped session's markers select (previous item: `<session>/freesided`
-  for one that started its own upgrade, `<session>/restore-freesided` for
-  one refused at composition before starting it) into the production app
-  (`install-mac-app.sh prod --prod --daemon-path <binary>`,
-  operator-approved), `recover` that session, stop the supervised daemon,
-  then resume on the new tip.
+- **Retained-session resume is gone.** The retired harness's
+  `--resume-session` replaced the production daemon and needed an exact
+  install-and-recover order whenever a resume failed or moved to a new
+  build (#2040, PR #2051). The deputy keeps no session to resume: after an
+  in-run fix merges, end it, build the new tip, and start it again on the
+  same root (`docs/production-walkthrough.md`, Replace The Runtime).
 - **Have a route ready for every parked finding.** A `review_dispute` card
   lists each finding's routes with none recommended; the adjudicator's lean,
   confidence, and rationale do not reach the client (#2059), and on run 117
@@ -245,15 +209,17 @@ Look for each of these before and during the run; most have bitten twice.
 
 - #1530 found that `Please handle <URL>.` saves no publication source issue.
   For a closure-specific client-target run, give the bare canonical issue URL
-  before submission and require the retained `verify-source` receipt before
-  specification approval. Client URL provenance is `recommended`; the receipt
-  proves eligibility, not closing authority or a later proposal. Correcting a
-  source requires a fresh task/session, never editing the old run's binding.
+  before submission. Runs before #2081 also required the harness's
+  `verify-source` receipt before specification approval; the deputy has no
+  equivalent read. Client URL provenance is `recommended`; the receipt
+  proved eligibility, not closing authority or a later proposal. Correcting a
+  source requires a fresh task, never editing the old run's binding.
 - #1211 required the task to come from the client composer
-  (`--client-target`) with the human specification gate on, and a live Stop
+  (client-target mode) with the human specification gate on, and a live Stop
   from a real client.
-- #1445 requires the daemon's four `-judgment-*` flags and a target whose
-  PR template needs a close reference; without the flags the author falls
+- #1445 requires the deputy's `judgment` settings group (the daemon's four
+  `-judgment-*` flags when it ran) and a target whose
+  PR template needs a close reference; without the group the author falls
   back to recipe v1 and the proof cannot pass.
 
 ## What A Run Proves
