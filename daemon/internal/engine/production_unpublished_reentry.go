@@ -12,6 +12,7 @@ import (
 	"github.com/freeside-ai/freeside/daemon/internal/domain"
 	"github.com/freeside-ai/freeside/daemon/internal/importer"
 	"github.com/freeside-ai/freeside/daemon/internal/publish"
+	"github.com/freeside-ai/freeside/daemon/internal/signet"
 	"github.com/freeside-ai/freeside/daemon/internal/store"
 )
 
@@ -23,6 +24,10 @@ import (
 // against the newer base. Nothing was published, so there is no pull request
 // to update: the publication is still the run's first.
 //
+// A successor cycle's head (a feedback return or a remediation continuation)
+// re-enters the same way once the run's pull request exists (issue #2111),
+// except that its publication updates that pull request to the kept head.
+//
 // The cycle reuses the head's original checkpoint and stored candidate
 // authorization, which name the base the head was imported over, for the
 // candidate the publisher re-gates. Its own verification at the newer base is
@@ -33,28 +38,65 @@ import (
 // advanced, when no intent was committed. In one transaction it seals the
 // re-entry authority against the newest recorded audit tip, reserves the
 // authority's publication, queues the re-entry task, and retires the refused
-// task's row. When the review hard round limit leaves no round to re-review,
-// it blocks the run instead. handled is false for a task this rule does not
-// cover; the caller then blocks it as before.
+// task's row. A run with no pull request yet seals an unpublished re-entry
+// (v5); a feedback, remediation continuation, or successor re-entry cycle
+// after the pull request exists seals a successor re-entry (v6, issue #2111),
+// which later updates that pull request. When the review hard round limit
+// leaves no round to re-review, it blocks the run instead. handled is false
+// for a task this rule does not cover; the caller then blocks it as before.
 func (w *productionPublicationWorkflow) sealUnpublishedReentry(
 	ctx context.Context,
 	task productionPublicationTask,
 	run domain.Run,
 	checkpoint productionVerificationCheckpoint,
 ) (outcome productionTaskOutcome, handled bool, err error) {
-	if task.reevaluation != nil || task.continuation != nil ||
-		(task.Successor != nil && !task.Successor.RepublishesUnpublished()) {
+	if task.reevaluation != nil || !reentryCovers(task) {
 		return productionTaskOutcome{}, false, nil
-	}
-	hardLimit, err := w.reviewHardRoundLimit(ctx, task.RunID)
-	if err != nil {
-		return productionTaskOutcome{}, true, err
 	}
 	// A hold an earlier pass recorded describes a retry the re-entry replaces.
 	if err := w.supersedeBlockedHold(ctx, task); err != nil {
 		return productionTaskOutcome{}, true, err
 	}
-	exhausted := false
+	exhausted, err := w.sealReentry(ctx, task, true)
+	if err != nil {
+		return productionTaskOutcome{}, true, err
+	}
+	if exhausted {
+		outcome, err := w.blockUnpublishedReentry(
+			ctx, task, run, checkpoint, checkpoint.Artifacts, productionBlockReentryRoundLimit)
+		return outcome, true, err
+	}
+	return productionTaskOutcome{}, true, nil
+}
+
+// reentryCovers reports whether a base-advance refusal of the task's head can
+// re-enter: the run's first publication or an unpublished re-entry of it, or
+// a successor cycle whose authority admits a successor re-entry after it.
+// A continuation intent is not a publication cycle of its own.
+func reentryCovers(task productionPublicationTask) bool {
+	if task.continuation != nil {
+		return false
+	}
+	return task.Successor == nil || task.Successor.RepublishesUnpublished() ||
+		task.Successor.AdmitsSuccessorReentry()
+}
+
+// sealReentry is the transaction behind sealUnpublishedReentry. retire marks
+// the refused task's row dispatched; a rerun's source row already is, and the
+// rerun's own intent completes through its completion record instead.
+// exhausted reports that the hard round limit left no round, and nothing was
+// sealed.
+func (w *productionPublicationWorkflow) sealReentry(
+	ctx context.Context, task productionPublicationTask, retire bool,
+) (exhausted bool, err error) {
+	hardLimit, err := w.reviewHardRoundLimit(ctx, task.RunID)
+	if err != nil {
+		return false, err
+	}
+	// The source task is the cycle the re-entry replaces; a rerun names it
+	// through its own intent, which never becomes the authorizing task.
+	source := task
+	source.reevaluation = nil
 	err = w.store.Write(ctx, func(tx *store.WriteTx) error {
 		if err := tx.ClearRunHold(ctx, task.RunID); err != nil {
 			return err
@@ -72,20 +114,24 @@ func (w *productionPublicationWorkflow) sealUnpublishedReentry(
 			return nil
 		}
 		predecessor := productionReadyItemID(task.RunID)
-		authorizingTaskKey := task.intentKey()
+		authorizingTaskKey := source.intentKey()
+		version, origin := domain.PublicationUnpublishedReentryVersion, domain.PublicationSuccessorUnpublishedBaseAdvance
 		if task.Successor != nil {
 			predecessor = task.Successor.ReadyItemID()
+			if !task.Successor.RepublishesUnpublished() {
+				version, origin = domain.PublicationSuccessorReentryVersion, domain.PublicationSuccessorBaseAdvance
+			}
 		}
 		if task.AuthorizingTaskKey != "" {
 			authorizingTaskKey = task.AuthorizingTaskKey
 		}
 		successor := domain.PublicationSuccessor{
-			Version:                 domain.PublicationUnpublishedReentryVersion,
+			Version:                 version,
 			RunID:                   task.RunID,
 			PredecessorItemID:       predecessor,
 			PriorReviewInvocationID: latest.InvocationID,
 			ReviewRound:             latest.Round + 1,
-			Origin:                  domain.PublicationSuccessorUnpublishedBaseAdvance,
+			Origin:                  origin,
 			Reentry: &domain.PublicationSuccessorReentry{
 				Reason:  domain.ReadinessInvalidationBaseAdvanced,
 				BaseSHA: tip, HeadSHA: task.HeadSHA,
@@ -106,12 +152,12 @@ func (w *productionPublicationWorkflow) sealUnpublishedReentry(
 			AuthorizingTaskKey:    authorizingTaskKey,
 		}
 		if err := next.validate(); err != nil {
-			return fmt.Errorf("build unpublished re-entry task: %w", err)
+			return fmt.Errorf("build re-entry task: %w", err)
 		}
 		// The store seals only against the newest audit tip, from the chain
 		// tip, while the replaced publication holds a bare reservation.
 		if err := tx.RecordPublicationSuccessor(ctx, successor); err != nil {
-			return fmt.Errorf("record unpublished re-entry authority: %w", err)
+			return fmt.Errorf("record re-entry authority: %w", err)
 		}
 		reservation, err := publish.NewReservation(next.PublicationID, next.RunID)
 		if err != nil {
@@ -129,20 +175,102 @@ func (w *productionPublicationWorkflow) sealUnpublishedReentry(
 			return err
 		}
 		if entry.Kind != KindProductionPublicationRequested || !bytes.Equal(entry.Payload, payload) {
-			return fmt.Errorf("unpublished re-entry task disagrees with stored row: %w",
+			return fmt.Errorf("re-entry task disagrees with stored row: %w",
 				domain.ErrImmutableTransition)
 		}
+		if !retire {
+			return nil
+		}
 		return tx.MarkOutboxDispatched(ctx, task.intentKey())
+	})
+	return exhausted, err
+}
+
+// reenterRerunBaseAdvance answers an operator rerun of a successor cycle
+// blocked because the target base advanced (issue #2111). Rerunning that
+// cycle at the base it was imported over would spend a review round on a
+// merge the publisher refuses again, so the rerun seals the successor
+// re-entry the refusal would have sealed and completes as reentered; the
+// re-entry then reviews and publishes the head at the newer base. Only the
+// cycle's own block qualifies (ReentersOnRerunOf), since the re-entry reuses
+// that cycle's verification, under the profile the cycle binds. Signet
+// accepts such a rerun under the trust profile that already authorized the
+// head, which an ordinary reevaluation could not record again, so a rerun
+// under the cycle's profile never falls through to one: with no review round
+// left it blocks on the round limit, and a rerun whose re-entry an earlier
+// pass already sealed records only its completion. handled is false for any
+// other rerun.
+func (w *productionPublicationWorkflow) reenterRerunBaseAdvance(
+	ctx context.Context, task productionPublicationTask, binding productionBinding,
+) (outcome productionTaskOutcome, handled bool, err error) {
+	if task.reevaluation == nil || task.Successor == nil || !task.Successor.AdmitsSuccessorReentry() {
+		return productionTaskOutcome{}, false, nil
+	}
+	sourceItemID, err := w.reevaluationSourceItemID(ctx, task)
+	if err != nil {
+		return productionTaskOutcome{}, true, err
+	}
+	var source domain.AttentionItem
+	var current *domain.PublicationSuccessor
+	err = w.store.Read(ctx, func(tx *store.ReadTx) error {
+		var err error
+		if source, err = tx.GetAttentionItemRecord(ctx, sourceItemID); err != nil {
+			return err
+		}
+		current, err = tx.CurrentPublicationSuccessor(ctx, task.RunID)
+		return err
 	})
 	if err != nil {
 		return productionTaskOutcome{}, true, err
 	}
-	if exhausted {
-		outcome, err := w.blockUnpublishedReentry(
-			ctx, task, run, checkpoint, checkpoint.Artifacts, productionBlockReentryRoundLimit)
-		return outcome, true, err
+	if !task.Successor.ReentersOnRerunOf(source) {
+		return productionTaskOutcome{}, false, nil
 	}
-	return productionTaskOutcome{}, true, nil
+	switch {
+	case current == nil:
+		return productionTaskOutcome{}, true, fmt.Errorf(
+			"rerun %q has no publication cycle: %w", task.intentKey(), domain.ErrParentKeyMismatch)
+	case current.PublicationID() == task.Successor.PublicationID():
+		// The re-entry reuses the cycle's verification under the profile the
+		// cycle binds. A rerun under another profile is an ordinary
+		// reevaluation, as before the re-entry existed.
+		replaced := task
+		replaced.reevaluation = nil
+		cycle, err := w.loadBinding(ctx, replaced)
+		if err != nil {
+			return productionTaskOutcome{}, true, err
+		}
+		if cycle.profile.ProfileDigest != binding.profile.ProfileDigest {
+			return productionTaskOutcome{}, false, nil
+		}
+		exhausted, err := w.sealReentry(ctx, task, false)
+		if err != nil {
+			return productionTaskOutcome{}, true, err
+		}
+		if exhausted {
+			checkpoint, found, err := w.loadCheckpoint(ctx, replaced, cycle)
+			if err != nil || !found {
+				return productionTaskOutcome{}, true, errors.Join(err, domain.ErrParentKeyMismatch)
+			}
+			outcome, err := w.blockUnpublishedReentry(
+				ctx, task, binding.run, checkpoint, checkpoint.Artifacts, productionBlockReentryRoundLimit)
+			return outcome, true, err
+		}
+	case current.Version != domain.PublicationSuccessorReentryVersion ||
+		current.Origin != domain.PublicationSuccessorBaseAdvance ||
+		current.PredecessorItemID != task.Successor.ReadyItemID():
+		return productionTaskOutcome{}, true, fmt.Errorf(
+			"rerun %q is not of the run's current publication cycle: %w",
+			task.intentKey(), domain.ErrParentKeyMismatch)
+	}
+	accepted, err := w.recordCompletedTerminalAtBoundary(ctx, binding.run, task, signet.PublicationReevaluationReentered)
+	if err != nil {
+		return productionTaskOutcome{}, true, err
+	}
+	if err := w.finishTask(ctx, task); err != nil {
+		return productionTaskOutcome{}, true, err
+	}
+	return productionTaskOutcome{completed: true, accepted: accepted}, true, nil
 }
 
 // blockUnpublishedReentry ends a base-advance re-entry on a cause a retry
@@ -165,7 +293,8 @@ func (w *productionPublicationWorkflow) blockUnpublishedReentry(
 }
 
 // reconcileUnpublishedReentry runs one re-entry cycle for a task that
-// re-enters before publication. checkout is at the base the head was imported
+// re-enters before publication, whether it makes the run's first publication
+// or updates the run's pull request. checkout is at the base the head was imported
 // over, with the head imported; it is the checkout the publisher pushes from.
 func (w *productionPublicationWorkflow) reconcileUnpublishedReentry(
 	ctx context.Context,
@@ -380,6 +509,10 @@ func (w *productionPublicationWorkflow) reconcileUnpublishedReentry(
 	}
 	candidate.BaseSHA = newBase
 	candidate.ProspectiveMergeSHA = merge
+	// A successor re-entry updates the pull request its chain published.
+	if err := w.bindSuccessorCandidate(ctx, task, &candidate); err != nil {
+		return productionTaskOutcome{}, err
+	}
 	history, err := publish.LoadDispositionHistory(ctx, w.store, candidate, reviewInstructions.ResultDigest)
 	if err != nil {
 		if errors.Is(err, domain.ErrReviewConfigurationUnapproved) {

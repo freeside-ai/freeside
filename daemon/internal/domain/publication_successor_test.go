@@ -29,6 +29,7 @@ func TestPublicationSuccessorVersions(t *testing.T) {
 		{"publication-successor-v3", reentry},
 		{"publication-successor-v4", externalReviewSuccessor()},
 		{"publication-successor-v5", unpublishedReentrySuccessor()},
+		{"publication-successor-v6", successorReentrySuccessor()},
 	} {
 		t.Run(fixture.name, func(t *testing.T) {
 			if err := fixture.value.Validate(); err != nil {
@@ -67,6 +68,8 @@ func TestPublicationSuccessorVersions(t *testing.T) {
 			value = externalReviewSuccessor()
 		case domain.PublicationSuccessorUnpublishedBaseAdvance:
 			value = unpublishedReentrySuccessor()
+		case domain.PublicationSuccessorBaseAdvance:
+			value = successorReentrySuccessor()
 		case domain.PublicationSuccessorRemediation:
 		}
 		if err := value.Validate(); err != nil {
@@ -137,6 +140,16 @@ func unpublishedReentrySuccessor() domain.PublicationSuccessor {
 		RunID: "run-1", PredecessorItemID: "production-ready-run-1", PriorReviewInvocationID: "review-1", ReviewRound: 2,
 		Reentry: &domain.PublicationSuccessorReentry{
 			Reason: domain.ReadinessInvalidationBaseAdvanced, BaseSHA: "base-2", HeadSHA: "head-1",
+		},
+	}
+}
+
+func successorReentrySuccessor() domain.PublicationSuccessor {
+	return domain.PublicationSuccessor{
+		Version: domain.PublicationSuccessorReentryVersion, Origin: domain.PublicationSuccessorBaseAdvance,
+		RunID: "run-1", PredecessorItemID: "production-ready-feedback-return-1", PriorReviewInvocationID: "review-2", ReviewRound: 3,
+		Reentry: &domain.PublicationSuccessorReentry{
+			Reason: domain.ReadinessInvalidationBaseAdvanced, BaseSHA: "base-2", HeadSHA: "head-2",
 		},
 	}
 }
@@ -447,5 +460,96 @@ func TestPublicationSuccessorReentryRemediation(t *testing.T) {
 		if changed.AllowsRemediation(request) {
 			t.Fatalf("head_changed re-entry admitted remediation at round %d", round)
 		}
+	}
+}
+
+// A successor re-entry is the unpublished re-entry's shape under its own
+// version and origin (issue #2111): it keeps an unpublished head and reviews
+// its prospective merge into the newer base, but updates the pull request the
+// run already published instead of opening one.
+func TestPublicationSuccessorSuccessorReentry(t *testing.T) {
+	valid := successorReentrySuccessor()
+	if err := valid.Validate(); err != nil {
+		t.Fatal(err)
+	}
+	if !valid.ReentersUnpublishedHead() || valid.RepublishesUnpublished() {
+		t.Fatal("successor re-entry is not an unpublished-head re-entry that updates a pull request")
+	}
+	for name, mutate := range map[string]func(*domain.PublicationSuccessor){
+		"head changed":         func(s *domain.PublicationSuccessor) { s.Reentry.Reason = domain.ReadinessInvalidationHeadChanged },
+		"no base":              func(s *domain.PublicationSuccessor) { s.Reentry.BaseSHA = "" },
+		"no reentry":           func(s *domain.PublicationSuccessor) { s.Reentry = nil },
+		"command":              func(s *domain.PublicationSuccessor) { s.CommandID = "return-1" },
+		"feedback invocation":  func(s *domain.PublicationSuccessor) { s.FeedbackInvocationID = "inv-feedback-1" },
+		"reevaluation command": func(s *domain.PublicationSuccessor) { s.ReevaluationCommandID = "rerun-1" },
+		"unpublished origin":   func(s *domain.PublicationSuccessor) { s.Origin = domain.PublicationSuccessorUnpublishedBaseAdvance },
+		"unpublished version":  func(s *domain.PublicationSuccessor) { s.Version = domain.PublicationUnpublishedReentryVersion },
+		"published version":    func(s *domain.PublicationSuccessor) { s.Version = domain.PublicationReentryVersion },
+		"continuation version": func(s *domain.PublicationSuccessor) { s.Version = domain.PublicationContinuationVersion },
+	} {
+		invalid := successorReentrySuccessor()
+		mutate(&invalid)
+		if invalid.Validate() == nil {
+			t.Errorf("%s: invalid successor re-entry accepted: %#v", name, invalid)
+		}
+	}
+	request := domain.RemediationInvocationIntent{
+		RunID: valid.RunID, SuccessorPublicationID: valid.PublicationID(), Round: valid.ReviewRound,
+		BaseSHA: valid.Reentry.BaseSHA, HeadSHA: valid.Reentry.HeadSHA,
+	}
+	if valid.AllowsRemediation(request) {
+		t.Fatal("successor re-entry admitted remediation")
+	}
+	merge := domain.ProspectiveMergeIdentity{BaseSHA: valid.Reentry.BaseSHA, HeadSHA: valid.Reentry.HeadSHA, MergeSHA: "merge-1"}
+	if !valid.AllowsProspectiveMerge(merge) {
+		t.Fatal("successor re-entry refused its prospective merge")
+	}
+	merge.HeadSHA = "head-1"
+	if valid.AllowsProspectiveMerge(merge) {
+		t.Fatal("successor re-entry admitted a merge of another head")
+	}
+}
+
+// Only a cycle that updates a pull request with a head of its own re-enters
+// after a base advance, and a rerun re-enters only from that cycle's own
+// base-advance block.
+func TestPublicationSuccessorReentersOnRerun(t *testing.T) {
+	feedback := domain.PublicationSuccessor{
+		Version: domain.PublicationContinuationVersion, Origin: domain.PublicationSuccessorFeedback,
+		RunID: "run-1", CommandID: "return-1", FeedbackInvocationID: "inv-feedback-1",
+		PredecessorItemID: "production-ready-run-1", PriorReviewInvocationID: "review-2", ReviewRound: 3,
+	}
+	remediation := feedback
+	remediation.Origin, remediation.FeedbackInvocationID, remediation.ReevaluationCommandID = domain.PublicationSuccessorRemediation, "", "rerun-1"
+	for _, admits := range []domain.PublicationSuccessor{feedback, remediation, successorReentrySuccessor()} {
+		if !admits.AdmitsSuccessorReentry() {
+			t.Errorf("%s cycle does not admit a successor re-entry", admits.EffectiveOrigin())
+		}
+	}
+	for _, refuses := range []domain.PublicationSuccessor{
+		reentrySuccessor(), externalReviewSuccessor(), unpublishedReentrySuccessor(),
+	} {
+		if refuses.AdmitsSuccessorReentry() {
+			t.Errorf("%s cycle admits a successor re-entry", refuses.EffectiveOrigin())
+		}
+	}
+	own := domain.AttentionItem{ID: feedback.BlockedItemID(), Reason: domain.PublicationBlockBaseAdvanced}
+	if !feedback.ReentersOnRerunOf(own) {
+		t.Fatal("a rerun of the cycle's own base-advance block does not re-enter")
+	}
+	trust := own
+	trust.Reason = domain.PublicationBlockTrust
+	reevaluated := own
+	reevaluated.ID = "production-publish-blocked-reevaluation/cnVuLTE/rerun-1"
+	for name, item := range map[string]domain.AttentionItem{"trust block": trust, "reevaluated block": reevaluated} {
+		if feedback.ReentersOnRerunOf(item) {
+			t.Errorf("a rerun of the %s re-enters", name)
+		}
+	}
+	unpublished := unpublishedReentrySuccessor()
+	if unpublished.ReentersOnRerunOf(domain.AttentionItem{
+		ID: unpublished.BlockedItemID(), Reason: domain.PublicationBlockBaseAdvanced,
+	}) {
+		t.Fatal("an unpublished re-entry's own block re-enters as a successor")
 	}
 }

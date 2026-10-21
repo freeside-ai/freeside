@@ -37,6 +37,7 @@ const (
 	PublicationReevaluationPublished       = domain.PublicationReevaluationPublished
 	PublicationReevaluationBlocked         = domain.PublicationReevaluationBlocked
 	PublicationReevaluationReviewEscalated = domain.PublicationReevaluationReviewEscalated
+	PublicationReevaluationReentered       = domain.PublicationReevaluationReentered
 )
 
 // PublicationReevaluationRequest is the immutable signet-to-engine intent.
@@ -532,6 +533,12 @@ func publicationBlockResolutionAuthenticated(
 					return false, fmt.Errorf(
 						"run %q completed blocked reevaluation has no durable item: %w",
 						run.ID, domain.ErrParentKeyMismatch)
+				case PublicationReevaluationReentered:
+					// A re-entered rerun sealed the run's next cycle, whose
+					// own blocked item, not this chain, is current.
+					return false, fmt.Errorf(
+						"run %q reentered reevaluation still owns its publication cycle: %w",
+						run.ID, domain.ErrParentKeyMismatch)
 				}
 			}
 			if !publicationBlockReasonsMatch(observation, matchedReasons) {
@@ -908,13 +915,20 @@ func (s *Service) applyRerunTrustEvaluation(
 	}
 	// Candidate authorizations are unique per repository, head, and profile.
 	// Re-gate before concluding the item so an unchanged profile rolls the
-	// command back and leaves the operator a live decision surface.
+	// command back and leaves the operator a live decision surface. A cycle
+	// blocked only because its base advanced is the exception when it can
+	// re-enter at the newer base (issue #2111): no trust evaluation refused
+	// it, and its rerun re-enters under the authorization it already holds.
+	reenters, err := rerunReentersSuccessor(ctx, &tx.ReadTx, runID, item)
+	if err != nil {
+		return err
+	}
 	authorizations, err := tx.ListCandidateAuthorizations(ctx, project.Repo, item.PRHeadSHA)
 	if err != nil {
 		return err
 	}
 	for _, authorization := range authorizations {
-		if authorization.TrustProfileDigest == profile.ProfileDigest {
+		if !reenters && authorization.TrustProfileDigest == profile.ProfileDigest {
 			return fmt.Errorf(
 				"trust profile %q already evaluated for %s@%s: %w",
 				profile.ProfileDigest, project.Repo, item.PRHeadSHA, domain.ErrDuplicate,
@@ -965,4 +979,20 @@ func nextPublicationReviewRound(
 		return 0, err
 	}
 	return round, nil
+}
+
+// rerunReentersSuccessor reports whether a rerun of item re-enters the run's
+// current publication cycle at a newer base, which the engine answers by
+// sealing the re-entry instead of reevaluating.
+func rerunReentersSuccessor(
+	ctx context.Context, tx *store.ReadTx, runID domain.RunID, item domain.AttentionItem,
+) (bool, error) {
+	if item.Reason != domain.PublicationBlockBaseAdvanced {
+		return false, nil
+	}
+	current, err := tx.CurrentPublicationSuccessor(ctx, runID)
+	if err != nil {
+		return false, err
+	}
+	return current != nil && current.ReentersOnRerunOf(item), nil
 }

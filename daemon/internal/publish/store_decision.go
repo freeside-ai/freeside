@@ -218,8 +218,9 @@ func (d *storePublicationDecision) prepare(
 			// exact target tip observed by this audit. An already-committed
 			// intent may continue after a base advance: effects may have begun,
 			// and recovery must converge them instead of stranding a branch.
-			// An unpublished re-entry publishes against its authority's base,
-			// the tip an earlier audit observed, and is held to the same rule.
+			// An unpublished or successor re-entry publishes against its
+			// authority's base, the tip an earlier audit observed, and is
+			// held to the same rule.
 			requiredBase := auth.BaseSHA
 			if reentry != nil {
 				requiredBase, err = reentryPublicationBase(*reentry, c)

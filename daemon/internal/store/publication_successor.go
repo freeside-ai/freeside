@@ -132,6 +132,8 @@ func (tx *ReadTx) validatePublicationSuccessor(ctx context.Context, successor do
 		return tx.validateReentrySuccessor(ctx, successor)
 	case domain.PublicationSuccessorUnpublishedBaseAdvance:
 		return tx.validateUnpublishedReentrySuccessor(ctx, successor)
+	case domain.PublicationSuccessorBaseAdvance:
+		return tx.validateSuccessorReentrySuccessor(ctx, successor)
 	case domain.PublicationSuccessorRemediation:
 		if err := tx.requireUninvalidatedPredecessor(ctx, successor); err != nil {
 			return err
@@ -257,14 +259,69 @@ func (tx *ReadTx) validateUnpublishedReentrySuccessor(ctx context.Context, succe
 	return nil
 }
 
+// validateSuccessorReentrySuccessor is the every-read gate of an authority
+// that re-enters a successor cycle refused for a base advance after the run's
+// pull request already existed (issue #2111). The successor's head was never
+// pushed, so, as for an unpublished re-entry, the store proves each
+// coordinate from its own records:
+//
+//   - The head is the one the round before the cycle reviewed, and the
+//     cycle's round follows it. That review was at another base.
+//   - The predecessor is the ready item of a feedback, remediation
+//     continuation, or earlier successor re-entry cycle that never
+//     published, and an ancestor before it did: that ancestor's pull request
+//     is the one the cycle updates.
+//   - The base is the tip of a workflow audit the daemon itself recorded for
+//     the run's repository.
+//
+// Sealing adds the same moment-bound checks as an unpublished re-entry
+// (requireCurrentUnpublishedReentry).
+func (tx *ReadTx) validateSuccessorReentrySuccessor(ctx context.Context, successor domain.PublicationSuccessor) error {
+	reentry := successor.Reentry
+	prior, err := tx.GetReviewRecord(ctx, successor.PriorReviewInvocationID)
+	if err != nil || prior.RunID != successor.RunID || prior.Round+1 != successor.ReviewRound ||
+		prior.HeadSHA != reentry.HeadSHA || prior.BaseSHA == "" || prior.BaseSHA == reentry.BaseSHA {
+		return errors.Join(err, domain.ErrParentKeyMismatch)
+	}
+	parent, err := tx.PublicationSuccessorForReadyItem(ctx, successor.RunID, successor.PredecessorItemID)
+	if err != nil {
+		return errors.Join(err, domain.ErrParentKeyMismatch)
+	}
+	if !parent.AdmitsSuccessorReentry() {
+		return domain.ErrParentKeyMismatch
+	}
+	var published bool
+	if err := tx.tx.QueryRowContext(ctx, `SELECT EXISTS (SELECT 1 FROM ready_item_pr_bindings WHERE item_id = ?)`,
+		successor.PredecessorItemID).Scan(&published); err != nil {
+		return err
+	}
+	if published {
+		return domain.ErrParentKeyMismatch
+	}
+	if _, err := tx.publishedReadyAtOrBefore(ctx, successor.RunID, parent.PredecessorItemID); err != nil {
+		return errors.Join(err, domain.ErrParentKeyMismatch)
+	}
+	audits, err := tx.runWorkflowAudits(ctx, successor.RunID)
+	if err != nil {
+		return err
+	}
+	if !slices.ContainsFunc(audits, func(record WorkflowAuditRecord) bool {
+		return record.Audit.AuditedCommitSHA == reentry.BaseSHA
+	}) {
+		return fmt.Errorf("re-entry base %s is no recorded audit tip: %w", reentry.BaseSHA, domain.ErrParentKeyMismatch)
+	}
+	return nil
+}
+
 // requireCurrentUnpublishedReentry is the seal-time half of the unpublished
-// re-entry gate. A new cycle may start only from the run's current chain tip,
-// only toward the tip the daemon's latest audit of the repository observed,
-// and only while the publication it replaces still holds its reservation and
-// no committed intent: an intent may already have reached the forge, and
-// recovery must converge it instead of opening a second pull request.
+// and successor re-entry gates. A new cycle may start only from the run's
+// current chain tip, only toward the tip the daemon's latest audit of the
+// repository observed, and only while the publication it replaces still
+// holds its reservation and no committed intent: an intent may already have
+// reached the forge, and recovery must converge it instead of opening a
+// second pull request or pushing a second head.
 func (tx *ReadTx) requireCurrentUnpublishedReentry(ctx context.Context, successor domain.PublicationSuccessor) error {
-	if successor.EffectiveOrigin() != domain.PublicationSuccessorUnpublishedBaseAdvance {
+	if !successor.ReentersUnpublishedHead() {
 		return nil
 	}
 	chain, err := tx.PublicationSuccessorChain(ctx, successor.RunID)
@@ -761,7 +818,7 @@ func (tx *ReadTx) AuthenticateSuccessorProducer(ctx context.Context, successor d
 	if producer == successor.FeedbackInvocationID {
 		return tx.validatePublicationSuccessor(ctx, successor)
 	}
-	if successor.RepublishesUnpublished() {
+	if successor.ReentersUnpublishedHead() {
 		// The cycle publishes the head its predecessor reviewed and admits
 		// no remediation, so its only producer is the invocation that
 		// exported that head at an earlier base.
@@ -904,7 +961,9 @@ func (tx *ReadTx) PublicationSuccessorTarget(ctx context.Context, runID domain.R
 		ItemID: ready.ItemID, Identity: ready.PublicationIdentity, HeadSHA: ready.HeadSHA,
 		PRNumber: ready.PRNumber, Branch: outcome.Branch,
 	}
-	if successor.Reentry != nil {
+	// A successor re-entry (v6) names the head it will push, not the one on
+	// the pull request, which is still the published ancestor's.
+	if successor.Reentry != nil && !successor.ReentersUnpublishedHead() {
 		target.HeadSHA = successor.Reentry.HeadSHA
 	}
 	return target, target.Validate(ready.BaseRef)

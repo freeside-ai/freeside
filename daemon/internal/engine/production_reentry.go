@@ -157,10 +157,12 @@ func (t productionPublicationTask) admittedBaseSHA() string {
 
 // reentersBeforePublication reports whether the task publishes, against a
 // newer base, the head a task before it verified and reviewed but could not
-// publish because the target base advanced (issue #2058). Such a cycle starts
-// no remediation, so every task under its authority carries that head.
+// publish because the target base advanced: the run's first publication
+// (issue #2058) or a successor's update of its pull request (issue #2111).
+// Such a cycle starts no remediation, so every task under its authority
+// carries that head.
 func (t productionPublicationTask) reentersBeforePublication() bool {
-	return t.Successor != nil && t.Successor.RepublishesUnpublished() &&
+	return t.Successor != nil && t.Successor.ReentersUnpublishedHead() &&
 		t.HeadSHA == t.Successor.Reentry.HeadSHA
 }
 
