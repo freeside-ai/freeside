@@ -1285,7 +1285,7 @@ func (w *productionPublicationWorkflow) quarantineTaskMarkers(
 		verified := transition.remediation
 		if verified.request.BaseSHA != task.Replay.ObservedBaseSHA ||
 			!reflect.DeepEqual(verified.publication, task.Publication) {
-			return classifyRemediationMarkerError(domain.ErrParentKeyMismatch)
+			return taskMarkerMismatch(domain.ErrParentKeyMismatch)
 		}
 		if task.ProducingInvocationID == verified.request.InvocationID {
 			return nil
@@ -1306,7 +1306,7 @@ func (w *productionPublicationWorkflow) quarantineTaskMarkers(
 			task.Successor.ReviewRound > verified.request.Round+1
 		if priorFeedback || laterFeedback {
 			if err := authenticateTaskSuccessor(ctx, tx, task); err != nil {
-				return classifyRemediationMarkerError(err)
+				return taskMarkerMismatch(err)
 			}
 		}
 		if laterFeedback {
@@ -1315,7 +1315,7 @@ func (w *productionPublicationWorkflow) quarantineTaskMarkers(
 		priorProducer := task.ProducingInvocationID == productionInvocationID(task.RunID) ||
 			priorFeedback || priorRemediation && producerRound < verified.request.Round
 		if !priorProducer || task.HeadSHA != verified.request.HeadSHA {
-			return classifyRemediationMarkerError(domain.ErrParentKeyMismatch)
+			return taskMarkerMismatch(domain.ErrParentKeyMismatch)
 		}
 		return nil
 	})
@@ -1333,6 +1333,15 @@ func (w *productionPublicationWorkflow) quarantineTaskMarkers(
 		}
 		return false, err
 	}
+	if errors.Is(err, errTaskMarkerMismatch) {
+		if quarantineErr := recordProductionQuarantine(
+			ctx, w.store, w.attention, productionTaskMarkerQuarantinePrefix,
+			run.ID, run.ProjectID, productionQuarantineTaskMarker,
+		); quarantineErr != nil {
+			return false, errors.Join(err, quarantineErr)
+		}
+		return true, nil
+	}
 	if errors.Is(err, errRemediationMarkerUnreadable) {
 		if quarantineErr := recordProductionQuarantine(
 			ctx, w.store, w.attention, remediationMarkerQuarantinePrefix,
@@ -1345,15 +1354,33 @@ func (w *productionPublicationWorkflow) quarantineTaskMarkers(
 	if err != nil {
 		return false, err
 	}
-	if err := releaseProductionQuarantine(
-		ctx, w.store, w.attention, productionMarkerQuarantinePrefix, task.RunID); err != nil {
-		return false, err
-	}
-	if err := releaseProductionQuarantine(
-		ctx, w.store, w.attention, remediationMarkerQuarantinePrefix, task.RunID); err != nil {
-		return false, err
+	for _, prefix := range []string{
+		productionMarkerQuarantinePrefix,
+		remediationMarkerQuarantinePrefix,
+		productionTaskMarkerQuarantinePrefix,
+	} {
+		if err := releaseProductionQuarantine(
+			ctx, w.store, w.attention, prefix, task.RunID); err != nil {
+			return false, err
+		}
 	}
 	return false, nil
+}
+
+// errTaskMarkerMismatch marks a publication task that disagrees with its
+// run's remediation record although the record itself authenticates. Only the
+// publication lane makes that comparison, so it holds the run under its own
+// notice: under the shared remediation notice, the production lane, which
+// authenticates the record alone, retired it every pass and this lane raised
+// a new one, notifying every device each time (#2102).
+var errTaskMarkerMismatch = errors.New("publication task disagrees with its remediation marker")
+
+func taskMarkerMismatch(err error) error {
+	err = classifyRemediationMarkerError(err)
+	if errors.Is(err, errRemediationMarkerUnreadable) {
+		return errors.Join(errTaskMarkerMismatch, err)
+	}
+	return err
 }
 
 func (w *productionPublicationWorkflow) loadProductionRequest(

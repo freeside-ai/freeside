@@ -1937,6 +1937,9 @@ const (
 		"daemon that can read the task runs again."
 	productionQuarantineScopeConflict = "Scope-conflict evidence or its decision could not be authenticated for this candidate. " +
 		"Publication is held and the required out-of-scope work remains unmet. Correct the evidence or start a new run under an approved path policy."
+	productionQuarantineTaskMarker = "A stored production publication task does not match its run's " +
+		"remediation record. The run's publication is held, and resumes by itself once a daemon " +
+		"that can authenticate the task runs again."
 )
 
 // Quarantine notices are per run and per row class: the marker's notice is
@@ -1946,6 +1949,10 @@ const (
 	productionMarkerQuarantinePrefix = "production-marker-quarantined-"
 	productionTaskQuarantinePrefix   = "production-task-quarantined-"
 	productionScopeQuarantinePrefix  = "production-scope-quarantined-"
+	// The task-marker notice is the publication lane's own: only that lane
+	// compares a task with the run's remediation record, so a lane that
+	// authenticates the marker alone must not retire it.
+	productionTaskMarkerQuarantinePrefix = "production-task-marker-quarantined-"
 )
 
 func productionQuarantineItemID(runID domain.RunID) domain.ItemID {
@@ -2231,6 +2238,9 @@ func productionQuarantineNoticeFor(prefix, reason string) bool {
 	}
 	if prefix == productionTaskQuarantinePrefix {
 		return reason == productionQuarantineUnreadableTask
+	}
+	if prefix == productionTaskMarkerQuarantinePrefix {
+		return reason == productionQuarantineTaskMarker
 	}
 	if prefix == specificationMarkerQuarantinePrefix {
 		return reason == specificationQuarantineUnreadable
