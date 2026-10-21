@@ -26,7 +26,7 @@ import (
 // bounding set launches, the CLI itself runs as UID 1001, and the bundle at
 // instructionBundlePath is readable there only once the seeder relaxes its
 // mode (ward's instructionSeederCommand). A complete credentialed run under
-// the drop is the operator's scripts/run-real-work.sh, not a unit test. The
+// the drop is the operator's `freesided deputy` run, not a unit test. The
 // setup token is read from the identity-bound read-only volume only inside
 // the launcher and never enters AgentSpec.Env.
 const (

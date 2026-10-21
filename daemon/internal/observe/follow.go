@@ -503,7 +503,7 @@ const (
 )
 
 // AllSupervisionStates is the single registration point for the snapshot
-// lifecycle contract shared with scripts/run-real-work-supervision.sh.
+// lifecycle contract.
 var AllSupervisionStates = []SupervisionState{
 	SupervisionUnobserved,
 	SupervisionPending,

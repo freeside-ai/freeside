@@ -101,7 +101,7 @@ func TestCodexAuthRenewalRefusesHoldAndIdentityMismatch(t *testing.T) {
 			if err == nil || len(leaser.holders) != 0 || refresher.calls != 0 || state.marks != 0 {
 				t.Fatal("refusal acquired a lease or called the provider")
 			}
-			if name == "hold" && !strings.Contains(err.Error(), "--recover-codex-credentials") {
+			if name == "hold" && !strings.Contains(err.Error(), "Recover Expired Reviewer Credentials") {
 				t.Fatal("hold lacks recovery command")
 			}
 		})

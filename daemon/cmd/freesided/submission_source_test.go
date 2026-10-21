@@ -379,8 +379,8 @@ func mustDecodePublication(t *testing.T, body string) engine.ProductionPublicati
 	return publication
 }
 
-// run-real-work.sh --resume-session feeds a finished session's retained
-// inputs back through preflight. A session that submitted before the rule
+// `freesided preflight -submission-id` re-checks a finished session's
+// retained inputs. A session that submitted before the rule
 // must still resume, and only with the inputs its journal saved.
 func TestPreflightResumesRetainedSourceSubmission(t *testing.T) {
 	t.Parallel()

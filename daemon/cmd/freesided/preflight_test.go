@@ -763,7 +763,7 @@ func TestPreflightFailureFixtures(t *testing.T) {
 					want = "renew-codex"
 				}
 				if tt.name == "Codex re-enrollment hold" {
-					want = "--recover-codex-credentials"
+					want = "Recover Expired Reviewer Credentials"
 				}
 				for _, check := range manifest.Checks {
 					if check.Name == tt.check && !strings.Contains(check.Remediation, want) {
