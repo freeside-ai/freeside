@@ -305,6 +305,24 @@ import Testing
         // Accepted: the synced cancellation keeps the control off the bare button.
         #expect(coordinator.tasks.first { $0.task.id == taskID }?.task.cancellation?.value1.state == .requested)
         #expect(!TaskStopView(coordinator: coordinator, taskID: taskID).showsOnlyTheStopButton)
+        // The menu no longer offers Stop; it stays only for a page's own items.
+        #expect(!TaskStopView(coordinator: coordinator, taskID: taskID).drawsMoreActionsMenu)
+        let copying = TaskStopView(coordinator: coordinator, taskID: taskID, moreActions: [.init(title: "Copy") {}])
+        #expect(!copying.offersStop)
+        #expect(copying.drawsMoreActionsMenu)
+        #expect(!copying.moreActionsMenuIsDisabled)
+    }
+
+    @Test func aPagesOwnItemsKeepTheMenuEnabledWhileStopIsUnavailable() async {
+        let coordinator = await coordinator(MockServer())
+        // No snapshot for the task: Stop cannot be prepared.
+        let stopOnly = TaskStopView(coordinator: coordinator, taskID: "task-missing")
+        #expect(stopOnly.drawsMoreActionsMenu)
+        #expect(stopOnly.moreActionsMenuIsDisabled)
+        let copying = TaskStopView(
+            coordinator: coordinator, taskID: "task-missing", moreActions: [.init(title: "Copy") {}])
+        #expect(copying.offersStop)
+        #expect(!copying.moreActionsMenuIsDisabled)
     }
 
     @Test(arguments: [(503, false), (404, true)])

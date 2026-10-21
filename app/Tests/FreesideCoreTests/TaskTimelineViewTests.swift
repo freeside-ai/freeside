@@ -910,6 +910,58 @@ import Testing
         #expect(Set(owners).count == owners.count)
     }
 
+    /// A row's context-menu item is `Copy` and its label in sentence case,
+    /// with the initialism and the Inbox's name kept.
+    @Test func copyMenuTitlesAreSentenceCase() {
+        let titles = [
+            "Run ID", "Parent Run ID", "Superseded by Run ID", "Verified Head 1", "Approved Specification Digest",
+            "Verification Inbox Item ID 2", "Campaign ID",
+        ].map(TaskTimelinePresentation.copyMenuTitle(for:))
+        #expect(
+            titles == [
+                "Copy run ID", "Copy parent run ID", "Copy superseded by run ID", "Copy verified head 1",
+                "Copy approved specification digest", "Copy verification Inbox item ID 2", "Copy campaign ID",
+            ])
+    }
+
+    /// A run's menu offers one item per row it holds: no parent item without
+    /// a parent, and numbered items when it recorded two verifications.
+    @Test func runCopyItemsFollowTheRunsRows() {
+        let t = Self.instants
+        func verification(_ item: String, at instant: Date) -> Components.Schemas.TaskEvent {
+            .init(
+                verification: .init(value1: .init(item_id: item, _class: .ready_clean, head_sha: "h", base_sha: "b")),
+                kind: .verification_recorded, recorded_at: instant, run_id: "run-x")
+        }
+        let timeline = Components.Schemas.TaskTimeline(
+            as_of_revision: 1, as_of: t[0], task_id: "task-x", project_id: "p",
+            name: .init(text: "n", source: ._operator),
+            events: [verification("item-1", at: t[0]), verification("item-2", at: t[1])],
+            sections: [
+                .init(campaign_id: "campaign-a", events: [], runs: [.init(run_id: "run-x", milestones: [], events: [])])
+            ])
+        let titles = TaskTimelinePresentation.technicalRows(run: timeline.sections[0].runs[0], in: timeline)
+            .map { TaskTimelinePresentation.copyMenuTitle(for: $0.label) }
+        #expect(!titles.contains("Copy parent run ID"))
+        #expect(
+            titles == [
+                "Copy run ID", "Copy verification Inbox item ID 1", "Copy verified head 1", "Copy verified base 1",
+                "Copy verification Inbox item ID 2", "Copy verified head 2", "Copy verified base 2",
+            ])
+    }
+
+    /// `Copy all identifiers` writes each group as a block: its owner on a
+    /// line, each `Label: value` under it, a blank line between blocks.
+    @Test func allIdentifiersTextIsOneBlockPerOwner() {
+        let text = TaskTimelinePresentation.allIdentifiersText([
+            .init(owner: "Task", rows: [.init(label: "Task ID", value: "task-x")]),
+            .init(
+                owner: "Attempt 1",
+                rows: [.init(label: "Run ID", value: "run-1"), .init(label: "Parent Run ID", value: "run-0")]),
+        ])
+        #expect(text == "Task\nTask ID: task-x\n\nAttempt 1\nRun ID: run-1\nParent Run ID: run-0")
+    }
+
     @Test func runTechnicalRowsKeepEveryVerificationItemID() {
         let t = Self.instants
         let runID = "run-x"

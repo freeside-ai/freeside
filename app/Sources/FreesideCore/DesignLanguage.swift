@@ -723,8 +723,11 @@ struct UnverifiedLabel: View {
 /// the newest time), so a closed section still says what it holds. The
 /// summary sits beside the label while both fit one line and stacks under it
 /// when they do not (R22), never truncating either. The caller owns
-/// `isExpanded`, which is how a surface persists the state.
-struct SentenceDisclosure<Content: View>: View {
+/// `isExpanded`, which is how a surface persists the state. `menuItems`
+/// puts a context menu on the toggle alone, so the open content keeps its
+/// own menus and its text selection; nil, for a fold with nothing to
+/// offer, puts none.
+struct SentenceDisclosure<Content: View, MenuItems: View>: View {
     let label: String
     var summary: String? = nil
     /// What the control is called aloud where the drawn label alone would
@@ -732,15 +735,37 @@ struct SentenceDisclosure<Content: View>: View {
     /// speaks the label and summary as drawn.
     var spokenLabel: String? = nil
     @Binding var isExpanded: Bool
+    private let menuItems: (() -> MenuItems)?
     @ViewBuilder let content: () -> Content
+
+    init(
+        label: String, summary: String? = nil, spokenLabel: String? = nil, isExpanded: Binding<Bool>,
+        menuItems: (() -> MenuItems)?, @ViewBuilder content: @escaping () -> Content
+    ) {
+        self.label = label
+        self.summary = summary
+        self.spokenLabel = spokenLabel
+        _isExpanded = isExpanded
+        self.menuItems = menuItems
+        self.content = content
+    }
 
     var body: some View {
         VStack(alignment: .leading, spacing: FreesideLadder.current.moduleGap) {
-            spoken(toggle)
+            spoken(menu(toggle))
                 .accessibilityValue(isExpanded ? "Expanded" : "Collapsed")
             if isExpanded {
                 content()
             }
+        }
+    }
+
+    @ViewBuilder
+    private func menu(_ control: some View) -> some View {
+        if let menuItems {
+            control.copyMenu(menuItems)
+        } else {
+            control
         }
     }
 
@@ -805,6 +830,20 @@ struct SentenceDisclosure<Content: View>: View {
             .font(FreesideFont.trailingSummary)
             .foregroundStyle(Color.inkDim)
             .multilineTextAlignment(.leading)
+    }
+}
+
+extension SentenceDisclosure where MenuItems == EmptyView {
+    init(
+        label: String, summary: String? = nil, spokenLabel: String? = nil, isExpanded: Binding<Bool>,
+        @ViewBuilder content: @escaping () -> Content
+    ) {
+        self.label = label
+        self.summary = summary
+        self.spokenLabel = spokenLabel
+        _isExpanded = isExpanded
+        menuItems = nil
+        self.content = content
     }
 }
 

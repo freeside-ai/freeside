@@ -193,7 +193,13 @@ struct TaskTimelineView: View {
             case .sentence(let sentence): guidanceSentence(sentence)
             case nil: EmptyView()
             }
-            TaskStopView(coordinator: coordinator, taskID: task.id)
+            TaskStopView(
+                coordinator: coordinator, taskID: task.id,
+                moreActions: timeline.map { timeline in
+                    let text = TaskTimelinePresentation.allIdentifiersText(
+                        TaskTimelinePresentation.identifierGroups(timeline, taskID: task.id))
+                    return [.init(title: "Copy all identifiers") { Clipboard.copy(text) }]
+                } ?? [])
         }
     }
 
@@ -280,11 +286,14 @@ struct TaskTimelineView: View {
                     .foregroundStyle(Color.inkDim)
             }
             ForEach(Array(timeline.sections.enumerated()), id: \.offset) { index, section in
+                let ids = TaskTimelinePresentation.technicalRows(section: section)
                 SentenceDisclosure(
                     label: TaskTimelinePresentation.sectionTitle(section, disambiguate: disambiguate),
                     summary: TaskTimelinePresentation.sectionSummary(
                         section, isCurrent: index == 0, now: now, locale: locale, timeZone: timeZone),
-                    isExpanded: fold(.campaign(section.campaign_id))
+                    isExpanded: fold(.campaign(section.campaign_id)),
+                    // A section outside a campaign may hold no id at all.
+                    menuItems: ids.isEmpty ? nil : { copyItems(ids) }
                 ) {
                     sectionBody(section, in: timeline, leadsWithFullCard: index == 0)
                         .padding(.top, 3)
@@ -296,7 +305,9 @@ struct TaskTimelineView: View {
 
     /// The page's one hairline, then its one Identifiers fold (R26), as the
     /// run timeline closes its page: every exact id on the page, grouped by
-    /// what it names, under everything the page says in words.
+    /// what it names, under everything the page says in words. Each card
+    /// keeps a copy menu for its own ids, so a single copy needs no trip
+    /// here.
     private func identifiers(_ timeline: Components.Schemas.TaskTimeline) -> some View {
         TechnicalDetailsSection(
             groups: TaskTimelinePresentation.identifierGroups(timeline, taskID: snapshot.task.id),
@@ -306,6 +317,13 @@ struct TaskTimelineView: View {
         .padding(.top, 18)
         .overlay(alignment: .top) {
             Color.rule.frame(height: 1)
+        }
+    }
+
+    /// One context-menu item per identifier, each copying the exact value.
+    private func copyItems(_ rows: [AttentionDisplay.BindingRow]) -> some View {
+        ForEach(Array(rows.enumerated()), id: \.offset) { _, row in
+            Button(TaskTimelinePresentation.copyMenuTitle(for: row.label)) { Clipboard.copy(row.value) }
         }
     }
 
@@ -385,6 +403,7 @@ struct TaskTimelineView: View {
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
+        .copyMenu { copyItems(TaskTimelinePresentation.technicalRows(run: run, in: timeline)) }
         .accessibilityLabel(TaskTimelinePresentation.runCardAccessibilityLabel(run, in: timeline))
         .accessibilityHint("Shows this run's recorded milestones and invocation observations.")
     }
@@ -437,6 +456,7 @@ struct TaskTimelineView: View {
             }
             .buttonStyle(.plain)
             .freesideFocusRing(cornerRadius: 4)
+            .copyMenu { copyItems(TaskTimelinePresentation.technicalRows(run: run, in: timeline)) }
             .accessibilityValue(isExpanded.wrappedValue ? "Expanded" : "Collapsed")
             if isExpanded.wrappedValue {
                 openRunButton(run, in: timeline, showsTitle: false)
@@ -1176,6 +1196,29 @@ enum TaskTimelinePresentation {
             + [campaigns > 0 ? (campaigns == 1 ? "campaign" : "\(campaigns) campaigns") : nil]
             + [runs > 0 ? "\(runs) \(runs == 1 ? "run" : "runs")" : nil])
             .compactMap { $0 }.joined(separator: " · ")
+    }
+
+    /// Words a copy item keeps capitalized: `ID` is an initialism and
+    /// `Inbox` names the screen.
+    private static let copyTitleKeptWords: Set<String> = ["ID", "Inbox"]
+
+    /// A row's context-menu item: `Copy ` and the row's label in sentence
+    /// case (`Copy parent run ID`, `Copy verified head 1`).
+    static func copyMenuTitle(for label: String) -> String {
+        let words = label.split(separator: " ").map { word in
+            copyTitleKeptWords.contains(String(word)) ? String(word) : word.lowercased()
+        }
+        return (["Copy"] + words).joined(separator: " ")
+    }
+
+    /// `Copy all identifiers`: each group as a block, its owner on a line
+    /// and each `Label: value` under it, a blank line between blocks, for
+    /// pasting into a terminal or an issue.
+    static func allIdentifiersText(_ groups: [IdentifierGroup]) -> String {
+        groups.map { group in
+            ([group.owner] + group.rows.map { "\($0.label): \($0.value)" }).joined(separator: "\n")
+        }
+        .joined(separator: "\n\n")
     }
 
     static func hasRunDetails(_ run: Components.Schemas.TaskTimelineRun) -> Bool {
