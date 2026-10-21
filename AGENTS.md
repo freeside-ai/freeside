@@ -301,7 +301,11 @@ and opt-in live suites. CI uses the same script except daemon lint, which
 uses golangci-lint-action at the same pinned version.
 `.github/workflows/pull-request.yml` has no path filter: it calls reusable
 workflows for changed components and reports `required`. Branch protection
-requires that check and an up-to-date branch, so rebase a PR behind `main`.
+requires that check and an up-to-date branch. Refresh a PR onto the current
+tip before handoff (`docs/agent-workflow.md` §handing-off). After handoff,
+leave a PR behind `main` to the lander (`land-approved-prs`), which refreshes
+it when it selects the PR; refresh it yourself only when the lander hands it
+back (`needs-human`) or the owner asks.
 
 Operator
 tools that are not checks live with their component: installers in
