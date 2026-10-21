@@ -181,7 +181,8 @@ func newCompositionImageFixture(t *testing.T) compositionImageFixture {
 
 func (f compositionImageFixture) observer(t *testing.T, commit string) projectImageBaseObserver {
 	return func() (domain.ProjectImageBaseInputs, error) {
-		return projectimage.ObserveBaseInputs(t.Context(), "git", f.root, commit)
+		return projectimage.ObserveBaseInputs(t.Context(), "git", f.root, commit,
+			domain.ProjectImageInputLayout{Toolchain: domain.ProjectToolchainNPM})
 	}
 }
 
@@ -330,7 +331,7 @@ func TestObserveCompositionBaseInputs(t *testing.T) {
 		}
 	}
 
-	inputs, err := observeCompositionBaseInputs(t.Context(), fetch(42), cfg)
+	inputs, err := observeCompositionBaseInputs(t.Context(), fetch(42), cfg, domain.ProjectImageInputLayout{Toolchain: domain.ProjectToolchainNPM})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -341,13 +342,13 @@ func TestObserveCompositionBaseInputs(t *testing.T) {
 		t.Fatalf("fetched checkout %s survived the observation: %v", fetched, statErr)
 	}
 
-	if _, err := observeCompositionBaseInputs(t.Context(), fetch(7), cfg); !errors.Is(
+	if _, err := observeCompositionBaseInputs(t.Context(), fetch(7), cfg, domain.ProjectImageInputLayout{Toolchain: domain.ProjectToolchainNPM}); !errors.Is(
 		err, domain.ErrRepositoryIdentityMismatch) {
 		t.Fatalf("foreign repository = %v, want ErrRepositoryIdentityMismatch", err)
 	}
 	missing := errors.New("base absent from branch")
 	if _, err := observeCompositionBaseInputs(t.Context(),
-		func(context.Context, string) (int64, error) { return 0, missing }, cfg,
+		func(context.Context, string) (int64, error) { return 0, missing }, cfg, domain.ProjectImageInputLayout{Toolchain: domain.ProjectToolchainNPM},
 	); !errors.Is(err, missing) {
 		t.Fatalf("failed fetch = %v, want the fetch error", err)
 	}

@@ -914,7 +914,7 @@ func validatePreflightProjectImage(
 	}
 	if err := admitProjectImageAtBase(image, cfg.BaseSHA,
 		func() (domain.ProjectImageBaseInputs, error) {
-			return projectimage.ObserveBaseInputs(ctx, "git", cfg.RepositoryCheckout, cfg.BaseSHA)
+			return projectimage.ObserveBaseInputs(ctx, "git", cfg.RepositoryCheckout, cfg.BaseSHA, image.InputLayout())
 		}); err != nil {
 		return err
 	}

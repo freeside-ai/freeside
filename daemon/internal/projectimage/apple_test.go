@@ -137,19 +137,19 @@ func taggedRef(specs []commandSpec, localRef string) string {
 }
 
 func TestAppleRunPreservesRecipeArgvWithRuntimeWorkingDirectory(t *testing.T) {
-	for _, masked := range []bool{false, true} {
+	for _, masked := range []string{"", NPMCachePath, GoModuleCachePath} {
 		for _, argv := range [][]string{
 			{PreparationPath},
 			{"tool", "argument with spaces", "$(opaque)", "*.literal"},
 		} {
-			t.Run(fmt.Sprintf("masked=%t/%s", masked, argv[0]), func(t *testing.T) {
+			t.Run(fmt.Sprintf("masked=%q/%s", masked, argv[0]), func(t *testing.T) {
 				testAppleRunVerificationEnvironment(t, masked, argv)
 			})
 		}
 	}
 }
 
-func testAppleRunVerificationEnvironment(t *testing.T, masked bool, argv []string) {
+func testAppleRunVerificationEnvironment(t *testing.T, masked string, argv []string) {
 	t.Helper()
 	runner := &managedRunner{next: func(_ context.Context, spec commandSpec) (commandOutput, error) {
 		if len(spec.Args) == 0 || spec.Args[0] != "run" {
@@ -160,7 +160,7 @@ func testAppleRunVerificationEnvironment(t *testing.T, masked bool, argv []strin
 	backend := appleBackend{containerPath: "/usr/bin/container", runner: runner}
 	if _, err := backend.Run(t.Context(), runSpec{
 		ImageRef:  "example.test/image@sha256:" + strings.Repeat("a", 64),
-		Workspace: "/host/workspace", Argv: argv, MaskCache: masked,
+		Workspace: "/host/workspace", Argv: argv, MaskedCache: masked,
 	}); err != nil {
 		t.Fatal(err)
 	}
@@ -172,8 +172,8 @@ func testAppleRunVerificationEnvironment(t *testing.T, masked bool, argv []strin
 		"run", "--rm", "--cidfile", args[3], "--label", args[5],
 		"--network", "none",
 	}
-	if masked {
-		wantPrefix = append(wantPrefix, "--tmpfs", NPMCachePath)
+	if masked != "" {
+		wantPrefix = append(wantPrefix, "--tmpfs", masked)
 	}
 	wantPrefix = append(wantPrefix,
 		"--volume", "/host/workspace:/workspace",
@@ -568,6 +568,7 @@ func TestAppleCheckProvenanceBindsLabelsAndEmbeddedFiles(t *testing.T) {
 		BaseBuildRef: "base:local", BaseDigest: testBaseDigest,
 		Repository:   "freeasinbird/gh-imgup",
 		RepositoryID: 1278475858, CommitSHA: testCommit, RecipeDigest: recipeDigest,
+		Layout:      domain.ProjectImageInputLayout{Toolchain: domain.ProjectToolchainNPM},
 		NodeVersion: nodeToolchainVersion, NodeToolchainArchiveSHA256: nodeArchiveDigest,
 		PackageJSONSHA256: manifestSHA256(packageJSON),
 		PackageLockSHA256: manifestSHA256(packageLock),
@@ -713,6 +714,151 @@ func TestAppleCheckProvenanceBindsLabelsAndEmbeddedFiles(t *testing.T) {
 	unbound.ImageDigest = ""
 	if err := backend.CheckProvenance(t.Context(), ref, unbound); err == nil {
 		t.Fatal("CheckProvenance ran without a built-image digest to bind")
+	}
+	unlaid := spec
+	unlaid.Layout = domain.ProjectImageInputLayout{}
+	if err := backend.CheckProvenance(t.Context(), ref, unlaid); err == nil {
+		t.Fatal("CheckProvenance ran without an input layout to select the toolchain")
+	}
+	t.Run("Go image", testAppleCheckProvenanceBindsGoImage)
+}
+
+// A Go image carries the Go and golangci-lint archives, the Go launcher at
+// every launcher path, the module-specific preparation helper, and the
+// go.mod and go.sum seeds; CheckProvenance proves each against the spec.
+func testAppleCheckProvenanceBindsGoImage(t *testing.T) {
+	goArchive, lintArchive := []byte("pinned Go archive"), []byte("pinned golangci-lint archive")
+	goMod, goSum := []byte("module example.test/m\n\ngo 1.26\n"), []byte("example.test/dep v1.0.0 h1:x=\n")
+	spec := provenanceSpec{
+		ImageDigest:  testImageDigest,
+		BaseBuildRef: "base:local", BaseDigest: testBaseDigest,
+		Repository:   "freeside-ai/freeside",
+		RepositoryID: 1023456789, CommitSHA: testCommit,
+		RecipeDigest: verify.RecipeDigest([]byte(testRecipe)),
+		Layout: domain.ProjectImageInputLayout{
+			Toolchain: domain.ProjectToolchainGo, GoModuleDir: "daemon",
+		},
+		GoVersion:                 goToolchainVersion,
+		GoToolchainArchiveSHA256:  fmt.Sprintf("%x", sha256.Sum256(goArchive)),
+		GolangciLintVersion:       golangciLintVersion,
+		GolangciLintArchiveSHA256: fmt.Sprintf("%x", sha256.Sum256(lintArchive)),
+		GoModSHA256:               manifestSHA256(goMod),
+		GoSumSHA256:               manifestSHA256(goSum),
+	}
+	ref := "project:local"
+	labels := map[string]string{
+		"org.opencontainers.image.title":                             "freeside-project-image",
+		"ai.freeside.base.digest":                                    spec.BaseDigest,
+		"ai.freeside.project.repository":                             spec.Repository,
+		"ai.freeside.project.repository-id":                          "1023456789",
+		"ai.freeside.project.commit":                                 spec.CommitSHA,
+		"ai.freeside.project.recipe-digest":                          string(spec.RecipeDigest),
+		"ai.freeside.project.toolchain.go.version":                   spec.GoVersion,
+		"ai.freeside.project.toolchain.go.archive-sha256":            spec.GoToolchainArchiveSHA256,
+		"ai.freeside.project.toolchain.golangci-lint.version":        spec.GolangciLintVersion,
+		"ai.freeside.project.toolchain.golangci-lint.archive-sha256": spec.GolangciLintArchiveSHA256,
+	}
+	runner := &recordingRunner{run: func(call commandSpec) (commandOutput, error) {
+		if len(call.Args) >= 3 && call.Args[0] == "image" && call.Args[1] == "inspect" {
+			if call.Args[2] == spec.BaseBuildRef {
+				return inspectOutputFor(spec.BaseBuildRef, testBaseDigest), nil
+			}
+			return inspectOutputFor(ref, testImageDigest), nil
+		}
+		return commandOutput{}, nil
+	}}
+	var baseConfig, projectConfig ociImageConfig
+	baseConfig.RootFS.DiffIDs = []string{"sha256:base-layer"}
+	projectConfig.Config.Labels = labels
+	projectConfig.RootFS.DiffIDs = []string{"sha256:base-layer", "sha256:project-layer"}
+	busybox := []byte("approved static BusyBox")
+	files := map[string][]byte{
+		ward.ProjectRecipePath:   []byte(testRecipe),
+		PreparationPath:          []byte(goPrepareScript("daemon")),
+		goToolchainArchivePath:   goArchive,
+		golangciLintArchivePath:  lintArchive,
+		goLauncherPath:           []byte(goToolchainLauncher),
+		gofmtLauncherPath:        []byte(goToolchainLauncher),
+		golangciLintLauncherPath: []byte(goToolchainLauncher),
+		busyboxPath:              busybox,
+		seedGoModPath:            goMod,
+		seedGoSumPath:            goSum,
+	}
+	modes := map[string]int64{
+		ward.ProjectRecipePath: 0o600, PreparationPath: 0o700,
+		goToolchainArchivePath: 0o644, golangciLintArchivePath: 0o644,
+		goLauncherPath: 0o755, gofmtLauncherPath: 0o755, golangciLintLauncherPath: 0o755,
+		busyboxPath: 0o755,
+	}
+	var requested map[string]int64
+	backend := appleBackend{
+		containerPath: "container", runner: runner,
+		readEvidence: func(_ context.Context, imageRef, _ string, wanted map[string]int64) (ociEvidence, error) {
+			if imageRef == spec.BaseBuildRef {
+				return ociEvidence{
+					Config: baseConfig, Files: map[string][]byte{busyboxPath: busybox},
+					FileModes: map[string]int64{busyboxPath: 0o755},
+				}, nil
+			}
+			requested = wanted
+			return ociEvidence{Config: projectConfig, Files: files, FileModes: modes}, nil
+		},
+	}
+	if err := backend.CheckProvenance(t.Context(), ref, spec); err != nil {
+		t.Fatal(err)
+	}
+	for path := range files {
+		if _, ok := requested[path]; !ok {
+			t.Errorf("Go evidence targets omit %s", path)
+		}
+	}
+	if _, ok := requested[nodeToolchainArchivePath]; ok {
+		t.Error("Go evidence targets require the Node archive a Go image does not carry")
+	}
+
+	reject := func(what string, mutate, restore func()) {
+		t.Helper()
+		mutate()
+		if err := backend.CheckProvenance(t.Context(), ref, spec); err == nil {
+			t.Errorf("CheckProvenance accepted %s", what)
+		}
+		restore()
+	}
+	for _, label := range []string{
+		"ai.freeside.project.toolchain.go.version",
+		"ai.freeside.project.toolchain.go.archive-sha256",
+		"ai.freeside.project.toolchain.golangci-lint.version",
+		"ai.freeside.project.toolchain.golangci-lint.archive-sha256",
+	} {
+		original := labels[label]
+		reject("a mismatched "+label+" label",
+			func() { labels[label] = "0" }, func() { labels[label] = original })
+	}
+	for _, path := range []string{
+		goToolchainArchivePath, golangciLintArchivePath,
+		goLauncherPath, gofmtLauncherPath, golangciLintLauncherPath,
+		seedGoModPath, seedGoSumPath, PreparationPath,
+	} {
+		original := files[path]
+		reject("tampered "+path,
+			func() { files[path] = []byte("tampered") }, func() { files[path] = original })
+		reject("missing "+path,
+			func() { delete(files, path) }, func() { files[path] = original })
+	}
+	for _, path := range []string{goToolchainArchivePath, golangciLintArchivePath, goLauncherPath} {
+		original := modes[path]
+		reject("a wrong mode on "+path,
+			func() { modes[path] = 0o4755 }, func() { modes[path] = original })
+	}
+	// The helper is rendered for the recorded module directory: an image
+	// whose helper checks another directory hydrates another module.
+	reject("a preparation helper for another module directory",
+		func() { files[PreparationPath] = []byte(goPrepareScript("")) },
+		func() { files[PreparationPath] = []byte(goPrepareScript("daemon")) })
+	swapped := spec
+	swapped.GoModSHA256, swapped.GoSumSHA256 = spec.GoSumSHA256, spec.GoModSHA256
+	if err := backend.CheckProvenance(t.Context(), ref, swapped); err == nil {
+		t.Error("CheckProvenance accepted Go manifest hashes bound to the wrong seed files")
 	}
 }
 

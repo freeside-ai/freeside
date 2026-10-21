@@ -27,6 +27,8 @@ type fakeSource struct {
 	copies  int
 	// sources records the repository each copy read from.
 	sources []string
+	// fixture writes each copied tree; nil writes the npm fixture.
+	fixture func(string) error
 }
 
 func (f *fakeSource) Fetch(
@@ -45,6 +47,9 @@ func (f *fakeSource) Copy(_ context.Context, source, commit, destination string)
 	f.sources = append(f.sources, source)
 	if commit != testCommit {
 		return errors.New("unexpected copied commit")
+	}
+	if f.fixture != nil {
+		return f.fixture(destination)
 	}
 	return writeNPMFixture(destination)
 }
@@ -84,6 +89,8 @@ type fakeBackend struct {
 	runs           []runSpec
 	builds         []buildSpec
 	publishes      []publishSpec
+	// probe is the argv the fake treats as the cache-masked negative probe.
+	probe          []string
 	negativeOutput []byte
 	negativeErr    error
 	maskedFailure  string
@@ -103,6 +110,7 @@ func newFakeBackend() *fakeBackend {
 	return &fakeBackend{
 		baseDigest: testBaseDigest, localDigest: testImageDigest,
 		published:      domain.ImageRef("127.0.0.1:5100/freeside-project-freeasinbird-gh-imgup@" + testImageDigest),
+		probe:          []string{"npm", "ci", "--ignore-scripts"},
 		negativeOutput: []byte("npm error request to https://registry.npmjs.org/pkg failed: ENOTFOUND"),
 		negativeErr:    errors.New("exit status 1"),
 	}
@@ -152,8 +160,8 @@ func (f *fakeBackend) CheckProvenance(_ context.Context, ref string, spec proven
 func (f *fakeBackend) Run(_ context.Context, spec runSpec) (runResult, error) {
 	spec.Argv = append([]string{}, spec.Argv...)
 	f.runs = append(f.runs, spec)
-	if spec.MaskCache {
-		if !slices.Equal(spec.Argv, []string{"npm", "ci", "--ignore-scripts"}) {
+	if spec.MaskedCache != "" {
+		if !slices.Equal(spec.Argv, f.probe) {
 			if spec.Argv[0] == f.maskedFailure {
 				if f.maskedRunErr {
 					return runResult{}, errors.New("masked runtime failed")
@@ -354,7 +362,7 @@ func TestBuildBindsExactInputsAndProvesEveryFreshWorkspace(t *testing.T) {
 			t.Errorf("recipe %d reused the previous fresh workspace", index)
 		}
 	}
-	if !backend.runs[7].MaskCache ||
+	if backend.runs[7].MaskedCache != NPMCachePath ||
 		!slices.Equal(backend.runs[7].Argv, []string{"npm", "ci", "--ignore-scripts"}) {
 		t.Fatalf("negative run = %+v", backend.runs[7])
 	}
@@ -494,7 +502,7 @@ func TestBuildProvesCacheIndependentRecipeInFreshMaskedWorkspaces(t *testing.T) 
 	}
 	for index, argv := range [][]string{{"npm", "run", "lint"}, {"npm", "run", "typecheck"}, {"npm", "test"}} {
 		preparation, command := backend.runs[8+index*2], backend.runs[9+index*2]
-		if !preparation.MaskCache || !command.MaskCache ||
+		if preparation.MaskedCache != NPMCachePath || command.MaskedCache != NPMCachePath ||
 			!slices.Equal(preparation.Argv, []string{PreparationPath}) || !slices.Equal(command.Argv, argv) {
 			t.Fatalf("masked proof %d changed preparation, recipe or masking: %+v / %+v", index, preparation, command)
 		}
@@ -652,7 +660,7 @@ func TestBuildContextRejectsSymlinkedManifest(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(source, "package-lock.json"), []byte("{}"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	err := createBuildContext(filepath.Join(t.TempDir(), "context"), source, validRequest(), "sha256:recipe")
+	_, err := createBuildContext(filepath.Join(t.TempDir(), "context"), source, validRequest(), "sha256:recipe")
 	if err == nil || !strings.Contains(err.Error(), "not a regular file") {
 		t.Fatalf("createBuildContext = %v, want non-regular refusal", err)
 	}
@@ -668,7 +676,7 @@ func TestBuildContextRejectsAlternateNPMInputs(t *testing.T) {
 			if err := os.WriteFile(filepath.Join(source, name), []byte("{}"), 0o600); err != nil {
 				t.Fatal(err)
 			}
-			err := createBuildContext(
+			_, err := createBuildContext(
 				filepath.Join(t.TempDir(), "context"),
 				source,
 				validRequest(),
@@ -687,10 +695,12 @@ func TestBuildContextPreparationBindsNPMInputs(t *testing.T) {
 		t.Fatal(err)
 	}
 	contextDir := filepath.Join(t.TempDir(), "context")
-	if err := createBuildContext(
-		contextDir, source, validRequest(), "sha256:recipe",
-	); err != nil {
+	layout, err := createBuildContext(contextDir, source, validRequest(), "sha256:recipe")
+	if err != nil {
 		t.Fatal(err)
+	}
+	if layout != (domain.ProjectImageInputLayout{Toolchain: domain.ProjectToolchainNPM}) {
+		t.Fatalf("layout = %+v, want npm at the root", layout)
 	}
 	preparation, err := os.ReadFile(filepath.Join(contextDir, "prepare")) //nolint:gosec // fixed file under test-owned build context
 	if err != nil {

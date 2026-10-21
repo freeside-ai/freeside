@@ -2377,7 +2377,7 @@ func requireProjectImageServesBase(
 	if image.CommitSHA == baseSHA {
 		return nil
 	}
-	inputs, err := projectimage.ObserveBaseInputs(ctx, "git", checkoutDir, baseSHA)
+	inputs, err := projectimage.ObserveBaseInputs(ctx, "git", checkoutDir, baseSHA, image.InputLayout())
 	if errors.Is(err, verify.ErrCommitFileUnreadable) {
 		return fmt.Errorf("%w: %w (image %s)", domain.ErrProjectImageIncompatible, err, image.ImageRef)
 	}

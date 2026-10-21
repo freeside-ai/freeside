@@ -17,13 +17,14 @@ import (
 )
 
 // This digest is recorded in every project image and compared with the running
-// binary's before an image is reused at another commit. It changes whenever
-// the preparation helper, the Node launcher, the Containerfile template, or the
-// Node pin does, and from then on every image built by an earlier binary is
-// usable only at its build commit until the operator rebuilds it. Update the
-// pin when that is the intended cost of the edit, and say so in the change.
+// binary's before an image is reused at another commit. It changes whenever a
+// preparation helper, a launcher, a Containerfile template, or a toolchain pin
+// of either toolchain does, and from then on every image built by an earlier
+// binary is usable only at its build commit until the operator rebuilds it.
+// Update the pin when that is the intended cost of the edit, and say so in the
+// change.
 func TestPreparationDigestPinsTheBuilderSources(t *testing.T) {
-	const want = "sha256:5c2e06016b95b136214f516f45d231072307f876abadb4ec7e694bc402b99b66"
+	const want = "sha256:a0262752cf52c1826b9cdff9619ad19b89a95a6124332363fed163df14a37369"
 	got := PreparationDigest()
 	if !contentaddr.Valid(string(got)) {
 		t.Fatalf("PreparationDigest() = %q, want a content address", got)
@@ -31,7 +32,37 @@ func TestPreparationDigestPinsTheBuilderSources(t *testing.T) {
 	if got != want {
 		t.Fatalf("PreparationDigest() = %s, want %s: the builder's fixed sources changed", got, want)
 	}
+
+	sources := preparationSources()
+	for name, source := range map[string]string{
+		"npm preparation helper":     prepareScript,
+		"Node launcher":              nodeToolchainLauncher,
+		"npm Containerfile":          renderNPMContainerfile(Request{}, ""),
+		"Node version":               nodeToolchainVersion,
+		"Node archive hash":          nodeToolchainArchiveSHA256,
+		"Go preparation helper":      goPrepareScript(""),
+		"Go launcher":                goToolchainLauncher,
+		"Go Containerfile":           renderGoContainerfile(Request{}, ""),
+		"Go version":                 goToolchainVersion,
+		"Go archive hash":            goToolchainArchiveSHA256,
+		"golangci-lint version":      golangciLintVersion,
+		"golangci-lint archive hash": golangciLintArchiveSHA256,
+	} {
+		if !slices.Contains(sources, source) {
+			t.Errorf("PreparationDigest does not address the %s", name)
+		}
+	}
+	for index := range sources {
+		changed := slices.Clone(sources)
+		changed[index] += " "
+		if preparationDigest(changed) == got {
+			t.Errorf("changing preparation source %d leaves the digest unchanged", index)
+		}
+	}
 }
+
+// npmLayout is the layout of every image recorded before the Go path.
+var npmLayout = domain.ProjectImageInputLayout{Toolchain: domain.ProjectToolchainNPM}
 
 type baseInputsRepo struct {
 	t   *testing.T
@@ -112,7 +143,7 @@ func TestObserveBaseInputsReadsEachInputAtTheExactCommit(t *testing.T) {
 	}
 	observe := func(t *testing.T, commit string) domain.ProjectImageBaseInputs {
 		t.Helper()
-		inputs, err := ObserveBaseInputs(t.Context(), "git", repo.dir, commit)
+		inputs, err := ObserveBaseInputs(t.Context(), "git", repo.dir, commit, npmLayout)
 		if err != nil {
 			t.Fatalf("ObserveBaseInputs: %v", err)
 		}
@@ -231,10 +262,10 @@ func TestObserveBaseInputsRefusesANonRegularManifest(t *testing.T) {
 		t.Fatal(err)
 	}
 	commit := repo.commit(nil)
-	if _, err := ObserveBaseInputs(t.Context(), "git", repo.dir, commit); !errors.Is(err, verify.ErrCommitFileUnreadable) {
+	if _, err := ObserveBaseInputs(t.Context(), "git", repo.dir, commit, npmLayout); !errors.Is(err, verify.ErrCommitFileUnreadable) {
 		t.Fatalf("ObserveBaseInputs = %v, want ErrCommitFileUnreadable", err)
 	}
-	if _, err := ObserveBaseInputs(t.Context(), "git", repo.dir, "HEAD"); !errors.Is(err, verify.ErrInvalidOptions) {
+	if _, err := ObserveBaseInputs(t.Context(), "git", repo.dir, "HEAD", npmLayout); !errors.Is(err, verify.ErrInvalidOptions) {
 		t.Fatalf("symbolic revision = %v, want ErrInvalidOptions", err)
 	}
 }
@@ -294,12 +325,12 @@ func TestObserveBaseInputsPinsOnceAndClosesItsReader(t *testing.T) {
 	git, check := countedCommitGit(t)
 	scratch := t.TempDir()
 	t.Setenv("TMPDIR", scratch)
-	if _, err := ObserveBaseInputs(t.Context(), git, repo.dir, base); err != nil {
+	if _, err := ObserveBaseInputs(t.Context(), git, repo.dir, base, npmLayout); err != nil {
 		t.Fatal(err)
 	}
 	check(5, 3)
 	// A later call opens its own reader, including one whose read fails.
-	if _, err := ObserveBaseInputs(t.Context(), "git", repo.dir, strings.Repeat("0", 40)); !errors.Is(err, verify.ErrGitPlumbing) {
+	if _, err := ObserveBaseInputs(t.Context(), "git", repo.dir, strings.Repeat("0", 40), npmLayout); !errors.Is(err, verify.ErrGitPlumbing) {
 		t.Fatalf("missing commit = %v, want plumbing fault", err)
 	}
 	entries, err := os.ReadDir(scratch)

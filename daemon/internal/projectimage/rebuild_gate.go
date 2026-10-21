@@ -73,7 +73,7 @@ func EvaluateRebuild(
 			Needed: true, Refusal: clause, Detail: fmt.Sprintf(format, args...), Head: head,
 		}
 	}
-	head, err := observeBaseInputs(ctx, reader, headSHA)
+	head, err := observeBaseInputs(ctx, reader, headSHA, image.InputLayout())
 	if errors.Is(err, verify.ErrCommitFileUnreadable) {
 		if image.Environment == nil {
 			return RebuildDecision{Head: domain.ProjectImageBaseInputs{CommitSHA: headSHA}}, nil
@@ -97,7 +97,7 @@ func EvaluateRebuild(
 		return refuse(head, RebuildRefusalUnsupportedInput,
 			"the candidate contains %s", strings.Join(head.UnsupportedInputs, ", ")), nil
 	}
-	base, err := observeBaseInputs(ctx, reader, baseSHA)
+	base, err := observeBaseInputs(ctx, reader, baseSHA, image.InputLayout())
 	if err != nil {
 		return RebuildDecision{}, fmt.Errorf("observe project-image inputs at base %s: %w", baseSHA, err)
 	}

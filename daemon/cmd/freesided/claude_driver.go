@@ -1515,6 +1515,7 @@ type exactBaseFetcher func(ctx context.Context, dir string) (repositoryID int64,
 // the remote's base branch does.
 func observeCompositionBaseInputs(
 	ctx context.Context, fetch exactBaseFetcher, cfg claudeDriverConfig,
+	layout domain.ProjectImageInputLayout,
 ) (domain.ProjectImageBaseInputs, error) {
 	scratch, err := os.MkdirTemp("", "freesided-project-image-base-")
 	if err != nil {
@@ -1533,7 +1534,7 @@ func observeCompositionBaseInputs(
 	}
 	// "git" from PATH is the binary the transport that fetched dir runs
 	// (claudeTransport leaves TransportOptions.GitPath at its default).
-	return projectimage.ObserveBaseInputs(ctx, "git", dir, cfg.BaseSHA)
+	return projectimage.ObserveBaseInputs(ctx, "git", dir, cfg.BaseSHA, layout)
 }
 
 // wardEnforceableEgressProfiles is the closed set of writer egress profiles
@@ -1646,7 +1647,7 @@ func composeClaudeDriver(
 								return 0, err
 							}
 							return checkout.RepositoryID(), nil
-						}, cfg)
+						}, cfg, image.InputLayout())
 					return err
 				})
 				return inputs, err
