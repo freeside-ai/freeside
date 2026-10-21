@@ -3457,18 +3457,14 @@
         /// The pieces the task surfaces share, by day and by dusk: the three
         /// status-chip cuts (one long enough to wrap), a sentence disclosure
         /// closed and open, the navigation link, and a newest-first rail with
-        /// its filled current marker over hollow prior rings.
+        /// its filled current marker over a hollow prior ring and a stage
+        /// start.
         private func taskStyleSurfaces() -> [Surface] {
-            let rail = DecisionStageRailPresentation.timeline(entries: [
-                .init(
-                    id: "2", title: "Review round 3", detail: "Findings",
-                    timestamp: FreesideFormat.shortTime(
-                        screenshotNow, now: screenshotNow, locale: Locale(identifier: "en_US_POSIX"),
-                        timeZone: screenshotTimeZone),
-                    state: .current),
-                .init(id: "1", title: "Implementation completed", detail: "Pass 2", state: .completed),
-                .init(id: "0", title: "Run submitted", state: .completed),
-            ])
+            let rail: [TimelineRail.Row] = [
+                .init(kind: .event, label: "Review round 3 · Findings", recordedAt: screenshotNow, isNewest: true),
+                .init(kind: .event, label: "Implementation completed · Pass 2", recordedAt: nil),
+                .init(kind: .stageStart(nil), label: "Run submitted", recordedAt: nil),
+            ]
             return [ColorScheme.light, .dark].map { scheme in
                 Surface(
                     name: "task-style-\(scheme)", width: 390, colorScheme: scheme,
@@ -3492,9 +3488,7 @@
                                     .frame(maxWidth: .infinity, alignment: .leading)
                             }
                             FreesideLink(title: "Open run history")
-                            StageRail(
-                                title: nil, presentation: rail, axis: .vertical, showsSummaryText: false,
-                                accessibilityStyle: .entries)
+                            TimelineRail(rows: rail)
                         }.padding(24).foregroundStyle(Color.ink).background(Color.ground)))
             }
         }

@@ -503,17 +503,11 @@ struct TaskTimelineView: View {
                     .font(FreesideFont.cardBody)
                     .foregroundStyle(Color.inkDim)
             } else {
-                StageRail(
-                    title: nil,
-                    presentation: .timeline(
-                        entries: TaskTimelinePresentation.milestoneEntries(
-                            run,
-                            reviewRounds: coordinator.timelinesByRunID[run.run_id]?.review?.value1.rounds ?? [],
-                            stages: stages(of: run.run_id),
-                            now: now, locale: locale, timeZone: timeZone)),
-                    axis: .vertical,
-                    showsSummaryText: false,
-                    accessibilityStyle: .entries)
+                TimelineRail(
+                    rows: TaskTimelinePresentation.milestoneRows(
+                        run,
+                        reviewRounds: coordinator.timelinesByRunID[run.run_id]?.review?.value1.rounds ?? [],
+                        stages: stages(of: run.run_id)))
             }
         }
         if TaskTimelinePresentation.hasRunDetails(run) {
@@ -708,7 +702,7 @@ enum TaskTimelinePresentation {
     /// chip and hold callout repeat.
     static func newestStage(_ rows: [TimelineRail.Row]) -> Components.Schemas.StageName? {
         for row in rows {
-            if case .stageStart(let stage) = row.kind { return stage }
+            if case .stageStart(let stage?) = row.kind { return stage }
         }
         return nil
     }
@@ -944,34 +938,23 @@ enum TaskTimelinePresentation {
         return nil
     }
 
-    /// The daemon's milestones as rail entries in the order received (newest
-    /// first), the first one current. Not reversed: the run rail reverses
-    /// because its source is oldest first; this source already leads with
-    /// the newest. With the run's review rounds loaded, each milestone names
-    /// its invocation's role and the findings adjudications that started a
+    /// The run card's milestones as rail rows, newest first, read the way
+    /// the run's own page reads them. The task history holds them newest
+    /// first, so they are reversed to the oldest-first order the run page's
+    /// rows take. With
+    /// the run's review rounds loaded, each milestone names its
+    /// invocation's role and the findings adjudications that started a
     /// remediation join the rail.
-    static func milestoneEntries(
+    static func milestoneRows(
         _ run: Components.Schemas.TaskTimelineRun, reviewRounds: [Components.Schemas.RunReviewRound] = [],
-        stages: [Components.Schemas.Stage] = [], now: Date = Date(), locale: Locale = .current,
-        timeZone: TimeZone = .current
-    ) -> [DecisionStageRailPresentation.Entry] {
-        let newestFirst = run.milestones.enumerated().map { index, milestone in
-            DecisionStageRailPresentation.Entry(
-                id: "\(index)-\(milestone.kind.rawValue)-\(milestone.recorded_at.timeIntervalSince1970)",
-                title: RunDisplay.label(milestone.kind),
-                detail: RunHistoryPresentation.detail(milestone),
-                context: RunHistoryPresentation.roleContext(
-                    invocationID: milestone.invocation_id, reviewRounds: reviewRounds, stages: stages),
-                timestamp: FreesideFormat.shortTime(
-                    milestone.recorded_at, now: now, locale: locale, timeZone: timeZone),
-                instant: milestone.recorded_at,
-                state: index == 0 ? .current : .completed)
-        }
-        return Array(
-            RunHistoryPresentation.insertingAdjudications(
-                into: newestFirst.reversed(), invocationIDs: run.milestones.reversed().map(\.invocation_id),
-                reviewRounds: reviewRounds, now: now, locale: locale, timeZone: timeZone
-            ).reversed())
+        stages: [Components.Schemas.Stage] = []
+    ) -> [TimelineRail.Row] {
+        RunHistoryPresentation.rows(
+            milestones: run.milestones.reversed(),
+            context: {
+                RunHistoryPresentation.roleContext(invocationID: $0, reviewRounds: reviewRounds, stages: stages)
+            },
+            reviewRounds: reviewRounds)
     }
 
     /// The header's one meta line: project, issue, lifecycle, source.

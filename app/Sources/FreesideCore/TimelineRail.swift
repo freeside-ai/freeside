@@ -16,7 +16,10 @@ struct TimelineRail: View {
             case event
             /// An event that records a failure. The rail marks it in wax.
             case failure
-            case stageStart(Components.Schemas.StageName)
+            /// The start of a stage, named when the rail knows which: a run
+            /// rail marks a run's submission without naming the stage it
+            /// enters, since only the task's events track where it stands.
+            case stageStart(Components.Schemas.StageName?)
         }
 
         let kind: Kind
@@ -90,7 +93,7 @@ struct TimelineRail: View {
 
     /// A row's marker. A stage start keeps its green and a failure its wax
     /// at the head of the rail, where any other entry takes the ink dot.
-    static func marker(_ row: Row) -> ChronologyMarker.Kind {
+    nonisolated static func marker(_ row: Row) -> ChronologyMarker.Kind {
         switch row.kind {
         case .stageStart: .stageStart
         case .failure: .failure
