@@ -136,15 +136,16 @@ enum TaskHistoryFixtures {
 
     /// Folds for a capture of what a campaign holds: every campaign starts
     /// collapsed, so a surface that is about the current campaign's runs
-    /// opens it.
+    /// opens it; `identifiersOpen` also opens the page's Identifiers footer.
     @MainActor
     static func currentCampaignOpen(
-        _ history: Components.Schemas.TaskTimeline
+        _ history: Components.Schemas.TaskTimeline, identifiersOpen: Bool = false
     ) -> TaskTimelineDisclosurePreferences {
         let disclosures = TaskTimelineDisclosurePreferences(defaults: nil)
         if let current = history.sections.first {
             disclosures.setExpanded(true, .campaign(current.campaign_id), taskID: history.task_id)
         }
+        disclosures.setExpanded(identifiersOpen, .identifiers, taskID: history.task_id)
         return disclosures
     }
 

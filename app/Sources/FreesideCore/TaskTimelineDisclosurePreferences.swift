@@ -25,6 +25,8 @@ final class TaskTimelineDisclosurePreferences {
         case roundFacts(String)
         /// A run's folded earlier review rounds.
         case priorRounds(String)
+        /// The page's one Identifiers footer.
+        case identifiers
 
         var id: String {
             switch self {
@@ -33,6 +35,7 @@ final class TaskTimelineDisclosurePreferences {
             case .runDetails(let runID): "details:\(runID)"
             case .roundFacts(let invocationID): "facts:\(invocationID)"
             case .priorRounds(let runID): "rounds:\(runID)"
+            case .identifiers: "identifiers"
             }
         }
     }

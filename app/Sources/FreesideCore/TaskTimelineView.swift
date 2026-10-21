@@ -38,10 +38,6 @@ struct TaskTimelineView: View {
     /// a scroll viewport. Rendering through body installs environment values
     /// before the content helpers read locale, time zone, and text size.
     var screenshotTimeline: Components.Schemas.TaskTimeline?
-    /// Screenshot-only: start every technical-details disclosure expanded so a
-    /// baseline can capture the section's rows and copy controls. Live use
-    /// leaves it false, so the sections open only on tap.
-    var expandsTechnicalDetails = false
     /// The gap above the card where a standing notice sits over it. Nil
     /// keeps the detail column's top margin.
     private let topMargin: CGFloat?
@@ -59,7 +55,7 @@ struct TaskTimelineView: View {
         onOpenRun: @escaping (String) -> Void, onOpenInboxItem: ((String) -> Void)? = nil,
         topMargin: CGFloat? = nil,
         screenshotTimeline: Components.Schemas.TaskTimeline? = nil,
-        expandsTechnicalDetails: Bool = false, disclosures: TaskTimelineDisclosurePreferences? = nil
+        disclosures: TaskTimelineDisclosurePreferences? = nil
     ) {
         self.coordinator = coordinator
         self.snapshot = snapshot
@@ -67,7 +63,6 @@ struct TaskTimelineView: View {
         self.onOpenInboxItem = onOpenInboxItem
         self.topMargin = topMargin
         self.screenshotTimeline = screenshotTimeline
-        self.expandsTechnicalDetails = expandsTechnicalDetails
         _disclosures = State(initialValue: disclosures ?? .shared)
     }
 
@@ -131,13 +126,11 @@ struct TaskTimelineView: View {
     /// The composition with fixture data supplied directly, because
     /// ImageRenderer never executes the loading task.
     func screenshotContent(
-        _ timeline: Components.Schemas.TaskTimeline, expandsTechnicalDetails: Bool = false,
-        disclosures: TaskTimelineDisclosurePreferences? = nil
+        _ timeline: Components.Schemas.TaskTimeline, disclosures: TaskTimelineDisclosurePreferences? = nil
     ) -> some View {
         TaskTimelineView(
             coordinator: coordinator, snapshot: snapshot, onOpenRun: onOpenRun,
             onOpenInboxItem: onOpenInboxItem, screenshotTimeline: timeline,
-            expandsTechnicalDetails: expandsTechnicalDetails,
             disclosures: disclosures ?? TaskTimelineDisclosurePreferences(defaults: nil))
     }
 
@@ -146,10 +139,10 @@ struct TaskTimelineView: View {
     }
 
     /// Layer 0: what the work is and where it stands, without scrolling
-    /// (5.6): the screen's name with the state beside it, the task's name,
-    /// the hold when there is one, where to act, and the identity line
-    /// folded into Technical Details. Stop sits last, behind More Actions.
-    /// Internal so a screenshot golden can draw the header on its own.
+    /// (5.6): the screen's name with the state beside it, the task's name
+    /// over its identity line, the hold when there is one, and where to act.
+    /// Stop sits last, behind More Actions. Internal so a screenshot golden
+    /// can draw the header on its own.
     func header(_ timeline: Components.Schemas.TaskTimeline?) -> some View {
         let task = snapshot.task
         let position = TaskDisplay.position(
@@ -157,8 +150,8 @@ struct TaskTimelineView: View {
         let lines = TaskDisplay.rowLines(task, position: position)
         let stage = TaskDisplay.detailStage(task, runs: coordinator.runs, history: timeline)
         return VStack(alignment: .leading, spacing: 12) {
-            // The task id lives in Technical Details; the copy menu keeps a
-            // quick path to it.
+            // The task id lives in the page's Identifiers footer; the copy
+            // menu keeps a quick path to it.
             CardEyebrow(
                 keyword: "Task timeline",
                 chip: StateChip(
@@ -173,6 +166,11 @@ struct TaskTimelineView: View {
                 font: FreesideFont.ask,
                 monoFont: FreesideFont.mono(.title2),
                 lineLimit: 3)
+            // The run timeline's identity line, in the same place and face.
+            Text(TaskTimelinePresentation.headerMetaLine(task))
+                .font(FreesideFont.trailingSummary)
+                .foregroundStyle(Color.inkDim)
+                .fixedSize(horizontal: false, vertical: true)
             if let hold = TaskDisplay.holdCallout(task, position: position, stage: stage) {
                 holdCallout(hold)
             }
@@ -195,11 +193,13 @@ struct TaskTimelineView: View {
             case .sentence(let sentence): guidanceSentence(sentence)
             case nil: EmptyView()
             }
-            TechnicalDetailsSection(
-                rows: TaskTimelinePresentation.technicalRows(taskID: task.id),
-                summary: TaskTimelinePresentation.headerMetaLine(task),
-                startsExpanded: expandsTechnicalDetails)
-            TaskStopView(coordinator: coordinator, taskID: task.id)
+            TaskStopView(
+                coordinator: coordinator, taskID: task.id,
+                moreActions: timeline.map { timeline in
+                    let text = TaskTimelinePresentation.allIdentifiersText(
+                        TaskTimelinePresentation.identifierGroups(timeline, taskID: task.id))
+                    return [.init(title: "Copy all identifiers") { Clipboard.copy(text) }]
+                } ?? [])
         }
     }
 
@@ -257,7 +257,8 @@ struct TaskTimelineView: View {
 
     /// Layer 1 is the task's events, always open: the rail that says which
     /// stage the task is in and how it got there. Under it every campaign,
-    /// the current one included, is one folded disclosure row.
+    /// the current one included, is one folded disclosure row, and the
+    /// page's exact identifiers close it under one hairline.
     private func content(_ timeline: Components.Schemas.TaskTimeline) -> some View {
         let rows = TaskTimelinePresentation.rows(timeline)
         let disambiguate = TaskTimelinePresentation.campaignCount(timeline) > 1
@@ -285,30 +286,55 @@ struct TaskTimelineView: View {
                     .foregroundStyle(Color.inkDim)
             }
             ForEach(Array(timeline.sections.enumerated()), id: \.offset) { index, section in
+                let ids = TaskTimelinePresentation.technicalRows(section: section)
                 SentenceDisclosure(
                     label: TaskTimelinePresentation.sectionTitle(section, disambiguate: disambiguate),
                     summary: TaskTimelinePresentation.sectionSummary(
                         section, isCurrent: index == 0, now: now, locale: locale, timeZone: timeZone),
-                    isExpanded: fold(.campaign(section.campaign_id))
+                    isExpanded: fold(.campaign(section.campaign_id)),
+                    // A section outside a campaign may hold no id at all.
+                    menuItems: ids.isEmpty ? nil : { copyItems(ids) }
                 ) {
                     sectionBody(section, in: timeline, leadsWithFullCard: index == 0)
                         .padding(.top, 3)
                 }
             }
+            identifiers(timeline)
         }
     }
 
-    /// A section's technical details and runs. The current section leads
-    /// with its newest run as a full card; every other run, here and in an
-    /// earlier campaign, is a one-line card that opens to the same content.
+    /// The page's one hairline, then its one Identifiers fold (R26), as the
+    /// run timeline closes its page: every exact id on the page, grouped by
+    /// what it names, under everything the page says in words. Each card
+    /// keeps a copy menu for its own ids, so a single copy needs no trip
+    /// here.
+    private func identifiers(_ timeline: Components.Schemas.TaskTimeline) -> some View {
+        TechnicalDetailsSection(
+            groups: TaskTimelinePresentation.identifierGroups(timeline, taskID: snapshot.task.id),
+            summary: TaskTimelinePresentation.identifiersSummary(timeline),
+            isExpanded: fold(.identifiers)
+        )
+        .padding(.top, 18)
+        .overlay(alignment: .top) {
+            Color.rule.frame(height: 1)
+        }
+    }
+
+    /// One context-menu item per identifier, each copying the exact value.
+    private func copyItems(_ rows: [AttentionDisplay.BindingRow]) -> some View {
+        ForEach(Array(rows.enumerated()), id: \.offset) { _, row in
+            Button(TaskTimelinePresentation.copyMenuTitle(for: row.label)) { Clipboard.copy(row.value) }
+        }
+    }
+
+    /// A section's runs. The current section leads with its newest run as a
+    /// full card; every other run, here and in an earlier campaign, is a
+    /// one-line card that opens to the same content.
     private func sectionBody(
         _ section: Components.Schemas.TaskTimelineSection, in timeline: Components.Schemas.TaskTimeline,
         leadsWithFullCard: Bool
     ) -> some View {
         VStack(alignment: .leading, spacing: 12) {
-            TechnicalDetailsSection(
-                rows: TaskTimelinePresentation.technicalRows(section: section),
-                startsExpanded: expandsTechnicalDetails)
             ForEach(Array(section.runs.enumerated()), id: \.element.run_id) { index, run in
                 if leadsWithFullCard && index == 0 {
                     item(verticalPadding: 18, horizontalPadding: 20) {
@@ -377,6 +403,7 @@ struct TaskTimelineView: View {
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
+        .copyMenu { copyItems(TaskTimelinePresentation.technicalRows(run: run, in: timeline)) }
         .accessibilityLabel(TaskTimelinePresentation.runCardAccessibilityLabel(run, in: timeline))
         .accessibilityHint("Shows this run's recorded milestones and invocation observations.")
     }
@@ -429,6 +456,7 @@ struct TaskTimelineView: View {
             }
             .buttonStyle(.plain)
             .freesideFocusRing(cornerRadius: 4)
+            .copyMenu { copyItems(TaskTimelinePresentation.technicalRows(run: run, in: timeline)) }
             .accessibilityValue(isExpanded.wrappedValue ? "Expanded" : "Collapsed")
             if isExpanded.wrappedValue {
                 openRunButton(run, in: timeline, showsTitle: false)
@@ -454,7 +482,7 @@ struct TaskTimelineView: View {
         coordinator.runs.first { $0.run.id == runID }?.run.stages ?? []
     }
 
-    /// Everything under a run's title: review, milestones, details, ids.
+    /// Everything under a run's title: review, milestones, details.
     @ViewBuilder
     private func runBody(
         _ run: Components.Schemas.TaskTimelineRun, in timeline: Components.Schemas.TaskTimeline
@@ -497,10 +525,6 @@ struct TaskTimelineView: View {
                     .frame(maxWidth: .infinity, alignment: .leading)
             }
         }
-        TechnicalDetailsSection(
-            rows: TaskTimelinePresentation.technicalRows(run: run, in: timeline),
-            summary: TaskTimelinePresentation.technicalSummary(run: run, in: timeline),
-            startsExpanded: expandsTechnicalDetails)
     }
 
     /// The run's role, lineage, and recorded hold as facts. A run this
@@ -870,7 +894,7 @@ enum TaskTimelinePresentation {
 
     /// A run inside a campaign is titled by its attempt; a run outside one,
     /// or missing its attempt number, by its short id, as the run timeline
-    /// does. The exact id is in the run's technical details.
+    /// does. The exact id is in the page's Identifiers footer.
     static func runTitle(_ run: Components.Schemas.TaskTimelineRun) -> String {
         run.attempt_number.map { "Attempt \($0)" } ?? "Run \(ShortIdentifier.short(run.run_id))"
     }
@@ -952,12 +976,12 @@ enum TaskTimelinePresentation {
         return ShortIdentifier.short(runID)
     }
 
-    /// The task header's technical details: the exact task id.
+    /// The task's identifiers: the exact task id.
     static func technicalRows(taskID: String) -> [AttentionDisplay.BindingRow] {
         [.init(label: "Task ID", value: taskID)]
     }
 
-    /// A campaign section's technical details: the exact campaign id and, when
+    /// A campaign section's identifiers: the exact campaign id and, when
     /// the section recorded one, the approved specification digest.
     static func technicalRows(
         section: Components.Schemas.TaskTimelineSection
@@ -974,7 +998,7 @@ enum TaskTimelinePresentation {
         return rows
     }
 
-    /// A run card's technical details: the exact run, parent, and superseding
+    /// A run card's identifiers: the exact run, parent, and superseding
     /// ids, and for every verification a verification event records for this
     /// run, its Inbox item id and the head and base it was run against. A
     /// run that returned to the agent or remediated can record several, each
@@ -1127,16 +1151,74 @@ enum TaskTimelinePresentation {
         return reference.prefix(1).uppercased() + reference.dropFirst()
     }
 
-    /// What a run's closed Technical Details says it holds: one word per
-    /// kind of identifier in `technicalRows(run:in:)`.
-    static func technicalSummary(
-        run: Components.Schemas.TaskTimelineRun, in timeline: Components.Schemas.TaskTimeline
+    /// The page's Identifiers footer, in page order: the task, then each
+    /// campaign, each followed by its attempts, every owner under the name
+    /// the page gives it. An owner with no identifiers (a section outside a
+    /// campaign with no approved specification) is left out.
+    static func identifierGroups(
+        _ timeline: Components.Schemas.TaskTimeline, taskID: String
+    ) -> [IdentifierGroup] {
+        let disambiguate = campaignCount(timeline) > 1
+        var groups = [IdentifierGroup(owner: "Task", rows: technicalRows(taskID: taskID))]
+        for section in timeline.sections {
+            groups.append(
+                .init(owner: sectionTitle(section, disambiguate: disambiguate), rows: technicalRows(section: section)))
+            for run in section.runs {
+                groups.append(
+                    .init(owner: identifierOwner(run, in: timeline), rows: technicalRows(run: run, in: timeline)))
+            }
+        }
+        return groups.filter { !$0.rows.isEmpty }
+    }
+
+    /// A run's name over its ids in the footer and in the copied text, where
+    /// no card stands beside it to say which run it is: its role as
+    /// `runLinkTitle` names it, since a campaign's specification run and its
+    /// first implementation run both carry attempt 1, and the campaign too
+    /// when attempts restart in another one, as the run card's spoken label
+    /// does. A run with no role keeps its card title. No two owners read
+    /// alike.
+    static func identifierOwner(
+        _ run: Components.Schemas.TaskTimelineRun, in timeline: Components.Schemas.TaskTimeline
     ) -> String {
-        var parts = ["run"]
-        if run.parent_run_id != nil { parts.append("parent") }
-        if run.superseded_by != nil { parts.append("superseding") }
-        if !verifications(for: run.run_id, in: timeline).isEmpty { parts.append("verification") }
-        return parts.joined(separator: " · ")
+        let title = run.role == nil ? runTitle(run) : runLinkTitle(run.run_id, in: timeline) ?? runTitle(run)
+        guard !isUniqueRunControl(run, in: timeline), let campaign = campaignID(forRun: run.run_id, in: timeline)
+        else { return title }
+        return "\(title), campaign \(ShortIdentifier.short(campaign))"
+    }
+
+    /// What the closed footer says it holds: `task · campaign · 2 runs`.
+    static func identifiersSummary(_ timeline: Components.Schemas.TaskTimeline) -> String {
+        let campaigns = timeline.sections.count { !technicalRows(section: $0).isEmpty }
+        let runs = timeline.sections.reduce(0) { $0 + $1.runs.count }
+        return
+            (["task"]
+            + [campaigns > 0 ? (campaigns == 1 ? "campaign" : "\(campaigns) campaigns") : nil]
+            + [runs > 0 ? "\(runs) \(runs == 1 ? "run" : "runs")" : nil])
+            .compactMap { $0 }.joined(separator: " · ")
+    }
+
+    /// Words a copy item keeps capitalized: `ID` is an initialism and
+    /// `Inbox` names the screen.
+    private static let copyTitleKeptWords: Set<String> = ["ID", "Inbox"]
+
+    /// A row's context-menu item: `Copy ` and the row's label in sentence
+    /// case (`Copy parent run ID`, `Copy verified head 1`).
+    static func copyMenuTitle(for label: String) -> String {
+        let words = label.split(separator: " ").map { word in
+            copyTitleKeptWords.contains(String(word)) ? String(word) : word.lowercased()
+        }
+        return (["Copy"] + words).joined(separator: " ")
+    }
+
+    /// `Copy all identifiers`: each group as a block, its owner on a line
+    /// and each `Label: value` under it, a blank line between blocks, for
+    /// pasting into a terminal or an issue.
+    static func allIdentifiersText(_ groups: [IdentifierGroup]) -> String {
+        groups.map { group in
+            ([group.owner] + group.rows.map { "\($0.label): \($0.value)" }).joined(separator: "\n")
+        }
+        .joined(separator: "\n\n")
     }
 
     static func hasRunDetails(_ run: Components.Schemas.TaskTimelineRun) -> Bool {

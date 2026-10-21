@@ -160,6 +160,28 @@ import Testing
         }
     }
 
+    /// The Identifiers footer persists under its own stable key, starts
+    /// closed, and is no other fold.
+    @Test func theIdentifiersFoldHasItsOwnKey() throws {
+        #expect(TaskTimelineDisclosurePreferences.Section.identifiers.id == "identifiers")
+        let others: [TaskTimelineDisclosurePreferences.Section] = [
+            .campaign(nil), .campaign("identifiers"), .run("identifiers"), .runDetails("identifiers"),
+            .roundFacts("identifiers"), .priorRounds("identifiers"),
+        ]
+        #expect(!others.map(\.id).contains("identifiers"))
+
+        let suite = "TaskTimelineLayersTests-\(UUID().uuidString)"
+        let defaults = try #require(UserDefaults(suiteName: suite))
+        defer { defaults.removePersistentDomain(forName: suite) }
+        let store = TaskTimelineDisclosurePreferences(defaults: defaults)
+        #expect(!store.isExpanded(.identifiers, taskID: "task-a"))
+        store.setExpanded(true, .identifiers, taskID: "task-a")
+        let reloaded = TaskTimelineDisclosurePreferences(defaults: defaults)
+        #expect(reloaded.isExpanded(.identifiers, taskID: "task-a"))
+        #expect(!reloaded.isExpanded(.identifiers, taskID: "task-b"))
+        #expect(others.allSatisfy { !reloaded.isExpanded($0, taskID: "task-a") })
+    }
+
     @Test func aMemoryOnlyStoreWritesNothing() {
         let store = TaskTimelineDisclosurePreferences(defaults: nil)
         store.setExpanded(true, .campaign("campaign-1"), taskID: "task-a")

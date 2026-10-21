@@ -832,10 +832,134 @@ import Testing
             ])
         #expect(runRows.map(\.value) == [runID, parentID, successorID, "item-ready", "h", "b"])
         #expect(TaskTimelinePresentation.technicalRows(taskID: "task-x").map(\.value) == ["task-x"])
-        // The closed disclosure names one word per kind of row it holds.
+    }
+
+    /// The footer holds the rows each card held, grouped by owner in page
+    /// order: the task, then each campaign followed by its attempts. An
+    /// owner with no identifiers draws no group.
+    @Test func identifierGroupsFollowPageOrder() {
+        let t = Self.instants
+        let timeline = Components.Schemas.TaskTimeline(
+            as_of_revision: 1, as_of: t[0], task_id: "task-x", project_id: "p",
+            name: .init(text: "n", source: ._operator),
+            events: [],
+            sections: [
+                .init(
+                    campaign_id: "campaign-new", events: [],
+                    runs: [
+                        .init(run_id: "run-2", attempt_number: 2, parent_run_id: "run-1", milestones: [], events: []),
+                        .init(run_id: "run-1", attempt_number: 1, milestones: [], events: []),
+                    ]),
+                .init(campaign_id: "campaign-old", events: [], runs: []),
+                .init(events: [], runs: [.init(run_id: "run-legacy", milestones: [], events: [])]),
+            ])
+        let groups = TaskTimelinePresentation.identifierGroups(timeline, taskID: "task-x")
+
         #expect(
-            TaskTimelinePresentation.technicalSummary(run: run, in: timeline)
-                == "run · parent · superseding · verification")
+            groups.map(\.owner) == [
+                "Task", "Campaign campaign-new", "Attempt 2", "Attempt 1", "Campaign campaign-old", "Run run-legacy",
+            ])
+        #expect(groups[0].rows == TaskTimelinePresentation.technicalRows(taskID: "task-x"))
+        #expect(groups[1].rows == TaskTimelinePresentation.technicalRows(section: timeline.sections[0]))
+        #expect(
+            groups[2].rows == TaskTimelinePresentation.technicalRows(run: timeline.sections[0].runs[0], in: timeline))
+        // The section outside a campaign records no id of its own, so only
+        // its run appears.
+        #expect(!groups.map(\.owner).contains("Outside a Campaign"))
+        #expect(TaskTimelinePresentation.identifiersSummary(timeline) == "task · 2 campaigns · 3 runs")
+
+        let single = Components.Schemas.TaskTimeline(
+            as_of_revision: 1, as_of: t[0], task_id: "task-x", project_id: "p",
+            name: .init(text: "n", source: ._operator), events: [],
+            sections: [
+                .init(campaign_id: "campaign-a", events: [], runs: [.init(run_id: "run-a", milestones: [], events: [])])
+            ])
+        #expect(
+            TaskTimelinePresentation.identifierGroups(single, taskID: "task-x").map(\.owner)
+                == ["Task", "Campaign", "Run run-a"])
+        #expect(TaskTimelinePresentation.identifiersSummary(single) == "task · campaign · 1 run")
+    }
+
+    @Test func identifierOwnersTellSharedAttemptNumbersApart() {
+        let t = Self.instants
+        func run(
+            _ id: String, _ role: Components.Schemas.TaskRunRole, attempt: Int
+        ) -> Components.Schemas.TaskTimelineRun {
+            .init(run_id: id, role: .init(value1: role), attempt_number: attempt, milestones: [], events: [])
+        }
+        // The daemon numbers a campaign's specification run and its first
+        // implementation run both attempt 1, and restarts in a new campaign.
+        let timeline = Components.Schemas.TaskTimeline(
+            as_of_revision: 1, as_of: t[0], task_id: "task-x", project_id: "p",
+            name: .init(text: "n", source: ._operator), events: [],
+            sections: [
+                .init(
+                    campaign_id: "campaign-new", events: [],
+                    runs: [run("run-b1", .implementation, attempt: 1), run("run-bs", .specification, attempt: 1)]),
+                .init(
+                    campaign_id: "campaign-old", events: [],
+                    runs: [run("run-a2", .implementation, attempt: 2), run("run-a1", .implementation, attempt: 1)]),
+            ])
+        let owners = TaskTimelinePresentation.identifierGroups(timeline, taskID: "task-x").map(\.owner)
+
+        #expect(
+            owners == [
+                "Task", "Campaign campaign-new", "Implementation attempt 1, campaign campaign-new", "Specification run",
+                "Campaign campaign-old", "Implementation attempt 2", "Implementation attempt 1, campaign campaign-old",
+            ])
+        #expect(Set(owners).count == owners.count)
+    }
+
+    /// A row's context-menu item is `Copy` and its label in sentence case,
+    /// with the initialism and the Inbox's name kept.
+    @Test func copyMenuTitlesAreSentenceCase() {
+        let titles = [
+            "Run ID", "Parent Run ID", "Superseded by Run ID", "Verified Head 1", "Approved Specification Digest",
+            "Verification Inbox Item ID 2", "Campaign ID",
+        ].map(TaskTimelinePresentation.copyMenuTitle(for:))
+        #expect(
+            titles == [
+                "Copy run ID", "Copy parent run ID", "Copy superseded by run ID", "Copy verified head 1",
+                "Copy approved specification digest", "Copy verification Inbox item ID 2", "Copy campaign ID",
+            ])
+    }
+
+    /// A run's menu offers one item per row it holds: no parent item without
+    /// a parent, and numbered items when it recorded two verifications.
+    @Test func runCopyItemsFollowTheRunsRows() {
+        let t = Self.instants
+        func verification(_ item: String, at instant: Date) -> Components.Schemas.TaskEvent {
+            .init(
+                verification: .init(value1: .init(item_id: item, _class: .ready_clean, head_sha: "h", base_sha: "b")),
+                kind: .verification_recorded, recorded_at: instant, run_id: "run-x")
+        }
+        let timeline = Components.Schemas.TaskTimeline(
+            as_of_revision: 1, as_of: t[0], task_id: "task-x", project_id: "p",
+            name: .init(text: "n", source: ._operator),
+            events: [verification("item-1", at: t[0]), verification("item-2", at: t[1])],
+            sections: [
+                .init(campaign_id: "campaign-a", events: [], runs: [.init(run_id: "run-x", milestones: [], events: [])])
+            ])
+        let titles = TaskTimelinePresentation.technicalRows(run: timeline.sections[0].runs[0], in: timeline)
+            .map { TaskTimelinePresentation.copyMenuTitle(for: $0.label) }
+        #expect(!titles.contains("Copy parent run ID"))
+        #expect(
+            titles == [
+                "Copy run ID", "Copy verification Inbox item ID 1", "Copy verified head 1", "Copy verified base 1",
+                "Copy verification Inbox item ID 2", "Copy verified head 2", "Copy verified base 2",
+            ])
+    }
+
+    /// `Copy all identifiers` writes each group as a block: its owner on a
+    /// line, each `Label: value` under it, a blank line between blocks.
+    @Test func allIdentifiersTextIsOneBlockPerOwner() {
+        let text = TaskTimelinePresentation.allIdentifiersText([
+            .init(owner: "Task", rows: [.init(label: "Task ID", value: "task-x")]),
+            .init(
+                owner: "Attempt 1",
+                rows: [.init(label: "Run ID", value: "run-1"), .init(label: "Parent Run ID", value: "run-0")]),
+        ])
+        #expect(text == "Task\nTask ID: task-x\n\nAttempt 1\nRun ID: run-1\nParent Run ID: run-0")
     }
 
     @Test func runTechnicalRowsKeepEveryVerificationItemID() {

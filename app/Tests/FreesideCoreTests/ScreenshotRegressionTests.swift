@@ -2104,17 +2104,18 @@
                         TaskTimelineView(coordinator: coordinator, snapshot: retryTask, onOpenRun: { _ in })
                             .screenshotContent(retryTimeline)
                     )))
-            // The technical-details disclosures expanded (#1379): the exact
-            // task, campaign, and run ids and their copy controls, with the
-            // current campaign open to show them.
+            // The page's Identifiers footer expanded (#1379, #2117): the
+            // exact task, campaign, and run ids grouped by owner, with their
+            // copy controls, and the current campaign open over it.
             surfaces.append(
                 Surface(
                     name: "task-timeline-details",
                     view: AnyView(
                         TaskTimelineView(coordinator: coordinator, snapshot: retryTask, onOpenRun: { _ in })
                             .screenshotContent(
-                                retryTimeline, expandsTechnicalDetails: true,
-                                disclosures: TaskHistoryFixtures.currentCampaignOpen(retryTimeline))
+                                retryTimeline,
+                                disclosures: TaskHistoryFixtures.currentCampaignOpen(
+                                    retryTimeline, identifiersOpen: true))
                     )))
             surfaces.append(
                 Surface(
@@ -2123,8 +2124,9 @@
                     view: AnyView(
                         TaskTimelineView(coordinator: coordinator, snapshot: retryTask, onOpenRun: { _ in })
                             .screenshotContent(
-                                retryTimeline, expandsTechnicalDetails: true,
-                                disclosures: TaskHistoryFixtures.currentCampaignOpen(retryTimeline))
+                                retryTimeline,
+                                disclosures: TaskHistoryFixtures.currentCampaignOpen(
+                                    retryTimeline, identifiersOpen: true))
                     )))
             surfaces.append(
                 Surface(
@@ -2195,7 +2197,7 @@
                         RunTimelineView(coordinator: coordinator, snapshot: activeRun)
                             .screenshotContent(timeline)
                     )))
-            // The header's technical details expanded (#1379): the exact run,
+            // The page's Identifiers footer expanded (#1379): the exact run,
             // task, campaign, and parent ids and the specification digest.
             surfaces.append(
                 Surface(

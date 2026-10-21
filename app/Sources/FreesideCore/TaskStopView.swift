@@ -3,8 +3,18 @@ import SwiftUI
 
 /// Shared Mac/iPhone control. Synced cancellation always outranks a receipt.
 struct TaskStopView: View {
+    /// A page's own item in the More Actions menu, drawn above Stop.
+    struct MoreAction {
+        let title: String
+        let perform: () -> Void
+    }
+
     let coordinator: SyncCoordinator
     let taskID: String
+    /// Offered in every Stop state: a page's own item needs no daemon, so
+    /// the menu holding one stays on the page, and enabled, while Stop is
+    /// unavailable, in flight, or done.
+    var moreActions: [MoreAction] = []
     @State private var confirmation: TaskStopModel.Confirmation?
     @State private var showsExplanation = false
 
@@ -42,8 +52,8 @@ struct TaskStopView: View {
             if model.sending.contains(taskID) {
                 note("Sending Stop…")
             } else if model.confirming.contains(taskID) {
-                // The confirmed Stop is validating current state: no menu,
-                // so a second Stop cannot start beside it.
+                // The confirmed Stop is validating current state: no Stop
+                // in the menu, so a second one cannot start beside it.
                 note("Checking current task state…")
             } else if let pending = model.pending(for: taskID) {
                 if pending.receipt != nil {
@@ -63,24 +73,9 @@ struct TaskStopView: View {
                     )
                     .accessibilityElement(children: .combine)
                 }
-            } else if snapshot?.task.cancellation == nil {
-                // Stop is the page's one consequential action, so it sits
-                // behind the overflow menu the decision card uses, never as
-                // a standing button beside the task's name (5.6). Only the
-                // offer folds away: every state above and below this branch
-                // stays on the page.
-                Menu {
-                    Button("Stop Task…", role: .destructive) {
-                        confirmation = model.prepare(taskID: taskID)
-                    }
-                } label: {
-                    Text("More Actions \u{25BE}")
-                }
-                .menuStyle(.button)
-                .buttonStyle(FreesideActionButtonStyle(tone: .tertiary))
-                .disabled(model.unavailableReason != nil || snapshot == nil)
-                .accessibilityLabel("More task actions")
-                .accessibilityHint("Holds Stop Task, which reviews what stopping this task will do")
+            }
+            if drawsMoreActionsMenu {
+                moreActionsMenu
             }
             if let reason = model.unavailableReason { note(reason) }
             if let message = model.messages[taskID] { note(message, color: .ink) }
@@ -111,6 +106,56 @@ struct TaskStopView: View {
                 Task { await model.confirm(prepared) }
             }
         }
+    }
+
+    /// Whether the menu offers Stop: no Stop is in flight and the task
+    /// carries no cancellation. Every other Stop state speaks in place.
+    var offersStop: Bool {
+        snapshot?.task.cancellation == nil && !model.sending.contains(taskID)
+            && !model.confirming.contains(taskID) && model.pending(for: taskID) == nil
+    }
+
+    private var stopIsUnavailable: Bool { model.unavailableReason != nil || snapshot == nil }
+
+    var drawsMoreActionsMenu: Bool { offersStop || !moreActions.isEmpty }
+
+    /// Disabled, never hidden, while it would hold an unavailable Stop
+    /// alone.
+    var moreActionsMenuIsDisabled: Bool { moreActions.isEmpty && stopIsUnavailable }
+
+    /// Stop is the page's one consequential action, so it sits behind the
+    /// overflow menu the decision card uses, never as a standing button
+    /// beside the task's name (5.6). Only the offer folds away: every Stop
+    /// state stays on the page. While a Stop is in flight or the task is
+    /// cancelled the menu holds the page's own items alone, so a second
+    /// Stop cannot start beside the first.
+    private var moreActionsMenu: some View {
+        Menu {
+            ForEach(Array(moreActions.enumerated()), id: \.offset) { _, action in
+                Button(action.title, action: action.perform)
+            }
+            if offersStop {
+                if !moreActions.isEmpty { Divider() }
+                Button("Stop Task…", role: .destructive) {
+                    confirmation = model.prepare(taskID: taskID)
+                }
+                .disabled(stopIsUnavailable)
+            }
+        } label: {
+            Text("More Actions \u{25BE}")
+        }
+        .menuStyle(.button)
+        .buttonStyle(FreesideActionButtonStyle(tone: .tertiary))
+        .disabled(moreActionsMenuIsDisabled)
+        .accessibilityLabel("More task actions")
+        .accessibilityHint(menuHint)
+    }
+
+    private var menuHint: String {
+        let items =
+            moreActions.map(\.title)
+            + (offersStop ? ["Stop Task, which reviews what stopping this task will do"] : [])
+        return "Holds \(items.formatted(.list(type: .and)))"
     }
 
     /// The Stop the daemon never answered: the request Retry resends.

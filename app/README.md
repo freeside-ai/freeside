@@ -559,7 +559,9 @@ A view opts out only with a reason in a comment beside its
   `copyMenu`, which turns selection off under the menu. The menu offers
   Copy for the text it covers, or that text is selectable elsewhere: the
   task and run timeline headers keep their ID menus, and the task name they
-  cover is selectable on the task timeline.
+  cover is selectable on the task timeline. The task timeline's campaign
+  headers and run-card headers carry menus that copy their exact ids; the
+  same values are selectable in the page's Identifiers footer.
 
 ## Task Cancellation Contract
 
