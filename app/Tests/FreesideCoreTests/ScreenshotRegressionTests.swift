@@ -2128,6 +2128,28 @@
                                 disclosures: TaskHistoryFixtures.currentCampaignOpen(
                                     retryTimeline, identifiersOpen: true))
                     )))
+            // A remediation under way (#2100): the task's events return to
+            // Implementation at the remediator's start, under the decision
+            // that sent the findings there, and the open run card draws the
+            // same decision in its own Milestones rail.
+            let remediationScript = TaskStageFixtures.script(.remediation)
+            let remediation = try TaskStageFixtures.coordinator(
+                TaskStageFixtures.page(.remediation), runTimelines: remediationScript.runTimelines)
+            for (name, width) in [("task-timeline-remediation", CGFloat?.none), ("task-timeline-remediation-390", 390)]
+            {
+                surfaces.append(
+                    Surface(
+                        name: name,
+                        width: width,
+                        view: AnyView(
+                            TaskTimelineView(
+                                coordinator: remediation.coordinator, snapshot: remediation.task, onOpenRun: { _ in }
+                            )
+                            .screenshotContent(
+                                remediationScript.timeline,
+                                disclosures: TaskHistoryFixtures.currentCampaignOpen(remediationScript.timeline))
+                        )))
+            }
             surfaces.append(
                 Surface(
                     name: "operational-summary",
