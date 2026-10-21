@@ -17,7 +17,7 @@ import (
 
 // taskRecordVersion names the record's JSON shape. Any change to that shape,
 // including to signet.TaskTimeline, which the record embeds, changes it.
-const taskRecordVersion = "freeside-task-record-v3"
+const taskRecordVersion = "freeside-task-record-v4"
 
 // taskRecord is what `freesided inspect task` prints: one task's recorded
 // facts, read under one store revision, for an agent to read. It is built
@@ -187,7 +187,8 @@ type taskRecordAgent struct {
 // taskRecordItem leaves out the item's evidence and claims, and its reason:
 // several writers compose the reason from a claim's text, an agent's
 // question, a reviewer's finding, or a driver error that names host paths.
-// The typed causes say why the item exists.
+// The typed causes say why the item exists. The conclusion's reason is kept:
+// the daemon writes it from fixed sentences and identifiers it owns.
 //
 // An item the store refused to reconstruct carries only its id and Error;
 // every other field is null, because nothing else about it was read.
@@ -199,6 +200,7 @@ type taskRecordItem struct {
 	RunID            *domain.RunID                 `json:"run_id"`
 	CreatedAt        *time.Time                    `json:"created_at"`
 	DecidedAt        *time.Time                    `json:"decided_at"`
+	Conclusion       *domain.Conclusion            `json:"conclusion"`
 	HealthDiagnostic *domain.HealthDiagnostic      `json:"health_diagnostic"`
 	ExecutionFailure *domain.ExecutionFailureFacts `json:"execution_failure"`
 	PublishBlock     *domain.PublishBlockFacts     `json:"publish_block"`
@@ -644,7 +646,7 @@ func readTaskRecordItems(
 		}
 		out := taskRecordItem{
 			ID: item.ID, Type: &item.Type, Status: &item.Status, RunID: item.Subject.RunID,
-			CreatedAt: item.CreatedAt, DecidedAt: item.DecidedAt,
+			CreatedAt: item.CreatedAt, DecidedAt: item.DecidedAt, Conclusion: item.Conclusion,
 			HealthDiagnostic: item.HealthDiagnostic, ExecutionFailure: item.ExecutionFailure,
 			PublishBlock: item.PublishBlock, BlockedOn: item.BlockedOn,
 			Commands:   make([]taskRecordCommand, 0, len(commands)),
