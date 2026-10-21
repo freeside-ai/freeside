@@ -803,7 +803,7 @@ an architectural assumption. The Phase 1 security gate is unchanged: the
 production API binds only to loopback or an exact verified Tailscale-owned
 address. A daemon bound to a Tailscale-owned address also serves the same API
 on loopback at the same port, and same-host clients (the Mac app on the
-daemon's own machine, the real-run harness health waits) always use loopback.
+daemon's own machine) always use loopback.
 The reason is that a host VPN can drop a machine's traffic to its own Tailscale
 address (reproduced with Mullvad), stranding a same-host client while other
 tailnet devices still reach the daemon; loopback is the one same-host path no
@@ -5540,7 +5540,7 @@ per-database lock refuses a second daemon on the same `-db` and nothing else.
 - **`ephemeral`:** any number of instances, unsupervised: a foreground run per
   worktree or `mktemp -d` root, listening on `127.0.0.1:0` by default, with no
   launchd registration and no installed app bundle. Agents run this tier and
-  no other. The operator's real-run harness (`scripts/run-real-work.sh`) is
+  no other. The operator's attended real-work run (`freesided deputy`) is
   also `ephemeral`; it shares the `prod` App's publication authority under
   Rules below.
   A debug app build is `ephemeral`.
@@ -5610,8 +5610,8 @@ stay with that run.
   credentials: its `-publication-credentials-dir` and onboard
   `-credentials-dir` resolve under its own root, which starts empty. Test and
   agent instances never hold the `prod` GitHub App's credentials. The one
-  exception is an attended real-work run (today the real-run harness,
-  `scripts/run-real-work.sh`, and phase-exit runs), because it is real work
+  exception is an attended real-work run (`freesided deputy`, which
+  phase-exit runs use), because it is real work
   and publishes as the real App. It uses `prod`'s own publication authority
   state directory and credentials directory (`<root>/daemon/` and
   `<root>/credentials/` in the table), never a copy, and only while it holds
@@ -5651,8 +5651,8 @@ stay with that run.
   credential by a hash of the daemon URL, so moving a supervised port orphans
   the pairing. `ephemeral` listens on port `0` by default and pairs afresh on
   each run. It may take an explicit fixed nonzero port when a paired client
-  must reach the run (the real-run harness pins its listener for the
-  specification-approval gate), but never `7331` or `7332`, the supervised
+  must reach the run (the deputy's `listen` setting pins its listener for
+  the specification-approval gate), but never `7331` or `7332`, the supervised
   tiers' ports.
 - **Only `prod` carries a remote backup destination.** A Section [5.10](#510-coherent-backup-encrypted-checkpoints)
   `BackupPolicy.destination` is allowed in `prod` alone; every tier keeps its
@@ -5676,12 +5676,10 @@ stay with that run.
   remains the first: `prod` adopts a merged daemon change when the operator
   re-runs `app/scripts/install-mac-app.sh --daemon-path ...` (no self-updater
   exists). The installed app's `daemon start|stop|status` command is the
-  second. The operator may run it. A script or agent may run it against
-  `prod` only inside a procedure the operator started that names the command:
-  the walkthrough's restore after the rig, its stop before resuming a
-  retained session saved before #2080, and the exit run. Tests, dev
-  scripts, and agents doing other work still never stop, unload, or
-  re-register `ai.freeside.daemon`.
+  second, and it is the operator's. No procedure names it for a script or
+  agent any longer: since #2080 a real-work run leaves `prod` running. Tests,
+  scripts, and agents never stop, unload, or re-register
+  `ai.freeside.daemon`.
 
 `dev` ships with the first installer change, alongside `prod`: the installer's
 identity constants become parameters of the environment either way, so a
