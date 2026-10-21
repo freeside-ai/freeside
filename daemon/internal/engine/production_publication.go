@@ -1292,13 +1292,25 @@ func (w *productionPublicationWorkflow) quarantineTaskMarkers(
 		}
 		producerRound, priorRemediation := remediationRoundForInvocation(
 			task.RunID, task.ProducingInvocationID)
-		priorFeedback := task.Successor != nil &&
-			task.ProducingInvocationID == task.Successor.FeedbackInvocationID &&
+		feedback := task.Successor != nil &&
+			task.ProducingInvocationID == task.Successor.FeedbackInvocationID
+		priorFeedback := feedback &&
 			verified.request.SuccessorPublicationID == task.PublicationID
-		if priorFeedback {
+		// Feedback returned on a head reviewed after this remediation is a
+		// later producer: a round-N remediation answers review N, so its
+		// head is reviewed at N+1 or later, and the successor's review
+		// round, sealed one past the review covering the returned head,
+		// exceeds N+1. Its head is the feedback's own, not the head the
+		// remediation was asked to fix.
+		laterFeedback := feedback && !priorFeedback &&
+			task.Successor.ReviewRound > verified.request.Round+1
+		if priorFeedback || laterFeedback {
 			if err := authenticateTaskSuccessor(ctx, tx, task); err != nil {
 				return classifyRemediationMarkerError(err)
 			}
+		}
+		if laterFeedback {
+			return nil
 		}
 		priorProducer := task.ProducingInvocationID == productionInvocationID(task.RunID) ||
 			priorFeedback || priorRemediation && producerRound < verified.request.Round
