@@ -2865,3 +2865,39 @@ The client work is #1798 to #1803.)
 
 (Owner decision in #1993, 2026-10-20;
 [decision note](../../devlog/2026-10-20-1030-workflow-episode-closure.md).)
+
+---
+
+## Revision 92 ("Claude Review Routes Now; Freeside Follows gh-imgup"):
+
+1. **Claude review routes by owner decision.** #397 is authorized without
+   shadow-arm evidence; the Section [7](../plan.md#7-review-policy) sequence and
+   Section [11](../plan.md#11-roadmap-build-order-and-coordination) row 9 no longer gate
+   it, and a same-lineage pairing is shown on every card and record under
+   revision 65. Rejected: waiting for shadow evidence (never
+   gathered, #1001, and automatic Codex review of Freeside's own PRs is off,
+   [decision note](../../devlog/2026-10-21-0848-retire-codex-reviewer.md));
+   making independence a gate (revision 65 made it a preference).
+2. **Freeside follows gh-imgup, daemon-first.** The trigger is the first
+   completed unattended gh-imgup run; the onboarded paths are `daemon/`,
+   `api/`, `scripts/`, and `docs/`. Rejected: "after the path works" with no
+   trigger; onboarding `app/` without a macOS execution class; managing
+   control-plane paths (the accepted hot spot stays operator-authored).
+3. **Go is a second project-image toolchain.** Keyed by the `go.mod` of the
+   module the image names (Freeside's is `daemon/`, since it has no root
+   `go.mod`), with the module cache and the recipe's lint binary baked in so
+   `bash scripts/check.sh daemon` runs networkless; that module's `go.mod` and
+   `go.sum` join the environment inputs; `go.mod` and `go.sum` deltas stay
+   refused until project-image upkeep (#1999) covers Go module changes;
+   implemented by #2115. Rejected: a hand-built Freeside image outside the
+   builder (it skips the ward gate and provenance); admitting Go module deltas
+   through the lockfile gate before upkeep covers them.
+4. **macOS execution stays open.** Recorded: the class is needed for
+   Freeside's `app/` and for Straylight; a Virtualization.framework backend is
+   capped at two guests per host by the macOS software license; the choice
+   between that backend and the Section
+   [5.2](../plan.md#52-the-daemon-and-its-supervisor) dedicated-user tier is
+   unresolved. Rejected: choosing now.
+
+(Owner decisions of 2026-10-21, #2113;
+[decision note](../../devlog/2026-10-21-1215-claude-review-and-bootstrap.md).)
