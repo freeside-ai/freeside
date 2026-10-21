@@ -731,7 +731,11 @@ func convergeDeputyPreflightCard(
 			if !strings.HasPrefix(string(item.ID), deputyPreflightItemPrefix) {
 				continue
 			}
-			item.Status = domain.StatusResolved
+			item, err := item.ConcludeByDaemon(domain.ConcludedByDaemon, now().UTC(),
+				"Resolved when the deputy's start-up checks ran again.", nil)
+			if err != nil {
+				return err
+			}
 			item.ItemVersion++
 			if err := tx.PutAttentionItem(ctx, item); err != nil {
 				return err

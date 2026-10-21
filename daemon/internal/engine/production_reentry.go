@@ -510,7 +510,8 @@ func (w *productionPublicationWorkflow) reconcileReentryTask(
 		// recorded: the run already published, and a re-entered cycle starts no
 		// remediation. A hold an earlier pass recorded describes a retry that
 		// will not happen, so it ends with the task.
-		if err := w.supersedeBlockedHold(ctx, task); err != nil {
+		if err := w.supersedeBlockedHold(ctx, task,
+			"Superseded when the re-entered review went to a person; the retry this hold described will not run.", nil); err != nil {
 			return productionTaskOutcome{}, err
 		}
 		if err := w.store.Write(ctx, func(tx *store.WriteTx) error {
@@ -710,8 +711,12 @@ func (w *productionPublicationWorkflow) stopReentryCycle(
 		case err != nil:
 			return err
 		case ready.Status == domain.StatusOpen:
-			ready.Status = domain.StatusSuperseded
 			ready.ItemVersion++
+			ready, err = ready.ConcludeByDaemon(domain.ConcludedBySupersession, w.now().UTC(),
+				"Superseded because the pull request changed and the re-entry cycle stopped.", nil)
+			if err != nil {
+				return err
+			}
 			if err := tx.PutAttentionItem(ctx, ready); err != nil {
 				return err
 			}
@@ -1218,7 +1223,8 @@ func (w *productionPublicationWorkflow) completeReentryTask(
 				errors.Join(err, errProductionCrashSeam))
 		}
 	}
-	if err := w.supersedeBlockedHold(ctx, task); err != nil {
+	readyID := task.readyItemID()
+	if err := w.supersedeBlockedHold(ctx, task, blockedHoldReadyReason, &readyID); err != nil {
 		return productionTaskOutcome{}, err
 	}
 	if err := w.finishTask(ctx, task); err != nil {
@@ -1287,12 +1293,16 @@ func (w *productionPublicationWorkflow) supersedeMovedReentry(
 		return err
 	}
 	return w.store.Write(ctx, func(tx *store.WriteTx) error {
-		superseded := ready
-		superseded.Status = domain.StatusSuperseded
+		now := w.now().UTC()
+		superseded, err := ready.ConcludeByDaemon(domain.ConcludedBySupersession, now,
+			"Superseded because the pull request head moved while the re-entry cycle ran.", nil)
+		if err != nil {
+			return err
+		}
 		superseded.ReadinessInvalidation = &domain.ReadinessInvalidation{
 			Reason: domain.ReadinessInvalidationHeadChanged,
 			Bound:  task.HeadSHA, Observed: tipSHA,
-			ObservedAt: w.now().UTC(),
+			ObservedAt: now,
 		}
 		if err := tx.PutAttentionItem(ctx, superseded); err != nil {
 			return err
@@ -1303,7 +1313,7 @@ func (w *productionPublicationWorkflow) supersedeMovedReentry(
 		if _, err := StartReadinessReentry(ctx, tx, superseded); err != nil {
 			return err
 		}
-		if err := supersedeOpenBlockedHold(ctx, tx, task); err != nil {
+		if err := supersedeOpenBlockedHold(ctx, tx, task, now); err != nil {
 			return err
 		}
 		// No ready milestone is appended for an item that was never open, so
@@ -1318,7 +1328,7 @@ func (w *productionPublicationWorkflow) supersedeMovedReentry(
 // supersedeOpenBlockedHold is supersedeBlockedHold inside the caller's
 // transaction.
 func supersedeOpenBlockedHold(
-	ctx context.Context, tx *store.WriteTx, task productionPublicationTask,
+	ctx context.Context, tx *store.WriteTx, task productionPublicationTask, now time.Time,
 ) error {
 	item, err := tx.GetAttentionItemRecord(ctx, task.blockedItemID())
 	if errors.Is(err, store.ErrNotFound) {
@@ -1337,8 +1347,12 @@ func supersedeOpenBlockedHold(
 	if item.Status != domain.StatusOpen {
 		return nil
 	}
-	item.Status = domain.StatusSuperseded
 	item.ItemVersion++
+	item, err = item.ConcludeByDaemon(domain.ConcludedBySupersession, now,
+		"Superseded because the pull request head moved and a new re-entry cycle started.", nil)
+	if err != nil {
+		return err
+	}
 	if err := signet.ValidateItemIntake(item); err != nil {
 		return err
 	}

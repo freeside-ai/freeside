@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/freeside-ai/freeside/daemon/internal/domain"
+	"github.com/freeside-ai/freeside/daemon/internal/domain/domaintest"
 	"github.com/freeside-ai/freeside/daemon/internal/publicationrecord"
 )
 
@@ -54,6 +55,7 @@ func supersedeReadyItem(t *testing.T, st *Store, id domain.ItemID) {
 		}
 		item.Status = domain.StatusSuperseded
 		item.ItemVersion++
+		item = domaintest.MustConclude(item)
 		return tx.PutAttentionItem(ctx, item)
 	}); err != nil {
 		t.Fatal(err)

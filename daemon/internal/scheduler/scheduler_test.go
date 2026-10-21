@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/freeside-ai/freeside/daemon/internal/domain"
+	"github.com/freeside-ai/freeside/daemon/internal/domain/domaintest"
 	"github.com/freeside-ai/freeside/daemon/internal/scheduler"
 	"github.com/freeside-ai/freeside/daemon/internal/store"
 )
@@ -541,6 +542,7 @@ func TestResolvedPolicyValidatedBeforeEventConstruction(t *testing.T) {
 				resolved := item
 				resolved.ItemVersion++
 				resolved.Status = domain.StatusResolved
+				resolved = domaintest.MustConclude(resolved)
 				if err := st.Write(context.Background(), func(tx *store.WriteTx) error {
 					return tx.PutAttentionItem(context.Background(), resolved)
 				}); err != nil {
@@ -784,6 +786,7 @@ func TestSubjectConclusionRecordsProof(t *testing.T) {
 	resolved.ItemVersion = 2
 	resolved.Status = domain.StatusResolved
 	if err := st.Write(ctx, func(tx *store.WriteTx) error {
+		resolved = domaintest.MustConclude(resolved)
 		return tx.PutAttentionItem(ctx, resolved)
 	}); err != nil {
 		t.Fatal(err)

@@ -1,0 +1,205 @@
+{
+  "id": "item-1",
+  "project_id": "proj-1",
+  "subject": {
+    "subject_type": "run",
+    "subject_id": "run-1",
+    "run_id": "run-1",
+    "task_id": null
+  },
+  "type": "ready_for_final_review",
+  "priority": "normal",
+  "reason": "checks are green and the diff is ready",
+  "requested_decision": [
+    "open_pr",
+    "return_to_agent",
+    "dismiss"
+  ],
+  "recommendation": null,
+  "decision_surface": {
+    "epoch": 1,
+    "digest": "sha256:adb47dbdf777e31d85c004f469268ebb5bfa486fb3d05fd3a56c7730ff242092"
+  },
+  "evidence_snapshot": [
+    {
+      "id": "art-1",
+      "type": "verify_log",
+      "digest": "sha256:log",
+      "provenance": {
+        "producer_class": "verifier",
+        "producer_invocation_id": "inv-1",
+        "head_binding": "head_bound",
+        "source_head_sha": "cafebabe",
+        "verification_recipe_digest": "sha256:recipe-approved",
+        "sensitivity_class": "normal"
+      },
+      "publish_eligible": true,
+      "metadata": {
+        "media_type": "application/json",
+        "size_bytes": 512,
+        "created_at": "2026-01-02T03:04:05Z",
+        "source": "run",
+        "availability": "available"
+      }
+    }
+  ],
+  "agent_claims": [
+    {
+      "label": "screenshot",
+      "artifact_id": "art-2",
+      "digest": "sha256:img",
+      "provenance": {
+        "producer_class": "agent",
+        "producer_invocation_id": "inv-2",
+        "head_binding": "head_bound",
+        "source_head_sha": "cafebabe",
+        "verification_recipe_digest": null,
+        "sensitivity_class": "normal"
+      },
+      "text": null,
+      "metadata": {
+        "media_type": "image/png",
+        "size_bytes": 4096,
+        "created_at": "2026-01-02T03:04:05Z",
+        "source": "claim",
+        "availability": "available"
+      }
+    }
+  ],
+  "artifact_digests": [
+    "sha256:img",
+    "sha256:log"
+  ],
+  "pr_head_sha": "cafebabe",
+  "pr_reference": {
+    "repo": "owner/repo",
+    "number": 123
+  },
+  "readiness": {
+    "class": "ready_clean",
+    "evaluation_set_digest": "sha256:evaluation-clean"
+  },
+  "readiness_detail": {
+    "evaluation_set_digest": "sha256:evaluation-clean",
+    "candidate_head": "cafebabe",
+    "base": {
+      "base_ref": "main",
+      "base_sha": "deadbeef"
+    },
+    "requirements": [
+      {
+        "requirement_key": "clean-verification",
+        "check_class": "clean_verification",
+        "kind": "required",
+        "state": "passed",
+        "proof_recipe_digest": "sha256:recipe",
+        "waiver": null
+      },
+      {
+        "requirement_key": "independent-review",
+        "check_class": "independent_review",
+        "kind": "required",
+        "state": "passed",
+        "proof_recipe_digest": "sha256:review-config",
+        "waiver": null
+      }
+    ]
+  },
+  "yield_history": {
+    "rounds": [
+      {
+        "round": 1,
+        "findings_ingested": 2,
+        "new_findings": 2,
+        "recurring_findings": 0,
+        "fixed": 1,
+        "declined": 0,
+        "deferred": 1,
+        "outcome": "findings"
+      },
+      {
+        "round": 2,
+        "findings_ingested": 2,
+        "new_findings": 1,
+        "recurring_findings": 1,
+        "fixed": 1,
+        "declined": 1,
+        "deferred": 0,
+        "outcome": "findings"
+      },
+      {
+        "round": 3,
+        "findings_ingested": 0,
+        "new_findings": 0,
+        "recurring_findings": 0,
+        "fixed": 0,
+        "declined": 0,
+        "deferred": 0,
+        "outcome": "clean"
+      }
+    ],
+    "terminal_outcome": "clean"
+  },
+  "commit_plan_notice": "present_but_not_honored",
+  "scope_decision": null,
+  "base_freshness": null,
+  "readiness_invalidation": {
+    "reason": "head_changed",
+    "bound": "cafebabe",
+    "observed": "feedface",
+    "observed_at": "2026-01-02T03:54:05Z"
+  },
+  "review_recovery_binding": null,
+  "codex_reenrollment_recovery_binding": null,
+  "review_configuration_recovery": null,
+  "finding_adjudication": null,
+  "display_names": {
+    "project": {
+      "text": "owner/repo",
+      "source": "name"
+    },
+    "task": {
+      "text": "#724",
+      "source": "name"
+    }
+  },
+  "billable_cost_so_far": null,
+  "execution_failure": null,
+  "publish_block": null,
+  "diff_stats": {
+    "files_changed": 12,
+    "additions": 240,
+    "deletions": 31,
+    "base_sha": "deadbeef",
+    "head_sha": "cafebabe"
+  },
+  "blocked_on": null,
+  "health_diagnostic": null,
+  "review_dispute": null,
+  "spec_revision": null,
+  "agent_question": null,
+  "review_diminishing": null,
+  "item_version": 2,
+  "interruption_class": "planned_gate",
+  "conversation_id": "conv-1",
+  "timing": {
+    "delivery_count": 1,
+    "first_submitted_at": "2026-01-02T03:04:05Z",
+    "first_accepted_at": "2026-01-02T03:05:05Z",
+    "first_opened_at": "2026-01-02T03:09:05Z",
+    "submit_to_first_open": 300000000000
+  },
+  "created_at": "2026-01-02T03:04:05Z",
+  "expires_when": "2026-01-03T03:04:05Z",
+  "decided_at": null,
+  "conclusion": {
+    "cause": "superseded",
+    "concluded_at": "2026-01-02T03:54:05Z",
+    "reason": "Superseded because the pull request head moved after review.",
+    "successor_item_id": "item-1/revision/cmd-2",
+    "decision": null
+  },
+  "posture": null,
+  "blocking_supersession": null,
+  "status": "superseded"
+}

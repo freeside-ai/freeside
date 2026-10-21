@@ -16,6 +16,7 @@ import (
 	"time"
 
 	"github.com/freeside-ai/freeside/daemon/internal/domain"
+	"github.com/freeside-ai/freeside/daemon/internal/domain/domaintest"
 	"github.com/freeside-ai/freeside/daemon/internal/exec/fake"
 	"github.com/freeside-ai/freeside/daemon/internal/publish"
 	"github.com/freeside-ai/freeside/daemon/internal/signet"
@@ -604,7 +605,7 @@ func (h *filingHarness) propose(run filingRun, finding int, decision domain.Acti
 		if err != nil {
 			return err
 		}
-		return tx.PutAttentionItem(ctx, item)
+		return tx.PutAttentionItem(ctx, domaintest.MustConclude(item))
 	}); err != nil {
 		h.t.Fatalf("propose filing %s/%d: %v", run.id, finding, err)
 	}

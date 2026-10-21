@@ -117,5 +117,5 @@ func (s *Service) applyFindingAdjudicationDecision(
 	if err := validateFindingAdjudicationDecision(command, item); err != nil {
 		return err
 	}
-	return concludeItem(ctx, tx, item, status, s.now().UTC())
+	return concludeItem(ctx, tx, command, item, status, s.now().UTC())
 }

@@ -2187,6 +2187,7 @@ func sameProductionQuarantineNotice(current, want domain.AttentionItem) bool {
 	normalized.ItemVersion = want.ItemVersion
 	normalized.Timing = want.Timing
 	normalized.DecidedAt = want.DecidedAt
+	normalized.Conclusion = want.Conclusion
 	normalized.ExpiresWhen = want.ExpiresWhen
 	normalized.ConversationID = want.ConversationID
 	normalized.Recommendation = want.Recommendation
@@ -2334,12 +2335,20 @@ func supersedeEarlierAttemptFailures(
 				!strings.HasPrefix(string(item.ID), productionExecutionFailureCardPrefix) {
 				continue
 			}
-			item.Reason += fmt.Sprintf(
-				" Superseded by attempt %d of this campaign (reattempt reason: %s); no recovery choice is needed.",
+			superseded := fmt.Sprintf(
+				"Superseded by attempt %d of this campaign (reattempt reason: %s); no recovery choice is needed.",
 				attemptNumber, reason,
 			)
-			item.Status = domain.StatusSuperseded
+			item.Reason += " " + superseded
 			item.ItemVersion++
+			// The conclusion leaves out the operator's reattempt reason: its
+			// reason is daemon-owned prose that the task record prints and
+			// caps, and the item's reason above already carries it.
+			item, err = item.ConcludeByDaemon(domain.ConcludedBySupersession, time.Now().UTC(),
+				fmt.Sprintf("Superseded by attempt %d of this campaign; no recovery choice is needed.", attemptNumber), nil)
+			if err != nil {
+				return fmt.Errorf("supersede earlier-attempt failure card %q: %w", item.ID, err)
+			}
 			if err := tx.PutAttentionItem(ctx, item); err != nil {
 				return fmt.Errorf("supersede earlier-attempt failure card %q: %w", item.ID, err)
 			}
@@ -2387,8 +2396,12 @@ func releaseProductionQuarantine(
 			!productionQuarantineNoticeFor(prefix, item.Reason) {
 			return nil
 		}
-		item.Status = domain.StatusSuperseded
 		item.ItemVersion++
+		item, err = item.ConcludeByDaemon(domain.ConcludedBySupersession, time.Now().UTC(),
+			"Superseded when the hold this notice reported on ended.", nil)
+		if err != nil {
+			return fmt.Errorf("retire quarantine item for run %q: %w", runID, err)
+		}
 		if err := attention.PutItem(ctx, item); err != nil {
 			if !errors.Is(err, store.ErrStaleWrite) && !errors.Is(err, store.ErrImmutableConflict) {
 				return fmt.Errorf("retire quarantine item for run %q: %w", runID, err)

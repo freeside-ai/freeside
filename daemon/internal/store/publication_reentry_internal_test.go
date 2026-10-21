@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/freeside-ai/freeside/daemon/internal/domain"
+	"github.com/freeside-ai/freeside/daemon/internal/domain/domaintest"
 	"github.com/freeside-ai/freeside/daemon/internal/exec/fake"
 	"github.com/freeside-ai/freeside/daemon/internal/publicationrecord"
 )
@@ -71,6 +72,7 @@ func invalidateReadyItem(t *testing.T, st *Store, id domain.ItemID, fact domain.
 		}
 		item.Status, item.ReadinessInvalidation = domain.StatusSuperseded, &fact
 		item.ItemVersion++
+		item = domaintest.MustConclude(item)
 		return tx.PutAttentionItem(ctx, item)
 	}); err != nil {
 		t.Fatal(err)
@@ -288,6 +290,7 @@ func TestReentryAuthorityRegatesCurrentState(t *testing.T) {
 			}
 			item.Status = domain.StatusSuperseded
 			item.ItemVersion++
+			item = domaintest.MustConclude(item)
 			return tx.PutAttentionItem(ctx, item)
 		}); err != nil {
 			t.Fatal(err)

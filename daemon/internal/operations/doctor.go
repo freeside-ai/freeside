@@ -86,6 +86,14 @@ func (d Doctor) ConvergeReviewConfiguration(ctx context.Context) error {
 	return nil
 }
 
+// now is the doctor's clock: Now when injected, else the wall clock, in UTC.
+func (d Doctor) now() time.Time {
+	if d.Now != nil {
+		return d.Now().UTC()
+	}
+	return time.Now().UTC()
+}
+
 func (d Doctor) resolveReviewConfigurationItemsAcrossProjects(ctx context.Context) error {
 	snapshots, err := d.Attention.ListAttentionItems(ctx)
 	if err != nil {
@@ -99,7 +107,11 @@ func (d Doctor) resolveReviewConfigurationItemsAcrossProjects(ctx context.Contex
 			continue
 		}
 		item.ItemVersion++
-		item.Status = domain.StatusResolved
+		item, err = item.ConcludeByDaemon(domain.ConcludedByDaemon, d.now(),
+			"Resolved when doctor found the review configuration healthy again.", nil)
+		if err != nil {
+			return fmt.Errorf("doctor review configuration: clear cross-project item %s: %w", item.ID, err)
+		}
 		if err := d.Attention.PutItem(ctx, item); err != nil {
 			return fmt.Errorf("doctor review configuration: clear cross-project item %s: %w", item.ID, err)
 		}
@@ -351,7 +363,11 @@ func (d Doctor) converge(ctx context.Context, findings []DoctorFinding) error {
 		if finding.Healthy {
 			for _, existing := range existingItems {
 				existing.ItemVersion++
-				existing.Status = domain.StatusResolved
+				existing, err := existing.ConcludeByDaemon(domain.ConcludedByDaemon, d.now(),
+					fmt.Sprintf("Resolved when doctor check %s passed.", finding.Code), nil)
+				if err != nil {
+					return fmt.Errorf("doctor: clear %s finding: %w", finding.Code, err)
+				}
 				if err := d.Attention.PutItem(ctx, existing); err != nil {
 					return fmt.Errorf("doctor: clear %s finding: %w", finding.Code, err)
 				}
@@ -361,7 +377,11 @@ func (d Doctor) converge(ctx context.Context, findings []DoctorFinding) error {
 		if len(existingItems) > 1 {
 			for _, duplicate := range existingItems[1:] {
 				duplicate.ItemVersion++
-				duplicate.Status = domain.StatusResolved
+				duplicate, err := duplicate.ConcludeByDaemon(domain.ConcludedByDaemon, d.now(),
+					fmt.Sprintf("Resolved as a duplicate of the open doctor check %s item.", finding.Code), nil)
+				if err != nil {
+					return fmt.Errorf("doctor: clear duplicate %s finding: %w", finding.Code, err)
+				}
 				if err := d.Attention.PutItem(ctx, duplicate); err != nil {
 					return fmt.Errorf("doctor: clear duplicate %s finding: %w", finding.Code, err)
 				}

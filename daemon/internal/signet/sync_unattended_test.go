@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/freeside-ai/freeside/daemon/internal/domain"
+	"github.com/freeside-ai/freeside/daemon/internal/domain/domaintest"
 	"github.com/freeside-ai/freeside/daemon/internal/signet"
 	"github.com/freeside-ai/freeside/daemon/internal/store"
 	"github.com/freeside-ai/freeside/daemon/internal/store/storetest"
@@ -255,6 +256,7 @@ func TestUnattendedOperationSyncDurableStop(t *testing.T) {
 	resolved, _ := f.itemSnapshotFor(t, item.ID)
 	resolved.ItemVersion++
 	resolved.Status = domain.StatusResolved
+	resolved = domaintest.MustConclude(resolved)
 	if err := f.service.PutItem(ctx, resolved); err != nil {
 		t.Fatalf("resolve durable stop: %v", err)
 	}

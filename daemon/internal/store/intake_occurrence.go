@@ -885,7 +885,8 @@ func (tx *WriteTx) SupersedeIntakeProposal(
 	// would falsely claim a withdrawal the decision ledger contradicts; the
 	// occurrence still leaves present, just without a supersession record. A
 	// replay (the record already exists) still enforces reason agreement.
-	superseded, err := tx.supersedeOpenProposalItem(ctx, occurrence.Admission.ProposalInstanceID, occurrence.Admission.ProposalDigest)
+	superseded, err := tx.supersedeOpenProposalItem(
+		ctx, occurrence.Admission.ProposalInstanceID, occurrence.Admission.ProposalDigest, reason, now.UTC())
 	if err != nil {
 		return domain.IntakeOccurrence{}, err
 	}
@@ -911,6 +912,7 @@ func (tx *WriteTx) SupersedeIntakeProposal(
 // records the supersession fact only when a withdrawal actually happened.
 func (tx *WriteTx) supersedeOpenProposalItem(
 	ctx context.Context, instanceID domain.ProposalInstanceID, admittedDigest domain.Digest,
+	reason domain.IntakeSupersessionReason, now time.Time,
 ) (bool, error) {
 	item, err := tx.authenticatedProposalItem(ctx, instanceID, admittedDigest)
 	if err != nil {
@@ -919,13 +921,28 @@ func (tx *WriteTx) supersedeOpenProposalItem(
 	if item.Status != domain.StatusOpen || item.DecidedAt != nil {
 		return false, nil
 	}
-	superseded := item
-	superseded.Status = domain.StatusSuperseded
+	superseded, err := item.ConcludeByDaemon(domain.ConcludedBySupersession, now,
+		intakeSupersessionConclusion(reason), nil)
+	if err != nil {
+		return false, fmt.Errorf("intake supersession item: %w", err)
+	}
 	superseded.ItemVersion = item.ItemVersion + 1
 	if err := tx.PutAttentionItem(ctx, superseded); err != nil {
 		return false, fmt.Errorf("intake supersession item: %w", err)
 	}
 	return true, nil
+}
+
+// intakeSupersessionConclusion is the closed card's sentence for a proposal
+// intake withdrew.
+func intakeSupersessionConclusion(reason domain.IntakeSupersessionReason) string {
+	switch reason {
+	case domain.IntakeSupersededLabelRemoved:
+		return "Superseded because the intake label was removed from the issue."
+	case domain.IntakeSupersededIssueClosed:
+		return "Superseded because the issue was closed."
+	}
+	return "Superseded because intake withdrew the proposal."
 }
 
 // authenticatedProposalItem resolves the proposal instance's attention item

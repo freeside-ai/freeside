@@ -15,6 +15,7 @@ import (
 
 	"github.com/freeside-ai/freeside/daemon/internal/contentaddr"
 	"github.com/freeside-ai/freeside/daemon/internal/domain"
+	"github.com/freeside-ai/freeside/daemon/internal/domain/domaintest"
 	"github.com/freeside-ai/freeside/daemon/internal/exec/fake"
 	"github.com/freeside-ai/freeside/daemon/internal/store"
 )
@@ -227,6 +228,7 @@ func newReplyHarnessForBinding(t *testing.T, f replyBindingFixture, thread, seco
 		item := h.f.item
 		item.Status = domain.StatusSuperseded
 		item.ItemVersion++
+		item = domaintest.MustConclude(item)
 		return tx.PutAttentionItem(ctx, item)
 	})
 	second, err := domain.NewExternalFinding(domain.ExternalFindingInput{

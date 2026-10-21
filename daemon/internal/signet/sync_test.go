@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/freeside-ai/freeside/daemon/internal/domain"
+	"github.com/freeside-ai/freeside/daemon/internal/domain/domaintest"
 	"github.com/freeside-ai/freeside/daemon/internal/engine"
 	"github.com/freeside-ai/freeside/daemon/internal/export"
 	"github.com/freeside-ai/freeside/daemon/internal/store"
@@ -296,6 +297,7 @@ func seedSpecificationCampaign(
 		if err != nil {
 			return err
 		}
+		approval = domaintest.MustConclude(approval)
 		return tx.PutAttentionItem(ctx, approval)
 	}); err != nil {
 		t.Fatalf("seed specification campaign %q: %v", implRunID, err)

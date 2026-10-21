@@ -11,6 +11,7 @@ import (
 
 	"github.com/freeside-ai/freeside/daemon/internal/contentaddr"
 	"github.com/freeside-ai/freeside/daemon/internal/domain"
+	"github.com/freeside-ai/freeside/daemon/internal/domain/domaintest"
 	"github.com/freeside-ai/freeside/daemon/internal/exec"
 	"github.com/freeside-ai/freeside/daemon/internal/golden"
 	"github.com/freeside-ai/freeside/daemon/internal/store"
@@ -123,6 +124,9 @@ func TestGoldenRoundTripCardFacts(t *testing.T) {
 		for name, item := range items {
 			if err := storetest.BindSubject(ctx, tx, &item); err != nil {
 				return err
+			}
+			if item.Status != domain.StatusOpen {
+				item = domaintest.MustConclude(item)
 			}
 			items[name] = item
 			if err := tx.PutAttentionItem(ctx, item); err != nil {

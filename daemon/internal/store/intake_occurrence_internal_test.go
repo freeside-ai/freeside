@@ -396,7 +396,8 @@ func TestIntakeReGateRejectsSupersessionOfDecidedProposal(t *testing.T) {
 		// The item is superseded (so the status check passes) AND the decision
 		// ledger records the start — the start_with_changes shape the status-only
 		// check could not distinguish from an intake withdrawal.
-		if _, err := tx.supersedeOpenProposalItem(ctx, instanceID, occurrence.Admission.ProposalDigest); err != nil {
+		if _, err := tx.supersedeOpenProposalItem(ctx, instanceID, occurrence.Admission.ProposalDigest,
+			domain.IntakeSupersededIssueClosed, time.Date(2026, 1, 2, 3, 4, 5, 0, time.UTC)); err != nil {
 			return err
 		}
 		if _, err := tx.tx.ExecContext(ctx,

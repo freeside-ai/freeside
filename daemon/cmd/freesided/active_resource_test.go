@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/freeside-ai/freeside/daemon/internal/domain"
+	"github.com/freeside-ai/freeside/daemon/internal/domain/domaintest"
 	"github.com/freeside-ai/freeside/daemon/internal/publish"
 	"github.com/freeside-ai/freeside/daemon/internal/store"
 	"github.com/freeside-ai/freeside/daemon/internal/store/storetest"
@@ -847,6 +848,7 @@ func TestActiveResourceIdentityInvalidationYieldsToConcurrentSupersession(t *tes
 	concurrent.Status = domain.StatusSuperseded
 	concurrent.ItemVersion++
 	if err := st.Write(ctx, func(tx *store.WriteTx) error {
+		concurrent = domaintest.MustConclude(concurrent)
 		return tx.PutAttentionItem(ctx, concurrent)
 	}); err != nil {
 		t.Fatal(err)
@@ -997,6 +999,7 @@ func TestActiveResourceReconcileInvalidationYieldsToConcurrentConclusion(t *test
 			concluded.Status = domain.StatusResolved
 			concluded.ItemVersion++
 			if err := st.Write(ctx, func(tx *store.WriteTx) error {
+				concluded = domaintest.MustConclude(concluded)
 				return tx.PutAttentionItem(ctx, concluded)
 			}); err != nil {
 				t.Fatal(err)
@@ -1161,6 +1164,11 @@ func TestActiveResourceReconcileSettlesReturnedAndDismissedItemsWithoutPolling(t
 			armActiveTestSchedules(t, st, item)
 			item.Status = status
 			item.ItemVersion++
+			item, err := item.WithDecidedAt(activeResourceTestTime)
+			if err != nil {
+				t.Fatal(err)
+			}
+			item = domaintest.MustConclude(item)
 			if err := st.Write(ctx, func(tx *store.WriteTx) error {
 				return tx.PutAttentionItem(ctx, item)
 			}); err != nil {
@@ -1205,6 +1213,7 @@ func TestActiveResourceReconcileRecoversSupersededCompletion(t *testing.T) {
 		Bound:  "cafebabe", Observed: "deadbeef", ObservedAt: activeResourceTestTime,
 	}
 	if err := st.Write(ctx, func(tx *store.WriteTx) error {
+		item = domaintest.MustConclude(item)
 		return tx.PutAttentionItem(ctx, item)
 	}); err != nil {
 		t.Fatal(err)
@@ -1325,6 +1334,7 @@ func TestActiveResourceReconcileForeclosesDivergedMergedCompletion(t *testing.T)
 			notice.Status = domain.StatusResolved
 			notice.ItemVersion++
 			if err := st.Write(ctx, func(tx *store.WriteTx) error {
+				notice = domaintest.MustConclude(notice)
 				if err := tx.PutAttentionItem(ctx, notice); err != nil {
 					return err
 				}
@@ -1367,6 +1377,7 @@ func TestActiveResourceReconcileKeepsExactMergedCompletionPending(t *testing.T) 
 		BaseRef: "main", HeadSHA: "cafed00d", ObservedAt: activeResourceTestTime,
 	}
 	if err := st.Write(ctx, func(tx *store.WriteTx) error {
+		item = domaintest.MustConclude(item)
 		if err := tx.PutAttentionItem(ctx, item); err != nil {
 			return err
 		}
@@ -1432,6 +1443,7 @@ func TestActiveResourceReconcileFinallyEvictsAcrossBindingRecovery(t *testing.T)
 	if err != nil {
 		t.Fatal(err)
 	}
+	item = domaintest.MustConclude(item)
 	if err := st.WriteInternal(ctx, func(tx *store.InternalTx) error {
 		return tx.RecordWorkUnitDeclaration(ctx, declaration)
 	}); err != nil {
@@ -1509,6 +1521,7 @@ func TestActiveResourceReconcileRecoversAfterClosedUnmergedPull(t *testing.T) {
 	item.Status = domain.StatusDismissed
 	item.ItemVersion++
 	if err := st.Write(ctx, func(tx *store.WriteTx) error {
+		item = domaintest.MustConclude(item)
 		return tx.PutAttentionItem(ctx, item)
 	}); err != nil {
 		t.Fatal(err)

@@ -38,9 +38,11 @@ func RetireAbandonedTaskItems(ctx context.Context, tx *store.WriteTx, taskID dom
 // RetireClosedTaskWorkflowItems expires only decisions owned by a durable
 // closure. Expiry is not an operator decision and never sets decided_at.
 func RetireClosedTaskWorkflowItems(ctx context.Context, tx *store.WriteTx, taskID domain.TaskID, ordinal int) ([]domain.ItemID, error) {
-	if _, err := tx.GetTaskWorkflowClosure(ctx, taskID, ordinal); err != nil {
+	closure, err := tx.GetTaskWorkflowClosure(ctx, taskID, ordinal)
+	if err != nil {
 		return nil, err
 	}
+	reason := "Expired when the task's workflow was closed. " + closure.Reason
 	retired := []domain.ItemID{}
 	items, err := tx.ListOpenAttentionItemRecordsForTask(ctx, taskID)
 	if err != nil {
@@ -65,11 +67,15 @@ func RetireClosedTaskWorkflowItems(ctx context.Context, tx *store.WriteTx, taskI
 		if owner != taskID || episode != ordinal {
 			continue
 		}
-		item.Status = domain.StatusExpired
 		item.ItemVersion++
 		// Some readers authenticate structured reason suffixes. The closure
-		// record carries the retirement reason without rewriting those bytes.
-		if err := tx.PutAttentionItem(ctx, item); err != nil {
+		// record carries the retirement reason without rewriting those bytes,
+		// and the conclusion repeats it for the closed card.
+		expired, err := item.ConcludeByDaemon(domain.ConcludedByExpiry, closure.ClosedAt.UTC(), reason, nil)
+		if err != nil {
+			return nil, fmt.Errorf("expire abandoned-task item %q: %w", item.ID, err)
+		}
+		if err := tx.PutAttentionItem(ctx, expired); err != nil {
 			return nil, fmt.Errorf("expire abandoned-task item %q: %w", item.ID, err)
 		}
 		retired = append(retired, item.ID)

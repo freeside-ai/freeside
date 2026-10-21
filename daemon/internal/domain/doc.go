@@ -9,7 +9,8 @@
 //   - enums.go        named-string enumerations and their valid() checks
 //   - ids.go          identifier newtypes and Digest
 //   - errors.go       sentinel validation errors (wrapped with %w)
-//   - attention_item.go, attention_delivery.go   the attention model (§4)
+//   - attention_item.go, attention_delivery.go, attention_conclusion.go
+//     the attention model and how a closed item concluded (§4)
 //   - artifact.go     artifacts, provenance, and the evidence gate (§5.15)
 //   - finding.go      raw findings and versioned classification (§5.12)
 //   - agent_decision.go the decisions an agent hands back and the blocked outcome (§4)

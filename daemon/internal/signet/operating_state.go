@@ -83,7 +83,7 @@ func (s *Service) applyStopUnattended(
 	command domain.Command, item domain.AttentionItem, status domain.ItemStatus,
 ) error {
 	now := s.now().UTC()
-	if err := concludeItem(ctx, tx, item, status, now); err != nil {
+	if err := concludeItem(ctx, tx, command, item, status, now); err != nil {
 		return err
 	}
 	commandID := command.CommandID
@@ -153,7 +153,7 @@ func (s *Service) applyResumeUnattended(
 	command domain.Command, item domain.AttentionItem, status domain.ItemStatus,
 ) error {
 	now := s.now().UTC()
-	if err := concludeItem(ctx, tx, item, status, now); err != nil {
+	if err := concludeItem(ctx, tx, command, item, status, now); err != nil {
 		return err
 	}
 	commandID := command.CommandID
@@ -167,26 +167,71 @@ func (s *Service) applyResumeUnattended(
 }
 
 // concludeItem applies a concluding decision's item side: the version bump,
-// the terminal status, and the decision stamp, committed by the enclosing
-// accepting transaction. Shared by the plain outcomeConcludes branch and the
-// operating-state transactions so the concluding semantics (issue #171's
-// exactly-once stamp among them) cannot drift between them.
+// the terminal status, the decision stamp, and the conclusion naming the
+// command, committed by the enclosing accepting transaction. Shared by the
+// plain outcomeConcludes branch and the operating-state transactions so the
+// concluding semantics (issue #171's exactly-once stamp among them) cannot
+// drift between them.
 func concludeItem(
-	ctx context.Context, tx *store.WriteTx,
+	ctx context.Context, tx *store.WriteTx, command domain.Command,
 	item domain.AttentionItem, status domain.ItemStatus, decidedAt time.Time,
 ) error {
-	next := item
-	next.ItemVersion++
-	next.Status = status
+	decision, err := commandDecision(ctx, tx, command)
+	if err != nil {
+		return err
+	}
 	// The concluding decision's accepted instant is the durable endpoint of
 	// the open-to-decision metric (#171), stamped in the same transaction as
 	// the command record and the status flip. Only concluding actions stamp,
 	// and a replay never reaches a concluding branch, so the instant is set
 	// exactly once — the item was open, so no earlier concluding command can
 	// have stamped it.
-	next, err := next.WithDecidedAt(decidedAt)
+	next, err := item.ConcludeByCommand(status, decidedAt, decision)
 	if err != nil {
 		return err
 	}
+	next.ItemVersion++
 	return tx.PutAttentionItem(ctx, next)
+}
+
+// commandDecision records command as the decision that concludes its item
+// (#2097). The device's display name is read in the accepting transaction,
+// so the record keeps the name the operator saw; a device the command was
+// authenticated as but that has no row is an invariant breach and fails the
+// command rather than recording a blank name. The per-finding routes come
+// from the canonical message decisionMessage wrote for the two
+// route-carrying actions.
+func commandDecision(
+	ctx context.Context, tx *store.WriteTx, command domain.Command,
+) (domain.ConclusionDecision, error) {
+	// The reserved unattended initiator has no device row to read a name
+	// from; every other device must exist, and a missing one fails the
+	// command rather than recording a blank name.
+	name := unattendedInitiatorDisplayName
+	if command.DeviceID != UnattendedInitiatorDeviceID {
+		device, err := tx.GetDevice(ctx, command.DeviceID)
+		if err != nil {
+			return domain.ConclusionDecision{}, fmt.Errorf("conclude by command %q: device %q: %w",
+				command.CommandID, command.DeviceID, err)
+		}
+		name = device.DisplayName
+	}
+	decision := domain.ConclusionDecision{
+		CommandID:         command.CommandID,
+		Action:            command.Action,
+		DeviceID:          command.DeviceID,
+		DeviceDisplayName: name,
+		AnswerRoute:       command.AnswerRoute,
+	}
+	if command.Action == domain.ActionAdjudicateFindings || command.Action == domain.ActionChooseAlternativeRoute {
+		choices, err := decodeAlternativeChoices(command.Message)
+		if err != nil {
+			return domain.ConclusionDecision{}, fmt.Errorf("conclude by command %q: %w", command.CommandID, err)
+		}
+		decision.FindingRoutes = make([]domain.ConcludedRoute, len(choices))
+		for index, choice := range choices {
+			decision.FindingRoutes[index] = domain.ConcludedRoute{FindingID: choice.FindingID, Route: choice.Route}
+		}
+	}
+	return decision, nil
 }

@@ -47,7 +47,8 @@ func invocationStallNotice(
 				return err
 			}
 			if !stalled {
-				return resolveInvocationStallNotices(ctx, tx, open)
+				return resolveInvocationStallNotices(ctx, tx, open, now().UTC(),
+					"Resolved when the writer recovered or its wait ended.")
 			}
 			if len(open) > 0 {
 				return nil
@@ -105,7 +106,8 @@ func concludeInvocationStallNotices(ctx context.Context, st *store.Store) error 
 		if err != nil {
 			return err
 		}
-		return resolveInvocationStallNotices(ctx, tx, open)
+		return resolveInvocationStallNotices(ctx, tx, open, time.Now().UTC(),
+			"Resolved when the daemon restarted: no writer wait survives a restart.")
 	})
 }
 
@@ -125,10 +127,15 @@ func openInvocationStallNotices(
 	return matching, nil
 }
 
-func resolveInvocationStallNotices(ctx context.Context, tx *store.WriteTx, items []domain.AttentionItem) error {
+func resolveInvocationStallNotices(
+	ctx context.Context, tx *store.WriteTx, items []domain.AttentionItem, now time.Time, reason string,
+) error {
 	for _, item := range items {
+		item, err := item.ConcludeByDaemon(domain.ConcludedByDaemon, now, reason, nil)
+		if err != nil {
+			return err
+		}
 		item.ItemVersion++
-		item.Status = domain.StatusResolved
 		if err := tx.PutAttentionItem(ctx, item); err != nil {
 			return err
 		}

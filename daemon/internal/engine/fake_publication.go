@@ -2447,6 +2447,7 @@ func compatibleTerminalItem(expected, current domain.AttentionItem) bool {
 	normalized.ItemVersion = expected.ItemVersion
 	normalized.Status = expected.Status
 	normalized.DecidedAt = expected.DecidedAt
+	normalized.Conclusion = expected.Conclusion
 	normalized.Timing = expected.Timing
 	// The base-advance watch maintains this fact after creation (§5.16), so
 	// like status and timing it never disqualifies an otherwise matching
@@ -2496,7 +2497,11 @@ func compatibleTerminalItem(expected, current domain.AttentionItem) bool {
 	if reflect.DeepEqual(current, expected) {
 		return true
 	}
-	return domain.ValidateAttentionItemTransition(expected, current) == nil
+	// A row closed before conclusions existed (#2097) carries none. Recovery
+	// compares it rather than writing it, so the missing record, which the
+	// validator checks only after every other rule, does not make it foreign.
+	err := domain.ValidateAttentionItemTransition(expected, current)
+	return err == nil || (current.Conclusion == nil && errors.Is(err, domain.ErrConclusionMissing))
 }
 
 func (w *fakePublicationWorkflow) recoverTerminalTask(

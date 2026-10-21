@@ -10,6 +10,7 @@ import (
 
 	"github.com/freeside-ai/freeside/daemon/internal/contentaddr"
 	"github.com/freeside-ai/freeside/daemon/internal/domain"
+	"github.com/freeside-ai/freeside/daemon/internal/domain/domaintest"
 	"github.com/freeside-ai/freeside/daemon/internal/exec/fake"
 	"github.com/freeside-ai/freeside/daemon/internal/export"
 )
@@ -53,6 +54,7 @@ func TestPutAttentionItemRegatesRestoredSpecRevision(t *testing.T) {
 	updated.ItemVersion++
 	updated.Status = domain.StatusSuperseded
 	updated.SpecRevision = nil
+	updated = domaintest.MustConclude(updated)
 	err := st.Write(ctx, func(tx *WriteTx) error { return putTestAttentionItem(ctx, tx, &updated) })
 	if !errors.Is(err, domain.ErrParentKeyMismatch) {
 		t.Fatalf("update carrying restored forged revision = %v, want ErrParentKeyMismatch", err)
@@ -92,6 +94,7 @@ func TestPutAttentionItemRestoresValidSpecRevision(t *testing.T) {
 	updated.ItemVersion++
 	updated.Status = domain.StatusSuperseded
 	updated.SpecRevision = nil
+	updated = domaintest.MustConclude(updated)
 	if err := st.Write(ctx, func(tx *WriteTx) error { return putTestAttentionItem(ctx, tx, &updated) }); err != nil {
 		t.Fatalf("update carrying restored revision: %v", err)
 	}
@@ -435,6 +438,7 @@ func TestAttentionItemReadAuthenticatesBlockedWait(t *testing.T) {
 		if err := putTestAttentionItem(ctx, tx, &approval); err != nil {
 			return err
 		}
+		blocked = domaintest.MustConclude(blocked)
 		return putTestAttentionItem(ctx, tx, &blocked)
 	}); err != nil {
 		t.Fatal(err)

@@ -481,6 +481,15 @@ func TestGolden(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	dismissConclusion, err := domain.NewDecisionConclusion(ts.Add(2*time.Hour), domain.ConclusionDecision{
+		CommandID: "cmd-1", Action: domain.ActionDismiss, DeviceID: "dev-1", DeviceDisplayName: "Ben's Mac",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if decidedItem, err = decidedItem.WithConclusion(dismissConclusion); err != nil {
+		t.Fatal(err)
+	}
 
 	// The waived-posture shape (issues #319/#321): a system_health notice
 	// carrying the typed condition that supersedes its blocking effect, so the
@@ -1796,6 +1805,52 @@ func TestGolden(t *testing.T) {
 	}
 	specRevisionItem := mustItem(t, specRevisionInput(t))
 
+	// Closed-card conclusions (#2097): a dispute concluded by its adjudication
+	// with both findings' routes, an item the daemon expired, and a ready item
+	// superseded with its replacement named. The open fixtures above keep the
+	// explicit-null render.
+	adjudicatedDispute := reviewDisputeItem
+	adjudicatedDispute.ItemVersion = 2
+	adjudicatedDispute.Status = domain.StatusResolved
+	if adjudicatedDispute, err = adjudicatedDispute.WithDecidedAt(ts.Add(3 * time.Hour)); err != nil {
+		t.Fatal(err)
+	}
+	adjudication, err := domain.NewDecisionConclusion(ts.Add(3*time.Hour), domain.ConclusionDecision{
+		CommandID: "cmd-adjudicate", Action: domain.ActionAdjudicateFindings,
+		DeviceID: "dev-1", DeviceDisplayName: "Ben's Mac",
+		FindingRoutes: []domain.ConcludedRoute{
+			{FindingID: "finding-1", Route: domain.RouteRemediate},
+			{FindingID: "finding-2", Route: domain.RouteDecline},
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if adjudicatedDispute, err = adjudicatedDispute.WithConclusion(adjudication); err != nil {
+		t.Fatal(err)
+	}
+	expiredItem := publishBlockedItem
+	expiredItem.ItemVersion = 2
+	expiredItem.Status = domain.StatusExpired
+	expiry, err := domain.NewDaemonConclusion(domain.ConcludedByExpiry, ts.Add(4*time.Hour),
+		"Expired when the task was abandoned: operator stopped the task.", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if expiredItem, err = expiredItem.WithConclusion(expiry); err != nil {
+		t.Fatal(err)
+	}
+	successorID := domain.ItemID("item-1/revision/cmd-2")
+	succeededItem := invalidatedItem
+	supersession, err := domain.NewDaemonConclusion(domain.ConcludedBySupersession, ts.Add(50*time.Minute),
+		"Superseded because the pull request head moved after review.", &successorID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if succeededItem, err = succeededItem.WithConclusion(supersession); err != nil {
+		t.Fatal(err)
+	}
+
 	cases := []struct {
 		name  string
 		value any
@@ -1834,6 +1889,9 @@ func TestGolden(t *testing.T) {
 		{"blocked_outcome", blockedOutcome},
 		{"attention_item_decided", decidedItem},
 		{"attention_item_superseded", supersededItem},
+		{"attention_item_conclusion_adjudicated", adjudicatedDispute},
+		{"attention_item_conclusion_expired", expiredItem},
+		{"attention_item_conclusion_superseded", succeededItem},
 		{"attention_item_advisory", advisoryItem},
 		{"attention_item_review_recovery", recoveryItem},
 		{"command", command},

@@ -637,7 +637,11 @@ func baseAdvanceRegistration(st *store.Store, observe baseTipObserver, capture m
 						}
 						item.BaseFreshness = &fact
 						item.ReadinessInvalidation = invalidation
-						item.Status = domain.StatusSuperseded
+						item, err = item.ConcludeByDaemon(domain.ConcludedBySupersession, time.Now().UTC(),
+							readinessInvalidationConclusion(domain.ReadinessInvalidationBaseAdvanced), nil)
+						if err != nil {
+							return err
+						}
 						item.ItemVersion++
 						if err := tx.PutAttentionItem(ctx, item); err != nil {
 							return err

@@ -18,6 +18,7 @@ import (
 
 	"github.com/freeside-ai/freeside/daemon/internal/advisory"
 	"github.com/freeside-ai/freeside/daemon/internal/domain"
+	"github.com/freeside-ai/freeside/daemon/internal/domain/domaintest"
 	"github.com/freeside-ai/freeside/daemon/internal/exec"
 	"github.com/freeside-ai/freeside/daemon/internal/exec/fake"
 	"github.com/freeside-ai/freeside/daemon/internal/export"
@@ -869,6 +870,7 @@ func TestProductionQuarantineLeavesADecidedNoticeAlone(t *testing.T) {
 	decided.Status = domain.StatusResolved
 	decided.ItemVersion = 2
 	if err := st.Write(ctx, func(tx *store.WriteTx) error {
+		decided = domaintest.MustConclude(decided)
 		return tx.PutAttentionItem(ctx, decided)
 	}); err != nil {
 		t.Fatalf("record operator decision: %v", err)
@@ -1406,6 +1408,7 @@ func TestProductionQuarantineReleaseConvergesOnADecision(t *testing.T) {
 	decided.Status = domain.StatusResolved
 	decided.ItemVersion = 2
 	if err := st.Write(ctx, func(tx *store.WriteTx) error {
+		decided = domaintest.MustConclude(decided)
 		return tx.PutAttentionItem(ctx, decided)
 	}); err != nil {
 		t.Fatalf("record decision: %v", err)
@@ -1988,6 +1991,7 @@ func TestReconstructProductionReevaluationTaskFailsClosed(t *testing.T) {
 					if err != nil {
 						return err
 					}
+					resolvedItem = domaintest.MustConclude(resolvedItem)
 					return tx.PutAttentionItem(ctx, resolvedItem)
 				}
 				return nil
@@ -2384,6 +2388,9 @@ func TestReviewAttentionReusesFirstClassifierRoutingDecision(t *testing.T) {
 			}, nil)
 			if err != nil {
 				t.Fatal(err)
+			}
+			if status != domain.StatusOpen {
+				legacy = domaintest.MustConclude(legacy)
 			}
 			if err := attention.PutItem(ctx, legacy); err != nil {
 				t.Fatal(err)

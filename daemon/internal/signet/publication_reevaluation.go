@@ -877,7 +877,7 @@ func (s *Service) applyRerunTrustEvaluation(
 	command domain.Command, item domain.AttentionItem, status domain.ItemStatus,
 ) error {
 	if item.Type != domain.AttentionPublishBlocked || item.Subject.RunID == nil {
-		return concludeItem(ctx, tx, item, status, s.now().UTC())
+		return concludeItem(ctx, tx, command, item, status, s.now().UTC())
 	}
 	runID := *item.Subject.RunID
 	identityValid := item.ID == domain.ProductionBlockedItemID(runID)
@@ -894,7 +894,7 @@ func (s *Service) applyRerunTrustEvaluation(
 		// The attended fake-publication lane already offered this action as a
 		// conclude-only decision. Its consumer is explicitly outside #419, so
 		// preserve that behavior until the follow-up wires its own lifecycle.
-		return concludeItem(ctx, tx, item, status, s.now().UTC())
+		return concludeItem(ctx, tx, command, item, status, s.now().UTC())
 	}
 	if _, definitive := domain.DefinitivePublicationBlockReason(item.Reason); !definitive ||
 		!slices.Equal(item.RequestedDecision, []domain.Action{
@@ -939,7 +939,7 @@ func (s *Service) applyRerunTrustEvaluation(
 	if err != nil {
 		return err
 	}
-	if err := concludeItem(ctx, tx, item, status, s.now().UTC()); err != nil {
+	if err := concludeItem(ctx, tx, command, item, status, s.now().UTC()); err != nil {
 		return err
 	}
 	request := PublicationReevaluationRequest{

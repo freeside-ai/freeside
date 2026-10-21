@@ -477,11 +477,6 @@ func (w *productionPublicationWorkflow) reviseFindingAdjudication(
 			predecessor.ItemVersion != discussion.request.ItemVersion+1 {
 			return domain.ErrParentKeyMismatch
 		}
-		predecessor.Status = domain.StatusSuperseded
-		predecessor.ItemVersion++
-		if err := tx.PutAttentionItem(ctx, predecessor); err != nil {
-			return err
-		}
 		findings, err := loadAdjudicationFindings(ctx, tx, successor)
 		if err != nil {
 			return err
@@ -498,6 +493,17 @@ func (w *productionPublicationWorkflow) reviseFindingAdjudication(
 		replacement, err := w.newFindingAdjudicationAttentionItem(task, binding.run.TaskID, successor, &prior,
 			findings, domain.CanonicalDeclaredPaths(binding.resolvedPolicy), external, names)
 		if err != nil {
+			return err
+		}
+		// The replacement is built first so the predecessor's conclusion can
+		// name it; the predecessor is still written first.
+		predecessor.ItemVersion++
+		predecessor, err = predecessor.ConcludeByDaemon(domain.ConcludedBySupersession, w.now().UTC(),
+			"Superseded by the adjudicator's revised recommendation after discussion.", &replacement.ID)
+		if err != nil {
+			return err
+		}
+		if err := tx.PutAttentionItem(ctx, predecessor); err != nil {
 			return err
 		}
 		source, err := findingAdjudicationRecommendationSource(replacement, successor, record)

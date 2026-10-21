@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	"github.com/freeside-ai/freeside/daemon/internal/domain"
+	"github.com/freeside-ai/freeside/daemon/internal/domain/domaintest"
 	"github.com/freeside-ai/freeside/daemon/internal/engine"
 	"github.com/freeside-ai/freeside/daemon/internal/inference"
 	inferencefake "github.com/freeside-ai/freeside/daemon/internal/inference/fake"
@@ -195,6 +196,7 @@ func TestHumanGateClosureWaitNeverWedgesTheLane(t *testing.T) {
 			ready.ItemVersion++
 			decidedAt := p.now
 			ready.DecidedAt = &decidedAt
+			ready = domaintest.MustConclude(ready)
 			return tx.PutAttentionItem(p.ctx, ready)
 		}); err != nil {
 			t.Fatal(err)

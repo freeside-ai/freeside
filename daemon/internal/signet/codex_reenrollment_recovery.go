@@ -19,7 +19,7 @@ func (s *Service) applyCodexReenrollmentRecovery(
 		return domain.ErrCodexReenrollmentBindingMissing
 	}
 	now := s.now().UTC()
-	if err := concludeItem(ctx, tx, item, status, now); err != nil {
+	if err := concludeItem(ctx, tx, command, item, status, now); err != nil {
 		return err
 	}
 	binding := *item.CodexReenrollmentRecoveryBinding

@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/freeside-ai/freeside/daemon/internal/domain"
+	"github.com/freeside-ai/freeside/daemon/internal/domain/domaintest"
 	"github.com/freeside-ai/freeside/daemon/internal/engine"
 	"github.com/freeside-ai/freeside/daemon/internal/exec"
 	"github.com/freeside-ai/freeside/daemon/internal/exec/fake"
@@ -515,7 +516,7 @@ func TestExternalReviewCycleAtTheRoundLimitKeepsItsOwnItem(t *testing.T) {
 		t.Fatalf("seed the round-limit item: %v", err)
 	}
 	seeded.ItemVersion, seeded.Status = 2, domain.StatusResolved
-	if err := p.attention.PutItem(p.ctx, seeded); err != nil {
+	if err := p.attention.PutItem(p.ctx, domaintest.MustConclude(seeded)); err != nil {
 		t.Fatalf("resolve the round-limit item: %v", err)
 	}
 

@@ -66,6 +66,7 @@
         "created_at": "2026-08-10T12:34:56Z",
         "expires_when": "2026-08-11T12:34:56Z",
         "decided_at": null,
+        "conclusion": null,
         "posture": null,
         "blocking_supersession": null,
         "status": "open"

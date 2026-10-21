@@ -20,6 +20,7 @@ import (
 	"github.com/freeside-ai/freeside/daemon/internal/advisory"
 	"github.com/freeside-ai/freeside/daemon/internal/contentaddr"
 	"github.com/freeside-ai/freeside/daemon/internal/domain"
+	"github.com/freeside-ai/freeside/daemon/internal/domain/domaintest"
 	"github.com/freeside-ai/freeside/daemon/internal/exec"
 	execfake "github.com/freeside-ai/freeside/daemon/internal/exec/fake"
 	"github.com/freeside-ai/freeside/daemon/internal/inference"
@@ -1892,6 +1893,7 @@ func decideFindingAdjudicationItem(
 		}
 		concluded.Status = domain.StatusResolved
 		concluded.ItemVersion++
+		concluded = domaintest.MustConclude(concluded)
 		return tx.PutAttentionItem(f.ctx, concluded)
 	}); err != nil {
 		t.Fatal(err)

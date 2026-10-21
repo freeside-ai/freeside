@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/freeside-ai/freeside/daemon/internal/domain"
+	"github.com/freeside-ai/freeside/daemon/internal/domain/domaintest"
 	"github.com/freeside-ai/freeside/daemon/migrations"
 )
 
@@ -131,7 +132,7 @@ func decideSubsetDispute(t *testing.T, f externalCycleFixture, item domain.Atten
 		if err != nil {
 			return err
 		}
-		return tx.PutAttentionItem(t.Context(), item)
+		return tx.PutAttentionItem(t.Context(), domaintest.MustConclude(item))
 	}); err != nil {
 		t.Fatal(err)
 	}

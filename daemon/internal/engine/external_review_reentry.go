@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"slices"
+	"time"
 
 	"github.com/freeside-ai/freeside/daemon/internal/domain"
 	"github.com/freeside-ai/freeside/daemon/internal/store"
@@ -224,8 +225,12 @@ func StartExternalReviewReentry(
 		return false, err
 	}
 	item := plan.item
-	item.Status = domain.StatusSuperseded
 	item.ItemVersion++
+	item, err = item.ConcludeByDaemon(domain.ConcludedBySupersession, time.Now().UTC(),
+		"Superseded when an external reviewer's finding started a re-entry cycle.", nil)
+	if err != nil {
+		return false, fmt.Errorf("withdraw ready item for external review: %w", err)
+	}
 	if err := tx.PutAttentionItem(ctx, item); err != nil {
 		return false, fmt.Errorf("withdraw ready item for external review: %w", err)
 	}

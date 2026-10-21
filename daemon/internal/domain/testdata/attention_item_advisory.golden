@@ -62,6 +62,7 @@
   "created_at": null,
   "expires_when": null,
   "decided_at": null,
+  "conclusion": null,
   "posture": "advisory",
   "blocking_supersession": null,
   "status": "open"

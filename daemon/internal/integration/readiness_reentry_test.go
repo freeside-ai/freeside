@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"github.com/freeside-ai/freeside/daemon/internal/domain"
+	"github.com/freeside-ai/freeside/daemon/internal/domain/domaintest"
 	"github.com/freeside-ai/freeside/daemon/internal/engine"
 	"github.com/freeside-ai/freeside/daemon/internal/exec"
 	"github.com/freeside-ai/freeside/daemon/internal/exec/fake"
@@ -103,6 +104,7 @@ func (p *productionPublicationHarness) invalidateReady(
 	item.ItemVersion++
 	started := false
 	if err := p.store.Write(p.ctx, func(tx *store.WriteTx) error {
+		item = domaintest.MustConclude(item)
 		if err := tx.PutAttentionItem(p.ctx, item); err != nil {
 			return err
 		}
@@ -453,7 +455,7 @@ func TestReadinessReentryAtTheRoundLimitKeepsItsOwnItem(t *testing.T) {
 				}
 				if name != "open legacy exhaustion" {
 					seeded.ItemVersion, seeded.Status = 2, domain.StatusResolved
-					if err := p.attention.PutItem(p.ctx, seeded); err != nil {
+					if err := p.attention.PutItem(p.ctx, domaintest.MustConclude(seeded)); err != nil {
 						t.Fatal(err)
 					}
 				}
@@ -588,7 +590,7 @@ func (p *productionPublicationHarness) seedReadinessRoundLimitAdjudication(t *te
 		t.Fatal(err)
 	}
 	card.ItemVersion, card.Status = 2, domain.StatusResolved
-	if err := p.attention.PutItem(p.ctx, card); err != nil {
+	if err := p.attention.PutItem(p.ctx, domaintest.MustConclude(card)); err != nil {
 		t.Fatal(err)
 	}
 }

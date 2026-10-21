@@ -606,6 +606,11 @@ type AttentionItem struct {
 	// recorded it is immutable (ValidateAttentionItemTransition): an
 	// idempotent command replay or a later re-put must not move or erase it.
 	DecidedAt *time.Time `json:"decided_at"`
+	// Conclusion records how the item closed: the concluding decision or the
+	// daemon's reason for closing it (attention_conclusion.go). Nil while open
+	// and on items closed before the field existed; set once, by
+	// WithConclusion, on the closing transition.
+	Conclusion *Conclusion `json:"conclusion"`
 	// Posture is required exactly on system_health items. Blocking preserves
 	// the historical admission behavior; advisory keeps the observation open
 	// and visible without blocking unrelated unattended admission. It is fixed
@@ -1250,6 +1255,9 @@ func (i AttentionItem) Validate() error {
 		if i.DecidedAt.Location() != time.UTC {
 			return fmt.Errorf("item %s decided_at: %w", i.ID, ErrTimestampNotUTC)
 		}
+	}
+	if err := i.validateConclusion(); err != nil {
+		return err
 	}
 	// DecidedAt presence is deliberately not coupled to Status here: terminal
 	// items may legitimately carry no decision (expiry, supersession, rows

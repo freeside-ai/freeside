@@ -43,6 +43,10 @@ func (s *Service) currentProposal(
 // device-gated operator Submit path, so no active device is implied.
 const UnattendedInitiatorDeviceID = domain.DeviceID("daemon-label-intake")
 
+// unattendedInitiatorDisplayName is the decider a conclusion names for an
+// UnattendedInitiatorDeviceID decision (#2097).
+const unattendedInitiatorDisplayName = "Label intake"
+
 // StartTaskProposalUnattended records a daemon-attributed start decision on an
 // open task_proposal, through the same decision ledger an operator start uses
 // (GQ2): it creates a reserved-device start command and applies it, resolving
@@ -116,7 +120,7 @@ func (s *Service) applyStartProposal(
 	if err := tx.RecordProposalDecision(ctx, instance.ID, command.CommandID, command.Action, &digest, now); err != nil {
 		return "", err
 	}
-	return proposal.Kind, concludeItem(ctx, tx, item, domain.StatusResolved, now)
+	return proposal.Kind, concludeItem(ctx, tx, command, item, domain.StatusResolved, now)
 }
 
 func (s *Service) applyDeclineProposal(
@@ -133,7 +137,7 @@ func (s *Service) applyDeclineProposal(
 	if err := tx.RecordProposalDecision(ctx, instance.ID, command.CommandID, command.Action, nil, now); err != nil {
 		return err
 	}
-	return concludeItem(ctx, tx, item, domain.StatusDismissed, now)
+	return concludeItem(ctx, tx, command, item, domain.StatusDismissed, now)
 }
 
 func (s *Service) applySnoozeProposal(
@@ -207,14 +211,31 @@ func (s *Service) applyStartProposalWithChanges(
 		return err
 	}
 
-	superseded := item
-	superseded.ItemVersion++
-	superseded.Status = domain.StatusSuperseded
-	if err := tx.PutAttentionItem(ctx, superseded); err != nil {
-		return err
-	}
 	replacement, err := proposalReplacementItem(item, instance, revised, artifact, command.CommandID, merge, now)
 	if err != nil {
+		return err
+	}
+	// The revision is the operator's decision, so the replacement records the
+	// command; the item it replaces names the replacement instead.
+	decision, err := commandDecision(ctx, tx, command)
+	if err != nil {
+		return err
+	}
+	conclusion, err := domain.NewDecisionConclusion(now, decision)
+	if err != nil {
+		return err
+	}
+	if replacement, err = replacement.WithConclusion(conclusion); err != nil {
+		return err
+	}
+	superseded := item
+	superseded.ItemVersion++
+	superseded, err = superseded.ConcludeByDaemon(domain.ConcludedBySupersession, now,
+		"Superseded by the revised proposal this decision made.", &replacement.ID)
+	if err != nil {
+		return err
+	}
+	if err := tx.PutAttentionItem(ctx, superseded); err != nil {
 		return err
 	}
 	if err := tx.PutAttentionItem(ctx, replacement); err != nil {

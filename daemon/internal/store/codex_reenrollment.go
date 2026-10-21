@@ -249,6 +249,7 @@ func CodexReenrollmentMarkerOccurrence(
 	expected.Timing = item.Timing
 	expected.CreatedAt = item.CreatedAt
 	expected.DecidedAt = item.DecidedAt
+	expected.Conclusion = item.Conclusion
 	if item.HealthDiagnostic == nil {
 		expected.HealthDiagnostic = nil
 	}
