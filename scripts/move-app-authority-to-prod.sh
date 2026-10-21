@@ -4,10 +4,9 @@
 #
 #   bash scripts/move-app-authority-to-prod.sh <app-state-dir> <app-credentials-dir>
 #
-# Real-work runs used to keep the App's authority in their own directories
-# (FREESIDE_REAL_RUN_APP_STATE and FREESIDE_REAL_RUN_APP_CREDS). They now share
-# prod's: <prod root>/daemon holds the authority state and <prod root>/credentials
-# the credentials. The App has one authority, so the move is all or nothing and
+# Real-work runs used to keep the App's authority in their own directories.
+# They now share prod's: <prod root>/daemon holds the authority state and
+# <prod root>/credentials the credentials. The App has one authority, so the move is all or nothing and
 # never merges two authorities.
 #
 # It holds prod's database lock (<prod root>/daemon/freeside.db.daemon.lock,
@@ -232,7 +231,7 @@ move_app_authority() {
     return 1
   fi
   echo "moved the App authority into \"$prod_root\"; the sources are kept as *.moved-to-prod-$stamp" >&2
-  echo "set FREESIDE_REAL_RUN_APP_STATE=\"$prod_root/daemon\" and FREESIDE_REAL_RUN_APP_CREDS=\"$prod_root/credentials\"" >&2
+  echo "set prod.app_state_dir=\"$prod_root/daemon\" and prod.app_credentials_dir=\"$prod_root/credentials\" in the deputy's <root>/daemon/settings.json" >&2
 }
 
 main() {
