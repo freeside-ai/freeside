@@ -2197,7 +2197,7 @@
                         RunTimelineView(coordinator: coordinator, snapshot: activeRun)
                             .screenshotContent(timeline)
                     )))
-            // The header's technical details expanded (#1379): the exact run,
+            // The page's Identifiers footer expanded (#1379): the exact run,
             // task, campaign, and parent ids and the specification digest.
             surfaces.append(
                 Surface(

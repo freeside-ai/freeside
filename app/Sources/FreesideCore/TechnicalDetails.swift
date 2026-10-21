@@ -107,11 +107,12 @@ struct IdentifierGroup: Equatable {
     let rows: [AttentionDisplay.BindingRow]
 }
 
-/// The one disclosure (R2), collapsed by default and labeled "Technical
-/// Details", holding a surface's exact identifiers, digests, and producer
+/// The one disclosure (R2), collapsed by default and labeled "Identifiers",
+/// holding a surface's exact identifiers, digests, and producer
 /// coordinates, each with a copy control. The primary views name the work;
 /// the values a reader occasionally needs to compare or paste live one
-/// disclosure from reach, unchanged from the daemon (#1379).
+/// disclosure from reach, unchanged from the daemon (#1379). Every surface
+/// that draws it says the same word (#2117).
 struct TechnicalDetailsSection: View {
     /// Owner nil draws the rows with no heading: a surface with one owner.
     private let groups: [(owner: String?, rows: [AttentionDisplay.BindingRow])]
@@ -150,7 +151,7 @@ struct TechnicalDetailsSection: View {
 
     var body: some View {
         if groups.contains(where: { !$0.rows.isEmpty }) {
-            SentenceDisclosure(label: "Technical Details", summary: summary, isExpanded: isExpanded ?? $expanded) {
+            SentenceDisclosure(label: "Identifiers", summary: summary, isExpanded: isExpanded ?? $expanded) {
                 VStack(alignment: .leading, spacing: 14) {
                     ForEach(Array(groups.enumerated()), id: \.offset) { _, group in
                         VStack(alignment: .leading, spacing: 6) {

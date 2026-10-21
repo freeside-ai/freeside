@@ -130,7 +130,7 @@ struct SpecificationReaderView: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 22) {
             // What makes this text the one under review: the daemon bound
-            // its digest to the approval (the Technical Details row).
+            // its digest to the approval (the Identifiers row).
             Text("Bound by the daemon to this approval")
                 .font(FreesideFont.statement)
                 .foregroundStyle(Color.ink)

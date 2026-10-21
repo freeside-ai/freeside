@@ -243,7 +243,7 @@ struct RunTimelineView: View {
         return rows
     }
 
-    /// What the closed Technical Details says it holds: one word per row
+    /// What the closed Identifiers section says it holds: one word per row
     /// of `technicalRows`.
     static func technicalSummary(run: Components.Schemas.Run, hold: Components.Schemas.RunHold? = nil) -> String {
         var parts = ["run", "task"]
@@ -329,7 +329,7 @@ struct RunTimelineView: View {
     /// The recorded hold in the one system callout, the shape the task
     /// page gives its hold: the round, the hold in words, and when the
     /// daemon observed it. A finished run's hold is a past fact and says
-    /// so. The exact code sits in Technical Details.
+    /// so. The exact code sits in Identifiers.
     private func holdCallout(_ hold: Components.Schemas.RunHold) -> some View {
         SystemCallout {
             if let round = RunDisplay.stageHeading(

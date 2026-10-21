@@ -265,7 +265,7 @@ enum RunDisplay {
     }
 
     /// What a run's specification digest is, which the header says as a
-    /// sentence and Technical Details says as a row label.
+    /// sentence and the Identifiers section says as a row label.
     private enum SpecificationStanding {
         case source
         case approved
@@ -294,7 +294,7 @@ enum RunDisplay {
         }
     }
 
-    /// The Technical Details row that carries the digest. A row label is
+    /// The Identifiers row that carries the digest. A row label is
     /// Title Case (R9); the header's line is prose and keeps its own case.
     static func specificationRowLabel(
         _ run: Components.Schemas.Run, approval: TaskDisplay.SpecificationApproval
