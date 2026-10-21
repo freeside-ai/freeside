@@ -43,6 +43,12 @@ const (
 	// project image supports, or changes one a rebuild cannot bound
 	// (package.json's overrides, workspaces, or packageManager).
 	RebuildRefusalUnsupportedInput RebuildRefusal = "unsupported_npm_input"
+	// RebuildRefusalGoDependencyChanged: the candidate changes the go.mod or
+	// go.sum of a Go image's module, holds one in a shape no build reads, or
+	// holds a Go input no project image supports (a vendor directory, a
+	// go.work). No rule bounds a Go dependency change yet, so every one needs
+	// a newly reviewed image.
+	RebuildRefusalGoDependencyChanged RebuildRefusal = "go_dependency_changed"
 	// RebuildRefusalNoRegistrySet: the run's policy declares no registry set,
 	// or a malformed one.
 	RebuildRefusalNoRegistrySet RebuildRefusal = "no_registry_set"
@@ -62,6 +68,7 @@ var AllRebuildRefusals = []RebuildRefusal{
 	RebuildRefusalRecipeChanged, RebuildRefusalLockfileInconsistent,
 	RebuildRefusalUnsupportedInput, RebuildRefusalNoRegistrySet,
 	RebuildRefusalNotConfigured, RebuildRefusalProofFailed,
+	RebuildRefusalGoDependencyChanged,
 }
 
 func (r RebuildRefusal) valid() bool {
@@ -69,7 +76,8 @@ func (r RebuildRefusal) valid() bool {
 	case RebuildRefusalUndeclaredAuthority, RebuildRefusalUnpinnedSource,
 		RebuildRefusalRecipeChanged, RebuildRefusalLockfileInconsistent,
 		RebuildRefusalUnsupportedInput, RebuildRefusalNoRegistrySet,
-		RebuildRefusalNotConfigured, RebuildRefusalProofFailed:
+		RebuildRefusalNotConfigured, RebuildRefusalProofFailed,
+		RebuildRefusalGoDependencyChanged:
 		return true
 	default:
 		return false

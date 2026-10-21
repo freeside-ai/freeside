@@ -36,8 +36,12 @@ type RebuildDecision struct {
 // manifests stays inside the project's declared policy, so the image may be
 // rebuilt at headSHA without a person.
 //
-// The gate applies only to a head whose package.json or package-lock.json
-// differs from the ones image baked. It then holds when all of these do:
+// The gate applies only to a head whose dependency manifests differ from the
+// ones image baked (ProjectImageEnvironment.ChangedManifests), or, for a Go
+// image, to a head holding a Go input no image supports. For a Go image it
+// then always refuses: no rule yet bounds a change to go.mod or go.sum, so
+// each one needs a newly reviewed image. For an npm image it holds when all
+// of these do:
 //
 //   - The head holds neither npm-shrinkwrap.json nor .npmrc.
 //   - The head declares the verification recipe its base declares.
@@ -81,16 +85,37 @@ func EvaluateRebuild(
 		// A manifest or recipe in a shape no build can read (a symlink, an
 		// oversized blob). Whether the manifests changed cannot be told, and
 		// no image could be built from them, so this is the gate's refusal.
-		return refuse(domain.ProjectImageBaseInputs{CommitSHA: headSHA},
-			RebuildRefusalLockfileInconsistent,
+		clause := RebuildRefusalLockfileInconsistent
+		if image.InputLayout().Toolchain == domain.ProjectToolchainGo {
+			clause = RebuildRefusalGoDependencyChanged
+		}
+		return refuse(domain.ProjectImageBaseInputs{CommitSHA: headSHA}, clause,
 			"a dependency manifest or the recipe at the candidate is not a readable regular file"), nil
 	}
 	if err != nil {
 		return RebuildDecision{}, fmt.Errorf("observe project-image inputs at head %s: %w", headSHA, err)
 	}
-	if image.Environment == nil ||
-		(head.PackageJSONSHA256 == image.Environment.PackageJSONSHA256 &&
-			head.PackageLockSHA256 == image.Environment.PackageLockSHA256) {
+	if image.Environment == nil {
+		return RebuildDecision{Head: head}, nil
+	}
+	changed := image.Environment.ChangedManifests(head)
+	if image.InputLayout().Toolchain == domain.ProjectToolchainGo {
+		// A Go head that keeps its manifests but adds a vendor directory or a
+		// go.work would otherwise fail only inside the room, at the
+		// preparation helper; the gate names it instead.
+		if len(changed) == 0 && len(head.UnsupportedInputs) == 0 {
+			return RebuildDecision{Head: head}, nil
+		}
+		var parts []string
+		if len(changed) != 0 {
+			parts = append(parts, "changes "+strings.Join(changed, ", "))
+		}
+		if len(head.UnsupportedInputs) != 0 {
+			parts = append(parts, "contains "+strings.Join(head.UnsupportedInputs, ", "))
+		}
+		return refuse(head, RebuildRefusalGoDependencyChanged, "the candidate %s", strings.Join(parts, " and ")), nil
+	}
+	if len(changed) == 0 {
 		return RebuildDecision{Head: head}, nil
 	}
 	if len(head.UnsupportedInputs) != 0 {
@@ -178,8 +203,9 @@ func (i BuildInputs) Validate() error {
 // RebuildRequest derives the request that rebuilds image at headSHA from the
 // local checkout sourceDir. Everything the image record binds carries over
 // unchanged: the repository, the recipe (recipe must hash to the recorded
-// digest), the base image, and the registry destination, which is parsed back
-// out of the image's own reference. Only the commit, the tag, and the source
+// digest), the base image, the declared Go module directory, and the
+// registry destination, which is parsed back out of the image's own
+// reference. Only the commit, the tag, and the source
 // differ.
 //
 // The tag names the head, so two candidates never contend for one tag; the
@@ -220,6 +246,9 @@ func RebuildRequest(
 		RefTag:       "rebuild-" + headSHA[:12],
 		DNS:          append([]string{}, inputs.DNS...),
 		BuildProxy:   inputs.BuildProxy,
+	}
+	if image.Environment != nil {
+		request.GoModuleDir = image.Environment.GoModuleDir
 	}
 	registry := destination[:separator]
 	if port, local := strings.CutPrefix(registry, "127.0.0.1:"); local {

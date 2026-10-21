@@ -127,6 +127,50 @@ func TestRebuiltImageServesOnlyWhatTheAdmittedImageBinds(t *testing.T) {
 	}
 }
 
+func goRebuildEnvironment(moduleDir string) *domain.ProjectImageEnvironment {
+	return &domain.ProjectImageEnvironment{
+		Toolchain: domain.ProjectToolchainGo, GoModuleDir: moduleDir,
+		GoModSHA256: strings.Repeat("4", 64), GoSumSHA256: strings.Repeat("5", 64),
+		PreparationDigest: projectimage.PreparationDigest(),
+	}
+}
+
+// A Go image is held to its module's manifests and module directory, the
+// way an npm image is held to its root manifests.
+func TestRebuiltGoImageServesOnlyItsModuleManifests(t *testing.T) {
+	t.Parallel()
+	admitted := rebuildTestImage(t, func(input *domain.ProjectImageInput) {
+		input.Environment = goRebuildEnvironment("daemon")
+		input.Environment.GoSumSHA256 = strings.Repeat("3", 64)
+	})
+	head := domain.ProjectImageBaseInputs{
+		CommitSHA:   strings.Repeat("b", 40),
+		GoModSHA256: strings.Repeat("4", 64), GoSumSHA256: strings.Repeat("5", 64),
+	}
+	rebuilt := func(edit func(*domain.ProjectImageEnvironment)) domain.ProjectImage {
+		return rebuildTestImage(t, func(input *domain.ProjectImageInput) {
+			input.CommitSHA = head.CommitSHA
+			input.ImageRef = domain.ImageRef("ghcr.io/owner/project@sha256:" + strings.Repeat("f", 64))
+			input.Environment = goRebuildEnvironment("daemon")
+			if edit != nil {
+				edit(input.Environment)
+			}
+		})
+	}
+	if err := rebuiltImageServes(rebuilt(nil), admitted, head, projectimage.PreparationDigest()); err != nil {
+		t.Fatalf("a Go image baking the head's module manifests was refused: %v", err)
+	}
+	for name, edit := range map[string]func(*domain.ProjectImageEnvironment){
+		"another go.sum":           func(e *domain.ProjectImageEnvironment) { e.GoSumSHA256 = strings.Repeat("7", 64) },
+		"another module directory": func(e *domain.ProjectImageEnvironment) { e.GoModuleDir = "tools" },
+	} {
+		if err := rebuiltImageServes(rebuilt(edit), admitted, head, projectimage.PreparationDigest()); !errors.Is(
+			err, domain.ErrProjectImageIncompatible) {
+			t.Errorf("%s: err = %v, want ErrProjectImageIncompatible", name, err)
+		}
+	}
+}
+
 // Every clause a person can be shown has its own sentence; none falls through
 // to the fallback an invalid clause gets.
 func TestRebuildRefusalMeaningCoversEveryClause(t *testing.T) {
@@ -229,7 +273,15 @@ func TestRebuiltImageKeepsAdmittedNeedsNoHead(t *testing.T) {
 		input.ImageRef = domain.ImageRef("ghcr.io/owner/project@sha256:" + strings.Repeat("e", 64))
 		input.RecipeDigest = domain.Digest("sha256:" + strings.Repeat("9", 64))
 	})
-	for name, image := range map[string]domain.ProjectImage{"the admitted image": admitted, "another recipe": other} {
+	// An image that installs another toolchain's inputs prepares another
+	// workspace, whatever else it keeps.
+	goImage := rebuildTestImage(t, func(input *domain.ProjectImageInput) {
+		input.ImageRef = domain.ImageRef("ghcr.io/owner/project@sha256:" + strings.Repeat("e", 64))
+		input.Environment = goRebuildEnvironment("daemon")
+	})
+	for name, image := range map[string]domain.ProjectImage{
+		"the admitted image": admitted, "another recipe": other, "another input layout": goImage,
+	} {
 		if err := rebuiltImageKeepsAdmitted(image, admitted); !errors.Is(err, domain.ErrProjectImageIncompatible) {
 			t.Fatalf("%s: err = %v, want ErrProjectImageIncompatible", name, err)
 		}

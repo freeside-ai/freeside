@@ -558,3 +558,108 @@ func TestObserveGoBaseInputsAtTheModuleDirectory(t *testing.T) {
 		t.Fatalf("invalid layout = %v, want ErrProjectImageInvalid", err)
 	}
 }
+
+func TestEvaluateRebuildRefusesEveryGoDependencyChange(t *testing.T) {
+	const declared = `["registry.npmjs.org"]`
+	repo := newBaseInputsRepo(t)
+	base := repo.commit(map[string]string{
+		"daemon/go.mod": testGoMod, "daemon/go.sum": testGoSum, "daemon/main.go": "package main\n",
+		verify.DefaultRecipePath: testRecipe,
+	})
+	image := domain.ProjectImage{Environment: &domain.ProjectImageEnvironment{
+		Toolchain: domain.ProjectToolchainGo, GoModuleDir: "daemon",
+		GoModSHA256:       manifestSHA256([]byte(testGoMod)),
+		GoSumSHA256:       manifestSHA256([]byte(testGoSum)),
+		PreparationDigest: PreparationDigest(),
+	}}
+	for _, test := range []struct {
+		name    string
+		changes map[string]string
+		needed  bool
+		// detail lists what the refusal names.
+		detail []string
+	}{
+		{name: "source-only head", changes: map[string]string{"daemon/main.go": "package main\n\nfunc main() {}\n"}},
+		{
+			// npm manifests are not a Go image's inputs.
+			name:    "root package.json added",
+			changes: map[string]string{"package.json": gateBasePackageJSON, "package-lock.json": gateBasePackageLock},
+		},
+		{
+			name: "vendor added alone", needed: true,
+			changes: map[string]string{"daemon/vendor/modules.txt": "x\n"},
+			detail:  []string{"the candidate contains daemon/vendor"},
+		},
+		{
+			name: "go.work added above the module", needed: true,
+			changes: map[string]string{"go.work": "go 1.26\n"},
+			detail:  []string{"the candidate contains go.work"},
+		},
+		{
+			name: "go.sum changed", needed: true,
+			changes: map[string]string{"daemon/go.sum": testGoSum + "example.test/x v1.0.0 h1:y=\n"},
+			detail:  []string{"the candidate changes daemon/go.sum"},
+		},
+		{
+			name: "go.mod and go.sum changed with a vendor directory", needed: true,
+			changes: map[string]string{
+				"daemon/go.mod": testGoMod + "require example.test/x v1.0.0\n",
+				"daemon/go.sum": "", "daemon/vendor/modules.txt": "x\n",
+			},
+			detail: []string{"the candidate changes daemon/go.mod, daemon/go.sum and contains daemon/vendor"},
+		},
+		{
+			name: "local-path replace", needed: true,
+			changes: map[string]string{"daemon/go.mod": testGoMod + "replace example.test/dep => ../dep\n"},
+			detail:  []string{"daemon/go.mod", goLocalReplaceInput("daemon")},
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			repo.git("checkout", "-q", "--detach", base)
+			head := repo.commit(test.changes)
+			decision, err := EvaluateRebuild(t.Context(), "git", repo.dir, image, base, head, gatePolicy(t, declared))
+			if err != nil {
+				t.Fatalf("EvaluateRebuild: %v", err)
+			}
+			want := RebuildRefusal("")
+			if test.needed {
+				want = RebuildRefusalGoDependencyChanged
+			}
+			if decision.Needed != test.needed || decision.Refusal != want || decision.Head.CommitSHA != head {
+				t.Fatalf("decision = %+v, want needed=%t refusal=%q", decision, test.needed, want)
+			}
+			for _, name := range test.detail {
+				if !strings.Contains(decision.Detail, name) {
+					t.Errorf("detail %q does not name %q", decision.Detail, name)
+				}
+			}
+		})
+	}
+	t.Run("unreadable go.mod", func(t *testing.T) {
+		repo.git("checkout", "-q", "--detach", base)
+		repo.git("rm", "-q", "daemon/go.mod")
+		repo.git("update-index", "--add", "--cacheinfo", "120000,"+
+			repo.git("hash-object", "-w", "daemon/go.sum")+",daemon/go.mod")
+		repo.git("commit", "-q", "-m", "symlink")
+		head := repo.git("rev-parse", "HEAD")
+		decision, err := EvaluateRebuild(t.Context(), "git", repo.dir, image, base, head, gatePolicy(t, declared))
+		if err != nil || !decision.Needed || decision.Refusal != RebuildRefusalGoDependencyChanged {
+			t.Fatalf("decision = %+v, %v; want the Go clause", decision, err)
+		}
+	})
+}
+
+func TestRebuildRequestKeepsTheDeclaredGoModule(t *testing.T) {
+	const head = "1111111111111111111111111111111111111111"
+	image := rebuildTestImage(t, "127.0.0.1:5100/freeside-project-x@"+testImageDigest)
+	image.Environment = &domain.ProjectImageEnvironment{
+		Toolchain: domain.ProjectToolchainGo, GoModuleDir: "daemon",
+		GoModSHA256: manifestSHA256([]byte(testGoMod)), GoSumSHA256: manifestSHA256([]byte(testGoSum)),
+		PreparationDigest: PreparationDigest(),
+	}
+	request, err := RebuildRequest(image, head, "/checkout", []byte(testRecipe),
+		BuildInputs{BaseBuildRef: "freeside-agent-claude:local"})
+	if err != nil || request.GoModuleDir != "daemon" {
+		t.Fatalf("RebuildRequest = %+v, %v; want the image's module directory", request, err)
+	}
+}

@@ -138,6 +138,8 @@ func rebuildRefusalMeaning(clause projectimage.RebuildRefusal) string {
 		return "The dependency change is within policy, but this daemon is not configured to rebuild project images."
 	case projectimage.RebuildRefusalProofFailed:
 		return "The dependency change is within policy, but the rebuilt image failed its proofs or did not finish building in time."
+	case projectimage.RebuildRefusalGoDependencyChanged:
+		return "The candidate changes its Go module's go.mod or go.sum, or adds a Go input no project image supports; a Go dependency change needs a newly reviewed project image."
 	}
 	return "The project image could not be rebuilt for this candidate."
 }
@@ -172,8 +174,7 @@ func rebuiltImageServes(
 		return err
 	}
 	if environment := image.Environment; environment == nil ||
-		environment.PackageJSONSHA256 != head.PackageJSONSHA256 ||
-		environment.PackageLockSHA256 != head.PackageLockSHA256 ||
+		len(environment.ChangedManifests(head)) != 0 ||
 		environment.PreparationDigest != preparation {
 		return fmt.Errorf(
 			"%w: image %s does not record the dependency manifests at %s, baked with this binary's toolchain and preparation sources",
@@ -184,8 +185,8 @@ func rebuiltImageServes(
 
 // rebuiltImageKeepsAdmitted is the part of the gate that needs no checkout:
 // the image must be another image of the admitted image's repository that
-// keeps its recipe, its base image, and the fixed preparation helper the room
-// runs as its first command.
+// keeps its recipe, its base image, its input layout, and the fixed
+// preparation helper the room runs as its first command.
 func rebuiltImageKeepsAdmitted(image, admitted domain.ProjectImage) error {
 	if err := image.Validate(); err != nil {
 		return err
@@ -194,6 +195,7 @@ func rebuiltImageKeepsAdmitted(image, admitted domain.ProjectImage) error {
 		image.RepositoryID != admitted.RepositoryID ||
 		image.RecipeDigest != admitted.RecipeDigest ||
 		image.BaseImageRef != admitted.BaseImageRef ||
+		image.InputLayout() != admitted.InputLayout() ||
 		!slices.Equal(image.PreparationCommand, []string{projectimage.PreparationPath}) {
 		return fmt.Errorf("%w: image %s does not keep what admitted image %s binds",
 			domain.ErrProjectImageIncompatible, image.ImageRef, admitted.ImageRef)
