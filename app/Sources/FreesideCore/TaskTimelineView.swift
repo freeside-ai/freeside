@@ -277,7 +277,7 @@ struct TaskTimelineView: View {
                         .font(FreesideFont.cardBody)
                         .foregroundStyle(Color.inkDim)
                 } else {
-                    eventRail(rows)
+                    TimelineRail(rows: rows)
                 }
             }
             if timeline.sections.isEmpty {
@@ -563,88 +563,6 @@ struct TaskTimelineView: View {
             FactRow(label: label, value: ShortIdentifier.short(runID))
         }
     }
-
-    /// The gap under a row, and the wider one under a stage start, which
-    /// sets the start apart from the older entry beneath it.
-    private static let railGap: CGFloat = 10
-    private static let railGapUnderStageStart: CGFloat = 18
-    /// How far a connector is drawn from its marker before the row cuts it
-    /// off: longer than any row at any text size.
-    private static let connectorReach: CGFloat = 2000
-
-    /// The task's events as one rail, newest first: the newest entry leads
-    /// in ink, a stage start is marked in the diff green and a failure in
-    /// wax, and a connector joins every marker to the next. Rows touch, each
-    /// carrying its own gap, so the connector runs through the gap unbroken.
-    private func eventRail(_ rows: [TaskTimelinePresentation.Row]) -> some View {
-        VStack(alignment: .leading, spacing: 0) {
-            ForEach(Array(rows.enumerated()), id: \.offset) { index, row in
-                let isLast = index == rows.count - 1
-                HStack(alignment: .firstTextBaseline, spacing: 8) {
-                    ChronologyMarker(kind: TaskTimelinePresentation.marker(row))
-                        .background { connector(above: index > 0, below: !isLast) }
-                        .alignmentGuide(.firstTextBaseline) { $0[.bottom] - 1 }
-                    ViewThatFits(in: .horizontal) {
-                        HStack(alignment: .firstTextBaseline, spacing: 8) {
-                            railLabel(row)
-                            Spacer(minLength: 8)
-                            railTime(row)
-                        }
-                        VStack(alignment: .leading, spacing: 4) {
-                            railLabel(row)
-                            railTime(row)
-                        }
-                    }
-                }
-                .padding(.bottom, isLast ? 0 : row.isStageStart ? Self.railGapUnderStageStart : Self.railGap)
-                // Cuts the connector off at the row's edges, where the next
-                // row's connector takes over.
-                .clipped()
-                .accessibilityElement(children: .combine)
-            }
-        }
-    }
-
-    /// The connector's two halves, each drawn from the marker's edge out
-    /// past the row. The marker sits on the label's baseline, so its place
-    /// in the row is not known here; the row's bounds end each half instead.
-    /// Clipping hides the overflow without removing it from hit testing, so
-    /// the connector takes no hits: it would otherwise cover a strip of the
-    /// controls above and below the rail.
-    private func connector(above: Bool, below: Bool) -> some View {
-        let offset = (Self.connectorReach + ChronologyMarker.diameter) / 2
-        return ZStack {
-            if above { connectorHalf.offset(y: -offset) }
-            if below { connectorHalf.offset(y: offset) }
-        }
-        .allowsHitTesting(false)
-        .accessibilityHidden(true)
-    }
-
-    private var connectorHalf: some View {
-        Rectangle()
-            .fill(Color.milestoneConnector)
-            .frame(width: 2, height: Self.connectorReach)
-    }
-
-    /// The newest entry and the stage start drawn from it are semibold. A
-    /// stage start is full ink wherever it sits; an older event is dimmed.
-    private func railLabel(_ row: TaskTimelinePresentation.Row) -> some View {
-        Text(row.label)
-            .font(FreesideFont.sans(.callout, weight: row.isNewest ? .semibold : .regular))
-            .foregroundStyle(row.isNewest || row.isStageStart ? Color.ink : Color.inkDim)
-            .fixedSize(horizontal: false, vertical: true)
-    }
-
-    private func railTime(_ row: TaskTimelinePresentation.Row) -> some View {
-        Text(
-            FreesideFormat.shortTime(
-                row.recordedAt, now: now, locale: locale, timeZone: timeZone)
-        )
-        .font(FreesideFont.trailingSummary)
-        .foregroundStyle(Color.inkDim)
-        .exactInstant(row.recordedAt)
-    }
 }
 
 /// Current projections retain daemon ordering. Legacy cached projections
@@ -701,28 +619,6 @@ enum TaskTimelinePresentation {
         return entries
     }
 
-    /// One line on the task's event rail: a daemon event, or the start of a
-    /// stage drawn from one.
-    struct Row: Equatable {
-        enum Kind: Equatable {
-            case event
-            /// An event that records a failure. The rail marks it in wax.
-            case failure
-            case stageStart(Components.Schemas.StageName)
-        }
-
-        let kind: Kind
-        let label: String
-        let recordedAt: Date
-        /// The newest event, and the stage start drawn from it: the two
-        /// share one instant, so both read as the head of the rail.
-        var isNewest = false
-
-        var isStageStart: Bool {
-            if case .stageStart = kind { true } else { false }
-        }
-    }
-
     /// Where the walk in `rows(_:)` stands: a stage within one campaign. A
     /// new campaign is a new position even when its first stage repeats the
     /// last one, so a revised specification gets its own start point.
@@ -748,7 +644,7 @@ enum TaskTimelinePresentation {
     /// Three kinds of event are machinery and leave the rail: a campaign's
     /// allocation, an invocation's start, and the result of a review
     /// round's own invocation, which the round's entry already states.
-    static func rows(_ timeline: Components.Schemas.TaskTimeline) -> [Row] {
+    static func rows(_ timeline: Components.Schemas.TaskTimeline) -> [TimelineRail.Row] {
         let events = events(timeline)
         var runs: [String: (run: Components.Schemas.TaskTimelineRun, campaignID: String?)] = [:]
         for section in timeline.sections {
@@ -759,7 +655,7 @@ enum TaskTimelinePresentation {
         let reviewInvocations = Set(events.compactMap { $0.review?.value1.invocation_id })
         var position: StagePosition?
         var results: [String: Int] = [:]
-        var oldestFirst: [Row] = []
+        var oldestFirst: [TimelineRail.Row] = []
         for event in events.reversed() {
             let milestone = event.milestone?.value1
             let source = (event.run_id ?? milestone?.run_id).flatMap { runs[$0] }
@@ -793,12 +689,12 @@ enum TaskTimelinePresentation {
             }
             if let start {
                 oldestFirst.append(
-                    Row(
+                    TimelineRail.Row(
                         kind: .stageStart(start), label: "\(AttentionDisplay.label(start)) started",
                         recordedAt: event.recorded_at))
             }
             oldestFirst.append(
-                Row(
+                TimelineRail.Row(
                     kind: recordsFailure(event) ? .failure : .event,
                     label: rowLabel(event, run: source?.run, pass: pass), recordedAt: event.recorded_at))
         }
@@ -810,21 +706,11 @@ enum TaskTimelinePresentation {
 
     /// The stage the rail's newest start point names, which the header's
     /// chip and hold callout repeat.
-    static func newestStage(_ rows: [Row]) -> Components.Schemas.StageName? {
+    static func newestStage(_ rows: [TimelineRail.Row]) -> Components.Schemas.StageName? {
         for row in rows {
             if case .stageStart(let stage) = row.kind { return stage }
         }
         return nil
-    }
-
-    /// A row's marker. A stage start keeps its green and a failure its wax
-    /// at the head of the rail, where any other entry takes the ink dot.
-    static func marker(_ row: Row) -> ChronologyMarker.Kind {
-        switch row.kind {
-        case .stageStart: .stageStart
-        case .failure: .failure
-        case .event: row.isNewest ? .current : .prior
-        }
     }
 
     private static func stage(_ role: Components.Schemas.TaskRunRole) -> Components.Schemas.StageName {
