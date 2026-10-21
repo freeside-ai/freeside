@@ -121,14 +121,14 @@ struct TimelineRail: View {
     }
 
     /// The newest entry and the stage start drawn from it are semibold. A
-    /// stage start is full ink wherever it sits; an older event is dimmed.
-    /// The context, when there is one, sits under the label in the mono a
-    /// trailing summary uses.
+    /// failure reads in wax and a stage start in full ink wherever they
+    /// sit; an older event is dimmed. The context, when there is one, sits
+    /// under the label in the mono a trailing summary uses.
     private func label(_ row: Row) -> some View {
         VStack(alignment: .leading, spacing: 2) {
             Text(row.label)
                 .font(FreesideFont.sans(.callout, weight: row.isNewest ? .semibold : .regular))
-                .foregroundStyle(row.isNewest || row.isStageStart ? Color.ink : Color.inkDim)
+                .foregroundStyle(Self.labelColor(row))
                 .fixedSize(horizontal: false, vertical: true)
             if let context = row.context {
                 Text(context)
@@ -136,6 +136,14 @@ struct TimelineRail: View {
                     .foregroundStyle(Color.inkDim)
                     .fixedSize(horizontal: false, vertical: true)
             }
+        }
+    }
+
+    private static func labelColor(_ row: Row) -> Color {
+        switch row.kind {
+        case .failure: .waxText
+        case .stageStart: .ink
+        case .event: row.isNewest ? .ink : .inkDim
         }
     }
 
