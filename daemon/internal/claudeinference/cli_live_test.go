@@ -140,14 +140,8 @@ func probePinnedCLI(t *testing.T, driver *Driver, effort string) {
 	defer server.Close()
 	root := t.TempDir()
 	copyPath := root + "/claude"
-	f, err := os.OpenFile(copyPath, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0o500) //nolint:gosec // G302: exercise the production private executable-copy protocol.
-	if err != nil {
+	if err := driver.writePrivateBinary(copyPath); err != nil {
 		t.Fatal(err)
-	}
-	copyErr := driver.copyBinary(f)
-	closeErr := f.Close()
-	if copyErr != nil || closeErr != nil {
-		t.Fatal("private executable copy failed")
 	}
 	if err := os.WriteFile(root+"/CLAUDE.md", []byte("repository-canary must not be read"), 0o600); err != nil {
 		t.Fatal(err)

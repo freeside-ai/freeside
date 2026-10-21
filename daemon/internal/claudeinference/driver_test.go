@@ -5,6 +5,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -136,6 +137,76 @@ func TestCompleteRejectsUnsupportedSitesAndCancellation(t *testing.T) {
 	cancel()
 	if _, err := d.Complete(ctx, classifierRequest(), "token"); err == nil {
 		t.Fatal("accepted canceled call")
+	}
+}
+
+func TestPrivateBinaryRefusesExistingDestination(t *testing.T) {
+	b, _ := json.Marshal(completion())
+	d := testDriver(t, "cat >/dev/null\nprintf '%s' '"+string(b)+"'\n")
+	path := filepath.Join(t.TempDir(), "existing")
+	if err := os.WriteFile(path, []byte("keep"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := d.writePrivateBinary(path); !os.IsExist(err) {
+		t.Fatalf("existing destination: %v", err)
+	}
+	if got, err := os.ReadFile(path); err != nil || string(got) != "keep" { //nolint:gosec // G304: test-owned path.
+		t.Fatalf("existing destination changed: %q, %v", got, err)
+	}
+	// A successful launch also proves the failed open released the fork guard.
+	if _, err := d.Complete(t.Context(), classifierRequest(), "synthetic"); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestCompleteRefusesPrivateCopyFailureAndRecovers(t *testing.T) {
+	for _, failure := range []string{"missing source", "non-executable source", "changed pin"} {
+		t.Run(failure, func(t *testing.T) {
+			b, _ := json.Marshal(completion())
+			marker := filepath.Join(t.TempDir(), "launched")
+			d := testDriver(t, "cat >/dev/null\n: >'"+marker+"'\nprintf '%s' '"+string(b)+"'\n")
+			original, err := os.ReadFile(d.config.Binary)
+			if err != nil {
+				t.Fatal(err)
+			}
+			scratch := t.TempDir()
+			t.Setenv("TMPDIR", scratch)
+			switch failure {
+			case "missing source":
+				err = os.Remove(d.config.Binary)
+			case "non-executable source":
+				err = os.Chmod(d.config.Binary, 0o600)
+			case "changed pin":
+				execfixture.Write(t, d.config.Binary, append(original, []byte("# changed\n")...), 0o700)
+			}
+			if err != nil {
+				t.Fatal(err)
+			}
+			got, quiescent, err := d.CompleteAndConfirm(t.Context(), classifierRequest(), "synthetic")
+			if !errors.Is(err, errCompletion) || err.Error() != errCompletion.Error() || !quiescent || len(got.Output) != 0 || got.ComputeUnits != 0 || got.Observed != (inference.Observed{}) {
+				t.Fatalf("copy refusal: %+v, quiescent %v, %v", got, quiescent, err)
+			}
+			if _, err := os.Stat(marker); !os.IsNotExist(err) {
+				t.Fatalf("refused copy launched the CLI: %v", err)
+			}
+			if entries, err := os.ReadDir(scratch); err != nil || len(entries) != 0 {
+				t.Fatalf("refused copy left scratch: %v, %v", entries, err)
+			}
+			execfixture.Write(t, d.config.Binary, original, 0o700)
+			if err := os.Chmod(d.config.Binary, 0o700); err != nil { //nolint:gosec // G302: test fixture must regain its executable owner-only mode.
+				t.Fatal(err)
+			}
+			got, quiescent, err = d.CompleteAndConfirm(t.Context(), classifierRequest(), "synthetic")
+			if err != nil || !quiescent || string(got.Output) != completion()["result"] || got.ComputeUnits != 12 {
+				t.Fatalf("call after refusal: %+v, quiescent %v, %v", got, quiescent, err)
+			}
+			if _, err := os.Stat(marker); err != nil {
+				t.Fatalf("recovered call did not launch: %v", err)
+			}
+			if entries, err := os.ReadDir(scratch); err != nil || len(entries) != 0 {
+				t.Fatalf("successful call left scratch: %v, %v", entries, err)
+			}
+		})
 	}
 }
 

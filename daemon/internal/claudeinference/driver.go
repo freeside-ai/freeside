@@ -19,6 +19,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"syscall"
 	"time"
 
 	"github.com/freeside-ai/freeside/daemon/internal/domain"
@@ -124,6 +125,23 @@ func (d *Driver) copyBinary(dst io.Writer) error {
 	return nil
 }
 
+// writePrivateBinary keeps Go forks from inheriting the executable's write
+// descriptor until their exec. Closing only our descriptor would still leave
+// that window open to ETXTBSY. Release the guard before any subprocess launch,
+// which needs the write side of ForkLock.
+func (d *Driver) writePrivateBinary(path string) error {
+	syscall.ForkLock.RLock()
+	defer syscall.ForkLock.RUnlock()
+
+	f, err := os.OpenFile(path, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0o500) //nolint:gosec // G302: verified executable needs owner execute permission; private 0700 parent.
+	if err != nil {
+		return err
+	}
+	copyErr := d.copyBinary(f)
+	closeErr := f.Close()
+	return errors.Join(copyErr, closeErr)
+}
+
 // Complete makes one CLI turn without tools, hooks, MCP, saved sessions, or a
 // repository directory. ComputeUnits are generated tokens (including thinking
 // if ever reported); input is separately byte-bounded by the inference site.
@@ -175,13 +193,7 @@ func (d *Driver) CompleteAndConfirm(ctx context.Context, req inference.Request, 
 	// Execute the verified private copy so an updater replacing the configured
 	// path between hashing and exec cannot silently select a different CLI.
 	binary := filepath.Join(root, "claude")
-	f, err := os.OpenFile(binary, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0o500) //nolint:gosec // G302: verified executable needs owner execute permission; private 0700 parent.
-	if err != nil {
-		return inference.Response{}, true, errCompletion
-	}
-	copyErr := d.copyBinary(f)
-	closeErr := f.Close()
-	if copyErr != nil || closeErr != nil {
+	if err := d.writePrivateBinary(binary); err != nil {
 		return inference.Response{}, true, errCompletion
 	}
 	cmd := exec.CommandContext(callCtx, binary, commandArgs(req.Model, req.NativeEffort, prompt)...) //nolint:gosec // G204: private content-pinned CLI copy; arguments are daemon-owned but for the model and effort checked above; no shell.
