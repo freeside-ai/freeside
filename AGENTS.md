@@ -27,12 +27,6 @@ it `YYYY-MM-DD-HHMM-slug.md`. Follow the protocol in `devlog/README.md`.
   dependency updates, mechanical syncs, large mechanical changes such as
   renames, and simple fixes need no note unless they reveal a lasting
   decision or discovery.
-- **Record the final reasoning.** Include rejected options, changed
-  assumptions, important verification findings, and a "Revisit when ..."
-  condition where one is useful. Do not include diffs, test logs, chronology,
-  or PR status.
-- **Let an active note evolve.** Update it while its work unit or PR is open.
-  Freeze it when the PR merges.
 - **Find notes from the work first.** Read notes linked from the current issue
   or PR. Otherwise, search by path, topic, contract, or decision name. Read
   the latest note only when resuming the work unit it describes.
@@ -40,9 +34,6 @@ it `YYYY-MM-DD-HHMM-slug.md`. Follow the protocol in `devlog/README.md`.
   explicit owner decision. When new evidence conflicts with one, name the old
   decision, explain which assumption or condition changed, and propose the
   revision.
-- **Track deferred work in issues.** Link the note from an issue that starts
-  there. The note may keep a historical `Follow-up: #N` link, but never a
-  second status record. Put non-actionable observations in "Revisit when ...".
 
 <!-- /agents-md:managed:devlog -->
 
