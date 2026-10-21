@@ -154,8 +154,8 @@ func runInspectCommand(ctx context.Context, args []string, stdout, stderr io.Wri
 // unapprovedRecipeNote goes to stderr, so stdout stays one JSON value.
 const unapprovedRecipeNote = "freesided inspect: this read approved %d verification recipes, so it " +
 	"could not read evidence the record reports as unapproved_recipe. Pass -approved-recipe " +
-	"once per digest the daemon was launched with: FREESIDE_REAL_RUN_APPROVED_RECIPE for a " +
-	"run-real-work.sh root, or approved_recipe in <root>/daemon/settings.json for a deputy root.\n"
+	"once per digest the daemon was launched with: approved_recipe in <root>/daemon/settings.json " +
+	"for a deputy root.\n"
 
 func readTaskRecordFrom(ctx context.Context, st *store.Store, id domain.TaskID) (taskRecord, error) {
 	var record taskRecord

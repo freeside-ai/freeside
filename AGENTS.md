@@ -309,7 +309,7 @@ back (`needs-human`) or the owner asks.
 Operator
 tools that are not checks live with their component: installers in
 app/README.md, image builds in images/README.md, the real unattended run in
-the `scripts/run-real-work.sh` header, and the API linter pin in
+daemon/README.md (Run Real Work With The Deputy), and the API linter pin in
 api/README.md. `prompts/` and `policy/` are not yet initialized. Lint,
 format, and CI follow the daemon's pattern, `daemon/.golangci.yml` and
 `.github/workflows/daemon-ci.yml` (Linux runs build, test, vet, and lint;

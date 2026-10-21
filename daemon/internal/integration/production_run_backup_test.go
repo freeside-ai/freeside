@@ -10,13 +10,14 @@ import (
 	"github.com/freeside-ai/freeside/daemon/internal/domain"
 	"github.com/freeside-ai/freeside/daemon/internal/engine"
 	"github.com/freeside-ai/freeside/daemon/internal/publish"
+	"github.com/freeside-ai/freeside/daemon/internal/signet"
 	"github.com/freeside-ai/freeside/daemon/internal/store"
 	"github.com/freeside-ai/freeside/daemon/internal/store/storetest"
 )
 
-// A valid encrypted checkpoint can still fail final admission if the verifier
-// cannot reconstruct a workflow kind that the daemon already wrote.
-func TestRealRunBackupVerificationWorkflowClosure(t *testing.T) {
+// A valid encrypted checkpoint can still fail backup health if the daemon's
+// own extractor registry cannot reconstruct a workflow kind it already wrote.
+func TestCheckpointHealthReconstructsWorkflowKinds(t *testing.T) {
 	t.Parallel()
 	const input = "remediation input"
 	digest := domain.Digest(contentaddr.Sum([]byte(input)))
@@ -108,14 +109,14 @@ func TestRealRunBackupVerificationWorkflowClosure(t *testing.T) {
 						entry.Kind = "unsupported.workflow"
 					}
 					path := filepath.Join(t.TempDir(), "freeside.db")
-					blobs, err := realRunBlobStore(path, false)
+					blobs, err := signet.NewBlobStore(path + ".blobs")
 					if err != nil {
 						t.Fatal(err)
 					}
 					if _, err := blobs.Put(digest, strings.NewReader(input)); err != nil {
 						t.Fatal(err)
 					}
-					files, err := realRunBackupFiles(path, false)
+					files, err := store.NewDefaultLocalBackupFiles(path)
 					if err != nil {
 						t.Fatal(err)
 					}
@@ -148,9 +149,9 @@ func TestRealRunBackupVerificationWorkflowClosure(t *testing.T) {
 					if err != nil || producerHealth.RequireHealthy() != nil {
 						t.Fatalf("producer health = %+v, error = %v", producerHealth, err)
 					}
-					// Use the final verifier's existing-file and read-only paths,
-					// with its own validating registry, beside the active writer.
-					verifierFiles, err := realRunBackupFiles(path, true)
+					// Read the checkpoint back read-only, beside the active writer,
+					// through the registry the daemon validates with.
+					verifierFiles, err := store.NewDefaultLocalBackupFiles(path)
 					if err != nil {
 						t.Fatal(err)
 					}
@@ -158,7 +159,7 @@ func TestRealRunBackupVerificationWorkflowClosure(t *testing.T) {
 					if err != nil {
 						t.Fatal(err)
 					}
-					verifier, err := realRunOpenStore(t.Context(), path, store.Options{BackupHealthSource: verifierSource}, true)
+					verifier, err := store.OpenReadOnly(t.Context(), path, store.Options{BackupHealthSource: verifierSource})
 					if err != nil {
 						t.Fatal(err)
 					}
@@ -169,10 +170,10 @@ func TestRealRunBackupVerificationWorkflowClosure(t *testing.T) {
 					}
 					if scenario == "valid" {
 						if err := health.RequireHealthy(); err != nil {
-							t.Fatalf("final admission rejected supported workflow: %v", err)
+							t.Fatalf("backup health rejected supported workflow: %v", err)
 						}
 					} else if health.RequireHealthy() == nil {
-						t.Fatalf("final admission accepted %s", scenario)
+						t.Fatalf("backup health accepted %s", scenario)
 					}
 				})
 			}

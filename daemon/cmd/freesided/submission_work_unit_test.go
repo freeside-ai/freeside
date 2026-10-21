@@ -205,8 +205,8 @@ func TestPreflightRequiresWorkUnit(t *testing.T) {
 	}
 }
 
-// run-real-work.sh --resume-session feeds a finished session's retained
-// inputs back through preflight. A session that submitted without a
+// `freesided preflight -submission-id` re-checks a finished session's
+// retained inputs. A session that submitted without a
 // declaration before the rule must still resume, and only with the inputs
 // its journal saved.
 func TestPreflightResumesRetainedUndeclaredSubmission(t *testing.T) {

@@ -139,7 +139,7 @@ from you; it can also concern system health rather than a task.
 In a configured real workflow:
 
 1. Submit work through the daemon's `submit` command or a configured intake
-   source. The current production exercise packages submission in the script
+   source. A real run submits with `freesided submit` against the deputy
    described below; installing the client does not configure intake.
 2. Read the generated specification in **Inbox**. Approve it or request
    changes before implementation begins.
@@ -156,13 +156,14 @@ describes keyboard commands and connection modes in more detail.
 
 ## Prepare a Real Repository Run
 
-The repository includes a script for running and checking a real workflow,
-called the production exercise. You still need to prepare its inputs by hand.
-The installed daemon leaves execution disabled until you configure a driver.
+A real workflow, called the production exercise, runs under
+`freesided deputy`: a separate daemon that executes the run while the
+installed daemon keeps running without a driver. You still need to prepare its
+inputs by hand.
 Start with a small repository and a narrowly scoped task whose expected change
 you can review.
 
-The real-run script requires a clean Freeside checkout. Xcode builds, including
+The real run requires a clean Freeside checkout. Xcode builds, including
 the preview and app installation above, can rewrite the tracked dependency file
 shown below. Check for changes before proceeding:
 
@@ -198,25 +199,25 @@ Prepare these pieces in order, using the linked instructions:
    [daemon guide](daemon/README.md#operational-commands) explains the required
    inputs and approval sequence; the bare command name here is not a complete
    onboarding invocation.
-4. **Submission and supervision.** Read the required environment and input
-   file formats in [scripts/run-real-work.sh](scripts/run-real-work.sh), then
-   follow the [production walkthrough and recovery guide](docs/production-walkthrough.md).
-   The invocation has this form after those inputs are prepared:
+4. **Submission and supervision.** Write the deputy's settings file, as
+   [Run Real Work With The Deputy](daemon/README.md#run-real-work-with-the-deputy)
+   describes, then follow the
+   [production walkthrough and recovery guide](docs/production-walkthrough.md).
+   Start the run, then submit the task from a second terminal:
 
    ```sh
-   bash scripts/run-real-work.sh \
-     /path/to/task.md /path/to/resolved-policy-keys.json /path/to/publication.json \
-     /path/to/work-unit.json
+   freesided deputy -root /path/to/root
+   freesided submit -db /path/to/root/daemon/freeside.db --require-composition \
+     -project <project> -task /path/to/task.md -policy /path/to/resolved-policy-keys.json \
+     -publication /path/to/publication.json -work-unit /path/to/work-unit.json
    ```
 
 Keep a paired client open to approve or revise the specification. This path
 runs real agents and can publish a pull request to the configured repository.
-After ready-publication verification, the script retains the running session;
-finish it using the exact completion command it prints, following the runbook's
-restoration steps. Completed-history verification instead reports authenticated
-completion and remote merge, then exits through cleanup without an endpoint or
-completion command; it supplies no live client acceptance evidence. Closing a
-retained session's terminal is an interruption, not normal completion.
+The deputy keeps serving after publication so the paired clients can work
+with the result. `freesided inspect task` reads the task's record, the proof
+of the run. End the deputy deliberately with Ctrl-C, as the runbook describes;
+closing its terminal is an interruption, not normal completion.
 
 There is not yet a single guided flow that assembles all these inputs. The
 roadmap's [operations and onboarding section](docs/plan.md#10-operations-and-onboarding)
@@ -245,7 +246,7 @@ device builds need periodic re-signing; the guide covers that maintenance.
 | --- | --- |
 | Xcode build tools are missing or too old | Check `xcodebuild -version` and select the full Xcode installation used for this checkout. |
 | The installer cannot choose a signing identity | Check Xcode Accounts and the [signing identity override](app/README.md#installing-the-operator-client), especially if you have multiple teams. |
-| The daemon is stopped or unreachable | Check the menu bar status, Login Items approval, the health URL, and `freesided.log`. After a production exercise, follow the [restoration steps](docs/production-walkthrough.md#restore-the-supervised-daemon). |
+| The daemon is stopped or unreachable | Check the menu bar status, Login Items approval, the health URL, and `freesided.log`. A real-work run leaves it running; choose **Start** if it was stopped. |
 | Pairing succeeds but sync stays stale | Rebuild and reinstall the client and daemon from the same commit; an API mismatch can appear as a freshness failure. |
 | A new installation says execution is not configured | Complete real-run setup before submitting work. Sample data and fake execution are available only through explicit demo options. |
 

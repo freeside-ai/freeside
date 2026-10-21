@@ -846,7 +846,7 @@ func evaluateComposition(
 	} else if database.ReviewCredentialError != nil {
 		failCheck(manifest, "codex_credentials", "Codex auth identity cannot support the configured leased store", "see daemon/README.md: Enroll A Codex Subscription Identity (freesided enroll-codex)")
 	} else if database.ReviewReenrollmentError != nil {
-		failCheck(manifest, "codex_credentials", "Codex re-enrollment hold is active or could not be verified", "run scripts/run-real-work.sh --recover-codex-credentials and resolve the hold from a paired client")
+		failCheck(manifest, "codex_credentials", "Codex re-enrollment hold is active or could not be verified", "resolve the hold from a paired client; see docs/production-walkthrough.md: Recover Expired Reviewer Credentials")
 	} else if credential := environment.InspectCodexCredential(
 		ctx, cfg, now, database.ReviewRefreshStrategy == domain.RefreshOnDemand,
 	); credential.Error != nil {

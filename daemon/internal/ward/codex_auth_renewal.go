@@ -76,7 +76,7 @@ func RenewCodexAuth(ctx context.Context, cfg CodexAuthRenewalConfig) (_ CodexAut
 		return CodexAuthRenewalResult{}, fmt.Errorf("inspect Codex re-enrollment hold: %w", err)
 	}
 	if needs {
-		return CodexAuthRenewalResult{}, errors.New("codex identity has a re-enrollment hold; run scripts/run-real-work.sh --recover-codex-credentials and resolve it from a paired client")
+		return CodexAuthRenewalResult{}, errors.New("codex identity has a re-enrollment hold; resolve it from a paired client; see docs/production-walkthrough.md: Recover Expired Reviewer Credentials")
 	}
 	identity, err := cfg.AuthStoreLeaser.GetIdentity(ctx, cfg.AuthIdentityID)
 	if err != nil {
@@ -154,5 +154,5 @@ func RenewCodexAuth(ctx context.Context, cfg CodexAuthRenewalConfig) (_ CodexAut
 }
 
 func codexAuthRenewalRecoveryError(err error) error {
-	return fmt.Errorf("codex renewal failed: %w; rerun renew-codex to recover a pending rotation; if the chain is rejected or unavailable, use codex login then freesided enroll-codex and scripts/run-real-work.sh --recover-codex-credentials", err)
+	return fmt.Errorf("codex renewal failed: %w; rerun renew-codex to recover a pending rotation; if the chain is rejected or unavailable, use codex login then freesided enroll-codex and resolve the re-enrollment hold (see docs/production-walkthrough.md: Recover Expired Reviewer Credentials)", err)
 }

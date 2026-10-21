@@ -165,11 +165,7 @@ claim_watchdog_state() { # <state-file> <value>
 	return "$claim_status"
 }
 
-# Live process-group members other than the leader, mirroring
-# real_work_group_members in scripts/real-work-lifecycle.sh. Kept as a copy
-# rather than sourcing that file: #1300's non-goals leave the lifecycle helper
-# alone, this is a standalone operator script, and the helper is copied into
-# sessions. Zombies (Z state) are already dead and do not count. Returns
+# Live process-group members other than the leader. Zombies (Z state) are already dead and do not count. Returns
 # nonzero if the process table cannot be read, so the caller fails closed
 # instead of mistaking an inspection failure for an empty group.
 runtime_group_members() { # <pgid>
@@ -179,11 +175,10 @@ runtime_group_members() { # <pgid>
 		$2 == pgid && $1 != pgid && substr($3, 1, 1) != "Z" { print $1 }'
 }
 
-# Drain a runtime group that was just SIGKILLed, mirroring the post-kill drain
-# in real_work_bounded_rig. On macOS a single group KILL can miss a member
-# being forked at that instant (#1290); at the interrupt site a relay that
-# escaped that way keeps the checker's own stdout or stderr open and hangs a
-# caller capturing this output. Re-send the group KILL until a snapshot taken
+# Drain a runtime group that was just SIGKILLed. On macOS a single group KILL
+# can miss a member being forked at that instant (#1290); at the interrupt
+# site a relay that escaped that way keeps the checker's own stdout or stderr
+# open and hangs a caller capturing this output. Re-send the group KILL until a snapshot taken
 # after a KILL and a settle is empty, for at most ~1s. Always KILL and settle
 # before concluding empty, because the escapee may not be visible the instant
 # the kill returns. Fail closed (message on fd 3, nonzero return) if members

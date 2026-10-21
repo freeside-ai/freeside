@@ -1,26 +1,17 @@
 # Production Walkthrough And Recovery
 
-After ready publication and its final verification, `scripts/run-real-work.sh`
-keeps the production daemon and its rig holder alive. The same database, state
-root and listener remain available to the paired Mac and iPhone. The production
-deadline ends at publication; the walkthrough has no automatic deadline or
-stdin prompt. Closing the shell is an interruption, not a request to complete
-the walkthrough.
+A real-work run is `freesided deputy -root <root>`: one process that takes the
+production rig lease, adopts the agent tree, runs the composition preflight,
+and serves the run's daemon until you stop it. Its settings, start-up order,
+and what it writes are in the daemon guide,
+[Run Real Work With The Deputy](../daemon/README.md#run-real-work-with-the-deputy).
+This runbook covers operating one: starting it, submitting work, reading the
+proof, ending it, and recovering when something goes wrong.
 
-Before publication, the deadline (`FREESIDE_REAL_RUN_TIMEOUT_SECONDS`) counts
-only executing time, from the moment the harness starts supervising the run;
-preflight and a client-target selection wait come before that and are not
-bounded. It pauses while the run has a visible hold or waits at the specification
-approval gate or at an implementation attention card such as a review dispute,
-so an operator who is away does not lose the run. Counting resumes when neither
-a hold nor a human gate remains. Startup and unreadable observations still
-count. A specification attention card still ends supervision and runs cleanup.
-
-Completed-history verification is different: it verifies the selected run's
-authenticated completion and remote merge, then exits through the ordinary
-cleanup path. It does not start a walkthrough, retain a client endpoint, or
-provide Mac or iPhone acceptance evidence. If you need access to completed
-history, use the existing retained-session restoration procedure below.
+The deputy has no automatic deadline and reads no stdin. It keeps serving the
+same database, state root, and listener to the paired Mac and iPhone after
+publication, until you end it ([Complete Deliberately](#complete-deliberately)).
+Closing its shell is an interruption, not a completion.
 
 For a task-specific Stop exercise, follow the
 [controlled cancellation check](task-cancellation-check.md). It records runtime
@@ -28,51 +19,54 @@ evidence separately from the walkthrough's publication and shutdown checks.
 
 ## Start And Verify
 
-Use the harness header's required environment and input files. The three
-trusted prompt packages ship in the repository, so no operator authors one:
-pass `prompts/phase-1a/implementer.md` as `FREESIDE_REAL_RUN_PROMPT_PACKAGE`,
-`prompts/phase-1a/specifier.md` as
-`FREESIDE_REAL_RUN_SPECIFICATION_PROMPT_PACKAGE`, and
-`prompts/phase-1a/remediator.md` as
-`FREESIDE_REAL_RUN_REMEDIATION_PROMPT_PACKAGE`, each from the approved
-default-branch commit. The daemon admits the content digest of these exact
-bytes; a workspace copy is never prompt authority.
+Write `<root>/daemon/settings.json`, mode `0600`, with every key the daemon
+guide's settings table lists. Every path in it is absolute and clean, and JSON
+expands neither `~` nor `$HOME`, so write each one out in full; the deputy
+refuses a relative path before it takes the lease. The three trusted prompt
+packages ship in the repository, so no operator authors one: in a checkout of
+the approved default-branch commit, set `prompts.prompt_package` to
+`<checkout>/prompts/phase-1a/implementer.md`,
+`prompts.specification_prompt_package` to
+`<checkout>/prompts/phase-1a/specifier.md`, and
+`prompts.remediation_prompt_package` to
+`<checkout>/prompts/phase-1a/remediator.md`.
+The daemon admits the content digest of these exact bytes; a workspace copy is
+never prompt authority.
 
-The production daemon keeps running during the run; you no longer stop it
-before acquiring the rig (#2080). It must run without a driver, which the
-installed LaunchAgent does: it passes no `-driver`. A driverless `prod` never
-opens the App authority's files, so the run stays their only writer
+The production daemon keeps running during the run (#2080). It must run
+without a driver, which the installed LaunchAgent does: it passes no
+`-driver`. A driverless `prod` never opens the App authority's files, so the
+run stays their only writer
 ([plan §10](plan.md#environments-prod-dev-and-ephemeral)). Both sides check
 this. Preflight's `prod_execution` check reads `prod`'s execution mode over
-its control socket and fails when `prod` reports a driver or does not answer,
-so the installed app must include #2080 before the first run; an older
-installed build fails the check. And while a production rig lease exists,
+its control socket and fails when `prod` reports a driver or advertises a
+socket that does not report its mode, so the installed app must include
+#2080; an older installed build fails the check. A stopped `prod` passes it,
+so confirm `prod` is running before the start:
+`"$HOME/Applications/Freeside.app/Contents/MacOS/FreesideMac" daemon status`
+must exit 0 and print `health=reachable` (app/README.md, Control The
+Supervised Daemon From A Command). And while a production rig lease exists,
 live or stale, `freesided -environment prod` refuses `-driver fake`,
 `-driver claude`, and `-fake-publication`. Choosing **Stop** or **Start**
-mid-run changes nothing for the run. This walkthrough's harness still runs
-its restore step when it finishes; the move onto `freesided deputy` drops it
-(#2081). One exception: resuming a retained session saved before #2080 runs
-that session's saved binary for preflight, which still refuses a loaded
-`prod` and takes `prod`'s database lock, so stop the production daemon before
-resuming one.
+mid-run changes nothing for the run, and the deputy never stops or restarts
+`prod`.
 
 The run uses `prod`'s own App authority, where the App's single authority
 lives ([plan §10](plan.md#environments-prod-dev-and-ephemeral)). Set
-`FREESIDE_REAL_RUN_APP_STATE` to `~/Library/Application Support/Freeside/daemon`
-and `FREESIDE_REAL_RUN_APP_CREDS` to
-`~/Library/Application Support/Freeside/credentials`; the harness and the
-daemon refuse any other directory, including a copy. The daemon also requires
-the live rig lease, and the installed app must include #1583: the run's daemon
-asks the installed `freesided` (`FREESIDE_REAL_RUN_RESTORE_DAEMON`, default
-`~/Applications/Freeside.app/Contents/Resources/freesided`) which App
+`prod.app_state_dir` to `<home>/Library/Application Support/Freeside/daemon`
+and `prod.app_credentials_dir` to
+`<home>/Library/Application Support/Freeside/credentials`, where `<home>` is
+your home directory written out; the deputy refuses any other directory,
+including a copy. Under the lease it asks the installed `freesided`
+(`prod.installed_daemon`, normally
+`<home>/Applications/Freeside.app/Contents/Resources/freesided`) which App
 authority formats it reads, and refuses to start if that build predates #1583
 or can't read what this build writes. Install the current app before the
 first run.
 
 Once, before the first run after #1583, move the App authority that earlier
 runs kept in their own directories into `prod`'s, with **Stop** chosen and no
-run active. Pass the old directories, the values the two variables held before
-you pointed them at `prod`:
+run active. Pass the old directories:
 
 ```sh
 bash scripts/move-app-authority-to-prod.sh <old-app-state-dir> <old-app-credentials-dir>
@@ -83,148 +77,172 @@ changing anything when `prod` already holds App state or credentials, when a
 rig lease exists, when `prod` is running, or when a source holds a file it
 doesn't recognize or no App registration. It never
 merges two authorities: resolve such a stop by hand. It keeps each source,
-renamed to `<dir>.moved-to-prod-<timestamp>`, so a stale variable fails loudly.
+renamed to `<dir>.moved-to-prod-<timestamp>`, so a stale setting fails loudly.
 It never deletes them; remove them yourself once a run has published through
 `prod`'s directories.
 
-Keep the harness shell open. It prints the retained session directory. For a
-verified ready publication, it also prints the implementation run, invocation,
-endpoint and exact completion command. Completed-history verification reports
-its authenticated history and exits through cleanup instead. Sessions default
-to `~/Library/Logs/Freeside/real-work-session.*`; set
-`FREESIDE_REAL_RUN_DIAGNOSTIC_DIR` to an existing directory outside the source
-checkout to use another destination. Each session is private and retains the
-built binary, submission input copies, rig acquisition material and diagnostics.
-
-Each new session saves `submission-id` before preflight and passes that identity
-to both preflight and submit. Identical input in another new session creates
-separate work. If submit's output is lost, its private journal is under
-`<database>.submissions/<submission-id>.json`; manually resolve it with
-`freesided submit --db <database> --retry-submission-id <submission-id>`.
-This loads the saved inputs and never creates a replacement identity. Neither
-the CLI nor the clients automatically resend unresolved submissions. Existing
-retained-session attachment performs no submission. Sessions predating the
-identity field keep their legacy composition checks.
-Do not upload the directory: acquisition material and operator inputs are private.
-
-Before startup, the verifier seeds the two required auth identities, and the
-harness enrolls them and checks the agent tree
-([Enroll The Identities And Check The Agent Tree](#enroll-the-identities-and-check-the-agent-tree)).
-After publication, it opens the existing database read-only, checks the recorded
-identities, and rechecks policy, evidence and the exact published head. It does
-not migrate the database or create missing backup keys or artifact directories.
-Both a successful exit and the explicit verification success marker are required.
-
-If pairing has not finished before the startup code expires, keep the session
-running and use its retained binary to request a fresh code as the daemon's OS
-user:
+Build `freesided` from a clean checkout of the reviewed commit; the
+composition preflight refuses a `-dirty` build. Then start the deputy and keep
+its shell open:
 
 ```sh
-/absolute/session/freesided pairing-code \
-  -state-dir "$(cat /absolute/session/state-root)"
+freesided deputy -root <root>
 ```
 
-Use the active campaign's state directory and the returned `api_url`, not the
-normal installed service's endpoint. The command prints a private code and its
-ten-minute expiry. Keep that output out of shared logs and evidence; record a
-redacted mint/preview receipt and successful client pairing instead. Renewal
-does not consume or create a workflow attempt, restart the session, or authorize
-another submission. Any campaign-specific minting budget still applies.
+It prints its build, the settings digest, and the repository it publishes to
+on stderr, then the self-check's result: `composition passed; manifest <path>`,
+or the failed checks and their remediation with execution left disabled. Once
+the daemon serves, its readiness line on stdout gives the `api_url` and a
+pairing code. Everything under `<root>/daemon` is private: the database, the
+adoption report and log, and the agent-tree patch. Do not upload it.
 
-A retained state root keeps the system-health items its earlier runs left
-open, and a restart does not close them. The blocking ones hold the next run's
-first admission with reason `blocking_system_health` until an operator resolves
+Submit the task from a second terminal. `--require-composition` binds it to
+this launch's passing manifest, `<root>/daemon/composition-manifest.json`:
+
+```sh
+freesided submit -db <root>/daemon/freeside.db --require-composition \
+  -project <project> -task /absolute/spec.md -policy /absolute/policy.json \
+  -publication /absolute/publication.json -work-unit /absolute/work-unit.json
+```
+
+Each submission saves its identity and exact input bytes before it is sent.
+Identical input in another submission creates separate work. If submit's
+output is lost, its private journal is under
+`<database>.submissions/<submission-id>.json`; resolve it with
+`freesided submit --db <database> --retry-submission-id <submission-id>`.
+This loads the saved inputs and never creates a replacement identity. Neither
+the CLI nor the clients automatically resend unresolved submissions. A second
+unfinished task for the same specification in the same project is refused;
+the refusal names the first task and the commands that settle it.
+
+If pairing has not finished before the startup code expires, request a fresh
+code as the deputy's OS user:
+
+```sh
+freesided pairing-code -state-dir <root>/daemon
+```
+
+Use the returned `api_url`, not the normal installed service's endpoint. The
+command prints a private code and its ten-minute expiry. Keep that output out
+of shared logs and evidence; record a redacted mint/preview receipt and
+successful client pairing instead. Renewal does not consume or create a
+workflow attempt, restart the deputy, or authorize another submission. Any
+campaign-specific minting budget still applies.
+
+A standing root keeps the system-health items its earlier runs left open, and
+a restart does not close them. The blocking ones hold the next run's first
+admission with reason `blocking_system_health` until an operator resolves
 them in a paired client (Inbox > System health; Resume Unattended closed a
-durable-stop notice on run 117). Advisory items never hold admission. No
-`freesided` read lists these items before the daemon starts, so resolve them
-once the clients are paired and before the first approval. A blocking item that
-no offered action closes keeps holding admission; stop the run and report it
-rather than going on.
+durable-stop notice on run 117). Advisory items never hold admission. Resolve
+them once the clients are paired and before the first approval. A blocking
+item that no offered action closes keeps holding admission; stop the run and
+report it rather than going on.
 
-During the walkthrough, fetch the printed run on both paired clients and exercise
-its offered ready-card actions. Record which actions actually ran, the run and
-invocation IDs, endpoint, and the published head that final verification checked.
-Later actions can change the run, so the earlier verification does not prove a
-later head. Health from the default service on port 7331 does not prove this run
-is still available at its paired endpoint.
+**The task record is the proof of a run.** Read it while the deputy serves:
+
+```sh
+freesided inspect -db <root>/daemon/freeside.db
+freesided inspect task -db <root>/daemon/freeside.db -task <task-id>
+```
+
+The first lists the tasks the daemon holds; the second prints one task's
+timeline, runs, attention items, and publication outcome as versioned JSON
+([Read A Task's Record](../daemon/README.md#read-a-tasks-record)). A published
+run's outcome names the pull request of exactly the exported head.
+
+The record proves a run only when it holds together. `inspect task` exits 0
+when a section or item fails its store check, so read the fields, not the
+exit status. For the published run, check that:
+
+- **Every read succeeded:** `task_error`, `timeline_error`, and `items_error`
+  are `null`, no item carries an `error`, and the run's `errors` is empty.
+- **The evidence holds:** `publication.evidence_snapshot_present` and
+  `publication.outcome.evidence_eligible` are both `true`.
+- **The heads agree:** `publication.export_head_sha` equals
+  `publication.outcome.head_sha`.
+- **The forge agrees:** `gh pr view <outcome.pr_number> --repo <outcome.repo>
+  --json headRefOid,baseRefName` reports that head and `outcome.base_ref`.
+
+A record that fails any check is a finding, not proof of the run. During the
+walkthrough, fetch the run on both paired clients and exercise its offered
+ready-card actions. Record which actions ran, the task and run IDs, the
+endpoint, and the published head the record shows. Later actions can change
+the run, so an earlier read does not prove a later head. Health from the
+default service on port 7331 does not prove this run is still available at
+its paired endpoint.
 
 ## Enroll The Identities And Check The Agent Tree
 
 The daemon selects every identity through the admitted-agent tree
 ([Select Agents Through The Lineup](../daemon/README.md#select-agents-through-the-lineup)),
-and a fresh state root holds no enrollment for the tree to name. The harness
-closes that gap on every start, after it acquires the rig and before
-preflight:
+and a fresh state root holds no enrollment for the tree to name. The deputy
+closes that gap on every start, after it takes the lease and before the
+composition preflight:
 
-1. **Record.** It records the two identities named by
-   `FREESIDE_REAL_RUN_AUTH_IDENTITY` and
-   `FREESIDE_REAL_RUN_REVIEW_AUTH_IDENTITY` on the state root.
-2. **Adopt.** It runs `freesided auth adopt` on that root and prints one line
-   per client, `auth adopt: claude_code adopted` and
-   `auth adopt: codex_cli adopted`. A root that was already adopted prints
-   `reused` and changes nothing.
-3. **Check.** It compares the tree adoption emitted with the tree at
-   `FREESIDE_REAL_RUN_AGENT_TREE_COMMIT` in `FREESIDE_REAL_RUN_AGENT_TREE`:
-   the mode and content of every file under `policy/agents` and
-   `policy/fragments`, and of `policy/lineup` and `policy/agents.lock`. On a
-   match the run goes on to preflight.
+1. **Record.** It records the two identities `agent_tree.auth_identity` and
+   `agent_tree.review_auth_identity` name, once. A later settings file that
+   names other ones is refused.
+2. **Adopt.** It runs `freesided auth adopt` on that root, writing
+   `<root>/daemon/auth-adopt.json` and `auth-adopt.log`. A root that was
+   already adopted changes nothing.
+3. **Check.** It compares the tree adoption emitted,
+   `<root>/daemon/agent-tree.patch`, with the tree at `agent_tree.commit` in
+   `agent_tree.checkout`: the mode and content of every file under
+   `policy/agents` and `policy/fragments`, and of `policy/lineup` and
+   `policy/agents.lock`. On a match it goes on to the composition preflight.
 
-The harness never writes to the agent-tree checkout. It applies the patch only
-in a scratch repository inside the session directory.
+The deputy never writes to the agent-tree checkout. It applies the patch only
+in a scratch repository under its root.
 
 ### The Stop On A Tree Mismatch
 
 When the trees differ, or the checkout doesn't hold the configured commit, the
-harness exits with status 2 before preflight and prints:
+self-check fails `agent_tree`. The deputy still serves, with execution
+disabled, and prints:
 
 ```text
-run-real-work: the agent tree at <commit> in <agent-tree-checkout> is not the tree auth adopt emitted
-run-real-work: review and commit <session>/agent-tree.patch in that checkout, set FREESIDE_REAL_RUN_AGENT_TREE_COMMIT to the new commit, and rerun; the harness changed nothing in the checkout
+freesided deputy: agent_tree failed; execution stays disabled (the agent tree at <commit> in <agent-tree-checkout> is not the tree auth adopt emitted: review and commit <root>/daemon/agent-tree.patch in that checkout, set agent_tree.commit to the new commit, and restart; ...)
 ```
 
-Nothing was submitted. The identities stay adopted on that state root, so the
-rerun reports `reused`. The session also keeps the adoption report in
-`auth-adopt.json` and adoption's and git's errors in `auth-adopt.log`. Both
-name the identities, and the log can quote a cost owner, so keep them out of
-shared logs like the rest of the session directory.
+A blocking `system_health` card (`deputy_preflight_failed`) says the same in
+the paired clients, and the deputy accepts no new work. Nothing was
+submitted. The identities stay adopted on that root. The adoption report and
+log name the identities, and the log can quote a cost owner, so keep them out
+of shared logs.
 
-When adoption itself fails or writes no patch, the harness exits with status 1
+When adoption itself fails or writes no patch, the check fails the same way
 and names those two files instead.
 
 ### The First Start
 
 The first start always stops this way, because no commit holds the tree yet:
 
-1. Create the agent-tree checkout (below) and point
-   `FREESIDE_REAL_RUN_AGENT_TREE` at it. Set
-   `FREESIDE_REAL_RUN_AGENT_TREE_COMMIT` to that checkout's current commit.
+1. Create the agent-tree checkout (below) and set `agent_tree.checkout` to
+   it and `agent_tree.commit` to its current commit.
 2. Choose the cost owners and the account
    ([Name The Cost Owner And The Account](../daemon/README.md#name-the-cost-owner-and-the-account))
-   and the three dated inputs, and start the harness. It stops with the
-   message above.
-3. Read the patch, then commit it in the checkout:
+   and the three dated inputs, and start the deputy. It reports the mismatch
+   above.
+3. Stop the deputy, read the patch, then commit it in the checkout:
 
    ```sh
-   git -C <agent-tree-checkout> apply --index <session>/agent-tree.patch
+   git -C <agent-tree-checkout> apply --index <root>/daemon/agent-tree.patch
    git -C <agent-tree-checkout> commit -m "Adopt the baseline agent tree"
    git -C <agent-tree-checkout> rev-parse HEAD
    ```
 
-4. Set `FREESIDE_REAL_RUN_AGENT_TREE_COMMIT` to the printed commit and start
-   the harness again.
+4. Set `agent_tree.commit` to the printed commit and start the deputy again.
 
-Later fresh state roots reuse that commit. The emitted tree depends on the
-identity ids, the route names, the review model, the review effort
-(`FREESIDE_REAL_RUN_REVIEW_REASONING`, a Freeside effort level: `low`,
-`medium`, `high`, or `max`), the three prompt packages, the three dated
-inputs, and, when the run has subscription judgments on,
-`FREESIDE_REAL_RUN_JUDGMENT_MODEL` and this checkout's publication-author
-prompt. It doesn't depend on the state root, the cost owners, or the account.
+Later fresh roots reuse that commit. The emitted tree depends on the identity
+ids, the route names, the review model, the review effort (`review.effort`, a
+Freeside effort level: `low`, `medium`, `high`, or `max`), the three prompt
+packages, the three dated inputs, and, when the run has subscription
+judgments on, `judgment.model` and `judgment.publication_author_prompt`. It
+doesn't depend on the state root, the cost owners, or the account.
 
-Keep `FREESIDE_REAL_RUN_TERMS_BASIS_DATE`, `FREESIDE_REAL_RUN_PRICING_REVISION`,
-and `FREESIDE_REAL_RUN_OFFER_NOT_AFTER` at the values the commit was adopted
-with. `auth adopt` defaults each to the current date, so the harness requires
-all three; a changed value is a different tree and stops the run.
+Keep `agent_tree.terms_basis_date`, `agent_tree.pricing_revision`, and
+`agent_tree.offer_not_after` at the values the commit was adopted with. A
+changed value is a different tree and fails the check.
 
 The patch creates every file, so it doesn't apply over an existing tree. To
 replace a committed tree (a renewed offer, a new review model or effort, a
@@ -232,7 +250,7 @@ changed prompt package), remove the old one in the same commit:
 
 ```sh
 git -C <agent-tree-checkout> rm -r -q policy/agents policy/fragments policy/lineup policy/agents.lock
-git -C <agent-tree-checkout> apply --index <session>/agent-tree.patch
+git -C <agent-tree-checkout> apply --index <root>/daemon/agent-tree.patch
 ```
 
 ### Where The Agent Tree Lives
@@ -253,299 +271,83 @@ git -C <agent-tree-checkout> commit --allow-empty -m "Start the agent tree"
 - **A tree change is its own review.** It changes which agent each role runs,
   independent of any code change.
 
-## Replace A Retained Runtime
+## Replace The Runtime
 
-A runtime upgrade uses a fresh rig acquisition after the old session releases
-its ownership. First run that session's printed `complete` command (or `recover`
-after an interruption), finish the requested app restoration actions, and verify
-its status is `completed`. Do not transfer a live lease, replace its binary in
-place, delete its rig manifest, or replay the original submission as Retry.
-An interrupted upgrade may instead remain `recovery-required` after `recover`
-has verified rig release. That session can be resumed directly with the command
-below; its release proof and upgrade marker are required. Do not change its
-status file to claim completion.
+The deputy composes once per start, so a new build or a settings change takes
+effect at the next start on the same root. End the running deputy
+([Complete Deliberately](#complete-deliberately)), build the reviewed
+replacement from a clean checkout, and start `freesided deputy -root <root>`
+again. The start prints the new settings digest, adopts the agent tree, and
+reruns the composition preflight; the root's tasks resume or fail on their own
+records. Pairing, signing material, approvals, and attempts stay where they
+are. A new build opens the existing database and never rolls it back, so
+keep the root's encrypted checkpoints until the new build has served a run.
 
-From a clean checkout of the reviewed replacement, export the same required
-configuration as the original run, including its state root, seed root, listener,
-base, images and review settings. Leave the supervised service running unless
-the old session was saved before #2080; then stop it as the start of this
-walkthrough describes. Then run:
-
-```sh
-bash scripts/run-real-work.sh --resume-session /absolute/old-session
-```
-
-The harness requires the existing database and binds the retained run and
-invocation to the original submission and composition manifest. It builds a new
-daemon and matching verifier, acquires a fresh rig, preserves a copy of the
-latest encrypted checkpoint before opening the database for migration, and
-uses the retained binary's non-migrating preflight to check approved inputs before
-the replacement can migrate or seed the database. It checks the new composition
-again afterward. Original composition, submission receipt and run IDs are saved
-before migration or identity seeding, so a refused or interrupted upgrade remains
-resumable. It does not submit work or issue a client command.
-Pairing, signing material, approvals, attempts and prior session evidence remain
-in their existing locations. The new session records its predecessor.
-
-### Retain Client Submission Configuration
-
-`FREESIDE_REAL_RUN_MANUAL_SUBMISSION_CONFIG` is an optional absolute path to
-the operator-owned JSON described in the
-[daemon guide](../daemon/README.md#configure-client-task-submission).
-On a fresh run, set it explicitly to enable new client tasks. The harness
-copies those bytes to `submission-inputs/manual-submission.json` in the private
-session directory, records their digest and presence in
-`manual-submission-input.json`, and passes the staged path through the
-daemon-only `-manual-submission-config` flag. It never derives this input from
-the seed task's policy, publication file, or database.
-
-A normal `--resume-session` with the variable unset reuses the retained bytes.
-Edits to the original operator file have no effect. Sessions that predate this
-input, and sessions created without it, remain disabled. Missing or changed
-retained bytes fail the resume instead of silently dropping configuration.
-
-To add configuration to an older session or replace it, complete/recover and
-restore the prior session as described above, review the new file and current
-build, then set the variable explicitly for `--resume-session`. To disable
-new submissions, supply a valid file with an empty `projects` array. The
-restart records a fresh input receipt; it does not change existing task or run
-bindings. The old binary's composition preflight receives no new flag. An
-interrupted upgrade must retry the same build and inputs, including the
-manual file's presence and digest. It refuses a replacement, addition, or
-missing file during that retry. Configuration is also rechecked immediately
-before the new daemon launch.
-
-### Verify The Resumed Endpoint
-
-Startup checks the listener's build and an authenticated retained publication
-checkpoint, including the remote PR head through the operator's `gh` access.
-A failed or pending feedback attempt may leave the previous ready item
-superseded. That historical checkpoint permits resuming the walkthrough but
-does not count as a completed successor publication. A failed restart uses the
-same checked rig cleanup and release path as an ordinary session. Once the
-upgrade has opened writable, it never rolls back the database or restores an
-unchecked older service. This protects startup writes and preserved evidence;
-the saved encrypted checkpoint is recovery evidence, not an automatic rollback.
-
-A dismissed current ready card can also supply a retained historical checkpoint.
-Resume restores access to the same run and decision history while the card stays
-dismissed. It does not grant a Retry, return-to-agent, or publication action.
-For incomplete history, the remote PR must still be open at the authenticated
-head. Stopped cards do not qualify as dismissed history. Preserve the successful
-publication checkpoint from before
-dismissal: the ordinary `verify` command still requires an open ready card and
-will refuse the dismissed one.
-
-A completed work unit instead supplies a `completed` history checkpoint. The
-verifier re-derives its durable completion from the declaration, published binding,
-and recorded merge/issue fact timelines. It checks that the remote PR is merged
-at the same accepted head and recorded merge commit. A later issue reopen does
-not erase an authenticated earlier completion. This restores access to completed
-history without granting submission, Retry, execution, or publication authority.
-The ordinary `verify` command continues to refuse completed work; the retained
-startup check establishes history restoration, not a new publication acceptance.
-
-A run that was admitted but never published, for example one interrupted while
-a `review_dispute` card waited on a decision, supplies a `pre-publication`
-checkpoint. It proves only that the admitted run has not published, so there
-is no remote PR to check and no endpoint to restore. The harness prints no
-restored-endpoint handoff; it supervises the implementation run from its
-current state, and the open attention item stays actionable from the paired
-clients. Once the run publishes or completes, the ordinary final verification
-and walkthrough follow, as for a fresh run. The supervision clock starts
-again at the resume and stays paused while the run waits at that attention
-item. A ready card whose publication binding is missing is damaged history,
-not this state, and is refused. A session interrupted at
-`waiting_for_specification_approval` has no implementation admission yet and
-cannot be resumed this way.
-
-Before completing the upgraded session, install its exact reviewed daemon using
-the existing Mac installer, with `--daemon-path /absolute/new-session/freesided`.
-The restoration gate compares the installed daemon's Go build ID with the retained
-binary, opens the retained database read-only with the matching verifier, and
-checks that the restored service reports the same build. Rebuilding separately
-may produce a different build ID; supply the retained binary to the installer.
-Go and the installer prerequisites remain required. The default installed binary
-is `~/Applications/Freeside.app/Contents/Resources/freesided`; for another install
-location, set `FREESIDE_REAL_RUN_RESTORE_DAEMON` before completion, or pass the
-installed daemon path as the third argument to recovery:
-
-```sh
-bash /absolute/new-session/real-work-session.sh recover /absolute/new-session \
-  /absolute/Freeside.app/Contents/Resources/freesided
-```
-
-Restoration starts `Contents/MacOS/FreesideMac` from that same bundle. The
-selected path must name the installed app's `Contents/Resources/freesided`,
-not a standalone retained binary; install that binary with the Mac installer
-first.
-
-A refused build, schema or health check leaves `recovery-required`. After installing
-the session's daemon, repeat `recover`. Alternatively, resume that released session
-from the same reviewed source version with unchanged inputs. Before migration,
-the harness records an atomic receipt containing that version and a digest of
-the configuration and input contents, including prompt and review snapshots.
-Matching that receipt allows an interrupted migration to finish even if its
-intermediate schema cannot pass preflight. Changed versions or inputs are refused;
-full composition verification still gates daemon startup after migration.
-Original approved composition remains separate from observations. Neither route
-deletes a marker manually or replaces the database. Preflight may write authority
-audit records under an existing schema; it does not migrate or seed identities.
-
-Once the retained endpoint is available, use the supported client Retry action
-on its execution-failure card when offered. After the workflow publishes a new
-ready result, run the new session's printed verification command:
-
-```sh
-bash /absolute/new-session/real-work-session.sh verify /absolute/new-session
-```
-
-This read-only check requires the current open ready item, its authenticated
-producer/export and publication outcome, a review covering that head, and an
-open remote PR with the same repository, number, branch, base ref and head.
-Superseded cards remain history. Each invocation preserves separate diagnostics;
-a premature or failed verification returns nonzero and leaves the daemon
-available for recovery. Only a successful `ready` checkpoint and remote check
-establish publication acceptance. Verify both paired clients separately against
-that run and head, then complete the new session deliberately. Fixture results
-alone do not establish live replacement or client acceptance.
+The deputy has no retained-session resume and keeps no copy of earlier
+inputs: the settings file and the files it names are the inputs, read at each
+start.
 
 ## Complete Deliberately
 
-Run the exact command the harness prints in a second terminal. Its form is:
+End the run with SIGINT (Ctrl-C in the deputy's shell) or SIGTERM. The deputy
+stops its daemon, deletes the containers its manifest records, and proves
+every recorded container, volume, and network absent before it releases the
+lease and removes `rig-acquisition.json` and `composition-manifest.json`. A
+failed proof, or a daemon that ended in error, abandons the lease instead, so
+the next start recovers it. The database, the adoption files, and the kept
+manifests under `<root>/production-evidence/composition/` remain.
+
+## Recover An Interrupted Deputy
+
+A deputy that dies without releasing its lease (a crash, SIGKILL, a reboot)
+leaves a stale lease. The next `freesided deputy -root <root>` on the same root
+recovers it as `freesided rig recover` would, then files an advisory
+`system_health` card (`deputy_run_interrupted`) naming the run it
+interrupted; the root's tasks resume or fail on their own records. A stale
+lease for another root refuses the start and names the command that recovers
+it:
 
 ```sh
-bash /absolute/session/real-work-session.sh complete /absolute/session
+freesided rig recover -state-root <that-root>/daemon -confirm
 ```
 
-This requests completion; the foreground harness reports the result. Repeating
-the request is safe. It stops its owned daemon, waits up to 30 seconds before
-escalating, cleans only authenticated recorded rig resources, and requests clean
-holder release with SIGUSR1 only after cleanup succeeds. Cleanup and holder
-release use `FREESIDE_REAL_RUN_RIG_RELEASE_TIMEOUT_SECONDS` (default 30).
-Failed cleanup or release returns nonzero and retains recovery inputs and the
-stale gate. Logs remain available after success too.
+A stale lease also keeps `prod` from starting with a driver; the driverless
+installed daemon starts and keeps running, and recovery does not need it
+stopped. `rig recover` rejects a live holder, a locked database, a live
+listener, or resources that cannot be cleaned, and it never kills a stored
+PID. Never delete a rig manifest by hand or clear the gate while the daemon
+or recorded resources remain live.
 
-## Restore The Supervised Daemon
-
-After release, the harness calls its retained copy of
-`app/scripts/restore-supervised-daemon.sh`. It clears the launchd disable override
-for the current UID and runs the installed app's `daemon start`. If registration
-is enabled but health is unreachable, it runs `daemon stop`, then `daemon start`
-once more. No menu input is needed. Pending Login Items approval returns a
-nonzero exit; approve Freeside in System Settings and retry. The menu's
-**Start**, **Stop**, and **Open Login Items…** controls remain a manual option.
-
-The app owns SMAppService registration. `launchctl enable` alone does not
-register a service removed by `bootout`; reopening an app with a current
-registration marker can also leave it unregistered. The helper requires both:
-
-```sh
-launchctl print "gui/$(id -u)/ai.freeside.daemon"
-curl --fail --silent --show-error http://127.0.0.1:7331/health
-```
-
-Registration errors, pending Login Items approval, or health timeout leave
-restoration incomplete and return nonzero. The wait defaults to 120 seconds;
-`FREESIDE_REAL_RUN_RESTORE_TIMEOUT_SECONDS` sets another positive bound. Retry
-the helper after resolving the error or approval. A missing or older app that
-does not support the command also fails within the bound and asks for the
-current app to be installed. See the [command reference](../app/README.md#control-the-supervised-daemon-from-a-command)
-for output and exit codes. Client endpoint preferences are never changed
-automatically.
-
-These are the implementation's supported recovery steps. Repository fixtures
-exercise registration and health outcomes with stand-ins; they do not prove
-SMAppService behavior. Live Mac/iPhone evidence must be recorded separately in
-the implementation PR before claiming the issue's full acceptance.
-
-## Recover An Interrupted Session
-
-SIGINT/SIGTERM makes the foreground harness stop its owned daemon and attempt
-the same checked cleanup. A surviving owned holder receives clean release only
-after cleanup. If the holder already died, recovery uses:
-
-```sh
-bash /absolute/session/real-work-session.sh recover /absolute/session
-```
-
-The helper runs the retained binary's
-`rig recover -state-root <recorded-state-root> -confirm`, with bounded process
-group cancellation. A stale lease also keeps `prod` from starting with a
-driver; the driverless installed daemon starts and keeps running, and
-`rig recover` does not need it stopped. That command rejects a live holder, locked database, live
-listener or resources that cannot be cleaned. Interruption of `rig hold` itself
-deliberately leaves `.freeside-rig.json`; checked recovery is the expected path,
-not permission to delete the manifest manually. A live holder still owned by
-the harness must finish through that harness. Recovery never kills a stored PID.
-
-`recover` releases the rig and restores the supervised daemon, but it never
-relaunches the run. To continue a run interrupted before it published, resume
-the released session with `--resume-session` from the same reviewed version and
-inputs ([Replace A Retained Runtime](#replace-a-retained-runtime)); its startup
-check reports a `pre-publication` checkpoint and supervision continues from
-the run's state.
-
-If cleanup failed, inspect `rig-cleanup.log` and correct the reported condition
-before retrying recovery. If only restoration failed, the saved `rig-released`
-status lets recovery retry restoration without repeating resource cleanup.
-Concurrent recovery attempts are refused. A helper killed with SIGKILL may
-leave `recovery.lock`; establish that the helper has stopped before removing
-that empty lock directory and retrying. Never remove rig manifests or clear a
-gate while the daemon or recorded resources remain live.
-
-The recovery command first removes exactly the manifest-recorded containers,
-then recovers review-owned volumes and networks through their existing journal.
-The full review namespace must belong to the stale manifest; journal ownership,
-fingerprints and lease checks still govern persistent resource removal. A lost
-review receives its normal interrupted outcome, without running a provider or
-advancing the workflow. Unknown persistent resources keep the rig gate closed.
-Recovery opens only an existing database at the binary's exact schema; it never
-migrates or recreates one.
-
-If an older retained binary lacks the required recovery fix, use the current
-reviewed helper with an explicit reviewed recovery binary:
-
-```sh
-FREESIDE_REAL_RUN_RECOVERY_DAEMON=/absolute/reviewed/freesided \
-  bash /absolute/reviewed-checkout/scripts/real-work-session.sh recover /absolute/session
-```
-
-This selects the binary only for `rig recover` and uses the helper's adjacent
-lifecycle script. It preserves the session's saved binary, scripts and inputs.
-Supervised restoration keeps its existing installation and schema checks;
-choosing a recovery binary does not install it or authorize a runtime upgrade.
-
-`daemon.log`, `verify-final.log`, `rig-cleanup.log` and `restore.log` retain
-earlier diagnostics. Keep the entire private session until recovery and the
-operator's evidence review are finished. There is no detached daemon continuation
-promise and no dependency on the former scratch `serve-78.sh`.
+Recovery first removes exactly the manifest-recorded containers, then
+recovers review-owned volumes and networks through their existing journal.
+The full review namespace must belong to the stale manifest; journal
+ownership, fingerprints, and lease checks still govern persistent resource
+removal. A lost review receives its normal interrupted outcome, without
+running a provider or advancing the workflow. Unknown persistent resources
+keep the rig gate closed. Recovery opens only an existing database at the
+binary's exact schema; it never migrates or recreates one.
 
 ## Recover Expired Reviewer Credentials
 
-If composition preflight fails `codex_credentials`, use the matching recovery
-hint. Preflight still enforces its lifetime floor, identity binding, and
-re-enrollment hold. Recovery creates no task and starts no agent execution.
+If composition preflight fails `codex_credentials`, use the matching
+remediation. Preflight still enforces its lifetime floor, identity binding,
+and re-enrollment hold. Recovery creates no task and starts no agent
+execution. Both procedures below need the database free, so end the deputy
+first, and use the build it ran so the database stays at its schema.
 
 ### Renew An Existing Store
 
-Complete or recover any prior harness session; the supervised daemon can keep
-running. Use a retained binary containing `renew-codex`, or build
-the current reviewed version with `go -C daemon build -o /tmp/freesided
-./cmd/freesided`. With the exercise's approved environment loaded, run:
-
 ```sh
-/tmp/freesided renew-codex \
-  -db "$FREESIDE_REAL_RUN_STATE_ROOT/freeside.db" \
-  -auth-identity "$FREESIDE_REAL_RUN_REVIEW_AUTH_IDENTITY" \
-  -auth-store-root "$FREESIDE_REAL_RUN_REVIEW_INPUT_ROOT" \
-  -auth-store "$FREESIDE_REAL_RUN_REVIEW_AUTH_SNAPSHOT" \
-  -approved-recipe "$FREESIDE_REAL_RUN_APPROVED_RECIPE"
+freesided renew-codex \
+  -db <root>/daemon/freeside.db \
+  -auth-identity <agent_tree.review_auth_identity> \
+  -auth-store-root <review.input_root> \
+  -auth-store <review.auth_snapshot> \
+  -approved-recipe <approved_recipe>
 ```
 
-Substitute the retained binary's path if using it. Pass every approved recipe
-when the production store uses more than one. Success reports only readiness
-coordinates and creates no hold. Rerun the intended harness command; its
+Pass every approved recipe when the store uses more than one. Success reports
+only readiness coordinates and creates no hold. Start the deputy again; its
 composition preflight must now pass `codex_credentials`. If renewal was
 interrupted, rerun it first to recover any pending rotation.
 
@@ -554,58 +356,56 @@ interrupted, rerun it first to recover any pending rotation.
 When renewal reports a rejected or unavailable refresh chain, follow
 [Enroll A Codex Subscription Identity](../daemon/README.md#enroll-a-codex-subscription-identity):
 run `codex login`, stage its output in a separate private input root, and run
-`enroll-codex` against the production database and live store. Enrollment
+`enroll-codex` against the deputy's database and live store. Enrollment
 leaves a hold that requires a paired-device command.
 
-With the same required exercise environment loaded, start the recovery service:
+Serve the deputy's root with a driverless daemon:
 
 ```sh
-bash scripts/run-real-work.sh --recover-codex-credentials
+freesided -environment ephemeral -driver disabled \
+  -listen <listen> \
+  -db <root>/daemon/freeside.db -state-dir <root>/daemon \
+  -approved-recipe <approved_recipe>
 ```
 
-The recovery daemon receives `FREESIDE_REAL_RUN_APPROVED_RECIPE`. If the
-database also contains evidence for other approved recipes, pass each with a
-repeatable `--approved-recipe sha256:<digest>` argument so paired-client sync
-can reconstruct all retained evidence. These additional approvals apply only
-to this recovery session.
+`<listen>` and `<approved_recipe>` are the settings file's values. If the
+database also holds evidence for other approved recipes, repeat
+`-approved-recipe sha256:<digest>` for each so paired-client sync can
+reconstruct it. The daemon runs no agent, opens no App authority, and takes
+no rig lease, so it needs none of the deputy's other settings.
 
-This mode requires no submission files. It reuses the harness's environment
-validation, clean build, and rig acquisition, then serves the production
-database with `-driver disabled`. Before startup, a read-only schema check
-refuses a database that this binary would migrate; use a schema-compatible
-build or complete the supported runtime upgrade first. It skips identity
-seeding, composition
-preflight, submission, and the production driver. The full exercise environment
-is still required, including values recovery does not otherwise use.
+Its readiness line gives the endpoint and a pairing code; a client already
+paired with the deputy at the same listener reconnects, and
+`freesided pairing-code -state-dir <root>/daemon` mints a fresh code. In the
+paired client, inspect the hold's exact digest, fence, and expiry, then choose
+**Resolve re-enrollment**. The daemon cannot accept the hold on your behalf.
+Stop it with Ctrl-C when done, then start the deputy again.
 
-Use the printed endpoint and pairing-code command. In the paired client,
-inspect the hold's exact digest, fence, and expiry, then choose **Resolve
-re-enrollment**. The recovery service cannot accept the hold on your behalf.
-Use its printed `real-work-session.sh complete` command when finished. Normal
-completion and interruption stop the daemon, release the rig, and restore the
-supervised service through the existing cleanup path. If cleanup fails, follow
-the printed recovery command before retrying.
-
-Before rerunning the exercise, leave the production daemon running; the
-rerun does not need it stopped, unless it resumes a retained session saved
-before #2080 (see the start of this walkthrough).
-Recovery has left the task count unchanged; for an exercise requiring its
-first task from the client composer, keep the database at zero tasks and use
-the client-submission path below. The ordinary harness invocation with source
-files submits a task and is not a substitute for that exercise.
+Recovery leaves the task count unchanged; for an exercise requiring its first
+task from the client composer, keep the database at zero tasks and use the
+client-submission path below.
 
 ## Submit A New Task From A Client
 
 This is the live creation exercise for #1360 and the Mac/physical-iPhone
-acceptance retained by #1211. Use a production session configured with the
-explicit manual-submission file above, current installed clients, and the
-normal authenticated App, policy, admission, and specification-approval gates.
-Hermetic HTTP tests do not replace this evidence.
+acceptance retained by #1211. It needs current installed clients and the
+normal authenticated App, policy, admission, and specification-approval
+gates. Hermetic HTTP tests do not replace this evidence.
 
-The ordinary harness invocation submits its own task from the CLI and follows
-that CLI seed to publication. When that task's spec file is exactly one GitHub
-issue URL, its publication file names the issue with the record a
-client-composed task saves:
+`manual_submission_config` in the settings names the operator-owned JSON
+described in the
+[daemon guide](../daemon/README.md#configure-client-task-submission); an
+empty value disables client tasks. The daemon reads and validates it once at
+start, so an edit takes effect at the next start, and a file with an empty
+`projects` array disables new submissions. A paired client's submission binds
+this launch implicitly: the deputy creates the task only for a configured
+project whose policy and commit author the launch admits, and answers any
+other project as unconfigured.
+
+### The Publication File And Work-Unit Declaration
+
+A CLI submission whose task file is exactly one GitHub issue URL names the
+issue in its publication file, with the record a client-composed task saves:
 
 ```json
 {"recipe": "freeside.client-publication/v2",
@@ -622,22 +422,26 @@ carries depends on where the issue lives:
 - **An issue in another repository:** `Source issue: <url>`, which closes
   nothing.
 
-The fourth argument, the work-unit declaration, is required in both modes. It
-says when the task is finished, and the smallest one finishes the task when
-its pull request merges:
+A publication file with a literal `title` and `body` is still accepted for any
+other task file. Its text is published as written, with no publisher-written
+issue reference. `freesided submit -h` describes both forms.
+
+The work-unit declaration is required for every new submission. It says when
+the task is finished, and the smallest one finishes the task when its pull
+request merges:
 
 ```json
 {"completion_criterion": "bound_pr_merged"}
 ```
 
-The harness, composition preflight, and `freesided submit` each refuse a new
-submission without it, because the daemon records completion against the
-declaration: a task accepted without one never finishes when its pull request
-merges, and it keeps its work-in-progress slot. A task the daemon accepted
-before this rule is left as it is and stays "Ready" after its merge. Release
-it with `freesided abandon -db <database> -task <task-id>`. The command releases
-the slot, closes that exact workflow episode, and expires its open decisions
-and notices. These steps commit separately. If one fails, inspect `episode`,
+Composition preflight and `freesided submit` each refuse a new submission
+without it, because the daemon records completion against the declaration: a
+task accepted without one never finishes when its pull request merges, and it
+keeps its work-in-progress slot. A task the daemon accepted before this rule
+is left as it is and stays "Ready" after its merge. Release it with
+`freesided abandon -db <database> -task <task-id>`. The command releases the
+slot, closes that exact workflow episode, and expires its open decisions and
+notices. These steps commit separately. If one fails, inspect `episode`,
 `workflow_closed`, and `cleanup_complete`, then repair the reported episode
 with `freesided abandon -db <database> -task <task-id> -episode <episode>`.
 A delayed repair cannot release newer work. Closure refuses new engine dispatch
@@ -648,144 +452,63 @@ normal release evidence exists. An explicit reasoned reattempt still needs
 an approved specification, valid lineage, no cancellation fence, and cap-checked
 admission. Upgrading does not infer closure from historical abandonment.
 
-A publication file with a literal `title` and `body` is still accepted for any
-other spec file. Its text is published as written, with no publisher-written
-issue reference. The `scripts/run-real-work.sh` header is the authority for
-both forms.
+### The Visibility Seed
 
-For this exercise the target must instead arrive through the client composer,
-so run the harness in client-target mode:
+Until #1332 lists configured projects in the sync bootstrap, the client
+composer offers a project only once it holds a task. For a fresh root, submit
+a seed task for the project from the CLI, as in
+[Start And Verify](#start-and-verify), before the client exercise. The seed
+spends one real specification execution and produces a spec-approval
+attention item; leave it unapproved, since approving it would run the
+throwaway seed to implementation. The writer identity has a single execution
+slot, so the client task's specification run queues behind the seed's until
+the seed reaches that gate, a few minutes. This is an accepted trade-off,
+tracked in #1405 and removed by #1332.
 
-```sh
-bash scripts/run-real-work.sh --client-target \
-  /absolute/spec.json /absolute/policy.json /absolute/publication.json \
-  /absolute/work-unit.json
-```
+### The Exercise
 
-Client-target mode requires `FREESIDE_REAL_RUN_MANUAL_SUBMISSION_CONFIG`,
-because a client cannot create a task without it. It cannot combine with
-`--resume-session` or `--recover-codex-credentials`. The harness does
-everything the ordinary mode does up to the daemon launch, including submitting
-the four files as a visibility seed, and then waits instead of following that
-seed. The seed is a CLI submission, which is why this mode needs the work-unit
-declaration too; the daemon records one for the task the client composes. The harness never follows, verifies, or records a result for the seed;
-the seed only exists to make the project visible in sync until #1332 lands.
-
-The daemon, however, executes the seed's specification run like any other
-unattended submission: nothing gates the specification invocation before it
-generates a spec, so the seed spends one real specification execution and
-produces a spec-approval attention item that you leave unapproved. Because the
-writer identity has a single execution slot, the client target's specification
-run queues behind the seed's until the seed reaches that approval gate, a few
-minutes. This is an accepted trade-off, not a defect, tracked in #1405 and
-removed by #1332 (project discovery drops the seed). Leave the seed's
-spec-approval item unapproved; approving it would run the throwaway seed to
-implementation.
-
-1. Confirm the chosen project has no existing task for your source. Project
-   discovery is tracked separately in #1332; the seed above supplies the
-   visibility this exercise needs. For the requested gh-imgup exercise, use
+1. Confirm the chosen project has no existing task for your source. For the
+   requested gh-imgup exercise, use
    `https://github.com/freeasinbird/gh-imgup/issues/82` as one line. When the
    exit condition requires source-issue closure, the agent must give the
    operator the exact bare canonical URL before submission, with no prose or
    trailing punctuation. Prose-wrapped URLs remain valid task input but do not
    save a publication source reference. Never pre-create this exercise's
    target through the CLI: the target must be the task the client composer
-   creates. That limit is this exercise's alone; an ordinary CLI run may
-   submit an issue URL with the publication file shown above.
-2. When the harness prints `awaiting a client target`, enter that source in the
-   client composer and submit. Record the command result, the new task ID, its
-   specification-run ID, and the returned sync state. Verify the task name and
-   run timeline on the Mac and physical iPhone.
-3. Hand the harness the new task by ID, in a second terminal:
-
-   ```sh
-   bash /absolute/session/real-work-session.sh select-target \
-     /absolute/session <task-id>
-   ```
-
-   The foreground harness validates the task against the live store and reports
-   the result. It refuses the visibility seed's own task, any task created
-   before this session's daemon started, a task in another project, a cancelled
-   or stopped task, and an absent task. A refusal prints its reason and the
-   harness keeps waiting, so correct the ID and run `select-target` again. On
-   acceptance the harness saves the selection durably; a saved selection cannot
-   be replaced in the same session, and choosing another target means starting
-   a new client-target session. Selection binds by trusted task and run
-   identity from the task's recorded run list, never by matching source text.
-4. **Before specification approval, prove the source when closure is required.**
-   After the harness accepts the target, run the retained session command with
-   the exact expected issue URL:
-
-   ```sh
-   bash /absolute/session/real-work-session.sh verify-source \
-     /absolute/session https://github.com/freeasinbird/gh-imgup/issues/82
-   ```
-
-   Save the printed local receipt path in the run record before asking the
-   operator to approve. The read-only check inspects the selected task's saved
-   specification/publication input, task/project/run ownership, exact issue
-   URL, and project repository. It records the task ID, specification-run ID,
-   repository, source issue, and `recommended` provenance. Displayed spec prose
-   and the visibility seed's publication file cannot prove this binding.
-
-   A refusal leaves approval pending and the closure proof blocked. Missing,
-   corrupt, mismatched, or cross-repository inputs fail; an existing
-   implementation run makes a pre-implementation proof too late. An older
-   retained verifier without this mode requires a reviewed runtime/session.
-   Do not edit the retained task or clear a checkpoint. A corrected source
-   needs a fresh task and client-target session under the one-target rule.
-
-   A successful receipt proves eligibility at that read, with recommended
-   client provenance. It neither creates a daemon-bound `issue_subject` nor
-   grants closing authority. The later proposal, policy/human approval, and
-   publisher checks still apply. In the separately authorized live proof on
-   the merged runtime, record the later closure proposal for this same task
-   and run; a receipt alone proves neither a proposal nor issue closure.
-   This checkpoint is required only for closure-specific exit exercises.
-5. Follow the normal clarification or specification flow for the selected task.
-   Leave the human specification approval gate in place. Each deliberate client
+   creates.
+2. Enter that source in the client composer and submit. Record the command
+   result, the new task ID, its specification-run ID, and the returned sync
+   state. Verify the task name and run timeline on the Mac and physical
+   iPhone.
+3. Read the task's record with `freesided inspect task` and confirm it is the
+   client's task, not the seed's, in the configured project.
+4. Follow the normal clarification or specification flow for that task. Leave
+   the human specification approval gate in place. Each deliberate client
    submission of the same project and source creates a distinct task, so a
-   second submission is a second task, not proof of reuse; select exactly one
+   second submission is a second task, not proof of reuse; record exactly one
    as the target.
 
-After the specification is approved, the harness resolves the selected task's
-implementation run from its recorded run list, follows it to publication (the
-deadline starts at that selection, not at the client submission, and pauses at
-gates, as described at the top of this document), and
-runs the same `TestRealWorkItemCompletesProductionPipeline` verifier with every
-existing assertion. In this mode it additionally requires that the verified run
-belongs to the selected task and to `FREESIDE_REAL_RUN_PROJECT`, and that the
-task is neither cancelled nor stopped. A ready publication continues to the
-walkthrough, and the session's `verify`, `complete`, and `recover` commands
-operate on the selected target's run and invocation, never the seed's. A
-completed-history verification instead reports its completion and remote-merge
-evidence, exits through cleanup, and leaves any live Mac or iPhone acceptance
-evidence outstanding.
-
-`--resume-session` of a client-target session that already saved a target
-copies the recorded mode and selection into the new session and rebinds to the
-selected target. A session that ended before any target was selected is not
-resumable; start a new client-target session instead. Interrupting the harness
-while it waits for a selection runs the ordinary cleanup: daemon stop,
-exact-resource rig cleanup, and supervised-daemon restoration.
-
-Record the selected task's evidence separately, and leave live acceptance
-outstanding if the approved inputs or either physical client are unavailable.
+The deputy runs the client's task like any other: after the specification is
+approved, it runs implementation, review, and publication, and the task record
+shows each step. A ready publication continues to the walkthrough on both
+clients. Record the target task's evidence separately from the seed's, and
+leave live acceptance outstanding if the approved inputs or either physical
+client are unavailable.
 
 ### Next Exit-Run Commands
 
-For the #1211 exit run against `freeasinbird/gh-imgup#82`, with the exercise
-environment and the manual-submission file loaded and the supervised daemon
-left running:
+For the #1211 exit run against `freeasinbird/gh-imgup#82`, with the settings
+file naming the manual-submission file and `prod` left running:
 
 ```sh
-bash scripts/run-real-work.sh --client-target \
-  /absolute/spec.json /absolute/policy.json /absolute/publication.json \
-  /absolute/work-unit.json
-# then, once the harness prints its awaiting-target line and the client task exists:
-bash /absolute/session/real-work-session.sh select-target /absolute/session <task-id>
+freesided deputy -root <root>
+# in a second terminal, the visibility seed for a fresh root:
+freesided submit -db <root>/daemon/freeside.db --require-composition \
+  -project <project> -task /absolute/seed-spec.md -policy /absolute/policy.json \
+  -publication /absolute/publication.json -work-unit /absolute/work-unit.json
+# once the client composer has created the target task:
+freesided inspect task -db <root>/daemon/freeside.db -task <task-id>
 ```
 
-Verify the published head on both paired clients, then complete the session
-deliberately with its printed `complete` command.
+Verify the published head on both paired clients, then end the deputy
+deliberately with Ctrl-C.

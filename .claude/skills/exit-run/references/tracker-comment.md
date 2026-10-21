@@ -32,7 +32,7 @@ Evidence basis: the run itself from `main` at `<sha>`, the state root
 | Campaign <n>, specification | <run id; outcome; who approved, on which device, which actions the card offered> |
 | Campaign <n>, implementation attempt <k> | <run id; outcome; if failed, the finding and whether an item was raised> |
 | Review | <review id; model and reasoning; instruction digest; round outcomes> |
-| Verifier | <verifier test name; result line; ready item and its offered actions> |
+| Task record | <`freesided inspect task` read: task id, `as_of_revision`, publication outcome and its head; each record check passed or failed; ready item and its offered actions> |
 | Publication | <PR link; base to head; branch; whether merged and by whom> |
 | Completion fact | <the recorded completion row after the merge, or why none> |
 | Spend | <per role; total; review cost owner> |
@@ -118,7 +118,7 @@ and this comment and the body index get repaired. Grounded at `main`
 
 ### What I Verified And What I Didn't
 
-- Passed: <the pipeline end to end; harness verifier; checks on in-run fix branches>.
+- Passed: <the pipeline end to end; the task record from `freesided inspect task`; checks on in-run fix branches>.
 - Checked: <read-only inventories; source traces, with file:line>.
 - Not run: <walkthrough steps not done; devices unavailable; any fix>.
 - Caveat: <store edit with backup path; anything that makes the state root unclean evidence>.

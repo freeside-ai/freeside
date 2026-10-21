@@ -1002,8 +1002,8 @@ Reading the record:
   exported, whether the ready item carries its `evidence_snapshot`, the
   `outcome` the publisher recorded (`repo`, `base_ref`, `head_sha`,
   `pr_number`, `evidence_eligible`), and the work unit's `completion`
-  (`null` while the unit is not done). These are the facts the real-run
-  verifier checks: an outcome whose `head_sha` matches `export_head_sha`
+  (`null` while the unit is not done). These are the facts that prove a
+  real run: an outcome whose `head_sha` matches `export_head_sha`
   and is `evidence_eligible` is a pull request of exactly the exported
   head. A completion bound to another pull request is an `integrity` error
   in the `completion` section.
@@ -1016,9 +1016,8 @@ Reading the record:
   flag names, and the store refuses evidence that names any other recipe;
   the record reports that item or section as `unapproved_recipe`, and the
   message names the recipe. A stopped root therefore needs the digests its
-  daemon ran with: `FREESIDE_REAL_RUN_APPROVED_RECIPE` for a
-  `scripts/run-real-work.sh` root, `approved_recipe` in
-  `<root>/daemon/settings.json` for a deputy root. A direct read that meets
+  daemon ran with: `approved_recipe` in `<root>/daemon/settings.json` for
+  a deputy root. A direct read that meets
   `unapproved_recipe` says so on stderr; stdout stays one JSON line.
 - **The timeline's shape is part of the record's version.** A change to the
   task timeline or its events changes `freeside-task-record-v3`.
@@ -1099,8 +1098,8 @@ enforces recipe approval, conformance, admission, and specification approval.
 Changing the file requires a daemon restart and affects only new submissions.
 An explicit manual Retry of a recorded command returns its original result,
 even if configuration changed or was removed. A new command always creates
-new work, including with identical project, source, and name. For private
-staging and retained-session recovery, use the [production walkthrough](../docs/production-walkthrough.md#submit-a-new-task-from-a-client).
+new work, including with identical project, source, and name. For a client
+submission to the deputy, use the [production walkthrough](../docs/production-walkthrough.md#submit-a-new-task-from-a-client).
 
 ### Set A Claude Identity's Parallel Limit
 
@@ -1114,8 +1113,8 @@ as JSON. Repeating the current limit writes nothing.
 
 ```sh
 freesided set-identity-limit \
-  -db "$FREESIDE_REAL_RUN_STATE_ROOT/freeside.db" \
-  -identity "$FREESIDE_REAL_RUN_AUTH_IDENTITY" \
+  -db <state-root>/daemon/freeside.db \
+  -identity <agent_tree.auth_identity from settings.json> \
   -max-parallel-executions 4
 ```
 
@@ -1125,8 +1124,7 @@ whole invocation, so a second concurrent writer on the same identity fails
 its stage instead of waiting. Raise the limit only after #1585 lets writer
 executions share an identity.
 
-The real-run harness (`scripts/run-real-work.sh`) records the writer identity
-at 1 on a fresh state root and never rewrites a recorded identity. After a
+`freesided deputy` records the writer identity at 1 on a fresh state root and never rewrites a recorded identity. After a
 raise, watch the daemon log and the paired clients for auth, rate-limit, or
 credential failures. On any such failure, set the limit back to the last value
 that ran cleanly, or to 1. The
@@ -1319,8 +1317,7 @@ refused until the tree changes. Before starting the new build:
      above. `codex_review_v1` and its lock entry may stay or go together.
 5. Commit, pass the commit as `-agent-tree-commit`, and run preflight. A
    review role that still lacks a model or an effort fails it by name, and a
-   tree whose lock disagrees with its content is refused. The lineup revision
-   is new, so a real-work session retained on the earlier tree cannot resume.
+   tree whose lock disagrees with its content is refused.
 
 `-judgment-model` is where the judgment roles get their model. With it, the
 patch also has the call agent `claude-code-call-default`, on an offer of the
@@ -1372,8 +1369,8 @@ Before starting the new build:
    The judgment configuration digest no longer covers a model, so start the
    daemon with the digest this preflight records.
 
-The real-run harness runs this command on every start and checks the emitted
-tree against the configured commit; its sequence, and where to keep the
+`freesided deputy` runs this command on every start and checks the emitted
+tree against `agent_tree.commit`; its sequence, and where to keep the
 checkout, are in
 [Enroll The Identities And Check The Agent Tree](../docs/production-walkthrough.md#enroll-the-identities-and-check-the-agent-tree).
 
@@ -1553,13 +1550,13 @@ After interruption, rerun the command: a persisted pending rotation is
 recovered without spending the old refresh token again. A revoked chain or
 an ambiguous provider result without a recoverable response requires a fresh
 `codex login` and `enroll-codex`. An existing re-enrollment hold refuses
-renewal. To resolve that hold before production preflight can pass, use
-`scripts/run-real-work.sh --recover-codex-credentials` and accept the exact
-digest, fence, and expiry in a paired client. See
-[Recover Expired Reviewer Credentials](../docs/production-walkthrough.md#recover-expired-reviewer-credentials).
-Pass any additional approved recipes to the recovery harness with repeatable
-`--approved-recipe` arguments so it can reconstruct retained evidence during
-paired-client sync.
+renewal. To resolve that hold before production preflight can pass, start a
+driverless daemon on the deputy's root and accept the exact digest, fence, and
+expiry in a paired client, as
+[Recover Expired Reviewer Credentials](../docs/production-walkthrough.md#recover-expired-reviewer-credentials)
+describes. Pass every approved recipe the root's evidence names with
+repeatable `-approved-recipe` flags so the daemon can reconstruct that
+evidence during paired-client sync.
 
 `freesided onboard <owner/name>` packages the previously manual path. Stop the
 daemon first; onboarding refuses a database it holds. It:
@@ -1677,10 +1674,8 @@ the detail. The probe is not the account probe: it reads stored bytes only and
 never contacts a provider.
 
 The [production walkthrough runbook](../docs/production-walkthrough.md) covers
-the harness's retained endpoint, explicit completion, interrupted-holder
-recovery and verified restoration of the supervised daemon. Final verification
-reads the existing database beside the running daemon; it never seeds identities
-or migrates state. Keep the foreground harness open through the client walkthrough.
+a deputy run end to end: start, submission, the proof read through
+`freesided inspect task`, ending the run, and stale-lease recovery.
 
 Each ordinary `freesided submit` invocation creates a new task and campaign,
 even with identical inputs. Before acceptance, it saves a submission identity
@@ -1709,21 +1704,21 @@ a task whose line names any other agent is refused as a review configuration
 failure instead of run under the composed one.
 
 For a preflight-bound submission, choose one `--submission-id <identity>` and
-pass it to both `preflight` and `submit`. The real-work harness saves this identity
-before preflight. Reusing it with different input values is refused. Legacy
-`--run-id` is lookup-only: it may recover an existing historical run but cannot
-create work. Attaching to a retained real-work session observes its existing
-identity without submitting again.
+pass it to both `preflight` and `submit`. Reusing it with different input
+values is refused. Legacy `--run-id` is lookup-only: it may recover an existing
+historical run but cannot create work.
 
-`freesided preflight` is the pre-start production-composition gate used by
-`scripts/run-real-work.sh` before it submits work. Its deterministic JSON
+`freesided preflight` is the pre-start production-composition gate;
+`freesided deputy` runs the same composition once per start (Run Real Work
+With The Deputy). Its deterministic JSON
 manifest binds the exact database schema, daemon build, listener, repository
 and base, active profile, review configuration, source identities, seed,
 image digests and tool capabilities, credential readiness, and build-egress
 posture. Every check reports `passed`, `failed`, or `not_run` with evidence;
-a failure also carries remediation and returns nonzero. The harness refuses
-submission on failure and saves a passing, secret-free manifest by content
-digest under `<state-root>/production-evidence/composition/`. Build-egress
+a failure also carries remediation and returns nonzero. The deputy accepts
+no new work after a failed composition and keeps a passing, secret-free
+manifest by content digest under `<state-root>/production-evidence/composition/`.
+Build-egress
 reachability is explicitly `not_run`: this gate validates that configuration
 without performing a live build-egress probe. Repository observation may mint
 one short-lived, repository-scoped read token and records the required
@@ -1799,11 +1794,10 @@ recorded before execution.
 ### Run Real Work With The Deputy
 
 `freesided deputy -root <state-root>` is the real-work daemon in one
-process. It does in-process what `scripts/run-real-work.sh` does across
-several: it takes the production rig lease, adopts the agent tree, runs the
+process: it takes the production rig lease, adopts the agent tree, runs the
 composition preflight, and serves an `ephemeral` daemon that uses `prod`'s
-App authority under that lease (#1583). The script stays in place; the
-deputy is the path that replaces it. Its settings come from one file, not
+App authority under that lease (#1583). It is the only real-work launch
+path. Its settings come from one file, not
 flags:
 
 ```sh
@@ -1837,7 +1831,7 @@ container volume, not a host path.
 | `timeouts` | `writer_stop`, `writer_stall`: Go durations |
 | `build` | `proxy`, `base_build_ref`, `dns` |
 
-The deputy fixes what the script hard-codes: the Claude driver, unattended
+The deputy fixes, rather than reads from settings, the Claude driver, unattended
 mode, run conformance, provider-only egress to `api.anthropic.com:443`, and
 an 8 GiB review workspace. The supervision deadline stays a `submit` flag.
 
@@ -1870,7 +1864,7 @@ The readiness line goes to stdout once the daemon serves; progress lines go
 to stderr. SIGINT or SIGTERM tears the daemon down. The lease is then
 released only after the containers its manifest records are deleted and
 every recorded container, volume, and network is proven absent, as `rig
-cleanup` proves for the script. A failed proof, or a daemon that ended in
+cleanup` proves. A failed proof, or a daemon that ended in
 error, abandons the lease instead, so the next start recovers it.
 
 **What it writes.** Under `<state-root>/daemon/`: `freeside.db`,
@@ -2125,8 +2119,7 @@ including `blocking_system_health` when another run's notice blocks admission;
 it does not infer holds from the selected run's attention items. Clearing the
 hold omits the field again. The lifecycle `state` can remain `pending` while
 held, and `outcome_reason` continues to describe a terminal publication block.
-The real-run harness pauses its executing-time budget while `hold_reason` is
-nonempty or a supported human gate applies. A missing field means no visible
+A missing field means no visible
 hold, preserving compatibility with older snapshots.
 
 ### Adjudication Dispatch Telemetry
@@ -2445,27 +2438,16 @@ manifest as `admitted`, `off`, or `unbound`. An unbound role fails preflight
 and is named in the check, so a run finds a missing line before it starts
 instead of running every site of that role on its fail-safe. The check reads
 each role's stored credential as the daemon will, so a missing or damaged
-credential volume fails preflight too. The real-run harness takes
-`FREESIDE_REAL_RUN_JUDGMENT_CLAUDE_BIN`,
-`FREESIDE_REAL_RUN_JUDGMENT_CLAUDE_SHA256`, and
-`FREESIDE_REAL_RUN_JUDGMENT_MODEL` together: the first two become the
-daemon's and preflight's flags, and the model goes to `auth adopt
--judgment-model`. It stops when an
-environment still sets the token-file variable it read before #1426. Retained
-restoration requires the same binding;
-adding a judgment backend to an unbound retained session is a configuration
-change and is refused. A separately configured challenge can enable it.
+credential volume fails preflight too. `freesided deputy` takes the
+`judgment` settings group together: `claude_bin` and `claude_sha256` become
+the daemon's and preflight's judgment flags, and `model` and
+`publication_author_prompt` go to `auth adopt` as `-judgment-model` and
+`-judgment-publication-author-prompt`.
 At startup, enabled judgments also require `-judgment-configuration-digest`
-from successful preflight. The harness supplies it from the immutable manifest;
+from successful preflight. The deputy supplies it from its launch manifest;
 a configuration change between preflight and startup is refused. The digest
 no longer covers a token (#1426) or a model (#1964), so one recorded before
-either change does not match: run preflight again after the upgrade. A
-retained session that had judgments on before either upgrade cannot be
-resumed across it, because its recorded composition names the old digest.
-The harness gives a retained session's saved binary the flags it gives the
-new one, so a binary saved before #1964 fails its `judgment_configuration`
-check for want of `-judgment-model`, and the resume stops there, before the
-runtime upgrade starts.
+either change does not match: run preflight again after the upgrade.
 
 Before deploying a different native CLI pin, run the protocol probe from
 `daemon/` with `FREESIDE_JUDGMENT_CLI` and

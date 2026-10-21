@@ -108,7 +108,7 @@ if [ "$(mode_of "$PROD/credentials")" = 700 ] && [ "$(mode_of "$PROD/credentials
 if [ "$(cat "$PROD/daemon/freeside.db")" = db ]; then ok; else report_failure "prod's own daemon files changed"; fi
 if [ ! -e "$STATE" ] && [ ! -e "$CREDS" ]; then ok; else report_failure "a source was left under its old name"; fi
 if [ -z "$(find "$PROD" -maxdepth 1 -name ".app-authority-move.*")" ]; then ok; else report_failure "a staging directory was left behind"; fi
-if [[ "$OUT" == *"FREESIDE_REAL_RUN_APP_STATE=\"$PROD/daemon\""* ]]; then ok; else report_failure "the output does not name the new App state directory"; fi
+if [[ "$OUT" == *"prod.app_state_dir=\"$PROD/daemon\""* ]]; then ok; else report_failure "the output does not name the new App state directory"; fi
 
 begin_case "an empty prod credentials directory is replaced"
 mkdir -m 700 "$PROD/credentials"
