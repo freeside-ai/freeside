@@ -67,13 +67,11 @@ are the only sources of active work state; a note records why, never status.
   further bounded by each wave tracker, live claims, conflicting changes, review
   bandwidth, and spine integration capacity. Within that width, at most two
   contract implementations are active at once (Contract Changes).
-- **Evidence basis:** Waves 3–6 and issue/PR history show recurring
-  lane-scoped fronts; PR #801 established the typed relations; Wave 6 tracker
-  #835 runs a repo-wide-exclusive contract chain alongside independent
-  fronts and identifies review bandwidth as the binding constraint. Wave 8's
-  seven-link chain serialized links that record no code dependence, so #1709
-  (owner decision, 2026-10-02) narrowed contract serialization to assessed
-  conflicts under a cap of two.
+- **Evidence basis:** Waves 3–6 show recurring lane fronts; PR #801 established
+  typed relations; Wave 6 tracker #835 identifies review bandwidth as the
+  constraint. After Wave 8's seven-link chain serialized units with no recorded
+  code dependence, owner decision #1709 (2026-10-02) limited contract
+  serialization to assessed conflicts under a cap of two.
 - **Detailed mechanics:** [`docs/coordination.md`](docs/coordination.md).
 - **Reassess when:** A planned wave needs more than four fronts;
   review or integration queueing persists at four or fewer; work repeatedly
@@ -296,19 +294,16 @@ translate agent jargon or search for the conclusion.
 
 ## Build, Test, Run
 
-`bash scripts/check.sh <component> [step...]` runs a component's standard
-checks from the repo root, and CI runs those steps through the same script,
-so its step table is the authoritative check list; the one exception is
-daemon lint, which CI runs through golangci-lint-action at the same pinned
-version. On a pull request the component workflows run as reusable
-workflows called from `.github/workflows/pull-request.yml`, which has no
-path filter, selects the components from the PR's changed files, and
-reports the `required` check. Branch protection on `main` requires that
-check together with the up-to-date rule, so a PR behind `main` rebases
-before it can merge. `bash scripts/check.sh --list` prints the components
-(`daemon`, `app`, `api`, `scripts`, `convergence`, `docs`) and their steps;
-the script header documents the tool overrides and the daemon's opt-in live
-suites. Operator
+Run standard checks from the repo root with
+`bash scripts/check.sh <component> [step...]`; `--list` lists components and
+steps. Its step table is authoritative. Read its header for tool overrides
+and opt-in live suites. CI uses the same script except daemon lint, which
+uses golangci-lint-action at the same pinned version.
+`.github/workflows/pull-request.yml` has no path filter: it calls reusable
+workflows for changed components and reports `required`. Branch protection
+requires that check and an up-to-date branch, so rebase a PR behind `main`.
+
+Operator
 tools that are not checks live with their component: installers in
 app/README.md, image builds in images/README.md, the real unattended run in
 the `scripts/run-real-work.sh` header, and the API linter pin in
@@ -319,18 +314,12 @@ macOS runs build and test); each new component adds its own on that pattern
 in its first PR, registers its steps in `scripts/check.sh`, and registers
 its paths in `pull-request.yml`.
 
-To inspect a running daemon, read its recorded state through `freesided`
-instead of the database or the logs. Start one with
-`bash scripts/dev-instance.sh --daemon-only`, which prints `root=<root>`; its
-database is `<root>/daemon/freeside.db`. `freesided inspect -db <db>` lists
-the reads on offer and the tasks the daemon holds, and
-`freesided inspect task -db <db> -task <task-id>` prints one task's record:
-its timeline, runs, attention items, and counts, as versioned JSON. Both
-write nothing and read through the control socket while a daemon runs, so
-they are safe on any tier. To wait for a state change, read again and
-compare `as_of_revision`. A stopped root needs the daemon's digests, one
-`-approved-recipe` each, or its evidence-bearing items and timeline report
-`unapproved_recipe`. Detail: `daemon/README.md` (Read A Task's Record).
+Before inspecting daemon state or waiting for a change, read
+`daemon/README.md` (Read A Task's Record), including its stopped-root recipe
+requirements. For a running daemon, use `freesided inspect` instead of
+database queries or logs.
+Start a development daemon with `bash scripts/dev-instance.sh --daemon-only`;
+it prints `root=<root>`, with the database at `<root>/daemon/freeside.db`.
 
 While iterating on a visible `app/` change, render only the surfaces the step
 touches with `bash app/scripts/render-surfaces.sh OUTPUT_DIR SURFACE...` and
@@ -415,17 +404,13 @@ carries it, not gated separately.
 
 ## Markdown Conventions
 
-Headings use **title case** at every level (`docs/intro.md` is the reference
-example). Convergence is a ratchet, not a retroactive sweep: new docs and any
-heading a substantial revision already touches adopt title case; existing
-sentence-case docs (`docs/plan.md` and the component READMEs) keep theirs
-until a substantive revision brings them along, and a heading-only retitle of
-an otherwise unchanged doc is not a work unit. No doc drifts away from title
-case; not every doc converts at once.
+Use **title case** at every heading level in new docs and headings touched by
+substantial revisions (`docs/intro.md` is the example). Keep existing title
+case; leave other headings alone until a substantive revision touches them.
+A heading-only retitle is not a work unit.
 
-A heading whose exact spelling is a machine-read record identifier keeps that
-spelling; `### Post-merge obligations` and `### Coordination model` are
-interface tokens, not prose to retitle.
+Keep machine-read record headings exact, including
+`### Post-merge obligations` and `### Coordination model`.
 
 ## Forge Record
 
@@ -493,42 +478,33 @@ escalation.
 
 ## Integration Ordering and Merge-Result Audit
 
-Integration evidence belongs to one base commit (the "Let the landing check
-repeat integration checks when the base moves" rule under Pull Requests).
-The merge-result audit is its mechanical defense; the script header carries
-the incident it answers and its guarantees.
+Integration evidence applies to one base commit (Pull Requests). The
+merge-result audit's script header explains its purpose and guarantees.
 
-- The spine role owns final integration ordering when several PRs are ready.
-  A unit's Dependencies field records typed `merges-after` integration
-  constraints and `stacked-on` intentional bases (see Stacked PRs).
-- After any merge to `main`, every remaining open PR's integration evidence is
-  stale until revalidated against the new tip.
-- Refresh a PR branch by rebasing it onto the freshly fetched tip of its
-  base, then push with `--force-with-lease`. Never merge the base into a PR
-  branch: not with `git merge`, not with the forge's "Update branch" merge,
-  and not with a host tool that merges the base in. This is the project's
-  method wherever a workflow step says to update the branch
-  (`docs/agent-workflow.md` §handing-off); a stacked child rebases onto its
-  base the same way (Stacked PRs). Resolve a conflict in the commit that
-  owns the conflicting change, and recheck that each rebased commit is
-  still green. Decision record:
+- The spine orders integration when several PRs are ready. Record
+  `merges-after` constraints and `stacked-on` bases in each unit's Dependencies
+  field (Stacked PRs).
+- After any merge to `main`, other open PRs' integration evidence is stale.
+  Revalidate a waiting PR once against the exact tip selected for its
+  integration; never merge on stale evidence. Each intervening tip does not
+  require a separate run.
+- Refresh every PR branch, including a stacked child, by rebasing onto its
+  freshly fetched base, then pushing with `--force-with-lease`. Never merge
+  the base into a PR branch, locally, through the forge, or through a host tool
+  (`docs/agent-workflow.md` §handing-off). Resolve each conflict in the commit
+  that owns the change and recheck that every rebased commit is green.
+  Decision record:
   `devlog/2026-10-06-1236-rebase-base-refresh.md`.
-- Before final handoff, and again after any base advance: fetch the default
-  branch and run
+- Before final handoff, and after a base advance when revalidating: fetch the
+  default branch and run
   `scripts/merge-result-audit.sh origin/main <head-branch> <allowed-path>...`
-  against that exact tip, with the unit's declared scope as the allowed
-  paths. Read the whole change set it prints: the audit cannot see intent,
-  so an in-scope reversion still passes. Record the resolved base SHA, the
-  audit command, and the verdict in the PR's Verification section.
-- "After any base advance" says what is stale, not that every tip gets a
-  re-run. A handed-off PR that is waiting to merge is stale from the advance
-  on. Revalidate it once, against the exact tip it will merge onto, when it
-  is selected for integration; it never merges on stale evidence.
-- When the advance landed another contract unit, a contract PR's
-  revalidation also regenerates its generated consumers and re-runs
-  `scripts/check.sh` for its components against the new tip. Two contract
-  units that merge cleanly as text can still disagree, and with two active
-  at once the second to merge always meets this case.
+  against that exact tip, allowing only the unit's declared paths. Read the
+  whole printed change set; an in-scope reversion still passes the audit.
+  Record the base SHA, command, and verdict in PR Verification.
+- When the base advance landed another contract unit, a contract PR's
+  revalidation also regenerates its generated consumers and reruns
+  `scripts/check.sh` for its components against the new tip, even if the text
+  merges cleanly.
 
 <!-- agents-md:managed:branches -->
 
@@ -744,20 +720,15 @@ all three.
 
 ## Mechanical Commit-Message Checks
 
-Before your first commit in a clone, run `git config core.hooksPath
-.githooks`: the commit hook gives a best-effort early check on the normal
-editor/strip-cleanup path. Git does not give that hook its later cleanup mode
-or the effective `core.commentChar=auto` character, so pull-request CI is the
-exact authority. The rules (subject and body shape, 72-character limits, and
-the forbidden Conventional Commit, autosquash, WIP, and review-cleanup
-prefixes) are in the header of `scripts/check-commit-messages.sh`. CI runs the
-script over every non-merge commit in `merge-base..head`, and
-`bash scripts/check-commit-messages.sh origin/main HEAD` checks a branch
-locally. The script also rejects a merge of the base into the branch
-(`base-merge`), which enforces the rebase rule under Integration Ordering and
-Merge-Result Audit. The same `core.hooksPath` opt-in also enables the
-`pre-commit` hook that regenerates the tracked API client when a commit
-stages one of its inputs; CI's `generate` job stays the backstop.
+Before the first commit in a clone, run `git config core.hooksPath .githooks`.
+The commit-message hook is best-effort; range-mode CI over recorded commits
+is authoritative. Before committing, read `scripts/check-commit-messages.sh`'s
+header for the rules and hook limitations. Check a branch locally with
+`bash scripts/check-commit-messages.sh origin/main HEAD`.
+
+The same opt-in enables the `pre-commit` hook that regenerates the tracked
+API client when any of its inputs is staged; CI's `generate` job remains the
+backstop.
 
 <!-- agents-md:managed:done -->
 
@@ -807,10 +778,8 @@ carries dependencies or blockers.
 
 ### Work Units
 
-Every work unit carries the work contract the finish line defines (objective,
-testable acceptance criteria, scope, dependencies and blockers, explicit
-non-goals); this section governs where that contract persists. A direct,
-session-contained user assignment may carry it in the prompt and PR together.
+Every work unit carries the contract defined under Default Agent Finish Line.
+A direct, session-contained user assignment may keep it in the prompt and PR.
 Scheduled work, backlog work, work that spans sessions, and work involving
 more than one agent need a work-unit issue; when a direct task crosses one of
 those boundaries mid-flight, promote it to an issue before continuing.
