@@ -49,8 +49,11 @@ One issue per issue-backed work unit, created from the work-unit template:
 - Dependencies: `starts-after`, `merges-after`, `stacked-on`, and
   `exclusive-with` (see Relationship Types), never untyped issue refs. Record
   an unknown or materially ambiguous relationship as `starts-after` until the
-  spine resolves it. A contract unit's field also carries the spine's
-  contract assessments (see Relationship Types).
+  spine resolves it. A contract unit's field also carries its contract
+  assessments (see Relationship Types). A contract unit is created with them
+  already recorded against every contract unit holding an active claim or
+  planning reservation, with `starts-after` on each pair its creator cannot
+  assess (AGENTS.md, Contract Changes).
 
 Labels: `lane:*` for ownership area, `kind:*` for type, and `tracker` for an
 issue that tracks other issues. Milestones carry the phase (1A, 1B). Each
@@ -99,7 +102,9 @@ cap (AGENTS.md, Contract Changes):
   `kind:contract` unit with which the unit has no recorded independence
   assessment (Relationship Types). An unassessed pair conflicts exactly as a
   declared `exclusive-with` pair does, for claims and for planning
-  reservations; a pair recorded as independent on both issues does not.
+  reservations; a pair recorded as independent on both issues does not. A
+  planning reservation on a unit recorded to start after this one does not
+  block this unit's claim (Stages).
 - **The cap is arbitrated like a conflict.** Before posting, count the
   contract units with an active claim; when the count already equals the
   cap, pick another unit. After posting, recount across every open contract
@@ -250,13 +255,16 @@ see the contract cap's occupancy in one issue list.
    - open `kind:contract` issues, ignoring a `deferral` issue until it is
      scheduled or has an active claim: for work that is not itself a contract
      unit, if one touches your Affected interfaces/contracts, block on it.
-     When claiming a `kind:contract` unit, the spine's recorded assessments
-     decide instead: among the other open contract units that hold an active
-     claim or planning reservation, block on any that has no recorded
-     independence assessment with your unit, and block when the number with
-     an active claim already equals the cap (the contract conflict set and
-     cap arbitration under Claiming). A `starts-after` edge between contract
-     units is an ordinary prerequisite, resolved in step 4.
+     When claiming a `kind:contract` unit, the recorded assessments decide
+     instead. A fiat session first records any missing assessment against a
+     contract unit holding an active claim or planning reservation (AGENTS.md,
+     Contract Changes). Then, among the other open contract units that hold
+     an active claim or planning reservation, block on any that has no
+     recorded independence assessment with your unit (except a reservation
+     on a unit recorded to start after yours), and block when the
+     number with an active claim already equals the cap (the contract
+     conflict set and cap arbitration under Claiming). A `starts-after` edge
+     between contract units is an ordinary prerequisite, resolved in step 4.
      `scripts/trackercollect contracts` may collect this evidence (each open
      contract unit's claim state, the trackers listing it, and the active
      count against the cap); it is optional and replaces none of the claim
@@ -350,8 +358,17 @@ existing reservation coordinates cooperating sessions; it is not a forge lock.
 Planning reserves its assigned issue before it can change the authoritative
 contract. The planner reads the issue and its direct conflict set using the
 paginated claim, reservation, and forward/reverse relationship queries under
-Claiming. If no member has an active work claim or planning reservation, write
-one comment on the assigned issue with this marker and visible line:
+Claiming. On a `kind:contract` unit the planner first places the unit
+(AGENTS.md, Contract Changes): it assesses every contract unit holding an
+active claim or planning reservation that has no record with this unit,
+writes each record on both issues, and rebuilds the conflict set. A partner
+recorded as independent leaves the set, and so does one joined to this unit
+by a recorded `starts-after` in either direction: that is an ordinary
+prerequisite, which planning does not wait on and Session Start step 4
+resolves at start. A partner recorded
+`exclusive-with`, or still unassessed, stays in the set and blocks the
+reservation. If no member has an active work claim or planning reservation,
+write one comment on the assigned issue with this marker and visible line:
 
 ```text
 <!-- freeside-planning-reservation:v1 -->
@@ -362,7 +379,8 @@ The reservation blocks any implementation claim or scheduled pickup for that
 issue and every direct `exclusive-with` partner. On a contract unit it has
 the same reach as a claim: it also blocks the contract units with no recorded
 independence assessment against it (the contract conflict set under
-Claiming), and it blocks no contract unit assessed as independent. It never
+Claiming), and it blocks no contract unit assessed as independent and no
+unit it is recorded to start after. It never
 counts toward the contract cap. It does not authorize either
 stage and is not a work claim. Verify the saved reservation and recheck the
 conflict set before editing the contract. If a competing claim or reservation
@@ -372,7 +390,8 @@ implementation-plan comment; on a blocked attempt, revise
 it in place with an explicit release marker. An implementation session pages
 the comments of its entire direct conflict set and stops on an active
 reservation before claiming or starting, even when its scheduling or fiat
-authorization is otherwise valid.
+authorization is otherwise valid, except a reservation on a unit recorded to
+start after it.
 
 A reservation is active only while unreleased and less than 48 hours past its
 forge-issued `created_at`. Expiry ends the holder's planning-write authority.
@@ -512,7 +531,7 @@ when both conditions hold:
   it holds a planning reservation. A candidate is waiting when this
   unit is what would hold it back:
   - it `starts-after` this unit;
-  - the pair is `exclusive-with`, or the spine has not assessed it as
+  - the pair is `exclusive-with`, or it has not been assessed as
     independent with the consumer included; or
   - only the cap would hold it back: its `starts-after` prerequisites
     have merged, it conflicts with no unit that holds an active claim,
@@ -668,11 +687,14 @@ never creates a relationship or authorizes work.
   declared paths overlapped on the Codex review sources.
 
 **Contract assessments.** The `kind:contract` label implies no relationship
-between two contract units. The spine's recorded assessment decides whether
-they may be active together (AGENTS.md, Contract Changes). The record sits in
-both units' Dependencies fields. Each side names the other unit, the
-assessor and date, the issue state or base commit assessed, the verdict, and
-the rationale:
+between two contract units. The recorded assessment decides whether they
+may be active together (AGENTS.md, Contract Changes). The assessor is the
+spine, or a session that created one of the two units or holds owner fiat
+for one of them, as that section says. The record sits in both units'
+Dependencies fields. Each side names the other unit, the assessor and date,
+the issue state or base commit assessed, the verdict, and the rationale. A
+session other than the spine names itself `fiat #N`, N being the unit it was
+assigned, or `created #N` for the unit it created:
 
 ```text
 - Contract assessment, #1600 (spine, 2026-10-05, at `8d834525`): independent.
@@ -688,15 +710,27 @@ the rationale:
   Merge-Result Audit). A `merges-after` edge left between two contract
   units is not an independence record.
 - **A pair without the record on both issues is unassessed.** It serializes:
-  claims and planning reservations treat it as conflicting, and the spine
-  records it as `starts-after` when it places a unit in the assessed
-  contract order.
-- **Recording independence only relaxes,** so the spine may write it while
+  claims and planning reservations treat it as conflicting, and the
+  assessor records it as `starts-after` when it places a unit in the
+  assessed contract order.
+- **Recording independence only relaxes,** so an assessor may write it while
   an endpoint is claimed; a claimant that sees an assessment change between
-  reads repeats its relationship, claim, and reservation reads. The spine
-  withdrawing an independence record whose units are unchanged, or
-  replacing it with a conflict, restricts and follows the `exclusive-with`
-  edit protocol above.
+  reads repeats its relationship, claim, and reservation reads. A first
+  verdict of any kind on an unassessed pair restricts nothing either,
+  because the pair already serialized, so it may also be written while an
+  endpoint is claimed, with one limit: it never records a claimed partner as
+  starting after the unit being placed, since that partner is already under
+  way. Against a claimed partner, the unit being placed starts after it, is
+  `exclusive-with` it, or is independent of it. Withdrawing an independence
+  record whose units are unchanged, or replacing it with a conflict,
+  restricts and follows the `exclusive-with` edit protocol above.
+- **Assess the partner's current scope.** Re-read the partner just before
+  writing, and reassess when its Objective, Scope / declared paths, or
+  Affected interfaces/contracts changed since the assessment read. Record no
+  independence against a partner whose planning reservation is active: its
+  planner may still change that scope, and a record written after its scope
+  edit escapes the withdrawal below. A `starts-after` or `exclusive-with`
+  verdict only orders or separates the pair, so it may be written then.
 - **A scope edit withdraws the unit's independence records.** Before saving
   an edit to a contract unit's Objective, Scope / declared paths, or
   Affected interfaces/contracts field, check its Dependencies field for
@@ -705,22 +739,23 @@ the rationale:
   both issues, so the spine learns of it. A planner, whose stage allows no
   new comment, names it in its implementation-plan comment or release edit
   on the assigned issue instead. Each pair is then unassessed and
-  serializes until the spine reassesses it and records the result on both
+  serializes until an assessor reassesses it and records the result on both
   issues again. An edit that touches none of those three fields (a
   Dependencies change, a tracker projection, the record itself) removes
   nothing.
 - **That removal is immediate.** It does not wait under the `exclusive-with`
   edit protocol: the edit has already made the record false, and waiting
-  would leave a false record standing. A verdict the spine withdraws on
+  would leave a false record standing. A verdict an assessor withdraws on
   unchanged scope is still true until withdrawn, which is why that
   withdrawal waits.
 - **Check the partner's claim state after the removal.** When the partner
   unit holds an active claim or planning reservation, the edited unit does
-  no work on the changed scope until the spine reassesses, and the editor
+  no work on the changed scope until the pair is reassessed, and the editor
   says so where it names the removal. The removal alone does not stop the
   partner's work in flight; the spine decides.
-- **The spine reassesses** when a record is removed this way or a recorded
-  assumption changes.
+- **The pair is reassessed** when a record is removed this way or a
+  recorded assumption changes, by the spine or another assessor of the
+  pair.
 
 Unknown or materially ambiguous relationships serialize as `starts-after`
 until the spine resolves and records the intended type. Coupled work still

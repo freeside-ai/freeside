@@ -98,7 +98,13 @@ gates in this file.
   planning-reservation comment, replaced in place by the current
   implementation-plan comment or an explicit release marker; an edit or
   explicit non-current marker on a superseded plan comment; and trackers
-  whose projections derive from an edited Dependencies field. Expiry ends
+  whose projections derive from an edited Dependencies field. On a contract
+  unit, the contract-assessment lines in the assigned unit's and each
+  partner's Dependencies fields (Contract Changes) may be written before the
+  reservation, to place the unit, as well as under it. A first verdict on an
+  unassessed pair restricts nothing, because the pair already serialized,
+  and recording independence only relaxes, so that write needs neither a
+  reservation nor the `exclusive-with` edit protocol. Expiry ends
   planning-write authority; continue only with a fresh reservation obtained
   through that document's recovery procedure. A mutation whose verification
   finishes after expiry stays visible but unverified and never satisfies the
@@ -132,7 +138,9 @@ gates in this file.
   ran first, the input includes the plan in comments.
 - **Allowed mutations:** The ordinary work-unit surface: its claim, isolated
   branch or worktree, declared paths, implementation and verification
-  artifacts, review responses, and PR.
+  artifacts, review responses, and PR; on a contract unit, also the
+  contract-assessment lines in its own and each partner's Dependencies
+  fields (Contract Changes).
 - **Required input:** The authoritative issue contract or, for a direct
   session-contained assignment, its prompt-backed work contract; when a
   planning stage ran, its single current implementation-plan comment. Execute
@@ -882,14 +890,16 @@ condition is inert until something else tells you to go look.
     active concurrently. Before starting, check the current unit's
     declarations and reverse declarations in every open work-unit issue, then
     run the cross-unit claim arbitration. Between two contract units the
-    relation comes only from the spine's recorded contract assessment
-    (Contract Changes); the `kind:contract` label implies none.
+    relation comes only from the recorded contract assessment (Contract
+    Changes); the `kind:contract` label implies none.
   - Adding an `exclusive-with` declaration: the editor checks both endpoints
     and must not edit while any claim or foreign planning reservation is
     active; a planner may retain only its own unexpired
     reservation, with sufficient write-and-verification margin, on its
     assigned endpoint. The editor waits for the blocking record to release
-    before changing the relationship. A declaration that appears during claim
+    before changing the relationship. A first contract assessment of an
+    unassessed pair needs no such wait, because the pair already serialized
+    (Contract Changes). A declaration that appears during claim
     arbitration stops that claimant until the edit completes and a fresh
     relationship, claim, and reservation read is done.
   - Treat an unknown or materially ambiguous relationship as `starts-after`
@@ -919,12 +929,13 @@ condition is inert until something else tells you to go look.
   unit names those surfaces in its Affected interfaces/contracts field; a
   direct assignment derives them from its declared scope. A
   `deferral`-labelled contract unit counts only once it is scheduled or
-  actively claimed. Between contract units the spine's recorded assessment
-  decides, not surface overlap. Claiming a `kind:contract` unit checks every
+  actively claimed. Between contract units the recorded assessment decides,
+  not surface overlap. Claiming a `kind:contract` unit checks every
   other open contract unit that holds an active claim or planning
   reservation:
   - Any of them that lacks a recorded independence assessment with your unit
-    blocks you (Contract Changes). An unassessed pair is treated as
+    blocks you (Contract Changes), except a planning reservation on a unit
+    recorded to start after yours. An unassessed pair is treated as
     conflicting, so missing evidence never opens concurrency.
   - The cap blocks you when the number of contract units with an active claim
     already equals it. After posting your claim, recount: when active
@@ -948,10 +959,12 @@ it as a dependency, and blocking or switching units.
 
 Contract units serialize by assessed conflict, not by label:
 
-- **The spine assesses each pair.** For two contract units, the spine
-  compares intended behavior, affected invariants, consumers, persistence,
-  generated artifacts, and recovery paths. Different files or a clean merge
-  do not prove independence.
+- **An assessor compares each pair.** The assessor is the spine, or a
+  session that created one of the two units or holds owner fiat (`Plan #N`
+  or `Handle #N`) for one of them. For two contract units, the assessor
+  compares intended behavior, affected invariants, consumers,
+  persistence, generated artifacts, and recovery paths. Different files or a
+  clean merge do not prove independence.
 - **Both issues' Dependencies fields carry the record.** A contract
   assessment names the other unit, the verdict, the rationale, and the issue
   state or base commit it was assessed against. A conflict is recorded as
@@ -972,16 +985,16 @@ Contract units serialize by assessed conflict, not by label:
   contract unit's Objective, Scope, or Affected interfaces/contracts, check
   its Dependencies field for independence records. Whoever makes the edit
   removes them from that issue in the same edit, at once, and names the
-  removal on both issues. The pair is then unassessed until the spine
-  reassesses and records the result on both issues again; while the partner
-  unit is claimed or reserved, the edited unit does no work on the changed
-  scope until then. The planner's case, and why this removal does not wait
-  as the spine's own withdrawal does, are in `docs/coordination.md`
-  (Relationship Types). The spine also reassesses when a recorded
-  assumption changes.
+  removal on both issues. The pair is then unassessed until an assessor
+  reassesses it and records the result on both issues again; while the
+  partner unit is claimed or reserved, the edited unit does no work on the
+  changed scope until then. The planner's case, and why this removal does
+  not wait as a withdrawal on unchanged scope does, are in
+  `docs/coordination.md` (Relationship Types). An assessor also reassesses
+  when a recorded assumption changes.
 - **An unassessed pair stays serialized.** Two contract units may be active
   together only when both issues record them as independent. Without that
-  record the pair is treated as conflicting, and the spine records an
+  record the pair is treated as conflicting, and an assessor records an
   unknown interaction as `starts-after`, the same fallback every unknown
   relationship takes.
 - **At most two contract implementations are active at once,** within the
@@ -990,14 +1003,23 @@ Contract units serialize by assessed conflict, not by label:
   contract unlocks a cluster nothing active unlocks; a contract PR waits
   under a day for owner review at two; and all three units are pairwise
   assessed on their issues. Planning reservations do not count toward it.
-- **A planning reservation has the same reach as a claim.** A reservation on
-  a contract unit blocks claims on the units a claim there would block, and
-  no others.
+- **A planning reservation reaches what a claim would, with one exception.**
+  A reservation on a contract unit blocks claims on the units a claim
+  there would block, and no others, except a unit it is recorded to start
+  after: a dependent's planning never holds back its prerequisite.
 - **The authorization doors are unchanged.** Scheduling and fiat remain the
   only two; an assessment or a free cap slot never authorizes work.
 
-Before a `kind:contract` deferral is scheduled or assigned by fiat, the spine
-gives it a place in the assessed contract order: it records the unit's
-assessment against every scheduled or active contract unit, with
-`starts-after` for any pair it has not assessed. With no valid position the
-unit stays dormant. Fiat never bypasses contract ordering.
+A `kind:contract` deferral gets its place in the assessed contract order
+before it is scheduled or worked under fiat. The session that creates it,
+and any session that receives `Plan #N` or `Handle #N` for it, records each
+missing assessment against a contract unit holding an active claim or
+planning reservation; that write is part of the session's assignment, not a
+separate step. The spine, when it schedules the unit, records each missing
+one against a scheduled or active contract unit. Either writes on both
+issues, in the Relationship Types form in `docs/coordination.md`, with
+`starts-after` for any pair it cannot assess. It records no independence
+against a partner whose planning reservation is active, because that
+partner's scope may still change, and never makes a claimed partner start
+after the unit it places. With no valid position the unit stays
+dormant. Fiat never bypasses contract ordering.
