@@ -441,23 +441,20 @@ interface tokens, not prose to retitle.
 
 ## Automated Reviewer
 
-**Codex** reviews pull requests automatically. Handle its findings per the
-review bullets under Pull Requests (judge on merits, reply after the pushed
-fix, fix the whole class), and filter later review activity by its login.
+**None.** The owner turned off automatic Codex review on 2026-10-21, so no
+bot reviews pull requests.
 
-- **Login/account:** `chatgpt-codex-connector`; the
-  `chatgpt-codex-connector[bot]` form appears on inline review comments and in
-  the pulls review-comments API.
-- **Triggered:** on PR open-for-review, mark-ready, and each push; on demand
-  via an `@codex review` comment.
-- **Status signals:** Codex keeps one `codex-pull-request-review-summary`
-  comment, posted on the first trigger and updated in place afterwards with
-  the reviewed commit, trigger, and completion time. On a **clean pass** (no
-  findings) it posts no review and reacts 👍 (`+1`, `THUMBS_UP`) on the PR
-  description a few minutes after the trigger; that reaction, dated after the
-  trigger, is the completion signal a review watch keys off. On a **findings
-  pass** it posts a `COMMENTED` review whose inline comments each carry a
-  priority badge (P1/P2/P3) and invite a 👍/👎 reaction.
+- **No review watch:** skip step 1 of Handing Off the PR and do not invoke
+  `await-pr-review`. With no record, that skill scans recent PRs, finds
+  Codex's old reviews, and waits out its cap for a pass that never comes.
+- **Before pushing:** follow `docs/agent-workflow.md` §pre-push-review, which
+  asks for a fresh-context reviewer when delegation is available and
+  otherwise relies on the owner. The owner's review is the final one.
+- **No new record from stray activity:** an old summary comment or an
+  on-demand `@codex review` is not a reviewer to record; a new record needs
+  the owner to turn automatic review back on.
+
+Decision record: `devlog/2026-10-21-0848-retire-codex-reviewer.md`.
 
 ## Landing Record
 
@@ -471,8 +468,7 @@ fix, fix the whole class), and filter later review activity by its login.
   - **Approver permission:** `write`.
   - **Stale lock age:** `240` minutes.
   - **Base-advance checks:** none.
-  - **Reviewer:** `chatgpt-codex-connector`.
-  - **Reviewer completion marker:** `codex-pull-request-review-summary`.
+  - **Reviewer:** `none`.
   - **Consumer:** `land-approved-prs`.
 
 The record is read from `main`'s tip, so a change to it takes effect only
@@ -480,9 +476,11 @@ once it merges. Base-advance checks stay empty because the required check
 already reruns on the branch updated to the tip, and the lander waits for it
 on that exact commit. The merge-result audit needs each PR's declared scope,
 so the lander runs it per PR (Integration Ordering and Merge-Result Audit);
-a fixed command here cannot. Decision records:
-`devlog/2026-10-19-1500-landing-record.md` and
-`devlog/2026-10-19-1903-permission-based-approval.md`.
+a fixed command here cannot. Reviewer is `none` because the project has no
+automated reviewer (Automated Reviewer). Decision records:
+`devlog/2026-10-19-1500-landing-record.md`,
+`devlog/2026-10-19-1903-permission-based-approval.md`, and
+`devlog/2026-10-21-0848-retire-codex-reviewer.md`.
 
 ## Freeside Review-Loop Bound
 
