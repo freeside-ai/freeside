@@ -1519,4 +1519,20 @@ import Testing
         calendar.timeZone = TimeZone(identifier: "UTC")!
         return calendar.date(from: components)!
     }
+
+    /// The closed defaults show one card per conclusion cause, and each
+    /// passes the mock's mirror of the daemon's conclusion rules (#2097).
+    @Test func closedInboxCoversEveryConclusionCause() {
+        let closed = AttentionFixtures.closedInbox()
+        #expect(
+            closed.map { $0.item.conclusion?.value1.cause }
+                == [.decision, .expired, .superseded, .resolved_by_daemon])
+        for snapshot in closed {
+            let breach = MockContractValidation.snapshotBreach(
+                snapshot, approvedRecipes: [AttentionFixtures.approvedRecipeDigest])
+            #expect(breach == nil, "\(snapshot.item.id): \(breach ?? "")")
+        }
+        #expect(
+            MockContractValidation.itemValidityBreach(AttentionFixtures.staleReady().item) == nil)
+    }
 }

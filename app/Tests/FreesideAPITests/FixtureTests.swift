@@ -75,7 +75,8 @@ import Testing
 
     @Test func defaultInboxCoversEveryPhase1TypeOnce() {
         let inbox = AttentionFixtures.defaultInbox()
-        #expect(inbox.map(\.item._type) == AttentionFixtures.phase1Types)
+        let open = inbox.filter { $0.item.status == .open || $0.item._type == .blocked }
+        #expect(open.map(\.item._type) == AttentionFixtures.phase1Types)
         #expect(Set(inbox.map(\.item.id)).count == inbox.count)
     }
 
@@ -255,6 +256,10 @@ import Testing
                 "item-task_proposal",
                 "item-effect_proposal",
                 "item-system_health",
+                "production-review-run-review_dispute-1",
+                "item-publish_blocked-expired",
+                "item-effect_proposal-superseded",
+                "item-system_health-resolved",
             ])
         #expect(
             AttentionFixtures.defaultInboxItemIDs()

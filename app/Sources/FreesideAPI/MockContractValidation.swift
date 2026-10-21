@@ -304,6 +304,7 @@ enum MockContractValidation {
         if let decided = item.decided_at, decided.timeIntervalSince1970 < -62_000_000_000 {
             return "zero decided_at"
         }
+        if let breach = conclusionBreach(item) { return breach }
         if let reference = item.pr_reference?.value1 {
             if item._type != .ready_for_final_review && item._type != .publish_blocked {
                 return "pr_reference on an item that is neither ready_for_final_review nor publish_blocked"
@@ -1025,6 +1026,52 @@ enum MockContractValidation {
         if item.artifact_digests != union {
             return "artifact_digests is not the canonical union of rendered digests"
         }
+        return nil
+    }
+
+    /// Mirrors domain.AttentionItem.validateConclusion and Conclusion.Validate
+    /// (#2097): a conclusion only on a closed item, with a cause that admits
+    /// the status; a decision on decided_at with no reason; a daemon close
+    /// with a reason and no decided_at. A closed item without one is a row
+    /// from before the field and passes.
+    private static func conclusionBreach(_ item: Components.Schemas.AttentionItem) -> String? {
+        guard let conclusion = item.conclusion?.value1 else { return nil }
+        if item.status == .open { return "conclusion on an open item" }
+        let admitted: [Components.Schemas.ItemStatus] =
+            switch conclusion.cause {
+            case .decision: [.resolved, .dismissed, .superseded]
+            case .expired: [.expired]
+            case .superseded: [.superseded]
+            case .resolved_by_daemon: [.resolved]
+            }
+        if !admitted.contains(item.status) { return "conclusion cause does not admit the item's status" }
+        if conclusion.successor_item_id == item.id || conclusion.successor_item_id?.isEmpty == true {
+            return "invalid conclusion successor_item_id"
+        }
+        if let decision = conclusion.decision?.value1 {
+            guard conclusion.cause == .decision, conclusion.reason.isEmpty else {
+                return "decision on a non-decision conclusion, or a decision with a reason"
+            }
+            if decision.command_id.isEmpty || decision.device_id.isEmpty || decision.device_display_name.isEmpty {
+                return "empty conclusion decision identity"
+            }
+            if let routes = decision.finding_routes {
+                if decision.action != .adjudicate_findings && decision.action != .choose_alternative_route {
+                    return "finding_routes on an action that carries none"
+                }
+                let ids = routes.map(\.finding_id)
+                if ids.isEmpty || ids.contains(where: \.isEmpty) || ids != ids.sorted() || Set(ids).count != ids.count {
+                    return "conclusion finding_routes not strictly sorted by finding"
+                }
+            }
+            if item.decided_at.map(wireDate) != wireDate(conclusion.concluded_at) {
+                return "decision conclusion and decided_at disagree"
+            }
+            return nil
+        }
+        if conclusion.cause == .decision { return "decision conclusion without a decision" }
+        if isBlank(conclusion.reason) { return "daemon conclusion without a reason" }
+        if item.decided_at != nil { return "daemon conclusion with decided_at" }
         return nil
     }
 

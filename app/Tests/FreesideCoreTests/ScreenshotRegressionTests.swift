@@ -847,7 +847,9 @@
                 }
             }
 
-            for snapshot in inbox {
+            // One open card per type; the closed matrix below draws the
+            // closed fixtures under their own names.
+            for snapshot in inbox where snapshot.item.status == .open {
                 let graphics = graphicPresentations(for: snapshot.item)
                 let detail = DecisionDetailView(
                     store: store,

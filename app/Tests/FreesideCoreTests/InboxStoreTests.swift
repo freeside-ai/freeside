@@ -229,7 +229,9 @@ import Testing
         #expect(!store.rows.contains { $0.item.status != .open })
 
         store.scope = .resolved
-        #expect(Set(store.rows.map(\.item.id)) == [resolved.item.id, dismissed.item.id])
+        // The seeded inbox already holds one closed item per conclusion cause.
+        let seededClosed = Set(AttentionFixtures.closedInbox().map(\.item.id))
+        #expect(Set(store.rows.map(\.item.id)) == seededClosed.union([resolved.item.id, dismissed.item.id]))
         #expect(store.urgentCount(in: .resolved) == 1)
 
         store.scope = .all
