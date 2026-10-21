@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/freeside-ai/freeside/daemon/internal/domain"
+	"github.com/freeside-ai/freeside/daemon/internal/domain/domaintest"
 	"github.com/freeside-ai/freeside/daemon/internal/store"
 	"github.com/freeside-ai/freeside/daemon/internal/store/storetest"
 )
@@ -73,6 +74,7 @@ func recordTransition(t *testing.T, s *store.Store, transition domain.Unattended
 		if concluded, err = concluded.WithDecidedAt(transition.OccurredAt); err != nil {
 			return err
 		}
+		concluded = domaintest.MustConclude(concluded)
 		if err := tx.PutAttentionItem(ctx, concluded); err != nil {
 			return err
 		}
@@ -357,6 +359,7 @@ func TestBlockingSystemHealthRefusesUnattendedAdmission(t *testing.T) {
 		resolved := item
 		resolved.ItemVersion = 2
 		resolved.Status = domain.StatusResolved
+		resolved = domaintest.MustConclude(resolved)
 		putItem(t, s, resolved)
 		if err := requireAdmission(); err != nil {
 			t.Fatalf("admission after advisory observation resolved: %v", err)
@@ -376,6 +379,7 @@ func TestBlockingSystemHealthRefusesUnattendedAdmission(t *testing.T) {
 		if resolved, err = resolved.WithDecidedAt(admissionEpoch); err != nil {
 			t.Fatalf("WithDecidedAt: %v", err)
 		}
+		resolved = domaintest.MustConclude(resolved)
 		putItem(t, s, resolved)
 		if err := recordAdmission(t, s, f.admission); err != nil {
 			t.Fatalf("admission after the diagnostic cleared: %v", err)

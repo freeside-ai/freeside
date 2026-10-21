@@ -369,7 +369,11 @@ func convergeHealthItems(
 			if keep != nil && keep(cause) {
 				continue
 			}
-			item.Status = domain.StatusResolved
+			item, err := item.ConcludeByDaemon(domain.ConcludedByDaemon, now.UTC(),
+				"Resolved when the condition this item reported cleared.", nil)
+			if err != nil {
+				return err
+			}
 			item.ItemVersion++
 			if err := tx.PutAttentionItem(ctx, item); err != nil {
 				return err

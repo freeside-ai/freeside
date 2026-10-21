@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/freeside-ai/freeside/daemon/internal/domain"
+	"github.com/freeside-ai/freeside/daemon/internal/domain/domaintest"
 	"github.com/freeside-ai/freeside/daemon/internal/exec"
 	"github.com/freeside-ai/freeside/daemon/internal/signet"
 	"github.com/freeside-ai/freeside/daemon/internal/store"
@@ -678,6 +679,7 @@ func TestCodexAuthStateIsIdentityScopedAndAdvisory(t *testing.T) {
 		if err != nil {
 			return err
 		}
+		resolved = domaintest.MustConclude(resolved)
 		return tx.PutAttentionItem(ctx, resolved)
 	}); err != nil {
 		t.Fatalf("resolve marker: %v", err)
@@ -840,6 +842,7 @@ func TestCodexAuthStateRequiresVerifiedCommandBackedRecovery(t *testing.T) {
 		t.Fatal(err)
 	}
 	if err := st.Write(ctx, func(tx *store.WriteTx) error {
+		newest = domaintest.MustConclude(newest)
 		return tx.PutAttentionItem(ctx, newest)
 	}); err != nil {
 		t.Fatal(err)

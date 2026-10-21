@@ -9,6 +9,7 @@ import (
 
 	"github.com/freeside-ai/freeside/daemon/internal/contentaddr"
 	"github.com/freeside-ai/freeside/daemon/internal/domain"
+	"github.com/freeside-ai/freeside/daemon/internal/domain/domaintest"
 	"github.com/freeside-ai/freeside/daemon/internal/operations"
 	"github.com/freeside-ai/freeside/daemon/internal/signet"
 	"github.com/freeside-ai/freeside/daemon/internal/store"
@@ -319,6 +320,7 @@ func TestDoctorNeverRefilesAHandledCredentialItem(t *testing.T) {
 	handled := d.healthItems()[0]
 	handled.ItemVersion++
 	handled.Status = domain.StatusResolved
+	handled = domaintest.MustConclude(handled)
 	if err := d.attention.PutItem(context.Background(), handled); err != nil {
 		t.Fatal(err)
 	}

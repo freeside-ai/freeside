@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/freeside-ai/freeside/daemon/internal/domain"
+	"github.com/freeside-ai/freeside/daemon/internal/domain/domaintest"
 	"github.com/freeside-ai/freeside/daemon/internal/signet"
 	"github.com/freeside-ai/freeside/daemon/internal/store"
 )
@@ -250,7 +251,7 @@ func TestRunProjectionHealthWriteFailureDoesNotFailRead(t *testing.T) {
 		t.Fatalf("build blocker item: %v", err)
 	}
 	f.mustWrite(t, func(tx *store.WriteTx) error {
-		return tx.PutAttentionItem(ctx, blocker)
+		return tx.PutAttentionItem(ctx, domaintest.MustConclude(blocker))
 	})
 
 	snapshot, err := f.service.Bootstrap(ctx)

@@ -1079,7 +1079,11 @@ func (f *FollowUpFiler) resolveClearedNotices(ctx context.Context) error {
 		}
 		for _, item := range cleared {
 			item.ItemVersion++
-			item.Status = domain.StatusResolved
+			item, err := item.ConcludeByDaemon(domain.ConcludedByDaemon, f.now().UTC(),
+				"Resolved when the condition holding the follow-up filing cleared.", nil)
+			if err != nil {
+				return err
+			}
 			if err := tx.PutAttentionItem(ctx, item); err != nil {
 				return err
 			}

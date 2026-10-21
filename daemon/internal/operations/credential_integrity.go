@@ -285,7 +285,11 @@ func (d Doctor) planCredentialIntegrityItems(
 	for id, item := range existing {
 		if item.Status == domain.StatusOpen && !current[id] {
 			item.ItemVersion++
-			item.Status = domain.StatusResolved
+			item, err := item.ConcludeByDaemon(domain.ConcludedByDaemon, d.now(),
+				"Resolved when re-enrollment replaced the credential generation the integrity check had marked.", nil)
+			if err != nil {
+				return nil, nil, fmt.Errorf("resolve %s item %s: %w", credentialIntegrityCode, id, err)
+			}
 			puts = append(puts, item)
 		}
 	}

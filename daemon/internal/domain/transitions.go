@@ -288,6 +288,23 @@ func ValidateAttentionItemTransition(old, updated AttentionItem) error {
 		return fmt.Errorf("attention item %s: pr reference cannot be attached in this transition: %w",
 			updated.ID, ErrImmutableTransition)
 	}
+	// A close records how it happened in the same write (#2097): a transition
+	// off open must carry its conclusion, and a recorded conclusion never moves
+	// or disappears. An item closed before the field existed stays without
+	// one; nothing backfills it.
+	if old.Status == StatusOpen && updated.Status != StatusOpen && updated.Conclusion == nil {
+		return fmt.Errorf("attention item %s: status %q: %w", updated.ID, updated.Status, ErrConclusionMissing)
+	}
+	if old.Status != StatusOpen {
+		sameConclusion, err := jsonEqual(old.Conclusion, updated.Conclusion)
+		if err != nil {
+			return fmt.Errorf("attention item %s: %w", updated.ID, err)
+		}
+		if !sameConclusion {
+			return fmt.Errorf("attention item %s: recorded conclusion would change: %w",
+				updated.ID, ErrImmutableTransition)
+		}
+	}
 	return nil
 }
 

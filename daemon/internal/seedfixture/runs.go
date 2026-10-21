@@ -363,12 +363,16 @@ func (s seeder) resolve(tx *store.WriteTx, item domain.AttentionItem, action dom
 	if err := tx.PutCommand(s.ctx, command); err != nil {
 		return err
 	}
-	item.Status = domain.StatusResolved
-	item.ItemVersion++
-	item, err = item.WithDecidedAt(at)
+	// The fixture pairs no device, so the conclusion names the command's
+	// device by a fixed label rather than a stored display name.
+	item, err = item.ConcludeByCommand(domain.StatusResolved, at, domain.ConclusionDecision{
+		CommandID: command.CommandID, Action: action, DeviceID: command.DeviceID,
+		DeviceDisplayName: "Seed fixture",
+	})
 	if err != nil {
 		return err
 	}
+	item.ItemVersion++
 	return tx.PutAttentionItem(s.ctx, item)
 }
 

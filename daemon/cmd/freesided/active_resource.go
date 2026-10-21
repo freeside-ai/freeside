@@ -641,8 +641,12 @@ func (r *activeResourceReconciler) convergeObservationHealth(
 	attention := signet.NewService(r.store)
 	if healthy {
 		for _, item := range existing {
+			item, err := item.ConcludeByDaemon(domain.ConcludedByDaemon, r.now().UTC(),
+				"Resolved when the pull request could be observed again or its watch ended.", nil)
+			if err != nil {
+				return err
+			}
 			item.ItemVersion++
-			item.Status = domain.StatusResolved
 			if err := attention.PutItem(ctx, item); err != nil {
 				return err
 			}
@@ -651,8 +655,12 @@ func (r *activeResourceReconciler) convergeObservationHealth(
 	}
 	if len(existing) > 0 {
 		for _, duplicate := range existing[1:] {
+			duplicate, err := duplicate.ConcludeByDaemon(domain.ConcludedByDaemon, r.now().UTC(),
+				fmt.Sprintf("Resolved as a duplicate of the open observation item %s.", existing[0].ID), nil)
+			if err != nil {
+				return err
+			}
 			duplicate.ItemVersion++
-			duplicate.Status = domain.StatusResolved
 			if err := attention.PutItem(ctx, duplicate); err != nil {
 				return err
 			}
@@ -1207,8 +1215,12 @@ func (r activeResourceReconciler) commit(ctx context.Context, observation active
 				// item and record why in the same transaction, so the staleness is
 				// item-visible and the version bump stales any command prepared
 				// against the old ready claim (plan §7, issue #496).
-				item.Status = domain.StatusSuperseded
 				item.ReadinessInvalidation = observation.invalidation
+				item, err = item.ConcludeByDaemon(domain.ConcludedBySupersession, time.Now().UTC(),
+					readinessInvalidationConclusion(observation.invalidation.Reason), nil)
+				if err != nil {
+					return err
+				}
 				item.ItemVersion++
 				if err := tx.PutAttentionItem(ctx, item); err != nil {
 					return err
@@ -1221,7 +1233,11 @@ func (r activeResourceReconciler) commit(ctx context.Context, observation active
 					return err
 				}
 			case observation.conclude:
-				item.Status = domain.StatusResolved
+				item, err = item.ConcludeByDaemon(domain.ConcludedByDaemon, time.Now().UTC(),
+					"Resolved when the pull request was merged or closed.", nil)
+				if err != nil {
+					return err
+				}
 				item.ItemVersion++
 				if err := tx.PutAttentionItem(ctx, item); err != nil {
 					return err
@@ -1332,4 +1348,20 @@ func concludePublicationSchedules(
 		}
 	}
 	return nil
+}
+
+// readinessInvalidationConclusion is the closed card's sentence for a ready
+// item superseded because its pass stopped describing the live candidate.
+func readinessInvalidationConclusion(reason domain.ReadinessInvalidationReason) string {
+	switch reason {
+	case domain.ReadinessInvalidationHeadChanged:
+		return "Superseded because the pull request head changed after the review passed."
+	case domain.ReadinessInvalidationBaseAdvanced:
+		return "Superseded because the target branch advanced past the base the review ran against."
+	case domain.ReadinessInvalidationRetargeted:
+		return "Superseded because the pull request was retargeted at another branch."
+	case domain.ReadinessInvalidationIdentityChanged:
+		return "Superseded because the observed pull request no longer matches the one this item names."
+	}
+	return "Superseded because the review pass no longer describes the pull request."
 }

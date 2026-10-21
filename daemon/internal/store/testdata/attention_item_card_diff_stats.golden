@@ -78,6 +78,7 @@
   "created_at": "2026-08-29T20:00:00Z",
   "expires_when": null,
   "decided_at": null,
+  "conclusion": null,
   "posture": null,
   "blocking_supersession": null,
   "status": "open"

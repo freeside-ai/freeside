@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"errors"
+	"reflect"
 	"slices"
 	"strings"
 	"testing"
@@ -234,6 +235,22 @@ func TestSubmitFindingAdjudicationAlternativeChoice(t *testing.T) {
 	decided, _ := f.itemSnapshotFor(t, item.ID)
 	if decided.Status != domain.StatusResolved || decided.DecidedAt == nil {
 		t.Fatalf("decided item = status %q at %v", decided.Status, decided.DecidedAt)
+	}
+	// The conclusion copies the device's name at decision time and the typed
+	// routes in finding order, so a closed card reads them without the thread.
+	want := domain.Conclusion{
+		Cause: domain.ConcludedByDecision, ConcludedAt: *decided.DecidedAt,
+		Decision: &domain.ConclusionDecision{
+			CommandID: "command-choose-alternative", Action: domain.ActionChooseAlternativeRoute,
+			DeviceID: "device-1", DeviceDisplayName: "Ben's iPhone",
+			FindingRoutes: []domain.ConcludedRoute{
+				{FindingID: "finding-a", Route: domain.RouteDispute},
+				{FindingID: "finding-b", Route: domain.RouteDispute},
+			},
+		},
+	}
+	if decided.Conclusion == nil || !reflect.DeepEqual(*decided.Conclusion, want) {
+		t.Fatalf("conclusion = %+v, want %+v", decided.Conclusion, want)
 	}
 }
 

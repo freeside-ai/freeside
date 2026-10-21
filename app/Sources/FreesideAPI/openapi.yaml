@@ -5027,6 +5027,7 @@ components:
         - created_at
         - expires_when
         - decided_at
+        - conclusion
         - posture
         - blocking_supersession
         - status
@@ -5317,6 +5318,16 @@ components:
             and the status flip; the durable endpoint of the open-to-decision
             metric (plan §4). Never client-set; null while the item is open
             and for items concluded without a decision (expiry, supersession).
+        conclusion:
+          nullable: true
+          allOf:
+            - $ref: "#/components/schemas/AttentionItemConclusion"
+          description: >
+            What closed the item: the decision that concluded it, or why the
+            daemon closed it. Daemon-stamped in the transaction that moves
+            the item off open, immutable once set, and never client-set.
+            Null while the item is open, and on an item closed by a daemon
+            that predates this field; non-null on every other closed item.
         posture:
           nullable: true
           allOf:
@@ -5490,6 +5501,7 @@ components:
         created_at: "2026-01-02T03:04:05Z"
         expires_when: "2026-01-03T03:04:05Z"
         decided_at: null
+        conclusion: null
         posture: null
         blocking_supersession: null
         status: "open"
@@ -6671,6 +6683,90 @@ components:
       description: The proposal producer's confidence in its recommended route.
       enum: [low, medium, high]
 
+    AttentionItemConclusion:
+      type: object
+      additionalProperties: false
+      description: >
+        How an attention item closed (mirrors domain.Conclusion). cause
+        decision pairs with a non-null decision and an empty reason; every
+        other cause pairs with a null decision and the daemon's one-sentence
+        reason.
+      required: [cause, concluded_at, reason, successor_item_id, decision]
+      properties:
+        cause:
+          $ref: "#/components/schemas/ConclusionCause"
+        concluded_at:
+          type: string
+          format: date-time
+          description: >
+            The instant the item closed; equals the item's decided_at when
+            cause is decision.
+        reason:
+          type: string
+          description: >
+            The daemon's sentence for a non-decision close, written for the
+            operator; empty when cause is decision.
+        successor_item_id:
+          type: string
+          minLength: 1
+          nullable: true
+          description: >
+            The attention item that replaced this one, when the daemon minted
+            a replacement; null otherwise.
+        decision:
+          nullable: true
+          allOf:
+            - $ref: "#/components/schemas/ConclusionDecision"
+          description: The concluding command; present only when cause is decision.
+    ConclusionCause:
+      type: string
+      description: >
+        Why an attention item closed. decision is a client command; expired,
+        superseded, and resolved_by_daemon are daemon closes (domain
+        enums.go).
+      enum:
+        - decision
+        - expired
+        - superseded
+        - resolved_by_daemon
+    ConclusionDecision:
+      type: object
+      additionalProperties: false
+      description: >
+        The accepted command that concluded an attention item, as recorded
+        at decision time.
+      required:
+        [command_id, action, device_id, device_display_name, finding_routes, answer_route]
+      properties:
+        command_id:
+          type: string
+          minLength: 1
+        action:
+          $ref: "#/components/schemas/Action"
+        device_id:
+          type: string
+          minLength: 1
+        device_display_name:
+          type: string
+          minLength: 1
+          description: >
+            The deciding device's display name at decision time, so the
+            record reads the same after the device is renamed or unpaired.
+        finding_routes:
+          type: array
+          nullable: true
+          minItems: 1
+          items:
+            $ref: "#/components/schemas/AlternativeChoice"
+          description: >
+            The per-finding routes the command carried: finding_routes of
+            adjudicate_findings or alternative_choices of
+            choose_alternative_route. Null for every other action.
+        answer_route:
+          nullable: true
+          allOf:
+            - $ref: "#/components/schemas/AnswerRoute"
+          description: The answer route the command carried, else null.
     ItemStatus:
       type: string
       description: Item lifecycle status. Provisional vocabulary (domain enums.go).

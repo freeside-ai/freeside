@@ -777,6 +777,7 @@ func (a *AuthState) MarkCodexAuthNeedsReenrollment(
 		if len(occurrences.open) > 1 {
 			return errors.New("codex auth identity has multiple open re-enrollment items")
 		}
+		var superseded *domain.AttentionItem
 		if len(occurrences.open) == 1 {
 			current := occurrences.open[0]
 			if current.ID != occurrences.latest.ID {
@@ -794,11 +795,7 @@ func (a *AuthState) MarkCodexAuthNeedsReenrollment(
 			if !supersede {
 				return nil
 			}
-			current.Status = domain.StatusSuperseded
-			current.ItemVersion++
-			if err := tx.PutAttentionItem(ctx, current); err != nil {
-				return err
-			}
+			superseded = &current
 		}
 		nextOccurrence, err := store.NextCodexReenrollmentMarkerOccurrence(occurrences.latestOccurrence)
 		if err != nil {
@@ -814,6 +811,19 @@ func (a *AuthState) MarkCodexAuthNeedsReenrollment(
 		)
 		if err != nil {
 			return err
+		}
+		// The superseded marker names the request that replaced it, so it is
+		// built after the replacement and written before it.
+		if superseded != nil {
+			closed, err := superseded.ConcludeByDaemon(domain.ConcludedBySupersession, a.now().UTC(),
+				"Superseded by a new re-enrollment request after the credential failed again.", &item.ID)
+			if err != nil {
+				return err
+			}
+			closed.ItemVersion++
+			if err := tx.PutAttentionItem(ctx, closed); err != nil {
+				return err
+			}
 		}
 		return tx.PutAttentionItem(ctx, item)
 	})
@@ -933,6 +943,7 @@ func (a *Enrollment) Begin(
 			return errors.New("codex auth identity has multiple open re-enrollment items")
 		}
 		var marker domain.AttentionItem
+		var replaced *domain.AttentionItem
 		if len(occurrences.open) == 1 {
 			marker = occurrences.open[0]
 			if marker.ID != occurrences.latest.ID {
@@ -944,11 +955,8 @@ func (a *Enrollment) Begin(
 			// rather than letting stale verified evidence block repair forever.
 			if marker.CodexReenrollmentRecoveryBinding != nil ||
 				marker.Offers(domain.ActionResolveReenrollment) {
-				marker.Status = domain.StatusSuperseded
-				marker.ItemVersion++
-				if err := tx.PutAttentionItem(ctx, marker); err != nil {
-					return err
-				}
+				stale := marker
+				replaced = &stale
 				marker = domain.AttentionItem{}
 			}
 		}
@@ -967,6 +975,19 @@ func (a *Enrollment) Begin(
 			)
 			if err != nil {
 				return err
+			}
+			// The replaced marker names the one that took its place, so it is
+			// built after the replacement and written before it.
+			if replaced != nil {
+				closed, err := replaced.ConcludeByDaemon(domain.ConcludedBySupersession, now.UTC(),
+					"Superseded by the marker for a replacement Codex enrollment.", &marker.ID)
+				if err != nil {
+					return err
+				}
+				closed.ItemVersion++
+				if err := tx.PutAttentionItem(ctx, closed); err != nil {
+					return err
+				}
 			}
 			if err := tx.PutAttentionItem(ctx, marker); err != nil {
 				return err

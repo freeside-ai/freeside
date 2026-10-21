@@ -4,6 +4,7 @@ import (
 	"testing"
 
 	"github.com/freeside-ai/freeside/daemon/internal/domain"
+	"github.com/freeside-ai/freeside/daemon/internal/domain/domaintest"
 	"github.com/freeside-ai/freeside/daemon/internal/store"
 )
 
@@ -12,6 +13,7 @@ func TestPublicationContinuationOfferDoesNotAdvanceRevisionForClosedDispute(t *t
 	item := f.item
 	item.ID = domain.ItemID(domain.PublicationContinuationItemPrefix + "old-recheck")
 	item.Status, item.DecidedAt = domain.StatusResolved, &f.now
+	item = domaintest.MustConclude(item)
 	if err := f.store.Write(t.Context(), func(tx *store.WriteTx) error { return tx.PutAttentionItem(t.Context(), item) }); err != nil {
 		t.Fatal(err)
 	}

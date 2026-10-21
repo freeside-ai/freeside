@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/freeside-ai/freeside/daemon/internal/domain"
+	"github.com/freeside-ai/freeside/daemon/internal/domain/domaintest"
 	"github.com/freeside-ai/freeside/daemon/migrations"
 )
 
@@ -191,6 +192,7 @@ func TestPutAttentionItemMaintainsDecisionSurface(t *testing.T) {
 	}
 	decided.Status = domain.StatusResolved
 	decided.ItemVersion = 2
+	decided = domaintest.MustConclude(decided)
 	putItem(t, ctx, st, &decided)
 	if epoch, digest, body := rawSurfaceRow(t, ctx, st.db, item.ID); epoch != 1 || digest != string(want.Digest) || body != createdBody {
 		t.Fatalf("telemetry transition rewrote the surface row: epoch %d digest %s", epoch, digest)
@@ -365,6 +367,7 @@ func TestDecisionSurfaceReconstructionFailsClosed(t *testing.T) {
 	next := item
 	next.ItemVersion = 2
 	next.Status = domain.StatusDismissed
+	next = domaintest.MustConclude(next)
 	err = st.Write(ctx, func(tx *WriteTx) error { return tx.PutAttentionItem(ctx, next) })
 	if !errors.Is(err, errRowInconsistent) {
 		t.Fatalf("put over a missing surface = %v, want %v", err, errRowInconsistent)

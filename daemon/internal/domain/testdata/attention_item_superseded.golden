@@ -59,6 +59,7 @@
   "created_at": null,
   "expires_when": null,
   "decided_at": null,
+  "conclusion": null,
   "posture": "blocking",
   "blocking_supersession": {
     "kind": "backup_encryption_waiver",

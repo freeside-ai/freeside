@@ -14,6 +14,7 @@ import (
 
 	"github.com/freeside-ai/freeside/daemon/internal/atomicfile"
 	"github.com/freeside-ai/freeside/daemon/internal/domain"
+	"github.com/freeside-ai/freeside/daemon/internal/domain/domaintest"
 	"github.com/freeside-ai/freeside/daemon/internal/signet"
 	"github.com/freeside-ai/freeside/daemon/internal/store"
 	"github.com/freeside-ai/freeside/daemon/internal/store/storetest"
@@ -826,7 +827,10 @@ func TestPutTerminalItemAcceptsCompatibleLifecycleAdvance(t *testing.T) {
 	advanced := expected
 	advanced.ItemVersion = 2
 	advanced.Status = domain.StatusDismissed
-	if err := attention.PutItem(ctx, advanced); err != nil {
+	// A dismissal is a decision, and signet's PutItem refuses a caller-set
+	// decided_at, so the fixture writes it through the store.
+	advanced = domaintest.MustConclude(advanced)
+	if err := st.Write(ctx, func(tx *store.WriteTx) error { return tx.PutAttentionItem(ctx, advanced) }); err != nil {
 		t.Fatal(err)
 	}
 

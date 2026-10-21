@@ -175,7 +175,7 @@ func TestTaskProposalStartAndDeclineConcludePerInstance(t *testing.T) {
 // the reconciler's already-decided path, not a second decision here).
 func TestStartTaskProposalUnattendedReportsStart(t *testing.T) {
 	ctx := context.Background()
-	readStatus := func(t *testing.T, f proposalDecisionFixture) domain.ItemStatus {
+	readItem := func(t *testing.T, f proposalDecisionFixture) domain.AttentionItem {
 		t.Helper()
 		var item domain.AttentionItem
 		if err := f.store.Read(ctx, func(tx *store.ReadTx) error {
@@ -185,7 +185,11 @@ func TestStartTaskProposalUnattendedReportsStart(t *testing.T) {
 		}); err != nil {
 			t.Fatal(err)
 		}
-		return item.Status
+		return item
+	}
+	readStatus := func(t *testing.T, f proposalDecisionFixture) domain.ItemStatus {
+		t.Helper()
+		return readItem(t, f).Status
 	}
 
 	t.Run("open card starts", func(t *testing.T) {
@@ -197,8 +201,15 @@ func TestStartTaskProposalUnattendedReportsStart(t *testing.T) {
 		if !started {
 			t.Fatal("an open task_proposal must report started")
 		}
-		if status := readStatus(t, f); status != domain.StatusResolved {
-			t.Fatalf("item status = %q, want resolved", status)
+		item := readItem(t, f)
+		if item.Status != domain.StatusResolved {
+			t.Fatalf("item status = %q, want resolved", item.Status)
+		}
+		// The reserved initiator has no device row; the conclusion still
+		// names who decided.
+		if c := item.Conclusion; c == nil || c.Decision == nil ||
+			c.Decision.DeviceID != signet.UnattendedInitiatorDeviceID || c.Decision.DeviceDisplayName != "Label intake" {
+			t.Fatalf("conclusion = %+v, want the label-intake initiator", item.Conclusion)
 		}
 	})
 

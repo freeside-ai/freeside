@@ -779,6 +779,98 @@
                         replacementPhoneDarkDetail.screenshotCard(
                             superseded.item, at: dynamicTypeSize))))
 
+            // Closed cards (#2097): the lead sentence, the Outcome facts, the
+            // timeline link, and the inert route list with the applied route
+            // outlined. The closed inbox draws one card per cause; the matrix
+            // adds a resolved, an expired, and a superseded card for the
+            // dispute, the specification, and the health notice. The tasks
+            // hold each subject's task so the link draws.
+            let dispute = AttentionFixtures.routedReviewDispute()
+            let specification = AttentionFixtures.fixture(type: .spec_approval)
+            let health = AttentionFixtures.fixture(type: .system_health)
+            let closedMatrix: [(name: String, snapshot: Components.Schemas.AttentionItemSnapshot)] = [
+                ("review_dispute-resolved", AttentionFixtures.decidedReviewDispute()),
+                (
+                    "review_dispute-expired",
+                    AttentionFixtures.closedByDaemon(
+                        dispute, id: "production-review-run-review_dispute-3", cause: .expired, after: 5400,
+                        reason: "Expired when the task's workflow was closed. The operator stopped the task.")
+                ),
+                (
+                    "review_dispute-superseded",
+                    AttentionFixtures.closedByDaemon(
+                        dispute, id: "production-review-run-review_dispute-4", cause: .superseded, after: 2400,
+                        reason: "Superseded when the pull request head changed during the dispute.",
+                        successor: dispute.item.id)
+                ),
+                (
+                    "spec_approval-resolved",
+                    AttentionFixtures.closedByDecision(
+                        specification, id: "item-spec_approval-resolved", status: .resolved, after: 1800,
+                        commandID: "cmd-approve-decided", action: .approve,
+                        deviceID: DeviceFixtures.currentDeviceID, deviceName: "Studio Mac")
+                ),
+                (
+                    "spec_approval-expired",
+                    AttentionFixtures.closedByDaemon(
+                        specification, id: "item-spec_approval-expired", cause: .expired, after: 5400,
+                        reason: "Expired when the task's workflow was closed. The operator stopped the task.")
+                ),
+                (
+                    "spec_approval-superseded",
+                    AttentionFixtures.closedByDaemon(
+                        specification, id: "item-spec_approval-superseded", cause: .superseded, after: 2400,
+                        reason: "Superseded by revision 2 of the specification.", successor: specification.item.id)
+                ),
+                ("system_health-resolved", AttentionFixtures.resolvedSystemHealth()),
+                (
+                    "system_health-expired",
+                    AttentionFixtures.closedByDaemon(
+                        health, id: "item-system_health-expired", cause: .expired, after: 5400,
+                        reason: "Expired when the daemon restored from a backup.")
+                ),
+                (
+                    "system_health-superseded",
+                    AttentionFixtures.closedByDaemon(
+                        health, id: "item-system_health-superseded", cause: .superseded, after: 2400,
+                        reason: "Superseded by a notice for the same diagnostic.", successor: health.item.id)
+                ),
+                ("publish_blocked-expired", AttentionFixtures.expiredPublishBlocked()),
+                ("effect_proposal-superseded", AttentionFixtures.supersededEffectProposal()),
+            ]
+            let closedStore = InboxStore(client: client, now: { screenshotNow })
+            closedStore.replaceAll(with: closedMatrix.map(\.snapshot) + [dispute, specification, health])
+            let closedTasks = closedMatrix.compactMap { entry -> Components.Schemas.TaskSnapshot? in
+                guard case .run(let run) = entry.snapshot.item.subject, let taskID = run.task_id,
+                    var task = TaskFixtures.defaultTasks().first
+                else { return nil }
+                task.task.id = taskID
+                return task
+            }
+            for entry in closedMatrix {
+                // The adjudicated dispute, the densest card, also draws on
+                // the phone and by dusk.
+                let variants: [(suffix: String, width: CGFloat?, colorScheme: ColorScheme)] =
+                    entry.name == "review_dispute-resolved"
+                    ? [("", nil, .light), ("-phone", 390, .light), ("-dark", nil, .dark)]
+                    : [("", nil, .light)]
+                for variant in variants {
+                    let detail = DecisionDetailView(
+                        store: closedStore,
+                        itemID: entry.snapshot.item.id,
+                        loadsAttachments: false,
+                        showsValidationProgress: false,
+                        now: screenshotNow,
+                        tasks: closedTasks)
+                    surfaces.append(
+                        Surface(
+                            name: "decision-\(entry.name)\(variant.suffix)",
+                            width: variant.width,
+                            colorScheme: variant.colorScheme,
+                            view: AnyView(detail.screenshotCard(entry.snapshot.item, at: dynamicTypeSize))))
+                }
+            }
+
             // Selection draws one way whatever Differentiate Without Color
             // says: the bar and the dropped border are geometry, so the pair
             // below pins the cue that setting relies on.
@@ -847,7 +939,9 @@
                 }
             }
 
-            for snapshot in inbox {
+            // One open card per type; the closed matrix below draws the
+            // closed fixtures under their own names.
+            for snapshot in inbox where snapshot.item.status == .open {
                 let graphics = graphicPresentations(for: snapshot.item)
                 let detail = DecisionDetailView(
                     store: store,

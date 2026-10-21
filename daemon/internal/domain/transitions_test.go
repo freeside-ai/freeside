@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/freeside-ai/freeside/daemon/internal/domain"
+	"github.com/freeside-ai/freeside/daemon/internal/domain/domaintest"
 )
 
 // The transition validators are the store guards lifted into the domain (issue
@@ -138,7 +139,7 @@ func TestValidateAttentionItemFixedBindings(t *testing.T) {
 	resolved := validItemInput(domain.AttentionSpecApproval)
 	resolved.Status = domain.StatusResolved
 	resolved.ItemVersion = 2
-	if err := domain.ValidateAttentionItemTransition(old, mustItem(t, resolved)); err != nil {
+	if err := domain.ValidateAttentionItemTransition(old, concluded(t, mustItem(t, resolved))); err != nil {
 		t.Fatalf("status transition rejected: %v", err)
 	}
 
@@ -187,7 +188,7 @@ func TestValidateAttentionItemPRReferenceAttachesOnce(t *testing.T) {
 		in.ItemVersion = version
 		in.Status = status
 		in.PRReference = ref
-		return mustItem(t, in)
+		return concluded(t, mustItem(t, in))
 	}
 
 	t.Run("open hold gains its reference", func(t *testing.T) {
@@ -311,7 +312,7 @@ func TestValidateAttentionItemStatusTerminality(t *testing.T) {
 				updatedIn := validItemInput(domain.AttentionSpecApproval)
 				updatedIn.Status = to
 				updatedIn.ItemVersion = 3
-				err := domain.ValidateAttentionItemTransition(mustItem(t, oldIn), mustItem(t, updatedIn))
+				err := domain.ValidateAttentionItemTransition(concluded(t, mustItem(t, oldIn)), concluded(t, mustItem(t, updatedIn)))
 				if from == to || from == domain.StatusOpen {
 					if err != nil {
 						t.Fatalf("legal status move rejected: %v", err)
@@ -351,6 +352,7 @@ func TestValidateAttentionItemDecidedAtImmutable(t *testing.T) {
 	if err != nil {
 		t.Fatalf("WithDecidedAt: %v", err)
 	}
+	decided = concluded(t, decided)
 
 	t.Run("stamping an undecided item", func(t *testing.T) {
 		if err := domain.ValidateAttentionItemTransition(mustItem(t, validItemInput(domain.AttentionSpecApproval)), decided); err != nil {
@@ -552,6 +554,24 @@ func TestValidateAttentionItemHealthPostureImmutable(t *testing.T) {
 	if err := domain.ValidateAttentionItemTransition(stored, updated); !errors.Is(err, domain.ErrImmutableTransition) {
 		t.Fatalf("changing posture = %v, want ErrImmutableTransition", err)
 	}
+}
+
+// concluded attaches the conclusion a closed item's status calls for: a
+// decision when the item carries decided_at, else the daemon cause its status
+// names. An open item is returned unchanged.
+func concluded(t *testing.T, item domain.AttentionItem) domain.AttentionItem {
+	t.Helper()
+	if item.Status == domain.StatusOpen {
+		return item
+	}
+	// Only a decision dismisses, so a dismissed item is a decided one.
+	if item.Status == domain.StatusDismissed && item.DecidedAt == nil {
+		var err error
+		if item, err = item.WithDecidedAt(domaintest.ConcludedAt); err != nil {
+			t.Fatalf("WithDecidedAt: %v", err)
+		}
+	}
+	return domaintest.MustConclude(item)
 }
 
 func mustItem(t *testing.T, in domain.AttentionItemInput) domain.AttentionItem {

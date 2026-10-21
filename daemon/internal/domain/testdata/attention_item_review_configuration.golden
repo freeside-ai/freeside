@@ -70,6 +70,7 @@
   "created_at": null,
   "expires_when": null,
   "decided_at": null,
+  "conclusion": null,
   "posture": null,
   "blocking_supersession": null,
   "status": "open"

@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/freeside-ai/freeside/daemon/internal/domain"
+	"github.com/freeside-ai/freeside/daemon/internal/domain/domaintest"
 	"github.com/freeside-ai/freeside/daemon/internal/store"
 	"github.com/freeside-ai/freeside/daemon/internal/store/storetest"
 )
@@ -105,6 +106,7 @@ func TestBeginCodexReenrollmentAuthenticatesCurrentMarkerBeforeLease(t *testing.
 		}
 		first.Status = domain.StatusSuperseded
 		first.ItemVersion++
+		first = domaintest.MustConclude(first)
 		if err := tx.PutAttentionItem(ctx, first); err != nil {
 			return err
 		}

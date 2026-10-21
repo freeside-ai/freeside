@@ -54,7 +54,8 @@ func (w *productionPublicationWorkflow) sealUnpublishedReentry(
 		return productionTaskOutcome{}, false, nil
 	}
 	// A hold an earlier pass recorded describes a retry the re-entry replaces.
-	if err := w.supersedeBlockedHold(ctx, task); err != nil {
+	if err := w.supersedeBlockedHold(ctx, task,
+		"Superseded by the re-entry cycle that replaces the retry this hold described.", nil); err != nil {
 		return productionTaskOutcome{}, true, err
 	}
 	exhausted, err := w.sealReentry(ctx, task, true)

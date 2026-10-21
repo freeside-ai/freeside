@@ -15,6 +15,10 @@ const executionConfigurationItemPrefix = "system-health-execution-configuration-
 // The installed daemon remains useful for pairing and state without pretending
 // to execute work. Keep that limitation visible until a driver is configured.
 func convergeExecutionConfiguration(ctx context.Context, st *store.Store, enabled bool, now func() time.Time) error {
+	at := time.Now().UTC()
+	if now != nil {
+		at = now().UTC()
+	}
 	return st.Write(ctx, func(tx *store.WriteTx) error {
 		items, err := tx.ListOpenAttentionItems(ctx, domain.AttentionSystemHealth)
 		if err != nil {
@@ -27,7 +31,11 @@ func convergeExecutionConfiguration(ctx context.Context, st *store.Store, enable
 			}
 			found = true
 			if enabled {
-				item.Status = domain.StatusResolved
+				item, err := item.ConcludeByDaemon(domain.ConcludedByDaemon, at,
+					"Resolved when an execution driver was configured.", nil)
+				if err != nil {
+					return err
+				}
 				item.ItemVersion++
 				if err := tx.PutAttentionItem(ctx, item); err != nil {
 					return err
@@ -46,10 +54,6 @@ func convergeExecutionConfiguration(ctx context.Context, st *store.Store, enable
 		if err != nil {
 			return err
 		}
-		createdAt := time.Now().UTC()
-		if now != nil {
-			createdAt = now().UTC()
-		}
 		posture := domain.HealthPostureBlocking
 		item, err := domain.NewAttentionItem(domain.AttentionItemInput{
 			ID:        domain.ItemID(fmt.Sprintf("%s%d", executionConfigurationItemPrefix, state.Revision+1)),
@@ -63,7 +67,7 @@ func convergeExecutionConfiguration(ctx context.Context, st *store.Store, enable
 			},
 			DisplayNames: names, ItemVersion: 1,
 			InterruptionClass: domain.InterruptionExceptional,
-			CreatedAt:         &createdAt, Posture: &posture, Status: domain.StatusOpen,
+			CreatedAt:         &at, Posture: &posture, Status: domain.StatusOpen,
 		}, nil)
 		if err != nil {
 			return err

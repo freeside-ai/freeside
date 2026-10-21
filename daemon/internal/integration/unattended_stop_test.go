@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/freeside-ai/freeside/daemon/internal/domain"
+	"github.com/freeside-ai/freeside/daemon/internal/domain/domaintest"
 	"github.com/freeside-ai/freeside/daemon/internal/engine"
 	"github.com/freeside-ai/freeside/daemon/internal/exec"
 	"github.com/freeside-ai/freeside/daemon/internal/exec/fake"
@@ -556,6 +557,7 @@ func TestBlockingItemHoldsAFreshDispatchUnderAnUnconfiguredEngine(t *testing.T) 
 		t.Fatalf("WithDecidedAt: %v", err)
 	}
 	if err := f.store.Write(ctx, func(tx *store.WriteTx) error {
+		resolved = domaintest.MustConclude(resolved)
 		return tx.PutAttentionItem(ctx, resolved)
 	}); err != nil {
 		t.Fatalf("resolve blocker: %v", err)

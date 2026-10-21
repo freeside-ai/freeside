@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/freeside-ai/freeside/daemon/internal/domain"
+	"github.com/freeside-ai/freeside/daemon/internal/domain/domaintest"
 	"github.com/freeside-ai/freeside/daemon/internal/store"
 	"github.com/freeside-ai/freeside/daemon/internal/store/storetest"
 )
@@ -161,6 +162,7 @@ func TestGrowthWithoutBlockersDecisionReconstructsAndContinueOpensAWindow(t *tes
 		if err := tx.PutCommand(ctx, command); err != nil {
 			return err
 		}
+		concluded = domaintest.MustConclude(concluded)
 		return tx.PutAttentionItem(ctx, concluded)
 	}); err != nil {
 		t.Fatalf("seed growth decision: %v", err)

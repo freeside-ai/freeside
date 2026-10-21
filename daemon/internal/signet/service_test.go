@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/freeside-ai/freeside/daemon/internal/domain"
+	"github.com/freeside-ai/freeside/daemon/internal/domain/domaintest"
 	"github.com/freeside-ai/freeside/daemon/internal/exec"
 	"github.com/freeside-ai/freeside/daemon/internal/export"
 	"github.com/freeside-ai/freeside/daemon/internal/signet"
@@ -248,6 +249,7 @@ func TestPutItemActionlessBlocked(t *testing.T) {
 	blocked.Status = domain.StatusSuperseded
 	blocked.RequestedDecision = nil
 	blocked.PRReference = nil
+	blocked = domaintest.MustConclude(blocked)
 	if err := f.service.PutItem(ctx, blocked); err != nil {
 		t.Fatalf("PutItem(actionless blocked): %v", err)
 	}
@@ -591,6 +593,7 @@ func TestSubmitClosedItemCurrentVersion(t *testing.T) {
 	closed.ItemVersion = 2
 	closed.Status = domain.StatusResolved
 	if err := f.store.Write(ctx, func(tx *store.WriteTx) error {
+		closed = domaintest.MustConclude(closed)
 		return tx.PutAttentionItem(ctx, closed)
 	}); err != nil {
 		t.Fatalf("close item: %v", err)

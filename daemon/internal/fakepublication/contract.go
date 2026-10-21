@@ -222,10 +222,11 @@ func BindTerminal(task Task, item domain.AttentionItem) (domain.AttentionItem, e
 }
 
 // terminalDigestItem is the terminal commitment's view of an item: every
-// AttentionItem field except review_diminishing.
+// AttentionItem field except review_diminishing and conclusion.
 type terminalDigestItem struct {
 	domain.AttentionItem
 	ReviewDiminishing *struct{} `json:"review_diminishing,omitempty"`
+	Conclusion        *struct{} `json:"conclusion,omitempty"`
 }
 
 func TerminalDigest(task Task, item domain.AttentionItem) (domain.Digest, error) {
@@ -236,6 +237,7 @@ func TerminalDigest(task Task, item domain.AttentionItem) (domain.Digest, error)
 	item.ItemVersion = 1
 	item.Status = domain.StatusOpen
 	item.DecidedAt = nil
+	item.Conclusion = nil
 	item.Timing = domain.TimingSummary{}
 	// Recommendation and decision-surface identity are filled by the store
 	// after the engine binds the terminal item. They are authenticated by their
@@ -249,8 +251,11 @@ func TerminalDigest(task Task, item domain.AttentionItem) (domain.Digest, error)
 	// A terminal item is ready_for_final_review or publish_blocked and can
 	// never carry review-diminishing facts, so the commitment leaves the key
 	// out instead of gaining a null: an item bound before the field existed
-	// keeps its digest. The shadowing field wins over the embedded item's and
-	// is always omitted; every other key keeps its place.
+	// keeps its digest. The conclusion is shadowed the same way: it is
+	// lifecycle state like status and decided_at, which the commitment resets
+	// to open, and an item bound before the field existed keeps its digest.
+	// The shadowing fields win over the embedded item's and are always
+	// omitted; every other key keeps its place.
 	payload, err := json.Marshal(struct {
 		Task Task               `json:"task"`
 		Item terminalDigestItem `json:"item"`

@@ -158,7 +158,7 @@ private final class CountingCacheStore: CacheStore, @unchecked Sendable {
         #expect(coordinator.store.freshness == .fresh)
         let persisted = try #require(cache.load())
         #expect(persisted.cursors == cursors)
-        #expect(persisted.attentionItems.count == coordinator.store.rows.count)
+        #expect(persisted.attentionItems.count == coordinator.store.orderedSnapshots.count)
         #expect(persisted.conversations == coordinator.store.orderedConversations)
         #expect(persisted.runs == coordinator.runs)
         #expect(persisted.schedules == coordinator.schedules)

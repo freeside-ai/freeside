@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/freeside-ai/freeside/daemon/internal/domain"
+	"github.com/freeside-ai/freeside/daemon/internal/domain/domaintest"
 	"github.com/freeside-ai/freeside/daemon/internal/golden"
 	"github.com/freeside-ai/freeside/daemon/internal/store"
 	"github.com/freeside-ai/freeside/daemon/internal/store/storetest"
@@ -294,6 +295,7 @@ func TestCommandIdempotentAndStale(t *testing.T) {
 		advanced := f.item
 		advanced.Status = domain.StatusResolved
 		advanced.ItemVersion = 2
+		advanced = domaintest.MustConclude(advanced)
 		if err := s.Write(ctx, func(tx *store.WriteTx) error { return tx.PutAttentionItem(ctx, advanced) }); err != nil {
 			t.Fatalf("advance item: %v", err)
 		}
@@ -350,6 +352,7 @@ func TestCommandIdempotentAndStale(t *testing.T) {
 		resolved := f.item
 		resolved.Status = domain.StatusResolved
 		resolved.ItemVersion = 2
+		resolved = domaintest.MustConclude(resolved)
 		if err := s.Write(ctx, func(tx *store.WriteTx) error { return tx.PutAttentionItem(ctx, resolved) }); err != nil {
 			t.Fatalf("resolve item: %v", err)
 		}
@@ -598,6 +601,7 @@ func TestAttentionItemFixedBindings(t *testing.T) {
 		resolved := f.item
 		resolved.Status = domain.StatusResolved
 		resolved.ItemVersion = 2
+		resolved = domaintest.MustConclude(resolved)
 		if err := s.Write(ctx, func(tx *store.WriteTx) error { return tx.PutAttentionItem(ctx, resolved) }); err != nil {
 			t.Fatalf("transition: %v", err)
 		}
@@ -760,6 +764,7 @@ func TestAttentionItemStaleWriteRejected(t *testing.T) {
 		if err := f.putItem(ctx, tx); err != nil {
 			return err
 		}
+		resolved = domaintest.MustConclude(resolved)
 		return tx.PutAttentionItem(ctx, resolved) // v1 -> v2 transition
 	})
 	if err != nil {
@@ -778,6 +783,109 @@ func TestAttentionItemStaleWriteRejected(t *testing.T) {
 	err = s.Write(ctx, func(tx *store.WriteTx) error { return tx.PutAttentionItem(ctx, sameVersion) })
 	if !errors.Is(err, store.ErrStaleWrite) {
 		t.Fatalf("same-version changed body error = %v, want ErrStaleWrite", err)
+	}
+}
+
+// TestAttentionItemConclusionGate covers the store side of #2097: a closed
+// item is never created without a conclusion, a close without one is refused,
+// a closed replay that omits the recorded conclusion keeps it, and a replay
+// that substitutes another one is refused rather than repaired.
+func TestAttentionItemConclusionGate(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	path := tempDBPath(t)
+	s := openStoreAt(t, path, store.Options{ApprovedRecipes: approvedFixtureRecipes()})
+	f := newFixtures(t)
+	if err := s.Write(ctx, func(tx *store.WriteTx) error { return tx.PutConversation(ctx, f.conversation) }); err != nil {
+		t.Fatal(err)
+	}
+
+	bornClosed := f.item
+	bornClosed.Status = domain.StatusExpired
+	f.item = bornClosed
+	err := s.Write(ctx, func(tx *store.WriteTx) error { return f.putItem(ctx, tx) })
+	if !errors.Is(err, domain.ErrConclusionMissing) {
+		t.Fatalf("create closed without a conclusion = %v, want ErrConclusionMissing", err)
+	}
+
+	f.item.Status = domain.StatusOpen
+	if err := s.Write(ctx, func(tx *store.WriteTx) error { return f.putItem(ctx, tx) }); err != nil {
+		t.Fatalf("seed open item: %v", err)
+	}
+	bare := f.item
+	bare.Status, bare.ItemVersion = domain.StatusExpired, 2
+	err = s.Write(ctx, func(tx *store.WriteTx) error { return tx.PutAttentionItem(ctx, bare) })
+	if !errors.Is(err, domain.ErrConclusionMissing) {
+		t.Fatalf("close without a conclusion = %v, want ErrConclusionMissing", err)
+	}
+	closed := domaintest.MustConclude(bare)
+	if err := s.Write(ctx, func(tx *store.WriteTx) error { return tx.PutAttentionItem(ctx, closed) }); err != nil {
+		t.Fatalf("close with a conclusion: %v", err)
+	}
+
+	replay := bare
+	if err := s.Write(ctx, func(tx *store.WriteTx) error { return tx.PutAttentionItem(ctx, replay) }); err != nil {
+		t.Fatalf("closed replay omitting the conclusion = %v, want convergence", err)
+	}
+	var stored domain.AttentionItem
+	if err := s.Read(ctx, func(tx *store.ReadTx) error {
+		var err error
+		stored, err = tx.GetAttentionItem(ctx, f.item.ID)
+		return err
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if stored.Conclusion == nil || !reflect.DeepEqual(*stored.Conclusion, *closed.Conclusion) {
+		t.Fatalf("stored conclusion = %+v, want %+v", stored.Conclusion, closed.Conclusion)
+	}
+
+	// The restore applies only to closed writes: a pre-close open copy
+	// still fails as stale rather than converging on the closed row.
+	err = s.Write(ctx, func(tx *store.WriteTx) error { return tx.PutAttentionItem(ctx, f.item) })
+	if !errors.Is(err, store.ErrStaleWrite) {
+		t.Fatalf("stale open copy after close = %v, want ErrStaleWrite", err)
+	}
+
+	substituted := bare
+	substituted.ItemVersion = 3
+	other, err := domain.NewDaemonConclusion(domain.ConcludedByExpiry, domaintest.ConcludedAt, "Another reason.", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	substituted.Conclusion = &other
+	err = s.Write(ctx, func(tx *store.WriteTx) error { return tx.PutAttentionItem(ctx, substituted) })
+	if !errors.Is(err, domain.ErrImmutableTransition) {
+		t.Fatalf("substituted conclusion = %v, want ErrImmutableTransition", err)
+	}
+
+	// A decoded conclusion is a trust bit: a row planted with a decision
+	// conclusion on an expired item fails to read instead of being repaired.
+	forged := stored
+	decision, err := domain.NewDecisionConclusion(domaintest.ConcludedAt, domain.ConclusionDecision{
+		CommandID: "forged", Action: domain.ActionApprove, DeviceID: "device-x", DeviceDisplayName: "Forged",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	forged.Conclusion = &decision
+	body, err := json.Marshal(forged)
+	if err != nil {
+		t.Fatal(err)
+	}
+	db, err := sql.Open("sqlite", path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = db.Close() })
+	if _, err := db.ExecContext(ctx, `UPDATE attention_items SET body = ? WHERE id = ?`, string(body), forged.ID); err != nil {
+		t.Fatalf("forge item body: %v", err)
+	}
+	err = s.Read(ctx, func(tx *store.ReadTx) error {
+		_, err := tx.GetAttentionItem(ctx, forged.ID)
+		return err
+	})
+	if !errors.Is(err, domain.ErrConclusionStatusMismatch) {
+		t.Fatalf("read forged conclusion = %v, want ErrConclusionStatusMismatch", err)
 	}
 }
 
@@ -1199,6 +1307,7 @@ func TestDecisionInstantsSurviveReopen(t *testing.T) {
 		if err := tx.PutAttentionDelivery(ctx, f.delivery); err != nil {
 			return err
 		}
+		concluded = domaintest.MustConclude(concluded)
 		return tx.PutAttentionItem(ctx, concluded)
 	})
 	if err != nil {

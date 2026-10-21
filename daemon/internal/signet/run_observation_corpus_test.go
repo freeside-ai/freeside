@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/freeside-ai/freeside/daemon/internal/domain"
+	"github.com/freeside-ai/freeside/daemon/internal/domain/domaintest"
 	"github.com/freeside-ai/freeside/daemon/internal/fakepublication"
 	"github.com/freeside-ai/freeside/daemon/internal/publicationrecord"
 	"github.com/freeside-ai/freeside/daemon/internal/signet"
@@ -1612,6 +1613,7 @@ func TestRunObservationCorpusForges(t *testing.T) {
 				if err := tx.PutCommand(ctx, secondCommand); err != nil {
 					return err
 				}
+				resolved = domaintest.MustConclude(resolved)
 				return tx.PutAttentionItem(ctx, resolved)
 			})
 			first, err := blockedItem(runID, domain.PublicationBlockTrust, []domain.Action{

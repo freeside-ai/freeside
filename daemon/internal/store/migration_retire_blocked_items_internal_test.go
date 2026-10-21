@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/freeside-ai/freeside/daemon/internal/domain"
+	"github.com/freeside-ai/freeside/daemon/internal/domain/domaintest"
 	"github.com/freeside-ai/freeside/daemon/migrations"
 )
 
@@ -222,6 +223,7 @@ func plantClosedBlockedWait(t *testing.T, ctx context.Context, st *Store, name s
 		if err := putTestAttentionItem(ctx, tx, &approval); err != nil {
 			return err
 		}
+		blocked = domaintest.MustConclude(blocked)
 		return putTestAttentionItem(ctx, tx, &blocked)
 	}); err != nil {
 		t.Fatal(err)

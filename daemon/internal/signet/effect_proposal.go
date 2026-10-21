@@ -94,21 +94,25 @@ func (s *Service) openEffectProposalItem(
 		if err != nil {
 			return fmt.Errorf("open effect proposal item %q: %w", instanceID, err)
 		}
-		if found {
-			if openMerge != nil && *openMerge == merge {
-				result = openItem
-				return nil
-			}
-			superseded := openItem
-			superseded.ItemVersion++
-			superseded.Status = domain.StatusSuperseded
-			if err := tx.PutAttentionItem(ctx, superseded); err != nil {
-				return fmt.Errorf("open effect proposal item %q supersede: %w", instanceID, err)
-			}
+		if found && openMerge != nil && *openMerge == merge {
+			result = openItem
+			return nil
 		}
 		item, err := s.newEffectProposalItem(ctx, tx, instance, merge, class, reason)
 		if err != nil {
 			return fmt.Errorf("open effect proposal item %q: %w", instanceID, err)
+		}
+		if found {
+			superseded := openItem
+			superseded.ItemVersion++
+			superseded, err = superseded.ConcludeByDaemon(domain.ConcludedBySupersession, s.now().UTC(),
+				"Superseded by a proposal for the newer prospective merge.", &item.ID)
+			if err != nil {
+				return fmt.Errorf("open effect proposal item %q supersede: %w", instanceID, err)
+			}
+			if err := tx.PutAttentionItem(ctx, superseded); err != nil {
+				return fmt.Errorf("open effect proposal item %q supersede: %w", instanceID, err)
+			}
 		}
 		if err := tx.PutAttentionItem(ctx, item); err != nil {
 			return fmt.Errorf("open effect proposal item %q item: %w", instanceID, err)

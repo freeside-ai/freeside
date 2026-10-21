@@ -420,7 +420,7 @@ func (s *Service) submitDecisionTransaction(ctx context.Context, in ClientComman
 			case outcomeConcludes:
 				// The stamp-and-flip semantics live in concludeItem, shared
 				// with the operating-state transactions below.
-				if err := concludeItem(ctx, tx, item, status, s.now().UTC()); err != nil {
+				if err := concludeItem(ctx, tx, command, item, status, s.now().UTC()); err != nil {
 					return fmt.Errorf("submit command %q: %w", command.CommandID, err)
 				}
 			case outcomeDiscusses:
@@ -428,7 +428,7 @@ func (s *Service) submitDecisionTransaction(ctx context.Context, in ClientComman
 					return fmt.Errorf("submit command %q: %w", command.CommandID, err)
 				}
 			case outcomeAnswersAndRetries, outcomeReturnsToAgent:
-				if err := concludeItem(ctx, tx, item, status, s.now().UTC()); err != nil {
+				if err := concludeItem(ctx, tx, command, item, status, s.now().UTC()); err != nil {
 					return fmt.Errorf("submit command %q: %w", command.CommandID, err)
 				}
 			case outcomeRetriesWithCapabilities:
@@ -463,7 +463,7 @@ func (s *Service) submitDecisionTransaction(ctx context.Context, in ClientComman
 				if err := validateReviewDisputeDecision(command, item); err != nil {
 					return err
 				}
-				if err := concludeItem(ctx, tx, item, status, s.now().UTC()); err != nil {
+				if err := concludeItem(ctx, tx, command, item, status, s.now().UTC()); err != nil {
 					return err
 				}
 			case outcomeAcceptsRecommendedRoute, outcomeChoosesAlternativeRoute:

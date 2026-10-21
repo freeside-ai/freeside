@@ -5290,7 +5290,8 @@ func (w *productionPublicationWorkflow) completePublishedTask(
 				errors.Join(err, errProductionCrashSeam))
 		}
 	}
-	if err := w.supersedeBlockedHold(ctx, task); err != nil {
+	readyID := task.readyItemID()
+	if err := w.supersedeBlockedHold(ctx, task, blockedHoldReadyReason, &readyID); err != nil {
 		return productionTaskOutcome{}, err
 	}
 	accepted, err := w.recordCompletedTerminalAtBoundary(
@@ -5924,9 +5925,17 @@ func (w *productionPublicationWorkflow) clearAttendedPublicationHold(
 	return nil
 }
 
+// blockedHoldReadyReason concludes a blocked hold the run's ready item
+// replaces.
+const blockedHoldReadyReason = "Superseded when the run became ready for final review."
+
+// supersedeBlockedHold supersedes the run's open blocked hold, if any, with
+// reason as its conclusion and successor naming the item that replaces it.
 func (w *productionPublicationWorkflow) supersedeBlockedHold(
 	ctx context.Context,
 	task productionPublicationTask,
+	reason string,
+	successor *domain.ItemID,
 ) error {
 	var item domain.AttentionItem
 	err := w.store.Read(ctx, func(tx *store.ReadTx) error {
@@ -5951,8 +5960,11 @@ func (w *productionPublicationWorkflow) supersedeBlockedHold(
 	if item.Status != domain.StatusOpen {
 		return nil
 	}
-	item.Status = domain.StatusSuperseded
 	item.ItemVersion++
+	item, err = item.ConcludeByDaemon(domain.ConcludedBySupersession, w.now().UTC(), reason, successor)
+	if err != nil {
+		return err
+	}
 	return w.attention.PutItem(ctx, item)
 }
 

@@ -102,9 +102,108 @@ public enum AttentionFixtures {
         .accept_recommended_route, .choose_alternative_route, .adjudicate_findings,
     ]
 
-    /// The default mock inbox: one open item per Phase 1 type.
+    /// The default mock inbox: one open item per Phase 1 type, then the
+    /// closed cards (`closedInbox()`).
     public static func defaultInbox() -> [Components.Schemas.AttentionItemSnapshot] {
-        phase1Types.map { fixture(type: $0) }
+        phase1Types.map { fixture(type: $0) } + closedInbox()
+    }
+
+    /// One closed card per way an item concludes (#2097): an operator's
+    /// decision with routes, an expiry, a supersession with its successor,
+    /// and the daemon's own resolution.
+    public static func closedInbox() -> [Components.Schemas.AttentionItemSnapshot] {
+        [decidedReviewDispute(), expiredPublishBlocked(), supersededEffectProposal(), resolvedSystemHealth()]
+    }
+
+    /// The routed dispute decided from the other paired device: one finding
+    /// remediated, one deferred.
+    public static func decidedReviewDispute() -> Components.Schemas.AttentionItemSnapshot {
+        var snapshot = routedReviewDispute()
+        // The previous round's dispute: a routed dispute's id names its
+        // run and round.
+        snapshot.item.review_dispute?.value1.round = 1
+        // A closed card leads with what happened, so its reason reads as
+        // the history it is rather than the open card's instruction.
+        snapshot.item.reason =
+            "The reviewer's findings were disputed; the run was held until the dispute was adjudicated."
+        return closedByDecision(
+            snapshot, id: "production-review-run-review_dispute-1", status: .resolved, after: 1800,
+            commandID: "cmd-adjudicate-decided", action: .adjudicate_findings,
+            deviceID: DeviceFixtures.otherDeviceID, deviceName: "Ben's iPhone",
+            routes: [
+                .init(finding_id: "finding-1", route: .remediate),
+                .init(finding_id: "finding-2", route: ._defer),
+            ])
+    }
+
+    /// A publication hold that expired when its task's workflow closed.
+    public static func expiredPublishBlocked() -> Components.Schemas.AttentionItemSnapshot {
+        closedByDaemon(
+            fixture(type: .publish_blocked), id: "item-publish_blocked-expired", cause: .expired, after: 5400,
+            reason: "Expired when the task's workflow was closed. The operator stopped the task.")
+    }
+
+    /// An effect proposal the daemon replaced with the default open one.
+    public static func supersededEffectProposal() -> Components.Schemas.AttentionItemSnapshot {
+        closedByDaemon(
+            fixture(type: .effect_proposal), id: "item-effect_proposal-superseded", cause: .superseded,
+            after: 2400, reason: "Superseded by a proposal for the newer prospective merge.",
+            successor: fixture(type: .effect_proposal).item.id)
+    }
+
+    /// A health notice the daemon resolved when its condition cleared.
+    public static func resolvedSystemHealth() -> Components.Schemas.AttentionItemSnapshot {
+        closedByDaemon(
+            fixture(type: .system_health), id: "item-system_health-resolved", cause: .resolved_by_daemon,
+            after: 3600, reason: "Resolved when an execution driver was configured.")
+    }
+
+    /// `snapshot` as the daemon closes it for `cause`, `offset` seconds
+    /// after the fixtures' creation instant: the status the cause names,
+    /// the next item version, and a conclusion with `reason` and the
+    /// successor. A decision is not a daemon cause (`closedByDecision`).
+    public static func closedByDaemon(
+        _ snapshot: Components.Schemas.AttentionItemSnapshot, id: String,
+        cause: Components.Schemas.ConclusionCause, after offset: TimeInterval, reason: String,
+        successor: String? = nil
+    ) -> Components.Schemas.AttentionItemSnapshot {
+        var closed = snapshot
+        switch cause {
+        case .expired: closed.item.status = .expired
+        case .superseded: closed.item.status = .superseded
+        case .resolved_by_daemon: closed.item.status = .resolved
+        case .decision: preconditionFailure("a decision closes through closedByDecision")
+        }
+        closed.item.id = id
+        closed.item.item_version += 1
+        closed.item.conclusion = MockServer.daemonConclusion(
+            cause, at: createdInstant.addingTimeInterval(offset), reason: reason, successor: successor)
+        return closed
+    }
+
+    /// `snapshot` closed to `status` by an accepted command `offset`
+    /// seconds after the fixtures' creation instant: decided_at and the
+    /// decision conclusion carry the same instant, as the daemon stamps them.
+    public static func closedByDecision(
+        _ snapshot: Components.Schemas.AttentionItemSnapshot, id: String,
+        status: Components.Schemas.ItemStatus, after offset: TimeInterval, commandID: String,
+        action: Components.Schemas.Action, deviceID: String, deviceName: String,
+        routes: [Components.Schemas.AlternativeChoice]? = nil
+    ) -> Components.Schemas.AttentionItemSnapshot {
+        var closed = snapshot
+        let decidedAt = createdInstant.addingTimeInterval(offset)
+        closed.item.id = id
+        closed.item.status = status
+        closed.item.item_version += 1
+        closed.item.decided_at = decidedAt
+        closed.item.conclusion = .init(
+            value1: .init(
+                cause: .decision, concluded_at: decidedAt, reason: "", successor_item_id: nil,
+                decision: .init(
+                    value1: .init(
+                        command_id: commandID, action: action, device_id: deviceID,
+                        device_display_name: deviceName, finding_routes: routes, answer_route: nil))))
+        return closed
     }
 
     public static func routedReviewDispute() -> Components.Schemas.AttentionItemSnapshot {
@@ -748,6 +847,9 @@ public enum AttentionFixtures {
                 bound: snapshot.item.pr_head_sha,
                 observed: "feedface",
                 observed_at: createdInstant.addingTimeInterval(3000)))
+        snapshot.item.conclusion = MockServer.daemonConclusion(
+            .superseded, at: createdInstant.addingTimeInterval(3000),
+            reason: "Superseded because the pull request head changed after the review passed.")
         return snapshot
     }
 

@@ -1641,7 +1641,7 @@ public actor MockServer {
         revision += 1
         switch ActionOutcome.of(payload.action) {
         case .concludes(let status):
-            itemsByID[payload.item_id] = concluded(current, as: status)
+            itemsByID[payload.item_id] = concluded(current, as: status, by: command, payload)
             if payload.action == .request_changes {
                 pendingSpecificationReplacements[command.command_id] = current
                 pendingSpecificationComments[command.command_id] = payload.message
@@ -1709,7 +1709,7 @@ public actor MockServer {
             // stop converges on the existing one. The durable transition
             // is recorded for every accepted stop, converged or not, and
             // rides the bootstrap's unattended_operation.
-            itemsByID[payload.item_id] = concluded(current, as: .resolved)
+            itemsByID[payload.item_id] = concluded(current, as: .resolved, by: command, payload)
             operatorStop = (commandID: command.command_id, since: currentTime)
             let alreadyOffered = itemsByID.values.contains {
                 $0.item.status == .open && $0.item._type == .system_health
@@ -1768,22 +1768,22 @@ public actor MockServer {
         case .resumesUnattended:
             // The daemon's resume transaction concludes the stopped notice
             // and appends the resumed transition, lifting the operator stop.
-            itemsByID[payload.item_id] = concluded(current, as: .resolved)
+            itemsByID[payload.item_id] = concluded(current, as: .resolved, by: command, payload)
             operatorStop = nil
         case .recoversReview:
             // The daemon also appends the exact-row transition; it has no API
             // surface, so resolving the carrier is the mock's observable parity.
-            itemsByID[payload.item_id] = concluded(current, as: .resolved)
+            itemsByID[payload.item_id] = concluded(current, as: .resolved, by: command, payload)
         case .adoptsReviewConfiguration:
             // The daemon also appends the profile-supersession-bound
             // transition; it has no API surface, so resolving the carrier is
             // the mock's observable parity.
-            itemsByID[payload.item_id] = concluded(current, as: .resolved)
+            itemsByID[payload.item_id] = concluded(current, as: .resolved, by: command, payload)
         case .resolvesReenrollment:
             // The daemon additionally records and re-gates the verified
             // operation transition; the carrier resolution is the sync-visible
             // portion the mock can mirror.
-            itemsByID[payload.item_id] = concluded(current, as: .resolved)
+            itemsByID[payload.item_id] = concluded(current, as: .resolved, by: command, payload)
         case .revisesProposal where current.item._type == .effect_proposal:
             guard let closure = payload.effect_proposal_revision?.value1.source_issue_closure,
                 payload.task_proposal_revision == nil, payload.snooze_until == nil,
@@ -1807,6 +1807,10 @@ public actor MockServer {
             superseded.as_of_revision = revision
             superseded.item.item_version += 1
             superseded.item.status = .superseded
+            superseded.item.conclusion = Self.daemonConclusion(
+                .superseded, at: currentTime,
+                reason: "Superseded by the revised proposal this decision made.",
+                successor: payload.item_id + "/revision/" + command.command_id)
             itemsByID[payload.item_id] = superseded
 
             artifact.id += "-revision-\(command.command_id)"
@@ -1828,6 +1832,7 @@ public actor MockServer {
             replacement.item.status = .resolved
             replacement.item.created_at = currentTime
             replacement.item.decided_at = currentTime
+            replacement.item.conclusion = decisionConclusion(command, payload, at: currentTime)
             itemsByID[replacementID] = replacement
             effectProposalFactsByItemID[replacementID] = .init(
                 as_of_revision: revision, entity_version: 1,
@@ -1865,6 +1870,10 @@ public actor MockServer {
             superseded.as_of_revision = revision
             superseded.item.item_version += 1
             superseded.item.status = .superseded
+            superseded.item.conclusion = Self.daemonConclusion(
+                .superseded, at: currentTime,
+                reason: "Superseded by the revised proposal this decision made.",
+                successor: payload.item_id + "/revision/" + command.command_id)
             itemsByID[payload.item_id] = superseded
 
             artifact.id += "-revision-\(command.command_id)"
@@ -1886,6 +1895,7 @@ public actor MockServer {
             replacement.item.status = .resolved
             replacement.item.created_at = currentTime
             replacement.item.decided_at = currentTime
+            replacement.item.conclusion = decisionConclusion(command, payload, at: currentTime)
             itemsByID[replacementID] = replacement
             proposalFactsByItemID[replacementID] = .init(
                 as_of_revision: revision, entity_version: 1,
@@ -2198,6 +2208,7 @@ public actor MockServer {
             replacement.item.reason = "The revised specification is ready for approval"
             replacement.item.status = .open
             replacement.item.decided_at = nil
+            replacement.item.conclusion = nil
             replacement.item.created_at = currentTime
             replacement.item.conversation_id = nil
             replacement.item.spec_revision = .init(
@@ -2372,11 +2383,13 @@ public actor MockServer {
 
     /// The concluding decision's item side: version bump, terminal status,
     /// and the decision instant stamped in the same mutation as the flip
-    /// (signet concludeItem, #171); a retry replays the recorded result and
-    /// never re-stamps.
+    /// (signet concludeItem, #171), with the conclusion naming the command
+    /// (#2097); a retry replays the recorded result and never re-stamps.
     private func concluded(
         _ snapshot: Components.Schemas.AttentionItemSnapshot,
-        as status: Components.Schemas.ItemStatus
+        as status: Components.Schemas.ItemStatus,
+        by command: Components.Schemas.ClientCommand,
+        _ payload: Components.Schemas.DecisionPayload
     ) -> Components.Schemas.AttentionItemSnapshot {
         var applied = snapshot
         applied.entity_version += 1
@@ -2384,7 +2397,54 @@ public actor MockServer {
         applied.item.item_version += 1
         applied.item.status = status
         applied.item.decided_at = Self.decidedInstant
+        applied.item.conclusion = decisionConclusion(command, payload, at: Self.decidedInstant)
         return applied
+    }
+
+    /// The decision conclusion signet's commandDecision records: the
+    /// command, its action and device with the device's name at decision
+    /// time, and the route list a route-carrying action sent, sorted by
+    /// finding. The daemon refuses a command from a device it has no row
+    /// for; the permissive mock accepts unpaired devices, so it names one
+    /// by its id.
+    private func decisionConclusion(
+        _ command: Components.Schemas.ClientCommand,
+        _ payload: Components.Schemas.DecisionPayload,
+        at instant: Date
+    ) -> Components.Schemas.AttentionItem.conclusionPayload {
+        let routes: [Components.Schemas.AlternativeChoice]? =
+            switch payload.action {
+            case .adjudicate_findings: payload.finding_routes
+            case .choose_alternative_route: payload.alternative_choices
+            default: nil
+            }
+        let deviceName: String =
+            switch devicesByID[command.device_id]?.device {
+            case .active(let active): active.display_name
+            case .revoked(let revoked): revoked.display_name
+            case nil: command.device_id
+            }
+        return .init(
+            value1: .init(
+                cause: .decision, concluded_at: instant, reason: "", successor_item_id: nil,
+                decision: .init(
+                    value1: .init(
+                        command_id: command.command_id, action: payload.action,
+                        device_id: command.device_id, device_display_name: deviceName,
+                        finding_routes: routes?.sorted { $0.finding_id < $1.finding_id },
+                        answer_route: payload.answer_route.map { .init(value1: $0.value1) }))))
+    }
+
+    /// A conclusion the daemon writes on its own close: cause, instant, the
+    /// one-sentence reason, and the replacement it minted, if any.
+    static func daemonConclusion(
+        _ cause: Components.Schemas.ConclusionCause, at instant: Date, reason: String,
+        successor: String? = nil
+    ) -> Components.Schemas.AttentionItem.conclusionPayload {
+        .init(
+            value1: .init(
+                cause: cause, concluded_at: instant, reason: reason, successor_item_id: successor,
+                decision: nil))
     }
 
 }

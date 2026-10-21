@@ -28,6 +28,13 @@ enum AttentionDisplay {
             case item(id: String)
             /// A page outside the app, which the value links to (R3).
             case link(URL)
+            /// A recorded instant in the short time grammar (R8), with the
+            /// exact instant one gesture away.
+            case instant(Date)
+            /// A sentence, such as the daemon's reason for a close: it
+            /// stacks under its label in the body face, since prose is not
+            /// a mono value.
+            case prose
         }
 
         let label: String
@@ -42,6 +49,13 @@ enum AttentionDisplay {
             self.value = value
             self.monospaced = monospaced
             self.form = .plain
+        }
+
+        init(_ label: String, prose: String) {
+            self.label = label
+            self.value = prose
+            self.monospaced = false
+            self.form = .prose
         }
 
         init(_ label: String, posture: Components.Schemas.HealthPosture) {
@@ -65,6 +79,16 @@ enum AttentionDisplay {
             self.value = value
             self.monospaced = url == nil
             self.form = url.map(Form.link) ?? .plain
+        }
+
+        /// `locale` and `timeZone` come from the view's environment, so a
+        /// pinned screenshot or a device in another zone prints the same
+        /// instant the other task surfaces do.
+        init(_ label: String, instant: Date, now: Date, locale: Locale, timeZone: TimeZone) {
+            self.label = label
+            self.value = FreesideFormat.shortTime(instant, now: now, locale: locale, timeZone: timeZone)
+            self.monospaced = false
+            self.form = .instant(instant)
         }
 
         init(_ label: String, diffs: [DiffCounts]) {
@@ -264,10 +288,7 @@ enum AttentionDisplay {
     }
 
     static func rowSummary(_ item: Components.Schemas.AttentionItem) -> String {
-        if item.status != .open {
-            return "This \(title(item._type).lowercased()) item is "
-                + "\(label(item.status).lowercased())."
-        }
+        if let lead = ConclusionDisplay.leadSentence(item) { return lead }
         switch item._type {
         case .spec_approval:
             return "A specification is ready for approval."

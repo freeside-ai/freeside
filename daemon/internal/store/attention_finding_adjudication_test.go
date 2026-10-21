@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/freeside-ai/freeside/daemon/internal/domain"
+	"github.com/freeside-ai/freeside/daemon/internal/domain/domaintest"
 	"github.com/freeside-ai/freeside/daemon/internal/store"
 	"github.com/freeside-ai/freeside/daemon/internal/store/storetest"
 )
@@ -224,6 +225,7 @@ func TestFindingAdjudicationDecisionAuthenticatesCausalCommandHistory(t *testing
 				}
 				concluded.Status = domain.StatusResolved
 				concluded.ItemVersion++
+				concluded = domaintest.MustConclude(concluded)
 				return tx.PutAttentionItem(ctx, concluded)
 			}); err != nil {
 				t.Fatal(err)

@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/freeside-ai/freeside/daemon/internal/domain"
+	"github.com/freeside-ai/freeside/daemon/internal/domain/domaintest"
 	"github.com/freeside-ai/freeside/daemon/internal/store"
 	"github.com/freeside-ai/freeside/daemon/internal/store/storetest"
 )
@@ -47,6 +48,9 @@ func watchTestItem(t *testing.T, st *store.Store, status domain.ItemStatus) doma
 	}, nil)
 	if err != nil {
 		t.Fatal(err)
+	}
+	if status != domain.StatusOpen {
+		item = domaintest.MustConclude(item)
 	}
 	if err := st.Write(context.Background(), func(tx *store.WriteTx) error {
 		ctx := context.Background()
@@ -220,6 +224,9 @@ func TestCompatibleTerminalItemIgnoresReadinessInvalidation(t *testing.T) {
 		ObservedAt: time.Date(2026, 2, 3, 5, 0, 0, 0, time.UTC),
 	}
 	if !compatibleTerminalItem(expected, current) {
+		t.Fatal("invalidation-bearing superseded item without a conclusion (a row from before #2097) rejected")
+	}
+	if !compatibleTerminalItem(expected, domaintest.MustConclude(current)) {
 		t.Fatal("invalidation-bearing superseded item rejected during recovery compatibility")
 	}
 	foreign := current

@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/freeside-ai/freeside/daemon/internal/domain"
+	"github.com/freeside-ai/freeside/daemon/internal/domain/domaintest"
 	"github.com/freeside-ai/freeside/daemon/internal/publish"
 	"github.com/freeside-ai/freeside/daemon/internal/scheduler"
 	"github.com/freeside-ai/freeside/daemon/internal/store"
@@ -587,6 +588,7 @@ func TestBaseAdvanceWatchRechecksSubjectOnObserveFailure(t *testing.T) {
 	concluded.ItemVersion++
 	concluded.Status = domain.StatusResolved
 	if err := st.Write(ctx, func(tx *store.WriteTx) error {
+		concluded = domaintest.MustConclude(concluded)
 		return tx.PutAttentionItem(ctx, concluded)
 	}); err != nil {
 		t.Fatal(err)
@@ -615,6 +617,7 @@ func TestBaseAdvanceWatchResolvesConcludedItemImmediately(t *testing.T) {
 	concluded.ItemVersion++
 	concluded.Status = domain.StatusResolved
 	if err := st.Write(ctx, func(tx *store.WriteTx) error {
+		concluded = domaintest.MustConclude(concluded)
 		return tx.PutAttentionItem(ctx, concluded)
 	}); err != nil {
 		t.Fatal(err)
@@ -1097,6 +1100,7 @@ func TestBaseAdvanceWatchFinalCaptureOnConcludedItem(t *testing.T) {
 	concluded.ItemVersion++
 	concluded.Status = domain.StatusResolved
 	if err := st.Write(ctx, func(tx *store.WriteTx) error {
+		concluded = domaintest.MustConclude(concluded)
 		return tx.PutAttentionItem(ctx, concluded)
 	}); err != nil {
 		t.Fatal(err)
@@ -1385,6 +1389,7 @@ func TestBaseAdvanceWatchDeclaredUnboundRetriesInsteadOfResolving(t *testing.T) 
 	item.ItemVersion++
 	item.Status = domain.StatusResolved
 	if err := st.Write(ctx, func(tx *store.WriteTx) error {
+		item = domaintest.MustConclude(item)
 		return tx.PutAttentionItem(ctx, item)
 	}); err != nil {
 		t.Fatal(err)
@@ -1479,6 +1484,7 @@ func TestBaseAdvanceWatchCaptureRefusesBindingOffTheAnchors(t *testing.T) {
 	mismatched.Status = domain.StatusResolved
 	mismatched.PRHeadSHA = "0ther5ha"
 	if err := st.Write(ctx, func(tx *store.WriteTx) error {
+		mismatched = domaintest.MustConclude(mismatched)
 		return tx.PutAttentionItem(ctx, mismatched)
 	}); err != nil {
 		t.Fatal(err)

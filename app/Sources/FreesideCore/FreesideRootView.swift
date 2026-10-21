@@ -604,6 +604,8 @@ public struct FreesideRootView: View {
                             launchComposer: navigation.launchComposer(for: itemID),
                             onConsumeLaunchComposer: navigation.consumeLaunchComposer,
                             onSelectItem: { navigation.route(to: .attentionItem($0)) },
+                            tasks: coordinator.tasks,
+                            onSelectTask: { navigation.route(to: .task($0)) },
                             onConclusion: { conclusion in
                                 handleConclusion(conclusion, coordinator: coordinator)
                             })
@@ -727,6 +729,8 @@ public struct FreesideRootView: View {
                         inspectorPresented: Bindable(navigation).inspectorPresented,
                         standingNotices: decisionNotices,
                         onSelectItem: { navigation.route(to: .attentionItem($0)) },
+                        tasks: coordinator.tasks,
+                        onSelectTask: { navigation.route(to: .task($0)) },
                         onConclusion: { conclusion in
                             handleConclusion(conclusion, coordinator: coordinator)
                         }

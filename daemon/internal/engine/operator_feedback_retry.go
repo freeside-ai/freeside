@@ -117,7 +117,7 @@ func (e *Engine) enqueueOperatorFeedbackRetry(ctx context.Context, command domai
 		sourceItem = item
 		// Reconstruct exactly the open card accepted by this command. The
 		// recorded command and concluded card remain untouched.
-		item.Status, item.DecidedAt = domain.StatusOpen, nil
+		item.Status, item.DecidedAt, item.Conclusion = domain.StatusOpen, nil, nil
 		item.ItemVersion--
 		parent, err := tx.OperatorFeedbackRetryParent(ctx, item)
 		if err != nil {

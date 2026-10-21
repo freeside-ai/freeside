@@ -11431,6 +11431,32 @@ public enum Components {
             ///
             /// - Remark: Generated from `#/components/schemas/AttentionItem/decided_at`.
             public var decided_at: Foundation.Date?
+            /// What closed the item: the decision that concluded it, or why the daemon closed it. Daemon-stamped in the transaction that moves the item off open, immutable once set, and never client-set. Null while the item is open, and on an item closed by a daemon that predates this field; non-null on every other closed item.
+            ///
+            ///
+            /// - Remark: Generated from `#/components/schemas/AttentionItem/conclusion`.
+            public struct conclusionPayload: Codable, Hashable, Sendable {
+                /// - Remark: Generated from `#/components/schemas/AttentionItem/conclusion/value1`.
+                public var value1: Components.Schemas.AttentionItemConclusion
+                /// Creates a new `conclusionPayload`.
+                ///
+                /// - Parameters:
+                ///   - value1:
+                public init(value1: Components.Schemas.AttentionItemConclusion) {
+                    self.value1 = value1
+                }
+                public init(from decoder: any Swift.Decoder) throws {
+                    self.value1 = try .init(from: decoder)
+                }
+                public func encode(to encoder: any Swift.Encoder) throws {
+                    try self.value1.encode(to: encoder)
+                }
+            }
+            /// What closed the item: the decision that concluded it, or why the daemon closed it. Daemon-stamped in the transaction that moves the item off open, immutable once set, and never client-set. Null while the item is open, and on an item closed by a daemon that predates this field; non-null on every other closed item.
+            ///
+            ///
+            /// - Remark: Generated from `#/components/schemas/AttentionItem/conclusion`.
+            public var conclusion: Components.Schemas.AttentionItem.conclusionPayload?
             /// The explicit admission posture of a system_health item (plan §4; mirrors domain.AttentionItem.Posture): blocking preserves the item's admission-gating effect, while advisory keeps the observation open and visible without blocking unrelated unattended admission. Required and non-null exactly on system_health items; null on every other item type. A blocking_supersession may appear only with the blocking posture. Fixed at creation and never client-set.
             ///
             ///
@@ -11531,6 +11557,7 @@ public enum Components {
             ///   - created_at: The daemon-stamped instant the attention item was created. Immutable and never client-set; null only for items persisted before this field existed.
             ///   - expires_when:
             ///   - decided_at: The daemon-stamped instant the item's first concluding decision was accepted, recorded in the same transaction as the command and the status flip; the durable endpoint of the open-to-decision metric (plan §4). Never client-set; null while the item is open and for items concluded without a decision (expiry, supersession).
+            ///   - conclusion: What closed the item: the decision that concluded it, or why the daemon closed it. Daemon-stamped in the transaction that moves the item off open, immutable once set, and never client-set. Null while the item is open, and on an item closed by a daemon that predates this field; non-null on every other closed item.
             ///   - posture: The explicit admission posture of a system_health item (plan §4; mirrors domain.AttentionItem.Posture): blocking preserves the item's admission-gating effect, while advisory keeps the observation open and visible without blocking unrelated unattended admission. Required and non-null exactly on system_health items; null on every other item type. A blocking_supersession may appear only with the blocking posture. Fixed at creation and never client-set.
             ///   - blocking_supersession: The typed condition under which this open system_health item does not block unattended admission (plan §4, §5.7; mirrors domain.AttentionItem.BlockingSupersession): set at creation by the daemon from the validated configuration the item reports on, null for every other item and for a health item that blocks unconditionally. Never client-set, and never a verdict — the daemon re-validates the condition against live policy at each admission, so a cleared or retargeted configuration re-blocks the still-open item.
             ///   - status:
@@ -11578,6 +11605,7 @@ public enum Components {
                 created_at: Foundation.Date? = nil,
                 expires_when: Foundation.Date? = nil,
                 decided_at: Foundation.Date? = nil,
+                conclusion: Components.Schemas.AttentionItem.conclusionPayload? = nil,
                 posture: Components.Schemas.AttentionItem.posturePayload? = nil,
                 blocking_supersession: Components.Schemas.AttentionItem.blocking_supersessionPayload? = nil,
                 status: Components.Schemas.ItemStatus
@@ -11625,6 +11653,7 @@ public enum Components {
                 self.created_at = created_at
                 self.expires_when = expires_when
                 self.decided_at = decided_at
+                self.conclusion = conclusion
                 self.posture = posture
                 self.blocking_supersession = blocking_supersession
                 self.status = status
@@ -11673,6 +11702,7 @@ public enum Components {
                 case created_at
                 case expires_when
                 case decided_at
+                case conclusion
                 case posture
                 case blocking_supersession
                 case status
@@ -13628,6 +13658,234 @@ public enum Components {
             case low = "low"
             case medium = "medium"
             case high = "high"
+        }
+        /// How an attention item closed (mirrors domain.Conclusion). cause decision pairs with a non-null decision and an empty reason; every other cause pairs with a null decision and the daemon's one-sentence reason.
+        ///
+        ///
+        /// - Remark: Generated from `#/components/schemas/AttentionItemConclusion`.
+        public struct AttentionItemConclusion: Codable, Hashable, Sendable {
+            /// - Remark: Generated from `#/components/schemas/AttentionItemConclusion/cause`.
+            public var cause: Components.Schemas.ConclusionCause
+            /// The instant the item closed; equals the item's decided_at when cause is decision.
+            ///
+            ///
+            /// - Remark: Generated from `#/components/schemas/AttentionItemConclusion/concluded_at`.
+            public var concluded_at: Foundation.Date
+            /// The daemon's sentence for a non-decision close, written for the operator; empty when cause is decision.
+            ///
+            ///
+            /// - Remark: Generated from `#/components/schemas/AttentionItemConclusion/reason`.
+            public var reason: Swift.String
+            /// The attention item that replaced this one, when the daemon minted a replacement; null otherwise.
+            ///
+            ///
+            /// - Remark: Generated from `#/components/schemas/AttentionItemConclusion/successor_item_id`.
+            public var successor_item_id: Swift.String?
+            /// The concluding command; present only when cause is decision.
+            ///
+            /// - Remark: Generated from `#/components/schemas/AttentionItemConclusion/decision`.
+            public struct decisionPayload: Codable, Hashable, Sendable {
+                /// - Remark: Generated from `#/components/schemas/AttentionItemConclusion/decision/value1`.
+                public var value1: Components.Schemas.ConclusionDecision
+                /// Creates a new `decisionPayload`.
+                ///
+                /// - Parameters:
+                ///   - value1:
+                public init(value1: Components.Schemas.ConclusionDecision) {
+                    self.value1 = value1
+                }
+                public init(from decoder: any Swift.Decoder) throws {
+                    self.value1 = try .init(from: decoder)
+                }
+                public func encode(to encoder: any Swift.Encoder) throws {
+                    try self.value1.encode(to: encoder)
+                }
+            }
+            /// The concluding command; present only when cause is decision.
+            ///
+            /// - Remark: Generated from `#/components/schemas/AttentionItemConclusion/decision`.
+            public var decision: Components.Schemas.AttentionItemConclusion.decisionPayload?
+            /// Creates a new `AttentionItemConclusion`.
+            ///
+            /// - Parameters:
+            ///   - cause:
+            ///   - concluded_at: The instant the item closed; equals the item's decided_at when cause is decision.
+            ///   - reason: The daemon's sentence for a non-decision close, written for the operator; empty when cause is decision.
+            ///   - successor_item_id: The attention item that replaced this one, when the daemon minted a replacement; null otherwise.
+            ///   - decision: The concluding command; present only when cause is decision.
+            public init(
+                cause: Components.Schemas.ConclusionCause,
+                concluded_at: Foundation.Date,
+                reason: Swift.String,
+                successor_item_id: Swift.String? = nil,
+                decision: Components.Schemas.AttentionItemConclusion.decisionPayload? = nil
+            ) {
+                self.cause = cause
+                self.concluded_at = concluded_at
+                self.reason = reason
+                self.successor_item_id = successor_item_id
+                self.decision = decision
+            }
+            public enum CodingKeys: String, CodingKey {
+                case cause
+                case concluded_at
+                case reason
+                case successor_item_id
+                case decision
+            }
+            public init(from decoder: any Swift.Decoder) throws {
+                let container = try decoder.container(keyedBy: CodingKeys.self)
+                self.cause = try container.decode(
+                    Components.Schemas.ConclusionCause.self,
+                    forKey: .cause
+                )
+                self.concluded_at = try container.decode(
+                    Foundation.Date.self,
+                    forKey: .concluded_at
+                )
+                self.reason = try container.decode(
+                    Swift.String.self,
+                    forKey: .reason
+                )
+                self.successor_item_id = try container.decodeIfPresent(
+                    Swift.String.self,
+                    forKey: .successor_item_id
+                )
+                self.decision = try container.decodeIfPresent(
+                    Components.Schemas.AttentionItemConclusion.decisionPayload.self,
+                    forKey: .decision
+                )
+                try decoder.ensureNoAdditionalProperties(knownKeys: [
+                    "cause",
+                    "concluded_at",
+                    "reason",
+                    "successor_item_id",
+                    "decision"
+                ])
+            }
+        }
+        /// Why an attention item closed. decision is a client command; expired, superseded, and resolved_by_daemon are daemon closes (domain enums.go).
+        ///
+        ///
+        /// - Remark: Generated from `#/components/schemas/ConclusionCause`.
+        @frozen public enum ConclusionCause: String, Codable, Hashable, Sendable, CaseIterable {
+            case decision = "decision"
+            case expired = "expired"
+            case superseded = "superseded"
+            case resolved_by_daemon = "resolved_by_daemon"
+        }
+        /// The accepted command that concluded an attention item, as recorded at decision time.
+        ///
+        ///
+        /// - Remark: Generated from `#/components/schemas/ConclusionDecision`.
+        public struct ConclusionDecision: Codable, Hashable, Sendable {
+            /// - Remark: Generated from `#/components/schemas/ConclusionDecision/command_id`.
+            public var command_id: Swift.String
+            /// - Remark: Generated from `#/components/schemas/ConclusionDecision/action`.
+            public var action: Components.Schemas.Action
+            /// - Remark: Generated from `#/components/schemas/ConclusionDecision/device_id`.
+            public var device_id: Swift.String
+            /// The deciding device's display name at decision time, so the record reads the same after the device is renamed or unpaired.
+            ///
+            ///
+            /// - Remark: Generated from `#/components/schemas/ConclusionDecision/device_display_name`.
+            public var device_display_name: Swift.String
+            /// The per-finding routes the command carried: finding_routes of adjudicate_findings or alternative_choices of choose_alternative_route. Null for every other action.
+            ///
+            ///
+            /// - Remark: Generated from `#/components/schemas/ConclusionDecision/finding_routes`.
+            public var finding_routes: [Components.Schemas.AlternativeChoice]?
+            /// The answer route the command carried, else null.
+            ///
+            /// - Remark: Generated from `#/components/schemas/ConclusionDecision/answer_route`.
+            public struct answer_routePayload: Codable, Hashable, Sendable {
+                /// - Remark: Generated from `#/components/schemas/ConclusionDecision/answer_route/value1`.
+                public var value1: Components.Schemas.AnswerRoute
+                /// Creates a new `answer_routePayload`.
+                ///
+                /// - Parameters:
+                ///   - value1:
+                public init(value1: Components.Schemas.AnswerRoute) {
+                    self.value1 = value1
+                }
+                public init(from decoder: any Swift.Decoder) throws {
+                    self.value1 = try decoder.decodeFromSingleValueContainer()
+                }
+                public func encode(to encoder: any Swift.Encoder) throws {
+                    try encoder.encodeToSingleValueContainer(self.value1)
+                }
+            }
+            /// The answer route the command carried, else null.
+            ///
+            /// - Remark: Generated from `#/components/schemas/ConclusionDecision/answer_route`.
+            public var answer_route: Components.Schemas.ConclusionDecision.answer_routePayload?
+            /// Creates a new `ConclusionDecision`.
+            ///
+            /// - Parameters:
+            ///   - command_id:
+            ///   - action:
+            ///   - device_id:
+            ///   - device_display_name: The deciding device's display name at decision time, so the record reads the same after the device is renamed or unpaired.
+            ///   - finding_routes: The per-finding routes the command carried: finding_routes of adjudicate_findings or alternative_choices of choose_alternative_route. Null for every other action.
+            ///   - answer_route: The answer route the command carried, else null.
+            public init(
+                command_id: Swift.String,
+                action: Components.Schemas.Action,
+                device_id: Swift.String,
+                device_display_name: Swift.String,
+                finding_routes: [Components.Schemas.AlternativeChoice]? = nil,
+                answer_route: Components.Schemas.ConclusionDecision.answer_routePayload? = nil
+            ) {
+                self.command_id = command_id
+                self.action = action
+                self.device_id = device_id
+                self.device_display_name = device_display_name
+                self.finding_routes = finding_routes
+                self.answer_route = answer_route
+            }
+            public enum CodingKeys: String, CodingKey {
+                case command_id
+                case action
+                case device_id
+                case device_display_name
+                case finding_routes
+                case answer_route
+            }
+            public init(from decoder: any Swift.Decoder) throws {
+                let container = try decoder.container(keyedBy: CodingKeys.self)
+                self.command_id = try container.decode(
+                    Swift.String.self,
+                    forKey: .command_id
+                )
+                self.action = try container.decode(
+                    Components.Schemas.Action.self,
+                    forKey: .action
+                )
+                self.device_id = try container.decode(
+                    Swift.String.self,
+                    forKey: .device_id
+                )
+                self.device_display_name = try container.decode(
+                    Swift.String.self,
+                    forKey: .device_display_name
+                )
+                self.finding_routes = try container.decodeIfPresent(
+                    [Components.Schemas.AlternativeChoice].self,
+                    forKey: .finding_routes
+                )
+                self.answer_route = try container.decodeIfPresent(
+                    Components.Schemas.ConclusionDecision.answer_routePayload.self,
+                    forKey: .answer_route
+                )
+                try decoder.ensureNoAdditionalProperties(knownKeys: [
+                    "command_id",
+                    "action",
+                    "device_id",
+                    "device_display_name",
+                    "finding_routes",
+                    "answer_route"
+                ])
+            }
         }
         /// Item lifecycle status. Provisional vocabulary (domain enums.go).
         ///

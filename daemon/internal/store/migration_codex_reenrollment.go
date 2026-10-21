@@ -154,6 +154,7 @@ func authenticateLegacyCodexReenrollmentMarker(
 		}
 		expected.Timing = item.Timing
 		expected.DecidedAt = item.DecidedAt
+		expected.Conclusion = item.Conclusion
 		if !reflect.DeepEqual(expected, item) {
 			continue
 		}
@@ -167,6 +168,7 @@ func authenticateLegacyCodexReenrollmentMarker(
 		updated.HealthDiagnostic = nil
 		updated.Timing = item.Timing
 		updated.DecidedAt = item.DecidedAt
+		updated.Conclusion = item.Conclusion
 		if err := updated.Validate(); err != nil {
 			return domain.AttentionItem{}, false
 		}

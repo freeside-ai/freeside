@@ -584,6 +584,14 @@ func (tx *WriteTx) putAttentionItem(ctx context.Context, item domain.AttentionIt
 		if item.DisplayNames == nil && decoded.DisplayNames != nil {
 			item.DisplayNames = decoded.DisplayNames
 		}
+		// A recorded conclusion is immutable (ValidateAttentionItemTransition),
+		// so a constructor-built replay of a closed item that omits it keeps the
+		// stored one instead of reading as an erasure. The restored value came
+		// through decode, which re-ran its structural gate. An open write is
+		// left alone so a stale pre-close copy still fails as stale below.
+		if item.Status != domain.StatusOpen && item.Conclusion == nil && decoded.Conclusion != nil {
+			item.Conclusion = decoded.Conclusion
+		}
 		// The task name is derived from the task, so it cannot force a
 		// new item version during a read-modify-write replay.
 		if item.DisplayNames != nil && decoded.DisplayNames != nil {
@@ -699,6 +707,12 @@ func (tx *WriteTx) putAttentionItem(ctx context.Context, item domain.AttentionIt
 		if err := validate(decoded, item); err != nil {
 			return fmt.Errorf("put attention item %q: %w", item.ID, mapTransition(err))
 		}
+	}
+	// An item created already closed has no open-to-closed transition to
+	// carry its conclusion, so creation requires one directly; only rows
+	// stored before the field existed may be closed without one.
+	if existing == nil && item.Status != domain.StatusOpen && item.Conclusion == nil {
+		return fmt.Errorf("put attention item %q status %q: %w", item.ID, item.Status, domain.ErrConclusionMissing)
 	}
 	if !timingUpdate && item.Status != domain.StatusExpired {
 		// A new proposal gets its authoritative target at BindProposalItem.

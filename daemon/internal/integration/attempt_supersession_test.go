@@ -11,6 +11,7 @@ import (
 
 	"github.com/freeside-ai/freeside/daemon/internal/contentaddr"
 	"github.com/freeside-ai/freeside/daemon/internal/domain"
+	"github.com/freeside-ai/freeside/daemon/internal/domain/domaintest"
 	"github.com/freeside-ai/freeside/daemon/internal/engine"
 	"github.com/freeside-ai/freeside/daemon/internal/exec"
 	"github.com/freeside-ai/freeside/daemon/internal/exec/fake"
@@ -284,6 +285,12 @@ func TestReattemptSupersedesEarlierAttemptFailureCards(t *testing.T) {
 		if !strings.HasPrefix(got.Reason, tc.before.Reason) {
 			t.Errorf("%s reason %q dropped the original text %q", tc.name, got.Reason, tc.before.Reason)
 		}
+		// The conclusion's reason is daemon-owned prose, so the operator's
+		// reattempt reason stays in the item's reason only.
+		const wantConclusion = "Superseded by attempt 2 of this campaign; no recovery choice is needed."
+		if c := got.Conclusion; c == nil || c.Cause != domain.ConcludedBySupersession || c.Reason != wantConclusion {
+			t.Errorf("%s conclusion = %+v, want supersession with reason %q", tc.name, c, wantConclusion)
+		}
 	}
 
 	for _, id := range []domain.ItemID{quarantineID, otherCardID} {
@@ -373,6 +380,7 @@ func concludeCard(t *testing.T, f *workflowFixture, id domain.ItemID) domain.Att
 	decidedAt := time.Date(2026, 8, 2, 10, 0, 0, 0, time.UTC)
 	item.DecidedAt = &decidedAt
 	if err := f.store.Write(ctx, func(tx *store.WriteTx) error {
+		item = domaintest.MustConclude(item)
 		return tx.PutAttentionItem(ctx, item)
 	}); err != nil {
 		t.Fatalf("conclude card %q: %v", id, err)

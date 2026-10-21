@@ -120,6 +120,9 @@ struct DecisionDetailView: View {
     /// stands beside them. Nil where they draw in the window's slot.
     private let standingNotices: StandingNotices?
     private let onSelectItem: (String) -> Void
+    /// The tasks a closed card's timeline link resolves its item against.
+    private let tasks: [Components.Schemas.TaskSnapshot]
+    private let onSelectTask: (String) -> Void
 
     @MainActor
     init(
@@ -142,6 +145,8 @@ struct DecisionDetailView: View {
         inspectorPresented: Binding<Bool>? = nil,
         standingNotices: StandingNotices? = nil,
         onSelectItem: @escaping (String) -> Void = { _ in },
+        tasks: [Components.Schemas.TaskSnapshot] = [],
+        onSelectTask: @escaping (String) -> Void = { _ in },
         onConclusion: @escaping @MainActor (DecisionConclusion) -> Void = { _ in },
         model: DecisionModel? = nil
     ) {
@@ -172,6 +177,8 @@ struct DecisionDetailView: View {
         externalInspectorPresented = inspectorPresented
         self.standingNotices = standingNotices
         self.onSelectItem = onSelectItem
+        self.tasks = tasks
+        self.onSelectTask = onSelectTask
         self.graphics = graphics
         self.loadsAttachments = loadsAttachments
         self.showsValidationProgress = showsValidationProgress
@@ -569,7 +576,14 @@ struct DecisionDetailView: View {
             VStack(alignment: .leading, spacing: CardScale.headGap) {
                 eyebrow(item, register: register, accessibilityLayout: accessibilityLayout)
                 banner(item)
-                if DecisionCardComposition.rendersAsk(for: item) {
+                // A closed card asks nothing: the ask's face says what
+                // happened instead (#2097).
+                if let lead = ConclusionDisplay.leadSentence(item) {
+                    Text(lead)
+                        .font(FreesideFont.ask)
+                        .foregroundStyle(Color.ink)
+                        .fixedSize(horizontal: false, vertical: true)
+                } else if DecisionCardComposition.rendersAsk(for: item) {
                     Text(AttentionDisplay.ask(item))
                         .font(FreesideFont.ask)
                         .foregroundStyle(Color.ink)
@@ -593,6 +607,8 @@ struct DecisionDetailView: View {
                     .fixedSize(horizontal: false, vertical: true)
                     .frame(maxWidth: .infinity, alignment: .leading)
             }
+
+            outcome(item, rendersInteractiveControls: rendersInteractiveControls)
 
             // A stale final review says what moved before anything else on
             // the card (frame 7.3). The notice carries no action: the
@@ -735,7 +751,51 @@ struct DecisionDetailView: View {
                         includesReviewing: !hasReviewingAction || !reviewingLeads)
                 #endif
             }
+        } else if hasReviewingAction {
+            // What the group holds between its controls is content, such as
+            // a change summary, and outlives the controls on a closed card.
+            cardModules(composition.controlGroupModules, modules)
         }
+    }
+
+    /// A closed card's Outcome facts and the link to the task timeline,
+    /// where what followed the close is told (#2097). An item closed
+    /// before conclusions existed has no facts and draws only the link.
+    @ViewBuilder
+    private func outcome(
+        _ item: Components.Schemas.AttentionItem, rendersInteractiveControls: Bool
+    ) -> some View {
+        TimeFormatEnvironment { locale, timeZone in
+            let facts = ConclusionDisplay.facts(
+                item, thisDeviceID: model.deviceID, now: now, locale: locale, timeZone: timeZone)
+            if !facts.isEmpty {
+                keywordSection("Outcome") {
+                    ForEach(facts) { fact in
+                        factRow(fact)
+                    }
+                }
+            }
+        }
+        if item.status != .open, let taskID = ConclusionDisplay.timelineTaskID(for: item, in: tasks) {
+            let link = FreesideLink(title: "Open task timeline", face: FreesideFont.noticeAction)
+            if rendersInteractiveControls {
+                Button {
+                    onSelectTask(taskID)
+                } label: {
+                    link.contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+            } else {
+                link
+            }
+        }
+    }
+
+    /// The item when it is closed, whose route lists draw inert with the
+    /// applied route outlined (#2097).
+    private var closedItem: Components.Schemas.AttentionItem? {
+        guard let item = model.snapshot?.item, item.status != .open else { return nil }
+        return item
     }
 
     /// The card's one hairline (R26) and the folds under it: the folded
@@ -761,7 +821,10 @@ struct DecisionDetailView: View {
     /// Whether the card has a control group to draw: an action
     /// the item requests, or the agent claims the Mac sets beside them.
     static func drawsControlGroup(_ item: Components.Schemas.AttentionItem) -> Bool {
-        !item.requested_decision.isEmpty
+        // A closed item takes no command, so its card keeps no group of
+        // disabled actions (#2097).
+        guard item.status == .open else { return false }
+        return !item.requested_decision.isEmpty
             || (!DecisionCardComposition.forType(item._type).drawsLeadClaimsInCard
                 && !DecisionCardComposition.actionRegionClaims(item.agent_claims).isEmpty)
     }
@@ -1538,8 +1601,10 @@ struct DecisionDetailView: View {
         if DecisionCardComposition.placesConversationWithSpecification(for: item._type),
             model.conversation != nil || !priorExchanges.isEmpty
         {
+            // A closed item takes no reply, so its thread reads without one.
             let offersReply =
-                item.requested_decision.contains(.discuss)
+                item.status == .open
+                && item.requested_decision.contains(.discuss)
                 && !actionRanking(item).unavailable.contains(.discuss)
             ConversationView(
                 snapshot: model.conversation,
@@ -2359,15 +2424,33 @@ struct DecisionDetailView: View {
                 rendersInteractiveControls: rendersInteractiveControls)
             if !card.routeOptions.isEmpty {
                 keywordSection("Route") {
-                    ChoiceList(
-                        accessibilityLabel: "Route for \(card.heading)",
-                        options: card.routeOptions.map {
-                            .init(
-                                value: $0.route, label: $0.label, consequence: $0.consequence,
-                                mark: $0.isProposed ? "Proposed" : nil,
-                                register: card.modelBacked ? .quote : .item)
-                        },
-                        selection: selection)
+                    if let closed = closedItem {
+                        // The list's values are optional so a close no
+                        // decision routed outlines none.
+                        ChoiceList<Components.Schemas.AdjudicationRoute?>(
+                            accessibilityLabel: "Route for \(card.heading)",
+                            options: card.routeOptions.map {
+                                .init(
+                                    value: $0.route, label: $0.label, consequence: $0.consequence,
+                                    mark: $0.isProposed ? "Proposed" : nil,
+                                    register: card.modelBacked ? .quote : .item)
+                            },
+                            selection: .constant(
+                                ConclusionDisplay.appliedRoute(
+                                    for: card.id, proposed: card.routeOptions.first { $0.isProposed }?.route,
+                                    in: closed)),
+                            isInert: true)
+                    } else {
+                        ChoiceList(
+                            accessibilityLabel: "Route for \(card.heading)",
+                            options: card.routeOptions.map {
+                                .init(
+                                    value: $0.route, label: $0.label, consequence: $0.consequence,
+                                    mark: $0.isProposed ? "Proposed" : nil,
+                                    register: card.modelBacked ? .quote : .item)
+                            },
+                            selection: selection)
+                    }
                 }
             }
             findingStatements(
@@ -2509,9 +2592,8 @@ struct DecisionDetailView: View {
                     .foregroundStyle(Color.inkDim)
                     .fixedSize(horizontal: false, vertical: true)
             }
-            ChoiceList<Components.Schemas.AdjudicationRoute?>(
-                accessibilityLabel: "Route for \(finding.message)",
-                options: finding.offered_routes.map {
+            let routes: [ChoiceList<Components.Schemas.AdjudicationRoute?>.Option] =
+                finding.offered_routes.map {
                     .init(
                         value: $0,
                         label: AttentionDisplay.disputeRouteLabel($0, external: external),
@@ -2519,12 +2601,24 @@ struct DecisionDetailView: View {
                         mark: $0 == finding.adjudication?.lean?.value1
                             ? AttentionDisplay.disputedFindingFavoredMark : nil,
                         register: .item)
-                },
-                selection: Binding(
-                    get: { alternativeSelections[finding.finding_id] },
-                    set: { alternativeSelections[finding.finding_id] = $0 })
-            )
-            .disabled(!model.actionsEnabled)
+                }
+            if let closed = closedItem {
+                ChoiceList(
+                    accessibilityLabel: "Route for \(finding.message)",
+                    options: routes,
+                    selection: .constant(
+                        ConclusionDisplay.appliedRoute(for: finding.finding_id, proposed: nil, in: closed)),
+                    isInert: true)
+            } else {
+                ChoiceList(
+                    accessibilityLabel: "Route for \(finding.message)",
+                    options: routes,
+                    selection: Binding(
+                        get: { alternativeSelections[finding.finding_id] },
+                        set: { alternativeSelections[finding.finding_id] = $0 })
+                )
+                .disabled(!model.actionsEnabled)
+            }
             SentenceDisclosure(
                 label: "Reason and Source",
                 summary: AttentionDisplay.disputedFindingReasonSummary(finding),
@@ -2801,6 +2895,9 @@ struct DecisionDetailView: View {
                 RetryableReceipt(
                     isExpanded: $lostResponseExpanded,
                     failureMessage: model.submissionError)
+                if !Self.drawsControlGroup(item) {
+                    lostResponseRetry
+                }
             } else if case .failed(let message) = model.validation {
                 receipt(.wax, "Failed", "Couldn't validate current state: \(message)")
             } else if let message = model.submissionError {
@@ -2820,14 +2917,16 @@ struct DecisionDetailView: View {
     }
 
     /// Whether a command's answer was lost and the card offers to resend
-    /// it: the receipt states it, and the control group holds the Retry.
+    /// it: the receipt states it, and the control group holds the Retry,
+    /// or the receipt does on a closed card, which draws no group.
     private var offersLostResponseRetry: Bool {
         model.phase != .superseded && model.canRetryLostResponse
     }
 
-    /// The uncertain receipt's act (R14). It leads the control group, and
-    /// a card that can retry always draws one: every command a card sends
-    /// is one of its item's requested decisions.
+    /// The uncertain receipt's act (R14). It leads the control group of an
+    /// open card. A closed card draws no group but keeps the act under the
+    /// receipt (#2097): resending is how this device learns whether the
+    /// command landed before the item closed, and what clears the entry.
     private var lostResponseRetry: some View {
         Button("Retry") {
             Task { await model.retryLostResponse() }
@@ -3205,6 +3304,12 @@ struct DecisionDetailView: View {
             FactLinkRow(label: fact.label, value: fact.value) { onSelectItem(id) }
         case .link(let url):
             FactLinkRow(label: fact.label, value: fact.value) { openURL(url) }
+        case .instant(let instant):
+            factRow(fact.label, value: fact.value).exactInstant(instant)
+        case .prose:
+            FactRow(
+                label: fact.label, value: fact.value,
+                drawn: Text(fact.value).font(FreesideFont.cardBody), stacksAlways: true)
         }
     }
 
@@ -4525,5 +4630,21 @@ extension View {
             .frame(maxWidth: compact ? nil : CardScale.cardWidth, alignment: .topLeading)
             .padding(margin)
             .frame(maxWidth: compact ? nil : .infinity, alignment: .topLeading)
+    }
+}
+
+/// Hands its content the locale and time zone installed where it draws.
+/// Read on the card itself from its module builders, both come back as
+/// SwiftUI's defaults (the process zone and the root locale), so the
+/// closed card printed its time in the wrong zone under a pinned
+/// screenshot or a device set to another zone. Read here, in a body of
+/// its own, they are the installed values.
+private struct TimeFormatEnvironment<Content: View>: View {
+    @Environment(\.locale) private var locale
+    @Environment(\.timeZone) private var timeZone
+    @ViewBuilder let content: (Locale, TimeZone) -> Content
+
+    var body: some View {
+        content(locale, timeZone)
     }
 }

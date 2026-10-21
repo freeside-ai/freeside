@@ -1324,6 +1324,47 @@ func (s ItemStatus) valid() bool {
 	}
 }
 
+// ConclusionCause says why an attention item left open: an accepted client
+// decision, or one of the daemon's own closes. It is recorded once, on the
+// transition that closes the item (Conclusion).
+type ConclusionCause string
+
+const (
+	ConcludedByDecision     ConclusionCause = "decision"
+	ConcludedByExpiry       ConclusionCause = "expired"
+	ConcludedBySupersession ConclusionCause = "superseded"
+	ConcludedByDaemon       ConclusionCause = "resolved_by_daemon"
+)
+
+// AllConclusionCauses lists every valid ConclusionCause.
+var AllConclusionCauses = []ConclusionCause{ConcludedByDecision, ConcludedByExpiry, ConcludedBySupersession, ConcludedByDaemon}
+
+func (c ConclusionCause) valid() bool {
+	switch c {
+	case ConcludedByDecision, ConcludedByExpiry, ConcludedBySupersession, ConcludedByDaemon:
+		return true
+	default:
+		return false
+	}
+}
+
+// admits reports whether an item closed for this cause may carry status. A
+// decision closes to whatever its action's outcome is (a request_changes
+// supersedes, a dismiss dismisses); each daemon cause names exactly one status.
+func (c ConclusionCause) admits(status ItemStatus) bool {
+	switch c {
+	case ConcludedByDecision:
+		return status == StatusResolved || status == StatusDismissed || status == StatusSuperseded
+	case ConcludedByExpiry:
+		return status == StatusExpired
+	case ConcludedBySupersession:
+		return status == StatusSuperseded
+	case ConcludedByDaemon:
+		return status == StatusResolved
+	}
+	return false
+}
+
 // SensitivityClass is an artifact's confidentiality tier (plan §5.15 provenance,
 // §5.10/§5.14 high-sensitivity handling). Provisional member set; flagged for
 // spine review.

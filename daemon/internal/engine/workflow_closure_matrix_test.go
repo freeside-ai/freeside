@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/freeside-ai/freeside/daemon/internal/domain"
+	"github.com/freeside-ai/freeside/daemon/internal/domain/domaintest"
 	execfake "github.com/freeside-ai/freeside/daemon/internal/exec/fake"
 	"github.com/freeside-ai/freeside/daemon/internal/importer"
 	"github.com/freeside-ai/freeside/daemon/internal/publish"
@@ -229,7 +230,7 @@ func closureMatrixItem(t *testing.T, kind domain.AttentionType) (*store.Store, d
 		if err != nil {
 			t.Fatal(err)
 		}
-		return f.store, runID, closureMatrixPut(t, f.store, item)
+		return f.store, runID, closureMatrixPut(t, f.store, domaintest.MustConclude(item))
 	}
 	t.Fatalf("attention kind %q needs an explicit closure disposition fixture", kind)
 	return nil, "", domain.AttentionItem{}

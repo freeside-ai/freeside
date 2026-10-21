@@ -89,7 +89,7 @@ import Testing
         let client = APIClientFactory.mock(server: MockServer())
         let snapshots = try await client.listAttentionItems().ok.body.json
         // Ordered by item id, as the daemon's list query is.
-        let expected = AttentionFixtures.phase1Types.map { "item-\($0.rawValue)" }.sorted()
+        let expected = AttentionFixtures.defaultInboxItemIDs().sorted()
         #expect(snapshots.map(\.item.id) == expected)
     }
 
@@ -521,6 +521,15 @@ import Testing
         // The concluding decision stamps the decision instant (#171).
         #expect(before.item.decided_at == nil)
         #expect(after.item.decided_at != nil)
+        // ...and records how the item closed, on the same instant (#2097).
+        let conclusion = try #require(after.item.conclusion?.value1)
+        #expect(conclusion.cause == .decision)
+        #expect(conclusion.concluded_at == after.item.decided_at)
+        #expect(conclusion.reason.isEmpty)
+        #expect(conclusion.decision?.value1.command_id == "cmd-1")
+        #expect(conclusion.decision?.value1.action == .approve)
+        #expect(conclusion.decision?.value1.device_id == "device-mock")
+        #expect(conclusion.decision?.value1.device_display_name == "Studio Mac")
     }
 
     @Test func staleCommandIsRejectedWithTheReplacementAndNoSideEffect() async throws {

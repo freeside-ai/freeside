@@ -175,9 +175,14 @@ func (e *Engine) reconcileHeldWorkNotices(ctx context.Context) error {
 		if err != nil {
 			return err
 		}
+		now := time.Now().UTC()
 		for _, item := range stale {
 			item.ItemVersion++
-			item.Status = domain.StatusResolved
+			item, err := item.ConcludeByDaemon(domain.ConcludedByDaemon, now,
+				"Resolved when the hold ended or its task was stopped.", nil)
+			if err != nil {
+				return err
+			}
 			if err := tx.PutAttentionItem(ctx, item); err != nil {
 				return err
 			}

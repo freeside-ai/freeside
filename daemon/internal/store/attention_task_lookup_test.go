@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	"github.com/freeside-ai/freeside/daemon/internal/domain"
+	"github.com/freeside-ai/freeside/daemon/internal/domain/domaintest"
 )
 
 func TestListOpenAttentionItemRecordsForTask(t *testing.T) {
@@ -23,6 +24,7 @@ func TestListOpenAttentionItemRecordsForTask(t *testing.T) {
 		}
 		closed.Status = domain.StatusExpired
 		closed.ItemVersion++
+		closed = domaintest.MustConclude(closed)
 		return tx.PutAttentionItem(ctx, closed)
 	}); err != nil {
 		t.Fatal(err)

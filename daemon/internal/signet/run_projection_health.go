@@ -114,7 +114,13 @@ func (s *Service) convergeRunProjectionHealth(ctx context.Context, excluded []ex
 		}
 		resolved := item
 		resolved.ItemVersion++
-		resolved.Status = domain.StatusResolved
+		resolved, err := resolved.ConcludeByDaemon(domain.ConcludedByDaemon, s.now().UTC(),
+			"Resolved when the run's records projected cleanly again.", nil)
+		if err != nil {
+			s.logger.Warn("run projection health converge: resolve item",
+				"item", item.ID, "error", err)
+			continue
+		}
 		if err := s.store.Write(ctx, func(tx *store.WriteTx) error {
 			return tx.PutAttentionItem(ctx, resolved)
 		}); err != nil {
