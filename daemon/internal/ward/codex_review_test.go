@@ -2846,6 +2846,7 @@ func TestBuildCodexReviewAgentSpecConforms(t *testing.T) {
 	joinedCommand := strings.Join(spec.Command, " ")
 	for _, required := range []string{
 		"--ephemeral", "-s read-only", "project_doc_max_bytes=0", "--ignore-user-config", "--ignore-rules",
+		"--disable apps", `-c 'web_search="disabled"'`,
 	} {
 		if !strings.Contains(joinedCommand, required) {
 			t.Errorf("command misses fixed argument %q: %q", required, spec.Command)
@@ -3489,6 +3490,12 @@ func TestCodexReviewConformanceRejectsTopologyDrift(t *testing.T) {
 		{"extra child environment", func(s *ContainerSpec, _ *CodexReviewJournalBinding) { s.Env = append(s.Env, "OPENAI_API_KEY=secret") }},
 		{"severance removed", func(s *ContainerSpec, _ *CodexReviewJournalBinding) {
 			s.Command[2] = strings.Replace(s.Command[2], " --ignore-user-config --ignore-rules", "", 1)
+		}},
+		{"connector paths reopened", func(s *ContainerSpec, _ *CodexReviewJournalBinding) {
+			s.Command[2] = strings.Replace(s.Command[2], " --disable apps", "", 1)
+		}},
+		{"web search reopened", func(s *ContainerSpec, _ *CodexReviewJournalBinding) {
+			s.Command[2] = strings.Replace(s.Command[2], ` -c 'web_search="disabled"'`, "", 1)
 		}},
 		{"continuity journalled", func(_ *ContainerSpec, b *CodexReviewJournalBinding) { b.ContinuityMounted = true }},
 		{"lease rule dropped", func(_ *ContainerSpec, b *CodexReviewJournalBinding) { b.AuthStoreMutationLeaseRequired = false }},

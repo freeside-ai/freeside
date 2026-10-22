@@ -1674,6 +1674,20 @@ func codexReviewCommand(workspaceTarget, model, reasoningEffort, prompt, baseSHA
 	// than silently leaving codex to read the image-provided credential or
 	// instruction. `set +e` is relaxed only immediately before `codex exec`, so a
 	// nonzero codex exit is still captured into review_status and the status file.
+	//
+	// --disable apps and web_search="disabled" close two paths that run on the
+	// provider's side, where neither the read-only sandbox nor the egress
+	// allowlist reaches. Both are on by default and survive
+	// --ignore-user-config: connected apps fetch the ChatGPT account's
+	// connectors (a GitHub connector with write tools, acting as the account's
+	// user) through chatgpt.com, and the web tool fetches arbitrary URLs. A
+	// review reads untrusted content, so either would let an injected
+	// instruction act or send data outside the run. --disable refuses a feature
+	// name the CLI doesn't know, where -c features.<name> accepts it silently,
+	// so a renamed apps feature refuses the review instead of reopening the
+	// path. web_search refuses an unknown value but not a renamed key; the
+	// per-bump re-proof guards that (#2196,
+	// devlog/2026-10-22-1700-review-connector-paths.md).
 	command := "set -e; mkdir -p " + shellQuote(CodexHomeTarget) + "; " +
 		"ln -s " + shellQuote(codexReviewSnapshotAuthSource) + " " + shellQuote(CodexAuthFileTarget) + "; " +
 		"ln -s " + shellQuote(codexReviewSnapshotInstrSource) + " " + shellQuote(CodexInstructionTarget) + "; " +
@@ -1684,6 +1698,7 @@ func codexReviewCommand(workspaceTarget, model, reasoningEffort, prompt, baseSHA
 		"codex exec --json --ephemeral --skip-git-repo-check -s read-only -C " + shellQuote(workspaceTarget) +
 		" -m " + shellQuote(model) + " -c " + shellQuote("model_reasoning_effort=\""+reasoningEffort+"\"") +
 		" -c project_doc_max_bytes=0 --ignore-user-config --ignore-rules" +
+		" --disable apps -c " + shellQuote("web_search=\"disabled\"") +
 		" --output-schema " + shellQuote(codexReviewSchemaPath) +
 		" --output-last-message " + shellQuote(codexReviewResultPath) +
 		" -- \"$1\" ) > " + shellQuote(codexReviewEventsPath) + " 2>&1; " +

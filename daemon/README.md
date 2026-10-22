@@ -1401,6 +1401,20 @@ refused until the tree changes. Before starting the new build:
    review role that still lacks a model or an effort fails it by name, and a
    tree whose lock disagrees with its content is refused.
 
+**Upgrade past the reviewer's connector fix.** The build that closes the
+Codex reviewer's connected-apps and provider web paths (#2196) adds
+`--disable apps -c 'web_search="disabled"'` to the review command. The
+command is part of the review configuration digest, so every Codex review
+configuration digest changes and an unattended deployment refuses its
+reviews as unapproved until the operator approves the new one. The agent
+tree, its adapter, and its conformance records don't change. Stop the
+daemon when no review is in flight: a review whose container exits while
+the daemon is down is collected under the new digest even though it ran
+without the flags (#2197). Then run `freesided preflight` with the deployment's flags,
+take the manifest's `review_configuration_digest`, and approve it with
+`freesided onboard -review-config-digest` before the next unattended run.
+A Claude reviewer's digest is unchanged.
+
 **Upgrade a deployment adopted before the writer roles named a model and an
 effort.** A tree adopted earlier has its three writer lines on the agent
 `claude-code-default`, whose offer `claude-code-native-default` names no
