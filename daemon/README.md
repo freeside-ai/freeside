@@ -2481,6 +2481,30 @@ wrote (an identity under 1 or 2, an `effective_effort` under 3), or with an
 unknown version, is refused, which disables the ledger so every call returns
 its fallback.
 
+A ledger that cannot be created, read, decoded, anchored, or persisted is
+disabled for the rest of the process: every judgment call returns its
+fallback with the reason `ledger_unavailable`, whatever its role's line, and
+the daemon keeps one open `system_health` item (`inference_ledger_disabled`)
+naming the cause. The item is `blocking` and holds unattended admission for
+the drift auditor's reason: its site is on its fail-safe too, so each run
+would carry on as if the audit were switched off. The cause names the step
+that failed and the system error, never a path, a record, or a credential,
+and stays the same on every start that fails the same way, so a restart
+that changes nothing rewrites nothing; the daemon log carries the full
+error. The daemon raises the item at the startup check and on each call
+that reaches the ledger, stops at startup when it cannot write it, as it
+does for a role's item, and never repairs the file: for a file that cannot
+be decoded or anchored, restore `inference-budget.json` in the state
+directory and its anchor (`<database>.inference-budget-anchor`), or remove
+both to start a new ledger, which discards the recorded budget usage and
+audit debt; for a directory or file that cannot be created, read, or
+written, fix its permissions or free the space; then restart. The item
+resolves at the start that loads the ledger. An exhausted budget is the
+ledger working and raises no item.
+Preflight does not check the ledger: it builds none and is not given the
+daemon's state directory, so a ledger that fails to load surfaces at the
+daemon's first start.
+
 Preflight reports `judgment_configuration` and a secret-free
 `judgment_configuration_digest`. Beside it, `judgment_roles` admits every
 judgment role as the daemon's startup check will and lists each role in the
