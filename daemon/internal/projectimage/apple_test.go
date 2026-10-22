@@ -170,7 +170,7 @@ func testAppleRunVerificationEnvironment(t *testing.T, masked string, argv []str
 	args := runner.specs[0].Args
 	wantPrefix := []string{
 		"run", "--rm", "--cidfile", args[3], "--label", args[5],
-		"--network", "none",
+		"--network", "none", "--cpus", "4", "--memory", "2048M",
 	}
 	if masked != "" {
 		wantPrefix = append(wantPrefix, "--tmpfs", masked)
@@ -186,6 +186,32 @@ func testAppleRunVerificationEnvironment(t *testing.T, masked string, argv []str
 		!slices.Equal(args[:len(wantPrefix)], wantPrefix) ||
 		!slices.Equal(args[len(wantPrefix):], argv) {
 		t.Fatalf("container argv = %q, want fixed wrapper plus exact %q", args, argv)
+	}
+}
+
+// The size flags are literal, not derived from ward, so a change to the
+// verification room's default fails here until the recipe bound documented
+// in daemon/README.md is revisited.
+func TestAppleRunBoundsAWorkspacelessProofAtTheVerificationRoomSize(t *testing.T) {
+	runner := &managedRunner{next: func(_ context.Context, spec commandSpec) (commandOutput, error) {
+		if len(spec.Args) == 0 || spec.Args[0] != "run" {
+			return commandOutput{}, nil
+		}
+		return commandOutput{exited: true}, nil
+	}}
+	backend := appleBackend{containerPath: "/usr/bin/container", runner: runner}
+	image := "example.test/image@sha256:" + strings.Repeat("a", 64)
+	if _, err := backend.Run(t.Context(), runSpec{ImageRef: image, Argv: []string{"true"}}); err != nil {
+		t.Fatal(err)
+	}
+	args := runner.specs[0].Args
+	want := []string{
+		"run", "--rm", "--cidfile", args[3], "--label", args[5],
+		"--network", "none", "--cpus", "4", "--memory", "2048M",
+		"--", image, "true",
+	}
+	if !slices.Equal(args, want) {
+		t.Fatalf("container argv = %q, want %q", args, want)
 	}
 }
 
