@@ -23,7 +23,8 @@ const (
 	seedPackageJSONPath = "/opt/freeside/project-seed/package.json"
 	seedPackageLockPath = "/opt/freeside/project-seed/package-lock.json"
 
-	preparationDigestVersion = "freeside.project-image-preparation/v1"
+	// v2 added the Go toolchain sources to the digested set.
+	preparationDigestVersion = "freeside.project-image-preparation/v2"
 )
 
 const nodeToolchainLauncher = `#!/usr/bin/busybox sh
@@ -89,9 +90,11 @@ exec npm ci --ignore-scripts
 `
 
 // PreparationDigest addresses this binary's fixed toolchain and preparation
-// implementation: the preparation helper, the Node launcher, the Containerfile
-// template (which carries the toolchain base image and the npm configuration),
-// and the pinned Node version and archive hash. A project image records the
+// implementation for every toolchain it builds: each preparation helper,
+// launcher, and Containerfile template (which carry the toolchain base image
+// and the npm configuration), and each pinned toolchain version and archive
+// hash. One digest covers both toolchains, so an edit to either path retires
+// cross-commit reuse of every image built before it. A project image records the
 // value it was built with, and reuse at another commit requires the running
 // binary's to equal it: these sources decide what an image's environment is as
 // much as the project's manifests do.
@@ -100,22 +103,55 @@ exec npm ci --ignore-scripts
 // changes it, so an image built by a different builder is never assumed
 // equivalent.
 func PreparationDigest() domain.Digest {
-	// Length-prefixed parts, so no two source sets share a preimage.
-	hash := sha256.New()
-	for _, part := range []string{
+	return preparationDigest(preparationSources())
+}
+
+// preparationSources lists, in digest order, every builder source
+// PreparationDigest addresses. The Go preparation helper and Containerfile
+// enter as templates rendered without a module directory or request: the
+// module directory is recorded in the image's environment on its own.
+func preparationSources() []string {
+	return []string{
 		preparationDigestVersion,
 		prepareScript,
 		nodeToolchainLauncher,
-		renderContainerfile(Request{}, ""),
+		renderNPMContainerfile(Request{}, ""),
 		nodeToolchainVersion,
 		nodeToolchainArchiveSHA256,
-	} {
+		goPrepareScript(""),
+		goToolchainLauncher,
+		renderGoContainerfile(Request{}, ""),
+		goToolchainVersion,
+		goToolchainArchiveSHA256,
+		golangciLintVersion,
+		golangciLintArchiveSHA256,
+	}
+}
+
+func preparationDigest(parts []string) domain.Digest {
+	// Length-prefixed parts, so no two source sets share a preimage.
+	hash := sha256.New()
+	for _, part := range parts {
 		hash.Write([]byte(strconv.Itoa(len(part)) + ":" + part))
 	}
 	return domain.Digest(contentaddr.Format(hash.Sum(nil)))
 }
 
-func renderContainerfile(request Request, recipeDigest domain.Digest) string {
+// renderContainerfile renders the generated Containerfile for the layout's
+// toolchain.
+func renderContainerfile(
+	layout domain.ProjectImageInputLayout, request Request, recipeDigest domain.Digest,
+) string {
+	switch layout.Toolchain {
+	case domain.ProjectToolchainNPM:
+		return renderNPMContainerfile(request, recipeDigest)
+	case domain.ProjectToolchainGo:
+		return renderGoContainerfile(request, recipeDigest)
+	}
+	return ""
+}
+
+func renderNPMContainerfile(request Request, recipeDigest domain.Digest) string {
 	// Every interpolated value has already passed validateRequest's restricted
 	// grammar. The dependency manifests and exact recipe bytes enter through
 	// COPY, never through instruction text.

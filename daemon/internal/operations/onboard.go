@@ -99,6 +99,9 @@ type ProjectImageReview struct {
 	RefTag            string          `json:"ref_tag"`
 	DNS               []string        `json:"dns"`
 	BuildProxy        string          `json:"build_proxy"`
+	// GoModuleDir is the declared Go module directory. It is omitted when
+	// empty so a review that declares none keeps its earlier approval digest.
+	GoModuleDir string `json:"go_module_dir,omitempty"`
 }
 
 // OnboardResult is either a review-required projection or a completed,
@@ -434,6 +437,7 @@ func projectImageReview(request projectimage.Request) ProjectImageReview {
 		Registry: request.Registry, LocalRegistryPort: request.LocalRegistryPort,
 		ImageName: request.ImageName, RefTag: request.RefTag,
 		DNS: slices.Clone(request.DNS), BuildProxy: request.BuildProxy,
+		GoModuleDir: request.GoModuleDir,
 	}
 }
 

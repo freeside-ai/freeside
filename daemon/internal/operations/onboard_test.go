@@ -213,6 +213,16 @@ func TestOnboardRoundTripsPlanPreferredIntoActivatedProfile(t *testing.T) {
 	if preferredReview.ApprovalDigest == singleCommitReview.ApprovalDigest {
 		t.Fatal("plan-preferred review reused the single-commit approval digest")
 	}
+	// The declared Go module directory is part of what the owner approves.
+	req.Image.GoModuleDir = "daemon"
+	goReview, err := onboard.Run(ctx, req)
+	if err != nil {
+		t.Fatalf("Go module review pass: %v", err)
+	}
+	if goReview.ImageRequest.GoModuleDir != "daemon" || goReview.ApprovalDigest == preferredReview.ApprovalDigest {
+		t.Fatalf("Go module review = %+v, want the module shown and its own approval digest", goReview.ImageRequest)
+	}
+	req.Image.GoModuleDir = ""
 	req.ApprovalDigest = preferredReview.ApprovalDigest
 	complete, err := onboard.Run(ctx, req)
 	if err != nil {

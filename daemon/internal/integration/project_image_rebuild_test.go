@@ -82,7 +82,8 @@ func (b *recordingImageBuilder) Build(
 		<-ctx.Done()
 		return domain.ProjectImage{}, ctx.Err()
 	}
-	inputs, err := projectimage.ObserveBaseInputs(ctx, "git", request.SourceDir, request.CommitSHA)
+	inputs, err := projectimage.ObserveBaseInputs(ctx, "git", request.SourceDir, request.CommitSHA,
+		domain.ProjectImageInputLayout{Toolchain: domain.ProjectToolchainNPM})
 	if err != nil {
 		return domain.ProjectImage{}, err
 	}

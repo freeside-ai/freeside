@@ -26,8 +26,11 @@ const (
 	// project-image-aware verification room runs before every recipe argv.
 	PreparationPath = "/usr/local/bin/freeside-project-prepare"
 	// NPMCachePath is the baked dependency material the positive and negative
-	// proofs exercise.
+	// proofs exercise for an npm image.
 	NPMCachePath = "/opt/freeside/npm-cache"
+	// GoModuleCachePath is the baked module cache the proofs exercise for a
+	// Go image. Only modules are baked; the build cache stays per room.
+	GoModuleCachePath = "/opt/freeside/go-mod-cache"
 
 	maxRecipeBytes   = 1 << 20
 	maxManifestBytes = 32 << 20
@@ -43,6 +46,10 @@ var (
 	imageNamePattern  = regexp.MustCompile(`^[a-z0-9]+(?:[._-][a-z0-9]+)*$`)
 	refTagPattern     = regexp.MustCompile(`^[A-Za-z0-9_][A-Za-z0-9_.-]{0,127}$`)
 	networkFailure    = regexp.MustCompile(`(?i)(EAI_AGAIN|ENOTFOUND|ECONNREFUSED|ETIMEDOUT|request to https://registry)`)
+	// goOfflineRefusal is Go's answer to a module missing from the cache
+	// under the launcher's GOPROXY=off, or a network failure should a
+	// download be attempted anyway.
+	goOfflineRefusal = regexp.MustCompile(`(module lookup disabled by GOPROXY=off|dial tcp|no such host)`)
 )
 
 // ErrInvalidRequest marks malformed or mutually inconsistent builder inputs.
@@ -65,7 +72,12 @@ type Request struct {
 	// makes no forge request and proves nothing about the checkout: the
 	// caller owns proving it is Repository at RepositoryID, which the record
 	// still names. The commit is materialized exactly, as from a clone.
-	SourceDir         string
+	SourceDir string
+	// GoModuleDir declares the Go module the recipe verifies, relative to
+	// the repository root. Empty with a root package.json selects npm, empty
+	// with a root go.mod and no package.json selects Go at the root, and any
+	// other value selects Go at that directory.
+	GoModuleDir       string
 	Recipe            []byte
 	BaseImageRef      domain.ImageRef
 	BaseBuildRef      string
@@ -159,17 +171,26 @@ type provenanceSpec struct {
 	RepositoryID               int64
 	CommitSHA                  string
 	RecipeDigest               domain.Digest
+	Layout                     domain.ProjectImageInputLayout
 	NodeVersion                string
 	NodeToolchainArchiveSHA256 string
 	PackageJSONSHA256          string
 	PackageLockSHA256          string
+	GoVersion                  string
+	GoToolchainArchiveSHA256   string
+	GolangciLintVersion        string
+	GolangciLintArchiveSHA256  string
+	GoModSHA256                string
+	GoSumSHA256                string
 }
 
 type runSpec struct {
 	ImageRef  string
 	Workspace string
 	Argv      []string
-	MaskCache bool
+	// MaskedCache is the image path an empty tmpfs covers for this run, so
+	// the run cannot read the baked dependency cache; empty masks nothing.
+	MaskedCache string
 }
 
 type runResult struct {
@@ -253,10 +274,11 @@ func (b *Builder) Build(
 		return domain.ProjectImage{}, fmt.Errorf("materialize source tree: %w", err)
 	}
 	contextDir := filepath.Join(scratch, "context")
-	if err := createBuildContext(contextDir, sourceDir, normalized, recipeDigest); err != nil {
+	layout, err := createBuildContext(contextDir, sourceDir, normalized, recipeDigest)
+	if err != nil {
 		return domain.ProjectImage{}, err
 	}
-	environment, err := bakedEnvironment(contextDir)
+	environment, err := bakedEnvironment(contextDir, layout)
 	if err != nil {
 		return domain.ProjectImage{}, err
 	}
@@ -317,16 +339,13 @@ func (b *Builder) Build(
 	if !validDigest(localDigest) {
 		return domain.ProjectImage{}, fmt.Errorf("built image reported digest %q: %w", localDigest, ErrProofFailed)
 	}
-	provenance := provenanceSpec{
+	provenance := expectedProvenance(provenanceSpec{
 		ImageDigest:  localDigest,
 		BaseBuildRef: privateBaseRef, BaseDigest: baseDigest,
 		Repository:   normalized.Repository,
 		RepositoryID: normalized.RepositoryID, CommitSHA: normalized.CommitSHA,
-		RecipeDigest: recipeDigest, NodeVersion: nodeToolchainVersion,
-		NodeToolchainArchiveSHA256: nodeToolchainArchiveSHA256,
-		PackageJSONSHA256:          environment.PackageJSONSHA256,
-		PackageLockSHA256:          environment.PackageLockSHA256,
-	}
+		RecipeDigest: recipeDigest, Layout: layout,
+	}, environment)
 	if err := b.backend.CheckProvenance(ctx, localRef, provenance); err != nil {
 		return domain.ProjectImage{}, fmt.Errorf("local image provenance: %w: %w", err, ErrProofFailed)
 	}
@@ -337,7 +356,9 @@ func (b *Builder) Build(
 	if err := b.backend.CheckAllowlist(ctx, localRef); err != nil {
 		return domain.ProjectImage{}, fmt.Errorf("local image allowlist: %w: %w", err, ErrProofFailed)
 	}
-	if err := b.proveOffline(ctx, repositoryDir, normalized.CommitSHA, localRef, recipe.Commands, scratch); err != nil {
+	if err := b.proveOffline(
+		ctx, repositoryDir, normalized.CommitSHA, localRef, recipe.Commands, scratch, layout,
+	); err != nil {
 		return domain.ProjectImage{}, err
 	}
 
@@ -474,12 +495,48 @@ func ValidatePublishedRef(request Request, ref domain.ImageRef) error {
 	return nil
 }
 
+// expectedProvenance completes spec with the layout toolchain's pins and the
+// baked manifest hashes. It leaves the other toolchain's fields empty, so a
+// spec never claims a toolchain the image does not carry.
+func expectedProvenance(spec provenanceSpec, environment domain.ProjectImageEnvironment) provenanceSpec {
+	switch spec.Layout.Toolchain {
+	case domain.ProjectToolchainNPM:
+		spec.NodeVersion = nodeToolchainVersion
+		spec.NodeToolchainArchiveSHA256 = nodeToolchainArchiveSHA256
+		spec.PackageJSONSHA256 = environment.PackageJSONSHA256
+		spec.PackageLockSHA256 = environment.PackageLockSHA256
+	case domain.ProjectToolchainGo:
+		spec.GoVersion = goToolchainVersion
+		spec.GoToolchainArchiveSHA256 = goToolchainArchiveSHA256
+		spec.GolangciLintVersion = golangciLintVersion
+		spec.GolangciLintArchiveSHA256 = golangciLintArchiveSHA256
+		spec.GoModSHA256 = environment.GoModSHA256
+		spec.GoSumSHA256 = environment.GoSumSHA256
+	}
+	return spec
+}
+
+// maskedProbe names a layout's cache-masked negative probe: the argv that
+// hydrates the workspace's dependencies, the baked cache the probe masks,
+// and the output that shows the hydration reached for the network.
+func maskedProbe(layout domain.ProjectImageInputLayout) ([]string, string, *regexp.Regexp) {
+	switch layout.Toolchain {
+	case domain.ProjectToolchainNPM:
+		return []string{"npm", "ci", "--ignore-scripts"}, NPMCachePath, networkFailure
+	case domain.ProjectToolchainGo:
+		return goMaskedProbe(layout.GoModuleDir), GoModuleCachePath, goOfflineRefusal
+	}
+	return nil, "", nil
+}
+
 func (b *Builder) proveOffline(
 	ctx context.Context,
 	sourceDir, commit, imageRef string,
 	commands [][]string,
 	scratch string,
+	layout domain.ProjectImageInputLayout,
 ) error {
+	probe, cache, networkAttempt := maskedProbe(layout)
 	// A failed process result means something only after the runtime has proved
 	// it can start this image under the same no-network topology.
 	preflight, err := b.backend.Run(ctx, runSpec{ImageRef: imageRef, Argv: []string{"true"}})
@@ -489,7 +546,7 @@ func (b *Builder) proveOffline(
 	if preflight.ExitCode != 0 {
 		return fmt.Errorf("offline preflight exited %d: %w", preflight.ExitCode, ErrProofFailed)
 	}
-	if err := b.proveRecipe(ctx, sourceDir, commit, imageRef, commands, scratch, false); err != nil {
+	if err := b.proveRecipe(ctx, sourceDir, commit, imageRef, commands, scratch, ""); err != nil {
 		return err
 	}
 
@@ -499,19 +556,20 @@ func (b *Builder) proveOffline(
 	}
 	result, runErr := b.backend.Run(ctx, runSpec{
 		ImageRef: imageRef, Workspace: negative,
-		Argv: []string{"npm", "ci", "--ignore-scripts"}, MaskCache: true,
+		Argv: probe, MaskedCache: cache,
 	})
 	switch {
 	case runErr != nil:
 		return fmt.Errorf("cache-masked preparation could not execute: %w: %w", runErr, ErrProofFailed)
 	case result.ExitCode == 0:
-		// npm need not consume cached packages, for example with no dependencies.
-		// Prove the complete recipe works without them rather than infer this
-		// from lockfile shape or accept installation alone as sufficient proof.
-		if err := b.proveRecipe(ctx, sourceDir, commit, imageRef, commands, scratch, true); err != nil {
+		// Hydration need not consume the cache, for example with no
+		// dependencies. Prove the complete recipe works without it rather than
+		// infer this from manifest shape or accept hydration alone as
+		// sufficient proof.
+		if err := b.proveRecipe(ctx, sourceDir, commit, imageRef, commands, scratch, cache); err != nil {
 			return fmt.Errorf("cache-independent verification: %w", err)
 		}
-	case !networkFailure.Match(result.Output):
+	case !networkAttempt.Match(result.Output):
 		return fmt.Errorf("cache-masked preparation failed without a registry/network attempt (%s): %w",
 			boundedOutput(result.Output), ErrProofFailed)
 	}
@@ -523,10 +581,10 @@ func (b *Builder) proveRecipe(
 	sourceDir, commit, imageRef string,
 	commands [][]string,
 	scratch string,
-	maskCache bool,
+	maskedCache string,
 ) error {
 	prefix := "positive"
-	if maskCache {
+	if maskedCache != "" {
 		prefix = "cache-masked"
 	}
 	for index, argv := range commands {
@@ -535,7 +593,7 @@ func (b *Builder) proveRecipe(
 			return fmt.Errorf("materialize positive workspace %d: %w", index, err)
 		}
 		preparation, err := b.backend.Run(ctx, runSpec{
-			ImageRef: imageRef, Workspace: workspace, Argv: []string{PreparationPath}, MaskCache: maskCache,
+			ImageRef: imageRef, Workspace: workspace, Argv: []string{PreparationPath}, MaskedCache: maskedCache,
 		})
 		if err != nil {
 			return fmt.Errorf("hydrate positive workspace %d: %w: %w", index, err, ErrProofFailed)
@@ -545,7 +603,7 @@ func (b *Builder) proveRecipe(
 				index, preparation.ExitCode, boundedOutput(preparation.Output), ErrProofFailed)
 		}
 		result, err := b.backend.Run(ctx, runSpec{
-			ImageRef: imageRef, Workspace: workspace, Argv: append([]string{}, argv...), MaskCache: maskCache,
+			ImageRef: imageRef, Workspace: workspace, Argv: append([]string{}, argv...), MaskedCache: maskedCache,
 		})
 		if err != nil {
 			return fmt.Errorf("recipe command %d %q: %w: %w", index, argv[0], err, ErrProofFailed)
@@ -565,6 +623,9 @@ func validateRequest(request Request) (Request, verify.Recipe, domain.Digest, er
 	}
 	if request.RepositoryID <= 0 {
 		return Request{}, verify.Recipe{}, "", fmt.Errorf("repository id %d: %w", request.RepositoryID, ErrInvalidRequest)
+	}
+	if !domain.ValidProjectGoModuleDir(request.GoModuleDir) {
+		return Request{}, verify.Recipe{}, "", fmt.Errorf("go module directory %q: %w", request.GoModuleDir, ErrInvalidRequest)
 	}
 	if !commitPattern.MatchString(request.CommitSHA) {
 		return Request{}, verify.Recipe{}, "", fmt.Errorf("commit %q is not a full lowercase SHA-1: %w",
@@ -649,11 +710,101 @@ func ValidateBuildProxy(raw string) error {
 	return nil
 }
 
+// createBuildContext selects the source's input layout, refuses inputs the
+// layout's toolchain does not support, and writes the build context: the
+// dependency manifests, the trusted recipe, and the toolchain's fixed
+// preparation helper, launcher, and Containerfile.
 func createBuildContext(
 	contextDir, sourceDir string,
 	request Request,
 	recipeDigest domain.Digest,
-) error {
+) (domain.ProjectImageInputLayout, error) {
+	layout, err := selectInputLayout(sourceDir, request.GoModuleDir)
+	if err != nil {
+		return domain.ProjectImageInputLayout{}, err
+	}
+	var preparation, launcher string
+	switch layout.Toolchain {
+	case domain.ProjectToolchainNPM:
+		preparation, launcher = prepareScript, nodeToolchainLauncher
+		err = stageNPMInputs(contextDir, sourceDir)
+	case domain.ProjectToolchainGo:
+		preparation, launcher = goPrepareScript(layout.GoModuleDir), goToolchainLauncher
+		err = stageGoInputs(contextDir, sourceDir, layout.GoModuleDir)
+	}
+	if err != nil {
+		return domain.ProjectImageInputLayout{}, err
+	}
+	if err := os.WriteFile(filepath.Join(contextDir, "recipe.json"), request.Recipe, 0o600); err != nil {
+		return domain.ProjectImageInputLayout{}, fmt.Errorf("write trusted recipe to build context: %w", err)
+	}
+	// Executable by design: the image invokes this fixed, builder-owned helper.
+	if err := os.WriteFile(filepath.Join(contextDir, "prepare"), []byte(preparation), 0o700); err != nil { //nolint:gosec // G306
+		return domain.ProjectImageInputLayout{}, fmt.Errorf("write preparation helper: %w", err)
+	}
+	if err := os.WriteFile(filepath.Join(contextDir, "toolchain-launcher"), []byte(launcher), 0o755); err != nil { //nolint:gosec // G306: executable fixed builder-owned helper
+		return domain.ProjectImageInputLayout{}, fmt.Errorf("write toolchain launcher: %w", err)
+	}
+	// WriteFile's mode is filtered by the caller's umask; image provenance
+	// requires these fixed launcher bytes to be executable with exactly 0755.
+	if err := os.Chmod(filepath.Join(contextDir, "toolchain-launcher"), 0o755); err != nil { //nolint:gosec // G302: public fixed launcher inside the private build context
+		return domain.ProjectImageInputLayout{}, fmt.Errorf("set toolchain launcher mode: %w", err)
+	}
+	containerfile := renderContainerfile(layout, request, recipeDigest)
+	if err := os.WriteFile(filepath.Join(contextDir, "Containerfile"), []byte(containerfile), 0o600); err != nil {
+		return domain.ProjectImageInputLayout{}, fmt.Errorf("write generated Containerfile: %w", err)
+	}
+	return layout, nil
+}
+
+// selectInputLayout decides which toolchain builds the source. A declared
+// module directory selects Go there and refuses a root package.json, since
+// one image carries one toolchain. Without one, a root package.json keeps
+// the npm path every existing image takes, and only a tree with no
+// package.json but a root go.mod selects Go at the root; a tree with
+// neither takes the npm path and fails on its missing manifest as before.
+func selectInputLayout(sourceDir, goModuleDir string) (domain.ProjectImageInputLayout, error) {
+	if !domain.ValidProjectGoModuleDir(goModuleDir) {
+		return domain.ProjectImageInputLayout{}, fmt.Errorf("go module directory %q: %w", goModuleDir, ErrInvalidRequest)
+	}
+	packageJSON, err := entryExists(filepath.Join(sourceDir, "package.json"))
+	if err != nil {
+		return domain.ProjectImageInputLayout{}, fmt.Errorf("inspect package.json: %w", err)
+	}
+	goLayout := domain.ProjectImageInputLayout{Toolchain: domain.ProjectToolchainGo, GoModuleDir: goModuleDir}
+	if goModuleDir != "" {
+		if packageJSON {
+			return domain.ProjectImageInputLayout{}, fmt.Errorf(
+				"source contains a root package.json beside the declared Go module %s; an image carries one toolchain",
+				goModuleDir)
+		}
+		return goLayout, nil
+	}
+	if packageJSON {
+		return domain.ProjectImageInputLayout{Toolchain: domain.ProjectToolchainNPM}, nil
+	}
+	goMod, err := entryExists(filepath.Join(sourceDir, "go.mod"))
+	if err != nil {
+		return domain.ProjectImageInputLayout{}, fmt.Errorf("inspect go.mod: %w", err)
+	}
+	if goMod {
+		return goLayout, nil
+	}
+	return domain.ProjectImageInputLayout{Toolchain: domain.ProjectToolchainNPM}, nil
+}
+
+// entryExists reports whether path names any directory entry, a dangling
+// symlink included.
+func entryExists(path string) (bool, error) {
+	if _, err := os.Lstat(path); err == nil {
+		return true, nil
+	} else if !errors.Is(err, os.ErrNotExist) {
+		return false, err
+	}
+	return false, nil
+}
+
+func stageNPMInputs(contextDir, sourceDir string) error {
 	for _, name := range unsupportedInputNames {
 		if _, err := os.Lstat(filepath.Join(sourceDir, name)); err == nil {
 			return fmt.Errorf("source contains unsupported npm input %s", name)
@@ -671,38 +822,35 @@ func createBuildContext(
 			return fmt.Errorf("copy %s from exact commit: %w", name, err)
 		}
 	}
-	if err := os.WriteFile(filepath.Join(contextDir, "recipe.json"), request.Recipe, 0o600); err != nil {
-		return fmt.Errorf("write trusted recipe to build context: %w", err)
-	}
-	// Executable by design: the image invokes this fixed, builder-owned helper.
-	if err := os.WriteFile(filepath.Join(contextDir, "prepare"), []byte(prepareScript), 0o700); err != nil { //nolint:gosec // G306
-		return fmt.Errorf("write preparation helper: %w", err)
-	}
-	if err := os.WriteFile(filepath.Join(contextDir, "toolchain-launcher"), []byte(nodeToolchainLauncher), 0o755); err != nil { //nolint:gosec // G306: executable fixed builder-owned helper
-		return fmt.Errorf("write Node toolchain launcher: %w", err)
-	}
-	// WriteFile's mode is filtered by the caller's umask; image provenance
-	// requires these fixed launcher bytes to be executable with exactly 0755.
-	if err := os.Chmod(filepath.Join(contextDir, "toolchain-launcher"), 0o755); err != nil { //nolint:gosec // G302: public fixed launcher inside the private build context
-		return fmt.Errorf("set Node toolchain launcher mode: %w", err)
-	}
-	containerfile := renderContainerfile(request, recipeDigest)
-	if err := os.WriteFile(filepath.Join(contextDir, "Containerfile"), []byte(containerfile), 0o600); err != nil {
-		return fmt.Errorf("write generated Containerfile: %w", err)
-	}
 	return nil
 }
 
 // bakedEnvironment records the environment inputs the build context carries:
-// the exact manifest bytes COPY will bake as the dependency seed, and this
-// binary's preparation implementation. It hashes the context's copies, not the
-// source tree's, so the record describes what the image is built from.
-func bakedEnvironment(contextDir string) (domain.ProjectImageEnvironment, error) {
+// the layout, the exact manifest bytes COPY will bake as the dependency seed,
+// and this binary's preparation implementation. It hashes the context's
+// copies, not the source tree's, so the record describes what the image is
+// built from. An npm environment leaves the toolchain empty, as every record
+// written before the Go path did.
+func bakedEnvironment(
+	contextDir string, layout domain.ProjectImageInputLayout,
+) (domain.ProjectImageEnvironment, error) {
 	environment := domain.ProjectImageEnvironment{PreparationDigest: PreparationDigest()}
-	for name, hash := range map[string]*string{
-		"package.json":      &environment.PackageJSONSHA256,
-		"package-lock.json": &environment.PackageLockSHA256,
-	} {
+	var manifests map[string]*string
+	switch layout.Toolchain {
+	case domain.ProjectToolchainNPM:
+		manifests = map[string]*string{
+			"package.json":      &environment.PackageJSONSHA256,
+			"package-lock.json": &environment.PackageLockSHA256,
+		}
+	case domain.ProjectToolchainGo:
+		environment.Toolchain = domain.ProjectToolchainGo
+		environment.GoModuleDir = layout.GoModuleDir
+		manifests = map[string]*string{
+			"go.mod": &environment.GoModSHA256,
+			"go.sum": &environment.GoSumSHA256,
+		}
+	}
+	for name, hash := range manifests {
 		content, err := os.ReadFile(filepath.Join(contextDir, name)) //nolint:gosec // G304: fixed manifest name inside the private build context
 		if err != nil {
 			return domain.ProjectImageEnvironment{}, fmt.Errorf("hash baked %s: %w", name, err)

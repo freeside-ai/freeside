@@ -66,6 +66,7 @@ type onboardConfig struct {
 	TempDir               string
 	DNS                   []string
 	BuildProxy            string
+	GoModuleDir           string
 }
 
 type stringList []string
@@ -316,7 +317,7 @@ func runOnboardCommand(
 				BaseImageRef: domain.ImageRef(cfg.BaseImage), BaseBuildRef: cfg.BaseBuildRef,
 				Registry: cfg.Registry, LocalRegistryPort: cfg.LocalRegistryPort,
 				ImageName: cfg.ImageName, RefTag: cfg.RefTag,
-				DNS: cfg.DNS, BuildProxy: cfg.BuildProxy,
+				DNS: cfg.DNS, BuildProxy: cfg.BuildProxy, GoModuleDir: cfg.GoModuleDir,
 			},
 		})
 		if runErr != nil {
@@ -390,6 +391,9 @@ func parseOnboardConfig(args []string, output io.Writer) (onboardConfig, error) 
 	flags.Var(&dns, "dns", "build DNS server; repeatable")
 	flags.StringVar(&cfg.BuildProxy, "build-proxy", "",
 		"build-only HTTP proxy URL without credentials, overriding the managed build proxy")
+	flags.StringVar(&cfg.GoModuleDir, "go-module-dir", "",
+		"repository-relative Go module directory to build a Go image for "+
+			"(default: Go at the root when it holds go.mod and no package.json, npm otherwise)")
 	if err := flags.Parse(args[1:]); err != nil {
 		return onboardConfig{}, err
 	}

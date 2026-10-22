@@ -12,6 +12,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"maps"
 	"net/http"
 	"os"
 	pathpkg "path"
@@ -224,6 +225,10 @@ func (a appleBackend) CheckProvenance(ctx context.Context, ref string, want prov
 	if !validDigest(want.ImageDigest) {
 		return fmt.Errorf("provenance check requires a valid built-image digest, got %q", want.ImageDigest)
 	}
+	if err := want.Layout.Validate(); err != nil {
+		return fmt.Errorf("provenance check requires a valid input layout: %w", err)
+	}
+	toolchain := expectedToolchainEvidence(want)
 	report, err := a.inspectImage(ctx, ref)
 	if err != nil {
 		return err
@@ -253,7 +258,7 @@ func (a appleBackend) CheckProvenance(ctx context.Context, ref string, want prov
 	if user := baseEvidence.Config.Config.User; !rootImageUser(user) {
 		return fmt.Errorf("build base config sets user %q, want the runtime-default root user", user)
 	}
-	projectEvidence, err := readEvidence(ctx, ref, want.ImageDigest, projectEvidenceTargets())
+	projectEvidence, err := readEvidence(ctx, ref, want.ImageDigest, projectEvidenceTargets(toolchain))
 	if err != nil {
 		return fmt.Errorf("host-verify project image: %w", err)
 	}
@@ -272,15 +277,14 @@ func (a appleBackend) CheckProvenance(ctx context.Context, ref string, want prov
 	}
 	labels := projectEvidence.Config.Config.Labels
 	expected := map[string]string{
-		"org.opencontainers.image.title":                    "freeside-project-image",
-		"ai.freeside.base.digest":                           want.BaseDigest,
-		"ai.freeside.project.repository":                    want.Repository,
-		"ai.freeside.project.repository-id":                 strconv.FormatInt(want.RepositoryID, 10),
-		"ai.freeside.project.commit":                        want.CommitSHA,
-		"ai.freeside.project.recipe-digest":                 string(want.RecipeDigest),
-		"ai.freeside.project.toolchain.node.version":        want.NodeVersion,
-		"ai.freeside.project.toolchain.node.archive-sha256": want.NodeToolchainArchiveSHA256,
+		"org.opencontainers.image.title":    "freeside-project-image",
+		"ai.freeside.base.digest":           want.BaseDigest,
+		"ai.freeside.project.repository":    want.Repository,
+		"ai.freeside.project.repository-id": strconv.FormatInt(want.RepositoryID, 10),
+		"ai.freeside.project.commit":        want.CommitSHA,
+		"ai.freeside.project.recipe-digest": string(want.RecipeDigest),
 	}
+	maps.Copy(expected, toolchain.labels)
 	for key, value := range expected {
 		if labels[key] != value {
 			return fmt.Errorf("image label %s = %q, want %q", key, labels[key], value)
@@ -295,28 +299,30 @@ func (a appleBackend) CheckProvenance(ctx context.Context, ref string, want prov
 	}
 	recipeDigest := contentaddr.Sum(recipeBytes)
 	if recipeDigest != string(want.RecipeDigest) ||
-		!bytes.Equal(prepareBytes, []byte(prepareScript)) {
+		!bytes.Equal(prepareBytes, []byte(toolchain.prepare)) {
 		return fmt.Errorf("embedded provenance file digests do not match the build inputs")
 	}
-	archive, archiveFound := files[nodeToolchainArchivePath]
-	archiveDigest := fmt.Sprintf("%x", sha256.Sum256(archive))
-	if !archiveFound || archiveDigest != want.NodeToolchainArchiveSHA256 {
-		return fmt.Errorf("embedded Node toolchain archive does not match the pinned input")
+	for _, pinned := range toolchain.archives {
+		archive, archiveFound := files[pinned.path]
+		archiveDigest := fmt.Sprintf("%x", sha256.Sum256(archive))
+		if !archiveFound || archiveDigest != pinned.sha256 {
+			return fmt.Errorf("embedded %s archive does not match the pinned input", pinned.name)
+		}
+		if modes[pinned.path] != 0o644 {
+			return fmt.Errorf("embedded project-image provenance files have invalid modes")
+		}
 	}
-	if modes[nodeToolchainArchivePath] != 0o644 || modes[PreparationPath] != 0o700 {
+	if modes[PreparationPath] != 0o700 {
 		return fmt.Errorf("embedded project-image provenance files have invalid modes")
 	}
-	for _, launcher := range []string{nodeLauncherPath, npmLauncherPath, npxLauncherPath} {
-		if !bytes.Equal(files[launcher], []byte(nodeToolchainLauncher)) || modes[launcher] != 0o755 {
-			return fmt.Errorf("embedded Node toolchain launcher %s does not match the builder input", launcher)
+	for _, launcher := range toolchain.launchers {
+		if !bytes.Equal(files[launcher], []byte(toolchain.launcher)) || modes[launcher] != 0o755 {
+			return fmt.Errorf("embedded %s launcher %s does not match the builder input", toolchain.name, launcher)
 		}
 	}
 	// The recorded environment claims these exact seed bytes. Prove the claim
 	// against the image, not only against the context the build was given.
-	for path, wantHash := range map[string]string{
-		seedPackageJSONPath: want.PackageJSONSHA256,
-		seedPackageLockPath: want.PackageLockSHA256,
-	} {
+	for path, wantHash := range toolchain.seeds {
 		seed, found := files[path]
 		if !found || manifestSHA256(seed) != wantHash {
 			return fmt.Errorf("baked dependency seed %s does not match the recorded environment", path)
@@ -427,8 +433,8 @@ func (a appleBackend) Run(ctx context.Context, spec runSpec) (result runResult, 
 		"--label", ownershipLabel + "=" + token,
 		"--network", "none",
 	}
-	if spec.MaskCache {
-		args = append(args, "--tmpfs", NPMCachePath)
+	if spec.MaskedCache != "" {
+		args = append(args, "--tmpfs", spec.MaskedCache)
 	}
 	if spec.Workspace != "" {
 		// Match ProjectImageRoom's preparation and recipe environment so the
@@ -1143,21 +1149,97 @@ const (
 	maxOCILayers         = 128
 	maxOCILayerBytes     = 1 << 30
 	maxNodeArchiveBytes  = 64 << 20
+	maxGoArchiveBytes    = 128 << 20
+	maxLintArchiveBytes  = 64 << 20
 	maxBusyboxBytes      = 8 << 20
 )
 
-func projectEvidenceTargets() map[string]int64 {
-	return map[string]int64{
-		ward.ProjectRecipePath:   maxRecipeBytes,
-		PreparationPath:          maxPrepareBytes,
-		nodeToolchainArchivePath: maxNodeArchiveBytes,
-		nodeLauncherPath:         maxPrepareBytes,
-		npmLauncherPath:          maxPrepareBytes,
-		npxLauncherPath:          maxPrepareBytes,
-		busyboxPath:              maxBusyboxBytes,
-		seedPackageJSONPath:      maxManifestBytes,
-		seedPackageLockPath:      maxManifestBytes,
+// toolchainEvidence is what a project image of one toolchain carries beyond
+// the shared provenance: its labels, its pinned archives, its launcher bytes
+// at each launcher path, its preparation helper, and its baked dependency
+// seeds with the hashes the record claims.
+type toolchainEvidence struct {
+	name      string
+	labels    map[string]string
+	archives  []pinnedArchive
+	launcher  string
+	launchers []string
+	prepare   string
+	seeds     map[string]string
+}
+
+type pinnedArchive struct {
+	name     string
+	path     string
+	sha256   string
+	maxBytes int64
+}
+
+func expectedToolchainEvidence(want provenanceSpec) toolchainEvidence {
+	switch want.Layout.Toolchain {
+	case domain.ProjectToolchainNPM:
+		return toolchainEvidence{
+			name: "Node toolchain",
+			labels: map[string]string{
+				"ai.freeside.project.toolchain.node.version":        want.NodeVersion,
+				"ai.freeside.project.toolchain.node.archive-sha256": want.NodeToolchainArchiveSHA256,
+			},
+			archives: []pinnedArchive{{
+				name: "Node toolchain", path: nodeToolchainArchivePath,
+				sha256: want.NodeToolchainArchiveSHA256, maxBytes: maxNodeArchiveBytes,
+			}},
+			launcher:  nodeToolchainLauncher,
+			launchers: []string{nodeLauncherPath, npmLauncherPath, npxLauncherPath},
+			prepare:   prepareScript,
+			seeds: map[string]string{
+				seedPackageJSONPath: want.PackageJSONSHA256,
+				seedPackageLockPath: want.PackageLockSHA256,
+			},
+		}
+	case domain.ProjectToolchainGo:
+		return toolchainEvidence{
+			name: "Go toolchain",
+			labels: map[string]string{
+				"ai.freeside.project.toolchain.go.version":                   want.GoVersion,
+				"ai.freeside.project.toolchain.go.archive-sha256":            want.GoToolchainArchiveSHA256,
+				"ai.freeside.project.toolchain.golangci-lint.version":        want.GolangciLintVersion,
+				"ai.freeside.project.toolchain.golangci-lint.archive-sha256": want.GolangciLintArchiveSHA256,
+			},
+			archives: []pinnedArchive{{
+				name: "Go toolchain", path: goToolchainArchivePath,
+				sha256: want.GoToolchainArchiveSHA256, maxBytes: maxGoArchiveBytes,
+			}, {
+				name: "golangci-lint", path: golangciLintArchivePath,
+				sha256: want.GolangciLintArchiveSHA256, maxBytes: maxLintArchiveBytes,
+			}},
+			launcher:  goToolchainLauncher,
+			launchers: []string{goLauncherPath, gofmtLauncherPath, golangciLintLauncherPath},
+			prepare:   goPrepareScript(want.Layout.GoModuleDir),
+			seeds: map[string]string{
+				seedGoModPath: want.GoModSHA256,
+				seedGoSumPath: want.GoSumSHA256,
+			},
+		}
 	}
+	return toolchainEvidence{}
+}
+
+func projectEvidenceTargets(toolchain toolchainEvidence) map[string]int64 {
+	targets := map[string]int64{
+		ward.ProjectRecipePath: maxRecipeBytes,
+		PreparationPath:        maxPrepareBytes,
+		busyboxPath:            maxBusyboxBytes,
+	}
+	for _, pinned := range toolchain.archives {
+		targets[pinned.path] = pinned.maxBytes
+	}
+	for _, launcher := range toolchain.launchers {
+		targets[launcher] = maxPrepareBytes
+	}
+	for seed := range toolchain.seeds {
+		targets[seed] = maxManifestBytes
+	}
+	return targets
 }
 
 func readOCIEvidence(

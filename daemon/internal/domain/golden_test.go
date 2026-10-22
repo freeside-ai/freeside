@@ -1451,6 +1451,25 @@ func TestGolden(t *testing.T) {
 		t.Fatal(err)
 	}
 
+	projectImageGoEnvironment, err := domain.NewProjectImage(domain.ProjectImageInput{
+		Repository: "freeside-ai/freeside", RepositoryID: 1023456789,
+		CommitSHA: projectImage.CommitSHA, RecipeDigest: projectImage.RecipeDigest,
+		PreparationCommand: projectImage.PreparationCommand,
+		BaseImageRef:       projectImage.BaseImageRef,
+		ImageRef: domain.ImageRef("127.0.0.1:5100/freeside-project-freeside-ai-freeside@sha256:" +
+			strings.Repeat("cd", 32)),
+		Environment: &domain.ProjectImageEnvironment{
+			Toolchain:         domain.ProjectToolchainGo,
+			GoModuleDir:       "daemon",
+			GoModSHA256:       strings.Repeat("78", 32),
+			GoSumSHA256:       strings.Repeat("9a", 32),
+			PreparationDigest: domain.Digest("sha256:" + strings.Repeat("56", 32)),
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
 	project, err := domain.NewProject("project-alpha", "freeasinbird/gh-imgup", 1278475858)
 	if err != nil {
 		t.Fatal(err)
@@ -2015,6 +2034,7 @@ func TestGolden(t *testing.T) {
 		{"current_import_start", currentImportStart},
 		{"project_image", projectImage},
 		{"project_image_environment", projectImageWithEnvironment},
+		{"project_image_go_environment", projectImageGoEnvironment},
 		{"project", project},
 		{"backend_conformance", backendConformance},
 		{"backend_conformance_failed", failedConformance},

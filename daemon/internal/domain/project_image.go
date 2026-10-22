@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"path"
 	"regexp"
 	"strings"
 
@@ -15,11 +16,86 @@ const (
 	// It must never change: every image recorded before environment evidence
 	// existed validates against this preimage.
 	projectImageEncodingVersion = "freeside.project-image/v1"
-	// projectImageEnvironmentEncodingVersion addresses a record that carries
-	// an environment, which the preimage then includes.
+	// projectImageEnvironmentEncodingVersion addresses an npm record that
+	// carries an environment, which the preimage then includes.
 	projectImageEnvironmentEncodingVersion = "freeside.project-image/v2"
 	projectImageEnvironmentVersion         = "freeside.project-image-environment/v1"
+	// projectImageGoEncodingVersion and projectImageGoEnvironmentVersion
+	// address a Go record. npm records keep the v2 preimage and v1 environment
+	// digest byte for byte, so no stored ID or environment digest changes; a
+	// Go record cannot share an address with any npm record.
+	projectImageGoEncodingVersion    = "freeside.project-image/v3"
+	projectImageGoEnvironmentVersion = "freeside.project-image-environment/v2"
 )
+
+// ProjectToolchain names the toolchain path a project image bakes (plan §5.7,
+// Toolchains).
+type ProjectToolchain string
+
+const (
+	// ProjectToolchainNPM bakes a pinned Node distribution and the npm ci
+	// closure of the root package.json and package-lock.json.
+	ProjectToolchainNPM ProjectToolchain = "npm"
+	// ProjectToolchainGo bakes a pinned Go distribution, golangci-lint, and
+	// the module cache one module's go.mod and go.sum pin.
+	ProjectToolchainGo ProjectToolchain = "go"
+)
+
+// AllProjectToolchains lists every valid ProjectToolchain.
+var AllProjectToolchains = []ProjectToolchain{ProjectToolchainNPM, ProjectToolchainGo}
+
+func (t ProjectToolchain) valid() bool {
+	switch t {
+	case ProjectToolchainNPM, ProjectToolchainGo:
+		return true
+	default:
+		return false
+	}
+}
+
+// ProjectImageInputLayout says where a project image's environment inputs
+// live in a tree: the toolchain and, for Go, the module directory relative
+// to the repository root ("" is the root).
+type ProjectImageInputLayout struct {
+	Toolchain   ProjectToolchain
+	GoModuleDir string
+}
+
+// Validate rejects a layout no project image can record.
+func (l ProjectImageInputLayout) Validate() error {
+	if !l.Toolchain.valid() {
+		return fmt.Errorf("project image toolchain %q: %w", l.Toolchain, ErrProjectImageInvalid)
+	}
+	if !ValidProjectGoModuleDir(l.GoModuleDir) ||
+		(l.Toolchain == ProjectToolchainNPM && l.GoModuleDir != "") {
+		return fmt.Errorf("project image go_module_dir %q: %w", l.GoModuleDir, ErrProjectImageInvalid)
+	}
+	return nil
+}
+
+// projectGoModuleDirSegment admits no leading dot, so neither "." nor ".."
+// nor a hidden directory can be a segment, and no character a shell or a
+// Containerfile would interpret.
+var projectGoModuleDirSegment = regexp.MustCompile(`^[A-Za-z0-9_][A-Za-z0-9_.-]*$`)
+
+// ValidProjectGoModuleDir reports whether dir can name a Go image's module
+// directory: empty for the repository root, or a relative slash-separated
+// path whose segments are plain names. It never admits an absolute path, a
+// ".." segment, or a non-canonical spelling, so one directory has one name.
+func ValidProjectGoModuleDir(dir string) bool {
+	if dir == "" {
+		return true
+	}
+	if len(dir) > 255 {
+		return false
+	}
+	for _, segment := range strings.Split(dir, "/") {
+		if !projectGoModuleDirSegment.MatchString(segment) {
+			return false
+		}
+	}
+	return true
+}
 
 var (
 	// ErrProjectImageInvalid marks a malformed project-image provenance field.
@@ -73,29 +149,58 @@ type ProjectImage struct {
 // runtime environment beyond the fields ProjectImage already binds
 // (RecipeDigest and BaseImageRef). A base whose inputs equal these gets the
 // same environment from the image as the build commit did.
+//
+// Every field a toolchain does not use is omitted, not rendered null: an npm
+// record must keep the exact JSON it had before Go fields existed, because
+// its ID and environment digest hash those bytes.
 type ProjectImageEnvironment struct {
+	// Toolchain is empty for npm, which every record built before the Go
+	// path carries, and "go" for a Go image; an explicit "npm" is invalid so
+	// one environment has one encoding. ResolvedToolchain reads it.
+	Toolchain ProjectToolchain `json:"toolchain,omitempty"`
+	// GoModuleDir is a Go image's module directory relative to the
+	// repository root, empty for the root.
+	GoModuleDir string `json:"go_module_dir,omitempty"`
 	// PackageJSONSHA256 and PackageLockSHA256 are the lowercase hex SHA-256
-	// of the exact manifest bytes baked as the image's dependency seed.
-	PackageJSONSHA256 string `json:"package_json_sha256"`
-	PackageLockSHA256 string `json:"package_lock_sha256"`
+	// of the exact npm manifest bytes baked as the image's dependency seed.
+	PackageJSONSHA256 string `json:"package_json_sha256,omitempty"`
+	PackageLockSHA256 string `json:"package_lock_sha256,omitempty"`
+	// GoModSHA256 and GoSumSHA256 are the same for a Go image's module.
+	GoModSHA256 string `json:"go_mod_sha256,omitempty"`
+	GoSumSHA256 string `json:"go_sum_sha256,omitempty"`
 	// PreparationDigest addresses the builder's fixed toolchain and
 	// preparation sources at build time.
 	PreparationDigest Digest `json:"preparation_digest"`
 }
 
+// ResolvedToolchain is the toolchain the environment baked: npm when the
+// record names none.
+func (e ProjectImageEnvironment) ResolvedToolchain() ProjectToolchain {
+	if e.Toolchain == "" {
+		return ProjectToolchainNPM
+	}
+	return e.Toolchain
+}
+
 // ProjectImageBaseInputs is what one run base holds for each input a project
-// image bakes, observed from that exact commit's tree. A hash or digest is
-// empty when the base holds no file at the path.
+// image bakes, observed from that exact commit's tree under one image's input
+// layout. A hash or digest is empty when the base holds no file at the path,
+// and the hashes of the other toolchain are always empty.
 type ProjectImageBaseInputs struct {
 	CommitSHA         string
 	PackageJSONSHA256 string
 	PackageLockSHA256 string
+	// GoModSHA256 and GoSumSHA256 hash the layout's module go.mod and go.sum.
+	GoModSHA256 string
+	GoSumSHA256 string
 	// RecipeDigest addresses the recipe the base declares in its own tree. It
 	// is empty for a repository whose recipe is supplied outside the tree,
 	// which declares nothing an image's baked recipe could contradict.
 	RecipeDigest Digest
-	// UnsupportedInputs names the installation-configuration files present at
-	// the base that no project image supports.
+	// UnsupportedInputs names the inputs present at the base that no project
+	// image of the layout's toolchain supports: npm's lock and configuration
+	// files, or a Go module's vendor directory, a go.work file, or a go.mod
+	// replace whose target is a local path.
 	UnsupportedInputs []string
 }
 
@@ -165,9 +270,9 @@ func NewProjectImage(in ProjectImageInput) (ProjectImage, error) {
 // digests, and each produced artifact needs its own truthful record.
 //
 // A record without an environment keeps the v1 preimage so its existing ID
-// still validates. A record with one uses the v2 preimage, which includes it,
-// so the environment cannot be added to, removed from, or altered in a stored
-// record without changing the ID.
+// still validates. A record with one uses the v2 preimage for npm and v3 for
+// Go, which include it, so the environment cannot be added to, removed from,
+// or altered in a stored record without changing the ID.
 func (p ProjectImage) ComputeID() (Digest, error) {
 	canonical := canonicalProjectImage{
 		Version:            projectImageEncodingVersion,
@@ -182,6 +287,9 @@ func (p ProjectImage) ComputeID() (Digest, error) {
 	var preimage any = canonical
 	if p.Environment != nil {
 		canonical.Version = projectImageEnvironmentEncodingVersion
+		if p.Environment.ResolvedToolchain() == ProjectToolchainGo {
+			canonical.Version = projectImageGoEncodingVersion
+		}
 		preimage = canonicalProjectImageWithEnvironment{
 			canonicalProjectImage: canonical, Environment: *p.Environment,
 		}
@@ -196,8 +304,12 @@ func (p ProjectImage) ComputeID() (Digest, error) {
 // Digest returns the versioned content address of the environment alone, the
 // lookup value a store keeps beside the record body.
 func (e ProjectImageEnvironment) Digest() (Digest, error) {
+	version := projectImageEnvironmentVersion
+	if e.ResolvedToolchain() == ProjectToolchainGo {
+		version = projectImageGoEnvironmentVersion
+	}
 	body, err := json.Marshal(canonicalProjectImageEnvironment{
-		Version: projectImageEnvironmentVersion, ProjectImageEnvironment: e,
+		Version: version, ProjectImageEnvironment: e,
 	})
 	if err != nil {
 		return "", fmt.Errorf("project image environment digest: %w", err)
@@ -206,19 +318,99 @@ func (e ProjectImageEnvironment) Digest() (Digest, error) {
 }
 
 func (e ProjectImageEnvironment) validate() error {
-	if !projectSHA256Pattern.MatchString(e.PackageJSONSHA256) {
-		return fmt.Errorf("project image environment package_json_sha256 %q: %w",
-			e.PackageJSONSHA256, ErrProjectImageInvalid)
+	goImage := false
+	switch e.Toolchain {
+	case "":
+		if e.GoModuleDir != "" {
+			return fmt.Errorf("project image npm environment names go_module_dir %q: %w",
+				e.GoModuleDir, ErrProjectImageInvalid)
+		}
+	case ProjectToolchainGo:
+		goImage = true
+		if !ValidProjectGoModuleDir(e.GoModuleDir) {
+			return fmt.Errorf("project image environment go_module_dir %q: %w",
+				e.GoModuleDir, ErrProjectImageInvalid)
+		}
+	default:
+		return fmt.Errorf("project image environment toolchain %q: %w",
+			e.Toolchain, ErrProjectImageInvalid)
 	}
-	if !projectSHA256Pattern.MatchString(e.PackageLockSHA256) {
-		return fmt.Errorf("project image environment package_lock_sha256 %q: %w",
-			e.PackageLockSHA256, ErrProjectImageInvalid)
+	// Exactly the toolchain's own pair: the other pair's presence would make
+	// the record claim inputs it never baked.
+	for _, hash := range []struct {
+		name, value string
+		required    bool
+	}{
+		{"package_json_sha256", e.PackageJSONSHA256, !goImage},
+		{"package_lock_sha256", e.PackageLockSHA256, !goImage},
+		{"go_mod_sha256", e.GoModSHA256, goImage},
+		{"go_sum_sha256", e.GoSumSHA256, goImage},
+	} {
+		if hash.required && !projectSHA256Pattern.MatchString(hash.value) {
+			return fmt.Errorf("project image environment %s %q: %w",
+				hash.name, hash.value, ErrProjectImageInvalid)
+		}
+		if !hash.required && hash.value != "" {
+			return fmt.Errorf("project image %s environment carries %s: %w",
+				e.ResolvedToolchain(), hash.name, ErrProjectImageInvalid)
+		}
 	}
 	if !contentaddr.Valid(string(e.PreparationDigest)) {
 		return fmt.Errorf("project image environment preparation_digest %q: %w",
 			e.PreparationDigest, ErrProjectImageInvalid)
 	}
 	return nil
+}
+
+// InputLayout is where the image's environment inputs live in a tree: npm at
+// the root for a record without an environment, which is admissible only at
+// its build commit anyway.
+func (p ProjectImage) InputLayout() ProjectImageInputLayout {
+	if p.Environment == nil {
+		return ProjectImageInputLayout{Toolchain: ProjectToolchainNPM}
+	}
+	return ProjectImageInputLayout{
+		Toolchain: p.Environment.ResolvedToolchain(), GoModuleDir: p.Environment.GoModuleDir,
+	}
+}
+
+// ChangedManifests names, in a fixed order, each dependency manifest of the
+// environment's toolchain whose hash at base differs from the baked one: the
+// root package.json and package-lock.json for npm, the module's go.mod and
+// go.sum (as repository-relative paths) for Go. Empty means the base holds
+// exactly the baked manifests.
+func (e ProjectImageEnvironment) ChangedManifests(base ProjectImageBaseInputs) []string {
+	type manifest struct{ name, baked, observed string }
+	var manifests []manifest
+	switch e.ResolvedToolchain() {
+	case ProjectToolchainNPM:
+		manifests = []manifest{
+			{"package.json", e.PackageJSONSHA256, base.PackageJSONSHA256},
+			{"package-lock.json", e.PackageLockSHA256, base.PackageLockSHA256},
+		}
+	case ProjectToolchainGo:
+		manifests = []manifest{
+			{path.Join(e.GoModuleDir, "go.mod"), e.GoModSHA256, base.GoModSHA256},
+			{path.Join(e.GoModuleDir, "go.sum"), e.GoSumSHA256, base.GoSumSHA256},
+		}
+	}
+	var changed []string
+	for _, m := range manifests {
+		if m.baked != m.observed {
+			changed = append(changed, m.name)
+		}
+	}
+	return changed
+}
+
+func (t ProjectToolchain) displayName() string {
+	switch t {
+	case ProjectToolchainNPM:
+		return "npm"
+	case ProjectToolchainGo:
+		return "Go"
+	}
+	return string(t)
 }
 
 // AdmissibleAt reports whether the image may serve a run whose base is the
@@ -229,9 +421,11 @@ func (e ProjectImageEnvironment) validate() error {
 // The image's own build commit is always admissible, and for a record without
 // an environment it is the only admissible base. Any other base is admissible
 // only when every recorded input is unchanged there: both dependency
-// manifests, the absence of unsupported installation configuration, and the
-// preparation implementation; and when the base declares no recipe that
-// contradicts the baked one.
+// manifests of the record's toolchain (for Go, in its module directory), the
+// absence of inputs that toolchain does not support, and the preparation
+// implementation; and when the base declares no recipe that contradicts the
+// baked one. base must be observed under the image's InputLayout; a base read
+// under another layout lacks the record's manifest hashes and is refused.
 //
 // The recipe is the one input a base need not hold. An image runs the recipe
 // it baked, which the caller checks against current approval, so a base that
@@ -261,14 +455,11 @@ func (p ProjectImage) AdmissibleAt(base ProjectImageBaseInputs, currentPreparati
 			"build commit; rebuild the image to reuse it across source-only commits")
 	}
 	if len(base.UnsupportedInputs) != 0 {
-		return refuse("the base contains unsupported npm input %s",
-			strings.Join(base.UnsupportedInputs, ", "))
+		return refuse("the base contains unsupported %s input %s",
+			p.Environment.ResolvedToolchain().displayName(), strings.Join(base.UnsupportedInputs, ", "))
 	}
-	if base.PackageJSONSHA256 != p.Environment.PackageJSONSHA256 {
-		return refuse("package.json at the base differs from the baked manifest")
-	}
-	if base.PackageLockSHA256 != p.Environment.PackageLockSHA256 {
-		return refuse("package-lock.json at the base differs from the baked manifest")
+	if changed := p.Environment.ChangedManifests(base); len(changed) != 0 {
+		return refuse("%s at the base differs from the baked manifest", changed[0])
 	}
 	if base.RecipeDigest != "" && base.RecipeDigest != p.RecipeDigest {
 		return refuse("the base declares a different verification recipe (%s) than the image baked (%s)",
