@@ -25,12 +25,15 @@ Use `--registry HOST[/PATH]` instead for a shared image. The image is
 | Input | Pin |
 | --- | --- |
 | Base | `docker.io/library/debian:trixie-slim@sha256:020c0d20…` |
-| Codex CLI | 0.147.0, upstream `codex-package-aarch64-unknown-linux-musl.tar.zst`, sha256 literal in the Containerfile |
+| Codex CLI | 0.162.1, upstream `codex-package-aarch64-unknown-linux-musl.tar.zst`, sha256 literal in the Containerfile |
 
 The pin moved to **0.147.0** in #623. That release removed the earlier bundle
 artifact, so the image now consumes the package artifact while preserving the
-installed paths the CLI uses for its bundled resources. Future bumps re-prove
-the contracts the #395 and #401 notes list under Pinning.
+installed paths the CLI uses for its bundled resources. It moved to
+**0.162.1** in #2195, because 0.147.0 and earlier are refused
+`gpt-6.1-sol` on a ChatGPT account; the re-proof is
+`devlog/2026-10-22-1558-cli-pin-reproof.md`. Future bumps re-prove the
+contracts the #395 and #401 notes list under Pinning.
 
 `busybox-static`, `ca-certificates`, `diffutils`, `file`, `git`, `jq`, `patch`,
 and `ripgrep` come from Debian's archive and are **recorded, not pinned**: their
@@ -50,13 +53,16 @@ standalone layout: `bin/codex` and `bin/codex-code-mode-host` plus
 `codex-resources` containing the bundled bwrap and zsh. The image installs
 those as `/usr/local/bin/codex`, `/usr/local/bin/codex-code-mode-host`, and
 `/usr/local/bin/codex-resources`, the CLI's first legacy resource candidate.
-The code-mode host is load-bearing on 0.147.0, not a code-mode convenience:
-the CLI's default tool surface routes composite shell commands through it, and
-without the executable those exec calls fail closed while the model can then
+The code-mode host is load-bearing, not a code-mode convenience: the CLI's
+default tool surface routes composite shell commands through it, and without
+the executable those exec calls fail closed. On 0.147.0 the model could then
 report success it never had (probed 2026-08-09; see
-`devlog/2026-08-09-1925-codex-0147-contract-reproof.md`). The image still
-omits the package's `codex-path/rg`, because Debian ripgrep is
-already the recorded runtime dependency. The npm package
+`devlog/2026-08-09-1925-codex-0147-contract-reproof.md`); on 0.162.1 the
+calls still fail without it, and the model reported the failure (probed
+2026-10-22). The image still omits the package's `codex-path/rg`, because
+Debian ripgrep is already the recorded runtime dependency, and its
+`codex-resources/voice` (a voice host and its GStreamer libraries), which no
+launch uses. The npm package
 `@openai/codex` is a JS shim that resolves platform binaries at install time,
 which would add Node, npm, and a resolution step to pin. One sha256 literal over
 one artifact is the stronger pin.
@@ -95,11 +101,13 @@ What the runtime supplies, and what the daemon must:
 - **The command is daemon-owned.** The image defines none; ward passes
   `AgentSpec.Command`, and the gate inspect-verifies it before the container
   starts.
-- **The launcher environment is the only containment for spawned commands.**
-  `shell_environment_policy` is inert on the `codex exec` path and children
-  inherit the launcher environment verbatim (#401 gate 5), so ward constructs a
-  minimal environment explicitly and treats everything it exports as reaching
-  untrusted model-spawned code.
+- **The launcher environment is the containment for spawned commands.** Ward
+  passes no `shell_environment_policy`, so children inherit the launcher
+  environment verbatim; ward constructs a minimal environment explicitly and
+  treats everything it exports as reaching untrusted model-spawned code. The
+  policy was inert on the `codex exec` path through 0.147.0 (#401 gate 5); on
+  0.162.1 `inherit="none"` and `exclude` do strip variables from children
+  (probed 2026-10-22), an available layer ward does not rely on.
 - **The CLI does not self-update, but it does probe for updates.** There is no
   background updater and no auto-update config key; `codex update` is an explicit
   subcommand that resolves its target from the install context, which here is a

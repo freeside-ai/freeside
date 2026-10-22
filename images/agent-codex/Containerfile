@@ -37,14 +37,19 @@
 # `/usr/local/bin/codex-resources` shape, the CLI's first legacy candidate
 # relative to `/usr/local/bin/codex`, so its bundled bwrap and zsh remain
 # available without adding the package's separate `codex-path` to PATH. The
-# code-mode host ships beside the CLI because 0.147.0's default tool surface
-# routes composite shell commands through it: without the executable those
-# exec calls fail closed on every attempt, and the model can then report
-# success it never had (probed 2026-08-09; see
-# devlog/2026-08-09-1925-codex-0147-contract-reproof.md).
+# code-mode host ships beside the CLI because its default tool surface routes
+# composite shell commands through it: without the executable those exec calls
+# fail closed on every attempt, and on 0.147.0 the model could then report
+# success it never had (probed 2026-08-09 and again on 0.162.1 2026-10-22; see
+# devlog/2026-08-09-1925-codex-0147-contract-reproof.md and
+# devlog/2026-10-22-1558-cli-pin-reproof.md). The package's
+# `codex-resources/voice` (a voice host and its GStreamer libraries, absent
+# from 0.147.0's package) is dropped in the build stage: a review or writer launch never
+# speaks, and an unused executable with its own shared libraries is surface
+# the image has no reason to carry.
 ARG BASE_IMAGE=docker.io/library/debian:trixie-slim@sha256:020c0d20b9880058cbe785a9db107156c3c75c2ac944a6aa7ab59f2add76a7bd
-ARG CODEX_VERSION=0.147.0
-ARG CODEX_PACKAGE_SHA256=692ff5c5d9eb86774c0448d930895e46659eee6a2c12f46b97399da458c1e8b7
+ARG CODEX_VERSION=0.162.1
+ARG CODEX_PACKAGE_SHA256=2a99f082df0575af2aa7ca0e98aac655b334d07043b3b72590a430ea747e0fc1
 
 FROM ${BASE_IMAGE} AS build
 
@@ -65,6 +70,7 @@ RUN set -eux; \
 	mkdir -p /out; \
 	tar --zstd -xf /tmp/codex-package.tar.zst -C /out; \
 	rm /tmp/codex-package.tar.zst; \
+	rm -r /out/codex-resources/voice; \
 	chmod 0755 /out/bin/codex /out/bin/codex-code-mode-host /out/codex-resources/bwrap; \
 	/out/bin/codex --version
 
