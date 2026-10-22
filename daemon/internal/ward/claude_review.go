@@ -43,7 +43,8 @@ const (
 	claudeReviewSnapshotInstrSource = codexReviewSnapshotTarget + "/" + claudeReviewSnapshotInstrName
 )
 
-// claudeReviewProvider is the Claude shadow ReviewSource's vendor seam. Every
+// claudeReviewProvider is the Claude ReviewSource's vendor seam, for the routed
+// reviewer and the shadow reviewer alike (#397). Every
 // value it returns is a Claude-native constant; the neutral core reads each one
 // so no Codex value leaks into a Claude review.
 type claudeReviewProvider struct{}
@@ -252,7 +253,7 @@ func claudeReviewCommand(workspaceTarget, model, reasoningEffort, prompt string)
 		// workspace's .claude settings, commands, hooks, and MCP config), so only
 		// the admitted instruction bundle and administrator policy are
 		// authoritative. Without it, --dangerously-skip-permissions would let a
-		// reviewed repo's own configuration influence its shadow review and
+		// reviewed repo's own configuration influence its review and
 		// suppress or fabricate findings. Matches the exec Claude launcher
 		// (daemon/internal/exec/claude/spec.go) and the plan's launch contract.
 		" --safe-mode" +
@@ -272,16 +273,20 @@ func claudeReviewCommand(workspaceTarget, model, reasoningEffort, prompt string)
 }
 
 // NewClaudeReviewLifecycle builds the Claude review runtime owner on the shared
-// review lifecycle, injecting the Claude provider seam.
+// review lifecycle, injecting the Claude provider seam. One lifecycle serves
+// both the routed and the shadow Claude source when both run.
 func NewClaudeReviewLifecycle(
 	rt Runtime, cfg Config, authorizeRuntimeResources RuntimeResourceAuthorizer,
 ) (*CodexReviewLifecycle, error) {
 	return newReviewLifecycle(claudeReviewProvider{}, rt, cfg, authorizeRuntimeResources)
 }
 
-// NewClaudeReviewSource builds the Claude shadow ReviewSource on the shared
-// review source, injecting the Claude provider seam before the shared
-// constructor validates the configuration digest against it.
+// NewClaudeReviewSource builds a Claude ReviewSource on the shared review
+// source, injecting the Claude provider seam before the shared constructor
+// validates the configuration digest against it. The daemon composes it for
+// the shadow reviewer and, when the reviewer line's agent runs Claude, for
+// routed review (#397). A Claude review binds the head but not the base: its
+// command takes no base SHA, so the source records no ExpectedBase for it.
 func NewClaudeReviewSource(cfg CodexReviewSourceConfig) (*CodexReviewSource, error) {
 	cfg.provider = claudeReviewProvider{}
 	return NewCodexReviewSource(cfg)

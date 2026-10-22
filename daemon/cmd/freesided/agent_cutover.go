@@ -49,19 +49,67 @@ func (e *roleAdmissionError) Unwrap() error { return e.Err }
 
 // reviewRole is what this daemon's composition fixes about a review role's
 // source: the code-owned review prompt, the harness client the source drives
-// (Codex for the routed reviewer, Claude for the shadow), the model shape the
-// review launch can pass, and the allowlist the source's proxy admits.
-func reviewRole(role domain.RoleName, egress []string) engine.ReviewRole {
-	client := domain.HarnessClientCodexCLI
-	if role == domain.RoleShadowReviewer {
-		client = domain.HarnessClientClaudeCode
-	}
+// and its vendor (provider), the model shape the review launch can pass, and
+// the allowlist the source's proxy admits.
+func reviewRole(role domain.RoleName, provider ward.RoutedReviewProvider, egress []string) engine.ReviewRole {
 	name, digest := ward.ProductionReviewPromptIdentity()
 	return engine.ReviewRole{
-		Role: role, PromptName: name, PromptDigest: digest, HarnessClient: client,
+		Role: role, PromptName: name, PromptDigest: digest,
+		HarnessClient: provider.HarnessClient, Vendor: provider.Vendor,
 		EffectiveEgress: egress, ValidModel: validReviewLaunchModel,
 	}
 }
+
+// shadowReviewProvider is the shadow reviewer's provider. The shadow arm is
+// Claude only (domain.ShadowReviewSource has the one member claude_local), so
+// its line is held to Claude whatever the routed reviewer runs.
+func shadowReviewProvider() ward.RoutedReviewProvider {
+	provider, _ := ward.LookupRoutedReviewProvider(domain.HarnessClientClaudeCode)
+	return provider
+}
+
+// reviewProviderFor selects the provider the daemon composes for a review
+// role. The reviewer line selects it (#397): the harness its agent runs picks
+// the routed source, and a harness ward keeps no routed provider for is
+// refused rather than run on an unproven source. There is no flag or setting
+// beside the line, so a restart with the same lineup composes the same source.
+func reviewProviderFor(
+	ctx context.Context, st *store.Store, tree agenttree.Tree, role domain.RoleName,
+) (ward.RoutedReviewProvider, error) {
+	if role == domain.RoleShadowReviewer {
+		return shadowReviewProvider(), nil
+	}
+	agent, err := engine.ResolveRole(ctx, st, tree, role)
+	if err != nil {
+		return ward.RoutedReviewProvider{}, &roleAdmissionError{Role: role, Err: err}
+	}
+	provider, ok := ward.LookupRoutedReviewProvider(agent.Enrollment.HarnessClient)
+	if !ok {
+		return ward.RoutedReviewProvider{}, &roleAdmissionError{Role: role, Err: &reviewProviderMismatch{
+			Harness: agent.Enrollment.HarnessClient,
+		}}
+	}
+	return provider, nil
+}
+
+// reviewProviderMismatch is a reviewer line the daemon cannot compose a
+// routed review for under this configuration: its harness has no routed
+// provider, or AuthMode is a -review-auth-mode that provider does not deliver.
+// Its text names only the harness and the mode, never the operator-authored
+// agent name, so preflight can show it as evidence.
+type reviewProviderMismatch struct {
+	Harness  domain.HarnessClientKind
+	AuthMode ward.CodexAuthMode
+}
+
+func (e *reviewProviderMismatch) Error() string {
+	if e.AuthMode == "" {
+		return fmt.Sprintf("the reviewer line's agent runs harness client %s, which has no routed review provider", e.Harness)
+	}
+	return fmt.Sprintf("-review-auth-mode %s is not a mode the %s reviewer accepts", e.AuthMode, e.Harness)
+}
+
+func (e *reviewProviderMismatch) Unwrap() error { return engine.ErrAgentNotAdmissible }
 
 // reviewRoleAgent resolves a review role's line and runs the review admission
 // checks (engine.CheckReviewRole) with no task in view: the startup and
@@ -69,28 +117,47 @@ func reviewRole(role domain.RoleName, egress []string) engine.ReviewRole {
 func reviewRoleAgent(
 	ctx context.Context, st *store.Store, tree agenttree.Tree, role domain.RoleName, now time.Time,
 ) (engine.ReviewRoleAgent, error) {
-	agent, err := engine.CheckReviewRole(ctx, st, tree, agentbaseline.RoleLaunch, reviewRole(role, nil), "", now)
+	provider, err := reviewProviderFor(ctx, st, tree, role)
 	if err != nil {
-		return engine.ReviewRoleAgent{}, &roleAdmissionError{Role: role, Err: err}
+		return engine.ReviewRoleAgent{}, err
+	}
+	return checkReviewRoleAgent(ctx, st, tree, reviewRole(role, provider, nil), now)
+}
+
+func checkReviewRoleAgent(
+	ctx context.Context, st *store.Store, tree agenttree.Tree, spec engine.ReviewRole, now time.Time,
+) (engine.ReviewRoleAgent, error) {
+	agent, err := engine.CheckReviewRole(ctx, st, tree, agentbaseline.RoleLaunch, spec, "", now)
+	if err != nil {
+		return engine.ReviewRoleAgent{}, &roleAdmissionError{Role: spec.Role, Err: err}
 	}
 	return agent, nil
 }
 
-// resolveReviewSelection fills the review identities, cost owners, models,
-// and efforts the removed flags carried from the reviewer and shadow reviewer
-// lines, so the review sources and the approved configuration digests read
-// the values the lineup selects. A role the configuration does not use is
-// not resolved.
+// resolveReviewSelection fills the routed review provider, and the review
+// identities, cost owners, models, and efforts the removed flags carried, from
+// the reviewer and shadow reviewer lines, so the review sources and the
+// approved configuration digests read the values the lineup selects. A role
+// the configuration does not use is not resolved. The routed review auth mode
+// stays a flag, and it must be one the selected provider delivers.
 func resolveReviewSelection(
 	ctx context.Context, st *store.Store, tree agenttree.Tree, cfg claudeDriverConfig, now time.Time,
 ) (claudeDriverConfig, error) {
 	if cfg.OperatingMode != domain.ModeUnattended {
 		return cfg, nil
 	}
-	reviewer, err := reviewRoleAgent(ctx, st, tree, domain.RoleReviewer, now)
+	provider, err := reviewProviderFor(ctx, st, tree, domain.RoleReviewer)
 	if err != nil {
 		return cfg, err
 	}
+	if err := requireReviewAuthMode(provider, cfg.ReviewAuthMode); err != nil {
+		return cfg, err
+	}
+	reviewer, err := checkReviewRoleAgent(ctx, st, tree, reviewRole(domain.RoleReviewer, provider, nil), now)
+	if err != nil {
+		return cfg, err
+	}
+	cfg.ReviewProvider = provider
 	cfg.ReviewAuthIdentityID, cfg.ReviewCostOwner = reviewer.Identity.ID, reviewer.Identity.CostOwner
 	cfg.ReviewModel, cfg.ReviewReasoningEffort = reviewer.Model, reviewer.NativeEffort
 	if cfg.ShadowReviewImage == "" {
@@ -103,6 +170,46 @@ func resolveReviewSelection(
 	cfg.ShadowReviewAuthIdentityID, cfg.ShadowReviewCostOwner = shadow.Identity.ID, shadow.Identity.CostOwner
 	cfg.ShadowReviewModel, cfg.ShadowReviewReasoningEffort = shadow.Model, shadow.NativeEffort
 	return cfg, nil
+}
+
+// requireReviewAuthMode refuses a -review-auth-mode the routed provider does
+// not deliver: a setup token for Codex, or a subscription or API key for
+// Claude. The flag is not derived from the line, because Codex has two modes;
+// one agree-or-refuse rule covers both harnesses.
+func requireReviewAuthMode(provider ward.RoutedReviewProvider, mode ward.CodexAuthMode) error {
+	if !provider.AcceptsAuthMode(mode) {
+		return &roleAdmissionError{Role: domain.RoleReviewer, Err: &reviewProviderMismatch{
+			Harness: provider.HarnessClient, AuthMode: mode,
+		}}
+	}
+	return nil
+}
+
+// routedReviewEndpoints is the allowlist the routed review proxy admits: the
+// Anthropic API for Claude, and for Codex the ChatGPT backend under a
+// subscription or the OpenAI API under an API key.
+func routedReviewEndpoints(provider ward.RoutedReviewProvider, mode ward.CodexAuthMode) []string {
+	switch provider.Vendor {
+	case domain.AgentVendorClaude:
+		return []string{"api.anthropic.com:443"}
+	case domain.AgentVendorCodex:
+		if mode == ward.CodexAuthAPIKey {
+			return []string{"api.openai.com:443"}
+		}
+		return []string{"chatgpt.com:443"}
+	}
+	return nil
+}
+
+// routedReviewConfig adds the provider's credential floors to a routed review
+// configuration: Codex's OAuth access token must outlive the review, while a
+// Claude setup token carries no lifetime and takes none (the shadow source's
+// shape).
+func routedReviewConfig(provider ward.RoutedReviewProvider, cfg ward.CodexReviewConfig) ward.CodexReviewConfig {
+	if provider.Vendor == domain.AgentVendorCodex {
+		cfg.AccessTokenLifetimeFloor, cfg.AccessTokenRefreshThreshold = time.Hour, 2*time.Hour
+	}
+	return cfg
 }
 
 // reviewAdmission is the check a review source runs before each launch: the
@@ -119,14 +226,17 @@ func resolveReviewSelection(
 // a launch starts, which may be a restart and a lineup later. The source
 // launches under the identity, model, and effort it was composed with, so a
 // snapshot that names another of the three is refused: the launch would run
-// one agent and the review record would name another.
+// one agent and the review record would name another. spec is the role the
+// source was composed for, so a line that moved to another harness or vendor
+// is refused as well.
 func reviewAdmission(
-	st *store.Store, tree agenttree.Tree, role domain.RoleName, identity domain.AuthIdentityID,
+	st *store.Store, tree agenttree.Tree, spec engine.ReviewRole, identity domain.AuthIdentityID,
 	now func() time.Time,
 ) func(context.Context, exec.ReviewRequest) error {
+	role := spec.Role
 	return func(ctx context.Context, req exec.ReviewRequest) error {
 		agent, err := engine.CheckReviewRole(
-			ctx, st, tree, agentbaseline.RoleLaunch, reviewRole(role, nil), req.RunID, now())
+			ctx, st, tree, agentbaseline.RoleLaunch, spec, req.RunID, now())
 		if err != nil {
 			return &roleAdmissionError{Role: role, Err: err}
 		}
@@ -149,18 +259,24 @@ func reviewAdmission(
 }
 
 // reviewAdmitter admits a review invocation through the lineup the daemon
-// loaded (engine.AgentSelection.AdmitReview). Each role's snapshot records
-// the allowlist that role's review proxy admits, which is the source's own
-// and not the writer stages' egress the selection carries.
+// loaded (engine.AgentSelection.AdmitReview), against the role the daemon
+// composed a source for. Each role's snapshot records the allowlist that
+// role's review proxy admits, which is the source's own and not the writer
+// stages' egress the selection carries.
 func reviewAdmitter(
-	st *store.Store, agents engine.AgentSelection, egress map[domain.RoleName][]string,
+	st *store.Store, agents engine.AgentSelection, roles map[domain.RoleName]engine.ReviewRole,
 ) engine.ReviewAdmitter {
 	return func(
 		ctx context.Context, role domain.RoleName, runID domain.RunID,
 		invocationID domain.InvocationID, admittedAt time.Time,
 	) (domain.ReviewAdmission, error) {
+		spec, ok := roles[role]
+		if !ok {
+			return domain.ReviewAdmission{}, &roleAdmissionError{Role: role, Err: fmt.Errorf(
+				"no review source is composed for the role: %w", engine.ErrAgentNotAdmissible)}
+		}
 		admission, err := agents.AdmitReview(
-			ctx, st, reviewRole(role, egress[role]), runID, invocationID, admittedAt)
+			ctx, st, spec, runID, invocationID, admittedAt)
 		if err != nil {
 			return domain.ReviewAdmission{}, &roleAdmissionError{Role: role, Err: err}
 		}

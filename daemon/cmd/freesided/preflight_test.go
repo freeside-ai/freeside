@@ -52,7 +52,10 @@ type fakePreflightEnvironment struct {
 	publicationAuthor    engine.ProductionCommitAuthor
 	agentsError          error
 	// reviewModel replaces the model the fixture's reviewer agent names.
-	reviewModel        string
+	reviewModel string
+	// reviewHarness, when set, is the harness the fixture's reviewer line
+	// runs, in place of codex_cli.
+	reviewHarness      domain.HarnessClientKind
 	judgmentRoles      []inference.RoleCheck
 	judgmentRolesError error
 	judgmentRolesCalls int
@@ -71,6 +74,7 @@ func (e *fakePreflightEnvironment) CheckJudgmentRoles(
 var preflightFixtureAgents = preflightAgentSelection{
 	LineupRevision: domain.Digest("sha256:" + strings.Repeat("9", 64)),
 	AuthIdentityID: "claude-1", AuthVolume: "claude-auth-volume",
+	ReviewProvider:       mustRoutedReviewProvider(domain.HarnessClientCodexCLI),
 	ReviewAuthIdentityID: "codex-1", ReviewCostOwner: "subscription:operator",
 	ReviewModel: "gpt-5.6-codex", ReviewReasoningEffort: "high",
 	ShadowReviewAuthIdentityID: "claude-1", ShadowReviewCostOwner: "subscription:shadow",
@@ -86,6 +90,9 @@ func (e *fakePreflightEnvironment) ResolveAgentSelection(
 	agents := preflightFixtureAgents
 	if e.reviewModel != "" {
 		agents.ReviewModel = e.reviewModel
+	}
+	if e.reviewHarness != "" {
+		agents.ReviewProvider = mustRoutedReviewProvider(e.reviewHarness)
 	}
 	if cfg.ShadowReviewImage == "" {
 		agents.ShadowReviewAuthIdentityID, agents.ShadowReviewCostOwner = "", ""
@@ -1055,6 +1062,222 @@ func TestPreflightRefusesProdAppDirectoriesWithoutAuthority(t *testing.T) {
 			}, time.Now())
 			if inspection.AuthorityError == nil || !strings.Contains(inspection.AuthorityError.Error(), tc.want) {
 				t.Fatalf("AuthorityError = %v, want %q", inspection.AuthorityError, tc.want)
+			}
+		})
+	}
+}
+
+// mustRoutedReviewProvider is the routed review provider a fixture reviewer
+// line's harness selects.
+func mustRoutedReviewProvider(client domain.HarnessClientKind) ward.RoutedReviewProvider {
+	provider, ok := ward.LookupRoutedReviewProvider(client)
+	if !ok {
+		panic("no routed review provider for " + string(client))
+	}
+	return provider
+}
+
+// claudeReviewerPreflightFixture is the preflight fixture with the reviewer
+// line on claude_code (#397): -review-auth-mode setup_token, and a setup-token
+// snapshot under the review input root as -review-auth-snapshot.
+func claudeReviewerPreflightFixture(t *testing.T) ([]string, *fakePreflightEnvironment) {
+	t.Helper()
+	args, environment := preflightFixture(t)
+	environment.reviewHarness = domain.HarnessClientClaudeCode
+	environment.reviewModel = "claude-review-fixture"
+	var inputRoot string
+	for i := range args {
+		if args[i] == "-review-input-root" {
+			inputRoot = args[i+1]
+		}
+	}
+	token := filepath.Join(inputRoot, "claude-review-token")
+	if err := os.WriteFile(token, []byte("fixture-token"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	for i := range args {
+		switch args[i] {
+		case "-review-auth-mode":
+			args[i+1] = string(ward.CodexAuthSetupToken)
+		case "-review-auth-snapshot":
+			args[i+1] = token
+		}
+	}
+	return args, environment
+}
+
+// A Claude reviewer's preflight probes its image for the claude CLI and
+// checks its setup-token credential in place of the Codex one, which is not
+// probed and not listed.
+func TestPreflightCoversAClaudeReviewer(t *testing.T) {
+	t.Parallel()
+	args, environment := claudeReviewerPreflightFixture(t)
+	manifest, err := runSourcePreflight(t, args, environment)
+	if err != nil {
+		t.Fatalf("preflight = %v; checks %+v", err, manifest.Checks)
+	}
+	if checkStatus(manifest, claudeReviewCredentialCheck) != compositionPassed ||
+		checkStatus(manifest, "codex_credentials") != "" || environment.codexCalls != 0 {
+		t.Fatalf("credential checks = %+v, codex probes %d", manifest.Checks, environment.codexCalls)
+	}
+	// The implementer and the reviewer images each carry claude.
+	if environment.imageCalls["claude"] != 2 || environment.imageCalls["codex"] != 0 ||
+		checkStatus(manifest, "reviewer_image") != compositionPassed {
+		t.Fatalf("image probes = %v; checks %+v", environment.imageCalls, manifest.Checks)
+	}
+}
+
+func TestPreflightRefusesAClaudeReviewerCredential(t *testing.T) {
+	t.Parallel()
+	for name, arrange := range map[string]func(*testing.T, []string, *fakePreflightEnvironment){
+		"review identity is not a leased Claude identity": func(_ *testing.T, _ []string, e *fakePreflightEnvironment) {
+			e.database.ReviewCredentialError = errors.New("identity is not a lease-enabled Claude identity")
+		},
+		"setup-token snapshot is absent": func(t *testing.T, args []string, _ *fakePreflightEnvironment) {
+			for i := range args {
+				if args[i] == "-review-auth-snapshot" {
+					if err := os.Remove(args[i+1]); err != nil {
+						t.Fatal(err)
+					}
+				}
+			}
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			args, environment := claudeReviewerPreflightFixture(t)
+			arrange(t, args, environment)
+			manifest, err := runSourcePreflight(t, args, environment)
+			if !errors.Is(err, errCompositionPreflight) ||
+				checkStatus(manifest, claudeReviewCredentialCheck) != compositionFailed {
+				t.Fatalf("preflight = %v; checks %+v", err, manifest.Checks)
+			}
+		})
+	}
+}
+
+// Preflight refuses an unknown -review-auth-mode while parsing, and never
+// echoes the value: a credential pasted into the flag stays out of the
+// manifest and the error.
+func TestPreflightRefusesAnUnknownReviewAuthMode(t *testing.T) {
+	t.Parallel()
+	args, _ := preflightFixture(t)
+	const pasted = "sk-ant-oat01-fixture"
+	for i := range args {
+		if args[i] == "-review-auth-mode" {
+			args[i+1] = pasted
+		}
+	}
+	_, err := parsePreflightConfig(args, &bytes.Buffer{})
+	if err == nil || strings.Contains(err.Error(), pasted) {
+		t.Fatalf("parse = %v, want a refusal that does not echo the value", err)
+	}
+}
+
+// A Claude reviewer's setup-token snapshot is never readable as review
+// instructions, as the Codex and shadow snapshots are not.
+func TestPreflightRejectsAClaudeReviewCredentialAsReviewInstructions(t *testing.T) {
+	t.Parallel()
+	args, environment := claudeReviewerPreflightFixture(t)
+	var token string
+	for i := range args {
+		if args[i] == "-review-auth-snapshot" {
+			token = args[i+1]
+		}
+	}
+	for i := range args {
+		if args[i] == "-review-instructions" {
+			args[i+1] = token
+		}
+	}
+	manifest, err := runSourcePreflight(t, args, environment)
+	if !errors.Is(err, errCompositionPreflight) ||
+		checkStatus(manifest, "review_instructions") != compositionFailed {
+		t.Fatalf("preflight = %v; checks %+v", err, manifest.Checks)
+	}
+}
+
+// A reviewer line whose harness has no routed provider, or whose provider
+// does not accept -review-auth-mode, fails agent selection naming why.
+func TestPreflightNamesAReviewProviderMismatch(t *testing.T) {
+	t.Parallel()
+	for name, mismatch := range map[string]*reviewProviderMismatch{
+		"no routed provider": {Harness: "gemini_cli"},
+		"auth mode":          {Harness: domain.HarnessClientClaudeCode, AuthMode: ward.CodexAuthSubscription},
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			args, environment := preflightFixture(t)
+			environment.agentsError = &roleAdmissionError{Role: domain.RoleReviewer, Err: mismatch}
+			manifest, err := runSourcePreflight(t, args, environment)
+			if !errors.Is(err, errCompositionPreflight) {
+				t.Fatalf("preflight = %v", err)
+			}
+			for _, check := range manifest.Checks {
+				if check.Name == "agent_selection" {
+					if check.Status != compositionFailed || check.Evidence != mismatch.Error() {
+						t.Fatalf("agent selection = %+v", check)
+					}
+					return
+				}
+			}
+			t.Fatal("manifest has no agent_selection check")
+		})
+	}
+}
+
+// Under setup_token the production database inspection holds the review
+// identity to a lease-enabled Claude identity, as it holds a Codex reviewer's
+// to a lease-enabled OpenAI one.
+func TestProductionPreflightDatabaseChecksAClaudeReviewIdentity(t *testing.T) {
+	t.Parallel()
+	for name, tc := range map[string]struct {
+		identity *domain.AuthIdentity
+		ok       bool
+	}{
+		"leased Claude identity": {&domain.AuthIdentity{
+			ID: "review", Provider: "claude", AuthStoreMutationLease: true, MaxParallelExecutions: 1, Enabled: true,
+			Interim: domain.InterimClientFacts{AuthStoreVolume: "claude-review-auth", RefreshStrategy: domain.RefreshOnDemand},
+		}, true},
+		"Codex identity": {&domain.AuthIdentity{
+			ID: "review", Provider: "openai", AuthStoreMutationLease: true, MaxParallelExecutions: 1, Enabled: true,
+			Interim: domain.InterimClientFacts{
+				AuthStoreVolume: "/private/auth.json", RefreshStrategy: domain.RefreshOnDemand,
+				SupportsReadOnlyAuthSnapshot: true,
+			},
+		}, false},
+		"unleased Claude identity": {&domain.AuthIdentity{
+			ID: "review", Provider: "claude", MaxParallelExecutions: 1, Enabled: true,
+			Interim: domain.InterimClientFacts{AuthStoreVolume: "claude-review-auth", RefreshStrategy: domain.RefreshOnDemand},
+		}, false},
+		"missing identity": {nil, false},
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			ctx := t.Context()
+			dbPath := filepath.Join(t.TempDir(), "freeside.db")
+			st := storetest.Open(t, dbPath, store.Options{})
+			if tc.identity != nil {
+				if err := st.WriteInternal(ctx, func(tx *store.InternalTx) error {
+					return tx.RecordAuthIdentity(ctx, *tc.identity, time.Now().UTC())
+				}); err != nil {
+					t.Fatal(err)
+				}
+			}
+			if err := st.Close(); err != nil {
+				t.Fatal(err)
+			}
+			inspection := (productionPreflightEnvironment{}).InspectDatabase(ctx, preflightConfig{
+				DBPath: dbPath, Repo: "owner/repo", RepositoryID: 42,
+				ApprovedRecipe: domain.Digest("sha256:" + strings.Repeat("7", 64)),
+				ReviewAuthMode: ward.CodexAuthSetupToken,
+				Agents:         preflightAgentSelection{ReviewAuthIdentityID: "review"},
+			}, domain.Digest("sha256:"+strings.Repeat("8", 64)))
+			if inspection.OpenError != nil || inspection.ShadowReviewError != nil {
+				t.Fatalf("inspection stopped early: %+v", inspection)
+			}
+			if (inspection.ReviewCredentialError == nil) != tc.ok {
+				t.Fatalf("review credential error = %v, want ok=%t", inspection.ReviewCredentialError, tc.ok)
 			}
 		})
 	}

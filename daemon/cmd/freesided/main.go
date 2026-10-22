@@ -21,6 +21,7 @@ import (
 	"os/signal"
 	"os/user"
 	"path/filepath"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -128,13 +129,20 @@ type reviewFlagValues struct {
 	ShadowRate                                             float64
 }
 
+// reviewAuthModes are the -review-auth-mode values: Codex delivers a
+// subscription or an API key, Claude a setup token. Which of them suits the
+// reviewer is checked against its line's harness (requireReviewAuthMode).
+var reviewAuthModes = []ward.CodexAuthMode{
+	ward.CodexAuthSubscription, ward.CodexAuthAPIKey, ward.CodexAuthSetupToken,
+}
+
 func reviewFlags(flags *flag.FlagSet, v *reviewFlagValues) {
-	flags.StringVar(&v.Image, "review-image", "", "digest-pinned Codex review image")
-	flags.StringVar(&v.InputRoot, "review-input-root", "", "private root containing Codex review auth and instruction snapshots")
-	flags.StringVar(&v.AuthMode, "review-auth-mode", "", "Codex review auth mode: subscription or api_key")
-	flags.StringVar(&v.AuthSnapshot, "review-auth-snapshot", "", "Codex auth.json snapshot under review-input-root")
-	flags.StringVar(&v.Instructions, "review-instructions", "", "operator-host Codex instruction source snapshotted with explicit absence")
-	flags.Int64Var(&v.WorkspaceSizeMB, "review-workspace-size-mb", 8192, "Codex review workspace volume size")
+	flags.StringVar(&v.Image, "review-image", "", "digest-pinned review image for the reviewer line's harness")
+	flags.StringVar(&v.InputRoot, "review-input-root", "", "private root containing review auth and instruction snapshots")
+	flags.StringVar(&v.AuthMode, "review-auth-mode", "", "review auth mode: subscription or api_key (Codex), setup_token (Claude)")
+	flags.StringVar(&v.AuthSnapshot, "review-auth-snapshot", "", "reviewer credential snapshot under review-input-root (Codex auth.json or Claude setup token)")
+	flags.StringVar(&v.Instructions, "review-instructions", "", "operator-host review instruction source snapshotted with explicit absence")
+	flags.Int64Var(&v.WorkspaceSizeMB, "review-workspace-size-mb", 8192, "review workspace volume size")
 	flags.StringVar(&v.ShadowImage, "shadow-review-image", "", "digest-pinned Claude shadow review image (enables the shadow arm)")
 	flags.StringVar(&v.ShadowAuthSnapshot, "shadow-review-auth-snapshot", "", "Claude setup-token snapshot under review-input-root")
 	flags.Int64Var(&v.ShadowWorkspaceSizeMB, "shadow-review-workspace-size-mb", 8192, "Claude shadow review workspace volume size")
@@ -453,15 +461,12 @@ func main() {
 		if v := repositoryID.Value(); v != nil {
 			id = *v
 		}
-		var codexAuthMode ward.CodexAuthMode
+		var reviewAuthMode ward.CodexAuthMode
 		if mode == domain.ModeUnattended {
-			switch review.AuthMode {
-			case string(ward.CodexAuthSubscription):
-				codexAuthMode = ward.CodexAuthSubscription
-			case string(ward.CodexAuthAPIKey):
-				codexAuthMode = ward.CodexAuthAPIKey
-			default:
-				fmt.Fprintf(os.Stderr, "freesided: -review-auth-mode %q is not subscription or api_key\n", review.AuthMode)
+			reviewAuthMode = ward.CodexAuthMode(review.AuthMode)
+			if !slices.Contains(reviewAuthModes, reviewAuthMode) {
+				fmt.Fprintf(os.Stderr,
+					"freesided: -review-auth-mode %q is not subscription, api_key, or setup_token\n", review.AuthMode)
 				os.Exit(2)
 			}
 		}
@@ -486,7 +491,7 @@ func main() {
 			StateRoot:      *publicationStateDir, CredentialsDir: *publicationCredentialsDir,
 			OperatingMode: mode,
 			ReviewImage:   review.Image, ReviewInputRoot: review.InputRoot,
-			ReviewAuthMode:     codexAuthMode,
+			ReviewAuthMode:     reviewAuthMode,
 			ReviewAuthSnapshot: review.AuthSnapshot, ReviewInstructions: review.Instructions,
 			ReviewWorkspaceSizeMB:       review.WorkspaceSizeMB,
 			ShadowReviewImage:           review.ShadowImage,

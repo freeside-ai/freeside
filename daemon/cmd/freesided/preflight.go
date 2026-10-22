@@ -253,9 +253,12 @@ type codexCredentialInspection struct {
 // mounts, and the review identities, cost owners, models, and native efforts
 // the approved review configuration digests take as inputs.
 type preflightAgentSelection struct {
-	LineupRevision              domain.Digest
-	AuthIdentityID              domain.AuthIdentityID
-	AuthVolume                  string
+	LineupRevision domain.Digest
+	AuthIdentityID domain.AuthIdentityID
+	AuthVolume     string
+	// ReviewProvider is the routed review provider the reviewer line's
+	// harness selects (#397).
+	ReviewProvider              ward.RoutedReviewProvider
 	ReviewAuthIdentityID        domain.AuthIdentityID
 	ReviewCostOwner             string
 	ReviewModel                 string
@@ -381,6 +384,7 @@ func composePreflight(
 			cfg.Agents = preflightAgentSelection{}
 		}
 		manifest.AgentLineupRevision = cfg.Agents.LineupRevision
+		useReviewCredentialCheck(&manifest, cfg.Agents.ReviewProvider)
 	}
 	reviewDigest, reviewDigestErr := reviewConfigurationDigest(cfg)
 	shadowReviewDigest, shadowReviewDigestErr := preflightShadowReviewConfigurationDigest(cfg)
@@ -490,6 +494,11 @@ func parsePreflightConfig(args []string, stderr io.Writer) (preflightConfig, err
 		cfg.PublicationPath == "" || cfg.ProjectID == "" {
 		return preflightConfig{}, errors.New("all production composition flags except -work-unit and -build-proxy are required")
 	}
+	// The mode is refused before it can reach any manifest evidence, without
+	// echoing it: a value pasted into the wrong flag may be a credential.
+	if !slices.Contains(reviewAuthModes, cfg.ReviewAuthMode) {
+		return preflightConfig{}, errors.New("-review-auth-mode is not subscription, api_key, or setup_token")
+	}
 	if cfg.ShadowReviewImage != "" &&
 		(cfg.ShadowReviewAuthSnapshot == "" ||
 			cfg.ShadowReviewWorkspaceSizeMB <= 0 || math.IsNaN(cfg.ShadowReviewRate) ||
@@ -588,8 +597,14 @@ func evaluateComposition(
 			notRunCheck(manifest, check, "rig database path was unavailable")
 		}
 	} else {
-		var roleFailure *roleAdmissionError
+		var (
+			roleFailure      *roleAdmissionError
+			providerMismatch *reviewProviderMismatch
+		)
 		switch {
+		case errors.As(agentsErr, &providerMismatch):
+			failCheck(manifest, "agent_selection", providerMismatch.Error(),
+				"select a reviewer agent on codex_cli or claude_code and pass the -review-auth-mode it accepts: subscription or api_key for Codex, setup_token for Claude")
 		case errors.As(agentsErr, &roleFailure):
 			failCheck(manifest, "agent_selection",
 				fmt.Sprintf("role %s has no lineup line that resolves against the store", roleFailure.Role),
@@ -761,6 +776,10 @@ func evaluateComposition(
 		passCheck(manifest, "seed_root", "canonical seed root is clean")
 	}
 
+	// The reviewer image must carry the CLI of the harness the reviewer line
+	// selects. A line that did not resolve leaves it unknown, and the image is
+	// not probed.
+	reviewerCLI := cfg.Agents.ReviewProvider.CLI
 	imageChecks := []struct {
 		check       string
 		role        string
@@ -771,7 +790,7 @@ func evaluateComposition(
 	}{
 		{"exporter_image", "exporter", cfg.ExporterImage, ward.RequiredObserverTools(), "", 0},
 		{"implementer_image", "implementer", cfg.AgentImage, []string{"sh", "git", "claude"}, "claude", 1},
-		{"reviewer_image", "reviewer", cfg.ReviewImage, []string{"sh", "git", "codex"}, "codex", 2},
+		{"reviewer_image", "reviewer", cfg.ReviewImage, []string{"sh", "git", reviewerCLI}, reviewerCLI, 2},
 	}
 	if cfg.ShadowReviewImage != "" {
 		imageChecks = append(imageChecks, struct {
@@ -791,6 +810,10 @@ func evaluateComposition(
 		})
 	}
 	for _, image := range imageChecks {
+		if image.check == "reviewer_image" && reviewerCLI == "" {
+			notRunCheck(manifest, image.check, "the reviewer line did not resolve, so the review CLI the image must carry is unknown")
+			continue
+		}
 		if shadowReviewProtectedAccessBlocked {
 			notRunCheck(manifest, image.check, "approved shadow review configuration is required before runtime probing")
 			continue
@@ -839,7 +862,11 @@ func evaluateComposition(
 		passCheck(manifest, "claude_credentials", "Claude auth identity and setup-token credential manifest are ready")
 	}
 
-	if shadowReviewProtectedAccessBlocked {
+	reviewAuthCheck := "codex_credentials"
+	if cfg.Agents.ReviewProvider.Vendor == domain.AgentVendorClaude {
+		reviewAuthCheck = claudeReviewCredentialCheck
+		evaluateClaudeReviewCredentials(manifest, cfg, database, shadowReviewProtectedAccessBlocked)
+	} else if shadowReviewProtectedAccessBlocked {
 		notRunCheck(manifest, "codex_credentials", "approved shadow review configuration is required before credential probing")
 	} else if cfg.DBPath == "" || database.OpenError != nil {
 		notRunCheck(manifest, "codex_credentials", "database inspection did not complete")
@@ -859,7 +886,7 @@ func evaluateComposition(
 		passCheck(manifest, "codex_credentials", "Codex access snapshot is ready until "+credential.ExpiresAt.UTC().Format(time.RFC3339))
 	}
 	if cfg.Judgments.PublicationAuthorPrompt != "" {
-		if !compositionChecksPassed(manifest, "repository_base", "review_instructions", "codex_credentials", "claude_credentials") {
+		if !compositionChecksPassed(manifest, "repository_base", "review_instructions", reviewAuthCheck, "claude_credentials") {
 			notRunCheck(manifest, "publication_author_inputs", "repository and credential access gates must pass first")
 		} else if err := checkPreflightAuthorInputs(ctx, cfg, hostInstructions); err != nil {
 			failCheck(manifest, "publication_author_inputs", err.Error(), "correct the host rules if they duplicate repository AGENTS.md, or reduce the named author input before submission")
@@ -1298,23 +1325,64 @@ func inspectLocalRepositoryBase(ctx context.Context, cfg preflightConfig) error 
 	return nil
 }
 
+// reviewConfigurationDigest is the digest the daemon would compose for the
+// routed review the reviewer line selects (claudeReviewConfigurationDigest).
 func reviewConfigurationDigest(cfg preflightConfig) (domain.Digest, error) {
 	if err := ward.ValidateCodexReviewModelConfiguration(
 		cfg.Agents.ReviewModel, cfg.Agents.ReviewReasoningEffort,
 	); err != nil {
 		return "", err
 	}
-	endpoints := []string{"chatgpt.com:443"}
-	if cfg.ReviewAuthMode == ward.CodexAuthAPIKey {
-		endpoints = []string{"api.openai.com:443"}
-	}
-	return ward.CodexReviewConfigurationDigest(ward.CodexReviewConfig{
+	provider := cfg.Agents.ReviewProvider
+	return provider.ConfigurationDigest(routedReviewConfig(provider, ward.CodexReviewConfig{
 		InputRoot: cfg.ReviewInputRoot, WorkspaceTarget: "/workspace/project",
-		ProviderEndpoints: endpoints, ApprovedImage: cfg.ReviewImage,
+		ProviderEndpoints: routedReviewEndpoints(provider, cfg.ReviewAuthMode), ApprovedImage: cfg.ReviewImage,
 		ObserverImage: cfg.ExporterImage, Model: cfg.Agents.ReviewModel,
-		ReasoningEffort:          cfg.Agents.ReviewReasoningEffort,
-		AccessTokenLifetimeFloor: time.Hour, AccessTokenRefreshThreshold: 2 * time.Hour,
-	}, cfg.ReviewWorkspaceSizeMB, cfg.ReviewAuthMode, cfg.Agents.ReviewAuthIdentityID, cfg.Agents.ReviewCostOwner)
+		ReasoningEffort: cfg.Agents.ReviewReasoningEffort,
+	}), cfg.ReviewWorkspaceSizeMB, cfg.ReviewAuthMode, cfg.Agents.ReviewAuthIdentityID, cfg.Agents.ReviewCostOwner)
+}
+
+// claudeReviewCredentialCheck replaces codex_credentials in the manifest when
+// the reviewer line runs Claude, whose credential is a setup token.
+const claudeReviewCredentialCheck = "claude_review_credentials"
+
+// useReviewCredentialCheck names the reviewer's credential check after the
+// harness its line selects. The manifest lists its checks before the lineup
+// resolves, so a Claude reviewer's check replaces the Codex one in place.
+func useReviewCredentialCheck(manifest *compositionManifest, provider ward.RoutedReviewProvider) {
+	if provider.Vendor != domain.AgentVendorClaude {
+		return
+	}
+	for i := range manifest.Checks {
+		if manifest.Checks[i].Name == "codex_credentials" {
+			manifest.Checks[i].Name = claudeReviewCredentialCheck
+		}
+	}
+}
+
+// evaluateClaudeReviewCredentials checks a Claude reviewer's credential: the
+// review identity is a leased Claude identity, and -review-auth-snapshot holds
+// a setup token of the shape the Claude review provider accepts. Runtime
+// repeats the token check before every launch.
+func evaluateClaudeReviewCredentials(
+	manifest *compositionManifest, cfg preflightConfig, database databaseInspection, protectedAccessBlocked bool,
+) {
+	switch {
+	case protectedAccessBlocked:
+		notRunCheck(manifest, claudeReviewCredentialCheck, "approved shadow review configuration is required before credential probing")
+	case cfg.DBPath == "" || database.OpenError != nil:
+		notRunCheck(manifest, claudeReviewCredentialCheck, "database inspection did not complete")
+	case database.ReviewCredentialError != nil:
+		failCheck(manifest, claudeReviewCredentialCheck, "Claude review identity is not a lease-enabled Claude identity",
+			"enroll the review identity with freesided auth add using a setup token, then adopt it with freesided auth adopt -review-harness claude_code")
+	default:
+		if _, err := readSetupTokenSnapshot(cfg.ReviewInputRoot, cfg.ReviewAuthSnapshot); err != nil {
+			failCheck(manifest, claudeReviewCredentialCheck, "Claude review setup-token snapshot is absent or invalid",
+				"restore the private setup-token snapshot -review-auth-snapshot names under -review-input-root")
+			return
+		}
+		passCheck(manifest, claudeReviewCredentialCheck, "Claude review identity and setup-token snapshot are ready; a setup token declares no expiry")
+	}
 }
 
 func preflightShadowReviewConfigurationDigest(cfg preflightConfig) (domain.Digest, error) {
@@ -1446,7 +1514,8 @@ func (productionPreflightEnvironment) ResolveAgentSelection(
 		return preflightAgentSelection{}, err
 	}
 	defer st.Close() //nolint:errcheck // the resolution result is reported independently
-	return resolvePreflightAgents(ctx, st, agents.Tree, agents.LineupRevision, cfg.ShadowReviewImage != "", now)
+	return resolvePreflightAgents(
+		ctx, st, agents.Tree, agents.LineupRevision, cfg.ReviewAuthMode, cfg.ShadowReviewImage != "", now)
 }
 
 // CheckJudgmentRoles admits every judgment role as the daemon's startup check
@@ -1538,7 +1607,8 @@ func evaluateJudgmentRoles(manifest *compositionManifest, checks []inference.Rol
 // attended mark, expiry, and egress steps run only in the daemon's startup
 // check, which holds admission when one fails.
 func resolvePreflightAgents(
-	ctx context.Context, st *store.Store, tree agenttree.Tree, revision domain.Digest, shadow bool, now time.Time,
+	ctx context.Context, st *store.Store, tree agenttree.Tree, revision domain.Digest,
+	reviewAuthMode ward.CodexAuthMode, shadow bool, now time.Time,
 ) (preflightAgentSelection, error) {
 	selection := preflightAgentSelection{LineupRevision: revision}
 	for _, role := range []domain.RoleName{domain.RoleImplementer, domain.RoleSpecifier, domain.RoleRemediator} {
@@ -1554,10 +1624,18 @@ func resolvePreflightAgents(
 				"it mounts another credential volume than the implementer; preflight probes one writer volume")}
 		}
 	}
-	reviewer, err := reviewRoleAgent(ctx, st, tree, domain.RoleReviewer, now)
+	provider, err := reviewProviderFor(ctx, st, tree, domain.RoleReviewer)
 	if err != nil {
 		return preflightAgentSelection{}, err
 	}
+	if err := requireReviewAuthMode(provider, reviewAuthMode); err != nil {
+		return preflightAgentSelection{}, err
+	}
+	reviewer, err := checkReviewRoleAgent(ctx, st, tree, reviewRole(domain.RoleReviewer, provider, nil), now)
+	if err != nil {
+		return preflightAgentSelection{}, err
+	}
+	selection.ReviewProvider = provider
 	selection.ReviewAuthIdentityID, selection.ReviewCostOwner = reviewer.Identity.ID, reviewer.Identity.CostOwner
 	selection.ReviewModel, selection.ReviewReasoningEffort = reviewer.Model, reviewer.NativeEffort
 	if shadow {
@@ -1636,7 +1714,8 @@ func (productionPreflightEnvironment) InspectDatabase(
 			!identity.AuthStoreMutationLease {
 			inspection.CredentialError = errors.Join(err, errors.New("identity cannot support the leased Claude auth store"))
 		}
-		if cfg.ReviewAuthMode == ward.CodexAuthSubscription {
+		switch cfg.ReviewAuthMode {
+		case ward.CodexAuthSubscription:
 			reviewIdentity, err := tx.GetAuthIdentity(ctx, cfg.Agents.ReviewAuthIdentityID)
 			inspection.ReviewAuthStoreVolume = reviewIdentity.Interim.AuthStoreVolume
 			inspection.ReviewRefreshStrategy = reviewIdentity.Interim.RefreshStrategy
@@ -1647,6 +1726,17 @@ func (productionPreflightEnvironment) InspectDatabase(
 					err, errors.New("identity cannot support lease-held Codex auth snapshot refresh"),
 				)
 			}
+		case ward.CodexAuthSetupToken:
+			reviewIdentity, err := tx.GetAuthIdentity(ctx, cfg.Agents.ReviewAuthIdentityID)
+			if err != nil || reviewIdentity.ID != cfg.Agents.ReviewAuthIdentityID ||
+				reviewIdentity.Provider != "claude" || !reviewIdentity.AuthStoreMutationLease {
+				inspection.ReviewCredentialError = errors.Join(
+					err, errors.New("identity is not a lease-enabled Claude identity"),
+				)
+			}
+		case ward.CodexAuthAPIKey:
+			// An API key is read from the snapshot; no identity holds a store
+			// for it to inspect.
 		}
 		inspection.ProjectImage, inspection.ProjectImageFound, inspection.ProjectImageError = tx.GetProjectImageByRef(ctx, domain.ImageRef(cfg.AgentImage))
 		return nil

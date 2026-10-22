@@ -529,6 +529,7 @@ func TestReviewConfigurationApprovalBindsExporterBeforeComposition(t *testing.T)
 		ExporterImage:   "ghcr.io/x/exporter@sha256:" + strings.Repeat("b", 64),
 		ReviewImage:     "ghcr.io/x/codex@sha256:" + strings.Repeat("c", 64),
 		ReviewInputRoot: "/var/freeside/review-inputs", ReviewAuthMode: ward.CodexAuthSubscription,
+		ReviewProvider:       mustRoutedReviewProvider(domain.HarnessClientCodexCLI),
 		ReviewAuthIdentityID: "auth-codex-owner", ReviewModel: "gpt-codex",
 		ReviewReasoningEffort: "high", ReviewCostOwner: "subscription:owner",
 		ReviewWorkspaceSizeMB: 8192,
