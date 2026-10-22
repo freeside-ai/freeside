@@ -2924,3 +2924,51 @@ The client work is #1798 to #1803.)
 
 (Owner decision in #2119, 2026-10-21;
 [decision note](../../devlog/2026-10-21-1256-fiat-session-contract-assessment.md).)
+
+---
+
+## Revision 94 ("Execution Hosts"):
+
+1. **Launches may run on enrolled hosts besides the daemon's.** An execution
+   host is a runner backend served by a runner, the daemon binary in a runner
+   role installed as an ordinary Freeside installation, which holds no durable
+   state and no forge credential. The runner connects out to the control plane's
+   Tailscale-bound endpoint and opens no listener; the enrolled host keys
+   authenticate the session, Tailscale only carries it, and the Section
+   [5.19](../plan.md#519-deferred-subsystems-provisional-contracts) relay later changes
+   only the connector's target. The daemon host composes the runner in-process
+   and runs no separate runner process; the control plane keeps the journal,
+   seeding, export authentication, the gauntlet, and publication (Section
+   [5.7](../plan.md#57-the-ward-runners-handoff-gate-and-operating-modes), Execution
+   Hosts). Rejected: a second daemon per host; a Section
+   [5.9](../plan.md#59-durability-effectively-once) standby, which serves no work; driving
+   `container` over SSH, because the proxy, the gate's proofs, and the suite run
+   where the runtime is; a runner that listens on its own address; a separate
+   runner process on the daemon host; a separate runner binary;
+   kubernetes-sigs/agent-sandbox, Nomad, and Warren as the spine.
+2. **The enrolled host record carries a role and lands with execution hosts.**
+   #2162 lands the host identity with `control_plane` and `runner` roles; #265
+   builds epoch, frontier, and replica on it. Enrolling a runner is never
+   activation.
+3. **Credential posture: the volume on each owner-held host; injection reaches
+   execution hosts as control-plane injection.** The identity enrollment
+   transaction authors each identity's credential volume on every enrolled host
+   over the runner session. Proxy injection (#2175) reaches an execution host
+   with the runner terminating and the control plane substituting, so the host
+   never holds the token; it gates any host the owner does not physically hold,
+   and the Linux host waits for it. Rejected: relaying CONNECT to the daemon
+   host's proxy as a credential measure, since the token stays in the writer.
+4. **Placement by eligibility, then local-first; budgets per host; an
+   unreachable host is held, not retried.** Declaring a host lost is the
+   operator's exception to the single-writer rule and names the identities to
+   rotate; a lease-mutating identity is pinned to one host. Rejected:
+   remote-first placement; automatic failover of a running launch, which would
+   start a second writer under a held identity.
+5. **Start triggers are recorded and the units are fenced.** Capacity measured
+   from recorded holds once #1598 merges, a capability the daemon host lacks, or
+   interactive use; the Linux desktop waits for #2175 and control-plane
+   injection, multi-arch images, and a `linux_vm` backend. Tracker #2161; units
+   #2162 to #2168.
+
+(Proposal of 2026-10-22, decided by the owner at merge;
+[decision note](../../devlog/2026-10-22-1042-execution-hosts.md).)
