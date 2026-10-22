@@ -10,8 +10,12 @@ Freeside runs one daemon on a Mac Studio and every ward container on that
 host. Prod's default budget is half the host's memory (§5.4 Machine
 Capacity, implemented by #1598), which admits about eight writers at the
 2048 MiB writer default (`daemon/internal/ward/sizes.go`). The owner has two
-idle machines, an M1 Max MacBook and an older Linux desktop, and wants to
-run launches on them.
+idle machines and wants to run launches on them: an M1 Max MacBook with 32
+GB, used interactively, and an older desktop with an AMD Ryzen 5 3600
+(x86_64, 6 cores, 12 threads) and, the owner believes, 64 GB, on an
+unspecified Linux that has not been updated recently and has no Tailscale
+yet (owner's answer, 2026-10-22). Sizing follows under Machine Facts and
+Sizing.
 
 The plan's existing multi-host story is the wrong axis. §5.9 enrolls hosts
 for control-plane failover: one active seat, standbys that serve nothing.
@@ -234,14 +238,49 @@ The numbers are defaults for the owner to set; the measure is the recorded
 hold, never a feeling about load. The Linux increment additionally needs
 #2175 merged, control-plane injection landed, and multi-arch images landed.
 
+## Machine Facts and Sizing
+
+Owner's answers of 2026-10-22. The plan stays generic; these numbers live
+here and on tracker #2161.
+
+- **MacBook (M1 Max, 32 GB, arm64, used interactively).** Proposed declared
+  budget 12 GiB: six writer-class launches at the 2048 MiB default, or
+  twelve review or conformance launches at 1024 MiB, leaving 20 GB for the
+  owner's own use. The default half (16 GiB) is the right number only while
+  nobody is using the machine, so the budget is set at host enrollment and
+  raised by hand, never defaulted. No new backend, image, or suite: same
+  Apple `container` runtime and `linux/arm64` images as the Studio.
+
+- **Linux desktop (Ryzen 5 3600, 6 cores and 12 threads, 64 GB believed,
+  x86_64).** It confirms the three Linux prerequisites rather than relaxing
+  any: the architecture makes multi-arch project images with `linux/amd64`
+  digests mandatory, not optional; the Zen 2 part has AMD-V, so a KVM-backed
+  `linux_vm` backend (Firecracker or Cloud Hypervisor) is possible on it and
+  nested virtualization on the Macs stays unnecessary; and the unupdated,
+  unnamed distribution means the increment starts with an OS refresh,
+  because §3.3 supports Linux only on one named distribution and kernel that
+  passes the full suite. Tailscale is not installed, so the host cannot
+  reach the control plane's runner endpoint until the owner joins it to the
+  tailnet; that and the OS refresh are owner-run prerequisites, recorded on
+  #2161 and not units. As a dedicated host it takes the default half budget,
+  32 GiB, but CPU binds first: twelve threads carry three writer-class
+  launches at the 4-CPU default without oversubscription, so its useful
+  concurrency is nearer three writers than sixteen until the `linux_vm`
+  backend's vCPU policy is decided. The 64 GB figure is unverified; the
+  enrollment ceremony records what the host reports.
+
 ## Owner Decisions Needed
 
-- The MacBook's RAM, to size its budget.
-- The Linux desktop's architecture, RAM, kernel, and whether it is on the
-  tailnet, before the Linux increment is sized at all.
+- Whether the MacBook's declared budget is 12 GiB.
+
 - Whether the trigger numbers above stand.
+
 - Whether local-first placement is right, or the Studio should shed work
-  first.
+first.
+
+- For the Linux increment, later: which distribution the OS refresh
+installs, and whether vCPU oversubscription is acceptable for writer
+launches.
 
 ## Revisit When
 
