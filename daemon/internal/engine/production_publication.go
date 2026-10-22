@@ -7344,6 +7344,21 @@ func (w *productionPublicationWorkflow) recoverDefinitiveBlockedTask(
 	return &productionTaskOutcome{completed: true, accepted: accepted, blocked: true}, nil
 }
 
+// closureBlockedReason is the closed card's sentence for a closure proposal
+// whose publication completed blocked, a definitive trust refusal included.
+const closureBlockedReason = "Superseded because the publication was blocked; a rerun that publishes proposes closure again."
+
+// retireBlockedClosureProposals retires the run's open closure card when its
+// publication completes blocked: the card names a merge that will not happen.
+// A rerun reuses the publication id, and binding its merge opens a fresh card
+// because none is left open.
+func (w *productionPublicationWorkflow) retireBlockedClosureProposals(ctx context.Context, runID domain.RunID) error {
+	return w.store.Write(ctx, func(tx *store.WriteTx) error {
+		_, err := tx.RetireOpenClosureProposals(ctx, runID, closureBlockedReason, w.now().UTC())
+		return err
+	})
+}
+
 func (w *productionPublicationWorkflow) completeBlockedTask(
 	ctx context.Context,
 	task productionPublicationTask,
@@ -7356,6 +7371,9 @@ func (w *productionPublicationWorkflow) completeBlockedTask(
 ) (productionTaskOutcome, error) {
 	item, err := w.newBlockedItem(ctx, task, imported, artifacts, reason, actions, w.approvedRecipes, facts, nil)
 	if err != nil {
+		return productionTaskOutcome{}, err
+	}
+	if err := w.retireBlockedClosureProposals(ctx, task.RunID); err != nil {
 		return productionTaskOutcome{}, err
 	}
 	if err := w.putTerminalItem(ctx, item); err != nil {

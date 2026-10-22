@@ -816,6 +816,10 @@ func (e *Engine) enqueueImplementationFeedback(
 	)
 }
 
+// closureReturnedToAgentReason is the closed card's sentence for a closure
+// proposal whose publication the operator returned to the agent.
+const closureReturnedToAgentReason = "Superseded because the pull request was returned to the agent."
+
 func (e *Engine) persistImplementationFeedback(
 	ctx context.Context,
 	item domain.AttentionItem,
@@ -946,6 +950,14 @@ func (e *Engine) persistImplementationFeedback(
 		inserted = made
 		if !made {
 			return errReplay
+		}
+		// The returned publication's closure card names a merge that will not
+		// happen; the feedback cycle's own publication proposes closure again.
+		if command.Action == domain.ActionReturnToAgent {
+			if _, err := tx.RetireOpenClosureProposals(ctx, runID,
+				closureReturnedToAgentReason, e.productionPublication.now().UTC()); err != nil {
+				return err
+			}
 		}
 		return nil
 	})
