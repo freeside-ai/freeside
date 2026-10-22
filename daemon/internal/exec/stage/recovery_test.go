@@ -17,6 +17,7 @@ import (
 	"github.com/freeside-ai/freeside/daemon/internal/domain"
 	"github.com/freeside-ai/freeside/daemon/internal/exec"
 	"github.com/freeside-ai/freeside/daemon/internal/export"
+	"github.com/freeside-ai/freeside/daemon/internal/gitenv"
 	"github.com/freeside-ai/freeside/daemon/internal/ward"
 )
 
@@ -47,13 +48,7 @@ func runRecoveryGit(ctx context.Context, dir string, args ...string) error {
 
 func runRecoveryGitOutput(ctx context.Context, dir string, args ...string) (string, error) {
 	cmd := osexec.CommandContext(ctx, "git", append([]string{"-C", dir}, args...)...) //nolint:gosec // G204: test-owned fixture paths and fixed arguments
-	env := make([]string, 0, len(os.Environ())+9)
-	for _, entry := range os.Environ() {
-		if !strings.HasPrefix(entry, "GIT_") {
-			env = append(env, entry)
-		}
-	}
-	cmd.Env = append(env,
+	cmd.Env = append(gitenv.Scrubbed(),
 		"GIT_CONFIG_GLOBAL="+os.DevNull,
 		"GIT_CONFIG_SYSTEM="+os.DevNull,
 		"GIT_CONFIG_NOSYSTEM=1",

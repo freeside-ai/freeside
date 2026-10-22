@@ -10,6 +10,7 @@ import (
 
 	"github.com/freeside-ai/freeside/daemon/internal/contentaddr"
 	"github.com/freeside-ai/freeside/daemon/internal/domain"
+	"github.com/freeside-ai/freeside/daemon/internal/gitenv"
 	"github.com/freeside-ai/freeside/daemon/internal/publish"
 )
 
@@ -82,7 +83,7 @@ func (c *composedGate) publishThrough(t *testing.T, p *publish.Publisher, approv
 func (c *composedGate) remoteRefs(t *testing.T) string {
 	t.Helper()
 	cmd := exec.Command("git", "-C", c.remote.Bare, "for-each-ref", "--format=%(refname) %(objectname)") //nolint:gosec // G204: test fixture path
-	cmd.Env = scrubbedLiveGitEnv()
+	cmd.Env = gitenv.Scrubbed()
 	out, err := cmd.CombinedOutput()
 	if err != nil {
 		t.Fatalf("for-each-ref: %v\n%s", err, out)

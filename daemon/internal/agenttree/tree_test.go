@@ -15,6 +15,7 @@ import (
 	"github.com/freeside-ai/freeside/daemon/internal/agenttree"
 	"github.com/freeside-ai/freeside/daemon/internal/contentaddr"
 	"github.com/freeside-ai/freeside/daemon/internal/domain"
+	"github.com/freeside-ai/freeside/daemon/internal/gitenv"
 )
 
 const (
@@ -284,7 +285,7 @@ func TestRevisionCoversContentNotOrder(t *testing.T) {
 func git(t *testing.T, dir string, args ...string) string {
 	t.Helper()
 	cmd := exec.CommandContext(t.Context(), "git", append([]string{"-C", dir}, args...)...) //nolint:gosec // G204: test fixture running git over test-owned repos with test-chosen arguments
-	cmd.Env = append(os.Environ(),
+	cmd.Env = append(gitenv.Scrubbed(),
 		"GIT_CONFIG_GLOBAL="+os.DevNull, "GIT_CONFIG_SYSTEM="+os.DevNull,
 		"GIT_AUTHOR_NAME=t", "GIT_AUTHOR_EMAIL=t@example.com",
 		"GIT_COMMITTER_NAME=t", "GIT_COMMITTER_EMAIL=t@example.com")

@@ -9,6 +9,7 @@ import (
 	"testing"
 
 	"github.com/freeside-ai/freeside/daemon/internal/export"
+	"github.com/freeside-ai/freeside/daemon/internal/gitenv"
 	"github.com/freeside-ai/freeside/daemon/internal/repotemplate"
 )
 
@@ -17,7 +18,7 @@ import (
 func rungit(t *testing.T, dir string, args ...string) string {
 	t.Helper()
 	cmd := exec.Command("git", append([]string{"-C", dir}, args...)...) //nolint:gosec // G204: test fixture running git over test-owned repos with test-chosen arguments
-	cmd.Env = append(scrubbedGitEnv(),
+	cmd.Env = append(gitenv.Scrubbed(),
 		"GIT_CONFIG_GLOBAL="+os.DevNull,
 		"GIT_CONFIG_SYSTEM="+os.DevNull,
 		"GIT_CONFIG_NOSYSTEM=1",
@@ -33,16 +34,6 @@ func rungit(t *testing.T, dir string, args ...string) string {
 		t.Fatalf("git %v: %v\n%s", args, err, out)
 	}
 	return strings.TrimSpace(string(out))
-}
-
-func scrubbedGitEnv() []string {
-	var env []string
-	for _, entry := range os.Environ() {
-		if !strings.HasPrefix(entry, "GIT_") {
-			env = append(env, entry)
-		}
-	}
-	return env
 }
 
 func TestRungitIgnoresAmbientGitDir(t *testing.T) {

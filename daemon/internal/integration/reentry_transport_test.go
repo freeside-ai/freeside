@@ -10,6 +10,7 @@ import (
 	"strings"
 
 	"github.com/freeside-ai/freeside/daemon/internal/engine"
+	"github.com/freeside-ai/freeside/daemon/internal/gitenv"
 	"github.com/freeside-ai/freeside/daemon/internal/publish"
 )
 
@@ -18,7 +19,7 @@ import (
 // commit it writes has the same SHA on every run.
 func tryGit(dir string, args ...string) (string, int, error) {
 	cmd := exec.Command("git", append([]string{"-C", dir}, args...)...) //nolint:gosec // G204: test running git on fixture arguments
-	cmd.Env = append(scrubbedGitEnv(),
+	cmd.Env = append(gitenv.Scrubbed(),
 		"GIT_CONFIG_GLOBAL="+os.DevNull,
 		"GIT_CONFIG_SYSTEM="+os.DevNull,
 		"GIT_CONFIG_NOSYSTEM=1",

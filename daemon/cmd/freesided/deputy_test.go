@@ -18,6 +18,7 @@ import (
 
 	"github.com/freeside-ai/freeside/daemon/internal/daemonlock"
 	"github.com/freeside-ai/freeside/daemon/internal/domain"
+	"github.com/freeside-ai/freeside/daemon/internal/gitenv"
 	"github.com/freeside-ai/freeside/daemon/internal/store"
 )
 
@@ -254,7 +255,7 @@ func TestRecordDeputyIdentitiesRecordsOnceAndRefusesDrift(t *testing.T) {
 func deputyTestGit(t *testing.T, dir string, args ...string) string {
 	t.Helper()
 	command := exec.Command("git", append([]string{"-C", dir}, args...)...) //nolint:gosec // G204: fixed test arguments
-	command.Env = append(os.Environ(), "GIT_CONFIG_GLOBAL=/dev/null", "GIT_CONFIG_SYSTEM=/dev/null",
+	command.Env = append(gitenv.Scrubbed(), "GIT_CONFIG_GLOBAL=/dev/null", "GIT_CONFIG_SYSTEM=/dev/null",
 		"GIT_AUTHOR_NAME=t", "GIT_AUTHOR_EMAIL=t@example.test", "GIT_COMMITTER_NAME=t",
 		"GIT_COMMITTER_EMAIL=t@example.test")
 	out, err := command.CombinedOutput()

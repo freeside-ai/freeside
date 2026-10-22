@@ -373,11 +373,77 @@ wait_for "$TMP/orphan-second.log" 'PASS: daemon test'
 kill "$(cat "$TMP/orphan.child")"
 wait "$waiter"
 
+# The stand-in go records the GIT_DIR it inherits and, on request, writes
+# through it the way an unscrubbed fixture helper would.
+mkdir "$TMP/decoy-tests"
+printf '#!/bin/bash\necho Linux\n' >"$TMP/decoy-tests/uname"
+cat >"$TMP/decoy-tests/go" <<'STUB'
+#!/bin/bash
+printf '%s\n' "${GIT_DIR-unset}" >"$RUN.git-dir"
+# Go's version-control stamping in a test build runs git status.
+git status --porcelain >/dev/null || exit 4
+[[ -z ${DECOY_WRITE:-} ]] || git config freeside.decoy touched || exit 3
+exit "${GO_RC:-0}"
+STUB
+chmod +x "$TMP/decoy-tests/"*
+decoy_path=$TMP/decoy-tests:$PATH
+env GIT_CONFIG_GLOBAL=/dev/null GIT_CONFIG_NOSYSTEM=1 git init -q "$TMP/ambient"
+cp -R "$TMP/ambient/.git" "$TMP/ambient-before"
+assert_ambient_unchanged() {
+  if diff -r "$TMP/ambient-before" "$TMP/ambient/.git" >/dev/null; then
+    pass=$((pass + 1))
+  else
+    report_failure 'the ambient repository changed'
+  fi
+}
+
+begin_case "tests run under the held slot's decoy GIT_DIR, never the ambient one"
+RUN=$TMP/decoy PATH=$decoy_path GIT_DIR=$TMP/ambient/.git DAEMON_TEST_MAX_RUNS=1 \
+  DAEMON_TEST_STATE_DIR=$TMP/decoy-state run_check daemon test
+assert_rc 0
+[[ $(cat "$TMP/decoy.git-dir") == "$TMP/decoy-state/slots/1.decoy/repo/.git/worktrees/wt" ]] ||
+  report_failure "GIT_DIR was $(cat "$TMP/decoy.git-dir")"
+[[ ! -e $TMP/decoy-state/slots/1.decoy ]] || report_failure 'the decoy was left behind'
+assert_ambient_unchanged
+
+begin_case "global index caches and a relative state directory leave the guard intact"
+printf '[core]\n\tuntrackedCache = true\n\tsplitIndex = true\n' >"$TMP/cache.gitconfig"
+mkdir "$TMP/relative-cwd"
+set +e
+OUT=$(cd "$TMP/relative-cwd" && RUN=$TMP/decoy PATH=$decoy_path DAEMON_TEST_MAX_RUNS=1 \
+  GIT_CONFIG_GLOBAL=$TMP/cache.gitconfig DAEMON_TEST_STATE_DIR=state "$CHECK" daemon test 2>&1)
+RC=$?
+set -e
+assert_rc 0
+[[ $(cat "$TMP/decoy.git-dir") == "$TMP/relative-cwd/state/slots/1.decoy/repo/.git/worktrees/wt" ]] ||
+  report_failure "GIT_DIR was $(cat "$TMP/decoy.git-dir")"
+
+begin_case "a write to the decoy fails a passing run and prints the change"
+RUN=$TMP/decoy PATH=$decoy_path GIT_DIR=$TMP/ambient/.git DAEMON_TEST_MAX_RUNS=1 \
+  DAEMON_TEST_STATE_DIR=$TMP/decoy-state DECOY_WRITE=1 run_check daemon test
+assert_rc 1
+assert_contains 'a test wrote to the decoy repository'
+assert_contains 'decoy = touched'
+assert_ambient_unchanged
+
+begin_case "without a slot the decoy is temporary and a test failure keeps its code"
+RUN=$TMP/decoy PATH=$decoy_path DAEMON_TEST_STATE_DIR=$TMP/decoy-off \
+  DECOY_WRITE=1 GO_RC=42 run_check daemon test
+assert_rc 42
+assert_contains 'decoy = touched'
+case $(cat "$TMP/decoy.git-dir") in
+  */freeside-decoy.*/repo/.git/worktrees/wt) pass=$((pass + 1)) ;;
+  *) report_failure "GIT_DIR was $(cat "$TMP/decoy.git-dir")" ;;
+esac
+[[ ! -e $TMP/decoy-off ]] || report_failure 'a run without a slot created state'
+
 if [[ -x /usr/bin/git ]]; then
   begin_case "macOS shim uses a stable git prefix and later steps keep PATH"
   mkdir -p "$TMP/git-tools" "$TMP/prefix/bin" "$TMP/prefix/libexec/git-core"
+  # Only --exec-path is faked: the test step's decoy repository needs git.
   cat >"$TMP/prefix/bin/git" <<'STUB'
 #!/bin/bash
+[[ $1 == --exec-path ]] || exec /usr/bin/git "$@"
 echo "${0%/bin/git}/libexec/git-core"
 STUB
   cp "$TMP/prefix/bin/git" "$TMP/prefix/libexec/git-core/git"

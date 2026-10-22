@@ -14,6 +14,7 @@ import (
 	"testing"
 
 	"github.com/freeside-ai/freeside/daemon/internal/domain"
+	"github.com/freeside-ai/freeside/daemon/internal/gitenv"
 )
 
 // testIdentityInput is a valid candidate identity input for push
@@ -77,7 +78,7 @@ func gitOut(t *testing.T, dir string, args ...string) string {
 		"-c", "gc.auto=0",
 	}
 	cmd := exec.Command("git", append(base, args...)...) //nolint:gosec // G204: test-authored fixture arguments
-	cmd.Env = scrubbedGitEnv()
+	cmd.Env = gitenv.Scrubbed()
 	if dir != "" {
 		cmd.Dir = dir
 	}
@@ -86,22 +87,6 @@ func gitOut(t *testing.T, dir string, args ...string) string {
 		t.Fatalf("git %v: %v\n%s", args, err, out)
 	}
 	return strings.TrimSpace(string(out))
-}
-
-// scrubbedGitEnv is the process environment with every GIT_* entry
-// dropped: fixture git commands must never inherit ambient git state.
-// A `git rebase --exec` run exports GIT_DIR, which would silently
-// retarget every fixture command at this repository itself — the same
-// ambient-state class the runner under test closes with its fully
-// replaced environment.
-func scrubbedGitEnv() []string {
-	var env []string
-	for _, e := range os.Environ() {
-		if !strings.HasPrefix(e, "GIT_") {
-			env = append(env, e)
-		}
-	}
-	return env
 }
 
 // localRemote is a bare "managed repository" fixture reachable over
@@ -260,7 +245,7 @@ func TestValidBranchNameAgreesWithGit(t *testing.T) {
 			continue // the gate may be stricter than git; only its accepts bind
 		}
 		cmd := exec.Command("git", "check-ref-format", "refs/heads/"+name) //nolint:gosec // G204: test-authored corpus
-		cmd.Env = scrubbedGitEnv()
+		cmd.Env = gitenv.Scrubbed()
 		if err := cmd.Run(); err != nil {
 			t.Errorf("validBranchName(%q) accepted a name git rejects (%v)", name, err)
 		}

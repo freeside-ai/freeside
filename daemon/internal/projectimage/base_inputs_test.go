@@ -13,6 +13,7 @@ import (
 	"github.com/freeside-ai/freeside/daemon/internal/contentaddr"
 	"github.com/freeside-ai/freeside/daemon/internal/domain"
 	"github.com/freeside-ai/freeside/daemon/internal/execfixture"
+	"github.com/freeside-ai/freeside/daemon/internal/gitenv"
 	"github.com/freeside-ai/freeside/daemon/internal/verify"
 )
 
@@ -80,7 +81,7 @@ func (r baseInputsRepo) git(args ...string) string {
 	r.t.Helper()
 	cmd := exec.CommandContext(r.t.Context(), "git", args...) //nolint:gosec // G204: fixed test git invocation
 	cmd.Dir = r.dir
-	cmd.Env = append(os.Environ(),
+	cmd.Env = append(gitenv.Scrubbed(),
 		"GIT_CONFIG_GLOBAL=/dev/null", "GIT_CONFIG_SYSTEM=/dev/null",
 		"GIT_AUTHOR_NAME=test", "GIT_AUTHOR_EMAIL=test@example.test",
 		"GIT_COMMITTER_NAME=test", "GIT_COMMITTER_EMAIL=test@example.test")

@@ -13,6 +13,7 @@ import (
 	"github.com/freeside-ai/freeside/daemon/internal/contentaddr"
 	"github.com/freeside-ai/freeside/daemon/internal/engine"
 	"github.com/freeside-ai/freeside/daemon/internal/exec"
+	"github.com/freeside-ai/freeside/daemon/internal/gitenv"
 )
 
 func authorPreflightRepository(t *testing.T, files map[string]string) (string, string) {
@@ -47,28 +48,12 @@ func authorPreflightGitInput(t *testing.T, root string, stdin io.Reader, args ..
 	t.Helper()
 	command := osexec.Command("git", append([]string{"-C", root}, args...)...) //nolint:gosec // Test-owned fixture directory and fixed Git arguments.
 	command.Stdin = stdin
-	command.Env = scrubbedGitEnv()
+	command.Env = gitenv.Scrubbed()
 	output, err := command.CombinedOutput()
 	if err != nil {
 		t.Fatalf("git %v: %v: %s", args, err, output)
 	}
 	return strings.TrimSpace(string(output))
-}
-
-// scrubbedGitEnv returns the process environment without its GIT_* entries.
-// Git exports GIT_DIR to hooks and to rebase --exec steps, and a fixture
-// command that inherits it writes to that repository instead of its own, -C
-// notwithstanding. The rest of the environment stays: Git on macOS needs it
-// to find its temporary directory without printing a warning into the output
-// these helpers return.
-func scrubbedGitEnv() []string {
-	var env []string
-	for _, entry := range os.Environ() {
-		if !strings.HasPrefix(entry, "GIT_") {
-			env = append(env, entry)
-		}
-	}
-	return env
 }
 
 func TestFixtureGitIgnoresAmbientGitDir(t *testing.T) {
