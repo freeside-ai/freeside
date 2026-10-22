@@ -175,6 +175,42 @@ FROM attention_items WHERE subject_task_id = ? AND status = 'open' ORDER BY id`,
 	return items, nil
 }
 
+// ListOpenAttentionItemTaskIDs returns, in ID order, every task that owns an
+// open item of one of the given types through its subject_task_id column.
+// It selects sweep candidates only and grants nothing: each caller reads a
+// task's items through ListOpenAttentionItemRecordsForTask, which runs the
+// task-scoped integrity guards. It deliberately skips the store-wide
+// divergence check, so one malformed row stops only its own task's read,
+// never the whole sweep; a row whose columns were altered is omitted and
+// stays open, as it would without the sweep.
+func (tx *ReadTx) ListOpenAttentionItemTaskIDs(ctx context.Context, kinds []domain.AttentionType) ([]domain.TaskID, error) {
+	selected, err := json.Marshal(kinds)
+	if err != nil {
+		return nil, fmt.Errorf("list open item tasks: %w", err)
+	}
+	rows, err := tx.tx.QueryContext(ctx, `
+SELECT DISTINCT subject_task_id FROM attention_items
+WHERE status = 'open' AND subject_task_id IS NOT NULL AND subject_task_id != ''
+  AND item_type IN (SELECT value FROM json_each(?))
+ORDER BY subject_task_id`, string(selected))
+	if err != nil {
+		return nil, fmt.Errorf("list open item tasks: %w", err)
+	}
+	defer func() { _ = rows.Close() }()
+	var ids []domain.TaskID
+	for rows.Next() {
+		var id domain.TaskID
+		if err := rows.Scan(&id); err != nil {
+			return nil, fmt.Errorf("list open item tasks: %w", err)
+		}
+		ids = append(ids, id)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("list open item tasks: %w", err)
+	}
+	return ids, nil
+}
+
 // checkAttentionTaskBodyLookup covers bodies accepted by Go but rejected by
 // SQLite JSON1, as checkAttentionRunBodyLookup does for run-scoped reads.
 func (tx *ReadTx) checkAttentionTaskBodyLookup(ctx context.Context, taskID domain.TaskID) error {

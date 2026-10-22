@@ -2572,6 +2572,16 @@ existing evidence; abandonment requests neither. Upgrading does not convert
 old abandonment facts into closures. Repeat abandonment explicitly to close
 an old admitted episode.
 
+Completion supersedes the open decisions owned by the completed episode on
+the next reconcile pass. Two kinds stay: the ready item, which the merge
+observer resolves itself, and proposals, which stay decidable because
+completion does not perform the effect they ask for. The conclusion names the
+merged pull request and is stamped at the completion's recorded time. A
+review dispute's conclusion also says any findings it lists were never
+routed; they stay on the closed card and in `freesided inspect task`. Tasks
+that completed before this version are cleaned up on the first pass after
+upgrade.
+
 An explicit `freesided reattempt` with a reason may use a closed parent that
 has an approved implementation specification, even while its provider remains
 live. It still checks lineage, cancellation, the policy cap, and execution

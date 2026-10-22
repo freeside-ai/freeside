@@ -3,6 +3,7 @@ package store
 import (
 	"errors"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 
@@ -105,5 +106,48 @@ func TestListOpenAttentionItemRecordsForTaskRejectsHiddenRows(t *testing.T) {
 				t.Fatalf("lookup error = %v, want inconsistent row", err)
 			}
 		})
+	}
+}
+
+func TestListOpenAttentionItemTaskIDs(t *testing.T) {
+	ctx := t.Context()
+	st := openTemplateStoreAt(t, filepath.Join(t.TempDir(), "store.db"), Options{})
+	first := attentionItemForRun(t, "first-item", "run-first")
+	second := attentionItemForRun(t, "second-item", "run-second")
+	closed := attentionItemForRun(t, "closed-item", "run-closed")
+	if err := st.Write(ctx, func(tx *WriteTx) error {
+		for _, item := range []*domain.AttentionItem{&first, &second, &closed} {
+			if err := putTestAttentionItem(ctx, tx, item); err != nil {
+				return err
+			}
+		}
+		closed.Status = domain.StatusExpired
+		closed.ItemVersion++
+		closed = domaintest.MustConclude(closed)
+		return tx.PutAttentionItem(ctx, closed)
+	}); err != nil {
+		t.Fatal(err)
+	}
+	// A malformed row selects its own task; it must not hide the others.
+	if _, err := st.db.ExecContext(ctx, `UPDATE attention_items SET body = '{' WHERE id = ?`, second.ID); err != nil {
+		t.Fatal(err)
+	}
+	want := []domain.TaskID{*first.Subject.TaskID, *second.Subject.TaskID}
+	slices.Sort(want)
+	if err := st.Read(ctx, func(tx *ReadTx) error {
+		ids, err := tx.ListOpenAttentionItemTaskIDs(ctx, []domain.AttentionType{domain.AttentionSpecApproval, domain.AttentionExecutionFailure})
+		if err != nil {
+			return err
+		}
+		if !slices.Equal(ids, want) {
+			t.Fatalf("task ids = %v, want %v", ids, want)
+		}
+		ids, err = tx.ListOpenAttentionItemTaskIDs(ctx, []domain.AttentionType{domain.AttentionSpecApproval})
+		if err == nil && len(ids) != 0 {
+			t.Fatalf("task ids of an unselected type = %v, want none", ids)
+		}
+		return err
+	}); err != nil {
+		t.Fatal(err)
 	}
 }
