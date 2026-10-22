@@ -40,11 +40,16 @@ The run **mode** is derived, not chosen: CLI mode (`freesided submit` seeds
 the task) or client-target mode (the task comes from the client composer,
 with the settings naming a manual-submission file). Read it from the tracker's Exit section and its latest
 exit-gate comment, which may also pin daemon flags or target properties
-(`references/prior-runs.md` lists the ones past trackers required). State
-the derived mode, its reason, and the expected spend, then wait for the
-user's go-ahead before preflight: a run costs real money, opens a real PR
-on someone's repository, and takes the operator's afternoon, so a wrong
-reading should cost one message, not a run.
+(`references/prior-runs.md` lists the ones past trackers required).
+
+Every run has two passes on the same `freesided` build SHA: a rehearsal
+pass on a disposable target (Rehearse Before The Operator), then the real
+run. Derive the exit contract (below), then state the derived mode, its
+reason, the expected spend of both passes, and every gate the contract
+leaves without a trigger, and wait for the user's go-ahead before
+preflight: a run costs real money, opens a real PR on someone's
+repository, and takes the operator's afternoon, so a wrong reading should
+cost one message, not a run.
 
 ## Derive the Exit Contract
 
@@ -71,8 +76,8 @@ order:
    same defects recur across runs; the digest names them so you look for
    them on purpose.
 
-The written contract has five parts: the gates this run must satisfy; the
-mode; the actions that must be exercised on real items, on which device
+The written contract has six parts: the gates this run must satisfy; the
+gate table (below); the mode; the actions that must be exercised on real items, on which device
 (the ready card's own actions belong on the list only under the rule in
 Walk Through below); the boundaries the record may rely on without proving
 (an accepted policy, an inactive configuration, a clean-break decision);
@@ -83,15 +88,38 @@ controlled defect in a dedicated challenge repository, never the real
 target (#1275 is the precedent), or record the gate as not measurable,
 before the run rather than after.
 
-Three alert gates need no real condition, only proof that the alert reaches
-the operator: a stalled writer, held work, and a review that keeps growing.
-`freesided raise-item` is their trigger. It raises the item each condition
-raises, on the run's own daemon, and the walkthrough below says when. Write
-each into the contract as a **synthetic-trigger proof**: it proves the item
-is delivered and shown, and the Go tests, not the run, prove the condition
-raises it.
+The **gate table** plans every check before launch, one row per gate the
+tracker's Exit section names (template in `references/checkpoints.md`):
+the trigger, the expected result on the Mac and on the iPhone, and the
+point in the run where it must happen. A trigger is one of three things:
+
+- **A real condition the run produces:** the specification card, the
+  published pull request and its ready card, the completion fact.
+- **A synthetic `freesided raise-item -alert <name>`:** for an alert that
+  needs no real condition, only proof that it reaches the operator (a
+  stalled writer, held work, a review that keeps growing). Build
+  `freesided` now from a clean checkout of the tip the run will use (the
+  rehearsal and the real run reuse that build), and take the names from its
+  `raise-item -list`, never from memory or this file; `raise-item -h` says
+  which need `-run`. The command raises the item each condition raises, on the
+  run's own daemon. Mark each such row a **synthetic-trigger proof**: it
+  proves the item is delivered and shown, and the Go tests, not the run,
+  prove the condition raises it.
+- **None.** A gate no real condition and no `raise-item` alert can reach
+  goes into the contract and the go-ahead message as untriggered, with
+  what would give it a trigger, before launch. Never discover it after.
+
+The point in the run is **before the merge** for anything that needs the
+ready pull request open (an external review, a ready-card action), or
+**after the merge and the completion fact** for `review-growth`, which is
+refused until the run's work unit is recorded complete, and the alerts
+raised with it (Walk Through on Both Clients).
 
 ## Preflight (Stop on Failure)
+
+You run these checks yourself, before the rehearsal pass; none needs the
+operator. Their environment checks come later, as one checkpoint list
+(The Environment Checkpoint below).
 
 Check each item and record the result. A failure here is reported on the
 tracker as an "Exit Preparation" comment (template in
@@ -112,45 +140,17 @@ with a partial run.
   implementation that never linked the issue; not from memory. The target
   usually lives in another repository (gh-imgup), and a bare `gh` call
   queries the current checkout's repository instead.
-- **The settings are written:** `<root>/daemon/settings.json`, mode `0600`,
-  with every key the daemon guide's settings table lists (daemon/README.md,
-  Run Real Work With The Deputy): prompt packages from the approved
-  default-branch commit (a stale package reused from an earlier run cost
-  run-70 its publication), the approved recipe digest, and for
-  client-target mode `manual_submission_config`. Read the table in this
-  session; it is the authority and it changes.
-- **A CLI-mode publication file names the target.** When the spec file is
-  the target's bare canonical issue URL, the publication file must be the
-  client record with `source_issue` set to that same URL
-  (docs/production-walkthrough.md, The Publication File And Work-Unit
-  Declaration); composition preflight refuses it otherwise. A target in the managed repository then becomes the pull
-  request's closing reference; one in another repository is linked and
-  stays open.
-- **The work-unit declaration is written.** It is the required fourth
-  argument in both modes: the task's own input in CLI mode, and the seed's
-  in client-target mode. The smallest file is
-  `{"completion_criterion": "bound_pr_merged"}`, which finishes the task
-  when its pull request merges. Composition preflight and `freesided
-  submit` refuse a submission without it, because a task accepted
-  with no declaration never records completion.
+- **The inputs are complete:** every row of the input checklist below for
+  the derived mode, read against the daemon guide's settings table in this
+  session (daemon/README.md, Run Real Work With The Deputy); the table is
+  the authority and it changes.
 - **Credentials are live:** the Codex reviewer token and the provider auth
-  identity. An expired token fails at composition preflight, after
-  onboarding and image work are already spent (#1363).
-- **The installed production daemon runs driverless** from an app that
-  includes #2080, and the App authority lives in its directories
-  (docs/production-walkthrough.md, Start And Verify). Leave it running: the
-  deputy never stops or restarts it. Preflight's `prod_execution` check
-  fails when it reports a driver, but a stopped `prod` passes, so have the
-  operator confirm it runs:
-  `"$HOME/Applications/Freeside.app/Contents/MacOS/FreesideMac" daemon
-  status` exits 0 and prints `health=reachable`. The command is the
-  operator's (plan §10); ask for its output rather than running it.
-- **Clients are rebuilt and installed from the tip** on both the Mac and the
-  physical iPhone, and both are on the tailnet the daemon will listen on. A
-  VPN on the Mac can block the tailnet range; a client built from an older
-  commit proves the older commit. Pairing itself happens after launch,
-  against the deputy's `api_url` (the pairing checkpoint below); a fresh state
-  root has no paired endpoint to check here.
+  identity. Composition preflight's `claude_credentials` and
+  `codex_credentials` checks are the authority, and the rehearsal pass runs
+  them before the real run spends anything. An expired token fails there,
+  after onboarding and image work are already spent (#1363); renew it
+  (docs/production-walkthrough.md, Recover Expired Reviewer Credentials)
+  and rerun the pass.
 - **The state root is usable:** a fresh root, or a retained one the current
   daemon can open. Clean-break migrations retire old roots at startup; don't
   spend a run discovering that. A retained root also keeps every
@@ -167,6 +167,162 @@ with a partial run.
   refuses the start (docs/production-walkthrough.md, Recover An Interrupted
   Deputy).
 
+### Input Checklist
+
+One table per mode. Each row names the input, where it lives, and the
+check that refuses it, so a missing input fails at a known point instead of
+during the run. The refusals stay in the daemon; this list makes sure you
+never reach them.
+
+**CLI mode.**
+
+| Input | Where it lives | What refuses it |
+| --- | --- | --- |
+| Settings, every key | `<root>/daemon/settings.json`, mode `0600`: prompt packages from the approved default-branch commit, the approved recipe digest | The deputy, before it takes the lease: a missing, unknown, or repeated key (`requireEveryKey`, `daemon/cmd/freesided/deputy_settings.go`), a relative path, an invalid prompt package. A stale package passes every check; only you catch it (run-70 lost its publication to one). |
+| Project | `submit -project`: the settings' `repository.project` | `freesided submit`, which requires it; composition preflight refuses a project the launch does not admit |
+| Specification | `submit -task`: a file holding exactly the target's bare canonical issue URL, or a specification file | `freesided submit`, which requires it |
+| Policy | `submit -policy`: the resolved policy keys, including `gates.spec_approval` and `gates.source_issue_closure` | `freesided submit`, which validates the keys and the specification policy (`specify.ParsePolicy`, `daemon/internal/specify/policy.go`) |
+| Publication | `submit -publication`: for a bare-URL target, the client record with `source_issue` set to that same URL (docs/production-walkthrough.md, The Publication File And Work-Unit Declaration) | Composition preflight and `freesided submit` (`submittedSourceReference`, `daemon/cmd/freesided/submit.go`) |
+| Work-unit declaration | `submit -work-unit`: at least `{"completion_criterion": "bound_pr_merged"}` | Composition preflight and `freesided submit` (`errWorkUnitRequired`, same file). A task accepted without one never records completion (#1931). |
+
+A target in the managed repository becomes the pull request's closing
+reference; one in another repository is linked and stays open.
+
+**Client-target mode.** The settings and the seed's `submit` inputs are
+the CLI-mode rows, for the visibility seed on a fresh root
+(docs/production-walkthrough.md, The Visibility Seed). Two rows are added:
+
+| Input | Where it lives | What refuses it |
+| --- | --- | --- |
+| Manual-submission file | `manual_submission_config` in the settings, the JSON in the daemon guide (Configure Client Task Submission) | The deputy at start, before the lease. A file with an empty `projects` array starts but accepts no client submission. |
+| Composer source text | The pairing checkpoint list, which you write and the operator types | Nothing: `Please handle <URL>.` creates valid work with no saved source reference (#1928). When the contract requires source-issue closure, write the bare canonical issue URL, with no prose or trailing punctuation. |
+
+The rehearsal pass exercises every CLI-mode row on its disposable target
+before the operator is involved. It leaves `manual_submission_config`
+empty, so in client-target mode the real run's deputy start is the first
+check of that file; it still comes before the pairing checkpoint.
+
+### The Environment Checkpoint
+
+Hand the operator the environment list from `references/checkpoints.md`
+after the rehearsal pass completes and before the real run starts, as one
+message. It covers what past runs found live, and each row says what to do
+when it fails:
+
+- **The installed production daemon runs driverless** from an app that
+  includes #2080, and the App authority lives in its directories
+  (docs/production-walkthrough.md, Start And Verify). Leave it running: the
+  deputy never stops or restarts it. Preflight's `prod_execution` check
+  fails when it reports a driver, but a stopped `prod` passes, so the
+  operator confirms it runs:
+  `"$HOME/Applications/Freeside.app/Contents/MacOS/FreesideMac" daemon
+  status` exits 0 and prints `health=reachable`. The command is the
+  operator's (plan §10); ask for its output rather than running it. On
+  failure: `daemon start` (app/README.md, Control The Supervised Daemon
+  From A Command), or install the current app when it predates #2080.
+- **Clients are rebuilt and installed from the tip** on both the Mac and the
+  physical iPhone. A client built from an older commit proves the older
+  commit. On failure: rebuild and install (app/README.md, Installing the
+  Operator Client and Installing on an iOS Device).
+- **The phone can reach the daemon.** Both devices are on the tailnet the
+  daemon will listen on. A VPN on the Mac can cut the iPhone off (#1930):
+  the operator turns it off or confirms the tailnet route. On failure every
+  phone proof in the run is lost, so fix it before launch or record each
+  iPhone row of the gate table as not measurable. Pairing itself happens
+  after launch, against the deputy's `api_url` (the pairing checkpoint
+  below); a fresh state root has no paired endpoint to check here.
+- **Credentials need nothing from the operator** once the rehearsal pass
+  passed composition preflight's `claude_credentials` and
+  `codex_credentials`. A Codex chain the renewal reports as revoked needs
+  `codex login` and a paired client's **Resolve re-enrollment**
+  (docs/production-walkthrough.md, Replace A Revoked Chain And Resolve Its
+  Hold): that is operator work before any pass can complete, so stop with
+  an Exit Preparation comment and hand it over on its own, outside the run.
+- **The liveness probe reaches the phone** when a tracker gate depends on
+  it. The probe runs outside the daemon, so nothing in the run installs or
+  tests it. You run `bash scripts/daemon-liveness-probe.sh check`; it
+  must exit 0. Then run `bash scripts/daemon-liveness-probe.sh
+  notify-test`, and the operator reports that the notice arrived on the
+  iPhone. On failure: `bash scripts/daemon-liveness-probe.sh install`, or
+  fix the phone's subscription, then repeat both.
+
+## Rehearse Before The Operator
+
+A rehearsal pass runs the whole pipeline once, unattended, on a disposable
+target, so the launch, inputs, credentials, publication, and alerts fail
+here and not in front of the operator. It is the first step after the
+go-ahead and preflight, and the operator is asked for nothing before a pass
+completes. docs/production-walkthrough.md (Rehearse Before The Real Run)
+holds the procedure; this section says what makes a pass count.
+
+1. **Same build, fresh root.** Build `freesided` from a clean checkout of
+   the SHA the real run will use, and make a fresh root (`mktemp -d`
+   style). The pass proves that build only: a real run on a different build
+   SHA needs a new pass.
+2. **Settings that differ only where they must.** Copy the real run's
+   settings and change only `listen`, `seed_root`, `repository.*` (the
+   disposable repository, its project, base, and allowed paths),
+   `manual_submission_config` (empty), `review.model` and `review.effort`
+   (the lowest-cost model the Codex subscription admits, at `low`),
+   `judgment.model` when the real run sets `judgment` (the lowest-cost
+   Claude model the pinned `judgment.claude_bin` serves), and the
+   `agent_tree.commit` those values require. The changed models emit a
+   different agent tree, so the rehearsal has its own agent-tree commit,
+   adopted once through the walkthrough's First Start procedure and reused
+   by later rehearsals. The writer, specifier, and remediator run the pinned
+   default route model, because no setting changes it.
+3. **A disposable target.** An issue in a dedicated throwaway repository
+   where the `prod` GitHub App is installed (the `freeside-review-challenge`
+   precedent, #1275), small enough that a review comes back clean. The same
+   images and approved recipe must serve it, since the settings keep them.
+   Never the real target.
+4. **Unattended inputs.** The policy file sets `gates.spec_approval` to
+   `false` (`PolicySpecApproval`, `daemon/internal/specify/policy.go`) and
+   leaves `gates.source_issue_closure` absent or `false`, its policy-approval
+   default (`daemon/internal/engine/publication_closure.go`), so neither a
+   specification nor a closure card waits for a person. The other inputs
+   are built the way the real run builds them, naming the disposable issue
+   and project instead of the target, so the pass exercises the CLI-mode
+   input checklist. Start
+   `freesided deputy -root <rehearsal-root>` as a tracked background task,
+   submit with `--require-composition`, and record the build, the settings
+   digest, and the composition result.
+5. **Read, never ask.** Read `freesided inspect task -db
+   <root>/daemon/freeside.db -task <task>` at each change of
+   `as_of_revision` until the run's `publication.outcome` is set: status
+   from `runs[].conclusion`, and the derived state from `freesided follow
+   -db <db> -run <run> -snapshot`. A card that needs a person (a finding
+   adjudication after a non-clean review, a closure approval) stops the
+   pass. That stop is a rehearsal finding, because the contract keeps people
+   on card decisions.
+6. **Merge, then raise the alerts.** Merge the rehearsal pull request in the
+   disposable repository yourself; the owner's merge rule covers real-work
+   pull requests on real targets. Wait for the run's
+   `publication.completion` in the record, then raise each alert the gate
+   table triggers synthetically, with the commands in Walk Through on Both
+   Clients. The run-bound alerts (`held-work`, `review-growth`) must show in
+   `items[]`. The rehearsal root has no paired device, so their
+   `deliveries` stay empty and the pass proves the daemon side only; a
+   daemon-subject alert (`stall`) never shows in a task's record, so its
+   proof is the raised item ID `raise-item` prints.
+7. **End it.** Apply the four record checks in
+   docs/production-walkthrough.md (Start And Verify), then end the deputy
+   with Ctrl-C. It must exit 0. The file `rig-acquisition.json` is removed
+   either way, so it proves nothing: a nonzero exit, or a line saying it
+   `left the rig lease for the next start to recover`, means the lease was
+   abandoned, and the real run's deputy would refuse that stale lease for
+   another root. Then run `freesided rig recover -state-root
+   <rehearsal-root>/daemon -confirm` before the real run starts, and record
+   the abandonment as a rehearsal finding.
+
+The pass counts as complete only when every step above passed. Record it as
+the Rehearsal row of the run record (`references/tracker-comment.md`):
+build SHA, root, settings digest, disposable target, task and run ids,
+`billable_cost`, and the result of the record checks, the alerts, and the
+lease release. A pass
+that fails is an Exit Preparation comment on the tracker with the defect
+filed, and no operator step happens until a later pass completes.
+
 ## Run the Deputy
 
 Follow docs/production-walkthrough.md; this section only says where to stop
@@ -174,8 +330,17 @@ and what to write down. Keep the deputy's shell open the whole time. Say in a
 line what you are about to start, because a run can take an hour and the
 operator needs to know when their step is next.
 
-1. Build `freesided` from a clean checkout of the tip and start
-   `freesided deputy -root <root>` as a tracked background task. Record the
+Each operator step is one list from `references/checkpoints.md`, filled in
+and sent as one message: pairing and health, specification approval, the
+pre-merge walkthrough and merge, and the post-merge alerts. Between
+checkpoints, ask the operator nothing. Status, cards, timeline, delivery,
+and spend come from the record (Walk Through on Both Clients), never from
+the operator.
+
+1. Start only after a rehearsal pass completed on the same build and its
+   lease is released. Build `freesided` from a clean checkout of that SHA
+   and start `freesided deputy -root <root>` on the real run's own root as
+   a tracked background task. Record the
    root, the build, the settings digest, and the composition-preflight
    result it prints; a failed self-check leaves execution disabled and
    stops the run. Then submit with `freesided submit --require-composition`
@@ -184,13 +349,20 @@ operator needs to know when their step is next.
    Visibility Seed). Record the submission id and task id. In CLI mode,
    check the publication file against what the pull request will carry
    (The Publication File And Work-Unit Declaration) before going on.
-2. **Checkpoint: pairing.** Once the daemon is up, pair both clients against
-   the deputy's `api_url` (a fresh state root) or confirm both still
-   reach the retained root's paired endpoint. A startup code that expires
-   before the iPhone pairs is renewed with
-   `freesided pairing-code -state-dir <root>/daemon`
-   (docs/production-walkthrough.md, Start And Verify). Record a
-   redacted receipt and which device paired, never the code.
+2. **Checkpoint: pairing and health.** Once the daemon is up, send the
+   pairing list: pair both clients against the deputy's `api_url` (a fresh
+   state root) or confirm both still reach the retained root's paired
+   endpoint. A startup code that expires before the iPhone pairs is renewed
+   with `freesided pairing-code -state-dir <root>/daemon`
+   (docs/production-walkthrough.md, Start And Verify). Record a redacted
+   receipt and which device paired, never the code.
+
+   When both report paired, run `freesided notify-test -state-dir
+   <root>/daemon` yourself. It prints `accepted by ntfy` or the failure per
+   paired device, and the operator confirms each test notice arrived; a
+   phone cannot send itself one yet (#1959). Before the first approval, the
+   operator syncs the run's task on the iPhone, so the approval card is
+   there to compare.
 
    On a retained root, before the first approval, open Inbox > System health
    in the Mac client and resolve each open item with the action its card
@@ -205,15 +377,17 @@ operator needs to know when their step is next.
    task's specification run is already waiting for admission, so that hold
    can show now; in client-target mode nothing waits until the operator
    composes a task.
-3. **Checkpoint (client-target mode):** once the clients are paired, hand
-   the operator the exact source text to enter in the composer. Read the
-   task id they report with `freesided inspect task`, confirm it is the
-   client's task and not the seed's, and record it as the one target. If the derived exit contract requires source-issue closure,
+3. **Client-target mode:** the pairing list's composer row hands the
+   operator the exact source text to enter. Find the new task yourself with
+   `freesided inspect -db <root>/daemon/freeside.db`, confirm with
+   `freesided inspect task` that it is the client's task and not the
+   seed's, and record it as the one target. If the derived exit contract requires source-issue closure,
    give the exact bare canonical GitHub issue URL before submission, with no
    prose or trailing punctuation. `Please handle <URL>.` creates valid work
    without a saved publication source reference.
-4. **Checkpoint:** the specification-approval card. The operator approves it
-   in a client; record which device and which actions the card offered.
+4. **Checkpoint: specification approval.** Send the list once the record
+   shows the open `spec_approval` item. The operator approves it in a
+   client; record which device and which actions the card offered.
    Leave the human gate on unless the contract says otherwise.
 
    **For closure-specific client-target runs,** no `freesided` read shows
@@ -221,24 +395,45 @@ operator needs to know when their step is next.
    does not report it, and the retired harness's `verify-source` receipt
    has no deputy equivalent. Record the pre-approval source proof as not
    run; neither displayed spec prose nor the seed's publication file is
-   evidence of that binding. A corrected source needs a fresh task under the
-   one-target rule; never repair the target task or clear its checkpoint.
+   evidence of that binding. A wrong source is a finding, not something to
+   repair: never edit the target task or clear its checkpoint, and compose
+   a corrected task only with the owner's yes, recording it as the new one
+   target and the first as superseded.
 
    The closure proof is then the live one: record the same task's actual
    closure proposal path, including its `propose_site` result; fallback or
    `has_proposal=false` does not satisfy that proof. The later proposal,
    policy or human approval, and publisher checks remain required.
-5. Follow implementation to publication. Record the specification and
-   implementation run ids, the campaign and attempt, base and head SHAs, the
-   review id, model, and outcome, the publication outcome the task record
-   shows, and the spend.
-6. If submit's output is lost or the submission looks stranded, recover it
-   by its saved identity: each submission saves a `submission-id`, and
-   `freesided submit --db <database> --retry-submission-id <id>` reloads
-   the saved inputs (docs/production-walkthrough.md). Don't mutate the
-   store, and don't
-   resubmit with edited inputs; that creates a second task next to the
-   stranded one.
+5. Follow implementation to publication in the record: `freesided inspect
+   task` for each run's `conclusion` (outcome, hold reason, terminal
+   status), and `freesided follow -db <db> -run <run> -snapshot` for the
+   derived supervision state. Record the specification and implementation
+   run ids, the campaign and attempt, base and head SHAs, the review id,
+   model, and outcome, the run's `publication.outcome`, and each run's
+   `billable_cost`.
+
+**One task per run.** Never resubmit. Each `submit` creates new work, and
+a relaunch that leaves a second task for the target puts a second card in
+the clients that looks like the first (#1922).
+
+- **A deputy that dies** is restarted on the same root. It recovers its
+  lease (docs/production-walkthrough.md, Recover An Interrupted Deputy),
+  and the task resumes on its own record.
+- **A lost `submit` result** is replayed by its saved identity:
+  `freesided submit --db <database> --retry-submission-id <id>` reloads the
+  saved inputs and never creates a replacement (docs/production-walkthrough.md,
+  Start And Verify).
+- **A refused duplicate** (`refuseUnfinishedDuplicate`,
+  `daemon/cmd/freesided/submit.go`) names the first task. That task is the
+  run's task.
+- **The composer has no such guard:** each client submission creates a
+  task. The operator composes once. When the client loses the result, find
+  the task with `freesided inspect -db <database>`; never ask for a second
+  composition.
+- **Don't mutate the store,** and don't resubmit with edited inputs.
+
+The record shows exactly one task for the target. A second one is a
+finding.
 
 A defect that stops the run is a finding first: file it, then stop and
 report. Running this skill authorizes no implementation.
@@ -267,11 +462,24 @@ report. Running this skill authorizes no implementation.
 
 The run's PR is not the proof; the walkthrough is. The merge ends the part
 of it that needs the ready pull request open: the ready card resolves on
-merge, and an external review can only be posted before it. So:
+merge, and an external review can only be posted before it.
 
-- Collect the pre-merge evidence first: every action the contract lists,
-  with the operator's report of each on each device. Then hand the owner
-  the PR link as a plain checkpoint and wait for the merge.
+**Read the record, not the operator.** Status, cards, timeline, delivery,
+and spend come from `freesided inspect task`: `items[]` with each item's
+`status`, `conclusion`, and per-device `deliveries`; the task `timeline`;
+`runs[].conclusion`; `runs[].billable_cost`. `freesided follow -snapshot`
+adds the derived state. Ask the operator only what a screen shows. On the
+Mac, prefer a window capture through computer use when the operator has
+granted it: an agent can drive a card's buttons without the pointer, but
+the card's More Actions menu and the menu-bar Start and Stop need
+full-screen control (#1988). On the iPhone, the operator's screenshot is
+the evidence, requested in the checkpoint list, never one question at a
+time. So:
+
+- **Checkpoint: pre-merge walkthrough and merge.** One list covers every
+  action the contract lists before the merge, per device, and ends with
+  the PR link for the owner. Collect the operator's reports, check them
+  against the record, then wait for the merge.
 - The ready card's own actions (`open_pr`, `mark_seen`, `dismiss`,
   `return_to_agent`) are not a per-run obligation. Put one on the
   contract's list only when a tracker gate names it, a prior run left a gap
@@ -289,11 +497,15 @@ merge, and an external review can only be posted before it. So:
   (a live Stop, a duplicate submission, a retry). A Stop check follows
   docs/task-cancellation-check.md and records its runtime evidence
   separately.
-- After the merge, wait for and record the completion fact (the
-  `work_unit_completions` row or its current equivalent) and the resolved
-  ready item. The daemon records that fact against the task's work-unit
-  declaration: the one you passed in CLI mode, or the one the daemon wrote
-  for the client-composed task in client-target mode.
+- After the merge, wait for and record the completion fact (the run's
+  `publication.completion` in the record) and the resolved ready item.
+  The daemon records that fact against the task's work-unit declaration:
+  the one you passed in CLI mode, or the one the daemon wrote for the
+  client-composed task in client-target mode. A daemon that stopped itself
+  records no completion, and the review-growth alert depends on it, so the
+  pre-merge list asks, right before the merge, whether the Mac shows the
+  STOPPED banner or an open `daemon_durable_stop` notice. That notice
+  names the daemon, not a task, so no `freesided` read shows it.
 - Then raise the alert gates, while the run's daemon is still up. The
   review-growth alert is refused until the completion fact is recorded, and
   ending the deputy stops the daemon, so this is the only point where all
@@ -306,15 +518,19 @@ merge, and an external review can only be posted before it. So:
   freesided raise-item -db "$db" -alert review-growth -run <run-id>
   ```
 
-  Each prints the raised item's ID and type. Have the operator report, per
-  alert and per device, whether the notification arrived and what the card
-  shows, and record the item ID beside the report. Every one of these is a
+  Each prints the raised item's ID and type. Read delivery yourself: a
+  run-bound item (`held-work`, `review-growth`) shows in `inspect task`'s
+  `items[]` with a `deliveries` entry per paired device. The `stall` notice
+  names the daemon, not a run, so no `freesided` read shows it; for that
+  one the operator's report is the delivery evidence. Then send the
+  **post-merge alerts** checkpoint list: the operator reports, per alert
+  and per device, what the notification and the card show, and you record
+  the item ID beside each report. Every one of these is a
   synthetic-trigger proof and the record says so: nothing stalled, nothing
   was held, and no review round stands behind the review card, so the
-  operator reads the cards and decides nothing on them. `raise-item -list`
-  names the alerts the binary can raise; a refusal (a daemon that is not
-  `ephemeral`, no daemon, a run with no completion) is a finding, not
-  something to work around.
+  operator reads the cards and decides nothing on them. A refusal (a
+  daemon that is not `ephemeral`, no daemon, a run with no completion) is
+  a finding, not something to work around.
 - Read the final task record with `freesided inspect task` while the
   deputy still serves and apply the record checks in
   docs/production-walkthrough.md, Start And Verify:
@@ -326,8 +542,9 @@ merge, and an external review can only be posted before it. So:
   same root rather than a fresh one: it recovers the stale lease
   (Recover An Interrupted Deputy), and a fresh root would not be this run's
   evidence.
-- Ask the operator for screenshots of anything visually wrong; they attach
-  to the finding issue and are the only evidence a client defect leaves.
+- Every checkpoint list asks for screenshots of anything visually wrong;
+  they attach to the finding issue and are the only evidence a client
+  defect leaves.
 
 ## File Findings
 
@@ -414,9 +631,10 @@ note.
 
 - **Bottom line first:** can the tracker close, and if not, what stands
   between here and closure, in two sentences.
-- **Run record** as a table: state root, clients and their commit, each
-  campaign and attempt with its result, review, task record, spend, PR,
-  base and head.
+- **Run record** as a table: the rehearsal pass, state root, clients and
+  their commit, each campaign and attempt with its result, review, task
+  record, spend, PR, base and head.
+- **Gate table** from the contract, each row with its result.
 - **Actions exercised** on real items, per device, and the ones not
   evidenced with why.
 - **Synthetic-trigger proofs**, apart from the real items: per raised alert,
@@ -475,9 +693,12 @@ the derivation step can read every prior run newest first.
 
 This skill restates rules that live elsewhere: the tracking-issue format and
 lane table (docs/coordination.md), the deputy's settings (daemon/README.md,
-Run Real Work With The Deputy), the walkthrough and recovery steps
-(docs/production-walkthrough.md), the Stop check
-(docs/task-cancellation-check.md), the `raise-item` command
+Run Real Work With The Deputy), the walkthrough, rehearsal, and recovery
+steps (docs/production-walkthrough.md, including Rehearse Before The Real
+Run), the task record's fields (daemon/README.md, Read A Task's Record), the
+Stop check (docs/task-cancellation-check.md), the `raise-item` command
 (daemon/README.md, Operational Commands), and the Forge Edits and label
 rules (AGENTS.md). Those documents are authoritative; when they change,
 mirror the change here, and when this skill disagrees with them, they win.
+`references/checkpoints.md` restates this skill's operator steps as lists;
+change both in the same edit.

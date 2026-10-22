@@ -27,6 +27,7 @@ Evidence basis: the run itself from `main` at `<sha>`, the state root
 
 | Step | Result |
 | --- | --- |
+| Rehearsal | <build SHA; root; settings digest; disposable target; task and run ids; `billable_cost`; record checks, alerts raised, lease released: passed or the finding> |
 | State root | <fresh or retained; onboarding profile; anything the current daemon refused; if retained, the system-health items resolved at the pairing checkpoint (id and action) and any advisory ones left open, with why> |
 | Clients | <Mac and iPhone build commit only; no addresses, device names, or pairing codes> |
 | Campaign <n>, specification | <run id; outcome; who approved, on which device, which actions the card offered> |
@@ -36,6 +37,14 @@ Evidence basis: the run itself from `main` at `<sha>`, the state root
 | Publication | <PR link; base to head; branch; whether merged and by whom> |
 | Completion fact | <the recorded completion row after the merge, or why none> |
 | Spend | <per role; total; review cost owner> |
+
+**Gates:** the contract's gate table (`references/checkpoints.md`) with a
+Result column: passed, failed with the finding, or not measurable as
+recorded before launch.
+
+| Gate | Trigger | Expected on Mac | Expected on iPhone | When | Result |
+| --- | --- | --- | --- | --- | --- |
+| <gate> | <real, synthetic, or none> | <expected> | <expected> | <point in the run> | <result> |
 
 **Actions exercised on real items:** <action (card, device)> ...
 **Not evidenced this run:** <action: why; what covers it instead> ...

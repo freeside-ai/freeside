@@ -148,7 +148,11 @@ freesided inspect task -db <root>/daemon/freeside.db -task <task-id>
 The first lists the tasks the daemon holds; the second prints one task's
 timeline, runs, attention items, and publication outcome as versioned JSON
 ([Read A Task's Record](../daemon/README.md#read-a-tasks-record)). A published
-run's outcome names the pull request of exactly the exported head.
+run's outcome names the pull request of exactly the exported head. Each
+attention item carries its per-device `deliveries`, so the record also shows
+whether a card's notification reached each paired client. For one run's
+derived supervision state, read
+`freesided follow -db <root>/daemon/freeside.db -run <run-id> -snapshot`.
 
 The record proves a run only when it holds together. `inspect task` exits 0
 when a section or item fails its store check, so read the fields, not the
@@ -170,6 +174,67 @@ endpoint, and the published head the record shows. Later actions can change
 the run, so an earlier read does not prove a later head. Health from the
 default service on port 7331 does not prove this run is still available at
 its paired endpoint.
+
+## Rehearse Before The Real Run
+
+An exit run starts with a rehearsal pass: the same build runs the whole
+pipeline once, unattended, on a disposable target, so a launch, input,
+credential, or publication problem shows up before the operator is involved.
+The exit-run skill (`.claude/skills/exit-run/SKILL.md`, Rehearse Before The
+Operator) says when a pass counts; this section is the procedure.
+
+**Root and build.** Use a fresh root and a `freesided` built from a clean
+checkout of the SHA the real run will use. A real run on another build needs
+a new pass.
+
+**Settings.** Copy the real run's settings file and change only these keys:
+
+| Key | Rehearsal value |
+| --- | --- |
+| `listen` | A listener of its own |
+| `seed_root` | A directory of its own for the daemon-owned base checkouts |
+| `repository.*` | The disposable repository: its `repo`, `repository_id`, `base_ref`, `base_sha`, `allowed_paths`, `checkout`, and `project` |
+| `manual_submission_config` | `""` |
+| `review.model`, `review.effort` | The lowest-cost model the Codex subscription admits, at `low` |
+| `judgment.model` | When the real run sets `judgment`: the lowest-cost Claude model the pinned `judgment.claude_bin` serves |
+| `agent_tree.commit` | The rehearsal tree's commit (below) |
+
+The review and judgment models are part of the emitted agent tree, so the
+rehearsal needs its own agent-tree commit. Adopt it once through
+[The First Start](#the-first-start) and keep it, for example on its own branch
+of the same agent-tree checkout; later rehearsals reuse it. The writer,
+specifier, and remediator run the pinned default route model, which no setting
+changes.
+
+**Disposable target.** An issue in a dedicated throwaway repository where the
+`prod` GitHub App is installed, as the `freeside-review-challenge` repository
+was for #1275. The images and approved recipe stay as the real run's, so the
+repository must be one they serve. Keep the issue small enough for a clean
+review: a review finding or a closure gate opens a card only a person can
+answer, and that stops the pass.
+
+**Inputs.** Build the `submit` inputs as the real run will, naming the
+disposable issue and project instead of the target. The policy file sets
+`gates.spec_approval` to `false` and leaves `gates.source_issue_closure`
+absent or `false`, so neither a specification nor a closure card waits for a
+person.
+
+**Run it.** Start the deputy and submit as in [Start And Verify](#start-and-verify),
+on the rehearsal root. Follow the task with `freesided inspect task` until the
+run's `publication.outcome` is set. Merge the rehearsal pull request in the
+disposable repository, wait for the run's `publication.completion`, and raise
+the alerts the exit contract triggers synthetically with
+`freesided raise-item` (exit-run skill, Walk Through on Both Clients).
+With no paired client on the rehearsal root, the record shows each run-bound
+item but no `deliveries`: the pass proves the daemon side only.
+
+**End it before the real run.** Apply the four record checks above, then end
+the deputy with Ctrl-C ([Complete Deliberately](#complete-deliberately)). It
+must exit 0. A nonzero exit, or a line saying it left the rig lease for the
+next start to recover, means the lease was abandoned; `rig-acquisition.json`
+is removed either way, so its absence proves nothing. Recover an abandoned
+lease with `freesided rig recover -state-root <rehearsal-root>/daemon -confirm`
+before the real run, which needs the rig lease and starts on its own root.
 
 ## Enroll The Identities And Check The Agent Tree
 
@@ -497,8 +562,10 @@ client are unavailable.
 
 ### Next Exit-Run Commands
 
-For the #1211 exit run against `freeasinbird/gh-imgup#82`, with the settings
-file naming the manual-submission file and `prod` left running:
+For the #1211 exit run against `freeasinbird/gh-imgup#82`, after a rehearsal
+pass on the same build ([Rehearse Before The Real Run](#rehearse-before-the-real-run)),
+with the settings file naming the manual-submission file and `prod` left
+running:
 
 ```sh
 freesided deputy -root <root>
