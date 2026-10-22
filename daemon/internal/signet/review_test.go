@@ -55,7 +55,10 @@ func TestRunReviewTimelineProgressAndBindings(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			if timeline.Review == nil || timeline.Review.Rounds[0].State != domain.ReviewPending {
+			// No admission snapshot is stored, as for a request written
+			// before review admission: the round names no reviewer.
+			if timeline.Review == nil || timeline.Review.Rounds[0].State != domain.ReviewPending ||
+				timeline.Review.Rounds[0].Provider != nil || timeline.Review.Rounds[0].ModelConfiguration != nil {
 				t.Fatalf("pending: %#v", timeline.Review)
 			}
 			before := timeline.AsOfRevision
@@ -78,7 +81,8 @@ func TestRunReviewTimelineProgressAndBindings(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			if timeline.Review.Rounds[0].State != domain.ReviewRunning || timeline.AsOfRevision <= before {
+			if timeline.Review.Rounds[0].State != domain.ReviewRunning || timeline.AsOfRevision <= before ||
+				timeline.Review.Rounds[0].Provider != nil || timeline.Review.Rounds[0].ModelConfiguration != nil {
 				t.Fatalf("running: %#v", timeline)
 			}
 			// A round recorded before the admission snapshot: the timeline
@@ -121,6 +125,91 @@ func TestRunReviewTimelineProgressAndBindings(t *testing.T) {
 				t.Fatal(err)
 			}
 			golden.Assert(t, "run-timeline-review", body)
+		})
+	}
+}
+
+func TestRunReviewTimelineNamesAdmittedReviewerBeforeResult(t *testing.T) {
+	for _, terminal := range []string{"record", "failure", "foreign run", "shadow role"} {
+		t.Run(terminal, func(t *testing.T) {
+			ctx := context.Background()
+			f := newCorpusFixture(t)
+			run, foreign := corpusRun("review-run"), corpusRun("foreign")
+			request := domain.ReviewRequestRecord{InvocationID: "review-1", RunID: run.ID, Round: 1, BaseSHA: "base", HeadSHA: "head", RequestedAt: f.at}
+			admission := fake.SeededReviewAdmission(run.ID, request.InvocationID)
+			switch terminal {
+			case "foreign run":
+				admission.RunID = foreign.ID
+			case "shadow role":
+				admission = fake.RecordAdmission(domain.RoleShadowReviewer, run.ID, request.InvocationID)
+			}
+			f.mustWrite(t, func(tx *store.WriteTx) error {
+				for _, r := range []domain.Run{run, foreign} {
+					if err := tx.PutRun(ctx, r); err != nil {
+						return err
+					}
+				}
+				if err := tx.PutReviewAdmission(ctx, *admission); err != nil {
+					return err
+				}
+				if err := tx.PutReviewRequest(ctx, request); err != nil {
+					return err
+				}
+				return tx.RecordInvocationObservation(ctx, domain.InvocationObservation{InvocationID: request.InvocationID, RunID: run.ID, Status: domain.ObservedStatusRunning, ObservedAt: f.at})
+			})
+			timeline, err := f.service.GetRunTimeline(ctx, run.ID)
+			if terminal == "foreign run" || terminal == "shadow role" {
+				if !errors.Is(err, domain.ErrParentKeyMismatch) {
+					t.Fatalf("snapshot bound elsewhere: %v", err)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatal(err)
+			}
+			named := func(state string, r signet.RunReviewRound) {
+				t.Helper()
+				if r.Provider == nil || *r.Provider != "openai" || r.ModelConfiguration == nil || *r.ModelConfiguration != "gpt-codex/high" {
+					t.Fatalf("%s: provider %v, model configuration %v", state, r.Provider, r.ModelConfiguration)
+				}
+			}
+			r := timeline.Review.Rounds[0]
+			if r.State != domain.ReviewRunning || r.CompletedAt != nil || r.Outcome != nil {
+				t.Fatalf("running: %#v", r)
+			}
+			named("running", r)
+			if terminal == "record" {
+				timeline.AsOf = f.at.Add(time.Hour)
+				body, err := json.MarshalIndent(timeline, "", "  ")
+				if err != nil {
+					t.Fatal(err)
+				}
+				golden.Assert(t, "run-timeline-review-running", body)
+			}
+			// The terminal fact keeps the identity the round showed while it
+			// ran: a record shows its embedded snapshot, and a failure keeps
+			// the stored one.
+			f.mustWrite(t, func(tx *store.WriteTx) error {
+				if terminal == "failure" {
+					return tx.PutReviewFailure(ctx, domain.ReviewFailure{InvocationID: request.InvocationID, RunID: run.ID, Round: 1, BaseSHA: request.BaseSHA, HeadSHA: request.HeadSHA, Class: domain.ReviewFailureConfiguration, Reason: "No diff access", ObservedAt: f.at.Add(time.Minute)})
+				}
+				return tx.PutReviewRecord(ctx, domain.ReviewRecord{
+					InvocationID: request.InvocationID, RunID: run.ID, Round: 1, Admission: fake.SeededReviewAdmission(run.ID, request.InvocationID),
+					ConfigurationDigest: domain.Digest("sha256:" + strings.Repeat("c", 64)), InstructionDigest: domain.Digest("sha256:" + strings.Repeat("d", 64)),
+					BaseSHA: request.BaseSHA, HeadSHA: request.HeadSHA, CompletedAt: f.at.Add(time.Minute),
+					CompletionEvidence: domain.Digest("sha256:" + strings.Repeat("e", 64)), Outcome: domain.ReviewClean,
+				}, nil)
+			})
+			timeline, err = f.service.GetRunTimeline(ctx, run.ID)
+			if err != nil {
+				t.Fatal(err)
+			}
+			r = timeline.Review.Rounds[0]
+			want := map[string]domain.ReviewProgressState{"record": domain.ReviewCompleted, "failure": domain.ReviewFailed}[terminal]
+			if r.State != want {
+				t.Fatalf("%s: %#v", terminal, r)
+			}
+			named(terminal, r)
 		})
 	}
 }

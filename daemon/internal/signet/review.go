@@ -141,6 +141,17 @@ func runReviewFacts(ctx context.Context, tx *store.ReadTx, runID domain.RunID, o
 			return nil, err
 		}
 		r.RequestedAt = &request.RequestedAt
+		// The admission snapshot is written before the request, so a round
+		// in progress names its reviewer and model before any result. A
+		// request recorded before admission has none and shows no identity.
+		if admission, err := tx.GetReviewAdmission(ctx, request.InvocationID); err == nil {
+			if admission.RunID != runID || admission.Role != domain.RoleReviewer {
+				return nil, domain.ErrParentKeyMismatch
+			}
+			r.Provider, r.ModelConfiguration = new(admission.ProviderLabel()), new(admission.ModelConfiguration())
+		} else if !errors.Is(err, store.ErrNotFound) {
+			return nil, err
+		}
 		for _, observation := range observations {
 			if observation.InvocationID != request.InvocationID {
 				continue
@@ -160,8 +171,9 @@ func runReviewFacts(ctx context.Context, tx *store.ReadTx, runID domain.RunID, o
 		}
 		r.State, r.CompletedAt = domain.ReviewCompleted, &record.CompletedAt
 		// A round written since review admission shows its admitted agent's
-		// lineage group and model configuration; a legacy round shows the
-		// strings it stored.
+		// lineage group and model configuration, the same strings its stored
+		// snapshot showed while it ran; a legacy round shows the strings it
+		// stored.
 		r.Provider, r.ModelConfiguration = new(record.Provider()), new(record.ModelConfiguration())
 		r.Outcome, r.FindingsCount = &record.Outcome, new(len(record.FindingIDs))
 		r.Evidence.CompletionEvidence = &record.CompletionEvidence
