@@ -2333,12 +2333,12 @@ the offer its role's lineup line names, which `freesided auth adopt
 -judgment-model` writes for the baseline lines. Each call authenticates with
 the setup token stored for the enrollment that line names, so no new API key
 or login is needed and judgment usage is billed to that enrollment's account.
-The default, with both flags absent, switches judgments off: the daemon
+The default, with every `-judgment-*` flag absent, switches judgments off: the daemon
 starts, every judgment role is off rather than unbound, so no
 `judgment_role_unbound` item is raised and nothing holds unattended admission
 whatever lines the tree holds, and every judgment site returns its fail-safe
 with the reason `role_off`. The task namer keeps
-the identifier name when judgments are unbound or naming fails. Naming uses a
+the identifier name when judgments are off or unbound or naming fails. Naming uses a
 separate serial worker after durable dispatch, so a slow provider does not
 delay reconciliation. Its 32-entry in-memory queue keeps the identifier
 fallback when full or lost on restart. Diagnostic and
