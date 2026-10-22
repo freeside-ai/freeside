@@ -2901,3 +2901,26 @@ The client work is #1798 to #1803.)
 
 (Owner decisions of 2026-10-21, #2113;
 [decision note](../../devlog/2026-10-21-1215-claude-review-and-bootstrap.md).)
+
+---
+
+## Revision 93 ("Contract Assessments By The Creating Or Fiat Session"):
+
+1. **The creating or fiat session places a contract unit.** The session
+   that creates a `kind:contract` unit, or receives its `Plan #N` or
+   `Handle #N`, records each missing assessment against a contract unit
+   holding an active claim or planning reservation, on both issues, with
+   `starts-after` for any pair it cannot assess; the write is part of its
+   assignment. The spine still assesses against every scheduled or active
+   contract unit when it schedules a unit. A planner writes the lines
+   before its reservation. A recorded `starts-after` between two contract
+   units no longer holds back planning in either direction, and a
+   dependent's reservation no longer blocks its prerequisite's claim. No
+   independence is recorded against a partner mid-planning. Unchanged: the
+   cap of two, the serialization of unassessed pairs, the record's form,
+   and the two authorization doors. Rejected: keeping a separate spine step
+   with planning failing closed, because nothing triggers that step when
+   fiat follows creation (#2115 against #2111, 2026-10-21).
+
+(Owner decision in #2119, 2026-10-21;
+[decision note](../../devlog/2026-10-21-1256-fiat-session-contract-assessment.md).)
