@@ -29,7 +29,7 @@ import (
 const (
 	tokenLiveEnv     = "FREESIDE_CLAUDE_TOKEN_LIVE_TEST"
 	tokenEnv         = "CLAUDE_CODE_OAUTH_TOKEN" //nolint:gosec // G101: the variable's name, not a credential
-	pinnedCLIVersion = "2.1.220"
+	pinnedCLIVersion = "2.1.282"
 	anthropicAPIBase = "https://api.anthropic.com"
 )
 

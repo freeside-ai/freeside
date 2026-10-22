@@ -396,7 +396,7 @@ func TestCallAdapterV2AddsOnlyTheEffortsItCanSend(t *testing.T) {
 // held to this definition.
 func TestReviewAdapterV2AddsOnlyTheEffortsItCanSend(t *testing.T) {
 	v1, v2 := must(agentbaseline.CodexReviewAdapterV1()), must(agentbaseline.CodexReviewAdapter())
-	const v1Digest = "sha256:cc1dd347863eafc67e095ddee3af95fb3141f606fae4d25d2e472ff2bd172f98"
+	const v1Digest = "sha256:d00b13ede2cb339da5cfc4828f7ecdf10978adda2c0079c6c1fb533aaef726a1"
 	if v1.Digest != v1Digest || v1.AdapterBuild != "codex_review_v1" {
 		t.Fatalf("v1 review adapter = %s %s, want the adopted %s", v1.AdapterBuild, v1.Digest, v1Digest)
 	}

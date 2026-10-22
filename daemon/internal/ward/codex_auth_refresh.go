@@ -84,8 +84,9 @@ type codexAuthHTTPRefresher struct {
 	endpoint string
 }
 
-// NewCodexAuthHTTPRefresher returns the pinned Codex 0.147.0 refresh client.
-// The request shape and public OAuth client id mirror that CLI version.
+// NewCodexAuthHTTPRefresher returns the Codex refresh client. The request
+// shape and public OAuth client id mirror Codex 0.147.0; the 0.162.1 pin
+// carries the same client id and endpoint.
 func NewCodexAuthHTTPRefresher() CodexAuthRefresher {
 	transport := http.DefaultTransport.(*http.Transport).Clone()
 	transport.Proxy = nil

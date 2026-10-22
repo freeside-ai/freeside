@@ -12,8 +12,8 @@ import (
 // Containerfiles, so an image bump that forgets the adapter fails there: a
 // new harness build is a new adapter digest with no conformance record.
 const (
-	ClaudeCodeHarnessBuild = "claude-code 2.1.220"
-	CodexHarnessBuild      = "codex-cli 0.147.0"
+	ClaudeCodeHarnessBuild = "claude-code 2.1.282"
+	CodexHarnessBuild      = "codex-cli 0.162.1"
 )
 
 // ClaudeCallHarnessBuild is the Claude CLI build the judgment call launch was

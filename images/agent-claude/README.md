@@ -24,7 +24,7 @@ Use `--registry HOST[/PATH]` instead for a shared image. The image is
 | --- | --- |
 | Base | `docker.io/library/debian:trixie-slim@sha256:020c0d20…` |
 | Node | v24.18.0, official `linux-arm64` tarball, sha256 literal in the Containerfile |
-| Claude CLI | `@anthropic-ai/claude-code@2.1.220` |
+| Claude CLI | `@anthropic-ai/claude-code@2.1.282` |
 
 `busybox-static`, `ca-certificates`, `diffutils`, `file`, `git`, `jq`, `patch`,
 and `ripgrep` come from Debian's archive and are **recorded, not pinned**: their
