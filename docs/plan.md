@@ -353,9 +353,8 @@ that exposure must appear in the residual-risk documentation. (Decider: user.)
 A Linux host enters as an execution host (Section
 [5.7](#57-the-ward-runners-handoff-gate-and-operating-modes), Execution Hosts),
 never as the control plane. The credential exposure above applies to every
-execution host, and proxy credential injection (#2175) with the control-plane
-injection recorded there gates any host the owner does not physically hold
-(revision 94).
+execution host, and `subscription_injected` (Section [5.4](#54-credential-modes-egress-profiles-and-concurrency))
+is required on any host the owner does not physically hold (revision 95).
 
 ### 3.4 Simplicity
 
@@ -939,7 +938,8 @@ Every run declares and records one credential mode:
 | Mode | Meaning |
 | --- | --- |
 | `subscription_contained` | Phase 1 default. The native vendor CLI runs in the agent VM. Its credential mount is read-only where permitted. The remaining exposure is an accepted, documented residual risk. |
-| `api_key_isolated` | Supported in Phase 2. |
+| `subscription_injected` | Supported in Phase 2; fiat pulls it forward for the first host the owner does not physically hold (revision 95). The native vendor CLI runs unmodified with a per-run placeholder in the token's place. The run's proxy on the daemon host terminates provider TLS under a per-run CA and substitutes the identity's token on the declared provider authorities and paths only. The writer, and any execution host, holds no provider secret. |
+| `api_key_isolated` | Supported in Phase 2. Reuses the `subscription_injected` path with an API key in the token's place. |
 | `local_trusted` | Permitted only for explicitly trusted inputs. |
 
 **Credential delivery under `subscription_contained` (Claude).** The setup token
@@ -967,6 +967,44 @@ empirical contracts, re-proved on every CLI version bump, not vendor-documented
 guarantees; the work unit's decision note lists them. Where a harness's web
 search runs, on the provider's servers or inside the ward, is one of them
 (research for the specifier, below).
+
+**Credential delivery under `subscription_injected`.** The writer receives a
+placeholder minted at handoff in the shape and place the vendor CLI expects
+(the launcher's environment variable; for Codex, an `auth.json` snapshot whose
+access token is well formed, carries the identity's claims, and bears a void
+signature, because the CLI parses the claims locally), plus a per-run CA
+certificate on a read-only mount named through each CLI's additive trust
+variable (`NODE_EXTRA_CA_CERTS`, `CODEX_CA_CERTIFICATE`). The replacing
+variables (`SSL_CERT_FILE` and its peers) are never set: git and libcurl read
+them as the whole store, and registry egress under `provider_registry` must
+keep the system roots. The run's proxy, the same daemon-host proxy that
+enforces `supports_enforced_provider_egress`, terminates TLS for the declared
+provider authorities under that CA, verifies the provider's own certificate
+against the system roots with the server name pinned, and forwards a request
+only when it carries exactly this run's placeholder as its bearer and names a
+path the profile declares for the identity: inference and the CLI's metadata
+paths, never token refresh, rotation, or account endpoints, which the proxy
+refuses as the Codex review profile already refuses its refresh endpoint. On a
+forwarded request it substitutes the identity's token for the placeholder,
+pins any account header the CLI sends to the identity, and refuses a request
+that carries credential shape anywhere else (another bearer, an API-key
+header, a cookie, a query parameter), so a credential the writer finds in a
+workspace never reaches the provider. Registry authorities stay opaque
+tunnels. Every substitution is recorded on the handoff result beside the
+realized allowlist (run, identity, authority, method, path, status, size,
+timing), never bodies or token values. The CA and the placeholder mapping
+exist only for the run: a placeholder presented to another run's proxy, or to
+anything else, authorizes nothing. The identity's token stays on the
+credential volume on the daemon host; the proxy reads it once per handoff,
+through the exporter observer a judgment call uses, and holds it in memory
+for the run. An injected run mounts no credential volume, and no execution
+host receives one. The mode is a stronger class than
+`subscription_contained`, never a silent downgrade of it, and admission
+records which one a run had. The image is unchanged: both pinned CLIs trust
+an operator CA through the variables above and pin no provider certificate,
+which the usage spike's terminating fake already drives live and the
+per-bump probe set re-proves (Section [5.8](#58-control-plane-trust)).
+What the owner gives up is listed under Section [14](#14-risks).
 
 Secret scanning is **best effort**, deliberately. It covers supported text
 formats. Size, type, provenance, and publication controls govern opaque
@@ -2080,7 +2118,7 @@ silently downgrades. Named capabilities are:
 - `supports_read_only_remount`;
 - `supports_credential_volume_detach`;
 - `supports_workspace_snapshot`;
-- `supports_networkless_export`; and
+- `supports_networkless_export`;
 - `supports_enforced_provider_egress`: the proven writer-egress boundary. The
   agent workspace reaches only the declared provider authorities and, under
   `provider_registry`, the declared registry authorities through the daemon's
@@ -2088,7 +2126,19 @@ silently downgrades. Named capabilities are:
   and direct connections. The realized proxy allowlist is conformance-checked
   against the requested profile, never trusted from configuration. This
   capability attests the enforcement mechanism, which is distinct from the
-  *requested* egress profile (Section [5.4](#54-credential-modes-egress-profiles-and-concurrency)).
+  *requested* egress profile (Section [5.4](#54-credential-modes-egress-profiles-and-concurrency)); and
+- `supports_proxy_credential_injection`: the proven placeholder boundary of
+  `subscription_injected` (Section [5.4](#54-credential-modes-egress-profiles-and-concurrency)), additive to
+  `supports_enforced_provider_egress`, whose meaning does not change. Live
+  probes prove that a placeholder launch reaches the declared provider
+  authenticated as its identity; that the same placeholder is refused from a
+  second run; that a request carrying credential shape other than the
+  placeholder, or naming an undeclared path, is refused; that the identity's
+  token is absent from the writer's filesystem, environment, inspect report,
+  and export; that registry tunnels are unchanged; and that the run's CA key
+  is absent after teardown. It joins the provable set, and a credential-mode
+  floor the contract unit adds makes it a minimum of every
+  `subscription_injected` admission.
 
 #### The First Ward Gate
 
@@ -2488,9 +2538,10 @@ transaction (Section
 [5.4](#54-credential-modes-egress-profiles-and-concurrency)) pushes each
 identity's setup token over that link, and the runner authors the same read-only
 per-identity credential volume the local path authors, writing the token nowhere
-else. Rotation re-authors the volume on every enrolled host while no execution
-can use the identity; removing a host names the identities it held so the
-operator can rotate them at the vendor. An identity whose credential store
+else. Under `subscription_injected` no execution host receives a credential
+volume (control-plane injection, below; revision 95). Rotation re-authors the volume on every
+enrolled host while no execution can use the identity; removing a host names
+the identities it held so the operator can rotate them at the vendor. An identity whose credential store
 mutates under the Section
 [5.4](#54-credential-modes-egress-profiles-and-concurrency) lease (a Codex
 subscription identity) is pinned to one host, because a leased mutation on one
@@ -2498,20 +2549,20 @@ host leaves every other copy stale; re-authoring every host's volume under the
 lease is a later decision. The residual is a copy of each token on every
 enrolled host, accepted for owner-held machines on the owner's tailnet. Proxy
 credential injection, where the writer holds a placeholder and a TLS-terminating
-proxy at the gateway substitutes the credential, is decided separately
-(`subscription_injected`, #2175, with spikes #2173 and #2174), not here. On an
-execution host it changes where the token lives, not the runner: the runner's
-per-run proxy terminates the writer's TLS under the per-run CA as the local
-proxy does, but forwards the request over the runner session to the control
-plane, which substitutes the credential and originates the provider connection
-from the daemon host, so the host holds the per-run CA key and the placeholder
-and never the token. That control-plane injection is a unit of its own, filed
-once #2175 merges; until it lands every execution host runs under
-`subscription_contained` with the volume above. It gates any execution host the
-owner does not physically hold, and the Linux host waits for it; the MacBook
-does not. Relaying the writer's CONNECT tunnel to the control plane's proxy
-without termination is rejected as a credential measure: it centralizes the
-allowlist but leaves the token in the writer.
+proxy substitutes the credential, is the `subscription_injected` mode
+(Section [5.4](#54-credential-modes-egress-profiles-and-concurrency); revision 95; #2175,
+with spikes #2173 and #2174). On an execution host it changes where the token
+lives, not the runner: the runner's per-run proxy terminates the writer's TLS
+under the per-run CA as the local proxy does, but forwards the request over the
+runner session to the control plane, which substitutes the credential and
+originates the provider connection from the daemon host, so the host holds the
+per-run CA key and the placeholder and never the token. That control-plane
+injection is a unit of its own, filed once #2175 merges; until it lands every
+execution host runs under `subscription_contained` with the volume above. It is
+required on any execution host the owner does not physically hold, so the Linux
+host waits for it; the MacBook does not. Relaying the writer's CONNECT tunnel to
+the control plane's proxy without termination is rejected as a credential
+measure: it centralizes the allowlist but leaves the token in the writer.
 
 **Placement.** Admission chooses the host in the launch transaction. A host is
 eligible when its current durable conformance record covers the launch's
@@ -2563,10 +2614,10 @@ the host memory budget (#1598) merged first:
   other use, after lowering its budget would put work under the capacity
   measure.
 
-The Linux desktop is a later increment. It needs #2175 and the
-control-plane-injection unit filed after it, multi-arch project images with
-per-arch digests (images are `linux/arm64` only), and a `linux_vm` backend on
-KVM that passes the full suite (Section [3.3](#33-portability)), developed on
+The Linux desktop is a later increment. It needs `subscription_injected` (#2175)
+and the control-plane-injection unit filed after it, multi-arch project images
+with per-arch digests (images are `linux/arm64` only), and a `linux_vm` backend
+on KVM that passes the full suite (Section [3.3](#33-portability)), developed on
 that machine because nested virtualization is unavailable on Apple silicon.
 
 ### 5.8 Control-Plane Trust
@@ -2704,7 +2755,32 @@ effects.
 This topology is an empirical contract with the pinned CLI. Before a CLI
 version change may enter the image, the exact image must pass these probes:
 minimal-writable-state, workspace/config poison, exact-resume, fresh-invocation
-isolation, crash-matrix, and live-race.
+isolation, crash-matrix, and live-race. Under `subscription_injected`
+(Section [5.4](#54-credential-modes-egress-profiles-and-concurrency)), two more: CA trust (the
+CLI accepts the per-run CA through its additive trust variable and pins no
+provider certificate) and placeholder acceptance (the CLI starts, parses, and
+sends the placeholder as its token, on every host and path it uses).
+
+Under `subscription_injected` the run's proxy is the credential holder and
+the provider's TLS peer. That adds no principal: the daemon process already
+holds every identity's token, refreshes Codex tokens on the host, composes
+every prompt, and reads every transcript, so a compromised proxy is the
+compromised daemon host of Section [5.2](#52-the-daemon-and-its-supervisor),
+not a new one. What it adds is the daemon's HTTP stack parsing bytes the
+writer sends, which the opaque tunnel never did. The contract unit bounds
+that surface: header, body, and connection limits; hop-by-hop headers
+stripped and no forwarding headers added; the websocket upgrade Codex uses
+and the event streams both CLIs read carried through without
+interpretation; one HTTP version negotiated with the provider on purpose. It
+also changes who may reach the proxy: today's listener binds every interface
+and admits by the run's subnet, which holds nothing; a terminating listener
+holds the token, so it admits only the run's own network, with the subnets
+of concurrent runs proven distinct; an execution host's requests arrive
+already parsed over the authenticated runner session, never as raw
+connections (Section [5.7](#57-the-ward-runners-handoff-gate-and-operating-modes),
+Execution Hosts). The per-run
+CA key is trusted by one writer whose only route is that proxy and is
+discarded at teardown.
 
 **Reviewer-instruction edits are advisory, never launch authority.** The
 gauntlet detects every reviewer-instruction path mechanically, including
@@ -6152,7 +6228,10 @@ license allows at most two macOS virtual machines per Apple host. The deferred
 dedicated-user tier (Section [5.2](#52-the-daemon-and-its-supervisor), hardened
 mode) would run on the host under a separate account instead. The choice
 between them is unresolved, and nothing else about macOS execution is decided
-here; Phase 4 keeps the macOS runner class.
+here; Phase 4 keeps the macOS runner class. Either shape holds a provider
+token as a file under `subscription_contained`; under `subscription_injected`
+(Section [5.4](#54-credential-modes-egress-profiles-and-concurrency)) it holds a placeholder, which
+is what makes a host-run writer context defensible at all (revision 95).
 
 ### Phase 1A: The Secure Publish Path, in Three Internal Exits
 
@@ -6497,7 +6576,8 @@ Expand beyond the first constrained path:
 
 - a second repository and workflow shape;
 - scan initiators and chaining;
-- `api_key_isolated`;
+- `subscription_injected`, the proxy-injected credential mode (Section [5.4](#54-credential-modes-egress-profiles-and-concurrency); revision 95), after its spikes;
+- `api_key_isolated`, on the same path;
 - full failure-injection and restore drills;
 - portable mode and host enrollment, the movable control plane (Sections [5.9](#59-durability-effectively-once)
   and [5.10](#510-coherent-backup-encrypted-checkpoints); #266, with its domain contract #265; revision 46);
@@ -6569,58 +6649,65 @@ Record material changes here by revision, with the decider in parentheses.
 - On first re-litigation, promote the decision to a `docs/decisions/` ADR that
   cites its history entry.
 
-Revision 94 ("Execution Hosts"):
+Revision 95 ("Provider Credentials Injected At The Proxy"):
 
-1. **Launches may run on enrolled hosts besides the daemon's.** An execution
-   host is a runner backend served by a runner, the daemon binary in a runner
-   role installed as an ordinary Freeside installation, which holds no durable
-   state and no forge credential. The runner connects out to the control plane's
-   Tailscale-bound endpoint and opens no listener; the enrolled host keys
-   authenticate the session, Tailscale only carries it, and the Section
-   [5.19](#519-deferred-subsystems-provisional-contracts) relay later changes
-   only the connector's target. The daemon host composes the runner in-process
-   and runs no separate runner process; the control plane keeps the journal,
-   seeding, export authentication, the gauntlet, and publication (Section
+1. **The writer holds a placeholder.** `subscription_injected` is the end
+   state for provider credentials: the vendor CLI runs unmodified with a
+   per-run placeholder, and the run's daemon-host proxy terminates provider
+   TLS under a per-run CA, substitutes the identity's token on the declared
+   provider authorities and paths only, refuses credential shape anywhere
+   else and every refresh or account path, and records every substitution
+   (Section [5.4](#54-credential-modes-egress-profiles-and-concurrency)).
+   Per-run issuance is structural: one proxy per run, mapping discarded at
+   teardown. Registry authorities stay opaque tunnels. No image change: both
+   pinned CLIs trust an operator CA through an additive variable and pin no
+   provider certificate. Rejected: short-lived file-based tokens as the
+   multi-host answer (a file token is usable from any host for its
+   lifetime, however short); a plaintext gateway through the CLIs' base-URL
+   variables (it changes the pinned CLI's own code path; kept as the
+   fallback if a CLI refuses the CA); a daemon-lifetime CA (a durable secret
+   for no gain); setting the replacing trust variables, which would break
+   registry egress.
+2. **A new capability, a new mode.** `supports_proxy_credential_injection`
+   is additive and proven by its own conformance probes;
+   `supports_enforced_provider_egress` keeps its meaning, because persisted
+   admission records re-gate by name. `subscription_injected` is a stronger
+   class than `subscription_contained`, never a silent downgrade of it;
+   `api_key_isolated` reuses the path. Rejected: redefining the egress
+   capability.
+3. **The proxy adds no principal.** The daemon already holds every token,
+   refreshes Codex tokens, composes prompts, and reads transcripts; a
+   compromised proxy is the compromised daemon host. New surface: the
+   daemon's HTTP stack on the writer's bytes, bounded by the contract unit,
+   and a terminating listener that admits only the run's network (Section
+   [5.8](#58-control-plane-trust)). The credential volume stays the control
+   plane's at-rest store; an injected run mounts none and no execution host
+   receives one: there the runner terminates under the per-run CA and
+   forwards over the runner session, and the control plane substitutes and
+   originates the provider connection, revision 94's control-plane
+   injection (Section
    [5.7](#57-the-ward-runners-handoff-gate-and-operating-modes), Execution
-   Hosts). Rejected: a second daemon per host; a Section
-   [5.9](#59-durability-effectively-once) standby, which serves no work; driving
-   `container` over SSH, because the proxy, the gate's proofs, and the suite run
-   where the runtime is; a runner that listens on its own address; a separate
-   runner process on the daemon host; a separate runner binary;
-   kubernetes-sigs/agent-sandbox, Nomad, and Warren as the spine.
-2. **The enrolled host record carries a role and lands with execution hosts.**
-   #2162 lands the host identity with `control_plane` and `runner` roles; #265
-   builds epoch, frontier, and replica on it. Enrolling a runner is never
-   activation.
-3. **Credential posture: the volume on each owner-held host; injection reaches
-   execution hosts as control-plane injection.** The identity enrollment
-   transaction authors each identity's credential volume on every enrolled host
-   over the runner session. Proxy injection (#2175) reaches an execution host
-   with the runner terminating and the control plane substituting, so the host
-   never holds the token; it gates any host the owner does not physically hold,
-   and the Linux host waits for it. Rejected: relaying CONNECT to the daemon
-   host's proxy as a credential measure, since the token stays in the writer.
-4. **Placement by eligibility, then local-first; budgets per host; an
-   unreachable host is held, not retried.** Declaring a host lost is the
-   operator's exception to the single-writer rule and names the identities to
-   rotate; a lease-mutating identity is pinned to one host. Rejected:
-   remote-first placement; automatic failover of a running launch, which would
-   start a second writer under a held identity.
-5. **Start triggers are recorded and the units are fenced.** Capacity measured
-   from recorded holds once #1598 merges, a capability the daemon host lacks, or
-   interactive use; the Linux desktop waits for #2175 and control-plane
-   injection, multi-arch images, and a `linux_vm` backend. Tracker #2161; units
-   #2162 to #2168.
+   Hosts). Rejected: relaying the writer's opaque TLS bytes to the control
+   plane's listener, which would make that token-holding listener admit
+   remote connections.
+4. **Sequencing.** Two spikes first (#2173, placeholder acceptance and
+   token placement per host and path on the pinned images; #2174, provider
+   acceptance of the daemon's TLS client), then one contract unit (#2175,
+   `starts-after` #397). Phase 2 by default; fiat pulls it forward for the
+   first host the owner does not physically hold, which is the Linux
+   trigger revision 94 names. The owner-held MacBook increment proceeds on
+   `subscription_contained`.
 
 (Proposal of 2026-10-22, decided by the owner at merge;
-[decision note](../devlog/2026-10-22-1042-execution-hosts.md).)
+[decision note](../devlog/2026-10-22-1100-proxy-credential-injection.md).)
 
 ## 14. Risks
 
 | Risk | Current response |
 | --- | --- |
-| Provider credentials in `subscription_contained` | Document the residual; enforce egress floors; keep the most exposed stage, the specifier, off the web: the daemon fetches its allowlisted sources and a researcher in its own ward does its web search (Section [5.4](#54-credential-modes-egress-profiles-and-concurrency)); provide `api_key_isolated` as the escape. Residual: the researcher's ward holds a provider credential. Its ward connects only to the provider, so its search queries are its one outward channel. That is reasoning from the #1620 connection record on one CLI build, not a tested exfiltration case. |
-| Registry egress under `subscription_contained` | Keep `provider_only` the default and the floor fixed. Admit `provider_registry` only per project policy through the per-authority proxy allowlist with TLS server-name pinning and no DNS, to public package registries consumed read-only, with any other authority routed to the `provider_web_read` record. Conformance-check the realized allowlist against the declared profile. Residual: the tunnel cannot constrain method or path. So a registry that co-hosts a write endpoint accepts an attacker-credentialed publish. Exclude such hosts per project where the residual is not acceptable, and provide `api_key_isolated` as the escape for anything wider. |
+| Provider credentials in `subscription_contained` | Document the residual; enforce egress floors; keep the most exposed stage, the specifier, off the web: the daemon fetches its allowlisted sources and a researcher in its own ward does its web search (Section [5.4](#54-credential-modes-egress-profiles-and-concurrency)); provide `api_key_isolated` as the escape. Residual: the researcher's ward holds a provider credential. Its ward connects only to the provider, so its search queries are its one outward channel. That is reasoning from the #1620 connection record on one CLI build, not a tested exfiltration case. `subscription_injected` removes the token from the writer and bounds a leak to the run's own provider use on declared paths; the search channel remains. |
+| Provider traffic terminated at the control plane under `subscription_injected` | The proxy holds no durable key: a per-run CA, discarded at teardown; the identity's token stays on the credential volume and in the run's proxy memory. It substitutes the placeholder on the declared provider authorities and paths only, refuses credential shape anywhere else and every refresh or account path, verifies the provider's certificate against the system roots with the server name pinned, admits only the run's network, and records every substitution without bodies. The owner accepts what the provider now sees: the daemon's TLS and HTTP client in place of the vendor CLI's, which a provider's bot defence may treat differently; the egress address is unchanged, since the daemon host already originates every tunnel. Residual: a compromised writer still spends the run's identity, request by request, visibly. The subscription-terms judgment on a substituting proxy is the owner's, per vendor. |
+| Registry egress under `subscription_contained` | Keep `provider_only` the default and the floor fixed. Admit `provider_registry` only per project policy through the per-authority proxy allowlist with TLS server-name pinning and no DNS, to public package registries consumed read-only, with any other authority routed to the `provider_web_read` record. Conformance-check the realized allowlist against the declared profile. Residual: the tunnel cannot constrain method or path. So a registry that co-hosts a write endpoint accepts an attacker-credentialed publish. Exclude such hosts per project where the residual is not acceptable, and provide `api_key_isolated` as the escape for anything wider. Under `subscription_injected` the registry tunnel is unchanged, but the writer holds no provider token for such a publish to carry. |
 | CI privilege crossing | Attest effective authority; block candidate automation changes; fail closed on drift; prohibit the daemon host as a runner. |
 | Reviewer-instruction poisoning | Compose agent and reviewer instructions from the trusted base, never the candidate; detect instruction-path edits mechanically and surface them as advisories that the human merge gate reads (Section [5.8](#58-control-plane-trust)). |
 | **Rendered agent Markdown in a public PR** | Recipe v2 (Section [5.15](#515-evidence-and-images)) renders authored prose as live Markdown only through a screen at least as strict as v1's: it rejects closing and automation directives at the body source, rejects secrets and control characters, neutralizes cross-reference, bare-URL, commit-reference and mention autolinks, renders raw HTML inert, and resolves links and images only to existing publishable (`publish_eligible`) evidence artifacts. The author's evidence inputs are likewise restricted to policy-approved publishable evidence, so it cannot paraphrase sensitive evidence past the publication gate. On any screen or inference failure it falls back to frozen v1 escaped-text rendering, adding no new publication block. The author's control-plane inputs (the target repository's template and AGENTS.md) resolve from the trusted base, never the candidate head (Section [5.8](#58-control-plane-trust)). The publisher, not agent text, writes any close directive; the closure is an effect proposal whose digest-bound approval is recorded by the project's policy actor, or by the `effect_proposal` action when policy keeps the human gate on, before any `Closes` is written; a same-repository client-supplied source URL is approved as a recommendation whose provenance is recorded and shown. |
@@ -6629,7 +6716,7 @@ Revision 94 ("Execution Hosts"):
 | **Workspace-handoff uncertainty** | Resolved by the workspace-handoff spike: the strong class is declared and conformance-gated (Section [5.7](#57-the-ward-runners-handoff-gate-and-operating-modes)); the same-VM fallback is refuted by execution, never implemented or declared. |
 | **Codex cloud review as a load-bearing dependency** | Realized 2026-07-31: the live-run trigger falsification (#427) showed no App-visible trigger path. The dependency is removed. Review is Freeside-invoked (Section [7](#7-review-policy)), and native review is best-effort extra evidence. |
 | Host capacity | Several accounts' limits can add up to more containers than one machine holds. Give every ward container a CPU cap and a declared memory size, and bound their memory by each instance's declared budget, so a launch that doesn't fit waits under a visible hold instead of exhausting memory; waiting launches go oldest task first, and a size that can never fit fails at once (Section [5.4](#54-credential-modes-egress-profiles-and-concurrency), Machine Capacity). Residual: the budget can't see load outside Freeside or another instance's containers, so the operator declares it with room for interactive use and keeps the budgets of every instance on one host within what the host holds. |
-| Execution host credential copies | Every enrolled execution host holds a copy of each identity's setup token in its credential volume (Section [5.7](#57-the-ward-runners-handoff-gate-and-operating-modes), Execution Hosts). Accepted for owner-held machines on the owner's tailnet: rotation re-authors every host, and removal names the identities to rotate. Residual: a host removed while unreachable keeps its copy until the owner rotates at the vendor, and any host the owner does not hold waits for #2175 and control-plane injection. |
+| Execution host credential copies | Every enrolled execution host holds a copy of each identity's setup token in its credential volume (Section [5.7](#57-the-ward-runners-handoff-gate-and-operating-modes), Execution Hosts). Accepted for owner-held machines on the owner's tailnet: rotation re-authors every host, and removal names the identities to rotate. Residual: a host removed while unreachable keeps its copy until the owner rotates at the vendor. Any host the owner does not hold waits for `subscription_injected` through control-plane injection and then receives no copy (revision 95). |
 | Single-provider execution capacity | Claude usage limits can stall real work. Schedule the 1B Codex execution driver as a hedge (Section [11](#11-roadmap-build-order-and-coordination)). Keep selection explicit as a lineup line or a task line, never silent (a lineup may name the switch per failure class, Section [4](#4-the-attention-model); a task line may pick another agent for one task, Section [5.4](#54-credential-modes-egress-profiles-and-concurrency), Admitted Agents). Usage remains observed telemetry (Section [8](#8-observability-and-optimization-telemetry)); from revision 77 an allowance observation shows the stall coming (Section [5.4](#54-credential-modes-egress-profiles-and-concurrency), usage observation), and the operator's explicit choice stays the only switch. |
 | Classifier mislabeling | Preserve immutable raw findings; require second adjudication for the safety case; enforce ceilings. |
 | Subscription-terms drift | Keep it as an explicit operating risk. |
