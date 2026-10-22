@@ -917,6 +917,46 @@ private final class CountingCacheStore: CacheStore, @unchecked Sendable {
         await recover()
     }
 
+    @Test func aPartialReadAtANewerRevisionKeepsAFailingSyncState() async throws {
+        // A timeline read that succeeds at a newer revision proves one read,
+        // not a sync round (#1947). It advances the observed cursor but
+        // leaves the failure on screen; the cursor gap makes the next good
+        // round bootstrap back to fresh.
+        let foreign = "sha256:" + String(repeating: "a", count: 64)
+        let server = MockServer()
+        let coordinator = makeCoordinator(server: server)
+        await coordinator.bootstrap()
+
+        func check(_ expected: InboxStore.Freshness, failingSyncReadsWith error: any Error) async throws {
+            // Only the sync reads fail, so the timeline read succeeds.
+            await server.setBeforeRespond { op in
+                if op == "getSyncRevision" || op == "getSyncBootstrap" { throw error }
+            }
+            await coordinator.heartbeat()
+            #expect(coordinator.store.freshness == expected)
+
+            await server.advanceRun(id: RunFixtures.activeRunID)
+            await coordinator.refreshTimeline(for: RunFixtures.activeRunID)
+            #expect(coordinator.timelineLoadStates[RunFixtures.activeRunID] == .loaded)
+            #expect(coordinator.store.freshness == expected)
+            let partial = try #require(coordinator.cursors)
+            #expect(partial.highestObservedServerRevision > partial.lastFullSnapshotRevision)
+
+            await server.setBeforeRespond(nil)
+            await server.setHealthContractDigest(APIContract.digest)
+            await coordinator.heartbeat()
+            #expect(coordinator.store.freshness == .fresh)
+            let recovered = try #require(coordinator.cursors)
+            #expect(recovered.lastFullSnapshotRevision == partial.highestObservedServerRevision)
+        }
+
+        try await check(.unreachable, failingSyncReadsWith: MockOutage())
+        try await check(.syncFailing, failingSyncReadsWith: MockServer.ForcedStatus(500))
+        try await check(.unauthenticated, failingSyncReadsWith: MockServer.ForcedStatus(401))
+        await server.setHealthContractDigest(foreign)
+        try await check(.contractMismatch(daemonContract: foreign), failingSyncReadsWith: MockServer.ForcedStatus(500))
+    }
+
     @Test func aFailingReadAgainstAMismatchedContractSurfacesContractMismatch() async throws {
         // A reachable-but-failing sync read against a daemon whose /health
         // reports a contract digest different from this client's is
@@ -1071,6 +1111,71 @@ private final class CountingCacheStore: CacheStore, @unchecked Sendable {
         let adopted = try #require(coordinator.cursors)
         #expect(adopted.lastFullSnapshotRevision == adopted.highestObservedServerRevision)
         #expect(adopted.lastFullSnapshotRevision == partial.highestObservedServerRevision)
+        #expect(coordinator.store.freshness == .fresh)
+    }
+
+    @Test func anOvertakenBootstrapLeavesAFailingStateToItsRetry() async throws {
+        // Rejecting an overtaken bootstrap is not a successful round, so it
+        // must not clear a failing state either (#1947): the retry bootstrap
+        // decides what the state becomes.
+        let server = MockServer()
+        let coordinator = makeCoordinator(server: server)
+        await coordinator.bootstrap()
+        await server.setBeforeRespond { op in
+            if op == "getSyncRevision" { throw MockServer.ForcedStatus(500) }
+        }
+        await coordinator.heartbeat()
+        #expect(coordinator.store.freshness == .syncFailing)
+
+        let reached = AsyncGate()
+        let release = AsyncGate()
+        await server.setAfterRespond { operationID in
+            if operationID == "getSyncBootstrap" {
+                await reached.open()
+                await release.wait()
+            }
+        }
+        let stale = Task { await coordinator.bootstrap() }
+        await reached.wait()
+        await server.setAfterRespond(nil)
+
+        await server.advanceRun(id: RunFixtures.activeRunID)
+        await coordinator.refreshRuns()
+        #expect(coordinator.store.freshness == .syncFailing)
+
+        // Hold the retry so the state between rejection and retry shows.
+        let retryReached = AsyncGate()
+        let retryRelease = AsyncGate()
+        await server.setBeforeRespond { operationID in
+            if operationID == "getSyncBootstrap" {
+                await retryReached.open()
+                await retryRelease.wait()
+            }
+        }
+        await release.open()
+        await retryReached.wait()
+        #expect(coordinator.store.freshness == .syncFailing)
+
+        await retryRelease.open()
+        await stale.value
+        #expect(coordinator.store.freshness == .fresh)
+    }
+
+    @Test func aRoundWhoseRunListAdvancesRetriesAFailedOpeningHeartbeat() async throws {
+        // A partial read no longer demotes a failing state (#1947), so the
+        // round cannot rely on that demotion to reach its closing heartbeat.
+        // A run list that answered at a newer revision still earns the
+        // retry, and the round can end fresh, as before.
+        let server = MockServer()
+        let coordinator = makeCoordinator(server: server)
+        await coordinator.bootstrap()
+        await server.advanceRun(id: RunFixtures.activeRunID)
+
+        let failOnce = OneShot()
+        await server.setBeforeRespond { op in
+            if op == "getSyncRevision", await failOnce.fire() { throw MockServer.ForcedStatus(500) }
+        }
+        #expect(await coordinator.refreshAfterCommit())
         #expect(coordinator.store.freshness == .fresh)
     }
 

@@ -474,14 +474,19 @@ public final class SyncCoordinator {
         let task = Task { @MainActor [weak self] in
             guard let self else { return false }
             await heartbeat()
+            let observedBeforeRuns = cursors?.highestObservedServerRevision
             await refreshRuns()
-            if store.freshness == .unvalidated,
-                let cursors,
-                cursors.highestObservedServerRevision > cursors.lastFullSnapshotRevision
+            if let cursors,
+                cursors.highestObservedServerRevision > cursors.lastFullSnapshotRevision,
+                store.freshness == .unvalidated
+                    || cursors.highestObservedServerRevision != observedBeforeRuns
             {
                 // The run-list partial read can observe a mutation that
                 // committed after the opening heartbeat. Close that gap
-                // before a user-visible refresh reports completion.
+                // before a user-visible refresh reports completion. A run
+                // list that advanced the cursor also earns the retry after a
+                // failed opening heartbeat: a partial read leaves a failing
+                // state in place (#1947), so `.unvalidated` alone would skip it.
                 await heartbeat()
             }
             return store.freshness == .fresh
@@ -536,6 +541,9 @@ public final class SyncCoordinator {
     /// A canonical partial read advances only the observed cursor,
     /// never the full-snapshot cursor (test 11). Reads that arrive
     /// before any bootstrap scoped an epoch carry no usable cursor.
+    /// A newer revision demotes a fresh cache to unvalidated, but a
+    /// partial read never clears a failing state: it proves one read,
+    /// not the cache, so only a successful sync round does (#1947).
     public func observe(revision: Int64) {
         guard advanceObservedRevision(to: revision) else { return }
         persist()
@@ -554,7 +562,7 @@ public final class SyncCoordinator {
         guard var cursors, revision > cursors.highestObservedServerRevision else { return false }
         cursors.highestObservedServerRevision = revision
         self.cursors = cursors
-        if revision > cursors.lastFullSnapshotRevision {
+        if revision > cursors.lastFullSnapshotRevision, !store.freshness.isFailing {
             store.freshness = .unvalidated
         }
         return true
@@ -785,12 +793,13 @@ public final class SyncCoordinator {
     /// Returns false when a same-epoch canonical snapshot was overtaken by a
     /// partial read. The caller must refetch instead of letting older rows
     /// replace the newer observation and falsely claim the cache is current.
+    /// A failing state stays for the retry bootstrap to settle.
     private func adopt(_ snapshot: Components.Schemas.BootstrapSnapshot) -> Bool {
         if let cursors,
             cursors.syncEpoch == snapshot.sync_epoch,
             cursors.highestObservedServerRevision > snapshot.revision
         {
-            store.freshness = .unvalidated
+            if !store.freshness.isFailing { store.freshness = .unvalidated }
             return false
         }
         if let cursors, cursors.syncEpoch != snapshot.sync_epoch {

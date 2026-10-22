@@ -244,7 +244,9 @@ import Testing
         #expect(coordinator.taskTimelineLoadStates[fixture.task.task.id] == .loaded)
         #expect(coordinator.cursors?.lastFullSnapshotRevision == revision)
         #expect(coordinator.cursors?.highestObservedServerRevision == fixture.history.as_of_revision)
-        #expect(coordinator.store.freshness == .unvalidated)
+        // The failed read reported the daemon unreachable; a later partial
+        // read does not clear that, only a sync round does (#1947).
+        #expect(coordinator.store.freshness == .unreachable)
         for _ in 0..<2 { await coordinator.refreshTaskTimeline(for: "missing-task") }
         #expect(coordinator.taskTimelinesByTaskID["missing-task"] == nil)
         #expect(coordinator.taskTimelineLoadStates["missing-task"] == .unavailable)

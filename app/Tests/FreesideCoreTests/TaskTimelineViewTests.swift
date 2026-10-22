@@ -217,6 +217,50 @@ import Testing
         #expect(banner())
     }
 
+    /// A review read that succeeds while sync keeps failing proves that one
+    /// read, not the cache, so every section keeps saying so (#1947).
+    @Test func aPartialReadKeepsSectionsNotingAFailingSync() async throws {
+        let server = server()
+        let coordinator = SyncCoordinator(client: APIClientFactory.mock(server: server), cache: InMemoryCacheStore())
+        let taskID = TaskFixtures.retryTaskID
+        let runID = RunFixtures.activeRunID
+        await coordinator.refresh()
+        await coordinator.refreshTaskTimeline(for: taskID)
+        await coordinator.refreshTaskReviews(for: taskID, revision: 12)
+        func history() -> String? {
+            TaskTimelinePresentation.availabilityMessage(
+                state: coordinator.taskTimelineLoadStates[taskID], freshness: coordinator.store.freshness)
+        }
+        func review() -> String? {
+            RunReviewSection.availabilityMessage(
+                hasTimeline: coordinator.timelinesByRunID[runID] != nil,
+                state: coordinator.timelineLoadStates[runID], freshness: coordinator.store.freshness)
+        }
+        func banner() -> Bool {
+            FreshnessBanner.isShowing(
+                freshness: coordinator.store.freshness, lastUpdatedAt: coordinator.lastUpdatedAt, at: .now)
+        }
+        func expectFailureShown() {
+            #expect(coordinator.store.freshness == .unreachable)
+            #expect(history() == "Saved task history. Freshness unconfirmed.")
+            #expect(review() == "Saved review details. Freshness unconfirmed.")
+            #expect(coordinator.taskStop.unavailableReason == "Offline. Connect to the daemon before sending Stop.")
+            #expect(banner())
+        }
+
+        // Only the sync reads fail, so the review read below succeeds.
+        await server.setBeforeRespond { operation in
+            if operation == "getSyncRevision" || operation == "getSyncBootstrap" { throw InjectedFailure() }
+        }
+        await coordinator.refresh()
+        expectFailureShown()
+
+        await server.advanceRun(id: runID)
+        await coordinator.refreshTimeline(for: runID)
+        #expect(coordinator.timelineLoadStates[runID] == .loaded)
+        expectFailureShown()
+    }
+
     @Test func overlappingRequestsCoalesceAndCancelledNavigationDoesNotAdopt() async throws {
         let server = server()
         let coordinator = SyncCoordinator(client: APIClientFactory.mock(server: server), cache: InMemoryCacheStore())
