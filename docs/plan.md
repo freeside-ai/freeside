@@ -61,6 +61,7 @@ why.
     - [The First Ward Gate](#the-first-ward-gate)
     - [Writer Outcome Authority](#writer-outcome-authority)
     - [Golden Agent and Project Images](#golden-agent-and-project-images)
+    - [macOS Execution: Linux-First Cores and a Credential-Free Verifier](#macos-execution-linux-first-cores-and-a-credential-free-verifier)
     - [Operating Modes](#operating-modes)
     - [Execution Hosts](#execution-hosts)
   - [5.8 Control-Plane Trust](#58-control-plane-trust)
@@ -2106,7 +2107,9 @@ evidence. Trusted verification recipes load only from approved control-plane
 configuration or the trusted base commit. Freeside mechanically identifies,
 risk-flags, and gates changes to verification-control files.
 
-Named residual risk: candidate test code runs inside the warded verifier.
+Named residual risk: candidate test code runs inside the warded verifier, or,
+for a Swift project's Apple-only modules, as a pooled uid in the macOS
+verification executor (Section [5.7](#57-the-ward-runners-handoff-gate-and-operating-modes), macOS Execution).
 
 ### 5.7 The Ward: Runners, Handoff Gate, and Operating Modes
 
@@ -2384,12 +2387,101 @@ use a tag for that build-time hop only, after verifying its digest, and must
 record the exact base digest in the derived image. The image supplied to
 ward remains a registry-resolved digest reference.
 
+#### macOS Execution: Linux-First Cores and a Credential-Free Verifier
+
+A Swift project is managed Linux-first (revision 96). Its writers, reviewers,
+and specifiers run in ordinary Linux wards against a Swift project image, so
+every credential-bearing stage keeps the handoff gate and the proven egress
+boundary above. Swift is the builder's third toolchain path beside Node and
+Go, keyed by the `Package.swift` and `Package.resolved` of the package
+directory the image names: a pinned Swift distribution, the system libraries
+the project declares, and the dependency closure as bare mirrors of every
+repository the resolver fetches, including submodules and the
+platform-conditional packages that `Package.resolved` does not pin. The
+closure is discovered by one proxied resolution at build time and then baked;
+the offline proof resolves and builds with networking disabled, and a
+`Package.resolved` the mirrors cannot satisfy fails the build (#2183). A
+project qualifies once its core modules build and test on Linux with the
+Apple-only modules declared in its manifest, not discovered by the build;
+Freeside's `app/` (#2182) and Straylight each need a module split first
+(Section [11](#11-roadmap-build-order-and-coordination)).
+
+macOS is a verification tier, used as briefly as possible. The **macOS
+verification executor** is a credential-free host-side execution class for
+the Section [5.6](#56-the-gauntlet-workspace-handoff-import-and-clean-verification) clean verification of a project's Apple-only modules: it runs
+the trusted recipe against the daemon-materialized exact head and authors
+only the evidence channel. It never runs an agent, and it holds no provider
+or GitHub credential and no placeholder, so it sits outside the credential
+modes (Section [5.4](#54-credential-modes-egress-profiles-and-concurrency)): that is what admits it now, where a host-run writer
+context waits for `subscription_injected` (revision 95). It is the
+verification room (Section [5.6](#56-the-gauntlet-workspace-handoff-import-and-clean-verification)) of the runner on a macOS execution host
+(Execution Hosts): the daemon host by default, in-process, or a second Mac
+enrolled in the runner role, the Capability start trigger's case; admission
+places the job as it places any launch, and the executor is never a separate
+agent or product. One installation per host serves every managed project,
+and concurrency comes from slots, not machines: a pool of unprivileged
+accounts, one per slot, with a job running as its slot's uid.
+Each job is confined four ways, and each confinement is conformance-proven
+and probed live, as the slot uid, before the recipe runs:
+
+- **Network access is denied twice.** A sandbox profile on the recipe's
+  process tree denies every network operation, which on the reference host
+  closed off-host connections, loopback connections, and name resolution
+  through the system resolver. Packet-filter rules keyed on the slot's uid
+  add a second layer for off-host traffic: they drop every packet of a
+  socket the uid owns, in and out, so a sandbox escape still cannot reach
+  the network. The spike showed the packet filter alone does not close
+  loopback or the system resolver (neither socket is the uid's), so the
+  probe refutes those two under the sandbox specifically, and off-host
+  reach under both.
+- **Writes are confined to the job directory** by the same sandbox profile;
+  the probe writes outside it and must fail.
+- **Dependencies come from a trusted offline cache keyed by digest.** A
+  `Package.resolved` whose digest the cache does not carry fails closed, and
+  verification never fetches.
+- **The slot's home is reset between jobs** from an empty template, so
+  nothing a candidate wrote survives into the next.
+
+The slot never logs in, so it has no window-server session; the spike
+rendered the app suite's SwiftUI `ImageRenderer` path (the explicit bitmap
+and `cgImage`) in a session-less slot, with zero displays, inside the
+network-denying sandbox. The executor plugs in at the verifier's room seam,
+so no trust decision moves: recipe resolution, head binding, and evidence
+stamping stay with the verifier. It is admitted in `unattended` (Operating
+Modes) as the one host-side class, under its own capability declaration,
+`supports_credential_free_host_verification`, proven by the full conformance
+pass and rechecked by the pre-job probe. The Section [10](#10-operations-and-onboarding) rule that confines
+host-side runners to `attended_dev` and `ephemeral` names it as its one
+exception.
+
+Named residual: candidate test code runs as a pooled uid on the operator's
+host rather than in a VM. The sandbox profile and uid separation, with the
+operator's state and credentials at `0700` and `0600`, bound what it can
+read; a sandbox or kernel escape reaches the host. That is the same class the
+warded verifier names, with a wider blast radius; placing the executor on a
+second Mac enrolled as an execution host shrinks it without changing the
+class.
+
+Writer work that itself needs macOS, such as running the app, driving its UI,
+or an Xcode-only build, is not served by the executor. It takes a **UI-writer
+tier**: a Virtualization.framework VM, or a second Mac enrolled as an
+execution host (Execution Hosts). A writer in a VM guest holds its provider
+token as a file under `subscription_contained`, as a ward does; a host-run
+writer context, on either Mac, waits for `subscription_injected`, where it
+holds a placeholder, which is what makes it defensible at all (revision 95).
+The two-guest limit is a kernel quota per Apple host
+(`hv_apple_isa_vm_quota`), not only a license term; its one bypass, a KDK
+kernel with SIP off, is rejected, and the reference host's memory and disk
+cannot hold even two Xcode guests. The tier is not scheduled; Phase 4 keeps
+it, and until it exists SwiftUI work that needs a macOS writer keeps the
+bootstrap exception below.
+
 #### Operating Modes
 
 | Mode | Requirements and limits |
 | --- | --- |
 | `attended_dev` | May use a weaker runner class. Disables `auto_start`, automatic publication, and unattended escalation. Reports its isolation class honestly. |
-| `unattended` | Requires all of these: successful conformance including the handoff gate; a valid trust profile; an approved credential mode; every runner minimum, including the proven `supports_networkless_export` exporter boundary and the proven `supports_enforced_provider_egress` writer egress boundary; current backup health including encryption status; and no blocking `system_health` item. |
+| `unattended` | Requires all of these: successful conformance including the handoff gate; a valid trust profile; an approved credential mode; every runner minimum, including the proven `supports_networkless_export` exporter boundary and the proven `supports_enforced_provider_egress` writer egress boundary; a host-side executor only as the credential-free macOS verification class with its `supports_credential_free_host_verification` declaration current (macOS Execution); current backup health including encryption status; and no blocking `system_health` item. |
 
 Run the full conformance suite at startup, after configuration changes, and on
 the doctor's schedule. Run a lightweight probe before every unattended job.
@@ -2437,8 +2529,10 @@ checkpoint landed before the Phase 1A exit, so a current build rejects the
 waiver as invalid configuration; the doctor ([§10](#10-operations-and-onboarding)) packages its encryption
 check.
 
-Bootstrap exception: SwiftUI work is exempt until a macOS execution class
-exists.
+Bootstrap exception: SwiftUI work that needs a macOS writer is exempt until a
+UI-writer tier exists. SwiftUI work whose verification the macOS verification
+executor covers leaves the exception once that executor and the Swift project
+image are conformance-proven (macOS Execution, revision 96).
 
 #### Execution Hosts
 
@@ -5940,7 +6034,10 @@ stay with that run.
   lease; no other `prod` path.
 - **Host-side runners are `ephemeral` only.** A runner class that executes on
   the host rather than in a ward runs only under the `attended_dev` operating
-  mode (Section [5.7](#57-the-ward-runners-handoff-gate-and-operating-modes)) and only in an `ephemeral` instance.
+  mode (Section [5.7](#57-the-ward-runners-handoff-gate-and-operating-modes)) and only in an `ephemeral` instance. The one exception
+  is the macOS verification executor (Section [5.7](#57-the-ward-runners-handoff-gate-and-operating-modes), macOS Execution), which
+  holds no credential and runs no agent; it is admitted in `unattended` under
+  its own conformance.
 - **Supervised tiers keep fixed ports.** The app keys its Keychain device
   credential by a hash of the daemon URL, so moving a supervised port orphans
   the pairing. `ephemeral` listens on port `0` by default and pairs afresh on
@@ -6219,19 +6316,29 @@ Onboarding needs the Go toolchain path in Section
 image's baked recipe must verify every onboarded path networkless under the
 criteria above; so far it covers only `daemon/`.
 
-**macOS execution is an open question (revision 92).** A macOS execution class
-is needed before Freeside manages its own `app/` paths and before it manages
-Straylight, the owner's SwiftUI writing tool in a separate repository (not the
-Section [15](#15-naming-and-references) surface name). Two shapes are known. A
-Virtualization.framework VM backend is capped at two guests: the macOS software
-license allows at most two macOS virtual machines per Apple host. The deferred
-dedicated-user tier (Section [5.2](#52-the-daemon-and-its-supervisor), hardened
-mode) would run on the host under a separate account instead. The choice
-between them is unresolved, and nothing else about macOS execution is decided
-here; Phase 4 keeps the macOS runner class. Either shape holds a provider
-token as a file under `subscription_contained`; under `subscription_injected`
-(Section [5.4](#54-credential-modes-egress-profiles-and-concurrency)) it holds a placeholder, which
-is what makes a host-run writer context defensible at all (revision 95).
+**macOS execution: Linux-first cores and a credential-free verifier (revision
+96).** The class revision 92 left open is decided in Section [5.7](#57-the-ward-runners-handoff-gate-and-operating-modes), macOS
+Execution: a Swift project's agents develop in Linux wards against a Swift
+project image; a credential-free macOS verification executor, the
+verification room of the runner on a macOS execution host (Section [5.7](#57-the-ward-runners-handoff-gate-and-operating-modes),
+Execution Hosts), verifies the Apple-only modules under `unattended` as
+pooled per-slot accounts; and writer work that needs macOS waits for a
+UI-writer tier (a VM, or a second Mac enrolled as an execution host) that
+Phase 4 keeps. The executor holds neither a token nor a placeholder, so it
+sits outside the credential modes. A UI writer in a VM guest holds a provider
+token as a file under `subscription_contained`, as a ward does; a host-run
+writer context, on either Mac, waits for `subscription_injected` (Section
+[5.4](#54-credential-modes-egress-profiles-and-concurrency)), where it holds a placeholder, which is what makes it defensible at
+all (revision 95). Two spikes on the reference host gated the text:
+SwiftUI `ImageRenderer` renders for a uid with no window-server session, and
+per-uid packet-filter rules refute off-host egress while a sandbox profile
+closes loopback and the system resolver. The order of work: the Swift
+toolchain path for project images (#2183); the `FreesideCore` split so the
+Linux-clean half of `app/` builds and tests in a ward (#2182); then the
+executor as its own `lane:ward` unit, filed when the Swift path exists.
+Straylight's module split runs in its own repository on the same order.
+`app/` paths whose verification the executor covers are onboarded after it
+is conformance-proven; the rest stay under the bootstrap exception.
 
 ### Phase 1A: The Secure Publish Path, in Three Internal Exits
 
@@ -6602,7 +6709,8 @@ display to 1B.1 (revision 77); routing that acts on usage stays here.
 ### Phase 4: Generalization
 
 After three real workflow shapes, consider a pipeline DSL. Add more agents and
-skills, a macOS runner class, App Intents, widgets, Live Activities, and voice.
+skills, a macOS UI-writer tier (a VM or a second Mac; Section [5.7](#57-the-ward-runners-handoff-gate-and-operating-modes), macOS
+Execution), App Intents, widgets, Live Activities, and voice.
 
 ## 12. Exit Criteria Definitions
 
@@ -6649,57 +6757,54 @@ Record material changes here by revision, with the decider in parentheses.
 - On first re-litigation, promote the decision to a `docs/decisions/` ADR that
   cites its history entry.
 
-Revision 95 ("Provider Credentials Injected At The Proxy"):
+Revision 96 ("Linux-First Cores, A Credential-Free macOS Verifier"):
 
-1. **The writer holds a placeholder.** `subscription_injected` is the end
-   state for provider credentials: the vendor CLI runs unmodified with a
-   per-run placeholder, and the run's daemon-host proxy terminates provider
-   TLS under a per-run CA, substitutes the identity's token on the declared
-   provider authorities and paths only, refuses credential shape anywhere
-   else and every refresh or account path, and records every substitution
-   (Section [5.4](#54-credential-modes-egress-profiles-and-concurrency)).
-   Per-run issuance is structural: one proxy per run, mapping discarded at
-   teardown. Registry authorities stay opaque tunnels. No image change: both
-   pinned CLIs trust an operator CA through an additive variable and pin no
-   provider certificate. Rejected: short-lived file-based tokens as the
-   multi-host answer (a file token is usable from any host for its
-   lifetime, however short); a plaintext gateway through the CLIs' base-URL
-   variables (it changes the pinned CLI's own code path; kept as the
-   fallback if a CLI refuses the CA); a daemon-lifetime CA (a durable secret
-   for no gain); setting the replacing trust variables, which would break
-   registry egress.
-2. **A new capability, a new mode.** `supports_proxy_credential_injection`
-   is additive and proven by its own conformance probes;
-   `supports_enforced_provider_egress` keeps its meaning, because persisted
-   admission records re-gate by name. `subscription_injected` is a stronger
-   class than `subscription_contained`, never a silent downgrade of it;
-   `api_key_isolated` reuses the path. Rejected: redefining the egress
-   capability.
-3. **The proxy adds no principal.** The daemon already holds every token,
-   refreshes Codex tokens, composes prompts, and reads transcripts; a
-   compromised proxy is the compromised daemon host. New surface: the
-   daemon's HTTP stack on the writer's bytes, bounded by the contract unit,
-   and a terminating listener that admits only the run's network (Section
-   [5.8](#58-control-plane-trust)). The credential volume stays the control
-   plane's at-rest store; an injected run mounts none and no execution host
-   receives one: there the runner terminates under the per-run CA and
-   forwards over the runner session, and the control plane substitutes and
-   originates the provider connection, revision 94's control-plane
-   injection (Section
-   [5.7](#57-the-ward-runners-handoff-gate-and-operating-modes), Execution
-   Hosts). Rejected: relaying the writer's opaque TLS bytes to the control
-   plane's listener, which would make that token-holding listener admit
-   remote connections.
-4. **Sequencing.** Two spikes first (#2173, placeholder acceptance and
-   token placement per host and path on the pinned images; #2174, provider
-   acceptance of the daemon's TLS client), then one contract unit (#2175,
-   `starts-after` #397). Phase 2 by default; fiat pulls it forward for the
-   first host the owner does not physically hold, which is the Linux
-   trigger revision 94 names. The owner-held MacBook increment proceeds on
-   `subscription_contained`.
+1. **Swift projects are managed Linux-first.** Writers, reviewers, and
+   specifiers for a Swift project run in Linux wards against a Swift project
+   image, and macOS is a verification tier used as briefly as possible. A
+   project qualifies once its core modules build and test on Linux with the
+   Apple-only modules declared in its manifest; Freeside's `app/` (#2182)
+   and Straylight each need a module split first. Rejected: developing on
+   macOS in VMs (the two-guest limit is a per-host kernel quota,
+   `hv_apple_isa_vm_quota`, and the reference host cannot hold two Xcode
+   guests); a KDK kernel with SIP off to lift the quota.
+2. **A credential-free macOS verification executor is admitted in
+   `unattended`.** The runner's verification room on a macOS execution host
+   (revision 94: the daemon host in-process, or a second Mac in the runner
+   role), pooled unprivileged accounts as slots, and four live-probed
+   confinements per job: a network-denying sandbox profile plus per-uid
+   packet-filter rules, write confinement to the job directory, a
+   digest-keyed offline dependency cache that fails closed, and a home
+   reset. It holds no credential and no placeholder, so it sits outside the
+   credential modes; it plugs in at the verifier's room seam and declares
+   `supports_credential_free_host_verification`; the Section
+   [10](#10-operations-and-onboarding) host-side rule names it as its one
+   exception. Gated by two spikes on the reference host (2026-10-22):
+   SwiftUI `ImageRenderer` rendered in a session-less slot with zero
+   displays, and per-uid packet-filter rules dropped off-host TCP, direct
+   IP, and direct DNS but not loopback or the system resolver, which the
+   sandbox profile closed. Rejected: a host-side writer now (it runs an
+   agent outside the ward boundary and, until `subscription_injected`
+   lands, holds the token as a file; revision 95 is what makes one
+   defensible later); verifying in macOS VMs (the quota and memory above);
+   relying on the packet filter alone.
+3. **UI writers wait for a VM or second-Mac tier.** Writer work that needs
+   macOS itself is not served by the executor: a writer in a VM guest holds
+   its token under `subscription_contained` as a ward does, and a host-run
+   writer context waits for `subscription_injected` (revision 95). Phase 4
+   keeps the tier, and the bootstrap exception narrows to SwiftUI work that
+   needs a macOS writer. Rejected: scheduling the tier now.
+4. **Swift is a third project-image toolchain.** Keyed by `Package.swift`
+   and `Package.resolved` of the named package directory, with the
+   dependency closure baked as bare mirrors, including submodules and the
+   platform-conditional packages the lockfile does not pin, discovered by one
+   proxied resolution and proven networkless; implemented by #2183.
+   Rejected: trusting `Package.resolved` as the complete closure (the
+   Straylight experiment showed it omits OpenCombine and GRDB's SQLiteLib
+   submodule).
 
-(Proposal of 2026-10-22, decided by the owner at merge;
-[decision note](../devlog/2026-10-22-1100-proxy-credential-injection.md).)
+(Owner decisions of 2026-10-21 and 2026-10-22;
+[decision note](../devlog/2026-10-22-1205-macos-verifier-executor.md).)
 
 ## 14. Risks
 
@@ -6713,6 +6818,7 @@ Revision 95 ("Provider Credentials Injected At The Proxy"):
 | **Rendered agent Markdown in a public PR** | Recipe v2 (Section [5.15](#515-evidence-and-images)) renders authored prose as live Markdown only through a screen at least as strict as v1's: it rejects closing and automation directives at the body source, rejects secrets and control characters, neutralizes cross-reference, bare-URL, commit-reference and mention autolinks, renders raw HTML inert, and resolves links and images only to existing publishable (`publish_eligible`) evidence artifacts. The author's evidence inputs are likewise restricted to policy-approved publishable evidence, so it cannot paraphrase sensitive evidence past the publication gate. On any screen or inference failure it falls back to frozen v1 escaped-text rendering, adding no new publication block. The author's control-plane inputs (the target repository's template and AGENTS.md) resolve from the trusted base, never the candidate head (Section [5.8](#58-control-plane-trust)). The publisher, not agent text, writes any close directive; the closure is an effect proposal whose digest-bound approval is recorded by the project's policy actor, or by the `effect_proposal` action when policy keeps the human gate on, before any `Closes` is written; a same-repository client-supplied source URL is approved as a recommendation whose provenance is recorded and shown. |
 | **Agent text in a public issue comment** | The approved-specification comment (Section [5.11](#511-github-integration-reconciliation-plus-intake)) posts only a human-approved, digest-bound public plan inside a daemon-written frame, screened under `github-issue-comment/1`, which rejects directives, secrets, mentions, and command shapes. The workflow audit gates it on `issue_comment` triggers, and only the daemon's publisher holds the `issues: write` token. The workflow set, with a content digest of each workflow and its local dependencies, is rechecked at the default-branch tip before each post. Residual: a remote action or reusable workflow named by a mutable ref, a script a listed workflow runs from the checkout, or a workflow chained by `workflow_run` can change unseen by the digests. Also residual: a webhook-driven App that reacts to any comment or to a plain phrase cannot be enumerated, and a comment resets stale-issue timers; each sees one screened comment per approval. |
 | **Wardless roles on the host** | A judgment role runs outside the ward, so nothing sandboxes it and no egress proxy sits in front of its harness. Its safety rests on the call launch, which an adapter proves per build against the real harness; Section [5.4](#54-credential-modes-egress-profiles-and-concurrency), Admission, holds the launch's clauses, the interim hand-audit exception, and credential handling on the host. The answer is schema-validated and bounded by its site's authority contract, the model sees only the site's allowlisted, redacted fields, and a shadow's output reaches only the advisory store. Residual: a harness update can change what a launch flag means, which is why the proof is per pinned build and not per harness; a host administrator policy file that no launch flag switches off is outside that per-build proof (Section [5.4](#54-credential-modes-egress-profiles-and-concurrency)); and a shadow whose agent shares its primary's usage pool draws on a vendor quota that Freeside does not meter (Section [5.13](#513-deterministic-components-judgment-calls-and-the-effect-registry)). |
+| **Host-side macOS verification** | The executor holds no credential and runs no agent; a network-denying sandbox profile plus per-uid packet-filter rules, write confinement to the job directory, a digest-keyed offline dependency cache, and a home reset confine each job, each conformance-proven and probed live before the recipe runs (Section [5.7](#57-the-ward-runners-handoff-gate-and-operating-modes), macOS Execution). Residual: candidate test code runs as a pooled uid on the operator's host, so a sandbox or kernel escape reaches the host, with the operator's state behind uid separation and `0700` modes; placing the executor on a second Mac enrolled as an execution host shrinks the blast radius. |
 | **Workspace-handoff uncertainty** | Resolved by the workspace-handoff spike: the strong class is declared and conformance-gated (Section [5.7](#57-the-ward-runners-handoff-gate-and-operating-modes)); the same-VM fallback is refuted by execution, never implemented or declared. |
 | **Codex cloud review as a load-bearing dependency** | Realized 2026-07-31: the live-run trigger falsification (#427) showed no App-visible trigger path. The dependency is removed. Review is Freeside-invoked (Section [7](#7-review-policy)), and native review is best-effort extra evidence. |
 | Host capacity | Several accounts' limits can add up to more containers than one machine holds. Give every ward container a CPU cap and a declared memory size, and bound their memory by each instance's declared budget, so a launch that doesn't fit waits under a visible hold instead of exhausting memory; waiting launches go oldest task first, and a size that can never fit fails at once (Section [5.4](#54-credential-modes-egress-profiles-and-concurrency), Machine Capacity). Residual: the budget can't see load outside Freeside or another instance's containers, so the operator declares it with room for interactive use and keeps the budgets of every instance on one host within what the host holds. |
