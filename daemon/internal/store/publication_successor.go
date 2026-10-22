@@ -55,8 +55,39 @@ func (tx *WriteTx) RecordPublicationSuccessor(ctx context.Context, successor dom
 		if err := tx.requireCurrentUnpublishedReentry(ctx, successor); err != nil {
 			return err
 		}
+		// A successor that replaces the publication's merge retires the
+		// replaced card here, once, at the seal; a cycle that publishes admits
+		// its own closure proposal.
+		if reason, retires := closureRetirementReason(successor.EffectiveOrigin()); retires {
+			if _, err := tx.RetireOpenClosureProposals(ctx, successor.RunID, reason, entry.CreatedAt); err != nil {
+				return err
+			}
+		}
 	}
 	return tx.MarkOutboxDispatched(ctx, successor.Key())
+}
+
+// closureRetirementReason is the closed card's sentence for a closure
+// proposal whose publication a successor cycle replaced, and whether the
+// origin retires the card at all. An external review re-enters in place on the
+// head and base its pull request already has, so the card still binds the
+// merge the cycle re-earns readiness for and stays open. A readiness
+// invalidation re-enters in place too, but only after the head or base moved,
+// so its card binds a merge that no longer exists.
+func closureRetirementReason(origin domain.PublicationSuccessorOrigin) (string, bool) {
+	switch origin {
+	case domain.PublicationSuccessorUnpublishedBaseAdvance, domain.PublicationSuccessorBaseAdvance:
+		return "Superseded because the target base advanced; the re-entered publication proposes closure again.", true
+	case domain.PublicationSuccessorFeedback:
+		return "Superseded because the pull request was returned to the agent.", true
+	case domain.PublicationSuccessorRemediation:
+		return "Superseded because a remediation continuation replaced the publication.", true
+	case domain.PublicationSuccessorReadinessInvalidation:
+		return "Superseded because the pull request's head or base moved after it was ready.", true
+	case domain.PublicationSuccessorExternalReview:
+		return "", false
+	}
+	return "Superseded because a successor cycle replaced the publication.", true
 }
 
 // ErrPublicationCompleted distinguishes an obsolete accepted request from

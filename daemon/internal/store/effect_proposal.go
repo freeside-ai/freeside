@@ -1593,6 +1593,63 @@ func (tx *ReadTx) OpenEffectItemForInstance(
 	return open, merge, true, nil
 }
 
+// RetireOpenClosureProposals concludes by supersession every open
+// effect_proposal card bound to a source_issue_closure instance of the run's
+// work unit, with reason as the closed card's sentence, and returns the
+// concluded item ids. Each publication admits its own closure instance, so a
+// replaced or refused publication would otherwise leave its card decidable
+// beside its successor's. A decided card is already closed, so it, another
+// effect kind's card, and another run's cards are untouched; a run with no
+// open closure card is a no-op, so a repeated call retires nothing further.
+func (tx *WriteTx) RetireOpenClosureProposals(
+	ctx context.Context,
+	runID domain.RunID,
+	reason string,
+	now time.Time,
+) ([]domain.ItemID, error) {
+	handle := domain.OpaqueSubjectHandle(domain.WorkUnitIDForRun(runID))
+	rows, err := tx.tx.QueryContext(ctx, `SELECT instance_id FROM effect_proposal_instances
+		WHERE subject_handle = ? AND effect_kind = ? ORDER BY instance_id`,
+		handle, domain.EffectSourceIssueClosure)
+	if err != nil {
+		return nil, fmt.Errorf("retire closure proposals for run %q: %w", runID, err)
+	}
+	// Collect the ids and close the cursor before reading each instance's
+	// card, as OpenEffectItemForInstance does on the store's one connection.
+	var instanceIDs []domain.ProposalInstanceID
+	for rows.Next() {
+		var id string
+		if err := rows.Scan(&id); err != nil {
+			_ = rows.Close()
+			return nil, err
+		}
+		instanceIDs = append(instanceIDs, domain.ProposalInstanceID(id))
+	}
+	if err := errors.Join(rows.Err(), rows.Close()); err != nil {
+		return nil, fmt.Errorf("retire closure proposals for run %q: %w", runID, err)
+	}
+	var retired []domain.ItemID
+	for _, instanceID := range instanceIDs {
+		item, _, found, err := tx.OpenEffectItemForInstance(ctx, instanceID)
+		if err != nil {
+			return nil, fmt.Errorf("retire closure proposals for run %q: %w", runID, err)
+		}
+		if !found {
+			continue
+		}
+		superseded, err := item.ConcludeByDaemon(domain.ConcludedBySupersession, now.UTC(), reason, nil)
+		if err != nil {
+			return nil, fmt.Errorf("retire closure proposal item %q: %w", item.ID, err)
+		}
+		superseded.ItemVersion = item.ItemVersion + 1
+		if err := tx.PutAttentionItem(ctx, superseded); err != nil {
+			return nil, fmt.Errorf("retire closure proposal item %q: %w", item.ID, err)
+		}
+		retired = append(retired, item.ID)
+	}
+	return retired, nil
+}
+
 // RecordProposalSnooze appends a bounded deferral and leaves the proposal
 // open. The item's version transition makes every pre-snooze command stale.
 func (tx *WriteTx) RecordProposalSnooze(

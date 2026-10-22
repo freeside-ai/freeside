@@ -56,13 +56,17 @@ func parseSourceIssueClosureHumanGate(policy domain.ResolvedPolicy) bool {
 	return false
 }
 
-// productionClosureCheckpoint is the once-per-run closure answer. The proposal is
-// head- and base-independent, so the key binds only the run and its publication
-// invocation; a base advance keeps the same proposal and re-binds the merge. A
-// stored row is untrusted at reconstruction: HasProposal reports whether a
-// proposal was admitted, InstanceID names it, and Origin selects the default
-// policy binding (a propose_site records the approval, a daemon_fallback opens
-// the notice). HasProposal == (InstanceID != "") is the invariant.
+// productionClosureCheckpoint is the once-per-publication closure answer. The
+// proposal is head- and base-independent, so the key binds only the run and its
+// publication invocation; a merge that moves within one publication keeps the
+// same proposal and re-binds it. A successor cycle that publishes, including a
+// base-advance re-entry, admits its own proposal; the predecessor's open card
+// is retired when the successor seals
+// (store.WriteTx.RecordPublicationSuccessor). A stored row is untrusted at
+// reconstruction: HasProposal reports whether a proposal was admitted,
+// InstanceID names it, and Origin selects the default policy binding (a
+// propose_site records the approval, a daemon_fallback opens the notice).
+// HasProposal == (InstanceID != "") is the invariant.
 type productionClosureCheckpoint struct {
 	Version       string                    `json:"version"`
 	RunID         domain.RunID              `json:"run_id"`

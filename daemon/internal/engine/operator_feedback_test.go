@@ -419,6 +419,66 @@ func TestOperatorFeedbackInputIDsPreserveAuthenticatedRetryChain(t *testing.T) {
 	}
 }
 
+// openRunClosureCard admits a recommended source-issue closure for run and
+// opens its gate card at head over base, seeding the project, resolved policy,
+// and work-unit declaration the closure gate re-derives from. It returns the
+// card's item id and the proposal instance it binds.
+func openRunClosureCard(
+	t *testing.T, st *store.Store, attention *signet.Service, run domain.Run, keys []domain.PolicyKey, head, base string,
+) (domain.ItemID, domain.ProposalInstanceID) {
+	t.Helper()
+	ctx := t.Context()
+	policy, err := domain.NewResolvedPolicy(run.ID, keys)
+	if err != nil {
+		t.Fatal(err)
+	}
+	at := time.Date(2026, 10, 21, 0, 0, 0, 0, time.UTC)
+	var instance domain.ProposalInstance
+	if err := st.Write(ctx, func(tx *store.WriteTx) error {
+		if err := tx.RegisterProject(ctx, domain.Project{ID: run.ProjectID, Repo: "owner/repo", RepositoryID: 4242}); err != nil {
+			return err
+		}
+		if err := tx.PutResolvedPolicy(ctx, policy); err != nil {
+			return err
+		}
+		declaration, err := domain.NewWorkUnitDeclaration(domain.WorkUnitDeclarationInput{
+			CompletionCriterion: domain.CompletionBoundPRMerged,
+		}, run.ID, run.ProjectID, at)
+		if err != nil {
+			return err
+		}
+		if err := tx.RecordWorkUnitDeclaration(ctx, declaration); err != nil {
+			return err
+		}
+		proposal, err := domain.NewEffectProposal(domain.EffectSourceIssueClosure, domain.SourceIssueClosureInput{
+			SubjectHandle: domain.OpaqueSubjectHandle(domain.WorkUnitIDForRun(run.ID)),
+			Source: domain.ClosableSource{
+				Present: true, Provenance: domain.ClosureProvenanceRecommended, Repo: "owner/repo", RepositoryID: 4242,
+			},
+			ProposedTarget: domain.IssueSubjectRef{Repo: "owner/repo", RepositoryID: 4242, IssueNumber: 7},
+			Origin:         domain.ClosureFlagOriginProposeSite, Resolves: true,
+		}, policy)
+		if err != nil {
+			return err
+		}
+		instance, _, err = tx.AllocateProposalInstance(ctx, domain.ProposalAdmissionKey{
+			Source: domain.ProposalSourceRunEmission, EmissionOrdinal: 1,
+			InvocationID: domain.ProductionPublicationInvocationID(run.ID),
+		}, closureProposalBatchID(run.ID), proposal, at)
+		return err
+	}); err != nil {
+		t.Fatalf("admit the run's closure proposal: %v", err)
+	}
+	card, err := attention.OpenEffectProposalItem(ctx, instance.ID, domain.ProspectiveMerge{
+		PublicationIdentity: domain.Digest("sha256:" + strings.Repeat("9", 64)),
+		CandidateHeadSHA:    head, BaseRef: "main", BaseSHA: base,
+	})
+	if err != nil {
+		t.Fatalf("open the run's closure card: %v", err)
+	}
+	return card.ID, instance.ID
+}
+
 func TestReturnToAgentRecordsFeedbackAndCandidatePatchForResumedWork(t *testing.T) {
 	f := newSpecificationFixture(t, false, 4)
 	runID := domain.RunID("run-return-to-agent")
@@ -447,6 +507,7 @@ func TestReturnToAgentRecordsFeedbackAndCandidatePatchForResumedWork(t *testing.
 	}); err != nil {
 		t.Fatal(err)
 	}
+	closureCard, closureInstance := openRunClosureCard(t, f.store, f.signet, run, f.policy.Keys, head, base)
 	item, err := domain.NewAttentionItem(domain.AttentionItemInput{
 		ID: domain.ProductionReadyItemID(runID), ProjectID: run.ProjectID,
 		Subject: domain.Subject{Type: domain.SubjectRun, ID: domain.SubjectID(runID), RunID: &runID},
@@ -545,10 +606,31 @@ func TestReturnToAgentRecordsFeedbackAndCandidatePatchForResumedWork(t *testing.
 		!bytes.Equal(input.CandidatePatchBase64, patch) {
 		t.Fatalf("operator feedback input = %#v", input)
 	}
+	// The returned publication's closure card is retired in the request's
+	// transaction, so no card for the abandoned merge stays decidable (#2112).
+	retired, err := f.signet.GetAttentionItem(t.Context(), closureCard)
+	if err != nil || retired.Item.Status != domain.StatusSuperseded || retired.Item.Conclusion == nil ||
+		retired.Item.Conclusion.Reason != closureReturnedToAgentReason {
+		t.Fatalf("closure card after Return to Agent = %+v, %v; want superseded with %q",
+			retired.Item, err, closureReturnedToAgentReason)
+	}
+	// A card a later publication opens survives a replayed request: only the
+	// first acceptance retires.
+	later, err := f.signet.OpenEffectProposalItem(t.Context(), closureInstance, domain.ProspectiveMerge{
+		PublicationIdentity: domain.Digest("sha256:" + strings.Repeat("9", 64)),
+		CandidateHeadSHA:    strings.Repeat("4", 40), BaseRef: "main", BaseSHA: base,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
 	if replay, err := engine.persistImplementationFeedback(
 		t.Context(), concluded, result.Record, run, root, sourceID, base, head, patch,
 	); err != nil || replay {
 		t.Fatalf("replayed feedback persistence = %t, %v", replay, err)
+	}
+	if replayed, err := f.signet.GetAttentionItem(t.Context(), later.ID); err != nil ||
+		replayed.Item.Status != domain.StatusOpen || replayed.Item.ItemVersion != later.ItemVersion {
+		t.Fatalf("later closure card after a replayed request = %+v, %v; want open and unchanged", replayed.Item, err)
 	}
 	feedbackInvocation, err := func() (domain.AgentInvocation, error) {
 		var invocation domain.AgentInvocation
