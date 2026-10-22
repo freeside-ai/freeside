@@ -1155,7 +1155,9 @@ an enrolled store is re-enrollment, not `auth add`.
 plus the client, route, and cost owner. The sequence is the one `enroll-codex`
 runs: it spends the same refresh token and leaves the same recovery item to
 resolve before the identity runs. It reads the account from the login's
-`tokens.account_id` and refuses a login without one.
+`tokens.account_id` and refuses a login without one. Produce that login with
+the dedicated-`CODEX_HOME` sequence in the enrollment section, never from
+`~/.codex`.
 
 ```sh
 freesided auth add \
@@ -1481,11 +1483,18 @@ the daemon-owned live auth store. The command refuses group/world-accessible
 directories, paths outside those roots, symlink escapes, and an input file
 that is not an owner-only regular file.
 
+Run `codex login` with the input root as its `CODEX_HOME`, so the fresh
+`auth.json` lands there and `~/.codex` is never read or written. A login
+shared with the host's own Codex would break it: `enroll-codex` spends the
+refresh token at once, leaving the host's copy holding a spent token that
+fails at its next refresh. The `chmod` keeps the input file owner-only
+whatever mode the Codex CLI wrote it with.
+
 ```sh
 install -d -m 700 /path/to/codex-enrollment-input
 install -d -m 700 /path/to/freeside/review-inputs
-codex login
-install -m 600 ~/.codex/auth.json /path/to/codex-enrollment-input/auth.json
+CODEX_HOME=/path/to/codex-enrollment-input codex login
+chmod 600 /path/to/codex-enrollment-input/auth.json
 
 freesided enroll-codex \
   -db /path/to/freeside.db \
@@ -1508,9 +1517,10 @@ fresh store with no recipe-gated evidence needs no `-approved-recipe`.
 Success prints only the identity, store path, lease fence, verified digest,
 access-token expiry, and recovery item coordinates. The input refresh token
 has then been deliberately spent and is no longer a usable backup. Securely
-remove the temporary input copy after success; preserve the rotated live store
-at the printed path. A retry after verification safely rechecks and projects
-that same store even if the temporary input has already been removed.
+remove the whole input root after success: it is the dedicated `CODEX_HOME`,
+and its login is spent. Preserve the rotated live store at the printed path. A
+retry after verification safely rechecks and projects that same store even if
+the input root has already been removed.
 
 Restart the daemon with `-review-auth-mode subscription`, `-review-input-root`
 set to the durable review-input root, and `-review-auth-snapshot` set to the
