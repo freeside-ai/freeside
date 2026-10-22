@@ -506,7 +506,10 @@ merge-result audit's script header explains its purpose and guarantees.
   `scripts/merge-result-audit.sh origin/main <head-branch> <allowed-path>...`
   against that exact tip, allowing only the unit's declared paths. Read the
   whole printed change set; an in-scope reversion still passes the audit.
-  Record the base SHA, command, and verdict in PR Verification.
+  Name the base SHA in the handoff report's Status line
+  (`docs/agent-workflow.md` §handing-off step 7), not the PR body. A
+  passing audit needs no other record; a failing one means the PR is not
+  ready to merge.
 - When the base advance landed another contract unit, a contract PR's
   revalidation also regenerates its generated consumers and reruns
   `scripts/check.sh` for its components against the new tip, even if the text
@@ -587,12 +590,13 @@ change.
   without a type prefix, ticket number, or other tracking text. The title and
   PR number become the whole merge-commit message in the intended setup. Write
   it for `git log --first-parent`.
-- **Use the PR template for the body.** Include Why, What, Screenshots for UI
-  changes, optional Review Notes, and Verification. Key the commit map by
-  subject, not SHA. Start verification bullets with `Passed:`, `Checked:`,
-  `Attempted:`, or `Not run:`. Before writing or updating the body, read
-  `docs/agent-workflow.md` §pr-body. For a UI change, meet its Screenshots
-  requirements.
+- **Use the PR template for the body.** Include Why, Scope, What,
+  Departures, Screenshots for UI changes, optional Review Notes, and
+  Verification. Departures is required; write "None" when nothing departs.
+  Key any commit map by subject, not SHA. Start verification bullets with
+  `Passed:`, `Checked:`, `Attempted:`, or `Not run:`. Before writing or
+  updating the body, read `docs/agent-workflow.md` §pr-body. For a UI change,
+  meet its Screenshots requirements.
 - **Self-review the full diff in the PR files view.** Look for stray changes,
   debug code, scope creep, and accidental files. This catches accidental
   changes; it doesn't check whether the solution is correct.
@@ -633,10 +637,9 @@ change.
   round. Before handoff, mark every finding fixed, declined, deferred, or
   explicitly outstanding.
 - **Keep the PR body current.** When review adds commits or changes scope,
-  update What, the subject-based commit map, and Verification. Mark commits
-  that resolve review findings. Keep each finding's outcome in its inline
-  reply, not a permanent feedback section. Once images are hosted, start a
-  later body edit from the live body.
+  update Scope, What, Departures, and Verification, and any commit map. Keep
+  each finding's outcome in its inline reply, not a permanent feedback
+  section. Once images are hosted, start a later body edit from the live body.
 - **Keep the intended repository rules.** Use merge commits only, disable
   squash and rebase merges, use title-only merge messages, and auto-delete
   merged branches. Do not re-enable a disabled method. Enforce these rules
@@ -647,6 +650,7 @@ change.
 A PR is ready to hand off when it's open, green, self-reviewed, has no
 unhandled threads, and has no outstanding review activity. After opening the
 PR, read `docs/agent-workflow.md` §handing-off and follow its sequence.
+End with the report its step 7 defines.
 
 Once the approver approves a PR to land, stop pushing to it unless you are the
 landing batch. Turn off any auto-fix, CI repair, or review watch the platform
@@ -738,8 +742,8 @@ and lint and formatting are clean.
 - Scope declared: the PR body names which component directories the work
   unit touches (see Monorepo scope discipline)
 - Merge-result audit run against freshly fetched `origin/main` before
-  handoff, base SHA and verdict recorded in PR Verification (see
-  Integration ordering and merge-result audit)
+  handoff, base SHA named in the handoff report (see Integration ordering
+  and merge-result audit)
 - `bash scripts/check.sh <component>` passes for every component in scope;
   for `scripts/` that includes its regression suites and the vocabulary
   check
