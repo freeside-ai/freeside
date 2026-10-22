@@ -7,18 +7,23 @@ struct RunTimelineView: View {
     /// a live run bootstraps each round without its own row changing, and the
     /// detail must refetch then to keep the observations current. The epoch
     /// participates because restored revisions are incomparable and may equal
-    /// an old value. Internal, not private, so a test can build it without a
-    /// view.
+    /// an old value. The cache generation changes on every canonical
+    /// replacement, including a bootstrap that leaves every revision
+    /// unchanged; the coordinator drops a read in flight across one, and only
+    /// this field makes the view reissue it. Internal, not private, so a test
+    /// can build it without a view.
     struct TimelineRequestKey: Hashable {
         let runID: String
         let syncEpoch: String?
         let lastFullSnapshotRevision: Int64?
+        let cacheGeneration: Int
         let revision: Int64
 
-        init(snapshot: Components.Schemas.RunSnapshot, cursors: SyncCursors?) {
+        init(snapshot: Components.Schemas.RunSnapshot, cursors: SyncCursors?, cacheGeneration: Int) {
             runID = snapshot.run.id
             syncEpoch = cursors?.syncEpoch
             lastFullSnapshotRevision = cursors?.lastFullSnapshotRevision
+            self.cacheGeneration = cacheGeneration
             revision = snapshot.as_of_revision
         }
     }
@@ -91,16 +96,24 @@ struct RunTimelineView: View {
         }
         .navigationTitle(snapshot.run.project_id)
         // A bootstrap now keeps the cached timeline (SyncCoordinator.adopt);
-        // this key still changes on every same-epoch bootstrap, so the view
+        // this key still changes on every canonical replacement, so the view
         // refetches to replace the retained projection while cached content
         // stays on screen. The three body branches keep their order, so
         // cached content wins over a `.loading` spinner between rounds.
-        .task(id: TimelineRequestKey(snapshot: snapshot, cursors: coordinator.cursors)) {
+        .task(id: requestKey) {
             await coordinator.refreshTimeline(for: snapshot.run.id)
         }
-        .task(id: TimelineRequestKey(snapshot: snapshot, cursors: coordinator.cursors)) {
+        .task(id: requestKey) {
             await coordinator.refreshTaskTimeline(for: snapshot.run.task_id)
         }
+    }
+
+    private var requestKey: TimelineRequestKey {
+        TimelineRequestKey(
+            snapshot: snapshot,
+            cursors: coordinator.cursors,
+            cacheGeneration: coordinator.cacheGeneration
+        )
     }
 
     /// The project-owned timeline composition with fixture data supplied

@@ -9,6 +9,10 @@ struct TasksListView: View {
     let attentionItems: [Components.Schemas.AttentionItemSnapshot]
     let taskTimelines: [String: Components.Schemas.TaskTimeline]
     let cursors: SyncCursors?
+    /// The coordinator's cache generation, so a row's timeline read that a
+    /// same-revision bootstrap dropped is reissued
+    /// (`TaskTimelineView.TimelineRequestKey`).
+    let cacheGeneration: Int
     private let onLoadTimeline: @MainActor (String) async -> Void
     @Binding var selection: String?
     @State private var filter: TaskListFilter
@@ -24,6 +28,7 @@ struct TasksListView: View {
         attentionItems: [Components.Schemas.AttentionItemSnapshot] = [],
         taskTimelines: [String: Components.Schemas.TaskTimeline] = [:],
         cursors: SyncCursors? = nil,
+        cacheGeneration: Int = 0,
         onLoadTimeline: @escaping @MainActor (String) async -> Void = { _ in },
         selection: Binding<String?>,
         initialScope: TaskListFilter.Scope = .active,
@@ -36,6 +41,7 @@ struct TasksListView: View {
         self.attentionItems = attentionItems
         self.taskTimelines = taskTimelines
         self.cursors = cursors
+        self.cacheGeneration = cacheGeneration
         self.onLoadTimeline = onLoadTimeline
         _selection = selection
         _filter = State(initialValue: TaskListFilter(scope: initialScope))
@@ -164,7 +170,10 @@ struct TasksListView: View {
                 #endif
             }
             .tag(snapshot.task.id)
-            .task(id: TaskTimelineView.TimelineRequestKey(snapshot: snapshot, cursors: cursors)) {
+            .task(
+                id: TaskTimelineView.TimelineRequestKey(
+                    snapshot: snapshot, cursors: cursors, cacheGeneration: cacheGeneration)
+            ) {
                 await onLoadTimeline(snapshot.task.id)
             }
             .listRowInsets(EdgeInsets(top: 4, leading: 12, bottom: 4, trailing: 12))
