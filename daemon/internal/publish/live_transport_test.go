@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"github.com/freeside-ai/freeside/daemon/internal/domain"
+	"github.com/freeside-ai/freeside/daemon/internal/gitenv"
 	"github.com/freeside-ai/freeside/daemon/internal/publish"
 )
 
@@ -29,7 +30,7 @@ func liveGit(t *testing.T, dir string, args ...string) string {
 		"-c", "commit.gpgsign=false",
 	}
 	cmd := exec.Command("git", append(base, args...)...) //nolint:gosec // G204: test-authored fixture arguments
-	cmd.Env = scrubbedLiveGitEnv()
+	cmd.Env = gitenv.Scrubbed()
 	if dir != "" {
 		cmd.Dir = dir
 	}
@@ -38,21 +39,6 @@ func liveGit(t *testing.T, dir string, args ...string) string {
 		t.Fatalf("git %v: %v\n%s", args, err, out)
 	}
 	return strings.TrimSpace(string(out))
-}
-
-// scrubbedLiveGitEnv drops every GIT_* entry from the process
-// environment, the external-test-package copy of the internal tests'
-// scrubbedGitEnv: fixture git must never inherit ambient git state
-// (a rebase --exec exports GIT_DIR, retargeting fixture commands at
-// this repository itself).
-func scrubbedLiveGitEnv() []string {
-	var env []string
-	for _, e := range os.Environ() {
-		if !strings.HasPrefix(e, "GIT_") {
-			env = append(env, e)
-		}
-	}
-	return env
 }
 
 // TestLiveTransportFetchPush is issue #277 acceptance 8 against the

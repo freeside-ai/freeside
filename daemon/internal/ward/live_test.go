@@ -38,6 +38,7 @@ import (
 
 	"github.com/freeside-ai/freeside/daemon/internal/domain"
 	"github.com/freeside-ai/freeside/daemon/internal/export"
+	"github.com/freeside-ai/freeside/daemon/internal/gitenv"
 	"github.com/freeside-ai/freeside/daemon/internal/importer"
 )
 
@@ -712,13 +713,7 @@ func commitLiveSeedCheckout(t *testing.T, dir string) domain.BaseRevision {
 // scrubbedLiveGitEnv removes inherited Git overrides and disables the default
 // excludes file, which Git reads through HOME or XDG even with global config off.
 func scrubbedLiveGitEnv() []string {
-	var env []string
-	for _, entry := range os.Environ() {
-		if !strings.HasPrefix(entry, "GIT_") {
-			env = append(env, entry)
-		}
-	}
-	return append(env,
+	return append(gitenv.Scrubbed(),
 		"GIT_CONFIG_COUNT=1",
 		"GIT_CONFIG_KEY_0=core.excludesFile",
 		"GIT_CONFIG_VALUE_0="+os.DevNull,
