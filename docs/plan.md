@@ -2250,8 +2250,13 @@ base:
 - Both dependency manifests hash to the recorded values.
 - Neither `npm-shrinkwrap.json` nor `.npmrc` exists. For a Go image, the
   module directory holds no `vendor/` directory and no `replace` whose target
-  path leaves it; a `go.work` file is inert, because the builder's launcher
-  sets `GOWORK=off` (#2115).
+  path leaves it, and neither it nor any directory above it up to the
+  repository root holds a `go.work` file or directory. The build refuses the
+  same inputs (#2115). The builder's launcher sets `GOWORK=off`, so no command
+  it runs reads a `go.work`; a `go.work` is refused anyway, because a recipe
+  step that reads it without the launcher would see an input the image never
+  baked, and refusing it names that problem at admission instead of inside
+  the room.
 - The base's tree declares no verification recipe other than the baked one. A
   repository whose recipe is supplied outside its tree declares none.
 - The recorded toolchain and preparation digest equals the running binary's.
@@ -2278,7 +2283,10 @@ when it stays inside the project's declared policy. The gate holds when:
 - For a Go image, the delta touches neither the named module's `go.mod` nor
   its `go.sum` (revision 92). A `go.sum` change, which every Go dependency
   change produces, keeps the fail-loud path above until project-image upkeep
-  (#1999) covers Go module changes.
+  (#1999) covers Go module changes. A candidate that adds a `vendor/`
+  directory to the module, or a `go.work` to the module directory or any
+  directory above it, keeps the fail-loud path under the same clause as a
+  `go.mod` or `go.sum` change (#2115).
 - Every added or changed package resolves from an authority in the project
   policy's declared registry set (the same set `provider_registry` exposes to
   the writer, Section [5.4](#54-credential-modes-egress-profiles-and-concurrency); the builder reads it whatever the writer's profile,
