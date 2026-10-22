@@ -191,6 +191,41 @@ func (t *GitPublicationTransport) ProspectiveMergeOnto(
 	return t.transport.ProspectiveMergeOnto(ctx, sealed.checkout, baseSHA, headSHA)
 }
 
+// RebaseProofTransport is the optional seam a head_changed re-entry asserts
+// for (issue #2129): it fetches a head someone else pushed and the reviewed
+// head it may be a rebase of, then decides whether it is. A transport
+// without it gets no proof, so the cycle reviews the head as it did before.
+type RebaseProofTransport interface {
+	FetchPullHead(ctx context.Context, checkout PublicationCheckout, prNumber int, headSHA, reviewedHeadSHA string) error
+	ProveRebase(ctx context.Context, checkout PublicationCheckout, reviewedBase, reviewedHead, newHead string) (publish.RebaseProof, error)
+}
+
+var _ RebaseProofTransport = (*GitPublicationTransport)(nil)
+
+// FetchPullHead forwards to the sealed transport, which re-gates the checkout
+// and proves the pull request's ref holds headSHA.
+func (t *GitPublicationTransport) FetchPullHead(
+	ctx context.Context, checkout PublicationCheckout, prNumber int, headSHA, reviewedHeadSHA string,
+) error {
+	sealed, ok := checkout.(gitPublicationCheckout)
+	if !ok || sealed.owner != t {
+		return ErrForeignPublicationCheckout
+	}
+	return t.transport.FetchPullHead(ctx, sealed.checkout, prNumber, headSHA, reviewedHeadSHA)
+}
+
+// ProveRebase forwards to the sealed transport. Like ProspectiveMerge it is
+// local and leaves nothing to push.
+func (t *GitPublicationTransport) ProveRebase(
+	ctx context.Context, checkout PublicationCheckout, reviewedBase, reviewedHead, newHead string,
+) (publish.RebaseProof, error) {
+	sealed, ok := checkout.(gitPublicationCheckout)
+	if !ok || sealed.owner != t {
+		return publish.RebaseProof{}, ErrForeignPublicationCheckout
+	}
+	return t.transport.ProveRebase(ctx, sealed.checkout, reviewedBase, reviewedHead, newHead)
+}
+
 // UpdateHead is a separate capability-bearing successor effect. Ordinary
 // publication transports remain create-only unless they implement this seam.
 func (t *GitPublicationTransport) UpdateHead(ctx context.Context, checkout PublicationCheckout, gated publish.GatedUpdate) (publish.PushResult, error) {

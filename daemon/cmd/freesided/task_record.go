@@ -91,6 +91,21 @@ type taskRecordPublication struct {
 	// Completion is null while the work unit is not done, and also when its
 	// read failed, which Errors then names.
 	Completion *taskRecordCompletion `json:"completion"`
+	// RebaseProofs are the work unit's recorded verdicts on heads a lander
+	// pushed (issue #2129), oldest first, read under the completion section.
+	// Each is the stored verdict: whether a merge of a proven head was
+	// accepted is Completion's to say, because the store honors a proof only
+	// while its reviewed pair is still the latest review's.
+	RebaseProofs []taskRecordRebaseProof `json:"rebase_proofs"`
+}
+
+type taskRecordRebaseProof struct {
+	ReviewedBaseSHA string    `json:"reviewed_base_sha"`
+	ReviewedHeadSHA string    `json:"reviewed_head_sha"`
+	ProvenHeadSHA   string    `json:"proven_head_sha"`
+	Proven          bool      `json:"proven"`
+	Detail          string    `json:"detail"`
+	RecordedAt      time.Time `json:"recorded_at"`
 }
 
 type taskRecordPublicationOutcome struct {
@@ -439,6 +454,8 @@ func readTaskRecordRun(ctx context.Context, tx *store.ReadTx, runID domain.RunID
 		out.Publication = publication
 		if publication.Completion, err = readTaskRecordCompletion(ctx, tx, runID, binding); err != nil {
 			fail(taskRecordRunCompletion, err)
+		} else if publication.RebaseProofs, err = readTaskRecordRebaseProofs(ctx, tx, runID, binding); err != nil {
+			fail(taskRecordRunCompletion, err)
 		}
 	}
 	observation, err := tx.ObserveRun(ctx, runID)
@@ -567,8 +584,12 @@ func readTaskRecordCompletion(
 	if err != nil {
 		return nil, err
 	}
+	covers, err := tx.WorkUnitBindingCovers(ctx, binding, ready.HeadSHA)
+	if err != nil {
+		return nil, err
+	}
 	if binding.Repo != ready.Repo || binding.RepositoryID != ready.RepositoryID ||
-		binding.PRNumber != ready.PRNumber || binding.BaseRef != ready.BaseRef || binding.HeadSHA != ready.HeadSHA {
+		binding.PRNumber != ready.PRNumber || binding.BaseRef != ready.BaseRef || !covers {
 		return nil, fmt.Errorf("completed work-unit binding disagrees with the published ready resource: %w",
 			domain.ErrParentKeyMismatch)
 	}
@@ -577,6 +598,37 @@ func readTaskRecordCompletion(
 		MergeCommitSHA: completion.MergeCommitSHA, BoundIssue: completion.BoundIssue,
 		RecordedAt: completion.RecordedAt,
 	}, nil
+}
+
+// readTaskRecordRebaseProofs lists the run's work-unit rebase proofs. A
+// proof of some other pull request is a contradiction, as a completion of one
+// is. No declaration is nil and no error.
+func readTaskRecordRebaseProofs(
+	ctx context.Context, tx *store.ReadTx, runID domain.RunID, ready domain.ReadyItemPRBinding,
+) ([]taskRecordRebaseProof, error) {
+	declaration, err := tx.GetWorkUnitDeclarationByRun(ctx, runID)
+	if errors.Is(err, store.ErrNotFound) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	proofs, err := tx.ListWorkUnitRebaseProofs(ctx, declaration.ID)
+	if err != nil {
+		return nil, err
+	}
+	var out []taskRecordRebaseProof
+	for _, p := range proofs {
+		if p.RepositoryID != ready.RepositoryID || p.PRNumber != ready.PRNumber {
+			return nil, fmt.Errorf("rebase proof of %s names pull request %d, not the published %d: %w",
+				p.ProvenHeadSHA, p.PRNumber, ready.PRNumber, domain.ErrParentKeyMismatch)
+		}
+		out = append(out, taskRecordRebaseProof{
+			ReviewedBaseSHA: p.ReviewedBaseSHA, ReviewedHeadSHA: p.ReviewedHeadSHA,
+			ProvenHeadSHA: p.ProvenHeadSHA, Proven: p.Proven, Detail: p.Detail, RecordedAt: p.RecordedAt,
+		})
+	}
+	return out, nil
 }
 
 func projectTaskRecordAdmission(admission domain.ExecutionAdmission) taskRecordAdmission {

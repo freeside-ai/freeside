@@ -83,9 +83,11 @@ func TestWorkflowClosureAuthenticatesLegacyHeldWorkNotices(t *testing.T) {
 				t.Fatal(err)
 			}
 			for _, statement := range []string{
+				`DROP TABLE work_unit_rebase_proofs`,
 				`DROP TABLE task_attention_workflow_origins`,
 				`DROP TABLE task_workflow_closures`,
-				`DELETE FROM schema_migrations WHERE name = '0100_task_workflow_closures.sql'`,
+				`DELETE FROM schema_migrations WHERE name IN
+					('0100_task_workflow_closures.sql', '0101_work_unit_rebase_proofs.sql')`,
 			} {
 				if _, err := st.db.ExecContext(ctx, statement); err != nil {
 					t.Fatal(err)
@@ -386,9 +388,11 @@ func TestWorkflowClosureMigrationDoesNotInferAuthority(t *testing.T) {
 		t.Fatal(err)
 	}
 	for _, statement := range []string{
+		`DROP TABLE work_unit_rebase_proofs`,
 		`DROP TABLE task_attention_workflow_origins`,
 		`DROP TABLE task_workflow_closures`,
-		`DELETE FROM schema_migrations WHERE name = '0100_task_workflow_closures.sql'`,
+		`DELETE FROM schema_migrations WHERE name IN
+					('0100_task_workflow_closures.sql', '0101_work_unit_rebase_proofs.sql')`,
 	} {
 		if _, err := st.db.ExecContext(ctx, statement); err != nil {
 			t.Fatal(err)

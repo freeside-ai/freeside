@@ -1006,7 +1006,10 @@ Reading the record:
   real run: an outcome whose `head_sha` matches `export_head_sha`
   and is `evidence_eligible` is a pull request of exactly the exported
   head. A completion bound to another pull request is an `integrity` error
-  in the `completion` section.
+  in the `completion` section. `rebase_proofs` lists the unit's verdicts on
+  heads a lander pushed, oldest first (see Complete A Rebased Merge); each
+  is the stored verdict, and `completion` says whether a merge of a proven
+  head was accepted.
 - **`failed_stops` is 0 or 1.** The store keeps the latest cancellation only.
   A failed stop is a cancellation whose acknowledgement `state` is
   `failed_to_stop`; the store holds no typed reason for it, so the record
@@ -1905,6 +1908,42 @@ composition preflight, run under the lease, fails `prod_execution` unless
 `prod` is not running or reports `disabled` on its control socket, and the
 installed build must serve that read (#2080).
 
+### Complete A Rebased Merge
+
+A lander that requires up-to-date branches rebases the reviewed head onto
+the base and force-pushes before it merges, so the merged head is never the
+one Freeside reviewed (#2129). The head change starts a `head_changed`
+readiness re-entry, as any pushed head does. Its first step proves the
+rebase instead of reviewing the new head. The proof holds only when all of
+these do:
+
+- The new head descends from the base the last clean review used.
+- `git range-diff` pairs every reviewed commit with a new one as identical
+  (`=`). A reworded or reflowed message shows as `!` and is not proven,
+  by design: the proof compares exactly what was reviewed. The pairs must
+  keep the reviewed order.
+- The rebased range adds no merge commit, which `range-diff` would skip.
+- Each rebased commit changes the same paths as its reviewed pair, to the
+  same contents and modes wherever both start from the same contents. This
+  covers binary files, which `range-diff` shows only as "Binary files
+  differ".
+- The new head's tree equals the prospective merge of the reviewed pair.
+
+A proven head ends the cycle quietly: no review, no ready item, no hold.
+Readiness stays bound to the reviewed head; only the head completion
+compares moves to the proven one, so a merge of it completes the unit. A
+refused head is reviewed as any pushed head is, and a merge of it forecloses
+the unit. When the remote no longer serves either head, nothing is recorded
+and the cycle reviews the head as before. The cycle fetches the new head
+through `refs/pull/<n>/head`, which survives the lander deleting the branch,
+and the reviewed head by SHA. A cycle that finds the pull request already
+merged ends without a hold, since completion or foreclosure decides it.
+
+While the cycle for exactly the merged head has neither recorded a verdict
+nor finished, the reconciler holds the foreclosure that merge would
+otherwise raise. Read the verdicts in the task record's
+`publication.rebase_proofs`.
+
 ### Rebuild A Project Image For A Dependency Change
 
 A candidate that changes `package.json` or `package-lock.json` cannot verify
@@ -2093,7 +2132,8 @@ at all.
 - **Milestones** are an append-only, first-observation-wins timeline of
   typed events (`run_submitted` through `publication_ready` or
   `publication_blocked`, and `work_unit_completed` once the published work
-  unit's completion criterion is satisfied), written inside the transactions
+  unit's completion criterion is satisfied, including by a merge of a proven
+  rebase of the published head), written inside the transactions
   that commit the underlying workflow facts. `work_unit_completed` carries
   only the publication invocation; the PR, merge commit, and bound issue are
   read from the re-gated `work_unit_completions` row, and the sync boundary

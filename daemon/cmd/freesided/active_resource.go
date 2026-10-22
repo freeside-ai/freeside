@@ -165,11 +165,14 @@ func loadCompletionRecoveryState(
 	if err != nil {
 		return state, err
 	}
+	covers, err := tx.WorkUnitBindingCovers(ctx, binding, readyBinding.HeadSHA)
+	if err != nil {
+		return state, err
+	}
 	if binding.Repo != readyBinding.Repo ||
 		binding.RepositoryID != readyBinding.RepositoryID ||
 		binding.PRNumber != readyBinding.PRNumber ||
-		binding.BaseRef != readyBinding.BaseRef ||
-		binding.HeadSHA != readyBinding.HeadSHA {
+		binding.BaseRef != readyBinding.BaseRef || !covers {
 		return state, fmt.Errorf("work-unit binding %s disagrees with ready resource %s",
 			binding.UnitID, readyBinding.ItemID)
 	}
@@ -193,6 +196,13 @@ func loadCompletionRecoveryState(
 	for i := len(pulls) - 1; i >= 0; i-- {
 		pull := pulls[i]
 		if pull.Merged && (pull.HeadSHA != binding.HeadSHA || pull.BaseRef != binding.BaseRef) {
+			pending, err := rebaseProofPending(ctx, tx, successor, declaration.ID, pull)
+			if err != nil {
+				return state, err
+			}
+			if pending {
+				break
+			}
 			state.foreclosure = &completionForeclosure{
 				unitID: declaration.ID, binding: binding, pull: pull,
 			}
@@ -200,6 +210,40 @@ func loadCompletionRecoveryState(
 		}
 	}
 	return state, nil
+}
+
+// rebaseProofPending reports whether a merge of a head other than the
+// effective one may still be completion rather than foreclosure: a lander
+// rebased and merged (issue #2129), the head_changed cycle for exactly the
+// merged head has not finished, and it has recorded no verdict for that
+// head. The cycle proves the rebase or ends on the merge in its first pass
+// that reaches the proof, so the wait lasts as long as that cycle runs; a
+// cycle whose pass keeps failing fails the publication lane loudly on every
+// pass, and the hold lasts as long as that failure does. Once the cycle
+// finishes, a proof moves the effective head onto the merged one and a
+// refusal or a missing proof forecloses as before.
+func rebaseProofPending(
+	ctx context.Context, tx *store.ReadTx, successor *domain.PublicationSuccessor,
+	unitID domain.WorkUnitID, pull domain.PullMergeFact,
+) (bool, error) {
+	if successor == nil || successor.Reentry == nil ||
+		successor.Reentry.Reason != domain.ReadinessInvalidationHeadChanged ||
+		successor.Reentry.HeadSHA != pull.HeadSHA {
+		return false, nil
+	}
+	if _, err := tx.GetWorkUnitRebaseProof(ctx, unitID, pull.HeadSHA); err == nil {
+		return false, nil
+	} else if !errors.Is(err, store.ErrNotFound) {
+		return false, err
+	}
+	task, err := tx.GetOutbox(ctx, successor.TaskKey())
+	if errors.Is(err, store.ErrNotFound) {
+		return false, nil
+	}
+	if err != nil {
+		return false, err
+	}
+	return !task.Dispatched(), nil
 }
 
 // Run performs one startup pass and then re-arms its process-local timer from
@@ -918,9 +962,12 @@ func (r activeResourceReconciler) observeReadyResource(
 		if err != nil {
 			return err
 		}
+		covers, err := tx.WorkUnitBindingCovers(ctx, b, binding.HeadSHA)
+		if err != nil {
+			return err
+		}
 		if b.Repo != binding.Repo || b.RepositoryID != binding.RepositoryID ||
-			b.PRNumber != binding.PRNumber || b.BaseRef != binding.BaseRef ||
-			b.HeadSHA != binding.HeadSHA {
+			b.PRNumber != binding.PRNumber || b.BaseRef != binding.BaseRef || !covers {
 			return fmt.Errorf("work-unit binding %s disagrees with ready resource %s",
 				b.UnitID, binding.ItemID)
 		}
@@ -1021,7 +1068,13 @@ func (r activeResourceReconciler) observeReadyResource(
 			observation.externalFindings, observation.externalSkipped = buildExternalFindings(reviewObs, binding)
 		}
 	}
-	if declaration != nil && unitBinding != nil && !completed && exact && pullFact.Merged &&
+	// Completion compares the unit's effective head, which a proven rebase
+	// moves off the ready item's head (issue #2129), so the issue that
+	// completes the unit is observed against that head, not the ready one.
+	unitExact := unitBinding != nil && pullFact.RepositoryID == unitBinding.RepositoryID &&
+		pullFact.PRNumber == unitBinding.PRNumber && pullFact.BaseRef == unitBinding.BaseRef &&
+		pullFact.HeadSHA == unitBinding.HeadSHA
+	if declaration != nil && unitBinding != nil && !completed && unitExact && pullFact.Merged &&
 		declaration.CompletionCriterion == domain.CompletionBoundIssueClosedByMergedPR &&
 		declaration.BoundIssue != nil {
 		if r.issue == nil {

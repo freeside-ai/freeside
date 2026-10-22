@@ -1749,6 +1749,18 @@ func TestGolden(t *testing.T) {
 	if !completed {
 		t.Fatal("golden completion fixture did not evaluate as completed")
 	}
+	unitRebaseProof := domain.WorkUnitRebaseProof{
+		UnitID: unitDeclaration.ID, RepositoryID: 84958515, PRNumber: 450,
+		ReviewedBaseSHA: "facefeed", ReviewedHeadSHA: "cafebabe", ProvenHeadSHA: "c0ffee00",
+		ReviewedTreeSHA: "feedf00d", Proven: true, RecordedAt: ts.Add(2 * time.Hour),
+	}
+	unitRebaseRefusal := domain.WorkUnitRebaseProof{
+		UnitID: unitDeclaration.ID, RepositoryID: 84958515, PRNumber: 450,
+		ReviewedBaseSHA: "facefeed", ReviewedHeadSHA: "cafebabe", ProvenHeadSHA: "0badc0de",
+		ReviewedTreeSHA: "feedf00d",
+		Detail:          `range-diff reports "1:  cafebab ! 1:  0badc0d Change the greeting"`,
+		RecordedAt:      ts.Add(2 * time.Hour),
+	}
 
 	// Label-intake occurrence fixtures (issue #720). The admitted occurrence
 	// derives its admission key from its own coordinates, so a valid fixture
@@ -2024,6 +2036,8 @@ func TestGolden(t *testing.T) {
 		{"native_review_observation", nativeReviewObservation},
 		{"native_review_clean_pass", nativeReviewCleanPass},
 		{"work_unit_completion", unitCompletion},
+		{"work_unit_rebase_proof", unitRebaseProof},
+		{"work_unit_rebase_refusal", unitRebaseRefusal},
 	}
 	cases = append(cases, filingLedgerGoldens(t)...)
 	for _, tc := range cases {

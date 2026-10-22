@@ -436,6 +436,11 @@ type integrationTransport struct {
 	headFetchHook func(call int)
 	merges        int
 	mergeMessage  string
+	// The scripted rebase proof verdict and the proof accounting
+	// (reentry_transport_test.go).
+	rebaseVerdict *publish.RebaseProof
+	pullFetches   int
+	proofs        int
 }
 
 func (tr *integrationTransport) RetainWorktree(

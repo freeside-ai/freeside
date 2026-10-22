@@ -655,7 +655,7 @@ func TestTaskRecordReportsPublication(t *testing.T) {
 			Repo: "owner/repo", BaseRef: "main", HeadSHA: "cafed00d", PRNumber: 450, EvidenceEligible: true,
 		},
 	}
-	if run.Publication == nil || *run.Publication != want {
+	if run.Publication == nil || !reflect.DeepEqual(*run.Publication, want) {
 		t.Fatalf("publication = %+v, want %+v", run.Publication, want)
 	}
 	if sections := runErrorSections(run); slices.Contains(sections, taskRecordRunPublication) ||
@@ -684,6 +684,26 @@ func TestTaskRecordReportsPublication(t *testing.T) {
 	}); err != nil {
 		t.Fatal(err)
 	}
+	// A lander's head the proof refused prints beside the publication.
+	refused := domain.WorkUnitRebaseProof{
+		UnitID: unit, RepositoryID: 424242, PRNumber: 450,
+		ReviewedBaseSHA: "deadbeef", ReviewedHeadSHA: "cafed00d", ProvenHeadSHA: "beadfeed",
+		Detail: "the head does not descend from the reviewed base", RecordedAt: taskRecordAsOf,
+	}
+	if err := st.WriteInternal(ctx, func(tx *store.InternalTx) error {
+		return tx.RecordWorkUnitRebaseProof(ctx, refused)
+	}); err != nil {
+		t.Fatal(err)
+	}
+	run = readRun()
+	want.RebaseProofs = []taskRecordRebaseProof{{
+		ReviewedBaseSHA: "deadbeef", ReviewedHeadSHA: "cafed00d", ProvenHeadSHA: "beadfeed",
+		Detail: refused.Detail, RecordedAt: taskRecordAsOf,
+	}}
+	if run.Publication == nil || !reflect.DeepEqual(*run.Publication, want) {
+		t.Fatalf("publication = %+v, want %+v", run.Publication, want)
+	}
+
 	boundIssue := 443
 	if err := st.WriteInternal(ctx, func(tx *store.InternalTx) error {
 		return tx.RecordWorkUnitCompletion(ctx, domain.WorkUnitCompletion{

@@ -614,7 +614,10 @@ func (c WorkUnitCompletion) Equal(o WorkUnitCompletion) bool {
 //     (a stacked or retargeted PR);
 //   - a merge whose head is not the binding's recorded head never completes
 //     (a post-publication push, update-branch merge, or force-push merged
-//     code the daemon never admitted);
+//     code the daemon never admitted). The store's effective binding may
+//     carry a proven rebase of the published head (WorkUnitRebaseProof) in
+//     its place, so a lander's rebase of the reviewed commits onto the
+//     reviewed base completes the unit while any other rewrite does not;
 //   - the issue-closure criterion additionally requires the bound issue,
 //     in the binding's repository, closed by exactly the observed merge
 //     commit (a partial merge, a manual closure, or a closure by any other
