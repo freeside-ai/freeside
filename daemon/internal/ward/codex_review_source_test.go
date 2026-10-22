@@ -2782,7 +2782,39 @@ func TestCodexReviewSourceEmptyExplanationRejectedBySource(t *testing.T) {
 	}
 }
 
+// codexRejectedCredentialFixture is the provider output of round 6 of the
+// Wave 8 exit run (#2110), verbatim: the provider rejected the reviewer's
+// access token, Codex's blocked refresh attempt ended the turn, and stderr
+// carried the 401s.
+func codexRejectedCredentialFixture(t *testing.T) string {
+	t.Helper()
+	body, err := os.ReadFile("testdata/codex_review_rejected_credential.jsonl")
+	if err != nil {
+		t.Fatal(err)
+	}
+	return string(body)
+}
+
+// codexRejectedCredentialStderrOnly is the fixture with its turn.failed line
+// removed: the shape Codex leaves when it exits on the rejected token without
+// a terminal event.
+func codexRejectedCredentialStderrOnly(t *testing.T) string {
+	t.Helper()
+	fixture := codexRejectedCredentialFixture(t)
+	const terminal = `{"type":"turn.failed","error":{"message":"error sending request for url (https://auth.openai.com/oauth/token)"}}`
+	if !strings.Contains(fixture, terminal) {
+		t.Fatal("fixture lacks its recorded turn.failed line")
+	}
+	return strings.Replace(fixture, terminal, "", 1)
+}
+
 func TestCodexReviewSourceClassifiesTerminalFailures(t *testing.T) {
+	fixture := codexRejectedCredentialFixture(t)
+	stderrOnly := codexRejectedCredentialStderrOnly(t)
+	beforeStart, _, found := strings.Cut(fixture, `{"type":"turn.started"}`)
+	if !found || !strings.Contains(beforeStart, "401 Unauthorized") {
+		t.Fatal("fixture lacks 401 stderr lines before its turn.started")
+	}
 	for _, tc := range []struct {
 		name   string
 		events string
@@ -2910,12 +2942,49 @@ func TestCodexReviewSourceClassifiesTerminalFailures(t *testing.T) {
 			`{"type":"turn.failed","error":{"message":"connection reset"}}`,
 			domain.ReviewFailureTransient,
 		},
+		{"recorded rejected credential", fixture, domain.ReviewFailureConfiguration},
+		{
+			"hand-observed refresh failure",
+			`{"type":"turn.failed","error":{"message":"Your access token could not be refreshed. Please log out and sign in again."}}`,
+			domain.ReviewFailureConfiguration,
+		},
+		{"stderr-only rejected credential", stderrOnly, domain.ReviewFailureConfiguration},
+		{
+			"usage limit",
+			`{"type":"turn.failed","error":{"message":"You've hit your usage limit. Try again later."}}`,
+			domain.ReviewFailureQuota,
+		},
+		{
+			"rejected credential stderr before a completed turn",
+			stderrOnly + `{"type":"turn.completed","usage":{"input_tokens":12}}`,
+			domain.ReviewFailureTransient,
+		},
+		{
+			"rejected credential stderr before a transient terminal",
+			stderrOnly + `{"type":"turn.failed","error":{"message":"connection reset"}}`,
+			domain.ReviewFailureTransient,
+		},
+		{
+			"rejected credential stderr only before the last turn.started",
+			beforeStart + `{"type":"turn.started"}`,
+			domain.ReviewFailureTransient,
+		},
+		{
+			"401 markers inside an event are not stderr",
+			"{\"type\":\"turn.started\"}\n" +
+				`{"type":"item.completed","item":{"text":"HTTP error: 401 Unauthorized, auth error: 401"}}`,
+			domain.ReviewFailureTransient,
+		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			if got, _ := classifyCodexTerminalFailure([]byte(tc.events)); got != tc.want {
+			if got, _ := classifyCodexTerminalFailure([]byte(tc.events), 1); got != tc.want {
 				t.Fatalf("class = %q, want %q", got, tc.want)
 			}
 		})
+	}
+	// Stderr decides only a nonzero exit.
+	if got, _ := classifyCodexTerminalFailure([]byte(stderrOnly), 0); got != domain.ReviewFailureTransient {
+		t.Fatalf("stderr-only shape at exit 0 = %q, want transient", got)
 	}
 }
 
@@ -2938,6 +3007,22 @@ func TestCodexReviewSourceNamesInContainerRefreshAttempt(t *testing.T) {
 	if outcome.FailureClass != domain.ReviewFailureTransient ||
 		outcome.Failure != "Codex review exited with status 1" {
 		t.Fatalf("historical refresh mention normalized as %#v", outcome)
+	}
+
+	outcome = source.normalizeCollection("review-run-1-3", exec.ReviewRequest{}, CodexReviewCollection{
+		Events: []byte(codexRejectedCredentialFixture(t)), ExitStatus: 1,
+	})
+	if outcome.FailureClass != domain.ReviewFailureConfiguration ||
+		outcome.Failure != "Codex review attempted an in-container credential refresh" {
+		t.Fatalf("recorded rejected credential normalized as %#v", outcome)
+	}
+
+	outcome = source.normalizeCollection("review-run-1-4", exec.ReviewRequest{}, CodexReviewCollection{
+		Events: []byte(codexRejectedCredentialStderrOnly(t)), ExitStatus: 1,
+	})
+	if outcome.FailureClass != domain.ReviewFailureConfiguration ||
+		outcome.Failure != "Codex review exited with status 1" {
+		t.Fatalf("stderr-only rejected credential normalized as %#v", outcome)
 	}
 }
 

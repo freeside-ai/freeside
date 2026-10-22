@@ -997,11 +997,15 @@ func (s *CodexReviewSource) normalizeCollection(
 	contradiction := func(message string) CodexReviewSourceOutcome {
 		return failure(domain.ReviewFailureContradiction, message)
 	}
+	isCodex := provider.sourceLabel() == (codexReviewProvider{}).sourceLabel()
 	_, terminalFailed := codexTerminalFailure(collection.Events)
-	if collection.ExitStatus != 0 || provider.sourceLabel() == (codexReviewProvider{}).sourceLabel() && terminalFailed {
+	if collection.ExitStatus != 0 || isCodex && terminalFailed {
 		class, terminalMessage := classifyReviewTerminalFailure(provider, collection.Events)
+		if isCodex {
+			class, terminalMessage = classifyCodexTerminalFailure(collection.Events, collection.ExitStatus)
+		}
 		message := fmt.Sprintf("Codex review exited with status %d", collection.ExitStatus)
-		if provider.sourceLabel() == (codexReviewProvider{}).sourceLabel() && collection.ExitStatus == codexReviewAccessFailureExitStatus {
+		if isCodex && collection.ExitStatus == codexReviewAccessFailureExitStatus {
 			class, message = domain.ReviewFailureConfiguration, "Codex review cannot inspect its bound workspace and commits in the read-only sandbox"
 		}
 		if collection.ExitStatus == 0 {
@@ -1648,7 +1652,16 @@ func classifyCodexObservationFailure(err error) domain.ReviewFailureClass {
 	return domain.ReviewFailureTransient
 }
 
-func classifyCodexTerminalFailure(events []byte) (domain.ReviewFailureClass, string) {
+// classifyCodexTerminalFailure classifies a failed Codex collection. The last
+// decoded turn.failed decides, as for every provider, with one exception: a
+// nonzero exit whose last turn.started has no terminal event after it is a
+// rejected credential when Codex's own stderr says 401. Codex can exit on a
+// rejected access token without emitting turn.failed (#2110), and that
+// otherwise spends a transient retry per round until the run's limit.
+func classifyCodexTerminalFailure(events []byte, exitStatus int) (domain.ReviewFailureClass, string) {
+	if line, ok := codexUnfinishedTurnRejection(events); ok && exitStatus != 0 {
+		return domain.ReviewFailureConfiguration, line
+	}
 	return classifyReviewTerminalFailure(codexReviewProvider{}, events)
 }
 
@@ -1661,7 +1674,7 @@ func classifyReviewTerminalFailure(
 	case codexRefreshAttemptFailure([]byte(message)):
 		return domain.ReviewFailureConfiguration, message
 	case strings.Contains(text, "quota"), strings.Contains(text, "rate limit"),
-		strings.Contains(text, "too many requests"):
+		strings.Contains(text, "too many requests"), strings.Contains(text, "usage limit"):
 		return domain.ReviewFailureQuota, message
 	case strings.Contains(text, "authentication"), strings.Contains(text, "unauthorized"),
 		strings.Contains(text, "invalid api key"), strings.Contains(text, "configuration"):
@@ -1682,23 +1695,15 @@ func codexTerminalFailure(events []byte) (string, bool) {
 	var message string
 	var failed bool
 	for line := range bytes.SplitSeq(events, []byte("\n")) {
-		var terminal struct {
-			Type  string `json:"type"`
-			Error struct {
-				Message string `json:"message"`
-			} `json:"error"`
-		}
-		if err := RejectDuplicateJSONKeys(line); err != nil {
+		eventType, eventMessage, ok := codexTurnEvent(line)
+		if !ok {
 			continue
 		}
-		if err := json.Unmarshal(line, &terminal); err != nil {
-			continue
-		}
-		switch terminal.Type {
+		switch eventType {
 		case "turn.started":
 			message, failed = "Codex review turn did not complete", true
 		case "turn.failed":
-			message, failed = terminal.Error.Message, true
+			message, failed = eventMessage, true
 		case "turn.completed":
 			message, failed = "", false
 		}
@@ -1706,9 +1711,63 @@ func codexTerminalFailure(events []byte) (string, bool) {
 	return message, failed
 }
 
+// codexUnfinishedTurnRejection returns the first stderr line after the last
+// turn.started that carries Codex's own 401 markers, when no terminal event
+// decoded after that turn.started. Only a line that is not a JSON envelope
+// counts, so text inside an event (model output, a tool result) never does.
+func codexUnfinishedTurnRejection(events []byte) (string, bool) {
+	var rejection string
+	var open bool
+	for line := range bytes.SplitSeq(events, []byte("\n")) {
+		if eventType, _, ok := codexTurnEvent(line); ok {
+			switch eventType {
+			case "turn.started":
+				rejection, open = "", true
+			case "turn.failed", "turn.completed":
+				rejection, open = "", false
+			}
+			continue
+		}
+		text := strings.TrimSpace(string(line))
+		if !open || rejection != "" || strings.HasPrefix(text, "{") {
+			continue
+		}
+		lower := strings.ToLower(text)
+		if strings.Contains(lower, "401 unauthorized") || strings.Contains(lower, "auth error: 401") {
+			rejection = text
+		}
+	}
+	return rejection, open && rejection != ""
+}
+
+// codexTurnEvent decodes one transcript line as a Codex event envelope. ok is
+// false for anything else: stderr, a truncated line, or duplicate keys.
+func codexTurnEvent(line []byte) (eventType, message string, ok bool) {
+	var event struct {
+		Type  string `json:"type"`
+		Error struct {
+			Message string `json:"message"`
+		} `json:"error"`
+	}
+	if err := RejectDuplicateJSONKeys(line); err != nil {
+		return "", "", false
+	}
+	if err := json.Unmarshal(line, &event); err != nil {
+		return "", "", false
+	}
+	return event.Type, event.Error.Message, true
+}
+
+// codexRefreshAttemptFailure reports whether a message records Codex trying
+// to refresh its access token inside the review container. The review profile
+// forbids the refresh endpoint, so a message that names it, or says the token
+// could not be refreshed, means the provider rejected the access token the
+// daemon supplied (#2110).
 func codexRefreshAttemptFailure(events []byte) bool {
 	text := strings.ToLower(string(events))
 	return strings.Contains(text, "failed to refresh token") ||
 		strings.Contains(text, "refresh token was already used") ||
-		strings.Contains(text, "invalid 'refresh_token'")
+		strings.Contains(text, "invalid 'refresh_token'") ||
+		strings.Contains(text, "could not be refreshed") ||
+		strings.Contains(text, strings.TrimPrefix(codexAuthRefreshEndpoint, "https://"))
 }
