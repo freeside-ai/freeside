@@ -2995,7 +2995,7 @@ func TestCodexReviewSourceNamesInContainerRefreshAttempt(t *testing.T) {
 		ExitStatus: 1,
 	})
 	if outcome.FailureClass != domain.ReviewFailureConfiguration ||
-		outcome.Failure != "Codex review attempted an in-container credential refresh" {
+		outcome.Failure != "Codex review attempted an in-container credential refresh: Failed to refresh token while starting" {
 		t.Fatalf("refresh attempt normalized as %#v", outcome)
 	}
 
@@ -3005,7 +3005,7 @@ func TestCodexReviewSourceNamesInContainerRefreshAttempt(t *testing.T) {
 		ExitStatus: 1,
 	})
 	if outcome.FailureClass != domain.ReviewFailureTransient ||
-		outcome.Failure != "Codex review exited with status 1" {
+		outcome.Failure != "Codex review exited with status 1: connection reset" {
 		t.Fatalf("historical refresh mention normalized as %#v", outcome)
 	}
 
@@ -3013,7 +3013,8 @@ func TestCodexReviewSourceNamesInContainerRefreshAttempt(t *testing.T) {
 		Events: []byte(codexRejectedCredentialFixture(t)), ExitStatus: 1,
 	})
 	if outcome.FailureClass != domain.ReviewFailureConfiguration ||
-		outcome.Failure != "Codex review attempted an in-container credential refresh" {
+		outcome.Failure != "Codex review attempted an in-container credential refresh: "+
+			"error sending request for url (https://auth.openai.com/oauth/token)" {
 		t.Fatalf("recorded rejected credential normalized as %#v", outcome)
 	}
 
@@ -3021,8 +3022,27 @@ func TestCodexReviewSourceNamesInContainerRefreshAttempt(t *testing.T) {
 		Events: []byte(codexRejectedCredentialStderrOnly(t)), ExitStatus: 1,
 	})
 	if outcome.FailureClass != domain.ReviewFailureConfiguration ||
-		outcome.Failure != "Codex review exited with status 1" {
+		outcome.Failure != "Codex review exited with status 1: 2026-10-21T15:31:21.312669Z ERROR "+
+			"codex_api::endpoint::responses_websocket: failed to connect to websocket: "+
+			"HTTP error: 401 Unauthorized, url: wss://chatgpt.com/backend-api/codex/responses" {
 		t.Fatalf("stderr-only rejected credential normalized as %#v", outcome)
+	}
+
+	outcome = source.normalizeCollection("review-run-1-5", exec.ReviewRequest{}, CodexReviewCollection{
+		Events: []byte(`{"type":"turn.started"}`), ExitStatus: 1,
+	})
+	if outcome.FailureClass != domain.ReviewFailureTransient ||
+		outcome.Failure != "Codex review exited with status 1" {
+		t.Fatalf("unfinished turn without a message normalized as %#v", outcome)
+	}
+
+	long := strings.Repeat("x", 4*exec.MaxSummaryBytes)
+	outcome = source.normalizeCollection("review-run-1-6", exec.ReviewRequest{}, CodexReviewCollection{
+		Events:     []byte(`{"type":"turn.failed","error":{"message":"` + long + `"}}`),
+		ExitStatus: 1,
+	})
+	if want := "Codex review exited with status 1: " + exec.TruncateSummary(long); outcome.Failure != want {
+		t.Fatalf("long terminal message recorded as %d bytes, want %d", len(outcome.Failure), len(want))
 	}
 }
 

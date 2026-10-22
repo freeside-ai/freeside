@@ -1014,6 +1014,12 @@ func (s *CodexReviewSource) normalizeCollection(
 		if codexRefreshAttemptFailure([]byte(terminalMessage)) {
 			message = "Codex review attempted an in-container credential refresh"
 		}
+		// The provider's own message is the only record of why the review
+		// failed that reaches review_failures.reason and the parked item, so
+		// it travels with the failure, bounded because the provider writes it.
+		if terminalMessage != "" {
+			message += ": " + exec.TruncateSummary(terminalMessage)
+		}
 		return failure(class, message)
 	}
 	var raw struct {
@@ -1691,6 +1697,8 @@ func codexTerminalFailureMessage(events []byte) string {
 
 // Only provider terminal events decide this state. Failed exploratory tools
 // are nested items, and a later completed turn supersedes a recovered failure.
+// A started turn with no terminal event after it has failed with no decoded
+// message.
 func codexTerminalFailure(events []byte) (string, bool) {
 	var message string
 	var failed bool
@@ -1701,7 +1709,7 @@ func codexTerminalFailure(events []byte) (string, bool) {
 		}
 		switch eventType {
 		case "turn.started":
-			message, failed = "Codex review turn did not complete", true
+			message, failed = "", true
 		case "turn.failed":
 			message, failed = eventMessage, true
 		case "turn.completed":
