@@ -114,7 +114,7 @@ delivery its original 31-KiB limit. This changes transport; it neither retries
 a failed invocation nor grants successor publication.
 
 The optional `TestPinnedClaudePromptStdinLive` probe uses a cached, pinned
-Claude 2.1.220 image, synthetic text larger than the argument limit, and a mock
+Claude image, synthetic text larger than the argument limit, and a mock
 API on loopback inside a network-disabled container. It checks that the exact
 text reaches a user-message block after privilege drop, and that the dropped
 user cannot independently open the protected file. It uses no real provider

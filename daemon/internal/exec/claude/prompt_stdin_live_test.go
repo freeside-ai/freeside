@@ -23,7 +23,7 @@ import (
 // its single container with the caller's held rig; never acquire a second rig.
 func TestPinnedClaudePromptStdinLive(t *testing.T) {
 	if os.Getenv("FREESIDE_PROMPT_STDIN_LIVE") != "1" {
-		t.Skip("set FREESIDE_PROMPT_STDIN_LIVE=1, FREESIDE_PROMPT_IMAGE, FREESIDE_RIG_ACQUISITION and FREESIDE_STATE_DIR; requires a held rig and cached pinned Claude 2.1.220 image")
+		t.Skip("set FREESIDE_PROMPT_STDIN_LIVE=1, FREESIDE_PROMPT_IMAGE, FREESIDE_RIG_ACQUISITION and FREESIDE_STATE_DIR; requires a held rig and a cached image at the pinned Claude version")
 	}
 	image := os.Getenv("FREESIDE_PROMPT_IMAGE")
 	if !strings.Contains(image, "@sha256:") {

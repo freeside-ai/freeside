@@ -12,7 +12,7 @@ import (
 // Containerfiles, so an image bump that forgets the adapter fails there: a
 // new harness build is a new adapter digest with no conformance record.
 const (
-	ClaudeCodeHarnessBuild = "claude-code 2.1.220"
+	ClaudeCodeHarnessBuild = "claude-code 2.1.282"
 	CodexHarnessBuild      = "codex-cli 0.147.0"
 )
 
