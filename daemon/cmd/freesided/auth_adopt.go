@@ -53,7 +53,11 @@ type authAdoptConfig struct {
 	ClaudeAccount, ContainerBin, ExporterImage string
 	AuthStoreRoot                              string
 
-	ClaudeRoute, CodexRoute, ReviewModel           string
+	ClaudeRoute, CodexRoute, ReviewModel string
+	// ReviewHarness is the harness the reviewer line's agent runs (#397):
+	// codex_cli adopts the review identity's Codex store, and claude_code
+	// its setup-token volume.
+	ReviewHarness                                  domain.HarnessClientKind
 	TermsBasisDate, PricingRevision, OfferNotAfter string
 	// ReviewEffort, ShadowReviewModel, and ShadowReviewEffort are what the
 	// review agents name beside ReviewModel. An effort is a Freeside level.
@@ -194,29 +198,56 @@ func runAuthAdoptCommand(
 		return errors.Join(err, writeAdoptReport(reportOut, report))
 	}
 
-	// One identity under both flags is one adoption: it holds one store, and
-	// that store is the Claude one, so the tree carries no review agent.
-	var codexEnrollment *domain.ClientEnrollment
-	if reviewID != claudeID {
+	var codexEnrollment, claudeReviewEnrollment *domain.ClientEnrollment
+	// adoptReview reports the review identity's adoption beside the writer's
+	// and returns its enrollment, nil when the identity is unadoptable.
+	adoptReview := func(result ward.AuthAdoptionResult, adoptErr error) (*domain.ClientEnrollment, error) {
+		entry, err := adoptReportEntry(reviewIdentity, cfg.ReviewHarness, result, adoptErr)
+		if err != nil {
+			// The first identity's adoption is already recorded; say so
+			// before failing, so the operator knows a rerun reuses it.
+			return nil, errors.Join(err, writeAdoptReport(reportOut, report))
+		}
+		report.Identities = append(report.Identities, entry)
+		if err := retireUnadoptable(ctx, st, cfg, &report.Identities[1], deps.now()); err != nil {
+			return nil, errors.Join(err, writeAdoptReport(reportOut, report))
+		}
+		if adoptErr != nil {
+			return nil, nil
+		}
+		return &result.Enrollment, nil
+	}
+	switch {
+	case reviewID == claudeID && cfg.ReviewHarness == domain.HarnessClientClaudeCode:
+		// One identity under both flags is one adoption. A Claude reviewer
+		// then runs on the writer's enrollment, under its own agent.
+		if claudeErr == nil {
+			claudeReviewEnrollment = &claude.Enrollment
+		}
+	case reviewID == claudeID:
+		// The one store is the Claude one, so a Codex reviewer has no store
+		// and the tree carries no review agent.
+	case cfg.ReviewHarness == domain.HarnessClientClaudeCode:
+		// The review identity is a Claude setup-token identity auth add
+		// enrolled; adoption reuses that enrollment. An identity with none
+		// is unadoptable here, because no account is attested for it.
+		review, reviewErr := ward.AdoptClaudeAuth(ctx, ward.ClaudeAuthAdoptionConfig{
+			AuthAdoptionConfig: shared(reviewIdentity, domain.HarnessClientClaudeCode, cfg.ClaudeRoute, cfg.ReviewCostOwner),
+			ObserveVolume:      deps.observeVolume(cfg.ContainerBin, cfg.ExporterImage),
+		})
+		if claudeReviewEnrollment, err = adoptReview(review, reviewErr); err != nil {
+			return err
+		}
+	default:
 		codex, codexErr := ward.AdoptCodexAuth(ctx, ward.CodexAuthAdoptionConfig{
 			AuthAdoptionConfig: shared(reviewIdentity, domain.HarnessClientCodexCLI, cfg.CodexRoute, cfg.ReviewCostOwner),
 			AuthStoreRoot:      cfg.AuthStoreRoot,
 		})
-		entry, err := adoptReportEntry(reviewIdentity, domain.HarnessClientCodexCLI, codex, codexErr)
-		if err != nil {
-			// The first identity's adoption is already recorded; say so
-			// before failing, so the operator knows a rerun reuses it.
-			return errors.Join(err, writeAdoptReport(reportOut, report))
-		}
-		report.Identities = append(report.Identities, entry)
-		if err := retireUnadoptable(ctx, st, cfg, &report.Identities[1], deps.now()); err != nil {
-			return errors.Join(err, writeAdoptReport(reportOut, report))
-		}
-		if codexErr == nil {
-			codexEnrollment = &codex.Enrollment
+		if codexEnrollment, err = adoptReview(codex, codexErr); err != nil {
+			return err
 		}
 	}
-	if codexEnrollment != nil {
+	if codexEnrollment != nil || claudeReviewEnrollment != nil {
 		// With no review agent there is no reviewer line; the cutover's
 		// startup check names the role when policy still asks review from ward.
 		prompts[domain.RoleReviewer] = reviewPrompt()
@@ -232,7 +263,8 @@ func runAuthAdoptCommand(
 
 	tree, err := agentbaseline.Tree(agentbaseline.TreeInput{
 		ClaudeEnrollment: claude.Enrollment, CodexEnrollment: codexEnrollment,
-		ReviewModel: cfg.ReviewModel, ReviewEffort: cfg.ReviewEffort,
+		ClaudeReviewEnrollment: claudeReviewEnrollment,
+		ReviewModel:            cfg.ReviewModel, ReviewEffort: cfg.ReviewEffort,
 		ShadowReviewModel: cfg.ShadowReviewModel, ShadowReviewEffort: cfg.ShadowReviewEffort,
 		JudgmentModel: cfg.JudgmentModel, TermsBasisDate: cfg.TermsBasisDate,
 		PricingRevision: cfg.PricingRevision, OfferNotAfter: notAfter, Prompts: prompts,
@@ -435,7 +467,7 @@ func parseAuthAdoptConfig(args []string, stderr io.Writer, now time.Time) (authA
 	flags.StringVar(&cfg.AuthIdentityID, "auth-identity", "",
 		"the flag-era -auth-identity: the Claude identity tasks ran under (required)")
 	flags.StringVar(&cfg.ReviewAuthIdentityID, "review-auth-identity", "",
-		"the flag-era -review-auth-identity: the Codex review identity (required)")
+		"the flag-era -review-auth-identity: the review identity (required)")
 	flags.StringVar(&cfg.CostOwner, "cost-owner", "", "who pays for the implementation identity's usage (required)")
 	flags.StringVar(&cfg.ReviewCostOwner, "review-cost-owner", "", "the flag-era -review-cost-owner (required)")
 	flags.StringVar(&cfg.ShadowReviewCostOwner, "shadow-review-cost-owner", "",
@@ -448,7 +480,11 @@ func parseAuthAdoptConfig(args []string, stderr io.Writer, now time.Time) (authA
 		"private root containing the review identity's live Codex auth store")
 	flags.StringVar(&cfg.ClaudeRoute, "claude-route", agentbaseline.DefaultClaudeRoute, "route name for the Claude enrollment")
 	flags.StringVar(&cfg.CodexRoute, "codex-route", agentbaseline.DefaultCodexRoute, "route name for the Codex enrollment")
-	flags.StringVar(&cfg.ReviewModel, "review-model", "", "Codex model the review agent's offer names")
+	flags.StringVar((*string)(&cfg.ReviewHarness), "review-harness", string(domain.HarnessClientCodexCLI),
+		"harness the reviewer runs: codex_cli adopts the review identity's Codex store, "+
+			"claude_code its setup-token volume")
+	flags.StringVar(&cfg.ReviewModel, "review-model", "",
+		"model the review agent's offer names: a Codex model, or the exact Claude model id under -review-harness claude_code")
 	flags.StringVar((*string)(&cfg.ReviewEffort), "review-effort", "",
 		fmt.Sprintf("effort the review agent asks, one of %v", reviewEfforts))
 	flags.StringVar(&cfg.ShadowReviewModel, "shadow-review-model", "",
@@ -504,9 +540,8 @@ func parseAuthAdoptConfig(args []string, stderr io.Writer, now time.Time) (authA
 		return authAdoptConfig{}, errors.New(
 			"-shadow-review-cost-owner must equal -cost-owner: the shadow arm runs under the implementation identity")
 	}
-	if !oneIdentity && (cfg.AuthStoreRoot == "" || cfg.ReviewModel == "" || cfg.ReviewEffort == "") {
-		return authAdoptConfig{}, errors.New(
-			"-auth-store-root, -review-model, and -review-effort are required to adopt the review identity")
+	if err := validateReviewHarness(cfg, oneIdentity); err != nil {
+		return authAdoptConfig{}, err
 	}
 	if cfg.ReviewEffort != "" {
 		if err := validateReviewEffort("review-effort", cfg.ReviewEffort); err != nil {
@@ -545,6 +580,35 @@ func parseAuthAdoptConfig(args []string, stderr io.Writer, now time.Time) (authA
 		}
 	}
 	return cfg, nil
+}
+
+// validateReviewHarness holds the review flags to the harness the reviewer
+// runs. A Codex reviewer on its own identity needs the Codex store root; a
+// Claude reviewer adopts a setup-token volume, so a store root names nothing
+// it uses, and it always gets a review agent, so it always needs the model
+// and effort that agent's offer names.
+func validateReviewHarness(cfg authAdoptConfig, oneIdentity bool) error {
+	switch cfg.ReviewHarness {
+	case domain.HarnessClientCodexCLI:
+		if !oneIdentity && (cfg.AuthStoreRoot == "" || cfg.ReviewModel == "" || cfg.ReviewEffort == "") {
+			return errors.New(
+				"-auth-store-root, -review-model, and -review-effort are required to adopt the review identity")
+		}
+		return nil
+	case domain.HarnessClientClaudeCode:
+		if cfg.AuthStoreRoot != "" {
+			return errors.New(
+				"-auth-store-root names a Codex store: a claude_code reviewer adopts its identity's setup-token volume")
+		}
+		if cfg.ReviewModel == "" || cfg.ReviewEffort == "" {
+			return errors.New("-review-model and -review-effort are required for a claude_code reviewer")
+		}
+		if cfg.ReviewModel == domain.ClaudeCodeNativeDefaultRouteModelID {
+			return fmt.Errorf("-review-model %s names no model: give the exact Claude model id", cfg.ReviewModel)
+		}
+		return nil
+	}
+	return fmt.Errorf("-review-harness %q is not codex_cli or claude_code", cfg.ReviewHarness)
 }
 
 // reviewEfforts are the efforts a review agent can ask: every Freeside level

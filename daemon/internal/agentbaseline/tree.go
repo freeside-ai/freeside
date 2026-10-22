@@ -27,9 +27,13 @@ type TreeInput struct {
 	// CodexEnrollment is nil when the review identity could not be adopted;
 	// the tree then carries no review agent and no reviewer line.
 	CodexEnrollment *domain.ClientEnrollment
-	// ReviewModel is the route model id of the Codex review offer, and
+	// ClaudeReviewEnrollment is the review identity's claude_code enrollment
+	// when the reviewer runs Claude instead (#397). At most one of it and
+	// CodexEnrollment is set: the reviewer line names one agent.
+	ClaudeReviewEnrollment *domain.ClientEnrollment
+	// ReviewModel is the route model id of the review offer, and
 	// ReviewEffort the effort the review agent asks. A review launch always
-	// passes both, so a tree with a Codex enrollment needs an effort other
+	// passes both, so a tree with a review enrollment needs an effort other
 	// than harness_default.
 	ReviewModel  string
 	ReviewEffort domain.EffortLevel
@@ -58,7 +62,9 @@ type TreeInput struct {
 // wardRoleAgents fixes which baseline agent runs each ward role, in lineup
 // order. The shadow reviewer has its own agent on the Claude enrollment: the
 // shadow arm runs under the implementation identity, and its launch names a
-// model and an effort the writer roles' agent does not.
+// model and an effort the writer roles' agent does not. The reviewer's agent
+// is the Codex one unless the tree's review enrollment is Claude
+// (reviewerAgent).
 var wardRoleAgents = []struct {
 	role  domain.RoleName
 	agent string
@@ -138,8 +144,15 @@ func Tree(in TreeInput) (agenttree.Tree, error) {
 			return agenttree.Tree{}, err
 		}
 	}
-	if in.CodexEnrollment != nil {
+	switch {
+	case in.CodexEnrollment != nil && in.ClaudeReviewEnrollment != nil:
+		return agenttree.Tree{}, errors.New("baseline tree: the review identity has both a Codex and a Claude enrollment")
+	case in.CodexEnrollment != nil:
 		if err := addCodexReview(&tree, in); err != nil {
+			return agenttree.Tree{}, err
+		}
+	case in.ClaudeReviewEnrollment != nil:
+		if err := addClaudeReview(&tree, in, claudeRoute); err != nil {
 			return agenttree.Tree{}, err
 		}
 	}
@@ -162,6 +175,9 @@ func Tree(in TreeInput) (agenttree.Tree, error) {
 			continue
 		}
 		agent := entry.agent
+		if entry.role == domain.RoleReviewer {
+			agent = reviewerAgent(in)
+		}
 		digest, ok := digests[agent]
 		if !ok {
 			return agenttree.Tree{}, fmt.Errorf("baseline tree: role %s has a prompt but agent %s was not adopted",
@@ -277,6 +293,56 @@ func addClaudeShadowReview(tree *agenttree.Tree, in TreeInput) error {
 	})
 	tree.Offers = append(tree.Offers, agenttree.Offer{
 		Route: in.ClaudeEnrollment.Route, Name: ClaudeShadowReviewOfferName, Fragment: offer,
+	})
+	return nil
+}
+
+// reviewerAgent names the agent the reviewer line selects: the Claude review
+// agent when the review identity is adopted on claude_code, else the Codex one.
+func reviewerAgent(in TreeInput) string {
+	if in.ClaudeReviewEnrollment != nil {
+		return ClaudeReviewAgentName
+	}
+	return CodexReviewAgentName
+}
+
+// addClaudeReview adds the routed reviewer's agent when it runs Claude
+// (#397): an agent on the review identity's claude_code enrollment and the
+// Claude ward adapter, with an offer of its own that names the review model
+// and effort, as the shadow reviewer's does. A review enrollment on another
+// route than the writer's gets that route; the route fragment is the same
+// Anthropic subscription route.
+func addClaudeReview(tree *agenttree.Tree, in TreeInput, route domain.RouteFragment) error {
+	enrollment := *in.ClaudeReviewEnrollment
+	if enrollment.HarnessClient != domain.HarnessClientClaudeCode {
+		return errors.New("baseline tree: the Claude review enrollment is not a claude_code enrollment")
+	}
+	if in.ReviewModel == "" || in.ReviewModel == domain.ClaudeCodeNativeDefaultRouteModelID {
+		return fmt.Errorf("baseline tree: review model %q names no model", in.ReviewModel)
+	}
+	if err := explicitEffort("review", in.ReviewEffort); err != nil {
+		return err
+	}
+	offer, err := sealOffer(domain.OfferFragment{
+		EncodingVersion: domain.AgentFragmentEncodingVersion,
+		RouteModelID:    in.ReviewModel, LineageGroup: "anthropic",
+		IdentityStability: domain.IdentityPinned,
+		AllowedEfforts:    []domain.EffortLevel{in.ReviewEffort},
+		PricingRevision:   in.PricingRevision, NotAfter: in.OfferNotAfter.UTC(),
+	})
+	if err != nil {
+		return err
+	}
+	if enrollment.Route != in.ClaudeEnrollment.Route {
+		tree.Routes = append(tree.Routes, agenttree.Route{Name: enrollment.Route, Fragment: route})
+	}
+	tree.Agents = append(tree.Agents, domain.AgentSource{
+		Name: ClaudeReviewAgentName, Enrollment: string(enrollment.ID),
+		Route: enrollment.Route, Adapter: ClaudeAdapterName,
+		Offer: ClaudeReviewOfferName, Effort: in.ReviewEffort,
+	})
+	tree.Offers = append(tree.Offers, agenttree.Offer{
+		Route: enrollment.Route, Name: ClaudeReviewOfferName, Fragment: offer,
 	})
 	return nil
 }

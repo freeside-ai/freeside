@@ -1126,3 +1126,59 @@ func testReviewRoles(egress map[domain.RoleName][]string) map[domain.RoleName]en
 	}
 	return roles
 }
+
+// TestReviewAdmissionRefusesALineOnAnotherHarness covers the per-launch
+// recheck across a harness switch (#397): a review source composed for one
+// harness refuses its next review once the reviewer line names an agent on
+// the other, and a source whose vendor is not the agent adapter's refuses
+// even on the right harness. The restart that recomposes the source for the
+// new line admits it.
+func TestReviewAdmissionRefusesALineOnAnotherHarness(t *testing.T) {
+	ctx := context.Background()
+	f := newAuthAdoptFixture(t)
+	_, codexPatch, err := f.run(t, f.args())
+	if err != nil {
+		t.Fatalf("adopt the Codex reviewer: %v", err)
+	}
+	f.recordClaudeReviewIdentity(t)
+	f.enrollClaudeReviewIdentity(t)
+	_, claudePatch, err := f.run(t, f.claudeReviewArgs())
+	if err != nil {
+		t.Fatalf("adopt the Claude reviewer: %v", err)
+	}
+	codexTree, claudeTree := loadAdoptedPatch(t, codexPatch), loadAdoptedPatch(t, claudePatch)
+	codexSpec := testReviewRole(domain.RoleReviewer, nil)
+	claudeSpec := reviewRole(domain.RoleReviewer, mustRoutedReviewProvider(domain.HarnessClientClaudeCode), nil)
+	wrongVendor := claudeSpec
+	wrongVendor.Vendor = domain.AgentVendorCodex
+	f.withStore(t, func(st *store.Store) {
+		run := seedReviewedRun(t, st, "run-switched").ID
+		codexReq := admittedReviewRequest(t, st, codexTree, domain.RoleReviewer, run)
+		claudeReq := admittedReviewRequest(t, st, claudeTree, domain.RoleReviewer, run)
+		for name, tc := range map[string]struct {
+			tree     agenttree.Tree
+			spec     engine.ReviewRole
+			identity domain.AuthIdentityID
+			req      exec.ReviewRequest
+			refusal  string
+		}{
+			"Codex source, Claude line":    {claudeTree, codexSpec, "claude-review", claudeReq, "harness"},
+			"Claude source, Codex line":    {codexTree, claudeSpec, "codex-review", codexReq, "harness"},
+			"Claude harness, Codex vendor": {claudeTree, wrongVendor, "claude-review", claudeReq, "adapter"},
+			"recomposed Claude source":     {claudeTree, claudeSpec, "claude-review", claudeReq, ""},
+		} {
+			err := reviewAdmission(st, tc.tree, tc.spec, tc.identity, time.Now)(ctx, tc.req)
+			if tc.refusal == "" {
+				if err != nil {
+					t.Fatalf("%s: %v", name, err)
+				}
+				continue
+			}
+			var failure *roleAdmissionError
+			if !errors.As(err, &failure) || failure.Role != domain.RoleReviewer ||
+				!errors.Is(err, engine.ErrAgentNotAdmissible) || !strings.Contains(err.Error(), tc.refusal) {
+				t.Fatalf("%s = %v, want a refusal naming the %s", name, err, tc.refusal)
+			}
+		}
+	})
+}
