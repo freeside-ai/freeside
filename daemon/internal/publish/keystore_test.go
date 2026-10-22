@@ -1112,6 +1112,11 @@ func TestSaveAppPreservesOldCredentialsOnFailure(t *testing.T) {
 	// Make staging impossible: the read-only registration root refuses new entries,
 	// and SaveApp only strips group/other bits so it won't re-widen it.
 	registrationRoot := filepath.Join(ks.Dir(), "github-app")
+	if os.Geteuid() == 0 {
+		// SaveApp clears any planted leftover before staging, so only a
+		// kernel-enforced permission can make staging fail (#2140).
+		t.Skip("root bypasses the missing owner write bit on the registration root, which is the staging failure under test")
+	}
 	if err := os.Chmod(registrationRoot, 0o500); err != nil { //nolint:gosec // deliberately makes staging fail to prove old creds survive
 		t.Fatal(err)
 	}
@@ -1880,6 +1885,12 @@ func TestListAppsDoesNotAttributePostPromotionCleanup(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(undeletable, "pinned"), []byte("x"), 0o600); err != nil {
 		t.Fatal(err)
 	}
+	if os.Geteuid() == 0 {
+		// A non-directory leftover fails earlier, in recovery, where the
+		// failure is attributed, so only a kernel-enforced permission can
+		// fail the post-promotion cleanup (#2140).
+		t.Skip("root bypasses the missing owner write bit on the leftover directory, which is the cleanup failure under test")
+	}
 	if err := os.Chmod(undeletable, 0o500); err != nil { //nolint:gosec // directory mode; blocks unlink to simulate an uncleanable leftover
 		t.Fatal(err)
 	}
@@ -2016,6 +2027,11 @@ func TestDeficientRegistrationRootIsKeystoreWide(t *testing.T) {
 				t.Fatal(err)
 			}
 			locked := filepath.Join(ks.Dir(), "github-app")
+			if tc.mode&0o700 != 0o700 && os.Geteuid() == 0 {
+				// Enumeration reaches recovery's rename without checking
+				// the owner bits, so only the kernel enforces them (#2140).
+				t.Skipf("root bypasses the missing owner bit in mode %#o on the registration root, which is the deficiency under test", tc.mode)
+			}
 			if err := os.Chmod(locked, tc.mode); err != nil {
 				t.Fatal(err)
 			}

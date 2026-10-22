@@ -417,6 +417,12 @@ func TestRigLeasePreservesAuthoritativeManifestWhenSeedPublishFails(t *testing.T
 	if err := os.WriteFile(filepath.Join(seedRoot, rigLockName), nil, 0o600); err != nil {
 		t.Fatal(err)
 	}
+	if os.Geteuid() == 0 {
+		// AcquireRig reads both manifests before writing either, and the
+		// seed root must stay a real directory, so only a kernel-enforced
+		// permission can fail the seed publish (#2140).
+		t.Skip("root bypasses the missing owner write bit on the seed root, which is the seed publish failure under test")
+	}
 	if err := os.Chmod(seedRoot, 0o500); err != nil { //nolint:gosec // directory fixture must refuse new files.
 		t.Fatal(err)
 	}
