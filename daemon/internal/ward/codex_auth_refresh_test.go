@@ -443,15 +443,16 @@ func TestPrepareCodexReviewAuthKeepsPrecallIntentFailureRetryable(t *testing.T) 
 	cfg.AuthRefresher = refresher
 	cfg.AuthState = state
 	cfg.AccessTokenRefreshThreshold = 2 * time.Hour
-	parent := filepath.Dir(launch.AuthSnapshot)
-	if err := os.Chmod(parent, 0o500); err != nil { //nolint:gosec // test removes directory write permission
+	// A non-empty directory named like a stale intent stage cannot be
+	// removed, for root too, so the intent write fails before any stage
+	// or intent exists.
+	planted := codexAuthRefreshIntentPath(launch.AuthSnapshot, launch.AuthIdentityID) + ".stage-planted"
+	if err := os.Mkdir(planted, 0o700); err != nil {
 		t.Fatal(err)
 	}
-	defer func() {
-		if err := os.Chmod(parent, 0o700); err != nil { //nolint:gosec // restore private test directory access
-			t.Error(err)
-		}
-	}()
+	if err := os.WriteFile(filepath.Join(planted, "keep"), nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
 
 	err := lifecycle.prepareCodexReviewAuth(context.Background(), cfg, launch)
 	if err == nil || errors.Is(err, ErrCodexAuthNeedsReenrollment) ||
@@ -461,7 +462,7 @@ func TestPrepareCodexReviewAuthKeepsPrecallIntentFailureRetryable(t *testing.T) 
 			err, state.marks, refresher.calls,
 		)
 	}
-	if err := os.Chmod(parent, 0o700); err != nil { //nolint:gosec // restore private test directory access
+	if err := os.RemoveAll(planted); err != nil {
 		t.Fatal(err)
 	}
 	if err := lifecycle.prepareCodexReviewAuth(context.Background(), cfg, launch); err != nil {
