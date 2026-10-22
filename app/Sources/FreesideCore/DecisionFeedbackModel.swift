@@ -1,6 +1,6 @@
+import Foundation
 import FreesideAPI
 import Observation
-import SwiftUI
 
 @MainActor
 private func scheduleDecisionFeedback(
@@ -42,8 +42,10 @@ final class DecisionFeedbackModel {
     private let announce: @MainActor (String) -> Void
     private let schedule: @MainActor (Duration, @escaping @MainActor () -> Void) -> Task<Void, Never>
 
+    /// `init()` supplies the platform's accessibility announcement
+    /// (`PlatformServices.swift`).
     init(
-        announce: @escaping @MainActor (String) -> Void = AccessibilityAnnouncer.announce,
+        announce: @escaping @MainActor (String) -> Void,
         schedule:
             @escaping @MainActor (
                 Duration, @escaping @MainActor () -> Void
@@ -84,11 +86,4 @@ final class DecisionFeedbackModel {
         conclusion = nil
     }
 
-}
-
-private enum AccessibilityAnnouncer {
-    @MainActor
-    static func announce(_ message: String) {
-        AccessibilityNotification.Announcement(message).post()
-    }
 }

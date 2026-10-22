@@ -2,12 +2,6 @@ import Foundation
 import FreesideAPI
 import Observation
 
-#if canImport(AppKit)
-    import AppKit
-#elseif canImport(UIKit)
-    import UIKit
-#endif
-
 /// One attention item's decision surface: revalidates the item's current
 /// state on open, exposes exactly the actions the item requests, and
 /// submits a ClientCommand bound to the rendered snapshot's versions and
@@ -103,24 +97,8 @@ public final class DecisionModel {
     private var detailsRevealEmitted = false
     private var notDecidableEmitted = false
 
-    public init(store: InboxStore, itemID: String) {
-        self.store = store
-        self.itemID = itemID
-        openURL = Self.openExternalURL
-        onConclusion = { _ in }
-    }
-
-    init(
-        store: InboxStore,
-        itemID: String,
-        onConclusion: @escaping @MainActor (DecisionConclusion) -> Void
-    ) {
-        self.store = store
-        self.itemID = itemID
-        openURL = Self.openExternalURL
-        self.onConclusion = onConclusion
-    }
-
+    /// `init(store:itemID:)` supplies the platform's external URL opener
+    /// (`PlatformServices.swift`).
     init(
         store: InboxStore,
         itemID: String,
@@ -131,19 +109,6 @@ public final class DecisionModel {
         self.itemID = itemID
         self.openURL = openURL
         self.onConclusion = onConclusion
-    }
-
-    private static func openExternalURL(_ url: URL) async -> Bool {
-        #if canImport(AppKit)
-            return NSWorkspace.shared.open(url)
-        #elseif canImport(UIKit)
-            guard UIApplication.shared.canOpenURL(url) else { return false }
-            return await withCheckedContinuation { continuation in
-                UIApplication.shared.open(url, options: [:]) { opened in
-                    continuation.resume(returning: opened)
-                }
-            }
-        #endif
     }
 
     static func pullRequestURL(for reference: Components.Schemas.PRReference) -> URL? {
