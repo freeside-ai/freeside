@@ -27,7 +27,7 @@ Evidence basis: the run itself from `main` at `<sha>`, the state root
 
 | Step | Result |
 | --- | --- |
-| Rehearsal | <build SHA; root; settings digest; disposable target; task and run ids; `billable_cost`; record checks, alerts raised, lease released: passed or the finding> |
+| Rehearsal | <build SHA; root; settings digest; disposable target; task and run ids; `billable_cost`; task lines proven; record checks, alerts raised, lease released: passed or the finding> |
 | State root | <fresh or retained; onboarding profile; anything the current daemon refused; if retained, the system-health items resolved at the pairing checkpoint (id and action) and any advisory ones left open, with why> |
 | Clients | <Mac and iPhone build commit only; no addresses, device names, or pairing codes> |
 | Campaign <n>, specification | <run id; outcome; who approved, on which device, which actions the card offered> |
