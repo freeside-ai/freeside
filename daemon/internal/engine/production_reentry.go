@@ -389,6 +389,17 @@ func (w *productionPublicationWorkflow) reconcileReentryTask(
 	if err != nil {
 		return productionTaskOutcome{}, err
 	}
+	// A proof needs neither the branch, which a lander may have deleted, nor
+	// the merge fact, so it runs before both are consulted.
+	if done, err := w.proveReentryRebase(ctx, task, checkout, cycle.predecessor); err != nil || done {
+		return productionTaskOutcome{}, err
+	}
+	if merged, err := w.reentryPullMerged(ctx, task); err != nil || merged {
+		if err != nil {
+			return productionTaskOutcome{}, err
+		}
+		return productionTaskOutcome{}, w.endReentryCycleQuietly(ctx, task, reentryPullMergedReason, nil)
+	}
 	// The head is a commit Freeside did not produce. The transport proves the
 	// branch holds exactly the commit the authority names, and nothing below
 	// evaluates any other commit of that branch.
@@ -642,6 +653,14 @@ func (w *productionPublicationWorkflow) stopReentryCycle(
 	reason string,
 	artifacts []domain.Artifact,
 ) (productionTaskOutcome, error) {
+	// A merge observed mid-cycle answers whatever stopped it, and the branch
+	// a lander deletes after merging is the usual cause of the stop.
+	if merged, err := w.reentryPullMerged(ctx, task); err != nil || merged {
+		if err != nil {
+			return productionTaskOutcome{}, err
+		}
+		return productionTaskOutcome{}, w.endReentryCycleQuietly(ctx, task, reentryPullMergedReason, nil)
+	}
 	reason, err := w.withExternalReviewFindings(ctx, task, reason)
 	if err != nil {
 		return productionTaskOutcome{}, err
