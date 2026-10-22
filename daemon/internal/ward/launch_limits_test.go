@@ -341,7 +341,7 @@ func TestProjectImageRoomDeclaresItsSizeAndNamesAMemoryLimitKill(t *testing.T) {
 			result, err := room.Run(t.Context(), t.TempDir(), []string{"verify"})
 			for _, call := range calls {
 				if !slices.Contains(call, "--cpus") ||
-					!strings.Contains(strings.Join(call, " "), strings.Join(sizeArgs(size), " ")) {
+					!strings.Contains(strings.Join(call, " "), strings.Join(SizeArgs(size), " ")) {
 					t.Fatalf("room container %q does not declare %s", call, size)
 				}
 			}

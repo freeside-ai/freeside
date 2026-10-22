@@ -186,7 +186,7 @@ func (r *ProjectImageRoom) runImageCommand(
 		"--label", owner.Key + "=" + owner.Value,
 		"--network", "none",
 	}
-	args = append(args, sizeArgs(r.size)...)
+	args = append(args, SizeArgs(r.size)...)
 	if workspace != "" {
 		args = append(args,
 			"--volume", workspace+":/workspace",

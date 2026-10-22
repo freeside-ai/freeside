@@ -262,7 +262,7 @@ func createContainerArgs(spec ContainerSpec) ([]string, error) {
 		return nil, fmt.Errorf("refusing to create container %q: %w", spec.Name, err)
 	}
 	args := []string{"create", "--name", spec.Name}
-	args = append(args, sizeArgs(spec.Size)...)
+	args = append(args, SizeArgs(spec.Size)...)
 	for _, l := range spec.Labels {
 		args = append(args, "--label", l.Key+"="+l.Value)
 	}
@@ -323,10 +323,10 @@ func createContainerArgs(spec ContainerSpec) ([]string, error) {
 	return args, nil
 }
 
-// sizeArgs declares a container's CPU cap and memory limit. Apple container
+// SizeArgs declares a container's CPU cap and memory limit. Apple container
 // 1.1.0 takes memory with a unit suffix at 1 MiB granularity; without these
 // flags it applies its own default of 4 CPUs and 1 GiB.
-func sizeArgs(s ContainerSize) []string {
+func SizeArgs(s ContainerSize) []string {
 	return []string{"--cpus", fmt.Sprint(s.CPUs), "--memory", fmt.Sprintf("%dM", s.MemoryMiB)}
 }
 

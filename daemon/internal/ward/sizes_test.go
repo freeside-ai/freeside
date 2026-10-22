@@ -111,7 +111,7 @@ func TestCreateContainerArgsDeclareTheSize(t *testing.T) {
 		if err != nil {
 			t.Fatalf("%s: %v", class, err)
 		}
-		want := sizeArgs(spec.Size)
+		want := SizeArgs(spec.Size)
 		at := slices.Index(args, "--cpus")
 		if at < 0 || !slices.Equal(args[at:at+len(want)], want) {
 			t.Fatalf("%s: args %q do not declare %q", class, args, want)
@@ -120,9 +120,9 @@ func TestCreateContainerArgsDeclareTheSize(t *testing.T) {
 			t.Fatalf("%s: size flags follow the positional terminator: %q", class, args)
 		}
 	}
-	if got := sizeArgs(ContainerSize{CPUs: 6, MemoryMiB: 3072}); !slices.Equal(got,
+	if got := SizeArgs(ContainerSize{CPUs: 6, MemoryMiB: 3072}); !slices.Equal(got,
 		[]string{"--cpus", "6", "--memory", "3072M"}) {
-		t.Fatalf("sizeArgs = %q", got)
+		t.Fatalf("SizeArgs = %q", got)
 	}
 }
 
