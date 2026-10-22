@@ -1171,9 +1171,15 @@ private final class ReloadFailingAfterDeleteCredentialStore: DeviceCredentialSto
         // database; a Keychain credential from an earlier run would skip
         // that run's pairing, so only the supervised tiers use the Keychain.
         let url = URL(string: "http://127.0.0.1:7400")!
-        #expect(AppSession.credentialStore(for: .ephemeral)(url) is InMemoryCredentialStore)
-        #expect(AppSession.credentialStore(for: .prod)(url) is KeychainCredentialStore)
-        #expect(AppSession.credentialStore(for: .dev)(url) is KeychainCredentialStore)
+        let keychain = InMemoryCredentialStore()
+        func store(_ environment: FreesideEnvironment) -> InMemoryCredentialStore? {
+            AppSession.credentialStore(for: environment, keychainStore: { _ in keychain })(url)
+                as? InMemoryCredentialStore
+        }
+        #expect(store(.ephemeral).map { $0 !== keychain } == true)
+        #expect(store(.prod) === keychain)
+        #expect(store(.dev) === keychain)
+        #expect(AppSession.keychainCredentialStore(for: url) is KeychainCredentialStore)
     }
 
     @Test func aTypedServerUsesTheSessionsCredentialStore() {

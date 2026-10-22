@@ -86,7 +86,10 @@ public final class AppSession {
         deploymentURL: URL? = nil,
         localDaemonURL: URL? = nil,
         cacheRoot: URL? = AppSession.defaultCacheRoot,
-        credentialStore: @escaping (URL) -> any DeviceCredentialStore = AppSession.keychainCredentialStore,
+        // In memory by default so this file names no platform store: every
+        // launch path passes its own, and a session built without one (a
+        // demo, mock, or test) never reaches `connect(serverURL:)`.
+        credentialStore: @escaping (URL) -> any DeviceCredentialStore = { _ in InMemoryCredentialStore() },
         persistServerURL: @escaping (URL) -> Void = AppSession.persistServerURLToDefaults
     ) {
         self.connection = Connection(
@@ -492,9 +495,11 @@ public final class AppSession {
     /// unless only the persisted deployment holds a device credential. The
     /// Mac's local daemon, readiness file, and persisted-URL rule come from
     /// its tier (`launchMode(environment:...)`). Sample data requires an
-    /// explicit mock or pairing-demo launch argument.
-    public static func fromEnvironment(
-        environment: FreesideEnvironment
+    /// explicit mock or pairing-demo launch argument. `keychainStore` is the
+    /// supervised tiers' durable store (`AppSessionPlatform.swift`).
+    static func fromEnvironment(
+        environment: FreesideEnvironment,
+        keychainStore: @escaping (URL) -> any DeviceCredentialStore
     ) throws(LaunchError) -> AppSession {
         let arguments = argumentDomain()
         let argumentServerURL = arguments["FreesideServerURL"] as? String
@@ -507,7 +512,7 @@ public final class AppSession {
             readinessDirectory: readinessDirectory,
             persistedServerURL: persistedServerURL(),
             readReadiness: { DaemonReadinessReader().read(at: $0, expecting: environment) },
-            hasCredential: hasStoredCredential)
+            hasCredential: { (try? keychainStore($0).load()) != nil })
         // The ephemeral app shares the production bundle ID, and so its
         // preferences domain; recording a throwaway run there would send the
         // installed app to a dead daemon on its next launch.
@@ -515,7 +520,8 @@ public final class AppSession {
             environment.isSupervised ? { persistServerURLToDefaults($0) } : { _ in }
         let session = session(
             for: mode, localDaemonURL: environment.supervisedAPIURL,
-            cacheRoot: environment.stateRoot(), credentialStore: credentialStore(for: environment),
+            cacheRoot: environment.stateRoot(),
+            credentialStore: credentialStore(for: environment, keychainStore: keychainStore),
             persistServerURL: persist)
         // `launchMode` threw for any path it would not follow, so only a
         // validated one names the window's instance.
@@ -550,17 +556,20 @@ public final class AppSession {
     /// credential from an earlier run would skip that run's pairing and send
     /// a stale token (plan: `ephemeral` pairs afresh on each run).
     static func credentialStore(
-        for environment: FreesideEnvironment
+        for environment: FreesideEnvironment,
+        keychainStore: @escaping (URL) -> any DeviceCredentialStore
     ) -> (URL) -> any DeviceCredentialStore {
         if environment.isSupervised {
-            return { keychainCredentialStore(for: $0) }
+            return keychainStore
         }
         return { _ in InMemoryCredentialStore() }
     }
 
     /// A remote client (iOS) with no same-host daemon: explicit inputs, then
     /// the persisted deployment, then the connect screen.
-    public static func fromEnvironment() -> AppSession {
+    static func fromEnvironment(
+        keychainStore: @escaping (URL) -> any DeviceCredentialStore
+    ) -> AppSession {
         let arguments = argumentDomain()
         let mode = launchMode(
             argumentServerURL: arguments["FreesideServerURL"] as? String,
@@ -569,10 +578,10 @@ public final class AppSession {
             readiness: .absent,
             persistedServerURL: persistedServerURL(),
             localDaemonURL: nil,
-            hasCredential: hasStoredCredential)
+            hasCredential: { (try? keychainStore($0).load()) != nil })
         return session(
             for: mode, localDaemonURL: nil, cacheRoot: defaultCacheRoot,
-            credentialStore: keychainCredentialStore, persistServerURL: persistServerURLToDefaults)
+            credentialStore: keychainStore, persistServerURL: persistServerURLToDefaults)
     }
 
     private static func argumentDomain() -> [String: Any] {
@@ -583,17 +592,6 @@ public final class AppSession {
         Bundle.main.bundleIdentifier.flatMap {
             UserDefaults.standard.persistentDomain(forName: $0)?["FreesideServerURL"] as? String
         }
-    }
-
-    private static func hasStoredCredential(_ url: URL) -> Bool {
-        (try? keychainCredentialStore(for: url).load()) != nil
-    }
-
-    /// The deployment's Keychain credential. `nonisolated` so it satisfies
-    /// the plain closure default without a main-actor hop, like
-    /// `persistServerURLToDefaults`.
-    public nonisolated static func keychainCredentialStore(for url: URL) -> any DeviceCredentialStore {
-        KeychainCredentialStore(service: "ai.freeside.device-credential/\(deploymentKey(for: url))")
     }
 
     static func session(
@@ -647,7 +645,7 @@ public final class AppSession {
     public static func live(
         serverURL: URL, pairingCode: String = "", localDaemonURL: URL? = nil,
         cacheRoot: URL? = AppSession.defaultCacheRoot,
-        credentialStore: @escaping (URL) -> any DeviceCredentialStore = AppSession.keychainCredentialStore,
+        credentialStore: @escaping (URL) -> any DeviceCredentialStore,
         persistServerURL: @escaping (URL) -> Void = AppSession.persistServerURLToDefaults
     ) -> AppSession {
         let credentials = credentialStore(serverURL)
