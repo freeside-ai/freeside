@@ -15,6 +15,7 @@ import (
 	"github.com/freeside-ai/freeside/daemon/internal/agenttree"
 	"github.com/freeside-ai/freeside/daemon/internal/domain"
 	"github.com/freeside-ai/freeside/daemon/internal/inference"
+	inferencefake "github.com/freeside-ai/freeside/daemon/internal/inference/fake"
 	"github.com/freeside-ai/freeside/daemon/internal/store"
 	"github.com/freeside-ai/freeside/daemon/internal/ward"
 )
@@ -119,6 +120,9 @@ func TestPreflightJudgmentRoleCheckReadsTheAdoptedLineup(t *testing.T) {
 	now := time.Date(2026, 10, 10, 12, 0, 0, 0, time.UTC)
 	f.withStore(t, func(st *store.Store) {
 		credentials := fixedJudgmentCredentials(t)
+		// Preflight composes the configured driver as the daemon does; a
+		// runtime with none is judgments off, and every role off with it.
+		driver := inferencefake.New()
 		evaluate := func(tree agenttree.Tree, runtime judgmentRuntime) compositionManifest {
 			t.Helper()
 			manifest := compositionManifest{
@@ -139,7 +143,7 @@ func TestPreflightJudgmentRoleCheckReadsTheAdoptedLineup(t *testing.T) {
 			return out
 		}
 
-		manifest := evaluate(adopted, judgmentRuntime{AuthorPrompt: authorBody})
+		manifest := evaluate(adopted, judgmentRuntime{Driver: driver, AuthorPrompt: authorBody})
 		if got := statuses(manifest); manifest.Status != compositionPassed || len(got) != 7 {
 			t.Fatalf("adopted lineup: status = %s, roles = %+v", manifest.Status, manifest.JudgmentRoles)
 		}
@@ -153,7 +157,7 @@ func TestPreflightJudgmentRoleCheckReadsTheAdoptedLineup(t *testing.T) {
 		unlined.Lineup = slices.DeleteFunc(slices.Clone(adopted.Lineup), func(line agenttree.LineupLine) bool {
 			return domain.RoleName(line.Key) == domain.RoleDriftAuditor
 		})
-		manifest = evaluate(unlined, judgmentRuntime{})
+		manifest = evaluate(unlined, judgmentRuntime{Driver: driver})
 		got := statuses(manifest)
 		if manifest.Status != compositionFailed || got[domain.RoleDriftAuditor] != judgmentRoleUnbound ||
 			got[domain.RolePublicationAuthor] != judgmentRoleOff || got[domain.RoleTaskNamer] != judgmentRoleAdmitted ||
@@ -165,7 +169,7 @@ func TestPreflightJudgmentRoleCheckReadsTheAdoptedLineup(t *testing.T) {
 		// A deployment adopted before the call offer has every judgment line
 		// on an offer that names no model. Each such role is unbound, and
 		// the check fails naming it.
-		manifest = evaluate(adoptedBeforeTheCallOffer(t, adopted), judgmentRuntime{AuthorPrompt: authorBody})
+		manifest = evaluate(adoptedBeforeTheCallOffer(t, adopted), judgmentRuntime{Driver: driver, AuthorPrompt: authorBody})
 		if manifest.Status != compositionFailed || manifest.Checks[0].Status != compositionFailed ||
 			len(manifest.JudgmentRoles) != 7 {
 			t.Fatalf("lines on an offer that names no model: manifest = %+v", manifest)
@@ -184,7 +188,7 @@ func TestPreflightJudgmentRoleCheckReadsTheAdoptedLineup(t *testing.T) {
 			func(context.Context, domain.ClientEnrollmentID, int) (ward.SetupToken, error) {
 				return ward.SetupToken{}, errors.New("credential volume \"freeside-claude-main-auth\": absent")
 			}, nil)
-		manifest = evaluate(adopted, judgmentRuntime{AuthorPrompt: authorBody})
+		manifest = evaluate(adopted, judgmentRuntime{Driver: driver, AuthorPrompt: authorBody})
 		if manifest.Status != compositionFailed || len(manifest.JudgmentRoles) != 7 ||
 			!strings.Contains(manifest.Checks[0].Remediation, "credential volume") {
 			t.Fatalf("unreadable credential: manifest = %+v", manifest)

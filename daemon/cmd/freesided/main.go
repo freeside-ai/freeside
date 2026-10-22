@@ -1120,15 +1120,13 @@ func run(parent context.Context, stop func(), cfg config) (_ *daemon, err error)
 			// mix of sites.
 			MaxCallsPerRoot: 20, MaxStarvationPerRoot: 40 * time.Minute,
 		}
-		judgmentRuntime, err := composeRuntimeJudgments(cfg.Claude.Judgments)
-		if err != nil {
-			return nil, fmt.Errorf("compose subscription judgments: %w", err)
-		}
-		ownedJudgments, err := ward.NewTaskJudgments(filepath.Join(cfg.StateDir, "task-judgments"), judgmentRuntime.Driver)
+		judgmentRuntime, ownedJudgments, err := composeProductionJudgments(cfg.StateDir, cfg.Claude.Judgments)
 		if err != nil {
 			return nil, err
 		}
-		judgmentRuntime.Driver = ownedJudgments
+		if judgmentRuntime.Driver == nil && cfg.Logger != nil {
+			cfg.Logger.Info("subscription judgments are off; every judgment site returns its fail-safe")
+		}
 		judgmentHealth := newJudgmentRoleHealth(st, func() time.Time { return time.Now().UTC() }, cfg.Logger)
 		judgments, err := inference.New(inference.Config{
 			Logger:     cfg.Logger,

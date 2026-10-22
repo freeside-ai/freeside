@@ -4,10 +4,13 @@ import (
 	"encoding/json"
 	"errors"
 	"flag"
+	"fmt"
 	"os"
+	"path/filepath"
 
 	"github.com/freeside-ai/freeside/daemon/internal/claudeinference"
 	"github.com/freeside-ai/freeside/daemon/internal/contentaddr"
+	"github.com/freeside-ai/freeside/daemon/internal/ward"
 )
 
 // maxJudgmentPromptBytes bounds a judgment-role prompt file. The composed
@@ -62,6 +65,30 @@ func composeRuntimeJudgments(cfg judgmentConfig) (judgmentRuntime, error) {
 		return judgmentRuntime{}, errors.New("judgment configuration differs from preflight")
 	}
 	return runtime, nil
+}
+
+// composeProductionJudgments composes the judgment runtime the daemon starts
+// with: what the flags name, held to the preflight digest, with the driver
+// wrapped in the task-judgment ownership journal under stateDir, which is
+// also returned so a task stop can confirm the run's judgments quiescent.
+// With the flags absent there is no driver, and the runtime stays the zero
+// value: judgments are off, the daemon starts, and judgmentRoles answers
+// every role off (#1945). The journal is still opened, around no driver,
+// because its records outlive the process: a task stop confirms what an
+// earlier start with judgments on left there.
+func composeProductionJudgments(stateDir string, cfg judgmentConfig) (judgmentRuntime, *ward.TaskJudgments, error) {
+	runtime, err := composeRuntimeJudgments(cfg)
+	if err != nil {
+		return judgmentRuntime{}, nil, fmt.Errorf("compose subscription judgments: %w", err)
+	}
+	owned, err := ward.NewTaskJudgments(filepath.Join(stateDir, "task-judgments"), runtime.Driver)
+	if err != nil {
+		return judgmentRuntime{}, nil, err
+	}
+	if runtime.Driver != nil {
+		runtime.Driver = owned
+	}
+	return runtime, owned, nil
 }
 
 // composeJudgments composes what the judgment flags name: the pinned CLI
