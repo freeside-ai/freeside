@@ -1,8 +1,8 @@
 ---
 title: Freeside Project Plan
-revision: 93
+revision: 94
 status: active
-updated: 2026-10-21
+updated: 2026-10-22
 ---
 
 # Freeside
@@ -62,6 +62,7 @@ why.
     - [Writer Outcome Authority](#writer-outcome-authority)
     - [Golden Agent and Project Images](#golden-agent-and-project-images)
     - [Operating Modes](#operating-modes)
+    - [Execution Hosts](#execution-hosts)
   - [5.8 Control-Plane Trust](#58-control-plane-trust)
   - [5.9 Durability: Effectively Once](#59-durability-effectively-once)
   - [5.10 Coherent Backup: Encrypted Checkpoints](#510-coherent-backup-encrypted-checkpoints)
@@ -348,6 +349,13 @@ Linux becomes supported only when one named distribution, architecture, and
 `linux_vm` backend pass the complete setup, conformance, execution, recovery,
 and upgrade suite. Running provider credentials on a cloud host adds exposure;
 that exposure must appear in the residual-risk documentation. (Decider: user.)
+
+A Linux host enters as an execution host (Section
+[5.7](#57-the-ward-runners-handoff-gate-and-operating-modes), Execution Hosts),
+never as the control plane. The credential exposure above applies to every
+execution host, and proxy credential injection (#2175) with the control-plane
+injection recorded there gates any host the owner does not physically hold
+(revision 94).
 
 ### 3.4 Simplicity
 
@@ -1233,6 +1241,20 @@ containers, so the operator keeps the budgets of every instance on one host
 what the host holds. Freeside has no host-wide coordinator across instances:
 it would add state shared across the instances that the environment tiers keep
 apart on purpose.
+
+Execution hosts (Section
+[5.7](#57-the-ward-runners-handoff-gate-and-operating-modes), Execution Hosts)
+extend the budget per host, not across instances (revision 94). Each enrolled
+execution host declares its own budget at host enrollment; the daemon host's
+budget is the instance budget above. The admission transaction reserves a
+launch's declared size against the host it is placed on, and the reservation
+ends when every container of the launch is proved absent on that host. The
+waiting order stays oldest task first across hosts, with one addition: a launch
+at the head waits only for the hosts it is eligible for and never holds back a
+launch that is eligible only for hosts the head cannot use. A launch larger than
+every host's whole budget fails at once, naming its size and the largest budget.
+The runner refuses a launch above its own declared budget as a fail-closed
+check, never as a second scheduler.
 
 #### Admitted Agents
 
@@ -2368,6 +2390,185 @@ check.
 Bootstrap exception: SwiftUI work is exempt until a macOS execution class
 exists.
 
+#### Execution Hosts
+
+An execution host is an enrolled host (Section
+[5.9](#59-durability-effectively-once)) with the `runner` role that runs
+launches for exactly one control plane (revision 94; [decision
+note](../devlog/2026-10-22-1042-execution-hosts.md); tracker #2161). The
+daemon's own host is the default, so a one-host deployment is the degenerate
+case and no consumer special-cases it. An execution host is a runner backend
+reached over the network, never a second daemon: the control plane keeps every
+durable record, every forge credential, the gauntlet, and publication.
+
+**The runner.** Each execution host runs `freesided runner`, the daemon binary
+in its runner role. It owns that host's runtime, per-run host-only networks and
+CONNECT proxy, handoff gate, verification room, and conformance suite, and
+serves them to its enrolled control plane over one session its outbound
+connector opens (Transport, below). It holds no durable state: the handoff
+journal, Begin, and Recover stay on the control plane, which supplies each run's
+ownership token and drives recovery from its own record after a restart on
+either side. A runner restart is recover-only for the runs it held, as a daemon
+restart is: the proxy's egress proof is process-local and dies with it, so no
+run survives a runner restart as live. It holds no forge credential: seeding
+runs on the control plane, which digests the exact-base tree before shipping it;
+the released export streams back, and the control plane re-verifies its manifest
+and blob digests before the gauntlet sees it. Driving the runtime over SSH from
+the control plane was rejected: the proxy, the gate's proofs, and the suite all
+run where the runtime is, so SSH would need a remote helper for all three.
+
+**Transport.** The runner connects out to the control plane and opens no
+listener. The control plane listens for runners beside its API, bound under the
+same Section [5.2](#52-the-daemon-and-its-supervisor) gate to loopback or its
+exact Tailscale-owned address, and the runner's outbound connector connects to
+the address its host enrollment record names, over the owner's tailnet in the
+first increment. Over that one long-lived session the control plane issues the
+gate's calls and the runner streams results and the released export back, the
+shape every hosted CI runner takes. The session is mutually authenticated at the
+application layer: each side proves its enrolled Section
+[5.9](#59-durability-effectively-once) host key and pins the other's, and no
+certificate authority, hostname, or Tailscale identity is consulted, because
+Tailscale provides reachability and never authentication (Section
+[5.2](#52-the-daemon-and-its-supervisor)). Connecting out is chosen because the
+runner has nothing to serve anyone else, a laptop sleeps and roams, and the
+managed relay (Section [5.19](#519-deferred-subsystems-provisional-contracts))
+already assumes an enrolled host with an outbound connector; a runner listening
+on its own address was rejected. The relay, when it exists, changes only the
+connector's target: it connects to the relay instead of the tailnet address, and
+the relay carries the same end-to-end authenticated session as an opaque channel
+under that section's prohibitions. The first increment depends on no relay; the
+tailnet connection is the first reachability implementation and the relay would
+be the second, so no abstraction over them enters the daemon before the second
+exists (Section [5.2](#52-the-daemon-and-its-supervisor)). The wire protocol is
+daemon-internal and versioned with the build: the host record carries the
+runner's build, a runner whose build the control plane's protocol version does
+not accept is treated as an unreachable host until it is upgraded, and the first
+increment requires the same build on every host.
+
+**The daemon host.** The daemon host runs no separate runner process. The daemon
+composes the ward package in-process behind the same runner-backend interface,
+so the local backend is the remote backend minus the wire, and both share one
+implementation of the runtime, proxy, gate, and suite. A separate process on the
+daemon host is rejected for the first increment: under the Phase 1
+single-operator deployment (Section [5.2](#52-the-daemon-and-its-supervisor))
+the operator account is the only isolation boundary, so a second process under
+the same account separates nothing and adds a supervision unit, a listener, and
+a recovery path. Revisit when the hardened tier's dedicated user lands, where a
+runner under a user other than the control plane's could keep the runtime and
+the per-run proxy apart from the forge credential and control-plane state.
+
+**Installation.** An execution host is an ordinary Freeside installation in the
+runner role, never a separate agent or product. The same `freesided` binary is
+installed by the path the daemon takes on that host's tier (Section
+[5.2](#52-the-daemon-and-its-supervisor): the operator app's per-user
+LaunchAgent on the Mac-first path, the elevation helper's unit on the hardened
+path), supervised with `KeepAlive`, and upgraded the same way. The role makes
+the unit run `freesided runner` and gives it its own root: the host key in
+platform-protected storage, the host enrollment record (the control plane's
+address and key, the registry it names), the credential volumes, and the image
+cache, and no control-plane database, checkpoint, or backup, so the root is
+disposable. The host needs the runtime its backend class needs (Apple
+`container` 1.1.0 in the first increment) and reach to a registry the control
+plane names, because ward resolves an image only through a registry
+(`images/README.md`); a loopback-only local registry on the daemon host does not
+qualify, so that registry is bound to the daemon host's Tailscale address for
+runners or a shared registry is used. The runner pulls each approved digest the
+control plane names before it reports that digest present. `freesided runner
+enroll` runs the host side of the pairing ceremony below, and `freesided doctor`
+on the control plane reports every host.
+
+**Host enrollment and credentials.** Host enrollment is a pairing ceremony in
+the shape of device pairing (Section
+[5.14](#514-client-synchronization-and-conversations)); it records each side's
+public key and the host's runtime facts (operating system, architecture, runtime
+and version, daemon build) and its declared budget. Pushing tokens is a separate
+step the operator confirms per host, with both key fingerprints shown on each
+side. Under `subscription_contained` the daemon-owned identity enrollment
+transaction (Section
+[5.4](#54-credential-modes-egress-profiles-and-concurrency)) pushes each
+identity's setup token over that link, and the runner authors the same read-only
+per-identity credential volume the local path authors, writing the token nowhere
+else. Rotation re-authors the volume on every enrolled host while no execution
+can use the identity; removing a host names the identities it held so the
+operator can rotate them at the vendor. An identity whose credential store
+mutates under the Section
+[5.4](#54-credential-modes-egress-profiles-and-concurrency) lease (a Codex
+subscription identity) is pinned to one host, because a leased mutation on one
+host leaves every other copy stale; re-authoring every host's volume under the
+lease is a later decision. The residual is a copy of each token on every
+enrolled host, accepted for owner-held machines on the owner's tailnet. Proxy
+credential injection, where the writer holds a placeholder and a TLS-terminating
+proxy at the gateway substitutes the credential, is decided separately
+(`subscription_injected`, #2175, with spikes #2173 and #2174), not here. On an
+execution host it changes where the token lives, not the runner: the runner's
+per-run proxy terminates the writer's TLS under the per-run CA as the local
+proxy does, but forwards the request over the runner session to the control
+plane, which substitutes the credential and originates the provider connection
+from the daemon host, so the host holds the per-run CA key and the placeholder
+and never the token. That control-plane injection is a unit of its own, filed
+once #2175 merges; until it lands every execution host runs under
+`subscription_contained` with the volume above. It gates any execution host the
+owner does not physically hold, and the Linux host waits for it; the MacBook
+does not. Relaying the writer's CONNECT tunnel to the control plane's proxy
+without termination is rejected as a credential measure: it centralizes the
+allowlist but leaves the token in the writer.
+
+**Placement.** Admission chooses the host in the launch transaction. A host is
+eligible when its current durable conformance record covers the launch's
+capability minimums and class, it has the approved image digest for its
+architecture, and the launch's declared size fits its budget (Section
+[5.4](#54-credential-modes-egress-profiles-and-concurrency), Machine Capacity).
+The daemon host is preferred; among eligible remote hosts, the one with the most
+free budget, its budget less its reservations. Review launches stay on the
+daemon host until placement evidence asks otherwise.
+
+**Conformance per host.** Each runner executes the full suite at its start,
+after its configuration changes, and on the doctor schedule, and the pre-job
+probe before each job it serves. The control plane records each pass bound to
+the host identity and configuration digest, with a proof generation per host; a
+pass on one host admits nothing on another, and a failed or superseded pass
+closes admission on that host alone. Doctor reports every host's record and
+reachability.
+
+**An unreachable host.** While the control plane cannot reach a runner that
+holds a launch, the attempt stays requested or failed (Section
+[5.9](#59-durability-effectively-once)), its identity lease and host reservation
+stay held, and one `system_health` item names the host and its launches. A
+returning runner is recovered launch by launch: a writer-complete run is
+adopted, everything else is torn down and lost, and the ordinary
+`execution_failure` card offers the retry. The operator may declare the host
+lost, which fails every attempt on it, releases their leases and reservations,
+and refuses the host until a returning runner proves it has torn down every
+object bearing the control plane's ownership labels. Declaring a host lost is
+the operator's accepted exception to the single-writer rule: a writer may still
+be running on that host, so the declaration names the identities it held for
+rotation at the vendor. No other path starts a second writer under an identity
+whose first writer may still be alive, so automatic failover of a running launch
+is rejected. A sleeping machine is an unreachable host; a runner keeps its host
+awake while it holds a launch.
+
+**Start triggers.** The units are filed fenced (tracker #2161). The first
+increment, the M1 Max MacBook on the same runtime and backend class, starts when
+any one of these holds; capacity is measured from recorded holds, so it needs
+the host memory budget (#1598) merged first:
+
+- **Capacity:** over fourteen consecutive days the daemon host's
+  machine-capacity hold has held launches for four hours in total, or one launch
+  waited thirty minutes. While the daemon host's budget sits below its default
+  half, raise it first.
+- **Capability:** a scheduled unit needs a launch class the daemon host cannot
+  provide, such as a Swift verifier that needs a macOS guest or an x86_64-only
+  toolchain.
+- **Interactive use:** the owner decides ward load degrades the daemon host's
+  other use, after lowering its budget would put work under the capacity
+  measure.
+
+The Linux desktop is a later increment. It needs #2175 and the
+control-plane-injection unit filed after it, multi-arch project images with
+per-arch digests (images are `linux/arm64` only), and a `linux_vm` backend on
+KVM that passes the full suite (Section [3.3](#33-portability)), developed on
+that machine because nested virtualization is unavailable on Apple silicon.
+
 ### 5.8 Control-Plane Trust
 
 The following are control-plane content:
@@ -2570,16 +2771,21 @@ An unresponsive provider or partially stopped child stays requested or failed.
 
 One logical control plane has a stable `control_plane_id`, and one or more
 enrolled hosts with distinct host identities. Exactly one host is active: a
-single global execution seat. GitHub App private keys stay per-machine
+single global seat of authority. Execution hosts (Section
+[5.7](#57-the-ward-runners-handoff-gate-and-operating-modes), Execution Hosts)
+run launches under that seat and never hold it; enrolling a host as a runner is
+not activation (revision 94). GitHub App private keys stay per-machine
 credentials; the logical identity does not turn them into shared secrets. A
 standby may verify replica and takeover readiness but serves no authoritative
 work. It does not process inbox or restored outbox work, run agents, mutate
 workflow state, or execute external effects.
 
-**Enrolled host identity is cryptographically backed.** Reviewed at revision
-35: no host identity is persisted yet, so this is a forward requirement on the
-#265 domain contract, not a migration. An enrolled host record carries a stable
-identifier and a host public key. The private key stays in platform protected
+**Enrolled host identity is cryptographically backed.** Reviewed at revision 35:
+no host identity is persisted yet, so this is a forward requirement, not a
+migration; the execution-host contract (#2162) lands the record with a role,
+`control_plane` or `runner`, and the replica and epoch contract (#265) builds on
+it (revision 94). An enrolled host record carries a stable identifier and a host
+public key. The private key stays in platform protected
 storage. The host proves it holds that key when it authenticates to
 infrastructure services (a future relay connector, portable-store provisioning,
 health attestation). Purpose-specific credentials derive from that identity or
@@ -6300,8 +6506,11 @@ Expand beyond the first constrained path:
 - webhooks if latency hurts;
 - APNs;
 - `provider_web_read` where explicitly accepted;
-- OCR image scanning if warranted; and
-- the Linux deployment matrix if wanted.
+- OCR image scanning if warranted;
+- execution hosts beyond the daemon's (Section
+  [5.7](#57-the-ward-runners-handoff-gate-and-operating-modes), Execution Hosts;
+  tracker #2161), fenced until a start trigger there holds (revision 94); and
+- the Linux deployment matrix if wanted, entering as an execution host.
 
 ### Phase 3: Comprehension and Interaction
 
@@ -6360,26 +6569,51 @@ Record material changes here by revision, with the decider in parentheses.
 - On first re-litigation, promote the decision to a `docs/decisions/` ADR that
   cites its history entry.
 
-Revision 93 ("Contract Assessments By The Creating Or Fiat Session"):
+Revision 94 ("Execution Hosts"):
 
-1. **The creating or fiat session places a contract unit.** The session
-   that creates a `kind:contract` unit, or receives its `Plan #N` or
-   `Handle #N`, records each missing assessment against a contract unit
-   holding an active claim or planning reservation, on both issues, with
-   `starts-after` for any pair it cannot assess; the write is part of its
-   assignment. The spine still assesses against every scheduled or active
-   contract unit when it schedules a unit. A planner writes the lines
-   before its reservation. A recorded `starts-after` between two contract
-   units no longer holds back planning in either direction, and a
-   dependent's reservation no longer blocks its prerequisite's claim. No
-   independence is recorded against a partner mid-planning. Unchanged: the
-   cap of two, the serialization of unassessed pairs, the record's form,
-   and the two authorization doors. Rejected: keeping a separate spine step
-   with planning failing closed, because nothing triggers that step when
-   fiat follows creation (#2115 against #2111, 2026-10-21).
+1. **Launches may run on enrolled hosts besides the daemon's.** An execution
+   host is a runner backend served by a runner, the daemon binary in a runner
+   role installed as an ordinary Freeside installation, which holds no durable
+   state and no forge credential. The runner connects out to the control plane's
+   Tailscale-bound endpoint and opens no listener; the enrolled host keys
+   authenticate the session, Tailscale only carries it, and the Section
+   [5.19](#519-deferred-subsystems-provisional-contracts) relay later changes
+   only the connector's target. The daemon host composes the runner in-process
+   and runs no separate runner process; the control plane keeps the journal,
+   seeding, export authentication, the gauntlet, and publication (Section
+   [5.7](#57-the-ward-runners-handoff-gate-and-operating-modes), Execution
+   Hosts). Rejected: a second daemon per host; a Section
+   [5.9](#59-durability-effectively-once) standby, which serves no work; driving
+   `container` over SSH, because the proxy, the gate's proofs, and the suite run
+   where the runtime is; a runner that listens on its own address; a separate
+   runner process on the daemon host; a separate runner binary;
+   kubernetes-sigs/agent-sandbox, Nomad, and Warren as the spine.
+2. **The enrolled host record carries a role and lands with execution hosts.**
+   #2162 lands the host identity with `control_plane` and `runner` roles; #265
+   builds epoch, frontier, and replica on it. Enrolling a runner is never
+   activation.
+3. **Credential posture: the volume on each owner-held host; injection reaches
+   execution hosts as control-plane injection.** The identity enrollment
+   transaction authors each identity's credential volume on every enrolled host
+   over the runner session. Proxy injection (#2175) reaches an execution host
+   with the runner terminating and the control plane substituting, so the host
+   never holds the token; it gates any host the owner does not physically hold,
+   and the Linux host waits for it. Rejected: relaying CONNECT to the daemon
+   host's proxy as a credential measure, since the token stays in the writer.
+4. **Placement by eligibility, then local-first; budgets per host; an
+   unreachable host is held, not retried.** Declaring a host lost is the
+   operator's exception to the single-writer rule and names the identities to
+   rotate; a lease-mutating identity is pinned to one host. Rejected:
+   remote-first placement; automatic failover of a running launch, which would
+   start a second writer under a held identity.
+5. **Start triggers are recorded and the units are fenced.** Capacity measured
+   from recorded holds once #1598 merges, a capability the daemon host lacks, or
+   interactive use; the Linux desktop waits for #2175 and control-plane
+   injection, multi-arch images, and a `linux_vm` backend. Tracker #2161; units
+   #2162 to #2168.
 
-(Owner decision in #2119, 2026-10-21;
-[decision note](../devlog/2026-10-21-1256-fiat-session-contract-assessment.md).)
+(Proposal of 2026-10-22, decided by the owner at merge;
+[decision note](../devlog/2026-10-22-1042-execution-hosts.md).)
 
 ## 14. Risks
 
@@ -6395,6 +6629,7 @@ Revision 93 ("Contract Assessments By The Creating Or Fiat Session"):
 | **Workspace-handoff uncertainty** | Resolved by the workspace-handoff spike: the strong class is declared and conformance-gated (Section [5.7](#57-the-ward-runners-handoff-gate-and-operating-modes)); the same-VM fallback is refuted by execution, never implemented or declared. |
 | **Codex cloud review as a load-bearing dependency** | Realized 2026-07-31: the live-run trigger falsification (#427) showed no App-visible trigger path. The dependency is removed. Review is Freeside-invoked (Section [7](#7-review-policy)), and native review is best-effort extra evidence. |
 | Host capacity | Several accounts' limits can add up to more containers than one machine holds. Give every ward container a CPU cap and a declared memory size, and bound their memory by each instance's declared budget, so a launch that doesn't fit waits under a visible hold instead of exhausting memory; waiting launches go oldest task first, and a size that can never fit fails at once (Section [5.4](#54-credential-modes-egress-profiles-and-concurrency), Machine Capacity). Residual: the budget can't see load outside Freeside or another instance's containers, so the operator declares it with room for interactive use and keeps the budgets of every instance on one host within what the host holds. |
+| Execution host credential copies | Every enrolled execution host holds a copy of each identity's setup token in its credential volume (Section [5.7](#57-the-ward-runners-handoff-gate-and-operating-modes), Execution Hosts). Accepted for owner-held machines on the owner's tailnet: rotation re-authors every host, and removal names the identities to rotate. Residual: a host removed while unreachable keeps its copy until the owner rotates at the vendor, and any host the owner does not hold waits for #2175 and control-plane injection. |
 | Single-provider execution capacity | Claude usage limits can stall real work. Schedule the 1B Codex execution driver as a hedge (Section [11](#11-roadmap-build-order-and-coordination)). Keep selection explicit as a lineup line or a task line, never silent (a lineup may name the switch per failure class, Section [4](#4-the-attention-model); a task line may pick another agent for one task, Section [5.4](#54-credential-modes-egress-profiles-and-concurrency), Admitted Agents). Usage remains observed telemetry (Section [8](#8-observability-and-optimization-telemetry)); from revision 77 an allowance observation shows the stall coming (Section [5.4](#54-credential-modes-egress-profiles-and-concurrency), usage observation), and the operator's explicit choice stays the only switch. |
 | Classifier mislabeling | Preserve immutable raw findings; require second adjudication for the safety case; enforce ceilings. |
 | Subscription-terms drift | Keep it as an explicit operating risk. |
