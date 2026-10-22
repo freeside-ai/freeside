@@ -1275,6 +1275,38 @@ every effort above. `codex_review_v1` sends `harness_default` only; it stays
 defined and conformance still records it, so a tree committed on it parses,
 but its reviewer asks no effort and is refused.
 
+**A Claude reviewer.** `-review-harness claude_code` (the default is
+`codex_cli`) writes the reviewer agent `claude-review-default` on the Claude
+ward adapter in place of the Codex agent, on an offer of its own for
+`-review-model`, asking `-review-effort`. It refuses `-auth-store-root`,
+which only a Codex store uses, and the model `claude-code-native-default`.
+
+- **The review identity is enrolled first.** Adopt cannot enroll a Claude
+  review identity, because a Claude enrollment needs an attested account and
+  `-claude-account` attests the implementation identity's. Enroll it with
+  `auth add -client claude_code` under its own `-account`; until then the
+  report lists it `unadoptable` and the patch carries no `reviewer` line.
+  When `-review-auth-identity` is the `-auth-identity`, the reviewer runs
+  under the implementation identity's enrollment.
+- **The daemon runs it with `-review-auth-mode setup_token`.** Set
+  `-review-input-root` and point `-review-auth-snapshot` at a file under it
+  holding the review identity's setup token, as the shadow reviewer's
+  snapshot does. Preflight checks that file as `claude_review_credentials`
+  in place of `codex_credentials`. The daemon checks the snapshot's shape,
+  not which account issued it, so give it the token of the account the
+  enrollment attests.
+- **The daemon composes one review harness at start.** It reads the
+  `reviewer` line's agent, and preflight fails when `-review-auth-mode` is
+  not one that harness accepts (`subscription` or `api_key` for Codex,
+  `setup_token` for Claude). A line moved to the other harness takes effect
+  at the next restart; until then every review launch refuses it by name.
+- **A Claude reviewer is a new review configuration.** Its digest covers
+  the harness, so no Codex approval covers it. Preflight records it as the
+  manifest's `review_configuration_digest`; approve it with `freesided
+  onboard -review-config-digest` before an unattended run.
+- **A Claude review binds the head only.** It checks out the head it
+  reviews and records no base; a Codex review binds both.
+
 **Upgrade a deployment adopted before the review agents named a model and an
 effort.** The daemon and `preflight` no longer take the four review model and
 effort flags. A tree adopted earlier has a reviewer that asks
@@ -1856,10 +1888,18 @@ freesided submit -db <state-root>/daemon/freeside.db --require-composition ...
 
 **Settings.** `<state-root>/daemon/settings.json` is required, mode `0600`
 and owned by the running user, version `freeside-deputy-settings-v1`. Every
-key is required (an unused one is `""`), an unknown or repeated key is
+key but `agent_tree.review_harness` is required (an unused one is `""`), an unknown or repeated key is
 refused, and each refusal is one line naming the field. The SHA-256 of the
 file bytes is the settings revision, printed at start and recorded in the
 composition manifest.
+
+`agent_tree.review_harness` is the one key that may be absent: absent means
+`codex_cli`, so a settings file written before it keeps its revision.
+`claude_code` adopts a Claude reviewer (Select Agents Through The Lineup) and
+requires `review.auth_mode` `setup_token`, with `review.auth_snapshot` naming
+the review identity's setup token. The deputy records the Codex review
+identity itself but not a Claude one: enroll `agent_tree.review_auth_identity`
+with `auth add -client claude_code` before the first run.
 
 Configured filesystem paths must be absolute and clean: no `.` or `..`
 components, repeated separators, or trailing separator. `prompts.vendor_instructions` cannot be
@@ -1873,8 +1913,8 @@ container volume, not a host path.
 | `images` | `agent`, `exporter`, `review`: digest-pinned references |
 | `repository` | `repo`, `repository_id`, `base_ref`, `base_sha`, `allowed_paths`, `checkout`, `project` |
 | `prompts` | `prompt_package`, `specification_prompt_package`, `remediation_prompt_package`, `vendor_instructions` |
-| `agent_tree` | `checkout` and `commit` (the policy tree adoption must reproduce), and the `auth adopt` inputs: `auth_identity`, `review_auth_identity`, `cost_owner`, `review_cost_owner`, `claude_account`, `terms_basis_date`, `pricing_revision`, `offer_not_after`, `auth_volume` |
-| `review` | `input_root`, `auth_mode` (`subscription` only; API-key enrollment awaits #1677), `auth_snapshot`, `instructions`, `model`, `effort` |
+| `agent_tree` | `checkout` and `commit` (the policy tree adoption must reproduce), and the `auth adopt` inputs: `auth_identity`, `review_auth_identity`, `cost_owner`, `review_cost_owner`, `claude_account`, `terms_basis_date`, `pricing_revision`, `offer_not_after`, `auth_volume`, and the optional `review_harness` |
+| `review` | `input_root`, `auth_mode` (`subscription` with a Codex reviewer, `setup_token` with a Claude one; API-key enrollment awaits #1677), `auth_snapshot`, `instructions`, `model`, `effort` |
 | `judgment` | `claude_bin`, `claude_sha256`, `model`, `publication_author_prompt`: all empty or all set |
 | `prod` | `app_state_dir`, `app_credentials_dir`, `installed_daemon` |
 | `timeouts` | `writer_stop`, `writer_stall`: Go durations |
