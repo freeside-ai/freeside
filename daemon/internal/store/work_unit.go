@@ -66,6 +66,16 @@ const (
 		FROM work_unit_completions WHERE unit_id = ?`
 	listWorkUnitCompletionsSQL = `SELECT unit_id, body, recorded_at
 		FROM work_unit_completions ORDER BY recorded_at, unit_id`
+	insertWorkUnitRebaseProofSQL = `INSERT INTO work_unit_rebase_proofs
+		(unit_id, proven_head_sha, body, recorded_at)
+		VALUES (?, ?, ?, ?)
+		ON CONFLICT DO NOTHING`
+	selectWorkUnitRebaseProofBodySQL = `SELECT body
+		FROM work_unit_rebase_proofs WHERE unit_id = ? AND proven_head_sha = ?`
+	getWorkUnitRebaseProofSQL = `SELECT unit_id, proven_head_sha, body, recorded_at
+		FROM work_unit_rebase_proofs WHERE unit_id = ? AND proven_head_sha = ?`
+	listWorkUnitRebaseProofsSQL = `SELECT unit_id, proven_head_sha, body, recorded_at
+		FROM work_unit_rebase_proofs WHERE unit_id = ? ORDER BY rowid`
 )
 
 // RecordWorkUnitDeclaration records one unit's declaration, write-once: a
@@ -578,4 +588,89 @@ func (tx *ReadTx) completionSupported(ctx context.Context, c domain.WorkUnitComp
 		}
 	}
 	return false, nil
+}
+
+// RecordWorkUnitRebaseProof records the verdict on one head someone else
+// pushed to the unit's pull request (issue #2129), write-once per unit and
+// head: a byte-identical replay converges and any other verdict on the same
+// head is ErrImmutableConflict, so a refusal can never later turn into a
+// proof. The proof's pull request must be the unit's bound one.
+func (tx *InternalTx) RecordWorkUnitRebaseProof(ctx context.Context, p domain.WorkUnitRebaseProof) error {
+	binding, err := tx.GetWorkUnitPRBinding(ctx, p.UnitID)
+	if err != nil {
+		return fmt.Errorf("put work unit rebase proof: %w", err)
+	}
+	if binding.RepositoryID != p.RepositoryID || binding.PRNumber != p.PRNumber {
+		return fmt.Errorf("put work unit rebase proof %s names %d#%d, the unit is bound to %d#%d: %w",
+			p.UnitID, p.RepositoryID, p.PRNumber, binding.RepositoryID, binding.PRNumber,
+			domain.ErrParentKeyMismatch)
+	}
+	body, err := encode(p)
+	if err != nil {
+		return fmt.Errorf("put work unit rebase proof: %w", err)
+	}
+	if err := tx.putImmutable(ctx, insertWorkUnitRebaseProofSQL,
+		[]any{p.UnitID, p.ProvenHeadSHA, body, formatTime(p.RecordedAt)},
+		selectWorkUnitRebaseProofBodySQL, []any{p.UnitID, p.ProvenHeadSHA}, body); err != nil {
+		return fmt.Errorf("put work unit rebase proof %s at %s: %w", p.UnitID, p.ProvenHeadSHA, err)
+	}
+	return nil
+}
+
+// scanWorkUnitRebaseProof reconstructs one proof row. A body that no longer
+// decodes or disagrees with its key columns is a row verdict.
+func (tx *ReadTx) scanWorkUnitRebaseProof(sc scanner) (domain.WorkUnitRebaseProof, error) {
+	var (
+		unitID, provenHead, recordedAt string
+		body                           []byte
+	)
+	if err := sc.Scan(&unitID, &provenHead, &body, &recordedAt); err != nil {
+		return domain.WorkUnitRebaseProof{}, err
+	}
+	p, err := decode[domain.WorkUnitRebaseProof](body)
+	if err != nil {
+		return domain.WorkUnitRebaseProof{}, fmt.Errorf("%w: %w", errRowInconsistent, err)
+	}
+	if p.UnitID != domain.WorkUnitID(unitID) || p.ProvenHeadSHA != provenHead ||
+		formatTime(p.RecordedAt) != recordedAt {
+		return domain.WorkUnitRebaseProof{}, errRowInconsistent
+	}
+	return p, nil
+}
+
+// GetWorkUnitRebaseProof returns the verdict on one head, or ErrNotFound
+// before one is recorded. The row is returned as stored: whether a proven row
+// still moves the unit's head is EffectiveWorkUnitPRBinding's decision.
+func (tx *ReadTx) GetWorkUnitRebaseProof(
+	ctx context.Context, unitID domain.WorkUnitID, headSHA string,
+) (domain.WorkUnitRebaseProof, error) {
+	p, err := tx.scanWorkUnitRebaseProof(tx.tx.QueryRowContext(ctx, getWorkUnitRebaseProofSQL, unitID, headSHA))
+	if err != nil {
+		return domain.WorkUnitRebaseProof{}, fmt.Errorf("get work unit rebase proof %s at %s: %w",
+			unitID, headSHA, notFoundOr(err))
+	}
+	return p, nil
+}
+
+// ListWorkUnitRebaseProofs returns the unit's verdicts in recorded order.
+func (tx *ReadTx) ListWorkUnitRebaseProofs(
+	ctx context.Context, unitID domain.WorkUnitID,
+) ([]domain.WorkUnitRebaseProof, error) {
+	rows, err := tx.tx.QueryContext(ctx, listWorkUnitRebaseProofsSQL, unitID)
+	if err != nil {
+		return nil, fmt.Errorf("list work unit rebase proofs %s: %w", unitID, err)
+	}
+	defer func() { _ = rows.Close() }()
+	var proofs []domain.WorkUnitRebaseProof
+	for rows.Next() {
+		p, err := tx.scanWorkUnitRebaseProof(rows)
+		if err != nil {
+			return nil, fmt.Errorf("list work unit rebase proofs %s: %w", unitID, err)
+		}
+		proofs = append(proofs, p)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("list work unit rebase proofs %s: %w", unitID, err)
+	}
+	return proofs, nil
 }

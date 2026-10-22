@@ -774,34 +774,108 @@ func (tx *ReadTx) PublicationSuccessorForBlockedItem(ctx context.Context, runID 
 }
 
 // EffectiveWorkUnitPRBinding derives the current head without changing the
-// immutable first-publication record. A pending successor has no merge authority.
+// immutable first-publication record. A pending successor has no merge
+// authority: the head is the last published ready item's, or a proven rebase
+// of it (provenWorkUnitHead).
 func (tx *ReadTx) EffectiveWorkUnitPRBinding(ctx context.Context, unitID domain.WorkUnitID) (domain.WorkUnitPRBinding, error) {
+	binding, _, err := tx.effectiveWorkUnitPRBinding(ctx, unitID)
+	return binding, err
+}
+
+// effectiveWorkUnitPRBinding is EffectiveWorkUnitPRBinding that also returns
+// the published head, which differs from the binding's head exactly when a
+// proven rebase moved it.
+func (tx *ReadTx) effectiveWorkUnitPRBinding(
+	ctx context.Context, unitID domain.WorkUnitID,
+) (domain.WorkUnitPRBinding, string, error) {
 	binding, err := tx.GetWorkUnitPRBinding(ctx, unitID)
 	if err != nil {
-		return binding, err
+		return binding, "", err
 	}
 	declaration, err := tx.GetWorkUnitDeclaration(ctx, unitID)
 	if err != nil {
-		return binding, err
+		return binding, "", err
 	}
 	successor, err := tx.CurrentPublicationSuccessor(ctx, declaration.RunID)
-	if err != nil || successor == nil {
-		return binding, err
-	}
-	itemID, err := tx.PublishedProductionReadyItemID(ctx, declaration.RunID)
 	if err != nil {
-		return binding, err
+		return binding, "", err
 	}
-	ready, err := tx.GetReadyItemPRBinding(ctx, itemID)
+	if successor != nil {
+		itemID, err := tx.PublishedProductionReadyItemID(ctx, declaration.RunID)
+		if err != nil {
+			return binding, "", err
+		}
+		ready, err := tx.GetReadyItemPRBinding(ctx, itemID)
+		if err != nil {
+			return binding, "", err
+		}
+		if binding.Repo != ready.Repo || binding.RepositoryID != ready.RepositoryID ||
+			binding.PRNumber != ready.PRNumber || binding.BaseRef != ready.BaseRef {
+			return binding, "", domain.ErrParentKeyMismatch
+		}
+		binding.HeadSHA = ready.HeadSHA
+	}
+	published := binding.HeadSHA
+	proven, err := tx.provenWorkUnitHead(ctx, declaration.RunID, binding)
 	if err != nil {
-		return binding, err
+		return binding, "", err
 	}
-	if binding.Repo != ready.Repo || binding.RepositoryID != ready.RepositoryID ||
-		binding.PRNumber != ready.PRNumber || binding.BaseRef != ready.BaseRef {
-		return binding, domain.ErrParentKeyMismatch
+	if proven != "" {
+		binding.HeadSHA = proven
 	}
-	binding.HeadSHA = ready.HeadSHA
-	return binding, nil
+	return binding, published, nil
+}
+
+// provenWorkUnitHead returns the head the latest proven rebase of the
+// published head names, or "" when none applies. A stored proven bit is never
+// trusted on its own (the store's reconstruction-gate convention): a row moves
+// the head only while it proves the published head, on the unit's pull
+// request, against exactly the pair the latest review record covered. A later
+// review, a newer published head, or a row for another pull request leaves
+// the published head in place, so the gate fails closed.
+func (tx *ReadTx) provenWorkUnitHead(
+	ctx context.Context, runID domain.RunID, published domain.WorkUnitPRBinding,
+) (string, error) {
+	proofs, err := tx.ListWorkUnitRebaseProofs(ctx, published.UnitID)
+	if err != nil || len(proofs) == 0 {
+		return "", err
+	}
+	review, err := tx.LatestReviewRecord(ctx, runID)
+	if errors.Is(err, ErrNotFound) {
+		return "", nil
+	}
+	if err != nil {
+		return "", err
+	}
+	proven := ""
+	for _, proof := range proofs {
+		if proof.Proven && proof.RepositoryID == published.RepositoryID &&
+			proof.PRNumber == published.PRNumber &&
+			proof.ReviewedHeadSHA == published.HeadSHA &&
+			proof.ReviewedHeadSHA == review.HeadSHA && proof.ReviewedBaseSHA == review.BaseSHA {
+			proven = proof.ProvenHeadSHA
+		}
+	}
+	return proven, nil
+}
+
+// WorkUnitBindingCovers reports whether effective, a binding
+// EffectiveWorkUnitPRBinding returned, describes the pull request a ready or
+// held binding at readyHeadSHA names. The heads agree, or readyHeadSHA is the
+// published head and effective carries the proven rebase of it: the ready
+// binding keeps the head that was reviewed, while completion compares the
+// head the lander merged. The caller compares the other coordinates.
+func (tx *ReadTx) WorkUnitBindingCovers(
+	ctx context.Context, effective domain.WorkUnitPRBinding, readyHeadSHA string,
+) (bool, error) {
+	if effective.HeadSHA == readyHeadSHA {
+		return true, nil
+	}
+	derived, published, err := tx.effectiveWorkUnitPRBinding(ctx, effective.UnitID)
+	if err != nil {
+		return false, err
+	}
+	return derived.HeadSHA == effective.HeadSHA && published == readyHeadSHA, nil
 }
 
 // AuthenticateSuccessorProducer excludes the original export and other

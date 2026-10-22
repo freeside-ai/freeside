@@ -1,0 +1,12 @@
+{
+  "unit_id": "workunit-run-1",
+  "repository_id": 84958515,
+  "pr_number": 450,
+  "reviewed_base_sha": "facefeed",
+  "reviewed_head_sha": "cafebabe",
+  "proven_head_sha": "0badc0de",
+  "reviewed_tree_sha": "feedf00d",
+  "proven": false,
+  "detail": "range-diff reports \"1:  cafebab ! 1:  0badc0d Change the greeting\"",
+  "recorded_at": "2026-01-02T05:04:05Z"
+}

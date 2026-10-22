@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/freeside-ai/freeside/daemon/internal/domain"
+	"github.com/freeside-ai/freeside/daemon/internal/exec/fake"
 	"github.com/freeside-ai/freeside/daemon/internal/publish"
 	"github.com/freeside-ai/freeside/daemon/internal/store"
 )
@@ -518,5 +519,202 @@ func TestWorkUnitCompletionRoundTrip(t *testing.T) {
 		return err
 	}); !errors.Is(err, store.ErrNotFound) {
 		t.Fatalf("incomplete unit = %v, want %v", err, store.ErrNotFound)
+	}
+}
+
+// rebaseProofFixture is a proven rebase of captureFixture's bound head onto
+// the base putCleanReview records for it.
+func rebaseProofFixture(binding domain.WorkUnitPRBinding) domain.WorkUnitRebaseProof {
+	return domain.WorkUnitRebaseProof{
+		UnitID: binding.UnitID, RepositoryID: binding.RepositoryID, PRNumber: binding.PRNumber,
+		ReviewedBaseSHA: "facefeed", ReviewedHeadSHA: binding.HeadSHA, ProvenHeadSHA: "c0ffee00",
+		ReviewedTreeSHA: "feedf00d", Proven: true,
+		RecordedAt: binding.RecordedAt.Add(3 * time.Hour),
+	}
+}
+
+// putCleanReview records a clean pass for run-1 over base and head.
+func putCleanReview(t *testing.T, s *store.Store, round int, base, head string) {
+	t.Helper()
+	invocation := domain.InvocationID("review-run-1-" + strings.Repeat("r", round))
+	record, err := domain.NewReviewRecord(domain.ReviewRecord{
+		InvocationID: invocation, RunID: "run-1", Round: round,
+		Admission:           fake.RecordAdmission(domain.RoleReviewer, "run-1", invocation),
+		ConfigurationDigest: domain.Digest("sha256:" + strings.Repeat("c", 64)),
+		InstructionDigest:   adjInstructionDigest,
+		BaseSHA:             base, HeadSHA: head,
+		CompletedAt:        time.Date(2026, 1, 2, 3, 4, 5+round, 0, time.UTC),
+		CompletionEvidence: domain.Digest("sha256:" + strings.Repeat("e", 64)),
+		Outcome:            domain.ReviewClean,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := s.Write(context.Background(), func(tx *store.WriteTx) error {
+		return tx.PutReviewRecord(context.Background(), record, nil)
+	}); err != nil {
+		t.Fatalf("put review round %d: %v", round, err)
+	}
+}
+
+// TestWorkUnitRebaseProofRoundTrip is the write-once contract: a proof needs
+// its unit's binding and pull request, an identical replay converges, and a
+// divergent verdict for the same head is an immutable conflict.
+func TestWorkUnitRebaseProofRoundTrip(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	s := openCaptureStore(t)
+	decl, binding, _, _ := captureFixture(t)
+	proof := rebaseProofFixture(binding)
+	put := func(p domain.WorkUnitRebaseProof) error {
+		return writeInternal(t, s, func(tx *store.InternalTx) error {
+			return tx.RecordWorkUnitRebaseProof(ctx, p)
+		})
+	}
+
+	if err := put(proof); !errors.Is(err, store.ErrNotFound) {
+		t.Fatalf("proof without a binding = %v, want %v", err, store.ErrNotFound)
+	}
+	if err := writeInternal(t, s, func(tx *store.InternalTx) error {
+		if err := tx.RecordWorkUnitDeclaration(ctx, decl); err != nil {
+			return err
+		}
+		return tx.RecordWorkUnitPRBinding(ctx, binding)
+	}); err != nil {
+		t.Fatal(err)
+	}
+	foreign := proof
+	foreign.PRNumber = 451
+	if err := put(foreign); !errors.Is(err, domain.ErrParentKeyMismatch) {
+		t.Fatalf("proof for another pull request = %v, want %v", err, domain.ErrParentKeyMismatch)
+	}
+	if err := put(proof); err != nil {
+		t.Fatalf("put: %v", err)
+	}
+	if err := put(proof); err != nil {
+		t.Fatalf("identical replay must converge: %v", err)
+	}
+	refused := proof
+	refused.Proven, refused.ReviewedTreeSHA, refused.Detail = false, "", "tree differs"
+	if err := put(refused); !errors.Is(err, store.ErrImmutableConflict) {
+		t.Fatalf("divergent verdict = %v, want %v", err, store.ErrImmutableConflict)
+	}
+	other := refused
+	other.ProvenHeadSHA = "0badc0de"
+	if err := put(other); err != nil {
+		t.Fatalf("refusal of another head: %v", err)
+	}
+
+	if err := s.Read(ctx, func(tx *store.ReadTx) error {
+		got, err := tx.GetWorkUnitRebaseProof(ctx, decl.ID, proof.ProvenHeadSHA)
+		if err != nil {
+			return err
+		}
+		if got != proof {
+			t.Errorf("get = %+v, want %+v", got, proof)
+		}
+		list, err := tx.ListWorkUnitRebaseProofs(ctx, decl.ID)
+		if err != nil {
+			return err
+		}
+		if len(list) != 2 || list[0] != proof || list[1] != other {
+			t.Errorf("list = %+v, want [%+v %+v]", list, proof, other)
+		}
+		_, err = tx.GetWorkUnitRebaseProof(ctx, decl.ID, "feedface")
+		if !errors.Is(err, store.ErrNotFound) {
+			t.Errorf("unrecorded head = %v, want %v", err, store.ErrNotFound)
+		}
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// TestEffectiveWorkUnitPRBindingRegatesRebaseProof pins the read re-gate: a
+// proof moves the head completion compares only while it proves the published
+// head against the latest review's pair, and a decoded proven bit alone moves
+// nothing.
+func TestEffectiveWorkUnitPRBindingRegatesRebaseProof(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	s := openCaptureStore(t)
+	decl, binding, _, _ := captureFixture(t)
+	if err := writeInternal(t, s, func(tx *store.InternalTx) error {
+		if err := tx.RecordWorkUnitDeclaration(ctx, decl); err != nil {
+			return err
+		}
+		return tx.RecordWorkUnitPRBinding(ctx, binding)
+	}); err != nil {
+		t.Fatal(err)
+	}
+	proof := rebaseProofFixture(binding)
+	effectiveHead := func() string {
+		t.Helper()
+		var head string
+		if err := s.Read(ctx, func(tx *store.ReadTx) error {
+			effective, err := tx.EffectiveWorkUnitPRBinding(ctx, decl.ID)
+			head = effective.HeadSHA
+			return err
+		}); err != nil {
+			t.Fatal(err)
+		}
+		return head
+	}
+	covers := func(effectiveHead, readyHead string) bool {
+		t.Helper()
+		effective := binding
+		effective.HeadSHA = effectiveHead
+		var ok bool
+		if err := s.Read(ctx, func(tx *store.ReadTx) error {
+			var err error
+			ok, err = tx.WorkUnitBindingCovers(ctx, effective, readyHead)
+			return err
+		}); err != nil {
+			t.Fatal(err)
+		}
+		return ok
+	}
+
+	// A refusal never moves the head.
+	refused := proof
+	refused.ProvenHeadSHA = "0badc0de"
+	refused.Proven, refused.ReviewedTreeSHA, refused.Detail = false, "", "tree differs"
+	if err := writeInternal(t, s, func(tx *store.InternalTx) error {
+		if err := tx.RecordWorkUnitRebaseProof(ctx, refused); err != nil {
+			return err
+		}
+		return tx.RecordWorkUnitRebaseProof(ctx, proof)
+	}); err != nil {
+		t.Fatal(err)
+	}
+	// With no review record the proof has no pair to agree with.
+	if got := effectiveHead(); got != binding.HeadSHA {
+		t.Fatalf("no review: head = %q, want the published %q", got, binding.HeadSHA)
+	}
+
+	putCleanReview(t, s, 1, "facefeed", binding.HeadSHA)
+	if got := effectiveHead(); got != proof.ProvenHeadSHA {
+		t.Fatalf("matching review: head = %q, want the proven %q", got, proof.ProvenHeadSHA)
+	}
+	if !covers(proof.ProvenHeadSHA, binding.HeadSHA) {
+		t.Fatal("the proven head must cover the ready binding's published head")
+	}
+	if !covers(binding.HeadSHA, binding.HeadSHA) {
+		t.Fatal("equal heads must cover")
+	}
+	if covers(proof.ProvenHeadSHA, "feedface") {
+		t.Fatal("the proven head covered a ready binding at another head")
+	}
+	if covers("0badc0de", binding.HeadSHA) {
+		t.Fatal("a refused head covered the published head")
+	}
+
+	// A later review at another base stales the proof.
+	putCleanReview(t, s, 2, "beefcafe", binding.HeadSHA)
+	if got := effectiveHead(); got != binding.HeadSHA {
+		t.Fatalf("later review: head = %q, want the published %q", got, binding.HeadSHA)
+	}
+	if covers(proof.ProvenHeadSHA, binding.HeadSHA) {
+		t.Fatal("a stale proof still covered the published head")
 	}
 }
