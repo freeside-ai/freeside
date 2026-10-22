@@ -418,6 +418,12 @@ func validateImageAllowlist(
 	}
 }
 
+// proofSize bounds every proof container at the verification room's default
+// size, the floor every room serves: policy may raise a room's size and never
+// lower it, so a recipe proven here fits any room. Without it Apple container
+// runs the proof at its own default of 1 GiB.
+var proofSize = ward.DefaultLaunchSize(ward.LaunchVerification)
+
 func (a appleBackend) Run(ctx context.Context, spec runSpec) (result runResult, err error) {
 	token, err := randomToken()
 	if err != nil {
@@ -433,6 +439,7 @@ func (a appleBackend) Run(ctx context.Context, spec runSpec) (result runResult, 
 		"--label", ownershipLabel + "=" + token,
 		"--network", "none",
 	}
+	args = append(args, ward.SizeArgs(proofSize)...)
 	if spec.MaskedCache != "" {
 		args = append(args, "--tmpfs", spec.MaskedCache)
 	}
