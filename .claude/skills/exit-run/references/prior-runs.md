@@ -204,6 +204,13 @@ Look for each of these before and during the run; most have bitten twice.
   every finding was parked as `park_unknown`. The operator will ask which
   route to take. Read the finding, the target's scope, and its decision-note
   rules first, and give a recommendation with one line of reason.
+- **Most runs lost a launch before the work began.** A startup race, a
+  Stop that could not work, a missing input, an expired credential, and a
+  phone that could not connect each cost a relaunch or the operator's
+  time, and every relaunch left another task in the clients (#1934). The
+  rehearsal pass (SKILL.md, Rehearse Before The Operator) is the response:
+  the launch, inputs, credentials, publication, and alerts fail on a
+  disposable target before the operator is asked for anything.
 
 ## Mode And Flags Past Trackers Required
 
