@@ -46,9 +46,14 @@ type TaskJudgments struct {
 	mu     sync.Mutex
 }
 
+// NewTaskJudgments opens the ownership journal under root. A nil driver is
+// judgments switched off: the journal makes no call and refuses one, but a
+// task stop still confirms a run against the records an earlier process with
+// judgments on left under root, because those records outlive the process
+// that wrote them (#1945).
 func NewTaskJudgments(root string, driver inference.Driver) (*TaskJudgments, error) {
-	if !filepath.IsAbs(root) || driver == nil {
-		return nil, errors.New("task judgments need an absolute ownership directory and driver")
+	if !filepath.IsAbs(root) {
+		return nil, errors.New("task judgments need an absolute ownership directory")
 	}
 	if err := os.MkdirAll(root, 0o700); err != nil {
 		return nil, err
@@ -61,6 +66,9 @@ func NewTaskJudgments(root string, driver inference.Driver) (*TaskJudgments, err
 }
 
 func (j *TaskJudgments) Complete(ctx context.Context, req inference.Request, secret inference.Secret) (inference.Response, error) {
+	if j.driver == nil {
+		return inference.Response{}, errors.New("task judgments have no driver: judgments are off")
+	}
 	owner, bound := ctx.Value(taskOwnerKey{}).(taskOwner)
 	if !bound {
 		return j.driver.Complete(ctx, req, secret)

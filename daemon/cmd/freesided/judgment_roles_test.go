@@ -346,6 +346,102 @@ func TestJudgmentSitesReadTheAdoptedLineup(t *testing.T) {
 	})
 }
 
+// With the judgment flags absent every judgment role is off, whatever the
+// tree holds: the startup check reports each role off and raises no item, a
+// call at any site returns its fail-safe as inference being unavailable
+// under the off reason and never the unbound one, and nothing past the off
+// answer is read, so no line, store row, or credential is needed. An item an
+// earlier start with judgments on had left is resolved, because a deployment
+// that switched judgments off has nothing for the item to hold (#1945).
+func TestJudgmentRolesAreOffWithTheFlagsAbsent(t *testing.T) {
+	ctx := context.Background()
+	f := newAuthAdoptFixture(t)
+	authorPath := filepath.Join(f.promptDir, "author")
+	if err := os.WriteFile(authorPath, []byte("write the pull request for a reviewer\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	_, patch, err := f.run(t, f.args("-judgment-publication-author-prompt", authorPath))
+	if err != nil {
+		t.Fatalf("auth adopt: %v", err)
+	}
+	withLines := loadAdoptedPatch(t, patch)
+	withoutLines := withLines
+	withoutLines.Lineup = slices.DeleteFunc(slices.Clone(withLines.Lineup), func(line agenttree.LineupLine) bool {
+		return slices.Contains(agentbaseline.JudgmentRoles(), domain.RoleName(line.Key))
+	})
+	if len(withoutLines.Lineup) == len(withLines.Lineup) {
+		t.Fatal("the adopted tree has no judgment lines to remove")
+	}
+	sites := judgmentTestSites()
+	roles := map[domain.RoleName]bool{}
+	for _, site := range sites {
+		role, _ := domain.RoleForSite(site.ID)
+		roles[role] = true
+	}
+	now := func() time.Time { return time.Date(2026, 10, 21, 12, 0, 0, 0, time.UTC) }
+	f.withStore(t, func(st *store.Store) {
+		// An earlier start with judgments on left the drift auditor's
+		// blocking item behind.
+		newJudgmentRoleHealth(st, now, nil).RoleUnbound(ctx, domain.RoleDriftAuditor, "the lineup has no line for it")
+		if len(judgmentRoleItems(t, st)) != 1 {
+			t.Fatal("the item of the earlier start is missing")
+		}
+		for _, tree := range []struct {
+			name string
+			tree agenttree.Tree
+		}{{"with judgment lines", withLines}, {"without judgment lines", withoutLines}} {
+			health := newJudgmentRoleHealth(st, now, nil)
+			client, err := inference.New(inference.Config{
+				StatePath: filepath.Join(t.TempDir(), "ledger.json"),
+				// No credentials: the off answer comes before they are read.
+				Roles: judgmentRoles{
+					st: st, tree: tree.tree, revision: domain.Digest("sha256:" + strings.Repeat("4", 64)),
+					runtime: judgmentRuntime{},
+				},
+				Health: health, Sites: sites,
+				Advisory: advisory.Unavailable(errors.New("unused")), Now: now,
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+			checks := client.CheckRoles(ctx)
+			if len(checks) != len(roles) {
+				t.Fatalf("%s: %d roles checked, want %d", tree.name, len(checks), len(roles))
+			}
+			for _, check := range checks {
+				if !check.Off || check.Err != nil || !roles[check.Role] {
+					t.Fatalf("%s: role %s = %+v, want off", tree.name, check.Role, check)
+				}
+			}
+			if err := checkJudgmentRolesAtStartup(ctx, client, health, nil); err != nil {
+				t.Fatalf("%s: startup check returned %v", tree.name, err)
+			}
+			if items := judgmentRoleItems(t, st); len(items) != 0 {
+				t.Fatalf("%s: items after the startup check = %+v", tree.name, items)
+			}
+			at := storeRevision(t, st)
+			for _, site := range sites {
+				fields := map[string]inference.InputField{}
+				for _, policy := range site.Fields {
+					fields[policy.Name] = inference.InputField{Value: "data", Sensitivity: policy.Sensitivity}
+				}
+				result, err := client.Call(ctx, site.ID, "project-1", "run-1", fields)
+				if err != nil {
+					t.Fatalf("%s: %s returned %v", tree.name, site.ID, err)
+				}
+				if !result.Fallback || result.Reason != inference.FallbackRoleOff ||
+					result.Producer != "unavailable/unbound" || string(result.Output) != site.FailSafe ||
+					result.Identity != nil {
+					t.Fatalf("%s: %s with judgments off = %+v", tree.name, site.ID, result)
+				}
+			}
+			if items := judgmentRoleItems(t, st); len(items) != 0 || storeRevision(t, st) != at {
+				t.Fatalf("%s: a call with judgments off wrote to the store: items = %+v", tree.name, items)
+			}
+		}
+	})
+}
+
 // adoptedBeforeTheCallOffer returns the tree as a deployment adopted before
 // the call offer existed holds it: the call agent on the native-default
 // offer, which names no model, and every judgment line naming that agent.

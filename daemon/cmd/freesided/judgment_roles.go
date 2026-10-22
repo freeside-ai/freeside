@@ -76,7 +76,7 @@ func judgmentSites(budget inference.Budget) []inference.Site {
 
 // judgmentRuntime is what the judgment flags compose: the driver that makes
 // every call and the publication author's prompt file. The zero value is
-// judgments switched off.
+// judgments switched off: with no driver, every role is off.
 type judgmentRuntime struct {
 	Driver       inference.Driver
 	AuthorPrompt []byte
@@ -108,8 +108,16 @@ func judgmentRolePrompt(role domain.RoleName, authorPrompt []byte) (inference.Ro
 	return inference.CodeOwnedRolePrompt(role)
 }
 
-// ResolveRole implements inference.RoleSource.
+// ResolveRole implements inference.RoleSource. With the judgment flags absent
+// the runtime has no driver and every role is off: the answer is
+// inference.ErrRoleOff before the lineup, the store, or a credential is read,
+// so a tree with no judgment lines leaves no role unbound and raises no item
+// on a deployment that never asked for judgments (#1945). Policy asks for a
+// role's line only while it asks for the role's work (plan §5.4).
 func (j judgmentRoles) ResolveRole(ctx context.Context, role domain.RoleName) (inference.RoleCall, error) {
+	if j.runtime.Driver == nil {
+		return inference.RoleCall{}, inference.ErrRoleOff
+	}
 	prompt, ok := judgmentRolePrompt(role, j.runtime.AuthorPrompt)
 	if !ok {
 		return inference.RoleCall{}, inference.ErrRoleOff

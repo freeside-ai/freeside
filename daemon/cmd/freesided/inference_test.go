@@ -18,6 +18,7 @@ import (
 	"github.com/freeside-ai/freeside/daemon/internal/claudeinference"
 	"github.com/freeside-ai/freeside/daemon/internal/contentaddr"
 	"github.com/freeside-ai/freeside/daemon/internal/inference"
+	"github.com/freeside-ai/freeside/daemon/internal/ward"
 )
 
 func judgmentFixture(t *testing.T) (judgmentConfig, string) {
@@ -179,6 +180,48 @@ func TestJudgmentStartupRequiresPreflightBinding(t *testing.T) {
 	binding, err := composeRuntimeJudgments(judgmentConfig{})
 	if err != nil || binding.Driver != nil {
 		t.Fatal("unconfigured startup fallback changed")
+	}
+}
+
+// The production composition starts with the judgment flags absent: the
+// runtime has no driver, and the task-judgment ownership journal is opened
+// around none, so a task stop still confirms what an earlier start with
+// judgments on left in it while no call can be made through it. With the
+// flags set the driver is wrapped in the journal, still held to the
+// preflight digest (#1945).
+func TestProductionJudgmentsComposeWithTheFlagsAbsent(t *testing.T) {
+	stateDir := t.TempDir()
+	ownership := filepath.Join(stateDir, "task-judgments")
+	off, owned, err := composeProductionJudgments(stateDir, judgmentConfig{})
+	if err != nil || off.Driver != nil || off.AuthorPrompt != nil || owned == nil {
+		t.Fatalf("composition with the flags absent = %+v, %v, %v", off, owned, err)
+	}
+	if info, err := os.Stat(ownership); err != nil || !info.IsDir() {
+		t.Fatalf("ownership directory with judgments off: %v", err)
+	}
+	if _, err := owned.Complete(t.Context(), inference.Request{SiteID: "task-name"}, ""); err == nil {
+		t.Fatal("the journal made a call with judgments off")
+	}
+	if err := owned.ConfirmRun(t.Context(), "task", "run"); err != nil {
+		t.Fatalf("a run with no judgment records did not confirm: %v", err)
+	}
+
+	cfg, _ := judgmentFixture(t)
+	_, digest, err := composeJudgments(cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	cfg.ExpectedDigest = digest
+	on, owned, err := composeProductionJudgments(stateDir, cfg)
+	if err != nil || owned == nil {
+		t.Fatalf("composition with the flags set = %+v, %v, %v", on, owned, err)
+	}
+	if journal, ok := on.Driver.(*ward.TaskJudgments); !ok || journal != owned {
+		t.Fatalf("configured driver is %T, want the returned ownership journal", on.Driver)
+	}
+	cfg.ExpectedDigest = ""
+	if _, _, err := composeProductionJudgments(stateDir, cfg); err == nil {
+		t.Fatal("a configured runtime composed without its preflight digest")
 	}
 }
 

@@ -2333,8 +2333,11 @@ the offer its role's lineup line names, which `freesided auth adopt
 -judgment-model` writes for the baseline lines. Each call authenticates with
 the setup token stored for the enrollment that line names, so no new API key
 or login is needed and judgment usage is billed to that enrollment's account.
-The default, with both flags absent, keeps inference unavailable
-and preserves the existing conservative fallback behavior. The task namer keeps
+The default, with both flags absent, switches judgments off: the daemon
+starts, every judgment role is off rather than unbound, so no
+`judgment_role_unbound` item is raised and nothing holds unattended admission
+whatever lines the tree holds, and every judgment site returns its fail-safe
+with the reason `role_off`. The task namer keeps
 the identifier name when judgments are unbound or naming fails. Naming uses a
 separate serial worker after durable dispatch, so a slow provider does not
 delay reconciliation. Its 32-entry in-memory queue keeps the identifier
@@ -2502,7 +2505,10 @@ start that cannot write these items stops with a `check judgment roles` error
 instead of running without them; after startup a failed item write is logged
 and retried on the next call, and never fails the call. The publication
 author with no prompt file is off, not unbound: its sites return their
-fail-safe and no item is raised.
+fail-safe and no item is raised. With the judgment flags absent every judgment
+role is off the same way, answered before any line, credential, or store row
+is read, and the startup check resolves an item an earlier start with
+judgments on had left.
 
 Each call's ledger record (`inference-budget.json`, version
 `freeside.inference-budget/v4`) carries the call identity: the admission (role,

@@ -58,6 +58,40 @@ func TestTaskCancellationJudgmentQueuedBeforeProviderEntry(t *testing.T) {
 	}
 }
 
+// A journal with no driver is judgments off: it refuses every call and
+// journals nothing, and still confirms a run against the records an earlier
+// process with judgments on left under the same root, so a restart with the
+// flags absent cannot invent proof for a judgment that process left unproven.
+func TestTaskJudgmentsWithoutADriverRefuseCallsAndStillConfirm(t *testing.T) {
+	root := filepath.Join(t.TempDir(), "judgments")
+	off, err := NewTaskJudgments(root, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, ctx := range []context.Context{t.Context(), WithTaskOwner(t.Context(), "task", "run")} {
+		if _, err := off.Complete(ctx, inference.Request{SiteID: "task-name"}, ""); err == nil {
+			t.Fatal("a journal with no driver made a call")
+		}
+	}
+	if err := off.ConfirmRun(t.Context(), "task", "run"); err != nil {
+		t.Fatalf("a run with no records did not confirm: %v", err)
+	}
+	on, err := NewTaskJudgments(root, provenJudgmentDriver{quiescent: false})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := on.Complete(WithTaskOwner(t.Context(), "task", "run"), inference.Request{SiteID: "task-name"}, ""); !errors.Is(err, context.Canceled) {
+		t.Fatal(err)
+	}
+	restarted, err := NewTaskJudgments(root, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := restarted.ConfirmRun(t.Context(), "task", "run"); err == nil {
+		t.Fatal("a restart with judgments off confirmed a judgment the earlier process left unproven")
+	}
+}
+
 type provenJudgmentDriver struct{ quiescent bool }
 
 func (d provenJudgmentDriver) Complete(context.Context, inference.Request, inference.Secret) (inference.Response, error) {
