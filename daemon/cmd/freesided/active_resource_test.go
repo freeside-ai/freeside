@@ -10,6 +10,7 @@ import (
 
 	"github.com/freeside-ai/freeside/daemon/internal/domain"
 	"github.com/freeside-ai/freeside/daemon/internal/domain/domaintest"
+	"github.com/freeside-ai/freeside/daemon/internal/exec/fake"
 	"github.com/freeside-ai/freeside/daemon/internal/publish"
 	"github.com/freeside-ai/freeside/daemon/internal/store"
 	"github.com/freeside-ai/freeside/daemon/internal/store/storetest"
@@ -1579,5 +1580,167 @@ func TestActiveResourceReconcileRecoversAfterClosedUnmergedPull(t *testing.T) {
 	}
 	if pullCalls != 3 || evictions != 2 {
 		t.Fatalf("completed resource calls = pulls %d evictions %d, want 3 and 2", pullCalls, evictions)
+	}
+}
+
+// TestActiveResourceReconcileWaitsOnARebaseProof is a lander that rebases the
+// reviewed head and merges it (issue #2129). The merged head is not the
+// published one, which alone would foreclose the unit, so the reconciler waits
+// while the head_changed cycle for exactly that head has not reached a
+// verdict. A proven rebase completes the unit; a refusal, or a cycle that
+// retired with none, forecloses it as any diverged merge does.
+func TestActiveResourceReconcileWaitsOnARebaseProof(t *testing.T) {
+	published, rebased := reentryTestHead, reentryTestNewHead
+	for _, tc := range []struct {
+		name     string
+		settle   func(*testing.T, *store.Store, domain.WorkUnitID, *domain.PublicationSuccessor)
+		complete bool
+	}{
+		{
+			name: "proven",
+			settle: func(t *testing.T, st *store.Store, unit domain.WorkUnitID, _ *domain.PublicationSuccessor) {
+				recordRebaseProof(t, st, unit, reentryTestHead, rebased, true)
+			},
+			complete: true,
+		},
+		{
+			name: "refused",
+			settle: func(t *testing.T, st *store.Store, unit domain.WorkUnitID, _ *domain.PublicationSuccessor) {
+				recordRebaseProof(t, st, unit, reentryTestHead, rebased, false)
+			},
+		},
+		{
+			name: "retired without a verdict",
+			settle: func(t *testing.T, st *store.Store, _ domain.WorkUnitID, successor *domain.PublicationSuccessor) {
+				if err := st.WriteInternal(context.Background(), func(tx *store.InternalTx) error {
+					return tx.MarkOutboxDispatched(context.Background(), successor.TaskKey())
+				}); err != nil {
+					t.Fatal(err)
+				}
+			},
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			ctx := context.Background()
+			st := schedTestStore(t)
+			runID := domain.RunID("run-rebase")
+			boundIssue := 443
+			item := capturedRunAtHead(t, st, runID, domain.ProductionReadyItemID(runID),
+				domain.CompletionBoundIssueClosedByMergedPR, &boundIssue, published)
+			putReentryCleanReview(t, st, runID, published)
+			unit := domain.WorkUnitIDForRun(runID)
+
+			pull := exactPull("open", false)
+			pull.HeadSHA = rebased
+			reconciler := activeResourceReconciler{
+				store: st,
+				pull: func(context.Context, string, int) (publish.PullObservation, error) {
+					return pull, nil
+				},
+				issue: func(context.Context, string, int) (publish.IssueObservation, error) {
+					return publish.IssueObservation{Number: 443, State: "closed", ClosedByCommitSHA: "deadbeef"}, nil
+				},
+				evictConcluded: func(domain.ReadyItemPRBinding, *int) {},
+				now:            func() time.Time { return activeResourceTestTime.Add(time.Minute) },
+			}
+			reconcile := func(pass string) {
+				t.Helper()
+				if failures, err := reconcileActiveResource(&reconciler, ctx); err != nil || len(failures) != 0 {
+					t.Fatalf("%s Reconcile = %v, %v", pass, failures, err)
+				}
+			}
+			reconcile("push")
+			successor, queued := readReentry(t, st, runID)
+			if successor == nil || !queued || successor.Reentry.HeadSHA != rebased {
+				t.Fatalf("re-entry = %+v, queued %t", successor, queued)
+			}
+
+			pull = exactPull("closed", true)
+			pull.HeadSHA = rebased
+			foreclosureID := completionForeclosureItemID(unit)
+			for _, pass := range []string{"merge", "repeat"} {
+				reconcile(pass)
+				assertNoActiveCompletion(t, st, item)
+				if err := st.Read(ctx, func(tx *store.ReadTx) error {
+					_, err := tx.GetAttentionItem(ctx, foreclosureID)
+					return err
+				}); !errors.Is(err, store.ErrNotFound) {
+					t.Fatalf("%s pass foreclosed a merge whose proof is in flight: %v", pass, err)
+				}
+			}
+
+			tc.settle(t, st, unit, successor)
+			reconcile("settled")
+			var completion *domain.WorkUnitCompletion
+			if err := st.Read(ctx, func(tx *store.ReadTx) error {
+				c, err := tx.GetWorkUnitCompletion(ctx, unit)
+				if err == nil {
+					completion = &c
+				}
+				if errors.Is(err, store.ErrNotFound) {
+					return nil
+				}
+				return err
+			}); err != nil {
+				t.Fatal(err)
+			}
+			if tc.complete {
+				if completion == nil || completion.MergeCommitSHA != "deadbeef" {
+					t.Fatalf("completion = %+v, want the rebased merge", completion)
+				}
+				if len(workUnitCompletedMilestones(t, st, runID)) != 1 {
+					t.Error("a proven rebase merge recorded no completion milestone")
+				}
+				return
+			}
+			if completion != nil {
+				t.Fatalf("completion = %+v, want a foreclosure", completion)
+			}
+			if notice := readActiveItem(t, st, foreclosureID); !strings.Contains(notice.Reason, rebased) {
+				t.Fatalf("foreclosure notice = %+v", notice)
+			}
+		})
+	}
+}
+
+func putReentryCleanReview(t *testing.T, st *store.Store, runID domain.RunID, head string) {
+	t.Helper()
+	review, err := domain.NewReviewRecord(domain.ReviewRecord{
+		InvocationID: reentryTestReviewID, RunID: runID, Round: 1,
+		Admission:           fake.RecordAdmission(domain.RoleReviewer, runID, reentryTestReviewID),
+		ConfigurationDigest: domain.Digest("sha256:" + strings.Repeat("c", 64)),
+		InstructionDigest:   domain.Digest("sha256:" + strings.Repeat("d", 64)),
+		BaseSHA:             reentryTestBase, HeadSHA: head,
+		CompletedAt:        activeResourceTestTime.Add(-2 * time.Minute),
+		CompletionEvidence: domain.Digest("sha256:" + strings.Repeat("e", 64)),
+		Outcome:            domain.ReviewClean,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := st.Write(context.Background(), func(tx *store.WriteTx) error {
+		return tx.PutReviewRecord(context.Background(), review, nil)
+	}); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func recordRebaseProof(
+	t *testing.T, st *store.Store, unit domain.WorkUnitID, reviewed, head string, proven bool,
+) {
+	t.Helper()
+	proof := domain.WorkUnitRebaseProof{
+		UnitID: unit, RepositoryID: 424242, PRNumber: 450,
+		ReviewedBaseSHA: reentryTestBase, ReviewedHeadSHA: reviewed, ProvenHeadSHA: head,
+		ReviewedTreeSHA: strings.Repeat("7", 40), Proven: proven,
+		RecordedAt: activeResourceTestTime.Add(time.Minute),
+	}
+	if !proven {
+		proof.Detail = "range-diff does not pair the reviewed commits as identical"
+	}
+	if err := st.WriteInternal(context.Background(), func(tx *store.InternalTx) error {
+		return tx.RecordWorkUnitRebaseProof(context.Background(), proof)
+	}); err != nil {
+		t.Fatal(err)
 	}
 }

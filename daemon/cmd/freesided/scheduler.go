@@ -92,6 +92,7 @@ func (c mergeCapture) observe(
 		declared     bool
 		bound        bool
 		complete     bool
+		covers       bool
 	)
 	if err := st.Read(ctx, func(tx *store.ReadTx) error {
 		d, err := tx.GetWorkUnitDeclarationByRun(ctx, *item.Subject.RunID)
@@ -119,6 +120,11 @@ func (c mergeCapture) observe(
 		if err != nil {
 			return err
 		}
+		// A proven rebase moves the work-unit head past the published one
+		// (issue #2129); the store decides whether that move is covered.
+		if covers, err = tx.WorkUnitBindingCovers(ctx, b, ready.HeadSHA); err != nil {
+			return err
+		}
 		readyBinding = ready
 		binding, bound = b, true
 		return nil
@@ -142,8 +148,7 @@ func (c mergeCapture) observe(
 	// and item add the scheduler pass's first-party base and head anchors.
 	if readyBinding.RunID != *item.Subject.RunID ||
 		binding.Repo != readyBinding.Repo || binding.RepositoryID != readyBinding.RepositoryID ||
-		binding.PRNumber != readyBinding.PRNumber || binding.BaseRef != readyBinding.BaseRef ||
-		binding.HeadSHA != readyBinding.HeadSHA {
+		binding.PRNumber != readyBinding.PRNumber || binding.BaseRef != readyBinding.BaseRef || !covers {
 		return nil, fmt.Errorf("work-unit binding %s disagrees with ready resource %s",
 			binding.UnitID, readyBinding.ItemID)
 	}

@@ -809,6 +809,16 @@ func capturedRunWithCriterion(
 	criterion domain.CompletionCriterionKind, boundIssue *int,
 ) domain.AttentionItem {
 	t.Helper()
+	return capturedRunAtHead(t, st, runID, itemID, criterion, boundIssue, "cafed00d")
+}
+
+// capturedRunAtHead is capturedRunWithCriterion publishing head, for a test
+// whose coordinates must validate as full SHAs.
+func capturedRunAtHead(
+	t *testing.T, st *store.Store, runID domain.RunID, itemID domain.ItemID,
+	criterion domain.CompletionCriterionKind, boundIssue *int, head string,
+) domain.AttentionItem {
+	t.Helper()
 	ctx := context.Background()
 	seedCaptureRun(t, st, runID)
 	declaration, err := domain.NewWorkUnitDeclaration(domain.WorkUnitDeclarationInput{
@@ -820,7 +830,7 @@ func capturedRunWithCriterion(
 	}
 	binding := domain.WorkUnitPRBinding{
 		UnitID: declaration.ID, Repo: "owner/repo", RepositoryID: 424242,
-		PRNumber: 450, BaseRef: "main", HeadSHA: "cafed00d",
+		PRNumber: 450, BaseRef: "main", HeadSHA: head,
 		RecordedAt: time.Date(2026, 2, 3, 3, 30, 0, 0, time.UTC),
 	}
 	authority := seedReadyBindingAuthority(t, st, runID, binding.HeadSHA)
@@ -840,7 +850,7 @@ func capturedRunWithCriterion(
 		RequestedDecision: []domain.Action{domain.ActionOpenPR, domain.ActionMarkSeen},
 		// PRHeadSHA is the head anchor the capture pass verifies the
 		// binding against.
-		PRHeadSHA:   "cafed00d",
+		PRHeadSHA:   head,
 		PRReference: &domain.PRReference{Repo: "owner/repo", Number: 450},
 		ItemVersion: 1, InterruptionClass: domain.InterruptionPlannedGate,
 		Status: domain.StatusOpen,

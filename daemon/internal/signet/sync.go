@@ -1390,9 +1390,14 @@ func authenticatedCompletionPRBinding(
 	if err != nil {
 		return err
 	}
+	// A proven rebase moves the work-unit head past the published one
+	// (issue #2129); the store re-gates that move on this read.
+	covers, err := tx.WorkUnitBindingCovers(ctx, binding, ready.HeadSHA)
+	if err != nil {
+		return err
+	}
 	if ready.RunID != runID || binding.Repo != ready.Repo || binding.RepositoryID != ready.RepositoryID ||
-		binding.PRNumber != ready.PRNumber || binding.BaseRef != ready.BaseRef ||
-		binding.HeadSHA != ready.HeadSHA {
+		binding.PRNumber != ready.PRNumber || binding.BaseRef != ready.BaseRef || !covers {
 		return fmt.Errorf("work-unit binding %s disagrees with ready resource %s: %w",
 			binding.UnitID, ready.ItemID, domain.ErrParentKeyMismatch)
 	}
