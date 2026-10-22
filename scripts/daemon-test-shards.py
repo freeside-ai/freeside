@@ -199,9 +199,39 @@ def read_events(path):
     return [json.loads(line) for line in path.read_text().splitlines()]
 
 
+def run_attempt(identity):
+    value = identity.get("GITHUB_RUN_ATTEMPT")
+    if value == "":
+        return 0  # Local evidence has no CI attempt.
+    require(isinstance(value, str) and re.fullmatch(r"[1-9][0-9]*", value), "invalid run attempt")
+    return int(value)
+
+
+def latest_attempts(paths):
+    # A failed-jobs rerun reruns only the failed shards, so the shards that
+    # passed keep their evidence in an earlier attempt. Each shard counts its
+    # latest attempt: the aggregator's gate already required every shard job
+    # to succeed, and a successful job uploads its own attempt's evidence.
+    candidates = {}
+    for path in paths:
+        report = read_json(path)
+        attempt = run_attempt(read_json(path.parent / "metadata.json"))
+        candidates.setdefault((report["kind"], report["index"], report["count"]), []).append(
+            (attempt, path, report))
+    kept = []
+    for shard in candidates.values():
+        attempts = [attempt for attempt, _, _ in shard]
+        require(len(set(attempts)) == len(attempts), "duplicate shard evidence in one attempt")
+        kept.append(max(shard, key=lambda candidate: candidate[0]))
+    if os.environ.get("GITHUB_RUN_ATTEMPT"):
+        current = int(os.environ["GITHUB_RUN_ATTEMPT"])
+        require(all(attempt <= current for attempt, _, _ in kept), "evidence belongs to a later attempt")
+    return [path for _, path, _ in kept], [report for _, _, report in kept]
+
+
 def verify_reports(paths):
     require(paths, "missing shard reports")
-    reports = [read_json(path) for path in paths]
+    paths, reports = latest_attempts(paths)
     rest = [r for r in reports if r["kind"] == "rest"]
     require(len(rest) == 1, "require exactly one rest shard")
     count = rest[0]["integration_count"]
@@ -218,9 +248,8 @@ def verify_reports(paths):
     identity = read_json(paths[0].parent / "metadata.json")
     require(isinstance(identity, dict) and all(identity.get(k) for k in
             ("tested_commit", "production_tree", "go", "platform")), "missing tested identity")
-    for key in ("GITHUB_RUN_ID", "GITHUB_RUN_ATTEMPT"):
-        if os.environ.get(key):
-            require(identity.get(key) == os.environ[key], "evidence belongs to another run or attempt")
+    if os.environ.get("GITHUB_RUN_ID"):
+        require(identity.get("GITHUB_RUN_ID") == os.environ["GITHUB_RUN_ID"], "evidence belongs to another run")
     if os.environ.get("GITHUB_SHA"):
         require(identity["tested_commit"] == os.environ["GITHUB_SHA"], "evidence tested another commit")
     inventory, cases, partitions = {}, {}, []
@@ -229,7 +258,7 @@ def verify_reports(paths):
         other = read_json(directory / "metadata.json")
         require(all(other.get(k) == identity.get(k) for k in
                     ("tested_commit", "production_tree", "go", "platform", "PR_HEAD", "PR_BASE",
-                     "GITHUB_RUN_ID", "GITHUB_RUN_ATTEMPT", "ImageOS")),
+                     "GITHUB_RUN_ID", "ImageOS")),
                 "evidence identities differ")
         require(read_json(directory / "packages.json") == packages, "inconsistent package inventory")
         require(report["integration_count"] == count, "inconsistent shard count")
@@ -261,11 +290,11 @@ def verify_reports(paths):
     require(all(p == partitions[0] for p in partitions), "inconsistent shard partitions")
     require(set(inventory) == set(packages), "missing package discovery")
     print(f"PASS: accounted for {len(cases)} cases in {len(packages)} packages")
-    return inventory, cases
+    return inventory, cases, identity
 
 
 def compare(args):
-    inventory, observed = verify_reports(args.reports)
+    inventory, observed, identity = verify_reports(args.reports)
     # The independent compiled baseline inventory catches omissions shared by
     # the candidate's discovery and execution, including a whole package.
     baseline_packages = (args.baseline.parent / "packages.txt").read_text().splitlines()
@@ -273,7 +302,6 @@ def compare(args):
             "invalid baseline package inventory")
     expected_inventory = discovery_events(
         read_events(args.baseline.parent / "discovery.jsonl"), baseline_packages)
-    identity = read_json(args.reports[0].parent / "metadata.json")
     baseline_identity = read_json(args.baseline.parent / "metadata.json")
     require(all(identity.get(k) and identity[k] == baseline_identity.get(k) for k in
                 ("production_tree", "go", "platform", "ImageOS")),

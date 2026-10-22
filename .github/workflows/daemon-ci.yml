@@ -294,9 +294,12 @@ jobs:
         env:
           NEEDS: ${{ toJSON(needs) }}
         run: python3 scripts/daemon-test-shards.py gate --needs "$NEEDS" --expected linux-build linux-tests
+      # Every attempt of this run: a failed-jobs rerun leaves the passed
+      # shards' evidence in earlier attempts, and verify counts each shard's
+      # latest attempt.
       - uses: actions/download-artifact@v4
         with:
-          pattern: daemon-linux-*-${{ github.run_id }}-${{ github.run_attempt }}
+          pattern: daemon-linux-*-${{ github.run_id }}-*
           path: evidence
       - name: Verify full default coverage
         run: python3 scripts/daemon-test-shards.py verify evidence/*/execution.json
@@ -312,9 +315,12 @@ jobs:
         env:
           NEEDS: ${{ toJSON(needs) }}
         run: python3 scripts/daemon-test-shards.py gate --needs "$NEEDS" --expected macos-tests
+      # Every attempt of this run: a failed-jobs rerun leaves the passed
+      # shards' evidence in earlier attempts, and verify counts each shard's
+      # latest attempt.
       - uses: actions/download-artifact@v4
         with:
-          pattern: daemon-macos-*-${{ github.run_id }}-${{ github.run_attempt }}
+          pattern: daemon-macos-*-${{ github.run_id }}-*
           path: evidence
       - name: Verify full default coverage
         run: python3 scripts/daemon-test-shards.py verify evidence/*/execution.json
