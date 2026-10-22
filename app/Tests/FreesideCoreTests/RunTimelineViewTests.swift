@@ -621,24 +621,33 @@ import Testing
         let cursors = SyncCursors(
             syncEpoch: "epoch-1", lastFullSnapshotRevision: 10,
             highestObservedServerRevision: 10)
-        let key = RunTimelineView.TimelineRequestKey(snapshot: snapshot, cursors: cursors)
+        func key(
+            cursors: SyncCursors, cacheGeneration: Int = 1
+        ) -> RunTimelineView.TimelineRequestKey {
+            RunTimelineView.TimelineRequestKey(
+                snapshot: snapshot, cursors: cursors, cacheGeneration: cacheGeneration)
+        }
 
-        // Same cursors and snapshot: an adopted-nothing heartbeat leaves the
-        // key unchanged, so the view does not refetch on every beat.
-        #expect(key == RunTimelineView.TimelineRequestKey(snapshot: snapshot, cursors: cursors))
+        // Same cursors, generation, and snapshot: an adopted-nothing
+        // heartbeat leaves the key unchanged, so the view does not refetch
+        // on every beat.
+        #expect(key(cursors: cursors) == key(cursors: cursors))
 
         // A same-epoch bootstrap advances the full-snapshot revision.
         let afterBootstrap = SyncCursors(
             syncEpoch: "epoch-1", lastFullSnapshotRevision: 11,
             highestObservedServerRevision: 11)
-        #expect(
-            key != RunTimelineView.TimelineRequestKey(snapshot: snapshot, cursors: afterBootstrap))
+        #expect(key(cursors: cursors) != key(cursors: afterBootstrap))
 
         // An epoch rotation changes the key even at an equal revision.
         let afterEpoch = SyncCursors(
             syncEpoch: "epoch-2", lastFullSnapshotRevision: 10,
             highestObservedServerRevision: 10)
-        #expect(key != RunTimelineView.TimelineRequestKey(snapshot: snapshot, cursors: afterEpoch))
+        #expect(key(cursors: cursors) != key(cursors: afterEpoch))
+
+        // A bootstrap at an unchanged revision advances only the cache
+        // generation, and drops any read in flight, so the key must change.
+        #expect(key(cursors: cursors) != key(cursors: cursors, cacheGeneration: 2))
     }
 
     private func stage(

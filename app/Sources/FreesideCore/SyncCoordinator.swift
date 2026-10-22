@@ -70,8 +70,10 @@ public final class SyncCoordinator {
     // A successful canonical replacement invalidates partial responses that
     // were issued against the prior cache image. Unlike syncGeneration this
     // token does not advance for an ordinary same-epoch heartbeat, so a lazy
-    // timeline fetch may finish while liveness is being confirmed.
-    private var cacheGeneration = 0
+    // timeline fetch may finish while liveness is being confirmed. The
+    // timeline views key their refetch on it, so a read this drops is
+    // reissued even when the replacement left every revision unchanged.
+    private(set) var cacheGeneration = 0
     private var runListGeneration = 0
     private var timelineGenerations: [String: Int] = [:]
     private var taskTimelineGenerations: [String: Int] = [:]
@@ -711,8 +713,9 @@ public final class SyncCoordinator {
     /// this newest request produces nothing, the load state returns to
     /// `.idle` rather than staying `.loading` with no request in flight,
     /// which is what let the spinner stick after a bootstrap. The view's
-    /// refetch, keyed on the new full-snapshot revision, issues the fresh
-    /// request. `binds` rejects an answer for the wrong entity: the daemon
+    /// refetch, keyed on the cache generation the bootstrap advanced, issues
+    /// the fresh request, even when the bootstrap left every revision
+    /// unchanged. `binds` rejects an answer for the wrong entity: the daemon
     /// responded, so that is a reachable-but-failing read, not silence.
     private func refreshComputedTimeline<Timeline>(
         id: String,
@@ -808,7 +811,7 @@ public final class SyncCoordinator {
         // bootstrap can neither replace nor invalidate a cached one: keep
         // every timeline whose run the snapshot still lists and drop the
         // rest. The view refetches after each replacement (its request key
-        // folds in `lastFullSnapshotRevision`), so holding the prior
+        // folds in `cacheGeneration`), so holding the prior
         // projection until then is the same trust the relaunch path already
         // extends to cached timelines. A live run advances the observed
         // revision every round and so bootstraps every round; discarding the

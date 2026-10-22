@@ -8,19 +8,22 @@ import SwiftUI
 /// nothing here is reversed or sorted by timestamp.
 struct TaskTimelineView: View {
     /// Keys the timeline refetch task, as `RunTimelineView.TimelineRequestKey`
-    /// does: the task's own revision plus the epoch and full-snapshot
-    /// revision, so every same-epoch bootstrap refetches while cached
-    /// content stays on screen.
+    /// does: the task's own revision plus the epoch, full-snapshot revision,
+    /// and cache generation, so every canonical replacement refetches while
+    /// cached content stays on screen, including a bootstrap that dropped a
+    /// read in flight without moving any revision.
     struct TimelineRequestKey: Hashable {
         let taskID: String
         let syncEpoch: String?
         let lastFullSnapshotRevision: Int64?
+        let cacheGeneration: Int
         let revision: Int64
 
-        init(snapshot: Components.Schemas.TaskSnapshot, cursors: SyncCursors?) {
+        init(snapshot: Components.Schemas.TaskSnapshot, cursors: SyncCursors?, cacheGeneration: Int) {
             taskID = snapshot.task.id
             syncEpoch = cursors?.syncEpoch
             lastFullSnapshotRevision = cursors?.lastFullSnapshotRevision
+            self.cacheGeneration = cacheGeneration
             revision = snapshot.as_of_revision
         }
     }
@@ -115,7 +118,10 @@ struct TaskTimelineView: View {
             .timelinePage(compact: horizontalSizeClass == .compact, topMargin: topMargin)
         }
         .navigationTitle(TaskDisplay.projectName(snapshot.task))
-        .task(id: TimelineRequestKey(snapshot: snapshot, cursors: coordinator.cursors)) {
+        .task(
+            id: TimelineRequestKey(
+                snapshot: snapshot, cursors: coordinator.cursors, cacheGeneration: coordinator.cacheGeneration)
+        ) {
             await coordinator.refreshTaskTimeline(for: snapshot.task.id)
         }
         .task(id: coordinator.taskReviewRequestKey(for: snapshot.task.id, revision: snapshot.as_of_revision)) {

@@ -1001,17 +1001,25 @@ import Testing
             TaskFixtures.defaultTasks().first { $0.task.id == TaskFixtures.retryTaskID })
         let cursors = SyncCursors(
             syncEpoch: "epoch-1", lastFullSnapshotRevision: 10, highestObservedServerRevision: 10)
-        let key = TaskTimelineView.TimelineRequestKey(snapshot: snapshot, cursors: cursors)
+        func key(
+            _ snapshot: Components.Schemas.TaskSnapshot, cursors: SyncCursors, cacheGeneration: Int = 1
+        ) -> TaskTimelineView.TimelineRequestKey {
+            TaskTimelineView.TimelineRequestKey(
+                snapshot: snapshot, cursors: cursors, cacheGeneration: cacheGeneration)
+        }
+        let original = key(snapshot, cursors: cursors)
 
-        #expect(key == TaskTimelineView.TimelineRequestKey(snapshot: snapshot, cursors: cursors))
+        #expect(original == key(snapshot, cursors: cursors))
         let afterBootstrap = SyncCursors(
             syncEpoch: "epoch-1", lastFullSnapshotRevision: 11, highestObservedServerRevision: 11)
-        #expect(key != TaskTimelineView.TimelineRequestKey(snapshot: snapshot, cursors: afterBootstrap))
+        #expect(original != key(snapshot, cursors: afterBootstrap))
         let afterEpoch = SyncCursors(
             syncEpoch: "epoch-2", lastFullSnapshotRevision: 10, highestObservedServerRevision: 10)
-        #expect(key != TaskTimelineView.TimelineRequestKey(snapshot: snapshot, cursors: afterEpoch))
+        #expect(original != key(snapshot, cursors: afterEpoch))
         var revised = snapshot
         revised.as_of_revision += 1
-        #expect(key != TaskTimelineView.TimelineRequestKey(snapshot: revised, cursors: cursors))
+        #expect(original != key(revised, cursors: cursors))
+        // A same-revision bootstrap moves only the cache generation.
+        #expect(original != key(snapshot, cursors: cursors, cacheGeneration: 2))
     }
 }

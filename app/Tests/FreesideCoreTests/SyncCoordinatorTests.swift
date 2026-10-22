@@ -1,5 +1,6 @@
 import Foundation
 import FreesideAPI
+import Observation
 import Testing
 
 @testable import FreesideCore
@@ -628,6 +629,107 @@ private final class CountingCacheStore: CacheStore, @unchecked Sendable {
         await refresh.value
 
         #expect(coordinator.timelineLoadStates[RunFixtures.activeRunID] == .idle)
+    }
+
+    /// A blocking system-health item with a backup-encryption waiver, so a
+    /// backup-health change moves `unattended_operation` without moving the
+    /// revision: the heartbeat then bootstraps at an unchanged revision.
+    private func backupWaiverServer() -> MockServer {
+        var item = AttentionFixtures.fixture(type: .system_health)
+        item.item.posture = .init(value1: .blocking)
+        item.item.blocking_supersession = .init(
+            value1: .init(kind: .backup_encryption_waiver, repository_id: 424_242))
+        return MockServer(items: [item])
+    }
+
+    @Test func aRunTimelineReadDroppedByASameRevisionBootstrapIsReissued() async throws {
+        let server = backupWaiverServer()
+        let coordinator = makeCoordinator(server: server)
+        await coordinator.bootstrap()
+        let cursors = coordinator.cursors
+        func requestKey() throws -> RunTimelineView.TimelineRequestKey {
+            let snapshot = try #require(coordinator.runs.first { $0.run.id == RunFixtures.activeRunID })
+            return RunTimelineView.TimelineRequestKey(
+                snapshot: snapshot, cursors: coordinator.cursors, cacheGeneration: coordinator.cacheGeneration)
+        }
+        let keyBefore = try requestKey()
+        let reached = AsyncGate()
+        let release = AsyncGate()
+        await server.setBeforeRespond { operationID in
+            if operationID == "getRunTimeline" {
+                await reached.open()
+                await release.wait()
+            }
+        }
+
+        let refresh = Task { await coordinator.refreshTimeline(for: RunFixtures.activeRunID) }
+        await reached.wait()
+        await server.setBackupHealthy(false)
+        // The view reads the generation in its body; the bootstrap must
+        // notify that read, or the changed key never reaches `.task(id:)`.
+        await confirmation { generationChanged in
+            withObservationTracking {
+                _ = coordinator.cacheGeneration
+            } onChange: {
+                generationChanged()
+            }
+            await coordinator.heartbeat()
+        }
+        await server.setBeforeRespond(nil)
+        await release.open()
+        await refresh.value
+
+        // No revision moved, so only the cache generation tells the view's
+        // `.task(id:)` to reissue the read the bootstrap dropped.
+        #expect(coordinator.cursors == cursors)
+        #expect(coordinator.timelineLoadStates[RunFixtures.activeRunID] == .idle)
+        #expect(try requestKey() != keyBefore)
+        await coordinator.refreshTimeline(for: RunFixtures.activeRunID)
+        #expect(coordinator.timelineLoadStates[RunFixtures.activeRunID] == .loaded)
+
+        // A heartbeat that adopts nothing leaves the key alone, so the view
+        // does not refetch on every beat.
+        let keyAfterReissue = try requestKey()
+        await coordinator.heartbeat()
+        #expect(try requestKey() == keyAfterReissue)
+    }
+
+    @Test func aTaskTimelineReadDroppedByASameRevisionBootstrapIsReissued() async throws {
+        let server = backupWaiverServer()
+        let coordinator = makeCoordinator(server: server)
+        await coordinator.bootstrap()
+        let cursors = coordinator.cursors
+        let taskID = try #require(
+            coordinator.tasks.first { $0.task.run_ids.contains(RunFixtures.activeRunID) }
+        ).task.id
+        func requestKey() throws -> TaskTimelineView.TimelineRequestKey {
+            let snapshot = try #require(coordinator.tasks.first { $0.task.id == taskID })
+            return TaskTimelineView.TimelineRequestKey(
+                snapshot: snapshot, cursors: coordinator.cursors, cacheGeneration: coordinator.cacheGeneration)
+        }
+        let keyBefore = try requestKey()
+        let reached = AsyncGate()
+        let release = AsyncGate()
+        await server.setBeforeRespond { operationID in
+            if operationID == "getTaskTimeline" {
+                await reached.open()
+                await release.wait()
+            }
+        }
+
+        let refresh = Task { await coordinator.refreshTaskTimeline(for: taskID) }
+        await reached.wait()
+        await server.setBackupHealthy(false)
+        await coordinator.heartbeat()
+        await server.setBeforeRespond(nil)
+        await release.open()
+        await refresh.value
+
+        #expect(coordinator.cursors == cursors)
+        #expect(coordinator.taskTimelineLoadStates[taskID] == .idle)
+        #expect(try requestKey() != keyBefore)
+        await coordinator.refreshTaskTimeline(for: taskID)
+        #expect(coordinator.taskTimelineLoadStates[taskID] == .loaded)
     }
 
     @Test func partialRefetchAdvancesOnlyTheObservedCursor() async throws {
