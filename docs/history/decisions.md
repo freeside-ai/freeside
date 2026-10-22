@@ -2972,3 +2972,57 @@ The client work is #1798 to #1803.)
 
 (Proposal of 2026-10-22, decided by the owner at merge;
 [decision note](../../devlog/2026-10-22-1042-execution-hosts.md).)
+
+---
+
+## Revision 95 ("Provider Credentials Injected At The Proxy"):
+
+1. **The writer holds a placeholder.** `subscription_injected` is the end
+   state for provider credentials: the vendor CLI runs unmodified with a
+   per-run placeholder, and the run's daemon-host proxy terminates provider
+   TLS under a per-run CA, substitutes the identity's token on the declared
+   provider authorities and paths only, refuses credential shape anywhere
+   else and every refresh or account path, and records every substitution
+   (Section [5.4](../plan.md#54-credential-modes-egress-profiles-and-concurrency)).
+   Per-run issuance is structural: one proxy per run, mapping discarded at
+   teardown. Registry authorities stay opaque tunnels. No image change: both
+   pinned CLIs trust an operator CA through an additive variable and pin no
+   provider certificate. Rejected: short-lived file-based tokens as the
+   multi-host answer (a file token is usable from any host for its
+   lifetime, however short); a plaintext gateway through the CLIs' base-URL
+   variables (it changes the pinned CLI's own code path; kept as the
+   fallback if a CLI refuses the CA); a daemon-lifetime CA (a durable secret
+   for no gain); setting the replacing trust variables, which would break
+   registry egress.
+2. **A new capability, a new mode.** `supports_proxy_credential_injection`
+   is additive and proven by its own conformance probes;
+   `supports_enforced_provider_egress` keeps its meaning, because persisted
+   admission records re-gate by name. `subscription_injected` is a stronger
+   class than `subscription_contained`, never a silent downgrade of it;
+   `api_key_isolated` reuses the path. Rejected: redefining the egress
+   capability.
+3. **The proxy adds no principal.** The daemon already holds every token,
+   refreshes Codex tokens, composes prompts, and reads transcripts; a
+   compromised proxy is the compromised daemon host. New surface: the
+   daemon's HTTP stack on the writer's bytes, bounded by the contract unit,
+   and a terminating listener that admits only the run's network (Section
+   [5.8](../plan.md#58-control-plane-trust)). The credential volume stays the control
+   plane's at-rest store; an injected run mounts none and no execution host
+   receives one: there the runner terminates under the per-run CA and
+   forwards over the runner session, and the control plane substitutes and
+   originates the provider connection, revision 94's control-plane
+   injection (Section
+   [5.7](../plan.md#57-the-ward-runners-handoff-gate-and-operating-modes), Execution
+   Hosts). Rejected: relaying the writer's opaque TLS bytes to the control
+   plane's listener, which would make that token-holding listener admit
+   remote connections.
+4. **Sequencing.** Two spikes first (#2173, placeholder acceptance and
+   token placement per host and path on the pinned images; #2174, provider
+   acceptance of the daemon's TLS client), then one contract unit (#2175,
+   `starts-after` #397). Phase 2 by default; fiat pulls it forward for the
+   first host the owner does not physically hold, which is the Linux
+   trigger revision 94 names. The owner-held MacBook increment proceeds on
+   `subscription_contained`.
+
+(Proposal of 2026-10-22, decided by the owner at merge;
+[decision note](../../devlog/2026-10-22-1100-proxy-credential-injection.md).)
