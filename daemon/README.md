@@ -1716,6 +1716,39 @@ A `go.mod` or `go.sum` that is missing or not a regular file is refused too.
 The masked-cache probe runs `go mod download` from the module directory and
 passes only on Go's offline refusal.
 
+**A recipe must fit 4 CPUs and 2048 MiB with no network,** whatever its
+toolchain. Every proof container (the offline preflight, the preparation and
+recipe commands, and the masked-cache probe) runs at the verification room's
+default size, `ward.DefaultLaunchSize(LaunchVerification)`. A project's raised
+`execution.verification_cpus` or `execution.verification_memory_mib` raises
+its rooms, never the proof, so a recipe proven here fits any room. The
+margin that matters is unreclaimable memory (`anon`, `shmem`, and `kernel` in
+the cgroup's `memory.stat`): page cache fills the room on every step and is
+reclaimed under pressure, so `memory.peak` sits near the limit whatever the
+recipe does. The recipe sized for Freeside's own daemon module, which passes
+the proof once #2140 fixes its failing tests, is:
+
+```sh
+env GOFLAGS=-p=2 GOMEMLIMIT=768MiB bash scripts/check.sh daemon build test vet lint
+```
+
+`-p=2` halves the compile, vet, and test-package parallelism Go runs on 4
+CPUs, and `GOMEMLIMIT` sets each Go process's heap target, golangci-lint's
+included. Without them, lint's heap reaches the room's limit and the step
+slows under reclaim. Measured at `bee7979b`, one container per step:
+
+| Step | Unreclaimable peak | Wall |
+| --- | --- | --- |
+| build | 774 MiB | 34 s |
+| test | 1201 MiB | 517 s |
+| vet | 1191 MiB | 56 s |
+| lint | 1183 MiB | 158 s |
+
+Each step started from a cold build cache on a loaded host, and `test` still
+fails on the root-sensitive and `ps`-dependent tests #2140 tracks. The
+decision and the rejected options are in
+`devlog/2026-10-22-1241-proof-memory-bound.md`.
+
 If the installation was terminally quarantined, start a fresh native
 installation with `-recover-installation <quarantined-id> -installation-id 0`
 and the ordinary onboarding arguments. Do not combine recovery with `-resume`
@@ -2156,6 +2189,8 @@ such as a tree with both `JSONStream` and `jsonstream`.
 
 The rebuild then runs the builder's own proofs (the networkless positive run
 and the masked-cache probe), records the image, and binds the run to it.
+Those proofs run at the verification room's default size, so the recipe must
+fit 4 CPUs and 2048 MiB even when the project's policy raises its rooms.
 Verification runs in the rebuilt image, still with `--network none`, and the
 verification checkpoint names that image. The admitted image still answers
 whether the run's base is one it serves. A rebuild leaves the admitted image
