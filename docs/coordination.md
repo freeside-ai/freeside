@@ -801,8 +801,7 @@ own additions to that format.
   redraws its diagram, draw `==>` along the longest chain of unmerged units
   linked by `starts-after`, counted in units, and along every chain that
   ties it. A merge doesn't move it, because the format's refresh leaves
-  edges alone. This is a structural stand-in until #674 settles whether an
-  estimate source exists. With no unmerged chain left, draw no thick arrows.
+  edges alone. With no unmerged chain left, draw no thick arrows.
 - **Startable now.** A structural projection: an open unit whose
   `starts-after` prerequisites have all merged and that no fence holds. A
   `stacked-on` unit also needs its named base PR open with any existing
