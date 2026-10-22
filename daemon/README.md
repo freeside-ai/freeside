@@ -1217,10 +1217,12 @@ so an uncommitted edit selects nothing. The flags `-auth-identity`,
 `-review-auth-identity`, `-review-cost-owner`, and `-shadow-review-cost-owner`
 are gone from the daemon and from `preflight`, and so are `-judgment-model`,
 `-review-model`, `-review-reasoning-effort`, `-shadow-review-model`, and
-`-shadow-review-reasoning-effort`: each review role launches with the model
-its agent's offer names and the effort its agent asks. A review role whose
+`-shadow-review-reasoning-effort`: each role launches with the model its
+agent's offer names and the effort its agent asks. A review role whose
 agent names no model, or asks `harness_default`, is refused by name: the
-daemon stops at startup and `preflight` fails until the tree names both.
+daemon stops at startup and `preflight` fails until the tree names both. A
+writer role on such an agent launches with no `--model` or `--effort`, and
+so runs whatever the Claude CLI defaults to; adoption writes no such agent.
 
 `freesided auth adopt` moves an instance that ran on those flags. Stop the
 daemon, then name the identities and cost owners the flags carried:
@@ -1231,8 +1233,11 @@ freesided auth adopt \
   -auth-identity claude-main -cost-owner <cost-owner> -claude-account <subscription-account> \
   -review-auth-identity codex-primary -review-cost-owner <review-cost-owner> \
   -auth-store-root /path/to/freeside/review-inputs \
+  -specifier-model <exact-Claude-model-id> -specifier-effort <effort> \
+  -implementer-model <exact-Claude-model-id> -implementer-effort <effort> \
+  -remediator-model <exact-Claude-model-id> -remediator-effort <effort> \
   -review-model <review-model> -review-effort <effort> \
-  -judgment-model <exact-Claude-model-id> \
+  -judgment-model <exact-Claude-model-id> -judgment-effort <effort> \
   -exporter-image <digest-pinned-exporter-image> \
   -prompt-package <file> -specification-prompt-package <file> \
   -remediation-prompt-package <file> \
@@ -1241,8 +1246,8 @@ freesided auth adopt \
 ```
 
 It enrolls each identity over the store it already holds, writes no
-credential, and emits a patch that adds the baseline tree: the writer agent
-and the review agent, a lineup line for `specifier`, `implementer`,
+credential, and emits a patch that adds the baseline tree: the writer
+agents, the review agent, a lineup line for `specifier`, `implementer`,
 `remediator`, and `reviewer`, and, when `-shadow-review-cost-owner` is given,
 the shadow reviewer's agent and its `shadow_reviewer` line. Review the patch,
 commit it in the checkout, and start the daemon with that commit. The report
@@ -1250,25 +1255,34 @@ lists each identity as `adopted`, `reused`, or `unadoptable`; running the
 command again changes nothing. The review and shadow review configuration
 digests are the ones the flags produced, so existing approvals stand.
 
-Each review agent names the model and the effort its launch passes:
+Each agent names the model and the effort its launch passes:
 
+- **`-specifier-model`, `-implementer-model`, `-remediator-model`, and
+  their `-effort` flags** are required. Writer roles that ask one model and
+  effort share one agent, named `claude-code-<role>` for the first of
+  `specifier`, `implementer`, and `remediator` that asks it, on a pinned
+  offer of the same name whose `route_model_id` is the model and whose
+  `allowed_efforts` hold the effort. One attended mark covers the shared
+  agent's one launch. The patch has no agent on the offer that names no
+  model: a writer launch passes `--model` and `--effort` when its agent
+  names them, so a tree that left either out would run whatever the CLI
+  defaults to.
 - **`-review-model` and `-review-effort`** are required with the review
   identity. The review agent `codex-review-default` is on an offer whose
   `route_model_id` is the model, and asks the effort.
 - **`-shadow-review-model` and `-shadow-review-effort`** are required with
   `-shadow-review-cost-owner` and refused without it. The shadow reviewer's
   agent `claude-shadow-review-default` runs under the implementation
-  identity, on an offer of its own for the model. The writer agent
-  `claude-code-default` stays on the offer that names no model, and its
-  digest does not change.
+  identity, on an offer of its own for the model.
 - **An effort is a Freeside level:** `low`, `medium`, `high`, or `max`.
-  Adoption refuses `harness_default`, because a review launch always passes
+  Adoption refuses `harness_default`, because every baseline launch passes
   an effort. Codex has no `max`, so the review launch sends it as `xhigh`.
   The pinned Codex build passes the value on unchecked, so a model that does
   not accept `xhigh` fails at its first review, not at adoption.
 - **A model is written as given.** Adoption refuses a value the launch
-  cannot pass as one argument, and for the shadow reviewer the id
+  cannot pass as one argument, and for a Claude agent the id
   `claude-code-native-default`, but it does not check that the model exists.
+  Give the exact id the Claude CLI reports.
 
 The review agent runs through the adapter `codex_review_v2`, which can send
 every effort above. `codex_review_v1` sends `harness_default` only; it stays
@@ -1356,9 +1370,39 @@ refused until the tree changes. Before starting the new build:
    review role that still lacks a model or an effort fails it by name, and a
    tree whose lock disagrees with its content is refused.
 
-`-judgment-model` is where the judgment roles get their model. With it, the
-patch also has the call agent `claude-code-call-default`, on an offer of the
-same name whose `route_model_id` is the flag's value, and a lineup line for
+**Upgrade a deployment adopted before the writer roles named a model and an
+effort.** A tree adopted earlier has its three writer lines on the agent
+`claude-code-default`, whose offer `claude-code-native-default` names no
+model and whose effort is `harness_default`, so each writer runs on the
+Claude CLI's own default model. The new build still launches such a tree;
+it is the adoption that changed, and every re-adoption now needs the six
+writer flags, so a deployment doing the review upgrade above or the
+judgment upgrade below does this one in the same run. To move the writers:
+
+1. Run `freesided auth adopt` again with the original adoption's flags plus
+   the six writer flags, and the three dated inputs the committed tree
+   carries (step 3 above). The command reports each identity `reused` and
+   prints the whole baseline tree as a patch of new files.
+2. Take the writer agents' parts from that patch. On a tree with no
+   hand-authored agent, replace the tree with the patch and check that the
+   staged diff changes only what this list names. Otherwise copy each part:
+   - An offer `policy/fragments/offers/<claude-route>/claude-code-<role>`
+     for each distinct model and effort.
+   - The agent `policy/agents/claude-code-<role>` on each, and its mark file
+     `claude-code-<role>.attended`.
+   - The `specifier`, `implementer`, and `remediator` lines in
+     `policy/lineup`.
+   - The `policy/agents.lock` entries for each agent and offer above. The
+     agent `claude-code-default`, the offer `claude-code-native-default`,
+     the mark file, and their lock entries go, unless a hand-authored line
+     still names the agent.
+3. Commit, pass the commit as `-agent-tree-commit`, and run preflight.
+
+`-judgment-model` is where the judgment roles get their model, and
+`-judgment-effort`, required with it and refused without it, their effort.
+With them, the patch also has the call agent `claude-code-call-default`,
+asking the effort, on an offer of the same name whose `route_model_id` is
+the model and whose `allowed_efforts` hold the effort, and a lineup line for
 each judgment role on that agent
 ([Subscription-Backed Daemon Judgments](#subscription-backed-daemon-judgments)).
 Give the exact model id
@@ -1383,7 +1427,8 @@ Before starting the new build:
    `freesided preflight` command lines; both now refuse it as an unknown
    flag.
 2. Run `freesided auth adopt` again with the original adoption's flags plus
-   `-judgment-model <exact-Claude-model-id>`. Pass `-terms-basis-date` with
+   `-judgment-model <exact-Claude-model-id>` and `-judgment-effort
+   <effort>`. Pass `-terms-basis-date` with
    the date the committed route carries (`terms_basis_date` in
    `policy/fragments/routes/<claude-route>`). The flag defaults to today, and
    an agent's digest covers its route, so a call agent adopted under another
@@ -2462,10 +2507,11 @@ The role source hands admission the record that names the resolved adapter's
 digest, and none for any other call adapter, which admission then refuses for
 want of a launch proof. The client admits what the source returns and
 never takes its word, so a test or a later source cannot hand it an admitted
-call. `freesided auth adopt -judgment-model <id>` writes the lines: one per
-judgment role with a built site, on the baseline call agent
-`claude-code-call-default`, whose call adapter pins the audited build and
-whose offer, also `claude-code-call-default`, names `<id>`. Without
+call. `freesided auth adopt -judgment-model <id> -judgment-effort <effort>`
+writes the lines: one per judgment role with a built site, on the baseline
+call agent `claude-code-call-default`, which asks `<effort>`, whose call
+adapter pins the audited build, and whose offer, also
+`claude-code-call-default`, names `<id>` and allows `<effort>`. Without
 `-judgment-model` adoption writes no judgment line. The publication author
 gets its line only when adopt is also given
 `-judgment-publication-author-prompt`. A deployment adopted before these
@@ -2487,9 +2533,10 @@ driver:
   `claude-code-native-default` names no model, and no flag supplies one, so
   admission leaves the role unbound: its sites return their fail-safe, the
   role's `system_health` item says the offer names no model, and preflight
-  fails. A ward role on that offer is unaffected. The baseline call agent is
-  on `claude-code-call-default`, which names the model `auth adopt
-  -judgment-model` was given.
+  fails. A ward role on that offer still launches, with no `--model`;
+  adoption no longer writes one there. The baseline call agent is on
+  `claude-code-call-default`, which names the model `auth adopt
+  -judgment-model` was given, and asks the effort `-judgment-effort` gave.
 - **An effort other than `harness_default` is sent as `--effort <native
   value>`,** translated by the `claude_code` table
   (`domain.TranslateEffort`). `harness_default` sends no `--effort`. The
@@ -2603,9 +2650,11 @@ instead of running every site of that role on its fail-safe. The check reads
 each role's stored credential as the daemon will, so a missing or damaged
 credential volume fails preflight too. `freesided deputy` takes the
 `judgment` settings group together: `claude_bin` and `claude_sha256` become
-the daemon's and preflight's judgment flags, and `model` and
-`publication_author_prompt` go to `auth adopt` as `-judgment-model` and
-`-judgment-publication-author-prompt`.
+the daemon's and preflight's judgment flags, and `model`, `effort`, and
+`publication_author_prompt` go to `auth adopt` as `-judgment-model`,
+`-judgment-effort`, and `-judgment-publication-author-prompt`. The `writers`
+group goes to `auth adopt` the same way: each role's `model` and `effort`
+become its `-<role>-model` and `-<role>-effort`.
 At startup, enabled judgments also require `-judgment-configuration-digest`
 from successful preflight. The deputy supplies it from its launch manifest;
 a configuration change between preflight and startup is refused. The digest

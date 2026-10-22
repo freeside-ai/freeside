@@ -58,19 +58,32 @@ func prompt(name string) agentbaseline.Prompt {
 	return agentbaseline.Prompt{Name: name, Digest: domain.Digest(contentaddr.Sum([]byte(name)))}
 }
 
-// judgmentModel is the model the tests hand adoption for the call offer, and
-// shadowReviewModel the one for the shadow reviewer's offer.
+// judgmentModel is the model the tests hand adoption for the call offer,
+// shadowReviewModel the one for the shadow reviewer's offer, and the two
+// writer models the ones the writer roles ask: the specifier its own, the
+// implementer and remediator one between them.
 const (
 	judgmentModel     = "claude-judgment-test"
 	shadowReviewModel = "claude-shadow-review-test"
+	specifierModel    = "claude-specifier-test"
+	implementerModel  = "claude-implementer-test"
 )
+
+// writers is the writer selection every test starts from.
+func writers() map[domain.RoleName]agentbaseline.Selection {
+	return map[domain.RoleName]agentbaseline.Selection{
+		domain.RoleSpecifier:   {Model: specifierModel, Effort: domain.EffortHigh},
+		domain.RoleImplementer: {Model: implementerModel, Effort: domain.EffortHigh},
+		domain.RoleRemediator:  {Model: implementerModel, Effort: domain.EffortHigh},
+	}
+}
 
 func input(shadow bool) agentbaseline.TreeInput {
 	claude, _ := claudeRecords()
 	codex, _ := codexRecords()
 	in := agentbaseline.TreeInput{
-		ClaudeEnrollment: claude, CodexEnrollment: &codex,
-		ReviewModel: "gpt-5.6-sol", ReviewEffort: domain.EffortMax,
+		ClaudeEnrollment: claude, CodexEnrollment: &codex, Writers: writers(),
+		ReviewModel: "gpt-5.6-sol", ReviewEffort: domain.EffortMax, JudgmentEffort: domain.EffortMedium,
 		TermsBasisDate: "2026-10-01", PricingRevision: "2026-10",
 		OfferNotAfter: time.Date(2027, 10, 1, 0, 0, 0, 0, time.UTC),
 		Prompts: map[domain.RoleName]agentbaseline.Prompt{
@@ -86,7 +99,7 @@ func input(shadow bool) agentbaseline.TreeInput {
 }
 
 // The tree adoption proposes survives its own round trip and resolves its
-// three ward agents against the adopted enrollments.
+// ward agents against the adopted enrollments.
 func TestBaselineTreeRoundTripsAndResolves(t *testing.T) {
 	tree := must(agentbaseline.Tree(input(true)))
 	parsed := must(agenttree.Parse(must(agenttree.Render(tree))))
@@ -94,20 +107,27 @@ func TestBaselineTreeRoundTripsAndResolves(t *testing.T) {
 		t.Fatalf("baseline tree changed across its round trip:\n%+v\n%+v", parsed, tree)
 	}
 	claudeEnrollment, claudeIdentity := claudeRecords()
-	claude := must(parsed.ResolveAgent(agentbaseline.ClaudeAgentName, claudeEnrollment, claudeIdentity))
+	specifier := must(parsed.ResolveAgent(
+		agentbaseline.WriterAgentName(domain.RoleSpecifier), claudeEnrollment, claudeIdentity))
+	claude := must(parsed.ResolveAgent(
+		agentbaseline.WriterAgentName(domain.RoleImplementer), claudeEnrollment, claudeIdentity))
 	codexEnrollment, codexIdentity := codexRecords()
 	codex := must(parsed.ResolveAgent(agentbaseline.CodexReviewAgentName, codexEnrollment, codexIdentity))
 
 	shadow := must(parsed.ResolveAgent(agentbaseline.ClaudeShadowReviewAgentName, claudeEnrollment, claudeIdentity))
 
-	// "The baseline is honest": the writer launch passes neither a model nor
-	// an effort, and each review agent names the model and effort its launch
-	// passes. Codex has no max, so the reviewer's max is sent as xhigh.
+	// Every agent names the model and effort its launch passes. Codex has no
+	// max, so the reviewer's max is sent as xhigh.
 	for _, tc := range []struct {
 		agent agenttree.ResolvedAgent
 		want  domain.AgentLaunchSelection
 	}{
-		{claude, domain.AgentLaunchSelection{}},
+		{specifier, domain.AgentLaunchSelection{
+			RouteModelID: specifierModel, RequestedEffort: domain.EffortHigh, NativeEffort: "high",
+		}},
+		{claude, domain.AgentLaunchSelection{
+			RouteModelID: implementerModel, RequestedEffort: domain.EffortHigh, NativeEffort: "high",
+		}},
 		{codex, domain.AgentLaunchSelection{
 			RouteModelID: "gpt-5.6-sol", RequestedEffort: domain.EffortMax, NativeEffort: "xhigh",
 		}},
@@ -135,7 +155,7 @@ func TestBaselineTreeRoundTripsAndResolves(t *testing.T) {
 
 	lineup := must(parsed.ResolveLineup())
 	want := map[domain.RoleName]domain.Digest{
-		domain.RoleSpecifier: claude.Definition.Digest, domain.RoleImplementer: claude.Definition.Digest,
+		domain.RoleSpecifier: specifier.Definition.Digest, domain.RoleImplementer: claude.Definition.Digest,
 		domain.RoleRemediator: claude.Definition.Digest, domain.RoleReviewer: codex.Definition.Digest,
 		domain.RoleShadowReviewer: shadow.Definition.Digest,
 	}
@@ -151,15 +171,94 @@ func TestBaselineTreeRoundTripsAndResolves(t *testing.T) {
 	}
 }
 
-// The writer roles' agent is the one a deployment adopted before the review
-// agents named a model and an effort: its digest is written out, and neither
-// review input moves it.
-func TestBaselineTreeKeepsTheWriterAgentDigest(t *testing.T) {
-	const adopted = "sha256:80a6fc75affb198ed289cba5888f7a43f507ca252f32d6003b1987152152f711"
-	for _, shadow := range []bool{false, true} {
-		tree := must(agentbaseline.Tree(input(shadow)))
-		if digest := must(tree.AgentDigest(agentbaseline.ClaudeAgentName)); digest != adopted {
-			t.Fatalf("writer agent digest with shadow=%t is %s, want the adopted %s", shadow, digest, adopted)
+// Writer roles that ask one model and effort share one agent, named for the
+// first of them, with one pinned offer and one attended mark; a role asking
+// another pair gets its own. The native-default writer agent is gone: no
+// baseline agent leaves the model to the CLI.
+func TestBaselineTreeSharesAWriterAgentBetweenRolesAskingOnePair(t *testing.T) {
+	tree := must(agentbaseline.Tree(input(false)))
+	var writers []string
+	for _, agent := range tree.Agents {
+		if agent.Adapter == agentbaseline.ClaudeAdapterName {
+			writers = append(writers, agent.Name)
+		}
+	}
+	specifier := agentbaseline.WriterAgentName(domain.RoleSpecifier)
+	implementer := agentbaseline.WriterAgentName(domain.RoleImplementer)
+	if !slices.Equal(writers, []string{implementer, specifier}) {
+		t.Fatalf("writer agents = %v, want the specifier's and the one the implementer and remediator share", writers)
+	}
+	if _, ok := tree.Agent(agentbaseline.ClaudeAgentName); ok {
+		t.Fatal("the native-default writer agent is still emitted")
+	}
+	lineup := must(tree.ResolveLineup())
+	for role, agent := range map[domain.RoleName]string{
+		domain.RoleSpecifier: specifier, domain.RoleImplementer: implementer, domain.RoleRemediator: implementer,
+	} {
+		if line, ok := lineup.Line(role); !ok || line.AgentName != agent {
+			t.Fatalf("line for %s = %+v, %v; want agent %s", role, line, ok, agent)
+		}
+	}
+	for _, offer := range tree.Offers {
+		if offer.Name == agentbaseline.ClaudeOfferName {
+			t.Fatal("the native-default offer is still emitted")
+		}
+		if offer.Name == implementer && (offer.Fragment.RouteModelID != implementerModel ||
+			offer.Fragment.IdentityStability != domain.IdentityPinned ||
+			!slices.Equal(offer.Fragment.AllowedEfforts, []domain.EffortLevel{domain.EffortHigh})) {
+			t.Fatalf("shared writer offer = %+v", offer.Fragment)
+		}
+	}
+	marks := 0
+	for _, mark := range tree.Marks {
+		if mark.Agent == implementer {
+			marks++
+		}
+	}
+	if marks != 1 {
+		t.Fatalf("the shared writer agent carries %d attended marks, want one for its one launch", marks)
+	}
+
+	// Three distinct pairs are three agents, each named for its role.
+	in := input(false)
+	in.Writers[domain.RoleRemediator] = agentbaseline.Selection{Model: implementerModel, Effort: domain.EffortMedium}
+	tree = must(agentbaseline.Tree(in))
+	for _, role := range agentbaseline.WriterRoles {
+		agent, ok := tree.Agent(agentbaseline.WriterAgentName(role))
+		if !ok || agent.Effort != in.Writers[role].Effort {
+			t.Fatalf("agent for %s = %+v, %v", role, agent, ok)
+		}
+	}
+}
+
+// A writer launch passes the agent's model and effort, so the tree refuses
+// a writer selection that names neither instead of writing a line that runs
+// on the CLI's default.
+func TestBaselineTreeRefusesAWriterWithNothingToLaunchWith(t *testing.T) {
+	for name, edit := range map[string]func(map[domain.RoleName]agentbaseline.Selection){
+		"missing role": func(w map[domain.RoleName]agentbaseline.Selection) { delete(w, domain.RoleRemediator) },
+		"empty model": func(w map[domain.RoleName]agentbaseline.Selection) {
+			w[domain.RoleSpecifier] = agentbaseline.Selection{Effort: domain.EffortHigh}
+		},
+		"native default": func(w map[domain.RoleName]agentbaseline.Selection) {
+			w[domain.RoleImplementer] = agentbaseline.Selection{
+				Model: domain.ClaudeCodeNativeDefaultRouteModelID, Effort: domain.EffortHigh,
+			}
+		},
+		"harness_default effort": func(w map[domain.RoleName]agentbaseline.Selection) {
+			w[domain.RoleImplementer] = agentbaseline.Selection{Model: implementerModel, Effort: domain.EffortHarnessDefault}
+		},
+		"empty effort": func(w map[domain.RoleName]agentbaseline.Selection) {
+			w[domain.RoleSpecifier] = agentbaseline.Selection{Model: specifierModel}
+		},
+		"unknown effort": func(w map[domain.RoleName]agentbaseline.Selection) {
+			w[domain.RoleSpecifier] = agentbaseline.Selection{Model: specifierModel, Effort: "xhigh"}
+		},
+	} {
+		in := input(false)
+		edit(in.Writers)
+		if _, err := agentbaseline.Tree(in); err == nil {
+			t.Errorf("%s: tree built", name)
 		}
 	}
 }
@@ -216,8 +315,10 @@ func TestBaselineTreeWithoutShadowArmOrReviewAgent(t *testing.T) {
 	}
 	delete(in.Prompts, domain.RoleReviewer)
 	tree = must(agentbaseline.Tree(in))
-	if len(tree.Agents) != 1 || tree.Agents[0].Name != agentbaseline.ClaudeAgentName {
-		t.Fatalf("agents = %+v", tree.Agents)
+	for _, agent := range tree.Agents {
+		if agent.Adapter != agentbaseline.ClaudeAdapterName {
+			t.Fatalf("agents = %+v, want the writers alone", tree.Agents)
+		}
 	}
 }
 
@@ -251,6 +352,11 @@ func TestBaselineTreeWithoutAJudgmentModelHasNoCallAgent(t *testing.T) {
 	in.JudgmentModel = domain.ClaudeCodeNativeDefaultRouteModelID
 	if _, err := agentbaseline.Tree(in); err == nil {
 		t.Fatal("call offer built on the native-default id")
+	}
+	// A call asks one effort; harness_default would leave it to the CLI.
+	in.JudgmentModel, in.JudgmentEffort = judgmentModel, domain.EffortHarnessDefault
+	if _, err := agentbaseline.Tree(in); err == nil {
+		t.Fatal("call agent built asking harness_default")
 	}
 }
 
@@ -334,7 +440,7 @@ func TestBaselineTreeNamesTheCallAgentForJudgmentRoles(t *testing.T) {
 	tree := must(agenttree.Parse(must(agenttree.Render(must(agentbaseline.Tree(in))))))
 	enrollment, identity := claudeRecords()
 	call := must(tree.ResolveAgent(agentbaseline.ClaudeCallAgentName, enrollment, identity))
-	ward := must(tree.ResolveAgent(agentbaseline.ClaudeAgentName, enrollment, identity))
+	ward := must(tree.ResolveAgent(agentbaseline.WriterAgentName(domain.RoleSpecifier), enrollment, identity))
 	adapter := must(agentbaseline.ClaudeCallAdapter())
 	if call.Adapter.Digest != adapter.Digest || call.Adapter.HarnessBuild != agentbaseline.ClaudeCallHarnessBuild {
 		t.Fatalf("call agent adapter = %+v", call.Adapter)
@@ -343,22 +449,25 @@ func TestBaselineTreeNamesTheCallAgentForJudgmentRoles(t *testing.T) {
 		t.Fatal("the call agent does not share the ward agent's enrollment and route")
 	}
 	if call.Offer.RouteModelID != judgmentModel || call.Offer.IdentityStability != domain.IdentityPinned ||
-		!slices.Equal(call.Offer.AllowedEfforts, []domain.EffortLevel{domain.EffortHarnessDefault}) ||
-		call.Definition.Effort != domain.EffortHarnessDefault {
+		!slices.Equal(call.Offer.AllowedEfforts, []domain.EffortLevel{domain.EffortMedium}) ||
+		call.Definition.Effort != domain.EffortMedium {
 		t.Fatalf("call offer = %+v at effort %s", call.Offer, call.Definition.Effort)
 	}
-	if ward.Offer.RouteModelID != domain.ClaudeCodeNativeDefaultRouteModelID {
-		t.Fatalf("ward offer model %q, want the native default", ward.Offer.RouteModelID)
+	if ward.Offer.RouteModelID != specifierModel {
+		t.Fatalf("ward offer model %q, want the specifier's", ward.Offer.RouteModelID)
 	}
-	// The call launch passes the offer's model and no effort; the ward launch
-	// still passes neither.
+	// Each launch passes its own offer's model and its own agent's effort.
 	callLaunch := must(domain.DeriveAgentLaunchSelection(call.Definition, call.Adapter, call.Offer))
-	if callLaunch != (domain.AgentLaunchSelection{RouteModelID: judgmentModel}) {
-		t.Fatalf("call agent passes %+v, want the model alone", callLaunch)
+	if callLaunch != (domain.AgentLaunchSelection{
+		RouteModelID: judgmentModel, RequestedEffort: domain.EffortMedium, NativeEffort: "medium",
+	}) {
+		t.Fatalf("call agent passes %+v, want the judgment model at medium", callLaunch)
 	}
 	wardLaunch := must(domain.DeriveAgentLaunchSelection(ward.Definition, ward.Adapter, ward.Offer))
-	if wardLaunch != (domain.AgentLaunchSelection{}) {
-		t.Fatalf("ward agent passes %+v, want nothing", wardLaunch)
+	if wardLaunch != (domain.AgentLaunchSelection{
+		RouteModelID: specifierModel, RequestedEffort: domain.EffortHigh, NativeEffort: "high",
+	}) {
+		t.Fatalf("ward agent passes %+v, want the specifier model at high", wardLaunch)
 	}
 	for _, capability := range []domain.LaunchCapability{
 		domain.LaunchCapReadTools, domain.LaunchCapMutationTools, domain.LaunchCapRouteStoreContract,
@@ -541,7 +650,7 @@ func claudeReviewInput() agentbaseline.TreeInput {
 
 // A Claude reviewer (#397) is an agent on the review identity's claude_code
 // enrollment and the Claude ward adapter, on an offer of its own, and the
-// reviewer line names it with an attended mark. The writer agent and the
+// reviewer line names it with an attended mark. The writer agents and the
 // shadow reviewer are unchanged, and the tree has no Codex agent.
 func TestBaselineTreeRunsAClaudeReviewer(t *testing.T) {
 	tree := must(agentbaseline.Tree(claudeReviewInput()))
@@ -550,7 +659,8 @@ func TestBaselineTreeRunsAClaudeReviewer(t *testing.T) {
 		t.Fatalf("baseline tree changed across its round trip:\n%+v\n%+v", parsed, tree)
 	}
 	claudeEnrollment, claudeIdentity := claudeRecords()
-	claude := must(parsed.ResolveAgent(agentbaseline.ClaudeAgentName, claudeEnrollment, claudeIdentity))
+	claude := must(parsed.ResolveAgent(
+		agentbaseline.WriterAgentName(domain.RoleImplementer), claudeEnrollment, claudeIdentity))
 	reviewEnrollment, reviewIdentity := claudeReviewRecords()
 	review := must(parsed.ResolveAgent(agentbaseline.ClaudeReviewAgentName, reviewEnrollment, reviewIdentity))
 	if review.Adapter.Digest != claude.Adapter.Digest || review.Route.Digest != claude.Route.Digest ||
@@ -575,9 +685,15 @@ func TestBaselineTreeRunsAClaudeReviewer(t *testing.T) {
 		parsed.Attended(line.AgentName, line.AgentDigest, launch.Digest) {
 		t.Fatalf("reviewer line = %+v, %v, or it has no attended mark", line, ok)
 	}
-	const adopted = "sha256:80a6fc75affb198ed289cba5888f7a43f507ca252f32d6003b1987152152f711"
-	if digest := must(tree.AgentDigest(agentbaseline.ClaudeAgentName)); digest != adopted {
-		t.Fatalf("writer agent digest is %s, want the adopted %s", digest, adopted)
+	codexLineup := must(must(agentbaseline.Tree(input(true))).ResolveLineup())
+	lineup := must(parsed.ResolveLineup())
+	for _, role := range agentbaseline.WriterRoles {
+		got, _ := lineup.Line(role)
+		want, _ := codexLineup.Line(role)
+		if got.AgentName != want.AgentName || got.AgentDigest != want.AgentDigest {
+			t.Fatalf("%s line under a Claude reviewer = %s %s, want the Codex reviewer tree's %s %s",
+				role, got.AgentName, got.AgentDigest, want.AgentName, want.AgentDigest)
+		}
 	}
 
 	// On the writer's own enrollment the review agent shares its route.

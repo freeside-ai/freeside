@@ -262,15 +262,16 @@ holds the procedure; this section says what makes a pass count.
 2. **Settings that differ only where they must.** Copy the real run's
    settings and change only `listen`, `seed_root`, `repository.*` (the
    disposable repository, its project, base, and allowed paths),
-   `manual_submission_config` (empty), `review.model` and `review.effort`
-   (the lowest-cost model the Codex subscription admits, at `low`),
-   `judgment.model` when the real run sets `judgment` (the lowest-cost
-   Claude model the pinned `judgment.claude_bin` serves), and the
+   `manual_submission_config` (empty), `writers.*` (the lowest-cost Claude
+   model the subscription admits, at `low`, for each writer role),
+   `review.model` and `review.effort` (the lowest-cost model the Codex
+   subscription admits, at `low`), `judgment.model` and `judgment.effort`
+   when the real run sets `judgment` (the lowest-cost Claude model the
+   pinned `judgment.claude_bin` serves, at `low`), and the
    `agent_tree.commit` those values require. The changed models emit a
    different agent tree, so the rehearsal has its own agent-tree commit,
    adopted once through the walkthrough's First Start procedure and reused
-   by later rehearsals. The writer, specifier, and remediator run the pinned
-   default route model, because no setting changes it.
+   by later rehearsals.
 3. **A disposable target.** An issue in a dedicated throwaway repository
    where the `prod` GitHub App is installed (the `freeside-review-challenge`
    precedent, #1275), small enough that a review comes back clean. The same

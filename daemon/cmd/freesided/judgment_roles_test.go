@@ -192,13 +192,13 @@ func TestJudgmentSitesReadTheAdoptedLineup(t *testing.T) {
 		if len(requests) != len(sites) {
 			t.Fatalf("driver saw %d calls, want %d", len(requests), len(sites))
 		}
-		// Every judgment role launches with the model the lineup decides: the
-		// one adoption wrote onto the call offer.
+		// Every judgment role launches with the model and effort the lineup
+		// decides: the ones adoption wrote onto the call offer and agent.
 		launched := map[domain.RoleName]bool{}
 		for _, request := range requests {
 			role, _ := domain.RoleForSite(request.SiteID)
-			if request.Model != adoptJudgmentModel || request.NativeEffort != "" {
-				t.Fatalf("%s launched with model %q effort %q, want the adopted %q and no effort",
+			if request.Model != adoptJudgmentModel || request.NativeEffort != "medium" {
+				t.Fatalf("%s launched with model %q effort %q, want the adopted %q at medium",
 					request.SiteID, request.Model, request.NativeEffort, adoptJudgmentModel)
 			}
 			launched[role] = true
@@ -445,14 +445,32 @@ func TestJudgmentRolesAreOffWithTheFlagsAbsent(t *testing.T) {
 // adoptedBeforeTheCallOffer returns the tree as a deployment adopted before
 // the call offer existed holds it: the call agent on the native-default
 // offer, which names no model, and every judgment line naming that agent.
+// The baseline no longer emits that offer, so it is put back here, shaped
+// as adoption once wrote it.
 func adoptedBeforeTheCallOffer(t *testing.T, tree agenttree.Tree) agenttree.Tree {
 	t.Helper()
-	tree.Agents = slices.Clone(tree.Agents)
+	tree.Agents, tree.Offers = slices.Clone(tree.Agents), slices.Clone(tree.Offers)
 	for i, agent := range tree.Agents {
 		if agent.Name == agentbaseline.ClaudeCallAgentName {
-			tree.Agents[i].Offer = agentbaseline.ClaudeOfferName
+			tree.Agents[i].Offer, tree.Agents[i].Effort = agentbaseline.ClaudeOfferName, domain.EffortHarnessDefault
 		}
 	}
+	call := slices.IndexFunc(tree.Offers, func(o agenttree.Offer) bool {
+		return o.Name == agentbaseline.ClaudeCallOfferName
+	})
+	if call < 0 {
+		t.Fatal("the adopted tree has no call offer")
+	}
+	native := tree.Offers[call]
+	native.Name = agentbaseline.ClaudeOfferName
+	native.Fragment.RouteModelID = domain.ClaudeCodeNativeDefaultRouteModelID
+	native.Fragment.AllowedEfforts = []domain.EffortLevel{domain.EffortHarnessDefault}
+	var err error
+	if native.Fragment.Digest, err = native.Fragment.ComputeDigest(); err != nil {
+		t.Fatal(err)
+	}
+	tree.Offers = append(tree.Offers, native)
+	tree.Sort()
 	digest, err := tree.AgentDigest(agentbaseline.ClaudeCallAgentName)
 	if err != nil {
 		t.Fatal(err)
@@ -577,8 +595,18 @@ func TestJudgmentLinesAdmitOnEachAuditedCallAdapter(t *testing.T) {
 	tree.Adapters = append(slices.Clone(tree.Adapters),
 		agenttree.Adapter{Name: agentbaseline.ClaudeCallAdapterV1Build, Fragment: v1},
 		agenttree.Adapter{Name: unaudited.AdapterBuild, Fragment: unaudited})
+	// The v1 adapter sends harness_default only, which the adopted call
+	// offer no longer allows, so the v1 and unaudited agents sit on an
+	// offer of the adopted model that allows it.
+	const harnessOffer = "call-harness-default"
+	harness := explicit
+	harness.RouteModelID, harness.AllowedEfforts = adoptJudgmentModel, []domain.EffortLevel{domain.EffortHarnessDefault}
+	if harness.Digest, err = harness.ComputeDigest(); err != nil {
+		t.Fatal(err)
+	}
 	tree.Offers = append(slices.Clone(tree.Offers),
-		agenttree.Offer{Route: baseline.Route, Name: explicitOffer, Fragment: explicit})
+		agenttree.Offer{Route: baseline.Route, Name: explicitOffer, Fragment: explicit},
+		agenttree.Offer{Route: baseline.Route, Name: harnessOffer, Fragment: harness})
 	agent := func(name, adapter, offer string, effort domain.EffortLevel) domain.AgentSource {
 		source := baseline
 		source.Name, source.Adapter, source.Offer, source.Effort = name, adapter, offer, effort
@@ -586,9 +614,9 @@ func TestJudgmentLinesAdmitOnEachAuditedCallAdapter(t *testing.T) {
 	}
 	const onV1, onV2, onUnaudited = "call-on-v1", "call-explicit-high", "call-unaudited"
 	tree.Agents = append(slices.Clone(tree.Agents),
-		agent(onV1, agentbaseline.ClaudeCallAdapterV1Build, baseline.Offer, domain.EffortHarnessDefault),
+		agent(onV1, agentbaseline.ClaudeCallAdapterV1Build, harnessOffer, domain.EffortHarnessDefault),
 		agent(onV2, agentbaseline.ClaudeCallAdapterName, explicitOffer, domain.EffortHigh),
-		agent(onUnaudited, unaudited.AdapterBuild, baseline.Offer, domain.EffortHarnessDefault))
+		agent(onUnaudited, unaudited.AdapterBuild, harnessOffer, domain.EffortHarnessDefault))
 	agents := map[domain.RoleName]string{
 		domain.RoleFindingClassifier: onV1, domain.RoleFindingAdjudicator: onV2, domain.RoleDiagnostic: onUnaudited,
 	}
@@ -639,7 +667,7 @@ func TestJudgmentLinesAdmitOnEachAuditedCallAdapter(t *testing.T) {
 		want := map[domain.RoleName]launch{
 			domain.RoleFindingClassifier:  {adoptJudgmentModel, ""},
 			domain.RoleFindingAdjudicator: {explicitModel, "high"},
-			domain.RoleDriftAuditor:       {adoptJudgmentModel, ""},
+			domain.RoleDriftAuditor:       {adoptJudgmentModel, "medium"},
 		}
 		for _, site := range sites {
 			role, _ := domain.RoleForSite(site.ID)
@@ -813,7 +841,7 @@ func TestWriterLineageReadsTheTreeAlone(t *testing.T) {
 	adopted := loadAdoptedPatch(t, patch)
 	want := ""
 	for _, offer := range adopted.Offers {
-		if offer.Name == agentbaseline.ClaudeOfferName {
+		if offer.Name == agentbaseline.WriterAgentName(domain.RoleImplementer) {
 			want = offer.Fragment.LineageGroup
 		}
 	}

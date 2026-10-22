@@ -186,8 +186,34 @@ func (f *authAdoptFixture) deps() authAdoptDeps {
 	}
 }
 
-// adoptJudgmentModel is the model the fixture's adoption gives the call offer.
-const adoptJudgmentModel = "claude-judgment-fixture-1"
+// adoptJudgmentModel is the model the fixture's adoption gives the call
+// offer; adoptSpecifierModel and adoptImplementerModel are the writers',
+// the implementer's shared with the remediator.
+const (
+	adoptJudgmentModel    = "claude-judgment-fixture-1"
+	adoptSpecifierModel   = "claude-specifier-fixture-1"
+	adoptImplementerModel = "claude-implementer-fixture-1"
+)
+
+// adoptWriterArgs are the writer flags every adoption passes: the specifier
+// on its own model, the implementer and remediator on one.
+func adoptWriterArgs() []string {
+	return []string{
+		"-specifier-model", adoptSpecifierModel, "-specifier-effort", "high",
+		"-implementer-model", adoptImplementerModel, "-implementer-effort", "high",
+		"-remediator-model", adoptImplementerModel, "-remediator-effort", "high",
+	}
+}
+
+// adoptWriterLines are the lineup lines the writer flags produce: the
+// remediator shares the implementer's agent.
+func adoptWriterLines() []string {
+	return []string{
+		"specifier=" + agentbaseline.WriterAgentName(domain.RoleSpecifier),
+		"implementer=" + agentbaseline.WriterAgentName(domain.RoleImplementer),
+		"remediator=" + agentbaseline.WriterAgentName(domain.RoleImplementer),
+	}
+}
 
 // args is the adoption of both identities with the shadow arm off; extra
 // flags append, and a later flag overrides an earlier one.
@@ -197,12 +223,13 @@ func (f *authAdoptFixture) args(extra ...string) []string {
 		"-cost-owner", "operator", "-review-cost-owner", "review-operator",
 		"-claude-account", adoptClaudeAccount, "-auth-store-root", f.storeRoot,
 		"-exporter-image", "example.test/exporter@sha256:" + strings.Repeat("0", 64),
-		"-review-model", "gpt-fixture-1", "-review-effort", "high", "-judgment-model", adoptJudgmentModel,
+		"-review-model", "gpt-fixture-1", "-review-effort", "high",
+		"-judgment-model", adoptJudgmentModel, "-judgment-effort", "medium",
 		"-prompt-package", filepath.Join(f.promptDir, "implementer"),
 		"-specification-prompt-package", filepath.Join(f.promptDir, "specifier"),
 		"-remediation-prompt-package", filepath.Join(f.promptDir, "remediator"),
 	}
-	return append(args, extra...)
+	return append(append(args, adoptWriterArgs()...), extra...)
 }
 
 // shadowArgs is args with the shadow arm on: the cost owner that turns it on
@@ -357,18 +384,20 @@ func TestAuthAdoptEnrollsBothIdentitiesAndEmitsAResolvingTree(t *testing.T) {
 	}
 
 	tree := loadAdoptedPatch(t, patch)
-	wantRoles := []string{
-		"specifier=" + agentbaseline.ClaudeAgentName, "implementer=" + agentbaseline.ClaudeAgentName,
-		"remediator=" + agentbaseline.ClaudeAgentName, "reviewer=" + agentbaseline.CodexReviewAgentName,
-	}
+	wantRoles := append(adoptWriterLines(), "reviewer="+agentbaseline.CodexReviewAgentName)
 	wantRoles = append(wantRoles, judgmentLines()...)
 	if got := lineupRoles(tree); !reflect.DeepEqual(got, wantRoles) {
 		t.Fatalf("lineup = %v, want %v", got, wantRoles)
 	}
+	// One mark per ward agent: the two writers and the reviewer.
 	if len(tree.Marks) != 3 {
 		t.Fatalf("attended marks = %+v", tree.Marks)
 	}
-	for i, name := range []string{agentbaseline.ClaudeAgentName, agentbaseline.CodexReviewAgentName} {
+	for name, i := range map[string]int{
+		agentbaseline.WriterAgentName(domain.RoleSpecifier):   0,
+		agentbaseline.WriterAgentName(domain.RoleImplementer): 0,
+		agentbaseline.CodexReviewAgentName:                    1,
+	} {
 		enrollment := after.Enrollments[i]
 		resolved, err := tree.ResolveAgent(name, enrollment, after.identity(t, enrollment.AuthIdentityID))
 		if err != nil {
@@ -376,6 +405,23 @@ func TestAuthAdoptEnrollsBothIdentitiesAndEmitsAResolvingTree(t *testing.T) {
 		}
 		if resolved.Definition.EnrollmentID != enrollment.ID {
 			t.Fatalf("agent %s enrollment = %s", name, resolved.Definition.EnrollmentID)
+		}
+	}
+	// Each writer launches with the model and effort its flags gave it.
+	for role, want := range map[domain.RoleName]string{
+		domain.RoleSpecifier: adoptSpecifierModel, domain.RoleImplementer: adoptImplementerModel,
+	} {
+		resolved, err := tree.ResolveAgent(agentbaseline.WriterAgentName(role),
+			after.Enrollments[0], after.identity(t, after.Enrollments[0].AuthIdentityID))
+		if err != nil {
+			t.Fatal(err)
+		}
+		launch, err := domain.DeriveAgentLaunchSelection(resolved.Definition, resolved.Adapter, resolved.Offer)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if launch != (domain.AgentLaunchSelection{RouteModelID: want, RequestedEffort: domain.EffortHigh, NativeEffort: "high"}) {
+			t.Fatalf("%s launches with %+v, want %s at high", role, launch, want)
 		}
 	}
 }
@@ -414,11 +460,12 @@ func TestAuthAdoptOneIdentityIsOneAdoption(t *testing.T) {
 		"-db", f.dbPath, "-auth-identity", "claude-main", "-review-auth-identity", "claude-main",
 		"-cost-owner", "operator", "-review-cost-owner", "operator", "-claude-account", adoptClaudeAccount,
 		"-exporter-image", "example.test/exporter@sha256:" + strings.Repeat("0", 64),
-		"-judgment-model", adoptJudgmentModel,
+		"-judgment-model", adoptJudgmentModel, "-judgment-effort", "medium",
 		"-prompt-package", filepath.Join(f.promptDir, "implementer"),
 		"-specification-prompt-package", filepath.Join(f.promptDir, "specifier"),
 		"-remediation-prompt-package", filepath.Join(f.promptDir, "remediator"),
 	}
+	args = append(args, adoptWriterArgs()...)
 	report, patch, err := f.run(t, args)
 	if err != nil {
 		t.Fatalf("auth adopt: %v", err)
@@ -430,7 +477,7 @@ func TestAuthAdoptOneIdentityIsOneAdoption(t *testing.T) {
 		t.Fatalf("enrollments = %+v", snap.Enrollments)
 	}
 	tree := loadAdoptedPatch(t, patch)
-	if len(tree.Agents) != 2 || len(tree.Lineup) != 3+len(judgmentLines()) {
+	if len(tree.Agents) != 3 || len(tree.Lineup) != 3+len(judgmentLines()) {
 		t.Fatalf("tree agents = %+v, lineup = %v", tree.Agents, lineupRoles(tree))
 	}
 
@@ -526,8 +573,53 @@ func TestAuthAdoptShadowArm(t *testing.T) {
 	if offer < 0 || tree.Offers[offer].Fragment.RouteModelID != "claude-opus" {
 		t.Fatalf("offers = %+v", tree.Offers)
 	}
-	if writer, ok := tree.Agent(agentbaseline.ClaudeAgentName); !ok || writer.Offer != agentbaseline.ClaudeOfferName {
-		t.Fatalf("writer agent = %+v", writer)
+	writer := agentbaseline.WriterAgentName(domain.RoleImplementer)
+	if agent, ok := tree.Agent(writer); !ok || agent.Offer != writer {
+		t.Fatalf("writer agent = %+v", agent)
+	}
+}
+
+// TestAuthAdoptRefusesAWriterSelectionItCannotWrite covers the refusals that
+// keep adoption from writing a writer agent that would run on the CLI's own
+// default or that the daemon would refuse to launch: a writer launch passes
+// the model and the effort, so every writer role names both. Each is
+// refused before anything is recorded.
+func TestAuthAdoptRefusesAWriterSelectionItCannotWrite(t *testing.T) {
+	f := newAuthAdoptFixture(t)
+	for name, tc := range map[string]struct {
+		extra []string
+		want  string
+	}{
+		"no specifier model":    {[]string{"-specifier-model", ""}, "-specifier-model is required"},
+		"no implementer effort": {[]string{"-implementer-effort", ""}, "-implementer-effort is required"},
+		"no remediator model":   {[]string{"-remediator-model", ""}, "-remediator-model is required"},
+		"the native-default id": {
+			[]string{"-implementer-model", domain.ClaudeCodeNativeDefaultRouteModelID}, "-implementer-model claude-code-native-default names no model",
+		},
+		"an effort the launch cannot pass": {
+			[]string{"-specifier-effort", "harness_default"}, `-specifier-effort "harness_default" is not an effort`,
+		},
+		"an unknown effort": {[]string{"-remediator-effort", "xhigh"}, `-remediator-effort "xhigh" is not an effort`},
+		"a value the launch would read as an option": {
+			[]string{"-specifier-model", "--dangerously-skip-permissions"}, "-specifier-model cannot be passed",
+		},
+		"a value with whitespace": {[]string{"-implementer-model", "claude model"}, "-implementer-model cannot be passed"},
+		"a value with a CLI delimiter": {
+			[]string{"-remediator-model", "claude,opus"}, "-remediator-model cannot be passed",
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			_, patch, err := f.run(t, f.args(tc.extra...))
+			if err == nil || !strings.Contains(err.Error(), tc.want) {
+				t.Fatalf("auth adopt = %v, want an error containing %q", err, tc.want)
+			}
+			if len(patch) != 0 {
+				t.Fatalf("a refused adoption emitted a patch:\n%s", patch)
+			}
+			if snap := f.snapshot(t); len(snap.Enrollments) != 0 {
+				t.Fatalf("a refused adoption recorded %+v", snap.Enrollments)
+			}
+		})
 	}
 }
 
@@ -605,7 +697,7 @@ func TestAuthAdoptRefusesAReviewSelectionItCannotWrite(t *testing.T) {
 // with a built site gets one on the call agent, the publication author only
 // when its prompt file is named, and that line records the file's digest.
 // The call agent is on its own offer, which names the model adoption was
-// given, and the ward agent stays on the native-default offer.
+// given, and the ward agents stay on the writer offers.
 func TestAuthAdoptJudgmentLines(t *testing.T) {
 	f := newAuthAdoptFixture(t)
 	if _, _, err := f.run(t, f.args("-judgment-publication-author-prompt",
@@ -627,10 +719,11 @@ func TestAuthAdoptJudgmentLines(t *testing.T) {
 	}
 	tree := loadAdoptedPatch(t, patch)
 	call, ok := tree.Agent(agentbaseline.ClaudeCallAgentName)
-	if !ok || call.Offer != agentbaseline.ClaudeCallOfferName || call.Effort != domain.EffortHarnessDefault {
+	if !ok || call.Offer != agentbaseline.ClaudeCallOfferName || call.Effort != domain.EffortMedium {
 		t.Fatalf("call agent = %+v, %v", call, ok)
 	}
-	if ward, ok := tree.Agent(agentbaseline.ClaudeAgentName); !ok || ward.Offer != agentbaseline.ClaudeOfferName {
+	specifier := agentbaseline.WriterAgentName(domain.RoleSpecifier)
+	if ward, ok := tree.Agent(specifier); !ok || ward.Offer != specifier {
 		t.Fatalf("ward agent = %+v, %v", ward, ok)
 	}
 	models := map[string]string{}
@@ -641,7 +734,8 @@ func TestAuthAdoptJudgmentLines(t *testing.T) {
 	}
 	if want := map[string]string{
 		agentbaseline.ClaudeCallOfferName: adoptJudgmentModel,
-		agentbaseline.ClaudeOfferName:     domain.ClaudeCodeNativeDefaultRouteModelID,
+		specifier:                         adoptSpecifierModel,
+		agentbaseline.WriterAgentName(domain.RoleImplementer): adoptImplementerModel,
 	}; !reflect.DeepEqual(models, want) {
 		t.Fatalf("Claude offers name models %v, want %v", models, want)
 	}
@@ -670,7 +764,7 @@ func TestAuthAdoptJudgmentLines(t *testing.T) {
 // judgment line, so nothing in it could launch a call with no model.
 func TestAuthAdoptWithoutAJudgmentModelWritesNoJudgmentLines(t *testing.T) {
 	f := newAuthAdoptFixture(t)
-	_, patch, err := f.run(t, f.args("-judgment-model", ""))
+	_, patch, err := f.run(t, f.args("-judgment-model", "", "-judgment-effort", ""))
 	if err != nil {
 		t.Fatalf("auth adopt: %v", err)
 	}
@@ -683,18 +777,16 @@ func TestAuthAdoptWithoutAJudgmentModelWritesNoJudgmentLines(t *testing.T) {
 			t.Fatalf("call offer without -judgment-model: %+v", offer)
 		}
 	}
-	want := []string{
-		"specifier=" + agentbaseline.ClaudeAgentName, "implementer=" + agentbaseline.ClaudeAgentName,
-		"remediator=" + agentbaseline.ClaudeAgentName, "reviewer=" + agentbaseline.CodexReviewAgentName,
-	}
+	want := append(adoptWriterLines(), "reviewer="+agentbaseline.CodexReviewAgentName)
 	if got := lineupRoles(tree); !reflect.DeepEqual(got, want) {
 		t.Fatalf("lineup = %v, want %v", got, want)
 	}
 }
 
-// TestAuthAdoptRefusesAJudgmentModelItCannotWrite covers the three refusals
-// that keep adoption from writing judgment lines that could never admit.
-// Each is refused before anything is recorded.
+// TestAuthAdoptRefusesAJudgmentModelItCannotWrite covers the refusals that
+// keep adoption from writing judgment lines that could never admit, or that
+// would launch at an effort the call agent never asked. Each is refused
+// before anything is recorded.
 func TestAuthAdoptRefusesAJudgmentModelItCannotWrite(t *testing.T) {
 	f := newAuthAdoptFixture(t)
 	authorPrompt := filepath.Join(f.promptDir, "author")
@@ -713,8 +805,13 @@ func TestAuthAdoptRefusesAJudgmentModelItCannotWrite(t *testing.T) {
 			[]string{"-judgment-model", domain.ClaudeCodeNativeDefaultRouteModelID}, "names no model",
 		},
 		"the author prompt with no model": {
-			[]string{"-judgment-model", "", "-judgment-publication-author-prompt", authorPrompt},
+			[]string{"-judgment-model", "", "-judgment-effort", "", "-judgment-publication-author-prompt", authorPrompt},
 			"needs -judgment-model",
+		},
+		"a model with no effort":  {[]string{"-judgment-effort", ""}, "are set together"},
+		"an effort with no model": {[]string{"-judgment-model", ""}, "are set together"},
+		"an effort the call cannot pass": {
+			[]string{"-judgment-effort", "harness_default"}, `-judgment-effort "harness_default" is not an effort`,
 		},
 	} {
 		t.Run(name, func(t *testing.T) {
@@ -800,7 +897,7 @@ func TestAuthAdoptReportsAnUnadoptableReviewIdentity(t *testing.T) {
 					t.Fatalf("enrollments = %+v", after.Enrollments)
 				}
 				tree := loadAdoptedPatch(t, patch)
-				if len(tree.Agents) != 2 || len(tree.Lineup) != 3+len(judgmentLines()) {
+				if len(tree.Agents) != 3 || len(tree.Lineup) != 3+len(judgmentLines()) {
 					t.Fatalf("tree agents = %+v, lineup = %v", tree.Agents, lineupRoles(tree))
 				}
 			})
@@ -1122,8 +1219,10 @@ func TestAuthAdoptClaudeReviewer(t *testing.T) {
 	}
 	tree := loadAdoptedPatch(t, patch)
 	wantRoles := append([]string{
-		"specifier=" + agentbaseline.ClaudeAgentName, "implementer=" + agentbaseline.ClaudeAgentName,
-		"remediator=" + agentbaseline.ClaudeAgentName, "reviewer=" + agentbaseline.ClaudeReviewAgentName,
+		"specifier=" + agentbaseline.WriterAgentName(domain.RoleSpecifier),
+		"implementer=" + agentbaseline.WriterAgentName(domain.RoleImplementer),
+		"remediator=" + agentbaseline.WriterAgentName(domain.RoleImplementer),
+		"reviewer=" + agentbaseline.ClaudeReviewAgentName,
 	}, judgmentLines()...)
 	if got := lineupRoles(tree); !reflect.DeepEqual(got, wantRoles) {
 		t.Fatalf("lineup = %v, want %v", got, wantRoles)

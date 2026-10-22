@@ -533,9 +533,15 @@ func deputyAdoptArgs(settings loadedDeputySettings, paths deputyPaths) []string 
 	if settings.reviewHarness() == domain.HarnessClientCodexCLI {
 		args = append(args, "-auth-store-root", settings.Review.InputRoot)
 	}
+	for _, writer := range settings.writerSelections() {
+		args = append(args,
+			"-"+string(writer.role)+"-model", writer.selection.Model,
+			"-"+string(writer.role)+"-effort", string(writer.selection.Effort))
+	}
 	if settings.Judgment.Model != "" {
 		args = append(args,
 			"-judgment-model", settings.Judgment.Model,
+			"-judgment-effort", string(settings.Judgment.Effort),
 			"-judgment-publication-author-prompt", settings.Judgment.PublicationAuthorPrompt)
 	}
 	return append(args, "-patch", paths.Patch)

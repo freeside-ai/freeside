@@ -58,6 +58,19 @@ var agentTestPrompts = map[domain.RoleName]agentbaseline.Prompt{
 	domain.RoleRemediator:  {Name: "remediator", Digest: agentTestDigest("8")},
 }
 
+// agentTestWriters puts the specifier on its own model and the implementer
+// and remediator on one, so the tree carries two writer agents; the
+// implementer's, agentTestWriterAgent, is the one the tests resolve.
+func agentTestWriters() map[domain.RoleName]agentbaseline.Selection {
+	return map[domain.RoleName]agentbaseline.Selection{
+		domain.RoleSpecifier:   {Model: "claude-specifier-test", Effort: domain.EffortHigh},
+		domain.RoleImplementer: {Model: "claude-implementer-test", Effort: domain.EffortHigh},
+		domain.RoleRemediator:  {Model: "claude-implementer-test", Effort: domain.EffortHigh},
+	}
+}
+
+var agentTestWriterAgent = agentbaseline.WriterAgentName(domain.RoleImplementer)
+
 // newAgentAdmissionFixture seeds an adopted Claude identity whose generation
 // mounts a volume other than the identity's interim one, the baseline tree
 // over it, and the baseline conformance records, and returns an engine that
@@ -131,7 +144,7 @@ func newAgentAdmissionFixture(t *testing.T) *agentAdmissionFixture {
 		t.Fatal(err)
 	}
 	tree, err := agentbaseline.Tree(agentbaseline.TreeInput{
-		ClaudeEnrollment: f.enrollment, TermsBasisDate: "2026-08-01",
+		ClaudeEnrollment: f.enrollment, Writers: agentTestWriters(), TermsBasisDate: "2026-08-01",
 		PricingRevision: "pricing-2026-08", OfferNotAfter: agentTestAt.Add(30 * 24 * time.Hour),
 		Prompts: agentTestPrompts,
 	})

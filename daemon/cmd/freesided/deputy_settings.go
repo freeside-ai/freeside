@@ -89,12 +89,21 @@ type deputySettings struct {
 		Model        string             `json:"model"`
 		Effort       domain.EffortLevel `json:"effort"`
 	} `json:"review"`
+	// Writers is what each writer role launches with: the exact Claude
+	// model id its offer names and the effort it asks. Every role names
+	// both; adoption refuses a tree that would leave either to the CLI.
+	Writers struct {
+		Specifier   deputyWriterSelection `json:"specifier"`
+		Implementer deputyWriterSelection `json:"implementer"`
+		Remediator  deputyWriterSelection `json:"remediator"`
+	} `json:"writers"`
 	// Judgment is all empty (subscription judgments off) or all set.
 	Judgment struct {
-		ClaudeBin               string `json:"claude_bin"`
-		ClaudeSHA256            string `json:"claude_sha256"`
-		Model                   string `json:"model"`
-		PublicationAuthorPrompt string `json:"publication_author_prompt"`
+		ClaudeBin               string             `json:"claude_bin"`
+		ClaudeSHA256            string             `json:"claude_sha256"`
+		Model                   string             `json:"model"`
+		Effort                  domain.EffortLevel `json:"effort"`
+		PublicationAuthorPrompt string             `json:"publication_author_prompt"`
 	} `json:"judgment"`
 	// Prod names the installed prod daemon's App directories, used in place
 	// under the rig lease (#1583), and its binary, whose publication formats
@@ -187,6 +196,28 @@ func readOwnerOnlyFile(path string) ([]byte, error) {
 		return nil, fmt.Errorf("settings: %s exceeds %d bytes", path, maxDeputySettingsBytes)
 	}
 	return body, nil
+}
+
+// deputyWriterSelection is one writer role's model and effort.
+type deputyWriterSelection struct {
+	Model  string             `json:"model"`
+	Effort domain.EffortLevel `json:"effort"`
+}
+
+// writerSelections lists the writer roles' selections by their adoption
+// flag prefix, which is the role name.
+func (s *loadedDeputySettings) writerSelections() []struct {
+	role      domain.RoleName
+	selection deputyWriterSelection
+} {
+	return []struct {
+		role      domain.RoleName
+		selection deputyWriterSelection
+	}{
+		{domain.RoleSpecifier, s.Writers.Specifier},
+		{domain.RoleImplementer, s.Writers.Implementer},
+		{domain.RoleRemediator, s.Writers.Remediator},
+	}
 }
 
 // requireEveryKey refuses an object that omits, or sets to null, any key the
@@ -290,7 +321,15 @@ func (s *loadedDeputySettings) validate() error {
 	if s.Review.Effort == "" {
 		return errors.New("review.effort is required")
 	}
-	judgment := []string{s.Judgment.ClaudeBin, s.Judgment.ClaudeSHA256, s.Judgment.Model, s.Judgment.PublicationAuthorPrompt}
+	for _, writer := range s.writerSelections() {
+		if writer.selection.Model == "" || writer.selection.Effort == "" {
+			return fmt.Errorf("writers.%s.model and writers.%s.effort are required", writer.role, writer.role)
+		}
+	}
+	judgment := []string{
+		s.Judgment.ClaudeBin, s.Judgment.ClaudeSHA256, s.Judgment.Model, string(s.Judgment.Effort),
+		s.Judgment.PublicationAuthorPrompt,
+	}
 	set := 0
 	for _, value := range judgment {
 		if value != "" {

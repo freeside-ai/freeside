@@ -10,6 +10,7 @@ import (
 	"os"
 	"path/filepath"
 	"slices"
+	"strings"
 	"time"
 
 	"github.com/freeside-ai/freeside/daemon/internal/agentbaseline"
@@ -66,10 +67,17 @@ type authAdoptConfig struct {
 	// The daemon's three prompt-package files; the lineup lines record their
 	// digests. The review prompt is code-owned and needs no file.
 	PromptPackage, SpecificationPromptPackage, RemediationPromptPackage string
-	// JudgmentModel is the exact Claude model id the call offer names. The
-	// daemon has no flag for it: a judgment call launches with the model its
-	// lineup line's offer names. Empty means no judgment lines.
-	JudgmentModel string
+	// Writers is what each writer role's agent launches with: the exact
+	// Claude model id its offer names and the effort it asks. Every writer
+	// role is required, because a writer launch passes both and the tree
+	// refuses a line that would leave either to the CLI.
+	Writers map[domain.RoleName]agentbaseline.Selection
+	// JudgmentModel is the exact Claude model id the call offer names, and
+	// JudgmentEffort the effort every judgment call asks. The daemon has no
+	// flag for either: a judgment call launches with what its lineup line's
+	// agent and offer name. An empty model means no judgment lines.
+	JudgmentModel  string
+	JudgmentEffort domain.EffortLevel
 	// JudgmentPublicationAuthorPrompt is the daemon's flag of the same name.
 	// The other judgment roles' prompts are code-owned and need no file.
 	JudgmentPublicationAuthorPrompt string
@@ -266,8 +274,9 @@ func runAuthAdoptCommand(
 		ClaudeReviewEnrollment: claudeReviewEnrollment,
 		ReviewModel:            cfg.ReviewModel, ReviewEffort: cfg.ReviewEffort,
 		ShadowReviewModel: cfg.ShadowReviewModel, ShadowReviewEffort: cfg.ShadowReviewEffort,
-		JudgmentModel: cfg.JudgmentModel, TermsBasisDate: cfg.TermsBasisDate,
-		PricingRevision: cfg.PricingRevision, OfferNotAfter: notAfter, Prompts: prompts,
+		Writers: cfg.Writers, JudgmentModel: cfg.JudgmentModel, JudgmentEffort: cfg.JudgmentEffort,
+		TermsBasisDate: cfg.TermsBasisDate, PricingRevision: cfg.PricingRevision,
+		OfferNotAfter: notAfter, Prompts: prompts,
 	})
 	if err != nil {
 		return err
@@ -459,7 +468,10 @@ func readBoundedFile(path string, limit int64) ([]byte, error) {
 }
 
 func parseAuthAdoptConfig(args []string, stderr io.Writer, now time.Time) (authAdoptConfig, error) {
-	cfg := authAdoptConfig{ApprovedRecipes: digestSetFlag{}}
+	cfg := authAdoptConfig{
+		ApprovedRecipes: digestSetFlag{},
+		Writers:         make(map[domain.RoleName]agentbaseline.Selection, len(agentbaseline.WriterRoles)),
+	}
 	flags := flag.NewFlagSet("freesided auth adopt", flag.ContinueOnError)
 	flags.SetOutput(stderr)
 	flags.StringVar(&cfg.DBPath, "db", "", "SQLite database path (required)")
@@ -480,17 +492,35 @@ func parseAuthAdoptConfig(args []string, stderr io.Writer, now time.Time) (authA
 		"private root containing the review identity's live Codex auth store")
 	flags.StringVar(&cfg.ClaudeRoute, "claude-route", agentbaseline.DefaultClaudeRoute, "route name for the Claude enrollment")
 	flags.StringVar(&cfg.CodexRoute, "codex-route", agentbaseline.DefaultCodexRoute, "route name for the Codex enrollment")
+	for _, role := range agentbaseline.WriterRoles {
+		flags.Func(string(role)+"-model",
+			fmt.Sprintf("exact Claude model id the %s's offer names (required)", role),
+			func(model string) error {
+				selection := cfg.Writers[role]
+				selection.Model = model
+				cfg.Writers[role] = selection
+				return nil
+			})
+		flags.Func(string(role)+"-effort",
+			fmt.Sprintf("effort the %s asks, one of %v (required)", role, explicitEfforts),
+			func(effort string) error {
+				selection := cfg.Writers[role]
+				selection.Effort = domain.EffortLevel(effort)
+				cfg.Writers[role] = selection
+				return nil
+			})
+	}
 	flags.StringVar((*string)(&cfg.ReviewHarness), "review-harness", string(domain.HarnessClientCodexCLI),
 		"harness the reviewer runs: codex_cli adopts the review identity's Codex store, "+
 			"claude_code its setup-token volume")
 	flags.StringVar(&cfg.ReviewModel, "review-model", "",
 		"model the review agent's offer names: a Codex model, or the exact Claude model id under -review-harness claude_code")
 	flags.StringVar((*string)(&cfg.ReviewEffort), "review-effort", "",
-		fmt.Sprintf("effort the review agent asks, one of %v", reviewEfforts))
+		fmt.Sprintf("effort the review agent asks, one of %v", explicitEfforts))
 	flags.StringVar(&cfg.ShadowReviewModel, "shadow-review-model", "",
 		"exact Claude model id the shadow review offer names; set exactly while the shadow arm is on")
 	flags.StringVar((*string)(&cfg.ShadowReviewEffort), "shadow-review-effort", "",
-		fmt.Sprintf("effort the shadow review agent asks, one of %v; set exactly while the shadow arm is on", reviewEfforts))
+		fmt.Sprintf("effort the shadow review agent asks, one of %v; set exactly while the shadow arm is on", explicitEfforts))
 	flags.StringVar(&cfg.TermsBasisDate, "terms-basis-date", now.Format(time.DateOnly),
 		"date of the operator's terms basis for both routes")
 	flags.StringVar(&cfg.PricingRevision, "pricing-revision", now.Format("2006-01"), "pricing revision authored onto both offers")
@@ -504,6 +534,8 @@ func parseAuthAdoptConfig(args []string, stderr io.Writer, now time.Time) (authA
 	flags.StringVar(&cfg.JudgmentModel, "judgment-model", "",
 		"exact Claude model id the call offer names, which every judgment call launches with "+
 			"(optional; without it the patch has no judgment lines)")
+	flags.StringVar((*string)(&cfg.JudgmentEffort), "judgment-effort", "",
+		fmt.Sprintf("effort every judgment call asks, one of %v; set exactly with -judgment-model", explicitEfforts))
 	flags.StringVar(&cfg.JudgmentPublicationAuthorPrompt, "judgment-publication-author-prompt", "",
 		"the daemon's -judgment-publication-author-prompt (optional, and needs -judgment-model; "+
 			"without it the publication author gets no line)")
@@ -543,8 +575,11 @@ func parseAuthAdoptConfig(args []string, stderr io.Writer, now time.Time) (authA
 	if err := validateReviewHarness(cfg, oneIdentity); err != nil {
 		return authAdoptConfig{}, err
 	}
+	if err := validateWriterSelections(cfg.Writers); err != nil {
+		return authAdoptConfig{}, err
+	}
 	if cfg.ReviewEffort != "" {
-		if err := validateReviewEffort("review-effort", cfg.ReviewEffort); err != nil {
+		if err := validateExplicitEffort("review-effort", cfg.ReviewEffort); err != nil {
 			return authAdoptConfig{}, err
 		}
 	}
@@ -564,6 +599,17 @@ func parseAuthAdoptConfig(args []string, stderr io.Writer, now time.Time) (authA
 	if cfg.JudgmentModel == domain.ClaudeCodeNativeDefaultRouteModelID {
 		return authAdoptConfig{}, fmt.Errorf(
 			"-judgment-model %s names no model: give the exact Claude model id", cfg.JudgmentModel)
+	}
+	// A call launch passes the effort too, so the call agent asks one; the
+	// effort is meaningless without the model it launches beside.
+	if (cfg.JudgmentModel == "") != (cfg.JudgmentEffort == "") {
+		return authAdoptConfig{}, errors.New(
+			"-judgment-model and -judgment-effort are set together: a judgment call launches with both")
+	}
+	if cfg.JudgmentEffort != "" {
+		if err := validateExplicitEffort("judgment-effort", cfg.JudgmentEffort); err != nil {
+			return authAdoptConfig{}, err
+		}
 	}
 	if cfg.JudgmentPublicationAuthorPrompt != "" && cfg.JudgmentModel == "" {
 		return authAdoptConfig{}, errors.New(
@@ -611,19 +657,54 @@ func validateReviewHarness(cfg authAdoptConfig, oneIdentity bool) error {
 	return fmt.Errorf("-review-harness %q is not codex_cli or claude_code", cfg.ReviewHarness)
 }
 
-// reviewEfforts are the efforts a review agent can ask: every Freeside level
-// but harness_default, which sends no effort, and a review launch always
-// passes one.
-var reviewEfforts = slices.DeleteFunc(slices.Clone(domain.AllEffortLevels), func(effort domain.EffortLevel) bool {
+// explicitEfforts are the efforts a baseline agent can ask: every Freeside
+// level but harness_default, which sends no effort, and every baseline
+// launch passes one.
+var explicitEfforts = slices.DeleteFunc(slices.Clone(domain.AllEffortLevels), func(effort domain.EffortLevel) bool {
 	return effort == domain.EffortHarnessDefault
 })
 
-func validateReviewEffort(flagName string, effort domain.EffortLevel) error {
-	if !slices.Contains(reviewEfforts, effort) {
-		return fmt.Errorf("-%s %q is not an effort a review launch can pass: give one of %v",
-			flagName, effort, reviewEfforts)
+func validateExplicitEffort(flagName string, effort domain.EffortLevel) error {
+	if !slices.Contains(explicitEfforts, effort) {
+		return fmt.Errorf("-%s %q is not an effort a launch can pass: give one of %v",
+			flagName, effort, explicitEfforts)
 	}
 	return nil
+}
+
+// validateWriterSelections holds every writer role to a model and an effort
+// the writer launch can pass. A writer launch passes both, so a role with
+// either missing would write a line that runs on the CLI's own default,
+// which is the selection the baseline exists to replace.
+func validateWriterSelections(writers map[domain.RoleName]agentbaseline.Selection) error {
+	for _, role := range agentbaseline.WriterRoles {
+		selection := writers[role]
+		if selection.Model == "" {
+			return fmt.Errorf("-%s-model is required", role)
+		}
+		if selection.Effort == "" {
+			return fmt.Errorf("-%s-effort is required", role)
+		}
+		if selection.Model == domain.ClaudeCodeNativeDefaultRouteModelID {
+			return fmt.Errorf("-%s-model %s names no model: give the exact Claude model id", role, selection.Model)
+		}
+		if !validClaudeLaunchModel(selection.Model) {
+			return fmt.Errorf("-%s-model cannot be passed to the writer launch as one option value", role)
+		}
+		if err := validateExplicitEffort(string(role)+"-effort", selection.Effort); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// validClaudeLaunchModel reports whether a Claude writer launch can pass the
+// model as one --model value: the shape every launch value has, and the
+// launch's own rule against a CLI delimiter (exec/claude refuses a comma
+// rather than escaping it). Adoption holds its flags to it so a tree it
+// wrote is never refused at launch for its model's shape.
+func validClaudeLaunchModel(model string) bool {
+	return inference.ValidLaunchValue(model) && !strings.Contains(model, ",")
 }
 
 // validateShadowReviewSelection holds the shadow reviewer's model and effort
@@ -641,7 +722,7 @@ func validateShadowReviewSelection(cfg authAdoptConfig) error {
 		return errors.New(
 			"-shadow-review-model and -shadow-review-effort are required with -shadow-review-cost-owner")
 	}
-	if err := validateReviewEffort("shadow-review-effort", cfg.ShadowReviewEffort); err != nil {
+	if err := validateExplicitEffort("shadow-review-effort", cfg.ShadowReviewEffort); err != nil {
 		return err
 	}
 	if cfg.ShadowReviewModel == domain.ClaudeCodeNativeDefaultRouteModelID {

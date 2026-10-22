@@ -1645,10 +1645,11 @@ asks work from by role name, judgment roles included, and never a stage name,
 so the first real lineup needs no key migration. The flags, the judgment and
 review flags among them, are removed once every such role admits.
 
-The baseline is honest: today's Claude path passes neither a model nor an effort
-flag, so its offer is `claude-code-native-default` with `identity_stability`
-rolling-or-opaque and `effort harness_default`. Choosing an explicit Claude
-model later is a change, not migration.
+The baseline is honest: each writer agent's offer names the exact Claude model
+its launch passes and the agent asks the effort it passes, both given to
+adoption per writer role, so no baseline agent sits on
+`claude-code-native-default`, the offer that leaves the model to the CLI.
+Making the writers explicit was a change, not migration (#1616).
 
 The cutover rules of revision 36 carry forward unchanged. A nonterminal run or
 admission that carries an `auth_identity_id` but no agent digest is read under a

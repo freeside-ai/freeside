@@ -65,8 +65,8 @@ func (f *agentAdmissionFixture) addSecondAgent(t *testing.T) (domain.AuthIdentit
 	tree := f.selection.Tree
 	tree.Agents = append(slices.Clone(tree.Agents), domain.AgentSource{
 		Name: agentTestSecondAgent, Enrollment: string(enrollment.ID), Route: enrollment.Route,
-		Adapter: agentbaseline.ClaudeAdapterName, Offer: agentbaseline.ClaudeOfferName,
-		Effort: domain.EffortHarnessDefault,
+		Adapter: agentbaseline.ClaudeAdapterName, Offer: agentTestWriterAgent,
+		Effort: domain.EffortHigh,
 	})
 	tree.Sort()
 	files, err := agenttree.Render(tree)
@@ -247,7 +247,7 @@ func TestTaskLineAdmissionReadsTheCurrentLineOfItsRole(t *testing.T) {
 	t.Run("the latest version wins", func(t *testing.T) {
 		f := newAgentAdmissionFixture(t)
 		_, enrollment := f.addSecondAgent(t)
-		first := f.submitLine(t, domain.RoleImplementer, agentbaseline.ClaudeAgentName)
+		first := f.submitLine(t, domain.RoleImplementer, agentTestWriterAgent)
 		second := f.submitLine(t, domain.RoleImplementer, agentTestSecondAgent)
 		if second.Version != 2 || second.PredecessorID == nil || *second.PredecessorID != first.ID {
 			t.Fatalf("second line = %+v, want version 2 superseding %s", second, first.ID)
@@ -264,7 +264,7 @@ func TestTaskLineAdmissionReadsTheCurrentLineOfItsRole(t *testing.T) {
 
 	t.Run("a line names the lineup's own agent", func(t *testing.T) {
 		f := newAgentAdmissionFixture(t)
-		line := f.submitLine(t, domain.RoleImplementer, agentbaseline.ClaudeAgentName)
+		line := f.submitLine(t, domain.RoleImplementer, agentTestWriterAgent)
 		admission, admitted, err := f.admit(t)
 		if err != nil || !admitted {
 			t.Fatalf("admitAttempt = %t, %v", admitted, err)
@@ -489,7 +489,7 @@ func TestTaskLinesLeaveLineupOnlyRolesAlone(t *testing.T) {
 		f.submitLine(t, role, agentTestSecondAgent)
 	}
 	tree := f.selection.Tree
-	digest, err := tree.AgentDigest(agentbaseline.ClaudeAgentName)
+	digest, err := tree.AgentDigest(agentTestWriterAgent)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -499,7 +499,7 @@ func TestTaskLinesLeaveLineupOnlyRolesAlone(t *testing.T) {
 		tree.Lineup = append(tree.Lineup, agenttree.LineupLine{
 			Key: string(role),
 			Selection: domain.LineupSelection{
-				AgentName: agentbaseline.ClaudeAgentName, AgentDigest: digest,
+				AgentName: agentTestWriterAgent, AgentDigest: digest,
 				PromptName: "lineup-only", PromptDigest: prompt,
 			},
 		})
@@ -509,7 +509,7 @@ func TestTaskLinesLeaveLineupOnlyRolesAlone(t *testing.T) {
 		if err != nil {
 			t.Fatalf("ResolveRole(%s) = %v", role, err)
 		}
-		if agent.TaskLine != nil || agent.Line.AgentName != agentbaseline.ClaudeAgentName ||
+		if agent.TaskLine != nil || agent.Line.AgentName != agentTestWriterAgent ||
 			agent.Enrollment.ID != f.enrollment.ID {
 			t.Fatalf("%s resolved %+v under %s, want the lineup's agent", role, agent.Line, agent.Enrollment.ID)
 		}
