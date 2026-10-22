@@ -15,8 +15,7 @@ follow this full sequence:
 
    When the project's reviewer record is `none` (§reviewer-record), start no
    watch, so steps 2 and 6 have none to anchor or close. Don't scan past PRs
-   for a reviewer; the human reviewer reviews at handoff. Say in the handoff
-   summary that the record skipped the watch.
+   for a reviewer; the human reviewer reviews at handoff.
 
    Before choosing a method, check whether a review-watch skill is installed,
    such as `await-pr-review`: list the available skills or look in the
@@ -53,7 +52,7 @@ follow this full sequence:
    before and after the rebase. Record what the resolution changed in the PR's
    Verification section.
 
-   Record the base commit in the PR's Verification section or in the handoff.
+   Record the base commit in the handoff, not the PR body.
    If the base moves before approval, the landing check decides who refreshes.
    A merge queue or land command tests the PR combined with the tip it selects
    and reruns CI there, so leave the PR waiting. Refresh only when the lander
@@ -91,9 +90,47 @@ follow this full sequence:
    step 7. A blocker in that review reopens fix rounds. If it has none, defer
    or decline its findings and do not push again.
 
-7. **Stop and summarize.** State that the PR is open and green. Name anything
-   the reviewer should inspect closely. Leave merging, branch cleanup, and
-   `main` resync to the approver.
+7. **Stop and report.** End the turn with this report as its final message.
+   Give the parts below in this order, each with its bold lead words, and use
+   no headings or tables. Aim for 60 to 120 words. Omit a part only where its
+   rule says so.
+
+   1. **Status.** One line: the PR link once, the base commit from step 3,
+      then "open and green, ready to merge." When it isn't, say what is red
+      or conflicting and what you are doing about it; never present a red or
+      conflicting PR as ready. Name any open sibling PR that touches the same
+      files, and the landing order. For a stack, write one Status line per PR.
+   2. **Result.** One or two sentences on what the change does once merged, in
+      behavior terms. List no files, commits, or "what changed" bullets; the
+      PR body carries them.
+   3. **Your call.** Up to three bullets, each a choice the owner can veto,
+      with the default named: a departure from the issue or plan, an
+      assumption, or a finding declined on judgment. Omit when none.
+   4. **Left for you.** Up to three bullets on what the owner must do besides
+      merge. Each is a thread that needs their word, a check only they can
+      run, a follow-up filed as #N or still to file, or a sibling PR to
+      refresh after this one lands. Omit when none.
+   5. **Skipped.** Up to two bullets, each a workflow step not run and why:
+      the review watch a `none` reviewer record skipped (step 1), screenshots
+      not captured or not uploaded (with the error), or a check not run. Omit
+      when none.
+
+   Leave out what the PR, its threads, and CI already show. That covers check
+   names and counts, the review exchange, other SHAs, and head or audit lines.
+   It also covers the worktree path, branch cleanup, the decision note, the
+   fresh-session reminder for review rounds, and "I left it unmerged."
+   Leave merging, branch cleanup, and `main` resync to the approver.
+
+   Three platform gates apply:
+
+   - **Last message.** Where the platform can end a turn on background work,
+     such as a review watch, the report must still be the last message the
+     owner sees.
+   - **Recap box.** Where the platform shows one, its recap is Status and
+     Result compressed to two sentences. Its question is a pending "Your call"
+     or "Left for you" item, or nothing.
+   - **Task cards.** Where the platform offers task or session cards, propose
+     one only for a "Left for you" item that is a task of its own.
 
    Once the approver approves the PR to land, stop pushing to it unless you
    are the landing batch, which records each push it makes. A landing batch
@@ -362,16 +399,32 @@ A `none` record differs from having no record:
 
 ## pr-body
 
-Use the sections scaffolded by the PR template:
+Use the sections scaffolded by the PR template, in this order: Why, Scope,
+What, Departures, Screenshots, Review Notes, and Verification. Use bold lead
+words inside bullets and no sub-headings. Aim for 150 to 300 words outside
+Screenshots in a typical PR. A longer What is the expected reason to exceed
+that. When a body passes 400 words and the extra words sit elsewhere, say why
+in Review Notes.
 
 - **Why:** Write one to three short sentences about the problem or motivation.
   Link a decision note instead of repeating it. Follow the template's close
   keyword instructions exactly. Use a close keyword for each fully resolved
   issue. Use plain `Refs #N` for related work a human must close.
-- **What:** Use outcome bullets, not a file list. For a multi-commit PR, add a
-  compact map with one bullet per commit or concern. Refer to commits by
-  subject, not SHA, because folded fixes rewrite SHAs. Point to the decision
-  note for rejected options.
+- **Scope:** Write one line naming the areas touched, such as
+  `Scope: api/, daemon/` or `Scope: skills/agent-setup, scripts/`. Include it
+  in every project. It is the reader's fastest size signal, and a project's
+  CI may read it.
+- **What:** Write one outcome bullet per change, in behavior terms: what a
+  user, agent, or caller can now do or see. When the issue has numbered
+  acceptance criteria, write one bullet per criterion in the issue's order, so
+  the reviewer can check them off. Add a change bullet only for an outcome no
+  criterion covers. The list has no cap and sizes itself to the
+  issue. About 25 words is the shape of a bullet, not a limit. Don't list
+  files or map commits here. Point to the decision note for rejected options.
+- **Departures:** Always include this section. Write up to three bullets, or
+  the single word "None". Each bullet names a change from the issue, plan, or
+  contract and why; an addition beyond it; or a criterion left unmet or work
+  left undone, with the issue that tracks it.
 - **Screenshots:** Keep this section only for visible UI work. Before handoff
   and merge, replace it with forge-hosted images or recordings a reviewer can
   see. Local paths, text descriptions, and "checked locally" don't qualify.
@@ -399,17 +452,36 @@ Use the sections scaffolded by the PR template:
   If you can't attach the images, say at handoff what you tried and the error
   it gave, then ask the user to add or confirm them.
 
-- **Review Notes:** Delete this optional section when it adds no routing value.
-  Otherwise, point to important files, review order, mechanical commits, or
-  risky edges.
-- **Verification:** Use required bullets beginning with `Passed:`, `Checked:`,
-  `Attempted:`, or `Not run:`. State what ran and what happened. Include
-  tests, lint, UI fixture or screenshot checks for every affected theme, and
-  schema round-trips when relevant.
+- **Review Notes:** Delete this optional section when it has nothing to add.
+  Otherwise, write up to three bullets. Each names a place to look, such as a
+  file to read first, a mechanical commit to skip, or a risky edge. Or it
+  names a call the reviewer must make, such as an assumption to veto or a
+  criterion to judge. Keep review rounds, folded findings, coordination, and
+  merge-order notes in the threads and on the issue. Add a commit map only for four or more commits
+  or a mechanical commit to skip. Key it by subject, not SHA, because folded
+  fixes rewrite SHAs.
+- **Verification:** Write up to five bullets beginning with `Passed:`,
+  `Checked:`, `Attempted:`, or `Not run:`. List only what CI doesn't show:
+  change-specific checks with counts as deltas, such as "82 to 86 cases";
+  manual or device checks; UI fixture or screenshot checks for every affected
+  theme; and schema round-trips. Add one `Not run:` bullet per check the
+  change needs and couldn't get, never for suites of untouched components.
+  When CI shows everything, write the single bullet `Passed: required checks.`
 
-  Use facts, never "should work". Mark every gap as `Not run:`. Verify factual
-  documentation claims against the code. Scope counts, flags, behaviors, and
-  runtime guarantees precisely. Avoid marketing and competitor put-downs.
+  Use facts, never "should work". Verify factual documentation claims against
+  the code. Scope counts, flags, behaviors, and runtime guarantees precisely.
+  Avoid marketing and competitor put-downs.
+
+Leave these out of the body:
+
+- The inventory of standard checks CI already runs, such as lint, format, and
+  tests.
+- A merge-result audit line, base-commit bullets, and 40-character SHAs. A
+  green required check carries them.
+- Review-round narration, coordination, and merge-order text. The threads and
+  the issue carry them.
+- A commit map for one to three commits, unless one is a mechanical commit to
+  skip. The forge already shows the commits.
 
 ## refute-first
 
