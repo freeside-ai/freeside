@@ -46,6 +46,18 @@
 # xcrun's git through a stable directory containing only git on PATH, with
 # its helpers and config preserved. Other git installations and later steps
 # are unchanged.
+# The test step clears every repository variable git names (rev-parse
+# --local-env-vars), then runs the tests with GIT_DIR naming the linked
+# worktree of a decoy repository, as `git rebase -x` does from a worktree. It
+# fails, printing the difference, when the decoy's .git changed, even if every
+# test passed: a fixture git helper that inherits GIT_* instead of starting
+# from gitenv.Scrubbed() wrote to it. The decoy sits beside the held slot so
+# GIT_DIR stays stable for Go's test cache; without a slot it is a fresh
+# temporary directory. The shard runner passes the environment through to go
+# test unchanged; a change that sanitizes it would disarm this guard. A test
+# result cached by any earlier run, decoy or not, does not rerun, and opt-in
+# live suites skip, so only an uncached run (CI's shards) covers every default
+# test.
 # CI shard runs require all of DAEMON_TEST_SHARD_KIND (rest or integration),
 # DAEMON_TEST_SHARD_INDEX, DAEMON_TEST_SHARD_COUNT, DAEMON_TEST_INTEGRATION_SHARDS,
 # and DAEMON_TEST_EVIDENCE_DIR. Indices are one-based; the rest shard uses 1/1.
@@ -180,6 +192,7 @@ except OSError as e:
         # 3.2 lacks BASHPID; an exec'd child can report its parent's PID.
         pid=${BASHPID:-$(exec sh -c 'echo "$PPID"')}
         printf 'run PID %s: %s\n' "$pid" "$ROOT" >"$file"
+        daemon_test_slot=$file
         return 0
       else
         rc=$?
@@ -245,13 +258,57 @@ daemon_test_use_real_git() {
   export PATH="$dir/bin:$PATH"
 }
 
+# daemon_test_decoy <dir>: builds the decoy under <dir>: a repository with one
+# empty commit and a linked worktree, plus a copy of its .git to compare with.
+# Test builds stamp version control through `git status`, which reads the
+# developer's global config; the local pins keep its index caches from
+# writing to the decoy.
+daemon_test_decoy() {
+  local dir=$1
+  local git=(env GIT_CONFIG_GLOBAL=/dev/null GIT_CONFIG_NOSYSTEM=1 git
+    -c init.defaultBranch=main -c user.name=decoy -c user.email=decoy@test.invalid)
+  rm -rf "$dir" && mkdir -p "$dir" &&
+    "${git[@]}" init -q "$dir/repo" &&
+    "${git[@]}" -C "$dir/repo" config core.untrackedCache false &&
+    "${git[@]}" -C "$dir/repo" config core.fsmonitor false &&
+    "${git[@]}" -C "$dir/repo" config core.splitIndex false &&
+    "${git[@]}" -C "$dir/repo" commit -q --allow-empty -m decoy &&
+    "${git[@]}" -C "$dir/repo" worktree add -q "$dir/wt" -b wt &&
+    cp -R "$dir/repo/.git" "$dir/before"
+}
+
 daemon_test() (
+  local vars decoy rc=0
+  daemon_test_slot=''
   daemon_test_use_real_git
   daemon_test_take_slot
+  # An ambient repository (GIT_DIR from `git rebase -x`) must reach neither
+  # the decoy's setup nor the tests.
+  vars=$(git rev-parse --local-env-vars) || return 1
+  # shellcheck disable=SC2086 # One variable name per line.
+  unset $vars
+  if [[ -n $daemon_test_slot ]]; then
+    decoy=$daemon_test_slot.decoy
+  else
+    decoy=$(mktemp -d "${TMPDIR:-/tmp}/freeside-decoy.XXXXXX") || return 1
+  fi
+  # Each fixture resolves a relative GIT_DIR against its own directory.
+  [[ $decoy == /* ]] || decoy=$PWD/$decoy
+  trap 'rm -rf "$decoy"' EXIT
+  if ! daemon_test_decoy "$decoy"; then
+    echo "daemon test: cannot build the decoy repository in $decoy" >&2
+    return 1
+  fi
   # Bash 3.2 saves a redirection on another descriptor if applied to the
   # function call. Close it inside a subshell so orphaned children can't
   # inherit either the slot descriptor or a saved copy.
-  ( exec 9>&-; daemon_test_run )
+  ( exec 9>&-; export GIT_DIR=$decoy/repo/.git/worktrees/wt; daemon_test_run ) || rc=$?
+  if ! diff -r "$decoy/before" "$decoy/repo/.git" >"$decoy/diff" 2>&1; then
+    echo 'daemon test: a test wrote to the decoy repository through the inherited GIT_DIR; build fixture git environments from gitenv.Scrubbed():' >&2
+    cat "$decoy/diff" >&2
+    ((rc != 0)) || rc=1
+  fi
+  return "$rc"
 )
 daemon_vet() { in_dir "$ROOT/daemon" go vet ./...; }
 daemon_lint() {
