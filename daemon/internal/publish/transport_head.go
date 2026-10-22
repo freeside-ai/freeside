@@ -7,7 +7,10 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
+
+	"github.com/freeside-ai/freeside/daemon/internal/domain"
 )
 
 // ErrRemoteMissingHead is returned when the managed repository's branch
@@ -17,12 +20,25 @@ import (
 // ref, an ancestry exit status), never from a failure's prose.
 var ErrRemoteMissingHead = errors.New("remote branch does not hold the requested head commit")
 
+// ErrReviewedHeadUnavailable is FetchPullHead's class for a failed fetch
+// of the reviewed head by SHA. It names which fetch failed and is not a
+// verdict: a caller skips the rebase proof on it and records nothing.
+var ErrReviewedHeadUnavailable = errors.New("reviewed head could not be fetched")
+
 // ErrMergeConflict is the class a *MergeConflictError matches.
 var ErrMergeConflict = errors.New("prospective merge has conflicts")
 
 // transportHeadRef is where FetchHead lands a pull request's branch. It
 // is private to the checkout like transportBaseRef and never pushed.
 const transportHeadRef = "refs/freeside/head"
+
+// transportPullHeadRef and transportReviewedHeadRef are where
+// FetchPullHead lands the two heads a rebase proof compares, private to
+// the checkout and never pushed like transportHeadRef.
+const (
+	transportPullHeadRef     = "refs/freeside/pull-head"
+	transportReviewedHeadRef = "refs/freeside/reviewed-head"
+)
 
 // checkoutAttributesPath is the checkout's repository-local attributes
 // file, which merge-tree reads even without a working tree.
@@ -45,6 +61,11 @@ const (
 // listing is retained. The tree name leads the output and is far inside
 // the bound, so truncation only ever shortens the list of paths.
 const maxMergeConflictListingBytes = 1 << 20
+
+// maxRangeDiffListingBytes bounds ProveRebase's range-diff listing. A
+// proven listing is one short line per commit; one past the bound is
+// refused rather than read in full.
+const maxRangeDiffListingBytes = 1 << 20
 
 // HeadFetch reports one FetchHead observation.
 type HeadFetch struct {
@@ -120,45 +141,17 @@ func (b *truncatingBuffer) Write(p []byte) (int, error) {
 // must not overlap; the production lane gives every pass its own
 // checkout.
 func (t *Transport) FetchHead(ctx context.Context, co Checkout, branch, headSHA string) (HeadFetch, error) {
-	ref, err := parseTransportRepo(co.repo)
-	if err != nil {
-		return HeadFetch{}, err
-	}
 	if err := ValidateBranchName(branch); err != nil {
 		return HeadFetch{}, fmt.Errorf("head branch %q: %w", branch, err)
 	}
 	if !validCommitSHA(headSHA) {
 		return HeadFetch{}, fmt.Errorf("head %q is not a full commit SHA", headSHA)
 	}
-	scratch, err := os.MkdirTemp("", "freeside-transport-")
-	if err != nil {
-		return HeadFetch{}, fmt.Errorf("create transport scratch: %w", err)
-	}
-	defer os.RemoveAll(scratch) //nolint:errcheck // best-effort scratch cleanup
-	r, err := newNetRunner(t.gitPath, scratch, t.scheme)
+	r, tok, url, cleanup, err := t.authedCheckoutRunner(ctx, co)
 	if err != nil {
 		return HeadFetch{}, err
 	}
-	if err := t.regateCheckout(ctx, r, co); err != nil {
-		return HeadFetch{}, err
-	}
-	tok, err := t.tokens.Token(ctx, co.repo)
-	if err != nil {
-		return HeadFetch{}, err
-	}
-	// Trust continuity, as in PushHead: a name transferred onto another
-	// repository since the base was fetched must not have that
-	// repository's branch fetched into this checkout.
-	if tok.RepositoryID <= 0 {
-		return HeadFetch{}, fmt.Errorf("trusted binding for %s carries no canonical repository id: %w", co.repo, ErrGitTransport)
-	}
-	if co.repositoryID != tok.RepositoryID {
-		return HeadFetch{}, fmt.Errorf(
-			"checkout is bound to repository id %d, trusted binding for %q is %d: %w",
-			co.repositoryID, co.repo, tok.RepositoryID, ErrGitTransport,
-		)
-	}
-	url := t.repoURL(ref)
+	defer cleanup()
 	if _, _, err := r.runAuthed(ctx, tok, fetchHeadArgs(url, branch)...); err != nil {
 		// One bounded structured observation decides whether the branch is
 		// gone; any other failure stays a transport failure the drain may
@@ -202,6 +195,409 @@ func (t *Transport) FetchHead(ctx context.Context, co Checkout, branch, headSHA 
 		return HeadFetch{}, err
 	}
 	return HeadFetch{TipSHA: tip, DescendsFromBase: descends}, nil
+}
+
+// authedCheckoutRunner is the prelude of a fetch into a checkout: it
+// re-gates the checkout, mints the token only after those local gates
+// pass, and holds the minted binding to the repository the checkout was
+// fetched from. The caller runs cleanup when it is done with the runner.
+func (t *Transport) authedCheckoutRunner(
+	ctx context.Context, co Checkout,
+) (r *netRunner, tok InstallationToken, url string, cleanup func(), err error) {
+	ref, err := parseTransportRepo(co.repo)
+	if err != nil {
+		return nil, InstallationToken{}, "", nil, err
+	}
+	scratch, err := os.MkdirTemp("", "freeside-transport-")
+	if err != nil {
+		return nil, InstallationToken{}, "", nil, fmt.Errorf("create transport scratch: %w", err)
+	}
+	cleanup = func() { _ = os.RemoveAll(scratch) } // best-effort scratch cleanup
+	fail := func(err error) (*netRunner, InstallationToken, string, func(), error) {
+		cleanup()
+		return nil, InstallationToken{}, "", nil, err
+	}
+	r, err = newNetRunner(t.gitPath, scratch, t.scheme)
+	if err != nil {
+		return fail(err)
+	}
+	if err := t.regateCheckout(ctx, r, co); err != nil {
+		return fail(err)
+	}
+	tok, err = t.tokens.Token(ctx, co.repo)
+	if err != nil {
+		return fail(err)
+	}
+	// Trust continuity, as in PushHead: a name transferred onto another
+	// repository since the base was fetched must not have that
+	// repository's refs fetched into this checkout.
+	if tok.RepositoryID <= 0 {
+		return fail(fmt.Errorf("trusted binding for %s carries no canonical repository id: %w", co.repo, ErrGitTransport))
+	}
+	if co.repositoryID != tok.RepositoryID {
+		return fail(fmt.Errorf(
+			"checkout is bound to repository id %d, trusted binding for %q is %d: %w",
+			co.repositoryID, co.repo, tok.RepositoryID, ErrGitTransport,
+		))
+	}
+	return r, tok, t.repoURL(ref), cleanup, nil
+}
+
+// FetchPullHead brings into the checkout the two heads a rebase proof
+// compares (issue #2129): headSHA, a head someone else pushed to pull
+// request prNumber, and reviewedHeadSHA, the head Freeside reviewed. A
+// lander that rebases force-pushes the pull request's branch and may
+// delete it after the merge, so neither head is fetched by branch.
+// headSHA comes from the pull request's own ref, which outlives the
+// branch, and must be reachable from it, so a commit that lives only on
+// the base branch is refused with ErrRemoteMissingHead exactly as in
+// FetchHead. reviewedHeadSHA is no longer on any ref the remote
+// advertises, so it is fetched by SHA, which GitHub serves for a commit a
+// pull request once held.
+//
+// A failed fetch of the reviewed head returns ErrReviewedHeadUnavailable.
+// Git reports a refused want and a dropped connection with one exit
+// status, so the class says which fetch failed, never that the remote
+// lacks the commit: a caller may skip the proof on it but must not record
+// a verdict.
+func (t *Transport) FetchPullHead(ctx context.Context, co Checkout, prNumber int, headSHA, reviewedHeadSHA string) error {
+	if prNumber <= 0 {
+		return fmt.Errorf("pull request number %d is not positive", prNumber)
+	}
+	for _, sha := range []string{headSHA, reviewedHeadSHA} {
+		if !validCommitSHA(sha) {
+			return fmt.Errorf("head %q is not a full commit SHA", sha)
+		}
+	}
+	r, tok, url, cleanup, err := t.authedCheckoutRunner(ctx, co)
+	if err != nil {
+		return err
+	}
+	defer cleanup()
+	pullRef := "refs/pull/" + strconv.Itoa(prNumber) + "/head"
+	if _, _, err := r.runAuthed(ctx, tok, fetchPullHeadArgs(url, prNumber)...); err != nil {
+		tip, lsErr := lsRemoteHead(ctx, r, tok, url, pullRef)
+		if lsErr == nil && tip == "" {
+			return fmt.Errorf("remote %s has no %s: %w: %w", co.repo, pullRef, ErrRemoteMissingHead, err)
+		}
+		return err
+	}
+	out, _, err := r.run(ctx, nil, "rev-parse", "--verify", transportPullHeadRef+"^{commit}")
+	if err != nil {
+		return err
+	}
+	tip := strings.TrimSpace(string(out))
+	if !validCommitSHA(tip) {
+		return fmt.Errorf("fetched %s resolved to an invalid object name: %w", pullRef, ErrGitTransport)
+	}
+	present, err := commitPresent(ctx, r, headSHA)
+	if err != nil {
+		return err
+	}
+	if !present {
+		return fmt.Errorf("head %s is not on remote %s: %w", headSHA, pullRef, ErrRemoteMissingHead)
+	}
+	onPull, err := isAncestor(ctx, r, headSHA, tip)
+	if err != nil {
+		return err
+	}
+	if !onPull {
+		return fmt.Errorf("head %s is not reachable from remote %s: %w", headSHA, pullRef, ErrRemoteMissingHead)
+	}
+	if _, _, err := r.runAuthed(ctx, tok, fetchReviewedHeadArgs(url, reviewedHeadSHA)...); err != nil {
+		return fmt.Errorf("fetch reviewed head %s: %w: %w", reviewedHeadSHA, ErrReviewedHeadUnavailable, err)
+	}
+	present, err = commitPresent(ctx, r, reviewedHeadSHA)
+	if err != nil {
+		return err
+	}
+	if !present {
+		return fmt.Errorf("reviewed head %s is not a commit after its fetch: %w", reviewedHeadSHA, ErrReviewedHeadUnavailable)
+	}
+	return nil
+}
+
+// RebaseProof is ProveRebase's verdict on one head.
+type RebaseProof struct {
+	Proven bool
+	// TreeSHA is the tree of the reviewed pair's prospective merge, empty
+	// when the proof failed before it was computed.
+	TreeSHA string
+	// Detail is the first reason the proof failed, empty when Proven. It
+	// may quote one range-diff line, which carries a commit subject from
+	// the pull request's branch, so the line is Go-quoted into ASCII and
+	// the whole detail is cut to domain.WorkUnitRebaseProofDetailLimit.
+	Detail string
+}
+
+// ProveRebase decides whether newHead is reviewedHead rebased onto
+// reviewedBase, with nothing added, dropped, squashed, or reworded:
+// newHead descends from reviewedBase; git range-diff pairs every commit
+// of the reviewed range, in order, with one of the rebased range as
+// identical ("="), so a reflowed message or a resolved conflict is a
+// refusal by design; the rebased range adds no merge commit; each
+// rebased commit changes the same paths as its reviewed pair, to the same
+// contents and modes wherever both start from the same contents, which
+// covers the binary changes range-diff does not compare; and newHead's
+// tree is the tree of the prospective merge the review covered. The
+// checks run in that order after the merge is built, and the first that
+// fails names the refusal. Like ProspectiveMerge the call is
+// local, mints no token, and leaves HEAD at the base; all three commits
+// must already be in the checkout (FetchPullHead brings in the two heads).
+//
+// A refusal is a verdict, returned with a nil error. An error means no
+// verdict was reached; the one exception is a reviewed pair that no
+// longer merges cleanly, which refuses with no tree.
+func (t *Transport) ProveRebase(
+	ctx context.Context, co Checkout, reviewedBase, reviewedHead, newHead string,
+) (RebaseProof, error) {
+	if !validCommitSHA(newHead) {
+		return RebaseProof{}, fmt.Errorf("head %q is not a full commit SHA", newHead)
+	}
+	if newHead == reviewedHead {
+		return RebaseProof{}, fmt.Errorf("head %s is the reviewed head; there is nothing to prove", newHead)
+	}
+	merge, err := t.ProspectiveMergeOnto(ctx, co, reviewedBase, reviewedHead)
+	var conflict *MergeConflictError
+	if errors.As(err, &conflict) {
+		return RebaseProof{Detail: "the reviewed head no longer merges cleanly into the reviewed base"}, nil
+	}
+	if err != nil {
+		return RebaseProof{}, err
+	}
+	scratch, err := os.MkdirTemp("", "freeside-transport-")
+	if err != nil {
+		return RebaseProof{}, fmt.Errorf("create transport scratch: %w", err)
+	}
+	defer os.RemoveAll(scratch) //nolint:errcheck // best-effort scratch cleanup
+	r, err := newNetRunner(t.gitPath, scratch, t.scheme)
+	if err != nil {
+		return RebaseProof{}, err
+	}
+	if err := t.regateCheckout(ctx, r, co); err != nil {
+		return RebaseProof{}, err
+	}
+	tree, err := revParseTree(ctx, r, merge)
+	if err != nil {
+		return RebaseProof{}, err
+	}
+	refuse := func(detail string) (RebaseProof, error) {
+		return RebaseProof{TreeSHA: tree, Detail: truncateDetail(detail)}, nil
+	}
+	present, err := commitPresent(ctx, r, newHead)
+	if err != nil {
+		return RebaseProof{}, err
+	}
+	if !present {
+		return RebaseProof{}, fmt.Errorf("head %s is not a commit in the checkout: %w", newHead, ErrGitTransport)
+	}
+	descends, err := isAncestor(ctx, r, reviewedBase, newHead)
+	if err != nil {
+		return RebaseProof{}, err
+	}
+	if !descends {
+		return refuse("the head does not descend from the reviewed base")
+	}
+	out, _, err := r.run(ctx, nil, "merge-base", reviewedBase, reviewedHead)
+	if err != nil {
+		return RebaseProof{}, err
+	}
+	forkPoint := strings.TrimSpace(string(out))
+	if !validCommitSHA(forkPoint) {
+		return RebaseProof{}, fmt.Errorf("merge-base returned an invalid commit name: %w", ErrGitTransport)
+	}
+	listing := &truncatingBuffer{remaining: maxRangeDiffListingBytes}
+	if err := r.runTo(ctx, listing, rangeDiffArgs(forkPoint, reviewedHead, reviewedBase, newHead)...); err != nil {
+		return RebaseProof{}, err
+	}
+	if listing.truncated {
+		return refuse("the range-diff listing exceeded its bound")
+	}
+	if detail := rangeDiffMismatch(listing.buffer.Bytes()); detail != "" {
+		return refuse(detail)
+	}
+	// range-diff walks without merges and prints "Binary files differ" for
+	// any binary change, so an all-"=" listing still admits a merge commit
+	// over the reviewed commits and a rebased commit whose binary bytes
+	// differ from the reviewed one. Both rewrite reviewed history.
+	merges, _, err := r.run(ctx, nil, rebasedMergesArgs(reviewedBase, newHead)...)
+	if err != nil {
+		return RebaseProof{}, err
+	}
+	if len(bytes.TrimSpace(merges)) != 0 {
+		return refuse("the head adds a merge commit over the reviewed base")
+	}
+	detail, err := rebasedBlobMismatch(ctx, r, forkPoint, reviewedHead, reviewedBase, newHead)
+	if err != nil {
+		return RebaseProof{}, err
+	}
+	if detail != "" {
+		return refuse(detail)
+	}
+	headTree, err := revParseTree(ctx, r, newHead)
+	if err != nil {
+		return RebaseProof{}, err
+	}
+	if headTree != tree {
+		return refuse("the head's tree " + headTree + " is not the reviewed merge tree " + tree)
+	}
+	return RebaseProof{Proven: true, TreeSHA: tree}, nil
+}
+
+// rangeDiffMismatch returns why a range-diff listing does not pair every
+// commit as identical, or "" when it does. Each pairing line reads
+// "<n>:  <sha> <status> <m>:  <sha> <subject>"; any status but "=" fails,
+// and so does a listing with no pairing at all. Only "!" pairings carry
+// indented diff lines, and the first one already fails.
+func rangeDiffMismatch(listing []byte) string {
+	paired := 0
+	for _, line := range strings.Split(string(listing), "\n") {
+		if strings.TrimSpace(line) == "" {
+			continue
+		}
+		fields := strings.Fields(line)
+		if len(fields) < 5 || fields[2] != "=" {
+			return "range-diff does not pair the reviewed commits as identical: " + strconv.QuoteToASCII(line)
+		}
+		// Each reviewed commit must pair with the rebased commit at its
+		// own position: an "=" pairing across positions is a reorder.
+		if fields[0] != fields[3] {
+			return "range-diff pairs the reviewed commits out of order: " + strconv.QuoteToASCII(line)
+		}
+		paired++
+	}
+	if paired == 0 {
+		return "range-diff found no commits to pair"
+	}
+	return ""
+}
+
+// rawChange is one path's entry in a commit's raw tree diff.
+type rawChange struct {
+	oldBlob, newBlob, newMode string
+}
+
+// rebasedBlobMismatch returns why the rebased commits do not reproduce the
+// reviewed commits byte for byte, or "" when they do. It pairs the commits
+// by position, which the range-diff listing already required. For each
+// pair, both commits must change the same paths, and a path that starts
+// from the same blob must end at the same blob and mode. A text change
+// passes whenever range-diff said "=", since the same hunks on the same
+// content give the same result; the check exists for binary changes, which
+// range-diff does not compare. A path whose starting blob differs (the base
+// changed it) is left to range-diff and the final tree comparison.
+func rebasedBlobMismatch(
+	ctx context.Context, r *netRunner, forkPoint, reviewedHead, reviewedBase, newHead string,
+) (string, error) {
+	reviewed, err := revListCommits(ctx, r, "--no-merges", forkPoint+".."+reviewedHead)
+	if err != nil {
+		return "", err
+	}
+	rebased, err := revListCommits(ctx, r, reviewedBase+".."+newHead)
+	if err != nil {
+		return "", err
+	}
+	if len(reviewed) != len(rebased) {
+		return fmt.Sprintf("the head carries %d commits over the reviewed base, not the %d reviewed",
+			len(rebased), len(reviewed)), nil
+	}
+	for i := range reviewed {
+		was, truncated, err := rawTreeChanges(ctx, r, reviewed[i])
+		if err != nil {
+			return "", err
+		}
+		now, truncatedNow, err := rawTreeChanges(ctx, r, rebased[i])
+		if err != nil {
+			return "", err
+		}
+		if truncated || truncatedNow {
+			return "a commit's change listing exceeded its bound", nil
+		}
+		if len(was) != len(now) {
+			return fmt.Sprintf("rebased commit %s changes %d paths, reviewed commit %s %d",
+				rebased[i], len(now), reviewed[i], len(was)), nil
+		}
+		for path, before := range was {
+			after, ok := now[path]
+			if !ok {
+				return fmt.Sprintf("rebased commit %s does not change %s", rebased[i], strconv.QuoteToASCII(path)), nil
+			}
+			if before.oldBlob == after.oldBlob && (before.newBlob != after.newBlob || before.newMode != after.newMode) {
+				return fmt.Sprintf("rebased commit %s changes %s to other content than reviewed commit %s",
+					rebased[i], strconv.QuoteToASCII(path), reviewed[i]), nil
+			}
+		}
+	}
+	return "", nil
+}
+
+// revListCommits lists a range's commits oldest first.
+func revListCommits(ctx context.Context, r *netRunner, args ...string) ([]string, error) {
+	out, _, err := r.run(ctx, nil, append([]string{"rev-list", "--reverse"}, args...)...)
+	if err != nil {
+		return nil, err
+	}
+	commits := strings.Fields(string(out))
+	for _, commit := range commits {
+		if !validCommitSHA(commit) {
+			return nil, fmt.Errorf("rev-list returned an invalid commit name: %w", ErrGitTransport)
+		}
+	}
+	return commits, nil
+}
+
+// rawTreeChanges reads a non-merge commit's raw tree diff against its
+// parent, keyed by path. The listing is bounded like the range-diff one;
+// truncated reports that it was cut.
+func rawTreeChanges(ctx context.Context, r *netRunner, commit string) (map[string]rawChange, bool, error) {
+	listing := &truncatingBuffer{remaining: maxRangeDiffListingBytes}
+	if err := r.runTo(ctx, listing, rawTreeDiffArgs(commit)...); err != nil {
+		return nil, false, err
+	}
+	if listing.truncated {
+		return nil, true, nil
+	}
+	// With -z each entry is ":<old mode> <new mode> <old blob> <new blob>
+	// <status>" and then the path, each NUL-terminated.
+	fields := strings.Split(strings.TrimSuffix(listing.buffer.String(), "\x00"), "\x00")
+	if len(fields) == 1 && fields[0] == "" {
+		return map[string]rawChange{}, false, nil
+	}
+	if len(fields)%2 != 0 {
+		return nil, false, fmt.Errorf("diff-tree of %s returned an unpaired entry: %w", commit, ErrGitTransport)
+	}
+	changes := make(map[string]rawChange, len(fields)/2)
+	for i := 0; i < len(fields); i += 2 {
+		meta := strings.Fields(strings.TrimPrefix(fields[i], ":"))
+		if len(meta) != 5 || !strings.HasPrefix(fields[i], ":") {
+			return nil, false, fmt.Errorf("diff-tree of %s returned a malformed entry: %w", commit, ErrGitTransport)
+		}
+		changes[fields[i+1]] = rawChange{oldBlob: meta[2], newBlob: meta[3], newMode: meta[1]}
+	}
+	return changes, false, nil
+}
+
+// truncateDetail cuts a refusal detail to the stored bound. Every detail
+// is ASCII (a quoted range-diff line is QuoteToASCII output), so a byte
+// cut stays valid UTF-8.
+func truncateDetail(detail string) string {
+	if len(detail) > domain.WorkUnitRebaseProofDetailLimit {
+		return detail[:domain.WorkUnitRebaseProofDetailLimit]
+	}
+	return detail
+}
+
+// revParseTree returns the tree a commit names.
+func revParseTree(ctx context.Context, r *netRunner, commit string) (string, error) {
+	out, _, err := r.run(ctx, nil, "rev-parse", "--verify", commit+"^{tree}")
+	if err != nil {
+		return "", err
+	}
+	tree := strings.TrimSpace(string(out))
+	if !validCommitSHA(tree) {
+		return "", fmt.Errorf("rev-parse returned an invalid tree name: %w", ErrGitTransport)
+	}
+	return tree, nil
 }
 
 // ProspectiveMerge builds the merge of headSHA into the checkout's base
@@ -429,6 +825,44 @@ func isAncestor(ctx context.Context, r *netRunner, ancestor, descendant string) 
 // pins it byte-for-byte.
 func fetchHeadArgs(url, branch string) []string {
 	return []string{"fetch", "--no-tags", url, "+refs/heads/" + branch + ":" + transportHeadRef}
+}
+
+// fetchPullHeadArgs is the fixed pull-request-head fetch argument
+// vector: the forge's pull ref, no tags, forced onto the private ref.
+func fetchPullHeadArgs(url string, prNumber int) []string {
+	return []string{
+		"fetch", "--no-tags", url,
+		"+refs/pull/" + strconv.Itoa(prNumber) + "/head:" + transportPullHeadRef,
+	}
+}
+
+// fetchReviewedHeadArgs is the fixed by-SHA fetch argument vector for
+// the reviewed head, which no advertised ref names any more.
+func fetchReviewedHeadArgs(url, reviewedHeadSHA string) []string {
+	return []string{"fetch", "--no-tags", url, "+" + reviewedHeadSHA + ":" + transportReviewedHeadRef}
+}
+
+// rebasedMergesArgs lists at most one merge commit the head adds over the
+// reviewed base.
+func rebasedMergesArgs(reviewedBase, newHead string) []string {
+	return []string{"rev-list", "--merges", "--max-count=1", reviewedBase + ".." + newHead}
+}
+
+// rawTreeDiffArgs is one commit's raw diff against its parent: full blob
+// names, NUL-separated paths, and no rename detection, so each path is one
+// entry.
+func rawTreeDiffArgs(commit string) []string {
+	return []string{"diff-tree", "-r", "-z", "--raw", "--no-abbrev", "--no-renames", "--no-commit-id", commit}
+}
+
+// rangeDiffArgs is the fixed range-diff argument vector: the reviewed
+// range from its fork point, the rebased range from the reviewed base,
+// uncolored and without notes so the listing is plain pairing lines.
+func rangeDiffArgs(forkPoint, reviewedHead, reviewedBase, newHead string) []string {
+	return []string{
+		"range-diff", "--no-color", "--no-notes",
+		forkPoint + ".." + reviewedHead, reviewedBase + ".." + newHead,
+	}
 }
 
 // mergeTreeArgs is the fixed merge argument vector: write the merged

@@ -30,6 +30,11 @@ func TestTransportArgvGolden(t *testing.T) {
 		Push           []string `json:"push"`
 		FetchHead      []string `json:"fetch_head"`
 		MergeTree      []string `json:"merge_tree"`
+		FetchPullHead  []string `json:"fetch_pull_head"`
+		FetchReviewed  []string `json:"fetch_reviewed_head"`
+		RangeDiff      []string `json:"range_diff"`
+		RebasedMerges  []string `json:"rebased_merges"`
+		RawTreeDiff    []string `json:"raw_tree_diff"`
 	}{
 		HardenedConfig: transportConfig("https"),
 		Fetch:          fetchArgs("https://github.com/freeasinbird/example.git", "main"),
@@ -43,6 +48,21 @@ func TestTransportArgvGolden(t *testing.T) {
 			"89abcdef0123456789abcdef0123456789abcdef",
 			"0123456789abcdef0123456789abcdef01234567",
 		),
+		FetchPullHead: fetchPullHeadArgs("https://github.com/freeasinbird/example.git", 450),
+		FetchReviewed: fetchReviewedHeadArgs(
+			"https://github.com/freeasinbird/example.git", "0123456789abcdef0123456789abcdef01234567",
+		),
+		RangeDiff: rangeDiffArgs(
+			"fedcba9876543210fedcba9876543210fedcba98",
+			"0123456789abcdef0123456789abcdef01234567",
+			"89abcdef0123456789abcdef0123456789abcdef",
+			"76543210fedcba9876543210fedcba9876543210",
+		),
+		RebasedMerges: rebasedMergesArgs(
+			"89abcdef0123456789abcdef0123456789abcdef",
+			"76543210fedcba9876543210fedcba9876543210",
+		),
+		RawTreeDiff: rawTreeDiffArgs("76543210fedcba9876543210fedcba9876543210"),
 	}
 	b, err := json.MarshalIndent(fixture, "", "  ")
 	if err != nil {

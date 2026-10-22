@@ -56,5 +56,40 @@
     "--no-messages",
     "89abcdef0123456789abcdef0123456789abcdef",
     "0123456789abcdef0123456789abcdef01234567"
+  ],
+  "fetch_pull_head": [
+    "fetch",
+    "--no-tags",
+    "https://github.com/freeasinbird/example.git",
+    "+refs/pull/450/head:refs/freeside/pull-head"
+  ],
+  "fetch_reviewed_head": [
+    "fetch",
+    "--no-tags",
+    "https://github.com/freeasinbird/example.git",
+    "+0123456789abcdef0123456789abcdef01234567:refs/freeside/reviewed-head"
+  ],
+  "range_diff": [
+    "range-diff",
+    "--no-color",
+    "--no-notes",
+    "fedcba9876543210fedcba9876543210fedcba98..0123456789abcdef0123456789abcdef01234567",
+    "89abcdef0123456789abcdef0123456789abcdef..76543210fedcba9876543210fedcba9876543210"
+  ],
+  "rebased_merges": [
+    "rev-list",
+    "--merges",
+    "--max-count=1",
+    "89abcdef0123456789abcdef0123456789abcdef..76543210fedcba9876543210fedcba9876543210"
+  ],
+  "raw_tree_diff": [
+    "diff-tree",
+    "-r",
+    "-z",
+    "--raw",
+    "--no-abbrev",
+    "--no-renames",
+    "--no-commit-id",
+    "76543210fedcba9876543210fedcba9876543210"
   ]
 }
