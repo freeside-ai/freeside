@@ -371,6 +371,12 @@ unit, never a fix in passing (Monorepo Scope Discipline).
   parallel fork can't make the exec fail with `text file busy`. Fixtures
   nothing executes stay as they are; this is a ratchet, not a sweep.
   Detail: `daemon/internal/execfixture/execfixture.go`.
+- **Fixture git environments:** a test helper that runs git starting from
+  the process environment builds it from `gitenv.Scrubbed()` and appends its
+  pins, so an inherited `GIT_DIR` never retargets it at the developer's
+  repository. `scripts/check.sh daemon test` fails when a helper that skips
+  it writes through an inherited `GIT_DIR`. Detail:
+  `daemon/internal/gitenv/gitenv.go`.
 
 ## Monorepo Scope Discipline
 

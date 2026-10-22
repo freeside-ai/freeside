@@ -433,6 +433,24 @@ tree; plain `git init` repositories work, local clones and worktrees do not.
 Disable automatic Git maintenance in builders so background writes cannot
 race the snapshot.
 
+**Fixture git environments.** A test helper that runs git builds its
+environment from `gitenv.Scrubbed()` (`internal/gitenv`) and appends its own
+config, identity, and date pins:
+
+```go
+cmd.Env = append(gitenv.Scrubbed(), "GIT_CONFIG_GLOBAL="+os.DevNull)
+```
+
+`Scrubbed` is the process environment without its `GIT_*` entries. Git
+exports `GIT_DIR` to hooks and `git rebase -x`, and a helper that inherits it
+writes to that repository, `-C` notwithstanding; from a linked worktree, a
+fixture `git init` sets `core.bare = true` in the developer's checkout. A
+helper that replaces the environment outright needs no scrub. The test step
+fails when a helper that skips it writes through the inherited `GIT_DIR`
+(Local Test Runs on a Shared Machine).
+`internal/gitenv/gitenv_test.go` is the worked example of a decoy regression
+test.
+
 **Golden files.** Tests that assert a serialized shape compare it against a
 committed fixture rather than hand-writing the expected bytes inline. Use the
 shared helper `internal/golden` so every lane's golden tests share one shape
@@ -585,8 +603,21 @@ is unavailable, the step prints a notice and runs without the limit.
 Outside CI on macOS, when `git` resolves to `/usr/bin/git`, the test step uses
 the binary from `xcrun -f git` through a stable link directory that preserves
 its helpers and config. Only git's lookup changes, and later steps keep their original
-`PATH`. Other git installations are unchanged. A bare `go test` uses neither
-this git change nor the run limit.
+`PATH`. Other git installations are unchanged.
+
+The test step runs the tests with `GIT_DIR` naming the linked-worktree git
+directory of a decoy repository, after clearing every repository variable
+from its own environment. When the decoy's `.git` changed, the step fails and
+prints the difference, even if every test passed: some fixture git helper
+inherits `GIT_*` instead of starting from `gitenv.Scrubbed()`. The decoy sits
+beside the held slot, so its path stays stable for Go's test cache; without a
+slot it is a fresh temporary directory. The decoy pins its own index-cache
+config, so a test build's version-control `git status` can't write to it
+whatever the global git config says. A test result cached by any earlier run,
+under the decoy or not, does not rerun, and opt-in live suites skip, so a
+local pass can miss a helper; CI's uncached shards run every default test.
+
+A bare `go test` uses none of the git change, the run limit, or the decoy.
 
 ## Measuring Local Test Time
 
