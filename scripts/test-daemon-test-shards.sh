@@ -8,6 +8,7 @@ import json
 import os
 from pathlib import Path
 import re
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -158,6 +159,16 @@ class Coverage(unittest.TestCase):
             self.assertEqual(len(rows), count + 1)
             self.assertIn('DAEMON_TEST_INTEGRATION_SHARDS: ' + str(count), tests)
             self.assertIn('daemon-test-shards.py verify evidence/*/execution.json', gate)
+            # Evidence from any attempt is safe to read only after the gate
+            # has required every child's current result to succeed, and only
+            # because a successful shard always uploads its own attempt.
+            self.assertIn('          pattern: daemon-' + platform + '-*-${{ github.run_id }}-*\n', gate)
+            self.assertLess(gate.index('daemon-test-shards.py gate'), gate.index('actions/download-artifact'))
+            upload = re.search(r'^      - name: Upload test evidence\n(.*?)(?=^      - )', tests, re.M | re.S).group(1)
+            self.assertIn('        if: always()\n', upload)
+            self.assertIn('          if-no-files-found: error\n', upload)
+            self.assertIn('          name: daemon-' + platform + '-${{ matrix.kind }}-${{ matrix.index }}-'
+                          '${{ github.run_id }}-${{ github.run_attempt }}\n', upload)
             self.assertIn("github.event_name == 'push' && matrix.index == 1", tests)
             self.assertNotIn('go-build-${{ runner.os }}-${{ matrix.index }}', tests)
         self.assertIn("if: matrix.kind == 'rest'", jobs['macos-tests'])
@@ -320,8 +331,52 @@ for p, names in data.items():
                 with self.assertRaisesRegex(ValueError, 'another commit'):
                     shards.verify_reports(reports)
             with patch.dict(os.environ, GITHUB_RUN_ID='2'):
-                with self.assertRaisesRegex(ValueError, 'another run or attempt'):
+                with self.assertRaisesRegex(ValueError, 'another run'):
                     shards.verify_reports(reports)
+            # A failed-jobs rerun leaves the passed shards' evidence in an
+            # earlier attempt; each shard counts only its latest attempt.
+            def rerun(report, name, **identity):
+                shutil.copytree(report.parent, directory / name)
+                metadata = directory / name / 'metadata.json'
+                metadata.write_text(json.dumps(dict(json.loads(metadata.read_text()), **identity)))
+                return directory / name / 'execution.json'
+            retried = rerun(reports[-1], 'retried', GITHUB_RUN_ATTEMPT='2')
+            twin = rerun(reports[-1], 'twin', GITHUB_RUN_ATTEMPT='2')
+            foreign = rerun(reports[-1], 'foreign', GITHUB_RUN_ID='2', GITHUB_RUN_ATTEMPT='2')
+            local = rerun(reports[-1], 'local', GITHUB_RUN_ATTEMPT='')
+            invalid = [rerun(reports[-1], 'invalid-' + value, GITHUB_RUN_ATTEMPT=value)
+                       for value in ('x', '0', '-1', 'missing')]
+            metadata = invalid[-1].parent / 'metadata.json'
+            metadata.write_text(json.dumps({k: v for k, v in json.loads(metadata.read_text()).items()
+                                            if k != 'GITHUB_RUN_ATTEMPT'}))
+            raw.write_text('')  # The superseded attempt's broken evidence is never read.
+            with patch.dict(os.environ, GITHUB_SHA='head', GITHUB_RUN_ID='1', GITHUB_RUN_ATTEMPT='2'):
+                shards.verify_reports(reports + [retried])
+                shards.verify_reports([retried] + reports)
+                shards.verify_reports(reports[:-1] + [local])
+                with self.assertRaisesRegex(ValueError, 'exactly one rest shard'):
+                    shards.verify_reports([retried])
+                with self.assertRaisesRegex(ValueError, 'missing, duplicate, or unexpected shard'):
+                    shards.verify_reports(reports[:-1])
+                with self.assertRaisesRegex(ValueError, 'duplicate shard evidence in one attempt'):
+                    shards.verify_reports(reports + [retried, twin])
+                for report in invalid:
+                    with self.subTest(attempt=report.parent.name), \
+                            self.assertRaisesRegex(ValueError, 'invalid run attempt'):
+                        shards.verify_reports(reports + [report])
+                with self.assertRaisesRegex(ValueError, 'identities differ'):
+                    shards.verify_reports(reports + [foreign])
+                with self.assertRaisesRegex(ValueError, 'another run'):
+                    shards.verify_reports([foreign] + reports)
+            with patch.dict(os.environ, GITHUB_SHA='head', GITHUB_RUN_ID='1', GITHUB_RUN_ATTEMPT='1'):
+                with self.assertRaisesRegex(ValueError, 'later attempt'):
+                    shards.verify_reports(reports + [retried])
+            raw.write_text(original)
+            # Broken latest evidence fails; it never falls back to an older attempt.
+            (retried.parent / 'tests.jsonl').write_text('')
+            with patch.dict(os.environ, GITHUB_SHA='head', GITHUB_RUN_ID='1', GITHUB_RUN_ATTEMPT='2'):
+                with self.assertRaises(ValueError):
+                    shards.verify_reports(reports + [retried])
             source.write_text(source.read_text().rsplit('\n', 2)[0])
             self.assertNotEqual(subprocess.run(command + list(map(str, reports)), capture_output=True).returncode, 0)
 
