@@ -515,3 +515,99 @@ func TestHarnessBuildsMatchTheImagePins(t *testing.T) {
 		}
 	}
 }
+
+// claudeReviewRecords is a Claude review identity apart from the writer's,
+// on a route of its own.
+func claudeReviewRecords() (domain.ClientEnrollment, domain.AuthIdentity) {
+	enrollment, identity := claudeRecords()
+	enrollment.ID, enrollment.AuthIdentityID, enrollment.Route = "claude-r/claude_code", "claude-r", "anthropic_review"
+	enrollment.AccountBinding = "reviewer@example.com"
+	identity.ID, identity.AccountBinding = "claude-r", "reviewer@example.com"
+	identity.Interim.AuthStoreVolume = "claude-review-cred"
+	return enrollment, identity
+}
+
+// claudeReviewModel is the model the tests hand adoption for a Claude
+// reviewer's offer.
+const claudeReviewModel = "claude-review-test"
+
+func claudeReviewInput() agentbaseline.TreeInput {
+	in := input(true)
+	review, _ := claudeReviewRecords()
+	in.CodexEnrollment, in.ClaudeReviewEnrollment = nil, &review
+	in.ReviewModel, in.ReviewEffort = claudeReviewModel, domain.EffortHigh
+	return in
+}
+
+// A Claude reviewer (#397) is an agent on the review identity's claude_code
+// enrollment and the Claude ward adapter, on an offer of its own, and the
+// reviewer line names it with an attended mark. The writer agent and the
+// shadow reviewer are unchanged, and the tree has no Codex agent.
+func TestBaselineTreeRunsAClaudeReviewer(t *testing.T) {
+	tree := must(agentbaseline.Tree(claudeReviewInput()))
+	parsed := must(agenttree.Parse(must(agenttree.Render(tree))))
+	if !reflect.DeepEqual(parsed, tree) {
+		t.Fatalf("baseline tree changed across its round trip:\n%+v\n%+v", parsed, tree)
+	}
+	claudeEnrollment, claudeIdentity := claudeRecords()
+	claude := must(parsed.ResolveAgent(agentbaseline.ClaudeAgentName, claudeEnrollment, claudeIdentity))
+	reviewEnrollment, reviewIdentity := claudeReviewRecords()
+	review := must(parsed.ResolveAgent(agentbaseline.ClaudeReviewAgentName, reviewEnrollment, reviewIdentity))
+	if review.Adapter.Digest != claude.Adapter.Digest || review.Route.Digest != claude.Route.Digest ||
+		review.Definition.EnrollmentID != reviewEnrollment.ID ||
+		review.Adapter.Vendor != domain.AgentVendorClaude || review.Offer.IdentityStability != domain.IdentityPinned {
+		t.Fatalf("Claude review agent = %+v on adapter %+v, offer %+v", review.Definition, review.Adapter, review.Offer)
+	}
+	selection := must(domain.DeriveAgentLaunchSelection(review.Definition, review.Adapter, review.Offer))
+	if selection != (domain.AgentLaunchSelection{
+		RouteModelID: claudeReviewModel, RequestedEffort: domain.EffortHigh, NativeEffort: "high",
+	}) {
+		t.Fatalf("Claude review agent passes %+v", selection)
+	}
+	for _, agent := range parsed.Agents {
+		if agent.Name == agentbaseline.CodexReviewAgentName {
+			t.Fatalf("a Claude reviewer tree carries the Codex review agent")
+		}
+	}
+	line, ok := must(parsed.ResolveLineup()).Line(domain.RoleReviewer)
+	launch := must(agentbaseline.RoleLaunch(domain.RoleReviewer))
+	if !ok || line.AgentName != agentbaseline.ClaudeReviewAgentName || line.AgentDigest != review.Definition.Digest ||
+		parsed.Attended(line.AgentName, line.AgentDigest, launch.Digest) {
+		t.Fatalf("reviewer line = %+v, %v, or it has no attended mark", line, ok)
+	}
+	const adopted = "sha256:80a6fc75affb198ed289cba5888f7a43f507ca252f32d6003b1987152152f711"
+	if digest := must(tree.AgentDigest(agentbaseline.ClaudeAgentName)); digest != adopted {
+		t.Fatalf("writer agent digest is %s, want the adopted %s", digest, adopted)
+	}
+
+	// On the writer's own enrollment the review agent shares its route.
+	in := claudeReviewInput()
+	in.ClaudeReviewEnrollment = &claudeEnrollment
+	shared := must(agentbaseline.Tree(in))
+	if len(shared.Routes) != 1 {
+		t.Fatalf("a Claude reviewer on the writer's enrollment added a route: %+v", shared.Routes)
+	}
+	must(shared.ResolveAgent(agentbaseline.ClaudeReviewAgentName, claudeEnrollment, claudeIdentity))
+}
+
+func TestBaselineTreeRefusesAClaudeReviewerItCannotLaunch(t *testing.T) {
+	codex, _ := codexRecords()
+	cases := map[string]func(*agentbaseline.TreeInput){
+		"both review enrollments": func(in *agentbaseline.TreeInput) { in.CodexEnrollment = &codex },
+		"a codex_cli enrollment":  func(in *agentbaseline.TreeInput) { in.ClaudeReviewEnrollment = &codex },
+		"no review model":         func(in *agentbaseline.TreeInput) { in.ReviewModel = "" },
+		"review model is the native default": func(in *agentbaseline.TreeInput) {
+			in.ReviewModel = domain.ClaudeCodeNativeDefaultRouteModelID
+		},
+		"review effort harness_default": func(in *agentbaseline.TreeInput) { in.ReviewEffort = domain.EffortHarnessDefault },
+	}
+	for name, mutate := range cases {
+		t.Run(name, func(t *testing.T) {
+			in := claudeReviewInput()
+			mutate(&in)
+			if tree, err := agentbaseline.Tree(in); err == nil {
+				t.Fatalf("tree built: agents %+v", tree.Agents)
+			}
+		})
+	}
+}

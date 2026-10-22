@@ -8374,6 +8374,63 @@ func TestProductionReviewConfigurationAdoptionRejectsIneffectiveTarget(t *testin
 // configuration failure and crashed before completing the task left that item
 // at the round's deterministic identity. The parked path honors the contract
 // that item presented instead of failing closed against its shape.
+// TestProductionReviewItemParkedUnderCodexWordingStillMatches covers the
+// upgrade across #397's harness-neutral wording: a contradiction or
+// configuration item an earlier daemon parked as "Codex review ..." is
+// re-put on every reconcile while it stays open, and must still match.
+func TestProductionReviewItemParkedUnderCodexWordingStillMatches(t *testing.T) {
+	t.Parallel()
+	for name, park := range map[string]func(*testing.T, *productionPublicationHarness){
+		"contradiction": func(t *testing.T, p *productionPublicationHarness) {
+			p.reviewer.Script(engine.ProductionReviewInvocationID(p.runID, 1), fake.ReviewScript{
+				Outcome: fake.OutcomeComplete,
+				Result: exec.ReviewResult{
+					BaseSHA: p.baseSHA, HeadSHA: p.replay.HeadSHA,
+					ConfigurationDigest: domain.Digest("sha256:" + strings.Repeat("d", 64)),
+				},
+			})
+			p.startAndRecordExport(t)
+		},
+		"configuration": func(t *testing.T, p *productionPublicationHarness) {
+			p.startAndRecordExport(t)
+			p.reviewConfigurationDigest = domain.Digest("sha256:" + strings.Repeat("d", 64))
+			p.workflow = p.newEngine(t, productionCrashSeams{}, true)
+			// The first tick records the configuration failure; the next
+			// tick's gate pass raises its item.
+			if _, err := p.reconcileLanes(); err != nil {
+				t.Fatalf("record the configuration failure: %v", err)
+			}
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			p := newProductionPublicationHarness(t, "")
+			park(t, p)
+			if _, err := p.reconcileLanes(); err != nil {
+				t.Fatalf("park the item: %v", err)
+			}
+			id := productionReviewItemIDForTest(p.runID, 1)
+			if err := p.store.Write(p.ctx, func(tx *store.WriteTx) error {
+				item, err := tx.GetAttentionItem(p.ctx, id)
+				if err != nil {
+					return err
+				}
+				if !strings.HasPrefix(item.Reason, "Review ") {
+					t.Fatalf("parked reason = %q, want the harness-neutral wording", item.Reason)
+				}
+				item.Reason = "Codex review" + strings.TrimPrefix(item.Reason, "Review")
+				item.ItemVersion++
+				return tx.PutAttentionItem(p.ctx, item)
+			}); err != nil {
+				t.Fatal(err)
+			}
+			if _, err := p.reconcileLanes(); err != nil {
+				t.Fatalf("reconcile an item parked under the Codex wording: %v", err)
+			}
+		})
+	}
+}
+
 func TestProductionReviewLegacyDisputeItemStillTerminalizes(t *testing.T) {
 	t.Parallel()
 	p := newProductionPublicationHarness(t, "")

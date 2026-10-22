@@ -108,6 +108,9 @@ type claudeDriverConfig struct {
 	ShadowReviewWorkspaceSizeMB int64
 	ShadowReviewRate            float64
 
+	// ReviewProvider is the routed review provider the reviewer line's
+	// harness selects (resolveReviewSelection, #397).
+	ReviewProvider ward.RoutedReviewProvider
 	// The review identities, cost owners, models, and efforts are resolved
 	// from the reviewer and shadow reviewer lineup lines
 	// (resolveReviewSelection), never set by a flag. An effort is the native
@@ -178,14 +181,15 @@ func (c claudeDriverConfig) validate() error {
 	case c.OperatingMode == domain.ModeUnattended &&
 		(c.ReviewImage == "" || c.ReviewInputRoot == "" ||
 			c.ReviewAuthSnapshot == "" || c.ReviewInstructions == "" || c.ReviewWorkspaceSizeMB <= 0):
-		return fmt.Errorf("codex review configuration is required in claude driver mode")
+		return fmt.Errorf("review configuration is required in claude driver mode")
 	case c.OperatingMode == domain.ModeUnattended && domain.ImageRef(c.ReviewImage).Validate() != nil:
 		return fmt.Errorf("-review-image must be digest-pinned")
 	case c.OperatingMode == domain.ModeUnattended &&
 		(!filepath.IsAbs(c.ReviewInputRoot) || filepath.Clean(c.ReviewInputRoot) != c.ReviewInputRoot):
 		return fmt.Errorf("-review-input-root must be a clean absolute path")
-	case c.OperatingMode == domain.ModeUnattended &&
-		c.ReviewAuthMode != ward.CodexAuthSubscription && c.ReviewAuthMode != ward.CodexAuthAPIKey:
+	case c.OperatingMode == domain.ModeUnattended && !slices.Contains(reviewAuthModes, c.ReviewAuthMode):
+		// Whether the mode suits the reviewer's harness is checked once the
+		// line is resolved (requireReviewAuthMode).
 		return fmt.Errorf("-review-auth-mode is invalid")
 	case c.ShadowReviewImage != "" && c.OperatingMode != domain.ModeUnattended:
 		return fmt.Errorf("shadow review requires unattended mode")
@@ -1682,6 +1686,10 @@ func composeClaudeDriver(
 	if backendErr != nil {
 		return nil, fmt.Errorf("compose ward backend: %w", backendErr)
 	}
+	// The Codex review lifecycle, volume leaser, and recovery stay composed
+	// whatever the reviewer line's harness, so a restart onto a Claude
+	// reviewer still reconciles the review intents and workspaces an
+	// earlier Codex reviewer left in the journal.
 	reviewLifecycle, lifecycleErr := ward.NewCodexReviewLifecycle(
 		runtime, wardConfig, productionRigRuntimeAuthorizer(cfg.StateDir, cfg.RigTokenFile),
 	)
@@ -1701,34 +1709,40 @@ func composeClaudeDriver(
 	if err != nil {
 		return nil, fmt.Errorf("compose Codex review recovery: %w", err)
 	}
-	var shadowReviewRecovery func(context.Context) error
-	var shadowReviewSource exec.ReviewSource
-	// The allowlist each review proxy admits, which a review admission
-	// snapshot records for its role.
-	reviewEgress := map[domain.RoleName][]string{
-		domain.RoleReviewer:       {"chatgpt.com:443"},
-		domain.RoleShadowReviewer: {"api.anthropic.com:443"},
-	}
-	if cfg.ReviewAuthMode == ward.CodexAuthAPIKey {
-		reviewEgress[domain.RoleReviewer] = []string{"api.openai.com:443"}
-	}
-	if cfg.ShadowReviewImage != "" {
-		shadowLifecycle, lifecycleErr := ward.NewClaudeReviewLifecycle(
+	routedClaude := cfg.OperatingMode == domain.ModeUnattended &&
+		cfg.ReviewProvider.Vendor == domain.AgentVendorClaude
+	// One Claude lifecycle and one recovery serve the routed and the shadow
+	// Claude source when both run, rather than one per source.
+	var (
+		claudeLifecycle      *ward.CodexReviewLifecycle
+		claudeReviewRecovery func(context.Context) error
+	)
+	if routedClaude || cfg.ShadowReviewImage != "" {
+		claudeLifecycle, lifecycleErr = ward.NewClaudeReviewLifecycle(
 			runtime, wardConfig, productionRigRuntimeAuthorizer(cfg.StateDir, cfg.RigTokenFile),
 		)
 		if lifecycleErr != nil {
-			return nil, fmt.Errorf("compose Claude shadow review lifecycle: %w", lifecycleErr)
+			return nil, fmt.Errorf("compose Claude review lifecycle: %w", lifecycleErr)
 		}
-		shadowRecovery, recoveryErr := ward.NewCodexReviewRecovery(
-			shadowLifecycle, adapters.Journal, volumeLeaser, cfg.ReviewInputRoot,
+		claudeRecovery, recoveryErr := ward.NewCodexReviewRecovery(
+			claudeLifecycle, adapters.Journal, volumeLeaser, cfg.ReviewInputRoot,
 		)
 		if recoveryErr != nil {
-			return nil, fmt.Errorf("compose Claude shadow review recovery: %w", recoveryErr)
+			return nil, fmt.Errorf("compose Claude review recovery: %w", recoveryErr)
 		}
-		shadowReviewRecovery = shadowRecovery.Reconcile
+		claudeReviewRecovery = claudeRecovery.Reconcile
+	}
+	var shadowReviewSource exec.ReviewSource
+	// Each composed review role, with the allowlist its proxy admits, which a
+	// review admission snapshot records for the role.
+	reviewRoles := map[domain.RoleName]engine.ReviewRole{}
+	if cfg.ShadowReviewImage != "" {
+		shadowRole := reviewRole(domain.RoleShadowReviewer, shadowReviewProvider(),
+			[]string{"api.anthropic.com:443"})
+		reviewRoles[domain.RoleShadowReviewer] = shadowRole
 		shadowConfig := ward.CodexReviewConfig{
 			InputRoot: cfg.ReviewInputRoot, WorkspaceTarget: "/workspace/project",
-			ProviderEndpoints: reviewEgress[domain.RoleShadowReviewer],
+			ProviderEndpoints: shadowRole.EffectiveEgress,
 			ApprovedImage:     cfg.ShadowReviewImage, ObserverImage: cfg.ExporterImage,
 			Model: cfg.ShadowReviewModel, ReasoningEffort: cfg.ShadowReviewReasoningEffort,
 			AuthStoreLeaser: adapters.Leaser, AuthState: adapters.AuthState,
@@ -1736,14 +1750,14 @@ func composeClaudeDriver(
 			VolumeLifecycleLeaser: volumeLeaser,
 		}
 		shadowReviewSource, err = ward.NewClaudeReviewSource(ward.CodexReviewSourceConfig{
-			Lifecycle: shadowLifecycle, Review: shadowConfig, Journal: adapters.Journal,
+			Lifecycle: claudeLifecycle, Review: shadowConfig, Journal: adapters.Journal,
 			WorkspaceSizeMB: cfg.ShadowReviewWorkspaceSizeMB,
 			AuthMode:        ward.CodexAuthSetupToken, AuthIdentityID: cfg.ShadowReviewAuthIdentityID,
 			AuthSnapshot: cfg.ShadowReviewAuthSnapshot, InstructionArtifacts: blobs,
 			ConfigurationDigest: shadowReviewDigests.runtime,
 			CostOwner:           cfg.ShadowReviewCostOwner, Now: utcNow,
 			Admit: reviewAdmission(
-				st, agents.Tree, domain.RoleShadowReviewer, cfg.ShadowReviewAuthIdentityID, utcNow),
+				st, agents.Tree, shadowRole, cfg.ShadowReviewAuthIdentityID, utcNow),
 		})
 		if err != nil {
 			return nil, fmt.Errorf("compose Claude shadow review source: %w", err)
@@ -1758,30 +1772,32 @@ func composeClaudeDriver(
 			ctx, cfg.ReviewInstructions, forbiddenInstructionPaths...,
 		)
 		if err != nil {
-			return nil, fmt.Errorf("snapshot Codex review host instructions: %w", err)
+			return nil, fmt.Errorf("snapshot review host instructions: %w", err)
 		}
-		reviewConfig := ward.CodexReviewConfig{
+		routedRole := reviewRole(domain.RoleReviewer, cfg.ReviewProvider,
+			routedReviewEndpoints(cfg.ReviewProvider, cfg.ReviewAuthMode))
+		reviewRoles[domain.RoleReviewer] = routedRole
+		reviewConfig := routedReviewConfig(cfg.ReviewProvider, ward.CodexReviewConfig{
 			InputRoot: cfg.ReviewInputRoot, WorkspaceTarget: "/workspace/project",
-			ProviderEndpoints: reviewEgress[domain.RoleReviewer], ApprovedImage: cfg.ReviewImage,
+			ProviderEndpoints: routedRole.EffectiveEgress, ApprovedImage: cfg.ReviewImage,
 			ObserverImage: cfg.ExporterImage, Model: cfg.ReviewModel,
-			ReasoningEffort: cfg.ReviewReasoningEffort, AccessTokenLifetimeFloor: time.Hour,
-			AccessTokenRefreshThreshold: 2 * time.Hour,
-			AuthStoreLeaser:             adapters.Leaser, AuthRefresher: ward.NewCodexAuthHTTPRefresher(),
-			AuthState: adapters.AuthState,
-			Now:       func() time.Time { return time.Now().UTC() }, Journal: adapters.Journal,
+			ReasoningEffort: cfg.ReviewReasoningEffort,
+			AuthStoreLeaser: adapters.Leaser, AuthState: adapters.AuthState,
+			Now: func() time.Time { return time.Now().UTC() }, Journal: adapters.Journal,
 			VolumeLifecycleLeaser: volumeLeaser,
-		}
-		reviewSource, err = ward.NewCodexReviewSource(ward.CodexReviewSourceConfig{
+		})
+		sourceConfig := ward.CodexReviewSourceConfig{
 			Lifecycle: reviewLifecycle, Review: reviewConfig, Journal: adapters.Journal,
 			WorkspaceSizeMB: cfg.ReviewWorkspaceSizeMB, AuthMode: cfg.ReviewAuthMode,
 			AuthIdentityID: cfg.ReviewAuthIdentityID, AuthSnapshot: cfg.ReviewAuthSnapshot,
 			InstructionArtifacts: blobs,
 			ConfigurationDigest:  reviewConfigurationDigest,
 			CostOwner:            cfg.ReviewCostOwner, Now: utcNow,
-			Admit: reviewAdmission(st, agents.Tree, domain.RoleReviewer, cfg.ReviewAuthIdentityID, utcNow),
-		})
+			Admit: reviewAdmission(st, agents.Tree, routedRole, cfg.ReviewAuthIdentityID, utcNow),
+		}
+		reviewSource, err = newRoutedReviewSource(cfg.ReviewProvider, sourceConfig, claudeLifecycle)
 		if err != nil {
-			return nil, fmt.Errorf("compose Codex review source: %w", err)
+			return nil, fmt.Errorf("compose %s review source: %w", cfg.ReviewProvider.HarnessClient, err)
 		}
 	}
 	var (
@@ -1908,11 +1924,11 @@ func composeClaudeDriver(
 		},
 		publicationTransport: publicationTransport,
 		publisher:            publisher, reviewSource: reviewSource, shadowReviewSource: shadowReviewSource,
-		reviewAdmission: reviewAdmitter(st, *agents, reviewEgress),
+		reviewAdmission: reviewAdmitter(st, *agents, reviewRoles),
 		reviewRecovery: func(recoveryCtx context.Context) error {
 			err := reviewRecovery.Reconcile(recoveryCtx)
-			if shadowReviewRecovery != nil {
-				err = errors.Join(err, shadowReviewRecovery(recoveryCtx))
+			if claudeReviewRecovery != nil {
+				err = errors.Join(err, claudeReviewRecovery(recoveryCtx))
 			}
 			return err
 		},
@@ -1955,6 +1971,25 @@ func restoreClaudeBackendConformance(
 	return backend.RestoreConformance(conformance)
 }
 
+// newRoutedReviewSource builds the routed review source on the provider the
+// reviewer line selected. sourceConfig carries the Codex lifecycle; a Claude
+// source runs on claudeLifecycle, the one the shadow source shares.
+func newRoutedReviewSource(
+	provider ward.RoutedReviewProvider, sourceConfig ward.CodexReviewSourceConfig,
+	claudeLifecycle *ward.CodexReviewLifecycle,
+) (exec.ReviewSource, error) {
+	switch provider.Vendor {
+	case domain.AgentVendorCodex:
+		sourceConfig.Review.AuthRefresher = ward.NewCodexAuthHTTPRefresher()
+		return ward.NewCodexReviewSource(sourceConfig)
+	case domain.AgentVendorClaude:
+		// A setup token has no refresh, so the source takes no refresher.
+		sourceConfig.Lifecycle = claudeLifecycle
+		return ward.NewClaudeReviewSource(sourceConfig)
+	}
+	return nil, fmt.Errorf("no routed review provider for vendor %q", provider.Vendor)
+}
+
 // requireApprovedReviewConfiguration re-gates the caller-selected review and
 // exporter images before composition can construct a transport or execute the
 // conformance runtime against repository content.
@@ -1989,25 +2024,25 @@ func requireApprovedReviewConfiguration(
 		}
 		return tx.RequireReviewConfigurationApproved(ctx, digest)
 	}); err != nil {
-		return "", fmt.Errorf("require approved Codex review configuration: %w", err)
+		return "", fmt.Errorf("require approved review configuration: %w", err)
 	}
 	return digest, nil
 }
 
+// claudeReviewConfigurationDigest is the trust-profile digest of the routed
+// review the reviewer line selected, Codex or Claude. The trust profile must
+// approve it before composition goes on (requireApprovedReviewConfiguration),
+// so flipping the line to another harness without re-approving refuses.
 func claudeReviewConfigurationDigest(cfg claudeDriverConfig) (domain.Digest, error) {
-	endpoints := []string{"chatgpt.com:443"}
-	if cfg.ReviewAuthMode == ward.CodexAuthAPIKey {
-		endpoints = []string{"api.openai.com:443"}
-	}
-	digest, err := ward.CodexReviewConfigurationDigest(ward.CodexReviewConfig{
+	provider := cfg.ReviewProvider
+	digest, err := provider.ConfigurationDigest(routedReviewConfig(provider, ward.CodexReviewConfig{
 		InputRoot: cfg.ReviewInputRoot, WorkspaceTarget: "/workspace/project",
-		ProviderEndpoints: endpoints, ApprovedImage: cfg.ReviewImage,
+		ProviderEndpoints: routedReviewEndpoints(provider, cfg.ReviewAuthMode), ApprovedImage: cfg.ReviewImage,
 		ObserverImage: cfg.ExporterImage, Model: cfg.ReviewModel,
-		ReasoningEffort:          cfg.ReviewReasoningEffort,
-		AccessTokenLifetimeFloor: time.Hour, AccessTokenRefreshThreshold: 2 * time.Hour,
-	}, cfg.ReviewWorkspaceSizeMB, cfg.ReviewAuthMode, cfg.ReviewAuthIdentityID, cfg.ReviewCostOwner)
+		ReasoningEffort: cfg.ReviewReasoningEffort,
+	}), cfg.ReviewWorkspaceSizeMB, cfg.ReviewAuthMode, cfg.ReviewAuthIdentityID, cfg.ReviewCostOwner)
 	if err != nil {
-		return "", fmt.Errorf("digest Codex review configuration: %w", err)
+		return "", fmt.Errorf("digest %s review configuration: %w", provider.HarnessClient, err)
 	}
 	return digest, nil
 }

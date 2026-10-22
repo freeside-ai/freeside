@@ -885,9 +885,12 @@ Phase 1 uses:
   CLI**, joins in 1B as an execution capacity hedge (Section [11](#11-roadmap-build-order-and-coordination)); its
   pre-adoption gates (#401) closed on 2026-08-02. Further adapters (pi first)
   follow as consumers of the same admitted-agent contract (Section [5.4](#54-credential-modes-egress-profiles-and-concurrency));
-- one production review source, a **Freeside-invoked local Codex review**
-  binding (Section [7](#7-review-policy)). GitHub-native Codex review is best-effort extra
-  evidence and never satisfies the review requirement; and
+- one production review source per deployment, a **Freeside-invoked local
+  review** whose harness the reviewer lineup line selects: the Codex review
+  binding, or since #397 a Claude review on the Claude ward adapter
+  (Section [7](#7-review-policy); revision 92 authorized the promotion).
+  GitHub-native Codex review is best-effort extra evidence and never
+  satisfies the review requirement; and
 - permanent fakes of both interfaces.
 
 The 1B shadow arm runs a fresh-context Claude review against the same head.

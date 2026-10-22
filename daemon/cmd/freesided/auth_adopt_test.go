@@ -21,6 +21,7 @@ import (
 	"github.com/freeside-ai/freeside/daemon/internal/engine"
 	"github.com/freeside-ai/freeside/daemon/internal/inference"
 	"github.com/freeside-ai/freeside/daemon/internal/store"
+	"github.com/freeside-ai/freeside/daemon/internal/ward"
 	"github.com/freeside-ai/freeside/daemon/internal/wardstore"
 )
 
@@ -1044,4 +1045,190 @@ func assertAdoptedPatchResolvesAndAdmitsEveryRole(t *testing.T, f *authAdoptFixt
 			t.Fatalf("resolve against an empty tree = %v", err)
 		}
 	})
+}
+
+// adoptClaudeReviewModel is the model the fixture's Claude reviewer offer names.
+const adoptClaudeReviewModel = "claude-review-fixture-1"
+
+// claudeReviewArgs adopts claude-review as a Claude reviewer beside the
+// claude-main writer: no Codex store, and a Claude review model.
+func (f *authAdoptFixture) claudeReviewArgs(extra ...string) []string {
+	return f.args(append([]string{
+		"-review-auth-identity", "claude-review", "-review-harness", "claude_code",
+		"-auth-store-root", "", "-review-model", adoptClaudeReviewModel,
+	}, extra...)...)
+}
+
+// recordClaudeReviewIdentity records claude-review, a Claude identity with a
+// setup-token volume and no enrollment.
+func (f *authAdoptFixture) recordClaudeReviewIdentity(t *testing.T) {
+	t.Helper()
+	f.recordIdentity(t, domain.AuthIdentity{
+		ID: "claude-review", Provider: "claude", AuthStoreMutationLease: true,
+		MaxParallelExecutions: 1, Enabled: true,
+		Interim: domain.InterimClientFacts{
+			AuthStoreVolume: "freeside-claude-review-auth", RefreshStrategy: domain.RefreshOnDemand,
+		},
+	})
+}
+
+// enrollClaudeReviewIdentity enrolls claude-review the way an attested Claude
+// adoption does, standing in for auth add's setup-token enrollment.
+func (f *authAdoptFixture) enrollClaudeReviewIdentity(t *testing.T) {
+	t.Helper()
+	if _, _, err := f.run(t, f.args(
+		"-auth-identity", "claude-review", "-review-auth-identity", "claude-review",
+		"-cost-owner", "review-operator", "-auth-store-root", "", "-claude-account", "acct-fixture-claude-review",
+	)); err != nil {
+		t.Fatalf("enroll the review identity: %v", err)
+	}
+}
+
+// TestAuthAdoptClaudeReviewer covers -review-harness claude_code (#397). A
+// review identity auth add has not enrolled is reported unadoptable, because
+// no account is attested for it; once enrolled, adoption reuses its
+// enrollment and the tree's reviewer line names a Claude review agent on it,
+// which the routed review resolution admits under setup_token only.
+func TestAuthAdoptClaudeReviewer(t *testing.T) {
+	ctx := context.Background()
+	f := newAuthAdoptFixture(t)
+	f.recordClaudeReviewIdentity(t)
+
+	report, patch, err := f.run(t, f.claudeReviewArgs())
+	if err != nil {
+		t.Fatalf("auth adopt: %v", err)
+	}
+	if len(report.Identities) != 2 || report.Identities[1].Status != authAdoptUnadoptable ||
+		report.Identities[1].Client != domain.HarnessClientClaudeCode ||
+		!strings.Contains(report.Identities[1].Reason, "none was attested") {
+		t.Fatalf("report for an unenrolled Claude review identity = %+v", report)
+	}
+	if roles := lineupRoles(loadAdoptedPatch(t, patch)); slices.ContainsFunc(roles, func(role string) bool {
+		return strings.HasPrefix(role, "reviewer=")
+	}) {
+		t.Fatalf("an unadoptable reviewer got a line: %v", roles)
+	}
+
+	f.enrollClaudeReviewIdentity(t)
+	report, patch, err = f.run(t, f.claudeReviewArgs())
+	if err != nil {
+		t.Fatalf("auth adopt: %v", err)
+	}
+	if len(report.Identities) != 2 || !reflect.DeepEqual(report.Identities[1], authAdoptIdentity{
+		AuthIdentityID: "claude-review", Client: domain.HarnessClientClaudeCode, Status: authAdoptReused,
+		EnrollmentID: "claude-review/claude_code", Generation: 1,
+	}) {
+		t.Fatalf("report = %+v", report)
+	}
+	tree := loadAdoptedPatch(t, patch)
+	wantRoles := append([]string{
+		"specifier=" + agentbaseline.ClaudeAgentName, "implementer=" + agentbaseline.ClaudeAgentName,
+		"remediator=" + agentbaseline.ClaudeAgentName, "reviewer=" + agentbaseline.ClaudeReviewAgentName,
+	}, judgmentLines()...)
+	if got := lineupRoles(tree); !reflect.DeepEqual(got, wantRoles) {
+		t.Fatalf("lineup = %v, want %v", got, wantRoles)
+	}
+	for _, agent := range tree.Agents {
+		if agent.Name == agentbaseline.CodexReviewAgentName {
+			t.Fatalf("a Claude reviewer tree carries the Codex review agent: %+v", tree.Agents)
+		}
+	}
+
+	revision, err := treeRevision(tree)
+	if err != nil {
+		t.Fatal(err)
+	}
+	f.withStore(t, func(st *store.Store) {
+		now := time.Now().UTC()
+		got, err := resolvePreflightAgents(ctx, st, tree, revision, ward.CodexAuthSetupToken, false, now)
+		if err != nil {
+			t.Fatalf("resolve the Claude reviewer: %v", err)
+		}
+		if got.ReviewProvider.Vendor != domain.AgentVendorClaude || got.ReviewProvider.CLI != "claude" ||
+			got.ReviewAuthIdentityID != "claude-review" || got.ReviewCostOwner != "review-operator" ||
+			got.ReviewModel != adoptClaudeReviewModel || got.ReviewReasoningEffort != "high" {
+			t.Fatalf("Claude reviewer selection = %+v", got)
+		}
+		// The daemon resolves the same reviewer from the line.
+		cfg := claudeDriverConfig{OperatingMode: domain.ModeUnattended, ReviewAuthMode: ward.CodexAuthSetupToken}
+		daemon, err := resolveReviewSelection(ctx, st, tree, cfg, now)
+		if err != nil || daemon.ReviewProvider != got.ReviewProvider ||
+			daemon.ReviewAuthIdentityID != "claude-review" || daemon.ReviewModel != adoptClaudeReviewModel {
+			t.Fatalf("daemon review selection = %+v, %v", daemon, err)
+		}
+		// A Codex auth mode is not one the Claude reviewer accepts.
+		for _, mode := range []ward.CodexAuthMode{ward.CodexAuthSubscription, ward.CodexAuthAPIKey} {
+			_, err := resolvePreflightAgents(ctx, st, tree, revision, mode, false, now)
+			var mismatch *reviewProviderMismatch
+			if !errors.As(err, &mismatch) || !errors.Is(err, engine.ErrAgentNotAdmissible) {
+				t.Fatalf("Claude reviewer under %s = %v", mode, err)
+			}
+			cfg.ReviewAuthMode = mode
+			if _, err := resolveReviewSelection(ctx, st, tree, cfg, now); !errors.As(err, &mismatch) {
+				t.Fatalf("daemon Claude reviewer under %s = %v", mode, err)
+			}
+		}
+	})
+}
+
+// TestAuthAdoptOneIdentityClaudeReviewer names the writer identity as a
+// Claude reviewer: one adoption, and the reviewer agent on its enrollment.
+func TestAuthAdoptOneIdentityClaudeReviewer(t *testing.T) {
+	f := newAuthAdoptFixture(t)
+	report, patch, err := f.run(t, f.claudeReviewArgs(
+		"-review-auth-identity", "claude-main", "-review-cost-owner", "operator",
+	))
+	if err != nil {
+		t.Fatalf("auth adopt: %v", err)
+	}
+	if len(report.Identities) != 1 {
+		t.Fatalf("report = %+v", report)
+	}
+	tree := loadAdoptedPatch(t, patch)
+	if roles := lineupRoles(tree); !slices.Contains(roles, "reviewer="+agentbaseline.ClaudeReviewAgentName) {
+		t.Fatalf("lineup = %v", roles)
+	}
+	snap := f.snapshot(t)
+	resolved, err := tree.ResolveAgent(agentbaseline.ClaudeReviewAgentName, snap.Enrollments[0], snap.identity(t, "claude-main"))
+	if err != nil || resolved.Definition.EnrollmentID != "claude-main/claude_code" {
+		t.Fatalf("Claude review agent = %+v, %v", resolved.Definition, err)
+	}
+}
+
+func TestAuthAdoptRefusesAClaudeReviewSelectionItCannotWrite(t *testing.T) {
+	f := newAuthAdoptFixture(t)
+	for name, tc := range map[string]struct {
+		args []string
+		want string
+	}{
+		"an unknown harness": {
+			f.args("-review-harness", "gemini_cli"), `-review-harness "gemini_cli" is not codex_cli or claude_code`,
+		},
+		"a Codex store root": {
+			f.claudeReviewArgs("-auth-store-root", f.storeRoot), "-auth-store-root names a Codex store",
+		},
+		"no review model": {
+			f.claudeReviewArgs("-review-model", ""), "required for a claude_code reviewer",
+		},
+		"no review effort": {
+			f.claudeReviewArgs("-review-effort", ""), "required for a claude_code reviewer",
+		},
+		"the native-default id as the review model": {
+			f.claudeReviewArgs("-review-model", domain.ClaudeCodeNativeDefaultRouteModelID), "names no model",
+		},
+		"one identity with no review model": {
+			f.claudeReviewArgs("-review-auth-identity", "claude-main", "-review-cost-owner", "operator", "-review-model", ""),
+			"required for a claude_code reviewer",
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			_, patch, err := f.run(t, tc.args)
+			if err == nil || !strings.Contains(err.Error(), tc.want) {
+				t.Fatalf("auth adopt = %v, want an error containing %q", err, tc.want)
+			}
+			if len(patch) != 0 {
+				t.Fatalf("a refused adoption emitted a patch:\n%s", patch)
+			}
+		})
+	}
 }

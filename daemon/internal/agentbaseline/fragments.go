@@ -46,6 +46,7 @@ const (
 	ClaudeAgentName             = "claude-code-default"
 	ClaudeCallAgentName         = "claude-code-call-default"
 	ClaudeShadowReviewAgentName = "claude-shadow-review-default"
+	ClaudeReviewAgentName       = "claude-review-default"
 	CodexReviewAgentName        = "codex-review-default"
 	ClaudeAdapterName           = ClaudeWardAdapterBuild
 	ClaudeCallAdapterName       = ClaudeCallAdapterBuild
@@ -53,6 +54,7 @@ const (
 	ClaudeOfferName             = domain.ClaudeCodeNativeDefaultRouteModelID
 	ClaudeCallOfferName         = "claude-code-call-default"
 	ClaudeShadowReviewOfferName = "claude-shadow-review-default"
+	ClaudeReviewOfferName       = "claude-review-default"
 	CodexOfferName              = "codex-review-default"
 	// DefaultClaudeRoute and DefaultCodexRoute name the route of an identity
 	// adoption enrolls. An identity `auth add` already enrolled keeps the

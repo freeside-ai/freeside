@@ -2,11 +2,14 @@ package main
 
 import (
 	"encoding/json"
+	"io"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"syscall"
 	"testing"
+	"time"
 
 	"github.com/freeside-ai/freeside/daemon/internal/contentaddr"
 	"github.com/freeside-ai/freeside/daemon/internal/domain"
@@ -123,6 +126,22 @@ func TestLoadDeputySettingsRefusesNamingTheField(t *testing.T) {
 		"unsupported api key": {func(s map[string]any) {
 			s["review"].(map[string]any)["auth_mode"] = "api_key"
 		}, "review.auth_mode must be subscription; api_key enrollment is not supported yet (#1677)"},
+		"subscription with a Claude reviewer": {func(s map[string]any) {
+			s["agent_tree"].(map[string]any)["review_harness"] = "claude_code"
+		}, "review.auth_mode must be setup_token with agent_tree.review_harness claude_code"},
+		"setup token with a Codex reviewer": {func(s map[string]any) {
+			s["agent_tree"].(map[string]any)["review_harness"] = "codex_cli"
+			s["review"].(map[string]any)["auth_mode"] = "setup_token"
+		}, "review.auth_mode must be subscription"},
+		"setup token with the harness absent": {func(s map[string]any) {
+			s["review"].(map[string]any)["auth_mode"] = "setup_token"
+		}, "review.auth_mode must be subscription"},
+		"unknown review harness": {func(s map[string]any) {
+			s["agent_tree"].(map[string]any)["review_harness"] = "gemini_cli"
+		}, `agent_tree.review_harness "gemini_cli" is not codex_cli or claude_code`},
+		"null review harness": {func(s map[string]any) {
+			s["agent_tree"].(map[string]any)["review_harness"] = nil
+		}, "agent_tree.review_harness is required"},
 		"root vendor instructions": {func(s map[string]any) {
 			s["prompts"].(map[string]any)["vendor_instructions"] = "/"
 		}, "prompts.vendor_instructions must not be the root directory"},
@@ -229,5 +248,48 @@ func TestLoadDeputySettingsRefusesWrongModeAndDuplicateKeys(t *testing.T) {
 	}
 	if _, err := loadDeputySettings(fifo); err == nil || !strings.Contains(err.Error(), "not a regular file") {
 		t.Fatalf("fifo: %v", err)
+	}
+}
+
+// agent_tree.review_harness may be absent, which reads as codex_cli, the
+// harness every settings file before #397 ran; each harness is accepted with
+// the one auth mode the deputy adopts for it, and adoption is asked for that
+// harness.
+func TestLoadDeputySettingsReviewHarness(t *testing.T) {
+	t.Parallel()
+	for name, tc := range map[string]struct {
+		harness, mode string
+		want          domain.HarnessClientKind
+		storeRoot     bool
+	}{
+		"absent":      {"", "subscription", domain.HarnessClientCodexCLI, true},
+		"codex_cli":   {"codex_cli", "subscription", domain.HarnessClientCodexCLI, true},
+		"claude_code": {"claude_code", "setup_token", domain.HarnessClientClaudeCode, false},
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			settings := deputySettingsFixture(t)
+			if tc.harness != "" {
+				settings["agent_tree"].(map[string]any)["review_harness"] = tc.harness
+			}
+			settings["review"].(map[string]any)["auth_mode"] = tc.mode
+			path, _ := writeDeputySettings(t, settings, 0o600)
+			loaded, err := loadDeputySettings(path)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if loaded.reviewHarness() != tc.want {
+				t.Fatalf("review harness = %s, want %s", loaded.reviewHarness(), tc.want)
+			}
+			args := deputyAdoptArgs(loaded, newDeputyPaths(t.TempDir()))
+			harness := slices.Index(args, "-review-harness")
+			if harness < 0 || args[harness+1] != string(tc.want) ||
+				slices.Contains(args, "-auth-store-root") != tc.storeRoot {
+				t.Fatalf("adopt args = %v", args)
+			}
+			if _, err := parseAuthAdoptConfig(args, io.Discard, time.Now()); err != nil {
+				t.Fatalf("auth adopt refuses the deputy's args: %v", err)
+			}
+		})
 	}
 }

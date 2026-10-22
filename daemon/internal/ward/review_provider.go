@@ -2,6 +2,7 @@ package ward
 
 import (
 	"context"
+	"errors"
 	"time"
 
 	"github.com/freeside-ai/freeside/daemon/internal/domain"
@@ -28,10 +29,9 @@ import (
 const reviewFindingsJSONSchema = `{"type":"object","properties":{"findings":{"type":"array","items":{"type":"object","properties":{"severity":{"type":"string","enum":["P0","P1","P2","P3"]},"location":{"description":"Use a canonical repository-relative path in the exact reviewed diff. Concrete ranges are inclusive, 1-based candidate-side lines, with end_line >= start_line, and must overlap at least one changed line. Anchor on the causal change, not an unchanged failure site; do not pad a range. When a relevant candidate-side changed line exists, use a concrete range, not whole_file.","anyOf":[{"type":"object","properties":{"path":{"type":"string"},"start_line":{"type":"integer","minimum":1},"end_line":{"type":"integer","minimum":1}},"required":["path","start_line","end_line"],"additionalProperties":false},{"type":"object","properties":{"path":{"type":"string"},"whole_file":{"type":"boolean","enum":[true],"description":"Set true for a finding caused by a pure-deletion hunk with no relevant candidate-side changed line: use the touched path and identify the removed code and its causal failure precisely in the explanation. Also allowed for a candidate-deleted file (no new-side line) or an otherwise wholly file-level finding on a changed file. When a relevant candidate-side changed line exists, use a concrete range; never substitute whole_file for a concrete location that fails overlap."}},"required":["path","whole_file"],"additionalProperties":false}]},"explanation":{"type":"string"}},"required":["severity","location","explanation"],"additionalProperties":false}}},"required":["findings"],"additionalProperties":false}`
 
 // review_provider.go carries the provider-neutral seam of the review runtime
-// (#872). The Codex ReviewSource and the forthcoming Claude shadow ReviewSource
-// (#865) share one audited container topology in this package; every
-// vendor-varying decision is read through reviewProvider so the neutral core
-// stays provider-agnostic. Codex is the first implementation, and every value
+// (#872). The Codex and Claude ReviewSources (#865, #397) share one audited
+// container topology in this package; every vendor-varying decision is read
+// through reviewProvider so the neutral core stays provider-agnostic. Codex is the first implementation, and every value
 // it returns matches the pre-#872 hardcoded constant, so migrating the core
 // onto this seam is byte-for-byte behavior-preserving.
 
@@ -280,4 +280,60 @@ func (l codexAuthLease) reserveStartAdmission(
 
 func (l codexAuthLease) release(ctx context.Context) error {
 	return l.lc.releaseCodexReviewAuthLease(ctx, l.guard)
+}
+
+// RoutedReviewProvider is what the daemon's composition and review admission
+// read about the review provider ward runs for one harness client (#397): the
+// vendor whose native instructions the review consumes, the CLI the approved
+// review image must carry, and the auth modes the provider delivers.
+type RoutedReviewProvider struct {
+	HarnessClient domain.HarnessClientKind
+	Vendor        domain.AgentVendor
+	CLI           string
+
+	provider reviewProvider
+}
+
+// LookupRoutedReviewProvider returns the review provider ward runs for a
+// reviewer whose agent drives client, and false when ward keeps none. The
+// registry is code-owned: a harness has an entry only when its provider passes
+// exec/contract.RunReviewSourceContract in this package's tests
+// (contract_test.go), so a reviewer line on any other harness is refused at
+// startup rather than run on an unproven source.
+func LookupRoutedReviewProvider(client domain.HarnessClientKind) (RoutedReviewProvider, bool) {
+	switch client {
+	case domain.HarnessClientCodexCLI:
+		return RoutedReviewProvider{
+			HarnessClient: client, Vendor: domain.AgentVendorCodex, CLI: "codex",
+			provider: codexReviewProvider{},
+		}, true
+	case domain.HarnessClientClaudeCode:
+		return RoutedReviewProvider{
+			HarnessClient: client, Vendor: domain.AgentVendorClaude, CLI: "claude",
+			provider: claudeReviewProvider{},
+		}, true
+	}
+	return RoutedReviewProvider{}, false
+}
+
+// AcceptsAuthMode reports whether the provider delivers mode: Codex takes a
+// subscription or an API key, Claude a setup token only.
+func (p RoutedReviewProvider) AcceptsAuthMode(mode CodexAuthMode) bool {
+	return p.provider != nil && p.provider.acceptsAuthMode(mode)
+}
+
+// ConfigurationDigest is the trust-profile configuration digest of a routed
+// review on this provider: CodexReviewConfigurationDigest's value for Codex
+// and ClaudeReviewConfigurationDigest's for Claude.
+func (p RoutedReviewProvider) ConfigurationDigest(
+	cfg CodexReviewConfig,
+	workspaceSizeMB int64,
+	authMode CodexAuthMode,
+	authIdentityID domain.AuthIdentityID,
+	costOwner string,
+) (domain.Digest, error) {
+	if p.provider == nil {
+		return "", errors.New("no routed review provider")
+	}
+	return reviewConfigurationDigest(p.provider, cfg, workspaceSizeMB, authMode, authIdentityID, costOwner)
 }

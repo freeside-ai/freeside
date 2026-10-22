@@ -1867,7 +1867,7 @@ func (w *productionPublicationWorkflow) reconcile(ctx context.Context) (producti
 	defer w.reconcileMu.Unlock()
 	if w.reviewRecoveryPending {
 		if err := w.reviewRecovery(ctx); err != nil {
-			return productionPublicationResult{}, fmt.Errorf("recover Codex reviews at startup: %w", err)
+			return productionPublicationResult{}, fmt.Errorf("recover reviews at startup: %w", err)
 		}
 		w.reviewRecoveryPending = false
 	}
@@ -3585,7 +3585,7 @@ func (w *productionPublicationWorkflow) reconcileReviewGate(
 				Round: latestFailure.Round, BaseSHA: latestFailure.BaseSHA, HeadSHA: latestFailure.HeadSHA,
 			}
 			if err := w.putReviewAttention(ctx, task, record,
-				fmt.Sprintf("Codex review stopped because of a %s failure.", latestFailure.Class),
+				fmt.Sprintf("Review stopped because of a %s failure.", latestFailure.Class),
 				domain.AttentionReviewDispute,
 			); err != nil {
 				return productionReviewPending, err
@@ -4323,7 +4323,7 @@ func (w *productionPublicationWorkflow) recordReviewSourceFailure(
 			Round: failure.Round, BaseSHA: failure.BaseSHA, HeadSHA: failure.HeadSHA,
 		}
 		if err := w.putReviewAttention(ctx, task, record,
-			fmt.Sprintf("Codex review stopped because of a %s failure.", class),
+			fmt.Sprintf("Review stopped because of a %s failure.", class),
 			domain.AttentionReviewDispute,
 		); err != nil {
 			return productionReviewPending, err
@@ -4402,7 +4402,7 @@ func (w *productionPublicationWorkflow) putReviewContradictionAttention(
 		ID: productionReviewItemID(task.RunID, failure.Round), ProjectID: task.ProjectID,
 		Subject: subject,
 		Type:    domain.AttentionReviewContradiction, Priority: domain.PriorityHigh,
-		Reason:            fmt.Sprintf("Codex review contradicted its execution contract: %s", failure.Reason),
+		Reason:            fmt.Sprintf("Review contradicted its execution contract: %s", failure.Reason),
 		RequestedDecision: []domain.Action{domain.ActionRecoverReview},
 		PRHeadSHA:         failure.HeadSHA, ReviewRecoveryBinding: &binding,
 		DisplayNames: names,
@@ -4442,6 +4442,9 @@ func (w *productionPublicationWorkflow) putReviewContradictionAttention(
 		comparable.Timing = item.Timing
 		comparable.Recommendation = item.Recommendation
 		comparable.DecisionSurface = item.DecisionSurface
+		if comparable.Reason == legacyCodexReviewReason(item.Reason) {
+			comparable.Reason = item.Reason
+		}
 		if !reflect.DeepEqual(comparable, item) {
 			return fmt.Errorf("review contradiction item %q diverges from failure %q: %w",
 				item.ID, failure.InvocationID, domain.ErrReviewRecoveryBindingMismatch)
@@ -4576,7 +4579,7 @@ func (w *productionPublicationWorkflow) parkReviewConfiguration(
 			Round: failure.Round, BaseSHA: failure.BaseSHA, HeadSHA: failure.HeadSHA,
 		}
 		if err := w.putReviewAttention(ctx, task, record,
-			"Codex review stopped because of a configuration failure.",
+			"Review stopped because of a configuration failure.",
 			domain.AttentionReviewDispute,
 		); err != nil {
 			return productionReviewPending, err
@@ -4675,7 +4678,7 @@ func (w *productionPublicationWorkflow) putReviewConfigurationAttention(
 		Subject: subject,
 		Type:    domain.AttentionReviewConfiguration, Priority: domain.PriorityHigh,
 		Reason: fmt.Sprintf(
-			"Codex review parked on a reviewer configuration the trust profile no longer approves: %s",
+			"Review parked on a reviewer configuration the trust profile no longer approves: %s",
 			failure.Reason),
 		RequestedDecision: []domain.Action{
 			domain.ActionAdoptReviewConfiguration, domain.ActionDiscuss, domain.ActionStop,
@@ -4719,6 +4722,9 @@ func (w *productionPublicationWorkflow) putReviewConfigurationAttention(
 		comparable.ConversationID = item.ConversationID
 		comparable.Recommendation = item.Recommendation
 		comparable.DecisionSurface = item.DecisionSurface
+		if comparable.Reason == legacyCodexReviewReason(item.Reason) {
+			comparable.Reason = item.Reason
+		}
 		if !reflect.DeepEqual(comparable, item) {
 			return fmt.Errorf("review configuration item %q diverges from failure %q: %w",
 				item.ID, failure.InvocationID, domain.ErrReviewConfigRecoveryBindingMismatch)
@@ -7698,4 +7704,14 @@ func (w *productionPublicationWorkflow) observeReviewInvocation(ctx context.Cont
 		return err
 	}
 	return nil
+}
+
+// legacyCodexReviewReason is a review item's reason in the wording an
+// earlier daemon wrote, "Codex review ..." where the harness-neutral
+// wording reads "Review ..." (#397). A parked contradiction or configuration
+// item is re-put on every tick while it stays open, so its comparison
+// accepts the earlier wording rather than failing every reconcile after an
+// upgrade.
+func legacyCodexReviewReason(reason string) string {
+	return "Codex review" + strings.TrimPrefix(reason, "Review")
 }

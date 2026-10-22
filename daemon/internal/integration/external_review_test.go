@@ -670,7 +670,7 @@ func TestExternalReviewCycleNamesFindingsWhenItsReviewFails(t *testing.T) {
 	}
 	item := end.reviewItems[0]
 	if item.Type != domain.AttentionReviewDispute ||
-		!strings.HasPrefix(item.Reason, "Codex review stopped because of a quota failure. ") ||
+		!strings.HasPrefix(item.Reason, "Review stopped because of a quota failure. ") ||
 		!strings.Contains(item.Reason, `maintainer on review_comment/1: "this leaks the handle"`) {
 		t.Fatalf("quota item = %s: %s", item.Type, item.Reason)
 	}

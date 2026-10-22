@@ -14,13 +14,15 @@ import (
 
 // ReviewRole is what the daemon's composition fixes about one review role's
 // source, which the lineup's agent is held to: the code-owned prompt the
-// source reviews with, the harness client it drives, the allowlist its proxy
-// admits, and the model shape its launch can pass as one argument.
+// source reviews with, the harness client it drives and the vendor whose
+// native instructions it consumes, the allowlist its proxy admits, and the
+// model shape its launch can pass as one argument.
 type ReviewRole struct {
 	Role          domain.RoleName
 	PromptName    string
 	PromptDigest  domain.Digest
 	HarnessClient domain.HarnessClientKind
+	Vendor        domain.AgentVendor
 	// EffectiveEgress is recorded on the snapshot. It is not held to the
 	// route's inference authorities (domain.ValidateReviewAdmissionDerivations).
 	EffectiveEgress []string
@@ -50,7 +52,8 @@ type ReviewAdmitter func(
 // steps 1, 2, and 4): the role's line resolves to an agent whose fragments,
 // enrollment, and enabled identity join; the line selects that agent's
 // current digest and the code-owned review prompt; the agent's harness is the
-// one the role's source drives; the offer is still on sale and the enrollment
+// one the role's source drives and its adapter is that source's vendor; the
+// offer is still on sale and the enrollment
 // holds a current credential at now; the agent carries the attended mark for
 // the review launch; and the agent names a model and an effort the launch can
 // pass. Review sources run only in an unattended daemon, so the mark is
@@ -64,7 +67,8 @@ type ReviewAdmitter func(
 // runID names the run a review is about to be requested for; it is empty at
 // startup and preflight, where no task is in view. A task line cannot move a
 // review to another agent: the source runs one identity and one agent, fixed
-// when the daemon composed it (#1981). So a line is never silently ignored, a
+// when the daemon composed it from the role's lineup line, whose harness
+// selected the source (#397, #1981). So a line is never silently ignored, a
 // run whose task's line for the role names any other agent is refused, and so
 // is one whose line does not hold against the command that set it. The shadow
 // reviewer takes no task line and is not checked for one.
@@ -119,6 +123,10 @@ func CheckReviewRole(
 	if agent.Enrollment.HarnessClient != spec.HarnessClient {
 		return refuse("agent %s runs harness client %s, the %s source drives %s",
 			agent.Line.AgentName, agent.Enrollment.HarnessClient, role, spec.HarnessClient)
+	}
+	if agent.Resolved.Adapter.Vendor != spec.Vendor {
+		return refuse("agent %s is on a %s adapter, the %s source consumes %s instructions",
+			agent.Line.AgentName, agent.Resolved.Adapter.Vendor, role, spec.Vendor)
 	}
 	if err := domain.ValidateOfferCoversDeadline(agent.Resolved.Offer, now); err != nil {
 		return refuse("%v", err)

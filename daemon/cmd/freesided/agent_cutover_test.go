@@ -25,9 +25,11 @@ import (
 )
 
 // flagEraReviewConfig is a daemon configuration as the removed flags set it
-// for the adoption fixture's two identities, with the shadow arm on.
+// for the adoption fixture's two identities, with the shadow arm on, and the
+// Codex provider the fixture's reviewer line selects.
 func flagEraReviewConfig() claudeDriverConfig {
 	return claudeDriverConfig{
+		ReviewProvider: mustRoutedReviewProvider(domain.HarnessClientCodexCLI),
 		ExporterImage:  "ghcr.io/x/exporter@sha256:" + strings.Repeat("b", 64),
 		OperatingMode:  domain.ModeUnattended,
 		ReviewImage:    "ghcr.io/x/codex@sha256:" + strings.Repeat("c", 64),
@@ -65,6 +67,7 @@ func TestLineupResolvedReviewDigestsEqualTheFlagEraDigests(t *testing.T) {
 	}
 
 	cfg := flags
+	cfg.ReviewProvider = ward.RoutedReviewProvider{}
 	cfg.ReviewAuthIdentityID, cfg.ReviewCostOwner = "", ""
 	cfg.ReviewModel, cfg.ReviewReasoningEffort = "", ""
 	cfg.ShadowReviewAuthIdentityID, cfg.ShadowReviewCostOwner = "", ""
@@ -107,17 +110,24 @@ func TestPreflightResolvesTheAdoptedLineup(t *testing.T) {
 	revision := domain.Digest("sha256:" + strings.Repeat("4", 64))
 	f.withStore(t, func(st *store.Store) {
 		now := time.Now().UTC()
-		got, err := resolvePreflightAgents(ctx, st, tree, revision, false, now)
+		got, err := resolvePreflightAgents(ctx, st, tree, revision, ward.CodexAuthSubscription, false, now)
 		want := preflightAgentSelection{
 			LineupRevision: revision, AuthIdentityID: "claude-main", AuthVolume: adoptClaudeVolume,
+			ReviewProvider:       mustRoutedReviewProvider(domain.HarnessClientCodexCLI),
 			ReviewAuthIdentityID: "codex-review", ReviewCostOwner: "review-operator",
 			ReviewModel: "gpt-fixture-1", ReviewReasoningEffort: "high",
 		}
 		if err != nil || got != want {
 			t.Fatalf("preflight agents = %+v, %v; want %+v", got, err, want)
 		}
+		// A setup token is not a mode the Codex reviewer accepts (#397).
+		_, err = resolvePreflightAgents(ctx, st, tree, revision, ward.CodexAuthSetupToken, false, now)
+		var mismatch *reviewProviderMismatch
+		if !errors.As(err, &mismatch) || !errors.Is(err, engine.ErrAgentNotAdmissible) {
+			t.Fatalf("Codex reviewer under setup_token = %v", err)
+		}
 		// The shadow arm is on but adoption emitted no shadow reviewer line.
-		_, err = resolvePreflightAgents(ctx, st, tree, revision, true, now)
+		_, err = resolvePreflightAgents(ctx, st, tree, revision, ward.CodexAuthSubscription, true, now)
 		var failure *roleAdmissionError
 		if !errors.As(err, &failure) || failure.Role != domain.RoleShadowReviewer {
 			t.Fatalf("preflight agents with the shadow arm on = %v", err)
@@ -140,6 +150,7 @@ func TestReviewLaunchSendsTheHarnessNativeEffort(t *testing.T) {
 	want := flagEraReviewConfig()
 	want.ReviewReasoningEffort, want.ShadowReviewReasoningEffort = "xhigh", "max"
 	cfg := want
+	cfg.ReviewProvider = ward.RoutedReviewProvider{}
 	cfg.ReviewModel, cfg.ReviewReasoningEffort = "", ""
 	cfg.ShadowReviewModel, cfg.ShadowReviewReasoningEffort = "", ""
 	f.withStore(t, func(st *store.Store) {
@@ -148,7 +159,7 @@ func TestReviewLaunchSendsTheHarnessNativeEffort(t *testing.T) {
 		if err != nil || !reflect.DeepEqual(got, want) {
 			t.Fatalf("lineup-resolved configuration = %+v, %v; want %+v", got, err, want)
 		}
-		agents, err := resolvePreflightAgents(ctx, st, tree, domain.Digest("sha256:"+strings.Repeat("4", 64)), true, now)
+		agents, err := resolvePreflightAgents(ctx, st, tree, domain.Digest("sha256:"+strings.Repeat("4", 64)), ward.CodexAuthSubscription, true, now)
 		if err != nil || agents.ReviewModel != want.ReviewModel || agents.ReviewReasoningEffort != "xhigh" ||
 			agents.ShadowReviewModel != want.ShadowReviewModel || agents.ShadowReviewReasoningEffort != "max" {
 			t.Fatalf("preflight agents = %+v, %v", agents, err)
@@ -236,7 +247,7 @@ func TestReviewRoleNeedsAModelAndAnEffort(t *testing.T) {
 			}
 			// The identity is never compared: the agent is refused first, so
 			// the refusal has to name what the agent lacks.
-			admit := reviewAdmission(st, old, role, "", time.Now)
+			admit := reviewAdmission(st, old, testReviewRole(role, nil), "", time.Now)
 			if err := admit(ctx, exec.ReviewRequest{}); !errors.Is(err, engine.ErrAgentNotAdmissible) ||
 				!strings.Contains(err.Error(), lacks) {
 				t.Fatalf("%s review admission on the earlier tree = %v, want it refused because its agent %s", role, err, lacks)
@@ -247,7 +258,7 @@ func TestReviewRoleNeedsAModelAndAnEffort(t *testing.T) {
 			failure.Role != domain.RoleReviewer {
 			t.Fatalf("startup selection on the earlier tree = %v", err)
 		}
-		_, err := resolvePreflightAgents(ctx, st, old, domain.Digest("sha256:"+strings.Repeat("4", 64)), true, now)
+		_, err := resolvePreflightAgents(ctx, st, old, domain.Digest("sha256:"+strings.Repeat("4", 64)), ward.CodexAuthSubscription, true, now)
 		if !errors.As(err, &failure) || failure.Role != domain.RoleReviewer {
 			t.Fatalf("preflight agents on the earlier tree = %v", err)
 		}
@@ -391,7 +402,7 @@ func TestReviewSelectionFailsClosed(t *testing.T) {
 					!errors.Is(err, engine.ErrAgentNotAdmissible) || !strings.Contains(err.Error(), "not_after") {
 					t.Fatalf("%s after the offer's not_after = %v", role, err)
 				}
-				admit := reviewAdmission(st, tree, role, agent.Identity.ID, func() time.Time { return expired })
+				admit := reviewAdmission(st, tree, testReviewRole(role, nil), agent.Identity.ID, func() time.Time { return expired })
 				if err := admit(ctx, exec.ReviewRequest{}); !errors.Is(err, engine.ErrAgentNotAdmissible) {
 					t.Fatalf("%s review admission after the offer's not_after = %v", role, err)
 				}
@@ -431,7 +442,7 @@ func TestReviewSelectionFailsClosed(t *testing.T) {
 					!errors.Is(err, engine.ErrAgentNotAdmissible) || !strings.Contains(err.Error(), "attended mark") {
 					t.Fatalf("%s without its attended mark = %v", role, err)
 				}
-				admit := reviewAdmission(st, unmarked, role, agent.Identity.ID, time.Now)
+				admit := reviewAdmission(st, unmarked, testReviewRole(role, nil), agent.Identity.ID, time.Now)
 				if err := admit(ctx, exec.ReviewRequest{}); !errors.Is(err, engine.ErrAgentNotAdmissible) {
 					t.Fatalf("%s review admission without its attended mark = %v", role, err)
 				}
@@ -456,11 +467,11 @@ func TestReviewSelectionFailsClosed(t *testing.T) {
 		tree := loadAdoptedPatch(t, patch)
 		f.withStore(t, func(st *store.Store) {
 			req := admittedReviewRequest(t, st, tree, domain.RoleReviewer, seedReviewedRun(t, st, "run-reviewed").ID)
-			admit := reviewAdmission(st, tree, domain.RoleReviewer, "codex-review", time.Now)
+			admit := reviewAdmission(st, tree, testReviewRole(domain.RoleReviewer, nil), "codex-review", time.Now)
 			if err := admit(ctx, req); err != nil {
 				t.Fatalf("review admission of the adopted reviewer: %v", err)
 			}
-			other := reviewAdmission(st, tree, domain.RoleReviewer, "codex-other", time.Now)
+			other := reviewAdmission(st, tree, testReviewRole(domain.RoleReviewer, nil), "codex-other", time.Now)
 			if err := other(ctx, req); !errors.Is(err, engine.ErrAgentNotAdmissible) {
 				t.Fatalf("review admission under another identity = %v", err)
 			}
@@ -547,8 +558,8 @@ func TestReviewAdmissionHoldsTheReviewerTaskLine(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		admit := reviewAdmission(st, tree, domain.RoleReviewer, reviewer.Identity.ID, time.Now)
-		admitShadow := reviewAdmission(st, tree, domain.RoleShadowReviewer, shadow.Identity.ID, time.Now)
+		admit := reviewAdmission(st, tree, testReviewRole(domain.RoleReviewer, nil), reviewer.Identity.ID, time.Now)
+		admitShadow := reviewAdmission(st, tree, testReviewRole(domain.RoleShadowReviewer, nil), shadow.Identity.ID, time.Now)
 		refused := func(t *testing.T, req exec.ReviewRequest, want string) {
 			t.Helper()
 			err := admit(ctx, req)
@@ -597,7 +608,7 @@ func TestReviewAdmissionHoldsTheReviewerTaskLine(t *testing.T) {
 			}
 			admitter := reviewAdmitter(st, engine.AgentSelection{
 				Tree: tree, LineupRevision: revision, Launch: agentbaseline.RoleLaunch,
-			}, egress)
+			}, testReviewRoles(egress))
 			for role, arm := range map[domain.RoleName]struct {
 				agent    engine.ReviewRoleAgent
 				source   func(context.Context, exec.ReviewRequest) error
@@ -803,7 +814,7 @@ func TestReviewInvocationIsRefusedBeforeItIsAdmitted(t *testing.T) {
 					admit := func(id domain.InvocationID) (domain.ReviewAdmission, error) {
 						return reviewAdmitter(st, engine.AgentSelection{
 							Tree: f.tree, LineupRevision: revision, Launch: agentbaseline.RoleLaunch,
-						}, map[domain.RoleName][]string{role: {"review.example:443"}})(ctx, role, f.run.ID, id, f.at)
+						}, testReviewRoles(map[domain.RoleName][]string{role: {"review.example:443"}}))(ctx, role, f.run.ID, id, f.at)
 					}
 					if _, err := admit("review-before"); err != nil {
 						t.Fatalf("admit the %s invocation on the adopted tree: %v", role, err)
@@ -1095,4 +1106,79 @@ func admittedReviewRequest(
 	admission.AgentBinding.RouteModelID = agent.Model
 	admission.AgentBinding.NativeEffort = agent.NativeEffort
 	return exec.ReviewRequest{RunID: runID, Admission: admission}
+}
+
+// testReviewRole is the review spec the daemon composes for a role whose line
+// runs the fixture harness: Codex for the reviewer, Claude for the shadow.
+func testReviewRole(role domain.RoleName, egress []string) engine.ReviewRole {
+	provider := shadowReviewProvider()
+	if role == domain.RoleReviewer {
+		provider, _ = ward.LookupRoutedReviewProvider(domain.HarnessClientCodexCLI)
+	}
+	return reviewRole(role, provider, egress)
+}
+
+// testReviewRoles composes testReviewRole for each role in egress.
+func testReviewRoles(egress map[domain.RoleName][]string) map[domain.RoleName]engine.ReviewRole {
+	roles := make(map[domain.RoleName]engine.ReviewRole, len(egress))
+	for role, endpoints := range egress {
+		roles[role] = testReviewRole(role, endpoints)
+	}
+	return roles
+}
+
+// TestReviewAdmissionRefusesALineOnAnotherHarness covers the per-launch
+// recheck across a harness switch (#397): a review source composed for one
+// harness refuses its next review once the reviewer line names an agent on
+// the other, and a source whose vendor is not the agent adapter's refuses
+// even on the right harness. The restart that recomposes the source for the
+// new line admits it.
+func TestReviewAdmissionRefusesALineOnAnotherHarness(t *testing.T) {
+	ctx := context.Background()
+	f := newAuthAdoptFixture(t)
+	_, codexPatch, err := f.run(t, f.args())
+	if err != nil {
+		t.Fatalf("adopt the Codex reviewer: %v", err)
+	}
+	f.recordClaudeReviewIdentity(t)
+	f.enrollClaudeReviewIdentity(t)
+	_, claudePatch, err := f.run(t, f.claudeReviewArgs())
+	if err != nil {
+		t.Fatalf("adopt the Claude reviewer: %v", err)
+	}
+	codexTree, claudeTree := loadAdoptedPatch(t, codexPatch), loadAdoptedPatch(t, claudePatch)
+	codexSpec := testReviewRole(domain.RoleReviewer, nil)
+	claudeSpec := reviewRole(domain.RoleReviewer, mustRoutedReviewProvider(domain.HarnessClientClaudeCode), nil)
+	wrongVendor := claudeSpec
+	wrongVendor.Vendor = domain.AgentVendorCodex
+	f.withStore(t, func(st *store.Store) {
+		run := seedReviewedRun(t, st, "run-switched").ID
+		codexReq := admittedReviewRequest(t, st, codexTree, domain.RoleReviewer, run)
+		claudeReq := admittedReviewRequest(t, st, claudeTree, domain.RoleReviewer, run)
+		for name, tc := range map[string]struct {
+			tree     agenttree.Tree
+			spec     engine.ReviewRole
+			identity domain.AuthIdentityID
+			req      exec.ReviewRequest
+			refusal  string
+		}{
+			"Codex source, Claude line":    {claudeTree, codexSpec, "claude-review", claudeReq, "harness"},
+			"Claude source, Codex line":    {codexTree, claudeSpec, "codex-review", codexReq, "harness"},
+			"Claude harness, Codex vendor": {claudeTree, wrongVendor, "claude-review", claudeReq, "adapter"},
+			"recomposed Claude source":     {claudeTree, claudeSpec, "claude-review", claudeReq, ""},
+		} {
+			err := reviewAdmission(st, tc.tree, tc.spec, tc.identity, time.Now)(ctx, tc.req)
+			if tc.refusal == "" {
+				if err != nil {
+					t.Fatalf("%s: %v", name, err)
+				}
+				continue
+			}
+			var failure *roleAdmissionError
+			if !errors.As(err, &failure) || failure.Role != domain.RoleReviewer ||
+				!errors.Is(err, engine.ErrAgentNotAdmissible) || !strings.Contains(err.Error(), tc.refusal) {
+				t.Fatalf("%s = %v, want a refusal naming the %s", name, err, tc.refusal)
+			}
+		}
+	})
 }
