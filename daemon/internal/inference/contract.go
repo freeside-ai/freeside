@@ -568,11 +568,12 @@ type RoleCall struct {
 	CredentialSource CredentialSource
 }
 
-// HealthReporter hears whether a judgment role could be admitted. Client
-// reports on every call that reaches admission, so an implementation keeps
-// the reports idempotent. Neither method can fail a call: the site's
-// fail-safe already carries an unbound role, and the item only makes the
-// standing fault visible.
+// HealthReporter hears whether a judgment role could be admitted and whether
+// the inference ledger is loaded. Client reports on every call that reaches
+// admission or the ledger and at its startup check, so an implementation
+// keeps the reports idempotent. No method can fail a call: the site's
+// fail-safe already carries an unbound role or a disabled ledger, and the
+// item only makes the standing fault visible.
 type HealthReporter interface {
 	// RoleUnbound reports that the role has no usable line or failed its
 	// wardless admission, with the reason.
@@ -580,6 +581,16 @@ type HealthReporter interface {
 	// RoleResolved reports that the role is not unbound: a call was
 	// admitted, or the configuration leaves the role off.
 	RoleResolved(ctx context.Context, role domain.RoleName)
+	// LedgerDisabled reports that the inference ledger could not be
+	// created, read, decoded, anchored, or persisted, with the cause. Every
+	// call returns its site fail-safe until a later start loads the ledger.
+	// The cause names the step and the system error, never a path, a
+	// record, or a credential, and is the same on every start that fails
+	// the same way.
+	LedgerDisabled(ctx context.Context, cause string)
+	// LedgerLoaded reports that the ledger admitted or refused a call on its
+	// merits, so it is loaded. An exhausted budget is the ledger working.
+	LedgerLoaded(ctx context.Context)
 }
 
 // unboundProducer labels a fail-safe result no agent produced.

@@ -160,6 +160,9 @@ func New(cfg Config) (*Client, error) {
 	if err != nil {
 		return nil, err
 	}
+	if cause := ledger.disabledCause(); cause != nil {
+		cfg.Logger.Warn("inference ledger disabled; every judgment call returns its fail-safe", "error", cause)
+	}
 	return &Client{
 		logger: cfg.Logger,
 		roles:  cfg.Roles, health: cfg.Health, callLaunch: callLaunch,
@@ -362,6 +365,7 @@ func (c *Client) Call(ctx context.Context, siteID, project, root string, fields 
 		return fallback(site, admitted.producer, FallbackCallInFlight), nil
 	}
 	record, err := c.ledger.reserveCall(site, project, root, admitted.producer, digest, admitted.identity)
+	c.reportLedger(ctx)
 	if err != nil {
 		c.endDriver(site.ID)
 		reason := FallbackLedgerUnavailable
@@ -519,12 +523,14 @@ func CheckRoles(ctx context.Context, roles RoleSource, sites []Site, now time.Ti
 }
 
 // CheckRoles admits every role with a registered site as CheckRoles does and
-// tells the health reporter each result. The daemon runs it at startup, so a
-// role the lineup cannot fill is named before a site returns its fail-safe,
-// and so an item whose role has since been fixed is resolved even while that
-// item is what holds the work that would have called the role. A nil
-// RoleSource has no role to check.
+// tells the health reporter each result, and whether the ledger is loaded.
+// The daemon runs it at startup, so a role the lineup cannot fill or a
+// ledger that did not load is named before a site returns its fail-safe,
+// and so an item whose cause has since been fixed is resolved even while
+// that item is what holds the work that would have called the role. A nil
+// RoleSource has no role to check; the ledger is reported either way.
 func (c *Client) CheckRoles(ctx context.Context) []RoleCheck {
+	c.reportLedger(ctx)
 	if c.roles == nil {
 		return nil
 	}
@@ -547,6 +553,22 @@ func (c *Client) reportResolved(ctx context.Context, role domain.RoleName) {
 	if c.health != nil {
 		c.health.RoleResolved(ctx, role)
 	}
+}
+
+// reportLedger tells the health reporter whether the ledger is loaded. It
+// runs at the startup check and after every reservation, as the role
+// reports do, so a ledger disabled by a failed persist is reported by the
+// next call and the item of a ledger that loads again resolves at that
+// start.
+func (c *Client) reportLedger(ctx context.Context) {
+	if c.health == nil {
+		return
+	}
+	if cause := c.ledger.disabledCause(); cause != nil {
+		c.health.LedgerDisabled(ctx, cause.Error())
+		return
+	}
+	c.health.LedgerLoaded(ctx)
 }
 
 // observedFrom turns a driver's observation into the record's shape, where a

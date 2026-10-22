@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io/fs"
 	"maps"
 	"math"
 	"os"
@@ -185,7 +186,7 @@ func openLedger(path, anchorPath string, now func() time.Time) (*ledger, error) 
 		Attention: map[string]attentionRecord{},
 	}, protected: map[string]bool{}}
 	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
-		l.disabled = fmt.Errorf("create inference state directory: %w", err)
+		l.disabled = disabledBy("create inference state directory", err)
 		return l, nil
 	}
 	body, err := os.ReadFile(path) //nolint:gosec // daemon-owned configured state path
@@ -206,12 +207,12 @@ func openLedger(path, anchorPath string, now func() time.Time) (*ledger, error) 
 			return l, nil
 		}
 		if err := atomicfile.WriteFileNoReplace(anchorPath, []byte(epoch), 0o600); err != nil {
-			l.disabled = fmt.Errorf("persist inference ledger anchor: %w", err)
+			l.disabled = disabledBy("persist inference ledger anchor", err)
 		}
 		return l, nil
 	}
 	if err != nil {
-		l.disabled = fmt.Errorf("read inference ledger: %w", err)
+		l.disabled = disabledBy("read inference ledger", err)
 		return l, nil
 	}
 	if err := json.Unmarshal(body, &l.state); err != nil {
@@ -278,6 +279,19 @@ func openLedger(path, anchorPath string, now func() time.Time) (*ledger, error) 
 	return l, nil
 }
 
+// disabledBy is the cause a failed step disables the ledger with. A path
+// error keeps its operation and its underlying error but not its path: a
+// persist fails on a temporary file whose random name would make the same
+// fault a new cause, and so a new health item, on every start. The paths
+// are the configured ones and the daemon log carries the full error.
+func disabledBy(step string, err error) error {
+	var pathErr *fs.PathError
+	if errors.As(err, &pathErr) {
+		return fmt.Errorf("%s: %s: %w", step, pathErr.Op, pathErr.Err)
+	}
+	return fmt.Errorf("%s: %w", step, err)
+}
+
 func recordsCarryIdentity(records []callRecord) bool {
 	return slices.ContainsFunc(records, func(record callRecord) bool { return record.Identity != nil })
 }
@@ -336,6 +350,15 @@ func validateLedgerState(state ledgerState) error {
 }
 
 var errBudgetExhausted = errors.New("inference cumulative budget exhausted")
+
+// disabledCause returns why the ledger is disabled, or nil while it is
+// loaded. A ledger stays disabled for the process: nothing clears the cause
+// before a start that loads the file again.
+func (l *ledger) disabledCause() error {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	return l.disabled
+}
 
 // reserveCall admits one call against the cumulative budgets and writes its
 // record, identity included, before the driver runs.
@@ -570,7 +593,7 @@ func (l *ledger) persist(state ledgerState) error {
 		return err
 	}
 	if err := atomicfile.WriteFile(l.path, body, 0o600); err != nil {
-		l.disabled = fmt.Errorf("persist inference ledger: %w", err)
+		l.disabled = disabledBy("persist inference ledger", err)
 		return l.disabled
 	}
 	l.state = state

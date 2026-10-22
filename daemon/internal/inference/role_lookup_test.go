@@ -7,6 +7,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -20,11 +21,15 @@ import (
 	"github.com/freeside-ai/freeside/daemon/internal/inference/fake"
 )
 
-// roleHealth records what the client reports about each role.
+// roleHealth records what the client reports about each role and the ledger.
 type roleHealth struct {
 	mu       sync.Mutex
 	unbound  map[domain.RoleName]string
 	resolved map[domain.RoleName]int
+	// disabled holds each cause the ledger was reported disabled with, in
+	// order; loaded counts the reports that it is loaded.
+	disabled []string
+	loaded   int
 }
 
 func newRoleHealth() *roleHealth {
@@ -41,6 +46,18 @@ func (h *roleHealth) RoleResolved(_ context.Context, role domain.RoleName) {
 	h.mu.Lock()
 	defer h.mu.Unlock()
 	h.resolved[role]++
+}
+
+func (h *roleHealth) LedgerDisabled(_ context.Context, cause string) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	h.disabled = append(h.disabled, cause)
+}
+
+func (h *roleHealth) LedgerLoaded(_ context.Context) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	h.loaded++
 }
 
 func budgetedSites() []inference.Site {
@@ -819,5 +836,107 @@ func TestCheckRolesReportsWithoutCalling(t *testing.T) {
 	var down *inference.Client
 	if down, _ = lookupClient(t, nil, health, budgetedSites()); len(down.CheckRoles(context.Background())) != 0 {
 		t.Fatal("a client with no role source checked a role")
+	}
+}
+
+// The client reports the ledger beside the roles: disabled with its cause at
+// the startup check and on each call that reaches it, loaded otherwise. An
+// exhausted budget is the ledger working and is reported as loaded.
+func TestLedgerStateIsReportedWithTheRoles(t *testing.T) {
+	ctx := context.Background()
+	driver := fake.New()
+	roles := fake.Roles{Provider: "fake", Model: "test", Driver: driver}
+	sites := []inference.Site{inference.ClassifierSite(testBudget(1))}
+	call := func(client *inference.Client) inference.CallResult {
+		t.Helper()
+		result, err := client.Call(ctx, sites[0].ID, "project-1", "run-1", siteFields(sites[0]))
+		if err != nil {
+			t.Fatal(err)
+		}
+		return result
+	}
+
+	// An undecodable file disables the ledger before any call is made.
+	dir := t.TempDir()
+	undecodable := filepath.Join(dir, "ledger.json")
+	if err := os.WriteFile(undecodable, []byte(`{"version":"freeside.inference-budget/v4",`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	advisories, err := advisory.Open(filepath.Join(dir, "advisory.json"), 100, 16<<10)
+	if err != nil {
+		t.Fatal(err)
+	}
+	health := newRoleHealth()
+	client, err := inference.New(inference.Config{
+		StatePath: undecodable, Roles: roles, Health: health, Sites: sites, Advisory: advisories,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	client.CheckRoles(ctx)
+	if result := call(client); !result.Fallback || result.Reason != inference.FallbackLedgerUnavailable {
+		t.Fatalf("call over a disabled ledger = %+v", result)
+	}
+	if want := []string{"decode inference ledger", "decode inference ledger"}; !slices.Equal(health.disabled, want) ||
+		health.loaded != 0 || len(driver.Requests()) != 0 {
+		t.Fatalf("reports over a disabled ledger: disabled = %q, loaded = %d, requests = %d",
+			health.disabled, health.loaded, len(driver.Requests()))
+	}
+
+	// A ledger that loads is reported loaded, at the check and at each
+	// reservation, whether the budget admits the call or not.
+	health = newRoleHealth()
+	client, _ = lookupClient(t, roles, health, sites)
+	client.CheckRoles(ctx)
+	if first := call(client); first.Reason == inference.FallbackLedgerUnavailable ||
+		first.Reason == inference.FallbackBudgetExhausted {
+		t.Fatalf("first call over a loaded ledger = %+v", first)
+	}
+	if second := call(client); second.Reason != inference.FallbackBudgetExhausted {
+		t.Fatalf("second call under a one-call budget = %+v", second)
+	}
+	if len(health.disabled) != 0 || health.loaded != 3 {
+		t.Fatalf("reports over a loaded ledger: disabled = %q, loaded = %d", health.disabled, health.loaded)
+	}
+
+	// A ledger disabled after the check, here by the reservation's own
+	// persist, is reported disabled by that same call and stays disabled.
+	// The cause keeps the operation and the error but not the temporary
+	// file's random name, so a restart that fails the same way reports the
+	// same cause.
+	stateDir := filepath.Join(t.TempDir(), "inference")
+	if err := os.Mkdir(stateDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.Chmod(stateDir, 0o700) }) //nolint:gosec // test-owned directory needs traversal
+	health = newRoleHealth()
+	client, err = inference.New(inference.Config{
+		StatePath: filepath.Join(stateDir, "ledger.json"), AnchorPath: filepath.Join(stateDir, "..", "ledger.anchor"),
+		Roles: roles, Health: health, Sites: []inference.Site{inference.ClassifierSite(testBudget(10))}, Advisory: advisories,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	client.CheckRoles(ctx)
+	if err := os.Chmod(stateDir, 0o500); err != nil { //nolint:gosec // deliberate write-denial fixture
+		t.Fatal(err)
+	}
+	if result := call(client); result.Reason != inference.FallbackLedgerUnavailable {
+		t.Fatalf("call whose reservation could not be persisted = %+v", result)
+	}
+	if err := os.Chmod(stateDir, 0o700); err != nil { //nolint:gosec // restore test-owned directory traversal
+		t.Fatal(err)
+	}
+	if result := call(client); result.Reason != inference.FallbackLedgerUnavailable {
+		t.Fatalf("call after the directory was restored = %+v", result)
+	}
+	want := "persist inference ledger: open: permission denied"
+	if health.loaded != 1 || !slices.Equal(health.disabled, []string{want, want}) {
+		t.Fatalf("reports over a ledger disabled mid-process: disabled = %q, loaded = %d", health.disabled, health.loaded)
+	}
+	for _, cause := range health.disabled {
+		if strings.Contains(cause, stateDir) || strings.Contains(cause, ".tmp") {
+			t.Fatalf("the cause carries a path: %q", cause)
+		}
 	}
 }
