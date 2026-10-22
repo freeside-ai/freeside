@@ -1,6 +1,5 @@
 import Foundation
 import FreesideAPI
-import Network
 import Observation
 import OpenAPIRuntime
 
@@ -163,7 +162,7 @@ public final class SyncCoordinator {
     private var heartbeatToken: UUID?
     private var refreshTask: Task<Bool, Never>?
     private var refreshToken: UUID?
-    private var reachabilityMonitor: NWPathMonitor?
+    private var stopReachability: (() -> Void)?
     private var lastReachabilitySatisfied: Bool?
 
     public init(
@@ -513,22 +512,24 @@ public final class SyncCoordinator {
         return now.timeIntervalSince(lastUpdatedAt) >= Self.stalenessThreshold
     }
 
-    public func startReachabilityMonitoring() {
-        guard reachabilityMonitor == nil else { return }
-        let monitor = NWPathMonitor()
-        reachabilityMonitor = monitor
-        monitor.pathUpdateHandler = { [weak self] path in
-            let isSatisfied = path.status == .satisfied
+    /// Starts `source`, which reports each network-path update as
+    /// satisfied or not, from any thread, and returns the call that stops
+    /// it. The platform source is `startReachabilityMonitoring()`
+    /// (`PlatformServices.swift`).
+    func startReachabilityMonitoring(
+        source: (@escaping @Sendable (Bool) -> Void) -> () -> Void
+    ) {
+        guard stopReachability == nil else { return }
+        stopReachability = source { [weak self] isSatisfied in
             Task { @MainActor [weak self] in
                 self?.observeReachability(isSatisfied)
             }
         }
-        monitor.start(queue: DispatchQueue(label: "ai.freeside.reachability"))
     }
 
     public func stopReachabilityMonitoring() {
-        reachabilityMonitor?.cancel()
-        reachabilityMonitor = nil
+        stopReachability?()
+        stopReachability = nil
         lastReachabilitySatisfied = nil
     }
 
