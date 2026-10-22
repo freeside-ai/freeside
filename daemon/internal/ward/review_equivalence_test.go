@@ -24,7 +24,8 @@ import (
 // harness reconstructs the pre-#872 pure implementations from base commit
 // 6bf2c8b854d6470e77ae5b93e6113530e35c3d90 and measures, over a fuzzed corpus,
 // that the Codex provider path preserves decisions apart from documented
-// post-extraction protocol changes below. It covers
+// post-extraction protocol changes below (#1212, #1291, and #2110's failure
+// classification and text). It covers
 // the two trust-boundary surfaces the acceptance criteria name: (a) collection
 // normalization / strict-JSON decode, and (b) launch-spec mount + command + env
 // derivation. A diff-read asserts equivalence; this harness measures it.
@@ -76,9 +77,14 @@ func TestReviewProviderConstantsMatchBase(t *testing.T) {
 // oldNormalizeCollection is the base-commit (6bf2c8b8) body of
 // CodexReviewSource.normalizeCollection, reconstructed verbatim with its inline
 // literals, as the independent reference for the equivalence comparison. It
-// calls the unchanged package helpers. The explicit #1212 deltas below retain
+// calls the package helpers, which #2110 revised (classifyCodexTerminalFailure,
+// codexTerminalFailure, codexRefreshAttemptFailure), so the comparison covers
+// how the outcome is composed, not those helpers' classification; their tests
+// pin that. The explicit #1212 deltas below retain
 // failure evidence, reject terminal failure at exit zero, and use v4 evidence;
-// the historical finding decoder remains an independent comparison oracle.
+// the #2110 deltas classify a rejected credential from stderr and carry the
+// terminal message in the failure; the historical finding decoder remains an
+// independent comparison oracle.
 func oldNormalizeCollection(
 	s *CodexReviewSource,
 	id domain.InvocationID, req exec.ReviewRequest, collection CodexReviewCollection,
@@ -98,7 +104,8 @@ func oldNormalizeCollection(
 	}()
 	_, terminalFailed := codexTerminalFailure(collection.Events)
 	if collection.ExitStatus != 0 || terminalFailed {
-		class, terminalMessage := classifyCodexTerminalFailure(collection.Events)
+		// #2110 lets a 401 on stderr classify a nonzero exit with no terminal event.
+		class, terminalMessage := classifyCodexTerminalFailure(collection.Events, collection.ExitStatus)
 		failure := fmt.Sprintf("Codex review exited with status %d", collection.ExitStatus)
 		switch collection.ExitStatus {
 		case 78:
@@ -109,6 +116,10 @@ func oldNormalizeCollection(
 		}
 		if codexRefreshAttemptFailure([]byte(terminalMessage)) {
 			failure = "Codex review attempted an in-container credential refresh"
+		}
+		// #2110 records the provider's terminal message with the failure.
+		if terminalMessage != "" {
+			failure += ": " + exec.TruncateSummary(terminalMessage)
 		}
 		return CodexReviewSourceOutcome{
 			InvocationID: id,

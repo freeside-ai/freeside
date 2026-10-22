@@ -71,7 +71,8 @@ type reviewProvider interface {
 	reviewPrompt(req exec.ReviewRequest) string
 	// terminalFailureMessage extracts the provider's final structured CLI error
 	// message. Unstructured stderr and non-error envelopes are never authority
-	// for failure classification.
+	// for failure classification, except the Codex source's 401 fallback for a
+	// turn with no terminal event (classifyCodexTerminalFailure, #2110).
 	terminalFailureMessage(events []byte) string
 	// usageMeasurements extracts numbers-only telemetry from the provider's
 	// authenticated event stream. Providers without trusted telemetry return nil.
