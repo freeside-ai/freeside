@@ -90,6 +90,23 @@ func judgmentRoleItems(t *testing.T, st *store.Store) map[domain.RoleName]domain
 	return items
 }
 
+func inferenceLedgerItems(t *testing.T, st *store.Store) []domain.AttentionItem {
+	t.Helper()
+	var items []domain.AttentionItem
+	if err := st.Read(context.Background(), func(tx *store.ReadTx) error {
+		open, err := tx.ListOpenAttentionItems(context.Background(), domain.AttentionSystemHealth)
+		for _, item := range open {
+			if strings.HasPrefix(string(item.ID), inferenceLedgerItemPrefix) {
+				items = append(items, item)
+			}
+		}
+		return err
+	}); err != nil {
+		t.Fatal(err)
+	}
+	return items
+}
+
 // TestJudgmentSitesReadTheAdoptedLineup runs every judgment site through the
 // daemon's role source over an adopted tree and a real store. Each role the
 // lineup names admits and its call is stamped; a role with no line, a line
@@ -725,5 +742,151 @@ func TestWriterLineageReadsTheTreeAlone(t *testing.T) {
 	}
 	if got := writerLineage(other, domain.RoleImplementer); got != "" {
 		t.Fatalf("lineage with a line naming another agent digest = %q", got)
+	}
+}
+
+// A disabled inference ledger raises one blocking system_health item that
+// names the cause and nothing the file held; a repeated report with the same
+// cause writes nothing, in one process or across a restart; a restart that
+// fails for another cause replaces the item; a start that loads the ledger
+// resolves it; an exhausted budget, which is the ledger working, opens
+// none; and a start that cannot write the item stops.
+func TestInferenceLedgerDisabledRaisesOneBlockingItem(t *testing.T) {
+	ctx := context.Background()
+	now := func() time.Time { return time.Date(2026, 10, 10, 12, 0, 0, 0, time.UTC) }
+	// A key-shaped epoch sits where validation looks and the record id
+	// where a decoder would name it, so a cause that quoted either would
+	// show in the item.
+	const keyShapedEpoch, record = "sk-ant-api03-ledger-epoch", "call-7f3a"
+	undecodable := filepath.Join(t.TempDir(), "ledger.json")
+	body := `{"version":"freeside.inference-budget/v4","epoch":"` + keyShapedEpoch + `","usage":{},"calls":[{"id":"` + record + `"}]}`
+	if err := os.WriteFile(undecodable, []byte(body), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	driver := inferencefake.New()
+	roles := inferencefake.Roles{Provider: "fake", Model: "test", Driver: driver}
+	newClient := func(path string, calls int64, health *judgmentRoleHealth) *inference.Client {
+		t.Helper()
+		limits := inference.Limits{Calls: calls, ComputeUnits: 10_000_000, AttentionItems: 100, Starvation: 10 * time.Hour}
+		client, err := inference.New(inference.Config{
+			StatePath: path, Roles: roles, Health: health,
+			Sites: judgmentSites(inference.Budget{
+				Window: 24 * time.Hour, Site: limits, Project: limits, Global: limits,
+				MaxCallsPerRoot: 100, MaxStarvationPerRoot: 10 * time.Hour,
+			}),
+			Advisory: advisory.Unavailable(errors.New("unused")), Now: now,
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		return client
+	}
+	site := inference.ClassifierSite(inference.Budget{})
+	fields := map[string]inference.InputField{}
+	for _, policy := range site.Fields {
+		fields[policy.Name] = inference.InputField{Value: "data", Sensitivity: policy.Sensitivity}
+	}
+	call := func(client *inference.Client) inference.CallResult {
+		t.Helper()
+		result, err := client.Call(ctx, site.ID, "project-1", "run-1", fields)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return result
+	}
+
+	st, _, err := openStoreWithTopicKey(ctx, newAuthAdoptFixture(t).dbPath, store.Options{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = st.Close() })
+	{
+		health := newJudgmentRoleHealth(st, now, nil)
+		disabled := newClient(undecodable, 100, health)
+		if err := checkJudgmentRolesAtStartup(ctx, disabled, health, nil); err != nil {
+			t.Fatalf("startup check over a disabled ledger: %v", err)
+		}
+		items := inferenceLedgerItems(t, st)
+		if len(items) != 1 {
+			t.Fatalf("items over a disabled ledger = %+v", items)
+		}
+		item := items[0]
+		if item.Posture == nil || *item.Posture != domain.HealthPostureBlocking ||
+			item.HealthDiagnostic == nil || item.HealthDiagnostic.Code != "inference_ledger_disabled" ||
+			item.HealthDiagnostic.Impairs != domain.ImpairedCapabilityUnattendedAdmission ||
+			!strings.Contains(item.Reason, "inference ledger is disabled (decode inference ledger)") {
+			t.Fatalf("item = %+v", item)
+		}
+		if strings.Contains(item.Reason, keyShapedEpoch) || strings.Contains(item.Reason, record) {
+			t.Fatalf("the item carries what the file held: %q", item.Reason)
+		}
+		if roleItems := judgmentRoleItems(t, st); len(roleItems) != 0 {
+			t.Fatalf("role items with every role admitted = %+v", roleItems)
+		}
+
+		// Every later call returns its fail-safe and writes nothing new; nor
+		// does a restart that fails for the same cause.
+		at := storeRevision(t, st)
+		if result := call(disabled); !result.Fallback || result.Reason != inference.FallbackLedgerUnavailable {
+			t.Fatalf("call over a disabled ledger = %+v", result)
+		}
+		if storeRevision(t, st) != at || len(driver.Requests()) != 0 {
+			t.Fatal("a call over a disabled ledger wrote to the store or reached the driver")
+		}
+		health = newJudgmentRoleHealth(st, now, nil)
+		if err := checkJudgmentRolesAtStartup(ctx, newClient(undecodable, 100, health), health, nil); err != nil {
+			t.Fatalf("restart over the same disabled ledger: %v", err)
+		}
+		if storeRevision(t, st) != at || len(inferenceLedgerItems(t, st)) != 1 {
+			t.Fatal("a restart with the same cause wrote to the store")
+		}
+
+		// A restart that fails for another cause replaces the item: here the
+		// file is gone while its anchor remains.
+		missing := filepath.Join(t.TempDir(), "ledger.json")
+		if err := os.WriteFile(missing+".anchor", []byte("sha256:"+strings.Repeat("5", 64)), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		health = newJudgmentRoleHealth(st, now, nil)
+		if err := checkJudgmentRolesAtStartup(ctx, newClient(missing, 100, health), health, nil); err != nil {
+			t.Fatalf("restart over a missing ledger with an anchor: %v", err)
+		}
+		if items := inferenceLedgerItems(t, st); len(items) != 1 || items[0].ID == item.ID ||
+			!strings.Contains(items[0].Reason, "(inference ledger missing after initialization)") {
+			t.Fatalf("items after a restart with another cause = %+v", items)
+		}
+
+		// A start that loads the ledger resolves the item.
+		health = newJudgmentRoleHealth(st, now, nil)
+		loaded := newClient(filepath.Join(t.TempDir(), "ledger.json"), 1, health)
+		if err := checkJudgmentRolesAtStartup(ctx, loaded, health, nil); err != nil {
+			t.Fatalf("startup check over a loaded ledger: %v", err)
+		}
+		if items := inferenceLedgerItems(t, st); len(items) != 0 {
+			t.Fatalf("items after a start loaded the ledger = %+v", items)
+		}
+
+		// An exhausted budget is the ledger working: no item, no write.
+		at = storeRevision(t, st)
+		if first := call(loaded); first.Reason == inference.FallbackLedgerUnavailable ||
+			first.Reason == inference.FallbackBudgetExhausted {
+			t.Fatalf("first call under a one-call budget = %+v", first)
+		}
+		if second := call(loaded); second.Reason != inference.FallbackBudgetExhausted {
+			t.Fatalf("second call under a one-call budget = %+v", second)
+		}
+		if storeRevision(t, st) != at || len(inferenceLedgerItems(t, st)) != 0 {
+			t.Fatal("an exhausted budget wrote a ledger item")
+		}
+	}
+
+	// A start that cannot write the ledger's item stops, naming the ledger.
+	if err := st.Close(); err != nil {
+		t.Fatal(err)
+	}
+	health := newJudgmentRoleHealth(st, now, nil)
+	err = checkJudgmentRolesAtStartup(ctx, newClient(undecodable, 100, health), health, nil)
+	if err == nil || !strings.Contains(err.Error(), string(ledgerHealthSubject)) {
+		t.Fatalf("a start that could not write the ledger item returned %v", err)
 	}
 }

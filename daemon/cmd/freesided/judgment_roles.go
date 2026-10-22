@@ -206,91 +206,144 @@ func judgmentRoleCause(role domain.RoleName, reason string) healthCause {
 	return cause
 }
 
+const inferenceLedgerItemPrefix = "system-health-inference-ledger-"
+
+var inferenceLedgerItemKind = healthItemKind{Prefix: inferenceLedgerItemPrefix, Code: "inference_ledger_disabled"}
+
+// inferenceLedgerCauseKey keys the ledger's item by why it is disabled, as a
+// role's item is keyed by its reason, so a restart that fails for another
+// reason replaces the item instead of keeping the old cause.
+func inferenceLedgerCauseKey(cause string) string {
+	return contentaddr.Hex(contentaddr.Sum([]byte(cause)))[:12]
+}
+
+// inferenceLedgerCause is the item for a disabled inference ledger (#1943).
+// It blocks for the reason the drift auditor's item does: with the ledger
+// disabled every judgment site returns its fail-safe, the drift auditor's
+// among them, so each run carries on as if the audit were switched off and
+// nothing else surfaces the standing fault (plan §5.4). The cause names the
+// step that failed and the system error, never a path, a record, or a
+// credential: the ledger holds no credential, and a file that fails to
+// decode is reported without the decoder's text. The daemon never repairs
+// the file (#1943, non-goals); the item says what the operator can do.
+func inferenceLedgerCause(cause string) healthCause {
+	return healthCause{
+		Reason: fmt.Sprintf(
+			"The inference ledger is disabled (%s). Every judgment site returns its fail-safe until a start "+
+				"loads it. The daemon leaves the file as it found it. For a file that cannot be decoded or "+
+				"anchored, restore inference-budget.json in the daemon state directory and its anchor beside "+
+				"the database, or remove both to start a new ledger, which discards the recorded budget usage "+
+				"and audit debt. For a directory or file that cannot be created, read, or written, fix its "+
+				"permissions or free the space. Then restart.", cause),
+		Posture: domain.HealthPostureBlocking, Impairs: domain.ImpairedCapabilityUnattendedAdmission,
+	}
+}
+
+// healthSubject is what one report to judgmentRoleHealth is about: a
+// judgment role, named by its role name, or the inference ledger.
+type healthSubject string
+
+const ledgerHealthSubject healthSubject = "inference ledger"
+
 // judgmentRoleHealth keeps one open system_health item per unbound judgment
-// role. The client reports on every call, so the last state written per role
-// is remembered and only a change between unbound and resolved reaches the
-// store. A process's first report for a role also replaces an item whose
-// reason is no longer the role's: the startup check is that report, so a
-// restart after a partial fix says what is still wrong. A reason that changes
-// while the role stays unbound is not rewritten before the next start,
-// because some reasons name the call's own deadline and would rewrite the
-// item on every call. A failed write is logged and retried on the next
-// report: a health item never fails a judgment call. Only the startup check
-// stops on one (checkJudgmentRolesAtStartup).
+// role and one for a disabled inference ledger. The client reports on every
+// call, so the last state written per subject is remembered and only a
+// change between faulted and resolved reaches the store. A process's first
+// report for a subject also replaces an item whose reason is no longer the
+// subject's: the startup check is that report, so a restart after a partial
+// fix says what is still wrong. A reason that changes while the subject
+// stays faulted is not rewritten before the next start, because some role
+// reasons name the call's own deadline and would rewrite the item on every
+// call. A failed write is logged and retried on the next report: a health
+// item never fails a judgment call. Only the startup check stops on one
+// (checkJudgmentRolesAtStartup).
 type judgmentRoleHealth struct {
 	st     *store.Store
 	now    func() time.Time
 	logger *slog.Logger
 
-	mu      sync.Mutex
-	unbound map[domain.RoleName]bool
-	// failed holds the write error of each role whose last report the store
-	// does not hold.
-	failed map[domain.RoleName]error
+	mu sync.Mutex
+	// faulted holds, per subject, what its last report to reach the store
+	// said: true for a role unbound or the ledger disabled.
+	faulted map[healthSubject]bool
+	// failed holds the write error of each subject whose last report the
+	// store does not hold.
+	failed map[healthSubject]error
 }
 
 func newJudgmentRoleHealth(st *store.Store, now func() time.Time, logger *slog.Logger) *judgmentRoleHealth {
 	return &judgmentRoleHealth{
 		st: st, now: now, logger: logger,
-		unbound: map[domain.RoleName]bool{}, failed: map[domain.RoleName]error{},
+		faulted: map[healthSubject]bool{}, failed: map[healthSubject]error{},
 	}
 }
 
 // RoleUnbound implements inference.HealthReporter.
 func (h *judgmentRoleHealth) RoleUnbound(ctx context.Context, role domain.RoleName, reason string) {
-	h.converge(ctx, role, true, reason)
+	h.converge(ctx, healthSubject(role), true, func() error { return h.writeRole(ctx, role, true, reason) })
 }
 
 // RoleResolved implements inference.HealthReporter.
 func (h *judgmentRoleHealth) RoleResolved(ctx context.Context, role domain.RoleName) {
-	h.converge(ctx, role, false, "")
+	h.converge(ctx, healthSubject(role), false, func() error { return h.writeRole(ctx, role, false, "") })
 }
 
-func (h *judgmentRoleHealth) converge(ctx context.Context, role domain.RoleName, unbound bool, reason string) {
+// LedgerDisabled implements inference.HealthReporter.
+func (h *judgmentRoleHealth) LedgerDisabled(ctx context.Context, cause string) {
+	h.converge(ctx, ledgerHealthSubject, true, func() error { return h.writeLedger(ctx, true, cause) })
+}
+
+// LedgerLoaded implements inference.HealthReporter.
+func (h *judgmentRoleHealth) LedgerLoaded(ctx context.Context) {
+	h.converge(ctx, ledgerHealthSubject, false, func() error { return h.writeLedger(ctx, false, "") })
+}
+
+func (h *judgmentRoleHealth) converge(ctx context.Context, subject healthSubject, faulted bool, write func() error) {
 	h.mu.Lock()
 	defer h.mu.Unlock()
-	if last, known := h.unbound[role]; known && last == unbound {
+	if last, known := h.faulted[subject]; known && last == faulted {
 		// The store holds this report already, whatever a write since tried.
-		delete(h.failed, role)
+		delete(h.failed, subject)
 		return
 	}
-	err := h.write(ctx, role, unbound, reason)
-	if err != nil {
-		h.failed[role] = err
+	if err := write(); err != nil {
+		h.failed[subject] = err
 		if h.logger != nil {
-			h.logger.Warn("judgment role health item not converged", "role", role, "error", err)
+			h.logger.Warn("judgment health item not converged", "subject", subject, "error", err)
 		}
 		return
 	}
-	delete(h.failed, role)
-	h.unbound[role] = unbound
+	delete(h.failed, subject)
+	h.faulted[subject] = faulted
 }
 
-// unwritten returns an error naming the roles whose last report did not reach
-// the store, with the first role's write error, or nil when every report did.
+// unwritten returns an error naming the subjects whose last report did not
+// reach the store, with the first one's write error, or nil when every
+// report did.
 func (h *judgmentRoleHealth) unwritten() error {
 	h.mu.Lock()
 	defer h.mu.Unlock()
 	if len(h.failed) == 0 {
 		return nil
 	}
-	roles := slices.Sorted(maps.Keys(h.failed))
-	names := make([]string, len(roles))
-	for i, role := range roles {
-		names[i] = string(role)
+	subjects := slices.Sorted(maps.Keys(h.failed))
+	names := make([]string, len(subjects))
+	for i, subject := range subjects {
+		names[i] = string(subject)
 	}
-	return fmt.Errorf("health item not written for %s: %w", strings.Join(names, ", "), h.failed[roles[0]])
+	return fmt.Errorf("health item not written for %s: %w", strings.Join(names, ", "), h.failed[subjects[0]])
 }
 
 // checkJudgmentRolesAtStartup admits every judgment role once, before any
 // site is reached, and leaves the store saying what it found: an item for
-// each role the lineup cannot fill, and none for a role fixed since the last
-// start. The drift auditor's item holds unattended admission, so no later
-// call would raise or clear it, and a start that could not write the items
-// stops here: started anyway, an unbound drift auditor would have nothing
-// holding the work it audits, and a fixed one would stay held. A start
-// cancelled during the check is reported as cancelled, because it proves
-// nothing about the lineup.
+// each role the lineup cannot fill, one for a ledger that did not load, and
+// none for a cause fixed since the last start. The drift auditor's item and
+// the ledger's hold unattended admission, so no later call would raise or
+// clear them, and a start that could not write the items stops here:
+// started anyway, an unbound drift auditor or a disabled ledger would have
+// nothing holding the work it audits, and a fixed one would stay held. A
+// start cancelled during the check is reported as cancelled, because it
+// proves nothing about the lineup.
 func checkJudgmentRolesAtStartup(
 	ctx context.Context, judgments *inference.Client, health *judgmentRoleHealth, logger *slog.Logger,
 ) error {
@@ -307,20 +360,21 @@ func checkJudgmentRolesAtStartup(
 	return health.unwritten()
 }
 
-func (h *judgmentRoleHealth) write(ctx context.Context, role domain.RoleName, unbound bool, reason string) error {
+func (h *judgmentRoleHealth) writeRole(ctx context.Context, role domain.RoleName, unbound bool, reason string) error {
 	// Every store write advances the revision clients watch, so look first
 	// and write only when the item is not already as it should be.
-	open, err := h.openCause(ctx, role)
+	open, err := h.openCauses(ctx, judgmentRoleItemKind)
 	if err != nil {
 		return err
 	}
+	open = slices.DeleteFunc(open, func(cause string) bool { return judgmentRoleOfCause(cause) != role })
 	causes := map[string]healthCause{}
-	want := ""
+	var want []string
 	if unbound {
-		want = judgmentRoleCauseKey(role, reason)
-		causes[want] = judgmentRoleCause(role, reason)
+		key := judgmentRoleCauseKey(role, reason)
+		want, causes[key] = []string{key}, judgmentRoleCause(role, reason)
 	}
-	if open == want {
+	if slices.Equal(open, want) {
 		return nil
 	}
 	// One role is converged at a time; every other role's item is left as it
@@ -329,25 +383,38 @@ func (h *judgmentRoleHealth) write(ctx context.Context, role domain.RoleName, un
 		func(cause string) bool { return judgmentRoleOfCause(cause) != role }, h.now())
 }
 
-// openCause returns the cause key of the role's open item, or "" when it has
-// none.
-func (h *judgmentRoleHealth) openCause(ctx context.Context, role domain.RoleName) (string, error) {
-	var open string
+func (h *judgmentRoleHealth) writeLedger(ctx context.Context, disabled bool, cause string) error {
+	open, err := h.openCauses(ctx, inferenceLedgerItemKind)
+	if err != nil {
+		return err
+	}
+	causes := map[string]healthCause{}
+	var want []string
+	if disabled {
+		key := inferenceLedgerCauseKey(cause)
+		want, causes[key] = []string{key}, inferenceLedgerCause(cause)
+	}
+	if slices.Equal(open, want) {
+		return nil
+	}
+	return convergeHealthItems(ctx, h.st, inferenceLedgerItemKind, causes, nil, h.now())
+}
+
+// openCauses returns the cause keys of the kind's open items.
+func (h *judgmentRoleHealth) openCauses(ctx context.Context, kind healthItemKind) ([]string, error) {
+	var open []string
 	err := h.st.Read(ctx, func(tx *store.ReadTx) error {
 		items, err := tx.ListOpenAttentionItems(ctx, domain.AttentionSystemHealth)
 		if err != nil {
 			return err
 		}
 		for _, item := range items {
-			rest, ok := strings.CutPrefix(string(item.ID), judgmentRoleItemPrefix)
+			rest, ok := strings.CutPrefix(string(item.ID), kind.Prefix)
 			if !ok {
 				continue
 			}
 			// The id ends with the revision that created it.
-			cause := rest[:max(strings.LastIndexByte(rest, '-'), 0)]
-			if judgmentRoleOfCause(cause) == role {
-				open = cause
-			}
+			open = append(open, rest[:max(strings.LastIndexByte(rest, '-'), 0)])
 		}
 		return nil
 	})
