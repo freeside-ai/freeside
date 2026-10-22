@@ -517,16 +517,24 @@ func TestSetupCommandKeepsRegistrationCodeOutOfProcessArgumentsAndOutput(t *test
 	if err := cmd.Start(); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := io.WriteString(stdin, manifestCode+"\n"); err != nil {
-		t.Fatal(err)
-	}
-	commandLine, psErr := exec.Command( //nolint:gosec // G204: ps is fixed and the PID comes from the child process started above.
-		"ps", "-ww", "-o", "command=", "-p", fmt.Sprint(cmd.Process.Pid),
-	).CombinedOutput()
-	if psErr != nil {
+	// Read the arguments while the child still blocks on stdin. Once it has
+	// the code it can finish and exit, and an unreaped process's arguments
+	// read as empty. The child never rewrites its arguments, so the early
+	// read misses nothing.
+	commandLine, inspectErr := processCommandLine(cmd.Process.Pid)
+	if inspectErr != nil {
 		_ = cmd.Process.Kill()
 		_ = cmd.Wait()
-		t.Fatalf("inspect setup process arguments: %v: %s", psErr, commandLine)
+		t.Fatalf("inspect setup process arguments: %v", inspectErr)
+	}
+	// An empty or foreign reading would pass the absence check vacuously.
+	if !strings.Contains(commandLine, "-registration-code-stdin") {
+		_ = cmd.Process.Kill()
+		_ = cmd.Wait()
+		t.Fatalf("setup process arguments %q do not name the stdin flag", commandLine)
+	}
+	if _, err := io.WriteString(stdin, manifestCode+"\n"); err != nil {
+		t.Fatal(err)
 	}
 	if err := stdin.Close(); err != nil {
 		t.Fatal(err)
@@ -537,7 +545,7 @@ func TestSetupCommandKeepsRegistrationCodeOutOfProcessArgumentsAndOutput(t *test
 	if conversionCalls.Load() != 1 {
 		t.Fatalf("manifest conversion calls = %d, want one", conversionCalls.Load())
 	}
-	assertSecretAbsent(t, manifestCode, string(commandLine), stdout.String(), stderr.String())
+	assertSecretAbsent(t, manifestCode, commandLine, stdout.String(), stderr.String())
 	assertSecretAbsentFromRegularFiles(t, configDir, manifestCode)
 }
 
