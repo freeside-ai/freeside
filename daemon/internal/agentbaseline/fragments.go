@@ -41,7 +41,11 @@ const (
 	CodexReviewAdapterV1Build = "codex_review_v1"
 )
 
-// Tree names of the baseline documents. Names enter no digest.
+// Tree names of the baseline documents. Names enter no digest. The writer
+// agents are named by WriterAgentName. ClaudeAgentName and ClaudeOfferName
+// are the writer agent and native-default offer of a tree adopted before the
+// writer roles named a model; the baseline no longer emits them, so a
+// re-adopted tree has no such agent for a line to name.
 const (
 	ClaudeAgentName             = "claude-code-default"
 	ClaudeCallAgentName         = "claude-code-call-default"

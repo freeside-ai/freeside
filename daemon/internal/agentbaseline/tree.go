@@ -3,6 +3,7 @@ package agentbaseline
 import (
 	"errors"
 	"fmt"
+	"slices"
 	"time"
 
 	"github.com/freeside-ai/freeside/daemon/internal/agenttree"
@@ -16,10 +17,17 @@ type Prompt struct {
 	Digest domain.Digest
 }
 
+// Selection is the model and effort a role's agent launches with: the route
+// model id its offer names and the effort it asks.
+type Selection struct {
+	Model  string
+	Effort domain.EffortLevel
+}
+
 // TreeInput is what adoption knows that the code does not: the enrollments
 // the agents run under, the operator's dated attestations, the model and
-// effort each review role launches with, the model judgment calls launch
-// with, and each role's prompt.
+// effort each writer, review, and judgment role launches with, and each
+// role's prompt.
 type TreeInput struct {
 	// ClaudeEnrollment and CodexEnrollment are the adopted enrollments. An
 	// agent's route name is its enrollment's route.
@@ -31,6 +39,12 @@ type TreeInput struct {
 	// when the reviewer runs Claude instead (#397). At most one of it and
 	// CodexEnrollment is set: the reviewer line names one agent.
 	ClaudeReviewEnrollment *domain.ClientEnrollment
+	// Writers is the model and effort each writer role's agent launches
+	// with, keyed by specifier, implementer, and remediator. Every writer
+	// role needs one that names a model and an effort: an offer on the
+	// native-default id leaves the role on whatever the pinned CLI defaults
+	// to, which the operator can neither see in the tree nor pin.
+	Writers map[domain.RoleName]Selection
 	// ReviewModel is the route model id of the review offer, and
 	// ReviewEffort the effort the review agent asks. A review launch always
 	// passes both, so a tree with a review enrollment needs an effort other
@@ -45,8 +59,10 @@ type TreeInput struct {
 	// JudgmentModel is the route model id of the call offer: the exact model
 	// every baseline judgment line launches with. Empty leaves the call agent,
 	// its offer, and its adapter out of the tree, so no judgment role can have
-	// a line.
-	JudgmentModel string
+	// a line. JudgmentEffort is the effort every judgment call asks, needed
+	// exactly when JudgmentModel is set.
+	JudgmentModel  string
+	JudgmentEffort domain.EffortLevel
 	// TermsBasisDate dates the operator's basis for both routes (YYYY-MM-DD).
 	TermsBasisDate string
 	// PricingRevision and OfferNotAfter are authored onto every offer.
@@ -59,19 +75,27 @@ type TreeInput struct {
 	Prompts map[domain.RoleName]Prompt
 }
 
-// wardRoleAgents fixes which baseline agent runs each ward role, in lineup
-// order. The shadow reviewer has its own agent on the Claude enrollment: the
-// shadow arm runs under the implementation identity, and its launch names a
-// model and an effort the writer roles' agent does not. The reviewer's agent
-// is the Codex one unless the tree's review enrollment is Claude
-// (reviewerAgent).
-var wardRoleAgents = []struct {
+// WriterRoles are the ward roles that run the Claude writer launches, in
+// lineup order. Each takes its model and effort from TreeInput.Writers.
+var WriterRoles = []domain.RoleName{domain.RoleSpecifier, domain.RoleImplementer, domain.RoleRemediator}
+
+// WriterAgentName is the name of the writer agent a role's selection
+// creates. Writer roles that ask one model and effort share one agent, named
+// for the first of them in WriterRoles order, so the tree carries one agent
+// per distinct pair and the roles' lines point at it.
+func WriterAgentName(role domain.RoleName) string {
+	return "claude-code-" + string(role)
+}
+
+// reviewRoleAgents fixes which baseline agent runs each review role, in
+// lineup order after the writer roles. The shadow reviewer has its own agent
+// on the Claude enrollment: the shadow arm runs under the implementation
+// identity, on an offer of its own. The reviewer's agent is the Codex one
+// unless the tree's review enrollment is Claude (reviewerAgent).
+var reviewRoleAgents = []struct {
 	role  domain.RoleName
 	agent string
 }{
-	{domain.RoleSpecifier, ClaudeAgentName},
-	{domain.RoleImplementer, ClaudeAgentName},
-	{domain.RoleRemediator, ClaudeAgentName},
 	{domain.RoleReviewer, CodexReviewAgentName},
 	{domain.RoleShadowReviewer, ClaudeShadowReviewAgentName},
 }
@@ -91,11 +115,11 @@ func JudgmentRoles() []domain.RoleName {
 
 // Tree builds the baseline tree: the fragments, the agents with their
 // resolved enrollment ids, a lineup line for each role with a prompt, and
-// the attended marks. A mark covers each launch the agent ran before the
-// cutover, which is the operator's standing evidence that the pair ran
-// attended; committing the patch is the operator making the mark. The call
-// agent gets no mark: attended evidence gates unattended ward launches, and
-// a call is admitted by its launch proof.
+// the attended marks. A mark is the operator's standing attestation that the
+// agent and launch pair runs attended under their watch; committing the
+// patch is the operator making the mark. The call agent gets no mark:
+// attended evidence gates unattended ward launches, and a call is admitted
+// by its launch proof.
 func Tree(in TreeInput) (agenttree.Tree, error) {
 	if in.ClaudeEnrollment.HarnessClient != domain.HarnessClientClaudeCode {
 		return agenttree.Tree{}, errors.New("baseline tree: the Claude enrollment is not a claude_code enrollment")
@@ -114,30 +138,16 @@ func Tree(in TreeInput) (agenttree.Tree, error) {
 	if err != nil {
 		return agenttree.Tree{}, err
 	}
-	// The ward launch passes neither a model nor an effort, so its offer is
-	// the native default at harness_default, and what model answers is
-	// opaque to the daemon.
-	claudeOffer, err := sealOffer(domain.OfferFragment{
-		EncodingVersion: domain.AgentFragmentEncodingVersion,
-		RouteModelID:    domain.ClaudeCodeNativeDefaultRouteModelID, LineageGroup: "anthropic",
-		IdentityStability: domain.IdentityOpaque,
-		AllowedEfforts:    []domain.EffortLevel{domain.EffortHarnessDefault},
-		PricingRevision:   in.PricingRevision, NotAfter: in.OfferNotAfter.UTC(),
-	})
+	tree := agenttree.Tree{
+		Routes:   []agenttree.Route{{Name: in.ClaudeEnrollment.Route, Fragment: claudeRoute}},
+		Adapters: []agenttree.Adapter{{Name: ClaudeAdapterName, Fragment: claudeAdapter}},
+	}
+	wardRoleAgents, err := addClaudeWriters(&tree, in)
 	if err != nil {
 		return agenttree.Tree{}, err
 	}
-	tree := agenttree.Tree{
-		Agents: []domain.AgentSource{{
-			Name: ClaudeAgentName, Enrollment: string(in.ClaudeEnrollment.ID),
-			Route: in.ClaudeEnrollment.Route, Adapter: ClaudeAdapterName,
-			Offer: ClaudeOfferName, Effort: domain.EffortHarnessDefault,
-		}},
-		Routes:   []agenttree.Route{{Name: in.ClaudeEnrollment.Route, Fragment: claudeRoute}},
-		Adapters: []agenttree.Adapter{{Name: ClaudeAdapterName, Fragment: claudeAdapter}},
-		Offers: []agenttree.Offer{{
-			Route: in.ClaudeEnrollment.Route, Name: ClaudeOfferName, Fragment: claudeOffer,
-		}},
+	for _, entry := range reviewRoleAgents {
+		wardRoleAgents = append(wardRoleAgents, roleAgent{entry.role, entry.agent})
 	}
 	if in.JudgmentModel != "" {
 		if err := addClaudeCall(&tree, in); err != nil {
@@ -226,17 +236,70 @@ func Tree(in TreeInput) (agenttree.Tree, error) {
 	return tree, nil
 }
 
+// roleAgent is one ward role and the name of the agent its lineup line names.
+type roleAgent struct {
+	role  domain.RoleName
+	agent string
+}
+
+// addClaudeWriters adds one writer agent per distinct model and effort the
+// writer roles ask, each on the Claude ward adapter and a pinned offer of its
+// own, and returns which agent each writer role's line names. The ward
+// launch passes the offer's model and the agent's effort (#1618), so a
+// selection that names neither is refused here rather than written as a
+// line the daemon then runs on the CLI's default.
+func addClaudeWriters(tree *agenttree.Tree, in TreeInput) ([]roleAgent, error) {
+	agents := map[Selection]string{}
+	var lines []roleAgent
+	for _, role := range WriterRoles {
+		selection, ok := in.Writers[role]
+		if !ok || selection.Model == "" || selection.Model == domain.ClaudeCodeNativeDefaultRouteModelID {
+			return nil, fmt.Errorf("baseline tree: writer role %s model %q names no model", role, selection.Model)
+		}
+		if err := explicitEffort(string(role), selection.Effort); err != nil {
+			return nil, err
+		}
+		if name, ok := agents[selection]; ok {
+			lines = append(lines, roleAgent{role, name})
+			continue
+		}
+		name := WriterAgentName(role)
+		offer, err := sealOffer(domain.OfferFragment{
+			EncodingVersion: domain.AgentFragmentEncodingVersion,
+			RouteModelID:    selection.Model, LineageGroup: "anthropic",
+			IdentityStability: domain.IdentityPinned,
+			AllowedEfforts:    []domain.EffortLevel{selection.Effort},
+			PricingRevision:   in.PricingRevision, NotAfter: in.OfferNotAfter.UTC(),
+		})
+		if err != nil {
+			return nil, err
+		}
+		tree.Agents = append(tree.Agents, domain.AgentSource{
+			Name: name, Enrollment: string(in.ClaudeEnrollment.ID),
+			Route: in.ClaudeEnrollment.Route, Adapter: ClaudeAdapterName,
+			Offer: name, Effort: selection.Effort,
+		})
+		tree.Offers = append(tree.Offers, agenttree.Offer{Route: in.ClaudeEnrollment.Route, Name: name, Fragment: offer})
+		agents[selection] = name
+		lines = append(lines, roleAgent{role, name})
+	}
+	return lines, nil
+}
+
 // addClaudeCall adds the call agent with the offer and adapter only it
-// names. The call agent shares the ward agent's enrollment and route: the
+// names. The call agent shares the writer agents' enrollment and route: the
 // same subscription answers a call through a launch with no tools. Its offer
-// is its own because a call launch always passes a model, and the
-// native-default offer names none. The operator's model is taken as exact,
-// like the review model, so the offer is pinned; the driver refuses an
-// answer that reports another model.
+// is its own because every judgment line launches with one model and asks
+// one effort, whatever the writer roles ask. The operator's model is taken
+// as exact, like the review model, so the offer is pinned; the driver
+// refuses an answer that reports another model.
 func addClaudeCall(tree *agenttree.Tree, in TreeInput) error {
 	if in.JudgmentModel == domain.ClaudeCodeNativeDefaultRouteModelID {
 		return fmt.Errorf("baseline tree: judgment model %q is the native-default id, which names no model",
 			in.JudgmentModel)
+	}
+	if err := explicitEffort("judgment", in.JudgmentEffort); err != nil {
+		return err
 	}
 	adapter, err := ClaudeCallAdapter()
 	if err != nil {
@@ -246,7 +309,7 @@ func addClaudeCall(tree *agenttree.Tree, in TreeInput) error {
 		EncodingVersion: domain.AgentFragmentEncodingVersion,
 		RouteModelID:    in.JudgmentModel, LineageGroup: "anthropic",
 		IdentityStability: domain.IdentityPinned,
-		AllowedEfforts:    []domain.EffortLevel{domain.EffortHarnessDefault},
+		AllowedEfforts:    []domain.EffortLevel{in.JudgmentEffort},
 		PricingRevision:   in.PricingRevision, NotAfter: in.OfferNotAfter.UTC(),
 	})
 	if err != nil {
@@ -255,7 +318,7 @@ func addClaudeCall(tree *agenttree.Tree, in TreeInput) error {
 	tree.Agents = append(tree.Agents, domain.AgentSource{
 		Name: ClaudeCallAgentName, Enrollment: string(in.ClaudeEnrollment.ID),
 		Route: in.ClaudeEnrollment.Route, Adapter: ClaudeCallAdapterName,
-		Offer: ClaudeCallOfferName, Effort: domain.EffortHarnessDefault,
+		Offer: ClaudeCallOfferName, Effort: in.JudgmentEffort,
 	})
 	tree.Adapters = append(tree.Adapters, agenttree.Adapter{Name: ClaudeCallAdapterName, Fragment: adapter})
 	tree.Offers = append(tree.Offers, agenttree.Offer{
@@ -347,10 +410,11 @@ func addClaudeReview(tree *agenttree.Tree, in TreeInput, route domain.RouteFragm
 	return nil
 }
 
-// explicitEffort refuses the efforts a review launch cannot run on: none,
-// and harness_default, which sends none.
+// explicitEffort refuses the efforts a baseline launch must not run on:
+// none, an effort the level set does not know, and harness_default, which
+// sends none and leaves the pinned CLI's default in charge.
 func explicitEffort(role string, effort domain.EffortLevel) error {
-	if effort == "" || effort == domain.EffortHarnessDefault {
+	if effort == "" || effort == domain.EffortHarnessDefault || !slices.Contains(domain.AllEffortLevels, effort) {
 		return fmt.Errorf("baseline tree: %s effort %q names no effort for the launch to pass", role, effort)
 	}
 	return nil

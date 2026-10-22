@@ -171,8 +171,10 @@ func TestReviewLaunchSendsTheHarnessNativeEffort(t *testing.T) {
 // agents into the shape adoption wrote before they named a model and an
 // effort: the reviewer on codex_review_v1 asking harness_default from an
 // offer that allows only that, and the shadow reviewer line on the writer
-// agent, whose offer names no model. Every digest, lineup line, and attended
-// mark follows, so the only thing wrong with the tree is what it lacks.
+// agent of that era, `claude-code-default` on the offer that names no model,
+// put back here because the baseline no longer emits it. Every digest,
+// lineup line, and attended mark follows, so the only thing wrong with the
+// tree is what it lacks.
 func treeAdoptedBeforeReviewAgentsNamedALaunch(t *testing.T, tree agenttree.Tree) agenttree.Tree {
 	t.Helper()
 	old := tree
@@ -198,6 +200,29 @@ func treeAdoptedBeforeReviewAgentsNamedALaunch(t *testing.T, tree agenttree.Tree
 			t.Fatal(err)
 		}
 	}
+	writer := agentbaseline.WriterAgentName(domain.RoleImplementer)
+	for _, offer := range tree.Offers {
+		if offer.Name != writer {
+			continue
+		}
+		native := offer
+		native.Name = agentbaseline.ClaudeOfferName
+		native.Fragment.RouteModelID = domain.ClaudeCodeNativeDefaultRouteModelID
+		native.Fragment.IdentityStability = domain.IdentityOpaque
+		native.Fragment.AllowedEfforts = []domain.EffortLevel{domain.EffortHarnessDefault}
+		if native.Fragment.Digest, err = native.Fragment.ComputeDigest(); err != nil {
+			t.Fatal(err)
+		}
+		old.Offers = append(old.Offers, native)
+	}
+	for _, agent := range tree.Agents {
+		if agent.Name != writer {
+			continue
+		}
+		agent.Name, agent.Offer, agent.Effort = agentbaseline.ClaudeAgentName, agentbaseline.ClaudeOfferName, domain.EffortHarnessDefault
+		old.Agents = append(old.Agents, agent)
+	}
+	old.Sort()
 	review, err := agentbaseline.RoleLaunch(domain.RoleReviewer)
 	if err != nil {
 		t.Fatal(err)

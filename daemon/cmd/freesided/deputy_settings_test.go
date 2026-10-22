@@ -48,8 +48,13 @@ func deputySettingsFixture(t *testing.T) map[string]any {
 			"input_root": "/review", "auth_mode": "subscription", "auth_snapshot": "/review/auth.json",
 			"instructions": "/review/AGENTS.md", "model": "gpt-5", "effort": "high",
 		},
+		"writers": map[string]any{
+			"specifier":   map[string]any{"model": "claude-fable", "effort": "high"},
+			"implementer": map[string]any{"model": "claude-opus", "effort": "high"},
+			"remediator":  map[string]any{"model": "claude-opus", "effort": "high"},
+		},
 		"judgment": map[string]any{
-			"claude_bin": "", "claude_sha256": "", "model": "", "publication_author_prompt": "",
+			"claude_bin": "", "claude_sha256": "", "model": "", "effort": "", "publication_author_prompt": "",
 		},
 		"prod": map[string]any{ //nolint:gosec // G101 false positive: fixture directory paths, not credentials.
 			"app_state_dir": "/prod/daemon", "app_credentials_dir": "/prod/credentials",
@@ -157,6 +162,18 @@ func TestLoadDeputySettingsRefusesNamingTheField(t *testing.T) {
 		"match-everything paths": {func(s map[string]any) {
 			s["repository"].(map[string]any)["allowed_paths"] = []string{"**"}
 		}, "repository.allowed_paths must name explicit declared paths"},
+		"no specifier model": {func(s map[string]any) {
+			s["writers"].(map[string]any)["specifier"].(map[string]any)["model"] = ""
+		}, "writers.specifier.model and writers.specifier.effort are required"},
+		"no remediator effort": {func(s map[string]any) {
+			s["writers"].(map[string]any)["remediator"].(map[string]any)["effort"] = ""
+		}, "writers.remediator.model and writers.remediator.effort are required"},
+		"no implementer key": {func(s map[string]any) {
+			delete(s["writers"].(map[string]any), "implementer")
+		}, "writers.implementer is required"},
+		"judgment effort alone": {func(s map[string]any) {
+			s["judgment"].(map[string]any)["effort"] = "medium"
+		}, "judgment fields must be all empty or all set"},
 	}
 	for _, field := range []string{
 		"seed_root", "repository.checkout",
@@ -178,7 +195,7 @@ func TestLoadDeputySettingsRefusesNamingTheField(t *testing.T) {
 					if strings.HasPrefix(field, "judgment.") {
 						s["judgment"] = map[string]any{
 							"claude_bin": "/bin/claude", "claude_sha256": strings.Repeat("a", 64),
-							"model": "claude-opus", "publication_author_prompt": "/prompts/author.md",
+							"model": "claude-opus", "effort": "medium", "publication_author_prompt": "/prompts/author.md",
 						}
 					}
 					object, key := s, field
@@ -213,7 +230,7 @@ func TestLoadDeputySettingsAcceptsConfiguredOptionalPaths(t *testing.T) {
 	settings := deputySettingsFixture(t)
 	settings["judgment"] = map[string]any{
 		"claude_bin": "/bin/claude", "claude_sha256": strings.Repeat("a", 64),
-		"model": "claude-opus", "publication_author_prompt": "/prompts/author.md",
+		"model": "claude-opus", "effort": "medium", "publication_author_prompt": "/prompts/author.md",
 	}
 	settings["manual_submission_config"] = "/config/manual.json"
 	path, _ := writeDeputySettings(t, settings, 0o600)

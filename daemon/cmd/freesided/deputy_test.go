@@ -339,6 +339,7 @@ func TestDeputyDaemonConfigRunsAgentsOnlyAfterAPassingCheck(t *testing.T) {
 	settings.Judgment.ClaudeBin = "/bin/claude"
 	settings.Judgment.ClaudeSHA256 = strings.Repeat("e", 64)
 	settings.Judgment.Model = "claude-opus"
+	settings.Judgment.Effort = domain.EffortMedium
 	settings.Judgment.PublicationAuthorPrompt = "/prompts/author.md"
 	prospective := deputyClaudeDriverConfig(settings, paths, "")
 	passing = deputyDaemonConfig(settings, paths, deputyLaunch{
