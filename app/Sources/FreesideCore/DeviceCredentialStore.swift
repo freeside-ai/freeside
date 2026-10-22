@@ -1,5 +1,4 @@
 import Foundation
-import Network
 import Security
 
 /// The private ntfy read capability minted for one paired device. Validation
@@ -62,7 +61,7 @@ public struct DeviceNtfySubscription: Equatable, Sendable {
             let decodedLiteral = decodedHost.dropFirst().dropLast()
             let parts = decodedLiteral.split(
                 separator: "%", maxSplits: 1, omittingEmptySubsequences: false)
-            guard let address = parts.first, IPv6Address(String(address)) != nil else {
+            guard let address = parts.first, ipv6Bytes(String(address)) != nil else {
                 return false
             }
             if zoneMarker == nil {
@@ -159,9 +158,8 @@ public struct DeviceNtfySubscription: Equatable, Sendable {
             ? String(host.dropFirst().dropLast())
             : host
         guard !literal.contains("%") else { return false }
-        if let address = IPv6Address(literal) {
-            if address == .loopback { return true }
-            let bytes = Array(address.rawValue)
+        if let bytes = ipv6Bytes(literal) {
+            if bytes == Array(repeating: 0, count: 15) + [1] { return true }
             guard bytes.prefix(10).allSatisfy({ $0 == 0 }),
                 bytes[10] == 0xff,
                 bytes[11] == 0xff,
@@ -172,6 +170,16 @@ public struct DeviceNtfySubscription: Equatable, Sendable {
             return isCanonicalIPv4(String(literal[literal.index(after: colon)...]))
         }
         return isCanonicalIPv4(literal) && literal.hasPrefix("127.")
+    }
+
+    /// The 16 network-order bytes of an IPv6 literal, or nil when the text
+    /// is not one. Callers strip any zone first: Darwin's inet_pton accepts
+    /// `%zone` and folds it into the address bytes. POSIX inet_pton keeps
+    /// the parse free of the Apple-only Network framework.
+    private static func ipv6Bytes(_ literal: String) -> [UInt8]? {
+        var address = in6_addr()
+        guard inet_pton(AF_INET6, literal, &address) == 1 else { return nil }
+        return withUnsafeBytes(of: address) { Array($0) }
     }
 
     private static func isCanonicalIPv4(_ host: String) -> Bool {

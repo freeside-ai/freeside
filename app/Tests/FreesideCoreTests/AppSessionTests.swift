@@ -202,6 +202,7 @@ private final class ReloadFailingAfterDeleteCredentialStore: DeviceCredentialSto
             ("http://+127.0.0.1", "fs-00000000000000000000000000000001"),
             ("http://0127.0.0.1", "fs-00000000000000000000000000000001"),
             ("http://[::ffff:0127.0.0.1]", "fs-00000000000000000000000000000001"),
+            ("http://[::ffff:10.0.0.1]", "fs-00000000000000000000000000000001"),
             ("http://[::1%25does-not-exist]", "fs-00000000000000000000000000000001"),
             ("https://ntfy.example:99999", "fs-00000000000000000000000000000001"),
             ("https://ntfy.example:0", "fs-00000000000000000000000000000001"),
@@ -210,6 +211,7 @@ private final class ReloadFailingAfterDeleteCredentialStore: DeviceCredentialSto
             ("https://ntfy.example%2Fevil", "fs-00000000000000000000000000000001"),
             ("https://[not-an-ip]", "fs-00000000000000000000000000000001"),
             ("https://[::gg]", "fs-00000000000000000000000000000001"),
+            ("https://[fe80::1::2]", "fs-00000000000000000000000000000001"),
             ("https://[%3A%3A1]", "fs-00000000000000000000000000000001"),
             ("https://[fe80::1%25en0%0Aevil]", "fs-00000000000000000000000000000001"),
             ("https://[fe80::1%25en0%0Aevil]:443", "fs-00000000000000000000000000000001"),
@@ -246,6 +248,7 @@ private final class ReloadFailingAfterDeleteCredentialStore: DeviceCredentialSto
 
     @Test func daemonAcceptedSubscriptionURLFormsRemainUsable() async throws {
         for serverURL in [
+            "http://[::1]",
             "http://[0:0:0:0:0:0:0:1]",
             "http://[::ffff:127.0.0.1]",
             "http://[0:0:0:0:0:ffff:7f00:1]",
