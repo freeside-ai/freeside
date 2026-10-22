@@ -4,8 +4,10 @@
 post-merge tracker reconciliation. It writes `snapshot.json` and `report.md`;
 it never writes to the forge and does not decide wave state, path overlap,
 startability, or mergeability. Its `contracts` subcommand reports contract
-occupancy instead, and its `unit` subcommand reports one issue's relationships
-and claim state; see Contract Occupancy and Unit Coordination Evidence below.
+occupancy instead, its `unit` subcommand reports one issue's relationships
+and claim state, and its `schedule` subcommand reports issues that escape
+scheduling; see Contract Occupancy, Unit Coordination Evidence, and
+Scheduling State below.
 
 The runtime requires Go 1.26.10 and an authenticated `gh` CLI with access to the
 target repository. Run it from this module:
@@ -213,3 +215,53 @@ Limits, beyond those of the claim states above:
 - Other open issues are scanned for `exclusive-with` only. The targets of
   `starts-after`, `merges-after`, and `stacked-on` are listed, not read.
 - The contract conflict set and the cap are not computed.
+
+## Scheduling State
+
+`trackercollect schedule` reports the open issues whose milestone and
+tracker listing disagree, and the open issues no deferral sweep selects. It
+is read-only and repairs nothing: the wave-planning sweep runs it and
+repairs what it lists (`.claude/skills/plan-wave/SKILL.md`). The rule that
+milestone and listing publish together is in `docs/coordination.md`
+(Work-Unit Issues and Tracking Issues).
+
+```sh
+/tmp/trackercollect schedule --repo github.com/freeside-ai/freeside --out /tmp/schedule
+```
+
+The command writes `schedule.json` and `schedule.md`. It reads the open-issue
+inventory once; each open `tracker` issue's Units section supplies the
+listings, and a tracker with no Units section lists nothing, as the wave
+tracker does between its creation and Close Out. An entry under a `### Owner-run` heading is not a scheduling
+listing, so it neither schedules its issue nor needs a milestone. Only a
+tracker that carries a milestone schedules: that is the wave tracker, and an
+ad hoc tracker's units start by fiat without one. Trackers are never
+entries. Each entry has one of three kinds, and an issue can carry more than
+one:
+
+| Kind | Rule |
+| --- | --- |
+| `milestone-unlisted` | An open issue carries a milestone, and no open tracker with that milestone lists it outside Owner-run. |
+| `listed-unmilestoned` | A milestoned tracker lists an open issue outside Owner-run, and the issue lacks that tracker's milestone: it has none or another one. |
+| `invisible` | An open issue has no milestone and none of the `deferral`, `needs-human`, or `tracker` labels, so neither the scheduling door nor any sweep selects it. |
+
+Every entry names the open trackers that list the issue in any group, so a
+fiat unit an ad hoc tracker lists reads as `invisible` with that tracker
+beside it.
+
+Exit codes: 0 for complete evidence with no entries, 3 for complete
+evidence with entries, 2 when any `AMBIGUOUS` entry exists (artifacts are
+still written), and 1 for a hard failure, including a usage error. With any
+`AMBIGUOUS` entry the report states no entry count or verdict and
+`schedule.json` carries `complete: false`. The entries are a truncated
+open-issue inventory, an issue with more labels than one page holds, and a
+tracker whose Units section is repeated or holds an invalid issue number.
+
+Known limits:
+
+- A listing is read only from a `- [ ] #N` or `- [x] #N` line in the Units
+  section. Exit and Notes may cite an issue without listing it.
+- The Owner-run heading is matched by its text alone, at any level; a group
+  runs to the next heading at its level or above.
+- Closed issues are not read. A merged unit still listed on a tracker is no
+  entry.

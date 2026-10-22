@@ -81,12 +81,47 @@ func runUnit(args []string) int {
 	return code
 }
 
+const scheduleUsage = "usage: trackercollect schedule --repo HOST/OWNER/NAME --out DIRECTORY"
+
+// runSchedule handles the schedule subcommand. A usage error is a hard
+// failure (exit 1): exits 2 and 3 are reserved for what the report found.
+func runSchedule(args []string) int {
+	flags := flag.NewFlagSet("schedule", flag.ContinueOnError)
+	flags.SetOutput(io.Discard)
+	var repo string
+	var out string
+	flags.StringVar(&repo, "repo", "", "repository as HOST/OWNER/NAME")
+	flags.StringVar(&out, "out", "", "output directory")
+	parseErr := flags.Parse(args)
+	ref, err := collector.ParseRepository(repo)
+	if parseErr != nil || err != nil || out == "" || flags.NArg() != 0 {
+		fmt.Fprintln(os.Stderr, scheduleUsage)
+		if parseErr != nil {
+			fmt.Fprintf(os.Stderr, "flags: %v\n", parseErr)
+		} else if err != nil {
+			fmt.Fprintf(os.Stderr, "repository: %v\n", err)
+		}
+		return 1
+	}
+	code, err := collector.RunSchedule(context.Background(), collector.ScheduleConfig{
+		Repository: ref,
+		OutputDir:  out,
+	}, collector.NewGHRunner(ref.Host), time.Now)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "trackercollect: %v\n", err)
+	}
+	return code
+}
+
 func main() {
 	if len(os.Args) > 1 && os.Args[1] == "contracts" {
 		os.Exit(runContracts(os.Args[2:]))
 	}
 	if len(os.Args) > 1 && os.Args[1] == "unit" {
 		os.Exit(runUnit(os.Args[2:]))
+	}
+	if len(os.Args) > 1 && os.Args[1] == "schedule" {
+		os.Exit(runSchedule(os.Args[2:]))
 	}
 	var repo string
 	var out string
