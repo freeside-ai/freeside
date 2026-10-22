@@ -31,7 +31,9 @@ const (
 // lands in a durable admission record, so nothing here has a default: a key
 // that is absent refuses the launch rather than letting the record attest to
 // a value nobody wrote. An empty string is a value only where the field says
-// so (judgment, manual_submission_config, build).
+// so (judgment, manual_submission_config, build). The one key that may be
+// absent is agent_tree.review_harness, tagged omitempty: every file written
+// before it existed ran a Codex reviewer, so its absence means codex_cli.
 type deputySettings struct {
 	Version string `json:"version"`
 	// Listen is the leased listener paired clients reach the run at.
@@ -74,6 +76,10 @@ type deputySettings struct {
 		PricingRevision    string `json:"pricing_revision"`
 		OfferNotAfter      string `json:"offer_not_after"`
 		AuthVolume         string `json:"auth_volume"`
+		// ReviewHarness is the harness the reviewer line's agent runs (#397):
+		// codex_cli, the meaning of an absent key, or claude_code. It picks
+		// the review identity's adoption and the review.auth_mode it takes.
+		ReviewHarness domain.HarnessClientKind `json:"review_harness,omitempty"`
 	} `json:"agent_tree"`
 	Review struct {
 		InputRoot    string             `json:"input_root"`
@@ -184,8 +190,9 @@ func readOwnerOnlyFile(path string) ([]byte, error) {
 }
 
 // requireEveryKey refuses an object that omits, or sets to null, any key the
-// struct declares. Strict decoding already refuses unknown keys; this is the
-// other half, because encoding/json leaves a missing field at its zero value.
+// struct declares, except that a key tagged omitempty may be omitted. Strict
+// decoding already refuses unknown keys; this is the other half, because
+// encoding/json leaves a missing field at its zero value.
 func requireEveryKey(body []byte, t reflect.Type, prefix string) error {
 	var object map[string]json.RawMessage
 	if err := json.Unmarshal(body, &object); err != nil {
@@ -193,8 +200,11 @@ func requireEveryKey(body []byte, t reflect.Type, prefix string) error {
 	}
 	for i := range t.NumField() {
 		field := t.Field(i)
-		name := strings.Split(field.Tag.Get("json"), ",")[0]
+		name, options, _ := strings.Cut(field.Tag.Get("json"), ",")
 		raw, ok := object[name]
+		if !ok && options == "omitempty" {
+			continue
+		}
 		if !ok || string(raw) == "null" {
 			return fmt.Errorf("%s%s is required", prefix, name)
 		}
@@ -274,8 +284,8 @@ func (s *loadedDeputySettings) validate() error {
 	if s.AgentTree.AuthIdentity == s.AgentTree.ReviewAuthIdentity {
 		return errors.New("agent_tree.review_auth_identity must differ from agent_tree.auth_identity")
 	}
-	if s.Review.AuthMode != ward.CodexAuthSubscription {
-		return errors.New("review.auth_mode must be subscription; api_key enrollment is not supported yet (#1677)")
+	if err := validateDeputyReviewHarness(s.deputySettings); err != nil {
+		return err
 	}
 	if s.Review.Effort == "" {
 		return errors.New("review.effort is required")
@@ -364,4 +374,32 @@ func nonNegativeDuration(raw string) (time.Duration, error) {
 		return 0, errors.New("must not be negative")
 	}
 	return value, nil
+}
+
+// reviewHarness is agent_tree.review_harness, with an absent key read as
+// codex_cli.
+func (s deputySettings) reviewHarness() domain.HarnessClientKind {
+	if s.AgentTree.ReviewHarness == "" {
+		return domain.HarnessClientCodexCLI
+	}
+	return s.AgentTree.ReviewHarness
+}
+
+// validateDeputyReviewHarness pairs the reviewer's harness with the only
+// review.auth_mode the deputy can adopt for it: a Codex reviewer's
+// subscription store, or a Claude reviewer's setup token.
+func validateDeputyReviewHarness(s deputySettings) error {
+	switch s.reviewHarness() {
+	case domain.HarnessClientCodexCLI:
+		if s.Review.AuthMode != ward.CodexAuthSubscription {
+			return errors.New("review.auth_mode must be subscription; api_key enrollment is not supported yet (#1677)")
+		}
+		return nil
+	case domain.HarnessClientClaudeCode:
+		if s.Review.AuthMode != ward.CodexAuthSetupToken {
+			return errors.New("review.auth_mode must be setup_token with agent_tree.review_harness claude_code")
+		}
+		return nil
+	}
+	return fmt.Errorf("agent_tree.review_harness %q is not codex_cli or claude_code", s.AgentTree.ReviewHarness)
 }

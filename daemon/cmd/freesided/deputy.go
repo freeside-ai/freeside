@@ -359,27 +359,33 @@ func withDeputyStore(
 // recordDeputyIdentities records the writer and reviewer identities a fresh
 // root lacks, so auth adopt can enroll them. A recorded identity is checked,
 // never rewritten: settings that disagree with the store refuse the launch.
+// A Claude reviewer's identity is not recorded here: its setup-token volume
+// and account come from auth add, so the operator enrolls it before the
+// first run, and adoption reuses that enrollment (#397).
 func recordDeputyIdentities(
 	ctx context.Context, st *store.Store, settings loadedDeputySettings, now func() time.Time,
 ) error {
-	reviewSnapshot, err := filepath.EvalSymlinks(settings.Review.AuthSnapshot)
-	if err != nil {
-		return fmt.Errorf("review.auth_snapshot: %w", err)
-	}
 	identities := []domain.AuthIdentity{{
 		ID: domain.AuthIdentityID(settings.AgentTree.AuthIdentity), Provider: "claude",
 		AuthStoreMutationLease: true, MaxParallelExecutions: 1, Enabled: true,
 		Interim: domain.InterimClientFacts{
 			AuthStoreVolume: settings.AgentTree.AuthVolume, RefreshStrategy: domain.RefreshOnDemand,
 		},
-	}, {
-		ID: domain.AuthIdentityID(settings.AgentTree.ReviewAuthIdentity), Provider: "openai",
-		AuthStoreMutationLease: true, MaxParallelExecutions: 1, Enabled: true,
-		Interim: domain.InterimClientFacts{
-			AuthStoreVolume: reviewSnapshot, RefreshStrategy: domain.RefreshOnDemand,
-			SupportsReadOnlyAuthSnapshot: true,
-		},
 	}}
+	if settings.reviewHarness() == domain.HarnessClientCodexCLI {
+		reviewSnapshot, err := filepath.EvalSymlinks(settings.Review.AuthSnapshot)
+		if err != nil {
+			return fmt.Errorf("review.auth_snapshot: %w", err)
+		}
+		identities = append(identities, domain.AuthIdentity{
+			ID: domain.AuthIdentityID(settings.AgentTree.ReviewAuthIdentity), Provider: "openai",
+			AuthStoreMutationLease: true, MaxParallelExecutions: 1, Enabled: true,
+			Interim: domain.InterimClientFacts{
+				AuthStoreVolume: reviewSnapshot, RefreshStrategy: domain.RefreshOnDemand,
+				SupportsReadOnlyAuthSnapshot: true,
+			},
+		})
+	}
 	return st.WriteInternal(ctx, func(tx *store.InternalTx) error {
 		for _, identity := range identities {
 			stored, err := tx.GetAuthIdentity(ctx, identity.ID)
@@ -512,7 +518,7 @@ func deputyAdoptArgs(settings loadedDeputySettings, paths deputyPaths) []string 
 		"-review-cost-owner", settings.AgentTree.ReviewCostOwner,
 		"-claude-account", settings.AgentTree.ClaudeAccount,
 		"-exporter-image", settings.Images.Exporter,
-		"-auth-store-root", settings.Review.InputRoot,
+		"-review-harness", string(settings.reviewHarness()),
 		"-review-model", settings.Review.Model,
 		"-review-effort", string(settings.Review.Effort),
 		"-terms-basis-date", settings.AgentTree.TermsBasisDate,
@@ -521,6 +527,11 @@ func deputyAdoptArgs(settings loadedDeputySettings, paths deputyPaths) []string 
 		"-prompt-package", settings.Prompts.PromptPackage,
 		"-specification-prompt-package", settings.Prompts.SpecificationPromptPackage,
 		"-remediation-prompt-package", settings.Prompts.RemediationPromptPackage,
+	}
+	// A Codex reviewer's live store is under the review input root; a Claude
+	// reviewer adopts its setup-token volume and takes no store root.
+	if settings.reviewHarness() == domain.HarnessClientCodexCLI {
+		args = append(args, "-auth-store-root", settings.Review.InputRoot)
 	}
 	if settings.Judgment.Model != "" {
 		args = append(args,
