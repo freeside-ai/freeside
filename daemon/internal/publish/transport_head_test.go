@@ -177,15 +177,11 @@ func TestFetchHeadDoesNotInferMissingHeadFromFailure(t *testing.T) {
 	remote := newLocalRemote(t)
 	head := remote.commitOn(t, "feat/pr", "pr.txt", "pr\n")
 	co := remote.fetchBase(t, remote.baseSHA)
-	objects := filepath.Join(remote.bare, "objects")
-	if err := os.Chmod(objects, 0o000); err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { _ = os.Chmod(objects, 0o700) }) //nolint:gosec // G302: restoring a test fixture's own directory mode
+	remote.emptyObjectStore(t)
 
 	_, err := remote.transport.FetchHead(t.Context(), co, "feat/pr", head)
 	if err == nil {
-		t.Fatal("fetch from an unreadable remote succeeded")
+		t.Fatal("fetch from a remote with no objects succeeded")
 	}
 	if errors.Is(err, ErrRemoteMissingHead) {
 		t.Errorf("a transport failure was reported as a definitive missing head: %v", err)

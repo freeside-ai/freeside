@@ -142,6 +142,24 @@ func newLocalRemoteForRepo(t *testing.T, repo string) *localRemote {
 	}
 }
 
+// emptyObjectStore replaces the bare remote's object store with an
+// empty directory. Refs are not objects, so the remote still advertises
+// every branch while any fetch of their commits fails. Unlike removing
+// the store's permissions, this fails for root too. It assumes git
+// advertises a ref without reading its object, as git 2.50 does; a git
+// that hid such refs would turn both fetch tests into missing-ref
+// verdicts.
+func (r *localRemote) emptyObjectStore(t *testing.T) {
+	t.Helper()
+	objects := filepath.Join(r.bare, "objects")
+	if err := os.RemoveAll(objects); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Mkdir(objects, 0o700); err != nil {
+		t.Fatal(err)
+	}
+}
+
 // checkoutDir returns a not-yet-existing directory for FetchBase to
 // materialize into.
 func checkoutDir(t *testing.T) string {
@@ -287,21 +305,17 @@ func TestFetchBaseAcceptsRelativeDir(t *testing.T) {
 // ErrRemoteMissingBase is a structured verdict, not a reading of the
 // failure's prose: a fetch that fails while the branch demonstrably
 // exists must stay a plain transport failure the drain may retry,
-// never definitive base drift. Here the remote repository is made
-// unreadable after the branch is confirmed present, so the fetch
-// fails for a reason unrelated to the ref existing.
+// never definitive base drift. Here the remote's object store is
+// emptied after the branch is confirmed present, so the fetch fails
+// for a reason unrelated to the ref existing.
 func TestFetchBaseDoesNotInferMissingBaseFromFailure(t *testing.T) {
 	t.Parallel()
 	remote := newLocalRemote(t)
-	objects := filepath.Join(remote.bare, "objects")
-	if err := os.Chmod(objects, 0o000); err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { _ = os.Chmod(objects, 0o700) }) //nolint:gosec // G302: restoring a test fixture's own directory mode
+	remote.emptyObjectStore(t)
 
 	_, err := remote.transport.FetchBase(t.Context(), remote.repo, "main", remote.baseSHA, checkoutDir(t))
 	if err == nil {
-		t.Fatal("fetch from an unreadable remote succeeded")
+		t.Fatal("fetch from a remote with no objects succeeded")
 	}
 	if errors.Is(err, ErrRemoteMissingBase) {
 		t.Errorf("a transport failure was reported as definitive base drift: %v", err)
