@@ -2021,6 +2021,26 @@ private final class CountingCacheStore: CacheStore, @unchecked Sendable {
         #expect(
             SyncCoordinator.heartbeatInterval < .seconds(SyncCoordinator.stalenessThreshold))
     }
+
+    @Test func reachabilityRunsOneInjectedSourceUntilStopped() {
+        let coordinator = makeCoordinator(server: MockServer())
+        var starts = 0
+        var stops = 0
+        let source: (@escaping @Sendable (Bool) -> Void) -> () -> Void = { _ in
+            starts += 1
+            return { stops += 1 }
+        }
+
+        coordinator.startReachabilityMonitoring(source: source)
+        coordinator.startReachabilityMonitoring(source: source)
+        #expect(starts == 1)
+
+        coordinator.stopReachabilityMonitoring()
+        #expect(stops == 1)
+
+        coordinator.startReachabilityMonitoring(source: source)
+        #expect(starts == 2)
+    }
 }
 
 private struct MockOutage: Error {}

@@ -1,6 +1,6 @@
+import Foundation
 import FreesideAPI
 import Observation
-import SwiftUI
 
 @MainActor
 private func scheduleDecisionFeedback(
@@ -42,8 +42,10 @@ final class DecisionFeedbackModel {
     private let announce: @MainActor (String) -> Void
     private let schedule: @MainActor (Duration, @escaping @MainActor () -> Void) -> Task<Void, Never>
 
+    /// `init()` supplies the platform's accessibility announcement
+    /// (`PlatformServices.swift`).
     init(
-        announce: @escaping @MainActor (String) -> Void = AccessibilityAnnouncer.announce,
+        announce: @escaping @MainActor (String) -> Void,
         schedule:
             @escaping @MainActor (
                 Duration, @escaping @MainActor () -> Void
@@ -84,37 +86,4 @@ final class DecisionFeedbackModel {
         conclusion = nil
     }
 
-}
-
-private enum AccessibilityAnnouncer {
-    @MainActor
-    static func announce(_ message: String) {
-        AccessibilityNotification.Announcement(message).post()
-    }
-}
-
-struct DecisionFeedbackBanner: View {
-    let feedback: DecisionFeedbackModel
-    let onView: (String) -> Void
-
-    var body: some View {
-        if let conclusion = feedback.conclusion {
-            HStack(spacing: 10) {
-                Image(systemName: "checkmark")
-                    .accessibilityHidden(true)
-                Text("\(conclusion.actionLabel) applied")
-                    .font(FreesideFont.callout)
-                Spacer()
-                if conclusion.hasQueryableItem {
-                    Button("View") { onView(conclusion.itemID) }
-                }
-            }
-            .foregroundStyle(Color.inkDim)
-            .padding(.horizontal, 12)
-            .padding(.vertical, 8)
-            .frame(maxWidth: .infinity, alignment: .leading)
-            .background(Color.neutralWash)
-            .accessibilityElement(children: .contain)
-        }
-    }
 }

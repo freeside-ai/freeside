@@ -37,6 +37,9 @@ var targets: [Target] = [
                 // decode failure (the daemon answered) from a transport
                 // outage (it did not).
                 .product(name: "OpenAPIRuntime", package: "swift-openapi-runtime"),
+                // The model code's digests use the portable Crypto API, so
+                // FreesideCore's models need no Apple-only framework.
+                .product(name: "Crypto", package: "swift-crypto"),
             ],
             // The §15 faces (see Sources/FreesideCore/Fonts/README.md),
             // registered at runtime by FreesideFont so neither app target
@@ -47,7 +50,10 @@ var targets: [Target] = [
     targets.append(
         .testTarget(
             name: "FreesideCoreTests",
-            dependencies: ["FreesideCore", "FreesideAPI"],
+            dependencies: [
+                "FreesideCore", "FreesideAPI",
+                .product(name: "Crypto", package: "swift-crypto"),
+            ],
             resources: [.copy("Resources")]
         )
     )
@@ -58,7 +64,10 @@ var targets: [Target] = [
     targets.append(
         .testTarget(
             name: "FreesideConvergenceTests",
-            dependencies: ["FreesideCore", "FreesideAPI"]
+            dependencies: [
+                "FreesideCore", "FreesideAPI",
+                .product(name: "Crypto", package: "swift-crypto"),
+            ]
         )
     )
 #endif

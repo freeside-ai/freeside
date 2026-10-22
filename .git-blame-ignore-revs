@@ -19,3 +19,9 @@ fb0f5607b2f836c5727a22d9a638144c91f90330
 
 # Move RunDisplay into its own file (#1209)
 2f29857e96070b612e494433da1533e654f96b31
+
+# Move the Keychain credential store into its own file (#2170)
+066fdd46381f286095f647cf08588a792a187e31
+
+# Move DecisionFeedbackBanner into its own file (#2170)
+c3af489852461e716330cff4619444233b55a63e
