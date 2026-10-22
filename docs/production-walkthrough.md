@@ -195,16 +195,15 @@ a new pass.
 | `seed_root` | A directory of its own for the daemon-owned base checkouts |
 | `repository.*` | The disposable repository: its `repo`, `repository_id`, `base_ref`, `base_sha`, `allowed_paths`, `checkout`, and `project` |
 | `manual_submission_config` | `""` |
+| `writers.*` | The lowest-cost Claude model the subscription admits, at `low`, for each of `specifier`, `implementer`, and `remediator` |
 | `review.model`, `review.effort` | The lowest-cost model the Codex subscription admits, at `low` |
-| `judgment.model` | When the real run sets `judgment`: the lowest-cost Claude model the pinned `judgment.claude_bin` serves |
+| `judgment.model`, `judgment.effort` | When the real run sets `judgment`: the lowest-cost Claude model the pinned `judgment.claude_bin` serves, at `low` |
 | `agent_tree.commit` | The rehearsal tree's commit (below) |
 
-The review and judgment models are part of the emitted agent tree, so the
-rehearsal needs its own agent-tree commit. Adopt it once through
+The writer, review, and judgment models are part of the emitted agent tree,
+so the rehearsal needs its own agent-tree commit. Adopt it once through
 [The First Start](#the-first-start) and keep it, for example on its own branch
-of the same agent-tree checkout; later rehearsals reuse it. The writer,
-specifier, and remediator run the pinned default route model, which no setting
-changes.
+of the same agent-tree checkout; later rehearsals reuse it.
 
 **Disposable target.** An issue in a dedicated throwaway repository where the
 `prod` GitHub App is installed, as the `freeside-review-challenge` repository
@@ -299,11 +298,13 @@ The first start always stops this way, because no commit holds the tree yet:
 4. Set `agent_tree.commit` to the printed commit and start the deputy again.
 
 Later fresh roots reuse that commit. The emitted tree depends on the identity
-ids, the route names, the review model, the review effort (`review.effort`, a
-Freeside effort level: `low`, `medium`, `high`, or `max`), the three prompt
+ids, the route names, each writer role's model and effort (`writers.<role>`;
+an effort is a Freeside level: `low`, `medium`, `high`, or `max`), the
+review model and effort (`review.model`, `review.effort`), the three prompt
 packages, the three dated inputs, and, when the run has subscription
-judgments on, `judgment.model` and `judgment.publication_author_prompt`. It
-doesn't depend on the state root, the cost owners, or the account.
+judgments on, `judgment.model`, `judgment.effort`, and
+`judgment.publication_author_prompt`. It doesn't depend on the state root,
+the cost owners, or the account.
 
 Keep `agent_tree.terms_basis_date`, `agent_tree.pricing_revision`, and
 `agent_tree.offer_not_after` at the values the commit was adopted with. A
