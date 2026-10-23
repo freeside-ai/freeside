@@ -386,10 +386,11 @@ local pixels cannot establish an override.
 
 - `Freeside.xcodeproj` contains the two application targets. Both consume the local `FreesideCore` Swift package product.
 - `Sources/FreesideAPI` owns the generated client surface, the stateful mock server and its transport, and the per-type attention fixtures. Apple Swift OpenAPI Generator produces tracked client and type source in `GeneratedSources/` from the schema mirror in that target.
-- `Sources/FreesideCore` contains shared SwiftUI presentation code. `DesignLanguage.swift` holds the §15 tokens, faces, and shared chip, banner, and button styles; `Fonts/` carries the bundled OFL faces (see its README; `scripts/instance-serif-font.sh` regenerates the serif instance).
+- `Sources/FreesideModel` holds the code that needs no Apple UI framework, so it builds and tests on Linux: the app session, the inbox and cache stores, the sync coordinator, device identity and the credential-store protocol, the decision, devices, pairing, task-submission, task-stop, and navigation models, the preferences, the launch inputs, and the display and presentation types the views read.
+- `Sources/FreesideCore` contains the SwiftUI views and the platform glue, and builds on Apple platforms only. It depends on `FreesideModel` and re-exports it, so the app targets and the views import `FreesideCore` alone. `DesignLanguage.swift` holds the §15 tokens, faces, and shared chip, banner, and button styles; `Fonts/` carries the bundled OFL faces (see its README; `scripts/instance-serif-font.sh` regenerates the serif instance). The Apple-only adapters the models take as parameters (the Keychain store, network reachability, URL opening, accessibility announcements) live here as extensions that supply the models' defaults. The claim-text Markdown reader (`SpecificationMarkdown`) and the decision-summary and finding presentations built on it stay here too, because `AttributedString`'s Markdown parser exists only in Apple's Foundation.
 - `Apps/macOS/FreesideMenuMark.png` is the menu-bar template source, rendered from the one-color key `Apps/macOS/FreesideKeyMono.svg` by `scripts/generate-menu-mark.sh` with the dot retired for the sub-24px size. The prod look tints it with the label color; the dev look (`FreesideEnvironment.look`, which maps `dev` and `ephemeral` to dev) draws it black on a safety-yellow tile and cuts a clear ring around the status dot, so the dot stays visible against the tile over a translucent menu bar. The status item's VoiceOver label names the tier: "Freeside", "Freeside Dev", or "Freeside Ephemeral".
 - `SURFACES.md` tracks what the app has to show and how far along each piece is: screens, cards, the rules every card follows, behind-the-scenes state, and the open placement questions. When a PR adds or changes something the app shows, update its line there in the same PR. It holds no design decisions.
-- `Tests/FreesideAPITests` exercises the generated client through the mock server, with no network or daemon; `Tests/FreesideCoreTests` covers the inbox, decision, sync, pairing, session, and daemon-menu models against the same mock, plus the cache and credential stores.
+- `Tests/FreesideAPITests` exercises the generated client through the mock server, with no network or daemon. `Tests/FreesideModelTests` holds the suites whose subjects and fixtures all live in `FreesideModel` (navigation, task submission and its recovery, notification links, the preferences, and the display and presentation types) and runs on Linux. `Tests/FreesideCoreTests` holds the suites that also reach a view or a platform default, among them the inbox, decision, decision-summary, finding, sync, session, devices, and daemon-menu model suites and the cache and credential stores, plus the screenshot suite. `Tests/FreesideTestSupport` holds the mocks and helpers both test targets share.
 - `Apps/macOS/AppIcon.icon` is the single app-icon source for both application targets: the §15 signet mark with explicit default and dark appearance artwork. `Apps/macOS/Info.plist` names that adaptive resource without a static icon-file fallback. FreesideIOS references the same document from its own Resources phase (no copy), names `AppIcon` in `Apps/iOS/Info.plist`, and sets `ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon` on its configurations because iOS shows the home-screen placeholder until `actool` runs with `--app-icon` and emits the `CFBundleIcons` entry SpringBoard reads.
 
 The Icon Composer document lets the system select the appearance and own the platform mask. Its default artwork is the prior light export; its dark artwork keeps that geometry but replaces the treatment with the §15 umber (`#16120E`) ground and tawny (`#C2912E`) mark. Re-derive the dark asset from the 1024-pixel default master with
@@ -429,6 +430,18 @@ xcodebuild -project Freeside.xcodeproj -scheme FreesideMac \
 xcodebuild -project Freeside.xcodeproj -scheme FreesideIOS \
   -destination 'generic/platform=iOS Simulator' -skipPackagePluginValidation \
   CODE_SIGNING_ALLOWED=NO build
+```
+
+On Linux, `Package.swift` declares only `FreesideAPI`, `FreesideModel`, and
+their tests. `bash scripts/check.sh app linux` from the repository root
+builds and tests those targets, as CI's `linux` job does inside the
+`swift:6.3` image. To run it locally in that image with Apple's
+`container` (`docker run` takes the same arguments), give the VM more than
+its default 1 GB of memory, which the test build needs:
+
+```sh
+container run --rm -m 8G -v "$PWD":/work -w /work docker.io/library/swift:6.3 \
+  bash scripts/check.sh app linux
 ```
 
 `swift test` renders the whole screenshot matrix. While iterating on a
