@@ -66,7 +66,7 @@ func TestFetcherStoresDigestAddressedResearch(t *testing.T) {
 	}
 	got, err := fetcher.Fetch(t.Context(), "inv-spec-1", 1, specify.FetchRequest{
 		URL: "https://DOCS.example/fact?q=1", Purpose: "confirm the contract",
-	}, []string{"https://docs.example"}, 1024)
+	}, specify.ManagedRepository{}, []string{"https://docs.example"}, 1024)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -106,7 +106,7 @@ func TestFetcherStoresDigestAddressedResearch(t *testing.T) {
 	}
 	recovered, err := fetcher.Fetch(t.Context(), "inv-spec-1", 1, specify.FetchRequest{
 		URL: "https://DOCS.example/fact?q=1", Purpose: "confirm the contract",
-	}, []string{"https://docs.example"}, 1024)
+	}, specify.ManagedRepository{}, []string{"https://docs.example"}, 1024)
 	if err != nil || recovered.Artifact.Digest != got.Artifact.Digest || calls.Load() != 1 {
 		t.Fatalf("recovery = %+v, %v; transport calls = %d", recovered, err, calls.Load())
 	}
@@ -149,7 +149,7 @@ func TestFetcherStoresDigestAddressedResearch(t *testing.T) {
 	}
 	_, err = fetcher.Fetch(t.Context(), "inv-spec-1", 1, specify.FetchRequest{
 		URL: "https://DOCS.example/fact?q=1", Purpose: "retarget the persisted ordinal",
-	}, []string{"https://docs.example"}, 1024)
+	}, specify.ManagedRepository{}, []string{"https://docs.example"}, 1024)
 	if !errors.Is(err, domain.ErrParentKeyMismatch) || calls.Load() != 1 {
 		t.Fatalf("retarget recovery = %v; transport calls = %d", err, calls.Load())
 	}
@@ -185,7 +185,7 @@ func TestFetcherAdversarialURLSpace(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			before := calls.Load()
 			_, err := fetcher.Fetch(t.Context(), domain.InvocationID("inv-"+strings.ReplaceAll(tc.name, " ", "-")), 1,
-				specify.FetchRequest{URL: tc.url, Purpose: "test"}, tc.allow, 16)
+				specify.FetchRequest{URL: tc.url, Purpose: "test"}, specify.ManagedRepository{}, tc.allow, 16)
 			if tc.ok && err != nil {
 				t.Fatal(err)
 			}
@@ -237,7 +237,7 @@ func TestFetcherRedirectAndSizePolicies(t *testing.T) {
 	fetcher, _ := specify.NewFetcher(st, blobs, transport)
 	_, err := fetcher.Fetch(t.Context(), "inv-redirect", 1,
 		specify.FetchRequest{URL: "https://docs.example/offsite", Purpose: "test"},
-		[]string{"https://docs.example"}, 100)
+		specify.ManagedRepository{}, []string{"https://docs.example"}, 100)
 	if !errors.Is(err, specify.ErrResearchURLRefused) {
 		t.Fatalf("redirect error = %v", err)
 	}
@@ -246,7 +246,7 @@ func TestFetcherRedirectAndSizePolicies(t *testing.T) {
 	}
 	_, err = fetcher.Fetch(t.Context(), "inv-large", 1,
 		specify.FetchRequest{URL: "https://docs.example/large", Purpose: "test"},
-		[]string{"https://docs.example"}, 3)
+		specify.ManagedRepository{}, []string{"https://docs.example"}, 3)
 	if !errors.Is(err, specify.ErrResearchTooLarge) {
 		t.Fatalf("size error = %v", err)
 	}
@@ -255,26 +255,26 @@ func TestFetcherRedirectAndSizePolicies(t *testing.T) {
 	}
 	_, err = fetcher.Fetch(t.Context(), "inv-encoded-large", 1,
 		specify.FetchRequest{URL: "https://docs.example/encoded-large", Purpose: "test"},
-		[]string{"https://docs.example"}, 3<<20)
+		specify.ManagedRepository{}, []string{"https://docs.example"}, 3<<20)
 	if !errors.Is(err, specify.ErrResearchTooLarge) {
 		t.Fatalf("encoded-envelope size error = %v, want ErrResearchTooLarge", err)
 	}
 	_, err = fetcher.Fetch(t.Context(), "inv-large-content-type", 1,
 		specify.FetchRequest{URL: "https://docs.example/large-content-type", Purpose: "test"},
-		[]string{"https://docs.example"}, 100)
+		specify.ManagedRepository{}, []string{"https://docs.example"}, 100)
 	if !errors.Is(err, specify.ErrResearchTooLarge) {
 		t.Fatalf("content-type size error = %v, want ErrResearchTooLarge", err)
 	}
 	_, err = fetcher.Fetch(t.Context(), "inv-forged-final", 1,
 		specify.FetchRequest{URL: "https://docs.example/forged-final", Purpose: "test"},
-		[]string{"https://docs.example"}, 100)
+		specify.ManagedRepository{}, []string{"https://docs.example"}, 100)
 	if !errors.Is(err, specify.ErrResearchURLRefused) {
 		t.Fatalf("forged final URL error = %v", err)
 	}
 	for _, path := range []string{"server-error", "network-error", "non-utf8"} {
 		_, err = fetcher.Fetch(t.Context(), domain.InvocationID("inv-"+path), 1,
 			specify.FetchRequest{URL: "https://docs.example/" + path, Purpose: "test"},
-			[]string{"https://docs.example"}, 100)
+			specify.ManagedRepository{}, []string{"https://docs.example"}, 100)
 		if !specify.IsResearchRequestFailure(err) {
 			t.Errorf("%s error is not classified as a request failure: %v", path, err)
 		}
@@ -284,7 +284,7 @@ func TestFetcherRedirectAndSizePolicies(t *testing.T) {
 	}
 	_, err = fetcher.Fetch(t.Context(), "inv-unbounded", 1,
 		specify.FetchRequest{URL: "https://docs.example/large", Purpose: "test"},
-		[]string{"https://docs.example"}, specify.MaxResearchResponseBytes+1)
+		specify.ManagedRepository{}, []string{"https://docs.example"}, specify.MaxResearchResponseBytes+1)
 	if err == nil {
 		t.Fatal("fetcher accepted a response bound above its hard maximum")
 	}

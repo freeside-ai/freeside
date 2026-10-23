@@ -2737,10 +2737,33 @@ func (e *Engine) cancelExpiredSpecification(ctx context.Context, attempt domain.
 	return nil
 }
 
+// researchScope names the run's own project as the only repository whose
+// issue endpoints the research fetcher may authenticate to, whatever URLs a
+// writer requests. A run whose project isn't registered gets the zero scope,
+// which authenticates nothing and leaves research as it was.
+func researchScope(ctx context.Context, tx *store.ReadTx, projectID domain.ProjectID) (specify.ManagedRepository, error) {
+	project, err := tx.GetProject(ctx, projectID)
+	if errors.Is(err, store.ErrNotFound) {
+		return specify.ManagedRepository{}, nil
+	}
+	if err != nil {
+		return specify.ManagedRepository{}, err
+	}
+	return specify.ManagedRepository{Repo: project.Repo, RepositoryID: project.RepositoryID}, nil
+}
+
 func (e *Engine) acceptResearchRequests(ctx context.Context, run domain.Run, request specificationRequest, requests []specify.FetchRequest, settings specify.Policy) (bool, error) {
+	var scope specify.ManagedRepository
+	if err := e.store.Read(ctx, func(tx *store.ReadTx) error {
+		var err error
+		scope, err = researchScope(ctx, tx, run.ProjectID)
+		return err
+	}); err != nil {
+		return false, err
+	}
 	ids := make([]domain.ArtifactID, 0, len(requests))
 	for index, fetchRequest := range requests {
-		artifact, err := e.specification.fetcher.Fetch(ctx, request.InvocationID, index+1, fetchRequest,
+		artifact, err := e.specification.fetcher.Fetch(ctx, request.InvocationID, index+1, fetchRequest, scope,
 			settings.ResearchAllowlist, settings.ResearchMaxBytes)
 		if err != nil {
 			if specify.IsResearchRequestFailure(err) {
