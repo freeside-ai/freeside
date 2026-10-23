@@ -133,6 +133,18 @@ class Coverage(unittest.TestCase):
                       {k: {'result': 'success'} for k in expected + ['unexpected']}]:
             with self.subTest(needs=needs), self.assertRaises(ValueError):
                 shards.gate(needs, expected)
+        # The other event's child must be present and skipped: a PR gate
+        # names the push-only job, a push gate names the PR-only job.
+        shards.gate({'tests': {'result': 'success'}, 'main': {'result': 'skipped'}}, ['tests'], ['main'])
+        for needs in [{'tests': {'result': 'success'}},
+                      {'tests': {'result': 'success'}, 'main': {'result': 'success'}},
+                      {'tests': {'result': 'success'}, 'main': {'result': 'failure'}},
+                      {'tests': {'result': 'skipped'}, 'main': {'result': 'skipped'}},
+                      {'tests': {'result': 'success'}, 'main': 'skipped'}]:
+            with self.subTest(needs=needs), self.assertRaises(ValueError):
+                shards.gate(needs, ['tests'], ['main'])
+        with self.assertRaises(ValueError):
+            shards.gate({'tests': {'result': 'success'}}, ['tests'], ['tests'])
 
     def test_workflow_wires_complete_matrices_and_tested_gate_predicate(self):
         workflow = (root / '.github/workflows/daemon-ci.yml').read_text()
@@ -327,6 +339,35 @@ for p, names in data.items():
             identity.write_text(saved)
             with patch.dict(os.environ, GITHUB_SHA='head', GITHUB_RUN_ID='1', GITHUB_RUN_ATTEMPT='1'):
                 shards.verify_reports(reports)
+                # A declared shard set verifies its own full coverage and
+                # rejects a shard outside it or a hole inside it.
+                shards.verify_reports(reports[:1], 'rest')
+                shards.verify_reports(reports[1:], 'integration')
+                with self.assertRaisesRegex(ValueError, 'missing, duplicate, or unexpected shard'):
+                    shards.verify_reports(reports, 'rest')
+                with self.assertRaisesRegex(ValueError, 'exactly one rest shard'):
+                    shards.verify_reports(reports[1:], 'rest')
+                with self.assertRaisesRegex(ValueError, 'rejects a rest shard'):
+                    shards.verify_reports(reports, 'integration')
+                with self.assertRaisesRegex(ValueError, 'missing, duplicate, or unexpected shard'):
+                    shards.verify_reports(reports[1:2], 'integration')
+                with self.assertRaisesRegex(ValueError, 'duplicate shard evidence in one attempt'):
+                    shards.verify_reports(reports[1:] + reports[1:2], 'integration')
+                with self.assertRaises(ValueError):
+                    shards.verify_reports(reports, 'other')
+                rest_inventory = reports[0].parent / 'inventory.json'
+                saved_inventory = rest_inventory.read_text()
+                rest_inventory.write_text(json.dumps({integration: inventory[integration]}))
+                with self.assertRaisesRegex(ValueError, 'rest shard omitted'):
+                    shards.verify_reports(reports[:1], 'rest')
+                rest_inventory.write_text(saved_inventory)
+                verify = [sys.executable, str(path), 'verify']
+                self.assertEqual(subprocess.run(verify + ['--shards', 'rest', str(reports[0])],
+                                                capture_output=True).returncode, 0)
+                self.assertNotEqual(subprocess.run(verify + ['--shards', 'integration', str(reports[0])],
+                                                   capture_output=True).returncode, 0)
+                self.assertNotEqual(subprocess.run(verify + ['--shards', 'integration'],
+                                                   capture_output=True).returncode, 0)
             with patch.dict(os.environ, GITHUB_SHA='different-head'):
                 with self.assertRaisesRegex(ValueError, 'another commit'):
                     shards.verify_reports(reports)
