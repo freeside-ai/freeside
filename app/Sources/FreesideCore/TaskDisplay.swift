@@ -294,9 +294,10 @@ enum TaskDisplay {
     /// (#1923), from the first of these that says one:
     ///
     /// 1. Verification, when the current run's publication position says so
-    ///    (`RunDisplay.workflowPhase`). The daemon records no instant for
-    ///    the start of verification, so the event rail has no start point
-    ///    to read it from.
+    ///    (`RunDisplay.workflowPhase`). The event rail draws Verification's
+    ///    start only under a verification or publication event, so the
+    ///    position names it before the timeline loads and when a publication
+    ///    hold has no such event yet.
     /// 2. The newest start point on the task's event rail, so the header and
     ///    the rail under it name the same stage. `reviewRounds` is the
     ///    rail's, so a remediation reads as Implementation here too.

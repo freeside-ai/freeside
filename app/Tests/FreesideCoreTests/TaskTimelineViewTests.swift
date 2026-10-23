@@ -718,8 +718,8 @@ import Testing
         ]
         // The rail names a result in words: no run or campaign id, no commit.
         let rows = TaskTimelinePresentation.rows(timeline)
-        #expect(rows.map(\.label) == ["Round 2 failed", "Verification recorded · Degraded"])
-        #expect(rows.map(\.kind) == [.failure, .event])
+        #expect(rows.map(\.label) == ["Round 2 failed", "Verification recorded · Degraded", "Verification started"])
+        #expect(rows.map(\.kind) == [.failure, .event, .stageStart(.verification)])
         for value in ["run-old", "campaign-old", "old-head", "old-base", "ready-old", "review-old"] {
             #expect(!rows.contains { $0.label.contains(value) })
         }

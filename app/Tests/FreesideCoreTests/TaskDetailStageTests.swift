@@ -101,17 +101,17 @@ import Testing
         unloaded.history = nil
         #expect(stage(unloaded) == .implementation)
         #expect(chip(unloaded) == "In Implementation")
-        // Verification has no start point: the run's publication position
-        // says it, over a timeline whose newest start is Review.
+        // The run's publication position and the rail's newest start both
+        // say Verification.
         let verification = TaskStageFixtures.page(.verification)
         let rows = TaskTimelinePresentation.rows(TaskStageFixtures.history(.verification))
-        #expect(TaskTimelinePresentation.newestStage(rows) == .review)
+        #expect(TaskTimelinePresentation.newestStage(rows) == .verification)
         #expect(stage(verification) == .verification)
         // With the run not synced, the publication position is unknown and
         // the start point stands.
         var runless = verification
         runless.runs = []
-        #expect(stage(runless) == .review)
+        #expect(stage(runless) == .verification)
         #expect(stage(TaskProgressFixtures.make("No position")) == nil)
     }
 
