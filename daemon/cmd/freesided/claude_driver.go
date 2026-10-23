@@ -349,6 +349,7 @@ func (r exportRecorder) RecordExecutionExport(
 		EvidenceManifestDigest: replay.EvidenceManifestDigest,
 		CommitPlanDigest:       replay.CommitPlanDigest,
 		ImportOptions:          replay.ImportOptions,
+		Usage:                  replay.Usage,
 	})
 	if errors.Is(err, store.ErrImmutableConflict) {
 		return errors.Join(err, domain.ErrImmutableTransition)

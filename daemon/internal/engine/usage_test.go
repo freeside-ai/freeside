@@ -188,6 +188,62 @@ func TestUsageObservationsPersistAfterStageCollect(t *testing.T) {
 	}
 }
 
+// TestUsageObservationsPersistWithTheExport is the writer half of #2212: the
+// export write records the usage the driver hands over, so an unattended
+// export, which is never collected, keeps it. Here the attended arm records
+// it; its later collect appends the same measurements and converges, as does
+// the driver's identical retry of the export write.
+func TestUsageObservationsPersistWithTheExport(t *testing.T) {
+	engine, run, attempt := usageEngineFixture(t, true)
+	ctx := context.Background()
+	var admission domain.ExecutionAdmission
+	if err := engine.store.Read(ctx, func(tx *store.ReadTx) error {
+		var err error
+		admission, err = tx.GetExecutionAdmissionRecord(ctx, attempt.InvocationID)
+		return err
+	}); err != nil {
+		t.Fatal(err)
+	}
+	export, err := domain.NewExecutionExport(domain.ExecutionExportInput{
+		InvocationID: attempt.InvocationID, AdmissionID: admission.ID,
+		ObservedBaseSHA: admission.Base.BaseSHA, HeadSHA: "cafebabe",
+		ManifestDigest: "sha256:manifest", RecordedAt: admission.AdmittedAt.Add(time.Hour),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	usage := []exec.UsageMeasurement{{
+		Source: domain.UsageSourceAdapterTranscript, Kind: domain.UsageMeasurementReportedUsage,
+		Metric: "input_tokens", Unit: "tokens", Quantity: 17, Sequence: 1, ObservedAt: admission.AdmittedAt,
+	}}
+	listUsage := func() []domain.UsageObservation {
+		t.Helper()
+		var observations []domain.UsageObservation
+		if err := engine.store.ReadUsage(ctx, func(tx *store.UsageReadTx) error {
+			var err error
+			observations, err = tx.ListRunUsageObservations(ctx, run.ID)
+			return err
+		}); err != nil {
+			t.Fatal(err)
+		}
+		return observations
+	}
+	for attempt := range 2 {
+		if err := RecordExecutionExport(ctx, engine.store, export, ProductionReplay{Usage: usage}); err != nil {
+			t.Fatalf("record export attempt %d: %v", attempt, err)
+		}
+	}
+	if got := listUsage(); len(got) != 1 || got[0].Quantity != 17 {
+		t.Fatalf("usage after the export write = %#v, want the one measurement", got)
+	}
+	if _, ready, err := engine.collectTerminal(ctx, run.ID, attempt); err != nil || !ready {
+		t.Fatalf("collect = ready %v, err %v", ready, err)
+	}
+	if got := listUsage(); len(got) != 1 {
+		t.Fatalf("usage after collect = %#v, want the export's row only", got)
+	}
+}
+
 func TestUsageObservationsPersistWithRoutedReviewFailure(t *testing.T) {
 	engine, run, attempt := usageEngineFixture(t, true)
 	observedAt := time.Date(2026, 1, 2, 4, 5, 6, 0, time.UTC)

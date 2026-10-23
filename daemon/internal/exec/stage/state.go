@@ -272,6 +272,12 @@ type ExecutionReplay struct {
 	EvidenceManifestDigest *domain.Digest
 	CommitPlanDigest       *domain.Digest
 	ImportOptions          importer.Options
+	// Usage is the telemetry extracted from the export's authenticated
+	// evidence, handed to the recorder so it lands in the same write as the
+	// export: an unattended export mints its publication task there and is
+	// never collected, so no later step would record it. It is set only on
+	// the recording path; LoadExecutionReplay leaves it empty.
+	Usage []exec.UsageMeasurement
 }
 
 func (r releasedExport) outcome() exportOutcome {

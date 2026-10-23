@@ -97,6 +97,10 @@ type ProductionReplay struct {
 	EvidenceManifestDigest *domain.Digest          `json:"evidence_manifest_digest,omitempty"`
 	CommitPlanDigest       *domain.Digest          `json:"commit_plan_digest,omitempty"`
 	ImportOptions          importer.Options        `json:"import_options"`
+	// Usage is the driver's extracted telemetry, appended in the same write
+	// that records the export. It is not replay data, so the publication
+	// task never persists it and a decoded task replay carries none.
+	Usage []exec.UsageMeasurement `json:"-"`
 }
 
 // ProductionPublicationConfig supplies the real boundaries required after a
@@ -836,15 +840,11 @@ func RecordExecutionExport(
 		// its first export is not itself a publication candidate. Recording it
 		// export-only lets the attempt close without minting a task that would
 		// incorrectly reuse the original production invocation's identity.
-		return st.Write(ctx, func(tx *store.WriteTx) error {
-			return tx.RecordExecutionExport(ctx, executionExport)
-		})
+		return recordExportOnly(ctx, st, executionExport, replay.Usage)
 	}
 	switch admission.OperatingMode {
 	case domain.ModeAttendedDev:
-		return st.Write(ctx, func(tx *store.WriteTx) error {
-			return tx.RecordExecutionExport(ctx, executionExport)
-		})
+		return recordExportOnly(ctx, st, executionExport, replay.Usage)
 	case domain.ModeUnattended:
 		// An unattended specification run produces an export the same way, but its
 		// output is a typed specification published outside the repo channel, and
@@ -857,9 +857,7 @@ func RecordExecutionExport(
 		if IsSpecificationInvocationIdentity(
 			executionExport.InvocationID, admission.RunID, admission.StageID,
 		) {
-			return st.Write(ctx, func(tx *store.WriteTx) error {
-				return tx.RecordExecutionExport(ctx, executionExport)
-			})
+			return recordExportOnly(ctx, st, executionExport, replay.Usage)
 		}
 		var run domain.Run
 		if err := st.Read(ctx, func(tx *store.ReadTx) error {
@@ -874,14 +872,31 @@ func RecordExecutionExport(
 			return err
 		}
 		if request.Legacy {
-			return st.Write(ctx, func(tx *store.WriteTx) error {
-				return tx.RecordExecutionExport(ctx, executionExport)
-			})
+			return recordExportOnly(ctx, st, executionExport, replay.Usage)
 		}
 		return RecordProductionExecutionExport(ctx, st, executionExport, replay)
 	}
 	return fmt.Errorf("execution admission %q has invalid operating mode %q: %w",
 		admission.InvocationID, admission.OperatingMode, domain.ErrInvalidOperatingMode)
+}
+
+// recordExportOnly records an export that mints no publication task, with
+// its usage in the same write. The attended and specification invocations it
+// serves are collected later and append the same measurements again, which
+// converges on the rows written here.
+func recordExportOnly(
+	ctx context.Context,
+	st *store.Store,
+	executionExport domain.ExecutionExport,
+	usage []exec.UsageMeasurement,
+) error {
+	return st.Write(ctx, func(tx *store.WriteTx) error {
+		if err := tx.RecordExecutionExport(ctx, executionExport); err != nil {
+			return err
+		}
+		_, err := tx.AppendUsageObservations(ctx, executionExport.InvocationID, usage)
+		return err
+	})
 }
 
 // RecordProductionExecutionExport atomically commits an unattended export and
@@ -1122,6 +1137,14 @@ func RecordProductionExecutionExport(
 			return err
 		}
 		if err := tx.RecordExecutionExportRecord(ctx, executionExport); err != nil {
+			return err
+		}
+		// An unattended export is never collected, so this write is the only
+		// one that records its usage. It precedes the open-execution fence
+		// because a late export's spend was still incurred.
+		if _, err := tx.AppendUsageObservations(
+			ctx, executionExport.InvocationID, replay.Usage,
+		); err != nil {
 			return err
 		}
 		if err := requireTaskExecutionOpen(ctx, &tx.ReadTx, task.RunID); err != nil {

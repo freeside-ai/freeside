@@ -240,6 +240,9 @@ type productionPublicationHarness struct {
 	// rebuiltImages are the images a room may then be built from beside image.
 	rebuild       *engine.ProjectImageRebuild
 	rebuiltImages map[domain.Digest]bool
+	// agents, when set, is the lineup the next engine admits writers
+	// through, so each writer admission carries an agent binding.
+	agents *engine.AgentSelection
 }
 
 // productionBaseManifests are the npm manifests the production harness
@@ -869,6 +872,10 @@ func (p *productionPublicationHarness) newEngineForMode(
 			HostPath: "/nonexistent/production-publication-claude-md",
 		},
 		AuthIdentityID: &identity,
+	}
+	if p.agents != nil {
+		// The lineup names the identity each writer runs under.
+		environment.AuthIdentityID, environment.Agents = nil, p.agents
 	}
 	options := []engine.Option{
 		engine.WithAdmission(

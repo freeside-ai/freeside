@@ -444,6 +444,7 @@ func (d *Driver) finish(
 		EvidenceManifestDigest: cloneDigest(record.EvidenceManifestDigest),
 		CommitPlanDigest:       cloneDigest(replay.CommitPlanDigest),
 		ImportOptions:          opts,
+		Usage:                  usage,
 	}
 	if err := d.recordExport(ctx, record, durableReplay); err != nil {
 		return exec.StageResult{}, err
@@ -652,9 +653,11 @@ func (d *Driver) completeReleasedExportWithOptions(
 		return classifyExportCompletion(out.dir, exec.StageResult{}, err)
 	}
 	// The authenticated evidence is the usage source, so observe it before any
-	// candidate validation can reject the returned workspace. The terminal
-	// result persists this timestamp and makes later collection replay exact.
-	usage := d.extractUsage(in, out, d.now().UTC())
+	// candidate validation can reject the returned workspace. The observation
+	// time is the pinned export stamp, not the clock: a crash after the export
+	// write replays this import, and the usage rows written with the export
+	// must converge rather than conflict on a fresh observed_at.
+	usage := d.extractUsage(in, out, in.exportRecordedAt())
 	result, err := d.finish(ctx, in, out, importOptions, usage)
 	if err != nil {
 		result.Usage = usage

@@ -154,6 +154,78 @@ func TestUsageExtractorFailureDoesNotFailTheStage(t *testing.T) {
 	}
 }
 
+// TestCompletedExportHandsItsUsageToTheRecorder is the #2212 regression: an
+// unattended export is never collected, so the recorder must receive the
+// extracted usage with the export. The usage is observed at the pinned export
+// stamp, so replaying the import-and-record crash window with a later clock
+// hands over the identical replay and converges on the stored record.
+func TestCompletedExportHandsItsUsageToTheRecorder(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	repo, base := emptyBaseRepo(t)
+	released := timestampTestExport(t, base)
+	evidence := export.EvidenceManifest{Version: export.EvidenceManifestVersion, Entries: []export.EvidenceEntry{}}
+	body, err := evidence.Encode()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(released.Dir, export.EvidenceFilename), body, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	released.Evidence, released.EvidencePresent = evidence, true
+	pinned := fixedNow.Add(5 * time.Minute)
+	released.RecordedAt = pinned
+	exports := newStubExports()
+	d := newTestDriver(t, &stubGate{}, exports)
+	d.seeder = recoveryGitSeeder{repo: repo}
+	d.provider = testProvider{usageExtractor: func(
+		_ string, _ export.EvidenceManifest, observedAt time.Time,
+	) ([]exec.UsageMeasurement, error) {
+		return []exec.UsageMeasurement{{
+			Source: domain.UsageSourceAdapterTranscript, Kind: domain.UsageMeasurementReportedUsage,
+			Metric: "input_tokens", Unit: "tokens", Quantity: 12, Sequence: 1, ObservedAt: observedAt,
+		}}, nil
+	}}
+	want := []exec.UsageMeasurement{{
+		Source: domain.UsageSourceAdapterTranscript, Kind: domain.UsageMeasurementReportedUsage,
+		Metric: "input_tokens", Unit: "tokens", Quantity: 12, Sequence: 1, ObservedAt: pinned,
+	}}
+	spec := testStartSpec()
+	spec.Base.BaseSHA = base
+	orphanWithSpec(t, d, phaseExported, released, spec)
+	in, err := d.loadIntent(ctx, testInvoke)
+	if err != nil {
+		t.Fatal(err)
+	}
+	backup := filepath.Join(t.TempDir(), "export")
+	if err := os.CopyFS(backup, os.DirFS(released.Dir)); err != nil {
+		t.Fatal(err)
+	}
+	now := fixedNow.Add(time.Hour)
+	d.now = func() time.Time { return now }
+	for attempt := range 2 {
+		if attempt > 0 {
+			// The first attempt consumed the released directory; restore it
+			// as a crash before the result commit would have left it.
+			if err := os.CopyFS(released.Dir, os.DirFS(backup)); err != nil {
+				t.Fatal(err)
+			}
+		}
+		result, err := d.completeReleasedExportWithOptions(
+			ctx, in, in.Export.outcome(), d.authority.ImportOptionsRecord)
+		if err != nil || result.Status != exec.StatusCompleted {
+			t.Fatalf("attempt %d = %+v, %v; want completed", attempt, result, err)
+		}
+		if !reflect.DeepEqual(result.Usage, want) {
+			t.Fatalf("attempt %d result usage = %#v, want %#v", attempt, result.Usage, want)
+		}
+		if got := exports.replays[testInvoke].Usage; !reflect.DeepEqual(got, want) {
+			t.Fatalf("attempt %d recorded usage = %#v, want %#v", attempt, got, want)
+		}
+		now = now.Add(time.Hour)
+	}
+}
+
 // TestEvidenceBlobMissingFromTheExportFailsTheStage: a named entry whose
 // blob is absent must fail rather than yield a result naming content nothing
 // can resolve.
