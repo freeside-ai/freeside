@@ -165,7 +165,10 @@ func TestCodexReviewTerminalFailureOverridesEmptyFindings(t *testing.T) {
 				Admission: testReviewAdmission("run-terminal"), RunID: "run-terminal",
 				BaseSHA: testCodexReviewHead, HeadSHA: testCodexReviewHead, Instructions: testReviewInstructionBinding(),
 			}
-			collection := CodexReviewCollection{ExitStatus: tc.status, Result: []byte(`{"findings":[]}`), Events: []byte(tc.events)}
+			collection := CodexReviewCollection{
+				ExitStatus: tc.status, Result: []byte(`{"findings":[]}`), Events: []byte(tc.events),
+				ConfigurationDigest: source.cfg.ConfigurationDigest,
+			}
 			outcome := source.normalizeCollection("review-terminal", req, collection)
 			if outcome.FailureClass != tc.failure || (outcome.Result == nil) != (tc.failure != "") {
 				t.Fatalf("failure=%q result present=%t", outcome.FailureClass, outcome.Result != nil)

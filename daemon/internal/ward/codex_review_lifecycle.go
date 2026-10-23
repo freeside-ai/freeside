@@ -14,6 +14,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/freeside-ai/freeside/daemon/internal/contentaddr"
 	"github.com/freeside-ai/freeside/daemon/internal/domain"
 	"github.com/freeside-ai/freeside/daemon/internal/exec"
 )
@@ -205,6 +206,9 @@ type CodexReviewLaunchSpec struct {
 	Instructions       VendorInstructions
 	InstructionFile    string
 	InstructionBinding exec.ReviewInstructionBinding
+	// ConfigurationDigest is the trust-profile configuration digest the
+	// launch is approved under; the journal binding records it.
+	ConfigurationDigest domain.Digest
 }
 
 // CodexReviewLaunch is a started review and its reconstructed durable binding.
@@ -589,7 +593,7 @@ func (b *CodexReviewLifecycle) codexReview(
 		AuthMode: launch.AuthMode, AuthIdentityID: launch.AuthIdentityID,
 		AuthSnapshot: launch.AuthSnapshot, Instructions: launch.Instructions,
 		InstructionFile: launch.InstructionFile, InstructionBinding: launch.InstructionBinding,
-		AgentsShadow: shadow, Snapshot: snapshot,
+		AgentsShadow: shadow, Snapshot: snapshot, ConfigurationDigest: launch.ConfigurationDigest,
 	}
 	if launch.ExpectedEvaluated != "" {
 		req.EvaluatedSHA, req.HeadSHA = launch.ExpectedEvaluated, launch.ExpectedHead
@@ -850,6 +854,8 @@ func validateCodexReviewLaunchShape(provider reviewProvider, cfg CodexReviewConf
 		return fmt.Errorf("%w: %w", ErrInvalidCodexReviewSpec, ErrCodexReviewContinuityRefused)
 	case !launch.AuthMode.valid() || launch.AuthIdentityID == "":
 		return fmt.Errorf("%w: auth identity is invalid", ErrInvalidCodexReviewSpec)
+	case !contentaddr.Valid(string(launch.ConfigurationDigest)):
+		return fmt.Errorf("%w: ConfigurationDigest is invalid", ErrInvalidCodexReviewSpec)
 	case !cleanAbs(cfg.InputRoot):
 		return fmt.Errorf("%w: InputRoot is invalid", ErrInvalidCodexReviewSpec)
 	case cfg.Now == nil:

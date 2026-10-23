@@ -406,7 +406,7 @@ func (s *CodexReviewSource) startRequestedReview(
 		Boundary: CodexReviewFreshStart, AuthMode: s.cfg.AuthMode,
 		AuthIdentityID: s.cfg.AuthIdentityID, AuthSnapshot: s.cfg.AuthSnapshot,
 		Instructions: instructions, InstructionFile: instructionFile,
-		InstructionBinding: req.Instructions,
+		InstructionBinding: req.Instructions, ConfigurationDigest: s.cfg.ConfigurationDigest,
 	})
 	if err != nil {
 		if classifyCodexLaunchFailure(err) == domain.ReviewFailureTransient {
@@ -860,10 +860,12 @@ func (s *CodexReviewSource) Inspect(
 		return exec.StatusRunning, nil
 	}
 	collection, err := s.cfg.Lifecycle.CollectCodexReview(ctx, s.cfg.Review, string(id))
-	if err != nil {
-		if !errors.Is(err, ErrMemoryLimit) && !errors.Is(err, ErrCodexReviewOutputInvalid) {
-			return "", &exec.ReviewSourceFailure{Class: classifyCodexObservationFailure(err), Err: err}
-		}
+	if err != nil && !errors.Is(err, ErrMemoryLimit) && !errors.Is(err, ErrCodexReviewOutputInvalid) {
+		return "", &exec.ReviewSourceFailure{Class: classifyCodexObservationFailure(err), Err: err}
+	}
+	if collection.ConfigurationDigest != s.cfg.ConfigurationDigest {
+		outcome = s.otherConfigurationOutcome(id, collection)
+	} else if err != nil {
 		class, failure := domain.ReviewFailureContradiction, fmt.Sprintf("Codex review returned invalid raw output: %v", err)
 		if errors.Is(err, ErrMemoryLimit) {
 			// Rerunning at the same size meets the same limit, so the kill is
@@ -888,7 +890,7 @@ func (s *CodexReviewSource) Inspect(
 		// bytes; failures before that boundary return no collection and get no
 		// invented evidence.
 		if collection.Events != nil {
-			retained := CodexReviewRetainedCollection(collection)
+			retained := collection.retained()
 			if retained.validate() == nil {
 				outcome.Collection = &retained
 				outcome.CollectionEvidence = collectionEvidence(s.reviewProvider(), retained)
@@ -929,6 +931,36 @@ func (s *CodexReviewSource) Inspect(
 		return exec.StatusCompleted, nil
 	}
 	return exec.StatusFailed, nil
+}
+
+// otherConfigurationOutcome refuses a review that ran under a configuration
+// digest other than the one this daemon runs, or under a binding written
+// before the launch digest was journaled. The result is never normalized,
+// so it cannot be recorded under the current approval. The class is
+// transient: the reviewer contradicted nothing, and the current
+// configuration may well be approved, so the engine's next round reviews
+// under it.
+func (s *CodexReviewSource) otherConfigurationOutcome(
+	id domain.InvocationID, collection CodexReviewCollection,
+) CodexReviewSourceOutcome {
+	launched := "a binding that predates the launch configuration record"
+	if collection.ConfigurationDigest != "" {
+		launched = "configuration " + string(collection.ConfigurationDigest)
+	}
+	outcome := CodexReviewSourceOutcome{
+		InvocationID: id, FailureClass: domain.ReviewFailureTransient,
+		Failure: fmt.Sprintf("review launched under %s, but the daemon now runs configuration %s",
+			launched, s.cfg.ConfigurationDigest),
+		Usage: s.reviewUsageMeasurements(collection.Events),
+	}
+	if collection.Events != nil {
+		retained := collection.retained()
+		if retained.validate() == nil {
+			outcome.Collection = &retained
+			outcome.CollectionEvidence = collectionEvidence(s.reviewProvider(), retained)
+		}
+	}
+	return outcome
 }
 
 func codexReviewOutcomeWriteFailure(err error) error {
@@ -982,10 +1014,7 @@ func (s *CodexReviewSource) normalizeCollection(
 	id domain.InvocationID, req exec.ReviewRequest, collection CodexReviewCollection,
 ) CodexReviewSourceOutcome {
 	provider := s.reviewProvider()
-	// The two collection types share field names and types (they differ only in
-	// JSON tags, which conversion ignores), so a conversion retains the raw
-	// account without a field-by-field copy.
-	retained := CodexReviewRetainedCollection(collection)
+	retained := collection.retained()
 	collEvidence := collectionEvidence(provider, retained)
 	completedAt, usage := s.reviewUsageMeasurementsAt(collection.Events)
 	failure := func(class domain.ReviewFailureClass, message string) CodexReviewSourceOutcome {
@@ -1116,7 +1145,7 @@ func (s *CodexReviewSource) normalizeCollection(
 		// source reports nothing of its own here: Admit already refused a
 		// request whose snapshot names another identity, model, or effort.
 		Admission:           req.Admission,
-		ConfigurationDigest: s.cfg.ConfigurationDigest,
+		ConfigurationDigest: collection.ConfigurationDigest,
 		InstructionDigest:   req.Instructions.ResultDigest,
 		CompletedAt:         completedAt,
 		Findings:            findings, Usage: usage,

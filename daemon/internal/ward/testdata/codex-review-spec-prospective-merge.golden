@@ -133,6 +133,7 @@
     "publication_credentials": false,
     "launcher_environment_digest": "sha256:0539629c9afabb416eea6a884893544e79220d27a38fdd8e8bd40cd2c1dae246",
     "command_digest": "sha256:157d167d3af2131e0815271c6e167cb55d3d4e28f0e67b83dde48a9b03465935",
+    "configuration_digest": "sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
     "review_container": "",
     "review_container_fingerprint": "",
     "review_ownership_token": ""
