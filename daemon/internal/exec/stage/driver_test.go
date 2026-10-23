@@ -440,6 +440,8 @@ type stubExports struct {
 	rejectErr    error
 	outcomeErr   error
 	lookupErr    error
+	// afterOutcome, when set, runs under mu once an outcome is stored.
+	afterOutcome func()
 }
 
 func newStubExports() *stubExports {
@@ -536,6 +538,9 @@ func (e *stubExports) RecordExecutionOutcome(
 		return domain.ErrImmutableTransition
 	}
 	e.outcomes[record.InvocationID] = record
+	if e.afterOutcome != nil {
+		e.afterOutcome()
+	}
 	return nil
 }
 
@@ -865,6 +870,64 @@ func newTestDriver(t *testing.T, gate *stubGate, exports *stubExports) *Driver {
 		t.Fatalf("New: %v", err)
 	}
 	return d
+}
+
+// holdIntentRecord moves runID's intent record aside and leaves a directory
+// at its path, so the next saveIntent fails at its rename, for root too,
+// which a read-only state directory would not. listIntents skips both the
+// directory and the held copy. release restores the record. It returns
+// errors rather than failing t because gate callbacks may run it off the
+// test goroutine.
+func holdIntentRecord(d *Driver, runID string) (release func() error, err error) {
+	path := d.intentPath(runID)
+	held := path + ".held"
+	if err := os.Rename(path, held); err != nil {
+		return nil, err
+	}
+	if err := os.Mkdir(path, 0o700); err != nil {
+		return nil, err
+	}
+	return func() error {
+		if err := os.Remove(path); err != nil {
+			return err
+		}
+		return os.Rename(held, path)
+	}, nil
+}
+
+// holdIntentAfterOutcome makes a terminal commit fail at its intent save
+// after its outcome is durable: once records stores an outcome, runID's
+// intent record is held (holdIntentRecord). The returned release disarms
+// the hook and restores the record, so a retry converges on the stored
+// outcome and lands the intent.
+func holdIntentAfterOutcome(t *testing.T, d *Driver, records *stubExports, runID string) (release func()) {
+	t.Helper()
+	var (
+		restore func() error
+		holdErr error
+	)
+	records.mu.Lock()
+	records.afterOutcome = func() {
+		records.afterOutcome = nil
+		restore, holdErr = holdIntentRecord(d, runID)
+	}
+	records.mu.Unlock()
+	return func() {
+		t.Helper()
+		records.mu.Lock()
+		records.afterOutcome = nil
+		restore, holdErr := restore, holdErr
+		records.mu.Unlock()
+		if holdErr != nil {
+			t.Fatalf("hold intent record: %v", holdErr)
+		}
+		if restore == nil {
+			t.Fatal("no outcome was recorded, so the intent record was never held")
+		}
+		if err := restore(); err != nil {
+			t.Fatalf("restore intent record: %v", err)
+		}
+	}
 }
 
 // newPreparingTestDriver is a driver whose composition carries the fixed
@@ -1294,15 +1357,11 @@ func TestPreJournalCancellationPersistenceFailureRetainsRetry(t *testing.T) {
 		t.Fatalf("StartWithInputs: %v", err)
 	}
 	<-entered
-	if err := os.Chmod(d.dir, 0o500); err != nil { //nolint:gosec // adversarial owner-only fixture
-		t.Fatal(err)
-	}
+	release := holdIntentAfterOutcome(t, d, records, testRunIDFor(testInvoke))
 	cancelErr := d.Cancel(context.Background(), testInvoke)
-	if err := os.Chmod(d.dir, 0o700); err != nil { //nolint:gosec // restore private state directory
-		t.Fatal(err)
-	}
+	release()
 	if cancelErr == nil {
-		t.Fatal("Cancel unexpectedly persisted through a read-only state directory")
+		t.Fatal("Cancel unexpectedly persisted while its intent record was held")
 	}
 	d.mu.Lock()
 	sess := d.running[testInvoke]
@@ -2056,7 +2115,8 @@ func TestNonExportTerminalStateRequiresDurableOutcome(t *testing.T) {
 func TestTerminalIntentPersistenceFailureRetainsAnInProcessRetry(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
-	d := newTestDriver(t, &stubGate{}, newStubExports())
+	records := newStubExports()
+	d := newTestDriver(t, &stubGate{}, records)
 	orphan(t, d, phaseSeeding, nil)
 	seed := filepath.Join(d.seedRoot, testRunIDFor(testInvoke))
 	if err := os.MkdirAll(seed, 0o700); err != nil {
@@ -2068,20 +2128,16 @@ func TestTerminalIntentPersistenceFailureRetainsAnInProcessRetry(t *testing.T) {
 	d.running[testInvoke] = &session{cancel: func() {}, done: done}
 	d.mu.Unlock()
 
-	if err := os.Chmod(d.dir, 0o500); err != nil { //nolint:gosec // adversarial fixture makes its private state directory read-only
-		t.Fatal(err)
-	}
+	release := holdIntentAfterOutcome(t, d, records, testRunIDFor(testInvoke))
 	result := exec.StageResult{
 		InvocationID: testInvoke,
 		Status:       exec.StatusFailed,
 		Summary:      "materialization failed",
 	}
 	commitErr := d.commitResult(testInvoke, result)
-	if err := os.Chmod(d.dir, 0o700); err != nil { //nolint:gosec // restore the private directory's owner-only permissions
-		t.Fatal(err)
-	}
+	release()
 	if commitErr == nil {
-		t.Fatal("terminal commit unexpectedly succeeded in a read-only state directory")
+		t.Fatal("terminal commit unexpectedly succeeded while its intent record was held")
 	}
 	d.mu.Lock()
 	pending := d.running[testInvoke] != nil &&

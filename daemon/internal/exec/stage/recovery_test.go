@@ -416,8 +416,9 @@ func TestHandoffReturnPersistenceRetriesBeforeClosedJournalRecovery(t *testing.T
 	now := fixedNow
 	completedAt := fixedNow.Add(5 * time.Minute)
 	var (
-		d      *Driver
-		outDir string
+		d       *Driver
+		outDir  string
+		release func() error
 	)
 	gate := &stubGate{
 		handoffFn: func(ward.HandoffSpec) (*ward.HandoffResult, error) {
@@ -433,7 +434,7 @@ func TestHandoffReturnPersistenceRetriesBeforeClosedJournalRecovery(t *testing.T
 			if err := os.WriteFile(filepath.Join(outDir, export.ManifestFilename), body, 0o600); err != nil {
 				return nil, err
 			}
-			if err := os.Chmod(d.dir, 0o500); err != nil { //nolint:gosec // G302: state directory, not a file
+			if release, err = holdIntentRecord(d, testRunIDFor(testInvoke)); err != nil {
 				return nil, err
 			}
 			now = completedAt
@@ -451,7 +452,6 @@ func TestHandoffReturnPersistenceRetriesBeforeClosedJournalRecovery(t *testing.T
 	d = newTestDriver(t, gate, newStubExports())
 	d.now = func() time.Time { return now }
 	t.Cleanup(func() {
-		_ = os.Chmod(d.dir, 0o700) //nolint:gosec // G302: state directory, not a file
 		if outDir != "" {
 			_ = os.RemoveAll(outDir)
 		}
@@ -476,8 +476,8 @@ func TestHandoffReturnPersistenceRetriesBeforeClosedJournalRecovery(t *testing.T
 	}
 
 	now = completedAt.Add(time.Hour)
-	if err := os.Chmod(d.dir, 0o700); err != nil { //nolint:gosec // G302: state directory, not a file
-		t.Fatalf("restore driver state permissions: %v", err)
+	if err := release(); err != nil {
+		t.Fatalf("restore driver intent record: %v", err)
 	}
 	if status, err := d.Inspect(ctx, testInvoke); err != nil || status.Status != exec.StatusRunning {
 		t.Fatalf("Inspect after persistence retry = %q, %v; want running", status.Status, err)
@@ -513,8 +513,9 @@ func TestRecoveryReturnPersistenceRetriesBeforeClosedJournalRecovery(t *testing.
 	now := fixedNow
 	completedAt := fixedNow.Add(5 * time.Minute)
 	var (
-		d      *Driver
-		outDir string
+		d       *Driver
+		outDir  string
+		release func() error
 	)
 	gate := &stubGate{
 		recoverFn: func(string, ward.HandoffSpec) (*ward.RecoveryResult, error) {
@@ -531,7 +532,7 @@ func TestRecoveryReturnPersistenceRetriesBeforeClosedJournalRecovery(t *testing.
 			if err := os.WriteFile(filepath.Join(outDir, export.ManifestFilename), body, 0o600); err != nil {
 				return nil, err
 			}
-			if err := os.Chmod(d.dir, 0o500); err != nil { //nolint:gosec // G302: state directory, not a file
+			if release, err = holdIntentRecord(d, testRunIDFor(testInvoke)); err != nil {
 				return nil, err
 			}
 			now = completedAt
@@ -545,7 +546,6 @@ func TestRecoveryReturnPersistenceRetriesBeforeClosedJournalRecovery(t *testing.
 	d = newTestDriver(t, gate, newStubExports())
 	d.now = func() time.Time { return now }
 	t.Cleanup(func() {
-		_ = os.Chmod(d.dir, 0o700) //nolint:gosec // G302: state directory, not a file
 		if outDir != "" {
 			_ = os.RemoveAll(outDir)
 		}
@@ -564,8 +564,8 @@ func TestRecoveryReturnPersistenceRetriesBeforeClosedJournalRecovery(t *testing.
 	}
 
 	now = completedAt.Add(time.Hour)
-	if err := os.Chmod(d.dir, 0o700); err != nil { //nolint:gosec // G302: state directory, not a file
-		t.Fatalf("restore driver state permissions: %v", err)
+	if err := release(); err != nil {
+		t.Fatalf("restore driver intent record: %v", err)
 	}
 	if status, err := d.Inspect(ctx, testInvoke); err != nil || status.Status != exec.StatusRunning {
 		t.Fatalf("Inspect after persistence retry = %q, %v; want running", status.Status, err)
@@ -598,6 +598,7 @@ func TestLiveImportPhasePersistenceRetriesBeforeCurrentPolicy(t *testing.T) {
 		d         *Driver
 		outDir    string
 		protected bool
+		release   func() error
 	)
 	gate := &stubGate{
 		handoffFn: func(ward.HandoffSpec) (*ward.HandoffResult, error) {
@@ -624,12 +625,13 @@ func TestLiveImportPhasePersistenceRetriesBeforeCurrentPolicy(t *testing.T) {
 			}
 			protected = true
 			d.authority = stubAuthority{startErr: drift, importErr: drift, recordImportCalls: &recordImportCalls}
-			return os.Chmod(d.dir, 0o500) //nolint:gosec // G302: force the phase write to fail
+			var err error
+			release, err = holdIntentRecord(d, testRunIDFor(testInvoke)) // force the phase write to fail
+			return err
 		},
 	}
 	d = newTestDriver(t, gate, newStubExports())
 	t.Cleanup(func() {
-		_ = os.Chmod(d.dir, 0o700) //nolint:gosec // G302: state directory, not a file
 		if outDir != "" {
 			_ = os.RemoveAll(outDir)
 		}
@@ -665,8 +667,8 @@ func TestLiveImportPhasePersistenceRetriesBeforeCurrentPolicy(t *testing.T) {
 		time.Sleep(5 * time.Millisecond)
 	}
 
-	if err := os.Chmod(d.dir, 0o700); err != nil { //nolint:gosec // G302: state directory, not a file
-		t.Fatalf("restore driver state permissions: %v", err)
+	if err := release(); err != nil {
+		t.Fatalf("restore driver intent record: %v", err)
 	}
 	if _, err := d.Inspect(ctx, testInvoke); !errors.Is(err, drift) {
 		t.Fatalf("Inspect after phase-write retry = %v, want current-policy refusal", err)
@@ -692,6 +694,7 @@ func TestRecoveredImportPhasePersistenceRetriesBeforeCurrentPolicy(t *testing.T)
 		d         *Driver
 		outDir    string
 		protected bool
+		release   func() error
 	)
 	gate := &stubGate{
 		recoverFn: func(string, ward.HandoffSpec) (*ward.RecoveryResult, error) {
@@ -718,12 +721,13 @@ func TestRecoveredImportPhasePersistenceRetriesBeforeCurrentPolicy(t *testing.T)
 			}
 			protected = true
 			d.authority = stubAuthority{startErr: drift, importErr: drift, recordImportCalls: &recordImportCalls}
-			return os.Chmod(d.dir, 0o500) //nolint:gosec // G302: force the phase write to fail
+			var err error
+			release, err = holdIntentRecord(d, testRunIDFor(testInvoke)) // force the phase write to fail
+			return err
 		},
 	}
 	d = newTestDriver(t, gate, newStubExports())
 	t.Cleanup(func() {
-		_ = os.Chmod(d.dir, 0o700) //nolint:gosec // G302: state directory, not a file
 		if outDir != "" {
 			_ = os.RemoveAll(outDir)
 		}
@@ -733,8 +737,17 @@ func TestRecoveredImportPhasePersistenceRetriesBeforeCurrentPolicy(t *testing.T)
 	if err := d.Reconcile(ctx); !errors.Is(err, ErrRecoveryRetryable) {
 		t.Fatalf("Reconcile after phase-write failure = %v, want retryable", err)
 	}
-	if err := os.Chmod(d.dir, 0o700); err != nil { //nolint:gosec // G302: state directory, not a file
-		t.Fatalf("restore driver state permissions: %v", err)
+	if err := release(); err != nil {
+		t.Fatalf("restore driver intent record: %v", err)
+	}
+	// Reconcile is retryable whether or not the write landed, so only the
+	// record proves the import phase is still owed to the retry.
+	body, err := os.ReadFile(d.intentPath(testRunIDFor(testInvoke)))
+	if err != nil {
+		t.Fatalf("read intent after failed phase write: %v", err)
+	}
+	if failed, err := decodeIntent(body); err != nil || failed.Phase == phaseImportPending {
+		t.Fatalf("intent after failed phase write = %#v, %v; want the import phase unpersisted", failed, err)
 	}
 	if _, err := d.Inspect(ctx, testInvoke); !errors.Is(err, drift) {
 		t.Fatalf("Inspect after recovered phase-write retry = %v, want current-policy refusal", err)
@@ -1966,14 +1979,15 @@ func TestStrandedExportRecoveryDoesNotExtractUnauthenticatedUsage(t *testing.T) 
 
 // TestStrandedExportRecoveryRetriesTerminalCommitWithoutResettingGrace is the
 // regression for a residual indefinite-slot-hold path (issue #1181): when the
-// post-grace terminal commit fails transiently (a read-only state directory
-// stands in for a brief SQLite or intent-file write error), the deferral and
+// post-grace terminal commit fails transiently (a held intent record stands
+// in for a brief intent-file write error), the deferral and
 // its original first-seen timestamp must survive so the next pass retries the
 // commit immediately. Resetting the grace on every such failure would keep the
 // slot held for another full recoveryGrace and, on recurring failures, forever.
 func TestStrandedExportRecoveryRetriesTerminalCommitWithoutResettingGrace(t *testing.T) {
 	ctx := context.Background()
-	d := newTestDriver(t, &stubGate{}, newStubExports())
+	records := newStubExports()
+	d := newTestDriver(t, &stubGate{}, records)
 	handler := &captureHandler{}
 	d.logger = slog.New(handler)
 	abandonmentLogs := func() int {
@@ -2004,13 +2018,9 @@ func TestStrandedExportRecoveryRetriesTerminalCommitWithoutResettingGrace(t *tes
 	// Past the grace, a transient terminal-commit failure must retain the
 	// deferral without moving its first-seen timestamp.
 	now = t0.Add(defaultRecoveryGrace + time.Minute)
-	if err := os.Chmod(d.dir, 0o500); err != nil { //nolint:gosec // adversarial fixture makes the private state directory read-only
-		t.Fatal(err)
-	}
+	release := holdIntentAfterOutcome(t, d, records, in.RunID)
 	commitErr := d.deferExportRecovery(in, cause)
-	if err := os.Chmod(d.dir, 0o700); err != nil { //nolint:gosec // restore the private state directory
-		t.Fatal(err)
-	}
+	release()
 	if !errors.Is(commitErr, ErrRecoveryRetryable) {
 		t.Fatalf("transient commit failure = %v, want a retryable error", commitErr)
 	}

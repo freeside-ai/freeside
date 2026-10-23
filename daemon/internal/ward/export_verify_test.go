@@ -355,10 +355,18 @@ func TestVerifyBlobClassifiesMismatchVsIO(t *testing.T) {
 	if err := verifyBlob(blob, strings.Repeat("0", 64), 4); !errors.Is(err, errBlobMismatch) {
 		t.Errorf("digest mismatch = %v, want the mismatch mark", err)
 	}
-	if err := os.Chmod(blob, 0o000); err != nil {
+	// The I/O failures must refuse root too, which a permission-stripped
+	// file would not. A path through a regular file fails to open with
+	// ENOTDIR, which is not absence; a directory opens but fails to read.
+	if err := verifyBlob(filepath.Join(blob, "b"), want, 4); err == nil || errors.Is(err, errBlobMismatch) {
+		t.Errorf("unopenable blob = %v, want an unmarked operational error", err)
+	}
+	if err := os.Remove(blob); err != nil {
 		t.Fatal(err)
 	}
-	t.Cleanup(func() { _ = os.Chmod(blob, 0o600) })
+	if err := os.Mkdir(blob, 0o700); err != nil {
+		t.Fatal(err)
+	}
 	if err := verifyBlob(blob, want, 4); err == nil || errors.Is(err, errBlobMismatch) {
 		t.Errorf("unreadable blob = %v, want an unmarked operational error", err)
 	}

@@ -1127,7 +1127,6 @@ func TestAmbiguousLedgerWriteDisablesLaterInference(t *testing.T) {
 	if err := os.Mkdir(stateDir, 0o700); err != nil {
 		t.Fatal(err)
 	}
-	t.Cleanup(func() { _ = os.Chmod(stateDir, 0o700) }) //nolint:gosec // test-owned directory needs traversal
 	store, err := advisory.Open(filepath.Join(dir, "advisory.json"), 20, 16<<10)
 	if err != nil {
 		t.Fatal(err)
@@ -1145,19 +1144,39 @@ func TestAmbiguousLedgerWriteDisablesLaterInference(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := os.Chmod(stateDir, 0o500); err != nil { //nolint:gosec // deliberate write-denial fixture
-		t.Fatal(err)
-	}
+	restore := holdStateDir(t, stateDir)
 	first, err := client.ClassifyFinding(context.Background(), "project-1", "run-1", finding("medium"), 1)
 	if err != nil || !first.Fallback {
 		t.Fatalf("ambiguous-write decision = %#v, %v", first, err)
 	}
-	if err := os.Chmod(stateDir, 0o700); err != nil { //nolint:gosec // restore test-owned directory traversal
-		t.Fatal(err)
-	}
+	restore()
 	second, err := client.ClassifyFinding(context.Background(), "project-1", "run-1", finding("medium"), 2)
 	if err != nil || !second.Fallback || len(driver.Requests()) != 0 {
 		t.Fatalf("disabled-ledger decision = %#v, %v; requests = %d", second, err, len(driver.Requests()))
+	}
+}
+
+// holdStateDir moves the ledger's state directory aside and leaves a regular
+// file at its path, so the next persist fails creating its temporary file
+// (open: not a directory), for root too, which a read-only directory would
+// not. restore puts the directory back.
+func holdStateDir(t *testing.T, stateDir string) (restore func()) {
+	t.Helper()
+	held := stateDir + ".held"
+	if err := os.Rename(stateDir, held); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(stateDir, nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	return func() {
+		t.Helper()
+		if err := os.Remove(stateDir); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.Rename(held, stateDir); err != nil {
+			t.Fatal(err)
+		}
 	}
 }
 

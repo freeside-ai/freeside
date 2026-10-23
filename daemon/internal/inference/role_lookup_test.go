@@ -908,7 +908,6 @@ func TestLedgerStateIsReportedWithTheRoles(t *testing.T) {
 	if err := os.Mkdir(stateDir, 0o700); err != nil {
 		t.Fatal(err)
 	}
-	t.Cleanup(func() { _ = os.Chmod(stateDir, 0o700) }) //nolint:gosec // test-owned directory needs traversal
 	health = newRoleHealth()
 	client, err = inference.New(inference.Config{
 		StatePath: filepath.Join(stateDir, "ledger.json"), AnchorPath: filepath.Join(stateDir, "..", "ledger.anchor"),
@@ -918,19 +917,15 @@ func TestLedgerStateIsReportedWithTheRoles(t *testing.T) {
 		t.Fatal(err)
 	}
 	client.CheckRoles(ctx)
-	if err := os.Chmod(stateDir, 0o500); err != nil { //nolint:gosec // deliberate write-denial fixture
-		t.Fatal(err)
-	}
+	restore := holdStateDir(t, stateDir)
 	if result := call(client); result.Reason != inference.FallbackLedgerUnavailable {
 		t.Fatalf("call whose reservation could not be persisted = %+v", result)
 	}
-	if err := os.Chmod(stateDir, 0o700); err != nil { //nolint:gosec // restore test-owned directory traversal
-		t.Fatal(err)
-	}
+	restore()
 	if result := call(client); result.Reason != inference.FallbackLedgerUnavailable {
 		t.Fatalf("call after the directory was restored = %+v", result)
 	}
-	want := "persist inference ledger: open: permission denied"
+	want := "persist inference ledger: open: not a directory"
 	if health.loaded != 1 || !slices.Equal(health.disabled, []string{want, want}) {
 		t.Fatalf("reports over a ledger disabled mid-process: disabled = %q, loaded = %d", health.disabled, health.loaded)
 	}
