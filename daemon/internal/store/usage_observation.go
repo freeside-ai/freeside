@@ -159,9 +159,10 @@ const (
 )
 
 // AppendUsageObservations attributes and appends measurements for one stored
-// admission. A missing admission or one without an agent binding records
-// nothing because it cannot supply the required agent, launch, treatment, and
-// pricing identity.
+// admission: the invocation's execution admission, or its review admission
+// when it has none. A missing admission, or an execution admission without an
+// agent binding, records nothing because it cannot supply the required agent,
+// launch, treatment, and pricing identity.
 func (tx *InternalTx) AppendUsageObservations(
 	ctx context.Context,
 	invocationID domain.InvocationID,
@@ -170,14 +171,11 @@ func (tx *InternalTx) AppendUsageObservations(
 	if len(measurements) == 0 {
 		return 0, nil
 	}
-	admission, err := tx.GetExecutionAdmissionRecord(ctx, invocationID)
-	if errors.Is(err, ErrNotFound) {
-		return 0, nil
-	}
+	runID, binding, found, err := tx.usageAttribution(ctx, invocationID)
 	if err != nil {
 		return 0, fmt.Errorf("append usage observations %q: %w", invocationID, err)
 	}
-	if admission.AgentBinding == nil {
+	if !found {
 		return 0, nil
 	}
 
@@ -188,12 +186,12 @@ func (tx *InternalTx) AppendUsageObservations(
 				invocationID, i, err)
 		}
 		observation := domain.UsageObservation{
-			InvocationID:    string(admission.InvocationID),
-			RunID:           string(admission.RunID),
-			AgentDigest:     admission.AgentBinding.AgentDigest,
-			LaunchDigest:    admission.AgentBinding.LaunchDigest,
-			TreatmentDigest: admission.AgentBinding.TreatmentDigest,
-			PricingRevision: admission.AgentBinding.PricingRevision,
+			InvocationID:    string(invocationID),
+			RunID:           string(runID),
+			AgentDigest:     binding.AgentDigest,
+			LaunchDigest:    binding.LaunchDigest,
+			TreatmentDigest: binding.TreatmentDigest,
+			PricingRevision: binding.PricingRevision,
 			Source:          measurement.Source,
 			Kind:            measurement.Kind,
 			Metric:          measurement.Metric,
@@ -232,6 +230,33 @@ func (tx *InternalTx) AppendUsageObservations(
 		}
 	}
 	return inserted, nil
+}
+
+// usageAttribution reads the immutable admission an invocation's usage is
+// attributed to. A review is admitted into review_admissions rather than
+// execution_admissions, so the execution admission is read first and the
+// review admission only when there is none.
+func (tx *InternalTx) usageAttribution(
+	ctx context.Context, invocationID domain.InvocationID,
+) (domain.RunID, domain.AdmissionAgentBinding, bool, error) {
+	execution, err := tx.GetExecutionAdmissionRecord(ctx, invocationID)
+	if err == nil {
+		if execution.AgentBinding == nil {
+			return "", domain.AdmissionAgentBinding{}, false, nil
+		}
+		return execution.RunID, *execution.AgentBinding, true, nil
+	}
+	if !errors.Is(err, ErrNotFound) {
+		return "", domain.AdmissionAgentBinding{}, false, err
+	}
+	review, err := tx.GetReviewAdmission(ctx, invocationID)
+	if errors.Is(err, ErrNotFound) {
+		return "", domain.AdmissionAgentBinding{}, false, nil
+	}
+	if err != nil {
+		return "", domain.AdmissionAgentBinding{}, false, err
+	}
+	return review.RunID, review.AgentBinding, true, nil
 }
 
 func (tx *InternalTx) requireMatchingUsageObservation(
