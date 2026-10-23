@@ -53,17 +53,17 @@ public struct LaunchInputs {
     /// `-FreesideScreen inbox|tasks`; defaults to the attention inbox.
     public let screen: Screen
 
-    /// `-FreesideColorScheme light|dark`; unset or unrecognized
-    /// follows the system.
-    public let colorScheme: ColorScheme?
+    /// `-FreesideColorScheme` as given; `colorScheme` reads it as the
+    /// SwiftUI value in FreesideCore.
+    let colorSchemeRaw: String?
 
     /// `-FreesideContrast standard|increased`; unset or unrecognized
     /// follows the system accessibility contrast.
     public let contrast: Contrast?
 
-    /// `-FreesideDynamicType <size>`; unset or unrecognized follows the
-    /// system. The accepted names mirror the documented screenshot inputs.
-    public let dynamicTypeSize: DynamicTypeSize?
+    /// `-FreesideDynamicType` as given; `dynamicTypeSize` reads it as the
+    /// SwiftUI value in FreesideCore.
+    let dynamicTypeSizeRaw: String?
 
     /// `-FreesideSelect <id>`: the inbox item selected at launch, or on
     /// the tasks screen the task or run opened at launch.
@@ -104,14 +104,9 @@ public struct LaunchInputs {
         composerRaw: String? = nil
     ) {
         screen = Screen(rawValue: screenRaw ?? "") ?? .inbox
-        colorScheme =
-            switch colorSchemeRaw {
-            case "light": .light
-            case "dark": .dark
-            default: nil
-            }
+        self.colorSchemeRaw = colorSchemeRaw
         contrast = Contrast(rawValue: contrastRaw ?? "")
-        dynamicTypeSize = Self.dynamicTypeSize(rawValue: dynamicTypeSizeRaw)
+        self.dynamicTypeSizeRaw = dynamicTypeSizeRaw
         let resolved = Self.resolveSelection(selectionRaw, screen: screen)
         selection = resolved.selection
         taskSelection = resolved.taskSelection
@@ -206,9 +201,25 @@ public struct LaunchInputs {
         }
         return Contrast(rawValue: defaults.string(forKey: "FreesideContrast") ?? "")
     }
+}
 
-    private static func dynamicTypeSize(rawValue: String?) -> DynamicTypeSize? {
-        switch rawValue {
+// The launch inputs that name SwiftUI values, read from the raw arguments
+// LaunchInputs keeps so the struct itself builds without SwiftUI.
+extension LaunchInputs {
+    /// `-FreesideColorScheme light|dark`; unset or unrecognized
+    /// follows the system.
+    public var colorScheme: ColorScheme? {
+        switch colorSchemeRaw {
+        case "light": .light
+        case "dark": .dark
+        default: nil
+        }
+    }
+
+    /// `-FreesideDynamicType <size>`; unset or unrecognized follows the
+    /// system. The accepted names mirror the documented screenshot inputs.
+    public var dynamicTypeSize: DynamicTypeSize? {
+        switch dynamicTypeSizeRaw {
         case "x-small": .xSmall
         case "small": .small
         case "medium": .medium

@@ -48,7 +48,7 @@ struct FindingPresentation: Equatable {
     /// draw faint. An empty severity is a finding with no badge, dashed as
     /// not rated. No accent: R23 keeps it for the fill, a link, and the
     /// attention mark.
-    static func severityCut(_ severity: String) -> (cut: StateChip.Cut, dashed: Bool) {
+    static func severityCut(_ severity: String) -> (cut: StateChipCut, dashed: Bool) {
         switch severity {
         case "P0", "P1": return (.ink, false)
         case "": return (.faint, true)

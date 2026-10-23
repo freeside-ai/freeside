@@ -72,7 +72,9 @@ final class TaskTimelineDisclosurePreferences {
         }
         expandedByTask[taskID] = sections.isEmpty ? nil : sections
     }
+}
 
+extension TaskTimelineDisclosurePreferences {
     func binding(_ section: Section, taskID: String) -> Binding<Bool> {
         Binding(
             get: { self.isExpanded(section, taskID: taskID) },

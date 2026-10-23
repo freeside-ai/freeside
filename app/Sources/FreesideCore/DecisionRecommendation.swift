@@ -125,9 +125,18 @@ struct DecisionRecommendationPresentation: Equatable {
         if action == .accept_recommended_route,
             let binding = item?.finding_adjudication?.value1
         {
-            return FindingCardPresentation.acceptancePhrase(findingCount: binding.proposals.count)
+            return acceptancePhrase(findingCount: binding.proposals.count)
         }
         return AttentionDisplay.label(action, for: item)
+    }
+
+    /// The coverage `FindingCardPresentation.acceptanceScope` states, as the
+    /// object of the recommendation's sentence (R20), which says it in place
+    /// of `acceptanceScope` where the card draws a recommendation.
+    static func acceptancePhrase(findingCount: Int) -> String {
+        findingCount == 1
+            ? "accepting the proposed route for the one finding above"
+            : "accepting the proposed route for each of the \(findingCount) findings above"
     }
 
     /// The recommendation an item carries, or none. Kept beside the projection
