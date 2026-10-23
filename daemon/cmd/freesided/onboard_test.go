@@ -68,10 +68,24 @@ func TestParseOnboardConfigBuildEgress(t *testing.T) {
 		if err != nil || cfg.RecoverInstallationID != 33 || cfg.InstallationID != 0 {
 			t.Fatalf("recovery config = %+v, %v", cfg, err)
 		}
-		for _, extra := range [][]string{{"-resume"}, {"-approve", "prior-digest"}, {"-installation-id", "33"}} {
+		for _, extra := range [][]string{
+			{"-resume"}, {"-replace-intent"}, {"-approve", "prior-digest"}, {"-installation-id", "33"},
+		} {
 			args := append(slices.Clone(baseArgs), "-recover-installation", "33")
 			if _, err := parseOnboardConfig(append(args, extra...), io.Discard); err == nil {
 				t.Fatalf("accepted incompatible recovery flags: %v", extra)
+			}
+		}
+	})
+	t.Run("intent replacement is a fresh request", func(t *testing.T) {
+		cfg, err := parseOnboardConfig(append(slices.Clone(baseArgs), "-replace-intent"), io.Discard)
+		if err != nil || !cfg.ReplaceIntent {
+			t.Fatalf("replacement config = %+v, %v", cfg, err)
+		}
+		for _, extra := range [][]string{{"-resume"}, {"-approve", "prior-digest"}} {
+			args := append(slices.Clone(baseArgs), "-replace-intent")
+			if _, err := parseOnboardConfig(append(args, extra...), io.Discard); err == nil {
+				t.Fatalf("accepted incompatible replacement flags: %v", extra)
 			}
 		}
 	})
