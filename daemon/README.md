@@ -1129,6 +1129,18 @@ Attribution syntax and provenance claims do not grant publication authority.
 Production still authenticates the author against the selected GitHub App and
 enforces recipe approval, conformance, admission, and specification approval.
 
+A source that is a bare GitHub issue URL, here or in `freesided submit -task`,
+may name an issue in a private managed repository, as may a label-intake
+issue. The specification stage reads the issue through the research fetcher,
+which authenticates only the project's own issue endpoints on
+`https://api.github.com`, matched by repository ID, with a read-only
+(`issues: read`) installation token minted for that repository. Every other
+research URL goes without credentials, and a redirect drops the token. The
+research allowlist must include `https://api.github.com`. If the token can't
+be minted, or GitHub refuses it with 401 or 403, the fetch goes without it,
+so a public issue still reads and a private one fails the specification with
+the cause in its reason.
+
 Changing the file requires a daemon restart and affects only new submissions.
 An explicit manual Retry of a recorded command returns its original result,
 even if configuration changed or was removed. A new command always creates
