@@ -114,9 +114,23 @@ func TestInstallationIntentRefusesOverlapAndChangedPromotion(t *testing.T) {
 	); err == nil {
 		t.Fatal("PromoteInstallation accepted changed coordinates")
 	}
+	if _, err := operations.BeginInstallation(
+		context.Background(), store, pending, clock,
+	); err == nil {
+		t.Fatal("BeginInstallation replaced a live intent without Replace")
+	}
 	store.document.Registrations[0].Pending.ExpiresAt = now.Add(-time.Minute)
 	replacement := pending
 	replacement.ExpiresAt = now.Add(time.Hour)
+	if _, err := operations.BeginInstallation(
+		context.Background(), store, replacement, clock,
+	); err == nil {
+		t.Fatal("BeginInstallation replaced an expired intent without Replace")
+	}
+	if got := store.document.Registrations[0].DurableIntentRevision; got != 8 {
+		t.Fatalf("refused replacement moved revision to %d, want 8", got)
+	}
+	replacement.Replace = true
 	replaced, err := operations.BeginInstallation(
 		context.Background(), store, replacement, clock,
 	)
@@ -125,6 +139,15 @@ func TestInstallationIntentRefusesOverlapAndChangedPromotion(t *testing.T) {
 	}
 	if replaced.DurableIntentRevision != 9 {
 		t.Fatalf("replacement revision = %d, want 9", replaced.DurableIntentRevision)
+	}
+	replacedLive, err := operations.BeginInstallation(
+		context.Background(), store, replacement, clock,
+	)
+	if err != nil {
+		t.Fatalf("BeginInstallation did not replace live intent: %v", err)
+	}
+	if replacedLive.DurableIntentRevision != 10 {
+		t.Fatalf("live replacement revision = %d, want 10", replacedLive.DurableIntentRevision)
 	}
 }
 
