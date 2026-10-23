@@ -1,4 +1,5 @@
 {
+  "task_id": "task-golden",
   "run_id": "run-implementation",
   "specification_run_id": "run-specification",
   "project_id": "project-golden",

@@ -113,6 +113,10 @@ freesided submit -db <root>/daemon/freeside.db --require-composition \
   -publication /absolute/publication.json -work-unit /absolute/work-unit.json
 ```
 
+Submit prints its result as JSON. Its `task_id` is the `<task-id>` that
+`freesided inspect task` takes below; its `run_id` names the implementation
+run, which exists only once the specification is approved.
+
 Each submission saves its identity and exact input bytes before it is sent.
 Identical input in another submission creates separate work. If submit's
 output is lost, its private journal is under
@@ -636,7 +640,8 @@ freesided deputy -root <root>
 freesided submit -db <root>/daemon/freeside.db --require-composition \
   -project <project> -task /absolute/seed-spec.md -policy /absolute/policy.json \
   -publication /absolute/publication.json -work-unit /absolute/work-unit.json
-# once the client composer has created the target task:
+# once the client composer has created the target task, with the task id from
+# the composer's result (submit's task_id names the seed's task):
 freesided inspect task -db <root>/daemon/freeside.db -task <task-id>
 ```
 

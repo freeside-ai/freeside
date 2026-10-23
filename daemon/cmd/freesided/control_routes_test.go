@@ -236,6 +236,9 @@ func TestControlRoutesUseRunningDaemonStore(t *testing.T) {
 	if submittedTask == "" {
 		t.Fatal("submission has no task")
 	}
+	if submitted.TaskID != submittedTask {
+		t.Fatalf("daemon-routed submit task id = %q, want %q", submitted.TaskID, submittedTask)
+	}
 	if _, err := runAbandonCommand(ctx, abandonCommandConfig{DBPath: dbPath, TaskID: submittedTask}); err != nil {
 		t.Fatal(err)
 	}

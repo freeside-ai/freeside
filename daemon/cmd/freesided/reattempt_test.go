@@ -93,6 +93,9 @@ func TestReattemptTaskMatchesCampaignAndUsesLatestAttempt(t *testing.T) {
 			if first.ParentRunID != parent.ID || first.CampaignID != parent.CampaignID || first.AttemptNumber != 2 {
 				t.Fatalf("first retry = %+v, want parent %q in campaign %q", first, parent.ID, parent.CampaignID)
 			}
+			if parent.TaskID == "" || first.TaskID != parent.TaskID {
+				t.Fatalf("first retry task id = %q, want the parent's %q", first.TaskID, parent.TaskID)
+			}
 			if _, err := runReattemptCommand(t.Context(), cfg); err == nil || !strings.Contains(err.Error(), "use resume while it is live") {
 				t.Fatalf("live latest attempt = %v, want refusal instead of retrying the older terminal run", err)
 			}
@@ -104,6 +107,13 @@ func TestReattemptTaskMatchesCampaignAndUsesLatestAttempt(t *testing.T) {
 			if latest.ParentRunID != first.RunID || latest.AttemptNumber != 3 {
 				t.Fatalf("latest retry = %+v, want attempt 3 from %q", latest, first.RunID)
 			}
+			if latest.TaskID != parent.TaskID {
+				t.Fatalf("latest retry task id = %q, want the parent's %q", latest.TaskID, parent.TaskID)
+			}
+			// Each subtest builds its own store, which mints its own task id;
+			// the id is checked against this fixture's parent above, so the
+			// cross-selector comparison covers every other field.
+			latest.TaskID = ""
 			if selector == "--campaign" {
 				campaignResult = latest
 			} else if latest != campaignResult {

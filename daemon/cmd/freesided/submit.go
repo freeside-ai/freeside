@@ -48,7 +48,9 @@ Result JSON fields by lane:
     specification_policy_digest, specification_policy_artifact_id
   reserved implementation: implementation_run_id, implementation_invocation_id,
     implementation_stage_id, campaign_id, attempt_number
-  shared: project_id, composition_digest
+  shared: task_id, project_id, composition_digest
+
+task_id is the input freesided inspect task -task takes.
 
 The legacy fields run_id, invocation_id, stage_id, and work_unit_id are
 compatibility aliases bound to the reserved implementation run. The former
@@ -226,6 +228,7 @@ type submittedWorkUnit struct {
 
 type submitResult struct {
 	SubmissionID                  string              `json:"submission_id,omitempty"`
+	TaskID                        domain.TaskID       `json:"task_id"`
 	RunID                         domain.RunID        `json:"run_id"`
 	SpecificationRunID            domain.RunID        `json:"specification_run_id"`
 	ProjectID                     domain.ProjectID    `json:"project_id"`
@@ -861,8 +864,8 @@ func applyLaunchSubmission(
 		return submitResult{}, fmt.Errorf("submit: %w", err)
 	}
 	result := submitResult{
-		SubmissionID: cfg.SubmissionID,
-		RunID:        submitted.ImplementationRunID, SpecificationRunID: submitted.Run.ID,
+		SubmissionID: cfg.SubmissionID, TaskID: submitted.Run.TaskID,
+		RunID: submitted.ImplementationRunID, SpecificationRunID: submitted.Run.ID,
 		ProjectID: submitted.Run.ProjectID,
 		// Keep the original fields as implementation aliases for compatibility
 		// while exposing both lanes without ambiguity.
@@ -1251,7 +1254,7 @@ func legacyProductionReplay(
 	invocationID := domain.InvocationID("inv-implement-" + string(runID))
 	stageID := domain.StageID("implement-" + string(runID))
 	result := submitResult{
-		RunID: runID, ProjectID: projectID,
+		TaskID: run.TaskID, RunID: runID, ProjectID: projectID,
 		InvocationID: invocationID, StageID: stageID,
 		ImplementationRunID: runID, ImplementationInvocationID: invocationID,
 		ImplementationStageID: stageID,
