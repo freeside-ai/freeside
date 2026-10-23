@@ -430,7 +430,16 @@ func parseOnboardConfig(args []string, output io.Writer) (onboardConfig, error) 
 	flags.BoolVar(&cfg.Resume, "resume", false, "resume the existing bounded installation intent")
 	flags.BoolVar(&cfg.ReplaceIntent, "replace-intent", false,
 		"open a new installation intent over the recorded one; the approval digest changes")
-	flags.DurationVar(&cfg.InstallWait, "install-wait", 10*time.Minute, "maximum wait for native installation approval")
+	// One hour, not ten minutes: the personal-account round trip (sign in,
+	// 2FA, select the repository, install, rerun with -resume) took longer
+	// than ten minutes in the Wave 8 exit run, and an expired intent both
+	// forces a new approval digest and drops the janitor's one tolerated
+	// grant exception. The intent's lifetime is also how long the janitor
+	// tolerates that grant, so the bound stays short; an organization
+	// approval passes a longer value instead.
+	flags.DurationVar(&cfg.InstallWait, "install-wait", time.Hour,
+		"lifetime of the pending installation intent and maximum wait for the grant; "+
+			"an organization approval needs a longer value")
 	flags.StringVar(&cfg.CredentialsDir, "credentials-dir", "",
 		"GitHub App credentials directory (defaults beside the state directory)")
 	flags.StringVar(&cfg.Commit, "commit", "", "exact full lowercase repository commit (required)")

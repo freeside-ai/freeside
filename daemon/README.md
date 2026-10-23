@@ -1719,10 +1719,16 @@ daemon first; onboarding refuses a database it holds. It:
 2. records a bounded, non-authorizing pending installation or
    repository-expansion envelope, returns the canonical native GitHub
    installation route, and resumes the same envelope with `-resume`. The
-   envelope stays recorded until approval promotes it, so every later call
-   until the result is `complete`, including the `-approve` call, passes
-   `-resume`; a call without it is refused, as is `-resume` once the envelope
-   has expired;
+   intent lasts one hour by default. `-install-wait` on the run that opens
+   it changes that; a `-resume` run keeps the stored expiry. An
+   organization approval that waits on an owner needs a longer value, such
+   as `-install-wait 24h`. The envelope stays recorded until approval
+   promotes it, so every later call until the result is `complete`,
+   including the `-approve` call, passes `-resume`; a call without it is
+   refused. Every later run needs the intent unexpired, so finish them all
+   before the `pending.expires_at` the `installation_pending` output prints.
+   After that time `-resume` is refused: rerun with `-replace-intent`, not
+   `-resume`, which opens a new intent and a new approval digest to review;
 3. mints a pending-gated, repository-scoped read-only token, uses it for
    private-repository identity and clone requests, audits the live `-base-ref`,
    requires its resolved commit to equal `-commit`, and retains that exact

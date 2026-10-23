@@ -91,6 +91,40 @@ func TestParseOnboardConfigBuildEgress(t *testing.T) {
 	})
 }
 
+func TestParseOnboardConfigInstallWait(t *testing.T) {
+	baseArgs := []string{
+		"example/repo",
+		"-db", "/tmp/freeside.db",
+		"-state-dir", "/tmp/freeside-state",
+		"-registration-id", "11",
+		"-repository-id", "44",
+		"-commit", "0123456789012345678901234567890123456789",
+		"-base-ref", "main",
+		"-base-image", "example.invalid/agent@sha256:test",
+		"-base-build-ref", "local/agent:test",
+		"-review-config-digest", "sha256:review",
+		"-recipe", "/tmp/verify.json",
+	}
+	t.Run("absent flag lasts one hour", func(t *testing.T) {
+		cfg, err := parseOnboardConfig(baseArgs, io.Discard)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if cfg.InstallWait != time.Hour {
+			t.Fatalf("InstallWait = %v, want %v", cfg.InstallWait, time.Hour)
+		}
+	})
+	t.Run("explicit flag overrides the default", func(t *testing.T) {
+		cfg, err := parseOnboardConfig(append(slices.Clone(baseArgs), "-install-wait", "15m"), io.Discard)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if want := 15 * time.Minute; cfg.InstallWait != want {
+			t.Fatalf("InstallWait = %v, want %v", cfg.InstallWait, want)
+		}
+	})
+}
+
 func TestParseOnboardConfigExternalReviewers(t *testing.T) {
 	baseArgs := []string{
 		"example/repo",
