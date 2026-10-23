@@ -1633,6 +1633,35 @@ func (tx *ReadTx) DecidedEffectItemForInstance(
 	return item, true, nil
 }
 
+// ListOpenClosureProposalSubjects returns, in order, every subject handle
+// whose source_issue_closure instances hold an open card. It selects sweep
+// candidates only and grants nothing: the retirement re-reads each card
+// through OpenEffectItemForInstance, which runs the item's integrity guards.
+func (tx *ReadTx) ListOpenClosureProposalSubjects(ctx context.Context) ([]domain.OpaqueSubjectHandle, error) {
+	rows, err := tx.tx.QueryContext(ctx, `
+SELECT DISTINCT i.subject_handle FROM effect_proposal_instances i
+JOIN effect_proposal_items p ON p.instance_id = i.instance_id
+JOIN attention_items a ON a.id = p.item_id
+WHERE i.effect_kind = ? AND a.status = 'open'
+ORDER BY i.subject_handle`, domain.EffectSourceIssueClosure)
+	if err != nil {
+		return nil, fmt.Errorf("list open closure proposal subjects: %w", err)
+	}
+	defer func() { _ = rows.Close() }()
+	var handles []domain.OpaqueSubjectHandle
+	for rows.Next() {
+		var handle domain.OpaqueSubjectHandle
+		if err := rows.Scan(&handle); err != nil {
+			return nil, fmt.Errorf("list open closure proposal subjects: %w", err)
+		}
+		handles = append(handles, handle)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("list open closure proposal subjects: %w", err)
+	}
+	return handles, nil
+}
+
 // RetireOpenClosureProposals concludes by supersession every open
 // effect_proposal card bound to a source_issue_closure instance of the run's
 // work unit, with reason as the closed card's sentence, and returns the
@@ -1641,6 +1670,7 @@ func (tx *ReadTx) DecidedEffectItemForInstance(
 // beside its successor's. A decided card is already closed, so it, another
 // effect kind's card, and another run's cards are untouched; a run with no
 // open closure card is a no-op, so a repeated call retires nothing further.
+// A card is concluded at now, or at its own creation when now is earlier.
 func (tx *WriteTx) RetireOpenClosureProposals(
 	ctx context.Context,
 	runID domain.RunID,
@@ -1677,7 +1707,14 @@ func (tx *WriteTx) RetireOpenClosureProposals(
 		if !found {
 			continue
 		}
-		superseded, err := item.ConcludeByDaemon(domain.ConcludedBySupersession, now.UTC(), reason, nil)
+		// The settlement sweep passes the settling fact's observed_at, which
+		// can predate a card bound after that observation; a conclusion
+		// before the card existed would misstate its lifetime.
+		at := now.UTC()
+		if item.CreatedAt != nil && item.CreatedAt.After(at) {
+			at = *item.CreatedAt
+		}
+		superseded, err := item.ConcludeByDaemon(domain.ConcludedBySupersession, at, reason, nil)
 		if err != nil {
 			return nil, fmt.Errorf("retire closure proposal item %q: %w", item.ID, err)
 		}

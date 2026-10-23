@@ -18,6 +18,15 @@ func openClosureCard(
 	instance domain.ProposalInstance, merge domain.ProspectiveMerge,
 ) domain.AttentionItem {
 	t.Helper()
+	return openClosureCardAt(t, ctx, st, projectID, instance, merge, nil)
+}
+
+// openClosureCardAt is openClosureCard with the card's created_at set.
+func openClosureCardAt(
+	t *testing.T, ctx context.Context, st *Store, projectID domain.ProjectID,
+	instance domain.ProposalInstance, merge domain.ProspectiveMerge, createdAt *time.Time,
+) domain.AttentionItem {
+	t.Helper()
 	var item domain.AttentionItem
 	if err := st.Write(ctx, func(tx *WriteTx) error {
 		artifact, err := instance.EvidenceArtifact()
@@ -35,7 +44,7 @@ func openClosureCard(
 			RequestedDecision: []domain.Action{domain.ActionApprove, domain.ActionDecline, domain.ActionSnooze},
 			EvidenceSnapshot:  []domain.Artifact{artifact}, ItemVersion: 1,
 			InterruptionClass: domain.InterruptionPlannedGate, Status: domain.StatusOpen,
-			PRHeadSHA: merge.CandidateHeadSHA,
+			PRHeadSHA: merge.CandidateHeadSHA, CreatedAt: createdAt,
 		}, map[domain.Digest]bool{domain.EffectProposalRecipeDigest: true})
 		if err != nil {
 			return err
@@ -53,7 +62,8 @@ func openClosureCard(
 // TestRetireOpenClosureProposals proves the helper concludes every open,
 // undecided closure card of the named run and nothing else: a decided closure
 // card, the run's task-proposal card, and another run's closure card keep
-// their state, and a second call retires nothing.
+// their state, and a second call retires nothing. The sweep's candidate read
+// lists exactly the runs with an open closure card, before and after.
 func TestRetireOpenClosureProposals(t *testing.T) {
 	ctx := context.Background()
 	st := openTemplateStoreAt(t, filepath.Join(t.TempDir(), "store.db"), Options{})
@@ -145,8 +155,28 @@ func TestRetireOpenClosureProposals(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	_, otherProposal := closureFor("project-b")
+	otherPolicy, otherProposal := closureFor("project-b")
 	other := openClosureCard(t, ctx, st, "project-b", allocateClosure(t, ctx, st, otherProposal, "event-b1"), merge("4"))
+
+	candidates := func() []domain.OpaqueSubjectHandle {
+		t.Helper()
+		var handles []domain.OpaqueSubjectHandle
+		if err := st.Read(ctx, func(tx *ReadTx) error {
+			var err error
+			handles, err = tx.ListOpenClosureProposalSubjects(ctx)
+			return err
+		}); err != nil {
+			t.Fatal(err)
+		}
+		return handles
+	}
+	handleA := domain.OpaqueSubjectHandle(domain.WorkUnitIDForRun(policy.RunID))
+	handleB := domain.OpaqueSubjectHandle(domain.WorkUnitIDForRun(otherPolicy.RunID))
+	wantCandidates := []domain.OpaqueSubjectHandle{handleA, handleB}
+	slices.Sort(wantCandidates)
+	if got := candidates(); !slices.Equal(got, wantCandidates) {
+		t.Fatalf("candidates = %v, want %v", got, wantCandidates)
+	}
 
 	const reason = "Superseded because the publication was refused; a rerun that publishes proposes closure again."
 	at := time.Date(2026, 8, 11, 14, 0, 0, 0, time.UTC)
@@ -169,6 +199,9 @@ func TestRetireOpenClosureProposals(t *testing.T) {
 	}
 	if got := retire(); len(got) != 0 {
 		t.Fatalf("second call retired %v, want nothing", got)
+	}
+	if got := candidates(); !slices.Equal(got, []domain.OpaqueSubjectHandle{handleB}) {
+		t.Fatalf("candidates after retirement = %v, want [%s]", got, handleB)
 	}
 
 	read := func(id domain.ItemID) domain.AttentionItem {
@@ -198,6 +231,51 @@ func TestRetireOpenClosureProposals(t *testing.T) {
 		if item := read(id); item.Status != domain.StatusOpen || item.ItemVersion != 1 {
 			t.Fatalf("card %s = status %q version %d, want open at version 1", id, item.Status, item.ItemVersion)
 		}
+	}
+}
+
+// TestRetireOpenClosureProposalsNeverPredatesTheCard proves a card created
+// after the passed instant is concluded at its own creation: the settlement
+// sweep stamps at a fact's observed_at, which can precede a card bound later.
+func TestRetireOpenClosureProposalsNeverPredatesTheCard(t *testing.T) {
+	ctx := context.Background()
+	st := openTemplateStoreAt(t, filepath.Join(t.TempDir(), "store.db"), Options{})
+	source := domain.SpecificationSource{
+		Kind:         domain.SpecificationSourceIssueSubject,
+		IssueSubject: &domain.IssueSubjectRef{Repo: "owner/repo", RepositoryID: 123, IssueNumber: 42},
+	}
+	policy, handle := closureScaffold(t, ctx, st, "project-a", &source)
+	proposal, err := domain.NewEffectProposal(domain.EffectSourceIssueClosure, domain.SourceIssueClosureInput{
+		SubjectHandle: handle,
+		Source: domain.ClosableSource{
+			Present: true, Provenance: domain.ClosureProvenanceVerified, Repo: "owner/repo", RepositoryID: 123, IssueNumber: 42,
+		},
+		Origin: domain.ClosureFlagOriginProposeSite, Resolves: true,
+	}, policy)
+	if err != nil {
+		t.Fatal(err)
+	}
+	created := time.Date(2026, 8, 11, 14, 0, 0, 0, time.UTC)
+	card := openClosureCardAt(t, ctx, st, "project-a", allocateClosure(t, ctx, st, proposal, "event-a1"), domain.ProspectiveMerge{
+		PublicationIdentity: domain.Digest("sha256:" + strings.Repeat("9", 64)),
+		CandidateHeadSHA:    strings.Repeat("1", 40), BaseRef: "main", BaseSHA: strings.Repeat("b", 40),
+	}, &created)
+	if err := st.Write(ctx, func(tx *WriteTx) error {
+		_, err := tx.RetireOpenClosureProposals(ctx, policy.RunID, "Superseded.", created.Add(-time.Minute))
+		return err
+	}); err != nil {
+		t.Fatal(err)
+	}
+	var item domain.AttentionItem
+	if err := st.Read(ctx, func(tx *ReadTx) error {
+		var err error
+		item, err = tx.GetAttentionItem(ctx, card.ID)
+		return err
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if item.Status != domain.StatusSuperseded || item.Conclusion == nil || !item.Conclusion.ConcludedAt.Equal(created) {
+		t.Fatalf("retired card = status %q conclusion %+v, want superseded at %s", item.Status, item.Conclusion, created)
 	}
 }
 
