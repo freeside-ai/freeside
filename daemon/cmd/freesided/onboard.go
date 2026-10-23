@@ -29,6 +29,10 @@ func runOnboardMain(args []string) {
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
 	if err := runOnboardCommand(ctx, args, os.Stdout, os.Stderr); err != nil {
+		// The flag package has already printed the usage for -h.
+		if errors.Is(err, flag.ErrHelp) {
+			return
+		}
 		fmt.Fprintln(os.Stderr, "freesided onboard:", err)
 		os.Exit(1)
 	}
@@ -344,13 +348,18 @@ func runOnboardCommand(
 	)
 }
 
-func parseOnboardConfig(args []string, output io.Writer) (onboardConfig, error) {
-	if len(args) == 0 {
-		return onboardConfig{}, errors.New("repository owner/name is required")
+func configureOnboardUsage(flags *flag.FlagSet) {
+	flags.Usage = func() {
+		_, _ = fmt.Fprintln(flags.Output(), "Usage: freesided onboard <owner/name> [flags]")
+		flags.PrintDefaults()
 	}
+}
+
+func parseOnboardConfig(args []string, output io.Writer) (onboardConfig, error) {
 	flags := flag.NewFlagSet("freesided onboard", flag.ContinueOnError)
 	flags.SetOutput(output)
-	cfg := onboardConfig{Repository: args[0]}
+	configureOnboardUsage(flags)
+	var cfg onboardConfig
 	var commitPlan string
 	var dns stringList
 	var externalReviewers externalReviewerList
@@ -394,11 +403,24 @@ func parseOnboardConfig(args []string, output io.Writer) (onboardConfig, error) 
 	flags.StringVar(&cfg.GoModuleDir, "go-module-dir", "",
 		"repository-relative Go module directory to build a Go image for "+
 			"(default: Go at the root when it holds go.mod and no package.json, npm otherwise)")
-	if err := flags.Parse(args[1:]); err != nil {
+	// The repository may come first or after the flags. A repository name
+	// never starts with "-", so a leading flag means the flags-first form.
+	flagArgs := args
+	if len(args) > 0 && !strings.HasPrefix(args[0], "-") {
+		cfg.Repository, flagArgs = args[0], args[1:]
+	}
+	if err := flags.Parse(flagArgs); err != nil {
 		return onboardConfig{}, err
 	}
-	if flags.NArg() != 0 {
-		return onboardConfig{}, fmt.Errorf("unexpected positional arguments: %v", flags.Args())
+	positional := flags.Args()
+	if cfg.Repository == "" && len(positional) > 0 {
+		cfg.Repository, positional = positional[0], positional[1:]
+	}
+	if len(positional) != 0 {
+		return onboardConfig{}, fmt.Errorf("unexpected positional arguments: %v", positional)
+	}
+	if cfg.Repository == "" {
+		return onboardConfig{}, errors.New("repository owner/name is required (run freesided onboard -h for usage)")
 	}
 	cfg.DNS = append([]string(nil), dns...)
 	cfg.ExternalReviewers = slices.Clone([]domain.ExternalReviewer(externalReviewers))
