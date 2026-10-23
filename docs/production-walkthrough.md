@@ -203,6 +203,8 @@ checkout of the SHA the real run will use, with the version flag in
 | `listen` | A listener of its own |
 | `seed_root` | A directory of its own for the daemon-owned base checkouts |
 | `repository.*` | The disposable repository: its `repo`, `repository_id`, `base_ref`, `base_sha`, `allowed_paths`, `checkout`, and `project` |
+| `images.agent` | The project image the disposable repository's onboarding builds (below); `images.exporter` and `images.review` stay the real run's |
+| `approved_recipe` | The recipe that onboarding approves |
 | `manual_submission_config` | `""` |
 | `writers.*` | The real run's model at `low`, for each of `specifier`, `implementer`, and `remediator`, except as below |
 | `review.effort` | `low`; `review.model` stays the real run's |
@@ -223,10 +225,51 @@ until an adoption input changes, which the deputy's self-check refuses.
 
 **Disposable target.** An issue in a dedicated throwaway repository where the
 `prod` GitHub App is installed, as the `freeside-review-challenge` repository
-was for #1275. The images and approved recipe stay as the real run's, so the
-repository must be one they serve. Keep the issue small enough for a clean
-review: a review finding or a closure gate opens a card only a person can
-answer, and that stops the pass.
+was for #1275. Keep the issue small enough for a clean review: a review
+finding or a closure gate opens a card only a person can answer, and that
+stops the pass. The repository needs its own trust profile and project image,
+since a profile binds one repository and onboarding builds the image from that
+repository's commit and recipe. The fresh root starts with an empty database,
+so every pass onboards it.
+
+**Review configuration.** `review.effort` is an input of the review
+configuration digest, so the rehearsal's review configuration differs from
+the real run's unless the real run's review already runs at `low`.
+Onboarding records the digest it is given, so take it from the rehearsal's
+own composition, never the real run's. On a fresh root, in this order:
+
+1. Write the settings with every rehearsal value above, leaving `images.agent`
+   and `approved_recipe` at the real run's until onboarding replaces them.
+2. Adopt the rehearsal agent tree through [The First Start](#the-first-start),
+   or set `agent_tree.commit` to the one an earlier rehearsal adopted.
+3. On the start whose tree matches, the self-check fails `trust_profile` and
+   the checks that need the project image, since this root holds neither for
+   the disposable repository. Those failures are expected here. It still
+   writes `<root>/daemon/composition-manifest.json`. Read its
+   `review_configuration_digest`; `freesided preflight` with the same inputs
+   reports the same digest. End the deputy with Ctrl-C: onboarding refuses a
+   database the daemon holds.
+4. Onboard the disposable repository on this root, as daemon/README.md
+   describes under Renew A Codex Subscription Credential (the
+   `freesided onboard <owner/name>` paragraphs):
+
+   ```sh
+   freesided onboard <owner/name> -db <root>/daemon/freeside.db \
+     -repository-id <id> -commit <sha> -base-ref <branch> -recipe <path> \
+     -review-config-digest <digest> ...
+   ```
+
+   The disposable repository supplies `-repository-id`, `-commit`,
+   `-base-ref`, the recipe (`-recipe`, or `-source` to detect it), and any
+   repository-bound flag the real run passes, such as `-go-module-dir`,
+   `-image-name`, or `-external-reviewer`. The App and base-image flags
+   (`-state-dir`, `-registration-id`, `-base-image`, `-base-build-ref`) are
+   the real run's. Run it once without `-approve` and read the review, then
+   again with `-approve <approval_digest>`. A repository the App installation
+   doesn't cover yet first returns `installation_pending`; the README gives
+   the installation flags and `--resume` for that case.
+5. Set `images.agent` to the approving run's `project_image.image_ref` and
+   `approved_recipe` to its `project_image.recipe_digest`.
 
 **Inputs.** Build the `submit` inputs as the real run will, naming the
 disposable issue and project instead of the target, with every `--task-line`
