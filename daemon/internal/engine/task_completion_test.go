@@ -2,6 +2,7 @@ package engine
 
 import (
 	"database/sql"
+	"fmt"
 	"path/filepath"
 	"reflect"
 	"slices"
@@ -251,6 +252,78 @@ func TestRetireCompletedTaskItemsSupersedesTheEpisodeDispute(t *testing.T) {
 	}
 }
 
+// seedRunDisputes adds an open review dispute on the fixture's run for each
+// creation time, keyed by that offset from the completion.
+func (f completionFixture) seedRunDisputes(t *testing.T, offsets ...time.Duration) map[time.Duration]domain.ItemID {
+	t.Helper()
+	ctx := t.Context()
+	ids := map[time.Duration]domain.ItemID{}
+	subject := domain.Subject{Type: domain.SubjectRun, ID: domain.SubjectID(f.run.ID), RunID: &f.run.ID}
+	if err := f.store.Write(ctx, func(tx *store.WriteTx) error {
+		for _, offset := range offsets {
+			createdAt := completionFixtureAt.Add(offset)
+			id := domain.ItemID(fmt.Sprintf("completion-dispute-%s", offset))
+			item, err := domain.NewAttentionItem(domain.AttentionItemInput{
+				ID: id, ProjectID: f.run.ProjectID, Subject: subject,
+				Type: domain.AttentionReviewDispute, Priority: domain.PriorityHigh, Reason: "Reword the test comment.",
+				RequestedDecision: []domain.Action{domain.ActionDiscuss}, ItemVersion: 1, Status: domain.StatusOpen,
+				InterruptionClass: domain.InterruptionExceptional, CreatedAt: &createdAt,
+			}, nil)
+			if err != nil {
+				return err
+			}
+			if err := tx.PutAttentionItem(ctx, item); err != nil {
+				return err
+			}
+			ids[offset] = id
+		}
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	return ids
+}
+
+func (f completionFixture) item(t *testing.T, id domain.ItemID) domain.AttentionItem {
+	t.Helper()
+	var item domain.AttentionItem
+	if err := f.store.Read(t.Context(), func(tx *store.ReadTx) error {
+		var err error
+		item, err = tx.GetAttentionItem(t.Context(), id)
+		return err
+	}); err != nil {
+		t.Fatal(err)
+	}
+	return item
+}
+
+func TestRetireCompletedTaskItemsSupersedesOnlyItemsOpenAtCompletion(t *testing.T) {
+	f := newCompletionFixture(t, "completed")
+	ids := f.seedRunDisputes(t, -time.Minute, 0, time.Minute)
+	later := f.item(t, ids[time.Minute])
+	want := []domain.ItemID{f.dispute, ids[-time.Minute], ids[0]}
+	slices.Sort(want)
+	if got := f.retire(t); !slices.Equal(got, want) {
+		t.Fatalf("retired = %v, want %v", got, want)
+	}
+	for _, id := range want {
+		item := f.item(t, id)
+		if item.Status != domain.StatusSuperseded || item.Conclusion == nil ||
+			!item.Conclusion.ConcludedAt.Equal(completionFixtureAt) {
+			t.Fatalf("item %s status = %q, conclusion = %+v", id, item.Status, item.Conclusion)
+		}
+	}
+	if got := f.item(t, later.ID); !reflect.DeepEqual(got, later) {
+		t.Fatalf("item raised after the completion changed: %+v", got)
+	}
+	if got := f.retire(t); len(got) != 0 {
+		t.Fatalf("second retirement = %v, want none", got)
+	}
+	if got := f.item(t, later.ID); !reflect.DeepEqual(got, later) {
+		t.Fatalf("second retirement changed the later item: %+v", got)
+	}
+}
+
 func TestRetireCompletedTaskItemsLeavesUnfinishedEpisodes(t *testing.T) {
 	for _, lifecycle := range []string{"active", "abandoned", "restarted", "recompleted"} {
 		t.Run(lifecycle, func(t *testing.T) {
@@ -348,6 +421,46 @@ func TestReconcileRetiresCompletedTaskItemsOnce(t *testing.T) {
 	}
 	if second := revision(); second != first {
 		t.Fatalf("revision moved from %d to %d on a no-op pass", first, second)
+	}
+}
+
+func TestReconcileLeavesItemsRaisedAfterCompletionOpen(t *testing.T) {
+	f := newCompletionFixture(t, "completed")
+	ids := f.seedRunDisputes(t, -time.Minute, time.Minute)
+	later := f.item(t, ids[time.Minute])
+	e, err := New(f.store, signet.NewService(f.store), execfake.NewStageDriver())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := e.Reconcile(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	if status := f.item(t, ids[-time.Minute]).Status; status != domain.StatusSuperseded {
+		t.Fatalf("earlier item status after reconcile = %q", status)
+	}
+	if got := f.item(t, later.ID); !reflect.DeepEqual(got, later) {
+		t.Fatalf("later item changed after reconcile: %+v", got)
+	}
+	revision := func() int64 {
+		var state store.ServerState
+		if err := f.store.Read(t.Context(), func(tx *store.ReadTx) error {
+			var err error
+			state, err = tx.ServerState(t.Context())
+			return err
+		}); err != nil {
+			t.Fatal(err)
+		}
+		return state.Revision
+	}
+	first := revision()
+	if err := e.reconcileCompletedTaskItems(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	if second := revision(); second != first {
+		t.Fatalf("revision moved from %d to %d on a pass with only a later item open", first, second)
+	}
+	if got := f.item(t, later.ID); !reflect.DeepEqual(got, later) {
+		t.Fatalf("later item changed after a second pass: %+v", got)
 	}
 }
 
