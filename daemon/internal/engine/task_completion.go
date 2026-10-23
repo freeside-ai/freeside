@@ -74,10 +74,21 @@ var supersededByCompletion = func() []domain.AttentionType {
 	return kinds
 }()
 
-// RetireCompletedTaskItems supersedes the open items owned by the task's
-// completed current episode, stamped at the completion's recorded time. It
-// retires nothing while the episode is unfinished, and it never touches an
-// earlier episode's items. Supersession is a daemon close, not an operator
+// openAtCompletion reports whether the item already existed when the task
+// completed. An item raised afterwards, such as an operator's raise-item
+// alert on the completed run, is not one the episode left open, so the sweep
+// keeps it for delivery. Comparing against the instant the sweep stamps as
+// concluded_at keeps every conclusion at or after its item's creation. A
+// legacy item with no created_at predates the field and still counts as open.
+func openAtCompletion(item domain.AttentionItem, completion domain.TaskLifecycleFact) bool {
+	return item.CreatedAt == nil || !item.CreatedAt.After(completion.RecordedAt)
+}
+
+// RetireCompletedTaskItems supersedes the open items that the task's
+// completed current episode owned when it completed, stamped at the
+// completion's recorded time. It retires nothing while the episode is
+// unfinished, and it never touches an earlier episode's items or an item
+// created after the completion. Supersession is a daemon close, not an operator
 // decision, so decided_at stays unset.
 func RetireCompletedTaskItems(ctx context.Context, tx *store.WriteTx, taskID domain.TaskID) ([]domain.ItemID, error) {
 	task, err := tx.GetTask(ctx, taskID)
@@ -94,7 +105,7 @@ func RetireCompletedTaskItems(ctx context.Context, tx *store.WriteTx, taskID dom
 	}
 	var owned []domain.AttentionItem
 	for _, item := range open {
-		if !completionSupersedes(item.Type) {
+		if !completionSupersedes(item.Type) || !openAtCompletion(item, *completion) {
 			continue
 		}
 		owner, episode, err := tx.AttentionItemWorkflowEpisode(ctx, item)
