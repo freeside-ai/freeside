@@ -50,13 +50,14 @@ type inspectTask struct {
 // commands that print what the store holds as JSON and write nothing. A new
 // read is registered here, or the index does not know it exists.
 func inspectReads() []inspectRead {
-	index, record := inspectIndexVersion, taskRecordVersion
+	index, record, health := inspectIndexVersion, taskRecordVersion, systemHealthVersion
 	return []inspectRead{
 		{Name: "inspect", Command: "freesided inspect -db PATH", IDs: []string{}, Version: &index},
 		{
 			Name: "inspect task", Command: "freesided inspect task -db PATH -task TASK_ID",
 			IDs: []string{"task_id"}, Version: &record,
 		},
+		{Name: "inspect health", Command: "freesided inspect health -db PATH", IDs: []string{}, Version: &health},
 		{
 			Name: "follow -snapshot", Command: "freesided follow -db PATH -run RUN_ID -snapshot",
 			IDs: []string{"run_id"},
@@ -81,14 +82,19 @@ func runInspectMain(args []string) {
 	os.Exit(1)
 }
 
-// runInspectCommand prints the index, or with the `task` verb one task's
-// record, as one JSON line. Both are reads: they write nothing and open an
-// unheld database without migrating it.
+// runInspectCommand prints the index, with the `task` verb one task's
+// record, or with the `health` verb the root's open system-health items, as
+// one JSON line. All are reads: they write nothing and open an unheld
+// database without migrating it.
 func runInspectCommand(ctx context.Context, args []string, stdout, stderr io.Writer) error {
 	verb := "freesided inspect"
 	wantTask := len(args) > 0 && args[0] == "task"
-	if wantTask {
+	wantHealth := len(args) > 0 && args[0] == "health"
+	switch {
+	case wantTask:
 		verb, args = "freesided inspect task", args[1:]
+	case wantHealth:
+		verb, args = "freesided inspect health", args[1:]
 	}
 	flags := flag.NewFlagSet(verb, flag.ContinueOnError)
 	flags.SetOutput(stderr)
@@ -119,6 +125,11 @@ func runInspectCommand(ctx context.Context, args []string, stdout, stderr io.Wri
 			return readTaskRecordFrom(ctx, st, domain.TaskID(*taskID))
 		}
 	}
+	if wantHealth {
+		route, read = "/system-health", func(ctx context.Context, st *store.Store) (any, error) {
+			return readSystemHealthFrom(ctx, st)
+		}
+	}
 	// storeExisting: a read never migrates a database.
 	handle, client, err := openCommandStore(ctx, *dbPath, store.Options{ApprovedRecipes: approvedRecipes}, storeExisting)
 	if err != nil {
@@ -144,16 +155,22 @@ func runInspectCommand(ctx context.Context, args []string, stdout, stderr io.Wri
 	}
 	// Only a direct read gets the note: a served record was read under the
 	// running daemon's own recipe set, which no flag can add to.
-	if record, ok := value.(taskRecord); ok && record.hasErrorKind(taskRecordErrorUnapprovedRecipe) {
+	if reporter, ok := value.(errorKindReporter); ok && reporter.hasErrorKind(taskRecordErrorUnapprovedRecipe) {
 		_, err := fmt.Fprintf(stderr, unapprovedRecipeNote, len(approvedRecipes))
 		return err
 	}
 	return nil
 }
 
+// errorKindReporter is a read that reports the errors that left part of it
+// unread: the task record and the system-health read.
+type errorKindReporter interface {
+	hasErrorKind(kind taskRecordErrorKind) bool
+}
+
 // unapprovedRecipeNote goes to stderr, so stdout stays one JSON value.
 const unapprovedRecipeNote = "freesided inspect: this read approved %d verification recipes, so it " +
-	"could not read evidence the record reports as unapproved_recipe. Pass -approved-recipe " +
+	"could not read evidence it reports as unapproved_recipe. Pass -approved-recipe " +
 	"once per digest the daemon was launched with: approved_recipe in <root>/daemon/settings.json " +
 	"for a deputy root.\n"
 

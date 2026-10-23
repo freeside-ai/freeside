@@ -21,8 +21,9 @@ import (
 	"github.com/freeside-ai/freeside/daemon/internal/strictjson"
 )
 
-// TestInspectIndexGolden pins the index's shape. A change to these bytes is a
-// change to inspectIndexVersion.
+// TestInspectIndexGolden pins the index's bytes. A change to the index's
+// fields changes inspectIndexVersion; a read added to the list is content and
+// changes only the bytes.
 func TestInspectIndexGolden(t *testing.T) {
 	latest := domain.RunID("run-freeside-656")
 	got, err := json.MarshalIndent(inspectIndex{
@@ -53,7 +54,8 @@ func TestInspectIndexNamesItsReads(t *testing.T) {
 			versions[read.Name] = *read.Version
 		}
 	}
-	if versions["inspect"] != inspectIndexVersion || versions["inspect task"] != taskRecordVersion {
+	if versions["inspect"] != inspectIndexVersion || versions["inspect task"] != taskRecordVersion ||
+		versions["inspect health"] != systemHealthVersion {
 		t.Fatalf("versions = %v", versions)
 	}
 }
@@ -84,7 +86,7 @@ func inspect[T any](t *testing.T, ctx context.Context, args ...string) T {
 }
 
 // TestInspectReadsThroughRunningDaemon fails any attempt to open the database
-// while a daemon holds it: both reads must come over the control socket.
+// while a daemon holds it: every read must come over the control socket.
 func TestInspectReadsThroughRunningDaemon(t *testing.T) {
 	h, dbPath := startSeededDaemon(t)
 	t.Cleanup(func() {
@@ -111,6 +113,10 @@ func TestInspectReadsThroughRunningDaemon(t *testing.T) {
 			t.Errorf("task %s: timeline error %+v, items error %+v, %d runs, latest run %v",
 				task.TaskID, record.TimelineError, record.ItemsError, len(record.Runs), task.LatestRunID)
 		}
+	}
+	health := inspect[systemHealth](t, ctx, "health", "-db", dbPath)
+	if health.Version != systemHealthVersion || health.AsOfRevision < index.AsOfRevision || len(health.Items) == 0 {
+		t.Errorf("health = %+v", health)
 	}
 	err := runInspectCommand(ctx, []string{"task", "-db", dbPath, "-task", "task-unknown"}, io.Discard, io.Discard)
 	if !errors.Is(err, store.ErrNotFound) || errors.Is(err, observe.ErrUsage) {
@@ -237,22 +243,7 @@ func TestInspectReadsStoppedRootWithRecipeEvidence(t *testing.T) {
 func putRecipeEvidenceItem(t *testing.T, st *store.Store, recipe domain.Digest, runID domain.RunID, id domain.ItemID) {
 	t.Helper()
 	approved := map[domain.Digest]bool{recipe: true}
-	at := time.Date(2026, 10, 15, 12, 0, 0, 0, time.UTC)
-	artifact, err := domain.NewArtifact(domain.ArtifactInput{
-		ID: domain.ArtifactID(id) + "-evidence", Type: domain.ArtifactKindVerifyLog, Digest: "sha256:" + domain.Digest(id),
-		Provenance: domain.Provenance{
-			ProducerClass: domain.ProducerVerifier, ProducerInvocationID: domain.InvocationID("invocation-" + id),
-			HeadBinding: domain.HeadBound, SourceHeadSHA: "cafebabe",
-			VerificationRecipeDigest: &recipe, SensitivityClass: domain.SensitivityNormal,
-		},
-		Metadata: domain.EvidenceMetadata{
-			MediaType: domain.EvidenceMediaApplicationJSON, SizeBytes: 1, CreatedAt: at,
-			Source: domain.EvidenceSourceRun, Availability: domain.EvidenceAvailable,
-		},
-	}, approved)
-	if err != nil {
-		t.Fatal(err)
-	}
+	artifact := recipeEvidenceArtifact(t, recipe, id)
 	if err := st.Write(t.Context(), func(tx *store.WriteTx) error {
 		run, err := tx.GetRun(t.Context(), runID)
 		if errors.Is(err, store.ErrNotFound) {
@@ -279,6 +270,29 @@ func putRecipeEvidenceItem(t *testing.T, st *store.Store, recipe domain.Digest, 
 	}
 }
 
+// recipeEvidenceArtifact is a verifier artifact for item id whose
+// provenance names recipe.
+func recipeEvidenceArtifact(t *testing.T, recipe domain.Digest, id domain.ItemID) domain.Artifact {
+	t.Helper()
+	at := time.Date(2026, 10, 15, 12, 0, 0, 0, time.UTC)
+	artifact, err := domain.NewArtifact(domain.ArtifactInput{
+		ID: domain.ArtifactID(id) + "-evidence", Type: domain.ArtifactKindVerifyLog, Digest: "sha256:" + domain.Digest(id),
+		Provenance: domain.Provenance{
+			ProducerClass: domain.ProducerVerifier, ProducerInvocationID: domain.InvocationID("invocation-" + id),
+			HeadBinding: domain.HeadBound, SourceHeadSHA: "cafebabe",
+			VerificationRecipeDigest: &recipe, SensitivityClass: domain.SensitivityNormal,
+		},
+		Metadata: domain.EvidenceMetadata{
+			MediaType: domain.EvidenceMediaApplicationJSON, SizeBytes: 1, CreatedAt: at,
+			Source: domain.EvidenceSourceRun, Availability: domain.EvidenceAvailable,
+		},
+	}, map[domain.Digest]bool{recipe: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return artifact
+}
+
 // comparableRecord is the record without the read's wall-clock stamps and
 // revision, which differ between two reads of unchanged task state.
 func comparableRecord(t *testing.T, record taskRecord) []byte {
@@ -299,12 +313,15 @@ func comparableRecord(t *testing.T, record taskRecord) []byte {
 func TestInspectUsageErrors(t *testing.T) {
 	dbPath := filepath.Join(t.TempDir(), "freeside.db")
 	for name, args := range map[string][]string{
-		"no database":        {},
-		"task with no id":    {"task", "-db", dbPath},
-		"task flag on index": {"-db", dbPath, "-task", "task-1"},
-		"unknown verb":       {"run", "-db", dbPath},
-		"positional":         {"-db", dbPath, "task"},
-		"unknown flag":       {"-db", dbPath, "-follow"},
+		"no database":         {},
+		"task with no id":     {"task", "-db", dbPath},
+		"task flag on index":  {"-db", dbPath, "-task", "task-1"},
+		"unknown verb":        {"run", "-db", dbPath},
+		"positional":          {"-db", dbPath, "task"},
+		"unknown flag":        {"-db", dbPath, "-follow"},
+		"health with no db":   {"health"},
+		"health positional":   {"health", "-db", dbPath, "extra"},
+		"task flag on health": {"health", "-db", dbPath, "-task", "task-1"},
 	} {
 		t.Run(name, func(t *testing.T) {
 			var out bytes.Buffer

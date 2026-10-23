@@ -17,6 +17,12 @@
       "version": "freeside-task-record-v4"
     },
     {
+      "name": "inspect health",
+      "command": "freesided inspect health -db PATH",
+      "ids": [],
+      "version": "freeside-system-health-v1"
+    },
+    {
       "name": "follow -snapshot",
       "command": "freesided follow -db PATH -run RUN_ID -snapshot",
       "ids": [
