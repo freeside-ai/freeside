@@ -5,6 +5,7 @@
     import Testing
 
     @testable import FreesideCore
+    @testable import FreesideModel
 
     @Suite(.serialized) @MainActor struct ScreenshotRegressionTests {
         private struct Surface {

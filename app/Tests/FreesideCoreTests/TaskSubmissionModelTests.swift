@@ -3,6 +3,7 @@ import FreesideAPI
 import Testing
 
 @testable import FreesideCore
+@testable import FreesideModel
 
 /// The client-layer task-submission call (plan §5.11): it builds a submit_task
 /// command, accepts the result only through the trust gate, and refreshes for

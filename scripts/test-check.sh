@@ -214,7 +214,8 @@ assert_rc 0
 OUT=$(cat "$stub.args")
 assert_contains 'Package.swift'
 assert_contains 'Sources/FreesideAPI/MockServer.swift'
-assert_contains 'Sources/FreesideCore/AppSession.swift'
+assert_contains 'Sources/FreesideModel/AppSession.swift'
+assert_contains 'Sources/FreesideCore/InboxView.swift'
 assert_contains 'Tests/FreesideAPITests/'
 assert_contains 'Apps/macOS/'
 case $OUT in

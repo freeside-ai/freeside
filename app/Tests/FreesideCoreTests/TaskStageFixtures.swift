@@ -2,6 +2,7 @@ import Foundation
 import FreesideAPI
 
 @testable import FreesideCore
+@testable import FreesideModel
 
 /// Task histories in the daemon's order, for the event rail. Each one is
 /// written oldest first, as it happened, and handed over newest first, as

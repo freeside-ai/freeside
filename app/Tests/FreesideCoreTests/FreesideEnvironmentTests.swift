@@ -2,6 +2,7 @@ import Foundation
 import Testing
 
 @testable import FreesideCore
+@testable import FreesideModel
 
 @Suite struct FreesideEnvironmentTests {
     @Test func eachSourceWinsInPrecedenceOrder() throws {

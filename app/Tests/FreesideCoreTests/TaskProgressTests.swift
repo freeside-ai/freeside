@@ -2,6 +2,7 @@ import FreesideAPI
 import Testing
 
 @testable import FreesideCore
+@testable import FreesideModel
 
 @Suite struct TaskProgressTests {
     @Test func reviewDisputeNamesTheOpenCardWithoutAnImplementationRound() {

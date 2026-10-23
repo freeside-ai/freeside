@@ -1,6 +1,5 @@
 import Foundation
 import Observation
-import SwiftUI
 
 /// Which folded sections of a task's timeline are open, per task id, on
 /// this device: the same UserDefaults-backed shape as
@@ -71,13 +70,5 @@ package final class TaskTimelineDisclosurePreferences {
             sections.remove(section.id)
         }
         expandedByTask[taskID] = sections.isEmpty ? nil : sections
-    }
-}
-
-extension TaskTimelineDisclosurePreferences {
-    func binding(_ section: Section, taskID: String) -> Binding<Bool> {
-        Binding(
-            get: { self.isExpanded(section, taskID: taskID) },
-            set: { self.setExpanded($0, section, taskID: taskID) })
     }
 }

@@ -3,6 +3,7 @@ import SwiftUI
 import Testing
 
 @testable import FreesideCore
+@testable import FreesideModel
 
 @Suite struct LaunchInputsTests {
     @Test func colorSchemeParsesLightAndDark() {

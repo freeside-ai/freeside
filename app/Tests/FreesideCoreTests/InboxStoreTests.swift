@@ -3,6 +3,7 @@ import FreesideAPI
 import Testing
 
 @testable import FreesideCore
+@testable import FreesideModel
 
 @MainActor
 @Suite struct InboxStoreTests {
