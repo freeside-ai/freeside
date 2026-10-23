@@ -195,15 +195,22 @@ a new pass.
 | `seed_root` | A directory of its own for the daemon-owned base checkouts |
 | `repository.*` | The disposable repository: its `repo`, `repository_id`, `base_ref`, `base_sha`, `allowed_paths`, `checkout`, and `project` |
 | `manual_submission_config` | `""` |
-| `writers.*` | The lowest-cost Claude model the subscription admits, at `low`, for each of `specifier`, `implementer`, and `remediator` |
-| `review.model`, `review.effort` | The lowest-cost model the Codex subscription admits, at `low` |
-| `judgment.model`, `judgment.effort` | When the real run sets `judgment`: the lowest-cost Claude model the pinned `judgment.claude_bin` serves, at `low` |
+| `writers.*` | The real run's model at `low`, for each of `specifier`, `implementer`, and `remediator`, except as below |
+| `review.effort` | `low`; `review.model` stays the real run's |
+| `judgment.effort` | When the real run sets `judgment`: `low`; `judgment.model` stays the real run's |
 | `agent_tree.commit` | The rehearsal tree's commit (below) |
 
-The writer, review, and judgment models are part of the emitted agent tree,
-so the rehearsal needs its own agent-tree commit. Adopt it once through
-[The First Start](#the-first-start) and keep it, for example on its own branch
-of the same agent-tree checkout; later rehearsals reuse it.
+The models stay the real run's so a model the images, the subscription, or
+the pinned `judgment.claude_bin` refuses fails in the rehearsal; `low` keeps
+the spend bounded. The pass does not prove a model accepts its real effort.
+Writer roles on one model and effort share one agent, so `low` can merge two
+writer agents the real tree keeps apart and drop a name a `--task-line` uses:
+keep a writer at its real effort where that would happen, so the rehearsal
+tree's writer agent names match the real tree's. Effort is part of the
+emitted agent tree, so the rehearsal needs its own agent-tree commit. Adopt
+it once through [The First Start](#the-first-start) and keep it, for example
+on its own branch of the same agent-tree checkout; later rehearsals reuse it
+until an adoption input changes, which the deputy's self-check refuses.
 
 **Disposable target.** An issue in a dedicated throwaway repository where the
 `prod` GitHub App is installed, as the `freeside-review-challenge` repository
@@ -213,7 +220,10 @@ review: a review finding or a closure gate opens a card only a person can
 answer, and that stops the pass.
 
 **Inputs.** Build the `submit` inputs as the real run will, naming the
-disposable issue and project instead of the target. The policy file sets
+disposable issue and project instead of the target, with every `--task-line`
+the real run will pass. A line resolves only when an attempt of its role is
+admitted, so a remediator line stays unproven when the review comes back
+clean. The policy file sets
 `gates.spec_approval` to `false` and leaves `gates.source_issue_closure`
 absent or `false`, so neither a specification nor a closure card waits for a
 person.

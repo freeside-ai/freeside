@@ -262,16 +262,24 @@ holds the procedure; this section says what makes a pass count.
 2. **Settings that differ only where they must.** Copy the real run's
    settings and change only `listen`, `seed_root`, `repository.*` (the
    disposable repository, its project, base, and allowed paths),
-   `manual_submission_config` (empty), `writers.*` (the lowest-cost Claude
-   model the subscription admits, at `low`, for each writer role),
-   `review.model` and `review.effort` (the lowest-cost model the Codex
-   subscription admits, at `low`), `judgment.model` and `judgment.effort`
-   when the real run sets `judgment` (the lowest-cost Claude model the
-   pinned `judgment.claude_bin` serves, at `low`), and the
-   `agent_tree.commit` those values require. The changed models emit a
-   different agent tree, so the rehearsal has its own agent-tree commit,
-   adopted once through the walkthrough's First Start procedure and reused
-   by later rehearsals.
+   `manual_submission_config` (empty), the effort for each role, and the
+   `agent_tree.commit` the efforts require. Every role keeps the real run's
+   model and runs at `low`, with one exception below: each writer in `writers.*`, `review.effort`, and
+   `judgment.effort` when the real run sets `judgment`. A model the images,
+   the subscription, or the pinned `judgment.claude_bin` refuses then fails
+   in the rehearsal and not in the real run, and `low` keeps the spend
+   bounded. A cheaper stand-in model would prove nothing about the real
+   one. The pass does not prove a model accepts its real effort: a review
+   `max` goes out as `xhigh`, which a model can refuse at its first review
+   (daemon/README.md, Select Agents Through The Lineup). Writer roles on one
+   model and effort share one agent, named for the first of them, so `low`
+   can merge two writer agents the real tree keeps apart and drop a name a
+   `--task-line` uses. Keep a writer at its real effort where `low` would
+   merge its agent away: the rehearsal tree's writer agent names match the
+   real tree's. Effort is part of the emitted agent tree, so the rehearsal
+   has its own agent-tree commit, adopted once through the walkthrough's
+   First Start procedure and reused by later rehearsals until an adoption
+   input changes, which the deputy's self-check refuses.
 3. **A disposable target.** An issue in a dedicated throwaway repository
    where the `prod` GitHub App is installed (the `freeside-review-challenge`
    precedent, #1275), small enough that a review comes back clean. The same
@@ -284,7 +292,10 @@ holds the procedure; this section says what makes a pass count.
    specification nor a closure card waits for a person. The other inputs
    are built the way the real run builds them, naming the disposable issue
    and project instead of the target, so the pass exercises the CLI-mode
-   input checklist. Start
+   input checklist. The submit carries every `--task-line` the real run
+   will pass. A line resolves only when an attempt of its role is
+   admitted, so a pass proves the specifier and implementer lines; a
+   remediator line stays unproven when the review comes back clean. Start
    `freesided deputy -root <rehearsal-root>` as a tracked background task,
    submit with `--require-composition`, and record the build, the settings
    digest, and the composition result.
@@ -319,7 +330,7 @@ holds the procedure; this section says what makes a pass count.
 The pass counts as complete only when every step above passed. Record it as
 the Rehearsal row of the run record (`references/tracker-comment.md`):
 build SHA, root, settings digest, disposable target, task and run ids,
-`billable_cost`, and the result of the record checks, the alerts, and the
+`billable_cost`, the task lines the pass proved, and the result of the record checks, the alerts, and the
 lease release. A pass
 that fails is an Exit Preparation comment on the tracker with the defect
 filed, and no operator step happens until a later pass completes.
