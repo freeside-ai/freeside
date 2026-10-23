@@ -240,19 +240,24 @@ func commandEnv(root string, credential inference.Secret, req inference.Request,
 	}
 }
 
+// boundedOutput holds its buffer in a named field rather than embedding it:
+// an embedded bytes.Buffer promotes ReadFrom, and os/exec's io.Copy prefers
+// ReadFrom over Write, which reads the whole stream past the bound.
 type boundedOutput struct {
-	bytes.Buffer
+	buf    bytes.Buffer
 	limit  int
 	cancel context.CancelFunc
 }
 
 func (b *boundedOutput) Write(p []byte) (int, error) {
-	if len(p) > b.limit-b.Len() {
+	if len(p) > b.limit-b.buf.Len() {
 		b.cancel()
 		return 0, errCompletion
 	}
-	return b.Buffer.Write(p)
+	return b.buf.Write(p)
 }
+
+func (b *boundedOutput) Bytes() []byte { return b.buf.Bytes() }
 
 func decodeCompletion(body []byte, req inference.Request, site inference.Site) (inference.Response, error) {
 	var result struct {
