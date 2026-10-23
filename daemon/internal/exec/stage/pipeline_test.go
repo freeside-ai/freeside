@@ -7,6 +7,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"log/slog"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -223,6 +224,34 @@ func TestCompletedExportHandsItsUsageToTheRecorder(t *testing.T) {
 			t.Fatalf("attempt %d recorded usage = %#v, want %#v", attempt, got, want)
 		}
 		now = now.Add(time.Hour)
+	}
+}
+
+// TestExportWithoutUsageIsLogged pins that every way an export yields no
+// usage leaves a warning naming the invocation, since the run's billable cost
+// is then incomplete.
+func TestExportWithoutUsageIsLogged(t *testing.T) {
+	t.Parallel()
+	in := intent{InvocationID: testInvoke, RunID: testRunIDFor(testInvoke)}
+	for name, out := range map[string]exportOutcome{
+		"no evidence":    {dir: t.TempDir()},
+		"empty evidence": {dir: t.TempDir(), evidencePresent: true},
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			d := newTestDriver(t, &stubGate{}, newStubExports())
+			handler := &captureHandler{}
+			d.logger = slog.New(handler)
+			if got := d.extractUsage(in, out, fixedNow); got != nil {
+				t.Fatalf("usage = %#v, want none", got)
+			}
+			records := handler.snapshot()
+			if len(records) != 1 || records[0].level != slog.LevelWarn ||
+				records[0].attrs["invocation"] != string(testInvoke) ||
+				records[0].attrs["run"] != in.RunID {
+				t.Fatalf("log records = %#v, want one warning naming the invocation", records)
+			}
+		})
 	}
 }
 
