@@ -130,6 +130,34 @@ func TestSubmitCommandSourceReference(t *testing.T) {
 	}
 }
 
+// TestSubmitCommandRefusesMixedPublicationForms pins the refusal for the
+// exit-run file: a literal title and body that also carry a recipe. The
+// operator sees which keys belong to which form, behind submit's own prefix.
+func TestSubmitCommandRefusesMixedPublicationForms(t *testing.T) {
+	t.Parallel()
+	root := t.TempDir()
+	task, policy, publication := writeSubmissionSource(t, root, submissionSourceCase{
+		task:        "# Task\n\nImplement the thing.\n",
+		publication: `{"recipe":"freeside.client-publication/v2",` + strings.TrimPrefix(literalSourcePublication, "{"),
+	})
+	cfg := submitCommandConfig{
+		DBPath: filepath.Join(root, "state.db"), SubmissionID: "mixed", ProjectID: "proj-mixed",
+		TaskPath: task, PolicyPath: policy, WorkUnitPath: declaredWorkUnit(t), PublicationPath: publication,
+	}
+	const want = `submit: decode publication metadata: publication mixes the recipe form and the literal form: ` +
+		`"recipe" belongs to the recipe form and "title" and "body" belong to the literal form; ` +
+		`keep "recipe" (with "source_issue" when the task is one GitHub issue URL) and remove "title" and "body", ` +
+		`or, when the task is not one GitHub issue URL, remove "recipe" and any "source_issue" and set both "title" and "body"`
+	if _, err := runSubmitCommand(t.Context(), cfg); err == nil || err.Error() != want {
+		t.Fatalf("submit = %v, want %q", err, want)
+	}
+	for _, path := range []string{cfg.DBPath, cfg.DBPath + ".blobs", cfg.DBPath + ".submissions"} {
+		if _, err := os.Stat(path); !errors.Is(err, os.ErrNotExist) {
+			t.Fatalf("refused submission left %s: %v", path, err)
+		}
+	}
+}
+
 // sourceApplyRequest is the request a CLI prepares for one task and
 // publication, with every digest and derived identity bound, so a refusal
 // exercises the source rule and not a binding error.
