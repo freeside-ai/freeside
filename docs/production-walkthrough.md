@@ -189,7 +189,7 @@ its paired endpoint.
 
 ## Rehearse Before The Real Run
 
-An exit run starts with a rehearsal pass: the same build runs the whole
+An exit run starts with a rehearsal pass: the real run's daemon runs the whole
 pipeline once, unattended, on a disposable target, so a launch, input,
 credential, or publication problem shows up before the operator is involved.
 The exit-run skill (`.claude/skills/exit-run/SKILL.md`, Rehearse Before The
@@ -198,7 +198,11 @@ Operator) says when a pass counts; this section is the procedure.
 **Root and build.** Use a fresh root and a `freesided` built from a clean
 checkout of the SHA the real run will use, with the version flag in
 [Start And Verify](#start-and-verify): a plain `go build` fails preflight's
-`daemon_build` check. A real run on another build needs a new pass.
+`daemon_build` check. A real run may start from a newer tip than its pass
+only when `bash scripts/runtime-diff.sh <pass-sha> <run-sha>` exits 0 (both
+SHAs build the same `freesided`, and the diff touches no image, `prompts/`,
+or `policy/` source) and the run record names both SHAs and the verdict;
+otherwise the pass runs again on the new tip.
 
 **Settings.** Copy the real run's settings file and change only these keys:
 
@@ -666,7 +670,7 @@ client are unavailable.
 ### Next Exit-Run Commands
 
 For the #1211 exit run against `freeasinbird/gh-imgup#82`, after a rehearsal
-pass on the same build ([Rehearse Before The Real Run](#rehearse-before-the-real-run)),
+pass on the same build or one `runtime-diff` carries ([Rehearse Before The Real Run](#rehearse-before-the-real-run)),
 with the settings file naming the manual-submission file and `prod` left
 running:
 
