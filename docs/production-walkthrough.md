@@ -234,7 +234,10 @@ finding or a closure gate opens a card only a person can answer, and that
 stops the pass. The repository needs its own trust profile and project image,
 since a profile binds one repository and onboarding builds the image from that
 repository's commit and recipe. The fresh root starts with an empty database,
-so every pass onboards it.
+so every pass onboards it. The repository may be private: the daemon reads a
+bare-URL task's source issue with a read-only installation token for that
+repository ([Configure Client Task
+Submission](../daemon/README.md#configure-client-task-submission)).
 
 **Review configuration.** `review.effort` is an input of the review
 configuration digest, so the rehearsal's review configuration differs from

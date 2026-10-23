@@ -20,6 +20,7 @@ import (
 	"github.com/freeside-ai/freeside/daemon/internal/contentaddr"
 	"github.com/freeside-ai/freeside/daemon/internal/domain"
 	"github.com/freeside-ai/freeside/daemon/internal/exec"
+	"github.com/freeside-ai/freeside/daemon/internal/publish"
 	"github.com/freeside-ai/freeside/daemon/internal/signet"
 	"github.com/freeside-ai/freeside/daemon/internal/store"
 	"github.com/freeside-ai/freeside/daemon/internal/strictjson"
@@ -137,28 +138,56 @@ type Fetcher struct {
 	store     *store.Store
 	blobs     *signet.BlobStore
 	transport http.RoundTripper
+	tokens    publish.TokenSource
 }
 
-// NewFetcher constructs a fetcher. A nil transport selects the production
-// transport, which resolves and dials the same public address and uses no
-// ambient proxy. Tests may inject a transport without weakening URL policy.
+// ManagedRepository names the task's own managed repository: the only one
+// whose issue endpoints a research fetch authenticates to. Repo is its
+// owner/name and RepositoryID its canonical GitHub ID. The zero value
+// authenticates nothing.
+type ManagedRepository struct {
+	Repo         string
+	RepositoryID int64
+}
+
+// githubAPIOrigin is the only origin an issue-read token is sent to.
+const githubAPIOrigin = "api.github.com:443"
+
+// NewFetcher constructs a fetcher that sends no credentials. A nil transport
+// selects the production transport, which resolves and dials the same public
+// address and uses no ambient proxy. Tests may inject a transport without
+// weakening URL policy.
 func NewFetcher(st *store.Store, blobs *signet.BlobStore, transport http.RoundTripper) (*Fetcher, error) {
+	return NewFetcherWithIssueTokens(st, blobs, transport, nil)
+}
+
+// NewFetcherWithIssueTokens constructs a fetcher that authenticates requests
+// for the managed repository's issue endpoints with tokens from the given
+// source, which should mint a read-only issue grant
+// (publish.IssueReadTokenSource). A nil source authenticates nothing.
+func NewFetcherWithIssueTokens(
+	st *store.Store, blobs *signet.BlobStore, transport http.RoundTripper, tokens publish.TokenSource,
+) (*Fetcher, error) {
 	if st == nil || blobs == nil {
 		return nil, errors.New("research fetcher requires store and blob store")
 	}
 	if transport == nil {
 		transport = secureResearchTransport()
 	}
-	return &Fetcher{store: st, blobs: blobs, transport: transport}, nil
+	return &Fetcher{store: st, blobs: blobs, transport: transport, tokens: tokens}, nil
 }
 
 // Fetch enforces the allowlist, bounds the response, stores a URL-bound
 // envelope in the blob store, then registers its immutable research artifact.
+// A request for one of the scope repository's issues on the GitHub API is
+// sent to its repository-ID endpoint with an installation token when one can
+// be had; every other request goes exactly as written, without credentials.
 func (f *Fetcher) Fetch(
 	ctx context.Context,
 	producer domain.InvocationID,
 	ordinal int,
 	request FetchRequest,
+	scope ManagedRepository,
 	allowlist []string,
 	maxBytes int64,
 ) (ResearchArtifact, error) {
@@ -201,13 +230,40 @@ func (f *Fetcher) Fetch(
 			return nil
 		},
 	}
-	httpRequest, err := http.NewRequestWithContext(ctx, http.MethodGet, parsed.String(), nil)
-	if err != nil {
-		return ResearchArtifact{}, fmt.Errorf("create research request: %w", err)
+	target := parsed
+	var credential *issueCredential
+	if issueURL, ok := managedIssueURL(parsed, scope); ok {
+		target = issueURL
+		resolved := f.issueCredential(ctx, scope)
+		credential = &resolved
 	}
-	httpRequest.Header.Set("Accept", "text/plain, text/html, application/json;q=0.9, */*;q=0.1")
-	httpRequest.Header.Set("User-Agent", "freeside-research-fetcher/1")
-	response, err := client.Do(httpRequest)
+	send := func(bearer string) (*http.Response, error) {
+		httpRequest, err := http.NewRequestWithContext(ctx, http.MethodGet, target.String(), nil)
+		if err != nil {
+			return nil, fmt.Errorf("create research request: %w", err)
+		}
+		httpRequest.Header.Set("Accept", "text/plain, text/html, application/json;q=0.9, */*;q=0.1")
+		httpRequest.Header.Set("User-Agent", "freeside-research-fetcher/1")
+		if bearer != "" {
+			httpRequest.Header.Set("Authorization", "Bearer "+bearer)
+		}
+		return client.Do(httpRequest)
+	}
+	var response *http.Response
+	if credential != nil && credential.bearer != "" {
+		response, err = send(credential.bearer)
+		// A cached token GitHub no longer honours (revoked, a suspended
+		// installation the janitor hasn't seen, an exhausted rate limit)
+		// must not fail a fetch that would succeed without it, so the
+		// request is repeated once without credentials.
+		if err == nil && (response.StatusCode == http.StatusUnauthorized || response.StatusCode == http.StatusForbidden) {
+			_ = response.Body.Close()
+			credential.rejected = response.StatusCode
+			response, err = send("")
+		}
+	} else {
+		response, err = send("")
+	}
 	if err != nil {
 		if ctx.Err() != nil {
 			return ResearchArtifact{}, ctx.Err()
@@ -223,7 +279,8 @@ func (f *Fetcher) Fetch(
 		return ResearchArtifact{}, fmt.Errorf("fetch research %q final URL: %w", request.URL, err)
 	}
 	if response.StatusCode < 200 || response.StatusCode > 299 {
-		return ResearchArtifact{}, fmt.Errorf("%w: fetch research %q: HTTP %d", ErrResearchFetchFailed, request.URL, response.StatusCode)
+		return ResearchArtifact{}, fmt.Errorf("%w: fetch research %q: HTTP %d%s",
+			ErrResearchFetchFailed, request.URL, response.StatusCode, credential.explain())
 	}
 	limited := &io.LimitedReader{R: response.Body, N: maxBytes + 1}
 	body, err := io.ReadAll(limited)
@@ -352,6 +409,131 @@ func (f *Fetcher) recover(
 		return ResearchArtifact{}, false, fmt.Errorf("recover research %q final URL: %w", id, err)
 	}
 	return ResearchArtifact{Artifact: artifact, URL: envelope.URL, FinalURL: final.String()}, true, nil
+}
+
+// issueCredential is the outcome of authenticating one in-scope request:
+// the bearer value to send, or why the request goes without one. The
+// bearer value never enters an error; missing never holds it.
+type issueCredential struct {
+	bearer  string
+	missing string
+	// rejected is the status GitHub refused the bearer with, when the
+	// request was then repeated without it.
+	rejected int
+}
+
+// issueCredential mints the scope repository's issue-read token. A failure
+// leaves the request unauthenticated rather than failing it, so research on
+// a public repository still works where the read grant can't be minted; a
+// private repository then fails with the cause named.
+func (f *Fetcher) issueCredential(ctx context.Context, scope ManagedRepository) issueCredential {
+	if f.tokens == nil {
+		return issueCredential{missing: "no installation token source is composed"}
+	}
+	token, err := f.tokens.Token(ctx, scope.Repo)
+	if err != nil {
+		return issueCredential{missing: "the installation token could not be minted: " + err.Error()}
+	}
+	// The source resolves by owner/name; the binding that matters is the ID.
+	if token.RepositoryID != scope.RepositoryID {
+		return issueCredential{missing: fmt.Sprintf(
+			"the installation token is for repository %d, not the task's repository %d",
+			token.RepositoryID, scope.RepositoryID)}
+	}
+	value := token.Token.Reveal()
+	if value == "" {
+		return issueCredential{missing: "the installation token source returned an empty token"}
+	}
+	return issueCredential{bearer: value}
+}
+
+// explain names why an in-scope request failed; it is empty out of scope.
+func (c *issueCredential) explain() string {
+	switch {
+	case c == nil:
+		return ""
+	case c.rejected != 0:
+		return fmt.Sprintf(" without credentials, after GitHub refused the managed repository's "+
+			"read-only installation token with HTTP %d", c.rejected)
+	case c.bearer != "":
+		return " with the managed repository's read-only installation token " +
+			"(the issue is absent or the installation cannot read its issues)"
+	default:
+		return " without credentials for the managed repository's issue (" + c.missing + ")"
+	}
+}
+
+// managedIssueURL reports whether parsed addresses an issue, or a
+// sub-resource of one, of the scope's repository on the GitHub API, and
+// returns the repository-ID form to send. The token is bound to the ID, so
+// an owner/name path naming the scope's repository is rewritten to the ID
+// endpoint and a rename can never route the credential to another
+// repository. A path with an empty, dot, or percent-encoded segment is out
+// of scope, so the server can't resolve an in-scope spelling elsewhere, and
+// so is a query that isn't plain, so an authenticated request line carries
+// nothing the writer could use to reshape it.
+func managedIssueURL(parsed *url.URL, scope ManagedRepository) (*url.URL, bool) {
+	if scope.RepositoryID <= 0 || scope.Repo == "" || parsed.RawPath != "" || parsed.Opaque != "" ||
+		!strings.HasPrefix(parsed.Path, "/") || !plainQuery(parsed.RawQuery) {
+		return nil, false
+	}
+	if origin, err := canonicalOrigin(parsed); err != nil || origin != githubAPIOrigin {
+		return nil, false
+	}
+	segments := strings.Split(parsed.Path[1:], "/")
+	for _, segment := range segments {
+		if !plainPathSegment(segment) {
+			return nil, false
+		}
+	}
+	repositoryID := strconv.FormatInt(scope.RepositoryID, 10)
+	var issuePath []string
+	switch {
+	case len(segments) >= 4 && segments[0] == "repositories" && segments[1] == repositoryID:
+		issuePath = segments[2:]
+	case len(segments) >= 5 && segments[0] == "repos" && strings.EqualFold(segments[1]+"/"+segments[2], scope.Repo):
+		issuePath = segments[3:]
+	default:
+		return nil, false
+	}
+	if issuePath[0] != "issues" || !positiveDecimal(issuePath[1]) {
+		return nil, false
+	}
+	return &url.URL{
+		Scheme:   "https",
+		Host:     "api.github.com",
+		Path:     "/repositories/" + repositoryID + "/" + strings.Join(issuePath, "/"),
+		RawQuery: parsed.RawQuery,
+	}, true
+}
+
+func plainPathSegment(segment string) bool {
+	if segment == "" || segment == "." || segment == ".." {
+		return false
+	}
+	for _, r := range segment {
+		if (r < 'a' || r > 'z') && (r < 'A' || r > 'Z') && (r < '0' || r > '9') && r != '-' && r != '_' && r != '.' {
+			return false
+		}
+	}
+	return true
+}
+
+// plainQuery accepts a query of unreserved characters, separators, and
+// well-formed percent escapes only.
+func plainQuery(query string) bool {
+	for _, r := range query {
+		if (r < 'a' || r > 'z') && (r < 'A' || r > 'Z') && (r < '0' || r > '9') && !strings.ContainsRune("-._~=&+,%", r) {
+			return false
+		}
+	}
+	_, err := url.ParseQuery(query)
+	return err == nil
+}
+
+func positiveDecimal(segment string) bool {
+	value, err := strconv.ParseInt(segment, 10, 64)
+	return err == nil && value > 0 && strconv.FormatInt(value, 10) == segment
 }
 
 func maxResearchEnvelopeBytes(maxBytes int64) int64 {

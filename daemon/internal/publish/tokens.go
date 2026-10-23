@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"slices"
 	"strings"
 	"sync"
@@ -218,6 +219,56 @@ func (s *FollowUpFilingTokenSource) Token(ctx context.Context, repo string) (Ins
 	}
 	tok, err := s.minter.mintResolved(ctx, binding, parsed, repositoryID,
 		FollowUpFilingPermissions, followUpFilingPermissionScopes)
+	if err != nil {
+		return InstallationToken{}, err
+	}
+	s.tokens[key] = tok
+	return tok, nil
+}
+
+// IssueReadTokenSource caches only the read-only issue grant the research
+// fetcher authenticates with, separately from publication and filing
+// credentials. Each read revalidates trust and the App binding.
+type IssueReadTokenSource struct {
+	minter *Minter
+	now    func() time.Time
+	mu     sync.Mutex
+	tokens map[tokenCacheKey]InstallationToken
+}
+
+func NewIssueReadTokenSource(m *Minter, now func() time.Time) *IssueReadTokenSource {
+	return &IssueReadTokenSource{minter: m, now: now, tokens: map[tokenCacheKey]InstallationToken{}}
+}
+
+// Format renders the source without its cache. fmt prints values reached
+// through an unexported field raw, without calling Secret's Formatter, so
+// a default rendering of the cache would print every cached token.
+func (*IssueReadTokenSource) Format(f fmt.State, _ rune) {
+	io.WriteString(f, "publish.IssueReadTokenSource") //nolint:errcheck,gosec // fmt.State writes cannot be usefully handled
+}
+
+// Token resolves the current trusted installation before looking in the cache,
+// so a registration change cannot be hidden by an unexpired read token.
+func (s *IssueReadTokenSource) Token(ctx context.Context, repo string) (InstallationToken, error) {
+	if s == nil || s.minter == nil || s.now == nil {
+		return InstallationToken{}, errors.New("issue read token: nil dependency")
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	binding, parsed, repositoryID, err := s.minter.resolveTrusted(ctx, repo)
+	if err != nil {
+		return InstallationToken{}, err
+	}
+	key := tokenCacheKey{
+		registrationID: binding.RegistrationID,
+		installationID: binding.InstallationID,
+		repositoryID:   repositoryID,
+	}
+	if tok, ok := s.tokens[key]; ok && tok.ExpiresAt.After(s.now().Add(tokenExpirySkew)) {
+		return tok, nil
+	}
+	tok, err := s.minter.mintResolved(ctx, binding, parsed, repositoryID,
+		IssueReadPermissions, issueReadPermissionScopes)
 	if err != nil {
 		return InstallationToken{}, err
 	}

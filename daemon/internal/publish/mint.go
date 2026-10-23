@@ -50,6 +50,16 @@ var followUpFilingPermissionScopes = map[string]string{
 	"metadata": FollowUpFilingPermissions.Metadata,
 }
 
+// IssueReadPermissions grants only reading one repository's issues, so the
+// specification research fetch can read a private source issue (#748)
+// without holding a credential that can write anything.
+var IssueReadPermissions = Permissions{Issues: "read", Metadata: "read"}
+
+var issueReadPermissionScopes = map[string]string{
+	"issues":   IssueReadPermissions.Issues,
+	"metadata": IssueReadPermissions.Metadata,
+}
+
 // RegistrationPermissions declares all capabilities the App may need; each
 // token source narrows its mint to the effect it performs.
 var RegistrationPermissions = func() Permissions {

@@ -141,9 +141,13 @@ func (e *Engine) nameTaskIfUnnamed(ctx context.Context, run domain.Run) error {
 		input.SourceText = string(body)
 	case domain.SpecificationSourceIssueSubject:
 		var resolved domain.ResolvedPolicy
+		var scope specify.ManagedRepository
 		if err := e.store.Read(ctx, func(tx *store.ReadTx) error {
 			var err error
-			resolved, err = tx.GetResolvedPolicy(ctx, run.ID)
+			if resolved, err = tx.GetResolvedPolicy(ctx, run.ID); err != nil {
+				return err
+			}
+			scope, err = researchScope(ctx, tx, run.ProjectID)
 			return err
 		}); err != nil {
 			return err
@@ -158,7 +162,7 @@ func (e *Engine) nameTaskIfUnnamed(ctx context.Context, run domain.Run) error {
 			specify.FetchRequest{
 				URL:     fmt.Sprintf("https://api.github.com/repositories/%d/issues/%d", issue.RepositoryID, issue.IssueNumber),
 				Purpose: "Name the task from the issue's requested outcome",
-			}, settings.ResearchAllowlist, settings.ResearchMaxBytes)
+			}, scope, settings.ResearchAllowlist, settings.ResearchMaxBytes)
 		if err != nil {
 			return err
 		}

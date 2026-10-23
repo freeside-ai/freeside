@@ -46,7 +46,7 @@ func TestFetcherAcceptsExactProductionInputBoundary(t *testing.T) {
 	}
 	artifact, err := fetcher.Fetch(t.Context(), "inv-exact-boundary", 1,
 		FetchRequest{URL: rawURL, Purpose: "test"},
-		[]string{"https://docs.example"}, int64(len(body)))
+		ManagedRepository{}, []string{"https://docs.example"}, int64(len(body)))
 	if err != nil {
 		t.Fatal(err)
 	}

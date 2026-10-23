@@ -25,6 +25,7 @@ import (
 	"github.com/freeside-ai/freeside/daemon/internal/exec/claude"
 	execfake "github.com/freeside-ai/freeside/daemon/internal/exec/fake"
 	"github.com/freeside-ai/freeside/daemon/internal/export"
+	"github.com/freeside-ai/freeside/daemon/internal/publish"
 	"github.com/freeside-ai/freeside/daemon/internal/signet"
 	"github.com/freeside-ai/freeside/daemon/internal/specify"
 	specifyfake "github.com/freeside-ai/freeside/daemon/internal/specify/fake"
@@ -225,9 +226,18 @@ type specificationFixture struct {
 	fetchCalls           *atomic.Int64
 	validationCalls      *atomic.Int64
 	validationPrompts    *deliveryValidationCapture
+	// researchTransport and issueTokens replace the default research
+	// transport and the fetcher's absent token source when set.
+	researchTransport http.RoundTripper
+	issueTokens       publish.TokenSource
 }
 
 func newSpecificationFixture(t *testing.T, specApproval bool, maxIterations int) specificationFixture {
+	t.Helper()
+	return newSpecificationFixtureAllowing(t, specApproval, maxIterations, "https://docs.example")
+}
+
+func newSpecificationFixtureAllowing(t *testing.T, specApproval bool, maxIterations int, researchAllowlist string) specificationFixture {
 	t.Helper()
 	root := t.TempDir()
 	dbPath := filepath.Join(root, "state.db")
@@ -266,7 +276,7 @@ func newSpecificationFixture(t *testing.T, specApproval bool, maxIterations int)
 		{Key: specify.PolicySpecApproval, Value: boolString(specApproval), Provenance: provenance},
 		{Key: specify.PolicyMaxIterations, Value: intString(maxIterations), Provenance: provenance},
 		{Key: specify.PolicyStageActiveTime, Value: "1m", Provenance: provenance},
-		{Key: specify.PolicyResearchAllowlist, Value: "https://docs.example", Provenance: provenance},
+		{Key: specify.PolicyResearchAllowlist, Value: researchAllowlist, Provenance: provenance},
 		{Key: specify.PolicyResearchMaxBytes, Value: "1024", Provenance: provenance},
 	})
 	if err != nil {
@@ -373,7 +383,7 @@ func (f specificationFixture) newEngineWithTransitionHook(
 	hook DurableTransitionHook,
 ) *Engine {
 	t.Helper()
-	transport := specificationRoundTripFunc(func(request *http.Request) (*http.Response, error) {
+	var transport http.RoundTripper = specificationRoundTripFunc(func(request *http.Request) (*http.Response, error) {
 		f.fetchCalls.Add(1)
 		return &http.Response{
 			StatusCode: http.StatusOK,
@@ -381,7 +391,10 @@ func (f specificationFixture) newEngineWithTransitionHook(
 			Body:       io.NopCloser(strings.NewReader("authoritative research")), Request: request,
 		}, nil
 	})
-	fetcher, err := specify.NewFetcher(f.store, f.blobs, transport)
+	if f.researchTransport != nil {
+		transport = f.researchTransport
+	}
+	fetcher, err := specify.NewFetcherWithIssueTokens(f.store, f.blobs, transport, f.issueTokens)
 	if err != nil {
 		t.Fatal(err)
 	}

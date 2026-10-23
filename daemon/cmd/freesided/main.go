@@ -1151,7 +1151,7 @@ func run(parent context.Context, stop func(), cfg config) (_ *daemon, err error)
 			return nil, fmt.Errorf("compose inference boundary: %w", err)
 		}
 		engineOptions = append(engineOptions, engine.WithInference(judgments))
-		researchFetcher, err := specify.NewFetcher(st, blobs, nil)
+		researchFetcher, err := specify.NewFetcherWithIssueTokens(st, blobs, nil, claudeWiring.issueReadTokens)
 		if err != nil {
 			return nil, fmt.Errorf("compose research fetcher: %w", err)
 		}
