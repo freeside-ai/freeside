@@ -92,6 +92,10 @@ type InstallationIntentRequest struct {
 	InstallationID int64
 	RepositoryID   int64
 	ExpiresAt      time.Time
+	// Replace is the caller's explicit consent to replace a recorded intent,
+	// live or expired. Replacing bumps DurableIntentRevision, which changes
+	// the approval digest an operator may already have reviewed.
+	Replace bool
 }
 
 // BeginInstallation records the bounded selected-repository exception before
@@ -122,9 +126,11 @@ func BeginInstallation(
 		if err != nil {
 			return err
 		}
-		if entry.Pending != nil && entry.Pending.ExpiresAt.After(currentTime) {
+		// An expired intent is refused too: the operator may hold a digest
+		// reviewed against it, and only an explicit replacement may move it.
+		if entry.Pending != nil && !req.Replace {
 			return errors.New(
-				"begin installation: registration already has a pending intent; use --resume")
+				"begin installation: registration already has a pending intent; pass -resume to continue it or replace it explicitly")
 		}
 		current := []int64{}
 		for _, binding := range entry.TrustedInstallations {

@@ -1718,7 +1718,11 @@ daemon first; onboarding refuses a database it holds. It:
    refusing a second App binding that runtime resolution would find ambiguous;
 2. records a bounded, non-authorizing pending installation or
    repository-expansion envelope, returns the canonical native GitHub
-   installation route, and resumes the same envelope with `--resume`;
+   installation route, and resumes the same envelope with `-resume`. The
+   envelope stays recorded until approval promotes it, so every later call
+   until the result is `complete`, including the `-approve` call, passes
+   `-resume`; a call without it is refused, as is `-resume` once the envelope
+   has expired;
 3. mints a pending-gated, repository-scoped read-only token, uses it for
    private-repository identity and clone requests, audits the live `-base-ref`,
    requires its resolved commit to equal `-commit`, and retains that exact
@@ -1739,8 +1743,11 @@ or may be supplied explicitly with `-recipe`. Run the command once without
 `-approve`, inspect the complete JSON review, then repeat it with the returned
 approval digest. A changed workflow head or installation coordinate produces a
 different review, as does replacement of the bounded pending intent, and
-invalidates the earlier approval. That is the one Freeside manual review; a
-GitHub organization approval remains a separate native prerequisite.
+invalidates the earlier approval. Only `-replace-intent` replaces the intent,
+live or expired, and it takes no `-resume` or `-approve`: it records a new
+intent revision and returns `installation_pending`, so the next review carries
+a new approval digest. That is the one Freeside manual review; a GitHub
+organization approval remains a separate native prerequisite.
 
 **Each project image bakes one toolchain.** `-go-module-dir <dir>`, on both
 `freesided onboard` and `freeside-project-image`, declares a
@@ -1813,10 +1820,10 @@ decision and the rejected options are in
 
 If the installation was terminally quarantined, start a fresh native
 installation with `-recover-installation <quarantined-id> -installation-id 0`
-and the ordinary onboarding arguments. Do not combine recovery with `-resume`
-or `-approve`. Recovery retains the prior authority in an owner-only
-`installation-recovery-<app-id>-<old-installation-id>-<revision>.json` file,
-then replaces only that withdrawn binding and its matching pending request.
+and the ordinary onboarding arguments. Do not combine recovery with `-resume`,
+`-replace-intent`, or `-approve`. Recovery retains the prior authority in an
+owner-only `installation-recovery-<app-id>-<old-installation-id>-<revision>.json`
+file, then replaces only that withdrawn binding and its matching pending request.
 The quarantine journal remains unchanged, and the old installation can never
 satisfy the new request. Select only the requested repository when installing;
 other repositories can be onboarded through the ordinary expansion flow later.

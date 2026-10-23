@@ -49,6 +49,7 @@ type onboardConfig struct {
 	InstallationID        int64
 	RecoverInstallationID int64
 	Resume                bool
+	ReplaceIntent         bool
 	InstallWait           time.Duration
 	CredentialsDir        string
 	Commit                string
@@ -189,6 +190,9 @@ func runOnboardCommand(
 	if trusted != nil && cfg.RecoverInstallationID > 0 {
 		return errors.New("installation recovery: repository already has a current trusted installation")
 	}
+	if trusted != nil && cfg.ReplaceIntent {
+		return errors.New("repository is already trusted; -replace-intent applies only while it awaits installation")
+	}
 	if trusted == nil {
 		if cfg.Account == "" || cfg.AccountID <= 0 || cfg.InstallationID < 0 {
 			return errors.New(
@@ -202,6 +206,19 @@ func runOnboardCommand(
 			InstallationID: cfg.InstallationID,
 			RepositoryID:   cfg.RepositoryID,
 			ExpiresAt:      time.Now().UTC().Add(cfg.InstallWait),
+			Replace:        cfg.ReplaceIntent,
+		}
+		var snapshot publish.InstallationAuthority
+		if cfg.RecoverInstallationID == 0 {
+			// The gate runs before -resume starts the janitor, so a refused
+			// call leaves nothing running.
+			snapshot, err = authority.InstallationAuthority(ctx, cfg.RegistrationID)
+			if err != nil {
+				return err
+			}
+			if err := pendingIntentGate(snapshot.Pending, cfg.Resume, cfg.ReplaceIntent, time.Now().UTC()); err != nil {
+				return err
+			}
 		}
 		if !cfg.Resume {
 			installURL, err := installationURLForRegistration(
@@ -214,10 +231,6 @@ func runOnboardCommand(
 			if cfg.RecoverInstallationID > 0 {
 				pending, err = operations.RecoverInstallation(ctx, authority, cfg.RecoverInstallationID, intent, time.Now)
 			} else {
-				snapshot, snapshotErr := authority.InstallationAuthority(ctx, cfg.RegistrationID)
-				if snapshotErr != nil {
-					return snapshotErr
-				}
 				if slices.Contains(snapshot.QuarantinedInstallationIDs, cfg.InstallationID) {
 					return errors.New("installation is quarantined; use -recover-installation with -installation-id 0 for a fresh native installation")
 				}
@@ -241,9 +254,10 @@ func runOnboardCommand(
 				Status          string                        `json:"status"`
 				Pending         publish.PendingEnvelopeRecord `json:"pending"`
 				InstallationURL string                        `json:"installation_url"`
+				Next            string                        `json:"next"`
 			}{
 				Status: "installation_pending", Pending: pending,
-				InstallationURL: installURL,
+				InstallationURL: installURL, Next: installationPendingNext,
 			})
 		}
 	}
@@ -348,6 +362,48 @@ func runOnboardCommand(
 	)
 }
 
+// installationPendingNext tells the operator that the intent stays recorded
+// until approval promotes it, so every call until then takes the intent path
+// and must say -resume.
+const installationPendingNext = "Complete GitHub's installation at installation_url, " +
+	"then rerun this command with the same arguments plus -resume, leaving out " +
+	"-recover-installation and -replace-intent. " +
+	"Every call until the status is complete, including the -approve call, needs -resume; " +
+	"a call without it is refused, and -replace-intent opens a new intent with a new approval digest."
+
+// pendingIntentGate decides whether a call may proceed against the
+// registration's recorded intent. A call without -resume never replaces an
+// intent silently: replacing bumps the durable revision and so changes the
+// approval digest the operator may already have reviewed. An expired intent
+// can't be resumed (its poll would expire at once), only replaced.
+func pendingIntentGate(
+	pending *publish.PendingInstallationEnvelope, resume, replace bool, now time.Time,
+) error {
+	if pending == nil {
+		if replace {
+			return errors.New("no pending installation intent to replace; run without -replace-intent")
+		}
+		return nil
+	}
+	expired := !pending.ExpiresAt.After(now)
+	if expired && !replace {
+		return fmt.Errorf(
+			"pending installation intent revision %d for repositories %v expired at %s; "+
+				"pass -replace-intent to open a new one, which changes the approval digest",
+			pending.DurableIntentRevision, pending.ExpectedRepositoryIDs,
+			pending.ExpiresAt.UTC().Format(time.RFC3339))
+	}
+	if !resume && !replace {
+		return fmt.Errorf(
+			"registration already has a pending installation intent "+
+				"(revision %d for repositories %v, expires %s); "+
+				"pass -resume to continue it, or -replace-intent to open a new one, which changes the approval digest",
+			pending.DurableIntentRevision, pending.ExpectedRepositoryIDs,
+			pending.ExpiresAt.UTC().Format(time.RFC3339))
+	}
+	return nil
+}
+
 func configureOnboardUsage(flags *flag.FlagSet) {
 	flags.Usage = func() {
 		_, _ = fmt.Fprintln(flags.Output(), "Usage: freesided onboard <owner/name> [flags]")
@@ -372,6 +428,8 @@ func parseOnboardConfig(args []string, output io.Writer) (onboardConfig, error) 
 	flags.Int64Var(&cfg.InstallationID, "installation-id", 0, "selected installation ID; zero before GitHub assigns one")
 	flags.Int64Var(&cfg.RecoverInstallationID, "recover-installation", 0, "quarantined installation ID to replace through a fresh native installation")
 	flags.BoolVar(&cfg.Resume, "resume", false, "resume the existing bounded installation intent")
+	flags.BoolVar(&cfg.ReplaceIntent, "replace-intent", false,
+		"open a new installation intent over the recorded one; the approval digest changes")
 	flags.DurationVar(&cfg.InstallWait, "install-wait", 10*time.Minute, "maximum wait for native installation approval")
 	flags.StringVar(&cfg.CredentialsDir, "credentials-dir", "",
 		"GitHub App credentials directory (defaults beside the state directory)")
@@ -453,8 +511,14 @@ func parseOnboardConfig(args []string, output io.Writer) (onboardConfig, error) 
 	if cfg.InstallWait <= 0 {
 		return onboardConfig{}, errors.New("-install-wait must be positive")
 	}
-	if cfg.RecoverInstallationID < 0 || (cfg.RecoverInstallationID > 0 && (cfg.InstallationID != 0 || cfg.Resume || cfg.Approval != "")) {
-		return onboardConfig{}, errors.New("-recover-installation requires a positive quarantined ID, -installation-id 0, and no -resume or -approve")
+	if cfg.RecoverInstallationID < 0 || (cfg.RecoverInstallationID > 0 &&
+		(cfg.InstallationID != 0 || cfg.Resume || cfg.ReplaceIntent || cfg.Approval != "")) {
+		return onboardConfig{}, errors.New(
+			"-recover-installation requires a positive quarantined ID, -installation-id 0, and no -resume, -replace-intent, or -approve")
+	}
+	if cfg.ReplaceIntent && (cfg.Resume || cfg.Approval != "") {
+		return onboardConfig{}, errors.New(
+			"-replace-intent opens a new intent with a new approval digest; it takes no -resume or -approve")
 	}
 	if cfg.RecipePath == "" && cfg.SourceDir == "" {
 		return onboardConfig{}, errors.New("-recipe or -source is required")
