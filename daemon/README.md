@@ -2173,6 +2173,8 @@ error, abandons the lease instead, so the next start recovers it.
 adoption's `agent-tree.patch`,
 `auth-adopt.json`, and `auth-adopt.log`. A passing manifest is also kept by
 content digest under `<state-root>/production-evidence/composition/`.
+`lineup-probe.json` in the same directory is written only by `freesided
+probe-lineup` (below); the deputy and preflight never read it.
 
 **The launch manifest.** The deputy composes once per start, so its manifest
 (`freeside-production-composition-v2`) has no run identity; it binds the
@@ -2204,6 +2206,70 @@ operator neither stops nor restores the `prod` daemon around a start. Its
 composition preflight, run under the lease, fails `prod_execution` unless
 `prod` is not running or reports `disabled` on its control socket, and the
 installed build must serve that read (#2080).
+
+### Probe The Lineup Before A Run
+
+`freesided probe-lineup -root <state-root>` checks, before a run spends a
+task on it, that each model and effort the deputy settings name is served
+by the CLI build that will launch it (#2208). A lineup can name a model the
+pinned CLI refuses: a Claude Code build older than the model needs, or a
+Codex model a ChatGPT-account login can't use. Without the probe that
+refusal surfaces only after a writer or reviewer has launched.
+
+```sh
+freesided probe-lineup -root <state-root> [-rig-token-file <state-root>/daemon/rig-acquisition.json]
+```
+
+**What it runs.** It reads `<state-root>/daemon/settings.json` and makes one
+minimal call per distinct launch: one turn on a fixed one-line prompt that
+asks for a one-word answer, with Claude's tools off and Codex read-only:
+
+- **Writers** (specifier, implementer, remediator) run Claude Code on
+  `images.agent`, with the setup token read once from
+  `agent_tree.auth_volume` through `images.exporter`.
+- **The reviewer** runs its harness on `images.review`, with the credential
+  derived from `review.auth_snapshot` as review launch derives it. A Codex
+  access token that expires within ten minutes is refused rather than
+  refreshed; run `freesided renew-codex` first.
+- **Judgment roles**, when `judgment` is set, run the pinned host binary
+  `judgment.claude_bin` with the same token.
+
+Roles that launch the same surface, model, and effort share one call.
+Each image call runs in its own labelled container on its own egress
+network behind the provider allowlist, with no mounts. The credential is
+copied in and the container deletes it before it stops; an export that
+still holds it is refused. Every container and network is removed either
+way. The command refuses while a daemon holds the root's database, and
+`-rig-token-file` binds its runtime objects into a held rig.
+
+**What it writes.** `<state-root>/daemon/lineup-probe.json`
+(`freeside-lineup-probe-v1`, mode `0600`, replaced atomically), on a pass
+and on a failure. It records the settings digest, the daemon build, and,
+per call, the roles, surface, image, model, requested and native effort,
+the pinned and observed CLI builds, the verdict (`pass`, `refused`, or
+`error` for a call that could not run), the CLI's refusal, and the usage
+the CLI reported. The same JSON goes to stdout. A mismatch between the
+pinned and observed build is recorded but does not fail the probe. Nothing
+the composition manifest reads changes.
+
+**Exit status.** 0 when every call passed. Otherwise 1, with one stderr
+line per failed call naming its roles, model, effort, and CLI build, and
+the CLI's own words.
+
+**Cost.** Each call is one turn on its role's account: a fixed prompt of a
+few tokens plus whatever context the CLI adds, and a one-word answer plus
+any thinking at the probed effort. Per-call input and output tokens, and Claude's reported
+cost, are in each call's `usage`. The per-role cost has not been measured
+on a real lineup yet; `TestLiveProbeLineup` (opt-in, below) logs it.
+
+**Live test.** `FREESIDE_WARD_LIVE_TEST=1 go test ./cmd/freesided -run
+TestLiveProbeLineup -v` runs one probe per shape and logs its usage. It
+needs Apple container running, `CLAUDE_CODE_OAUTH_TOKEN`,
+`FREESIDE_PROBE_LINEUP_CLAUDE_MODEL`, `FREESIDE_WARD_CLAUDE_AGENT_IMAGE`,
+`FREESIDE_WARD_CODEX_AGENT_IMAGE`, `FREESIDE_WARD_CODEX_REVIEW_MODEL`,
+`FREESIDE_WARD_CODEX_REVIEW_AUTH` (a subscription `auth.json` snapshot in
+an owner-only directory), `FREESIDE_JUDGMENT_CLI`, and
+`FREESIDE_JUDGMENT_CLI_SHA256`. A missing input fails the opted-in run.
 
 ### Complete A Rebased Merge
 
