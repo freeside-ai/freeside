@@ -1,13 +1,17 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"crypto/sha256"
 	"errors"
+	"flag"
 	"io"
 	"os"
 	"path/filepath"
+	"reflect"
 	"slices"
+	"strings"
 	"testing"
 	"time"
 
@@ -134,6 +138,72 @@ func TestParseOnboardConfigExternalReviewers(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestOnboardUsage(t *testing.T) {
+	for _, args := range [][]string{{"-h"}, {"example/repo", "-h"}, {"-db", "/tmp/freeside.db", "-h"}} {
+		t.Run(strings.Join(args, " "), func(t *testing.T) {
+			var output bytes.Buffer
+			err := runOnboardCommand(context.Background(), args, io.Discard, &output)
+			if !errors.Is(err, flag.ErrHelp) {
+				t.Fatalf("err = %v, want flag.ErrHelp", err)
+			}
+			for _, want := range []string{"Usage: freesided onboard <owner/name> [flags]", "-db"} {
+				if !strings.Contains(output.String(), want) {
+					t.Fatalf("usage missing %q:\n%s", want, output.String())
+				}
+			}
+		})
+	}
+}
+
+func TestParseOnboardConfigRepositoryPosition(t *testing.T) {
+	flagArgs := []string{
+		"-db", "/tmp/freeside.db",
+		"-state-dir", "/tmp/freeside-state",
+		"-registration-id", "11",
+		"-repository-id", "44",
+		"-commit", "0123456789012345678901234567890123456789",
+		"-base-ref", "main",
+		"-base-image", "example.invalid/agent@sha256:test",
+		"-base-build-ref", "local/agent:test",
+		"-review-config-digest", "sha256:review",
+		"-recipe", "/tmp/verify.json",
+	}
+	t.Run("flags first matches repository first", func(t *testing.T) {
+		repositoryFirst, err := parseOnboardConfig(append([]string{"example/repo"}, flagArgs...), io.Discard)
+		if err != nil {
+			t.Fatal(err)
+		}
+		flagsFirst, err := parseOnboardConfig(append(slices.Clone(flagArgs), "example/repo"), io.Discard)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if flagsFirst.Repository != "example/repo" || !reflect.DeepEqual(flagsFirst, repositoryFirst) {
+			t.Fatalf("flags-first config = %+v, want %+v", flagsFirst, repositoryFirst)
+		}
+	})
+	for _, tt := range []struct {
+		name string
+		args []string
+	}{
+		{"no arguments", nil},
+		{"flags without a repository", flagArgs},
+	} {
+		t.Run("requires repository with "+tt.name, func(t *testing.T) {
+			_, err := parseOnboardConfig(tt.args, io.Discard)
+			if err == nil || !strings.Contains(err.Error(), "repository owner/name is required") {
+				t.Fatalf("err = %v, want the repository-required error", err)
+			}
+		})
+	}
+	t.Run("rejects a repository between flags", func(t *testing.T) {
+		args := append(slices.Clone(flagArgs[:2]), "example/repo")
+		_, err := parseOnboardConfig(append(args, flagArgs[2:]...), io.Discard)
+		if err == nil || !strings.Contains(err.Error(), "unexpected positional arguments") {
+			t.Fatalf("err = %v, want unexpected positional arguments", err)
+		}
+	})
 }
 
 func TestOnboardStoreCanPassSubmitTopicKeyGate(t *testing.T) {
