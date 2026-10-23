@@ -63,6 +63,12 @@
 # and DAEMON_TEST_EVIDENCE_DIR. Indices are one-based; the rest shard uses 1/1.
 # Shards disable test-result caching and retain full execution evidence.
 #
+# Convergence runs:
+#   CONVERGENCE_ALL_TESTS  non-empty runs every Swift test suite in the
+#                          convergence pass (run-convergence.sh --all-tests),
+#                          not only FreesideConvergenceTests; CI sets it when
+#                          the app component is selected
+#
 # The daemon's opt-in live suites are skipped by `go test` unless their
 # environment is set (FREESIDE_PUBLISH_LIVE_TEST, FREESIDE_WARD_LIVE_TEST,
 # FREESIDE_CLAUDE_TOKEN_LIVE_TEST, FREESIDE_CODEX_ENROLLMENT_LIVE_TEST,
@@ -387,7 +393,9 @@ scripts_trackercollect() {
 
 # --- convergence -----------------------------------------------------------
 
-convergence_run() { in_dir "$ROOT" bash scripts/run-convergence.sh; }
+convergence_run() {
+  in_dir "$ROOT" bash scripts/run-convergence.sh ${CONVERGENCE_ALL_TESTS:+--all-tests}
+}
 
 # --- docs ------------------------------------------------------------------
 

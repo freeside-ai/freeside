@@ -199,17 +199,20 @@ jobs:
           path: ${{ steps.go-cache.outputs.build }}
           key: ${{ steps.go-build-cache.outputs.cache-primary-key }}
 
+  # The org's plan runs at most five macOS jobs at once, across every
+  # workflow, so each macOS job a PR requests is wait time for every other
+  # run (#2248). A PR runs only the rest shard here: it holds the darwin-
+  # specific code, while the integration package's macOS delta is timing
+  # and filesystem behaviour, which `macos-main` covers after the merge.
   macos-tests:
     name: macos (test, ${{ matrix.kind }} ${{ matrix.index }}/${{ matrix.count }})
     runs-on: macos-26
+    if: github.event_name != 'push'
     strategy:
       fail-fast: false
       matrix:
         include:
           - {kind: rest, index: 1, count: 1}
-          - {kind: integration, index: 1, count: 3}
-          - {kind: integration, index: 2, count: 3}
-          - {kind: integration, index: 3, count: 3}
     steps:
       - uses: actions/checkout@v4
         with:
@@ -254,7 +257,6 @@ jobs:
           python3 scripts/daemon-test-shards.py metadata --evidence-dir evidence
           du -sk "$(cd daemon && go env GOCACHE)" "$(cd daemon && go env GOMODCACHE)" >evidence/cache-before.txt
       - name: build (scripts/check.sh)
-        if: matrix.kind == 'rest'
         run: bash scripts/check.sh daemon build
       - name: test (scripts/check.sh)
         env:
@@ -276,8 +278,103 @@ jobs:
           name: daemon-macos-${{ matrix.kind }}-${{ matrix.index }}-${{ github.run_id }}-${{ github.run_attempt }}
           path: evidence/
           if-no-files-found: error
+
+  # The one macOS job a push to main requests. The tree was tested on its
+  # PR under the up-to-date rule, so this job exists for what PRs no longer
+  # run on macOS: it compiles every test binary to warm the build cache the
+  # PR rest shard restores, runs the three integration shards in sequence
+  # under the unchanged per-shard timeout, and saves that cache. Its
+  # evidence is verified by the `macos` gate like any shard's.
+  macos-main:
+    name: macos (test, integration 1-3/3)
+    runs-on: macos-26
+    if: github.event_name == 'push'
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 2
+      - uses: actions/setup-go@v5
+        id: go
+        with:
+          go-version-file: daemon/go.mod
+          cache: false
+      - name: Resolve Go cache paths
+        id: go-cache
+        working-directory: daemon
+        run: |
+          echo "build=$(go env GOCACHE)" >>"$GITHUB_OUTPUT"
+          echo "mod=$(go env GOMODCACHE)" >>"$GITHUB_OUTPUT"
+          mkdir -p "$(go env GOCACHE)" "$(go env GOMODCACHE)"
+      - name: Cache Go modules
+        uses: actions/cache@v4
+        with:
+          path: ${{ steps.go-cache.outputs.mod }}
+          key: go-mod-${{ runner.os }}-${{ hashFiles('daemon/go.sum') }}
+          restore-keys: go-mod-${{ runner.os }}-
+      - name: Cache Go build output
+        id: go-build-cache
+        uses: actions/cache/restore@v4
+        with:
+          path: ${{ steps.go-cache.outputs.build }}
+          # One macOS namespace, the rest shard's, holds every test binary
+          # since this job compiles them all; the PR rest shard and the
+          # convergence job restore it. The integration namespace and the
+          # old monolithic cache remain migration sources.
+          key: daemon-build-v2-${{ runner.os }}-${{ runner.arch }}-${{ steps.go.outputs.go-version }}-rest-${{ hashFiles('daemon/go.sum') }}-${{ github.sha }}
+          restore-keys: |
+            daemon-build-v2-${{ runner.os }}-${{ runner.arch }}-${{ steps.go.outputs.go-version }}-rest-${{ hashFiles('daemon/go.sum') }}-
+            daemon-build-v2-${{ runner.os }}-${{ runner.arch }}-${{ steps.go.outputs.go-version }}-integration-${{ hashFiles('daemon/go.sum') }}-
+            go-build-${{ runner.os }}-macos-${{ hashFiles('daemon/go.sum') }}-
+      - name: Record test identity and cache conditions
+        env:
+          CACHE_HIT: ${{ steps.go-build-cache.outputs.cache-hit }}
+          CACHE_KEY: ${{ steps.go-build-cache.outputs.cache-matched-key }}
+        run: |
+          for index in 1 2 3; do
+            python3 scripts/daemon-test-shards.py metadata --evidence-dir "evidence/integration-$index"
+          done
+          du -sk "$(cd daemon && go env GOCACHE)" "$(cd daemon && go env GOMODCACHE)" >evidence/cache-before.txt
+      - name: Compile every test binary
+        working-directory: daemon
+        run: go test -count=1 -run '^$' ./...
+      - name: test, integration 1/3 (scripts/check.sh)
+        env:
+          DAEMON_TEST_SHARD_KIND: integration
+          DAEMON_TEST_SHARD_INDEX: 1
+          DAEMON_TEST_SHARD_COUNT: 3
+          DAEMON_TEST_INTEGRATION_SHARDS: 3
+          DAEMON_TEST_EVIDENCE_DIR: ${{ github.workspace }}/evidence/integration-1
+        run: bash scripts/check.sh daemon test
+      - name: test, integration 2/3 (scripts/check.sh)
+        env:
+          DAEMON_TEST_SHARD_KIND: integration
+          DAEMON_TEST_SHARD_INDEX: 2
+          DAEMON_TEST_SHARD_COUNT: 3
+          DAEMON_TEST_INTEGRATION_SHARDS: 3
+          DAEMON_TEST_EVIDENCE_DIR: ${{ github.workspace }}/evidence/integration-2
+        run: bash scripts/check.sh daemon test
+      - name: test, integration 3/3 (scripts/check.sh)
+        env:
+          DAEMON_TEST_SHARD_KIND: integration
+          DAEMON_TEST_SHARD_INDEX: 3
+          DAEMON_TEST_SHARD_COUNT: 3
+          DAEMON_TEST_INTEGRATION_SHARDS: 3
+          DAEMON_TEST_EVIDENCE_DIR: ${{ github.workspace }}/evidence/integration-3
+        run: bash scripts/check.sh daemon test
+      - name: Record cache size after tests
+        if: always()
+        run: |
+          mkdir -p evidence
+          du -sk "$(cd daemon && go env GOCACHE)" "$(cd daemon && go env GOMODCACHE)" >evidence/cache-after.txt
+      - name: Upload test evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: daemon-macos-integration-${{ github.run_id }}-${{ github.run_attempt }}
+          path: evidence/
+          if-no-files-found: error
       - name: Save Go build output
-        if: github.event_name == 'push' && matrix.index == 1
+        if: github.event_name == 'push'
         uses: actions/cache/save@v4
         with:
           path: ${{ steps.go-cache.outputs.build }}
@@ -304,23 +401,29 @@ jobs:
       - name: Verify full default coverage
         run: python3 scripts/daemon-test-shards.py verify evidence/*/execution.json
 
+  # Same gate name on both events; which child must run, which must be
+  # skipped, and which shard set the evidence must cover follow the event.
   macos:
     name: macos (build, test)
     runs-on: ubuntu-latest
     if: always()
-    needs: [macos-tests]
+    needs: [macos-tests, macos-main]
     steps:
       - uses: actions/checkout@v4
-      - name: Require every child to succeed
+      - name: Require this event's child to succeed and the other's to skip
         env:
           NEEDS: ${{ toJSON(needs) }}
-        run: python3 scripts/daemon-test-shards.py gate --needs "$NEEDS" --expected macos-tests
+          EXPECTED: ${{ github.event_name == 'push' && 'macos-main' || 'macos-tests' }}
+          SKIPPED: ${{ github.event_name == 'push' && 'macos-tests' || 'macos-main' }}
+        run: python3 scripts/daemon-test-shards.py gate --needs "$NEEDS" --expected "$EXPECTED" --skipped "$SKIPPED"
       # Every attempt of this run: a failed-jobs rerun leaves the passed
       # shards' evidence in earlier attempts, and verify counts each shard's
-      # latest attempt.
+      # latest attempt. The push job nests its three shards in one artifact.
       - uses: actions/download-artifact@v4
         with:
           pattern: daemon-macos-*-${{ github.run_id }}-*
           path: evidence
-      - name: Verify full default coverage
-        run: python3 scripts/daemon-test-shards.py verify evidence/*/execution.json
+      - name: Verify full coverage of this event's shard set
+        env:
+          SHARDS: ${{ github.event_name == 'push' && 'integration' || 'rest' }}
+        run: find evidence -name execution.json -print0 | xargs -0 python3 scripts/daemon-test-shards.py verify --shards "$SHARDS"

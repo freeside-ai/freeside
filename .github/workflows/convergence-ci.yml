@@ -7,20 +7,25 @@ name: convergence CI
 # 1A.0 exit evidence, so it runs in CI rather than as a local-only
 # ritual; it spans daemon/ and app/, hence its own workflow with both
 # components' paths.
+#
+# This is also the PR's one macOS Swift job. The org's plan runs at most
+# five macOS jobs at once across every workflow, so each macOS job a PR
+# requests is queue time for every other run (#2248). When the caller
+# selects the app component, the same `swift test` invocation runs every
+# Darwin-only suite (FreesideCoreTests, the screenshot regressions) beside
+# the convergence suite, and the swift-format gate runs first; the build
+# is the same either way. The job runs only through pull-request.yml: a
+# push to main carries a tree its PR tested under the up-to-date rule,
+# and the Go build cache it restores is saved by daemon-ci.yml's
+# `macos-main` job.
 
 on:
-  push:
-    branches: [main]
-    paths:
-      - "app/**"
-      - "daemon/**"
-      - "api/openapi.yaml"
-      - "scripts/run-convergence.sh"
-      - "scripts/check.sh"
-      - ".github/workflows/convergence-ci.yml"
-  # Pull requests run this through pull-request.yml, which selects it
-  # from the changed paths and reports the required check.
   workflow_call:
+    inputs:
+      app_tests:
+        description: Run every Swift test suite and the swift-format gate, not only the convergence suite
+        type: boolean
+        default: false
 
 permissions:
   contents: read
@@ -33,38 +38,75 @@ jobs:
   convergence:
     name: convergence (real daemon + Swift client)
     runs-on: macos-26
+    env:
+      # Pin the toolchain-bundled swift-format via Xcode selection on the
+      # format steps only; a floating tool version would make the
+      # formatting gate nondeterministic (same reasoning as the shellcheck
+      # and vacuum pins). The test steps keep the image's default Xcode.
+      # Bump together with the version documented in app/README.md.
+      SWIFT_FORMAT_DEVELOPER_DIR: /Applications/Xcode_26.6.app
+      SWIFT_FORMAT_VERSION: 6.3.0
     steps:
       - uses: actions/checkout@v4
+      - name: Verify pinned swift-format version
+        if: inputs.app_tests
+        env:
+          DEVELOPER_DIR: ${{ env.SWIFT_FORMAT_DEVELOPER_DIR }}
+        run: |
+          version="$(xcrun swift-format --version)"
+          if [ "${version}" != "${SWIFT_FORMAT_VERSION}" ]; then
+            echo "swift-format ${version} != pinned ${SWIFT_FORMAT_VERSION}" >&2
+            exit 1
+          fi
+      - name: Lint (scripts/check.sh)
+        if: inputs.app_tests
+        env:
+          DEVELOPER_DIR: ${{ env.SWIFT_FORMAT_DEVELOPER_DIR }}
+        run: bash scripts/check.sh app format
+      - name: Check formatting drift
+        if: inputs.app_tests
+        env:
+          DEVELOPER_DIR: ${{ env.SWIFT_FORMAT_DEVELOPER_DIR }}
+        working-directory: app
+        run: |
+          files=(Package.swift)
+          while IFS= read -r -d '' file; do
+            files+=("$file")
+          done < <(find Sources Tests Apps -name '*.swift' \
+            -not -path 'Sources/FreesideAPI/GeneratedSources/*' -print0)
+          xcrun swift-format format --in-place "${files[@]}"
+          git diff --exit-code
       - uses: actions/setup-go@v5
+        id: go
         with:
           go-version-file: daemon/go.mod
           cache: false
       # Same two Go caches as daemon-ci.yml, which carries the rationale:
-      # modules keyed on go.sum alone, build output on a rolling key so
-      # the harness build does not recompile from scratch every run. The
-      # build cache is split into restore here and a push-only "Save Go
-      # build output" step at the end of the job (#1161); see
-      # daemon-ci.yml for why.
+      # modules keyed on go.sum alone, build output restored from the
+      # daemon's macOS rest namespace, which `macos-main` fills with every
+      # compiled package on a push to main, so the harness build does not
+      # recompile from scratch. Restore-only: this job never runs on push.
       - name: Resolve Go cache paths
         id: go-cache
+        working-directory: daemon
         run: |
           echo "build=$(go env GOCACHE)" >>"$GITHUB_OUTPUT"
           echo "mod=$(go env GOMODCACHE)" >>"$GITHUB_OUTPUT"
+          mkdir -p "$(go env GOCACHE)" "$(go env GOMODCACHE)"
       - name: Cache Go modules
         uses: actions/cache@v4
         with:
           path: ${{ steps.go-cache.outputs.mod }}
           key: go-mod-${{ runner.os }}-${{ hashFiles('daemon/go.sum') }}
           restore-keys: go-mod-${{ runner.os }}-
-      - name: Cache Go build output
-        id: go-build-cache
+      - name: Restore Go build output
         uses: actions/cache/restore@v4
         with:
           path: ${{ steps.go-cache.outputs.build }}
-          key: go-build-${{ runner.os }}-${{ github.job }}-${{ hashFiles('daemon/go.sum') }}-${{ github.sha }}
+          key: daemon-build-v2-${{ runner.os }}-${{ runner.arch }}-${{ steps.go.outputs.go-version }}-rest-${{ hashFiles('daemon/go.sum') }}-${{ github.sha }}
           restore-keys: |
+            daemon-build-v2-${{ runner.os }}-${{ runner.arch }}-${{ steps.go.outputs.go-version }}-rest-${{ hashFiles('daemon/go.sum') }}-
             go-build-${{ runner.os }}-${{ github.job }}-${{ hashFiles('daemon/go.sum') }}-
-            go-build-${{ runner.os }}-${{ github.job }}-
       - name: Cache SwiftPM dependencies
         uses: actions/cache@v4
         with:
@@ -77,13 +119,21 @@ jobs:
           path: ~/Library/Caches/org.swift.swiftpm
           key: swiftpm-${{ runner.os }}-${{ github.job }}-${{ hashFiles('app/Package.resolved') }}
           restore-keys: swiftpm-${{ runner.os }}-${{ github.job }}-
-      - name: Run the convergence pass
+      - name: Run the convergence pass (scripts/check.sh)
+        env:
+          CONVERGENCE_ALL_TESTS: ${{ inputs.app_tests && '1' || '' }}
         run: bash scripts/check.sh convergence
-      # Last step so a failed job saves nothing; push-only so PR runs are
-      # restore-only. See daemon-ci.yml for the full rationale.
-      - name: Save Go build output
-        if: github.event_name == 'push'
-        uses: actions/cache/save@v4
+      # The screenshot suite dumps each mismatched render next to its digest
+      # line; publishing those PNGs is the only way to review a hosted
+      # runner's raster before it is recorded as an override (#1139).
+      - name: Resolve screenshot dump directory
+        if: failure() && inputs.app_tests
+        id: screenshot-dumps
+        run: echo "dir=$TMPDIR/freeside-screenshot-regressions" >>"$GITHUB_OUTPUT"
+      - name: Upload screenshot mismatch renders
+        if: failure() && inputs.app_tests
+        uses: actions/upload-artifact@v4
         with:
-          path: ${{ steps.go-cache.outputs.build }}
-          key: ${{ steps.go-build-cache.outputs.cache-primary-key }}
+          name: screenshot-mismatches
+          path: ${{ steps.screenshot-dumps.outputs.dir }}
+          if-no-files-found: ignore

@@ -229,15 +229,26 @@ def latest_attempts(paths):
     return [path for _, path, _ in kept], [report for _, _, report in kept]
 
 
-def verify_reports(paths):
+def verify_reports(paths, shards="all"):
+    # A platform's shard set is declared by the workflow: PRs run the rest
+    # shard alone on macOS and a push to main runs the integration shards
+    # alone there, so each gate verifies full coverage of its declared set
+    # and still rejects a shard outside it.
+    require(shards in ("all", "rest", "integration"), "invalid shard selection")
     require(paths, "missing shard reports")
     paths, reports = latest_attempts(paths)
     rest = [r for r in reports if r["kind"] == "rest"]
-    require(len(rest) == 1, "require exactly one rest shard")
-    count = rest[0]["integration_count"]
+    if shards == "integration":
+        require(not rest, "integration-only verification rejects a rest shard")
+        count = reports[0]["integration_count"]
+    else:
+        require(len(rest) == 1, "require exactly one rest shard")
+        count = rest[0]["integration_count"]
     require(type(count) is int and count > 0, "invalid integration count")
-    require(Counter((r["kind"], r["index"], r["count"]) for r in reports) ==
-            Counter([("rest", 1, 1)] + [("integration", i, count) for i in range(1, count + 1)]),
+    expected = [("rest", 1, 1)] if shards != "integration" else []
+    if shards != "rest":
+        expected += [("integration", i, count) for i in range(1, count + 1)]
+    require(Counter((r["kind"], r["index"], r["count"]) for r in reports) == Counter(expected),
             "missing, duplicate, or unexpected shard")
     packages = read_json(paths[0].parent / "packages.json")
     require(isinstance(packages, list) and packages and len(set(packages)) == len(packages),
@@ -288,7 +299,8 @@ def verify_reports(paths):
             require(key not in cases, "duplicate shard case")
             cases[key] = case["outcome"]
     require(all(p == partitions[0] for p in partitions), "inconsistent shard partitions")
-    require(set(inventory) == set(packages), "missing package discovery")
+    covered = {"all": set(packages), "rest": set(packages) - {package}, "integration": {package}}[shards]
+    require(set(inventory) == covered, "missing package discovery")
     print(f"PASS: accounted for {len(cases)} cases in {len(packages)} packages")
     return inventory, cases, identity
 
@@ -330,10 +342,16 @@ def metadata(args):
     write_json(args.evidence_dir, "metadata.json", value)
 
 
-def gate(needs, expected):
-    require(set(needs) == set(expected), "missing or unexpected required child job")
-    require(all(isinstance(value, dict) and value.get("result") == "success"
-                for value in needs.values()), "every required child job must succeed")
+def gate(needs, expected, skipped=()):
+    # A child that runs only on the other event (the macOS push job on a PR)
+    # must be present and skipped, never absent, failed, or quietly run.
+    require(set(needs) == set(expected) | set(skipped) and not set(expected) & set(skipped),
+            "missing or unexpected required child job")
+    require(all(isinstance(value, dict) for value in needs.values()), "malformed child job result")
+    require(all(needs[name].get("result") == "success" for name in expected),
+            "every required child job must succeed")
+    require(all(needs[name].get("result") == "skipped" for name in skipped),
+            "every other-event child job must be skipped")
 
 
 def main():
@@ -352,12 +370,15 @@ def main():
     comparison.add_argument("--baseline", type=Path, required=True)
     comparison.add_argument("reports", type=Path, nargs="+")
     verification = commands.add_parser("verify")
+    verification.add_argument("--shards", choices=("all", "rest", "integration"), default="all",
+                              help="the shard set the workflow declares for this gate")
     verification.add_argument("reports", type=Path, nargs="+")
     identity = commands.add_parser("metadata")
     identity.add_argument("--evidence-dir", type=Path, required=True)
     final = commands.add_parser("gate")
     final.add_argument("--needs", required=True)
     final.add_argument("--expected", nargs="+", required=True)
+    final.add_argument("--skipped", nargs="*", default=[], help="children that must have been skipped")
     args = parser.parse_args()
     try:
         if args.command == "run":
@@ -365,11 +386,11 @@ def main():
         if args.command == "compare":
             compare(args)
         elif args.command == "verify":
-            verify_reports(args.reports)
+            verify_reports(args.reports, args.shards)
         elif args.command == "metadata":
             metadata(args)
         else:
-            gate(json.loads(args.needs), args.expected)
+            gate(json.loads(args.needs), args.expected, args.skipped)
     except (ValueError, KeyError, TypeError, OSError, subprocess.CalledProcessError) as error:
         print(f"daemon-test-shards: {error}", file=sys.stderr)
         return 1

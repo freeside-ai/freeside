@@ -11,6 +11,9 @@ name: pull request
 #
 # The path lists in `select` copy the component workflows' push filters.
 # A change to one must change the other; when in doubt, select more.
+# convergence-ci.yml has no push trigger; its list stays the union of the
+# app and daemon lists, and it runs the macOS Swift tests whenever app is
+# selected (`app_tests`), so `app` itself requests no macOS test job.
 
 on:
   pull_request:
@@ -124,6 +127,8 @@ jobs:
     needs: select
     if: needs.select.outputs.convergence == 'true'
     uses: ./.github/workflows/convergence-ci.yml
+    with:
+      app_tests: ${{ needs.select.outputs.app == 'true' }}
 
   vocabulary:
     needs: select

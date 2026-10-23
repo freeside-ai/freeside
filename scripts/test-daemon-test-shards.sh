@@ -133,46 +133,91 @@ class Coverage(unittest.TestCase):
                       {k: {'result': 'success'} for k in expected + ['unexpected']}]:
             with self.subTest(needs=needs), self.assertRaises(ValueError):
                 shards.gate(needs, expected)
+        # The other event's child must be present and skipped: a PR gate
+        # names the push-only job, a push gate names the PR-only job.
+        shards.gate({'tests': {'result': 'success'}, 'main': {'result': 'skipped'}}, ['tests'], ['main'])
+        for needs in [{'tests': {'result': 'success'}},
+                      {'tests': {'result': 'success'}, 'main': {'result': 'success'}},
+                      {'tests': {'result': 'success'}, 'main': {'result': 'failure'}},
+                      {'tests': {'result': 'skipped'}, 'main': {'result': 'skipped'}},
+                      {'tests': {'result': 'success'}, 'main': 'skipped'}]:
+            with self.subTest(needs=needs), self.assertRaises(ValueError):
+                shards.gate(needs, ['tests'], ['main'])
+        with self.assertRaises(ValueError):
+            shards.gate({'tests': {'result': 'success'}}, ['tests'], ['tests'])
 
     def test_workflow_wires_complete_matrices_and_tested_gate_predicate(self):
         workflow = (root / '.github/workflows/daemon-ci.yml').read_text()
         jobs = dict(re.findall(r'^  ([a-z-]+):\n(.*?)(?=^  [a-z-]+:|\Z)', workflow, re.M | re.S))
+        rows = r'- \{kind: (\w+), index: (\d+), count: (\d+)\}'
         for platform in ['linux', 'macos']:
             gate = jobs[platform]
             needs = re.search(r'^    needs: \[(.*?)\]', gate, re.M).group(1).split(', ')
             self.assertEqual(set(needs), ({'linux-build', 'linux-tests'} if platform == 'linux'
-                                         else {'macos-tests'}))
+                                         else {'macos-tests', 'macos-main'}))
             self.assertIn('    if: always()', gate)
             self.assertIn('toJSON(needs)', gate)
             self.assertIn('daemon-test-shards.py gate', gate)
-            self.assertIn('--expected ' + ' '.join(needs), gate)
             self.assertIn('runs-on: ubuntu-latest', gate)
             tests = jobs[platform + '-tests']
             self.assertIn('fail-fast: false', tests)
             self.assertIn('fetch-depth: 2', tests)
             self.assertIn('bash scripts/check.sh daemon test', tests)
-            rows = re.findall(r'- \{kind: (\w+), index: (\d+), count: (\d+)\}', tests)
-            self.assertEqual([r for r in rows if r[0] == 'rest'], [('rest', '1', '1')])
-            integration_rows = [(int(i), int(n)) for kind, i, n in rows if kind == 'integration']
-            count = integration_rows[0][1]
-            self.assertEqual(integration_rows, [(i, count) for i in range(1, count + 1)])
-            self.assertEqual(len(rows), count + 1)
-            self.assertIn('DAEMON_TEST_INTEGRATION_SHARDS: ' + str(count), tests)
-            self.assertIn('daemon-test-shards.py verify evidence/*/execution.json', gate)
+            self.assertEqual([r for r in re.findall(rows, tests) if r[0] == 'rest'], [('rest', '1', '1')])
+            self.assertIn('DAEMON_TEST_INTEGRATION_SHARDS: 3', tests)
             # Evidence from any attempt is safe to read only after the gate
             # has required every child's current result to succeed, and only
             # because a successful shard always uploads its own attempt.
             self.assertIn('          pattern: daemon-' + platform + '-*-${{ github.run_id }}-*\n', gate)
             self.assertLess(gate.index('daemon-test-shards.py gate'), gate.index('actions/download-artifact'))
-            upload = re.search(r'^      - name: Upload test evidence\n(.*?)(?=^      - )', tests, re.M | re.S).group(1)
+            upload = re.search(r'^      - name: Upload test evidence\n(.*?)(?=^      - |\Z)', tests, re.M | re.S).group(1)
             self.assertIn('        if: always()\n', upload)
             self.assertIn('          if-no-files-found: error\n', upload)
             self.assertIn('          name: daemon-' + platform + '-${{ matrix.kind }}-${{ matrix.index }}-'
                           '${{ github.run_id }}-${{ github.run_attempt }}\n', upload)
-            self.assertIn("github.event_name == 'push' && matrix.index == 1", tests)
             self.assertNotIn('go-build-${{ runner.os }}-${{ matrix.index }}', tests)
-        self.assertIn("if: matrix.kind == 'rest'", jobs['macos-tests'])
-        self.assertIn('runs-on: macos-26', jobs['macos-tests'])
+        # Linux runs the rest shard and every integration shard on both events.
+        linux = jobs['linux-tests']
+        integration_rows = [(int(i), int(n)) for kind, i, n in re.findall(rows, linux) if kind == 'integration']
+        self.assertEqual(integration_rows, [(i, 3) for i in range(1, 4)])
+        self.assertIn('--expected linux-build linux-tests', jobs['linux'])
+        self.assertIn('daemon-test-shards.py verify evidence/*/execution.json', jobs['linux'])
+        self.assertIn("github.event_name == 'push' && matrix.index == 1", linux)
+        self.assertNotIn("github.event_name != 'push'", linux)
+        # macOS: a PR runs the rest shard alone and saves no cache; a push to
+        # main runs the three integration shards in one job, warms the cache
+        # with every test binary, and is the only macOS cache writer.
+        macos_tests = jobs['macos-tests']
+        self.assertEqual(re.findall(rows, macos_tests), [('rest', '1', '1')])
+        self.assertIn("    if: github.event_name != 'push'\n", macos_tests)
+        self.assertIn('bash scripts/check.sh daemon build', macos_tests)
+        self.assertIn('runs-on: macos-26', macos_tests)
+        self.assertNotIn('actions/cache/save', macos_tests)
+        main = jobs['macos-main']
+        self.assertIn("    if: github.event_name == 'push'\n", main)
+        self.assertIn('runs-on: macos-26', main)
+        self.assertIn('fetch-depth: 2', main)
+        self.assertLess(main.index("go test -count=1 -run '^$' ./..."), main.index('bash scripts/check.sh daemon test'))
+        shard_steps = re.findall(r'DAEMON_TEST_SHARD_KIND: integration\n *DAEMON_TEST_SHARD_INDEX: (\d+)\n'
+                                 r' *DAEMON_TEST_SHARD_COUNT: (\d+)\n *DAEMON_TEST_INTEGRATION_SHARDS: (\d+)\n'
+                                 r' *DAEMON_TEST_EVIDENCE_DIR: \$\{\{ github.workspace \}\}/evidence/integration-(\d+)\n'
+                                 r' *run: bash scripts/check.sh daemon test\n', main)
+        self.assertEqual(shard_steps, [(str(i), '3', '3', str(i)) for i in range(1, 4)])
+        self.assertEqual(main.count('bash scripts/check.sh daemon test'), 3)
+        self.assertIn('metadata --evidence-dir "evidence/integration-$index"', main)
+        upload = re.search(r'^      - name: Upload test evidence\n(.*?)(?=^      - )', main, re.M | re.S).group(1)
+        self.assertIn('        if: always()\n', upload)
+        self.assertIn('          if-no-files-found: error\n', upload)
+        self.assertIn('          name: daemon-macos-integration-${{ github.run_id }}-${{ github.run_attempt }}\n', upload)
+        self.assertIn("        if: github.event_name == 'push'\n        uses: actions/cache/save@v4", main)
+        self.assertRegex(main, r'key: daemon-build-v2-.*-rest-.*\$\{\{ github.sha \}\}\n')
+        gate = jobs['macos']
+        self.assertIn("EXPECTED: ${{ github.event_name == 'push' && 'macos-main' || 'macos-tests' }}", gate)
+        self.assertIn("SKIPPED: ${{ github.event_name == 'push' && 'macos-tests' || 'macos-main' }}", gate)
+        self.assertIn('gate --needs "$NEEDS" --expected "$EXPECTED" --skipped "$SKIPPED"', gate)
+        self.assertIn("SHARDS: ${{ github.event_name == 'push' && 'integration' || 'rest' }}", gate)
+        self.assertIn('find evidence -name execution.json -print0 | xargs -0 python3 scripts/daemon-test-shards.py '
+                      'verify --shards "$SHARDS"', gate)
         self.assertIn('  workflow_call:', workflow)
         self.assertNotIn('race', workflow)
         caller = (root / '.github/workflows/pull-request.yml').read_text()
@@ -181,6 +226,21 @@ class Coverage(unittest.TestCase):
         for helper in ('scripts/daemon-test-shards.py', 'scripts/daemon-test-shards.json'):
             self.assertIn(helper, selector)
             self.assertIn('      - "' + helper + '"', workflow)
+        # The PR's macOS Swift tests run in the convergence job when app is
+        # selected; app-ci.yml itself requests no macOS job on push and no
+        # macOS test job at all, so a PR asks for three macOS jobs, not five.
+        self.assertIn("    with:\n      app_tests: ${{ needs.select.outputs.app == 'true' }}\n", caller)
+        convergence = (root / '.github/workflows/convergence-ci.yml').read_text()
+        self.assertIn('    inputs:\n      app_tests:\n', convergence)
+        self.assertNotIn('\n  push:', convergence)
+        self.assertNotIn('actions/cache/save', convergence)
+        self.assertIn("CONVERGENCE_ALL_TESTS: ${{ inputs.app_tests && '1' || '' }}", convergence)
+        self.assertIn('-rest-${{ hashFiles', convergence)
+        app = (root / '.github/workflows/app-ci.yml').read_text()
+        app_jobs = dict(re.findall(r'^  ([a-z-]+):\n(.*?)(?=^  [a-z-]+:|\Z)', app, re.M | re.S))
+        self.assertEqual({name for name, body in app_jobs.items() if 'runs-on: macos' in body}, {'apps'})
+        self.assertIn("    if: github.event_name != 'push'\n", app_jobs['apps'])
+        self.assertNotIn('swift test', app_jobs['apps'])
 
     def test_required_gate_rejects_selected_skips_and_missing_children(self):
         caller = (root / '.github/workflows/pull-request.yml').read_text()
@@ -327,6 +387,35 @@ for p, names in data.items():
             identity.write_text(saved)
             with patch.dict(os.environ, GITHUB_SHA='head', GITHUB_RUN_ID='1', GITHUB_RUN_ATTEMPT='1'):
                 shards.verify_reports(reports)
+                # A declared shard set verifies its own full coverage and
+                # rejects a shard outside it or a hole inside it.
+                shards.verify_reports(reports[:1], 'rest')
+                shards.verify_reports(reports[1:], 'integration')
+                with self.assertRaisesRegex(ValueError, 'missing, duplicate, or unexpected shard'):
+                    shards.verify_reports(reports, 'rest')
+                with self.assertRaisesRegex(ValueError, 'exactly one rest shard'):
+                    shards.verify_reports(reports[1:], 'rest')
+                with self.assertRaisesRegex(ValueError, 'rejects a rest shard'):
+                    shards.verify_reports(reports, 'integration')
+                with self.assertRaisesRegex(ValueError, 'missing, duplicate, or unexpected shard'):
+                    shards.verify_reports(reports[1:2], 'integration')
+                with self.assertRaisesRegex(ValueError, 'duplicate shard evidence in one attempt'):
+                    shards.verify_reports(reports[1:] + reports[1:2], 'integration')
+                with self.assertRaises(ValueError):
+                    shards.verify_reports(reports, 'other')
+                rest_inventory = reports[0].parent / 'inventory.json'
+                saved_inventory = rest_inventory.read_text()
+                rest_inventory.write_text(json.dumps({integration: inventory[integration]}))
+                with self.assertRaisesRegex(ValueError, 'rest shard omitted'):
+                    shards.verify_reports(reports[:1], 'rest')
+                rest_inventory.write_text(saved_inventory)
+                verify = [sys.executable, str(path), 'verify']
+                self.assertEqual(subprocess.run(verify + ['--shards', 'rest', str(reports[0])],
+                                                capture_output=True).returncode, 0)
+                self.assertNotEqual(subprocess.run(verify + ['--shards', 'integration', str(reports[0])],
+                                                   capture_output=True).returncode, 0)
+                self.assertNotEqual(subprocess.run(verify + ['--shards', 'integration'],
+                                                   capture_output=True).returncode, 0)
             with patch.dict(os.environ, GITHUB_SHA='different-head'):
                 with self.assertRaisesRegex(ValueError, 'another commit'):
                     shards.verify_reports(reports)

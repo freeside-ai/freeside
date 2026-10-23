@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # run-convergence.sh — the §5.14 real-daemon convergence pass (issue #72).
 #
-# Usage: run-convergence.sh
+# Usage: run-convergence.sh [--all-tests]
 #
 # Builds the freeside-signet-dev harness from daemon/, launches it on
 # loopback with a temporary state directory, reads the readiness line
@@ -12,8 +12,25 @@
 # the cross-language enumeration that proves the Swift fixture matrix and
 # the daemon's per-type action policy agree over every attention type (#204).
 #
+# --all-tests runs every Swift test suite in the same `swift test`
+# invocation, not only the convergence suite. CI uses it so one macOS job
+# covers the whole Darwin-only suite (FreesideCoreTests, the screenshot
+# regressions) and the convergence pass; the build is the same either way,
+# since `--filter` selects at run time (#2248).
+#
 # Requires: Go (daemon toolchain), Swift (app toolchain), macOS.
 set -euo pipefail
+
+all_tests=""
+for argument in "$@"; do
+  case "$argument" in
+    --all-tests) all_tests=1 ;;
+    *)
+      echo "run-convergence: unknown argument: $argument" >&2
+      exit 2
+      ;;
+  esac
+done
 
 # The convergence target exists only on Darwin (app/Package.swift), and
 # SwiftPM's --filter exits 0 when nothing matches, so off macOS this
@@ -81,13 +98,19 @@ echo "harness ready: api=$api_url control=$control_url" >&2
 
 # A filter that matches nothing, or a suite that skips (env not seen),
 # still exits 0, so demand positive evidence that the suite ran and
-# passed before this command counts as a convergence pass.
+# passed before this command counts as a convergence pass. The same
+# evidence is demanded of an --all-tests run, where the suite is one of
+# many. The empty-array expansion guard is for the macOS Bash 3.2 `set -u`.
+filter=(--filter FreesideConvergenceTests)
+if [[ -n "$all_tests" ]]; then
+  filter=()
+fi
 test_log="$workdir/swift-test.log"
 (
   cd "$repo_root/app" &&
     FREESIDE_CONVERGENCE_URL="$api_url" \
     FREESIDE_CONVERGENCE_CONTROL_URL="$control_url" \
-    swift test --only-use-versions-from-resolved-file --filter FreesideConvergenceTests
+    swift test --only-use-versions-from-resolved-file ${filter[@]+"${filter[@]}"}
 ) 2>&1 | tee "$test_log"
 if ! grep -q "Suite RealDaemonConvergenceTests passed" "$test_log"; then
   echo "run-convergence: the convergence suite did not run to a pass (zero tests matched, or the suite skipped)" >&2
