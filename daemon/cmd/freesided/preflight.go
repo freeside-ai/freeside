@@ -22,6 +22,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/freeside-ai/freeside/daemon/internal/agentbaseline"
 	"github.com/freeside-ai/freeside/daemon/internal/agenttree"
 	"github.com/freeside-ai/freeside/daemon/internal/contentaddr"
 	"github.com/freeside-ai/freeside/daemon/internal/daemonlock"
@@ -239,7 +240,10 @@ type databaseInspection struct {
 
 type imageInspection struct {
 	Digest string
-	Error  error
+	// Version is the first line the image's agent CLI printed for --version,
+	// empty when the image carries no agent CLI.
+	Version string
+	Error   error
 }
 
 type codexCredentialInspection struct {
@@ -837,12 +841,30 @@ func evaluateComposition(
 		expected := imageDigestFromRef(image.ref)
 		if inspection.Error != nil || expected == "" || inspection.Digest != expected {
 			failCheck(manifest, image.check, image.role+" image digest or required executable capabilities are stale", "rebuild and re-pin the "+image.role+" image")
-		} else {
-			passCheck(manifest, image.check, fmt.Sprintf(
-				"%s image resolved exact digest %s and passed required tool probes",
-				image.role, inspection.Digest,
-			))
+			continue
 		}
+		// The adapter digest the conformance records name is built from the
+		// pinned harness build, so an image built before a pin bump would run
+		// work under a record that names another CLI.
+		if image.versionTool != "" {
+			pinned := pinnedHarnessBuild(image.versionTool)
+			reported, ok := reportedHarnessBuild(image.versionTool, inspection.Version)
+			if !ok || reported != pinned {
+				shown := fmt.Sprintf("%q", inspection.Version)
+				if inspection.Version == "" {
+					shown = "no version line"
+				}
+				failCheck(manifest, image.check, fmt.Sprintf(
+					"%s image's %s reports %s, the daemon pins %s",
+					image.role, image.versionTool, shown, pinned,
+				), "rebuild and re-pin the "+image.role+" image from the current images/agent-"+image.versionTool+" pin")
+				continue
+			}
+		}
+		passCheck(manifest, image.check, fmt.Sprintf(
+			"%s image resolved exact digest %s and passed required tool probes",
+			image.role, inspection.Digest,
+		))
 	}
 
 	if shadowReviewProtectedAccessBlocked {
@@ -1798,10 +1820,11 @@ func (productionPreflightEnvironment) InspectImage(
 	if err != nil {
 		return imageInspection{Error: err}
 	}
-	if err := probeImageTools(ctx, containerBin, ref, tools, versionTool); err != nil {
+	version, err := probeImageTools(ctx, containerBin, ref, tools, versionTool)
+	if err != nil {
 		return imageInspection{Digest: digest, Error: err}
 	}
-	return imageInspection{Digest: digest}
+	return imageInspection{Digest: digest, Version: version}
 }
 
 func (productionPreflightEnvironment) InspectCodexCredential(
@@ -1937,9 +1960,13 @@ func (e productionPreflightEnvironment) ProbeDaemon(
 	return e.rig.ProbeDaemon(ctx, address)
 }
 
+// probeImageTools checks that each tool exists in the image and, unless
+// versionTool is empty, returns the first line versionTool prints for
+// --version. The image's stdout and stderr are read apart so a runtime or CLI
+// warning cannot stand in for the version line.
 func probeImageTools(
 	ctx context.Context, containerBin, ref string, tools []string, versionTool string,
-) error {
+) (string, error) {
 	const script = `version_tool=$1
 shift
 missing=0
@@ -1950,7 +1977,7 @@ for tool do
   fi
 done
 if [ "$missing" -ne 0 ]; then exit 127; fi
-if [ "$version_tool" != - ]; then "$version_tool" --version >/dev/null 2>&1; fi`
+if [ "$version_tool" != - ]; then "$version_tool" --version 2>/dev/null; fi`
 	if versionTool == "" {
 		versionTool = "-"
 	}
@@ -1960,16 +1987,21 @@ if [ "$version_tool" != - ]; then "$version_tool" --version >/dev/null 2>&1; fi`
 	}
 	args = append(args, tools...)
 	command := osexec.CommandContext(ctx, containerBin, args...) //nolint:gosec // executable is operator-selected; fixed arguments keep image input opaque
-	output := &preflightOutput{max: 64 << 10}
-	command.Stdout = output
-	command.Stderr = output
+	stdout := &preflightOutput{max: 64 << 10}
+	stderr := &preflightOutput{max: 64 << 10}
+	command.Stdout = stdout
+	command.Stderr = stderr
 	if err := procbound.Run(command, procbound.DefaultWaitDelay); err != nil {
-		return fmt.Errorf("image capability probe failed: %w", err)
+		return "", fmt.Errorf("image capability probe failed: %w", err)
 	}
-	if output.truncated {
-		return errors.New("image capability probe output exceeded limit")
+	if stdout.truncated || stderr.truncated {
+		return "", errors.New("image capability probe output exceeded limit")
 	}
-	return nil
+	if versionTool == "-" {
+		return "", nil
+	}
+	line, _, _ := strings.Cut(strings.TrimSpace(stdout.buf.String()), "\n")
+	return strings.TrimSpace(line), nil
 }
 
 type preflightOutput struct {
@@ -2004,6 +2036,41 @@ func imageDigestFromRef(ref string) string {
 		}
 	}
 	return digest
+}
+
+// pinnedHarnessBuild names the CLI build the daemon's adapter conformance is
+// recorded against for an agent CLI, or "" for a CLI it pins none for.
+func pinnedHarnessBuild(cli string) string {
+	switch cli {
+	case "claude":
+		return agentbaseline.ClaudeCodeHarnessBuild
+	case "codex":
+		return agentbaseline.CodexHarnessBuild
+	}
+	return ""
+}
+
+// reportedHarnessBuild turns an agent CLI's --version line into the harness
+// build form pinnedHarnessBuild returns. It reports false for a line in neither
+// CLI's format, so an unrecognised version never matches a pin.
+func reportedHarnessBuild(cli, line string) (string, bool) {
+	switch cli {
+	case "claude":
+		// claude --version prints "<version> (Claude Code)".
+		version, ok := strings.CutSuffix(line, " (Claude Code)")
+		if !ok || version == "" || strings.ContainsAny(version, " \t") {
+			return "", false
+		}
+		return "claude-code " + version, true
+	case "codex":
+		// codex --version prints "codex-cli <version>".
+		version, ok := strings.CutPrefix(line, "codex-cli ")
+		if !ok || version == "" || strings.ContainsAny(version, " \t") {
+			return "", false
+		}
+		return line, true
+	}
+	return "", false
 }
 
 func validServerURL(raw string) bool {
