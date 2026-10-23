@@ -1,0 +1,16 @@
+{
+  "claude_code": [
+    "sh",
+    "-c",
+    "set -e; mkdir -p '/var/lib/freeside/claude-review-home' '/var/lib/freeside/claude-review-config' '/var/lib/freeside/lineup-probe/out'; cd '/var/lib/freeside/claude-review-home'; n=0; while [ ! -f '/lineup-probe-ready/ready' ]; do n=$((n+1)); [ \"$n\" -le 60 ] || exit 1; sleep 1; done; token=\"$(cat '/lineup-probe-stage/credential')\"; rm -rf '/lineup-probe-stage'; set +e; claude --version > '/var/lib/freeside/lineup-probe/out/version' 2>&1; CLAUDE_CODE_OAUTH_TOKEN=\"$token\" claude -p \"$1\" --output-format json --model 'claude-fable-5-1' --effort 'high' --safe-mode --tools '' --strict-mcp-config --mcp-config '{\"mcpServers\":{}}' --no-session-persistence --max-turns 1 < /dev/null > '/var/lib/freeside/lineup-probe/out/stdout' 2> '/var/lib/freeside/lineup-probe/out/stderr'; status=$?; unset token; printf '%s\\n' \"$status\" > '/var/lib/freeside/lineup-probe/out/status'; sync; exit 0",
+    "freeside-lineup-probe",
+    "Reply with the single word OK."
+  ],
+  "codex_cli": [
+    "sh",
+    "-c",
+    "set -e; mkdir -p '/var/lib/freeside/home' '/var/lib/freeside/codex-home' '/var/lib/freeside/lineup-probe/out'; cd '/var/lib/freeside/home'; n=0; while [ ! -f '/lineup-probe-ready/ready' ]; do n=$((n+1)); [ \"$n\" -le 60 ] || exit 1; sleep 1; done; cp '/lineup-probe-stage/credential' '/var/lib/freeside/codex-home/auth.json'; chmod 0600 '/var/lib/freeside/codex-home/auth.json'; rm -rf '/lineup-probe-stage'; set +e; codex --version > '/var/lib/freeside/lineup-probe/out/version' 2>&1; codex exec --json --ephemeral --skip-git-repo-check -s read-only -C '/var/lib/freeside/home' -m 'gpt-6.1-sol' -c 'model_reasoning_effort=\"xhigh\"' -c project_doc_max_bytes=0 --ignore-user-config --ignore-rules --disable apps -c 'web_search=\"disabled\"' -- \"$1\" < /dev/null > '/var/lib/freeside/lineup-probe/out/stdout' 2> '/var/lib/freeside/lineup-probe/out/stderr'; status=$?; rm -rf '/var/lib/freeside/codex-home'; printf '%s\\n' \"$status\" > '/var/lib/freeside/lineup-probe/out/status'; sync; exit 0",
+    "freeside-lineup-probe",
+    "Reply with the single word OK."
+  ]
+}
