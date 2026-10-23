@@ -256,9 +256,11 @@ completes. docs/production-walkthrough.md (Rehearse Before The Real Run)
 holds the procedure; this section says what makes a pass count.
 
 1. **Same build, fresh root.** Build `freesided` from a clean checkout of
-   the SHA the real run will use, and make a fresh root (`mktemp -d`
-   style). The pass proves that build only: a real run on a different build
-   SHA needs a new pass.
+   the SHA the real run will use, with the version flag the walkthrough's
+   Start And Verify build names (preflight's `daemon_build` check fails a
+   plain `go build`), and make a fresh root (`mktemp -d` style). The pass
+   proves that build only: a real run on a different build SHA needs a new
+   pass.
 2. **Settings that differ only where they must.** Copy the real run's
    settings and change only `listen`, `seed_root`, `repository.*` (the
    disposable repository, its project, base, and allowed paths),

@@ -81,9 +81,17 @@ renamed to `<dir>.moved-to-prod-<timestamp>`, so a stale setting fails loudly.
 It never deletes them; remove them yourself once a run has published through
 `prod`'s directories.
 
-Build `freesided` from a clean checkout of the reviewed commit; the
-composition preflight refuses a `-dirty` build. Then start the deputy and keep
-its shell open:
+Build `freesided` from a clean checkout of the reviewed commit, stamping that
+commit as its version. In `daemon/`:
+
+```sh
+go build -ldflags "-X main.version=<sha>" -o <dir>/freesided ./cmd/freesided
+```
+
+`<sha>` is the checkout's commit (`git rev-parse HEAD`). The composition
+preflight's `daemon_build` check refuses a build whose version is empty,
+`devel`, `(devel)`, or ends in `-dirty`, and a plain `go build` reports
+`(devel)`. Then start the deputy and keep its shell open:
 
 ```sh
 freesided deputy -root <root>
@@ -184,8 +192,9 @@ The exit-run skill (`.claude/skills/exit-run/SKILL.md`, Rehearse Before The
 Operator) says when a pass counts; this section is the procedure.
 
 **Root and build.** Use a fresh root and a `freesided` built from a clean
-checkout of the SHA the real run will use. A real run on another build needs
-a new pass.
+checkout of the SHA the real run will use, with the version flag in
+[Start And Verify](#start-and-verify): a plain `go build` fails preflight's
+`daemon_build` check. A real run on another build needs a new pass.
 
 **Settings.** Copy the real run's settings file and change only these keys:
 
