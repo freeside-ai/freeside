@@ -2274,6 +2274,166 @@ func TestCodexReviewRecoveryAbortsLegacyRunningInvocationWithLostProxy(t *testin
 	}
 }
 
+// A review whose container exits while the daemon is down is collected by a
+// daemon that may run another configuration. Collection must stamp the
+// digest the launch journaled, and refuse as transient (rerun, never
+// relabel) a review launched under any other digest or under a binding that
+// predates the record.
+func TestCodexReviewSourceRefusesCollectionLaunchedUnderAnotherDigest(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		// restart changes the restarted daemon's configuration or the
+		// journaled binding before the stopped review is collected.
+		restart func(*testing.T, *CodexReviewSourceConfig, *fakeCodexReviewJournal)
+		// omitResult makes the raw output invalid, which under the launch
+		// configuration would be a contradiction rather than a rerun.
+		omitResult  bool
+		wantRefusal string
+	}{
+		{name: "same configuration"},
+		{
+			name: "another configuration",
+			restart: func(t *testing.T, cfg *CodexReviewSourceConfig, _ *fakeCodexReviewJournal) {
+				var err error
+				cfg.CostOwner = "subscription:other-owner"
+				cfg.ConfigurationDigest, err = CodexReviewConfigurationDigest(
+					cfg.Review, cfg.WorkspaceSizeMB, cfg.AuthMode, cfg.AuthIdentityID, cfg.CostOwner,
+				)
+				if err != nil {
+					t.Fatal(err)
+				}
+			},
+			wantRefusal: "launched under configuration sha256:",
+		},
+		{
+			name: "another configuration with invalid output",
+			restart: func(t *testing.T, cfg *CodexReviewSourceConfig, _ *fakeCodexReviewJournal) {
+				var err error
+				cfg.WorkspaceSizeMB *= 2
+				cfg.ConfigurationDigest, err = CodexReviewConfigurationDigest(
+					cfg.Review, cfg.WorkspaceSizeMB, cfg.AuthMode, cfg.AuthIdentityID, cfg.CostOwner,
+				)
+				if err != nil {
+					t.Fatal(err)
+				}
+			},
+			omitResult:  true,
+			wantRefusal: "launched under configuration sha256:",
+		},
+		{
+			name: "binding predates the launch digest",
+			restart: func(_ *testing.T, _ *CodexReviewSourceConfig, journal *fakeCodexReviewJournal) {
+				journal.binding.ConfigurationDigest = ""
+			},
+			wantRefusal: "launched under a binding that predates the launch configuration record",
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			ctx := context.Background()
+			fx := newHandoffFixture(t)
+			seedSpec := fx.seed(t)
+			backend := fx.codexReviewLifecycle(t)
+			cfg, requestSpec := testCodexReview(t)
+			journal := &fakeCodexReviewJournal{}
+			sourceConfig := codexReviewSourceConfigForTest(t, backend, cfg, requestSpec, journal)
+			source, err := NewCodexReviewSource(sourceConfig)
+			if err != nil {
+				t.Fatal(err)
+			}
+			id := domain.InvocationID("review-run-restart-digest")
+			request := exec.ReviewRequest{
+				Admission: testReviewAdmission("run-restart-digest"),
+				RunID:     "run-restart-digest", Round: 1, Repo: seedSpec.Seed.Base.Repo,
+				RepositoryID: seedSpec.Seed.Base.RepositoryID, BaseRef: seedSpec.Seed.Base.BaseRef,
+				BaseSHA: strings.Repeat("a", 40), HeadSHA: seedSpec.Seed.Base.BaseSHA,
+				Workspace: seedSpec.Seed.SourceDir, Verification: testReviewVerificationEvidence(),
+				Instructions: testReviewInstructionBinding(), RequestedAt: codexReviewEpoch.Add(-time.Minute),
+			}
+			if err := source.RequestReview(ctx, id, request); err != nil {
+				t.Fatal(err)
+			}
+			launchedDigest := journal.binding.ConfigurationDigest
+			if launchedDigest != sourceConfig.ConfigurationDigest {
+				t.Fatalf("journaled launch digest = %q, want %q", launchedDigest, sourceConfig.ConfigurationDigest)
+			}
+			entries := []tarEntry{
+				{name: strings.TrimPrefix(codexReviewStatusPath, "/"), body: []byte("0\n")},
+				{name: strings.TrimPrefix(codexReviewEventsPath, "/"), body: []byte("terminal\n")},
+			}
+			if !tc.omitResult {
+				entries = append(entries, tarEntry{
+					name: strings.TrimPrefix(codexReviewResultPath, "/"), body: []byte(`{"findings":[]}`),
+				})
+			}
+			fx.rt.exportTarPath = buildTar(t, entries)
+			// The container exits while the daemon is down: the restarted
+			// source has no live launch and finds the review stopped.
+			state, err := backend.InspectCodexReview(ctx, sourceConfig.Review, string(id))
+			if err == nil && state == StateRunning {
+				state, err = backend.InspectCodexReview(ctx, sourceConfig.Review, string(id))
+			}
+			if err != nil || state != StateStopped {
+				t.Fatalf("review runtime state = %q, %v", state, err)
+			}
+			source.mu.Lock()
+			_ = source.launches[id].Close()
+			delete(source.launches, id)
+			source.mu.Unlock()
+			restartedConfig := source.cfg
+			restartedConfig.Review.VolumeLifecycleLeaser, err = NewRuntimeCodexReviewVolumeLeaser(fx.rt)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if tc.restart != nil {
+				tc.restart(t, &restartedConfig, journal)
+			}
+			restarted, err := NewCodexReviewSource(restartedConfig)
+			if err != nil {
+				t.Fatal(err)
+			}
+
+			status, err := restarted.Inspect(ctx, id)
+			outcome, ready, getErr := journal.GetCodexReviewOutcome(ctx, string(id))
+			if getErr != nil || !ready {
+				t.Fatalf("persisted outcome ready=%v, %v", ready, getErr)
+			}
+			if tc.wantRefusal == "" {
+				if err != nil || status != exec.StatusCompleted {
+					t.Fatalf("matching-digest collection = %q, %v", status, err)
+				}
+				result, err := restarted.Poll(ctx, id)
+				if err != nil || result.ConfigurationDigest != launchedDigest {
+					t.Fatalf("collected result digest = %q, %v; want %q", result.ConfigurationDigest, err, launchedDigest)
+				}
+			} else {
+				if err != nil || status != exec.StatusFailed {
+					t.Fatalf("other-digest collection = %q, %v", status, err)
+				}
+				if outcome.Result != nil || outcome.FailureClass != domain.ReviewFailureTransient ||
+					!strings.Contains(outcome.Failure, tc.wantRefusal) ||
+					!strings.Contains(outcome.Failure, "daemon now runs configuration "+string(restartedConfig.ConfigurationDigest)) {
+					t.Fatalf("persisted outcome = %#v", outcome)
+				}
+				if tc.restart != nil && journal.binding.ConfigurationDigest != "" && !strings.Contains(outcome.Failure, string(launchedDigest)) {
+					t.Fatalf("refusal does not name the launch digest: %q", outcome.Failure)
+				}
+				var failure *exec.ReviewSourceFailure
+				if _, err := restarted.Poll(ctx, id); !errors.As(err, &failure) ||
+					failure.Class != domain.ReviewFailureTransient {
+					t.Fatalf("poll after refused collection = %v", err)
+				}
+			}
+			containers, _ := fx.rt.ListContainers(ctx)
+			volumes, _ := fx.rt.ListVolumes(ctx)
+			networks, _ := fx.rt.ListNetworks(ctx)
+			if len(containers) != 0 || len(volumes) != 0 || len(networks) != 0 {
+				t.Fatalf("review topology leaked: containers=%v volumes=%v networks=%v",
+					containers, volumes, networks)
+			}
+		})
+	}
+}
+
 func TestCodexReviewSourceRestartAbortsRunningInvocationWithLostProxy(t *testing.T) {
 	ctx := context.Background()
 	fx := newHandoffFixture(t)
@@ -2458,6 +2618,8 @@ func TestCodexReviewSourceNormalizesStructuredFindings(t *testing.T) {
 	collection := CodexReviewCollection{
 		Result: []byte(`{"findings":[{"severity":"P2","location":{"path":"daemon/main.go","start_line":12,"end_line":12},"explanation":"unchecked error"}]}`),
 		Events: []byte("terminal event\n"),
+		// Collection journals the launch digest, which matches the daemon's.
+		ConfigurationDigest: source.cfg.ConfigurationDigest,
 	}
 	first := source.normalizeCollection("review-run-1-1", request, collection)
 	second := source.normalizeCollection("review-run-1-1", request, collection)
@@ -2502,8 +2664,9 @@ func TestCodexReviewSourceAcceptsWholeFileLocation(t *testing.T) {
 		RequestedAt: now.Add(-time.Minute),
 	}
 	collection := CodexReviewCollection{
-		Result: []byte(`{"findings":[{"severity":"P1","location":{"path":"daemon/old.go","whole_file":true},"explanation":"deletes the only caller of gone()"}]}`),
-		Events: []byte("terminal event\n"),
+		Result:              []byte(`{"findings":[{"severity":"P1","location":{"path":"daemon/old.go","whole_file":true},"explanation":"deletes the only caller of gone()"}]}`),
+		Events:              []byte("terminal event\n"),
+		ConfigurationDigest: source.cfg.ConfigurationDigest,
 	}
 	outcome := source.normalizeCollection("review-run-1-1", request, collection)
 	if err := outcome.Validate(); err != nil {
@@ -2649,6 +2812,7 @@ func TestCodexReviewSourceRejectsInvalidFindingsEnvelope(t *testing.T) {
 	}
 	clean := source.normalizeCollection("review-run-1-1", request, CodexReviewCollection{
 		Result: []byte(`{"findings":[]}`), Events: []byte("terminal event\n"),
+		ConfigurationDigest: source.cfg.ConfigurationDigest,
 	})
 	if clean.Result == nil || len(clean.Result.Findings) != 0 || clean.FailureClass != "" {
 		t.Fatalf("empty findings array = %#v", clean)
@@ -2670,7 +2834,7 @@ func TestCodexReviewSourceFindingIdentityIsInvocationScoped(t *testing.T) {
 	}
 	collection := CodexReviewCollection{Result: []byte(
 		`{"findings":[{"severity":"P2","location":{"path":"daemon/main.go","start_line":12,"end_line":12},"explanation":"unchecked error"}]}`,
-	)}
+	), ConfigurationDigest: source.cfg.ConfigurationDigest}
 	first := source.normalizeCollection("review-invocation-1", request, collection)
 	request.RunID = "run-2"
 	second := source.normalizeCollection("review-invocation-2", request, collection)
@@ -2704,7 +2868,7 @@ func TestCodexReviewSourceFindingsAreCrossRoundFingerprintable(t *testing.T) {
 		`{"findings":[` +
 			`{"severity":"P1","location":{"path":"daemon/main.go","start_line":10,"end_line":12},"explanation":"unchecked error from Close"},` +
 			`{"severity":"P2","location":{"path":"daemon/store.go","start_line":5,"end_line":5},"explanation":"nil map write"}` +
-			`]}`)}
+			`]}`), ConfigurationDigest: source.cfg.ConfigurationDigest}
 	// A later remediation round: different invocation and head, severity re-tagged,
 	// line ranges shifted by the intervening edits — the same two logical findings.
 	round2Req := round1Req
@@ -2714,7 +2878,7 @@ func TestCodexReviewSourceFindingsAreCrossRoundFingerprintable(t *testing.T) {
 		`{"findings":[` +
 			`{"severity":"P2","location":{"path":"daemon/main.go","start_line":30,"end_line":33},"explanation":"unchecked error from Close"},` +
 			`{"severity":"P3","location":{"path":"daemon/store.go","start_line":9,"end_line":9},"explanation":"nil map write"}` +
-			`]}`)}
+			`]}`), ConfigurationDigest: source.cfg.ConfigurationDigest}
 
 	first := source.normalizeCollection("review-invocation-A", round1Req, round1)
 	second := source.normalizeCollection("review-invocation-B", round2Req, round2)
@@ -2772,7 +2936,8 @@ func TestCodexReviewSourceEmptyExplanationRejectedBySource(t *testing.T) {
 		Verification: testReviewVerificationEvidence(), Instructions: testReviewInstructionBinding(), RequestedAt: now,
 	}
 	outcome := source.normalizeCollection("review-invocation-1", request, CodexReviewCollection{
-		Result: []byte(`{"findings":[{"severity":"P1","location":{"path":"a.go","start_line":1,"end_line":1},"explanation":""}]}`),
+		Result:              []byte(`{"findings":[{"severity":"P1","location":{"path":"a.go","start_line":1,"end_line":1},"explanation":""}]}`),
+		ConfigurationDigest: source.cfg.ConfigurationDigest,
 	})
 	// The production source runs this Validate immediately after normalization
 	// and converts a failure into a ReviewFailureContradiction.
@@ -3572,7 +3737,8 @@ func TestCodexReviewSourceOutcomeRejectsFindingCorruption(t *testing.T) {
 		Verification: testReviewVerificationEvidence(), Instructions: testReviewInstructionBinding(), RequestedAt: now,
 	}
 	outcome := source.normalizeCollection("review-invocation-1", request, CodexReviewCollection{
-		Result: []byte(`{"findings":[{"severity":"P1","location":{"path":"main.go","start_line":1,"end_line":1},"explanation":"unsafe"}]}`),
+		Result:              []byte(`{"findings":[{"severity":"P1","location":{"path":"main.go","start_line":1,"end_line":1},"explanation":"unsafe"}]}`),
+		ConfigurationDigest: source.cfg.ConfigurationDigest,
 	})
 	if err := outcome.Validate(); err != nil {
 		t.Fatal(err)
@@ -3992,13 +4158,16 @@ func TestReconcileRejectedRequestDispatchEquivalence(t *testing.T) {
 // codexGoldenReviewCollection is the fixed, valid raw collection the outcome
 // goldens and the evidence tests share. The events line carries the
 // caller-chosen usage shape; every other input is stable so the digests pin.
+// It journals the golden source's own launch digest, the only digest a
+// normalized collection carries.
 func codexGoldenReviewCollection(events string) CodexReviewCollection {
 	return CodexReviewCollection{
 		ExitStatus: 0,
 		Result: []byte(`{"findings":[{"severity":"P2","location":` +
 			`{"path":"main.go","start_line":10,"end_line":12},` +
 			`"explanation":"re-derive the approval instead of trusting the stored bit"}]}`),
-		Events: []byte(events + "\n"),
+		Events:              []byte(events + "\n"),
+		ConfigurationDigest: newEquivalenceReviewSource().cfg.ConfigurationDigest,
 	}
 }
 

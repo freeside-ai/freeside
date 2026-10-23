@@ -302,8 +302,11 @@ func FuzzReviewNormalizeCollectionEquivalence(f *testing.F) {
 	}
 	f.Fuzz(func(t *testing.T, exit int, result, events, baseSHA, headSHA, runID string) {
 		source := newEquivalenceReviewSource()
+		// Inspect normalizes only a collection whose journaled launch digest
+		// equals the daemon's (#2197), so the harness journals that digest.
 		collection := CodexReviewCollection{
 			ExitStatus: exit, Result: []byte(result), Events: []byte(events),
+			ConfigurationDigest: source.cfg.ConfigurationDigest,
 		}
 		req := exec.ReviewRequest{Admission: testReviewAdmission(domain.RunID(runID)), RunID: domain.RunID(runID), BaseSHA: baseSHA, HeadSHA: headSHA}
 		id := domain.InvocationID("review-" + runID)

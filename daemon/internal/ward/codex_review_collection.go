@@ -10,6 +10,8 @@ import (
 	"slices"
 	"strconv"
 	"strings"
+
+	"github.com/freeside-ai/freeside/daemon/internal/domain"
 )
 
 const (
@@ -24,6 +26,17 @@ type CodexReviewCollection struct {
 	ExitStatus int
 	Result     []byte
 	Events     []byte
+	// ConfigurationDigest is the digest the authenticated journal binding
+	// recorded at launch, empty for a binding written before the record
+	// existed. It is not part of the retained collection.
+	ConfigurationDigest domain.Digest
+}
+
+// retained is the raw account an outcome keeps. It copies exactly the three
+// fields collection_evidence hashes, so the launch digest never changes a
+// persisted outcome's evidence.
+func (c CodexReviewCollection) retained() CodexReviewRetainedCollection {
+	return CodexReviewRetainedCollection{ExitStatus: c.ExitStatus, Result: c.Result, Events: c.Events}
 }
 
 // CodexReviewRetainedCollection is the raw collection an outcome retains so its
@@ -62,7 +75,7 @@ func (b *CodexReviewLifecycle) InspectCodexReview(
 func (b *CodexReviewLifecycle) CollectCodexReview(
 	ctx context.Context, cfg CodexReviewConfig, runID string,
 ) (CodexReviewCollection, error) {
-	_, _, report, err := b.authenticateCodexReviewContainer(ctx, cfg, runID)
+	_, binding, report, err := b.authenticateCodexReviewContainer(ctx, cfg, runID)
 	if err != nil {
 		return CodexReviewCollection{}, err
 	}
@@ -70,6 +83,7 @@ func (b *CodexReviewLifecycle) CollectCodexReview(
 		return CodexReviewCollection{}, fmt.Errorf("codex review %q is not stopped", runID)
 	}
 	collection, err := b.readCodexReviewOutput(ctx, report, runID)
+	collection.ConfigurationDigest = binding.ConfigurationDigest
 	if err != nil && !errors.Is(err, ErrCodexReviewOutputInvalid) {
 		// An operational failure says nothing about how the review ended;
 		// the collection is retried rather than recorded.

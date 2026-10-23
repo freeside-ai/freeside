@@ -543,7 +543,8 @@ func TestClaudeReviewCollectionEnvelope(t *testing.T) {
 	req := exec.ReviewRequest{Admission: testReviewAdmission("run-1"), RunID: "run-1", BaseSHA: strings.Repeat("a", 40), HeadSHA: strings.Repeat("b", 40)}
 
 	valid := source.normalizeCollection(id, req, CodexReviewCollection{
-		Result: []byte(`{"findings":[{"severity":"P1","location":{"path":"a.go","start_line":3,"end_line":5},"explanation":"x"}]}`),
+		Result:              []byte(`{"findings":[{"severity":"P1","location":{"path":"a.go","start_line":3,"end_line":5},"explanation":"x"}]}`),
+		ConfigurationDigest: source.cfg.ConfigurationDigest,
 	})
 	if valid.Result == nil {
 		t.Fatalf("valid Claude envelope produced no result: %+v", valid)
@@ -560,7 +561,8 @@ func TestClaudeReviewCollectionEnvelope(t *testing.T) {
 	// through the same shared normalization, so the Claude provider admits the
 	// domain whole-file (0,0) location under the explicit marker too.
 	wholeFile := source.normalizeCollection(id, req, CodexReviewCollection{
-		Result: []byte(`{"findings":[{"severity":"P2","location":{"path":"old.go","whole_file":true},"explanation":"file removed"}]}`),
+		Result:              []byte(`{"findings":[{"severity":"P2","location":{"path":"old.go","whole_file":true},"explanation":"file removed"}]}`),
+		ConfigurationDigest: source.cfg.ConfigurationDigest,
 	})
 	if wholeFile.Result == nil || len(wholeFile.Result.Findings) != 1 {
 		t.Fatalf("whole-file Claude envelope produced no result: %+v", wholeFile)
@@ -626,8 +628,9 @@ func TestClaudeReviewCollectionCarriesUsage(t *testing.T) {
 		RunID:     "run-1", BaseSHA: strings.Repeat("a", 40), HeadSHA: strings.Repeat("b", 40),
 	}
 	outcome := source.normalizeCollection(id, req, CodexReviewCollection{
-		Events: []byte(`{"type":"result","total_cost_usd":0.0012345,"usage":{"input_tokens":11,"output_tokens":7}}` + "\n"),
-		Result: []byte(`{"findings":[]}`),
+		Events:              []byte(`{"type":"result","total_cost_usd":0.0012345,"usage":{"input_tokens":11,"output_tokens":7}}` + "\n"),
+		Result:              []byte(`{"findings":[]}`),
+		ConfigurationDigest: source.cfg.ConfigurationDigest,
 	})
 	if outcome.Result == nil {
 		t.Fatalf("Claude envelope produced no result: %+v", outcome)
@@ -685,7 +688,8 @@ func TestClaudeReviewOutcomeValidationProviderAware(t *testing.T) {
 		Instructions: exec.ReviewInstructionBinding{ResultDigest: domain.Digest(contentaddr.Sum([]byte("instr")))},
 	}
 	outcome := source.normalizeCollection(id, req, CodexReviewCollection{
-		Result: []byte(`{"findings":[{"severity":"P2","location":{"path":"a.go","start_line":1,"end_line":1},"explanation":"y"}]}`),
+		Result:              []byte(`{"findings":[{"severity":"P2","location":{"path":"a.go","start_line":1,"end_line":1},"explanation":"y"}]}`),
+		ConfigurationDigest: source.cfg.ConfigurationDigest,
 	})
 	if outcome.Result == nil {
 		t.Fatalf("expected a Claude result: %+v", outcome)
