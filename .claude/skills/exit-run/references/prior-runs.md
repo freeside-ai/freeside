@@ -22,6 +22,7 @@ pattern; a routine run needs no row.
 | #1445 run-114 human gate, 2026-09-25 | #1445, #1211 | gh-imgup#114 to PR #121, merged by the owner | Client target | The human-gated proof passed and closed #1445: the PR stayed a draft with `Refs #114` until the closure card was approved on the iPhone, then the publisher wrote `Closes #114`. The first session died at preflight because a review-prompt bump (PR #1546) invalidated the onboarded reviewer digest. The reviewer flagged the missing decision note live (#1542 working), but the adjudicator recommended parking an in-scope fix twice; two Discuss rounds reached `remediate` (#1550). A #1211 sketch exercise afterwards bricked the daemon with a durable stop once its clarified spec was ready (#1556). Restore stalled at `registered=false` a third time, probably because nobody was handed the menu Start step. |
 | Wave 8 exit run 2, 2026-10-12 to 13 | #1613 | gh-imgup#116 to PR #127, merged by the owner | CLI | The pull request waited overnight for its merge, and the run's daemon stopped itself twice meanwhile: a GitHub 500 on the janitor's token mint (#1997), then the backup producer refusing the run's own effect-proposal artifact twelve hours after start (#1996). Stopped, it could not see the merge, recorded no completion, and so could not raise review growth. That stop was the first real stopped-state evidence on an exit run. The first real external review superseded the ready card and reached the Mac as a card, but the adjudicator's batch parked, no remediator ran, and the card offered only discuss and stop (#1989, #1990). The spine drove the Mac client through computer use; the iPhone never connected (#1514), so no phone proof exists. Three owner decisions changed this skill (devlog/2026-10-13-1002-exit-run-owner-decisions.md). |
 | Wave 8 exit run 3, 2026-10-14 to 16 | #1613 | gh-imgup#117, no pull request; ended final with `base_advanced` | CLI | The run reached a second internal review round and the harness's observation deadline expired while the run waited on the review-dispute card; `--resume-session` then refused because the run had not published (#2040, #2041). The per-finding review-dispute decision ran live for the first time, on the internal review, with a remediation and re-review behind it. A retained root's open system-health items hold the next run's admission (#2043), and `inspect` cannot list items on a stopped root (#2042). Resumed on 2026-10-16 after those fixes merged: the verifier refused the retained checkpoint on a drifted backup payload map (#2053, fixed in-run), a decline-only final round durably stopped the daemon at publication (#2055, fixed in-run), and the third resume ended final because gh-imgup's `main` had advanced after admission and an unpublished run has no base-advance re-entry (#2058, owner: Required). The first phone-side per-finding decision ran on the iPhone. |
+| Wave 8 exit run on gh-imgup#125, 2026-10-22 to 23 | #1613, #1616 | gh-imgup#125 to PR #144, merged by the owner; completion recorded | CLI (deputy, rehearsal first) | The rehearsal pass did its job: on a disposable target it found that the agent image's CLIs refused the #1616 picks (#2195) and that the Codex reviewer had the account's connected GitHub tools and the provider web tool (#2196), both fixed in-run before the real run. It also cost three builds, because each fix and one `main` advance restarted it (#2221). The operator was away, so the spine drove the installed Mac app and every gate decision was the agent's under delegation; no iPhone took part. The closure card held the PR in draft before the merge, visible only in the inbox (#2224, #2226). The held-work and review-growth alerts raised after completion were superseded at creation on both passes and never delivered (#2217, owner: Required); the rehearsal's reading missed it. Specifier and implementer models showed in their transcripts, judgment calls in the inference ledger; a cross-role task line was refused (#2211, #1431). Process friction went to tracker #2228. |
 
 ## Recurring Pitfalls
 
@@ -211,6 +212,55 @@ Look for each of these before and during the run; most have bitten twice.
   rehearsal pass (SKILL.md, Rehearse Before The Operator) is the response:
   the launch, inputs, credentials, publication, and alerts fail on a
   disposable target before the operator is asked for anything.
+- **Read a raised alert back; don't assume it opened.** `raise-item` prints
+  an item ID even when the item is born closed. On run 125 the held-work
+  and review-growth items sat in `items[]` as `superseded`, concluded before
+  their own creation, with no deliveries (#2217). Read each item's `status`,
+  `conclusion`, and `deliveries` after raising it; `items[]` alone passes a
+  born-closed item. Until #2217 merges, the review-growth alert can't be
+  evidenced at all, since it is refused before completion.
+- **The image's agent CLI must serve the lineup's models.** Nothing checks
+  it before spend (#2208), and a built image can carry an older CLI than its
+  pin (#2209). Before the rehearsal, run each writer's CLI in its image
+  against its lineup model, and Codex against the review model. Run 125
+  lost two rehearsal builds to this (#2195).
+- **Recheck the Codex reviewer's tools after a CLI upgrade.** Under ward's
+  review flags, Codex 0.146 and 0.162 still exposed the ChatGPT account's
+  connected apps and the provider web tool, which run outside the sandbox
+  and the egress allowlist (#2196, check in #2198).
+- **A Freeside `main` advance restarts the rehearsal.** The real run must
+  use the rehearsal's build, so any Freeside merge before launch means a new
+  build, root, and pass. Launch soon after the rehearsal passes, or ask for
+  merges to wait, until #2221 settles when a rehearsal carries over.
+- **Rehearsal targets and settings need more than the docs say.** A bare-URL
+  task needs a public disposable issue, since the spec writer's fetch is
+  unauthenticated (#2214). A disposable repository needs its own onboarded
+  project image, a review-configuration change needs re-onboarding, and
+  preflight's `daemon_build` needs the `-X main.version=<sha>` ldflag
+  (#2206).
+- **Pass `-resume` on every onboarding call until approval, and a long
+  `-install-wait`.** The intent expires after `-install-wait` (ten minutes
+  by default, #2205). Once it has, a call without `-resume` silently opens a
+  new intent and changes the approval digest, so the reviewed digest is
+  refused (#2203). Pass `-install-wait 1h` so an operator round trip fits.
+- **A lease left by an older-schema build may need that build to recover
+  it.** When the lease records review volumes or networks, the current
+  build refuses to open the older store, so `rig recover` must come from a
+  build at that schema; a lease with only containers recovers across
+  schemas. A stale lease for another root blocks every deputy start on the
+  machine (#2201).
+- **Check the specification's criteria against the stage.** The specifier
+  can write a criterion the implementer can't meet, such as opening a
+  follow-up issue with no forge access. Read the criteria before approving
+  (seen on run 125; not filed).
+- **A retained root's old cards may never clear.** Closure cards for a
+  merged work unit stay open (#2218), and a card can reopen after its
+  approval (#2219). No `freesided` read lists effect-proposal cards yet
+  (#2226), so inspect them from a copy of the stopped store and leave them
+  for the owner rather than deciding them.
+- **Spend is a lower bound.** Usage isn't recorded for the implementation
+  writer or the reviewer (#2212); the implementation transcript's result
+  event carries `total_cost_usd`.
 
 ## Mode And Flags Past Trackers Required
 
