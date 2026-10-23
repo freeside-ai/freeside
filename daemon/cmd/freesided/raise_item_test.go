@@ -4,12 +4,15 @@ import (
 	"bytes"
 	"errors"
 	"io"
+	"net/http"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 	"time"
 
 	"github.com/freeside-ai/freeside/daemon/internal/domain"
+	"github.com/freeside-ai/freeside/daemon/internal/engine"
 	"github.com/freeside-ai/freeside/daemon/internal/signet"
 	"github.com/freeside-ai/freeside/daemon/internal/store"
 )
@@ -296,6 +299,89 @@ func TestRaiseItemReachesClients(t *testing.T) {
 	}
 	if after := reviewDecisions(t, h.store, fixtureCompletedRun); after != decisionsBefore {
 		t.Errorf("review decisions on %s = %d, were %d", fixtureCompletedRun, after, decisionsBefore)
+	}
+}
+
+// The exit run raises its synthetic alerts after the completion fact, in the
+// order of the raise-item command block in .claude/skills/exit-run/SKILL.md
+// (Walk Through on Both Clients). Each raised item must survive the
+// completion sweep on that task and reach a paired device. The fixture daemon
+// runs no engine, so the sweep's per-task body runs here directly.
+func TestRaiseItemSequenceSurvivesCompletionSweep(t *testing.T) {
+	dbPath := filepath.Join(t.TempDir(), "freeside.db")
+	h := startDaemon(t, config{
+		DBPath: dbPath, ListenAddr: "127.0.0.1:0",
+		SeedFixture: "representative", Environment: environmentEphemeral,
+	})
+	defer func() { _ = h.Close() }()
+	ctx := t.Context()
+	completed, err := h.attention.GetRun(ctx, fixtureCompletedRun)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// The skill's order. A new alert in raise-item -list fails here until the
+	// skill's sequence and this literal agree.
+	skillAlertOrder := []raiseAlert{raiseAlertStall, raiseAlertHeldWork, raiseAlertReviewGrowth}
+	if !slices.Equal(slices.Sorted(slices.Values(skillAlertOrder)), slices.Sorted(slices.Values(AllRaiseAlerts))) {
+		t.Fatalf("skill order %v does not name the alerts of raise-item -list %v", skillAlertOrder, AllRaiseAlerts)
+	}
+
+	// A device owes only items created at or after its pairing, so pairing
+	// now keeps the delivery pass to the raised items.
+	if err := h.store.Write(ctx, func(tx *store.WriteTx) error {
+		return tx.PutDevice(ctx, domain.Device{
+			ID: "phone", DisplayName: "phone", Status: domain.DeviceActive, PairedAt: time.Now().UTC(),
+		})
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	raised := make(map[domain.ItemID]int, len(skillAlertOrder))
+	for _, alert := range skillAlertOrder {
+		cfg := raiseItemCommandConfig{DBPath: dbPath, Alert: alert}
+		if alert.needsRun() {
+			cfg.RunID = fixtureCompletedRun
+		}
+		result, err := runRaiseItemCommand(ctx, cfg)
+		if err != nil {
+			t.Fatalf("raise %s: %v", alert, err)
+		}
+		raised[result.ItemID] = servedItem(t, h, result.ItemID).ItemVersion
+	}
+
+	// The sweep reads only the task's items, so the daemon-subject stall
+	// notice is out of its reach; the run-bound alerts are what it could take.
+	var retired []domain.ItemID
+	if err := h.store.Write(ctx, func(tx *store.WriteTx) error {
+		retired, err = engine.RetireCompletedTaskItems(ctx, tx, completed.Run.TaskID)
+		return err
+	}); err != nil {
+		t.Fatal(err)
+	}
+	for id, version := range raised {
+		if slices.Contains(retired, id) {
+			t.Errorf("the completion sweep retired raised item %s", id)
+		}
+		item := servedItem(t, h, id)
+		if item.Status != domain.StatusOpen || item.ItemVersion != version {
+			t.Errorf("raised item %s is %s at version %d after the sweep, want open at %d",
+				id, item.Status, item.ItemVersion, version)
+		}
+	}
+
+	sink := newNtfySink(t, http.StatusOK)
+	service := signet.NewService(h.store, signet.WithNtfy(signet.NtfyConfig{
+		BaseURL: sink.URL, Client: sink.Client(), TopicKey: []byte("fixture-notification-topic-key-32"),
+	}))
+	if err := service.DeliverOwed(ctx, func(err error) { t.Errorf("delivery: %v", err) }); err != nil {
+		t.Fatal(err)
+	}
+	for id := range raised {
+		rows := deliveriesFor(t, h, id, "phone")
+		if len(rows) != 1 || rows[0].Status != domain.DeliveryChannelAccepted {
+			t.Errorf("deliveries of %s to the phone = %+v, want one channel_accepted row", id, rows)
+		}
 	}
 }
 
