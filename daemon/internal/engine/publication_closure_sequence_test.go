@@ -27,16 +27,24 @@ var (
 // publication holds a bare reservation, reviewed clean at closureSequenceBase1
 // and audited there, so an unpublished base-advance re-entry can seal.
 type closureSequenceFixture struct {
-	st      *store.Store
-	w       *productionPublicationWorkflow
-	policy  domain.ResolvedPolicy
-	taskID  domain.TaskID
-	prior   domain.ReviewRecord
-	opened  map[domain.ProposalInstanceID]domain.ItemID
-	ordered []domain.ProposalInstanceID
+	st          *store.Store
+	w           *productionPublicationWorkflow
+	policy      domain.ResolvedPolicy
+	declaration domain.WorkUnitDeclaration
+	taskID      domain.TaskID
+	prior       domain.ReviewRecord
+	opened      map[domain.ProposalInstanceID]domain.ItemID
+	ordered     []domain.ProposalInstanceID
 }
 
 func seedClosureSequence(t *testing.T) *closureSequenceFixture {
+	t.Helper()
+	return seedClosureSequenceBound(t, nil)
+}
+
+// seedClosureSequenceBound is seedClosureSequence with the work unit declared
+// under the bound-issue criterion when boundIssue is set.
+func seedClosureSequenceBound(t *testing.T, boundIssue *int) *closureSequenceFixture {
 	t.Helper()
 	ctx := context.Background()
 	st := storetest.Open(t, filepath.Join(t.TempDir(), "store.db"), store.Options{
@@ -99,6 +107,17 @@ func seedClosureSequence(t *testing.T) *closureSequenceFixture {
 	if err != nil {
 		t.Fatal(err)
 	}
+	criterion := domain.CompletionBoundPRMerged
+	if boundIssue != nil {
+		criterion = domain.CompletionBoundIssueClosedByMergedPR
+	}
+	declaration, err := domain.NewWorkUnitDeclaration(domain.WorkUnitDeclarationInput{
+		CompletionCriterion: criterion, BoundIssue: boundIssue,
+		DeclaredPaths: domain.CanonicalDeclaredPaths(policy),
+	}, runID, closureStoreProject, closureSequenceAt.Add(-time.Hour))
+	if err != nil {
+		t.Fatal(err)
+	}
 	var taskID domain.TaskID
 	if err := st.Write(ctx, func(tx *store.WriteTx) error {
 		if err := tx.RegisterProject(ctx, domain.Project{
@@ -121,13 +140,6 @@ func seedClosureSequence(t *testing.T) *closureSequenceFixture {
 		if err := tx.RecordExecutionAdmission(ctx, admission); err != nil {
 			return err
 		}
-		declaration, err := domain.NewWorkUnitDeclaration(domain.WorkUnitDeclarationInput{
-			CompletionCriterion: domain.CompletionBoundPRMerged,
-			DeclaredPaths:       domain.CanonicalDeclaredPaths(policy),
-		}, runID, closureStoreProject, closureSequenceAt.Add(-time.Hour))
-		if err != nil {
-			return err
-		}
 		if err := tx.RecordWorkUnitDeclaration(ctx, declaration); err != nil {
 			return err
 		}
@@ -148,7 +160,7 @@ func seedClosureSequence(t *testing.T) *closureSequenceFixture {
 	}
 	now := func() time.Time { return closureSequenceAt }
 	f := &closureSequenceFixture{
-		st: st, policy: policy, taskID: taskID, prior: prior,
+		st: st, policy: policy, declaration: declaration, taskID: taskID, prior: prior,
 		opened: map[domain.ProposalInstanceID]domain.ItemID{},
 		w: &productionPublicationWorkflow{
 			store: st, attention: signet.NewService(st, signet.WithBlobStore(blobs), signet.WithClock(now)), now: now,
