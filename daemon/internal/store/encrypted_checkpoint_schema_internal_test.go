@@ -5,17 +5,13 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"io/fs"
 	"os"
 	"path/filepath"
-	"strconv"
 	"strings"
 	"testing"
-	"testing/fstest"
 	"time"
 
 	"github.com/freeside-ai/freeside/daemon/internal/domain"
-	"github.com/freeside-ai/freeside/daemon/migrations"
 )
 
 type schemaCheckpointArtifacts struct{}
@@ -170,37 +166,6 @@ func newSchemaCheckpointTestStore(t *testing.T) schemaCheckpointTestStore {
 	}
 }
 
-func migrationsBeforeVersion(t *testing.T, threshold int) fs.FS {
-	t.Helper()
-	entries, err := fs.ReadDir(migrations.FS, ".")
-	if err != nil {
-		t.Fatalf("read migrations: %v", err)
-	}
-	prefix := fstest.MapFS{}
-	for _, entry := range entries {
-		if entry.IsDir() || filepath.Ext(entry.Name()) != ".sql" {
-			continue
-		}
-		versionText, _, ok := strings.Cut(entry.Name(), "_")
-		if !ok {
-			t.Fatalf("migration %q has no version prefix", entry.Name())
-		}
-		version, err := strconv.Atoi(versionText)
-		if err != nil {
-			t.Fatalf("parse migration version %q: %v", entry.Name(), err)
-		}
-		if version >= threshold {
-			continue
-		}
-		body, err := fs.ReadFile(migrations.FS, entry.Name())
-		if err != nil {
-			t.Fatalf("read migration %q: %v", entry.Name(), err)
-		}
-		prefix[entry.Name()] = &fstest.MapFile{Data: body}
-	}
-	return prefix
-}
-
 func installSchemaCheckpointFixture(
 	t *testing.T, ctx context.Context, files *LocalBackupFiles, schemaVersion int,
 ) {
@@ -214,7 +179,11 @@ func installSchemaCheckpointFixture(
 			t.Errorf("close checkpoint database: %v", err)
 		}
 	})
-	if err := migrate(ctx, db, migrationsBeforeVersion(t, schemaVersion+1)); err != nil {
+	prefix, err := migrationsThrough(schemaVersion)
+	if err != nil {
+		t.Fatalf("select checkpoint migrations: %v", err)
+	}
+	if err := migrate(ctx, db, prefix); err != nil {
 		t.Fatalf("migrate checkpoint database: %v", err)
 	}
 	if err := seedEpoch(ctx, db); err != nil {

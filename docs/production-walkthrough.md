@@ -436,7 +436,7 @@ manifests under `<root>/production-evidence/composition/` remain.
 
 A deputy that dies without releasing its lease (a crash, SIGKILL, a reboot)
 leaves a stale lease. The next `freesided deputy -root <root>` on the same root
-recovers it as `freesided rig recover` would, then files an advisory
+recovers it as `freesided rig recover -migrate` would, then files an advisory
 `system_health` card (`deputy_run_interrupted`) naming the run it
 interrupted; the root's tasks resume or fail on their own records. A stale
 lease for another root refuses the start and names the command that recovers
@@ -459,8 +459,29 @@ The full review namespace must belong to the stale manifest; journal
 ownership, fingerprints, and lease checks still govern persistent resource
 removal. A lost review receives its normal interrupted outcome, without
 running a provider or advancing the workflow. Unknown persistent resources
-keep the rig gate closed. Recovery opens only an existing database at the
-binary's exact schema; it never migrates or recreates one.
+keep the rig gate closed. Recovery never creates a database, and by default
+it reads the review journal only at this build's schema.
+
+A lease left by an older build, whose database is at an older schema, makes
+recovery refuse when the manifest records review volumes or networks. The
+refusal names the database's schema, this build's schema, and the newest
+migration file at the database's schema. It may come after the recorded
+containers are removed; the gate stays closed. There are two ways out:
+
+- Rerun with `-migrate` to migrate the database to this build's schema
+  before the journal teardown, as the daemon's next start on that root
+  would. Migrating is one-way: a build at the older schema can no longer
+  open that database.
+- Recover with a build at the database's schema, identified by that
+  migration file.
+
+```sh
+freesided rig recover -state-root <that-root>/daemon -confirm -migrate
+```
+
+The deputy migrates its own root's database when it recovers its own stale
+lease, because its start migrates that database anyway. A stale lease for
+another root still refuses the start and names `rig recover`.
 
 ## Recover Expired Reviewer Credentials
 

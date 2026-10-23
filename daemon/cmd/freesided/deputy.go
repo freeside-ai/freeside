@@ -310,7 +310,11 @@ func acquireDeputyLease(
 		_, _ = fmt.Fprintf(stderr, "freesided deputy: recovering the interrupted run's lease from %s@%s pid=%d acquired %s\n",
 			stale.Manifest.Owner.User, stale.Manifest.Owner.Host, stale.Manifest.Owner.PID,
 			stale.Manifest.AcquiredAt.Format(time.RFC3339))
-		if err := recoverStaleRig(ctx, stderr, host.rig, paths.StateRoot, deputyContainerBin, true); err != nil {
+		// Migrate: the operator is running this build on this root, whose
+		// start opens the same database through store.Open and so migrates
+		// it anyway. A start that fails before that open still leaves it
+		// migrated, which the next start of this build would do too.
+		if err := recoverStaleRig(ctx, stderr, host.rig, paths.StateRoot, deputyContainerBin, true, true); err != nil {
 			return nil, nil, fmt.Errorf("recover the interrupted run's lease: %w", err)
 		}
 		manifest := stale.Manifest

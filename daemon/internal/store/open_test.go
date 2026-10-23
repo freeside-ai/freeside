@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"errors"
+	"fmt"
 	"io/fs"
 	"os"
 	"path/filepath"
@@ -296,6 +297,107 @@ func TestOpenExistingRejectsStaleSchemaWithoutMigrating(t *testing.T) {
 	}
 	if gotVersion != wantVersion-1 {
 		t.Fatalf("schema version after refused open = %d, want %d", gotVersion, wantVersion-1)
+	}
+}
+
+// writeOlderSchemaDatabase writes a database one schema version behind this
+// binary, as an older build would have left it.
+func writeOlderSchemaDatabase(t *testing.T) (path string, head int) {
+	t.Helper()
+	head, err := store.CurrentSchemaVersion()
+	if err != nil {
+		t.Fatal(err)
+	}
+	data, err := store.TemplateDatabaseAt(t.Context(), head-1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	path = tempDBPath(t)
+	if err := os.WriteFile(path, data, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	return path, head
+}
+
+func TestOpenRefusesOlderSchemaWithSchemaMismatchError(t *testing.T) {
+	t.Parallel()
+	path, head := writeOlderSchemaDatabase(t)
+	for name, open := range map[string]func(context.Context, string, store.Options) (*store.Store, error){
+		"OpenExisting": store.OpenExisting, "OpenReadOnly": store.OpenReadOnly,
+	} {
+		opened, err := open(t.Context(), path, store.Options{})
+		if err == nil {
+			_ = opened.Close()
+			t.Fatalf("%s opened an older-schema database", name)
+		}
+		var mismatch *store.SchemaMismatchError
+		if !errors.As(err, &mismatch) || mismatch.Database != head-1 || mismatch.Binary != head {
+			t.Fatalf("%s error = %v, want a SchemaMismatchError at %d of %d", name, err, head-1, head)
+		}
+		want := fmt.Sprintf("database schema version %d is not binary schema version %d", head-1, head)
+		if err.Error() != want {
+			t.Fatalf("%s error text = %q, want %q", name, err, want)
+		}
+	}
+}
+
+func TestMigrateExistingMigratesAnOlderDatabaseToHeadAndNeverCreatesOne(t *testing.T) {
+	t.Parallel()
+	missing := tempDBPath(t)
+	if opened, err := store.MigrateExisting(t.Context(), missing, store.Options{}); err == nil {
+		_ = opened.Close()
+		t.Fatal("MigrateExisting created a missing database")
+	}
+	if _, err := os.Stat(missing); !errors.Is(err, fs.ErrNotExist) {
+		t.Fatalf("stat after missing migrate = %v, want ErrNotExist", err)
+	}
+
+	path, head := writeOlderSchemaDatabase(t)
+	var epochs [2]string
+	// The second pass finds the database at head: a no-op that keeps its epoch.
+	for i := range epochs {
+		migrated, err := store.MigrateExisting(t.Context(), path, store.Options{})
+		if err != nil {
+			t.Fatalf("MigrateExisting pass %d: %v", i, err)
+		}
+		version, err := migrated.SchemaVersion(t.Context())
+		if err != nil {
+			t.Fatal(err)
+		}
+		if version != head {
+			t.Fatalf("schema version after pass %d = %d, want %d", i, version, head)
+		}
+		state, err := migrated.ServerState(t.Context())
+		if err != nil {
+			t.Fatal(err)
+		}
+		epochs[i] = string(state.SyncEpoch)
+		if err := migrated.Close(); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if epochs[0] == "" || epochs[0] != epochs[1] {
+		t.Fatalf("epochs = %q, want one seeded epoch kept at head", epochs)
+	}
+	existing, err := store.OpenExisting(t.Context(), path, store.Options{})
+	if err != nil {
+		t.Fatalf("OpenExisting after migrate: %v", err)
+	}
+	if err := existing.Close(); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestTemplateDatabaseAtRejectsVersionsOutsideHistory(t *testing.T) {
+	t.Parallel()
+	head, err := store.CurrentSchemaVersion()
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, version := range []int{0, head + 1} {
+		if _, err := store.TemplateDatabaseAt(t.Context(), version); err == nil {
+			t.Fatalf("TemplateDatabaseAt(%d) succeeded", version)
+		}
 	}
 }
 

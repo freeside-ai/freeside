@@ -2074,9 +2074,11 @@ an 8 GiB review workspace. The supervision deadline stays a `submit` flag.
    listener and opens no database. Startup still revalidates files and
    addresses when it uses them, since they can change after this check.
 3. Take the rig lease. A live holder refuses. A stale lease for this root is
-   recovered as `freesided rig recover` would, and a `system_health` card
-   (`deputy_run_interrupted`) names the run it interrupted. A stale lease
-   for another root refuses and names the `rig recover` command.
+   recovered as `freesided rig recover -migrate` would (a database an older
+   build left migrates forward, as the start's own open would migrate it),
+   and a `system_health` card (`deputy_run_interrupted`) names the run it
+   interrupted. A stale lease for another root refuses and names the
+   `rig recover` command.
 4. Check `prod`'s App authority against `prod.installed_daemon`, under the
    lease, and record the two auth identities from the settings once (a
    later file that names other ones is refused).

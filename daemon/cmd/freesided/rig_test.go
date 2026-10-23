@@ -5,6 +5,8 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
+	"io/fs"
 	"net"
 	"os"
 	"path/filepath"
@@ -15,7 +17,9 @@ import (
 	"github.com/freeside-ai/freeside/daemon/internal/daemonlock"
 	"github.com/freeside-ai/freeside/daemon/internal/domain"
 	"github.com/freeside-ai/freeside/daemon/internal/exec/claude"
+	"github.com/freeside-ai/freeside/daemon/internal/store"
 	"github.com/freeside-ai/freeside/daemon/internal/ward"
+	"github.com/freeside-ai/freeside/daemon/migrations"
 )
 
 type fakeRigHost struct {
@@ -33,10 +37,14 @@ type fakeRigHost struct {
 	inspected      []string
 	deleted        []string
 	probed         []string
+	migrates       []bool // the migrate argument of each review-journal recovery
 	recoverReviews func(context.Context, string, daemonlock.RigManifest) error
 }
 
-func (h *fakeRigHost) RecoverReviewResources(ctx context.Context, executable string, manifest daemonlock.RigManifest) error {
+func (h *fakeRigHost) RecoverReviewResources(
+	ctx context.Context, executable string, manifest daemonlock.RigManifest, migrate bool,
+) error {
+	h.migrates = append(h.migrates, migrate)
 	if h.recoverReviews != nil {
 		return h.recoverReviews(ctx, executable, manifest)
 	}
@@ -965,17 +973,112 @@ func TestRigRecoverJournalsAfterContainersAndBeforeRelease(t *testing.T) {
 	}
 }
 
-func TestRigReviewJournalNeverCreatesMissingDatabase(t *testing.T) {
-	root := t.TempDir()
-	path := filepath.Join(root, "missing.db")
-	err := newProductionRigHost().RecoverReviewResources(t.Context(), "must-not-run", daemonlock.RigManifest{
-		Resources: daemonlock.RigResources{StateRoot: root, DatabasePath: path},
-	})
-	if err == nil {
-		t.Fatal("recovery created a missing database")
+func TestRigRecoverPassesMigrateOnlyWhenAsked(t *testing.T) {
+	for name, tc := range map[string]struct {
+		args []string
+		want bool
+	}{
+		"without -migrate": {nil, false},
+		"with -migrate":    {[]string{"-migrate"}, true},
+	} {
+		t.Run(name, func(t *testing.T) {
+			stateRoot, lease, _, _ := acquireBoundRig(t, "review-interrupted")
+			manifest, err := daemonlock.ReadRigManifest(stateRoot)
+			if err != nil {
+				t.Fatal(err)
+			}
+			volume := manifest.Resources.Volumes[0]
+			if err := lease.Abandon(); err != nil {
+				t.Fatal(err)
+			}
+			host := &fakeRigHost{volumes: map[string]bool{volume: true}}
+			host.recoverReviews = func(context.Context, string, daemonlock.RigManifest) error {
+				delete(host.volumes, volume)
+				return nil
+			}
+			args := append([]string{"-state-root", stateRoot, "-confirm"}, tc.args...)
+			if err := runRigRecover(t.Context(), args, ioDiscard{}, ioDiscard{}, host); err != nil {
+				t.Fatal(err)
+			}
+			if !slices.Equal(host.migrates, []bool{tc.want}) {
+				t.Fatalf("review recovery migrate arguments = %v, want [%v]", host.migrates, tc.want)
+			}
+		})
 	}
-	if _, err := os.Stat(path); !errors.Is(err, os.ErrNotExist) {
-		t.Fatalf("missing database was changed: %v", err)
+}
+
+func TestRigReviewJournalNeverCreatesMissingDatabase(t *testing.T) {
+	for _, migrate := range []bool{false, true} {
+		root := t.TempDir()
+		path := filepath.Join(root, "missing.db")
+		err := newProductionRigHost().RecoverReviewResources(t.Context(), "must-not-run", daemonlock.RigManifest{
+			Resources: daemonlock.RigResources{StateRoot: root, DatabasePath: path},
+		}, migrate)
+		if err == nil {
+			t.Fatalf("recovery with migrate %v created a missing database", migrate)
+		}
+		if _, err := os.Stat(path); !errors.Is(err, os.ErrNotExist) {
+			t.Fatalf("missing database was changed with migrate %v: %v", migrate, err)
+		}
+	}
+}
+
+// TestRigReviewJournalMigratesAnOlderBuildsDatabaseOnlyWhenAsked pins #2201:
+// a lease an older build left, with recorded review volumes, refuses with
+// both schemas and the ways out, and recovers through -migrate.
+func TestRigReviewJournalMigratesAnOlderBuildsDatabaseOnlyWhenAsked(t *testing.T) {
+	head, err := store.CurrentSchemaVersion()
+	if err != nil {
+		t.Fatal(err)
+	}
+	older, err := store.TemplateDatabaseAt(t.Context(), head-1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	newestOlder, err := fs.Glob(migrations.FS, fmt.Sprintf("%04d_*.sql", head-1))
+	if err != nil || len(newestOlder) != 1 {
+		t.Fatalf("migration at schema %d: %v, %v", head-1, newestOlder, err)
+	}
+	root := t.TempDir()
+	path := filepath.Join(root, "freeside.db")
+	if err := os.WriteFile(path, older, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	resources := ward.RuntimeResourceNamesFor(claude.RunIDFor("review-interrupted"))
+	manifest := daemonlock.RigManifest{Resources: daemonlock.RigResources{
+		StateRoot: root, DatabasePath: path, Volumes: resources.Volumes, Networks: resources.Networks,
+	}}
+	// The journal is empty, so its teardown touches no runtime.
+	host := newProductionRigHost()
+
+	err = host.RecoverReviewResources(t.Context(), "must-not-run", manifest, false)
+	var mismatch *store.SchemaMismatchError
+	if !errors.As(err, &mismatch) {
+		t.Fatalf("recovery without migrate = %v, want a schema mismatch", err)
+	}
+	for _, want := range []string{
+		fmt.Sprintf("database schema version %d is not binary schema version %d", head-1, head),
+		newestOlder[0], "rerun with -migrate", "one-way", fmt.Sprintf("a build at schema %d", head-1),
+	} {
+		if !strings.Contains(err.Error(), want) {
+			t.Fatalf("refusal %q does not name %q", err, want)
+		}
+	}
+	if _, err := store.OpenReadOnly(t.Context(), path, store.Options{}); !errors.As(err, &mismatch) ||
+		mismatch.Database != head-1 {
+		t.Fatalf("refused recovery changed the database: %v", err)
+	}
+
+	if err := host.RecoverReviewResources(t.Context(), "must-not-run", manifest, true); err != nil {
+		t.Fatalf("recovery with migrate: %v", err)
+	}
+	migrated, err := store.OpenReadOnly(t.Context(), path, store.Options{})
+	if err != nil {
+		t.Fatalf("database after migrated recovery: %v", err)
+	}
+	defer func() { _ = migrated.Close() }()
+	if version, err := migrated.SchemaVersion(t.Context()); err != nil || version != head {
+		t.Fatalf("schema after migrated recovery = %d, %v; want %d", version, err, head)
 	}
 }
 

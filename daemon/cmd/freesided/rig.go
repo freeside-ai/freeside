@@ -7,6 +7,7 @@ import (
 	"flag"
 	"fmt"
 	"io"
+	"io/fs"
 	"net"
 	"net/http"
 	"os"
@@ -28,6 +29,7 @@ import (
 	"github.com/freeside-ai/freeside/daemon/internal/strictjson"
 	"github.com/freeside-ai/freeside/daemon/internal/ward"
 	"github.com/freeside-ai/freeside/daemon/internal/wardstore"
+	"github.com/freeside-ai/freeside/daemon/migrations"
 )
 
 var errRigUsage = errors.New("invalid rig command")
@@ -46,13 +48,25 @@ type rigHost interface {
 	DeleteContainers(context.Context, string, []string) error
 	PresentPersistentResources(context.Context, string, []string, []string) ([]string, []string, error)
 	RuntimeCLIActive(context.Context, string) (bool, error)
-	RecoverReviewResources(context.Context, string, daemonlock.RigManifest) error
+	RecoverReviewResources(ctx context.Context, executable string, manifest daemonlock.RigManifest, migrate bool) error
 }
 
+// RecoverReviewResources tears down the recorded review volumes and networks
+// through their journal. It reads the journal only at this build's schema:
+// with migrate it first migrates an older database forward, as the daemon's
+// next start on that root would; without it an older database is refused
+// with the ways out. Neither mode creates a missing database.
 func (productionRigHost) RecoverReviewResources(
-	ctx context.Context, executable string, manifest daemonlock.RigManifest,
+	ctx context.Context, executable string, manifest daemonlock.RigManifest, migrate bool,
 ) (retErr error) {
-	st, err := store.OpenExisting(ctx, manifest.Resources.DatabasePath, store.Options{})
+	open := store.OpenExisting
+	if migrate {
+		open = store.MigrateExisting
+	}
+	st, err := open(ctx, manifest.Resources.DatabasePath, store.Options{})
+	if mismatch := (*store.SchemaMismatchError)(nil); errors.As(err, &mismatch) {
+		return fmt.Errorf("open existing review journal: %w: %s", err, olderSchemaRecovery(mismatch))
+	}
 	if err != nil {
 		return fmt.Errorf("open existing review journal: %w", err)
 	}
@@ -66,6 +80,20 @@ func (productionRigHost) RecoverReviewResources(
 			Containers: manifest.Resources.Containers,
 			Volumes:    manifest.Resources.Volumes, Networks: manifest.Resources.Networks,
 		})
+}
+
+// olderSchemaRecovery names the two ways past a review journal an older
+// build left: migrate it forward, which that build can then no longer open,
+// or recover with a build at its schema, identified by its newest migration.
+func olderSchemaRecovery(mismatch *store.SchemaMismatchError) string {
+	newest := "none"
+	if names, err := fs.Glob(migrations.FS, fmt.Sprintf("%04d_*.sql", mismatch.Database)); err == nil && len(names) == 1 {
+		newest = names[0]
+	}
+	return fmt.Sprintf("an older build left it at schema %d (newest migration %s); "+
+		"rerun with -migrate to migrate it to schema %d first, which is one-way: "+
+		"a build at schema %d can no longer open it; or recover with a build at schema %d",
+		mismatch.Database, newest, mismatch.Binary, mismatch.Database, mismatch.Database)
 }
 
 type productionRigHost struct {
@@ -718,6 +746,8 @@ func runRigRecover(
 	flags.SetOutput(stderr)
 	stateRoot := flags.String("state-root", "", "production daemon state root (required)")
 	confirm := flags.Bool("confirm", false, "confirm cleanup of exactly the recorded stale resources")
+	migrate := flags.Bool("migrate", false,
+		"migrate a review journal an older build left to this build's schema before recovery (one-way)")
 	containerBin := flags.String("container-bin", "container", "Apple container executable")
 	if err := flags.Parse(args); err != nil {
 		return fmt.Errorf("%w: %w", errRigUsage, err)
@@ -725,15 +755,16 @@ func runRigRecover(
 	if flags.NArg() != 0 || *stateRoot == "" {
 		return fmt.Errorf("%w: -state-root is required", errRigUsage)
 	}
-	return recoverStaleRig(ctx, stdout, host, *stateRoot, *containerBin, *confirm)
+	return recoverStaleRig(ctx, stdout, host, *stateRoot, *containerBin, *confirm, *migrate)
 }
 
 // recoverStaleRig is rig recover after its flags. Without confirm it prints
 // what it would clean up and refuses; deputy confirms for the lease its own
 // root recorded, because that lease is the one its previous start left.
+// Migrate reaches only the review journal (rigHost.RecoverReviewResources).
 func recoverStaleRig(
 	ctx context.Context, stdout io.Writer, host rigHost,
-	stateRoot, containerBin string, confirm bool,
+	stateRoot, containerBin string, confirm, migrate bool,
 ) (err error) {
 	lease, err := daemonlock.AcquireStaleRig(stateRoot)
 	if err != nil {
@@ -800,7 +831,7 @@ func recoverStaleRig(
 		if active {
 			return errors.New("runtime CLI process is still active; wait before recovering review journals")
 		}
-		if err := host.RecoverReviewResources(ctx, containerBin, manifest); err != nil {
+		if err := host.RecoverReviewResources(ctx, containerBin, manifest, migrate); err != nil {
 			return fmt.Errorf("recover recorded review journals: %w", err)
 		}
 	}

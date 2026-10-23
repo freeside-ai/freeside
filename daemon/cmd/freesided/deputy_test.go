@@ -18,8 +18,10 @@ import (
 
 	"github.com/freeside-ai/freeside/daemon/internal/daemonlock"
 	"github.com/freeside-ai/freeside/daemon/internal/domain"
+	"github.com/freeside-ai/freeside/daemon/internal/exec/claude"
 	"github.com/freeside-ai/freeside/daemon/internal/gitenv"
 	"github.com/freeside-ai/freeside/daemon/internal/store"
+	"github.com/freeside-ai/freeside/daemon/internal/ward"
 )
 
 var deputyTestNow = func() time.Time { return time.Date(2026, 10, 14, 12, 0, 0, 0, time.UTC) }
@@ -117,6 +119,44 @@ func TestAcquireDeputyLeaseRecoversItsOwnStaleLease(t *testing.T) {
 	}
 	if lease.Manifest().Owner.Note != deputyOwnerNote || lease.Manifest().Owner.PID != os.Getpid() {
 		t.Fatalf("new lease owner %+v", lease.Manifest().Owner)
+	}
+}
+
+// TestAcquireDeputyLeaseMigratesItsOwnRootsReviewJournal pins #2201: the
+// deputy recovers its own root's review journal through the migrated schema,
+// because its start migrates that database anyway.
+func TestAcquireDeputyLeaseMigratesItsOwnRootsReviewJournal(t *testing.T) {
+	host, paths, settings := deputyLeaseFixture(t)
+	prior, err := daemonlock.AcquireRig(daemonlock.RigAcquireConfig{
+		Owner:     daemonlock.RigOwner{User: "operator", Host: "host", PID: 4242, Note: deputyOwnerNote},
+		StateRoot: paths.StateRoot, DatabasePath: paths.DB,
+		ListenAddress: settings.Listen, SeedRoot: settings.SeedRoot, LeaseRoot: host.leaseRoot,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	volume := ward.RuntimeResourceNamesFor(claude.RunIDFor("review-interrupted")).Volumes[0]
+	if _, err := daemonlock.BindRigRuntimeResources(
+		paths.StateRoot, prior.Token(), nil, []string{volume}, nil,
+	); err != nil {
+		t.Fatal(err)
+	}
+	if err := prior.Abandon(); err != nil {
+		t.Fatal(err)
+	}
+	rig := &fakeRigHost{volumes: map[string]bool{volume: true}}
+	rig.recoverReviews = func(context.Context, string, daemonlock.RigManifest) error {
+		delete(rig.volumes, volume)
+		return nil
+	}
+	host.rig = rig
+	lease, _, err := acquireDeputyLease(context.Background(), host, paths, settings, io.Discard)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = lease.Close() }()
+	if !slices.Equal(rig.migrates, []bool{true}) {
+		t.Fatalf("review recovery migrate arguments = %v, want [true]", rig.migrates)
 	}
 }
 
