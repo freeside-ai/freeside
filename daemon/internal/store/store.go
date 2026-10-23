@@ -187,7 +187,7 @@ func OpenReadOnly(ctx context.Context, path string, opts Options) (*Store, error
 	}
 	if len(applied) != len(names) {
 		_ = db.Close()
-		return nil, fmt.Errorf("database schema version %d is not binary schema version %d", len(applied), len(names))
+		return nil, &SchemaMismatchError{Database: len(applied), Binary: len(names)}
 	}
 	return newStore(db, opts, verificationGeneration, requirementSets), nil
 }
@@ -229,9 +229,53 @@ func OpenExisting(ctx context.Context, path string, opts Options) (*Store, error
 	}
 	if len(applied) != len(names) {
 		_ = db.Close()
-		return nil, fmt.Errorf("database schema version %d is not binary schema version %d", len(applied), len(names))
+		return nil, &SchemaMismatchError{Database: len(applied), Binary: len(names)}
 	}
 	return newStore(db, opts, verificationGeneration, requirementSets), nil
+}
+
+// MigrateExisting opens an existing database for writes without creating
+// one, then migrates it to head and seeds its epoch exactly as Open does. It
+// is the opt-in for an operator command that must read a database an older
+// build left, such as rig recover -migrate. Migrating is one-way: after it, a
+// build at the older schema can no longer open the database.
+func MigrateExisting(ctx context.Context, path string, opts Options) (*Store, error) {
+	verificationGeneration, err := resolveVerificationFloorRegistryGeneration(
+		opts.VerificationFloorRegistryGeneration,
+		domain.CurrentVerificationFloorRegistryGeneration,
+	)
+	if err != nil {
+		return nil, err
+	}
+	requirementSets, err := resolveTrustedRequirementSets(verificationGeneration, opts.TrustedRequirementSets)
+	if err != nil {
+		return nil, err
+	}
+	db, err := openExistingDB(path, opts)
+	if err != nil {
+		return nil, err
+	}
+	if err := migrate(ctx, db, migrations.FS); err != nil {
+		_ = db.Close()
+		return nil, err
+	}
+	if err := seedEpoch(ctx, db); err != nil {
+		_ = db.Close()
+		return nil, err
+	}
+	return newStore(db, opts, verificationGeneration, requirementSets), nil
+}
+
+// SchemaMismatchError is OpenReadOnly's and OpenExisting's refusal of a
+// database whose applied history is a strict prefix of this binary's: an
+// older build left it. A database newer than the binary fails earlier with
+// a different error, so Database is always below Binary here.
+type SchemaMismatchError struct {
+	Database, Binary int
+}
+
+func (e *SchemaMismatchError) Error() string {
+	return fmt.Sprintf("database schema version %d is not binary schema version %d", e.Database, e.Binary)
 }
 
 func newStore(
