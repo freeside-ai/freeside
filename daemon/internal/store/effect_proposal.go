@@ -1593,6 +1593,46 @@ func (tx *ReadTx) OpenEffectItemForInstance(
 	return open, merge, true, nil
 }
 
+// DecidedEffectItemForInstance returns the item a recorded decision on an
+// instance was made against, for OpenEffectProposalItem's refusal to reopen a
+// decided instance. found is false when the instance has no decision row. The
+// effect_proposal_decisions row is the authority, never an item's status: the
+// item is the one the deciding command names, which for approve_with_changes is
+// the original card, not the replacement that carries the conclusion. A
+// command whose item is not bound to the instance is a corrupt state and fails
+// closed.
+func (tx *ReadTx) DecidedEffectItemForInstance(
+	ctx context.Context,
+	instanceID domain.ProposalInstanceID,
+) (domain.AttentionItem, bool, error) {
+	var commandID string
+	err := tx.tx.QueryRowContext(ctx,
+		`SELECT command_id FROM effect_proposal_decisions WHERE instance_id = ?`, instanceID).Scan(&commandID)
+	if errors.Is(err, sql.ErrNoRows) {
+		return domain.AttentionItem{}, false, nil
+	}
+	if err != nil {
+		return domain.AttentionItem{}, false, fmt.Errorf("decided effect item for instance %q: %w", instanceID, err)
+	}
+	command, err := tx.GetCommand(ctx, commandID)
+	if err != nil {
+		return domain.AttentionItem{}, false, fmt.Errorf("decided effect item for instance %q: %w", instanceID, err)
+	}
+	boundInstance, _, _, err := tx.proposalItemBinding(ctx, command.ItemID)
+	if err != nil {
+		return domain.AttentionItem{}, false, fmt.Errorf("decided effect item for instance %q: %w", instanceID, err)
+	}
+	if boundInstance != instanceID {
+		return domain.AttentionItem{}, false,
+			fmt.Errorf("decided effect item for instance %q: %w", instanceID, errRowInconsistent)
+	}
+	item, err := tx.GetAttentionItem(ctx, command.ItemID)
+	if err != nil {
+		return domain.AttentionItem{}, false, fmt.Errorf("decided effect item for instance %q: %w", instanceID, err)
+	}
+	return item, true, nil
+}
+
 // RetireOpenClosureProposals concludes by supersession every open
 // effect_proposal card bound to a source_issue_closure instance of the run's
 // work unit, with reason as the closed card's sentence, and returns the

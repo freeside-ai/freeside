@@ -213,6 +213,108 @@ func TestOpenEffectProposalItemIdempotentAndSupersedes(t *testing.T) {
 	}
 }
 
+func (f closureFixture) assertNoOpenItem(t *testing.T) {
+	t.Helper()
+	if err := f.store.Read(context.Background(), func(tx *store.ReadTx) error {
+		open, _, found, err := tx.OpenEffectItemForInstance(context.Background(), f.instance.ID)
+		if err != nil {
+			return err
+		}
+		if found {
+			t.Fatalf("instance has open item %q, want none", open.ID)
+		}
+		return nil
+	}); err != nil {
+		t.Fatalf("OpenEffectItemForInstance: %v", err)
+	}
+}
+
+// TestOpenEffectProposalItemDecidedRebindOpensNothing reproduces the Wave 8
+// exit-run order (#2219): a decision resolves the card, then the closure bind
+// runs again. Neither the same merge nor a moved one opens a card; the call
+// returns the item the decision was recorded against, unchanged.
+func TestOpenEffectProposalItemDecidedRebindOpensNothing(t *testing.T) {
+	movedHead := func(m domain.ProspectiveMerge) domain.ProspectiveMerge {
+		m.CandidateHeadSHA = "head-bbb"
+		return m
+	}
+	movedBase := func(m domain.ProspectiveMerge) domain.ProspectiveMerge {
+		m.BaseSHA = "base-999"
+		return m
+	}
+	for _, tc := range []struct {
+		name     string
+		resolves bool
+		decide   func(f closureFixture, item domain.AttentionItem) signet.ClientCommand
+		status   domain.ItemStatus
+		approved bool
+	}{
+		{
+			name: "approve", resolves: true, status: domain.StatusResolved, approved: true,
+			decide: func(f closureFixture, item domain.AttentionItem) signet.ClientCommand {
+				return f.decision(item, "approve-1", domain.ActionApprove)
+			},
+		},
+		{
+			name: "decline", resolves: true, status: domain.StatusDismissed,
+			decide: func(f closureFixture, item domain.AttentionItem) signet.ClientCommand {
+				return f.decision(item, "decline-1", domain.ActionDecline)
+			},
+		},
+		{
+			name: "approve_with_changes", resolves: false, status: domain.StatusSuperseded, approved: true,
+			decide: func(f closureFixture, item domain.AttentionItem) signet.ClientCommand {
+				cmd := f.decision(item, "approve-changes-1", domain.ActionApproveWithChanges)
+				cmd.Payload.EffectProposalRevision = &signet.EffectProposalRevisionInput{Resolves: true}
+				return cmd
+			},
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			f := newClosureFixture(t, tc.resolves, domain.ClosureFlagOriginProposeSite)
+			first := f.open(t, f.merge)
+			if _, err := f.service.Submit(context.Background(), tc.decide(f, first)); err != nil {
+				t.Fatalf("decide: %v", err)
+			}
+			decided := f.readItem(t, first.ID)
+			if decided.Status != tc.status {
+				t.Fatalf("decided item status = %q, want %q", decided.Status, tc.status)
+			}
+			for _, merge := range []domain.ProspectiveMerge{f.merge, movedHead(f.merge), movedBase(f.merge)} {
+				again := f.open(t, merge)
+				if again.ID != first.ID || again.Status != tc.status || again.ItemVersion != decided.ItemVersion {
+					t.Fatalf("rebind for %+v returned %q status %q version %d, want the decided %q",
+						merge, again.ID, again.Status, again.ItemVersion, first.ID)
+				}
+				f.assertNoOpenItem(t)
+			}
+			approval := f.approval(t)
+			if (approval != nil) != tc.approved {
+				t.Fatalf("approval after rebinds = %+v, want present %v", approval, tc.approved)
+			}
+			if approval == nil {
+				return
+			}
+			if approval.CandidateHeadSHA != f.merge.CandidateHeadSHA || approval.BaseSHA != f.merge.BaseSHA {
+				t.Fatalf("approval = %+v, want it still bound to the decided merge", approval)
+			}
+			if !tc.resolves {
+				// approve_with_changes binds the revised digest, which the
+				// fixture's proposal does not carry; the binding check above
+				// covers it.
+				return
+			}
+			if !approval.AuthorizesClose(f.instance.Proposal, f.merge) {
+				t.Fatal("the decided merge lost its approval")
+			}
+			if approval.AuthorizesClose(f.instance.Proposal, movedHead(f.merge)) ||
+				approval.AuthorizesClose(f.instance.Proposal, movedBase(f.merge)) {
+				t.Fatal("the approval authorized a moved merge")
+			}
+		})
+	}
+}
+
 // TestGenericIntakeRefusesEffectProposal proves only the opener creates an
 // effect_proposal item; generic intake refuses the type.
 func TestGenericIntakeRefusesEffectProposal(t *testing.T) {
@@ -441,6 +543,25 @@ func TestOpenEffectProposalNoticeSupersedesOnMergeChange(t *testing.T) {
 	}
 	if superseded := f.readItem(t, first.ID); superseded.Status != domain.StatusSuperseded {
 		t.Fatalf("first notice status = %q, want superseded", superseded.Status)
+	}
+}
+
+// TestOpenEffectProposalNoticeDecidedRebindOpensNothing proves a decided
+// fallback notice does not reopen, for the same merge or a moved one.
+func TestOpenEffectProposalNoticeDecidedRebindOpensNothing(t *testing.T) {
+	f := newClosureFixture(t, true, domain.ClosureFlagOriginDaemonFallback)
+	first := f.openNotice(t, f.merge)
+	if _, err := f.service.Submit(context.Background(), f.decision(first, "notice-approve", domain.ActionApprove)); err != nil {
+		t.Fatalf("approve notice: %v", err)
+	}
+	moved := f.merge
+	moved.CandidateHeadSHA = "head-bbb"
+	for _, merge := range []domain.ProspectiveMerge{f.merge, moved} {
+		again := f.openNotice(t, merge)
+		if again.ID != first.ID || again.Status != domain.StatusResolved {
+			t.Fatalf("rebind for %+v returned %q status %q, want the decided %q", merge, again.ID, again.Status, first.ID)
+		}
+		f.assertNoOpenItem(t)
 	}
 }
 
