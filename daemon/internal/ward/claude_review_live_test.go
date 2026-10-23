@@ -24,6 +24,7 @@ import (
 	osexec "os/exec"
 	"path/filepath"
 	"slices"
+	"strings"
 	"testing"
 	"time"
 
@@ -139,7 +140,8 @@ func TestLiveClaudeReviewLifecycleCrossesReconstructionStartBoundary(t *testing.
 			Vendor: domain.AgentVendorClaude, Delivery: domain.VendorInstructionDeliveryAppendFile,
 			Present: true, Digest: digestBody(instructionBody), Body: instructionBody,
 		},
-		InstructionBinding: instructionBinding,
+		InstructionBinding:  instructionBinding,
+		ConfigurationDigest: domain.Digest("sha256:" + strings.Repeat("c", 64)),
 	}
 	launch, err := backend.CodexReview(ctx, reviewConfig, launchSpec)
 	if err != nil {

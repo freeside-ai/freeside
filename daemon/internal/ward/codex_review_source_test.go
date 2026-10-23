@@ -3360,7 +3360,7 @@ func TestCodexReviewRestartRecoversLegacyRoundAndRelaunchesSameRequest(t *testin
 		Boundary: CodexReviewFreshStart, AuthMode: sourceConfig.AuthMode,
 		AuthIdentityID: sourceConfig.AuthIdentityID, AuthSnapshot: sourceConfig.AuthSnapshot,
 		Instructions: instructions, InstructionFile: instructionFile,
-		InstructionBinding: request.Instructions,
+		InstructionBinding: request.Instructions, ConfigurationDigest: sourceConfig.ConfigurationDigest,
 	}
 	digest, err := codexReviewIntentDigest(sourceConfig.Review, launchSpec)
 	if err != nil {

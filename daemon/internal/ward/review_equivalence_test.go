@@ -24,8 +24,8 @@ import (
 // harness reconstructs the pre-#872 pure implementations from base commit
 // 6bf2c8b854d6470e77ae5b93e6113530e35c3d90 and measures, over a fuzzed corpus,
 // that the Codex provider path preserves decisions apart from documented
-// post-extraction protocol changes below (#1212, #1291, and #2110's failure
-// classification and text). It covers
+// post-extraction protocol changes below (#1212, #1291, #2110's failure
+// classification and text, and #2197's journaled launch digest). It covers
 // the two trust-boundary surfaces the acceptance criteria name: (a) collection
 // normalization / strict-JSON decode, and (b) launch-spec mount + command + env
 // derivation. A diff-read asserts equivalence; this harness measures it.
@@ -480,6 +480,8 @@ func oldBuildReviewAgentSpec(
 		PublicationCredentials:          false,
 		LauncherEnvironmentDigest:       digestEnvironment(env),
 		CommandDigest:                   digestStrings(command),
+		// #2197 journals the configuration digest the launch is approved under.
+		ConfigurationDigest: req.ConfigurationDigest,
 	}
 	if err := validateCodexReviewAgentSpec(cfg, req, spec, binding); err != nil {
 		return ContainerSpec{}, CodexReviewJournalBinding{}, err

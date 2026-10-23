@@ -406,7 +406,7 @@ func (s *CodexReviewSource) startRequestedReview(
 		Boundary: CodexReviewFreshStart, AuthMode: s.cfg.AuthMode,
 		AuthIdentityID: s.cfg.AuthIdentityID, AuthSnapshot: s.cfg.AuthSnapshot,
 		Instructions: instructions, InstructionFile: instructionFile,
-		InstructionBinding: req.Instructions,
+		InstructionBinding: req.Instructions, ConfigurationDigest: s.cfg.ConfigurationDigest,
 	})
 	if err != nil {
 		if classifyCodexLaunchFailure(err) == domain.ReviewFailureTransient {

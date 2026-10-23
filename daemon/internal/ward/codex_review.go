@@ -390,6 +390,11 @@ type CodexReviewSpec struct {
 	InstructionFile      string
 	InstructionBinding   exec.ReviewInstructionBinding
 
+	// ConfigurationDigest is the trust-profile configuration digest the
+	// review is approved under. The binding journals it so collection can
+	// refuse a result produced under a configuration the daemon no longer runs.
+	ConfigurationDigest domain.Digest
+
 	// AgentsShadow is the runtime-backed observation of one empty volume,
 	// mounted read-only at HOME/.agents, at every in-container ancestor of
 	// the workspace, and over the workspace's own .agents exactly when the
@@ -463,6 +468,7 @@ type CodexReviewJournalBinding struct {
 	PublicationCredentials                  bool                           `json:"publication_credentials"`
 	LauncherEnvironmentDigest               string                         `json:"launcher_environment_digest"`
 	CommandDigest                           string                         `json:"command_digest"`
+	ConfigurationDigest                     domain.Digest                  `json:"configuration_digest"`
 	ReviewContainer                         string                         `json:"review_container"`
 	ReviewContainerFingerprint              string                         `json:"review_container_fingerprint"`
 	ReviewOwnershipToken                    string                         `json:"review_ownership_token"`
@@ -1132,6 +1138,7 @@ func buildReviewAgentSpec(
 		PublicationCredentials:          false,
 		LauncherEnvironmentDigest:       digestEnvironment(env),
 		CommandDigest:                   digestStrings(command),
+		ConfigurationDigest:             req.ConfigurationDigest,
 	}
 	if err := validateReviewAgentSpec(provider, cfg, req, spec, binding); err != nil {
 		return ContainerSpec{}, CodexReviewJournalBinding{}, err
@@ -1327,6 +1334,8 @@ func validateCodexReviewRequest(provider reviewProvider, cfg CodexReviewConfig, 
 		return fmt.Errorf("%w: unsupported auth mode %q", ErrInvalidCodexReviewSpec, req.AuthMode)
 	case req.AuthIdentityID == "":
 		return fmt.Errorf("%w: AuthIdentityID is required", ErrInvalidCodexReviewSpec)
+	case !contentaddr.Valid(string(req.ConfigurationDigest)):
+		return fmt.Errorf("%w: ConfigurationDigest is invalid", ErrInvalidCodexReviewSpec)
 	case !req.AgentsShadow.valid() || req.AgentsShadow.observerImage != cfg.ObserverImage:
 		return fmt.Errorf("%w: runtime-backed empty shadow observation is required", ErrInvalidCodexReviewSpec)
 	case !req.Snapshot.valid() || req.Snapshot.observerImage != cfg.ObserverImage ||
@@ -2176,6 +2185,7 @@ func validateReviewAgentSpec(
 		binding.ProviderProxyAuthority != req.Network.proxyAuthority ||
 		binding.LauncherEnvironmentDigest != digestEnvironment(wantEnv) ||
 		binding.CommandDigest != digestStrings(wantCommand) ||
+		binding.ConfigurationDigest != req.ConfigurationDigest ||
 		!contentaddr.Valid(binding.AuthSnapshotDigest) || !contentaddr.Valid(string(binding.InstructionDigest)) {
 		return failf(CheckControlPlaneIsolation, "Codex review journal binding diverged from the admitted topology")
 	}

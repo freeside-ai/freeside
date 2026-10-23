@@ -123,10 +123,11 @@ func testClaudeReview(t *testing.T) (CodexReviewConfig, CodexReviewSpec) {
 			Vendor: domain.AgentVendorClaude, Delivery: domain.VendorInstructionDeliveryAppendFile,
 			Present: true, Digest: digest, Body: instructionBody,
 		},
-		InstructionFile:    writeCodexReviewFile(t, root, "CLAUDE.md", instructionBody),
-		InstructionBinding: instructionBinding,
-		AgentsShadow:       shadow,
-		Snapshot:           snapshot,
+		InstructionFile:     writeCodexReviewFile(t, root, "CLAUDE.md", instructionBody),
+		InstructionBinding:  instructionBinding,
+		ConfigurationDigest: domain.Digest("sha256:" + strings.Repeat("c", 64)),
+		AgentsShadow:        shadow,
+		Snapshot:            snapshot,
 	}
 	return cfg, req
 }

@@ -143,6 +143,7 @@ func liveCodexReviewLifecycle(t *testing.T, slug string, withAgents bool) {
 		AuthMode: request.AuthMode, AuthIdentityID: request.AuthIdentityID,
 		AuthSnapshot: request.AuthSnapshot, Instructions: request.Instructions,
 		InstructionFile: request.InstructionFile, InstructionBinding: request.InstructionBinding,
+		ConfigurationDigest: request.ConfigurationDigest,
 	}
 	launch, err := backend.CodexReview(ctx, reviewConfig, launchSpec)
 	if err != nil {

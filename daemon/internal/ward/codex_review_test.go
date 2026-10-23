@@ -736,10 +736,11 @@ func testCodexReview(t *testing.T) (CodexReviewConfig, CodexReviewSpec) {
 			Vendor: domain.AgentVendorCodex, Delivery: domain.VendorInstructionDeliveryAppendFile,
 			Present: true, Digest: digest, Body: instructionBody,
 		},
-		InstructionFile:    writeCodexReviewFile(t, root, "AGENTS.md", instructionBody),
-		InstructionBinding: instructionBinding,
-		AgentsShadow:       shadow,
-		Snapshot:           snapshot,
+		InstructionFile:     writeCodexReviewFile(t, root, "AGENTS.md", instructionBody),
+		InstructionBinding:  instructionBinding,
+		ConfigurationDigest: domain.Digest("sha256:" + strings.Repeat("c", 64)),
+		AgentsShadow:        shadow,
+		Snapshot:            snapshot,
 	}
 	return cfg, req
 }
@@ -774,6 +775,7 @@ func testReviewLifecycle(
 		AuthMode: req.AuthMode, AuthIdentityID: req.AuthIdentityID,
 		AuthSnapshot: req.AuthSnapshot, Instructions: req.Instructions,
 		InstructionFile: req.InstructionFile, InstructionBinding: req.InstructionBinding,
+		ConfigurationDigest: req.ConfigurationDigest,
 	}
 	fx := newHandoffFixture(t)
 	cfg.VolumeLifecycleLeaser = &fakeCodexReviewVolumeLeaser{rt: fx.rt}
@@ -2689,6 +2691,12 @@ func TestBackendCodexReviewRejectsCallerInputBeforeRuntime(t *testing.T) {
 			},
 		},
 		{
+			name: "missing configuration digest",
+			mutate: func(_ *testing.T, _ *CodexReviewConfig, launch *CodexReviewLaunchSpec) {
+				launch.ConfigurationDigest = ""
+			},
+		},
+		{
 			name: "auth outside input root",
 			mutate: func(t *testing.T, cfg *CodexReviewConfig, launch *CodexReviewLaunchSpec) {
 				launch.AuthSnapshot = writeCodexReviewFile(t, t.TempDir(), "auth.json", []byte("{}"))
@@ -3024,6 +3032,32 @@ func TestBuildCodexReviewAgentSpecOmitsWorkspaceShadowWhenAgentsAbsent(t *testin
 // disagrees with its recorded workspace .agents entry, or whose entry
 // disagrees with the live observation, must fail closed, so reconstruction
 // can never choose a different topology than the one bound at launch.
+// The binding journals the configuration digest the review was approved
+// under; collection compares it with the daemon's, so a spec without one, or a
+// binding that records another, must never reach the runtime.
+func TestCodexReviewBindingRecordsConfigurationDigest(t *testing.T) {
+	cfg, req := testCodexReview(t)
+	spec, binding, err := BuildCodexReviewAgentSpec(cfg, req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if binding.ConfigurationDigest != req.ConfigurationDigest {
+		t.Fatalf("binding digest = %q, want %q", binding.ConfigurationDigest, req.ConfigurationDigest)
+	}
+	other := binding
+	other.ConfigurationDigest = domain.Digest("sha256:" + strings.Repeat("d", 64))
+	if err := validateCodexReviewAgentSpec(cfg, req, spec, other); !errors.Is(err, ErrConformance) {
+		t.Fatalf("validate binding with another digest = %v, want conformance refusal", err)
+	}
+	for _, digest := range []domain.Digest{"", "sha256:short"} {
+		missing := req
+		missing.ConfigurationDigest = digest
+		if _, _, err := BuildCodexReviewAgentSpec(cfg, missing); !errors.Is(err, ErrInvalidCodexReviewSpec) {
+			t.Fatalf("Build with digest %q = %v, want typed refusal", digest, err)
+		}
+	}
+}
+
 func TestCodexReviewBindingRejectsTopologyEntryMismatch(t *testing.T) {
 	cfg, req := testCodexReview(t)
 	_, binding, err := BuildCodexReviewAgentSpec(cfg, req)
