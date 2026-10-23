@@ -208,8 +208,20 @@ func (p ProductionPublication) validateRetained() error {
 	// The intake recipe carries literal title and body as its fallback, so it
 	// takes the literal checks below, including the ban on a source issue.
 	if p.Recipe != "" && p.Recipe != IntakePublicationRecipe {
-		if (p.Recipe != clientPublicationRecipeV1 && p.Recipe != clientPublicationRecipeV2) || p.Title != "" || p.Body != "" {
-			return errors.New("unsupported or contradictory publication recipe")
+		// Both refusals name keys, never values: preflight prints this text
+		// into the composition manifest.
+		if p.Recipe != clientPublicationRecipeV1 && p.Recipe != clientPublicationRecipeV2 {
+			return errors.New(`publication "recipe" is not an accepted recipe: ` +
+				`a recipe publication sets "recipe" to "` + clientPublicationRecipeV2 + `" ` +
+				`(and "source_issue" when the task is one GitHub issue URL) with no "title" or "body"; ` +
+				`a literal publication sets "title" and "body" with no "recipe"`)
+		}
+		if keys, verb := p.presentLiteralKeys(); keys != "" {
+			return fmt.Errorf(`publication mixes the recipe form and the literal form: `+
+				`"recipe" belongs to the recipe form and %[1]s %[2]s to the literal form; `+
+				`keep "recipe" (with "source_issue" when the task is one GitHub issue URL) and remove %[1]s, `+
+				`or, when the task is not one GitHub issue URL, remove "recipe" and any "source_issue" and set both "title" and "body"`,
+				keys, verb)
 		}
 		if p.SourceIssue != "" && (canonicalSourceIssue(p.SourceIssue) != p.SourceIssue || screenPublicationText(p.SourceIssue) != nil) {
 			return errors.New("invalid publication source issue")
@@ -239,6 +251,20 @@ func (p ProductionPublication) validateRetained() error {
 		return err
 	}
 	return nil
+}
+
+// presentLiteralKeys names the literal-form keys a recipe publication also
+// set, with the verb that agrees with them, or "" when it set neither.
+func (p ProductionPublication) presentLiteralKeys() (keys, verb string) {
+	switch {
+	case p.Title != "" && p.Body != "":
+		return `"title" and "body"`, "belong"
+	case p.Title != "":
+		return `"title"`, "belongs"
+	case p.Body != "":
+		return `"body"`, "belongs"
+	}
+	return "", ""
 }
 
 // ProductionRunSpec is the fixed input `freesided submit` registers: the

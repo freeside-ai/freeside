@@ -219,6 +219,51 @@ func TestPublicationRecipePreservesLiteralEncodingAndCanonicalRecovery(t *testin
 	}
 }
 
+// TestPublicationRecipeRefusalNamesKeys pins the refusals an operator sees
+// from submit and preflight: they name the offending keys and the two accepted
+// forms, and never echo submitted values into the composition manifest.
+func TestPublicationRecipeRefusalNamesKeys(t *testing.T) {
+	const (
+		title  = "Submitted literal title"
+		body   = "Submitted literal body."
+		recipe = "freeside.unknown-publication/v9"
+	)
+	mixed := func(keys, verb string) string {
+		return `publication mixes the recipe form and the literal form: "recipe" belongs to the recipe form and ` +
+			keys + ` ` + verb + ` to the literal form; keep "recipe" (with "source_issue" when the task is one GitHub issue URL) and remove ` +
+			keys + `, or, when the task is not one GitHub issue URL, remove "recipe" and any "source_issue" and set both "title" and "body"`
+	}
+	for name, tc := range map[string]struct {
+		mutate func(*ProductionPublication)
+		want   string
+	}{
+		"title and body": {func(p *ProductionPublication) { p.Title, p.Body = title, body }, mixed(`"title" and "body"`, "belong")},
+		"title only":     {func(p *ProductionPublication) { p.Title = title }, mixed(`"title"`, "belongs")},
+		"body only":      {func(p *ProductionPublication) { p.Body = body }, mixed(`"body"`, "belongs")},
+		"unknown recipe": {
+			func(p *ProductionPublication) { p.Recipe, p.Title, p.Body = recipe, title, body },
+			`publication "recipe" is not an accepted recipe: a recipe publication sets "recipe" to "freeside.client-publication/v2" ` +
+				`(and "source_issue" when the task is one GitHub issue URL) with no "title" or "body"; ` +
+				`a literal publication sets "title" and "body" with no "recipe"`,
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			p := recipePublicationFixture()
+			p.Recipe = clientPublicationRecipeV2
+			tc.mutate(&p)
+			err := p.Validate()
+			if err == nil || err.Error() != tc.want {
+				t.Fatalf("refusal = %v, want %q", err, tc.want)
+			}
+			for _, value := range []string{title, body, recipe} {
+				if strings.Contains(err.Error(), value) {
+					t.Fatalf("refusal echoes submitted value %q", value)
+				}
+			}
+		})
+	}
+}
+
 // TestIntakePublicationRecipeKeepsLiteralFallback pins the intake recipe's
 // record shape: it carries the literal title and body as its fallback, renders
 // them without reading the agent's publication claim, and refuses a source
