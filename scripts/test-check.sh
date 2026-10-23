@@ -65,7 +65,7 @@ begin_case "--list prints every component with its steps"
 run_check --list
 assert_rc 0
 assert_contains 'daemon       build test vet lint'
-assert_contains 'app          generate format test build-mac build-ios'
+assert_contains 'app          generate format test linux build-mac build-ios'
 assert_contains 'api          lint'
 assert_contains 'scripts      syntax shellcheck suites vocabulary trackercollect'
 assert_contains 'convergence  run'
@@ -206,6 +206,18 @@ OUT=$(cat "$stub.args")
 assert_contains 'FreesideIOS'
 assert_contains 'ARCHS=arm64'
 assert_contains 'ONLY_ACTIVE_ARCH=YES'
+
+begin_case "app linux builds FreesideModel alone and runs only the Linux suites"
+# The step calls swift twice, so this stand-in appends one line per call.
+stub=$TMP/swift
+printf '#!/usr/bin/env bash\necho "$*" >>"%s.args"\n' "$stub" >"$stub"
+chmod +x "$stub"
+PATH="$TMP:$PATH" run_check app linux
+assert_rc 0
+OUT=$(cat "$stub.args")
+assert_contains 'build --only-use-versions-from-resolved-file --target FreesideModel'
+assert_contains 'test --only-use-versions-from-resolved-file --filter FreesideAPITests|FreesideModelTests'
+rm -f "$stub" "$stub.args"
 
 begin_case "app format covers hand-written Swift and excludes generated sources"
 stub=$(make_stub xcrun 0)

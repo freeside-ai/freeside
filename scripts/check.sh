@@ -13,7 +13,7 @@
 #
 # Components and steps (`--list` prints the same table):
 #   daemon       build test vet lint
-#   app          generate format test build-mac build-ios
+#   app          generate format test linux build-mac build-ios
 #   api          lint digest
 #   scripts      syntax shellcheck suites vocabulary trackercollect
 #   convergence  run
@@ -92,7 +92,7 @@ COMPONENTS='daemon app api scripts convergence docs'
 steps_for() { # <component>; prints the component's steps in default order
   case $1 in
     daemon) echo 'build test vet lint' ;;
-    app) echo 'generate format test build-mac build-ios' ;;
+    app) echo 'generate format test linux build-mac build-ios' ;;
     api) echo 'lint digest' ;;
     scripts) echo 'syntax shellcheck suites vocabulary trackercollect' ;;
     convergence) echo 'run' ;;
@@ -336,6 +336,15 @@ app_format() (
   run xcrun swift-format lint --strict "${files[@]}"
 )
 app_test() { in_dir "$ROOT/app" swift test --only-use-versions-from-resolved-file; }
+# The Linux-clean targets alone, as the Linux CI job runs them in the
+# swift image: FreesideModel and its tests beside FreesideAPI's. On macOS
+# it runs the same suites but proves less: an Apple-only import in the
+# model still compiles there, so only the Linux job catches one.
+app_linux() {
+  in_dir "$ROOT/app" swift build --only-use-versions-from-resolved-file --target FreesideModel
+  in_dir "$ROOT/app" swift test --only-use-versions-from-resolved-file \
+    --filter 'FreesideAPITests|FreesideModelTests'
+}
 xcodebuild_scheme() { # <scheme> <destination> [build-setting...]
   local scheme=$1 destination=$2
   shift 2

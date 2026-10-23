@@ -39,9 +39,13 @@ jobs:
       - name: Verify generated API client (scripts/check.sh)
         run: bash scripts/check.sh app generate
 
-  package:
-    name: package (tests)
+  # The Linux-clean targets (FreesideAPI, FreesideModel, and their tests)
+  # in the official Swift image, which pins the toolchain instead of
+  # taking whichever Swift the runner image preinstalls.
+  linux:
+    name: linux (FreesideModel)
     runs-on: ubuntu-latest
+    container: swift:6.3
     steps:
       - uses: actions/checkout@v4
       - name: Cache SwiftPM dependencies
@@ -49,16 +53,17 @@ jobs:
         with:
           # SwiftPM's shared dependency cache: the bare mirrors it clones
           # the pinned checkouts from, re-fetched from github.com on
-          # every run without this. Linux location here; macOS jobs use
-          # ~/Library/Caches/org.swift.swiftpm. Not app/.build: caching
-          # compiled output could let a stale artifact register as a
-          # pass, while a mirror cannot (Package.resolved still decides
-          # what is checked out and everything is still compiled here).
+          # every run without this. Linux location here (the container's
+          # home); macOS jobs use ~/Library/Caches/org.swift.swiftpm. Not
+          # app/.build: caching compiled output could let a stale artifact
+          # register as a pass, while a mirror cannot (Package.resolved
+          # still decides what is checked out and everything is still
+          # compiled here).
           path: ~/.cache/org.swift.swiftpm
           key: swiftpm-${{ runner.os }}-${{ github.job }}-${{ hashFiles('app/Package.resolved') }}
           restore-keys: swiftpm-${{ runner.os }}-${{ github.job }}-
-      - name: Test Swift package (scripts/check.sh)
-        run: bash scripts/check.sh app test
+      - name: Build and test the Linux targets (scripts/check.sh)
+        run: bash scripts/check.sh app linux
 
   # PR-only: a push to main carries a tree its PR built under the
   # up-to-date rule, and this build warms no cache a PR restores.
@@ -70,8 +75,8 @@ jobs:
       - uses: actions/checkout@v4
       - name: Cache SwiftPM dependencies
         # xcodebuild resolves app/Package.swift's graph, pruned to the
-        # packages the app targets consume, from the same shared cache
-        # the package job uses; see that job for the rationale. Its
+        # packages the app targets consume, from SwiftPM's shared
+        # dependency cache; see the linux job for the rationale. Its
         # checkouts land in DerivedData, which stays uncached for the
         # same reason app/.build does.
         uses: actions/cache@v4
