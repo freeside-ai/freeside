@@ -444,6 +444,7 @@ func (d *Driver) finish(
 		EvidenceManifestDigest: cloneDigest(record.EvidenceManifestDigest),
 		CommitPlanDigest:       cloneDigest(replay.CommitPlanDigest),
 		ImportOptions:          opts,
+		Usage:                  usage,
 	}
 	if err := d.recordExport(ctx, record, durableReplay); err != nil {
 		return exec.StageResult{}, err
@@ -581,14 +582,20 @@ func (d *Driver) finishBlocked(
 	}, nil
 }
 
+// extractUsage reads the export's usage telemetry. Missing telemetry never
+// fails the export, but it leaves the run's billable cost incomplete, so each
+// way of finding none is logged rather than dropped silently.
 func (d *Driver) extractUsage(
 	in intent, out exportOutcome, observedAt time.Time,
 ) []exec.UsageMeasurement {
+	attrs := []any{"invocation", string(in.InvocationID), "run", in.RunID}
 	if !out.evidencePresent {
+		d.logger.Warn("export has no evidence channel; recording no usage", attrs...)
 		return nil
 	}
 	extractor, ok := d.provider.(UsageExtractor)
 	if !ok {
+		d.logger.Warn("provider extracts no usage; recording no usage", attrs...)
 		return nil
 	}
 	usage, err := extractor.ExtractUsage(
@@ -596,8 +603,11 @@ func (d *Driver) extractUsage(
 	)
 	if err != nil {
 		d.logger.Warn("usage extraction failed; continuing without measurements",
-			"invocation", string(in.InvocationID), "error", err)
+			append(attrs, "error", err)...)
 		return nil
+	}
+	if len(usage) == 0 {
+		d.logger.Warn("export evidence carries no usage; recording no usage", attrs...)
 	}
 	return usage
 }
@@ -652,9 +662,11 @@ func (d *Driver) completeReleasedExportWithOptions(
 		return classifyExportCompletion(out.dir, exec.StageResult{}, err)
 	}
 	// The authenticated evidence is the usage source, so observe it before any
-	// candidate validation can reject the returned workspace. The terminal
-	// result persists this timestamp and makes later collection replay exact.
-	usage := d.extractUsage(in, out, d.now().UTC())
+	// candidate validation can reject the returned workspace. The observation
+	// time is the pinned export stamp, not the clock: a crash after the export
+	// write replays this import, and the usage rows written with the export
+	// must converge rather than conflict on a fresh observed_at.
+	usage := d.extractUsage(in, out, in.exportRecordedAt())
 	result, err := d.finish(ctx, in, out, importOptions, usage)
 	if err != nil {
 		result.Usage = usage

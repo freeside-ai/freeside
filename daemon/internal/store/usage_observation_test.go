@@ -196,6 +196,60 @@ func TestAppendUsageObservationsWithoutAdmissionWritesNothing(t *testing.T) {
 	}
 }
 
+// TestAppendUsageObservationsAttributesReviewAdmission covers a review
+// invocation, which has a review admission and no execution admission: its
+// rows are attributed from the review admission's binding, never the caller.
+func TestAppendUsageObservationsAttributesReviewAdmission(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	s := openTemplateStoreAt(t, filepath.Join(t.TempDir(), "review-usage.db"), Options{})
+	admission := storedReviewAdmission(t, domain.RoleReviewer)
+	run := domain.Run{
+		ID: admission.RunID, ProjectID: "project",
+		SpecDigest: "sha256:spec", PolicyDigest: "sha256:policy",
+	}
+	if err := s.Write(ctx, func(tx *WriteTx) error {
+		if err := tx.PutRun(ctx, run); err != nil {
+			return err
+		}
+		return tx.PutReviewAdmission(ctx, admission)
+	}); err != nil {
+		t.Fatalf("seed review admission: %v", err)
+	}
+	measurement := usageMeasurementFixture()
+	measurement.Source = domain.UsageSourceReviewSource
+	var inserted int
+	if err := s.Write(ctx, func(tx *WriteTx) error {
+		var err error
+		inserted, err = tx.AppendUsageObservations(ctx, admission.InvocationID,
+			[]exec.UsageMeasurement{measurement})
+		return err
+	}); err != nil {
+		t.Fatalf("append review usage: %v", err)
+	}
+	if inserted != 1 {
+		t.Fatalf("inserted = %d, want 1", inserted)
+	}
+	want := []domain.UsageObservation{{
+		InvocationID:    string(admission.InvocationID),
+		RunID:           string(admission.RunID),
+		AgentDigest:     admission.AgentBinding.AgentDigest,
+		LaunchDigest:    admission.AgentBinding.LaunchDigest,
+		TreatmentDigest: admission.AgentBinding.TreatmentDigest,
+		PricingRevision: admission.AgentBinding.PricingRevision,
+		Source:          measurement.Source,
+		Kind:            measurement.Kind,
+		Metric:          measurement.Metric,
+		Unit:            measurement.Unit,
+		Quantity:        measurement.Quantity,
+		Sequence:        measurement.Sequence,
+		ObservedAt:      measurement.ObservedAt,
+	}}
+	if got := listRunUsage(t, s, admission.RunID); !reflect.DeepEqual(got, want) {
+		t.Fatalf("review usage = %#v, want %#v", got, want)
+	}
+}
+
 func TestUsageObservationsAreStructurallyAppendOnly(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()

@@ -968,7 +968,9 @@ Every section is read in one transaction, at the store revision
 and compare `as_of_revision`. A revision that hasn't moved means no recorded
 state changed, with one exception: cost rows are written without advancing
 the revision, so `billable_cost` can differ between two records at the same
-revision.
+revision. `billable_cost` counts the writer's and the reviewer's invocations;
+its `complete` is false while any admitted invocation has no cost row, which
+stays true for a run Codex reviews, because Codex reports tokens only.
 
 | Section | Holds |
 | --- | --- |
