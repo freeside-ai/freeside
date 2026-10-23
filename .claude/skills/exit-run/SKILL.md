@@ -167,10 +167,14 @@ with a partial run.
   system-health item its earlier runs left open, and a restart doesn't close
   them. The blocking ones (not the advisory ones) hold the first run's
   admission with reason `blocking_system_health` until an operator resolves
-  them in a client. No `freesided` read lists them before launch:
-  `inspect task` keeps only a task's own items, and a notice such as a
-  durable stop names the daemon, not a task. Plan to resolve them at the pairing
-  checkpoint (Run the Deputy, step 2), or record why one stays open.
+  them in a client. List them before launch with `freesided inspect health
+  -db <root>/daemon/freeside.db` (daemon/README.md, Read A Task's Record)
+  and record each item whose `admission` is `holds`, with its `id` and
+  `requested_decision`, and whether `operator_stop` is set. Plan to resolve
+  them at the pairing checkpoint (Run the Deputy, step 2), or record why
+  one stays open. With no daemon running, an item with a `supersession`
+  reads as `holds` even when the daemon would waive it; the served read at
+  the checkpoint decides it.
 - **Nothing else holds the rig** or an execution slot: no stranded
   dispatched invocation, no orphaned cleanup reservation (#1181, #1465). A
   stale lease for this root is recovered at start; one for another root
@@ -398,8 +402,10 @@ the operator.
    offers (on run 117, More Actions > Resume Unattended closed the run-116
    `daemon_durable_stop` notice; Acknowledge only records, and the item
    stays open). Record each item's id and the action taken for the run
-   record. Only an advisory item may stay open, since it never holds
-   admission; record why. A blocking item that no offered action closes
+   record, then run `freesided inspect health -db <root>/daemon/freeside.db`
+   and confirm no item's `admission` is `holds` and `operator_stop` is
+   `null` before the first approval. Only an advisory item may stay open,
+   since it never holds admission; record why. A blocking item that no offered action closes
    holds every run at admission: it is a defect that stops the run (below),
    so file it and stop rather than going on. A missed blocking item shows
    as the run's hold reason `blocking_system_health`. In CLI mode the submitted
