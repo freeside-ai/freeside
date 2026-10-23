@@ -853,3 +853,88 @@ func closureApproval(t *testing.T, ctx context.Context, st *Store, instanceID do
 	}
 	return approval
 }
+
+// TestDecidedEffectItemForInstance proves the read reports no item before a
+// decision and the decided item after one, keyed on the ledger row rather than
+// the item's status, and fails closed when the deciding command names an item
+// bound to another instance.
+func TestDecidedEffectItemForInstance(t *testing.T) {
+	ctx := context.Background()
+	st := openTemplateStoreAt(t, filepath.Join(t.TempDir(), "store.db"), Options{})
+	source := domain.SpecificationSource{
+		Kind:         domain.SpecificationSourceIssueSubject,
+		IssueSubject: &domain.IssueSubjectRef{Repo: "owner/repo", RepositoryID: 123, IssueNumber: 42},
+	}
+	policy, handle := closureScaffold(t, ctx, st, "project-a", &source)
+	proposal, err := domain.NewEffectProposal(domain.EffectSourceIssueClosure, domain.SourceIssueClosureInput{
+		SubjectHandle: handle,
+		Source: domain.ClosableSource{
+			Present: true, Provenance: domain.ClosureProvenanceVerified, Repo: "owner/repo", RepositoryID: 123, IssueNumber: 42,
+		},
+		Origin: domain.ClosureFlagOriginProposeSite, Resolves: true,
+	}, policy)
+	if err != nil {
+		t.Fatal(err)
+	}
+	merge := domain.ProspectiveMerge{
+		PublicationIdentity: domain.Digest("sha256:" + strings.Repeat("9", 64)),
+		CandidateHeadSHA:    strings.Repeat("1", 40), BaseRef: "main", BaseSHA: strings.Repeat("b", 40),
+	}
+	decidedInstance := allocateClosure(t, ctx, st, proposal, "event-1")
+	decidedCard := openClosureCard(t, ctx, st, "project-a", decidedInstance, merge)
+	otherCard := openClosureCard(t, ctx, st, "project-a", allocateClosure(t, ctx, st, proposal, "event-2"), merge)
+
+	decided := func() (domain.AttentionItem, bool, error) {
+		t.Helper()
+		var item domain.AttentionItem
+		var found bool
+		err := st.Read(ctx, func(tx *ReadTx) error {
+			var err error
+			item, found, err = tx.DecidedEffectItemForInstance(ctx, decidedInstance.ID)
+			return err
+		})
+		return item, found, err
+	}
+	if _, found, err := decided(); err != nil || found {
+		t.Fatalf("before a decision: found %v err %v, want not found", found, err)
+	}
+
+	at := time.Date(2026, 8, 11, 12, 0, 0, 0, time.UTC)
+	putCommand := func(tx *WriteTx, id string, item domain.AttentionItem) error {
+		command, err := domain.NewCommand(domain.CommandInput{
+			CommandID: id, DeviceID: "device-1", ItemID: item.ID,
+			ItemVersion: item.ItemVersion, PRHeadSHA: item.PRHeadSHA,
+			ArtifactDigests: item.ArtifactDigests, Action: domain.ActionDecline,
+		})
+		if err != nil {
+			return err
+		}
+		return tx.PutCommand(ctx, command)
+	}
+	// Record the ledger row alone, leaving the card open: the read keys on the
+	// decision, never on the item's status.
+	if err := st.Write(ctx, func(tx *WriteTx) error {
+		if err := putCommand(tx, "command-decline", decidedCard); err != nil {
+			return err
+		}
+		if err := putCommand(tx, "command-other", otherCard); err != nil {
+			return err
+		}
+		return tx.RecordProposalDecision(ctx, decidedInstance.ID, "command-decline", domain.ActionDecline, nil, at)
+	}); err != nil {
+		t.Fatal(err)
+	}
+	item, found, err := decided()
+	if err != nil || !found || item.ID != decidedCard.ID {
+		t.Fatalf("after a decision: item %q found %v err %v, want %q", item.ID, found, err, decidedCard.ID)
+	}
+
+	if _, err := st.db.ExecContext(ctx,
+		`UPDATE effect_proposal_decisions SET command_id = 'command-other' WHERE instance_id = ?`,
+		decidedInstance.ID); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := decided(); !errors.Is(err, errRowInconsistent) {
+		t.Fatalf("decision naming another instance's item: err %v, want row inconsistency", err)
+	}
+}
