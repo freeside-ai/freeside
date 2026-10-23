@@ -120,7 +120,8 @@ func runReattemptCommand(ctx context.Context, cfg reattemptCommandConfig) (submi
 		return submitResult{}, fmt.Errorf("reattempt: %w", err)
 	}
 	result := submitResult{
-		RunID: created.Run.Run.ID, ProjectID: created.Run.Run.ProjectID,
+		TaskID: created.Run.Run.TaskID,
+		RunID:  created.Run.Run.ID, ProjectID: created.Run.Run.ProjectID,
 		InvocationID: created.Run.InvocationID, StageID: created.Run.StageID,
 		ImplementationRunID:           created.Run.Run.ID,
 		ImplementationInvocationID:    created.Run.InvocationID,

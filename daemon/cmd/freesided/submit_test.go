@@ -154,6 +154,8 @@ func TestSubmitUsageDocumentsResultLanes(t *testing.T) {
 		"source_reference_omitted gives the reason when the pull request\nwill carry no publisher-written issue reference",
 		"specification_policy_digest, specification_policy_artifact_id",
 		"reserved implementation: implementation_run_id, implementation_invocation_id",
+		"shared: task_id, project_id, composition_digest",
+		"task_id is the input freesided inspect task -task takes",
 		"run_id, invocation_id, stage_id, and work_unit_id are",
 		"No deprecated\ndigest or artifact aliases are emitted",
 		"legacy production-only replay leaves\nthe specification fields empty",
@@ -168,7 +170,8 @@ func TestSubmitUsageDocumentsResultLanes(t *testing.T) {
 func TestSubmitResultGolden(t *testing.T) {
 	t.Parallel()
 	result := submitResult{
-		RunID: "run-implementation", SpecificationRunID: "run-specification", ProjectID: "project-golden",
+		TaskID: "task-golden",
+		RunID:  "run-implementation", SpecificationRunID: "run-specification", ProjectID: "project-golden",
 		InvocationID: "inv-implement", StageID: "implement-run-implementation",
 		ImplementationRunID: "run-implementation", ImplementationInvocationID: "inv-implement",
 		ImplementationStageID:     "implement-run-implementation",
@@ -741,6 +744,9 @@ func TestSubmitCommandRegistersAndConverges(t *testing.T) {
 			t.Errorf("specification run attempt = %q/%d, want %q/1",
 				run.CampaignID, run.AttemptNumber, first.CampaignID)
 		}
+		if run.TaskID == "" || first.TaskID != run.TaskID {
+			t.Errorf("submit task id = %q, want the specification run's %q", first.TaskID, run.TaskID)
+		}
 		task, err := tx.GetTask(ctx, run.TaskID)
 		if err != nil {
 			return err
@@ -1277,7 +1283,13 @@ func TestSubmitCommandReplaysMatchingPreSpecificationProductionRun(t *testing.T)
 		replay.SourceIssue != "" || replay.SourceReferenceOmitted != sourceOmittedBeforeRule {
 		t.Fatalf("legacy replay result = %+v", replay)
 	}
+	var seededTask domain.TaskID
 	if err := st.Read(ctx, func(tx *store.ReadTx) error {
+		seeded, err := tx.GetRun(ctx, runID)
+		if err != nil {
+			return err
+		}
+		seededTask = seeded.TaskID
 		specificationRunID, err := engine.SpecificationRunIDForImplementation(runID)
 		if err != nil {
 			return err
@@ -1289,6 +1301,9 @@ func TestSubmitCommandReplaysMatchingPreSpecificationProductionRun(t *testing.T)
 		return nil
 	}); err != nil {
 		t.Fatal(err)
+	}
+	if seededTask == "" || replay.TaskID != seededTask {
+		t.Fatalf("legacy replay task id = %q, want the seeded run's %q", replay.TaskID, seededTask)
 	}
 	issue := 123
 	workUnit := &domain.WorkUnitDeclarationInput{
@@ -1312,6 +1327,9 @@ func TestSubmitCommandReplaysMatchingPreSpecificationProductionRun(t *testing.T)
 	}
 	if legacy.WorkUnitID != domain.WorkUnitIDForRun(runID) {
 		t.Fatalf("legacy work-unit id = %q, want %q", legacy.WorkUnitID, domain.WorkUnitIDForRun(runID))
+	}
+	if legacy.TaskID != seededTask {
+		t.Fatalf("legacy work-unit task id = %q, want %q", legacy.TaskID, seededTask)
 	}
 }
 
