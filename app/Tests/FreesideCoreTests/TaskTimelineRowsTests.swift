@@ -39,7 +39,7 @@ import Testing
         let timeline = TaskStageFixtures.history(.verification)
         // The attempt's result is recorded after the review of its work
         // and does not read as a return to implementation. Verification
-        // shows through its result entries and has no start point.
+        // starts under its first recorded result.
         #expect(
             lines(timeline)
                 == [
@@ -47,13 +47,76 @@ import Testing
                     "Publication Blocked · Recorded hold: Verification findings block publication"
                         + " (verification_findings)",
                     "Verification recorded · Degraded",
+                    "> Verification started",
                     "Round 1 completed · Clean",
                     "Round 1 requested",
                     "> Review started",
                     "Attempt 1 started",
                     "> Implementation started",
                 ] + specificationPhase)
-        #expect(TaskTimelinePresentation.newestStage(TaskTimelinePresentation.rows(timeline)) == .review)
+        #expect(TaskTimelinePresentation.newestStage(TaskTimelinePresentation.rows(timeline)) == .verification)
+    }
+
+    @Test func aPublishedTaskStartsVerificationUnderItsVerificationRecord() {
+        let timeline = TaskHistoryFixtures.history(.published)
+        // The PR and publication readiness sit above the start, in
+        // Verification, not as rows under Review's.
+        #expect(
+            lines(timeline) == [
+                "PR opened · #110 *",
+                "Publication Ready",
+                "Verification recorded · Clean",
+                "> Verification started",
+                "Round 1 completed · Clean",
+                "Round 1 requested",
+                "> Review started",
+                "Attempt 1 started",
+                "> Implementation started",
+                "Specification approved",
+                "Attempt 1 started",
+                "> Specification started",
+                "Task started",
+                "Task created",
+            ])
+        #expect(TaskTimelinePresentation.newestStage(TaskTimelinePresentation.rows(timeline)) == .verification)
+    }
+
+    @Test func aPublicationMilestoneWithNoVerificationRecordStartsVerification() {
+        // A legacy record carries no verification detail, so the
+        // publication milestone is the first event at Verification.
+        var script = TaskStageFixtures.script(.review)
+        script.wait(9)
+        script.review(TaskStageFixtures.implementationRun, round: 1, .review_completed, outcome: .clean)
+        script.wait(6)
+        script.milestone(TaskStageFixtures.implementationRun, .publication_ready)
+        #expect(
+            Array(lines(script.timeline).prefix(4)) == [
+                "Publication Ready *", "> Verification started *", "Round 1 completed · Clean", "Round 1 requested",
+            ])
+    }
+
+    @Test func aSecondVerificationResultDrawsNoSecondStart() {
+        // A reevaluation records another result while the task already
+        // stands at Verification.
+        var script = TaskStageFixtures.script(.review)
+        script.wait(9)
+        script.review(TaskStageFixtures.implementationRun, round: 1, .review_completed, outcome: .clean)
+        script.wait(6)
+        script.verify(TaskStageFixtures.implementationRun, clean: true)
+        script.wait()
+        script.verify(TaskStageFixtures.implementationRun, clean: false)
+        #expect(
+            lines(script.timeline)
+                == [
+                    "Verification recorded · Degraded *",
+                    "Verification recorded · Clean",
+                    "> Verification started",
+                    "Round 1 completed · Clean",
+                    "Round 1 requested",
+                    "> Review started",
+                    "Attempt 1 started",
+                    "> Implementation started",
+                ] + specificationPhase)
     }
 
     @Test func aRetryInsideImplementationDrawsNoSecondStart() {

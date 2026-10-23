@@ -639,11 +639,13 @@ enum TaskTimelinePresentation {
     /// The daemon records no stage starts, so they are read off its events
     /// (devlog/2026-10-11-1140-task-stage-timeline.md). Walking oldest to
     /// newest, a run's submission enters its role's stage and a review
-    /// request enters Review; each draws a start point directly under
-    /// itself when that changes where the task stands. A verification
-    /// result or a publication milestone enters Verification, which has no
-    /// start point because the daemon does not record when it began. No
-    /// other event moves the stage: an attempt's result can be recorded
+    /// request enters Review, and a verification result or a publication
+    /// milestone enters Verification; each draws a start point directly
+    /// under itself when that changes where the task stands. Verification's
+    /// start therefore carries the time of the first event that moved the
+    /// task there, which trails the real start by the daemon's own
+    /// verification (devlog/2026-10-23-0856-verification-start-point.md).
+    /// No other event moves the stage: an attempt's result can be recorded
     /// after the review of its work was requested, and must not read as a
     /// return to implementation.
     ///
@@ -762,7 +764,9 @@ enum TaskTimelinePresentation {
                 if next != position { start = .review }
                 position = next
             case (.verification_recorded, _), (_, .publication_ready), (_, .publication_blocked):
-                position = StagePosition(stage: .verification, campaignID: source?.campaignID)
+                let next = StagePosition(stage: .verification, campaignID: source?.campaignID)
+                if next != position { start = .verification }
+                position = next
             default:
                 break
             }
