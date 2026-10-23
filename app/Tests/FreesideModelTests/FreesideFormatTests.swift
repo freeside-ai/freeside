@@ -1,7 +1,7 @@
 import Foundation
 import Testing
 
-@testable import FreesideCore
+@testable import FreesideModel
 
 @Suite struct FreesideFormatTests {
     private let utc = TimeZone.gmt

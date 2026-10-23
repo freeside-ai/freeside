@@ -1,5 +1,6 @@
 import Foundation
 import FreesideAPI
+import FreesideTestSupport
 import HTTPTypes
 import OpenAPIRuntime
 import Testing

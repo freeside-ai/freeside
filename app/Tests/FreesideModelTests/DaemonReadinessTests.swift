@@ -1,7 +1,7 @@
 import Foundation
 import Testing
 
-@testable import FreesideCore
+@testable import FreesideModel
 
 /// The daemon's environment stamp, spliced into every well-formed fixture.
 private let stamp = #""environment":"dev","run_id":"0123456789abcdef0123456789abcdef""#

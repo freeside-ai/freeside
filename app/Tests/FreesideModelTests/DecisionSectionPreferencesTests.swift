@@ -1,7 +1,7 @@
 import Foundation
 import Testing
 
-@testable import FreesideCore
+@testable import FreesideModel
 
 @Suite @MainActor struct DecisionSectionPreferencesTests {
     @Test func sectionExpansionPersistsAcrossInstances() throws {

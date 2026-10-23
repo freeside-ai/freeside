@@ -2,7 +2,7 @@ import Foundation
 import FreesideAPI
 import Testing
 
-@testable import FreesideCore
+@testable import FreesideModel
 
 /// A closed card's lead sentence, Outcome facts, applied routes, and
 /// timeline link, read from the item's conclusion (#2097).

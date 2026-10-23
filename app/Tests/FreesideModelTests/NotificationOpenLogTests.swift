@@ -1,7 +1,7 @@
 import Foundation
 import Testing
 
-@testable import FreesideCore
+@testable import FreesideModel
 
 @Suite @MainActor struct NotificationOpenLogTests {
     private static let opened = Date(timeIntervalSince1970: 1_752_000_000)

@@ -1,20 +1,22 @@
 import Foundation
 import FreesideAPI
-import FreesideCore
+import FreesideModel
 import HTTPTypes
 import OpenAPIRuntime
 
 /// A reusable one-shot gate: `wait()` suspends until `open()`.
-actor AsyncGate {
+public actor AsyncGate {
     private var isOpen = false
     private var waiters: [CheckedContinuation<Void, Never>] = []
 
-    func wait() async {
+    public init() {}
+
+    public func wait() async {
         if isOpen { return }
         await withCheckedContinuation { waiters.append($0) }
     }
 
-    func open() {
+    public func open() {
         isOpen = true
         for waiter in waiters {
             waiter.resume()
@@ -23,13 +25,15 @@ actor AsyncGate {
     }
 }
 
-struct InjectedFailure: Error {}
+public struct InjectedFailure: Error {
+    public init() {}
+}
 
 /// The production tier's same-host daemon, the local daemon most tests use.
 // swift-format-ignore: NeverForceUnwrap
-let prodDaemonURL = FreesideEnvironment.prod.supervisedAPIURL!
+public let prodDaemonURL = FreesideEnvironment.prod.supervisedAPIURL!
 
-func testDeviceToken(for deviceID: String, secretByte: UInt8 = 1) -> String {
+public func testDeviceToken(for deviceID: String, secretByte: UInt8 = 1) -> String {
     func base64URL(_ data: Data) -> String {
         data.base64EncodedString()
             .replacingOccurrences(of: "+", with: "-")
@@ -42,14 +46,14 @@ func testDeviceToken(for deviceID: String, secretByte: UInt8 = 1) -> String {
 }
 
 /// Throws on the first `times` calls to `consume()`; later calls pass.
-actor InjectedFailures {
+public actor InjectedFailures {
     private var remaining: Int
 
-    init(times: Int) {
+    public init(times: Int) {
         remaining = times
     }
 
-    func consume() throws {
+    public func consume() throws {
         guard remaining > 0 else { return }
         remaining -= 1
         throw InjectedFailure()
@@ -57,7 +61,7 @@ actor InjectedFailures {
 }
 
 @MainActor
-func makeStore(server: MockServer) async -> InboxStore {
+public func makeStore(server: MockServer) async -> InboxStore {
     let store = InboxStore(client: APIClientFactory.mock(server: server))
     await store.refresh()
     return store
@@ -68,7 +72,7 @@ func makeStore(server: MockServer) async -> InboxStore {
 /// authoritative rejection, never a validation error. The device
 /// defaults to the store default (`DeviceIdentity.mock`) so the entry
 /// survives the restore-time device re-gate.
-func makeCommand(
+public func makeCommand(
     itemID: String, commandID: String = "cmd-fixture",
     deviceID: String = DeviceIdentity.mock.deviceID
 ) -> Components.Schemas.ClientCommand {
@@ -92,13 +96,20 @@ func makeCommand(
 /// Answers the first matching operation with a bare HTTP status instead
 /// of reaching the mock server (simulating a transient gateway/server
 /// failure before commit); everything else passes through.
-struct StatusOverrideTransport: ClientTransport {
-    let base: MockServerTransport
-    let operationID: String
-    let status: Int
-    let once: OneShot
+public struct StatusOverrideTransport: ClientTransport {
+    public let base: MockServerTransport
+    public let operationID: String
+    public let status: Int
+    public let once: OneShot
 
-    func send(
+    public init(base: MockServerTransport, operationID: String, status: Int, once: OneShot) {
+        self.base = base
+        self.operationID = operationID
+        self.status = status
+        self.once = once
+    }
+
+    public func send(
         _ request: HTTPRequest,
         body: HTTPBody?,
         baseURL: URL,
@@ -113,12 +124,18 @@ struct StatusOverrideTransport: ClientTransport {
 
 /// Replaces one answered status body with undecodable JSON while preserving
 /// the status, so returned-object failure paths exercise generated decoding.
-struct CorruptStatusBodyTransport: ClientTransport {
-    let base: MockServerTransport
-    let operationID: String
-    let status: Int
+public struct CorruptStatusBodyTransport: ClientTransport {
+    public let base: MockServerTransport
+    public let operationID: String
+    public let status: Int
 
-    func send(
+    public init(base: MockServerTransport, operationID: String, status: Int) {
+        self.base = base
+        self.operationID = operationID
+        self.status = status
+    }
+
+    public func send(
         _ request: HTTPRequest,
         body: HTTPBody?,
         baseURL: URL,
@@ -134,20 +151,25 @@ struct CorruptStatusBodyTransport: ClientTransport {
 }
 
 /// Counts how many times an operation ran, for asserting re-fetches.
-actor Counter {
-    private(set) var count = 0
-    func increment() { count += 1 }
-    func incrementAndGet() -> Int {
+public actor Counter {
+    public private(set) var count = 0
+
+    public init() {}
+
+    public func increment() { count += 1 }
+    public func incrementAndGet() -> Int {
         count += 1
         return count
     }
 }
 
 /// True exactly once.
-actor OneShot {
+public actor OneShot {
     private var fired = false
 
-    func fire() -> Bool {
+    public init() {}
+
+    public func fire() -> Bool {
         if fired { return false }
         fired = true
         return true
@@ -155,8 +177,8 @@ actor OneShot {
 }
 
 /// Scripts one behavior per matching call, in order; exhausted → pass.
-actor ScriptedResponses {
-    enum Step {
+public actor ScriptedResponses {
+    public enum Step {
         case pass
         case fail
         /// Opens `reached`, then suspends until `release` opens.
@@ -165,11 +187,11 @@ actor ScriptedResponses {
 
     private var steps: [Step]
 
-    init(_ steps: [Step]) {
+    public init(_ steps: [Step]) {
         self.steps = steps
     }
 
-    func next() async throws {
+    public func next() async throws {
         guard !steps.isEmpty else { return }
         switch steps.removeFirst() {
         case .pass:

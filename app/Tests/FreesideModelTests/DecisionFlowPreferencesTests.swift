@@ -1,7 +1,7 @@
 import Foundation
 import Testing
 
-@testable import FreesideCore
+@testable import FreesideModel
 
 @Suite @MainActor struct DecisionFlowPreferencesTests {
     @Test func nextItemAdvanceDefaultsOffAndPersistsOptIn() throws {

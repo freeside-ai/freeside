@@ -1,7 +1,7 @@
 import FreesideAPI
 import Testing
 
-@testable import FreesideCore
+@testable import FreesideModel
 
 struct AgentQuestionPresentationTests {
     @Test func scopeConflictKeepsFactsAndOmitsRetryRoute() throws {

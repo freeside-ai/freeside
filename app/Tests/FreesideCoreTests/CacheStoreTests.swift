@@ -1,5 +1,6 @@
 import Foundation
 import FreesideAPI
+import FreesideTestSupport
 import Security
 import Testing
 

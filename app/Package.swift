@@ -41,6 +41,22 @@ var targets: [Target] = [
             .product(name: "Crypto", package: "swift-crypto"),
         ]
     ),
+    // The mocks and helpers both app test targets share. A regular target
+    // so FreesideModelTests and FreesideCoreTests can each depend on it.
+    .target(
+        name: "FreesideTestSupport",
+        dependencies: [
+            "FreesideModel", "FreesideAPI",
+            .product(name: "OpenAPIRuntime", package: "swift-openapi-runtime"),
+            .product(name: "HTTPTypes", package: "swift-http-types"),
+            .product(name: "Crypto", package: "swift-crypto"),
+        ],
+        path: "Tests/FreesideTestSupport"
+    ),
+    .testTarget(
+        name: "FreesideModelTests",
+        dependencies: ["FreesideModel", "FreesideAPI", "FreesideTestSupport"]
+    ),
 ]
 
 #if !os(Linux)
@@ -59,7 +75,7 @@ var targets: [Target] = [
         .testTarget(
             name: "FreesideCoreTests",
             dependencies: [
-                "FreesideCore", "FreesideModel", "FreesideAPI",
+                "FreesideCore", "FreesideModel", "FreesideAPI", "FreesideTestSupport",
                 .product(name: "Crypto", package: "swift-crypto"),
             ],
             resources: [.copy("Resources")]

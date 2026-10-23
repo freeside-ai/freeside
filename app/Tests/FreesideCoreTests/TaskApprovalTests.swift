@@ -1,4 +1,5 @@
 import FreesideAPI
+import FreesideTestSupport
 import Testing
 
 @testable import FreesideCore

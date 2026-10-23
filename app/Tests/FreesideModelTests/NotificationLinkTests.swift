@@ -1,8 +1,9 @@
 import Foundation
 import FreesideAPI
+import FreesideTestSupport
 import Testing
 
-@testable import FreesideCore
+@testable import FreesideModel
 
 /// The tap link's form is shared with the daemon, which writes it
 /// (`notificationFor` in `daemon/internal/signet/ntfy.go`). Any app on the

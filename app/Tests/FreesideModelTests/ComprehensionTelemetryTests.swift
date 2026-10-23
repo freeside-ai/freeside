@@ -4,7 +4,7 @@ import HTTPTypes
 import OpenAPIRuntime
 import Testing
 
-@testable import FreesideCore
+@testable import FreesideModel
 
 /// Holds the store the hook mutates: the transport is built before the store
 /// exists, so the store is set afterward and read only on the main actor.
