@@ -438,6 +438,44 @@ func TestRunHoldObservationValidate(t *testing.T) {
 		{"backwards span", func(h *RunHoldObservation) {
 			h.LastObservedAt = h.FirstObservedAt.Add(-time.Second)
 		}, ErrTimestampOutOfOrder},
+		{"detail beside another reason", func(h *RunHoldObservation) {
+			h.Detail = &AdmissionRefusal{Check: AdmissionCheckAgentGate}
+		}, ErrHoldDetailMismatch},
+		{"unknown check", func(h *RunHoldObservation) {
+			h.Reason, h.Detail = HoldAdmissionPolicyRefused, &AdmissionRefusal{Check: "vibes"}
+		}, ErrInvalidAdmissionCheck},
+		{"zero check", func(h *RunHoldObservation) {
+			h.Reason, h.Detail = HoldAdmissionPolicyRefused, &AdmissionRefusal{}
+		}, ErrInvalidAdmissionCheck},
+		{"empty agent", func(h *RunHoldObservation) {
+			empty := ""
+			h.Reason = HoldAdmissionPolicyRefused
+			h.Detail = &AdmissionRefusal{Check: AdmissionCheckAgentPrompt, Agent: &empty}
+		}, ErrEmptyField},
+		{"launch stage without its digest", func(h *RunHoldObservation) {
+			stage := StageNameSpecification
+			h.Reason = HoldAdmissionPolicyRefused
+			h.Detail = &AdmissionRefusal{Check: AdmissionCheckAgentLaunchCoverage, LaunchStage: &stage}
+		}, ErrHoldDetailMismatch},
+		{"launch digest without its stage", func(h *RunHoldObservation) {
+			digest := Digest("sha256:launch")
+			h.Reason = HoldAdmissionPolicyRefused
+			h.Detail = &AdmissionRefusal{Check: AdmissionCheckAgentLaunchCoverage, LaunchDigest: &digest}
+		}, ErrHoldDetailMismatch},
+		{"invalid launch stage", func(h *RunHoldObservation) {
+			stage, digest := StageName("vibes"), Digest("sha256:launch")
+			h.Reason = HoldAdmissionPolicyRefused
+			h.Detail = &AdmissionRefusal{
+				Check: AdmissionCheckAgentLaunchCoverage, LaunchStage: &stage, LaunchDigest: &digest,
+			}
+		}, ErrInvalidStageName},
+		{"empty launch digest", func(h *RunHoldObservation) {
+			stage, digest := StageNameSpecification, Digest("")
+			h.Reason = HoldAdmissionPolicyRefused
+			h.Detail = &AdmissionRefusal{
+				Check: AdmissionCheckAgentLaunchCoverage, LaunchStage: &stage, LaunchDigest: &digest,
+			}
+		}, ErrEmptyField},
 	}
 	for _, tc := range cases {
 		h := valid
@@ -451,6 +489,17 @@ func TestRunHoldObservationValidate(t *testing.T) {
 	unscoped.InvocationID = nil
 	if err := unscoped.Validate(); err != nil {
 		t.Errorf("unscoped hold rejected: %v", err)
+	}
+	// An admission refusal may carry no detail (rows written before the
+	// detail existed, a hold raised outside admission) or a check alone.
+	refused := valid
+	refused.Reason = HoldAdmissionPolicyRefused
+	if err := refused.Validate(); err != nil {
+		t.Errorf("detail-less admission hold rejected: %v", err)
+	}
+	refused.Detail = &AdmissionRefusal{Check: AdmissionCheckCapabilityBelowFloor}
+	if err := refused.Validate(); err != nil {
+		t.Errorf("check-only admission hold rejected: %v", err)
 	}
 }
 

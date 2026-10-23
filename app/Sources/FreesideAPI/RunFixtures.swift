@@ -305,6 +305,7 @@ public enum RunFixtures {
             run_id: activeRunID,
             invocation_id: "inv-\(activeRunID)-2",
             reason: .verification_findings,
+            detail: nil,
             first_observed_at: date(1_800),
             last_observed_at: date(2_100))
         return [

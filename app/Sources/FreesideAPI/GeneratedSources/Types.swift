@@ -5158,6 +5158,148 @@ public enum Components {
             case base_advanced = "base_advanced"
             case identity_parallelism = "identity_parallelism"
         }
+        /// The closed admission-check vocabulary mirrored from domain.AdmissionCheck: the check that refused an admission_policy_refused hold. Values are typed daemon observations, never free text.
+        ///
+        ///
+        /// - Remark: Generated from `#/components/schemas/AdmissionCheck`.
+        @frozen public enum AdmissionCheck: String, Codable, Hashable, Sendable, CaseIterable {
+            case generation_integrity_marked = "generation_integrity_marked"
+            case egress_profile_not_enforceable = "egress_profile_not_enforceable"
+            case egress_policy_refused = "egress_policy_refused"
+            case backend_capability_refused = "backend_capability_refused"
+            case backend_pre_job_refused = "backend_pre_job_refused"
+            case admission_floor_unknown = "admission_floor_unknown"
+            case capability_below_floor = "capability_below_floor"
+            case credential_mode_not_approved = "credential_mode_not_approved"
+            case waiver_not_configured = "waiver_not_configured"
+            case repository_identity_mismatch = "repository_identity_mismatch"
+            case path_boundary_mismatch = "path_boundary_mismatch"
+            case trust_profile_superseded = "trust_profile_superseded"
+            case review_configuration_unapproved = "review_configuration_unapproved"
+            case agent_role = "agent_role"
+            case agent_gate = "agent_gate"
+            case agent_launch = "agent_launch"
+            case agent_resolution = "agent_resolution"
+            case agent_prompt = "agent_prompt"
+            case agent_launch_coverage = "agent_launch_coverage"
+            case agent_credential_expiry = "agent_credential_expiry"
+            case agent_offer_deadline = "agent_offer_deadline"
+            case agent_attended_mark = "agent_attended_mark"
+            case agent_egress_authority = "agent_egress_authority"
+            case agent_snapshot = "agent_snapshot"
+            case agent_admission = "agent_admission"
+        }
+        /// The typed detail of an admission_policy_refused hold, mirrored from domain.AdmissionRefusal: the refused check and, once each resolved, the agent and the launch it refused. The agent is a name from the admitted agent tree; refusal error text never appears here.
+        ///
+        ///
+        /// - Remark: Generated from `#/components/schemas/AdmissionRefusal`.
+        public struct AdmissionRefusal: Codable, Hashable, Sendable {
+            /// - Remark: Generated from `#/components/schemas/AdmissionRefusal/check`.
+            public var check: Components.Schemas.AdmissionCheck
+            /// The refused agent's name; null when the refusal came before an agent resolved.
+            ///
+            /// - Remark: Generated from `#/components/schemas/AdmissionRefusal/agent`.
+            public var agent: Swift.String?
+            /// The refused launch's stage; null exactly when launch_digest is, when the refusal came before the launch resolved.
+            ///
+            ///
+            /// - Remark: Generated from `#/components/schemas/AdmissionRefusal/launch_stage`.
+            public struct launch_stagePayload: Codable, Hashable, Sendable {
+                /// - Remark: Generated from `#/components/schemas/AdmissionRefusal/launch_stage/value1`.
+                public var value1: Components.Schemas.StageName
+                /// Creates a new `launch_stagePayload`.
+                ///
+                /// - Parameters:
+                ///   - value1:
+                public init(value1: Components.Schemas.StageName) {
+                    self.value1 = value1
+                }
+                public init(from decoder: any Swift.Decoder) throws {
+                    self.value1 = try decoder.decodeFromSingleValueContainer()
+                }
+                public func encode(to encoder: any Swift.Encoder) throws {
+                    try encoder.encodeToSingleValueContainer(self.value1)
+                }
+            }
+            /// The refused launch's stage; null exactly when launch_digest is, when the refusal came before the launch resolved.
+            ///
+            ///
+            /// - Remark: Generated from `#/components/schemas/AdmissionRefusal/launch_stage`.
+            public var launch_stage: Components.Schemas.AdmissionRefusal.launch_stagePayload?
+            /// The refused launch's digest; null exactly when launch_stage is.
+            ///
+            /// - Remark: Generated from `#/components/schemas/AdmissionRefusal/launch_digest`.
+            public struct launch_digestPayload: Codable, Hashable, Sendable {
+                /// - Remark: Generated from `#/components/schemas/AdmissionRefusal/launch_digest/value1`.
+                public var value1: Components.Schemas.Digest
+                /// Creates a new `launch_digestPayload`.
+                ///
+                /// - Parameters:
+                ///   - value1:
+                public init(value1: Components.Schemas.Digest) {
+                    self.value1 = value1
+                }
+                public init(from decoder: any Swift.Decoder) throws {
+                    self.value1 = try decoder.decodeFromSingleValueContainer()
+                }
+                public func encode(to encoder: any Swift.Encoder) throws {
+                    try encoder.encodeToSingleValueContainer(self.value1)
+                }
+            }
+            /// The refused launch's digest; null exactly when launch_stage is.
+            ///
+            /// - Remark: Generated from `#/components/schemas/AdmissionRefusal/launch_digest`.
+            public var launch_digest: Components.Schemas.AdmissionRefusal.launch_digestPayload?
+            /// Creates a new `AdmissionRefusal`.
+            ///
+            /// - Parameters:
+            ///   - check:
+            ///   - agent: The refused agent's name; null when the refusal came before an agent resolved.
+            ///   - launch_stage: The refused launch's stage; null exactly when launch_digest is, when the refusal came before the launch resolved.
+            ///   - launch_digest: The refused launch's digest; null exactly when launch_stage is.
+            public init(
+                check: Components.Schemas.AdmissionCheck,
+                agent: Swift.String? = nil,
+                launch_stage: Components.Schemas.AdmissionRefusal.launch_stagePayload? = nil,
+                launch_digest: Components.Schemas.AdmissionRefusal.launch_digestPayload? = nil
+            ) {
+                self.check = check
+                self.agent = agent
+                self.launch_stage = launch_stage
+                self.launch_digest = launch_digest
+            }
+            public enum CodingKeys: String, CodingKey {
+                case check
+                case agent
+                case launch_stage
+                case launch_digest
+            }
+            public init(from decoder: any Swift.Decoder) throws {
+                let container = try decoder.container(keyedBy: CodingKeys.self)
+                self.check = try container.decode(
+                    Components.Schemas.AdmissionCheck.self,
+                    forKey: .check
+                )
+                self.agent = try container.decodeIfPresent(
+                    Swift.String.self,
+                    forKey: .agent
+                )
+                self.launch_stage = try container.decodeIfPresent(
+                    Components.Schemas.AdmissionRefusal.launch_stagePayload.self,
+                    forKey: .launch_stage
+                )
+                self.launch_digest = try container.decodeIfPresent(
+                    Components.Schemas.AdmissionRefusal.launch_digestPayload.self,
+                    forKey: .launch_digest
+                )
+                try decoder.ensureNoAdditionalProperties(knownKeys: [
+                    "check",
+                    "agent",
+                    "launch_stage",
+                    "launch_digest"
+                ])
+            }
+        }
         /// The daemon-derived run result mirrored from domain.RunOutcome. Pending can coexist with a current hold; blocked means a definitive publication_blocked milestone, not merely a transient hold. A run with no observation history (a pre-migration-0024 legacy run, which is deliberately not backfilled, and with no nonterminal invocation observation) classifies as unobserved, never pending, so a legacy terminal run is not shown as in flight; a legacy run still executing across the upgrade has a nonterminal invocation observation and reports pending. Completed means the work unit satisfied its completion criterion after publication (a work_unit_completed milestone); it outranks published and blocked and is terminal.
         ///
         ///
@@ -5361,6 +5503,32 @@ public enum Components {
             public var invocation_id: Swift.String?
             /// - Remark: Generated from `#/components/schemas/RunHold/reason`.
             public var reason: Components.Schemas.RunHoldReason
+            /// What an admission_policy_refused hold refused; null beside every other reason, and on an admission hold recorded before the detail existed or raised outside admission.
+            ///
+            ///
+            /// - Remark: Generated from `#/components/schemas/RunHold/detail`.
+            public struct detailPayload: Codable, Hashable, Sendable {
+                /// - Remark: Generated from `#/components/schemas/RunHold/detail/value1`.
+                public var value1: Components.Schemas.AdmissionRefusal
+                /// Creates a new `detailPayload`.
+                ///
+                /// - Parameters:
+                ///   - value1:
+                public init(value1: Components.Schemas.AdmissionRefusal) {
+                    self.value1 = value1
+                }
+                public init(from decoder: any Swift.Decoder) throws {
+                    self.value1 = try .init(from: decoder)
+                }
+                public func encode(to encoder: any Swift.Encoder) throws {
+                    try self.value1.encode(to: encoder)
+                }
+            }
+            /// What an admission_policy_refused hold refused; null beside every other reason, and on an admission hold recorded before the detail existed or raised outside admission.
+            ///
+            ///
+            /// - Remark: Generated from `#/components/schemas/RunHold/detail`.
+            public var detail: Components.Schemas.RunHold.detailPayload?
             /// - Remark: Generated from `#/components/schemas/RunHold/first_observed_at`.
             public var first_observed_at: Foundation.Date
             /// - Remark: Generated from `#/components/schemas/RunHold/last_observed_at`.
@@ -5371,18 +5539,21 @@ public enum Components {
             ///   - run_id:
             ///   - invocation_id:
             ///   - reason:
+            ///   - detail: What an admission_policy_refused hold refused; null beside every other reason, and on an admission hold recorded before the detail existed or raised outside admission.
             ///   - first_observed_at:
             ///   - last_observed_at:
             public init(
                 run_id: Swift.String,
                 invocation_id: Swift.String? = nil,
                 reason: Components.Schemas.RunHoldReason,
+                detail: Components.Schemas.RunHold.detailPayload? = nil,
                 first_observed_at: Foundation.Date,
                 last_observed_at: Foundation.Date
             ) {
                 self.run_id = run_id
                 self.invocation_id = invocation_id
                 self.reason = reason
+                self.detail = detail
                 self.first_observed_at = first_observed_at
                 self.last_observed_at = last_observed_at
             }
@@ -5390,6 +5561,7 @@ public enum Components {
                 case run_id
                 case invocation_id
                 case reason
+                case detail
                 case first_observed_at
                 case last_observed_at
             }
@@ -5407,6 +5579,10 @@ public enum Components {
                     Components.Schemas.RunHoldReason.self,
                     forKey: .reason
                 )
+                self.detail = try container.decodeIfPresent(
+                    Components.Schemas.RunHold.detailPayload.self,
+                    forKey: .detail
+                )
                 self.first_observed_at = try container.decode(
                     Foundation.Date.self,
                     forKey: .first_observed_at
@@ -5419,6 +5595,7 @@ public enum Components {
                     "run_id",
                     "invocation_id",
                     "reason",
+                    "detail",
                     "first_observed_at",
                     "last_observed_at"
                 ])

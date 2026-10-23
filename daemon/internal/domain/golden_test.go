@@ -1569,6 +1569,21 @@ func TestGolden(t *testing.T) {
 		FirstObservedAt: ts.Add(time.Minute),
 		LastObservedAt:  ts.Add(2 * time.Minute),
 	}
+	// The exit-run shape (#2211): an unattended specification attempt
+	// whose task line names an agent with no attended mark for the launch.
+	refusedAgent := "implementer-agent"
+	refusedStage := domain.StageNameSpecification
+	refusedLaunch := domain.Digest("sha256:specification-launch")
+	admissionHoldObservation := domain.RunHoldObservation{
+		RunID: "run-1", InvocationID: &obsInvocationID,
+		Reason: domain.HoldAdmissionPolicyRefused,
+		Detail: &domain.AdmissionRefusal{
+			Check: domain.AdmissionCheckAgentAttendedMark, Agent: &refusedAgent,
+			LaunchStage: &refusedStage, LaunchDigest: &refusedLaunch,
+		},
+		FirstObservedAt: ts.Add(time.Minute),
+		LastObservedAt:  ts.Add(2 * time.Minute),
+	}
 	runObservation := domain.RunObservation{
 		RunID:      "run-1",
 		Milestones: []domain.RunMilestone{submittedMilestone, outcomeMilestone, terminalMilestone},
@@ -2047,6 +2062,7 @@ func TestGolden(t *testing.T) {
 		{"run_milestone_completed", completedMilestone},
 		{"invocation_observation", invocationObservation},
 		{"run_hold_observation", holdObservation},
+		{"run_hold_observation_admission_refusal", admissionHoldObservation},
 		{"run_observation", runObservation},
 		{"work_unit_declaration", unitDeclaration},
 		{"work_unit_pr_binding", unitPRBinding},
