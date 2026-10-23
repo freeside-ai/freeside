@@ -2324,10 +2324,14 @@ base:
 
 - Both dependency manifests hash to the recorded values.
 - Neither `npm-shrinkwrap.json` nor `.npmrc` exists. For a Go image, the
-  module directory holds no `vendor/` directory and no `replace` whose target
-  path leaves it, and neither it nor any directory above it up to the
-  repository root holds a `go.work` file or directory. The build refuses the
-  same inputs (#2115). The builder's launcher sets `GOWORK=off`, so no command
+  module directory holds no `vendor/` directory, its `go.mod` holds no
+  `replace` whose target is a filesystem path, inside the module directory or
+  not, and neither it nor any directory above it up to the repository root
+  holds a `go.work` file or directory. The build refuses the same inputs
+  (#2115). A filesystem-path target is refused even inside the module because
+  the image warms its module cache from a seed holding only `go.mod` and
+  `go.sum`, so no image can warm it; a module-path `replace` is served like any
+  other requirement. The builder's launcher sets `GOWORK=off`, so no command
   it runs reads a `go.work`; a `go.work` is refused anyway, because a recipe
   step that reads it without the launcher would see an input the image never
   baked, and refusing it names that problem at admission instead of inside
