@@ -6,12 +6,23 @@ Daemon CI builds and tests on **Linux as well as macOS from day one**: the daemo
 
 ## CI Shards And Coverage Evidence
 
-CI runs three integration shards and one rest shard on each platform. Linux
-build, vet, lint, and exporter cross-compilation run independently. The macOS
-rest job also builds. Both existing platform gate names remain stable, and a
-gate requires every child to succeed and verifies the combined test evidence.
-The PR's `required` check also rejects an unexpected skip of a selected
-component.
+CI runs three integration shards and one rest shard on Linux for every
+event. Linux build, vet, lint, and exporter cross-compilation run
+independently. On macOS the layout follows the event, because the org's plan
+runs at most five macOS jobs at once across every workflow (#2248): a pull
+request runs only the rest shard, which also builds and holds the
+darwin-specific code, and a push to main runs only the three integration
+shards, in sequence in one job. Both platform gate names remain stable. A
+gate requires this event's children to succeed and the other event's macOS
+job to be skipped, then verifies the test evidence against the shard set
+declared for the event (`verify --shards rest` on a PR, `--shards
+integration` on a push). The PR's `required` check also rejects an
+unexpected skip of a selected component. A darwin-only integration regression
+therefore surfaces as a failed `daemon CI` run on main after its merge, which
+GitHub reports to the account that pushed the merge. The lander reads PR
+checks only, so nothing hands a landing back for it, and a later push in a
+landing batch cancels an earlier push's run, so the batch's last tip carries
+the macOS integration evidence for the whole batch.
 
 `bash scripts/check.sh daemon test` still runs the full local suite with its
 existing slot limiter and Git wrapper. CI supplies all five shard settings:
@@ -34,12 +45,15 @@ timeouts, and the existing opt-in skips. No race job is added.
 Each test job uploads raw Go JSON, compiled inventories, assignments, execution
 reports, tested identities, tool/image versions, and cache sizes. The platform
 gate re-accounts the raw events, checks every assigned family and package,
-and rejects missing, duplicate, stale, or failed execution. Integration shards
-share a build-cache restore group keyed by OS, architecture, Go version, and
-dependencies. Shard 1 alone writes that group's cache on a successful main
-push; PR build caches remain restore-only. The old monolithic caches provide
-a compatible migration fallback. Empty cache directories are created before
-size reporting, so a cold miss still reaches compilation.
+and rejects missing, duplicate, stale, or failed execution. On Linux,
+integration shards share a build-cache restore group keyed by OS,
+architecture, Go version, and dependencies, and shard 1 alone writes that
+group's cache on a successful main push. On macOS the push job compiles every
+test binary first and writes the rest group's cache, which the PR rest shard
+and the convergence job restore. PR build caches remain restore-only. The old
+monolithic caches provide a compatible migration fallback. Empty cache
+directories are created before size reporting, so a cold miss still reaches
+compilation.
 
 For an independent unsharded coverage baseline, retain `go list ./...` as
 `packages.txt`, `go test -json -list . ./...` as `discovery.jsonl`, and
