@@ -240,6 +240,9 @@ func (e *Engine) Reconcile(ctx context.Context) (ReconcileResult, error) {
 	if err := e.reconcileCompletedTaskItems(ctx); err != nil {
 		return ReconcileResult{}, err
 	}
+	if err := e.reconcileSettledClosureProposals(ctx); err != nil {
+		return ReconcileResult{}, err
+	}
 	if err := e.ConvergeLegacyFakePublicationPolicies(ctx); err != nil {
 		return ReconcileResult{}, fmt.Errorf("converge legacy fake-publication policies: %w", err)
 	}
