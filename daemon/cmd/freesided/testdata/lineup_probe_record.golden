@@ -1,0 +1,94 @@
+{
+  "version": "freeside-lineup-probe-v1",
+  "settings_digest": "sha256:ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+  "daemon_build": "freesided 0.0.0-test",
+  "probed_at": "2026-10-23T18:30:00Z",
+  "passed": true,
+  "calls": [
+    {
+      "roles": [
+        "specifier"
+      ],
+      "surface": "agent_image",
+      "harness": "claude_code",
+      "image": "registry.local/agent@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "model": "claude-fable-5-1",
+      "requested_effort": "high",
+      "native_effort": "high",
+      "pinned_build": "claude-code 2.1.282",
+      "observed_build": "2.1.282 (Claude Code)",
+      "verdict": "pass",
+      "refusal": null,
+      "usage": {
+        "input_tokens": 9,
+        "output_tokens": 4,
+        "cost_usd": "0.0213"
+      }
+    },
+    {
+      "roles": [
+        "implementer",
+        "remediator"
+      ],
+      "surface": "agent_image",
+      "harness": "claude_code",
+      "image": "registry.local/agent@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "model": "claude-opus-5-5",
+      "requested_effort": "max",
+      "native_effort": "max",
+      "pinned_build": "claude-code 2.1.282",
+      "observed_build": "2.1.282 (Claude Code)",
+      "verdict": "pass",
+      "refusal": null,
+      "usage": {
+        "input_tokens": 9,
+        "output_tokens": 4,
+        "cost_usd": "0.0213"
+      }
+    },
+    {
+      "roles": [
+        "reviewer"
+      ],
+      "surface": "review_image",
+      "harness": "codex_cli",
+      "image": "registry.local/review@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "model": "gpt-6.1-sol",
+      "requested_effort": "max",
+      "native_effort": "xhigh",
+      "pinned_build": "codex-cli 0.162.1",
+      "observed_build": "codex-cli 0.162.1",
+      "verdict": "pass",
+      "refusal": null,
+      "usage": {
+        "input_tokens": 3100,
+        "output_tokens": 5,
+        "cost_usd": null
+      }
+    },
+    {
+      "roles": [
+        "finding_classifier",
+        "finding_adjudicator",
+        "drift_auditor",
+        "task_namer",
+        "publication_author"
+      ],
+      "surface": "judgment_binary",
+      "harness": "claude_code",
+      "image": null,
+      "model": "claude-sonnet-5-5",
+      "requested_effort": "medium",
+      "native_effort": "medium",
+      "pinned_build": "claude-code 2.1.267",
+      "observed_build": "2.1.267 (Claude Code)",
+      "verdict": "pass",
+      "refusal": null,
+      "usage": {
+        "input_tokens": 9,
+        "output_tokens": 4,
+        "cost_usd": "0.0213"
+      }
+    }
+  ]
+}

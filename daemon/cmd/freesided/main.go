@@ -215,6 +215,9 @@ func main() {
 		case "deputy":
 			runDeputyMain(os.Args[2:])
 			return
+		case "probe-lineup":
+			runProbeLineupMain(os.Args[2:])
+			return
 		case "comprehension":
 			runComprehensionMain(os.Args[2:])
 			return
