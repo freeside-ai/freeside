@@ -4,34 +4,34 @@ import FreesideAPI
 /// display. Built only from the contract's `recommendation` (plan §4): the
 /// client never infers one from offer order, decision history, or item type,
 /// and no recommendation means equally weighted actions.
-struct DecisionRecommendationPresentation: Equatable {
+package struct DecisionRecommendationPresentation: Equatable {
     /// Section 9's source registers. A `daemon_policy` recommendation renders
     /// as a card fact, an `agent_judgment` recommendation as a labeled
     /// (unverified) proposal, and a `project_policy` recommendation as a card
     /// fact citing its exact policy key and digest.
-    enum Register: Equatable {
+    package enum Register: Equatable {
         case daemonFact
         case agentClaim
         case projectPolicy
 
         /// Agent judgment is the only register whose content is a claim, so it
         /// carries the dashed unverified treatment the claim layer uses.
-        var isUnverifiedClaim: Bool { self == .agentClaim }
+        package var isUnverifiedClaim: Bool { self == .agentClaim }
     }
 
-    struct SourceFact: Equatable, Identifiable {
-        let label: String
-        let value: String
+    package struct SourceFact: Equatable, Identifiable {
+        package let label: String
+        package let value: String
         let monospaced: Bool
 
-        var id: String { label }
+        package var id: String { label }
     }
 
-    let action: Components.Schemas.Action
-    let reason: String
+    package let action: Components.Schemas.Action
+    package let reason: String
     let confidence: String?
-    let register: Register
-    let sourceFacts: [SourceFact]
+    package let register: Register
+    package let sourceFacts: [SourceFact]
 
     /// Fails when `source` and `provenance` disagree, so a recommendation whose
     /// source-specific provenance cannot be revalidated renders as no
@@ -93,7 +93,7 @@ struct DecisionRecommendationPresentation: Equatable {
 
     /// The block's head (R20). An agent's judgment draws it with the
     /// unverified word; a policy's recommendation draws the keyword alone.
-    static let keyword = "Recommendation"
+    package static let keyword = "Recommendation"
 
     /// Who recommends, as the subject of the block's sentence.
     var actor: String {
@@ -109,7 +109,7 @@ struct DecisionRecommendationPresentation: Equatable {
     /// the recommendation itself, so it reads here rather than as a fact row
     /// the operator has to find below the reason (#1107). It replaces the
     /// dotted `Recommended · agent judgment · High` label.
-    func sentence(for item: Components.Schemas.AttentionItem?) -> String {
+    package func sentence(for item: Components.Schemas.AttentionItem?) -> String {
         let confidence = confidence.map { ", with \($0.lowercased()) confidence" } ?? ""
         return "\(actor) recommends \(Self.actionPhrase(action, for: item))\(confidence)."
     }
@@ -141,7 +141,7 @@ struct DecisionRecommendationPresentation: Equatable {
 
     /// The recommendation an item carries, or none. Kept beside the projection
     /// so every call site reads the same authoritative field.
-    static func of(
+    package static func of(
         _ item: Components.Schemas.AttentionItem
     ) -> DecisionRecommendationPresentation? {
         item.recommendation.flatMap { DecisionRecommendationPresentation($0.value1) }

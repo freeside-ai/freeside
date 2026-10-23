@@ -37,7 +37,7 @@ public final class SyncCoordinator {
     public let store: InboxStore
     public private(set) var pendingTaskSubmissions: [String: Components.Schemas.ClientCommand] = [:]
     public private(set) var pendingTaskStops: [String: PendingTaskStop] = [:]
-    @ObservationIgnored lazy var taskStop = TaskStopModel(coordinator: self)
+    @ObservationIgnored package lazy var taskStop = TaskStopModel(coordinator: self)
     private let submissionDaemonID: String
     public let promptHistory: TaskPromptHistory
     public private(set) var cursors: SyncCursors?
@@ -72,7 +72,7 @@ public final class SyncCoordinator {
     // timeline fetch may finish while liveness is being confirmed. The
     // timeline views key their refetch on it, so a read this drops is
     // reissued even when the replacement left every revision unchanged.
-    private(set) var cacheGeneration = 0
+    package private(set) var cacheGeneration = 0
     private var runListGeneration = 0
     private var timelineGenerations: [String: Int] = [:]
     private var taskTimelineGenerations: [String: Int] = [:]
@@ -103,7 +103,7 @@ public final class SyncCoordinator {
     }
     private var taskReviewRequests: [String: TaskReviewRequest] = [:]
 
-    struct TaskReviewRequestKey: Hashable {
+    package struct TaskReviewRequestKey: Hashable {
         let taskID: String
         let taskRevision: Int64
         let historyRevision: Int64
@@ -113,7 +113,7 @@ public final class SyncCoordinator {
         let runIDs: [String]
     }
 
-    func taskReviewRequestKey(for taskID: String, revision: Int64) -> TaskReviewRequestKey? {
+    package func taskReviewRequestKey(for taskID: String, revision: Int64) -> TaskReviewRequestKey? {
         guard let history = taskTimelinesByTaskID[taskID], let cursors else { return nil }
         var seen = Set<String>()
         let runIDs = history.sections.flatMap(\.runs).filter {
@@ -127,7 +127,7 @@ public final class SyncCoordinator {
 
     /// Only fetched task membership authorizes these reads. Mark before awaiting
     /// so overlapping views share work; failed/cancelled reads can be retried.
-    func refreshTaskReviews(for taskID: String, revision: Int64) async {
+    package func refreshTaskReviews(for taskID: String, revision: Int64) async {
         guard let key = taskReviewRequestKey(for: taskID, revision: revision) else { return }
         runLoop: for runID in key.runIDs {
             guard !Task.isCancelled,
@@ -516,7 +516,7 @@ public final class SyncCoordinator {
     /// satisfied or not, from any thread, and returns the call that stops
     /// it. The platform source is `startReachabilityMonitoring()`
     /// (`PlatformServices.swift`).
-    func startReachabilityMonitoring(
+    package func startReachabilityMonitoring(
         source: (@escaping @Sendable (Bool) -> Void) -> () -> Void
     ) {
         guard stopReachability == nil else { return }

@@ -1,7 +1,7 @@
 import Foundation
 import FreesideAPI
 
-enum RunDisplay {
+package enum RunDisplay {
     enum SecondaryLine: Equatable {
         case hold(String)
         case milestone(String)
@@ -39,8 +39,8 @@ enum RunDisplay {
         return "Round \(stage.attempts.count)"
     }
 
-    struct WorkflowPhase {
-        let stage: Components.Schemas.StageName
+    package struct WorkflowPhase {
+        package let stage: Components.Schemas.StageName
         let round: String?
         let completed: Set<Components.Schemas.StageName>
     }
@@ -48,7 +48,7 @@ enum RunDisplay {
     /// Production runs append implementation passes without recording review
     /// or verification stages. Publication progress supplies that position;
     /// Review is completed by position, never shown as a live review round.
-    static func workflowPhase(_ run: Components.Schemas.Run) -> WorkflowPhase? {
+    package static func workflowPhase(_ run: Components.Schemas.Run) -> WorkflowPhase? {
         guard let stage = run.stages.last, canonicalStageName(stage.name) == "implementation" else { return nil }
         let milestone = run.latest_milestone?.value1
         let completed = run.outcome == .completed || milestone == .work_unit_completed
@@ -70,7 +70,7 @@ enum RunDisplay {
     }
 
     /// Shared by the row title and timeline header so their phase and round agree.
-    static func stageHeading(
+    package static func stageHeading(
         _ run: Components.Schemas.Run, task: Components.Schemas.Task? = nil,
         attentionItems: [Components.Schemas.AttentionItemSnapshot] = []
     ) -> (label: String, round: String?)? {
@@ -130,13 +130,13 @@ enum RunDisplay {
     /// The daemon's production lane records its implementation stage as
     /// `implement` (daemon/internal/engine/production_workflow.go), so that
     /// name reads as the implementation stage rather than a fifth one.
-    static func canonicalStageName(_ name: String) -> String {
+    package static func canonicalStageName(_ name: String) -> String {
         name == "implement" ? Components.Schemas.StageName.implementation.rawValue : name
     }
 
     /// A workflow stage takes its display label; any other recorded name
     /// is shown capitalized.
-    static func stageLabel(_ name: String) -> String {
+    package static func stageLabel(_ name: String) -> String {
         Components.Schemas.StageName(rawValue: canonicalStageName(name))
             .map(AttentionDisplay.label) ?? name.capitalized
     }
@@ -144,7 +144,7 @@ enum RunDisplay {
     /// The timeline title is the attempt number; a run outside a
     /// campaign, or missing its attempt number, is titled by its short id.
     /// The exact id is in the header's technical details.
-    static func timelineTitle(_ run: Components.Schemas.Run) -> String {
+    package static func timelineTitle(_ run: Components.Schemas.Run) -> String {
         guard run.campaign_id != nil, let attempt = run.attempt_number else {
             return "Run \(ShortIdentifier.short(run.id))"
         }
@@ -296,7 +296,7 @@ enum RunDisplay {
 
     /// The Identifiers row that carries the digest. A row label is
     /// Title Case (R9); the header's line is prose and keeps its own case.
-    static func specificationRowLabel(
+    package static func specificationRowLabel(
         _ run: Components.Schemas.Run, approval: TaskDisplay.SpecificationApproval
     ) -> String {
         switch specificationStanding(run, approval: approval) {
@@ -311,14 +311,14 @@ enum RunDisplay {
     /// unavailable approval says so rather than labelling a digest that is no
     /// longer beside it. `specificationRowLabel` names the technical-details
     /// row that still carries the digest.
-    static func specificationHeaderLabel(
+    package static func specificationHeaderLabel(
         _ run: Components.Schemas.Run, approval: TaskDisplay.SpecificationApproval
     ) -> String {
         let label = specificationLabel(run, approval: approval)
         return label == "Specification digest" ? "Specification approval not confirmed" : label
     }
 
-    static func label(_ value: Components.Schemas.RunOutcome) -> String {
+    package static func label(_ value: Components.Schemas.RunOutcome) -> String {
         switch value {
         case .unobserved: "Not Observed"
         case .pending: "In Progress"
@@ -330,7 +330,7 @@ enum RunDisplay {
         }
     }
 
-    static func label(_ value: Components.Schemas.RunMilestoneKind) -> String {
+    package static func label(_ value: Components.Schemas.RunMilestoneKind) -> String {
         switch value {
         // The milestone says one agent invocation ended, whatever its result.
         // The raw kind read as "Terminal Recorded", as if the task were done.
@@ -339,15 +339,15 @@ enum RunDisplay {
         }
     }
 
-    static func label(_ value: Components.Schemas.ReviewProgressState) -> String {
+    package static func label(_ value: Components.Schemas.ReviewProgressState) -> String {
         value.rawValue.capitalized
     }
 
-    static func reviewIdentity(_ round: Components.Schemas.RunReviewRound) -> String {
+    package static func reviewIdentity(_ round: Components.Schemas.RunReviewRound) -> String {
         "\(round.provider ?? "Reviewer unknown") · \(round.model_configuration ?? "Model unknown")"
     }
 
-    static func label(_ value: Components.Schemas.RunHoldReason) -> String {
+    package static func label(_ value: Components.Schemas.RunHoldReason) -> String {
         switch value {
         case .scope_conflict: "Required work outside approved scope"
         case .operation_stopped: "Unattended operation stopped"
@@ -369,7 +369,7 @@ enum RunDisplay {
         }
     }
 
-    static func label(_ value: Components.Schemas.ScheduleKind) -> String {
+    package static func label(_ value: Components.Schemas.ScheduleKind) -> String {
         switch value {
         case .pr_checks_deadline: "Checks"
         case .review_wait_threshold: "Review"

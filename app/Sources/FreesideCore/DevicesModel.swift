@@ -10,8 +10,8 @@ import Observation
 /// revision, and a stale list would misreport who can still act.
 @MainActor
 @Observable
-final class DevicesModel {
-    enum LoadState: Equatable {
+package final class DevicesModel {
+    package enum LoadState: Equatable {
         case loading
         case loaded
         case failed(String)
@@ -19,23 +19,23 @@ final class DevicesModel {
 
     /// One listed device, flattened from the contract's active and revoked
     /// variants.
-    struct Row: Identifiable, Equatable {
-        let id: String
-        let name: String
-        let pairedAt: Date
+    package struct Row: Identifiable, Equatable {
+        package let id: String
+        package let name: String
+        package let pairedAt: Date
         /// Nil when the daemon has recorded no authenticated request.
-        let lastSeenAt: Date?
+        package let lastSeenAt: Date?
         /// Non-nil exactly when the device is revoked.
-        let revokedAt: Date?
-        let isCurrent: Bool
+        package let revokedAt: Date?
+        package let isCurrent: Bool
 
-        var isRevoked: Bool { revokedAt != nil }
+        package var isRevoked: Bool { revokedAt != nil }
     }
 
     private(set) var rows: [Row] = []
-    private(set) var loadState: LoadState = .loading
-    private(set) var revokingID: String?
-    private(set) var revokeFailure: String?
+    package private(set) var loadState: LoadState = .loading
+    package private(set) var revokingID: String?
+    package private(set) var revokeFailure: String?
 
     static let loadFailureMessage = "Couldn't load devices. Check the connection to the daemon and try again."
     static let unauthenticatedMessage = "This device is no longer paired with the daemon."
@@ -55,15 +55,15 @@ final class DevicesModel {
     /// card so the operator can subscribe to it in the ntfy app. Nil on a
     /// platform that takes no notification link (the Mac). The topic is a
     /// secret: whoever holds it reads this device's notifications.
-    let notificationSubscription: DeviceNtfySubscription?
+    package let notificationSubscription: DeviceNtfySubscription?
     /// Where this device's card reads when a notification was last opened
     /// here. Read when the card draws, so a test notification tapped while
     /// the sheet is open shows at once.
-    let notificationOpens: NotificationOpenLog?
+    package let notificationOpens: NotificationOpenLog?
 
     /// `signOut` deletes this device's credential and returns to pairing. It
     /// runs only after the daemon confirms this device's own revocation.
-    init(
+    package init(
         coordinator: SyncCoordinator, notificationSubscription: DeviceNtfySubscription? = nil,
         notificationOpens: NotificationOpenLog? = nil,
         signOut: @escaping @MainActor () throws -> Void
@@ -75,21 +75,21 @@ final class DevicesModel {
     }
 
     var currentDeviceID: String { coordinator.store.device.deviceID }
-    var observedRevision: Int64? { coordinator.cursors?.highestObservedServerRevision }
+    package var observedRevision: Int64? { coordinator.cursors?.highestObservedServerRevision }
 
-    var currentDevice: Row? { rows.first { $0.isCurrent && !$0.isRevoked } }
-    var otherDevices: [Row] { rows.filter { !$0.isCurrent && !$0.isRevoked } }
-    var revokedDevices: [Row] { rows.filter(\.isRevoked) }
+    package var currentDevice: Row? { rows.first { $0.isCurrent && !$0.isRevoked } }
+    package var otherDevices: [Row] { rows.filter { !$0.isCurrent && !$0.isRevoked } }
+    package var revokedDevices: [Row] { rows.filter(\.isRevoked) }
 
     /// Loads on first appearance and again whenever the observed server
     /// revision has moved since the rows were read: pairing and revocation
     /// are synchronized writes, so the heartbeat reports them.
-    func loadIfStale() async {
+    package func loadIfStale() async {
         guard loadState != .loaded || loadedAtRevision != observedRevision else { return }
         await load()
     }
 
-    func load() async {
+    package func load() async {
         loadGeneration += 1
         let generation = loadGeneration
         if rows.isEmpty { loadState = .loading }
@@ -120,7 +120,7 @@ final class DevicesModel {
     /// Revokes a device. Revoking this device signs the app out, and only
     /// once the daemon's answer names this device as revoked: deleting the
     /// credential cannot be undone, so no other answer reaches `signOut`.
-    func revoke(_ id: String) async {
+    package func revoke(_ id: String) async {
         guard revokingID == nil else { return }
         revokingID = id
         revokeFailure = nil

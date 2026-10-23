@@ -289,7 +289,7 @@ public final class AppSession {
     }
 
     /// Returns to address entry without changing saved deployments or credentials.
-    func changeServer() {
+    package func changeServer() {
         connection = nil
         phase = .needsConnection
     }
@@ -477,7 +477,7 @@ public final class AppSession {
         }
     }
 
-    static func serverURL(from value: String) -> URL? {
+    package static func serverURL(from value: String) -> URL? {
         guard
             let components = URLComponents(string: value.trimmingCharacters(in: .whitespacesAndNewlines)),
             let scheme = components.scheme?.lowercased(),
@@ -497,7 +497,7 @@ public final class AppSession {
     /// its tier (`launchMode(environment:...)`). Sample data requires an
     /// explicit mock or pairing-demo launch argument. `keychainStore` is the
     /// supervised tiers' durable store (`AppSessionPlatform.swift`).
-    static func fromEnvironment(
+    package static func fromEnvironment(
         environment: FreesideEnvironment,
         keychainStore: @escaping (URL) -> any DeviceCredentialStore
     ) throws(LaunchError) -> AppSession {
@@ -567,7 +567,7 @@ public final class AppSession {
 
     /// A remote client (iOS) with no same-host daemon: explicit inputs, then
     /// the persisted deployment, then the connect screen.
-    static func fromEnvironment(
+    package static func fromEnvironment(
         keychainStore: @escaping (URL) -> any DeviceCredentialStore
     ) -> AppSession {
         let arguments = argumentDomain()

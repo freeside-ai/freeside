@@ -51,7 +51,7 @@ public final class TaskPromptHistory {
         entries = record.entries
     }
 
-    func prompts(for projectID: String) -> [String] {
+    package func prompts(for projectID: String) -> [String] {
         entries.reversed().filter { $0.projectID == projectID }.map(\.source)
     }
 
@@ -84,14 +84,16 @@ public final class TaskPromptHistory {
 /// A browsing session snapshots its entries, preserving the exact draft
 /// until Down returns to it or a project switch ends the session.
 @MainActor @Observable
-final class TaskPromptBrowseState {
+package final class TaskPromptBrowseState {
     private var prompts: [String] = []
     private var index: Int?
     private var draft = ""
 
-    var isBrowsing: Bool { index != nil }
+    package init() {}
 
-    func up(from source: String, history: [String]) -> String? {
+    package var isBrowsing: Bool { index != nil }
+
+    package func up(from source: String, history: [String]) -> String? {
         if let index {
             self.index = min(index + 1, prompts.count - 1)
         } else {
@@ -103,21 +105,21 @@ final class TaskPromptBrowseState {
         return index.map { prompts[$0] }
     }
 
-    func down() -> String? {
+    package func down() -> String? {
         guard let index else { return nil }
         if index == 0 { return end() }
         self.index = index - 1
         return prompts[index - 1]
     }
 
-    func end() -> String? {
+    package func end() -> String? {
         guard isBrowsing else { return nil }
         let restored = draft
         edited()
         return restored
     }
 
-    func edited() {
+    package func edited() {
         index = nil
         prompts = []
         draft = ""

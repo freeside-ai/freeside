@@ -4,19 +4,24 @@ import FreesideAPI
 /// Human-readable labels for the contract's enums. Behaviour-dispatch
 /// switches omit `default` on purpose: a new enum member must be handled
 /// here before the code compiles.
-enum AttentionDisplay {
-    struct BindingRow: Equatable {
-        let label: String
-        let value: String
+package enum AttentionDisplay {
+    package struct BindingRow: Equatable {
+        package let label: String
+        package let value: String
+
+        package init(label: String, value: String) {
+            self.label = label
+            self.value = value
+        }
     }
 
     /// One Section 9 card fact: a daemon-produced value with the label the
     /// card shows it under. Identifiers and digests render monospaced so a
     /// fact that must be compared by eye reads as one.
-    struct FactRow: Equatable, Identifiable {
+    package struct FactRow: Equatable, Identifiable {
         /// How a card draws the value. `value` is the same reading as plain
         /// text on every form, for a summary, a test, or a stacking rule.
-        enum Form: Equatable {
+        package enum Form: Equatable {
             case plain
             /// Counts in the diff cuts (R28): successive measurements of one
             /// diff, earliest first.
@@ -37,14 +42,14 @@ enum AttentionDisplay {
             case prose
         }
 
-        let label: String
-        let value: String
+        package let label: String
+        package let value: String
         let monospaced: Bool
-        let form: Form
+        package let form: Form
 
-        var id: String { label }
+        package var id: String { label }
 
-        init(_ label: String, _ value: String, monospaced: Bool = false) {
+        package init(_ label: String, _ value: String, monospaced: Bool = false) {
             self.label = label
             self.value = value
             self.monospaced = monospaced
@@ -104,25 +109,25 @@ enum AttentionDisplay {
         let identifier: String?
     }
 
-    struct RowContext: Equatable {
-        struct Segment: Equatable {
-            let value: String
+    package struct RowContext: Equatable {
+        package struct Segment: Equatable {
+            package let value: String
             let isIdentifier: Bool
             /// An agent-proposed task name: the row labels it as the
             /// agent's claim (plan §9), as the task row does.
-            var isAgentClaim = false
+            package var isAgentClaim = false
         }
 
-        let project: Segment
-        let workUnit: Segment?
+        package let project: Segment
+        package let workUnit: Segment?
     }
 
-    struct CopyableSubjectReference: Equatable {
-        let label: String
-        let value: String
+    package struct CopyableSubjectReference: Equatable {
+        package let label: String
+        package let value: String
     }
 
-    static func title(_ type: Components.Schemas.AttentionType) -> String {
+    package static func title(_ type: Components.Schemas.AttentionType) -> String {
         switch type {
         case .spec_approval: return "Spec Approval"
         case .execution_failure: return "Execution Failure"
@@ -141,7 +146,7 @@ enum AttentionDisplay {
         }
     }
 
-    static func title(_ item: Components.Schemas.AttentionItem) -> String {
+    package static func title(_ item: Components.Schemas.AttentionItem) -> String {
         guard item._type == .ready_for_final_review,
             item.readiness?.value1._class == .ready_degraded
         else { return title(item._type) }
@@ -153,7 +158,7 @@ enum AttentionDisplay {
             && item.review_dispute?.value1.findings?.contains(where: { $0.external != nil }) == true
     }
 
-    static func disputeRouteLabel(
+    package static func disputeRouteLabel(
         _ route: Components.Schemas.AdjudicationRoute, external: Bool
     ) -> String {
         guard external else { return label(route) }
@@ -168,7 +173,7 @@ enum AttentionDisplay {
     /// What picking a route does to an external finding, drawn under the
     /// route's label (R29). Nil on a finding with no review thread: the
     /// reply these lines promise goes to that thread.
-    static func disputeRouteConsequence(
+    package static func disputeRouteConsequence(
         _ route: Components.Schemas.AdjudicationRoute, external: Bool
     ) -> String? {
         guard external else { return nil }
@@ -185,12 +190,12 @@ enum AttentionDisplay {
     /// accept-all action applies, and this one fell below the dispatch
     /// threshold, so nothing preselects it. The mark informs the pick, it
     /// never makes it. `adjudication.lean` keeps its schema name.
-    static let disputedFindingFavoredMark = "Favored"
+    package static let disputedFindingFavoredMark = "Favored"
 
     /// The trailing summary on a disputed finding's closed Reason and
     /// Source fold: whether the model favored a route, its confidence, and
     /// the review thread, so the closed fold still says what it holds.
-    static func disputedFindingReasonSummary(_ finding: Components.Schemas.DisputedFinding) -> String {
+    package static func disputedFindingReasonSummary(_ finding: Components.Schemas.DisputedFinding) -> String {
         var parts: [String] = []
         if let adjudication = finding.adjudication {
             if adjudication.lean == nil { parts.append("no favored route") }
@@ -204,7 +209,7 @@ enum AttentionDisplay {
 
     /// Why the model's route is only favored, inside the fold. Nil when the
     /// confidence met the threshold, which says nothing about this.
-    static func disputedFindingThreshold(
+    package static func disputedFindingThreshold(
         _ adjudication: Components.Schemas.DisputedFinding.adjudicationPayload
     ) -> String? {
         guard adjudication.below_threshold else { return nil }
@@ -217,7 +222,7 @@ enum AttentionDisplay {
     /// The favored route when the finding does not offer it, which no
     /// option can carry as a mark: the lean is a model proposal and may
     /// name a route the dispute cannot send.
-    static func disputedFindingUnofferedFavorite(_ finding: Components.Schemas.DisputedFinding) -> String? {
+    package static func disputedFindingUnofferedFavorite(_ finding: Components.Schemas.DisputedFinding) -> String? {
         guard let lean = finding.adjudication?.lean?.value1, !finding.offered_routes.contains(lean) else {
             return nil
         }
@@ -227,23 +232,23 @@ enum AttentionDisplay {
 
     /// Where a disputed finding is and who raised it, as one mono line on
     /// its face. Nil when it has neither a location nor a reviewer.
-    static func disputedFindingSource(_ finding: Components.Schemas.DisputedFinding) -> String? {
+    package static func disputedFindingSource(_ finding: Components.Schemas.DisputedFinding) -> String? {
         let parts = [finding.location.map { findingLocation($0.value1) }, finding.external?.reviewer_login]
             .compactMap { $0 }
         return parts.isEmpty ? nil : parts.joined(separator: " · ")
     }
 
-    static let disputedFindingNoAdjudication = "No adjudicator view was recorded for this finding."
+    package static let disputedFindingNoAdjudication = "No adjudicator view was recorded for this finding."
 
     /// The Apply label on a routed dispute, counting the picks (R32), so a
     /// disabled button says how many findings still need a route.
-    static func applyFindingRoutesLabel(selected: Int, of total: Int) -> String {
+    package static func applyFindingRoutesLabel(selected: Int, of total: Int) -> String {
         guard selected > 0 else { return label(.adjudicate_findings) }
         guard selected == total else { return "Apply \(selected) of \(total) Routes" }
         return total == 1 ? "Apply 1 Route" : "Apply \(total) Routes"
     }
 
-    static func ask(_ item: Components.Schemas.AttentionItem) -> String {
+    package static func ask(_ item: Components.Schemas.AttentionItem) -> String {
         switch item._type {
         case .spec_approval:
             return "Approve this specification for implementation?"
@@ -287,7 +292,7 @@ enum AttentionDisplay {
         item.blocked_on.map { "Waiting on \(phrase($0.value1.kind))." }
     }
 
-    static func rowSummary(_ item: Components.Schemas.AttentionItem) -> String {
+    package static func rowSummary(_ item: Components.Schemas.AttentionItem) -> String {
         if let lead = ConclusionDisplay.leadSentence(item) { return lead }
         switch item._type {
         case .spec_approval:
@@ -344,7 +349,7 @@ enum AttentionDisplay {
     /// nothing here is derived from prose, logs, or event names, and a type
     /// whose lead is a claim, an artifact, or its own module contributes no
     /// row.
-    static func cardFacts(
+    package static func cardFacts(
         _ item: Components.Schemas.AttentionItem,
         now: Date
     ) -> [FactRow] {
@@ -483,15 +488,15 @@ enum AttentionDisplay {
     /// merge would do to the issue. The head is kept apart so the card can
     /// set it in the identifier face. Nil for an effect with no merge to
     /// state, which keeps its rows instead.
-    struct EffectBinding: Equatable {
-        let lead: String
-        let head: String
-        let outcome: String
+    package struct EffectBinding: Equatable {
+        package let lead: String
+        package let head: String
+        package let outcome: String
 
-        var plain: String { lead + head + outcome }
+        package var plain: String { lead + head + outcome }
     }
 
-    static func effectBinding(
+    package static func effectBinding(
         _ facts: Components.Schemas.EffectProposalFactsSnapshot
     ) -> EffectBinding? {
         guard facts.effect_kind == .source_issue_closure,
@@ -509,7 +514,7 @@ enum AttentionDisplay {
     /// The effect's rows as the card draws them. Where the binding
     /// statement leads, it already names the effect and what the merge
     /// does, so those two rows are not repeated under it.
-    static func effectProposalCardRows(
+    package static func effectProposalCardRows(
         _ facts: Components.Schemas.EffectProposalFactsSnapshot
     ) -> [FactRow] {
         let rows = effectProposalRows(facts)
@@ -615,16 +620,16 @@ enum AttentionDisplay {
 
     /// The agent-written text a follow-up filing would publish, exactly as
     /// it would be sent.
-    struct ProposedIssueText: Equatable {
-        let title: String
-        let body: String
+    package struct ProposedIssueText: Equatable {
+        package let title: String
+        package let body: String
     }
 
     /// The filing's title and body, kept apart from `effectProposalRows`
     /// so agent text never shares a row or a section with a daemon fact.
     /// Nil for any other effect kind, even one that carries a stray filing
     /// arm.
-    static func proposedIssueText(
+    package static func proposedIssueText(
         _ facts: Components.Schemas.EffectProposalFactsSnapshot
     ) -> ProposedIssueText? {
         guard facts.effect_kind == .follow_up_filing,
@@ -637,13 +642,13 @@ enum AttentionDisplay {
     /// sentence says the daemon did not check the text; the daemon did
     /// screen this text (the "Text screening" row), so the sentence says
     /// what that screening does not establish.
-    static let screenedIssueTextExplanation =
+    package static let screenedIssueTextExplanation =
         "Written by the agent. The daemon screened this text; it did not check that it is true."
 
     /// The filing's audit coordinates for Details, in full: the card's rows
     /// name the repository and finding for reading, and these are the
     /// forge identity and digest an operator copies to compare.
-    static func followUpFilingDetailRows(
+    package static func followUpFilingDetailRows(
         _ facts: Components.Schemas.EffectProposalFactsSnapshot
     ) -> [BindingRow] {
         guard facts.effect_kind == .follow_up_filing,
@@ -722,13 +727,13 @@ enum AttentionDisplay {
     }
 
     /// The label of the fact that carries a candidate's whole diff.
-    static let diffFactLabel = "Diff"
+    package static let diffFactLabel = "Diff"
 
-    static func fileCount(_ count: Int) -> String {
+    package static func fileCount(_ count: Int) -> String {
         count == 1 ? "1 file" : "\(count) files"
     }
 
-    static func diffCounts(_ diff: Components.Schemas.DiffStats) -> DiffCounts {
+    package static func diffCounts(_ diff: Components.Schemas.DiffStats) -> DiffCounts {
         .init(added: diff.additions, removed: diff.deletions)
     }
 
@@ -737,7 +742,7 @@ enum AttentionDisplay {
         "\(diffCounts(diff).plain) · \(fileCount(diff.files_changed))"
     }
 
-    static func label(_ action: Components.Schemas.Action) -> String {
+    package static func label(_ action: Components.Schemas.Action) -> String {
         switch action {
         case .approve: return "Approve"
         case .request_changes: return "Request Changes"
@@ -781,7 +786,7 @@ enum AttentionDisplay {
     /// findings it carries their count: the findings stack above the
     /// action, and the count says how many of them the one press settles.
     /// The action and what it submits are the same either way.
-    static func label(
+    package static func label(
         _ action: Components.Schemas.Action,
         for item: Components.Schemas.AttentionItem?
     ) -> String {
@@ -792,7 +797,7 @@ enum AttentionDisplay {
             ? "Accept All \(findingCount) Dispositions" : "Accept All Dispositions"
     }
 
-    static func systemImage(_ action: Components.Schemas.Action) -> String? {
+    package static func systemImage(_ action: Components.Schemas.Action) -> String? {
         switch action {
         case .open_pr: return "arrow.up.right.square"
         case .retry: return "arrow.clockwise"
@@ -811,7 +816,7 @@ enum AttentionDisplay {
         }
     }
 
-    static func confirmationConsequence(
+    package static func confirmationConsequence(
         _ action: Components.Schemas.Action,
         for item: Components.Schemas.AttentionItem
     ) -> String? {
@@ -868,7 +873,7 @@ enum AttentionDisplay {
         }
     }
 
-    static func label(_ stage: Components.Schemas.StageName) -> String {
+    package static func label(_ stage: Components.Schemas.StageName) -> String {
         switch stage {
         case .specification: return "Specification"
         case .implementation: return "Implementation"
@@ -917,7 +922,7 @@ enum AttentionDisplay {
         }
     }
 
-    static func label(_ priority: Components.Schemas.Priority) -> String {
+    package static func label(_ priority: Components.Schemas.Priority) -> String {
         switch priority {
         case .low: return "Low"
         case .normal: return "Normal"
@@ -926,7 +931,7 @@ enum AttentionDisplay {
         }
     }
 
-    static func label(_ status: Components.Schemas.ItemStatus) -> String {
+    package static func label(_ status: Components.Schemas.ItemStatus) -> String {
         switch status {
         case .open: return "Open"
         case .resolved: return "Resolved"
@@ -936,14 +941,14 @@ enum AttentionDisplay {
         }
     }
 
-    static func label(_ posture: Components.Schemas.HealthPosture) -> String {
+    package static func label(_ posture: Components.Schemas.HealthPosture) -> String {
         switch posture {
         case .blocking: return "Blocking"
         case .advisory: return "Advisory"
         }
     }
 
-    static func label(_ notice: Components.Schemas.CommitPlanNoticeReason) -> String {
+    package static func label(_ notice: Components.Schemas.CommitPlanNoticeReason) -> String {
         switch notice {
         case .absent: return "No plan provided"
         case .structural: return "Plan rejected (structure)"
@@ -966,7 +971,7 @@ enum AttentionDisplay {
     /// Row context comes from the daemon's own labels (`display_names`), which
     /// carry whether each one is a chosen name or an identifier fallback. A
     /// legacy item without them falls back to its raw identifiers.
-    static func rowContext(_ item: Components.Schemas.AttentionItem) -> RowContext {
+    package static func rowContext(_ item: Components.Schemas.AttentionItem) -> RowContext {
         let names = item.display_names?.value1
         let project = RowContext.Segment(
             value: nonempty(names?.project.text) ?? item.project_id,
@@ -991,7 +996,7 @@ enum AttentionDisplay {
         return .init(project: project, workUnit: workUnit)
     }
 
-    static func copyableSubjectReference(
+    package static func copyableSubjectReference(
         _ item: Components.Schemas.AttentionItem
     ) -> CopyableSubjectReference? {
         switch item.subject {
@@ -1006,7 +1011,7 @@ enum AttentionDisplay {
         }
     }
 
-    static func relativeRowTime(
+    package static func relativeRowTime(
         _ item: Components.Schemas.AttentionItem,
         now: Date
     ) -> String? {
@@ -1024,11 +1029,11 @@ enum AttentionDisplay {
         return relativeDuration(max(0, now.timeIntervalSince(created)))
     }
 
-    static func relativeRowTime(_ date: Date, now: Date) -> String {
+    package static func relativeRowTime(_ date: Date, now: Date) -> String {
         relativeDuration(max(0, now.timeIntervalSince(date)))
     }
 
-    static func exactRowTimestamp(
+    package static func exactRowTimestamp(
         _ item: Components.Schemas.AttentionItem,
         now: Date
     ) -> String? {
@@ -1038,22 +1043,22 @@ enum AttentionDisplay {
         return item.created_at?.formatted(.iso8601)
     }
 
-    static func showsPriorityBadge(_ priority: Components.Schemas.Priority) -> Bool {
+    package static func showsPriorityBadge(_ priority: Components.Schemas.Priority) -> Bool {
         switch priority {
         case .urgent, .high: return true
         case .normal, .low: return false
         }
     }
 
-    static func showsLifecycleBadge(_ status: Components.Schemas.ItemStatus) -> Bool {
+    package static func showsLifecycleBadge(_ status: Components.Schemas.ItemStatus) -> Bool {
         status != .open
     }
 
-    static func showsDegradedBadge(_ item: Components.Schemas.AttentionItem) -> Bool {
+    package static func showsDegradedBadge(_ item: Components.Schemas.AttentionItem) -> Bool {
         item.readiness?.value1._class == .ready_degraded
     }
 
-    static func uniqueEvidenceDigests(
+    package static func uniqueEvidenceDigests(
         _ item: Components.Schemas.AttentionItem
     ) -> [String] {
         var seen: Set<String> = []
@@ -1099,13 +1104,13 @@ enum AttentionDisplay {
     /// collect and execute: they are omitted from the action surface and
     /// listed in the drill-down, so an audit still shows what the daemon
     /// asked for.
-    static func unavailableActionRows(
+    package static func unavailableActionRows(
         _ actions: [Components.Schemas.Action]
     ) -> [BindingRow] {
         actions.map { .init(label: "Requested, Not Available Here", value: label($0)) }
     }
 
-    static func detailBindingRows(
+    package static func detailBindingRows(
         _ item: Components.Schemas.AttentionItem,
         priorProposalDigest: String? = nil,
         proposalDigest: String? = nil
@@ -1257,12 +1262,12 @@ enum AttentionDisplay {
     /// and a "repository_id#pr_number" identity, put their meaning in the
     /// tail, so truncating them can render two different values identically
     /// and hide the very change the row exists to name.
-    static func shortRevision(_ value: String) -> String {
+    package static func shortRevision(_ value: String) -> String {
         guard value.count > 8, value.allSatisfy(\.isHexDigit) else { return value }
         return String(value.prefix(8))
     }
 
-    static func label(_ state: Components.Schemas.ReadinessRequirementState) -> String {
+    package static func label(_ state: Components.Schemas.ReadinessRequirementState) -> String {
         switch state {
         case .passed: return "Passed"
         case .failed: return "Failed"
@@ -1286,14 +1291,14 @@ enum AttentionDisplay {
         }
     }
 
-    static func label(_ authority: Components.Schemas.WaiverGrantingAuthority) -> String {
+    package static func label(_ authority: Components.Schemas.WaiverGrantingAuthority) -> String {
         switch authority {
         case .explicit_human_approval: return "Explicit human approval"
         case .daemon_trusted_configuration: return "Daemon trusted configuration"
         }
     }
 
-    static func label(_ reason: Components.Schemas.ReadinessInvalidationReason) -> String {
+    package static func label(_ reason: Components.Schemas.ReadinessInvalidationReason) -> String {
         switch reason {
         case .head_changed: return "Head changed"
         case .base_advanced: return "Base advanced"
@@ -1317,7 +1322,7 @@ enum AttentionDisplay {
     /// route that parks the run starts with "Park". The daemon writes the
     /// same labels into the card's reason (`domain.AdjudicationRouteLabel`
     /// in daemon/internal/domain/finding_adjudication.go); change both.
-    static func label(_ route: Components.Schemas.AdjudicationRoute) -> String {
+    package static func label(_ route: Components.Schemas.AdjudicationRoute) -> String {
         switch route {
         case .remediate: return "Fix in this PR"
         case .park_revision: return "Park: revise the work unit"
@@ -1347,7 +1352,7 @@ enum AttentionDisplay {
         }
     }
 
-    static func label(_ confidence: Components.Schemas.AdjudicationConfidence) -> String {
+    package static func label(_ confidence: Components.Schemas.AdjudicationConfidence) -> String {
         switch confidence {
         case .low: return "Low"
         case .medium: return "Medium"
@@ -1358,7 +1363,7 @@ enum AttentionDisplay {
     /// Renders a finding location the way the daemon's canonical location string
     /// does: "path" for a whole-file location, "path:line" for a single line, and
     /// "path:start-end" for a range.
-    static func findingLocation(_ location: Components.Schemas.FindingLocation) -> String {
+    package static func findingLocation(_ location: Components.Schemas.FindingLocation) -> String {
         if location.start_line == 0 && location.end_line == 0 {
             return location.path
         }
@@ -1371,7 +1376,7 @@ enum AttentionDisplay {
     /// `unverifiedKeyword` is the label without its "(unverified)" word, for
     /// a producer whose label carries one, so a card can draw the word
     /// through `UnverifiedLabel` with its explanation (visual audit D03).
-    static func adjudicationProducerPresentation(
+    package static func adjudicationProducerPresentation(
         _ producer: Components.Schemas.AdjudicationProducer
     ) -> (label: String, modelBacked: Bool, unverifiedKeyword: String?) {
         switch producer {

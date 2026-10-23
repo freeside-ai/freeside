@@ -5,11 +5,11 @@ import Foundation
 /// subtitle names the tier too, because a bare worktree name such as
 /// "freeside" reads as the product name. Nil means no subtitle, so a prod
 /// window on its own daemon keeps a plain title bar.
-enum WindowSubtitle {
+package enum WindowSubtitle {
     /// `serverURL` is the session's selected deployment, set from the
     /// pairing screen on; `readinessDirectory` is the validated
     /// `-FreesideReadinessDir` whose run the session still shows.
-    static func text(
+    package static func text(
         environment: FreesideEnvironment, serverURL: URL?, readinessDirectory: URL?
     ) -> String? {
         switch environment {

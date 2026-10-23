@@ -9,7 +9,7 @@ public struct PendingTaskStop: Codable, Equatable, Sendable {
     public let projectName: String
     public var receipt: Components.Schemas.CommandResult?
 
-    var taskID: String {
+    package var taskID: String {
         guard case .stop_task(let payload) = command.payload else { return "" }
         return payload.task_id
     }
@@ -25,33 +25,33 @@ public struct PendingTaskStop: Codable, Equatable, Sendable {
 }
 
 @MainActor @Observable
-final class TaskStopModel {
-    struct Confirmation: Identifiable {
-        let entry: PendingTaskStop
-        var id: String { entry.command.command_id }
+package final class TaskStopModel {
+    package struct Confirmation: Identifiable {
+        package let entry: PendingTaskStop
+        package var id: String { entry.command.command_id }
     }
 
     private unowned let coordinator: SyncCoordinator
-    private(set) var sending: Set<String> = []
+    package private(set) var sending: Set<String> = []
     /// Tasks whose confirmed Stop is in flight, from the start of its
     /// validating sync round until the command is sent or refused.
-    private(set) var confirming: Set<String> = []
-    private(set) var messages: [String: String] = [:]
+    package private(set) var confirming: Set<String> = []
+    package private(set) var messages: [String: String] = [:]
 
     init(coordinator: SyncCoordinator) { self.coordinator = coordinator }
 
-    var pending: [PendingTaskStop] {
+    package var pending: [PendingTaskStop] {
         coordinator.pendingTaskStops.values.sorted { $0.command.command_id < $1.command.command_id }
     }
 
-    func pending(for taskID: String) -> PendingTaskStop? {
+    package func pending(for taskID: String) -> PendingTaskStop? {
         pending.first { $0.taskID == taskID }
     }
 
     /// Why Stop is not offered, or nil when it is. An unvalidated cache
     /// still offers it: `confirm` validates current state before sending
     /// (`devlog/2026-10-10-1726-validate-stop-on-confirm.md`).
-    var unavailableReason: String? {
+    package var unavailableReason: String? {
         switch coordinator.store.freshness {
         case .fresh, .unvalidated:
             return coordinator.cursors == nil ? "Refresh task state before sending Stop." : nil
@@ -61,7 +61,7 @@ final class TaskStopModel {
         }
     }
 
-    func prepare(taskID: String) -> Confirmation? {
+    package func prepare(taskID: String) -> Confirmation? {
         guard unavailableReason == nil, pending(for: taskID) == nil, !confirming.contains(taskID),
             let snapshot = coordinator.tasks.first(where: { $0.task.id == taskID }),
             snapshot.task.cancellation == nil, snapshot.entity_version > 0,
@@ -84,7 +84,7 @@ final class TaskStopModel {
     /// read follows this call ended `.fresh` and the command's epoch, task,
     /// and project still match what that round left. Otherwise nothing is
     /// sent or saved.
-    func confirm(_ confirmation: Confirmation) async {
+    package func confirm(_ confirmation: Confirmation) async {
         let entry = confirmation.entry
         guard !confirming.contains(entry.taskID) else { return }
         confirming.insert(entry.taskID)
@@ -111,13 +111,13 @@ final class TaskStopModel {
     }
 
     /// Explicit retry only. Epoch/version/target are never rewritten.
-    func retry(_ commandID: String) async {
+    package func retry(_ commandID: String) async {
         guard let entry = coordinator.pendingTaskStops[commandID], entry.receipt == nil else { return }
         guard coordinator.store.freshness != .unauthenticated else { return }
         await send(entry)
     }
 
-    func refresh() async { await coordinator.refreshAfterCommit() }
+    package func refresh() async { await coordinator.refreshAfterCommit() }
 
     private func send(_ entry: PendingTaskStop) async {
         let taskID = entry.taskID

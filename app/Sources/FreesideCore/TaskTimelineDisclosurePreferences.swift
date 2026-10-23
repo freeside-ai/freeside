@@ -9,10 +9,10 @@ import SwiftUI
 /// task list.
 @MainActor
 @Observable
-final class TaskTimelineDisclosurePreferences {
+package final class TaskTimelineDisclosurePreferences {
     /// The sections a timeline folds. Raw ids keep a run's or campaign's
     /// own state apart from its neighbours'.
-    enum Section: Hashable {
+    package enum Section: Hashable {
         /// A campaign, by its campaign id. Never by position: a new
         /// campaign is prepended, so every index shifts and a stored index
         /// would reopen a different campaign. Nil is the one legacy section
@@ -43,7 +43,7 @@ final class TaskTimelineDisclosurePreferences {
     /// The one live instance. The task timeline and the run timeline both
     /// fold a run's review rounds, so they share state rather than each
     /// caching its own copy of the stored dictionary.
-    static let shared = TaskTimelineDisclosurePreferences()
+    package static let shared = TaskTimelineDisclosurePreferences()
 
     private static let key = "FreesideTaskTimelineExpandedSections"
     private let defaults: UserDefaults?
@@ -53,17 +53,17 @@ final class TaskTimelineDisclosurePreferences {
 
     /// `defaults` nil keeps the state in memory only: a screenshot must
     /// neither read this device's folds nor leave any behind.
-    init(defaults: UserDefaults? = .standard) {
+    package init(defaults: UserDefaults? = .standard) {
         self.defaults = defaults
         let stored = defaults?.dictionary(forKey: Self.key) as? [String: [String]] ?? [:]
         expandedByTask = stored.mapValues(Set.init)
     }
 
-    func isExpanded(_ section: Section, taskID: String) -> Bool {
+    package func isExpanded(_ section: Section, taskID: String) -> Bool {
         expandedByTask[taskID]?.contains(section.id) ?? false
     }
 
-    func setExpanded(_ expanded: Bool, _ section: Section, taskID: String) {
+    package func setExpanded(_ expanded: Bool, _ section: Section, taskID: String) {
         var sections = expandedByTask[taskID] ?? []
         if expanded {
             sections.insert(section.id)

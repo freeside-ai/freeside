@@ -1,20 +1,20 @@
 import Foundation
 
 /// A reading aid for retained reviewer claims. It supplies no review verdict or evidence authority.
-struct ReviewEvidencePresentation: Sendable, Equatable {
-    enum Conclusion: Sendable, Equatable {
+package struct ReviewEvidencePresentation: Sendable, Equatable {
+    package enum Conclusion: Sendable, Equatable {
         case noFindings
         case findings([Finding])
         case absent
         case unreadable
     }
 
-    struct Finding: Decodable, Sendable, Equatable {
-        let severity: String
-        let location: Location
-        let explanation: String
+    package struct Finding: Decodable, Sendable, Equatable {
+        package let severity: String
+        package let location: Location
+        package let explanation: String
 
-        struct Location: Decodable, Sendable, Equatable {
+        package struct Location: Decodable, Sendable, Equatable {
             let path: String
             let startLine: Int?
             let endLine: Int?
@@ -27,23 +27,23 @@ struct ReviewEvidencePresentation: Sendable, Equatable {
                 case wholeFile = "whole_file"
             }
 
-            var label: String {
+            package var label: String {
                 if wholeFile == true { return "\(path) · Whole file" }
                 return "\(path) · Lines \(startLine ?? 0)–\(endLine ?? 0)"
             }
         }
     }
 
-    struct Entry: Identifiable, Sendable, Equatable {
-        let id: Int
-        let kind: Kind
-        let text: String
-        var command: String? = nil
-        var exitCode: Int? = nil
-        var status: String? = nil
-        var invalidUTF8 = false
+    package struct Entry: Identifiable, Sendable, Equatable {
+        package let id: Int
+        package let kind: Kind
+        package let text: String
+        package var command: String? = nil
+        package var exitCode: Int? = nil
+        package var status: String? = nil
+        package var invalidUTF8 = false
 
-        enum Kind: String, Sendable {
+        package enum Kind: String, Sendable {
             case message = "Agent message"
             case command = "Command execution"
             case reasoning = "Reviewer note"
@@ -53,20 +53,20 @@ struct ReviewEvidencePresentation: Sendable, Equatable {
             case accessCheck = "Freeside access check"
         }
 
-        var isDiagnostic: Bool { kind == .diagnostic || kind == .accessCheck }
+        package var isDiagnostic: Bool { kind == .diagnostic || kind == .accessCheck }
     }
 
-    let conclusion: Conclusion
-    let entries: [Entry]
-    let explanation: String?
-    let terminalState: String?
-    let exitStatus: Int?
+    package let conclusion: Conclusion
+    package let entries: [Entry]
+    package let explanation: String?
+    package let terminalState: String?
+    package let exitStatus: Int?
 
-    var messageCount: Int { entries.filter { $0.kind == .message }.count }
-    var commandCount: Int { entries.filter { $0.kind == .command }.count }
-    var diagnosticCount: Int { entries.filter(\.isDiagnostic).count }
+    package var messageCount: Int { entries.filter { $0.kind == .message }.count }
+    package var commandCount: Int { entries.filter { $0.kind == .command }.count }
+    package var diagnosticCount: Int { entries.filter(\.isDiagnostic).count }
 
-    init(events: [UInt8], result: [UInt8]?, exitStatus: Int?) {
+    package init(events: [UInt8], result: [UInt8]?, exitStatus: Int?) {
         conclusion = Self.conclusion(from: result)
         self.exitStatus = exitStatus
         var entries: [Entry] = []

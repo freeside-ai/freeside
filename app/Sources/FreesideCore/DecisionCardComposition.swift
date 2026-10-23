@@ -26,12 +26,12 @@ enum DecisionCardModule: String, CaseIterable {
 
 // Keep in sync with export.SummaryEvidenceLabel in
 // daemon/internal/export/evidence_source.go.
-enum AgentClaimLabels {
-    static let summary = "freeside.summary"
+package enum AgentClaimLabels {
+    package static let summary = "freeside.summary"
     static let addressals = "Addressals"
-    static let specification = "Specification"
+    package static let specification = "Specification"
 
-    static func isApprovalMaterial(_ label: String) -> Bool {
+    package static func isApprovalMaterial(_ label: String) -> Bool {
         label == addressals || label == specification
     }
 }
@@ -1528,8 +1528,8 @@ struct DecisionYieldPresentation: Equatable {
     }
 }
 
-struct DecisionStageRailPresentation: Equatable {
-    enum State: Equatable {
+package struct DecisionStageRailPresentation: Equatable {
+    package enum State: Equatable {
         case completed
         case current
         case failed
@@ -1545,24 +1545,24 @@ struct DecisionStageRailPresentation: Equatable {
         }
     }
 
-    struct Entry: Equatable, Identifiable {
-        let id: String
-        let title: String
-        let state: State
+    package struct Entry: Equatable, Identifiable {
+        package let id: String
+        package let title: String
+        package let state: State
 
-        var accessibilityLabel: String {
+        package var accessibilityLabel: String {
             "\(title), \(state.accessibilityLabel)"
         }
     }
 
-    let entries: [Entry]
-    let summary: String
+    package let entries: [Entry]
+    package let summary: String
 
     /// The stages the run reached, newest first, as a card lists history
     /// (frame 5.3). A stage the run never reached is left out: above the
     /// failure it would read as the latest event. The summary still counts
     /// every stage.
-    var reachedNewestFirst: Self {
+    package var reachedNewestFirst: Self {
         .init(entries: entries.filter { $0.state != .pending }.reversed(), summary: summary)
     }
 

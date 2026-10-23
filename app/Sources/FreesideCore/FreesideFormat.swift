@@ -7,7 +7,7 @@ import SwiftUI
 
 /// Shared value formats for primary text. One place so every timeline,
 /// review round, and event row prints an instant the same way.
-enum FreesideFormat {
+package enum FreesideFormat {
     /// The one time format the task surfaces share (R8): the abbreviated
     /// date, a comma, and the shortened time (`Aug 11, 10:15 PM`), never
     /// seconds, with the year dropped when it is `now`'s year in
@@ -18,7 +18,7 @@ enum FreesideFormat {
     ///
     /// `now` is a parameter, not read from the clock, so a screenshot with
     /// fixed fixture dates does not change when the calendar year does.
-    static func shortTime(
+    package static func shortTime(
         _ date: Date,
         now: Date,
         locale: Locale = .current,
@@ -35,7 +35,7 @@ enum FreesideFormat {
     /// The date alone in the same grammar, for a summary that names a day
     /// ("from Sep 11"): abbreviated month and day, the year only when it
     /// differs from `now`'s.
-    static func shortDate(
+    package static func shortDate(
         _ date: Date,
         now: Date,
         locale: Locale = .current,
@@ -51,7 +51,7 @@ enum FreesideFormat {
 
     /// The instant `shortTime` abbreviates, to the second and with its
     /// year: the ISO 8601 stamp the task row's and pairing's hover carry.
-    static func exactTime(_ date: Date) -> String {
+    package static func exactTime(_ date: Date) -> String {
         date.formatted(.iso8601)
     }
 }

@@ -5,7 +5,7 @@ import Observation
 @MainActor
 @Observable
 public final class NavigationModel {
-    enum ConclusionAdvanceResult: Equatable {
+    package enum ConclusionAdvanceResult: Equatable {
         case advanced
         case returnedToInbox
         case inboxClear
@@ -200,7 +200,7 @@ public final class NavigationModel {
         inboxPath = path
     }
 
-    func recordOperatorNavigation() {
+    package func recordOperatorNavigation() {
         operatorNavigationRevision += 1
     }
 
@@ -208,7 +208,7 @@ public final class NavigationModel {
     /// destination is the inbox: clear the selection so the list stays visible
     /// with no item open. Only when `advancesToNextItem` is set, and an open
     /// item remains, does focus move to the next one instead.
-    func advanceAfterConclusion(
+    package func advanceAfterConclusion(
         itemID: String,
         expectedOperatorNavigationRevision: Int,
         advancesToNextItem: Bool,
@@ -249,7 +249,7 @@ public final class NavigationModel {
         route(to: .attentionItem(itemIDs[nextIndex]))
     }
 
-    static func repairedPath(
+    package static func repairedPath(
         _ path: [String], availableIDs: Set<String>, keeping linkedItemID: String? = nil
     ) -> [String] {
         guard let routedID = path.last, routedID != linkedItemID, !availableIDs.contains(routedID)
@@ -260,7 +260,7 @@ public final class NavigationModel {
     /// The tasks stack is rooted at a task and may hold that task's run
     /// above it, so it stands or falls with its root: a task that left the
     /// visible rows takes the run pushed over it along.
-    static func repairedTaskPath(_ path: [String], availableTaskIDs: Set<String>) -> [String] {
+    package static func repairedTaskPath(_ path: [String], availableTaskIDs: Set<String>) -> [String] {
         guard let taskID = path.first, !availableTaskIDs.contains(taskID) else { return path }
         return []
     }

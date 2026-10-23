@@ -3,7 +3,7 @@ import Observation
 
 @MainActor
 @Observable
-final class DecisionSectionPreferences {
+package final class DecisionSectionPreferences {
     private enum Key {
         static let claims = "FreesideDecisionInspectorClaimsExpanded"
         static let evidence = "FreesideDecisionInspectorEvidenceExpanded"
@@ -12,17 +12,17 @@ final class DecisionSectionPreferences {
 
     private let defaults: UserDefaults
 
-    var claimsExpanded: Bool {
+    package var claimsExpanded: Bool {
         didSet { defaults.set(claimsExpanded, forKey: Key.claims) }
     }
-    var evidenceExpanded: Bool {
+    package var evidenceExpanded: Bool {
         didSet { defaults.set(evidenceExpanded, forKey: Key.evidence) }
     }
-    var detailsExpanded: Bool {
+    package var detailsExpanded: Bool {
         didSet { defaults.set(detailsExpanded, forKey: Key.details) }
     }
 
-    init(defaults: UserDefaults = .standard, detailsExpandedOverride: Bool? = nil) {
+    package init(defaults: UserDefaults = .standard, detailsExpandedOverride: Bool? = nil) {
         self.defaults = defaults
         claimsExpanded = Self.value(defaults, key: Key.claims, defaultValue: false)
         evidenceExpanded = Self.value(defaults, key: Key.evidence, defaultValue: false)

@@ -3,15 +3,15 @@ import FreesideAPI
 /// A pure presentation partition over the daemon-offered decision set.
 /// The optional recommendation must come from an authoritative contract
 /// projection. Callers never infer it from offer order.
-struct DecisionActionRanking: Equatable {
-    let recommended: Components.Schemas.Action?
-    let principal: [Components.Schemas.Action]
-    let reviewing: Components.Schemas.Action?
-    let overflow: [Components.Schemas.Action]
-    let unavailable: [Components.Schemas.Action]
-    let notDecidableHere: Bool
+package struct DecisionActionRanking: Equatable {
+    package let recommended: Components.Schemas.Action?
+    package let principal: [Components.Schemas.Action]
+    package let reviewing: Components.Schemas.Action?
+    package let overflow: [Components.Schemas.Action]
+    package let unavailable: [Components.Schemas.Action]
+    package let notDecidableHere: Bool
 
-    init(
+    package init(
         requested: [Components.Schemas.Action],
         recommendedAction: Components.Schemas.Action? = nil,
         reservesRecommendedAction: Bool = true,

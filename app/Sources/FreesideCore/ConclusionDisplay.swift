@@ -6,10 +6,10 @@ import FreesideAPI
 /// item, so the card, the inbox row, and the tests read one answer. An item
 /// closed before the field existed carries no conclusion; it keeps the
 /// status sentence it always had and draws no outcome facts.
-enum ConclusionDisplay {
+package enum ConclusionDisplay {
     /// The sentence a closed card leads with in place of its ask, and its
     /// inbox row repeats; nil for an open item.
-    static func leadSentence(_ item: Components.Schemas.AttentionItem) -> String? {
+    package static func leadSentence(_ item: Components.Schemas.AttentionItem) -> String? {
         guard item.status != .open else { return nil }
         guard let conclusion = item.conclusion?.value1 else {
             return "This \(AttentionDisplay.title(item._type).lowercased()) item is "
@@ -91,7 +91,7 @@ enum ConclusionDisplay {
     /// close names the daemon and its reason. Empty for an open item and
     /// for one closed before conclusions existed. The time prints in
     /// `locale` and `timeZone`, the view's environment.
-    static func facts(
+    package static func facts(
         _ item: Components.Schemas.AttentionItem, thisDeviceID: String?, now: Date,
         locale: Locale, timeZone: TimeZone
     ) -> [AttentionDisplay.FactRow] {
@@ -120,7 +120,7 @@ enum ConclusionDisplay {
     /// The task whose timeline tells what followed the item's close: the
     /// task its subject names. Nil when no synced task holds it, so the
     /// card draws no link to a task the app cannot show.
-    static func timelineTaskID(
+    package static func timelineTaskID(
         for item: Components.Schemas.AttentionItem, in tasks: [Components.Schemas.TaskSnapshot]
     ) -> String? {
         let taskID: String?
@@ -139,7 +139,7 @@ enum ConclusionDisplay {
     /// and accepts `proposed` for the rest, as accepting the recommendation
     /// does for all. Nil when no decision routed the finding: a daemon
     /// close, or a decision that stopped or discussed instead.
-    static func appliedRoute(
+    package static func appliedRoute(
         for findingID: String, proposed: Components.Schemas.AdjudicationRoute?,
         in item: Components.Schemas.AttentionItem
     ) -> Components.Schemas.AdjudicationRoute? {

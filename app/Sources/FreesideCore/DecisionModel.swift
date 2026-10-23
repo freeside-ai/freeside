@@ -46,7 +46,7 @@ public final class DecisionModel {
 
     /// This device, which a closed card names as "This device" when it
     /// made the concluding decision.
-    var deviceID: String { store.device.deviceID }
+    package var deviceID: String { store.device.deviceID }
 
     private let store: InboxStore
     private let openURL: (URL) async -> Bool
@@ -99,7 +99,7 @@ public final class DecisionModel {
 
     /// `init(store:itemID:)` supplies the platform's external URL opener
     /// (`PlatformServices.swift`).
-    init(
+    package init(
         store: InboxStore,
         itemID: String,
         openURL: @escaping (URL) async -> Bool,
@@ -738,7 +738,7 @@ public final class DecisionModel {
 
     // Called by the view only after its platform details handler has
     // presented and scrolled the inspection destination.
-    func recordTrustFailureInspection() async {
+    package func recordTrustFailureInspection() async {
         await submit(.inspect_trust_failure, trustDetailsRevealed: true)
     }
 
@@ -758,7 +758,7 @@ public final class DecisionModel {
             reviewedSnapshot: reviewedSnapshot)
     }
 
-    func submitConfirmed(
+    package func submitConfirmed(
         _ action: Components.Schemas.Action,
         reviewedSnapshot: Components.Schemas.AttentionItemSnapshot
     ) async {

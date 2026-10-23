@@ -37,7 +37,7 @@ extension View {
 /// (`daemon/internal/store/production_attempt.go`, `task.go`); a digest is
 /// `sha256:` plus 64 hex characters. The exact value stays in the technical
 /// details section, so a short form never has to round-trip.
-enum ShortIdentifier {
+package enum ShortIdentifier {
     private static let digestPrefix = "sha256:"
     private static let kindPrefixes = ["run-", "campaign-", "task-"]
 
@@ -45,7 +45,7 @@ enum ShortIdentifier {
     /// kind prefix and the next 8 characters; a digest keeps `sha256:` and its
     /// first 12 hex characters. An id with no known kind prefix is left whole
     /// rather than truncated at a meaningless point.
-    static func short(_ identifier: String) -> String {
+    package static func short(_ identifier: String) -> String {
         if identifier.hasPrefix(digestPrefix) {
             let hex = identifier.dropFirst(digestPrefix.count)
             return hex.count > 12 ? "\(digestPrefix)\(hex.prefix(12))…" : identifier

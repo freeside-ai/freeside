@@ -55,7 +55,7 @@ public struct LaunchInputs {
 
     /// `-FreesideColorScheme` as given; `colorScheme` reads it as the
     /// SwiftUI value in FreesideCore.
-    let colorSchemeRaw: String?
+    package let colorSchemeRaw: String?
 
     /// `-FreesideContrast standard|increased`; unset or unrecognized
     /// follows the system accessibility contrast.
@@ -63,7 +63,7 @@ public struct LaunchInputs {
 
     /// `-FreesideDynamicType` as given; `dynamicTypeSize` reads it as the
     /// SwiftUI value in FreesideCore.
-    let dynamicTypeSizeRaw: String?
+    package let dynamicTypeSizeRaw: String?
 
     /// `-FreesideSelect <id>`: the inbox item selected at launch, or on
     /// the tasks screen the task or run opened at launch.
@@ -195,7 +195,7 @@ public struct LaunchInputs {
     /// callback. Normal launches retain the argument/defaults and host fallback.
     @TaskLocal static var screenshotIncreasedContrast: Bool?
 
-    static func accessibilityContrastOverride(defaults: UserDefaults = .standard) -> Contrast? {
+    package static func accessibilityContrastOverride(defaults: UserDefaults = .standard) -> Contrast? {
         if let increased = screenshotIncreasedContrast {
             return increased ? .increased : .standard
         }

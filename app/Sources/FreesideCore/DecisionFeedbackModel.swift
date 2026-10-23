@@ -18,25 +18,25 @@ private func scheduleDecisionFeedback(
     }
 }
 
-struct DecisionConclusion: Equatable, Sendable {
-    let itemID: String
-    let actionLabel: String
+package struct DecisionConclusion: Equatable, Sendable {
+    package let itemID: String
+    package let actionLabel: String
     /// The canonical lifecycle status when the item remains queryable.
     /// Snoozing a proposal instead proves queue exit through an authoritative
     /// 404, so it has no visible lifecycle status until it wakes again.
     let resultingStatus: Components.Schemas.ItemStatus?
     let at: Date
 
-    var hasQueryableItem: Bool { resultingStatus != nil }
+    package var hasQueryableItem: Bool { resultingStatus != nil }
 }
 
 @MainActor
 @Observable
-final class DecisionFeedbackModel {
+package final class DecisionFeedbackModel {
     static let advanceDelay: Duration = .milliseconds(800)
     static let dismissalDelay: Duration = .seconds(6)
 
-    private(set) var conclusion: DecisionConclusion?
+    package private(set) var conclusion: DecisionConclusion?
     private var advanceTask: Task<Void, Never>?
     private var dismissalTask: Task<Void, Never>?
     private let announce: @MainActor (String) -> Void
@@ -44,7 +44,7 @@ final class DecisionFeedbackModel {
 
     /// `init()` supplies the platform's accessibility announcement
     /// (`PlatformServices.swift`).
-    init(
+    package init(
         announce: @escaping @MainActor (String) -> Void,
         schedule:
             @escaping @MainActor (
@@ -55,7 +55,7 @@ final class DecisionFeedbackModel {
         self.schedule = schedule
     }
 
-    func present(
+    package func present(
         _ conclusion: DecisionConclusion,
         advance: @escaping @MainActor () -> Void
     ) {
@@ -80,7 +80,7 @@ final class DecisionFeedbackModel {
         }
     }
 
-    func dismiss() {
+    package func dismiss() {
         advanceTask?.cancel()
         dismissalTask?.cancel()
         conclusion = nil

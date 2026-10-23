@@ -616,7 +616,7 @@ extension StateChipCut {
 
 /// Which of the three task-status tones a chip takes. A caller picks
 /// the cut from what the operator can do, never from the status word.
-enum StateChipCut: CaseIterable {
+package enum StateChipCut: CaseIterable {
     /// A bound Inbox item waits on the operator.
     case attention
     /// The daemon is working or has spoken; nothing to do here.
@@ -1526,26 +1526,31 @@ struct FactRow: View {
 /// One + / − pair in the diff cuts (R28): the added count in the add color
 /// and the removed count, behind a typographic minus, in the remove color.
 /// The cuts are `Text`, so a caller sets the pair inside a longer mono line.
-struct DiffCounts: Equatable {
-    let added: Int
-    let removed: Int
+package struct DiffCounts: Equatable {
+    package let added: Int
+    package let removed: Int
+
+    package init(added: Int, removed: Int) {
+        self.added = added
+        self.removed = removed
+    }
 
     /// The pair as the plain line the cuts draw.
-    var plain: String { "+\(added) \u{2212}\(removed)" }
+    package var plain: String { "+\(added) \u{2212}\(removed)" }
 
     /// The pair as VoiceOver reads it, in words instead of signs.
-    var spoken: String { "\(added) added, \(removed) removed" }
+    package var spoken: String { "\(added) added, \(removed) removed" }
 
     /// Successive measurements of one diff, earliest first.
-    static func plain(_ measurements: [DiffCounts]) -> String {
+    package static func plain(_ measurements: [DiffCounts]) -> String {
         measurements.map(\.plain).joined(separator: growthSeparator)
     }
 
-    static func spoken(_ measurements: [DiffCounts]) -> String {
+    package static func spoken(_ measurements: [DiffCounts]) -> String {
         measurements.map(\.spoken).joined(separator: ", then ")
     }
 
-    static let growthSeparator = " \u{2192} "
+    package static let growthSeparator = " \u{2192} "
 }
 
 extension DiffCounts {

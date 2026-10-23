@@ -42,10 +42,10 @@ extension TaskDisplay {
 
 /// The task presentation vocabulary the task row, the task timeline, and
 /// the run timeline's eyebrow share.
-enum TaskDisplay {
+package enum TaskDisplay {
     /// The row's stage line: the phase heading the run row carried as its
     /// title (#1174), the rail under it, and the current hold.
-    struct Position: Equatable {
+    package struct Position: Equatable {
         struct Heading: Equatable {
             let label: String
             let round: String?
@@ -60,17 +60,17 @@ enum TaskDisplay {
         let holdReason: Components.Schemas.RunHoldReason?
         var hold: String? { holdReason.map(RunDisplay.label) }
         var qualification: String? = nil
-        var status: String? = nil
+        package var status: String? = nil
         var guidance: String = Position.defaultGuidance
         var historical = false
         /// The current open Inbox item `guidance` points at, when it points
         /// at one. The lookups that produce that guidance set it, so the
         /// accent chip, the Inbox sentence, and the place the sentence leads
         /// can never disagree.
-        var attentionItemID: String? = nil
+        package var attentionItemID: String? = nil
         /// True iff `guidance` targets a current open Inbox item bound to
         /// this task.
-        var attention: Bool { attentionItemID != nil }
+        package var attention: Bool { attentionItemID != nil }
         /// True iff `status` names history rather than a state (a superseded
         /// run, an abandoned task). Narrower than `historical`, which also
         /// covers a stopped or finished task whose status the daemon spoke.
@@ -87,17 +87,17 @@ enum TaskDisplay {
         }
     }
 
-    enum SpecificationApproval {
+    package enum SpecificationApproval {
         case approved, unapproved, unavailable
 
-        var qualification: String? {
+        package var qualification: String? {
             self == .unavailable ? "Specification approval history unavailable" : nil
         }
     }
 
     /// Approval belongs to the displayed run's campaign, not the task's newest
     /// event or the stage order. A retry shares the initial attempt's approval.
-    static func specificationApproval(
+    package static func specificationApproval(
         _ task: Components.Schemas.Task, runID: String, run: Components.Schemas.Run?,
         history: Components.Schemas.TaskTimeline?
     ) -> SpecificationApproval {
@@ -163,13 +163,13 @@ enum TaskDisplay {
     /// picker draws from, so a task's home project appears once the client
     /// has synced a task in it. A configured project with no synced task is
     /// not offered until #1332 lists configured projects in the bootstrap.
-    static func knownProjects(in tasks: [Components.Schemas.TaskSnapshot]) -> [String] {
+    package static func knownProjects(in tasks: [Components.Schemas.TaskSnapshot]) -> [String] {
         Array(Set(tasks.map(\.task.project_id))).sorted()
     }
 
     /// Newest activity first, the id as the tie-breaker. A task always
     /// carries its last activity, so unlike the run list no row is undated.
-    static func sortedTasks(
+    package static func sortedTasks(
         _ tasks: [Components.Schemas.TaskSnapshot]
     ) -> [Components.Schemas.TaskSnapshot] {
         tasks.sorted { lhs, rhs in
@@ -184,7 +184,7 @@ enum TaskDisplay {
     /// task's, so the row can append a short id only where two rows would
     /// otherwise read alike. An identifier-fallback name is the task id, which
     /// is unique, so those rows never collide.
-    static func ambiguousTaskIDs(_ tasks: [Components.Schemas.TaskSnapshot]) -> Set<String> {
+    package static func ambiguousTaskIDs(_ tasks: [Components.Schemas.TaskSnapshot]) -> Set<String> {
         var idsByName: [String: [String]] = [:]
         for snapshot in tasks {
             idsByName[snapshot.task.display_names.task.text, default: []].append(snapshot.task.id)
@@ -194,14 +194,14 @@ enum TaskDisplay {
 
     /// A task with no lifecycle yet (no run) is work that exists and has
     /// not finished, so it counts as active.
-    static func isActive(_ task: Components.Schemas.Task) -> Bool {
+    package static func isActive(_ task: Components.Schemas.Task) -> Bool {
         switch task.lifecycle {
         case .finished, .stopped, .abandoned: false
         case .active, ._empty, nil: true
         }
     }
 
-    static func lifecycleLabel(_ task: Components.Schemas.Task) -> (text: String, systemImage: String) {
+    package static func lifecycleLabel(_ task: Components.Schemas.Task) -> (text: String, systemImage: String) {
         switch task.lifecycle {
         case .finished: ("Finished", "checkmark.circle")
         case .stopped: ("Stopped", "stop.circle")
@@ -217,7 +217,7 @@ enum TaskDisplay {
     /// then marks that stage current and other stages pending. Recorded
     /// campaign approval independently completes Specification in either
     /// path. A task with no position has no stage line.
-    static func position(
+    package static func position(
         _ task: Components.Schemas.Task, runs: [Components.Schemas.RunSnapshot],
         attentionItems: [Components.Schemas.AttentionItemSnapshot] = [],
         history: Components.Schemas.TaskTimeline? = nil
@@ -278,12 +278,12 @@ enum TaskDisplay {
 
     /// Task lifecycle remains the daemon's projection. A run's terminal
     /// outcome and a cancellation request are separate facts, not success.
-    static func rowStatus(_ task: Components.Schemas.Task, run: Components.Schemas.Run? = nil) -> String {
+    package static func rowStatus(_ task: Components.Schemas.Task, run: Components.Schemas.Run? = nil) -> String {
         statusAndTone(task, run: run).text
     }
 
     /// The status chip's cut for a row with or without a position.
-    static func statusCut(_ task: Components.Schemas.Task, position: Position?) -> StateChipCut {
+    package static func statusCut(_ task: Components.Schemas.Task, position: Position?) -> StateChipCut {
         position?.cut ?? (statusAndTone(task, run: nil).isHistorical ? .faint : .ink)
     }
 
@@ -332,7 +332,7 @@ enum TaskDisplay {
     /// that a working task names its stage ("In Review") where the row says
     /// only that it is in progress. Every other status keeps its words, and
     /// so does a working task whose stage is not known.
-    static func detailStatus(_ status: String, stage: Components.Schemas.StageName?) -> String {
+    package static func detailStatus(_ status: String, stage: Components.Schemas.StageName?) -> String {
         guard status == inProgress, let stage else { return status }
         return "In \(AttentionDisplay.label(stage))"
     }
@@ -342,16 +342,16 @@ enum TaskDisplay {
     /// not; `phases` and the hold among `facts` are VoiceOver's and the task
     /// timeline's (R31), and the round rides the context line
     /// (`currentPhaseAndRound`). VoiceOver reads all of them, in this order.
-    struct RowLines: Equatable {
-        let status: String
+    package struct RowLines: Equatable {
+        package let status: String
         let phases: String?
         /// Round, hold, and a recorded stop confirmation, in that order.
         let facts: [String]
-        let guidance: String
+        package let guidance: String
 
-        var all: [String] { [status] + [phases].compactMap { $0 } + facts + [guidance] }
+        package var all: [String] { [status] + [phases].compactMap { $0 } + facts + [guidance] }
 
-        enum VisibleGuidance: Equatable {
+        package enum VisibleGuidance: Equatable {
             /// Names an Inbox destination: drawn in the link style, without
             /// the sentence's full stop.
             case link(String)
@@ -361,7 +361,7 @@ enum TaskDisplay {
 
         /// What the row draws for `guidance`. The default sentence draws
         /// nothing: the row itself is that affordance.
-        func visibleGuidance(attention: Bool) -> VisibleGuidance? {
+        package func visibleGuidance(attention: Bool) -> VisibleGuidance? {
             if attention {
                 return .link(guidance.hasSuffix(".") ? String(guidance.dropLast()) : guidance)
             }
@@ -375,7 +375,7 @@ enum TaskDisplay {
         rowLines(task, position: position).all
     }
 
-    static func rowLines(_ task: Components.Schemas.Task, position: Position?) -> RowLines {
+    package static func rowLines(_ task: Components.Schemas.Task, position: Position?) -> RowLines {
         var phaseLine: String?
         var facts: [String] = []
         if let position {
@@ -404,26 +404,26 @@ enum TaskDisplay {
 
     /// A stop the daemon confirmed on a task that then finished: the one
     /// fact the row draws on a closing line of its own.
-    static func stopConfirmation(_ task: Components.Schemas.Task) -> String? {
+    package static func stopConfirmation(_ task: Components.Schemas.Task) -> String? {
         task.cancellation?.value1.state == .confirmed && task.lifecycle == .finished
             ? "Stop Confirmation Recorded" : nil
     }
 
     /// The task's current hold. VoiceOver's row and the task timeline's
     /// callout both state `hold`, so the two cannot drift apart.
-    struct HoldCallout: Equatable {
+    package struct HoldCallout: Equatable {
         /// The stage the task waits in, on the task detail page
         /// (`detailStage`). Nil for the row, which states its phases on a
         /// line of their own, and where no stage is known.
-        let stage: String?
+        package let stage: String?
         /// "Hold: …", or "Last recorded hold: …" under a cancellation fence.
-        let hold: String
+        package let hold: String
     }
 
     /// Nil when the row shows no hold: no position, no recorded hold, or a
     /// historical position, whose hold is a past fact and not where the
     /// task stands.
-    static func holdCallout(
+    package static func holdCallout(
         _ task: Components.Schemas.Task, position: Position?, stage: Components.Schemas.StageName? = nil
     ) -> HoldCallout? {
         guard let position, let hold = position.hold, !position.historical else { return nil }
@@ -559,7 +559,7 @@ enum TaskDisplay {
     /// name when the coordinator lists the task, else the name the run
     /// itself carries, else the task id as an identifier fallback, so a run
     /// reached before its task loaded still names its work.
-    static func name(
+    package static func name(
         for run: Components.Schemas.Run, tasks: [Components.Schemas.TaskSnapshot]
     ) -> Components.Schemas.DisplayName {
         tasks.first { $0.task.id == run.task_id }?.task.display_names.task
@@ -570,7 +570,7 @@ enum TaskDisplay {
     /// The armed watches and deadlines attached to any of the task's runs,
     /// which the task timeline lists under Schedules. A schedule belongs to
     /// a run, so the task shows the union over its runs.
-    static func armedSchedules(
+    package static func armedSchedules(
         for task: Components.Schemas.Task, in schedules: [Components.Schemas.ScheduleSnapshot]
     ) -> [Components.Schemas.ScheduleSnapshot] {
         schedules.filter { snapshot in
@@ -579,13 +579,13 @@ enum TaskDisplay {
         }
     }
 
-    static func projectName(_ task: Components.Schemas.Task) -> String {
+    package static func projectName(_ task: Components.Schemas.Task) -> String {
         let project = task.display_names.project.text
         return project.isEmpty ? task.project_id : project
     }
 
     /// The intake issue behind the task, when its source is an issue.
-    static func issueReference(_ task: Components.Schemas.Task) -> String? {
+    package static func issueReference(_ task: Components.Schemas.Task) -> String? {
         guard case .issue_subject(let source)? = task.source?.value1 else { return nil }
         return "#\(source.issue_subject.issue_number)"
     }
@@ -597,7 +597,7 @@ enum TaskDisplay {
     /// `labelsActivity` true is the sentence VoiceOver keeps for the row's
     /// context line. False ends the line with the bare time the row trails
     /// (`rowTime`).
-    static func metaLine(_ task: Components.Schemas.Task, now: Date, labelsActivity: Bool = true) -> String {
+    package static func metaLine(_ task: Components.Schemas.Task, now: Date, labelsActivity: Bool = true) -> String {
         var parts = [projectName(task)]
         if let issue = issueReference(task) {
             parts.append(issue)
@@ -609,7 +609,7 @@ enum TaskDisplay {
 
     /// When the task was last active, as the row's context line trails it:
     /// coarse under a day, the one short time format from a day on.
-    static func rowTime(_ task: Components.Schemas.Task, now: Date) -> String {
+    package static func rowTime(_ task: Components.Schemas.Task, now: Date) -> String {
         if now.timeIntervalSince(task.last_activity_at) < 86_400 {
             return "\(AttentionDisplay.relativeRowTime(task.last_activity_at, now: now)) ago"
         }
@@ -631,20 +631,20 @@ enum TaskDisplay {
     /// one, then the current phase and round. The four-phase sentence and
     /// the hold stay with VoiceOver and the task timeline (`rowLines`,
     /// `holdCallout`).
-    static func rowContext(_ task: Components.Schemas.Task, position: Position?) -> String {
+    package static func rowContext(_ task: Components.Schemas.Task, position: Position?) -> String {
         ([projectName(task)] + [issueReference(task), currentPhaseAndRound(position)].compactMap { $0 })
             .joined(separator: " · ")
     }
 
     /// The exact last-activity instant behind the row's coarse segment,
     /// for the macOS hover help.
-    static func exactActivityTimestamp(_ task: Components.Schemas.Task) -> String {
+    package static func exactActivityTimestamp(_ task: Components.Schemas.Task) -> String {
         task.last_activity_at.formatted(.iso8601)
     }
 
     /// The timeline header's source line. A null source is legacy or demo
     /// work without a recoverable intake reference (the Task contract).
-    static func sourceLine(_ task: Components.Schemas.Task) -> String {
+    package static func sourceLine(_ task: Components.Schemas.Task) -> String {
         switch task.source?.value1 {
         case .issue_subject(let source)?:
             "Source: \(source.issue_subject.repo)#\(source.issue_subject.issue_number)"

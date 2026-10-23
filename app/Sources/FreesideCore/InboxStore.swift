@@ -19,7 +19,7 @@ public final class InboxStore {
 
         public var id: Self { self }
 
-        var label: String {
+        package var label: String {
             switch self {
             case .open: "Open"
             case .resolved: "Resolved"
@@ -466,7 +466,7 @@ public final class InboxStore {
         }
     }
 
-    func applyLaunchProjectFilter(_ projectID: String) {
+    package func applyLaunchProjectFilter(_ projectID: String) {
         pendingLaunchProjectID = projectID
         self.projectID = projectID
         repairProjectFilter()
@@ -475,12 +475,12 @@ public final class InboxStore {
         }
     }
 
-    func selectProjectFilter(_ projectID: String?) {
+    package func selectProjectFilter(_ projectID: String?) {
         pendingLaunchProjectID = nil
         self.projectID = projectID
     }
 
-    func finishLaunchProjectRepair() {
+    package func finishLaunchProjectRepair() {
         guard let pendingLaunchProjectID else {
             repairProjectFilter()
             return
