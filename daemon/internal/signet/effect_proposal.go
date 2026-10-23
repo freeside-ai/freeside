@@ -24,9 +24,15 @@ import (
 // existing open item and writes nothing. A different merge (a new candidate
 // head, a base advance, or a changed publication identity) supersedes the open
 // item and opens a fresh one bound to the new merge; that is how #1419 reports a
-// merge change. A decision already recorded against the superseded item stays in
-// the ledger, and ClosureApproval.AuthorizesClose stops honoring it once the
-// merge differs.
+// merge change.
+//
+// A decided instance opens nothing and writes nothing, for any merge: the call
+// returns the item the decision was recorded against. The ledger holds one
+// decision per instance, so a card for a moved merge could not record a second
+// one. The decision stays, ClosureApproval.AuthorizesClose stops honoring an
+// approval once the merge differs, and the publisher reduces that stale
+// approval to declined (reduceClosureApproval), so the pull request opens with
+// Refs and no hold.
 func (s *Service) OpenEffectProposalItem(
 	ctx context.Context,
 	instanceID domain.ProposalInstanceID,
@@ -40,10 +46,10 @@ func (s *Service) OpenEffectProposalItem(
 // exceptional interruption whose reason says the pull request is not held, and
 // whose approval never authorizes a close (the fallback's resolves flag is
 // always false, so ClosureApproval.AuthorizesClose yields false). It refuses a
-// propose_site instance, which takes the gate card instead. Idempotency and
-// supersession key on the merge exactly as the gate item does. The plan tracks
-// the exceptional-interruption rate as a health signal (§3.2), which is what a
-// closure-site failure is (plan revision 68, #1487).
+// propose_site instance, which takes the gate card instead. Idempotency,
+// supersession, and the decided-instance refusal follow the gate item exactly.
+// The plan tracks the exceptional-interruption rate as a health signal (§3.2),
+// which is what a closure-site failure is (plan revision 68, #1487).
 func (s *Service) OpenEffectProposalNotice(
 	ctx context.Context,
 	instanceID domain.ProposalInstanceID,
@@ -89,6 +95,18 @@ func (s *Service) openEffectProposalItem(
 		if notice && instance.Proposal.ClosureProposal.Origin != domain.ClosureFlagOriginDaemonFallback {
 			return fmt.Errorf("open effect proposal notice %q: not a daemon_fallback proposal: %w",
 				instanceID, domain.ErrEffectProposalInconsistent)
+		}
+		// A decided instance is never asked again: the ledger holds one decision
+		// per instance, so a fresh card could not record another. The check
+		// precedes the open-card lookup so a stray open card left on a decided
+		// instance is neither returned nor superseded here.
+		decided, isDecided, err := tx.DecidedEffectItemForInstance(ctx, instanceID)
+		if err != nil {
+			return fmt.Errorf("open effect proposal item %q: %w", instanceID, err)
+		}
+		if isDecided {
+			result = decided
+			return nil
 		}
 		openItem, openMerge, found, err := tx.OpenEffectItemForInstance(ctx, instanceID)
 		if err != nil {
