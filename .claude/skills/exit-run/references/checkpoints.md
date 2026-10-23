@@ -89,7 +89,12 @@ Sent once the record shows the open `spec_approval` item.
 ## 4. Pre-Merge Walkthrough And Merge
 
 Sent once the record shows the run's `publication.outcome`. Every action
-the contract needs before the merge goes here; the merge is last.
+the contract needs before the merge goes here; the merge is last. Under the
+human closure gate the pull request is a draft until the closure card is
+decided, so the closure card's rows (1 and 2) come first and row 6 holds the
+merge until the pull request leaves draft. Drop rows 1, 2, and 6 when the
+gate is off or the source issue is not in the managed repository, since no
+card opens then.
 
 ```markdown
 **Walk through the ready pull request, then merge.** Task `<task title>`,
@@ -97,12 +102,15 @@ PR <link>.
 
 | # | Device | Action | Report back |
 | --- | --- | --- | --- |
-| 1 | Mac | Open the ready card | The actions it offers; a screenshot. |
-| 2 | iPhone | Open the ready card | The actions it offers; a screenshot. |
-| 3 | <device> | <each action the contract lists: a card action, an external review, a Stop check> | <what the card or forge shows after it> |
-| 4 | Mac | Look for a STOPPED banner or an open daemon stop notice in Inbox > System health | Present or not. |
-| 5 | Owner | Merge PR <link> | Merged. |
-| 6 | Either | Anything that looks wrong | A screenshot. |
+| 1 | <device the contract names> | Open the source-issue closure card in the inbox (its statement starts "Merging head <head> into <base>") | Its statement and the actions it offers; a screenshot. |
+| 2 | <device the contract names> | <Approve it, or the decision the contract names: Approve With Changes with the resolves flag off, or Decline> | Done. |
+| 3 | Mac | Open the ready card | The actions it offers; a screenshot. |
+| 4 | iPhone | Open the ready card | The actions it offers; a screenshot. |
+| 5 | <device> | <each action the contract lists: a card action, an external review, a Stop check> | <what the card or forge shows after it> |
+| 6 | Owner | (after my step) Hold the merge until I confirm the PR left draft with <`Closes #<number>`, or the reference the decision gives> | Nothing; I say when. |
+| 7 | Mac | Look for a STOPPED banner or an open daemon stop notice in Inbox > System health | Present or not. |
+| 8 | Owner | Merge PR <link> | Merged. |
+| 9 | Either | Anything that looks wrong | A screenshot. |
 ```
 
 ## 5. Post-Merge Alerts
