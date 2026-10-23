@@ -256,14 +256,17 @@ completes. docs/production-walkthrough.md (Rehearse Before The Real Run)
 holds the procedure; this section says what makes a pass count.
 
 1. **Same build, fresh root.** Build `freesided` from a clean checkout of
-   the SHA the real run will use, and make a fresh root (`mktemp -d`
-   style). The pass proves that build only: a real run on a different build
-   SHA needs a new pass.
+   the SHA the real run will use, with the version flag the walkthrough's
+   Start And Verify build names (preflight's `daemon_build` check fails a
+   plain `go build`), and make a fresh root (`mktemp -d` style). The pass
+   proves that build only: a real run on a different build SHA needs a new
+   pass.
 2. **Settings that differ only where they must.** Copy the real run's
    settings and change only `listen`, `seed_root`, `repository.*` (the
    disposable repository, its project, base, and allowed paths),
-   `manual_submission_config` (empty), the effort for each role, and the
-   `agent_tree.commit` the efforts require. Every role keeps the real run's
+   `images.agent` and `approved_recipe` (from the disposable repository's
+   onboarding, step 3), `manual_submission_config` (empty), the effort for
+   each role, and the `agent_tree.commit` the efforts require. Every role keeps the real run's
    model and runs at `low`, with one exception below: each writer in `writers.*`, `review.effort`, and
    `judgment.effort` when the real run sets `judgment`. A model the images,
    the subscription, or the pinned `judgment.claude_bin` refuses then fails
@@ -282,9 +285,13 @@ holds the procedure; this section says what makes a pass count.
    input changes, which the deputy's self-check refuses.
 3. **A disposable target.** An issue in a dedicated throwaway repository
    where the `prod` GitHub App is installed (the `freeside-review-challenge`
-   precedent, #1275), small enough that a review comes back clean. The same
-   images and approved recipe must serve it, since the settings keep them.
-   Never the real target.
+   precedent, #1275), small enough that a review comes back clean. Never
+   the real target. It is onboarded on its own on the rehearsal root, which
+   builds its project image and approves its recipe, and that onboarding
+   takes the rehearsal's review-configuration digest: `low` review effort
+   is a new review configuration. The walkthrough (Rehearse Before The Real
+   Run, Review configuration) gives the order and the commands: agent tree,
+   digest, onboarding, then `images.agent` and `approved_recipe`.
 4. **Unattended inputs.** The policy file sets `gates.spec_approval` to
    `false` (`PolicySpecApproval`, `daemon/internal/specify/policy.go`) and
    leaves `gates.source_issue_closure` absent or `false`, its policy-approval
