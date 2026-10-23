@@ -635,7 +635,8 @@ func TestRunObservationDerivations(t *testing.T) {
 // that no percentage-complete field exists in the model: the serialized
 // contract shapes carry no key that reads as a completion fraction. Guarding
 // the wire shape (not field names in Go) catches a rename that keeps the
-// JSON key as well as a new field.
+// JSON key as well as a new field. A key matches by its words, not its
+// letters: "eta" names a completion estimate, "detail" and "metadata" do not.
 func TestObservationModelHasNoCompletionFraction(t *testing.T) {
 	inv := InvocationID("inv-1")
 	reason := HoldTrustBlocked
@@ -658,11 +659,53 @@ func TestObservationModelHasNoCompletionFraction(t *testing.T) {
 		if err != nil {
 			t.Fatalf("marshal %T: %v", v, err)
 		}
-		lowered := strings.ToLower(string(encoded))
-		for _, banned := range []string{"percent", "progress", "fraction", "eta"} {
-			if strings.Contains(lowered, banned) {
-				t.Errorf("%T serializes a completion-fraction key (%q): %s", v, banned, encoded)
-			}
+		if key, ok := completionFractionKey(t, encoded); ok {
+			t.Errorf("%T serializes a completion-fraction key (%q): %s", v, key, encoded)
 		}
 	}
+	// The guard still bites on the keys it exists to keep out.
+	for _, banned := range []string{
+		`{"percent_complete":1}`, `{"progress":1}`, `{"completion_fraction":1}`,
+		`{"eta":1}`, `{"hold":{"eta_seconds":1}}`, `[{"percentage":1}]`,
+	} {
+		if _, ok := completionFractionKey(t, []byte(banned)); !ok {
+			t.Errorf("completionFractionKey missed %s", banned)
+		}
+	}
+}
+
+// completionFractionKey reports the first object key, at any depth, with an
+// underscore-separated word that starts with a completion-fraction word.
+func completionFractionKey(t *testing.T, encoded []byte) (string, bool) {
+	t.Helper()
+	var decoded any
+	if err := json.Unmarshal(encoded, &decoded); err != nil {
+		t.Fatalf("decode %s: %v", encoded, err)
+	}
+	var walk func(any) (string, bool)
+	walk = func(v any) (string, bool) {
+		switch v := v.(type) {
+		case map[string]any:
+			for key, child := range v {
+				for _, word := range strings.Split(strings.ToLower(key), "_") {
+					for _, banned := range []string{"percent", "progress", "fraction", "eta"} {
+						if strings.HasPrefix(word, banned) {
+							return key, true
+						}
+					}
+				}
+				if key, ok := walk(child); ok {
+					return key, true
+				}
+			}
+		case []any:
+			for _, child := range v {
+				if key, ok := walk(child); ok {
+					return key, true
+				}
+			}
+		}
+		return "", false
+	}
+	return walk(decoded)
 }
