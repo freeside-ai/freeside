@@ -40,6 +40,10 @@ const productionClosureCheckpointVersion = "1"
 // policy itself). Absent or false is the default policy-approval mode.
 const policySourceIssueClosureGate = "gates.source_issue_closure"
 
+// closureLaterPublicationReason closes an earlier publication's closure card
+// when a later publication admits its own instance for the same work unit.
+const closureLaterPublicationReason = "Superseded because a later publication proposed closure again."
+
 // parseSourceIssueClosureHumanGate reads the closure human-gate switch from a
 // run's resolved policy. A malformed value fails closed to the human gate, so a
 // configuration typo never turns into an unreviewed automatic close.
@@ -62,11 +66,12 @@ func parseSourceIssueClosureHumanGate(policy domain.ResolvedPolicy) bool {
 // same proposal and re-binds it. A successor cycle that publishes, including a
 // base-advance re-entry, admits its own proposal; the predecessor's open card
 // is retired when the successor seals
-// (store.WriteTx.RecordPublicationSuccessor). A stored row is untrusted at
-// reconstruction: HasProposal reports whether a proposal was admitted,
-// InstanceID names it, and Origin selects the default policy binding (a
-// propose_site records the approval, a daemon_fallback opens the notice).
-// HasProposal == (InstanceID != "") is the invariant.
+// (store.WriteTx.RecordPublicationSuccessor), and admission retires whatever
+// the seal left open, such as an external-review successor's card. A stored
+// row is untrusted at reconstruction: HasProposal reports whether a proposal
+// was admitted, InstanceID names it, and Origin selects the default policy
+// binding (a propose_site records the approval, a daemon_fallback opens the
+// notice). HasProposal == (InstanceID != "") is the invariant.
 type productionClosureCheckpoint struct {
 	Version       string                    `json:"version"`
 	RunID         domain.RunID              `json:"run_id"`
@@ -290,6 +295,11 @@ func (w *productionPublicationWorkflow) admitClosureProposal(
 		}
 		instance, _, err := tx.AllocateProposalInstance(ctx, admission, batchID, proposal, w.attentionCreatedAt())
 		if err != nil {
+			return err
+		}
+		// The new instance has no card until bindClosureMerge opens it, so
+		// this closes only earlier publications' cards.
+		if _, err := tx.RetireOpenClosureProposals(ctx, task.RunID, closureLaterPublicationReason, w.attentionCreatedAt()); err != nil {
 			return err
 		}
 		decided.HasProposal = true

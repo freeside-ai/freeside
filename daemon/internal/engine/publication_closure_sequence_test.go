@@ -333,3 +333,18 @@ func TestClosureCardsRetireAcrossTheExitRunSequence(t *testing.T) {
 	f.requireOpen(t, "refused publication", nil)
 	f.requireRetired(t, "refused publication", 2, closureBlockedReason)
 }
+
+// TestClosureAdmissionRetiresTheEarlierPublicationsCard proves a later
+// publication's admission closes the card an earlier publication left open
+// when no successor seal retired it, as an external-review successor leaves
+// it, and that the new publication's own card is the one left open.
+func TestClosureAdmissionRetiresTheEarlierPublicationsCard(t *testing.T) {
+	f := seedClosureSequence(t)
+	runID := f.policy.RunID
+	first := f.publish(t, domain.ProductionPublicationInvocationID(runID), closureSequenceHead1, closureSequenceBase1)
+	f.requireOpen(t, "first publication", &first)
+
+	second := f.publish(t, "publication-external-review-2", closureSequenceHead2, closureSequenceBase1)
+	f.requireOpen(t, "later publication", &second)
+	f.requireRetired(t, "later publication", 0, closureLaterPublicationReason)
+}
