@@ -494,7 +494,10 @@ Swift formatting and style analysis both come from the toolchain's
 `swift-format` (swift-format 6.3.0, shipped with Xcode 26.6; CI pins the
 matching Xcode and fails if the tool version drifts). The configuration is
 `.swift-format` in this directory; the decision record is
-`devlog/2026-07-20-1140-swift-style-tooling.md`.
+`devlog/2026-07-20-1140-swift-style-tooling.md`. In CI the gate runs at the
+start of the convergence job (`.github/workflows/convergence-ci.yml`), the
+PR's one macOS Swift job, which also runs FreesideCoreTests and the
+screenshot regressions beside the convergence suite (#2248).
 
 From `app/`:
 

@@ -226,6 +226,21 @@ class Coverage(unittest.TestCase):
         for helper in ('scripts/daemon-test-shards.py', 'scripts/daemon-test-shards.json'):
             self.assertIn(helper, selector)
             self.assertIn('      - "' + helper + '"', workflow)
+        # The PR's macOS Swift tests run in the convergence job when app is
+        # selected; app-ci.yml itself requests no macOS job on push and no
+        # macOS test job at all, so a PR asks for three macOS jobs, not five.
+        self.assertIn("    with:\n      app_tests: ${{ needs.select.outputs.app == 'true' }}\n", caller)
+        convergence = (root / '.github/workflows/convergence-ci.yml').read_text()
+        self.assertIn('    inputs:\n      app_tests:\n', convergence)
+        self.assertNotIn('\n  push:', convergence)
+        self.assertNotIn('actions/cache/save', convergence)
+        self.assertIn("CONVERGENCE_ALL_TESTS: ${{ inputs.app_tests && '1' || '' }}", convergence)
+        self.assertIn('-rest-${{ hashFiles', convergence)
+        app = (root / '.github/workflows/app-ci.yml').read_text()
+        app_jobs = dict(re.findall(r'^  ([a-z-]+):\n(.*?)(?=^  [a-z-]+:|\Z)', app, re.M | re.S))
+        self.assertEqual({name for name, body in app_jobs.items() if 'runs-on: macos' in body}, {'apps'})
+        self.assertIn("    if: github.event_name != 'push'\n", app_jobs['apps'])
+        self.assertNotIn('swift test', app_jobs['apps'])
 
     def test_required_gate_rejects_selected_skips_and_missing_children(self):
         caller = (root / '.github/workflows/pull-request.yml').read_text()
