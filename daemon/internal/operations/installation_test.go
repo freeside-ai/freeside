@@ -151,6 +151,55 @@ func TestInstallationIntentRefusesOverlapAndChangedPromotion(t *testing.T) {
 	}
 }
 
+func TestInstallationIntentExpiresAtTheClock(t *testing.T) {
+	now := time.Date(2026, 7, 31, 12, 0, 0, 0, time.UTC)
+	clock := func() time.Time { return now }
+	store := &documentStoreStub{document: publish.InstallationAuthorityDocument{
+		Version: 1,
+		Registrations: []publish.InstallationAuthorityEntry{{
+			RegistrationID: 11, ActiveEpoch: 3, DurableIntentRevision: 7,
+			TrustedOwners: []publish.TrustedOwnerRecord{{Login: "example", ID: 22}},
+			TrustedInstallations: []publish.TrustedInstallationRecord{{
+				InstallationID: 33, Account: "example", AccountID: 22,
+				RepositoryIDs: []int64{44},
+			}},
+			Pending: nil,
+		}},
+	}}
+	req := operations.InstallationIntentRequest{
+		RegistrationID: 11, Account: "example", AccountID: 22,
+		InstallationID: 33, RepositoryID: 55,
+		ExpiresAt: now,
+	}
+	if _, err := operations.BeginInstallation(
+		context.Background(), store, req, clock,
+	); err == nil {
+		t.Fatal("BeginInstallation accepted an intent expiring at the clock")
+	}
+	if entry := store.document.Registrations[0]; entry.Pending != nil || entry.DurableIntentRevision != 7 {
+		t.Fatalf("refused intent mutated authority: %+v", entry)
+	}
+	req.ExpiresAt = now.Add(time.Hour)
+	if _, err := operations.BeginInstallation(
+		context.Background(), store, req, clock,
+	); err != nil {
+		t.Fatal(err)
+	}
+	store.document.Registrations[0].Pending.ExpiresAt = now
+	replacement := req
+	replacement.ExpiresAt = now.Add(2 * time.Hour)
+	replacement.Replace = true
+	replaced, err := operations.BeginInstallation(
+		context.Background(), store, replacement, clock,
+	)
+	if err != nil {
+		t.Fatalf("BeginInstallation kept an intent expiring at the clock: %v", err)
+	}
+	if replaced.DurableIntentRevision != 9 || !replaced.ExpiresAt.Equal(replacement.ExpiresAt) {
+		t.Fatalf("replacement = %+v, want revision 9 expiring %v", replaced, replacement.ExpiresAt)
+	}
+}
+
 func TestPromoteInstallationRechecksCrossRegistrationOwnership(t *testing.T) {
 	now := time.Date(2026, 7, 31, 12, 0, 0, 0, time.UTC)
 	clock := func() time.Time { return now }
