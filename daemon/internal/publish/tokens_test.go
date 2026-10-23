@@ -154,6 +154,106 @@ func TestFollowUpFilingTokenSourceRevalidatesInstallationBeforeCacheHit(t *testi
 	}
 }
 
+func TestIssueReadTokenSourceScopesCacheAndAudit(t *testing.T) {
+	t.Parallel()
+	clock, mints := fixtureTime, 0
+	srv := newMintServer(t, func(w http.ResponseWriter, r *http.Request) {
+		mints++
+		var request struct {
+			RepositoryIDs []int64           `json:"repository_ids"`
+			Permissions   map[string]string `json:"permissions"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
+			t.Error(err)
+		}
+		if len(request.RepositoryIDs) != 1 || request.RepositoryIDs[0] != fixtureRepositoryID ||
+			len(request.Permissions) != 2 || request.Permissions["issues"] != "read" || request.Permissions["metadata"] != "read" {
+			t.Errorf("issue read mint request = %+v", request)
+		}
+		writeFilingTokenResponse(t, w, map[string]string{"issues": "read", "metadata": "read"})
+	})
+	defer srv.Close()
+	recorder := &captureRecorder{}
+	now := func() time.Time { return clock }
+	m := newCoveredMinter(newRegisteredKeystore(t), srv.Client(), srv.URL, recorder, conformantTrust(t), now)
+	source := publish.NewIssueReadTokenSource(m, now)
+	for _, offset := range []time.Duration{0, 30 * time.Minute, 59 * time.Minute} {
+		clock = fixtureTime.Add(offset)
+		token, err := source.Token(context.Background(), testTrustRepo)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if token.Permissions != publish.IssueReadPermissions || token.RepositoryID != fixtureRepositoryID {
+			t.Errorf("token permissions = %+v, repository = %d", token.Permissions, token.RepositoryID)
+		}
+	}
+	if mints != 2 || len(recorder.records) != 2 {
+		t.Fatalf("mints = %d, audit records = %d, want 2 each", mints, len(recorder.records))
+	}
+	for _, record := range recorder.records {
+		if record.Requested != publish.IssueReadPermissions || record.Granted != publish.IssueReadPermissions {
+			t.Errorf("audit scopes requested=%+v granted=%+v", record.Requested, record.Granted)
+		}
+	}
+}
+
+// TestIssueReadTokenSourceRejectsDifferentGrants pins the exact grant: an
+// installation that answers with issue write access, or any extra scope, is
+// refused rather than handed to the research fetcher.
+func TestIssueReadTokenSourceRejectsDifferentGrants(t *testing.T) {
+	t.Parallel()
+	for name, scopes := range map[string]map[string]string{
+		"missing issues":    {"metadata": "read"},
+		"write issues":      {"issues": "write", "metadata": "read"},
+		"publication scope": {"issues": "read", "metadata": "read", "contents": "write"},
+		"unknown scope":     {"issues": "read", "metadata": "read", "unexpected": "read"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			srv := newMintServer(t, func(w http.ResponseWriter, _ *http.Request) { writeFilingTokenResponse(t, w, scopes) })
+			defer srv.Close()
+			recorder := &captureRecorder{}
+			m := newCoveredMinter(newRegisteredKeystore(t), srv.Client(), srv.URL, recorder, conformantTrust(t), fixedNow)
+			token, err := publish.NewIssueReadTokenSource(m, fixedNow).Token(context.Background(), testTrustRepo)
+			if !errors.Is(err, publish.ErrGrantMismatch) || token.Token.Reveal() != "" {
+				t.Fatal("different grant returned a token or lacked ErrGrantMismatch")
+			}
+			if len(recorder.records) != 0 {
+				t.Fatal("rejected grant reached the successful-mint audit")
+			}
+		})
+	}
+}
+
+func TestIssueReadTokenSourceRevalidatesInstallationBeforeCacheHit(t *testing.T) {
+	t.Parallel()
+	discoveries, mints := 0, 0
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodGet && r.URL.Path == "/app/installations" {
+			discoveries++
+			if discoveries == 1 {
+				_, _ = fmt.Fprintf(w, `[{"id":777,"app_id":%d,"target_id":%d,"repository_selection":"selected","account":{"login":"freeside-ai","id":%d}}]`, fixtureAppID, testOwnerID, testOwnerID)
+			} else {
+				_, _ = fmt.Fprint(w, `[]`)
+			}
+			return
+		}
+		mints++
+		writeFilingTokenResponse(t, w, map[string]string{"issues": "read", "metadata": "read"})
+	}))
+	defer srv.Close()
+	m := newCoveredMinter(newRegisteredKeystore(t), srv.Client(), srv.URL, &captureRecorder{}, conformantTrust(t), fixedNow)
+	source := publish.NewIssueReadTokenSource(m, fixedNow)
+	if _, err := source.Token(context.Background(), testTrustRepo); err != nil {
+		t.Fatal(err)
+	}
+	if token, err := source.Token(context.Background(), testTrustRepo); !errors.Is(err, publish.ErrNoInstallation) || token.Token.Reveal() != "" {
+		t.Fatal("cached token survived installation removal")
+	}
+	if mints != 1 {
+		t.Errorf("mints = %d, want 1", mints)
+	}
+}
+
 // newMintCountingSource stands up a fixture-backed mint endpoint and a
 // CachedTokenSource over it, returning the source and a pointer to the
 // mint count. The fixture token expires at 13:00; now starts at

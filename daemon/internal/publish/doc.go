@@ -9,7 +9,7 @@
 // a trusted registration and installation (InstallationResolver);
 // trust-gated per-repository installation tokens with the pinned
 // minimum permission sets (Minter, PublishPermissions,
-// FollowUpFilingPermissions); a per-mint audit
+// FollowUpFilingPermissions, IssueReadPermissions); a per-mint audit
 // record naming the registration (MintRecord, Recorder); and the
 // redaction boundary every credential value lives behind (Secret).
 // Public registration and per-machine-key onboarding (issue #248) composes
