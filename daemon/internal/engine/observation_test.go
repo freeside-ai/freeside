@@ -2,7 +2,10 @@ package engine
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
+	"reflect"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -83,6 +86,98 @@ func TestDispatchHoldReasonCoversEveryHoldClass(t *testing.T) {
 	}
 	if _, ok := dispatchHoldReason(nil); ok {
 		t.Error("nil produced a hold reason")
+	}
+}
+
+type admissionCheckCase struct {
+	sentinel error
+	check    domain.AdmissionCheck
+}
+
+// admissionRefusalChecks is the check each error class dispatchHoldReason
+// maps onto admission_policy_refused names when it carries no typed agent
+// refusal (issue #2211).
+var admissionRefusalChecks = []admissionCheckCase{
+	{ErrAgentNotAdmissible, domain.AdmissionCheckAgentAdmission},
+	{domain.ErrGenerationIntegrityMarked, domain.AdmissionCheckGenerationIntegrityMarked},
+	{ErrEgressProfileNotEnforceable, domain.AdmissionCheckEgressProfileNotEnforceable},
+	{ErrEgressPolicyRefused, domain.AdmissionCheckEgressPolicyRefused},
+	{exec.ErrCapabilityRefused, domain.AdmissionCheckBackendCapabilityRefused},
+	{exec.ErrPreJobRefused, domain.AdmissionCheckBackendPreJobRefused},
+	{domain.ErrUnknownAdmissionFloor, domain.AdmissionCheckAdmissionFloorUnknown},
+	{domain.ErrCapabilityBelowFloor, domain.AdmissionCheckCapabilityBelowFloor},
+	{domain.ErrCredentialModeNotApproved, domain.AdmissionCheckCredentialModeNotApproved},
+	{domain.ErrWaiverNotConfigured, domain.AdmissionCheckWaiverNotConfigured},
+	{domain.ErrRepositoryIdentityMismatch, domain.AdmissionCheckRepositoryIdentityMismatch},
+	{domain.ErrPathBoundaryMismatch, domain.AdmissionCheckPathBoundaryMismatch},
+	{domain.ErrTrustProfileSuperseded, domain.AdmissionCheckTrustProfileSuperseded},
+	{domain.ErrReviewConfigurationUnapproved, domain.AdmissionCheckReviewConfigurationUnapproved},
+}
+
+// TestAdmissionRefusalDetailCoversEveryAdmissionClass: every error class the
+// hold records as admission_policy_refused names its own check and no agent
+// or launch, every hold-classified sentinel of that reason is in the table,
+// and an error of any other reason has no detail.
+func TestAdmissionRefusalDetailCoversEveryAdmissionClass(t *testing.T) {
+	seen := map[domain.AdmissionCheck]bool{}
+	for _, tc := range admissionRefusalChecks {
+		wrapped := fmt.Errorf("intent %q: dispatch: %w", "inv-1", tc.sentinel)
+		if reason, ok := dispatchHoldReason(wrapped); !ok || reason != domain.HoldAdmissionPolicyRefused {
+			t.Errorf("%v: hold reason = %q, %t; want %q", tc.sentinel, reason, ok, domain.HoldAdmissionPolicyRefused)
+			continue
+		}
+		got := admissionRefusalDetail(wrapped)
+		want := domain.AdmissionRefusal{Check: tc.check}
+		if got == nil || *got != want {
+			t.Errorf("%v: detail = %+v, want %+v", tc.sentinel, got, want)
+		}
+		if seen[tc.check] {
+			t.Errorf("%v: check %q names two error classes", tc.sentinel, tc.check)
+		}
+		seen[tc.check] = true
+	}
+	for _, sentinel := range holdClassifiedSentinels {
+		reason, _ := dispatchHoldReason(sentinel)
+		detail := admissionRefusalDetail(sentinel)
+		if reason != domain.HoldAdmissionPolicyRefused {
+			if detail != nil {
+				t.Errorf("%v: reason %q carries detail %+v", sentinel, reason, detail)
+			}
+			continue
+		}
+		if !slices.ContainsFunc(admissionRefusalChecks, func(tc admissionCheckCase) bool {
+			return errors.Is(sentinel, tc.sentinel)
+		}) {
+			t.Errorf("%v maps to %q but has no expected check", sentinel, reason)
+		}
+	}
+	// A typed agent refusal names its own check, agent, and launch through
+	// any wrapping; one joined with a cause of another reason has no detail,
+	// because the hold records that other reason.
+	agent, stage, launch := "implementer-agent", domain.StageNameSpecification, domain.Digest("sha256:launch")
+	typed := &AgentAdmissionRefusal{
+		Refusal: domain.AdmissionRefusal{
+			Check: domain.AdmissionCheckAgentAttendedMark, Agent: &agent,
+			LaunchStage: &stage, LaunchDigest: &launch,
+		},
+		err: fmt.Errorf("role specifier: no attended mark: %w", ErrAgentNotAdmissible),
+	}
+	if got := admissionRefusalDetail(fmt.Errorf("admit invocation %q: %w", "inv-1", typed)); got == nil ||
+		!reflect.DeepEqual(*got, typed.Refusal) {
+		t.Errorf("typed refusal detail = %+v, want %+v", got, typed.Refusal)
+	}
+	gated := &AgentAdmissionRefusal{
+		Refusal: domain.AdmissionRefusal{Check: domain.AdmissionCheckAgentGate},
+		err:     errors.Join(ErrAgentNotAdmissible, domain.ErrBlockingSystemHealth),
+	}
+	if reason, _ := dispatchHoldReason(gated); reason != domain.HoldBlockingSystemHealth {
+		t.Fatalf("gate refusal on system health: reason = %q", reason)
+	}
+	if got := admissionRefusalDetail(gated); got != nil {
+		t.Errorf("a blocking_system_health hold carries detail %+v", got)
+	}
+	if got := admissionRefusalDetail(errors.New("an unclassified failure")); got != nil {
+		t.Errorf("an unclassified error carries detail %+v", got)
 	}
 }
 

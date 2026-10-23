@@ -122,7 +122,7 @@ func (w *productionPublicationWorkflow) recoverScopeConflictTask(
 			if err != nil {
 				return err
 			}
-			if err := recordRunHold(ctx, tx, task.RunID, task.PublicationID, domain.HoldScopeConflict, now); err != nil {
+			if err := recordRunHold(ctx, tx, task.RunID, task.PublicationID, domain.HoldScopeConflict, nil, now); err != nil {
 				return err
 			}
 			return tx.PutAttentionItem(ctx, item)

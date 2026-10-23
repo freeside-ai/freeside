@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"path/filepath"
+	"reflect"
 	"slices"
 	"strings"
 	"testing"
@@ -397,19 +398,78 @@ func TestHeldWorkNoticeNewCauseResolvesAndRestarts(t *testing.T) {
 	}
 }
 
+// TestAttendedMarkRefusalNamesTheAgent is the Wave 8 exit-run shape (issue
+// #2211): an unattended specification attempt whose task line names an agent
+// with no attended mark for the specification launch. The hold names the
+// check, the agent, and the launch, a changed detail is written at once, and
+// the held-work notice names them too.
+func TestAttendedMarkRefusalNamesTheAgent(t *testing.T) {
+	agents := newAgentAdmissionFixture(t)
+	agents.addSecondAgent(t)
+	agents.submitLine(t, domain.RoleSpecifier, agentTestSecondAgent)
+	_, refusal := resolveAgentAdmission(
+		t.Context(), agents.store, agents.selection, agents.run.ID, domain.RoleSpecifier,
+		agentTestPrompts[domain.RoleSpecifier].Digest, domain.ModeUnattended, agentTestAt,
+	)
+	launch := agentTestLaunch(t, agents, domain.RoleSpecifier)
+	assertAdmissionDetail(t, refusal, domain.AdmissionCheckAgentAttendedMark, agentTestSecondAgent, launch)
+
+	f := newFailedImplementationFixture(t, execfake.OutcomeFail, "unused")
+	engine := f.newEngine(t, f.driver)
+	observe := func(engine *Engine, err error) domain.RunHoldObservation {
+		t.Helper()
+		if err := engine.observeRefusalHold(t.Context(), f.run.ID, f.attempt.InvocationID, err); err != nil {
+			t.Fatal(err)
+		}
+		var hold domain.RunHoldObservation
+		if err := f.store.Read(t.Context(), func(tx *store.ReadTx) error {
+			var err error
+			hold, _, err = tx.GetRunHold(t.Context(), f.run.ID)
+			return err
+		}); err != nil {
+			t.Fatal(err)
+		}
+		return hold
+	}
+	// A floor refusal first, then the agent refusal on the same engine: the
+	// reason is unchanged, but the new detail is not held back by the pacer.
+	floor := observe(engine, fmt.Errorf("admit: %w", domain.ErrCapabilityBelowFloor))
+	if floor.Detail == nil || floor.Detail.Check != domain.AdmissionCheckCapabilityBelowFloor {
+		t.Fatalf("floor hold = %+v", floor)
+	}
+	hold := observe(engine, fmt.Errorf("admit invocation %q: %w", f.attempt.InvocationID, refusal))
+	if want := admissionRefusalDetail(refusal); hold.Reason != domain.HoldAdmissionPolicyRefused ||
+		!reflect.DeepEqual(hold.Detail, want) || !hold.FirstObservedAt.Equal(floor.FirstObservedAt) {
+		t.Fatalf("hold = %+v with detail %s, want detail %s and the span kept",
+			hold, renderDetail(hold.Detail), renderDetail(want))
+	}
+
+	backdateRunHold(t, f.store, f.run.ID, heldWorkNoticeAfter+time.Minute)
+	observe(f.newEngine(t, f.driver), refusal)
+	open := openHeldWorkNotices(t, f.store)
+	if len(open) != 1 {
+		t.Fatalf("open notices = %+v, want one", open)
+	}
+	want := fmt.Sprintf("When this notice was raised, admission check %s refused agent %s on the %s launch %s.",
+		domain.AdmissionCheckAgentAttendedMark, agentTestSecondAgent, launch.Stage, launch.Digest)
+	if !strings.Contains(open[0].Reason, want) {
+		t.Errorf("notice reason %q does not contain %q", open[0].Reason, want)
+	}
+}
+
 // TestHeldWorkNoticeIgnoresHoldsOutsideTheRefusalClass: a long hold whose
 // reason is not an admission refusal raises nothing.
 func TestHeldWorkNoticeIgnoresHoldsOutsideTheRefusalClass(t *testing.T) {
 	f := newFailedImplementationFixture(t, execfake.OutcomeFail, "unused")
 	engine := f.newEngine(t, f.driver)
 	if err := engine.observeRunHold(
-		t.Context(), f.run.ID, f.attempt.InvocationID, domain.HoldIdentityParallelism,
+		t.Context(), f.run.ID, f.attempt.InvocationID, domain.HoldIdentityParallelism, nil,
 	); err != nil {
 		t.Fatal(err)
 	}
 	backdateRunHold(t, f.store, f.run.ID, heldWorkNoticeAfter+time.Minute)
 	if err := f.newEngine(t, f.driver).observeRunHold(
-		t.Context(), f.run.ID, f.attempt.InvocationID, domain.HoldIdentityParallelism,
+		t.Context(), f.run.ID, f.attempt.InvocationID, domain.HoldIdentityParallelism, nil,
 	); err != nil {
 		t.Fatal(err)
 	}
@@ -493,7 +553,7 @@ func TestHeldWorkNoticeSkipsAStoppedTask(t *testing.T) {
 	start := now.Add(-heldWorkNoticeAfter - time.Minute)
 	if err := f.store.Write(t.Context(), func(tx *store.WriteTx) error {
 		if err := recordRunHold(
-			t.Context(), tx, f.run.ID, f.attempt.InvocationID, domain.HoldBackendNotConformant, start,
+			t.Context(), tx, f.run.ID, f.attempt.InvocationID, domain.HoldBackendNotConformant, nil, start,
 		); err != nil {
 			return err
 		}
