@@ -6,6 +6,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -70,6 +71,7 @@ func TestOnboardRecoveryReturnsFreshNativeInstallationRequest(t *testing.T) {
 		Status          string                        `json:"status"`
 		Pending         publish.PendingEnvelopeRecord `json:"pending"`
 		InstallationURL string                        `json:"installation_url"`
+		Next            string                        `json:"next"`
 	}
 	if err := json.Unmarshal(output.Bytes(), &result); err != nil {
 		t.Fatal(err)
@@ -77,6 +79,13 @@ func TestOnboardRecoveryReturnsFreshNativeInstallationRequest(t *testing.T) {
 	if result.Status != "installation_pending" || result.InstallationURL != "https://github.com/apps/freeside-example/installations/new" ||
 		result.Pending.InstallationID == nil || *result.Pending.InstallationID != 0 || len(result.Pending.CurrentRepositoryIDs) != 0 {
 		t.Fatalf("fresh recovery result = %+v", result)
+	}
+	// A fresh installation has no trusted binding, so next must explain the
+	// empty list rather than call it a binding's recorded list.
+	for _, want := range []string{"pending.current_repository_ids is empty", "when this intent opened", "-resume"} {
+		if !strings.Contains(result.Next, want) {
+			t.Errorf("next %q does not name %q", result.Next, want)
+		}
 	}
 	snapshot, err := authority.InstallationAuthority(t.Context(), 91)
 	if err != nil {

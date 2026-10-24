@@ -7,6 +7,8 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"slices"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -93,7 +95,9 @@ func TestOnboardRefusesSilentIntentReplacement(t *testing.T) {
 			if result.Status != "installation_pending" || result.Pending.DurableIntentRevision != wantRevision+1 {
 				t.Fatalf("replacement result = %+v, want installation_pending at revision %d", result, wantRevision+1)
 			}
-			for _, want := range []string{"-resume", "-approve", "complete", "-replace-intent", "-recover-installation"} {
+			for _, want := range []string{
+				"-resume", "-approve", "complete", "-replace-intent", "-recover-installation", "pending.current_repository_ids",
+			} {
 				if !strings.Contains(result.Next, want) {
 					t.Errorf("next %q does not name %q", result.Next, want)
 				}
@@ -102,6 +106,58 @@ func TestOnboardRefusesSilentIntentReplacement(t *testing.T) {
 				t.Fatalf("recorded revision = %d, want %d", got, wantRevision+1)
 			}
 		})
+	}
+}
+
+// TestOnboardReportsStoredRepositoriesAfterGrant replays the exit run's order
+// (#1613): the operator grants repository 55 on GitHub after the first call,
+// but the intent path makes no GitHub call, so the replacement intent still
+// shows the stored binding's list. next must say so instead of leaving the
+// operator to read [44] as the grant not having landed.
+func TestOnboardReportsStoredRepositoriesAfterGrant(t *testing.T) {
+	fixture := newOnboardIntentFixture(t)
+	fixture.trustInstallation(t, 777, 44)
+	run := func(extra ...string) (publish.PendingEnvelopeRecord, string) {
+		t.Helper()
+		var output bytes.Buffer
+		if err := runOnboardCommand(t.Context(), append(fixture.args, extra...), &output, io.Discard); err != nil {
+			t.Fatal(err)
+		}
+		var result struct {
+			Status  string                        `json:"status"`
+			Pending publish.PendingEnvelopeRecord `json:"pending"`
+			Next    string                        `json:"next"`
+		}
+		if err := json.Unmarshal(output.Bytes(), &result); err != nil {
+			t.Fatal(err)
+		}
+		if result.Status != "installation_pending" {
+			t.Fatalf("status = %q, want installation_pending", result.Status)
+		}
+		return result.Pending, result.Next
+	}
+
+	first, firstNext := run()
+	if !slices.Equal(first.CurrentRepositoryIDs, []int64{44}) || !slices.Equal(first.ExpectedRepositoryIDs, []int64{44, 55}) {
+		t.Fatalf("first intent = %+v, want current [44] and expected [44 55]", first)
+	}
+	for _, want := range []string{
+		"pending.current_repository_ids", "recorded when this intent opened", "pending.expected_repository_ids", "repository 55", "-resume",
+	} {
+		if !strings.Contains(firstNext, want) {
+			t.Errorf("next %q does not name %q", firstNext, want)
+		}
+	}
+
+	// The grant lands on GitHub while the intent expires; nothing here can
+	// see it.
+	fixture.expireIntent(t)
+	second, secondNext := run("-replace-intent")
+	if second.DurableIntentRevision != first.DurableIntentRevision+1 || !slices.Equal(second.CurrentRepositoryIDs, []int64{44}) {
+		t.Fatalf("replacement intent = %+v, want revision %d with the stored current [44]", second, first.DurableIntentRevision+1)
+	}
+	if secondNext != firstNext {
+		t.Fatalf("replacement next = %q, want the first call's %q", secondNext, firstNext)
 	}
 }
 
@@ -200,16 +256,41 @@ func (f onboardIntentFixture) recordIntent(t *testing.T, expired bool) int64 {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !expired {
-		return pending.DurableIntentRevision
+	if expired {
+		f.expireIntent(t)
 	}
+	return pending.DurableIntentRevision
+}
+
+// expireIntent backdates the recorded intent's expiry.
+func (f onboardIntentFixture) expireIntent(t *testing.T) {
+	t.Helper()
 	if err := f.authority.UpdateDocument(t.Context(), func(doc *publish.InstallationAuthorityDocument) error {
 		doc.Registrations[0].Pending.ExpiresAt = time.Now().UTC().Add(-time.Minute)
 		return nil
 	}); err != nil {
 		t.Fatal(err)
 	}
-	return pending.DurableIntentRevision
+}
+
+// trustInstallation records a trusted binding of the App owner's
+// installationID holding repositoryIDs, and points the fixture's onboard call
+// at that installation.
+func (f *onboardIntentFixture) trustInstallation(t *testing.T, installationID int64, repositoryIDs ...int64) {
+	t.Helper()
+	if err := f.authority.UpdateDocument(t.Context(), func(doc *publish.InstallationAuthorityDocument) error {
+		doc.Registrations[0].TrustedInstallations = []publish.TrustedInstallationRecord{{
+			InstallationID: installationID, Account: "example", AccountID: 42, RepositoryIDs: repositoryIDs,
+		}}
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	flag := slices.Index(f.args, "-installation-id")
+	if flag < 0 || flag+1 >= len(f.args) {
+		t.Fatal("fixture args carry no -installation-id value")
+	}
+	f.args[flag+1] = strconv.FormatInt(installationID, 10)
 }
 
 func (f onboardIntentFixture) revision(t *testing.T) int64 {
