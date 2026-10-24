@@ -138,6 +138,14 @@ tracker as an "Exit Preparation" comment (template in
 created, and what unblocks the run. Never work around a failed precondition
 with a partial run.
 
+- **The pre-spend checks pass, first:** with the real run's settings
+  written on its root and no daemon on that root, `freesided prelaunch
+  -root <root> -task <file> -policy <file> -publication <file> -work-unit
+  <file>` exits 0 (daemon/README.md, Run The Pre-Spend Checks Before A
+  Launch). Record `<root>/daemon/prelaunch.json`'s path and its
+  `manifest_digest`. A failed check, or a `first_missing` that isn't null,
+  is a precondition failure, and its `fix` is what unblocks the run. The
+  bullets below that name the record read it rather than rerun its checks.
 - **Every unit in the exit set is resolved**, Required ones merged and
   Investigate-before-exit ones diagnosed with any resulting fix merged, and
   `main` is at the tip you will run from. Record that SHA; the run's
@@ -154,38 +162,44 @@ with a partial run.
 - **The inputs are complete:** every row of the input checklist below for
   the derived mode, read against the daemon guide's settings table in this
   session (daemon/README.md, Run Real Work With The Deputy); the table is
-  the authority and it changes.
+  the authority and it changes. The record's `inputs` checks apply
+  `submit`'s refusals to the files; a row only you can judge, such as a
+  stale prompt package, stays yours.
 - **Credentials are live:** the Codex reviewer token and the provider auth
   identity. Composition preflight's `claude_credentials` and
-  `codex_credentials` checks are the authority, and the fixture pass runs
-  them before the real run spends anything. An expired token fails there,
+  `codex_credentials` checks are the authority; the record carries them
+  among its `composition` checks, and the fixture pass runs them again
+  before the real run spends anything. An expired token fails there,
   after onboarding and image work are already spent (#1363); renew it
   (docs/production-walkthrough.md, Recover Expired Reviewer Credentials)
   and rerun the pass.
-- **The real lineup is served:** with the real run's settings written on
-  its root and no daemon holding that root, `freesided probe-lineup -root
-  <root>` exits 0 (daemon/README.md, Probe The Lineup Before A Run). The
-  fixture pass runs the fixture's models, so this is the only call to the
-  real models before the real run spends a task on them. A refused model
-  is a precondition failure, reported like any other.
+- **The real lineup is served:** the record's `lineup_probe` check passed,
+  which runs `probe-lineup`'s calls on the real settings (daemon/README.md,
+  Probe The Lineup Before A Run). The fixture pass runs the fixture's
+  models, so this is the only call to the real models before the real run
+  spends a task on them. A refused model is a precondition failure,
+  reported like any other.
 - **The state root is usable:** a fresh root, or a retained one the current
   daemon can open. Clean-break migrations retire old roots at startup; don't
   spend a run discovering that. A retained root also keeps every
   system-health item its earlier runs left open, and a restart doesn't close
   them. The blocking ones (not the advisory ones) hold the first run's
   admission with reason `blocking_system_health` until an operator resolves
-  them in a client. List them before launch with `freesided inspect health
-  -db <root>/daemon/freeside.db` (daemon/README.md, Read A Task's Record)
-  and record each item whose `admission` is `holds`, with its `id` and
-  `requested_decision`, and whether `operator_stop` is set. Plan to resolve
+  them in a client. The record's `state` checks open the root read-only,
+  and its `health_items` lists each item whose `admission` is `holds`, with
+  its `id`, its `requested_decision`, and whether `operator_stop` is set,
+  from the read behind `freesided inspect health` (daemon/README.md, Read
+  A Task's Record). Record each one. Plan to resolve
   them at the pairing checkpoint (Run the Deputy, step 2), or record why
   one stays open. With no daemon running, an item with a `supersession`
   reads as `holds` even when the daemon would waive it; the served read at
   the checkpoint decides it.
 - **Nothing else holds the rig** or an execution slot: no stranded
-  dispatched invocation, no orphaned cleanup reservation (#1181, #1465). A
-  stale lease for this root is recovered at start; one for another root
-  refuses the start (docs/production-walkthrough.md, Recover An Interrupted
+  dispatched invocation, no orphaned cleanup reservation (#1181, #1465). The
+  record's `rig_lease` check takes and releases the lease; a live holder
+  fails it. A stale lease for this root is recovered at start; one for
+  another root refuses the start, and the check's `fix` names its `rig
+  recover` command (docs/production-walkthrough.md, Recover An Interrupted
   Deputy).
 
 ### Input Checklist

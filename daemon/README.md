@@ -2292,7 +2292,9 @@ adoption's `agent-tree.patch`,
 `auth-adopt.json`, and `auth-adopt.log`. A passing manifest is also kept by
 content digest under `<state-root>/production-evidence/composition/`.
 `lineup-probe.json` in the same directory is written only by `freesided
-probe-lineup` (below); the deputy and preflight never read it.
+probe-lineup` and `freesided prelaunch`, and `prelaunch.json` only by
+`freesided prelaunch` (both below); the deputy and preflight never read
+either.
 
 **The launch manifest.** The deputy composes once per start, so its manifest
 (`freeside-production-composition-v2`) has no run identity; it binds the
@@ -2388,6 +2390,78 @@ needs Apple container running, `CLAUDE_CODE_OAUTH_TOKEN`,
 `FREESIDE_WARD_CODEX_REVIEW_AUTH` (a subscription `auth.json` snapshot in
 an owner-only directory), `FREESIDE_JUDGMENT_CLI`, and
 `FREESIDE_JUDGMENT_CLI_SHA256`. A missing input fails the opted-in run.
+
+### Run The Pre-Spend Checks Before A Launch
+
+`freesided prelaunch` runs, in one command and before the deputy starts,
+every check a deputy start and the run's `submit` would make that spends
+nothing, and names the first onboarding step the root still lacks (#2222).
+Run it on the standing root with the files the run will submit:
+
+```sh
+freesided prelaunch -root <state-root> -task <file> -policy <file> -publication <file> \
+  [-work-unit <file>] [--task-line role=agent]... [-no-live]
+```
+
+**What it checks.** Each check reports `passed`, `failed` with the `fix`
+the operator runs, or `not_run` with why. A check whose prerequisite failed
+is `not_run`, and the rest still run.
+
+- **`settings`**: `<state-root>/daemon/settings.json` loads and passes the
+  deputy's checks before its lease.
+- **`agent_tree`**: `agent_tree.commit` holds a readable agent tree, and it
+  is the tree in an `agent-tree.patch` an earlier start left on the root.
+- **`inputs`**: the files pass what `submit` checks of a new submission
+  before it saves anything, including the work-unit requirement and the
+  publication's `source_issue`; the `--task-line` set is well formed and
+  each agent is in the tree. `duplicate_source` makes `submit`'s refusal of
+  a source an unfinished task in the project already holds, as for new
+  work (a replay under that task's own `--submission-id` is not checked), and
+  `launch_binding` compares the inputs with the composed manifest as
+  `submit` does: the publication's `commit_author` must be the App bot the
+  composition resolved.
+- **`state`**: the database is absent (a fresh root) or opens read-only at
+  this build's schema; an older schema fails with both versions and the
+  recovery text. `system_health` fails on every open item whose admission
+  `holds`, listed in `health_items`. `identities` compares the recorded
+  identities with the settings' fixed bindings, and is `not_run` before
+  the first start records them.
+- **`rig`**: the rig lease is acquirable and the rig idle, and `prod`'s App
+  authority is usable under it (`installed_daemon`). A live holder fails,
+  naming it; a stale lease fails, naming the `rig recover` command for its
+  root, or, for this root, that the deputy's start recovers it.
+- **`composition`**: every check of the deputy's launch composition,
+  verbatim, under the lease.
+- **`live`**, unless `-no-live`: the lineup probe (Probe The Lineup Before
+  A Run).
+
+**The walk.** `first_missing` names the first onboarding step the root
+lacks, with its fix, or is null: `agent_tree` (see The First Start in
+docs/production-walkthrough.md), `trust_profile` (`freesided onboard` with
+the record's review-configuration digest), `project_image` (set
+`images.agent` to the onboarding's `project_image.image_ref`), then
+`approved_recipe` (set it to that image's `recipe_digest`).
+
+**What it writes.** `<state-root>/daemon/prelaunch.json`
+(`freeside-prelaunch-v1`, mode `0600`, replaced atomically), and the same
+JSON to stdout. It records the settings digest, the daemon build, the
+composed manifest's digest (`manifest_digest`, the same with or without
+`-no-live`), every check, the walk, the health items, and the lineup
+probe. With live on it also writes `lineup-probe.json`, as
+`probe-lineup` does. It never writes, removes, or replaces
+`composition-manifest.json`, migrates the database, records identities, or
+recovers a stale lease. Its lease token sits in
+`prelaunch-rig-acquisition.json` while it runs and is removed with the
+lease.
+
+**The mint-audit exception.** Its only store write is the audit row of the
+App token the composition's publication-authority check mints, as the
+deputy's does. It runs under the rig lease, so no deputy uses the App
+authority meanwhile.
+
+**Exit status.** 0 when no check failed and nothing is missing. Otherwise
+1, with one stderr line per failed check and one naming the first missing
+step. A malformed command line exits 2.
 
 ### Complete A Rebased Merge
 
