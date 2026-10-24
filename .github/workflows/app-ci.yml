@@ -12,8 +12,9 @@ on:
   # from the changed paths and reports the required check. The macOS
   # Swift tests and the swift-format gate run in convergence-ci.yml's one
   # macOS job, which the caller gives `app_tests` whenever it selects this
-  # component (#2248); only the Linux jobs run here on a push to main,
-  # where `generate` saves the SwiftPM mirror that macOS job restores.
+  # component (#2248). On a push to main the Linux jobs run, `generate`
+  # saving the SwiftPM mirror that macOS job restores, and
+  # `swift-build-cache` saves the Swift build it restores.
   workflow_call:
 
 permissions:
@@ -79,10 +80,11 @@ jobs:
           # the pinned checkouts from, re-fetched from github.com on
           # every run without this. Linux location here (the container's
           # home); macOS jobs use ~/Library/Caches/org.swift.swiftpm. Not
-          # app/.build: caching compiled output could let a stale artifact
-          # register as a pass, while a mirror cannot (Package.resolved
-          # still decides what is checked out and everything is still
-          # compiled here).
+          # app/.build: a build cache keyed on less than the whole tree
+          # could let a stale artifact register as a pass, while a mirror
+          # cannot (Package.resolved still decides what is checked out and
+          # everything is still compiled here). The convergence job's
+          # Swift build cache avoids that by keying on all of app/.
           path: ~/.cache/org.swift.swiftpm
           key: swiftpm-${{ runner.os }}-${{ github.job }}-${{ hashFiles('app/Package.resolved') }}
           restore-keys: swiftpm-${{ runner.os }}-${{ github.job }}-
@@ -101,8 +103,9 @@ jobs:
         # xcodebuild resolves app/Package.swift's graph, pruned to the
         # packages the app targets consume, from SwiftPM's shared
         # dependency cache; see the linux job for the rationale. Its
-        # checkouts land in DerivedData, which stays uncached for the
-        # same reason app/.build does.
+        # checkouts land in DerivedData, which stays uncached, since
+        # only a key over the whole tree makes compiled output safe to
+        # reuse (see the linux job).
         uses: actions/cache@v4
         with:
           path: ~/Library/Caches/org.swift.swiftpm
@@ -110,3 +113,59 @@ jobs:
           restore-keys: swiftpm-${{ runner.os }}-${{ github.job }}-
       - name: Build macOS and iOS apps (scripts/check.sh)
         run: bash scripts/check.sh app build-mac build-ios
+
+  # Push-only: builds app/ with its tests once per app-path merge and saves
+  # app/.build under the key convergence-ci.yml restores, which names
+  # app/'s git tree, so a daemon-only PR's convergence job runs the restored test
+  # bundle with --skip-build instead of compiling app code it did not
+  # touch (#2291). The trade, as in daemon-ci.yml's `macos-main`: a
+  # checkout and a cache lookup when the entry exists (a push that changes
+  # only api/openapi.yaml, scripts/check.sh, or this file), one macOS build
+  # when app/ changed, against the per-PR saving measured on #2291.
+  # `cancel-in-progress` may cancel it on a quick second merge; daemon PRs
+  # then build as before until the next app-path push saves the entry.
+  swift-build-cache:
+    name: swift build cache (main)
+    runs-on: macos-26
+    if: github.event_name == 'push'
+    steps:
+      - uses: actions/checkout@v4
+      # Byte for byte the step in convergence-ci.yml's `convergence` job,
+      # which carries the rationale; the workflow guard pins them equal.
+      - name: Resolve the Swift build key
+        id: swift-key
+        run: |
+          toolchain="$(swift --version 2>&1 | grep -o 'swiftlang-[^ )]*' | head -n1)"
+          xcode="$(xcodebuild -version | awk '/^Build version/ {print $3}')"
+          tree="$(git rev-parse HEAD:app)"
+          if [ -z "${ImageOS:-}" ] || [ -z "${xcode}" ] || [ -z "${toolchain}" ] || [ -z "${tree}" ]; then
+            echo "swift-key: empty part (ImageOS=${ImageOS:-} xcode=${xcode} toolchain=${toolchain} tree=${tree})" >&2
+            exit 1
+          fi
+          echo "image=${ImageOS}" >>"$GITHUB_OUTPUT"
+          echo "xcode=${xcode}" >>"$GITHUB_OUTPUT"
+          echo "toolchain=${toolchain}" >>"$GITHUB_OUTPUT"
+          echo "tree=${tree}" >>"$GITHUB_OUTPUT"
+      - name: Look up the Swift build
+        id: swift-build
+        uses: actions/cache/restore@v4
+        with:
+          # The path and key convergence-ci.yml restores, which carries the
+          # rationale. Lookup only: a hit means this tree's entry exists and
+          # there is nothing to build.
+          path: app/.build
+          key: swift-build-v1-${{ runner.os }}-${{ runner.arch }}-${{ steps.swift-key.outputs.image }}-${{ steps.swift-key.outputs.xcode }}-${{ steps.swift-key.outputs.toolchain }}-${{ steps.swift-key.outputs.tree }}
+          lookup-only: true
+      - name: Build app/ with its tests
+        if: steps.swift-build.outputs.cache-hit != 'true'
+        working-directory: app
+        run: swift build --only-use-versions-from-resolved-file --build-tests
+      - name: Record the Swift build size
+        if: steps.swift-build.outputs.cache-hit != 'true'
+        run: du -sh app/.build
+      - name: Save the Swift build
+        if: steps.swift-build.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v4
+        with:
+          path: app/.build
+          key: ${{ steps.swift-build.outputs.cache-primary-key }}
