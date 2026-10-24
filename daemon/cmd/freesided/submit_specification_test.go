@@ -111,6 +111,7 @@ func testSubmitCommandSpecificationDigest(
 		PolicyPath: policyPath, WorkUnitPath: declaredWorkUnit(t), PublicationPath: publicationPath,
 		ProjectID: "project-submit-specification", SubmissionID: "implementation-from-submit",
 	}
+	seedTemplateStore(t, cfg.DBPath)
 	submitted, err := runSubmitCommand(t.Context(), cfg)
 	if err != nil {
 		t.Fatal(err)

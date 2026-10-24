@@ -142,6 +142,7 @@ func startNotifyingDaemon(t *testing.T, root, ntfyURL string, logs *lockedBuffer
 	if logs != nil {
 		cfg.Logger = slog.New(slog.NewTextHandler(logs, nil))
 	}
+	seedTemplateStore(t, cfg.DBPath)
 	h, err := run(t.Context(), nil, cfg)
 	if err != nil {
 		t.Fatalf("run: %v", err)

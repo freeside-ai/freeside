@@ -70,6 +70,7 @@ func TestSeedFixtureServesRepresentativeState(t *testing.T) {
 
 func startDaemon(t *testing.T, cfg config) *daemon {
 	t.Helper()
+	seedTemplateStore(t, cfg.DBPath)
 	ctx, cancel := context.WithCancel(t.Context())
 	t.Cleanup(cancel)
 	h, err := run(ctx, nil, cfg)

@@ -27,6 +27,7 @@ func startNotifyTestFixture(t *testing.T, ntfyURL string) notifyTestFixture {
 	t.Helper()
 	root := t.TempDir()
 	f := notifyTestFixture{stateDir: filepath.Join(root, "state"), logs: &lockedBuffer{}}
+	seedTemplateStore(t, filepath.Join(root, "freeside.db"))
 	h, err := run(t.Context(), nil, config{
 		Environment: environmentEphemeral,
 		DBPath:      filepath.Join(root, "freeside.db"), StateDir: f.stateDir,

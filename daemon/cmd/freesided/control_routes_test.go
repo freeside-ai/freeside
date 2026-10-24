@@ -759,6 +759,7 @@ func TestControlServesExecutionMode(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			dbPath := filepath.Join(t.TempDir(), "freeside.db")
+			seedTemplateStore(t, dbPath)
 			cfg := tc.cfg
 			cfg.Environment, cfg.DBPath, cfg.ListenAddr = environmentEphemeral, dbPath, "127.0.0.1:0"
 			h, err := run(t.Context(), nil, cfg)

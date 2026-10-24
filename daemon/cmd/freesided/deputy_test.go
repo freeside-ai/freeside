@@ -201,7 +201,9 @@ func TestAcquireDeputyLeaseRefusesBusyListenerAndReleases(t *testing.T) {
 
 func openDeputyTestStore(t *testing.T) *store.Store {
 	t.Helper()
-	st, _, err := openStoreWithTopicKey(context.Background(), filepath.Join(t.TempDir(), "freeside.db"), store.Options{})
+	dbPath := filepath.Join(t.TempDir(), "freeside.db")
+	seedTemplateStore(t, dbPath)
+	st, _, err := openStoreWithTopicKey(context.Background(), dbPath, store.Options{})
 	if err != nil {
 		t.Fatal(err)
 	}

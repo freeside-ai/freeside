@@ -26,6 +26,7 @@ func TestAbandonPartialResultsAndExactEpisodeRepair(t *testing.T) {
 			t.Run(name, func(t *testing.T) {
 				ctx := t.Context()
 				dbPath := filepath.Join(t.TempDir(), "freeside.db")
+				seedTemplateStore(t, dbPath)
 				h, err := run(ctx, nil, config{Environment: environmentEphemeral, DBPath: dbPath, ListenAddr: "127.0.0.1:0"})
 				if err != nil {
 					t.Fatal(err)

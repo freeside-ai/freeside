@@ -51,6 +51,7 @@ func newAuthAdoptFixture(t *testing.T) *authAdoptFixture {
 		promptDir: filepath.Join(root, "prompts"),
 	}
 	f.storePath = filepath.Join(f.storeRoot, "auth.json")
+	seedTemplateStore(t, f.dbPath)
 	for _, dir := range []string{f.storeRoot, f.promptDir} {
 		if err := os.Mkdir(dir, 0o700); err != nil {
 			t.Fatal(err)

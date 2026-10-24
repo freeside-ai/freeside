@@ -285,6 +285,7 @@ func TestSubmitBindsLaunchCompositionManifest(t *testing.T) {
 			root := t.TempDir()
 			body := writeLaunchManifest(t, root, tc.edit)
 			dbPath := filepath.Join(root, "freeside.db")
+			seedTemplateStore(t, dbPath)
 			h, err := run(t.Context(), nil, config{Environment: environmentEphemeral, DBPath: dbPath, ListenAddr: "127.0.0.1:0"})
 			if err != nil {
 				t.Fatal(err)
@@ -337,6 +338,7 @@ func TestDeputyAdmitsOnlyWorkBoundToItsLaunch(t *testing.T) {
 				launch = &deputyLaunch{Manifest: manifest}
 			}
 			dbPath := filepath.Join(root, "freeside.db")
+			seedTemplateStore(t, dbPath)
 			h, err := run(t.Context(), nil, config{
 				Environment: environmentEphemeral, DBPath: dbPath, ListenAddr: "127.0.0.1:0", DeputyLaunch: launch,
 			})
