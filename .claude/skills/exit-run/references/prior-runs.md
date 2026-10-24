@@ -228,10 +228,11 @@ Look for each of these before and during the run; most have bitten twice.
   review flags, Codex 0.146 and 0.162 still exposed the ChatGPT account's
   connected apps and the provider web tool, which run outside the sandbox
   and the egress allowlist (#2196, check in #2198).
-- **A Freeside `main` advance restarts the rehearsal.** The real run must
-  use the rehearsal's build, so any Freeside merge before launch means a new
-  build, root, and pass. Launch soon after the rehearsal passes, or ask for
-  merges to wait, until #2221 settles when a rehearsal carries over.
+- **A Freeside `main` advance restarts the rehearsal only when it changes
+  the runtime.** Before launch, run `scripts/runtime-diff.sh <pass-sha>
+  <run-sha>`: exit 0 carries the pass to the new tip and the record names
+  both SHAs and the verdict (#2221); any other exit means a new build,
+  root, and pass. Wave 8's third rebuild (#2193, #2184) would have carried.
 - **Rehearsal targets and settings need more than the docs say.** A bare-URL
   task needs a public disposable issue, since the spec writer's fetch is
   unauthenticated (#2214). A disposable repository needs its own onboarded

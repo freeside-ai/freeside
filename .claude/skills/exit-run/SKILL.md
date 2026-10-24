@@ -42,11 +42,12 @@ with the settings naming a manual-submission file). Read it from the tracker's E
 exit-gate comment, which may also pin daemon flags or target properties
 (`references/prior-runs.md` lists the ones past trackers required).
 
-Every run has two passes on the same `freesided` build SHA: a rehearsal
-pass on a disposable target (Rehearse Before The Operator), then the real
-run. Derive the exit contract (below), then state the derived mode, its
-reason, the expected spend of both passes, and every gate the contract
-leaves without a trigger, and wait for the user's go-ahead before
+Every run has two passes on the same `freesided` build SHA, or on a
+newer one `scripts/runtime-diff.sh` carries the pass to: a rehearsal pass
+on a disposable target (Rehearse Before The Operator), then the real run.
+Derive the exit contract (below), then state the derived mode, its reason,
+the expected spend of both passes, and every gate the contract leaves
+without a trigger, and wait for the user's go-ahead before
 preflight: a run costs real money, opens a real PR on someone's
 repository, and takes the operator's afternoon, so a wrong reading should
 cost one message, not a run.
@@ -269,12 +270,17 @@ go-ahead and preflight, and the operator is asked for nothing before a pass
 completes. docs/production-walkthrough.md (Rehearse Before The Real Run)
 holds the procedure; this section says what makes a pass count.
 
-1. **Same build, fresh root.** Build `freesided` from a clean checkout of
+1. **Same runtime, fresh root.** Build `freesided` from a clean checkout of
    the SHA the real run will use, with the version flag the walkthrough's
    Start And Verify build names (preflight's `daemon_build` check fails a
    plain `go build`), and make a fresh root (`mktemp -d` style). The pass
-   proves that build only: a real run on a different build SHA needs a new
-   pass.
+   proves that build's runtime only. When `main` advances before the real
+   run launches, the run may start from the newer tip only if
+   `bash scripts/runtime-diff.sh <pass-sha> <run-sha>` exits 0: the two
+   SHAs build the same `freesided` and the diff touches no image,
+   `prompts/`, or `policy/` source. The run record then names both SHAs
+   and the script's verdict line. Any other exit means a new pass on the
+   new tip. An in-run fix keeps its own rule (Run the Deputy).
 2. **Settings that differ only where they must.** Copy the real run's
    settings and change only `listen`, `seed_root`, `repository.*` (the
    disposable repository, its project, base, and allowed paths),
@@ -350,9 +356,10 @@ holds the procedure; this section says what makes a pass count.
 
 The pass counts as complete only when every step above passed. Record it as
 the Rehearsal row of the run record (`references/tracker-comment.md`):
-build SHA, root, settings digest, disposable target, task and run ids,
-`billable_cost`, the task lines the pass proved, and the result of the record checks, the alerts, and the
-lease release. A pass
+build SHA (and, when the real run starts from a newer tip, that SHA and
+the `runtime-diff` verdict), root, settings digest, disposable target,
+task and run ids, `billable_cost`, the task lines the pass proved, and the
+result of the record checks, the alerts, and the lease release. A pass
 that fails is an Exit Preparation comment on the tracker with the defect
 filed, and no operator step happens until a later pass completes.
 
@@ -370,10 +377,12 @@ checkpoints, ask the operator nothing. Status, cards, timeline, delivery,
 and spend come from the record (Walk Through on Both Clients), never from
 the operator.
 
-1. Start only after a rehearsal pass completed on the same build and its
-   lease is released. Build `freesided` from a clean checkout of that SHA
-   and start `freesided deputy -root <root>` on the real run's own root as
-   a tracked background task. Record the
+1. Start only after a rehearsal pass completed on the same build, or on
+   an older SHA that `scripts/runtime-diff.sh` carries to this one
+   (Rehearse Before The Operator, step 1), and its lease is released. Build
+   `freesided` from a clean checkout of the run's SHA and start
+   `freesided deputy -root <root>` on the real run's own root as a tracked
+   background task. Record the
    root, the build, the settings digest, and the composition-preflight
    result it prints; a failed self-check leaves execution disabled and
    stops the run. Then submit with `freesided submit --require-composition`
