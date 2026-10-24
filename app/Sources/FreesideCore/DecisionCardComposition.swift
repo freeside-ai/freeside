@@ -1561,29 +1561,6 @@ struct DecisionFactPresentation: Equatable {
     let facts: [Fact]
 }
 
-struct DecisionModuleContainer<Content: View>: View {
-    let title: String
-    var dashed = false
-    @ViewBuilder let content: Content
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            KeywordLabel(text: title)
-            content
-                .font(FreesideFont.callout)
-                .foregroundStyle(Color.ink)
-        }
-        .padding(12)
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .background(RoundedRectangle(cornerRadius: 8).fill(Color.ground))
-        .overlay(
-            RoundedRectangle(cornerRadius: 8)
-                .strokeBorder(
-                    Color.rule,
-                    style: StrokeStyle(lineWidth: 1, dash: dashed ? [4, 3] : [])))
-    }
-}
-
 /// A change as one row (R28): the keyword, then the counts in the diff cuts
 /// and what they count in mono. The final review counts a diff's files; a
 /// revised specification counts lines against the revision it supersedes.
