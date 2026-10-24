@@ -39,6 +39,7 @@
   "billable_cost_so_far": null,
   "execution_failure": {
     "outcome": "failed",
+    "cause": "invalid_configuration",
     "stage": "implementation",
     "invocation_id": "inv-implementation-1"
   },

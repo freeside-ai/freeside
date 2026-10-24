@@ -1890,8 +1890,8 @@ func (e *Engine) recordProductionDeliveryRefusal(
 		var facts *domain.ExecutionFailureFacts
 		if admissionErr == nil {
 			facts = &domain.ExecutionFailureFacts{
-				Outcome: domain.ExecutionOutcomeFailed, Stage: domain.StageNameImplementation,
-				InvocationID: invocationID,
+				Outcome: domain.ExecutionOutcomeFailed, Cause: domain.FailureCauseUnknown,
+				Stage: domain.StageNameImplementation, InvocationID: invocationID,
 			}
 		}
 		item, itemErr := tx.GetAttentionItem(ctx, itemID)

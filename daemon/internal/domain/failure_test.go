@@ -225,3 +225,33 @@ func TestExecutionOutcomeCanonicalizeStoredRow(t *testing.T) {
 		}
 	}
 }
+
+// An execution-failure item stored before its facts carried a cause reads
+// back with the cause its outcome reconstructs with (#2210).
+func TestAttentionItemCanonicalizeStoredRowExecutionFailureCause(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		status domain.ExecutionOutcomeStatus
+		cause  domain.FailureCause
+		want   domain.FailureCause
+	}{
+		{domain.ExecutionOutcomeFailed, "", domain.FailureCauseUnknown},
+		{domain.ExecutionOutcomeFailed, domain.FailureCauseQuota, domain.FailureCauseQuota},
+		{domain.ExecutionOutcomeCanceled, "", ""},
+		{domain.ExecutionOutcomeLost, "", ""},
+	} {
+		item := domain.AttentionItem{ExecutionFailure: &domain.ExecutionFailureFacts{
+			Outcome: tc.status, Cause: tc.cause,
+		}}
+		item.CanonicalizeStoredRow()
+		if item.ExecutionFailure.Cause != tc.want {
+			t.Errorf("%s item with cause %q canonicalized to %q, want %q",
+				tc.status, tc.cause, item.ExecutionFailure.Cause, tc.want)
+		}
+	}
+	var item domain.AttentionItem
+	item.CanonicalizeStoredRow()
+	if item.ExecutionFailure != nil {
+		t.Errorf("item without facts canonicalized to %+v", item.ExecutionFailure)
+	}
+}

@@ -75,10 +75,15 @@ func (c CostSoFar) Validate() error {
 	return nil
 }
 
-// ExecutionFailureFacts identifies the failed terminal outcome and the stage
-// and invocation that produced it.
+// ExecutionFailureFacts identifies the failed terminal outcome, its cause,
+// and the stage and invocation that produced it.
 type ExecutionFailureFacts struct {
-	Outcome          ExecutionOutcomeStatus    `json:"outcome"`
+	Outcome ExecutionOutcomeStatus `json:"outcome"`
+	// Cause mirrors ExecutionOutcome.Cause: present exactly when Outcome is
+	// failed, where unknown means nothing classified the failure. omitempty
+	// keeps a canceled or lost item's stored body byte-identical to the rows
+	// written before causes existed.
+	Cause            FailureCause              `json:"cause,omitempty"`
 	Stage            StageName                 `json:"stage"`
 	InvocationID     InvocationID              `json:"invocation_id"`
 	OfferedManifests []CapabilityManifestOffer `json:"offered_manifests,omitempty"`
@@ -89,6 +94,13 @@ func (f ExecutionFailureFacts) Validate() error {
 	if !f.Outcome.valid() || f.Outcome == ExecutionOutcomeBlocked || !f.Stage.valid() || f.InvocationID == "" {
 		return fmt.Errorf("execution failure outcome %q stage %q invocation %q: %w",
 			f.Outcome, f.Stage, f.InvocationID, ErrCardFactInconsistent)
+	}
+	if f.Outcome == ExecutionOutcomeFailed {
+		if !f.Cause.valid() {
+			return fmt.Errorf("execution failure cause %q: %w", f.Cause, ErrCardFactInconsistent)
+		}
+	} else if f.Cause != "" {
+		return fmt.Errorf("execution failure %s with cause %q: %w", f.Outcome, f.Cause, ErrCardFactInconsistent)
 	}
 	seen := make(map[Digest]struct{}, len(f.OfferedManifests))
 	for index, offer := range f.OfferedManifests {

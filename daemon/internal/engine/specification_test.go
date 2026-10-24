@@ -4217,10 +4217,20 @@ func TestSpecificationFailureRecordsDriverCause(t *testing.T) {
 	}
 	if err := f.store.Read(t.Context(), func(tx *store.ReadTx) error {
 		outcome, err := tx.GetExecutionOutcomeRecord(t.Context(), id)
-		if err == nil && outcome.Cause != domain.FailureCauseQuota {
+		if err != nil {
+			return err
+		}
+		if outcome.Cause != domain.FailureCauseQuota {
 			t.Errorf("recorded cause = %q, want quota", outcome.Cause)
 		}
-		return err
+		item, err := tx.GetAttentionItem(t.Context(), domain.ItemID("execution-failure-"+string(id)))
+		if err != nil {
+			return err
+		}
+		if item.ExecutionFailure == nil || item.ExecutionFailure.Cause != domain.FailureCauseQuota {
+			t.Errorf("item facts = %#v, want cause quota", item.ExecutionFailure)
+		}
+		return nil
 	}); err != nil {
 		t.Fatal(err)
 	}

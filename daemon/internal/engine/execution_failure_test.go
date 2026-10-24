@@ -96,8 +96,8 @@ func TestExecutionFailureFactsReuseDriverOutcome(t *testing.T) {
 		t.Fatalf("reuse driver outcome: %v", err)
 	}
 	want := &domain.ExecutionFailureFacts{
-		Outcome: domain.ExecutionOutcomeFailed, Stage: domain.StageNameImplementation,
-		InvocationID: attempt.InvocationID,
+		Outcome: domain.ExecutionOutcomeFailed, Cause: domain.FailureCauseUnknown,
+		Stage: domain.StageNameImplementation, InvocationID: attempt.InvocationID,
 	}
 	if facts == nil || !reflect.DeepEqual(facts, want) {
 		t.Fatalf("facts = %#v, want %#v", facts, want)

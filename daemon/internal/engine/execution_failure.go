@@ -53,7 +53,7 @@ func executionFailureFacts(
 				invocationID, domain.ErrParentKeyMismatch)
 		}
 		return &domain.ExecutionFailureFacts{
-			Outcome: mapped, Stage: stage, InvocationID: invocationID,
+			Outcome: mapped, Cause: outcome.Cause, Stage: stage, InvocationID: invocationID,
 		}, nil
 	}
 	if !errors.Is(err, store.ErrNotFound) {
@@ -70,15 +70,15 @@ func executionFailureFacts(
 	if mapped == domain.ExecutionOutcomeLost {
 		summary = ""
 	}
+	cause = domain.CanonicalFailureCause(mapped, cause)
 	if err := tx.RecordExecutionOutcome(ctx, domain.ExecutionOutcome{
 		InvocationID: invocationID, AdmissionID: admission.ID,
-		Status: mapped, Summary: summary,
-		Cause: domain.CanonicalFailureCause(mapped, cause), RecordedAt: recordedAt,
+		Status: mapped, Summary: summary, Cause: cause, RecordedAt: recordedAt,
 	}); err != nil {
 		return nil, err
 	}
 	return &domain.ExecutionFailureFacts{
-		Outcome: mapped, Stage: stage, InvocationID: invocationID,
+		Outcome: mapped, Cause: cause, Stage: stage, InvocationID: invocationID,
 	}, nil
 }
 

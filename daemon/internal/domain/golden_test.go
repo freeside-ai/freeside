@@ -369,7 +369,8 @@ func TestGolden(t *testing.T) {
 		Reason:            "the implementation stage failed",
 		RequestedDecision: []domain.Action{domain.ActionRetry, domain.ActionStop},
 		ExecutionFailure: &domain.ExecutionFailureFacts{
-			Outcome: domain.ExecutionOutcomeFailed, Stage: domain.StageNameImplementation,
+			Outcome: domain.ExecutionOutcomeFailed, Cause: domain.FailureCauseInvalidConfiguration,
+			Stage:        domain.StageNameImplementation,
 			InvocationID: "inv-implementation-1",
 		},
 		ItemVersion: 1, InterruptionClass: domain.InterruptionExceptional,

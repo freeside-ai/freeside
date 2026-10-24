@@ -872,8 +872,8 @@ func storeCardFactItems(t *testing.T) map[string]domain.AttentionItem {
 			Type: domain.AttentionExecutionFailure, Priority: domain.PriorityUrgent,
 			Reason: "implementation failed", RequestedDecision: []domain.Action{domain.ActionRetry},
 			ExecutionFailure: &domain.ExecutionFailureFacts{
-				Outcome: domain.ExecutionOutcomeFailed, Stage: domain.StageNameImplementation,
-				InvocationID: "inv-1",
+				Outcome: domain.ExecutionOutcomeFailed, Cause: domain.FailureCauseUnknown,
+				Stage: domain.StageNameImplementation, InvocationID: "inv-1",
 			},
 			DisplayNames: runNames,
 			ItemVersion:  1, InterruptionClass: domain.InterruptionExceptional, CreatedAt: &at, Status: domain.StatusOpen,
