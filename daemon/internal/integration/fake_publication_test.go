@@ -30,6 +30,7 @@ import (
 	"github.com/freeside-ai/freeside/daemon/internal/signet"
 	"github.com/freeside-ai/freeside/daemon/internal/store"
 	"github.com/freeside-ai/freeside/daemon/internal/store/storetest"
+	"github.com/freeside-ai/freeside/daemon/internal/strictjson"
 	"github.com/freeside-ai/freeside/daemon/internal/verify"
 )
 
@@ -115,6 +116,13 @@ func newIntegrationForge(t *testing.T) (*integrationForge, *httptest.Server) {
 	return forge, server
 }
 
+// decodeForgeRequest decodes one request body. It allows unknown fields
+// because the double models only the fields it answers on, not every field
+// the publisher sends.
+func decodeForgeRequest(r *http.Request, dst any) error {
+	return strictjson.DecodeReaderAllowingUnknownFields(r.Body, dst, strictjson.TolerateInvalidUTF8, 1<<20)
+}
+
 func (f *integrationForge) handle(w http.ResponseWriter, r *http.Request) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
@@ -164,7 +172,7 @@ func (f *integrationForge) handle(w http.ResponseWriter, r *http.Request) {
 			Ref string `json:"ref"`
 			SHA string `json:"sha"`
 		}
-		if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
+		if err := decodeForgeRequest(r, &request); err != nil {
 			f.t.Errorf("decode ref request: %v", err)
 			w.WriteHeader(http.StatusBadRequest)
 			return
@@ -206,7 +214,7 @@ func (f *integrationForge) handle(w http.ResponseWriter, r *http.Request) {
 			Base  string `json:"base"`
 			Draft bool   `json:"draft"`
 		}
-		if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
+		if err := decodeForgeRequest(r, &request); err != nil {
 			f.t.Errorf("decode PR request: %v", err)
 			w.WriteHeader(http.StatusBadRequest)
 			return
@@ -248,7 +256,7 @@ func (f *integrationForge) handle(w http.ResponseWriter, r *http.Request) {
 			Title string `json:"title"`
 			Body  string `json:"body"`
 		}
-		if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
+		if err := decodeForgeRequest(r, &request); err != nil {
 			w.WriteHeader(http.StatusBadRequest)
 			return
 		}
@@ -286,7 +294,7 @@ func (f *integrationForge) handleDraftMutation(w http.ResponseWriter, r *http.Re
 			ID string `json:"id"`
 		} `json:"variables"`
 	}
-	if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
+	if err := decodeForgeRequest(r, &request); err != nil {
 		w.WriteHeader(http.StatusBadRequest)
 		return
 	}

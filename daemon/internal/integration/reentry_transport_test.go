@@ -1,6 +1,7 @@
 package integration_test
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
@@ -11,6 +12,7 @@ import (
 
 	"github.com/freeside-ai/freeside/daemon/internal/engine"
 	"github.com/freeside-ai/freeside/daemon/internal/gitenv"
+	"github.com/freeside-ai/freeside/daemon/internal/procbound"
 	"github.com/freeside-ai/freeside/daemon/internal/publish"
 )
 
@@ -18,7 +20,7 @@ import (
 // status instead of failing the test. Identity and dates are fixed, so a
 // commit it writes has the same SHA on every run.
 func tryGit(dir string, args ...string) (string, int, error) {
-	cmd := exec.Command("git", append([]string{"-C", dir}, args...)...) //nolint:gosec // G204: test running git on fixture arguments
+	cmd := exec.CommandContext(context.Background(), "git", append([]string{"-C", dir}, args...)...) //nolint:gosec // G204: test running git on fixture arguments
 	cmd.Env = append(gitenv.Scrubbed(),
 		"GIT_CONFIG_GLOBAL="+os.DevNull,
 		"GIT_CONFIG_SYSTEM="+os.DevNull,
@@ -28,12 +30,14 @@ func tryGit(dir string, args ...string) (string, int, error) {
 		"GIT_COMMITTER_NAME=fixture", "GIT_COMMITTER_EMAIL=fixture@test.invalid",
 		"GIT_COMMITTER_DATE=1700000000 +0000",
 	)
-	out, err := cmd.Output()
+	var out bytes.Buffer
+	cmd.Stdout = &out
+	err := procbound.Run(cmd, procbound.DefaultWaitDelay)
 	var exit *exec.ExitError
 	if errors.As(err, &exit) {
-		return strings.TrimSpace(string(out)), exit.ExitCode(), nil
+		return strings.TrimSpace(out.String()), exit.ExitCode(), nil
 	}
-	return strings.TrimSpace(string(out)), 0, err
+	return strings.TrimSpace(out.String()), 0, err
 }
 
 // headRepo is the remote side of the pull request branches. PushHead only
