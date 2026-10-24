@@ -58,9 +58,10 @@
 # result cached by any earlier run, decoy or not, does not rerun, and opt-in
 # live suites skip, so only an uncached run (CI's shards) covers every default
 # test.
-# CI shard runs require all of DAEMON_TEST_SHARD_KIND (rest or integration),
-# DAEMON_TEST_SHARD_INDEX, DAEMON_TEST_SHARD_COUNT, DAEMON_TEST_INTEGRATION_SHARDS,
-# and DAEMON_TEST_EVIDENCE_DIR. Indices are one-based; the rest shard uses 1/1.
+# CI shard runs require all of DAEMON_TEST_SHARD_KIND (rest, integration, or
+# darwin), DAEMON_TEST_SHARD_INDEX, DAEMON_TEST_SHARD_COUNT,
+# DAEMON_TEST_INTEGRATION_SHARDS, and DAEMON_TEST_EVIDENCE_DIR. Indices are
+# one-based; the rest and darwin shards use 1/1.
 # Shards disable test-result caching and retain full execution evidence.
 #
 # Convergence runs:
@@ -142,7 +143,7 @@ daemon_test_run() {
   fi
   local kind=${DAEMON_TEST_SHARD_KIND:-} index=${DAEMON_TEST_SHARD_INDEX:-}
   local count=${DAEMON_TEST_SHARD_COUNT:-} integration=${DAEMON_TEST_INTEGRATION_SHARDS:-}
-  if [[ ! $kind =~ ^(rest|integration)$ || ! $index =~ ^[1-9][0-9]*$ ||
+  if [[ ! $kind =~ ^(rest|integration|darwin)$ || ! $index =~ ^[1-9][0-9]*$ ||
         ! $count =~ ^[1-9][0-9]*$ || ! $integration =~ ^[1-9][0-9]*$ ||
         -z ${DAEMON_TEST_EVIDENCE_DIR:-} ]]; then
     echo 'daemon test: require shard kind, index, count, integration count, and evidence directory together' >&2
