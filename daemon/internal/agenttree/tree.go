@@ -22,8 +22,11 @@ const (
 	offersDir    = "fragments/offers/"
 	lineupPath   = "lineup"
 	lockPath     = "agents.lock"
-	markSuffix   = ".attended"
 	maxTreeFiles = 4096
+	// removedMarkSuffix named an agent's attended marks until plan revision
+	// 97 removed the attended first run. A leftover file is refused with
+	// the fix rather than as an unknown agent name.
+	removedMarkSuffix = ".attended"
 )
 
 var (
@@ -61,14 +64,6 @@ type Offer struct {
 	Fragment domain.OfferFragment
 }
 
-// Mark is one line of an agent's .attended file: the operator's statement
-// that this exact agent, under this exact launch, may run unattended.
-type Mark struct {
-	Agent        string
-	AgentDigest  domain.Digest
-	LaunchDigest domain.Digest
-}
-
 // LineupLine is one line of the lineup file. Key is the part after
 // domain.LineupRoleKeyPrefix: a role name, or "<role>.shadow.<name>".
 type LineupLine struct {
@@ -80,7 +75,6 @@ type LineupLine struct {
 // with the same content are equal and render to the same bytes.
 type Tree struct {
 	Agents   []domain.AgentSource
-	Marks    []Mark
 	Routes   []Route
 	Adapters []Adapter
 	Offers   []Offer
@@ -92,9 +86,6 @@ type Tree struct {
 // lineup keeps its authored order, which is the file's line order.
 func (t *Tree) Sort() {
 	slices.SortFunc(t.Agents, func(a, b domain.AgentSource) int { return strings.Compare(a.Name, b.Name) })
-	slices.SortStableFunc(t.Marks, func(a, b Mark) int {
-		return strings.Compare(a.Agent+markSuffix, b.Agent+markSuffix)
-	})
 	slices.SortFunc(t.Routes, func(a, b Route) int { return strings.Compare(a.Name, b.Name) })
 	slices.SortFunc(t.Adapters, func(a, b Adapter) int { return strings.Compare(a.Name, b.Name) })
 	slices.SortFunc(t.Offers, func(a, b Offer) int {
@@ -126,7 +117,7 @@ func Revision(files Files) (domain.Digest, error) {
 
 // Parse reads one revision. It fails closed on a file outside the layout, a
 // document that does not parse, an agent naming a fragment the tree lacks, a
-// lineup the role rules refuse, a mark for an agent the tree lacks, and an
+// lineup the role rules refuse, a leftover attended-mark file, and an
 // agents.lock that disagrees with the content.
 func Parse(files Files) (Tree, error) {
 	if len(files) > maxTreeFiles {
@@ -177,13 +168,9 @@ func (t *Tree) parseFile(path string, body []byte, lineupSeen, lockSeen *bool) e
 		*lockSeen = true
 	case strings.HasPrefix(path, agentsDir):
 		name := strings.TrimPrefix(path, agentsDir)
-		if agent, isMark := strings.CutSuffix(name, markSuffix); isMark {
-			marks, err := parseMarks(agent, body)
-			if err != nil {
-				return err
-			}
-			t.Marks = append(t.Marks, marks...)
-			return nil
+		if strings.HasSuffix(name, removedMarkSuffix) {
+			return fmt.Errorf("%s: attended marks were removed in plan revision 97; delete the file and commit: %w",
+				path, ErrMalformed)
 		}
 		source, err := parseAgent(name, body)
 		if err != nil {
@@ -238,7 +225,7 @@ func decodeNamed[T any](path, name string, body []byte, decode func([]byte) (T, 
 }
 
 // validate checks what one file cannot: every agent's fragments are present,
-// the lineup follows the role rules, and every mark has its agent.
+// and the lineup follows the role rules.
 func (t Tree) validate() error {
 	for _, agent := range t.Agents {
 		if _, err := t.closure(agent); err != nil {
@@ -247,11 +234,6 @@ func (t Tree) validate() error {
 	}
 	if _, err := t.ResolveLineup(); err != nil {
 		return err
-	}
-	for _, mark := range t.Marks {
-		if _, ok := t.Agent(mark.Agent); !ok {
-			return fmt.Errorf("attended mark for %q: %w", mark.Agent, errors.Join(ErrMalformed, ErrUnknownAgent))
-		}
 	}
 	return nil
 }
@@ -279,13 +261,6 @@ func (t Tree) ResolveLineup() (domain.Lineup, error) {
 		return domain.Lineup{}, fmt.Errorf("lineup: %w", errors.Join(ErrMalformed, err))
 	}
 	return lineup, nil
-}
-
-// Attended reports whether the agent, under the launch, still has to run
-// attended: true unless a mark names exactly this agent digest and launch
-// digest. A mark for an earlier digest of the same name does not carry.
-func (t Tree) Attended(agent string, agentDigest, launchDigest domain.Digest) bool {
-	return !slices.Contains(t.Marks, Mark{Agent: agent, AgentDigest: agentDigest, LaunchDigest: launchDigest})
 }
 
 // agentClosure is the fragments an agent's lines name.
@@ -361,14 +336,6 @@ func Render(tree Tree) (Files, error) {
 		}
 		files[agentsDir+agent.Name] = body
 	}
-	for _, mark := range tree.Marks {
-		line, err := renderMark(mark)
-		if err != nil {
-			return nil, err
-		}
-		path := agentsDir + mark.Agent + markSuffix
-		files[path] = append(files[path], line...)
-	}
 	for _, route := range tree.Routes {
 		if err := putFragment(files, routesDir, route.Name, route.Fragment.Encode); err != nil {
 			return nil, err
@@ -423,7 +390,7 @@ func sortedPaths(files Files) []string {
 // validName is the rule for a fragment's tree name, which is a file name:
 // lowercase ASCII alphanumeric, with '-', '_', and '.' as interior
 // separators ("gpt-5.6-sol"). An agent's name follows the stricter
-// domain.AgentSource rule, which leaves room for the ".attended" suffix.
+// domain.AgentSource rule.
 func validName(name string) bool {
 	if name == "" || len(name) > 255 {
 		return false

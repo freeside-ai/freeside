@@ -114,12 +114,7 @@ func JudgmentRoles() []domain.RoleName {
 }
 
 // Tree builds the baseline tree: the fragments, the agents with their
-// resolved enrollment ids, a lineup line for each role with a prompt, and
-// the attended marks. A mark is the operator's standing attestation that the
-// agent and launch pair runs attended under their watch; committing the
-// patch is the operator making the mark. The call agent gets no mark:
-// attended evidence gates unattended ward launches, and a call is admitted
-// by its launch proof.
+// resolved enrollment ids, and a lineup line for each role with a prompt.
 func Tree(in TreeInput) (agenttree.Tree, error) {
 	if in.ClaudeEnrollment.HarnessClient != domain.HarnessClientClaudeCode {
 		return agenttree.Tree{}, errors.New("baseline tree: the Claude enrollment is not a claude_code enrollment")
@@ -199,15 +194,6 @@ func Tree(in TreeInput) (agenttree.Tree, error) {
 				AgentName: agent, AgentDigest: digest, PromptName: prompt.Name, PromptDigest: prompt.Digest,
 			},
 		})
-		launch, err := RoleLaunch(entry.role)
-		if err != nil {
-			return agenttree.Tree{}, err
-		}
-		mark := agenttree.Mark{Agent: agent, AgentDigest: digest, LaunchDigest: launch.Digest}
-		if !tree.Attended(agent, digest, launch.Digest) {
-			continue // the implementer and remediator share one launch
-		}
-		tree.Marks = append(tree.Marks, mark)
 	}
 	for _, role := range JudgmentRoles() {
 		prompt, ok := in.Prompts[role]

@@ -172,14 +172,14 @@ func TestReviewLaunchSendsTheHarnessNativeEffort(t *testing.T) {
 // effort: the reviewer on codex_review_v1 asking harness_default from an
 // offer that allows only that, and the shadow reviewer line on the writer
 // agent of that era, `claude-code-default` on the offer that names no model,
-// put back here because the baseline no longer emits it. Every digest,
-// lineup line, and attended mark follows, so the only thing wrong with the
-// tree is what it lacks.
+// put back here because the baseline no longer emits it. Every digest and
+// lineup line follows, so the only thing wrong with the tree is what it
+// lacks.
 func treeAdoptedBeforeReviewAgentsNamedALaunch(t *testing.T, tree agenttree.Tree) agenttree.Tree {
 	t.Helper()
 	old := tree
 	old.Agents, old.Offers = slices.Clone(tree.Agents), slices.Clone(tree.Offers)
-	old.Lineup, old.Marks = slices.Clone(tree.Lineup), slices.Clone(tree.Marks)
+	old.Lineup = slices.Clone(tree.Lineup)
 	v1, err := agentbaseline.CodexReviewAdapterV1()
 	if err != nil {
 		t.Fatal(err)
@@ -223,10 +223,6 @@ func treeAdoptedBeforeReviewAgentsNamedALaunch(t *testing.T, tree agenttree.Tree
 		old.Agents = append(old.Agents, agent)
 	}
 	old.Sort()
-	review, err := agentbaseline.RoleLaunch(domain.RoleReviewer)
-	if err != nil {
-		t.Fatal(err)
-	}
 	for i := range old.Lineup {
 		line := &old.Lineup[i].Selection
 		switch domain.RoleName(old.Lineup[i].Key) {
@@ -239,9 +235,6 @@ func treeAdoptedBeforeReviewAgentsNamedALaunch(t *testing.T, tree agenttree.Tree
 		if line.AgentDigest, err = old.AgentDigest(line.AgentName); err != nil {
 			t.Fatal(err)
 		}
-		old.Marks = append(old.Marks, agenttree.Mark{
-			Agent: line.AgentName, AgentDigest: line.AgentDigest, LaunchDigest: review.Digest,
-		})
 	}
 	return old
 }
@@ -304,10 +297,6 @@ func TestReviewRoleRefusesAModelTheLaunchCannotPass(t *testing.T) {
 		t.Fatalf("auth adopt: %v", err)
 	}
 	adopted := loadAdoptedPatch(t, patch)
-	review, err := agentbaseline.RoleLaunch(domain.RoleReviewer)
-	if err != nil {
-		t.Fatal(err)
-	}
 	for _, tc := range []struct {
 		role         domain.RoleName
 		agent, offer string
@@ -322,7 +311,6 @@ func TestReviewRoleRefusesAModelTheLaunchCannotPass(t *testing.T) {
 		t.Run(string(tc.role), func(t *testing.T) {
 			tree := adopted
 			tree.Offers, tree.Lineup = slices.Clone(adopted.Offers), slices.Clone(adopted.Lineup)
-			tree.Marks = slices.Clone(adopted.Marks)
 			offer := slices.IndexFunc(tree.Offers, func(o agenttree.Offer) bool { return o.Name == tc.offer })
 			if offer < 0 {
 				t.Fatalf("adopted tree has no offer %s", tc.offer)
@@ -340,7 +328,6 @@ func TestReviewRoleRefusesAModelTheLaunchCannotPass(t *testing.T) {
 					tree.Lineup[i].Selection.AgentDigest = digest
 				}
 			}
-			tree.Marks = append(tree.Marks, agenttree.Mark{Agent: tc.agent, AgentDigest: digest, LaunchDigest: review.Digest})
 			f.withStore(t, func(st *store.Store) {
 				_, err := reviewRoleAgent(ctx, st, tree, tc.role, now)
 				var failure *roleAdmissionError
@@ -356,9 +343,8 @@ func TestReviewRoleRefusesAModelTheLaunchCannotPass(t *testing.T) {
 // TestReviewSelectionFailsClosed covers the review roles' startup and
 // per-review checks: a lineup with no reviewer line refuses and names the
 // role, an attended daemon resolves no review role, an offer past its
-// not_after refuses, an agent with no attended mark resolves, and a source
-// composed under an identity refuses its next review once the identity is
-// disabled.
+// not_after refuses, and a source composed under an identity refuses its
+// next review once the identity is disabled.
 func TestReviewSelectionFailsClosed(t *testing.T) {
 	ctx := context.Background()
 	now := time.Now().UTC()
@@ -431,28 +417,6 @@ func TestReviewSelectionFailsClosed(t *testing.T) {
 				if err := admit(ctx, exec.ReviewRequest{}); !errors.Is(err, engine.ErrAgentNotAdmissible) {
 					t.Fatalf("%s review admission after the offer's not_after = %v", role, err)
 				}
-			}
-		})
-	})
-
-	// Plan revision 97 dropped the attended first run: a review role whose
-	// tree carries no attended mark resolves and passes the startup check.
-	t.Run("no attended mark", func(t *testing.T) {
-		f := newAuthAdoptFixture(t)
-		_, patch, err := f.run(t, f.shadowArgs())
-		if err != nil {
-			t.Fatalf("auth adopt: %v", err)
-		}
-		unmarked := loadAdoptedPatch(t, patch)
-		unmarked.Marks = nil
-		f.withStore(t, func(st *store.Store) {
-			for _, role := range []domain.RoleName{domain.RoleReviewer, domain.RoleShadowReviewer} {
-				if _, err := reviewRoleAgent(ctx, st, unmarked, role, now); err != nil {
-					t.Fatalf("%s without an attended mark: %v", role, err)
-				}
-			}
-			if _, err := resolveReviewSelection(ctx, st, unmarked, flagEraReviewConfig(), now); err != nil {
-				t.Fatalf("startup selection with no marks = %v", err)
 			}
 		})
 	})

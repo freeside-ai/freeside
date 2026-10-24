@@ -34,8 +34,8 @@ func must[T any](value T, err error) T {
 	return value
 }
 
-// fixtureTree is one agent with its three fragments, a reviewer lineup line
-// that selects it, and one attended mark.
+// fixtureTree is one agent with its three fragments and a reviewer lineup
+// line that selects it.
 func fixtureTree(t *testing.T) agenttree.Tree {
 	t.Helper()
 	route := domain.RouteFragment{
@@ -76,7 +76,6 @@ func fixtureTree(t *testing.T) agenttree.Tree {
 		Offers:   []agenttree.Offer{{Route: routeName, Name: "gpt-5.6-sol", Fragment: offer}},
 	}
 	agentDigest := must(tree.AgentDigest(agentName))
-	tree.Marks = []agenttree.Mark{{Agent: agentName, AgentDigest: agentDigest, LaunchDigest: digestOf("launch")}}
 	tree.Lineup = []agenttree.LineupLine{{
 		Key: string(domain.RoleReviewer),
 		Selection: domain.LineupSelection{
@@ -176,12 +175,6 @@ func TestParseFailsClosed(t *testing.T) {
 			body := f["fragments/routes/"+routeName]
 			f["fragments/routes/"+routeName] = body[:len(body)-1]
 		}, agenttree.ErrMalformed},
-		{"mark for an agent the tree lacks", func(f agenttree.Files) {
-			f["agents/ghost.attended"] = f["agents/"+agentName+".attended"]
-		}, agenttree.ErrUnknownAgent},
-		{"mark that is not two digests", func(f agenttree.Files) {
-			f["agents/"+agentName+".attended"] = []byte("yes\n")
-		}, agenttree.ErrMalformed},
 		{"lineup role outside the vocabulary", func(f agenttree.Files) {
 			f["lineup"] = bytes.Replace(f["lineup"], []byte("reviewer"), []byte("critic"), 1)
 		}, agenttree.ErrMalformed},
@@ -227,20 +220,21 @@ func TestFragmentEditWithoutLockUpdateFails(t *testing.T) {
 	}
 }
 
-func TestAttendedNeedsTheExactMark(t *testing.T) {
-	tree := fixtureTree(t)
-	mark := tree.Marks[0]
-	if tree.Attended(agentName, mark.AgentDigest, mark.LaunchDigest) {
-		t.Fatal("marked agent and launch still attended")
+// TestLeftoverAttendedMarkIsRefused: plan revision 97 removed the attended
+// mark, so a committed tree that still has an agent's .attended file is
+// refused with the file named and the fix, not read past or reported as an
+// unknown agent.
+func TestLeftoverAttendedMarkIsRefused(t *testing.T) {
+	files := must(agenttree.Render(fixtureTree(t)))
+	path := "agents/" + agentName + ".attended"
+	if _, ok := files[path]; ok {
+		t.Fatalf("Render wrote %s", path)
 	}
-	if !tree.Attended(agentName, mark.AgentDigest, digestOf("another launch")) {
-		t.Fatal("mark carried to another launch")
-	}
-	if !tree.Attended(agentName, digestOf("edited agent"), mark.LaunchDigest) {
-		t.Fatal("mark carried to another agent digest")
-	}
-	if !tree.Attended("other", mark.AgentDigest, mark.LaunchDigest) {
-		t.Fatal("mark carried to another agent name")
+	files[path] = []byte(string(digestOf("agent")) + " " + string(digestOf("launch")) + "\n")
+	_, err := agenttree.Parse(files)
+	if !errors.Is(err, agenttree.ErrMalformed) || !strings.Contains(err.Error(), path) ||
+		!strings.Contains(err.Error(), "delete the file") {
+		t.Fatalf("Parse = %v, want %v naming %s and its removal", err, agenttree.ErrMalformed, path)
 	}
 }
 
@@ -339,13 +333,14 @@ func TestPatchAppliesAndReadsBackAtTheCommit(t *testing.T) {
 		t.Fatal("tree read at the commit differs from the rendered tree")
 	}
 
-	// A second revision: one file changes, one goes, one arrives.
+	// A second revision: the agent is renamed, so its file goes, another
+	// arrives, and the lineup changes.
 	next := tree
-	next.Marks = nil
-	next.Agents = append([]domain.AgentSource{{
-		Name: "max-via-codex", Enrollment: "openai-chatgpt-a/codex_cli",
-		Route: routeName, Adapter: "codex_proto_v1", Offer: "gpt-5.6-sol", Effort: domain.EffortHigh,
-	}}, tree.Agents...)
+	renamed := tree.Agents[0]
+	renamed.Name = "max-via-codex"
+	next.Agents = []domain.AgentSource{renamed}
+	next.Lineup = []agenttree.LineupLine{tree.Lineup[0]}
+	next.Lineup[0].Selection.AgentName = renamed.Name
 	nextFiles := must(agenttree.Render(next))
 	second := applyAndCommit(t, repo, must(agenttree.Patch(files, nextFiles)))
 	if read := must(agenttree.ReadCommit(ctx, repo, t.TempDir(), second)); !reflect.DeepEqual(read, nextFiles) {

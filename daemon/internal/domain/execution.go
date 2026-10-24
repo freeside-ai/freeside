@@ -1079,7 +1079,7 @@ func ValidateOutcomeBinding(a ExecutionAdmission, x ExecutionOutcome) error {
 // effort the launch passes with DeriveAgentLaunchSelection over the agent,
 // adapter, and offer (a stored model or effort is never trusted on its
 // own), the binding's launch digest with an authenticated launch for exactly that role, and the
-// agent's offer digest with an authenticated offer, so attended eligibility,
+// agent's offer digest with an authenticated offer, so
 // launch-capability provenance, and the admitted model can never be
 // attributed to a fragment the admission did not run. The joins the closure
 // itself expresses are re-run: the agent's effort must be one the offer

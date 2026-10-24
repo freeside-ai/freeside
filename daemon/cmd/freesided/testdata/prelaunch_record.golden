@@ -17,7 +17,7 @@
       "group": "agent_tree",
       "name": "agent_tree",
       "status": "passed",
-      "evidence": "agent_tree.commit <agent-tree-commit> holds lineup revision sha256:124d95adafff9d53f8e37094eb3b26c3590a12079f28b5822b64f7eb75471466 with 4 agents"
+      "evidence": "agent_tree.commit <agent-tree-commit> holds lineup revision sha256:a0d87b7f8dda4f06544cd47ae7be242318ea4cf239368f735b561f61d9129357 with 4 agents"
     },
     {
       "group": "inputs",

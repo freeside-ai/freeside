@@ -390,10 +390,6 @@ func TestAuthAdoptEnrollsBothIdentitiesAndEmitsAResolvingTree(t *testing.T) {
 	if got := lineupRoles(tree); !reflect.DeepEqual(got, wantRoles) {
 		t.Fatalf("lineup = %v, want %v", got, wantRoles)
 	}
-	// One mark per ward agent: the two writers and the reviewer.
-	if len(tree.Marks) != 3 {
-		t.Fatalf("attended marks = %+v", tree.Marks)
-	}
 	for name, i := range map[string]int{
 		agentbaseline.WriterAgentName(domain.RoleSpecifier):   0,
 		agentbaseline.WriterAgentName(domain.RoleImplementer): 0,
