@@ -329,6 +329,26 @@ class Coverage(unittest.TestCase):
         self.assertEqual({name for name, body in app_jobs.items() if 'runs-on: macos' in body}, {'apps'})
         self.assertIn("    if: github.event_name != 'push'\n", app_jobs['apps'])
         self.assertNotIn('swift test', app_jobs['apps'])
+        # The SwiftPM mirror: generate writes it on push, convergence only
+        # restores it, and both name the same workspace-relative path and
+        # key prefix, or the entries would not share a cache version.
+        mirror = ("          path: .swiftpm-mirror\n"
+                  "          key: swiftpm-mirror-v1-${{ hashFiles('app/Package.resolved') }}\n"
+                  "          restore-keys: swiftpm-mirror-v1-\n")
+        generate = app_jobs['generate']
+        for job in (convergence, generate):
+            restore = re.search(r'^      - name: Restore the SwiftPM mirror\n(.*?)(?=^      - )', job, re.M | re.S).group(1)
+            self.assertIn('        uses: actions/cache/restore@v4\n', restore)
+            self.assertIn(mirror, restore)
+        self.assertIn('ln -s "$PWD/.swiftpm-mirror" ~/Library/Caches/org.swift.swiftpm/repositories\n', convergence)
+        self.assertIn('ln -s "$PWD/.swiftpm-mirror" ~/.cache/org.swift.swiftpm/repositories\n', generate)
+        # The save reads the restore step's primary key by id; a renamed id
+        # leaves the key empty, and cache/save then only warns.
+        self.assertIn('        id: swiftpm-mirror\n        uses: actions/cache/restore@v4\n', generate)
+        self.assertIn("        if: github.event_name == 'push' && steps.swiftpm-mirror.outputs.cache-hit != 'true'\n"
+                      "        uses: actions/cache/save@v4\n        with:\n          path: .swiftpm-mirror\n"
+                      "          key: ${{ steps.swiftpm-mirror.outputs.cache-primary-key }}\n", generate)
+        self.assertNotIn('actions/cache/save', app_jobs['linux'])
 
     def test_required_gate_rejects_selected_skips_and_missing_children(self):
         caller = (root / '.github/workflows/pull-request.yml').read_text()
