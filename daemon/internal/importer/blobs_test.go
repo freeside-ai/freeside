@@ -107,16 +107,20 @@ func TestVerifyBlobsClean(t *testing.T) {
 	}
 }
 
+// smallDirBatch makes a store of a few dozen blobs span several ReadDir
+// batches, so the multi-batch path runs without thousands of files.
+const smallDirBatch = 8
+
 // TestVerifyBlobsManyBatches exercises the batched blob-store
 // enumeration across more than one ReadDir batch, so the multi-batch
 // path is covered and a large legitimate store still audits clean.
 func TestVerifyBlobsManyBatches(t *testing.T) {
-	specs := make([]blobSpec, 0, dirBatch+50)
-	for i := 0; i < dirBatch+50; i++ {
+	specs := make([]blobSpec, 0, 60)
+	for i := range 60 {
 		specs = append(specs, blobSpec{path: fmt.Sprintf("f%05d.txt", i), content: fmt.Sprintf("content-%d\n", i)})
 	}
 	dir := buildHandoff(t, specs)
-	blobs, err := verifyBlobsForTest(t, dir, loadFixtureManifest(t, dir), Policy{}.withDefaults())
+	blobs, err := verifyBlobsForTest(t, dir, loadFixtureManifest(t, dir), Policy{dirBatch: smallDirBatch}.withDefaults())
 	if err != nil {
 		t.Fatalf("verifyBlobs across %d blobs: %v", len(specs), err)
 	}
@@ -128,8 +132,8 @@ func TestVerifyBlobsManyBatches(t *testing.T) {
 // TestVerifyBlobsRejectsOrphanAmongMany confirms a single orphan is
 // still caught when the store spans multiple batches.
 func TestVerifyBlobsRejectsOrphanAmongMany(t *testing.T) {
-	specs := make([]blobSpec, 0, dirBatch+10)
-	for i := 0; i < dirBatch+10; i++ {
+	specs := make([]blobSpec, 0, 60)
+	for i := range 60 {
 		specs = append(specs, blobSpec{path: fmt.Sprintf("f%05d.txt", i), content: fmt.Sprintf("c-%d\n", i)})
 	}
 	dir := buildHandoff(t, specs)
@@ -137,7 +141,7 @@ func TestVerifyBlobsRejectsOrphanAmongMany(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(dir, "blobs", "sha256", "deadbeef"), []byte("x"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := verifyBlobsForTest(t, dir, m, Policy{}.withDefaults()); !errors.Is(err, ErrOrphanBlob) {
+	if _, err := verifyBlobsForTest(t, dir, m, Policy{dirBatch: smallDirBatch}.withDefaults()); !errors.Is(err, ErrOrphanBlob) {
 		t.Fatalf("verifyBlobs = %v, want %v", err, ErrOrphanBlob)
 	}
 }

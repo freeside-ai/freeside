@@ -173,6 +173,10 @@ type Policy struct {
 	MaxCommitPlanBytes    int64
 	MaxCommitPlanGroups   int
 	MaxCommitMessageBytes int
+	// dirBatch is how many directory entries one ReadDir call pulls while
+	// auditing the handoff (defaultDirBatch). It is unexported, so it never
+	// serializes, and set only by tests that cross a batch boundary cheaply.
+	dirBatch int
 }
 
 // withDefaults returns a copy with every zero field set to its default.
@@ -250,6 +254,9 @@ func (p Policy) withDefaults() Policy {
 	}
 	if p.MaxCommitMessageBytes == 0 {
 		p.MaxCommitMessageBytes = DefaultMaxCommitMessageBytes
+	}
+	if p.dirBatch == 0 {
+		p.dirBatch = defaultDirBatch
 	}
 	return p
 }
