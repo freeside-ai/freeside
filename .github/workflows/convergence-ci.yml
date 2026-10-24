@@ -143,6 +143,12 @@ jobs:
         env:
           CONVERGENCE_ALL_TESTS: ${{ inputs.app_tests && '1' || '' }}
         run: bash scripts/check.sh convergence
+      - name: Save SwiftPM build output (measurement only)
+        if: steps.swiftpm-build.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v4
+        with:
+          path: app/.build
+          key: ${{ steps.swiftpm-build.outputs.cache-primary-key }}
       - name: Report SwiftPM build cache use
         if: always()
         env:
