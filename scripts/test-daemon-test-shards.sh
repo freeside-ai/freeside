@@ -318,12 +318,29 @@ class Coverage(unittest.TestCase):
         # macOS test job at all, so a PR asks for three macOS jobs, not five.
         self.assertIn("    with:\n      app_tests: ${{ needs.select.outputs.app == 'true' }}\n", caller)
         convergence = (root / '.github/workflows/convergence-ci.yml').read_text()
+        swift_build_cache = ("          path: app/.build\n"
+                             "          key: swift-build-v1-${{ runner.os }}-${{ runner.arch }}-"
+                             "${{ steps.swift-key.outputs.image }}-${{ steps.swift-key.outputs.xcode }}-"
+                             "${{ steps.swift-key.outputs.toolchain }}-"
+                             "${{ steps.swift-key.outputs.tree }}\n")
         self.assertIn('    inputs:\n      app_tests:\n', convergence)
         self.assertNotIn('\n  push:', convergence)
         self.assertNotIn('actions/cache/save', convergence)
         self.assertNotIn(trim, convergence)
         self.assertIn("CONVERGENCE_ALL_TESTS: ${{ inputs.app_tests && '1' || '' }}", convergence)
         self.assertIn('-rest-${{ hashFiles', convergence)
+        # The Swift build cache (#2291): an exact key over all of app/ with
+        # no fallback, and the build skipped only on that hit and never for
+        # an app PR, whose --all-tests run must compile its own changes.
+        swift_build = re.search(r'^      - name: Restore the Swift build\n(.*?)(?=^      (?:- |#))',
+                                convergence, re.M | re.S).group(1)
+        self.assertIn('        id: swift-build\n        uses: actions/cache/restore@v4\n', swift_build)
+        self.assertIn(swift_build_cache, swift_build)
+        self.assertNotIn('restore-keys', swift_build)
+        self.assertIn("CONVERGENCE_SKIP_BUILD: ${{ steps.swift-build.outputs.cache-hit == 'true' && "
+                      "!inputs.app_tests && '1' || '' }}", convergence)
+        self.assertLess(convergence.index('- name: Restore the Swift build\n'),
+                        convergence.index('- name: Run the convergence pass'))
         app = (root / '.github/workflows/app-ci.yml').read_text()
         app_jobs = dict(re.findall(r'^  ([a-z-]+):\n(.*?)(?=^  [a-z-]+:|\Z)', app, re.M | re.S))
         self.assertEqual({name for name, body in app_jobs.items() if 'runs-on: macos' in body}, {'apps'})
