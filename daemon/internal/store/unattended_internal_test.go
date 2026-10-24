@@ -159,10 +159,7 @@ func TestAttentionHealthPostureMigrationAppliesFromHead(t *testing.T) {
 func TestAttentionHealthPostureReconstructionFailsClosed(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
-	db := openRaw(t)
-	if err := migrate(ctx, db, migrations.FS); err != nil {
-		t.Fatalf("migrate: %v", err)
-	}
+	db := openRawTemplate(t)
 	item, err := domain.NewAttentionItem(domain.AttentionItemInput{
 		ID: "missing-posture", ProjectID: "proj-1",
 		Subject:           domain.Subject{Type: domain.SubjectSystem, ID: "daemon"},
@@ -294,10 +291,7 @@ func TestTamperedTransitionFailsClosed(t *testing.T) {
 func TestForgedAdmissionColumnsOrBodyCannotLiftABlocker(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
-	db := openRaw(t)
-	if err := migrate(ctx, db, migrations.FS); err != nil {
-		t.Fatalf("migrate: %v", err)
-	}
+	db := openRawTemplate(t)
 	item, err := domain.NewAttentionItem(domain.AttentionItemInput{
 		ID: "blocker-1", ProjectID: "proj-1",
 		Subject:           domain.Subject{Type: domain.SubjectSystem, ID: "daemon"},
@@ -380,10 +374,7 @@ func TestForgedAdmissionColumnsOrBodyCannotLiftABlocker(t *testing.T) {
 func TestForgedItemTypeColumnFailsClosed(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
-	db := openRaw(t)
-	if err := migrate(ctx, db, migrations.FS); err != nil {
-		t.Fatalf("migrate: %v", err)
-	}
+	db := openRawTemplate(t)
 	item, err := domain.NewAttentionItem(domain.AttentionItemInput{
 		ID: "item-1", ProjectID: "proj-1",
 		Subject:           domain.Subject{Type: domain.SubjectSystem, ID: "daemon"},

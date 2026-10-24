@@ -310,10 +310,7 @@ VALUES (?, ?, ?, ?, ?, ?, 1, 1, ?)`,
 func TestJoinedRowSurfacesScanMismatchAsError(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
-	db := openRaw(t)
-	if err := migrate(ctx, db, migrations.FS); err != nil {
-		t.Fatal(err)
-	}
+	db := openRawTemplate(t)
 	if err := seedEpoch(ctx, db); err != nil {
 		t.Fatal(err)
 	}
@@ -480,10 +477,7 @@ func migrationsBeforeScheduleAuthority(t *testing.T) fs.FS {
 func TestGetScheduleRejectsOneShotExpiry(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
-	db := openRaw(t)
-	if err := migrate(ctx, db, migrations.FS); err != nil {
-		t.Fatal(err)
-	}
+	db := openRawTemplate(t)
 	if err := seedEpoch(ctx, db); err != nil {
 		t.Fatal(err)
 	}

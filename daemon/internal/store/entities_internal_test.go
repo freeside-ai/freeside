@@ -8,7 +8,6 @@ import (
 	"time"
 
 	"github.com/freeside-ai/freeside/daemon/internal/domain"
-	"github.com/freeside-ai/freeside/daemon/migrations"
 )
 
 // TestGetRejectsInconsistentRow: a row whose JSON body disagrees with its
@@ -20,10 +19,7 @@ import (
 func TestGetRejectsInconsistentRow(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
-	db := openRaw(t)
-	if err := migrate(ctx, db, migrations.FS); err != nil {
-		t.Fatalf("migrate: %v", err)
-	}
+	db := openRawTemplate(t)
 	if err := seedEpoch(ctx, db); err != nil {
 		t.Fatalf("seedEpoch: %v", err)
 	}
@@ -88,10 +84,7 @@ func TestGetRejectsInconsistentRow(t *testing.T) {
 func TestGetCommandRejectsInconsistentRow(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
-	db := openRaw(t)
-	if err := migrate(ctx, db, migrations.FS); err != nil {
-		t.Fatalf("migrate: %v", err)
-	}
+	db := openRawTemplate(t)
 	if err := seedEpoch(ctx, db); err != nil {
 		t.Fatalf("seedEpoch: %v", err)
 	}
@@ -147,10 +140,7 @@ func TestGetCommandRejectsInconsistentRow(t *testing.T) {
 func TestGetResolvedPolicyRejectsForgedDigest(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
-	db := openRaw(t)
-	if err := migrate(ctx, db, migrations.FS); err != nil {
-		t.Fatalf("migrate: %v", err)
-	}
+	db := openRawTemplate(t)
 	if err := seedEpoch(ctx, db); err != nil {
 		t.Fatalf("seedEpoch: %v", err)
 	}
@@ -189,10 +179,7 @@ func TestGetResolvedPolicyRejectsForgedDigest(t *testing.T) {
 func TestMigrateLegacyTrustProfileRunPolicyIsExact(t *testing.T) {
 	t.Parallel()
 	ctx := t.Context()
-	db := openRaw(t)
-	if err := migrate(ctx, db, migrations.FS); err != nil {
-		t.Fatal(err)
-	}
+	db := openRawTemplate(t)
 	if err := seedEpoch(ctx, db); err != nil {
 		t.Fatal(err)
 	}
@@ -444,10 +431,7 @@ UPDATE schedules SET policy_digest = ?, body = ? WHERE id = ?`,
 func TestGetRejectsForgedMetadata(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
-	db := openRaw(t)
-	if err := migrate(ctx, db, migrations.FS); err != nil {
-		t.Fatalf("migrate: %v", err)
-	}
+	db := openRawTemplate(t)
 	if err := seedEpoch(ctx, db); err != nil {
 		t.Fatalf("seedEpoch: %v", err)
 	}
@@ -568,10 +552,7 @@ func TestGetRejectsForgedMetadata(t *testing.T) {
 func TestListRejectsForgedMetadata(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
-	db := openRaw(t)
-	if err := migrate(ctx, db, migrations.FS); err != nil {
-		t.Fatalf("migrate: %v", err)
-	}
+	db := openRawTemplate(t)
 	if err := seedEpoch(ctx, db); err != nil {
 		t.Fatalf("seedEpoch: %v", err)
 	}
@@ -734,10 +715,7 @@ func TestListRejectsForgedMetadata(t *testing.T) {
 func TestListRejectsInconsistentRow(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
-	db := openRaw(t)
-	if err := migrate(ctx, db, migrations.FS); err != nil {
-		t.Fatalf("migrate: %v", err)
-	}
+	db := openRawTemplate(t)
 	if err := seedEpoch(ctx, db); err != nil {
 		t.Fatalf("seedEpoch: %v", err)
 	}
@@ -908,10 +886,7 @@ func TestListRejectsInconsistentRow(t *testing.T) {
 func TestSnapshotRejectsForgedMetadata(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
-	db := openRaw(t)
-	if err := migrate(ctx, db, migrations.FS); err != nil {
-		t.Fatalf("migrate: %v", err)
-	}
+	db := openRawTemplate(t)
 	if err := seedEpoch(ctx, db); err != nil {
 		t.Fatalf("seedEpoch: %v", err)
 	}
@@ -1082,10 +1057,7 @@ func TestSnapshotRejectsForgedMetadata(t *testing.T) {
 func TestPutAttentionItemPreNoticeRowConverges(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
-	db := openRaw(t)
-	if err := migrate(ctx, db, migrations.FS); err != nil {
-		t.Fatalf("migrate: %v", err)
-	}
+	db := openRawTemplate(t)
 	if err := seedEpoch(ctx, db); err != nil {
 		t.Fatalf("seedEpoch: %v", err)
 	}
@@ -1163,10 +1135,7 @@ func TestPutAttentionItemPreNoticeRowConverges(t *testing.T) {
 func TestPutAttentionItemLegacyOffsetExpiresWhenConverges(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
-	db := openRaw(t)
-	if err := migrate(ctx, db, migrations.FS); err != nil {
-		t.Fatalf("migrate: %v", err)
-	}
+	db := openRawTemplate(t)
 	if err := seedEpoch(ctx, db); err != nil {
 		t.Fatalf("seedEpoch: %v", err)
 	}
