@@ -2390,6 +2390,7 @@ func TestProductionReviewOverlapGateSurvivesCrashBeforeRecord(t *testing.T) {
 }
 
 func TestProductionAdjudicatedRemediationRerunsVerificationAndReview(t *testing.T) {
+	t.Parallel()
 	p := newProductionPublicationHarness(t, "")
 	testProductionAdjudicatedRemediation(t, p, false)
 }
@@ -2653,6 +2654,7 @@ func testProductionAdjudicatedRemediation(t *testing.T, p *productionPublication
 }
 
 func TestProductionUndeliverableRemediationTerminalizesPerRun(t *testing.T) {
+	t.Parallel()
 	p := newProductionPublicationHarness(t, "")
 	deliveryCalls := 0
 	p.productionDelivery = func(_ context.Context, spec exec.StartSpec) error {
@@ -2759,6 +2761,7 @@ func TestProductionUndeliverableRemediationTerminalizesPerRun(t *testing.T) {
 }
 
 func TestProductionRemediationNoopPushbackEscalatesWithoutReverification(t *testing.T) {
+	t.Parallel()
 	t.Run("different commit with identical tree", func(t *testing.T) {
 		testProductionRemediationNoopPushback(t, fakePublicationTime.Add(time.Minute), false)
 	})
@@ -3077,6 +3080,7 @@ func TestProductionTrustBlockAfterReviewBlocksAtPublisher(t *testing.T) {
 }
 
 func TestProductionReevaluationReviewEscalationRemainsBlocked(t *testing.T) {
+	t.Parallel()
 	p := newProductionPublicationHarness(t, "")
 	p.audit.EffectiveTokenPerms = domain.TokenPermissionsReadWrite
 	p.workflow = p.newEngine(t, productionCrashSeams{}, true)
@@ -3145,6 +3149,7 @@ func TestProductionReevaluationReviewEscalationRemainsBlocked(t *testing.T) {
 }
 
 func TestProductionReevaluationHardLimitEscalationUsesPolicyRound(t *testing.T) {
+	t.Parallel()
 	p := newProductionPublicationHarnessWithPolicyKeys(t, "", []domain.PolicyKey{{
 		Key: "review.hard_round_limit", Value: "1",
 		Provenance: domain.KeyProvenance{
@@ -5692,6 +5697,7 @@ func TestProductionPublicationHoldAdvancesToDefinitiveBlock(t *testing.T) {
 }
 
 func TestProductionPublicationRerunTrustEvaluationSurvivesRestart(t *testing.T) {
+	t.Parallel()
 	p := newProductionPublicationHarness(t, "")
 	p.room.fail = true
 	p.startAndRecordExport(t)
@@ -5974,6 +5980,7 @@ func TestProductionPublicationRerunTrustEvaluationSurvivesRestart(t *testing.T) 
 }
 
 func TestProductionPublicationReevaluationPinsAcceptedProfileAcrossRestart(t *testing.T) {
+	t.Parallel()
 	p := newProductionPublicationHarness(t, "")
 	p.room.fail = true
 	p.startAndRecordExport(t)
@@ -6071,6 +6078,7 @@ func TestProductionPublicationReevaluationPinsAcceptedProfileAcrossRestart(t *te
 }
 
 func TestProductionPublicationReevaluationCanBlockAgainAndStop(t *testing.T) {
+	t.Parallel()
 	p := newProductionPublicationHarness(t, "")
 	p.room.fail = true
 	p.startAndRecordExport(t)
@@ -7209,6 +7217,7 @@ func TestQuarantinedMarkerHoldsAndReleasesThePublicationLane(t *testing.T) {
 }
 
 func TestDispatchedRemediationMarkerHoldsAndReleasesThePublicationLane(t *testing.T) {
+	t.Parallel()
 	for _, tc := range []struct {
 		name         string
 		markerKey    func(*productionPublicationHarness, domain.InvocationID) string
@@ -7327,6 +7336,7 @@ func TestDispatchedRemediationMarkerHoldsAndReleasesThePublicationLane(t *testin
 // covers the lifecycle interval where durable remediation is active but the
 // publication task still names the original implementation producer.
 func TestDispatchedRemediationMarkerBeforeExportHoldsAndReleasesThePublicationLane(t *testing.T) {
+	t.Parallel()
 	for _, tc := range []struct {
 		name     string
 		mutation string

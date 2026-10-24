@@ -189,6 +189,7 @@ func (f compositionImageFixture) observer(t *testing.T, commit string) projectIm
 // The base half of the gate: an image may serve a base other than its build
 // commit only when every recorded environment input is unchanged there.
 func TestAdmitProjectImageAtBase(t *testing.T) {
+	t.Parallel()
 	fixture := newCompositionImageFixture(t)
 
 	// The build commit needs no base tree, for either record: the observer

@@ -32,6 +32,7 @@ func (submitSpecificationBackend) Capabilities() exec.CapabilitySet {
 }
 
 func TestSubmitCommandSpecifiesBeforeCreatingProductionRun(t *testing.T) {
+	t.Parallel()
 	tests := []struct {
 		name                  string
 		acceptedBody          string

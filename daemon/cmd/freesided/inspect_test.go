@@ -88,6 +88,7 @@ func inspect[T any](t *testing.T, ctx context.Context, args ...string) T {
 // TestInspectReadsThroughRunningDaemon fails any attempt to open the database
 // while a daemon holds it: every read must come over the control socket.
 func TestInspectReadsThroughRunningDaemon(t *testing.T) {
+	t.Parallel()
 	h, dbPath := startSeededDaemon(t)
 	t.Cleanup(func() {
 		if err := h.Close(); err != nil {
@@ -136,6 +137,7 @@ func equalInspectReads(a, b inspectRead) bool {
 // TestInspectReadsStoreWithNoDaemon reads each record through a daemon,
 // stops it, and expects the command to read the same record from the file.
 func TestInspectReadsStoreWithNoDaemon(t *testing.T) {
+	t.Parallel()
 	h, dbPath := startSeededDaemon(t)
 	ctx := t.Context()
 	index := inspect[inspectIndex](t, ctx, "-db", dbPath)

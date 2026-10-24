@@ -103,6 +103,7 @@ func assertDismissedRunHistory(t *testing.T, p *productionPublicationHarness) {
 }
 
 func TestRealRunDismissedCheckpointRejectsDamagedHistory(t *testing.T) {
+	t.Parallel()
 	for _, damage := range []struct {
 		name, query string
 	}{
@@ -152,6 +153,7 @@ func TestRealRunDismissedCheckpointRejectsDamagedHistory(t *testing.T) {
 }
 
 func TestRealRunStoppedCheckpointIsNotDismissedHistory(t *testing.T) {
+	t.Parallel()
 	p := newProductionPublicationHarness(t, "")
 	p.startAndRecordExport(t)
 	if result, err := p.reconcileLanes(); err != nil || result.ReadyItemsCreated != 1 {

@@ -20,6 +20,7 @@ import (
 // lineup that changed would, and the invocation crashes before its launch and
 // is picked up by a restarted daemon.
 func TestProductionReviewInvocationKeepsItsFirstAdmission(t *testing.T) {
+	t.Parallel()
 	p := newProductionPublicationHarness(t, "")
 	id := engine.ProductionReviewInvocationID(p.runID, 1)
 	script := fake.ReviewScript{PendingInspects: 2, Outcome: fake.OutcomeComplete, Result: exec.ReviewResult{

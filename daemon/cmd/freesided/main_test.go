@@ -856,6 +856,7 @@ func TestConfigStoreOptions(t *testing.T) {
 }
 
 func TestConfigStoreOptionsCarryDoctorRecipePolicy(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	recipe := domain.Digest("sha256:" + strings.Repeat("a", 64))
 	cfg := config{ApprovedRecipes: map[domain.Digest]bool{recipe: true}}

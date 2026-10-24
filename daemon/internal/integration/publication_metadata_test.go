@@ -183,6 +183,7 @@ func assertProjectAuthority(t *testing.T, h *publicationHarness, id domain.Proje
 }
 
 func TestClientSubmissionPublishesCandidateMetadata(t *testing.T) {
+	t.Parallel()
 	for _, name := range []string{"", "Operator task name"} {
 		t.Run(name, func(t *testing.T) {
 			p := newProductionPublicationHarnessWithMetadata(t, newPublicationHarness(t), "", nil, nil, nil, engine.ProductionPublication{}, nil, name)
@@ -521,6 +522,7 @@ func TestPublicMetadataHoldRecoveryStopsAndResubmits(t *testing.T) {
 }
 
 func TestPublicMetadataRepairsDriftFromSameCandidate(t *testing.T) {
+	t.Parallel()
 	p := newPublicMetadataHarness(t)
 	p.replay = withPublicAccount(t, p, p.replay, publicAccount)
 	p.workflow = p.newEngine(t, productionCrashSeams{afterReady: func() error { return errors.New("interrupt after ready") }}, true)
@@ -544,12 +546,14 @@ func TestPublicMetadataRepairsDriftFromSameCandidate(t *testing.T) {
 }
 
 func TestPublicMetadataRemediationUsesNewProducer(t *testing.T) {
+	t.Parallel()
 	p := newPublicMetadataHarness(t)
 	p.replay = withPublicAccount(t, p, p.replay, "# Initial candidate\n\nInitial whole change.")
 	testProductionAdjudicatedRemediation(t, p, true)
 }
 
 func TestPublicMetadataFeedbackUsesNewProducer(t *testing.T) {
+	t.Parallel()
 	testPublishedFeedbackRetry(t, "public-metadata")
 }
 

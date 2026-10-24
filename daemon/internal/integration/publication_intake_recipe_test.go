@@ -27,6 +27,7 @@ func intakeRecipeMetadata() engine.ProductionPublication {
 // author renders the record's literal title and body rather than the agent's
 // publication claim.
 func TestIntakeRecipeAuthorsWithLiteralFallback(t *testing.T) {
+	t.Parallel()
 	t.Run("authored", func(t *testing.T) {
 		p := newAuthoredMetadataHarness(t, intakeRecipeMetadata(), nil)
 		driver := scriptPublicationAuthor(t, p, inferencefake.Script{Response: inference.Response{

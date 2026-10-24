@@ -77,6 +77,7 @@ func assertCompletedSuccessorCheckpoint(t *testing.T, p *productionPublicationHa
 }
 
 func TestRealRunCompletedCheckpointPreservesHistory(t *testing.T) {
+	t.Parallel()
 	for _, action := range []domain.Action{"", domain.ActionDismiss, domain.ActionStop} {
 		t.Run(string(action), func(t *testing.T) {
 			p := completedCheckpointHarness(t)
@@ -150,6 +151,7 @@ func TestRealRunCompletedCheckpointPreservesHistory(t *testing.T) {
 }
 
 func TestRealRunCompletedCheckpointRejectsForgedAuthority(t *testing.T) {
+	t.Parallel()
 	for _, damage := range []struct {
 		name    string
 		queries []string

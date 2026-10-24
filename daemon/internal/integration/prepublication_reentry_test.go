@@ -521,6 +521,7 @@ func TestUnpublishedReentryPublishesTheDispositionHistory(t *testing.T) {
 // at, which the re-entry task still carries in its replay, so the marker
 // authenticates instead of quarantining the task.
 func TestUnpublishedReentryAfterARemediationPublishes(t *testing.T) {
+	t.Parallel()
 	p, _ := prepareDispatchedRemediationPublicationTask(t)
 	advanced, _ := p.advanceBaseBeforePublication(t, "UPSTREAM.md", "upstream change\n")
 	p.scriptCleanReview(3, advanced, p.replay.HeadSHA)

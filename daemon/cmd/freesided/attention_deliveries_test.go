@@ -273,6 +273,7 @@ func TestDaemonNotifiesAPhoneOncePerItem(t *testing.T) {
 // version ended the engine loop in a durable stop; it now changes only the
 // item's timing, and the discuss is dispatched and answered.
 func TestDaemonAnswersADiscussAskedWhileItsNotificationIsInFlight(t *testing.T) {
+	t.Parallel()
 	ctx := t.Context()
 	approvalID := "approval-" + domain.ItemID(defaultFakeRunID)
 	feedbackID := "feedback-" + domain.ItemID(defaultFakeRunID)
@@ -381,6 +382,7 @@ func TestDaemonAnswersADiscussAskedWhileItsNotificationIsInFlight(t *testing.T) 
 // with no acceptance, and the log names the status or the failure class but
 // never the device's topic or the publish URL.
 func TestDaemonSurvivesANotificationOutage(t *testing.T) {
+	t.Parallel()
 	approval := "approval-" + domain.ItemID(defaultFakeRunID)
 
 	t.Run("rejected", func(t *testing.T) {

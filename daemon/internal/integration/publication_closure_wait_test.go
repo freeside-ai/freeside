@@ -21,6 +21,7 @@ import (
 // effect_proposal item is open; once the item is decided, the next pass writes
 // the decided reference and marks the PR ready, then retires the wait.
 func TestHumanGateClosureHoldsDraftUntilDecided(t *testing.T) {
+	t.Parallel()
 	for _, tc := range []struct {
 		action   domain.Action
 		want     string
@@ -118,6 +119,7 @@ func newHeldClosureHarness(t *testing.T) (*productionPublicationHarness, domain.
 // either author site or approve a closure proposal. The fallback is durable
 // when the issue becomes readable on a later pass at the same head and base.
 func TestSourceIssueReadFailureFallsBack(t *testing.T) {
+	t.Parallel()
 	t.Run("API failure", func(t *testing.T) { testSourceIssueReadFailureFallsBack(t, false) })
 	t.Run("malformed title", func(t *testing.T) { testSourceIssueReadFailureFallsBack(t, true) })
 }
@@ -181,6 +183,7 @@ func testSourceIssueReadFailureFallsBack(t *testing.T, malformedTitle bool) {
 // re-entering the task, a re-entry the repair cannot complete fails loud once
 // and retires its wait, and an unreadable wait row is skipped and left pending.
 func TestHumanGateClosureWaitNeverWedgesTheLane(t *testing.T) {
+	t.Parallel()
 	t.Run("concluded", func(t *testing.T) {
 		p, _ := newHeldClosureHarness(t)
 		// The active-resource reconciler observed a human close the held PR.

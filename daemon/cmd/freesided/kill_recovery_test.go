@@ -60,6 +60,7 @@ type processFixture struct {
 // notification has reached the provider, so the recovery matrix runs with a
 // delivery recorded on the item the engine binds its intent to.
 func TestDaemonRecoversAcrossSIGKILL(t *testing.T) {
+	t.Parallel()
 	binary := buildKillTestDaemon(t)
 
 	tests := []struct {

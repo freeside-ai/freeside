@@ -159,6 +159,7 @@ func TestProductionReviewUpgradePreservesRequestTime(t *testing.T) {
 }
 
 func TestProductionReviewProgressSurvivesRestart(t *testing.T) {
+	t.Parallel()
 	p := newProductionPublicationHarness(t, "")
 	id := engine.ProductionReviewInvocationID(p.runID, 1)
 	script := fake.ReviewScript{PendingInspects: 2, Outcome: fake.OutcomeComplete, Result: exec.ReviewResult{

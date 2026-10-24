@@ -61,6 +61,7 @@ func (p *productionPublicationHarness) configureAdjudicator(t *testing.T) *infer
 }
 
 func TestExternalReviewRejectedBatchLogsCause(t *testing.T) {
+	t.Parallel()
 	const marker = "UNTRUSTED-REVIEWER-AND-MODEL-TEXT"
 	for _, tc := range []struct {
 		name, cause   string

@@ -438,6 +438,7 @@ func TestJudgmentCallsCarryTheirEnrollmentsToken(t *testing.T) {
 // drift auditor's blocking. The failure is not remembered: once the store is
 // readable the next call binds the role and resolves the item.
 func TestJudgmentRoleIsUnboundWhileItsCredentialCannotBeRead(t *testing.T) {
+	t.Parallel()
 	const unbound = inference.FallbackRoleUnbound
 	volume := adoptClaudeVolume
 	failures := map[string]func(r *judgmentCredentialRig){
@@ -518,6 +519,7 @@ func TestJudgmentRoleIsUnboundWhileItsCredentialCannotBeRead(t *testing.T) {
 // A read that finds another generation current, or a live mutation lease,
 // hands back no token either.
 func TestJudgmentCredentialReadRefusesAStoreInMotion(t *testing.T) {
+	t.Parallel()
 	withJudgmentCredentialRig(t, func(r *judgmentCredentialRig) {
 		ctx := context.Background()
 		credentials := newJudgmentCredentials(r.reader().Read, r.logger())
@@ -559,6 +561,7 @@ func TestJudgmentCredentialReadRefusesAStoreInMotion(t *testing.T) {
 // health item, a call record, or a preflight manifest, on the path that
 // succeeds and on each that fails after the token was in hand.
 func TestJudgmentCredentialStaysOutOfEveryOutput(t *testing.T) {
+	t.Parallel()
 	withJudgmentCredentialRig(t, func(r *judgmentCredentialRig) {
 		ctx := context.Background()
 		volume := r.generation(r.first.ID).AuthStoreVolume

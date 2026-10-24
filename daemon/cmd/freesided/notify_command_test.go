@@ -164,6 +164,7 @@ func TestNotifyTestOneDevice(t *testing.T) {
 // the failure class and a failing command. Neither the output nor the daemon
 // log names the topic or the publish URL.
 func TestNotifyTestReportsAFailureWithoutTheTopic(t *testing.T) {
+	t.Parallel()
 	t.Run("rejected", func(t *testing.T) {
 		sink := newNtfySink(t, http.StatusForbidden)
 		f := startNotifyTestFixture(t, sink.URL)

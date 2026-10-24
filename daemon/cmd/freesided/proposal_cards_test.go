@@ -103,6 +103,7 @@ func TestProposalCardsGolden(t *testing.T) {
 // recipe is refused, listed under refused_rows with the stderr note. A
 // decided card is closed and not listed.
 func TestInspectProposalsServedEqualsDirect(t *testing.T) {
+	t.Parallel()
 	recipe := domain.Digest("sha256:" + strings.Repeat("e", 64))
 	dbPath := filepath.Join(t.TempDir(), "freeside.db")
 	h := startDaemon(t, config{

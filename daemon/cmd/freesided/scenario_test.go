@@ -130,6 +130,7 @@ func TestScenarioFromFlags(t *testing.T) {
 // completed terminal. A restart on the same root then starts clean, because
 // seeding finds its repository and records in place.
 func TestScenarioCleanRunPublishes(t *testing.T) {
+	t.Parallel()
 	clean := cleanScenario()
 	dir := t.TempDir()
 	cfg := config{

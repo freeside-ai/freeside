@@ -17,6 +17,7 @@ import (
 )
 
 func TestAbandonPartialResultsAndExactEpisodeRepair(t *testing.T) {
+	t.Parallel()
 	for _, live := range []bool{false, true} {
 		for _, failure := range []string{"closure", "cleanup"} {
 			name := failure + "/offline"
