@@ -79,15 +79,17 @@ jobs:
         working-directory: .
         run: bash scripts/check.sh scripts trackercollect
 
+  # Only the real exclusive rename runs here. The stand-in rename matrix
+  # needs no macOS: the `test` job's suites step runs it, rename-race
+  # injections included, and this run repeats every other case with the
+  # real rename and the real Foundation URL validator.
   mac-installer:
     name: Mac installer real-Swift matrix
-    runs-on: macos-latest
+    runs-on: macos-26
     steps:
       - uses: actions/checkout@v4
       - name: bash syntax check
         run: bash -n scripts/test-install-mac-app.sh app/scripts/install-mac-app.sh scripts/test-install-ios-app.sh app/scripts/install-ios-app.sh
-      - name: Installer matrix with rename stand-in
-        run: bash scripts/test-install-mac-app.sh
       - name: Installer matrix with real exclusive rename
         run: FREESIDE_TEST_REAL_RENAME=true bash scripts/test-install-mac-app.sh
       - name: iOS installer suite with the real URL validator
