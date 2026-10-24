@@ -411,6 +411,9 @@ fi
             reports = []
             for kind, index, count in [('rest', 1, 1), ('integration', 1, 2), ('integration', 2, 2)]:
                 output = directory / f'{kind}-{index}'
+                env.pop('GOFLAGS', None)
+                if kind == 'rest':
+                    env['GOFLAGS'] = '-p=6'
                 self.assertEqual(call('--kind', kind, '--index', str(index), '--count', str(count),
                                       '--integration-count', '2',
                                       '--evidence-dir', str(output)), 0)
@@ -419,6 +422,8 @@ fi
                     'go': 'go version test', 'platform': ['darwin', 'arm64'], 'ImageOS': 'macos26',
                     'GITHUB_RUN_ID': '1', 'GITHUB_RUN_ATTEMPT': '1'}))
                 reports.append(output / 'execution.json')
+            # The evidence names the width that produced it, empty when unset.
+            self.assertEqual([shards.read_json(r)['goflags'] for r in reports], ['-p=6', '', ''])
             baseline = events(inventory) + [
                 {'Package': integration, 'Test': 'FuzzThing/seed#0', 'Action': 'run'},
                 {'Package': integration, 'Test': 'FuzzThing/seed#0', 'Action': 'pass'}]
