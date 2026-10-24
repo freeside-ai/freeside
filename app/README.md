@@ -256,10 +256,13 @@ pkill -x FreesideMac
 
 Look at a change through selected renders, and run the whole screenshot
 matrix once before push, not once per step. The full
-`surfacesMatchRecordedPixels` pass draws 2,466 images (411 manifest keys at
-each of six text sizes) one at a time on the main actor: 90 to 180 s on the
-development Mac (2026-10-08), depending on what else was building, before
-the build and the rest of the suite. One card through the selected-key
+`surfacesMatchRecordedPixels` pass draws 1,544 images one at a time on the
+main actor: a light surface at `large`, `xxxlarge`, `ax1`, and `ax5`, the
+sizes where an explicit Dynamic Type check branches, and a dark surface at
+`large`, plus `ax5` for six named wrapped-text specimens (#2250). On the
+development Mac (2026-10-24) it took 87 s alone and 140 s inside
+`scripts/check.sh app test`, before the build. One card through the
+selected-key
 probe took 16 to 19 s including an incremental build, and 3.5 s with
 nothing to rebuild.
 
@@ -275,7 +278,9 @@ nothing to rebuild.
 
    A surface is a primary-surface key from
    `Tests/FreesideCoreTests/Resources/ScreenshotDigests.json` without its
-   text-size suffix; `FREESIDE_RENDER_SIZES` defaults to `large`. The script
+   text-size suffix; `FREESIDE_RENDER_SIZES` defaults to `large` and takes
+   all six suite sizes, including `xsmall` and `ax3`, which the comparison
+   matrix skips. The script
    wraps the probe described under
    [Screenshot Regression Determinism](#screenshot-regression-determinism),
    which rejects the manifest's supplemental fixtures. It names each key the
@@ -303,9 +308,12 @@ nothing to rebuild.
 
 ### Screenshot Regression Determinism
 
-The macOS package tests compare exact dimensions-plus-RGBA digests at six
-Dynamic Type sizes. Capture draws through `ImageRenderer.render` into an
-explicit sRGB bitmap; comparison and recording use that same path. Explicit
+The macOS package tests compare exact dimensions-plus-RGBA digests at the
+Dynamic Type sizes where an explicit Dynamic Type check branches: a light
+surface at `large`, `xxxlarge`, `ax1`, and `ax5`, a dark surface at
+`large`, and six dark wrapped-text specimens also at `ax5` (the rule is
+`ScreenshotRegressionTests.matrixSizeNames`). Capture draws through
+`ImageRenderer.render` into an explicit sRGB bitmap; comparison and recording use that same path. Explicit
 contrast is scoped in memory, and screenshot disclosure preferences use
 separate temporary suites. Ordinary launch inputs and host contrast behavior
 remain unchanged.
