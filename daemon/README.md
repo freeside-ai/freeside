@@ -10,19 +10,27 @@ CI runs three integration shards and one rest shard on Linux for every
 event. Linux build, vet, lint, and exporter cross-compilation run
 independently. On macOS the layout follows the event, because the org's plan
 runs at most five macOS jobs at once across every workflow (#2248): a pull
-request runs only the rest shard, which also builds and holds the
-darwin-specific code, and a push to main runs only the three integration
-shards, in sequence in one job. Both platform gate names remain stable. A
-gate requires this event's children to succeed and the other event's macOS
-job to be skipped, then verifies the test evidence against the shard set
-declared for the event (`verify --shards rest` on a PR, `--shards
-integration` on a push). The PR's `required` check also rejects an
-unexpected skip of a selected component. A darwin-only integration regression
-therefore surfaces as a failed `daemon CI` run on main after its merge, which
-GitHub reports to the account that pushed the merge. The lander reads PR
-checks only, so nothing hands a landing back for it, and a later push in a
-landing batch cancels an earlier push's run, so the batch's last tip carries
-the macOS integration evidence for the whole batch.
+request builds the daemon and runs only the darwin shard (#2274), and a push
+to main runs the full rest shard and then the three integration shards, in
+sequence in one job. Both platform gate names remain stable. A gate requires
+this event's children to succeed and the other event's macOS job to be
+skipped, then verifies the test evidence against the shard set declared for
+the event (`verify --shards darwin` on a PR; on a push, the default full
+coverage of every package and family). The PR's `required` check also
+rejects an unexpected skip of a selected component. A darwin-only regression
+outside the darwin selection therefore surfaces as a failed `daemon CI` run
+on main after its merge, which GitHub reports to the account that pushed the
+merge. The lander reads PR checks only, so nothing hands a landing back for
+it, and a later push in a landing batch cancels an earlier push's run, so the
+batch's last tip carries the macOS evidence for the whole batch.
+
+The darwin shard runs `DARWIN_SELECTION` in `scripts/daemon-test-shards.py`:
+the tests whose behaviour differs on macOS through a build tag, the
+filesystem (case-insensitive APFS, the `/var` to `/private` link), or
+loopback and bind rules. Each entry names a package, either whole or by its
+top-level test families, and the reason. A listed package or family that
+discovery cannot find fails the shard. A new darwin-sensitive test runs on a
+PR's macOS job only once its family is added there.
 
 `bash scripts/check.sh daemon test` still runs the full local suite with its
 existing slot limiter and Git wrapper. CI supplies all five shard settings:
@@ -35,9 +43,11 @@ DAEMON_TEST_EVIDENCE_DIR=/tmp/daemon-shard-1 \
   bash scripts/check.sh daemon test
 ```
 
-The rest shard uses `kind=rest`, index/count `1`, and integration count `3`.
+The rest shard uses `kind=rest`, index/count `1`, and integration count `3`;
+the darwin shard uses `kind=darwin` with the same settings.
 Each integration runner discovers its compiled Test, Example, and Fuzz
-families; the rest runner discovers every other package. The weight file is
+families; the rest runner discovers every other package, and the darwin
+runner only the packages its selection names. The weight file is
 only a scheduling hint: new families receive weight `1`, and removed weights
 do not select tests. Every shard uses `-count=1`, default Go concurrency and
 timeouts, and the existing opt-in skips. No race job is added.
@@ -50,12 +60,12 @@ and rejects missing, duplicate, stale, or failed execution. On Linux,
 integration shards share a build-cache restore group keyed by OS,
 architecture, Go version, and dependencies, and shard 1 alone writes that
 group's cache on a successful main push. On macOS the push job runs the PR
-rest shard's build and compiles every test binary first, then writes the rest
-group's cache, which the PR rest shard and the convergence job restore. Before
-saving, each main-push writer removes every restored entry that its own run
-neither compiled nor read and that is more than an hour older than the run,
-so a saved entry holds the tree's outputs rather than a rolling history of
-earlier pushes. PR build caches remain restore-only. The old
+darwin shard's build and compiles every test binary first, then writes the
+rest group's cache, which the PR darwin shard and the convergence job restore.
+Before saving, each main-push writer removes every restored entry that its own
+run neither compiled nor read and that is more than an hour older than the
+run, so a saved entry holds the tree's outputs rather than a rolling history
+of earlier pushes. PR build caches remain restore-only. The old
 monolithic caches provide a compatible migration fallback. Empty cache
 directories are created before size reporting, so a cold miss still reaches
 compilation.
