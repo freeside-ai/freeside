@@ -173,11 +173,6 @@
             }
         }
 
-        public func stopMonitoring() {
-            monitoringTask?.cancel()
-            monitoringTask = nil
-        }
-
         public func start() async {
             actionError = nil
             actionErrorKind = nil
