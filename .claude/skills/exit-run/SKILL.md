@@ -94,7 +94,8 @@ the trigger, the expected result on the Mac and on the iPhone, and the
 point in the run where it must happen. A trigger is one of three things:
 
 - **A real condition the run produces:** the specification card, the
-  published pull request and its ready card, the completion fact.
+  published pull request and its ready card, the source-issue closure card
+  under the human gate, the completion fact.
 - **A synthetic `freesided raise-item -alert <name>`:** for an alert that
   needs no real condition, only proof that it reaches the operator (a
   stalled writer, held work, a review that keeps growing). Build
@@ -114,6 +115,15 @@ ready pull request open (an external review, a ready-card action), or
 **after the merge and the completion fact** for `review-growth`, which is
 refused until the run's work unit is recorded complete, and the alerts
 raised with it (Walk Through on Both Clients).
+
+The closure card is **before the merge**, and first among those: under the
+human gate (`gates.source_issue_closure` set to `true` in the policy file),
+for a source issue in the managed repository, the pull request stays a
+draft until the card is decided, so nothing can merge ahead of it. The
+card is not in `inspect task`'s `items[]`, because its subject is a
+proposal batch, not the task. Until #2226 adds a `freesided` read for it,
+its evidence is the client inbox card and
+`gh pr view <number> --repo <owner/repo> --json isDraft,body`.
 
 ## Preflight (Stop on Failure)
 
@@ -430,6 +440,20 @@ the operator.
    run ids, the campaign and attempt, base and head SHAs, the review id,
    model, and outcome, the run's `publication.outcome`, and each run's
    `billable_cost`.
+6. **Under the human closure gate,** for a source issue in the managed
+   repository (one in another repository gets a `Source issue:` link and no
+   card), the publisher opens the pull request as a draft carrying
+   `Refs #N` and holds it there while the closure card is undecided. That
+   card is an effect-proposal card in the client inbox, open beside the
+   ready card; its statement names the merge and the issue.
+   It opens the pre-merge checkpoint list (Walk Through on Both Clients),
+   not a checkpoint of its own. Once it is decided, the publisher marks the
+   pull request ready: with `Closes #N` on an approval that keeps the
+   resolves flag, with `Refs #N` on a decline or an approval that turns the
+   flag off. Read the draft state and the reference with
+   `gh pr view <number> --repo <owner/repo> --json isDraft,body` before the
+   decision and after it, and record both beside the device and the
+   decision.
 
 **One task per run.** Never resubmit. Each `submit` creates new work, and
 a relaunch that leaves a second task for the target puts a second card in
@@ -481,23 +505,32 @@ report. Running this skill authorizes no implementation.
 
 The run's PR is not the proof; the walkthrough is. The merge ends the part
 of it that needs the ready pull request open: the ready card resolves on
-merge, and an external review can only be posted before it.
+merge, and an external review can only be posted before it. Under the human
+closure gate the pull request stays a draft until the closure card is
+decided, so that decision comes first.
 
 **Read the record, not the operator.** Status, cards, timeline, delivery,
 and spend come from `freesided inspect task`: `items[]` with each item's
 `status`, `conclusion`, and per-device `deliveries`; the task `timeline`;
 `runs[].conclusion`; `runs[].billable_cost`. `freesided follow -snapshot`
-adds the derived state. Ask the operator only what a screen shows. On the
-Mac, prefer a window capture through computer use when the operator has
-granted it: an agent can drive a card's buttons without the pointer, but
-the card's More Actions menu and the menu-bar Start and Stop need
-full-screen control (#1988). On the iPhone, the operator's screenshot is
-the evidence, requested in the checkpoint list, never one question at a
+adds the derived state. The closure card is the exception: it is not in
+`items[]`, so the operator's inbox report and the `gh pr view` read are
+its record (Derive the Exit Contract). Ask the operator only what a screen
+shows. On the Mac, prefer a window capture through computer use when the
+operator has granted it: an agent can drive a card's buttons without the
+pointer, but the card's More Actions menu and the menu-bar Start and Stop
+need full-screen control (#1988). On the iPhone, the operator's screenshot
+is the evidence, requested in the checkpoint list, never one question at a
 time. So:
 
 - **Checkpoint: pre-merge walkthrough and merge.** One list covers every
   action the contract lists before the merge, per device, and ends with
-  the PR link for the owner. Collect the operator's reports, check them
+  the PR link for the owner. Under the human closure gate it starts with
+  the closure card's rows. After the operator decides the card, confirm
+  from the forge read that the pull request left draft and carries the
+  final reference before the merge row; a pull request still in draft a
+  few minutes after the decision is a finding (on gh-imgup#144 the rewrite
+  took under a minute). Collect the operator's reports, check them
   against the record, then wait for the merge.
 - The ready card's own actions (`open_pr`, `mark_seen`, `dismiss`,
   `return_to_agent`) are not a per-run obligation. Put one on the

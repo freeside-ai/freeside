@@ -574,7 +574,15 @@ such a task or names anything but the task's issue. What the pull request then
 carries depends on where the issue lives:
 
 - **An issue in the managed repository:** `Closes #<number>`, or
-  `Refs #<number>` when the closure is declined.
+  `Refs #<number>` when the closure is declined. Under the human closure
+  gate (`gates.source_issue_closure` set to `true` in the policy file), the
+  publisher opens the pull request as a draft carrying `Refs #<number>` and
+  holds it there until the closure card is decided. An approval that keeps
+  the resolves flag marks it ready with `Closes #<number>`; a decline, or an
+  approval that turns the flag off, marks it ready with `Refs #<number>`.
+  The card is an effect-proposal card in a paired client's inbox;
+  `freesided inspect task` doesn't list it, because its subject is the
+  proposal batch, not the task (#2226). Only the approval path has run live.
 - **An issue in another repository:** `Source issue: <url>`, which closes
   nothing.
 
@@ -647,7 +655,11 @@ tracked in #1405 and removed by #1332.
 The deputy runs the client's task like any other: after the specification is
 approved, it runs implementation, review, and publication, and the task record
 shows each step. A ready publication continues to the walkthrough on both
-clients. Record the target task's evidence separately from the seed's, and
+clients. Under the human closure gate, the operator decides the closure card
+in a client inbox before the merge, and the pull request stays a draft until
+then. `gh pr view <number> --repo <owner/repo> --json isDraft,body` confirms
+it left draft with the final reference; the merge waits for that. Record the
+target task's evidence separately from the seed's, and
 leave live acceptance outstanding if the approved inputs or either physical
 client are unavailable.
 
