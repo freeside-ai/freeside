@@ -5343,6 +5343,20 @@ public enum Components {
             case lost = "lost"
             case blocked = "blocked"
         }
+        /// What went wrong in a failed invocation, in a vocabulary every invocation lane shares. It says nothing about what to do next. unknown is a real member: nothing positively classified the failure.
+        ///
+        ///
+        /// - Remark: Generated from `#/components/schemas/FailureCause`.
+        @frozen public enum FailureCause: String, Codable, Hashable, Sendable, CaseIterable {
+            case quota = "quota"
+            case credential_expired = "credential_expired"
+            case credential_revoked = "credential_revoked"
+            case service_capacity = "service_capacity"
+            case provider_unavailable = "provider_unavailable"
+            case invalid_configuration = "invalid_configuration"
+            case contract_contradiction = "contract_contradiction"
+            case unknown = "unknown"
+        }
         /// One append-only, first-observation-wins daemon milestone. Detail fields are kind-scoped and use explicit null when absent.
         ///
         ///
@@ -9921,12 +9935,15 @@ public enum Components {
                 ])
             }
         }
-        /// The terminal execution outcome and invocation that failed within a workflow stage.
+        /// The terminal execution outcome and invocation that failed within a workflow stage. cause is present exactly when outcome is failed, copied from the recorded outcome, and absent for canceled and lost.
+        ///
         ///
         /// - Remark: Generated from `#/components/schemas/ExecutionFailureFacts`.
         public struct ExecutionFailureFacts: Codable, Hashable, Sendable {
             /// - Remark: Generated from `#/components/schemas/ExecutionFailureFacts/outcome`.
             public var outcome: Components.Schemas.ExecutionOutcomeStatus
+            /// - Remark: Generated from `#/components/schemas/ExecutionFailureFacts/cause`.
+            public var cause: Components.Schemas.FailureCause?
             /// - Remark: Generated from `#/components/schemas/ExecutionFailureFacts/stage`.
             public var stage: Components.Schemas.StageName
             /// - Remark: Generated from `#/components/schemas/ExecutionFailureFacts/invocation_id`.
@@ -9940,22 +9957,26 @@ public enum Components {
             ///
             /// - Parameters:
             ///   - outcome:
+            ///   - cause:
             ///   - stage:
             ///   - invocation_id:
             ///   - offered_manifests: Canonically name-sorted capability alternatives that the current daemon composition can enforce and that differ from the failed admission. Presence is what authorizes retry_with_capabilities.
             public init(
                 outcome: Components.Schemas.ExecutionOutcomeStatus,
+                cause: Components.Schemas.FailureCause? = nil,
                 stage: Components.Schemas.StageName,
                 invocation_id: Swift.String,
                 offered_manifests: [Components.Schemas.CapabilityManifestOffer]? = nil
             ) {
                 self.outcome = outcome
+                self.cause = cause
                 self.stage = stage
                 self.invocation_id = invocation_id
                 self.offered_manifests = offered_manifests
             }
             public enum CodingKeys: String, CodingKey {
                 case outcome
+                case cause
                 case stage
                 case invocation_id
                 case offered_manifests
@@ -9965,6 +9986,10 @@ public enum Components {
                 self.outcome = try container.decode(
                     Components.Schemas.ExecutionOutcomeStatus.self,
                     forKey: .outcome
+                )
+                self.cause = try container.decodeIfPresent(
+                    Components.Schemas.FailureCause.self,
+                    forKey: .cause
                 )
                 self.stage = try container.decode(
                     Components.Schemas.StageName.self,
@@ -9980,6 +10005,7 @@ public enum Components {
                 )
                 try decoder.ensureNoAdditionalProperties(knownKeys: [
                     "outcome",
+                    "cause",
                     "stage",
                     "invocation_id",
                     "offered_manifests"

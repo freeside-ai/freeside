@@ -2665,6 +2665,22 @@ components:
         agent_question answer.
       enum: [failed, canceled, lost, blocked]
 
+    FailureCause:
+      type: string
+      description: >
+        What went wrong in a failed invocation, in a vocabulary every
+        invocation lane shares. It says nothing about what to do next.
+        unknown is a real member: nothing positively classified the failure.
+      enum:
+        - quota
+        - credential_expired
+        - credential_revoked
+        - service_capacity
+        - provider_unavailable
+        - invalid_configuration
+        - contract_contradiction
+        - unknown
+
     RunMilestone:
       type: object
       description: >
@@ -4709,12 +4725,17 @@ components:
 
     ExecutionFailureFacts:
       type: object
-      description: The terminal execution outcome and invocation that failed within a workflow stage.
+      description: >
+        The terminal execution outcome and invocation that failed within a
+        workflow stage. cause is present exactly when outcome is failed,
+        copied from the recorded outcome, and absent for canceled and lost.
       additionalProperties: false
       required: [outcome, stage, invocation_id]
       properties:
         outcome:
           $ref: "#/components/schemas/ExecutionOutcomeStatus"
+        cause:
+          $ref: "#/components/schemas/FailureCause"
         stage:
           $ref: "#/components/schemas/StageName"
         invocation_id:
