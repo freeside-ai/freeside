@@ -13,7 +13,7 @@ enum EmptyStateGlyph {
 
     var symbolName: String {
         switch self {
-        case .inbox: "archivebox"
+        case .inbox: "tray"
         case .tasks: "checklist.checked"
         case .revoked: "lock.slash"
         }
