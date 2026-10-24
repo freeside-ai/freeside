@@ -257,7 +257,7 @@ func runOnboardCommand(
 				Next            string                        `json:"next"`
 			}{
 				Status: "installation_pending", Pending: pending,
-				InstallationURL: installURL, Next: installationPendingNext,
+				InstallationURL: installURL, Next: installationPendingNext(pending, cfg.RepositoryID),
 			})
 		}
 	}
@@ -364,12 +364,26 @@ func runOnboardCommand(
 
 // installationPendingNext tells the operator that the intent stays recorded
 // until approval promotes it, so every call until then takes the intent path
-// and must say -resume.
-const installationPendingNext = "Complete GitHub's installation at installation_url, " +
-	"then rerun this command with the same arguments plus -resume, leaving out " +
-	"-recover-installation and -replace-intent. " +
-	"Every call until the status is complete, including the -approve call, needs -resume; " +
-	"a call without it is refused, and -replace-intent opens a new intent with a new approval digest."
+// and must say -resume. It also explains pending.current_repository_ids:
+// this path makes no GitHub call, so the list is the trusted binding's as
+// recorded when the intent opened, and an operator who has just granted the
+// repository would otherwise read it as the grant not having landed.
+func installationPendingNext(pending publish.PendingEnvelopeRecord, repositoryID int64) string {
+	current := "pending.current_repository_ids is the trusted binding's repository list " +
+		"recorded when this intent opened, not GitHub's current grant, " +
+		fmt.Sprintf("so it still leaves out repository %d after you grant it", repositoryID)
+	if len(pending.CurrentRepositoryIDs) == 0 {
+		current = "pending.current_repository_ids is empty because no trusted binding held this installation " +
+			"when this intent opened, and it is not GitHub's current grant"
+	}
+	return "Complete GitHub's installation at installation_url with exactly the repositories in pending.expected_repository_ids selected, " +
+		fmt.Sprintf("which grants repository %d, ", repositoryID) +
+		"then rerun this command with the same arguments plus -resume, leaving out " +
+		"-recover-installation and -replace-intent. " +
+		current + "; only a -resume call observes the grant. " +
+		"Every call until the status is complete, including the -approve call, needs -resume; " +
+		"a call without it is refused, and -replace-intent opens a new intent with a new approval digest."
+}
 
 // pendingIntentGate decides whether a call may proceed against the
 // registration's recorded intent. A call without -resume never replaces an
