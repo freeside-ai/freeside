@@ -3882,6 +3882,7 @@ func TestProductionReviewObservationFailuresRetrySameInvocation(t *testing.T) {
 		}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
 			p := newProductionPublicationHarness(t, "")
 			faults := &faultReviewSource{ReviewSource: p.reviewer}
 			tc.configure(faults)
@@ -6504,6 +6505,7 @@ func TestProductionExportSurvivesUntilPublicationComposerReturns(t *testing.T) {
 func TestProductionVerificationAndHeadMismatchNeverReachExternalEffects(t *testing.T) {
 	t.Parallel()
 	t.Run("blocked reason must match checkpoint authority", func(t *testing.T) {
+		t.Parallel()
 		p := newProductionPublicationHarness(t, "")
 		p.room.fail = true
 		p.workflow = p.newEngine(t, productionCrashSeams{
@@ -6548,6 +6550,7 @@ func TestProductionVerificationAndHeadMismatchNeverReachExternalEffects(t *testi
 	})
 
 	t.Run("open blocked item survives recipe revocation", func(t *testing.T) {
+		t.Parallel()
 		p := newProductionPublicationHarness(t, "")
 		p.room.fail = true
 		p.workflow = p.newEngine(t, productionCrashSeams{
@@ -6587,6 +6590,7 @@ func TestProductionVerificationAndHeadMismatchNeverReachExternalEffects(t *testi
 	})
 
 	t.Run("definitive blocked fact must match reason", func(t *testing.T) {
+		t.Parallel()
 		p := newProductionPublicationHarness(t, "")
 		p.room.fail = true
 		p.workflow = p.newEngine(t, productionCrashSeams{
@@ -6629,6 +6633,7 @@ func TestProductionVerificationAndHeadMismatchNeverReachExternalEffects(t *testi
 	})
 
 	t.Run("resolved blocked item survives recipe revocation", func(t *testing.T) {
+		t.Parallel()
 		p := newProductionPublicationHarness(t, "")
 		p.room.fail = true
 		p.workflow = p.newEngine(t, productionCrashSeams{
@@ -6717,6 +6722,7 @@ func TestProductionVerificationAndHeadMismatchNeverReachExternalEffects(t *testi
 	})
 
 	t.Run("verification failure", func(t *testing.T) {
+		t.Parallel()
 		p := newProductionPublicationHarness(t, "")
 		p.room.fail = true
 		p.startAndRecordExport(t)
@@ -6782,6 +6788,7 @@ func TestProductionVerificationAndHeadMismatchNeverReachExternalEffects(t *testi
 		}
 	})
 	t.Run("revoked project-image recipe", func(t *testing.T) {
+		t.Parallel()
 		p := newProductionPublicationHarness(t, "")
 		p.startAndRecordExport(t)
 		verificationRuns := p.room.runs
@@ -6820,6 +6827,7 @@ func TestProductionVerificationAndHeadMismatchNeverReachExternalEffects(t *testi
 		}
 	})
 	t.Run("recipe revoked after checkpoint holds and resumes", func(t *testing.T) {
+		t.Parallel()
 		p := newProductionPublicationHarness(t, "")
 		p.startAndRecordExport(t)
 		p.workflow = p.newEngine(t, productionCrashSeams{
@@ -6906,6 +6914,7 @@ func TestProductionVerificationAndHeadMismatchNeverReachExternalEffects(t *testi
 		}
 	})
 	t.Run("target base advanced before publication", func(t *testing.T) {
+		t.Parallel()
 		// The audited tip is not on the fetched branch, so the re-entry the
 		// refusal seals cannot merge the head into it and stops there.
 		p := newProductionPublicationHarness(t, "")
@@ -6950,6 +6959,7 @@ func TestProductionVerificationAndHeadMismatchNeverReachExternalEffects(t *testi
 		}
 	})
 	t.Run("head mismatch", func(t *testing.T) {
+		t.Parallel()
 		p := newProductionPublicationHarness(t, strings.Repeat("f", 40))
 		record := p.startExecutionExport(t, strings.Repeat("f", 40))
 		if err := engine.RecordProductionExecutionExport(p.ctx, p.store, record, p.replay); err == nil ||
@@ -6961,6 +6971,7 @@ func TestProductionVerificationAndHeadMismatchNeverReachExternalEffects(t *testi
 		}
 	})
 	t.Run("replay policy mismatch", func(t *testing.T) {
+		t.Parallel()
 		p := newProductionPublicationHarness(t, "")
 		p.replay.ImportOptions.Policy.Allowlist = nil
 		record := p.startExecutionExport(t, p.replay.HeadSHA)
@@ -6985,6 +6996,7 @@ func TestProductionVerificationAndHeadMismatchNeverReachExternalEffects(t *testi
 		}
 	})
 	t.Run("replay commit date mismatch", func(t *testing.T) {
+		t.Parallel()
 		p := newProductionPublicationHarness(t, "")
 		p.replay.ImportOptions.CommitDate = p.replay.ImportOptions.CommitDate.Add(time.Minute)
 		record := p.startExecutionExport(t, p.replay.HeadSHA)

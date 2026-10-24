@@ -4,16 +4,8 @@ import (
 	"bytes"
 	"crypto/sha256"
 	"errors"
-	"fmt"
-	"go/ast"
-	"go/parser"
-	"go/token"
-	"io/fs"
 	"os"
 	"path/filepath"
-	"sort"
-	"strconv"
-	"strings"
 	"testing"
 	"time"
 
@@ -98,90 +90,4 @@ func TestOpenStoreWithTopicKey(t *testing.T) {
 			t.Fatal("open store loaded different topic key bytes")
 		}
 	})
-}
-
-func TestProductionStoreOpenSitesUseTopicKeyHelper(t *testing.T) {
-	var directOpens []string
-	var productionTestImports []string
-	daemonRoot := filepath.Clean(filepath.Join("..", ".."))
-	err := filepath.WalkDir(daemonRoot, func(path string, entry fs.DirEntry, walkErr error) error {
-		if walkErr != nil {
-			return walkErr
-		}
-		if entry.IsDir() || !strings.HasSuffix(path, ".go") || strings.HasSuffix(path, "_test.go") {
-			return nil
-		}
-		relativePath, err := filepath.Rel(daemonRoot, path)
-		if err != nil {
-			return err
-		}
-		fileSet := token.NewFileSet()
-		file, err := parser.ParseFile(fileSet, path, nil, 0)
-		if err != nil {
-			return fmt.Errorf("parse %s: %w", relativePath, err)
-		}
-		storeAliases := map[string]bool{}
-		for _, spec := range file.Imports {
-			importPath, err := strconv.Unquote(spec.Path.Value)
-			if err != nil {
-				return fmt.Errorf("parse import in %s: %w", relativePath, err)
-			}
-			if importPath == "github.com/freeside-ai/freeside/daemon/internal/store/storetest" {
-				productionTestImports = append(productionTestImports, filepath.ToSlash(relativePath))
-			}
-			if importPath != "github.com/freeside-ai/freeside/daemon/internal/store" {
-				continue
-			}
-			if spec.Name != nil && spec.Name.Name == "." {
-				directOpens = append(directOpens, filepath.ToSlash(relativePath)+": dot import")
-				continue
-			}
-			alias := "store"
-			if spec.Name != nil {
-				alias = spec.Name.Name
-			}
-			storeAliases[alias] = true
-		}
-		ast.Inspect(file, func(node ast.Node) bool {
-			call, ok := node.(*ast.CallExpr)
-			if !ok {
-				return true
-			}
-			selector, ok := call.Fun.(*ast.SelectorExpr)
-			if !ok || selector.Sel.Name != "Open" {
-				return true
-			}
-			pkg, ok := selector.X.(*ast.Ident)
-			if !ok || pkg.Obj != nil || !storeAliases[pkg.Name] {
-				return true
-			}
-			position := fileSet.Position(call.Pos())
-			directOpens = append(directOpens,
-				fmt.Sprintf("%s:%d", filepath.ToSlash(relativePath), position.Line))
-			return true
-		})
-		return nil
-	})
-	if err != nil {
-		t.Fatalf("scan production Go files: %v", err)
-	}
-	if len(productionTestImports) != 0 {
-		t.Fatalf("production files import test-only store fixtures: %v", productionTestImports)
-	}
-	sort.Strings(directOpens)
-	wantPrefixes := []string{
-		"cmd/freeside-signet-dev/main.go:",
-		// Shared test support needs a non-_test.go file, but production files
-		// cannot import it (checked above) and bypass topic-key setup.
-		"internal/store/storetest/storetest.go:",
-		"internal/topicstore/topicstore.go:",
-	}
-	if len(directOpens) != len(wantPrefixes) {
-		t.Fatalf("production store.Open sites = %v, want prefixes %v", directOpens, wantPrefixes)
-	}
-	for i := range wantPrefixes {
-		if !strings.HasPrefix(directOpens[i], wantPrefixes[i]) {
-			t.Fatalf("production store.Open sites = %v, want prefixes %v", directOpens, wantPrefixes)
-		}
-	}
 }

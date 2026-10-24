@@ -79,7 +79,7 @@ func verifyBlobs(handoffDir, scratch string, m export.Manifest, em export.Eviden
 			return nil, nil, err
 		}
 	}
-	repoSha256, evidenceSha256, err := auditHandoffLayout(handoffDir, repoNeeded, evidenceNeeded, emPresent, planPresent)
+	repoSha256, evidenceSha256, err := auditHandoffLayout(handoffDir, repoNeeded, evidenceNeeded, emPresent, planPresent, pol.dirBatch)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -177,14 +177,14 @@ func snapshotChannel(scratch, name string, sha256Dir *os.File, needed map[export
 // evidence/ are NOT permitted at the root: a stale or planted second-channel
 // entry is an orphan, so an absent evidence channel is exactly the pre-evidence
 // layout.
-func auditHandoffLayout(dir string, repoNeeded, evidenceNeeded map[export.Digest]int64, evidencePresent, planPresent bool) (repoSha256, evidenceSha256 *os.File, err error) {
+func auditHandoffLayout(dir string, repoNeeded, evidenceNeeded map[export.Digest]int64, evidencePresent, planPresent bool, batch int) (repoSha256, evidenceSha256 *os.File, err error) {
 	root, err := openDirectory(dir, ErrHandoffUnreadable)
 	if err != nil {
 		return nil, nil, fmt.Errorf("open %q: %w: %w", dir, ErrHandoffUnreadable, err)
 	}
 	defer func() { _ = root.Close() }()
 	blobsDir, evidenceDir := false, false
-	if err := scanOpenDirBatched(root, dir, ErrHandoffUnreadable, func(de os.DirEntry) error {
+	if err := scanOpenDirBatched(root, dir, batch, ErrHandoffUnreadable, func(de os.DirEntry) error {
 		switch {
 		case de.Name() == export.ManifestFilename && de.Type().IsRegular():
 			return nil
@@ -204,11 +204,11 @@ func auditHandoffLayout(dir string, repoNeeded, evidenceNeeded map[export.Digest
 	}); err != nil {
 		return nil, nil, err
 	}
-	repoSha256, err = auditBlobStore(root, dir, "blobs", blobsDir, repoNeeded)
+	repoSha256, err = auditBlobStore(root, dir, "blobs", blobsDir, repoNeeded, batch)
 	if err != nil {
 		return nil, nil, err
 	}
-	evidenceSha256, err = auditBlobStore(root, dir, export.EvidenceBlobsDirname, evidenceDir, evidenceNeeded)
+	evidenceSha256, err = auditBlobStore(root, dir, export.EvidenceBlobsDirname, evidenceDir, evidenceNeeded, batch)
 	if err != nil {
 		if repoSha256 != nil {
 			_ = repoSha256.Close()
@@ -226,7 +226,7 @@ func auditHandoffLayout(dir string, repoNeeded, evidenceNeeded map[export.Digest
 // missing needed digest is ErrMissingBlob, and an absent store with a non-empty
 // needed set is ErrMissingBlob. Both channels share this routine, so neither can
 // hold content the other's manifest references.
-func auditBlobStore(root *os.File, dir, storeName string, present bool, needed map[export.Digest]int64) (*os.File, error) {
+func auditBlobStore(root *os.File, dir, storeName string, present bool, needed map[export.Digest]int64, batch int) (*os.File, error) {
 	if !present {
 		if len(needed) > 0 {
 			return nil, fmt.Errorf("manifest references blobs but the handoff has no %s store: %w", storeName, ErrMissingBlob)
@@ -240,7 +240,7 @@ func auditBlobStore(root *os.File, dir, storeName string, present bool, needed m
 	}
 	defer func() { _ = store.Close() }()
 	sha256Present := false
-	if err := scanOpenDirBatched(store, storePath, ErrHandoffUnreadable, func(de os.DirEntry) error {
+	if err := scanOpenDirBatched(store, storePath, batch, ErrHandoffUnreadable, func(de os.DirEntry) error {
 		if de.Name() != "sha256" || !de.IsDir() {
 			return fmt.Errorf("unexpected %s-store entry %q: %w", storeName, de.Name(), ErrOrphanBlob)
 		}
@@ -263,7 +263,7 @@ func auditBlobStore(root *os.File, dir, storeName string, present bool, needed m
 		return nil, fmt.Errorf("open %q: %w: %w", sha256Path, ErrHandoffUnreadable, err)
 	}
 	found := make(map[string]struct{}, len(needed))
-	if err := scanOpenDirBatched(sha256, sha256Path, ErrHandoffUnreadable, func(bf os.DirEntry) error {
+	if err := scanOpenDirBatched(sha256, sha256Path, batch, ErrHandoffUnreadable, func(bf os.DirEntry) error {
 		addr, validName := contentaddr.FromHex(bf.Name())
 		digest := export.Digest(addr)
 		_, referenced := needed[digest]
@@ -285,22 +285,22 @@ func auditBlobStore(root *os.File, dir, storeName string, present bool, needed m
 	return sha256, nil
 }
 
-// dirBatch is how many entries scanOpenDirBatched pulls per syscall:
-// enough to keep enumeration cheap, small enough that a hostile
+// defaultDirBatch is how many entries scanOpenDirBatched pulls per
+// syscall: enough to keep enumeration cheap, small enough that a hostile
 // directory of millions of names never lands in memory at once.
-const dirBatch = 4096
+const defaultDirBatch = 4096
 
 // scanOpenDirBatched enumerates a directory descriptor the caller has
-// pinned in bounded batches, calling fn on each entry and stopping at
+// pinned in batches of batch entries, calling fn on each entry and stopping at
 // the first fn error. Unlike os.ReadDir it never reads the whole listing
 // into memory, so it fails closed on a hostile directory without an
 // unbounded allocation first; a directory that cannot be read wraps
 // unreadableErr. It does not close d, so an audit can use that same
 // inode as the parent for a descriptor-relative child open after
 // inspecting its entries.
-func scanOpenDirBatched(d *os.File, path string, unreadableErr error, fn func(os.DirEntry) error) error {
+func scanOpenDirBatched(d *os.File, path string, batch int, unreadableErr error, fn func(os.DirEntry) error) error {
 	for {
-		entries, err := d.ReadDir(dirBatch)
+		entries, err := d.ReadDir(batch)
 		for _, de := range entries {
 			if ferr := fn(de); ferr != nil {
 				return ferr

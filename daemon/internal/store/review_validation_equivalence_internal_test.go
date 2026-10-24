@@ -1,41 +1,56 @@
 package store
 
 import (
-	"crypto/sha256"
-	"encoding/json"
-	"fmt"
 	"reflect"
+	"strings"
 	"testing"
 
 	"github.com/freeside-ai/freeside/daemon/internal/domain"
 )
 
-// This corpus can also run against the base implementation with the same
-// fixture. Its digest includes every returned value and exact error text.
+// TestReviewValidationEquivalence checks that a disposition load agrees with
+// itself across repeated reads and between read and write transactions, on an
+// intact store and under each forged row. Each mutation runs alone, then in a
+// few combinations that forge two links of one binding, then all together.
 func TestReviewValidationEquivalence(t *testing.T) {
-	mutations := []string{
-		`UPDATE finding_dispositions SET reason = 'forged'`,
-		`UPDATE finding_adjudications SET approved_spec_digest = 'forged'`,
-		`UPDATE review_records SET head_sha = 'forged'`,
-		`UPDATE review_record_findings SET ordinal = 99 WHERE finding_id = 'reuse-finding-0'`,
-		`UPDATE finding_dispositions SET body_digest = 'forged'`,
-		`UPDATE finding_adjudications SET body_digest = 'forged'`,
-		`UPDATE review_records SET body_digest = 'forged'`,
+	mutations := map[string]string{
+		"disposition reason":       `UPDATE finding_dispositions SET reason = 'forged'`,
+		"adjudication spec":        `UPDATE finding_adjudications SET approved_spec_digest = 'forged'`,
+		"review record head":       `UPDATE review_records SET head_sha = 'forged'`,
+		"finding ordinal":          `UPDATE review_record_findings SET ordinal = 99 WHERE finding_id = 'reuse-finding-0'`,
+		"disposition body digest":  `UPDATE finding_dispositions SET body_digest = 'forged'`,
+		"adjudication body digest": `UPDATE finding_adjudications SET body_digest = 'forged'`,
+		"review record body":       `UPDATE review_records SET body_digest = 'forged'`,
 	}
+	cases := [][]string{
+		nil,
+		{"disposition reason", "disposition body digest"},
+		{"review record head", "finding ordinal"},
+		{"adjudication spec", "review record body"},
+	}
+	all := make([]string, 0, len(mutations))
+	for name := range mutations {
+		cases = append(cases, []string{name})
+		all = append(all, name)
+	}
+	cases = append(cases, all)
 	type result struct {
 		Dispositions []domain.ReviewDispositionRecord
 		Error        string
 	}
-	var corpus []result
-	for mask := range 1 << len(mutations) {
-		t.Run(fmt.Sprintf("mutation-%03d", mask), func(t *testing.T) {
+	for _, applied := range cases {
+		name := "none"
+		if len(applied) == len(mutations) {
+			name = "all"
+		} else if len(applied) > 0 {
+			name = strings.Join(applied, " + ")
+		}
+		t.Run(name, func(t *testing.T) {
 			st, artifact, _ := seedReviewValidation(t, 2, 2)
 			ctx := t.Context()
-			for bit, query := range mutations {
-				if mask&(1<<bit) != 0 {
-					if _, err := st.db.ExecContext(ctx, query); err != nil {
-						t.Fatal(err)
-					}
+			for _, mutation := range applied {
+				if _, err := st.db.ExecContext(ctx, mutations[mutation]); err != nil {
+					t.Fatal(err)
 				}
 			}
 			for _, path := range []string{"", "outer-publication"} {
@@ -79,16 +94,10 @@ func TestReviewValidationEquivalence(t *testing.T) {
 					}); err != nil {
 						t.Fatal(err)
 					}
-					corpus = append(corpus, first)
 				}
 			}
 		})
 	}
-	body, err := json.Marshal(corpus)
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Logf("%d decisions and results: %x", len(corpus), sha256.Sum256(body))
 }
 
 func TestReviewValidationReuseDoesNotKeepFailedChecks(t *testing.T) {

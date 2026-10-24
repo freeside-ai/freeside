@@ -3,8 +3,10 @@ package ward
 import (
 	"bytes"
 	"encoding/json"
+	"errors"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/freeside-ai/freeside/daemon/internal/contentaddr"
 	"github.com/freeside-ai/freeside/daemon/internal/domain"
@@ -123,6 +125,89 @@ func TestDecodeRetainedCodexReview(t *testing.T) {
 				}
 			} else if err == nil {
 				t.Fatal("corrupt retained evidence accepted")
+			}
+		})
+	}
+}
+
+// TestDecodeRetainedCodexReviewRequestFacts covers the journal a pre-0067
+// in-flight review leaves behind: the decoder recovers its request time only
+// for the exact candidate, and a request from before instruction binding still
+// reads. TestProductionReviewUpgradePreservesRequestTime runs the upgrade end
+// to end on an intact and a damaged journal.
+func TestDecodeRetainedCodexReviewRequestFacts(t *testing.T) {
+	t.Parallel()
+	for _, corruption := range []string{"none", "legacy", "run", "round", "base", "head", "time", "digest"} {
+		t.Run(corruption, func(t *testing.T) {
+			t.Parallel()
+			request := exec.ReviewRequest{
+				Admission: testReviewAdmission("run-golden"),
+				RunID:     "run-golden", Round: 1, Repo: "owner/repo", RepositoryID: 1, BaseRef: "main",
+				BaseSHA: strings.Repeat("a", 40), HeadSHA: strings.Repeat("b", 40), Workspace: "/workspace",
+				Verification: testReviewVerificationEvidence(), Instructions: testReviewInstructionBinding(), RequestedAt: codexReviewEpoch,
+			}
+			binding := domain.ReviewRequestRecord{
+				InvocationID: "inv-review", RunID: request.RunID, Round: request.Round,
+				BaseSHA: request.BaseSHA, HeadSHA: request.HeadSHA,
+			}
+			switch corruption {
+			case "run":
+				request.RunID = "other-run"
+			case "round":
+				request.Round++
+			case "base":
+				request.BaseSHA = "other-base"
+			case "head":
+				request.HeadSHA = "other-head"
+			case "time":
+				request.RequestedAt = time.Time{}
+			}
+			body, err := json.Marshal(request)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if corruption == "legacy" {
+				var fields map[string]json.RawMessage
+				if err := json.Unmarshal(body, &fields); err != nil {
+					t.Fatal(err)
+				}
+				delete(fields, "instructions")
+				if body, err = json.Marshal(fields); err != nil {
+					t.Fatal(err)
+				}
+			}
+			digest := contentaddr.Sum(body)
+			if corruption == "digest" {
+				digest = "wrong"
+			}
+			got, err := DecodeRetainedCodexReviewRequestFacts(binding, body, digest)
+			switch corruption {
+			case "none", "legacy":
+			case "time":
+				if err == nil {
+					t.Fatalf("journal without a request time decoded: %+v", got)
+				}
+				return
+			case "digest":
+				if !errors.Is(err, domain.ErrInvalidReviewCompletionEvidence) {
+					t.Fatalf("damaged journal = %v, want %v", err, domain.ErrInvalidReviewCompletionEvidence)
+				}
+				return
+			default:
+				if !errors.Is(err, domain.ErrParentKeyMismatch) {
+					t.Fatalf("journal for another candidate = %v, want %v", err, domain.ErrParentKeyMismatch)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatal(err)
+			}
+			if !got.RequestedAt.Equal(codexReviewEpoch) {
+				t.Fatalf("requested at = %s, want %s", got.RequestedAt, codexReviewEpoch)
+			}
+			got.RequestedAt = time.Time{}
+			if got != binding {
+				t.Fatalf("facts = %+v, want %+v", got, binding)
 			}
 		})
 	}

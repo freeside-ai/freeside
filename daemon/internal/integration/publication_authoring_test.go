@@ -451,6 +451,10 @@ func TestCLISubmissionPublishesDeclaredSourceIssue(t *testing.T) {
 	}
 }
 
+// The fallback does not depend on which screen refused the body, so one screen
+// failure and a provider error cover it. The screens themselves are unit-tested
+// in internal/publicationtext/screen_test.go and
+// internal/inference/publication_author_test.go.
 func TestPublicationAuthorScreenFailureKeepsIndependentClosure(t *testing.T) {
 	secret := "ghp_" + strings.Repeat("x", 36)
 	for _, tc := range []struct {
@@ -458,8 +462,6 @@ func TestPublicationAuthorScreenFailureKeepsIndependentClosure(t *testing.T) {
 		providerErr        error
 	}{
 		{"closing directive", "Closes #82", "publication author body: message_rules", nil},
-		{"reserved section", "## Verification\n\nAll passed.", "publication author body: candidate_body_size_or_reserved_section", nil},
-		{"spliced secret", "ghp_" + strings.Repeat("x", 18) + "**xx**" + strings.Repeat("x", 16), "publication author body: secret_detection", nil},
 		{"provider error", "", "author returned a fallback", errors.New(secret)},
 	} {
 		t.Run(tc.name, func(t *testing.T) {

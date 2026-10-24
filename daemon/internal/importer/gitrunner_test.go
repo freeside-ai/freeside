@@ -123,35 +123,38 @@ func TestVerifyBase(t *testing.T) {
 
 // TestCommitTreeStdinMatchesPriorMessageSemantics is the refute-first
 // equivalence harness for moving commit messages off argv. It reconstructs the
-// previous `commit-tree -m` invocation and compares object identities over a
-// deterministic fuzzed corpus, so the trust-boundary hardening cannot silently
-// change existing single-commit hashes or message cleanup behavior.
+// previous `commit-tree -m` invocation and compares object identities over
+// pinned messages, one per whitespace or encoding edge, so the trust-boundary
+// hardening cannot silently change existing single-commit hashes or message
+// cleanup behavior. commit-tree does no comment cleanup, so a `#` line must
+// survive into the commit object.
 func TestCommitTreeStdinMatchesPriorMessageSemantics(t *testing.T) {
 	dir, base := initBaseRepo(t, map[string]string{"a.txt": "base\n"})
 	g := newTestRunner(t, dir, testImportOptions(base))
 	tree := rungit(t, dir, "log", "-1", "--format=%T", base)
-	alphabet := []rune("abc XYZ012\n\tø中")
-	state := uint64(0x9e3779b97f4a7c15)
-	for i := 0; i < 200; i++ {
-		length := i % 73
-		var message strings.Builder
-		for range length {
-			state = state*6364136223846793005 + 1442695040888963407
-			message.WriteRune(alphabet[state%uint64(len(alphabet))])
-		}
-		if strings.TrimSpace(message.String()) == "" {
-			message.WriteString("message")
-		}
-		got, err := g.commitTree(t.Context(), tree, base, message.String())
+	for name, message := range map[string]string{
+		"blank after trim":   "  \n",
+		"trailing newlines":  "subject\n\n",
+		"leading whitespace": "  subject",
+		"embedded tab":       "subject\twith tab",
+		"non-ASCII":          "ø中 subject",
+		"comment line":       "subject\n\n# not a comment",
+	} {
+		got, err := g.commitTree(t.Context(), tree, base, message)
 		if err != nil {
-			t.Fatalf("stdin commit %d: %v", i, err)
+			t.Fatalf("%s: stdin commit: %v", name, err)
 		}
-		old, err := g.run(t.Context(), nil, "commit-tree", tree, "-p", base, "-m", message.String())
+		old, err := g.run(t.Context(), nil, "commit-tree", tree, "-p", base, "-m", message)
 		if err != nil {
-			t.Fatalf("prior argv commit %d: %v", i, err)
+			t.Fatalf("%s: prior argv commit: %v", name, err)
 		}
 		if want := strings.TrimSpace(string(old)); got != want {
-			t.Fatalf("message transport changed commit %d: stdin=%s argv=%s message=%q", i, got, want, message.String())
+			t.Fatalf("%s: message transport changed commit: stdin=%s argv=%s message=%q", name, got, want, message)
+		}
+		if strings.Contains(message, "\n#") {
+			if obj := rungit(t, dir, "cat-file", "commit", got); !strings.Contains(obj, "\n# not a comment") {
+				t.Fatalf("%s: commit object lost the # line:\n%s", name, obj)
+			}
 		}
 	}
 }

@@ -25,9 +25,17 @@ func (s *capturedReviewRequestSource) RequestReview(ctx context.Context, id doma
 	return s.ReviewSource.RequestReview(ctx, id, request)
 }
 
+// TestProductionReviewUpgradePreservesRequestTime upgrades an in-flight review
+// across migration 0067: an intact journal keeps its request time, and a damaged
+// one creates no request facts. TestDecodeRetainedCodexReviewRequestFacts in
+// internal/ward covers each field the decoder checks. Here a journal for another
+// run shows the upgrade checks it against the current request, not against
+// itself, and a wrong body digest shows it fails closed on a damaged journal.
 func TestProductionReviewUpgradePreservesRequestTime(t *testing.T) {
-	for _, corruption := range []string{"none", "legacy", "run", "round", "base", "head", "time", "digest"} {
+	t.Parallel()
+	for _, corruption := range []string{"none", "run", "digest"} {
 		t.Run(corruption, func(t *testing.T) {
+			t.Parallel()
 			// The database is rolled back below to a schema that predates the
 			// project-image environment, so its image is one such a database
 			// could hold: a record without one.
@@ -48,32 +56,12 @@ func TestProductionReviewUpgradePreservesRequestTime(t *testing.T) {
 				t.Fatal("review request was not captured")
 			}
 			retained := original
-			switch corruption {
-			case "run":
+			if corruption == "run" {
 				retained.RunID = "other-run"
-			case "round":
-				retained.Round++
-			case "base":
-				retained.BaseSHA = "other-base"
-			case "head":
-				retained.HeadSHA = "other-head"
-			case "time":
-				retained.RequestedAt = time.Time{}
 			}
 			body, err := json.Marshal(retained)
 			if err != nil {
 				t.Fatal(err)
-			}
-			if corruption == "legacy" {
-				var fields map[string]json.RawMessage
-				if err := json.Unmarshal(body, &fields); err != nil {
-					t.Fatal(err)
-				}
-				delete(fields, "instructions")
-				body, err = json.Marshal(fields)
-				if err != nil {
-					t.Fatal(err)
-				}
 			}
 			if err := p.store.WriteInternal(p.ctx, func(tx *store.InternalTx) error {
 				return tx.RecordCodexReviewRequest(p.ctx, string(id), body)
@@ -147,7 +135,7 @@ func TestProductionReviewUpgradePreservesRequestTime(t *testing.T) {
 				request, err = tx.GetReviewRequest(p.ctx, id)
 				return err
 			})
-			if corruption != "none" && corruption != "legacy" {
+			if corruption != "none" {
 				if reconcileErr == nil || !errors.Is(readErr, store.ErrNotFound) {
 					t.Fatalf("corrupt upgrade created request facts: reconcile=%v read=%v", reconcileErr, readErr)
 				}

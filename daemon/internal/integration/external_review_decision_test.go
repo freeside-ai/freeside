@@ -38,109 +38,121 @@ func (p *productionPublicationHarness) externalDisputeCommand(t *testing.T, item
 	}
 }
 
+// The crash point does not depend on the route, and a second decision changes
+// only the artifact's revision, so every route runs once on a first decision
+// and decline alone covers the second.
 func TestExternalReviewDecisionSurvivesRestart(t *testing.T) {
-	for _, secondDecision := range []bool{false, true} {
-		for _, route := range []domain.AdjudicationRoute{domain.RouteDecline, domain.RouteDefer, domain.RouteRemediate} {
-			t.Run(fmt.Sprintf("second=%t/%s", secondDecision, route), func(t *testing.T) {
-				p := newProductionPublicationHarness(t, "")
-				driver := p.configureAdjudicator(t)
-				_, findings := p.startAdjudicatedExternalReview(t, "this leaks the handle")
-				finding := findings[0]
-				p.scriptCleanReview(2, p.baseSHA, p.replay.HeadSHA)
-				if secondDecision {
-					// An accepted disputed route needs the same second decision
-					// as an unrated decline, without changing the finding fixture.
-					scriptAdjudication(t, driver, disputeVerdict(finding.ID))
-				} else {
-					p.judgments = nil
-					p.workflow = p.newEngine(t, productionCrashSeams{}, true)
-				}
-				if _, err := p.reconcileLanes(); err != nil {
-					t.Fatal(err)
-				}
-				end := p.externalReviewEnd(t)
-				if end.pending != 1 || len(end.reviewItems) != 1 || end.readyItem {
-					t.Fatalf("waiting cycle = %#v", end)
-				}
-				item := end.reviewItems[0]
-				if !item.Offers(domain.ActionAdjudicateFindings) || item.ReviewDispute == nil || len(item.ReviewDispute.Findings) != 1 {
-					t.Fatalf("decision surface = %#v", item)
-				}
-				// An undecided card survives a restart without an adjudicator.
-				p.restartDurableState(t)
+	t.Parallel()
+	for _, tc := range []struct {
+		secondDecision bool
+		route          domain.AdjudicationRoute
+	}{
+		{false, domain.RouteDecline},
+		{false, domain.RouteDefer},
+		{false, domain.RouteRemediate},
+		{true, domain.RouteDecline},
+	} {
+		secondDecision, route := tc.secondDecision, tc.route
+		t.Run(fmt.Sprintf("second=%t/%s", secondDecision, route), func(t *testing.T) {
+			t.Parallel()
+			p := newProductionPublicationHarness(t, "")
+			driver := p.configureAdjudicator(t)
+			_, findings := p.startAdjudicatedExternalReview(t, "this leaks the handle")
+			finding := findings[0]
+			p.scriptCleanReview(2, p.baseSHA, p.replay.HeadSHA)
+			if secondDecision {
+				// An accepted disputed route needs the same second decision
+				// as an unrated decline, without changing the finding fixture.
+				scriptAdjudication(t, driver, disputeVerdict(finding.ID))
+			} else {
 				p.judgments = nil
 				p.workflow = p.newEngine(t, productionCrashSeams{}, true)
-				if _, err := p.reconcileLanes(); err != nil {
-					t.Fatal(err)
+			}
+			if _, err := p.reconcileLanes(); err != nil {
+				t.Fatal(err)
+			}
+			end := p.externalReviewEnd(t)
+			if end.pending != 1 || len(end.reviewItems) != 1 || end.readyItem {
+				t.Fatalf("waiting cycle = %#v", end)
+			}
+			item := end.reviewItems[0]
+			if !item.Offers(domain.ActionAdjudicateFindings) || item.ReviewDispute == nil || len(item.ReviewDispute.Findings) != 1 {
+				t.Fatalf("decision surface = %#v", item)
+			}
+			// An undecided card survives a restart without an adjudicator.
+			p.restartDurableState(t)
+			p.judgments = nil
+			p.workflow = p.newEngine(t, productionCrashSeams{}, true)
+			if _, err := p.reconcileLanes(); err != nil {
+				t.Fatal(err)
+			}
+			if again := p.externalReviewEnd(t); again.pending != 1 || len(again.reviewItems) != 1 || again.reviewItems[0].ItemVersion != item.ItemVersion {
+				t.Fatalf("restarted waiting cycle = %#v", again)
+			}
+			command := p.externalDisputeCommand(t, item, signet.AlternativeChoice{FindingID: finding.ID, Route: route})
+			if _, err := p.attention.Submit(p.ctx, command); err != nil {
+				t.Fatal(err)
+			}
+			p.workflow = p.newEngine(t, productionCrashSeams{transitionHook: func(transition engine.DurableTransition, side engine.DurableTransitionSide) error {
+				if transition == engine.DurableTransitionFindingAdjudication && side == engine.DurableTransitionAfter {
+					return errors.New("crash after human adjudication")
 				}
-				if again := p.externalReviewEnd(t); again.pending != 1 || len(again.reviewItems) != 1 || again.reviewItems[0].ItemVersion != item.ItemVersion {
-					t.Fatalf("restarted waiting cycle = %#v", again)
-				}
-				command := p.externalDisputeCommand(t, item, signet.AlternativeChoice{FindingID: finding.ID, Route: route})
-				if _, err := p.attention.Submit(p.ctx, command); err != nil {
-					t.Fatal(err)
-				}
-				p.workflow = p.newEngine(t, productionCrashSeams{transitionHook: func(transition engine.DurableTransition, side engine.DurableTransitionSide) error {
-					if transition == engine.DurableTransitionFindingAdjudication && side == engine.DurableTransitionAfter {
-						return errors.New("crash after human adjudication")
-					}
-					return nil
-				}}, true)
-				if _, err := p.reconcileLanes(); err == nil {
-					t.Fatal("human artifact write did not interrupt")
-				}
-				p.restartDurableState(t)
-				p.workflow = p.newEngine(t, productionCrashSeams{}, true)
-				if _, err := p.attention.Submit(p.ctx, command); err != nil {
-					t.Fatalf("command replay: %v", err)
-				}
-				if _, err := p.reconcileLanes(); err != nil {
-					t.Fatal(err)
-				}
-				var artifact domain.FindingAdjudication
-				if err := p.store.Read(p.ctx, func(tx *store.ReadTx) error {
-					var err error
-					artifact, err = tx.GetFindingAdjudicationForRound(p.ctx, p.runID, 2)
-					return err
-				}); err != nil {
-					t.Fatal(err)
-				}
-				wantRevision := 1
-				if secondDecision {
-					wantRevision = 2
-				}
-				if artifact.Revision != wantRevision || artifact.Decision == nil || artifact.Entries[0].Route != route || artifact.Entries[0].Producer != domain.AdjudicationProducerHuman {
-					t.Fatalf("human artifact = %#v", artifact)
-				}
-				if route == domain.RouteRemediate {
-					_, input := p.remediateExternalCycle(t, 2, "production change\nfixed the handle\n")
-					assertExternalFindingsRemediated(t, input, findings)
-				}
-				wantDisposition := domain.ReviewDispositionDeclined
-				if route == domain.RouteDefer {
-					wantDisposition = domain.ReviewDispositionDeferred
-				}
-				if route == domain.RouteRemediate {
-					wantDisposition = domain.ReviewDispositionFixed
-				}
-				dispositions := p.externalDispositions(t)
-				if len(dispositions) != 1 || dispositions[0].Disposition != wantDisposition {
-					t.Fatalf("dispositions = %#v", dispositions)
-				}
-				if route != domain.RouteRemediate && (dispositions[0].AdjudicationDigest == nil || *dispositions[0].AdjudicationDigest != artifact.Digest) {
-					t.Fatal("disposition is not bound to the human artifact")
-				}
-				if route == domain.RouteDecline {
-					p.assertExternalReplyQueued(t, finding)
-				}
-				if ready := p.currentReadyItem(t); ready.Status != domain.StatusOpen || ready.PRHeadSHA != p.replay.HeadSHA {
-					t.Fatalf("ready item = %#v", ready)
-				}
-				if p.startExternalReview(t) {
-					t.Fatal("answered finding started another cycle")
-				}
-			})
-		}
+				return nil
+			}}, true)
+			if _, err := p.reconcileLanes(); err == nil {
+				t.Fatal("human artifact write did not interrupt")
+			}
+			p.restartDurableState(t)
+			p.workflow = p.newEngine(t, productionCrashSeams{}, true)
+			if _, err := p.attention.Submit(p.ctx, command); err != nil {
+				t.Fatalf("command replay: %v", err)
+			}
+			if _, err := p.reconcileLanes(); err != nil {
+				t.Fatal(err)
+			}
+			var artifact domain.FindingAdjudication
+			if err := p.store.Read(p.ctx, func(tx *store.ReadTx) error {
+				var err error
+				artifact, err = tx.GetFindingAdjudicationForRound(p.ctx, p.runID, 2)
+				return err
+			}); err != nil {
+				t.Fatal(err)
+			}
+			wantRevision := 1
+			if secondDecision {
+				wantRevision = 2
+			}
+			if artifact.Revision != wantRevision || artifact.Decision == nil || artifact.Entries[0].Route != route || artifact.Entries[0].Producer != domain.AdjudicationProducerHuman {
+				t.Fatalf("human artifact = %#v", artifact)
+			}
+			if route == domain.RouteRemediate {
+				_, input := p.remediateExternalCycle(t, 2, "production change\nfixed the handle\n")
+				assertExternalFindingsRemediated(t, input, findings)
+			}
+			wantDisposition := domain.ReviewDispositionDeclined
+			if route == domain.RouteDefer {
+				wantDisposition = domain.ReviewDispositionDeferred
+			}
+			if route == domain.RouteRemediate {
+				wantDisposition = domain.ReviewDispositionFixed
+			}
+			dispositions := p.externalDispositions(t)
+			if len(dispositions) != 1 || dispositions[0].Disposition != wantDisposition {
+				t.Fatalf("dispositions = %#v", dispositions)
+			}
+			if route != domain.RouteRemediate && (dispositions[0].AdjudicationDigest == nil || *dispositions[0].AdjudicationDigest != artifact.Digest) {
+				t.Fatal("disposition is not bound to the human artifact")
+			}
+			if route == domain.RouteDecline {
+				p.assertExternalReplyQueued(t, finding)
+			}
+			if ready := p.currentReadyItem(t); ready.Status != domain.StatusOpen || ready.PRHeadSHA != p.replay.HeadSHA {
+				t.Fatalf("ready item = %#v", ready)
+			}
+			if p.startExternalReview(t) {
+				t.Fatal("answered finding started another cycle")
+			}
+		})
 	}
 }
 

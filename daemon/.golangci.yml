@@ -14,8 +14,10 @@ linters:
   # "standard" = errcheck, govet, ineffassign, staticcheck, unused.
   default: standard
   enable:
+    - depguard # test-only store fixtures stay out of production files
     - errorlint # error-wrapping mistakes (%w vs %v, errors.Is/As misuse)
     - exhaustive # missing enum switch cases (matters once domain lands)
+    - forbidigo # production store opens go through the topic-key helper
     - gosec # security static checks for a credential-broker daemon
     - misspell # free, deterministic spelling fixes in comments/strings
     - nolintlint # keep //nolint directives specific and explained
@@ -25,6 +27,33 @@ linters:
       require-specific: true
     exhaustive:
       default-signifies-exhaustive: true
+    # A production store open has to load or create the topic key first
+    # (cmd/freesided/topic_key.go), so store.Open is forbidden outside the
+    # files listed under exclusions. analyze-types matches the
+    # package, not the identifier, so an alias or a local variable named
+    # store is judged by what it is.
+    forbidigo:
+      analyze-types: true
+      forbid:
+        - pattern: ^store\.Open$
+          pkg: ^github\.com/freeside-ai/freeside/daemon/internal/store$
+          msg: open a production store through openStoreWithTopicKey
+    depguard:
+      rules:
+        storetest:
+          files:
+            - "!$test"
+          deny:
+            - pkg: github.com/freeside-ai/freeside/daemon/internal/store/storetest
+              desc: storetest opens stores without a topic key; tests only
+  exclusions:
+    rules:
+      # The development signet, shared test support (which depguard keeps
+      # out of production files), and the topic store open a store directly,
+      # and so does the store package itself, where Open is unqualified.
+      - path: (^cmd/freeside-signet-dev/main\.go|^internal/store/storetest/storetest\.go|^internal/topicstore/topicstore\.go|^internal/store/[^/]+\.go|_test\.go)$
+        linters:
+          - forbidigo
 
 formatters:
   # Deterministic formatting as law removes an entire class of review

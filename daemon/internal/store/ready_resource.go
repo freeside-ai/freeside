@@ -132,6 +132,7 @@ func (tx *InternalTx) RecordReadyItemPRBinding(ctx context.Context, binding doma
 // the item and run records it claims to describe. Stored coordinates are data,
 // never authority to retarget a ready item.
 func (tx *ReadTx) GetReadyItemPRBinding(ctx context.Context, itemID domain.ItemID) (domain.ReadyItemPRBinding, error) {
+	tx.readyItemPRBindingReads++
 	ctx, err := publicationReadContext(ctx, "ready/"+string(itemID))
 	if err != nil {
 		return domain.ReadyItemPRBinding{}, err
