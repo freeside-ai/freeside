@@ -9,13 +9,16 @@ import (
 	"os"
 	"path/filepath"
 	"slices"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
 
+	"github.com/freeside-ai/freeside/daemon/internal/agentbaseline"
 	"github.com/freeside-ai/freeside/daemon/internal/daemonlock"
 	"github.com/freeside-ai/freeside/daemon/internal/domain"
 	"github.com/freeside-ai/freeside/daemon/internal/engine"
+	"github.com/freeside-ai/freeside/daemon/internal/execfixture"
 	"github.com/freeside-ai/freeside/daemon/internal/golden"
 	"github.com/freeside-ai/freeside/daemon/internal/inference"
 	"github.com/freeside-ai/freeside/daemon/internal/projectimage"
@@ -29,6 +32,7 @@ type fakePreflightEnvironment struct {
 	rig                  daemonlock.RigManifest
 	database             databaseInspection
 	imageErrors          map[string]error
+	imageVersions        map[string]string
 	imageCalls           map[string]int
 	topicError           error
 	seedError            error
@@ -119,7 +123,23 @@ func (e *fakePreflightEnvironment) InspectImage(
 		role = "exporter"
 	}
 	e.imageCalls[role]++
-	return imageInspection{Digest: imageDigestFromRef(ref), Error: e.imageErrors[role]}
+	version, ok := e.imageVersions[versionTool]
+	if !ok {
+		version = pinnedVersionLine(versionTool)
+	}
+	return imageInspection{Digest: imageDigestFromRef(ref), Version: version, Error: e.imageErrors[role]}
+}
+
+// pinnedVersionLine is the --version line a CLI built at the daemon's pin
+// prints, so a fixture that names no version passes the build comparison.
+func pinnedVersionLine(cli string) string {
+	switch cli {
+	case "claude":
+		return strings.TrimPrefix(agentbaseline.ClaudeCodeHarnessBuild, "claude-code ") + " (Claude Code)"
+	case "codex":
+		return agentbaseline.CodexHarnessBuild
+	}
+	return ""
 }
 
 func (e *fakePreflightEnvironment) InspectCodexCredential(
@@ -695,6 +715,18 @@ func TestPreflightFailureFixtures(t *testing.T) {
 				}
 			}
 		}, "review_instructions"},
+		{"implementer image whose CLI predates the pin", func(_ *[]string, env *fakePreflightEnvironment) {
+			env.imageVersions["claude"] = "2.1.220 (Claude Code)"
+		}, "implementer_image"},
+		{"reviewer image whose CLI predates the pin", func(_ *[]string, env *fakePreflightEnvironment) {
+			env.imageVersions["codex"] = "codex-cli 0.146.0"
+		}, "reviewer_image"},
+		{"implementer image whose CLI prints no version line", func(_ *[]string, env *fakePreflightEnvironment) {
+			env.imageVersions["claude"] = ""
+		}, "implementer_image"},
+		{"reviewer image whose CLI prints an unparseable version", func(_ *[]string, env *fakePreflightEnvironment) {
+			env.imageVersions["codex"] = "0.162.1"
+		}, "reviewer_image"},
 		{"unsupported reviewer CLI or model", func(_ *[]string, env *fakePreflightEnvironment) {
 			env.imageErrors["codex"] = errors.New("unsupported")
 		}, "reviewer_image"},
@@ -787,6 +819,23 @@ func TestPreflightFailureFixtures(t *testing.T) {
 					}
 				}
 			}
+			for cli, reported := range environment.imageVersions {
+				assertVersionMismatch(t, manifest, tt.check, reported, pinnedHarnessBuild(cli))
+				// Only the image whose CLI mismatched fails; the exporter carries
+				// no CLI and the other role's CLI still matches its pin.
+				other := "reviewer_image"
+				if tt.check == "reviewer_image" {
+					other = "implementer_image"
+				}
+				for _, name := range []string{"exporter_image", other} {
+					if status := checkStatus(manifest, name); status != compositionPassed {
+						t.Fatalf("%s status = %s, want passed", name, status)
+					}
+				}
+				if cli == "claude" && checkStatus(manifest, "shadow_reviewer_image") != "" {
+					assertVersionMismatch(t, manifest, "shadow_reviewer_image", reported, pinnedHarnessBuild(cli))
+				}
+			}
 			if tt.name == "unrecorded implementer image" && environment.imageCalls["claude"] != 0 {
 				t.Fatalf("unrecorded implementer image executed %d probes", environment.imageCalls["claude"])
 			}
@@ -801,6 +850,108 @@ func TestPreflightFailureFixtures(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+// assertVersionMismatch checks that the named image check failed with
+// evidence naming the version line the image reported and the pinned build.
+func assertVersionMismatch(t *testing.T, manifest compositionManifest, name, reported, pinned string) {
+	t.Helper()
+	shown := strconv.Quote(reported)
+	if reported == "" {
+		shown = "no version line"
+	}
+	for _, check := range manifest.Checks {
+		if check.Name != name {
+			continue
+		}
+		if check.Status != compositionFailed || !strings.Contains(check.Evidence, shown) || !strings.Contains(check.Evidence, pinned) {
+			t.Fatalf("%s = %s %q; want failed naming %s and %q", name, check.Status, check.Evidence, shown, pinned)
+		}
+		return
+	}
+	t.Fatalf("%s check missing", name)
+}
+
+// A Claude reviewer image is held to the Claude build, not the Codex one.
+func TestPreflightChecksAClaudeReviewerImageAgainstTheClaudeBuild(t *testing.T) {
+	t.Parallel()
+	args, environment := claudeReviewerPreflightFixture(t)
+	environment.imageVersions["claude"] = "2.1.220 (Claude Code)"
+	manifest, err := runSourcePreflight(t, args, environment)
+	if !errors.Is(err, errCompositionPreflight) {
+		t.Fatalf("preflight = %v, want composition refusal", err)
+	}
+	assertVersionMismatch(t, manifest, "reviewer_image", "2.1.220 (Claude Code)", agentbaseline.ClaudeCodeHarnessBuild)
+}
+
+// probeImageTools reads the version line from the probe's stdout alone. The
+// fake runtime runs the probe script on the host, so the script, the stream
+// split, and the line parsing are exercised as production runs them.
+func TestProbeImageToolsReturnsTheVersionLine(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	runtime := filepath.Join(dir, "container")
+	// Drop "run --rm --network none -- <ref>" and run the rest on the host.
+	execfixture.Write(t, runtime, []byte("#!/bin/sh\nPATH="+dir+"/bin:/usr/bin:/bin\nexport PATH\nshift 6\nexec \"$@\"\n"), 0o700)
+	if err := os.Mkdir(filepath.Join(dir, "bin"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	execfixture.Write(t, filepath.Join(dir, "bin", "codex"), []byte("#!/bin/sh\necho 'warning: no network' >&2\nprintf 'codex-cli 0.162.1\\r\\nsecond line\\n'\n"), 0o700)
+	execfixture.Write(t, filepath.Join(dir, "bin", "broken"), []byte("#!/bin/sh\necho 'codex-cli 0.162.1'\nexit 1\n"), 0o700)
+	ref := "ghcr.io/x/codex@sha256:" + strings.Repeat("1", 64)
+
+	version, err := probeImageTools(t.Context(), runtime, ref, []string{"sh", "codex"}, "codex")
+	if err != nil || version != "codex-cli 0.162.1" {
+		t.Fatalf("probe = %q, %v; want the first stdout line", version, err)
+	}
+	if version, err := probeImageTools(t.Context(), runtime, ref, []string{"sh"}, ""); err != nil || version != "" {
+		t.Fatalf("probe without a version tool = %q, %v; want empty", version, err)
+	}
+	if _, err := probeImageTools(t.Context(), runtime, ref, []string{"sh", "missing-tool"}, "codex"); err == nil {
+		t.Fatal("probe passed with a missing tool")
+	}
+	if _, err := probeImageTools(t.Context(), runtime, ref, []string{"sh", "broken"}, "broken"); err == nil {
+		t.Fatal("probe passed when --version exited nonzero")
+	}
+}
+
+func TestReportedHarnessBuild(t *testing.T) {
+	tests := []struct {
+		cli, line, want string
+		ok              bool
+	}{
+		{"claude", "2.1.282 (Claude Code)", "claude-code 2.1.282", true},
+		{"codex", "codex-cli 0.162.1", "codex-cli 0.162.1", true},
+		{"claude", "", "", false},
+		{"codex", "", "", false},
+		{"claude", "claude-code 2.1.282", "", false},
+		{"claude", " (Claude Code)", "", false},
+		{"claude", "2.1.282 beta (Claude Code)", "", false},
+		{"codex", "0.162.1", "", false},
+		{"codex", "codex-cli ", "", false},
+		{"codex", "codex-cli 0.162.1 extra", "", false},
+		{"codex", "2.1.282 (Claude Code)", "", false},
+		{"gemini", "gemini 1.0.0", "", false},
+	}
+	for _, tt := range tests {
+		got, ok := reportedHarnessBuild(tt.cli, tt.line)
+		if got != tt.want || ok != tt.ok {
+			t.Errorf("reportedHarnessBuild(%q, %q) = %q, %v; want %q, %v", tt.cli, tt.line, got, ok, tt.want, tt.ok)
+		}
+	}
+	// The pinned build follows the CLI, not the role: a Claude reviewer image
+	// is held to the Claude build.
+	for cli, want := range map[string]string{
+		"claude": agentbaseline.ClaudeCodeHarnessBuild,
+		"codex":  agentbaseline.CodexHarnessBuild,
+	} {
+		if got := pinnedHarnessBuild(cli); got != want {
+			t.Errorf("pinnedHarnessBuild(%q) = %q, want %q", cli, got, want)
+		}
+		if got, ok := reportedHarnessBuild(cli, pinnedVersionLine(cli)); !ok || got != want {
+			t.Errorf("the pinned %s version line parses to %q, %v; want %q", cli, got, ok, want)
+		}
 	}
 }
 
@@ -981,7 +1132,7 @@ func preflightFixture(t *testing.T) ([]string, *fakePreflightEnvironment) {
 	}
 	expiresAt := time.Date(2026, 8, 17, 14, 0, 0, 0, time.UTC)
 	environment := &fakePreflightEnvironment{
-		rig: rig.Manifest, imageErrors: map[string]error{}, imageCalls: map[string]int{}, codexExpiresAt: &expiresAt,
+		rig: rig.Manifest, imageErrors: map[string]error{}, imageVersions: map[string]string{}, imageCalls: map[string]int{}, codexExpiresAt: &expiresAt,
 		database: databaseInspection{
 			SchemaVersion: 81, ExpectedSchemaVersion: 81,
 			ProfileDigest: reviewDigest, ProfileRepo: "owner/repo", ProfileRepositoryID: 42,

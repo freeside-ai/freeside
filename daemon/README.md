@@ -1961,9 +1961,12 @@ historical run but cannot create work.
 With The Deputy). Its deterministic JSON
 manifest binds the exact database schema, daemon build, listener, repository
 and base, active profile, review configuration, source identities, seed,
-image digests and tool capabilities, credential readiness, and build-egress
-posture. Every check reports `passed`, `failed`, or `not_run` with evidence;
-a failure also carries remediation and returns nonzero. The deputy accepts
+image digests and tool capabilities, each agent image's CLI version against
+the harness build the daemon pins for that CLI, credential readiness, and
+build-egress posture. An image whose CLI reports another version fails its
+role's image check with both versions named. Every check reports `passed`,
+`failed`, or `not_run` with evidence; a failure also carries remediation and
+returns nonzero. The deputy accepts
 no new work after a failed composition and keeps a passing, secret-free
 manifest by content digest under `<state-root>/production-evidence/composition/`.
 Build-egress
