@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # run-convergence.sh — the §5.14 real-daemon convergence pass (issue #72).
 #
-# Usage: run-convergence.sh [--all-tests]
+# Usage: run-convergence.sh [--all-tests] [--skip-build]
 #
 # Builds the freeside-signet-dev harness from daemon/, launches it on
 # loopback with a temporary state directory, reads the readiness line
@@ -18,13 +18,21 @@
 # regressions) and the convergence pass; the build is the same either way,
 # since `--filter` selects at run time (#2248).
 #
+# --skip-build passes `--skip-build` to `swift test`, so it runs the test
+# bundle already in app/.build instead of building one. CI sets it only on
+# an exact hit of the Swift build cache, whose key hashes all of app/, so
+# the bundle was built from this tree (#2291). The harness is always built
+# here.
+#
 # Requires: Go (daemon toolchain), Swift (app toolchain), macOS.
 set -euo pipefail
 
 all_tests=""
+skip_build=""
 for argument in "$@"; do
   case "$argument" in
     --all-tests) all_tests=1 ;;
+    --skip-build) skip_build=1 ;;
     *)
       echo "run-convergence: unknown argument: $argument" >&2
       exit 2
@@ -100,17 +108,22 @@ echo "harness ready: api=$api_url control=$control_url" >&2
 # still exits 0, so demand positive evidence that the suite ran and
 # passed before this command counts as a convergence pass. The same
 # evidence is demanded of an --all-tests run, where the suite is one of
-# many. The empty-array expansion guard is for the macOS Bash 3.2 `set -u`.
-filter=(--filter FreesideConvergenceTests)
-if [[ -n "$all_tests" ]]; then
-  filter=()
+# many. The command line goes to stderr so a CI log shows whether the
+# build was skipped.
+swift_args=(--only-use-versions-from-resolved-file)
+if [[ -z "$all_tests" ]]; then
+  swift_args+=(--filter FreesideConvergenceTests)
 fi
+if [[ -n "$skip_build" ]]; then
+  swift_args+=(--skip-build)
+fi
+echo "running: swift test ${swift_args[*]}" >&2
 test_log="$workdir/swift-test.log"
 (
   cd "$repo_root/app" &&
     FREESIDE_CONVERGENCE_URL="$api_url" \
     FREESIDE_CONVERGENCE_CONTROL_URL="$control_url" \
-    swift test --only-use-versions-from-resolved-file ${filter[@]+"${filter[@]}"}
+    swift test "${swift_args[@]}"
 ) 2>&1 | tee "$test_log"
 if ! grep -q "Suite RealDaemonConvergenceTests passed" "$test_log"; then
   echo "run-convergence: the convergence suite did not run to a pass (zero tests matched, or the suite skipped)" >&2

@@ -69,6 +69,11 @@
 #                          convergence pass (run-convergence.sh --all-tests),
 #                          not only FreesideConvergenceTests; CI sets it when
 #                          the app component is selected
+#   CONVERGENCE_SKIP_BUILD non-empty runs `swift test --skip-build` against
+#                          the test bundle already in app/.build
+#                          (run-convergence.sh --skip-build); CI sets it
+#                          only on an exact Swift build cache hit for a run
+#                          without the app component
 #
 # The daemon's opt-in live suites are skipped by `go test` unless their
 # environment is set (FREESIDE_PUBLISH_LIVE_TEST, FREESIDE_WARD_LIVE_TEST,
@@ -404,7 +409,7 @@ scripts_trackercollect() {
 # --- convergence -----------------------------------------------------------
 
 convergence_run() {
-  in_dir "$ROOT" bash scripts/run-convergence.sh ${CONVERGENCE_ALL_TESTS:+--all-tests}
+  in_dir "$ROOT" bash scripts/run-convergence.sh ${CONVERGENCE_ALL_TESTS:+--all-tests} ${CONVERGENCE_SKIP_BUILD:+--skip-build}
 }
 
 # --- docs ------------------------------------------------------------------
