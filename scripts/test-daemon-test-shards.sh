@@ -343,9 +343,31 @@ class Coverage(unittest.TestCase):
                         convergence.index('- name: Run the convergence pass'))
         app = (root / '.github/workflows/app-ci.yml').read_text()
         app_jobs = dict(re.findall(r'^  ([a-z-]+):\n(.*?)(?=^  [a-z-]+:|\Z)', app, re.M | re.S))
-        self.assertEqual({name for name, body in app_jobs.items() if 'runs-on: macos' in body}, {'apps'})
+        self.assertEqual({name for name, body in app_jobs.items() if 'runs-on: macos' in body},
+                         {'apps', 'swift-build-cache'})
         self.assertIn("    if: github.event_name != 'push'\n", app_jobs['apps'])
         self.assertNotIn('swift test', app_jobs['apps'])
+        # The Swift build cache's writer: push-only, a lookup on the same
+        # path and key the convergence job restores, and a build and save
+        # only when the entry is absent. The two key steps must match, or
+        # writer and reader never share an entry.
+        writer = app_jobs['swift-build-cache']
+        self.assertIn("    if: github.event_name == 'push'\n", writer)
+        lookup = re.search(r'^      - name: Look up the Swift build\n(.*?)(?=^      (?:- |#))',
+                           writer, re.M | re.S).group(1)
+        self.assertIn('        id: swift-build\n        uses: actions/cache/restore@v4\n', lookup)
+        self.assertIn(swift_build_cache + '          lookup-only: true\n', lookup)
+        self.assertNotIn('restore-keys', lookup)
+        self.assertIn("        if: steps.swift-build.outputs.cache-hit != 'true'\n"
+                      "        working-directory: app\n"
+                      "        run: swift build --only-use-versions-from-resolved-file --build-tests\n", writer)
+        self.assertIn("        if: steps.swift-build.outputs.cache-hit != 'true'\n"
+                      "        uses: actions/cache/save@v4\n        with:\n          path: app/.build\n"
+                      "          key: ${{ steps.swift-build.outputs.cache-primary-key }}\n", writer)
+        key_steps = [re.search(r'^      - name: Resolve the Swift build key\n(.*?)(?=^      (?:- |#))',
+                               job, re.M | re.S).group(0) for job in (convergence, writer)]
+        self.assertEqual(key_steps[0], key_steps[1])
+        self.assertIn('        id: swift-key\n', key_steps[0])
         # The SwiftPM mirror: generate writes it on push, convergence only
         # restores it, and both name the same workspace-relative path and
         # key prefix, or the entries would not share a cache version.
