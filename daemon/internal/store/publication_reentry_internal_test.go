@@ -620,15 +620,15 @@ func TestReentrySuccessorTarget(t *testing.T) {
 	}
 }
 
-// TestReentryChainReadsEachAncestorOnce re-enters the same pull request many
-// times over. Each level's binding is proved by its predecessor's, so a gate
-// that authenticated the predecessor twice per level would double the cost of
-// a read with every re-entry and this depth would not finish.
+// TestReentryChainReadsEachAncestorOnce re-enters the same pull request
+// several times over. Each level's binding is proved by its predecessor's, so a
+// gate that authenticated the predecessor twice per level would double the cost
+// of a read with every re-entry. The read counter catches that at any depth.
 func TestReentryChainReadsEachAncestorOnce(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
 	f := seedReentry(t, domain.ReadinessInvalidationBaseAdvanced, reentryOptions{})
-	const depth = 24
+	const depth = 6
 	authority, item, binding := f.authority, f.item, f.binding
 	for level := 1; level <= depth; level++ {
 		if err := f.record(t, authority); err != nil {
@@ -659,8 +659,20 @@ func TestReentryChainReadsEachAncestorOnce(t *testing.T) {
 		if len(chain) != depth {
 			t.Fatalf("chain length = %d, want %d", len(chain), depth)
 		}
-		_, err = tx.GetReadyItemPRBinding(ctx, item.ID)
-		return err
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	// A fresh read, so the count covers only this binding's proof: the deepest
+	// item plus one read per ancestor down to the published binding.
+	if err := f.st.Read(ctx, func(tx *ReadTx) error {
+		if _, err := tx.GetReadyItemPRBinding(ctx, item.ID); err != nil {
+			return err
+		}
+		if got, limit := tx.readyItemPRBindingReads, depth+1; got > limit {
+			t.Fatalf("binding reads = %d, want at most %d", got, limit)
+		}
+		return nil
 	}); err != nil {
 		t.Fatal(err)
 	}

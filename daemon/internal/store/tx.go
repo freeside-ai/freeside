@@ -35,6 +35,9 @@ type ReadTx struct {
 	// Review validation also reuses checks within one read-only load in a
 	// write transaction, but never between calls that could straddle a write.
 	reviewValidation reviewValidationState
+	// readyItemPRBindingReads counts GetReadyItemPRBinding calls so a test
+	// can prove a re-entry chain authenticates each ancestor once.
+	readyItemPRBindingReads int
 	// approvedRecipes is the store's boundary policy set (see
 	// Options.ApprovedRecipes), carried on every transaction so a Get can
 	// re-derive an evidence artifact's publish_eligibility instead of trusting
