@@ -31,3 +31,6 @@ c6a298611f7463e5633da56aa4cb9d8617cb4b2f
 
 # Move the model code into a FreesideModel target (#2171)
 52381596ac250861d7209ecce1cc21fc88d09df4
+
+# Move the loopback forge and local-git transport out of test code (#1937)
+c5e65942551bb0ec863b0c882bc8904036ecccb5
