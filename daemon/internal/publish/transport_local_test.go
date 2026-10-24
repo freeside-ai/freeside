@@ -736,13 +736,65 @@ func TestFetchBaseRefusesTokenWithoutRepositoryID(t *testing.T) {
 	}
 }
 
+// TestReadRepoIDBindingRefusesMalformedStamps covers the stamp format:
+// only a positive canonical decimal, optionally newline-terminated, is a
+// binding. No refusal may echo the file's bytes: the checkout is a
+// directory later pipeline stages write into, so rejected content is not
+// safe error material.
+func TestReadRepoIDBindingRefusesMalformedStamps(t *testing.T) {
+	t.Parallel()
+	const canary = "credential-canary"
+	for name, stamp := range map[string]string{
+		"empty":          "",
+		"not a decimal":  canary + "\n",
+		"nul byte":       "\x00" + canary + "\n",
+		"zero":           "0\n",
+		"negative":       "-8675309\n",
+		"plus sign":      "+8675309\n",
+		"leading zero":   "08675309\n",
+		"trailing space": "8675309 \n",
+		"double newline": "8675309\n\n",
+		"trailing junk":  "8675309" + canary + "\n",
+		"oversized":      strings.Repeat("8675309", 12) + "\n",
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			dir := writeRepoIDStamp(t, stamp)
+			_, err := readRepoIDBinding(dir)
+			if !errors.Is(err, ErrGitTransport) {
+				t.Fatalf("readRepoIDBinding(%q) = %v, want %v", stamp, err, ErrGitTransport)
+			}
+			if strings.Contains(err.Error(), canary) {
+				t.Errorf("refusal echoes the rejected binding content: %v", err)
+			}
+		})
+	}
+	for _, stamp := range []string{"8675309\n", "8675309"} {
+		if id, err := readRepoIDBinding(writeRepoIDStamp(t, stamp)); err != nil || id != 8675309 {
+			t.Errorf("readRepoIDBinding(%q) = %d, %v, want 8675309", stamp, id, err)
+		}
+	}
+}
+
+func writeRepoIDStamp(t *testing.T, stamp string) string {
+	t.Helper()
+	dir := t.TempDir()
+	path := filepath.Join(dir, filepath.FromSlash(transportRepoIDPath))
+	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, []byte(stamp), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	return dir
+}
+
 // TestPushHeadRefusesBrokenRepositoryIDBinding drives the stamp-
-// integrity re-gate across the rejection classes: an absent binding (a
-// checkout materialized before the stamp existed — staleness must not
-// bypass the tightening), non-canonical or oversized content, and a
-// well-formed stamp naming a different repository. No refusal may echo
-// the file's bytes: the checkout is a directory later pipeline stages
-// write into, so rejected content is not safe error material.
+// integrity re-gate end to end: an absent binding (a checkout
+// materialized before the stamp existed — staleness must not bypass the
+// tightening), one malformed stamp that also proves PushHead does not
+// echo it, and a well-formed stamp naming a different repository.
+// TestReadRepoIDBindingRefusesMalformedStamps covers the other formats.
 func TestPushHeadRefusesBrokenRepositoryIDBinding(t *testing.T) {
 	t.Parallel()
 	const canary = "credential-canary"
@@ -752,17 +804,7 @@ func TestPushHeadRefusesBrokenRepositoryIDBinding(t *testing.T) {
 		stamp  string
 	}{
 		{name: "absent", remove: true},
-		{name: "empty", stamp: ""},
 		{name: "not a decimal", stamp: canary + "\n"},
-		{name: "nul byte", stamp: "\x00" + canary + "\n"},
-		{name: "zero", stamp: "0\n"},
-		{name: "negative", stamp: "-8675309\n"},
-		{name: "plus sign", stamp: "+8675309\n"},
-		{name: "leading zero", stamp: "08675309\n"},
-		{name: "trailing space", stamp: "8675309 \n"},
-		{name: "double newline", stamp: "8675309\n\n"},
-		{name: "trailing junk", stamp: "8675309" + canary + "\n"},
-		{name: "oversized", stamp: strings.Repeat("8675309", 12) + "\n"},
 		{name: "different repository", stamp: "424242\n"},
 	}
 	for _, tc := range cases {
