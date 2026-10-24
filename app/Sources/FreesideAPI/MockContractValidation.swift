@@ -650,6 +650,9 @@ enum MockContractValidation {
             if failure.invocation_id.isEmpty {
                 return "empty execution_failure invocation_id"
             }
+            if (failure.outcome == .failed) != (failure.cause != nil) {
+                return "execution_failure cause disagrees with outcome"
+            }
             guard case .run(let subject) = item.subject, subject.run_id != nil else {
                 return "execution_failure facts on a non-run subject"
             }

@@ -358,9 +358,10 @@ package enum AttentionDisplay {
             guard let failure = item.execution_failure?.value1 else { return [] }
             return [
                 .init("Outcome", label(failure.outcome)),
+                failure.cause.map { .init("Cause", label($0)) },
                 .init("Stage", label(failure.stage)),
                 .init("Invocation", failure.invocation_id, monospaced: true),
-            ]
+            ].compactMap { $0 }
         case .review_diminishing_returns:
             return [
                 item.billable_cost_so_far.map { .init("Cost so Far", costSoFar($0.value1)) },
@@ -870,6 +871,19 @@ package enum AttentionDisplay {
         case .canceled: return "Canceled"
         case .lost: return "Lost"
         case .blocked: return "Blocked"
+        }
+    }
+
+    static func label(_ cause: Components.Schemas.FailureCause) -> String {
+        switch cause {
+        case .quota: return "Quota exhausted"
+        case .credential_expired: return "Credential expired"
+        case .credential_revoked: return "Credential revoked"
+        case .service_capacity: return "Service at capacity"
+        case .provider_unavailable: return "Provider unavailable"
+        case .invalid_configuration: return "Invalid configuration"
+        case .contract_contradiction: return "Contract contradiction"
+        case .unknown: return "Unknown"
         }
     }
 
