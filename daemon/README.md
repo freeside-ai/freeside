@@ -773,10 +773,12 @@ the authority; this section says which command to reach for.
   `representative` fixture (`--no-seed` starts empty), and launches the app
   with `-FreesideReadinessDir <root>/daemon`. It prints `root=` and `api_url=`
   lines on stdout for a calling script. `--daemon-only` skips the app, for
-  scripts and non-Mac hosts. Stopping it (Ctrl-C, or the app or daemon
-  exiting) removes the root. A SIGKILL to the script skips that cleanup and
-  can leave the daemon and app running; stop them before you delete the
-  root by hand.
+  scripts and non-Mac hosts. `--scenario NAME` runs a scripted task on the
+  production pipeline instead of seeding the fixture
+  ([Run A Scenario](#run-a-scenario)). Stopping it (Ctrl-C, or the app or
+  daemon exiting) removes the root. A SIGKILL to the script skips that
+  cleanup and can leave the daemon and app running; stop them before you
+  delete the root by hand.
 - **Never run `app/scripts/install-mac-app.sh` from an agent or script.**
   Both of its tiers are the operator's: omitting the tier installs `prod`,
   and the `dev` install is the operator's own too. Its `--prod` flag lets a
@@ -821,6 +823,71 @@ path: the attachment blobs (`<db>.blobs/`), the ntfy device-topic key
 (`<db>.backup-encryption.key`). The daemon's runtime control files are
 under [Control Socket and Pairing Codes](#control-socket-and-pairing-codes).
 
+### Run A Scenario
+
+`-driver scenario -scenario NAME` plays one scripted task on the production
+engine composition, so you can watch the whole workflow without a model, a
+container, or GitHub (#1937). `freesided -list-scenarios` prints each
+scenario's name and description. The one scenario today is `clean`: one
+task runs specification, approval, implementation, verification, review,
+and publication with no findings.
+
+The dev instance is the quickest way in:
+
+```sh
+bash scripts/dev-instance.sh --scenario clean
+```
+
+It starts the daemon with the scenario driver instead of the fixture,
+submits the scenario's task with `freesided submit` once the daemon is
+ready, prints `task=<task-id>` after the `root=` and `api_url=` lines, and
+attaches the app. Approve the specification in the app, then follow the
+run with `freesided inspect task -db <root>/daemon/freeside.db -task
+<task-id>` ([Read A Task's Record](#read-a-tasks-record)). A clean run ends
+with the implementation run's `terminal_recorded` milestone at `completed`,
+a `ready_clean` verification, and pull request #101 on the in-process
+forge. The task's `ready_for_final_review` item stays open: the scenario
+never merges, so there is no merge to observe.
+
+What runs is the composition the Claude driver uses: admission and its
+derivation, delivery validation, specification, task cancellation,
+production publication, and the durable scheduler. It runs unattended,
+because production publication holds every other mode's work before it
+publishes. Fakes stand in for everything that would leave the machine:
+
+- **Specifier and implementer:** the fake stage driver. The implementer's
+  delivery is the scenario's files, exported, imported over the base, and
+  recorded the way the ward pipeline records an execution export.
+- **Reviewer:** the fake review source, which completes with no findings
+  for the head it was asked about.
+- **Verification:** the project image's recipe, `/usr/bin/true`, run as a
+  host process.
+- **GitHub:** the loopback forge and local-git transport in
+  `internal/exec/fake/forge`, which the integration tests also use. The
+  forge listens on `127.0.0.1:0` and the scenario's repository lives under
+  `<db dir>/scenario/`, so parallel instances never collide. Two runs of a
+  scenario pass the same states and publish pull request #101 over the
+  same base commit; their heads differ only in the run id the commit
+  message names.
+
+Startup seeds the auth identity, project image, backend conformance, and
+trust profile the gates check, and writes the task's submit inputs beside
+the repository. A restart on the same root finds them in place. The forge
+keeps its refs and pull requests in memory, though, so a restart is
+supported only before approval or after the run publishes; one in between
+loses the forge's state.
+
+> **Caveat: the backend's conformance claim is scripted.** The scenario
+> records the fake backend as conforming to the fresh-VM backend's full
+> capability ceiling, a containment nothing in the process provides. Only
+> the ephemeral guard keeps that claim out of a `dev` or `prod` store:
+> `-driver scenario` refuses every `-environment` but `ephemeral` before it
+> opens the database. Nothing else protects those stores from it.
+
+`-scenario` without `-driver scenario`, `-driver scenario` without
+`-scenario`, and an unknown name are usage errors. The scenario driver also
+refuses `-seed-fixture` and another driver beside it.
+
 ## Operational Commands
 
 `-environment` selects `prod`, `dev`, or `ephemeral`. Without the flag, the
@@ -863,7 +930,9 @@ simulating work. Its inbox explains that agent execution is not configured.
 Select `-driver claude` with the required production configuration for real
 agents. Select `-driver fake` only for an intentional demo or test; add
 `-seed-walking-skeleton` if that demo should start with sample work. Seeding
-without an explicit fake driver is rejected.
+without an explicit fake driver is rejected. `-driver scenario`, `ephemeral`
+only, plays a scripted task on the production composition
+([Run A Scenario](#run-a-scenario)).
 
 `-seed-fixture representative` fills an empty `ephemeral` store with
 development data, so the app has something to show: two projects, runs in
