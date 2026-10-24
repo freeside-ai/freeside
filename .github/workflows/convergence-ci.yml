@@ -17,7 +17,8 @@ name: convergence CI
 # is the same either way. The job runs only through pull-request.yml: a
 # push to main carries a tree its PR tested under the up-to-date rule,
 # and the Go build cache it restores is saved by daemon-ci.yml's
-# `macos-main` job.
+# `macos-main` job and the SwiftPM mirror by app-ci.yml's `generate`
+# job.
 
 on:
   workflow_call:
@@ -107,18 +108,24 @@ jobs:
           restore-keys: |
             daemon-build-v2-${{ runner.os }}-${{ runner.arch }}-${{ steps.go.outputs.go-version }}-rest-${{ hashFiles('daemon/go.sum') }}-
             go-build-${{ runner.os }}-${{ github.job }}-${{ hashFiles('daemon/go.sum') }}-
-      - name: Cache SwiftPM dependencies
-        uses: actions/cache@v4
+      - name: Restore the SwiftPM mirror
+        uses: actions/cache/restore@v4
         with:
-          # SwiftPM's shared dependency cache: the bare mirrors it clones
-          # the pinned checkouts from. macOS location; the Linux one is
-          # ~/.cache/org.swift.swiftpm (see app-ci.yml). Not app/.build:
+          # The bare git mirrors SwiftPM clones the pinned checkouts from,
+          # saved by app-ci.yml's `generate` job on a push to main, which
+          # carries the rationale for the shared path and key. Restore-only:
+          # a save here would be scoped to this PR. Not app/.build:
           # caching compiled output could let a stale artifact register
           # as a pass, while a mirror cannot (the pin still decides what
           # is checked out and everything is still compiled here).
-          path: ~/Library/Caches/org.swift.swiftpm
-          key: swiftpm-${{ runner.os }}-${{ github.job }}-${{ hashFiles('app/Package.resolved') }}
-          restore-keys: swiftpm-${{ runner.os }}-${{ github.job }}-
+          path: .swiftpm-mirror
+          key: swiftpm-mirror-v1-${{ hashFiles('app/Package.resolved') }}
+          restore-keys: swiftpm-mirror-v1-
+      - name: Link the SwiftPM mirror into SwiftPM's cache
+        run: |
+          mkdir -p .swiftpm-mirror ~/Library/Caches/org.swift.swiftpm
+          rm -rf ~/Library/Caches/org.swift.swiftpm/repositories
+          ln -s "$PWD/.swiftpm-mirror" ~/Library/Caches/org.swift.swiftpm/repositories
       - name: Run the convergence pass (scripts/check.sh)
         env:
           CONVERGENCE_ALL_TESTS: ${{ inputs.app_tests && '1' || '' }}
