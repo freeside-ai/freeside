@@ -12,7 +12,8 @@ on:
   # from the changed paths and reports the required check. The macOS
   # Swift tests and the swift-format gate run in convergence-ci.yml's one
   # macOS job, which the caller gives `app_tests` whenever it selects this
-  # component (#2248); only the Linux jobs run here on a push to main.
+  # component (#2248); only the Linux jobs run here on a push to main,
+  # where `generate` saves the SwiftPM mirror that macOS job restores.
   workflow_call:
 
 permissions:
@@ -30,14 +31,37 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - name: Cache SwiftPM dependencies
-        uses: actions/cache@v4
+      - name: Restore the SwiftPM mirror
+        id: swiftpm-mirror
+        uses: actions/cache/restore@v4
         with:
-          path: ~/.cache/org.swift.swiftpm
-          key: swiftpm-${{ runner.os }}-${{ github.job }}-${{ hashFiles('app/Package.resolved') }}
-          restore-keys: swiftpm-${{ runner.os }}-${{ github.job }}-
+          # The bare git mirrors SwiftPM clones checkouts from, shared with
+          # convergence-ci.yml's macOS job: bare clones are the same on
+          # every platform, so the key names no OS, image, or toolchain.
+          # Workspace-relative on both sides, because actions/cache
+          # extracts the archive relative to the workspace and hashes the
+          # literal path into the entry's version. This job is the writer
+          # because it runs on every push to main this workflow's paths
+          # select, which includes every Package.resolved change, and on
+          # the Ubuntu host, whose actions/cache compresses with zstd like
+          # the macOS runner; the linux job's swift:6.3 container has no
+          # zstd, and a gzip entry is invisible to a zstd reader (#2273).
+          path: .swiftpm-mirror
+          key: swiftpm-mirror-v1-${{ hashFiles('app/Package.resolved') }}
+          restore-keys: swiftpm-mirror-v1-
+      - name: Link the SwiftPM mirror into SwiftPM's cache
+        run: |
+          mkdir -p .swiftpm-mirror ~/.cache/org.swift.swiftpm
+          rm -rf ~/.cache/org.swift.swiftpm/repositories
+          ln -s "$PWD/.swiftpm-mirror" ~/.cache/org.swift.swiftpm/repositories
       - name: Verify generated API client (scripts/check.sh)
         run: bash scripts/check.sh app generate
+      - name: Save the SwiftPM mirror
+        if: github.event_name == 'push' && steps.swiftpm-mirror.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v4
+        with:
+          path: .swiftpm-mirror
+          key: ${{ steps.swiftpm-mirror.outputs.cache-primary-key }}
 
   # The Linux-clean targets (FreesideAPI, FreesideModel, and their tests)
   # in the official Swift image, which pins the toolchain instead of
