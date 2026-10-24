@@ -454,8 +454,9 @@ container run --rm -m 8G -v "$PWD":/work -w /work docker.io/library/swift:6.3 \
 
 CI's SwiftPM mirror cache holds only the bare git clones SwiftPM checks
 the pinned dependencies out from (the `repositories/` directory of its
-shared cache), never `app/.build` or DerivedData: compiled output could let
-a stale artifact register as a pass, while a clone cannot, because
+shared cache), never `app/.build` or DerivedData: compiled output keyed on
+`Package.resolved` alone could let a stale artifact register as a pass,
+while a clone cannot, because
 `Package.resolved` still decides the checkout and everything is compiled in
 the job. Its key is `swiftpm-mirror-v1-<hash of app/Package.resolved>`,
 with no OS or toolchain in it, because bare clones are the same on every
@@ -470,6 +471,27 @@ the matching assertions from `scripts/test-daemon-test-shards.sh`, then
 delete each `swiftpm-mirror-` key that
 `gh cache list --repo freeside-ai/freeside` lists with
 `gh cache delete --repo freeside-ai/freeside <key>`.
+
+CI's Swift build cache holds `app/.build`, test bundle included, so a PR
+that leaves `app/` alone skips the Swift build in the `convergence` job
+(#2291). Its key is
+`swift-build-v1-<os>-<arch>-<image OS>-<Xcode build>-<toolchain>-<app/ tree>`.
+The image OS is `$ImageOS`; the Xcode build is the default Xcode's
+`xcodebuild -version` build number; the toolchain is the `swiftlang-` token
+of its `swift --version`; and the tree is `git rev-parse HEAD:app`, which
+covers every file's name, mode, and content. The key leaves out
+`$ImageVersion`, which changes with every weekly image even when Xcode does
+not. App CI's `swift-build-cache` job writes it on a push to `main` when the
+key is absent. The `convergence` job restores it, and on an exact hit for a
+PR without the app component runs `swift test --skip-build`
+(`CONVERGENCE_SKIP_BUILD`, `scripts/run-convergence.sh --skip-build`).
+Because the key names the tree of `app/`, a PR that changes `app/` misses by
+construction, so a stale artifact cannot register as a pass; an app PR also
+builds on a hit. There is no fallback key: a partial build still recompiles
+every project module (#2249). After an Xcode or toolchain change every run
+misses until the next push to `main` that touches `app/`, and PRs build as
+before meanwhile. To retire every entry, bump the `swift-build-v1` prefix in
+both workflows and in `scripts/test-daemon-test-shards.sh`.
 
 `swift test` renders the whole screenshot matrix. While iterating on a
 visible change, follow
