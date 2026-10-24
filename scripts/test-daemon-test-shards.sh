@@ -203,7 +203,11 @@ class Coverage(unittest.TestCase):
             self.assertIn('fail-fast: false', tests)
             self.assertIn('fetch-depth: 2', tests)
             self.assertIn('bash scripts/check.sh daemon test', tests)
-            self.assertEqual([r for r in re.findall(rows, tests) if r[0] == 'rest'], [('rest', '1', '1')])
+            # A PR's macOS job runs the declared darwin selection; the full
+            # rest shard runs there only after the merge, in macos-main.
+            single = 'rest' if platform == 'linux' else 'darwin'
+            self.assertEqual([r for r in re.findall(rows, tests) if r[0] in ('rest', 'darwin')],
+                             [(single, '1', '1')])
             self.assertIn('DAEMON_TEST_INTEGRATION_SHARDS: 3', tests)
             # Evidence from any attempt is safe to read only after the gate
             # has required every child's current result to succeed, and only
@@ -224,11 +228,14 @@ class Coverage(unittest.TestCase):
         self.assertIn('daemon-test-shards.py verify evidence/*/execution.json', jobs['linux'])
         self.assertIn("github.event_name == 'push' && matrix.index == 1", linux)
         self.assertNotIn("github.event_name != 'push'", linux)
-        # macOS: a PR runs the rest shard alone and saves no cache; a push to
-        # main runs the three integration shards in one job, warms the cache
+        # macOS: a PR runs the darwin selection alone, restores the rest
+        # namespace, and saves no cache; a push to main runs the full rest
+        # shard and the three integration shards in one job, warms the cache
         # with every test binary, and is the only macOS cache writer.
         macos_tests = jobs['macos-tests']
-        self.assertEqual(re.findall(rows, macos_tests), [('rest', '1', '1')])
+        self.assertEqual(re.findall(rows, macos_tests), [('darwin', '1', '1')])
+        self.assertRegex(macos_tests, r'key: daemon-build-v2-.*-rest-.*\$\{\{ github.sha \}\}\n')
+        self.assertNotIn('${{ matrix.kind }}-${{ hashFiles', macos_tests)
         self.assertIn("    if: github.event_name != 'push'\n", macos_tests)
         self.assertIn('bash scripts/check.sh daemon build', macos_tests)
         self.assertIn('runs-on: macos-26', macos_tests)
@@ -238,21 +245,23 @@ class Coverage(unittest.TestCase):
         self.assertIn('runs-on: macos-26', main)
         self.assertIn('fetch-depth: 2', main)
         self.assertLess(main.index("go test -count=1 -run '^$' ./..."), main.index('bash scripts/check.sh daemon test'))
-        # The cache this job saves is the one the PR rest shard and the
+        # The cache this job saves is the one the PR darwin shard and the
         # convergence job restore, so it runs their build too.
         self.assertLess(main.index('run: bash scripts/check.sh daemon build\n'),
                         main.index("go test -count=1 -run '^$' ./..."))
-        shard_steps = re.findall(r'DAEMON_TEST_SHARD_KIND: integration\n *DAEMON_TEST_SHARD_INDEX: (\d+)\n'
+        shard_steps = re.findall(r'DAEMON_TEST_SHARD_KIND: (\w+)\n *DAEMON_TEST_SHARD_INDEX: (\d+)\n'
                                  r' *DAEMON_TEST_SHARD_COUNT: (\d+)\n *DAEMON_TEST_INTEGRATION_SHARDS: (\d+)\n'
-                                 r' *DAEMON_TEST_EVIDENCE_DIR: \$\{\{ github.workspace \}\}/evidence/integration-(\d+)\n'
+                                 r' *DAEMON_TEST_EVIDENCE_DIR: \$\{\{ github.workspace \}\}/evidence/([\w-]+)\n'
                                  r' *run: bash scripts/check.sh daemon test\n', main)
-        self.assertEqual(shard_steps, [(str(i), '3', '3', str(i)) for i in range(1, 4)])
-        self.assertEqual(main.count('bash scripts/check.sh daemon test'), 3)
-        self.assertIn('metadata --evidence-dir "evidence/integration-$index"', main)
+        self.assertEqual(shard_steps, [('rest', '1', '1', '3', 'rest')] +
+                         [('integration', str(i), '3', '3', f'integration-{i}') for i in range(1, 4)])
+        self.assertEqual(main.count('bash scripts/check.sh daemon test'), 4)
+        self.assertIn('for shard in rest integration-1 integration-2 integration-3; do\n', main)
+        self.assertIn('metadata --evidence-dir "evidence/$shard"', main)
         upload = re.search(r'^      - name: Upload test evidence\n(.*?)(?=^      - )', main, re.M | re.S).group(1)
         self.assertIn('        if: always()\n', upload)
         self.assertIn('          if-no-files-found: error\n', upload)
-        self.assertIn('          name: daemon-macos-integration-${{ github.run_id }}-${{ github.run_attempt }}\n', upload)
+        self.assertIn('          name: daemon-macos-main-${{ github.run_id }}-${{ github.run_attempt }}\n', upload)
         self.assertIn("        if: github.event_name == 'push'\n        uses: actions/cache/save@v4", main)
         self.assertRegex(main, r'key: daemon-build-v2-.*-rest-.*\$\{\{ github.sha \}\}\n')
         # Each main-push cache writer trims the restored cache to the entries
@@ -293,7 +302,7 @@ class Coverage(unittest.TestCase):
         self.assertIn("EXPECTED: ${{ github.event_name == 'push' && 'macos-main' || 'macos-tests' }}", gate)
         self.assertIn("SKIPPED: ${{ github.event_name == 'push' && 'macos-tests' || 'macos-main' }}", gate)
         self.assertIn('gate --needs "$NEEDS" --expected "$EXPECTED" --skipped "$SKIPPED"', gate)
-        self.assertIn("SHARDS: ${{ github.event_name == 'push' && 'integration' || 'rest' }}", gate)
+        self.assertIn("SHARDS: ${{ github.event_name == 'push' && 'all' || 'darwin' }}", gate)
         self.assertIn('find evidence -name execution.json -print0 | xargs -0 python3 scripts/daemon-test-shards.py '
                       'verify --shards "$SHARDS"', gate)
         self.assertIn('  workflow_call:', workflow)

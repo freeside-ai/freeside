@@ -227,9 +227,11 @@ jobs:
 
   # The org's plan runs at most five macOS jobs at once, across every
   # workflow, so each macOS job a PR requests is wait time for every other
-  # run (#2248). A PR runs only the rest shard here: it holds the darwin-
-  # specific code, while the integration package's macOS delta is timing
-  # and filesystem behaviour, which `macos-main` covers after the merge.
+  # run (#2248). A PR runs only the darwin selection declared in
+  # scripts/daemon-test-shards.py: the tests whose behaviour differs on
+  # macOS. The rest of the default tests repeat Linux there, so the full
+  # rest shard and the integration shards run in `macos-main` after the
+  # merge (#2274).
   macos-tests:
     name: macos (test, ${{ matrix.kind }} ${{ matrix.index }}/${{ matrix.count }})
     runs-on: macos-26
@@ -238,7 +240,7 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - {kind: rest, index: 1, count: 1}
+          - {kind: darwin, index: 1, count: 1}
     steps:
       - uses: actions/checkout@v4
         with:
@@ -266,12 +268,13 @@ jobs:
         uses: actions/cache/restore@v4
         with:
           path: ${{ steps.go-cache.outputs.build }}
-          # Integration shards share one restore namespace and one main-push
-          # writer. Go's content-addressed entries also make the old monolithic
-          # cache a safe migration source; no test-result cache is reused.
-          key: daemon-build-v2-${{ runner.os }}-${{ runner.arch }}-${{ steps.go.outputs.go-version }}-${{ matrix.kind }}-${{ hashFiles('daemon/go.sum') }}-${{ github.sha }}
+          # The rest namespace, which `macos-main` fills with every test
+          # binary; the darwin kind has no writer of its own. Go's
+          # content-addressed entries also make the old monolithic cache a
+          # safe migration source; no test-result cache is reused.
+          key: daemon-build-v2-${{ runner.os }}-${{ runner.arch }}-${{ steps.go.outputs.go-version }}-rest-${{ hashFiles('daemon/go.sum') }}-${{ github.sha }}
           restore-keys: |
-            daemon-build-v2-${{ runner.os }}-${{ runner.arch }}-${{ steps.go.outputs.go-version }}-${{ matrix.kind }}-${{ hashFiles('daemon/go.sum') }}-
+            daemon-build-v2-${{ runner.os }}-${{ runner.arch }}-${{ steps.go.outputs.go-version }}-rest-${{ hashFiles('daemon/go.sum') }}-
             go-build-${{ runner.os }}-macos-${{ hashFiles('daemon/go.sum') }}-
       - name: Record test identity and cache conditions
         env:
@@ -307,14 +310,14 @@ jobs:
 
   # The one macOS job a push to main requests. The tree was tested on its
   # PR under the up-to-date rule, so this job exists for what PRs no longer
-  # run on macOS: it runs the PR rest shard's build and compiles every test
-  # binary to warm the build cache that shard and the convergence job
-  # restore, runs the three integration shards in sequence under the
-  # unchanged per-shard timeout, and saves that cache, trimmed first to
-  # this job's own outputs. Its evidence is verified by the `macos` gate
-  # like any shard's.
+  # run on macOS: it runs the PR darwin shard's build and compiles every
+  # test binary to warm the build cache that shard and the convergence job
+  # restore, runs the full rest shard and then the three integration shards
+  # in sequence under the unchanged per-shard timeout, and saves that cache,
+  # trimmed first to this job's own outputs. The `macos` gate verifies full
+  # default coverage from its evidence.
   macos-main:
-    name: macos (test, integration 1-3/3)
+    name: macos (test, rest + integration 1-3/3)
     runs-on: macos-26
     if: github.event_name == 'push'
     steps:
@@ -346,7 +349,7 @@ jobs:
         with:
           path: ${{ steps.go-cache.outputs.build }}
           # One macOS namespace, the rest shard's, holds every test binary
-          # since this job compiles them all; the PR rest shard and the
+          # since this job compiles them all; the PR darwin shard and the
           # convergence job restore it. The integration namespace and the
           # old monolithic cache remain migration sources.
           key: daemon-build-v2-${{ runner.os }}-${{ runner.arch }}-${{ steps.go.outputs.go-version }}-rest-${{ hashFiles('daemon/go.sum') }}-${{ github.sha }}
@@ -359,8 +362,8 @@ jobs:
           CACHE_HIT: ${{ steps.go-build-cache.outputs.cache-hit }}
           CACHE_KEY: ${{ steps.go-build-cache.outputs.cache-matched-key }}
         run: |
-          for index in 1 2 3; do
-            python3 scripts/daemon-test-shards.py metadata --evidence-dir "evidence/integration-$index"
+          for shard in rest integration-1 integration-2 integration-3; do
+            python3 scripts/daemon-test-shards.py metadata --evidence-dir "evidence/$shard"
           done
           du -sk "$(cd daemon && go env GOCACHE)" "$(cd daemon && go env GOMODCACHE)" >evidence/cache-before.txt
       - name: build (scripts/check.sh)
@@ -368,6 +371,14 @@ jobs:
       - name: Compile every test binary
         working-directory: daemon
         run: go test -count=1 -run '^$' ./...
+      - name: test, rest 1/1 (scripts/check.sh)
+        env:
+          DAEMON_TEST_SHARD_KIND: rest
+          DAEMON_TEST_SHARD_INDEX: 1
+          DAEMON_TEST_SHARD_COUNT: 1
+          DAEMON_TEST_INTEGRATION_SHARDS: 3
+          DAEMON_TEST_EVIDENCE_DIR: ${{ github.workspace }}/evidence/rest
+        run: bash scripts/check.sh daemon test
       - name: test, integration 1/3 (scripts/check.sh)
         env:
           DAEMON_TEST_SHARD_KIND: integration
@@ -413,7 +424,7 @@ jobs:
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: daemon-macos-integration-${{ github.run_id }}-${{ github.run_attempt }}
+          name: daemon-macos-main-${{ github.run_id }}-${{ github.run_attempt }}
           path: evidence/
           if-no-files-found: error
       - name: Save Go build output
@@ -461,12 +472,12 @@ jobs:
         run: python3 scripts/daemon-test-shards.py gate --needs "$NEEDS" --expected "$EXPECTED" --skipped "$SKIPPED"
       # Every attempt of this run: a failed-jobs rerun leaves the passed
       # shards' evidence in earlier attempts, and verify counts each shard's
-      # latest attempt. The push job nests its three shards in one artifact.
+      # latest attempt. The push job nests its four shards in one artifact.
       - uses: actions/download-artifact@v4
         with:
           pattern: daemon-macos-*-${{ github.run_id }}-*
           path: evidence
       - name: Verify full coverage of this event's shard set
         env:
-          SHARDS: ${{ github.event_name == 'push' && 'integration' || 'rest' }}
+          SHARDS: ${{ github.event_name == 'push' && 'all' || 'darwin' }}
         run: find evidence -name execution.json -print0 | xargs -0 python3 scripts/daemon-test-shards.py verify --shards "$SHARDS"
