@@ -63,3 +63,5 @@ func run(args []string, stderr io.Writer) error {
 	_, _ = fmt.Fprintf(stderr, "exported %d entries to %s\n", len(m.Entries), *out)
 	return nil
 }
+
+// Throwaway probe for #2291; never merged.
