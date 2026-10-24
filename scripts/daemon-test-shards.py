@@ -287,6 +287,8 @@ def run(args):
     report = account(events, selected)
     report.update({"kind": args.kind, "index": args.index, "count": args.count,
                    "integration_count": count, "commands": commands, "inventory": selected})
+    # The commands do not show the width; GOFLAGS reaches go test through the environment.
+    report["goflags"] = os.environ.get("GOFLAGS", "")
     write_json(directory, "execution.json", report)
     print(f"accounted for {len(report['cases'])} default test cases", file=sys.stderr)
     return 0
