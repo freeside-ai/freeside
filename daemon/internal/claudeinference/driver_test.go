@@ -6,6 +6,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"io"
 	"os"
 	"path/filepath"
 	"strings"
@@ -216,8 +217,17 @@ func TestBoundedOutputCancelsOverflow(t *testing.T) {
 	if _, err := b.Write([]byte("12345")); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := b.Write([]byte("6")); err == nil || !canceled || b.Len() != 5 {
+	if _, err := b.Write([]byte("6")); err == nil || !canceled || len(b.Bytes()) != 5 {
 		t.Fatal("output exceeded bound")
+	}
+
+	// os/exec copies a child's stream with io.Copy, which takes a ReadFrom
+	// in preference to Write; the bound must hold on that path too. A
+	// LimitedReader offers no WriteTo, so the copy reaches the writer's side.
+	canceled = false
+	b = &boundedOutput{limit: 5, cancel: func() { canceled = true }}
+	if _, err := io.Copy(b, io.LimitReader(strings.NewReader("123456789"), 9)); err == nil || !canceled || len(b.Bytes()) > 5 {
+		t.Fatalf("io.Copy exceeded bound: %d bytes", len(b.Bytes()))
 	}
 }
 
