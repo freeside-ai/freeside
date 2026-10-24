@@ -16,6 +16,7 @@ on:
   # saving the SwiftPM mirror that macOS job restores, and
   # `swift-build-cache` saves the Swift build it restores.
   workflow_call:
+  workflow_dispatch:
 
 permissions:
   contents: read
@@ -96,7 +97,7 @@ jobs:
   apps:
     name: apps (macOS + iOS)
     runs-on: macos-26
-    if: github.event_name != 'push'
+    if: github.event_name != 'push' && github.event_name != 'workflow_dispatch'
     steps:
       - uses: actions/checkout@v4
       - name: Cache SwiftPM dependencies
@@ -127,7 +128,7 @@ jobs:
   swift-build-cache:
     name: swift build cache (main)
     runs-on: macos-26
-    if: github.event_name == 'push'
+    if: github.event_name == 'push' || github.event_name == 'workflow_dispatch'
     steps:
       - uses: actions/checkout@v4
       # Byte for byte the step in convergence-ci.yml's `convergence` job,
