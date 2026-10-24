@@ -241,19 +241,15 @@ func TestRetainedMalformedEgressSubmissionDoesNotCreateWork(t *testing.T) {
 	}
 }
 
+// submissionEgressCases is one refusal per error kind and the accept path that
+// needs both keys: each entry point only has to show it runs the egress gate
+// and reports its refusal. The full matrix of profiles and sets is
+// TestSubmittedEgressPolicy in internal/engine/submission_egress_test.go, over
+// the domain parsers tested in internal/domain/registry_set_test.go.
 func submissionEgressCases() []submissionEgressCase {
 	return []submissionEgressCase{
 		{"unknown profile", map[string]string{domain.EgressProfilePolicyKey: "provider_unknown"}, domain.ErrInvalidEgressProfile, domain.EgressProfilePolicyKey},
-		{"empty profile", map[string]string{domain.EgressProfilePolicyKey: ""}, domain.ErrInvalidEgressProfile, domain.EgressProfilePolicyKey},
-		{"padded profile", map[string]string{domain.EgressProfilePolicyKey: "provider_only "}, domain.ErrInvalidEgressProfile, domain.EgressProfilePolicyKey},
-		{"missing set", map[string]string{domain.EgressProfilePolicyKey: "provider_registry"}, domain.ErrRegistrySetInvalid, domain.RegistrySetPolicyKey},
-		{"malformed set alone", map[string]string{domain.RegistrySetPolicyKey: "null"}, domain.ErrRegistrySetInvalid, domain.RegistrySetPolicyKey},
-		{"malformed provider only set", map[string]string{domain.EgressProfilePolicyKey: "provider_only", domain.RegistrySetPolicyKey: "[]"}, domain.ErrRegistrySetInvalid, domain.RegistrySetPolicyKey},
 		{"malformed provider registry set", map[string]string{domain.EgressProfilePolicyKey: "provider_registry", domain.RegistrySetPolicyKey: `["registry.local"]`}, domain.ErrRegistrySetInvalid, domain.RegistrySetPolicyKey},
-		{"defaults", nil, nil, ""},
-		{"provider only", map[string]string{domain.EgressProfilePolicyKey: "provider_only"}, nil, ""},
-		{"set alone", map[string]string{domain.RegistrySetPolicyKey: `["pypi.org"]`}, nil, ""},
-		{"provider only set", map[string]string{domain.EgressProfilePolicyKey: "provider_only", domain.RegistrySetPolicyKey: `["pypi.org"]`}, nil, ""},
 		{"provider registry set", map[string]string{domain.EgressProfilePolicyKey: "provider_registry", domain.RegistrySetPolicyKey: `["pypi.org"]`}, nil, ""},
 	}
 }
