@@ -43,11 +43,11 @@ exit-gate comment, which may also pin daemon flags or target properties
 (`references/prior-runs.md` lists the ones past trackers required).
 
 Every run has two passes on the same `freesided` build SHA, or on a
-newer one `scripts/runtime-diff.sh` carries the pass to: a rehearsal pass
-on a disposable target (Rehearse Before The Operator), then the real run.
-Derive the exit contract (below), then state the derived mode, its reason,
-the expected spend of both passes, and every gate the contract leaves
-without a trigger, and wait for the user's go-ahead before
+newer one `scripts/runtime-diff.sh` carries the pass to: a fixture pass on
+Freeside's fixture repository (Rehearse Before The Operator), then the real
+run. Derive the exit contract (below), then state the derived mode, its
+reason, the expected spend of both passes, and every gate the contract
+leaves without a trigger, and wait for the user's go-ahead before
 preflight: a run costs real money, opens a real PR on someone's
 repository, and takes the operator's afternoon, so a wrong reading should
 cost one message, not a run.
@@ -101,7 +101,7 @@ point in the run where it must happen. A trigger is one of three things:
   needs no real condition, only proof that it reaches the operator (a
   stalled writer, held work, a review that keeps growing). Build
   `freesided` now from a clean checkout of the tip the run will use (the
-  rehearsal and the real run reuse that build), and take the names from its
+  fixture pass and the real run reuse that build), and take the names from its
   `raise-item -list`, never from memory or this file; `raise-item -h` says
   which need `-run`. The command raises the item each condition raises, on the
   run's own daemon. Mark each such row a **synthetic-trigger proof**: it
@@ -128,7 +128,7 @@ its evidence is the client inbox card and
 
 ## Preflight (Stop on Failure)
 
-You run these checks yourself, before the rehearsal pass; none needs the
+You run these checks yourself, before the fixture pass; none needs the
 operator. Their environment checks come later, as one checkpoint list
 (The Environment Checkpoint below).
 
@@ -157,11 +157,17 @@ with a partial run.
   the authority and it changes.
 - **Credentials are live:** the Codex reviewer token and the provider auth
   identity. Composition preflight's `claude_credentials` and
-  `codex_credentials` checks are the authority, and the rehearsal pass runs
+  `codex_credentials` checks are the authority, and the fixture pass runs
   them before the real run spends anything. An expired token fails there,
   after onboarding and image work are already spent (#1363); renew it
   (docs/production-walkthrough.md, Recover Expired Reviewer Credentials)
   and rerun the pass.
+- **The real lineup is served:** with the real run's settings written on
+  its root and no daemon holding that root, `freesided probe-lineup -root
+  <root>` exits 0 (daemon/README.md, Probe The Lineup Before A Run). The
+  fixture pass runs the fixture's models, so this is the only call to the
+  real models before the real run spends a task on them. A refused model
+  is a precondition failure, reported like any other.
 - **The state root is usable:** a fresh root, or a retained one the current
   daemon can open. Clean-break migrations retire old roots at startup; don't
   spend a run discovering that. A retained root also keeps every
@@ -212,15 +218,15 @@ the CLI-mode rows, for the visibility seed on a fresh root
 | Manual-submission file | `manual_submission_config` in the settings, the JSON in the daemon guide (Configure Client Task Submission) | The deputy at start, before the lease. A file with an empty `projects` array starts but accepts no client submission. |
 | Composer source text | The pairing checkpoint list, which you write and the operator types | Nothing: `Please handle <URL>.` creates valid work with no saved source reference (#1928). When the contract requires source-issue closure, write the bare canonical issue URL, with no prose or trailing punctuation. |
 
-The rehearsal pass exercises every CLI-mode row on its disposable target
-before the operator is involved. It leaves `manual_submission_config`
+The fixture pass exercises every CLI-mode row on the fixture before the
+operator is involved. It leaves `manual_submission_config`
 empty, so in client-target mode the real run's deputy start is the first
 check of that file; it still comes before the pairing checkpoint.
 
 ### The Environment Checkpoint
 
 Hand the operator the environment list from `references/checkpoints.md`
-after the rehearsal pass completes and before the real run starts, as one
+after the fixture pass completes and before the real run starts, as one
 message. It covers what past runs found live, and each row says what to do
 when it fails:
 
@@ -246,7 +252,7 @@ when it fails:
   iPhone row of the gate table as not measurable. Pairing itself happens
   after launch, against the deputy's `api_url` (the pairing checkpoint
   below); a fresh state root has no paired endpoint to check here.
-- **Credentials need nothing from the operator** once the rehearsal pass
+- **Credentials need nothing from the operator** once the fixture pass
   passed composition preflight's `claude_credentials` and
   `codex_credentials`. A Codex chain the renewal reports as revoked needs
   `codex login` and a paired client's **Resolve re-enrollment**
@@ -263,12 +269,16 @@ when it fails:
 
 ## Rehearse Before The Operator
 
-A rehearsal pass runs the whole pipeline once, unattended, on a disposable
-target, so the launch, inputs, credentials, publication, and alerts fail
-here and not in front of the operator. It is the first step after the
-go-ahead and preflight, and the operator is asked for nothing before a pass
-completes. docs/production-walkthrough.md (Rehearse Before The Real Run)
-holds the procedure; this section says what makes a pass count.
+A fixture pass runs the whole pipeline once, unattended, on Freeside's
+fixture repository and its canonical issue, so the launch, inputs,
+publication, completion, and alerts fail here and not in front of the
+operator. It proves this build's workflow, not the real project's settings,
+models, images, or trust profile: preflight checks those against the real
+project (#2222, #2208). It is the first step after the go-ahead and
+preflight, and the operator is asked for nothing before a pass completes.
+docs/production-walkthrough.md (Rehearse Before The Real Run) holds the
+procedure, the fixture, and its settings; this section says what makes a
+pass count. Decision record: `devlog/2026-10-23-1321-fixture-pass.md`.
 
 1. **Same runtime, fresh root.** Build `freesided` from a clean checkout of
    the SHA the real run will use, with the version flag the walkthrough's
@@ -281,49 +291,25 @@ holds the procedure; this section says what makes a pass count.
    `prompts/`, or `policy/` source. The run record then names both SHAs
    and the script's verdict line. Any other exit means a new pass on the
    new tip. An in-run fix keeps its own rule (Run the Deputy).
-2. **Settings that differ only where they must.** Copy the real run's
-   settings and change only `listen`, `seed_root`, `repository.*` (the
-   disposable repository, its project, base, and allowed paths),
-   `images.agent` and `approved_recipe` (from the disposable repository's
-   onboarding, step 3), `manual_submission_config` (empty), the effort for
-   each role, and the `agent_tree.commit` the efforts require. Every role keeps the real run's
-   model and runs at `low`, with one exception below: each writer in `writers.*`, `review.effort`, and
-   `judgment.effort` when the real run sets `judgment`. A model the images,
-   the subscription, or the pinned `judgment.claude_bin` refuses then fails
-   in the rehearsal and not in the real run, and `low` keeps the spend
-   bounded. A cheaper stand-in model would prove nothing about the real
-   one. The pass does not prove a model accepts its real effort: a review
-   `max` goes out as `xhigh`, which a model can refuse at its first review
-   (daemon/README.md, Select Agents Through The Lineup). Writer roles on one
-   model and effort share one agent, named for the first of them, so `low`
-   can merge two writer agents the real tree keeps apart and drop a name a
-   `--task-line` uses. Keep a writer at its real effort where `low` would
-   merge its agent away: the rehearsal tree's writer agent names match the
-   real tree's. Effort is part of the emitted agent tree, so the rehearsal
-   has its own agent-tree commit, adopted once through the walkthrough's
-   First Start procedure and reused by later rehearsals until an adoption
-   input changes, which the deputy's self-check refuses.
-3. **A disposable target.** An issue in a dedicated throwaway repository
-   where the `prod` GitHub App is installed (the `freeside-review-challenge`
-   precedent, #1275), small enough that a review comes back clean. Never
-   the real target. It is onboarded on its own on the rehearsal root, which
-   builds its project image and approves its recipe, and that onboarding
-   takes the rehearsal's review-configuration digest: `low` review effort
-   is a new review configuration. The walkthrough (Rehearse Before The Real
-   Run, Review configuration) gives the order and the commands: agent tree,
-   digest, onboarding, then `images.agent` and `approved_recipe`.
+2. **The fixture reset.** Before onboarding, `main` is back at
+   `fixture-baseline`, the canonical issue is open, and the last pass's
+   branch is gone (the walkthrough's reset commands). A pass from another
+   base or issue is not comparable with the last one and doesn't count.
+3. **The fixture's settings, exactly.** Every key the walkthrough's fixture
+   table lists takes the value it lists, and nothing comes from the real
+   run's settings; the other keys are the machine's. The fixture's agent
+   tree, onboarding, `images.agent` and `approved_recipe`, and
+   `probe-lineup` follow the walkthrough's order. A role that is refused,
+   or can't complete the canonical issue at the table's model, is a pass
+   finding: the table moves up one tier with the fix.
 4. **Unattended inputs.** The policy file sets `gates.spec_approval` to
    `false` (`PolicySpecApproval`, `daemon/internal/specify/policy.go`) and
    leaves `gates.source_issue_closure` absent or `false`, its policy-approval
    default (`daemon/internal/engine/publication_closure.go`), so neither a
    specification nor a closure card waits for a person. The other inputs
-   are built the way the real run builds them, naming the disposable issue
-   and project instead of the target, so the pass exercises the CLI-mode
-   input checklist. The submit carries every `--task-line` the real run
-   will pass. A line resolves only when an attempt of its role is
-   admitted, so a pass proves the specifier and implementer lines; a
-   remediator line stays unproven when the review comes back clean. Start
-   `freesided deputy -root <rehearsal-root>` as a tracked background task,
+   are the walkthrough's, naming the canonical issue, so the pass exercises
+   the CLI-mode input checklist. The submit carries no `--task-line`. Start
+   `freesided deputy -root <fixture-root>` as a tracked background task,
    submit with `--require-composition`, and record the build, the settings
    digest, and the composition result.
 5. **Read, never ask.** Read `freesided inspect task -db
@@ -332,15 +318,15 @@ holds the procedure; this section says what makes a pass count.
    from `runs[].conclusion`, and the derived state from `freesided follow
    -db <db> -run <run> -snapshot`. A card that needs a person (a finding
    adjudication after a non-clean review, a closure approval) stops the
-   pass. That stop is a rehearsal finding, because the contract keeps people
-   on card decisions.
-6. **Merge, then raise the alerts.** Merge the rehearsal pull request in the
-   disposable repository yourself; the owner's merge rule covers real-work
-   pull requests on real targets. Wait for the run's
-   `publication.completion` in the record, then raise each alert the gate
-   table triggers synthetically, with the commands in Walk Through on Both
-   Clients. The run-bound alerts (`held-work`, `review-growth`) must show in
-   `items[]`. The rehearsal root has no paired device, so their
+   pass. That stop is a pass finding, because the contract keeps people on
+   card decisions.
+6. **Merge, then raise the alerts.** Merge the fixture's pull request
+   yourself; the owner's merge rule covers real-work pull requests on real
+   targets, and the fixture is reset before the next pass. Wait for the
+   run's `publication.completion` in the record, then raise each alert the
+   gate table triggers synthetically, with the commands in Walk Through on
+   Both Clients. The run-bound alerts (`held-work`, `review-growth`) must
+   show in `items[]`. The fixture root has no paired device, so their
    `deliveries` stay empty and the pass proves the daemon side only; a
    daemon-subject alert (`stall`) never shows in a task's record, so its
    proof is the raised item ID `raise-item` prints.
@@ -351,17 +337,17 @@ holds the procedure; this section says what makes a pass count.
    `left the rig lease for the next start to recover`, means the lease was
    abandoned, and the real run's deputy would refuse that stale lease for
    another root. Then run `freesided rig recover -state-root
-   <rehearsal-root>/daemon -confirm` before the real run starts, and record
-   the abandonment as a rehearsal finding.
+   <fixture-root>/daemon -confirm` before the real run starts, and record
+   the abandonment as a pass finding.
 
 The pass counts as complete only when every step above passed. Record it as
 the Rehearsal row of the run record (`references/tracker-comment.md`):
 build SHA (and, when the real run starts from a newer tip, that SHA and
-the `runtime-diff` verdict), root, settings digest, disposable target,
-task and run ids, `billable_cost`, the task lines the pass proved, and the
-result of the record checks, the alerts, and the lease release. A pass
-that fails is an Exit Preparation comment on the tracker with the defect
-filed, and no operator step happens until a later pass completes.
+the `runtime-diff` verdict), root, settings digest, canonical issue, task
+and run ids, `billable_cost`, and the result of the record checks, the
+alerts, and the lease release. A pass that fails is an Exit Preparation
+comment on the tracker with the defect filed, and no operator step happens
+until a later pass completes.
 
 ## Run the Deputy
 
@@ -377,7 +363,7 @@ checkpoints, ask the operator nothing. Status, cards, timeline, delivery,
 and spend come from the record (Walk Through on Both Clients), never from
 the operator.
 
-1. Start only after a rehearsal pass completed on the same build, or on
+1. Start only after a fixture pass completed on the same build, or on
    an older SHA that `scripts/runtime-diff.sh` carries to this one
    (Rehearse Before The Operator, step 1), and its lease is released. Build
    `freesided` from a clean checkout of the run's SHA and start
@@ -703,7 +689,7 @@ note.
 
 - **Bottom line first:** can the tracker close, and if not, what stands
   between here and closure, in two sentences.
-- **Run record** as a table: the rehearsal pass, state root, clients and
+- **Run record** as a table: the fixture pass, state root, clients and
   their commit, each campaign and attempt with its result, review, task
   record, spend, PR, base and head.
 - **Gate table** from the contract, each row with its result.

@@ -209,9 +209,9 @@ Look for each of these before and during the run; most have bitten twice.
   Stop that could not work, a missing input, an expired credential, and a
   phone that could not connect each cost a relaunch or the operator's
   time, and every relaunch left another task in the clients (#1934). The
-  rehearsal pass (SKILL.md, Rehearse Before The Operator) is the response:
-  the launch, inputs, credentials, publication, and alerts fail on a
-  disposable target before the operator is asked for anything.
+  fixture pass (SKILL.md, Rehearse Before The Operator) is the response:
+  the launch, inputs, credentials, publication, and alerts fail on the
+  fixture before the operator is asked for anything.
 - **Read a raised alert back; don't assume it opened.** `raise-item` prints
   an item ID even when the item is born closed. On run 125 the held-work
   and review-growth items sat in `items[]` as `superseded`, concluded before
@@ -219,26 +219,30 @@ Look for each of these before and during the run; most have bitten twice.
   `conclusion`, and `deliveries` after raising it; `items[]` alone passes a
   born-closed item. Until #2217 merges, the review-growth alert can't be
   evidenced at all, since it is refused before completion.
-- **The image's agent CLI must serve the lineup's models.** Nothing checks
-  it before spend (#2208), and a built image can carry an older CLI than its
-  pin (#2209). Before the rehearsal, run each writer's CLI in its image
-  against its lineup model, and Codex against the review model. Run 125
-  lost two rehearsal builds to this (#2195).
+- **The image's agent CLI must serve the lineup's models.** A built image
+  can carry an older CLI than its pin (#2209). Before the real run, run
+  `freesided probe-lineup` on the real run's root (daemon/README.md, Probe
+  The Lineup Before A Run, #2208); the fixture pass runs the fixture's
+  models, not the real lineup. Run 125 lost two rehearsal builds to this
+  (#2195).
 - **Recheck the Codex reviewer's tools after a CLI upgrade.** Under ward's
   review flags, Codex 0.146 and 0.162 still exposed the ChatGPT account's
   connected apps and the provider web tool, which run outside the sandbox
   and the egress allowlist (#2196, check in #2198).
-- **A Freeside `main` advance restarts the rehearsal only when it changes
-  the runtime.** Before launch, run `scripts/runtime-diff.sh <pass-sha>
-  <run-sha>`: exit 0 carries the pass to the new tip and the record names
-  both SHAs and the verdict (#2221); any other exit means a new build,
-  root, and pass. Wave 8's third rebuild (#2193, #2184) would have carried.
-- **Rehearsal targets and settings need more than the docs say.** A bare-URL
-  task needs a public disposable issue, since the spec writer's fetch is
-  unauthenticated (#2214). A disposable repository needs its own onboarded
-  project image, a review-configuration change needs re-onboarding, and
-  preflight's `daemon_build` needs the `-X main.version=<sha>` ldflag
-  (#2206).
+- **A Freeside `main` advance restarts the fixture pass only when it
+  changes the runtime.** Before launch, run `scripts/runtime-diff.sh
+  <pass-sha> <run-sha>`: exit 0 carries the pass to the new tip and the
+  record names both SHAs and the verdict (#2221); any other exit means a
+  new build, root, and pass. Wave 8's third rebuild (#2193, #2184) would
+  have carried.
+- **The fixture's settings and reset are fixed in the walkthrough.** Run
+  125's rehearsal derived its settings from the real run and its target
+  per project; the fixture pass does neither (Rehearse Before The Real
+  Run). Its private canonical issue reads through a read-only installation
+  token since #748, so the research allowlist must include
+  `https://api.github.com`. Every pass onboards the fixture on its fresh
+  root, a review-configuration change needs re-onboarding, and preflight's
+  `daemon_build` needs the `-X main.version=<sha>` ldflag (#2206).
 - **Pass `-resume` on every onboarding call until approval, and a long
   `-install-wait`.** The intent expires after `-install-wait` (ten minutes
   by default, #2205). Once it has, a call without `-resume` silently opens a
