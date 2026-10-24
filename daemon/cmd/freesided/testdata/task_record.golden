@@ -1,5 +1,5 @@
 {
-  "version": "freeside-task-record-v5",
+  "version": "freeside-task-record-v6",
   "as_of_revision": 20,
   "as_of": "2026-10-01T09:00:00Z",
   "task_id": "task-GOLDEN",
@@ -345,6 +345,7 @@
       "resolved_policy_digest": "sha256:6bda16bf57c2fe51cc15caa7e490006616c7000cbd37105f607c5c9e339e9088",
       "billable_cost": null,
       "publication": null,
+      "closure_cards": [],
       "errors": []
     },
     {
@@ -392,6 +393,7 @@
       "resolved_policy_digest": null,
       "billable_cost": null,
       "publication": null,
+      "closure_cards": [],
       "errors": []
     },
     {
@@ -446,6 +448,7 @@
       "resolved_policy_digest": null,
       "billable_cost": null,
       "publication": null,
+      "closure_cards": [],
       "errors": []
     }
   ],

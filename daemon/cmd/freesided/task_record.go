@@ -16,8 +16,9 @@ import (
 )
 
 // taskRecordVersion names the record's JSON shape. Any change to that shape,
-// including to signet.TaskTimeline, which the record embeds, changes it.
-const taskRecordVersion = "freeside-task-record-v5"
+// including to signet.TaskTimeline or proposalCard, which the record embeds,
+// changes it.
+const taskRecordVersion = "freeside-task-record-v6"
 
 // taskRecord is what `freesided inspect task` prints: one task's recorded
 // facts, read under one store revision, for an agent to read. It is built
@@ -75,7 +76,11 @@ type taskRecordRun struct {
 	ResolvedPolicyDigest *domain.Digest                 `json:"resolved_policy_digest"`
 	BillableCost         *domain.CostSoFar              `json:"billable_cost"`
 	Publication          *taskRecordPublication         `json:"publication"`
-	Errors               []taskRecordRunError           `json:"errors"`
+	// ClosureCards are the closure cards of the run's work unit, open or
+	// closed, in item-id order. Each publication admits its own closure
+	// instance, so a run that published more than once can hold several.
+	ClosureCards []proposalCard       `json:"closure_cards"`
+	Errors       []taskRecordRunError `json:"errors"`
 }
 
 // taskRecordPublication is a run's last published pull request and the facts
@@ -138,19 +143,22 @@ const (
 	// taskRecordRunPublication covers Publication other than its Completion.
 	taskRecordRunPublication taskRecordRunSection = "publication"
 	taskRecordRunCompletion  taskRecordRunSection = "completion"
+	// taskRecordRunClosureCards is the enumeration of ClosureCards; a card
+	// whose own reads fail carries its error instead.
+	taskRecordRunClosureCards taskRecordRunSection = "closure_cards"
 )
 
 var allTaskRecordRunSections = []taskRecordRunSection{
 	taskRecordRunAdmissions, taskRecordRunPolicy, taskRecordRunCost,
 	taskRecordRunObservation, taskRecordRunConclusion,
-	taskRecordRunPublication, taskRecordRunCompletion,
+	taskRecordRunPublication, taskRecordRunCompletion, taskRecordRunClosureCards,
 }
 
 func (s taskRecordRunSection) valid() bool {
 	switch s {
 	case taskRecordRunAdmissions, taskRecordRunPolicy, taskRecordRunCost,
 		taskRecordRunObservation, taskRecordRunConclusion,
-		taskRecordRunPublication, taskRecordRunCompletion:
+		taskRecordRunPublication, taskRecordRunCompletion, taskRecordRunClosureCards:
 		return true
 	default:
 		return false
@@ -337,6 +345,9 @@ func (r taskRecord) hasErrorKind(kind taskRecordErrorKind) bool {
 				return true
 			}
 		}
+		if cardsHaveErrorKind(run.ClosureCards, kind) {
+			return true
+		}
 	}
 	return false
 }
@@ -457,6 +468,15 @@ func readTaskRecordRun(ctx context.Context, tx *store.ReadTx, runID domain.RunID
 			fail(taskRecordRunCompletion, err)
 		} else if publication.RebaseProofs, err = readTaskRecordRebaseProofs(ctx, tx, runID, binding); err != nil {
 			fail(taskRecordRunCompletion, err)
+		}
+	}
+	handle := domain.OpaqueSubjectHandle(domain.WorkUnitIDForRun(runID))
+	if ids, err := tx.ProposalItemIDsForSubject(ctx, handle, domain.EffectSourceIssueClosure); err != nil {
+		fail(taskRecordRunClosureCards, err)
+	} else {
+		out.ClosureCards = make([]proposalCard, 0, len(ids))
+		for _, id := range ids {
+			out.ClosureCards = append(out.ClosureCards, readProposalCard(ctx, tx, id))
 		}
 	}
 	observation, err := tx.ObserveRun(ctx, runID)
@@ -678,12 +698,20 @@ func readTaskRecordItems(
 			SubmittedAt: d.SubmittedAt, ChannelAcceptedAt: d.ChannelAcceptedAt, OpenedAt: d.OpenedAt,
 		})
 	}
+	// A run's closure_cards already place a refused closure card in this
+	// task, with its error, so it is not counted as unattributed.
+	closureCards := make(map[domain.ItemID]bool)
+	for _, run := range runs {
+		for _, card := range run.ClosureCards {
+			closureCards[card.ItemID] = true
+		}
+	}
 	items = []taskRecordItem{}
 	for _, row := range stored {
 		// A refused row's subject columns are unverified; they only route
 		// its id and error to this record, and nothing else of it is read.
 		if !taskRecordOwnsItem(row.ID, row.SubjectTaskID, row.SubjectRunID, id, runs) {
-			if row.Err != nil {
+			if row.Err != nil && !closureCards[row.ID] {
 				unattributed++
 			}
 			continue

@@ -1,0 +1,32 @@
+{
+  "item_id": "proposal-1111111111111111111111111111111111111111111111111111111111111111/effect/0a1b2c3d",
+  "type": "effect_proposal",
+  "project_id": "gh-imgup",
+  "status": "resolved",
+  "created_at": "2026-10-24T11:00:00Z",
+  "requested_decision": [
+    "approve",
+    "approve_with_changes",
+    "decline",
+    "snooze"
+  ],
+  "instance_id": "proposal-1111111111111111111111111111111111111111111111111111111111111111",
+  "kind": "source_issue_closure",
+  "subject_handle": "workunit-run-117",
+  "run_id": "run-117",
+  "task_id": "task-117",
+  "merge": {
+    "publication_identity": "sha256:9999999999999999999999999999999999999999999999999999999999999999",
+    "candidate_head_sha": "cccccccccccccccccccccccccccccccccccccccc",
+    "base_ref": "main",
+    "base_sha": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+  },
+  "decision": {
+    "command_id": "command-approve",
+    "action": "approve",
+    "selected_digest": "sha256:dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+    "decided_at": "2026-10-24T11:55:00Z"
+  },
+  "snoozed_until": null,
+  "error": null
+}

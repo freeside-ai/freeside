@@ -1,0 +1,89 @@
+{
+  "version": "freeside-proposal-cards-v1",
+  "as_of_revision": 57,
+  "as_of": "2026-10-24T12:00:00Z",
+  "cards": [
+    {
+      "item_id": "proposal-1111111111111111111111111111111111111111111111111111111111111111/effect/0a1b2c3d",
+      "type": "effect_proposal",
+      "project_id": "gh-imgup",
+      "status": "open",
+      "created_at": "2026-10-24T11:00:00Z",
+      "requested_decision": [
+        "approve",
+        "approve_with_changes",
+        "decline",
+        "snooze"
+      ],
+      "instance_id": "proposal-1111111111111111111111111111111111111111111111111111111111111111",
+      "kind": "source_issue_closure",
+      "subject_handle": "workunit-run-117",
+      "run_id": "run-117",
+      "task_id": "task-117",
+      "merge": {
+        "publication_identity": "sha256:9999999999999999999999999999999999999999999999999999999999999999",
+        "candidate_head_sha": "cccccccccccccccccccccccccccccccccccccccc",
+        "base_ref": "main",
+        "base_sha": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+      },
+      "decision": null,
+      "snoozed_until": null,
+      "error": null
+    },
+    {
+      "item_id": "proposal-2222222222222222222222222222222222222222222222222222222222222222",
+      "type": "task_proposal",
+      "project_id": "gh-imgup",
+      "status": "open",
+      "created_at": "2026-10-24T11:10:00Z",
+      "requested_decision": [
+        "start",
+        "start_with_changes",
+        "decline",
+        "snooze"
+      ],
+      "instance_id": "proposal-2222222222222222222222222222222222222222222222222222222222222222",
+      "kind": "run_proposal",
+      "subject_handle": "workunit-run-117",
+      "run_id": "run-117",
+      "task_id": "task-117",
+      "merge": null,
+      "decision": null,
+      "snoozed_until": "2026-10-24T11:50:00Z",
+      "error": null
+    },
+    {
+      "item_id": "proposal-3333333333333333333333333333333333333333333333333333333333333333/effect/4e5f6a7b",
+      "type": "effect_proposal",
+      "project_id": "gh-imgup",
+      "status": "open",
+      "created_at": "2026-10-24T11:20:00Z",
+      "requested_decision": [
+        "approve",
+        "decline",
+        "snooze"
+      ],
+      "instance_id": null,
+      "kind": null,
+      "subject_handle": null,
+      "run_id": null,
+      "task_id": null,
+      "merge": null,
+      "decision": null,
+      "snoozed_until": null,
+      "error": {
+        "kind": "integrity",
+        "message": "stored row inconsistent"
+      }
+    }
+  ],
+  "refused_rows": [
+    {
+      "id": "execution-failure-evidence",
+      "error": {
+        "kind": "unapproved_recipe",
+        "message": "recipe not approved"
+      }
+    }
+  ]
+}

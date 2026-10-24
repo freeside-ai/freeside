@@ -14,13 +14,19 @@
       "ids": [
         "task_id"
       ],
-      "version": "freeside-task-record-v5"
+      "version": "freeside-task-record-v6"
     },
     {
       "name": "inspect health",
       "command": "freesided inspect health -db PATH",
       "ids": [],
       "version": "freeside-system-health-v1"
+    },
+    {
+      "name": "inspect proposals",
+      "command": "freesided inspect proposals -db PATH",
+      "ids": [],
+      "version": "freeside-proposal-cards-v1"
     },
     {
       "name": "follow -snapshot",

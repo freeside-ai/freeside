@@ -240,6 +240,9 @@ func (p *pairingControl) registerControlRoutes(
 	p.handleGet(mux, "/system-health", func(ctx context.Context, _ *http.Request) (any, error) {
 		return readSystemHealthFrom(ctx, st)
 	})
+	p.handleGet(mux, "/proposal-cards", func(ctx context.Context, _ *http.Request) (any, error) {
+		return readProposalCardsFrom(ctx, st)
+	})
 	p.handle(mux, "/submissions", func(ctx context.Context, body json.RawMessage) (any, error) {
 		req, err := decodeControlPayload[submitApplyRequest](body)
 		if err != nil {

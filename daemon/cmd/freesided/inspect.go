@@ -50,7 +50,7 @@ type inspectTask struct {
 // commands that print what the store holds as JSON and write nothing. A new
 // read is registered here, or the index does not know it exists.
 func inspectReads() []inspectRead {
-	index, record, health := inspectIndexVersion, taskRecordVersion, systemHealthVersion
+	index, record, health, proposals := inspectIndexVersion, taskRecordVersion, systemHealthVersion, proposalCardsVersion
 	return []inspectRead{
 		{Name: "inspect", Command: "freesided inspect -db PATH", IDs: []string{}, Version: &index},
 		{
@@ -58,6 +58,7 @@ func inspectReads() []inspectRead {
 			IDs: []string{"task_id"}, Version: &record,
 		},
 		{Name: "inspect health", Command: "freesided inspect health -db PATH", IDs: []string{}, Version: &health},
+		{Name: "inspect proposals", Command: "freesided inspect proposals -db PATH", IDs: []string{}, Version: &proposals},
 		{
 			Name: "follow -snapshot", Command: "freesided follow -db PATH -run RUN_ID -snapshot",
 			IDs: []string{"run_id"},
@@ -83,18 +84,21 @@ func runInspectMain(args []string) {
 }
 
 // runInspectCommand prints the index, with the `task` verb one task's
-// record, or with the `health` verb the root's open system-health items, as
-// one JSON line. All are reads: they write nothing and open an unheld
-// database without migrating it.
+// record, with the `health` verb the root's open system-health items, or with
+// the `proposals` verb its open proposal cards, as one JSON line. All are
+// reads: they write nothing and open an unheld database without migrating it.
 func runInspectCommand(ctx context.Context, args []string, stdout, stderr io.Writer) error {
 	verb := "freesided inspect"
 	wantTask := len(args) > 0 && args[0] == "task"
 	wantHealth := len(args) > 0 && args[0] == "health"
+	wantProposals := len(args) > 0 && args[0] == "proposals"
 	switch {
 	case wantTask:
 		verb, args = "freesided inspect task", args[1:]
 	case wantHealth:
 		verb, args = "freesided inspect health", args[1:]
+	case wantProposals:
+		verb, args = "freesided inspect proposals", args[1:]
 	}
 	flags := flag.NewFlagSet(verb, flag.ContinueOnError)
 	flags.SetOutput(stderr)
@@ -130,6 +134,11 @@ func runInspectCommand(ctx context.Context, args []string, stdout, stderr io.Wri
 			return readSystemHealthFrom(ctx, st)
 		}
 	}
+	if wantProposals {
+		route, read = "/proposal-cards", func(ctx context.Context, st *store.Store) (any, error) {
+			return readProposalCardsFrom(ctx, st)
+		}
+	}
 	// storeExisting: a read never migrates a database.
 	handle, client, err := openCommandStore(ctx, *dbPath, store.Options{ApprovedRecipes: approvedRecipes}, storeExisting)
 	if err != nil {
@@ -163,7 +172,7 @@ func runInspectCommand(ctx context.Context, args []string, stdout, stderr io.Wri
 }
 
 // errorKindReporter is a read that reports the errors that left part of it
-// unread: the task record and the system-health read.
+// unread: the task record, the system-health read, and the proposal cards.
 type errorKindReporter interface {
 	hasErrorKind(kind taskRecordErrorKind) bool
 }

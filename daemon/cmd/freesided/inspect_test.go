@@ -55,7 +55,7 @@ func TestInspectIndexNamesItsReads(t *testing.T) {
 		}
 	}
 	if versions["inspect"] != inspectIndexVersion || versions["inspect task"] != taskRecordVersion ||
-		versions["inspect health"] != systemHealthVersion {
+		versions["inspect health"] != systemHealthVersion || versions["inspect proposals"] != proposalCardsVersion {
 		t.Fatalf("versions = %v", versions)
 	}
 }
@@ -117,6 +117,11 @@ func TestInspectReadsThroughRunningDaemon(t *testing.T) {
 	health := inspect[systemHealth](t, ctx, "health", "-db", dbPath)
 	if health.Version != systemHealthVersion || health.AsOfRevision < index.AsOfRevision || len(health.Items) == 0 {
 		t.Errorf("health = %+v", health)
+	}
+	proposals := inspect[proposalCards](t, ctx, "proposals", "-db", dbPath)
+	if proposals.Version != proposalCardsVersion || proposals.AsOfRevision < index.AsOfRevision ||
+		proposals.Cards == nil || proposals.RefusedRows == nil {
+		t.Errorf("proposals = %+v", proposals)
 	}
 	err := runInspectCommand(ctx, []string{"task", "-db", dbPath, "-task", "task-unknown"}, io.Discard, io.Discard)
 	if !errors.Is(err, store.ErrNotFound) || errors.Is(err, observe.ErrUsage) {
@@ -313,15 +318,18 @@ func comparableRecord(t *testing.T, record taskRecord) []byte {
 func TestInspectUsageErrors(t *testing.T) {
 	dbPath := filepath.Join(t.TempDir(), "freeside.db")
 	for name, args := range map[string][]string{
-		"no database":         {},
-		"task with no id":     {"task", "-db", dbPath},
-		"task flag on index":  {"-db", dbPath, "-task", "task-1"},
-		"unknown verb":        {"run", "-db", dbPath},
-		"positional":          {"-db", dbPath, "task"},
-		"unknown flag":        {"-db", dbPath, "-follow"},
-		"health with no db":   {"health"},
-		"health positional":   {"health", "-db", dbPath, "extra"},
-		"task flag on health": {"health", "-db", dbPath, "-task", "task-1"},
+		"no database":            {},
+		"task with no id":        {"task", "-db", dbPath},
+		"task flag on index":     {"-db", dbPath, "-task", "task-1"},
+		"unknown verb":           {"run", "-db", dbPath},
+		"positional":             {"-db", dbPath, "task"},
+		"unknown flag":           {"-db", dbPath, "-follow"},
+		"health with no db":      {"health"},
+		"health positional":      {"health", "-db", dbPath, "extra"},
+		"task flag on health":    {"health", "-db", dbPath, "-task", "task-1"},
+		"proposals with no db":   {"proposals"},
+		"proposals positional":   {"proposals", "-db", dbPath, "extra"},
+		"task flag on proposals": {"proposals", "-db", dbPath, "-task", "task-1"},
 	} {
 		t.Run(name, func(t *testing.T) {
 			var out bytes.Buffer
