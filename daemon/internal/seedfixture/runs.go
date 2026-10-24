@@ -176,7 +176,8 @@ func (s seeder) export(tx *store.WriteTx, admission domain.ExecutionAdmission, a
 func (s seeder) fail(tx *store.WriteTx, admission domain.ExecutionAdmission, summary string, at time.Time) error {
 	if err := tx.RecordExecutionOutcome(s.ctx, domain.ExecutionOutcome{
 		InvocationID: admission.InvocationID, AdmissionID: admission.ID,
-		Status: domain.ExecutionOutcomeFailed, Summary: summary, RecordedAt: at,
+		Status: domain.ExecutionOutcomeFailed, Summary: summary,
+		Cause: domain.FailureCauseUnknown, RecordedAt: at,
 	}); err != nil {
 		return err
 	}

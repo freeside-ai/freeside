@@ -1011,7 +1011,12 @@ type ExecutionOutcome struct {
 	AdmissionID  Digest                 `json:"admission_id"`
 	Status       ExecutionOutcomeStatus `json:"status"`
 	Summary      string                 `json:"summary,omitempty"`
-	RecordedAt   time.Time              `json:"recorded_at"`
+	// Cause is present exactly on a failed outcome, where unknown means
+	// nothing classified the failure. omitempty rather than a pointer keeps
+	// the stored body of every other status byte-identical to the rows
+	// written before causes existed, which write-once convergence compares.
+	Cause      FailureCause `json:"cause,omitempty"`
+	RecordedAt time.Time    `json:"recorded_at"`
 }
 
 func (x ExecutionOutcome) Validate() error {
@@ -1029,6 +1034,15 @@ func (x ExecutionOutcome) Validate() error {
 		return fmt.Errorf("execution outcome %s lost with summary: %w",
 			x.InvocationID, ErrOutcomeInconsistent)
 	}
+	if x.Status == ExecutionOutcomeFailed {
+		if !x.Cause.valid() {
+			return fmt.Errorf("execution outcome %s cause %q: %w",
+				x.InvocationID, x.Cause, ErrInvalidFailureCause)
+		}
+	} else if x.Cause != "" {
+		return fmt.Errorf("execution outcome %s %s with cause %q: %w",
+			x.InvocationID, x.Status, x.Cause, ErrOutcomeInconsistent)
+	}
 	if x.RecordedAt.IsZero() {
 		return fmt.Errorf("execution outcome %s recorded_at: %w", x.InvocationID, ErrMissingTimestamp)
 	}
@@ -1036,6 +1050,12 @@ func (x ExecutionOutcome) Validate() error {
 		return fmt.Errorf("execution outcome %s recorded_at: %w", x.InvocationID, ErrTimestampNotUTC)
 	}
 	return nil
+}
+
+// CanonicalizeStoredRow gives a failed outcome stored before causes existed
+// the cause unknown, so it reconstructs and compares like one recorded now.
+func (x *ExecutionOutcome) CanonicalizeStoredRow() {
+	x.Cause = CanonicalFailureCause(x.Status, x.Cause)
 }
 
 // ValidateOutcomeBinding requires the same invocation and admission, and

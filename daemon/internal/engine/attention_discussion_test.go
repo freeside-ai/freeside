@@ -100,6 +100,7 @@ func newAttentionDiscussionFixture(
 		return tx.RecordExecutionOutcome(t.Context(), domain.ExecutionOutcome{
 			InvocationID: attempt.InvocationID, AdmissionID: admission.ID,
 			Status: domain.ExecutionOutcomeFailed, Summary: "discussion fixture failure",
+			Cause:      domain.FailureCauseUnknown,
 			RecordedAt: now,
 		})
 	}); err != nil {

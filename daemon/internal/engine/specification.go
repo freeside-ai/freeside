@@ -2506,7 +2506,7 @@ func (e *Engine) acceptSpecificationAttempt(ctx context.Context, run domain.Run,
 		return false, e.clearRefusalHold(ctx, run.ID)
 	}
 	if result.Status != exec.StatusCompleted {
-		return false, e.recordSpecificationFailure(ctx, run, request, result.Status, result.Summary)
+		return false, e.recordSpecificationResultFailure(ctx, run, request, result)
 	}
 	admission, err := e.requireSpecificationAdmissible(ctx, request.InvocationID)
 	if err != nil {
@@ -3431,7 +3431,19 @@ func unifiedLineDiff(before, after string) domain.SpecDiff {
 	return domain.DeriveSpecDiff(before, after)
 }
 
+// recordSpecificationFailure records a failure the engine detected itself,
+// whose cause nothing classified.
 func (e *Engine) recordSpecificationFailure(ctx context.Context, run domain.Run, request specificationRequest, status exec.Status, summary string) error {
+	return e.recordSpecificationFailureWithCause(ctx, run, request, status, summary, "")
+}
+
+// recordSpecificationResultFailure records a driver's non-completed result
+// with the cause the driver reported.
+func (e *Engine) recordSpecificationResultFailure(ctx context.Context, run domain.Run, request specificationRequest, result exec.StageResult) error {
+	return e.recordSpecificationFailureWithCause(ctx, run, request, result.Status, result.Summary, result.Cause)
+}
+
+func (e *Engine) recordSpecificationFailureWithCause(ctx context.Context, run domain.Run, request specificationRequest, status exec.Status, summary string, cause domain.FailureCause) error {
 	terminal := specificationTerminal{
 		InvocationID: request.InvocationID, Iteration: request.Iteration,
 		Status: status, ResearchArtifactIDs: []domain.ArtifactID{},
@@ -3454,7 +3466,7 @@ func (e *Engine) recordSpecificationFailure(ctx context.Context, run domain.Run,
 		}
 		createdAt := e.specification.now().UTC()
 		facts, err := executionFailureFacts(
-			ctx, tx, request.InvocationID, status, summary, createdAt,
+			ctx, tx, request.InvocationID, status, summary, cause, createdAt,
 			domain.StageNameSpecification,
 		)
 		if err != nil {

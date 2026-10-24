@@ -410,6 +410,7 @@ func TestIdentityParallelismFailureRelease(t *testing.T) {
 		return tx.RecordExecutionOutcome(ctx, domain.ExecutionOutcome{
 			InvocationID: failed.InvocationID, AdmissionID: admission.ID,
 			Status: domain.ExecutionOutcomeFailed, Summary: "expected fixture failure",
+			Cause:      domain.FailureCauseUnknown,
 			RecordedAt: admittedAt.Add(time.Minute),
 		})
 	}); err != nil {

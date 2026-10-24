@@ -379,6 +379,7 @@ func TestExecutionRecordsProjectMilestones(t *testing.T) {
 	outcome := domain.ExecutionOutcome{
 		InvocationID: f.admission.InvocationID, AdmissionID: f.admission.ID,
 		Status: domain.ExecutionOutcomeFailed, Summary: "provider stderr: secret-ish detail",
+		Cause:      domain.FailureCauseUnknown,
 		RecordedAt: f.admission.AdmittedAt.Add(time.Hour),
 	}
 	if err := s.Write(ctx, func(tx *store.WriteTx) error {

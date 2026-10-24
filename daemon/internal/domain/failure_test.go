@@ -4,6 +4,7 @@ import (
 	"errors"
 	"slices"
 	"testing"
+	"time"
 
 	"github.com/freeside-ai/freeside/daemon/internal/domain"
 )
@@ -164,6 +165,63 @@ func TestFailureCauseValidate(t *testing.T) {
 	for _, cause := range []domain.FailureCause{"", "transient"} {
 		if err := cause.Validate(); !errors.Is(err, domain.ErrInvalidFailureCause) {
 			t.Errorf("%q.Validate() = %v, want ErrInvalidFailureCause", cause, err)
+		}
+	}
+}
+
+func TestExecutionOutcomeCause(t *testing.T) {
+	t.Parallel()
+	outcome := func(status domain.ExecutionOutcomeStatus, cause domain.FailureCause) domain.ExecutionOutcome {
+		return domain.ExecutionOutcome{
+			InvocationID: "inv-1", AdmissionID: "sha256:admission",
+			Status: status, Cause: cause,
+			RecordedAt: time.Date(2026, 1, 2, 3, 4, 5, 0, time.UTC),
+		}
+	}
+	for _, tc := range []struct {
+		name    string
+		outcome domain.ExecutionOutcome
+		want    error
+	}{
+		{"failed with a cause", outcome(domain.ExecutionOutcomeFailed, domain.FailureCauseQuota), nil},
+		{"failed with unknown", outcome(domain.ExecutionOutcomeFailed, domain.FailureCauseUnknown), nil},
+		{"failed without a cause", outcome(domain.ExecutionOutcomeFailed, ""), domain.ErrInvalidFailureCause},
+		{"failed with an invalid cause", outcome(domain.ExecutionOutcomeFailed, "transient"), domain.ErrInvalidFailureCause},
+		{"canceled without a cause", outcome(domain.ExecutionOutcomeCanceled, ""), nil},
+		{"canceled with a cause", outcome(domain.ExecutionOutcomeCanceled, domain.FailureCauseUnknown), domain.ErrOutcomeInconsistent},
+		{"lost with a cause", outcome(domain.ExecutionOutcomeLost, domain.FailureCauseQuota), domain.ErrOutcomeInconsistent},
+		{"blocked with a cause", outcome(domain.ExecutionOutcomeBlocked, domain.FailureCauseQuota), domain.ErrOutcomeInconsistent},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			err := tc.outcome.Validate()
+			if tc.want == nil && err != nil {
+				t.Fatalf("Validate() = %v, want nil", err)
+			}
+			if tc.want != nil && !errors.Is(err, tc.want) {
+				t.Fatalf("Validate() = %v, want %v", err, tc.want)
+			}
+		})
+	}
+}
+
+func TestExecutionOutcomeCanonicalizeStoredRow(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		status domain.ExecutionOutcomeStatus
+		cause  domain.FailureCause
+		want   domain.FailureCause
+	}{
+		{domain.ExecutionOutcomeFailed, "", domain.FailureCauseUnknown},
+		{domain.ExecutionOutcomeFailed, domain.FailureCauseQuota, domain.FailureCauseQuota},
+		{domain.ExecutionOutcomeCanceled, "", ""},
+		{domain.ExecutionOutcomeLost, "", ""},
+		{domain.ExecutionOutcomeBlocked, "", ""},
+	} {
+		outcome := domain.ExecutionOutcome{Status: tc.status, Cause: tc.cause}
+		outcome.CanonicalizeStoredRow()
+		if outcome.Cause != tc.want {
+			t.Errorf("%s with cause %q canonicalized to %q, want %q", tc.status, tc.cause, outcome.Cause, tc.want)
 		}
 	}
 }

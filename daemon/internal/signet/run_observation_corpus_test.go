@@ -221,7 +221,9 @@ func (f corpusFixture) seedOutcome(
 	f.mustWrite(t, func(tx *store.WriteTx) error {
 		return tx.RecordExecutionOutcome(context.Background(), domain.ExecutionOutcome{
 			InvocationID: admission.InvocationID, AdmissionID: admission.ID,
-			Status: status, Summary: summary, RecordedAt: admission.AdmittedAt.Add(time.Hour),
+			Status: status, Summary: summary,
+			Cause:      domain.CanonicalFailureCause(status, ""),
+			RecordedAt: admission.AdmittedAt.Add(time.Hour),
 		})
 	})
 }

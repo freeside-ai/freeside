@@ -768,6 +768,7 @@ func cardFactExecutionOutcome(admission domain.ExecutionAdmission) domain.Execut
 	return domain.ExecutionOutcome{
 		InvocationID: admission.InvocationID, AdmissionID: admission.ID,
 		Status:     domain.ExecutionOutcomeFailed,
+		Cause:      domain.FailureCauseUnknown,
 		Summary:    "implementation failed",
 		RecordedAt: admissionEpoch.Add(time.Minute),
 	}

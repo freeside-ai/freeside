@@ -1633,6 +1633,7 @@ func (d *Driver) recordOutcome(
 		AdmissionID:  in.Spec.AdmissionID,
 		Status:       status,
 		Summary:      result.Summary,
+		Cause:        domain.CanonicalFailureCause(status, result.Cause),
 		RecordedAt:   d.now().UTC(),
 	}
 	return d.recordOrConvergeOutcome(ctx, want)
@@ -1678,11 +1679,15 @@ func (d *Driver) recordOrConvergeOutcome(
 		want.InvocationID, errors.Join(recordErr, lookupErr, exportErr))
 }
 
+// sameOutcome compares canonical causes, so an outcome stored before causes
+// existed converges with a replay that records unknown.
 func sameOutcome(a, b domain.ExecutionOutcome) bool {
 	return a.InvocationID == b.InvocationID &&
 		a.AdmissionID == b.AdmissionID &&
 		a.Status == b.Status &&
-		a.Summary == b.Summary
+		a.Summary == b.Summary &&
+		domain.CanonicalFailureCause(a.Status, a.Cause) ==
+			domain.CanonicalFailureCause(b.Status, b.Cause)
 }
 
 func (d *Driver) authenticateOutcome(
@@ -1702,6 +1707,7 @@ func (d *Driver) authenticateOutcome(
 		AdmissionID:  in.Spec.AdmissionID,
 		Status:       status,
 		Summary:      result.Summary,
+		Cause:        result.Cause,
 	}
 	if !found || !sameOutcome(stored, want) {
 		return fmt.Errorf("%w: committed intent %s has no matching durable outcome",
@@ -2312,6 +2318,7 @@ func (d *Driver) adoptRecordedOutcome(
 		}
 		if err := d.commitResult(in.InvocationID, exec.StageResult{
 			InvocationID: in.InvocationID, Status: status, Summary: outcome.Summary,
+			Cause: outcome.Cause,
 		}); err != nil {
 			return fmt.Errorf("%w: adopt recorded outcome: %w", ErrRecoveryRetryable, err)
 		}

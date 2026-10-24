@@ -149,6 +149,7 @@ func TestAuthorityReplayDoesNotBackfillMilestones(t *testing.T) {
 	outcome := domain.ExecutionOutcome{
 		InvocationID: admission.InvocationID, AdmissionID: admission.ID,
 		Status: domain.ExecutionOutcomeFailed, Summary: "failed once",
+		Cause:      domain.FailureCauseUnknown,
 		RecordedAt: admission.AdmittedAt.Add(time.Hour),
 	}
 	if err := s.Write(ctx, func(tx *WriteTx) error {
