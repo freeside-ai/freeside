@@ -54,12 +54,6 @@ const (
 	prepareHome = "/tmp/freeside-home"
 )
 
-// ProviderEndpoints is the provider_only egress allowlist for the Claude
-// CLI: the inference API alone. It is configuration, not contract, so a
-// composition may widen it; the ward proves whatever list it is given is
-// what the agent could actually reach.
-func ProviderEndpoints() []string { return []string{"api.anthropic.com:443"} }
-
 // agentEnv carries the fixed command-scope Git protected configuration the
 // unprivileged writer needs for ward's deliberately root-owned workspace
 // mount. A repository-local safe.directory cannot authorize itself: Git
