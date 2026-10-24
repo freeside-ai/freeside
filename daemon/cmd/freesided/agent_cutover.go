@@ -288,10 +288,10 @@ func reviewAdmitter(
 // the prompt the daemon runs it on, and returns the first role that fails.
 func checkWriterRoles(
 	ctx context.Context, st *store.Store, agents engine.AgentSelection,
-	prompts map[domain.RoleName]domain.Digest, mode domain.OperatingMode, now time.Time,
+	prompts map[domain.RoleName]domain.Digest, now time.Time,
 ) *roleAdmissionError {
 	for _, role := range []domain.RoleName{domain.RoleSpecifier, domain.RoleImplementer, domain.RoleRemediator} {
-		if _, err := agents.CheckRole(ctx, st, role, prompts[role], mode, now); err != nil {
+		if _, err := agents.CheckRole(ctx, st, role, prompts[role], now); err != nil {
 			return &roleAdmissionError{Role: role, Err: err}
 		}
 	}

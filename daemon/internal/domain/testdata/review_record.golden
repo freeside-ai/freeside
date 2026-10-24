@@ -20,7 +20,6 @@
       "effective_egress": [
         "review.fake.example:443"
       ],
-      "attended": false,
       "route_model_id": "gpt-codex",
       "requested_effort": "high",
       "native_effort": "high",

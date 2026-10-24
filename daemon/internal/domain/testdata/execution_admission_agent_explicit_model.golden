@@ -1,5 +1,5 @@
 {
-  "id": "sha256:197b1d579c69360111a14e1bbb013a91ea1ca05a189ab86814eb81254477bda0",
+  "id": "sha256:d822770656547621f79b22d1340e296b2cabbbbfe04af35c4b3e6cc999e98970",
   "invocation_id": "inv-4",
   "run_id": "run-1",
   "stage_id": "stage-1",
@@ -58,7 +58,6 @@
     "effective_egress": [
       "api.anthropic.com"
     ],
-    "attended": true,
     "route_model_id": "claude-opus-5-5",
     "requested_effort": "max",
     "native_effort": "max",

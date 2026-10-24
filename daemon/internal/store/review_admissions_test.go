@@ -74,7 +74,9 @@ func TestReviewAdmissionIsWrittenOnce(t *testing.T) {
 		}
 	}
 	invalid := first
-	invalid.AgentBinding.Attended = true
+	// No task line selects a review agent.
+	invalid.AgentBinding.SelectionSource = domain.AgentSelectionSourceTaskLine
+	invalid.AgentBinding.SelectionRecordID = invalid.AgentBinding.AgentDigest
 	if err := st.Write(ctx, func(tx *WriteTx) error {
 		return tx.PutReviewAdmission(ctx, invalid)
 	}); !errors.Is(err, domain.ErrReviewAdmissionInvalid) {
@@ -149,5 +151,49 @@ func TestReviewAdmissionRowTamper(t *testing.T) {
 				t.Fatalf("tampered row read back: %v", err)
 			}
 		})
+	}
+}
+
+// TestReviewAdmissionWithTheAttendedFlagReconstructs: a review admission
+// recorded before plan revision 97 carries "attended": false. It still reads
+// back, and a resumed invocation's replay of it is not a conflict, because
+// the binding re-encodes to the same bytes (#2265).
+func TestReviewAdmissionWithTheAttendedFlagReconstructs(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	st := openTemplateStoreAt(t, t.TempDir()+"/admissions.db", Options{})
+	run := domain.Run{ID: "run-1", ProjectID: "project", SpecDigest: "sha256:spec", PolicyDigest: "sha256:policy"}
+	legacy := storedReviewAdmission(t, domain.RoleReviewer)
+	attended := false
+	legacy.AgentBinding.LegacyAttended = &attended
+	if err := st.Write(ctx, func(tx *WriteTx) error {
+		if err := tx.PutRun(ctx, run); err != nil {
+			return err
+		}
+		return tx.PutReviewAdmission(ctx, legacy)
+	}); err != nil {
+		t.Fatal(err)
+	}
+	var body string
+	if err := st.db.QueryRowContext(ctx,
+		`SELECT body FROM review_admissions WHERE invocation_id = ?`, legacy.InvocationID).Scan(&body); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(body, `"attended":false`) {
+		t.Fatalf("stored body %s does not carry the attended flag", body)
+	}
+	var got domain.ReviewAdmission
+	if err := st.Read(ctx, func(tx *ReadTx) error {
+		var err error
+		got, err = tx.GetReviewAdmission(ctx, legacy.InvocationID)
+		return err
+	}); err != nil {
+		t.Fatalf("read a review admission carrying the attended flag: %v", err)
+	}
+	if !got.Equal(legacy) {
+		t.Fatalf("read back %+v, want %+v", got, legacy)
+	}
+	if err := st.Write(ctx, func(tx *WriteTx) error { return tx.PutReviewAdmission(ctx, got) }); err != nil {
+		t.Fatalf("replay of the stored snapshot = %v", err)
 	}
 }

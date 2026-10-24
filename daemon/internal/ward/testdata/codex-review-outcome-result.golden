@@ -22,7 +22,6 @@
         "effective_egress": [
           "review.fake.example:443"
         ],
-        "attended": false,
         "route_model_id": "fake",
         "requested_effort": "high",
         "native_effort": "review-v1",
@@ -33,7 +32,7 @@
     "configuration_digest": "sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
     "instruction_digest": "sha256:0be72fc9d7967e681492f7dbbb6ef4fc66e1f7fc8e4d1a887fb766fc38282a35",
     "completed_at": "2026-08-03T12:00:00Z",
-    "completion_evidence": "sha256:401220cdbf661fc6f387942e8ac6aa4b7efa32d3c1ef2f64657696d015f9a5fe",
+    "completion_evidence": "sha256:91aed785c476bab75ec8711b96df8a27fe760f2a8e5621e56ccc212f3a5b4758",
     "findings": [
       {
         "id": "review-99ed897149dddfe622171aac",

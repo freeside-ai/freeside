@@ -115,7 +115,6 @@ func agentBinding() domain.AdmissionAgentBinding {
 		EnrollmentGeneration: 1,
 		StoreManifestDigest:  manifestDigest,
 		EffectiveEgress:      []string{"chatgpt.com"},
-		Attended:             true,
 	}
 }
 
@@ -281,15 +280,6 @@ func TestAdmissionAgentEncoding(t *testing.T) {
 }
 
 func TestAdmissionAgentBindingCrossChecks(t *testing.T) {
-	t.Run("attended flag must agree with the mode", func(t *testing.T) {
-		in := admissionInput()
-		binding := agentBinding()
-		binding.Attended = false // mode is attended_dev
-		in.AgentBinding = &binding
-		if _, err := domain.NewExecutionAdmission(in); !errors.Is(err, domain.ErrAdmissionInconsistent) {
-			t.Fatalf("NewExecutionAdmission = %v, want %v", err, domain.ErrAdmissionInconsistent)
-		}
-	})
 	t.Run("agent binding requires instruction provenance", func(t *testing.T) {
 		// All three provenance-less shapes are valid history for a legacy
 		// admission and incoherent for a newly written v4 one: absent stage
@@ -389,7 +379,6 @@ func derivationClosureFor(t *testing.T, resolution domain.AgentResolutionInput, 
 		EnrollmentGeneration: generationEntry.Ordinal,
 		StoreManifestDigest:  generationEntry.StoreManifestDigest,
 		EffectiveEgress:      resolution.Route.InferenceAuthorities,
-		Attended:             true,
 		RouteModelID:         selection.RouteModelID,
 		RequestedEffort:      selection.RequestedEffort,
 		NativeEffort:         selection.NativeEffort,

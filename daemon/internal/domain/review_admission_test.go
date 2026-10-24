@@ -21,7 +21,7 @@ func reviewAdmissionClosure(t *testing.T) (
 	execution, agent, adapter, route, offer, _, enrollment, generationEntry := derivationClosure(t)
 	launch := launchSpec(t)
 	binding := *execution.AgentBinding
-	binding.LaunchDigest, binding.Attended = launch.Digest, false
+	binding.LaunchDigest = launch.Digest
 	binding.SelectionSource = domain.AgentSelectionSourceLineup
 	admission, err := domain.NewReviewAdmission(domain.ReviewAdmission{
 		InvocationID: "review-run-1-1", RunID: "run-1", Role: domain.RoleReviewer,
@@ -70,7 +70,6 @@ func TestReviewAdmissionValidate(t *testing.T) {
 		{"no effort", func(a *domain.ReviewAdmission) {
 			a.AgentBinding.RequestedEffort, a.AgentBinding.NativeEffort = "", ""
 		}, domain.ErrEmptyField},
-		{"attended", func(a *domain.ReviewAdmission) { a.AgentBinding.Attended = true }, domain.ErrReviewAdmissionInvalid},
 		{"task line selection", func(a *domain.ReviewAdmission) {
 			a.AgentBinding.SelectionSource = domain.AgentSelectionSourceTaskLine
 			a.AgentBinding.SelectionRecordID = a.AgentBinding.AgentDigest

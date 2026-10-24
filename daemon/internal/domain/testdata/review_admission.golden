@@ -16,7 +16,6 @@
     "effective_egress": [
       "chatgpt.com:443"
     ],
-    "attended": false,
     "route_model_id": "gpt-5.2-codex",
     "requested_effort": "high",
     "native_effort": "high",

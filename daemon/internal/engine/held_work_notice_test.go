@@ -398,20 +398,21 @@ func TestHeldWorkNoticeNewCauseResolvesAndRestarts(t *testing.T) {
 	}
 }
 
-// TestCrossRoleSpecifierLineIsAdmittedUnattended is the Wave 8 exit-run
-// shape (issues #2211, #2265): an unattended specification attempt whose task
-// line names another role's agent. Plan revision 97 dropped the attended
-// first run, so the attempt is admitted on that agent from its first launch.
-func TestCrossRoleSpecifierLineIsAdmittedUnattended(t *testing.T) {
+// TestCrossRoleSpecifierLineIsAdmitted is the Wave 8 exit-run shape (issues
+// #2211, #2265): a specification attempt whose task line names another
+// role's agent, refused unattended while the attended first run held. Plan
+// revision 97 dropped it, so agent admission takes no operating mode and the
+// attempt is admitted on that agent from its first launch.
+func TestCrossRoleSpecifierLineIsAdmitted(t *testing.T) {
 	agents := newAgentAdmissionFixture(t)
 	agents.addSecondAgent(t)
 	agents.submitLine(t, domain.RoleSpecifier, agentTestSecondAgent)
 	admission, err := resolveAgentAdmission(
 		t.Context(), agents.store, agents.selection, agents.run.ID, domain.RoleSpecifier,
-		agentTestPrompts[domain.RoleSpecifier].Digest, domain.ModeUnattended, agentTestAt,
+		agentTestPrompts[domain.RoleSpecifier].Digest, agentTestAt,
 	)
 	if err != nil {
-		t.Fatalf("unattended admission of the cross-role line: %v", err)
+		t.Fatalf("admission of the cross-role line: %v", err)
 	}
 	digest, err := agents.selection.Tree.AgentDigest(agentTestSecondAgent)
 	if err != nil {
@@ -423,8 +424,8 @@ func TestCrossRoleSpecifierLineIsAdmittedUnattended(t *testing.T) {
 	}
 }
 
-// TestAgentRefusalNamesTheAgent: an unattended specification attempt whose
-// task line names an agent, refused after that agent resolves. The hold
+// TestAgentRefusalNamesTheAgent: a specification attempt whose task line
+// names an agent, refused after that agent resolves. The hold
 // names the check, the agent, and the launch, a changed detail is written at
 // once, and the held-work notice names them too.
 func TestAgentRefusalNamesTheAgent(t *testing.T) {
@@ -434,7 +435,7 @@ func TestAgentRefusalNamesTheAgent(t *testing.T) {
 	// A prompt the line does not select is refused once the agent resolved.
 	_, refusal := resolveAgentAdmission(
 		t.Context(), agents.store, agents.selection, agents.run.ID, domain.RoleSpecifier,
-		agentTestDigest("9"), domain.ModeUnattended, agentTestAt,
+		agentTestDigest("9"), agentTestAt,
 	)
 	launch := agentTestLaunch(t, agents, domain.RoleSpecifier)
 	assertAdmissionDetail(t, refusal, domain.AdmissionCheckAgentPrompt, agentTestSecondAgent, launch)

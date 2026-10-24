@@ -337,12 +337,12 @@ func (s AgentSelection) validate() error {
 // first seen at its attempt.
 func (s AgentSelection) CheckRole(
 	ctx context.Context, st *store.Store, role domain.RoleName,
-	promptDigest domain.Digest, mode domain.OperatingMode, at time.Time,
+	promptDigest domain.Digest, at time.Time,
 ) (domain.AdmissionAgentBinding, error) {
 	if err := s.validate(); err != nil {
 		return domain.AdmissionAgentBinding{}, err
 	}
-	resolved, err := resolveAgentAdmission(ctx, st, s, "", role, promptDigest, mode, at)
+	resolved, err := resolveAgentAdmission(ctx, st, s, "", role, promptDigest, at)
 	return resolved.binding, err
 }
 
@@ -384,7 +384,7 @@ func wardRole(
 // one; it is empty outside an attempt (CheckRole), where the lineup selects.
 func resolveAgentAdmission(
 	ctx context.Context, st *store.Store, selection AgentSelection, runID domain.RunID, role domain.RoleName,
-	promptDigest domain.Digest, mode domain.OperatingMode, admittedAt time.Time,
+	promptDigest domain.Digest, admittedAt time.Time,
 ) (agentAdmission, error) {
 	// refused gains the launch and the agent as each resolves, so a refusal
 	// names whichever of them it came after.
@@ -495,7 +495,6 @@ func resolveAgentAdmission(
 			EnrollmentID: enrollment.ID, EnrollmentGeneration: generation.Ordinal,
 			StoreManifestDigest: generation.StoreManifestDigest,
 			EffectiveEgress:     slices.Clone(selection.EffectiveEgress),
-			Attended:            mode != domain.ModeUnattended,
 			RouteModelID:        passes.RouteModelID, RequestedEffort: passes.RequestedEffort,
 			NativeEffort:    passes.NativeEffort,
 			SelectionSource: source, SelectionRecordID: record,

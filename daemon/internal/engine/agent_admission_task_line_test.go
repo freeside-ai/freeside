@@ -537,7 +537,7 @@ func TestTaskLinesLeaveLineupOnlyRolesAlone(t *testing.T) {
 	}
 
 	binding, err := f.selection.CheckRole(ctx, f.store, domain.RoleImplementer,
-		agentTestPrompts[domain.RoleImplementer].Digest, domain.ModeAttendedDev, agentTestAt)
+		agentTestPrompts[domain.RoleImplementer].Digest, agentTestAt)
 	if err != nil || binding.SelectionSource != domain.AgentSelectionSourceLineup ||
 		binding.SelectionRecordID != "" || binding.EnrollmentID != f.enrollment.ID {
 		t.Fatalf("CheckRole = %+v, %v; want the lineup's agent", binding, err)
@@ -554,7 +554,7 @@ func TestLinelessAdmissionSelectsFromTheLineup(t *testing.T) {
 		t.Fatalf("admitAttempt = %t, %v", admitted, err)
 	}
 	lineupOnly, err := f.selection.CheckRole(context.Background(), f.store, domain.RoleImplementer,
-		admission.StageInputs.PromptPackageDigest, domain.ModeAttendedDev, agentTestAt)
+		admission.StageInputs.PromptPackageDigest, agentTestAt)
 	if err != nil {
 		t.Fatal(err)
 	}

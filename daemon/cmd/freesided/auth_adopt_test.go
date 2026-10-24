@@ -1119,22 +1119,19 @@ func assertAdoptedPatchResolvesAndAdmitsEveryRole(t *testing.T, f *authAdoptFixt
 				// admitted by the review check, which records a snapshot and
 				// does not enforce launch coverage yet (#1980).
 				if _, err := selection.CheckRole(
-					ctx, st, role, agent.Line.PromptDigest, domain.ModeAttendedDev, now,
+					ctx, st, role, agent.Line.PromptDigest, now,
 				); !errors.Is(err, engine.ErrAgentNotAdmissible) {
 					t.Fatalf("stage admission of review role %s = %v", role, err)
 				}
 				continue
 			}
-			for _, mode := range []domain.OperatingMode{domain.ModeAttendedDev, domain.ModeUnattended} {
-				binding, err := selection.CheckRole(ctx, st, role, prompt.Digest, mode, now)
-				if err != nil {
-					t.Fatalf("admit %s in %s: %v", role, mode, err)
-				}
-				if binding.EnrollmentID != agent.Enrollment.ID || binding.EnrollmentGeneration != 1 ||
-					binding.LineupRevision != selection.LineupRevision ||
-					binding.Attended != (mode != domain.ModeUnattended) {
-					t.Fatalf("role %s binding in %s = %+v", role, mode, binding)
-				}
+			binding, err := selection.CheckRole(ctx, st, role, prompt.Digest, now)
+			if err != nil {
+				t.Fatalf("admit %s: %v", role, err)
+			}
+			if binding.EnrollmentID != agent.Enrollment.ID || binding.EnrollmentGeneration != 1 ||
+				binding.LineupRevision != selection.LineupRevision {
+				t.Fatalf("role %s binding = %+v", role, binding)
 			}
 		}
 		// A lineup without the role refuses, naming it.

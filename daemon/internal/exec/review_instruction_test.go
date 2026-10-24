@@ -224,9 +224,6 @@ func TestReviewRequestRequiresItsAdmission(t *testing.T) {
 	}{
 		"no admission": {func(r *ReviewRequest) { r.Admission = domain.ReviewAdmission{} }, domain.ErrEmptyID},
 		"another run":  {func(r *ReviewRequest) { r.Admission.RunID = "run-2" }, domain.ErrParentKeyMismatch},
-		"an attended binding": {func(r *ReviewRequest) {
-			r.Admission.AgentBinding.Attended = true
-		}, domain.ErrReviewAdmissionInvalid},
 	} {
 		refused := request
 		tc.mutate(&refused)
@@ -263,9 +260,6 @@ func TestReviewResultRequiresAWellFormedAdmission(t *testing.T) {
 		"no admission":   {func(r *ReviewResult) { r.Admission = domain.ReviewAdmission{} }, domain.ErrEmptyID},
 		"no identity":    {func(r *ReviewResult) { r.Admission.AuthIdentityID = "" }, domain.ErrEmptyID},
 		"a stage's role": {func(r *ReviewResult) { r.Admission.Role = domain.RoleImplementer }, domain.ErrInvalidRoleName},
-		"an attended binding": {func(r *ReviewResult) {
-			r.Admission.AgentBinding.Attended = true
-		}, domain.ErrReviewAdmissionInvalid},
 	} {
 		refused := result
 		tc.mutate(&refused)

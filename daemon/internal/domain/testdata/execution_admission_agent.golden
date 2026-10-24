@@ -1,5 +1,5 @@
 {
-  "id": "sha256:a82367becb8a96c47ad99807b3cc1946b66630e856c24c2e4624f1c18f5f88bd",
+  "id": "sha256:c374dcfe0e8b64bab30eec5427ef35bc0c7ccb0fab0aa6eab4ce80262e691c66",
   "invocation_id": "inv-3",
   "run_id": "run-1",
   "stage_id": "stage-1",
@@ -58,7 +58,6 @@
     "effective_egress": [
       "chatgpt.com"
     ],
-    "attended": true,
     "selection_source": "lineup"
   },
   "admitted_at": "2026-01-02T03:04:05Z"

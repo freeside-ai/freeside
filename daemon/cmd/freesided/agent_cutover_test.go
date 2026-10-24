@@ -863,7 +863,7 @@ func TestWriterRoleFailureHoldsAdmissionAndRaisesOneItem(t *testing.T) {
 		if err := recordBaselineAdapterConformance(ctx, st, now); err != nil {
 			t.Fatal(err)
 		}
-		if failure := checkWriterRoles(ctx, st, *selection, prompts, domain.ModeUnattended, now); failure != nil {
+		if failure := checkWriterRoles(ctx, st, *selection, prompts, now); failure != nil {
 			t.Fatalf("adopted writer roles: %v", failure)
 		}
 		if err := agentSelectionGate(st, nil)(ctx); err != nil {
@@ -872,7 +872,7 @@ func TestWriterRoleFailureHoldsAdmissionAndRaisesOneItem(t *testing.T) {
 
 		// The daemon now runs another remediation prompt than the line names.
 		prompts[domain.RoleRemediator] = prompts[domain.RoleImplementer]
-		failure := checkWriterRoles(ctx, st, *selection, prompts, domain.ModeUnattended, now)
+		failure := checkWriterRoles(ctx, st, *selection, prompts, now)
 		if failure == nil || failure.Role != domain.RoleRemediator || !errors.Is(failure, engine.ErrAgentNotAdmissible) {
 			t.Fatalf("mismatched remediation prompt = %v", failure)
 		}

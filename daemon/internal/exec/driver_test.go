@@ -23,7 +23,7 @@ func agentBinding() *domain.AdmissionAgentBinding {
 		TreatmentDigest: execStageDigest("d"), PricingRevision: "pricing-2026-01",
 		LineupRevision: execStageDigest("c"), EnrollmentID: "enroll-1",
 		EnrollmentGeneration: 1, StoreManifestDigest: execStageDigest("9"),
-		EffectiveEgress: []string{"api.anthropic.com"}, Attended: true,
+		EffectiveEgress: []string{"api.anthropic.com"},
 	}
 }
 

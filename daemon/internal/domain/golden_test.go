@@ -1202,7 +1202,6 @@ func TestGolden(t *testing.T) {
 			EnrollmentGeneration: 2,
 			StoreManifestDigest:  stageDigest("9"),
 			EffectiveEgress:      goldenRoute.InferenceAuthorities,
-			Attended:             true,
 			SelectionSource:      domain.AgentSelectionSourceLineup,
 		},
 		AdmittedAt: ts,
@@ -1210,12 +1209,15 @@ func TestGolden(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	// The same admission without a selection source is the body recorded
-	// before the field existed. It must keep the id the golden pinned then,
-	// or every stored agent-bound admission would stop validating.
+	// The same admission without a selection source and with the attended
+	// flag is the body recorded before either change. It must keep the id
+	// the golden pinned then, or every stored agent-bound admission would
+	// stop validating.
 	legacyAgentAdmission := agentAdmission
 	legacyBinding := *agentAdmission.AgentBinding
 	legacyBinding.SelectionSource = ""
+	legacyAttended := true
+	legacyBinding.LegacyAttended = &legacyAttended
 	legacyAgentAdmission.AgentBinding = &legacyBinding
 	const legacyAgentAdmissionID = "sha256:30c98a416a17ac8c357accdf8cfca31370765dad9e6dafab9a4e427ad647822c"
 	if id, err := legacyAgentAdmission.ComputeID(); err != nil || id != legacyAgentAdmissionID {
@@ -1269,7 +1271,6 @@ func TestGolden(t *testing.T) {
 			EnrollmentGeneration: 1,
 			StoreManifestDigest:  stageDigest("9"),
 			EffectiveEgress:      []string{"api.anthropic.com"},
-			Attended:             true,
 			RouteModelID:         "claude-opus-5-5",
 			RequestedEffort:      domain.EffortMax,
 			NativeEffort:         "max",
