@@ -16,8 +16,9 @@ name: convergence CI
 # the convergence suite, and the swift-format gate runs first; the build
 # is the same either way. The job runs only through pull-request.yml: a
 # push to main carries a tree its PR tested under the up-to-date rule,
-# and the Go build cache it restores is saved by daemon-ci.yml's
-# `macos-main` job.
+# the Go build cache it restores is saved by daemon-ci.yml's
+# `macos-main` job, and the SwiftPM build cache by app-ci.yml's
+# `swiftpm-cache` job.
 
 on:
   workflow_call:
@@ -107,22 +108,48 @@ jobs:
           restore-keys: |
             daemon-build-v2-${{ runner.os }}-${{ runner.arch }}-${{ steps.go.outputs.go-version }}-rest-${{ hashFiles('daemon/go.sum') }}-
             go-build-${{ runner.os }}-${{ github.job }}-${{ hashFiles('daemon/go.sum') }}-
-      - name: Cache SwiftPM dependencies
-        uses: actions/cache@v4
+      # The key's twin is the same step in app-ci.yml's `swiftpm-cache`
+      # job, which saves the entry this job restores; change both
+      # together or the keys stop matching. The image and the default
+      # toolchain (the one `swift test` uses; the format steps pin their
+      # own Xcode) are in the key because a build made by another
+      # compiler is not reusable.
+      - name: Resolve SwiftPM build cache key
+        id: swiftpm-key
+        run: |
+          toolchain="$(swift --version 2>&1 | grep -o 'swiftlang-[0-9.]*' | head -n 1)"
+          if [ -z "${ImageOS:-}" ] || [ -z "${ImageVersion:-}" ] || [ -z "${toolchain}" ]; then
+            echo "cannot resolve image (${ImageOS:-}-${ImageVersion:-}) or toolchain (${toolchain})" >&2
+            exit 1
+          fi
+          echo "image=${ImageOS}-${ImageVersion}" >>"$GITHUB_OUTPUT"
+          echo "toolchain=${toolchain}" >>"$GITHUB_OUTPUT"
+      # app/.build from the last app-path push to main, so the pinned
+      # dependencies compile once per Package.resolved, toolchain, and
+      # image instead of once per PR. A fresh checkout gives every
+      # project source a new mtime, so SwiftPM still recompiles the
+      # project's own modules; the restored dependency checkouts keep
+      # theirs and are reused (#2249 measured both). Restore-only: a PR
+      # run's save would be scoped to that PR. Its clones under
+      # app/.build replace the SwiftPM mirror cache this job used to
+      # keep, which never ran on a push and so no other PR could read.
+      - name: Restore SwiftPM build output
+        id: swiftpm-build
+        uses: actions/cache/restore@v4
         with:
-          # SwiftPM's shared dependency cache: the bare mirrors it clones
-          # the pinned checkouts from. macOS location; the Linux one is
-          # ~/.cache/org.swift.swiftpm (see app-ci.yml). Not app/.build:
-          # caching compiled output could let a stale artifact register
-          # as a pass, while a mirror cannot (the pin still decides what
-          # is checked out and everything is still compiled here).
-          path: ~/Library/Caches/org.swift.swiftpm
-          key: swiftpm-${{ runner.os }}-${{ github.job }}-${{ hashFiles('app/Package.resolved') }}
-          restore-keys: swiftpm-${{ runner.os }}-${{ github.job }}-
+          path: app/.build
+          key: swiftpm-build-v1-${{ runner.os }}-${{ runner.arch }}-${{ steps.swiftpm-key.outputs.image }}-${{ steps.swiftpm-key.outputs.toolchain }}-${{ hashFiles('app/Package.resolved') }}
       - name: Run the convergence pass (scripts/check.sh)
         env:
           CONVERGENCE_ALL_TESTS: ${{ inputs.app_tests && '1' || '' }}
         run: bash scripts/check.sh convergence
+      - name: Report SwiftPM build cache use
+        if: always()
+        env:
+          CACHE_HIT: ${{ steps.swiftpm-build.outputs.cache-hit }}
+        run: |
+          echo "swiftpm build cache hit: ${CACHE_HIT:-false}"
+          du -sh app/.build || true
       # The screenshot suite dumps each mismatched render next to its digest
       # line; publishing those PNGs is the only way to review a hosted
       # runner's raster before it is recorded as an override (#1139).

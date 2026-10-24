@@ -227,8 +227,10 @@ class Coverage(unittest.TestCase):
             self.assertIn(helper, selector)
             self.assertIn('      - "' + helper + '"', workflow)
         # The PR's macOS Swift tests run in the convergence job when app is
-        # selected; app-ci.yml itself requests no macOS job on push and no
-        # macOS test job at all, so a PR asks for three macOS jobs, not five.
+        # selected; app-ci.yml itself requests no macOS test job at all, so
+        # a PR asks for three macOS jobs, not five. Its one push-side macOS
+        # job saves the SwiftPM build cache the convergence job only
+        # restores, under a key both workflows spell the same (#2249).
         self.assertIn("    with:\n      app_tests: ${{ needs.select.outputs.app == 'true' }}\n", caller)
         convergence = (root / '.github/workflows/convergence-ci.yml').read_text()
         self.assertIn('    inputs:\n      app_tests:\n', convergence)
@@ -238,9 +240,15 @@ class Coverage(unittest.TestCase):
         self.assertIn('-rest-${{ hashFiles', convergence)
         app = (root / '.github/workflows/app-ci.yml').read_text()
         app_jobs = dict(re.findall(r'^  ([a-z-]+):\n(.*?)(?=^  [a-z-]+:|\Z)', app, re.M | re.S))
-        self.assertEqual({name for name, body in app_jobs.items() if 'runs-on: macos' in body}, {'apps'})
+        self.assertEqual({name for name, body in app_jobs.items() if 'runs-on: macos' in body},
+                         {'apps', 'swiftpm-cache'})
         self.assertIn("    if: github.event_name != 'push'\n", app_jobs['apps'])
-        self.assertNotIn('swift test', app_jobs['apps'])
+        self.assertIn("    if: github.event_name == 'push'\n", app_jobs['swiftpm-cache'])
+        for name in ('apps', 'swiftpm-cache'):
+            self.assertNotIn('swift test', app_jobs[name])
+        swiftpm_key = re.compile(r'^ +key: (swiftpm-build-v1-.*)$', re.M)
+        self.assertEqual(swiftpm_key.findall(convergence), swiftpm_key.findall(app_jobs['swiftpm-cache']))
+        self.assertEqual(len(swiftpm_key.findall(convergence)), 1)
 
     def test_required_gate_rejects_selected_skips_and_missing_children(self):
         caller = (root / '.github/workflows/pull-request.yml').read_text()

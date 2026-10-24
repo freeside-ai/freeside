@@ -12,7 +12,8 @@ on:
   # from the changed paths and reports the required check. The macOS
   # Swift tests and the swift-format gate run in convergence-ci.yml's one
   # macOS job, which the caller gives `app_tests` whenever it selects this
-  # component (#2248); only the Linux jobs run here on a push to main.
+  # component (#2248). On a push to main the Linux jobs run here, and
+  # `swiftpm-cache` refreshes the SwiftPM build cache that job restores.
   workflow_call:
 
 permissions:
@@ -86,3 +87,54 @@ jobs:
           restore-keys: swiftpm-${{ runner.os }}-${{ github.job }}-
       - name: Build macOS and iOS apps (scripts/check.sh)
         run: bash scripts/check.sh app build-mac build-ios
+
+  # Push-only: saves the app/.build entry convergence-ci.yml's
+  # `convergence` job restores, since a PR run's save is scoped to that
+  # PR and only a push to main fills an entry every PR can read. When the
+  # entry exists the job is a checkout and a cache lookup (under a
+  # minute); when the key changes (Package.resolved, the image, or its
+  # default toolchain) it builds the test graph once, against the 2 to 3
+  # minutes each app PR saves (#2249). A quick second app-path merge may
+  # cancel it under `cancel-in-progress`; the next app-path push repairs
+  # the miss.
+  swiftpm-cache:
+    name: swiftpm build cache (main)
+    runs-on: macos-26
+    if: github.event_name == 'push'
+    steps:
+      - uses: actions/checkout@v4
+      # The key's twin is the same step in convergence-ci.yml's
+      # `convergence` job, which restores the entry this job saves;
+      # change both together or the keys stop matching.
+      - name: Resolve SwiftPM build cache key
+        id: swiftpm-key
+        run: |
+          toolchain="$(swift --version 2>&1 | grep -o 'swiftlang-[0-9.]*' | head -n 1)"
+          if [ -z "${ImageOS:-}" ] || [ -z "${ImageVersion:-}" ] || [ -z "${toolchain}" ]; then
+            echo "cannot resolve image (${ImageOS:-}-${ImageVersion:-}) or toolchain (${toolchain})" >&2
+            exit 1
+          fi
+          echo "image=${ImageOS}-${ImageVersion}" >>"$GITHUB_OUTPUT"
+          echo "toolchain=${toolchain}" >>"$GITHUB_OUTPUT"
+      - name: Look up SwiftPM build output
+        id: lookup
+        uses: actions/cache/restore@v4
+        with:
+          path: app/.build
+          key: swiftpm-build-v1-${{ runner.os }}-${{ runner.arch }}-${{ steps.swiftpm-key.outputs.image }}-${{ steps.swiftpm-key.outputs.toolchain }}-${{ hashFiles('app/Package.resolved') }}
+          lookup-only: true
+      # The graph the convergence job's test run compiles: debug, test
+      # targets included, the image's default Xcode.
+      - name: Build the Swift test graph
+        if: steps.lookup.outputs.cache-hit != 'true'
+        working-directory: app
+        run: swift build --only-use-versions-from-resolved-file --build-tests
+      - name: Report SwiftPM build output size
+        if: steps.lookup.outputs.cache-hit != 'true'
+        run: du -sh app/.build
+      - name: Save SwiftPM build output
+        if: steps.lookup.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v4
+        with:
+          path: app/.build
+          key: ${{ steps.lookup.outputs.cache-primary-key }}
