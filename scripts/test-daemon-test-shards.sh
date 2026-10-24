@@ -198,6 +198,10 @@ class Coverage(unittest.TestCase):
         self.assertIn('runs-on: macos-26', main)
         self.assertIn('fetch-depth: 2', main)
         self.assertLess(main.index("go test -count=1 -run '^$' ./..."), main.index('bash scripts/check.sh daemon test'))
+        # The cache this job saves is the one the PR rest shard and the
+        # convergence job restore, so it runs their build too.
+        self.assertLess(main.index('run: bash scripts/check.sh daemon build\n'),
+                        main.index("go test -count=1 -run '^$' ./..."))
         shard_steps = re.findall(r'DAEMON_TEST_SHARD_KIND: integration\n *DAEMON_TEST_SHARD_INDEX: (\d+)\n'
                                  r' *DAEMON_TEST_SHARD_COUNT: (\d+)\n *DAEMON_TEST_INTEGRATION_SHARDS: (\d+)\n'
                                  r' *DAEMON_TEST_EVIDENCE_DIR: \$\{\{ github.workspace \}\}/evidence/integration-(\d+)\n'

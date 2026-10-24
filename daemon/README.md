@@ -48,9 +48,10 @@ gate re-accounts the raw events, checks every assigned family and package,
 and rejects missing, duplicate, stale, or failed execution. On Linux,
 integration shards share a build-cache restore group keyed by OS,
 architecture, Go version, and dependencies, and shard 1 alone writes that
-group's cache on a successful main push. On macOS the push job compiles every
-test binary first and writes the rest group's cache, which the PR rest shard
-and the convergence job restore. PR build caches remain restore-only. The old
+group's cache on a successful main push. On macOS the push job runs the PR
+rest shard's build and compiles every test binary first, then writes the rest
+group's cache, which the PR rest shard and the convergence job restore. PR
+build caches remain restore-only. The old
 monolithic caches provide a compatible migration fallback. Empty cache
 directories are created before size reporting, so a cold miss still reaches
 compilation.
