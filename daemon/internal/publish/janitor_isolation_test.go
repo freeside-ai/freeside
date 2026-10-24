@@ -126,15 +126,19 @@ func requestingRegistration(t *testing.T, r *http.Request) int64 {
 }
 
 // awaitActive polls the runtime gate, which the always-on loop publishes from
-// its own goroutine.
+// its own goroutine. The loop withdraws coverage at the start of every pass and
+// republishes it at the end, so a plain ActiveFor sample can land inside a pass
+// and a second read can disagree with the first. Each AwaitActiveFor call waits
+// out any pass in progress and reads that pass's result, and the first read
+// reporting coverage decides; only the deadline fails.
 func awaitActive(t *testing.T, janitor *publish.InstallationJanitor, registrationID int64) {
 	t.Helper()
 	deadline := time.Now().Add(5 * time.Second)
-	for !janitor.ActiveFor(registrationID) && time.Now().Before(deadline) {
+	for !janitor.AwaitActiveFor(registrationID) {
+		if !time.Now().Before(deadline) {
+			t.Fatalf("registration %d never became active", registrationID)
+		}
 		time.Sleep(time.Millisecond)
-	}
-	if !janitor.ActiveFor(registrationID) {
-		t.Fatalf("registration %d never became active", registrationID)
 	}
 }
 
@@ -253,7 +257,7 @@ func TestInstallationJanitorIsolatesAnAuthorityFailure(t *testing.T) {
 	if janitor.ActiveFor(601) {
 		t.Fatal("a registration with no authority was covered")
 	}
-	if !janitor.AllowsRepository(501, 701, fixtureRepositoryID) {
+	if !janitor.AwaitAllowsRepository(501, 701, fixtureRepositoryID) {
 		t.Fatal("the usable registration lost its mint allow-set")
 	}
 	faults := janitor.RegistrationFaults()
