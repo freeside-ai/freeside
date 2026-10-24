@@ -48,6 +48,7 @@ var (
 	ErrInvalidReviewOutcome             = errors.New("invalid review outcome")
 	ErrInvalidReviewDisposition         = errors.New("invalid review disposition")
 	ErrInvalidReviewFailureClass        = errors.New("invalid review failure class")
+	ErrInvalidFailureCause              = errors.New("invalid failure cause")
 	ErrInvalidReviewCompletionEvidence  = errors.New("invalid review completion evidence digest")
 	ErrInvalidCommitPlanMode            = errors.New("invalid commit plan mode")
 	ErrUnknownMessageRuleset            = errors.New("message ruleset is not in the built-in ruleset registry")
