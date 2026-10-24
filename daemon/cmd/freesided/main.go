@@ -254,7 +254,11 @@ func main() {
 	publicationProjectID := flags.String("publication-project-id", "project-fake-publication", "publication project id")
 	publicationTitle := flags.String("publication-title", "Publish attended fake candidate", "pull request title")
 	publicationBody := flags.String("publication-body", "", "pull request body")
-	driverMode := flags.String("driver", "disabled", "execution: disabled (setup only), fake (explicit demo), or claude (real agents)")
+	driverMode := flags.String("driver", "disabled",
+		"execution: disabled (setup only), fake (explicit demo), claude (real agents), "+
+			"or scenario (a scripted run on the production pipeline; ephemeral only)")
+	scenarioName := flags.String("scenario", "", "with -driver scenario: the scenario to play (see -list-scenarios)")
+	listScenariosOnly := flags.Bool("list-scenarios", false, "print the scenarios -driver scenario plays, one per line, and exit")
 	var judgmentsConfig judgmentConfig
 	judgmentFlags(flags, &judgmentsConfig)
 	flags.StringVar(&judgmentsConfig.ExpectedDigest, "judgment-configuration-digest", "", "required preflight digest when subscription judgments are enabled")
@@ -326,6 +330,13 @@ func main() {
 	if err := flags.Parse(os.Args[1:]); err != nil {
 		os.Exit(2)
 	}
+	if *listScenariosOnly {
+		if err := listScenarios(os.Stdout); err != nil {
+			fmt.Fprintln(os.Stderr, "freesided:", err)
+			os.Exit(1)
+		}
+		return
+	}
 	logger, err := newLogger(os.Stderr, *logLevel)
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "freesided:", err)
@@ -338,7 +349,7 @@ func main() {
 	}
 	execution := executionMode(*driverMode)
 	if !execution.valid() {
-		fmt.Fprintf(os.Stderr, "freesided: -driver %q is not disabled, fake, or claude\n", *driverMode)
+		fmt.Fprintf(os.Stderr, "freesided: -driver %q is not disabled, fake, claude, or scenario\n", *driverMode)
 		os.Exit(2)
 	}
 	home, err := os.UserHomeDir()
@@ -455,10 +466,18 @@ func main() {
 		fmt.Fprintf(os.Stderr, "freesided: -operating-mode %q is not attended_dev or unattended\n", *operatingMode)
 		os.Exit(2)
 	}
+	played, err := scenarioFromFlags(execution, *scenarioName)
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "freesided:", err)
+		os.Exit(2)
+	}
+	daemonConfig.Scenario = played
 	switch execution {
 	case executionDisabled:
 	case executionFake:
 		daemonConfig.FakeDriverEnabled = true
+	case executionScenario:
+		// scenarioFromFlags set daemonConfig.Scenario above.
 	case executionClaude:
 		id := int64(0)
 		if v := repositoryID.Value(); v != nil {
@@ -554,17 +573,19 @@ const (
 	executionDisabled executionMode = "disabled"
 	executionFake     executionMode = "fake"
 	executionClaude   executionMode = "claude"
+	executionScenario executionMode = "scenario"
 )
 
 var AllExecutionModes = []executionMode{
 	executionDisabled,
 	executionFake,
 	executionClaude,
+	executionScenario,
 }
 
 func (mode executionMode) valid() bool {
 	switch mode {
-	case executionDisabled, executionFake, executionClaude:
+	case executionDisabled, executionFake, executionClaude, executionScenario:
 		return true
 	default:
 		return false
@@ -629,9 +650,15 @@ type config struct {
 	// now is the attention service clock. Production leaves it nil for the
 	// wall clock; tests can advance startup across pairing-code expiry.
 	now func() time.Time
-	// Claude configures real execution and its ward gate. Without it or explicit
-	// FakeDriverEnabled, the daemon serves setup and state without an engine.
+	// Claude configures real execution and its ward gate. Without it, explicit
+	// FakeDriverEnabled, or Scenario, the daemon serves setup and state
+	// without an engine.
 	Claude *claudeDriverConfig
+	// Scenario plays one scripted run on the production engine composition
+	// over fakes (-driver scenario). It is refused outside the ephemeral tier,
+	// because the fake backend's conformance record claims a containment
+	// nothing provides.
+	Scenario *scenario
 	// DeputyLaunch is set only by deputy: the composition this daemon serves
 	// under, which every new submission must bind (deputyLaunch.admit).
 	DeputyLaunch *deputyLaunch
@@ -681,6 +708,8 @@ func (cfg config) execution() executionMode {
 		return executionClaude
 	case cfg.FakeDriverEnabled:
 		return executionFake
+	case cfg.Scenario != nil:
+		return executionScenario
 	default:
 		return executionDisabled
 	}
@@ -695,6 +724,19 @@ func (cfg config) storeOptions() (store.Options, error) {
 		return store.Options{}, fmt.Errorf(
 			"-backup-encryption-waiver-repository-id: %w",
 			domain.ErrBackupEncryptionWaiverUnsupported)
+	}
+	if cfg.Scenario != nil {
+		// The scenario runs unattended, so its store re-gates admissions
+		// against the unattended floor, as a Claude-mode store does.
+		opts.AdmissionFloors = map[domain.OperatingMode]domain.CapabilitySnapshot{
+			domain.ModeUnattended: admissionCapabilitySnapshot(domain.ModeUnattended),
+		}
+		opts.ApprovedCredentialModes = []domain.CredentialMode{domain.CredentialSubscriptionContained}
+		if opts.ApprovedRecipes == nil {
+			opts.ApprovedRecipes = map[domain.Digest]bool{}
+		}
+		opts.ApprovedRecipes[verify.RecipeDigest(scenarioRecipe)] = true
+		return opts, nil
 	}
 	if cfg.Claude == nil {
 		if cfg.Environment == environmentEphemeral && !cfg.FakeDriverEnabled {
@@ -799,6 +841,17 @@ func run(parent context.Context, stop func(), cfg config) (_ *daemon, err error)
 	}
 	if cfg.SeedWalkingSkeleton && !cfg.FakeDriverEnabled {
 		return nil, errors.New("-seed-walking-skeleton requires -driver fake")
+	}
+	if cfg.Scenario != nil {
+		// Before the lock or the store: a non-ephemeral store must never
+		// receive the fake backend's conformance claim.
+		if cfg.Environment != environmentEphemeral {
+			return nil, fmt.Errorf("-driver scenario requires -environment %s, not %q",
+				environmentEphemeral, cfg.Environment)
+		}
+		if cfg.FakeDriverEnabled || cfg.Claude != nil {
+			return nil, errors.New("-driver scenario cannot run beside another driver")
+		}
 	}
 	var fixture seedfixture.Name
 	if cfg.SeedFixture != "" {
@@ -1017,6 +1070,7 @@ func run(parent context.Context, stop func(), cfg config) (_ *daemon, err error)
 	var (
 		workflow              *engine.Engine
 		claudeWiring          *claudeComposition
+		scenarioWiring        *scenarioComposition
 		doctorConvergenceLock sync.Mutex
 		doctorAvailable       atomic.Bool
 	)
@@ -1045,8 +1099,12 @@ func run(parent context.Context, stop func(), cfg config) (_ *daemon, err error)
 		}),
 		// The effective digest exists only after the Claude composition below;
 		// the func indirection lets the decision-time adoption gate read it
-		// then. The fake-driver composition leaves it empty (gate absent).
+		// then. The fake-driver composition leaves it empty (gate absent);
+		// the scenario's review source is the fake's default configuration.
 		signet.WithEffectiveReviewConfiguration(func() domain.Digest {
+			if scenarioWiring != nil {
+				return fake.DefaultReviewConfigurationDigest
+			}
 			if claudeWiring == nil {
 				return ""
 			}
@@ -1334,6 +1392,19 @@ func run(parent context.Context, stop func(), cfg config) (_ *daemon, err error)
 		if err := holdRetryableClaudeRecovery(claudeWiring.driver.Reconcile(ctx)); err != nil {
 			return nil, fmt.Errorf("reconcile orphaned handoffs: %w", err)
 		}
+	} else if cfg.Scenario != nil {
+		scenarioWiring, err = composeScenario(ctx, st, attention, blobs, lock, cfg)
+		if err != nil {
+			return nil, fmt.Errorf("compose scenario %s: %w", cfg.Scenario.Name, err)
+		}
+		// The forge serves only once its loop starts; a start that fails
+		// before then still owns the listener.
+		defer func() {
+			if err != nil {
+				_ = scenarioWiring.listener.Close()
+			}
+		}()
+		workflow = scenarioWiring.workflow
 	}
 	// The live credential-integrity probe exists only in Claude mode, where
 	// the daemon has a runtime and a pinned exporter image to observe with.
@@ -1416,8 +1487,10 @@ func run(parent context.Context, stop func(), cfg config) (_ *daemon, err error)
 		d.sessionCloser = claudeWiring.closer
 	}
 	d.pairing.configure(d.readiness().APIURL, attention.MintPairingCode)
+	// The control routes approve the store's recipe set, which a scenario
+	// extends with its own recipe.
 	d.pairing.registerControlRoutes(
-		d.pairing.mux, st, blobs, localBackupFiles, cfg.ApprovedRecipes, integrityProbe, cfg.Environment,
+		d.pairing.mux, st, blobs, localBackupFiles, storeOptions.ApprovedRecipes, integrityProbe, cfg.Environment,
 		cfg.execution(), attention, cfg.DeputyLaunch, func(ctx context.Context, id domain.TaskID, commit func() error) error {
 			if workflow == nil {
 				return commit()
@@ -1609,6 +1682,27 @@ func run(parent context.Context, stop func(), cfg config) (_ *daemon, err error)
 			defer d.wg.Done()
 			err := intakeReconcilerLoop.Run(ctx, defaultIntakeInterval, cfg.Logger)
 			d.componentExited(parent, ctx, componentLabelIntake, err)
+		}()
+	}
+	if scenarioWiring != nil {
+		// The scenario's own loops: the in-process forge publication talks
+		// to, the publication lane, and the durable scheduler's publication
+		// watches. The forge is an HTTP server like the API, so its exit is
+		// the same component failure.
+		d.wg.Add(3)
+		go func() {
+			defer d.wg.Done()
+			d.componentExited(parent, ctx, componentHTTP, scenarioWiring.serveForge(ctx, cfg.Logger))
+		}()
+		go func() {
+			defer d.wg.Done()
+			d.componentExited(parent, ctx, componentProductionPublication,
+				workflow.RunProductionPublications(ctx, cfg.ReconcileInterval))
+		}()
+		go func() {
+			defer d.wg.Done()
+			d.componentExited(parent, ctx, componentScheduler,
+				scenarioWiring.scheduler.Run(ctx, cfg.SchedulerInterval))
 		}()
 	}
 	pairingCode, _, err := attention.MintPairingCode(parent)
