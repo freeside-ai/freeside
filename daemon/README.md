@@ -43,15 +43,19 @@ do not select tests. Every shard uses `-count=1`, default Go concurrency and
 timeouts, and the existing opt-in skips. No race job is added.
 
 Each test job uploads raw Go JSON, compiled inventories, assignments, execution
-reports, tested identities, tool/image versions, and cache sizes. The platform
+reports, tested identities, tool/image versions, and cache sizes (before,
+after, and, on a cache-writing main push, trimmed). The platform
 gate re-accounts the raw events, checks every assigned family and package,
 and rejects missing, duplicate, stale, or failed execution. On Linux,
 integration shards share a build-cache restore group keyed by OS,
 architecture, Go version, and dependencies, and shard 1 alone writes that
 group's cache on a successful main push. On macOS the push job runs the PR
 rest shard's build and compiles every test binary first, then writes the rest
-group's cache, which the PR rest shard and the convergence job restore. PR
-build caches remain restore-only. The old
+group's cache, which the PR rest shard and the convergence job restore. Before
+saving, each main-push writer removes every restored entry that its own run
+neither compiled nor read and that is more than an hour older than the run,
+so a saved entry holds the tree's outputs rather than a rolling history of
+earlier pushes. PR build caches remain restore-only. The old
 monolithic caches provide a compatible migration fallback. Empty cache
 directories are created before size reporting, so a cold miss still reaches
 compilation.
