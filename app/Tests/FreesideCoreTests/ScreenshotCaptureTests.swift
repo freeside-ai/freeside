@@ -5,6 +5,7 @@
     import Testing
 
     @testable import FreesideCore
+    @testable import FreesideModel
 
     @Suite @MainActor struct ScreenshotCaptureTests {
         private enum ProbeError: Error { case stopped }

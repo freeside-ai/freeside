@@ -1,0 +1,203 @@
+import Foundation
+import FreesideAPI
+
+/// Presentation state pinned per launch so screenshot and automation
+/// workflows drive the app purely through launch arguments (#109):
+/// no mutation of the user's system appearance, no accessibility
+/// scripting to click a row. Launch arguments, not environment
+/// variables, because `open --args` forwards only arguments and
+/// `simctl launch` forwards them too; the composition arguments in
+/// `AppSession.fromEnvironment` follow the same convention. Unset
+/// means the ordinary launch: system appearance, nothing selected.
+public struct LaunchInputs {
+    public enum Contrast: String {
+        case standard
+        case increased
+    }
+
+    public enum Screen: String, Hashable {
+        case inbox
+        case tasks
+    }
+
+    /// What `-FreesideSelect` names on the tasks screen: a task, or a run
+    /// reached through its task, so a run link opens the task with the run
+    /// timeline pushed.
+    public enum TaskSelection: Equatable {
+        case task(String)
+        case run(taskID: String, runID: String)
+    }
+
+    /// What `-FreesideComposer` names: a decision card's message composer, by
+    /// the API action whose button opens it. Five cases, not the whole
+    /// `Action` type, so a launch can't name an action that has no composer.
+    public enum Composer: String, CaseIterable, Sendable {
+        case discuss
+        case requestChanges = "request_changes"
+        case returnToAgent = "return_to_agent"
+        case answerAndRetry = "answer_and_retry"
+        case answerWithoutRetry = "answer_without_retry"
+
+        public var action: Components.Schemas.Action {
+            switch self {
+            case .discuss: .discuss
+            case .requestChanges: .request_changes
+            case .returnToAgent: .return_to_agent
+            case .answerAndRetry: .answer_and_retry
+            case .answerWithoutRetry: .answer_without_retry
+            }
+        }
+    }
+
+    /// `-FreesideScreen inbox|tasks`; defaults to the attention inbox.
+    public let screen: Screen
+
+    /// `-FreesideColorScheme` as given; `colorScheme` reads it as the
+    /// SwiftUI value in FreesideCore.
+    package let colorSchemeRaw: String?
+
+    /// `-FreesideContrast standard|increased`; unset or unrecognized
+    /// follows the system accessibility contrast.
+    public let contrast: Contrast?
+
+    /// `-FreesideDynamicType` as given; `dynamicTypeSize` reads it as the
+    /// SwiftUI value in FreesideCore.
+    package let dynamicTypeSizeRaw: String?
+
+    /// `-FreesideSelect <id>`: the inbox item selected at launch, or on
+    /// the tasks screen the task or run opened at launch.
+    /// `AttentionFixtures.defaultInboxItemIDs()`,
+    /// `TaskFixtures.defaultTaskIDs()`, and `RunFixtures.defaultRunIDs()` are
+    /// the canonical value lists. An unknown id is ignored with a stderr
+    /// note, never a crash: the capture recipe's content check catches the
+    /// typo, and a stray persisted default must not take the app down.
+    public let selection: String?
+
+    /// The tasks-screen reading of `selection`: nil on the inbox screen or
+    /// when nothing valid was selected.
+    public let taskSelection: TaskSelection?
+
+    /// Optional deterministic inbox presentation for screenshot launches.
+    public let inboxScope: InboxStore.Scope?
+    public let projectID: String?
+    public let detailsExpanded: Bool
+
+    /// `-FreesideDevices YES`: the Devices sheet is open at launch, so a
+    /// capture needs no click on the toolbar.
+    public let devicesPresented: Bool
+
+    /// `-FreesideComposer <action>`: the selected inbox item's composer for
+    /// that action is presented at launch, so a capture of the sheet needs no
+    /// click. Nil unless the value names a composer, `-FreesideSelect` names
+    /// an inbox item, and that item's fixture offers the action; anything
+    /// else is ignored with a stderr note, as an unknown selection is. The
+    /// card still waits until the action's button is enabled before it opens
+    /// the composer.
+    public let composer: Composer?
+
+    public init(
+        colorSchemeRaw: String?, contrastRaw: String? = nil, selectionRaw: String?,
+        inboxScopeRaw: String? = nil, projectIDRaw: String? = nil,
+        detailsExpanded: Bool = false, screenRaw: String? = nil,
+        dynamicTypeSizeRaw: String? = nil, devicesPresented: Bool = false,
+        composerRaw: String? = nil
+    ) {
+        screen = Screen(rawValue: screenRaw ?? "") ?? .inbox
+        self.colorSchemeRaw = colorSchemeRaw
+        contrast = Contrast(rawValue: contrastRaw ?? "")
+        self.dynamicTypeSizeRaw = dynamicTypeSizeRaw
+        let resolved = Self.resolveSelection(selectionRaw, screen: screen)
+        selection = resolved.selection
+        taskSelection = resolved.taskSelection
+        if selectionRaw != nil, selection == nil {
+            FileHandle.standardError.write(
+                Data("FreesideSelect ignored: unknown item id \(selectionRaw ?? "")\n".utf8))
+        }
+        inboxScope = inboxScopeRaw.flatMap(InboxStore.Scope.init(rawValue:))
+        projectID = projectIDRaw
+        self.detailsExpanded = detailsExpanded
+        self.devicesPresented = devicesPresented
+        switch Self.resolveComposer(composerRaw, screen: screen, selection: selection) {
+        case .resolved(let resolved):
+            composer = resolved
+        case .ignored(let reason):
+            composer = nil
+            FileHandle.standardError.write(
+                Data("FreesideComposer ignored: \(reason)\n".utf8))
+        }
+    }
+
+    /// The screen decides which fixture ids a selection may name. On the
+    /// tasks screen a run id resolves to its task, from the run fixtures,
+    /// so the launch routes to the task with that run pushed.
+    private static func resolveSelection(
+        _ raw: String?, screen: Screen
+    ) -> (selection: String?, taskSelection: TaskSelection?) {
+        guard let raw else { return (nil, nil) }
+        switch screen {
+        case .inbox:
+            return AttentionFixtures.defaultInboxItemIDs().contains(raw) ? (raw, nil) : (nil, nil)
+        case .tasks:
+            if TaskFixtures.defaultTaskIDs().contains(raw) {
+                return (raw, .task(raw))
+            }
+            if let run = RunFixtures.defaultRuns().first(where: { $0.run.id == raw })?.run {
+                return (raw, .run(taskID: run.task_id, runID: run.id))
+            }
+            return (nil, nil)
+        }
+    }
+
+    private enum ComposerResolution {
+        /// Nil when the argument is unset.
+        case resolved(Composer?)
+        case ignored(reason: String)
+    }
+
+    /// A composer needs an inbox item that offers its action, checked against
+    /// the same fixtures that decide which ids a selection may name.
+    private static func resolveComposer(
+        _ raw: String?, screen: Screen, selection: String?
+    ) -> ComposerResolution {
+        guard let raw else { return .resolved(nil) }
+        guard let composer = Composer(rawValue: raw) else {
+            return .ignored(reason: "\(raw) names no composer")
+        }
+        guard screen == .inbox, let selection else {
+            return .ignored(reason: "\(raw) needs an inbox item from FreesideSelect")
+        }
+        let item = AttentionFixtures.defaultInbox().first { $0.item.id == selection }?.item
+        guard item?.requested_decision.contains(composer.action) == true else {
+            return .ignored(reason: "\(selection) does not offer \(raw)")
+        }
+        return .resolved(composer)
+    }
+
+    /// The process's launch arguments, via the UserDefaults argument
+    /// domain (`-Key value` pairs).
+    public static func standard() -> LaunchInputs {
+        let defaults = UserDefaults.standard
+        return LaunchInputs(
+            colorSchemeRaw: defaults.string(forKey: "FreesideColorScheme"),
+            contrastRaw: accessibilityContrastOverride(defaults: defaults)?.rawValue,
+            selectionRaw: defaults.string(forKey: "FreesideSelect"),
+            inboxScopeRaw: defaults.string(forKey: "FreesideInboxScope"),
+            projectIDRaw: defaults.string(forKey: "FreesideProject"),
+            detailsExpanded: defaults.bool(forKey: "FreesideDetailsExpanded"),
+            screenRaw: defaults.string(forKey: "FreesideScreen"),
+            dynamicTypeSizeRaw: defaults.string(forKey: "FreesideDynamicType"),
+            devicesPresented: defaults.bool(forKey: "FreesideDevices"),
+            composerRaw: defaults.string(forKey: "FreesideComposer"))
+    }
+
+    /// Screenshot capture scopes this input to the synchronous AppKit color
+    /// callback. Normal launches retain the argument/defaults and host fallback.
+    @TaskLocal static var screenshotIncreasedContrast: Bool?
+
+    package static func accessibilityContrastOverride(defaults: UserDefaults = .standard) -> Contrast? {
+        if let increased = screenshotIncreasedContrast {
+            return increased ? .increased : .standard
+        }
+        return Contrast(rawValue: defaults.string(forKey: "FreesideContrast") ?? "")
+    }
+}

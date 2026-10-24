@@ -3,6 +3,7 @@
     import Testing
 
     @testable import FreesideCore
+    @testable import FreesideModel
 
     @MainActor enum TaskSubmissionRecoveryScreenshots {
         static func model(client: any APIProtocol) throws -> TaskSubmissionModel {

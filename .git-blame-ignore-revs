@@ -28,3 +28,6 @@ c3af489852461e716330cff4619444233b55a63e
 
 # Export the ward's container size renderer (#2139)
 c6a298611f7463e5633da56aa4cb9d8617cb4b2f
+
+# Move the model code into a FreesideModel target (#2171)
+52381596ac250861d7209ecce1cc21fc88d09df4

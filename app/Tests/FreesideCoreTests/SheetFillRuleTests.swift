@@ -4,6 +4,7 @@
     import Testing
 
     @testable import FreesideCore
+    @testable import FreesideModel
 
     /// The sheet fill rule (design handoff 8 Oct 2026, item 6), read from
     /// the pixels a sheet's footer draws: the submit fills only while it is

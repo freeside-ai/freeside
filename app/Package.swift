@@ -23,6 +23,40 @@ var targets: [Target] = [
         name: "FreesideAPITests",
         dependencies: ["FreesideAPI"]
     ),
+    // The Linux-clean half of the app: the session, stores, sync, models,
+    // and the presentation data the views read. No Apple UI framework, so
+    // it builds and tests on Linux beside FreesideAPI; FreesideCore keeps
+    // the views and the platform glue and re-exports this module.
+    .target(
+        name: "FreesideModel",
+        dependencies: [
+            "FreesideAPI",
+            // Directly, not only transitively via FreesideAPI: the sync
+            // coordinator inspects OpenAPIRuntime's ClientError to tell a
+            // decode failure (the daemon answered) from a transport
+            // outage (it did not).
+            .product(name: "OpenAPIRuntime", package: "swift-openapi-runtime"),
+            // The model code's digests use the portable Crypto API, so
+            // the models need no Apple-only framework.
+            .product(name: "Crypto", package: "swift-crypto"),
+        ]
+    ),
+    // The mocks and helpers both app test targets share. A regular target
+    // so FreesideModelTests and FreesideCoreTests can each depend on it.
+    .target(
+        name: "FreesideTestSupport",
+        dependencies: [
+            "FreesideModel", "FreesideAPI",
+            .product(name: "OpenAPIRuntime", package: "swift-openapi-runtime"),
+            .product(name: "HTTPTypes", package: "swift-http-types"),
+            .product(name: "Crypto", package: "swift-crypto"),
+        ],
+        path: "Tests/FreesideTestSupport"
+    ),
+    .testTarget(
+        name: "FreesideModelTests",
+        dependencies: ["FreesideModel", "FreesideAPI", "FreesideTestSupport"]
+    ),
 ]
 
 #if !os(Linux)
@@ -30,17 +64,7 @@ var targets: [Target] = [
     targets.append(
         .target(
             name: "FreesideCore",
-            dependencies: [
-                "FreesideAPI",
-                // Directly, not only transitively via FreesideAPI: the sync
-                // coordinator inspects OpenAPIRuntime's ClientError to tell a
-                // decode failure (the daemon answered) from a transport
-                // outage (it did not).
-                .product(name: "OpenAPIRuntime", package: "swift-openapi-runtime"),
-                // The model code's digests use the portable Crypto API, so
-                // FreesideCore's models need no Apple-only framework.
-                .product(name: "Crypto", package: "swift-crypto"),
-            ],
+            dependencies: ["FreesideModel", "FreesideAPI"],
             // The §15 faces (see Sources/FreesideCore/Fonts/README.md),
             // registered at runtime by FreesideFont so neither app target
             // needs an Info.plist font list.
@@ -51,7 +75,7 @@ var targets: [Target] = [
         .testTarget(
             name: "FreesideCoreTests",
             dependencies: [
-                "FreesideCore", "FreesideAPI",
+                "FreesideCore", "FreesideModel", "FreesideAPI", "FreesideTestSupport",
                 .product(name: "Crypto", package: "swift-crypto"),
             ],
             resources: [.copy("Resources")]

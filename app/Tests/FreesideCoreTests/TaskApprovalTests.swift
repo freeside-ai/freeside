@@ -1,7 +1,9 @@
 import FreesideAPI
+import FreesideTestSupport
 import Testing
 
 @testable import FreesideCore
+@testable import FreesideModel
 
 @Suite struct TaskApprovalTests {
     @Test func recordedCampaignApprovalCompletesSpecification() throws {

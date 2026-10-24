@@ -1,9 +1,11 @@
 import Foundation
 import FreesideAPI
+import FreesideTestSupport
 import Observation
 import Testing
 
 @testable import FreesideCore
+@testable import FreesideModel
 
 @MainActor
 private func makeCoordinator(

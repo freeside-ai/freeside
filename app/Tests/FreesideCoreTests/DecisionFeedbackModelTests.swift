@@ -1,8 +1,10 @@
 import Foundation
 import FreesideAPI
+import FreesideTestSupport
 import Testing
 
 @testable import FreesideCore
+@testable import FreesideModel
 
 @Suite @MainActor struct DecisionFeedbackModelTests {
     private struct ScheduledAction {

@@ -3,6 +3,7 @@ import FreesideAPI
 import Testing
 
 @testable import FreesideCore
+@testable import FreesideModel
 
 @Suite struct HoldPresentationTests {
     @Test func everyHoldHasOneReadableLabelAndRetainsItsDiagnosticCode() throws {

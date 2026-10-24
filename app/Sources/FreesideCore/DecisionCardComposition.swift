@@ -24,18 +24,6 @@ enum DecisionCardModule: String, CaseIterable {
     case details
 }
 
-// Keep in sync with export.SummaryEvidenceLabel in
-// daemon/internal/export/evidence_source.go.
-enum AgentClaimLabels {
-    static let summary = "freeside.summary"
-    static let addressals = "Addressals"
-    static let specification = "Specification"
-
-    static func isApprovalMaterial(_ label: String) -> Bool {
-        label == addressals || label == specification
-    }
-}
-
 struct DecisionCardComposition: Equatable {
     let modules: [DecisionCardModule]
     let actionInsertionIndex: Int
@@ -1192,15 +1180,6 @@ struct FindingCardPresentation: Equatable, Identifiable {
             ? "Accepting covers the proposed route for the one finding above."
             : "Accepting covers every proposed route above: all \(findingCount) findings."
     }
-
-    /// The same coverage as the object of the recommendation's sentence
-    /// (R20), which says it in place of `acceptanceScope` where the card
-    /// draws a recommendation.
-    static func acceptancePhrase(findingCount: Int) -> String {
-        findingCount == 1
-            ? "accepting the proposed route for the one finding above"
-            : "accepting the proposed route for each of the \(findingCount) findings above"
-    }
 }
 
 struct DecisionGraphicPresentations: Equatable {
@@ -1534,59 +1513,6 @@ struct DecisionYieldPresentation: Equatable {
                     recurringFindings: $0.recurring_findings)
             },
             lastRound: lastRound)
-    }
-}
-
-struct DecisionStageRailPresentation: Equatable {
-    enum State: Equatable {
-        case completed
-        case current
-        case failed
-        case pending
-
-        var accessibilityLabel: String {
-            switch self {
-            case .completed: "completed"
-            case .current: "current"
-            case .failed: "failed"
-            case .pending: "pending"
-            }
-        }
-    }
-
-    struct Entry: Equatable, Identifiable {
-        let id: String
-        let title: String
-        let state: State
-
-        var accessibilityLabel: String {
-            "\(title), \(state.accessibilityLabel)"
-        }
-    }
-
-    let entries: [Entry]
-    let summary: String
-
-    /// The stages the run reached, newest first, as a card lists history
-    /// (frame 5.3). A stage the run never reached is left out: above the
-    /// failure it would read as the latest event. The summary still counts
-    /// every stage.
-    var reachedNewestFirst: Self {
-        .init(entries: entries.filter { $0.state != .pending }.reversed(), summary: summary)
-    }
-
-    static func failure(stages: [String], failedStageIndex: Int) -> Self? {
-        guard stages.indices.contains(failedStageIndex) else { return nil }
-        let entries = stages.enumerated().map { index, stage in
-            Entry(
-                id: "\(index)-\(stage)",
-                title: stage,
-                state: index < failedStageIndex ? .completed : index == failedStageIndex ? .failed : .pending)
-        }
-        return .init(
-            entries: entries,
-            summary:
-                "\(stages[failedStageIndex]) failed, stage \(failedStageIndex + 1) of \(stages.count).")
     }
 }
 

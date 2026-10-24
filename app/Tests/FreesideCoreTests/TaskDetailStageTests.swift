@@ -3,6 +3,7 @@ import FreesideAPI
 import Testing
 
 @testable import FreesideCore
+@testable import FreesideModel
 
 /// The stage the task detail page names in its header: on the status chip
 /// while the task works, and on the hold callout's first line.

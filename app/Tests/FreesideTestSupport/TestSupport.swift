@@ -1,0 +1,206 @@
+import Foundation
+import FreesideAPI
+import FreesideModel
+import HTTPTypes
+import OpenAPIRuntime
+
+/// A reusable one-shot gate: `wait()` suspends until `open()`.
+public actor AsyncGate {
+    private var isOpen = false
+    private var waiters: [CheckedContinuation<Void, Never>] = []
+
+    public init() {}
+
+    public func wait() async {
+        if isOpen { return }
+        await withCheckedContinuation { waiters.append($0) }
+    }
+
+    public func open() {
+        isOpen = true
+        for waiter in waiters {
+            waiter.resume()
+        }
+        waiters.removeAll()
+    }
+}
+
+public struct InjectedFailure: Error {
+    public init() {}
+}
+
+/// The production tier's same-host daemon, the local daemon most tests use.
+// swift-format-ignore: NeverForceUnwrap
+public let prodDaemonURL = FreesideEnvironment.prod.supervisedAPIURL!
+
+public func testDeviceToken(for deviceID: String, secretByte: UInt8 = 1) -> String {
+    func base64URL(_ data: Data) -> String {
+        data.base64EncodedString()
+            .replacingOccurrences(of: "+", with: "-")
+            .replacingOccurrences(of: "/", with: "_")
+            .replacingOccurrences(of: "=", with: "")
+    }
+    let encodedID = base64URL(Data(deviceID.utf8))
+    let encodedSecret = base64URL(Data(repeating: secretByte, count: 32))
+    return "fsd1.\(encodedID).\(encodedSecret)"
+}
+
+/// Throws on the first `times` calls to `consume()`; later calls pass.
+public actor InjectedFailures {
+    private var remaining: Int
+
+    public init(times: Int) {
+        remaining = times
+    }
+
+    public func consume() throws {
+        guard remaining > 0 else { return }
+        remaining -= 1
+        throw InjectedFailure()
+    }
+}
+
+@MainActor
+public func makeStore(server: MockServer) async -> InboxStore {
+    let store = InboxStore(client: APIClientFactory.mock(server: server))
+    await store.refresh()
+    return store
+}
+
+/// A well-formed command fixture for ledger persistence tests: the mock
+/// accepts its shape, and one naming an unknown item draws the
+/// authoritative rejection, never a validation error. The device
+/// defaults to the store default (`DeviceIdentity.mock`) so the entry
+/// survives the restore-time device re-gate.
+public func makeCommand(
+    itemID: String, commandID: String = "cmd-fixture",
+    deviceID: String = DeviceIdentity.mock.deviceID
+) -> Components.Schemas.ClientCommand {
+    .init(
+        command_id: commandID,
+        device_id: deviceID,
+        expected_entity_version: 1,
+        expected_bindings: .init(additionalProperties: [:]),
+        payload: .decision(
+            .init(
+                kind: .decision,
+                item_id: itemID,
+                action: .approve,
+                item_version: 1,
+                pr_head_sha: "",
+                artifact_digests: []
+            ))
+    )
+}
+
+/// Answers the first matching operation with a bare HTTP status instead
+/// of reaching the mock server (simulating a transient gateway/server
+/// failure before commit); everything else passes through.
+public struct StatusOverrideTransport: ClientTransport {
+    public let base: MockServerTransport
+    public let operationID: String
+    public let status: Int
+    public let once: OneShot
+
+    public init(base: MockServerTransport, operationID: String, status: Int, once: OneShot) {
+        self.base = base
+        self.operationID = operationID
+        self.status = status
+        self.once = once
+    }
+
+    public func send(
+        _ request: HTTPRequest,
+        body: HTTPBody?,
+        baseURL: URL,
+        operationID: String
+    ) async throws -> (HTTPResponse, HTTPBody?) {
+        if operationID == self.operationID, await once.fire() {
+            return (HTTPResponse(status: .init(code: status)), nil)
+        }
+        return try await base.send(request, body: body, baseURL: baseURL, operationID: operationID)
+    }
+}
+
+/// Replaces one answered status body with undecodable JSON while preserving
+/// the status, so returned-object failure paths exercise generated decoding.
+public struct CorruptStatusBodyTransport: ClientTransport {
+    public let base: MockServerTransport
+    public let operationID: String
+    public let status: Int
+
+    public init(base: MockServerTransport, operationID: String, status: Int) {
+        self.base = base
+        self.operationID = operationID
+        self.status = status
+    }
+
+    public func send(
+        _ request: HTTPRequest,
+        body: HTTPBody?,
+        baseURL: URL,
+        operationID: String
+    ) async throws -> (HTTPResponse, HTTPBody?) {
+        let (response, responseBody) = try await base.send(
+            request, body: body, baseURL: baseURL, operationID: operationID)
+        guard operationID == self.operationID, response.status.code == status else {
+            return (response, responseBody)
+        }
+        return (HTTPResponse(status: response.status), HTTPBody(Data("{}".utf8)))
+    }
+}
+
+/// Counts how many times an operation ran, for asserting re-fetches.
+public actor Counter {
+    public private(set) var count = 0
+
+    public init() {}
+
+    public func increment() { count += 1 }
+    public func incrementAndGet() -> Int {
+        count += 1
+        return count
+    }
+}
+
+/// True exactly once.
+public actor OneShot {
+    private var fired = false
+
+    public init() {}
+
+    public func fire() -> Bool {
+        if fired { return false }
+        fired = true
+        return true
+    }
+}
+
+/// Scripts one behavior per matching call, in order; exhausted → pass.
+public actor ScriptedResponses {
+    public enum Step {
+        case pass
+        case fail
+        /// Opens `reached`, then suspends until `release` opens.
+        case hold(reached: AsyncGate, release: AsyncGate)
+    }
+
+    private var steps: [Step]
+
+    public init(_ steps: [Step]) {
+        self.steps = steps
+    }
+
+    public func next() async throws {
+        guard !steps.isEmpty else { return }
+        switch steps.removeFirst() {
+        case .pass:
+            return
+        case .fail:
+            throw InjectedFailure()
+        case .hold(let reached, let release):
+            await reached.open()
+            await release.wait()
+        }
+    }
+}

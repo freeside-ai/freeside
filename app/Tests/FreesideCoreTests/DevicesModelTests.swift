@@ -1,10 +1,12 @@
 import Foundation
 import FreesideAPI
+import FreesideTestSupport
 import HTTPTypes
 import OpenAPIRuntime
 import Testing
 
 @testable import FreesideCore
+@testable import FreesideModel
 
 /// Answers `revokeDevice` with the snapshot of a different device than the
 /// one asked for: a daemon answer the client must not act on.
