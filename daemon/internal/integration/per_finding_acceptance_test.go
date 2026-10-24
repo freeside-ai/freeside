@@ -21,7 +21,7 @@ func TestExternalReviewPerFindingAcceptance(t *testing.T) {
 	p := newProductionPublicationHarness(t, "")
 	driver := p.configureAdjudicator(t)
 	_, findings := p.startAdjudicatedExternalReview(t, "[P2] unnecessary rename", "fix the handle", "check the close")
-	pr := p.forge.pullRequests()[0]
+	pr := p.forge.PullRequests()[0]
 	p.scriptCleanReview(2, p.baseSHA, p.replay.HeadSHA)
 	waiting := remediateVerdict(findings[2].ID)
 	waiting.confidence = "low"
@@ -87,7 +87,7 @@ func TestExternalReviewPerFindingAcceptance(t *testing.T) {
 		_ = json.NewEncoder(w).Encode(map[string]any{"id": 901, "user": map[string]any{"id": 7001, "type": "Bot"}, "in_reply_to_id": 1, "created_at": p.now.Format(time.RFC3339), "pull_request_url": fmt.Sprintf("%s/repos/%s/pulls/%d", server.URL, p.profile.Repo, pr.Number)})
 	}))
 	t.Cleanup(server.Close)
-	replier, err := publish.NewExternalReviewReplier(p.store, integrationTokenSource{}, server.Client(), server.URL, externalDecisionIdentity{}, func() time.Time { return p.now })
+	replier, err := publish.NewExternalReviewReplier(p.store, integrationTokenSource(), server.Client(), server.URL, externalDecisionIdentity{}, func() time.Time { return p.now })
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -134,7 +134,7 @@ func TestExternalReviewPerFindingAcceptance(t *testing.T) {
 			t.Fatalf("unfixed outcome = %#v", d)
 		}
 	}
-	prs := p.forge.pullRequests()
+	prs := p.forge.PullRequests()
 	if len(prs) != 1 || prs[0].Number != pr.Number {
 		t.Fatal("remediation replaced the pull request")
 	}

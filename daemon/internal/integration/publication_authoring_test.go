@@ -91,7 +91,7 @@ func TestPublicationAuthorOversizedRuntimeInputReasonsSurviveRestart(t *testing.
 	if _, err := p.reconcileLanes(); err != nil {
 		t.Fatal(err)
 	}
-	prs := p.forge.pullRequests()
+	prs := p.forge.PullRequests()
 	if len(prs) != 1 || strings.Contains(prs[0].Body, "Closes #82") || len(driver.Requests()) != 0 {
 		t.Fatalf("oversized input published a close or reached the driver: prs=%d calls=%d", len(prs), len(driver.Requests()))
 	}
@@ -169,7 +169,7 @@ func TestPublicationAuthorStoresTextAndPolicyApprovedClose(t *testing.T) {
 	if body := assertAuthoredMetadata(t, p); !strings.Contains(body, "Closes #82") {
 		t.Fatal("publisher omitted the policy-approved close reference")
 	}
-	rendered := p.forge.pullRequests()[0].Body
+	rendered := p.forge.PullRequests()[0].Body
 	if strings.Count(rendered, "## Verification") != 1 || !strings.Contains(rendered, html.EscapeString(disclosure)) {
 		t.Fatal("publisher ownership or visible conflict disclosure lost")
 	}
@@ -178,7 +178,7 @@ func TestPublicationAuthorStoresTextAndPolicyApprovedClose(t *testing.T) {
 			t.Fatal("trusted template was changed before the author call")
 		}
 	}
-	authorKey := "production-authoring/" + string(p.runID) + "/" + p.forge.pullRequests()[0].HeadSHA + "/" + p.baseSHA
+	authorKey := "production-authoring/" + string(p.runID) + "/" + p.forge.PullRequests()[0].HeadSHA + "/" + p.baseSHA
 	if err := p.store.Read(p.ctx, func(tx *store.ReadTx) error {
 		entry, err := tx.GetInbox(p.ctx, authorKey)
 		if err != nil {
@@ -201,7 +201,7 @@ func TestPublicationAuthorStoresTextAndPolicyApprovedClose(t *testing.T) {
 	}); err != nil {
 		t.Fatal(err)
 	}
-	if p.forge.pullRequests()[0].Draft || len(driver.Requests()) != 2 {
+	if p.forge.PullRequests()[0].Draft || len(driver.Requests()) != 2 {
 		t.Fatal("valid inputs did not reach both author sites and publish a ready PR")
 	}
 	key := "production-closure/" + string(p.runID) + "/publish-production-" + string(p.runID)
@@ -253,7 +253,7 @@ func TestClientSubmissionPublishesPolicyApprovedClose(t *testing.T) {
 	if _, err := p.reconcileLanes(); err != nil {
 		t.Fatal(err)
 	}
-	prs := p.forge.pullRequests()
+	prs := p.forge.PullRequests()
 	if len(prs) != 1 || !strings.Contains(prs[0].Body, "Closes #82") {
 		t.Fatalf("client submission did not publish the policy-approved close reference: %d PRs", len(prs))
 	}
@@ -410,7 +410,7 @@ func TestCLISubmissionPublishesDeclaredSourceIssue(t *testing.T) {
 			if _, err := p.reconcileLanes(); err != nil {
 				t.Fatal(err)
 			}
-			prs := p.forge.pullRequests()
+			prs := p.forge.PullRequests()
 			lead := "<!-- " + publicationtext.SourceReferenceMarkerName + " -->\n\n" + tc.lead
 			if len(prs) != 1 || prs[0].Draft || !strings.HasPrefix(prs[0].Body, lead) {
 				t.Fatalf("CLI submission PRs = %+v, want one ready PR led by %q", prs, tc.lead)
@@ -482,7 +482,7 @@ func TestPublicationAuthorScreenFailureKeepsIndependentClosure(t *testing.T) {
 			if _, err := p.reconcileLanes(); err != nil {
 				t.Fatal(err)
 			}
-			prs := p.forge.pullRequests()
+			prs := p.forge.PullRequests()
 			if len(prs) != 1 || !strings.Contains(prs[0].Body, "## Agent-reported implementation (claim)") ||
 				!strings.Contains(prs[0].Body, "Closes #82") || len(driver.Requests()) != 2 {
 				t.Fatalf("screen fallback suppressed separately approved closure: prs=%d calls=%d", len(prs), len(driver.Requests()))
@@ -538,7 +538,7 @@ func TestPublicationAuthorScreenFailureKeepsIndependentClosure(t *testing.T) {
 				t.Fatal(err)
 			}
 			assertCheckpoint()
-			if len(driver.Requests()) != 2 || p.forge.pullRequests()[0].Body != prs[0].Body {
+			if len(driver.Requests()) != 2 || p.forge.PullRequests()[0].Body != prs[0].Body {
 				t.Fatal("restart re-authored or changed the fallback")
 			}
 		})
@@ -605,10 +605,10 @@ func authorCallCount(d *inferencefake.Driver) int {
 // artifact (recipe v2), not the v1 claim fallback, and returns the PR body.
 func assertAuthoredMetadata(t *testing.T, p *productionPublicationHarness) string {
 	t.Helper()
-	if refs, count := p.forge.counts(); refs != 1 || count != 1 {
+	if refs, count := p.forge.Counts(); refs != 1 || count != 1 {
 		t.Fatalf("effects: refs=%d PRs=%d", refs, count)
 	}
-	prs := p.forge.pullRequests()
+	prs := p.forge.PullRequests()
 	if prs[0].Title != "Authored PR title" {
 		t.Fatalf("title = %q", prs[0].Title)
 	}
@@ -656,10 +656,10 @@ func TestPublicationAuthorStoresAndReplays(t *testing.T) {
 
 	// External drift: someone edits the PR title and prose. Repair must restore
 	// the stored authored rendering byte-for-byte.
-	p.forge.mu.Lock()
-	p.forge.prs[0].Title = "external title"
-	p.forge.prs[0].Body = strings.Replace(p.forge.prs[0].Body, "Authored body prose", "Externally changed prose", 1)
-	p.forge.mu.Unlock()
+	p.forge.Mu.Lock()
+	p.forge.PRs[0].Title = "external title"
+	p.forge.PRs[0].Body = strings.Replace(p.forge.PRs[0].Body, "Authored body prose", "Externally changed prose", 1)
+	p.forge.Mu.Unlock()
 	p.restartDurableState(t)
 	p.workflow = p.newEngine(t, productionCrashSeams{}, true)
 	if _, err := p.reconcileLanes(); err != nil {
@@ -694,10 +694,10 @@ func TestPublicationAuthorReplayToleratesVisibilityReadFailure(t *testing.T) {
 
 	// External edit plus a sustained visibility read outage. Repair must restore
 	// the stored v2 rendering, not fall back to v1 on the failed read.
-	p.forge.mu.Lock()
-	p.forge.prs[0].Body = strings.Replace(p.forge.prs[0].Body, "Authored body prose", "Externally changed prose", 1)
-	p.forge.failRepoRead = true
-	p.forge.mu.Unlock()
+	p.forge.Mu.Lock()
+	p.forge.PRs[0].Body = strings.Replace(p.forge.PRs[0].Body, "Authored body prose", "Externally changed prose", 1)
+	p.forge.FailRepoRead = true
+	p.forge.Mu.Unlock()
 	p.restartDurableState(t)
 	p.workflow = p.newEngine(t, productionCrashSeams{}, true)
 	if _, err := p.reconcileLanes(); err != nil {
@@ -771,9 +771,9 @@ func TestPublicationAuthorTargetClassOpens(t *testing.T) {
 	p := newPublicV2MetadataHarness(t)
 	p.replay = withPublicAccount(t, p, p.replay, publicAccount)
 	// The repository is private at author time, so the stored class is sensitive.
-	p.forge.mu.Lock()
-	p.forge.visibility = "private"
-	p.forge.mu.Unlock()
+	p.forge.Mu.Lock()
+	p.forge.Visibility = "private"
+	p.forge.Mu.Unlock()
 	scriptPublicationAuthor(t, p, inferencefake.Script{Response: inference.Response{
 		Output: []byte(authoredExplainOutput), ComputeUnits: 5,
 	}})
@@ -789,9 +789,9 @@ func TestPublicationAuthorTargetClassOpens(t *testing.T) {
 
 	// The repository becomes public: now more open than the stored sensitive
 	// class allows, so the repair pass re-renders v1 in place of the stored v2.
-	p.forge.mu.Lock()
-	p.forge.visibility = "public"
-	p.forge.mu.Unlock()
+	p.forge.Mu.Lock()
+	p.forge.Visibility = "public"
+	p.forge.Mu.Unlock()
 	p.restartDurableState(t)
 	p.workflow = p.newEngine(t, productionCrashSeams{}, true)
 	if _, err := p.reconcileLanes(); err != nil {
@@ -812,9 +812,9 @@ func TestPublicationAuthorFailsClosedOnUnknownVisibility(t *testing.T) {
 	p := newPublicV2MetadataHarness(t)
 	p.replay = withPublicAccount(t, p, p.replay, publicAccount)
 	// Private at author time, so the stored class is sensitive.
-	p.forge.mu.Lock()
-	p.forge.visibility = "private"
-	p.forge.mu.Unlock()
+	p.forge.Mu.Lock()
+	p.forge.Visibility = "private"
+	p.forge.Mu.Unlock()
 	scriptPublicationAuthor(t, p, inferencefake.Script{Response: inference.Response{
 		Output: []byte(authoredExplainOutput), ComputeUnits: 5,
 	}})
@@ -831,9 +831,9 @@ func TestPublicationAuthorFailsClosedOnUnknownVisibility(t *testing.T) {
 
 	// The visibility read now fails. The stored class is sensitive, so the repair
 	// pass cannot confirm the repository is still restricted and falls back to v1.
-	p.forge.mu.Lock()
-	p.forge.failRepoRead = true
-	p.forge.mu.Unlock()
+	p.forge.Mu.Lock()
+	p.forge.FailRepoRead = true
+	p.forge.Mu.Unlock()
 	p.restartDurableState(t)
 	p.workflow = p.newEngine(t, productionCrashSeams{}, true)
 	if _, err := p.reconcileLanes(); err != nil {

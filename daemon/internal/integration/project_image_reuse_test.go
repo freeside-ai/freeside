@@ -58,7 +58,7 @@ func TestProductionPublicationReusesProjectImageAtCompatibleBase(t *testing.T) {
 	if p.room.runs != 1 {
 		t.Fatalf("verification runs = %d, want 1 on the run's own base", p.room.runs)
 	}
-	if refs, prs := p.forge.counts(); refs != 1 || prs != 1 {
+	if refs, prs := p.forge.Counts(); refs != 1 || prs != 1 {
 		t.Fatalf("publication effects = %d refs, %d PRs, want 1 and 1", refs, prs)
 	}
 	var recorded domain.ProjectImage
@@ -123,7 +123,7 @@ func TestProductionPublicationRefusesIncompatibleProjectImage(t *testing.T) {
 				t.Fatalf("room reads/runs = %d/%d, want none before the refusal",
 					p.room.reads, p.room.runs)
 			}
-			if refs, prs := p.forge.counts(); refs != 0 || prs != 0 {
+			if refs, prs := p.forge.Counts(); refs != 0 || prs != 0 {
 				t.Fatalf("refused image caused effects: %d refs, %d PRs", refs, prs)
 			}
 		})

@@ -744,7 +744,7 @@ func TestAcceptedPublicationKeepsOtherHoldCauses(t *testing.T) {
 	t.Parallel()
 	p := newProductionPublicationHarness(t, "")
 	p.startAndRecordExport(t)
-	p.transport.failFetch(&net.DNSError{Err: "temporary", Name: "github.com"})
+	p.transport.FailFetch(&net.DNSError{Err: "temporary", Name: "github.com"})
 	if _, err := p.reconcileLanes(); err != nil {
 		t.Fatalf("transient publication reconcile: %v", err)
 	}
@@ -753,7 +753,7 @@ func TestAcceptedPublicationKeepsOtherHoldCauses(t *testing.T) {
 		t.Fatalf("transient hold = %+v, want %s",
 			held.Hold, domain.HoldPublicationEnvironment)
 	}
-	p.transport.failFetch(nil)
+	p.transport.FailFetch(nil)
 	p.now = p.now.Add(time.Minute)
 	p.workflow = p.newEngine(t, productionCrashSeams{
 		afterVerification: func() error { return errors.New("stop after checkpoint") },

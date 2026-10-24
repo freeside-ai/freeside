@@ -14,13 +14,15 @@ import (
 // to it. It returns the landed head and its tree.
 func (p *productionPublicationHarness) landRebase(t *testing.T) (head, tree string) {
 	t.Helper()
-	pull := p.forge.pullRequests()[0]
+	pull := p.forge.PullRequests()[0]
 	dir := t.TempDir()
 	runGit(t, dir, "init", "-q")
-	runGit(t, dir, "fetch", "-q", p.transport.headRepo(), "refs/heads/"+pull.HeadRef)
+	runGit(t, dir, "fetch", "-q", headRepo(t, p.transport), "refs/heads/"+pull.HeadRef)
 	tree = runGit(t, dir, "rev-parse", "FETCH_HEAD^{tree}")
 	head = runGit(t, dir, "commit-tree", tree, "-p", "FETCH_HEAD^", "-m", "rebased by the lander")
-	p.transport.landPullHead(dir, pull.HeadRef, pull.Number, head)
+	if err := p.transport.LandPullHead(dir, pull.HeadRef, pull.Number, head); err != nil {
+		t.Fatal(err)
+	}
 	return head, tree
 }
 
@@ -102,7 +104,7 @@ func TestReadinessReentryEndsQuietlyOnAProvenRebase(t *testing.T) {
 	t.Parallel()
 	p := newProductionPublicationHarnessWithBoundIssue(t, "", 443)
 	_, head, tree := p.startRebaseReentry(t)
-	p.transport.scriptRebaseProof(publish.RebaseProof{Proven: true, TreeSHA: tree})
+	p.transport.ScriptRebaseProof(publish.RebaseProof{Proven: true, TreeSHA: tree})
 
 	result, err := p.reconcileLanes()
 	if err != nil || result.ReadyItemsCreated != 0 || result.BlockedItemsCreated != 0 {
@@ -125,7 +127,7 @@ func TestReadinessReentryEndsQuietlyOnAProvenRebase(t *testing.T) {
 	if result, err := p.reconcileLanes(); err != nil || result.ReadyItemsCreated != 0 || result.BlockedItemsCreated != 0 {
 		t.Fatalf("second pass = %#v, %v", result, err)
 	}
-	if _, proofs := p.transport.proofCounts(); proofs != 1 {
+	if _, proofs := p.transport.ProofCounts(); proofs != 1 {
 		t.Errorf("proofs = %d, want 1", proofs)
 	}
 }
@@ -136,7 +138,7 @@ func TestReadinessReentryReviewsARefusedRebase(t *testing.T) {
 	t.Parallel()
 	p := newProductionPublicationHarnessWithBoundIssue(t, "", 443)
 	superseded, head, tree := p.startRebaseReentry(t)
-	p.transport.scriptRebaseProof(publish.RebaseProof{
+	p.transport.ScriptRebaseProof(publish.RebaseProof{
 		TreeSHA: tree, Detail: "range-diff does not pair the reviewed commits as identical",
 	})
 	p.scriptCleanReview(2, p.baseSHA, head)
@@ -169,8 +171,10 @@ func TestReadinessReentryEndsQuietlyWhenThePullRequestMerged(t *testing.T) {
 			t.Parallel()
 			p := newProductionPublicationHarnessWithBoundIssue(t, "", 443)
 			_, head, _ := p.startRebaseReentry(t)
-			pull := p.forge.pullRequests()[0]
-			p.transport.deleteBranch(pull.HeadRef)
+			pull := p.forge.PullRequests()[0]
+			if err := p.transport.DeleteBranch(pull.HeadRef); err != nil {
+				t.Fatal(err)
+			}
 			recordMerge := func() {
 				var predecessor domain.ReadyItemPRBinding
 				if err := p.store.Read(p.ctx, func(tx *store.ReadTx) error {
@@ -199,7 +203,7 @@ func TestReadinessReentryEndsQuietlyWhenThePullRequestMerged(t *testing.T) {
 				// The proof is unscripted, so it fails as unprovable and the
 				// cycle goes on to fetch the deleted branch; the merge lands
 				// just before that fetch.
-				p.transport.onHeadFetch(func(int) { recordMerge() })
+				p.transport.OnHeadFetch(func(int) { recordMerge() })
 			} else {
 				recordMerge()
 			}

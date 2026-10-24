@@ -46,11 +46,11 @@ func TestProductionReplaySeparatesCommitAndCompletionTime(t *testing.T) {
 			}); err != nil {
 				t.Fatal(err)
 			}
-			pushes := p.transport.pushCount()
+			pushes := p.transport.PushCount()
 			if result, err := p.reconcileLanes(); err != nil || result.ResultsAccepted != 0 || result.PublicationTasksCompleted != 0 {
 				t.Fatalf("terminal replay = %#v, %v", result, err)
 			}
-			if p.transport.pushCount() != pushes {
+			if p.transport.PushCount() != pushes {
 				t.Fatal("terminal replay repeated publication")
 			}
 		})
@@ -70,7 +70,7 @@ func TestProductionReplayChangedCommitTimeStillRefusesPublication(t *testing.T) 
 	if _, err := p.reconcileLanes(); err == nil || !strings.Contains(err.Error(), "reconstructed execution export produced head") {
 		t.Fatalf("changed replay date was not refused: %v", err)
 	}
-	if refs, prs := p.forge.counts(); refs != 0 || prs != 0 {
+	if refs, prs := p.forge.Counts(); refs != 0 || prs != 0 {
 		t.Fatalf("changed replay date published: %d refs, %d PRs", refs, prs)
 	}
 	if p.room.runs != 0 {

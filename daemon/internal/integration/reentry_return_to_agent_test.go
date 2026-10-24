@@ -46,7 +46,7 @@ func TestReenteredReadyItemOffersNoReturnToAgent(t *testing.T) {
 		t.Fatalf("re-entered ready item offers return to agent: %v", ready.Item.RequestedDecision)
 	}
 	const commandID = "return-reentered"
-	fetches, merges := p.transport.fetchCount(), p.transport.mergeCount()
+	fetches, merges := p.transport.FetchCount(), p.transport.MergeCount()
 	if _, err := p.attention.Submit(p.ctx, signet.ClientCommand{
 		CommandID: commandID, DeviceID: deviceID, ExpectedEntityVersion: ready.EntityVersion,
 		Payload: signet.DecisionPayload{
@@ -62,7 +62,7 @@ func TestReenteredReadyItemOffersNoReturnToAgent(t *testing.T) {
 			t.Fatalf("a rejected return to agent stopped the lane: %v", err)
 		}
 	}
-	if p.transport.fetchCount() != fetches || p.transport.mergeCount() != merges {
+	if p.transport.FetchCount() != fetches || p.transport.MergeCount() != merges {
 		t.Fatal("a rejected return to agent fetched or merged")
 	}
 	if err := p.store.Read(p.ctx, func(tx *store.ReadTx) error {

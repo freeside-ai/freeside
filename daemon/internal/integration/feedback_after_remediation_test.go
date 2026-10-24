@@ -110,7 +110,7 @@ func TestSuccessorReentryRefusedAgainReentersAgain(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	if prs := p.forge.pullRequests(); len(prs) != 1 || prs[0].HeadSHA == p.replay.HeadSHA {
+	if prs := p.forge.PullRequests(); len(prs) != 1 || prs[0].HeadSHA == p.replay.HeadSHA {
 		t.Fatalf("the first re-entry published before the further advance: %#v", prs)
 	}
 	further, _ = p.advanceBaseBeforePublication(t, "FURTHER.md", "further upstream change\n")
@@ -265,7 +265,7 @@ func assertSuccessorReentryPublished(t *testing.T, p *productionPublicationHarne
 		t.Fatalf("ready item = %s at %s, want %s at %s", ready.ID, ready.PRHeadSHA,
 			successor.ReadyItemID(), p.replay.HeadSHA)
 	}
-	prs := p.forge.pullRequests()
+	prs := p.forge.PullRequests()
 	if len(prs) != 1 || prs[0].HeadSHA != p.replay.HeadSHA {
 		t.Fatalf("pull requests = %#v, want the one pull request at %s", prs, p.replay.HeadSHA)
 	}

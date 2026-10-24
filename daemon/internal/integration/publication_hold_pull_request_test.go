@@ -58,7 +58,7 @@ func (p *productionPublicationHarness) publishThenStop(t *testing.T) {
 // binding the store proves against the publication records.
 func (p *productionPublicationHarness) assertHoldCarriesPullRequest(t *testing.T) domain.AttentionItem {
 	t.Helper()
-	pulls := p.forge.pullRequests()
+	pulls := p.forge.PullRequests()
 	if len(pulls) != 1 {
 		t.Fatalf("forge holds %d pull requests, want 1", len(pulls))
 	}
@@ -135,19 +135,19 @@ func TestHoldOpenBeforePublicationGainsPullRequest(t *testing.T) {
 	t.Parallel()
 	p := newProductionPublicationHarness(t, "")
 	p.startAndRecordExport(t)
-	p.transport.conflictNextPush()
+	p.transport.ConflictNextPush()
 	if result, err := p.reconcileLanes(); err != nil || result.BlockedItemsCreated != 1 {
 		t.Fatalf("external-conflict hold = %#v, %v", result, err)
 	}
 	// No pull request exists yet, so the hold names none.
-	if _, prs := p.forge.counts(); prs != 0 {
+	if _, prs := p.forge.Counts(); prs != 0 {
 		t.Fatalf("conflicted publication opened %d pull requests", prs)
 	}
 	early := p.assertHoldWithoutPullRequest(t)
 
 	// The conflict is repaired and the run publishes, then is held at the
 	// recipe re-gate before it reaches readiness.
-	p.forge.clearRefs()
+	p.forge.ClearRefs()
 	p.now = p.now.Add(time.Minute)
 	p.publishThenStop(t)
 	p.now = p.now.Add(time.Minute)
@@ -177,7 +177,7 @@ func TestHoldKeepsPullRequestWhenCauseChanges(t *testing.T) {
 	// The same hold is restated for an external conflict. A first hold for
 	// that cause carries no pull request, but the store refuses a version
 	// that drops a reference, so this one keeps it.
-	p.transport.failFetch(fmt.Errorf("fetch refused: %w", publish.ErrRemoteMissingBase))
+	p.transport.FailFetch(fmt.Errorf("fetch refused: %w", publish.ErrRemoteMissingBase))
 	p.now = p.now.Add(time.Minute)
 	p.workflow = p.newEngine(t, productionCrashSeams{}, true)
 	if result, err := p.reconcileLanes(); err != nil || result.ReadyItemsCreated != 0 {
@@ -193,7 +193,7 @@ func TestHoldKeepsPullRequestWhenCauseChanges(t *testing.T) {
 
 	// And for a third cause, a trust refusal raised before the checkpoint
 	// loads.
-	p.transport.failFetch(fmt.Errorf("fetch refused: %w", publish.ErrTrustProfileDrift))
+	p.transport.FailFetch(fmt.Errorf("fetch refused: %w", publish.ErrTrustProfileDrift))
 	p.now = p.now.Add(time.Minute)
 	if result, err := p.reconcileLanes(); err != nil || result.ReadyItemsCreated != 0 {
 		t.Fatalf("trust restatement = %#v, %v", result, err)
@@ -211,12 +211,12 @@ func TestExternalConflictFirstHoldCarriesNoPullRequest(t *testing.T) {
 	p.publishThenStop(t)
 	// The run has published, but its first hold is for an external conflict:
 	// the recorded pull request is the thing in doubt, so the card names none.
-	p.transport.failFetch(fmt.Errorf("fetch refused: %w", publish.ErrRemoteMissingBase))
+	p.transport.FailFetch(fmt.Errorf("fetch refused: %w", publish.ErrRemoteMissingBase))
 	p.workflow = p.newEngine(t, productionCrashSeams{}, true)
 	if result, err := p.reconcileLanes(); err != nil || result.BlockedItemsCreated != 1 {
 		t.Fatalf("external-conflict hold on a published run = %#v, %v", result, err)
 	}
-	if _, prs := p.forge.counts(); prs != 1 {
+	if _, prs := p.forge.Counts(); prs != 1 {
 		t.Fatalf("published run has %d pull requests, want 1", prs)
 	}
 	first := p.assertHoldWithoutPullRequest(t)
@@ -236,7 +236,7 @@ func TestPublishedRunHeldBeforeCheckpointCarriesPullRequest(t *testing.T) {
 	p := newProductionPublicationHarness(t, "")
 	p.startAndRecordExport(t)
 	p.publishThenStop(t)
-	p.transport.failFetch(fmt.Errorf("fetch refused: %w", publish.ErrTrustProfileDrift))
+	p.transport.FailFetch(fmt.Errorf("fetch refused: %w", publish.ErrTrustProfileDrift))
 	p.workflow = p.newEngine(t, productionCrashSeams{}, true)
 	if result, err := p.reconcileLanes(); err != nil || result.BlockedItemsCreated != 1 {
 		t.Fatalf("trust hold on a published run = %#v, %v", result, err)
@@ -250,11 +250,11 @@ func TestHoldBeforePublicationCarriesNoPullRequest(t *testing.T) {
 	p.startAndRecordExport(t)
 	// A trust refusal, not an external conflict: the cause would carry a pull
 	// request if the run had one.
-	p.transport.failFetch(fmt.Errorf("fetch refused: %w", publish.ErrTrustProfileDrift))
+	p.transport.FailFetch(fmt.Errorf("fetch refused: %w", publish.ErrTrustProfileDrift))
 	if result, err := p.reconcileLanes(); err != nil || result.BlockedItemsCreated != 1 {
 		t.Fatalf("pre-publication hold = %#v, %v", result, err)
 	}
-	if refs, prs := p.forge.counts(); refs != 0 || prs != 0 {
+	if refs, prs := p.forge.Counts(); refs != 0 || prs != 0 {
 		t.Fatalf("pre-publication hold caused effects: %d refs/%d PRs", refs, prs)
 	}
 	first := p.assertHoldWithoutPullRequest(t)
@@ -367,7 +367,7 @@ func holdPublishedSuccessor(t *testing.T, p *productionPublicationHarness) {
 		}
 		p.now = p.now.Add(time.Minute)
 	}
-	pulls := p.forge.pullRequests()
+	pulls := p.forge.PullRequests()
 	if len(pulls) != 1 {
 		t.Fatalf("forge holds %d pull requests, want 1", len(pulls))
 	}

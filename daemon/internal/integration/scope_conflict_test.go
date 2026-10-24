@@ -135,7 +135,7 @@ func TestProductionScopeConflictDecisionSurvivesRestart(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			if result.ReadyItemsCreated != 0 || len(p.forge.pullRequests()) != 0 || p.room.runs != 0 {
+			if result.ReadyItemsCreated != 0 || len(p.forge.PullRequests()) != 0 || p.room.runs != 0 {
 				t.Fatalf("conflict escaped hold: %+v", result)
 			}
 			item, err := p.attention.GetAttentionItem(p.ctx, domain.ItemID("question-"+p.invocation))
@@ -189,14 +189,14 @@ func TestProductionScopeConflictDecisionSurvivesRestart(t *testing.T) {
 				t.Fatal(err)
 			}
 			if stop {
-				if len(p.forge.pullRequests()) != 0 || result.PublicationTasksCompleted != 1 {
+				if len(p.forge.PullRequests()) != 0 || result.PublicationTasksCompleted != 1 {
 					t.Fatalf("stop result: %+v", result)
 				}
 			} else {
 				if result.ReadyItemsCreated != 1 {
 					t.Fatalf("answer result: %+v", result)
 				}
-				prs := p.forge.pullRequests()
+				prs := p.forge.PullRequests()
 				if len(prs) != 1 || !strings.Contains(prs[0].Body, "## Freeside Scope Decision") || !strings.Contains(prs[0].Body, "AGENTS.md") || !strings.Contains(prs[0].Body, "remains required") {
 					t.Fatalf("missing scope decision: %+v", prs)
 				}
@@ -262,7 +262,7 @@ func TestProductionScopeConflictCannotDisappearDuringRemediation(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if result.ReadyItemsCreated != 0 || result.PublicationTasksCompleted != 0 || len(p.forge.pullRequests()) != 0 || p.room.runs != verified {
+	if result.ReadyItemsCreated != 0 || result.PublicationTasksCompleted != 0 || len(p.forge.PullRequests()) != 0 || p.room.runs != verified {
 		t.Fatalf("replacement dropped scope obligation: %+v", result)
 	}
 	item, err := p.attention.GetAttentionItem(p.ctx, domain.ItemID("production-scope-quarantined-1-"+p.runID))
@@ -280,7 +280,7 @@ func TestProductionScopeConflictUnreadableEvidenceQuarantines(t *testing.T) {
 		t.Fatal(err)
 	}
 	result, err := p.reconcileLanes()
-	if err != nil || result.ReadyItemsCreated != 0 || p.room.runs != 0 || len(p.forge.pullRequests()) != 0 {
+	if err != nil || result.ReadyItemsCreated != 0 || p.room.runs != 0 || len(p.forge.PullRequests()) != 0 {
 		t.Fatalf("unreadable scope evidence = %+v, %v", result, err)
 	}
 	item, err := p.attention.GetAttentionItem(p.ctx, domain.ItemID("production-scope-quarantined-1-"+p.runID))
@@ -344,13 +344,13 @@ func (p *productionPublicationHarness) refuseStrippedScopeRepair(t *testing.T) {
 	}); err != nil {
 		t.Fatal(err)
 	}
-	before := p.forge.pullRequests()[0].Body
+	before := p.forge.PullRequests()[0].Body
 	for _, run := range []domain.RunID{"", "unrelated-run"} {
 		c.RunID = run
 		if err := p.newPublisher(t).ConvergeOutcome(p.ctx, c, map[domain.Digest]bool{auth.VerificationRecipeDigest: true}, identity, outcome); !errors.Is(err, publish.ErrPublicationConflict) {
 			t.Fatalf("stripped scope repair = %v", err)
 		}
-		if p.forge.pullRequests()[0].Body != before {
+		if p.forge.PullRequests()[0].Body != before {
 			t.Fatal("stripped repair changed PR body")
 		}
 	}
@@ -361,16 +361,16 @@ func (p *productionPublicationHarness) refuseStrippedScopeRepair(t *testing.T) {
 		if removeLiveSection {
 			liveBody = "Scope notice removed externally.\n\n" + identity.Marker()
 		}
-		p.forge.mu.Lock()
-		p.forge.prs[0].Body = liveBody
-		writes := maps.Clone(p.forge.writeCounts)
-		p.forge.mu.Unlock()
+		p.forge.Mu.Lock()
+		p.forge.PRs[0].Body = liveBody
+		writes := maps.Clone(p.forge.WriteCounts)
+		p.forge.Mu.Unlock()
 		if _, err := p.newPublisher(t).Publish(p.ctx, c, map[domain.Digest]bool{auth.VerificationRecipeDigest: true}); !errors.Is(err, publish.ErrPublicationConflict) {
 			t.Errorf("converging run erased durable scope (live section removed %v): %v", removeLiveSection, err)
 		}
-		p.forge.mu.Lock()
-		unchanged := reflect.DeepEqual(writes, p.forge.writeCounts) && p.forge.prs[0].Body == liveBody
-		p.forge.mu.Unlock()
+		p.forge.Mu.Lock()
+		unchanged := reflect.DeepEqual(writes, p.forge.WriteCounts) && p.forge.PRs[0].Body == liveBody
+		p.forge.Mu.Unlock()
 		if !unchanged {
 			t.Errorf("conflicting scope convergence reached the forge (live section removed %v)", removeLiveSection)
 		}
@@ -382,9 +382,9 @@ func (p *productionPublicationHarness) refuseStrippedScopeRepair(t *testing.T) {
 			t.Errorf("conflicting convergence committed an intent (live section removed %v): %v", removeLiveSection, err)
 		}
 	}
-	p.forge.mu.Lock()
-	p.forge.prs[0].Body = before
-	p.forge.mu.Unlock()
+	p.forge.Mu.Lock()
+	p.forge.PRs[0].Body = before
+	p.forge.Mu.Unlock()
 	c.RunID = p.runID
 	if err := p.store.Read(p.ctx, func(tx *store.ReadTx) error {
 		var err error

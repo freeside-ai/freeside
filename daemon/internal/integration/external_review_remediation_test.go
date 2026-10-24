@@ -291,10 +291,10 @@ func TestExternalReviewCycleRemediatesAnAcceptedFinding(t *testing.T) {
 		t.Fatalf("findings = %#v, want none for a clean record", input.Findings)
 	}
 
-	pr := p.forge.pullRequests()[0]
-	p.forge.mu.Lock()
-	pushed := p.forge.refs[pr.HeadRef]
-	p.forge.mu.Unlock()
+	pr := p.forge.PullRequests()[0]
+	p.forge.Mu.Lock()
+	pushed := p.forge.Refs[pr.HeadRef]
+	p.forge.Mu.Unlock()
 	if pushed != remediated.HeadSHA {
 		t.Fatalf("pull request head = %s, want the remediated head %s", pushed, remediated.HeadSHA)
 	}
