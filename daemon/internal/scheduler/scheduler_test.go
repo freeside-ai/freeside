@@ -15,6 +15,7 @@ import (
 	"github.com/freeside-ai/freeside/daemon/internal/domain/domaintest"
 	"github.com/freeside-ai/freeside/daemon/internal/scheduler"
 	"github.com/freeside-ai/freeside/daemon/internal/store"
+	"github.com/freeside-ai/freeside/daemon/internal/store/storetest"
 )
 
 func ptr[T any](v T) *T { return &v }
@@ -26,16 +27,7 @@ func openStore(t *testing.T) *store.Store {
 
 func openStoreAt(t *testing.T, path string) *store.Store {
 	t.Helper()
-	s, err := store.Open(context.Background(), path, store.Options{})
-	if err != nil {
-		t.Fatalf("Open: %v", err)
-	}
-	t.Cleanup(func() {
-		if err := s.Close(); err != nil {
-			t.Errorf("Close: %v", err)
-		}
-	})
-	return s
+	return storetest.Open(t, path, store.Options{})
 }
 
 // clock is a settable test clock.
