@@ -157,10 +157,10 @@ func TestAdmissionRefusalDetailCoversEveryAdmissionClass(t *testing.T) {
 	agent, stage, launch := "implementer-agent", domain.StageNameSpecification, domain.Digest("sha256:launch")
 	typed := &AgentAdmissionRefusal{
 		Refusal: domain.AdmissionRefusal{
-			Check: domain.AdmissionCheckAgentAttendedMark, Agent: &agent,
+			Check: domain.AdmissionCheckAgentPrompt, Agent: &agent,
 			LaunchStage: &stage, LaunchDigest: &launch,
 		},
-		err: fmt.Errorf("role specifier: no attended mark: %w", ErrAgentNotAdmissible),
+		err: fmt.Errorf("role specifier: the lineup selects prompt: %w", ErrAgentNotAdmissible),
 	}
 	if got := admissionRefusalDetail(fmt.Errorf("admit invocation %q: %w", "inv-1", typed)); got == nil ||
 		!reflect.DeepEqual(*got, typed.Refusal) {

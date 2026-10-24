@@ -1440,6 +1440,13 @@ daemon stops at startup and `preflight` fails until the tree names both. A
 writer role on such an agent launches with no `--model` or `--effort`, and
 so runs whatever the Claude CLI defaults to; adoption writes no such agent.
 
+An agent needs no attended mark: plan revision 97 removed the attended
+first run. A tree committed before that may still hold
+`policy/agents/<agent>.attended` files. The daemon, `preflight`, and
+`freesided deputy` refuse such a tree, naming the file, until the mark
+files are deleted and the deletion is committed. The lock never listed
+them, so `agents.lock` stays as it is.
+
 `freesided auth adopt` moves an instance that ran on those flags. Stop the
 daemon, then name the identities and cost owners the flags carried:
 
@@ -1478,11 +1485,10 @@ Each agent names the model and the effort its launch passes:
   effort share one agent, named `claude-code-<role>` for the first of
   `specifier`, `implementer`, and `remediator` that asks it, on a pinned
   offer of the same name whose `route_model_id` is the model and whose
-  `allowed_efforts` hold the effort. One attended mark covers the shared
-  agent's one launch. The patch has no agent on the offer that names no
-  model: a writer launch passes `--model` and `--effort` when its agent
-  names them, so a tree that left either out would run whatever the CLI
-  defaults to.
+  `allowed_efforts` hold the effort. The patch has no agent on the offer
+  that names no model: a writer launch passes `--model` and `--effort` when
+  its agent names them, so a tree that left either out would run whatever
+  the CLI defaults to.
 - **`-review-model` and `-review-effort`** are required with the review
   identity. The review agent `codex-review-default` is on an offer whose
   `route_model_id` is the model, and asks the effort.
@@ -1572,13 +1578,10 @@ refused until the tree changes. Before starting the new build:
    - The review offer
      `policy/fragments/offers/<codex-route>/codex-review-default`, which now
      allows the review effort.
-   - The agent `policy/agents/codex-review-default` and its mark file
-     `codex-review-default.attended`.
+   - The agent `policy/agents/codex-review-default`.
    - With the shadow arm on, the offer
-     `policy/fragments/offers/<claude-route>/claude-shadow-review-default`,
-     the agent `policy/agents/claude-shadow-review-default`, and its mark
-     file. The writer agent's mark file loses the review launch's line,
-     which marked a launch that agent no longer runs.
+     `policy/fragments/offers/<claude-route>/claude-shadow-review-default`
+     and the agent `policy/agents/claude-shadow-review-default`.
    - The `reviewer` and `shadow_reviewer` lines in `policy/lineup`.
    - The `policy/agents.lock` entries for each agent, offer, and adapter
      above. `codex_review_v1` and its lock entry may stay or go together.
@@ -1621,13 +1624,12 @@ judgment upgrade below does this one in the same run. To move the writers:
    staged diff changes only what this list names. Otherwise copy each part:
    - An offer `policy/fragments/offers/<claude-route>/claude-code-<role>`
      for each distinct model and effort.
-   - The agent `policy/agents/claude-code-<role>` on each, and its mark file
-     `claude-code-<role>.attended`.
+   - The agent `policy/agents/claude-code-<role>` on each.
    - The `specifier`, `implementer`, and `remediator` lines in
      `policy/lineup`.
    - The `policy/agents.lock` entries for each agent and offer above. The
      agent `claude-code-default`, the offer `claude-code-native-default`,
-     the mark file, and their lock entries go, unless a hand-authored line
+     and their lock entries go, unless a hand-authored line
      still names the agent.
 3. Commit, pass the commit as `-agent-tree-commit`, and run preflight.
 

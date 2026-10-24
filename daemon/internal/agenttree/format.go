@@ -109,38 +109,6 @@ func renderAgent(source domain.AgentSource) ([]byte, error) {
 		source.Enrollment, source.Route, source.Adapter, source.Offer, source.Effort), nil
 }
 
-// parseMarks reads an agent's .attended file: one "<agent-digest>
-// <launch-digest>" line for each launch the agent may run unattended.
-func parseMarks(agent string, body []byte) ([]Mark, error) {
-	path := agentsDir + agent + markSuffix
-	rows, err := lines(path, body)
-	if err != nil {
-		return nil, err
-	}
-	if len(rows) == 0 {
-		return nil, fmt.Errorf("%s is empty: %w", path, ErrMalformed)
-	}
-	marks := make([]Mark, 0, len(rows))
-	for _, row := range rows {
-		if len(row) != 2 || !contentaddr.Valid(row[0]) || !contentaddr.Valid(row[1]) {
-			return nil, fmt.Errorf("%s is not <agent-digest> <launch-digest> lines: %w", path, ErrMalformed)
-		}
-		mark := Mark{Agent: agent, AgentDigest: domain.Digest(row[0]), LaunchDigest: domain.Digest(row[1])}
-		if slices.Contains(marks, mark) {
-			return nil, fmt.Errorf("%s repeats a mark: %w", path, ErrMalformed)
-		}
-		marks = append(marks, mark)
-	}
-	return marks, nil
-}
-
-func renderMark(mark Mark) ([]byte, error) {
-	if !contentaddr.Valid(string(mark.AgentDigest)) || !contentaddr.Valid(string(mark.LaunchDigest)) {
-		return nil, fmt.Errorf("attended mark for %q: %w", mark.Agent, ErrMalformed)
-	}
-	return fmt.Appendf(nil, "%s %s\n", mark.AgentDigest, mark.LaunchDigest), nil
-}
-
 // parseLineup reads the lineup file: one "<key> <selection>" line for each
 // role, where the key is the role name (or "<role>.shadow.<name>") and the
 // selection is the lineup contract's value. Which keys are legal is

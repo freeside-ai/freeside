@@ -23,8 +23,10 @@ import (
 // AgentEncodingVersion tags the agent's canonical serialization.
 const AgentEncodingVersion = 1
 
-// maxAgentNameBytes leaves room for the nine-byte ".attended" suffix in a
-// 255-byte policy-tree filename component.
+// maxAgentNameBytes was sized to leave room for the nine-byte ".attended"
+// mark suffix in a 255-byte policy-tree filename component. Plan revision 97
+// removed the mark; the limit stays, because widening the name rule is its
+// own decision.
 const maxAgentNameBytes = 246
 
 // AgentSource is the operator-authored form: names, resolved against one

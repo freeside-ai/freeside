@@ -270,7 +270,7 @@ func TestRunHoldAdmissionDetail(t *testing.T) {
 	}
 
 	full := &domain.AdmissionRefusal{
-		Check: domain.AdmissionCheckAgentAttendedMark, Agent: &agent,
+		Check: domain.AdmissionCheckAgentPrompt, Agent: &agent,
 		LaunchStage: &stage, LaunchDigest: &launch,
 	}
 	recordHold(full, admissionEpoch)

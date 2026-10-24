@@ -390,10 +390,6 @@ func TestAuthAdoptEnrollsBothIdentitiesAndEmitsAResolvingTree(t *testing.T) {
 	if got := lineupRoles(tree); !reflect.DeepEqual(got, wantRoles) {
 		t.Fatalf("lineup = %v, want %v", got, wantRoles)
 	}
-	// One mark per ward agent: the two writers and the reviewer.
-	if len(tree.Marks) != 3 {
-		t.Fatalf("attended marks = %+v", tree.Marks)
-	}
 	for name, i := range map[string]int{
 		agentbaseline.WriterAgentName(domain.RoleSpecifier):   0,
 		agentbaseline.WriterAgentName(domain.RoleImplementer): 0,
@@ -1119,22 +1115,19 @@ func assertAdoptedPatchResolvesAndAdmitsEveryRole(t *testing.T, f *authAdoptFixt
 				// admitted by the review check, which records a snapshot and
 				// does not enforce launch coverage yet (#1980).
 				if _, err := selection.CheckRole(
-					ctx, st, role, agent.Line.PromptDigest, domain.ModeAttendedDev, now,
+					ctx, st, role, agent.Line.PromptDigest, now,
 				); !errors.Is(err, engine.ErrAgentNotAdmissible) {
 					t.Fatalf("stage admission of review role %s = %v", role, err)
 				}
 				continue
 			}
-			for _, mode := range []domain.OperatingMode{domain.ModeAttendedDev, domain.ModeUnattended} {
-				binding, err := selection.CheckRole(ctx, st, role, prompt.Digest, mode, now)
-				if err != nil {
-					t.Fatalf("admit %s in %s: %v", role, mode, err)
-				}
-				if binding.EnrollmentID != agent.Enrollment.ID || binding.EnrollmentGeneration != 1 ||
-					binding.LineupRevision != selection.LineupRevision ||
-					binding.Attended != (mode != domain.ModeUnattended) {
-					t.Fatalf("role %s binding in %s = %+v", role, mode, binding)
-				}
+			binding, err := selection.CheckRole(ctx, st, role, prompt.Digest, now)
+			if err != nil {
+				t.Fatalf("admit %s: %v", role, err)
+			}
+			if binding.EnrollmentID != agent.Enrollment.ID || binding.EnrollmentGeneration != 1 ||
+				binding.LineupRevision != selection.LineupRevision {
+				t.Fatalf("role %s binding = %+v", role, binding)
 			}
 		}
 		// A lineup without the role refuses, naming it.

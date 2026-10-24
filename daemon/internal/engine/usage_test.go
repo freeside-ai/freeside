@@ -105,7 +105,7 @@ func usageEngineFixture(t *testing.T, bound bool) (*Engine, domain.Run, domain.A
 		LineupRevision: domain.Digest("sha256:" + strings.Repeat("c", 64)),
 		EnrollmentID:   enrollment.ID, EnrollmentGeneration: generation.Ordinal,
 		StoreManifestDigest: generation.StoreManifestDigest,
-		EffectiveEgress:     []string{"chatgpt.com"}, Attended: true,
+		EffectiveEgress:     []string{"chatgpt.com"},
 	}
 	if !bound {
 		binding = nil

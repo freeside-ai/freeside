@@ -224,11 +224,13 @@ type AdmissionAgentBinding struct {
 	// EffectiveEgress is the canonical (sorted, deduplicated) allowlist of
 	// authorities the writer's proxy admitted for this attempt.
 	EffectiveEgress []string `json:"effective_egress"`
-	// Attended records whether the attempt ran attended (§5.4: a new
-	// agent × launch pair runs attended until the operator marks it). It must
-	// agree with the admission's operating mode; carrying both keeps the
-	// snapshot self-contained while the cross-check refuses drift.
-	Attended bool `json:"attended"`
+	// LegacyAttended is the attended flag a binding recorded before plan
+	// revision 97 removed the attended first run. Admission no longer sets
+	// it, nothing reads it, and Validate does not check it. It stays,
+	// omitted when nil, so a stored binding re-encodes to the bytes its
+	// admission id, review digests, and completion evidence were computed
+	// over.
+	LegacyAttended *bool `json:"attended,omitempty"`
 	// RouteModelID, RequestedEffort, and NativeEffort are the model and
 	// effort the launch passes (DeriveAgentLaunchSelection), recorded so
 	// exec.StartSpecFromAdmission can carry them without a closure lookup.
@@ -592,13 +594,6 @@ func (a ExecutionAdmission) Validate() error {
 	if a.AgentBinding != nil {
 		if err := a.AgentBinding.Validate(); err != nil {
 			return fmt.Errorf("execution admission %s: %w", a.InvocationID, err)
-		}
-		// The binding's attended flag and the admission's operating mode are
-		// two spellings of one fact; drift between them would let a record
-		// claim an attended first run while dispatching unattended.
-		if a.AgentBinding.Attended == (a.OperatingMode == ModeUnattended) {
-			return fmt.Errorf("execution admission %s attended flag disagrees with mode %q: %w",
-				a.InvocationID, a.OperatingMode, ErrAdmissionInconsistent)
 		}
 		// An agent-admitted attempt always runs under some provider identity;
 		// a clean-verification stage never resolves an agent.
@@ -1084,7 +1079,7 @@ func ValidateOutcomeBinding(a ExecutionAdmission, x ExecutionOutcome) error {
 // effort the launch passes with DeriveAgentLaunchSelection over the agent,
 // adapter, and offer (a stored model or effort is never trusted on its
 // own), the binding's launch digest with an authenticated launch for exactly that role, and the
-// agent's offer digest with an authenticated offer, so attended eligibility,
+// agent's offer digest with an authenticated offer, so
 // launch-capability provenance, and the admitted model can never be
 // attributed to a fragment the admission did not run. The joins the closure
 // itself expresses are re-run: the agent's effort must be one the offer

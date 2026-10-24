@@ -49,8 +49,8 @@ func NewReviewAdmission(admission ReviewAdmission) (ReviewAdmission, error) {
 }
 
 // Validate reports whether the snapshot is identified, names a review role,
-// and carries a binding a review launch could have run: unattended, chosen
-// by the lineup, and passing both a model and an effort.
+// and carries a binding a review launch could have run: chosen by the
+// lineup, and passing both a model and an effort.
 func (a ReviewAdmission) Validate() error {
 	switch {
 	case a.InvocationID == "":
@@ -74,9 +74,6 @@ func (a ReviewAdmission) Validate() error {
 	// configuration a review record shows is built from both.
 	case a.AgentBinding.RouteModelID == "" || a.AgentBinding.NativeEffort == "":
 		return fmt.Errorf("review admission %s model and effort: %w", a.InvocationID, ErrEmptyField)
-	// Review sources run only in an unattended daemon.
-	case a.AgentBinding.Attended:
-		return fmt.Errorf("review admission %s ran attended: %w", a.InvocationID, ErrReviewAdmissionInvalid)
 	// No task line or card selects a review agent: the source runs the one
 	// agent the lineup names.
 	case a.AgentBinding.SelectionSource != AgentSelectionSourceLineup:

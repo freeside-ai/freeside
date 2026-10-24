@@ -1631,8 +1631,8 @@ func evaluateJudgmentRoles(manifest *compositionManifest, checks []inference.Rol
 // must share one credential volume, because preflight probes exactly one.
 // A writer role is resolved, not admitted: preflight takes no prompt package,
 // operating mode, or attempt budget, so the prompt digest, launch coverage,
-// attended mark, expiry, and egress steps run only in the daemon's startup
-// check, which holds admission when one fails.
+// expiry, and egress steps run only in the daemon's startup check, which
+// holds admission when one fails.
 func resolvePreflightAgents(
 	ctx context.Context, st *store.Store, tree agenttree.Tree, revision domain.Digest,
 	reviewAuthMode ward.CodexAuthMode, shadow bool, now time.Time,

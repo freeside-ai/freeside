@@ -5184,7 +5184,6 @@ public enum Components {
             case agent_launch_coverage = "agent_launch_coverage"
             case agent_credential_expiry = "agent_credential_expiry"
             case agent_offer_deadline = "agent_offer_deadline"
-            case agent_attended_mark = "agent_attended_mark"
             case agent_egress_authority = "agent_egress_authority"
             case agent_snapshot = "agent_snapshot"
             case agent_admission = "agent_admission"

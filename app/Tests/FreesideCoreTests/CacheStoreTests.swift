@@ -294,6 +294,76 @@ private func sampleState(revision: Int64 = 5) -> CachedState {
         #expect(decoded.task_proposal_revision?.value1.expected_cost_units == 25)
     }
 
+    @Test func aCachedHoldUnderTheRetiredAttendedCheckLoadsWithoutItsDetail() throws {
+        // Plan revision 97 removed the agent_attended_mark admission check
+        // (#2265). AdmissionCheck decodes strictly, so a cache holding a run
+        // hold refused under it would throw on decode and discard the whole
+        // cache, ledger included. The load path drops that detail in run
+        // timelines and in task timelines' run sections.
+        let (store, directory) = temporaryStore()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        var state = sampleState()
+        state.runTimelines = RunFixtures.defaultTimelines()
+        state.pendingCommands = [
+            "item-a": .init(command: makeCommand(itemID: "item-a"), state: .unresolved)
+        ]
+        try store.save(state)
+
+        let retired: [String: Any] = [
+            "check": "agent_attended_mark", "agent": "claude-code-specifier",
+            "launch_stage": NSNull(), "launch_digest": NSNull(),
+        ]
+        func retire(_ hold: inout [String: Any]) {
+            hold["reason"] = "admission_policy_refused"
+            hold["detail"] = retired
+        }
+        let file = directory.appendingPathComponent("cache.json")
+        var object = try #require(
+            try JSONSerialization.jsonObject(with: Data(contentsOf: file)) as? [String: Any])
+        var persistedState = try #require(object["state"] as? [String: Any])
+        var runTimelines = try #require(persistedState["runTimelines"] as? [[String: Any]])
+        var retiredRunHolds = 0
+        for index in runTimelines.indices {
+            guard var hold = runTimelines[index]["hold"] as? [String: Any] else { continue }
+            retire(&hold)
+            runTimelines[index]["hold"] = hold
+            retiredRunHolds += 1
+        }
+        persistedState["runTimelines"] = runTimelines
+        var taskTimelines = try #require(persistedState["taskTimelines"] as? [[String: Any]])
+        var retiredTaskHolds = 0
+        for timelineIndex in taskTimelines.indices {
+            guard var sections = taskTimelines[timelineIndex]["sections"] as? [[String: Any]] else { continue }
+            for sectionIndex in sections.indices {
+                guard var runs = sections[sectionIndex]["runs"] as? [[String: Any]] else { continue }
+                for runIndex in runs.indices {
+                    guard var hold = runs[runIndex]["hold"] as? [String: Any] else { continue }
+                    retire(&hold)
+                    runs[runIndex]["hold"] = hold
+                    retiredTaskHolds += 1
+                }
+                sections[sectionIndex]["runs"] = runs
+            }
+            taskTimelines[timelineIndex]["sections"] = sections
+        }
+        persistedState["taskTimelines"] = taskTimelines
+        #expect(retiredRunHolds > 0)
+        #expect(retiredTaskHolds > 0)
+        object["state"] = persistedState
+        try JSONSerialization.data(withJSONObject: object).write(to: file)
+
+        let migrated = try #require(store.load())
+        #expect(migrated.pendingCommands == state.pendingCommands)
+        let runHolds = migrated.runTimelines.compactMap { $0.hold?.value1 }
+        #expect(runHolds.count == retiredRunHolds)
+        #expect(runHolds.allSatisfy { $0.reason == .admission_policy_refused && $0.detail == nil })
+        let taskHolds = migrated.taskTimelines.flatMap { timeline in
+            timeline.sections.flatMap { section in section.runs.compactMap { $0.hold?.value1 } }
+        }
+        #expect(taskHolds.count == retiredTaskHolds)
+        #expect(taskHolds.allSatisfy { $0.reason == .admission_policy_refused && $0.detail == nil })
+    }
+
     @Test func aPreTasksFormatFourCacheKeepsTheLedgerAndTelemetrySections() throws {
         // Format 4 predates task snapshots and task timelines. Its cursors
         // must not make an upgraded client consider an empty task list

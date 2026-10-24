@@ -172,14 +172,14 @@ func TestReviewLaunchSendsTheHarnessNativeEffort(t *testing.T) {
 // effort: the reviewer on codex_review_v1 asking harness_default from an
 // offer that allows only that, and the shadow reviewer line on the writer
 // agent of that era, `claude-code-default` on the offer that names no model,
-// put back here because the baseline no longer emits it. Every digest,
-// lineup line, and attended mark follows, so the only thing wrong with the
-// tree is what it lacks.
+// put back here because the baseline no longer emits it. Every digest and
+// lineup line follows, so the only thing wrong with the tree is what it
+// lacks.
 func treeAdoptedBeforeReviewAgentsNamedALaunch(t *testing.T, tree agenttree.Tree) agenttree.Tree {
 	t.Helper()
 	old := tree
 	old.Agents, old.Offers = slices.Clone(tree.Agents), slices.Clone(tree.Offers)
-	old.Lineup, old.Marks = slices.Clone(tree.Lineup), slices.Clone(tree.Marks)
+	old.Lineup = slices.Clone(tree.Lineup)
 	v1, err := agentbaseline.CodexReviewAdapterV1()
 	if err != nil {
 		t.Fatal(err)
@@ -223,10 +223,6 @@ func treeAdoptedBeforeReviewAgentsNamedALaunch(t *testing.T, tree agenttree.Tree
 		old.Agents = append(old.Agents, agent)
 	}
 	old.Sort()
-	review, err := agentbaseline.RoleLaunch(domain.RoleReviewer)
-	if err != nil {
-		t.Fatal(err)
-	}
 	for i := range old.Lineup {
 		line := &old.Lineup[i].Selection
 		switch domain.RoleName(old.Lineup[i].Key) {
@@ -239,9 +235,6 @@ func treeAdoptedBeforeReviewAgentsNamedALaunch(t *testing.T, tree agenttree.Tree
 		if line.AgentDigest, err = old.AgentDigest(line.AgentName); err != nil {
 			t.Fatal(err)
 		}
-		old.Marks = append(old.Marks, agenttree.Mark{
-			Agent: line.AgentName, AgentDigest: line.AgentDigest, LaunchDigest: review.Digest,
-		})
 	}
 	return old
 }
@@ -304,10 +297,6 @@ func TestReviewRoleRefusesAModelTheLaunchCannotPass(t *testing.T) {
 		t.Fatalf("auth adopt: %v", err)
 	}
 	adopted := loadAdoptedPatch(t, patch)
-	review, err := agentbaseline.RoleLaunch(domain.RoleReviewer)
-	if err != nil {
-		t.Fatal(err)
-	}
 	for _, tc := range []struct {
 		role         domain.RoleName
 		agent, offer string
@@ -322,7 +311,6 @@ func TestReviewRoleRefusesAModelTheLaunchCannotPass(t *testing.T) {
 		t.Run(string(tc.role), func(t *testing.T) {
 			tree := adopted
 			tree.Offers, tree.Lineup = slices.Clone(adopted.Offers), slices.Clone(adopted.Lineup)
-			tree.Marks = slices.Clone(adopted.Marks)
 			offer := slices.IndexFunc(tree.Offers, func(o agenttree.Offer) bool { return o.Name == tc.offer })
 			if offer < 0 {
 				t.Fatalf("adopted tree has no offer %s", tc.offer)
@@ -340,7 +328,6 @@ func TestReviewRoleRefusesAModelTheLaunchCannotPass(t *testing.T) {
 					tree.Lineup[i].Selection.AgentDigest = digest
 				}
 			}
-			tree.Marks = append(tree.Marks, agenttree.Mark{Agent: tc.agent, AgentDigest: digest, LaunchDigest: review.Digest})
 			f.withStore(t, func(st *store.Store) {
 				_, err := reviewRoleAgent(ctx, st, tree, tc.role, now)
 				var failure *roleAdmissionError
@@ -356,9 +343,8 @@ func TestReviewRoleRefusesAModelTheLaunchCannotPass(t *testing.T) {
 // TestReviewSelectionFailsClosed covers the review roles' startup and
 // per-review checks: a lineup with no reviewer line refuses and names the
 // role, an attended daemon resolves no review role, an offer past its
-// not_after and an agent with no attended mark for the review launch refuse,
-// and a source composed under an identity refuses its next review once the
-// identity is disabled.
+// not_after refuses, and a source composed under an identity refuses its
+// next review once the identity is disabled.
 func TestReviewSelectionFailsClosed(t *testing.T) {
 	ctx := context.Background()
 	now := time.Now().UTC()
@@ -431,54 +417,6 @@ func TestReviewSelectionFailsClosed(t *testing.T) {
 				if err := admit(ctx, exec.ReviewRequest{}); !errors.Is(err, engine.ErrAgentNotAdmissible) {
 					t.Fatalf("%s review admission after the offer's not_after = %v", role, err)
 				}
-			}
-		})
-	})
-
-	t.Run("no attended mark", func(t *testing.T) {
-		f := newAuthAdoptFixture(t)
-		_, patch, err := f.run(t, f.shadowArgs())
-		if err != nil {
-			t.Fatalf("auth adopt: %v", err)
-		}
-		tree := loadAdoptedPatch(t, patch)
-		review, err := agentbaseline.RoleLaunch(domain.RoleReviewer)
-		if err != nil {
-			t.Fatal(err)
-		}
-		f.withStore(t, func(st *store.Store) {
-			for _, role := range []domain.RoleName{domain.RoleReviewer, domain.RoleShadowReviewer} {
-				agent, err := reviewRoleAgent(ctx, st, tree, role, now)
-				if err != nil {
-					t.Fatalf("%s with its attended mark: %v", role, err)
-				}
-				// Drop only this agent's mark for the review launch: a mark for
-				// another launch of the same agent does not cover a review.
-				unmarked := tree
-				unmarked.Marks = slices.DeleteFunc(slices.Clone(tree.Marks), func(mark agenttree.Mark) bool {
-					return mark.Agent == agent.Line.AgentName && mark.LaunchDigest == review.Digest
-				})
-				if len(unmarked.Marks) != len(tree.Marks)-1 {
-					t.Fatalf("%s: dropped %d marks, want 1", role, len(tree.Marks)-len(unmarked.Marks))
-				}
-				_, err = reviewRoleAgent(ctx, st, unmarked, role, now)
-				var failure *roleAdmissionError
-				if !errors.As(err, &failure) || failure.Role != role ||
-					!errors.Is(err, engine.ErrAgentNotAdmissible) || !strings.Contains(err.Error(), "attended mark") {
-					t.Fatalf("%s without its attended mark = %v", role, err)
-				}
-				admit := reviewAdmission(st, unmarked, testReviewRole(role, nil), agent.Identity.ID, time.Now)
-				if err := admit(ctx, exec.ReviewRequest{}); !errors.Is(err, engine.ErrAgentNotAdmissible) {
-					t.Fatalf("%s review admission without its attended mark = %v", role, err)
-				}
-			}
-			cfg := flagEraReviewConfig()
-			unmarked := tree
-			unmarked.Marks = nil
-			var failure *roleAdmissionError
-			if _, err := resolveReviewSelection(ctx, st, unmarked, cfg, now); !errors.As(err, &failure) ||
-				failure.Role != domain.RoleReviewer {
-				t.Fatalf("startup selection with no marks = %v", err)
 			}
 		})
 	})
@@ -746,10 +684,6 @@ func TestReviewAdmissionHoldsTheReviewerTaskLine(t *testing.T) {
 func TestReviewInvocationIsRefusedBeforeItIsAdmitted(t *testing.T) {
 	ctx := context.Background()
 	now := time.Now().UTC()
-	review, err := agentbaseline.RoleLaunch(domain.RoleReviewer)
-	if err != nil {
-		t.Fatal(err)
-	}
 	other := map[domain.RoleName]domain.RoleName{
 		domain.RoleReviewer:       domain.RoleShadowReviewer,
 		domain.RoleShadowReviewer: domain.RoleReviewer,
@@ -799,14 +733,6 @@ func TestReviewInvocationIsRefusedBeforeItIsAdmitted(t *testing.T) {
 				setIdentityEnabled(t, f.st, agent.Identity.ID, false)
 			},
 			want: "role ",
-		},
-		"the agent has no attended mark for the review launch": {
-			breakIt: func(_ *testing.T, f *fixture, _ domain.RoleName, agent engine.ReviewRoleAgent) {
-				f.tree.Marks = slices.DeleteFunc(slices.Clone(f.tree.Marks), func(mark agenttree.Mark) bool {
-					return mark.Agent == agent.Line.AgentName && mark.LaunchDigest == review.Digest
-				})
-			},
-			want: "attended mark",
 		},
 		// Only the routed reviewer reads a task line.
 		"the task's line names another agent": {
@@ -901,7 +827,7 @@ func TestWriterRoleFailureHoldsAdmissionAndRaisesOneItem(t *testing.T) {
 		if err := recordBaselineAdapterConformance(ctx, st, now); err != nil {
 			t.Fatal(err)
 		}
-		if failure := checkWriterRoles(ctx, st, *selection, prompts, domain.ModeUnattended, now); failure != nil {
+		if failure := checkWriterRoles(ctx, st, *selection, prompts, now); failure != nil {
 			t.Fatalf("adopted writer roles: %v", failure)
 		}
 		if err := agentSelectionGate(st, nil)(ctx); err != nil {
@@ -910,7 +836,7 @@ func TestWriterRoleFailureHoldsAdmissionAndRaisesOneItem(t *testing.T) {
 
 		// The daemon now runs another remediation prompt than the line names.
 		prompts[domain.RoleRemediator] = prompts[domain.RoleImplementer]
-		failure := checkWriterRoles(ctx, st, *selection, prompts, domain.ModeUnattended, now)
+		failure := checkWriterRoles(ctx, st, *selection, prompts, now)
 		if failure == nil || failure.Role != domain.RoleRemediator || !errors.Is(failure, engine.ErrAgentNotAdmissible) {
 			t.Fatalf("mismatched remediation prompt = %v", failure)
 		}

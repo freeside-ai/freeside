@@ -279,7 +279,7 @@ func TestLineupAdmissionBindsTheRolesAgent(t *testing.T) {
 		binding.LineupRevision != f.selection.LineupRevision ||
 		binding.EnrollmentID != f.enrollment.ID || binding.EnrollmentGeneration != f.generation.Ordinal ||
 		binding.StoreManifestDigest != f.generation.StoreManifestDigest ||
-		binding.PricingRevision != "pricing-2026-08" || !binding.Attended ||
+		binding.PricingRevision != "pricing-2026-08" ||
 		!slices.Equal(binding.EffectiveEgress, agentTestEgress) {
 		t.Fatalf("agent binding = %+v", *binding)
 	}
@@ -434,7 +434,6 @@ func TestLineupAdmissionRefusals(t *testing.T) {
 	implementerPrompt := agentTestPrompts[domain.RoleImplementer].Digest
 	cases := []struct {
 		name   string
-		mode   domain.OperatingMode
 		prompt domain.Digest
 		at     time.Time
 		mutate func(t *testing.T, f *agentAdmissionFixture, selection *AgentSelection)
@@ -448,15 +447,6 @@ func TestLineupAdmissionRefusals(t *testing.T) {
 			name:   "the attempt runs a prompt the line does not select",
 			prompt: agentTestDigest("9"), want: "the lineup selects prompt",
 			check: domain.AdmissionCheckAgentPrompt, named: true,
-		},
-		{
-			name: "unattended without an attended mark",
-			mode: domain.ModeUnattended,
-			mutate: func(_ *testing.T, _ *agentAdmissionFixture, selection *AgentSelection) {
-				selection.Tree.Marks = nil
-			},
-			want:  "no attended mark",
-			check: domain.AdmissionCheckAgentAttendedMark, named: true,
 		},
 		{
 			name: "the identity is disabled",
@@ -513,10 +503,7 @@ func TestLineupAdmissionRefusals(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			f := newAgentAdmissionFixture(t)
 			selection := f.selection
-			mode, prompt, at := tc.mode, tc.prompt, tc.at
-			if mode == "" {
-				mode = domain.ModeAttendedDev
-			}
+			prompt, at := tc.prompt, tc.at
 			if prompt == "" {
 				prompt = implementerPrompt
 			}
@@ -526,7 +513,7 @@ func TestLineupAdmissionRefusals(t *testing.T) {
 			if tc.mutate != nil {
 				tc.mutate(t, f, &selection)
 			}
-			_, err := resolveAgentAdmission(ctx, f.store, selection, f.run.ID, domain.RoleImplementer, prompt, mode, at)
+			_, err := resolveAgentAdmission(ctx, f.store, selection, f.run.ID, domain.RoleImplementer, prompt, at)
 			if !errors.Is(err, ErrAgentNotAdmissible) || !strings.Contains(err.Error(), tc.want) {
 				t.Fatalf("resolve = %v, want a refusal naming %q", err, tc.want)
 			}
@@ -609,25 +596,13 @@ func TestLineupAdmissionRequiresAdapterConformance(t *testing.T) {
 		t.Fatal(err)
 	}
 	_, err = resolveAgentAdmission(
-		ctx, f.store, f.selection, f.run.ID, domain.RoleImplementer, agentTestPrompts[domain.RoleImplementer].Digest,
-		domain.ModeAttendedDev, agentTestAt,
+		ctx, f.store, f.selection, f.run.ID, domain.RoleImplementer, agentTestPrompts[domain.RoleImplementer].Digest, agentTestAt,
 	)
 	if !errors.Is(err, ErrAgentNotAdmissible) {
 		t.Fatalf("resolve after a failed conformance pass = %v", err)
 	}
 	assertAdmissionDetail(t, err, domain.AdmissionCheckAgentLaunchCoverage,
 		agentTestWriterAgent, agentTestLaunch(t, f, domain.RoleImplementer))
-}
-
-func TestUnattendedLineupAdmissionRecordsTheMark(t *testing.T) {
-	f := newAgentAdmissionFixture(t)
-	resolved, err := resolveAgentAdmission(
-		context.Background(), f.store, f.selection, f.run.ID, domain.RoleImplementer,
-		agentTestPrompts[domain.RoleImplementer].Digest, domain.ModeUnattended, agentTestAt,
-	)
-	if err != nil || resolved.binding.Attended {
-		t.Fatalf("unattended resolve = attended %t, %v", resolved.binding.Attended, err)
-	}
 }
 
 func TestWithAdmissionRefusesAgentSelectionBesideAnIdentity(t *testing.T) {
@@ -664,7 +639,7 @@ func TestLineupAdmissionGateHoldsEveryAttempt(t *testing.T) {
 	// The startup check decides whether to open the gate, so it ignores it.
 	if _, err := f.engine.admission.environment.Agents.CheckRole(
 		context.Background(), f.store, domain.RoleImplementer,
-		agentTestPrompts[domain.RoleImplementer].Digest, domain.ModeAttendedDev, agentTestAt,
+		agentTestPrompts[domain.RoleImplementer].Digest, agentTestAt,
 	); err != nil {
 		t.Fatalf("CheckRole behind a closed gate = %v", err)
 	}
@@ -793,7 +768,7 @@ func TestLineupAdmissionRefusesAMarkedGeneration(t *testing.T) {
 			_, err := ResolveRole(ctx, f.store, f.selection.Tree, domain.RoleImplementer)
 			assertRefusal("ResolveRole", err)
 			_, err = f.selection.CheckRole(ctx, f.store, domain.RoleImplementer,
-				agentTestPrompts[domain.RoleImplementer].Digest, domain.ModeAttendedDev, agentTestAt)
+				agentTestPrompts[domain.RoleImplementer].Digest, agentTestAt)
 			assertRefusal("CheckRole", err)
 			_, admitted, err := f.engine.admitAttempt(ctx, f.binding, f.stage, f.binding.invocation.ID)
 			if admitted {

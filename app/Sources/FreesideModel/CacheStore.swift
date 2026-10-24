@@ -261,6 +261,12 @@ public struct DiskCacheStore: CacheStore {
     ///    key, so a committed start_with_changes command would silently reload
     ///    without its revision and fail its verbatim retry; the key is renamed
     ///    in place.
+    /// 4. Plan revision 97 removed the `agent_attended_mark` admission check
+    ///    (#2265). `AdmissionCheck` decodes strictly, so a cached run hold
+    ///    refused under it would throw and discard the cache, ledger
+    ///    included. The hold's detail is dropped, the shape the daemon now
+    ///    serves for such a hold, in run timelines and in task timelines'
+    ///    run sections.
     private static func migratingLegacyEncodings(_ data: Data) -> Data {
         guard var root = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any],
             var state = root["state"] as? [String: Any]
@@ -311,9 +317,65 @@ public struct DiskCacheStore: CacheStore {
             }
         }
 
+        if var timelines = state["runTimelines"] as? [[String: Any]] {
+            var timelinesChanged = false
+            for index in timelines.indices {
+                guard var hold = timelines[index]["hold"] as? [String: Any],
+                    droppingRetiredHoldDetail(&hold)
+                else { continue }
+                timelines[index]["hold"] = hold
+                timelinesChanged = true
+            }
+            if timelinesChanged {
+                state["runTimelines"] = timelines
+                changed = true
+            }
+        }
+
+        if var timelines = state["taskTimelines"] as? [[String: Any]] {
+            var timelinesChanged = false
+            for timelineIndex in timelines.indices {
+                guard var sections = timelines[timelineIndex]["sections"] as? [[String: Any]]
+                else { continue }
+                var sectionsChanged = false
+                for sectionIndex in sections.indices {
+                    guard var runs = sections[sectionIndex]["runs"] as? [[String: Any]] else { continue }
+                    var runsChanged = false
+                    for runIndex in runs.indices {
+                        guard var hold = runs[runIndex]["hold"] as? [String: Any],
+                            droppingRetiredHoldDetail(&hold)
+                        else { continue }
+                        runs[runIndex]["hold"] = hold
+                        runsChanged = true
+                    }
+                    guard runsChanged else { continue }
+                    sections[sectionIndex]["runs"] = runs
+                    sectionsChanged = true
+                }
+                guard sectionsChanged else { continue }
+                timelines[timelineIndex]["sections"] = sections
+                timelinesChanged = true
+            }
+            if timelinesChanged {
+                state["taskTimelines"] = timelines
+                changed = true
+            }
+        }
+
         guard changed else { return data }
         root["state"] = state
         return (try? JSONSerialization.data(withJSONObject: root)) ?? data
+    }
+
+    /// Drops a cached hold's detail when it names the retired
+    /// `agent_attended_mark` check (translation 4 above), reporting whether
+    /// it did.
+    private static func droppingRetiredHoldDetail(_ hold: inout [String: Any]) -> Bool {
+        guard let detail = hold["detail"] as? [String: Any],
+            detail["check"] as? String == "agent_attended_mark"
+        else { return false }
+        hold.removeValue(forKey: "detail")
+        return true
     }
 
     public func save(_ state: CachedState) throws {

@@ -21,7 +21,6 @@
       "effective_egress": [
         "review.fake.example:443"
       ],
-      "attended": false,
       "route_model_id": "fake",
       "requested_effort": "high",
       "native_effort": "review-v1",

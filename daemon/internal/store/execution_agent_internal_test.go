@@ -120,7 +120,6 @@ func agentBoundAdmission(t *testing.T, generation domain.EnrollmentGeneration) d
 			EnrollmentGeneration: generation.Ordinal,
 			StoreManifestDigest:  generation.StoreManifestDigest,
 			EffectiveEgress:      []string{"chatgpt.com"},
-			Attended:             true,
 		},
 		AdmittedAt: time.Date(2026, 1, 2, 3, 4, 5, 0, time.UTC),
 	})
@@ -310,6 +309,50 @@ func TestLegacyAdmissionKeepsItsRecord(t *testing.T) {
 	}
 	if agentDigest != nil || enrollmentID != nil {
 		t.Fatalf("legacy admission carries agent columns: %v, %v", agentDigest, enrollmentID)
+	}
+}
+
+// TestAdmissionWithTheAttendedFlagReconstructs: an agent-bound admission
+// recorded before plan revision 97 removed the attended first run carries
+// the attended flag in its body and its id. It still records and reads back
+// with that id, because the binding re-encodes to the same bytes (#2265).
+func TestAdmissionWithTheAttendedFlagReconstructs(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	s := openAgentAdmissionStore(t)
+	generation := seedAgentClosure(t, s)
+	legacy := agentBoundAdmission(t, generation)
+	binding := *legacy.AgentBinding
+	attended := true // the mode is attended_dev
+	binding.LegacyAttended = &attended
+	legacy.AgentBinding = &binding
+	id, err := legacy.ComputeID()
+	if err != nil {
+		t.Fatal(err)
+	}
+	legacy.ID = id
+	if err := s.Write(ctx, func(tx *WriteTx) error {
+		return tx.RecordExecutionAdmission(ctx, legacy)
+	}); err != nil {
+		t.Fatalf("record an admission carrying the attended flag: %v", err)
+	}
+	var body string
+	if err := s.db.QueryRowContext(ctx, selectExecutionAdmissionBodySQL, legacy.InvocationID).Scan(&body); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(body, `"effective_egress":["chatgpt.com"],"attended":true`) {
+		t.Fatalf("stored body %s does not carry the attended flag where it was recorded", body)
+	}
+	var got domain.ExecutionAdmission
+	if err := s.Read(ctx, func(tx *ReadTx) error {
+		var err error
+		got, err = tx.GetExecutionAdmission(ctx, legacy.InvocationID)
+		return err
+	}); err != nil {
+		t.Fatalf("read an admission carrying the attended flag: %v", err)
+	}
+	if !reflect.DeepEqual(got, legacy) {
+		t.Fatalf("read back %+v, want %+v", got, legacy)
 	}
 }
 

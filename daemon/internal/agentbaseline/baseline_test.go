@@ -7,6 +7,7 @@ import (
 	"reflect"
 	"regexp"
 	"slices"
+	"strings"
 	"testing"
 	"time"
 
@@ -99,10 +100,17 @@ func input(shadow bool) agentbaseline.TreeInput {
 }
 
 // The tree adoption proposes survives its own round trip and resolves its
-// ward agents against the adopted enrollments.
+// ward agents against the adopted enrollments. It carries no attended mark
+// file: plan revision 97 removed the mark.
 func TestBaselineTreeRoundTripsAndResolves(t *testing.T) {
 	tree := must(agentbaseline.Tree(input(true)))
-	parsed := must(agenttree.Parse(must(agenttree.Render(tree))))
+	files := must(agenttree.Render(tree))
+	for path := range files {
+		if strings.HasSuffix(path, ".attended") {
+			t.Fatalf("baseline tree renders %s", path)
+		}
+	}
+	parsed := must(agenttree.Parse(files))
 	if !reflect.DeepEqual(parsed, tree) {
 		t.Fatalf("baseline tree changed across its round trip:\n%+v\n%+v", parsed, tree)
 	}
@@ -164,15 +172,11 @@ func TestBaselineTreeRoundTripsAndResolves(t *testing.T) {
 		if !ok || line.AgentDigest != digest {
 			t.Fatalf("lineup line for %s = %+v, %v; want agent %s", role, line, ok, digest)
 		}
-		launch := must(agentbaseline.RoleLaunch(role))
-		if parsed.Attended(line.AgentName, digest, launch.Digest) {
-			t.Fatalf("role %s has no attended mark for its launch", role)
-		}
 	}
 }
 
 // Writer roles that ask one model and effort share one agent, named for the
-// first of them, with one pinned offer and one attended mark; a role asking
+// first of them, with one pinned offer; a role asking
 // another pair gets its own. The native-default writer agent is gone: no
 // baseline agent leaves the model to the CLI.
 func TestBaselineTreeSharesAWriterAgentBetweenRolesAskingOnePair(t *testing.T) {
@@ -208,15 +212,6 @@ func TestBaselineTreeSharesAWriterAgentBetweenRolesAskingOnePair(t *testing.T) {
 			!slices.Equal(offer.Fragment.AllowedEfforts, []domain.EffortLevel{domain.EffortHigh})) {
 			t.Fatalf("shared writer offer = %+v", offer.Fragment)
 		}
-	}
-	marks := 0
-	for _, mark := range tree.Marks {
-		if mark.Agent == implementer {
-			marks++
-		}
-	}
-	if marks != 1 {
-		t.Fatalf("the shared writer agent carries %d attended marks, want one for its one launch", marks)
 	}
 
 	// Three distinct pairs are three agents, each named for its role.
@@ -492,11 +487,6 @@ func TestBaselineTreeNamesTheCallAgentForJudgmentRoles(t *testing.T) {
 			t.Fatalf("lineup line for %s = %+v, %v", role, line, ok)
 		}
 	}
-	for _, mark := range tree.Marks {
-		if mark.Agent == agentbaseline.ClaudeCallAgentName {
-			t.Fatalf("call agent carries an attended mark: %+v", mark)
-		}
-	}
 	// The ward adapters are the ones a conformance record proves.
 	for _, proved := range must(agentbaseline.Adapters()) {
 		if proved.Digest == adapter.Digest {
@@ -650,7 +640,7 @@ func claudeReviewInput() agentbaseline.TreeInput {
 
 // A Claude reviewer (#397) is an agent on the review identity's claude_code
 // enrollment and the Claude ward adapter, on an offer of its own, and the
-// reviewer line names it with an attended mark. The writer agents and the
+// reviewer line names it. The writer agents and the
 // shadow reviewer are unchanged, and the tree has no Codex agent.
 func TestBaselineTreeRunsAClaudeReviewer(t *testing.T) {
 	tree := must(agentbaseline.Tree(claudeReviewInput()))
@@ -680,10 +670,8 @@ func TestBaselineTreeRunsAClaudeReviewer(t *testing.T) {
 		}
 	}
 	line, ok := must(parsed.ResolveLineup()).Line(domain.RoleReviewer)
-	launch := must(agentbaseline.RoleLaunch(domain.RoleReviewer))
-	if !ok || line.AgentName != agentbaseline.ClaudeReviewAgentName || line.AgentDigest != review.Definition.Digest ||
-		parsed.Attended(line.AgentName, line.AgentDigest, launch.Digest) {
-		t.Fatalf("reviewer line = %+v, %v, or it has no attended mark", line, ok)
+	if !ok || line.AgentName != agentbaseline.ClaudeReviewAgentName || line.AgentDigest != review.Definition.Digest {
+		t.Fatalf("reviewer line = %+v, %v", line, ok)
 	}
 	codexLineup := must(must(agentbaseline.Tree(input(true))).ResolveLineup())
 	lineup := must(parsed.ResolveLineup())

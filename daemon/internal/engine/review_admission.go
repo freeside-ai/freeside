@@ -54,10 +54,8 @@ type ReviewAdmitter func(
 // current digest and the code-owned review prompt; the agent's harness is the
 // one the role's source drives and its adapter is that source's vendor; the
 // offer is still on sale and the enrollment
-// holds a current credential at now; the agent carries the attended mark for
-// the review launch; and the agent names a model and an effort the launch can
-// pass. Review sources run only in an unattended daemon, so the mark is
-// always required.
+// holds a current credential at now; and the agent names a model and an
+// effort the launch can pass.
 //
 // Step 3, launch coverage, is not enforced for the review roles: the review
 // launch forbids auxiliary inference and no review adapter declares that
@@ -140,10 +138,6 @@ func CheckReviewRole(
 	}
 	if agent.launch, err = launch(role); err != nil {
 		return refuse("launch: %v", err)
-	}
-	if tree.Attended(agent.Line.AgentName, agent.Resolved.Definition.Digest, agent.launch.Digest) {
-		return refuse("agent %s has no attended mark for launch %s, so it cannot review unattended",
-			agent.Line.AgentName, agent.launch.Digest)
 	}
 	// Every review launch passes a model and an effort, and the approved
 	// review configuration digest covers both. An agent that names neither

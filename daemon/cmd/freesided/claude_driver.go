@@ -1869,7 +1869,7 @@ func composeClaudeDriver(
 	selectionFailure := checkWriterRoles(ctx, st, *agents, map[domain.RoleName]domain.Digest{
 		domain.RoleSpecifier: specificationPromptPackage, domain.RoleImplementer: promptPackage,
 		domain.RoleRemediator: remediationPromptPackage,
-	}, cfg.OperatingMode, utcNow())
+	}, utcNow())
 	agents.Gate = agentSelectionGate(st, selectionFailure)
 	env := engine.AdmissionEnvironment{
 		OperatingMode:             cfg.OperatingMode,

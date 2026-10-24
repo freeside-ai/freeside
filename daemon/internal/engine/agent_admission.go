@@ -85,8 +85,8 @@ type RoleAgent struct {
 // identity join; the line selects that agent's current digest; and the
 // enrollment holds a store generation. Stage admission adds the launch,
 // conformance, and deadline checks; the review roles, whose launch coverage
-// is not enforced yet (#1980), add only the offer's not_after and the
-// attended mark, in the daemon's review check.
+// is not enforced yet (#1980), add only the offer's not_after, in the
+// daemon's review check.
 //
 // It reads the lineup only. No task is in view here, so no task line is: the
 // startup and preflight checks, the shadow reviewer, and the review source's
@@ -337,12 +337,12 @@ func (s AgentSelection) validate() error {
 // first seen at its attempt.
 func (s AgentSelection) CheckRole(
 	ctx context.Context, st *store.Store, role domain.RoleName,
-	promptDigest domain.Digest, mode domain.OperatingMode, at time.Time,
+	promptDigest domain.Digest, at time.Time,
 ) (domain.AdmissionAgentBinding, error) {
 	if err := s.validate(); err != nil {
 		return domain.AdmissionAgentBinding{}, err
 	}
-	resolved, err := resolveAgentAdmission(ctx, st, s, "", role, promptDigest, mode, at)
+	resolved, err := resolveAgentAdmission(ctx, st, s, "", role, promptDigest, at)
 	return resolved.binding, err
 }
 
@@ -384,7 +384,7 @@ func wardRole(
 // one; it is empty outside an attempt (CheckRole), where the lineup selects.
 func resolveAgentAdmission(
 	ctx context.Context, st *store.Store, selection AgentSelection, runID domain.RunID, role domain.RoleName,
-	promptDigest domain.Digest, mode domain.OperatingMode, admittedAt time.Time,
+	promptDigest domain.Digest, admittedAt time.Time,
 ) (agentAdmission, error) {
 	// refused gains the launch and the agent as each resolves, so a refusal
 	// names whichever of them it came after.
@@ -463,11 +463,6 @@ func resolveAgentAdmission(
 	if err := domain.ValidateOfferCoversDeadline(resolved.Offer, deadline); err != nil {
 		return refuse(domain.AdmissionCheckAgentOfferDeadline, "%v", err)
 	}
-	// An agent and launch pair with no attended mark runs attended only.
-	if mode == domain.ModeUnattended && selection.Tree.Attended(agent.Line.AgentName, definition.Digest, launch.Digest) {
-		return refuse(domain.AdmissionCheckAgentAttendedMark, "agent %s has no attended mark for launch %s, so it cannot run unattended",
-			agent.Line.AgentName, launch.Digest)
-	}
 	for _, authority := range selection.EffectiveEgress {
 		if !slices.Contains(resolved.Route.InferenceAuthorities, authority) {
 			return refuse(domain.AdmissionCheckAgentEgressAuthority, "provider endpoint %q is outside the route's inference authorities", authority)
@@ -500,7 +495,6 @@ func resolveAgentAdmission(
 			EnrollmentID: enrollment.ID, EnrollmentGeneration: generation.Ordinal,
 			StoreManifestDigest: generation.StoreManifestDigest,
 			EffectiveEgress:     slices.Clone(selection.EffectiveEgress),
-			Attended:            mode != domain.ModeUnattended,
 			RouteModelID:        passes.RouteModelID, RequestedEffort: passes.RequestedEffort,
 			NativeEffort:    passes.NativeEffort,
 			SelectionSource: source, SelectionRecordID: record,
