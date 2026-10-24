@@ -235,8 +235,8 @@ the surface, exists or not, and `file:line`.
   Dependencies on the units that supply its criteria; it runs
   `.claude/skills/exit-run/SKILL.md`. A mid-wave exit rehearsal is a second
   unit, `starts-after` the first front's or the first chain head's last
-  unit. It runs only the rehearsal pass that skill defines (Rehearse Before
-  The Operator) on a disposable target against the midpoint build, not the
+  unit. It runs only the fixture pass that skill defines (Rehearse Before The
+  Operator) on the fixture repository against the midpoint build, not the
   skill's preflight, whose resolved-exit-set check can't hold mid-wave, and
   files what it finds against this wave. Neither unit closes through a
   merged PR and both start by the owner's word, so both go under
