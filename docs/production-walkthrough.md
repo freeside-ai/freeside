@@ -17,6 +17,36 @@ For a task-specific Stop exercise, follow the
 [controlled cancellation check](task-cancellation-check.md). It records runtime
 evidence separately from the walkthrough's publication and shutdown checks.
 
+## An Exit Run In Order
+
+An exit run is this runbook from start to finish. The exit-run skill
+(`.claude/skills/exit-run/SKILL.md`) says where to stop for the operator,
+whether a step counts, and what to record; each step's procedure is in the
+section it links.
+
+1. Write the real run's settings and inputs
+   ([The Inputs And What Refuses Them](#the-inputs-and-what-refuses-them)),
+   then run the pre-spend checks on its root ([Start And Verify](#start-and-verify)).
+2. Run the fixture pass on the build the real run will use
+   ([Rehearse Before The Real Run](#rehearse-before-the-real-run)).
+3. Prepare the operator's devices
+   ([Prepare The Operator's Devices](#prepare-the-operators-devices)).
+4. Start the deputy on the real root, pair both clients, test their
+   notifications, and resolve a retained root's health items
+   ([Start And Verify](#start-and-verify)).
+5. Submit the target from the CLI ([Start And Verify](#start-and-verify)),
+   or, in client-target mode, the visibility seed and then the composer's
+   task ([Submit A New Task From A Client](#submit-a-new-task-from-a-client)).
+6. Follow the task record through the specification approval to
+   publication ([Start And Verify](#start-and-verify)); a client-composed
+   task follows [The Exercise](#the-exercise).
+7. Decide the closure card, walk through the ready card, and merge
+   ([Walk Through, Merge, And Raise The Alerts](#walk-through-merge-and-raise-the-alerts)).
+8. Wait for the completion fact and raise the alerts (same section).
+9. Apply the record checks to the final task record
+   ([Start And Verify](#start-and-verify)).
+10. End the deputy ([Complete Deliberately](#complete-deliberately)).
+
 ## Start And Verify
 
 Write `<root>/daemon/settings.json`, mode `0600`, with every key the daemon
@@ -159,14 +189,38 @@ successful client pairing instead. Renewal does not consume or create a
 workflow attempt, restart the deputy, or authorize another submission. Any
 campaign-specific minting budget still applies.
 
+Once both clients are paired, send each a test notification, as the deputy's
+OS user:
+
+```sh
+freesided notify-test -state-dir <root>/daemon
+```
+
+It prints a line per paired device, ending `accepted by ntfy` or the failure
+([Control Socket and Pairing Codes](../daemon/README.md#control-socket-and-pairing-codes)).
+Acceptance is the provider's, so the operator confirms that each notice
+arrived. A phone can't send itself one yet (#1959).
+
 A standing root keeps the system-health items its earlier runs left open, and
 a restart does not close them. The blocking ones hold the next run's first
 admission with reason `blocking_system_health` until an operator resolves
-them in a paired client (Inbox > System health; Resume Unattended closed a
-durable-stop notice on run 117). Advisory items never hold admission. Resolve
-them once the clients are paired and before the first approval. A blocking
-item that no offered action closes keeps holding admission; stop the run and
-report it rather than going on.
+them in a paired client: Inbox > System health in the Mac client, with the
+action the item's card offers (on run 117, More Actions > Resume Unattended
+closed the run-116 `daemon_durable_stop` notice; Acknowledge only records,
+and the item stays open). Advisory items never hold admission. Resolve them
+once the clients are paired and before the first approval, then confirm
+that the read's `admission_error` and `operator_stop` are `null` and no
+item's `admission` is `holds`:
+
+```sh
+freesided inspect health -db <root>/daemon/freeside.db
+```
+
+A blocking item that no offered action closes keeps holding admission; stop
+the run and report it rather than going on. A missed blocking item shows as
+the run's hold reason `blocking_system_health`. A CLI-submitted task's
+specification run already waits for admission, so the hold can show at once;
+in client-target mode nothing waits until the operator composes a task.
 
 **The task record is the proof of a run.** Read it while the deputy serves:
 
@@ -197,13 +251,91 @@ exit status. For the published run, check that:
 - **The forge agrees:** `gh pr view <outcome.pr_number> --repo <outcome.repo>
   --json headRefOid,baseRefName` reports that head and `outcome.base_ref`.
 
-A record that fails any check is a finding, not proof of the run. During the
-walkthrough, fetch the run on both paired clients and exercise its offered
-ready-card actions. Record which actions ran, the task and run IDs, the
-endpoint, and the published head the record shows. Later actions can change
-the run, so an earlier read does not prove a later head. Health from the
-default service on port 7331 does not prove this run is still available at
-its paired endpoint.
+A record that fails any check is a finding, not proof of the run.
+
+### Walk Through, Merge, And Raise The Alerts
+
+Once the run's `publication.outcome` is set, the run goes on in this order,
+with the deputy still serving:
+
+1. **The closure card, first.** Under the human closure gate, for a source
+   issue in the managed repository, the pull request stays a draft until
+   the card is decided
+   ([The Publication File And Work-Unit Declaration](#the-publication-file-and-work-unit-declaration)),
+   so nothing can merge ahead of it. Read
+   `gh pr view <number> --repo <owner/repo> --json isDraft,body` before the
+   decision and after it: afterwards the pull request has left draft and
+   carries the final reference.
+2. **The walkthrough.** Fetch the run on both paired clients and exercise
+   the ready-card actions the run needs; in an exit run, the ones its
+   contract lists. Record which actions ran, the task and
+   run IDs, the endpoint, and the published head the record shows. Later
+   actions can change the run, so an earlier read does not prove a later
+   head. Health from the default service on port 7331 does not prove this
+   run is still available at its paired endpoint.
+3. **The stopped-daemon check.** Right before the merge, look on the Mac for
+   the STOPPED banner or an open `daemon_durable_stop` notice in Inbox >
+   System health. A daemon that stopped itself records no completion, and
+   the review-growth alert depends on that fact. The notice names the
+   daemon, not a task, so no `freesided` read shows it.
+4. **The merge.** The pull request merges; on real work in an exit run, the
+   owner merges it.
+5. **The completion fact.** Wait for the run's `publication.completion` in
+   the task record and the resolved ready item. The daemon records the fact
+   against the task's work-unit declaration: the one submitted with a CLI
+   task, or the one it wrote for a client-composed task.
+6. **The alerts.** Raise each alert the exit contract triggers
+   synthetically, with the deputy's build and the implementation run's id,
+   in the order of the `raise-item` command block in
+   [Operational Commands](../daemon/README.md#operational-commands). This
+   is the only point where all three work: `review-growth` is refused until
+   the completion fact is recorded, and ending the deputy stops its daemon.
+   Each command prints the raised item's ID and type. A run-bound item
+   (`held-work`, `review-growth`) shows in `inspect task`'s `items[]` with a
+   `deliveries` entry per paired device. The `stall` notice names the
+   daemon, not a run, so no `freesided` read shows it; the operator's report
+   is its delivery evidence. A refusal (a daemon that is not `ephemeral`, no
+   daemon, a run with no completion) is a finding, not something to work
+   around.
+7. **The record checks** above, on the final task record.
+8. **The end.** [Complete Deliberately](#complete-deliberately). If the
+   deputy died first, start it again on the same root rather than a fresh
+   one: it recovers the stale lease
+   ([Recover An Interrupted Deputy](#recover-an-interrupted-deputy)), and a
+   fresh root would not hold this run's evidence.
+
+## The Inputs And What Refuses Them
+
+One table per mode. Each row names the input, where it lives, and the check
+that refuses it, so a missing input fails at a known point instead of during
+the run. The daemon guide's settings table
+([Run Real Work With The Deputy](../daemon/README.md#run-real-work-with-the-deputy))
+is the authority for the settings, and it changes. The pre-spend record's
+`inputs` checks apply `submit`'s refusals to the files
+([Run The Pre-Spend Checks Before A Launch](../daemon/README.md#run-the-pre-spend-checks-before-a-launch)).
+
+**CLI mode.**
+
+| Input | Where it lives | What refuses it |
+| --- | --- | --- |
+| Settings, every key | `<root>/daemon/settings.json`, mode `0600`: prompt packages from the approved default-branch commit, the approved recipe digest | The deputy, before it takes the lease: a missing, unknown, or repeated key (`requireEveryKey`, `daemon/cmd/freesided/deputy_settings.go`), a relative path, an invalid prompt package. A stale package passes every check; only the person preparing the run catches it (run-70 lost its publication to one). |
+| Project | `submit -project`: the settings' `repository.project` | `freesided submit`, which requires it; composition preflight refuses a project the launch does not admit |
+| Specification | `submit -task`: a file holding exactly the target's bare canonical issue URL, or a specification file | `freesided submit`, which requires it |
+| Policy | `submit -policy`: the resolved policy keys, including `gates.spec_approval` and `gates.source_issue_closure` | `freesided submit`, which validates the keys and the specification policy (`specify.ParsePolicy`, `daemon/internal/specify/policy.go`) |
+| Publication | `submit -publication`: for a bare-URL target, the client record with `source_issue` set to that same URL ([The Publication File And Work-Unit Declaration](#the-publication-file-and-work-unit-declaration)) | Composition preflight and `freesided submit` (`submittedSourceReference`, `daemon/cmd/freesided/submit.go`) |
+| Work-unit declaration | `submit -work-unit`: at least `{"completion_criterion": "bound_pr_merged"}` | Composition preflight and `freesided submit` (`errWorkUnitRequired`, same file). A task accepted without one never records completion (#1931). |
+
+A target in the managed repository becomes the pull request's closing
+reference; one in another repository is linked and stays open.
+
+**Client-target mode.** The settings and the seed's `submit` inputs are the
+CLI-mode rows, for the visibility seed on a fresh root
+([The Visibility Seed](#the-visibility-seed)). Two rows are added:
+
+| Input | Where it lives | What refuses it |
+| --- | --- | --- |
+| Manual-submission file | `manual_submission_config` in the settings, the JSON in the daemon guide ([Configure Client Task Submission](../daemon/README.md#configure-client-task-submission)) | The deputy at start, before the lease. A file with an empty `projects` array starts but accepts no client submission. |
+| Composer source text | The pairing checkpoint list, which the exit run writes and the operator types | Nothing: `Please handle <URL>.` creates valid work with no saved source reference (#1928). When the contract requires source-issue closure, write the bare canonical issue URL, with no prose or trailing punctuation. |
 
 ## Rehearse Before The Real Run
 
@@ -342,20 +474,25 @@ The work-unit declaration is `{"completion_criterion": "bound_pr_merged"}`.
 The policy file names the settings' `allowed_paths` in `paths`, includes
 `https://api.github.com` in `research.allowlist`, sets `gates.spec_approval`
 to `false`, and leaves `gates.source_issue_closure` absent or `false`, so
-neither a specification nor a closure card waits for a person. The pass
-submits no `--task-line`: a real run's lines name agents in the real
+neither a specification nor a closure card waits for a person. These are the
+CLI-mode rows of [The Inputs And What Refuses Them](#the-inputs-and-what-refuses-them),
+so the pass exercises each of them. It leaves `manual_submission_config`
+empty, so in client-target mode the real run's deputy start is the first
+check of that file. The pass submits no `--task-line`: a real run's lines name agents in the real
 project's tree, not the fixture's. `submit` checks only a line's shape, so
 until the readiness walk (#2222) checks the real lines before spend, a line
 the real tree can't honor is first refused at the real run's admission.
 
 **Run it.** Start the deputy and submit as in [Start And Verify](#start-and-verify),
 on the fixture root with `-project fixture`. Follow the task with `freesided
-inspect task` until the run's `publication.outcome` is set. Merge the pull
-request in the fixture, wait for the run's `publication.completion`, and
-raise the alerts the exit contract triggers synthetically with
-`freesided raise-item` (exit-run skill, Walk Through on Both Clients).
+inspect task` at each change of its `as_of_revision` until the run's
+`publication.outcome` is set. Merge the pull request in the fixture, wait for
+the run's `publication.completion`, and raise the alerts the exit contract
+triggers synthetically with `freesided raise-item`
+([Walk Through, Merge, And Raise The Alerts](#walk-through-merge-and-raise-the-alerts)).
 With no paired client on the fixture root, the record shows each run-bound
-item but no `deliveries`: the pass proves the daemon side only.
+item but no `deliveries`: the pass proves the daemon side only, and the
+`stall` item's proof is the ID `raise-item` prints.
 
 **End it before the real run.** Apply the four record checks above, then end
 the deputy with Ctrl-C ([Complete Deliberately](#complete-deliberately)). It
@@ -364,6 +501,49 @@ next start to recover, means the lease was abandoned; `rig-acquisition.json`
 is removed either way, so its absence proves nothing. Recover an abandoned
 lease with `freesided rig recover -state-root <fixture-root>/daemon -confirm`
 before the real run, which needs the rig lease and starts on its own root.
+
+## Prepare The Operator's Devices
+
+After the fixture pass and before the real run's deputy starts, the
+operator's devices need what this list names. Each item says how to check it
+and how to fix it. The app's commands are the operator's to run
+([plan §10](plan.md#environments-prod-dev-and-ephemeral)).
+
+- **`prod` runs driverless** from an installed app that includes #2080, and
+  the App authority lives in its directories. Confirm it runs with the app's
+  `daemon status` command in [Start And Verify](#start-and-verify): a
+  stopped `prod` passes preflight's `prod_execution` check, so only that
+  read catches it. Leave it running; the deputy never stops or restarts it.
+  On failure, run the app's `daemon start` (app/README.md, Control The
+  Supervised Daemon From A Command), or install the current app when the
+  installed one predates #2080.
+- **Both clients come from the run's tip.** Rebuild and install the client on
+  the Mac and on the physical iPhone from the commit the run uses
+  (app/README.md, Installing the Operator Client and Installing on an iOS
+  Device). A client built from an older commit proves the older commit.
+- **The iPhone reaches the daemon.** Both devices are on the tailnet the
+  daemon will listen on. A VPN on the Mac can cut the iPhone off (#1930):
+  turn it off, or confirm the tailnet route. Pairing comes after the start,
+  against the deputy's `api_url`, so a fresh root has no paired endpoint to
+  check yet.
+- **Credentials need nothing from the operator** once preflight passes
+  `claude_credentials` and `codex_credentials`. A Codex chain that renewal
+  reports as revoked needs `codex login` and a paired client's **Resolve
+  re-enrollment**
+  ([Replace A Revoked Chain And Resolve Its Hold](#replace-a-revoked-chain-and-resolve-its-hold))
+  before any pass can complete.
+- **The liveness probe reaches the phone,** when a gate depends on it. The
+  probe runs outside the daemon, so nothing in the run installs or tests it:
+
+  ```sh
+  bash scripts/daemon-liveness-probe.sh check
+  bash scripts/daemon-liveness-probe.sh notify-test
+  ```
+
+  `check` must exit 0, and the operator confirms that the test notice
+  arrived on the iPhone. On failure, run
+  `bash scripts/daemon-liveness-probe.sh install` or fix the phone's
+  subscription, then repeat both.
 
 ## Enroll The Identities And Check The Agent Tree
 
@@ -745,4 +925,5 @@ freesided inspect task -db <root>/daemon/freeside.db -task <task-id>
 ```
 
 Verify the published head on both paired clients, then end the deputy
-deliberately with Ctrl-C.
+deliberately with Ctrl-C. These are the commands only; every step between
+them is in [An Exit Run In Order](#an-exit-run-in-order).
