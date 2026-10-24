@@ -97,6 +97,18 @@ import Testing
             MockContractValidation.itemValidityBreach(emptyInvocation)
                 == "empty execution_failure invocation_id")
 
+        var causelessFailure = AttentionFixtures.fixture(type: .execution_failure).item
+        causelessFailure.execution_failure?.value1.cause = nil
+        #expect(
+            MockContractValidation.itemValidityBreach(causelessFailure)
+                == "execution_failure cause disagrees with outcome")
+
+        var causedCancel = AttentionFixtures.fixture(type: .execution_failure).item
+        causedCancel.execution_failure?.value1.outcome = .canceled
+        #expect(
+            MockContractValidation.itemValidityBreach(causedCancel)
+                == "execution_failure cause disagrees with outcome")
+
         var ambiguousBlock = AttentionFixtures.fixture(type: .publish_blocked).item
         ambiguousBlock.publish_block?.value1.hold_reason = .init(value1: .trust_blocked)
         #expect(

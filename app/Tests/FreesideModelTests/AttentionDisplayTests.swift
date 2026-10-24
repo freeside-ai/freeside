@@ -300,7 +300,7 @@ import Testing
     /// leaving a value recovered from prose.
     @Test func everyTypedLeadComesFromItsOwnFactFieldAndDisappearsWithIt() {
         let expected: [Components.Schemas.AttentionType: [String]] = [
-            .execution_failure: ["Outcome", "Stage", "Invocation"],
+            .execution_failure: ["Outcome", "Cause", "Stage", "Invocation"],
             .review_diminishing_returns: ["Cost so Far", "Diff Growth"],
             .review_dispute: ["Run", "Round", "Disputed findings", "Completion evidence"],
             .ready_for_final_review: ["Diff"],
@@ -346,7 +346,8 @@ import Testing
         #expect(
             AttentionDisplay.cardFacts(
                 AttentionFixtures.fixture(type: .execution_failure).item, now: now
-            ).map(\.value) == ["Failed", "Implementation", "inv-execution_failure"])
+            ).map(\.value)
+                == ["Failed", "Invalid configuration", "Implementation", "inv-execution_failure"])
         #expect(
             AttentionDisplay.cardFacts(
                 AttentionFixtures.fixture(type: .review_diminishing_returns).item, now: now
@@ -533,6 +534,35 @@ import Testing
         #expect(
             AttentionDisplay.confirmationConsequence(.stop, for: failure)
                 == "The current invocation is discarded. Work already exported stays; the round in flight does not.")
+    }
+
+    /// A cause is present exactly when the outcome failed, so a canceled or
+    /// lost run's card shows no Cause row rather than an empty one.
+    @Test func executionFailureShowsCauseOnlyForAFailedOutcome() {
+        let now = AttentionFixtures.createdInstant.addingTimeInterval(18 * 3_600)
+        var canceled = AttentionFixtures.fixture(type: .execution_failure).item
+        canceled.execution_failure?.value1.outcome = .canceled
+        canceled.execution_failure?.value1.cause = nil
+        #expect(
+            AttentionDisplay.cardFacts(canceled, now: now).map(\.label)
+                == ["Outcome", "Stage", "Invocation"])
+    }
+
+    @Test func failureCauseLabelsAreExplicit() {
+        let labels: [Components.Schemas.FailureCause: String] = [
+            .quota: "Quota exhausted",
+            .credential_expired: "Credential expired",
+            .credential_revoked: "Credential revoked",
+            .service_capacity: "Service at capacity",
+            .provider_unavailable: "Provider unavailable",
+            .invalid_configuration: "Invalid configuration",
+            .contract_contradiction: "Contract contradiction",
+            .unknown: "Unknown",
+        ]
+        #expect(Set(labels.keys) == Set(Components.Schemas.FailureCause.allCases))
+        for (cause, label) in labels {
+            #expect(AttentionDisplay.label(cause) == label)
+        }
     }
 
     @Test func healthPostureLabelsAreExplicit() {

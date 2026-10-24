@@ -1442,14 +1442,20 @@ func (i AttentionItem) WithDecidedAt(t time.Time) (AttentionItem, error) {
 // the store's put-idempotence compare is a canonical re-encode, so a legacy row
 // and its fresh equivalent have to marshal identically once this has run.
 //
-// Today the only such field is ExpiresWhen, whose UTC check (issue #553)
-// post-dates a dev-CLI producer that persisted a host-local offset; rewriting
-// it to UTC is the same instant in the spelling Validate now demands. DecidedAt
-// needs no entry: its write gate has always rejected non-UTC, so no offset row
-// of it can exist to canonicalize.
+// ExpiresWhen's UTC check (issue #553) post-dates a dev-CLI producer that
+// persisted a host-local offset; rewriting it to UTC is the same instant in
+// the spelling Validate now demands. DecidedAt needs no entry: its write gate
+// has always rejected non-UTC, so no offset row of it can exist to
+// canonicalize. An execution-failure item for a failed outcome stored before
+// its facts carried a cause (issue #2210) decodes with an empty one and gets
+// unknown, the cause its outcome reconstructs with, so a replayed rebuild of
+// that item compares equal to the stored row.
 func (i *AttentionItem) CanonicalizeStoredRow() {
 	if i.ExpiresWhen != nil {
 		utc := i.ExpiresWhen.UTC()
 		i.ExpiresWhen = &utc
+	}
+	if i.ExecutionFailure != nil {
+		i.ExecutionFailure.Cause = CanonicalFailureCause(i.ExecutionFailure.Outcome, i.ExecutionFailure.Cause)
 	}
 }

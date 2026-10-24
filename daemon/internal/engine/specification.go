@@ -3472,12 +3472,6 @@ func (e *Engine) recordSpecificationFailureWithCause(ctx context.Context, run do
 		if err != nil {
 			return err
 		}
-		var invocationID *domain.InvocationID
-		var outcomeStatus *domain.ExecutionOutcomeStatus
-		if facts != nil {
-			invocationID = &request.InvocationID
-			outcomeStatus = &facts.Outcome
-		}
 		names, err := tx.DisplayNamesFor(ctx, run.ProjectID, domain.Subject{
 			Type: domain.SubjectRun, ID: domain.SubjectID(run.ID), RunID: &run.ID,
 		})
@@ -3490,7 +3484,7 @@ func (e *Engine) recordSpecificationFailureWithCause(ctx context.Context, run do
 		}
 		item, err := specificationFailureItem(run,
 			domain.ItemID("execution-failure-"+string(request.InvocationID)), status, summary,
-			createdAt, invocationID, outcomeStatus, names, claims)
+			createdAt, facts, names, claims)
 		if err != nil {
 			return err
 		}
@@ -3520,7 +3514,7 @@ func (e *Engine) recordSpecificationRevisionFailure(
 	}
 	item, err := specificationFailureItem(run,
 		specificationRevisionFailureItemID(request),
-		status, summary, e.specification.now().UTC(), nil, nil, names, nil)
+		status, summary, e.specification.now().UTC(), nil, names, nil)
 	if err != nil {
 		return err
 	}
@@ -3572,20 +3566,13 @@ func validSpecificationRevisionFailureDecisionSet(actions []domain.Action) bool 
 
 func specificationFailureItem(
 	run domain.Run, id domain.ItemID, status exec.Status, summary string, createdAt time.Time,
-	invocationID *domain.InvocationID, outcome *domain.ExecutionOutcomeStatus,
-	displayNames *domain.DisplayNames,
+	facts *domain.ExecutionFailureFacts, displayNames *domain.DisplayNames,
 	claims []domain.AgentClaim,
 ) (domain.AttentionItem, error) {
 	runID := run.ID
 	reason := fmt.Sprintf("Specification ended %q without an accepted specification.", status)
 	if summary != "" {
 		reason += " Driver summary: " + summary
-	}
-	var facts *domain.ExecutionFailureFacts
-	if invocationID != nil && outcome != nil {
-		facts = &domain.ExecutionFailureFacts{
-			Outcome: *outcome, Stage: domain.StageNameSpecification, InvocationID: *invocationID,
-		}
 	}
 	return domain.NewAttentionItem(domain.AttentionItemInput{
 		ID: id, ProjectID: run.ProjectID,
@@ -3821,7 +3808,8 @@ func (e *Engine) reconcileSpecificationGates(ctx context.Context) (int, error) {
 				}
 				failure, itemErr := specificationFailureItem(run,
 					domain.ItemID("execution-failure-spec-revision-"+string(request.ImplementationRunID)),
-					exec.StatusFailed, ErrSpecificationIterationsExhausted.Error(), e.specification.now().UTC(), nil, nil, names, nil)
+					exec.StatusFailed, ErrSpecificationIterationsExhausted.Error(), e.specification.now().UTC(),
+					nil, names, nil)
 				if itemErr != nil {
 					return started, itemErr
 				}

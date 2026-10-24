@@ -10,6 +10,7 @@ import (
 	"github.com/freeside-ai/freeside/daemon/internal/domain"
 	"github.com/freeside-ai/freeside/daemon/internal/exec"
 	"github.com/freeside-ai/freeside/daemon/internal/export"
+	"github.com/freeside-ai/freeside/daemon/internal/ward"
 )
 
 // TestRecordOutcomeCarriesFailureCause pins how a failed result's cause
@@ -150,5 +151,54 @@ func TestAdoptRecordedOutcomeKeepsFailureCause(t *testing.T) {
 	}
 	if adopted.Result.Cause != domain.FailureCauseQuota {
 		t.Fatalf("adopted result cause = %q, want quota", adopted.Result.Cause)
+	}
+}
+
+// TestPipelineClassifiesOnlyTheHandoffRefusal pins the driver's one
+// classifier (#2210): a handoff spec the driver refuses to build for an
+// admitted start records invalid_configuration, and a writer that exits
+// nonzero still records unknown, since its transcript is untrusted text.
+func TestPipelineClassifiesOnlyTheHandoffRefusal(t *testing.T) {
+	t.Parallel()
+	refused := func(d *Driver) {
+		// The test provider refuses a start with no auth identity.
+		d.provider = testProvider{
+			volumes:            stubVolumes{volume: testAuthVol},
+			handoffInputMutate: func(in *ProviderHandoffInput) { in.Spec.AuthIdentityID = "" },
+		}
+	}
+	writerExit := func(d *Driver) {
+		d.gate = &stubGate{
+			handoffFn: func(ward.HandoffSpec) (*ward.HandoffResult, error) { return nil, ward.ErrWriterFailed },
+			recoverFn: func(string, ward.HandoffSpec) (*ward.RecoveryResult, error) {
+				return &ward.RecoveryResult{Outcome: ward.RecoveryFailed, FailureStatus: 1}, nil
+			},
+		}
+	}
+	for _, tc := range []struct {
+		name  string
+		setup func(*Driver)
+		want  domain.FailureCause
+	}{
+		{"refused handoff spec", refused, domain.FailureCauseInvalidConfiguration},
+		{"writer exit", writerExit, domain.FailureCauseUnknown},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			ctx := context.Background()
+			outcomes := newStubExports()
+			d := newTestDriver(t, &stubGate{}, outcomes)
+			d.seeder = &recordingSeeder{}
+			in := orphan(t, d, phaseSeeding, nil)
+			tc.setup(d)
+			d.runPipeline(ctx, in)
+			got, err := d.Collect(ctx, testInvoke)
+			if err != nil || got.Status != exec.StatusFailed {
+				t.Fatalf("result = %+v, %v; want failed", got, err)
+			}
+			if outcome := outcomes.outcomes[testInvoke]; outcome.Cause != tc.want {
+				t.Fatalf("recorded cause = %q, want %q", outcome.Cause, tc.want)
+			}
+		})
 	}
 }

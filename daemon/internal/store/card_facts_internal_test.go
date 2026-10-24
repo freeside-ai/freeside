@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"strings"
 	"testing"
 	"time"
@@ -734,7 +735,7 @@ func TestAttentionItemReadAuthenticatesExecutionFailure(t *testing.T) {
 		Type:    domain.AttentionExecutionFailure, Priority: domain.PriorityUrgent,
 		Reason: "implementation failed", RequestedDecision: []domain.Action{domain.ActionRetry},
 		ExecutionFailure: &domain.ExecutionFailureFacts{
-			Outcome: outcome.Status, Stage: domain.StageNameImplementation,
+			Outcome: outcome.Status, Cause: outcome.Cause, Stage: domain.StageNameImplementation,
 			InvocationID: admission.InvocationID,
 		},
 		ItemVersion: 1, InterruptionClass: domain.InterruptionExceptional,
@@ -749,7 +750,82 @@ func TestAttentionItemReadAuthenticatesExecutionFailure(t *testing.T) {
 		t.Fatal(err)
 	}
 	assertAttentionItemFactReadGate(t, st, item.ID,
-		attentionItemFactMutation{"$.execution_failure.invocation_id", "inv-invented"})
+		attentionItemFactMutation{"$.execution_failure.invocation_id", "inv-invented"},
+		attentionItemFactMutation{"$.execution_failure.cause", "quota"})
+}
+
+// TestAttentionItemReadsCauselessExecutionFailure covers a failed item stored
+// before its facts carried a cause (#2210): the body has no cause, and the
+// item reads back with cause unknown, matching its outcome, and a replayed
+// put of the item as built today converges on the stored row.
+func TestAttentionItemReadsCauselessExecutionFailure(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	st, admission := seedAdmission(t, nil)
+	if _, err := st.db.ExecContext(ctx,
+		`UPDATE runs SET body = json_set(body, '$.stages[0].name', 'implement') WHERE id = ?`,
+		admission.RunID); err != nil {
+		t.Fatal(err)
+	}
+	insertRawOutcome(t, ctx, st, admission, "unknown", causelessFailedBody(t, admission))
+	runID := admission.RunID
+	at := admission.AdmittedAt.Add(time.Hour)
+	item, err := domain.NewAttentionItem(domain.AttentionItemInput{
+		ID: "item-causeless-execution-failure", ProjectID: "proj-1",
+		Subject: domain.Subject{Type: domain.SubjectRun, ID: domain.SubjectID(runID), RunID: &runID},
+		Type:    domain.AttentionExecutionFailure, Priority: domain.PriorityUrgent,
+		Reason: "implementation failed", RequestedDecision: []domain.Action{domain.ActionRetry},
+		ExecutionFailure: &domain.ExecutionFailureFacts{
+			Outcome: domain.ExecutionOutcomeFailed, Cause: domain.FailureCauseUnknown,
+			Stage: domain.StageNameImplementation, InvocationID: admission.InvocationID,
+		},
+		ItemVersion: 1, InterruptionClass: domain.InterruptionExceptional,
+		CreatedAt: &at, Status: domain.StatusOpen,
+	}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := st.Write(ctx, func(tx *WriteTx) error {
+		return putTestAttentionItem(ctx, tx, &item)
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := st.db.ExecContext(ctx,
+		`UPDATE attention_items SET body = json_remove(body, '$.execution_failure.cause') WHERE id = ?`,
+		item.ID); err != nil {
+		t.Fatal(err)
+	}
+	var stored string
+	if err := st.db.QueryRowContext(ctx,
+		`SELECT body FROM attention_items WHERE id = ?`, item.ID).Scan(&stored); err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(stored, `"cause"`) {
+		t.Fatalf("seeded body still carries a cause: %s", stored)
+	}
+
+	if err := st.Read(ctx, func(tx *ReadTx) error {
+		for name, read := range map[string]func() (domain.AttentionItem, error){
+			"current": func() (domain.AttentionItem, error) { return tx.GetAttentionItem(ctx, item.ID) },
+			"record":  func() (domain.AttentionItem, error) { return tx.GetAttentionItemRecord(ctx, item.ID) },
+		} {
+			got, err := read()
+			if err != nil {
+				return fmt.Errorf("%s read: %w", name, err)
+			}
+			if got.ExecutionFailure == nil || got.ExecutionFailure.Cause != domain.FailureCauseUnknown {
+				t.Errorf("%s read facts = %#v, want cause unknown", name, got.ExecutionFailure)
+			}
+		}
+		return nil
+	}); err != nil {
+		t.Fatalf("read causeless item: %v", err)
+	}
+	if err := st.Write(ctx, func(tx *WriteTx) error {
+		return tx.PutAttentionItem(ctx, item)
+	}); err != nil {
+		t.Fatalf("replayed put against the causeless row: %v", err)
+	}
 }
 
 func TestAttentionItemSuccessorReauthenticatesRestoredExecutionFailure(t *testing.T) {
@@ -780,7 +856,7 @@ func TestAttentionItemSuccessorReauthenticatesRestoredExecutionFailure(t *testin
 		Type:    domain.AttentionExecutionFailure, Priority: domain.PriorityUrgent,
 		Reason: "implementation failed", RequestedDecision: []domain.Action{domain.ActionRetry},
 		ExecutionFailure: &domain.ExecutionFailureFacts{
-			Outcome: outcome.Status, Stage: domain.StageNameImplementation,
+			Outcome: outcome.Status, Cause: outcome.Cause, Stage: domain.StageNameImplementation,
 			InvocationID: admission.InvocationID,
 		},
 		ItemVersion: 1, InterruptionClass: domain.InterruptionExceptional,

@@ -24,8 +24,8 @@ func TestCapabilityRetryAcceptsOnlyAnOfferedDigest(t *testing.T) {
 			domain.ActionRetryWithCapability, domain.ActionDiscuss, domain.ActionStop,
 		},
 		ExecutionFailure: &domain.ExecutionFailureFacts{
-			Outcome: domain.ExecutionOutcomeFailed, Stage: domain.StageNameImplementation,
-			InvocationID:     "inv-implement-run-capability-retry",
+			Outcome: domain.ExecutionOutcomeFailed, Cause: domain.FailureCauseUnknown,
+			Stage: domain.StageNameImplementation, InvocationID: "inv-implement-run-capability-retry",
 			OfferedManifests: []domain.CapabilityManifestOffer{manifest.Offer()},
 		},
 		ItemVersion: 1, InterruptionClass: domain.InterruptionExceptional,

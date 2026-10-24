@@ -1323,7 +1323,8 @@ public enum AttentionFixtures {
             type == .execution_failure
             ? .init(
                 value1: .init(
-                    outcome: .failed, stage: .implementation, invocation_id: "inv-\(key)",
+                    outcome: .failed, cause: .invalid_configuration, stage: .implementation,
+                    invocation_id: "inv-\(key)",
                     offered_manifests: [
                         .init(
                             name: "No network verification",

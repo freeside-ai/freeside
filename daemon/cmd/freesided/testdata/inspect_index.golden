@@ -14,7 +14,7 @@
       "ids": [
         "task_id"
       ],
-      "version": "freeside-task-record-v6"
+      "version": "freeside-task-record-v7"
     },
     {
       "name": "inspect health",

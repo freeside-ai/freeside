@@ -374,8 +374,8 @@ func testSubmitCommandSpecificationDigest(
 			domain.ActionRetryWithCapability, domain.ActionDiscuss, domain.ActionStop,
 		},
 		ExecutionFailure: &domain.ExecutionFailureFacts{
-			Outcome: domain.ExecutionOutcomeFailed, Stage: domain.StageNameImplementation,
-			InvocationID:     submitted.ImplementationInvocationID,
+			Outcome: domain.ExecutionOutcomeFailed, Cause: domain.FailureCauseUnknown,
+			Stage: domain.StageNameImplementation, InvocationID: submitted.ImplementationInvocationID,
 			OfferedManifests: []domain.CapabilityManifestOffer{manifest.Offer()},
 		},
 		ItemVersion: 1, InterruptionClass: domain.InterruptionExceptional,

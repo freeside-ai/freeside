@@ -95,7 +95,11 @@ func TestCardFactValidation(t *testing.T) {
 		},
 		domain.CostSoFar{Currency: "USD", Amount: "12.50", Invocations: 2, Complete: true},
 		domain.ExecutionFailureFacts{
-			Outcome: domain.ExecutionOutcomeFailed, Stage: domain.StageNameImplementation,
+			Outcome: domain.ExecutionOutcomeFailed, Cause: domain.FailureCauseQuota,
+			Stage: domain.StageNameImplementation, InvocationID: "inv-1",
+		},
+		domain.ExecutionFailureFacts{
+			Outcome: domain.ExecutionOutcomeLost, Stage: domain.StageNameImplementation,
 			InvocationID: "inv-1",
 		},
 		domain.PublishBlockFacts{HoldReason: &hold},
@@ -118,6 +122,18 @@ func TestCardFactValidation(t *testing.T) {
 		domain.DisplayName{Source: domain.DisplayNameSourceName},
 		domain.CostSoFar{Currency: "usd", Amount: "01", Invocations: 0},
 		domain.ExecutionFailureFacts{Outcome: domain.ExecutionOutcomeFailed},
+		domain.ExecutionFailureFacts{
+			Outcome: domain.ExecutionOutcomeFailed, Stage: domain.StageNameImplementation,
+			InvocationID: "inv-1",
+		},
+		domain.ExecutionFailureFacts{
+			Outcome: domain.ExecutionOutcomeFailed, Cause: "quota_exhausted",
+			Stage: domain.StageNameImplementation, InvocationID: "inv-1",
+		},
+		domain.ExecutionFailureFacts{
+			Outcome: domain.ExecutionOutcomeCanceled, Cause: domain.FailureCauseUnknown,
+			Stage: domain.StageNameImplementation, InvocationID: "inv-1",
+		},
 		domain.ExecutionFailureFacts{
 			Outcome: domain.ExecutionOutcomeBlocked, Stage: domain.StageNameImplementation,
 			InvocationID: "inv-1",
@@ -452,8 +468,8 @@ func cardFactInputs() []domain.AttentionItemInput {
 	failure := validItemInput(domain.AttentionExecutionFailure)
 	failure.Subject.RunID = &runID
 	failure.ExecutionFailure = &domain.ExecutionFailureFacts{
-		Outcome: domain.ExecutionOutcomeFailed, Stage: domain.StageNameImplementation,
-		InvocationID: "inv-1",
+		Outcome: domain.ExecutionOutcomeFailed, Cause: domain.FailureCauseUnknown,
+		Stage: domain.StageNameImplementation, InvocationID: "inv-1",
 	}
 	publish := validItemInput(domain.AttentionPublishBlocked)
 	publish.PublishBlock = &domain.PublishBlockFacts{TrustRule: &rule}

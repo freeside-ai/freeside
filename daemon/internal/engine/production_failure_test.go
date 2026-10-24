@@ -168,8 +168,8 @@ func (f failedImplementationFixture) assertFailure(
 	facts := item.ExecutionFailure
 	if item.Type != domain.AttentionExecutionFailure || item.Subject.RunID == nil || *item.Subject.RunID != f.run.ID ||
 		item.Priority != domain.PriorityHigh || item.Status != domain.StatusOpen ||
-		facts == nil || facts.Outcome != wantOutcome || facts.Stage != domain.StageNameImplementation ||
-		facts.InvocationID != f.attempt.InvocationID {
+		facts == nil || facts.Outcome != wantOutcome || facts.Cause != pre.Cause ||
+		facts.Stage != domain.StageNameImplementation || facts.InvocationID != f.attempt.InvocationID {
 		t.Fatalf("execution_failure item = %#v", item)
 	}
 	if err := f.store.Read(ctx, func(tx *store.ReadTx) error {
@@ -222,6 +222,29 @@ func TestProductionFailedOutcomeConverges(t *testing.T) {
 		t.Fatalf("restarted reconcile: %v", err)
 	}
 	f.specificationFixture = reopened
+	if _, after := f.item(t, f.failureItemID()); after.EntityVersion != before.EntityVersion {
+		t.Fatalf("replay advanced the item to version %d (was %d)", after.EntityVersion, before.EntityVersion)
+	}
+}
+
+// TestProductionFailedItemCarriesDriverCause: with no pre-recorded outcome the
+// engine records the driver's cause on the outcome and copies it onto the
+// item's facts (#2210); a replayed pass converges on the item it wrote.
+func TestProductionFailedItemCarriesDriverCause(t *testing.T) {
+	f := newFailedImplementationFixtureScript(t, execfake.StageScript{
+		Outcome: execfake.OutcomeFail,
+		Result:  exec.StageResult{Summary: "quota exhausted", Cause: domain.FailureCauseQuota},
+	})
+	if _, err := f.engine.Reconcile(t.Context()); err != nil {
+		t.Fatalf("reconcile: %v", err)
+	}
+	item, before := f.item(t, f.failureItemID())
+	if item.ExecutionFailure == nil || item.ExecutionFailure.Cause != domain.FailureCauseQuota {
+		t.Fatalf("execution_failure facts = %#v, want cause quota", item.ExecutionFailure)
+	}
+	if _, err := f.engine.Reconcile(t.Context()); err != nil {
+		t.Fatalf("replayed reconcile: %v", err)
+	}
 	if _, after := f.item(t, f.failureItemID()); after.EntityVersion != before.EntityVersion {
 		t.Fatalf("replay advanced the item to version %d (was %d)", after.EntityVersion, before.EntityVersion)
 	}

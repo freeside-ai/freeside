@@ -130,11 +130,28 @@ func (d *Driver) runPipeline(ctx context.Context, in intent) {
 		}
 		return
 	}
+	var cause domain.FailureCause
+	var refusal handoffSpecRefusal
+	if status == exec.StatusFailed && errors.As(err, &refusal) {
+		cause = domain.FailureCauseInvalidConfiguration
+	}
 	d.commit(log, in.InvocationID, exec.StageResult{
 		InvocationID: in.InvocationID, Status: status,
-		Summary: truncateSummary(err.Error()), Usage: result.Usage, Artifacts: result.Artifacts,
+		Summary: truncateSummary(err.Error()), Cause: cause, Usage: result.Usage, Artifacts: result.Artifacts,
 	})
 }
+
+// handoffSpecRefusal marks a handoff spec the driver refused to build for an
+// admitted start (ErrUnsupportedStart), the one failure runPipeline classifies
+// itself: the refusal is the daemon's own judgment of the start, so
+// invalid_configuration is a trusted cause. ErrUnsupportedStart alone is not
+// enough, because later phases also use it for durable-state integrity
+// failures. The message is the refusal's own, so the summary is unchanged.
+type handoffSpecRefusal struct{ err error }
+
+func (r handoffSpecRefusal) Error() string { return r.err.Error() }
+
+func (r handoffSpecRefusal) Unwrap() error { return r.err }
 
 // commit writes the terminal result and reports a write that failed. The
 // failure is retained for Inspect/Collect either way; recording it is the
@@ -209,7 +226,7 @@ func (d *Driver) handoffAndImport(ctx context.Context, in intent) (exec.StageRes
 			return exec.StageResult{}, fmt.Errorf(
 				"%w: rebuild pre-journal handoff: %w", ErrRecoveryRetryable, err)
 		}
-		return exec.StageResult{}, err
+		return exec.StageResult{}, handoffSpecRefusal{err}
 	}
 	// The phase advances before the gate is called, because from here on a
 	// journal record may exist and ward's own recovery is what may adopt it.

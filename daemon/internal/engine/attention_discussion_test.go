@@ -119,8 +119,8 @@ func newAttentionDiscussionFixture(
 	case domain.AttentionExecutionFailure:
 		input.RequestedDecision = []domain.Action{domain.ActionDiscuss, domain.ActionStop}
 		input.ExecutionFailure = &domain.ExecutionFailureFacts{
-			Outcome: domain.ExecutionOutcomeFailed, Stage: domain.StageNameImplementation,
-			InvocationID: "inv-failed",
+			Outcome: domain.ExecutionOutcomeFailed, Cause: domain.FailureCauseUnknown,
+			Stage: domain.StageNameImplementation, InvocationID: "inv-failed",
 		}
 	case domain.AttentionReviewConfiguration:
 		input.RequestedDecision = []domain.Action{

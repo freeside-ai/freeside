@@ -1389,9 +1389,10 @@ func (tx *ReadTx) getAttentionItemBindingRecord(
 	return item, nil
 }
 
-// gateExecutionFailureItem authenticates copied terminal coordinates against
-// the immutable admission and outcome records, then maps the admitted run
-// stage to the card's stable StageName vocabulary.
+// gateExecutionFailureItem authenticates copied terminal coordinates,
+// including the cause, against the immutable admission and outcome
+// records, then maps the admitted run stage to the card's stable
+// StageName vocabulary.
 func (tx *ReadTx) gateExecutionFailureItem(ctx context.Context, item domain.AttentionItem) error {
 	if item.ExecutionFailure == nil {
 		return nil
@@ -1404,7 +1405,7 @@ func (tx *ReadTx) gateExecutionFailureItem(ctx context.Context, item domain.Atte
 		}
 		return err
 	}
-	if outcome.Status != facts.Outcome {
+	if outcome.Status != facts.Outcome || outcome.Cause != facts.Cause {
 		return domain.ErrParentKeyMismatch
 	}
 	admission, err := tx.GetExecutionAdmissionRecord(ctx, facts.InvocationID)
