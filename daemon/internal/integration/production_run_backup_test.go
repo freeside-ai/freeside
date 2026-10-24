@@ -76,7 +76,7 @@ func TestCheckpointHealthReconstructsWorkflowKinds(t *testing.T) {
 		`"text_digest":"` + string(digest) + `","ruleset":"` + string(domain.IssueTextRulesetGitHubIssue1) + `",` +
 		`"bot_id":5,"before":null,"created_at":"2026-10-16T00:00:00Z"}`)
 	replyOutcome := json.RawMessage(`{"finding_id":"finding","round":1,"comment_id":12,"code":""}`)
-	for _, fixture := range []struct {
+	for i, fixture := range []struct {
 		kind    string
 		key     string
 		payload any
@@ -93,12 +93,20 @@ func TestCheckpointHealthReconstructsWorkflowKinds(t *testing.T) {
 		{publish.ExternalReplyOutcomeKind, "external-review-reply/finding/1/outcome", replyOutcome, publish.ExternalReplyBackupPayloadDigests},
 	} {
 		t.Run(fixture.kind, func(t *testing.T) {
+			t.Parallel()
 			payload, err := json.Marshal(fixture.payload)
 			if err != nil {
 				t.Fatal(err)
 			}
-			for _, scenario := range []string{"valid", "malformed payload", "wrong key", "unknown kind"} {
+			scenarios := []string{"valid", "malformed payload", "wrong key"}
+			if i == 0 {
+				// The kind becomes one constant, so every fixture would take the
+				// same unknown-kind path; one run covers it.
+				scenarios = append(scenarios, "unknown kind")
+			}
+			for _, scenario := range scenarios {
 				t.Run(scenario, func(t *testing.T) {
+					t.Parallel()
 					entry := store.QueueEntry{Kind: fixture.kind, IdempotencyKey: fixture.key, Payload: payload}
 					switch scenario {
 					case "malformed payload":
