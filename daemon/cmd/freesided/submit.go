@@ -828,7 +828,7 @@ func applyLaunchSubmission(
 			if err := launch.admit(req.ProjectID, publication.CommitAuthor, composition.digest, resolvedPolicy); err != nil {
 				return fmt.Errorf("submit: %w", err)
 			}
-			if err := refuseUnfinishedDuplicate(ctx, tx, cfg.ProjectID, specArtifact.ID); err != nil {
+			if err := refuseUnfinishedDuplicate(ctx, &tx.ReadTx, cfg.ProjectID, specArtifact.ID); err != nil {
 				return err
 			}
 		}
@@ -1047,7 +1047,7 @@ func validateSubmissionComposition(
 // deputy's store this covers every task. The scan reads every task: a
 // real-work store holds few.
 func refuseUnfinishedDuplicate(
-	ctx context.Context, tx *store.WriteTx, project domain.ProjectID, source domain.ArtifactID,
+	ctx context.Context, tx *store.ReadTx, project domain.ProjectID, source domain.ArtifactID,
 ) error {
 	tasks, err := tx.ListTasks(ctx)
 	if err != nil {

@@ -186,15 +186,9 @@ func runProbeLineupCommand(ctx context.Context, args []string, stdout, stderr io
 		return fmt.Errorf("a daemon holds this root, or its lock is unreadable: %w", err)
 	}
 	defer func() { _ = lock.Close() }() // Nothing follows the close to report its error to.
-	containerBin, err := exec.LookPath(cfg.ContainerBin)
+	prober, err := newProductionLineupProber(&settings, stateRoot, cfg.RigTokenFile, cfg.ContainerBin)
 	if err != nil {
-		return fmt.Errorf("find container CLI: %w", err)
-	}
-	prober := &productionLineupProber{
-		settings:  &settings,
-		runtime:   ward.NewCLIRuntime(containerBin),
-		authorize: productionRigRuntimeAuthorizer(stateRoot, cfg.RigTokenFile),
-		now:       time.Now,
+		return err
 	}
 	_, _ = fmt.Fprintf(stderr, "freesided probe-lineup: build %s, %d calls\n", buildVersion(), len(calls))
 	record := probeLineup(ctx, calls, prober, settings.Digest, buildVersion(), time.Now().UTC())
@@ -204,13 +198,9 @@ func runProbeLineupCommand(ctx context.Context, args []string, stdout, stderr io
 // reportLineupProbe writes the record, prints it, and names each failed
 // call: its roles, model, effort, and CLI build, with the CLI's words.
 func reportLineupProbe(stateRoot string, record lineupProbeRecord, stdout, stderr io.Writer) error {
-	body, err := json.MarshalIndent(record, "", "  ")
+	body, err := writeLineupProbe(stateRoot, record)
 	if err != nil {
 		return err
-	}
-	body = append(body, '\n')
-	if err := atomicfile.WriteFile(filepath.Join(stateRoot, lineupProbeRecordName), body, 0o600); err != nil {
-		return fmt.Errorf("write %s: %w", lineupProbeRecordName, err)
 	}
 	if _, err := stdout.Write(body); err != nil {
 		return err
@@ -218,20 +208,43 @@ func reportLineupProbe(stateRoot string, record lineupProbeRecord, stdout, stder
 	if record.Passed {
 		return nil
 	}
-	failed := 0
+	failed := failedLineupCalls(record)
+	for _, line := range failed {
+		_, _ = fmt.Fprintln(stderr, line)
+	}
+	return fmt.Errorf("%d of %d lineup calls failed; see %s", len(failed), len(record.Calls), lineupProbeRecordName)
+}
+
+// writeLineupProbe writes the record as lineup-probe.json under stateRoot
+// and returns the bytes written.
+func writeLineupProbe(stateRoot string, record lineupProbeRecord) ([]byte, error) {
+	body, err := json.MarshalIndent(record, "", "  ")
+	if err != nil {
+		return nil, err
+	}
+	body = append(body, '\n')
+	if err := atomicfile.WriteFile(filepath.Join(stateRoot, lineupProbeRecordName), body, 0o600); err != nil {
+		return nil, fmt.Errorf("write %s: %w", lineupProbeRecordName, err)
+	}
+	return body, nil
+}
+
+// failedLineupCalls names each call that did not pass: its roles, model,
+// effort, and CLI build, with the CLI's words.
+func failedLineupCalls(record lineupProbeRecord) []string {
+	var failed []string
 	for _, call := range record.Calls {
 		if call.Verdict == lineupVerdictPass {
 			continue
 		}
-		failed++
 		build := "unknown"
 		if call.ObservedBuild != nil {
 			build = *call.ObservedBuild
 		}
-		_, _ = fmt.Fprintf(stderr, "%s %v: model %q at effort %q (sent %q) on %s: %s\n",
-			call.Verdict, call.Roles, call.Model, call.RequestedEffort, call.NativeEffort, build, *call.Refusal)
+		failed = append(failed, fmt.Sprintf("%s %v: model %q at effort %q (sent %q) on %s: %s",
+			call.Verdict, call.Roles, call.Model, call.RequestedEffort, call.NativeEffort, build, *call.Refusal))
 	}
-	return fmt.Errorf("%d of %d lineup calls failed; see %s", failed, len(record.Calls), lineupProbeRecordName)
+	return failed
 }
 
 // lineupCalls lists the distinct launches the settings name: the writers on
@@ -365,6 +378,23 @@ type productionLineupProber struct {
 	authorize ward.RuntimeResourceAuthorizer
 	now       func() time.Time
 	token     *ward.SetupToken
+}
+
+// newProductionLineupProber binds the probe's runtime objects into the rig
+// that rigTokenFile holds; an empty file binds none.
+func newProductionLineupProber(
+	settings *loadedDeputySettings, stateRoot, rigTokenFile, containerBin string,
+) (*productionLineupProber, error) {
+	resolved, err := exec.LookPath(containerBin)
+	if err != nil {
+		return nil, fmt.Errorf("find container CLI: %w", err)
+	}
+	return &productionLineupProber{
+		settings:  settings,
+		runtime:   ward.NewCLIRuntime(resolved),
+		authorize: productionRigRuntimeAuthorizer(stateRoot, rigTokenFile),
+		now:       time.Now,
+	}, nil
 }
 
 func (p *productionLineupProber) setupToken(ctx context.Context) (ward.SetupToken, error) {

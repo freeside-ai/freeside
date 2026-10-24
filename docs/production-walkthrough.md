@@ -91,7 +91,25 @@ go build -ldflags "-X main.version=<sha>" -o <dir>/freesided ./cmd/freesided
 `<sha>` is the checkout's commit (`git rev-parse HEAD`). The composition
 preflight's `daemon_build` check refuses a build whose version is empty,
 `devel`, `(devel)`, or ends in `-dirty`, and a plain `go build` reports
-`(devel)`. Then start the deputy and keep its shell open:
+`(devel)`.
+
+Before the start, run every pre-spend check in one command, with the files
+the run will submit:
+
+```sh
+freesided prelaunch -root <root> -task /absolute/spec.md -policy /absolute/policy.json \
+  -publication /absolute/publication.json -work-unit /absolute/work-unit.json
+```
+
+It exits 0 only when no check failed, and writes the JSON it prints to
+`<root>/daemon/prelaunch.json`. A failed check carries its `fix`, and
+`first_missing` names the first onboarding step the root lacks; on a fresh
+root that is the agent tree ([The First Start](#the-first-start)). It takes
+and releases the rig lease, so run it before the deputy starts. Its lineup
+probe spends one minimal call per lineup launch; `-no-live` skips it
+([Run The Pre-Spend Checks Before A Launch](../daemon/README.md#run-the-pre-spend-checks-before-a-launch)).
+
+Then start the deputy and keep its shell open:
 
 ```sh
 freesided deputy -root <root>
@@ -714,6 +732,8 @@ with the settings file naming the manual-submission file and `prod` left
 running:
 
 ```sh
+freesided prelaunch -root <root> -task /absolute/seed-spec.md -policy /absolute/policy.json \
+  -publication /absolute/publication.json -work-unit /absolute/work-unit.json
 freesided deputy -root <root>
 # in a second terminal, the visibility seed for a fresh root:
 freesided submit -db <root>/daemon/freeside.db --require-composition \

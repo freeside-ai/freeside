@@ -1,0 +1,292 @@
+{
+  "version": "freeside-prelaunch-v1",
+  "settings_digest": "sha256:<settings>",
+  "daemon_build": "2dce6570ee23",
+  "checked_at": "2026-10-24T15:00:00Z",
+  "passed": true,
+  "manifest_digest": "sha256:<manifest>",
+  "first_missing": null,
+  "checks": [
+    {
+      "group": "settings",
+      "name": "settings",
+      "status": "passed",
+      "evidence": "settings sha256:<settings> pass the deputy's checks before its lease"
+    },
+    {
+      "group": "agent_tree",
+      "name": "agent_tree",
+      "status": "passed",
+      "evidence": "agent_tree.commit <agent-tree-commit> holds lineup revision sha256:124d95adafff9d53f8e37094eb3b26c3590a12079f28b5822b64f7eb75471466 with 4 agents"
+    },
+    {
+      "group": "inputs",
+      "name": "submission",
+      "status": "passed",
+      "evidence": "the inputs pass submit's checks for a new submission to project project-widgets"
+    },
+    {
+      "group": "inputs",
+      "name": "task_lines",
+      "status": "passed",
+      "evidence": "no task lines"
+    },
+    {
+      "group": "state",
+      "name": "state_database",
+      "status": "passed",
+      "evidence": "opened read-only at this build's schema"
+    },
+    {
+      "group": "state",
+      "name": "system_health",
+      "status": "passed",
+      "evidence": "no open item holds unattended admission at revision 0"
+    },
+    {
+      "group": "state",
+      "name": "identities",
+      "status": "passed",
+      "evidence": "recorded identities carry the settings' fixed bindings"
+    },
+    {
+      "group": "inputs",
+      "name": "duplicate_source",
+      "status": "passed",
+      "evidence": "no unfinished task in project project-widgets holds the source"
+    },
+    {
+      "group": "rig",
+      "name": "rig_lease",
+      "status": "passed",
+      "evidence": "acquired and idle; released when the checks end"
+    },
+    {
+      "group": "rig",
+      "name": "installed_daemon",
+      "status": "passed",
+      "evidence": "prod's App authority is usable under the lease"
+    },
+    {
+      "group": "composition",
+      "name": "rig_manifest",
+      "status": "passed",
+      "evidence": "rig manifest binds canonical state, database, listener, and seed resources"
+    },
+    {
+      "group": "composition",
+      "name": "state_database",
+      "status": "passed",
+      "evidence": "canonical database schema version 81 matches binary schema version 81"
+    },
+    {
+      "group": "composition",
+      "name": "topic_key",
+      "status": "passed",
+      "evidence": "private topic key is present and valid"
+    },
+    {
+      "group": "composition",
+      "name": "daemon_build",
+      "status": "passed",
+      "evidence": "daemon build identity is 2dce6570ee23"
+    },
+    {
+      "group": "composition",
+      "name": "listener_server_url",
+      "status": "passed",
+      "evidence": "operator server URL exactly names the leased listener"
+    },
+    {
+      "group": "composition",
+      "name": "daemon_conflict",
+      "status": "passed",
+      "evidence": "database and leased listener are idle"
+    },
+    {
+      "group": "composition",
+      "name": "prod_execution",
+      "status": "passed",
+      "evidence": "prod is not running"
+    },
+    {
+      "group": "composition",
+      "name": "repository_base",
+      "status": "passed",
+      "evidence": "repository, live branch ancestry, exact base commit, and approved recipe are canonical"
+    },
+    {
+      "group": "composition",
+      "name": "trust_profile",
+      "status": "passed",
+      "evidence": "active profile sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb binds repository acme/widgets (42)"
+    },
+    {
+      "group": "composition",
+      "name": "agent_selection",
+      "status": "passed",
+      "evidence": "lineup revision sha256:9999999999999999999999999999999999999999999999999999999999999999 resolves every role this composition uses"
+    },
+    {
+      "group": "composition",
+      "name": "review_configuration",
+      "status": "passed",
+      "evidence": "effective reviewer configuration digest is approved"
+    },
+    {
+      "group": "composition",
+      "name": "shadow_review_configuration",
+      "status": "passed",
+      "evidence": "shadow review is disabled by the absent image flag"
+    },
+    {
+      "group": "composition",
+      "name": "source_implementation_identity",
+      "status": "not_run",
+      "evidence": "launch composition: submit binds each submission's commit author and paths to this manifest"
+    },
+    {
+      "group": "composition",
+      "name": "review_instructions",
+      "status": "passed",
+      "evidence": "review host instructions can be snapshotted before submission"
+    },
+    {
+      "group": "composition",
+      "name": "seed_root",
+      "status": "passed",
+      "evidence": "canonical seed root is clean"
+    },
+    {
+      "group": "composition",
+      "name": "publication_authority",
+      "status": "passed",
+      "evidence": "publication authority resolves App bot freeside-test[bot] for the repository-bound registration"
+    },
+    {
+      "group": "composition",
+      "name": "exporter_image",
+      "status": "passed",
+      "evidence": "exporter image resolved exact digest sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa and passed required tool probes"
+    },
+    {
+      "group": "composition",
+      "name": "implementer_image",
+      "status": "passed",
+      "evidence": "implementer image resolved exact digest sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa and passed required tool probes"
+    },
+    {
+      "group": "composition",
+      "name": "reviewer_image",
+      "status": "passed",
+      "evidence": "reviewer image resolved exact digest sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa and passed required tool probes"
+    },
+    {
+      "group": "composition",
+      "name": "claude_credentials",
+      "status": "passed",
+      "evidence": "Claude auth identity and setup-token credential manifest are ready"
+    },
+    {
+      "group": "composition",
+      "name": "codex_credentials",
+      "status": "passed",
+      "evidence": "Codex access snapshot is ready until 2026-08-17T14:00:00Z"
+    },
+    {
+      "group": "composition",
+      "name": "build_egress_configuration",
+      "status": "passed",
+      "evidence": "managed host-side project-image build proxy is selected"
+    },
+    {
+      "group": "composition",
+      "name": "build_egress_reachability",
+      "status": "not_run",
+      "evidence": "live build-egress reachability is intentionally not exercised by this read-only preflight"
+    },
+    {
+      "group": "inputs",
+      "name": "launch_binding",
+      "status": "passed",
+      "evidence": "the inputs bind the launch manifest as submit requires"
+    },
+    {
+      "group": "live",
+      "name": "lineup_probe",
+      "status": "passed",
+      "evidence": "all 3 lineup calls answered"
+    }
+  ],
+  "health_items": [],
+  "lineup_probe": {
+    "version": "freeside-lineup-probe-v1",
+    "settings_digest": "sha256:<settings>",
+    "daemon_build": "2dce6570ee23",
+    "probed_at": "2026-10-24T15:00:00Z",
+    "passed": true,
+    "calls": [
+      {
+        "roles": [
+          "specifier"
+        ],
+        "surface": "agent_image",
+        "harness": "claude_code",
+        "image": "registry.local/agent@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "model": "claude-fable-5-1",
+        "requested_effort": "high",
+        "native_effort": "high",
+        "pinned_build": "claude-code 2.1.282",
+        "observed_build": "2.1.282 (Claude Code)",
+        "verdict": "pass",
+        "refusal": null,
+        "usage": {
+          "input_tokens": 9,
+          "output_tokens": 4,
+          "cost_usd": "0.0213"
+        }
+      },
+      {
+        "roles": [
+          "implementer",
+          "remediator"
+        ],
+        "surface": "agent_image",
+        "harness": "claude_code",
+        "image": "registry.local/agent@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "model": "claude-opus-5-5",
+        "requested_effort": "max",
+        "native_effort": "max",
+        "pinned_build": "claude-code 2.1.282",
+        "observed_build": "2.1.282 (Claude Code)",
+        "verdict": "pass",
+        "refusal": null,
+        "usage": {
+          "input_tokens": 9,
+          "output_tokens": 4,
+          "cost_usd": "0.0213"
+        }
+      },
+      {
+        "roles": [
+          "reviewer"
+        ],
+        "surface": "review_image",
+        "harness": "codex_cli",
+        "image": "registry.local/review@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "model": "gpt-6.1-sol",
+        "requested_effort": "max",
+        "native_effort": "xhigh",
+        "pinned_build": "codex-cli 0.162.1",
+        "observed_build": "codex-cli 0.162.1",
+        "verdict": "pass",
+        "refusal": null,
+        "usage": {
+          "input_tokens": 3100,
+          "output_tokens": 5,
+          "cost_usd": null
+        }
+      }
+    ]
+  }
+}

@@ -142,30 +142,9 @@ func runDeputy(
 	paths := newDeputyPaths(stateRoot)
 	_, _ = fmt.Fprintf(stderr, "freesided deputy: settings %s; publishes to %s (repository %d), base %s\n",
 		settings.Digest, settings.Repository.Repo, settings.Repository.RepositoryID, settings.Repository.BaseRef)
-	if err := checkDeputyDaemonSettings(settings, paths, host.tailscaleIPs); err != nil {
-		return fmt.Errorf("%w: %w", errDeputyUsage, err)
-	}
-
-	home, err := os.UserHomeDir()
+	homes, err := deputyPreLeaseChecks(settings, paths, host.tailscaleIPs)
 	if err != nil {
 		return err
-	}
-	accountHome, err := currentAccountHome()
-	if err != nil {
-		return err
-	}
-	// Path checks only, before the lease creates the state and seed roots:
-	// the App directories are exempt only as prod's own, and the
-	// authority itself is checked under the lease below.
-	envPaths := environmentPaths{
-		DB: paths.DB, StateDir: paths.StateRoot,
-		PublicationStateDir: settings.Prod.AppStateDir, PublicationCredentialsDir: settings.Prod.AppCredentialsDir,
-		ReviewInputRoot: settings.Review.InputRoot, ProdAppAuthority: true,
-	}
-	for _, h := range []string{home, accountHome} {
-		if err := checkEnvironment(deputyEnvironment, h, envPaths, settings.Listen); err != nil {
-			return err
-		}
 	}
 
 	lease, interrupted, err := acquireDeputyLease(ctx, host, paths, settings, stderr)
@@ -181,7 +160,7 @@ func runDeputy(
 	if err := writeDeputyAcquisition(paths.Acquisition, lease); err != nil {
 		return err
 	}
-	if err := checkProdAppAuthority(ctx, deputyEnvironment, home, accountHome, paths.Acquisition,
+	if err := checkProdAppAuthority(ctx, deputyEnvironment, homes.home, homes.account, paths.Acquisition,
 		lease.Manifest().Resources.LeaseRoot, settings.Prod.InstalledDaemon); err != nil {
 		return err
 	}
@@ -238,6 +217,45 @@ func runDeputy(
 	return nil
 }
 
+// deputyHomes are the two homes the environment checks run against: $HOME
+// and the account's own, which a launchd-started prod reads.
+type deputyHomes struct {
+	home, account string
+}
+
+// deputyPreLeaseChecks refuses settings and paths a deputy start would
+// refuse before it takes the rig lease. A settings refusal wraps
+// errDeputyUsage; a path refusal does not.
+func deputyPreLeaseChecks(
+	settings loadedDeputySettings, paths deputyPaths, tailscaleIPs func() ([]netip.Addr, error),
+) (deputyHomes, error) {
+	if err := checkDeputyDaemonSettings(settings, paths, tailscaleIPs); err != nil {
+		return deputyHomes{}, fmt.Errorf("%w: %w", errDeputyUsage, err)
+	}
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return deputyHomes{}, err
+	}
+	accountHome, err := currentAccountHome()
+	if err != nil {
+		return deputyHomes{}, err
+	}
+	// Path checks only, before the lease creates the state and seed roots:
+	// the App directories are exempt only as prod's own, and the
+	// authority itself is checked under the lease.
+	envPaths := environmentPaths{
+		DB: paths.DB, StateDir: paths.StateRoot,
+		PublicationStateDir: settings.Prod.AppStateDir, PublicationCredentialsDir: settings.Prod.AppCredentialsDir,
+		ReviewInputRoot: settings.Review.InputRoot, ProdAppAuthority: true,
+	}
+	for _, h := range []string{home, accountHome} {
+		if err := checkEnvironment(deputyEnvironment, h, envPaths, settings.Listen); err != nil {
+			return deputyHomes{}, err
+		}
+	}
+	return deputyHomes{home: home, account: accountHome}, nil
+}
+
 // deputyReleaseTimeout bounds the container cleanup at the end of a run. The
 // run's own context is already cancelled by then.
 const deputyReleaseTimeout = 2 * time.Minute
@@ -284,20 +302,9 @@ func proveDeputyRigClear(ctx context.Context, host rigHost, stateRoot string) er
 func acquireDeputyLease(
 	ctx context.Context, host deputyHost, paths deputyPaths, settings loadedDeputySettings, stderr io.Writer,
 ) (*daemonlock.RigLease, *daemonlock.RigManifest, error) {
-	currentUser, err := user.Current()
+	acquire, err := deputyRigAcquireConfig(paths, settings, host.leaseRoot, deputyOwnerNote)
 	if err != nil {
-		return nil, nil, fmt.Errorf("identify rig owner user: %w", err)
-	}
-	hostname, err := os.Hostname()
-	if err != nil {
-		return nil, nil, fmt.Errorf("identify rig owner host: %w", err)
-	}
-	acquire := daemonlock.RigAcquireConfig{
-		Owner: daemonlock.RigOwner{
-			User: currentUser.Username, Host: hostname, PID: os.Getpid(), Note: deputyOwnerNote,
-		},
-		StateRoot: paths.StateRoot, DatabasePath: paths.DB,
-		ListenAddress: settings.Listen, SeedRoot: settings.SeedRoot, LeaseRoot: host.leaseRoot,
+		return nil, nil, err
 	}
 	lease, err := daemonlock.AcquireRig(acquire)
 	var interrupted *daemonlock.RigManifest
@@ -328,6 +335,28 @@ func acquireDeputyLease(
 		return nil, nil, errors.Join(err, lease.Close())
 	}
 	return lease, interrupted, nil
+}
+
+// deputyRigAcquireConfig is the production rig lease a deputy root binds:
+// its state root, database, listener, and seed root, owned by this process.
+func deputyRigAcquireConfig(
+	paths deputyPaths, settings loadedDeputySettings, leaseRoot, note string,
+) (daemonlock.RigAcquireConfig, error) {
+	currentUser, err := user.Current()
+	if err != nil {
+		return daemonlock.RigAcquireConfig{}, fmt.Errorf("identify rig owner user: %w", err)
+	}
+	hostname, err := os.Hostname()
+	if err != nil {
+		return daemonlock.RigAcquireConfig{}, fmt.Errorf("identify rig owner host: %w", err)
+	}
+	return daemonlock.RigAcquireConfig{
+		Owner: daemonlock.RigOwner{
+			User: currentUser.Username, Host: hostname, PID: os.Getpid(), Note: note,
+		},
+		StateRoot: paths.StateRoot, DatabasePath: paths.DB,
+		ListenAddress: settings.Listen, SeedRoot: settings.SeedRoot, LeaseRoot: leaseRoot,
+	}, nil
 }
 
 // writeDeputyAcquisition writes the lease token where the driver and the
@@ -369,26 +398,9 @@ func withDeputyStore(
 func recordDeputyIdentities(
 	ctx context.Context, st *store.Store, settings loadedDeputySettings, now func() time.Time,
 ) error {
-	identities := []domain.AuthIdentity{{
-		ID: domain.AuthIdentityID(settings.AgentTree.AuthIdentity), Provider: "claude",
-		AuthStoreMutationLease: true, MaxParallelExecutions: 1, Enabled: true,
-		Interim: domain.InterimClientFacts{
-			AuthStoreVolume: settings.AgentTree.AuthVolume, RefreshStrategy: domain.RefreshOnDemand,
-		},
-	}}
-	if settings.reviewHarness() == domain.HarnessClientCodexCLI {
-		reviewSnapshot, err := filepath.EvalSymlinks(settings.Review.AuthSnapshot)
-		if err != nil {
-			return fmt.Errorf("review.auth_snapshot: %w", err)
-		}
-		identities = append(identities, domain.AuthIdentity{
-			ID: domain.AuthIdentityID(settings.AgentTree.ReviewAuthIdentity), Provider: "openai",
-			AuthStoreMutationLease: true, MaxParallelExecutions: 1, Enabled: true,
-			Interim: domain.InterimClientFacts{
-				AuthStoreVolume: reviewSnapshot, RefreshStrategy: domain.RefreshOnDemand,
-				SupportsReadOnlyAuthSnapshot: true,
-			},
-		})
+	identities, err := deputyIdentities(settings)
+	if err != nil {
+		return err
 	}
 	return st.WriteInternal(ctx, func(tx *store.InternalTx) error {
 		for _, identity := range identities {
@@ -408,6 +420,33 @@ func recordDeputyIdentities(
 		}
 		return nil
 	})
+}
+
+// deputyIdentities are the writer and, with a Codex reviewer, the reviewer
+// identities the settings bind.
+func deputyIdentities(settings loadedDeputySettings) ([]domain.AuthIdentity, error) {
+	identities := []domain.AuthIdentity{{
+		ID: domain.AuthIdentityID(settings.AgentTree.AuthIdentity), Provider: "claude",
+		AuthStoreMutationLease: true, MaxParallelExecutions: 1, Enabled: true,
+		Interim: domain.InterimClientFacts{
+			AuthStoreVolume: settings.AgentTree.AuthVolume, RefreshStrategy: domain.RefreshOnDemand,
+		},
+	}}
+	if settings.reviewHarness() == domain.HarnessClientCodexCLI {
+		reviewSnapshot, err := filepath.EvalSymlinks(settings.Review.AuthSnapshot)
+		if err != nil {
+			return nil, fmt.Errorf("review.auth_snapshot: %w", err)
+		}
+		identities = append(identities, domain.AuthIdentity{
+			ID: domain.AuthIdentityID(settings.AgentTree.ReviewAuthIdentity), Provider: "openai",
+			AuthStoreMutationLease: true, MaxParallelExecutions: 1, Enabled: true,
+			Interim: domain.InterimClientFacts{
+				AuthStoreVolume: reviewSnapshot, RefreshStrategy: domain.RefreshOnDemand,
+				SupportsReadOnlyAuthSnapshot: true,
+			},
+		})
+	}
+	return identities, nil
 }
 
 // deputySelfCheckResult is the start-up verdict: the failed check names, in
