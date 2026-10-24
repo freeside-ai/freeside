@@ -17,8 +17,8 @@ name: convergence CI
 # is the same either way. The job runs only through pull-request.yml: a
 # push to main carries a tree its PR tested under the up-to-date rule,
 # and the Go build cache it restores is saved by daemon-ci.yml's
-# `macos-main` job and the SwiftPM mirror by app-ci.yml's `generate`
-# job.
+# `macos-main` job, the SwiftPM mirror by app-ci.yml's `generate` job,
+# and the Swift build by app-ci.yml's `swift-build-cache` job.
 
 on:
   workflow_call:
@@ -49,6 +49,26 @@ jobs:
       SWIFT_FORMAT_VERSION: 6.3.0
     steps:
       - uses: actions/checkout@v4
+      # The OS, default Xcode build, and toolchain parts of the Swift build
+      # cache key. Not $ImageVersion: GitHub rolls the image about weekly,
+      # usually keeping Xcode, and during a rollout runs land on either
+      # image, so a third of #2291's warm runs missed on an identical
+      # toolchain. app-ci.yml's `swift-build-cache` job carries the same
+      # step byte for byte, and the workflow guard pins the two equal, or
+      # writer and reader would never share an entry. No DEVELOPER_DIR: the
+      # test step builds with the image's default Xcode, not the format pin.
+      - name: Resolve the Swift build key
+        id: swift-key
+        run: |
+          toolchain="$(swift --version 2>&1 | grep -o 'swiftlang-[^ )]*' | head -n1)"
+          xcode="$(xcodebuild -version | awk '/^Build version/ {print $3}')"
+          if [ -z "${ImageOS:-}" ] || [ -z "${xcode}" ] || [ -z "${toolchain}" ]; then
+            echo "swift-key: empty part (ImageOS=${ImageOS:-} xcode=${xcode} toolchain=${toolchain})" >&2
+            exit 1
+          fi
+          echo "image=${ImageOS}" >>"$GITHUB_OUTPUT"
+          echo "xcode=${xcode}" >>"$GITHUB_OUTPUT"
+          echo "toolchain=${toolchain}" >>"$GITHUB_OUTPUT"
       - name: Verify pinned swift-format version
         if: inputs.app_tests
         env:
@@ -114,10 +134,8 @@ jobs:
           # The bare git mirrors SwiftPM clones the pinned checkouts from,
           # saved by app-ci.yml's `generate` job on a push to main, which
           # carries the rationale for the shared path and key. Restore-only:
-          # a save here would be scoped to this PR. Not app/.build:
-          # caching compiled output could let a stale artifact register
-          # as a pass, while a mirror cannot (the pin still decides what
-          # is checked out and everything is still compiled here).
+          # a save here would be scoped to this PR. It serves every run the
+          # Swift build cache below misses, which includes every app PR.
           path: .swiftpm-mirror
           key: swiftpm-mirror-v1-${{ hashFiles('app/Package.resolved') }}
           restore-keys: swiftpm-mirror-v1-
@@ -126,10 +144,33 @@ jobs:
           mkdir -p .swiftpm-mirror ~/Library/Caches/org.swift.swiftpm
           rm -rf ~/Library/Caches/org.swift.swiftpm/repositories
           ln -s "$PWD/.swiftpm-mirror" ~/Library/Caches/org.swift.swiftpm/repositories
+      - name: Restore the Swift build
+        id: swift-build
+        uses: actions/cache/restore@v4
+        with:
+          # app/.build with the test bundle, saved by app-ci.yml's
+          # `swift-build-cache` job on a push to main (#2291). The key
+          # hashes all of app/, so a hit holds a build of exactly this
+          # tree, and a stale artifact cannot register as a pass: any app/
+          # change misses. No fallback key: an inexact entry is a partial
+          # build SwiftPM must re-scan and partly recompile, which saved
+          # under a minute when #2249 measured it. hashFiles reads the
+          # workspace, not the index, so this step runs before anything
+          # writes under app/ (app/.build is gitignored, not unhashed).
+          path: app/.build
+          key: swift-build-v1-${{ runner.os }}-${{ runner.arch }}-${{ steps.swift-key.outputs.image }}-${{ steps.swift-key.outputs.xcode }}-${{ steps.swift-key.outputs.toolchain }}-${{ hashFiles('app/**') }}
       - name: Run the convergence pass (scripts/check.sh)
         env:
           CONVERGENCE_ALL_TESTS: ${{ inputs.app_tests && '1' || '' }}
+          # Skip the Swift build only on an exact hit, and never for an app
+          # PR: its --all-tests run must compile the PR's own app changes.
+          CONVERGENCE_SKIP_BUILD: ${{ steps.swift-build.outputs.cache-hit == 'true' && !inputs.app_tests && '1' || '' }}
         run: bash scripts/check.sh convergence
+      - name: Record the Swift build cache result
+        if: always()
+        run: |
+          echo "cache-hit=${{ steps.swift-build.outputs.cache-hit }}"
+          du -sh app/.build 2>/dev/null || echo "app/.build: absent"
       # The screenshot suite dumps each mismatched render next to its digest
       # line; publishing those PNGs is the only way to review a hosted
       # runner's raster before it is recorded as an override (#1139).
