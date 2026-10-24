@@ -65,6 +65,12 @@ func seedItems(s seeder, failed, active, verification domain.Run) error {
 		reason:  "The implementation attempt failed before producing a candidate.",
 		actions: []domain.Action{domain.ActionRetry, domain.ActionDiscuss, domain.ActionStop}, createdAt: at,
 	}.input()
+	failedStage := failed.Stages[len(failed.Stages)-1]
+	executionFailure.ExecutionFailure = &domain.ExecutionFailureFacts{
+		Outcome: domain.ExecutionOutcomeFailed, Cause: domain.FailureCauseUnknown,
+		Stage:        domain.StageNameImplementation,
+		InvocationID: failedStage.Attempts[len(failedStage.Attempts)-1].InvocationID,
+	}
 	inputs = append(inputs, executionFailure)
 
 	diminishing := itemSpec{

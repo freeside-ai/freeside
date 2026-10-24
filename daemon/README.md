@@ -1047,7 +1047,7 @@ freesided inspect proposals -db <db>
 - `tasks`: every task the store holds, with `task_id`, `project_id`,
   `created_at`, and `latest_run_id` (`null` before the first run).
 
-`freesided inspect task` prints one task's record, `freeside-task-record-v6`.
+`freesided inspect task` prints one task's record, `freeside-task-record-v7`.
 Every section is read in one transaction, at the store revision
 `as_of_revision`; `as_of` is the read time. To wait for a change, read again
 and compare `as_of_revision`. A revision that hasn't moved means no recorded
@@ -1062,7 +1062,7 @@ stays true for a run Codex reviews, because Codex reports tokens only.
 | `task` | Project, creation time, lifecycle facts, and the current cancellation with its acknowledgement state. |
 | `timeline` | The timeline a paired client gets, unchanged: runs and attempts, milestones, the current hold, review rounds, verification, pull request, completion, and stop events. |
 | `runs` | For each run: `conclusion` (outcome, hold reason, terminal invocation status), the current `hold`, each invocation's last observed status, the governing digests of each recorded admission, the resolved policy digest, `billable_cost` (`null` when none was recorded), `publication` (`null` until the run publishes), and `closure_cards`: the closure cards of the run's work unit, open or closed, in the card shape `freesided inspect proposals` prints. |
-| `items` | Every attention item of the task or one of its runs, open or closed, and the stall notices for the task's invocations: type, status, `created_at`, `decided_at`, the `conclusion` (how it closed: the cause, when, the daemon's reason, the successor item, and for a decision the command, action, device and its name, and the applied routes), the typed cause (`health_diagnostic`, `execution_failure`, `publish_block`, `blocked_on`), the commands applied (command id, action, device id), and the deliveries. |
+| `items` | Every attention item of the task or one of its runs, open or closed, and the stall notices for the task's invocations: type, status, `created_at`, `decided_at`, the `conclusion` (how it closed: the cause, when, the daemon's reason, the successor item, and for a decision the command, action, device and its name, and the applied routes), the typed cause (`health_diagnostic`, `execution_failure` with its outcome and failure `cause`, `publish_block`, `blocked_on`), the commands applied (command id, action, device id), and the deliveries. |
 | `counts` | Items by type, with every type listed; health notices by code; refused item rows not placed in this task; runs held now; and failed stops. |
 
 Only an unknown task id or a failed read fails the command (exit status 1; a
@@ -1150,7 +1150,7 @@ Reading the record:
   `unapproved_recipe` says so on stderr; stdout stays one JSON line.
 - **The timeline's and the card's shapes are part of the record's version.**
   A change to the task timeline, its events, or the proposal card changes
-  `freeside-task-record-v6`.
+  `freeside-task-record-v7`.
 
 The record never holds evidence, claims, conversation messages (a command's
 message and attachments included), transcripts, prompt text, credentials, or
