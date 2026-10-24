@@ -46,7 +46,7 @@ func (tx *WriteTx) AllocateProposalInstance(
 	if err := proposal.Validate(); err != nil {
 		return domain.ProposalInstance{}, false, fmt.Errorf("allocate proposal instance: %w", err)
 	}
-	subjectHandle, err := proposalSubjectHandle(proposal)
+	subjectHandle, err := ProposalSubjectHandle(proposal)
 	if err != nil {
 		return domain.ProposalInstance{}, false, fmt.Errorf("allocate proposal instance: %w", err)
 	}
@@ -191,7 +191,7 @@ func scanProposalInstance(sc scanner) (domain.ProposalInstance, string, error) {
 	if err != nil {
 		return domain.ProposalInstance{}, "", err
 	}
-	handle, err := proposalSubjectHandle(instance.Proposal)
+	handle, err := ProposalSubjectHandle(instance.Proposal)
 	if err != nil {
 		return domain.ProposalInstance{}, "", errRowInconsistent
 	}
@@ -207,10 +207,10 @@ func scanProposalInstance(sc scanner) (domain.ProposalInstance, string, error) {
 	return instance, admissionKey, nil
 }
 
-// proposalSubjectHandle returns the opaque work-unit handle for any
+// ProposalSubjectHandle returns the opaque work-unit handle for any
 // registry kind. The switch dispatches behaviour and so omits default; the
 // trailing return guards an unregistered kind.
-func proposalSubjectHandle(proposal domain.EffectProposal) (domain.OpaqueSubjectHandle, error) {
+func ProposalSubjectHandle(proposal domain.EffectProposal) (domain.OpaqueSubjectHandle, error) {
 	switch proposal.Kind {
 	case domain.EffectTaskProposal:
 		if proposal.TaskProposal == nil {
@@ -475,7 +475,7 @@ func (tx *ReadTx) authenticatedProposalRevision(
 		!slices.Equal(command.ArtifactDigests, []domain.Digest{supersedes}) {
 		return domain.EffectProposal{}, domain.EffectProposal{}, errRowInconsistent
 	}
-	handle, err := proposalSubjectHandle(prior)
+	handle, err := ProposalSubjectHandle(prior)
 	if err != nil {
 		return domain.EffectProposal{}, domain.EffectProposal{}, err
 	}
@@ -701,7 +701,7 @@ func (tx *ReadTx) gateProposalSubject(
 	ctx context.Context,
 	proposal domain.EffectProposal,
 ) (domain.WorkUnitDeclaration, error) {
-	handle, err := proposalSubjectHandle(proposal)
+	handle, err := ProposalSubjectHandle(proposal)
 	if err != nil {
 		return domain.WorkUnitDeclaration{}, err
 	}
@@ -1025,11 +1025,11 @@ func (tx *WriteTx) PutProposalRevision(
 	if err != nil {
 		return fmt.Errorf("put proposal revision command %q prior: %w", commandID, err)
 	}
-	priorHandle, err := proposalSubjectHandle(storedPrior)
+	priorHandle, err := ProposalSubjectHandle(storedPrior)
 	if err != nil {
 		return fmt.Errorf("put proposal revision command %q prior subject: %w", commandID, err)
 	}
-	revisedHandle, err := proposalSubjectHandle(revised)
+	revisedHandle, err := ProposalSubjectHandle(revised)
 	if err != nil {
 		return fmt.Errorf("put proposal revision command %q subject: %w", commandID, err)
 	}
@@ -1172,39 +1172,8 @@ func (tx *WriteTx) RecordProposalDecision(
 			return fmt.Errorf("record proposal decision command %q: %w", commandID, err)
 		}
 	}
-	// A "digest" decision (start/approve) binds the item's current rendered
-	// digest; a "revision" decision (start_with_changes/approve_with_changes)
-	// binds a revision row authored by this command; decline binds none.
-	requireRevisionRow := func() error {
-		if selectedDigest == nil {
-			return fmt.Errorf("record proposal decision command %q selected digest: %w", commandID, domain.ErrTransitionCommandMismatch)
-		}
-		var matched int
-		if err := tx.tx.QueryRowContext(ctx, `SELECT COUNT(*) FROM effect_proposal_revisions
-			WHERE instance_id = ? AND content_digest = ? AND supersedes_digest = ? AND command_id = ?`,
-			instanceID, *selectedDigest, boundDigest, commandID).Scan(&matched); err != nil {
-			return fmt.Errorf("record proposal decision command %q revision: %w", commandID, err)
-		}
-		if matched != 1 {
-			return fmt.Errorf("record proposal decision command %q revision: %w", commandID, domain.ErrTransitionCommandMismatch)
-		}
-		return nil
-	}
-	switch action {
-	case domain.ActionStart, domain.ActionApprove:
-		if selectedDigest == nil || *selectedDigest != boundDigest {
-			return fmt.Errorf("record proposal decision command %q selected digest: %w", commandID, domain.ErrTransitionCommandMismatch)
-		}
-	case domain.ActionStartWithChanges, domain.ActionApproveWithChanges:
-		if err := requireRevisionRow(); err != nil {
-			return err
-		}
-	case domain.ActionDecline:
-		if selectedDigest != nil {
-			return fmt.Errorf("record proposal decision command %q selected digest: %w", commandID, domain.ErrTransitionCommandMismatch)
-		}
-	default:
-		return fmt.Errorf("record proposal decision command %q action %q: %w", commandID, action, domain.ErrTransitionCommandMismatch)
+	if err := tx.checkDecisionSelection(ctx, instanceID, commandID, action, selectedDigest, boundDigest); err != nil {
+		return err
 	}
 	// The second-actor rule: a policy approval and a human decision are the two
 	// recorders of one closure, and the per-project gate mode admits exactly one.
@@ -1228,6 +1197,51 @@ func (tx *WriteTx) RecordProposalDecision(
 		return fmt.Errorf("record proposal decision %q: %w", instanceID, err)
 	}
 	return nil
+}
+
+// checkDecisionSelection checks what a decision selects against the item it
+// decides: a "digest" decision (start/approve) binds the item's rendered
+// digest; a "revision" decision (start_with_changes/approve_with_changes)
+// binds a revision row authored by this command; decline binds none. The
+// writer runs it before recording a decision and the decision read re-runs it
+// on the recorded row; no writer changes an item's rendered digest, so a row
+// that passed once passes again.
+func (tx *ReadTx) checkDecisionSelection(
+	ctx context.Context,
+	instanceID domain.ProposalInstanceID,
+	commandID string,
+	action domain.Action,
+	selectedDigest *domain.Digest,
+	boundDigest domain.Digest,
+) error {
+	switch action {
+	case domain.ActionStart, domain.ActionApprove:
+		if selectedDigest == nil || *selectedDigest != boundDigest {
+			return fmt.Errorf("record proposal decision command %q selected digest: %w", commandID, domain.ErrTransitionCommandMismatch)
+		}
+		return nil
+	case domain.ActionStartWithChanges, domain.ActionApproveWithChanges:
+		if selectedDigest == nil {
+			return fmt.Errorf("record proposal decision command %q selected digest: %w", commandID, domain.ErrTransitionCommandMismatch)
+		}
+		var matched int
+		if err := tx.tx.QueryRowContext(ctx, `SELECT COUNT(*) FROM effect_proposal_revisions
+			WHERE instance_id = ? AND content_digest = ? AND supersedes_digest = ? AND command_id = ?`,
+			instanceID, *selectedDigest, boundDigest, commandID).Scan(&matched); err != nil {
+			return fmt.Errorf("record proposal decision command %q revision: %w", commandID, err)
+		}
+		if matched != 1 {
+			return fmt.Errorf("record proposal decision command %q revision: %w", commandID, domain.ErrTransitionCommandMismatch)
+		}
+		return nil
+	case domain.ActionDecline:
+		if selectedDigest != nil {
+			return fmt.Errorf("record proposal decision command %q selected digest: %w", commandID, domain.ErrTransitionCommandMismatch)
+		}
+		return nil
+	default:
+		return fmt.Errorf("record proposal decision command %q action %q: %w", commandID, action, domain.ErrTransitionCommandMismatch)
+	}
 }
 
 // gateFollowUpFilingApproval refuses an approval of a filing whose source
@@ -1631,6 +1645,94 @@ func (tx *ReadTx) DecidedEffectItemForInstance(
 		return domain.AttentionItem{}, false, fmt.Errorf("decided effect item for instance %q: %w", instanceID, err)
 	}
 	return item, true, nil
+}
+
+// ProposalDecision is an instance's ledger decision as an operator read shows
+// it. It grants nothing: a closure's authority is ClosureApprovalForInstance.
+type ProposalDecision struct {
+	CommandID string
+	Action    domain.Action
+	// SelectedDigest is nil for a decline.
+	SelectedDigest *domain.Digest
+	DecidedAt      time.Time
+}
+
+// ProposalDecisionForInstance returns the instance's recorded decision, or nil
+// when it has none. The row must name a command whose item is bound to the
+// instance and whose action it repeats, and select what that action binds, as
+// RecordProposalDecision required when it wrote the row; a row that does not
+// fails closed.
+func (tx *ReadTx) ProposalDecisionForInstance(
+	ctx context.Context,
+	instanceID domain.ProposalInstanceID,
+) (*ProposalDecision, error) {
+	var commandID, action, decidedAt string
+	var selected sql.NullString
+	err := tx.tx.QueryRowContext(ctx, `SELECT command_id, action, selected_digest, decided_at
+		FROM effect_proposal_decisions WHERE instance_id = ?`, instanceID).Scan(&commandID, &action, &selected, &decidedAt)
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, fmt.Errorf("proposal decision for instance %q: %w", instanceID, err)
+	}
+	command, err := tx.GetCommand(ctx, commandID)
+	if err != nil {
+		return nil, fmt.Errorf("proposal decision for instance %q: %w", instanceID, err)
+	}
+	boundInstance, boundDigest, _, err := tx.proposalItemBinding(ctx, command.ItemID)
+	if err != nil {
+		return nil, fmt.Errorf("proposal decision for instance %q: %w", instanceID, err)
+	}
+	at, err := parseTime(decidedAt)
+	if err != nil || boundInstance != instanceID || string(command.Action) != action {
+		return nil, fmt.Errorf("proposal decision for instance %q: %w", instanceID, errRowInconsistent)
+	}
+	decision := &ProposalDecision{CommandID: commandID, Action: command.Action, DecidedAt: at}
+	if selected.Valid {
+		digest := domain.Digest(selected.String)
+		decision.SelectedDigest = &digest
+	}
+	err = tx.checkDecisionSelection(ctx, instanceID, commandID, command.Action, decision.SelectedDigest, boundDigest)
+	if errors.Is(err, domain.ErrTransitionCommandMismatch) {
+		return nil, fmt.Errorf("proposal decision for instance %q: %w", instanceID, errRowInconsistent)
+	}
+	if err != nil {
+		return nil, fmt.Errorf("proposal decision for instance %q: %w", instanceID, err)
+	}
+	return decision, nil
+}
+
+// ProposalItemIDsForSubject returns, in order, the id of every card, open or
+// closed, bound to an instance of kind whose subject is handle. It selects
+// candidates only: a caller re-reads each item through GetAttentionItem,
+// which runs the item's integrity gates.
+func (tx *ReadTx) ProposalItemIDsForSubject(
+	ctx context.Context,
+	handle domain.OpaqueSubjectHandle,
+	kind domain.EffectKind,
+) ([]domain.ItemID, error) {
+	rows, err := tx.tx.QueryContext(ctx, `
+SELECT p.item_id FROM effect_proposal_items p
+JOIN effect_proposal_instances i ON i.instance_id = p.instance_id
+WHERE i.subject_handle = ? AND i.effect_kind = ?
+ORDER BY p.item_id`, handle, kind)
+	if err != nil {
+		return nil, fmt.Errorf("proposal items for subject %q: %w", handle, err)
+	}
+	defer func() { _ = rows.Close() }()
+	ids := []domain.ItemID{}
+	for rows.Next() {
+		var id domain.ItemID
+		if err := rows.Scan(&id); err != nil {
+			return nil, fmt.Errorf("proposal items for subject %q: %w", handle, err)
+		}
+		ids = append(ids, id)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("proposal items for subject %q: %w", handle, err)
+	}
+	return ids, nil
 }
 
 // ListOpenClosureProposalSubjects returns, in order, every subject handle
