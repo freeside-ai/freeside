@@ -2,10 +2,8 @@ package signet
 
 import (
 	"context"
-	"crypto/rand"
 	"errors"
 	"fmt"
-	"io"
 	"log/slog"
 	"strings"
 	"time"
@@ -54,7 +52,6 @@ type Service struct {
 	doctorSchedule        domain.ScheduleID
 	doctorAvailable       func() bool
 	now                   func() time.Time
-	rand                  io.Reader
 	// logger records durable diagnoses the read projections would otherwise
 	// swallow into an undifferentiated 500 (issue #767): when a listing read
 	// isolates a run whose observation rows contradict their durable authority,
@@ -106,9 +103,8 @@ func WithTaskStopGuard(guard func(context.Context, domain.TaskID, func() error) 
 	return func(s *Service) { s.taskStopGuard = guard }
 }
 
-// Option configures a Service. The clock and randomness sources exist so
-// tests can pin expiry and generated identities; production composition
-// passes only WithPairingKey.
+// Option configures a Service. The clock source exists so tests can pin
+// expiry.
 type Option func(*Service)
 
 // WithDoctorSchedule binds Run doctor to the deployment's existing durable
@@ -131,12 +127,6 @@ func WithPairingKey(key []byte) Option {
 // expiry-at-redemption, and pairing/revocation timestamps.
 func WithClock(now func() time.Time) Option {
 	return func(s *Service) { s.now = now }
-}
-
-// WithRand overrides the randomness source for pairing codes, device IDs,
-// and token secrets.
-func WithRand(r io.Reader) Option {
-	return func(s *Service) { s.rand = r }
 }
 
 // WithHostFacts supplies the daemon host's display name and the connection
@@ -181,7 +171,7 @@ func WithTaskSubmitter(submitter TaskSubmitter) Option {
 }
 
 func NewService(st *store.Store, opts ...Option) *Service {
-	s := &Service{store: st, now: time.Now, rand: rand.Reader, logger: slog.New(slog.DiscardHandler)}
+	s := &Service{store: st, now: time.Now, logger: slog.New(slog.DiscardHandler)}
 	for _, opt := range opts {
 		opt(s)
 	}
