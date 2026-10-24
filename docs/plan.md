@@ -1511,7 +1511,7 @@ its only output. It has its own launch class and declared size (Machine
 Capacity) and takes a usage-pool slot like any ward stage launch. The
 specification stage's floors hold for it, and it widens none of them. The
 researcher is a ward role because its agent has a tool. Admission applies to
-it unchanged, including the attended first run of a new agent × launch pair.
+it unchanged.
 The Claude CLI's search is a side request (#1620), so two things are
 decided when the adapter is built and tested (#1657): the launch's
 auxiliary-inference policy, and whether that request's model can contradict
@@ -1560,22 +1560,33 @@ every other input:
 5. *Snapshot.* `ExecutionAdmission` records the agent digest, the launch digest,
    the lineup revision, the selection source (the lineup, a task line, or the
    alternate-agent card, with the id of the task line or card record that
-   chose the agent; revision 73), the enrollment id and generation, the store
-   manifest digest, the effective egress allowlist, and whether the attempt is
-   attended.
+   chose the agent; revision 73), the route model and the requested and
+   native effort the launch passes, the enrollment id and generation, the
+   store manifest digest, and the effective egress allowlist. Whether the
+   attempt ran attended is a fact of its operating mode (Section [5.7](#57-the-ward-runners-handoff-gate-and-operating-modes)), not
+   a field of its own (revision 97).
    It derives its existing fields (identity, image, credential mode, endpoints,
    instruction delivery) from them. Reconstruction reads by digest and rechecks
    the derivations.
 
-A new agent × launch pair runs attended until an operator, having looked at a
-run, marks it unattended-eligible beside the agent in the tree (outside the
-hashed body, like the name). The mark names the exact agent digest and launch
-digest it was given for. A line edit makes a different agent with a different
-digest, so the mark does not carry over, and the changed pair runs attended
-again. The mark is the approval; there is no smoke-record type.
+An agent that passes those five steps runs under the deployment's operating
+mode (Section [5.7](#57-the-ward-runners-handoff-gate-and-operating-modes)) from its first launch. There is no attended
+first run and no unattended-eligible mark. Revision 97 removed the rule, from
+the admitted-agent contract (#894), that a new agent × launch pair runs
+attended until an operator, having looked at a run, marks it in the tree:
+under the lineup every model or effort edit is a new pair, so the rule turned
+each one-step experiment into an attended run, while a call never had it
+(below). The operator's look is after the fact, where it already was for a
+call: the admission snapshot names the agent, the launch, the model and
+effort, and what selected them, and the run record shows what the agent did.
+What bounds a bad new agent is what bounded it under the mark: the ward
+boundary, the hostile import, verification, review, and the human merge gate.
+An operator who wants the look first runs the deployment in `attended_dev`,
+or runs a new reviewer or judgment line as a shadow first (Section
+[5.13](#513-deterministic-components-judgment-calls-and-the-effect-registry)); neither is a gate.
 
-Harness × model is not pre-proved beyond that first run: a request works or
-fails closed against the stage's output validation. An observed model, serving
+Harness × model is not pre-proved: a request works or fails closed against
+the stage's output validation. An observed model, serving
 operator, or route that contradicts a pinned admitted value fails the attempt as
 a durable contradiction, never a log line. Pre-proving a rolling upstream would
 be fiction; offers say so with `identity_stability`, and records claim only what
@@ -1620,12 +1631,13 @@ ward-only parts fall away or change hands, and nothing else does:
 - *Snapshot* holds, with the call record in the place of `ExecutionAdmission`
   (the record paragraph below).
 
-The attended first run does not apply to a call. It gates a pair's move to
-unattended operation on an operator having looked at a run, and a call that
-lasts seconds inside the daemon has no attended mode for an operator to sit in.
-So a call has no gate before first use, and the plan does not pretend the
-audit is one. What bounds a bad new agent or prompt is what bounds any answer:
-the site's authority contract, its ceilings, and its fail-safe. Where a site
+A call has no gate before first use either, and the plan does not pretend the
+audit is one. (Revision 65 said so of calls while a stage pair still ran
+attended first, because a call lasting seconds inside the daemon has no
+attended mode for an operator to sit in; revision 97 removed that run, so the
+two admission classes agree.) What bounds a bad new agent or prompt is what
+bounds any answer: the site's authority contract, its ceilings, and its
+fail-safe. Where a site
 carries a sampled audit (Section [5.13](#513-deterministic-components-judgment-calls-and-the-effect-registry)), that audit is the operator's look
 after the fact. An operator
 who wants the look before the answers count runs the new line as a shadow first
@@ -1699,9 +1711,9 @@ tree. The first step lands the schemas, dual-read, and enrollment adoption while
 the interim flag selection stays active. The second step is the operator's:
 `freesided auth adopt` adopts each interim identity's store as an enrollment
 with an initial generation and emits a proposed baseline patch (the baseline
-agents, the deployment lineup, and their attended-run marks, carrying resolved
-enrollment ids). A human commits it. Selection activates and queued inputs are
-rewritten to agent digests. The baseline lineup lists every role that policy
+agents and the deployment lineup, carrying resolved enrollment ids). A human
+commits it. Selection activates and queued inputs are rewritten to agent
+digests. The baseline lineup lists every role that policy
 asks work from by role name, judgment roles included, and never a stage name,
 so the first real lineup needs no key migration. The flags, the judgment and
 review flags among them, are removed once every such role admits.
@@ -1728,9 +1740,9 @@ capability vocabulary, and the lifecycle command set are settled by the
 admitted-agent contract unit and the enrollment unit (#867), not listed here.
 Deliberately not built:
 
-- A qualification ledger with projections and supersession (two proofs suffice,
-  the adapter suite per build and the attended first run per agent × launch;
-  a call has the first only, bounded by its site's authority contract).
+- A qualification ledger with projections and supersession (one proof
+  suffices, the adapter suite per build; a stage is bounded by its output
+  validation and the ward's gates, a call by its site's authority contract).
 - Alias and withdrawal machinery (the tree is the active set and git is its
   history).
 - Stored projections beyond the treatment digest.
@@ -5873,8 +5885,8 @@ corrupt store is enrolled as a new identity rather than adopted.
   daemon-driven refresh before accepting it.
 
 `adopt` is the cutover command: it adopts each interim identity's store as an
-enrollment and emits the proposed baseline patch (agents, deployment lineup,
-attended-run marks) for the operator to commit. It never writes the tree.
+enrollment and emits the proposed baseline patch (agents and deployment
+lineup) for the operator to commit. It never writes the tree.
 
 `list` shows identities and their enrollments with the masked label. `doctor`
 runs the account probe for one identity on demand once #868 lands.
@@ -6761,54 +6773,28 @@ Record material changes here by revision, with the decider in parentheses.
 - On first re-litigation, promote the decision to a `docs/decisions/` ADR that
   cites its history entry.
 
-Revision 96 ("Linux-First Cores, A Credential-Free macOS Verifier"):
+Revision 97 ("No Attended First Run"):
 
-1. **Swift projects are managed Linux-first.** Writers, reviewers, and
-   specifiers for a Swift project run in Linux wards against a Swift project
-   image, and macOS is a verification tier used as briefly as possible. A
-   project qualifies once its core modules build and test on Linux with the
-   Apple-only modules declared in its manifest; Freeside's `app/` (#2182)
-   and Straylight each need a module split first. Rejected: developing on
-   macOS in VMs (the two-guest limit is a per-host kernel quota,
-   `hv_apple_isa_vm_quota`, and the reference host cannot hold two Xcode
-   guests); a KDK kernel with SIP off to lift the quota.
-2. **A credential-free macOS verification executor is admitted in
-   `unattended`.** The runner's verification room on a macOS execution host
-   (revision 94: the daemon host in-process, or a second Mac in the runner
-   role), pooled unprivileged accounts as slots, and four live-probed
-   confinements per job: a network-denying sandbox profile plus per-uid
-   packet-filter rules, write confinement to the job directory, a
-   digest-keyed offline dependency cache that fails closed, and a home
-   reset. It holds no credential and no placeholder, so it sits outside the
-   credential modes; it plugs in at the verifier's room seam and declares
-   `supports_credential_free_host_verification`; the Section
-   [10](#10-operations-and-onboarding) host-side rule names it as its one
-   exception. Gated by two spikes on the reference host (2026-10-22):
-   SwiftUI `ImageRenderer` rendered in a session-less slot with zero
-   displays, and per-uid packet-filter rules dropped off-host TCP, direct
-   IP, and direct DNS but not loopback or the system resolver, which the
-   sandbox profile closed. Rejected: a host-side writer now (it runs an
-   agent outside the ward boundary and, until `subscription_injected`
-   lands, holds the token as a file; revision 95 is what makes one
-   defensible later); verifying in macOS VMs (the quota and memory above);
-   relying on the packet filter alone.
-3. **UI writers wait for a VM or second-Mac tier.** Writer work that needs
-   macOS itself is not served by the executor: a writer in a VM guest holds
-   its token under `subscription_contained` as a ward does, and a host-run
-   writer context waits for `subscription_injected` (revision 95). Phase 4
-   keeps the tier, and the bootstrap exception narrows to SwiftUI work that
-   needs a macOS writer. Rejected: scheduling the tier now.
-4. **Swift is a third project-image toolchain.** Keyed by `Package.swift`
-   and `Package.resolved` of the named package directory, with the
-   dependency closure baked as bare mirrors, including submodules and the
-   platform-conditional packages the lockfile does not pin, discovered by one
-   proxied resolution and proven networkless; implemented by #2183.
-   Rejected: trusting `Package.resolved` as the complete closure (the
-   Straylight experiment showed it omits OpenCombine and GRDB's SQLiteLib
-   submodule).
+1. **A new agent runs under the deployment's operating mode from its first
+   launch.** Admission's five steps (resolve, selected, proved, credentialed,
+   snapshot) are the whole gate. The attended first run of a new agent ×
+   launch pair, the unattended-eligible mark beside the agent in the tree,
+   and the admission snapshot's attended flag are removed; the daemon
+   enforces them until the follow-up contract unit #2265 lands. The
+   operator's look moves after the fact, to the admission snapshot and the
+   run record, where revision 65 already put it for a call. Rejected:
+   keeping the rule (under the lineup every model or effort edit is a new
+   pair, so each one-step experiment forced an attended run, and the Wave 8
+   exit run's rehearsal refused a cross-role task line unattended because a
+   writer agent is marked only for its own role's launch, #1616 exit line
+   4); narrowing
+   it to adapter or harness build changes (the adapter suite per build
+   already proves those, and a model or effort change is the experiment
+   itself); an advisory item on each new pair's first unattended run (one
+   item per effort tweak, naming nothing the admission snapshot does not).
 
-(Owner decisions of 2026-10-21 and 2026-10-22;
-[decision note](../devlog/2026-10-22-1205-macos-verifier-executor.md).)
+(Owner decision of 2026-10-24 on #1431;
+[decision note](../devlog/2026-10-24-0927-drop-attended-first-run.md).)
 
 ## 14. Risks
 
