@@ -39,6 +39,46 @@ def events(selected):
     return result
 
 
+# A `go` stand-in serving SHARD_FIXTURE's {package: families}: it lists the
+# named packages (or all for ./...) and, with SHARD_EXECUTE=yes, runs the
+# families a -run pattern selects in each named package.
+FAKE_GO = '''#!/usr/bin/env python3
+import json, os, sys
+import re
+import signal
+data = json.load(open(os.environ['SHARD_FIXTURE']))
+if sys.argv[1] == 'list':
+    print('\\n'.join(data)); sys.exit(0)
+if '-list' in sys.argv:
+    for p, names in data.items():
+        if './...' not in sys.argv and p not in sys.argv: continue
+        for n in names: print(json.dumps({'Package': p, 'Action': 'output', 'Output': n+'\\n'}))
+        print(json.dumps({'Package': p, 'Action': 'pass'}))
+    sys.exit(0)
+if os.environ.get('SHARD_EXECUTE') == 'signal': os.kill(os.getpid(), signal.SIGTERM)
+if os.environ.get('SHARD_EXECUTE') == 'filtered-fail':
+    if '-run' in sys.argv: sys.exit(9)
+elif os.environ.get('SHARD_EXECUTE') != 'yes': sys.exit(7)
+selector = sys.argv[sys.argv.index('-run')+1] if '-run' in sys.argv else '.'
+for p, names in data.items():
+    if p not in sys.argv: continue
+    for n in names:
+        if not re.search(selector, n): continue
+        for name in ([n, n+'/seed#0'] if n.startswith('Fuzz') else [n]):
+            print(json.dumps({'Package': p, 'Test': name, 'Action': 'run'}))
+            print(json.dumps({'Package': p, 'Test': name, 'Action': 'pass'}))
+    print(json.dumps({'Package': p, 'Action': 'pass'}))
+'''
+
+
+def darwin_fixture():
+    # Every declared darwin package, each with a family the selection leaves
+    # out, beside packages the selection must never reach.
+    data = {integration: ['TestA'], 'module/elsewhere': ['TestElsewhere']}
+    for entry in shards.DARWIN_SELECTION:
+        data['module/' + entry['package']] = (entry['families'] or ['TestWhole']) + ['TestUnlisted']
+    return data
+
 class Coverage(unittest.TestCase):
     def test_partition_exact_union_and_stable_new_removed_names(self):
         names = inventory[integration]
@@ -163,7 +203,11 @@ class Coverage(unittest.TestCase):
             self.assertIn('fail-fast: false', tests)
             self.assertIn('fetch-depth: 2', tests)
             self.assertIn('bash scripts/check.sh daemon test', tests)
-            self.assertEqual([r for r in re.findall(rows, tests) if r[0] == 'rest'], [('rest', '1', '1')])
+            # A PR's macOS job runs the declared darwin selection; the full
+            # rest shard runs there only after the merge, in macos-main.
+            single = 'rest' if platform == 'linux' else 'darwin'
+            self.assertEqual([r for r in re.findall(rows, tests) if r[0] in ('rest', 'darwin')],
+                             [(single, '1', '1')])
             self.assertIn('DAEMON_TEST_INTEGRATION_SHARDS: 3', tests)
             # Evidence from any attempt is safe to read only after the gate
             # has required every child's current result to succeed, and only
@@ -184,11 +228,14 @@ class Coverage(unittest.TestCase):
         self.assertIn('daemon-test-shards.py verify evidence/*/execution.json', jobs['linux'])
         self.assertIn("github.event_name == 'push' && matrix.index == 1", linux)
         self.assertNotIn("github.event_name != 'push'", linux)
-        # macOS: a PR runs the rest shard alone and saves no cache; a push to
-        # main runs the three integration shards in one job, warms the cache
+        # macOS: a PR runs the darwin selection alone, restores the rest
+        # namespace, and saves no cache; a push to main runs the full rest
+        # shard and the three integration shards in one job, warms the cache
         # with every test binary, and is the only macOS cache writer.
         macos_tests = jobs['macos-tests']
-        self.assertEqual(re.findall(rows, macos_tests), [('rest', '1', '1')])
+        self.assertEqual(re.findall(rows, macos_tests), [('darwin', '1', '1')])
+        self.assertRegex(macos_tests, r'key: daemon-build-v2-.*-rest-.*\$\{\{ github.sha \}\}\n')
+        self.assertNotIn('${{ matrix.kind }}-${{ hashFiles', macos_tests)
         self.assertIn("    if: github.event_name != 'push'\n", macos_tests)
         self.assertIn('bash scripts/check.sh daemon build', macos_tests)
         self.assertIn('runs-on: macos-26', macos_tests)
@@ -198,21 +245,23 @@ class Coverage(unittest.TestCase):
         self.assertIn('runs-on: macos-26', main)
         self.assertIn('fetch-depth: 2', main)
         self.assertLess(main.index("go test -count=1 -run '^$' ./..."), main.index('bash scripts/check.sh daemon test'))
-        # The cache this job saves is the one the PR rest shard and the
+        # The cache this job saves is the one the PR darwin shard and the
         # convergence job restore, so it runs their build too.
         self.assertLess(main.index('run: bash scripts/check.sh daemon build\n'),
                         main.index("go test -count=1 -run '^$' ./..."))
-        shard_steps = re.findall(r'DAEMON_TEST_SHARD_KIND: integration\n *DAEMON_TEST_SHARD_INDEX: (\d+)\n'
+        shard_steps = re.findall(r'DAEMON_TEST_SHARD_KIND: (\w+)\n *DAEMON_TEST_SHARD_INDEX: (\d+)\n'
                                  r' *DAEMON_TEST_SHARD_COUNT: (\d+)\n *DAEMON_TEST_INTEGRATION_SHARDS: (\d+)\n'
-                                 r' *DAEMON_TEST_EVIDENCE_DIR: \$\{\{ github.workspace \}\}/evidence/integration-(\d+)\n'
+                                 r' *DAEMON_TEST_EVIDENCE_DIR: \$\{\{ github.workspace \}\}/evidence/([\w-]+)\n'
                                  r' *run: bash scripts/check.sh daemon test\n', main)
-        self.assertEqual(shard_steps, [(str(i), '3', '3', str(i)) for i in range(1, 4)])
-        self.assertEqual(main.count('bash scripts/check.sh daemon test'), 3)
-        self.assertIn('metadata --evidence-dir "evidence/integration-$index"', main)
+        self.assertEqual(shard_steps, [('rest', '1', '1', '3', 'rest')] +
+                         [('integration', str(i), '3', '3', f'integration-{i}') for i in range(1, 4)])
+        self.assertEqual(main.count('bash scripts/check.sh daemon test'), 4)
+        self.assertIn('for shard in rest integration-1 integration-2 integration-3; do\n', main)
+        self.assertIn('metadata --evidence-dir "evidence/$shard"', main)
         upload = re.search(r'^      - name: Upload test evidence\n(.*?)(?=^      - )', main, re.M | re.S).group(1)
         self.assertIn('        if: always()\n', upload)
         self.assertIn('          if-no-files-found: error\n', upload)
-        self.assertIn('          name: daemon-macos-integration-${{ github.run_id }}-${{ github.run_attempt }}\n', upload)
+        self.assertIn('          name: daemon-macos-main-${{ github.run_id }}-${{ github.run_attempt }}\n', upload)
         self.assertIn("        if: github.event_name == 'push'\n        uses: actions/cache/save@v4", main)
         self.assertRegex(main, r'key: daemon-build-v2-.*-rest-.*\$\{\{ github.sha \}\}\n')
         # Each main-push cache writer trims the restored cache to the entries
@@ -253,7 +302,7 @@ class Coverage(unittest.TestCase):
         self.assertIn("EXPECTED: ${{ github.event_name == 'push' && 'macos-main' || 'macos-tests' }}", gate)
         self.assertIn("SKIPPED: ${{ github.event_name == 'push' && 'macos-tests' || 'macos-main' }}", gate)
         self.assertIn('gate --needs "$NEEDS" --expected "$EXPECTED" --skipped "$SKIPPED"', gate)
-        self.assertIn("SHARDS: ${{ github.event_name == 'push' && 'integration' || 'rest' }}", gate)
+        self.assertIn("SHARDS: ${{ github.event_name == 'push' && 'all' || 'darwin' }}", gate)
         self.assertIn('find evidence -name execution.json -print0 | xargs -0 python3 scripts/daemon-test-shards.py '
                       'verify --shards "$SHARDS"', gate)
         self.assertIn('  workflow_call:', workflow)
@@ -340,31 +389,7 @@ fi
             fixture = directory / 'fixture.json'
             fixture.write_text(json.dumps(inventory))
             fake = directory / 'go'
-            fake.write_text('''#!/usr/bin/env python3
-import json, os, sys
-import re
-import signal
-data = json.load(open(os.environ['SHARD_FIXTURE']))
-if sys.argv[1] == 'list':
-    print('\\n'.join(data)); sys.exit(0)
-if '-list' in sys.argv:
-    for p, names in data.items():
-        if './...' not in sys.argv and p not in sys.argv: continue
-        for n in names: print(json.dumps({'Package': p, 'Action': 'output', 'Output': n+'\\n'}))
-        print(json.dumps({'Package': p, 'Action': 'pass'}))
-    sys.exit(0)
-if os.environ.get('SHARD_EXECUTE') == 'signal': os.kill(os.getpid(), signal.SIGTERM)
-if os.environ.get('SHARD_EXECUTE') != 'yes': sys.exit(7)
-selector = sys.argv[sys.argv.index('-run')+1] if '-run' in sys.argv else '.'
-for p, names in data.items():
-    if p not in sys.argv: continue
-    for n in names:
-        if not re.search(selector, n): continue
-        for name in ([n, n+'/seed#0'] if n.startswith('Fuzz') else [n]):
-            print(json.dumps({'Package': p, 'Test': name, 'Action': 'run'}))
-            print(json.dumps({'Package': p, 'Test': name, 'Action': 'pass'}))
-    print(json.dumps({'Package': p, 'Action': 'pass'}))
-''')
+            fake.write_text(FAKE_GO)
             fake.chmod(0o755)
             base = [sys.executable, str(path), 'run', '--go', str(fake), '--daemon', str(directory)]
             env = dict(os.environ, SHARD_FIXTURE=str(fixture))
@@ -507,6 +532,106 @@ for p, names in data.items():
                     shards.verify_reports(reports + [retried])
             source.write_text(source.read_text().rsplit('\n', 2)[0])
             self.assertNotEqual(subprocess.run(command + list(map(str, reports)), capture_output=True).returncode, 0)
+
+    def test_darwin_selection_runs_declared_families_and_fails_closed(self):
+        selection = {'module/' + e['package']: e['families'] for e in shards.DARWIN_SELECTION}
+        with tempfile.TemporaryDirectory() as temporary:
+            directory = Path(temporary)
+            fixture = directory / 'fixture.json'
+            fake = directory / 'go'
+            fake.write_text(FAKE_GO)
+            fake.chmod(0o755)
+            env = dict(os.environ, SHARD_FIXTURE=str(fixture), SHARD_EXECUTE='yes')
+            def call(data, kind, output, count='1'):
+                fixture.write_text(json.dumps(data))
+                result = subprocess.run([sys.executable, str(path), 'run', '--go', str(fake),
+                                         '--daemon', str(directory), '--kind', kind, '--index', '1',
+                                         '--count', count, '--integration-count', '1',
+                                         '--evidence-dir', str(output)], env=env, capture_output=True, text=True)
+                if result.returncode == 0:
+                    (output / 'metadata.json').write_text(json.dumps({
+                        'tested_commit': 'head', 'production_tree': 'production',
+                        'go': 'go version test', 'platform': ['darwin', 'arm64'], 'ImageOS': 'macos26',
+                        'GITHUB_RUN_ID': '1', 'GITHUB_RUN_ATTEMPT': '1'}))
+                return result
+            data = darwin_fixture()
+            darwin = directory / 'darwin'
+            result = call(data, 'darwin', darwin)
+            self.assertEqual(result.returncode, 0, result.stderr)
+            report = json.loads((darwin / 'execution.json').read_text())
+            # Whole packages share one command; each filtered package runs
+            # alone, because one -run pattern applies to every package.
+            base = [str(fake), 'test', '-json', '-count=1']
+            whole = [p for p, families in selection.items() if families is None]
+            self.assertEqual(report['commands'], [base + whole] + [
+                base + ['-run', '^(' + '|'.join(sorted(families)) + ')$', p]
+                for p, families in selection.items() if families is not None])
+            self.assertEqual(set(json.loads((darwin / 'inventory.json').read_text())), set(selection))
+            expected = {p: sorted(families or data[p]) for p, families in selection.items()}
+            self.assertEqual(report['inventory'], expected)
+            self.assertEqual({(c['package'], c['name']) for c in report['cases']},
+                             {(p, n) for p, names in expected.items() for n in names})
+            # A listed package or family that discovery cannot find fails the
+            # shard instead of shrinking it.
+            missing_package = {p: n for p, n in data.items() if p != 'module/internal/verify'}
+            result = call(missing_package, 'darwin', directory / 'no-package')
+            self.assertEqual(result.returncode, 1)
+            self.assertIn('missing or ambiguous darwin package: internal/verify', result.stderr)
+            missing_family = dict(data, **{'module/internal/ward':
+                                           [n for n in data['module/internal/ward'] if n != 'TestPublicUnicast']})
+            result = call(missing_family, 'darwin', directory / 'no-family')
+            self.assertEqual(result.returncode, 1)
+            self.assertIn('darwin families not discovered in module/internal/ward: TestPublicUnicast', result.stderr)
+            self.assertEqual(call(data, 'darwin', directory / 'split', count='2').returncode, 1)
+            with patch.object(shards, 'DARWIN_SELECTION', shards.DARWIN_SELECTION + shards.DARWIN_SELECTION[:1]), \
+                    self.assertRaisesRegex(ValueError, 'duplicate darwin package'):
+                shards.darwin_packages(list(data))
+            # A filtered package that fails after the whole-package command
+            # passed still fails the shard and leaves no execution report.
+            env['SHARD_EXECUTE'] = 'filtered-fail'
+            failed = directory / 'filtered-fail'
+            self.assertEqual(call(data, 'darwin', failed).returncode, 9)
+            self.assertFalse((failed / 'execution.json').exists())
+            self.assertIn('module/internal/atomicfile', (failed / 'tests.jsonl').read_text())
+            env['SHARD_EXECUTE'] = 'yes'
+            rest = directory / 'rest'
+            self.assertEqual(call(data, 'rest', rest).returncode, 0)
+            stray = directory / 'integration'
+            self.assertEqual(call(data, 'integration', stray).returncode, 0)
+            reports = [p / 'execution.json' for p in (darwin, rest, stray)]
+            with patch.dict(os.environ, GITHUB_SHA='head', GITHUB_RUN_ID='1', GITHUB_RUN_ATTEMPT='1'):
+                shards.verify_reports(reports[:1], 'darwin')
+                with self.assertRaisesRegex(ValueError, 'darwin-only verification rejects a rest shard'):
+                    shards.verify_reports(reports[:2], 'darwin')
+                with self.assertRaisesRegex(ValueError, 'missing, duplicate, or unexpected shard'):
+                    shards.verify_reports([reports[0], reports[2]], 'darwin')
+                # A full-coverage gate never accepts the darwin selection.
+                with self.assertRaisesRegex(ValueError, 'exactly one rest shard'):
+                    shards.verify_reports(reports[:1])
+                with self.assertRaisesRegex(ValueError, 'missing, duplicate, or unexpected shard'):
+                    shards.verify_reports(reports)
+                discovered = darwin / 'inventory.json'
+                saved = discovered.read_text()
+                discovered.write_text(json.dumps(dict(json.loads(saved), **{'module/internal/ward':
+                                      missing_family['module/internal/ward']})))
+                with self.assertRaisesRegex(ValueError, 'darwin families not discovered'):
+                    shards.verify_reports(reports[:1], 'darwin')
+                discovered.write_text(saved)
+                execution = reports[0]
+                saved = execution.read_text()
+                narrowed = json.loads(saved)
+                narrowed['inventory']['module/internal/verify'] = []
+                execution.write_text(json.dumps(narrowed))
+                with self.assertRaisesRegex(ValueError, 'darwin shard omitted a package or family'):
+                    shards.verify_reports(reports[:1], 'darwin')
+                execution.write_text(saved)
+                verify = [sys.executable, str(path), 'verify']
+                self.assertEqual(subprocess.run(verify + ['--shards', 'darwin', str(reports[0])],
+                                                capture_output=True).returncode, 0)
+                self.assertNotEqual(subprocess.run(verify + ['--shards', 'darwin', str(reports[1])],
+                                                   capture_output=True).returncode, 0)
+                self.assertNotEqual(subprocess.run(verify + ['--shards', 'bogus', str(reports[0])],
+                                                   capture_output=True).returncode, 0)
 
     def test_cohort_timing_includes_trigger_queues_children_and_attempts(self):
         with tempfile.TemporaryDirectory() as temporary:

@@ -14,6 +14,57 @@ import sys
 
 ROOT = Path(__file__).resolve().parent.parent
 
+# The daemon tests whose behaviour differs on macOS, the only ones a PR runs
+# there; the full rest shard runs on macOS after the merge
+# (devlog/2026-10-24-1255-macos-darwin-selection.md). A package is relative
+# to the daemon module. `families` names top-level tests, or None takes the
+# whole package, which suits only cheap packages. A listed package or family
+# that no longer exists fails the shard: update the list, never drop the check.
+# A new darwin-sensitive test is covered on PRs only once it is listed here.
+DARWIN_SELECTION = [
+    {"package": "internal/atomicfile", "families": None,
+     "reason": "build tag: rename_noreplace_darwin.go"},
+    {"package": "internal/operations", "families": None,
+     "reason": "filesystem: setup resolves /var to /private"},
+    {"package": "cmd/freeside-signet-dev", "families": None,
+     "reason": "filesystem and network: case-folded store path, loopback-only listener"},
+    {"package": "internal/export", "families": None,
+     "reason": "build tag: *_unix_test.go"},
+    {"package": "cmd/freesided", "families": [
+        "TestPairingControlRejectsUnauthorizedPeers",
+        "TestSetupCommandKeepsRegistrationCodeOutOfProcessArgumentsAndOutput",
+        "TestUnderRootAcceptsAPFSFirmlinkAlias", "TestEnvironmentPaths",
+        "TestListenPrivileged", "TestListenPrivilegedAcceptsOnlyTailscaleOwnedAddresses",
+        "TestConnectionModeOfBoundListener", "TestLoopbackTwinAddr", "TestListenLoopbackTwin"],
+     "reason": "build tag (pairing_peer_darwin.go, setup_process_other_test.go), "
+               "filesystem (APFS firmlinks), network (loopback and Tailscale binds)"},
+    {"package": "internal/publish", "families": [
+        "TestNewKeystoreRejectsOverlap", "TestKeystoreWritesStayOutsideStateDir",
+        "TestRejectMaterializationFilesystemCollisions",
+        "TestMaterializationVerificationUsesRootedPaths"],
+     "reason": "filesystem: case-insensitive APFS and rooted paths"},
+    {"package": "internal/verify", "families": [
+        "TestMaterializeRejectsCaseFoldingSymlinkCollision"],
+     "reason": "filesystem: case-insensitive APFS"},
+    {"package": "internal/importer", "families": [
+        "TestDetectCollisions", "TestDetectCollisionsFileDirectory",
+        "TestFoldedComponentsFullCaseFold", "TestDetectCollisionsFullFold",
+        "TestDetectCollisionsIgnoresModifies", "TestDetectCollisionsDeterministicPartner",
+        "TestImportCaseCollisionBlocksNothingButFlags",
+        "TestCommitPlanPreboundsCaseFoldedDuplicateKeys",
+        "TestManifestEntryCountCaseInsensitive"],
+     "reason": "filesystem: case-insensitive APFS collision checks"},
+    {"package": "internal/ward", "families": [
+        "TestConnectProxyRegistryRequiresPublicAddresses", "TestPublicUnicast",
+        "TestConnectProxyClientSubnetAdmission",
+        "TestPromptScriptsHandleFreshVolumeAndRejectUnexpectedContents",
+        "TestComposeClaudeInstructionsUsesRootedPaths", "TestStageSeedSourceUsesRootedPaths"],
+     "reason": "network (egress.go bind rules), filesystem (runtime.GOOS path branches)"},
+    {"package": "internal/exec/claude", "families": [
+        "TestRuntimeDependencyCleanupDoesNotFollowReplacementSymlink"],
+     "reason": "filesystem: the non-Linux mv branch"},
+]
+
 
 def require(condition, message):
     if not condition:
@@ -49,19 +100,51 @@ def discovery_events(events, packages):
     return inventory
 
 
-def discover(go, daemon, integration_only=False, *, packages=None, rest_only=False):
+def discover(go, daemon, integration_only=False, *, packages=None, rest_only=False, only=None):
     packages = list_packages(go, daemon) if packages is None else packages
     if integration_only:
         packages = [p for p in packages if p.endswith("/internal/integration")]
         require(len(packages) == 1, "missing or ambiguous integration package")
     if rest_only:
         packages = [p for p in packages if not p.endswith("/internal/integration")]
+    if only is not None:
+        require(set(only) <= set(packages), "discovery selection names an unknown package")
+        packages = list(only)
     require(packages, "empty discovery selection")
+    subset = integration_only or rest_only or only is not None
     listing = subprocess.check_output(
-        [go, "test", "-json", "-list", "."] + (packages if integration_only or rest_only else ["./..."]),
+        [go, "test", "-json", "-list", "."] + (packages if subset else ["./..."]),
         cwd=daemon, text=True
     )
     return discovery_events((json.loads(line) for line in listing.splitlines()), packages)
+
+
+def darwin_packages(packages):
+    """Map each DARWIN_SELECTION entry to its import path and families."""
+    selection = {}
+    for entry in DARWIN_SELECTION:
+        matches = [p for p in packages if p.endswith("/" + entry["package"])]
+        require(len(matches) == 1, f"missing or ambiguous darwin package: {entry['package']}")
+        # A repeated entry would silently replace the earlier one's families.
+        require(matches[0] not in selection, f"duplicate darwin package: {entry['package']}")
+        selection[matches[0]] = entry["families"]
+    return selection
+
+
+def darwin_families(selection, inventory):
+    selected = {}
+    for package, families in selection.items():
+        if families is None:
+            selected[package] = inventory[package]
+            continue
+        missing = sorted(set(families) - set(inventory[package]))
+        require(not missing, f"darwin families not discovered in {package}: {', '.join(missing)}")
+        selected[package] = sorted(families)
+    return selected
+
+
+def run_pattern(names):
+    return "^(" + "|".join(re.escape(n) for n in names) + ")$"
 
 
 def partition(names, count, weights):
@@ -133,8 +216,8 @@ def run(args):
     require(args.count > 0 and 1 <= args.index <= args.count, "invalid shard index/count")
     require(args.integration_count is None or args.integration_count > 0,
             "integration shard count must be positive")
-    require(args.kind != "rest" or (args.index, args.count) == (1, 1),
-            "rest shard requires index=1 and count=1")
+    require(args.kind == "integration" or (args.index, args.count) == (1, 1),
+            f"{args.kind} shard requires index=1 and count=1")
     require(args.kind != "integration" or args.integration_count in (None, args.count),
             "conflicting integration shard counts")
     directory = args.evidence_dir
@@ -144,8 +227,10 @@ def run(args):
         (directory / "execution.json").unlink(missing_ok=True)
     packages = list_packages(args.go, args.daemon)
     write_json(directory, "packages.json", packages)
+    darwin = darwin_packages(packages) if args.kind == "darwin" else None
     inventory = discover(args.go, args.daemon, args.kind == "integration",
-                         packages=packages, rest_only=args.kind == "rest")
+                         packages=packages, rest_only=args.kind == "rest",
+                         only=list(darwin) if args.kind == "darwin" else None)
     integration = [p for p in packages if p.endswith("/internal/integration")]
     require(len(integration) == 1, "missing or ambiguous integration package")
     package = integration[0]
@@ -154,29 +239,45 @@ def run(args):
     if args.kind == "integration":
         weights = json.loads(args.weights.read_text())
         bins = partition(inventory[package], count, weights)
-    selected = {package: bins[args.index - 1]} if args.kind == "integration" else inventory
+        selected = {package: bins[args.index - 1]}
+    elif args.kind == "darwin":
+        selected = darwin_families(darwin, inventory)
+    else:
+        selected = inventory
     require(selected, "empty package selection")
     write_json(directory, "inventory.json", inventory)
     write_json(directory, "partition.json", {"count": count, "integration": bins})
-    command = [args.go, "test", "-json", "-count=1"]
+    base = [args.go, "test", "-json", "-count=1"]
     if args.kind == "integration":
-        command += ["-run", "^(" + "|".join(re.escape(n) for n in selected[package]) + ")$"]
-    command += list(selected)
+        commands = [base + ["-run", run_pattern(selected[package]), package]]
+    elif args.kind == "darwin":
+        # One -run applies to every package in a command, and accounting
+        # rejects an unselected family, so each filtered package runs alone.
+        whole = [p for p, families in darwin.items() if families is None]
+        commands = ([base + whole] if whole else []) + [
+            base + ["-run", run_pattern(selected[p]), p]
+            for p, families in darwin.items() if families is not None]
+    else:
+        commands = [base + list(selected)]
     print(f"shard {args.kind} {args.index}/{args.count}: {len(selected)} packages", file=sys.stderr)
     evidence = (directory / "tests.jsonl").open("w") if directory else None
     events = []
     invalid = None
+    code = 0
     try:
-        with subprocess.Popen(command, cwd=args.daemon, stdout=subprocess.PIPE, text=True) as child:
-            for line in child.stdout:
-                sys.stdout.write(line)
-                if evidence:
-                    evidence.write(line)
-                try:
-                    events.append(json.loads(line))
-                except ValueError as error:
-                    invalid = error
-            code = child.wait()
+        for command in commands:
+            with subprocess.Popen(command, cwd=args.daemon, stdout=subprocess.PIPE, text=True) as child:
+                for line in child.stdout:
+                    sys.stdout.write(line)
+                    if evidence:
+                        evidence.write(line)
+                    try:
+                        events.append(json.loads(line))
+                    except ValueError as error:
+                        invalid = error
+                code = child.wait()
+            if code:
+                break
     finally:
         if evidence:
             evidence.close()
@@ -185,7 +286,7 @@ def run(args):
     require(invalid is None, "malformed JSON execution output")
     report = account(events, selected)
     report.update({"kind": args.kind, "index": args.index, "count": args.count,
-                   "integration_count": count, "command": command, "inventory": selected})
+                   "integration_count": count, "commands": commands, "inventory": selected})
     write_json(directory, "execution.json", report)
     print(f"accounted for {len(report['cases'])} default test cases", file=sys.stderr)
     return 0
@@ -230,24 +331,27 @@ def latest_attempts(paths):
 
 
 def verify_reports(paths, shards="all"):
-    # A platform's shard set is declared by the workflow: PRs run the rest
-    # shard alone on macOS and a push to main runs the integration shards
-    # alone there, so each gate verifies full coverage of its declared set
-    # and still rejects a shard outside it.
-    require(shards in ("all", "rest", "integration"), "invalid shard selection")
+    # A platform's shard set is declared by the workflow: PRs run the darwin
+    # selection alone on macOS and a push to main runs every shard there, so
+    # each gate verifies full coverage of its declared set and still rejects
+    # a shard outside it.
+    require(shards in ("all", "rest", "integration", "darwin"), "invalid shard selection")
     require(paths, "missing shard reports")
     paths, reports = latest_attempts(paths)
     rest = [r for r in reports if r["kind"] == "rest"]
-    if shards == "integration":
-        require(not rest, "integration-only verification rejects a rest shard")
+    if shards in ("integration", "darwin"):
+        require(not rest, f"{shards}-only verification rejects a rest shard")
         count = reports[0]["integration_count"]
     else:
         require(len(rest) == 1, "require exactly one rest shard")
         count = rest[0]["integration_count"]
     require(type(count) is int and count > 0, "invalid integration count")
-    expected = [("rest", 1, 1)] if shards != "integration" else []
-    if shards != "rest":
-        expected += [("integration", i, count) for i in range(1, count + 1)]
+    if shards == "darwin":
+        expected = [("darwin", 1, 1)]
+    else:
+        expected = [("rest", 1, 1)] if shards != "integration" else []
+        if shards != "rest":
+            expected += [("integration", i, count) for i in range(1, count + 1)]
     require(Counter((r["kind"], r["index"], r["count"]) for r in reports) == Counter(expected),
             "missing, duplicate, or unexpected shard")
     packages = read_json(paths[0].parent / "packages.json")
@@ -278,6 +382,10 @@ def verify_reports(paths, shards="all"):
         if report["kind"] == "rest":
             require(set(discovered) == set(packages) - {package} and selected == discovered,
                     "rest shard omitted a package or family")
+        elif report["kind"] == "darwin":
+            darwin = darwin_packages(packages)
+            require(set(discovered) == set(darwin) and selected == darwin_families(darwin, discovered),
+                    "darwin shard omitted a package or family")
         else:
             require(set(discovered) == {package}, "invalid integration inventory")
             assignment = read_json(directory / "partition.json")
@@ -299,7 +407,10 @@ def verify_reports(paths, shards="all"):
             require(key not in cases, "duplicate shard case")
             cases[key] = case["outcome"]
     require(all(p == partitions[0] for p in partitions), "inconsistent shard partitions")
-    covered = {"all": set(packages), "rest": set(packages) - {package}, "integration": {package}}[shards]
+    if shards == "darwin":
+        covered = set(darwin_packages(packages))
+    else:
+        covered = {"all": set(packages), "rest": set(packages) - {package}, "integration": {package}}[shards]
     require(set(inventory) == covered, "missing package discovery")
     print(f"PASS: accounted for {len(cases)} cases in {len(packages)} packages")
     return inventory, cases, identity
@@ -358,7 +469,7 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     commands = parser.add_subparsers(dest="command", required=True)
     shard = commands.add_parser("run")
-    shard.add_argument("--kind", choices=("rest", "integration"), required=True)
+    shard.add_argument("--kind", choices=("rest", "integration", "darwin"), required=True)
     shard.add_argument("--index", type=int, required=True, help="one-based shard index")
     shard.add_argument("--count", type=int, required=True)
     shard.add_argument("--integration-count", type=int)
@@ -370,7 +481,7 @@ def main():
     comparison.add_argument("--baseline", type=Path, required=True)
     comparison.add_argument("reports", type=Path, nargs="+")
     verification = commands.add_parser("verify")
-    verification.add_argument("--shards", choices=("all", "rest", "integration"), default="all",
+    verification.add_argument("--shards", choices=("all", "rest", "integration", "darwin"), default="all",
                               help="the shard set the workflow declares for this gate")
     verification.add_argument("reports", type=Path, nargs="+")
     identity = commands.add_parser("metadata")
