@@ -17,6 +17,7 @@ import (
 	"github.com/freeside-ai/freeside/daemon/internal/golden"
 	"github.com/freeside-ai/freeside/daemon/internal/publish"
 	"github.com/freeside-ai/freeside/daemon/internal/store"
+	"github.com/freeside-ai/freeside/daemon/internal/store/storetest"
 )
 
 // fixtureTokenValue must match testdata/token-response.json.
@@ -427,16 +428,7 @@ func TestMintRejectsRegistrationChangeAfterResolution(t *testing.T) {
 // pooled :memory: DSN would give each connection its own database).
 func newTestStore(t *testing.T) *store.Store {
 	t.Helper()
-	s, err := store.Open(context.Background(), filepath.Join(t.TempDir(), "store.db"), store.Options{})
-	if err != nil {
-		t.Fatalf("store.Open: %v", err)
-	}
-	t.Cleanup(func() {
-		if err := s.Close(); err != nil {
-			t.Errorf("store.Close: %v", err)
-		}
-	})
-	return s
+	return storetest.Open(t, filepath.Join(t.TempDir(), "store.db"), store.Options{})
 }
 
 // TestStoreRecorder drives a full mint through the production audit
@@ -510,10 +502,7 @@ func TestStoreRecorderFailsClosed(t *testing.T) {
 	})
 	defer srv.Close()
 
-	s, err := store.Open(context.Background(), filepath.Join(t.TempDir(), "store.db"), store.Options{})
-	if err != nil {
-		t.Fatalf("store.Open: %v", err)
-	}
+	s := storetest.Open(t, filepath.Join(t.TempDir(), "store.db"), store.Options{})
 	rec, err := publish.NewStoreRecorder(s)
 	if err != nil {
 		t.Fatalf("NewStoreRecorder: %v", err)

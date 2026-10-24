@@ -14,6 +14,7 @@ import (
 	"github.com/freeside-ai/freeside/daemon/internal/domain"
 	"github.com/freeside-ai/freeside/daemon/internal/publish"
 	"github.com/freeside-ai/freeside/daemon/internal/store"
+	"github.com/freeside-ai/freeside/daemon/internal/store/storetest"
 )
 
 // The kill-test matrix (issue #82 acceptance 1, plan §5.9). Each test
@@ -60,10 +61,7 @@ func (g *fakeGitHub) failOnce(method, pathSubstr string) {
 // the live opt-in path reuse it.
 func openKillHarness(t *testing.T, dbPath string, client *http.Client, baseURL string, ts publish.TokenSource) (*store.Store, *publish.Publisher) {
 	t.Helper()
-	s, err := store.Open(context.Background(), dbPath, store.Options{})
-	if err != nil {
-		t.Fatalf("store.Open: %v", err)
-	}
+	s := storetest.Open(t, dbPath, store.Options{})
 	ledger, err := publish.NewStoreLedger(s)
 	if err != nil {
 		t.Fatalf("NewStoreLedger: %v", err)

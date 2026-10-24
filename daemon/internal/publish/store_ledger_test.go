@@ -12,6 +12,7 @@ import (
 	"github.com/freeside-ai/freeside/daemon/internal/contentaddr"
 	"github.com/freeside-ai/freeside/daemon/internal/publish"
 	"github.com/freeside-ai/freeside/daemon/internal/store"
+	"github.com/freeside-ai/freeside/daemon/internal/store/storetest"
 )
 
 // TestStoreLedgerRecordsIntent drives an intent through the production
@@ -87,15 +88,7 @@ func TestStoreLedgerAuthenticatesCommittedIntentFormat(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
 	path := filepath.Join(t.TempDir(), "store.db")
-	s, err := store.Open(ctx, path, store.Options{})
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() {
-		if err := s.Close(); err != nil {
-			t.Errorf("close store: %v", err)
-		}
-	})
+	s := storetest.Open(t, path, store.Options{})
 	ledger, err := publish.NewStoreLedger(s)
 	if err != nil {
 		t.Fatal(err)

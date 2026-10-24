@@ -17,6 +17,7 @@ import (
 
 	"github.com/freeside-ai/freeside/daemon/internal/publish"
 	"github.com/freeside-ai/freeside/daemon/internal/store"
+	"github.com/freeside-ai/freeside/daemon/internal/store/storetest"
 )
 
 // The forge records credential effects in order and uses the same injected
@@ -114,15 +115,7 @@ type holdFixture struct {
 func newHoldFixture(t *testing.T, f *heldTokenForge) *holdFixture {
 	t.Helper()
 	dbPath := filepath.Join(t.TempDir(), "store.db")
-	st, err := store.Open(context.Background(), dbPath, store.Options{})
-	if err != nil {
-		t.Fatalf("store.Open: %v", err)
-	}
-	t.Cleanup(func() {
-		if err := st.Close(); err != nil {
-			t.Errorf("store.Close: %v", err)
-		}
-	})
+	st := storetest.Open(t, dbPath, store.Options{})
 	recorder, err := publish.NewStoreRecorder(st)
 	if err != nil {
 		t.Fatal(err)

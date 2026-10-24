@@ -13,6 +13,7 @@ import (
 
 	"github.com/freeside-ai/freeside/daemon/internal/domain"
 	"github.com/freeside-ai/freeside/daemon/internal/store"
+	"github.com/freeside-ai/freeside/daemon/internal/store/storetest"
 )
 
 // TestOnlyGitNetImportsExec pins the process-boundary discipline the
@@ -149,15 +150,7 @@ func TestOnlyApprovedStreamingReaders(t *testing.T) {
 func TestFinalizeRejectsSubstitutedIntentCoordinates(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
-	s, err := store.Open(ctx, filepath.Join(t.TempDir(), "store.db"), store.Options{})
-	if err != nil {
-		t.Fatalf("store.Open: %v", err)
-	}
-	t.Cleanup(func() {
-		if err := s.Close(); err != nil {
-			t.Errorf("store.Close: %v", err)
-		}
-	})
+	s := storetest.Open(t, filepath.Join(t.TempDir(), "store.db"), store.Options{})
 
 	authorizationID := domain.Digest("sha256:" + strings.Repeat("a", 64))
 	candidate := Candidate{
