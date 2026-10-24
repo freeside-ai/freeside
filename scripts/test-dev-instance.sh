@@ -7,8 +7,10 @@
 # readiness.json into its -state-dir; `xcodebuild` writes a fake FreesideMac
 # bundle whose executable records its arguments and FREESIDE_ENV; `uname`
 # reports the platform the case chooses, so the app path runs on Linux CI.
-# The cases cover the daemon and app arguments, the printed root and URL,
-# --no-seed, --daemon-only, cleanup of both processes and the root on SIGTERM
+# The fake freesided also answers `submit`, recording its arguments and
+# printing a task id. The cases cover the daemon and app arguments, the
+# printed root and URL, --no-seed, --daemon-only, --scenario and its
+# submission, cleanup of both processes and the root on SIGTERM
 # (also when a second one arrives mid-cleanup), on an early daemon exit, and
 # when the app quits, and the refusals that
 # create nothing. SIGINT is not driven: a background job in a non-interactive
@@ -63,6 +65,15 @@ done
 mkdir -p "$(dirname "$out")"
 cat >"$out" <<'DAEMON'
 #!/usr/bin/env bash
+if [[ "${1:-}" == submit ]]; then
+  printf '%s\n' "$@" >"$STUB_DIR/submit.args"
+  if [[ "${FAKE_SUBMIT_MODE:-}" == fail ]]; then
+    echo 'fake freesided: submission refused' >&2
+    exit 1
+  fi
+  printf '{"submission_id":"S1","task_id":"task-scenario","run_id":"run-1"}\n'
+  exit 0
+fi
 printf '%s\n' "$@" >"$STUB_DIR/daemon.args"
 printf '%s\n' "$$" >"$STUB_DIR/daemon.pid"
 state=''
@@ -282,6 +293,51 @@ assert_rc 143
 assert_not_exists "$CASE_DIR/xcodebuild.log"
 assert_not_exists "$CASE_DIR/app.args"
 assert_stopped "$CASE_DIR/daemon.pid"
+assert_no_roots "$REPO"
+
+begin_case "--scenario runs the scenario driver and submits its task"
+REPO=$CASE_DIR/repo
+make_repo "$REPO"
+start_instance "$REPO" --daemon-only --scenario clean
+if wait_for "$CASE_DIR/stdout" '^task='; then ok; else report_failure "never printed the task"; fi
+root=$(sed -n 's/^root=//p' "$CASE_DIR/stdout")
+assert_line "$CASE_DIR/stdout" 'task=task-scenario'
+assert_line "$CASE_DIR/daemon.args" '-driver'
+assert_line "$CASE_DIR/daemon.args" 'scenario'
+assert_line "$CASE_DIR/daemon.args" '-scenario'
+assert_line "$CASE_DIR/daemon.args" 'clean'
+assert_line "$CASE_DIR/daemon.args" 'ephemeral'
+assert_no_line "$CASE_DIR/daemon.args" '-seed-fixture'
+assert_line "$CASE_DIR/submit.args" 'submit'
+assert_line "$CASE_DIR/submit.args" "$root/daemon/freeside.db"
+assert_line "$CASE_DIR/submit.args" "$root/daemon/scenario/task.md"
+assert_line "$CASE_DIR/submit.args" "$root/daemon/scenario/policy.json"
+assert_line "$CASE_DIR/submit.args" "$root/daemon/scenario/publication.json"
+assert_line "$CASE_DIR/submit.args" "$root/daemon/scenario/work-unit.json"
+assert_line "$CASE_DIR/submit.args" 'project-scenario'
+kill -TERM "$INSTANCE_PID"
+finish_instance
+assert_rc 143
+assert_stopped "$CASE_DIR/daemon.pid"
+assert_no_roots "$REPO"
+
+begin_case "a refused scenario submission fails, stops the daemon, and removes the root"
+REPO=$CASE_DIR/repo
+make_repo "$REPO"
+FAKE_SUBMIT_MODE=fail run_instance "$REPO" --daemon-only --scenario clean
+assert_rc 1
+assert_contains "scenario submission failed"
+assert_contains "fake freesided: submission refused"
+assert_stopped "$CASE_DIR/daemon.pid"
+assert_no_roots "$REPO"
+
+begin_case "--scenario without a name is a usage error"
+REPO=$CASE_DIR/repo
+make_repo "$REPO"
+run_instance "$REPO" --daemon-only --scenario
+assert_rc 2
+assert_contains "usage: dev-instance.sh"
+assert_not_exists "$CASE_DIR/go.log"
 assert_no_roots "$REPO"
 
 begin_case "an early daemon exit fails, shows the log, and removes the root"
