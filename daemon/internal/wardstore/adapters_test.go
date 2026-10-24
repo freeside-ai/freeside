@@ -15,6 +15,7 @@ import (
 	"github.com/freeside-ai/freeside/daemon/internal/exec"
 	"github.com/freeside-ai/freeside/daemon/internal/signet"
 	"github.com/freeside-ai/freeside/daemon/internal/store"
+	"github.com/freeside-ai/freeside/daemon/internal/store/storetest"
 	"github.com/freeside-ai/freeside/daemon/internal/ward"
 	"github.com/freeside-ai/freeside/daemon/internal/wardstore"
 )
@@ -23,10 +24,7 @@ func TestAdaptersRoundTripAcrossStoreReopen(t *testing.T) {
 	ctx := context.Background()
 	path := filepath.Join(t.TempDir(), "freeside.db")
 	at := time.Date(2026, 7, 28, 12, 0, 0, 0, time.UTC)
-	st, err := store.Open(ctx, path, store.Options{})
-	if err != nil {
-		t.Fatalf("store.Open: %v", err)
-	}
+	st := storetest.Open(t, path, store.Options{})
 	identity := domain.AuthIdentity{
 		ID: "auth-1", Provider: "claude", AuthStoreMutationLease: true,
 		MaxParallelExecutions: 1,
@@ -73,11 +71,7 @@ func TestAdaptersRoundTripAcrossStoreReopen(t *testing.T) {
 		t.Fatalf("close first store: %v", err)
 	}
 
-	reopened, err := store.Open(ctx, path, store.Options{})
-	if err != nil {
-		t.Fatalf("reopen store: %v", err)
-	}
-	t.Cleanup(func() { _ = reopened.Close() })
+	reopened := storetest.Open(t, path, store.Options{})
 	adapters, err = wardstore.New(reopened)
 	if err != nil {
 		t.Fatalf("wardstore.New(reopened): %v", err)
@@ -134,11 +128,7 @@ func TestAdaptersRoundTripAcrossStoreReopen(t *testing.T) {
 func TestLeaserHeldMutationBlocksExpiredTakeoverUntilFilesystemMutationReturns(t *testing.T) {
 	ctx := context.Background()
 	path := filepath.Join(t.TempDir(), "freeside.db")
-	st, err := store.Open(ctx, path, store.Options{})
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { _ = st.Close() })
+	st := storetest.Open(t, path, store.Options{})
 	at := time.Date(2026, 8, 11, 20, 0, 0, 0, time.UTC)
 	identity := domain.AuthIdentity{
 		ID: "codex-atomic-mutation", Provider: "openai", AuthStoreMutationLease: true, MaxParallelExecutions: 1,
@@ -153,11 +143,7 @@ func TestLeaserHeldMutationBlocksExpiredTakeoverUntilFilesystemMutationReturns(t
 	if err != nil {
 		t.Fatal(err)
 	}
-	contenderStore, err := store.Open(ctx, path, store.Options{})
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { _ = contenderStore.Close() })
+	contenderStore := storetest.Open(t, path, store.Options{})
 	contenderAdapters, err := wardstore.New(contenderStore)
 	if err != nil {
 		t.Fatal(err)
@@ -224,11 +210,7 @@ func TestLeaserHeldMutationBlocksExpiredTakeoverUntilFilesystemMutationReturns(t
 func TestJournalMapsMissingRecordToWardSentinel(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
-	st, err := store.Open(ctx, filepath.Join(t.TempDir(), "freeside.db"), store.Options{})
-	if err != nil {
-		t.Fatalf("store.Open: %v", err)
-	}
-	t.Cleanup(func() { _ = st.Close() })
+	st := storetest.Open(t, filepath.Join(t.TempDir(), "freeside.db"), store.Options{})
 	adapters, err := wardstore.New(st)
 	if err != nil {
 		t.Fatalf("wardstore.New: %v", err)
@@ -242,10 +224,7 @@ func TestJournalMapsMissingRecordToWardSentinel(t *testing.T) {
 func TestCodexReviewJournalRoundTripsLifecycleAcrossStoreReopen(t *testing.T) {
 	ctx := context.Background()
 	path := filepath.Join(t.TempDir(), "freeside.db")
-	st, err := store.Open(ctx, path, store.Options{})
-	if err != nil {
-		t.Fatal(err)
-	}
+	st := storetest.Open(t, path, store.Options{})
 	adapters, err := wardstore.New(st)
 	if err != nil {
 		t.Fatal(err)
@@ -377,11 +356,7 @@ func TestCodexReviewJournalRoundTripsLifecycleAcrossStoreReopen(t *testing.T) {
 	if err := st.Close(); err != nil {
 		t.Fatal(err)
 	}
-	reopened, err := store.Open(ctx, path, store.Options{})
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { _ = reopened.Close() })
+	reopened := storetest.Open(t, path, store.Options{})
 	adapters, err = wardstore.New(reopened)
 	if err != nil {
 		t.Fatal(err)
@@ -415,10 +390,7 @@ func TestCodexReviewJournalRoundTripsLifecycleAcrossStoreReopen(t *testing.T) {
 // gate) refuses it and nothing unresolvable reaches the durable store.
 func TestPutCodexReviewOutcomeRefusesUnresolvableEvidence(t *testing.T) {
 	ctx := context.Background()
-	st, err := store.Open(ctx, filepath.Join(t.TempDir(), "freeside.db"), store.Options{})
-	if err != nil {
-		t.Fatal(err)
-	}
+	st := storetest.Open(t, filepath.Join(t.TempDir(), "freeside.db"), store.Options{})
 	adapters, err := wardstore.New(st)
 	if err != nil {
 		t.Fatal(err)
@@ -450,11 +422,7 @@ func TestPutCodexReviewOutcomeRefusesUnresolvableEvidence(t *testing.T) {
 
 func TestLeaserExcludesConcurrentHolderAndMapsEndedWindow(t *testing.T) {
 	ctx := context.Background()
-	st, err := store.Open(ctx, filepath.Join(t.TempDir(), "freeside.db"), store.Options{})
-	if err != nil {
-		t.Fatalf("store.Open: %v", err)
-	}
-	t.Cleanup(func() { _ = st.Close() })
+	st := storetest.Open(t, filepath.Join(t.TempDir(), "freeside.db"), store.Options{})
 	at := time.Date(2026, 7, 28, 12, 0, 0, 0, time.UTC)
 	identity := domain.AuthIdentity{
 		ID: "auth-1", Provider: "claude", AuthStoreMutationLease: true,
@@ -489,11 +457,7 @@ func TestLeaserExcludesConcurrentHolderAndMapsEndedWindow(t *testing.T) {
 
 func TestEnrollmentAdapterCreatesExclusiveRecoverableOperation(t *testing.T) {
 	ctx := context.Background()
-	st, err := store.Open(ctx, filepath.Join(t.TempDir(), "freeside.db"), store.Options{})
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { _ = st.Close() })
+	st := storetest.Open(t, filepath.Join(t.TempDir(), "freeside.db"), store.Options{})
 	adapters, err := wardstore.New(st)
 	if err != nil {
 		t.Fatal(err)
@@ -560,11 +524,7 @@ func TestEnrollmentAdapterCreatesExclusiveRecoverableOperation(t *testing.T) {
 
 func TestEnrollmentAdapterRefusesChangedIdentityBindings(t *testing.T) {
 	ctx := context.Background()
-	st, err := store.Open(ctx, filepath.Join(t.TempDir(), "freeside.db"), store.Options{})
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { _ = st.Close() })
+	st := storetest.Open(t, filepath.Join(t.TempDir(), "freeside.db"), store.Options{})
 	adapters, err := wardstore.New(st)
 	if err != nil {
 		t.Fatal(err)
@@ -597,11 +557,7 @@ func TestNewRejectsNilStore(t *testing.T) {
 func TestCodexAuthStateIsIdentityScopedAndAdvisory(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
-	st, err := store.Open(ctx, filepath.Join(t.TempDir(), "freeside.db"), store.Options{})
-	if err != nil {
-		t.Fatalf("store.Open: %v", err)
-	}
-	t.Cleanup(func() { _ = st.Close() })
+	st := storetest.Open(t, filepath.Join(t.TempDir(), "freeside.db"), store.Options{})
 	adapters, err := wardstore.New(st)
 	if err != nil {
 		t.Fatalf("wardstore.New: %v", err)
@@ -707,11 +663,7 @@ func TestCodexAuthStateIsIdentityScopedAndAdvisory(t *testing.T) {
 
 func TestCodexAuthStateRequiresVerifiedCommandBackedRecovery(t *testing.T) {
 	ctx := context.Background()
-	st, err := store.Open(ctx, filepath.Join(t.TempDir(), "freeside.db"), store.Options{})
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { _ = st.Close() })
+	st := storetest.Open(t, filepath.Join(t.TempDir(), "freeside.db"), store.Options{})
 	adapters, err := wardstore.New(st)
 	if err != nil {
 		t.Fatal(err)
@@ -854,11 +806,7 @@ func TestCodexAuthStateRequiresVerifiedCommandBackedRecovery(t *testing.T) {
 
 func TestFailedCodexReenrollmentCannotProjectOrClearAdmission(t *testing.T) {
 	ctx := context.Background()
-	st, err := store.Open(ctx, filepath.Join(t.TempDir(), "freeside.db"), store.Options{})
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { _ = st.Close() })
+	st := storetest.Open(t, filepath.Join(t.TempDir(), "freeside.db"), store.Options{})
 	adapters, err := wardstore.New(st)
 	if err != nil {
 		t.Fatal(err)
@@ -917,11 +865,7 @@ func TestFailedCodexReenrollmentCannotProjectOrClearAdmission(t *testing.T) {
 
 func TestCodexReenrollmentOperationCannotCrossMarkerOccurrences(t *testing.T) {
 	ctx := context.Background()
-	st, err := store.Open(ctx, filepath.Join(t.TempDir(), "freeside.db"), store.Options{})
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { _ = st.Close() })
+	st := storetest.Open(t, filepath.Join(t.TempDir(), "freeside.db"), store.Options{})
 	adapters, err := wardstore.New(st)
 	if err != nil {
 		t.Fatal(err)
@@ -1031,11 +975,7 @@ func TestCodexReenrollmentOperationCannotCrossMarkerOccurrences(t *testing.T) {
 // made here rather than silently inherited by the explicit close list.
 func TestCodexReviewIntentTransitionFromStates(t *testing.T) {
 	ctx := context.Background()
-	st, err := store.Open(ctx, filepath.Join(t.TempDir(), "freeside.db"), store.Options{})
-	if err != nil {
-		t.Fatalf("store.Open: %v", err)
-	}
-	t.Cleanup(func() { _ = st.Close() })
+	st := storetest.Open(t, filepath.Join(t.TempDir(), "freeside.db"), store.Options{})
 	adapters, err := wardstore.New(st)
 	if err != nil {
 		t.Fatalf("wardstore.New: %v", err)
@@ -1154,11 +1094,7 @@ func TestCodexReviewIntentTransitionFromStates(t *testing.T) {
 // back, and a release after the window maps to the ward's ended sentinel.
 func TestReadHoldAdaptersShareIdentityAndExcludeTheLease(t *testing.T) {
 	ctx := context.Background()
-	st, err := store.Open(ctx, filepath.Join(t.TempDir(), "freeside.db"), store.Options{})
-	if err != nil {
-		t.Fatalf("store.Open: %v", err)
-	}
-	t.Cleanup(func() { _ = st.Close() })
+	st := storetest.Open(t, filepath.Join(t.TempDir(), "freeside.db"), store.Options{})
 	at := time.Date(2026, 9, 29, 12, 0, 0, 0, time.UTC)
 	identity := domain.AuthIdentity{
 		ID: "auth-1", Provider: "claude", AuthStoreMutationLease: true,

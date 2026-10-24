@@ -15,6 +15,7 @@ import (
 	"github.com/freeside-ai/freeside/daemon/internal/contentaddr"
 	"github.com/freeside-ai/freeside/daemon/internal/domain"
 	"github.com/freeside-ai/freeside/daemon/internal/store"
+	"github.com/freeside-ai/freeside/daemon/internal/store/storetest"
 	"github.com/freeside-ai/freeside/daemon/internal/ward"
 	"github.com/freeside-ai/freeside/daemon/internal/wardstore"
 )
@@ -65,13 +66,8 @@ type codexEnrollmentRig struct {
 
 func newCodexEnrollmentRig(t *testing.T, account string, request *ward.CodexClientEnrollmentRequest) codexEnrollmentRig {
 	t.Helper()
-	ctx := context.Background()
 	root := t.TempDir()
-	st, err := store.Open(ctx, filepath.Join(root, "freeside.db"), store.Options{})
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { _ = st.Close() })
+	st := storetest.Open(t, filepath.Join(root, "freeside.db"), store.Options{})
 	adapters, err := wardstore.New(st)
 	if err != nil {
 		t.Fatal(err)
@@ -539,11 +535,7 @@ func TestClaudeEnrollmentBeginRefusesEnablingAnEnrolledIdentity(t *testing.T) {
 
 func openEnrollmentStore(t *testing.T) (*store.Store, *wardstore.Adapters) {
 	t.Helper()
-	st, err := store.Open(context.Background(), filepath.Join(t.TempDir(), "freeside.db"), store.Options{})
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { _ = st.Close() })
+	st := storetest.Open(t, filepath.Join(t.TempDir(), "freeside.db"), store.Options{})
 	adapters, err := wardstore.New(st)
 	if err != nil {
 		t.Fatal(err)
