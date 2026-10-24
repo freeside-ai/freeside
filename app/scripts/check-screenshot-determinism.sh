@@ -120,7 +120,9 @@ run_log build swift test --package-path "$ROOT/app" --only-use-versions-from-res
 
 # #1698 surfaces; replace these only with keys from the current supported
 # primary-surface manifest. Supplemental fixtures are not probe inputs.
-KEYS='decision-execution_failure-xsmall,decision-ready_for_final_review-inspector-xsmall,decision-ready_for_final_review-inspector-xxxlarge,attachment-states-ax1,attachment-states-ax5,message-composer-ax3,tasks-names-light-standard-large,tasks-names-light-increased-large,task-progress-0-390-light-large,task-progress-0-390-dark-large,task-history-revised-390-light-xsmall,new-task-sheet-phone-ax5'
+# The xsmall keys moved to large and the ax3 key to ax5 when the
+# comparison matrix dropped those sizes (#2250).
+KEYS='decision-execution_failure-large,decision-ready_for_final_review-inspector-large,decision-ready_for_final_review-inspector-xxxlarge,attachment-states-ax1,attachment-states-ax5,message-composer-ax5,tasks-names-light-standard-large,tasks-names-light-increased-large,task-progress-0-390-light-large,task-progress-0-390-dark-large,task-history-revised-390-light-large,new-task-sheet-phone-ax5'
 for mode in selected reverse construct render; do
   probe "$mode" "$KEYS" "$mode" || FAILED=1
 done

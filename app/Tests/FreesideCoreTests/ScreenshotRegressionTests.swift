@@ -53,6 +53,33 @@
             TextSize(name: "ax3", value: .accessibility3),
             TextSize(name: "ax5", value: .accessibility5),
         ]
+        /// The sizes `surfacesMatchRecordedPixels` compares a light surface
+        /// at. Every explicit Dynamic Type check in `app/Sources` branches at
+        /// `.xxxLarge` or at the accessibility sizes, so these four reach
+        /// each of those branches; `xsmall` and `ax3` are given up, along
+        /// with any `ViewThatFits` fallback only they would select. The probe
+        /// and `render-surfaces.sh` still take all six `textSizes` (#2250).
+        private static let lightMatrixSizes: Set<String> = ["large", "xxxlarge", "ax1", "ax5"]
+        /// Dark surfaces that also compare at `ax5`. Dark mode changes colour,
+        /// not layout, so a dark surface compares at `large` alone; these keep
+        /// one wrapped-text case per family, where a contrast bug could show
+        /// only at a large size.
+        private static let darkWrappedTextSpecimens: Set<String> = [
+            "inbox-sidebar-dark",
+            "discuss-composer-phone-dark",
+            "new-task-sheet-phone-filled-dark",
+            "run-review-findings-390-dark",
+            "decision-ready-summary-wrapped-collapsed-390-dark",
+            "task-history-390-dark",
+        ]
+
+        /// The text sizes the comparison matrix renders a surface at. Every
+        /// dark size is also a light size, so `lightMatrixSizes` bounds the
+        /// sizes the matrix visits.
+        private static func matrixSizeNames(for name: String, colorScheme: ColorScheme) -> Set<String> {
+            guard colorScheme == .dark else { return lightMatrixSizes }
+            return darkWrappedTextSpecimens.contains(name) ? ["large", "ax5"] : ["large"]
+        }
 
         @Test func screenshotMetricsUseTheirOwnTextStyleBaseline() {
             FreesideFont.$screenshotDynamicTypeSize.withValue(.large) {
@@ -88,16 +115,26 @@
                 #expect(actual.count == expected.count)
                 #expect(
                     Set(actual.values).count > 45,
-                    "The six-size matrix must exercise more than the prior two-state rendering")
+                    "The size matrix must exercise more than the prior two-state rendering")
+                for specimen in Self.darkWrappedTextSpecimens {
+                    // A light surface also renders at ax5, so a dark one is
+                    // the specimen that renders there but not at ax1.
+                    #expect(
+                        actual["\(specimen)-ax5"] != nil && actual["\(specimen)-ax1"] == nil,
+                        "\(specimen) names no dark surface")
+                }
             }
         }
 
         private func captureSurfaces(expected: [String: String], recording: Bool) async throws -> [String: String] {
             var actual: [String: String] = [:]
 
-            for size in textSizes {
+            for size in textSizes where Self.lightMatrixSizes.contains(size.name) {
                 try await FreesideFont.$screenshotDynamicTypeSize.withValue(size.value) {
-                    for surface in try await makeSurfaces(at: size.value) {
+                    for surface in try await makeSurfaces(at: size.value)
+                    where Self.matrixSizeNames(for: surface.name, colorScheme: surface.colorScheme)
+                        .contains(size.name)
+                    {
                         let key = "\(surface.name)-\(size.name)"
                         let image = try await render(
                             surface.view,
@@ -124,7 +161,10 @@
                     for supplemental in [
                         try await makeUnavailableAttachmentSurface(at: size.value),
                         try await makeImageAttachmentSurface(at: size.value),
-                    ] {
+                    ]
+                    where Self.matrixSizeNames(for: supplemental.name, colorScheme: supplemental.colorScheme)
+                        .contains(size.name)
+                    {
                         let key = "\(supplemental.name)-\(size.name)"
                         let image = try await render(
                             supplemental.view,
@@ -355,6 +395,18 @@
                 try validateRecordingOperatingSystem(
                     "macOS-26.6", baselineKey: "macOS-26.7")
             }
+        }
+
+        @Test func matrixSizesCoverEveryLayoutBreakpointButRepeatNone() {
+            #expect(Self.matrixSizeNames(for: "inbox-sidebar", colorScheme: .light) == Self.lightMatrixSizes)
+            #expect(Self.lightMatrixSizes == ["large", "xxxlarge", "ax1", "ax5"])
+            #expect(Self.matrixSizeNames(for: "inbox-dark", colorScheme: .dark) == ["large"])
+            for specimen in Self.darkWrappedTextSpecimens {
+                #expect(Self.matrixSizeNames(for: specimen, colorScheme: .dark) == ["large", "ax5"])
+            }
+            let sizeNames = Set(textSizes.map(\.name))
+            #expect(Self.lightMatrixSizes.isSubset(of: sizeNames))
+            #expect(Self.lightMatrixSizes.isDisjoint(with: ["xsmall", "ax3"]))
         }
 
         /// Mirrors the mock's read-time availability projection so the store's
