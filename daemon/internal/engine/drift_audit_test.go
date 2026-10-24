@@ -21,7 +21,6 @@ import (
 )
 
 const (
-	driftAuditMediumConfidence = `{"verdict":"over_hardened","confidence":"medium","reversals":[{"finding_id":"finding-1","undo":"remove the retry wrapper around the config read","rationale":"the specification reads the config once at start"}],"explanation":"review added defensive work the specification does not need"}`
 	// driftAuditBatchReversal cites the audited round's own finding, which the
 	// site accepts (the round's adjudication names it) and the route gate
 	// refuses.
@@ -31,20 +30,17 @@ const (
 type driftAuditFixtureOptions struct {
 	// policy is merged over the default, which turns the audit on from round 2.
 	policy map[string]string
-	// earlierSeverity is the severity of the round-1 finding whose fix the
-	// scripted audit reverses. The zero value is P2.
-	earlierSeverity domain.FindingSeverity
 	// batchRoute is the audited round's one route. The zero value is the
 	// engine's remediate route; any other leaves the batch without a routed fix.
 	batchRoute domain.AdjudicationRoute
 	// recur makes the audited round's finding recur the fixed round-1 finding,
 	// so the round stops on fixed_recurrence before any audit.
 	recur bool
-	// earlierOverHardened stores an over_hardened audit for round 1.
-	earlierOverHardened bool
 	// noRoundOneInput leaves out round 1's stored remediation input, the only
 	// retained copy of the candidate round 1 reviewed.
 	noRoundOneInput bool
+	// earlierOverHardened stores an over_hardened audit for round 1.
+	earlierOverHardened bool
 }
 
 // driftAuditFixture is a run at review round 2 over a git-backed candidate.
@@ -95,11 +91,7 @@ func newDriftAuditFixture(t *testing.T, options driftAuditFixtureOptions) *drift
 		}
 		policy[key] = value
 	}
-	severity := options.earlierSeverity
-	if severity == "" {
-		severity = domain.FindingSeverityP2
-	}
-	base := newFindingAdjudicationFixtureWithOptions(t, severity,
+	base := newFindingAdjudicationFixtureWithOptions(t, domain.FindingSeverityP2,
 		&domain.FindingLocation{Path: "daemon/a.go", StartLine: 1, EndLine: 1}, "high", "high",
 		findingAdjudicationFixtureOptions{
 			note: "producer=fake/test; fixture", policy: policy,
@@ -731,8 +723,14 @@ func TestDriftAuditAutoRoutesOneSimplificationRound(t *testing.T) {
 	}
 }
 
-// TestDriftAuditOverHardenedParks covers every reason an over_hardened verdict
-// parks instead of routing, with the promise the card then makes.
+// TestDriftAuditOverHardenedParks wires the store's route gate into the parked
+// card: the promise it makes and the decisions it requests. Each reason the
+// gate parks is a row of TestEvaluateDriftAuditRoute in
+// internal/store/drift_route_test.go, so one parked route stands for them here.
+// A second over_hardened verdict stays because only this fixture stores the
+// earlier audit the gate derives that row's input from. The two promise-free
+// cases are the engine's own: the round limit's finish_now decision, and a
+// batch that routes no fix, which the gate does not read.
 func TestDriftAuditOverHardenedParks(t *testing.T) {
 	for _, tc := range []struct {
 		name    string
@@ -748,24 +746,9 @@ func TestDriftAuditOverHardenedParks(t *testing.T) {
 			fake.DriftAuditOverHardened, true, nil,
 		},
 		{
-			"confidence below the threshold",
-			driftAuditFixtureOptions{},
-			driftAuditMediumConfidence, true, nil,
-		},
-		{
-			"reverses a high finding's fix",
-			driftAuditFixtureOptions{earlierSeverity: domain.FindingSeverityP1},
-			fake.DriftAuditOverHardened, true, nil,
-		},
-		{
 			"second over_hardened of the run",
 			driftAuditFixtureOptions{earlierOverHardened: true},
 			fake.DriftAuditOverHardened, true, nil,
-		},
-		{
-			"reverses a finding of the round's own batch",
-			driftAuditFixtureOptions{},
-			driftAuditBatchReversal, false, nil,
 		},
 		{
 			"no review round left",
@@ -813,7 +796,10 @@ func TestDriftAuditOverHardenedParks(t *testing.T) {
 // TestDriftAuditContinueUnderPolicy shows what the human's decision on a
 // drift_audit item runs: the simplification round under human authority only
 // when the card promised one and the action is continue_under_policy, and the
-// action's landed meaning otherwise.
+// action's landed meaning otherwise. One case stands for each (promise, action)
+// outcome: a promise the gate made for any parking reason runs the same way,
+// and a card with no promise, from an invalid list or a stuck verdict, runs an
+// ordinary round.
 func TestDriftAuditContinueUnderPolicy(t *testing.T) {
 	for _, tc := range []struct {
 		name           string
@@ -828,11 +814,6 @@ func TestDriftAuditContinueUnderPolicy(t *testing.T) {
 			fake.DriftAuditOverHardened, domain.ActionContinueUnderPolicy, true,
 		},
 		{
-			"continue on a high finding's reversal",
-			driftAuditFixtureOptions{earlierSeverity: domain.FindingSeverityP1},
-			fake.DriftAuditOverHardened, domain.ActionContinueUnderPolicy, true,
-		},
-		{
 			"apply then finish on a promised simplification",
 			driftAuditFixtureOptions{policy: map[string]string{"review.drift_audit_route": "park"}},
 			fake.DriftAuditOverHardened, domain.ActionApplyThenFinish, false,
@@ -841,11 +822,6 @@ func TestDriftAuditContinueUnderPolicy(t *testing.T) {
 			"continue on an invalid list",
 			driftAuditFixtureOptions{},
 			driftAuditBatchReversal, domain.ActionContinueUnderPolicy, false,
-		},
-		{
-			"continue on a stuck verdict",
-			driftAuditFixtureOptions{},
-			fake.DriftAuditStuck, domain.ActionContinueUnderPolicy, false,
 		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
