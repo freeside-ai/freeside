@@ -189,11 +189,15 @@ its paired endpoint.
 
 ## Rehearse Before The Real Run
 
-An exit run starts with a rehearsal pass: the real run's daemon runs the whole
-pipeline once, unattended, on a disposable target, so a launch, input,
-credential, or publication problem shows up before the operator is involved.
+An exit run starts with a fixture pass: the real run's daemon runs the whole
+pipeline once, unattended, on Freeside's fixture repository and its
+canonical issue, so a launch, input, publication, completion, or alert
+problem shows up before the operator is involved. The pass proves the
+build's workflow, not the real project's settings, models, images, or trust
+profile; preflight checks those against the real project (#2222, #2208).
 The exit-run skill (`.claude/skills/exit-run/SKILL.md`, Rehearse Before The
-Operator) says when a pass counts; this section is the procedure.
+Operator) says when a pass counts; this section is the procedure. Decision
+record: `devlog/2026-10-23-1321-fixture-pass.md`.
 
 **Root and build.** Use a fresh root and a `freesided` built from a clean
 checkout of the SHA the real run will use, with the version flag in
@@ -204,100 +208,135 @@ SHAs build the same `freesided`, and the diff touches no image, `prompts/`,
 or `policy/` source) and the run record names both SHAs and the verdict;
 otherwise the pass runs again on the new tip.
 
-**Settings.** Copy the real run's settings file and change only these keys:
+**The fixture.** The repository is `freeasinbird/freeside-review-challenge`
+(private) and its canonical issue is
+[freeasinbird/freeside-review-challenge#2](https://github.com/freeasinbird/freeside-review-challenge/issues/2),
+a small change sized for a clean review: a review finding or a closure gate
+opens a card only a person can answer, and that stops the pass. The `prod`
+GitHub App is installed there. The daemon reads the private issue with a
+read-only installation token for that repository, so the policy file's
+`research.allowlist` must include `https://api.github.com` ([Configure
+Client Task Submission](../daemon/README.md#configure-client-task-submission)).
 
-| Key | Rehearsal value |
+Reset the fixture before every pass, before its onboarding, so every pass
+starts from the same commit and issue and a pass on one build compares with
+the pass on the last. From a clone of the fixture:
+
+```sh
+git push --force origin fixture-baseline:main
+gh issue reopen 2 --repo freeasinbird/freeside-review-challenge
+git ls-remote --heads origin
+```
+
+`git ls-remote` lists `main` alone, unless the last pass's branch survived
+its merge; delete that one with `git push origin --delete <branch>`. The
+force-push works because the repository has no branch protection (a private
+repository on a free plan allows none); if it ever gains protection, the
+reset needs a bypass. Because the reset discards each pass's merge, the
+fixture's `AGENTS.md` lets the pass merge its pull request.
+
+**Settings.** The fixture has settings of its own, fixed here and never
+derived from a real run's:
+
+| Key | Fixture value |
 | --- | --- |
-| `listen` | A listener of its own |
-| `seed_root` | A directory of its own for the daemon-owned base checkouts |
-| `repository.*` | The disposable repository: its `repo`, `repository_id`, `base_ref`, `base_sha`, `allowed_paths`, `checkout`, and `project` |
-| `images.agent` | The project image the disposable repository's onboarding builds (below); `images.exporter` and `images.review` stay the real run's |
-| `approved_recipe` | The recipe that onboarding approves |
+| `repository.repo` | `freeasinbird/freeside-review-challenge` |
+| `repository.repository_id` | `1363494422` |
+| `repository.base_ref` | `main` |
+| `repository.base_sha` | The `fixture-baseline` commit (`git ls-remote origin fixture-baseline`) |
+| `repository.allowed_paths` | `src/**`, `test/**`, `README.md` |
+| `repository.checkout` | A clone of the fixture of its own |
+| `repository.project` | `fixture` |
+| `listen`, `seed_root` | Of its own |
 | `manual_submission_config` | `""` |
-| `writers.*` | The real run's model at `low`, for each of `specifier`, `implementer`, and `remediator`, except as below |
-| `review.effort` | `low`; `review.model` stays the real run's |
-| `judgment.effort` | When the real run sets `judgment`: `low`; `judgment.model` stays the real run's |
-| `agent_tree.commit` | The rehearsal tree's commit (below) |
+| `writers.specifier`, `writers.implementer`, `writers.remediator` | `claude-haiku-5-5` at `low` |
+| `review.model`, `review.effort` | `gpt-6-luna` at `low` |
+| `review.auth_mode` | `subscription` |
+| `agent_tree.review_harness` | `codex_cli`, or absent |
+| `judgment.model`, `judgment.effort` | `claude-haiku-5-5` at `low`, with the pinned `claude_bin` and `claude_sha256` |
+| `images.agent`, `approved_recipe` | From the fixture's onboarding on this root (below) |
+| `agent_tree.commit` | The fixture tree's commit (below) |
 
-The models stay the real run's so a model the images, the subscription, or
-the pinned `judgment.claude_bin` refuses fails in the rehearsal; `low` keeps
-the spend bounded. The pass does not prove a model accepts its real effort.
-Writer roles on one model and effort share one agent, so `low` can merge two
-writer agents the real tree keeps apart and drop a name a `--task-line` uses:
-keep a writer at its real effort where that would happen, so the rehearsal
-tree's writer agent names match the real tree's. Effort is part of the
-emitted agent tree, so the rehearsal needs its own agent-tree commit. Adopt
-it once through [The First Start](#the-first-start) and keep it, for example
-on its own branch of the same agent-tree checkout; later rehearsals reuse it
-until an adoption input changes, which the deputy's self-check refuses.
+These are the cheapest models expected to complete the workflow; onboarding
+step 6 below checks that the pinned CLIs serve them. `gpt-6-luna` is the
+affordable listed model in the pinned Codex CLI's bundled catalog
+(`codex debug models --bundled` in the review image). A role that is
+refused, or can't complete the fixture's issue at these values, is a pass
+finding: move it up one tier and change this table with the pass. Every
+other key is machine-bound (paths, identities, cost owners, dated inputs,
+`prod.*`, the build's `images.exporter` and `images.review`) and comes from
+[Start And Verify](#start-and-verify), as for any root. Keep
+`review.instructions`, `judgment.publication_author_prompt`, and
+`timeouts.*` the same from pass to pass: a pass that changes one isn't
+comparable with the last.
 
-**Disposable target.** An issue in a dedicated throwaway repository where the
-`prod` GitHub App is installed, as the `freeside-review-challenge` repository
-was for #1275. Keep the issue small enough for a clean review: a review
-finding or a closure gate opens a card only a person can answer, and that
-stops the pass. The repository needs its own trust profile and project image,
-since a profile binds one repository and onboarding builds the image from that
-repository's commit and recipe. The fresh root starts with an empty database,
-so every pass onboards it. The repository may be private: the daemon reads a
-bare-URL task's source issue with a read-only installation token for that
-repository ([Configure Client Task
-Submission](../daemon/README.md#configure-client-task-submission)).
+The fixture's models and efforts make a tree of its own. Adopt it once
+through [The First Start](#the-first-start) and keep it on its own branch of
+the agent-tree checkout; later passes reuse its commit until an adoption
+input changes, such as a build whose prompt packages changed, which the
+deputy's self-check refuses. Then adopt it again.
 
-**Review configuration.** `review.effort` is an input of the review
-configuration digest, so the rehearsal's review configuration differs from
-the real run's unless the real run's review already runs at `low`.
-Onboarding records the digest it is given, so take it from the rehearsal's
-own composition, never the real run's. On a fresh root, in this order:
+**Onboard the fixture.** The fresh root starts with an empty database, so
+every pass onboards the fixture, and the onboarding takes the fixture's own
+review configuration digest. On the fresh root, in this order:
 
-1. Write the settings with every rehearsal value above, leaving `images.agent`
-   and `approved_recipe` at the real run's until onboarding replaces them.
-2. Adopt the rehearsal agent tree through [The First Start](#the-first-start),
-   or set `agent_tree.commit` to the one an earlier rehearsal adopted.
+1. Write the settings with every value above. Until onboarding replaces
+   them, set `images.agent` and `approved_recipe` to any digest-pinned image
+   and recipe digest, such as an earlier pass's.
+2. Adopt the fixture tree through [The First Start](#the-first-start), or
+   set `agent_tree.commit` to the one an earlier pass adopted.
 3. On the start whose tree matches, the self-check fails `trust_profile` and
-   the checks that need the project image, since this root holds neither for
-   the disposable repository. Those failures are expected here. It still
-   writes `<root>/daemon/composition-manifest.json`. Read its
+   the checks that need the project image, since this root holds neither
+   yet. Those failures are expected here. It still writes
+   `<root>/daemon/composition-manifest.json`. Read its
    `review_configuration_digest`; `freesided preflight` with the same inputs
    reports the same digest. End the deputy with Ctrl-C: onboarding refuses a
    database the daemon holds.
-4. Onboard the disposable repository on this root, as daemon/README.md
-   describes under Renew A Codex Subscription Credential (the
-   `freesided onboard <owner/name>` paragraphs):
+4. Onboard the fixture on this root, as daemon/README.md describes under
+   Renew A Codex Subscription Credential (the `freesided onboard
+   <owner/name>` paragraphs):
 
    ```sh
-   freesided onboard <owner/name> -db <root>/daemon/freeside.db \
-     -repository-id <id> -commit <sha> -base-ref <branch> -recipe <path> \
+   freesided onboard freeasinbird/freeside-review-challenge \
+     -db <root>/daemon/freeside.db -repository-id 1363494422 \
+     -commit <fixture-baseline-sha> -base-ref main -source <fixture-clone> \
      -review-config-digest <digest> ...
    ```
 
-   The disposable repository supplies `-repository-id`, `-commit`,
-   `-base-ref`, the recipe (`-recipe`, or `-source` to detect it), and any
-   repository-bound flag the real run passes, such as `-go-module-dir`,
-   `-image-name`, or `-external-reviewer`. The App and base-image flags
-   (`-state-dir`, `-registration-id`, `-base-image`, `-base-build-ref`) are
-   the real run's. Run it once without `-approve` and read the review, then
-   again with `-approve <approval_digest>`. A repository the App installation
-   doesn't cover yet first returns `installation_pending`; the README gives
-   the installation flags and `--resume` for that case.
+   The App and base-image flags (`-state-dir`, `-registration-id`,
+   `-base-image`, `-base-build-ref`) are the machine's. Run it once without
+   `-approve` and read the review, then again with `-approve
+   <approval_digest>`. Until the fixture is trusted in `prod`'s App
+   authority, the first call opens an installation intent and every later
+   call, the `-approve` one included, passes `-resume`; the daemon guide's
+   `freesided onboard` steps give the intent's expiry and `-replace-intent`.
 5. Set `images.agent` to the approving run's `project_image.image_ref` and
    `approved_recipe` to its `project_image.recipe_digest`.
+6. Run `freesided probe-lineup -root <root>`
+   ([Probe The Lineup Before A Run](../daemon/README.md#probe-the-lineup-before-a-run))
+   before the deputy starts again. A model the pinned CLIs refuse fails here
+   for the cost of one short call per role, not partway through the pass.
 
-**Inputs.** Build the `submit` inputs as the real run will, naming the
-disposable issue and project instead of the target, with every `--task-line`
-the real run will pass. A line resolves only when an attempt of its role is
-admitted, so a remediator line stays unproven when the review comes back
-clean. The policy file sets
-`gates.spec_approval` to `false` and leaves `gates.source_issue_closure`
-absent or `false`, so neither a specification nor a closure card waits for a
-person.
+**Inputs.** The task file holds the canonical issue's bare URL, and the
+publication file names that URL in `source_issue`
+([The Publication File And Work-Unit Declaration](#the-publication-file-and-work-unit-declaration)).
+The work-unit declaration is `{"completion_criterion": "bound_pr_merged"}`.
+The policy file names the settings' `allowed_paths` in `paths`, includes
+`https://api.github.com` in `research.allowlist`, sets `gates.spec_approval`
+to `false`, and leaves `gates.source_issue_closure` absent or `false`, so
+neither a specification nor a closure card waits for a person. The pass
+submits no `--task-line`: a real run's lines name agents in the real
+project's tree, not the fixture's. `submit` checks only a line's shape, so
+until the readiness walk (#2222) checks the real lines before spend, a line
+the real tree can't honor is first refused at the real run's admission.
 
 **Run it.** Start the deputy and submit as in [Start And Verify](#start-and-verify),
-on the rehearsal root. Follow the task with `freesided inspect task` until the
-run's `publication.outcome` is set. Merge the rehearsal pull request in the
-disposable repository, wait for the run's `publication.completion`, and raise
-the alerts the exit contract triggers synthetically with
+on the fixture root with `-project fixture`. Follow the task with `freesided
+inspect task` until the run's `publication.outcome` is set. Merge the pull
+request in the fixture, wait for the run's `publication.completion`, and
+raise the alerts the exit contract triggers synthetically with
 `freesided raise-item` (exit-run skill, Walk Through on Both Clients).
-With no paired client on the rehearsal root, the record shows each run-bound
+With no paired client on the fixture root, the record shows each run-bound
 item but no `deliveries`: the pass proves the daemon side only.
 
 **End it before the real run.** Apply the four record checks above, then end
@@ -305,7 +344,7 @@ the deputy with Ctrl-C ([Complete Deliberately](#complete-deliberately)). It
 must exit 0. A nonzero exit, or a line saying it left the rig lease for the
 next start to recover, means the lease was abandoned; `rig-acquisition.json`
 is removed either way, so its absence proves nothing. Recover an abandoned
-lease with `freesided rig recover -state-root <rehearsal-root>/daemon -confirm`
+lease with `freesided rig recover -state-root <fixture-root>/daemon -confirm`
 before the real run, which needs the rig lease and starts on its own root.
 
 ## Enroll The Identities And Check The Agent Tree
@@ -669,7 +708,7 @@ client are unavailable.
 
 ### Next Exit-Run Commands
 
-For the #1211 exit run against `freeasinbird/gh-imgup#82`, after a rehearsal
+For the #1211 exit run against `freeasinbird/gh-imgup#82`, after a fixture
 pass on the same build or one `runtime-diff` carries ([Rehearse Before The Real Run](#rehearse-before-the-real-run)),
 with the settings file naming the manual-submission file and `prod` left
 running:
