@@ -583,6 +583,11 @@ time. So:
   operator reads the cards and decides nothing on them. A refusal (a
   daemon that is not `ephemeral`, no daemon, a run with no completion) is
   a finding, not something to work around.
+  `TestRaiseItemSequenceSurvivesCompletionSweep` in
+  `daemon/cmd/freesided/raise_item_test.go` runs this sequence on a
+  completed fixture run through the completion sweep and a delivery pass,
+  so a daemon change that breaks it fails `scripts/check.sh daemon` before
+  an exit run; its order literal and this block change together.
 - Read the final task record with `freesided inspect task` while the
   deputy still serves and apply the record checks in
   docs/production-walkthrough.md, Start And Verify:
