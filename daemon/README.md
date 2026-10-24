@@ -955,8 +955,8 @@ elevation step, but the stateful daemon always runs as the non-root operator.
 
 ### Read A Task's Record
 
-Two commands print what the daemon has recorded, as JSON for an agent to
-read. Both are reads: they write nothing to the database, never migrate it,
+Three commands print what the daemon has recorded, as JSON for an agent to
+read. All are reads: they write nothing to the database, never migrate it,
 and work the same on every tier. While a daemon holds the database they read
 through the [control socket](#control-socket-and-pairing-codes); with no
 daemon they take the daemon lock (`<db>.daemon.lock`) and open the file
@@ -965,6 +965,7 @@ themselves. Each prints one JSON document on one line.
 ```sh
 freesided inspect -db <db>
 freesided inspect task -db <db> -task <task-id>
+freesided inspect health -db <db>
 ```
 
 `freesided inspect` prints the index, `freeside-inspect-index-v1`:
@@ -1083,6 +1084,44 @@ store read returns today:
 - Cancellations before the latest one, and hold history.
 - Check proofs listed by run. Verification still appears as timeline events.
 - Token counts.
+
+`freesided inspect health` prints the root's open system-health items and
+whether each holds unattended admission now, `freeside-system-health-v1`.
+No other read lists them: the daemon's stop notices name no task, so a
+task's record never shows them. Like the record, it is read in one
+transaction at `as_of_revision`, and `as_of` is the read time.
+
+| Field | Holds |
+| --- | --- |
+| `operator_stop` | The operator stop in force (`command_id`, `reason`, `occurred_at`), or `null`. A stop holds admission on its own, beside the notice it raises. |
+| `admission_error` | `null`, or why the admission gate could not be evaluated. Then `operator_stop` and every item's `admission` are `null`. |
+| `items` | Every open `system_health` item, in id order: `id`, `project_id`, `subject`, `posture` (`blocking` or `advisory`), `health_diagnostic`, `requested_decision`, `created_at`, `supersession` (the condition that lifts a blocking item, or `null`), `admission`, `hold_reason`, and `admission_error`. Closed items are not listed. |
+| `refused_rows` | Every item row the store refused to reconstruct, of any type, by `id` and `error`. A refused row hides no other item. |
+
+`admission` says whether the item holds unattended admission:
+
+- **`holds`:** the gate lists it, and `hold_reason` is the gate's refusal.
+- **`advisory`:** its posture never holds admission.
+- **`superseded`:** a blocking item whose `supersession` the gate found met.
+- **`workflow_closed`:** a blocking item of a closed task workflow, which
+  the gate skips.
+
+`admission` is `null` exactly when the read could not say; `admission_error`
+on the item, or on the read, says why. Errors take the record's kinds. The
+gate fails whole when it cannot read every open `system_health` item, for
+example when the store refuses one of their rows, so the items then print
+with `admission` null.
+
+- **Only the served read decides a supersession.** With no daemon the store
+  opens without the daemon's backup-health source or waiver setting, so a
+  superseded item reads as `holds`, with a `hold_reason` naming backup
+  health or the waiver. Today only the legacy backup-encryption waiver
+  notice carries a supersession; items without one read the same either
+  way.
+- **`-approved-recipe` applies as it does for the record.** A refused row
+  of `unapproved_recipe` kind gets the same stderr note.
+- **An item gives its diagnostic, not its reason line,** and leaves out
+  evidence and claims, as the record's items do.
 
 ### Inspect A Live Database
 

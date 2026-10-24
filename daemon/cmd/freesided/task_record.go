@@ -311,7 +311,8 @@ func newTaskRecordError(err error) *taskRecordError {
 	switch {
 	case errors.Is(err, domain.ErrUnapprovedRecipe):
 		kind = taskRecordErrorUnapprovedRecipe
-	case errors.Is(err, signet.ErrRunObservationIntegrity), store.IsRowVerdict(err):
+	case errors.Is(err, signet.ErrRunObservationIntegrity), store.IsRowVerdict(err),
+		errors.Is(err, errSystemHealthUnexplained):
 		kind = taskRecordErrorIntegrity
 	}
 	return &taskRecordError{Kind: kind, Message: err.Error()}

@@ -1,0 +1,131 @@
+{
+  "version": "freeside-system-health-v1",
+  "as_of_revision": 41,
+  "as_of": "2026-10-23T12:00:00Z",
+  "operator_stop": {
+    "command_id": "command-stop",
+    "reason": "operator stop",
+    "occurred_at": "2026-10-23T11:00:00Z"
+  },
+  "admission_error": null,
+  "items": [
+    {
+      "id": "system-health-unattended-stopped-command-stop",
+      "project_id": "project-system",
+      "subject": {
+        "subject_type": "system",
+        "subject_id": "daemon",
+        "run_id": null,
+        "task_id": null
+      },
+      "posture": "blocking",
+      "health_diagnostic": {
+        "code": "unattended.stopped",
+        "impairs": "unattended_admission"
+      },
+      "requested_decision": [
+        "resume_unattended"
+      ],
+      "created_at": "2026-10-23T11:00:00Z",
+      "supersession": null,
+      "admission": "holds",
+      "hold_reason": "item \"system-health-unattended-stopped-command-stop\": blocking system health",
+      "admission_error": null
+    },
+    {
+      "id": "system-health-advisory",
+      "project_id": "project-system",
+      "subject": {
+        "subject_type": "system",
+        "subject_id": "daemon",
+        "run_id": null,
+        "task_id": null
+      },
+      "posture": "advisory",
+      "health_diagnostic": null,
+      "requested_decision": [
+        "acknowledge"
+      ],
+      "created_at": "2026-10-23T11:10:00Z",
+      "supersession": null,
+      "admission": "advisory",
+      "hold_reason": null,
+      "admission_error": null
+    },
+    {
+      "id": "system-health-waived",
+      "project_id": "project-system",
+      "subject": {
+        "subject_type": "system",
+        "subject_id": "daemon",
+        "run_id": null,
+        "task_id": null
+      },
+      "posture": "blocking",
+      "health_diagnostic": null,
+      "requested_decision": [
+        "acknowledge"
+      ],
+      "created_at": "2026-10-23T11:20:00Z",
+      "supersession": {
+        "kind": "backup_encryption_waiver",
+        "repository_id": 1296269
+      },
+      "admission": "superseded",
+      "hold_reason": null,
+      "admission_error": null
+    },
+    {
+      "id": "system-health-closed-workflow",
+      "project_id": "freeside",
+      "subject": {
+        "subject_type": "run",
+        "subject_id": "run-closed",
+        "run_id": "run-closed",
+        "task_id": "task-closed"
+      },
+      "posture": "blocking",
+      "health_diagnostic": null,
+      "requested_decision": [
+        "acknowledge"
+      ],
+      "created_at": "2026-10-23T11:30:00Z",
+      "supersession": null,
+      "admission": "workflow_closed",
+      "hold_reason": null,
+      "admission_error": null
+    },
+    {
+      "id": "system-health-unexplained",
+      "project_id": "project-system",
+      "subject": {
+        "subject_type": "system",
+        "subject_id": "daemon",
+        "run_id": null,
+        "task_id": null
+      },
+      "posture": "blocking",
+      "health_diagnostic": null,
+      "requested_decision": [
+        "acknowledge"
+      ],
+      "created_at": "2026-10-23T11:40:00Z",
+      "supersession": null,
+      "admission": null,
+      "hold_reason": null,
+      "admission_error": {
+        "kind": "integrity",
+        "message": "item unexplained"
+      }
+    }
+  ],
+  "refused_rows": [
+    {
+      "id": "execution-failure-evidence",
+      "error": {
+        "kind": "unapproved_recipe",
+        "message": "recipe not approved"
+      }
+    }
+  ]
+}
