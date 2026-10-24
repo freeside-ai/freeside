@@ -3026,3 +3026,54 @@ The client work is #1798 to #1803.)
 
 (Proposal of 2026-10-22, decided by the owner at merge;
 [decision note](../../devlog/2026-10-22-1100-proxy-credential-injection.md).)
+
+---
+
+## Revision 96 ("Linux-First Cores, A Credential-Free macOS Verifier"):
+
+1. **Swift projects are managed Linux-first.** Writers, reviewers, and
+   specifiers for a Swift project run in Linux wards against a Swift project
+   image, and macOS is a verification tier used as briefly as possible. A
+   project qualifies once its core modules build and test on Linux with the
+   Apple-only modules declared in its manifest; Freeside's `app/` (#2182)
+   and Straylight each need a module split first. Rejected: developing on
+   macOS in VMs (the two-guest limit is a per-host kernel quota,
+   `hv_apple_isa_vm_quota`, and the reference host cannot hold two Xcode
+   guests); a KDK kernel with SIP off to lift the quota.
+2. **A credential-free macOS verification executor is admitted in
+   `unattended`.** The runner's verification room on a macOS execution host
+   (revision 94: the daemon host in-process, or a second Mac in the runner
+   role), pooled unprivileged accounts as slots, and four live-probed
+   confinements per job: a network-denying sandbox profile plus per-uid
+   packet-filter rules, write confinement to the job directory, a
+   digest-keyed offline dependency cache that fails closed, and a home
+   reset. It holds no credential and no placeholder, so it sits outside the
+   credential modes; it plugs in at the verifier's room seam and declares
+   `supports_credential_free_host_verification`; the Section
+   [10](../plan.md#10-operations-and-onboarding) host-side rule names it as its one
+   exception. Gated by two spikes on the reference host (2026-10-22):
+   SwiftUI `ImageRenderer` rendered in a session-less slot with zero
+   displays, and per-uid packet-filter rules dropped off-host TCP, direct
+   IP, and direct DNS but not loopback or the system resolver, which the
+   sandbox profile closed. Rejected: a host-side writer now (it runs an
+   agent outside the ward boundary and, until `subscription_injected`
+   lands, holds the token as a file; revision 95 is what makes one
+   defensible later); verifying in macOS VMs (the quota and memory above);
+   relying on the packet filter alone.
+3. **UI writers wait for a VM or second-Mac tier.** Writer work that needs
+   macOS itself is not served by the executor: a writer in a VM guest holds
+   its token under `subscription_contained` as a ward does, and a host-run
+   writer context waits for `subscription_injected` (revision 95). Phase 4
+   keeps the tier, and the bootstrap exception narrows to SwiftUI work that
+   needs a macOS writer. Rejected: scheduling the tier now.
+4. **Swift is a third project-image toolchain.** Keyed by `Package.swift`
+   and `Package.resolved` of the named package directory, with the
+   dependency closure baked as bare mirrors, including submodules and the
+   platform-conditional packages the lockfile does not pin, discovered by one
+   proxied resolution and proven networkless; implemented by #2183.
+   Rejected: trusting `Package.resolved` as the complete closure (the
+   Straylight experiment showed it omits OpenCombine and GRDB's SQLiteLib
+   submodule).
+
+(Owner decisions of 2026-10-21 and 2026-10-22;
+[decision note](../../devlog/2026-10-22-1205-macos-verifier-executor.md).)
