@@ -1024,7 +1024,7 @@ elevation step, but the stateful daemon always runs as the non-root operator.
 
 ### Read A Task's Record
 
-Three commands print what the daemon has recorded, as JSON for an agent to
+Four commands print what the daemon has recorded, as JSON for an agent to
 read. All are reads: they write nothing to the database, never migrate it,
 and work the same on every tier. While a daemon holds the database they read
 through the [control socket](#control-socket-and-pairing-codes); with no
@@ -1035,6 +1035,7 @@ themselves. Each prints one JSON document on one line.
 freesided inspect -db <db>
 freesided inspect task -db <db> -task <task-id>
 freesided inspect health -db <db>
+freesided inspect proposals -db <db>
 ```
 
 `freesided inspect` prints the index, `freeside-inspect-index-v1`:
@@ -1046,7 +1047,7 @@ freesided inspect health -db <db>
 - `tasks`: every task the store holds, with `task_id`, `project_id`,
   `created_at`, and `latest_run_id` (`null` before the first run).
 
-`freesided inspect task` prints one task's record, `freeside-task-record-v5`.
+`freesided inspect task` prints one task's record, `freeside-task-record-v6`.
 Every section is read in one transaction, at the store revision
 `as_of_revision`; `as_of` is the read time. To wait for a change, read again
 and compare `as_of_revision`. A revision that hasn't moved means no recorded
@@ -1060,7 +1061,7 @@ stays true for a run Codex reviews, because Codex reports tokens only.
 | --- | --- |
 | `task` | Project, creation time, lifecycle facts, and the current cancellation with its acknowledgement state. |
 | `timeline` | The timeline a paired client gets, unchanged: runs and attempts, milestones, the current hold, review rounds, verification, pull request, completion, and stop events. |
-| `runs` | For each run: `conclusion` (outcome, hold reason, terminal invocation status), the current `hold`, each invocation's last observed status, the governing digests of each recorded admission, the resolved policy digest, `billable_cost` (`null` when none was recorded), and `publication` (`null` until the run publishes). |
+| `runs` | For each run: `conclusion` (outcome, hold reason, terminal invocation status), the current `hold`, each invocation's last observed status, the governing digests of each recorded admission, the resolved policy digest, `billable_cost` (`null` when none was recorded), `publication` (`null` until the run publishes), and `closure_cards`: the closure cards of the run's work unit, open or closed, in the card shape `freesided inspect proposals` prints. |
 | `items` | Every attention item of the task or one of its runs, open or closed, and the stall notices for the task's invocations: type, status, `created_at`, `decided_at`, the `conclusion` (how it closed: the cause, when, the daemon's reason, the successor item, and for a decision the command, action, device and its name, and the applied routes), the typed cause (`health_diagnostic`, `execution_failure`, `publish_block`, `blocked_on`), the commands applied (command id, action, device id), and the deliveries. |
 | `counts` | Items by type, with every type listed; health notices by code; refused item rows not placed in this task; runs held now; and failed stops. |
 
@@ -1076,16 +1077,17 @@ nothing.
 - **`error` on an item** says why the store refused that one item. A refused
   item prints its `id` and `error`, and every other field is `null`; the
   task's other items still print. The store could not verify a refused row,
-  so the record places it by the task and run ids the row stores, and counts
-  every refused row it did not place in this task as
-  `unattributed_refused_items`: usually another task's, but a corrupt row of
-  this task lands there too. The other counts cover the items that were
+  so the record places it by the task and run ids the row stores, or as a
+  run's closure card, and counts every refused row it did not place in this
+  task as `unattributed_refused_items`: usually another task's, but a corrupt
+  row of this task lands there too. The other counts cover the items that were
   read. The timeline is the client's, unchanged, so one refused item fails
   the whole `timeline`.
 - **`errors` on a run** lists each of the run's reads that failed, by
   `section`: `admissions`, `resolved_policy_digest`, `billable_cost`,
   `observation` (the hold and the invocations), `conclusion`, `publication`,
-  or `completion`. A null run
+  `completion`, or `closure_cards` (the list itself; a card that could not
+  be read carries its own `error`). A null run
   field was not read exactly when `errors` names its section; otherwise the
   run has none. The admissions read scans every run's rows, so one
   unreadable admission fails that section for every run. `runs_held` counts
@@ -1127,6 +1129,13 @@ Reading the record:
   heads a lander pushed, oldest first (see Complete A Rebased Merge); each
   is the stored verdict, and `completion` says whether a merge of a proven
   head was accepted.
+- **`closure_cards` hold the run's pull request at the closure gate.** Each
+  publication admits its own closure proposal for the run's work unit, so a
+  run that published more than once can hold several cards. The card
+  bound to the published pull request is the one whose
+  `merge.candidate_head_sha` is the outcome's `head_sha`. The record's
+  `items` never list these cards, because a card's subject is its proposal
+  batch, not the run.
 - **`failed_stops` is 0 or 1.** The store keeps the latest cancellation only.
   A failed stop is a cancellation whose acknowledgement `state` is
   `failed_to_stop`; the store holds no typed reason for it, so the record
@@ -1139,8 +1148,9 @@ Reading the record:
   daemon ran with: `approved_recipe` in `<root>/daemon/settings.json` for
   a deputy root. A direct read that meets
   `unapproved_recipe` says so on stderr; stdout stays one JSON line.
-- **The timeline's shape is part of the record's version.** A change to the
-  task timeline or its events changes `freeside-task-record-v5`.
+- **The timeline's and the card's shapes are part of the record's version.**
+  A change to the task timeline, its events, or the proposal card changes
+  `freeside-task-record-v6`.
 
 The record never holds evidence, claims, conversation messages (a command's
 message and attachments included), transcripts, prompt text, credentials, or
@@ -1191,6 +1201,45 @@ with `admission` null.
   of `unapproved_recipe` kind gets the same stderr note.
 - **An item gives its diagnostic, not its reason line,** and leaves out
   evidence and claims, as the record's items do.
+
+`freesided inspect proposals` prints the root's open proposal cards,
+`freeside-proposal-cards-v1`: every open `task_proposal` and
+`effect_proposal` item, whichever task or run proposed it. No other read
+lists them all: a card's subject is its proposal batch, so a task's record
+shows only its runs' closure cards. It is read in one transaction at
+`as_of_revision`, and `as_of` is the read time.
+
+| Field | Holds |
+| --- | --- |
+| `cards` | Every open card, in id order. Closed and decided cards are not listed; a run's `closure_cards` in the task record are. |
+| `refused_rows` | Every item row the store refused to reconstruct, of any type, by `id` and `error`, as `inspect health` lists them. |
+
+A card holds:
+
+| Field | Holds |
+| --- | --- |
+| `item_id`, `type`, `project_id`, `status`, `created_at`, `requested_decision` | The attention item: `type` is `task_proposal` or `effect_proposal`. |
+| `instance_id`, `kind`, `subject_handle` | The proposal instance the card decides, its effect kind (`run_proposal` for a task proposal, `source_issue_closure`, or `follow_up_filing`), and the work-unit handle it names. |
+| `run_id`, `task_id` | The run whose work unit the handle resolves to, and that run's task. |
+| `merge` | For a closure, the prospective merge the card is bound to: `publication_identity`, `candidate_head_sha`, `base_ref`, `base_sha`. `null` for a task proposal or a filing. |
+| `decision` | The recorded decision (`command_id`, `action`, `selected_digest`, `decided_at`), or `null`. A policy closure approval opens no card, so it never appears here. |
+| `snoozed_until` | The latest snooze's end, or `null`. It may be past. |
+| `error` | `null`, or why a read behind the card failed. |
+
+A card is read through the store's gated proposal reads, in the table's
+order, and stops at the first that fails: `error` says why, and every field
+that read and the later ones would have filled is `null`. The card still
+lists. In the task record a card whose item the store refuses also lists,
+by `item_id` and `error` alone; in this read that item is a refused row.
+
+- **A stopped root lists its cards without `-approved-recipe`.** The store
+  always approves the built-in recipe a proposal's evidence names, so the
+  cards read the same with or without the flag. Another item whose
+  evidence names the daemon's recipe is still a refused row of
+  `unapproved_recipe` kind without it, with the same stderr note.
+- **A card gives its kind, its work unit, and its binding,** never its
+  reason line, evidence, claims, or the proposal's parameters: no task
+  proposal's scope or cost and no filing's text.
 
 ### Inspect A Live Database
 

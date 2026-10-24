@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -936,5 +937,138 @@ func TestDecidedEffectItemForInstance(t *testing.T) {
 	}
 	if _, _, err := decided(); !errors.Is(err, errRowInconsistent) {
 		t.Fatalf("decision naming another instance's item: err %v, want row inconsistency", err)
+	}
+}
+
+// TestProposalCardReads covers the two reads an operator's card listing
+// uses: the subject's cards of one kind, open or closed, and an instance's
+// ledger decision, which fails closed when its command no longer backs it.
+func TestProposalCardReads(t *testing.T) {
+	ctx := context.Background()
+	st := openTemplateStoreAt(t, filepath.Join(t.TempDir(), "store.db"), Options{})
+	closureFor := func(projectID domain.ProjectID) (domain.OpaqueSubjectHandle, domain.EffectProposal) {
+		source := domain.SpecificationSource{
+			Kind:         domain.SpecificationSourceIssueSubject,
+			IssueSubject: &domain.IssueSubjectRef{Repo: "owner/repo", RepositoryID: 123, IssueNumber: 42},
+		}
+		policy, handle := closureScaffold(t, ctx, st, projectID, &source)
+		proposal, err := domain.NewEffectProposal(domain.EffectSourceIssueClosure, domain.SourceIssueClosureInput{
+			SubjectHandle: handle,
+			Source: domain.ClosableSource{
+				Present: true, Provenance: domain.ClosureProvenanceVerified, Repo: "owner/repo", RepositoryID: 123, IssueNumber: 42,
+			},
+			Origin: domain.ClosureFlagOriginProposeSite, Resolves: true,
+		}, policy)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return handle, proposal
+	}
+	merge := domain.ProspectiveMerge{
+		PublicationIdentity: domain.Digest("sha256:" + strings.Repeat("9", 64)),
+		CandidateHeadSHA:    strings.Repeat("1", 40), BaseRef: "main", BaseSHA: strings.Repeat("b", 40),
+	}
+	handle, proposal := closureFor("project-a")
+	decidedInstance := allocateClosure(t, ctx, st, proposal, "event-1")
+	decidedCard := openClosureCard(t, ctx, st, "project-a", decidedInstance, merge)
+	openCard := openClosureCard(t, ctx, st, "project-a", allocateClosure(t, ctx, st, proposal, "event-2"), merge)
+	_, otherProposal := closureFor("project-b")
+	openClosureCard(t, ctx, st, "project-b", allocateClosure(t, ctx, st, otherProposal, "event-3"), merge)
+
+	read := func(f func(tx *ReadTx) error) error {
+		t.Helper()
+		return st.Read(ctx, f)
+	}
+	var ids, taskIDs []domain.ItemID
+	if err := read(func(tx *ReadTx) error {
+		var err error
+		if ids, err = tx.ProposalItemIDsForSubject(ctx, handle, domain.EffectSourceIssueClosure); err != nil {
+			return err
+		}
+		taskIDs, err = tx.ProposalItemIDsForSubject(ctx, handle, domain.EffectTaskProposal)
+		return err
+	}); err != nil {
+		t.Fatal(err)
+	}
+	want := []domain.ItemID{decidedCard.ID, openCard.ID}
+	slices.Sort(want)
+	if !slices.Equal(ids, want) || taskIDs == nil || len(taskIDs) != 0 {
+		t.Fatalf("closure ids = %v, want %v; task-proposal ids = %#v, want empty", ids, want, taskIDs)
+	}
+
+	decision := func() (*ProposalDecision, error) {
+		t.Helper()
+		var decision *ProposalDecision
+		err := read(func(tx *ReadTx) error {
+			var err error
+			decision, err = tx.ProposalDecisionForInstance(ctx, decidedInstance.ID)
+			return err
+		})
+		return decision, err
+	}
+	if got, err := decision(); err != nil || got != nil {
+		t.Fatalf("before a decision: %+v, %v", got, err)
+	}
+	at := time.Date(2026, 8, 11, 12, 30, 0, 0, time.UTC)
+	putCommand := func(tx *WriteTx, id string, item domain.AttentionItem, action domain.Action) error {
+		command, err := domain.NewCommand(domain.CommandInput{
+			CommandID: id, DeviceID: "device-1", ItemID: item.ID, ItemVersion: item.ItemVersion,
+			PRHeadSHA: item.PRHeadSHA, ArtifactDigests: item.ArtifactDigests, Action: action,
+		})
+		if err != nil {
+			return err
+		}
+		return tx.PutCommand(ctx, command)
+	}
+	if err := st.Write(ctx, func(tx *WriteTx) error {
+		if err := putCommand(tx, "command-decline", decidedCard, domain.ActionDecline); err != nil {
+			return err
+		}
+		if err := putCommand(tx, "command-approve", decidedCard, domain.ActionApprove); err != nil {
+			return err
+		}
+		if err := putCommand(tx, "command-other", openCard, domain.ActionDecline); err != nil {
+			return err
+		}
+		return tx.RecordProposalDecision(ctx, decidedInstance.ID, "command-decline", domain.ActionDecline, nil, at)
+	}); err != nil {
+		t.Fatal(err)
+	}
+	got, err := decision()
+	if err != nil || got == nil || got.CommandID != "command-decline" || got.Action != domain.ActionDecline ||
+		got.SelectedDigest != nil || !got.DecidedAt.Equal(at) {
+		t.Fatalf("decision = %+v, %v", got, err)
+	}
+
+	const restore = `UPDATE effect_proposal_decisions SET command_id = 'command-decline', action = 'decline',
+		selected_digest = NULL WHERE instance_id = ?`
+	for _, tc := range []struct{ name, corrupt string }{
+		{
+			"another instance's command",
+			`UPDATE effect_proposal_decisions SET command_id = 'command-other' WHERE instance_id = ?`,
+		},
+		{
+			"an action the command did not send",
+			`UPDATE effect_proposal_decisions SET action = 'approve', selected_digest = 'sha256:x' WHERE instance_id = ?`,
+		},
+		{
+			"an approval of a digest the card does not bind",
+			`UPDATE effect_proposal_decisions SET command_id = 'command-approve', action = 'approve',
+				selected_digest = 'sha256:x' WHERE instance_id = ?`,
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			exec := func(statement string) {
+				t.Helper()
+				if _, err := st.db.ExecContext(ctx, statement, decidedInstance.ID); err != nil {
+					t.Fatal(err)
+				}
+			}
+			exec(tc.corrupt)
+			defer exec(restore)
+			if _, err := decision(); !errors.Is(err, errRowInconsistent) {
+				t.Fatalf("err = %v, want row inconsistency", err)
+			}
+		})
 	}
 }
