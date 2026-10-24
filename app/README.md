@@ -452,6 +452,25 @@ container run --rm -m 8G -v "$PWD":/work -w /work docker.io/library/swift:6.3 \
   bash scripts/check.sh app linux
 ```
 
+CI's SwiftPM mirror cache holds only the bare git clones SwiftPM checks
+the pinned dependencies out from (the `repositories/` directory of its
+shared cache), never `app/.build` or DerivedData: compiled output could let
+a stale artifact register as a pass, while a clone cannot, because
+`Package.resolved` still decides the checkout and everything is compiled in
+the job. Its key is `swiftpm-mirror-v1-<hash of app/Package.resolved>`,
+with no OS or toolchain in it, because bare clones are the same on every
+platform. App CI's `generate` job, on the Ubuntu host, writes it on a push
+to `main` that touches app CI's paths; the PR's `convergence` job on macOS and `generate` on a PR only
+restore it, since a PR's save would be visible to that PR alone. Both
+cache the workspace-relative `.swiftpm-mirror` and link it into the
+platform's SwiftPM cache directory, because `actions/cache` shares an entry
+only between jobs that pass the same `path` and compression (#2273). To
+retire it, remove the restore, link, and save steps from both workflows and
+the matching assertions from `scripts/test-daemon-test-shards.sh`, then
+delete each `swiftpm-mirror-` key that
+`gh cache list --repo freeside-ai/freeside` lists with
+`gh cache delete --repo freeside-ai/freeside <key>`.
+
 `swift test` renders the whole screenshot matrix. While iterating on a
 visible change, follow
 [Iterating on a Visible Change](#iterating-on-a-visible-change) instead of
