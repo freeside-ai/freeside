@@ -156,7 +156,7 @@ func TestProductionReturnToAgentPreflightsCompletePrompt(t *testing.T) {
 			if validationCalls != 1 {
 				t.Fatalf("refusal replay repeated preflight: %d calls", validationCalls)
 			}
-			if len(p.forge.pullRequests()) != 1 || p.transport.pushCount() != 1 {
+			if len(p.forge.PullRequests()) != 1 || p.transport.PushCount() != 1 {
 				t.Fatal("feedback refusal republished candidate")
 			}
 		})

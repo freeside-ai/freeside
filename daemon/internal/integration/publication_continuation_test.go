@@ -435,20 +435,20 @@ func completePublicationContinuationCycle(t *testing.T, p *productionPublication
 	}
 	if strings.HasSuffix(scenario, "-moved") || strings.HasSuffix(scenario, "-missing") || strings.HasSuffix(scenario, "-foreign") || strings.HasSuffix(scenario, "-closed") {
 		wantPRs := 1
-		p.forge.mu.Lock()
+		p.forge.Mu.Lock()
 		switch {
 		case strings.HasSuffix(scenario, "-moved"):
-			for branch := range p.forge.refs {
-				p.forge.refs[branch] = strings.Repeat("f", 40)
+			for branch := range p.forge.Refs {
+				p.forge.Refs[branch] = strings.Repeat("f", 40)
 			}
 		case strings.HasSuffix(scenario, "-missing"):
-			p.forge.prs, wantPRs = nil, 0
+			p.forge.PRs, wantPRs = nil, 0
 		case strings.HasSuffix(scenario, "-foreign"):
-			p.forge.prs[0].Body = "A pull request owned by someone else."
+			p.forge.PRs[0].Body = "A pull request owned by someone else."
 		case strings.HasSuffix(scenario, "-closed"):
-			p.forge.prs[0].State = "closed"
+			p.forge.PRs[0].State = "closed"
 		}
-		p.forge.mu.Unlock()
+		p.forge.Mu.Unlock()
 		if strings.HasSuffix(scenario, "-missing") {
 			// An empty listing may be GitHub lagging the branch (#1544), so
 			// the missing PR is tolerated for three paced attempts before the
@@ -467,7 +467,7 @@ func completePublicationContinuationCycle(t *testing.T, p *productionPublication
 		if blocked.Type != domain.AttentionPublishBlocked {
 			t.Fatal("unavailable target lacks continuation block")
 		}
-		if refs, prs := p.forge.counts(); refs != 1 || prs != wantPRs {
+		if refs, prs := p.forge.Counts(); refs != 1 || prs != wantPRs {
 			t.Fatalf("unavailable target created replacement: %d refs %d prs", refs, prs)
 		}
 		return
@@ -535,7 +535,7 @@ func completePublicationContinuationCycle(t *testing.T, p *productionPublication
 	}); err != nil {
 		t.Fatal(err)
 	}
-	if refs, prs := p.forge.counts(); refs != 1 || prs != 1 {
+	if refs, prs := p.forge.Counts(); refs != 1 || prs != 1 {
 		t.Fatalf("continuation created resources: refs=%d prs=%d", refs, prs)
 	}
 	assertContinuationRequiresTerminal(t, p, intent.Successor)

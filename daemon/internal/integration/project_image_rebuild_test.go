@@ -242,7 +242,7 @@ func TestProductionPublicationRebuildsProjectImageForDeclaredDependencyChange(t 
 	if got := p.verificationCheckpointImage(t); got != rebuilt.ID {
 		t.Fatalf("checkpoint names image %s, want the rebuilt %s", got, rebuilt.ID)
 	}
-	if refs, prs := p.forge.counts(); refs != 1 || prs != 1 {
+	if refs, prs := p.forge.Counts(); refs != 1 || prs != 1 {
 		t.Fatalf("publication effects = %d refs, %d PRs, want 1 and 1", refs, prs)
 	}
 	// A later pass holds its evidence: it neither builds nor verifies again.
@@ -387,7 +387,7 @@ func TestProductionPublicationBlocksDependencyChangeOutsidePolicy(t *testing.T) 
 				t.Fatalf("refused gate ran %d commands, read %d recipes, built %d times",
 					p.room.runs, p.room.reads, len(builder.requests))
 			}
-			if refs, prs := p.forge.counts(); refs != 0 || prs != 0 {
+			if refs, prs := p.forge.Counts(); refs != 0 || prs != 0 {
 				t.Fatalf("refused gate caused effects: %d refs, %d PRs", refs, prs)
 			}
 			if images := p.recordedImages(t); len(images) != 1 {
@@ -498,7 +498,7 @@ func TestProductionPublicationRerunRebuildsOnceConfigured(t *testing.T) {
 		t.Fatalf("rerun built %d times, recorded %d images, ran %d commands in rooms %v",
 			len(builder.requests), len(images), p.room.runs, p.room.images)
 	}
-	if refs, prs := p.forge.counts(); refs != 1 || prs != 1 {
+	if refs, prs := p.forge.Counts(); refs != 1 || prs != 1 {
 		t.Fatalf("publication effects = %d refs, %d PRs, want 1 and 1", refs, prs)
 	}
 }

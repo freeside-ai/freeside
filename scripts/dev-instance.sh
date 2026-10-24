@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # dev-instance.sh — one command for an ephemeral daemon, seeded, with an app.
 #
-# Usage: dev-instance.sh [--daemon-only] [--no-seed]
+# Usage: dev-instance.sh [--daemon-only] [--no-seed] [--scenario NAME]
 #
 # Builds freesided from daemon/ and the Debug FreesideMac app, then starts
 # freesided as an `ephemeral` daemon in a fresh root,
@@ -9,7 +9,7 @@
 # `representative` fixture seeded (#1503). Once the daemon is ready it runs the
 # app with `-FreesideReadinessDir <root>/daemon`, so the app finds the daemon
 # and its pairing code without typing either. It also prints two lines on
-# stdout for a calling script to parse:
+# stdout for a calling script to parse (three with --scenario):
 #
 #   root=<root>
 #   api_url=<url>
@@ -19,8 +19,13 @@
 # the root. The daemon's and app's logs live in the root and go with it; an
 # early daemon exit prints the log's tail first.
 #
-#   --daemon-only  skip the app build and launch (for scripts; any platform)
-#   --no-seed      start with an empty store
+#   --daemon-only    skip the app build and launch (for scripts; any platform)
+#   --no-seed        start with an empty store
+#   --scenario NAME  instead of the fixture, run `-driver scenario -scenario
+#                    NAME` and submit the scenario's task once the daemon is
+#                    ready, printing a third line, `task=<task-id>`
+#                    (`freesided -list-scenarios` names them; daemon/README.md,
+#                    Run A Scenario)
 #
 # The app needs macOS and Xcode. Its derived data stays in the ignored
 # app/DerivedData/dev-instance so rebuilds are incremental. ntfy points at a
@@ -36,20 +41,26 @@
 #
 # Exit codes: 0 when the app quits normally, 130 after Ctrl-C, 143 after
 # SIGTERM, 1 on a build or daemon failure or an abnormal app exit, 2 on a
-# usage error or refusal.
+# usage error or refusal. A failed scenario submission exits 1.
 set -euo pipefail
 
 usage() {
-  echo 'usage: dev-instance.sh [--daemon-only] [--no-seed]' >&2
+  echo 'usage: dev-instance.sh [--daemon-only] [--no-seed] [--scenario NAME]' >&2
   exit 2
 }
 
 daemon_only=false
 seed=true
+scenario=''
 while [[ $# -gt 0 ]]; do
   case $1 in
   --daemon-only) daemon_only=true ;;
   --no-seed) seed=false ;;
+  --scenario)
+    [[ $# -ge 2 && -n "$2" ]] || usage
+    scenario=$2
+    shift
+    ;;
   *) usage ;;
   esac
   shift
@@ -117,7 +128,8 @@ if [[ "$daemon_only" == false ]]; then
   [[ -x "$app_exec" ]] || { echo "dev-instance: no app executable at $app_exec" >&2; exit 1; }
 fi
 
-# -driver stays at its default, disabled, which -seed-fixture requires.
+# -driver stays at its default, disabled, which -seed-fixture requires; a
+# scenario replaces the fixture, since freesided refuses the two together.
 daemon_args=(
   -environment ephemeral
   -db "$root/daemon/freeside.db"
@@ -125,7 +137,11 @@ daemon_args=(
   -listen 127.0.0.1:0
   -ntfy-url http://127.0.0.1:1
 )
-[[ "$seed" == false ]] || daemon_args+=(-seed-fixture representative)
+if [[ -n "$scenario" ]]; then
+  daemon_args+=(-driver scenario -scenario "$scenario")
+elif [[ "$seed" == true ]]; then
+  daemon_args+=(-seed-fixture representative)
+fi
 echo "dev-instance: starting freesided (log: $daemon_log)" >&2
 "$root/bin/freesided" "${daemon_args[@]}" >"$daemon_log" 2>&1 &
 daemon_pid=$!
@@ -150,6 +166,22 @@ for _ in $(seq 1 300); do
 done
 [[ -n "$api_url" ]] || daemon_failed 'no readiness within 30s'
 printf 'root=%s\napi_url=%s\n' "$root" "$api_url"
+
+if [[ -n "$scenario" ]]; then
+  # The scenario daemon writes its task's submit inputs under its root.
+  inputs="$root/daemon/scenario"
+  echo "dev-instance: submitting the $scenario scenario's task" >&2
+  submitted=''
+  if ! submitted="$("$root/bin/freesided" submit -db "$root/daemon/freeside.db" \
+    -task "$inputs/task.md" -policy "$inputs/policy.json" \
+    -publication "$inputs/publication.json" -work-unit "$inputs/work-unit.json" \
+    -project project-scenario)"; then
+    daemon_failed 'scenario submission failed'
+  fi
+  task_id="$(printf '%s\n' "$submitted" | sed -n 's/.*"task_id":"\([^"]*\)".*/\1/p')"
+  [[ -n "$task_id" ]] || daemon_failed "scenario submission printed no task_id: $submitted"
+  printf 'task=%s\n' "$task_id"
+fi
 
 if [[ -n "$app_exec" ]]; then
   # FREESIDE_ENV overrides a stray value in the caller's shell; any tier but

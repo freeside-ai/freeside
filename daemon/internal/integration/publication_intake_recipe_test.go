@@ -53,7 +53,7 @@ func TestIntakeRecipeAuthorsWithLiteralFallback(t *testing.T) {
 		if _, err := p.reconcileLanes(); err != nil {
 			t.Fatal(err)
 		}
-		prs := p.forge.pullRequests()
+		prs := p.forge.PullRequests()
 		if len(prs) != 1 || prs[0].Title != intakeLiteralTitle ||
 			!strings.HasPrefix(prs[0].Body, intakeLiteralBody+"\n") {
 			t.Fatalf("fallback PR = %+v, want the literal intake title and body", prs)

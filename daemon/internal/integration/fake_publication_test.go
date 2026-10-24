@@ -8,14 +8,9 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"errors"
-	"fmt"
-	"io"
-	"maps"
-	"net/http"
 	"net/http/httptest"
 	"os"
 	"path/filepath"
-	"strconv"
 	"strings"
 	"sync"
 	"testing"
@@ -24,6 +19,7 @@ import (
 	"github.com/freeside-ai/freeside/daemon/internal/domain"
 	"github.com/freeside-ai/freeside/daemon/internal/engine"
 	"github.com/freeside-ai/freeside/daemon/internal/exec/fake"
+	fakeforge "github.com/freeside-ai/freeside/daemon/internal/exec/fake/forge"
 	"github.com/freeside-ai/freeside/daemon/internal/export"
 	"github.com/freeside-ai/freeside/daemon/internal/publicationrecord"
 	"github.com/freeside-ai/freeside/daemon/internal/publish"
@@ -41,13 +37,11 @@ const (
 
 var fakePublicationTime = time.Date(2026, 7, 25, 12, 0, 0, 0, time.UTC)
 
-type integrationTokenSource struct{}
-
-func (integrationTokenSource) Token(context.Context, string) (publish.InstallationToken, error) {
-	return publish.InstallationToken{
-		Token: "integration-token", ExpiresAt: fakePublicationTime.Add(time.Hour),
-		Repo: fakePublicationRepo,
-	}, nil
+func integrationTokenSource() fakeforge.TokenSource {
+	return fakeforge.TokenSource{
+		Secret: "integration-token", Repo: fakePublicationRepo,
+		Now: func() time.Time { return fakePublicationTime },
+	}
 }
 
 type inactiveIntegrationTokenSource struct{}
@@ -59,602 +53,31 @@ func (inactiveIntegrationTokenSource) Token(
 	return publish.InstallationToken{}, publish.ErrJanitorInactive
 }
 
-type integrationAuditor struct {
-	audit domain.WorkflowAudit
-}
-
-func (a integrationAuditor) Audit(context.Context, string, string) (domain.WorkflowAudit, error) {
-	return a.audit, nil
-}
-
-type integrationPR struct {
-	Number  int
-	State   string
-	Title   string
-	Body    string
-	HeadRef string
-	HeadSHA string
-	BaseRef string
-	// Draft is emitted in the PR response; GitHub always sends the field and
-	// the forge fails closed on its absence. It stays false unless the
-	// publisher holds a human-gate closure (plan §5.15), which opens the PR as a
-	// draft and toggles it through the GraphQL mutations below.
-	Draft bool
-}
-
-type integrationForge struct {
-	t *testing.T
-
-	mu                   sync.Mutex
-	refs                 map[string]string
-	prs                  []integrationPR
-	nextPR               int
-	writeCounts          map[string]int
-	failPRCreateResponse bool
-	requestHook          func(method, path string) bool
-	visibility           string
-	failRepoRead         bool
-	failIssueRead        bool
-	issueReads           int
-	issueTitle           *string
-	// lagListings serves the next lagListings head-branch pull listings as
-	// GitHub's view lagging a successor push (#1544): an empty list when
-	// lagHeadSHA is empty, otherwise every listed PR at lagHeadSHA.
-	lagListings int
-	lagHeadSHA  string
-}
-
-func newIntegrationForge(t *testing.T) (*integrationForge, *httptest.Server) {
+// newIntegrationForge serves the forge double for fakePublicationRepo, whose
+// one work-unit issue is #82, and fails the test on any request it does not
+// expect.
+func newIntegrationForge(t *testing.T) (*fakeforge.Forge, *httptest.Server) {
 	t.Helper()
-	forge := &integrationForge{
-		t: t, refs: map[string]string{}, nextPR: 101, writeCounts: map[string]int{},
-		visibility: "public",
-	}
-	server := httptest.NewServer(http.HandlerFunc(forge.handle))
+	forge := fakeforge.New(fakeforge.Config{
+		Repo: fakePublicationRepo, Token: "integration-token",
+		Issue: fakeforge.Issue{
+			Number: 82, Title: fakePublicationIssueTitle, Body: fakePublicationIssueBody,
+		},
+		Report: t.Errorf,
+	})
+	server := httptest.NewServer(forge)
 	t.Cleanup(server.Close)
 	return forge, server
 }
 
-func (f *integrationForge) handle(w http.ResponseWriter, r *http.Request) {
-	f.mu.Lock()
-	defer f.mu.Unlock()
-	if f.requestHook != nil && f.requestHook(r.Method, r.URL.Path) {
-		f.requestHook = nil
-	}
-	if got := r.Header.Get("Authorization"); got != "Bearer integration-token" {
-		f.t.Errorf("Authorization = %q", got)
-	}
-	if r.Method != http.MethodGet {
-		f.writeCounts[r.Method+" "+r.URL.Path]++
-	}
-	root := "/repos/" + fakePublicationRepo
-	switch {
-	case r.Method == http.MethodGet && r.URL.Path == root:
-		// GET /repos/{owner}/{repo}: recipe v2 reads the target repository's
-		// visibility here to derive and re-check the artifact's sensitivity class.
-		if f.failRepoRead {
-			w.WriteHeader(http.StatusInternalServerError)
-			return
-		}
-		_ = json.NewEncoder(w).Encode(map[string]any{
-			"id": 424242, "visibility": f.visibility, "private": f.visibility != "public",
-		})
-	case r.Method == http.MethodGet && r.URL.Path == root+"/issues/82":
-		f.issueReads++
-		if f.failIssueRead {
-			w.WriteHeader(http.StatusServiceUnavailable)
-			return
-		}
-		_ = json.NewEncoder(w).Encode(map[string]any{
-			"number": 82, "state": "open", "title": f.publicationIssueTitle(),
-			"body": fakePublicationIssueBody,
-		})
-	case r.Method == http.MethodGet && strings.HasPrefix(r.URL.Path, root+"/git/ref/heads/"):
-		branch := strings.TrimPrefix(r.URL.Path, root+"/git/ref/heads/")
-		sha, ok := f.refs[branch]
-		if !ok {
-			w.WriteHeader(http.StatusNotFound)
-			return
-		}
-		_ = json.NewEncoder(w).Encode(map[string]any{
-			"ref": "refs/heads/" + branch, "object": map[string]string{"sha": sha},
-		})
-	case r.Method == http.MethodPost && r.URL.Path == root+"/git/refs":
-		var request struct {
-			Ref string `json:"ref"`
-			SHA string `json:"sha"`
-		}
-		if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
-			f.t.Errorf("decode ref request: %v", err)
-			w.WriteHeader(http.StatusBadRequest)
-			return
-		}
-		branch := strings.TrimPrefix(request.Ref, "refs/heads/")
-		if _, exists := f.refs[branch]; exists {
-			w.WriteHeader(http.StatusUnprocessableEntity)
-			return
-		}
-		f.refs[branch] = request.SHA
-		w.WriteHeader(http.StatusCreated)
-		_ = json.NewEncoder(w).Encode(map[string]any{
-			"ref": request.Ref, "object": map[string]string{"sha": request.SHA},
-		})
-	case r.Method == http.MethodGet && r.URL.Path == root+"/pulls":
-		head := strings.TrimPrefix(r.URL.Query().Get("head"), "freeside-ai:")
-		out := make([]map[string]any, 0, len(f.prs))
-		lagging := f.lagListings > 0 && head != ""
-		if lagging {
-			f.lagListings--
-		}
-		for _, pr := range f.prs {
-			if lagging && f.lagHeadSHA == "" {
-				break
-			}
-			if lagging {
-				pr.HeadSHA = f.lagHeadSHA
-			}
-			if head == "" || head == pr.HeadRef {
-				out = append(out, integrationPRJSON(pr))
-			}
-		}
-		_ = json.NewEncoder(w).Encode(out)
-	case r.Method == http.MethodPost && r.URL.Path == root+"/pulls":
-		var request struct {
-			Title string `json:"title"`
-			Body  string `json:"body"`
-			Head  string `json:"head"`
-			Base  string `json:"base"`
-			Draft bool   `json:"draft"`
-		}
-		if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
-			f.t.Errorf("decode PR request: %v", err)
-			w.WriteHeader(http.StatusBadRequest)
-			return
-		}
-		pr := integrationPR{
-			Number: f.nextPR, Title: request.Title, Body: request.Body,
-			HeadRef: request.Head, HeadSHA: f.refs[request.Head], BaseRef: request.Base,
-			Draft: request.Draft,
-		}
-		f.nextPR++
-		f.prs = append(f.prs, pr)
-		if f.failPRCreateResponse {
-			f.failPRCreateResponse = false
-			w.WriteHeader(http.StatusInternalServerError)
-			return
-		}
-		w.WriteHeader(http.StatusCreated)
-		_ = json.NewEncoder(w).Encode(integrationPRJSON(pr))
-	case r.Method == http.MethodGet && strings.HasPrefix(r.URL.Path, root+"/pulls/"):
-		number, err := strconv.Atoi(strings.TrimPrefix(r.URL.Path, root+"/pulls/"))
-		if err != nil {
-			w.WriteHeader(http.StatusNotFound)
-			return
-		}
-		for _, pr := range f.prs {
-			if pr.Number == number {
-				_ = json.NewEncoder(w).Encode(integrationPRJSON(pr))
-				return
-			}
-		}
-		w.WriteHeader(http.StatusNotFound)
-	case r.Method == http.MethodPatch && strings.HasPrefix(r.URL.Path, root+"/pulls/"):
-		number, err := strconv.Atoi(strings.TrimPrefix(r.URL.Path, root+"/pulls/"))
-		if err != nil {
-			w.WriteHeader(http.StatusNotFound)
-			return
-		}
-		var request struct {
-			Title string `json:"title"`
-			Body  string `json:"body"`
-		}
-		if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
-			w.WriteHeader(http.StatusBadRequest)
-			return
-		}
-		for i := range f.prs {
-			if f.prs[i].Number == number {
-				f.prs[i].Title, f.prs[i].Body = request.Title, request.Body
-				_ = json.NewEncoder(w).Encode(integrationPRJSON(f.prs[i]))
-				return
-			}
-		}
-		w.WriteHeader(http.StatusNotFound)
-	case r.Method == http.MethodPost && r.URL.Path == "/graphql":
-		f.handleDraftMutation(w, r)
-	default:
-		body, _ := io.ReadAll(r.Body)
-		f.t.Errorf("unexpected forge request %s %s: %s", r.Method, r.URL.Path, body)
-		w.WriteHeader(http.StatusNotFound)
-	}
-}
-
-func (f *integrationForge) publicationIssueTitle() string {
-	if f.issueTitle != nil {
-		return *f.issueTitle
-	}
-	return fakePublicationIssueTitle
-}
-
-// handleDraftMutation serves the publisher's GraphQL
-// markPullRequestReadyForReview / convertPullRequestToDraft call against the PR
-// its node id names, answering in the shape the publisher verifies.
-func (f *integrationForge) handleDraftMutation(w http.ResponseWriter, r *http.Request) {
-	var request struct {
-		Query     string `json:"query"`
-		Variables struct {
-			ID string `json:"id"`
-		} `json:"variables"`
-	}
-	if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
-		w.WriteHeader(http.StatusBadRequest)
-		return
-	}
-	field, draft := "markPullRequestReadyForReview", false
-	if strings.Contains(request.Query, "convertPullRequestToDraft") {
-		field, draft = "convertPullRequestToDraft", true
-	}
-	for i := range f.prs {
-		if integrationPRNodeID(f.prs[i].Number) != request.Variables.ID {
-			continue
-		}
-		f.prs[i].Draft = draft
-		_ = json.NewEncoder(w).Encode(map[string]any{"data": map[string]any{field: map[string]any{
-			"pullRequest": map[string]any{
-				"number": f.prs[i].Number, "isDraft": draft,
-				"repository": map[string]string{"nameWithOwner": fakePublicationRepo},
-			},
-		}}})
-		return
-	}
-	f.t.Errorf("draft mutation names unknown node %q", request.Variables.ID)
-	w.WriteHeader(http.StatusNotFound)
-}
-
-func integrationPRNodeID(number int) string {
-	return "PR_node_" + strconv.Itoa(number)
-}
-
-// lagPRListings makes the next n head-branch pull listings lag the branch:
-// empty when head is "", otherwise showing every PR at head.
-func (f *integrationForge) lagPRListings(n int, head string) {
-	f.mu.Lock()
-	defer f.mu.Unlock()
-	f.lagListings, f.lagHeadSHA = n, head
-}
-
-func (f *integrationForge) interceptRequest(hook func(method, path string) bool) {
-	f.mu.Lock()
-	defer f.mu.Unlock()
-	f.requestHook = hook
-}
-
-func integrationPRJSON(pr integrationPR) map[string]any {
-	state := pr.State
-	if state == "" {
-		state = "open"
-	}
-	return map[string]any{
-		"number": pr.Number, "state": state, "title": pr.Title, "body": pr.Body,
-		"draft": pr.Draft, "node_id": integrationPRNodeID(pr.Number),
-		"head": map[string]any{
-			"ref": pr.HeadRef, "sha": pr.HeadSHA,
-			"repo": map[string]string{"full_name": fakePublicationRepo},
-		},
-		"base": map[string]any{
-			"ref": pr.BaseRef, "repo": map[string]string{"full_name": fakePublicationRepo},
-		},
-	}
-}
-
-func (f *integrationForge) setRef(branch, sha string) bool {
-	f.mu.Lock()
-	defer f.mu.Unlock()
-	if current, ok := f.refs[branch]; ok {
-		return current != sha
-	}
-	f.refs[branch] = sha
-	return false
-}
-
-func (f *integrationForge) clearRefs() {
-	f.mu.Lock()
-	defer f.mu.Unlock()
-	clear(f.refs)
-}
-
-func (f *integrationForge) counts() (refs, prs int) {
-	f.mu.Lock()
-	defer f.mu.Unlock()
-	return len(f.refs), len(f.prs)
-}
-
-func (f *integrationForge) writeCountSnapshot() map[string]int {
-	f.mu.Lock()
-	defer f.mu.Unlock()
-	return maps.Clone(f.writeCounts)
-}
-
-func (f *integrationForge) pullRequests() []integrationPR {
-	f.mu.Lock()
-	defer f.mu.Unlock()
-	return append([]integrationPR(nil), f.prs...)
-}
-
-func (f *integrationForge) failAfterNextPRCreate() {
-	f.mu.Lock()
-	defer f.mu.Unlock()
-	f.failPRCreateResponse = true
-}
-
-type integrationCheckout struct {
-	dir, repo, baseRef, baseSHA string
-	laterDir                    string
-	dirCalls                    *int
-	owner                       *integrationTransport
-}
-
-func (c integrationCheckout) Dir() string {
-	if c.dirCalls != nil {
-		*c.dirCalls++
-		if *c.dirCalls > 1 && c.laterDir != "" {
-			return c.laterDir
-		}
-	}
-	return c.dir
-}
-func (c integrationCheckout) Repo() string    { return c.repo }
-func (c integrationCheckout) BaseRef() string { return c.baseRef }
-func (c integrationCheckout) BaseSHA() string { return c.baseSHA }
-
-type integrationTransport struct {
-	t              *testing.T
-	baseDir        string
-	forge          *integrationForge
-	returnDir      string
-	laterReturnDir string
-	symlinkTarget  string
-	replaceParent  string
-	noCheckout     bool
-
-	mu                     sync.Mutex
-	fetches                int
-	fetchErr               error
-	fetchEntered           chan struct{}
-	fetchRelease           chan struct{}
-	materializeErr         error
-	materializeBaseErr     error
-	pushes                 int
-	lastMessage            string
-	fail                   bool
-	conflict               bool
-	successorUpdateFailure error
-	// The remote side of the pull request branches and the re-entry fetch
-	// accounting (reentry_transport_test.go).
-	headsDir      string
-	headFetches   int
-	headFetchHook func(call int)
-	merges        int
-	mergeMessage  string
-	// The scripted rebase proof verdict and the proof accounting
-	// (reentry_transport_test.go).
-	rebaseVerdict *publish.RebaseProof
-	pullFetches   int
-	proofs        int
-}
-
-func (tr *integrationTransport) RetainWorktree(
-	ctx context.Context, checkout engine.PublicationCheckout, dest, headSHA string,
-) error {
-	sealed, ok := checkout.(integrationCheckout)
-	if !ok || sealed.owner != tr {
-		return engine.ErrForeignPublicationCheckout
-	}
-	tr.mu.Lock()
-	err := tr.materializeErr
-	if headSHA == sealed.baseSHA {
-		err = tr.materializeBaseErr
-	}
-	tr.mu.Unlock()
+// headRepo is the transport's remote side of the pull request branches.
+func headRepo(t *testing.T, transport *fakeforge.Transport) string {
+	t.Helper()
+	dir, err := transport.HeadRepo()
 	if err != nil {
-		return err
+		t.Fatal(err)
 	}
-	if err := ctx.Err(); err != nil {
-		return err
-	}
-	if got := runGit(tr.t, checkout.Dir(), "rev-parse", "--verify", headSHA+"^{commit}"); got != headSHA {
-		return fmt.Errorf("materialization resolved %s to %s", headSHA, got)
-	}
-	if err := os.CopyFS(dest, os.DirFS(checkout.Dir())); err != nil {
-		return err
-	}
-	runGit(tr.t, dest, "reset", "-q", "--hard", headSHA)
-	return nil
-}
-
-func (tr *integrationTransport) failMaterialization(err error) {
-	tr.mu.Lock()
-	defer tr.mu.Unlock()
-	tr.materializeErr = err
-}
-
-// blockNextFetch parks the next FetchBase inside the transport, which is how a
-// test holds the publication lane in a real external boundary. entered closes
-// once the fetch has arrived; release lets it proceed, and canceling the
-// fetch's context ends it too, the way a shutdown does.
-func (tr *integrationTransport) blockNextFetch() (entered <-chan struct{}, release func()) {
-	arrived := make(chan struct{})
-	proceed := make(chan struct{})
-	tr.mu.Lock()
-	tr.fetchEntered, tr.fetchRelease = arrived, proceed
-	tr.mu.Unlock()
-	return arrived, sync.OnceFunc(func() { close(proceed) })
-}
-
-func (tr *integrationTransport) FetchBase(
-	ctx context.Context,
-	repo, baseRef, baseSHA, dir string,
-) (engine.PublicationCheckout, error) {
-	tr.mu.Lock()
-	tr.fetches++
-	fetchErr := tr.fetchErr
-	symlinkTarget := tr.symlinkTarget
-	replaceParent := tr.replaceParent
-	// One-shot: taking the channels under the lock keeps a second fetch from
-	// closing an already-closed entered channel.
-	entered, release := tr.fetchEntered, tr.fetchRelease
-	tr.fetchEntered, tr.fetchRelease = nil, nil
-	tr.mu.Unlock()
-	if release != nil {
-		close(entered)
-		select {
-		case <-release:
-		case <-ctx.Done():
-			return nil, ctx.Err()
-		}
-	}
-	if fetchErr != nil {
-		return nil, fetchErr
-	}
-	if repo != fakePublicationRepo || baseRef != "main" {
-		return nil, errors.New("unexpected repository binding")
-	}
-	if replaceParent != "" {
-		parent := filepath.Dir(dir)
-		if err := os.Rename(parent, filepath.Join(replaceParent, "original")); err != nil {
-			return nil, err
-		}
-		if err := os.Mkdir(parent, 0o700); err != nil {
-			return nil, err
-		}
-	}
-	if symlinkTarget != "" {
-		if err := os.Symlink(symlinkTarget, dir); err != nil {
-			return nil, err
-		}
-	} else {
-		args := []string{"clone", "-q", "--no-hardlinks"}
-		if tr.noCheckout {
-			args = append(args, "--no-checkout")
-		}
-		runGit(tr.t, tr.baseDir, append(args, ".", dir)...)
-		if got := runGit(tr.t, dir, "rev-parse", "HEAD"); got != baseSHA {
-			// The branch advanced past the exact base, as the real transport
-			// allows: the base must still be on the fetched branch.
-			if _, code, err := tryGit(dir, "merge-base", "--is-ancestor", baseSHA, "HEAD"); err != nil || code != 0 {
-				return nil, fmt.Errorf("cloned base %s, want %s", got, baseSHA)
-			}
-			if tr.noCheckout {
-				runGit(tr.t, dir, "update-ref", "--no-deref", "HEAD", baseSHA)
-			} else {
-				runGit(tr.t, dir, "checkout", "-q", "--detach", baseSHA)
-			}
-		}
-	}
-	checkoutDir := dir
-	if tr.returnDir != "" {
-		checkoutDir = tr.returnDir
-	}
-	dirCalls := 0
-	return integrationCheckout{
-		dir: checkoutDir, repo: repo, baseRef: baseRef, baseSHA: baseSHA, owner: tr,
-		laterDir: tr.laterReturnDir, dirCalls: &dirCalls,
-	}, nil
-}
-
-func (tr *integrationTransport) failFetch(err error) {
-	tr.mu.Lock()
-	defer tr.mu.Unlock()
-	tr.fetchErr = err
-}
-
-func (tr *integrationTransport) fetchCount() int {
-	tr.mu.Lock()
-	defer tr.mu.Unlock()
-	return tr.fetches
-}
-
-func (tr *integrationTransport) PushHead(
-	_ context.Context,
-	checkout engine.PublicationCheckout,
-	gated publish.GatedHead,
-) (publish.PushResult, error) {
-	sealed, ok := checkout.(integrationCheckout)
-	if !ok || sealed.owner != tr {
-		return publish.PushResult{}, engine.ErrForeignPublicationCheckout
-	}
-	// The real Git transport pushes from the checkout working tree, so it reads
-	// checkout.Dir(); model that dependency here. A pre-publication review that
-	// consumed (moved and deleted) the publication checkout would leave this
-	// path missing, which the real transport would fail on but a double that
-	// never touched Dir() would silently mask (issue #527 checkout-vs-workspace
-	// seam).
-	checkoutDir := checkout.Dir()
-	if checkoutDir != "" {
-		if _, err := os.Stat(checkoutDir); err != nil {
-			return publish.PushResult{}, fmt.Errorf(
-				"publication checkout unavailable for push: %w", err)
-		}
-	}
-	// Branch and head come off the gate capability, as they do in the real
-	// transport: a double that took them from separately supplied input
-	// could stand in for a push the Publisher never cleared.
-	identity := gated.Identity()
-	message := strings.TrimSpace(runGit(
-		tr.t, sealed.dir, "show", "-s", "--format=%B", gated.SourceHeadSHA(),
-	))
-	tr.mu.Lock()
-	tr.pushes++
-	tr.lastMessage = message
-	fail := tr.fail
-	tr.fail = false
-	injectConflict := tr.conflict
-	tr.conflict = false
-	tr.mu.Unlock()
-	if fail {
-		return publish.PushResult{}, &publish.TransportGitError{
-			Args: []string{"push"}, ExitCode: -1,
-			Refusal: publish.RefusalUnknown, Err: context.DeadlineExceeded,
-		}
-	}
-	if injectConflict {
-		tr.forge.setRef(identity.BranchName(), strings.Repeat("9", 40))
-		return publish.PushResult{}, fmt.Errorf(
-			"injected publication ref conflict: %w", publish.ErrPublicationConflict,
-		)
-	}
-	refConflict := tr.forge.setRef(identity.BranchName(), gated.SourceHeadSHA())
-	if refConflict {
-		return publish.PushResult{}, fmt.Errorf(
-			"publication ref moved: %w", publish.ErrPublicationConflict,
-		)
-	}
-	tr.publishHead(sealed.dir, identity.BranchName(), gated.SourceHeadSHA())
-	return publish.PushResult{Created: !refConflict}, nil
-}
-
-func (tr *integrationTransport) pushCount() int {
-	tr.mu.Lock()
-	defer tr.mu.Unlock()
-	return tr.pushes
-}
-
-func (tr *integrationTransport) pushedCommitMessage() string {
-	tr.mu.Lock()
-	defer tr.mu.Unlock()
-	return tr.lastMessage
-}
-
-func (tr *integrationTransport) failNextPush() {
-	tr.mu.Lock()
-	defer tr.mu.Unlock()
-	tr.fail = true
-}
-
-func (tr *integrationTransport) conflictNextPush() {
-	tr.mu.Lock()
-	defer tr.mu.Unlock()
-	tr.conflict = true
+	return dir
 }
 
 type publicationHarness struct {
@@ -675,8 +98,8 @@ type publicationHarness struct {
 	store                     *store.Store
 	attention                 *signet.Service
 	blobs                     *signet.BlobStore
-	transport                 *integrationTransport
-	forge                     *integrationForge
+	transport                 *fakeforge.Transport
+	forge                     *fakeforge.Forge
 	server                    *httptest.Server
 	tokens                    publish.TokenSource
 	now                       time.Time
@@ -772,7 +195,7 @@ func newPublicationHarnessWithBaseFiles(t *testing.T, recipe []byte, files map[s
 		baseDir: base, baseSHA: baseSHA, baseFiles: files, recipe: recipe, recipeD: recipeDigest,
 		profile: profile, audit: audit, store: st,
 		attention: signet.NewService(st, signet.WithBlobStore(blobs)), blobs: blobs,
-		transport: &integrationTransport{t: t, baseDir: base, forge: forge},
+		transport: &fakeforge.Transport{BaseDir: base, BaseRef: "main", Forge: forge, HeadsDir: t.TempDir()},
 		forge:     forge, server: server, now: fakePublicationTime,
 	}
 }
@@ -804,11 +227,11 @@ func (h *publicationHarness) engineWithRecipeAtWorkDir(
 	}
 	tokens := h.tokens
 	if tokens == nil {
-		tokens = integrationTokenSource{}
+		tokens = integrationTokenSource()
 	}
 	publisher := publish.NewPublisher(
 		tokens, h.server.Client(), h.server.URL,
-		integrationAuditor{audit: h.audit}, ledger, trust, authz,
+		fakeforge.Auditor{Result: h.audit}, ledger, trust, authz,
 	)
 	driver, err := fake.NewStageDriverAt(filepath.Join(h.workDir, "driver"))
 	if err != nil {
@@ -1201,7 +624,7 @@ func TestFakeCandidatePublicationRejectsMissingInvocationOwnerBeforeRecovery(t *
 			if _, err := workflow.ReconcileFakePublication(h.ctx, spec.RunID); err == nil {
 				t.Fatalf("missing %s owner passed reconciliation", invocation.role)
 			}
-			if pushes := h.transport.pushCount(); pushes != 0 {
+			if pushes := h.transport.PushCount(); pushes != 0 {
 				t.Fatalf("missing %s owner reached push %d times", invocation.role, pushes)
 			}
 		})
@@ -1250,7 +673,7 @@ func TestFakeCandidatePublicationPropagatesInactiveJanitorDuringPendingRecovery(
 		!errors.Is(err, publish.ErrJanitorInactive) {
 		t.Fatalf("pending terminal recovery error = %v", err)
 	}
-	if pushes := h.transport.pushCount(); pushes != 1 {
+	if pushes := h.transport.PushCount(); pushes != 1 {
 		t.Fatalf("pending terminal recovery repeated push: %d", pushes)
 	}
 }
@@ -1352,7 +775,7 @@ func TestFakeCandidatePublicationRejectsExtendedDurableRun(t *testing.T) {
 		!errors.Is(err, domain.ErrParentKeyMismatch) {
 		t.Fatalf("task reconciliation with extended run error = %v", err)
 	}
-	if pushes := h.transport.pushCount(); pushes != 0 {
+	if pushes := h.transport.PushCount(); pushes != 0 {
 		t.Fatalf("extended durable run reached push %d times", pushes)
 	}
 }
@@ -1462,7 +885,7 @@ func TestFakeCandidatePublicationRejectsRedirectedCheckoutBeforeImport(t *testin
 	workspace := t.TempDir()
 	writeFile(t, workspace, "README.md", "base\n")
 	writeFile(t, workspace, "candidate.txt", "verified\n")
-	h.transport.returnDir = workspace
+	h.transport.ReturnDir = workspace
 	workflow := h.engine()
 	spec := h.spec(workspace)
 	if _, err := workflow.StartFakePublication(h.ctx, spec); err != nil {
@@ -1473,7 +896,7 @@ func TestFakeCandidatePublicationRejectsRedirectedCheckoutBeforeImport(t *testin
 		!errors.Is(err, domain.ErrParentKeyMismatch) {
 		t.Fatalf("redirected checkout error = %v", err)
 	}
-	if pushes := h.transport.pushCount(); pushes != 0 {
+	if pushes := h.transport.PushCount(); pushes != 0 {
 		t.Fatalf("redirected checkout reached push %d times", pushes)
 	}
 }
@@ -1485,8 +908,8 @@ func TestFakeCandidatePublicationRejectsSymlinkedRequestedCheckoutBeforeImport(t
 	writeFile(t, workspace, "README.md", "base\n")
 	writeFile(t, workspace, "candidate.txt", "verified\n")
 	redirected := filepath.Join(t.TempDir(), "redirected")
-	runGit(t, h.transport.baseDir, "clone", "-q", "--no-hardlinks", ".", redirected)
-	h.transport.symlinkTarget = redirected
+	runGit(t, h.transport.BaseDir, "clone", "-q", "--no-hardlinks", ".", redirected)
+	h.transport.SymlinkTarget = redirected
 	workflow := h.engine()
 	spec := h.spec(workspace)
 	if _, err := workflow.StartFakePublication(h.ctx, spec); err != nil {
@@ -1498,7 +921,7 @@ func TestFakeCandidatePublicationRejectsSymlinkedRequestedCheckoutBeforeImport(t
 		!strings.Contains(err.Error(), "not a real directory") {
 		t.Fatalf("symlinked checkout error = %v", err)
 	}
-	if pushes := h.transport.pushCount(); pushes != 0 {
+	if pushes := h.transport.PushCount(); pushes != 0 {
 		t.Fatalf("symlinked checkout reached push %d times", pushes)
 	}
 }
@@ -1509,7 +932,7 @@ func TestFakeCandidatePublicationRejectsReplacedCheckoutParentBeforeImport(t *te
 	workspace := t.TempDir()
 	writeFile(t, workspace, "README.md", "base\n")
 	writeFile(t, workspace, "candidate.txt", "verified\n")
-	h.transport.replaceParent = t.TempDir()
+	h.transport.ReplaceParent = t.TempDir()
 	workflow := h.engine()
 	spec := h.spec(workspace)
 	if _, err := workflow.StartFakePublication(h.ctx, spec); err != nil {
@@ -1521,7 +944,7 @@ func TestFakeCandidatePublicationRejectsReplacedCheckoutParentBeforeImport(t *te
 		!strings.Contains(err.Error(), "replaced requested checkout parent") {
 		t.Fatalf("replaced checkout parent error = %v", err)
 	}
-	if pushes := h.transport.pushCount(); pushes != 0 {
+	if pushes := h.transport.PushCount(); pushes != 0 {
 		t.Fatalf("replaced checkout parent reached push %d times", pushes)
 	}
 }
@@ -1532,7 +955,7 @@ func TestFakeCandidatePublicationReusesValidatedCheckoutDirectory(t *testing.T) 
 	workspace := t.TempDir()
 	writeFile(t, workspace, "README.md", "base\n")
 	writeFile(t, workspace, "candidate.txt", "verified\n")
-	h.transport.laterReturnDir = workspace
+	h.transport.LaterReturnDir = workspace
 	workflow := h.engine()
 	spec := h.spec(workspace)
 	if _, err := workflow.StartFakePublication(h.ctx, spec); err != nil {
@@ -1581,7 +1004,7 @@ func TestFakeCandidatePublicationRestoresAndConvergesExactlyOnce(t *testing.T) {
 		item.Item.PRHeadSHA == "" || len(item.Item.EvidenceSnapshot) != 2 {
 		t.Fatalf("ready item = %+v", item.Item)
 	}
-	message := h.transport.pushedCommitMessage()
+	message := h.transport.PushedCommitMessage()
 	if subject, _, _ := strings.Cut(message, "\n"); subject != "Publish attended fake candidate" {
 		t.Fatalf("fallback commit subject = %q, want attended title", subject)
 	}
@@ -1600,10 +1023,10 @@ func TestFakeCandidatePublicationRestoresAndConvergesExactlyOnce(t *testing.T) {
 			t.Fatalf("artifact %s content stored = %t, %v", artifact.ID, stored, err)
 		}
 	}
-	if refs, prs := h.forge.counts(); refs != 1 || prs != 1 {
+	if refs, prs := h.forge.Counts(); refs != 1 || prs != 1 {
 		t.Fatalf("forge resources after first reconcile = refs:%d prs:%d", refs, prs)
 	}
-	body := h.forge.pullRequests()[0].Body
+	body := h.forge.PullRequests()[0].Body
 	if !strings.Contains(body, "## Verification") || strings.Count(body, "exit 0") != 2 ||
 		!strings.Contains(body, "second-step") || !strings.Contains(body, string(h.recipeD)) ||
 		!strings.Contains(body, item.Item.PRHeadSHA) || !strings.Contains(body, "### Agent-Reported Evidence") {
@@ -1628,16 +1051,16 @@ func TestFakeCandidatePublicationRestoresAndConvergesExactlyOnce(t *testing.T) {
 	if second.ReadyItemsCreated != 1 || second.LastPRNumber != 101 {
 		t.Fatalf("restored result = %+v", second)
 	}
-	if refs, prs := h.forge.counts(); refs != 1 || prs != 1 {
+	if refs, prs := h.forge.Counts(); refs != 1 || prs != 1 {
 		t.Fatalf("restore duplicated forge resources = refs:%d prs:%d", refs, prs)
 	}
-	if h.transport.pushCount() != 2 {
-		t.Fatalf("push convergence attempts = %d, want 2", h.transport.pushCount())
+	if h.transport.PushCount() != 2 {
+		t.Fatalf("push convergence attempts = %d, want 2", h.transport.PushCount())
 	}
 	if replay, err := restored.Reconcile(h.ctx); err != nil || replay != (engine.ReconcileResult{}) {
 		t.Fatalf("settled reconcile = %+v, %v", replay, err)
 	}
-	if h.forge.pullRequests()[0].Body != body {
+	if h.forge.PullRequests()[0].Body != body {
 		t.Fatal("fake publication changed body after restore and repeated reconcile")
 	}
 }
@@ -1702,7 +1125,7 @@ func TestFakeCandidatePublicationSerializesOneTaskAcrossEngines(t *testing.T) {
 			t.Fatalf("%s reconcile = %+v, %v", name, result.result, result.err)
 		}
 	}
-	if refs, prs := h.forge.counts(); refs != 1 || prs != 1 {
+	if refs, prs := h.forge.Counts(); refs != 1 || prs != 1 {
 		t.Fatalf("concurrent engines duplicated forge resources = refs:%d prs:%d", refs, prs)
 	}
 }
@@ -1748,7 +1171,7 @@ func TestFakeCandidatePublicationRunTraceProducesDistinctIdentities(t *testing.T
 	if firstItem.Item.PRHeadSHA == secondItem.Item.PRHeadSHA {
 		t.Fatalf("run-bound fallback messages reused head %s", firstItem.Item.PRHeadSHA)
 	}
-	if refs, prs := h.forge.counts(); refs != 2 || prs != 2 {
+	if refs, prs := h.forge.Counts(); refs != 2 || prs != 2 {
 		t.Fatalf("run-traced candidates = refs:%d prs:%d, want 2/2", refs, prs)
 	}
 }
@@ -1761,7 +1184,7 @@ func TestFakeCandidatePublicationRejectsCorruptCheckpointBlob(t *testing.T) {
 	writeFile(t, workspace, "candidate.txt", "verified\n")
 
 	workflow := h.engine()
-	h.transport.failNextPush()
+	h.transport.FailNextPush()
 	if _, err := workflow.StartFakePublication(h.ctx, h.spec(workspace)); err != nil {
 		t.Fatalf("StartFakePublication: %v", err)
 	}
@@ -1789,12 +1212,12 @@ func TestFakeCandidatePublicationRejectsCorruptCheckpointBlob(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(h.blobDir, corruptBlob), []byte("corrupt"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	pushes := h.transport.pushCount()
+	pushes := h.transport.PushCount()
 	if _, err := workflow.Reconcile(h.ctx); err == nil ||
 		!strings.Contains(err.Error(), "body hashes to") {
 		t.Fatalf("corrupt checkpoint blob error = %v", err)
 	}
-	if got := h.transport.pushCount(); got != pushes {
+	if got := h.transport.PushCount(); got != pushes {
 		t.Fatalf("corrupt checkpoint reached push: %d -> %d", pushes, got)
 	}
 }
@@ -1807,7 +1230,7 @@ func TestFakeCandidatePublicationRejectsSubstitutedCheckpointArtifact(t *testing
 	writeFile(t, workspace, "candidate.txt", "verified\n")
 
 	workflow := h.engine()
-	h.transport.failNextPush()
+	h.transport.FailNextPush()
 	if _, err := workflow.StartFakePublication(h.ctx, h.spec(workspace)); err != nil {
 		t.Fatalf("StartFakePublication: %v", err)
 	}
@@ -1851,12 +1274,12 @@ func TestFakeCandidatePublicationRejectsSubstitutedCheckpointArtifact(t *testing
 		t.Fatal(err)
 	}
 
-	pushes := h.transport.pushCount()
+	pushes := h.transport.PushCount()
 	if _, err := workflow.Reconcile(h.ctx); err == nil ||
 		!errors.Is(err, domain.ErrParentKeyMismatch) {
 		t.Fatalf("substituted checkpoint artifact error = %v", err)
 	}
-	if got := h.transport.pushCount(); got != pushes {
+	if got := h.transport.PushCount(); got != pushes {
 		t.Fatalf("substituted checkpoint reached push: %d -> %d", pushes, got)
 	}
 }
@@ -1869,7 +1292,7 @@ func TestFakeCandidatePublicationReverifiesSelfConsistentCheckpoint(t *testing.T
 	writeFile(t, workspace, "candidate.txt", "verified\n")
 
 	workflow := h.engine()
-	h.transport.failNextPush()
+	h.transport.FailNextPush()
 	if _, err := workflow.StartFakePublication(h.ctx, h.spec(workspace)); err != nil {
 		t.Fatalf("StartFakePublication: %v", err)
 	}
@@ -1923,13 +1346,13 @@ func TestFakeCandidatePublicationReverifiesSelfConsistentCheckpoint(t *testing.T
 		t.Fatal(err)
 	}
 
-	pushes := h.transport.pushCount()
+	pushes := h.transport.PushCount()
 	if _, err := workflow.Reconcile(h.ctx); err == nil ||
 		!errors.Is(err, domain.ErrParentKeyMismatch) ||
 		!strings.Contains(err.Error(), "fresh verification") {
 		t.Fatalf("self-consistent checkpoint error = %v", err)
 	}
-	if got := h.transport.pushCount(); got != pushes {
+	if got := h.transport.PushCount(); got != pushes {
 		t.Fatalf("forged checkpoint reached push: %d -> %d", pushes, got)
 	}
 }
@@ -2220,7 +1643,7 @@ func TestFakeCandidatePublicationContinuesPastBrokenSibling(t *testing.T) {
 	if result.ReadyItemsCreated != 1 || result.LastPRNumber != 101 {
 		t.Fatalf("independent reconciliation result = %+v", result)
 	}
-	if got := h.transport.pushCount(); got != 1 {
+	if got := h.transport.PushCount(); got != 1 {
 		t.Fatalf("independent task pushes = %d, want 1", got)
 	}
 	var pending []store.QueueEntry
@@ -2448,7 +1871,7 @@ func TestFakeCandidatePublicationDoesNotReuseHandoffAfterStateRollback(t *testin
 	if secondItem.Item.PRHeadSHA == firstItem.Item.PRHeadSHA {
 		t.Fatalf("rollback reused stale handoff head %s", secondItem.Item.PRHeadSHA)
 	}
-	if refs, prs := h.forge.counts(); refs != 2 || prs != 2 {
+	if refs, prs := h.forge.Counts(); refs != 2 || prs != 2 {
 		t.Fatalf("rollback resources = refs:%d prs:%d, want 2 each", refs, prs)
 	}
 }
@@ -2483,7 +1906,7 @@ func TestFakeCandidatePublicationRejectsReplacedCommittedHandoff(t *testing.T) {
 		!errors.Is(err, domain.ErrParentKeyMismatch) {
 		t.Fatalf("replaced handoff error = %v", err)
 	}
-	if pushes := h.transport.pushCount(); pushes != 0 {
+	if pushes := h.transport.PushCount(); pushes != 0 {
 		t.Fatalf("replaced handoff reached push %d times", pushes)
 	}
 }
@@ -2555,7 +1978,7 @@ func TestFakeCandidatePublicationDoesNotReExportMissingCommittedHandoff(t *testi
 	if _, err := workflow.Reconcile(h.ctx); err == nil {
 		t.Fatal("Reconcile recreated a missing committed handoff")
 	}
-	if pushes := h.transport.pushCount(); pushes != 0 {
+	if pushes := h.transport.PushCount(); pushes != 0 {
 		t.Fatalf("missing committed handoff reached push %d times", pushes)
 	}
 }
@@ -2613,10 +2036,10 @@ func TestFakeCandidatePublicationContainsMaliciousFixtures(t *testing.T) {
 					t.Fatalf("blocked item type = %s", item.Item.Type)
 				}
 			}
-			if refs, prs := h.forge.counts(); refs != 0 || prs != 0 {
+			if refs, prs := h.forge.Counts(); refs != 0 || prs != 0 {
 				t.Fatalf("malicious fixture escaped containment = refs:%d prs:%d", refs, prs)
 			}
-			if pushes := h.transport.pushCount(); pushes != 0 {
+			if pushes := h.transport.PushCount(); pushes != 0 {
 				t.Fatalf("malicious fixture reached push %d times", pushes)
 			}
 		})
@@ -2645,7 +2068,7 @@ func TestFakeCandidatePublicationSurfacesReviewerInstructionEdits(t *testing.T) 
 	if result.BlockedItemsCreated != 0 || result.ReadyItemsCreated != 1 {
 		t.Fatalf("result = %+v, want one ready item and no blocked item", result)
 	}
-	prs := h.forge.pullRequests()
+	prs := h.forge.PullRequests()
 	if len(prs) != 1 {
 		t.Fatalf("pull requests = %d, want 1", len(prs))
 	}
@@ -2678,10 +2101,10 @@ func TestFakeCandidatePublicationChecksFreshTrustBeforePush(t *testing.T) {
 	if result.BlockedItemsCreated != 1 || result.ReadyItemsCreated != 0 {
 		t.Fatalf("drifted trust result = %+v", result)
 	}
-	if refs, prs := h.forge.counts(); refs != 0 || prs != 0 {
+	if refs, prs := h.forge.Counts(); refs != 0 || prs != 0 {
 		t.Fatalf("drifted trust created forge resources = refs:%d prs:%d", refs, prs)
 	}
-	if pushes := h.transport.pushCount(); pushes != 0 {
+	if pushes := h.transport.PushCount(); pushes != 0 {
 		t.Fatalf("drifted trust reached push %d times", pushes)
 	}
 }
@@ -2694,7 +2117,7 @@ func TestFakeCandidatePublicationRetainsRecoveryTaskAfterIntentTrustDrift(t *tes
 	writeFile(t, workspace, "candidate.txt", "verified\n")
 
 	workflow := h.engine()
-	h.transport.failNextPush()
+	h.transport.FailNextPush()
 	if _, err := workflow.StartFakePublication(h.ctx, h.spec(workspace)); err != nil {
 		t.Fatalf("StartFakePublication: %v", err)
 	}
@@ -2746,7 +2169,7 @@ func TestFakeCandidatePublicationRetainsRecoveryTaskAfterIntentTrustDrift(t *tes
 			len(engineTasks), len(publicationIntents),
 		)
 	}
-	if pushes := h.transport.pushCount(); pushes != 1 {
+	if pushes := h.transport.PushCount(); pushes != 1 {
 		t.Fatalf("trust-drifted retry reached push %d times, want original attempt only", pushes)
 	}
 	if _, err := h.attention.GetAttentionItem(
@@ -2799,12 +2222,12 @@ func TestFakeCandidatePublicationRecoversDispatchedOutcomeBeforeTrustGate(t *tes
 		!strings.Contains(err.Error(), "injected crash after publication outcome") {
 		t.Fatalf("post-outcome crash error = %v", err)
 	}
-	if pushes := h.transport.pushCount(); pushes != 1 {
+	if pushes := h.transport.PushCount(); pushes != 1 {
 		t.Fatalf("initial publication pushes = %d, want 1", pushes)
 	}
 
 	h.audit.OIDCAvailable = true
-	h.transport.failFetch(publish.ErrRemoteMissingBase)
+	h.transport.FailFetch(publish.ErrRemoteMissingBase)
 	result, err := workflow.Reconcile(h.ctx)
 	if err != nil {
 		t.Fatalf("outcome recovery Reconcile: %v", err)
@@ -2812,10 +2235,10 @@ func TestFakeCandidatePublicationRecoversDispatchedOutcomeBeforeTrustGate(t *tes
 	if result.ReadyItemsCreated != 1 || result.LastPRNumber != 101 {
 		t.Fatalf("outcome recovery result = %+v", result)
 	}
-	if pushes := h.transport.pushCount(); pushes != 1 {
+	if pushes := h.transport.PushCount(); pushes != 1 {
 		t.Fatalf("outcome recovery repeated push: %d", pushes)
 	}
-	if fetches := h.transport.fetchCount(); fetches != 1 {
+	if fetches := h.transport.FetchCount(); fetches != 1 {
 		t.Fatalf("outcome recovery fetched missing base: %d total fetches, want initial fetch only", fetches)
 	}
 }
@@ -2875,7 +2298,7 @@ func TestFakeCandidatePublicationRejectsAlteredImportAccountDuringOutcomeRecover
 		!errors.Is(err, domain.ErrParentKeyMismatch) {
 		t.Fatalf("altered import-account recovery error = %v", err)
 	}
-	if fetches := h.transport.fetchCount(); fetches != 1 {
+	if fetches := h.transport.FetchCount(); fetches != 1 {
 		t.Fatalf("altered checkpoint reached base fetch: %d total fetches, want initial fetch only", fetches)
 	}
 }
@@ -2935,7 +2358,7 @@ func TestFakeCandidatePublicationDoesNotReuseSameTreeSiblingOutcome(t *testing.T
 	if result.BlockedItemsCreated != 1 || result.ReadyItemsCreated != 0 {
 		t.Fatalf("same-candidate result = %+v", result)
 	}
-	if pushes := h.transport.pushCount(); pushes != 1 {
+	if pushes := h.transport.PushCount(); pushes != 1 {
 		t.Fatalf("same-candidate tasks pushed %d times, want first attempt only", pushes)
 	}
 	firstItem, err := h.attention.GetAttentionItem(
@@ -3008,7 +2431,7 @@ func TestFakeCandidatePublicationReplayKeepsOriginalTrustBinding(t *testing.T) {
 	if result.BlockedItemsCreated != 1 || result.ReadyItemsCreated != 1 {
 		t.Fatalf("mixed-profile reconciliation = %+v", result)
 	}
-	if pushes := h.transport.pushCount(); pushes != 1 {
+	if pushes := h.transport.PushCount(); pushes != 1 {
 		t.Fatalf("mixed-profile tasks reached push %d times, want only the current task", pushes)
 	}
 }
@@ -3405,7 +2828,7 @@ func TestFakeCandidatePublicationBackfillsAReservationMissingFromAdmission(t *te
 
 	// Fail the reconcile after the claim so the reservation can be observed
 	// while the task is still mid-flight, which is the window it must cover.
-	h.transport.failFetch(errors.New("transport unavailable"))
+	h.transport.FailFetch(errors.New("transport unavailable"))
 	if _, err := h.engine().ReconcileFakePublication(h.ctx, spec.RunID); err == nil {
 		t.Fatal("ReconcileFakePublication succeeded, want the injected transport failure")
 	}

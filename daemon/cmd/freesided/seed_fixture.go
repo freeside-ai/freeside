@@ -18,7 +18,7 @@ func parseSeedFixture(cfg config) (seedfixture.Name, error) {
 	if cfg.Environment != environmentEphemeral {
 		return "", fmt.Errorf("-seed-fixture requires -environment %s, not %q", environmentEphemeral, cfg.Environment)
 	}
-	if cfg.FakeDriverEnabled || cfg.Claude != nil {
+	if cfg.FakeDriverEnabled || cfg.Claude != nil || cfg.Scenario != nil {
 		return "", errors.New("-seed-fixture requires -driver disabled")
 	}
 	return name, nil

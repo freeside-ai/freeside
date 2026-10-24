@@ -263,7 +263,7 @@ func TestExternalReviewCycleReearnsReadinessWhenEveryFindingIsAnswered(t *testin
 	driver := p.configureAdjudicator(t)
 	first, findings := p.startAdjudicatedExternalReview(t, "this leaks the handle", "rename this too")
 	head := p.replay.HeadSHA
-	pushes, body := p.transport.pushCount(), p.forge.pullRequests()[0].Body
+	pushes, body := p.transport.PushCount(), p.forge.PullRequests()[0].Body
 
 	p.scriptCleanReview(2, p.baseSHA, head)
 	scriptAdjudication(t, driver, declineVerdict(findings[0].ID), deferVerdict(findings[1].ID))
@@ -272,7 +272,7 @@ func TestExternalReviewCycleReearnsReadinessWhenEveryFindingIsAnswered(t *testin
 		t.Fatalf("cycle result = %#v, %v", result, err)
 	}
 	p.assertReentered(t, first, 2, p.baseSHA, head)
-	if p.transport.pushCount() != pushes || p.forge.pullRequests()[0].Body != body {
+	if p.transport.PushCount() != pushes || p.forge.PullRequests()[0].Body != body {
 		t.Fatal("the cycle pushed or rewrote the pull request")
 	}
 	end := p.externalReviewEnd(t)

@@ -45,7 +45,7 @@ func TestProductionVerificationListsAgentClaimsWithoutTheirText(t *testing.T) {
 		t.Fatal(err)
 	}
 	p.assertReady(t)
-	body := p.forge.pullRequests()[0].Body
+	body := p.forge.PullRequests()[0].Body
 	claims := strings.Index(body, "### Agent-Reported Evidence")
 	label := strings.Index(body, "freeside.summary")
 	if claims < 0 || label < claims || !strings.Contains(body, string(digest)) || !strings.Contains(body, "text/markdown") || strings.Contains(body, "imaginary randomized fuzzing") {
@@ -93,7 +93,7 @@ func TestProductionVerificationMissingReportRetriesWithoutPublishing(t *testing.
 	if err != nil || result.ReadyItemsCreated != 0 || removedPath == "" {
 		t.Fatalf("missing report result = %+v, %v", result, err)
 	}
-	if refs, prs := p.forge.counts(); refs != 0 || prs != 0 {
+	if refs, prs := p.forge.Counts(); refs != 0 || prs != 0 {
 		t.Fatal("missing report reached publication")
 	}
 	if err := p.store.Read(p.ctx, func(tx *store.ReadTx) error {

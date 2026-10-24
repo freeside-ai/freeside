@@ -262,8 +262,8 @@ func newPublicMetadataHarness(t *testing.T) *productionPublicationHarness {
 
 func assertPublicMetadata(t *testing.T, p *productionPublicationHarness) string {
 	t.Helper()
-	prs := p.forge.pullRequests()
-	if refs, count := p.forge.counts(); refs != 1 || count != 1 {
+	prs := p.forge.PullRequests()
+	if refs, count := p.forge.Counts(); refs != 1 || count != 1 {
 		t.Fatalf("effects: refs=%d PRs=%d", refs, count)
 	}
 	if prs[0].Title != "Preserve retries after restart" {
@@ -302,9 +302,9 @@ func TestPublicMetadataPublicationAndRecovery(t *testing.T) {
 			p.startAndRecordExport(t)
 			switch mode {
 			case "push response lost":
-				p.transport.failNextPush()
+				p.transport.FailNextPush()
 			case "create response lost":
-				p.forge.failAfterNextPRCreate()
+				p.forge.FailAfterNextPRCreate()
 			}
 			if _, err := p.reconcileLanes(); err != nil {
 				t.Fatal(err)
@@ -361,7 +361,7 @@ func TestPublicMetadataHoldsBeforeForgeWrite(t *testing.T) {
 			if mode != "substituted bytes" && (err != nil || result.BlockedItemsCreated != 1) {
 				t.Fatalf("hold = %+v, %v", result, err)
 			}
-			if refs, prs := p.forge.counts(); refs != 0 || prs != 0 {
+			if refs, prs := p.forge.Counts(); refs != 0 || prs != 0 {
 				t.Fatalf("unsafe metadata wrote forge: %d refs, %d PRs", refs, prs)
 			}
 		})
@@ -503,7 +503,7 @@ func TestPublicMetadataHoldRecoveryStopsAndResubmits(t *testing.T) {
 			if _, err := p.reconcileLanes(); err != nil {
 				t.Fatal(err)
 			}
-			if refs, prs := p.forge.counts(); refs != 0 || prs != 0 {
+			if refs, prs := p.forge.Counts(); refs != 0 || prs != 0 {
 				t.Fatal("held or stopped task wrote the forge")
 			}
 			replacement := newProductionPublicationHarnessWithMetadata(t, p.publicationHarness, "", nil, nil, nil, engine.ProductionPublication{}, p, "", "replacement-publication")
@@ -529,10 +529,10 @@ func TestPublicMetadataRepairsDriftFromSameCandidate(t *testing.T) {
 		t.Fatal("ready crash seam did not fire")
 	}
 	want := assertPublicMetadata(t, p)
-	p.forge.mu.Lock()
-	p.forge.prs[0].Title = "external title"
-	p.forge.prs[0].Body = strings.Replace(p.forge.prs[0].Body, "Keep the whole approved change", "Externally changed prose", 1)
-	p.forge.mu.Unlock()
+	p.forge.Mu.Lock()
+	p.forge.PRs[0].Title = "external title"
+	p.forge.PRs[0].Body = strings.Replace(p.forge.PRs[0].Body, "Keep the whole approved change", "Externally changed prose", 1)
+	p.forge.Mu.Unlock()
 	p.restartDurableState(t)
 	p.workflow = p.newEngine(t, productionCrashSeams{}, true)
 	if _, err := p.reconcileLanes(); err != nil {
@@ -580,9 +580,9 @@ func TestPublicMetadataCancellationFencesPublicationAndRepair(t *testing.T) {
 			}
 			confirmFixtureTask(t, p.store, taskID)
 			if published {
-				p.forge.mu.Lock()
-				p.forge.prs[0].Title = "external title after Stop"
-				p.forge.mu.Unlock()
+				p.forge.Mu.Lock()
+				p.forge.PRs[0].Title = "external title after Stop"
+				p.forge.Mu.Unlock()
 			}
 			p.restartDurableState(t)
 			p.workflow = p.newEngine(t, productionCrashSeams{}, true)
@@ -593,10 +593,10 @@ func TestPublicMetadataCancellationFencesPublicationAndRepair(t *testing.T) {
 			if published {
 				want = 1
 			}
-			if refs, prs := p.forge.counts(); refs != want || prs != want {
+			if refs, prs := p.forge.Counts(); refs != want || prs != want {
 				t.Fatal("Stop allowed a new publication effect")
 			}
-			if published && p.forge.pullRequests()[0].Title != "external title after Stop" {
+			if published && p.forge.PullRequests()[0].Title != "external title after Stop" {
 				t.Fatal("Stop allowed metadata repair")
 			}
 		})

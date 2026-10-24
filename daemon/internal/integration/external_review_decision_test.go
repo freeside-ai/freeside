@@ -160,7 +160,7 @@ func (p *productionPublicationHarness) assertExternalReplyQueued(t *testing.T, f
 		_, _ = w.Write([]byte("[]"))
 	}))
 	t.Cleanup(server.Close)
-	replier, err := publish.NewExternalReviewReplier(p.store, integrationTokenSource{}, server.Client(), server.URL, externalDecisionIdentity{}, func() time.Time { return p.now })
+	replier, err := publish.NewExternalReviewReplier(p.store, integrationTokenSource(), server.Client(), server.URL, externalDecisionIdentity{}, func() time.Time { return p.now })
 	if err != nil {
 		t.Fatal(err)
 	}

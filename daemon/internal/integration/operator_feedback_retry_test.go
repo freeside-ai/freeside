@@ -619,11 +619,11 @@ func completeFeedbackSuccessor(t *testing.T, p *productionPublicationHarness, in
 		replay = remediateFeedbackSuccessor(t, p, replay, run)
 		wantVerifications = 3
 	} else {
-		p.transport.successorUpdateFailure = &net.OpError{Op: "write", Net: "tcp", Err: syscall.ECONNRESET}
+		p.transport.SuccessorUpdateFailure = &net.OpError{Op: "write", Net: "tcp", Err: syscall.ECONNRESET}
 		if _, err := p.reconcileLanes(); err != nil && !errors.Is(err, syscall.ECONNRESET) {
 			t.Fatal(err)
 		}
-		if p.transport.successorUpdateFailure != nil {
+		if p.transport.SuccessorUpdateFailure != nil {
 			t.Fatal("successor did not reach post-push interruption")
 		}
 		p.restartDurableState(t)
@@ -671,11 +671,11 @@ func completeFeedbackSuccessor(t *testing.T, p *productionPublicationHarness, in
 	if conclusion := authenticatedProductionConclusion(t, p); conclusion.Outcome != domain.RunOutcomePublished || !conclusion.Final {
 		t.Fatalf("successor supervision conclusion = %#v", conclusion)
 	}
-	if refs, prs := p.forge.counts(); refs != 1 || prs != 1 {
+	if refs, prs := p.forge.Counts(); refs != 1 || prs != 1 {
 		t.Fatalf("successor created another resource: refs=%d prs=%d", refs, prs)
 	}
 	if scenario == "public-metadata" {
-		pr := p.forge.pullRequests()[0]
+		pr := p.forge.PullRequests()[0]
 		if pr.Title != "Preserve retries after restart" || !strings.Contains(pr.Body, "Producer:\n\n<pre><code>"+string(invocation)+"</code></pre>") ||
 			!strings.Contains(pr.Body, "Keep the whole approved change") || strings.Contains(pr.Body, "Initial whole change") {
 			t.Fatal("feedback retained predecessor public metadata")
@@ -815,32 +815,6 @@ func assertSuccessorCorruptionRejected(t *testing.T, p *productionPublicationHar
 	assertFeedbackRunProjection(t, p, domain.RunOutcomePublished)
 }
 
-func (tr *integrationTransport) UpdateHead(_ context.Context, checkout engine.PublicationCheckout, update publish.GatedUpdate) (publish.PushResult, error) {
-	sealed, ok := checkout.(integrationCheckout)
-	if !ok || sealed.owner != tr || update.ExpectedOldHead() == "" || update.SourceHeadSHA() == "" {
-		return publish.PushResult{}, engine.ErrForeignPublicationCheckout
-	}
-	tr.forge.mu.Lock()
-	defer tr.forge.mu.Unlock()
-	old := tr.forge.refs[update.Branch()]
-	if old != update.ExpectedOldHead() && old != update.SourceHeadSHA() {
-		return publish.PushResult{}, publish.ErrPublicationConflict
-	}
-	tr.forge.refs[update.Branch()] = update.SourceHeadSHA()
-	for i := range tr.forge.prs {
-		if tr.forge.prs[i].HeadRef == update.Branch() {
-			tr.forge.prs[i].HeadSHA = update.SourceHeadSHA()
-		}
-	}
-	tr.publishHead(sealed.dir, update.Branch(), update.SourceHeadSHA())
-	if tr.successorUpdateFailure != nil {
-		err := tr.successorUpdateFailure
-		tr.successorUpdateFailure = nil
-		return publish.PushResult{}, err
-	}
-	return publish.PushResult{}, nil
-}
-
 func configureSuccessorJudgments(t *testing.T, p *productionPublicationHarness) {
 	t.Helper()
 	classifier := inferencefake.New()
@@ -973,7 +947,7 @@ func assertSuccessorReevaluationEscalates(t *testing.T, p *productionPublication
 	}); err != nil {
 		t.Fatal(err)
 	}
-	if refs, prs := p.forge.counts(); refs != 1 || prs != 1 {
+	if refs, prs := p.forge.Counts(); refs != 1 || prs != 1 {
 		t.Fatalf("escalation changed resources: refs=%d prs=%d", refs, prs)
 	}
 }
@@ -1021,11 +995,11 @@ func absorbLaggingSuccessorListings(t *testing.T, p *productionPublicationHarnes
 	// idempotent re-push, and after it, where only the second can lag.
 	switch scenario {
 	case "lagging-empty-listing":
-		p.forge.lagPRListings(1, "")
+		p.forge.LagPRListings(1, "")
 	case "lagging-head-listing":
-		p.forge.lagPRListings(2, oldHead)
+		p.forge.LagPRListings(2, oldHead)
 	case "lagging-persistent":
-		p.forge.lagPRListings(1<<20, oldHead)
+		p.forge.LagPRListings(1<<20, oldHead)
 	}
 	attempts := 1
 	if scenario == "lagging-persistent" {
@@ -1045,11 +1019,11 @@ func absorbLaggingSuccessorListings(t *testing.T, p *productionPublicationHarnes
 		if scenario == "lagging-persistent" && attempt == 1 {
 			// A transient failure between lagging reads must not restart
 			// the tolerance window, or a flaky GitHub postpones the card.
-			p.transport.successorUpdateFailure = &net.OpError{Op: "write", Net: "tcp", Err: syscall.ECONNRESET}
+			p.transport.SuccessorUpdateFailure = &net.OpError{Op: "write", Net: "tcp", Err: syscall.ECONNRESET}
 			if result, err := p.reconcileLanes(); (err != nil && !errors.Is(err, syscall.ECONNRESET)) || result.BlockedItemsCreated != 0 {
 				t.Fatalf("transient failure during lag: %#v, %v", result, err)
 			}
-			if p.transport.successorUpdateFailure != nil {
+			if p.transport.SuccessorUpdateFailure != nil {
 				t.Fatal("transient failure was not reached")
 			}
 			p.now = p.now.Add(time.Minute + time.Second)
@@ -1079,7 +1053,7 @@ func absorbLaggingSuccessorListings(t *testing.T, p *productionPublicationHarnes
 		}
 		p.now = p.now.Add(time.Minute + time.Second)
 	}
-	p.forge.lagPRListings(0, "")
+	p.forge.LagPRListings(0, "")
 }
 
 func assertNoPublishBlockedItem(t *testing.T, p *productionPublicationHarness) {
@@ -1130,7 +1104,7 @@ func assertUnreadableSuccessorTaskHeld(t *testing.T, p *productionPublicationHar
 	if held := productionItemRecord(t, p, id); held.Status != domain.StatusOpen {
 		t.Fatalf("unreadable successor was not held: %#v", held)
 	}
-	if refs, prs := p.forge.counts(); refs != 1 || prs != 1 || p.room.runs != 1 {
+	if refs, prs := p.forge.Counts(); refs != 1 || prs != 1 || p.room.runs != 1 {
 		t.Fatalf("unreadable successor advanced: refs=%d prs=%d verification=%d", refs, prs, p.room.runs)
 	}
 	writeOutboxPayload(t, p, key, original)

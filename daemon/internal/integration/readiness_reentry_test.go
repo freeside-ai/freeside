@@ -51,16 +51,18 @@ func (p *productionPublicationHarness) pushToPullRequest(t *testing.T, name, con
 // pull request's branch and pushes it, as anyone with push access can.
 func (p *productionPublicationHarness) pushCommitToPullRequest(t *testing.T, change func(dir string)) string {
 	t.Helper()
-	pull := p.forge.pullRequests()[0]
+	pull := p.forge.PullRequests()[0]
 	dir := t.TempDir()
 	runGit(t, dir, "init", "-q")
-	runGit(t, dir, "fetch", "-q", p.transport.headRepo(), "refs/heads/"+pull.HeadRef)
+	runGit(t, dir, "fetch", "-q", headRepo(t, p.transport), "refs/heads/"+pull.HeadRef)
 	runGit(t, dir, "checkout", "-q", "--detach", "FETCH_HEAD")
 	change(dir)
 	runGit(t, dir, "add", "-A")
 	runGit(t, dir, "commit", "-q", "-m", "push to the pull request")
 	head := runGit(t, dir, "rev-parse", "HEAD")
-	p.transport.pushBranchHead(dir, pull.HeadRef, head)
+	if err := p.transport.PushBranchHead(dir, pull.HeadRef, head); err != nil {
+		t.Fatal(err)
+	}
 	return head
 }
 
@@ -216,7 +218,7 @@ func (p *productionPublicationHarness) assertReentered(
 		t.Fatalf("re-entry review = %#v, want clean round %d of %s..%s",
 			review, round, baseSHA, headSHA)
 	}
-	if refs, prs := p.forge.counts(); refs != 1 || prs != 1 {
+	if refs, prs := p.forge.Counts(); refs != 1 || prs != 1 {
 		t.Fatalf("re-entry changed publication effects: %d refs, %d PRs", refs, prs)
 	}
 	return ready
@@ -226,7 +228,7 @@ func TestReadinessReentersAfterBaseAdvance(t *testing.T) {
 	t.Parallel()
 	p := newProductionPublicationHarnessWithBoundIssue(t, "", 1986)
 	first := p.publishReady(t)
-	pushes, body := p.transport.pushCount(), p.forge.pullRequests()[0].Body
+	pushes, body := p.transport.PushCount(), p.forge.PullRequests()[0].Body
 
 	advanced := p.advanceBase(t, "UPSTREAM.md", "upstream change\n")
 	superseded, started := p.invalidateReady(t, domain.ReadinessInvalidation{
@@ -265,11 +267,11 @@ func TestReadinessReentersAfterBaseAdvance(t *testing.T) {
 	if first.ID != superseded.ID {
 		t.Fatalf("superseded %s, want the first ready item %s", superseded.ID, first.ID)
 	}
-	if p.room.runs != 2 || p.transport.mergeCount() != 1 {
+	if p.room.runs != 2 || p.transport.MergeCount() != 1 {
 		t.Fatalf("verification runs = %d, merges = %d, want 2 and 1",
-			p.room.runs, p.transport.mergeCount())
+			p.room.runs, p.transport.MergeCount())
 	}
-	if p.transport.pushCount() != pushes || p.forge.pullRequests()[0].Body != body {
+	if p.transport.PushCount() != pushes || p.forge.PullRequests()[0].Body != body {
 		t.Fatal("re-entry pushed or rewrote the pull request")
 	}
 	if result, err := p.reconcileLanes(); err != nil || result.ReadyItemsCreated != 0 ||
@@ -404,9 +406,9 @@ func TestReadinessReentersAfterHeadChange(t *testing.T) {
 		reviews.files[0]["FOLLOWUP.md"] != "pushed after readiness\n" {
 		t.Fatalf("review request = %#v, tree %#v", reviews.requests, reviews.files)
 	}
-	if p.room.runs != 2 || p.transport.mergeCount() != 0 {
+	if p.room.runs != 2 || p.transport.MergeCount() != 0 {
 		t.Fatalf("verification runs = %d, merges = %d, want 2 and 0",
-			p.room.runs, p.transport.mergeCount())
+			p.room.runs, p.transport.MergeCount())
 	}
 }
 
@@ -738,9 +740,9 @@ func TestReadinessReentersThreeTimesAndWatchesTheCycleBase(t *testing.T) {
 		}
 		bound = advanced
 	}
-	if p.room.runs != 4 || p.transport.mergeCount() != 3 {
+	if p.room.runs != 4 || p.transport.MergeCount() != 3 {
 		t.Fatalf("verification runs = %d, merges = %d, want 4 and 3",
-			p.room.runs, p.transport.mergeCount())
+			p.room.runs, p.transport.MergeCount())
 	}
 }
 
@@ -849,7 +851,7 @@ func TestReadinessReentryDiscardsCycleWhenHeadMoves(t *testing.T) {
 	}
 	p.scriptCleanReview(2, p.baseSHA, second)
 	var third string
-	p.transport.onHeadFetch(func(call int) {
+	p.transport.OnHeadFetch(func(call int) {
 		// The second fetch of the cycle is its check of the live head just
 		// before readiness.
 		if call == 2 {
@@ -894,7 +896,7 @@ func TestReadinessReentryDiscardsCycleWhenHeadMoves(t *testing.T) {
 		t.Fatalf("discarded ready item = %#v", discarded)
 	}
 	assertObservedReentryConclusion(t, p, domain.RunConclusion{Outcome: domain.RunOutcomePending})
-	p.transport.onHeadFetch(nil)
+	p.transport.OnHeadFetch(nil)
 	p.reconcileUntilReady(t, 2)
 	p.assertReentered(t, discarded, 3, p.baseSHA, third)
 	assertObservedReentryConclusion(t, p, domain.RunConclusion{Outcome: domain.RunOutcomePublished, Final: true})
@@ -947,7 +949,7 @@ func (p *productionPublicationHarness) reentryStopItem(t *testing.T) domain.Atte
 		if err != nil {
 			return err
 		}
-		if held.PRNumber != p.forge.pullRequests()[0].Number {
+		if held.PRNumber != p.forge.PullRequests()[0].Number {
 			t.Errorf("stop item pull request = %d", held.PRNumber)
 		}
 		if _, err := tx.GetAttentionItem(p.ctx, successor.ReadyItemID()); !errors.Is(err, store.ErrNotFound) {
@@ -1090,8 +1092,10 @@ func TestReadinessReentryStopWithdrawsItsOwnReadyItem(t *testing.T) {
 	}
 	runGit(t, replacement, "add", "-A")
 	runGit(t, replacement, "commit", "-q", "-m", "rewrite the branch")
-	p.transport.pushBranchHead(replacement, p.forge.pullRequests()[0].HeadRef,
-		runGit(t, replacement, "rev-parse", "HEAD"))
+	if err := p.transport.PushBranchHead(replacement, p.forge.PullRequests()[0].HeadRef,
+		runGit(t, replacement, "rev-parse", "HEAD")); err != nil {
+		t.Fatal(err)
+	}
 
 	p.restartDurableState(t)
 	p.workflow = p.newEngine(t, productionCrashSeams{}, true)
@@ -1221,7 +1225,7 @@ func TestReadinessReentryHoldCarriesThePullRequest(t *testing.T) {
 		if err != nil {
 			return err
 		}
-		if held.PRNumber != p.forge.pullRequests()[0].Number {
+		if held.PRNumber != p.forge.PullRequests()[0].Number {
 			t.Errorf("hold item pull request = %d", held.PRNumber)
 		}
 		hold, present, err := tx.GetRunHold(p.ctx, p.runID)
@@ -1440,7 +1444,7 @@ func TestReadinessReentryRefusesMergeThatDiffersFromTheVerifiedOne(t *testing.T)
 	p.restartDurableState(t)
 	p.scriptCleanReview(2, advanced, p.replay.HeadSHA)
 	reviews := p.recordReviews(t)
-	p.transport.rebuildMergesAs("another merge of the same pair")
+	p.transport.RebuildMergesAs("another merge of the same pair")
 	if _, err := p.reconcileLanes(); !errors.Is(err, domain.ErrParentKeyMismatch) {
 		t.Fatalf("differing merge: err = %v, want a parent-key mismatch", err)
 	}

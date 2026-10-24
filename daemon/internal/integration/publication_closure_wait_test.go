@@ -33,14 +33,14 @@ func TestHumanGateClosureHoldsDraftUntilDecided(t *testing.T) {
 			p, instance := newHeldClosureHarness(t)
 
 			// An undecided item costs no forge write on a later pass.
-			writes := p.forge.writeCountSnapshot()
+			writes := p.forge.WriteCountSnapshot()
 			if _, err := p.reconcileLanes(); err != nil {
 				t.Fatal(err)
 			}
-			if after := p.forge.writeCountSnapshot(); !equalCounts(writes, after) {
+			if after := p.forge.WriteCountSnapshot(); !equalCounts(writes, after) {
 				t.Fatalf("undecided pass wrote to the forge: %v -> %v", writes, after)
 			}
-			if pr := p.forge.pullRequests()[0]; !pr.Draft {
+			if pr := p.forge.PullRequests()[0]; !pr.Draft {
 				t.Fatal("undecided pass released the draft hold")
 			}
 
@@ -48,7 +48,7 @@ func TestHumanGateClosureHoldsDraftUntilDecided(t *testing.T) {
 			if _, err := p.reconcileLanes(); err != nil {
 				t.Fatal(err)
 			}
-			released := p.forge.pullRequests()
+			released := p.forge.PullRequests()
 			if len(released) != 1 || released[0].Draft || !strings.Contains(released[0].Body, tc.want) ||
 				(tc.withheld != "" && strings.Contains(released[0].Body, tc.withheld)) {
 				t.Fatalf("decided PR = %+v, want ready with %q", released, tc.want)
@@ -56,11 +56,11 @@ func TestHumanGateClosureHoldsDraftUntilDecided(t *testing.T) {
 			if waits := pendingClosureWaits(t, p); len(waits) != 0 {
 				t.Fatalf("closure wait still pending after convergence: %d", len(waits))
 			}
-			writes = p.forge.writeCountSnapshot()
+			writes = p.forge.WriteCountSnapshot()
 			if _, err := p.reconcileLanes(); err != nil {
 				t.Fatal(err)
 			}
-			if after := p.forge.writeCountSnapshot(); !equalCounts(writes, after) {
+			if after := p.forge.WriteCountSnapshot(); !equalCounts(writes, after) {
 				t.Fatalf("retired wait still reconverges: %v -> %v", writes, after)
 			}
 		})
@@ -104,10 +104,10 @@ func newHeldClosureHarness(t *testing.T) (*productionPublicationHarness, domain.
 	if !seen[inference.PublicationAuthorExplainSiteID] || !seen[inference.PublicationAuthorProposeSiteID] {
 		t.Fatalf("publication author sites called = %v, want explain and propose", seen)
 	}
-	if p.forge.issueReads != 1 {
-		t.Fatalf("source issue reads = %d, want one shared observation", p.forge.issueReads)
+	if p.forge.IssueReads != 1 {
+		t.Fatalf("source issue reads = %d, want one shared observation", p.forge.IssueReads)
 	}
-	held := p.forge.pullRequests()
+	held := p.forge.PullRequests()
 	if len(held) != 1 || !held[0].Draft || strings.Contains(held[0].Body, "Closes #82") {
 		t.Fatalf("held PR = %+v, want one draft with no Closes", held)
 	}
@@ -130,15 +130,15 @@ func testSourceIssueReadFailureFallsBack(t *testing.T, malformedTitle bool) {
 	metadata.SourceIssue = "https://github.com/" + fakePublicationRepo + "/issues/82"
 	p := newAuthoredMetadataHarness(t, metadata, nil)
 	p.replay = withPublicAccount(t, p, p.replay, publicAccount)
-	p.forge.failIssueRead = !malformedTitle
+	p.forge.FailIssueRead = !malformedTitle
 	if malformedTitle {
 		empty := ""
-		p.forge.issueTitle = &empty
+		p.forge.IssueTitle = &empty
 	}
-	p.forge.requestHook = func(method, path string) bool {
-		if method == "GET" && strings.HasSuffix(path, "/issues/82") && p.forge.issueReads == 1 {
-			p.forge.failIssueRead = false
-			p.forge.issueTitle = nil
+	p.forge.RequestHook = func(method, path string) bool {
+		if method == "GET" && strings.HasSuffix(path, "/issues/82") && p.forge.IssueReads == 1 {
+			p.forge.FailIssueRead = false
+			p.forge.IssueTitle = nil
 			return true
 		}
 		return false
@@ -151,7 +151,7 @@ func testSourceIssueReadFailureFallsBack(t *testing.T, malformedTitle bool) {
 	if _, err := p.reconcileLanes(); err != nil {
 		t.Fatal(err)
 	}
-	prs := p.forge.pullRequests()
+	prs := p.forge.PullRequests()
 	if len(prs) != 1 || prs[0].Draft || !strings.Contains(prs[0].Body, "Refs #82") ||
 		strings.Contains(prs[0].Body, "Closes #82") {
 		t.Fatalf("failed issue read PR = %+v, want ready with Refs #82", prs)
@@ -159,19 +159,19 @@ func testSourceIssueReadFailureFallsBack(t *testing.T, malformedTitle bool) {
 	if len(driver.Requests()) != 0 || len(pendingClosureWaits(t, p)) != 0 {
 		t.Fatal("failed issue read reached an author site or armed a closure wait")
 	}
-	if p.forge.issueReads != 1 {
-		t.Fatalf("source issue reads = %d, want failed read shared by both sites", p.forge.issueReads)
+	if p.forge.IssueReads != 1 {
+		t.Fatalf("source issue reads = %d, want failed read shared by both sites", p.forge.IssueReads)
 	}
 
-	p.forge.mu.Lock()
-	p.forge.failIssueRead = false
-	p.forge.issueTitle = nil
-	p.forge.mu.Unlock()
-	writes := p.forge.writeCountSnapshot()
+	p.forge.Mu.Lock()
+	p.forge.FailIssueRead = false
+	p.forge.IssueTitle = nil
+	p.forge.Mu.Unlock()
+	writes := p.forge.WriteCountSnapshot()
 	if _, err := p.reconcileLanes(); err != nil {
 		t.Fatal(err)
 	}
-	if len(driver.Requests()) != 0 || !equalCounts(writes, p.forge.writeCountSnapshot()) {
+	if len(driver.Requests()) != 0 || !equalCounts(writes, p.forge.WriteCountSnapshot()) {
 		t.Fatal("same candidate retried authoring after its durable fallback")
 	}
 }
@@ -184,9 +184,9 @@ func TestHumanGateClosureWaitNeverWedgesTheLane(t *testing.T) {
 	t.Run("concluded", func(t *testing.T) {
 		p, _ := newHeldClosureHarness(t)
 		// The active-resource reconciler observed a human close the held PR.
-		p.forge.mu.Lock()
-		p.forge.prs[0].State = "closed"
-		p.forge.mu.Unlock()
+		p.forge.Mu.Lock()
+		p.forge.PRs[0].State = "closed"
+		p.forge.Mu.Unlock()
 		if err := p.store.Write(p.ctx, func(tx *store.WriteTx) error {
 			ready, err := tx.GetAttentionItemRecord(p.ctx, domain.ProductionReadyItemID(p.runID))
 			if err != nil {
@@ -201,11 +201,11 @@ func TestHumanGateClosureWaitNeverWedgesTheLane(t *testing.T) {
 		}); err != nil {
 			t.Fatal(err)
 		}
-		writes := p.forge.writeCountSnapshot()
+		writes := p.forge.WriteCountSnapshot()
 		if _, err := p.reconcileLanes(); err != nil {
 			t.Fatalf("concluded wait failed the pass: %v", err)
 		}
-		if after := p.forge.writeCountSnapshot(); !equalCounts(writes, after) {
+		if after := p.forge.WriteCountSnapshot(); !equalCounts(writes, after) {
 			t.Fatalf("concluded wait re-entered the task: %v -> %v", writes, after)
 		}
 		if waits := pendingClosureWaits(t, p); len(waits) != 0 {
@@ -217,9 +217,9 @@ func TestHumanGateClosureWaitNeverWedgesTheLane(t *testing.T) {
 		decideEffectItem(t, p, instance, domain.ActionApprove)
 		// A human merged the held PR before any pass observed it, so the
 		// repair meets a closed PR whose body lacks the decided reference.
-		p.forge.mu.Lock()
-		p.forge.prs[0].State = "closed"
-		p.forge.mu.Unlock()
+		p.forge.Mu.Lock()
+		p.forge.PRs[0].State = "closed"
+		p.forge.Mu.Unlock()
 		if _, err := p.reconcileLanes(); err == nil {
 			t.Fatal("unreachable repair did not fail loud")
 		}
@@ -246,7 +246,7 @@ func TestHumanGateClosureWaitNeverWedgesTheLane(t *testing.T) {
 		if waits := pendingClosureWaits(t, p); len(waits) != 2 {
 			t.Fatalf("pending waits = %d, want the held wait and the skipped row", len(waits))
 		}
-		if pr := p.forge.pullRequests()[0]; !pr.Draft {
+		if pr := p.forge.PullRequests()[0]; !pr.Draft {
 			t.Fatal("unreadable wait row released the held PR")
 		}
 	})

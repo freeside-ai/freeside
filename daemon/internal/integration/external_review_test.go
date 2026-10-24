@@ -192,7 +192,7 @@ func TestExternalReviewCycleEndsOnAPerson(t *testing.T) {
 	p := newProductionPublicationHarness(t, "")
 	first := p.publishReady(t)
 	head := p.replay.HeadSHA
-	pushes, body := p.transport.pushCount(), p.forge.pullRequests()[0].Body
+	pushes, body := p.transport.PushCount(), p.forge.PullRequests()[0].Body
 
 	maintainer := externalMaintainer()
 	stranger := domain.ExternalReviewer{
@@ -248,10 +248,10 @@ func TestExternalReviewCycleEndsOnAPerson(t *testing.T) {
 		reviews.requests[0].EvaluatedSHA != "" {
 		t.Fatalf("review requests = %#v", reviews.requests)
 	}
-	if p.room.runs != 2 || p.transport.mergeCount() != 0 {
-		t.Fatalf("verification runs = %d, merges = %d, want 2 and 0", p.room.runs, p.transport.mergeCount())
+	if p.room.runs != 2 || p.transport.MergeCount() != 0 {
+		t.Fatalf("verification runs = %d, merges = %d, want 2 and 0", p.room.runs, p.transport.MergeCount())
 	}
-	if p.transport.pushCount() != pushes || p.forge.pullRequests()[0].Body != body {
+	if p.transport.PushCount() != pushes || p.forge.PullRequests()[0].Body != body {
 		t.Fatal("the cycle pushed or rewrote the pull request")
 	}
 

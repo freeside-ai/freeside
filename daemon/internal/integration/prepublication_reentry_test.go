@@ -64,7 +64,7 @@ func (p *productionPublicationHarness) assertUnpublishedReentryBlocked(
 		blocked.Item.Status != domain.StatusOpen {
 		t.Fatalf("re-entry blocked item = %#v, want open publish_blocked: %s", blocked.Item, reason)
 	}
-	if refs, prs := p.forge.counts(); refs != 0 || prs != 0 {
+	if refs, prs := p.forge.Counts(); refs != 0 || prs != 0 {
 		t.Fatalf("blocked re-entry produced forge effects = %d refs, %d prs", refs, prs)
 	}
 	if err := p.store.Read(p.ctx, func(tx *store.ReadTx) error {
@@ -98,7 +98,7 @@ func TestUnpublishedRunReentersAfterBaseAdvance(t *testing.T) {
 	if sealed.ReadyItemsCreated != 0 || sealed.BlockedItemsCreated != 0 {
 		t.Fatalf("base-advance pass = %#v, want a re-entry and no item", sealed)
 	}
-	if refs, prs := p.forge.counts(); refs != 0 || prs != 0 {
+	if refs, prs := p.forge.Counts(); refs != 0 || prs != 0 {
 		t.Fatalf("the refused publication reached the forge: %d refs, %d prs", refs, prs)
 	}
 	successor := p.unpublishedReentry(t, advanced)
@@ -123,16 +123,16 @@ func TestUnpublishedRunReentersAfterBaseAdvance(t *testing.T) {
 	if ready.ID != successor.ReadyItemID() || ready.PRHeadSHA != p.replay.HeadSHA {
 		t.Fatalf("ready item = %#v, want %s at the unchanged head", ready, successor.ReadyItemID())
 	}
-	if refs, prs := p.forge.counts(); refs != 1 || prs != 1 {
+	if refs, prs := p.forge.Counts(); refs != 1 || prs != 1 {
 		t.Fatalf("publication effects = %d refs, %d prs, want one of each", refs, prs)
 	}
-	pr := p.forge.pullRequests()[0]
+	pr := p.forge.PullRequests()[0]
 	if pr.HeadSHA != p.replay.HeadSHA {
 		t.Fatalf("published head = %s, want the unchanged head %s", pr.HeadSHA, p.replay.HeadSHA)
 	}
-	if p.room.runs != 2 || p.transport.mergeCount() != 1 {
+	if p.room.runs != 2 || p.transport.MergeCount() != 1 {
 		t.Fatalf("verification runs = %d, merges = %d, want 2 and 1",
-			p.room.runs, p.transport.mergeCount())
+			p.room.runs, p.transport.MergeCount())
 	}
 	if err := p.store.Read(p.ctx, func(tx *store.ReadTx) error {
 		review, err := tx.LatestReviewRecord(p.ctx, p.runID)
@@ -194,7 +194,7 @@ func TestUnpublishedReentryBindsTheClosureToTheNewBase(t *testing.T) {
 	successor := p.unpublishedReentry(t, advanced)
 	p.reconcileUntilReady(t, 3)
 
-	prs := p.forge.pullRequests()
+	prs := p.forge.PullRequests()
 	if len(prs) != 1 || !strings.Contains(prs[0].Body, "Closes #82") {
 		t.Fatalf("re-entry did not publish the policy-approved close: %d PRs", len(prs))
 	}
@@ -281,7 +281,7 @@ func TestUnpublishedReentryAtTheRoundLimitBlocks(t *testing.T) {
 	if blocked.Item.Reason != domain.PublicationBlockBaseAdvancedRoundLimit {
 		t.Fatalf("round-limit block reason = %q", blocked.Item.Reason)
 	}
-	if refs, prs := p.forge.counts(); refs != 0 || prs != 0 {
+	if refs, prs := p.forge.Counts(); refs != 0 || prs != 0 {
 		t.Fatalf("round-limit block produced forge effects = %d refs, %d prs", refs, prs)
 	}
 	if err := p.store.Read(p.ctx, func(tx *store.ReadTx) error {
@@ -324,7 +324,7 @@ func TestUnpublishedReentrySealsAgainAfterASecondAdvance(t *testing.T) {
 	if ready := p.currentReadyItem(t); ready.ID != secondReentry.ReadyItemID() {
 		t.Fatalf("ready item = %s, want the second re-entry's %s", ready.ID, secondReentry.ReadyItemID())
 	}
-	if refs, prs := p.forge.counts(); refs != 1 || prs != 1 {
+	if refs, prs := p.forge.Counts(); refs != 1 || prs != 1 {
 		t.Fatalf("publication effects = %d refs, %d prs, want one of each", refs, prs)
 	}
 	if err := p.store.Read(p.ctx, func(tx *store.ReadTx) error {
@@ -424,7 +424,7 @@ func TestUnpublishedReentryFindingsGoToAPerson(t *testing.T) {
 		!strings.Contains(dispute.Item.Reason, "starts no remediation") {
 		t.Fatalf("re-entry dispute = %#v", dispute.Item)
 	}
-	if refs, prs := p.forge.counts(); refs != 0 || prs != 0 {
+	if refs, prs := p.forge.Counts(); refs != 0 || prs != 0 {
 		t.Fatalf("escalated re-entry produced forge effects = %d refs, %d prs", refs, prs)
 	}
 	if err := p.store.Read(p.ctx, func(tx *store.ReadTx) error {
@@ -484,10 +484,10 @@ func TestUnpublishedReentryPublishesTheDispositionHistory(t *testing.T) {
 	if ready := p.currentReadyItem(t); ready.ID != successor.ReadyItemID() {
 		t.Fatalf("ready item = %s, want %s", ready.ID, successor.ReadyItemID())
 	}
-	if refs, prs := p.forge.counts(); refs != 1 || prs != 1 {
+	if refs, prs := p.forge.Counts(); refs != 1 || prs != 1 {
 		t.Fatalf("publication effects = %d refs, %d prs, want one of each", refs, prs)
 	}
-	body := p.forge.pullRequests()[0].Body
+	body := p.forge.PullRequests()[0].Body
 	for _, want := range []string{
 		"### Review Round 1", "### Review Round 2",
 		string(findings[0].ID), string(findings[1].ID),
@@ -534,7 +534,7 @@ func TestUnpublishedReentryAfterARemediationPublishes(t *testing.T) {
 	if ready.Item.PRHeadSHA != p.replay.HeadSHA || ready.Item.Status != domain.StatusOpen {
 		t.Fatalf("ready item = %#v, want open at the remediated head", ready)
 	}
-	if refs, prs := p.forge.counts(); refs != 1 || prs != 1 {
+	if refs, prs := p.forge.Counts(); refs != 1 || prs != 1 {
 		t.Fatalf("forge effects = %d refs, %d PRs; want one each", refs, prs)
 	}
 	items, err := p.attention.ListAttentionItems(p.ctx)
