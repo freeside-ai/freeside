@@ -2588,7 +2588,6 @@ components:
         - agent_launch_coverage
         - agent_credential_expiry
         - agent_offer_deadline
-        - agent_attended_mark
         - agent_egress_authority
         - agent_snapshot
         - agent_admission

@@ -342,6 +342,14 @@ func scanInvocationObservation(row scanner) (domain.InvocationObservation, error
 	return o, nil
 }
 
+// retiredAttendedMarkCheck is the admission check plan revision 97 removed
+// with the attended first run. A hold recorded under it before the upgrade
+// stays in run_hold_observations until the run's next hold, clear, or
+// milestone, so GetRunHold reads it back with no detail, the shape the 0103
+// contract gives a hold whose check it cannot name, rather than failing
+// every run listing that includes the run.
+const retiredAttendedMarkCheck = "agent_attended_mark"
+
 // GetRunHold reconstructs the run's current hold, with presence reported
 // separately because "not held" is the ordinary state, not an error (the
 // LatestUnattendedOperationTransition shape).
@@ -384,6 +392,7 @@ func (tx *ReadTx) GetRunHold(
 		h.InvocationID = &id
 	}
 	switch {
+	case check.Valid && check.String == retiredAttendedMarkCheck:
 	case check.Valid:
 		h.Detail = &domain.AdmissionRefusal{Check: domain.AdmissionCheck(check.String)}
 		if agent.Valid {

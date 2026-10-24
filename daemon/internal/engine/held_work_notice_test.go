@@ -398,21 +398,46 @@ func TestHeldWorkNoticeNewCauseResolvesAndRestarts(t *testing.T) {
 	}
 }
 
-// TestAttendedMarkRefusalNamesTheAgent is the Wave 8 exit-run shape (issue
-// #2211): an unattended specification attempt whose task line names an agent
-// with no attended mark for the specification launch. The hold names the
-// check, the agent, and the launch, a changed detail is written at once, and
-// the held-work notice names them too.
-func TestAttendedMarkRefusalNamesTheAgent(t *testing.T) {
+// TestCrossRoleSpecifierLineIsAdmittedUnattended is the Wave 8 exit-run
+// shape (issues #2211, #2265): an unattended specification attempt whose task
+// line names another role's agent. Plan revision 97 dropped the attended
+// first run, so the attempt is admitted on that agent from its first launch.
+func TestCrossRoleSpecifierLineIsAdmittedUnattended(t *testing.T) {
 	agents := newAgentAdmissionFixture(t)
 	agents.addSecondAgent(t)
 	agents.submitLine(t, domain.RoleSpecifier, agentTestSecondAgent)
-	_, refusal := resolveAgentAdmission(
+	admission, err := resolveAgentAdmission(
 		t.Context(), agents.store, agents.selection, agents.run.ID, domain.RoleSpecifier,
 		agentTestPrompts[domain.RoleSpecifier].Digest, domain.ModeUnattended, agentTestAt,
 	)
+	if err != nil {
+		t.Fatalf("unattended admission of the cross-role line: %v", err)
+	}
+	digest, err := agents.selection.Tree.AgentDigest(agentTestSecondAgent)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if admission.binding.AgentDigest != digest ||
+		admission.binding.SelectionSource != domain.AgentSelectionSourceTaskLine {
+		t.Fatalf("agent binding = %+v, want the task line's agent %s", admission.binding, digest)
+	}
+}
+
+// TestAgentRefusalNamesTheAgent: an unattended specification attempt whose
+// task line names an agent, refused after that agent resolves. The hold
+// names the check, the agent, and the launch, a changed detail is written at
+// once, and the held-work notice names them too.
+func TestAgentRefusalNamesTheAgent(t *testing.T) {
+	agents := newAgentAdmissionFixture(t)
+	agents.addSecondAgent(t)
+	agents.submitLine(t, domain.RoleSpecifier, agentTestSecondAgent)
+	// A prompt the line does not select is refused once the agent resolved.
+	_, refusal := resolveAgentAdmission(
+		t.Context(), agents.store, agents.selection, agents.run.ID, domain.RoleSpecifier,
+		agentTestDigest("9"), domain.ModeUnattended, agentTestAt,
+	)
 	launch := agentTestLaunch(t, agents, domain.RoleSpecifier)
-	assertAdmissionDetail(t, refusal, domain.AdmissionCheckAgentAttendedMark, agentTestSecondAgent, launch)
+	assertAdmissionDetail(t, refusal, domain.AdmissionCheckAgentPrompt, agentTestSecondAgent, launch)
 
 	f := newFailedImplementationFixture(t, execfake.OutcomeFail, "unused")
 	engine := f.newEngine(t, f.driver)
@@ -451,7 +476,7 @@ func TestAttendedMarkRefusalNamesTheAgent(t *testing.T) {
 		t.Fatalf("open notices = %+v, want one", open)
 	}
 	want := fmt.Sprintf("When this notice was raised, admission check %s refused agent %s on the %s launch %s.",
-		domain.AdmissionCheckAgentAttendedMark, agentTestSecondAgent, launch.Stage, launch.Digest)
+		domain.AdmissionCheckAgentPrompt, agentTestSecondAgent, launch.Stage, launch.Digest)
 	if !strings.Contains(open[0].Reason, want) {
 		t.Errorf("notice reason %q does not contain %q", open[0].Reason, want)
 	}

@@ -3,7 +3,7 @@
   "invocation_id": "inv-1",
   "reason": "admission_policy_refused",
   "detail": {
-    "check": "agent_attended_mark",
+    "check": "agent_prompt",
     "agent": "implementer-agent",
     "launch_stage": "specification",
     "launch_digest": "sha256:specification-launch"

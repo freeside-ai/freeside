@@ -356,9 +356,9 @@ func TestReviewRoleRefusesAModelTheLaunchCannotPass(t *testing.T) {
 // TestReviewSelectionFailsClosed covers the review roles' startup and
 // per-review checks: a lineup with no reviewer line refuses and names the
 // role, an attended daemon resolves no review role, an offer past its
-// not_after and an agent with no attended mark for the review launch refuse,
-// and a source composed under an identity refuses its next review once the
-// identity is disabled.
+// not_after refuses, an agent with no attended mark resolves, and a source
+// composed under an identity refuses its next review once the identity is
+// disabled.
 func TestReviewSelectionFailsClosed(t *testing.T) {
 	ctx := context.Background()
 	now := time.Now().UTC()
@@ -435,49 +435,23 @@ func TestReviewSelectionFailsClosed(t *testing.T) {
 		})
 	})
 
+	// Plan revision 97 dropped the attended first run: a review role whose
+	// tree carries no attended mark resolves and passes the startup check.
 	t.Run("no attended mark", func(t *testing.T) {
 		f := newAuthAdoptFixture(t)
 		_, patch, err := f.run(t, f.shadowArgs())
 		if err != nil {
 			t.Fatalf("auth adopt: %v", err)
 		}
-		tree := loadAdoptedPatch(t, patch)
-		review, err := agentbaseline.RoleLaunch(domain.RoleReviewer)
-		if err != nil {
-			t.Fatal(err)
-		}
+		unmarked := loadAdoptedPatch(t, patch)
+		unmarked.Marks = nil
 		f.withStore(t, func(st *store.Store) {
 			for _, role := range []domain.RoleName{domain.RoleReviewer, domain.RoleShadowReviewer} {
-				agent, err := reviewRoleAgent(ctx, st, tree, role, now)
-				if err != nil {
-					t.Fatalf("%s with its attended mark: %v", role, err)
-				}
-				// Drop only this agent's mark for the review launch: a mark for
-				// another launch of the same agent does not cover a review.
-				unmarked := tree
-				unmarked.Marks = slices.DeleteFunc(slices.Clone(tree.Marks), func(mark agenttree.Mark) bool {
-					return mark.Agent == agent.Line.AgentName && mark.LaunchDigest == review.Digest
-				})
-				if len(unmarked.Marks) != len(tree.Marks)-1 {
-					t.Fatalf("%s: dropped %d marks, want 1", role, len(tree.Marks)-len(unmarked.Marks))
-				}
-				_, err = reviewRoleAgent(ctx, st, unmarked, role, now)
-				var failure *roleAdmissionError
-				if !errors.As(err, &failure) || failure.Role != role ||
-					!errors.Is(err, engine.ErrAgentNotAdmissible) || !strings.Contains(err.Error(), "attended mark") {
-					t.Fatalf("%s without its attended mark = %v", role, err)
-				}
-				admit := reviewAdmission(st, unmarked, testReviewRole(role, nil), agent.Identity.ID, time.Now)
-				if err := admit(ctx, exec.ReviewRequest{}); !errors.Is(err, engine.ErrAgentNotAdmissible) {
-					t.Fatalf("%s review admission without its attended mark = %v", role, err)
+				if _, err := reviewRoleAgent(ctx, st, unmarked, role, now); err != nil {
+					t.Fatalf("%s without an attended mark: %v", role, err)
 				}
 			}
-			cfg := flagEraReviewConfig()
-			unmarked := tree
-			unmarked.Marks = nil
-			var failure *roleAdmissionError
-			if _, err := resolveReviewSelection(ctx, st, unmarked, cfg, now); !errors.As(err, &failure) ||
-				failure.Role != domain.RoleReviewer {
+			if _, err := resolveReviewSelection(ctx, st, unmarked, flagEraReviewConfig(), now); err != nil {
 				t.Fatalf("startup selection with no marks = %v", err)
 			}
 		})
@@ -746,10 +720,6 @@ func TestReviewAdmissionHoldsTheReviewerTaskLine(t *testing.T) {
 func TestReviewInvocationIsRefusedBeforeItIsAdmitted(t *testing.T) {
 	ctx := context.Background()
 	now := time.Now().UTC()
-	review, err := agentbaseline.RoleLaunch(domain.RoleReviewer)
-	if err != nil {
-		t.Fatal(err)
-	}
 	other := map[domain.RoleName]domain.RoleName{
 		domain.RoleReviewer:       domain.RoleShadowReviewer,
 		domain.RoleShadowReviewer: domain.RoleReviewer,
@@ -799,14 +769,6 @@ func TestReviewInvocationIsRefusedBeforeItIsAdmitted(t *testing.T) {
 				setIdentityEnabled(t, f.st, agent.Identity.ID, false)
 			},
 			want: "role ",
-		},
-		"the agent has no attended mark for the review launch": {
-			breakIt: func(_ *testing.T, f *fixture, _ domain.RoleName, agent engine.ReviewRoleAgent) {
-				f.tree.Marks = slices.DeleteFunc(slices.Clone(f.tree.Marks), func(mark agenttree.Mark) bool {
-					return mark.Agent == agent.Line.AgentName && mark.LaunchDigest == review.Digest
-				})
-			},
-			want: "attended mark",
 		},
 		// Only the routed reviewer reads a task line.
 		"the task's line names another agent": {

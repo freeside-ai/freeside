@@ -329,9 +329,6 @@ const (
 	// AdmissionCheckAgentOfferDeadline: the agent's offer ends before the
 	// attempt's deadline.
 	AdmissionCheckAgentOfferDeadline AdmissionCheck = "agent_offer_deadline"
-	// AdmissionCheckAgentAttendedMark: the agent has no attended mark for
-	// the launch, so it cannot run unattended.
-	AdmissionCheckAgentAttendedMark AdmissionCheck = "agent_attended_mark"
 	// AdmissionCheckAgentEgressAuthority: an effective egress endpoint is
 	// outside the route's inference authorities.
 	AdmissionCheckAgentEgressAuthority AdmissionCheck = "agent_egress_authority"
@@ -366,7 +363,6 @@ var AllAdmissionChecks = []AdmissionCheck{
 	AdmissionCheckAgentLaunchCoverage,
 	AdmissionCheckAgentCredentialExpiry,
 	AdmissionCheckAgentOfferDeadline,
-	AdmissionCheckAgentAttendedMark,
 	AdmissionCheckAgentEgressAuthority,
 	AdmissionCheckAgentSnapshot,
 	AdmissionCheckAgentAdmission,
@@ -384,9 +380,8 @@ func (c AdmissionCheck) valid() bool {
 		AdmissionCheckAgentRole, AdmissionCheckAgentGate, AdmissionCheckAgentLaunch,
 		AdmissionCheckAgentResolution, AdmissionCheckAgentPrompt,
 		AdmissionCheckAgentLaunchCoverage, AdmissionCheckAgentCredentialExpiry,
-		AdmissionCheckAgentOfferDeadline, AdmissionCheckAgentAttendedMark,
-		AdmissionCheckAgentEgressAuthority, AdmissionCheckAgentSnapshot,
-		AdmissionCheckAgentAdmission:
+		AdmissionCheckAgentOfferDeadline, AdmissionCheckAgentEgressAuthority,
+		AdmissionCheckAgentSnapshot, AdmissionCheckAgentAdmission:
 		return true
 	default:
 		return false

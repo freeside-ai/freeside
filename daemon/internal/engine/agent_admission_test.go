@@ -450,15 +450,6 @@ func TestLineupAdmissionRefusals(t *testing.T) {
 			check: domain.AdmissionCheckAgentPrompt, named: true,
 		},
 		{
-			name: "unattended without an attended mark",
-			mode: domain.ModeUnattended,
-			mutate: func(_ *testing.T, _ *agentAdmissionFixture, selection *AgentSelection) {
-				selection.Tree.Marks = nil
-			},
-			want:  "no attended mark",
-			check: domain.AdmissionCheckAgentAttendedMark, named: true,
-		},
-		{
 			name: "the identity is disabled",
 			mutate: func(t *testing.T, f *agentAdmissionFixture, _ *AgentSelection) {
 				disabled := f.identity

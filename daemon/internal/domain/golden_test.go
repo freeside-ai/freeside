@@ -1570,8 +1570,9 @@ func TestGolden(t *testing.T) {
 		FirstObservedAt: ts.Add(time.Minute),
 		LastObservedAt:  ts.Add(2 * time.Minute),
 	}
-	// The exit-run shape (#2211): an unattended specification attempt
-	// whose task line names an agent with no attended mark for the launch.
+	// An unattended specification attempt whose task line names an agent
+	// refused after it resolved: the attempt runs a prompt the line does not
+	// select.
 	refusedAgent := "implementer-agent"
 	refusedStage := domain.StageNameSpecification
 	refusedLaunch := domain.Digest("sha256:specification-launch")
@@ -1579,7 +1580,7 @@ func TestGolden(t *testing.T) {
 		RunID: "run-1", InvocationID: &obsInvocationID,
 		Reason: domain.HoldAdmissionPolicyRefused,
 		Detail: &domain.AdmissionRefusal{
-			Check: domain.AdmissionCheckAgentAttendedMark, Agent: &refusedAgent,
+			Check: domain.AdmissionCheckAgentPrompt, Agent: &refusedAgent,
 			LaunchStage: &refusedStage, LaunchDigest: &refusedLaunch,
 		},
 		FirstObservedAt: ts.Add(time.Minute),
