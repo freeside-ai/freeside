@@ -33,7 +33,7 @@ The tracker comment repeats this table with a Result column.
 
 ## 1. Environment (Before Launch)
 
-Sent after the rehearsal pass completes and before the real run's deputy
+Sent after the fixture pass completes and before the real run's deputy
 starts.
 
 ```markdown
