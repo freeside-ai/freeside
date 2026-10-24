@@ -150,15 +150,6 @@ func snapshotVendorInstructions(
 	return snapshot, body, nil
 }
 
-// SnapshotVendorInstructions validates and snapshots an operator-owned
-// instruction source without persisting it, for read-only composition checks.
-func SnapshotVendorInstructions(
-	ctx context.Context, cfg VendorInstructionConfig,
-) (domain.VendorInstructionSnapshot, error) {
-	snapshot, _, err := snapshotVendorInstructions(ctx, cfg)
-	return snapshot, err
-}
-
 func pinForbiddenHostInputs(paths []string) ([]pinnedForbiddenHostInput, error) {
 	inputs := make([]pinnedForbiddenHostInput, 0, len(paths))
 	for _, path := range paths {

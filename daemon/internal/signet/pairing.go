@@ -3,6 +3,7 @@ package signet
 import (
 	"context"
 	"crypto/hmac"
+	"crypto/rand"
 	"crypto/sha256"
 	"encoding/base64"
 	"encoding/hex"
@@ -320,7 +321,7 @@ func (s *Service) pairingCodeHash(plaintext string) domain.Digest {
 // divides 256 evenly, so a byte modulo carries no bias.
 func (s *Service) randomPairingCode() (string, error) {
 	var raw [pairingCodeLength]byte
-	if _, err := io.ReadFull(s.rand, raw[:]); err != nil {
+	if _, err := io.ReadFull(rand.Reader, raw[:]); err != nil {
 		return "", fmt.Errorf("generate code: %w", err)
 	}
 	code := make([]byte, pairingCodeLength)
@@ -336,12 +337,12 @@ func (s *Service) randomPairingCode() (string, error) {
 // stores: the sha256 digest of the whole token, never the token itself.
 func (s *Service) newDeviceIdentity() (domain.DeviceID, string, string, error) {
 	var raw [16]byte
-	if _, err := io.ReadFull(s.rand, raw[:]); err != nil {
+	if _, err := io.ReadFull(rand.Reader, raw[:]); err != nil {
 		return "", "", "", fmt.Errorf("generate device id: %w", err)
 	}
 	deviceID := domain.DeviceID(hex.EncodeToString(raw[:]))
 	var secret [32]byte
-	if _, err := io.ReadFull(s.rand, secret[:]); err != nil {
+	if _, err := io.ReadFull(rand.Reader, secret[:]); err != nil {
 		return "", "", "", fmt.Errorf("generate token secret: %w", err)
 	}
 	token := deviceTokenPrefix +
