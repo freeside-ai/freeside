@@ -300,11 +300,13 @@ and opt-in live suites. CI uses the same script except daemon lint, which
 uses golangci-lint-action at the same pinned version.
 `.github/workflows/pull-request.yml` has no path filter: it calls reusable
 workflows for changed components and reports `required`. Branch protection
-requires that check and an up-to-date branch. Refresh a PR onto the current
-tip before handoff (`docs/agent-workflow.md` §handing-off). After handoff,
-leave a PR behind `main` to the lander (`land-approved-prs`), which refreshes
-it when it selects the PR; refresh it yourself only when the lander hands it
-back (`needs-human`) or the owner asks.
+requires that check and an up-to-date branch. Leave a PR behind `main`, before
+handoff and after it: the lander (`land-approved-prs`) refreshes it when it
+selects the PR. Refresh it onto `main` yourself only when the merge-result
+audit finds a conflict, a landed change needs a fix in it (including a
+contract PR's regenerated consumers, Integration Ordering and Merge-Result
+Audit), the lander hands it back (`needs-human`), or the owner asks
+(`docs/agent-workflow.md` §handing-off step 3).
 
 Operator
 tools that are not checks live with their component: installers in
@@ -500,7 +502,7 @@ merge-result audit's script header explains its purpose and guarantees.
   Revalidate a waiting PR once against the exact tip selected for its
   integration; never merge on stale evidence. Each intervening tip does not
   require a separate run.
-- Refresh every PR branch, including a stacked child, by rebasing onto its
+- Refresh a PR branch, including a stacked child, by rebasing onto its
   freshly fetched base, then pushing with `--force-with-lease`. Never merge
   the base into a PR branch, locally, through the forge, or through a host tool
   (`docs/agent-workflow.md` §handing-off). Resolve each conflict in the commit
@@ -512,7 +514,7 @@ merge-result audit's script header explains its purpose and guarantees.
   `scripts/merge-result-audit.sh origin/main <head-branch> <allowed-path>...`
   against that exact tip, allowing only the unit's declared paths. Read the
   whole printed change set; an in-scope reversion still passes the audit.
-  Name the base SHA in the handoff report's Status line
+  Name that tip's SHA in the handoff report's Status line
   (`docs/agent-workflow.md` §handing-off step 7), not the PR body. A
   passing audit needs no other record; a failing one means the PR is not
   ready to merge.
@@ -748,8 +750,8 @@ and lint and formatting are clean.
 - Scope declared: the PR body names which component directories the work
   unit touches (see Monorepo scope discipline)
 - Merge-result audit run against freshly fetched `origin/main` before
-  handoff, base SHA named in the handoff report (see Integration ordering
-  and merge-result audit)
+  handoff, the checked tip's SHA named in the handoff report (see
+  Integration ordering and merge-result audit)
 - `bash scripts/check.sh <component>` passes for every component in scope;
   for `scripts/` that includes its regression suites and the vocabulary
   check
