@@ -1,0 +1,11 @@
+{
+  "invocation_id": "inv-1",
+  "status": "failed",
+  "head_sha": "",
+  "artifacts": [
+    "sha256:transcript"
+  ],
+  "summary": "provider refused: quota exhausted",
+  "cause": "quota",
+  "usage": null
+}

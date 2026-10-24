@@ -207,6 +207,10 @@ type StageResult struct {
 	Artifacts []domain.Digest `json:"artifacts"`
 	// Summary is the driver's short human-readable outcome description.
 	Summary string `json:"summary"`
+	// Cause is what went wrong, present only on a failed result. A driver
+	// sets it only when it positively knows the cause; empty on a failed
+	// result means unknown, which is what the stage driver records.
+	Cause domain.FailureCause `json:"cause,omitempty"`
 	// Usage carries numbers-only route telemetry. Nil means not observed.
 	Usage []UsageMeasurement `json:"usage"`
 }
@@ -223,6 +227,15 @@ func (r StageResult) Validate() error {
 	}
 	if !r.Status.Terminal() {
 		return fmt.Errorf("stage result status %q: %w", r.Status, ErrNonTerminalResult)
+	}
+	if r.Cause != "" {
+		if r.Status != StatusFailed {
+			return fmt.Errorf("stage result status %q with cause %q: %w",
+				r.Status, r.Cause, ErrCauseWithoutFailure)
+		}
+		if err := r.Cause.Validate(); err != nil {
+			return fmt.Errorf("stage result: %w", err)
+		}
 	}
 	for i, d := range r.Artifacts {
 		if d == "" {

@@ -151,6 +151,11 @@ func TestGolden(t *testing.T) {
 	}{
 		{"stage_result", stage},
 		{"stage_result_blocked", blocked},
+		{"stage_result_failed", exec.StageResult{
+			InvocationID: "inv-1", Status: exec.StatusFailed,
+			Artifacts: []domain.Digest{"sha256:transcript"},
+			Summary:   "provider refused: quota exhausted", Cause: domain.FailureCauseQuota,
+		}},
 		{"review_result", review},
 		{"review_request", request},
 		{"review_request_prospective_merge", mergeRequest},
