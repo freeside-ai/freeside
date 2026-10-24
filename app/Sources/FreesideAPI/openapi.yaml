@@ -2559,6 +2559,70 @@ components:
         - base_advanced
         - identity_parallelism
 
+    AdmissionCheck:
+      type: string
+      description: >
+        The closed admission-check vocabulary mirrored from
+        domain.AdmissionCheck: the check that refused an
+        admission_policy_refused hold. Values are typed daemon observations,
+        never free text.
+      enum:
+        - generation_integrity_marked
+        - egress_profile_not_enforceable
+        - egress_policy_refused
+        - backend_capability_refused
+        - backend_pre_job_refused
+        - admission_floor_unknown
+        - capability_below_floor
+        - credential_mode_not_approved
+        - waiver_not_configured
+        - repository_identity_mismatch
+        - path_boundary_mismatch
+        - trust_profile_superseded
+        - review_configuration_unapproved
+        - agent_role
+        - agent_gate
+        - agent_launch
+        - agent_resolution
+        - agent_prompt
+        - agent_launch_coverage
+        - agent_credential_expiry
+        - agent_offer_deadline
+        - agent_attended_mark
+        - agent_egress_authority
+        - agent_snapshot
+        - agent_admission
+
+    AdmissionRefusal:
+      type: object
+      description: >
+        The typed detail of an admission_policy_refused hold, mirrored from
+        domain.AdmissionRefusal: the refused check and, once each resolved,
+        the agent and the launch it refused. The agent is a name from the
+        admitted agent tree; refusal error text never appears here.
+      additionalProperties: false
+      required: [check, agent, launch_stage, launch_digest]
+      properties:
+        check:
+          $ref: "#/components/schemas/AdmissionCheck"
+        agent:
+          type: string
+          minLength: 1
+          nullable: true
+          description: The refused agent's name; null when the refusal came before an agent resolved.
+        launch_stage:
+          nullable: true
+          allOf:
+            - $ref: "#/components/schemas/StageName"
+          description: >
+            The refused launch's stage; null exactly when launch_digest is,
+            when the refusal came before the launch resolved.
+        launch_digest:
+          nullable: true
+          allOf:
+            - $ref: "#/components/schemas/Digest"
+          description: The refused launch's digest; null exactly when launch_stage is.
+
     RunOutcome:
       type: string
       description: >
@@ -2638,7 +2702,7 @@ components:
       type: object
       description: The daemon's current typed hold observation for one run.
       additionalProperties: false
-      required: [run_id, invocation_id, reason, first_observed_at, last_observed_at]
+      required: [run_id, invocation_id, reason, detail, first_observed_at, last_observed_at]
       properties:
         run_id:
           type: string
@@ -2649,6 +2713,14 @@ components:
           nullable: true
         reason:
           $ref: "#/components/schemas/RunHoldReason"
+        detail:
+          nullable: true
+          allOf:
+            - $ref: "#/components/schemas/AdmissionRefusal"
+          description: >
+            What an admission_policy_refused hold refused; null beside every
+            other reason, and on an admission hold recorded before the detail
+            existed or raised outside admission.
         first_observed_at:
           type: string
           format: date-time

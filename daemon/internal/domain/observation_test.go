@@ -438,6 +438,44 @@ func TestRunHoldObservationValidate(t *testing.T) {
 		{"backwards span", func(h *RunHoldObservation) {
 			h.LastObservedAt = h.FirstObservedAt.Add(-time.Second)
 		}, ErrTimestampOutOfOrder},
+		{"detail beside another reason", func(h *RunHoldObservation) {
+			h.Detail = &AdmissionRefusal{Check: AdmissionCheckAgentGate}
+		}, ErrHoldDetailMismatch},
+		{"unknown check", func(h *RunHoldObservation) {
+			h.Reason, h.Detail = HoldAdmissionPolicyRefused, &AdmissionRefusal{Check: "vibes"}
+		}, ErrInvalidAdmissionCheck},
+		{"zero check", func(h *RunHoldObservation) {
+			h.Reason, h.Detail = HoldAdmissionPolicyRefused, &AdmissionRefusal{}
+		}, ErrInvalidAdmissionCheck},
+		{"empty agent", func(h *RunHoldObservation) {
+			empty := ""
+			h.Reason = HoldAdmissionPolicyRefused
+			h.Detail = &AdmissionRefusal{Check: AdmissionCheckAgentPrompt, Agent: &empty}
+		}, ErrEmptyField},
+		{"launch stage without its digest", func(h *RunHoldObservation) {
+			stage := StageNameSpecification
+			h.Reason = HoldAdmissionPolicyRefused
+			h.Detail = &AdmissionRefusal{Check: AdmissionCheckAgentLaunchCoverage, LaunchStage: &stage}
+		}, ErrHoldDetailMismatch},
+		{"launch digest without its stage", func(h *RunHoldObservation) {
+			digest := Digest("sha256:launch")
+			h.Reason = HoldAdmissionPolicyRefused
+			h.Detail = &AdmissionRefusal{Check: AdmissionCheckAgentLaunchCoverage, LaunchDigest: &digest}
+		}, ErrHoldDetailMismatch},
+		{"invalid launch stage", func(h *RunHoldObservation) {
+			stage, digest := StageName("vibes"), Digest("sha256:launch")
+			h.Reason = HoldAdmissionPolicyRefused
+			h.Detail = &AdmissionRefusal{
+				Check: AdmissionCheckAgentLaunchCoverage, LaunchStage: &stage, LaunchDigest: &digest,
+			}
+		}, ErrInvalidStageName},
+		{"empty launch digest", func(h *RunHoldObservation) {
+			stage, digest := StageNameSpecification, Digest("")
+			h.Reason = HoldAdmissionPolicyRefused
+			h.Detail = &AdmissionRefusal{
+				Check: AdmissionCheckAgentLaunchCoverage, LaunchStage: &stage, LaunchDigest: &digest,
+			}
+		}, ErrEmptyField},
 	}
 	for _, tc := range cases {
 		h := valid
@@ -451,6 +489,17 @@ func TestRunHoldObservationValidate(t *testing.T) {
 	unscoped.InvocationID = nil
 	if err := unscoped.Validate(); err != nil {
 		t.Errorf("unscoped hold rejected: %v", err)
+	}
+	// An admission refusal may carry no detail (rows written before the
+	// detail existed, a hold raised outside admission) or a check alone.
+	refused := valid
+	refused.Reason = HoldAdmissionPolicyRefused
+	if err := refused.Validate(); err != nil {
+		t.Errorf("detail-less admission hold rejected: %v", err)
+	}
+	refused.Detail = &AdmissionRefusal{Check: AdmissionCheckCapabilityBelowFloor}
+	if err := refused.Validate(); err != nil {
+		t.Errorf("check-only admission hold rejected: %v", err)
 	}
 }
 
@@ -635,7 +684,8 @@ func TestRunObservationDerivations(t *testing.T) {
 // that no percentage-complete field exists in the model: the serialized
 // contract shapes carry no key that reads as a completion fraction. Guarding
 // the wire shape (not field names in Go) catches a rename that keeps the
-// JSON key as well as a new field.
+// JSON key as well as a new field. A key matches by its words, not its
+// letters: "eta" names a completion estimate, "detail" and "metadata" do not.
 func TestObservationModelHasNoCompletionFraction(t *testing.T) {
 	inv := InvocationID("inv-1")
 	reason := HoldTrustBlocked
@@ -658,11 +708,53 @@ func TestObservationModelHasNoCompletionFraction(t *testing.T) {
 		if err != nil {
 			t.Fatalf("marshal %T: %v", v, err)
 		}
-		lowered := strings.ToLower(string(encoded))
-		for _, banned := range []string{"percent", "progress", "fraction", "eta"} {
-			if strings.Contains(lowered, banned) {
-				t.Errorf("%T serializes a completion-fraction key (%q): %s", v, banned, encoded)
-			}
+		if key, ok := completionFractionKey(t, encoded); ok {
+			t.Errorf("%T serializes a completion-fraction key (%q): %s", v, key, encoded)
 		}
 	}
+	// The guard still bites on the keys it exists to keep out.
+	for _, banned := range []string{
+		`{"percent_complete":1}`, `{"progress":1}`, `{"completion_fraction":1}`,
+		`{"eta":1}`, `{"hold":{"eta_seconds":1}}`, `[{"percentage":1}]`,
+	} {
+		if _, ok := completionFractionKey(t, []byte(banned)); !ok {
+			t.Errorf("completionFractionKey missed %s", banned)
+		}
+	}
+}
+
+// completionFractionKey reports the first object key, at any depth, with an
+// underscore-separated word that starts with a completion-fraction word.
+func completionFractionKey(t *testing.T, encoded []byte) (string, bool) {
+	t.Helper()
+	var decoded any
+	if err := json.Unmarshal(encoded, &decoded); err != nil {
+		t.Fatalf("decode %s: %v", encoded, err)
+	}
+	var walk func(any) (string, bool)
+	walk = func(v any) (string, bool) {
+		switch v := v.(type) {
+		case map[string]any:
+			for key, child := range v {
+				for _, word := range strings.Split(strings.ToLower(key), "_") {
+					for _, banned := range []string{"percent", "progress", "fraction", "eta"} {
+						if strings.HasPrefix(word, banned) {
+							return key, true
+						}
+					}
+				}
+				if key, ok := walk(child); ok {
+					return key, true
+				}
+			}
+		case []any:
+			for _, child := range v {
+				if key, ok := walk(child); ok {
+					return key, true
+				}
+			}
+		}
+		return "", false
+	}
+	return walk(decoded)
 }

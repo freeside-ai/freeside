@@ -40,14 +40,21 @@ const (
 			live, observed_at
 		FROM invocation_observations WHERE run_id = ? ORDER BY invocation_id`
 	selectRunHoldSQL = `SELECT run_id, invocation_id, reason,
+			detail_check, detail_agent, detail_launch_stage, detail_launch_digest,
 			first_observed_at, last_observed_at
 		FROM run_hold_observations WHERE run_id = ?`
 	replaceRunHoldSQL = `INSERT INTO run_hold_observations
-		(run_id, invocation_id, reason, first_observed_at, last_observed_at)
-		VALUES (?, ?, ?, ?, ?)
+		(run_id, invocation_id, reason,
+			detail_check, detail_agent, detail_launch_stage, detail_launch_digest,
+			first_observed_at, last_observed_at)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
 		ON CONFLICT (run_id) DO UPDATE SET
 			invocation_id = excluded.invocation_id,
 			reason = excluded.reason,
+			detail_check = excluded.detail_check,
+			detail_agent = excluded.detail_agent,
+			detail_launch_stage = excluded.detail_launch_stage,
+			detail_launch_digest = excluded.detail_launch_digest,
 			first_observed_at = excluded.first_observed_at,
 			last_observed_at = excluded.last_observed_at`
 	clearRunHoldSQL      = `DELETE FROM run_hold_observations WHERE run_id = ?`
@@ -128,7 +135,9 @@ func (tx *WriteTx) RecordInvocationObservation(
 // RecordRunHold records the run's current hold. The (reason, invocation)
 // pair identifies the cause: re-observing the same cause advances only
 // LastObservedAt and keeps the recorded first instant, while a changed cause
-// replaces the row and restarts the span. The stored row is projection, so
+// replaces the row and restarts the span. The detail is not part of the
+// cause: each write overwrites it with the latest. The stored row is
+// projection, so
 // it is only ever merged with, never trusted: a row the current vocabulary
 // cannot express, an unparsable stored instant, or a stored span the
 // incoming observation cannot extend (a stepped-back clock) all fall through
@@ -156,12 +165,21 @@ func (tx *WriteTx) RecordRunHold(ctx context.Context, h domain.RunHoldObservatio
 			h.FirstObservedAt = firstAt
 		}
 	}
-	var invocation any
+	var invocation, check, agent, launchStage, launchDigest any
 	if h.InvocationID != nil {
 		invocation = string(*h.InvocationID)
 	}
+	if d := h.Detail; d != nil {
+		check = string(d.Check)
+		if d.Agent != nil {
+			agent = *d.Agent
+		}
+		if d.LaunchStage != nil {
+			launchStage, launchDigest = string(*d.LaunchStage), string(*d.LaunchDigest)
+		}
+	}
 	if _, err := tx.tx.ExecContext(ctx, replaceRunHoldSQL,
-		h.RunID, invocation, h.Reason,
+		h.RunID, invocation, h.Reason, check, agent, launchStage, launchDigest,
 		formatTime(h.FirstObservedAt), formatTime(h.LastObservedAt)); err != nil {
 		return fmt.Errorf("record run hold %s: %w", h.RunID, err)
 	}
@@ -334,11 +352,11 @@ func (tx *ReadTx) GetRunHold(
 		return domain.RunHoldObservation{}, false, fmt.Errorf("get run hold: %w", domain.ErrEmptyID)
 	}
 	var (
-		storedRun, reason, first, last string
-		invocation                     sql.NullString
+		storedRun, reason, first, last                string
+		invocation, check, agent, stage, launchDigest sql.NullString
 	)
 	err := tx.tx.QueryRowContext(ctx, selectRunHoldSQL, runID).
-		Scan(&storedRun, &invocation, &reason, &first, &last)
+		Scan(&storedRun, &invocation, &reason, &check, &agent, &stage, &launchDigest, &first, &last)
 	switch {
 	case errors.Is(err, sql.ErrNoRows):
 		return domain.RunHoldObservation{}, false, nil
@@ -364,6 +382,26 @@ func (tx *ReadTx) GetRunHold(
 	if invocation.Valid {
 		id := domain.InvocationID(invocation.String)
 		h.InvocationID = &id
+	}
+	switch {
+	case check.Valid:
+		h.Detail = &domain.AdmissionRefusal{Check: domain.AdmissionCheck(check.String)}
+		if agent.Valid {
+			h.Detail.Agent = &agent.String
+		}
+		if stage.Valid {
+			s := domain.StageName(stage.String)
+			h.Detail.LaunchStage = &s
+		}
+		if launchDigest.Valid {
+			d := domain.Digest(launchDigest.String)
+			h.Detail.LaunchDigest = &d
+		}
+	case agent.Valid || stage.Valid || launchDigest.Valid:
+		// A detail column without its check is not a detail the contract
+		// can express; dropping it would hide the inconsistency.
+		return domain.RunHoldObservation{}, false,
+			fmt.Errorf("get run hold %s: detail without a check: %w", runID, domain.ErrHoldDetailMismatch)
 	}
 	if err := h.Validate(); err != nil {
 		return domain.RunHoldObservation{}, false, fmt.Errorf("get run hold %s: %w", runID, err)

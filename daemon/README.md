@@ -977,7 +977,7 @@ freesided inspect health -db <db>
 - `tasks`: every task the store holds, with `task_id`, `project_id`,
   `created_at`, and `latest_run_id` (`null` before the first run).
 
-`freesided inspect task` prints one task's record, `freeside-task-record-v4`.
+`freesided inspect task` prints one task's record, `freeside-task-record-v5`.
 Every section is read in one transaction, at the store revision
 `as_of_revision`; `as_of` is the read time. To wait for a change, read again
 and compare `as_of_revision`. A revision that hasn't moved means no recorded
@@ -1071,7 +1071,7 @@ Reading the record:
   a deputy root. A direct read that meets
   `unapproved_recipe` says so on stderr; stdout stays one JSON line.
 - **The timeline's shape is part of the record's version.** A change to the
-  task timeline or its events changes `freeside-task-record-v4`.
+  task timeline or its events changes `freeside-task-record-v5`.
 
 The record never holds evidence, claims, conversation messages (a command's
 message and attachments included), transcripts, prompt text, credentials, or

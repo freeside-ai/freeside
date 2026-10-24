@@ -17,7 +17,7 @@ import (
 
 // taskRecordVersion names the record's JSON shape. Any change to that shape,
 // including to signet.TaskTimeline, which the record embeds, changes it.
-const taskRecordVersion = "freeside-task-record-v4"
+const taskRecordVersion = "freeside-task-record-v5"
 
 // taskRecord is what `freesided inspect task` prints: one task's recorded
 // facts, read under one store revision, for an agent to read. It is built

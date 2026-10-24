@@ -2,9 +2,11 @@ package engine
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"os"
 	"path/filepath"
+	"reflect"
 	"slices"
 	"strings"
 	"testing"
@@ -422,6 +424,8 @@ func TestLineupAdmissionPicksTheRoleFromTheAttempt(t *testing.T) {
 		ctx, binding, domain.Stage{ID: "stage-other", Name: "verify"}, other.ID,
 	); admitted || !errors.Is(err, ErrAgentNotAdmissible) {
 		t.Fatalf("non-ward stage = %t, %v", admitted, err)
+	} else {
+		assertAdmissionDetail(t, err, domain.AdmissionCheckAgentRole, "", nil)
 	}
 }
 
@@ -435,10 +439,15 @@ func TestLineupAdmissionRefusals(t *testing.T) {
 		at     time.Time
 		mutate func(t *testing.T, f *agentAdmissionFixture, selection *AgentSelection)
 		want   string
+		// check is the refusal's hold detail; named says whether it names the
+		// agent and the launch, which it does once both resolved.
+		check domain.AdmissionCheck
+		named bool
 	}{
 		{
 			name:   "the attempt runs a prompt the line does not select",
 			prompt: agentTestDigest("9"), want: "the lineup selects prompt",
+			check: domain.AdmissionCheckAgentPrompt, named: true,
 		},
 		{
 			name: "unattended without an attended mark",
@@ -446,7 +455,8 @@ func TestLineupAdmissionRefusals(t *testing.T) {
 			mutate: func(_ *testing.T, _ *agentAdmissionFixture, selection *AgentSelection) {
 				selection.Tree.Marks = nil
 			},
-			want: "no attended mark",
+			want:  "no attended mark",
+			check: domain.AdmissionCheckAgentAttendedMark, named: true,
 		},
 		{
 			name: "the identity is disabled",
@@ -459,19 +469,22 @@ func TestLineupAdmissionRefusals(t *testing.T) {
 					t.Fatal(err)
 				}
 			},
-			want: "is disabled",
+			want:  "is disabled",
+			check: domain.AdmissionCheckAgentResolution,
 		},
 		{
-			name: "the offer lapses before the attempt's deadline",
-			at:   agentTestAt.Add(30 * 24 * time.Hour),
-			want: "not_after precedes the attempt deadline",
+			name:  "the offer lapses before the attempt's deadline",
+			at:    agentTestAt.Add(30 * 24 * time.Hour),
+			want:  "not_after precedes the attempt deadline",
+			check: domain.AdmissionCheckAgentOfferDeadline, named: true,
 		},
 		{
 			name: "a provider endpoint outside the route",
 			mutate: func(_ *testing.T, _ *agentAdmissionFixture, selection *AgentSelection) {
 				selection.EffectiveEgress = []string{"api.anthropic.com:443", "example.com:443"}
 			},
-			want: "outside the route's inference authorities",
+			want:  "outside the route's inference authorities",
+			check: domain.AdmissionCheckAgentEgressAuthority, named: true,
 		},
 		{
 			name: "the line names an agent digest the tree no longer resolves",
@@ -482,7 +495,8 @@ func TestLineupAdmissionRefusals(t *testing.T) {
 				}
 				selection.Tree.Lineup = lineup
 			},
-			want: "the lineup selects agent digest",
+			want:  "the lineup selects agent digest",
+			check: domain.AdmissionCheckAgentResolution,
 		},
 		{
 			name: "the launch source refuses the role",
@@ -491,7 +505,8 @@ func TestLineupAdmissionRefusals(t *testing.T) {
 					return domain.LaunchSpec{}, errors.New("no launch")
 				}
 			},
-			want: "no launch",
+			want:  "no launch",
+			check: domain.AdmissionCheckAgentLaunch,
 		},
 	}
 	for _, tc := range cases {
@@ -515,8 +530,55 @@ func TestLineupAdmissionRefusals(t *testing.T) {
 			if !errors.Is(err, ErrAgentNotAdmissible) || !strings.Contains(err.Error(), tc.want) {
 				t.Fatalf("resolve = %v, want a refusal naming %q", err, tc.want)
 			}
+			agent, launch := "", (*domain.LaunchSpec)(nil)
+			if tc.named {
+				agent, launch = agentTestWriterAgent, agentTestLaunch(t, f, domain.RoleImplementer)
+			} else if tc.check != domain.AdmissionCheckAgentLaunch {
+				launch = agentTestLaunch(t, f, domain.RoleImplementer)
+			}
+			assertAdmissionDetail(t, err, tc.check, agent, launch)
 		})
 	}
+}
+
+// agentTestLaunch is the fixture's launch for the role.
+func agentTestLaunch(t *testing.T, f *agentAdmissionFixture, role domain.RoleName) *domain.LaunchSpec {
+	t.Helper()
+	launch, err := f.selection.Launch(role)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return &launch
+}
+
+// assertAdmissionDetail checks the hold detail a refusal records: its check,
+// the agent's name (empty for none), and the launch (nil for none).
+func assertAdmissionDetail(
+	t *testing.T, err error, check domain.AdmissionCheck, agent string, launch *domain.LaunchSpec,
+) {
+	t.Helper()
+	want := domain.AdmissionRefusal{Check: check}
+	if agent != "" {
+		want.Agent = &agent
+	}
+	if launch != nil {
+		want.LaunchStage, want.LaunchDigest = &launch.Stage, &launch.Digest
+	}
+	got := admissionRefusalDetail(err)
+	if got == nil || !reflect.DeepEqual(*got, want) {
+		t.Fatalf("hold detail of %v = %s, want %s", err, renderDetail(got), renderDetail(&want))
+	}
+	if err := got.Validate(); err != nil {
+		t.Fatalf("hold detail invalid: %v", err)
+	}
+}
+
+func renderDetail(detail *domain.AdmissionRefusal) string {
+	encoded, err := json.Marshal(detail)
+	if err != nil {
+		return err.Error()
+	}
+	return string(encoded)
 }
 
 // TestLineupAdmissionRequiresAdapterConformance records a later failed pass:
@@ -553,6 +615,8 @@ func TestLineupAdmissionRequiresAdapterConformance(t *testing.T) {
 	if !errors.Is(err, ErrAgentNotAdmissible) {
 		t.Fatalf("resolve after a failed conformance pass = %v", err)
 	}
+	assertAdmissionDetail(t, err, domain.AdmissionCheckAgentLaunchCoverage,
+		agentTestWriterAgent, agentTestLaunch(t, f, domain.RoleImplementer))
 }
 
 func TestUnattendedLineupAdmissionRecordsTheMark(t *testing.T) {
@@ -595,6 +659,8 @@ func TestLineupAdmissionGateHoldsEveryAttempt(t *testing.T) {
 	if reason, ok := dispatchHoldReason(err); !ok || reason != domain.HoldAdmissionPolicyRefused {
 		t.Fatalf("closed gate hold reason = %q, %t", reason, ok)
 	}
+	// The gate refuses before any role's agent or launch resolves.
+	assertAdmissionDetail(t, err, domain.AdmissionCheckAgentGate, "", nil)
 	// The startup check decides whether to open the gate, so it ignores it.
 	if _, err := f.engine.admission.environment.Agents.CheckRole(
 		context.Background(), f.store, domain.RoleImplementer,
@@ -734,6 +800,10 @@ func TestLineupAdmissionRefusesAMarkedGeneration(t *testing.T) {
 				t.Fatal("an attempt was admitted on a marked generation")
 			}
 			assertRefusal("admitAttempt", err)
+			// The mark refuses during resolution, after the launch and before
+			// the agent resolved.
+			assertAdmissionDetail(t, err, domain.AdmissionCheckGenerationIntegrityMarked,
+				"", agentTestLaunch(t, f, domain.RoleImplementer))
 
 			// Re-enrollment appends generation 2, which carries no mark.
 			var next domain.EnrollmentGeneration

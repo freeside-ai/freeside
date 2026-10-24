@@ -344,7 +344,8 @@ FROM client_enrollment_generations`
 			entry.Name() == "0099_publish_installation_mint_holds.sql" ||
 			entry.Name() == "0100_task_workflow_closures.sql" ||
 			entry.Name() == "0101_work_unit_rebase_proofs.sql" ||
-			entry.Name() == "0102_usage_observations_review.sql" || entry.IsDir() {
+			entry.Name() == "0102_usage_observations_review.sql" ||
+			entry.Name() == "0103_run_hold_admission_detail.sql" || entry.IsDir() {
 			continue
 		}
 		body, err := fs.ReadFile(migrations.FS, entry.Name())

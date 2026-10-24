@@ -19,6 +19,21 @@ import (
 // Nothing is appended and nothing starts.
 var ErrAgentNotAdmissible = errors.New("the role's agent does not pass admission")
 
+// AgentAdmissionRefusal is the typed form of a stage admission's
+// ErrAgentNotAdmissible refusal. It reads and matches as the error it wraps,
+// so errors.Is still finds ErrAgentNotAdmissible and anything the refusal
+// wraps, while errors.As hands a hold the refused check, agent, and launch
+// without reading the refusal's text (issue #2211).
+type AgentAdmissionRefusal struct {
+	// Refusal names the check, and the agent and launch once they resolved.
+	Refusal domain.AdmissionRefusal
+	err     error
+}
+
+func (e *AgentAdmissionRefusal) Error() string { return e.err.Error() }
+
+func (e *AgentAdmissionRefusal) Unwrap() error { return e.err }
+
 // cliSubmissionIdentityPrefix starts the manual-submission identity of a
 // `freesided submit`, which is also the SetBy of the task lines it records.
 const cliSubmissionIdentityPrefix = "cli:"
@@ -371,17 +386,23 @@ func resolveAgentAdmission(
 	ctx context.Context, st *store.Store, selection AgentSelection, runID domain.RunID, role domain.RoleName,
 	promptDigest domain.Digest, mode domain.OperatingMode, admittedAt time.Time,
 ) (agentAdmission, error) {
-	refuse := func(format string, args ...any) (agentAdmission, error) {
-		return agentAdmission{}, fmt.Errorf("role %s: %s: %w", role, fmt.Sprintf(format, args...), ErrAgentNotAdmissible)
+	// refused gains the launch and the agent as each resolves, so a refusal
+	// names whichever of them it came after.
+	var refused domain.AdmissionRefusal
+	refuse := func(check domain.AdmissionCheck, format string, args ...any) (agentAdmission, error) {
+		refused.Check = check
+		return agentAdmission{}, &AgentAdmissionRefusal{Refusal: refused, err: fmt.Errorf(
+			"role %s: %s: %w", role, fmt.Sprintf(format, args...), ErrAgentNotAdmissible)}
 	}
 	stage, ok := role.Stage()
 	if !ok {
-		return refuse("it is not a ward role")
+		return refuse(domain.AdmissionCheckAgentRole, "it is not a ward role")
 	}
 	launch, err := selection.Launch(role)
 	if err != nil {
-		return refuse("launch: %v", err)
+		return refuse(domain.AdmissionCheckAgentLaunch, "launch: %v", err)
 	}
+	refused.LaunchStage, refused.LaunchDigest = &launch.Stage, &launch.Digest
 
 	var (
 		agent       RoleAgent
@@ -413,36 +434,43 @@ func resolveAgentAdmission(
 		// Wrapped, not flattened like the other refusals: a marked
 		// generation's refusal is typed, and a caller reads the mark off it.
 		// The text is what refuse would have printed.
-		return agentAdmission{}, fmt.Errorf("role %s: %w: %w", role, err, ErrAgentNotAdmissible)
+		refused.Check = domain.AdmissionCheckAgentResolution
+		if errors.Is(err, domain.ErrGenerationIntegrityMarked) {
+			refused.Check = domain.AdmissionCheckGenerationIntegrityMarked
+		}
+		return agentAdmission{}, &AgentAdmissionRefusal{
+			Refusal: refused, err: fmt.Errorf("role %s: %w: %w", role, err, ErrAgentNotAdmissible),
+		}
 	}
+	refused.Agent = &agent.Line.AgentName
 	resolved, enrollment, generation := agent.Resolved, agent.Enrollment, agent.Generation
 	definition := resolved.Definition
 	// The line also names the prompt the attempt is about to run.
 	if agent.Line.PromptDigest != promptDigest {
-		return refuse("the lineup selects prompt %s, the attempt runs %s", agent.Line.PromptDigest, promptDigest)
+		return refuse(domain.AdmissionCheckAgentPrompt, "the lineup selects prompt %s, the attempt runs %s", agent.Line.PromptDigest, promptDigest)
 	}
 	// Step 3, proved: the adapter's latest conformance covers the launch.
 	if err := domain.ValidateAdapterLaunchCoverage(conformance, resolved.Adapter.Digest, launch); err != nil {
-		return refuse("%v", err)
+		return refuse(domain.AdmissionCheckAgentLaunchCoverage, "%v", err)
 	}
 	// Step 4, credentialed: a credential that outlives the attempt and an
 	// offer still on sale at its deadline. Resolution already refused a
 	// disabled identity.
 	deadline := admittedAt.Add(selection.AttemptBudget)
 	if err := domain.ValidateGenerationExpiryMargin(enrollment, generation, deadline, selection.ExpiryMargin); err != nil {
-		return refuse("%v", err)
+		return refuse(domain.AdmissionCheckAgentCredentialExpiry, "%v", err)
 	}
 	if err := domain.ValidateOfferCoversDeadline(resolved.Offer, deadline); err != nil {
-		return refuse("%v", err)
+		return refuse(domain.AdmissionCheckAgentOfferDeadline, "%v", err)
 	}
 	// An agent and launch pair with no attended mark runs attended only.
 	if mode == domain.ModeUnattended && selection.Tree.Attended(agent.Line.AgentName, definition.Digest, launch.Digest) {
-		return refuse("agent %s has no attended mark for launch %s, so it cannot run unattended",
+		return refuse(domain.AdmissionCheckAgentAttendedMark, "agent %s has no attended mark for launch %s, so it cannot run unattended",
 			agent.Line.AgentName, launch.Digest)
 	}
 	for _, authority := range selection.EffectiveEgress {
 		if !slices.Contains(resolved.Route.InferenceAuthorities, authority) {
-			return refuse("provider endpoint %q is outside the route's inference authorities", authority)
+			return refuse(domain.AdmissionCheckAgentEgressAuthority, "provider endpoint %q is outside the route's inference authorities", authority)
 		}
 	}
 	// Step 5, snapshot. The lineup has no selection record beyond its
@@ -453,17 +481,17 @@ func resolveAgentAdmission(
 	}
 	passes, err := domain.DeriveAgentLaunchSelection(definition, resolved.Adapter, resolved.Offer)
 	if err != nil {
-		return refuse("%v", err)
+		return refuse(domain.AdmissionCheckAgentSnapshot, "%v", err)
 	}
 	effort, err := domain.TranslateEffort(resolved.Adapter.ClientKind, definition.Effort)
 	if err != nil {
-		return refuse("%v", err)
+		return refuse(domain.AdmissionCheckAgentSnapshot, "%v", err)
 	}
 	treatment, err := domain.ComputeTreatmentDigest(
 		resolved.Route, resolved.Adapter.Digest, launch.Digest, resolved.Offer, definition.Effort, effort.Effective(),
 	)
 	if err != nil {
-		return refuse("%v", err)
+		return refuse(domain.AdmissionCheckAgentSnapshot, "%v", err)
 	}
 	return agentAdmission{
 		binding: domain.AdmissionAgentBinding{

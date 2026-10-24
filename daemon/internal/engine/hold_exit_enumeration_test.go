@@ -74,6 +74,10 @@ var holdlessPauseExits = map[string]string{
 	// is no run to hold; the stop notice or the blocking item is already open.
 	"attention_discussion.go:Engine.attentionDiscussionHeld": "gates a conversation reply, which has no run to hold",
 
+	// A classifier, not an exit: it derives the detail its caller records
+	// beside the hold, so the caller's hold covers it.
+	"observation.go:admissionRefusalDetail": "derives the hold detail its caller records",
+
 	// Reads the cancellation fence to decide whether a held-work notice still
 	// applies. It pauses nothing: the hold it reports on is already recorded.
 	"held_work_notice.go:heldWorkTaskStopped": "reads the fence for the held-work notice; pauses no run",

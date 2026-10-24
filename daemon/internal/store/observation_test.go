@@ -3,6 +3,7 @@ package store_test
 import (
 	"context"
 	"errors"
+	"reflect"
 	"testing"
 	"time"
 
@@ -239,6 +240,68 @@ func TestClearRunHoldCause(t *testing.T) {
 		return tx.ClearRunHoldCause(ctx, "", domain.HoldAttendedModeActive)
 	}); !errors.Is(err, domain.ErrEmptyID) {
 		t.Errorf("empty run: ClearRunHoldCause() = %v, want %v", err, domain.ErrEmptyID)
+	}
+}
+
+// TestRunHoldAdmissionDetail: an admission refusal's detail round-trips, is
+// not part of the cause (a changed detail keeps the span and is overwritten),
+// and a detail-less write clears it.
+func TestRunHoldAdmissionDetail(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	f := newAdmissionFixture(t, nil)
+	s := openWithFixture(t, f, store.Options{AdmissionFloors: attendedFloors()})
+	inv := domain.InvocationID("inv-1")
+	agent := "implementer-agent"
+	stage := domain.StageNameSpecification
+	launch := domain.Digest("sha256:specification-launch")
+
+	recordHold := func(detail *domain.AdmissionRefusal, at time.Time) {
+		t.Helper()
+		if err := s.Write(ctx, func(tx *store.WriteTx) error {
+			return tx.RecordRunHold(ctx, domain.RunHoldObservation{
+				RunID: f.run.ID, InvocationID: &inv,
+				Reason: domain.HoldAdmissionPolicyRefused, Detail: detail,
+				FirstObservedAt: at, LastObservedAt: at,
+			})
+		}); err != nil {
+			t.Fatalf("record hold: %v", err)
+		}
+	}
+
+	full := &domain.AdmissionRefusal{
+		Check: domain.AdmissionCheckAgentAttendedMark, Agent: &agent,
+		LaunchStage: &stage, LaunchDigest: &launch,
+	}
+	recordHold(full, admissionEpoch)
+	got := observeRun(t, s, f.run.ID)
+	if got.Hold == nil || !reflect.DeepEqual(got.Hold.Detail, full) {
+		t.Fatalf("hold = %+v, want detail %+v", got.Hold, full)
+	}
+
+	checkOnly := &domain.AdmissionRefusal{Check: domain.AdmissionCheckCapabilityBelowFloor}
+	recordHold(checkOnly, admissionEpoch.Add(time.Minute))
+	got = observeRun(t, s, f.run.ID)
+	if got.Hold == nil || !reflect.DeepEqual(got.Hold.Detail, checkOnly) ||
+		!got.Hold.FirstObservedAt.Equal(admissionEpoch) {
+		t.Errorf("changed detail = %+v, want detail %+v and the span kept from %v",
+			got.Hold, checkOnly, admissionEpoch)
+	}
+
+	recordHold(nil, admissionEpoch.Add(2*time.Minute))
+	if got = observeRun(t, s, f.run.ID); got.Hold == nil || got.Hold.Detail != nil {
+		t.Errorf("detail-less write = %+v, want no detail", got.Hold)
+	}
+
+	// The write re-validates: a detail beside another reason is refused.
+	if err := s.Write(ctx, func(tx *store.WriteTx) error {
+		return tx.RecordRunHold(ctx, domain.RunHoldObservation{
+			RunID: f.run.ID, Reason: domain.HoldOperationStopped, Detail: full,
+			FirstObservedAt: admissionEpoch, LastObservedAt: admissionEpoch,
+		})
+	}); !errors.Is(err, domain.ErrHoldDetailMismatch) {
+		t.Errorf("detail beside another reason: RecordRunHold() = %v, want %v",
+			err, domain.ErrHoldDetailMismatch)
 	}
 }
 

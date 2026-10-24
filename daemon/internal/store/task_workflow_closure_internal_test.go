@@ -83,11 +83,16 @@ func TestWorkflowClosureAuthenticatesLegacyHeldWorkNotices(t *testing.T) {
 				t.Fatal(err)
 			}
 			for _, statement := range []string{
+				`ALTER TABLE run_hold_observations DROP COLUMN detail_check`,
+				`ALTER TABLE run_hold_observations DROP COLUMN detail_agent`,
+				`ALTER TABLE run_hold_observations DROP COLUMN detail_launch_stage`,
+				`ALTER TABLE run_hold_observations DROP COLUMN detail_launch_digest`,
 				`DROP TABLE work_unit_rebase_proofs`,
 				`DROP TABLE task_attention_workflow_origins`,
 				`DROP TABLE task_workflow_closures`,
 				`DELETE FROM schema_migrations WHERE name IN
-					('0100_task_workflow_closures.sql', '0101_work_unit_rebase_proofs.sql', '0102_usage_observations_review.sql')`,
+					('0100_task_workflow_closures.sql', '0101_work_unit_rebase_proofs.sql',
+					'0102_usage_observations_review.sql', '0103_run_hold_admission_detail.sql')`,
 			} {
 				if _, err := st.db.ExecContext(ctx, statement); err != nil {
 					t.Fatal(err)
@@ -388,11 +393,16 @@ func TestWorkflowClosureMigrationDoesNotInferAuthority(t *testing.T) {
 		t.Fatal(err)
 	}
 	for _, statement := range []string{
+		`ALTER TABLE run_hold_observations DROP COLUMN detail_check`,
+		`ALTER TABLE run_hold_observations DROP COLUMN detail_agent`,
+		`ALTER TABLE run_hold_observations DROP COLUMN detail_launch_stage`,
+		`ALTER TABLE run_hold_observations DROP COLUMN detail_launch_digest`,
 		`DROP TABLE work_unit_rebase_proofs`,
 		`DROP TABLE task_attention_workflow_origins`,
 		`DROP TABLE task_workflow_closures`,
 		`DELETE FROM schema_migrations WHERE name IN
-					('0100_task_workflow_closures.sql', '0101_work_unit_rebase_proofs.sql', '0102_usage_observations_review.sql')`,
+					('0100_task_workflow_closures.sql', '0101_work_unit_rebase_proofs.sql',
+					'0102_usage_observations_review.sql', '0103_run_hold_admission_detail.sql')`,
 	} {
 		if _, err := st.db.ExecContext(ctx, statement); err != nil {
 			t.Fatal(err)

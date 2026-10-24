@@ -1,0 +1,13 @@
+{
+  "run_id": "run-1",
+  "invocation_id": "inv-1",
+  "reason": "admission_policy_refused",
+  "detail": {
+    "check": "agent_attended_mark",
+    "agent": "implementer-agent",
+    "launch_stage": "specification",
+    "launch_digest": "sha256:specification-launch"
+  },
+  "first_observed_at": "2026-01-02T03:05:05Z",
+  "last_observed_at": "2026-01-02T03:06:05Z"
+}

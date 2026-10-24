@@ -257,6 +257,178 @@ func (r RunHoldReason) valid() bool {
 	}
 }
 
+// AdmissionCheck is the closed vocabulary of admission checks an
+// admission_policy_refused hold can name: one member per policy sentinel the
+// engine classifies onto that reason, one per refusal site in agent
+// admission, and AdmissionCheckAgentAdmission for an agent refusal that
+// names no site. Like RunHoldReason it is a code, never free text. Adding a
+// member is a contract change. The zero value "" is invalid by design.
+type AdmissionCheck string
+
+const (
+	// AdmissionCheckGenerationIntegrityMarked: the agent's credential
+	// generation carries an integrity mark.
+	AdmissionCheckGenerationIntegrityMarked AdmissionCheck = "generation_integrity_marked"
+	// AdmissionCheckEgressProfileNotEnforceable: the backend cannot enforce
+	// the stage's egress profile.
+	AdmissionCheckEgressProfileNotEnforceable AdmissionCheck = "egress_profile_not_enforceable"
+	// AdmissionCheckEgressPolicyRefused: egress policy refuses the stage's
+	// effective egress.
+	AdmissionCheckEgressPolicyRefused AdmissionCheck = "egress_policy_refused"
+	// AdmissionCheckBackendCapabilityRefused: the runner backend refused a
+	// required capability.
+	AdmissionCheckBackendCapabilityRefused AdmissionCheck = "backend_capability_refused"
+	// AdmissionCheckBackendPreJobRefused: the runner backend's pre-job check
+	// refused the job.
+	AdmissionCheckBackendPreJobRefused AdmissionCheck = "backend_pre_job_refused"
+	// AdmissionCheckAdmissionFloorUnknown: the stage names no known
+	// admission floor.
+	AdmissionCheckAdmissionFloorUnknown AdmissionCheck = "admission_floor_unknown"
+	// AdmissionCheckCapabilityBelowFloor: the backend's capabilities fall
+	// below the stage's floor.
+	AdmissionCheckCapabilityBelowFloor AdmissionCheck = "capability_below_floor"
+	// AdmissionCheckCredentialModeNotApproved: the credential mode is not
+	// approved for the stage.
+	AdmissionCheckCredentialModeNotApproved AdmissionCheck = "credential_mode_not_approved" //nolint:gosec // G101 false positive: a check code, not a credential.
+	// AdmissionCheckWaiverNotConfigured: a required waiver is not
+	// configured.
+	AdmissionCheckWaiverNotConfigured AdmissionCheck = "waiver_not_configured"
+	// AdmissionCheckRepositoryIdentityMismatch: the repository's identity
+	// does not match its trust profile.
+	AdmissionCheckRepositoryIdentityMismatch AdmissionCheck = "repository_identity_mismatch"
+	// AdmissionCheckPathBoundaryMismatch: the work's path boundary does not
+	// match the admitted one.
+	AdmissionCheckPathBoundaryMismatch AdmissionCheck = "path_boundary_mismatch"
+	// AdmissionCheckTrustProfileSuperseded: a newer trust profile superseded
+	// the admitted one.
+	AdmissionCheckTrustProfileSuperseded AdmissionCheck = "trust_profile_superseded"
+	// AdmissionCheckReviewConfigurationUnapproved: the repository's review
+	// configuration is not the approved one.
+	AdmissionCheckReviewConfigurationUnapproved AdmissionCheck = "review_configuration_unapproved"
+	// AdmissionCheckAgentRole: the stage has no ward role to bind an agent
+	// to.
+	AdmissionCheckAgentRole AdmissionCheck = "agent_role"
+	// AdmissionCheckAgentGate: the agent-admission gate refused before any
+	// role resolved.
+	AdmissionCheckAgentGate AdmissionCheck = "agent_gate"
+	// AdmissionCheckAgentLaunch: the role's launch did not resolve.
+	AdmissionCheckAgentLaunch AdmissionCheck = "agent_launch"
+	// AdmissionCheckAgentResolution: the role's agent, its fragments,
+	// enrollment, identity, generation, or conformance record did not
+	// resolve.
+	AdmissionCheckAgentResolution AdmissionCheck = "agent_resolution"
+	// AdmissionCheckAgentPrompt: the selection names a prompt other than the
+	// one the attempt runs.
+	AdmissionCheckAgentPrompt AdmissionCheck = "agent_prompt"
+	// AdmissionCheckAgentLaunchCoverage: the adapter's conformance does not
+	// cover the launch.
+	AdmissionCheckAgentLaunchCoverage AdmissionCheck = "agent_launch_coverage"
+	// AdmissionCheckAgentCredentialExpiry: the credential generation expires
+	// inside the attempt's margin.
+	AdmissionCheckAgentCredentialExpiry AdmissionCheck = "agent_credential_expiry" //nolint:gosec // G101 false positive: a check code, not a credential.
+	// AdmissionCheckAgentOfferDeadline: the agent's offer ends before the
+	// attempt's deadline.
+	AdmissionCheckAgentOfferDeadline AdmissionCheck = "agent_offer_deadline"
+	// AdmissionCheckAgentAttendedMark: the agent has no attended mark for
+	// the launch, so it cannot run unattended.
+	AdmissionCheckAgentAttendedMark AdmissionCheck = "agent_attended_mark"
+	// AdmissionCheckAgentEgressAuthority: an effective egress endpoint is
+	// outside the route's inference authorities.
+	AdmissionCheckAgentEgressAuthority AdmissionCheck = "agent_egress_authority"
+	// AdmissionCheckAgentSnapshot: the admission snapshot (launch selection,
+	// effort, treatment digest) did not derive.
+	AdmissionCheckAgentSnapshot AdmissionCheck = "agent_snapshot"
+	// AdmissionCheckAgentAdmission: an agent refusal that names no refusal
+	// site.
+	AdmissionCheckAgentAdmission AdmissionCheck = "agent_admission"
+)
+
+// AllAdmissionChecks is the single registration point for admission checks.
+var AllAdmissionChecks = []AdmissionCheck{
+	AdmissionCheckGenerationIntegrityMarked,
+	AdmissionCheckEgressProfileNotEnforceable,
+	AdmissionCheckEgressPolicyRefused,
+	AdmissionCheckBackendCapabilityRefused,
+	AdmissionCheckBackendPreJobRefused,
+	AdmissionCheckAdmissionFloorUnknown,
+	AdmissionCheckCapabilityBelowFloor,
+	AdmissionCheckCredentialModeNotApproved,
+	AdmissionCheckWaiverNotConfigured,
+	AdmissionCheckRepositoryIdentityMismatch,
+	AdmissionCheckPathBoundaryMismatch,
+	AdmissionCheckTrustProfileSuperseded,
+	AdmissionCheckReviewConfigurationUnapproved,
+	AdmissionCheckAgentRole,
+	AdmissionCheckAgentGate,
+	AdmissionCheckAgentLaunch,
+	AdmissionCheckAgentResolution,
+	AdmissionCheckAgentPrompt,
+	AdmissionCheckAgentLaunchCoverage,
+	AdmissionCheckAgentCredentialExpiry,
+	AdmissionCheckAgentOfferDeadline,
+	AdmissionCheckAgentAttendedMark,
+	AdmissionCheckAgentEgressAuthority,
+	AdmissionCheckAgentSnapshot,
+	AdmissionCheckAgentAdmission,
+}
+
+func (c AdmissionCheck) valid() bool {
+	switch c {
+	case AdmissionCheckGenerationIntegrityMarked, AdmissionCheckEgressProfileNotEnforceable,
+		AdmissionCheckEgressPolicyRefused, AdmissionCheckBackendCapabilityRefused,
+		AdmissionCheckBackendPreJobRefused, AdmissionCheckAdmissionFloorUnknown,
+		AdmissionCheckCapabilityBelowFloor, AdmissionCheckCredentialModeNotApproved,
+		AdmissionCheckWaiverNotConfigured, AdmissionCheckRepositoryIdentityMismatch,
+		AdmissionCheckPathBoundaryMismatch, AdmissionCheckTrustProfileSuperseded,
+		AdmissionCheckReviewConfigurationUnapproved,
+		AdmissionCheckAgentRole, AdmissionCheckAgentGate, AdmissionCheckAgentLaunch,
+		AdmissionCheckAgentResolution, AdmissionCheckAgentPrompt,
+		AdmissionCheckAgentLaunchCoverage, AdmissionCheckAgentCredentialExpiry,
+		AdmissionCheckAgentOfferDeadline, AdmissionCheckAgentAttendedMark,
+		AdmissionCheckAgentEgressAuthority, AdmissionCheckAgentSnapshot,
+		AdmissionCheckAgentAdmission:
+		return true
+	default:
+		return false
+	}
+}
+
+// AdmissionRefusal is the typed detail of an admission_policy_refused hold:
+// which check refused and, when the refusal site knows them, the agent and
+// the launch it refused. Every field is a code, an operator-authored agent
+// name from the admitted tree, or a digest; refusal error text never enters
+// it.
+type AdmissionRefusal struct {
+	Check AdmissionCheck `json:"check"`
+	// Agent is the refused agent's name; nil renders explicit null when the
+	// refusal came before an agent resolved, or names none.
+	Agent *string `json:"agent"`
+	// LaunchStage and LaunchDigest identify the refused launch; both are nil
+	// (explicit null) when the refusal came before the launch resolved.
+	LaunchStage  *StageName `json:"launch_stage"`
+	LaunchDigest *Digest    `json:"launch_digest"`
+}
+
+// Validate reports whether the refusal detail is structurally sound.
+func (r AdmissionRefusal) Validate() error {
+	if !r.Check.valid() {
+		return fmt.Errorf("admission refusal check %q: %w", r.Check, ErrInvalidAdmissionCheck)
+	}
+	if r.Agent != nil && *r.Agent == "" {
+		return fmt.Errorf("admission refusal %s agent: %w", r.Check, ErrEmptyField)
+	}
+	if (r.LaunchStage == nil) != (r.LaunchDigest == nil) {
+		return fmt.Errorf("admission refusal %s names half a launch: %w", r.Check, ErrHoldDetailMismatch)
+	}
+	if r.LaunchStage != nil && !r.LaunchStage.valid() {
+		return fmt.Errorf("admission refusal %s launch stage %q: %w", r.Check, *r.LaunchStage, ErrInvalidStageName)
+	}
+	if r.LaunchDigest != nil && *r.LaunchDigest == "" {
+		return fmt.Errorf("admission refusal %s launch digest: %w", r.Check, ErrEmptyField)
+	}
+	return nil
+}
+
 // DefinitivePublicationBlockReason maps the exact durable terminal-item
 // reason onto its operator-safe code. Transient publication holds deliberately
 // have no member here, even when they use the same AttentionType.
@@ -435,6 +607,11 @@ type RunHoldObservation struct {
 	// renders explicit null (pointer-for-optional).
 	InvocationID *InvocationID `json:"invocation_id"`
 	Reason       RunHoldReason `json:"reason"`
+	// Detail names the refused check, agent, and launch of an
+	// admission_policy_refused hold; nil renders explicit null. It is
+	// optional even beside that reason: rows written before it existed, and
+	// holds raised outside admission, carry none.
+	Detail *AdmissionRefusal `json:"detail"`
 	// FirstObservedAt is the UTC instant the current cause was first
 	// observed; LastObservedAt the most recent.
 	FirstObservedAt time.Time `json:"first_observed_at"`
@@ -452,6 +629,15 @@ func (h RunHoldObservation) Validate() error {
 	if !h.Reason.valid() {
 		return fmt.Errorf("run hold observation %s reason %q: %w",
 			h.RunID, h.Reason, ErrInvalidRunHoldReason)
+	}
+	if h.Detail != nil {
+		if h.Reason != HoldAdmissionPolicyRefused {
+			return fmt.Errorf("run hold observation %s carries a detail beside reason %q: %w",
+				h.RunID, h.Reason, ErrHoldDetailMismatch)
+		}
+		if err := h.Detail.Validate(); err != nil {
+			return fmt.Errorf("run hold observation %s: %w", h.RunID, err)
+		}
 	}
 	for name, ts := range map[string]time.Time{
 		"first_observed_at": h.FirstObservedAt,

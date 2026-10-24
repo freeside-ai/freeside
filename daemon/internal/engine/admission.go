@@ -484,13 +484,19 @@ func (e *Engine) admitAttempt(
 		if !ok {
 			// A lineup admitter runs ward stages only; a stage no role runs
 			// has no agent to bind and no identity to run under.
-			return domain.ExecutionAdmission{}, false, fmt.Errorf(
-				"admit invocation %q: stage %q has no ward role: %w", invocationID, stage.Name, ErrAgentNotAdmissible)
+			return domain.ExecutionAdmission{}, false, &AgentAdmissionRefusal{
+				Refusal: domain.AdmissionRefusal{Check: domain.AdmissionCheckAgentRole},
+				err: fmt.Errorf(
+					"admit invocation %q: stage %q has no ward role: %w", invocationID, stage.Name, ErrAgentNotAdmissible),
+			}
 		}
 		if env.Agents.Gate != nil {
 			if err := env.Agents.Gate(ctx); err != nil {
-				return domain.ExecutionAdmission{}, false, fmt.Errorf(
-					"admit invocation %q: role %s: %w", invocationID, role, errors.Join(ErrAgentNotAdmissible, err))
+				return domain.ExecutionAdmission{}, false, &AgentAdmissionRefusal{
+					Refusal: domain.AdmissionRefusal{Check: domain.AdmissionCheckAgentGate},
+					err: fmt.Errorf(
+						"admit invocation %q: role %s: %w", invocationID, role, errors.Join(ErrAgentNotAdmissible, err)),
+				}
 			}
 		}
 		resolved, err := resolveAgentAdmission(

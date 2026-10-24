@@ -113,10 +113,16 @@ func TestRetireBlockedItemsMigrationClosesOpenRows(t *testing.T) {
 
 // forgetRetireBlockedItems returns the database to the one a daemon at 0095
 // holds. 0096 changes no schema, so its record is all there is to forget; the
-// later migrations only add tables, which are dropped with their records so
-// the recorded history stays contiguous.
+// later migrations only add tables and columns, which are dropped with their
+// records so the recorded history stays contiguous.
 func forgetRetireBlockedItems(t *testing.T, ctx context.Context, db *sql.DB) {
 	t.Helper()
+	if _, err := db.ExecContext(ctx, `ALTER TABLE run_hold_observations DROP COLUMN detail_check;
+		ALTER TABLE run_hold_observations DROP COLUMN detail_agent;
+		ALTER TABLE run_hold_observations DROP COLUMN detail_launch_stage;
+		ALTER TABLE run_hold_observations DROP COLUMN detail_launch_digest`); err != nil {
+		t.Fatal(err)
+	}
 	if _, err := db.ExecContext(ctx, `DROP TABLE work_unit_rebase_proofs`); err != nil {
 		t.Fatal(err)
 	}
@@ -135,7 +141,8 @@ func forgetRetireBlockedItems(t *testing.T, ctx context.Context, db *sql.DB) {
 	if _, err := db.ExecContext(ctx, `DELETE FROM schema_migrations WHERE name IN
 		('0096_retire_blocked_items.sql', '0097_review_admissions.sql', '0098_review_dispute_rows.sql',
 		'0099_publish_installation_mint_holds.sql', '0100_task_workflow_closures.sql',
-		'0101_work_unit_rebase_proofs.sql', '0102_usage_observations_review.sql')`); err != nil {
+		'0101_work_unit_rebase_proofs.sql',
+		'0102_usage_observations_review.sql', '0103_run_hold_admission_detail.sql')`); err != nil {
 		t.Fatal(err)
 	}
 }

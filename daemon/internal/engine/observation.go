@@ -162,6 +162,55 @@ func dispatchHoldReason(err error) (domain.RunHoldReason, bool) {
 	return "", false
 }
 
+// admissionRefusalDetail names the check, and when known the agent and the
+// launch, behind an error dispatchHoldReason classifies as
+// admission_policy_refused; any other error has no detail. A typed agent
+// refusal names its own check; otherwise the most specific sentinel does,
+// and an agent refusal with neither names the generic agent check.
+func admissionRefusalDetail(err error) *domain.AdmissionRefusal {
+	if reason, ok := dispatchHoldReason(err); !ok || reason != domain.HoldAdmissionPolicyRefused {
+		return nil
+	}
+	var agent *AgentAdmissionRefusal
+	if errors.As(err, &agent) {
+		refusal := agent.Refusal
+		return &refusal
+	}
+	var check domain.AdmissionCheck
+	switch {
+	case errors.Is(err, domain.ErrGenerationIntegrityMarked):
+		check = domain.AdmissionCheckGenerationIntegrityMarked
+	case errors.Is(err, ErrEgressProfileNotEnforceable):
+		check = domain.AdmissionCheckEgressProfileNotEnforceable
+	case errors.Is(err, ErrEgressPolicyRefused):
+		check = domain.AdmissionCheckEgressPolicyRefused
+	case errors.Is(err, exec.ErrCapabilityRefused):
+		check = domain.AdmissionCheckBackendCapabilityRefused
+	case errors.Is(err, exec.ErrPreJobRefused):
+		check = domain.AdmissionCheckBackendPreJobRefused
+	case errors.Is(err, domain.ErrUnknownAdmissionFloor):
+		check = domain.AdmissionCheckAdmissionFloorUnknown
+	case errors.Is(err, domain.ErrCapabilityBelowFloor):
+		check = domain.AdmissionCheckCapabilityBelowFloor
+	case errors.Is(err, domain.ErrCredentialModeNotApproved):
+		check = domain.AdmissionCheckCredentialModeNotApproved
+	case errors.Is(err, domain.ErrWaiverNotConfigured):
+		check = domain.AdmissionCheckWaiverNotConfigured
+	case errors.Is(err, domain.ErrRepositoryIdentityMismatch):
+		check = domain.AdmissionCheckRepositoryIdentityMismatch
+	case errors.Is(err, domain.ErrPathBoundaryMismatch):
+		check = domain.AdmissionCheckPathBoundaryMismatch
+	case errors.Is(err, domain.ErrTrustProfileSuperseded):
+		check = domain.AdmissionCheckTrustProfileSuperseded
+	case errors.Is(err, domain.ErrReviewConfigurationUnapproved):
+		check = domain.AdmissionCheckReviewConfigurationUnapproved
+	default:
+		// Only ErrAgentNotAdmissible is left in the reason's class.
+		check = domain.AdmissionCheckAgentAdmission
+	}
+	return &domain.AdmissionRefusal{Check: check}
+}
+
 // productionBlockReason maps a definitive publication block reason onto its
 // closed code. The vocabulary is exactly the daemon's own definitive
 // reasons; recovery already fails closed on any other string, so an
@@ -210,19 +259,20 @@ func (e *Engine) observeInvocation(
 	return nil
 }
 
-// observeRunHold records one paced hold observation for a run.
+// observeRunHold records one paced hold observation for a run. detail is
+// nil except beside admission_policy_refused (admissionRefusalDetail).
 func (e *Engine) observeRunHold(
 	ctx context.Context, runID domain.RunID,
-	invocationID domain.InvocationID, reason domain.RunHoldReason,
+	invocationID domain.InvocationID, reason domain.RunHoldReason, detail *domain.AdmissionRefusal,
 ) error {
 	now := time.Now().UTC()
 	key := "hold:" + string(runID)
-	due, changed := e.pace.dueChanged(key, string(reason), now)
+	due, changed := e.pace.dueChanged(key, holdPaceState(reason, detail), now)
 	if !due {
 		return nil
 	}
 	if err := e.store.Write(ctx, func(tx *store.WriteTx) error {
-		if err := recordRunHold(ctx, tx, runID, invocationID, reason, now); err != nil {
+		if err := recordRunHold(ctx, tx, runID, invocationID, reason, detail, now); err != nil {
 			return err
 		}
 		return raiseHeldWorkNotice(ctx, tx, runID, reason, now)
@@ -235,20 +285,41 @@ func (e *Engine) observeRunHold(
 	// record every observationRefreshInterval, which buries the operational
 	// signal this line adds.
 	if changed {
-		e.logger.Info("run hold recorded",
-			"run", string(runID), "invocation", string(invocationID), "reason", string(reason))
+		attrs := []any{"run", string(runID), "invocation", string(invocationID), "reason", string(reason)}
+		if detail != nil {
+			attrs = append(attrs, "check", string(detail.Check))
+		}
+		e.logger.Info("run hold recorded", attrs...)
 	}
 	return nil
+}
+
+// holdPaceState is the pacer's state for a hold: a changed detail is a
+// changed state, so it is written at once rather than at the next refresh.
+func holdPaceState(reason domain.RunHoldReason, detail *domain.AdmissionRefusal) string {
+	state := string(reason)
+	if detail == nil {
+		return state
+	}
+	state += "+" + string(detail.Check)
+	if detail.Agent != nil {
+		state += "+" + *detail.Agent
+	}
+	if detail.LaunchDigest != nil {
+		state += "+" + string(*detail.LaunchDigest)
+	}
+	return state
 }
 
 // recordRunHold is the shared write: the publication workflow uses it
 // directly because its retry window already paces it.
 func recordRunHold(
 	ctx context.Context, tx *store.WriteTx, runID domain.RunID,
-	invocationID domain.InvocationID, reason domain.RunHoldReason, now time.Time,
+	invocationID domain.InvocationID, reason domain.RunHoldReason,
+	detail *domain.AdmissionRefusal, now time.Time,
 ) error {
 	hold := domain.RunHoldObservation{
-		RunID: runID, Reason: reason,
+		RunID: runID, Reason: reason, Detail: detail,
 		FirstObservedAt: now, LastObservedAt: now,
 	}
 	if invocationID != "" {
@@ -288,7 +359,7 @@ func (e *Engine) observeRefusalHold(
 	if !ok {
 		return nil
 	}
-	return e.observeRunHold(ctx, runID, invocationID, reason)
+	return e.observeRunHold(ctx, runID, invocationID, reason, admissionRefusalDetail(err))
 }
 
 // refusalRecoveredPaceState paces clearRefusalHold on the run's hold key

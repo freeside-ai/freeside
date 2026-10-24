@@ -103,8 +103,8 @@ func raiseHeldWorkNotice(
 // the run: an open run-subject item with a requested decision reads as
 // attention_required to run supervision, and a self-resolving advisory must
 // not end a supervised run. The reason names the run instead, and is built
-// only from the run ID, the hold's reason code, and its start: refusal error
-// text never reaches the item.
+// only from the run ID, the hold's reason code, its start, and the typed
+// fields of its admission detail: refusal error text never reaches the item.
 //
 // The caller chooses the ID because the ID decides who resolves the item.
 // The engine passes heldWorkNoticeID, which reconcileHeldWorkNotices reads
@@ -127,10 +127,10 @@ func HeldWorkNoticeItem(
 		ProjectID: run.ProjectID, Subject: subject,
 		Type: domain.AttentionSystemHealth, Priority: domain.PriorityHigh,
 		Reason: fmt.Sprintf(
-			"Run %s has been held since %s with hold reason %s. "+
+			"Run %s has been held since %s with hold reason %s. %s"+
 				"Freeside keeps retrying it. "+
 				"This notice resolves itself when the hold clears, its cause changes, or the task is stopped.",
-			run.ID, hold.FirstObservedAt.Format(time.RFC3339), hold.Reason),
+			run.ID, hold.FirstObservedAt.Format(time.RFC3339), hold.Reason, admissionRefusalSentence(hold.Detail)),
 		RequestedDecision: []domain.Action{domain.ActionAcknowledge},
 		HealthDiagnostic: &domain.HealthDiagnostic{
 			Code: heldWorkDiagnosticCode, Impairs: domain.ImpairedCapabilityUnattendedAdmission,
@@ -139,6 +139,27 @@ func HeldWorkNoticeItem(
 		InterruptionClass: domain.InterruptionExceptional,
 		CreatedAt:         &createdAt, Posture: &posture, Status: domain.StatusOpen,
 	}, nil)
+}
+
+// admissionRefusalSentence names the refused check, agent, and launch, each
+// only when the detail carries it, or nothing without a detail.
+func admissionRefusalSentence(detail *domain.AdmissionRefusal) string {
+	if detail == nil {
+		return ""
+	}
+	// The notice keeps its text while the span lasts, and the span outlives a
+	// change of check, so the sentence dates itself instead of claiming the
+	// current cause; the hold row carries that.
+	sentence := "When this notice was raised, admission check " + string(detail.Check) + " refused"
+	if detail.Agent != nil {
+		sentence += " agent " + *detail.Agent
+	} else {
+		sentence += " the run"
+	}
+	if detail.LaunchStage != nil {
+		sentence += fmt.Sprintf(" on the %s launch %s", *detail.LaunchStage, *detail.LaunchDigest)
+	}
+	return sentence + ". "
 }
 
 // heldWorkTaskStopped reports whether the operator stopped the run's task.
