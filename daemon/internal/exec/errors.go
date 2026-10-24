@@ -24,6 +24,8 @@ var (
 	ErrInvalidStatus = errors.New("invalid invocation status")
 	// ErrNonTerminalResult: a committed result must carry a terminal status.
 	ErrNonTerminalResult = errors.New("result status is not terminal")
+	// ErrCauseWithoutFailure: only a failed result may carry a failure cause.
+	ErrCauseWithoutFailure = errors.New("result carries a failure cause but did not fail")
 	// ErrInputSourceMissing: no content-addressed store was supplied.
 	ErrInputSourceMissing = errors.New("stage input source is missing")
 	// ErrInputBodyMissing: a source reported success without returning a body.

@@ -2046,6 +2046,15 @@ func TestGolden(t *testing.T) {
 		{"execution_admission_task_line", taskLineAdmission},
 		{"adapter_conformance", adapterConformance},
 		{"execution_export", export},
+		{"execution_outcome_failed", domain.ExecutionOutcome{
+			InvocationID: "inv-1", AdmissionID: "sha256:admission",
+			Status: domain.ExecutionOutcomeFailed, Summary: "provider refused: quota exhausted",
+			Cause: domain.FailureCauseQuota, RecordedAt: ts,
+		}},
+		{"execution_outcome_canceled", domain.ExecutionOutcome{
+			InvocationID: "inv-1", AdmissionID: "sha256:admission",
+			Status: domain.ExecutionOutcomeCanceled, Summary: "canceled by the operator", RecordedAt: ts,
+		}},
 		{"current_import_start", currentImportStart},
 		{"project_image", projectImage},
 		{"project_image_environment", projectImageWithEnvironment},

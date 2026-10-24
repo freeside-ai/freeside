@@ -1,0 +1,8 @@
+{
+  "invocation_id": "inv-1",
+  "admission_id": "sha256:admission",
+  "status": "failed",
+  "summary": "provider refused: quota exhausted",
+  "cause": "quota",
+  "recorded_at": "2026-01-02T03:04:05Z"
+}

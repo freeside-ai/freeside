@@ -927,6 +927,7 @@ func TestRecoverExportedAdoptsWrittenFailedOutcome(t *testing.T) {
 	if err := exports.RecordExecutionOutcome(ctx, domain.ExecutionOutcome{
 		InvocationID: testInvoke, AdmissionID: testStartSpec().AdmissionID,
 		Status:     domain.ExecutionOutcomeFailed,
+		Cause:      domain.FailureCauseUnknown,
 		Summary:    "released export was definitively rejected: gauntlet containment reported 3 publish-blocking findings",
 		RecordedAt: fixedNow,
 	}); err != nil {

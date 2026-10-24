@@ -90,9 +90,11 @@ func TestWorkflowClosureAuthenticatesLegacyHeldWorkNotices(t *testing.T) {
 				`DROP TABLE work_unit_rebase_proofs`,
 				`DROP TABLE task_attention_workflow_origins`,
 				`DROP TABLE task_workflow_closures`,
+				`ALTER TABLE execution_outcomes DROP COLUMN cause`,
 				`DELETE FROM schema_migrations WHERE name IN
 					('0100_task_workflow_closures.sql', '0101_work_unit_rebase_proofs.sql',
-					'0102_usage_observations_review.sql', '0103_run_hold_admission_detail.sql')`,
+					'0102_usage_observations_review.sql', '0103_run_hold_admission_detail.sql',
+					'0104_execution_outcome_cause.sql')`,
 			} {
 				if _, err := st.db.ExecContext(ctx, statement); err != nil {
 					t.Fatal(err)
@@ -400,9 +402,11 @@ func TestWorkflowClosureMigrationDoesNotInferAuthority(t *testing.T) {
 		`DROP TABLE work_unit_rebase_proofs`,
 		`DROP TABLE task_attention_workflow_origins`,
 		`DROP TABLE task_workflow_closures`,
+		`ALTER TABLE execution_outcomes DROP COLUMN cause`,
 		`DELETE FROM schema_migrations WHERE name IN
 					('0100_task_workflow_closures.sql', '0101_work_unit_rebase_proofs.sql',
-					'0102_usage_observations_review.sql', '0103_run_hold_admission_detail.sql')`,
+					'0102_usage_observations_review.sql', '0103_run_hold_admission_detail.sql',
+					'0104_execution_outcome_cause.sql')`,
 	} {
 		if _, err := st.db.ExecContext(ctx, statement); err != nil {
 			t.Fatal(err)

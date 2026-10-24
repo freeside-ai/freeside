@@ -356,6 +356,7 @@ func testSubmitCommandSpecificationDigest(
 		return tx.RecordExecutionOutcome(t.Context(), domain.ExecutionOutcome{
 			InvocationID: submitted.ImplementationInvocationID, AdmissionID: admission.ID,
 			Status: domain.ExecutionOutcomeFailed, Summary: "fixture failure",
+			Cause:      domain.FailureCauseUnknown,
 			RecordedAt: now.Add(time.Minute),
 		})
 	}); err != nil {

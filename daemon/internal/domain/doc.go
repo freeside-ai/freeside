@@ -19,6 +19,7 @@
 //   - run.go          run/stage/attempt and invocation identities (§5.3)
 //   - capability.go   runner capabilities and their persisted snapshot (§5.7)
 //   - execution.go    the durable admission and export records (§5.3, §5.7)
+//   - failure.go      the failure cause and disposition axes, and the pure disposition rule (§4)
 //   - task_line.go    the per-task agent choice and its line versions (§5.4)
 //   - auth_identity.go provider identities and the mutation lease (§5.4)
 //   - schedule.go     the durable scheduler's kinds, aggregate, and events (§5.16)

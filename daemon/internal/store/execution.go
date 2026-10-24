@@ -89,12 +89,12 @@ FROM current_import_starts WHERE invocation_id = ?`
 
 	recordExecutionOutcomeSQL = `
 INSERT INTO execution_outcomes
-    (invocation_id, admission_id, status, summary, recorded_at, body)
-VALUES (?, ?, ?, ?, ?, ?)
+    (invocation_id, admission_id, status, summary, cause, recorded_at, body)
+VALUES (?, ?, ?, ?, ?, ?, ?)
 ON CONFLICT (invocation_id) DO NOTHING`
 	selectExecutionOutcomeBodySQL = `SELECT body FROM execution_outcomes WHERE invocation_id = ?`
 	getExecutionOutcomeSQL        = `
-SELECT invocation_id, admission_id, status, summary, recorded_at, body
+SELECT invocation_id, admission_id, status, summary, cause, recorded_at, body
 FROM execution_outcomes WHERE invocation_id = ?`
 
 	recordExportRejectionSQL = `
@@ -1118,7 +1118,7 @@ func (tx *WriteTx) RecordExecutionOutcome(
 	inserted, err := tx.putImmutableInserted(ctx, recordExecutionOutcomeSQL,
 		[]any{
 			outcome.InvocationID, outcome.AdmissionID, outcome.Status,
-			outcome.Summary, formatTime(outcome.RecordedAt), body,
+			outcome.Summary, outcome.Cause, formatTime(outcome.RecordedAt), body,
 		},
 		selectExecutionOutcomeBodySQL, []any{outcome.InvocationID}, body)
 	if err != nil {
@@ -1186,15 +1186,18 @@ func (tx *ReadTx) getExecutionOutcome(
 		admissionID  string
 		status       string
 		summary      string
+		cause        string
 		recordedAt   string
 		body         []byte
 	)
 	err := tx.tx.QueryRowContext(ctx, getExecutionOutcomeSQL, id).
-		Scan(&invocationID, &admissionID, &status, &summary, &recordedAt, &body)
+		Scan(&invocationID, &admissionID, &status, &summary, &cause, &recordedAt, &body)
 	if err != nil {
 		return domain.ExecutionOutcome{}, fmt.Errorf(
 			"get execution outcome %q: %w", id, notFoundOr(err))
 	}
+	// decode canonicalizes a failed body stored before causes existed to
+	// unknown, the value migration 0104 gave its column.
 	outcome, err := decode[domain.ExecutionOutcome](body)
 	if err != nil {
 		return domain.ExecutionOutcome{}, fmt.Errorf("get execution outcome %q: %w", id, err)
@@ -1202,6 +1205,7 @@ func (tx *ReadTx) getExecutionOutcome(
 	if outcome.InvocationID != id || invocationID != string(outcome.InvocationID) ||
 		admissionID != string(outcome.AdmissionID) ||
 		status != string(outcome.Status) || summary != outcome.Summary ||
+		cause != string(outcome.Cause) ||
 		!timeColumnEqual(recordedAt, outcome.RecordedAt) {
 		return domain.ExecutionOutcome{}, fmt.Errorf(
 			"get execution outcome %q: %w", id, errRowInconsistent)

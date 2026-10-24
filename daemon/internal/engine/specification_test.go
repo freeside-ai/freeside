@@ -4196,3 +4196,32 @@ func TestSubmitSpecificationRunSourceGuard(t *testing.T) {
 		}
 	})
 }
+
+// TestSpecificationFailureRecordsDriverCause covers the specification lane's
+// half of issue #899: a failed specifier result's cause reaches the recorded
+// execution outcome.
+func TestSpecificationFailureRecordsDriverCause(t *testing.T) {
+	f := newSpecificationFixture(t, true, 2)
+	driver := f.newDriver(t)
+	id := specificationInvocationID("specification-run", 1)
+	driver.Script(id, execfake.StageScript{
+		Outcome: execfake.OutcomeFail,
+		Result: exec.StageResult{
+			Artifacts: []domain.Digest{}, Summary: "Specifier quota exhausted.",
+			Cause: domain.FailureCauseQuota,
+		},
+	})
+	f.submit(t)
+	if _, err := f.newEngine(t, driver).Reconcile(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	if err := f.store.Read(t.Context(), func(tx *store.ReadTx) error {
+		outcome, err := tx.GetExecutionOutcomeRecord(t.Context(), id)
+		if err == nil && outcome.Cause != domain.FailureCauseQuota {
+			t.Errorf("recorded cause = %q, want quota", outcome.Cause)
+		}
+		return err
+	}); err != nil {
+		t.Fatal(err)
+	}
+}

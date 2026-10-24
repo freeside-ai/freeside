@@ -322,6 +322,7 @@ func TestDurableOutcomeRestoresBeforeMutablePolicy(t *testing.T) {
 				AdmissionID:  testStartSpec().AdmissionID,
 				Status:       tc.outcome,
 				Summary:      tc.summary,
+				Cause:        domain.CanonicalFailureCause(tc.outcome, ""),
 				RecordedAt:   fixedNow,
 			}); err != nil {
 				t.Fatal(err)
@@ -2083,6 +2084,7 @@ func TestInspectClearsLeakedDeferralOnReconstructedTerminal(t *testing.T) {
 		InvocationID: in.InvocationID,
 		AdmissionID:  testStartSpec().AdmissionID,
 		Status:       domain.ExecutionOutcomeFailed,
+		Cause:        domain.FailureCauseUnknown,
 		Summary:      "recovery of the released export failed",
 		RecordedAt:   fixedNow,
 	}); err != nil {

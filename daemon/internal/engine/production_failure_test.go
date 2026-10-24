@@ -147,7 +147,8 @@ func (f failedImplementationFixture) preRecordOutcome(
 		}
 		outcome = domain.ExecutionOutcome{
 			InvocationID: f.attempt.InvocationID, AdmissionID: admission.ID,
-			Status: status, Summary: summary, RecordedAt: f.now.Add(time.Minute).UTC(),
+			Status: status, Summary: summary, Cause: domain.CanonicalFailureCause(status, ""),
+			RecordedAt: f.now.Add(time.Minute).UTC(),
 		}
 		return tx.RecordExecutionOutcome(t.Context(), outcome)
 	}); err != nil {

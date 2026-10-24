@@ -1194,6 +1194,10 @@ type productionTerminalRecord struct {
 	HeadSHA      string              `json:"head_sha,omitempty"`
 	Artifacts    []domain.Digest     `json:"artifacts,omitempty"`
 	Summary      string              `json:"summary,omitempty"`
+	// Cause is the driver's failure cause, carried so a failed outcome the
+	// engine records names it; omitempty keeps rows written before causes
+	// existed byte-identical.
+	Cause domain.FailureCause `json:"cause,omitempty"`
 }
 
 // decodeProductionTerminal reconstructs and re-gates one stored terminal
@@ -1433,6 +1437,7 @@ func (e *Engine) settleProductionAttempt(
 		terminal.HeadSHA = result.HeadSHA
 		terminal.Artifacts = result.Artifacts
 		terminal.Summary = result.Summary
+		terminal.Cause = productionTerminalCause(result.Status, result.Cause)
 	}
 	if terminal.Status == exec.StatusCompleted {
 		// Re-gated at the last point the engine controls before the
@@ -1545,18 +1550,37 @@ func (e *Engine) authenticateProductionTerminal(
 		actual.HeadSHA = result.HeadSHA
 		actual.Artifacts = result.Artifacts
 		actual.Summary = result.Summary
+		actual.Cause = productionTerminalCause(result.Status, result.Cause)
 	}
-	if recorded.InvocationID != actual.InvocationID ||
-		recorded.RunID != actual.RunID ||
-		recorded.StageID != actual.StageID ||
-		recorded.Status != actual.Status ||
-		recorded.HeadSHA != actual.HeadSHA ||
-		!slices.Equal(recorded.Artifacts, actual.Artifacts) ||
-		recorded.Summary != actual.Summary {
+	if !sameProductionTerminal(recorded, actual) {
 		return fmt.Errorf("terminal record for %q disagrees with collected outcome: %w",
 			attempt.InvocationID, domain.ErrParentKeyMismatch)
 	}
 	return nil
+}
+
+// sameProductionTerminal compares canonical causes: a failed terminal stored
+// before causes existed has none, while the driver reports unknown for the
+// same failure once it restores the result from the durable outcome.
+func sameProductionTerminal(recorded, actual productionTerminalRecord) bool {
+	return recorded.InvocationID == actual.InvocationID &&
+		recorded.RunID == actual.RunID &&
+		recorded.StageID == actual.StageID &&
+		recorded.Status == actual.Status &&
+		recorded.HeadSHA == actual.HeadSHA &&
+		slices.Equal(recorded.Artifacts, actual.Artifacts) &&
+		recorded.Summary == actual.Summary &&
+		productionTerminalCause(recorded.Status, recorded.Cause) ==
+			productionTerminalCause(actual.Status, actual.Cause)
+}
+
+// productionTerminalCause is the cause a terminal with this status records:
+// unknown for a failed terminal whose driver classified nothing.
+func productionTerminalCause(status exec.Status, cause domain.FailureCause) domain.FailureCause {
+	if status != exec.StatusFailed {
+		return cause
+	}
+	return domain.CanonicalFailureCause(domain.ExecutionOutcomeFailed, cause)
 }
 
 // requireProductionAdmissionRecord authenticates the immutable admission
@@ -1680,7 +1704,7 @@ func (e *Engine) recordProductionTerminalWithCompletion(
 			createdAt := time.Now().UTC()
 			facts, err := executionFailureFacts(
 				ctx, tx, terminal.InvocationID, terminal.Status, terminal.Summary,
-				createdAt, domain.StageNameImplementation,
+				terminal.Cause, createdAt, domain.StageNameImplementation,
 			)
 			if err != nil {
 				return err
@@ -1838,6 +1862,7 @@ func (e *Engine) recordProductionDeliveryRefusal(
 				AdmissionID:  admission.ID,
 				Status:       domain.ExecutionOutcomeFailed,
 				Summary:      terminal.Summary,
+				Cause:        domain.FailureCauseUnknown,
 				RecordedAt:   time.Now().UTC(),
 			}
 			stored, outcomeErr := tx.GetExecutionOutcomeRecord(ctx, invocationID)

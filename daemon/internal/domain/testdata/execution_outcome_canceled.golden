@@ -1,0 +1,7 @@
+{
+  "invocation_id": "inv-1",
+  "admission_id": "sha256:admission",
+  "status": "canceled",
+  "summary": "canceled by the operator",
+  "recorded_at": "2026-01-02T03:04:05Z"
+}

@@ -718,6 +718,7 @@ func TestAttentionItemReadAuthenticatesExecutionFailure(t *testing.T) {
 	outcome := domain.ExecutionOutcome{
 		InvocationID: admission.InvocationID, AdmissionID: admission.ID,
 		Status: domain.ExecutionOutcomeFailed, Summary: "implementation failed",
+		Cause:      domain.FailureCauseUnknown,
 		RecordedAt: admission.AdmittedAt.Add(time.Minute),
 	}
 	if err := st.Write(ctx, func(tx *WriteTx) error {
@@ -763,6 +764,7 @@ func TestAttentionItemSuccessorReauthenticatesRestoredExecutionFailure(t *testin
 	outcome := domain.ExecutionOutcome{
 		InvocationID: admission.InvocationID, AdmissionID: admission.ID,
 		Status: domain.ExecutionOutcomeFailed, Summary: "implementation failed",
+		Cause:      domain.FailureCauseUnknown,
 		RecordedAt: admission.AdmittedAt.Add(time.Minute),
 	}
 	if err := st.Write(ctx, func(tx *WriteTx) error {

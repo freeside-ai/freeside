@@ -424,6 +424,7 @@ func (d *Driver) restoreDurableOutcome(
 			InvocationID: in.InvocationID,
 			Status:       exec.StatusFailed,
 			Summary:      stored.Summary,
+			Cause:        stored.Cause,
 			Usage:        usage,
 			Artifacts:    artifacts,
 		}

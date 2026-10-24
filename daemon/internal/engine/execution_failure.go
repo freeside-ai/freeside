@@ -31,6 +31,7 @@ func executionFailureFacts(
 	invocationID domain.InvocationID,
 	status exec.Status,
 	summary string,
+	cause domain.FailureCause,
 	recordedAt time.Time,
 	stage domain.StageName,
 ) (*domain.ExecutionFailureFacts, error) {
@@ -71,7 +72,8 @@ func executionFailureFacts(
 	}
 	if err := tx.RecordExecutionOutcome(ctx, domain.ExecutionOutcome{
 		InvocationID: invocationID, AdmissionID: admission.ID,
-		Status: mapped, Summary: summary, RecordedAt: recordedAt,
+		Status: mapped, Summary: summary,
+		Cause: domain.CanonicalFailureCause(mapped, cause), RecordedAt: recordedAt,
 	}); err != nil {
 		return nil, err
 	}

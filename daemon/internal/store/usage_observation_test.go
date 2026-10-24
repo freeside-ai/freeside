@@ -281,6 +281,7 @@ func TestUsageObservationMayArriveAfterConclusion(t *testing.T) {
 		InvocationID: admission.InvocationID,
 		AdmissionID:  admission.ID,
 		Status:       domain.ExecutionOutcomeFailed,
+		Cause:        domain.FailureCauseUnknown,
 		Summary:      "provider failed after reporting usage",
 		RecordedAt:   admission.AdmittedAt.Add(time.Hour),
 	}

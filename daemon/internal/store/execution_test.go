@@ -1267,6 +1267,7 @@ func TestExecutionOutcomeBinding(t *testing.T) {
 		InvocationID: "inv-1",
 		AdmissionID:  f.admission.ID,
 		Status:       domain.ExecutionOutcomeFailed,
+		Cause:        domain.FailureCauseUnknown,
 		Summary:      "writer failed",
 		RecordedAt:   admissionEpoch.Add(time.Hour),
 	}
@@ -1294,6 +1295,7 @@ func TestExecutionOutcomeBinding(t *testing.T) {
 	}
 	changed := outcome
 	changed.Status = domain.ExecutionOutcomeCanceled
+	changed.Cause = ""
 	if err := record(changed); !errors.Is(err, store.ErrImmutableConflict) {
 		t.Fatalf("changed outcome = %v, want immutable conflict", err)
 	}
@@ -1363,6 +1365,7 @@ func TestExecutionExportAndOutcomeAreMutuallyExclusive(t *testing.T) {
 			outcome := domain.ExecutionOutcome{
 				InvocationID: "inv-1", AdmissionID: f.admission.ID,
 				Status: domain.ExecutionOutcomeFailed, Summary: "failed",
+				Cause:      domain.FailureCauseUnknown,
 				RecordedAt: admissionEpoch.Add(time.Hour),
 			}
 			if err := s.Write(ctx, func(tx *store.WriteTx) error {
@@ -1496,6 +1499,7 @@ func TestExportRejectionRoundTrip(t *testing.T) {
 		return tx.RecordExecutionOutcome(ctx, domain.ExecutionOutcome{
 			InvocationID: "inv-1", AdmissionID: f.admission.ID,
 			Status: domain.ExecutionOutcomeFailed, Summary: "rejected",
+			Cause:      domain.FailureCauseUnknown,
 			RecordedAt: admissionEpoch.Add(time.Hour),
 		})
 	}); err != nil {
@@ -1642,6 +1646,7 @@ func TestFailedOutcomeFreesDispatchedExecutionSlot(t *testing.T) {
 		return tx.RecordExecutionOutcome(ctx, domain.ExecutionOutcome{
 			InvocationID: "inv-1", AdmissionID: f.admission.ID,
 			Status: domain.ExecutionOutcomeFailed, Summary: "recovery abandoned after grace",
+			Cause:      domain.FailureCauseUnknown,
 			RecordedAt: admissionEpoch.Add(time.Hour),
 		})
 	}); err != nil {

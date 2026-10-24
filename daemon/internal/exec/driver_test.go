@@ -1,6 +1,7 @@
 package exec_test
 
 import (
+	"errors"
 	"reflect"
 	"strings"
 	"testing"
@@ -157,5 +158,34 @@ func TestStartSpecFromAdmissionDetachesStageInputs(t *testing.T) {
 		spec.StageInputs.PriorArtifactDigests[0] != execStageDigest("5") ||
 		spec.StageInputs.ImageInputDigests[0] != execStageDigest("6") {
 		t.Fatal("start spec followed mutable admission slice storage")
+	}
+}
+
+func TestStageResultCause(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		name   string
+		status exec.Status
+		cause  domain.FailureCause
+		want   error
+	}{
+		{"failed with a cause", exec.StatusFailed, domain.FailureCauseQuota, nil},
+		// Empty on a failed result means unknown; the stage driver records it.
+		{"failed without a cause", exec.StatusFailed, "", nil},
+		{"failed with an invalid cause", exec.StatusFailed, "transient", domain.ErrInvalidFailureCause},
+		{"completed with a cause", exec.StatusCompleted, domain.FailureCauseUnknown, exec.ErrCauseWithoutFailure},
+		{"canceled with a cause", exec.StatusCanceled, domain.FailureCauseQuota, exec.ErrCauseWithoutFailure},
+		{"blocked with a cause", exec.StatusBlocked, domain.FailureCauseQuota, exec.ErrCauseWithoutFailure},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			err := exec.StageResult{InvocationID: "inv-1", Status: tc.status, Cause: tc.cause}.Validate()
+			if tc.want == nil && err != nil {
+				t.Fatalf("Validate() = %v, want nil", err)
+			}
+			if tc.want != nil && !errors.Is(err, tc.want) {
+				t.Fatalf("Validate() = %v, want %v", err, tc.want)
+			}
+		})
 	}
 }

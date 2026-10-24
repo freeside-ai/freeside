@@ -1748,6 +1748,26 @@ func (c ReviewFailureClass) valid() bool {
 	}
 }
 
+// FailureCause maps the review-only class onto the shared cause axis. The
+// class mixes axes (transient is a disposition, contradiction a trust
+// outcome), so the mapping is lossy by design: transient positively
+// identified operational I/O or the provider's default terminal, and
+// provider_unavailable is the nearest cause. The engine's review routing
+// still switches on the class itself.
+func (c ReviewFailureClass) FailureCause() FailureCause {
+	switch c {
+	case ReviewFailureTransient:
+		return FailureCauseProviderUnavailable
+	case ReviewFailureConfiguration:
+		return FailureCauseInvalidConfiguration
+	case ReviewFailureQuota:
+		return FailureCauseQuota
+	case ReviewFailureContradiction:
+		return FailureCauseContractContradiction
+	}
+	return FailureCauseUnknown
+}
+
 // CommitPlanMode gates commit-plan import per repository (plan §5.5, §5.6):
 // under single_commit, the conservative default, a present plan is never
 // decoded or honored and its presence surfaces as a notice; under

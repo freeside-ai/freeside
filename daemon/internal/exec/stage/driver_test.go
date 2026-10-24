@@ -2732,6 +2732,7 @@ func TestOutcomeRefusesExistingExportWithoutRetrying(t *testing.T) {
 		InvocationID: testInvoke,
 		AdmissionID:  domain.Digest("sha256:" + strings.Repeat("44", 32)),
 		Status:       domain.ExecutionOutcomeFailed,
+		Cause:        domain.FailureCauseUnknown,
 		Summary:      "failed after export",
 		RecordedAt:   fixedNow,
 	})

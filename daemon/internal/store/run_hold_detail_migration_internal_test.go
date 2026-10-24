@@ -17,9 +17,11 @@ func TestRunHoldDetailMigrationKeepsOlderHolds(t *testing.T) {
 	ctx := context.Background()
 	st := openTemplateStoreAt(t, t.TempDir()+"/run-hold-detail.db", Options{})
 
-	// Return the table to the shape a daemon at 0102 holds; 0103 is the
-	// head, so its record is the only one to forget.
+	// Return the store to the shape a daemon at 0102 holds, forgetting 0104
+	// and then 0103 so the recorded history stays contiguous.
 	for _, statement := range []string{
+		`ALTER TABLE execution_outcomes DROP COLUMN cause`,
+		`DELETE FROM schema_migrations WHERE name = '0104_execution_outcome_cause.sql'`,
 		`ALTER TABLE run_hold_observations DROP COLUMN detail_check`,
 		`ALTER TABLE run_hold_observations DROP COLUMN detail_agent`,
 		`ALTER TABLE run_hold_observations DROP COLUMN detail_launch_stage`,
