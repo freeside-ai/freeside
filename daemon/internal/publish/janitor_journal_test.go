@@ -599,32 +599,32 @@ func TestOversizedJournalIsRefusedBeforeItIsWritten(t *testing.T) {
 		"reason":                  string(publish.InstallationRemovalUnbound),
 		"observed_repository_ids": observed,
 	}
-	entries := make([]map[string]any, 0, 64)
-	var payload []byte
-	for len(payload) < 8<<20 {
-		entries = append(entries, entry)
+	encode := func(count int) []byte {
+		t.Helper()
 		encoded, err := json.MarshalIndent(map[string]any{
 			"version":     1,
 			"quarantined": []any{},
-			"entries":     entries,
+			"entries":     slices.Repeat([]map[string]any{entry}, count),
 		}, "", "  ")
 		if err != nil {
-			t.Fatalf("encode oversized journal: %v", err)
+			t.Fatalf("encode journal: %v", err)
 		}
-		payload = append(encoded, '\n')
+		return append(encoded, '\n')
 	}
+	// The encoding grows by the same number of bytes per entry, so two small
+	// encodings size the journal instead of re-encoding it on every append.
+	const limit = 8 << 20
+	one := len(encode(1))
+	perEntry := len(encode(2)) - one
 	// One entry short of the bound, so the store can still read it and the next
 	// record is what crosses the line.
-	entries = entries[:len(entries)-1]
-	payload, err := json.MarshalIndent(map[string]any{
-		"version":     1,
-		"quarantined": []any{},
-		"entries":     entries,
-	}, "", "  ")
-	if err != nil {
-		t.Fatalf("encode journal: %v", err)
+	count := 1 + (limit-1-one)/perEntry
+	payload := encode(count)
+	if len(payload) != one+(count-1)*perEntry || len(payload) >= limit || len(payload)+perEntry < limit {
+		t.Fatalf("journal of %d entries is %d bytes; want under %d and within one entry (%d bytes) of it",
+			count, len(payload), limit, perEntry)
 	}
-	if err := os.WriteFile(filepath.Join(dir, journalFileName), append(payload, '\n'), 0o600); err != nil {
+	if err := os.WriteFile(filepath.Join(dir, journalFileName), payload, 0o600); err != nil {
 		t.Fatalf("write journal: %v", err)
 	}
 
