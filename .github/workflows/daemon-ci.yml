@@ -39,6 +39,7 @@ jobs:
         run: |
           echo "build=$(go env GOCACHE)" >>"$GITHUB_OUTPUT"
           echo "mod=$(go env GOMODCACHE)" >>"$GITHUB_OUTPUT"
+          echo "start=$(date +%s)" >>"$GITHUB_OUTPUT"
           mkdir -p "$(go env GOCACHE)" "$(go env GOMODCACHE)"
       - name: Cache Go modules
         uses: actions/cache@v4
@@ -98,6 +99,18 @@ jobs:
         run: |
           mkdir -p evidence
           du -sk "$(cd daemon && go env GOCACHE)" "$(cd daemon && go env GOMODCACHE)" >evidence/cache-after.txt
+      - name: Trim the build cache to this job's outputs
+        if: github.event_name == 'push'
+        env:
+          GOCACHE_DIR: ${{ steps.go-cache.outputs.build }}
+          JOB_START: ${{ steps.go-cache.outputs.start }}
+        run: |
+          # Go bumps an entry's mtime when it uses one at least an hour old,
+          # so everything this job compiled or read is newer than an hour
+          # before it started; the rest is history from earlier pushes.
+          age=$(( ($(date +%s) - JOB_START) / 60 + 61 ))
+          find "$GOCACHE_DIR" -mindepth 2 -maxdepth 2 -mmin +"$age" -exec rm -rf {} +
+          du -sk "$GOCACHE_DIR" >evidence/cache-trimmed.txt
       - name: Upload static-job evidence
         if: always()
         uses: actions/upload-artifact@v4
@@ -144,6 +157,7 @@ jobs:
         run: |
           echo "build=$(go env GOCACHE)" >>"$GITHUB_OUTPUT"
           echo "mod=$(go env GOMODCACHE)" >>"$GITHUB_OUTPUT"
+          echo "start=$(date +%s)" >>"$GITHUB_OUTPUT"
           mkdir -p "$(go env GOCACHE)" "$(go env GOMODCACHE)"
       - name: Cache Go modules
         uses: actions/cache@v4
@@ -185,6 +199,18 @@ jobs:
         run: |
           mkdir -p evidence
           du -sk "$(cd daemon && go env GOCACHE)" "$(cd daemon && go env GOMODCACHE)" >evidence/cache-after.txt
+      - name: Trim the build cache to this job's outputs
+        if: github.event_name == 'push' && matrix.index == 1
+        env:
+          GOCACHE_DIR: ${{ steps.go-cache.outputs.build }}
+          JOB_START: ${{ steps.go-cache.outputs.start }}
+        run: |
+          # Go bumps an entry's mtime when it uses one at least an hour old,
+          # so everything this job compiled or read is newer than an hour
+          # before it started; the rest is history from earlier pushes.
+          age=$(( ($(date +%s) - JOB_START) / 60 + 61 ))
+          find "$GOCACHE_DIR" -mindepth 2 -maxdepth 2 -mmin +"$age" -exec rm -rf {} +
+          du -sk "$GOCACHE_DIR" >evidence/cache-trimmed.txt
       - name: Upload test evidence
         if: always()
         uses: actions/upload-artifact@v4
@@ -281,10 +307,12 @@ jobs:
 
   # The one macOS job a push to main requests. The tree was tested on its
   # PR under the up-to-date rule, so this job exists for what PRs no longer
-  # run on macOS: it compiles every test binary to warm the build cache the
-  # PR rest shard restores, runs the three integration shards in sequence
-  # under the unchanged per-shard timeout, and saves that cache. Its
-  # evidence is verified by the `macos` gate like any shard's.
+  # run on macOS: it runs the PR rest shard's build and compiles every test
+  # binary to warm the build cache that shard and the convergence job
+  # restore, runs the three integration shards in sequence under the
+  # unchanged per-shard timeout, and saves that cache, trimmed first to
+  # this job's own outputs. Its evidence is verified by the `macos` gate
+  # like any shard's.
   macos-main:
     name: macos (test, integration 1-3/3)
     runs-on: macos-26
@@ -304,6 +332,7 @@ jobs:
         run: |
           echo "build=$(go env GOCACHE)" >>"$GITHUB_OUTPUT"
           echo "mod=$(go env GOMODCACHE)" >>"$GITHUB_OUTPUT"
+          echo "start=$(date +%s)" >>"$GITHUB_OUTPUT"
           mkdir -p "$(go env GOCACHE)" "$(go env GOMODCACHE)"
       - name: Cache Go modules
         uses: actions/cache@v4
@@ -334,6 +363,8 @@ jobs:
             python3 scripts/daemon-test-shards.py metadata --evidence-dir "evidence/integration-$index"
           done
           du -sk "$(cd daemon && go env GOCACHE)" "$(cd daemon && go env GOMODCACHE)" >evidence/cache-before.txt
+      - name: build (scripts/check.sh)
+        run: bash scripts/check.sh daemon build
       - name: Compile every test binary
         working-directory: daemon
         run: go test -count=1 -run '^$' ./...
@@ -366,6 +397,18 @@ jobs:
         run: |
           mkdir -p evidence
           du -sk "$(cd daemon && go env GOCACHE)" "$(cd daemon && go env GOMODCACHE)" >evidence/cache-after.txt
+      - name: Trim the build cache to this job's outputs
+        if: github.event_name == 'push'
+        env:
+          GOCACHE_DIR: ${{ steps.go-cache.outputs.build }}
+          JOB_START: ${{ steps.go-cache.outputs.start }}
+        run: |
+          # Go bumps an entry's mtime when it uses one at least an hour old,
+          # so everything this job compiled or read is newer than an hour
+          # before it started; the rest is history from earlier pushes.
+          age=$(( ($(date +%s) - JOB_START) / 60 + 61 ))
+          find "$GOCACHE_DIR" -mindepth 2 -maxdepth 2 -mmin +"$age" -exec rm -rf {} +
+          du -sk "$GOCACHE_DIR" >evidence/cache-trimmed.txt
       - name: Upload test evidence
         if: always()
         uses: actions/upload-artifact@v4

@@ -198,6 +198,10 @@ class Coverage(unittest.TestCase):
         self.assertIn('runs-on: macos-26', main)
         self.assertIn('fetch-depth: 2', main)
         self.assertLess(main.index("go test -count=1 -run '^$' ./..."), main.index('bash scripts/check.sh daemon test'))
+        # The cache this job saves is the one the PR rest shard and the
+        # convergence job restore, so it runs their build too.
+        self.assertLess(main.index('run: bash scripts/check.sh daemon build\n'),
+                        main.index("go test -count=1 -run '^$' ./..."))
         shard_steps = re.findall(r'DAEMON_TEST_SHARD_KIND: integration\n *DAEMON_TEST_SHARD_INDEX: (\d+)\n'
                                  r' *DAEMON_TEST_SHARD_COUNT: (\d+)\n *DAEMON_TEST_INTEGRATION_SHARDS: (\d+)\n'
                                  r' *DAEMON_TEST_EVIDENCE_DIR: \$\{\{ github.workspace \}\}/evidence/integration-(\d+)\n'
@@ -211,6 +215,40 @@ class Coverage(unittest.TestCase):
         self.assertIn('          name: daemon-macos-integration-${{ github.run_id }}-${{ github.run_attempt }}\n', upload)
         self.assertIn("        if: github.event_name == 'push'\n        uses: actions/cache/save@v4", main)
         self.assertRegex(main, r'key: daemon-build-v2-.*-rest-.*\$\{\{ github.sha \}\}\n')
+        # Each main-push cache writer trims the restored cache to the entries
+        # its own run used before saving, so a saved entry holds the tree's
+        # outputs rather than a rolling history. Jobs that save nothing trim
+        # nothing: there it would only cost time.
+        trim = "Trim the build cache to this job's outputs"
+        trim_run = (
+            '        env:\n'
+            '          GOCACHE_DIR: ${{ steps.go-cache.outputs.build }}\n'
+            '          JOB_START: ${{ steps.go-cache.outputs.start }}\n'
+            '        run: |\n'
+            '          # Go bumps an entry\'s mtime when it uses one at least an hour old,\n'
+            '          # so everything this job compiled or read is newer than an hour\n'
+            '          # before it started; the rest is history from earlier pushes.\n'
+            '          age=$(( ($(date +%s) - JOB_START) / 60 + 61 ))\n'
+            '          find "$GOCACHE_DIR" -mindepth 2 -maxdepth 2 -mmin +"$age" -exec rm -rf {} +\n'
+            '          du -sk "$GOCACHE_DIR" >evidence/cache-trimmed.txt\n')
+        push = "github.event_name == 'push'"
+        for name, record, upload, if_push in [
+                ('linux-build', 'Record static-job cache size', 'Upload static-job evidence', push),
+                ('linux-tests', 'Record cache size after tests', 'Upload test evidence', push + ' && matrix.index == 1'),
+                ('macos-main', 'Record cache size after tests', 'Upload test evidence', push)]:
+            steps = re.findall(r'^      - (.*?)\n(.*?)(?=^      - |\Z)', jobs[name], re.M | re.S)
+            titles = [title.removeprefix('name: ') for title, _ in steps]
+            bodies = dict(zip(titles, (body for _, body in steps)))
+            self.assertEqual(titles.count(trim), 1, name)
+            self.assertLess(titles.index(record), titles.index(trim), name)
+            self.assertLess(titles.index(trim), titles.index(upload), name)
+            self.assertLess(titles.index(upload), titles.index('Save Go build output'), name)
+            # The whole step is pinned: its slack, depth, and target are each
+            # the difference between trimming history and deleting used entries.
+            self.assertEqual(bodies[trim], '        if: ' + if_push + '\n' + trim_run, name)
+            self.assertIn('        if: ' + if_push + '\n', bodies['Save Go build output'], name)
+            self.assertIn('echo "start=$(date +%s)" >>"$GITHUB_OUTPUT"', bodies['Resolve Go cache paths'], name)
+        self.assertNotIn(trim, macos_tests)
         gate = jobs['macos']
         self.assertIn("EXPECTED: ${{ github.event_name == 'push' && 'macos-main' || 'macos-tests' }}", gate)
         self.assertIn("SKIPPED: ${{ github.event_name == 'push' && 'macos-tests' || 'macos-main' }}", gate)
@@ -234,6 +272,7 @@ class Coverage(unittest.TestCase):
         self.assertIn('    inputs:\n      app_tests:\n', convergence)
         self.assertNotIn('\n  push:', convergence)
         self.assertNotIn('actions/cache/save', convergence)
+        self.assertNotIn(trim, convergence)
         self.assertIn("CONVERGENCE_ALL_TESTS: ${{ inputs.app_tests && '1' || '' }}", convergence)
         self.assertIn('-rest-${{ hashFiles', convergence)
         app = (root / '.github/workflows/app-ci.yml').read_text()
