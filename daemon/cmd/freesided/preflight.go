@@ -612,7 +612,7 @@ func evaluateComposition(
 		case errors.As(agentsErr, &roleFailure):
 			failCheck(manifest, "agent_selection",
 				fmt.Sprintf("role %s has no lineup line that resolves against the store", roleFailure.Role),
-				"run freesided auth adopt, commit its tree patch, and pass that commit as -agent-tree-commit")
+				agentSelectionUnresolvedFix)
 		case agentsErr != nil:
 			failCheck(manifest, "agent_selection", "the admitted-agent tree or the store it resolves against could not be read",
 				"pass the checkout and exact commit that hold policy/ as -agent-tree and -agent-tree-commit")
@@ -1040,6 +1040,11 @@ func evaluateProdExecution(
 		return true
 	}
 }
+
+// agentSelectionUnresolvedFix is agent_selection's fix when a role has no
+// lineup line that resolves: the one failure of that check that means the
+// tree is not adopted. Prelaunch's walk keys on it.
+const agentSelectionUnresolvedFix = "run freesided auth adopt, commit its tree patch, and pass that commit as -agent-tree-commit"
 
 func inspectCompositionIdentity(ctx context.Context, cfg preflightConfig) (compositionIdentity, error) {
 	spec, err := readSubmissionFile(cfg.TaskPath)
