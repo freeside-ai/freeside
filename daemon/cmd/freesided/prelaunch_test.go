@@ -57,7 +57,11 @@ func newPrelaunchFixture(t *testing.T) *prelaunchFixture {
 	}
 
 	adopt := newAuthAdoptFixture(t)
-	_, patch, err := adopt.run(t, adopt.args())
+	// Adoption defaults its offer terms from the wall clock, and the tree's
+	// lineup revision is in the golden record, so the fixture pins them to
+	// what adoption derives at prelaunchTestNow.
+	_, patch, err := adopt.run(t, adopt.args("-terms-basis-date", "2026-10-24", "-pricing-revision", "2026-10",
+		"-offer-not-after", "2027-10-24T00:00:00Z"))
 	if err != nil {
 		t.Fatal(err)
 	}
