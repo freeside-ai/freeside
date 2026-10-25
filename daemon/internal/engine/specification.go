@@ -2763,7 +2763,9 @@ func (e *Engine) acceptResearchRequests(ctx context.Context, run domain.Run, req
 	}
 	ids := make([]domain.ArtifactID, 0, len(requests))
 	for index, fetchRequest := range requests {
-		artifact, err := e.specification.fetcher.Fetch(ctx, request.InvocationID, index+1, fetchRequest, scope,
+		// A fetch that fails comes back to the specifier as research naming
+		// the cause; only a refusal or limit below fails the run.
+		artifact, err := e.specification.fetcher.FetchOrRecordFailure(ctx, request.InvocationID, index+1, fetchRequest, scope,
 			settings.ResearchAllowlist, settings.ResearchMaxBytes)
 		if err != nil {
 			if specify.IsResearchRequestFailure(err) {

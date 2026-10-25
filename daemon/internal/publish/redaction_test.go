@@ -68,7 +68,7 @@ func TestNoCredentialValueRenders(t *testing.T) {
 	// The issue-read source renders with a populated cache, so its cached
 	// token goes through the sweep along with the source's own fields.
 	srv := newMintServer(t, func(w http.ResponseWriter, _ *http.Request) {
-		writeFilingTokenResponse(t, w, map[string]string{"issues": "read", "metadata": "read"})
+		writeFilingTokenResponse(t, w, issueReadGrant)
 	})
 	defer srv.Close()
 	issueRead := publish.NewIssueReadTokenSource(

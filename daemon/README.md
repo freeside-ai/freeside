@@ -1330,14 +1330,21 @@ enforces recipe approval, conformance, admission, and specification approval.
 A source that is a bare GitHub issue URL, here or in `freesided submit -task`,
 may name an issue in a private managed repository, as may a label-intake
 issue. The specification stage reads the issue through the research fetcher,
-which authenticates only the project's own issue endpoints on
-`https://api.github.com`, matched by repository ID, with a read-only
-(`issues: read`) installation token minted for that repository. Every other
-research URL goes without credentials, and a redirect drops the token. The
-research allowlist must include `https://api.github.com`. If the token can't
-be minted, or GitHub refuses it with 401 or 403, the fetch goes without it,
-so a public issue still reads and a private one fails the specification with
-the cause in its reason.
+which authenticates only the project's own issue and pull request endpoints
+(`issues/N`, `pulls/N`, and their sub-resources) on `https://api.github.com`,
+matched by repository ID, with a read-only (`issues: read`,
+`pull_requests: read`) installation token minted for that repository. The App
+needs no new permission for this: its registration already holds
+`pull_requests: write` for publication. Every other research URL goes without
+credentials, and a redirect drops the token. The research allowlist must
+include `https://api.github.com`. If the token can't be minted, or GitHub
+refuses it with 401 or 403, the fetch goes without it, so a public issue
+still reads. A research fetch the specifier asked for that then fails, with
+an error status or a transport error, comes back to the specifier as a
+research result naming the URL and the cause, with no body, and the run goes
+on within `max_iterations`. A refused URL, an oversized or non-UTF-8
+response, and a storage error still fail the specification. The source-issue
+read that names a label-intake task still fails on a miss.
 
 Changing the file requires a daemon restart and affects only new submissions.
 An explicit manual Retry of a recorded command returns its original result,
