@@ -226,8 +226,8 @@ func (s *FollowUpFilingTokenSource) Token(ctx context.Context, repo string) (Ins
 	return tok, nil
 }
 
-// IssueReadTokenSource caches only the read-only issue grant the research
-// fetcher authenticates with, separately from publication and filing
+// IssueReadTokenSource caches only the read-only issue and pull request
+// grant the research fetcher authenticates with, separately from publication and filing
 // credentials. Each read revalidates trust and the App binding.
 type IssueReadTokenSource struct {
 	minter *Minter

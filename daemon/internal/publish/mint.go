@@ -50,14 +50,18 @@ var followUpFilingPermissionScopes = map[string]string{
 	"metadata": FollowUpFilingPermissions.Metadata,
 }
 
-// IssueReadPermissions grants only reading one repository's issues, so the
-// specification research fetch can read a private source issue (#748)
-// without holding a credential that can write anything.
-var IssueReadPermissions = Permissions{Issues: "read", Metadata: "read"}
+// IssueReadPermissions grants only reading one repository's issues and pull
+// requests, so the specification research fetch can read a private source
+// issue (#748) or an earlier pull request (#2311) without holding a
+// credential that can write anything. The registration already declares
+// pull_requests:write for publication, so this mint narrows an existing
+// grant and needs no App change.
+var IssueReadPermissions = Permissions{Issues: "read", PullRequests: "read", Metadata: "read"}
 
 var issueReadPermissionScopes = map[string]string{
-	"issues":   IssueReadPermissions.Issues,
-	"metadata": IssueReadPermissions.Metadata,
+	"issues":        IssueReadPermissions.Issues,
+	"pull_requests": IssueReadPermissions.PullRequests,
+	"metadata":      IssueReadPermissions.Metadata,
 }
 
 // RegistrationPermissions declares all capabilities the App may need; each

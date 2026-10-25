@@ -154,6 +154,10 @@ func TestFollowUpFilingTokenSourceRevalidatesInstallationBeforeCacheHit(t *testi
 	}
 }
 
+// issueReadGrant is the exact scope set a conformant installation answers
+// an issue-read mint with.
+var issueReadGrant = map[string]string{"issues": "read", "pull_requests": "read", "metadata": "read"}
+
 func TestIssueReadTokenSourceScopesCacheAndAudit(t *testing.T) {
 	t.Parallel()
 	clock, mints := fixtureTime, 0
@@ -167,10 +171,11 @@ func TestIssueReadTokenSourceScopesCacheAndAudit(t *testing.T) {
 			t.Error(err)
 		}
 		if len(request.RepositoryIDs) != 1 || request.RepositoryIDs[0] != fixtureRepositoryID ||
-			len(request.Permissions) != 2 || request.Permissions["issues"] != "read" || request.Permissions["metadata"] != "read" {
+			len(request.Permissions) != 3 || request.Permissions["issues"] != "read" ||
+			request.Permissions["pull_requests"] != "read" || request.Permissions["metadata"] != "read" {
 			t.Errorf("issue read mint request = %+v", request)
 		}
-		writeFilingTokenResponse(t, w, map[string]string{"issues": "read", "metadata": "read"})
+		writeFilingTokenResponse(t, w, issueReadGrant)
 	})
 	defer srv.Close()
 	recorder := &captureRecorder{}
@@ -203,10 +208,12 @@ func TestIssueReadTokenSourceScopesCacheAndAudit(t *testing.T) {
 func TestIssueReadTokenSourceRejectsDifferentGrants(t *testing.T) {
 	t.Parallel()
 	for name, scopes := range map[string]map[string]string{
-		"missing issues":    {"metadata": "read"},
-		"write issues":      {"issues": "write", "metadata": "read"},
-		"publication scope": {"issues": "read", "metadata": "read", "contents": "write"},
-		"unknown scope":     {"issues": "read", "metadata": "read", "unexpected": "read"},
+		"missing issues":        {"pull_requests": "read", "metadata": "read"},
+		"missing pull requests": {"issues": "read", "metadata": "read"},
+		"write issues":          {"issues": "write", "pull_requests": "read", "metadata": "read"},
+		"write pull requests":   {"issues": "read", "pull_requests": "write", "metadata": "read"},
+		"publication scope":     {"issues": "read", "pull_requests": "read", "metadata": "read", "contents": "write"},
+		"unknown scope":         {"issues": "read", "pull_requests": "read", "metadata": "read", "unexpected": "read"},
 	} {
 		t.Run(name, func(t *testing.T) {
 			srv := newMintServer(t, func(w http.ResponseWriter, _ *http.Request) { writeFilingTokenResponse(t, w, scopes) })
@@ -238,7 +245,7 @@ func TestIssueReadTokenSourceRevalidatesInstallationBeforeCacheHit(t *testing.T)
 			return
 		}
 		mints++
-		writeFilingTokenResponse(t, w, map[string]string{"issues": "read", "metadata": "read"})
+		writeFilingTokenResponse(t, w, issueReadGrant)
 	}))
 	defer srv.Close()
 	m := newCoveredMinter(newRegisteredKeystore(t), srv.Client(), srv.URL, &captureRecorder{}, conformantTrust(t), fixedNow)
