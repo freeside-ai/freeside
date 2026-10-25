@@ -461,12 +461,15 @@ while a clone cannot, because
 the job. Its key is `swiftpm-mirror-v1-<hash of app/Package.resolved>`,
 with no OS or toolchain in it, because bare clones are the same on every
 platform. App CI's `generate` job, on the Ubuntu host, writes it on a push
-to `main` that touches app CI's paths; the PR's `convergence` job on macOS and `generate` on a PR only
-restore it, since a PR's save would be visible to that PR alone. Both
-cache the workspace-relative `.swiftpm-mirror` and link it into the
+to `main` that touches app CI's paths; the PR's macOS jobs (`convergence`
+and app CI's `apps`, whose `xcodebuild` reads the same shared cache as
+`swift test`) and `generate` on a PR only restore it, since a PR's save
+would be visible to that PR alone. Each job caches the workspace-relative
+`.swiftpm-mirror` and links it into the
 platform's SwiftPM cache directory, because `actions/cache` shares an entry
 only between jobs that pass the same `path` and compression (#2273). To
-retire it, remove the restore, link, and save steps from both workflows and
+retire it, remove the restore, link, and save steps from the three jobs
+(`generate` and `apps` in app CI, `convergence` in convergence CI) and
 the matching assertions from `scripts/test-daemon-test-shards.sh`, then
 delete each `swiftpm-mirror-` key that
 `gh cache list --repo freeside-ai/freeside` lists with
