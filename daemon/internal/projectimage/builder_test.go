@@ -410,6 +410,14 @@ func TestBuildRejectsInvalidInputsBeforeSourceAccess(t *testing.T) {
 			r.LocalRegistryPort = 0
 			r.Registry = "/registry.example.test"
 		}},
+		{"loopback registry", func(r *Request) {
+			r.LocalRegistryPort = 0
+			r.Registry = "127.0.0.1:5523"
+		}},
+		{"localhost registry", func(r *Request) {
+			r.LocalRegistryPort = 0
+			r.Registry = "localhost:5000/team"
+		}},
 		{"bad image name", func(r *Request) { r.ImageName = "UPPER" }},
 		{"bad tag", func(r *Request) { r.RefTag = "-bad" }},
 		{"option-shaped dns", func(r *Request) { r.DNS = []string{"--bad"} }},
@@ -433,6 +441,49 @@ func TestBuildRejectsInvalidInputsBeforeSourceAccess(t *testing.T) {
 				t.Fatal("invalid input reached repository fetch")
 			}
 		})
+	}
+}
+
+func TestValidateRegistry(t *testing.T) {
+	for _, registry := range []string{
+		"registry.example.test",
+		"registry.example.test:5000/team",
+		"192.168.64.1:5000",
+		"[fd00::1]:5000",
+	} {
+		if err := ValidateRegistry(registry); err != nil {
+			t.Errorf("ValidateRegistry(%q) = %v, want nil", registry, err)
+		}
+	}
+	cases := []struct {
+		registry string
+		loopback bool
+	}{
+		{"127.0.0.1:5523", true},
+		{"127.0.0.1", true},
+		{"127.1.2.3:5000/team", true},
+		{"localhost:5000/team", true},
+		{"LOCALHOST", true},
+		{"[::1]:5000", true},
+		{"[::1]", true},
+		{"::1/team", true},
+		{"https://registry.example.test", false},
+		{"--help", false},
+		{"/registry.example.test", false},
+		{"registry.example.test/", false},
+		{"registry.example.test team", false},
+		{"registry.example.test@sha256", false},
+	}
+	for _, tc := range cases {
+		err := ValidateRegistry(tc.registry)
+		if !errors.Is(err, ErrInvalidRequest) {
+			t.Errorf("ValidateRegistry(%q) = %v, want ErrInvalidRequest", tc.registry, err)
+			continue
+		}
+		if got := strings.Contains(err.Error(), "-local-registry-port"); got != tc.loopback {
+			t.Errorf("ValidateRegistry(%q) = %v, names -local-registry-port %t, want %t",
+				tc.registry, err, got, tc.loopback)
+		}
 	}
 }
 
