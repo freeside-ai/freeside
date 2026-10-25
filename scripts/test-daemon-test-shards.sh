@@ -377,19 +377,23 @@ class Coverage(unittest.TestCase):
         self.assertIn('swift_args=(--only-use-versions-from-resolved-file)\n', runner)
         self.assertEqual(re.findall(r'^ *swift_args\+=\((.*)\)$', runner, re.M),
                          ['--filter FreesideConvergenceTests', '--skip-build'])
-        # The SwiftPM mirror: generate writes it on push, convergence only
-        # restores it, and both name the same workspace-relative path and
-        # key prefix, or the entries would not share a cache version.
+        # The SwiftPM mirror: generate writes it on push, convergence and
+        # apps only restore it, and all three name the same
+        # workspace-relative path and key prefix, or the entries would not
+        # share a cache version.
         mirror = ("          path: .swiftpm-mirror\n"
                   "          key: swiftpm-mirror-v1-${{ hashFiles('app/Package.resolved') }}\n"
                   "          restore-keys: swiftpm-mirror-v1-\n")
         generate = app_jobs['generate']
-        for job in (convergence, generate):
+        for job in (convergence, generate, app_jobs['apps']):
             restore = re.search(r'^      - name: Restore the SwiftPM mirror\n(.*?)(?=^      - )', job, re.M | re.S).group(1)
             self.assertIn('        uses: actions/cache/restore@v4\n', restore)
             self.assertIn(mirror, restore)
         self.assertIn('ln -s "$PWD/.swiftpm-mirror" ~/Library/Caches/org.swift.swiftpm/repositories\n', convergence)
         self.assertIn('ln -s "$PWD/.swiftpm-mirror" ~/.cache/org.swift.swiftpm/repositories\n', generate)
+        self.assertIn('ln -s "$PWD/.swiftpm-mirror" ~/Library/Caches/org.swift.swiftpm/repositories\n', app_jobs['apps'])
+        self.assertNotIn('actions/cache@v4', app_jobs['apps'])
+        self.assertNotIn('actions/cache/save', app_jobs['apps'])
         # The save reads the restore step's primary key by id; a renamed id
         # leaves the key empty, and cache/save then only warns.
         self.assertIn('        id: swiftpm-mirror\n        uses: actions/cache/restore@v4\n', generate)

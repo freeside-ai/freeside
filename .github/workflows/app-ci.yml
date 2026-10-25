@@ -13,8 +13,9 @@ on:
   # Swift tests and the swift-format gate run in convergence-ci.yml's one
   # macOS job, which the caller gives `app_tests` whenever it selects this
   # component (#2248). On a push to main the Linux jobs run, `generate`
-  # saving the SwiftPM mirror that macOS job restores, and
-  # `swift-build-cache` saves the Swift build it restores.
+  # saving the SwiftPM mirror the PR's macOS jobs restore (`apps` here
+  # and convergence-ci.yml's `convergence`), and `swift-build-cache`
+  # saves the Swift build `convergence` restores.
   workflow_call:
 
 permissions:
@@ -37,9 +38,10 @@ jobs:
         uses: actions/cache/restore@v4
         with:
           # The bare git mirrors SwiftPM clones checkouts from, shared with
-          # convergence-ci.yml's macOS job: bare clones are the same on
-          # every platform, so the key names no OS, image, or toolchain.
-          # Workspace-relative on both sides, because actions/cache
+          # the PR's macOS jobs (`apps` below and convergence-ci.yml's
+          # `convergence`): bare clones are the same on every platform, so
+          # the key names no OS, image, or toolchain.
+          # Workspace-relative in every job, because actions/cache
           # extracts the archive relative to the workspace and hashes the
           # literal path into the entry's version. This job is the writer
           # because it runs on every push to main this workflow's paths
@@ -99,18 +101,28 @@ jobs:
     if: github.event_name != 'push'
     steps:
       - uses: actions/checkout@v4
-      - name: Cache SwiftPM dependencies
-        # xcodebuild resolves app/Package.swift's graph, pruned to the
-        # packages the app targets consume, from SwiftPM's shared
-        # dependency cache; see the linux job for the rationale. Its
-        # checkouts land in DerivedData, which stays uncached, since
-        # only a key over the whole tree makes compiled output safe to
-        # reuse (see the linux job).
-        uses: actions/cache@v4
+      - name: Restore the SwiftPM mirror
+        uses: actions/cache/restore@v4
         with:
-          path: ~/Library/Caches/org.swift.swiftpm
-          key: swiftpm-${{ runner.os }}-${{ github.job }}-${{ hashFiles('app/Package.resolved') }}
-          restore-keys: swiftpm-${{ runner.os }}-${{ github.job }}-
+          # The bare git mirrors xcodebuild clones the pinned checkouts
+          # from, saved by this workflow's `generate` job on a push to
+          # main, which carries the rationale for the shared path and
+          # key. Restore-only: a save here would be scoped to this PR, so
+          # it helped only later pushes to the same PR and left a 49 MB
+          # entry per app PR behind (#2290). xcodebuild resolves
+          # app/Package.swift's graph, pruned to the packages the app
+          # targets consume, through the same shared cache the swift
+          # command line uses; its checkouts land in DerivedData,
+          # which stays uncached, since only a key over the whole tree
+          # makes compiled output safe to reuse (see the linux job).
+          path: .swiftpm-mirror
+          key: swiftpm-mirror-v1-${{ hashFiles('app/Package.resolved') }}
+          restore-keys: swiftpm-mirror-v1-
+      - name: Link the SwiftPM mirror into SwiftPM's cache
+        run: |
+          mkdir -p .swiftpm-mirror ~/Library/Caches/org.swift.swiftpm
+          rm -rf ~/Library/Caches/org.swift.swiftpm/repositories
+          ln -s "$PWD/.swiftpm-mirror" ~/Library/Caches/org.swift.swiftpm/repositories
       - name: Build macOS and iOS apps (scripts/check.sh)
         run: bash scripts/check.sh app build-mac build-ios
 
