@@ -51,7 +51,9 @@ result per line.
 ```
 
 Drop row 5 when no gate depends on the liveness probe. On a failed row,
-SKILL.md (The Environment Checkpoint) says what to do before launch.
+the walkthrough says how to fix it (docs/production-walkthrough.md,
+Prepare The Operator's Devices), and SKILL.md (The Environment Checkpoint)
+says which failures change the run.
 
 ## 2. Pairing And Health (After Launch)
 

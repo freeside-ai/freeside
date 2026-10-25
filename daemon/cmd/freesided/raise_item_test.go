@@ -304,10 +304,10 @@ func TestRaiseItemReachesClients(t *testing.T) {
 }
 
 // The exit run raises its synthetic alerts after the completion fact, in the
-// order of the raise-item command block in .claude/skills/exit-run/SKILL.md
-// (Walk Through on Both Clients). Each raised item must survive the
-// completion sweep on that task and reach a paired device. The fixture daemon
-// runs no engine, so the sweep's per-task body runs here directly.
+// order of the raise-item command block in daemon/README.md (Operational
+// Commands). Each raised item must survive the completion sweep on that task
+// and reach a paired device. The fixture daemon runs no engine, so the
+// sweep's per-task body runs here directly.
 func TestRaiseItemSequenceSurvivesCompletionSweep(t *testing.T) {
 	dbPath := filepath.Join(t.TempDir(), "freeside.db")
 	h := startDaemon(t, config{
@@ -321,8 +321,8 @@ func TestRaiseItemSequenceSurvivesCompletionSweep(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	// The skill's order. A new alert in raise-item -list fails here until the
-	// skill's sequence and this literal agree.
+	// The README block's order. A new alert in raise-item -list fails here
+	// until the README's sequence and this literal agree.
 	skillAlertOrder := []raiseAlert{raiseAlertStall, raiseAlertHeldWork, raiseAlertReviewGrowth}
 	if !slices.Equal(slices.Sorted(slices.Values(skillAlertOrder)), slices.Sorted(slices.Values(AllRaiseAlerts))) {
 		t.Fatalf("skill order %v does not name the alerts of raise-item -list %v", skillAlertOrder, AllRaiseAlerts)

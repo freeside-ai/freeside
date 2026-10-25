@@ -971,6 +971,10 @@ freesided raise-item -db <db> -alert held-work -run <run-id>
 freesided raise-item -db <db> -alert review-growth -run <run-id>
 ```
 
+An exit run raises the alerts in this block's order.
+`TestRaiseItemSequenceSurvivesCompletionSweep` mirrors it in an order
+literal, so a change to either changes both.
+
 It prints the raised item's ID, type, and alert as one JSON line. Each item
 has the type and reason code its real condition raises, and it reaches the
 clients and the notification pass the same way:

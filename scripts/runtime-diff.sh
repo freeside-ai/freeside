@@ -9,7 +9,7 @@
 #
 # A real run may start from a newer tip than its rehearsal pass when this
 # command exits 0 and the run record names both SHAs and the verdict line
-# (.claude/skills/exit-run/SKILL.md, Rehearse Before The Operator). The pass
+# (docs/production-walkthrough.md, Rehearse Before The Real Run). The pass
 # carries only when both hold:
 #
 #   - The two SHAs build the same freesided. Each SHA's daemon/ tree is
