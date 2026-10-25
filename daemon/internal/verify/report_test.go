@@ -27,6 +27,8 @@ func TestParseReportCanonicalRoundTrip(t *testing.T) {
 		"unknown field":    bytes.Replace(raw, []byte(`"head_sha"`), []byte(`"unknown"`), 1),
 		"duplicate field":  bytes.Replace(raw, []byte("{\n"), []byte("{\n  \"outcome\": \"passed\",\n"), 1),
 		"invalid outcome":  bytes.Replace(raw, []byte(`"passed"`), []byte(`"pending"`), 1),
+		"unknown finding":  bytes.Replace(raw, []byte(`"verification_control_path"`), []byte(`"advisory"`), 1),
+		"empty finding":    bytes.Replace(raw, []byte(`"verification_control_path"`), []byte(`""`), 1),
 		"empty head":       bytes.Replace(raw, []byte(rep.HeadSHA), nil, 1),
 		"empty recipe":     bytes.Replace(raw, []byte(rep.RecipeDigest), nil, 1),
 		"empty executable": bytes.Replace(raw, []byte(`"go"`), []byte(`""`), 1),
@@ -38,5 +40,30 @@ func TestParseReportCanonicalRoundTrip(t *testing.T) {
 				t.Fatal("accepted invalid report")
 			}
 		})
+	}
+}
+
+// TestParseReportAcceptsEveryFindingKind keeps the finding-kind gate from
+// rejecting a report the verifier itself writes.
+func TestParseReportAcceptsEveryFindingKind(t *testing.T) {
+	t.Parallel()
+	raw, err := os.ReadFile("testdata/verify_report.golden")
+	if err != nil {
+		t.Fatal(err)
+	}
+	rep, err := verify.ParseReport(raw)
+	if err != nil {
+		t.Fatal(err)
+	}
+	rep.Findings = nil
+	for _, kind := range verify.AllFindingKinds {
+		rep.Findings = append(rep.Findings, verify.Finding{Path: "go.mod", Kind: kind})
+	}
+	encoded, err := json.MarshalIndent(rep, "", "  ")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := verify.ParseReport(append(encoded, '\n')); err != nil {
+		t.Fatalf("rejected a report carrying every finding kind: %v", err)
 	}
 }

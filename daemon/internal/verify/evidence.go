@@ -102,6 +102,11 @@ func ParseReport(raw []byte) (Report, error) {
 	if !rep.Outcome.valid() || rep.HeadSHA == "" || rep.RecipeDigest == "" {
 		return Report{}, fmt.Errorf("verification report lacks a valid outcome, head, or recipe")
 	}
+	for i, finding := range rep.Findings {
+		if !finding.Kind.valid() {
+			return Report{}, fmt.Errorf("verification report finding %d has unknown kind %q", i, finding.Kind)
+		}
+	}
 	if rep.EvaluatedSHA != "" && (rep.BaseSHA == "" || rep.EvaluatedSHA == rep.HeadSHA || rep.EvaluatedSHA == rep.BaseSHA) {
 		return Report{}, fmt.Errorf("verification report's evaluated commit is not a merge of its head into its base")
 	}
