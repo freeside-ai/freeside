@@ -1,6 +1,8 @@
 package engine
 
 import (
+	"errors"
+	"fmt"
 	"reflect"
 	"testing"
 	"time"
@@ -8,6 +10,7 @@ import (
 	"github.com/freeside-ai/freeside/daemon/internal/contentaddr"
 	"github.com/freeside-ai/freeside/daemon/internal/domain"
 	"github.com/freeside-ai/freeside/daemon/internal/exec"
+	"github.com/freeside-ai/freeside/daemon/internal/specify"
 	"github.com/freeside-ai/freeside/daemon/internal/store"
 )
 
@@ -143,6 +146,94 @@ func TestExecutionFailureFactsLeaveCompletedExportUnclassified(t *testing.T) {
 	}
 	if facts != nil {
 		t.Fatalf("completed export facts = %#v, want nil", facts)
+	}
+}
+
+// TestInterpretationFailureFactsRequireExport pins that the engine mints an
+// interpretation fact only beside the invocation's export: without one, the
+// failure keeps the fact-less card it raised before.
+func TestInterpretationFailureFactsRequireExport(t *testing.T) {
+	t.Parallel()
+	ctx := t.Context()
+	engine, _, attempt := usageEngineFixture(t, true)
+	mint := func() *domain.InterpretationFailureFacts {
+		t.Helper()
+		var facts *domain.InterpretationFailureFacts
+		if err := engine.store.Read(ctx, func(tx *store.ReadTx) error {
+			var err error
+			facts, err = interpretationFailureFacts(ctx, tx, attempt.InvocationID,
+				domain.InterpretationFailureInvalidOutput, domain.StageNameSpecification)
+			return err
+		}); err != nil {
+			t.Fatal(err)
+		}
+		return facts
+	}
+	if facts := mint(); facts != nil {
+		t.Fatalf("facts without export = %#v, want nil", facts)
+	}
+	var admission domain.ExecutionAdmission
+	if err := engine.store.Read(ctx, func(tx *store.ReadTx) error {
+		var err error
+		admission, err = tx.GetExecutionAdmissionRecord(ctx, attempt.InvocationID)
+		return err
+	}); err != nil {
+		t.Fatal(err)
+	}
+	export, err := domain.NewExecutionExport(domain.ExecutionExportInput{
+		InvocationID: attempt.InvocationID, AdmissionID: admission.ID,
+		ObservedBaseSHA: admission.Base.BaseSHA, HeadSHA: "cafebabe",
+		ManifestDigest: "sha256:manifest", RecordedAt: admission.AdmittedAt.Add(time.Minute),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := engine.store.Write(ctx, func(tx *store.WriteTx) error {
+		return tx.RecordExecutionExport(ctx, export)
+	}); err != nil {
+		t.Fatal(err)
+	}
+	want := &domain.InterpretationFailureFacts{
+		Cause: domain.InterpretationFailureInvalidOutput, Stage: domain.StageNameSpecification,
+		InvocationID: attempt.InvocationID,
+	}
+	if facts := mint(); !reflect.DeepEqual(facts, want) {
+		t.Fatalf("facts beside export = %#v, want %#v", facts, want)
+	}
+}
+
+func TestSpecificationFailureCauseMapping(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		name string
+		got  domain.InterpretationFailureCause
+		want domain.InterpretationFailureCause
+	}{
+		{
+			"refused URL", researchFailureCause(fmt.Errorf("%w: off allowlist", specify.ErrResearchURLRefused)),
+			domain.InterpretationFailureResearchURLRefused,
+		},
+		// The fetcher wraps an oversized body inside a fetch failure.
+		{
+			"oversized body", researchFailureCause(fmt.Errorf("%w: fetch: %w", specify.ErrResearchFetchFailed, specify.ErrResearchTooLarge)),
+			domain.InterpretationFailureResearchTooLarge,
+		},
+		{
+			"fetch failure", researchFailureCause(fmt.Errorf("%w: status 500", specify.ErrResearchFetchFailed)),
+			domain.InterpretationFailureResearchFetchFailed,
+		},
+		{
+			"invalid output", outputFailureCause(fmt.Errorf("%w: no result", specify.ErrInvalidOutput)),
+			domain.InterpretationFailureInvalidOutput,
+		},
+		{
+			"unreadable transcript", outputFailureCause(errors.New("read transcript blob")),
+			domain.InterpretationFailureTranscriptUnreadable,
+		},
+	} {
+		if tc.got != tc.want {
+			t.Errorf("%s: cause = %q, want %q", tc.name, tc.got, tc.want)
+		}
 	}
 }
 

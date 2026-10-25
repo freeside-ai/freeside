@@ -919,6 +919,7 @@ func TestAnswerAtSpecificationIterationLimitRecordsFailure(t *testing.T) {
 		if failure.Type != domain.AttentionExecutionFailure || failure.Status != domain.StatusOpen {
 			return fmt.Errorf("iteration-limit failure = %#v", failure)
 		}
+		requireInterpretationFailure(t, failure, domain.InterpretationFailureIterationsExhausted, request.InvocationID)
 		return nil
 	}); err != nil {
 		t.Fatal(err)
@@ -964,6 +965,7 @@ func TestUndeliverableSpecificationAnswerRecordsFailure(t *testing.T) {
 		if failure.Type != domain.AttentionExecutionFailure || failure.Status != domain.StatusOpen {
 			return fmt.Errorf("undeliverable answer failure = %#v", failure)
 		}
+		requireInterpretationFailure(t, failure, domain.InterpretationFailureInputUndeliverable, request.InvocationID)
 		return nil
 	}); err != nil {
 		t.Fatal(err)
@@ -1499,8 +1501,21 @@ func seedSpecificationQuestion(
 	if err != nil || !admitted {
 		t.Fatalf("admit specification question producer = %t, %v", admitted, err)
 	}
+	// The question stands on a completed producer, which the stage pipeline
+	// exports before it reports completed.
+	export, err := domain.NewExecutionExport(domain.ExecutionExportInput{
+		InvocationID: invocationID, AdmissionID: admission.ID,
+		ObservedBaseSHA: admission.Base.BaseSHA, HeadSHA: "cafebabe",
+		ManifestDigest: "sha256:manifest", RecordedAt: *f.now,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
 	if err := f.store.Write(t.Context(), func(tx *store.WriteTx) error {
-		return tx.RecordExecutionAdmission(t.Context(), admission)
+		if err := tx.RecordExecutionAdmission(t.Context(), admission); err != nil {
+			return err
+		}
+		return tx.RecordExecutionExport(t.Context(), export)
 	}); err != nil {
 		t.Fatal(err)
 	}

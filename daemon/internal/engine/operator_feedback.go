@@ -473,8 +473,8 @@ func (e *Engine) enqueueSpecificationAnswer(
 		return false, err
 	}
 	if request.Iteration-request.firstIteration()+1 >= settings.MaxIterations {
-		return false, e.recordSpecificationRevisionFailure(
-			ctx, run, request, exec.StatusFailed, ErrSpecificationIterationsExhausted.Error())
+		return false, e.recordSpecificationRevisionFailure(ctx, run, request,
+			domain.InterpretationFailureIterationsExhausted, ErrSpecificationIterationsExhausted.Error())
 	}
 	feedbackInput, err := newSpecificationAnswerInput(item, command)
 	if err != nil {
@@ -516,8 +516,8 @@ func (e *Engine) enqueueSpecificationAnswer(
 	if err := e.validateProspectiveDelivery(ctx, run, invocation,
 		e.specification.promptPackage, true, map[domain.ArtifactID]domain.Artifact{feedback.ID: feedback}); err != nil {
 		if errors.Is(err, ErrSpecificationInputUndeliverable) {
-			return false, e.recordSpecificationRevisionFailure(
-				ctx, run, request, exec.StatusFailed, err.Error())
+			return false, e.recordSpecificationRevisionFailure(ctx, run, request,
+				domain.InterpretationFailureInputUndeliverable, err.Error())
 		}
 		return false, err
 	}

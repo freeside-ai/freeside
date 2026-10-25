@@ -68,6 +68,11 @@ func (f specificationFixture) requireHold(t *testing.T, want domain.RunHoldReaso
 func scriptedSpecificationRefusal(t *testing.T) (specificationFixture, *execfake.StageDriver) {
 	t.Helper()
 	f := newSpecificationFixture(t, true, 2)
+	// The floor rises before the attempt completes, so the store would refuse
+	// its export until recovery, and the export's milestone would then clear
+	// every hold. These tests pin the engine's refusal-scoped clear, so the
+	// attempt completes without an export.
+	f.withoutExports = true
 	driver := f.newDriver(t)
 	if err := specifyfake.Script(driver, specificationInvocationID("specification-run", 1), 0, 1, specify.Output{
 		Specification: &specify.Specification{

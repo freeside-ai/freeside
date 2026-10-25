@@ -2527,36 +2527,39 @@ func (e *Engine) acceptSpecificationAttempt(ctx context.Context, run domain.Run,
 	}
 	decodeTranscript, err := e.specificationTranscriptDecoder(ctx, request, admission)
 	if err != nil {
-		return false, e.recordSpecificationFailure(ctx, run, request, exec.StatusFailed, err.Error())
+		return false, e.recordSpecificationInterpretationFailure(ctx, run, request, outputFailureCause(err), err.Error())
 	}
 	output, err := e.readSpecificationOutput(ctx, request.InvocationID, result, decodeTranscript)
 	if err != nil {
-		return false, e.recordSpecificationFailure(ctx, run, request, exec.StatusFailed, err.Error())
+		return false, e.recordSpecificationInterpretationFailure(ctx, run, request, outputFailureCause(err), err.Error())
 	}
 	if len(output.FetchRequests) > 0 {
 		if request.Iteration-request.firstIteration()+1 >= settings.MaxIterations {
-			return false, e.recordSpecificationFailure(ctx, run, request, exec.StatusFailed, ErrSpecificationIterationsExhausted.Error())
+			return false, e.recordSpecificationInterpretationFailure(ctx, run, request,
+				domain.InterpretationFailureIterationsExhausted, ErrSpecificationIterationsExhausted.Error())
 		}
 		return e.acceptResearchRequests(ctx, run, request, output.FetchRequests, settings)
 	}
 	if len(output.Decisions) > 0 {
 		if request.Iteration-request.firstIteration()+1 >= settings.MaxIterations {
-			return false, e.recordSpecificationFailure(ctx, run, request, exec.StatusFailed, ErrSpecificationIterationsExhausted.Error())
+			return false, e.recordSpecificationInterpretationFailure(ctx, run, request,
+				domain.InterpretationFailureIterationsExhausted, ErrSpecificationIterationsExhausted.Error())
 		}
 		return e.acceptSpecificationDecisions(ctx, run, request, output.Decisions)
 	}
 	if output.Reply != nil || output.Specification == nil {
-		return false, e.recordSpecificationFailure(ctx, run, request, exec.StatusFailed,
+		return false, e.recordSpecificationInterpretationFailure(ctx, run, request, domain.InterpretationFailureInvalidOutput,
 			fmt.Errorf("%w: ordinary specification must return research requests, a specification, or decisions", specify.ErrInvalidOutput).Error())
 	}
 	if importer.ContainsSecret([]byte(output.Specification.Summary)) ||
 		importer.ContainsSecret([]byte(output.Specification.Body)) {
-		return false, e.recordSpecificationFailure(ctx, run, request, exec.StatusFailed,
+		return false, e.recordSpecificationInterpretationFailure(ctx, run, request, domain.InterpretationFailureInvalidOutput,
 			fmt.Errorf("%w: specification contains credential-shaped content", specify.ErrInvalidOutput).Error())
 	}
 	if err := e.validateSpecificationAddressals(ctx, request, *output.Specification); err != nil {
 		if errors.Is(err, specify.ErrInvalidOutput) {
-			return false, e.recordSpecificationFailure(ctx, run, request, exec.StatusFailed, err.Error())
+			return false, e.recordSpecificationInterpretationFailure(ctx, run, request,
+				domain.InterpretationFailureInvalidOutput, err.Error())
 		}
 		return false, err
 	}
@@ -2769,7 +2772,7 @@ func (e *Engine) acceptResearchRequests(ctx context.Context, run domain.Run, req
 			settings.ResearchAllowlist, settings.ResearchMaxBytes)
 		if err != nil {
 			if specify.IsResearchRequestFailure(err) {
-				return false, e.recordSpecificationFailure(ctx, run, request, exec.StatusFailed, err.Error())
+				return false, e.recordSpecificationInterpretationFailure(ctx, run, request, researchFailureCause(err), err.Error())
 			}
 			return false, err
 		}
@@ -2795,7 +2798,8 @@ func (e *Engine) acceptResearchRequests(ctx context.Context, run domain.Run, req
 	}
 	if err := e.validateSpecificationInvocationDelivery(ctx, run, invocation); err != nil {
 		if errors.Is(err, ErrSpecificationInputUndeliverable) {
-			return false, e.recordSpecificationFailure(ctx, run, request, exec.StatusFailed, err.Error())
+			return false, e.recordSpecificationInterpretationFailure(ctx, run, request,
+				domain.InterpretationFailureInputUndeliverable, err.Error())
 		}
 		return false, err
 	}
@@ -2942,7 +2946,8 @@ func (e *Engine) acceptSpecification(ctx context.Context, run domain.Run, reques
 		e.admission.environment.PromptPackageDigest, false,
 		map[domain.ArtifactID]domain.Artifact{artifactID: artifact}); err != nil {
 		if errors.Is(err, ErrSpecificationInputUndeliverable) {
-			return false, e.recordSpecificationFailure(ctx, run, request, exec.StatusFailed, err.Error())
+			return false, e.recordSpecificationInterpretationFailure(ctx, run, request,
+				domain.InterpretationFailureInputUndeliverable, err.Error())
 		}
 		return false, err
 	}
@@ -3135,7 +3140,7 @@ func (e *Engine) acceptSpecificationDecisions(
 	ctx context.Context, run domain.Run, request specificationRequest, decisions []domain.Decision,
 ) (bool, error) {
 	if decisionsContainSecret(decisions) {
-		return false, e.recordSpecificationFailure(ctx, run, request, exec.StatusFailed,
+		return false, e.recordSpecificationInterpretationFailure(ctx, run, request, domain.InterpretationFailureInvalidOutput,
 			fmt.Errorf("%w: decisions contain credential-shaped content", specify.ErrInvalidOutput).Error())
 	}
 	body, err := json.Marshal(decisions)
@@ -3143,7 +3148,7 @@ func (e *Engine) acceptSpecificationDecisions(
 		return false, err
 	}
 	if importer.ContainsSecret(body) {
-		return false, e.recordSpecificationFailure(ctx, run, request, exec.StatusFailed,
+		return false, e.recordSpecificationInterpretationFailure(ctx, run, request, domain.InterpretationFailureInvalidOutput,
 			fmt.Errorf("%w: decisions contain credential-shaped content", specify.ErrInvalidOutput).Error())
 	}
 	digest := domain.Digest(contentaddr.Sum(body))
@@ -3436,16 +3441,32 @@ func unifiedLineDiff(before, after string) domain.SpecDiff {
 // recordSpecificationFailure records a failure the engine detected itself,
 // whose cause nothing classified.
 func (e *Engine) recordSpecificationFailure(ctx context.Context, run domain.Run, request specificationRequest, status exec.Status, summary string) error {
-	return e.recordSpecificationFailureWithCause(ctx, run, request, status, summary, "")
+	return e.recordSpecificationFailureWithCause(ctx, run, request, status, summary, "", "")
 }
 
 // recordSpecificationResultFailure records a driver's non-completed result
 // with the cause the driver reported.
 func (e *Engine) recordSpecificationResultFailure(ctx context.Context, run domain.Run, request specificationRequest, result exec.StageResult) error {
-	return e.recordSpecificationFailureWithCause(ctx, run, request, result.Status, result.Summary, result.Cause)
+	return e.recordSpecificationFailureWithCause(ctx, run, request, result.Status, result.Summary, result.Cause, "")
 }
 
-func (e *Engine) recordSpecificationFailureWithCause(ctx context.Context, run domain.Run, request specificationRequest, status exec.Status, summary string, cause domain.FailureCause) error {
+// recordSpecificationInterpretationFailure records a failure the engine found
+// after the invocation completed and exported, typed by interpretation.
+func (e *Engine) recordSpecificationInterpretationFailure(
+	ctx context.Context, run domain.Run, request specificationRequest,
+	interpretation domain.InterpretationFailureCause, summary string,
+) error {
+	return e.recordSpecificationFailureWithCause(ctx, run, request, exec.StatusFailed, summary, "", interpretation)
+}
+
+// recordSpecificationFailureWithCause records the terminal and its failure
+// item. An outcome-backed failure carries cause in execution-failure facts;
+// an exported invocation has no outcome, so its item carries interpretation
+// in interpretation-failure facts instead.
+func (e *Engine) recordSpecificationFailureWithCause(
+	ctx context.Context, run domain.Run, request specificationRequest, status exec.Status, summary string,
+	cause domain.FailureCause, interpretation domain.InterpretationFailureCause,
+) error {
 	terminal := specificationTerminal{
 		InvocationID: request.InvocationID, Iteration: request.Iteration,
 		Status: status, ResearchArtifactIDs: []domain.ArtifactID{},
@@ -3474,6 +3495,15 @@ func (e *Engine) recordSpecificationFailureWithCause(ctx context.Context, run do
 		if err != nil {
 			return err
 		}
+		var interpretationFacts *domain.InterpretationFailureFacts
+		if facts == nil && interpretation != "" {
+			interpretationFacts, err = interpretationFailureFacts(
+				ctx, &tx.ReadTx, request.InvocationID, interpretation, domain.StageNameSpecification,
+			)
+			if err != nil {
+				return err
+			}
+		}
 		names, err := tx.DisplayNamesFor(ctx, run.ProjectID, domain.Subject{
 			Type: domain.SubjectRun, ID: domain.SubjectID(run.ID), RunID: &run.ID,
 		})
@@ -3486,7 +3516,7 @@ func (e *Engine) recordSpecificationFailureWithCause(ctx context.Context, run do
 		}
 		item, err := specificationFailureItem(run,
 			domain.ItemID("execution-failure-"+string(request.InvocationID)), status, summary,
-			createdAt, facts, names, claims)
+			createdAt, facts, interpretationFacts, names, claims)
 		if err != nil {
 			return err
 		}
@@ -3506,28 +3536,43 @@ func (e *Engine) recordSpecificationFailureWithCause(ctx context.Context, run do
 // immutable result record. A deterministic failure item makes the refusal
 // durable and idempotent while retaining that accepted terminal for audit.
 func (e *Engine) recordSpecificationRevisionFailure(
-	ctx context.Context, run domain.Run, request specificationRequest, status exec.Status, summary string,
+	ctx context.Context, run domain.Run, request specificationRequest,
+	cause domain.InterpretationFailureCause, summary string,
 ) error {
-	names, err := displayNames(ctx, e.store, run.ProjectID, domain.Subject{
-		Type: domain.SubjectRun, ID: domain.SubjectID(run.ID), RunID: &run.ID,
-	})
-	if err != nil {
-		return err
-	}
-	item, err := specificationFailureItem(run,
-		specificationRevisionFailureItemID(request),
-		status, summary, e.specification.now().UTC(), nil, names, nil)
-	if err != nil {
-		return err
-	}
 	return e.store.Write(ctx, func(tx *store.WriteTx) error {
-		if _, err := tx.GetAttentionItem(ctx, item.ID); err == nil {
+		id := specificationRevisionFailureItemID(request)
+		if _, err := tx.GetAttentionItem(ctx, id); err == nil {
 			return nil
 		} else if !errors.Is(err, store.ErrNotFound) {
 			return err
 		}
+		item, err := e.specificationRevisionFailureItem(ctx, tx, run, request, id, cause, summary)
+		if err != nil {
+			return err
+		}
 		return tx.PutAttentionItem(ctx, item)
 	})
+}
+
+// specificationRevisionFailureItem builds the failure item for a refusal
+// found after request's invocation completed with an accepted output. The
+// item names that accepted invocation, whose export is its terminal record.
+func (e *Engine) specificationRevisionFailureItem(
+	ctx context.Context, tx *store.WriteTx, run domain.Run, request specificationRequest, id domain.ItemID,
+	cause domain.InterpretationFailureCause, summary string,
+) (domain.AttentionItem, error) {
+	names, err := tx.DisplayNamesFor(ctx, run.ProjectID, domain.Subject{
+		Type: domain.SubjectRun, ID: domain.SubjectID(run.ID), RunID: &run.ID,
+	})
+	if err != nil {
+		return domain.AttentionItem{}, err
+	}
+	facts, err := interpretationFailureFacts(ctx, &tx.ReadTx, request.InvocationID, cause, domain.StageNameSpecification)
+	if err != nil {
+		return domain.AttentionItem{}, err
+	}
+	return specificationFailureItem(run, id, exec.StatusFailed, summary, e.specification.now().UTC(),
+		nil, facts, names, nil)
 }
 
 func specificationRevisionFailureItemID(request specificationRequest) domain.ItemID {
@@ -3568,8 +3613,8 @@ func validSpecificationRevisionFailureDecisionSet(actions []domain.Action) bool 
 
 func specificationFailureItem(
 	run domain.Run, id domain.ItemID, status exec.Status, summary string, createdAt time.Time,
-	facts *domain.ExecutionFailureFacts, displayNames *domain.DisplayNames,
-	claims []domain.AgentClaim,
+	facts *domain.ExecutionFailureFacts, interpretation *domain.InterpretationFailureFacts,
+	displayNames *domain.DisplayNames, claims []domain.AgentClaim,
 ) (domain.AttentionItem, error) {
 	runID := run.ID
 	reason := fmt.Sprintf("Specification ended %q without an accepted specification.", status)
@@ -3581,10 +3626,33 @@ func specificationFailureItem(
 		Subject: domain.Subject{Type: domain.SubjectRun, ID: domain.SubjectID(run.ID), RunID: &runID},
 		Type:    domain.AttentionExecutionFailure, Priority: domain.PriorityHigh, Reason: reason,
 		RequestedDecision: []domain.Action{domain.ActionDiscuss, domain.ActionStop}, ItemVersion: 1,
-		ExecutionFailure: facts, DisplayNames: displayNames, AgentClaims: claims,
+		ExecutionFailure: facts, InterpretationFailure: interpretation,
+		DisplayNames: displayNames, AgentClaims: claims,
 		InterruptionClass: domain.InterruptionExceptional, Status: domain.StatusOpen,
 		CreatedAt: &createdAt,
 	}, nil)
+}
+
+// outputFailureCause types an error from reading an exported specification
+// transcript: the output was read and rejected, or could not be read.
+func outputFailureCause(err error) domain.InterpretationFailureCause {
+	if errors.Is(err, specify.ErrInvalidOutput) {
+		return domain.InterpretationFailureInvalidOutput
+	}
+	return domain.InterpretationFailureTranscriptUnreadable
+}
+
+// researchFailureCause types a research request failure. The fetcher wraps a
+// too-large body inside a fetch failure, so the size check runs first.
+func researchFailureCause(err error) domain.InterpretationFailureCause {
+	switch {
+	case errors.Is(err, specify.ErrResearchURLRefused):
+		return domain.InterpretationFailureResearchURLRefused
+	case errors.Is(err, specify.ErrResearchTooLarge):
+		return domain.InterpretationFailureResearchTooLarge
+	default:
+		return domain.InterpretationFailureResearchFetchFailed
+	}
 }
 
 func decodeSpecificationTerminal(entry store.QueueEntry) (specificationTerminal, error) {
@@ -3802,23 +3870,16 @@ func (e *Engine) reconcileSpecificationGates(ctx context.Context) (int, error) {
 				continue
 			}
 			if request.Iteration-request.firstIteration()+1 >= settings.MaxIterations {
-				names, err := displayNames(ctx, e.store, run.ProjectID, domain.Subject{
-					Type: domain.SubjectRun, ID: domain.SubjectID(run.ID), RunID: &run.ID,
-				})
-				if err != nil {
-					return started, err
-				}
-				failure, itemErr := specificationFailureItem(run,
-					domain.ItemID("execution-failure-spec-revision-"+string(request.ImplementationRunID)),
-					exec.StatusFailed, ErrSpecificationIterationsExhausted.Error(), e.specification.now().UTC(),
-					nil, names, nil)
-				if itemErr != nil {
-					return started, itemErr
-				}
 				if err := e.store.Write(ctx, func(tx *store.WriteTx) error {
-					if _, err := tx.GetAttentionItem(ctx, failure.ID); err == nil {
+					id := domain.ItemID("execution-failure-spec-revision-" + string(request.ImplementationRunID))
+					if _, err := tx.GetAttentionItem(ctx, id); err == nil {
 						return errReplay
 					} else if !errors.Is(err, store.ErrNotFound) {
+						return err
+					}
+					failure, err := e.specificationRevisionFailureItem(ctx, tx, run, request, id,
+						domain.InterpretationFailureIterationsExhausted, ErrSpecificationIterationsExhausted.Error())
+					if err != nil {
 						return err
 					}
 					return tx.PutAttentionItem(ctx, failure)
@@ -3829,7 +3890,8 @@ func (e *Engine) reconcileSpecificationGates(ctx context.Context) (int, error) {
 			}
 			if err := e.enqueueSpecRevision(ctx, run, request, *terminal.SpecArtifactID, commands[0]); err != nil {
 				if errors.Is(err, ErrSpecificationInputUndeliverable) {
-					return started, e.recordSpecificationRevisionFailure(ctx, run, request, exec.StatusFailed, err.Error())
+					return started, e.recordSpecificationRevisionFailure(ctx, run, request,
+						domain.InterpretationFailureInputUndeliverable, err.Error())
 				}
 				return started, err
 			}
