@@ -306,6 +306,18 @@ nothing to rebuild.
    command runs one test. It comes after recording because a change that
    moves pixels fails the comparison until its digests are recorded.
 
+CI renders the matrix as two slices beside the other suites (see the
+Swift build cache under [Build and test](#build-and-test)).
+`FREESIDE_SCREENSHOT_SHARD=<index>/<count>`, with a zero-based index,
+selects one slice: every `count`th key of the sorted manifest. A slice
+compares only its own keys, and slice 0 also renders any key the manifest
+lacks and runs the whole-matrix checks against the manifest. Recording
+refuses a slice. To run one locally, from `app/`:
+
+```sh
+FREESIDE_SCREENSHOT_SHARD=0/2 swift test --only-use-versions-from-resolved-file --filter ScreenshotRegressionTests/surfacesMatchRecordedPixels
+```
+
 ### Screenshot Regression Determinism
 
 The macOS package tests compare exact dimensions-plus-RGBA digests at the
@@ -495,6 +507,14 @@ every project module (#2249). After an Xcode or toolchain change every run
 misses until the next push to `main` that touches `app/`, and PRs build as
 before meanwhile. To retire every entry, bump the `swift-build-v1` prefix in
 both workflows and in `scripts/test-daemon-test-shards.sh`.
+
+On an app PR the `convergence` job builds once and then runs the screenshot
+matrix as concurrent slices beside the other suites
+(`scripts/run-convergence.sh --all-tests`, #2292). Each slice is a
+`swift test --skip-build --scratch-path` run on its own APFS clone of
+`app/.build` (`cp -c -R`), because SwiftPM holds the `app/.build` lock for
+the whole of a `swift test` run: concurrent `swift test` runs on one scratch
+path wait for each other and save nothing.
 
 `swift test` renders the whole screenshot matrix. While iterating on a
 visible change, follow

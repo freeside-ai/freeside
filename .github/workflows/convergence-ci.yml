@@ -175,7 +175,9 @@ jobs:
           du -sh app/.build 2>/dev/null || echo "app/.build: absent"
       # The screenshot suite dumps each mismatched render next to its digest
       # line; publishing those PNGs is the only way to review a hosted
-      # runner's raster before it is recorded as an override (#1139).
+      # runner's raster before it is recorded as an override (#1139). The
+      # matrix's concurrent slices share this directory, and each owns
+      # disjoint keys, so no two write the same file (#2292).
       - name: Resolve screenshot dump directory
         if: failure() && inputs.app_tests
         id: screenshot-dumps
