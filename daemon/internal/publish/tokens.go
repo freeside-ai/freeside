@@ -84,64 +84,90 @@ func (s *AuthorityInspectionTokenSource) Token(
 	ctx context.Context,
 	repo string,
 ) (InstallationToken, error) {
-	if s == nil || s.minter == nil || s.minter.keystore == nil || s.minter.client == nil ||
-		s.minter.baseURL == "" || s.minter.recorder == nil || s.minter.now == nil ||
-		s.authority == nil || s.registrationID <= 0 || s.repositoryID <= 0 {
+	if s == nil {
 		return InstallationToken{}, errors.New("authority inspection token: nil or invalid dependency")
+	}
+	binding, parsed, err := resolveDurableBinding(
+		ctx, "authority inspection token", s.minter, s.authority, s.registrationID, s.repositoryID, repo,
+	)
+	if err != nil {
+		return InstallationToken{}, err
+	}
+	return s.minter.mintResolved(
+		ctx, binding, parsed, s.repositoryID,
+		authorityInspectionPermissions, authorityInspectionPermissionScopes,
+	)
+}
+
+// resolveDurableBinding is the janitor-free resolution every durable-binding
+// source shares, so their fail-closed rules cannot drift: the selected
+// registration must appear exactly once in the keystore, the durable authority
+// must validate against it, and exactly one trusted installation must hold
+// repositoryID under the repository's owner. Pending envelopes never count.
+// label prefixes every error so a refusal names the source that refused.
+func resolveDurableBinding(
+	ctx context.Context,
+	label string,
+	minter *Minter,
+	authority InstallationAuthoritySource,
+	registrationID, repositoryID int64,
+	repo string,
+) (InstallationBinding, repoRef, error) {
+	if minter == nil || minter.keystore == nil || minter.client == nil ||
+		minter.baseURL == "" || minter.recorder == nil || minter.now == nil ||
+		authority == nil || registrationID <= 0 || repositoryID <= 0 {
+		return InstallationBinding{}, repoRef{}, fmt.Errorf("%s: nil or invalid dependency", label)
 	}
 	parsed, err := parseRepo(repo)
 	if err != nil {
-		return InstallationToken{}, fmt.Errorf("authority inspection token: %w", err)
+		return InstallationBinding{}, repoRef{}, fmt.Errorf("%s: %w", label, err)
 	}
-	apps, err := s.minter.keystore.ListApps()
+	apps, err := minter.keystore.ListApps()
 	if err != nil {
-		return InstallationToken{}, fmt.Errorf("authority inspection token: list registrations: %w", err)
+		return InstallationBinding{}, repoRef{}, fmt.Errorf("%s: list registrations: %w", label, err)
 	}
 	var selected *AppCredentials
 	for index := range apps {
-		if apps[index].AppID != s.registrationID {
+		if apps[index].AppID != registrationID {
 			continue
 		}
 		if selected != nil {
-			return InstallationToken{}, errors.New("authority inspection token: selected registration is duplicated")
+			return InstallationBinding{}, repoRef{}, fmt.Errorf("%s: selected registration is duplicated", label)
 		}
 		selected = &apps[index]
 	}
 	if selected == nil {
-		return InstallationToken{}, errors.New("authority inspection token: selected registration is unavailable")
+		return InstallationBinding{}, repoRef{}, fmt.Errorf("%s: selected registration is unavailable", label)
 	}
-	snapshot, err := s.authority.InstallationAuthority(ctx, s.registrationID)
+	snapshot, err := authority.InstallationAuthority(ctx, registrationID)
 	if err != nil {
-		return InstallationToken{}, fmt.Errorf("authority inspection token: read authority: %w", err)
+		return InstallationBinding{}, repoRef{}, fmt.Errorf("%s: read authority: %w", label, err)
 	}
-	validated, err := validateInstallationAuthority(*selected, snapshot, s.minter.now().UTC())
+	validated, err := validateInstallationAuthority(*selected, snapshot, minter.now().UTC())
 	if err != nil {
-		return InstallationToken{}, fmt.Errorf("authority inspection token: validate authority: %w", err)
+		return InstallationBinding{}, repoRef{}, fmt.Errorf("%s: validate authority: %w", label, err)
 	}
 	var binding *InstallationBinding
 	for installationID, candidate := range validated.trusted {
-		if !slices.Contains(candidate.repositoryIDs, s.repositoryID) {
+		if !slices.Contains(candidate.repositoryIDs, repositoryID) {
 			continue
 		}
 		if candidate.account != strings.ToLower(parsed.owner) {
-			return InstallationToken{}, errors.New("authority inspection token: repository owner differs from trusted installation")
+			return InstallationBinding{}, repoRef{}, fmt.Errorf("%s: repository owner differs from trusted installation", label)
 		}
 		if binding != nil {
-			return InstallationToken{}, errors.New("authority inspection token: repository authority is ambiguous")
+			return InstallationBinding{}, repoRef{}, fmt.Errorf("%s: repository authority is ambiguous", label)
 		}
 		binding = &InstallationBinding{
-			RegistrationID: s.registrationID, RegistrationOwner: selected.Owner,
+			RegistrationID: registrationID, RegistrationOwner: selected.Owner,
 			RegistrationOwnerID: selected.OwnerID, InstallationID: installationID,
 			Account: candidate.account, AccountID: candidate.accountID,
 		}
 	}
 	if binding == nil {
-		return InstallationToken{}, errors.New("authority inspection token: repository has no durable trusted installation")
+		return InstallationBinding{}, repoRef{}, fmt.Errorf("%s: repository has no durable trusted installation", label)
 	}
-	return s.minter.mintResolved(
-		ctx, *binding, parsed, s.repositoryID,
-		authorityInspectionPermissions, authorityInspectionPermissionScopes,
-	)
+	return *binding, parsed, nil
 }
 
 // NewCachedTokenSource wires a CachedTokenSource over a resolving minter.
