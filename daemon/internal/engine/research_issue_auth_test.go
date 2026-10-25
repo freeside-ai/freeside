@@ -2,6 +2,8 @@ package engine
 
 import (
 	"context"
+	"encoding/json"
+	"errors"
 	"io"
 	"net/http"
 	"strings"
@@ -9,6 +11,8 @@ import (
 	"testing"
 
 	"github.com/freeside-ai/freeside/daemon/internal/domain"
+	"github.com/freeside-ai/freeside/daemon/internal/exec"
+	execfake "github.com/freeside-ai/freeside/daemon/internal/exec/fake"
 	"github.com/freeside-ai/freeside/daemon/internal/inference"
 	inferencefake "github.com/freeside-ai/freeside/daemon/internal/inference/fake"
 	"github.com/freeside-ai/freeside/daemon/internal/publish"
@@ -180,7 +184,7 @@ func TestSpecificationResearchReadsAPrivateProjectIssue(t *testing.T) {
 	f.submit(t)
 	engine := f.newEngine(t, driver)
 	// The third request names a repository the token is not for, so its
-	// unauthenticated 404 fails the run after the first two are fetched.
+	// unauthenticated 404 is recorded as research and the run goes on.
 	for pass := 1; pass <= 3; pass++ {
 		if _, err := engine.Reconcile(t.Context()); err != nil {
 			t.Fatalf("reconcile pass %d: %v", pass, err)
@@ -223,9 +227,16 @@ func TestSpecificationResearchReadsAPrivateProjectIssue(t *testing.T) {
 	if strings.Contains(string(body), researchTokenNeedle) {
 		t.Fatal("stored research carries the token")
 	}
-	item, _ := f.item(t, domain.ItemID("execution-failure-"+string(firstID)))
-	if !strings.Contains(item.Reason, "HTTP 404") || strings.Contains(item.Reason, "managed repository") {
-		t.Fatalf("other repository failure reason = %q", item.Reason)
+	assertNoExecutionFailure(t, f, firstID)
+	other := f.artifact(t, domain.ArtifactID("research-"+string(firstID)+"-3"))
+	body, err = readBoundedArtifactBlob(f.blobs, other.Digest, 1<<20)
+	if err != nil {
+		t.Fatal(err)
+	}
+	evidence, err = specify.DecodeResearchEvidence(body)
+	if err != nil || !strings.Contains(evidence.Source.Failure, "HTTP 404") ||
+		strings.Contains(evidence.Source.Failure, "managed repository") {
+		t.Fatalf("other repository failure = %+v, %v", evidence.Source, err)
 	}
 }
 
@@ -285,9 +296,10 @@ func TestSpecificationResearchReadsAPrivateProjectPullRequest(t *testing.T) {
 	}
 }
 
-// TestSpecificationResearchNamesWhyAPrivateIssueFailed checks the recorded
-// item reason: it names the cause, never the token.
-func TestSpecificationResearchNamesWhyAPrivateIssueFailed(t *testing.T) {
+// TestSpecificationResearchHandsBackWhyAPrivateIssueFailed covers a fetch
+// the token can't make (#2311): the run goes on, and the next iteration sees
+// a research envelope naming the cause, never the token or the server's body.
+func TestSpecificationResearchHandsBackWhyAPrivateIssueFailed(t *testing.T) {
 	for _, tc := range []struct {
 		label  string
 		tokens publish.TokenSource
@@ -300,22 +312,99 @@ func TestSpecificationResearchNamesWhyAPrivateIssueFailed(t *testing.T) {
 		t.Run(tc.label, func(t *testing.T) {
 			f := newSpecificationFixtureAllowing(t, true, 2, "https://api.github.com")
 			f.researchTransport, f.issueTokens = &privateIssueTransport{repositoryID: "1"}, tc.tokens
-			driver := f.newDriver(t)
-			id := specificationInvocationID("specification-run", 1)
-			if err := specifyfake.Script(driver, id, 0, 0, specify.Output{FetchRequests: []specify.FetchRequest{{
+			driver, capturing := newCapturingResearchDriver(t, f)
+			firstID := specificationInvocationID("specification-run", 1)
+			secondID := specificationInvocationID("specification-run", 2)
+			if err := specifyfake.Script(driver, firstID, 0, 0, specify.Output{FetchRequests: []specify.FetchRequest{{
 				URL: "https://api.github.com/repos/owner/repo/issues/" + tc.issue, Purpose: "read the source issue",
 			}}}); err != nil {
 				t.Fatal(err)
 			}
-			f.submit(t)
-			if _, err := f.newEngine(t, driver).Reconcile(t.Context()); err != nil {
+			if err := specifyfake.Script(driver, secondID, 0, 0, specify.Output{Specification: &specify.Specification{
+				Summary: "Worked from the task text.", Body: "# Specification\n\nThe issue was unreadable.",
+				Addressals: []specify.Addressal{},
+			}}); err != nil {
 				t.Fatal(err)
 			}
-			item, _ := f.item(t, domain.ItemID("execution-failure-"+string(id)))
-			if !strings.Contains(item.Reason, "HTTP 404") || !strings.Contains(item.Reason, tc.want) ||
-				strings.Contains(item.Reason, researchTokenNeedle) {
-				t.Fatalf("failure reason = %q, want HTTP 404 naming %q", item.Reason, tc.want)
+			f.submit(t)
+			engine := f.newEngine(t, capturing)
+			for pass := 1; pass <= 2; pass++ {
+				if _, err := engine.Reconcile(t.Context()); err != nil {
+					t.Fatalf("reconcile pass %d: %v", pass, err)
+				}
+			}
+			assertNoExecutionFailure(t, f, firstID)
+			prompt, ok := capturing.prompt(secondID)
+			if !ok || len(prompt.bodies) != 1 {
+				t.Fatalf("second iteration prompt captured = %t with %d prior artifacts", ok, len(prompt.bodies))
+			}
+			if strings.Contains(string(prompt.bodies[0]), researchTokenNeedle) ||
+				strings.Contains(string(prompt.bodies[0]), "Not Found") {
+				t.Fatal("research envelope carries the token or the server's error body")
+			}
+			var envelope specificationPriorArtifactEnvelope
+			if err := json.Unmarshal(prompt.bodies[0], &envelope); err != nil {
+				t.Fatal(err)
+			}
+			if envelope.Role != "research" || envelope.Body != "" || envelope.Source == nil ||
+				envelope.Source.Status != http.StatusNotFound || !strings.Contains(envelope.Source.Failure, "HTTP 404") ||
+				!strings.Contains(envelope.Source.Failure, tc.want) {
+				t.Fatalf("research envelope = %+v, source = %+v; want a 404 naming %q", envelope, envelope.Source, tc.want)
 			}
 		})
+	}
+}
+
+// TestSpecificationResearchFailuresStayWithinTheIterationBudget covers a
+// specifier that keeps asking for research that fails: max_iterations still
+// ends the run.
+func TestSpecificationResearchFailuresStayWithinTheIterationBudget(t *testing.T) {
+	f := newSpecificationFixtureAllowing(t, true, 2, "https://api.github.com")
+	f.researchTransport, f.issueTokens = &privateIssueTransport{repositoryID: "1"}, &fakeResearchTokens{repositoryID: 1}
+	driver := f.newDriver(t)
+	missing := specify.Output{FetchRequests: []specify.FetchRequest{{
+		URL: "https://api.github.com/repos/owner/repo/issues/404", Purpose: "read the source issue",
+	}}}
+	for iteration := 1; iteration <= 2; iteration++ {
+		if err := specifyfake.Script(driver, specificationInvocationID("specification-run", iteration), 0, 0, missing); err != nil {
+			t.Fatal(err)
+		}
+	}
+	f.submit(t)
+	engine := f.newEngine(t, driver)
+	for pass := 1; pass <= 2; pass++ {
+		if _, err := engine.Reconcile(t.Context()); err != nil {
+			t.Fatalf("reconcile pass %d: %v", pass, err)
+		}
+	}
+	assertNoExecutionFailure(t, f, specificationInvocationID("specification-run", 1))
+	item, _ := f.item(t, domain.ItemID("execution-failure-"+string(specificationInvocationID("specification-run", 2))))
+	if !strings.Contains(item.Reason, ErrSpecificationIterationsExhausted.Error()) {
+		t.Fatalf("second iteration failure reason = %q, want the iteration budget", item.Reason)
+	}
+}
+
+func newCapturingResearchDriver(t *testing.T, f specificationFixture) (*execfake.StageDriver, *capturingSpecificationDriver) {
+	t.Helper()
+	driver := f.newDriver(t)
+	materializer, err := exec.NewMaterializer(f.blobs, exec.MaterializerOptions{
+		MaxInputBytes: exec.ProductionMaxInputBytes, MaxTotalBytes: exec.ProductionMaxTotalInputBytes,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return driver, &capturingSpecificationDriver{
+		StageDriver: driver, materializer: materializer,
+		prompts: make(map[domain.InvocationID]capturedSpecificationPrompt),
+	}
+}
+
+func assertNoExecutionFailure(t *testing.T, f specificationFixture, id domain.InvocationID) {
+	t.Helper()
+	if err := f.store.Read(t.Context(), func(tx *store.ReadTx) error {
+		_, err := tx.GetAttentionItem(t.Context(), domain.ItemID("execution-failure-"+string(id)))
+		return err
+	}); !errors.Is(err, store.ErrNotFound) {
+		t.Fatalf("execution failure for %s = %v, want none", id, err)
 	}
 }
