@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/freeside-ai/freeside/daemon/internal/domain"
+	"github.com/freeside-ai/freeside/daemon/internal/engine"
 	"github.com/freeside-ai/freeside/daemon/internal/signet"
 	"github.com/freeside-ai/freeside/daemon/internal/store"
 )
@@ -159,7 +160,40 @@ func seedItems(s seeder, failed, active, verification domain.Run) error {
 	if err := seedAgentQuestion(s, at.Add(8*time.Minute)); err != nil {
 		return err
 	}
-	return nil
+	return seedInterpretationFailure(s, failed.ID, at.Add(9*time.Minute))
+}
+
+// seedInterpretationFailure records a failure found after the retry
+// campaign's specification invocation exported: an execution_failure that
+// carries the interpretation fact instead of an execution outcome. It is
+// resolved, so the failed implementation attempt's item stays the one open
+// execution_failure.
+func seedInterpretationFailure(s seeder, implementationRunID domain.RunID, at time.Time) error {
+	specificationRunID, err := engine.SpecificationRunIDForImplementation(implementationRunID)
+	if err != nil {
+		return err
+	}
+	invocation := domain.InvocationID("inv-specify-" + string(specificationRunID) + "-1")
+	in := itemSpec{
+		id: "execution-failure-" + domain.ItemID(invocation), project: freesideProject, runID: specificationRunID,
+		itemType: domain.AttentionExecutionFailure, priority: domain.PriorityHigh,
+		reason:  "A research fetch failed after the specification invocation exported.",
+		actions: []domain.Action{domain.ActionDiscuss, domain.ActionStop}, createdAt: at,
+	}.input()
+	in.InterpretationFailure = &domain.InterpretationFailureFacts{
+		Cause: domain.InterpretationFailureResearchFetchFailed, Stage: domain.StageNameSpecification,
+		InvocationID: invocation,
+	}
+	if err := putItem(s, in); err != nil {
+		return fmt.Errorf("item %s: %w", in.ID, err)
+	}
+	return s.write(func(tx *store.WriteTx) error {
+		item, err := tx.GetAttentionItem(s.ctx, in.ID)
+		if err != nil {
+			return err
+		}
+		return s.resolve(tx, item, domain.ActionStop, at.Add(time.Minute))
+	})
 }
 
 // seedFindingAdjudication records a review round's finding and its

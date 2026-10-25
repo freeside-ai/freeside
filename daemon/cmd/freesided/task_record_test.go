@@ -488,6 +488,30 @@ func TestTaskRecordLeavesOutContent(t *testing.T) {
 	}) {
 		t.Fatalf("item = %+v", item)
 	}
+	// The interpretation fact is the one typed cause minted after an export,
+	// where a free-text reason is most at hand; it carries only its enum and
+	// id fields.
+	var interpretation *domain.InterpretationFailureFacts
+	for _, entry := range record.Items {
+		if entry.InterpretationFailure != nil {
+			interpretation = entry.InterpretationFailure
+		}
+	}
+	if interpretation == nil {
+		t.Fatal("the fixture no longer records an interpretation failure")
+	}
+	fact, err := json.Marshal(interpretation)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var keys map[string]json.RawMessage
+	if err := json.Unmarshal(fact, &keys); err != nil {
+		t.Fatal(err)
+	}
+	if len(keys) != 3 || keys["cause"] == nil || keys["stage"] == nil || keys["invocation_id"] == nil ||
+		!slices.Contains(domain.AllInterpretationFailureCauses, interpretation.Cause) {
+		t.Fatalf("interpretation_failure = %s, want only a known cause, the stage, and the invocation id", fact)
+	}
 	out, err := json.Marshal(record)
 	if err != nil {
 		t.Fatal(err)
