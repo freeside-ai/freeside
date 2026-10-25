@@ -74,6 +74,11 @@
 #                          (run-convergence.sh --skip-build); CI sets it
 #                          only on an exact Swift build cache hit for a run
 #                          without the app component
+#   CONVERGENCE_SCREENSHOT_SHARDS
+#                          with CONVERGENCE_ALL_TESTS, the number of
+#                          concurrent slices the screenshot regression
+#                          matrix renders as; default the smaller of the
+#                          core count and 2, and 1 runs it whole
 #
 # The daemon's opt-in live suites are skipped by `go test` unless their
 # environment is set (FREESIDE_PUBLISH_LIVE_TEST, FREESIDE_WARD_LIVE_TEST,

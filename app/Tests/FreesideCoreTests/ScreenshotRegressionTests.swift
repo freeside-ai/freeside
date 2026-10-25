@@ -81,6 +81,34 @@
             return darkWrappedTextSpecimens.contains(name) ? ["large", "ax5"] : ["large"]
         }
 
+        /// One slice of the comparison matrix, so CI can render the matrix as
+        /// concurrent processes (#2292). Read from
+        /// `FREESIDE_SCREENSHOT_SHARD=<index>/<count>`, with a zero-based
+        /// index; unset means the whole matrix.
+        private struct ScreenshotShard: Equatable {
+            let index: Int
+            let count: Int
+
+            static func parse(_ selector: String?) throws -> ScreenshotShard? {
+                guard let selector else { return nil }
+                let parts = selector.split(separator: "/", omittingEmptySubsequences: false)
+                guard parts.count == 2, let index = Int(parts[0]), let count = Int(parts[1]),
+                    count >= 1, (0..<count).contains(index)
+                else { throw ScreenshotError.invalidShardSelection(selector) }
+                return ScreenshotShard(index: index, count: count)
+            }
+        }
+
+        /// The manifest keys slice `index` of `count` owns: the keys whose
+        /// position in the sorted key list, modulo `count`, is `index`. The
+        /// slices are disjoint, cover the manifest, and differ in size by at
+        /// most one.
+        private static func shardKeys(
+            _ keys: some Collection<String>, index: Int, count: Int
+        ) -> Set<String> {
+            Set(keys.sorted().enumerated().filter { $0.offset % count == index }.map(\.element))
+        }
+
         @Test func screenshotMetricsUseTheirOwnTextStyleBaseline() {
             FreesideFont.$screenshotDynamicTypeSize.withValue(.large) {
                 #expect(screenshotMetricBase(28, relativeTo: .title) == 28)
@@ -96,8 +124,13 @@
             _ = FreesideFont.registration
             let recording =
                 ProcessInfo.processInfo.environment["FREESIDE_RECORD_SCREENSHOTS"] == "1"
+            let shard = try ScreenshotShard.parse(
+                ProcessInfo.processInfo.environment["FREESIDE_SCREENSHOT_SHARD"])
             let overrides = try loadOverrides()
             if recording {
+                // The manifest is written from what was rendered, so it
+                // must come from the whole matrix.
+                guard shard == nil else { throw ScreenshotError.shardedRecordingRefused }
                 try validateRecordingHost(hosted: isHostedRunner)
                 try validateRecordingOperatingSystem(
                     operatingSystemKey, baselineKey: baselineOperatingSystemKey)
@@ -110,23 +143,45 @@
                 try await ScreenshotCapture.record(to: sourceURL) {
                     try await captureSurfaces(expected: expected, recording: true)
                 }
+            } else if let shard {
+                let slice = Self.shardKeys(expected.keys, index: shard.index, count: shard.count)
+                let actual = try await captureSurfaces(expected: expected, recording: false) { key in
+                    // A key the manifest lacks renders in slice 0 alone, so
+                    // a new surface fails exactly one slice as `missing`.
+                    expected[key] == nil ? shard.index == 0 : slice.contains(key)
+                }
+                #expect(Set(actual.keys).intersection(expected.keys) == slice)
+                // When every slice passes, each manifest key rendered its
+                // recorded digest and no other key rendered, so the
+                // renders equal the manifest and slice 0 checks it whole.
+                if shard.index == 0 {
+                    expectWholeMatrix(expected)
+                }
             } else {
                 let actual = try await captureSurfaces(expected: expected, recording: false)
                 #expect(actual.count == expected.count)
-                #expect(
-                    Set(actual.values).count > 45,
-                    "The size matrix must exercise more than the prior two-state rendering")
-                for specimen in Self.darkWrappedTextSpecimens {
-                    // A light surface also renders at ax5, so a dark one is
-                    // the specimen that renders there but not at ax1.
-                    #expect(
-                        actual["\(specimen)-ax5"] != nil && actual["\(specimen)-ax1"] == nil,
-                        "\(specimen) names no dark surface")
-                }
+                expectWholeMatrix(actual)
             }
         }
 
-        private func captureSurfaces(expected: [String: String], recording: Bool) async throws -> [String: String] {
+        private func expectWholeMatrix(_ digests: [String: String]) {
+            #expect(
+                Set(digests.values).count > 45,
+                "The size matrix must exercise more than the prior two-state rendering")
+            for specimen in Self.darkWrappedTextSpecimens {
+                // A light surface also renders at ax5, so a dark one is
+                // the specimen that renders there but not at ax1.
+                #expect(
+                    digests["\(specimen)-ax5"] != nil && digests["\(specimen)-ax1"] == nil,
+                    "\(specimen) names no dark surface")
+            }
+        }
+
+        private func captureSurfaces(
+            expected: [String: String],
+            recording: Bool,
+            rendersKey: (String) -> Bool = { _ in true }
+        ) async throws -> [String: String] {
             var actual: [String: String] = [:]
 
             for size in textSizes where Self.lightMatrixSizes.contains(size.name) {
@@ -136,6 +191,7 @@
                         .contains(size.name)
                     {
                         let key = "\(surface.name)-\(size.name)"
+                        guard rendersKey(key) else { continue }
                         let image = try await render(
                             surface.view,
                             at: size.value,
@@ -166,6 +222,7 @@
                         .contains(size.name)
                     {
                         let key = "\(supplemental.name)-\(size.name)"
+                        guard rendersKey(key) else { continue }
                         let image = try await render(
                             supplemental.view,
                             at: size.value,
@@ -189,6 +246,8 @@
 
             // Exercise the mounted countdown after the complete matrix so
             // this check also covers rendering state left by other surfaces.
+            // A slice runs it after its own renders only, half the state at
+            // CI's two slices.
             guard
                 let pairingRepetitions = Int(
                     ProcessInfo.processInfo.environment["FREESIDE_PAIRING_PROBE_REPETITIONS"] ?? "1"),
@@ -407,6 +466,27 @@
             let sizeNames = Set(textSizes.map(\.name))
             #expect(Self.lightMatrixSizes.isSubset(of: sizeNames))
             #expect(Self.lightMatrixSizes.isDisjoint(with: ["xsmall", "ax3"]))
+        }
+
+        @Test func shardsPartitionTheManifest() throws {
+            let keys = Set(try loadManifest(overrides: [:]).keys)
+            for count in [2, 3] {
+                let slices = (0..<count).map { Self.shardKeys(keys, index: $0, count: count) }
+                #expect(slices.reduce(into: Set<String>()) { $0.formUnion($1) } == keys)
+                for first in slices.indices {
+                    for second in slices.indices where second > first {
+                        #expect(slices[first].isDisjoint(with: slices[second]))
+                    }
+                }
+                let sizes = slices.map(\.count)
+                #expect(try #require(sizes.max()) - (try #require(sizes.min())) <= 1)
+            }
+            for malformed in ["3/3", "a/b", "0/0", "1", "-1/3", "0/1/2", "/3", ""] {
+                #expect(throws: ScreenshotError.self) { try ScreenshotShard.parse(malformed) }
+            }
+            #expect(try ScreenshotShard.parse(nil) == nil)
+            #expect(try ScreenshotShard.parse("0/1") == ScreenshotShard(index: 0, count: 1))
+            #expect(try ScreenshotShard.parse("2/3") == ScreenshotShard(index: 2, count: 3))
         }
 
         /// Mirrors the mock's read-time availability projection so the store's
@@ -4285,6 +4365,7 @@
     private enum ScreenshotError: Error {
         case diagnosticRecordingRefused
         case invalidDiagnosticSelection
+        case invalidShardSelection(String)
         case missingActiveRun
         case missingActiveTimeline
         case missingRetryTask
@@ -4296,5 +4377,6 @@
         case recordingRefusedOnHostedRunner
         case recordingRequiresBaselineOperatingSystem(expected: String, actual: String)
         case renderFailed
+        case shardedRecordingRefused
     }
 #endif
