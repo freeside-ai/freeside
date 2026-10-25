@@ -60,8 +60,9 @@ type seenRequest struct {
 	authorization string
 }
 
-// issueTransport plays GitHub for a private repository: its issue endpoints
-// answer 404 unless the request carries the needle bearer token. Issue 100
+// issueTransport plays GitHub for a private repository: its issue and pull
+// request endpoints answer 404 unless the request carries the needle bearer
+// token. Issue 100
 // is readable without credentials (a public issue), issue 404 is absent even
 // with them, and issues 8 and 10 redirect. A non-zero rejectToken is the
 // status every authenticated request gets, as GitHub answers a revoked token.
@@ -96,6 +97,8 @@ func (tr *issueTransport) RoundTrip(request *http.Request) (*http.Response, erro
 		return response(request, http.StatusNotFound, "application/json", `{"message":"Not Found"}`), nil
 	case strings.HasPrefix(path, "/repositories/4242/issues/") && authorized:
 		return response(request, http.StatusOK, "application/json", `{"body":"private issue text"}`), nil
+	case strings.HasPrefix(path, "/repositories/4242/pulls/") && authorized:
+		return response(request, http.StatusOK, "application/json", `{"body":"private pull request text"}`), nil
 	default:
 		return response(request, http.StatusNotFound, "application/json", `{"message":"Not Found"}`), nil
 	}
@@ -171,6 +174,42 @@ func TestFetcherAuthenticatesTheManagedRepositoryIssue(t *testing.T) {
 	}
 }
 
+// TestFetcherAuthenticatesTheManagedRepositoryPullRequest covers the earlier
+// pull request a specifier reads for its settled contract (#2311): the pull
+// request and its sub-resources read with the token on a private repository
+// and 404 without it.
+func TestFetcherAuthenticatesTheManagedRepositoryPullRequest(t *testing.T) {
+	t.Parallel()
+	for _, resource := range []string{"pulls/1", "pulls/1/comments", "pulls/1/reviews", "pulls/1/files"} {
+		t.Run(resource, func(t *testing.T) {
+			t.Parallel()
+			idURL := "https://api.github.com/repositories/4242/" + resource
+			id := "inv-" + strings.ReplaceAll(resource, "/", "-")
+			fetcher, transport, blobs := newIssueFetcher(t, validIssueTokens())
+			got, err := fetchIssue(t, fetcher, id, idURL, issueScope)
+			if err != nil {
+				t.Fatal(err)
+			}
+			seen := transport.requests()
+			if len(seen) != 1 || seen[0].url != idURL || seen[0].authorization != "Bearer "+issueTokenNeedle {
+				t.Fatalf("transport saw %+v", redactSeen(seen))
+			}
+			evidence, err := specify.DecodeResearchEvidence(storedEnvelope(t, blobs, got))
+			if err != nil {
+				t.Fatal(err)
+			}
+			if evidence.Body != `{"body":"private pull request text"}` {
+				t.Fatalf("evidence body = %q", evidence.Body)
+			}
+			unauthenticated, _, _ := newIssueFetcher(t, nil)
+			if _, err := fetchIssue(t, unauthenticated, id, idURL, issueScope); !errors.Is(err, specify.ErrResearchFetchFailed) ||
+				!strings.Contains(err.Error(), "HTTP 404") {
+				t.Fatalf("unauthenticated fetch error = %v, want HTTP 404", err)
+			}
+		})
+	}
+}
+
 // TestFetcherRewritesTheOwnerNameIssueURL covers the writer's form: an
 // owner/name issue URL for the scope's repository, in any case and with a
 // sub-resource and query, goes to the repository-ID endpoint, and the
@@ -206,7 +245,27 @@ func TestFetcherRewritesTheOwnerNameIssueURL(t *testing.T) {
 	}
 }
 
-func TestFetcherSendsNoCredentialOutsideTheManagedIssueEndpoints(t *testing.T) {
+func TestFetcherRewritesTheOwnerNamePullRequestURL(t *testing.T) {
+	t.Parallel()
+	fetcher, transport, _ := newIssueFetcher(t, validIssueTokens())
+	const (
+		writerURL = "https://api.github.com/repos/freeside-ai/private-repo/pulls/1/comments"
+		idURL     = "https://api.github.com/repositories/4242/pulls/1/comments"
+	)
+	got, err := fetchIssue(t, fetcher, "inv-owner-name-pull", writerURL, issueScope)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.URL != writerURL || got.FinalURL != idURL {
+		t.Fatalf("result URLs = %q, %q", got.URL, got.FinalURL)
+	}
+	seen := transport.requests()
+	if len(seen) != 1 || seen[0].url != idURL || seen[0].authorization != "Bearer "+issueTokenNeedle {
+		t.Fatalf("transport saw %+v", redactSeen(seen))
+	}
+}
+
+func TestFetcherSendsNoCredentialOutsideTheManagedRepositoryEndpoints(t *testing.T) {
 	t.Parallel()
 	cases := []struct {
 		name  string
@@ -217,8 +276,12 @@ func TestFetcherSendsNoCredentialOutsideTheManagedIssueEndpoints(t *testing.T) {
 		{"another owner/name", "https://api.github.com/repos/freeside-ai/other-repo/issues/7", issueScope},
 		{"owner/name prefix", "https://api.github.com/repos/freeside-ai/private-repo-fork/issues/7", issueScope},
 		{"another host", "https://docs.example/repositories/4242/issues/7", issueScope},
-		{"non-issue path", "https://api.github.com/repositories/4242/pulls/7", issueScope},
+		{"non-issue path", "https://api.github.com/repositories/4242/commits/7", issueScope},
 		{"issue listing", "https://api.github.com/repos/freeside-ai/private-repo/issues", issueScope},
+		{"pull request listing", "https://api.github.com/repos/freeside-ai/private-repo/pulls", issueScope},
+		{"zero pull request", "https://api.github.com/repositories/4242/pulls/0", issueScope},
+		{"singular pull path", "https://api.github.com/repos/freeside-ai/private-repo/pull/1", issueScope},
+		{"pull request in another repository", "https://api.github.com/repos/freeside-ai/other-repo/pulls/1", issueScope},
 		{"non-numeric issue", "https://api.github.com/repositories/4242/issues/abc", issueScope},
 		{"zero issue", "https://api.github.com/repositories/4242/issues/0", issueScope},
 		{"leading-zero ID", "https://api.github.com/repositories/04242/issues/7", issueScope},

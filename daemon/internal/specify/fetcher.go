@@ -142,7 +142,7 @@ type Fetcher struct {
 }
 
 // ManagedRepository names the task's own managed repository: the only one
-// whose issue endpoints a research fetch authenticates to. Repo is its
+// whose issue and pull request endpoints a research fetch authenticates to. Repo is its
 // owner/name and RepositoryID its canonical GitHub ID. The zero value
 // authenticates nothing.
 type ManagedRepository struct {
@@ -162,9 +162,9 @@ func NewFetcher(st *store.Store, blobs *signet.BlobStore, transport http.RoundTr
 }
 
 // NewFetcherWithIssueTokens constructs a fetcher that authenticates requests
-// for the managed repository's issue endpoints with tokens from the given
-// source, which should mint a read-only issue grant
-// (publish.IssueReadTokenSource). A nil source authenticates nothing.
+// for the managed repository's issue and pull request endpoints with tokens
+// from the given source, which should mint a read-only issue and pull request
+// grant (publish.IssueReadTokenSource). A nil source authenticates nothing.
 func NewFetcherWithIssueTokens(
 	st *store.Store, blobs *signet.BlobStore, transport http.RoundTripper, tokens publish.TokenSource,
 ) (*Fetcher, error) {
@@ -179,8 +179,8 @@ func NewFetcherWithIssueTokens(
 
 // Fetch enforces the allowlist, bounds the response, stores a URL-bound
 // envelope in the blob store, then registers its immutable research artifact.
-// A request for one of the scope repository's issues on the GitHub API is
-// sent to its repository-ID endpoint with an installation token when one can
+// A request for one of the scope repository's issues or pull requests on the
+// GitHub API is sent to its repository-ID endpoint with an installation token when one can
 // be had; every other request goes exactly as written, without credentials.
 func (f *Fetcher) Fetch(
 	ctx context.Context,
@@ -232,8 +232,8 @@ func (f *Fetcher) Fetch(
 	}
 	target := parsed
 	var credential *issueCredential
-	if issueURL, ok := managedIssueURL(parsed, scope); ok {
-		target = issueURL
+	if repositoryURL, ok := managedRepositoryURL(parsed, scope); ok {
+		target = repositoryURL
 		resolved := f.issueCredential(ctx, scope)
 		credential = &resolved
 	}
@@ -457,14 +457,15 @@ func (c *issueCredential) explain() string {
 			"read-only installation token with HTTP %d", c.rejected)
 	case c.bearer != "":
 		return " with the managed repository's read-only installation token " +
-			"(the issue is absent or the installation cannot read its issues)"
+			"(the issue or pull request is absent, or the installation cannot read it)"
 	default:
-		return " without credentials for the managed repository's issue (" + c.missing + ")"
+		return " without credentials for the managed repository's issue or pull request (" + c.missing + ")"
 	}
 }
 
-// managedIssueURL reports whether parsed addresses an issue, or a
-// sub-resource of one, of the scope's repository on the GitHub API, and
+// managedRepositoryURL reports whether parsed addresses an issue or pull
+// request, or a sub-resource of one, of the scope's repository on the GitHub
+// API, and
 // returns the repository-ID form to send. The token is bound to the ID, so
 // an owner/name path naming the scope's repository is rewritten to the ID
 // endpoint and a rename can never route the credential to another
@@ -472,7 +473,7 @@ func (c *issueCredential) explain() string {
 // of scope, so the server can't resolve an in-scope spelling elsewhere, and
 // so is a query that isn't plain, so an authenticated request line carries
 // nothing the writer could use to reshape it.
-func managedIssueURL(parsed *url.URL, scope ManagedRepository) (*url.URL, bool) {
+func managedRepositoryURL(parsed *url.URL, scope ManagedRepository) (*url.URL, bool) {
 	if scope.RepositoryID <= 0 || scope.Repo == "" || parsed.RawPath != "" || parsed.Opaque != "" ||
 		!strings.HasPrefix(parsed.Path, "/") || !plainQuery(parsed.RawQuery) {
 		return nil, false
@@ -487,22 +488,22 @@ func managedIssueURL(parsed *url.URL, scope ManagedRepository) (*url.URL, bool) 
 		}
 	}
 	repositoryID := strconv.FormatInt(scope.RepositoryID, 10)
-	var issuePath []string
+	var resourcePath []string
 	switch {
 	case len(segments) >= 4 && segments[0] == "repositories" && segments[1] == repositoryID:
-		issuePath = segments[2:]
+		resourcePath = segments[2:]
 	case len(segments) >= 5 && segments[0] == "repos" && strings.EqualFold(segments[1]+"/"+segments[2], scope.Repo):
-		issuePath = segments[3:]
+		resourcePath = segments[3:]
 	default:
 		return nil, false
 	}
-	if issuePath[0] != "issues" || !positiveDecimal(issuePath[1]) {
+	if (resourcePath[0] != "issues" && resourcePath[0] != "pulls") || !positiveDecimal(resourcePath[1]) {
 		return nil, false
 	}
 	return &url.URL{
 		Scheme:   "https",
 		Host:     "api.github.com",
-		Path:     "/repositories/" + repositoryID + "/" + strings.Join(issuePath, "/"),
+		Path:     "/repositories/" + repositoryID + "/" + strings.Join(resourcePath, "/"),
 		RawQuery: parsed.RawQuery,
 	}, true
 }
