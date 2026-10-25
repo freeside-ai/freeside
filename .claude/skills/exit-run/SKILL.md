@@ -153,7 +153,11 @@ with a partial run.
   deployment the tracker doesn't describe.
 - **The target issue is runnable:** open, its prerequisites closed, no open
   PR already implementing it, and inside the scope the tracker's close
-  condition names. Verify with `gh issue view <n> --repo <owner/repo>
+  condition names. Open and readable through the App come from the record:
+  its `live` `target_issue` check passed and `issue.readable` is true. A
+  `-no-live` record, or a target outside the managed repository, leaves
+  that check `not_run`; then verify open with `gh issue view`. For the rest,
+  verify with `gh issue view <n> --repo <owner/repo>
   --json state,closedByPullRequestsReferences` for the issue's linked PRs,
   then read the open PR list (`gh pr list --repo <owner/repo>`) for an
   implementation that never linked the issue; not from memory. The target
