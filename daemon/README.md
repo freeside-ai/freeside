@@ -132,15 +132,21 @@ selected components can keep `required` running longer.
 
 ## Protected Prompt Delivery
 
-New Claude stage intents select `file_v2`. The renderer accepts at most 1 MiB
+New Claude stage intents select `file_v3`. The renderer accepts at most 1 MiB
 of complete UTF-8 input. Ward verifies its digest on a separate protected
 volume before writer creation, journals the volume binding with launch state,
 and supplies the root-opened file as Claude's user stdin. `file_v2` delivers
 the prompt exactly as `file_v1` does; it differs in keeping the launcher's own
-files out of the workspace while the agent runs. Existing intents retain the
-protocol they started under: `file_v1` its launch command, and argument
-delivery its original 31-KiB limit. This changes transport; it neither retries
-a failed invocation nor grants successor publication.
+files out of the workspace while the agent runs. `file_v3` delivers it as
+`file_v2` does and differs only in where the CLI's stderr goes: to a root-only
+file beside the in-flight transcript, so a CLI warning cannot break the
+transcript's JSONL at import. When the CLI exits nonzero, the launcher appends
+that file to the transcript, which a failed writer retains as plain text; a
+successful run's stderr is discarded with the container. Existing intents
+retain the protocol they started under: `file_v1` and `file_v2` their launch
+commands, and argument delivery its original 31-KiB limit. This changes
+transport; it neither retries a failed invocation nor grants successor
+publication.
 
 The optional `TestPinnedClaudePromptStdinLive` probe uses a cached, pinned
 Claude image, synthetic text larger than the argument limit, and a mock

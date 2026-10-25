@@ -30,20 +30,23 @@ type Provider interface {
 // ward refuses a rebuilt spec whose digest differs. So a provider changes its
 // command by adding a member, never by changing what an existing one builds.
 // PromptFileV2 carries the prompt as PromptFileV1 does and differs only in
-// the provider's launch command.
+// the provider's launch command. PromptFileV3 carries it as PromptFileV2 does
+// and differs only in the Claude launch command's handling of the CLI's
+// stderr.
 type PromptDelivery string
 
 const (
 	PromptArgument PromptDelivery = "argument"
 	PromptFileV1   PromptDelivery = "file_v1"
 	PromptFileV2   PromptDelivery = "file_v2"
+	PromptFileV3   PromptDelivery = "file_v3"
 )
 
-var AllPromptDeliveries = []PromptDelivery{PromptArgument, PromptFileV1, PromptFileV2}
+var AllPromptDeliveries = []PromptDelivery{PromptArgument, PromptFileV1, PromptFileV2, PromptFileV3}
 
 func (d PromptDelivery) valid() bool {
 	switch d {
-	case PromptArgument, PromptFileV1, PromptFileV2:
+	case PromptArgument, PromptFileV1, PromptFileV2, PromptFileV3:
 		return true
 	default:
 		return false
@@ -54,7 +57,7 @@ func (d PromptDelivery) valid() bool {
 // ward's protected prompt file instead of the launch argv.
 func (d PromptDelivery) usesPromptFile() bool {
 	switch d {
-	case PromptFileV1, PromptFileV2:
+	case PromptFileV1, PromptFileV2, PromptFileV3:
 		return true
 	case PromptArgument:
 		return false
