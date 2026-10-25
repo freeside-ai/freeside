@@ -102,6 +102,10 @@ func TestCardFactValidation(t *testing.T) {
 			Outcome: domain.ExecutionOutcomeLost, Stage: domain.StageNameImplementation,
 			InvocationID: "inv-1",
 		},
+		domain.InterpretationFailureFacts{
+			Cause: domain.InterpretationFailureResearchFetchFailed, Stage: domain.StageNameSpecification,
+			InvocationID: "inv-1",
+		},
 		domain.PublishBlockFacts{HoldReason: &hold},
 		domain.PublishBlockFacts{TrustRule: &rule},
 		domain.DiffStats{FilesChanged: 1, Additions: 2, BaseSHA: "base", HeadSHA: "head"},
@@ -138,6 +142,16 @@ func TestCardFactValidation(t *testing.T) {
 			Outcome: domain.ExecutionOutcomeBlocked, Stage: domain.StageNameImplementation,
 			InvocationID: "inv-1",
 		},
+		domain.InterpretationFailureFacts{Stage: domain.StageNameSpecification, InvocationID: "inv-1"},
+		domain.InterpretationFailureFacts{
+			Cause: "unknown", Stage: domain.StageNameSpecification, InvocationID: "inv-1",
+		},
+		domain.InterpretationFailureFacts{
+			Cause: domain.InterpretationFailureInvalidOutput, Stage: "specify", InvocationID: "inv-1",
+		},
+		domain.InterpretationFailureFacts{
+			Cause: domain.InterpretationFailureInvalidOutput, Stage: domain.StageNameSpecification,
+		},
 		domain.PublishBlockFacts{},
 		domain.PublishBlockFacts{HoldReason: &hold, TrustRule: &rule},
 		domain.DiffStats{FilesChanged: -1, BaseSHA: "base", HeadSHA: "head"},
@@ -155,6 +169,17 @@ func TestCardFactValidation(t *testing.T) {
 	}
 }
 
+func TestInterpretationFailureFactsAcceptEveryCause(t *testing.T) {
+	for _, cause := range domain.AllInterpretationFailureCauses {
+		facts := domain.InterpretationFailureFacts{
+			Cause: cause, Stage: domain.StageNameSpecification, InvocationID: "inv-1",
+		}
+		if err := facts.Validate(); err != nil {
+			t.Errorf("cause %q: %v", cause, err)
+		}
+	}
+}
+
 func TestAttentionItemCardFactRules(t *testing.T) {
 	for _, in := range cardFactInputs() {
 		if _, err := domain.NewAttentionItem(in, nil); err != nil {
@@ -167,6 +192,7 @@ func TestAttentionItemCardFactRules(t *testing.T) {
 		wrong.DisplayNames = source.DisplayNames
 		wrong.BillableCostSoFar = source.BillableCostSoFar
 		wrong.ExecutionFailure = source.ExecutionFailure
+		wrong.InterpretationFailure = source.InterpretationFailure
 		wrong.PublishBlock = source.PublishBlock
 		wrong.DiffStats = source.DiffStats
 		wrong.BlockedOn = source.BlockedOn
@@ -175,6 +201,17 @@ func TestAttentionItemCardFactRules(t *testing.T) {
 		if _, err := domain.NewAttentionItem(wrong, nil); !errors.Is(err, domain.ErrCardFactOutsideItem) {
 			t.Errorf("%s fact on spec approval = %v, want ErrCardFactOutsideItem", source.Type, err)
 		}
+	}
+
+	both := cardFactInputs()[len(cardFactInputs())-1]
+	both.ExecutionFailure = cardFactInputs()[2].ExecutionFailure
+	if _, err := domain.NewAttentionItem(both, nil); !errors.Is(err, domain.ErrCardFactInconsistent) {
+		t.Fatalf("execution and interpretation failure together = %v, want ErrCardFactInconsistent", err)
+	}
+	unbound := cardFactInputs()[len(cardFactInputs())-1]
+	unbound.Subject.RunID = nil
+	if _, err := domain.NewAttentionItem(unbound, nil); !errors.Is(err, domain.ErrCardFactInconsistent) {
+		t.Fatalf("interpretation failure without a run = %v, want ErrCardFactInconsistent", err)
 	}
 
 	ready := validItemInput(domain.AttentionReadyForFinalReview)
@@ -218,6 +255,10 @@ func TestAttentionItemCardFactTransitions(t *testing.T) {
 			copy := *changed.ExecutionFailure
 			changed.ExecutionFailure = &copy
 			changed.ExecutionFailure.InvocationID = "inv-other"
+		case changed.InterpretationFailure != nil:
+			copy := *changed.InterpretationFailure
+			changed.InterpretationFailure = &copy
+			changed.InterpretationFailure.Cause = domain.InterpretationFailureInvalidOutput
 		case changed.PublishBlock != nil:
 			hold := domain.HoldExternalConflict
 			changed.PublishBlock = &domain.PublishBlockFacts{HoldReason: &hold}
@@ -487,5 +528,11 @@ func cardFactInputs() []domain.AttentionItemInput {
 		RunID: runID, Round: 1, FindingIDs: []domain.FindingID{"finding-1"},
 		CompletionEvidence: "sha256:evidence",
 	}
-	return []domain.AttentionItemInput{display, cost, failure, publish, ready, blocked, health, dispute}
+	interpretation := validItemInput(domain.AttentionExecutionFailure)
+	interpretation.Subject.RunID = &runID
+	interpretation.InterpretationFailure = &domain.InterpretationFailureFacts{
+		Cause: domain.InterpretationFailureResearchFetchFailed, Stage: domain.StageNameSpecification,
+		InvocationID: "inv-1",
+	}
+	return []domain.AttentionItemInput{display, cost, failure, publish, ready, blocked, health, dispute, interpretation}
 }

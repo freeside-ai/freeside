@@ -70,6 +70,7 @@
   },
   "billable_cost_so_far": null,
   "execution_failure": null,
+  "interpretation_failure": null,
   "publish_block": null,
   "diff_stats": null,
   "blocked_on": null,

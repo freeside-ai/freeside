@@ -222,11 +222,13 @@ func BindTerminal(task Task, item domain.AttentionItem) (domain.AttentionItem, e
 }
 
 // terminalDigestItem is the terminal commitment's view of an item: every
-// AttentionItem field except review_diminishing and conclusion.
+// AttentionItem field except review_diminishing, interpretation_failure, and
+// conclusion.
 type terminalDigestItem struct {
 	domain.AttentionItem
-	ReviewDiminishing *struct{} `json:"review_diminishing,omitempty"`
-	Conclusion        *struct{} `json:"conclusion,omitempty"`
+	ReviewDiminishing     *struct{} `json:"review_diminishing,omitempty"`
+	InterpretationFailure *struct{} `json:"interpretation_failure,omitempty"`
+	Conclusion            *struct{} `json:"conclusion,omitempty"`
 }
 
 func TerminalDigest(task Task, item domain.AttentionItem) (domain.Digest, error) {
@@ -251,7 +253,9 @@ func TerminalDigest(task Task, item domain.AttentionItem) (domain.Digest, error)
 	// A terminal item is ready_for_final_review or publish_blocked and can
 	// never carry review-diminishing facts, so the commitment leaves the key
 	// out instead of gaining a null: an item bound before the field existed
-	// keeps its digest. The conclusion is shadowed the same way: it is
+	// keeps its digest. Interpretation-failure facts belong only to
+	// execution_failure items and are shadowed for the same reason. The
+	// conclusion is shadowed the same way: it is
 	// lifecycle state like status and decided_at, which the commitment resets
 	// to open, and an item bound before the field existed keeps its digest.
 	// The shadowing fields win over the embedded item's and are always
