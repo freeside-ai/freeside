@@ -839,6 +839,14 @@ func evaluateComposition(
 		inspection := environment.InspectImage(ctx, cfg.ContainerBin, image.ref, image.tools, image.versionTool)
 		manifest.Images[image.index].ResolvedDigest = inspection.Digest
 		expected := imageDigestFromRef(image.ref)
+		// No digest means the inspect itself failed, before any tool probe:
+		// the store has no entry under the pin, which a reseed fixes and a
+		// rebuild would not. The CLI's output stays out of the manifest.
+		if inspection.Digest == "" && inspection.Error != nil {
+			evidence, fix := imageStoreFailure(image.ref, inspection.Error)
+			failCheck(manifest, image.check, image.role+" image "+evidence, fix)
+			continue
+		}
 		if inspection.Error != nil || expected == "" || inspection.Digest != expected {
 			failCheck(manifest, image.check, image.role+" image digest or required executable capabilities are stale", "rebuild and re-pin the "+image.role+" image")
 			continue
