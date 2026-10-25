@@ -13,6 +13,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/freeside-ai/freeside/daemon/internal/daemonlock"
 	"github.com/freeside-ai/freeside/daemon/internal/domain"
 	"github.com/freeside-ai/freeside/daemon/internal/golden"
 )
@@ -297,6 +298,47 @@ func TestProbeLineupImageRunsOneContainedCallAndRemovesEverything(t *testing.T) 
 				t.Fatalf("left %d containers and %d networks behind", len(rt.ctrs), len(rt.nets))
 			}
 		})
+	}
+}
+
+// The probe's names must pass the production rig manifest's namespace check,
+// or every probe under a held lease fails before it creates anything.
+func TestProbeLineupImageNamesBindUnderAHeldRigLease(t *testing.T) {
+	root := t.TempDir()
+	state := filepath.Join(root, "state")
+	lease, err := daemonlock.AcquireRig(daemonlock.RigAcquireConfig{
+		Owner:     daemonlock.RigOwner{User: "operator", Host: "rig-host", PID: os.Getpid(), Note: "acceptance"},
+		StateRoot: state, DatabasePath: filepath.Join(state, "freeside.db"),
+		ListenAddress: "127.0.0.1:8677", SeedRoot: filepath.Join(root, "seed"),
+		LeaseRoot: filepath.Join(root, "rig-locks"),
+		Now:       func() time.Time { return time.Date(2026, 10, 25, 12, 0, 0, 0, time.UTC) },
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = lease.Close() })
+
+	rt := newLineupProbeFakeRuntime(t, lineupProbeOutputFiles("2.1.282 (Claude Code)\n", `{"type":"result"}`, "", "0\n")...)
+	var spec ContainerSpec
+	rt.onCreateContainer = func(s ContainerSpec) error { spec = s; return nil }
+	var manifest daemonlock.RigManifest
+	authorize := func(_ context.Context, names RuntimeResourceNames) error {
+		bound, err := daemonlock.BindRigRuntimeResources(state, lease.Token(), names.Containers, names.Volumes, names.Networks)
+		manifest = bound
+		return err
+	}
+
+	out, err := ProbeLineupImage(t.Context(), rt, claudeWriterProbe(t), authorize)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(out.Stdout) != `{"type":"result"}` || out.ExitStatus != 0 {
+		t.Fatalf("output = %+v", out)
+	}
+	if !slices.Equal(manifest.Resources.Containers, []string{spec.Name}) ||
+		!slices.Equal(manifest.Resources.Networks, []string{spec.Network}) ||
+		len(manifest.Resources.Volumes) != 0 {
+		t.Fatalf("bound %+v for container %q on %q", manifest.Resources, spec.Name, spec.Network)
 	}
 }
 

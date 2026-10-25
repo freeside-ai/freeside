@@ -727,6 +727,66 @@ func TestRigBindAdmitsPreflightCredentialNamespace(t *testing.T) {
 	}
 }
 
+func TestRigBindAdmitsLineupProbeNamespace(t *testing.T) {
+	root := t.TempDir()
+	cfg := rigTestConfig(t, filepath.Join(root, "state"), filepath.Join(root, "seed"))
+	lease, err := AcquireRig(cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = lease.Close() })
+
+	container := "freeside-lineup-probe-" + strings.Repeat("a", 12)
+	network := container + "-egress"
+	manifest, err := BindRigRuntimeResources(cfg.StateRoot, lease.Token(), []string{container}, nil, []string{network})
+	if err != nil {
+		t.Fatalf("bind exact lineup probe names: %v", err)
+	}
+	if !slices.Equal(manifest.Resources.Containers, []string{container}) ||
+		!slices.Equal(manifest.Resources.Networks, []string{network}) {
+		t.Fatalf("bound containers = %v, networks = %v, want %q and %q",
+			manifest.Resources.Containers, manifest.Resources.Networks, container, network)
+	}
+
+	const prefix = "freeside-lineup-probe-"
+	slice := strings.Repeat("a", 12)
+	for _, tc := range []struct {
+		name      string
+		container string
+		network   string
+	}{
+		{name: "short container slice", container: prefix + strings.Repeat("a", 11)},
+		{name: "long container slice", container: prefix + strings.Repeat("a", 13)},
+		{name: "uppercase container slice", container: prefix + strings.Repeat("A", 12)},
+		{name: "non-hex container slice", container: prefix + strings.Repeat("g", 12)},
+		{name: "missing container slice", container: prefix},
+		{name: "container with egress", container: prefix + slice + "-egress"},
+		{name: "container trailing suffix", container: prefix + slice + "-obs"},
+		{name: "short network slice", network: prefix + strings.Repeat("a", 11) + "-egress"},
+		{name: "long network slice", network: prefix + strings.Repeat("a", 13) + "-egress"},
+		{name: "uppercase network slice", network: prefix + strings.Repeat("A", 12) + "-egress"},
+		{name: "non-hex network slice", network: prefix + strings.Repeat("g", 12) + "-egress"},
+		{name: "missing network slice", network: prefix + "-egress"},
+		{name: "network without egress", network: prefix + slice},
+		{name: "network trailing suffix", network: prefix + slice + "-egress-obs"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			var containers, networks []string
+			if tc.container != "" {
+				containers = []string{tc.container}
+			}
+			if tc.network != "" {
+				networks = []string{tc.network}
+			}
+			if _, err := BindRigRuntimeResources(
+				cfg.StateRoot, lease.Token(), containers, nil, networks,
+			); err == nil || !strings.Contains(err.Error(), "outside the owned namespace") {
+				t.Fatalf("bind containers %v, networks %v = %v, want outside-namespace refusal", containers, networks, err)
+			}
+		})
+	}
+}
+
 func TestRigManifestRejectsNoncanonicalEncoding(t *testing.T) {
 	root := t.TempDir()
 	cfg := rigTestConfig(t, filepath.Join(root, "state"), filepath.Join(root, "seed"))
