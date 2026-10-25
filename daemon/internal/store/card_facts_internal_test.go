@@ -754,6 +754,59 @@ func TestAttentionItemReadAuthenticatesExecutionFailure(t *testing.T) {
 		attentionItemFactMutation{"$.execution_failure.cause", "quota"})
 }
 
+// TestAttentionItemReadAuthenticatesInterpretationFailure: a stored
+// interpretation fact is re-gated against the export and the admission on
+// every read, so a row edited to name another invocation or stage fails
+// closed.
+func TestAttentionItemReadAuthenticatesInterpretationFailure(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	st, admission := seedAdmission(t, nil)
+	if _, err := st.db.ExecContext(ctx,
+		`UPDATE runs SET body = json_set(body, '$.stages[0].name', 'specification') WHERE id = ?`,
+		admission.RunID); err != nil {
+		t.Fatal(err)
+	}
+	export, err := domain.NewExecutionExport(domain.ExecutionExportInput{
+		InvocationID: admission.InvocationID, AdmissionID: admission.ID,
+		ObservedBaseSHA: admission.Base.BaseSHA, HeadSHA: "cafebabe",
+		ManifestDigest: "sha256:manifest", RecordedAt: admission.AdmittedAt.Add(time.Minute),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := st.Write(ctx, func(tx *WriteTx) error {
+		return tx.RecordExecutionExport(ctx, export)
+	}); err != nil {
+		t.Fatal(err)
+	}
+	runID := admission.RunID
+	at := export.RecordedAt
+	item, err := domain.NewAttentionItem(domain.AttentionItemInput{
+		ID: "item-interpretation-card-fact", ProjectID: "proj-1",
+		Subject: domain.Subject{Type: domain.SubjectRun, ID: domain.SubjectID(runID), RunID: &runID},
+		Type:    domain.AttentionExecutionFailure, Priority: domain.PriorityUrgent,
+		Reason: "research fetch failed", RequestedDecision: []domain.Action{domain.ActionDiscuss, domain.ActionStop},
+		InterpretationFailure: &domain.InterpretationFailureFacts{
+			Cause: domain.InterpretationFailureResearchFetchFailed, Stage: domain.StageNameSpecification,
+			InvocationID: admission.InvocationID,
+		},
+		ItemVersion: 1, InterruptionClass: domain.InterruptionExceptional,
+		CreatedAt: &at, Status: domain.StatusOpen,
+	}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := st.Write(ctx, func(tx *WriteTx) error {
+		return putTestAttentionItem(ctx, tx, &item)
+	}); err != nil {
+		t.Fatal(err)
+	}
+	assertAttentionItemFactReadGate(t, st, item.ID,
+		attentionItemFactMutation{"$.interpretation_failure.invocation_id", "inv-invented"},
+		attentionItemFactMutation{"$.interpretation_failure.stage", "implementation"})
+}
+
 // TestAttentionItemReadsCauselessExecutionFailure covers a failed item stored
 // before its facts carried a cause (#2210): the body has no cause, and the
 // item reads back with cause unknown, matching its outcome, and a replayed
