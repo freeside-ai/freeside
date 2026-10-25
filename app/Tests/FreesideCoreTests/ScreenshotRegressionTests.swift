@@ -3103,8 +3103,7 @@
                             actionError: nil,
                             inbox: .init(open: 6, urgent: 2),
                             unattendedStopped:
-                                "Unattended operation is stopped by operator decision. "
-                                + "No new unattended work starts until it is resumed.",
+                                "Unattended operation is stopped by operator decision.",
                             actions: panelActions))))
             surfaces.append(
                 Surface(

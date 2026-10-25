@@ -23,8 +23,6 @@ struct UnattendedStoppedPresentation: Equatable {
     /// daemon names one and it is open in the synced inbox. Nil otherwise,
     /// so the indicator never offers a link with no card to land on.
     let itemID: String?
-    /// The daemon's reason on that item, shown for a blocking finding.
-    let itemReason: String?
     /// Stops in force beyond the one the indicator names.
     let additionalStops: Int
     /// False when the snapshot cannot be claimed current (§5.14): restored
@@ -55,37 +53,40 @@ struct UnattendedStoppedPresentation: Equatable {
             lastUpdatedAt.map {
                 now.timeIntervalSince($0) < SyncCoordinator.stalenessThreshold
             } ?? false
-        let openItemReason = first?.item_id.flatMap(reason)
+        // The reason only says whether the item is open; its text stays on
+        // the item, so a long one never grows the indicator (#2313).
+        let itemIsOpen = first?.item_id.flatMap(reason) != nil
         return .init(
             cause: cause,
-            itemID: openItemReason == nil ? nil : first?.item_id,
-            itemReason: cause == .blockingFinding ? openItemReason : nil,
+            itemID: itemIsOpen ? first?.item_id : nil,
             additionalStops: max(0, operation.stops.count - 1),
             isCurrent: freshness == .fresh && withinThreshold)
     }
 
     var keyword: String { "Stopped" }
 
+    /// Wax only while the stop is current. A cached stop is a record of the
+    /// last refresh, so it reads under the freshness banner, not over it.
+    var tone: Notice.Tone { isCurrent ? .wax : .neutral }
+
+    /// One sentence naming the cause, plus a count of any other stops. The
+    /// item's reason is never in it: the action opens the item, and the
+    /// notice stays the same size whatever the daemon wrote.
     var message: String {
         var text: String
         switch (cause, isCurrent) {
         case (.operatorStop, true):
-            text =
-                "Unattended operation is stopped by operator decision. "
-                + "No new unattended work starts until it is resumed."
+            text = "Unattended operation is stopped by operator decision."
         case (.operatorStop, false):
             text =
                 "At the last successful refresh, "
                 + "unattended operation was stopped by operator decision."
         case (.blockingFinding, true):
-            text =
-                "Unattended operation is stopped by a system health finding"
-                + (itemReason.map { ": \(Self.sentence($0))" } ?? ".")
+            text = "Unattended operation is stopped by a system health finding."
         case (.blockingFinding, false):
             text =
                 "At the last successful refresh, "
-                + "unattended operation was stopped by a system health finding"
-                + (itemReason.map { ": \(Self.sentence($0))" } ?? ".")
+                + "unattended operation was stopped by a system health finding."
         case (.unspecified, true):
             text = "Unattended operation is stopped."
         case (.unspecified, false):
@@ -96,21 +97,12 @@ struct UnattendedStoppedPresentation: Equatable {
         } else if additionalStops > 1 {
             text += " \(additionalStops) other stops are in force."
         }
-        if !isCurrent {
-            text += " The current state is unknown."
-        }
         return text
     }
 
     /// The label on the action that opens the reopening item.
     var actionTitle: String {
         cause == .operatorStop ? "Review to Resume" : "Open Finding"
-    }
-
-    private static func sentence(_ reason: String) -> String {
-        let trimmed = reason.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard let last = trimmed.last else { return "." }
-        return ".!?".contains(last) ? trimmed : trimmed + "."
     }
 }
 
@@ -146,7 +138,7 @@ struct UnattendedStoppedIndicator: View {
 
     private func row(_ presentation: UnattendedStoppedPresentation) -> some View {
         Notice(
-            tone: .wax, keyword: presentation.keyword, sentence: presentation.message,
+            tone: presentation.tone, keyword: presentation.keyword, sentence: presentation.message,
             action: action(for: presentation)
         )
         .standingNoticeInset(placement)
