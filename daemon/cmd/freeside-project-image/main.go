@@ -136,7 +136,8 @@ func parseConfig(args []string, output io.Writer) (config, error) {
 	flags.StringVar(&cfg.RecipePath, "recipe", "", "trusted verification recipe JSON file (required)")
 	flags.StringVar(&cfg.BaseImageRef, "base-image", "", "digest-pinned approved agent base (required)")
 	flags.StringVar(&cfg.BaseBuildRef, "base-build-ref", "", "local base tag whose digest must match -base-image (required)")
-	flags.StringVar(&cfg.Registry, "registry", "", "registry host/path destination")
+	flags.StringVar(&cfg.Registry, "registry", "",
+		"shared registry host/path destination; a loopback host is refused, use -local-registry-port")
 	flags.IntVar(&cfg.LocalRegistryPort, "local-registry-port", 0,
 		"managed loopback registry port retained to back the returned reference (1024-65535)")
 	flags.StringVar(&cfg.ImageName, "image-name", "", "project image name (default derived from repository)")
@@ -171,6 +172,11 @@ func parseConfig(args []string, output io.Writer) (config, error) {
 	for _, field := range required {
 		if field.value == "" {
 			return config{}, fmt.Errorf("%s is required", field.name)
+		}
+	}
+	if cfg.Registry != "" {
+		if err := projectimage.ValidateRegistry(cfg.Registry); err != nil {
+			return config{}, fmt.Errorf("-registry: %w", err)
 		}
 	}
 	if cfg.RepositoryID <= 0 {

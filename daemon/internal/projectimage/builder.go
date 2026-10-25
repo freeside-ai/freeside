@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net"
 	"net/url"
 	"os"
 	"path/filepath"
@@ -616,6 +617,32 @@ func (b *Builder) proveRecipe(
 	return nil
 }
 
+// ValidateRegistry refuses a registry destination the builder cannot publish
+// to. Every refusal wraps ErrInvalidRequest. A loopback host (localhost, any
+// 127.0.0.0/8 address, or ::1) is refused because -local-registry-port is the
+// supported loopback path: it leases the port, checks the retained registry's
+// ownership, and publishes over HTTP, while -registry mode does none of that.
+// The check is syntactic; a name that only resolves to loopback passes.
+func ValidateRegistry(registry string) error {
+	if strings.HasPrefix(registry, "-") ||
+		strings.HasPrefix(registry, "/") ||
+		strings.HasSuffix(registry, "/") ||
+		strings.ContainsAny(registry, " \t\r\n@") ||
+		strings.Contains(registry, "://") {
+		return fmt.Errorf("registry %q: %w", registry, ErrInvalidRequest)
+	}
+	hostPort, _, _ := strings.Cut(registry, "/")
+	host, _, err := net.SplitHostPort(hostPort)
+	if err != nil {
+		host = strings.TrimSuffix(strings.TrimPrefix(hostPort, "["), "]")
+	}
+	if ip := net.ParseIP(host); strings.EqualFold(host, "localhost") || (ip != nil && ip.IsLoopback()) {
+		return fmt.Errorf("registry %q is a loopback host; pass the port as -local-registry-port instead: %w",
+			registry, ErrInvalidRequest)
+	}
+	return nil
+}
+
 func validateRequest(request Request) (Request, verify.Recipe, domain.Digest, error) {
 	request = NormalizeRequest(request)
 	if !repositoryPattern.MatchString(request.Repository) || strings.Contains(request.Repository, "..") {
@@ -648,13 +675,10 @@ func validateRequest(request Request) (Request, verify.Recipe, domain.Digest, er
 		return Request{}, verify.Recipe{}, "", fmt.Errorf(
 			"exactly one of registry or local registry port is required: %w", ErrInvalidRequest)
 	}
-	if request.Registry != "" &&
-		(strings.HasPrefix(request.Registry, "-") ||
-			strings.HasPrefix(request.Registry, "/") ||
-			strings.HasSuffix(request.Registry, "/") ||
-			strings.ContainsAny(request.Registry, " \t\r\n@") ||
-			strings.Contains(request.Registry, "://")) {
-		return Request{}, verify.Recipe{}, "", fmt.Errorf("registry %q: %w", request.Registry, ErrInvalidRequest)
+	if request.Registry != "" {
+		if err := ValidateRegistry(request.Registry); err != nil {
+			return Request{}, verify.Recipe{}, "", err
+		}
 	}
 	if request.LocalRegistryPort != 0 &&
 		(request.LocalRegistryPort < 1024 || request.LocalRegistryPort > 65535) {

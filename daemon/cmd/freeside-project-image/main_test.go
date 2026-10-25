@@ -121,6 +121,7 @@ func TestParseConfigRejectsMissingInputsAndPositionals(t *testing.T) {
 		{"missing db", validArgs()[2:], "-db is required"},
 		{"missing repository id", append(validArgs()[:4], validArgs()[6:]...), "-repository-id must be positive"},
 		{"positional", append(validArgs(), "extra"), "unexpected positional"},
+		{"loopback registry", append(validArgs()[:14], "-registry", "127.0.0.1:5100"), "-local-registry-port"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			_, err := parseConfig(tc.args, new(bytes.Buffer))

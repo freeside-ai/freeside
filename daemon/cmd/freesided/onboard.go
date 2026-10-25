@@ -471,7 +471,8 @@ func parseOnboardConfig(args []string, output io.Writer) (onboardConfig, error) 
 		"reviewer outside Freeside whose findings on a published pull request may start a review round, "+
 			"as github:<account-id>:<login>=drive_round with the login spelled as GitHub returns it; repeatable")
 	flags.StringVar(&cfg.Approval, "approve", "", "exact proposed review digest; omit for the one-time review")
-	flags.StringVar(&cfg.Registry, "registry", "", "registry host/path destination")
+	flags.StringVar(&cfg.Registry, "registry", "",
+		"shared registry host/path destination; a loopback host is refused, use -local-registry-port")
 	flags.IntVar(&cfg.LocalRegistryPort, "local-registry-port", 0, "managed loopback registry port")
 	flags.StringVar(&cfg.ImageName, "image-name", "", "project image name")
 	flags.StringVar(&cfg.RefTag, "ref-tag", "v1", "one-shot image tag prefix")
@@ -519,6 +520,11 @@ func parseOnboardConfig(args []string, output io.Writer) (onboardConfig, error) 
 	} {
 		if required.value == "" {
 			return onboardConfig{}, fmt.Errorf("%s is required", required.name)
+		}
+	}
+	if cfg.Registry != "" {
+		if err := projectimage.ValidateRegistry(cfg.Registry); err != nil {
+			return onboardConfig{}, fmt.Errorf("-registry: %w", err)
 		}
 	}
 	cfg.CommitPlan = domain.CommitPlanMode(commitPlan)

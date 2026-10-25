@@ -21,6 +21,36 @@ import (
 	"github.com/freeside-ai/freeside/daemon/internal/store/storetest"
 )
 
+func TestParseOnboardConfigRefusesLoopbackRegistry(t *testing.T) {
+	baseArgs := []string{
+		"example/repo",
+		"-db", "/tmp/freeside.db",
+		"-state-dir", "/tmp/freeside-state",
+		"-registration-id", "11",
+		"-repository-id", "44",
+		"-commit", "0123456789012345678901234567890123456789",
+		"-base-ref", "main",
+		"-base-image", "example.invalid/agent@sha256:test",
+		"-base-build-ref", "local/agent:test",
+		"-review-config-digest", "sha256:review",
+		"-recipe", "/tmp/verify.json",
+	}
+	for _, registry := range []string{"127.0.0.1:5523", "localhost:5000/team", "[::1]:5000"} {
+		_, err := parseOnboardConfig(append(slices.Clone(baseArgs), "-registry", registry), io.Discard)
+		if err == nil || !strings.Contains(err.Error(), "-local-registry-port") {
+			t.Fatalf("parseOnboardConfig(-registry %s) = %v, want a refusal naming -local-registry-port",
+				registry, err)
+		}
+	}
+	cfg, err := parseOnboardConfig(append(slices.Clone(baseArgs), "-registry", "registry.example.test/team"), io.Discard)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := "registry.example.test/team"; cfg.Registry != want {
+		t.Fatalf("Registry = %q, want %q", cfg.Registry, want)
+	}
+}
+
 func TestParseOnboardConfigBuildEgress(t *testing.T) {
 	baseArgs := []string{
 		"example/repo",
