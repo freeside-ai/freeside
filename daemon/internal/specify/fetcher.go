@@ -29,6 +29,7 @@ import (
 const (
 	maxResearchRedirects        = 5
 	maxResearchContentTypeBytes = 8 << 10
+	maxResearchFailureBytes     = 8 << 10
 )
 
 var nonPublicResearchPrefixes = []netip.Prefix{
@@ -74,13 +75,17 @@ type ResearchArtifact struct {
 }
 
 // ResearchSource attributes prompt-readable evidence to its requested and
-// final URL plus the daemon-observed HTTP metadata.
+// final URL plus the daemon-observed HTTP metadata. Failure, when set, says
+// why a fetch returned no body: Status is then the HTTP status, or 0 when no
+// response arrived. The daemon writes it, but a transport error can quote
+// bytes the server sent, so it is as untrusted as a body.
 type ResearchSource struct {
 	URL         string `json:"url"`
 	Purpose     string `json:"purpose"`
 	FinalURL    string `json:"final_url"`
 	Status      int    `json:"status"`
 	ContentType string `json:"content_type"`
+	Failure     string `json:"failure,omitempty"`
 }
 
 // ResearchEvidence is the prompt-readable reconstruction of one stored
@@ -117,8 +122,7 @@ func DecodeResearchEvidence(data []byte) (ResearchEvidence, error) {
 	}
 	final, err := url.Parse(envelope.FinalURL)
 	if err != nil || final.Scheme != "https" || final.User != nil || final.Hostname() == "" ||
-		final.Fragment != "" || net.ParseIP(final.Hostname()) != nil ||
-		envelope.Status < 200 || envelope.Status > 299 {
+		final.Fragment != "" || net.ParseIP(final.Hostname()) != nil || !envelope.outcomeValid() {
 		return ResearchEvidence{}, fmt.Errorf("decode research evidence metadata: %w", domain.ErrParentKeyMismatch)
 	}
 	if len(envelope.ContentType) > maxResearchContentTypeBytes {
@@ -127,7 +131,7 @@ func DecodeResearchEvidence(data []byte) (ResearchEvidence, error) {
 	return ResearchEvidence{
 		Source: ResearchSource{
 			URL: envelope.URL, Purpose: envelope.Purpose, FinalURL: envelope.FinalURL,
-			Status: envelope.Status, ContentType: envelope.ContentType,
+			Status: envelope.Status, ContentType: envelope.ContentType, Failure: envelope.Failure,
 		},
 		Body: string(body),
 	}, nil
@@ -182,6 +186,7 @@ func NewFetcherWithIssueTokens(
 // A request for one of the scope repository's issues or pull requests on the
 // GitHub API is sent to its repository-ID endpoint with an installation token when one can
 // be had; every other request goes exactly as written, without credentials.
+// A non-2xx status or a transport error fails with ErrResearchFetchFailed.
 func (f *Fetcher) Fetch(
 	ctx context.Context,
 	producer domain.InvocationID,
@@ -190,6 +195,38 @@ func (f *Fetcher) Fetch(
 	scope ManagedRepository,
 	allowlist []string,
 	maxBytes int64,
+) (ResearchArtifact, error) {
+	return f.fetch(ctx, producer, ordinal, request, scope, allowlist, maxBytes, false)
+}
+
+// FetchOrRecordFailure is Fetch for research a specifier asked for: a non-2xx
+// status after the credential retry, or a transport error, is stored as a
+// research artifact whose envelope carries the status (0 when no response
+// arrived), an empty body, and a failure text naming the URL and cause, so the
+// specifier learns why and the run goes on. The failed response's body is
+// never read. An allowlist refusal, a size limit, a non-UTF-8 body,
+// cancellation, and persistence errors still fail as they do for Fetch.
+func (f *Fetcher) FetchOrRecordFailure(
+	ctx context.Context,
+	producer domain.InvocationID,
+	ordinal int,
+	request FetchRequest,
+	scope ManagedRepository,
+	allowlist []string,
+	maxBytes int64,
+) (ResearchArtifact, error) {
+	return f.fetch(ctx, producer, ordinal, request, scope, allowlist, maxBytes, true)
+}
+
+func (f *Fetcher) fetch(
+	ctx context.Context,
+	producer domain.InvocationID,
+	ordinal int,
+	request FetchRequest,
+	scope ManagedRepository,
+	allowlist []string,
+	maxBytes int64,
+	recordFailures bool,
 ) (ResearchArtifact, error) {
 	if producer == "" || ordinal < 1 || maxBytes < 1 {
 		return ResearchArtifact{}, errors.New("research fetch requires producer, positive ordinal, and size limit")
@@ -268,6 +305,14 @@ func (f *Fetcher) Fetch(
 		if ctx.Err() != nil {
 			return ResearchArtifact{}, ctx.Err()
 		}
+		// A refused redirect or non-public address is policy, not an outage,
+		// so it fails even where other transport errors are recorded.
+		if recordFailures && !errors.Is(err, ErrResearchURLRefused) {
+			return f.register(ctx, artifactID, producer, request, researchEnvelope{
+				URL: request.URL, Purpose: request.Purpose, FinalURL: target.String(),
+				Failure: boundedFailure(fmt.Sprintf("fetch research %q: %v", request.URL, err)),
+			}, maxBytes)
+		}
 		return ResearchArtifact{}, fmt.Errorf("%w: fetch research %q: %w", ErrResearchFetchFailed, request.URL, err)
 	}
 	defer func() { _ = response.Body.Close() }()
@@ -279,8 +324,16 @@ func (f *Fetcher) Fetch(
 		return ResearchArtifact{}, fmt.Errorf("fetch research %q final URL: %w", request.URL, err)
 	}
 	if response.StatusCode < 200 || response.StatusCode > 299 {
-		return ResearchArtifact{}, fmt.Errorf("%w: fetch research %q: HTTP %d%s",
-			ErrResearchFetchFailed, request.URL, response.StatusCode, credential.explain())
+		failure := fmt.Sprintf("fetch research %q: HTTP %d%s", request.URL, response.StatusCode, credential.explain())
+		// A status outside 300–599 isn't one a failure envelope accepts, so
+		// it fails as it always has rather than storing an undecodable record.
+		if recordFailures && failureStatus(response.StatusCode) {
+			return f.register(ctx, artifactID, producer, request, researchEnvelope{
+				URL: request.URL, Purpose: request.Purpose, FinalURL: finalURL.String(),
+				Status: response.StatusCode, Failure: boundedFailure(failure),
+			}, maxBytes)
+		}
+		return ResearchArtifact{}, fmt.Errorf("%w: %s", ErrResearchFetchFailed, failure)
 	}
 	limited := &io.LimitedReader{R: response.Body, N: maxBytes + 1}
 	body, err := io.ReadAll(limited)
@@ -303,11 +356,24 @@ func (f *Fetcher) Fetch(
 		return ResearchArtifact{}, fmt.Errorf("%w: fetch research %q content type exceeds %d bytes: %w",
 			ErrResearchFetchFailed, request.URL, maxResearchContentTypeBytes, ErrResearchTooLarge)
 	}
-	envelope, err := json.Marshal(researchEnvelope{
+	return f.register(ctx, artifactID, producer, request, researchEnvelope{
 		URL: request.URL, Purpose: request.Purpose, FinalURL: finalURL.String(),
 		Status: response.StatusCode, ContentType: contentType,
 		BodyBase64: base64.StdEncoding.EncodeToString(body),
-	})
+	}, maxBytes)
+}
+
+// register writes one research envelope to the blob store and registers its
+// immutable artifact.
+func (f *Fetcher) register(
+	ctx context.Context,
+	artifactID domain.ArtifactID,
+	producer domain.InvocationID,
+	request FetchRequest,
+	outcome researchEnvelope,
+	maxBytes int64,
+) (ResearchArtifact, error) {
+	envelope, err := json.Marshal(outcome)
 	if err != nil {
 		return ResearchArtifact{}, fmt.Errorf("encode research %q: %w", request.URL, err)
 	}
@@ -343,7 +409,7 @@ func (f *Fetcher) Fetch(
 	}); err != nil {
 		return ResearchArtifact{}, fmt.Errorf("register research %q: %w", request.URL, err)
 	}
-	return ResearchArtifact{Artifact: artifact, URL: request.URL, FinalURL: finalURL.String()}, nil
+	return ResearchArtifact{Artifact: artifact, URL: request.URL, FinalURL: outcome.FinalURL}, nil
 }
 
 // recover returns the immutable result already registered for an invocation
@@ -396,8 +462,7 @@ func (f *Fetcher) recover(
 	}
 	decoded, err := base64.StdEncoding.DecodeString(envelope.BodyBase64)
 	if err != nil || int64(len(decoded)) > maxBytes || envelope.URL != request.URL ||
-		envelope.Purpose != request.Purpose ||
-		envelope.Status < 200 || envelope.Status > 299 {
+		envelope.Purpose != request.Purpose || !envelope.outcomeValid() {
 		return ResearchArtifact{}, false, fmt.Errorf("recover research %q: envelope disagrees: %w", id, domain.ErrParentKeyMismatch)
 	}
 	if !utf8.Valid(decoded) {
@@ -541,6 +606,9 @@ func maxResearchEnvelopeBytes(maxBytes int64) int64 {
 	return min(maxBytes*2+(1<<20), exec.ProductionMaxInputBytes)
 }
 
+// researchEnvelope is the stored research record. Failure is omitempty, and
+// stays last, so envelopes stored before it existed still re-marshal to their
+// own bytes and keep their digests.
 type researchEnvelope struct {
 	URL         string `json:"url"`
 	Purpose     string `json:"purpose"`
@@ -548,6 +616,38 @@ type researchEnvelope struct {
 	Status      int    `json:"status"`
 	ContentType string `json:"content_type"`
 	BodyBase64  string `json:"body_base64"`
+	Failure     string `json:"failure,omitempty"`
+}
+
+// outcomeValid accepts a fetched response (2xx, no failure) or a recorded
+// failure (a bounded failure text, no body or content type, and a failure
+// status); every other mix is rejected.
+func (e researchEnvelope) outcomeValid() bool {
+	if e.Failure == "" {
+		return e.Status >= 200 && e.Status <= 299
+	}
+	return len(e.Failure) <= maxResearchFailureBytes && e.BodyBase64 == "" && e.ContentType == "" &&
+		failureStatus(e.Status)
+}
+
+// failureStatus reports the statuses a failure envelope may carry: 0 when no
+// response arrived, otherwise a redirect, client, or server error status.
+func failureStatus(status int) bool {
+	return status == 0 || (status >= 300 && status <= 599)
+}
+
+// boundedFailure keeps a failure text valid UTF-8 and within its cap; a
+// transport error can quote bytes the server sent.
+func boundedFailure(text string) string {
+	text = strings.ToValidUTF8(text, "\uFFFD")
+	if len(text) <= maxResearchFailureBytes {
+		return text
+	}
+	cut := maxResearchFailureBytes
+	for !utf8.RuneStart(text[cut]) {
+		cut--
+	}
+	return text[:cut]
 }
 
 type allowedOrigins map[string]struct{}
@@ -616,7 +716,7 @@ func secureResearchTransport() http.RoundTripper {
 		}
 		for _, candidate := range addresses {
 			if !publicResearchIP(candidate.IP) {
-				return nil, fmt.Errorf("research host %q resolved to a non-public address", host)
+				return nil, fmt.Errorf("%w: research host %q resolved to a non-public address", ErrResearchURLRefused, host)
 			}
 		}
 		if len(addresses) == 0 {

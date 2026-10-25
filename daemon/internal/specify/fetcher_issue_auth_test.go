@@ -417,6 +417,39 @@ func TestFetcherMintFailureLeavesPublicIssuesReadable(t *testing.T) {
 	}
 }
 
+// TestFetcherRecordsWhyAnInScopeFetchFailed covers the specifier's path for
+// a private issue the token can't read: the failure is stored as research
+// naming the credential cause, while Fetch still fails on the same miss.
+func TestFetcherRecordsWhyAnInScopeFetchFailed(t *testing.T) {
+	t.Parallel()
+	fetcher, transport, blobs := newIssueFetcher(t, validIssueTokens())
+	const missURL = "https://api.github.com/repos/freeside-ai/private-repo/issues/404"
+	got, err := fetcher.FetchOrRecordFailure(t.Context(), "inv-recorded-miss", 1,
+		specify.FetchRequest{URL: missURL, Purpose: "read the source issue"}, issueScope, issueAllowlist, 1024)
+	if err != nil {
+		t.Fatal(err)
+	}
+	envelope := storedEnvelope(t, blobs, got)
+	evidence, err := specify.DecodeResearchEvidence(envelope)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if evidence.Source.Status != http.StatusNotFound || evidence.Body != "" ||
+		evidence.Source.FinalURL != "https://api.github.com/repositories/4242/issues/404" ||
+		!strings.Contains(evidence.Source.Failure, "HTTP 404 with the managed repository's read-only installation token") {
+		t.Fatalf("recorded failure = %+v", evidence)
+	}
+	if strings.Contains(string(envelope), issueTokenNeedle) || strings.Contains(string(envelope), "Not Found") {
+		t.Fatal("failure envelope carries the token or the server's error body")
+	}
+	if _, err := fetchIssue(t, fetcher, "inv-failed-miss", missURL, issueScope); !errors.Is(err, specify.ErrResearchFetchFailed) {
+		t.Fatalf("Fetch on the same miss = %v, want ErrResearchFetchFailed", err)
+	}
+	if seen := transport.requests(); len(seen) != 2 {
+		t.Fatalf("transport saw %+v", redactSeen(seen))
+	}
+}
+
 // TestFetcherKeepsTheTokenOutOfStoredResearch checks the stored envelope and
 // every returned error for the minted value.
 func TestFetcherKeepsTheTokenOutOfStoredResearch(t *testing.T) {
@@ -441,6 +474,14 @@ func TestFetcherKeepsTheTokenOutOfStoredResearch(t *testing.T) {
 		}
 		if strings.Contains(err.Error(), issueTokenNeedle) {
 			t.Fatalf("%s: error carries the token", rawURL)
+		}
+		recorded, err := fetcher.FetchOrRecordFailure(t.Context(), domain.InvocationID("inv-leak-recorded-"+string(rune('a'+index))), 1,
+			specify.FetchRequest{URL: rawURL, Purpose: "read the source issue"}, issueScope, issueAllowlist, 1024)
+		if err != nil {
+			t.Fatalf("%s: recorded fetch failed: %v", rawURL, err)
+		}
+		if strings.Contains(string(storedEnvelope(t, blobs, recorded)), issueTokenNeedle) {
+			t.Fatalf("%s: stored failure envelope carries the token", rawURL)
 		}
 	}
 }
