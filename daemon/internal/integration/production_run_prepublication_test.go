@@ -12,6 +12,7 @@ import (
 // A session interrupted after admission and before publication resumes from a
 // pre-publication checkpoint, and the same run reports ready once it publishes.
 func TestRealRunPrePublicationCheckpoint(t *testing.T) {
+	t.Parallel()
 	p := newProductionPublicationHarness(t, "")
 	p.startAndRecordExport(t)
 	if err := p.store.Read(p.ctx, func(tx *store.ReadTx) error {
@@ -40,6 +41,7 @@ func TestRealRunPrePublicationCheckpoint(t *testing.T) {
 // publication, which records no ready item, so only the committed publication
 // intent refuses it.
 func TestRealRunPrePublicationCheckpointRejectsPublishedRun(t *testing.T) {
+	t.Parallel()
 	for _, damage := range []struct {
 		name    string
 		queries []string

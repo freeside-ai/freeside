@@ -6,7 +6,6 @@ import (
 	"testing"
 
 	"github.com/freeside-ai/freeside/daemon/internal/domain"
-	"github.com/freeside-ai/freeside/daemon/migrations"
 )
 
 // TestGetAgentClaimsRejectsTamperedRow: a stored agent_claims body that bypassed
@@ -19,10 +18,7 @@ import (
 func TestGetAgentClaimsRejectsTamperedRow(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
-	db := openRaw(t)
-	if err := migrate(ctx, db, migrations.FS); err != nil {
-		t.Fatalf("migrate: %v", err)
-	}
+	db := openRawTemplate(t)
 	if err := seedEpoch(ctx, db); err != nil {
 		t.Fatalf("seedEpoch: %v", err)
 	}

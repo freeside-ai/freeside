@@ -21,6 +21,7 @@ import (
 )
 
 func TestOriginalPublicationReevaluationEscalatesWithoutProducer(t *testing.T) {
+	t.Parallel()
 	p := newProductionPublicationHarnessWithBoundIssue(t, "", 79)
 	if err := p.store.Read(p.ctx, func(tx *store.ReadTx) error {
 		policy, err := tx.GetResolvedPolicy(p.ctx, p.runID)

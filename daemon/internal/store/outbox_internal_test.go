@@ -4,17 +4,12 @@ import (
 	"context"
 	"strings"
 	"testing"
-
-	"github.com/freeside-ai/freeside/daemon/migrations"
 )
 
 func TestGetOutboxRejectsUnknownStatus(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
-	db := openRaw(t)
-	if err := migrate(ctx, db, migrations.FS); err != nil {
-		t.Fatalf("migrate: %v", err)
-	}
+	db := openRawTemplate(t)
 	s := &Store{db: db}
 	if err := s.WriteInternal(ctx, func(tx *InternalTx) error {
 		_, _, err := tx.EnqueueOutbox(ctx, "intent-1", "publish", []byte(`{}`))
@@ -50,10 +45,7 @@ func TestGetOutboxRejectsUnknownStatus(t *testing.T) {
 func TestPromoteOutboxRefusesQuarantinedRow(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
-	db := openRaw(t)
-	if err := migrate(ctx, db, migrations.FS); err != nil {
-		t.Fatalf("migrate: %v", err)
-	}
+	db := openRawTemplate(t)
 	s := &Store{db: db}
 	placeholder := []byte(`{"reserved":true}`)
 	if err := s.WriteInternal(ctx, func(tx *InternalTx) error {
@@ -90,10 +82,7 @@ func TestPromoteOutboxRefusesQuarantinedRow(t *testing.T) {
 func TestListQuarantinedOutbox(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
-	db := openRaw(t)
-	if err := migrate(ctx, db, migrations.FS); err != nil {
-		t.Fatalf("migrate: %v", err)
-	}
+	db := openRawTemplate(t)
 	s := &Store{db: db}
 	if err := s.WriteInternal(ctx, func(tx *InternalTx) error {
 		if _, _, err := tx.EnqueueOutbox(ctx, "intent-1", "reservation", []byte(`{}`)); err != nil {

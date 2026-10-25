@@ -13,6 +13,7 @@ import (
 )
 
 func TestOpenStoreWithTopicKey(t *testing.T) {
+	t.Parallel()
 	t.Run("fresh store mints key before opening", func(t *testing.T) {
 		dbPath := filepath.Join(t.TempDir(), "freeside.db")
 		st, key, err := openStoreWithTopicKey(t.Context(), dbPath, store.Options{})

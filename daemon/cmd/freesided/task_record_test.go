@@ -174,6 +174,7 @@ func TestTaskRecordStampsMatchTimeline(t *testing.T) {
 // one `freesided follow` reads, for every fixture run: the same outcome, or
 // the same refusal.
 func TestTaskRecordConclusionMatchesFollow(t *testing.T) {
+	t.Parallel()
 	st, _ := openSeededStore(t)
 	ctx := t.Context()
 	var tasks []store.Snapshotted[domain.Task]
@@ -294,6 +295,7 @@ func TestTaskRecordReportsUnreadableRun(t *testing.T) {
 // this task's runs too, and each run still reads its hold, invocations, and
 // conclusion.
 func TestTaskRecordKeepsRunFactsPastAFailedRead(t *testing.T) {
+	t.Parallel()
 	st, dbPath := openSeededStore(t)
 	id := taskOfRun(t, st, fixtureActiveRunID)
 	before := readRecord(t, st, id)
@@ -394,6 +396,7 @@ func TestTaskRecordReportsUnreadableItems(t *testing.T) {
 // no longer route it here, so it leaves the items, and the count of refused
 // rows the record did not attribute says the store refused something.
 func TestTaskRecordCountsUnattributedRefusedRows(t *testing.T) {
+	t.Parallel()
 	st, dbPath := openSeededStore(t)
 	id := taskOfRun(t, st, fixtureActiveRunID)
 	const forged = "execution-failure-" + fixtureActiveRunID

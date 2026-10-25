@@ -13,6 +13,7 @@ import (
 	"github.com/freeside-ai/freeside/daemon/internal/domain"
 	"github.com/freeside-ai/freeside/daemon/internal/publish"
 	"github.com/freeside-ai/freeside/daemon/internal/store"
+	"github.com/freeside-ai/freeside/daemon/internal/store/storetest"
 )
 
 // fakeResolver stands in for the Wave 2 engine: it hands the drain back
@@ -203,19 +204,7 @@ func TestDrainExecutionIntentReauthenticatesRecordedExport(t *testing.T) {
 	t.Parallel()
 	ctx := t.Context()
 	storePath := filepath.Join(t.TempDir(), "store.db")
-	s, err := store.Open(
-		ctx,
-		storePath,
-		executionStoreOptions(),
-	)
-	if err != nil {
-		t.Fatalf("store.Open: %v", err)
-	}
-	t.Cleanup(func() {
-		if err := s.Close(); err != nil {
-			t.Errorf("store.Close: %v", err)
-		}
-	})
+	s := storetest.Open(t, storePath, executionStoreOptions())
 	seedDecisionRecords(t, s)
 	head := testHeadSHA
 	reservation := seedExecutionPublicationChain(

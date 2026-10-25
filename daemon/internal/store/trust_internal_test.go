@@ -267,10 +267,7 @@ func TestWorkflowAuditEvidenceMigrationPreservesLegacyLedger(t *testing.T) {
 func TestTrustRowsTamperedBodyFailsClosed(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
-	db := openRaw(t)
-	if err := migrate(ctx, db, migrations.FS); err != nil {
-		t.Fatalf("migrate: %v", err)
-	}
+	db := openRawTemplate(t)
 	if err := seedEpoch(ctx, db); err != nil {
 		t.Fatalf("seedEpoch: %v", err)
 	}
@@ -385,10 +382,7 @@ const (
 func TestTrustProfilePreRepositoryIDRowFailsClosed(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
-	db := openRaw(t)
-	if err := migrate(ctx, db, migrations.FS); err != nil {
-		t.Fatalf("migrate: %v", err)
-	}
+	db := openRawTemplate(t)
 	if err := seedEpoch(ctx, db); err != nil {
 		t.Fatalf("seedEpoch: %v", err)
 	}
@@ -440,10 +434,7 @@ const (
 func TestTrustProfileStaleEncodingRowFailsClosed(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
-	db := openRaw(t)
-	if err := migrate(ctx, db, migrations.FS); err != nil {
-		t.Fatalf("migrate: %v", err)
-	}
+	db := openRawTemplate(t)
 	if err := seedEpoch(ctx, db); err != nil {
 		t.Fatalf("seedEpoch: %v", err)
 	}
@@ -498,10 +489,7 @@ const (
 func TestTrustProfilePreAllowlistRowReconstructs(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
-	db := openRaw(t)
-	if err := migrate(ctx, db, migrations.FS); err != nil {
-		t.Fatalf("migrate: %v", err)
-	}
+	db := openRawTemplate(t)
 	if err := seedEpoch(ctx, db); err != nil {
 		t.Fatalf("seedEpoch: %v", err)
 	}
@@ -545,10 +533,7 @@ func TestTrustProfilePreAllowlistRowReconstructs(t *testing.T) {
 func TestTrustRowsInconsistentColumnsFailClosed(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
-	db := openRaw(t)
-	if err := migrate(ctx, db, migrations.FS); err != nil {
-		t.Fatalf("migrate: %v", err)
-	}
+	db := openRawTemplate(t)
 	if err := seedEpoch(ctx, db); err != nil {
 		t.Fatalf("seedEpoch: %v", err)
 	}
@@ -618,10 +603,7 @@ func TestTrustRowsInconsistentColumnsFailClosed(t *testing.T) {
 func TestWorkflowAuditEvidenceRetentionAndTamperGate(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
-	db := openRaw(t)
-	if err := migrate(ctx, db, migrations.FS); err != nil {
-		t.Fatalf("migrate: %v", err)
-	}
+	db := openRawTemplate(t)
 	if err := seedEpoch(ctx, db); err != nil {
 		t.Fatalf("seedEpoch: %v", err)
 	}
@@ -760,10 +742,7 @@ func TestWorkflowAuditEvidenceRetentionAndTamperGate(t *testing.T) {
 func TestWorkflowAuditEvidencePruningRejectsUnauthenticatedBindings(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
-	db := openRaw(t)
-	if err := migrate(ctx, db, migrations.FS); err != nil {
-		t.Fatalf("migrate: %v", err)
-	}
+	db := openRawTemplate(t)
 	if err := seedEpoch(ctx, db); err != nil {
 		t.Fatalf("seedEpoch: %v", err)
 	}
@@ -951,10 +930,7 @@ func TestWorkflowAuditEvidencePruningRejectsUnauthenticatedBindings(t *testing.T
 func TestLatestTrustProfileSurvivesStaleHistory(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
-	db := openRaw(t)
-	if err := migrate(ctx, db, migrations.FS); err != nil {
-		t.Fatalf("migrate: %v", err)
-	}
+	db := openRawTemplate(t)
 	if err := seedEpoch(ctx, db); err != nil {
 		t.Fatalf("seedEpoch: %v", err)
 	}

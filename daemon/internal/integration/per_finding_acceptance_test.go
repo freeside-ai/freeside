@@ -18,6 +18,7 @@ import (
 )
 
 func TestExternalReviewPerFindingAcceptance(t *testing.T) {
+	t.Parallel()
 	p := newProductionPublicationHarness(t, "")
 	driver := p.configureAdjudicator(t)
 	_, findings := p.startAdjudicatedExternalReview(t, "[P2] unnecessary rename", "fix the handle", "check the close")

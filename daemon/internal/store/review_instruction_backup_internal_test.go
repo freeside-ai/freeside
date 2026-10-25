@@ -12,16 +12,12 @@ import (
 	"github.com/freeside-ai/freeside/daemon/internal/domain"
 	"github.com/freeside-ai/freeside/daemon/internal/exec"
 	"github.com/freeside-ai/freeside/daemon/internal/exec/fake"
-	"github.com/freeside-ai/freeside/daemon/migrations"
 )
 
 func TestCheckpointArtifactDigestsIncludesCodexReviewInstructionClosure(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
-	db := openRaw(t)
-	if err := migrate(ctx, db, migrations.FS); err != nil {
-		t.Fatal(err)
-	}
+	db := openRawTemplate(t)
 	host := domain.Digest("sha256:" + strings.Repeat("a", 64))
 	source := domain.Digest("sha256:" + strings.Repeat("b", 64))
 	result := domain.Digest("sha256:" + strings.Repeat("c", 64))
@@ -78,10 +74,7 @@ func TestCheckpointArtifactDigestsRejectsUnknownCurrentReviewRequestFields(t *te
 				t.Fatal(err)
 			}
 			ctx := context.Background()
-			db := openRaw(t)
-			if err := migrate(ctx, db, migrations.FS); err != nil {
-				t.Fatal(err)
-			}
+			db := openRawTemplate(t)
 			if _, err := db.ExecContext(ctx, `INSERT INTO codex_review_requests
 				(invocation_id, body_digest, body) VALUES (?, ?, ?)`,
 				"review-unknown", codexReviewBodyDigest(body), string(body)); err != nil {
@@ -134,10 +127,7 @@ func TestCheckpointArtifactDigestsReadsRequestsFromBeforeReviewAdmission(t *test
 				t.Fatal(err)
 			}
 			ctx := context.Background()
-			db := openRaw(t)
-			if err := migrate(ctx, db, migrations.FS); err != nil {
-				t.Fatal(err)
-			}
+			db := openRawTemplate(t)
 			if _, err := db.ExecContext(ctx, `INSERT INTO codex_review_requests
 				(invocation_id, body_digest, body) VALUES (?, ?, ?)`,
 				"review-retained", codexReviewBodyDigest(body), string(body)); err != nil {
@@ -191,10 +181,7 @@ func TestCheckpointArtifactDigestsRejectsAmbiguousInstructionField(t *testing.T)
 	} {
 		t.Run(body, func(t *testing.T) {
 			ctx := context.Background()
-			db := openRaw(t)
-			if err := migrate(ctx, db, migrations.FS); err != nil {
-				t.Fatal(err)
-			}
+			db := openRawTemplate(t)
 			if _, err := db.ExecContext(ctx, `INSERT INTO codex_review_requests
 				(invocation_id, body_digest, body) VALUES (?, ?, ?)`,
 				"review-ambiguous", codexReviewBodyDigest([]byte(body)), body); err != nil {

@@ -61,6 +61,7 @@ func newTeardownDaemon(t *testing.T, closer sessionCloser) *daemon {
 // budget, and returning alone could be a timeout; gating completion on the
 // release proves the wait tracks the lease.
 func TestCloseWaitsOutTheCredentialBearingTeardown(t *testing.T) {
+	t.Parallel()
 	closer := newSlowCloser()
 	d := newTeardownDaemon(t, closer)
 

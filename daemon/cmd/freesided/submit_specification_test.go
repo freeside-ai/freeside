@@ -32,6 +32,7 @@ func (submitSpecificationBackend) Capabilities() exec.CapabilitySet {
 }
 
 func TestSubmitCommandSpecifiesBeforeCreatingProductionRun(t *testing.T) {
+	t.Parallel()
 	tests := []struct {
 		name                  string
 		acceptedBody          string
@@ -111,6 +112,7 @@ func testSubmitCommandSpecificationDigest(
 		PolicyPath: policyPath, WorkUnitPath: declaredWorkUnit(t), PublicationPath: publicationPath,
 		ProjectID: "project-submit-specification", SubmissionID: "implementation-from-submit",
 	}
+	seedTemplateStore(t, cfg.DBPath)
 	submitted, err := runSubmitCommand(t.Context(), cfg)
 	if err != nil {
 		t.Fatal(err)

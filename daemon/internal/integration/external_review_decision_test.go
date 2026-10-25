@@ -204,6 +204,7 @@ func (p *productionPublicationHarness) assertExternalReplyQueued(t *testing.T, f
 }
 
 func TestExternalReviewDecisionFreezesFindingsAndRejectsForeignChoices(t *testing.T) {
+	t.Parallel()
 	p := newProductionPublicationHarness(t, "")
 	_, findings := p.startAdjudicatedExternalReview(t, "first finding")
 	p.scriptCleanReview(2, p.baseSHA, p.replay.HeadSHA)
@@ -258,6 +259,7 @@ func TestExternalReviewDecisionFreezesFindingsAndRejectsForeignChoices(t *testin
 }
 
 func TestExternalReviewDecisionRefusesFixOutsideScope(t *testing.T) {
+	t.Parallel()
 	for _, location := range []*domain.FindingLocation{nil, {Path: "outside.go", StartLine: 1, EndLine: 1}} {
 		t.Run(fmt.Sprint(location), func(t *testing.T) {
 			p := newProductionPublicationHarness(t, "")

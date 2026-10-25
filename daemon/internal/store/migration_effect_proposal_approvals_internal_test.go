@@ -73,10 +73,7 @@ func TestEffectProposalApprovalsMigrationPreservesRows(t *testing.T) {
 // insert.
 func TestEffectProposalItemsCheckEnforcesAllOrNoneMerge(t *testing.T) {
 	ctx := context.Background()
-	db := openRaw(t)
-	if err := migrate(ctx, db, migrations.FS); err != nil {
-		t.Fatal(err)
-	}
+	db := openRawTemplate(t)
 	conn, err := db.Conn(ctx)
 	if err != nil {
 		t.Fatal(err)

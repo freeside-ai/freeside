@@ -143,6 +143,7 @@ func TestReadinessGolden(t *testing.T) {
 }
 
 func TestRunMintsADistinctRunIDPerStart(t *testing.T) {
+	t.Parallel()
 	dbPath := filepath.Join(t.TempDir(), "freeside.db")
 	start := func() string {
 		t.Helper()
@@ -183,6 +184,7 @@ func TestRunRejectsAMissingEnvironment(t *testing.T) {
 }
 
 func TestReadinessFileIsPrivateMintedAfterStartupAndUsable(t *testing.T) {
+	t.Parallel()
 	root := t.TempDir()
 	stateDir := filepath.Join(root, "state")
 	if err := os.Mkdir(stateDir, 0o700); err != nil {
@@ -272,6 +274,7 @@ func TestReadinessFileIsPrivateMintedAfterStartupAndUsable(t *testing.T) {
 }
 
 func TestDurableStopKeepsHTTPAndSurvivesReopen(t *testing.T) {
+	t.Parallel()
 	root := t.TempDir()
 	dbPath := filepath.Join(root, "freeside.db")
 	lifetime, cancelLifetime := context.WithCancel(context.Background())

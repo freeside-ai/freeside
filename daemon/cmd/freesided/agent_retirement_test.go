@@ -237,6 +237,7 @@ func legacyAdmittedTask(t *testing.T, identityID domain.AuthIdentityID) (*store.
 		DBPath: filepath.Join(root, "freeside.db"), TaskPath: work,
 		PolicyPath: policyFile, WorkUnitPath: declaredWorkUnit(t), PublicationPath: publicationFile, ProjectID: "agent-cutover",
 	}
+	seedTemplateStore(t, cfg.DBPath)
 	submitted, err := runSubmitCommand(ctx, cfg)
 	if err != nil {
 		t.Fatal(err)

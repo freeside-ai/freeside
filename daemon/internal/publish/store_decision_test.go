@@ -14,6 +14,7 @@ import (
 	"github.com/freeside-ai/freeside/daemon/internal/exec/fake"
 	"github.com/freeside-ai/freeside/daemon/internal/publish"
 	"github.com/freeside-ai/freeside/daemon/internal/store"
+	"github.com/freeside-ai/freeside/daemon/internal/store/storetest"
 )
 
 func TestPublisherRejectsNonAtomicStoreAdapterWiring(t *testing.T) {
@@ -169,20 +170,7 @@ func newExecutionBoundStoreAt(
 	t *testing.T, path string, opts executionChainOptions,
 ) *store.Store {
 	t.Helper()
-	s, err := store.Open(
-		t.Context(),
-		path,
-		executionStoreOptions(),
-	)
-	if err != nil {
-		t.Fatalf("store.Open: %v", err)
-	}
-	t.Cleanup(func() {
-		if err := s.Close(); err != nil {
-			t.Errorf("store.Close: %v", err)
-		}
-	})
-	return s
+	return storetest.Open(t, path, executionStoreOptions())
 }
 
 func seedExecutionPublicationChain(
@@ -1046,14 +1034,7 @@ func testPublishExecutionRejectsModernIntentMutation(t *testing.T, mutation, wan
 func TestPublishExecutionAuthenticatesFrozenAdmissionAndExport(t *testing.T) {
 	t.Parallel()
 	storePath := filepath.Join(t.TempDir(), "store.db")
-	initial, err := store.Open(
-		t.Context(),
-		storePath,
-		executionStoreOptions(),
-	)
-	if err != nil {
-		t.Fatalf("open initial store: %v", err)
-	}
+	initial := storetest.Open(t, storePath, executionStoreOptions())
 	seedDecisionRecords(t, initial)
 	head := testHeadSHA
 	reservation := seedExecutionPublicationChain(
@@ -1065,19 +1046,7 @@ func TestPublishExecutionAuthenticatesFrozenAdmissionAndExport(t *testing.T) {
 
 	currentOptions := executionStoreOptions()
 	currentOptions.AdmissionFloors[domain.ModeUnattended] = domain.NewCapabilitySnapshot(domain.CapWorkspaceSnapshot)
-	current, err := store.Open(
-		t.Context(),
-		storePath,
-		currentOptions,
-	)
-	if err != nil {
-		t.Fatalf("reopen store under raised floor: %v", err)
-	}
-	t.Cleanup(func() {
-		if err := current.Close(); err != nil {
-			t.Errorf("close current store: %v", err)
-		}
-	})
+	current := storetest.Open(t, storePath, currentOptions)
 	if err := current.Read(t.Context(), func(tx *store.ReadTx) error {
 		_, err := tx.GetExecutionAdmission(t.Context(), testProducingInvocationID)
 		return err

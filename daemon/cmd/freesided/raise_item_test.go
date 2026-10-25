@@ -136,6 +136,7 @@ func TestRaiseItemCommandLine(t *testing.T) {
 // Every tier is named here through AllEnvironments, so a new tier fails this
 // test until someone decides whether it may raise items.
 func TestRaiseItemRefusedOutsideEphemeral(t *testing.T) {
+	t.Parallel()
 	for _, env := range AllEnvironments {
 		t.Run(string(env), func(t *testing.T) {
 			// The supervised-path guards of dev and prod run in main, not

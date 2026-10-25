@@ -51,6 +51,7 @@ func newAuthAdoptFixture(t *testing.T) *authAdoptFixture {
 		promptDir: filepath.Join(root, "prompts"),
 	}
 	f.storePath = filepath.Join(f.storeRoot, "auth.json")
+	seedTemplateStore(t, f.dbPath)
 	for _, dir := range []string{f.storeRoot, f.promptDir} {
 		if err := os.Mkdir(dir, 0o700); err != nil {
 			t.Fatal(err)
@@ -861,6 +862,7 @@ func TestAuthAdoptRefusesACostOwnerMismatchBeforeRecording(t *testing.T) {
 // enrollment enables nothing, including the one refused inside the
 // first-enrollment transaction.
 func TestAuthAdoptReportsAnUnadoptableReviewIdentity(t *testing.T) {
+	t.Parallel()
 	for name, arrange := range map[string]func(*testing.T, *authAdoptFixture){
 		"store names no account": func(t *testing.T, f *authAdoptFixture) { f.writeCodexStore(t, "") },
 		"account bound to another identity": func(t *testing.T, f *authAdoptFixture) {
@@ -1043,6 +1045,7 @@ func TestDaemonLoadsTheAdoptedTreeAtItsCommit(t *testing.T) {
 // the pre-#867 harness seed step wrote (disabled, with no account binding and
 // no cost owner), which adoption enables.
 func TestAdoptedPatchResolvesAndAdmitsEveryRole(t *testing.T) {
+	t.Parallel()
 	for name, seedDisabled := range map[string]bool{
 		"identities stored enabled":                  false,
 		"identities the old seed step left disabled": true,

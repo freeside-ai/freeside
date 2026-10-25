@@ -9,6 +9,7 @@ import (
 
 	"github.com/freeside-ai/freeside/daemon/internal/contentaddr"
 	"github.com/freeside-ai/freeside/daemon/internal/store"
+	"github.com/freeside-ai/freeside/daemon/internal/store/storetest"
 	"github.com/freeside-ai/freeside/daemon/internal/ward"
 	"github.com/freeside-ai/freeside/daemon/internal/wardstore"
 )
@@ -17,10 +18,7 @@ func TestFailureEvidenceDispositionSurvivesStoreReopen(t *testing.T) {
 	for _, unavailable := range []bool{false, true} {
 		ctx := context.Background()
 		path := filepath.Join(t.TempDir(), "freeside.db")
-		st, err := store.Open(ctx, path, store.Options{})
-		if err != nil {
-			t.Fatal(err)
-		}
+		st := storetest.Open(t, path, store.Options{})
 		adapters, err := wardstore.New(st)
 		if err != nil {
 			t.Fatal(err)
@@ -50,10 +48,7 @@ func TestFailureEvidenceDispositionSurvivesStoreReopen(t *testing.T) {
 		if err := st.Close(); err != nil {
 			t.Fatal(err)
 		}
-		st, err = store.Open(ctx, path, store.Options{})
-		if err != nil {
-			t.Fatal(err)
-		}
+		st = storetest.Open(t, path, store.Options{})
 		adapters, err = wardstore.New(st)
 		if err != nil {
 			t.Fatal(err)

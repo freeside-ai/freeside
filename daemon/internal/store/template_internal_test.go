@@ -2,6 +2,7 @@ package store
 
 import (
 	"context"
+	"database/sql"
 	"errors"
 	"os"
 	"path/filepath"
@@ -13,6 +14,31 @@ import (
 var internalTemplate = sync.OnceValues(func() ([]byte, error) {
 	return TemplateDatabase(context.Background())
 })
+
+// openRawTemplate is openRaw on a copy of the migrated template: a raw handle
+// at head without running the migrations, for tests of store behaviour rather
+// than of migration.
+func openRawTemplate(t testing.TB) *sql.DB {
+	t.Helper()
+	path := filepath.Join(t.TempDir(), "store.db")
+	data, err := internalTemplate()
+	if err != nil {
+		t.Fatalf("build store template: %v", err)
+	}
+	if err := os.WriteFile(path, data, 0o600); err != nil {
+		t.Fatalf("copy store template: %v", err)
+	}
+	db, err := openDB(path, Options{})
+	if err != nil {
+		t.Fatalf("openDB: %v", err)
+	}
+	t.Cleanup(func() {
+		if err := db.Close(); err != nil {
+			t.Errorf("close: %v", err)
+		}
+	})
+	return db
+}
 
 func openTemplateStore(t testing.TB, opts Options) *Store {
 	t.Helper()

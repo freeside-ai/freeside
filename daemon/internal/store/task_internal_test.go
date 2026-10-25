@@ -163,12 +163,9 @@ func TestBackfillTaskLifecycleFactsClassifiesLegacyTasks(t *testing.T) {
 // than releasing a WIP slot on a corrupt log.
 func TestTaskReconstructionRegatesLifecycleFacts(t *testing.T) {
 	ctx := t.Context()
-	db := openRaw(t)
-	// Migrate to head so task_lifecycle_facts exists and facts can be seeded
-	// directly; the backfill is a no-op on the empty database.
-	if err := migrate(ctx, db, migrations.FS); err != nil {
-		t.Fatal(err)
-	}
+	// A head-schema copy, so task_lifecycle_facts exists and facts can be
+	// seeded directly.
+	db := openRawTemplate(t)
 	if err := seedEpoch(ctx, db); err != nil {
 		t.Fatal(err)
 	}

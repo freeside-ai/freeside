@@ -7,8 +7,6 @@ import (
 	"strings"
 	"testing"
 	"time"
-
-	"github.com/freeside-ai/freeside/daemon/migrations"
 )
 
 // TestInstallationMintHoldColumns pins the hold table's shape: no token and
@@ -16,10 +14,7 @@ import (
 func TestInstallationMintHoldColumns(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
-	db := openRaw(t)
-	if err := migrate(ctx, db, migrations.FS); err != nil {
-		t.Fatalf("migrate: %v", err)
-	}
+	db := openRawTemplate(t)
 	rows, err := db.QueryContext(ctx,
 		`SELECT name FROM pragma_table_info('publish_installation_mint_holds') ORDER BY cid`)
 	if err != nil {

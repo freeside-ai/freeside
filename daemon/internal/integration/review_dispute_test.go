@@ -14,6 +14,7 @@ import (
 // surface after the review record and before that ending, proving #1016's
 // external admission, human artifact, continuation, and producer gates together.
 func TestExternalReviewDisputeHumanDecisionSurvivesRestart(t *testing.T) {
+	t.Parallel()
 	for _, route := range []domain.AdjudicationRoute{domain.RouteDecline, domain.RouteRemediate} {
 		t.Run(string(route), func(t *testing.T) {
 			p := newProductionPublicationHarness(t, "")

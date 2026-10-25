@@ -84,6 +84,7 @@ func TestSpecificationApprovalStopNeedsConfirmedTaskAcknowledgement(t *testing.T
 }
 
 func TestConfirmedCancellationPreservesPublishedPRAndRunHistory(t *testing.T) {
+	t.Parallel()
 	p := newProductionPublicationHarness(t, "")
 	p.startAndRecordExport(t)
 	if _, err := p.reconcileLanes(); err != nil {

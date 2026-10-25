@@ -26,6 +26,7 @@ import (
 )
 
 func TestControlLegacySubmissionNearInputLimits(t *testing.T) {
+	t.Parallel()
 	root := t.TempDir()
 	dbPath := filepath.Join(root, "freeside.db")
 	h, err := run(t.Context(), nil, config{Environment: environmentEphemeral, DBPath: dbPath, ListenAddr: "127.0.0.1:0"})
@@ -749,6 +750,7 @@ func TestControlDoctorUsesDaemonBlobStoreThroughSymlink(t *testing.T) {
 // prod runs no driver (#2080): every daemon answers it on its control socket,
 // and the rig host's probe reads it through the advertisement.
 func TestControlServesExecutionMode(t *testing.T) {
+	t.Parallel()
 	for _, tc := range []struct {
 		name string
 		cfg  config
@@ -759,6 +761,7 @@ func TestControlServesExecutionMode(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			dbPath := filepath.Join(t.TempDir(), "freeside.db")
+			seedTemplateStore(t, dbPath)
 			cfg := tc.cfg
 			cfg.Environment, cfg.DBPath, cfg.ListenAddr = environmentEphemeral, dbPath, "127.0.0.1:0"
 			h, err := run(t.Context(), nil, cfg)

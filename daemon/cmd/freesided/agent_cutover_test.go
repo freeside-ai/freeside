@@ -49,6 +49,7 @@ func flagEraReviewConfig() claudeDriverConfig {
 // and effort the reviewer and shadow reviewer lines resolve produce the
 // digests the removed flags produced, so no operator approval moves.
 func TestLineupResolvedReviewDigestsEqualTheFlagEraDigests(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	f := newAuthAdoptFixture(t)
 	_, patch, err := f.run(t, f.shadowArgs())
@@ -140,6 +141,7 @@ func TestPreflightResolvesTheAdoptedLineup(t *testing.T) {
 // shadow reviewer's gets max, which Claude Code has. Preflight resolves the
 // same pair, so it approves the digest the daemon will run.
 func TestReviewLaunchSendsTheHarnessNativeEffort(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	f := newAuthAdoptFixture(t)
 	_, patch, err := f.run(t, f.shadowArgs("-review-effort", "max", "-shadow-review-effort", "max"))
@@ -244,6 +246,7 @@ func treeAdoptedBeforeReviewAgentsNamedALaunch(t *testing.T, tree agenttree.Tree
 // is refused by name with what its agent lacks, at startup, in preflight,
 // and before a review, instead of launching on the harness's own defaults.
 func TestReviewRoleNeedsAModelAndAnEffort(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	now := time.Now().UTC()
 	f := newAuthAdoptFixture(t)
@@ -289,6 +292,7 @@ func TestReviewRoleNeedsAModelAndAnEffort(t *testing.T) {
 // read as another option. Adoption refuses both as flags; a committed offer
 // is held to the same rule.
 func TestReviewRoleRefusesAModelTheLaunchCannotPass(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	now := time.Now().UTC()
 	f := newAuthAdoptFixture(t)
@@ -346,6 +350,7 @@ func TestReviewRoleRefusesAModelTheLaunchCannotPass(t *testing.T) {
 // not_after refuses, and a source composed under an identity refuses its
 // next review once the identity is disabled.
 func TestReviewSelectionFailsClosed(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	now := time.Now().UTC()
 
@@ -504,6 +509,7 @@ func setReviewedRunLine(
 // line names another agent is refused, and so is one whose line does not hold
 // against the command that set it. The shadow reviewer takes no task line.
 func TestReviewAdmissionHoldsTheReviewerTaskLine(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	f := newAuthAdoptFixture(t)
 	_, patch, err := f.run(t, f.shadowArgs())
@@ -682,6 +688,7 @@ func TestReviewAdmissionHoldsTheReviewerTaskLine(t *testing.T) {
 // rests on. Each refusal names the role, and none returns a snapshot the
 // engine could store: a refused invocation is never requested.
 func TestReviewInvocationIsRefusedBeforeItIsAdmitted(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	now := time.Now().UTC()
 	other := map[domain.RoleName]domain.RoleName{
@@ -1085,6 +1092,7 @@ func testReviewRoles(egress map[domain.RoleName][]string) map[domain.RoleName]en
 // even on the right harness. The restart that recomposes the source for the
 // new line admits it.
 func TestReviewAdmissionRefusesALineOnAnotherHarness(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	f := newAuthAdoptFixture(t)
 	_, codexPatch, err := f.run(t, f.args())

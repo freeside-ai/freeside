@@ -137,6 +137,7 @@ func TestClassifySystemHealthItem(t *testing.T) {
 // not listed. The daemon raises notices of its own at start, so items are
 // found by id.
 func TestInspectHealthServedEqualsDirect(t *testing.T) {
+	t.Parallel()
 	h, dbPath := startSeededDaemon(t)
 	ctx := t.Context()
 	putSystemHealthItem(t, h.store, "system-health-advisory", domain.HealthPostureAdvisory, nil)
@@ -183,6 +184,7 @@ func TestInspectHealthServedEqualsDirect(t *testing.T) {
 // refused, listed by id beside the health items it does not hide, and the
 // stderr note says what the read needs. With the digest the read is clean.
 func TestInspectHealthReadsStoppedRootWithRecipeEvidence(t *testing.T) {
+	t.Parallel()
 	recipe := domain.Digest("sha256:" + strings.Repeat("e", 64))
 	dbPath := filepath.Join(t.TempDir(), "freeside.db")
 	h := startDaemon(t, config{

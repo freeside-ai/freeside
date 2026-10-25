@@ -12,6 +12,7 @@ import (
 )
 
 func TestReattemptTaskAdmissionIsAtomicWithAllocation(t *testing.T) {
+	t.Parallel()
 	for _, tc := range []struct {
 		name, cap               string
 		abandon, occupy, cancel bool

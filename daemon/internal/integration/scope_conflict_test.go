@@ -256,6 +256,7 @@ func TestProductionScopeConflictDecisionSurvivesRestart(t *testing.T) {
 }
 
 func TestProductionScopeConflictCannotDisappearDuringRemediation(t *testing.T) {
+	t.Parallel()
 	p, _ := prepareRemediationPublicationLifecycleWithScope(t, true, true)
 	verified := p.room.runs
 	result, err := p.reconcileLanes()

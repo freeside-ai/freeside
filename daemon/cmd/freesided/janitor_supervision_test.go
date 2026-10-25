@@ -68,6 +68,7 @@ func (p *supervisionJanitorPorts) InstallationMintHold(installationID int64) (pu
 }
 
 func TestScheduledJanitorCredentialFailures(t *testing.T) {
+	t.Parallel()
 	for _, failure := range []string{"mint", "revoke", "missing-token", "rejected-expiry"} {
 		t.Run(failure, func(t *testing.T) {
 			now := time.Date(2026, 10, 13, 12, 0, 0, 0, time.UTC)

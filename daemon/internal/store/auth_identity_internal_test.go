@@ -84,10 +84,7 @@ func TestAuthIdentityMigrationAppliesFromHead(t *testing.T) {
 func TestLeaseRowRequiresItsIdentity(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
-	db := openRaw(t)
-	if err := migrate(ctx, db, migrations.FS); err != nil {
-		t.Fatalf("migrate: %v", err)
-	}
+	db := openRawTemplate(t)
 	_, err := db.ExecContext(ctx,
 		`INSERT INTO auth_store_mutation_leases
 		   (auth_identity_id, holder, fence, acquired_at, expires_at, expires_at_unix_nano, body)

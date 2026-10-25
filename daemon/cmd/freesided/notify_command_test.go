@@ -27,6 +27,7 @@ func startNotifyTestFixture(t *testing.T, ntfyURL string) notifyTestFixture {
 	t.Helper()
 	root := t.TempDir()
 	f := notifyTestFixture{stateDir: filepath.Join(root, "state"), logs: &lockedBuffer{}}
+	seedTemplateStore(t, filepath.Join(root, "freeside.db"))
 	h, err := run(t.Context(), nil, config{
 		Environment: environmentEphemeral,
 		DBPath:      filepath.Join(root, "freeside.db"), StateDir: f.stateDir,
@@ -163,6 +164,7 @@ func TestNotifyTestOneDevice(t *testing.T) {
 // the failure class and a failing command. Neither the output nor the daemon
 // log names the topic or the publish URL.
 func TestNotifyTestReportsAFailureWithoutTheTopic(t *testing.T) {
+	t.Parallel()
 	t.Run("rejected", func(t *testing.T) {
 		sink := newNtfySink(t, http.StatusForbidden)
 		f := startNotifyTestFixture(t, sink.URL)

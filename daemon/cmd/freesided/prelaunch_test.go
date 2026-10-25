@@ -20,6 +20,7 @@ import (
 	"github.com/freeside-ai/freeside/daemon/internal/golden"
 	"github.com/freeside-ai/freeside/daemon/internal/projectimage"
 	"github.com/freeside-ai/freeside/daemon/internal/store"
+	"github.com/freeside-ai/freeside/daemon/internal/store/storetest"
 )
 
 var prelaunchTestNow = time.Date(2026, 10, 24, 15, 0, 0, 0, time.UTC)
@@ -152,10 +153,7 @@ func (f *prelaunchFixture) load(t *testing.T) loadedDeputySettings {
 
 func (f *prelaunchFixture) withStore(t *testing.T, write func(*store.InternalTx) error) {
 	t.Helper()
-	st, err := store.Open(t.Context(), f.paths.DB, store.Options{})
-	if err != nil {
-		t.Fatal(err)
-	}
+	st := storetest.Open(t, f.paths.DB, store.Options{})
 	if err := st.WriteInternal(t.Context(), write); err != nil {
 		t.Fatal(err)
 	}

@@ -11,6 +11,7 @@ import (
 	"github.com/freeside-ai/freeside/daemon/internal/golden"
 	"github.com/freeside-ai/freeside/daemon/internal/publish"
 	"github.com/freeside-ai/freeside/daemon/internal/store"
+	"github.com/freeside-ai/freeside/daemon/internal/store/storetest"
 )
 
 func fixtureOutcome() publish.Outcome {
@@ -140,11 +141,7 @@ func TestOutcomeKeyIsKindNamespacedFullDigest(t *testing.T) {
 func TestLoadOutcomeReconstructsDurableResult(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
-	st, err := store.Open(ctx, filepath.Join(t.TempDir(), "freeside.db"), store.Options{})
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { _ = st.Close() })
+	st := storetest.Open(t, filepath.Join(t.TempDir(), "freeside.db"), store.Options{})
 	recipe := testRecipe
 	id, err := publish.DeriveIdentity(publish.IdentityInput{
 		Repo:            "freeside-ai/evidence-repo",
@@ -222,13 +219,7 @@ func TestLoadOutcomeRejectsForeignCoordinates(t *testing.T) {
 	} {
 		t.Run(name, func(t *testing.T) {
 			ctx := context.Background()
-			st, err := store.Open(
-				ctx, filepath.Join(t.TempDir(), "freeside.db"), store.Options{},
-			)
-			if err != nil {
-				t.Fatal(err)
-			}
-			t.Cleanup(func() { _ = st.Close() })
+			st := storetest.Open(t, filepath.Join(t.TempDir(), "freeside.db"), store.Options{})
 			outcome := fixtureOutcome()
 			mutate(&outcome)
 			payload, err := outcome.Encode()

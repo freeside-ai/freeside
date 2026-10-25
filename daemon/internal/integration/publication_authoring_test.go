@@ -71,6 +71,7 @@ func newAuthoredMetadataHarnessFromBase(
 }
 
 func TestPublicationAuthorOversizedRuntimeInputReasonsSurviveRestart(t *testing.T) {
+	t.Parallel()
 	metadata := productionPublicationMetadata()
 	metadata.Title, metadata.Body = "", ""
 	metadata.Recipe = "freeside.client-publication/v2"
@@ -135,6 +136,7 @@ func TestPublicationAuthorOversizedRuntimeInputReasonsSurviveRestart(t *testing.
 }
 
 func TestPublicationAuthorStoresTextAndPolicyApprovedClose(t *testing.T) {
+	t.Parallel()
 	metadata := productionPublicationMetadata()
 	metadata.Title, metadata.Body = "", ""
 	metadata.Recipe = "freeside.client-publication/v2"
@@ -234,6 +236,7 @@ func TestPublicationAuthorStoresTextAndPolicyApprovedClose(t *testing.T) {
 // daemon's own repository reaches the closure gate with no fixture-registered
 // project, records a policy-approved proposal, and publishes Closes.
 func TestClientSubmissionPublishesPolicyApprovedClose(t *testing.T) {
+	t.Parallel()
 	source := engine.ProductionPublication{SourceIssue: "https://github.com/" + fakePublicationRepo + "/issues/82"}
 	p := newProductionPublicationHarnessWithMetadata(t, newPublicationHarness(t), "", nil, nil, nil, source, nil, "")
 	output, err := json.Marshal(map[string]any{
@@ -386,6 +389,7 @@ func submitCLIForPublication(t *testing.T, h *publicationHarness, project domain
 // the pull request closes the issue; without one the closure gate has no
 // subject, so the pull request carries the plain link and nothing waits.
 func TestCLISubmissionPublishesDeclaredSourceIssue(t *testing.T) {
+	t.Parallel()
 	const issue = "https://github.com/" + fakePublicationRepo + "/issues/82"
 	for _, tc := range []struct {
 		name     string
@@ -637,6 +641,7 @@ func assertAuthoredMetadata(t *testing.T, p *productionPublicationHarness) strin
 // and external-drift repair replay identical bytes without calling the author
 // again.
 func TestPublicationAuthorStoresAndReplays(t *testing.T) {
+	t.Parallel()
 	p := newPublicV2MetadataHarness(t)
 	p.replay = withPublicAccount(t, p, p.replay, publicAccount)
 	driver := scriptPublicationAuthor(t, p, inferencefake.Script{Response: inference.Response{
@@ -680,6 +685,7 @@ func TestPublicationAuthorStoresAndReplays(t *testing.T) {
 // published v2 PR to v1: the stored artifact was already screened for public
 // output, so the render keeps the stored class and replays identical bytes.
 func TestPublicationAuthorReplayToleratesVisibilityReadFailure(t *testing.T) {
+	t.Parallel()
 	p := newPublicV2MetadataHarness(t)
 	p.replay = withPublicAccount(t, p, p.replay, publicAccount)
 	scriptPublicationAuthor(t, p, inferencefake.Script{Response: inference.Response{
@@ -714,6 +720,7 @@ func TestPublicationAuthorReplayToleratesVisibilityReadFailure(t *testing.T) {
 // screen-failing answer both fall back to the deterministic v1 rendering, the
 // fallback is recorded, and a retry never calls the author again.
 func TestPublicationAuthorFallsBackToV1(t *testing.T) {
+	t.Parallel()
 	for _, mode := range []string{"unavailable", "screen failure", "multiline title"} {
 		t.Run(mode, func(t *testing.T) {
 			p := newPublicV2MetadataHarness(t)
@@ -770,6 +777,7 @@ func TestPublicationAuthorFallsBackToV1(t *testing.T) {
 // from the repository's visibility, and that a repository that later becomes
 // more open than the stored class allows renders v1 instead of the stored v2.
 func TestPublicationAuthorTargetClassOpens(t *testing.T) {
+	t.Parallel()
 	p := newPublicV2MetadataHarness(t)
 	p.replay = withPublicAccount(t, p, p.replay, publicAccount)
 	// The repository is private at author time, so the stored class is sensitive.
@@ -811,6 +819,7 @@ func TestPublicationAuthorTargetClassOpens(t *testing.T) {
 // keeps v2 on the same read failure, because public-grade content is safe under
 // any visibility.
 func TestPublicationAuthorFailsClosedOnUnknownVisibility(t *testing.T) {
+	t.Parallel()
 	p := newPublicV2MetadataHarness(t)
 	p.replay = withPublicAccount(t, p, p.replay, publicAccount)
 	// Private at author time, so the stored class is sensitive.

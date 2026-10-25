@@ -21,6 +21,7 @@ import (
 // recorded installation intent and the next onboard call: only -resume
 // continues a live intent, and only -replace-intent moves its revision.
 func TestOnboardRefusesSilentIntentReplacement(t *testing.T) {
+	t.Parallel()
 	for _, tc := range []struct {
 		name string
 		// intent is the recorded intent's state: "", "live", or "expired".

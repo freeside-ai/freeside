@@ -115,6 +115,7 @@ func inferenceLedgerItems(t *testing.T, st *store.Store) []domain.AttentionItem 
 // the item resolves once the role admits; and the publication author with no
 // prompt file is off, which raises nothing.
 func TestJudgmentSitesReadTheAdoptedLineup(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	f := newAuthAdoptFixture(t)
 	authorBody := []byte("write the pull request for a reviewer\n")
@@ -354,6 +355,7 @@ func TestJudgmentSitesReadTheAdoptedLineup(t *testing.T) {
 // earlier start with judgments on had left is resolved, because a deployment
 // that switched judgments off has nothing for the item to hold (#1945).
 func TestJudgmentRolesAreOffWithTheFlagsAbsent(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	f := newAuthAdoptFixture(t)
 	authorPath := filepath.Join(f.promptDir, "author")
@@ -493,6 +495,7 @@ func adoptedBeforeTheCallOffer(t *testing.T, tree agenttree.Tree) agenttree.Tree
 // adopted before the call offer, until the operator applies a fresh patch,
 // and the drift auditor's item blocks unattended admission meanwhile.
 func TestJudgmentLineOnAnOfferThatNamesNoModelIsUnbound(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	f := newAuthAdoptFixture(t)
 	_, patch, err := f.run(t, f.args())
@@ -557,6 +560,7 @@ func TestJudgmentLineOnAnOfferThatNamesNoModelIsUnbound(t *testing.T) {
 // admitting under the earlier audit; a call adapter no record names is
 // refused for want of a launch proof, whatever else about it matches.
 func TestJudgmentLinesAdmitOnEachAuditedCallAdapter(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	f := newAuthAdoptFixture(t)
 	_, patch, err := f.run(t, f.args())
@@ -749,6 +753,7 @@ func TestJudgmentRoleItemSaysTheCurrentReasonAfterARestart(t *testing.T) {
 // reported as cancelled, never as a role the lineup cannot fill, and writes
 // nothing.
 func TestJudgmentRoleStartupCheckStopsWhenItsItemsAreNotWritten(t *testing.T) {
+	t.Parallel()
 	f := newAuthAdoptFixture(t)
 	_, patch, err := f.run(t, f.args())
 	if err != nil {

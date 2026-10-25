@@ -17,6 +17,7 @@ import (
 	"github.com/freeside-ai/freeside/daemon/internal/domain"
 	"github.com/freeside-ai/freeside/daemon/internal/exec"
 	"github.com/freeside-ai/freeside/daemon/internal/store"
+	"github.com/freeside-ai/freeside/daemon/internal/store/storetest"
 	"github.com/freeside-ai/freeside/daemon/internal/ward"
 )
 
@@ -84,11 +85,7 @@ func TestCodexAuthReenrollmentOccurrencesRequireCanonicalNumericOrder(t *testing
 func TestCodexReviewJournalClassifiesRejectedPersistedRows(t *testing.T) {
 	ctx := context.Background()
 	path := filepath.Join(t.TempDir(), "freeside.db")
-	st, err := store.Open(ctx, path, store.Options{})
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { _ = st.Close() })
+	st := storetest.Open(t, path, store.Options{})
 	adapters, err := New(st)
 	if err != nil {
 		t.Fatal(err)
@@ -325,11 +322,7 @@ func TestCodexReviewJournalClassifiesRejectedPersistedRows(t *testing.T) {
 func TestCodexReviewJournalRejectsRewrittenOutcomeAuthority(t *testing.T) {
 	ctx := context.Background()
 	path := filepath.Join(t.TempDir(), "freeside.db")
-	st, err := store.Open(ctx, path, store.Options{})
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { _ = st.Close() })
+	st := storetest.Open(t, path, store.Options{})
 	adapters, err := New(st)
 	if err != nil {
 		t.Fatal(err)
