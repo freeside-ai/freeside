@@ -23,6 +23,7 @@ pattern; a routine run needs no row.
 | Wave 8 exit run 2, 2026-10-12 to 13 | #1613 | gh-imgup#116 to PR #127, merged by the owner | CLI | The pull request waited overnight for its merge, and the run's daemon stopped itself twice meanwhile: a GitHub 500 on the janitor's token mint (#1997), then the backup producer refusing the run's own effect-proposal artifact twelve hours after start (#1996). Stopped, it could not see the merge, recorded no completion, and so could not raise review growth. That stop was the first real stopped-state evidence on an exit run. The first real external review superseded the ready card and reached the Mac as a card, but the adjudicator's batch parked, no remediator ran, and the card offered only discuss and stop (#1989, #1990). The spine drove the Mac client through computer use; the iPhone never connected (#1514), so no phone proof exists. Three owner decisions changed this skill (devlog/2026-10-13-1002-exit-run-owner-decisions.md). |
 | Wave 8 exit run 3, 2026-10-14 to 16 | #1613 | gh-imgup#117, no pull request; ended final with `base_advanced` | CLI | The run reached a second internal review round and the harness's observation deadline expired while the run waited on the review-dispute card; `--resume-session` then refused because the run had not published (#2040, #2041). The per-finding review-dispute decision ran live for the first time, on the internal review, with a remediation and re-review behind it. A retained root's open system-health items hold the next run's admission (#2043), and `inspect` cannot list items on a stopped root (#2042). Resumed on 2026-10-16 after those fixes merged: the verifier refused the retained checkpoint on a drifted backup payload map (#2053, fixed in-run), a decline-only final round durably stopped the daemon at publication (#2055, fixed in-run), and the third resume ended final because gh-imgup's `main` had advanced after admission and an unpublished run has no base-advance re-entry (#2058, owner: Required). The first phone-side per-finding decision ran on the iPhone. |
 | Wave 8 exit run on gh-imgup#125, 2026-10-22 to 23 | #1613, #1616 | gh-imgup#125 to PR #144, merged by the owner; completion recorded | CLI (deputy, rehearsal first) | The rehearsal pass did its job: on a disposable target it found that the agent image's CLIs refused the #1616 picks (#2195) and that the Codex reviewer had the account's connected GitHub tools and the provider web tool (#2196), both fixed in-run before the real run. It also cost three builds, because each fix and one `main` advance restarted it (#2221). The operator was away, so the spine drove the installed Mac app and every gate decision was the agent's under delegation; no iPhone took part. The closure card held the PR in draft before the merge, visible only in the inbox (#2224, #2226). The held-work and review-growth alerts raised after completion were superseded at creation on both passes and never delivered (#2217, owner: Required); the rehearsal's reading missed it. Specifier and implementer models showed in their transcripts, judgment calls in the inference ledger; a cross-role task line was refused (#2211, #1431). Process friction went to tracker #2228. |
+| Wave 8 exit run on gh-imgup#132, 2026-10-25 | #1613, #1616 | gh-imgup#132, no pull request; stopped at the first specification invocation, run ended by the owner | CLI (deputy, fixture pass first) | The first fixture pass failed at import on the table's Haiku model, because the CLI's stderr lands in the transcript (#2307); the second ran the Claude roles on Opus as a recorded departure and completed, with held-work and review-growth staying open after the completion fact (#2217 working), though no device was paired to receive them. The real run's Fable specifier wrote a sentence of prose before its JSON and the decoder rejected it (#2314, owner: Required), which no pass could catch because the fixture runs other models. A failed specification run has no retry inside its task, so under the one-task rule the run ended there (#2315). The #1616 cross-role task line was admitted unattended for the first time. The operator was present with both devices; the iPhone's standing notices took over its screen (#2313). |
 
 ## Recurring Pitfalls
 
@@ -217,8 +218,8 @@ Look for each of these before and during the run; most have bitten twice.
   and review-growth items sat in `items[]` as `superseded`, concluded before
   their own creation, with no deliveries (#2217). Read each item's `status`,
   `conclusion`, and `deliveries` after raising it; `items[]` alone passes a
-  born-closed item. Until #2217 merges, the review-growth alert can't be
-  evidenced at all, since it is refused before completion.
+  born-closed item. Since #2217 merged, both stay open after completion
+  (run 132's fixture pass), but delivery still needs a paired device.
 - **The image's agent CLI must serve the lineup's models.** A built image
   can carry an older CLI than its pin (#2209). Before the real run, run
   `freesided probe-lineup` on the real run's root (daemon/README.md, Probe
@@ -263,6 +264,36 @@ Look for each of these before and during the run; most have bitten twice.
   approval (#2219). No `freesided` read lists effect-proposal cards yet
   (#2226), so inspect them from a copy of the stopped store and leave them
   for the owner rather than deciding them.
+- **A failed specification stage ends a one-task run.** `freesided
+  reattempt` retries the implementation run, which exists only after spec
+  approval, so it refuses a task whose specification failed; the
+  `execution_failure` card offers only discuss and stop; Stop cancels the
+  task, and a cancelled task refuses any retry; `--retry-submission-id`
+  replays a lost submit and returns the same task. Don't press Stop until
+  the owner has decided. A second task is an owner-approved departure
+  only: `submit` refuses a second unfinished task for the same
+  specification, so settle the first with `freesided abandon`, which
+  closes it without cancelling (#2315, run 132).
+- **The fixture pass doesn't test the real lineup's output format.**
+  `probe-lineup` checks that each model is served, not that the stage's
+  output decodes. On run 132 the Fable specifier wrote prose before its
+  JSON while Opus returned bare JSON on the same prompt (#2314). Until that
+  is fixed, expect the real specifier's first invocation to be the first
+  test of its output.
+- **The fixture table's Haiku and Sonnet models fail at import** until
+  #2307 merges: the CLI warns on stderr and the warning lands in the JSONL
+  transcript. Run 132 moved the fixture's Claude roles to Opus as a
+  recorded departure.
+- **The private fixture can't serve PR research reads.** The research
+  fetcher authenticates only the scope repository's issue endpoints, so a
+  specifier that asks for one of the fixture's pull requests gets a 404 and
+  the specification fails (#2311, run 132's line-4 check).
+- **The liveness probe's topic is its own.** It is not the device topic on
+  the client's Devices screen, and it works with no daemon. Hand the
+  operator the probe topic privately (never in a record) to subscribe in
+  the iPhone's ntfy app before the environment check. Uninstall the dev
+  probe as soon as the deputy ends, or it reports the stopped deputy as a
+  dead daemon.
 - **Spend is a lower bound.** Usage isn't recorded for the implementation
   writer or the reviewer (#2212); the implementation transcript's result
   event carries `total_cost_usd`.
