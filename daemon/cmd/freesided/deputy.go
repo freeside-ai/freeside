@@ -87,6 +87,9 @@ type deputyHost struct {
 	leaseRoot    string
 	now          func() time.Time
 	tailscaleIPs func() ([]netip.Addr, error)
+	// inspectImage checks that the local container store holds a pinned
+	// reference.
+	inspectImage func(ctx context.Context, ref string) error
 }
 
 func productionDeputyHost() deputyHost {
@@ -96,6 +99,9 @@ func productionDeputyHost() deputyHost {
 		adopt:        productionAuthAdoptDeps(),
 		now:          func() time.Time { return time.Now().UTC() },
 		tailscaleIPs: readTailscaleIPs,
+		inspectImage: func(ctx context.Context, ref string) error {
+			return checkImageInStore(ctx, deputyContainerBin, ref)
+		},
 	}
 }
 
@@ -508,7 +514,10 @@ func deputySelfCheck(
 
 // adoptDeputyAgentTree runs auth adopt in-process and compares the tree it
 // emits with the agent tree commit. The operator reviews and commits the
-// patch; a deputy never edits the checkout.
+// patch; a deputy never edits the checkout. Auth adopt creates its
+// credential observer from the exporter image, so an exporter the local
+// container store no longer holds fails exporter_image first, naming the
+// image, instead of surfacing as a failed adopt.
 func adoptDeputyAgentTree(
 	ctx context.Context, host deputyHost, paths deputyPaths, settings loadedDeputySettings,
 ) (deputySelfCheckResult, bool) {
@@ -517,6 +526,14 @@ func adoptDeputyAgentTree(
 	}
 	if err := removeIfPresent(paths.Patch); err != nil {
 		return failed("could not clear " + paths.Patch)
+	}
+	// The remediation reaches the attention card, so it carries the
+	// classified evidence, not the CLI's output.
+	if err := host.inspectImage(ctx, settings.Images.Exporter); err != nil {
+		evidence, fix := imageStoreFailure(settings.Images.Exporter, err)
+		return deputySelfCheckResult{
+			Failed: []string{"exporter_image"}, Remediation: "images.exporter " + evidence + "; " + fix,
+		}, false
 	}
 	report, err := os.OpenFile(paths.AdoptReport, os.O_CREATE|os.O_TRUNC|os.O_WRONLY, 0o600)
 	if err != nil {

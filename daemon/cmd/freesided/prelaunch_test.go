@@ -124,6 +124,7 @@ func newPrelaunchFixture(t *testing.T) *prelaunchFixture {
 		prober: func(*loadedDeputySettings, string, string) (lineupProber, error) {
 			return f.prober, nil
 		},
+		inspectImage: func(context.Context, string) error { return nil },
 	}
 	return f
 }
@@ -684,6 +685,54 @@ func TestPrelaunchUsage(t *testing.T) {
 		if _, _, _, err := f.run(t, args); !errors.Is(err, errPrelaunchUsage) {
 			t.Fatalf("%s: %v, want a usage error", name, err)
 		}
+	}
+}
+
+// TestPrelaunchNamesAnImageMissingFromTheStore pins #2309: a pinned image
+// the local container store no longer holds fails its images check, before
+// the lease and under -no-live, naming the settings key, the reference, and
+// the reseed.
+func TestPrelaunchNamesAnImageMissingFromTheStore(t *testing.T) {
+	t.Parallel()
+	f := newPrelaunchFixture(t)
+	const ref = "127.0.0.1:5005/freeside-exporter@sha256:" +
+		"ce4eeb61a8b204a4faf3bdd34ed4c96680846ca64aec2842e4855af6a240b7cc"
+	f.settings["images"].(map[string]any)["exporter"] = ref
+	f.writeSettings(t)
+	var inspected []string
+	f.host.inspectImage = func(_ context.Context, got string) error {
+		inspected = append(inspected, got)
+		if got == ref {
+			return errors.New("inspect image " + ref + ": exit status 1\nError: image not found: " + ref)
+		}
+		return nil
+	}
+	record, body, stderr, err := f.run(t, f.args("-no-live"))
+	if !errors.Is(err, errPrelaunchFailed) || record.Passed {
+		t.Fatalf("err %v; want a failed prelaunch\n%s", err, body)
+	}
+	settings := f.load(t)
+	if want := []string{ref, settings.Images.Agent, settings.Images.Review}; !slices.Equal(inspected, want) {
+		t.Fatalf("inspected %v, want %v", inspected, want)
+	}
+	check := findPrelaunchCheck(record, prelaunchGroupImages, "exporter_image")
+	if check.Status != compositionFailed ||
+		!strings.HasPrefix(check.Evidence, "images.exporter "+ref+" is not in the local container store: ") ||
+		!strings.Contains(check.Fix, "container image pull --scheme http "+ref) {
+		t.Fatalf("exporter_image = %+v", check)
+	}
+	for _, name := range []string{"implementer_image", "reviewer_image"} {
+		if got := findPrelaunchCheck(record, prelaunchGroupImages, name).Status; got != compositionPassed {
+			t.Fatalf("%s = %q, want passed", name, got)
+		}
+	}
+	images := slices.IndexFunc(record.Checks, func(c prelaunchCheck) bool { return c.Group == prelaunchGroupImages })
+	lease := slices.IndexFunc(record.Checks, func(c prelaunchCheck) bool { return c.Name == "rig_lease" })
+	if images < 0 || lease < 0 || images > lease {
+		t.Fatalf("images checks at %d, rig_lease at %d; want the images checks first", images, lease)
+	}
+	if !strings.Contains(stderr, "images exporter_image: images.exporter "+ref) {
+		t.Fatalf("stderr %q does not name the image", stderr)
 	}
 }
 

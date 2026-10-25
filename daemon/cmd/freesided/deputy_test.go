@@ -597,6 +597,45 @@ func TestRunDeputyRefusesBeforeTheLease(t *testing.T) {
 	}
 }
 
+// TestAdoptDeputyAgentTreeNamesAMissingExporter pins #2309: an exporter
+// image the local container store no longer holds fails exporter_image,
+// naming the reference and the reseed, before auth adopt runs against it.
+func TestAdoptDeputyAgentTreeNamesAMissingExporter(t *testing.T) {
+	host, paths, _ := deputyLeaseFixture(t)
+	settings := deputyDaemonSettingsFixture(t)
+	settings.Images.Exporter = "127.0.0.1:5005/freeside-exporter@sha256:" + strings.Repeat("c", 64)
+	host.inspectImage = func(_ context.Context, ref string) error {
+		if ref != settings.Images.Exporter {
+			t.Fatalf("inspected %s, want the exporter", ref)
+		}
+		return errors.New("inspect image " + ref + ": exit status 1\nError: image not found: " + ref)
+	}
+	// An earlier start's patch is cleared even though adopt does not run.
+	if err := os.WriteFile(paths.Patch, []byte("stale"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	result, ok := adoptDeputyAgentTree(t.Context(), host, paths, settings)
+	if ok || !slices.Equal(result.Failed, []string{"exporter_image"}) {
+		t.Fatalf("result %+v, %v; want exporter_image failed", result, ok)
+	}
+	for _, want := range []string{
+		"images.exporter " + settings.Images.Exporter + " is not in the local container store",
+		"container image pull --scheme http " + settings.Images.Exporter,
+	} {
+		if !strings.Contains(result.Remediation, want) {
+			t.Fatalf("remediation %q lacks %q", result.Remediation, want)
+		}
+	}
+	if strings.Contains(result.Remediation, "exit status") {
+		t.Fatalf("remediation %q carries the CLI's output to the card", result.Remediation)
+	}
+	for _, path := range []string{paths.Patch, paths.AdoptReport, paths.AdoptLog} {
+		if _, err := os.Stat(path); !errors.Is(err, os.ErrNotExist) {
+			t.Fatalf("%s exists after an exporter failure (%v)", path, err)
+		}
+	}
+}
+
 func TestPublishCompositionEvidenceIsNoClobber(t *testing.T) {
 	dir := filepath.Join(t.TempDir(), "composition")
 	first, err := publishCompositionEvidence(dir, []byte("manifest\n"))
