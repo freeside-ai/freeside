@@ -98,7 +98,7 @@ func (claudeProvider) RenderPrompt(inputs stage.ProviderPromptInputs) (string, e
 
 // launchDelivery is the protocol every new Claude launch selects. Stored
 // intents keep the member they were started under.
-const launchDelivery = stage.PromptFileV2
+const launchDelivery = stage.PromptFileV3
 
 func (claudeProvider) PromptDelivery() stage.PromptDelivery { return launchDelivery }
 
@@ -150,16 +150,25 @@ const (
 	// closes both directories to the agent and moves both files into the
 	// subtree.
 	launcherFilesDeferred
+	// launcherFilesDeferredStderr is the file_v3 command: launcherFilesDeferred
+	// except that the CLI's stderr goes to launchStderrPath, not into the
+	// transcript, so a warning line cannot break the transcript's JSONL
+	// (#2307). When the CLI exits nonzero the launcher appends that file to
+	// the transcript before placing it, so the retained failure transcript
+	// still carries the diagnostics. A successful run's stderr is discarded
+	// with the container.
+	launcherFilesDeferredStderr
 )
 
-// launchDir holds the in-flight transcript of a launcherFilesDeferred run. It
-// sits outside every mount, so nothing reaches it after the container is
-// gone, and it is root-only, so the agent reaches the transcript by no path:
-// only through the output descriptors it was started with, as it always
-// could.
+// launchDir holds the in-flight transcript of a deferred run, and under
+// launcherFilesDeferredStderr the CLI's stderr. It sits outside every mount,
+// so nothing reaches it after the container is gone, and it is root-only, so
+// the agent reaches either file by no path: only through the output
+// descriptors it was started with, as it always could.
 const (
 	launchDir            = "/var/lib/freeside-launch"
 	launchTranscriptPath = launchDir + "/agent-transcript.jsonl"
+	launchStderrPath     = launchDir + "/agent-stderr.log"
 )
 
 // agentCommand is the pinned CLI's unattended argv. The workspace is the
@@ -278,7 +287,7 @@ func agentCommandWithInput(
 		"; chown 0:0 " + shellQuote(transcriptDescriptorPath) + "; chmod 0644 " + shellQuote(transcriptDescriptorPath) + "; "
 	afterAgent := collectSources("declare=0; ", "declare=1; ") +
 		"if [ \"$declare\" = 1 ]; then " + writeDescriptor(transcriptDescriptorPath) + "; fi; "
-	if files == launcherFilesDeferred {
+	if files == launcherFilesDeferred || files == launcherFilesDeferredStderr {
 		excludeReserved, controlMode, transcriptTarget = excludeReservedPaths(), "0755", launchTranscriptPath
 		beforeAgent = "rm -rf " + shellQuote(launchDir) + "; mkdir " + shellQuote(launchDir) +
 			"; chown 0:0 " + shellQuote(launchDir) + "; chmod 0700 " + shellQuote(launchDir) + "; "
@@ -298,12 +307,29 @@ func agentCommandWithInput(
 		}
 		stagedDescriptor := controlDir + "/" + path.Base(transcriptDescriptorPath)
 		stagedTranscript := controlDir + "/" + path.Base(transcriptPath)
+		appendStderr := ""
+		if files == launcherFilesDeferredStderr {
+			// A failed transcript is retained as plain text, never validated as
+			// JSONL, so appending there keeps the diagnostics an interleaved
+			// stream used to carry.
+			appendStderr = "if [ \"$status\" -ne 0 ] && [ -s " + shellQuote(launchStderrPath) + " ]; then cat " +
+				shellQuote(launchStderrPath) + " >> " + shellQuote(launchTranscriptPath) + "; fi; "
+		}
 		afterAgent = "chmod 0755 " + shellQuote(evidenceDir) + "; chmod 0700 " + shellQuote(controlDir) + "; " +
 			collectSources("", "") + writeDescriptor(stagedDescriptor) + "; " +
 			place(stagedDescriptor, transcriptDescriptorPath) +
 			// No transcript exists when the agent never launched.
-			"if [ -f " + shellQuote(launchTranscriptPath) + " ]; then cp " + shellQuote(launchTranscriptPath) +
+			"if [ -f " + shellQuote(launchTranscriptPath) + " ]; then " + appendStderr +
+			"cp " + shellQuote(launchTranscriptPath) +
 			" " + shellQuote(stagedTranscript) + "; " + place(stagedTranscript, transcriptPath) + "fi; "
+	}
+	// The in-workspace and file_v2 commands send stderr into the transcript;
+	// recovery rebuilds them, so their redirection never changes. Under file_v3
+	// the root shell opens the stderr file before the drop, so the agent
+	// reaches it only through its own fd 2.
+	redirect := "> " + shellQuote(transcriptTarget) + " 2>&1"
+	if files == launcherFilesDeferredStderr {
+		redirect = "> " + shellQuote(launchTranscriptPath) + " 2> " + shellQuote(launchStderrPath)
 	}
 	// hydrate runs before the chown sweep; guardPrefix turns the token check
 	// into a two-branch guard that reports the prepare failure and skips the
@@ -338,7 +364,7 @@ func agentCommandWithInput(
 			"--no-new-privs claude -p %s "+
 			"--output-format stream-json --verbose --dangerously-skip-permissions "+
 			"--safe-mode --session-id %s --append-system-prompt-file %s %s"+
-			"> %s 2>&1; status=$?; set -e; unset token; fi; "+
+			"%s; status=$?; set -e; unset token; fi; "+
 			"%s"+
 			"rm -rf -- %s; "+
 			"printf '%%s %%s\\n' %s \"$status\" > %s; sync; exit \"$status\"",
@@ -357,7 +383,7 @@ func agentCommandWithInput(
 		shellQuote(credentialTokenPath), shellQuote(credentialTokenPath),
 		shellQuote(ward.ClaudeConfigRootTarget), agentUID, agentGID, promptInput,
 		shellQuote(sessionID), shellQuote(instructionBundlePath), selection,
-		shellQuote(transcriptTarget),
+		redirect,
 		afterAgent,
 		shellQuote(workspaceDir+"/node_modules"),
 		shellQuote(ward.WriterNoncePlaceholder),
@@ -489,7 +515,7 @@ func promptByteLimit(delivery stage.PromptDelivery) (int, error) {
 	switch delivery {
 	case "", stage.PromptArgument:
 		return maxPromptBytes, nil
-	case stage.PromptFileV1, stage.PromptFileV2:
+	case stage.PromptFileV1, stage.PromptFileV2, stage.PromptFileV3:
 		return ward.MaxPromptFileBytes, nil
 	}
 	return 0, fmt.Errorf("%w: unknown prompt delivery %q", ErrUnsupportedStart, delivery)
@@ -631,6 +657,8 @@ func (p claudeProvider) HandoffSpec(
 		return withPromptFile(launcherFilesInWorkspace)
 	case stage.PromptFileV2:
 		return withPromptFile(launcherFilesDeferred)
+	case stage.PromptFileV3:
+		return withPromptFile(launcherFilesDeferredStderr)
 	}
 	return ward.HandoffSpec{}, fmt.Errorf("%w: unknown prompt delivery", ErrUnsupportedStart)
 }

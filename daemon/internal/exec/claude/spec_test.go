@@ -16,6 +16,7 @@ import (
 	"strconv"
 	"strings"
 	"testing"
+	"unicode/utf8"
 
 	"github.com/freeside-ai/freeside/daemon/internal/domain"
 	"github.com/freeside-ai/freeside/daemon/internal/exec"
@@ -184,26 +185,34 @@ func TestHandoffSpecRefusesUnsupportedContainment(t *testing.T) {
 
 // handoffCommandCases are the launch shapes one HandoffSpec path produces:
 // every launch protocol, each with and without the preparation command.
-// redirect is where that protocol streams the transcript while the agent runs.
+// redirect is that protocol's whole output redirection while the agent runs.
 var handoffCommandCases = []struct {
 	name     string
 	delivery stage.PromptDelivery
 	prepare  []string
 	redirect string
 }{
-	{"argument", stage.PromptArgument, nil, transcriptPath},
-	{"argument-prepare", stage.PromptArgument, []string{"/usr/local/bin/freeside-project-prepare"}, transcriptPath},
-	{"prompt-file", stage.PromptFileV1, nil, transcriptPath},
-	{"prompt-file-prepare", stage.PromptFileV1, []string{"/usr/local/bin/freeside-project-prepare"}, transcriptPath},
-	{"file-v2", stage.PromptFileV2, nil, launchTranscriptPath},
-	{"file-v2-prepare", stage.PromptFileV2, []string{"/usr/local/bin/freeside-project-prepare"}, launchTranscriptPath},
+	{"argument", stage.PromptArgument, nil, inWorkspaceRedirect},
+	{"argument-prepare", stage.PromptArgument, []string{"/usr/local/bin/freeside-project-prepare"}, inWorkspaceRedirect},
+	{"prompt-file", stage.PromptFileV1, nil, inWorkspaceRedirect},
+	{"prompt-file-prepare", stage.PromptFileV1, []string{"/usr/local/bin/freeside-project-prepare"}, inWorkspaceRedirect},
+	{"file-v2", stage.PromptFileV2, nil, deferredRedirect},
+	{"file-v2-prepare", stage.PromptFileV2, []string{"/usr/local/bin/freeside-project-prepare"}, deferredRedirect},
+	{"file-v3", stage.PromptFileV3, nil, deferredStderrRedirect},
+	{"file-v3-prepare", stage.PromptFileV3, []string{"/usr/local/bin/freeside-project-prepare"}, deferredStderrRedirect},
 }
+
+var (
+	inWorkspaceRedirect    = "> " + shellQuote(transcriptPath) + " 2>&1"
+	deferredRedirect       = "> " + shellQuote(launchTranscriptPath) + " 2>&1"
+	deferredStderrRedirect = "> " + shellQuote(launchTranscriptPath) + " 2> " + shellQuote(launchStderrPath)
+)
 
 // deferredCommand is the launch script new launches run: the prompt file on
 // stdin and the launcher's own files kept out of the workspace.
 func deferredCommand(prepare []string) string {
 	return agentCommandWithInput(
-		"< "+shellQuote(ward.PromptFilePath), "session-1", "inv-1", prepare, "", "", launcherFilesDeferred)[2]
+		"< "+shellQuote(ward.PromptFilePath), "session-1", "inv-1", prepare, "", "", launcherFilesDeferredStderr)[2]
 }
 
 // TestHandoffSpecCommandGolden pins the whole launch command of a start that
@@ -250,7 +259,7 @@ func TestHandoffSpecPassesModelAndEffort(t *testing.T) {
 		for _, sel := range selections {
 			t.Run(tc.name+"/"+sel.name, func(t *testing.T) {
 				t.Parallel()
-				redirect := "> " + shellQuote(tc.redirect)
+				redirect := tc.redirect
 				in := testProviderHandoffInput()
 				in.PromptDelivery, in.Preparation = tc.delivery, tc.prepare
 				bare, err := provider.HandoffSpec(context.Background(), in)
@@ -646,7 +655,7 @@ func TestOversizedPromptIsRejected(t *testing.T) {
 // writer the ability to report its own success. Ordering is asserted by
 // position rather than by matching the whole script, so ordinary edits stay
 // cheap. The command checked is the one new launches run; the golden files
-// pin the two older ones byte for byte.
+// pin the older ones byte for byte.
 func TestAgentCommandKeepsTheOutcomeMarkerOutOfWriterReach(t *testing.T) {
 	t.Parallel()
 	script := deferredCommand(nil)
@@ -731,9 +740,14 @@ func TestAgentCommandKeepsTheOutcomeMarkerOutOfWriterReach(t *testing.T) {
 	// Before the writer exits the launcher puts none of its own files in the
 	// workspace (#1929): the transcript streams to the launch directory and
 	// nothing names the descriptor, the final transcript, or a control file.
-	redirect := at("> '" + launchTranscriptPath + "' 2>&1")
+	// The CLI's stderr goes to its own root-only file, so a warning line
+	// never enters the JSONL transcript (#2307).
+	redirect := at("> '" + launchTranscriptPath + "' 2> '" + launchStderrPath + "'")
 	if redirect < drop {
 		t.Error("the transcript redirect does not belong to the dropped invocation")
+	}
+	if strings.HasPrefix(launchStderrPath, workspaceDir+"/") || path.Dir(launchStderrPath) != launchDir {
+		t.Errorf("stderr file %q is not in the root-only launch directory", launchStderrPath)
 	}
 	for _, launcherPath := range []string{transcriptDescriptorPath, transcriptPath, controlDir + "/"} {
 		if i := strings.Index(script, launcherPath); i >= 0 && i < redirect {
@@ -752,6 +766,12 @@ func TestAgentCommandKeepsTheOutcomeMarkerOutOfWriterReach(t *testing.T) {
 	}
 	if firstWrite := at(controlDir + "/"); firstWrite < closeControl {
 		t.Error("the launcher writes into the control directory before closing it")
+	}
+	// A failed CLI's stderr joins the transcript before the transcript is
+	// copied out of the launch directory, or the retained copy misses it.
+	appendStderr := at("cat '" + launchStderrPath + "' >> '" + launchTranscriptPath + "'")
+	if copyTranscript := at("cp '" + launchTranscriptPath + "'"); appendStderr < closeControl || appendStderr > copyTranscript {
+		t.Error("stderr is not appended after the writer exits and before the transcript is copied")
 	}
 	for _, final := range []string{transcriptDescriptorPath, transcriptPath} {
 		staged := controlDir + "/" + path.Base(final)
@@ -1332,5 +1352,87 @@ func TestLaunchCommandReportsAnAgentThatNeverLaunched(t *testing.T) {
 	}
 	if _, err := os.Lstat(filepath.Join(evidence, path.Base(transcriptPath))); !os.IsNotExist(err) {
 		t.Errorf("a transcript was placed for an agent that never ran: %v", err)
+	}
+}
+
+// launchRigStderrAgent is a stand-in CLI that writes one stream-json record
+// to stdout and a warning to stderr, as the pinned CLI does for a model it
+// does not recognize (#2307), then exits with the given status.
+func launchRigStderrAgent(t *testing.T, stdout, stderr string, status int) string {
+	t.Helper()
+	dir := t.TempDir()
+	execfixture.Write(t, filepath.Join(dir, "claude"), []byte("#!/bin/sh\n"+
+		"printf '%s' "+shellQuote(stdout)+"\n"+
+		"printf '%s\\n' "+shellQuote(stderr)+" >&2\n"+
+		"exit "+strconv.Itoa(status)+"\n"), 0o700)
+	return dir
+}
+
+const (
+	launchRigStdout  = `{"type":"result","subtype":"success","is_error":false}` + "\n"
+	launchRigWarning = `[claude-code:unrecognized_model] {"model":"x","query_source":"sdk"}`
+)
+
+// A successful run's transcript is the CLI's stdout alone. The importer
+// rejects an application/jsonl export unless every line is a non-empty,
+// valid UTF-8 JSON record and there is at least one (validateJSONLines, which
+// it does not export), so one stderr line in the transcript used to fail the
+// stage at import.
+func TestLaunchCommandKeepsStderrOutOfTheTranscript(t *testing.T) {
+	t.Parallel()
+	requireRenameOnlyMove(t)
+	rig := newLaunchRig(t)
+	output, err := rig.run(t, launchRigStderrAgent(t, launchRigStdout, launchRigWarning, 0))
+	if err != nil {
+		t.Fatalf("launch command: %v: %s", err, output)
+	}
+	if marker := rig.read(t, rig.root, writerOutcomePath); marker != launchRigNonce+" 0\n" {
+		t.Errorf("outcome marker = %q", marker)
+	}
+	transcript := rig.read(t, rig.workspace, export.EvidenceWorkspaceDir, path.Base(transcriptPath))
+	if transcript != launchRigStdout {
+		t.Fatalf("transcript = %q, want the CLI's stdout %q", transcript, launchRigStdout)
+	}
+	// An empty transcript splits to one empty line, so this also requires a
+	// record.
+	for i, line := range strings.Split(strings.TrimSuffix(transcript, "\n"), "\n") {
+		if strings.TrimSpace(line) == "" || !utf8.ValidString(line) || !json.Valid([]byte(line)) {
+			t.Errorf("transcript line %d is not a JSONL record: %q", i+1, line)
+		}
+	}
+	// Nothing the export can read carries the warning.
+	err = filepath.WalkDir(rig.workspace, func(name string, entry os.DirEntry, err error) error {
+		if err != nil || !entry.Type().IsRegular() {
+			return err
+		}
+		if strings.Contains(rig.read(t, name), launchRigWarning) {
+			t.Errorf("%s carries the CLI's stderr", name)
+		}
+		return nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+}
+
+// A failed run keeps the CLI's diagnostics: the launcher appends stderr to the
+// transcript before placing it, and a failed writer's transcript is retained
+// as plain text, never validated as JSONL.
+func TestLaunchCommandAppendsStderrWhenTheAgentFails(t *testing.T) {
+	t.Parallel()
+	requireRenameOnlyMove(t)
+	rig := newLaunchRig(t)
+	const failure = "Error: the model refused the request"
+	output, err := rig.run(t, launchRigStderrAgent(t, launchRigStdout, failure, 1))
+	var exit *osexec.ExitError
+	if !errors.As(err, &exit) || exit.ExitCode() != 1 {
+		t.Fatalf("launch command: %v, want exit status 1: %s", err, output)
+	}
+	if marker := rig.read(t, rig.root, writerOutcomePath); marker != launchRigNonce+" 1\n" {
+		t.Errorf("outcome marker = %q", marker)
+	}
+	transcript := rig.read(t, rig.workspace, export.EvidenceWorkspaceDir, path.Base(transcriptPath))
+	if want := launchRigStdout + failure + "\n"; transcript != want {
+		t.Errorf("transcript = %q, want stdout then stderr %q", transcript, want)
 	}
 }
