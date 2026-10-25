@@ -2475,8 +2475,24 @@ is `not_run`, and the rest still run.
   root, or, for this root, that the deputy's start recovers it.
 - **`composition`**: every check of the deputy's launch composition,
   verbatim, under the lease.
-- **`live`**, unless `-no-live`: the lineup probe (Probe The Lineup Before
-  A Run).
+- **`live`**, unless `-no-live`, under the lease: `target_issue` and the
+  lineup probe (Probe The Lineup Before A Run). `target_issue` reads the
+  task's issue, when the task is one canonical issue URL in the managed
+  repository, through an App token granting only `issues: read` and
+  `metadata: read`, minted from `prod`'s durable installation authority
+  with no janitor running. That grant is narrower than the research
+  fetcher's, which also reads pull requests: prelaunch reads only the
+  target issue. It passes when the issue is open; a 410 fails with
+  "install the prod App on the repository, or choose an open issue", and
+  a closed issue fails with "choose an open issue". A 404 also fails with
+  "choose an open issue", and its evidence names the two causes left once
+  the mint has shown the App can read the repository's issues: no such
+  issue, or a pull request, which GitHub hides from an App without
+  pull-request permission. A 200 that does carry the pull-request marker
+  still fails with "choose an open issue". It is `not_run` for
+  specification text, for another repository's issue (the specifier reads
+  that one without the App's grant), and when the root has no active trust
+  profile or the composition resolved no App bot.
 
 **The walk.** `first_missing` names the first onboarding step the root
 lacks, with its fix, or is null: `agent_tree` (see The First Start in
@@ -2489,18 +2505,20 @@ the record's review-configuration digest), `project_image` (set
 (`freeside-prelaunch-v1`, mode `0600`, replaced atomically), and the same
 JSON to stdout. It records the settings digest, the daemon build, the
 composed manifest's digest (`manifest_digest`, the same with or without
-`-no-live`), every check, the walk, the health items, and the lineup
-probe. With live on it also writes `lineup-probe.json`, as
-`probe-lineup` does. It never writes, removes, or replaces
+`-no-live`), every check, the walk, the health items, the lineup probe,
+and `issue` (the target issue's `url`, `readable`, and `state`, null when
+`target_issue` did not read it). With live on it also writes
+`lineup-probe.json`, as `probe-lineup` does. It never writes, removes, or replaces
 `composition-manifest.json`, migrates the database, records identities, or
 recovers a stale lease. Its lease token sits in
 `prelaunch-rig-acquisition.json` while it runs and is removed with the
 lease.
 
-**The mint-audit exception.** Its only store write is the audit row of the
-App token the composition's publication-authority check mints, as the
-deputy's does. It runs under the rig lease, so no deputy uses the App
-authority meanwhile.
+**The mint-audit exception.** Its only store writes are the audit rows of
+the App tokens it mints: the one the composition's publication-authority
+check mints, as the deputy's does, and with live on the `issues: read`
+token `target_issue` mints. Both run under the rig lease, so no deputy uses
+the App authority meanwhile, and neither runs the installation janitor.
 
 **Exit status.** 0 when no check failed and nothing is missing. Otherwise
 1, with one stderr line per failed check and one naming the first missing

@@ -5,6 +5,9 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -19,6 +22,7 @@ import (
 	"github.com/freeside-ai/freeside/daemon/internal/engine"
 	"github.com/freeside-ai/freeside/daemon/internal/golden"
 	"github.com/freeside-ai/freeside/daemon/internal/projectimage"
+	"github.com/freeside-ai/freeside/daemon/internal/publish"
 	"github.com/freeside-ai/freeside/daemon/internal/store"
 	"github.com/freeside-ai/freeside/daemon/internal/store/storetest"
 )
@@ -39,6 +43,11 @@ type prelaunchFixture struct {
 	preflight                           *fakePreflightEnvironment
 	prober                              *fakeLineupProber
 	task, policy, publication, workUnit string
+	// issue and issueErr are what the fake target-issue read answers;
+	// issueReads records each read's repository and number.
+	issue      prelaunchIssueObservation
+	issueErr   error
+	issueReads []string
 }
 
 func newPrelaunchFixture(t *testing.T) *prelaunchFixture {
@@ -77,14 +86,7 @@ func newPrelaunchFixture(t *testing.T) *prelaunchFixture {
 	f.writeSettings(t)
 
 	f.task, f.policy, f.publication = writeSubmissionInputs(t, base)
-	if err := os.WriteFile(f.task, []byte(prelaunchTestIssue+"\n"), 0o600); err != nil {
-		t.Fatal(err)
-	}
-	publication := `{"recipe":"freeside.client-publication/v2","source_issue":"` + prelaunchTestIssue +
-		`","commit_author":{"app_slug":"freeside-test","bot_user_id":12345}}`
-	if err := os.WriteFile(f.publication, []byte(publication), 0o600); err != nil {
-		t.Fatal(err)
-	}
+	f.writeIssueTask(t, prelaunchTestIssue)
 	f.workUnit = declaredWorkUnit(t)
 
 	settings := f.load(t)
@@ -125,8 +127,27 @@ func newPrelaunchFixture(t *testing.T) *prelaunchFixture {
 			return f.prober, nil
 		},
 		inspectImage: func(context.Context, string) error { return nil },
+		readIssue: func(_ context.Context, cfg preflightConfig, _ time.Time, number int) (prelaunchIssueObservation, error) {
+			f.issueReads = append(f.issueReads, fmt.Sprintf("%s#%d repository %d db %s", cfg.Repo, number, cfg.RepositoryID, cfg.DBPath))
+			return f.issue, f.issueErr
+		},
 	}
+	f.issue = prelaunchIssueObservation{Status: http.StatusOK, State: "open"}
 	return f
+}
+
+// writeIssueTask makes the task the issue at issueURL, with the publication
+// that answers it.
+func (f *prelaunchFixture) writeIssueTask(t *testing.T, issueURL string) {
+	t.Helper()
+	if err := os.WriteFile(f.task, []byte(issueURL+"\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	publication := `{"recipe":"freeside.client-publication/v2","source_issue":"` + issueURL +
+		`","commit_author":{"app_slug":"freeside-test","bot_user_id":12345}}`
+	if err := os.WriteFile(f.publication, []byte(publication), 0o600); err != nil {
+		t.Fatal(err)
+	}
 }
 
 func (f *prelaunchFixture) writeSettings(t *testing.T) {
@@ -404,6 +425,9 @@ func TestPrelaunchLeavesTheRootAsItFound(t *testing.T) {
 	if offline.LineupProbe != nil {
 		t.Fatalf("-no-live ran the lineup probe: %+v", offline.LineupProbe)
 	}
+	if findPrelaunchCheck(live, prelaunchGroupLive, "target_issue").Status != compositionPassed || live.Issue == nil {
+		t.Fatalf("the live run did not read the target issue: %+v", live.Issue)
+	}
 	if got, err := os.ReadFile(f.paths.Manifest); err != nil || !bytes.Equal(got, manifest) {
 		t.Fatalf("composition manifest %q, %v; want it untouched", got, err)
 	}
@@ -513,7 +537,7 @@ func TestPrelaunchReportsTheRigHolder(t *testing.T) {
 			if lease.Status != compositionFailed || !strings.Contains(lease.Fix, tc.fix(f)) {
 				t.Fatalf("rig_lease %+v, want a failure whose fix names %q", lease, tc.fix(f))
 			}
-			for _, check := range []string{"composition", "lineup_probe"} {
+			for _, check := range []string{"composition", "target_issue", "lineup_probe"} {
 				if !slices.ContainsFunc(record.Checks, func(c prelaunchCheck) bool {
 					return c.Name == check && c.Status == compositionNotRun
 				}) {
@@ -608,6 +632,10 @@ func TestPrelaunchNoLiveSkipsTheLineupProbe(t *testing.T) {
 	}
 	if len(f.prober.calls) != 0 {
 		t.Fatalf("-no-live probed %d calls", len(f.prober.calls))
+	}
+	if issue := findPrelaunchCheck(record, prelaunchGroupLive, "target_issue"); issue.Status != compositionNotRun ||
+		issue.Evidence != "-no-live" || record.Issue != nil || len(f.issueReads) != 0 {
+		t.Fatalf("target_issue %+v, issue %+v, reads %v; want not_run with -no-live", issue, record.Issue, f.issueReads)
 	}
 	if _, err := os.Stat(filepath.Join(f.paths.StateRoot, lineupProbeRecordName)); !errors.Is(err, os.ErrNotExist) {
 		t.Fatalf("-no-live wrote the lineup record: %v", err)
@@ -903,4 +931,336 @@ func TestPrelaunchNamesTheTreeMissingOnlyForAnUnresolvedLineup(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestPrelaunchReadsTheTargetIssue(t *testing.T) {
+	t.Parallel()
+	retry := "retry; if it persists, check the App's issues:read grant on acme/widgets"
+	cases := map[string]struct {
+		issue    prelaunchIssueObservation
+		err      error
+		status   compositionStatus
+		evidence string
+		fix      string
+		record   prelaunchIssue
+	}{
+		"open": {
+			issue: prelaunchIssueObservation{Status: http.StatusOK, State: "open"}, status: compositionPassed,
+			evidence: "issue #7 of acme/widgets is open and readable through the App's issues:read grant",
+			record:   prelaunchIssue{URL: prelaunchTestIssue, Readable: true, State: "open"},
+		},
+		"closed": {
+			issue: prelaunchIssueObservation{Status: http.StatusOK, State: "closed"}, status: compositionFailed,
+			evidence: "issue #7 of acme/widgets is closed", fix: "choose an open issue",
+			record: prelaunchIssue{URL: prelaunchTestIssue, Readable: true, State: "closed"},
+		},
+		"not found": {
+			issue: prelaunchIssueObservation{Status: http.StatusNotFound}, status: compositionFailed,
+			evidence: "GitHub answered 404 for #7 of acme/widgets through the App's issues:read grant: " +
+				"there is no such issue, or it is a pull request, which that grant doesn't see",
+			fix:    "choose an open issue",
+			record: prelaunchIssue{URL: prelaunchTestIssue},
+		},
+		"gone": {
+			issue: prelaunchIssueObservation{Status: http.StatusGone}, status: compositionFailed,
+			evidence: "GitHub answered 410 for issue #7 of acme/widgets through the App's issues:read grant",
+			fix:      "install the prod App on the repository, or choose an open issue",
+			record:   prelaunchIssue{URL: prelaunchTestIssue},
+		},
+		"pull request": {
+			issue:  prelaunchIssueObservation{Status: http.StatusOK, State: "open", PullRequest: true},
+			status: compositionFailed, evidence: "#7 of acme/widgets is a pull request, not an issue",
+			fix: "choose an open issue", record: prelaunchIssue{URL: prelaunchTestIssue, Readable: true, State: "open"},
+		},
+		"unrecognized state": {
+			issue: prelaunchIssueObservation{Status: http.StatusOK, State: "locked"}, status: compositionFailed,
+			evidence: `issue #7 of acme/widgets has state "locked", which is not recognized`,
+			fix:      "report it; prelaunch knows open and closed",
+			record:   prelaunchIssue{URL: prelaunchTestIssue, Readable: true, State: "locked"},
+		},
+		"other status": {
+			issue: prelaunchIssueObservation{Status: http.StatusInternalServerError}, status: compositionFailed,
+			evidence: "GitHub answered 500 for issue #7 of acme/widgets", fix: retry,
+			record: prelaunchIssue{URL: prelaunchTestIssue},
+		},
+		"read error": {
+			err: errors.New("decode the issue: unexpected EOF"), status: compositionFailed,
+			evidence: "the issue could not be read: decode the issue: unexpected EOF", fix: retry,
+			record: prelaunchIssue{URL: prelaunchTestIssue},
+		},
+	}
+	for name, tc := range cases {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			f := newPrelaunchFixture(t)
+			f.issue, f.issueErr = tc.issue, tc.err
+			record, body, stderr, err := f.run(t, f.args())
+			check := findPrelaunchCheck(record, prelaunchGroupLive, "target_issue")
+			if check.Status != tc.status || check.Evidence != tc.evidence || check.Fix != tc.fix {
+				t.Fatalf("target_issue %+v, want %s %q fix %q\n%s", check, tc.status, tc.evidence, tc.fix, body)
+			}
+			if record.Issue == nil || *record.Issue != tc.record {
+				t.Fatalf("issue %+v, want %+v", record.Issue, tc.record)
+			}
+			want := []string{"acme/widgets#7 repository 42 db " + f.paths.DB}
+			if !slices.Equal(f.issueReads, want) {
+				t.Fatalf("reads %v, want %v", f.issueReads, want)
+			}
+			if tc.status == compositionPassed {
+				if err != nil {
+					t.Fatalf("prelaunch: %v\nstderr=%s", err, stderr)
+				}
+				return
+			}
+			if !errors.Is(err, errPrelaunchFailed) || !strings.Contains(stderr, "live target_issue: "+tc.evidence+"; fix: "+tc.fix) {
+				t.Fatalf("err %v, stderr %q; want the failed check named", err, stderr)
+			}
+		})
+	}
+}
+
+func TestPrelaunchSkipsATargetIssueTheAppDoesNotRead(t *testing.T) {
+	t.Parallel()
+	cases := map[string]struct {
+		task func(*testing.T, *prelaunchFixture)
+		why  string
+	}{
+		"specification text": {func(t *testing.T, f *prelaunchFixture) {
+			// writeSubmissionInputs' literal task and publication.
+			f.task, f.policy, f.publication = writeSubmissionInputs(t, t.TempDir())
+		}, "the task is specification text, not an issue URL"},
+		"another repository": {func(t *testing.T, f *prelaunchFixture) {
+			f.writeIssueTask(t, "https://github.com/acme/gadgets/issues/7")
+		}, "the issue is not in acme/widgets; the specifier reads it without the App's grant"},
+	}
+	for name, tc := range cases {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			f := newPrelaunchFixture(t)
+			tc.task(t, f)
+			record, body, _, _ := f.run(t, f.args())
+			check := findPrelaunchCheck(record, prelaunchGroupLive, "target_issue")
+			if check.Status != compositionNotRun || check.Evidence != tc.why || record.Issue != nil || len(f.issueReads) != 0 {
+				t.Fatalf("target_issue %+v, issue %+v, reads %v; want not_run: %s\n%s",
+					check, record.Issue, f.issueReads, tc.why, body)
+			}
+		})
+	}
+}
+
+func TestPrelaunchMatchesTheManagedRepositoryCaseInsensitively(t *testing.T) {
+	t.Parallel()
+	f := newPrelaunchFixture(t)
+	f.writeIssueTask(t, "https://github.com/Acme/Widgets/issues/7")
+	record, body, _, _ := f.run(t, f.args())
+	if check := findPrelaunchCheck(record, prelaunchGroupLive, "target_issue"); check.Status != compositionPassed {
+		t.Fatalf("target_issue %+v, want passed\n%s", check, body)
+	}
+}
+
+func TestPrelaunchSkipsTheTargetIssueWithoutATrustProfile(t *testing.T) {
+	t.Parallel()
+	f := newPrelaunchFixture(t)
+	f.resetStore(t, false, "")
+	record, body, _, _ := f.run(t, f.args())
+	check := findPrelaunchCheck(record, prelaunchGroupLive, "target_issue")
+	if check.Status != compositionNotRun || !strings.Contains(check.Evidence, "no active trust profile") ||
+		len(f.issueReads) != 0 {
+		t.Fatalf("target_issue %+v, reads %v; want not_run without a trust profile\n%s", check, f.issueReads, body)
+	}
+}
+
+// TestPrelaunchIssueReaderMintsFromDurableAuthority builds the production
+// reader over a keystore, an installation-authority store, and a database on
+// disk, so a reader whose token source can't mint without a janitor fails
+// here rather than in a launch.
+func TestPrelaunchIssueReaderMintsFromDurableAuthority(t *testing.T) {
+	t.Parallel()
+	cfg, server, requests := newPrelaunchIssueReaderFixture(t, true, func(w http.ResponseWriter, r *http.Request) {
+		if r.Header.Get("Authorization") != "Bearer "+prelaunchIssueReadToken {
+			t.Errorf("issue read authorization %q", r.Header.Get("Authorization"))
+		}
+		_, _ = fmt.Fprint(w, `{"number":7,"state":"open","title":"Spin the widget"}`)
+	})
+	observed, err := readManagedIssue(t.Context(), cfg, prelaunchTestNow, 7, server.Client(), server.URL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if observed != (prelaunchIssueObservation{Status: http.StatusOK, State: "open"}) {
+		t.Fatalf("observation %+v", observed)
+	}
+	if want := []string{
+		`POST /app/installations/555/access_tokens {"issues":"read","metadata":"read"}`, "GET /repositories/42/issues/7",
+	}; !slices.Equal(*requests, want) {
+		t.Fatalf("requests %q, want %q", *requests, want)
+	}
+	audits := prelaunchMintAudits(t, cfg.DBPath)
+	if len(audits) != 1 || audits[0].RequestedIssues != "read" || audits[0].GrantedIssues != "read" ||
+		audits[0].RequestedContents != "" || audits[0].RepositoryID != 42 {
+		t.Fatalf("mint audits %+v, want one issue-read row", audits)
+	}
+}
+
+func TestPrelaunchIssueReaderFailsClosedWithoutATrustedInstallation(t *testing.T) {
+	t.Parallel()
+	cfg, server, requests := newPrelaunchIssueReaderFixture(t, false, func(http.ResponseWriter, *http.Request) {
+		t.Error("the issue was read without a trusted installation")
+	})
+	_, err := readManagedIssue(t.Context(), cfg, prelaunchTestNow, 7, server.Client(), server.URL)
+	if err == nil || !strings.Contains(err.Error(), "no registered GitHub App has authority") ||
+		len(*requests) != 0 || len(prelaunchMintAudits(t, cfg.DBPath)) != 0 {
+		t.Fatalf("err %v, requests %v; want a refusal before any request", err, *requests)
+	}
+}
+
+// TestPrelaunchIssueReaderTrustsOnlyTheAnswerItAskedFor pins the reader's
+// returned-object boundary: an answer about another issue is an error, a
+// redirect is reported rather than followed with the bearer, and a pull
+// request is reported as one.
+func TestPrelaunchIssueReaderTrustsOnlyTheAnswerItAskedFor(t *testing.T) {
+	t.Parallel()
+	for name, tc := range map[string]struct {
+		answer func(http.ResponseWriter, *http.Request)
+		want   prelaunchIssueObservation
+		err    string
+	}{
+		"another issue's number": {
+			answer: func(w http.ResponseWriter, _ *http.Request) { _, _ = fmt.Fprint(w, `{"number":8,"state":"open"}`) },
+			err:    "GitHub answered with issue #8 for #7",
+		},
+		"redirect": {
+			answer: func(w http.ResponseWriter, r *http.Request) {
+				http.Redirect(w, r, "/elsewhere", http.StatusMovedPermanently)
+			},
+			want: prelaunchIssueObservation{Status: http.StatusMovedPermanently},
+		},
+		"pull request": {
+			answer: func(w http.ResponseWriter, _ *http.Request) {
+				_, _ = fmt.Fprint(w, `{"number":7,"state":"open","pull_request":{"url":"https://api.github.com/x"}}`)
+			},
+			want: prelaunchIssueObservation{Status: http.StatusOK, State: "open", PullRequest: true},
+		},
+		"undecodable": {
+			answer: func(w http.ResponseWriter, _ *http.Request) { _, _ = fmt.Fprint(w, `{"number":7,`) },
+			err:    "decode the issue",
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			cfg, server, requests := newPrelaunchIssueReaderFixture(t, true, tc.answer)
+			observed, err := readManagedIssue(t.Context(), cfg, prelaunchTestNow, 7, server.Client(), server.URL)
+			if tc.err != "" {
+				if err == nil || !strings.Contains(err.Error(), tc.err) || strings.Contains(err.Error(), prelaunchIssueReadToken) {
+					t.Fatalf("err %v, want %q", err, tc.err)
+				}
+				return
+			}
+			if err != nil || observed != tc.want {
+				t.Fatalf("observation %+v, %v; want %+v", observed, err, tc.want)
+			}
+			if slices.Contains(*requests, "GET /elsewhere") {
+				t.Fatalf("the reader followed a redirect: %q", *requests)
+			}
+		})
+	}
+}
+
+const prelaunchIssueReadToken = "ghs_PRELAUNCHISSUEREAD" //nolint:gosec // fixture value, not a credential
+
+// newPrelaunchIssueReaderFixture writes a private App registration for acme,
+// its durable authority (with installation 555 trusted on repository 42 when
+// trusted is set), and a store, and serves the mint endpoint and issue 7 of
+// repository 42 with answer. requests lists each request, with a mint's
+// requested permissions.
+func newPrelaunchIssueReaderFixture(
+	t *testing.T, trusted bool, answer func(http.ResponseWriter, *http.Request),
+) (preflightConfig, *httptest.Server, *[]string) {
+	t.Helper()
+	state, credentials := prodAppDirs(t, t.TempDir())
+	keystore, err := publish.NewKeystore(credentials, state)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := keystore.SaveApp(publish.AppCredentials{
+		Owner: "acme", OwnerID: 4242, Visibility: publish.AppVisibilityPrivate,
+		AppID: 91, Name: "Freeside Acme", Slug: "freeside-acme",
+		ClientID: "Iv1.acme", Key: setupTestKey(t),
+	}); err != nil {
+		t.Fatal(err)
+	}
+	authority, err := publish.NewInstallationAuthorityStore(state)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := authority.InitializeDocument(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	installations := []publish.TrustedInstallationRecord{}
+	if trusted {
+		installations = append(installations, publish.TrustedInstallationRecord{
+			InstallationID: 555, Account: "acme", AccountID: 4242, RepositoryIDs: []int64{42},
+		})
+	}
+	if err := authority.UpdateDocument(t.Context(), func(document *publish.InstallationAuthorityDocument) error {
+		document.Registrations = append(document.Registrations, publish.InstallationAuthorityEntry{
+			RegistrationID: 91, ActiveEpoch: 1, DurableIntentRevision: 1,
+			TrustedOwners:        []publish.TrustedOwnerRecord{{Login: "acme", ID: 4242}},
+			TrustedInstallations: installations,
+		})
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	dbPath := filepath.Join(t.TempDir(), "freeside.db")
+	if err := storetest.Open(t, dbPath, store.Options{}).Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	var requests []string
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/app/installations/555/access_tokens":
+			var body struct {
+				Permissions json.RawMessage `json:"permissions"`
+			}
+			if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+				t.Error(err)
+			}
+			requests = append(requests, r.Method+" "+r.URL.Path+" "+string(body.Permissions))
+			w.WriteHeader(http.StatusCreated)
+			_, _ = fmt.Fprintf(w, `{"token":%q,"expires_at":%q,`+
+				`"permissions":{"issues":"read","metadata":"read"},"repository_selection":"selected",`+
+				`"repositories":[{"id":42,"name":"widgets"}]}`,
+				prelaunchIssueReadToken, prelaunchTestNow.Add(time.Hour).Format(time.RFC3339))
+		case "/repositories/42/issues/7":
+			requests = append(requests, r.Method+" "+r.URL.Path)
+			answer(w, r)
+		default:
+			requests = append(requests, r.Method+" "+r.URL.Path)
+			w.WriteHeader(http.StatusNotFound)
+		}
+	}))
+	t.Cleanup(server.Close)
+	return preflightConfig{
+		PublicationStateDir: state, PublicationCredentialsDir: credentials,
+		Repo: "acme/widgets", RepositoryID: 42, DBPath: dbPath,
+		ApprovedRecipe: approveShadowReviewDigest("a"),
+	}, server, &requests
+}
+
+func prelaunchMintAudits(t *testing.T, dbPath string) []store.MintAudit {
+	t.Helper()
+	st, err := store.OpenReadOnly(t.Context(), dbPath, store.Options{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = st.Close() }()
+	var audits []store.MintAudit
+	if err := st.Read(t.Context(), func(tx *store.ReadTx) error {
+		audits, err = tx.ListMintAudits(t.Context())
+		return err
+	}); err != nil {
+		t.Fatal(err)
+	}
+	return audits
 }

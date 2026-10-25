@@ -1232,48 +1232,13 @@ func inspectRepositoryAuthority(
 	ctx context.Context, cfg preflightConfig, now time.Time,
 ) (inspection repositoryAuthorityInspection) {
 	localErr := inspectLocalRepositoryBase(ctx, cfg)
-	authorityStore, err := publish.NewInstallationAuthorityStore(cfg.PublicationStateDir)
+	keystore, authorityStore, selected, err := selectRepositoryAuthority(ctx, cfg, now)
 	if err != nil {
 		return repositoryAuthorityInspection{BaseError: errors.Join(localErr, err), AuthorityError: err}
-	}
-	keystore, err := publish.NewKeystore(cfg.PublicationCredentialsDir, cfg.PublicationStateDir)
-	if err != nil {
-		return repositoryAuthorityInspection{BaseError: errors.Join(localErr, err), AuthorityError: err}
-	}
-	apps, err := keystore.ListApps()
-	if err != nil || len(apps) == 0 {
-		authorityErr := errors.New("no usable GitHub App credentials")
-		return repositoryAuthorityInspection{BaseError: errors.Join(localErr, authorityErr), AuthorityError: authorityErr}
-	}
-	var selected *publish.AppCredentials
-	for _, app := range apps {
-		authority, err := authorityStore.InstallationAuthority(ctx, app.AppID)
-		if err != nil {
-			return repositoryAuthorityInspection{BaseError: errors.Join(localErr, err), AuthorityError: err}
-		}
-		allows, err := publish.InstallationAuthorityAllowsRepository(
-			app, authority, cfg.RepositoryID, now,
-		)
-		if err != nil {
-			return repositoryAuthorityInspection{BaseError: errors.Join(localErr, err), AuthorityError: err}
-		}
-		if !allows {
-			continue
-		}
-		if selected != nil {
-			authorityErr := errors.New("multiple GitHub Apps have authority for the target repository")
-			return repositoryAuthorityInspection{BaseError: errors.Join(localErr, authorityErr), AuthorityError: authorityErr}
-		}
-		candidate := app
-		selected = &candidate
-	}
-	if selected == nil {
-		authorityErr := errors.New("no registered GitHub App has authority for the target repository")
-		return repositoryAuthorityInspection{BaseError: errors.Join(localErr, authorityErr), AuthorityError: authorityErr}
 	}
 	client := &http.Client{Timeout: 30 * time.Second}
 	resolved, err := publish.InspectAppBotIdentity(
-		ctx, *selected, client, defaultGitHubAPIBase,
+		ctx, selected, client, defaultGitHubAPIBase,
 	)
 	if err != nil {
 		return repositoryAuthorityInspection{BaseError: errors.Join(localErr, err), AuthorityError: err}
@@ -1341,6 +1306,53 @@ func inspectRepositoryAuthority(
 		return repositoryAuthorityInspection{BaseError: err, AuthorityError: err}
 	}
 	return repositoryAuthorityInspection{BaseError: localErr}
+}
+
+// selectRepositoryAuthority opens prod's keystore and installation-authority
+// store and selects the one registered App whose durable authority allows the
+// target repository. Every janitor-free mint for the repository selects its
+// App here, so the composition and prelaunch's issue read cannot pick
+// different registrations.
+func selectRepositoryAuthority(
+	ctx context.Context, cfg preflightConfig, now time.Time,
+) (*publish.Keystore, *publish.InstallationAuthorityStore, publish.AppCredentials, error) {
+	authorityStore, err := publish.NewInstallationAuthorityStore(cfg.PublicationStateDir)
+	if err != nil {
+		return nil, nil, publish.AppCredentials{}, err
+	}
+	keystore, err := publish.NewKeystore(cfg.PublicationCredentialsDir, cfg.PublicationStateDir)
+	if err != nil {
+		return nil, nil, publish.AppCredentials{}, err
+	}
+	apps, err := keystore.ListApps()
+	if err != nil || len(apps) == 0 {
+		return nil, nil, publish.AppCredentials{}, errors.New("no usable GitHub App credentials")
+	}
+	var selected *publish.AppCredentials
+	for _, app := range apps {
+		authority, err := authorityStore.InstallationAuthority(ctx, app.AppID)
+		if err != nil {
+			return nil, nil, publish.AppCredentials{}, err
+		}
+		allows, err := publish.InstallationAuthorityAllowsRepository(
+			app, authority, cfg.RepositoryID, now,
+		)
+		if err != nil {
+			return nil, nil, publish.AppCredentials{}, err
+		}
+		if !allows {
+			continue
+		}
+		if selected != nil {
+			return nil, nil, publish.AppCredentials{}, errors.New("multiple GitHub Apps have authority for the target repository")
+		}
+		candidate := app
+		selected = &candidate
+	}
+	if selected == nil {
+		return nil, nil, publish.AppCredentials{}, errors.New("no registered GitHub App has authority for the target repository")
+	}
+	return keystore, authorityStore, *selected, nil
 }
 
 func inspectLocalRepositoryBase(ctx context.Context, cfg preflightConfig) error {

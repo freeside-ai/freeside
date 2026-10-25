@@ -8,10 +8,12 @@ import (
 	"fmt"
 	"io"
 	"io/fs"
+	"net/http"
 	"os"
 	"os/signal"
 	"path/filepath"
 	"slices"
+	"strconv"
 	"strings"
 	"syscall"
 	"time"
@@ -21,8 +23,10 @@ import (
 	"github.com/freeside-ai/freeside/daemon/internal/daemonlock"
 	"github.com/freeside-ai/freeside/daemon/internal/domain"
 	"github.com/freeside-ai/freeside/daemon/internal/engine"
+	"github.com/freeside-ai/freeside/daemon/internal/publish"
 	"github.com/freeside-ai/freeside/daemon/internal/specify"
 	"github.com/freeside-ai/freeside/daemon/internal/store"
+	"github.com/freeside-ai/freeside/daemon/internal/strictjson"
 	"github.com/freeside-ai/freeside/daemon/internal/ward"
 )
 
@@ -120,7 +124,8 @@ func (p prelaunchPrerequisite) valid() bool {
 }
 
 // prelaunchRecord is prelaunch.json. ManifestDigest is null when the
-// composition did not run; LineupProbe is null when the probe did not run.
+// composition did not run; LineupProbe is null when the probe did not run;
+// Issue is null when the target-issue read did not run.
 type prelaunchRecord struct {
 	Version        string                `json:"version"`
 	SettingsDigest *domain.Digest        `json:"settings_digest"`
@@ -132,6 +137,15 @@ type prelaunchRecord struct {
 	Checks         []prelaunchCheck      `json:"checks"`
 	HealthItems    []prelaunchHealthItem `json:"health_items"`
 	LineupProbe    *lineupProbeRecord    `json:"lineup_probe"`
+	Issue          *prelaunchIssue       `json:"issue"`
+}
+
+// prelaunchIssue is what the target-issue read saw of the run's issue. State
+// is GitHub's, "" when the issue was unreadable.
+type prelaunchIssue struct {
+	URL      string `json:"url"`
+	Readable bool   `json:"readable"`
+	State    string `json:"state"`
 }
 
 // prelaunchCheck is one check. Evidence says what was seen, or why the
@@ -201,6 +215,17 @@ type prelaunchHost struct {
 	// inspectImage checks that the local container store holds a pinned
 	// reference, without the lease.
 	inspectImage func(ctx context.Context, ref string) error
+	// readIssue reads one issue of cfg.Repo through the App's issue-read grant.
+	readIssue func(ctx context.Context, cfg preflightConfig, now time.Time, number int) (prelaunchIssueObservation, error)
+}
+
+// prelaunchIssueObservation is GitHub's answer to the target-issue read. Only
+// a 200 answer carries the decoded fields; the reader has already refused a
+// 200 that names a different issue number.
+type prelaunchIssueObservation struct {
+	Status      int
+	State       string
+	PullRequest bool
 }
 
 func productionPrelaunchHost() prelaunchHost {
@@ -224,6 +249,7 @@ func productionPrelaunchHost() prelaunchHost {
 		inspectImage: func(ctx context.Context, ref string) error {
 			return checkImageInStore(ctx, deputyContainerBin, ref)
 		},
+		readIssue: readPrelaunchIssue,
 	}
 }
 
@@ -243,7 +269,7 @@ func parsePrelaunchConfig(args []string, stderr io.Writer) (prelaunchConfig, err
 	flags.StringVar(&cfg.PublicationPath, "publication", "", "the publication file the run will submit (required)")
 	flags.StringVar(&cfg.WorkUnitPath, "work-unit", "", "the work-unit declaration the run will submit")
 	flags.Var(&cfg.TaskLines, "task-line", "a task line the run will submit, as role=agent (repeatable)")
-	flags.BoolVar(&cfg.NoLive, "no-live", false, "skip the lineup probe")
+	flags.BoolVar(&cfg.NoLive, "no-live", false, "skip the live checks: the target-issue read and the lineup probe")
 	if err := flags.Parse(args); err != nil {
 		return prelaunchConfig{}, fmt.Errorf("%w: %w", errPrelaunchUsage, err)
 	}
@@ -262,10 +288,10 @@ func parsePrelaunchConfig(args []string, stderr io.Writer) (prelaunchConfig, err
 // would make that spends nothing: settings, the pinned images in the local
 // container store, submit inputs, the agent tree, the state database, the
 // rig lease, prod's authority, and the launch composition, and with live on
-// the lineup probe. It writes prelaunch.json beside the composition manifest
-// and prints the same bytes. The only store write is the mint audit of the
-// token the composition mints; the composition manifest is neither written
-// nor removed.
+// the target-issue read and the lineup probe. It writes prelaunch.json beside
+// the composition manifest and prints the same bytes. The only store writes
+// are the mint audits of the tokens the composition and the target-issue read
+// mint; the composition manifest is neither written nor removed.
 func runPrelaunchCommand(
 	ctx context.Context, args []string, stdout, stderr io.Writer, host prelaunchHost,
 ) error {
@@ -312,6 +338,9 @@ type prelaunchInputs struct {
 	// source is the specification artifact submit would register; a task
 	// already holding it refuses the submission.
 	source domain.ArtifactID
+	// sourceIssue is the canonical issue URL the task names, or "" when the
+	// task is specification text.
+	sourceIssue string
 }
 
 // prelaunchState is what the store reads found, for the walk. trustRead and
@@ -369,7 +398,7 @@ func evaluatePrelaunch(ctx context.Context, cfg prelaunchConfig, paths deputyPat
 	if preLeaseErr != nil {
 		skipLeaseBound(&record, "the settings must pass the deputy's checks first", cfg.NoLive)
 	} else {
-		manifest = runPrelaunchUnderLease(ctx, &record, cfg, settings, paths, homes, inputs, host, now)
+		manifest = runPrelaunchUnderLease(ctx, &record, cfg, settings, paths, homes, inputs, state, host, now)
 	}
 	record.FirstMissing = firstPrelaunchMissing(record, treeMissing, settings, paths, state, manifest)
 	record.Passed = record.FirstMissing == nil && !slices.ContainsFunc(record.Checks, func(c prelaunchCheck) bool {
@@ -419,6 +448,7 @@ func skipUnderLease(record *prelaunchRecord, why string, noLive bool) {
 	if noLive {
 		why = "-no-live"
 	}
+	record.skip(prelaunchGroupLive, "target_issue", why)
 	record.skip(prelaunchGroupLive, "lineup_probe", why)
 }
 
@@ -446,8 +476,9 @@ func checkPrelaunchInputs(
 		policy, err = checkSubmittedPolicy(cfg.PolicyPath, identity.ImplementationRunID)
 	}
 	var source domain.Artifact
+	var sourceIssue string
 	if err == nil {
-		source, err = prelaunchSourceArtifact(cfg.TaskPath, identity.SourceDigest)
+		source, sourceIssue, err = prelaunchSourceArtifact(cfg.TaskPath, identity.SourceDigest)
 	}
 	if err != nil {
 		record.fail(prelaunchGroupInputs, "submission", err.Error(), fix)
@@ -455,21 +486,22 @@ func checkPrelaunchInputs(
 	}
 	record.pass(prelaunchGroupInputs, "submission", "the inputs pass submit's checks for a new submission to project "+
 		string(settings.Repository.Project))
-	return &prelaunchInputs{identity: identity, policy: policy, source: source.ID}
+	return &prelaunchInputs{identity: identity, policy: policy, source: source.ID, sourceIssue: sourceIssue}
 }
 
 // prelaunchSourceArtifact is the specification artifact submit registers for
-// the task file.
-func prelaunchSourceArtifact(taskPath string, digest domain.Digest) (domain.Artifact, error) {
+// the task file, and the issue the task names, as submit reads it.
+func prelaunchSourceArtifact(taskPath string, digest domain.Digest) (domain.Artifact, string, error) {
 	task, err := readSubmissionFile(taskPath)
 	if err != nil {
-		return domain.Artifact{}, err
+		return domain.Artifact{}, "", err
 	}
 	if task.digest != digest {
-		return domain.Artifact{}, errors.New("the task file changed while it was checked")
+		return domain.Artifact{}, "", errors.New("the task file changed while it was checked")
 	}
-	return engine.SubmissionArtifact(
+	artifact, err := engine.SubmissionArtifact(
 		domain.ArtifactKindSpecification, task.digest, domain.EvidenceMediaTextMarkdown, int64(len(task.body)))
+	return artifact, engine.TaskSourceIssue(task.body), err
 }
 
 // checkSubmittedPolicy is the rest of what submit checks of the policy before
@@ -763,7 +795,7 @@ func checkPrelaunchIdentities(
 // the App authority's one writer during a run, can't start meanwhile.
 func runPrelaunchUnderLease(
 	ctx context.Context, record *prelaunchRecord, cfg prelaunchConfig, settings loadedDeputySettings,
-	paths deputyPaths, homes deputyHomes, inputs *prelaunchInputs, host prelaunchHost, now time.Time,
+	paths deputyPaths, homes deputyHomes, inputs *prelaunchInputs, state prelaunchState, host prelaunchHost, now time.Time,
 ) *compositionManifest {
 	lease, err := acquirePrelaunchLease(ctx, settings, paths, host)
 	if err != nil {
@@ -811,8 +843,10 @@ func runPrelaunchUnderLease(
 	manifest := composePrelaunchManifest(ctx, record, settings, paths, lease, tokenFile, host, now)
 	checkPrelaunchLaunchBinding(record, manifest, inputs, settings.Repository.Project)
 	if cfg.NoLive {
+		record.skip(prelaunchGroupLive, "target_issue", "-no-live")
 		record.skip(prelaunchGroupLive, "lineup_probe", "-no-live")
 	} else {
+		checkPrelaunchTargetIssue(ctx, record, settings, paths, lease, inputs, state, manifest, host)
 		probePrelaunchLineup(ctx, record, settings, paths, tokenFile, host, now)
 	}
 	return manifest
@@ -919,6 +953,203 @@ func checkPrelaunchLaunchBinding(
 		return
 	}
 	record.pass(prelaunchGroupInputs, name, "the inputs bind the launch manifest as submit requires")
+}
+
+// checkPrelaunchTargetIssue reads the run's target issue through the App's
+// issue-read grant, so an issue the App can't read, or one already closed,
+// fails before spend rather than in the run. It reads only an issue of the
+// managed repository: the specifier reads any other without the App's grant.
+// It runs under the lease, as the composition's mint does, so the App
+// authority's one writer can't start meanwhile.
+func checkPrelaunchTargetIssue(
+	ctx context.Context, record *prelaunchRecord, settings loadedDeputySettings, paths deputyPaths,
+	lease *daemonlock.RigLease, inputs *prelaunchInputs, state prelaunchState, manifest *compositionManifest,
+	host prelaunchHost,
+) {
+	const name = "target_issue"
+	repo := settings.Repository.Repo
+	if inputs == nil {
+		record.skip(prelaunchGroupLive, name, "the inputs must pass first")
+		return
+	}
+	if inputs.sourceIssue == "" {
+		record.skip(prelaunchGroupLive, name, "the task is specification text, not an issue URL")
+		return
+	}
+	issueRepo, numberText := splitIssueURL(inputs.sourceIssue)
+	if !strings.EqualFold(issueRepo, repo) {
+		record.skip(prelaunchGroupLive, name, "the issue is not in "+repo+"; the specifier reads it without the App's grant")
+		return
+	}
+	number, err := strconv.Atoi(numberText)
+	if err != nil {
+		record.fail(prelaunchGroupLive, name, inputs.sourceIssue+" names no usable issue number", "choose an open issue")
+		return
+	}
+	switch {
+	case !state.trustProfile:
+		record.skip(prelaunchGroupLive, name, "the state read found no active trust profile for "+repo+"; see first_missing")
+		return
+	case manifest == nil:
+		record.skip(prelaunchGroupLive, name, "the composition must run first")
+		return
+	case manifest.PublicationAuthor == nil:
+		record.skip(prelaunchGroupLive, name, "the composition resolved no App bot; see publication_authority")
+		return
+	}
+	cfg := deputyPreflightConfig(settings, paths, lease)
+	cfg.DBPath = lease.Manifest().Resources.DatabasePath
+	// The mint's App JWT is valid for minutes from the clock it is signed
+	// with, so the read takes the clock now, not the time the checks began:
+	// a slow composition must not leave it signing an expired JWT.
+	observed, err := host.readIssue(ctx, cfg, host.now(), number)
+	issue := &prelaunchIssue{URL: inputs.sourceIssue}
+	record.Issue = issue
+	retry := "retry; if it persists, check the App's issues:read grant on " + repo
+	if err != nil {
+		record.fail(prelaunchGroupLive, name, "the issue could not be read: "+err.Error(), retry)
+		return
+	}
+	switch observed.Status {
+	case http.StatusOK:
+	case http.StatusNotFound:
+		// The mint has already shown the App can read this repository's
+		// issues. GitHub limits an App holding issues but not pull_requests
+		// permission to issues, so a pull request's number reads as not
+		// found through this grant rather than as a 200 with its marker.
+		record.fail(prelaunchGroupLive, name, fmt.Sprintf(
+			"GitHub answered 404 for #%d of %s through the App's issues:read grant: there is no such issue, or it is a pull request, which that grant doesn't see",
+			number, repo),
+			"choose an open issue")
+		return
+	case http.StatusGone:
+		record.fail(prelaunchGroupLive, name, fmt.Sprintf(
+			"GitHub answered 410 for issue #%d of %s through the App's issues:read grant", number, repo),
+			"install the prod App on the repository, or choose an open issue")
+		return
+	default:
+		record.fail(prelaunchGroupLive, name, fmt.Sprintf("GitHub answered %d for issue #%d of %s", observed.Status, number, repo), retry)
+		return
+	}
+	issue.Readable, issue.State = true, observed.State
+	switch {
+	// Kept although the issues-only grant should hide pull requests: a 200
+	// that does carry the marker must still fail.
+	case observed.PullRequest:
+		record.fail(prelaunchGroupLive, name, fmt.Sprintf("#%d of %s is a pull request, not an issue", number, repo),
+			"choose an open issue")
+	case observed.State == "open":
+		record.pass(prelaunchGroupLive, name, fmt.Sprintf(
+			"issue #%d of %s is open and readable through the App's issues:read grant", number, repo))
+	case observed.State == "closed":
+		record.fail(prelaunchGroupLive, name, fmt.Sprintf("issue #%d of %s is closed", number, repo), "choose an open issue")
+	default:
+		record.fail(prelaunchGroupLive, name, fmt.Sprintf("issue #%d of %s has state %q, which is not recognized", number, repo, observed.State),
+			"report it; prelaunch knows open and closed")
+	}
+}
+
+// splitIssueURL returns the owner/name and number text of a canonical issue
+// URL, the shape engine.TaskSourceIssue guarantees: the regular expression
+// behind it admits exactly https://github.com/<owner>/<name>/issues/<n>.
+func splitIssueURL(issueURL string) (repo, number string) {
+	parts := strings.Split(strings.TrimPrefix(issueURL, "https://github.com/"), "/")
+	return parts[0] + "/" + parts[1], parts[3]
+}
+
+// readPrelaunchIssue is the production target-issue read.
+func readPrelaunchIssue(
+	ctx context.Context, cfg preflightConfig, now time.Time, number int,
+) (prelaunchIssueObservation, error) {
+	return readManagedIssue(ctx, cfg, now, number, &http.Client{Timeout: 30 * time.Second}, defaultGitHubAPIBase)
+}
+
+// prelaunchIssueResponseLimit bounds the issue answer. GitHub caps an issue
+// body at 65536 characters, so a larger answer is not an issue.
+const prelaunchIssueResponseLimit = 1 << 20
+
+// readManagedIssue mints an issue-read token from prod's durable installation
+// authority, with no janitor, and reads issue number of cfg.Repo by repository
+// ID. The daemon lock is held only for the mint and its audit row, so a slow
+// GitHub answer never holds the database. The token goes only into the
+// request's Authorization header. Redirects are not followed, so the bearer
+// never leaves the API host it was minted for.
+func readManagedIssue(
+	ctx context.Context, cfg preflightConfig, now time.Time, number int, client *http.Client, apiBase string,
+) (prelaunchIssueObservation, error) {
+	token, err := mintPrelaunchIssueToken(ctx, cfg, now, client, apiBase)
+	if err != nil {
+		return prelaunchIssueObservation{}, err
+	}
+	request, err := http.NewRequestWithContext(ctx, http.MethodGet,
+		fmt.Sprintf("%s/repositories/%d/issues/%d", apiBase, cfg.RepositoryID, number), nil)
+	if err != nil {
+		return prelaunchIssueObservation{}, err
+	}
+	request.Header.Set("Authorization", "Bearer "+token.Token.Reveal())
+	request.Header.Set("Accept", "application/vnd.github+json")
+	request.Header.Set("X-GitHub-Api-Version", "2022-11-28")
+	noRedirect := *client
+	noRedirect.CheckRedirect = func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }
+	response, err := noRedirect.Do(request)
+	if err != nil {
+		return prelaunchIssueObservation{}, err
+	}
+	defer func() {
+		_, _ = io.Copy(io.Discard, io.LimitReader(response.Body, prelaunchIssueResponseLimit))
+		_ = response.Body.Close()
+	}()
+	if response.StatusCode != http.StatusOK {
+		return prelaunchIssueObservation{Status: response.StatusCode}, nil
+	}
+	var decoded struct {
+		Number      int              `json:"number"`
+		State       string           `json:"state"`
+		PullRequest *json.RawMessage `json:"pull_request"`
+	}
+	if err := strictjson.DecodeReaderAllowingUnknownFields(
+		response.Body, &decoded, strictjson.TolerateInvalidUTF8, strictjson.Limit(prelaunchIssueResponseLimit),
+	); err != nil {
+		return prelaunchIssueObservation{}, fmt.Errorf("decode the issue: %w", err)
+	}
+	// Returned-object boundary: an answer about some other issue must not
+	// decide this one's check.
+	if decoded.Number != number {
+		return prelaunchIssueObservation{}, fmt.Errorf("GitHub answered with issue #%d for #%d", decoded.Number, number)
+	}
+	return prelaunchIssueObservation{
+		Status: response.StatusCode, State: decoded.State, PullRequest: decoded.PullRequest != nil,
+	}, nil
+}
+
+// mintPrelaunchIssueToken mints the issue-read token under the daemon lock and
+// releases the lock and store before returning.
+func mintPrelaunchIssueToken(
+	ctx context.Context, cfg preflightConfig, now time.Time, client *http.Client, apiBase string,
+) (publish.InstallationToken, error) {
+	keystore, authorityStore, selected, err := selectRepositoryAuthority(ctx, cfg, now)
+	if err != nil {
+		return publish.InstallationToken{}, err
+	}
+	lock, err := daemonlock.Acquire(cfg.DBPath)
+	if err != nil {
+		return publish.InstallationToken{}, err
+	}
+	defer lock.Close() //nolint:errcheck // acquisition succeeded; the mint's result is primary
+	st, err := store.OpenExisting(ctx, cfg.DBPath, store.Options{
+		ApprovedRecipes: map[domain.Digest]bool{cfg.ApprovedRecipe: true},
+	})
+	if err != nil {
+		return publish.InstallationToken{}, err
+	}
+	defer st.Close() //nolint:errcheck // the mint audit transaction owns its durability result
+	recorder, err := publish.NewStoreRecorder(st)
+	if err != nil {
+		return publish.InstallationToken{}, err
+	}
+	minter := publish.NewMinter(keystore, client, apiBase, recorder, nil, func() time.Time { return now })
+	return publish.NewIssueInspectionTokenSource(minter, authorityStore, selected.AppID, cfg.RepositoryID).
+		Token(ctx, cfg.Repo)
 }
 
 // probePrelaunchLineup runs the lineup probe under the held lease and writes
