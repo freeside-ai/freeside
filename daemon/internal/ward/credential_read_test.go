@@ -324,6 +324,20 @@ func TestReadSetupTokenFailsClosed(t *testing.T) {
 			t.Fatalf("missing volume = %v after %d runtime calls, want absent after the volume list", err, f.callCount())
 		}
 	})
+	// #2309: auth adopt's log is where a dropped exporter digest shows, so
+	// the create failure names the image the observer was created from.
+	t.Run("a failed observer create names the image", func(t *testing.T) {
+		fx := newTokenReadFixture(t, []byte(integritySentinelToken), hexSHA256([]byte(integritySentinelToken)))
+		fx.rt.onCreateContainer = func(ContainerSpec) error { return errors.New("container create: exit status 1") }
+		synctest.Test(t, func(t *testing.T) {
+			_, err := ReadSetupToken(context.Background(), fx.rt, integrityExporterImage, integrityCredentialVolume, nil)
+			if err == nil || !strings.Contains(err.Error(),
+				"create credential observer container from image "+integrityExporterImage+": ") {
+				t.Fatalf("read = %v, want the create failure naming %s", err, integrityExporterImage)
+			}
+		})
+		fx.assertNothingLeft(t)
+	})
 	t.Run("an unpinned exporter image touches no runtime", func(t *testing.T) {
 		f := newFakeRuntime(t)
 		_, err := ReadSetupToken(context.Background(), f, "registry.test/exporter", integrityCredentialVolume, nil)

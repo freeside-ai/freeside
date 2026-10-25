@@ -697,7 +697,7 @@ func (b *Backend) Handoff(ctx context.Context, hs HandoffSpec) (result *HandoffR
 
 	st.agent.attempted = true
 	if err := b.rt.CreateContainer(ctx, cloneContainerSpec(agentSpec)); err != nil {
-		return nil, fmt.Errorf("create agent container: %w", err)
+		return nil, fmt.Errorf("create agent container from image %s: %w", agentSpec.Image, err)
 	}
 	st.agent.owned = true
 	agentRep, err := b.rt.Inspect(ctx, names.Agent)
@@ -942,7 +942,7 @@ func (b *Backend) observeCredentialProof(
 	}
 	claim.attempted = true
 	if err := b.rt.CreateContainer(ctx, cloneContainerSpec(spec)); err != nil {
-		return fail(failf(CheckAuthStoreMutationLease, "create credential observer container: %v", err))
+		return fail(failf(CheckAuthStoreMutationLease, "create credential observer container from image %s: %v", spec.Image, err))
 	}
 	claim.owned = true
 	rep, err := b.rt.Inspect(ctx, name)
@@ -1108,7 +1108,7 @@ func (b *Backend) materializeExport(ctx context.Context, hs HandoffSpec, names h
 	exporterSpec := buildExporterSpec(b.cfg, hs, names, st.ownershipLabel)
 	st.exporter.attempted = true
 	if err := b.rt.CreateContainer(ctx, cloneContainerSpec(exporterSpec)); err != nil {
-		return "", fmt.Errorf("create exporter container: %w", err)
+		return "", fmt.Errorf("create exporter container from image %s: %w", exporterSpec.Image, err)
 	}
 	st.exporter.owned = true
 	rep, err := b.rt.Inspect(ctx, names.Exporter)
