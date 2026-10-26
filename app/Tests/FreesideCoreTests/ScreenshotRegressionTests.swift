@@ -2025,6 +2025,44 @@
                             .header(fixture.history))
                 )
             }
+            // A ready card an external review withdrew, before round 2's
+            // request: the task row and the timeline header name the stage
+            // and round the re-entry opened (#2350).
+            var reentry = TaskStageFixtures.page(TaskHistoryFixtures.externallyReviewed(requested: false))
+            reentry.runs[0].run.outcome = .pending
+            reentry.runs[0].run.latest_milestone = .init(value1: .publication_ready)
+            var reentryTask = approvalFixture.task
+            reentryTask.task = reentry.task
+            let reentryCache = InMemoryCacheStore()
+            try reentryCache.save(
+                .init(
+                    cursors: .init(
+                        syncEpoch: "reentry-epoch", lastFullSnapshotRevision: reentryTask.as_of_revision,
+                        highestObservedServerRevision: reentryTask.as_of_revision),
+                    attentionItems: reentry.items, runs: reentry.runs, tasks: [reentryTask],
+                    taskTimelines: [reentry.history].compactMap { $0 }))
+            let reentryCoordinator = SyncCoordinator(
+                client: APIClientFactory.mock(server: MockServer()), cache: reentryCache)
+            let reentryPosition = TaskDisplay.position(
+                reentry.task, runs: reentry.runs, attentionItems: reentry.items, history: reentry.history,
+                stage: TaskDisplay.currentStage(reentry.task, runs: reentry.runs, history: reentry.history))
+            for scheme in [ColorScheme.light, .dark] {
+                surfaces.append(
+                    Surface(
+                        name: "task-external-review-stage-390-\(scheme)", width: 390, colorScheme: scheme,
+                        nativeAppearance: true,
+                        view: AnyView(
+                            VStack(alignment: .leading, spacing: 28) {
+                                TaskRowView(
+                                    task: reentry.task, position: reentryPosition, now: RunFixtures.screenshotInstant)
+                                TaskTimelineView(
+                                    coordinator: reentryCoordinator, snapshot: reentryTask, onOpenRun: { _ in }
+                                ).header(reentry.history)
+                            }
+                            .padding(24)
+                            .foregroundStyle(Color.ink)
+                            .background(Color.ground))))
+            }
             for width in [CGFloat(820), CGFloat(390)] {
                 for scheme in [ColorScheme.light, .dark] {
                     surfaces.append(

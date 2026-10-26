@@ -372,6 +372,8 @@ import Testing
                 == [
                     "Round 2 requested *", "External review by @maintainer on #110 · Round 2", "> Review started",
                 ] + published)
+        #expect(
+            TaskTimelinePresentation.newestReviewRound(TaskHistoryFixtures.externallyReviewed(requested: false)) == 2)
     }
 
     @Test func aRunWithNoRoleKeepsItsLabelsAndDrawsNoStart() {

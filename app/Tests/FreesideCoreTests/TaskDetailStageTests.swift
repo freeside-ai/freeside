@@ -116,6 +116,135 @@ import Testing
         #expect(stage(TaskProgressFixtures.make("No position")) == nil)
     }
 
+    /// An admitted external review sends a published task back to review
+    /// (#2350). Through each window the task row's stage and round and the
+    /// header's chip name the rail's newest start: published, after the
+    /// ready card was withdrawn but before round 2 was requested (with the
+    /// run's newest milestone still its publication, as the iPhone held it,
+    /// or a later one, as the Mac did), and after the request.
+    @Test func theRowAndHeaderAgreeThroughAnExternalReviewReEntry() throws {
+        func page(
+            _ history: Components.Schemas.TaskTimeline, outcome: Components.Schemas.RunOutcome,
+            milestone: Components.Schemas.RunMilestoneKind
+        ) -> TaskProgressFixtures.Case {
+            var page = TaskStageFixtures.page(history)
+            page.runs[0].run.outcome = outcome
+            page.runs[0].run.latest_milestone = .init(value1: milestone)
+            return page
+        }
+        let windows: [(String, TaskProgressFixtures.Case, Stage, String?)] = [
+            (
+                "published",
+                page(TaskHistoryFixtures.history(.published), outcome: .published, milestone: .publication_ready),
+                .verification, nil
+            ),
+            (
+                "withdrawn, publication newest",
+                page(
+                    TaskHistoryFixtures.externallyReviewed(requested: false), outcome: .pending,
+                    milestone: .publication_ready),
+                .review, "Round 2"
+            ),
+            (
+                "withdrawn, a later milestone",
+                page(
+                    TaskHistoryFixtures.externallyReviewed(requested: false), outcome: .pending,
+                    milestone: .invocation_started),
+                .review, "Round 2"
+            ),
+            (
+                "round 2 requested",
+                page(
+                    TaskHistoryFixtures.externallyReviewed(requested: true), outcome: .pending,
+                    milestone: .invocation_started),
+                .review, "Round 2"
+            ),
+        ]
+        for (name, page, expected, round) in windows {
+            let history = try #require(page.history)
+            let rail = TaskTimelinePresentation.newestStage(TaskTimelinePresentation.rows(history))
+            let current = TaskDisplay.currentStage(page.task, runs: page.runs, history: history)
+            let position = TaskDisplay.position(
+                page.task, runs: page.runs, attentionItems: page.items, history: history, stage: current)
+            let heading = try #require(position?.heading)
+            #expect(rail == expected, "\(name)")
+            #expect(stage(page) == expected, "\(name)")
+            #expect(heading.label == AttentionDisplay.label(expected), "\(name)")
+            // A published run keeps the round its run names; a re-entry's
+            // is the round it opened.
+            if let round { #expect(heading.round == round, "\(name)") }
+            // The spoken rail marks the stage the heading names; a published
+            // run's Verification reads completed.
+            if expected == .review {
+                #expect(position?.rail.entries.first { $0.state == .current }?.id == expected.rawValue, "\(name)")
+            }
+        }
+        // Before the timeline loads, the row keeps its run's own heading.
+        var unloaded = windows[2].1
+        unloaded.history = nil
+        #expect(TaskDisplay.currentStage(unloaded.task, runs: unloaded.runs, history: nil) == nil)
+    }
+
+    @Test func aPublicationHoldNewerThanTheRailsStartSaysVerification() {
+        // The rail draws no event for a publication hold, so a hold observed
+        // after round 1's request still reads as Verification.
+        var page = TaskStageFixtures.page(.review)
+        page.runs[0].run.hold_reason = .init(value1: .verification_findings)
+        let requested = page.history?.events.first?.recorded_at ?? .distantPast
+        // The page's current run is its history's newest.
+        page.history?.sections[0].runs[0].hold = .init(
+            value1: .init(
+                run_id: page.runs[0].run.id, reason: .verification_findings,
+                first_observed_at: requested.addingTimeInterval(60), last_observed_at: requested.addingTimeInterval(60))
+        )
+        #expect(stage(page) == .verification)
+        #expect(TaskDisplay.currentStage(page.task, runs: page.runs, history: page.history)?.stage == .verification)
+    }
+
+    @Test func aHoldOutsidePublicationLeavesAReEntrysReview() throws {
+        // In attended mode the re-entered cycle's publication waits on a
+        // hold observed after the re-entry; it is not a publication hold.
+        var page = TaskStageFixtures.page(TaskHistoryFixtures.externallyReviewed(requested: false))
+        page.runs[0].run.outcome = .pending
+        page.runs[0].run.latest_milestone = .init(value1: .publication_ready)
+        page.runs[0].run.hold_reason = .init(value1: .attended_mode_active)
+        let reentered = try #require(page.history?.events.first?.recorded_at)
+        page.history?.sections[0].runs[0].hold = .init(
+            value1: .init(
+                run_id: page.runs[0].run.id, reason: .attended_mode_active,
+                first_observed_at: reentered.addingTimeInterval(60), last_observed_at: reentered.addingTimeInterval(60))
+        )
+        #expect(stage(page) == .review)
+        #expect(
+            TaskDisplay.currentStage(page.task, runs: page.runs, history: page.history)
+                == .init(stage: .review, round: "Round 2"))
+    }
+
+    @Test func aRoundRequestedAfterPublicationSaysReviewWithoutExternalReview() throws {
+        // A readiness re-entry opens round 2 while the run's newest
+        // milestone is still its publication.
+        var history = TaskHistoryFixtures.history(.published)
+        let published = try #require(history.events.first?.recorded_at)
+        let head = String(repeating: "a", count: 40)
+        history.events.insert(
+            .init(
+                review: .init(
+                    value1: .init(
+                        invocation_id: "review-history-implementation-1-2", round: 2, head_sha: head, base_sha: head)),
+                kind: .review_requested, recorded_at: published.addingTimeInterval(60),
+                run_id: "history-implementation-1"),
+            at: 0)
+        var page = TaskStageFixtures.page(history)
+        page.runs[0].run.outcome = .pending
+        page.runs[0].run.latest_milestone = .init(value1: .publication_ready)
+        let current = TaskDisplay.currentStage(page.task, runs: page.runs, history: page.history)
+        #expect(current == .init(stage: .review, round: "Round 2"))
+        #expect(stage(page) == .review)
+        let position = TaskDisplay.position(
+            page.task, runs: page.runs, attentionItems: page.items, history: page.history, stage: current)
+        #expect(position?.heading?.text == "Review · Round 2")
+    }
+
     @Test func everyOtherStatusKeepsItsWords() {
         for stage in Stage.allCases {
             for status in [

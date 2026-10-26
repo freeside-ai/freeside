@@ -4,6 +4,18 @@ import FreesideAPI
 /// The task presentation vocabulary the task row, the task timeline, and
 /// the run timeline's eyebrow share.
 package enum TaskDisplay {
+    /// A stage and its round, as the task names where it stands
+    /// (`TaskDisplay.currentStage` in FreesideCore, which reads the rail).
+    package struct CurrentStage: Equatable {
+        package let stage: Components.Schemas.StageName
+        package let round: String?
+
+        package init(stage: Components.Schemas.StageName, round: String?) {
+            self.stage = stage
+            self.round = round
+        }
+    }
+
     /// The row's stage line: the phase heading the run row carried as its
     /// title (#1174), the rail under it, and the current hold.
     package struct Position: Equatable {
@@ -177,14 +189,17 @@ package enum TaskDisplay {
     /// daemon's own position supplies the stage, round, and hold; the rail
     /// then marks that stage current and other stages pending. Recorded
     /// campaign approval independently completes Specification in either
-    /// path. A task with no position has no stage line.
+    /// path. A task with no position has no stage line. `stage`, when the
+    /// task's timeline names one, is the stage and round the line names
+    /// instead, so the row and the task detail header agree (#2350).
     package static func position(
         _ task: Components.Schemas.Task, runs: [Components.Schemas.RunSnapshot],
         attentionItems: [Components.Schemas.AttentionItemSnapshot] = [],
-        history: Components.Schemas.TaskTimeline? = nil
+        history: Components.Schemas.TaskTimeline? = nil, stage: CurrentStage? = nil
     ) -> Position? {
         guard let current = task.current_position?.value1,
-            var position = phasePosition(task, runs: runs, attentionItems: attentionItems, history: history)
+            var position = phasePosition(
+                task, runs: runs, attentionItems: attentionItems, history: history, stage: stage)
         else { return nil }
         let run = runs.first { $0.run.id == current.run_id }?.run
         let status = statusAndTone(task, run: run)
@@ -395,7 +410,7 @@ package enum TaskDisplay {
     private static func phasePosition(
         _ task: Components.Schemas.Task, runs: [Components.Schemas.RunSnapshot],
         attentionItems: [Components.Schemas.AttentionItemSnapshot],
-        history: Components.Schemas.TaskTimeline?
+        history: Components.Schemas.TaskTimeline?, stage current: CurrentStage?
     ) -> Position? {
         guard let position = task.current_position?.value1 else { return nil }
         let run = runs.first(where: { $0.run.id == position.run_id })?.run
@@ -405,10 +420,11 @@ package enum TaskDisplay {
             ? reviewDisputeHeading(task, run: run, attentionItems: attentionItems)
                 ?? finalReviewHeading(task, run: run, attentionItems: attentionItems) : nil)
             .map { Position.Heading(label: $0, round: nil) }
+            ?? current.map { Position.Heading(label: AttentionDisplay.label($0.stage), round: $0.round) }
         if let run {
             return Position(
                 heading: handoff ?? RunDisplay.stageHeading(run).map { .init(label: $0.label, round: $0.round) },
-                rail: approvalRail(RunDisplay.stageRail(run), approval: approval),
+                rail: approvalRail(RunDisplay.stageRail(run, stage: current?.stage), approval: approval),
                 holdReason: run.hold_reason?.value1,
                 qualification: approval.qualification)
         }

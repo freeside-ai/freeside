@@ -151,14 +151,17 @@ struct TaskTimelineView: View {
     /// can draw the header on its own.
     func header(_ timeline: Components.Schemas.TaskTimeline?) -> some View {
         let task = snapshot.task
+        let reviewRounds =
+            timeline.map { TaskTimelinePresentation.reviewRounds($0, runTimelines: coordinator.timelinesByRunID) }
+            ?? [:]
+        // The task row reads the same stage and round (`TasksListView.row`).
         let position = TaskDisplay.position(
-            task, runs: coordinator.runs, attentionItems: coordinator.store.orderedSnapshots, history: timeline)
+            task, runs: coordinator.runs, attentionItems: coordinator.store.orderedSnapshots, history: timeline,
+            stage: TaskDisplay.currentStage(
+                task, runs: coordinator.runs, history: timeline, reviewRounds: reviewRounds))
         let lines = TaskDisplay.rowLines(task, position: position)
         let stage = TaskDisplay.detailStage(
-            task, runs: coordinator.runs, history: timeline,
-            reviewRounds: timeline.map {
-                TaskTimelinePresentation.reviewRounds($0, runTimelines: coordinator.timelinesByRunID)
-            } ?? [:])
+            task, runs: coordinator.runs, history: timeline, reviewRounds: reviewRounds)
         return VStack(alignment: .leading, spacing: 12) {
             // The task id lives in the page's Identifiers footer; the copy
             // menu keeps a quick path to it.
@@ -815,8 +818,31 @@ enum TaskTimelinePresentation {
     /// The stage the rail's newest start point names, which the header's
     /// chip and hold callout repeat.
     static func newestStage(_ rows: [TimelineRail.Row]) -> Components.Schemas.StageName? {
+        newestStageStart(rows)?.stage
+    }
+
+    /// The rail's newest start point and when it was recorded.
+    static func newestStageStart(
+        _ rows: [TimelineRail.Row]
+    ) -> (stage: Components.Schemas.StageName, recordedAt: Date?)? {
         for row in rows {
-            if case .stageStart(let stage?) = row.kind { return stage }
+            if case .stageStart(let stage?) = row.kind { return (stage, row.recordedAt) }
+        }
+        return nil
+    }
+
+    /// The round the newest round-opening event names: an external review
+    /// re-entry, or a round request. Events are newest first.
+    static func newestReviewRound(_ timeline: Components.Schemas.TaskTimeline) -> Int? {
+        for event in timeline.events {
+            switch event.kind {
+            case .external_review_reentered:
+                if let round = event.external_review?.value1.round { return round }
+            case .review_requested:
+                if let round = event.review?.value1.round { return round }
+            default:
+                continue
+            }
         }
         return nil
     }
