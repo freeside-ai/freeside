@@ -1118,7 +1118,9 @@ nothing.
   `completion`, `closure_cards` (the list itself; a card that could not
   be read carries its own `error`), or `closure`. A null run
   field was not read exactly when `errors` names its section; otherwise the
-  run has none. The admissions read scans every run's rows, so one
+  run has none. `observation` also fails when the run itself can't be read
+  or an invocation's recorded terminal can't be authenticated, so the
+  record prints neither status. The admissions read scans every run's rows, so one
   unreadable admission fails that section for every run. `runs_held` counts
   the holds that were read.
 
@@ -1145,9 +1147,13 @@ Reading the record:
   invocation exported, such as a refused research fetch or output it could
   not read, carries `interpretation_failure` instead of `execution_failure`;
   an item never carries both.
-- **`invocations` are the driver's last observations.** A finished
-  invocation can still read as the status last seen. The authoritative
-  outcome is `conclusion.terminal_status` and the timeline.
+- **An invocation shows its recorded terminal once there is one.** Each
+  entry starts as the driver's last observation, which can lag the
+  invocation's end indefinitely. Once an export, an outcome, or a terminal
+  is recorded for the invocation and authenticates, the entry shows that
+  status with `live` false, the same status the app's run views show;
+  `observed_at` is still the daemon's last look. An invocation with no
+  recorded terminal shows the status last seen.
 - **`publication` is a run's proof of work.** It names the last published
   cycle's `ready_item_id`, the `export_head_sha` the producing attempt
   exported, whether the ready item carries its `evidence_snapshot`, the

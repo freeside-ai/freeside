@@ -11,6 +11,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/freeside-ai/freeside/daemon/internal/contentaddr"
 	"github.com/freeside-ai/freeside/daemon/internal/domain"
 	"github.com/freeside-ai/freeside/daemon/internal/golden"
 	"github.com/freeside-ai/freeside/daemon/internal/observe/observedb"
@@ -321,6 +322,117 @@ func TestTaskRecordKeepsRunFactsPastAFailedRead(t *testing.T) {
 	}
 }
 
+// fixtureRunningRun is the representative task's running attempt: its
+// invocation's observation row is running and live.
+func fixtureRunningRun(t *testing.T, st *store.Store) (domain.TaskID, domain.ExecutionAdmission, domain.InvocationObservation) {
+	t.Helper()
+	id := taskOfRun(t, st, fixtureActiveRunID)
+	runs := readRecord(t, st, id).Runs
+	run := runs[len(runs)-1]
+	if len(run.Invocations) != 1 || run.Invocations[0].Status != domain.ObservedStatusRunning ||
+		!run.Invocations[0].Live {
+		t.Fatalf("fixture run %s invocations = %+v, want one running", run.RunID, run.Invocations)
+	}
+	var admission domain.ExecutionAdmission
+	if err := st.Read(t.Context(), func(tx *store.ReadTx) error {
+		var err error
+		admission, err = tx.GetExecutionAdmissionRecord(t.Context(), run.Invocations[0].InvocationID)
+		return err
+	}); err != nil {
+		t.Fatal(err)
+	}
+	return id, admission, run.Invocations[0]
+}
+
+// TestTaskRecordShowsRecordedTerminal records an invocation's durable
+// terminal without touching its observation row, the state the engine's
+// terminal path leaves (#2351). The record shows the terminal status, as the
+// app's run views do, and keeps the row's last look.
+func TestTaskRecordShowsRecordedTerminal(t *testing.T) {
+	t.Parallel()
+	for _, terminal := range []domain.ObservedInvocationStatus{
+		domain.ObservedStatusCompleted, domain.ObservedStatusFailed,
+	} {
+		t.Run(string(terminal), func(t *testing.T) {
+			t.Parallel()
+			st, _ := openSeededStore(t)
+			id, admission, observed := fixtureRunningRun(t, st)
+			at := observed.ObservedAt.Add(time.Minute)
+			if err := st.Write(t.Context(), func(tx *store.WriteTx) error {
+				if terminal == domain.ObservedStatusCompleted {
+					export, err := domain.NewExecutionExport(domain.ExecutionExportInput{
+						InvocationID: admission.InvocationID, AdmissionID: admission.ID,
+						ObservedBaseSHA: admission.Base.BaseSHA, HeadSHA: "cafebabe",
+						ManifestDigest: domain.Digest(contentaddr.Sum([]byte("manifest"))), RecordedAt: at,
+					})
+					if err != nil {
+						return err
+					}
+					if err := tx.RecordExecutionExportRecord(t.Context(), export); err != nil {
+						return err
+					}
+				} else if err := tx.RecordExecutionOutcome(t.Context(), domain.ExecutionOutcome{
+					InvocationID: admission.InvocationID, AdmissionID: admission.ID,
+					Status: domain.ExecutionOutcomeFailed, Summary: "failed",
+					Cause: domain.FailureCauseUnknown, RecordedAt: at,
+				}); err != nil {
+					return err
+				}
+				return tx.AppendRunMilestone(t.Context(), domain.RunMilestone{
+					RunID: admission.RunID, Kind: domain.MilestoneTerminalRecorded,
+					InvocationID: &admission.InvocationID, Terminal: &terminal, RecordedAt: at,
+				})
+			}); err != nil {
+				t.Fatal(err)
+			}
+			runs := readRecord(t, st, id).Runs
+			run := runs[len(runs)-1]
+			want := observed
+			want.Status, want.Live = terminal, false
+			if len(run.Errors) != 0 || !slices.Equal(run.Invocations, []domain.InvocationObservation{want}) {
+				t.Fatalf("invocations = %+v, errors = %+v, want %+v", run.Invocations, run.Errors, want)
+			}
+		})
+	}
+}
+
+// TestTaskRecordRefusesUnbackedTerminal appends a terminal milestone no
+// outcome record backs. The record prints neither the forged status nor the
+// row's, and the run's other sections still read.
+func TestTaskRecordRefusesUnbackedTerminal(t *testing.T) {
+	t.Parallel()
+	st, _ := openSeededStore(t)
+	id, admission, observed := fixtureRunningRun(t, st)
+	before := readRecord(t, st, id)
+	failed := domain.ObservedStatusFailed
+	if err := st.Write(t.Context(), func(tx *store.WriteTx) error {
+		return tx.AppendRunMilestone(t.Context(), domain.RunMilestone{
+			RunID: admission.RunID, Kind: domain.MilestoneTerminalRecorded,
+			InvocationID: &admission.InvocationID, Terminal: &failed,
+			RecordedAt: observed.ObservedAt.Add(time.Minute),
+		})
+	}); err != nil {
+		t.Fatal(err)
+	}
+	record := readRecord(t, st, id)
+	run := record.Runs[len(record.Runs)-1]
+	if !slices.Equal(runErrorSections(run), []taskRecordRunSection{taskRecordRunObservation}) ||
+		run.Errors[0].Kind != taskRecordErrorIntegrity {
+		t.Fatalf("run errors = %+v", run.Errors)
+	}
+	if run.Hold != nil || run.Invocations != nil {
+		t.Fatalf("hold = %+v, invocations = %+v, want both null", run.Hold, run.Invocations)
+	}
+	if run.Conclusion == nil || run.Admissions == nil {
+		t.Fatalf("conclusion = %+v, admissions = %v", run.Conclusion, run.Admissions)
+	}
+	for index, other := range record.Runs[:len(record.Runs)-1] {
+		if got, want := mustJSON(t, other), mustJSON(t, before.Runs[index]); !bytes.Equal(got, want) {
+			t.Errorf("run %s changed: %s, want %s", other.RunID, got, want)
+		}
+	}
+}
+
 func mustJSON(t *testing.T, value any) []byte {
 	t.Helper()
 	out, err := json.Marshal(value)
@@ -339,8 +451,10 @@ func quotedRunIDs(runs []taskRecordRun) string {
 }
 
 // TestTaskRecordReportsUnreadableTask stores a task row the store refuses.
-// The task section is null with its error. Each run's conclusion needs the
-// task's rows and says so, and the reads that do not need them stay.
+// The task section is null with its error. Each run's conclusion and
+// observation need the task's rows through the run read and say so (an
+// invocation's status is authenticated against its run), and the reads that
+// do not need them stay.
 func TestTaskRecordReportsUnreadableTask(t *testing.T) {
 	st, dbPath := openSeededStore(t)
 	id := taskOfRun(t, st, fixtureActiveRunID)
@@ -354,8 +468,8 @@ func TestTaskRecordReportsUnreadableTask(t *testing.T) {
 		t.Fatalf("timeline = %v, error = %+v, runs = %d", record.Timeline, record.TimelineError, len(record.Runs))
 	}
 	for _, run := range record.Runs {
-		if !slices.Equal(runErrorSections(run), []taskRecordRunSection{taskRecordRunConclusion}) ||
-			run.Admissions == nil || run.Invocations == nil {
+		if !slices.Equal(runErrorSections(run), []taskRecordRunSection{taskRecordRunObservation, taskRecordRunConclusion}) ||
+			run.Admissions == nil || run.Invocations != nil {
 			t.Errorf("run %s: admissions = %v, invocations = %v, errors = %+v",
 				run.RunID, run.Admissions, run.Invocations, run.Errors)
 		}
