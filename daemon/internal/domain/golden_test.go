@@ -1488,6 +1488,12 @@ func TestGolden(t *testing.T) {
 		t.Fatal(err)
 	}
 
+	admittedImagePointer := domain.AdmittedImagePointer{
+		RepositoryID: projectImage.RepositoryID, Repository: projectImage.Repository,
+		Harness: domain.HarnessClientClaudeCode, ImageID: projectImage.ID,
+		ImageRef: projectImage.ImageRef, AdvancedAt: ts,
+	}
+
 	project, err := domain.NewProject("project-alpha", "freeasinbird/gh-imgup", 1278475858)
 	if err != nil {
 		t.Fatal(err)
@@ -2079,6 +2085,7 @@ func TestGolden(t *testing.T) {
 		{"project_image", projectImage},
 		{"project_image_environment", projectImageWithEnvironment},
 		{"project_image_go_environment", projectImageGoEnvironment},
+		{"admitted_image_pointer", admittedImagePointer},
 		{"project", project},
 		{"backend_conformance", backendConformance},
 		{"backend_conformance_failed", failedConformance},

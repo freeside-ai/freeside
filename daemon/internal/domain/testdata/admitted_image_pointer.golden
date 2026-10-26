@@ -1,0 +1,8 @@
+{
+  "repository_id": 1278475858,
+  "repository": "freeasinbird/gh-imgup",
+  "harness": "claude_code",
+  "image_id": "sha256:7e7a5c42548e88175b869c057c4ad4bb221dc0069e4caf6818dfe7c4af926349",
+  "image_ref": "127.0.0.1:5100/freeside-project-freeasinbird-gh-imgup@sha256:cdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcd",
+  "advanced_at": "2026-01-02T03:04:05Z"
+}
