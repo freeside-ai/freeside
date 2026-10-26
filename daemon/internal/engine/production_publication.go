@@ -74,6 +74,17 @@ const (
 	// card: long past the moment GitHub normally needs, short enough that a
 	// PR that is really missing is not hidden for long.
 	successorObservationPendingTolerance = 3
+	// closedPublicationUnsettledTolerance is how many unsettled observations
+	// of a closed run's publication, with no settle between them, record its
+	// external_conflict hold (#2343). The third comes about 90 seconds in at
+	// the default holdRetryInterval, past a pull request GitHub has not
+	// listed yet.
+	closedPublicationUnsettledTolerance = 3
+	// closedPublicationMaxBackoffShift caps the closed-run observation's
+	// doubling at 32 times holdRetryInterval, 16 minutes at the default. An
+	// intent nothing can settle then costs a few GitHub calls an hour instead
+	// of one per lane pass, about 88 a minute in #2343.
+	closedPublicationMaxBackoffShift = 5
 )
 
 var (
@@ -280,6 +291,14 @@ type productionPublicationWorkflow struct {
 	// Process state only: a restart starts the tolerance window again.
 	successorObservationPending map[string]int
 	reviewRetryAfter            map[domain.RunID]time.Time
+	// closedPublicationRetry paces the closed-workflow publication
+	// observation per run (#2343). Process state only: a restart starts each
+	// schedule again from one immediate attempt, and the run's durable hold
+	// carries the finding across it.
+	closedPublicationRetry map[domain.RunID]closedPublicationPace
+	// reconcileClosedPublication replaces the publisher's closed-run
+	// observation when set, so a test can count attempts.
+	reconcileClosedPublication func(context.Context, domain.RunID) error
 	// holdPace bounds this workflow's per-pass hold projection writes: the
 	// hold-only composition's observations, and the active composition's
 	// clear when it accepts a queued task (issue #394). Process state only,
@@ -403,6 +422,7 @@ func newProductionPublicationWorkflow(
 		holdRetryAfter:              make(map[string]time.Time),
 		successorObservationPending: make(map[string]int),
 		reviewRetryAfter:            make(map[domain.RunID]time.Time),
+		closedPublicationRetry:      make(map[domain.RunID]closedPublicationPace),
 		preparationDigest:           cmp.Or(cfg.PreparationDigest, projectimage.PreparationDigest()),
 		afterVerification:           cfg.AfterVerification,
 		afterPublication:            cfg.AfterPublication, afterReady: cfg.AfterReady,

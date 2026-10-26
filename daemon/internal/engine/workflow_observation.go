@@ -6,9 +6,11 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"time"
 
 	"github.com/freeside-ai/freeside/daemon/internal/domain"
 	"github.com/freeside-ai/freeside/daemon/internal/exec"
+	"github.com/freeside-ai/freeside/daemon/internal/publish"
 	"github.com/freeside-ai/freeside/daemon/internal/store"
 	"github.com/freeside-ai/freeside/daemon/internal/strictjson"
 	"github.com/freeside-ai/freeside/daemon/internal/ward"
@@ -27,10 +29,24 @@ func (w *productionPublicationWorkflow) claimProviderDispatch(ctx context.Contex
 	return w.requireWorkflowOpen(ctx, runID)
 }
 
+func (w *productionPublicationWorkflow) reconcileClosedRunPublication(ctx context.Context, runID domain.RunID) error {
+	if w.reconcileClosedPublication != nil {
+		return w.reconcileClosedPublication(ctx, runID)
+	}
+	return w.publisher.ReconcileClosedWorkflowRun(ctx, runID)
+}
+
 // Closed runs keep their real provider and forge outcomes. This sweep is
 // independent of publication tasks: a ready task can already have left the
 // queue while its shadow review or an external acknowledgement is outstanding.
+// It holds the lane's mutex for the publication pacing state; the lane runs
+// it before reconcile, which takes the same mutex, so the two never nest.
 func (w *productionPublicationWorkflow) observeClosedWorkflows(ctx context.Context) error {
+	w.reconcileMu.Lock()
+	defer w.reconcileMu.Unlock()
+	if w.closedPublicationRetry == nil {
+		w.closedPublicationRetry = make(map[domain.RunID]closedPublicationPace)
+	}
 	var closures []store.TaskWorkflowClosure
 	if err := w.store.Read(ctx, func(tx *store.ReadTx) error {
 		var err error
@@ -65,12 +81,89 @@ func (w *productionPublicationWorkflow) observeClosedWorkflows(ctx context.Conte
 					}
 				}
 			}
-			if err := w.publisher.ReconcileClosedWorkflowRun(ctx, runID); err != nil {
-				w.logger.Warn("closed workflow publication observation remains unresolved", "run", runID, "error", err)
-			}
+			w.observeClosedPublication(ctx, runID)
 		}
 	}
 	return nil
+}
+
+// closedPublicationPace is one closed run's place in its publication
+// observation schedule. failures counts every consecutive failed attempt and
+// sets the backoff; unsettled counts only the attempts since the last settle
+// that the forge answered with no settled outcome, and alone raises the hold.
+type closedPublicationPace struct {
+	due       time.Time
+	failures  int
+	unsettled int
+}
+
+// closedPublicationRetryDelay waits holdRetryInterval after the first failed
+// attempt and doubles per further failure, up to the cap.
+func closedPublicationRetryDelay(interval time.Duration, failures int) time.Duration {
+	return interval << min(failures-1, closedPublicationMaxBackoffShift)
+}
+
+// observeClosedPublication paces one closed run's publication observation
+// (#2343). Without it the lane's 100 ms cadence turned an intent nothing can
+// settle into a GitHub call per pass, on every later start of the root. A
+// transient failure backs off like an unsettled one but records no hold: only
+// an outcome that lasts until something outside the daemon changes the branch
+// tells the operator to look. The hold is the run's existing projection, not
+// an attention item, because closure retirement expires a closed episode's
+// items on every pass. A failed hold write is logged and retried on the next
+// due attempt, like this sweep's other observation failures. Closures are
+// never deleted, so a run's entry lives until its intent settles.
+func (w *productionPublicationWorkflow) observeClosedPublication(ctx context.Context, runID domain.RunID) {
+	now := w.now()
+	pace, paced := w.closedPublicationRetry[runID]
+	if paced && now.Before(pace.due) {
+		return
+	}
+	err := w.reconcileClosedRunPublication(ctx, runID)
+	if err == nil {
+		if !paced {
+			return
+		}
+		// Only a run that failed in this process clears: clearing on every
+		// settled pass would write once per pass for every closed run.
+		if err := w.store.Write(ctx, func(tx *store.WriteTx) error {
+			return tx.ClearRunHoldCause(ctx, runID, domain.HoldExternalConflict)
+		}); err != nil {
+			w.logger.Warn("closed workflow publication hold remains after its intent settled", "run", runID, "error", err)
+			return
+		}
+		delete(w.closedPublicationRetry, runID)
+		return
+	}
+	pace.failures++
+	pace.due = now.Add(closedPublicationRetryDelay(w.holdRetryInterval, pace.failures))
+	unsettled := errors.Is(err, publish.ErrPublicationUnsettled)
+	if unsettled {
+		pace.unsettled++
+	}
+	w.closedPublicationRetry[runID] = pace
+	w.logger.Warn("closed workflow publication observation remains unresolved",
+		"run", runID, "attempt", pace.failures, "next_attempt_at", pace.due.UTC(), "error", err)
+	if !unsettled || pace.unsettled < closedPublicationUnsettledTolerance {
+		return
+	}
+	if err := w.store.Write(ctx, func(tx *store.WriteTx) error {
+		// A task held at publication before it was abandoned already carries
+		// this cause under its publication invocation. Keeping that invocation
+		// keeps the hold's first instant, so the operator still sees when the
+		// conflict began; a different cause names none.
+		var invocation domain.InvocationID
+		held, found, err := tx.GetRunHold(ctx, runID)
+		if err != nil {
+			return err
+		}
+		if found && held.Reason == domain.HoldExternalConflict && held.InvocationID != nil {
+			invocation = *held.InvocationID
+		}
+		return recordRunHold(ctx, tx, runID, invocation, domain.HoldExternalConflict, nil, now.UTC())
+	}); err != nil {
+		w.logger.Warn("closed workflow publication hold was not recorded", "run", runID, "error", err)
+	}
 }
 
 func (w *productionPublicationWorkflow) observeClosedReview(
