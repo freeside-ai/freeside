@@ -2955,17 +2955,17 @@
                 ])
             func stoppedSurface(
                 name: String, width: CGFloat,
+                freshness: InboxStore.Freshness = .fresh,
                 operation: Components.Schemas.UnattendedOperationSnapshot,
-                lastUpdatedAt: Date
+                lastUpdatedAt: Date,
+                reason: String = "The daemon stopped unattended operation after repeated restarts"
             ) -> Surface {
                 let inDetailColumn = width > 390
                 let notices = StandingNotices(
                     saveWarning: nil, onDismissSaveWarning: {},
-                    freshness: .fresh, lastUpdatedAt: lastUpdatedAt, onRePair: nil,
+                    freshness: freshness, lastUpdatedAt: lastUpdatedAt, onRePair: nil,
                     operation: operation,
-                    reason: { _ in
-                        "The daemon stopped unattended operation after repeated restarts"
-                    },
+                    reason: { _ in reason },
                     onOpenItem: { _ in },
                     placement: inDetailColumn ? .detailColumn : .window)
                 return Surface(
@@ -2997,6 +2997,19 @@
                 stoppedSurface(
                     name: "unattended-stopped-finding", width: Self.detailColumnWidth,
                     operation: findingStopped, lastUpdatedAt: stoppedFresh))
+            // The exit run's phone state (#2313): the daemon unreachable over
+            // a cached finding stop whose reason is a ten-line Go error
+            // chain, the shape that once pushed the inbox below the fold.
+            let errorChainReason = (1...10).map { line in
+                "production_publication: reconcile production publications: task "
+                    + "\"production-publication/run-\(line)\": load publication disposition "
+                    + "history: child record's parent key does not match"
+            }.joined(separator: "\n")
+            surfaces.append(
+                stoppedSurface(
+                    name: "unattended-stopped-unreachable-finding-phone", width: 390,
+                    freshness: .unreachable, operation: findingStopped,
+                    lastUpdatedAt: stoppedFresh, reason: errorChainReason))
 
             // The non-image attachment reader as a sheet: inline serif title,
             // the mono text preview laid out in place of its scroll view,
@@ -3090,8 +3103,7 @@
                             actionError: nil,
                             inbox: .init(open: 6, urgent: 2),
                             unattendedStopped:
-                                "Unattended operation is stopped by operator decision. "
-                                + "No new unattended work starts until it is resumed.",
+                                "Unattended operation is stopped by operator decision.",
                             actions: panelActions))))
             surfaces.append(
                 Surface(

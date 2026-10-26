@@ -70,6 +70,30 @@
             #expect(two.minY == margin.top + both)
         }
 
+        /// The exit run's phone state (#2313): Unreachable over a cached
+        /// finding stop that offers Open Finding, at the iPhone SE's 375pt
+        /// width. The item's reason never sizes the notices, and the two
+        /// together keep to 222pt, a third of the SE's 667pt height. The
+        /// host draws the Mac ladder (13pt body, 28pt button); the phone's
+        /// is taller, so the phone itself is checked by screenshot.
+        @Test func theNoticesOverAFindingStopFitAThirdOfThePhone() throws {
+            func height(reason: String) -> CGFloat? {
+                noticesHeight(
+                    notices(
+                        .unreachable, stopped: true, stopKind: .blocking_system_health,
+                        reason: reason, onOpenItem: { _ in }, placement: .window),
+                    paneWidth: 375)
+            }
+            let chain = (1...10).map {
+                "production_publication: reconcile production publications: task "
+                    + "\"production-publication/run-\($0)\": load publication disposition history"
+            }.joined(separator: "\n")
+            let long = try #require(height(reason: chain))
+            let short = try #require(height(reason: "A restart loop"))
+            #expect(long == short)
+            #expect(long <= 222)
+        }
+
         /// The column seats its content by asking whether a notice draws,
         /// and each notice decides that in its own body. The two must
         /// agree, or a card sits a module gap under nothing.
@@ -213,7 +237,10 @@
 
         private func notices(
             _ freshness: InboxStore.Freshness, lastUpdatedAt: Date? = nil,
-            stopped: Bool = false, saveWarning: String? = nil
+            stopped: Bool = false, saveWarning: String? = nil,
+            stopKind: Components.Schemas.UnattendedStopKind = .operator_stop,
+            reason: String? = nil, onOpenItem: ((String) -> Void)? = nil,
+            placement: StandingNoticePlacement = .detailColumn
         ) -> StandingNotices {
             StandingNotices(
                 saveWarning: saveWarning, onDismissSaveWarning: {},
@@ -223,10 +250,11 @@
                         admission: .stopped,
                         stops: [
                             .init(
-                                kind: .operator_stop, item_id: "system-health-stop",
-                                command_id: "cmd-stop", since: AttentionFixtures.createdInstant)
+                                kind: stopKind, item_id: "system-health-stop",
+                                command_id: stopKind == .operator_stop ? "cmd-stop" : nil,
+                                since: AttentionFixtures.createdInstant)
                         ]) : nil,
-                reason: { _ in nil }, onOpenItem: nil, placement: .detailColumn)
+                reason: { _ in reason }, onOpenItem: onOpenItem, placement: placement)
         }
 
         /// The height the notices take in a pane, read from where a probe

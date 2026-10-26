@@ -168,7 +168,7 @@ struct UnattendedOperationSyncTests {
                 reason: { _ in nil }))
         #expect(!presentation.isCurrent)
         #expect(presentation.message.hasPrefix("At the last successful refresh"))
-        #expect(presentation.message.hasSuffix("The current state is unknown."))
+        #expect(presentation.tone == .neutral)
     }
 
     @Test func aNewEpochDiscardsTheOldEpochsStop() async throws {
@@ -257,10 +257,10 @@ struct UnattendedStoppedPresentationTests {
         #expect(presentation.cause == .operatorStop)
         #expect(presentation.itemID == "notice")
         #expect(presentation.isCurrent)
+        #expect(presentation.tone == .wax)
         #expect(
             presentation.message
-                == "Unattended operation is stopped by operator decision. "
-                + "No new unattended work starts until it is resumed. 1 other stop is in force.")
+                == "Unattended operation is stopped by operator decision. 1 other stop is in force.")
         #expect(presentation.actionTitle == "Review to Resume")
     }
 
@@ -271,11 +271,24 @@ struct UnattendedStoppedPresentationTests {
                 reason: "The daemon stopped after a restart loop"))
         #expect(presentation.cause == .blockingFinding)
         #expect(
-            presentation.message
-                == "Unattended operation is stopped by a system health finding: "
-                + "The daemon stopped after a restart loop.")
+            presentation.message == "Unattended operation is stopped by a system health finding.")
         #expect(!presentation.message.contains("operator"))
         #expect(presentation.actionTitle == "Open Finding")
+    }
+
+    /// The exit run's Go error chain (#2313): however long the item's reason,
+    /// the indicator says the same sentence and keeps the link to the item.
+    @Test func aFindingsReasonNeverEntersTheMessage() throws {
+        let stops: [Components.Schemas.UnattendedStop] = [
+            .init(kind: .blocking_system_health, item_id: "finding", command_id: nil, since: nil)
+        ]
+        let chain = (1...10).map { "load publication disposition history \($0): parent key" }
+            .joined(separator: "\n")
+        let long = try #require(make(stops, reason: chain))
+        let short = try #require(make(stops, reason: "A restart loop"))
+        #expect(long == short)
+        #expect(!long.message.contains("disposition"))
+        #expect(long.itemID == "finding")
     }
 
     @Test func aStopWhoseItemIsNotOpenHereOffersNoLink() throws {
@@ -311,10 +324,11 @@ struct UnattendedStoppedPresentationTests {
                 freshness: freshness,
                 age: pastThreshold ? SyncCoordinator.stalenessThreshold : 5))
         #expect(!presentation.isCurrent)
+        #expect(presentation.tone == .neutral)
         #expect(
             presentation.message
                 == "At the last successful refresh, unattended operation was stopped by "
-                + "operator decision. The current state is unknown.")
+                + "operator decision.")
     }
 }
 
