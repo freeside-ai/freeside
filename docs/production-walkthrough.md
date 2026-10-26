@@ -138,6 +138,9 @@ root that is the agent tree ([The First Start](#the-first-start)). It takes
 and releases the rig lease, so run it before the deputy starts. Its lineup
 probe spends one minimal call per lineup launch; `-no-live` skips it
 ([Run The Pre-Spend Checks Before A Launch](../daemon/README.md#run-the-pre-spend-checks-before-a-launch)).
+With live on it also reads the task's issue through the App's grant, so an
+issue the App can't read, or one already closed, fails here and not in the
+run; `-no-live` skips that read too.
 A failed `images` check names the pinned reference the local container store
 no longer holds; [Reseed A Pinned Image That Stopped Resolving](#reseed-a-pinned-image-that-stopped-resolving)
 restores it.

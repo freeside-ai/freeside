@@ -64,6 +64,18 @@ var issueReadPermissionScopes = map[string]string{
 	"metadata":      IssueReadPermissions.Metadata,
 }
 
+// IssueInspectionPermissions grants only reading one repository's issues, for
+// prelaunch's read of the run's target issue. It is separate from
+// IssueReadPermissions because the research grant widened to pull requests
+// for #2311, and prelaunch reads only the target issue, so it keeps the
+// narrower grant (owner decision, #2269).
+var IssueInspectionPermissions = Permissions{Issues: "read", Metadata: "read"}
+
+var issueInspectionPermissionScopes = map[string]string{
+	"issues":   IssueInspectionPermissions.Issues,
+	"metadata": IssueInspectionPermissions.Metadata,
+}
+
 // RegistrationPermissions declares all capabilities the App may need; each
 // token source narrows its mint to the effect it performs.
 var RegistrationPermissions = func() Permissions {
