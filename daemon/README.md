@@ -1342,7 +1342,13 @@ which authenticates only the project's own issue and pull request endpoints
 matched by repository ID, with a read-only (`issues: read`,
 `pull_requests: read`) installation token minted for that repository. The App
 needs no new permission for this: its registration already holds
-`pull_requests: write` for publication. Every other research URL goes without
+`pull_requests: write` for publication. The bare page URLs
+`https://github.com/<owner>/<name>/issues/<n>` and `.../pull/<n>` of the
+project's own repository read the same way: when `https://api.github.com` is
+in the research allowlist, the fetcher sends them to that repository-ID API
+endpoint with the token and returns the API's JSON, not the page. The token
+never goes to `github.com`. Every other research URL, including a page
+sub-path or a page URL with a query, goes as written without
 credentials, and a redirect drops the token. The research allowlist must
 include `https://api.github.com`. If the token can't be minted, or GitHub
 refuses it with 401 or 403, the fetch goes without it, so a public issue
