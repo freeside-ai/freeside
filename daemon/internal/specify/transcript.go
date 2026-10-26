@@ -10,20 +10,30 @@ import (
 	"github.com/freeside-ai/freeside/daemon/internal/strictjson"
 )
 
-const MaxTranscriptRecordBytes = strictjson.Limit(2 << 20)
+// MaxTranscriptRecordBytes bounds one stream-json line. A schema-constrained
+// result record carries the output twice, as structured_output and escaped in
+// result, so the bound leaves room for both at MaxOutputBytes.
+const MaxTranscriptRecordBytes = strictjson.Limit(4 << 20)
 
 var ErrTranscriptResultMissing = errors.New("specifier transcript has no successful result")
 
+// transcriptRecord is one stream-json line. A launch that passes the CLI a
+// JSON Schema gets the model's answer in StructuredOutput, and Result then
+// holds that object serialized; any prose the model wrote before it stays in
+// the assistant records, which are not an output channel.
 type transcriptRecord struct {
-	Type    string  `json:"type"`
-	Subtype string  `json:"subtype"`
-	IsError *bool   `json:"is_error"`
-	Result  *string `json:"result"`
+	Type             string          `json:"type"`
+	Subtype          string          `json:"subtype"`
+	IsError          *bool           `json:"is_error"`
+	Result           *string         `json:"result"`
+	StructuredOutput json.RawMessage `json:"structured_output,omitempty"`
 }
 
 // DecodeTranscript extracts the typed output from the successful terminal
-// record in a Claude stream-json transcript. The human-readable StageResult
-// summary is deliberately not an output channel.
+// record in a Claude stream-json transcript: its structured_output when the
+// record carries one, otherwise its result text, which is all a launch without
+// a schema produces. Either payload passes DecodeOutput unchanged. The
+// human-readable StageResult summary is deliberately not an output channel.
 func DecodeTranscript(reader io.Reader) (Output, error) {
 	return decodeTranscript(reader, DecodeOutput)
 }
@@ -39,7 +49,8 @@ func DecodeLegacyAddressalTranscript(reader io.Reader, commentIDs map[string]str
 func decodeTranscript(reader io.Reader, decode func([]byte) (Output, error)) (Output, error) {
 	scanner := bufio.NewScanner(reader)
 	scanner.Buffer(make([]byte, 64<<10), int(MaxTranscriptRecordBytes))
-	var result *string
+	var payload []byte
+	found := false
 	for line := 1; scanner.Scan(); line++ {
 		var record transcriptRecord
 		if err := strictjson.DecodeAllowingUnknownFields(
@@ -50,25 +61,37 @@ func decodeTranscript(reader io.Reader, decode func([]byte) (Output, error)) (Ou
 		if record.Type != "result" {
 			continue
 		}
-		if result != nil {
+		if found {
 			return Output{}, fmt.Errorf("decode specifier transcript: multiple result records: %w", ErrInvalidOutput)
 		}
-		if record.Subtype != "success" || record.IsError == nil || *record.IsError || record.Result == nil {
+		if record.Subtype != "success" || record.IsError == nil || *record.IsError {
 			return Output{}, fmt.Errorf("decode specifier transcript: unsuccessful result record: %w", ErrInvalidOutput)
 		}
-		result = record.Result
+		// A null structured_output is no structured answer, so the record's
+		// result text is the payload, as for a launch without a schema.
+		switch {
+		case len(record.StructuredOutput) > 0 && string(record.StructuredOutput) != "null":
+			payload = record.StructuredOutput
+		case record.Result != nil:
+			payload = []byte(*record.Result)
+		default:
+			return Output{}, fmt.Errorf("decode specifier transcript: unsuccessful result record: %w", ErrInvalidOutput)
+		}
+		found = true
 	}
 	if err := scanner.Err(); err != nil {
 		return Output{}, fmt.Errorf("decode specifier transcript: %w", err)
 	}
-	if result == nil {
+	if !found {
 		return Output{}, ErrTranscriptResultMissing
 	}
-	return decode([]byte(*result))
+	return decode(payload)
 }
 
 // EncodeTranscript emits the production transcript result shape for the
-// deterministic fake, keeping fixtures on the same output channel as Claude.
+// deterministic fake, keeping fixtures on the same output channel as Claude:
+// a schema-constrained launch's record, which carries the object in
+// structured_output and its serialization in result.
 func EncodeTranscript(out Output) ([]byte, error) {
 	body, err := EncodeOutput(out)
 	if err != nil {
@@ -78,6 +101,7 @@ func EncodeTranscript(out Output) ([]byte, error) {
 	result := string(body)
 	record, err := json.Marshal(transcriptRecord{
 		Type: "result", Subtype: "success", IsError: &isError, Result: &result,
+		StructuredOutput: body,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("encode specifier transcript: %w", err)
