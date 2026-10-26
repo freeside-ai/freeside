@@ -2852,6 +2852,7 @@ components:
         - installation_poll
         - doctor
         - janitor
+        - image_upkeep
 
     ScheduleStatus:
       type: string

@@ -5877,6 +5877,7 @@ public enum Components {
             case installation_poll = "installation_poll"
             case doctor = "doctor"
             case janitor = "janitor"
+            case image_upkeep = "image_upkeep"
         }
         /// A schedule's lifecycle state (mirrors domain.ScheduleStatus): armed is live; fired is a one-shot deadline that terminated fired-and-handled; resolved was explicitly resolved (the awaited condition arrived, or the subject concluded); expired ended with its validity window.
         ///

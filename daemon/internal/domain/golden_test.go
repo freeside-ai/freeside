@@ -1723,6 +1723,15 @@ func TestGolden(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	imageUpkeepSchedule, err := domain.NewSchedule(domain.ScheduleInput{
+		ID: "schedule-image-upkeep", ProjectID: "project-system",
+		Kind:      domain.ScheduleImageUpkeep,
+		Subject:   domain.ScheduleSubject{Type: domain.ScheduleSubjectTrustedConfig},
+		CreatedAt: ts, IntervalSeconds: &janitorInterval,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
 	firedSchedule, err := deadlineSchedule.Concluded(
 		domain.ScheduleFired, domain.ResolutionDeadlineElapsed, ts.Add(31*time.Minute))
 	if err != nil {
@@ -1937,6 +1946,7 @@ func TestGolden(t *testing.T) {
 		{"schedule_base_advance_watch", watchSchedule},
 		{"schedule_installation_poll", pollSchedule},
 		{"schedule_janitor", janitorSchedule},
+		{"schedule_image_upkeep", imageUpkeepSchedule},
 		{"schedule_fired", firedSchedule},
 		{"schedule_occurrence_pending", pendingOccurrence},
 		{"schedule_occurrence_consumed", consumedOccurrence},

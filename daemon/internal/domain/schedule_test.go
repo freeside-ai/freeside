@@ -49,7 +49,7 @@ func validScheduleInput(kind ScheduleKind) ScheduleInput {
 		}
 		in.IntervalSeconds = ptr(int64(2))
 		in.ExpiresAt = ptr(ts.Add(10 * time.Minute))
-	case ScheduleDoctor, ScheduleJanitor:
+	case ScheduleDoctor, ScheduleJanitor, ScheduleImageUpkeep:
 		in.Subject = ScheduleSubject{Type: ScheduleSubjectTrustedConfig}
 		in.IntervalSeconds = ptr(int64(30))
 	}
@@ -81,7 +81,9 @@ func TestScheduleKindContract(t *testing.T) {
 	oneShot := map[ScheduleKind]bool{
 		SchedulePRChecksDeadline: true, ScheduleReviewWaitThreshold: true,
 	}
-	trusted := map[ScheduleKind]bool{ScheduleDoctor: true, ScheduleJanitor: true}
+	trusted := map[ScheduleKind]bool{
+		ScheduleDoctor: true, ScheduleJanitor: true, ScheduleImageUpkeep: true,
+	}
 	for _, kind := range AllScheduleKinds {
 		if kind.OneShot() != oneShot[kind] {
 			t.Errorf("%s OneShot() = %v", kind, kind.OneShot())
@@ -192,7 +194,9 @@ func TestScheduleValidateDetailContract(t *testing.T) {
 	})
 
 	t.Run("non-workload authority", func(t *testing.T) {
-		for _, kind := range []ScheduleKind{ScheduleInstallationPoll, ScheduleDoctor, ScheduleJanitor} {
+		for _, kind := range []ScheduleKind{
+			ScheduleInstallationPoll, ScheduleDoctor, ScheduleJanitor, ScheduleImageUpkeep,
+		} {
 			s := mustSchedule(t, kind)
 			s.RunID = ptr(RunID("run-1"))
 			s.PolicyDigest = ptr(Digest("sha256:policy"))
@@ -226,10 +230,12 @@ func TestScheduleValidateDetailContract(t *testing.T) {
 		if err := s.Validate(); !errors.Is(err, ErrScheduleDetailMismatch) {
 			t.Fatalf("installation poll without expiry: %v", err)
 		}
-		s = mustSchedule(t, ScheduleJanitor)
-		s.ExpiresAt = ptr(s.CreatedAt.Add(time.Hour))
-		if err := s.Validate(); !errors.Is(err, ErrScheduleDetailMismatch) {
-			t.Fatalf("permanent job with expiry: %v", err)
+		for _, kind := range []ScheduleKind{ScheduleDoctor, ScheduleJanitor, ScheduleImageUpkeep} {
+			s = mustSchedule(t, kind)
+			s.ExpiresAt = ptr(s.CreatedAt.Add(time.Hour))
+			if err := s.Validate(); !errors.Is(err, ErrScheduleDetailMismatch) {
+				t.Fatalf("%s permanent job with expiry: %v", kind, err)
+			}
 		}
 	})
 }
@@ -312,9 +318,11 @@ func TestScheduleConcluded(t *testing.T) {
 	if _, err := watch.Concluded(ScheduleResolved, ResolutionSubjectConcluded, ts); err != nil {
 		t.Fatalf("watch resolved: %v", err)
 	}
-	janitor := mustSchedule(t, ScheduleJanitor)
-	if _, err := janitor.Concluded(ScheduleResolved, ResolutionSubjectConcluded, ts); !errors.Is(err, ErrInvalidScheduleStatus) {
-		t.Fatalf("permanent job concluded: %v", err)
+	for _, kind := range []ScheduleKind{ScheduleDoctor, ScheduleJanitor, ScheduleImageUpkeep} {
+		job := mustSchedule(t, kind)
+		if _, err := job.Concluded(ScheduleResolved, ResolutionSubjectConcluded, ts); !errors.Is(err, ErrInvalidScheduleStatus) {
+			t.Fatalf("%s permanent job concluded: %v", kind, err)
+		}
 	}
 }
 

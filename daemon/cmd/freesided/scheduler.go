@@ -780,6 +780,13 @@ func newClaudeScheduler(
 			}
 			return failures.consumption(domain.ScheduleJanitor, err)
 		}},
+		// Registered so every kind has a handler; the upkeep pass is #2333's,
+		// and nothing arms this schedule until then.
+		domain.ScheduleImageUpkeep: {Handle: func(
+			context.Context, domain.ScheduleEvent, domain.Schedule,
+		) (scheduler.Consumption, error) {
+			return failures.consumption(domain.ScheduleImageUpkeep, nil)
+		}},
 	}
 	// The installation-poll kind registers with the daemon too: a pending
 	// intent recorded by the onboarding CLI keeps its durable observation

@@ -390,6 +390,7 @@ package enum RunDisplay {
         case .installation_poll: "Install watch"
         case .doctor: "Doctor"
         case .janitor: "Janitor"
+        case .image_upkeep: "Image upkeep"
         }
     }
 }
