@@ -3102,3 +3102,63 @@ The client work is #1798 to #1803.)
 
 (Owner decision of 2026-10-24 on #1431;
 [decision note](../../devlog/2026-10-24-0927-drop-attended-first-run.md).)
+
+---
+
+## Revision 98 ("Project Images Keep Themselves"):
+
+1. **Freeside keeps each project's image in service.** A permanent
+   trusted-config job, image upkeep, checks the image at the default-branch
+   tip on a tip advance, at daemon start, and on the doctor's schedule. An
+   admissible image needs nothing; a delta the policy-gated rebuild's gate
+   admits is rebuilt and admitted with no AttentionItem, and the gate now
+   also runs on a toolchain-only delta (both manifests equal), which is what
+   a daemon upgrade produces. Rejected: leaving each case to an attention item
+   a human resolves by hand (a manual `freesided onboard`, or running the
+   earlier binary until tasks drain, #1784), because a reviewed PR or a
+   tapped card is the normal Freeside loop and a chore outside it is not.
+2. **A refusal by a policy clause alone ends in one adoption card.** A
+   changed recipe digest or an undeclared registry authority at the tip
+   raises a card bound to it. Approving the card opens a Section [4](#4-the-attention-model)
+   project-policy proposal, merging that proposal is the adoption, and the
+   builder then builds a new image under the adopted policy. Recipe approval
+   and the registry set are trusted project policy, so the adoption has to
+   pass the Section [5.8](#58-control-plane-trust) control-plane gate. The owner's original choice, a
+   one-tap `effect_proposal` into the trust profile, would have changed
+   policy outside that gate. Rejected: an agent task for
+   every refusal (the change is already in the repository and needs a trust
+   decision, not a code change).
+3. **A refusal that needs a repair opens a maintenance task through the
+   submission primitive.** The daemon submits it with a daemon origin, the
+   refusal record as its source, no bound issue, and `bound_pr_merged`
+   completion; specification approval and the merge gate apply as for any
+   task. Its base is the refused tip, so its writer is the one exception to
+   composition's admissibility check: the refusal record stands in for
+   verifying the base, and the candidate is verified in an image built and
+   proven at the candidate head. Rejected: Section [5.17](#517-follow-up-issue-filing) issue filing (a
+   human-gated fan-out whose issues are propose-only, so it adds two gates
+   and no information).
+4. **Each repository has one admitted-image pointer per agent base.** Only
+   the trusted builder advances it; image records stay write-once and every
+   boundary still re-derives its verdict. Rejected: keeping the daemon's
+   single configured image (one image cannot serve two projects or two agent
+   bases, and advancing it means an operator restarting the daemon with a
+   new flag).
+5. **Work holds while a resolution is pending.** A task waits under a
+   visible hold until an admitted image serves its base. #1784's blocked
+   outcome narrows to a refusal with no pending resolution. Rejected: blocking at once (it strands
+   work the job is already resolving).
+6. **A Go module delta stays refused and gets its own gate unit**
+   (#2337). Rejected: admitting it at the tip under upkeep (the gate's
+   delta rules read npm lockfiles only, so admitting a `go.sum` change would
+   widen the gate past what it checks).
+7. **Agent-base upkeep is designed now and scheduled later** (#2338).
+   Rejected: building it in row 12 (it needs Freeside onboarded against its
+   own repository first).
+8. **Image upkeep is Section [11](#11-roadmap-build-order-and-coordination) row 12, in 1B.2,** and the 1B exit
+   evaluation moves to that row. Rejected: a Phase 2 bullet (unattended operation does not
+   hold over time without it); folding it into row 11 (the initiative view
+   shares no code with it).
+
+(Owner decisions of 2026-10-13 on #1999;
+[decision note](../../devlog/2026-10-26-1057-project-image-upkeep.md).)
