@@ -54,7 +54,7 @@ func TestPinnedTemplateConflict(t *testing.T) {
 			t.Fatal("accepted a forbidden template requirement")
 		}
 	}
-	prose := "## Why\n\nPrevent empty-input crashes.\n\n## What\n\n- Handle the empty case.\n\n## Review Notes\n\nCheck evidence and the source reference are supplied separately by the publisher. Its fixed check format does not use the template's requested status prefixes."
+	prose := "## Why\n\nPrevent empty-input crashes.\n\n## What\n\n- Handle the empty case.\n\n## Review Notes\n\nWatch the empty-input boundary."
 	if err := ScreenField("body", prose, 1000); err != nil {
 		t.Fatal(err)
 	}

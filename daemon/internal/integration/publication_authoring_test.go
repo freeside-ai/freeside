@@ -152,8 +152,10 @@ func TestPublicationAuthorStoresTextAndPolicyApprovedClose(t *testing.T) {
 	)
 	p := newAuthoredMetadataHarnessFromBase(t, base, metadata, nil,
 		map[string]string{".github/pull_request_template.md": string(template)})
-	const disclosure = "Check evidence and the source reference are supplied separately by the publisher. Its fixed check format does not use the template's requested status prefixes."
-	const body = "## Why\n\nAuthored body prose from the recipe v2 author.\n\n## What\n\n- Handle empty input.\n\n## Review Notes\n\n" + disclosure
+	// The author leaves out the template's Verification section and closing
+	// line without comment; the publisher supplies both.
+	const reviewNotes = "Watch the empty-input boundary."
+	const body = "## Why\n\nAuthored body prose from the recipe v2 author.\n\n## What\n\n- Handle empty input.\n\n## Review Notes\n\n" + reviewNotes
 	output, err := json.Marshal(map[string]any{"title": "Authored PR title", "body": body, "reviewer_notes": nil, "evidence_refs": []string{}, "outcome_summary": "Reported checks passed."})
 	if err != nil {
 		t.Fatal(err)
@@ -172,8 +174,8 @@ func TestPublicationAuthorStoresTextAndPolicyApprovedClose(t *testing.T) {
 		t.Fatal("publisher omitted the policy-approved close reference")
 	}
 	rendered := p.forge.PullRequests()[0].Body
-	if strings.Count(rendered, "## Verification") != 1 || !strings.Contains(rendered, html.EscapeString(disclosure)) {
-		t.Fatal("publisher ownership or visible conflict disclosure lost")
+	if strings.Count(rendered, "## Verification") != 1 || !strings.Contains(rendered, html.EscapeString(reviewNotes)) {
+		t.Fatal("publisher ownership or authored Review Notes lost")
 	}
 	for _, request := range driver.Requests() {
 		if request.Fields["pr_template"] != string(template) {

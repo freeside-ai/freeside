@@ -386,6 +386,29 @@ func TestPublicationAuthorPrompt(t *testing.T) {
 	}
 }
 
+// TestShippedPublicationAuthorPromptOmitsPublisherParts reads the shipped role
+// prompt, which precedes the explain site instruction in the same prompt. It
+// must give the same rule: leave out what the publisher writes without saying
+// so, rather than explain that evidence is supplied separately.
+func TestShippedPublicationAuthorPromptOmitsPublisherParts(t *testing.T) {
+	body, err := os.ReadFile("../../../prompts/publication-author.md")
+	if err != nil {
+		t.Fatal(err)
+	}
+	prompt := strings.Join(strings.Fields(string(body)), " ")
+	for _, want := range []string{
+		"source-issue reference", "leave out every template section", "Never mention the omission",
+		"Keep every other template section", "If any other template requirement conflicts",
+	} {
+		if !strings.Contains(prompt, want) {
+			t.Errorf("role prompt does not carry %q", want)
+		}
+	}
+	if strings.Contains(prompt, "supplied separately") {
+		t.Error("role prompt still tells the author to say evidence is supplied separately")
+	}
+}
+
 func TestCompleteSerializesDifferentSites(t *testing.T) {
 	root := t.TempDir()
 	ready := filepath.Join(root, "ready")
