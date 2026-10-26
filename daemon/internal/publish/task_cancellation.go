@@ -10,6 +10,13 @@ import (
 	"github.com/freeside-ai/freeside/daemon/internal/store"
 )
 
+// ErrPublicationUnsettled reports that the forge answered a fenced run's
+// observation but no single pull request on the intent's branch carries the
+// intent's identity, so the intent stays pending. A failed forge or store
+// read is a different error: the caller may retry it, while this outcome
+// lasts until something outside the daemon changes the branch (#2343).
+var ErrPublicationUnsettled = errors.New("no single pull request on its branch carries its identity")
+
 func requireTaskPublicationOpen(ctx context.Context, tx *store.ReadTx, id domain.RunID) error {
 	if id == "" {
 		return nil // Legacy attended candidates have no task-bound reservation.
@@ -115,7 +122,8 @@ func (p *Publisher) reconcileFencedRun(ctx context.Context, runID domain.RunID, 
 		candidate := Candidate{Repo: intent.Repo, BaseRef: intent.BaseRef, HeadSHA: intent.SourceHeadSHA}
 		if len(prs) != 1 || !prMatchesPublicationCoordinates(prs[0], repo, identity, candidate, branch) ||
 			(intent.Successor != nil && prs[0].Number != intent.Successor.PRNumber) {
-			unresolved = errors.Join(unresolved, fmt.Errorf("publication %s has no exact settled external outcome", intent.InvocationID))
+			unresolved = errors.Join(unresolved, fmt.Errorf("publication %s has no exact settled external outcome: %w",
+				intent.InvocationID, ErrPublicationUnsettled))
 			continue
 		}
 		if err := finalizePublicationEntry(ctx, s, entry.IdempotencyKey, intent, Result{
