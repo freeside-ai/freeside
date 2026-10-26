@@ -457,13 +457,16 @@ type AuthoredPublication struct {
 }
 
 // ProposedClosure is the propose site's bounded recommendation. It fails safe
-// to "no close" independently of the explain site.
+// to "no close" independently of the explain site. A fallback carries either
+// InputRefusalReason, when the input was refused before any call, or
+// FallbackReason, the call's own fixed fallback code.
 type ProposedClosure struct {
 	Resolves           bool
 	Producer           string
 	InputDigest        string
 	Fallback           bool
 	InputRefusalReason string
+	FallbackReason     FallbackReason
 }
 
 func authorInputRefusalReason(err error) string {
@@ -526,7 +529,7 @@ func (c *Client) ProposeSourceIssueClosure(ctx context.Context, input Publicatio
 		return ProposedClosure{}, callErr
 	}
 	if result.Fallback {
-		return ProposedClosure{Fallback: true}, nil
+		return ProposedClosure{Fallback: true, FallbackReason: result.Reason}, nil
 	}
 	var output publicationAuthorProposeOutput
 	if err := json.Unmarshal(result.Output, &output); err != nil {
