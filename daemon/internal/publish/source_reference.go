@@ -182,7 +182,9 @@ func reduceClosureApproval(
 // resolved closure, or "" when there is no reference to write (a descriptive
 // link with no source URL). The section has no heading (#1553): it heads the
 // body, so its single reference paragraph reads as the description's lead
-// line, and a recommended close joins its provenance sentence to that line.
+// line. A close renders the same line whatever its provenance (#2349): the
+// pull request's readers are the target repository's maintainers, and the
+// provenance stays on the proposal record.
 // The switch dispatches on the reference kind and omits default; the trailing
 // error guards the invalid zero value the matrix never returns.
 func renderSourceReference(res closureResolution) (string, error) {
@@ -195,9 +197,6 @@ func renderSourceReference(res closureResolution) (string, error) {
 	switch res.outcome.Reference {
 	case domain.ClosureReferenceCloses:
 		line = fmt.Sprintf("Closes #%d", res.target)
-		if res.outcome.Recommended {
-			line += ". The client recommended this issue; the approver confirmed it."
-		}
 	case domain.ClosureReferenceRefs:
 		line = fmt.Sprintf("Refs #%d", res.target)
 	case domain.ClosureReferenceDescriptiveLink:

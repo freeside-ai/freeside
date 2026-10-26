@@ -120,8 +120,9 @@ func (s ClosureApprovalState) valid() bool {
 // ClosureOutcome is the resolved reference, hold, and item for one closure
 // proposal against one merge, plus whether the proposal's provenance is
 // recommended. Recommended is orthogonal to the other three: it never changes
-// the reference, hold, or item, and only tells the publisher to mark the Source
-// issue line (plan revision 68 item 1).
+// the reference, hold, or item. The publisher no longer reads it, because the
+// Source issue line is the same for both provenances (#2349); it stays for the
+// outcome record.
 type ClosureOutcome struct {
 	Reference   ClosureReference `json:"reference"`
 	Hold        ClosureHold      `json:"hold"`
