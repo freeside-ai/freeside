@@ -8,15 +8,19 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"os"
 	osexec "os/exec"
+	"path"
 	"path/filepath"
 	"slices"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
 
+	"github.com/freeside-ai/freeside/daemon/internal/contentaddr"
 	"github.com/freeside-ai/freeside/daemon/internal/domain"
 	"github.com/freeside-ai/freeside/daemon/internal/exec"
 	"github.com/freeside-ai/freeside/daemon/internal/execfixture"
@@ -1077,16 +1081,18 @@ func TestSuiteFullEmptyWorkspaceContainment(t *testing.T) {
 	wantCheckFailure(t, err, CheckCredentialContainment)
 	var cf *ConformanceFailure
 	_ = errors.As(err, &cf)
-	if !strings.Contains(cf.Reason, "empty workspace") {
-		t.Errorf("reason = %q, want the empty-workspace failure", cf.Reason)
+	if !strings.Contains(cf.Reason, "empty workspace") ||
+		!strings.HasSuffix(cf.Reason, "; writer exited 0; export held 0 entries") {
+		t.Errorf("reason = %q, want the empty-workspace failure after a clean writer exit", cf.Reason)
 	}
 	s.assertReaped(t, rt)
 }
 
 // TestSuiteFullStaleWorkspaceNoSentinel: a non-empty export that does not carry
-// this run's writer sentinel (stale or prepopulated content, or a writer that
-// aborted before it could produce output) makes "marker absent" vacuous, so
-// containment fails closed rather than passing on any non-empty content.
+// this run's writer sentinel (stale or prepopulated content) makes "marker
+// absent" vacuous, so containment fails closed rather than passing on any
+// non-empty content. The writer exited 0, and the reason keeps what the
+// export held, since the export itself is deleted.
 func TestSuiteFullStaleWorkspaceNoSentinel(t *testing.T) {
 	s, rt := newSuiteTest(t)
 	// Non-empty, but the blob is unrelated to this run: no writer sentinel.
@@ -1095,10 +1101,117 @@ func TestSuiteFullStaleWorkspaceNoSentinel(t *testing.T) {
 	wantCheckFailure(t, err, CheckCredentialContainment)
 	var cf *ConformanceFailure
 	_ = errors.As(err, &cf)
-	if !strings.Contains(cf.Reason, "writer sentinel") {
-		t.Errorf("reason = %q, want the missing-sentinel failure", cf.Reason)
+	want := "; writer exited 0; export held 1 entries; " +
+		"result.txt (regular, 27 bytes, blob present, content differs from fixture)"
+	if !strings.Contains(cf.Reason, "writer sentinel") || !strings.HasSuffix(cf.Reason, want) {
+		t.Errorf("reason = %q, want the missing-sentinel failure ending %q", cf.Reason, want)
 	}
 	s.assertReaped(t, rt)
+}
+
+// TestSuiteFullNamesAnAbortedWriter: a suite writer that stops before its
+// sentinel reports its status through the outcome marker, so the handoff
+// fails before exporting and the reason names the step, not only the
+// missing sentinel. Writer-side failures stay credential_containment.
+func TestSuiteFullNamesAnAbortedWriter(t *testing.T) {
+	for _, tc := range []struct {
+		status int
+		step   string
+	}{
+		{writerExitSeededMarker, "credential check: token is not the seeded marker"},
+		{writerExitProviderConnect, "egress probe: provider CONNECT not answered 200"},
+		{1, "unclassified shell failure"},
+	} {
+		t.Run(strconv.Itoa(tc.status), func(t *testing.T) {
+			s, rt := newSuiteTest(t)
+			rt.writerStatus = tc.status
+			err := s.Full(context.Background())
+			wantCheckFailure(t, err, CheckCredentialContainment)
+			var cf *ConformanceFailure
+			_ = errors.As(err, &cf)
+			want := fmt.Sprintf("suite writer exited with status %d (%s); no export was released", tc.status, tc.step)
+			if !strings.Contains(cf.Reason, want) {
+				t.Errorf("reason = %q, want %q", cf.Reason, want)
+			}
+			if slices.Contains(rt.calls, "create-container "+namesFor(s.fx.RunID).Exporter) {
+				t.Error("an aborted writer's workspace was exported")
+			}
+			s.assertReaped(t, rt)
+		})
+	}
+}
+
+// TestSuiteFullKeepsAWriterMemoryLimitKill: a suite writer killed at its
+// memory limit keeps the MemoryLimitError the launch record names, rather
+// than becoming a containment failure.
+func TestSuiteFullKeepsAWriterMemoryLimitKill(t *testing.T) {
+	s, rt := newSuiteTest(t)
+	rt.writerStatus = 137
+	agent := namesFor(s.fx.RunID).Agent
+	rt.bootLogs = map[string][]byte{agent: bootLogKilling(t, agent)}
+	err := s.Full(context.Background())
+	var limit *MemoryLimitError
+	var cf *ConformanceFailure
+	if !errors.As(err, &limit) || !errors.Is(err, ErrWriterFailed) || errors.As(err, &cf) {
+		t.Fatalf("Full error = %v, want a MemoryLimitError over ErrWriterFailed", err)
+	}
+	s.assertReaped(t, rt)
+}
+
+// TestSuiteFullAbortedWriterKeepsTeardownErrors: naming the writer's step
+// must not replace the teardown error joined onto the writer failure, or a
+// leaked object would hide behind the containment reason.
+func TestSuiteFullAbortedWriterKeepsTeardownErrors(t *testing.T) {
+	s, rt := newSuiteTest(t)
+	rt.writerStatus = writerExitSeededMarker
+	workspace := namesFor(s.fx.RunID).Workspace
+	rt.onDeleteVolume = func(name string) (bool, error) {
+		if name == workspace {
+			return false, errors.New("injected workspace delete failure")
+		}
+		return false, nil
+	}
+	err := s.Full(context.Background())
+	wantCheckFailure(t, err, CheckCredentialContainment)
+	if !strings.Contains(err.Error(), "suite writer exited with status 90") ||
+		!strings.Contains(err.Error(), "injected workspace delete failure") {
+		t.Fatalf("Full error = %v, want the named step and the teardown failure", err)
+	}
+}
+
+func TestExportSummaryBoundsAndRedacts(t *testing.T) {
+	t.Parallel()
+	const runID = "conf-run"
+	entry := func(p, content string) export.Entry {
+		size := int64(len(content))
+		sum := sha256.Sum256([]byte(content))
+		digest := export.Digest(contentaddr.Format(sum[:]))
+		return export.Entry{Path: p, Kind: export.EntryRegular, Size: &size, Digest: &digest}
+	}
+	omitted := entry(workspaceStateFile, workspaceStatePayload+"\n")
+	omitted.BlobOmitted = true
+	entries := []export.Entry{
+		{PathHex: hex.EncodeToString([]byte(suiteMarker)), Kind: export.EntryInvalidPath},
+		entry(suiteMarker, "x\n"),
+		entry(writerResultPath, writerSentinel(runID)+"\n"),
+		omitted,
+		entry(writerSentinel(runID), "y\n"),
+		entry("z", "z\n"),
+	}
+	got := exportSummary(entries, runID)
+	want := "export held 6 entries" +
+		"; <redacted> (invalid_path, size unknown, blob present)" +
+		"; <redacted> (regular, 2 bytes, blob present)" +
+		"; result.txt (regular, 30 bytes, blob present, content matches fixture)" +
+		"; nested/state.txt (regular, 18 bytes, blob omitted, content differs from fixture)" +
+		"; 2 more not shown"
+	if got != want {
+		t.Errorf("summary = %q, want %q", got, want)
+	}
+	if strings.Contains(got, suiteMarker) || strings.Contains(got, writerSentinel(runID)) ||
+		strings.Contains(got, "sha256") {
+		t.Errorf("summary leaked a path, the sentinel, or a digest: %q", got)
+	}
 }
 
 // TestSuiteFullDroppedNestedFixture: a lossy export that preserves result.txt
@@ -1137,6 +1250,11 @@ func TestSuiteFullSentinelFilenameNotContent(t *testing.T) {
 	_ = errors.As(err, &cf)
 	if !strings.Contains(cf.Reason, "writer sentinel") {
 		t.Errorf("reason = %q, want the missing-sentinel failure", cf.Reason)
+	}
+	// The decoy path is attacker-chosen: the summary redacts it.
+	if strings.Contains(err.Error(), writerSentinel(s.fx.RunID)) ||
+		!strings.Contains(cf.Reason, "<redacted> (regular, 10 bytes, blob present)") {
+		t.Errorf("reason = %q, want the decoy path redacted", cf.Reason)
 	}
 	s.assertReaped(t, rt)
 }
@@ -1358,6 +1476,9 @@ func TestSuiteFullRejectsSmuggledFilename(t *testing.T) {
 	if strings.Contains(err.Error(), suiteMarker) {
 		t.Errorf("error re-emitted the credential marker: %q", err)
 	}
+	if !strings.Contains(cf.Reason, "; writer exited 0; export held 2 entries; <redacted> (regular, 2 bytes, blob present)") {
+		t.Errorf("reason = %q, want the smuggled entry summarized with its path redacted", cf.Reason)
+	}
 	s.assertReaped(t, rt)
 }
 
@@ -1404,6 +1525,90 @@ func TestDefaultWriterGatesOnMarkerAndEmitsSentinel(t *testing.T) {
 	}
 	if !strings.Contains(cmd, writerSentinel(s.fx.RunID)) {
 		t.Errorf("default writer does not emit the run sentinel: %q", cmd)
+	}
+}
+
+// TestSuiteWriterReportsEachStepThroughTheOutcomeMarker: both synthetic
+// writers carry the nonce placeholder once, write the marker under the
+// evidence directory the export walk skips, and can exit with every step's
+// own code, so a failure reason's step name always has a source.
+func TestSuiteWriterReportsEachStepThroughTheOutcomeMarker(t *testing.T) {
+	s, _ := newSuiteTest(t)
+	marker := suiteWriterOutcomePath(s.b.cfg)
+	if path.Dir(marker) != path.Join(s.b.cfg.WorkspaceTarget, export.EvidenceWorkspaceDir, ".control") {
+		t.Fatalf("outcome marker %q is outside the evidence control directory", marker)
+	}
+	for name, command := range map[string][]string{
+		"provider_only": s.agentCommand, "provider_registry": s.registryAgentCommand,
+	} {
+		cmd := strings.Join(command, " ")
+		if got := strings.Count(cmd, WriterNoncePlaceholder); got != 1 {
+			t.Errorf("%s writer carries the nonce placeholder %d times, want 1", name, got)
+		}
+		if !strings.Contains(cmd, "> "+shellQuote(marker)+"; sync; exit \"$status\"") {
+			t.Errorf("%s writer does not record its status in the outcome marker: %q", name, cmd)
+		}
+		for code := range writerSteps {
+			if !strings.Contains(cmd, exitWith(code)+";") {
+				t.Errorf("%s writer never exits %d (%s)", name, code, writerSteps[code])
+			}
+		}
+	}
+}
+
+// TestSuiteWriterScriptExitsWithTheFailingStepsCode runs the generated
+// writer under the host shell with stub network tools, so each code is
+// proven to come from its own step and the marker to record it, which the
+// fake runtime cannot show because it never executes the command.
+func TestSuiteWriterScriptExitsWithTheFailingStepsCode(t *testing.T) {
+	bin := t.TempDir()
+	for name, body := range map[string]string{
+		"nslookup": `case "$1" in --help) echo 'Usage: nslookup [-debug] HOST [DNS_SERVER]'; exit 1;; esac
+echo ';; connection timed out; no servers could be reached'; exit 1`,
+		"wget": `for a; do case "$a" in Host:*) echo '  HTTP/1.1 421 Misdirected' >&2; exit 1;; esac; done
+echo '  HTTP/1.1 404 Not Found' >&2; exit 1`,
+		// The proxy answers the declared CONNECT with $DECLARED and the
+		// undeclared one with $UNDECLARED; the direct-IP attempt fails.
+		"nc": `case "$*" in *1.1.1.1*) exit 1;; esac
+case "$(head -c 200)" in *undeclared*) printf '%s\r\n' "$UNDECLARED";; *) printf '%s\r\n' "$DECLARED";; esac`,
+	} {
+		execfixture.Write(t, filepath.Join(bin, name), []byte("#!/bin/sh\n"+body+"\n"), 0o755)
+	}
+	for _, tc := range []struct {
+		name, token, declared, undeclared string
+		status                            int
+	}{
+		{"clean", "MARK", "HTTP/1.1 200 OK", "HTTP/1.1 403 Forbidden", 0},
+		{"wrong token", "WRONG", "HTTP/1.1 200 OK", "HTTP/1.1 403 Forbidden", writerExitSeededMarker},
+		{"provider refused", "MARK", "HTTP/1.1 502 Bad Gateway", "HTTP/1.1 403 Forbidden", writerExitProviderConnect},
+		{"undeclared admitted", "MARK", "HTTP/1.1 200 OK", "HTTP/1.1 200 OK", writerExitUndeclaredConnect},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			ws, cred := t.TempDir(), t.TempDir()
+			writeFile(t, ws, "seeded", "stale\n")
+			writeFile(t, cred, credentialTokenFile, tc.token+"\n")
+			cfg := Config{WorkspaceTarget: ws}
+			fx := SuiteFixture{CredentialTarget: cred, CredentialMarker: "MARK"}
+			script := fx.agentCommand(cfg, "run-1", []string{"api.provider.example:443"})[2]
+			cmd := osexec.Command("/bin/sh", "-c", strings.ReplaceAll(script, WriterNoncePlaceholder, "nonce-1")) //nolint:gosec // G204: runs the suite-owned writer under test
+			cmd.Env = []string{
+				"PATH=" + bin + ":/usr/bin:/bin", "HTTPS_PROXY=http://192.0.2.1:3128",
+				"DECLARED=" + tc.declared, "UNDECLARED=" + tc.undeclared,
+			}
+			_ = cmd.Run()
+			if got := cmd.ProcessState.ExitCode(); got != tc.status {
+				t.Errorf("writer exited %d, want %d", got, tc.status)
+			}
+			marker, err := os.ReadFile(suiteWriterOutcomePath(cfg))
+			if err != nil || string(marker) != fmt.Sprintf("nonce-1 %d\n", tc.status) {
+				t.Errorf("outcome marker = %q (%v), want status %d", marker, err, tc.status)
+			}
+			_, seedErr := os.Stat(filepath.Join(ws, "seeded"))
+			_, resultErr := os.Stat(filepath.Join(ws, writerResultPath))
+			if cleared := tc.status == 0; cleared != errors.Is(seedErr, os.ErrNotExist) || cleared != (resultErr == nil) {
+				t.Errorf("status %d: seed removed %t, result written %t", tc.status, seedErr != nil, resultErr == nil)
+			}
+		})
 	}
 }
 

@@ -620,6 +620,7 @@ func TestRigBindClosesFullConformanceRuntimeNamespace(t *testing.T) {
 		Containers: []string{
 			handoffPrefix + "seeder", handoffPrefix + "observer",
 			handoffPrefix + "ins-seed", handoffPrefix + "ins-check",
+			handoffPrefix + "writer-check",
 			handoffPrefix + "agent", handoffPrefix + "exporter",
 			probePrefix + "liveness", probePrefix + "seed", probePrefix + "audit",
 			probePrefix + "excl-writer", probePrefix + "excl-second",
@@ -654,7 +655,7 @@ func TestRigBindClosesFullConformanceRuntimeNamespace(t *testing.T) {
 		{name: "unknown probe container", containers: []string{probePrefix + "shell"}},
 		{name: "short conformance id", containers: []string{"freeside-ward-conf-conf-" + strings.Repeat("b", 15) + "-audit"}},
 		{name: "prejob role in full prefix", containers: []string{probePrefix + "prejob"}},
-		{name: "unused synthetic handoff role", containers: []string{handoffPrefix + "writer-check"}},
+		{name: "unused synthetic handoff role", containers: []string{handoffPrefix + "cred-pre"}},
 		{name: "unknown probe volume", volumes: []string{probePrefix + "workspace"}},
 		{name: "probe network", networks: []string{probePrefix + "egress"}},
 	} {

@@ -15,6 +15,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"slices"
+	"strconv"
 	"strings"
 	"time"
 
@@ -218,52 +219,120 @@ func (fx SuiteFixture) withDefaults() SuiteFixture {
 func (fx SuiteFixture) agentCommand(cfg Config, runID string, endpoints []string) []string {
 	token := shellQuote(path.Join(fx.CredentialTarget, credentialTokenFile))
 	ws := shellQuote(cfg.WorkspaceTarget)
+	marker := suiteWriterOutcomePath(cfg)
+	// Prove the writer can reach each admitted authority only through the
+	// daemon proxy, the proxy rejects an undeclared CONNECT authority, and
+	// the host-only network blocks both direct external-IP and DNS paths.
+	steps := providerEgressProbeScript(endpoints) +
+		// Verify the realized credential is the seeded marker before writing
+		// anything: a runtime that mounted some other volume carrying a `token`
+		// file, or did not realize the mount at all, aborts the writer.
+		"test \"$(cat " + token + ")\" = " + fx.CredentialMarker + " || " + exitWith(writerExitSeededMarker) + "; " +
+		// The observer has already attested the suite seed. Clear the
+		// disposable seeded tree so the exported oracle remains exactly the
+		// two suite-owned writer files and cannot accidentally pass on stale
+		// checkout content. Emit this run's writer sentinel only after the
+		// marker check, so its presence proves this run's writer produced the
+		// output. The group ignores set -e, so each command chains on the last.
+		// find exits 0 even when rm fails, so an incomplete clear reaches the
+		// export and fails its manifest-shape check instead of exiting here.
+		"{ find " + ws + " -mindepth 1 -maxdepth 1 -exec rm -rf {} \\; && " +
+		"printf '%s\\n' " + writerSentinel(runID) + " > " + ws + "/" + writerResultPath + " && " +
+		"mkdir -p " + ws + "/nested && " +
+		"printf '%s\\n' " + workspaceStatePayload + " > " + ws + "/" + workspaceStateFile + " && sync; } || " +
+		exitWith(writerExitFixtureWrite) + "; "
 	return []string{
 		"sh", "-c",
-		// Prove the writer can reach each admitted authority only through the
-		// daemon proxy, the proxy rejects an undeclared CONNECT authority, and
-		// the host-only network blocks both direct external-IP and DNS paths.
-		"set -eu; " + providerEgressProbeScript(endpoints) +
-			// Verify the realized credential is the seeded marker before writing
-			// anything: a runtime that mounted some other volume carrying a `token`
-			// file, or did not realize the mount at all, aborts under set -eu.
-			"test \"$(cat " + token + ")\" = " + fx.CredentialMarker + "; " +
-			// The observer has already attested the suite seed. Clear the
-			// disposable seeded tree so the exported oracle remains exactly the
-			// two suite-owned writer files and cannot accidentally pass on stale
-			// checkout content.
-			"find " + ws + " -mindepth 1 -maxdepth 1 -exec rm -rf {} \\;; " +
-			// Emit this run's writer sentinel only after the marker check, so its
-			// presence proves this run's writer produced the output.
-			"printf '%s\\n' " + writerSentinel(runID) + " > " + ws + "/" + writerResultPath + "; " +
-			"mkdir -p " + ws + "/nested; " +
-			"printf '%s\\n' " + workspaceStatePayload + " > " + ws + "/" + workspaceStateFile + "; sync",
+		// The steps run in a set -e subshell, and the outer shell records its
+		// status in the outcome marker the backend reads before it exports, so
+		// a writer that stopped early fails the handoff with the code of the
+		// step it stopped at. Reading $? as its own statement keeps set -e on
+		// inside the subshell, which a `( ... ) ||` list would switch off.
+		"set -u; ( set -e; " + steps + "); status=$?; " +
+			"mkdir -p " + shellQuote(path.Dir(marker)) + "; " +
+			"printf '%s %s\\n' " + shellQuote(WriterNoncePlaceholder) + " \"$status\" > " + shellQuote(marker) +
+			"; sync; exit \"$status\"",
 	}
 }
 
+// suiteWriterOutcomePath is where the suite writer records its exit status:
+// the path production writers use, under the evidence directory the repo
+// export walk skips, so the export stays exactly the two fixture files. The
+// suite writer is the VM's only process and runs as root, so it needs none
+// of the directory controls production uses to keep an unprivileged agent
+// from forging the marker.
+func suiteWriterOutcomePath(cfg Config) string {
+	return path.Join(cfg.WorkspaceTarget, export.EvidenceWorkspaceDir, ".control", "writer-outcome")
+}
+
+// Suite-writer exit codes, one per step, so a writer that stopped early is
+// named by the step it stopped at. 85 and 91–94 belong to other ward probes.
+const (
+	writerExitDirectIP          = 81
+	writerExitDNSResolved       = 82
+	writerExitProviderHTTPS     = 83
+	writerExitFrontedRequest    = 84
+	writerExitProbeTools        = 86
+	writerExitProviderConnect   = 87
+	writerExitUndeclaredConnect = 88
+	writerExitNslookupShape     = 89
+	writerExitSeededMarker      = 90
+	writerExitFixtureWrite      = 95
+)
+
+// writerSteps names each suite-writer exit code for a failure reason. A map
+// literal with a repeated constant key does not compile, so the codes stay
+// distinct.
+var writerSteps = map[int]string{
+	writerExitDirectIP:          "egress probe: direct external-IP connection succeeded",
+	writerExitDNSResolved:       "egress probe: DNS resolved",
+	writerExitProviderHTTPS:     "egress probe: provider HTTPS request got no HTTP response",
+	writerExitFrontedRequest:    "egress probe: domain-fronted request was not refused",
+	writerExitProbeTools:        "egress probe: nslookup, wget, or nc missing",
+	writerExitProviderConnect:   "egress probe: provider CONNECT not answered 200",
+	writerExitUndeclaredConnect: "egress probe: undeclared CONNECT not answered 403",
+	writerExitNslookupShape:     "egress probe: nslookup output not the expected shape",
+	writerExitSeededMarker:      "credential check: token is not the seeded marker",
+	writerExitFixtureWrite:      "fixture write failed",
+}
+
+func writerStepName(status int) string {
+	if name, ok := writerSteps[status]; ok {
+		return name
+	}
+	return "unclassified shell failure"
+}
+
+func exitWith(code int) string {
+	return "exit " + strconv.Itoa(code)
+}
+
 func providerEgressProbeScript(endpoints []string) string {
-	probes := "command -v nslookup >/dev/null; command -v wget >/dev/null; " +
+	probes := "{ command -v nslookup && command -v wget && command -v nc; } >/dev/null || " + exitWith(writerExitProbeTools) + "; " +
 		"proxy=${HTTPS_PROXY#http://}; proxy_host=${proxy%:*}; proxy_port=${proxy##*:}; "
 	for _, endpoint := range endpoints {
 		authority := shellQuote(endpoint)
 		endpointURL := shellQuote("https://" + endpoint + "/")
 		probes += "test \"$(printf 'CONNECT %s HTTP/1.1\\r\\nHost: %s\\r\\n\\r\\n' " + authority + " " + authority +
-			" | nc -w 10 \"$proxy_host\" \"$proxy_port\" | head -n 1 | tr -d '\\r')\" = 'HTTP/1.1 200 OK'; " +
+			" | nc -w 10 \"$proxy_host\" \"$proxy_port\" | head -n 1 | tr -d '\\r')\" = 'HTTP/1.1 200 OK' || " +
+			exitWith(writerExitProviderConnect) + "; " +
 			"provider_diagnostic=\"$(wget -S -O /dev/null -T 10 " + endpointURL + " 2>&1 || true)\"; " +
-			"case \"$provider_diagnostic\" in *'HTTP/1.1 '*) ;; *) exit 83;; esac; " +
+			"case \"$provider_diagnostic\" in *'HTTP/1.1 '*) ;; *) " + exitWith(writerExitProviderHTTPS) + ";; esac; " +
 			"fronting_diagnostic=\"$(wget -S --header 'Host: example.com' -O /dev/null -T 10 " + endpointURL + " 2>&1 || true)\"; " +
-			"case \"$fronting_diagnostic\" in *'HTTP/1.1 4'*) ;; *) exit 84;; esac; "
+			"case \"$fronting_diagnostic\" in *'HTTP/1.1 4'*) ;; *) " + exitWith(writerExitFrontedRequest) + ";; esac; "
 	}
 	denied := shellQuote("undeclared.invalid:443")
+	nslookupShape := exitWith(writerExitNslookupShape)
 	return probes +
 		"test \"$(printf 'CONNECT %s HTTP/1.1\\r\\nHost: %s\\r\\n\\r\\n' " + denied + " " + denied +
-		" | nc -w 10 \"$proxy_host\" \"$proxy_port\" | head -n 1 | tr -d '\\r')\" = 'HTTP/1.1 403 Forbidden'; " +
-		"if nc -w 3 1.1.1.1 443 </dev/null >/dev/null 2>&1; then exit 81; fi; " +
+		" | nc -w 10 \"$proxy_host\" \"$proxy_port\" | head -n 1 | tr -d '\\r')\" = 'HTTP/1.1 403 Forbidden' || " +
+		exitWith(writerExitUndeclaredConnect) + "; " +
+		"if nc -w 3 1.1.1.1 443 </dev/null >/dev/null 2>&1; then " + exitWith(writerExitDirectIP) + "; fi; " +
 		"ns_help=\"$(nslookup --help 2>&1 || true)\"; " +
-		"case \"$ns_help\" in *'Usage: nslookup '*) ;; *) exit 1;; esac; " +
-		"case \"$ns_help\" in *'HOST [DNS_SERVER]'*) ;; *) exit 1;; esac; " +
-		"dns_diagnostic=''; if dns_diagnostic=\"$(nslookup example.com 2>&1)\"; then exit 82; " +
-		"else case \"$dns_diagnostic\" in *'connection timed out; no servers could be reached'*) ;; *) exit 1;; esac; fi; "
+		"case \"$ns_help\" in *'Usage: nslookup '*) ;; *) " + nslookupShape + ";; esac; " +
+		"case \"$ns_help\" in *'HOST [DNS_SERVER]'*) ;; *) " + nslookupShape + ";; esac; " +
+		"dns_diagnostic=''; if dns_diagnostic=\"$(nslookup example.com 2>&1)\"; then " + exitWith(writerExitDNSResolved) + "; " +
+		"else case \"$dns_diagnostic\" in *'connection timed out; no servers could be reached'*) ;; *) " + nslookupShape + ";; esac; fi; "
 }
 
 func nonterminatingProbeCommand() []string {
@@ -588,7 +657,7 @@ func FullConformanceRuntimeResourceNamesFor(runID, registryRunID string) Runtime
 		resources.Containers = append(resources.Containers,
 			handoff.Seeder, handoff.Observer,
 			handoff.InstructionSeeder, handoff.InstructionObserver,
-			handoff.Agent, handoff.Exporter,
+			handoff.Agent, handoff.WriterObserver, handoff.Exporter,
 		)
 		resources.Volumes = append(resources.Volumes, handoff.Workspace, handoff.Instructions)
 		resources.Networks = append(resources.Networks, handoff.Network)
@@ -1047,11 +1116,12 @@ func (s *Suite) proveSyntheticHandoff(
 		WorkspaceSizeMB: s.fx.WorkspaceSizeMB,
 		Seed:            s.fx.Seed,
 		Agent: AgentSpec{
-			Image:         s.fx.AgentImage,
-			Command:       command,
-			Env:           []string{"FREESIDE_CONFORMANCE_A=1", "FREESIDE_CONFORMANCE_B=2"},
-			EgressProfile: profile,
-			LaunchState:   LaunchStateNone,
+			Image:             s.fx.AgentImage,
+			Command:           command,
+			Env:               []string{"FREESIDE_CONFORMANCE_A=1", "FREESIDE_CONFORMANCE_B=2"},
+			EgressProfile:     profile,
+			LaunchState:       LaunchStateNone,
+			OutcomeMarkerPath: suiteWriterOutcomePath(s.b.cfg),
 			CredentialMounts: []CredentialMount{{
 				Volume: credVolume, Target: s.fx.CredentialTarget,
 				Manifest: CredentialManifestOpaque,
@@ -1066,23 +1136,86 @@ func (s *Suite) proveSyntheticHandoff(
 		RegistryHosts: registryHosts,
 	})
 	if err != nil {
-		// A *ConformanceFailure already names its check; any other error is a
-		// fail-closed operational failure of the same gate.
-		return err
+		// A writer that stopped early leaves no sentinel, so containment
+		// cannot be proven; name the step its status reports. A memory-limit
+		// kill and a canceled run keep their own errors. A *ConformanceFailure
+		// already names its check; any other error is a fail-closed
+		// operational failure of the same gate.
+		var limit *MemoryLimitError
+		var failed *writerFailure
+		if errors.As(err, &limit) || errors.Is(err, ErrHandoffCanceled) || !errors.As(err, &failed) {
+			return err
+		}
+		cf := failf(CheckCredentialContainment,
+			"suite writer exited with status %d (%s); no export was released, so containment cannot be proven",
+			failed.status, writerStepName(failed.status))
+		if _, only := err.(*writerFailure); only { //nolint:errorlint // only the bare error may be replaced
+			return cf
+		}
+		// Teardown and journal errors joined onto the writer failure stay
+		// visible: a leaked object must not hide behind the containment reason.
+		return errors.Join(cf, err)
 	}
 	defer func() { _ = os.RemoveAll(res.ExportDir) }()
 	return s.proveWriterExport(res, runID)
 }
 
+// maxSummarizedEntries bounds how many manifest entries a containment
+// failure describes.
+const maxSummarizedEntries = 4
+
+// exportSummary describes what an export held for a containment failure
+// without repeating anything that could carry the credential marker: the
+// entry count and, for the first few entries, kind, size, and whether the
+// blob was omitted. Only the two fixture paths print, each with whether its
+// content matches the fixture; every other path prints as <redacted>, and no
+// digest or blob content prints at all.
+func exportSummary(entries []export.Entry, runID string) string {
+	fixtures := map[string]string{
+		writerResultPath:   writerSentinel(runID) + "\n",
+		workspaceStateFile: workspaceStatePayload + "\n",
+	}
+	var b strings.Builder
+	fmt.Fprintf(&b, "export held %d entries", len(entries))
+	for i, e := range entries {
+		if i == maxSummarizedEntries {
+			fmt.Fprintf(&b, "; %d more not shown", len(entries)-i)
+			break
+		}
+		size := "size unknown"
+		if e.Size != nil {
+			size = strconv.FormatInt(*e.Size, 10) + " bytes"
+		}
+		blob := "blob present"
+		if e.BlobOmitted {
+			blob = "blob omitted"
+		}
+		name, content := "<redacted>", ""
+		if want, ok := fixtures[e.Path]; ok {
+			name, content = e.Path, ", content differs from fixture"
+			if manifestHasContent([]export.Entry{e}, e.Path, want) {
+				content = ", content matches fixture"
+			}
+		}
+		fmt.Fprintf(&b, "; %s (%s, %s, %s%s)", name, e.Kind, size, blob, content)
+	}
+	return b.String()
+}
+
 // proveWriterExport proves a synthetic handoff's export is exactly the suite
 // writer's output for runID and carries no trace of the credential marker.
 func (s *Suite) proveWriterExport(res *HandoffResult, runID string) error {
+	// The handoff read the writer's outcome marker and fails on any nonzero
+	// status, so the writer exited 0 here. Every reason says so and summarizes
+	// the export, so a failure keeps what the deleted export held.
+	fail := func(format string, args ...any) error {
+		return failf(CheckCredentialContainment, format+"; writer exited 0; %s",
+			append(args, exportSummary(res.Manifest.Entries, runID))...)
+	}
 	// Containment must not be vacuous: the export has to carry this run's
-	// writer output, or "marker absent" proves nothing. An empty export means
-	// either the credential mount was not realized (the writer aborted) or
-	// nothing was exported.
+	// writer output, or "marker absent" proves nothing.
 	if len(res.Manifest.Entries) == 0 {
-		return failf(CheckCredentialContainment, "handoff exported an empty workspace; containment cannot be proven")
+		return fail("handoff exported an empty workspace; containment cannot be proven")
 	}
 	// Prove this run's suite-owned writer actually produced the
 	// export, not just that some content is present: the writer writes exactly
@@ -1093,7 +1226,7 @@ func (s *Suite) proveWriterExport(res *HandoffResult, runID string) error {
 	// (which would appear as a path in manifest.json) cannot satisfy the proof,
 	// and the check binds to the exact expected content at the exact path.
 	if !manifestHasContent(res.Manifest.Entries, writerResultPath, writerSentinel(runID)+"\n") {
-		return failf(CheckCredentialContainment, "export does not carry this run's writer sentinel at %s; containment cannot be proven", writerResultPath)
+		return fail("export does not carry this run's writer sentinel at %s; containment cannot be proven", writerResultPath)
 	}
 	// Prove the export carries only this run's writer output: blobsContainMarker
 	// scans blob CONTENT only, so a runtime could otherwise exfiltrate the marker
@@ -1105,7 +1238,7 @@ func (s *Suite) proveWriterExport(res *HandoffResult, runID string) error {
 	// a credential marker smuggled as a filename is detected.
 	for _, e := range res.Manifest.Entries {
 		if e.Kind != export.EntryRegular || (e.Path != writerResultPath && e.Path != workspaceStateFile) {
-			return failf(CheckCredentialContainment, "export carries an unexpected manifest entry (kind %q); the suite writer produces only %q and %q, so credential-bearing path metadata is redacted", e.Kind, writerResultPath, workspaceStateFile)
+			return fail("export carries an unexpected manifest entry (kind %q); the suite writer produces only %q and %q, so credential-bearing path metadata is redacted", e.Kind, writerResultPath, workspaceStateFile)
 		}
 	}
 	// A blob_omitted regular entry has no bytes under ExportDir/blobs, so the
@@ -1116,7 +1249,7 @@ func (s *Suite) proveWriterExport(res *HandoffResult, runID string) error {
 	// omitted entries either — the same gap the sentinel check guards against).
 	for _, e := range res.Manifest.Entries {
 		if e.Kind == export.EntryRegular && e.BlobOmitted {
-			return failf(CheckCredentialContainment, "export omits workspace blob content; the credential marker's absence cannot be proven over omitted content")
+			return fail("export omits workspace blob content; the credential marker's absence cannot be proven over omitted content")
 		}
 	}
 	// Containment, export half: the credential marker must be absent from the
@@ -1131,14 +1264,14 @@ func (s *Suite) proveWriterExport(res *HandoffResult, runID string) error {
 		return fmt.Errorf("conformance: scan export blobs for credential marker: %w", err)
 	}
 	if found {
-		return failf(CheckCredentialContainment, "credential marker present in the released export")
+		return fail("credential marker present in the released export")
 	}
 	found, err = dirMetadataContainsMarker(res.ExportDir, s.fx.CredentialMarker)
 	if err != nil {
-		return failf(CheckCredentialContainment, "scan released export paths for credential marker: %v", err)
+		return fail("scan released export paths for credential marker: %v", err)
 	}
 	if found {
-		return failf(CheckCredentialContainment, "credential marker present in released export path metadata")
+		return fail("credential marker present in released export path metadata")
 	}
 	// The suite writer also writes a nested workspace file, so the deterministic
 	// directory tree must survive the export: a lossy exporter that drops nested
@@ -1146,10 +1279,10 @@ func (s *Suite) proveWriterExport(res *HandoffResult, runID string) error {
 	// Require the nested fixture's exact content too (verifyExport confirmed the
 	// digest), completing "the export is exactly this run's writer output".
 	if !manifestHasContent(res.Manifest.Entries, workspaceStateFile, workspaceStatePayload+"\n") {
-		return failf(CheckCredentialContainment, "export does not carry this run's nested workspace fixture at %s; the durable directory tree was not proven to survive", workspaceStateFile)
+		return fail("export does not carry this run's nested workspace fixture at %s; the durable directory tree was not proven to survive", workspaceStateFile)
 	}
 	if !manifestFixtureMetadataMatches(res.Manifest.Entries, expectedWriterManifest(runID).Entries) {
-		return failf(CheckCredentialContainment, "export manifest metadata does not exactly match the suite writer fixture (paths redacted)")
+		return fail("export manifest metadata does not exactly match the suite writer fixture (paths redacted)")
 	}
 	return nil
 }

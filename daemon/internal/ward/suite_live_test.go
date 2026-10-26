@@ -65,7 +65,8 @@ func TestLiveConformanceSuite(t *testing.T) {
 	prefix := conformanceObjectPrefix + runID + "-"
 	t.Cleanup(func() {
 		for _, c := range []string{
-			names.Agent, names.Exporter, registryNames.Agent, registryNames.Exporter,
+			names.Agent, names.WriterObserver, names.Exporter,
+			registryNames.Agent, registryNames.WriterObserver, registryNames.Exporter,
 			prefix + "seed", prefix + "audit", prefix + "prejob",
 			prefix + networklessProbeSuffix, prefix + networklessLivenessProbeSuffix,
 			prefix + "excl-writer", prefix + "excl-second",

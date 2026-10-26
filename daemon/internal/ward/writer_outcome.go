@@ -172,6 +172,19 @@ func verifyWriterOutcomeProof(data []byte, nonce string) (int, error) {
 	return status, nil
 }
 
+// writerFailure is a nonzero writer status. It matches ErrWriterFailed and
+// keeps the status, so the conformance suite can name the writer step that
+// status reports.
+type writerFailure struct {
+	status int
+}
+
+func (e *writerFailure) Error() string {
+	return fmt.Sprintf("%v (status %d)", ErrWriterFailed, e.status)
+}
+
+func (e *writerFailure) Unwrap() error { return ErrWriterFailed }
+
 func writerFailureError(status int) error {
-	return fmt.Errorf("%w (status %d)", ErrWriterFailed, status)
+	return &writerFailure{status: status}
 }
