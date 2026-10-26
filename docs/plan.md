@@ -2356,16 +2356,19 @@ Repository identity, the fixed preparation command, and recipe approval
 against current policy are checked as before. Every boundary that binds an
 image to a base (composition preflight, daemon start, publication, and
 readiness re-entry) re-derives the verdict from the immutable record and the
-exact base tree; none stores or trusts one. The publication lane decides
-immediately before it builds a verification room, so finished verification
-evidence is never judged again. A re-entered cycle whose image cannot serve
-its base stops on an attention item that carries the pull request; it does not
-fail the lane. A record built before environment
-evidence existed carries none and stays admissible only at its build commit,
-so reusing it takes one rebuild. Compatibility selects the environment and
-nothing else: the run's own base and candidate are still verified in fresh
-networkless workspaces, and the build's proof at its own commit never stands
-in for that evidence.
+exact base tree; none stores or trusts one. The one exception is a repair
+task's writer at composition (project-image upkeep below). The publication
+lane decides immediately before it builds a verification room, so finished
+verification evidence is never judged again. A re-entered cycle whose image
+cannot serve its base holds while project-image upkeep below has a
+resolution pending; otherwise it stops on an attention item that carries the
+pull request. Either way it does not fail the lane. A record built before
+environment evidence existed carries none and stays admissible only at its
+build commit, so reusing it takes one rebuild, which project-image upkeep
+below performs. Compatibility selects the environment and nothing else: the
+run's own base and candidate are still verified in fresh networkless
+workspaces (except a repair task's base, project-image upkeep below), and
+the build's proof at its own commit never stands in for that evidence.
 
 **Policy-gated rebuild.** A dependency change stops costing a human round trip
 when it stays inside the project's declared policy. The gate holds when:
@@ -2373,8 +2376,9 @@ when it stays inside the project's declared policy. The gate holds when:
 - The candidate's dependency-manifest delta is lockfile-consistent.
 - For a Go image, the delta touches neither the named module's `go.mod` nor
   its `go.sum` (revision 92). A `go.sum` change, which every Go dependency
-  change produces, keeps the fail-loud path above until project-image upkeep
-  (#1999) covers Go module changes. A candidate that adds a `vendor/`
+  change produces, keeps the fail-loud path above until the gate reads Go
+  module sources against the declared registry set (#2337). A candidate
+  that adds a `vendor/`
   directory to the module, or a `go.work` to the module directory or any
   directory above it, keeps the fail-loud path under the same clause as a
   `go.mod` or `go.sum` change (#2115).
@@ -2383,6 +2387,11 @@ when it stays inside the project's declared policy. The gate holds when:
   the writer, Section [5.4](#54-credential-modes-egress-profiles-and-concurrency); the builder reads it whatever the writer's profile,
   since builder fetch authorization and writer egress are different concerns).
 - The verification recipe is unchanged.
+
+The gate also runs when no dependency changed but the recorded toolchain and
+preparation digest differs from the running binary's, which is what a daemon
+upgrade produces (revision 98). With both manifests equal, such a delta meets
+every condition above, so this widens when the gate runs, not what it admits.
 
 Under those conditions the reusable builder rebuilds the project image from the
 trusted recipe, reruns the networkless positive run and the masked-cache proof, and
@@ -2393,6 +2402,115 @@ the fail-loud path above. The gate is a machine check, never a widening of the
 writer's network: the writer still never fetches during verification, and the
 human still sees every dependency change in the PR diff and in the image
 provenance record.
+
+**Project-image upkeep (revision 98).** Freeside keeps each project's image
+working by itself, and no step of that upkeep is a human chore. The normal
+loop is a person reviewing a PR or tapping a card, not re-onboarding a
+project or running an older daemon binary until its tasks drain. Each
+managed repository has one admitted-image pointer per agent base it uses.
+The pointer names the image record that new work on that base starts from.
+`freesided onboard` seeds it (Section [10](#10-operations-and-onboarding)), it replaces the single image the
+daemon is configured with today, and only the trusted builder advances it.
+Image records stay write-once. The pointer picks an image but never vouches
+for it: every boundary above still re-derives admissibility from the record
+and the exact base tree. Section [11](#11-roadmap-build-order-and-coordination) row 12 orders the work.
+
+- **Triggers.** A permanent trusted-config job, image upkeep (Section [5.16](#516-the-durable-scheduler)),
+  checks a project at three points:
+  - when its default-branch tip advances, whether or not a bound PR caused
+    it (the reconciler watches the tip of every onboarded project, not only
+    the base of a task in review);
+  - when the daemon starts;
+  - on the doctor's schedule, as a backstop for a missed tip advance
+    (Section [10](#10-operations-and-onboarding)).
+- **Three verdicts at the tip.** If the pointed-to image is admissible at
+  the default-branch tip (Reuse across compatible commits), the job does
+  nothing. Otherwise it runs the policy-gated rebuild's gate on the delta
+  from the image's build commit to the tip. If the gate admits the delta,
+  the reusable builder rebuilds from the trusted recipe at the tip, reruns
+  the networkless positive run and the masked-cache proof, records the
+  provenance, and advances the pointer, with no AttentionItem. If the gate
+  refuses, the job evaluates every gate clause before it classifies the
+  refusal, so a refusal counts as policy-only only when no other clause
+  also refuses. The classes are:
+  - *Policy clause only.* The recipe digest changed at the tip, a package
+    resolves from an authority outside the declared registry set, or the
+    project declares no registry set. Recipe approval and the registry set
+    are trusted project policy, so adopting a change passes the Section [5.8](#58-control-plane-trust)
+    control-plane gate. The job raises one card, bound to the exact recipe
+    digest or authority. Approving the card opens a project-policy proposal
+    (the Section [4](#4-the-attention-model) policy-proposal path), and merging that proposal is the
+    adoption. The builder then builds a new image at the tip under the
+    adopted policy, with the same positive run and masked-cache proof, as
+    onboarding does. The policy-gated rebuild's unchanged-recipe clause
+    stays as it is.
+  - *Repair needed.* The positive run or the masked-cache proof fails at
+    the tip, the install fails deterministically under #1792's
+    classification, or the delta carries an input the gate never admits (an
+    inconsistent lockfile, an unpinned or VCS source). The fix is a
+    repository change, so the daemon submits a maintenance task through the
+    Section [5.12](#512-workflow-definition-initiators-and-artifacts) submission primitive, with the refusal record as its
+    source. The task passes specification approval, the agent's PR, and the
+    human merge gate like any task. Its merge advances the tip, which reruns
+    the job.
+  - *Host fault.* The builder, the runtime, or the daemon's rebuild
+    configuration failed, or the build timed out, for a reason outside the
+    project. The job raises a `system_health` item through the doctor's
+    converge pattern (Section [10](#10-operations-and-onboarding)) and retries on the next trigger. A host
+    fault never opens a task.
+  - *Go module delta.* A `go.mod` or `go.sum` change at the tip stays
+    refused under the Go clause above. It opens neither a proposal nor a
+    task until the gate reads Go module sources (#2337).
+  - *Unsupported npm input.* The tip holds an npm input no project image
+    supports, or changes `package.json`'s `overrides`, `workspaces`, or
+    `packageManager`. Such a change is usually deliberate, and a repair
+    could only revert it, so it opens neither a proposal nor a task.
+- **A maintenance task runs on the image it fixes.** Its base is the refused
+  tip, where no image is admissible, so an ordinary hold would make it wait
+  on itself. It is therefore the one exception to composition's
+  admissibility check, and the exception is narrow: it covers only a
+  daemon-origin task whose source is a repair-class refusal record for the
+  same project. Its writer starts in the pointed-to image even though that
+  image doesn't serve the task's base. The refusal record, which is the
+  trusted builder's failed run at that exact tip, stands in for verifying
+  the base. The candidate is verified only in an image the builder builds
+  and proves at the candidate head, under the gate's conditions measured
+  from the pointed-to image's build commit. Publication re-derives that
+  image's admissibility at the candidate head as it does for any run. If
+  that build fails, the run fails like any failed verification. Nothing
+  else relaxes.
+- **Holds, not blocks, while a resolution is pending.** A task whose base
+  needs a rebuild that the job will perform waits under a visible hold. A
+  task whose base was refused waits under a hold that names the pending
+  proposal or maintenance task. Either hold releases once an admitted image
+  serves the task's base. The advanced pointer does that for a base at the
+  tip; a task on an older base can use any write-once record that still
+  serves it. A task ends in the blocked outcome #1784 defines only when its
+  refusal has no pending resolution (a Go module delta, an unsupported npm
+  input, a declined adoption) or when no admitted image can serve its base.
+- **Serialization.** One builder runs at a time per daemon, within the
+  rebuild's time limit (one hour by default), oldest request first. An
+  upkeep rebuild and a run's policy-gated rebuild take turns on the
+  project's pointer: the second re-checks admissibility against the pointer
+  the first advanced before it builds. Neither holds the publication lane
+  while it waits. After a daemon upgrade, the start trigger checks every
+  project right away (one digest comparison each) and queues the rebuilds.
+- **The trust boundary is unchanged.** No gate clause widens. The
+  toolchain-only delta touches nothing the recipe or the registry set
+  governs, and an adoption changes project policy only through the Section
+  [5.8](#58-control-plane-trust) control-plane gate. The writer never fetches during verification, and
+  admitted images stay registry-resolved digest references. Whether the
+  builder's install is held to the registry set at the point it connects is
+  still #1793's question.
+- **Agent-base upkeep is designed and deferred.** The pinned vendor CLIs in
+  the agent bases go out of date too. The design: a cadence-driven
+  maintenance task against the Freeside repository, onboarded as a project,
+  proposes a pinned-CLI bump in `images/`. After the merge, the daemon
+  builds the base, runs the image-side probe above on that exact image, and
+  admits its digest. Project-image upkeep then rebuilds each project on the
+  new base through the ordinary gate. This waits for Freeside to be
+  onboarded against its own repository and for the project-image units, and
+  is not scheduled (#2338).
 
 Every runnable agent-base and project-image reference is a
 registry-resolvable `name@sha256:<digest>` and is admitted by digest, never
@@ -3552,6 +3670,19 @@ Additional rules:
   task comes from `freesided submit` on the host until the configured-project
   list lands in `/sync/bootstrap` (#1332). Attachments on submission wait
   until the composer can upload them. (#1328; the composer is #1330.)
+- **The daemon may submit a maintenance task.** When project-image upkeep
+  (Section [5.7](#57-the-ward-runners-handoff-gate-and-operating-modes)) meets a refusal that needs a repository repair, the daemon
+  submits a task through the same acceptance primitives as `freesided submit`
+  and `submit_task`, not a parallel path. The task records a daemon origin in
+  place of a device or operator, registers the refusal record as its
+  digest-addressed source artifact, binds no issue, and declares
+  `bound_pr_merged` completion with declared paths from the resolved policy.
+  Its submission identity derives from the refusal record, so a repeated
+  refusal never opens a second task. Its specification passes the ordinary
+  approval, so no implementation the daemon submits runs before an operator
+  approves its specification. This is not a scan initiator (deferred to
+  Phase 2): it fires only on a refusal record from the trusted upkeep job
+  (revision 98).
 - **Client PR metadata describes the implemented outcome.** New client
   submissions freeze the current publication recipe
   (`freeside.client-publication/v2`, Section [5.15](#515-evidence-and-images)),
@@ -4406,7 +4537,8 @@ subject-bound polls. It represents them as a closed union of schedule kinds with
 fixed Go types and trusted event constructors. 1B implements only the kinds that
 have 1B consumers: the PR-checks deadline, the review-wait threshold, the
 base-advance staleness watch, and the installation poll, plus the permanent
-trusted-config jobs (doctor, janitor; not proposable, no expiry requirement).
+trusted-config jobs (doctor, janitor, image upkeep; not proposable, no expiry
+requirement).
 The base-advance staleness watch is bound to the task, so it follows the work
 across retries. Its consumer is the base-freshness fact on task-bound
 `ready_for_final_review` items. Section [4](#4-the-attention-model)'s item resolution rules still
@@ -4448,7 +4580,8 @@ validation runs before event construction. It covers project binding, resolved
 policy, expiry, activation state (Section [5.9](#59-durability-effectively-once)), operating-mode eligibility
 (Section [5.7](#57-the-ward-runners-handoff-gate-and-operating-modes)), and subject existence. Operating-mode eligibility is
 kind-specific. Permanent trusted-config jobs run in every operating mode, so the
-doctor and janitor keep their Section [10](#10-operations-and-onboarding) obligations in `attended_dev`. Workload
+doctor and janitor keep their Section [10](#10-operations-and-onboarding) obligations in `attended_dev`, and image
+upkeep keeps each project's image in service there too (Section [5.7](#57-the-ward-runners-handoff-gate-and-operating-modes)). Workload
 kinds require the operating mode their consumer demands.
 
 The event carries the expected schedule generation and subject version, and the
@@ -5799,8 +5932,8 @@ Build the installer only after the underlying interfaces survive real use. The
 | Command | Function |
 | --- | --- |
 | `freesided setup` | Performs installation. On the Mac-first path, the operator app registers the daemon LaunchAgent (Section [5.2](#52-the-daemon-and-its-supervisor)) and no step is privileged. When a hardened deployment needs privileged steps (user creation, LaunchDaemon installation), they run through a narrow elevation helper. The daemon never retains root. |
-| `freesided onboard <repo>` | Resolves the selected GitHub App installation, creates the trust profile, attests effective authority for one-time human review, detects the verification recipe, and invokes the proven reusable project-image builder. If the installation, organization approval, or repository selection is missing, onboarding records a bounded pending-install-or-expansion intent before routing the operator into GitHub's native flow, then polls. A callback or `--resume` reopens the same review after approval. |
-| `freesided doctor` | Checks conformance, the workspace-handoff gate, checkpoint encryption, backup age, artifact closure, restore-test age, and, from 1B.1, stored-credential integrity (a truncation and corruption probe); the probe rules follow the table. |
+| `freesided onboard <repo>` | Resolves the selected GitHub App installation, creates the trust profile, attests effective authority for one-time human review, detects the verification recipe, invokes the proven reusable project-image builder, and seeds the project's admitted-image pointer (Section [5.7](#57-the-ward-runners-handoff-gate-and-operating-modes)). If the installation, organization approval, or repository selection is missing, onboarding records a bounded pending-install-or-expansion intent before routing the operator into GitHub's native flow, then polls. A callback or `--resume` reopens the same review after approval. |
+| `freesided doctor` | Checks conformance, the workspace-handoff gate, checkpoint encryption, backup age, artifact closure, restore-test age, from 1B.1, stored-credential integrity (a truncation and corruption probe), and, from 1B.2, the image-upkeep backstop check (Section [5.7](#57-the-ward-runners-handoff-gate-and-operating-modes)); the probe rules follow the table. |
 | `freesided auth add`, `auth adopt`, `auth list`, `auth doctor`, `auth re-enroll`, `auth disable`, `auth enable` | Guided identity and enrollment lifecycle (Section [5.4](#54-credential-modes-egress-profiles-and-concurrency)); each subcommand's rules follow the table. |
 | `freesided submit` | Creates a new task, specification workflow, campaign, and reserved implementation run for each deliberate submission. Only explicit manual Retry reuses a saved submission identity and its original inputs. The `submit_task` client command uses the same acceptance primitives. |
 | `freesided reattempt --task <task>`, `--parent-run <run>`, or `--campaign <campaign>` | Requires an operator reason and allocates the campaign's next attempt from an already approved specification. The task selector resolves to the task's current campaign and its exact parent run; it refuses a live parent. |
@@ -6541,6 +6674,9 @@ one minimal deterministic projection (owner decision), under Section [5.18](#518
 rendering and coverage discipline. This placement materially overturns two
 statements recorded in Section [13](#13-decisions-log): Section [4](#4-the-attention-model)'s GitHub Projects as the all-work
 view, and this section's former Phase 3 placement for the initiative view.
+1B.2 also delivers project-image upkeep (Section [5.7](#57-the-ward-runners-handoff-gate-and-operating-modes)), so unattended
+operation keeps working as dependencies and the daemon change. This extends
+1B's scope by owner decision (revision 98).
 
 Clients don't edit settings directly. Today every configuration change passes
 Section [5.8](#58-control-plane-trust)'s control-plane gate through an operator-authored PR or, for
@@ -6609,7 +6745,8 @@ Contracts and fakes coordinate implementation. CI keeps lanes honest.
 | **8 (1B.1): operational closure** | Parallel lanes | Freeside runs unattended, says when it is stuck, and lets published-PR activity back in. The `effect_proposal` card, arriving with the source-issue closure proposal (Section [5.13](#513-deterministic-components-judgment-calls-and-the-effect-registry)) and reused by human-gated follow-up filing (Section [5.17](#517-follow-up-issue-filing)); the doctor credential-integrity probe (Section [10](#10-operations-and-onboarding)); the stall heartbeat (Section [5.12](#512-workflow-definition-initiators-and-artifacts)); the external daemon-liveness probe (Section [5.2](#52-the-daemon-and-its-supervisor), #510); the held-work item (#766); the review drift audit (Section [7](#7-review-policy); the #1048 contract, then #1049–#1053, floor before model site); the standing stopped-operation indicator (#980); device listing and revocation (#981); and the egress floor's first capabilities above it (Sections [5.4](#54-credential-modes-egress-profiles-and-concurrency), [5.7](#57-the-ward-runners-handoff-gate-and-operating-modes)): (a) the `provider_registry` profile, its policy field, and ward allowlist conformance, `kind:contract` because `EgressProfile` is a domain enum carried in the admission record, then (b) the policy-gated project-image rebuild in the reusable builder, `starts-after` (a) because its gate reads the registry set (a) declares; both build on merged #302 and #334. Ward container limits (#1597, revision 72) launch every ward container with a declared CPU cap and memory limit and measure real peak memory, so wave 9's memory budget reserves against recorded sizes; it has no open prerequisite and is startable at wave start. Re-entry after a ready-item invalidation (#502; the spine splits its contract half at planning) and external review ingestion on published PRs (#524) share the re-entry trigger shape and land together. Deferral drain: the operational and re-entry clusters, plus #1597. External first-round adjudication fallbacks wait for per-finding human decisions (#1989), using #1016’s executable dispute contract. Exit proof: an unattended real run completes; daemon death, crash loops, stalls, held work, a stopped state, a review loop that grows past its specification, and external review each alert without terminal patrol or manual polling. |
 | **9 (1B.1): provider diversity** | Parallel lanes; split-eligible | One agent vocabulary and a second real provider. The agent-vocabulary contract chain, positions assigned at planning: review admission and provenance (#898), the cross-lane failure model (#899), judgment roles in the lineup (#900, decided in revision 65: every agent activity is a lineup role), the role-name lineup keys and wardless admission class that decision needs (#1421, `starts-after` #900), then agent and run facts in the clients (#979). The Codex tail: the adapter registration (#406, `starts-after` the merged admitted-agent contract #894), ward's second vendor topology (#407), the continuation compatibility digest (#873), and #397, authorized by owner decision on 2026-10-21 (revision 92) without shadow evidence (none was gathered: the shadow configuration was never approved for a project, #1001), startable by fiat before the wave and independent of #873 (its `starts-after` #898 is satisfied, #898 closed as completed; #869 `starts-after` #899 stays recorded under the ambiguity rule for wave-9 planning to confirm), then the StageDriver binding (#408, `merges-after` #873; Section [7](#7-review-policy) keeps #397 ahead of it so that a Claude reviewer is selectable before Codex-implements plus Codex-reviews can be configured); the alternate-provider retry card (#869, `starts-after` #406 and #408). The Codex account-probe spike (#866) finishes as a negative result: local account facts replace the proposed app-server probe, while its harness supports the usage spike. Guided enrollment with the two-step cutover (#867) `starts-after` #1421, because `freesided auth adopt` emits the first real lineup and must not emit stage-named keys (owner decision, revision 65); until then #867 no longer starts early by fiat. The local doctor account facts (#868) `starts-after` #406 and the completed #866 spike; replan #868 after the revision-80 policy PR (#1758) merges. The pi adapter, enrollment, and specification agent (#895) `starts-after` #897 and #867, specification only, with its pre-adoption gates run against the pinned build. The capacity cluster (revisions 72 and 73), its contract units placed in the same chain at planning: the shared-identity writer lease (#1585), per-pool execution limits (#1596, `starts-after` #1585), the host memory budget and machine-capacity hold (#1598, `starts-after` #898 and #1597), and task lines (#1600, `starts-after` #1421). #1585's prerequisite has merged, so it may start before the wave by fiat once it has a chain position. Beside the chain: the budget command (#1595, `starts-after` #1598), the task-line change command (#1601, `starts-after` #1600), the hold wording in the clients (#1599, `starts-after` #1596 and #1598), and the New Task agent picker (#1602, `starts-after` #1600 and #979). The spine splits this wave into 9a (contracts) and 9b (adapters) at planning if the measured chain length exceeds review bandwidth; a realized split makes those halves numbered waves through a plan revision, because a wave tracker is titled `Wave N: <Name>`. Deferral drain: the agent, provider, and capacity clusters. Exit proof: a real unattended Codex run and a pi specification; provider switching explicit in the lineup and visible in the clients; correct cost and independence records (#901); quota and capacity failures recover through the retry card, never a silent fallback. |
 | **10 (1B.1): subscription operations** | Parallel lanes | The operator sees each subscription's allowance and chooses where work runs. Contract-first, positions assessed by the spine at planning (unassessed pairs serialize): the usage-observation record keyed by usage pool and provider window (Section [5.4](#54-credential-modes-egress-profiles-and-concurrency), usage observation), `starts-after` the per-pool record (#1596), with the sync-visibility question (#1145) resolved before the client projection adopts its freshness contract; then the client contract for the account usage view, for reassigning a pool's collector, and for changing a waiting task's line from a client (the client half that #1601 leaves to its own contract unit). Beside the chain: the Codex and Claude usage spikes (the Codex spike #1714 `starts-after` #866, accepts its negative account-probe result, and measures fresh and near-expiry usage reads under Section [10](#10-operations-and-onboarding); the Claude spike proves what the pinned CLI answers under the setup-token credential), the collectors those spikes prove, the refresh lifecycle (Section [10](#10-operations-and-onboarding)), the daemon's operator-facing projection, the Mac and iPhone account usage view, and the usage facts beside the agent choices of #1602, #1601, and #869's alternate-agent retry card (wave 10 owns that projection: the reading cannot sit beside the card until the observation record exists, and #869 ships the card without it). Quota, expiry, and capacity failures keep #869's retry card; no usage-specific failure surface is added. Deferral drain: the subscription-usage cluster. Exit proof: on Mac and iPhone the operator inspects a real pool's windows, reset times, and freshness; chooses an agent on that pool for new work; changes a waiting task's role; and reads the recorded admission showing the chosen identity ran, with a stale reading shown as stale and an unsupported provider shown as unsupported. 1B.1 exit evaluation. |
-| **11 (1B.2): the initiative view** | Integrated | Many work units become one picture. Typed relationship kinds in the Section [5.18](#518-the-world-model-post-merge-recompute-and-frontier-projection) capture records (#884, its position assessed by the spine at planning), the frontier projection, and the deterministic initiative view rendering the dependency graph (#885). 1B exit evaluation against recorded comprehension and operational evidence. |
+| **11 (1B.2): the initiative view** | Integrated | Many work units become one picture. Typed relationship kinds in the Section [5.18](#518-the-world-model-post-merge-recompute-and-frontier-projection) capture records (#884, its position assessed by the spine at planning), the frontier projection, and the deterministic initiative view rendering the dependency graph (#885). |
+| **12 (1B.2): image upkeep** | Parallel lanes | Freeside keeps each project's image in service with no operator step (Section [5.7](#57-the-ward-runners-handoff-gate-and-operating-modes), project-image upkeep). Contract-first, its position assessed by the spine at planning: the admitted-image pointer per agent base, the `image_upkeep` schedule kind, the upkeep refusal record and hold facts, and daemon-origin submission (#2332). Then, each `starts-after` #2332: the upkeep job (#2333, also `starts-after` #1792); default-branch tip observation independent of bound PRs (#2334); the adoption proposal for policy-clause refusals (#2335); and the daemon-submitted maintenance task for repairs (#2336, also `starts-after` #1792). Then the Go module-source gate (#2337, `starts-after` #2333). Agent-base upkeep (#2338) stays a deferral. Exit proof: a dependency change merged outside Freeside within policy and a daemon upgrade each end in a new admitted image with no operator action; a recipe change ends in one approved adoption card and its merged policy proposal; a recipe failing at the tip ends in a maintenance task's PR. 1B exit evaluation against recorded comprehension and operational evidence. |
 
 Wave 5's row stays as built: it shipped the specifier with daemon fetching
 only. The researcher (revision 76, #1656 to #1658) is Phase 1B work that no
@@ -6773,28 +6910,63 @@ Record material changes here by revision, with the decider in parentheses.
 - On first re-litigation, promote the decision to a `docs/decisions/` ADR that
   cites its history entry.
 
-Revision 97 ("No Attended First Run"):
+Revision 98 ("Project Images Keep Themselves"):
 
-1. **A new agent runs under the deployment's operating mode from its first
-   launch.** Admission's five steps (resolve, selected, proved, credentialed,
-   snapshot) are the whole gate. The attended first run of a new agent ×
-   launch pair, the unattended-eligible mark beside the agent in the tree,
-   and the admission snapshot's attended flag are removed; the daemon
-   enforces them until the follow-up contract unit #2265 lands. The
-   operator's look moves after the fact, to the admission snapshot and the
-   run record, where revision 65 already put it for a call. Rejected:
-   keeping the rule (under the lineup every model or effort edit is a new
-   pair, so each one-step experiment forced an attended run, and the Wave 8
-   exit run's rehearsal refused a cross-role task line unattended because a
-   writer agent is marked only for its own role's launch, #1616 exit line
-   4); narrowing
-   it to adapter or harness build changes (the adapter suite per build
-   already proves those, and a model or effort change is the experiment
-   itself); an advisory item on each new pair's first unattended run (one
-   item per effort tweak, naming nothing the admission snapshot does not).
+1. **Freeside keeps each project's image in service.** A permanent
+   trusted-config job, image upkeep, checks the image at the default-branch
+   tip on a tip advance, at daemon start, and on the doctor's schedule. An
+   admissible image needs nothing; a delta the policy-gated rebuild's gate
+   admits is rebuilt and admitted with no AttentionItem, and the gate now
+   also runs on a toolchain-only delta (both manifests equal), which is what
+   a daemon upgrade produces. Rejected: leaving each case to an attention item
+   a human resolves by hand (a manual `freesided onboard`, or running the
+   earlier binary until tasks drain, #1784), because a reviewed PR or a
+   tapped card is the normal Freeside loop and a chore outside it is not.
+2. **A refusal by a policy clause alone ends in one adoption card.** A
+   changed recipe digest or an undeclared registry authority at the tip
+   raises a card bound to it. Approving the card opens a Section [4](#4-the-attention-model)
+   project-policy proposal, merging that proposal is the adoption, and the
+   builder then builds a new image under the adopted policy. Recipe approval
+   and the registry set are trusted project policy, so the adoption has to
+   pass the Section [5.8](#58-control-plane-trust) control-plane gate. The owner's original choice, a
+   one-tap `effect_proposal` into the trust profile, would have changed
+   policy outside that gate. Rejected: an agent task for
+   every refusal (the change is already in the repository and needs a trust
+   decision, not a code change).
+3. **A refusal that needs a repair opens a maintenance task through the
+   submission primitive.** The daemon submits it with a daemon origin, the
+   refusal record as its source, no bound issue, and `bound_pr_merged`
+   completion; specification approval and the merge gate apply as for any
+   task. Its base is the refused tip, so its writer is the one exception to
+   composition's admissibility check: the refusal record stands in for
+   verifying the base, and the candidate is verified in an image built and
+   proven at the candidate head. Rejected: Section [5.17](#517-follow-up-issue-filing) issue filing (a
+   human-gated fan-out whose issues are propose-only, so it adds two gates
+   and no information).
+4. **Each repository has one admitted-image pointer per agent base.** Only
+   the trusted builder advances it; image records stay write-once and every
+   boundary still re-derives its verdict. Rejected: keeping the daemon's
+   single configured image (one image cannot serve two projects or two agent
+   bases, and advancing it means an operator restarting the daemon with a
+   new flag).
+5. **Work holds while a resolution is pending.** A task waits under a
+   visible hold until an admitted image serves its base. #1784's blocked
+   outcome narrows to a refusal with no pending resolution. Rejected: blocking at once (it strands
+   work the job is already resolving).
+6. **A Go module delta stays refused and gets its own gate unit**
+   (#2337). Rejected: admitting it at the tip under upkeep (the gate's
+   delta rules read npm lockfiles only, so admitting a `go.sum` change would
+   widen the gate past what it checks).
+7. **Agent-base upkeep is designed now and scheduled later** (#2338).
+   Rejected: building it in row 12 (it needs Freeside onboarded against its
+   own repository first).
+8. **Image upkeep is Section [11](#11-roadmap-build-order-and-coordination) row 12, in 1B.2,** and the 1B exit
+   evaluation moves to that row. Rejected: a Phase 2 bullet (unattended operation does not
+   hold over time without it); folding it into row 11 (the initiative view
+   shares no code with it).
 
-(Owner decision of 2026-10-24 on #1431;
-[decision note](../devlog/2026-10-24-0927-drop-attended-first-run.md).)
+(Owner decisions of 2026-10-13 on #1999;
+[decision note](../devlog/2026-10-26-1057-project-image-upkeep.md).)
 
 ## 14. Risks
 
@@ -6807,6 +6979,7 @@ Revision 97 ("No Attended First Run"):
 | Reviewer-instruction poisoning | Compose agent and reviewer instructions from the trusted base, never the candidate; detect instruction-path edits mechanically and surface them as advisories that the human merge gate reads (Section [5.8](#58-control-plane-trust)). |
 | **Rendered agent Markdown in a public PR** | Recipe v2 (Section [5.15](#515-evidence-and-images)) renders authored prose as live Markdown only through a screen at least as strict as v1's: it rejects closing and automation directives at the body source, rejects secrets and control characters, neutralizes cross-reference, bare-URL, commit-reference and mention autolinks, renders raw HTML inert, and resolves links and images only to existing publishable (`publish_eligible`) evidence artifacts. The author's evidence inputs are likewise restricted to policy-approved publishable evidence, so it cannot paraphrase sensitive evidence past the publication gate. On any screen or inference failure it falls back to frozen v1 escaped-text rendering, adding no new publication block. The author's control-plane inputs (the target repository's template and AGENTS.md) resolve from the trusted base, never the candidate head (Section [5.8](#58-control-plane-trust)). The publisher, not agent text, writes any close directive; the closure is an effect proposal whose digest-bound approval is recorded by the project's policy actor, or by the `effect_proposal` action when policy keeps the human gate on, before any `Closes` is written; a same-repository client-supplied source URL is approved as a recommendation whose provenance is recorded and shown. |
 | **Agent text in a public issue comment** | The approved-specification comment (Section [5.11](#511-github-integration-reconciliation-plus-intake)) posts only a human-approved, digest-bound public plan inside a daemon-written frame, screened under `github-issue-comment/1`, which rejects directives, secrets, mentions, and command shapes. The workflow audit gates it on `issue_comment` triggers, and only the daemon's publisher holds the `issues: write` token. The workflow set, with a content digest of each workflow and its local dependencies, is rechecked at the default-branch tip before each post. Residual: a remote action or reusable workflow named by a mutable ref, a script a listed workflow runs from the checkout, or a workflow chained by `workflow_run` can change unseen by the digests. Also residual: a webhook-driven App that reacts to any comment or to a plain phrase cannot be enumerated, and a comment resets stale-issue timers; each sees one screened comment per approval. |
+| **Maintenance tasks Freeside opens for itself** | Project-image upkeep submits a task only for a refusal that needs a repository repair, through the ordinary submission primitive with a daemon origin and the refusal record as its source (Section [5.12](#512-workflow-definition-initiators-and-artifacts)). It passes the ordinary specification approval and the full publication gate like any operator-submitted task, never files an issue, and opens at most one task per refusal record. Residual: operator attention on a task nobody asked for, bounded by the refusal classes that may open one (Section [5.7](#57-the-ward-runners-handoff-gate-and-operating-modes)). |
 | **Wardless roles on the host** | A judgment role runs outside the ward, so nothing sandboxes it and no egress proxy sits in front of its harness. Its safety rests on the call launch, which an adapter proves per build against the real harness; Section [5.4](#54-credential-modes-egress-profiles-and-concurrency), Admission, holds the launch's clauses, the interim hand-audit exception, and credential handling on the host. The answer is schema-validated and bounded by its site's authority contract, the model sees only the site's allowlisted, redacted fields, and a shadow's output reaches only the advisory store. Residual: a harness update can change what a launch flag means, which is why the proof is per pinned build and not per harness; a host administrator policy file that no launch flag switches off is outside that per-build proof (Section [5.4](#54-credential-modes-egress-profiles-and-concurrency)); and a shadow whose agent shares its primary's usage pool draws on a vendor quota that Freeside does not meter (Section [5.13](#513-deterministic-components-judgment-calls-and-the-effect-registry)). |
 | **Host-side macOS verification** | The executor holds no credential and runs no agent; a network-denying sandbox profile plus per-uid packet-filter rules, write confinement to the job directory, a digest-keyed offline dependency cache, and a home reset confine each job, each conformance-proven and probed live before the recipe runs (Section [5.7](#57-the-ward-runners-handoff-gate-and-operating-modes), macOS Execution). Residual: candidate test code runs as a pooled uid on the operator's host, so a sandbox or kernel escape reaches the host, with the operator's state behind uid separation and `0700` modes; placing the executor on a second Mac enrolled as an execution host shrinks the blast radius. |
 | **Workspace-handoff uncertainty** | Resolved by the workspace-handoff spike: the strong class is declared and conformance-gated (Section [5.7](#57-the-ward-runners-handoff-gate-and-operating-modes)); the same-VM fallback is refuted by execution, never implemented or declared. |

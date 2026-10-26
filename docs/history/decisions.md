@@ -3077,3 +3077,28 @@ The client work is #1798 to #1803.)
 
 (Owner decisions of 2026-10-21 and 2026-10-22;
 [decision note](../../devlog/2026-10-22-1205-macos-verifier-executor.md).)
+
+---
+
+## Revision 97 ("No Attended First Run"):
+
+1. **A new agent runs under the deployment's operating mode from its first
+   launch.** Admission's five steps (resolve, selected, proved, credentialed,
+   snapshot) are the whole gate. The attended first run of a new agent ×
+   launch pair, the unattended-eligible mark beside the agent in the tree,
+   and the admission snapshot's attended flag are removed; the daemon
+   enforces them until the follow-up contract unit #2265 lands. The
+   operator's look moves after the fact, to the admission snapshot and the
+   run record, where revision 65 already put it for a call. Rejected:
+   keeping the rule (under the lineup every model or effort edit is a new
+   pair, so each one-step experiment forced an attended run, and the Wave 8
+   exit run's rehearsal refused a cross-role task line unattended because a
+   writer agent is marked only for its own role's launch, #1616 exit line
+   4); narrowing
+   it to adapter or harness build changes (the adapter suite per build
+   already proves those, and a model or effort change is the experiment
+   itself); an advisory item on each new pair's first unattended run (one
+   item per effort tweak, naming nothing the admission snapshot does not).
+
+(Owner decision of 2026-10-24 on #1431;
+[decision note](../../devlog/2026-10-24-0927-drop-attended-first-run.md).)
