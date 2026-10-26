@@ -20,6 +20,13 @@ and registry destination. `daemon/README.md` (Rebuild A Project Image For A
 Dependency Change) documents the gate, the flags, and what a refusal looks
 like.
 
+Who rebuilds when no candidate asked is plan §5.7, **Project-image upkeep**:
+the daemon rebuilds a project's image itself when the default branch or the
+daemon's toolchain moves within policy. What reaches the operator instead is
+a card proposing the project-policy change that adopts a changed recipe or
+registry, a maintenance task's PR when the image needs a repository repair,
+or a health item for a host fault.
+
 This directory may split to its own repo later if vendor-CLI version churn pollutes this repo's history; that is an anticipated, acceptable move, not a failure.
 
 - **Toolchain:** OCI image definitions (devcontainer-spec shaped), pinned CLI + adapter versions.
