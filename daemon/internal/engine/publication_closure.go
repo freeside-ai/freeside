@@ -71,7 +71,9 @@ func parseSourceIssueClosureHumanGate(policy domain.ResolvedPolicy) bool {
 // row is untrusted at reconstruction: HasProposal reports whether a proposal
 // was admitted, InstanceID names it, and Origin selects the default policy
 // binding (a propose_site records the approval, a daemon_fallback opens the
-// notice). HasProposal == (InstanceID != "") is the invariant.
+// notice). HasProposal == (InstanceID != "") is the invariant. Reason names a
+// daemon_fallback's cause in fixed text (proposeClosure); a row written before
+// causes were recorded carries none, and an empty Reason stays valid.
 type productionClosureCheckpoint struct {
 	Version       string                    `json:"version"`
 	RunID         domain.RunID              `json:"run_id"`
@@ -227,10 +229,49 @@ func (w *productionPublicationWorkflow) decideClosableSource(
 		domain.IssueSubjectRef{Repo: repo, RepositoryID: repositoryID, IssueNumber: number}, true, nil
 }
 
+// The fixed causes a daemon_fallback closure records in its checkpoint's Reason.
+// Each is daemon-chosen text, optionally followed by a fixed stage name, a
+// control-file refusal, or a fallback code; none copies an error, provider
+// output, or issue text.
+const (
+	closureCauseSiteUnavailable = "propose site unavailable"
+	closureCauseInputFailed     = "resolve author input failed"
+	closureCauseInputRefused    = "author input refused"
+	closureCauseCallFailed      = "propose call failed"
+	closureCauseSiteFellBack    = "propose site fell back"
+)
+
+// closureInputFailureCause names the builder step a closure input failure came
+// from. Every builder return is tagged, so the bare cause is only a backstop.
+func closureInputFailureCause(err error) string {
+	var stageErr *authorInputError
+	if errors.As(err, &stageErr) {
+		return closureCauseInputFailed + ": " + stageErr.stage
+	}
+	return closureCauseInputFailed
+}
+
+// closureCallFallbackCause names why a propose call fell back: the input
+// refusal the site reported, or the call's own fallback code. A fallback with
+// neither is an input the site refused to build.
+func closureCallFallbackCause(proposed inference.ProposedClosure) string {
+	switch {
+	case proposed.InputRefusalReason != "":
+		return closureCauseInputRefused + ": " + proposed.InputRefusalReason
+	case proposed.FallbackReason != "":
+		return closureCauseSiteFellBack + ": " + string(proposed.FallbackReason)
+	default:
+		return closureCauseInputRefused
+	}
+}
+
 // proposeClosure asks the propose site whether the pull request should close the
 // source issue. An unavailable site, an input-build fault, a call error, or a
 // returned fallback is a daemon_fallback proposal that never resolves and never
-// holds; only a clean answer carries a propose_site origin and its resolve flag.
+// holds; its reason names the cause in fixed text. Only a clean answer carries a
+// propose_site origin and its resolve flag. A source-issue checkpoint fault
+// propagates for retry, as it does in authoring, rather than fixing a
+// permanent fallback for a store fault.
 func (w *productionPublicationWorkflow) proposeClosure(
 	ctx context.Context,
 	task productionPublicationTask,
@@ -241,18 +282,24 @@ func (w *productionPublicationWorkflow) proposeClosure(
 	report []byte,
 ) (domain.ClosureFlagOrigin, bool, string, error) {
 	if w.inference == nil || !w.inference.SupportsSite(inference.PublicationAuthorProposeSiteID) {
-		return domain.ClosureFlagOriginDaemonFallback, false, "", nil
+		return domain.ClosureFlagOriginDaemonFallback, false, closureCauseSiteUnavailable, nil
 	}
 	input, err := w.buildPublicationAuthorInput(ctx, task, binding, checkpoint, reviewInstructions, checkoutDir, report)
 	if err != nil {
-		return domain.ClosureFlagOriginDaemonFallback, false, "", nil
+		if errors.Is(err, errSourceIssueCheckpoint) {
+			return "", false, "", err
+		}
+		return domain.ClosureFlagOriginDaemonFallback, false, closureInputFailureCause(err), nil
 	}
 	if err := w.claimProviderDispatch(ctx, task.RunID); err != nil {
 		return "", false, "", err
 	}
 	proposed, err := w.inference.ProposeSourceIssueClosure(ctx, input)
-	if err != nil || proposed.Fallback {
-		return domain.ClosureFlagOriginDaemonFallback, false, proposed.InputRefusalReason, nil
+	if err != nil {
+		return domain.ClosureFlagOriginDaemonFallback, false, closureCauseCallFailed, nil
+	}
+	if proposed.Fallback {
+		return domain.ClosureFlagOriginDaemonFallback, false, closureCallFallbackCause(proposed), nil
 	}
 	return domain.ClosureFlagOriginProposeSite, proposed.Resolves, "", nil
 }
