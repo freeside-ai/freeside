@@ -3162,3 +3162,50 @@ The client work is #1798 to #1803.)
 
 (Owner decisions of 2026-10-13 on #1999;
 [decision note](../../devlog/2026-10-26-1057-project-image-upkeep.md).)
+
+---
+
+## Revision 99 ("Claude Capacity Before Provider Diversity"):
+
+1. **Two Claude subscriptions, not the Codex execution driver, are 1B's
+   execution capacity.** The Codex execution tail (#406, #407, #408, #873,
+   #868, #1718) and pi (#895, #897) move to Phase 2; Codex review stays as
+   built, and #408 still follows #397 when it returns. Rejected: keeping the
+   tail in wave 9 (with the Codex plan downgraded, a hedge that holds
+   contract-chain slots through four units delays Freeside's own
+   onboarding); dropping Codex altogether (review on a second vendor is
+   still the independence Section [7](#7-review-policy) prefers).
+2. **A router above admission reads usage readings and failures and writes
+   the task line; admission reads only the line.** This overturns revision
+   77's rule that no reading selects an agent. The balancing the owner did
+   by hand is the daily interruption Freeside exists to remove, and the
+   layering keeps every switch a recorded fact that names its reading.
+   Rejected: routing on failures only (it cannot empty one subscription
+   before its reset on purpose); routing inside admission (admission would
+   read a reading, and the line would stop being the one authority).
+3. **The routing policy and task lines are operator settings, set from a
+   client.** This narrows the rule that clients never edit settings: an
+   operator setting chooses among credentials the committed lineup already
+   approved and approves none, the class task lines already opened. Other
+   configuration still passes the Section [5.8](#58-control-plane-trust)
+   gate. Rejected: policy in the committed agent tree (a PR for every
+   change of preference); an approval card per change (the operator is the
+   one deciding, so the card would approve its own author).
+4. **The usage record, collector, and account usage view move from wave 10
+   into wave 9; wave 10 folds.** The owner decides on how full each
+   subscription is, and the router needs the record anyway. Rejected: facts
+   beside the retry card only (that answers why nothing runs, not the
+   decision the owner makes).
+5. **The Claude quantitative usage spike runs first, and the view's shape
+   follows its result.** Only status and reset per window are proved
+   (#1713). Rejected: planning the view on a used share nobody has proved.
+6. **Freeside's own onboarding, `daemon/` first, is wave 9's exit proof,
+   and the proof consumes no real allowance.** The real run proves the
+   ordinary path; a seeded exhausted window or an injected refusal proves
+   the fallback, as wave 8's fixture passes prove its alerts. Rejected:
+   onboarding all four paths at once (the baked recipe verifies only
+   `daemon/` networkless); draining a real subscription to prove the
+   fallback.
+
+(Owner decisions of 2026-10-26;
+[decision note](../../devlog/2026-10-26-1238-claude-capacity-before-provider-diversity.md).)
