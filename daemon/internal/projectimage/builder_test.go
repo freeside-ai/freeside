@@ -99,6 +99,7 @@ type fakeBackend struct {
 	// runFault, when it holds for a run, makes the runtime fail to run it.
 	runFault      func(runSpec) bool
 	preflightExit int
+	buildErr      error
 	allowlistErr  error
 	// publishedAllowlistErr answers the allowlist check of the published
 	// reference only.
@@ -149,7 +150,7 @@ func (f *fakeBackend) Build(_ context.Context, spec buildSpec) error {
 		return err
 	}
 	f.containerfile = string(body)
-	return nil
+	return f.buildErr
 }
 
 func (f *fakeBackend) CheckAllowlist(_ context.Context, ref string) error {
@@ -595,10 +596,22 @@ func TestBuildKeepsRuntimeFaultsOutOfProofFailures(t *testing.T) {
 			if err == nil || result.ImageRef != "" {
 				t.Fatalf("Build = %+v, %v, want a failed build", result, err)
 			}
-			if errors.Is(err, ErrProofFailed) || errors.Is(err, ErrInvalidRequest) {
+			if errors.Is(err, ErrProofFailed) || errors.Is(err, ErrInstallFailed) || errors.Is(err, ErrInvalidRequest) {
 				t.Fatalf("Build = %v, want an error without a verdict class", err)
 			}
 		})
+	}
+}
+
+func TestBuildPassesInstallFailureThroughWithoutPublishing(t *testing.T) {
+	backend := newFakeBackend()
+	backend.buildErr = fmt.Errorf("%w:\nnpm error code EINTEGRITY", ErrInstallFailed)
+	_, err := newBuilder(&fakeSource{}, backend, t.TempDir()).Build(t.Context(), validRequest())
+	if !errors.Is(err, ErrInstallFailed) || errors.Is(err, ErrProofFailed) {
+		t.Fatalf("Build = %v, want ErrInstallFailed alone", err)
+	}
+	if len(backend.runs) != 0 || len(backend.publishes) != 0 {
+		t.Fatalf("runs/publications = %d/%d after a failed install, want 0/0", len(backend.runs), len(backend.publishes))
 	}
 }
 

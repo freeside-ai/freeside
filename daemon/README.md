@@ -2699,7 +2699,7 @@ A refused gate names one clause:
 | `go_dependency_changed` | Changes a Go image's module `go.mod` or `go.sum`, holds one no build can read, or holds a Go input no image serves (`vendor`, `go.work`). The detail names the changed files and the unsupported inputs. |
 | `no_registry_set` | Runs under a policy with no registry set, or a malformed one. |
 | `rebuild_not_configured` | Passed the gate, but the daemon has no `-base-build-ref`. |
-| `build_or_proof_failed` | Passed the gate, but the image failed its build-time proof, or the build did not finish within one hour. |
+| `build_or_proof_failed` | Passed the gate, but the image's dependency install failed on the candidate's own manifests, a build-time proof ran and failed, or the build did not finish within one hour. The evidence leads with npm's error lines for a failed install. |
 
 No verification room runs for a refused gate. Where the clause appears
 depends on the cycle:
@@ -2712,14 +2712,19 @@ depends on the cycle:
 - **Re-entered cycle:** The cycle stops, and the stop item's reason names the
   clause and the commit.
 
-A build fault that is not a proof failure (the registry unreachable, the
-container runtime down) is the build's environment, not a verdict: the task
-stays queued under the lane's visible `publication_environment` hold and the
-next paced attempt builds again. That includes an install the candidate's own
-lockfile breaks, such as a tarball that fails its integrity value: the builder
-does not tell that apart from a registry fault, so it retries on every paced
-attempt. A restart during a build converges on the image the build recorded
-and does not build a second one.
+A failure is a verdict only on positive evidence that the candidate caused
+it; anything else retries. An npm install that only the candidate's manifests
+can fail blocks as `build_or_proof_failed`: npm reports `EINTEGRITY` (a
+tarball doesn't match its lockfile integrity value) or `EUSAGE` with `npm
+ci`'s out-of-sync message (the lockfile doesn't hold what `package.json`
+declares). So does a proof that ran and failed. Everything else is the build's
+environment, not a verdict: a registry or proxy fault, an install failure the
+builder doesn't recognize (`E404` and `ETARGET` included), a container-runtime
+command that failed inside a proof, and a base tag that no longer resolves to
+the approved digest. The task stays queued under the lane's visible
+`publication_environment` hold and the next paced attempt builds again. A
+restart during a build converges on the image the build recorded and does not
+build a second one.
 
 One build, with its proofs, is bounded at one hour. The proofs run the
 candidate's verification commands, and the lane handles one task at a time, so

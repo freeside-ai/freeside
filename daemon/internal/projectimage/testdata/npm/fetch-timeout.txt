@@ -1,0 +1,4 @@
+npm error code FETCH_ERROR
+npm error errno FETCH_ERROR
+npm error network timeout at: http://127.0.0.1:18406/is-number/-/is-number-7.0.0.tgz
+npm error A complete log of this run can be found in: /tmp/npmcap/cache-etimedout/_logs/2026-10-26T20_01_03_325Z-debug-0.log

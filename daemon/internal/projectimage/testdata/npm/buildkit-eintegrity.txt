@@ -1,0 +1,44 @@
+#1 [resolver] fetching image...docker.io/library/freeside-agent-claude:local
+#1 DONE 0.0s
+
+#2 [internal] load build definition from Dockerfile
+#2 transferring dockerfile: 0.1s
+#2 transferring dockerfile: 2B 0.1s done
+#2 DONE 0.1s
+
+#3 [internal] load .dockerignore
+#3 transferring context: 0.0s
+#3 transferring context: 2B 0.0s done
+#3 DONE 0.1s
+
+#4 oci-layout://docker.io/library/freeside-agent-claude:local@sha256:a4eff5d20113e919eff91399acc64d5eb77e611b9f018e746d63e259fa998d89
+#4 resolve docker.io/library/freeside-agent-claude:local@sha256:a4eff5d20113e919eff91399acc64d5eb77e611b9f018e746d63e259fa998d89 done
+#4 CACHED
+
+#5 [internal] load build context
+#5 transferring context: 751B 0.1s done
+#5 DONE 0.1s
+
+#6 [linux/arm64/v8 1/3] COPY package.json package-lock.json /opt/freeside/project-seed/
+#6 DONE 0.1s
+
+#7 [linux/arm64 2/3] RUN set -eux; 	cd /opt/freeside/project-seed; 	NPM_CONFIG_USERCONFIG=/dev/null 		npm ci --ignore-scripts --audit=false --fund=false --update-notifier=false; 	rm -rf node_modules
+#7 0.475 + cd /opt/freeside/project-seed
+#7 0.475 + NPM_CONFIG_USERCONFIG=/dev/null npm ci --ignore-scripts --audit=false --fund=false --update-notifier=false
+#7 4.553 npm warn tarball tarball data for is-number@https://registry.npmjs.org/is-number/-/is-number-7.0.0.tgz (sha512-pKvURIxJVi2CgRXROh/M6pJ/UrTVRZKX+LQ+QtqJI4vBNibkPcs43bCCSIkn7JBPtCBXRDmD6IWFF51QVRr+Yg==) seems to be corrupted. Trying again.
+#7 4.612 npm warn tarball tarball data for is-number@https://registry.npmjs.org/is-number/-/is-number-7.0.0.tgz (sha512-pKvURIxJVi2CgRXROh/M6pJ/UrTVRZKX+LQ+QtqJI4vBNibkPcs43bCCSIkn7JBPtCBXRDmD6IWFF51QVRr+Yg==) seems to be corrupted. Trying again.
+#7 4.623 npm error code EINTEGRITY
+#7 4.623 npm error sha512-pKvURIxJVi2CgRXROh/M6pJ/UrTVRZKX+LQ+QtqJI4vBNibkPcs43bCCSIkn7JBPtCBXRDmD6IWFF51QVRr+Yg== integrity checksum failed when using sha512: wanted sha512-pKvURIxJVi2CgRXROh/M6pJ/UrTVRZKX+LQ+QtqJI4vBNibkPcs43bCCSIkn7JBPtCBXRDmD6IWFF51QVRr+Yg== but got sha512-41Cifkg6e8TylSpdtTpeLVMqvSBEVzTttHvERD741+pnZ8ANv0004MRL43QKPDlK9cGvNp6NZWZUBlbGXYxxng==. (3730 bytes)
+#7 4.624 npm error A complete log of this run can be found in: /root/.npm/_logs/2026-10-26T20_03_07_179Z-debug-0.log
+#7 ERROR: process "/bin/sh -c set -eux; \tcd /opt/freeside/project-seed; \tNPM_CONFIG_USERCONFIG=/dev/null \t\tnpm ci --ignore-scripts --audit=false --fund=false --update-notifier=false; \trm -rf node_modules" did not complete successfully: exit code: 1
+------
+ > [linux/arm64 2/3] RUN set -eux; 	cd /opt/freeside/project-seed; 	NPM_CONFIG_USERCONFIG=/dev/null 		npm ci --ignore-scripts --audit=false --fund=false --update-notifier=false; 	rm -rf node_modules:
+0.475 + cd /opt/freeside/project-seed
+0.475 + NPM_CONFIG_USERCONFIG=/dev/null npm ci --ignore-scripts --audit=false --fund=false --update-notifier=false
+4.553 npm warn tarball tarball data for is-number@https://registry.npmjs.org/is-number/-/is-number-7.0.0.tgz (sha512-pKvURIxJVi2CgRXROh/M6pJ/UrTVRZKX+LQ+QtqJI4vBNibkPcs43bCCSIkn7JBPtCBXRDmD6IWFF51QVRr+Yg==) seems to be corrupted. Trying again.
+4.612 npm warn tarball tarball data for is-number@https://registry.npmjs.org/is-number/-/is-number-7.0.0.tgz (sha512-pKvURIxJVi2CgRXROh/M6pJ/UrTVRZKX+LQ+QtqJI4vBNibkPcs43bCCSIkn7JBPtCBXRDmD6IWFF51QVRr+Yg==) seems to be corrupted. Trying again.
+4.623 npm error code EINTEGRITY
+4.623 npm error sha512-pKvURIxJVi2CgRXROh/M6pJ/UrTVRZKX+LQ+QtqJI4vBNibkPcs43bCCSIkn7JBPtCBXRDmD6IWFF51QVRr+Yg== integrity checksum failed when using sha512: wanted sha512-pKvURIxJVi2CgRXROh/M6pJ/UrTVRZKX+LQ+QtqJI4vBNibkPcs43bCCSIkn7JBPtCBXRDmD6IWFF51QVRr+Yg== but got sha512-41Cifkg6e8TylSpdtTpeLVMqvSBEVzTttHvERD741+pnZ8ANv0004MRL43QKPDlK9cGvNp6NZWZUBlbGXYxxng==. (3730 bytes)
+4.624 npm error A complete log of this run can be found in: /root/.npm/_logs/2026-10-26T20_03_07_179Z-debug-0.log
+------
+Error: unknown: "failed to solve: process "/bin/sh -c set -eux; \tcd /opt/freeside/project-seed; \tNPM_CONFIG_USERCONFIG=/dev/null \t\tnpm ci --ignore-scripts --audit=false --fund=false --update-notifier=false; \trm -rf node_modules" did not complete successfully: exit code: 1"

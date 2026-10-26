@@ -513,6 +513,43 @@ func TestAppleCheckAllowlistDriftIsNotARuntimeFault(t *testing.T) {
 	}
 }
 
+func TestAppleBuildClassesCandidateInstallFailures(t *testing.T) {
+	for _, tc := range []struct {
+		name    string
+		fixture string
+		install bool
+	}{
+		{name: "integrity mismatch", fixture: "buildkit-eintegrity.txt", install: true},
+		{name: "lockfile out of sync", fixture: "buildkit-out-of-sync.txt", install: true},
+		{name: "registry connection reset", fixture: "econnreset.txt"},
+		{name: "registry 5xx", fixture: "e503.txt"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			output := readNPMFixture(t, tc.fixture)
+			runner := &recordingRunner{run: func(commandSpec) (commandOutput, error) {
+				return commandOutput{bytes: output, exited: true, exitCode: 1}, errors.New("exit status 1")
+			}}
+			spec := testBuildSpec()
+			spec.BuildProxy = "http://192.168.64.1:53536"
+			err := appleBackend{containerPath: "container", runner: runner}.Build(t.Context(), spec)
+			if err == nil {
+				t.Fatal("Build accepted a failed container build")
+			}
+			if got := errors.Is(err, ErrInstallFailed); got != tc.install {
+				t.Fatalf("Build = %v, ErrInstallFailed %t, want %t", err, got, tc.install)
+			}
+			// A recognized install failure is the candidate's; anything else
+			// stays a failed runtime command, retryable as before.
+			if isRuntimeFault(err) == tc.install {
+				t.Fatalf("Build = %v, runtime fault %t, want %t", err, !tc.install, !tc.install)
+			}
+			if tc.install && !strings.HasPrefix(err.Error(), ErrInstallFailed.Error()+":\nnpm error code E") {
+				t.Fatalf("Build = %q, want it to lead with npm's error lines", err)
+			}
+		})
+	}
+}
+
 func TestAppleCheckAllowlistFailsWhenIdentityFileCleanupFails(t *testing.T) {
 	runner := &managedRunner{}
 	backend := appleBackend{

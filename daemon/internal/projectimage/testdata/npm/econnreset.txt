@@ -1,0 +1,8 @@
+npm error code ECONNRESET
+npm error errno ECONNRESET
+npm error network request to http://127.0.0.1:18405/is-number/-/is-number-7.0.0.tgz failed, reason: socket hang up
+npm error network This is a problem related to network connectivity.
+npm error network In most cases you are behind a proxy or have bad network settings.
+npm error network
+npm error network If you are behind a proxy, please make sure that the 'proxy' config is set properly.  See: 'npm help config'
+npm error A complete log of this run can be found in: /tmp/npmcap/cache-econnreset/_logs/2026-10-26T20_01_02_612Z-debug-0.log

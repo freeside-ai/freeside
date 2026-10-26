@@ -62,6 +62,12 @@ var ErrInvalidRequest = errors.New("invalid project-image build request")
 // produced no result, so the error carries neither this class nor a verdict.
 var ErrProofFailed = errors.New("project-image proof failed")
 
+// ErrInstallFailed marks a build whose dependency install failed in a way only
+// the candidate's own manifests can cause, such as a tarball that doesn't
+// match its lockfile integrity. Its error text leads with the installer's
+// lines. An install failure the builder doesn't recognize doesn't carry it.
+var ErrInstallFailed = errors.New("project-image dependency install failed")
+
 // Request binds one build to its repository, commit, recipe, approved base,
 // and registry destination. BaseBuildRef is the local tag Apple container can
 // use for FROM; the builder verifies it resolves to BaseImageRef's exact digest

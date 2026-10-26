@@ -1,0 +1,3 @@
+npm error code E503
+npm error 503 Service Unavailable - GET http://127.0.0.1:18503/is-number/-/is-number-7.0.0.tgz - fixture
+npm error A complete log of this run can be found in: /tmp/npmcap/cache-e503/_logs/2026-10-26T20_01_01_269Z-debug-0.log

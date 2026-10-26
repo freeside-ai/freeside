@@ -203,6 +203,15 @@ func (a appleBackend) Build(ctx context.Context, spec buildSpec) (err error) {
 		spec.ContextDir,
 	)
 	output, err := a.runner.Run(ctx, commandSpec{Path: a.containerPath, Args: args})
+	if err == nil {
+		return nil
+	}
+	// npm prints its error last, so the output's retained tail holds it. The
+	// npm lines lead the error so the evidence a caller keeps shows them; the
+	// rest of the output would only repeat them.
+	if lines, ok := installFailure(output.bytes); ok {
+		return fmt.Errorf("%w:\n%s\ncontainer build: %w", ErrInstallFailed, lines, err)
+	}
 	return runError("container build", output, err)
 }
 

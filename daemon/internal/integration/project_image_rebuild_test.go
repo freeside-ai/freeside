@@ -295,7 +295,9 @@ func TestProductionPublicationBlocksDependencyChangeOutsidePolicy(t *testing.T) 
 		registrySet string
 		configure   func(*productionPublicationHarness, *recordingImageBuilder)
 		clause      projectimage.RebuildRefusal
-		builds      int
+		// evidence, when set, is text the item's evidence must carry.
+		evidence string
+		builds   int
 		// reads counts recipe reads: a build needs the admitted image's recipe.
 		reads int
 	}{
@@ -350,6 +352,17 @@ func TestProductionPublicationBlocksDependencyChangeOutsidePolicy(t *testing.T) 
 			},
 			clause: projectimage.RebuildRefusalProofFailed, builds: 1, reads: 1,
 		},
+		// The candidate's own lockfile fails the install, so no later pass can
+		// succeed where this one failed.
+		"dependency install failed": {
+			files: declared, registrySet: rebuildDeclaredSet,
+			configure: func(_ *productionPublicationHarness, builder *recordingImageBuilder) {
+				builder.fail = fmt.Errorf("build project image: %w:\n%s\ncontainer build: exit status 1",
+					projectimage.ErrInstallFailed, "npm error code EINTEGRITY\n"+
+						"npm error sha512-AAAA integrity checksum failed when using sha512: wanted sha512-AAAA but got sha512-BBBB.")
+			},
+			clause: projectimage.RebuildRefusalProofFailed, evidence: "npm error code EINTEGRITY", builds: 1, reads: 1,
+		},
 		// The stalled build returns only when the bound ends it, so the short
 		// bound sets how long the case takes and never which way it goes.
 		"build did not finish": {
@@ -382,6 +395,9 @@ func TestProductionPublicationBlocksDependencyChangeOutsidePolicy(t *testing.T) 
 			}
 			if !strings.HasPrefix(text, "Project image rebuild refused: "+string(tc.clause)+". ") {
 				t.Fatalf("evidence does not name clause %s:\n%s", tc.clause, text)
+			}
+			if !strings.Contains(text, tc.evidence) {
+				t.Fatalf("evidence does not carry %q:\n%s", tc.evidence, text)
 			}
 			if p.room.runs != 0 || p.room.reads != tc.reads || len(builder.requests) != tc.builds {
 				t.Fatalf("refused gate ran %d commands, read %d recipes, built %d times",
