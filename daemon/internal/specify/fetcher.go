@@ -718,6 +718,17 @@ func validateResearchURL(raw string, allowed allowedOrigins) (*url.URL, error) {
 }
 
 func canonicalOrigin(parsed *url.URL) (string, error) {
+	// net/http dials an ASCII host as written but converts any other host
+	// with IDNA, so a non-ASCII host can lowercase into an allowed origin
+	// (gİthub.com to github.com) while the transport dials a different
+	// domain. Only for an ASCII host is the origin compared here the one
+	// dialed, since DNS ignores ASCII case.
+	host := parsed.Hostname()
+	for i := range len(host) {
+		if host[i] >= utf8.RuneSelf {
+			return "", errors.New("host is not ASCII")
+		}
+	}
 	port := parsed.Port()
 	if port == "" {
 		port = "443"
@@ -727,7 +738,7 @@ func canonicalOrigin(parsed *url.URL) (string, error) {
 			return "", errors.New("port is not canonical")
 		}
 	}
-	return strings.ToLower(parsed.Hostname()) + ":" + port, nil
+	return strings.ToLower(host) + ":" + port, nil
 }
 
 func secureResearchTransport() http.RoundTripper {

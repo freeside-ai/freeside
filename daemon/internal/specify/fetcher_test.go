@@ -7,6 +7,7 @@ import (
 	"errors"
 	"io"
 	"net/http"
+	"slices"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -180,6 +181,11 @@ func TestFetcherAdversarialURLSpace(t *testing.T) {
 		{"HTTP", "http://docs.example/a", []string{"https://docs.example"}, false},
 		{"suffix", "https://docs.example.evil/a", []string{"https://docs.example"}, false},
 		{"fragment", "https://docs.example/a#secret", []string{"https://docs.example"}, false},
+		// These hosts lowercase into the allowed ASCII host, but net/http
+		// would dial their IDNA form, a different domain.
+		{"dotted capital I", "https://gİthub.com/a", []string{"https://github.com"}, false},
+		{"percent-encoded dotted capital I", "https://g%C4%B0thub.com/a", []string{"https://github.com"}, false},
+		{"Kelvin sign", "https://Kelvin.example/a", []string{"https://kelvin.example"}, false},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -196,6 +202,52 @@ func TestFetcherAdversarialURLSpace(t *testing.T) {
 				t.Fatal("refused URL reached transport")
 			}
 		})
+	}
+}
+
+func TestFetcherRefusesRedirectToNonASCIIHost(t *testing.T) {
+	st := openStore(t)
+	blobs, _ := signet.NewBlobStore(t.TempDir())
+	var requested []string
+	transport := roundTripFunc(func(request *http.Request) (*http.Response, error) {
+		requested = append(requested, request.URL.String())
+		result := response(request, http.StatusFound, "", "")
+		result.Header.Set("Location", "https://gİthub.com/landing")
+		return result, nil
+	})
+	fetcher, _ := specify.NewFetcher(st, blobs, transport)
+	_, err := fetcher.Fetch(t.Context(), "inv-non-ascii-redirect", 1,
+		specify.FetchRequest{URL: "https://docs.example/start", Purpose: "test"},
+		specify.ManagedRepository{}, []string{"https://docs.example", "https://github.com"}, 100)
+	if !errors.Is(err, specify.ErrResearchURLRefused) {
+		t.Fatalf("redirect error = %v, want ErrResearchURLRefused", err)
+	}
+	if want := []string{"https://docs.example/start"}; !slices.Equal(requested, want) {
+		t.Fatalf("requested = %q, want only %q", requested, want)
+	}
+}
+
+func TestFetcherRejectsNonASCIIAllowlistHost(t *testing.T) {
+	st := openStore(t)
+	blobs, _ := signet.NewBlobStore(t.TempDir())
+	var calls atomic.Int64
+	transport := roundTripFunc(func(request *http.Request) (*http.Response, error) {
+		calls.Add(1)
+		return response(request, http.StatusOK, "text/plain", "ok"), nil
+	})
+	fetcher, _ := specify.NewFetcher(st, blobs, transport)
+	_, err := fetcher.Fetch(t.Context(), "inv-non-ascii-allowlist", 1,
+		specify.FetchRequest{URL: "https://github.com/a", Purpose: "test"},
+		specify.ManagedRepository{}, []string{"https://gİthub.com"}, 16)
+	if err == nil || !strings.Contains(err.Error(), "research allowlist entry") {
+		t.Fatalf("error = %v, want a research allowlist entry error", err)
+	}
+	// The allowlist is operator policy, not untrusted request data.
+	if errors.Is(err, specify.ErrResearchURLRefused) {
+		t.Fatalf("error = %v, want an ordinary error, not ErrResearchURLRefused", err)
+	}
+	if calls.Load() != 0 {
+		t.Fatal("fetch with a rejected allowlist reached transport")
 	}
 }
 
