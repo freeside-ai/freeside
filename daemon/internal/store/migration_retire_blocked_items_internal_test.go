@@ -141,12 +141,16 @@ func forgetRetireBlockedItems(t *testing.T, ctx context.Context, db *sql.DB) {
 	if _, err := db.ExecContext(ctx, `DROP TABLE review_admissions`); err != nil {
 		t.Fatal(err)
 	}
+	if _, err := db.ExecContext(ctx, `DROP TABLE admitted_image_pointers`); err != nil {
+		t.Fatal(err)
+	}
 	if _, err := db.ExecContext(ctx, `DELETE FROM schema_migrations WHERE name IN
 		('0096_retire_blocked_items.sql', '0097_review_admissions.sql', '0098_review_dispute_rows.sql',
 		'0099_publish_installation_mint_holds.sql', '0100_task_workflow_closures.sql',
 		'0101_work_unit_rebase_proofs.sql',
 		'0102_usage_observations_review.sql', '0103_run_hold_admission_detail.sql',
-		'0104_execution_outcome_cause.sql')`); err != nil {
+		'0104_execution_outcome_cause.sql',
+		'0105_admitted_image_pointers.sql')`); err != nil {
 		t.Fatal(err)
 	}
 }

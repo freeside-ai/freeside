@@ -122,6 +122,8 @@ func TestExecutionOutcomeCauseMigration(t *testing.T) {
 	s, admission := seedAdmission(t, nil)
 	seedRawAdmission(t, ctx, s, admission)
 	for _, statement := range []string{
+		`DROP TABLE admitted_image_pointers`,
+		`DELETE FROM schema_migrations WHERE name = '0105_admitted_image_pointers.sql'`,
 		`ALTER TABLE execution_outcomes DROP COLUMN cause`,
 		`DELETE FROM schema_migrations WHERE name = '0104_execution_outcome_cause.sql'`,
 	} {
