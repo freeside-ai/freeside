@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/freeside-ai/freeside/daemon/internal/domain"
+	"github.com/freeside-ai/freeside/daemon/internal/publicationrecord"
 	"github.com/freeside-ai/freeside/daemon/internal/publish"
 	"github.com/freeside-ai/freeside/daemon/internal/store"
 )
@@ -244,6 +245,58 @@ func TestTaskCancellationObservesUnrecordedPublishedPR(t *testing.T) {
 
 func TestTaskWorkflowClosureObservesUnrecordedPublishedPR(t *testing.T) {
 	testTaskFenceObservesUnrecordedPublishedPR(t, true)
+}
+
+// TestTaskWorkflowClosureUnsettledByForeignPR pins what one closed-workflow
+// observation costs and how it reports an intent nothing can settle: the
+// branch's only pull request is another run's merged one, as in #2343. The
+// engine paces attempts, so one GitHub request per attempt is what bounds the
+// calls, and the sentinel is what the engine counts toward a durable hold.
+func TestTaskWorkflowClosureUnsettledByForeignPR(t *testing.T) {
+	head := testHeadSHA
+	st := newExecutionBoundStore(t, executionChainOptions{})
+	seedDecisionRecords(t, st)
+	reservation := seedExecutionPublicationChain(t, st, executionChainOptions{exportHead: &head})
+	gh := newFakeGitHub(t)
+	p := storeBackedPublisher(t, st, gh, fixedWorkflowAuditor{audit: executionWorkflowAudit(t)})
+	candidate := testCandidate(t)
+	candidate.RunID = reservation.RunID
+	candidate.DispositionHistory = testDispositionHistory(t, st, candidate)
+	// Close the workflow after the intent commits and before any forge write,
+	// leaving the intent pending with nothing of its own on the branch.
+	if _, err := p.PublishExecutionAfterGateAndFinalize(t.Context(), publish.ExecutionCandidate{Candidate: candidate, ProducingInvocationID: testProducingInvocationID}, testApprovedRecipes(), func(context.Context, publish.GatedHead) error {
+		closePublicationWorkflow(t, st, candidate.RunID)
+		return nil
+	}); !errors.Is(err, store.ErrTaskWorkflowClosed) {
+		t.Fatalf("publication crossed the closure fence: %v", err)
+	}
+	pending := pendingPublications(t, st)
+	if len(pending) != 1 {
+		t.Fatalf("pending publication intents = %d, want 1", len(pending))
+	}
+	intent, err := publish.DecodeStoredIntent(pending[0])
+	if err != nil {
+		t.Fatal(err)
+	}
+	gh.mu.Lock()
+	gh.prs = append(gh.prs, fakePR{
+		Number: 3, State: "closed", Title: "Another run's change",
+		HeadRef: publicationrecord.ExpectedBranch(intent), HeadSHA: strings.Repeat("b", 40),
+		MergedAt: "2026-10-26T16:00:00Z",
+	})
+	gh.mu.Unlock()
+
+	before := len(gh.requestLog())
+	err = p.ReconcileClosedWorkflowRun(t.Context(), candidate.RunID)
+	if !errors.Is(err, publish.ErrPublicationUnsettled) {
+		t.Fatalf("reconcile error = %v, want ErrPublicationUnsettled", err)
+	}
+	if got := gh.requestLog()[before:]; len(got) != 1 || got[0] != http.MethodGet+" "+testRepoPath+"/pulls" {
+		t.Fatalf("observation requests = %v, want exactly one pull request listing", got)
+	}
+	if len(pendingPublications(t, st)) != 1 {
+		t.Fatal("an unsettled observation retired the publication intent")
+	}
 }
 
 func testTaskFenceObservesUnrecordedPublishedPR(t *testing.T, workflowClosure bool) {
