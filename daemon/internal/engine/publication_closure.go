@@ -536,31 +536,87 @@ func (w *productionPublicationWorkflow) loadClosureCheckpoint(
 	var checkpoint productionClosureCheckpoint
 	var found bool
 	err := w.store.Read(ctx, func(tx *store.ReadTx) error {
-		entry, err := tx.GetInbox(ctx, key)
-		if errors.Is(err, store.ErrNotFound) {
-			return nil
-		}
-		if err != nil {
-			return err
-		}
-		if entry.Kind != productionClosureCheckpointKind {
-			return fmt.Errorf("closure checkpoint kind %q: %w", entry.Kind, domain.ErrParentKeyMismatch)
-		}
-		if err := strictjson.Decode(
-			entry.Payload, &checkpoint, strictjson.TolerateInvalidUTF8, strictjson.NoLimit,
-		); err != nil {
-			return fmt.Errorf("decode closure checkpoint: %w", errors.Join(err, domain.ErrParentKeyMismatch))
-		}
-		if err := validateClosureCheckpoint(checkpoint, want); err != nil {
-			return err
-		}
-		found = true
-		return nil
+		var err error
+		checkpoint, found, err = readClosureCheckpoint(ctx, tx, key, want)
+		return err
 	})
 	if err != nil {
 		return productionClosureCheckpoint{}, false, err
 	}
 	return checkpoint, found, nil
+}
+
+// readClosureCheckpoint is loadClosureCheckpoint within a caller's read
+// transaction. found is false when no row exists under key.
+func readClosureCheckpoint(
+	ctx context.Context, tx *store.ReadTx, key string, want productionClosureCheckpoint,
+) (productionClosureCheckpoint, bool, error) {
+	entry, err := tx.GetInbox(ctx, key)
+	if errors.Is(err, store.ErrNotFound) {
+		return productionClosureCheckpoint{}, false, nil
+	}
+	if err != nil {
+		return productionClosureCheckpoint{}, false, err
+	}
+	if entry.Kind != productionClosureCheckpointKind {
+		return productionClosureCheckpoint{}, false,
+			fmt.Errorf("closure checkpoint kind %q: %w", entry.Kind, domain.ErrParentKeyMismatch)
+	}
+	var checkpoint productionClosureCheckpoint
+	if err := strictjson.Decode(
+		entry.Payload, &checkpoint, strictjson.TolerateInvalidUTF8, strictjson.NoLimit,
+	); err != nil {
+		return productionClosureCheckpoint{}, false,
+			fmt.Errorf("decode closure checkpoint: %w", errors.Join(err, domain.ErrParentKeyMismatch))
+	}
+	if err := validateClosureCheckpoint(checkpoint, want); err != nil {
+		return productionClosureCheckpoint{}, false, err
+	}
+	return checkpoint, true, nil
+}
+
+// ProductionClosureAnswer is the source-issue-closure answer a publication
+// recorded. HasProposal is false when no proposal was made (no closable
+// source). Origin is the admitted proposal's origin, and Reason a
+// daemon_fallback's fixed-text cause, empty for a row written before causes
+// were recorded.
+type ProductionClosureAnswer struct {
+	HasProposal bool
+	Origin      domain.ClosureFlagOrigin
+	Reason      string
+}
+
+// ProductionPublicationClosure reads the closure answer of runID's last
+// published cycle, the one whose pull request the run carries, so the answer
+// explains that pull request's body. Each cycle records its own answer, and a
+// successor keeps the run id, so the cycle is chosen the way the published
+// ready item is (store.ReadTx.PublishedPublicationInvocationID). Before any
+// cycle publishes it is the current cycle, whose answer the first pull request
+// will carry. found is false until the chosen cycle's closure step records an
+// answer. The row is decoded and validated as the workflow's own load does, so
+// a malformed row is an error, never an answer. It is a read-only boundary for
+// the task record; the answer is advisory and authorizes nothing.
+func ProductionPublicationClosure(
+	ctx context.Context, tx *store.ReadTx, runID domain.RunID,
+) (ProductionClosureAnswer, bool, error) {
+	publicationID, err := tx.PublishedPublicationInvocationID(ctx, runID)
+	if errors.Is(err, store.ErrNoPublishedContinuationTarget) {
+		// The run re-entered before its first publication.
+		publicationID, err = tx.CurrentPublicationInvocationID(ctx, runID)
+	}
+	if err != nil {
+		return ProductionClosureAnswer{}, false, err
+	}
+	want := productionClosureCheckpoint{
+		Version: productionClosureCheckpointVersion, RunID: runID, PublicationID: publicationID,
+	}
+	checkpoint, found, err := readClosureCheckpoint(ctx, tx, productionClosureCheckpointKey(runID, publicationID), want)
+	if err != nil || !found {
+		return ProductionClosureAnswer{}, false, err
+	}
+	return ProductionClosureAnswer{
+		HasProposal: checkpoint.HasProposal, Origin: checkpoint.Origin, Reason: checkpoint.Reason,
+	}, true, nil
 }
 
 // validateClosureCheckpoint fails closed unless the decoded row matches the run

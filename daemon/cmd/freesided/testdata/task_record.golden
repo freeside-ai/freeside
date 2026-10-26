@@ -1,5 +1,5 @@
 {
-  "version": "freeside-task-record-v8",
+  "version": "freeside-task-record-v9",
   "as_of_revision": 22,
   "as_of": "2026-10-01T09:00:00Z",
   "task_id": "task-GOLDEN",
@@ -387,6 +387,7 @@
       "billable_cost": null,
       "publication": null,
       "closure_cards": [],
+      "closure": null,
       "errors": []
     },
     {
@@ -435,6 +436,7 @@
       "billable_cost": null,
       "publication": null,
       "closure_cards": [],
+      "closure": null,
       "errors": []
     },
     {
@@ -490,6 +492,7 @@
       "billable_cost": null,
       "publication": null,
       "closure_cards": [],
+      "closure": null,
       "errors": []
     }
   ],
