@@ -17,72 +17,25 @@ import (
 	"github.com/freeside-ai/freeside/daemon/internal/ward"
 )
 
-// RebuildRefusal names the clause of the policy-gated rebuild (plan §5.7) that
-// kept a dependency change on the fail-loud path. The zero value "" is invalid
-// by design: a decision that holds carries no refusal.
-type RebuildRefusal string
+// RebuildRefusal is domain.RebuildRefusal; the gate and the engine keep naming
+// it here.
+type RebuildRefusal = domain.RebuildRefusal
 
+// The refusal clauses, re-exported from domain.
 const (
-	// RebuildRefusalUndeclaredAuthority: an added or changed package resolves
-	// from a host outside the project policy's declared registry set.
-	RebuildRefusalUndeclaredAuthority RebuildRefusal = "undeclared_authority"
-	// RebuildRefusalUnpinnedSource: an added or changed package is not a
-	// registry tarball pinned by an https URL and a sha512 integrity value (a
-	// link, a workspace member, a VCS or file source, a bundled package, a
-	// missing pin), or the change declares a dependency by anything but a
-	// registry version, range, or tag.
-	RebuildRefusalUnpinnedSource RebuildRefusal = "unpinned_source"
-	// RebuildRefusalRecipeChanged: the candidate changes the verification
-	// recipe its tree declares.
-	RebuildRefusalRecipeChanged RebuildRefusal = "recipe_changed"
-	// RebuildRefusalLockfileInconsistent: the lockfile is not a readable npm
-	// v2 or v3 lockfile whose root agrees with package.json and that holds an
-	// entry npm accepts for every dependency the change reaches.
-	RebuildRefusalLockfileInconsistent RebuildRefusal = "lockfile_inconsistent"
-	// RebuildRefusalUnsupportedInput: the candidate holds an npm input no
-	// project image supports, or changes one a rebuild cannot bound
-	// (package.json's overrides, workspaces, or packageManager).
-	RebuildRefusalUnsupportedInput RebuildRefusal = "unsupported_npm_input"
-	// RebuildRefusalGoDependencyChanged: the candidate changes the go.mod or
-	// go.sum of a Go image's module, holds one in a shape no build reads, or
-	// holds a Go input no project image supports (a vendor directory, a
-	// go.work). No rule bounds a Go dependency change yet, so every one needs
-	// a newly reviewed image.
-	RebuildRefusalGoDependencyChanged RebuildRefusal = "go_dependency_changed"
-	// RebuildRefusalNoRegistrySet: the run's policy declares no registry set,
-	// or a malformed one.
-	RebuildRefusalNoRegistrySet RebuildRefusal = "no_registry_set"
-	// RebuildRefusalNotConfigured: the gate holds but this daemon has no
-	// builder inputs to rebuild with.
-	RebuildRefusalNotConfigured RebuildRefusal = "rebuild_not_configured"
-	// RebuildRefusalProofFailed: the gate holds but the rebuilt image failed
-	// its build-time proof (the networkless positive run or the masked-cache
-	// probe), the builder refused the derived request, or the build did not
-	// finish within the caller's bound.
-	RebuildRefusalProofFailed RebuildRefusal = "build_or_proof_failed"
+	RebuildRefusalUndeclaredAuthority  = domain.RebuildRefusalUndeclaredAuthority
+	RebuildRefusalUnpinnedSource       = domain.RebuildRefusalUnpinnedSource
+	RebuildRefusalRecipeChanged        = domain.RebuildRefusalRecipeChanged
+	RebuildRefusalLockfileInconsistent = domain.RebuildRefusalLockfileInconsistent
+	RebuildRefusalUnsupportedInput     = domain.RebuildRefusalUnsupportedInput
+	RebuildRefusalGoDependencyChanged  = domain.RebuildRefusalGoDependencyChanged
+	RebuildRefusalNoRegistrySet        = domain.RebuildRefusalNoRegistrySet
+	RebuildRefusalNotConfigured        = domain.RebuildRefusalNotConfigured
+	RebuildRefusalProofFailed          = domain.RebuildRefusalProofFailed
 )
 
-// AllRebuildRefusals lists every valid RebuildRefusal.
-var AllRebuildRefusals = []RebuildRefusal{
-	RebuildRefusalUndeclaredAuthority, RebuildRefusalUnpinnedSource,
-	RebuildRefusalRecipeChanged, RebuildRefusalLockfileInconsistent,
-	RebuildRefusalUnsupportedInput, RebuildRefusalNoRegistrySet,
-	RebuildRefusalNotConfigured, RebuildRefusalProofFailed,
-	RebuildRefusalGoDependencyChanged,
-}
-
-func (r RebuildRefusal) valid() bool {
-	switch r {
-	case RebuildRefusalUndeclaredAuthority, RebuildRefusalUnpinnedSource,
-		RebuildRefusalRecipeChanged, RebuildRefusalLockfileInconsistent,
-		RebuildRefusalUnsupportedInput, RebuildRefusalNoRegistrySet,
-		RebuildRefusalNotConfigured, RebuildRefusalProofFailed,
-		RebuildRefusalGoDependencyChanged:
-		return true
-	default:
-		return false
-	}
-}
+// AllRebuildRefusals is domain.AllRebuildRefusals.
+var AllRebuildRefusals = domain.AllRebuildRefusals
 
 // LockfileDelta summarizes what a candidate's package-lock.json changes
 // against its base's. It is the account a rebuild record keeps, never the

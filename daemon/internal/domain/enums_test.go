@@ -466,6 +466,10 @@ func TestEnumValidity(t *testing.T) {
 		valids["UsageMeasurementKind"] = append(valids["UsageMeasurementKind"], v.valid)
 	}
 	invalids["UsageMeasurementKind"] = UsageMeasurementKind("").valid
+	for _, v := range AllRebuildRefusals {
+		valids["RebuildRefusal"] = append(valids["RebuildRefusal"], v.valid)
+	}
+	invalids["RebuildRefusal"] = RebuildRefusal("").valid
 
 	for name, checks := range valids {
 		for i, check := range checks {
