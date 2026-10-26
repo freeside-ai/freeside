@@ -43,11 +43,12 @@ What each measure reads:
    the landing is its latest push before it, read from its runs and its
    force-push events. Final heads are not used: under the rebase rule a PR
    that landed later already contains the earlier one, so its final head
-   would never conflict. Also, as two separate counts: merged PR bodies
-   whose Verification section mentions range-diff, the provisional reading
-   of #2020's rebase record, and merged PRs that carry a comment by a
-   non-bot user mentioning range-diff, the lander's record of a rebase it
-   resolved or reworked.
+   would never conflict. Also, as two separate counts of the rebase
+   record's two forms (AGENTS.md, Integration Ordering and Merge-Result
+   Audit): merged PR bodies whose Verification section mentions
+   range-diff, the author's record of a rebase the author ran, and merged
+   PRs that carry a comment by a non-bot user mentioning range-diff, the
+   lander's record of a rebase it resolved or reworked.
 3. Wait to land. Per merged PR, hours from ready-for-review (the last
    ready_for_review event, else creation) to merge, from the last push
    (the push of the merged head) to merge, and from approval (the latest
@@ -63,10 +64,11 @@ What it cannot see:
 
 - Measure 1 counts every workflow, not only the `required` check #2017
   added; filtering to that check's job is a later change.
-- The rebase record of #2020 has no fixed format yet; the range-diff matcher
-  is provisional until #2020 defines it. The lander's comments have no fixed
-  format either, so a comment that mentions range-diff for another reason
-  also matches.
+- The rebase record's two forms are matched by the word range-diff alone, so
+  a Verification section or comment that mentions range-diff for another
+  reason also matches, a hand-back comment among them, and a record that
+  omits the word is missed. A lander comment counts only when posted before
+  the merge, though the skill's order comments after it (#2362).
 - A hand-back comment has no fixed format; the reason is a heuristic read of
   it, and a `needs-human` label with no comment by the same actor in the
   previous hour reads as "(no hand-back comment)".
@@ -873,7 +875,7 @@ def render(snapshot, failures, conflicts, records, waits, discards, top):
             f"without a recorded head, {len(conflicts['errors'])} merge-tree "
             f"errors). A pair is a PR that merged and a PR open, ready, and "
             f"based on `{meta['default_branch']}` at that moment.", "",
-            f"Rebase records (provisional until #2020): "
+            f"Rebase records: "
             f"{len(records['with_range_diff'])} of {records['merged']} merged "
             f"PR bodies mention `range-diff` in Verification"
             + (f" ({pr_list(records['with_range_diff'])})"
@@ -920,10 +922,10 @@ def render(snapshot, failures, conflicts, records, waits, discards, top):
     out += ["", "## What this cannot see", "",
             "- Measure 1 counts every workflow, not only the required check "
             "#2017 added.",
-            "- The range-diff matcher is provisional until #2020 fixes the "
-            "rebase record's format; the lander's comments have no fixed "
-            "format either, so any non-bot comment mentioning range-diff "
-            "counts.",
+            "- Both rebase-record forms are matched by the word range-diff "
+            "alone, so a Verification section or non-bot comment that "
+            "mentions it for another reason counts, and a lander comment "
+            "posted after the merge does not (#2362).",
             "- A hand-back comment has no fixed format: its reason is the "
             "first backticked guard-shaped token, else its first line, and "
             f"a `{HAND_BACK_LABEL}` label with no comment by the same actor "
