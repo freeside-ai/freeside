@@ -15,10 +15,11 @@ import (
 //     completed, question, and failed verification runs;
 //   - tasks: one per campaign or standalone run;
 //   - attention items: one open item per type in OpenItemTypes, plus the retry
-//     campaign's approved spec_approval and the completed run's resolved
+//     campaign's approved spec_approval, its specification invocation's
+//     resolved post-export execution_failure, and the completed run's resolved
 //     ready_for_final_review.
 var representativeInventory = Inventory{
-	Projects: 2, Tasks: 6, Runs: 8, AttentionItems: 13, WorkUnitPRBindings: 2,
+	Projects: 2, Tasks: 6, Runs: 8, AttentionItems: 14, WorkUnitPRBindings: 2,
 }
 
 // OpenItemTypes are the attention types the representative fixture leaves

@@ -230,6 +230,9 @@ type specificationFixture struct {
 	// transport and the fetcher's absent token source when set.
 	researchTransport http.RoundTripper
 	issueTokens       publish.TokenSource
+	// withoutExports leaves the fake driver's completions unexported; see
+	// exportingSpecificationDriver.
+	withoutExports bool
 }
 
 func newSpecificationFixture(t *testing.T, specApproval bool, maxIterations int) specificationFixture {
@@ -373,6 +376,65 @@ func (f specificationFixture) newDriver(t *testing.T) *execfake.StageDriver {
 	return driver
 }
 
+// exportingSpecificationDriver records the export the production stage
+// pipeline records before a specification invocation reports completed, which
+// the fake driver alone never does. Without it the engine would see a
+// completed invocation with no terminal authority, a state production cannot
+// reach, and would type a post-export interpretation failure as an execution
+// outcome instead. It exports at the first observation of completion, Inspect
+// or Collect, because the export's milestone clears a run hold, and a later
+// export would clear a hold production would have kept.
+type exportingSpecificationDriver struct {
+	exec.StageDriver
+	store *store.Store
+	now   *time.Time
+}
+
+func (d exportingSpecificationDriver) Inspect(ctx context.Context, id domain.InvocationID) (exec.Inspection, error) {
+	inspection, err := d.StageDriver.Inspect(ctx, id)
+	if err != nil || inspection.Status != exec.StatusCompleted {
+		return inspection, err
+	}
+	return inspection, d.export(ctx, id)
+}
+
+func (d exportingSpecificationDriver) Collect(ctx context.Context, id domain.InvocationID) (exec.StageResult, error) {
+	result, err := d.StageDriver.Collect(ctx, id)
+	if err != nil || result.Status != exec.StatusCompleted {
+		return result, err
+	}
+	return result, d.export(ctx, id)
+}
+
+func (d exportingSpecificationDriver) export(ctx context.Context, id domain.InvocationID) error {
+	if !strings.HasPrefix(string(id), "inv-specify-") {
+		return nil
+	}
+	return d.store.Write(ctx, func(tx *store.WriteTx) error {
+		admission, err := tx.GetExecutionAdmissionRecord(ctx, id)
+		if errors.Is(err, store.ErrNotFound) {
+			return nil
+		}
+		if err != nil {
+			return err
+		}
+		if _, err := tx.GetExecutionExportRecord(ctx, id); err == nil {
+			return nil
+		} else if !errors.Is(err, store.ErrNotFound) {
+			return err
+		}
+		export, err := domain.NewExecutionExport(domain.ExecutionExportInput{
+			InvocationID: id, AdmissionID: admission.ID,
+			ObservedBaseSHA: admission.Base.BaseSHA, HeadSHA: "cafebabe",
+			ManifestDigest: "sha256:manifest", RecordedAt: *d.now,
+		})
+		if err != nil {
+			return err
+		}
+		return tx.RecordExecutionExport(ctx, export)
+	})
+}
+
 func (f specificationFixture) newEngine(t *testing.T, driver exec.StageDriver) *Engine {
 	return f.newEngineWithTransitionHook(t, driver, nil)
 }
@@ -399,6 +461,9 @@ func (f specificationFixture) newEngineWithTransitionHook(
 		t.Fatal(err)
 	}
 	identity := domain.AuthIdentityID("auth-1")
+	if !f.withoutExports {
+		driver = exportingSpecificationDriver{StageDriver: driver, store: f.store, now: f.now}
+	}
 	engine, err := New(f.store, f.signet, driver,
 		WithAdmission(stageInputBackend{}, []exec.Capability{exec.CapPostExitExport}, AdmissionEnvironment{
 			OperatingMode: domain.ModeAttendedDev, CredentialMode: domain.CredentialSubscriptionContained,
@@ -1716,6 +1781,58 @@ func TestSpecificationRefusesUndeliverableInitialInputDurably(t *testing.T) {
 	}
 }
 
+// requireInterpretationFailure asserts that a failure found after the
+// invocation exported carries the typed interpretation fact naming that
+// invocation, and no outcome-backed facts.
+func requireInterpretationFailure(
+	t *testing.T, item domain.AttentionItem, cause domain.InterpretationFailureCause, id domain.InvocationID,
+) {
+	t.Helper()
+	want := domain.InterpretationFailureFacts{Cause: cause, Stage: domain.StageNameSpecification, InvocationID: id}
+	if item.ExecutionFailure != nil || item.InterpretationFailure == nil || *item.InterpretationFailure != want {
+		t.Fatalf("item %s facts = %#v / %#v, want interpretation %+v",
+			item.ID, item.ExecutionFailure, item.InterpretationFailure, want)
+	}
+}
+
+// TestSpecificationRevisionBudgetRecordsInterpretationFailure covers the
+// request_changes path once the iteration budget is spent: the refusal names
+// the accepted invocation whose specification the human asked to revise.
+func TestSpecificationRevisionBudgetRecordsInterpretationFailure(t *testing.T) {
+	f := newSpecificationFixture(t, true, 1)
+	driver := f.newDriver(t)
+	firstID := specificationInvocationID("specification-run", 1)
+	if err := specifyfake.Script(driver, firstID, 0, 0, specify.Output{Specification: &specify.Specification{
+		Summary: "First draft.", Body: "# Specification\n\nImplement the safe path.",
+		Addressals: []specify.Addressal{},
+	}}); err != nil {
+		t.Fatal(err)
+	}
+	f.submit(t)
+	engine := f.newEngine(t, driver)
+	if _, err := engine.Reconcile(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	item, snapshot := f.item(t, "spec-approval-implementation-run-1")
+	if _, err := f.signet.Submit(t.Context(), signet.ClientCommand{
+		CommandID: "reject-over-budget", DeviceID: "device-1", ExpectedEntityVersion: snapshot.EntityVersion,
+		Payload: signet.DecisionPayload{
+			ItemID: item.ID, Action: domain.ActionRequestChanges,
+			ItemVersion: item.ItemVersion, ArtifactDigests: item.ArtifactDigests, Message: "Revise the boundary.",
+		},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := engine.Reconcile(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	failure, _ := f.item(t, "execution-failure-spec-revision-implementation-run")
+	if !strings.Contains(failure.Reason, ErrSpecificationIterationsExhausted.Error()) {
+		t.Fatalf("revision budget failure = %+v", failure)
+	}
+	requireInterpretationFailure(t, failure, domain.InterpretationFailureIterationsExhausted, firstID)
+}
+
 func TestSpecificationRevisionRefusalKeepsAcceptedTerminal(t *testing.T) {
 	f := newSpecificationFixture(t, true, 3)
 	driver := f.newDriver(t)
@@ -1751,6 +1868,7 @@ func TestSpecificationRevisionRefusalKeepsAcceptedTerminal(t *testing.T) {
 		t.Fatalf("replay revision refusal: %v", err)
 	}
 	failure, failureSnapshot := f.item(t, "execution-failure-spec-revision-implementation-run-2")
+	requireInterpretationFailure(t, failure, domain.InterpretationFailureInputUndeliverable, firstID)
 	if _, err := f.signet.Submit(t.Context(), signet.ClientCommand{
 		CommandID: "stop-undeliverable-revision", DeviceID: "device-1",
 		ExpectedEntityVersion: failureSnapshot.EntityVersion,
@@ -2891,6 +3009,7 @@ func TestSpecificationFailureAndGatePolicies(t *testing.T) {
 		if !strings.Contains(item.Reason, ErrSpecificationIterationsExhausted.Error()) || f.fetchCalls.Load() != 0 {
 			t.Fatalf("iteration failure = %+v, fetches = %d", item, f.fetchCalls.Load())
 		}
+		requireInterpretationFailure(t, item, domain.InterpretationFailureIterationsExhausted, id)
 	})
 
 	t.Run("malformed output", func(t *testing.T) {
@@ -2913,6 +3032,7 @@ func TestSpecificationFailureAndGatePolicies(t *testing.T) {
 		if !strings.Contains(item.Reason, specify.ErrInvalidOutput.Error()) {
 			t.Fatalf("malformed-output failure = %+v", item)
 		}
+		requireInterpretationFailure(t, item, domain.InterpretationFailureInvalidOutput, id)
 	})
 
 	t.Run("lost invocation", func(t *testing.T) {
@@ -2928,6 +3048,11 @@ func TestSpecificationFailureAndGatePolicies(t *testing.T) {
 		item, _ := f.item(t, domain.ItemID("execution-failure-"+string(id)))
 		if !strings.Contains(item.Reason, ErrInvocationLost.Error()) {
 			t.Fatalf("lost-invocation failure = %+v", item)
+		}
+		// A lost invocation never exported, so it keeps outcome-backed facts.
+		if item.InterpretationFailure != nil || item.ExecutionFailure == nil ||
+			item.ExecutionFailure.Outcome != domain.ExecutionOutcomeLost {
+			t.Fatalf("lost-invocation facts = %#v / %#v", item.ExecutionFailure, item.InterpretationFailure)
 		}
 	})
 }
@@ -3141,6 +3266,7 @@ func TestSpecificationResearchRefusalBecomesDurableFailure(t *testing.T) {
 	if !strings.Contains(item.Reason, specify.ErrResearchURLRefused.Error()) {
 		t.Fatalf("research refusal item = %+v", item)
 	}
+	requireInterpretationFailure(t, item, domain.InterpretationFailureResearchURLRefused, id)
 	if replay, err := engine.Reconcile(t.Context()); err != nil || replay.ResultsAccepted != 0 {
 		t.Fatalf("research refusal replay = %+v, %v", replay, err)
 	}

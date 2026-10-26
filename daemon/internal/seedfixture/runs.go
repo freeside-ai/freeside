@@ -426,6 +426,15 @@ func seedRetryCampaign(s seeder) (failed, active domain.Run, err error) {
 	active.CampaignID, active.AttemptNumber = campaign, 2
 	active.AttemptReason, active.ParentRunID = "Retry after repairing the acceptance rig", failed.ID
 	err = s.write(func(tx *store.WriteTx) error {
+		// The specification invocation's admission and export are what an
+		// interpretation_failure item on it is authenticated against.
+		specificationAdmission, err := s.admit(tx, p, specificationRun, at.Add(5*time.Minute))
+		if err != nil {
+			return err
+		}
+		if err := s.export(tx, specificationAdmission, at.Add(10*time.Minute)); err != nil {
+			return err
+		}
 		if err := s.approveSpecification(tx, campaign, approval, failed.SpecDigest, at.Add(30*time.Minute)); err != nil {
 			return err
 		}

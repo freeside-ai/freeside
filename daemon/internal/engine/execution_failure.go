@@ -82,6 +82,30 @@ func executionFailureFacts(
 	}, nil
 }
 
+// interpretationFailureFacts types a failure the engine found after
+// invocationID completed and exported, which executionFailureFacts leaves
+// unclassified. It returns nil when the invocation has no admission or no
+// export, so such a failure keeps the fact-less card it raised before.
+func interpretationFailureFacts(
+	ctx context.Context,
+	tx *store.ReadTx,
+	invocationID domain.InvocationID,
+	cause domain.InterpretationFailureCause,
+	stage domain.StageName,
+) (*domain.InterpretationFailureFacts, error) {
+	if _, err := tx.GetExecutionAdmissionRecord(ctx, invocationID); errors.Is(err, store.ErrNotFound) {
+		return nil, nil
+	} else if err != nil {
+		return nil, err
+	}
+	if _, err := tx.GetExecutionExportRecord(ctx, invocationID); errors.Is(err, store.ErrNotFound) {
+		return nil, nil
+	} else if err != nil {
+		return nil, err
+	}
+	return &domain.InterpretationFailureFacts{Cause: cause, Stage: stage, InvocationID: invocationID}, nil
+}
+
 // failureTranscriptClaims makes retained diagnostics discoverable through the
 // existing attention evidence surface. It never copies transcript bytes into
 // the card, and only a durable failed invocation may supply the claim.

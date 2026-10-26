@@ -18,7 +18,7 @@ import (
 // taskRecordVersion names the record's JSON shape. Any change to that shape,
 // including to signet.TaskTimeline or proposalCard, which the record embeds,
 // changes it.
-const taskRecordVersion = "freeside-task-record-v7"
+const taskRecordVersion = "freeside-task-record-v8"
 
 // taskRecord is what `freesided inspect task` prints: one task's recorded
 // facts, read under one store revision, for an agent to read. It is built
@@ -226,10 +226,13 @@ type taskRecordItem struct {
 	Conclusion       *domain.Conclusion            `json:"conclusion"`
 	HealthDiagnostic *domain.HealthDiagnostic      `json:"health_diagnostic"`
 	ExecutionFailure *domain.ExecutionFailureFacts `json:"execution_failure"`
-	PublishBlock     *domain.PublishBlockFacts     `json:"publish_block"`
-	BlockedOn        *domain.BlockedWait           `json:"blocked_on"`
-	Commands         []taskRecordCommand           `json:"commands"`
-	Deliveries       []taskRecordDelivery          `json:"deliveries"`
+	// InterpretationFailure types a failure found after the invocation
+	// exported; an item carries it or ExecutionFailure, never both.
+	InterpretationFailure *domain.InterpretationFailureFacts `json:"interpretation_failure"`
+	PublishBlock          *domain.PublishBlockFacts          `json:"publish_block"`
+	BlockedOn             *domain.BlockedWait                `json:"blocked_on"`
+	Commands              []taskRecordCommand                `json:"commands"`
+	Deliveries            []taskRecordDelivery               `json:"deliveries"`
 }
 
 // taskRecordCommand leaves out the command's message and attachments, which
@@ -729,7 +732,8 @@ func readTaskRecordItems(
 			ID: item.ID, Type: &item.Type, Status: &item.Status, RunID: item.Subject.RunID,
 			CreatedAt: item.CreatedAt, DecidedAt: item.DecidedAt, Conclusion: item.Conclusion,
 			HealthDiagnostic: item.HealthDiagnostic, ExecutionFailure: item.ExecutionFailure,
-			PublishBlock: item.PublishBlock, BlockedOn: item.BlockedOn,
+			InterpretationFailure: item.InterpretationFailure, PublishBlock: item.PublishBlock,
+			BlockedOn:  item.BlockedOn,
 			Commands:   make([]taskRecordCommand, 0, len(commands)),
 			Deliveries: append([]taskRecordDelivery{}, deliveriesByItem[item.ID]...),
 		}

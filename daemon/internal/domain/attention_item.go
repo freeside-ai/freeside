@@ -577,13 +577,16 @@ type AttentionItem struct {
 	// on legacy items and fixed once first attached, except PublishBlock, which
 	// follows the current canonical cause across versioned publication holds.
 	ExecutionFailure *ExecutionFailureFacts `json:"execution_failure"`
-	PublishBlock     *PublishBlockFacts     `json:"publish_block"`
-	DiffStats        *DiffStats             `json:"diff_stats"`
-	BlockedOn        *BlockedWait           `json:"blocked_on"`
-	HealthDiagnostic *HealthDiagnostic      `json:"health_diagnostic"`
-	ReviewDispute    *ReviewDisputeBinding  `json:"review_dispute"`
-	SpecRevision     *SpecRevisionFacts     `json:"spec_revision"`
-	AgentQuestion    *AgentQuestionFacts    `json:"agent_question"`
+	// InterpretationFailure replaces ExecutionFailure on an execution_failure
+	// item whose invocation completed and exported; an item never has both.
+	InterpretationFailure *InterpretationFailureFacts `json:"interpretation_failure"`
+	PublishBlock          *PublishBlockFacts          `json:"publish_block"`
+	DiffStats             *DiffStats                  `json:"diff_stats"`
+	BlockedOn             *BlockedWait                `json:"blocked_on"`
+	HealthDiagnostic      *HealthDiagnostic           `json:"health_diagnostic"`
+	ReviewDispute         *ReviewDisputeBinding       `json:"review_dispute"`
+	SpecRevision          *SpecRevisionFacts          `json:"spec_revision"`
+	AgentQuestion         *AgentQuestionFacts         `json:"agent_question"`
 	// ReviewDiminishing carries the stop cause, and for a drift_audit stop the
 	// audit's facts, on a review_diminishing_returns item (plan §7 Review
 	// Drift). It is nil on items created before the field existed.
@@ -657,6 +660,7 @@ type AttentionItemInput struct {
 	DisplayNames                     *DisplayNames
 	BillableCostSoFar                *CostSoFar
 	ExecutionFailure                 *ExecutionFailureFacts
+	InterpretationFailure            *InterpretationFailureFacts
 	PublishBlock                     *PublishBlockFacts
 	DiffStats                        *DiffStats
 	BlockedOn                        *BlockedWait
@@ -717,6 +721,7 @@ func NewAttentionItem(in AttentionItemInput, approvedRecipes map[Digest]bool) (A
 		DisplayNames:                     clonePtr(in.DisplayNames),
 		BillableCostSoFar:                clonePtr(in.BillableCostSoFar),
 		ExecutionFailure:                 cloneExecutionFailureFacts(in.ExecutionFailure),
+		InterpretationFailure:            clonePtr(in.InterpretationFailure),
 		PublishBlock:                     clonePublishBlockFacts(in.PublishBlock),
 		DiffStats:                        clonePtr(in.DiffStats),
 		BlockedOn:                        cloneBlockedWait(in.BlockedOn),
@@ -1037,6 +1042,25 @@ func (i AttentionItem) Validate() error {
 	} else if i.Offers(ActionRetryWithCapability) {
 		return fmt.Errorf("item %s offers capability retry without execution failure facts: %w",
 			i.ID, ErrCardFactInconsistent)
+	}
+	if i.InterpretationFailure != nil {
+		if i.Type != AttentionExecutionFailure {
+			return fmt.Errorf("item %s type %q carries interpretation failure facts: %w",
+				i.ID, i.Type, ErrCardFactOutsideItem)
+		}
+		if err := i.InterpretationFailure.Validate(); err != nil {
+			return fmt.Errorf("item %s interpretation_failure: %w", i.ID, err)
+		}
+		if i.Subject.Type != SubjectRun || i.Subject.RunID == nil {
+			return fmt.Errorf("item %s interpretation failure has no run subject: %w",
+				i.ID, ErrCardFactInconsistent)
+		}
+		// An exported invocation has no outcome, so the two facts name
+		// mutually exclusive terminal authorities.
+		if i.ExecutionFailure != nil {
+			return fmt.Errorf("item %s carries both execution and interpretation failure facts: %w",
+				i.ID, ErrCardFactInconsistent)
+		}
 	}
 	if i.PublishBlock != nil {
 		if i.Type != AttentionPublishBlocked {

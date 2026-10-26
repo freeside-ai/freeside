@@ -51,6 +51,7 @@
     "stage": "implementation",
     "invocation_id": "inv-1"
   },
+  "interpretation_failure": null,
   "publish_block": null,
   "diff_stats": null,
   "blocked_on": null,

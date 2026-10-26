@@ -51,6 +51,7 @@
     "complete": false
   },
   "execution_failure": null,
+  "interpretation_failure": null,
   "publish_block": null,
   "diff_stats": null,
   "blocked_on": null,

@@ -119,6 +119,24 @@ func (f ExecutionFailureFacts) Validate() error {
 	return nil
 }
 
+// InterpretationFailureFacts identifies an invocation that completed and
+// exported, and why the engine could not carry its output forward. It stands
+// in for ExecutionFailureFacts on such an item, since the export, not an
+// outcome, is that invocation's terminal record.
+type InterpretationFailureFacts struct {
+	Cause        InterpretationFailureCause `json:"cause"`
+	Stage        StageName                  `json:"stage"`
+	InvocationID InvocationID               `json:"invocation_id"`
+}
+
+func (f InterpretationFailureFacts) Validate() error {
+	if !f.Cause.valid() || !f.Stage.valid() || f.InvocationID == "" {
+		return fmt.Errorf("interpretation failure cause %q stage %q invocation %q: %w",
+			f.Cause, f.Stage, f.InvocationID, ErrCardFactInconsistent)
+	}
+	return nil
+}
+
 // AgentQuestionFacts identifies the stage and invocation that stopped to ask,
 // the blocker kind on the implementation side, and the decisions the human
 // is asked to make. Kind is set exactly when Stage is implementation: the

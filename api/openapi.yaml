@@ -2680,6 +2680,22 @@ components:
         - contract_contradiction
         - unknown
 
+    InterpretationFailureCause:
+      type: string
+      description: >
+        Why the daemon could not carry a completed, exported invocation's
+        output forward. A separate vocabulary from FailureCause, which rides
+        on an execution outcome that never sits beside an export. It has no
+        unknown member: every writer names its cause.
+      enum:
+        - research_url_refused
+        - research_too_large
+        - research_fetch_failed
+        - iterations_exhausted
+        - invalid_output
+        - transcript_unreadable
+        - input_undeliverable
+
     RunMilestone:
       type: object
       description: >
@@ -4749,6 +4765,24 @@ components:
             daemon composition can enforce and that differ from the failed
             admission. Presence is what authorizes retry_with_capabilities.
 
+    InterpretationFailureFacts:
+      type: object
+      description: >
+        A failure the daemon found after the invocation completed and
+        exported, while it read that output. The export is the invocation's
+        terminal authority, so an item carries these facts or
+        ExecutionFailureFacts, never both.
+      additionalProperties: false
+      required: [cause, stage, invocation_id]
+      properties:
+        cause:
+          $ref: "#/components/schemas/InterpretationFailureCause"
+        stage:
+          $ref: "#/components/schemas/StageName"
+        invocation_id:
+          type: string
+          minLength: 1
+
     CapabilityManifestOffer:
       type: object
       description: A policy-derived capability manifest offered for an execution retry.
@@ -5104,6 +5138,7 @@ components:
         - display_names
         - billable_cost_so_far
         - execution_failure
+        - interpretation_failure
         - publish_block
         - diff_stats
         - blocked_on
@@ -5325,6 +5360,10 @@ components:
           nullable: true
           allOf:
             - $ref: "#/components/schemas/ExecutionFailureFacts"
+        interpretation_failure:
+          nullable: true
+          allOf:
+            - $ref: "#/components/schemas/InterpretationFailureFacts"
         publish_block:
           nullable: true
           allOf:
@@ -5568,6 +5607,7 @@ components:
           task: {text: "task-1", source: "identifier"}
         billable_cost_so_far: null
         execution_failure: null
+        interpretation_failure: null
         publish_block: null
         diff_stats:
           files_changed: 12

@@ -606,6 +606,9 @@ func (tx *WriteTx) putAttentionItem(ctx context.Context, item domain.AttentionIt
 			if item.ExecutionFailure == nil && decoded.ExecutionFailure != nil {
 				item.ExecutionFailure = decoded.ExecutionFailure
 			}
+			if item.InterpretationFailure == nil && decoded.InterpretationFailure != nil {
+				item.InterpretationFailure = decoded.InterpretationFailure
+			}
 			if item.PublishBlock == nil && decoded.PublishBlock != nil {
 				item.PublishBlock = decoded.PublishBlock
 			}
@@ -647,6 +650,9 @@ func (tx *WriteTx) putAttentionItem(ctx context.Context, item domain.AttentionIt
 			}
 			if decoded.ExecutionFailure == nil {
 				item.ExecutionFailure = nil
+			}
+			if decoded.InterpretationFailure == nil {
+				item.InterpretationFailure = nil
 			}
 			if decoded.PublishBlock == nil {
 				item.PublishBlock = nil
@@ -1389,26 +1395,50 @@ func (tx *ReadTx) getAttentionItemBindingRecord(
 	return item, nil
 }
 
-// gateExecutionFailureItem authenticates copied terminal coordinates,
-// including the cause, against the immutable admission and outcome
-// records, then maps the admitted run stage to the card's stable
-// StageName vocabulary.
+// gateExecutionFailureItem authenticates an execution_failure item's copied
+// terminal coordinates against the invocation's terminal authority: the
+// outcome record, including its cause, for execution-failure facts, and the
+// export record for interpretation-failure facts, whose cause the engine
+// assigns after reading that export. Either way it then binds the item to
+// the immutable admission and maps the admitted run stage to the card's
+// stable StageName vocabulary.
 func (tx *ReadTx) gateExecutionFailureItem(ctx context.Context, item domain.AttentionItem) error {
-	if item.ExecutionFailure == nil {
-		return nil
-	}
-	facts := item.ExecutionFailure
-	outcome, err := tx.GetExecutionOutcomeRecord(ctx, facts.InvocationID)
-	if err != nil {
-		if errors.Is(err, ErrNotFound) {
+	if facts := item.ExecutionFailure; facts != nil {
+		outcome, err := tx.GetExecutionOutcomeRecord(ctx, facts.InvocationID)
+		if err != nil {
+			if errors.Is(err, ErrNotFound) {
+				return domain.ErrParentKeyMismatch
+			}
+			return err
+		}
+		if outcome.Status != facts.Outcome || outcome.Cause != facts.Cause {
 			return domain.ErrParentKeyMismatch
 		}
-		return err
+		if err := tx.gateAdmittedStage(ctx, item, facts.InvocationID, facts.Stage); err != nil {
+			return err
+		}
 	}
-	if outcome.Status != facts.Outcome || outcome.Cause != facts.Cause {
-		return domain.ErrParentKeyMismatch
+	if facts := item.InterpretationFailure; facts != nil {
+		if _, err := tx.GetExecutionExportRecord(ctx, facts.InvocationID); err != nil {
+			if errors.Is(err, ErrNotFound) {
+				return domain.ErrParentKeyMismatch
+			}
+			return err
+		}
+		if err := tx.gateAdmittedStage(ctx, item, facts.InvocationID, facts.Stage); err != nil {
+			return err
+		}
 	}
-	admission, err := tx.GetExecutionAdmissionRecord(ctx, facts.InvocationID)
+	return nil
+}
+
+// gateAdmittedStage binds a card fact's invocation to the item's run subject
+// and project through the immutable admission, and checks that the admitted
+// stage maps to the fact's stage.
+func (tx *ReadTx) gateAdmittedStage(
+	ctx context.Context, item domain.AttentionItem, invocationID domain.InvocationID, factStage domain.StageName,
+) error {
+	admission, err := tx.GetExecutionAdmissionRecord(ctx, invocationID)
 	if err != nil {
 		if errors.Is(err, ErrNotFound) {
 			return domain.ErrParentKeyMismatch
@@ -1434,7 +1464,7 @@ func (tx *ReadTx) gateExecutionFailureItem(ctx context.Context, item domain.Atte
 			continue
 		}
 		mapped, err := domain.CanonicalStageRole(stage.Name)
-		if err != nil || mapped != facts.Stage {
+		if err != nil || mapped != factStage {
 			return domain.ErrParentKeyMismatch
 		}
 		return nil

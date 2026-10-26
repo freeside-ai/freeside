@@ -380,6 +380,22 @@ func TestGolden(t *testing.T) {
 		t.Fatal(err)
 	}
 
+	interpretationFailureItem, err := domain.NewAttentionItem(domain.AttentionItemInput{
+		ID: "item-interpretation-failure", ProjectID: "proj-1", Subject: subject,
+		Type: domain.AttentionExecutionFailure, Priority: domain.PriorityUrgent,
+		Reason:            "the specification stage failed",
+		RequestedDecision: []domain.Action{domain.ActionDiscuss, domain.ActionStop},
+		InterpretationFailure: &domain.InterpretationFailureFacts{
+			Cause: domain.InterpretationFailureResearchFetchFailed, Stage: domain.StageNameSpecification,
+			InvocationID: "inv-specify-1",
+		},
+		ItemVersion: 1, InterruptionClass: domain.InterruptionExceptional,
+		CreatedAt: &ts, Status: domain.StatusOpen,
+	}, approved)
+	if err != nil {
+		t.Fatal(err)
+	}
+
 	questionProvenance := domain.Provenance{
 		ProducerClass: domain.ProducerAgent, ProducerInvocationID: "inv-specify-1",
 		HeadBinding: domain.HeadIndependent, SensitivityClass: domain.SensitivityNormal,
@@ -1930,6 +1946,7 @@ func TestGolden(t *testing.T) {
 		{"attention_item_readiness_degraded", degradedItem},
 		{"attention_item_blocked", blockedItem},
 		{"attention_item_execution_failure", executionFailureItem},
+		{"attention_item_interpretation_failure", interpretationFailureItem},
 		{"attention_item_publish_blocked", publishBlockedItem},
 		{"attention_item_publish_blocked_pr_reference", publishBlockedPRReferenceItem},
 		{"attention_item_review_dispute", reviewDisputeItem},

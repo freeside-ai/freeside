@@ -76,6 +76,9 @@ func TestGoldenRoundTripCardFacts(t *testing.T) {
 		if err := tx.RecordExecutionOutcome(ctx, outcome); err != nil {
 			return err
 		}
+		if err := tx.RecordExecutionExportRecord(ctx, cardFactExecutionExport(t, questionExecution.admission)); err != nil {
+			return err
+		}
 		question := items["agent_question"]
 		questionClaim := question.AgentClaims[0]
 		artifact, err := domain.NewArtifact(domain.ArtifactInput{
@@ -350,6 +353,68 @@ func TestPutAttentionItemRejectsChangedCardFact(t *testing.T) {
 	err := s.Write(ctx, func(tx *store.WriteTx) error { return tx.PutAttentionItem(ctx, changed) })
 	if !errors.Is(err, store.ErrImmutableConflict) {
 		t.Fatalf("changed fact put = %v, want ErrImmutableConflict", err)
+	}
+}
+
+// TestPutAttentionItemAuthenticatesInterpretationFailure pins the export
+// half of the execution_failure gate: the fact needs the invocation's export
+// record, and the admitted stage must map to the fact's stage.
+func TestPutAttentionItemAuthenticatesInterpretationFailure(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	item := storeCardFactItems(t)["interpretation_failure"]
+	otherRun := domain.RunID("run-other")
+	cases := []struct {
+		name      string
+		stageName string
+		export    bool
+		mutate    func(*domain.AttentionItem)
+		want      error
+	}{
+		{"exported specification", "specification", true, nil, nil},
+		{"no export record", "specification", false, nil, domain.ErrParentKeyMismatch},
+		{"admitted stage is implementation", "implement", true, nil, domain.ErrParentKeyMismatch},
+		{"item names another run", "specification", true, func(item *domain.AttentionItem) {
+			item.Subject = domain.Subject{Type: domain.SubjectRun, ID: domain.SubjectID(otherRun), RunID: &otherRun}
+		}, domain.ErrParentKeyMismatch},
+		{"item names another project", "specification", true, func(item *domain.AttentionItem) {
+			item.ProjectID = "proj-other"
+		}, domain.ErrParentKeyMismatch},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			s := openStore(t, store.Options{AdmissionFloors: attendedFloors()})
+			execution := newAdmissionFixture(t, func(input *domain.ExecutionAdmissionInput) {
+				input.InvocationID = item.InterpretationFailure.InvocationID
+			})
+			execution.run.Stages[0].Name = tc.stageName
+			execution.run.Stages[0].Attempts[0].InvocationID = item.InterpretationFailure.InvocationID
+			err := s.Write(ctx, func(tx *store.WriteTx) error {
+				if err := tx.PutRun(ctx, execution.run); err != nil {
+					return err
+				}
+				if err := tx.RecordAuthIdentity(ctx, execution.identity, admissionEpoch); err != nil {
+					return err
+				}
+				if err := tx.RecordExecutionAdmission(ctx, execution.admission); err != nil {
+					return err
+				}
+				if tc.export {
+					if err := tx.RecordExecutionExportRecord(ctx, cardFactExecutionExport(t, execution.admission)); err != nil {
+						return err
+					}
+				}
+				item := item
+				if tc.mutate != nil {
+					tc.mutate(&item)
+				}
+				return tx.PutAttentionItem(ctx, item)
+			})
+			if tc.want == nil && err != nil || tc.want != nil && !errors.Is(err, tc.want) {
+				t.Fatalf("put = %v, want %v", err, tc.want)
+			}
+		})
 	}
 }
 
@@ -774,6 +839,20 @@ func cardFactExecutionOutcome(admission domain.ExecutionAdmission) domain.Execut
 	}
 }
 
+func cardFactExecutionExport(t *testing.T, admission domain.ExecutionAdmission) domain.ExecutionExport {
+	t.Helper()
+	export, err := domain.NewExecutionExport(domain.ExecutionExportInput{
+		InvocationID: admission.InvocationID, AdmissionID: admission.ID,
+		ObservedBaseSHA: admission.Base.BaseSHA, HeadSHA: "cafebabe",
+		ManifestDigest: "sha256:manifest",
+		RecordedAt:     admission.AdmittedAt.Add(time.Minute),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return export
+}
+
 type agentQuestionSpecificationTerminalFixture struct {
 	InvocationID        domain.InvocationID `json:"invocation_id"`
 	Iteration           int                 `json:"iteration"`
@@ -874,6 +953,18 @@ func storeCardFactItems(t *testing.T) map[string]domain.AttentionItem {
 			ExecutionFailure: &domain.ExecutionFailureFacts{
 				Outcome: domain.ExecutionOutcomeFailed, Cause: domain.FailureCauseUnknown,
 				Stage: domain.StageNameImplementation, InvocationID: "inv-1",
+			},
+			DisplayNames: runNames,
+			ItemVersion:  1, InterruptionClass: domain.InterruptionExceptional, CreatedAt: &at, Status: domain.StatusOpen,
+		},
+		"interpretation_failure": {
+			ID: domain.ItemID("execution-failure-" + invocationID), ProjectID: "proj-1", Subject: subject,
+			Type: domain.AttentionExecutionFailure, Priority: domain.PriorityHigh,
+			Reason:            "specification research fetch failed",
+			RequestedDecision: []domain.Action{domain.ActionDiscuss, domain.ActionStop},
+			InterpretationFailure: &domain.InterpretationFailureFacts{
+				Cause: domain.InterpretationFailureResearchFetchFailed, Stage: domain.StageNameSpecification,
+				InvocationID: invocationID,
 			},
 			DisplayNames: runNames,
 			ItemVersion:  1, InterruptionClass: domain.InterruptionExceptional, CreatedAt: &at, Status: domain.StatusOpen,

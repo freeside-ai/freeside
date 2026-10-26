@@ -239,6 +239,7 @@ func ValidateAttentionItemTransition(old, updated AttentionItem) error {
 		updated    any
 	}{
 		{"execution_failure", old.ExecutionFailure != nil, old.ExecutionFailure, updated.ExecutionFailure},
+		{"interpretation_failure", old.InterpretationFailure != nil, old.InterpretationFailure, updated.InterpretationFailure},
 		{"diff_stats", old.DiffStats != nil, old.DiffStats, updated.DiffStats},
 		{"blocked_on", old.BlockedOn != nil, old.BlockedOn, updated.BlockedOn},
 		{"health_diagnostic", old.HealthDiagnostic != nil, old.HealthDiagnostic, updated.HealthDiagnostic},

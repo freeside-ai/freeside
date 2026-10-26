@@ -5356,6 +5356,19 @@ public enum Components {
             case contract_contradiction = "contract_contradiction"
             case unknown = "unknown"
         }
+        /// Why the daemon could not carry a completed, exported invocation's output forward. A separate vocabulary from FailureCause, which rides on an execution outcome that never sits beside an export. It has no unknown member: every writer names its cause.
+        ///
+        ///
+        /// - Remark: Generated from `#/components/schemas/InterpretationFailureCause`.
+        @frozen public enum InterpretationFailureCause: String, Codable, Hashable, Sendable, CaseIterable {
+            case research_url_refused = "research_url_refused"
+            case research_too_large = "research_too_large"
+            case research_fetch_failed = "research_fetch_failed"
+            case iterations_exhausted = "iterations_exhausted"
+            case invalid_output = "invalid_output"
+            case transcript_unreadable = "transcript_unreadable"
+            case input_undeliverable = "input_undeliverable"
+        }
         /// One append-only, first-observation-wins daemon milestone. Detail fields are kind-scoped and use explicit null when absent.
         ///
         ///
@@ -10011,6 +10024,58 @@ public enum Components {
                 ])
             }
         }
+        /// A failure the daemon found after the invocation completed and exported, while it read that output. The export is the invocation's terminal authority, so an item carries these facts or ExecutionFailureFacts, never both.
+        ///
+        ///
+        /// - Remark: Generated from `#/components/schemas/InterpretationFailureFacts`.
+        public struct InterpretationFailureFacts: Codable, Hashable, Sendable {
+            /// - Remark: Generated from `#/components/schemas/InterpretationFailureFacts/cause`.
+            public var cause: Components.Schemas.InterpretationFailureCause
+            /// - Remark: Generated from `#/components/schemas/InterpretationFailureFacts/stage`.
+            public var stage: Components.Schemas.StageName
+            /// - Remark: Generated from `#/components/schemas/InterpretationFailureFacts/invocation_id`.
+            public var invocation_id: Swift.String
+            /// Creates a new `InterpretationFailureFacts`.
+            ///
+            /// - Parameters:
+            ///   - cause:
+            ///   - stage:
+            ///   - invocation_id:
+            public init(
+                cause: Components.Schemas.InterpretationFailureCause,
+                stage: Components.Schemas.StageName,
+                invocation_id: Swift.String
+            ) {
+                self.cause = cause
+                self.stage = stage
+                self.invocation_id = invocation_id
+            }
+            public enum CodingKeys: String, CodingKey {
+                case cause
+                case stage
+                case invocation_id
+            }
+            public init(from decoder: any Swift.Decoder) throws {
+                let container = try decoder.container(keyedBy: CodingKeys.self)
+                self.cause = try container.decode(
+                    Components.Schemas.InterpretationFailureCause.self,
+                    forKey: .cause
+                )
+                self.stage = try container.decode(
+                    Components.Schemas.StageName.self,
+                    forKey: .stage
+                )
+                self.invocation_id = try container.decode(
+                    Swift.String.self,
+                    forKey: .invocation_id
+                )
+                try decoder.ensureNoAdditionalProperties(knownKeys: [
+                    "cause",
+                    "stage",
+                    "invocation_id"
+                ])
+            }
+        }
         /// A policy-derived capability manifest offered for an execution retry.
         ///
         /// - Remark: Generated from `#/components/schemas/CapabilityManifestOffer`.
@@ -11425,6 +11490,26 @@ public enum Components {
             }
             /// - Remark: Generated from `#/components/schemas/AttentionItem/execution_failure`.
             public var execution_failure: Components.Schemas.AttentionItem.execution_failurePayload?
+            /// - Remark: Generated from `#/components/schemas/AttentionItem/interpretation_failure`.
+            public struct interpretation_failurePayload: Codable, Hashable, Sendable {
+                /// - Remark: Generated from `#/components/schemas/AttentionItem/interpretation_failure/value1`.
+                public var value1: Components.Schemas.InterpretationFailureFacts
+                /// Creates a new `interpretation_failurePayload`.
+                ///
+                /// - Parameters:
+                ///   - value1:
+                public init(value1: Components.Schemas.InterpretationFailureFacts) {
+                    self.value1 = value1
+                }
+                public init(from decoder: any Swift.Decoder) throws {
+                    self.value1 = try .init(from: decoder)
+                }
+                public func encode(to encoder: any Swift.Encoder) throws {
+                    try self.value1.encode(to: encoder)
+                }
+            }
+            /// - Remark: Generated from `#/components/schemas/AttentionItem/interpretation_failure`.
+            public var interpretation_failure: Components.Schemas.AttentionItem.interpretation_failurePayload?
             /// - Remark: Generated from `#/components/schemas/AttentionItem/publish_block`.
             public struct publish_blockPayload: Codable, Hashable, Sendable {
                 /// - Remark: Generated from `#/components/schemas/AttentionItem/publish_block/value1`.
@@ -11744,6 +11829,7 @@ public enum Components {
             ///   - display_names: Daemon-authored project and work-unit labels; null on legacy items.
             ///   - billable_cost_so_far: Billable cost observed so far on review_diminishing_returns items.
             ///   - execution_failure:
+            ///   - interpretation_failure:
             ///   - publish_block:
             ///   - diff_stats:
             ///   - blocked_on: Retired with the `blocked` attention type (plan revision 84). Non-null only on a closed `blocked` item stored before the retirement.
@@ -11792,6 +11878,7 @@ public enum Components {
                 display_names: Components.Schemas.AttentionItem.display_namesPayload? = nil,
                 billable_cost_so_far: Components.Schemas.AttentionItem.billable_cost_so_farPayload? = nil,
                 execution_failure: Components.Schemas.AttentionItem.execution_failurePayload? = nil,
+                interpretation_failure: Components.Schemas.AttentionItem.interpretation_failurePayload? = nil,
                 publish_block: Components.Schemas.AttentionItem.publish_blockPayload? = nil,
                 diff_stats: Components.Schemas.AttentionItem.diff_statsPayload? = nil,
                 blocked_on: Components.Schemas.AttentionItem.blocked_onPayload? = nil,
@@ -11840,6 +11927,7 @@ public enum Components {
                 self.display_names = display_names
                 self.billable_cost_so_far = billable_cost_so_far
                 self.execution_failure = execution_failure
+                self.interpretation_failure = interpretation_failure
                 self.publish_block = publish_block
                 self.diff_stats = diff_stats
                 self.blocked_on = blocked_on
@@ -11889,6 +11977,7 @@ public enum Components {
                 case display_names
                 case billable_cost_so_far
                 case execution_failure
+                case interpretation_failure
                 case publish_block
                 case diff_stats
                 case blocked_on
