@@ -38,8 +38,9 @@ body:
         Interfaces, domain types, schemas, or API surfaces this unit
         touches (not the whole work contract; the issue as a whole is
         that). If it CHANGES any shared contract, stop: file it as
-        kind:contract instead; contract units are exclusive and
-        spine-owned.
+        kind:contract instead; a contract unit lands in its own PR with
+        its generated consumers before the units that depend on it
+        start.
     validations:
       required: true
   - type: textarea
@@ -65,12 +66,11 @@ body:
     attributes:
       label: Dependencies
       description: >
-        Type every relationship as starts-after (the prerequisite PR must merge
-        before this unit starts), merges-after (this unit may start, but its PR
-        integrates later), stacked-on (name the open PR branch used as the
-        base), or exclusive-with (the units may not be active concurrently; a
-        declaration on either unit applies symmetrically). Write "none" if
-        none; ambiguous relationships serialize as starts-after until the spine
-        resolves them.
+        Type every relationship as starts-after (this unit must be written
+        against the prerequisite's result, so the prerequisite's PR must
+        merge before this unit starts), merges-after (this unit may start,
+        but its PR lands later), or stacked-on (name the open PR branch used
+        as the base). Write "none" if none; ambiguous relationships
+        serialize as starts-after until the planner resolves them.
     validations:
       required: true

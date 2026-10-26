@@ -24,8 +24,8 @@
 # revert already-merged sibling work through a clean 3-way merge (#47
 # reverted #48; #49 recovered it). Integration evidence belongs to one
 # base commit, so AGENTS.md requires this audit before handoff and again
-# after every base advance, with the unit's declared scope as the
-# allowed paths.
+# after each rebase, with the unit's declared scope as the allowed
+# paths.
 #
 # Exit codes:
 #   0  pass: clean merge, every changed path inside the allowed paths
