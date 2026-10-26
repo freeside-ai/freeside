@@ -1311,8 +1311,13 @@ func TestPublishRefusesForeignPR(t *testing.T) {
 			gh.refs[id.BranchName()] = testHeadSHA
 			gh.prs = append(gh.prs, fakePR{Number: 7, State: "open", Title: "foreign", Body: body, HeadRef: id.BranchName(), HeadSHA: testHeadSHA})
 
-			if _, err := p.Publish(context.Background(), c, testApprovedRecipes()); !errors.Is(err, publish.ErrForeignResource) {
+			_, err = p.Publish(context.Background(), c, testApprovedRecipes())
+			var foreign *publish.ForeignPullRequestError
+			if !errors.Is(err, publish.ErrForeignResource) || !errors.As(err, &foreign) {
 				t.Fatalf("err = %v, want ErrForeignResource", err)
+			}
+			if foreign.Number != 7 || foreign.Branch != id.BranchName() {
+				t.Fatalf("foreign pull request = #%d on %q, want #7 on %q", foreign.Number, foreign.Branch, id.BranchName())
 			}
 			if writes := gh.writeRequests(); len(writes) != 0 {
 				t.Errorf("foreign occupation issued writes: %v", writes)
@@ -1921,6 +1926,22 @@ func TestVerifyOutcomeBindsUniqueLivePullRequestNumber(t *testing.T) {
 		context.Background(), candidate, identity, outcome,
 	); !errors.Is(err, publish.ErrPublicationConflict) {
 		t.Fatalf("duplicate identity PR error = %v", err)
+	}
+
+	// A merged pull request from another publication on the branch is
+	// named, so the card can say which one pins it (#2339).
+	gh.prs = []fakePR{{
+		Number: 103, State: "closed", Title: "earlier pass",
+		Body:    "<!-- freeside:publication-identity=sha256:" + strings.Repeat("d", 64) + " -->",
+		HeadRef: identity.BranchName(), HeadSHA: candidate.HeadSHA,
+	}}
+	err := p.VerifyOutcome(context.Background(), candidate, identity, outcome)
+	var foreign *publish.ForeignPullRequestError
+	if !errors.Is(err, publish.ErrForeignResource) || !errors.As(err, &foreign) {
+		t.Fatalf("foreign PR error = %v", err)
+	}
+	if foreign.Number != 103 || foreign.Branch != identity.BranchName() {
+		t.Fatalf("foreign pull request = #%d on %q, want #103 on %q", foreign.Number, foreign.Branch, identity.BranchName())
 	}
 }
 

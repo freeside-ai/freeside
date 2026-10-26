@@ -1226,6 +1226,52 @@ func TestProductionExecutionPublishesOnlyAfterCleanVerification(t *testing.T) {
 	}
 }
 
+// A declared branch that still lists a merged pull request from another
+// publication holds the run, and the card names that pull request and the
+// branch (#2339). Deleting the branch can't clear it, so the card is the
+// operator's only way to learn what pins it.
+func TestProductionForeignMergedPRHoldNamesThePullRequest(t *testing.T) {
+	t.Parallel()
+	const branch = "fix/reservation-count-floor"
+	metadata := productionPublicationMetadata()
+	metadata.Branch = branch
+	p := newProductionPublicationHarnessWithMetadata(t, newPublicationHarness(t), "", nil, nil, nil, metadata, nil)
+	p.forge.Mu.Lock()
+	p.forge.PRs = append(p.forge.PRs, fakeforge.PR{
+		Number: 3, State: "closed", Title: "Earlier pass",
+		Body:    "<!-- freeside:publication-identity=sha256:" + strings.Repeat("e", 64) + " -->",
+		HeadRef: branch, HeadSHA: strings.Repeat("e", 40), BaseRef: "main",
+	})
+	p.forge.Mu.Unlock()
+	p.startAndRecordExport(t)
+	result, err := p.reconcileLanes()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.BlockedItemsCreated != 1 || result.PublicationTasksCompleted != 0 {
+		t.Fatalf("publication result = %#v", result)
+	}
+	assertRunHoldReason(t, p, domain.HoldExternalConflict)
+	var blocked []domain.AttentionItem
+	if err := p.store.Read(p.ctx, func(tx *store.ReadTx) error {
+		items, err := tx.ListAttentionItems(p.ctx)
+		for _, item := range items {
+			if item.Value.Type == domain.AttentionPublishBlocked && item.Value.Status == domain.StatusOpen {
+				blocked = append(blocked, item.Value)
+			}
+		}
+		return err
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if len(blocked) != 1 || !strings.Contains(blocked[0].Reason, "pull request #3 on branch "+branch) {
+		t.Fatalf("publish_blocked card = %#v", blocked)
+	}
+	if prs := p.forge.PullRequests(); len(prs) != 1 {
+		t.Fatalf("hold created a pull request: %#v", prs)
+	}
+}
+
 func TestProductionPublicationSupervisionTracksSplitInvocationOwners(t *testing.T) {
 	t.Parallel()
 	p := newProductionPublicationHarness(t, "")

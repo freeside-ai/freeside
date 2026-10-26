@@ -216,6 +216,25 @@ var ErrTransportAuthorityClaimed = errors.New("publication authority is already 
 // rather than adopting or overwriting it.
 var ErrForeignResource = errors.New("pull request on the publication branch does not carry the identity marker")
 
+// ForeignPullRequestError is the ErrForeignResource refusal with the
+// pull request that occupies the branch. The engine recovers it with
+// errors.As to name that pull request on the operator's publish_blocked
+// card (#2339): a merged pull request can't be deleted, so the operator
+// needs to know which one pins the branch. The marker check can't tell
+// another publication's pull request from this one's with its marker
+// edited away, so the error claims only the missing marker.
+// errors.Is(err, ErrForeignResource) still matches it.
+type ForeignPullRequestError struct {
+	Number int
+	Branch string
+}
+
+func (e *ForeignPullRequestError) Error() string {
+	return fmt.Sprintf("pull request #%d occupies branch %s: %v", e.Number, e.Branch, ErrForeignResource)
+}
+
+func (e *ForeignPullRequestError) Unwrap() error { return ErrForeignResource }
+
 // ErrSuccessorObservationPending is the class of successor-publication
 // reads GitHub has not caught up on yet: its pull-request view can lag the
 // successor branch for a moment after a push (#1544). It is not a conflict

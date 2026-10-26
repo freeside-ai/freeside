@@ -83,6 +83,13 @@ func TestSuccessorPRObservationPending(t *testing.T) {
 			if !errors.Is(err, tc.want) {
 				t.Fatalf("error = %v, want %v", err, tc.want)
 			}
+			var foreign *ForeignPullRequestError
+			if got := errors.As(err, &foreign); got != errors.Is(tc.want, ErrForeignResource) {
+				t.Fatalf("ForeignPullRequestError found = %t: %v", got, err)
+			}
+			if foreign != nil && (foreign.Number != 108 || foreign.Branch != branch) {
+				t.Fatalf("foreign pull request = #%d on %q, want #108 on %q", foreign.Number, foreign.Branch, branch)
+			}
 			pending := errors.Is(err, ErrSuccessorObservationPending)
 			if wantPending := errors.Is(tc.want, ErrSuccessorObservationPending); pending != wantPending {
 				t.Fatalf("pending = %v, want %v: %v", pending, wantPending, err)

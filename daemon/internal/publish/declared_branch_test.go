@@ -148,21 +148,36 @@ func TestDeclaredBranchRestartAndBinding(t *testing.T) {
 
 func TestDeclaredBranchCollisionsLeaveFirstPublicationUntouched(t *testing.T) {
 	t.Parallel()
-	for _, foreignPR := range []bool{false, true} {
-		t.Run(map[bool]string{false: "foreign-commit", true: "foreign-identity"}[foreignPR], func(t *testing.T) {
+	// prState is the first publication's pull request state, or "" for none.
+	// "closed" is a merged first publication: the branch can be deleted, but
+	// its pull request stays listed on it (#2339).
+	for name, prState := range map[string]string{
+		"foreign-commit":          "",
+		"foreign-identity":        "open",
+		"merged-foreign-identity": "closed",
+	} {
+		t.Run(name, func(t *testing.T) {
 			h := newDrainHarness(t)
 			c := testCandidate(t)
 			c.Branch = "feat/shared-name"
 			sha := strings.Repeat("f", 40)
 			want := publish.ErrPublicationConflict
-			if foreignPR {
+			if prState != "" {
 				sha = c.HeadSHA
 				want = publish.ErrForeignResource
-				h.gh.prs = append(h.gh.prs, fakePR{Number: 7, State: "open", HeadRef: c.Branch, HeadSHA: sha, Title: "First publication", Body: "<!-- freeside:publication-identity=sha256:" + strings.Repeat("f", 64) + " -->"})
+				h.gh.prs = append(h.gh.prs, fakePR{Number: 7, State: prState, HeadRef: c.Branch, HeadSHA: sha, Title: "First publication", Body: "<!-- freeside:publication-identity=sha256:" + strings.Repeat("f", 64) + " -->"})
 			}
 			h.gh.refs[c.Branch] = sha
-			if _, err := h.pub.Publish(t.Context(), c, testApprovedRecipes()); !errors.Is(err, want) {
+			_, err := h.pub.Publish(t.Context(), c, testApprovedRecipes())
+			if !errors.Is(err, want) {
 				t.Fatalf("collision = %v, want %v", err, want)
+			}
+			var foreign *publish.ForeignPullRequestError
+			if got := errors.As(err, &foreign); got != (prState != "") {
+				t.Fatalf("ForeignPullRequestError found = %t: %v", got, err)
+			}
+			if foreign != nil && (foreign.Number != 7 || foreign.Branch != c.Branch) {
+				t.Fatalf("foreign pull request = #%d on %q, want #7 on %q", foreign.Number, foreign.Branch, c.Branch)
 			}
 			if h.gh.refs[c.Branch] != sha {
 				t.Fatal("collision moved existing branch")

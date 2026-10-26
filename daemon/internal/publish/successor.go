@@ -172,7 +172,7 @@ func validateSuccessorPR(pr prState, repo repoRef, identity Identity, candidate 
 	}
 	marker, ok := ParseMarker(pr.Body)
 	if !ok || (marker != target.Identity && marker != identity.Digest()) {
-		return prState{}, ErrForeignResource
+		return prState{}, &ForeignPullRequestError{Number: pr.Number, Branch: target.Branch}
 	}
 	if pr.Number != target.PRNumber || pr.State != "open" {
 		return prState{}, ErrPublicationConflict
