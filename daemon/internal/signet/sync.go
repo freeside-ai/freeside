@@ -1680,28 +1680,10 @@ func authenticateRunObservation(
 				return fmt.Errorf("milestone %s conversation invocation %q is not its own attempt: %w",
 					milestone.Kind, invocation, domain.ErrParentKeyMismatch)
 			}
-		case domain.MilestoneExecutionExportRecorded:
-			if _, err := tx.GetExecutionExportRecord(ctx, invocation); err != nil {
-				return fmt.Errorf("milestone %s: %w", milestone.Kind, err)
-			}
-			if err := authenticateAdmissionRun(ctx, tx, invocation, run.ID, attempts[invocation]); err != nil {
-				return fmt.Errorf("milestone %s: %w", milestone.Kind, err)
-			}
-		case domain.MilestoneExecutionOutcomeRecorded:
-			outcome, err := tx.GetExecutionOutcomeRecord(ctx, invocation)
-			if err != nil {
-				return fmt.Errorf("milestone %s: %w", milestone.Kind, err)
-			}
-			if outcome.Status != *milestone.Outcome {
-				return fmt.Errorf("milestone %s outcome disagrees with authority: %w",
-					milestone.Kind, domain.ErrParentKeyMismatch)
-			}
-			if err := authenticateAdmissionRun(ctx, tx, invocation, run.ID, attempts[invocation]); err != nil {
-				return fmt.Errorf("milestone %s: %w", milestone.Kind, err)
-			}
-		case domain.MilestoneTerminalRecorded:
-			if err := authenticateTerminal(ctx, tx, invocation, run.ID, attempts[invocation], *milestone.Terminal); err != nil {
-				return fmt.Errorf("milestone %s: %w", milestone.Kind, err)
+		case domain.MilestoneExecutionExportRecorded, domain.MilestoneExecutionOutcomeRecorded,
+			domain.MilestoneTerminalRecorded:
+			if err := authenticateStatusMilestone(ctx, tx, run.ID, attempts, milestone); err != nil {
+				return err
 			}
 		case domain.MilestonePublicationReady:
 			if invocation == currentPublication {
@@ -1776,6 +1758,75 @@ func authenticateRunObservation(
 		return err
 	}
 	return nil
+}
+
+// authenticateStatusMilestone binds one status-bearing milestone (an export,
+// an outcome, or a terminal) to the durable record it summarizes and to the
+// run attempt it names. withAuthoritativeInvocationStatuses reads exactly
+// these kinds, so the full observation pass and AuthoritativeInvocationStatuses
+// both go through it and cannot drift apart on which statuses they accept.
+func authenticateStatusMilestone(
+	ctx context.Context,
+	tx *store.ReadTx,
+	runID domain.RunID,
+	attempts map[domain.InvocationID]runAttemptBinding,
+	milestone domain.RunMilestone,
+) error {
+	invocation := *milestone.InvocationID
+	switch milestone.Kind {
+	case domain.MilestoneExecutionExportRecorded:
+		if _, err := tx.GetExecutionExportRecord(ctx, invocation); err != nil {
+			return fmt.Errorf("milestone %s: %w", milestone.Kind, err)
+		}
+		if err := authenticateAdmissionRun(ctx, tx, invocation, runID, attempts[invocation]); err != nil {
+			return fmt.Errorf("milestone %s: %w", milestone.Kind, err)
+		}
+	case domain.MilestoneExecutionOutcomeRecorded:
+		outcome, err := tx.GetExecutionOutcomeRecord(ctx, invocation)
+		if err != nil {
+			return fmt.Errorf("milestone %s: %w", milestone.Kind, err)
+		}
+		if outcome.Status != *milestone.Outcome {
+			return fmt.Errorf("milestone %s outcome disagrees with authority: %w",
+				milestone.Kind, domain.ErrParentKeyMismatch)
+		}
+		if err := authenticateAdmissionRun(ctx, tx, invocation, runID, attempts[invocation]); err != nil {
+			return fmt.Errorf("milestone %s: %w", milestone.Kind, err)
+		}
+	case domain.MilestoneTerminalRecorded:
+		if err := authenticateTerminal(ctx, tx, invocation, runID, attempts[invocation], *milestone.Terminal); err != nil {
+			return fmt.Errorf("milestone %s: %w", milestone.Kind, err)
+		}
+	case domain.MilestoneRunSubmitted, domain.MilestoneInvocationAdmitted,
+		domain.MilestoneInvocationStarted, domain.MilestonePublicationReady,
+		domain.MilestonePublicationBlocked, domain.MilestoneWorkUnitCompleted:
+	}
+	return nil
+}
+
+// AuthoritativeInvocationStatuses overlays a run's authenticated terminal
+// facts on its invocation observations, the status rule the client run reads
+// apply (withAuthoritativeInvocationStatuses), for a reader that does not run
+// the full observation pass. It authenticates every status-bearing milestone
+// first, with the checks that pass runs for those kinds, and returns the
+// first failure tagged the way the client reads tag it: a milestone the
+// durable records do not back must fail the read, never print a status.
+//
+// It deliberately checks nothing else. The other milestone kinds, the hold,
+// the invocation rows' run binding, and attention items stay the full pass's
+// job, so a reader can keep a fault there out of the invocations it prints.
+// The returned observation's milestones and hold are the caller's, unchanged.
+func AuthoritativeInvocationStatuses(
+	ctx context.Context, tx *store.ReadTx, run domain.Run, observation domain.RunObservation,
+) (domain.RunObservation, error) {
+	attempts := runAttemptBindings(run)
+	for _, milestone := range observation.Milestones {
+		if err := authenticateStatusMilestone(ctx, tx, run.ID, attempts, milestone); err != nil {
+			return domain.RunObservation{}, fmt.Errorf("run %q invocation status: %w",
+				run.ID, asRunObservationIntegrityError(err))
+		}
+	}
+	return withAuthoritativeInvocationStatuses(observation), nil
 }
 
 // withAuthoritativeInvocationStatuses overlays each authenticated terminal
