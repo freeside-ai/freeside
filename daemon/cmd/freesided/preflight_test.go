@@ -29,9 +29,12 @@ import (
 )
 
 type fakePreflightEnvironment struct {
-	rig                  daemonlock.RigManifest
-	database             databaseInspection
-	imageErrors          map[string]error
+	rig         daemonlock.RigManifest
+	database    databaseInspection
+	imageErrors map[string]error
+	// imageMissing makes a role's inspect fail before any tool probe, as
+	// when the local container store has no entry under the pin.
+	imageMissing         map[string]bool
 	imageVersions        map[string]string
 	imageCalls           map[string]int
 	topicError           error
@@ -123,6 +126,9 @@ func (e *fakePreflightEnvironment) InspectImage(
 		role = "exporter"
 	}
 	e.imageCalls[role]++
+	if e.imageMissing[role] {
+		return imageInspection{Error: errors.New("inspect image " + ref + ": exit status 1\nError: image not found")}
+	}
 	version, ok := e.imageVersions[versionTool]
 	if !ok {
 		version = pinnedVersionLine(versionTool)
@@ -1160,6 +1166,66 @@ func preflightFixture(t *testing.T) ([]string, *fakePreflightEnvironment) {
 		"-project", "project-test", "-allowed-paths", "daemon/**",
 	}
 	return args, environment
+}
+
+// TestPreflightImageFailureNamesTheFix splits an image the local store
+// cannot inspect, which a reseed fixes, from an image that inspects but is
+// stale, which a rebuild fixes (#2309).
+func TestPreflightImageFailureNamesTheFix(t *testing.T) {
+	const ref = "127.0.0.1:5005/freeside-exporter@sha256:" +
+		"ce4eeb61a8b204a4faf3bdd34ed4c96680846ca64aec2842e4855af6a240b7cc"
+	tests := map[string]struct {
+		mutate       func(*fakePreflightEnvironment)
+		wantEvidence string
+		wantFix      []string
+	}{
+		"not in the store": {
+			func(env *fakePreflightEnvironment) { env.imageMissing = map[string]bool{"exporter": true} },
+			"exporter image " + ref + " is not in the local container store",
+			[]string{"container image pull --scheme http " + ref, "Reseed A Pinned Image That Stopped Resolving"},
+		},
+		"failed tool probe": {
+			func(env *fakePreflightEnvironment) { env.imageErrors["exporter"] = errors.New("missing tool") },
+			"exporter image digest or required executable capabilities are stale",
+			[]string{"rebuild and re-pin the exporter image"},
+		},
+	}
+	for name, tt := range tests {
+		t.Run(name, func(t *testing.T) {
+			args, environment := preflightFixture(t)
+			for i := range args {
+				if args[i] == "-exporter-image" {
+					args[i+1] = ref
+				}
+			}
+			tt.mutate(environment)
+			var stdout bytes.Buffer
+			err := runPreflightCommandWithEnvironment(
+				t.Context(), args, &stdout, &bytes.Buffer{}, environment,
+				time.Date(2026, 8, 17, 12, 0, 0, 0, time.UTC), "2dce6570ee23",
+			)
+			if !errors.Is(err, errCompositionPreflight) {
+				t.Fatalf("error = %v, want composition refusal", err)
+			}
+			var manifest compositionManifest
+			if err := json.Unmarshal(stdout.Bytes(), &manifest); err != nil {
+				t.Fatalf("decode manifest: %v", err)
+			}
+			index := slices.IndexFunc(manifest.Checks, func(c compositionCheck) bool { return c.Name == "exporter_image" })
+			if index < 0 {
+				t.Fatal("no exporter_image check")
+			}
+			check := manifest.Checks[index]
+			if check.Status != compositionFailed || check.Evidence != tt.wantEvidence {
+				t.Fatalf("exporter_image = %+v, want failed with evidence %q", check, tt.wantEvidence)
+			}
+			for _, want := range tt.wantFix {
+				if !strings.Contains(check.Remediation, want) {
+					t.Fatalf("remediation %q lacks %q", check.Remediation, want)
+				}
+			}
+		})
+	}
 }
 
 func checkStatus(manifest compositionManifest, name string) compositionStatus {

@@ -67,6 +67,7 @@ type prelaunchGroup string
 
 const (
 	prelaunchGroupSettings    prelaunchGroup = "settings"
+	prelaunchGroupImages      prelaunchGroup = "images"
 	prelaunchGroupInputs      prelaunchGroup = "inputs"
 	prelaunchGroupAgentTree   prelaunchGroup = "agent_tree"
 	prelaunchGroupState       prelaunchGroup = "state"
@@ -78,13 +79,13 @@ const (
 // AllPrelaunchGroups is the single registration point for prelaunchGroup,
 // in the order the checks run.
 var AllPrelaunchGroups = []prelaunchGroup{
-	prelaunchGroupSettings, prelaunchGroupAgentTree, prelaunchGroupInputs, prelaunchGroupState,
+	prelaunchGroupSettings, prelaunchGroupImages, prelaunchGroupAgentTree, prelaunchGroupInputs, prelaunchGroupState,
 	prelaunchGroupRig, prelaunchGroupComposition, prelaunchGroupLive,
 }
 
 func (g prelaunchGroup) valid() bool {
 	switch g {
-	case prelaunchGroupSettings, prelaunchGroupInputs, prelaunchGroupAgentTree, prelaunchGroupState,
+	case prelaunchGroupSettings, prelaunchGroupImages, prelaunchGroupInputs, prelaunchGroupAgentTree, prelaunchGroupState,
 		prelaunchGroupRig, prelaunchGroupComposition, prelaunchGroupLive:
 		return true
 	default:
@@ -197,6 +198,9 @@ type prelaunchHost struct {
 	// prodAuthority checks prod's App authority under the held lease.
 	prodAuthority func(ctx context.Context, homes deputyHomes, settings loadedDeputySettings, tokenFile, leaseRoot string) error
 	prober        func(settings *loadedDeputySettings, stateRoot, tokenFile string) (lineupProber, error)
+	// inspectImage checks that the local container store holds a pinned
+	// reference, without the lease.
+	inspectImage func(ctx context.Context, ref string) error
 }
 
 func productionPrelaunchHost() prelaunchHost {
@@ -216,6 +220,9 @@ func productionPrelaunchHost() prelaunchHost {
 		},
 		prober: func(settings *loadedDeputySettings, stateRoot, tokenFile string) (lineupProber, error) {
 			return newProductionLineupProber(settings, stateRoot, tokenFile, deputyContainerBin)
+		},
+		inspectImage: func(ctx context.Context, ref string) error {
+			return checkImageInStore(ctx, deputyContainerBin, ref)
 		},
 	}
 }
@@ -252,12 +259,13 @@ func parsePrelaunchConfig(args []string, stderr io.Writer) (prelaunchConfig, err
 }
 
 // runPrelaunchCommand runs every check a deputy start and the run's submit
-// would make that spends nothing: settings, submit inputs, the agent tree,
-// the state database, the rig lease, prod's authority, and the launch
-// composition, and with live on the lineup probe. It writes prelaunch.json
-// beside the composition manifest and prints the same bytes. The only store
-// write is the mint audit of the token the composition mints; the
-// composition manifest is neither written nor removed.
+// would make that spends nothing: settings, the pinned images in the local
+// container store, submit inputs, the agent tree, the state database, the
+// rig lease, prod's authority, and the launch composition, and with live on
+// the lineup probe. It writes prelaunch.json beside the composition manifest
+// and prints the same bytes. The only store write is the mint audit of the
+// token the composition mints; the composition manifest is neither written
+// nor removed.
 func runPrelaunchCommand(
 	ctx context.Context, args []string, stdout, stderr io.Writer, host prelaunchHost,
 ) error {
@@ -327,6 +335,9 @@ func evaluatePrelaunch(ctx context.Context, cfg prelaunchConfig, paths deputyPat
 	settings, err := loadDeputySettings(paths.Settings)
 	if err != nil {
 		record.fail(prelaunchGroupSettings, "settings", err.Error(), "correct "+paths.Settings)
+		for _, image := range prelaunchImages(loadedDeputySettings{}) {
+			record.skip(prelaunchGroupImages, image.check, "the settings must load first")
+		}
 		record.skip(prelaunchGroupAgentTree, "agent_tree", "the settings must load first")
 		for _, name := range []string{"submission", "task_lines", "duplicate_source"} {
 			record.skip(prelaunchGroupInputs, name, "the settings must load first")
@@ -347,6 +358,7 @@ func evaluatePrelaunch(ctx context.Context, cfg prelaunchConfig, paths deputyPat
 		record.pass(prelaunchGroupSettings, "settings", "settings "+string(settings.Digest)+
 			" pass the deputy's checks before its lease")
 	}
+	checkPrelaunchImages(ctx, &record, settings, host)
 
 	tree, treeMissing, treeErr := checkPrelaunchAgentTree(ctx, &record, settings, paths)
 	inputs := checkPrelaunchInputs(ctx, &record, cfg, settings)
@@ -364,6 +376,33 @@ func evaluatePrelaunch(ctx context.Context, cfg prelaunchConfig, paths deputyPat
 		return c.Status == compositionFailed
 	})
 	return record
+}
+
+// prelaunchImage is one pinned image a run creates containers from. Check
+// names match the composition's image checks.
+type prelaunchImage struct{ check, key, ref string }
+
+func prelaunchImages(settings loadedDeputySettings) []prelaunchImage {
+	return []prelaunchImage{
+		{"exporter_image", "images.exporter", settings.Images.Exporter},
+		{"implementer_image", "images.agent", settings.Images.Agent},
+		{"reviewer_image", "images.review", settings.Images.Review},
+	}
+}
+
+// checkPrelaunchImages checks that the local container store holds each
+// pinned image under its digest. It runs before the lease and with -no-live,
+// because auth adopt creates the first container from the exporter image
+// before the composition inspects any of them.
+func checkPrelaunchImages(ctx context.Context, record *prelaunchRecord, settings loadedDeputySettings, host prelaunchHost) {
+	for _, image := range prelaunchImages(settings) {
+		if err := host.inspectImage(ctx, image.ref); err != nil {
+			evidence, fix := imageStoreFailure(image.ref, err)
+			record.fail(prelaunchGroupImages, image.check, image.key+" "+evidence+": "+err.Error(), fix)
+			continue
+		}
+		record.pass(prelaunchGroupImages, image.check, image.key+" "+image.ref+" is in the local container store")
+	}
 }
 
 func skipLeaseBound(record *prelaunchRecord, why string, noLive bool) {

@@ -2443,6 +2443,12 @@ is `not_run`, and the rest still run.
 
 - **`settings`**: `<state-root>/daemon/settings.json` loads and passes the
   deputy's checks before its lease.
+- **`images`**: the local container store holds each of `images.exporter`,
+  `images.agent`, and `images.review` under its digest reference
+  (`container image inspect`), before the lease and with `-no-live`. A
+  failure names the key, the reference, and the reseed (Reseed A Pinned
+  Image That Stopped Resolving in docs/production-walkthrough.md); a
+  missing container CLI fails them with the install fix.
 - **`agent_tree`**: `agent_tree.commit` holds a readable agent tree, and it
   is the tree in an `agent-tree.patch` an earlier start left on the root.
 - **`inputs`**: the files pass what `submit` checks of a new submission

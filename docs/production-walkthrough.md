@@ -138,6 +138,9 @@ root that is the agent tree ([The First Start](#the-first-start)). It takes
 and releases the rig lease, so run it before the deputy starts. Its lineup
 probe spends one minimal call per lineup launch; `-no-live` skips it
 ([Run The Pre-Spend Checks Before A Launch](../daemon/README.md#run-the-pre-spend-checks-before-a-launch)).
+A failed `images` check names the pinned reference the local container store
+no longer holds; [Reseed A Pinned Image That Stopped Resolving](#reseed-a-pinned-image-that-stopped-resolving)
+restores it.
 
 Then start the deputy and keep its shell open:
 
@@ -781,6 +784,69 @@ Stop it with Ctrl-C when done, then start the deputy again.
 Recovery leaves the task count unchanged; for an exercise requiring its first
 task from the client composer, keep the database at zero tasks and use the
 client-submission path below.
+
+## Reseed A Pinned Image That Stopped Resolving
+
+A pinned image reference (`images.exporter`, `images.agent`, or
+`images.review`) can stop resolving between runs: the local container store
+loses its entry under the digest. The cause is not known (#2309). The digest
+is unchanged, so a reseed from a registry that still holds it restores the
+entry without a rebuild.
+
+**The symptom.** `freesided prelaunch` fails an `images` check, the deputy's
+self-check fails `exporter_image`, or the composition preflight reports that
+an image is not in the local container store; each names the reference. A
+container create that fails on it names the image too, in `auth-adopt.log`
+or the deputy log. To confirm, `container image inspect <ref>` reports
+`image not found`.
+
+**When the port's registry is running.** Pull the digest reference from it
+over HTTP:
+
+```sh
+container image pull --scheme http <ref>
+```
+
+A plain `container image pull <ref>` tries HTTPS and fails with
+`bad protocol version` against a local registry.
+
+**When it is a project image and its registry is stopped.** `freesided
+onboard -local-registry-port <port>` keeps its registry container but no
+local tag. Find the container by its label, start it, and pull as above:
+
+```sh
+container list --all --format json   # the entry labelled ai.freeside.project-image.registry-port=<port>
+container start <id>
+container image pull --scheme http <ref>
+```
+
+**When it is a script-built image and no registry runs on that port.** The
+`scripts/build-*-image.sh` scripts remove their temporary registry but keep
+the image's tag, which `container image list` still shows under
+`127.0.0.1:<port>/<name>`. Start the same pinned registry helper on the
+reference's port, push that tag to it, pull the digest reference, and remove
+the registry. `<port>`, `<name>`, and `<tag>` are the reference's port, image
+name, and that tag:
+
+```sh
+container run --detach --name freeside-reseed-registry \
+  --publish 127.0.0.1:<port>:5000 \
+  docker.io/library/registry@sha256:a3d8aaa63ed8681a604f1dea0aa03f100d5895b6a58ace528858a7b332415373
+until curl --silent --fail http://127.0.0.1:<port>/v2/ >/dev/null; do sleep 1; done
+container image push --scheme http 127.0.0.1:<port>/<name>:<tag>
+container image pull --scheme http <ref>
+container delete --force freeside-reseed-registry
+```
+
+The push sends the cached image, so the pull by digest gets the same bytes
+and the pinned reference does not change. Settings stay as they are.
+
+**When neither works.** If no registry holds the digest and no cached tag
+does either, so the pull by digest fails, rebuild the image and re-pin its
+new digest in the settings.
+
+**To confirm.** `container image inspect <ref>` now succeeds, and
+`freesided prelaunch` passes its `images` checks.
 
 ## Submit A New Task From A Client
 

@@ -14,6 +14,24 @@
       "evidence": "settings sha256:<settings> pass the deputy's checks before its lease"
     },
     {
+      "group": "images",
+      "name": "exporter_image",
+      "status": "passed",
+      "evidence": "images.exporter registry.local/exporter@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa is in the local container store"
+    },
+    {
+      "group": "images",
+      "name": "implementer_image",
+      "status": "passed",
+      "evidence": "images.agent registry.local/agent@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa is in the local container store"
+    },
+    {
+      "group": "images",
+      "name": "reviewer_image",
+      "status": "passed",
+      "evidence": "images.review registry.local/review@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa is in the local container store"
+    },
+    {
       "group": "agent_tree",
       "name": "agent_tree",
       "status": "passed",
