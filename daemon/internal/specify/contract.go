@@ -82,6 +82,31 @@ type Output struct {
 	Decisions     []domain.Decision `json:"decisions"`
 }
 
+// OutputJSONSchema is the JSON Schema of Output that the Claude launch passes
+// to the CLI on a specification stage, so the model returns its decision
+// through the CLI's structured output and any prose it writes stays out of the
+// payload (#2314). It steers the model and decides nothing: DecodeOutput
+// still gates every byte, and the one-form rule, sizes, and identifier checks
+// live only in Validate. It uses only type, properties, required, items, and
+// additionalProperties, which every schema validator enforces alike. The
+// launch command inlines it, and recovery rebuilds that command byte for byte,
+// so a change to it needs a new stage.PromptDelivery member.
+const OutputJSONSchema = `{"type":"object","additionalProperties":false,"properties":{` +
+	`"fetch_requests":{"type":["array","null"],"items":{"type":"object","additionalProperties":false,` +
+	`"required":["url","purpose"],"properties":{"url":{"type":"string"},"purpose":{"type":"string"}}}},` +
+	`"specification":{"type":["object","null"],"additionalProperties":false,` +
+	`"required":["summary","body","addressals"],"properties":{"title":{"type":["string","null"]},` +
+	`"summary":{"type":"string"},"body":{"type":"string"},"addressals":{"type":"array","items":{` +
+	`"type":"object","additionalProperties":false,"required":["comment_id","response"],` +
+	`"properties":{"comment_id":{"type":"string"},"response":{"type":"string"}}}}}},` +
+	`"reply":{"type":["string","null"]},` +
+	`"decisions":{"type":["array","null"],"items":{"type":"object","additionalProperties":false,` +
+	`"required":["question","why_blocking","options","recommendation"],"properties":{` +
+	`"question":{"type":"string"},"why_blocking":{"type":"string"},"options":{"type":"array","items":{` +
+	`"type":"object","additionalProperties":false,"required":["label","tradeoffs"],` +
+	`"properties":{"label":{"type":"string"},"tradeoffs":{"type":"string"}}}},` +
+	`"recommendation":{"type":"string"}}}}}}`
+
 // DecodeOutput strictly reconstructs and validates one typed stage payload.
 // Three tolerated presentation defects: a single Markdown code fence around
 // the whole object (issue #780), surrounding whitespace on prose fields
