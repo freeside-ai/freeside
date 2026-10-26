@@ -2169,10 +2169,14 @@
             #expect(failedCoordinator.taskTimelineLoadStates[completeHistory.task_id] == .unavailable)
             let revisedHistory = TaskHistoryFixtures.history(.revised)
             let revisedCoordinator = try TaskHistoryFixtures.coordinator(revisedHistory)
+            // The ready card an external review withdrew, under its cause.
+            let externalHistory = TaskHistoryFixtures.externallyReviewed(requested: false)
+            let externalCoordinator = try TaskHistoryFixtures.coordinator(externalHistory)
             for (name, history, display) in [
                 ("empty", loadedEmptyHistory, emptyCoordinator),
                 ("failed", completeHistory, failedCoordinator),
                 ("revised", revisedHistory, revisedCoordinator),
+                ("external-review", externalHistory, externalCoordinator),
             ] {
                 for scheme in [ColorScheme.light, .dark] {
                     surfaces.append(

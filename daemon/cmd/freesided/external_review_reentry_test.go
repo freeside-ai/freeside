@@ -2,7 +2,9 @@ package main
 
 import (
 	"context"
+	"database/sql"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -11,6 +13,7 @@ import (
 	"github.com/freeside-ai/freeside/daemon/internal/engine"
 	"github.com/freeside-ai/freeside/daemon/internal/exec/fake"
 	"github.com/freeside-ai/freeside/daemon/internal/publish"
+	"github.com/freeside-ai/freeside/daemon/internal/signet"
 	"github.com/freeside-ai/freeside/daemon/internal/store"
 	"github.com/freeside-ai/freeside/daemon/internal/store/storetest"
 )
@@ -559,4 +562,92 @@ func TestExternalReviewReentryRefusesEndedWork(t *testing.T) {
 			}
 		})
 	}
+}
+
+// TestTaskTimelineShowsExternalReviewReentry proves the task timeline names
+// an external review cycle's cause: one event, at the withdrawn ready card's
+// conclusion, naming the pull request, the reviewer's login, the card, the
+// finding, and the round the cycle opens. The event reads history, so taking
+// the reviewer off the trust profile afterward neither hides nor breaks it
+// (#2350).
+func TestTaskTimelineShowsExternalReviewReentry(t *testing.T) {
+	ctx := context.Background()
+	path := filepath.Join(t.TempDir(), "store.db")
+	st := storetest.Open(t, path, store.Options{
+		AdmissionFloors: map[domain.OperatingMode]domain.CapabilitySnapshot{
+			domain.ModeAttendedDev: domain.NewCapabilitySnapshot(domain.CapPostExitExport),
+		},
+	})
+	t.Cleanup(func() {
+		if err := st.Close(); err != nil {
+			t.Errorf("Close: %v", err)
+		}
+	})
+	item := reentryReadyItem(t, st, "run-external-timeline")
+	runID := *item.Subject.RunID
+	armActiveTestSchedules(t, st, item)
+	activateExternalTestProfile(t, st, activeResourceTestTime.Add(-time.Hour), externalTestMaintainer())
+	reconciler := externalReentryReconciler(st, staticReview(externalReentryActivity()))
+	reconcileClean(t, &reconciler, "first pass")
+	trigger := externalFindingByThread(t, runID, "review_comment/800400")
+	withdrawn := readActiveItem(t, st, item.ID)
+	if withdrawn.Conclusion == nil {
+		t.Fatal("the cycle withdrew the ready card without a conclusion")
+	}
+	pr := 450
+	want := []domain.TaskEvent{{
+		Kind: domain.TaskEventExternalReviewReentered, RecordedAt: withdrawn.Conclusion.ConcludedAt,
+		RunID: &runID, PRNumber: &pr,
+		ExternalReview: &domain.TaskEventExternalReview{
+			ItemID: item.ID, FindingID: trigger.ID, ReviewerLogin: externalTestMaintainerLogin,
+			Round: 2, HeadSHA: reentryTestHead,
+		},
+	}}
+	assertReentryEvents := func(step string) {
+		t.Helper()
+		var got []domain.TaskEvent
+		if err := st.Read(ctx, func(tx *store.ReadTx) error {
+			run, err := tx.GetRun(ctx, runID)
+			if err != nil {
+				return err
+			}
+			timeline, err := signet.ReadTaskTimeline(ctx, tx, run.TaskID, activeResourceTestTime)
+			if err != nil {
+				return err
+			}
+			for _, event := range timeline.Events {
+				if event.Kind == domain.TaskEventExternalReviewReentered {
+					got = append(got, event)
+				}
+			}
+			return nil
+		}); err != nil {
+			t.Fatalf("%s: %v", step, err)
+		}
+		if !reflect.DeepEqual(got, want) {
+			t.Fatalf("%s: re-entry events = %+v, want %+v", step, got, want)
+		}
+	}
+	assertReentryEvents("after the cycle started")
+	activateExternalTestProfile(t, st, activeResourceTestTime)
+	assertReentryEvents("after the reviewer left the profile")
+
+	// A card withdrawn before conclusions were recorded (re-entry predates
+	// them) has no instant to place the event at: it yields none, and the
+	// timeline still reads. The store writes no such row now, so the test
+	// strips the conclusion from the stored body.
+	db, err := sql.Open("sqlite", path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = db.Close() })
+	if _, err := db.ExecContext(ctx,
+		`UPDATE attention_items SET body = json_remove(body, '$.conclusion') WHERE id = ?`, item.ID); err != nil {
+		t.Fatal(err)
+	}
+	if readActiveItem(t, st, item.ID).Conclusion != nil {
+		t.Fatal("fixture left the conclusion in place")
+	}
+	want = nil
+	assertReentryEvents("after the conclusion was dropped")
 }

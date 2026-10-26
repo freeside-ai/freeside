@@ -25,12 +25,14 @@ func TestTaskTimelineEnums(t *testing.T) {
 
 func TestTaskEventDetailContract(t *testing.T) {
 	at := time.Date(2026, 9, 12, 12, 0, 0, 0, time.UTC)
+	externalReview := TaskEventExternalReview{ItemID: "ready", FindingID: "finding", ReviewerLogin: "octocat", Round: 2, HeadSHA: "head"}
 	fixtures := []TaskEvent{
 		{Kind: TaskEventCreated, RecordedAt: at},
 		{Kind: TaskEventCampaignAllocated, RecordedAt: at, CampaignID: ptr(CampaignID("campaign-1")), SpecificationRunID: ptr(RunID("spec-1"))},
 		{Kind: TaskEventSpecificationApproved, RecordedAt: at, CampaignID: ptr(CampaignID("campaign-1")), RunID: ptr(RunID("impl-1")), ApprovedSpecDigest: ptr(Digest("sha256:spec")), SpecificationRunID: ptr(RunID("spec-1"))},
 		{Kind: TaskEventPROpened, RecordedAt: at, RunID: ptr(RunID("impl-1")), PRNumber: ptr(42)},
 		{Kind: TaskEventPRMerged, RecordedAt: at, RunID: ptr(RunID("impl-1")), PRNumber: ptr(42), MergeCommitSHA: ptr("abc123")},
+		{Kind: TaskEventExternalReviewReentered, RecordedAt: at, RunID: ptr(RunID("impl-1")), PRNumber: ptr(42), ExternalReview: &externalReview},
 	}
 	for _, event := range fixtures {
 		t.Run(string(event.Kind), func(t *testing.T) {
@@ -46,6 +48,7 @@ func TestTaskEventDetailContract(t *testing.T) {
 				func(e *TaskEvent) { e.SpecificationRunID = toggled(e.SpecificationRunID, RunID("spec-1")) },
 				func(e *TaskEvent) { e.PRNumber = toggled(e.PRNumber, 42) },
 				func(e *TaskEvent) { e.MergeCommitSHA = toggled(e.MergeCommitSHA, "abc123") },
+				func(e *TaskEvent) { e.ExternalReview = toggled(e.ExternalReview, externalReview) },
 			} {
 				invalid := event
 				change(&invalid)
@@ -65,6 +68,23 @@ func TestTaskEventDetailContract(t *testing.T) {
 	} {
 		if err := invalid.Validate(); err == nil {
 			t.Errorf("invalid event %+v accepted", invalid)
+		}
+	}
+	// Every external review detail is required, and the login is the
+	// forge's: one a trust profile could not list is not one.
+	for name, change := range map[string]func(*TaskEventExternalReview){
+		"no item":           func(x *TaskEventExternalReview) { x.ItemID = "" },
+		"no finding":        func(x *TaskEventExternalReview) { x.FindingID = "" },
+		"no login":          func(x *TaskEventExternalReview) { x.ReviewerLogin = "" },
+		"spaced login":      func(x *TaskEventExternalReview) { x.ReviewerLogin = "octo cat" },
+		"no round":          func(x *TaskEventExternalReview) { x.Round = 0 },
+		"no published head": func(x *TaskEventExternalReview) { x.HeadSHA = "" },
+	} {
+		detail := externalReview
+		change(&detail)
+		invalid := TaskEvent{Kind: TaskEventExternalReviewReentered, RecordedAt: at, RunID: ptr(RunID("run-1")), PRNumber: ptr(42), ExternalReview: &detail}
+		if err := invalid.Validate(); !errors.Is(err, ErrTaskEventDetailMismatch) {
+			t.Errorf("%s: %v", name, err)
 		}
 	}
 }
@@ -97,7 +117,7 @@ func TestTaskHistoryEventDetails(t *testing.T) {
 		{Kind: TaskEventReviewFailed, RecordedAt: at, RunID: &run, Review: &failed},
 		{Kind: TaskEventVerificationRecorded, RecordedAt: at, RunID: &run, Verification: &TaskEventVerification{ItemID: "ready", Class: ReadinessReadyClean, HeadSHA: "head", BaseSHA: "base"}},
 	}
-	if len(fixtures)+5 != len(AllTaskEventKinds) {
+	if len(fixtures)+6 != len(AllTaskEventKinds) {
 		t.Fatal("new event kinds need detail fixtures")
 	}
 	for _, e := range fixtures {
@@ -124,6 +144,11 @@ func TestTaskHistoryEventDetails(t *testing.T) {
 			invalid.Verification = toggled(invalid.Verification, TaskEventVerification{})
 			if err := invalid.Validate(); err == nil {
 				t.Fatal("missing or unrelated verification accepted")
+			}
+			invalid = e
+			invalid.ExternalReview = toggled(invalid.ExternalReview, TaskEventExternalReview{})
+			if err := invalid.Validate(); err == nil {
+				t.Fatal("unrelated external review accepted")
 			}
 		})
 	}

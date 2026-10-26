@@ -3567,7 +3567,7 @@ public enum Components {
                 ])
             }
         }
-        /// A recorded fact and its instant, with kind-scoped details. task_created has no details. campaign_allocated requires campaign_id and specification_run_id. specification_approved also requires run_id (the initial implementation) and approved_spec_digest; its instant is that run's submission, committed with approval. Retries reuse approval and emit no new approval event. pr_opened requires run_id and pr_number and uses the daemon's PR binding instant. pr_merged also requires merge_commit_sha and uses the re-gated completion record's instant. task_started, task_completed and task_abandoned require the recorded run_id and retain campaign_id when the lifecycle fact has one. stop_requested, task_stopped and stop_failed have no details; request acceptance and confirmed stopping are distinct events, including for queued tasks with no run. run_milestone requires run_id and milestone, with matching run and timestamp. review_requested, review_completed and review_failed require run_id and review; outcome is present only for completed, failure only for failed. verification_recorded requires run_id and verification, referring to a dated readiness decision with detailed results. It never establishes current readiness. All other details are null. Events are observations, never authority.
+        /// A recorded fact and its instant, with kind-scoped details. task_created has no details. campaign_allocated requires campaign_id and specification_run_id. specification_approved also requires run_id (the initial implementation) and approved_spec_digest; its instant is that run's submission, committed with approval. Retries reuse approval and emit no new approval event. pr_opened requires run_id and pr_number and uses the daemon's PR binding instant. pr_merged also requires merge_commit_sha and uses the re-gated completion record's instant. task_started, task_completed and task_abandoned require the recorded run_id and retain campaign_id when the lifecycle fact has one. stop_requested, task_stopped and stop_failed have no details; request acceptance and confirmed stopping are distinct events, including for queued tasks with no run. run_milestone requires run_id and milestone, with matching run and timestamp. review_requested, review_completed and review_failed require run_id and review; outcome is present only for completed, failure only for failed. verification_recorded requires run_id and verification, referring to a dated readiness decision with detailed results. It never establishes current readiness. external_review_reentered requires run_id, pr_number and external_review: an admitted external reviewer's finding withdrew the run's ready card and opened another review round. Its instant is the card's conclusion. It reads the recorded finding, not current admission, so a later trust-profile change does not hide it. All other details are null. Events are observations, never authority.
         ///
         ///
         /// - Remark: Generated from `#/components/schemas/TaskEvent`.
@@ -3632,6 +3632,26 @@ public enum Components {
             }
             /// - Remark: Generated from `#/components/schemas/TaskEvent/verification`.
             public var verification: Components.Schemas.TaskEvent.verificationPayload?
+            /// - Remark: Generated from `#/components/schemas/TaskEvent/external_review`.
+            public struct external_reviewPayload: Codable, Hashable, Sendable {
+                /// - Remark: Generated from `#/components/schemas/TaskEvent/external_review/value1`.
+                public var value1: Components.Schemas.TaskEventExternalReview
+                /// Creates a new `external_reviewPayload`.
+                ///
+                /// - Parameters:
+                ///   - value1:
+                public init(value1: Components.Schemas.TaskEventExternalReview) {
+                    self.value1 = value1
+                }
+                public init(from decoder: any Swift.Decoder) throws {
+                    self.value1 = try .init(from: decoder)
+                }
+                public func encode(to encoder: any Swift.Encoder) throws {
+                    try self.value1.encode(to: encoder)
+                }
+            }
+            /// - Remark: Generated from `#/components/schemas/TaskEvent/external_review`.
+            public var external_review: Components.Schemas.TaskEvent.external_reviewPayload?
             /// - Remark: Generated from `#/components/schemas/TaskEvent/kind`.
             public var kind: Components.Schemas.TaskEventKind
             /// - Remark: Generated from `#/components/schemas/TaskEvent/recorded_at`.
@@ -3672,6 +3692,7 @@ public enum Components {
             ///   - milestone:
             ///   - review:
             ///   - verification:
+            ///   - external_review:
             ///   - kind:
             ///   - recorded_at:
             ///   - campaign_id:
@@ -3684,6 +3705,7 @@ public enum Components {
                 milestone: Components.Schemas.TaskEvent.milestonePayload? = nil,
                 review: Components.Schemas.TaskEvent.reviewPayload? = nil,
                 verification: Components.Schemas.TaskEvent.verificationPayload? = nil,
+                external_review: Components.Schemas.TaskEvent.external_reviewPayload? = nil,
                 kind: Components.Schemas.TaskEventKind,
                 recorded_at: Foundation.Date,
                 campaign_id: Swift.String? = nil,
@@ -3696,6 +3718,7 @@ public enum Components {
                 self.milestone = milestone
                 self.review = review
                 self.verification = verification
+                self.external_review = external_review
                 self.kind = kind
                 self.recorded_at = recorded_at
                 self.campaign_id = campaign_id
@@ -3709,6 +3732,7 @@ public enum Components {
                 case milestone
                 case review
                 case verification
+                case external_review
                 case kind
                 case recorded_at
                 case campaign_id
@@ -3731,6 +3755,10 @@ public enum Components {
                 self.verification = try container.decodeIfPresent(
                     Components.Schemas.TaskEvent.verificationPayload.self,
                     forKey: .verification
+                )
+                self.external_review = try container.decodeIfPresent(
+                    Components.Schemas.TaskEvent.external_reviewPayload.self,
+                    forKey: .external_review
                 )
                 self.kind = try container.decode(
                     Components.Schemas.TaskEventKind.self,
@@ -3768,6 +3796,7 @@ public enum Components {
                     "milestone",
                     "review",
                     "verification",
+                    "external_review",
                     "kind",
                     "recorded_at",
                     "campaign_id",
@@ -3948,6 +3977,80 @@ public enum Components {
                 ])
             }
         }
+        /// An external review re-entry: the ready card it withdrew, the admitted finding that started the cycle with its reviewer's forge login and the published head it was left on, and the review round the cycle opens.
+        ///
+        ///
+        /// - Remark: Generated from `#/components/schemas/TaskEventExternalReview`.
+        public struct TaskEventExternalReview: Codable, Hashable, Sendable {
+            /// - Remark: Generated from `#/components/schemas/TaskEventExternalReview/item_id`.
+            public var item_id: Swift.String
+            /// - Remark: Generated from `#/components/schemas/TaskEventExternalReview/finding_id`.
+            public var finding_id: Swift.String
+            /// - Remark: Generated from `#/components/schemas/TaskEventExternalReview/reviewer_login`.
+            public var reviewer_login: Swift.String
+            /// - Remark: Generated from `#/components/schemas/TaskEventExternalReview/round`.
+            public var round: Swift.Int
+            /// - Remark: Generated from `#/components/schemas/TaskEventExternalReview/head_sha`.
+            public var head_sha: Swift.String
+            /// Creates a new `TaskEventExternalReview`.
+            ///
+            /// - Parameters:
+            ///   - item_id:
+            ///   - finding_id:
+            ///   - reviewer_login:
+            ///   - round:
+            ///   - head_sha:
+            public init(
+                item_id: Swift.String,
+                finding_id: Swift.String,
+                reviewer_login: Swift.String,
+                round: Swift.Int,
+                head_sha: Swift.String
+            ) {
+                self.item_id = item_id
+                self.finding_id = finding_id
+                self.reviewer_login = reviewer_login
+                self.round = round
+                self.head_sha = head_sha
+            }
+            public enum CodingKeys: String, CodingKey {
+                case item_id
+                case finding_id
+                case reviewer_login
+                case round
+                case head_sha
+            }
+            public init(from decoder: any Swift.Decoder) throws {
+                let container = try decoder.container(keyedBy: CodingKeys.self)
+                self.item_id = try container.decode(
+                    Swift.String.self,
+                    forKey: .item_id
+                )
+                self.finding_id = try container.decode(
+                    Swift.String.self,
+                    forKey: .finding_id
+                )
+                self.reviewer_login = try container.decode(
+                    Swift.String.self,
+                    forKey: .reviewer_login
+                )
+                self.round = try container.decode(
+                    Swift.Int.self,
+                    forKey: .round
+                )
+                self.head_sha = try container.decode(
+                    Swift.String.self,
+                    forKey: .head_sha
+                )
+                try decoder.ensureNoAdditionalProperties(knownKeys: [
+                    "item_id",
+                    "finding_id",
+                    "reviewer_login",
+                    "round",
+                    "head_sha"
+                ])
+            }
+        }
         /// Closed vocabulary of recorded task-wide milestone history.
         ///
         /// - Remark: Generated from `#/components/schemas/TaskEventKind`.
@@ -3968,6 +4071,7 @@ public enum Components {
             case specification_approved = "specification_approved"
             case pr_opened = "pr_opened"
             case pr_merged = "pr_merged"
+            case external_review_reentered = "external_review_reentered"
         }
         /// The run's role in its production attempt.
         ///

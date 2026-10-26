@@ -358,6 +358,22 @@ import Testing
                 ] + campaign + campaign)
     }
 
+    @Test func anExternalReviewReEntryStartsReviewUnderItsCause() {
+        // The withdrawn ready card's cause names the reviewer and the pull
+        // request, and starts Review before the round's request does.
+        let published = lines(TaskHistoryFixtures.history(.published)).map {
+            $0.replacingOccurrences(of: " *", with: "")
+        }
+        #expect(
+            lines(TaskHistoryFixtures.externallyReviewed(requested: false))
+                == ["External review by @maintainer on #110 · Round 2 *", "> Review started *"] + published)
+        #expect(
+            lines(TaskHistoryFixtures.externallyReviewed(requested: true))
+                == [
+                    "Round 2 requested *", "External review by @maintainer on #110 · Round 2", "> Review started",
+                ] + published)
+    }
+
     @Test func aRunWithNoRoleKeepsItsLabelsAndDrawsNoStart() {
         // Its review is still a stage the events name.
         #expect(

@@ -88,6 +88,18 @@ func taskTimelineFixtureInputs() (domain.Task, []taskTimelineInput) {
 			input.observation.Milestones = append(input.observation.Milestones,
 				domain.RunMilestone{RunID: seed.run, Kind: domain.MilestonePublicationReady, InvocationID: &inv, RecordedAt: input.prBinding.RecordedAt},
 				domain.RunMilestone{RunID: seed.run, Kind: domain.MilestoneWorkUnitCompleted, InvocationID: &inv, RecordedAt: input.facts.completion.RecordedAt})
+			// An admitted external review withdrew the published card and
+			// opened round 2 before the PR merged.
+			input.externalReentries = []taskTimelineExternalReentry{{
+				successor: domain.PublicationSuccessor{RunID: seed.run, PredecessorItemID: "ready-run-retry-1", ReviewRound: 2},
+				predecessor: domain.AttentionItem{ID: "ready-run-retry-1", Conclusion: &domain.Conclusion{
+					Cause: domain.ConcludedBySupersession, ConcludedAt: at.Add(225 * time.Minute),
+				}},
+				prNumber: 73,
+				finding: domain.Finding{ID: "finding-external-1", RunID: seed.run, External: &domain.ExternalFindingProvenance{
+					ReviewerLogin: "octocat", HeadSHA: strings.Repeat("b", 40),
+				}},
+			}}
 		}
 		inputs = append(inputs, input)
 	}

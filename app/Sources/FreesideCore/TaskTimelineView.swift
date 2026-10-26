@@ -759,7 +759,9 @@ enum TaskTimelinePresentation {
                     pass = results[runID, default: 0] + 1
                     results[runID] = pass
                 }
-            case (.review_requested, _):
+            case (.review_requested, _), (.external_review_reentered, _):
+                // An external review re-entry opens the round its request
+                // later names, so the withdrawn ready card has its cause.
                 let next = StagePosition(stage: .review, campaignID: source?.campaignID)
                 if next != position { start = .review }
                 position = next
@@ -855,6 +857,13 @@ enum TaskTimelinePresentation {
             if milestone.kind == .terminal_recorded, let word = terminalWord(milestone) {
                 return "Attempt \(attempt)" + (pass > 1 ? ", pass \(pass)" : "") + " \(word)"
             }
+        }
+        // The reviewer by login and the pull request by number: the two
+        // names a reader can find on the forge.
+        if let external = event.external_review?.value1, let number = event.pr_number,
+            event.kind == .external_review_reentered
+        {
+            return "External review by @\(external.reviewer_login) on #\(number) · Round \(external.round)"
         }
         if let review = event.review?.value1 {
             switch event.kind {
@@ -1254,6 +1263,7 @@ enum TaskTimelinePresentation {
         case .specification_approved: "Specification approved"
         case .pr_opened: "PR opened"
         case .pr_merged: "PR merged"
+        case .external_review_reentered: "External review re-entered"
         }
     }
 

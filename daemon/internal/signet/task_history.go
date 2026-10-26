@@ -83,6 +83,19 @@ func taskHistoryEvents(task domain.Task, inputs []taskTimelineInput, sections []
 				Verification: &domain.TaskEventVerification{ItemID: item.ID, Class: item.Readiness.Class, HeadSHA: item.ReadinessDetail.CandidateHead, BaseSHA: item.ReadinessDetail.Base.BaseSHA},
 			})
 		}
+		// The withdrawn card's conclusion is the instant the re-entry was
+		// recorded: the same transaction sealed the cycle's authority.
+		for _, reentry := range input.externalReentries {
+			events = append(events, domain.TaskEvent{
+				Kind: domain.TaskEventExternalReviewReentered, RecordedAt: reentry.predecessor.Conclusion.ConcludedAt,
+				RunID: &input.run.ID, PRNumber: &reentry.prNumber,
+				ExternalReview: &domain.TaskEventExternalReview{
+					ItemID: reentry.predecessor.ID, FindingID: reentry.finding.ID,
+					ReviewerLogin: reentry.finding.External.ReviewerLogin,
+					Round:         reentry.successor.ReviewRound, HeadSHA: reentry.finding.External.HeadSHA,
+				},
+			})
+		}
 	}
 	if err := orderTaskEvents(events); err != nil {
 		return nil, err
@@ -111,6 +124,9 @@ func historyEventSource(event domain.TaskEvent) string {
 	}
 	if event.Verification != nil {
 		source += ":" + string(event.Verification.ItemID)
+	}
+	if event.ExternalReview != nil {
+		source += ":" + string(event.ExternalReview.ItemID) + ":" + string(event.ExternalReview.FindingID)
 	}
 	return source
 }

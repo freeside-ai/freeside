@@ -26,6 +26,10 @@ const (
 	TaskEventSpecificationApproved TaskEventKind = "specification_approved"
 	TaskEventPROpened              TaskEventKind = "pr_opened"
 	TaskEventPRMerged              TaskEventKind = "pr_merged"
+	// TaskEventExternalReviewReentered marks an admitted external review
+	// sending a published run back to review: the ready card it withdrew and
+	// the finding that started the cycle.
+	TaskEventExternalReviewReentered TaskEventKind = "external_review_reentered"
 )
 
 var AllTaskEventKinds = []TaskEventKind{
@@ -33,7 +37,7 @@ var AllTaskEventKinds = []TaskEventKind{
 	TaskEventStopRequested, TaskEventStopped, TaskEventStopFailed, TaskEventRunMilestone,
 	TaskEventReviewRequested, TaskEventReviewCompleted, TaskEventReviewFailed, TaskEventVerificationRecorded,
 	TaskEventCampaignAllocated, TaskEventSpecificationApproved,
-	TaskEventPROpened, TaskEventPRMerged,
+	TaskEventPROpened, TaskEventPRMerged, TaskEventExternalReviewReentered,
 }
 
 func (k TaskEventKind) valid() bool {
@@ -42,7 +46,7 @@ func (k TaskEventKind) valid() bool {
 		TaskEventStopRequested, TaskEventStopped, TaskEventStopFailed, TaskEventRunMilestone,
 		TaskEventReviewRequested, TaskEventReviewCompleted, TaskEventReviewFailed, TaskEventVerificationRecorded,
 		TaskEventCampaignAllocated, TaskEventSpecificationApproved,
-		TaskEventPROpened, TaskEventPRMerged:
+		TaskEventPROpened, TaskEventPRMerged, TaskEventExternalReviewReentered:
 		return true
 	default:
 		return false
@@ -89,21 +93,35 @@ type TaskEventVerification struct {
 	BaseSHA string                `json:"base_sha"`
 }
 
+// TaskEventExternalReview names what an external review re-entry recorded:
+// the ready card it superseded, the admitted finding that started the cycle,
+// that finding's reviewer login and published head, and the review round the
+// cycle opens. The login is the forge's, never an account or device ID.
+type TaskEventExternalReview struct {
+	ItemID        ItemID    `json:"item_id"`
+	FindingID     FindingID `json:"finding_id"`
+	ReviewerLogin string    `json:"reviewer_login"`
+	Round         int       `json:"round"`
+	HeadSHA       string    `json:"head_sha"`
+}
+
 // TaskEvent is a kind-scoped fact with explicit-null details. Campaign
 // allocation names its specification run; approval also names the bound
-// implementation run. PR events name their run, including legacy runs.
+// implementation run. PR events name their run, including legacy runs, and
+// an external review re-entry names its run and pull request.
 type TaskEvent struct {
-	Milestone          *RunMilestone          `json:"milestone"`
-	Review             *TaskEventReview       `json:"review"`
-	Verification       *TaskEventVerification `json:"verification"`
-	Kind               TaskEventKind          `json:"kind"`
-	RecordedAt         time.Time              `json:"recorded_at"`
-	CampaignID         *CampaignID            `json:"campaign_id"`
-	RunID              *RunID                 `json:"run_id"`
-	ApprovedSpecDigest *Digest                `json:"approved_spec_digest"`
-	SpecificationRunID *RunID                 `json:"specification_run_id"`
-	PRNumber           *int                   `json:"pr_number"`
-	MergeCommitSHA     *string                `json:"merge_commit_sha"`
+	Milestone          *RunMilestone            `json:"milestone"`
+	Review             *TaskEventReview         `json:"review"`
+	Verification       *TaskEventVerification   `json:"verification"`
+	ExternalReview     *TaskEventExternalReview `json:"external_review"`
+	Kind               TaskEventKind            `json:"kind"`
+	RecordedAt         time.Time                `json:"recorded_at"`
+	CampaignID         *CampaignID              `json:"campaign_id"`
+	RunID              *RunID                   `json:"run_id"`
+	ApprovedSpecDigest *Digest                  `json:"approved_spec_digest"`
+	SpecificationRunID *RunID                   `json:"specification_run_id"`
+	PRNumber           *int                     `json:"pr_number"`
+	MergeCommitSHA     *string                  `json:"merge_commit_sha"`
 }
 
 func (e TaskEvent) Validate() error {
@@ -134,7 +152,8 @@ func (e TaskEvent) Validate() error {
 	}
 	if (e.Milestone != nil) != (e.Kind == TaskEventRunMilestone) ||
 		(e.Review != nil) != (e.Kind == TaskEventReviewRequested || e.Kind == TaskEventReviewCompleted || e.Kind == TaskEventReviewFailed) ||
-		(e.Verification != nil) != (e.Kind == TaskEventVerificationRecorded) {
+		(e.Verification != nil) != (e.Kind == TaskEventVerificationRecorded) ||
+		(e.ExternalReview != nil) != (e.Kind == TaskEventExternalReviewReentered) {
 		return ErrTaskEventDetailMismatch
 	}
 	switch e.Kind {
@@ -179,6 +198,13 @@ func (e TaskEvent) Validate() error {
 		return check(false, true, false, false, true, false)
 	case TaskEventPRMerged:
 		return check(false, true, false, false, true, true)
+	case TaskEventExternalReviewReentered:
+		x := e.ExternalReview
+		if x.ItemID == "" || x.FindingID == "" || x.Round < 1 || x.HeadSHA == "" ||
+			validateExternalReviewerLogin(x.ReviewerLogin) != nil {
+			return ErrTaskEventDetailMismatch
+		}
+		return check(false, true, false, false, true, false)
 	}
 	return ErrInvalidTaskEventKind
 }

@@ -43,12 +43,23 @@ type TaskTimelineRun struct {
 }
 
 type taskTimelineInput struct {
-	run         domain.Run
-	observation domain.RunObservation
-	attempt     *domain.ProductionAttempt
-	facts       runProjectionFacts
-	readiness   []domain.AttentionItem
-	prBinding   *domain.WorkUnitPRBinding
+	run               domain.Run
+	observation       domain.RunObservation
+	attempt           *domain.ProductionAttempt
+	facts             runProjectionFacts
+	readiness         []domain.AttentionItem
+	externalReentries []taskTimelineExternalReentry
+	prBinding         *domain.WorkUnitPRBinding
+}
+
+// taskTimelineExternalReentry is one external review re-entry's recorded
+// authority: the successor that sealed it, the ready card it withdrew, that
+// card's pull request, and the finding that started the cycle.
+type taskTimelineExternalReentry struct {
+	successor   domain.PublicationSuccessor
+	predecessor domain.AttentionItem
+	prNumber    int
+	finding     domain.Finding
 }
 
 // GetTaskTimeline authenticates every run and its observations under one
@@ -176,6 +187,10 @@ func loadedTaskTimeline(
 			}
 			input.readiness = append(input.readiness, item)
 		}
+		input.externalReentries, err = taskTimelineExternalReentries(ctx, tx, runID, items)
+		if err != nil {
+			return TaskTimeline{}, asRunObservationIntegrityError(err)
+		}
 		if run.Value.CampaignID != "" {
 			attempt, err := tx.GetProductionAttempt(ctx, run.Value.CampaignID, run.Value.AttemptNumber)
 			if err != nil {
@@ -226,6 +241,62 @@ func taskTimelineReadinessBinding(ctx context.Context, tx *store.ReadTx, runID d
 		}
 	}
 	return false, domain.ErrParentKeyMismatch
+}
+
+// taskTimelineExternalReentries reads every external review re-entry on the
+// run from the authority StartExternalReviewReentry sealed. The finding is
+// read as recorded, not re-gated against the current trust profile: the
+// event is history, and admission gated the cycle when it started. A card
+// concluded before conclusions were recorded has no instant to place the
+// event at, so it yields none, as legacy readiness records yield none.
+func taskTimelineExternalReentries(
+	ctx context.Context, tx *store.ReadTx, runID domain.RunID, items []store.Snapshotted[domain.AttentionItem],
+) ([]taskTimelineExternalReentry, error) {
+	chain, err := tx.PublicationSuccessorChain(ctx, runID)
+	if err != nil {
+		return nil, err
+	}
+	var out []taskTimelineExternalReentry
+	for _, successor := range chain {
+		if successor.EffectiveOrigin() != domain.PublicationSuccessorExternalReview {
+			continue
+		}
+		at := slices.IndexFunc(items, func(item store.Snapshotted[domain.AttentionItem]) bool {
+			return item.Value.ID == successor.PredecessorItemID
+		})
+		if at < 0 {
+			return nil, fmt.Errorf("external review re-entry withdrew missing item %s: %w", successor.PredecessorItemID, domain.ErrParentKeyMismatch)
+		}
+		predecessor := items[at].Value
+		if predecessor.Type != domain.AttentionReadyForFinalReview || predecessor.Subject.RunID == nil || *predecessor.Subject.RunID != runID {
+			return nil, fmt.Errorf("external review re-entry predecessor %s: %w", predecessor.ID, domain.ErrParentKeyMismatch)
+		}
+		if predecessor.Conclusion == nil {
+			continue
+		}
+		if predecessor.Conclusion.Cause != domain.ConcludedBySupersession {
+			return nil, fmt.Errorf("external review re-entry predecessor %s concluded by %s: %w",
+				predecessor.ID, predecessor.Conclusion.Cause, domain.ErrParentKeyMismatch)
+		}
+		finding, err := tx.GetFinding(ctx, successor.ExternalFindingID)
+		if err != nil {
+			return nil, err
+		}
+		if finding.External == nil || finding.RunID != runID {
+			return nil, fmt.Errorf("external review re-entry finding %s: %w", finding.ID, domain.ErrParentKeyMismatch)
+		}
+		binding, err := tx.GetReadyItemPRBinding(ctx, predecessor.ID)
+		if err != nil {
+			return nil, err
+		}
+		if binding.RunID != runID {
+			return nil, fmt.Errorf("external review re-entry predecessor %s binding: %w", predecessor.ID, domain.ErrParentKeyMismatch)
+		}
+		out = append(out, taskTimelineExternalReentry{
+			successor: successor, predecessor: predecessor, prNumber: binding.PRNumber, finding: finding,
+		})
+	}
+	return out, nil
 }
 
 func taskTimelinePRBinding(ctx context.Context, tx *store.ReadTx, runID domain.RunID) (*domain.WorkUnitPRBinding, error) {
