@@ -466,6 +466,11 @@ failure-specific, read from recorded facts:
 - An expiry or revocation needs an enrollment with a valid generation.
 - A capacity failure needs a different service route.
 
+A routing policy's fallback runs before the card (Section [5.4](#54-credential-modes-egress-profiles-and-concurrency), routing
+policy; revision 99): a quota failure on a pool whose policy names another
+agent with allowance for the role's model is retried there as a recorded
+selection, and the card is raised only when the policy has nowhere to route.
+
 Wait leaves the task parked with the same card until the operator returns to it.
 The offer is stated once here and applies on whichever card surfaces such a
 failure, including a review-side quota or expiry failure; it never widens a
@@ -679,7 +684,7 @@ GitHub  <── reconciliation and publication ──>  freesided
 | **Scheduler** | Owns the closed union of durable schedule kinds, fire-time validation, and transactional redelivery (Section [5.16](#516-the-durable-scheduler)). |
 | **signet** | Owns AttentionItems, deliveries, conversations, synchronization, device pairing, and ntfy integration. |
 | **Research fetcher** | Retrieves immutable, digest-addressed research artifacts for agents. |
-| **StageDriver** | Runs bounded local agent batch jobs: Claude in 1A, joined by Codex in 1B (Section [11](#11-roadmap-build-order-and-coordination)). A permanent fake supports deterministic tests. |
+| **StageDriver** | Runs bounded local agent batch jobs: Claude in Phase 1; Codex joins in Phase 2 (Section [11](#11-roadmap-build-order-and-coordination); revision 99). A permanent fake supports deterministic tests. |
 | **ReviewSource** | Runs the Freeside-invoked review stage; the first production binding is a local Codex invocation (Section [7](#7-review-policy)). A permanent fake supports deterministic tests. |
 | **Finding classifier** | Adds versioned annotations to immutable raw review findings. |
 | **ward** | Provides runner capability classes, workspace-handoff capabilities, per-stage egress, operating modes, and conformance checks. |
@@ -889,10 +894,11 @@ accepted result. The workflow never advances twice.
 
 Phase 1 uses:
 
-- one harness adapter, **Claude Code**, in 1A. A second, the **Codex
-  CLI**, joins in 1B as an execution capacity hedge (Section [11](#11-roadmap-build-order-and-coordination)); its
-  pre-adoption gates (#401) closed on 2026-08-02. Further adapters (pi first)
-  follow as consumers of the same admitted-agent contract (Section [5.4](#54-credential-modes-egress-profiles-and-concurrency));
+- one harness adapter, **Claude Code**, in Phase 1. A second, the **Codex
+  CLI**, was to join in 1B as an execution capacity hedge; revision 99 moved
+  it to Phase 2 (Section [11](#11-roadmap-build-order-and-coordination)), and its pre-adoption gates (#401,
+  closed 2026-08-02) still stand. Further adapters (pi first) follow as
+  consumers of the same admitted-agent contract (Section [5.4](#54-credential-modes-egress-profiles-and-concurrency));
 - one production review source per deployment, a **Freeside-invoked local
   review** whose harness the reviewer lineup line selects: the Codex review
   binding, or since #397 a Claude review on the Claude ward adapter
@@ -1390,6 +1396,31 @@ the one its lineup line names.
   the researcher: a failed research request fails safe and blocks no stage
   (Roles and Launch Shapes), so there is no blocked attempt for the card to
   retry and only the lineup picks that agent.
+- **A routing policy** (revision 99) is the standing rule for which of the
+  agents the lineup admits for a role a task line names when the operator
+  has not chosen one. It is an operator setting of the deployment, not a
+  lineup line: it ranks or weights agents the lineup already carries for the
+  role and never adds one. Its modes are a priority order with fallback, a
+  percentage split, and round robin. Priority with fallback is the default,
+  and the one that different reset dates make useful: the first agent in the
+  order takes every task until its pool's window for the role's model is
+  marked exhausted, so one subscription empties before its reset while the
+  other keeps its allowance, and the next agent in the order takes over
+  until that window resets. A window is marked exhausted by a provider
+  refusal (a quota failure, Section [4](#4-the-attention-model)) or by a usage observation
+  the collector reports as exhausted (usage observation, below), and the
+  mark clears at the window's reset time or on a fresh reading that says
+  otherwise. The router applies the policy at a role's first admission on a
+  task and writes the task line; later admissions of that role read the
+  line, so a task stays on its agent until a fallback, the alternate-agent
+  card, or an operator's line change supersedes it. Every selection the
+  router writes cites the policy revision, the mark or reading it acted on,
+  and the agent it passed over, and shows on the task's timeline and cards.
+  An authenticated operator sets the policy from a client or the CLI, and
+  each change is a new revision that supersedes the last and never edits it,
+  as a task line is. The policy is an operator setting rather than
+  control-plane configuration for the reason a task line is: it chooses
+  among credentials the committed lineup already approved and approves none.
 
 The lines:
 
@@ -1860,15 +1891,20 @@ consumption (what one invocation drew, Section [8](#8-observability-and-optimiza
 Collection and refresh are operations (Section [10](#10-operations-and-onboarding)); delivery to the clients
 follows Section [5.14](#514-client-synchronization-and-conversations).
 
-A usage observation is observation under this subsection's exclusion list.
-It informs the account usage view and the facts shown beside the agent
-choices in the clients, and it may inform a proposal; the operator's recorded
-lineup line or task line is what admits an agent and its credential. No
-reading selects, reorders, or withholds an agent, and admission never reads
-one. A selection whose pool a reading shows as exhausted still admits; when
-the provider then refuses the run, that attempt fails as a provider quota
-failure and recovers through the alternate-agent retry card (Section [4](#4-the-attention-model))
-with the latest reading shown beside it, never through a silent switch.
+A usage observation is observation under this subsection's exclusion list,
+with one reader above admission: the router (routing policy, above). It
+informs the account usage view and the facts shown beside the agent choices
+in the clients, it may inform a proposal, and from revision 99 it may mark a
+pool's window exhausted for the router. The operator's recorded lineup line
+or task line is still what admits an agent and its credential, and admission
+never reads a reading: the router reads readings and marks and writes the
+task line, so every selection a reading influenced is a recorded fact that
+names the reading, never a silent switch. A task line the operator set by
+hand admits whatever its pool's reading shows; when the provider then
+refuses the run, that attempt fails as a provider quota failure, the router
+applies the policy's fallback when it has one, and otherwise the
+alternate-agent retry card (Section [4](#4-the-attention-model)) offers the choice with the
+latest reading shown beside it.
 
 ### 5.5 The CI Trust Boundary
 
@@ -5116,7 +5152,8 @@ The review stage was built in an order that preserved independence
 runs with Claude implementing and Codex reviewing. The #397 Claude ReviewSource
 promotion was next, gated on shadow-arm evidence; the owner authorized it
 instead on 2026-10-21 (revision 92), so it starts by fiat and waits on no
-evidence. #408 Codex execution routing still follows #397, so a Claude reviewer
+evidence. #408 Codex execution routing moved to Phase 2 with the Codex driver
+(revision 99) and still follows #397 when it returns, so a Claude reviewer
 is selectable before Codex-implements plus Codex-reviews can be configured. The
 first production Codex review pass is also gated on the applicable subset of
 the Codex pre-adoption probes (#401: credential handling, vendor-instruction
@@ -5128,7 +5165,7 @@ Routing comparisons use accumulated traces, including the 1B Claude shadow
 arm. Shadow findings are recorded but never routed, and comparisons are
 adjudicated blind where practical.
 
-Scheduled Codex execution (Section [11](#11-roadmap-build-order-and-coordination)) will make Codex-executes plus
+Codex execution, when Phase 2 schedules it (Section [11](#11-roadmap-build-order-and-coordination)), will make Codex-executes plus
 Codex-reviews a same-vendor pairing. That weakens the independence this section
 prefers, which is why the selectable Claude ReviewSource (#397) lands first.
 With it, a Claude writer may be paired with a Claude reviewer on the same
@@ -5707,10 +5744,12 @@ records never see, and once its reset time passes it reads as stale, not
 replenished, until a fresh observation lands (Section [10](#10-operations-and-onboarding)). Telemetry joins
 the two by pool and time; it never derives one from the other.
 
-Routing policy sits above the harness. Task class, quality, latency, usage, and
-cost inform it, all drawn from these records. The provider balancing I do by
-hand today, including usage-limit-driven switching, is attention work: until
-routing absorbs it, it counts in the attention accounting.
+Routing policy sits above the harness. Usage-limit-driven switching between
+subscriptions is the first routing it absorbs (Section [5.4](#54-credential-modes-egress-profiles-and-concurrency), routing
+policy; revision 99): the provider balancing I did by hand was attention
+work, and it still counts in the attention accounting wherever the policy
+has nowhere to route. Routing on task class, quality, latency, and cost waits
+for Phase 3 and draws on the same records.
 
 ## 9. Comprehension
 
@@ -6452,7 +6491,9 @@ digest-bound trust profile. They are not prose exceptions.
 
 **Freeside follows gh-imgup (revision 92).** After the first completed
 unattended run on gh-imgup (the wave 8 exit proof), Freeside is onboarded as a
-managed repository for its `daemon/`, `api/`, `scripts/`, and `docs/` paths.
+managed repository: `daemon/` first, as a wave 9 unit whose exit proof is an
+unattended run on a Freeside issue (revision 99), then `api/`, `scripts/`,
+and `docs/` as the image's baked recipe comes to verify each networkless.
 Control-plane paths stay operator-authored, including those inside the
 onboarded directories (verification recipes such as `scripts/check.sh`, and
 the materiality rules in this plan): the accepted hot spot in Section
@@ -6608,14 +6649,18 @@ Phase 1B adds:
 - provenance-gated EvidencePublisher;
 - `max_parallel_executions` per usage pool, visible to scheduling
   (revision 72);
-- the Codex execution driver, an execution capacity hedge against
-  single-provider stalls (Section [14](#14-risks)). The `agent-codex` agent base, the project
-  images the reusable builder derives from it (Section [5.7](#57-the-ward-runners-handoff-gate-and-operating-modes)), ward's second
-  vendor topology, and the Codex adapter registration land as separate follow-on
-  units behind the admitted-agent contract (Section [5.4](#54-credential-modes-egress-profiles-and-concurrency)). They are sequenced
-  after the 1A.2 exit and behind the #401 pre-adoption gates, closed
-  2026-08-02. Selection is a lineup line or a task line (revision 73), never
-  silent; and
+- two Claude subscriptions as the execution capacity, routed by an
+  operator-set policy (Section [5.4](#54-credential-modes-egress-profiles-and-concurrency), routing policy; revision 99): the
+  usage observation per pool and window, the router above admission, the
+  routing policy as an in-app operator setting, and the account usage view
+  on Mac and iPhone. The Codex execution driver, the hedge against
+  single-provider stalls (Section [14](#14-risks)), moves to Phase 2 with the
+  `agent-codex` agent base, the project images the reusable builder derives
+  from it (Section [5.7](#57-the-ward-runners-handoff-gate-and-operating-modes)), ward's second vendor topology, and the Codex
+  adapter registration, still behind the admitted-agent contract (Section
+  [5.4](#54-credential-modes-egress-profiles-and-concurrency)) and the #401 pre-adoption gates, closed 2026-08-02. Selection
+  is a lineup line, a task line, or a routing policy's recorded choice
+  (revisions 73 and 99), never silent; and
 - the task timeline screen, with each run's timeline beneath it.
 
 Precondition: the verified 1A exit. 1B proceeds in three internal exits.
@@ -6642,9 +6687,10 @@ close of wave 4 (this section's coordination table).
 
 #### 1B.1: Decision, Operational, and Provider Closure
 
-1B.1 spans waves 7 through 10 of this section's coordination table, the way 1B.0
-spanned waves 3 through 6. Each wave proves one outcome and ends with its own
-audit. The internal exit is evaluated once all four have closed.
+1B.1 spans waves 7 through 9 of this section's coordination table, the way 1B.0
+spanned waves 3 through 6 (wave 10 folded into wave 9, revision 99). Each wave
+proves one outcome and ends with its own audit. The internal exit is evaluated
+once all three have closed.
 
 - **The decision surface closes (wave 7).** This wave delivers the revision-40
   attention-presentation contracts, their daemon fact producers, and client
@@ -6657,15 +6703,15 @@ audit. The internal exit is evaluated once all four have closed.
   [5.12](#512-workflow-definition-initiators-and-artifacts)), the external daemon-liveness probe (Section [5.2](#52-the-daemon-and-its-supervisor)), held-work and
   stopped-operation signals, the registry egress profile and the policy-gated
   image rebuild, and re-entry of published-PR activity.
-- **Providers close (wave 9).** This wave delivers one agent vocabulary across
-  execution, review, and daemon judgment (Section [5.4](#54-credential-modes-egress-profiles-and-concurrency)); the Codex execution
-  driver and its enrollment cutover; and pi specification.
-- **Subscription operations close (wave 10).** This wave delivers
-  subscription usage visibility (Sections [5.4](#54-credential-modes-egress-profiles-and-concurrency), [8](#8-observability-and-optimization-telemetry), and [10](#10-operations-and-onboarding)): usage
-  observations per pool and window, their collection and refresh, the account
-  usage view on Mac and iPhone, and the same facts beside the agent choices
-  the wave-9 task lines introduced, so the operator sees which identity has
-  allowance and chooses it explicitly (revision 77).
+- **Claude capacity closes (wave 9).** This wave delivers one agent
+  vocabulary across execution, review, and daemon judgment (Section [5.4](#54-credential-modes-egress-profiles-and-concurrency));
+  routing between two Claude subscriptions by an operator-set policy, with
+  usage observations per pool and window, their collection and refresh, and
+  the account usage view on Mac and iPhone (Sections [5.4](#54-credential-modes-egress-profiles-and-concurrency), [8](#8-observability-and-optimization-telemetry), and
+  [10](#10-operations-and-onboarding)), so the operator sees how full each subscription is and the
+  policy empties one before its reset; and Freeside onboarded as a managed
+  repository for `daemon/`. The Codex execution driver and pi moved to
+  Phase 2 (revision 99).
 
 #### 1B.2: The Initiative View
 
@@ -6678,12 +6724,15 @@ view, and this section's former Phase 3 placement for the initiative view.
 operation keeps working as dependencies and the daemon change. This extends
 1B's scope by owner decision (revision 98).
 
-Clients don't edit settings directly. Today every configuration change passes
-Section [5.8](#58-control-plane-trust)'s control-plane gate through an operator-authored PR or, for
-recurring preferences, the Section [4](#4-the-attention-model) policy-proposal path. When deferred
-settings surfaces ship, a configuration-change proposal kind joins the Section
-[5.13](#513-deterministic-components-judgment-calls-and-the-effect-registry) registry with those surfaces as its consumer. Approval cards, never edit
-forms, stay the client surface.
+Clients edit one class of setting directly: an operator setting, which
+chooses among what the committed lineup already approved and approves
+nothing (the routing policy and task lines, Section [5.4](#54-credential-modes-egress-profiles-and-concurrency); revision 99).
+Every other configuration change passes Section [5.8](#58-control-plane-trust)'s control-plane gate
+through an operator-authored PR or, for recurring preferences, the Section
+[4](#4-the-attention-model) policy-proposal path. When deferred settings surfaces ship for
+those, a configuration-change proposal kind joins the Section [5.13](#513-deterministic-components-judgment-calls-and-the-effect-registry)
+registry with those surfaces as its consumer. Approval cards, never edit
+forms, stay the client surface for them.
 
 The following are deferred past 1B, with provisional contracts where Section
 [5.19](#519-deferred-subsystems-provisional-contracts) records one:
@@ -6743,8 +6792,8 @@ Contracts and fakes coordinate implementation. CI keeps lanes honest.
 | **6 (1B.0): convergence and yield** | Integrated | Convergence policy and the Section [7](#7-review-policy) finding-adjudication routing (#697; the spine assigns its contract splits at wave planning); the Claude shadow arm with second adjudication and sampled classification accuracy; automatic re-review of remediation heads as a standing integration test; yield history on ready-for-final-review; the full chain on the real backlog. iOS on-device install (Section [10](#10-operations-and-onboarding)). 1B.0 exit. |
 | **7 (1B.1): the decision surface** | Parallel lanes | The decision surface closes and reads from the phone. Contract-first, positions assessed by the spine at planning (unassessed pairs serialize): the revision-40 attention-presentation cluster (the Section [4](#4-the-attention-model) recommendation shape and Section [9](#9-comprehension) typed minimum card facts, #917, which must retire `adjudicate` or reassign it to an executable `review_dispute` transaction before client adoption; decision-surface identity, #942; per-type card facts, #724; adjudication finding context, #892; per-invocation cost observations, #901), then transaction closure for the remaining Phase 1 pending actions (#918, #919, #920, #921) and the retirement of `choose_alternate_profile` (#936), then Section [5.15](#515-evidence-and-images) evidence metadata (#922), pairing identity facts (#923), readiness rendering (#982), and the Section [8](#8-observability-and-optimization-telemetry)/9 comprehension-telemetry contracts the wave-11 exit evaluation reads (#924, the first unit to slip to wave 8 if review bandwidth binds). Beside the chain: the daemon fact producers, client adoption (the provisional Swift `ActionOutcome` and mock server converge with the daemon's `discuss` and spec-approval `request_changes`), and the Section [9](#9-comprehension) summary layer (#723, stage-agent-sourced, no daemon-inference call). The adjudication-size contract (#961) is placed here or in wave 9 at planning. Deferral drain: the attention-presentation and card-fact clusters only. Exit proof: every rendered Phase 1 action executes on Mac and iPhone; no action stays pending, disabled, or decorative; every card is self-contained at its Section [9](#9-comprehension) altitude; facts stay distinct from claims. |
 | **8 (1B.1): operational closure** | Parallel lanes | Freeside runs unattended, says when it is stuck, and lets published-PR activity back in. The `effect_proposal` card, arriving with the source-issue closure proposal (Section [5.13](#513-deterministic-components-judgment-calls-and-the-effect-registry)) and reused by human-gated follow-up filing (Section [5.17](#517-follow-up-issue-filing)); the doctor credential-integrity probe (Section [10](#10-operations-and-onboarding)); the stall heartbeat (Section [5.12](#512-workflow-definition-initiators-and-artifacts)); the external daemon-liveness probe (Section [5.2](#52-the-daemon-and-its-supervisor), #510); the held-work item (#766); the review drift audit (Section [7](#7-review-policy); the #1048 contract, then #1049–#1053, floor before model site); the standing stopped-operation indicator (#980); device listing and revocation (#981); and the egress floor's first capabilities above it (Sections [5.4](#54-credential-modes-egress-profiles-and-concurrency), [5.7](#57-the-ward-runners-handoff-gate-and-operating-modes)): (a) the `provider_registry` profile, its policy field, and ward allowlist conformance, `kind:contract` because `EgressProfile` is a domain enum carried in the admission record, then (b) the policy-gated project-image rebuild in the reusable builder, `starts-after` (a) because its gate reads the registry set (a) declares; both build on merged #302 and #334. Ward container limits (#1597, revision 72) launch every ward container with a declared CPU cap and memory limit and measure real peak memory, so wave 9's memory budget reserves against recorded sizes; it has no open prerequisite and is startable at wave start. Re-entry after a ready-item invalidation (#502; the spine splits its contract half at planning) and external review ingestion on published PRs (#524) share the re-entry trigger shape and land together. Deferral drain: the operational and re-entry clusters, plus #1597. External first-round adjudication fallbacks wait for per-finding human decisions (#1989), using #1016’s executable dispute contract. Exit proof: an unattended real run completes; daemon death, crash loops, stalls, held work, a stopped state, a review loop that grows past its specification, and external review each alert without terminal patrol or manual polling. |
-| **9 (1B.1): provider diversity** | Parallel lanes; split-eligible | One agent vocabulary and a second real provider. The agent-vocabulary contract chain, positions assigned at planning: review admission and provenance (#898), the cross-lane failure model (#899), judgment roles in the lineup (#900, decided in revision 65: every agent activity is a lineup role), the role-name lineup keys and wardless admission class that decision needs (#1421, `starts-after` #900), then agent and run facts in the clients (#979). The Codex tail: the adapter registration (#406, `starts-after` the merged admitted-agent contract #894), ward's second vendor topology (#407), the continuation compatibility digest (#873), and #397, authorized by owner decision on 2026-10-21 (revision 92) without shadow evidence (none was gathered: the shadow configuration was never approved for a project, #1001), startable by fiat before the wave and independent of #873 (its `starts-after` #898 is satisfied, #898 closed as completed; #869 `starts-after` #899 stays recorded under the ambiguity rule for wave-9 planning to confirm), then the StageDriver binding (#408, `merges-after` #873; Section [7](#7-review-policy) keeps #397 ahead of it so that a Claude reviewer is selectable before Codex-implements plus Codex-reviews can be configured); the alternate-provider retry card (#869, `starts-after` #406 and #408). The Codex account-probe spike (#866) finishes as a negative result: local account facts replace the proposed app-server probe, while its harness supports the usage spike. Guided enrollment with the two-step cutover (#867) `starts-after` #1421, because `freesided auth adopt` emits the first real lineup and must not emit stage-named keys (owner decision, revision 65); until then #867 no longer starts early by fiat. The local doctor account facts (#868) `starts-after` #406 and the completed #866 spike; replan #868 after the revision-80 policy PR (#1758) merges. The pi adapter, enrollment, and specification agent (#895) `starts-after` #897 and #867, specification only, with its pre-adoption gates run against the pinned build. The capacity cluster (revisions 72 and 73), its contract units placed in the same chain at planning: the shared-identity writer lease (#1585), per-pool execution limits (#1596, `starts-after` #1585), the host memory budget and machine-capacity hold (#1598, `starts-after` #898 and #1597), and task lines (#1600, `starts-after` #1421). #1585's prerequisite has merged, so it may start before the wave by fiat once it has a chain position. Beside the chain: the budget command (#1595, `starts-after` #1598), the task-line change command (#1601, `starts-after` #1600), the hold wording in the clients (#1599, `starts-after` #1596 and #1598), and the New Task agent picker (#1602, `starts-after` #1600 and #979). The spine splits this wave into 9a (contracts) and 9b (adapters) at planning if the measured chain length exceeds review bandwidth; a realized split makes those halves numbered waves through a plan revision, because a wave tracker is titled `Wave N: <Name>`. Deferral drain: the agent, provider, and capacity clusters. Exit proof: a real unattended Codex run and a pi specification; provider switching explicit in the lineup and visible in the clients; correct cost and independence records (#901); quota and capacity failures recover through the retry card, never a silent fallback. |
-| **10 (1B.1): subscription operations** | Parallel lanes | The operator sees each subscription's allowance and chooses where work runs. Contract-first, positions assessed by the spine at planning (unassessed pairs serialize): the usage-observation record keyed by usage pool and provider window (Section [5.4](#54-credential-modes-egress-profiles-and-concurrency), usage observation), `starts-after` the per-pool record (#1596), with the sync-visibility question (#1145) resolved before the client projection adopts its freshness contract; then the client contract for the account usage view, for reassigning a pool's collector, and for changing a waiting task's line from a client (the client half that #1601 leaves to its own contract unit). Beside the chain: the Codex and Claude usage spikes (the Codex spike #1714 `starts-after` #866, accepts its negative account-probe result, and measures fresh and near-expiry usage reads under Section [10](#10-operations-and-onboarding); the Claude spike proves what the pinned CLI answers under the setup-token credential), the collectors those spikes prove, the refresh lifecycle (Section [10](#10-operations-and-onboarding)), the daemon's operator-facing projection, the Mac and iPhone account usage view, and the usage facts beside the agent choices of #1602, #1601, and #869's alternate-agent retry card (wave 10 owns that projection: the reading cannot sit beside the card until the observation record exists, and #869 ships the card without it). Quota, expiry, and capacity failures keep #869's retry card; no usage-specific failure surface is added. Deferral drain: the subscription-usage cluster. Exit proof: on Mac and iPhone the operator inspects a real pool's windows, reset times, and freshness; chooses an agent on that pool for new work; changes a waiting task's role; and reads the recorded admission showing the chosen identity ran, with a stale reading shown as stale and an unsupported provider shown as unsupported. 1B.1 exit evaluation. |
+| **9 (1B.1): Claude capacity** | Parallel lanes; split-eligible | Freeside runs on two Claude subscriptions, routed by policy, and develops itself. First, the Claude quantitative usage spike, filed at planning on the #1713 harness: whether the pinned CLI, or a read under the setup token outside it, reports a used share per window, model-scoped windows included, with no token refresh and no auth-store write. Its result fixes what the account usage view shows, per window: a share, or status and reset only, or unsupported. The contract chain, positions assessed by the spine at planning (unassessed pairs serialize): the usage observation record per pool (#1715, extended with the exhausted mark per window and the model-to-window map); the routing policy record and the router at admission, filed at planning (Section [5.4](#54-credential-modes-egress-profiles-and-concurrency), routing policy); per-pool execution limits (#1596, `starts-after` the merged #1585); the host memory budget and machine-capacity hold (#1598; its prerequisites #898 and #1597 merged); the client contract for usage, refresh, reassignment, line changes, and the routing setting (#1719, with the sync-visibility question #1145 resolved before #1720 adopts its freshness contract); agent and run facts in the clients (#979); and the alternate-agent retry card (#869), now the manual path when the policy has nowhere to route. Beside the chain: the Claude collector on the spike-proven path (#1717), collection, refresh, and reassignment (#1716), and usage state into sync (#1720); the account usage view on Mac and iPhone (#1721), usage facts beside the agent choices (#1722), the New Task agent picker (#1602, `starts-after` #979), the routing settings surface in the app, filed at planning, and the hold wording (#1599, `starts-after` #1596 and #1598); the task-line change command (#1601) and the budget command (#1595, `starts-after` #1598); and, operator-run once the wave 8 exit run completes, Freeside onboarded for `daemon/` (revision 92's trigger, above). Merged before the wave: the agent-vocabulary chain (#898, #899, #900, #1421), the shared-identity writer lease (#1585), the task-line record (#1600), and the enrollment cutover (#867). Moved to Phase 2 by revision 99: the Codex execution tail (#406, #407, #408, #873, #868, #1718) and pi (#895, #897). The spine splits this wave into 9a (records and routing) and 9b (views and onboarding) at planning if the measured chain length exceeds review bandwidth; a realized split makes those halves numbered waves through a plan revision, because a wave tracker is titled `Wave N: <Name>`. Deferral drain: the agent, capacity, and subscription-usage clusters. Exit proof, which consumes no real allowance: an unattended run on a Freeside `daemon/` issue completes with the writer's subscription chosen by the routing policy and the selection recorded with its policy revision; a fixture pass that seeds one subscription's model-scoped window as exhausted, or injects a quota refusal, routes the next admission to the other subscription with the switch visible on the task timeline and cards; on Mac and iPhone the operator reads both pools' windows, reset times, and freshness, changes the routing setting from the app, and reads the recorded change; a seeded quota failure with nowhere to route raises the retry card with the latest readings beside it; and cost and independence records are correct (#901). 1B.1 exit evaluation. |
+| **10 (1B.1): subscription operations** | Folded | Folded into row 9 by revision 99. No wave 10 tracker is created; rows 11 and 12 keep their numbers. |
 | **11 (1B.2): the initiative view** | Integrated | Many work units become one picture. Typed relationship kinds in the Section [5.18](#518-the-world-model-post-merge-recompute-and-frontier-projection) capture records (#884, its position assessed by the spine at planning), the frontier projection, and the deterministic initiative view rendering the dependency graph (#885). |
 | **12 (1B.2): image upkeep** | Parallel lanes | Freeside keeps each project's image in service with no operator step (Section [5.7](#57-the-ward-runners-handoff-gate-and-operating-modes), project-image upkeep). Contract-first, its position assessed by the spine at planning: the admitted-image pointer per agent base, the `image_upkeep` schedule kind, the upkeep refusal record and hold facts, and daemon-origin submission (#2332). Then, each `starts-after` #2332: the upkeep job (#2333, also `starts-after` #1792); default-branch tip observation independent of bound PRs (#2334); the adoption proposal for policy-clause refusals (#2335); and the daemon-submitted maintenance task for repairs (#2336, also `starts-after` #1792). Then the Go module-source gate (#2337, `starts-after` #2333). Agent-base upkeep (#2338) stays a deferral. Exit proof: a dependency change merged outside Freeside within policy and a daemon upgrade each end in a new admitted image with no operator action; a recipe change ends in one approved adoption card and its merged policy proposal; a recipe failing at the tip ends in a maintenance task's PR. 1B exit evaluation against recorded comprehension and operational evidence. |
 
@@ -6761,7 +6810,7 @@ a fork when the repository is not pushable is a plain publication feature,
 deferred to #1042. The phone-decidability exit holds once no rendered action
 stays pending.
 
-The deferral drain is bounded per row. Waves 7 through 10 each drain the clusters
+The deferral drain is bounded per row. Waves 7 through 9 each drain the clusters
 named in their row and nothing else. A deferral outside them stays in the queue.
 The long tail, including the `kind:fix` items on production paths that no 1B
 exit proof depends on, does not drain in 1B. It binds to Phase 2's hardening or
@@ -6834,8 +6883,13 @@ The 1A backlog also serves as specifier fixtures.
 
 Expand beyond the first constrained path:
 
-- a second repository and workflow shape;
+- a second workflow shape (Freeside itself is the second repository,
+  onboarded in wave 9);
 - scan initiators and chaining;
+- the Codex execution driver (#406, #407, #408, #873, #868) and the Codex
+  usage collector (#1718), moved out of wave 9 by revision 99: a hedge not
+  worth its contract-chain slots while the Codex plan is downgraded;
+- the pi adapter and its specification agent (#895, #897), on the same path;
 - `subscription_injected`, the proxy-injected credential mode (Section [5.4](#54-credential-modes-egress-profiles-and-concurrency); revision 95), after its spikes;
 - `api_key_isolated`, on the same path;
 - full failure-injection and restore drills;
@@ -6856,8 +6910,10 @@ Expand beyond the first constrained path:
 
 Add ACP interactive attachment, best-effort resume, material plan-change gates,
 briefings, evidence-informed routing, WIP views, and mature `auto_start`
-behavior. The initiative view moved to 1B.2 (revision 25), and basic usage
-display to 1B.1 (revision 77); routing that acts on usage stays here.
+behavior. The initiative view moved to 1B.2 (revision 25), basic usage
+display to 1B.1 (revision 77), and usage-limit routing between subscriptions
+to 1B.1 (revision 99); routing on task class, quality, latency, and cost
+stays here.
 
 ### Phase 4: Generalization
 
@@ -6910,63 +6966,50 @@ Record material changes here by revision, with the decider in parentheses.
 - On first re-litigation, promote the decision to a `docs/decisions/` ADR that
   cites its history entry.
 
-Revision 98 ("Project Images Keep Themselves"):
+Revision 99 ("Claude Capacity Before Provider Diversity"):
 
-1. **Freeside keeps each project's image in service.** A permanent
-   trusted-config job, image upkeep, checks the image at the default-branch
-   tip on a tip advance, at daemon start, and on the doctor's schedule. An
-   admissible image needs nothing; a delta the policy-gated rebuild's gate
-   admits is rebuilt and admitted with no AttentionItem, and the gate now
-   also runs on a toolchain-only delta (both manifests equal), which is what
-   a daemon upgrade produces. Rejected: leaving each case to an attention item
-   a human resolves by hand (a manual `freesided onboard`, or running the
-   earlier binary until tasks drain, #1784), because a reviewed PR or a
-   tapped card is the normal Freeside loop and a chore outside it is not.
-2. **A refusal by a policy clause alone ends in one adoption card.** A
-   changed recipe digest or an undeclared registry authority at the tip
-   raises a card bound to it. Approving the card opens a Section [4](#4-the-attention-model)
-   project-policy proposal, merging that proposal is the adoption, and the
-   builder then builds a new image under the adopted policy. Recipe approval
-   and the registry set are trusted project policy, so the adoption has to
-   pass the Section [5.8](#58-control-plane-trust) control-plane gate. The owner's original choice, a
-   one-tap `effect_proposal` into the trust profile, would have changed
-   policy outside that gate. Rejected: an agent task for
-   every refusal (the change is already in the repository and needs a trust
-   decision, not a code change).
-3. **A refusal that needs a repair opens a maintenance task through the
-   submission primitive.** The daemon submits it with a daemon origin, the
-   refusal record as its source, no bound issue, and `bound_pr_merged`
-   completion; specification approval and the merge gate apply as for any
-   task. Its base is the refused tip, so its writer is the one exception to
-   composition's admissibility check: the refusal record stands in for
-   verifying the base, and the candidate is verified in an image built and
-   proven at the candidate head. Rejected: Section [5.17](#517-follow-up-issue-filing) issue filing (a
-   human-gated fan-out whose issues are propose-only, so it adds two gates
-   and no information).
-4. **Each repository has one admitted-image pointer per agent base.** Only
-   the trusted builder advances it; image records stay write-once and every
-   boundary still re-derives its verdict. Rejected: keeping the daemon's
-   single configured image (one image cannot serve two projects or two agent
-   bases, and advancing it means an operator restarting the daemon with a
-   new flag).
-5. **Work holds while a resolution is pending.** A task waits under a
-   visible hold until an admitted image serves its base. #1784's blocked
-   outcome narrows to a refusal with no pending resolution. Rejected: blocking at once (it strands
-   work the job is already resolving).
-6. **A Go module delta stays refused and gets its own gate unit**
-   (#2337). Rejected: admitting it at the tip under upkeep (the gate's
-   delta rules read npm lockfiles only, so admitting a `go.sum` change would
-   widen the gate past what it checks).
-7. **Agent-base upkeep is designed now and scheduled later** (#2338).
-   Rejected: building it in row 12 (it needs Freeside onboarded against its
-   own repository first).
-8. **Image upkeep is Section [11](#11-roadmap-build-order-and-coordination) row 12, in 1B.2,** and the 1B exit
-   evaluation moves to that row. Rejected: a Phase 2 bullet (unattended operation does not
-   hold over time without it); folding it into row 11 (the initiative view
-   shares no code with it).
+1. **Two Claude subscriptions, not the Codex execution driver, are 1B's
+   execution capacity.** The Codex execution tail (#406, #407, #408, #873,
+   #868, #1718) and pi (#895, #897) move to Phase 2; Codex review stays as
+   built, and #408 still follows #397 when it returns. Rejected: keeping the
+   tail in wave 9 (with the Codex plan downgraded, a hedge that holds
+   contract-chain slots through four units delays Freeside's own
+   onboarding); dropping Codex altogether (review on a second vendor is
+   still the independence Section [7](#7-review-policy) prefers).
+2. **A router above admission reads usage readings and failures and writes
+   the task line; admission reads only the line.** This overturns revision
+   77's rule that no reading selects an agent. The balancing the owner did
+   by hand is the daily interruption Freeside exists to remove, and the
+   layering keeps every switch a recorded fact that names its reading.
+   Rejected: routing on failures only (it cannot empty one subscription
+   before its reset on purpose); routing inside admission (admission would
+   read a reading, and the line would stop being the one authority).
+3. **The routing policy and task lines are operator settings, set from a
+   client.** This narrows the rule that clients never edit settings: an
+   operator setting chooses among credentials the committed lineup already
+   approved and approves none, the class task lines already opened. Other
+   configuration still passes the Section [5.8](#58-control-plane-trust)
+   gate. Rejected: policy in the committed agent tree (a PR for every
+   change of preference); an approval card per change (the operator is the
+   one deciding, so the card would approve its own author).
+4. **The usage record, collector, and account usage view move from wave 10
+   into wave 9; wave 10 folds.** The owner decides on how full each
+   subscription is, and the router needs the record anyway. Rejected: facts
+   beside the retry card only (that answers why nothing runs, not the
+   decision the owner makes).
+5. **The Claude quantitative usage spike runs first, and the view's shape
+   follows its result.** Only status and reset per window are proved
+   (#1713). Rejected: planning the view on a used share nobody has proved.
+6. **Freeside's own onboarding, `daemon/` first, is wave 9's exit proof,
+   and the proof consumes no real allowance.** The real run proves the
+   ordinary path; a seeded exhausted window or an injected refusal proves
+   the fallback, as wave 8's fixture passes prove its alerts. Rejected:
+   onboarding all four paths at once (the baked recipe verifies only
+   `daemon/` networkless); draining a real subscription to prove the
+   fallback.
 
-(Owner decisions of 2026-10-13 on #1999;
-[decision note](../devlog/2026-10-26-1057-project-image-upkeep.md).)
+(Owner decisions of 2026-10-26;
+[decision note](../devlog/2026-10-26-1238-claude-capacity-before-provider-diversity.md).)
 
 ## 14. Risks
 
@@ -6986,7 +7029,7 @@ Revision 98 ("Project Images Keep Themselves"):
 | **Codex cloud review as a load-bearing dependency** | Realized 2026-07-31: the live-run trigger falsification (#427) showed no App-visible trigger path. The dependency is removed. Review is Freeside-invoked (Section [7](#7-review-policy)), and native review is best-effort extra evidence. |
 | Host capacity | Several accounts' limits can add up to more containers than one machine holds. Give every ward container a CPU cap and a declared memory size, and bound their memory by each instance's declared budget, so a launch that doesn't fit waits under a visible hold instead of exhausting memory; waiting launches go oldest task first, and a size that can never fit fails at once (Section [5.4](#54-credential-modes-egress-profiles-and-concurrency), Machine Capacity). Residual: the budget can't see load outside Freeside or another instance's containers, so the operator declares it with room for interactive use and keeps the budgets of every instance on one host within what the host holds. |
 | Execution host credential copies | Every enrolled execution host holds a copy of each identity's setup token in its credential volume (Section [5.7](#57-the-ward-runners-handoff-gate-and-operating-modes), Execution Hosts). Accepted for owner-held machines on the owner's tailnet: rotation re-authors every host, and removal names the identities to rotate. Residual: a host removed while unreachable keeps its copy until the owner rotates at the vendor. Any host the owner does not hold waits for `subscription_injected` through control-plane injection and then receives no copy (revision 95). |
-| Single-provider execution capacity | Claude usage limits can stall real work. Schedule the 1B Codex execution driver as a hedge (Section [11](#11-roadmap-build-order-and-coordination)). Keep selection explicit as a lineup line or a task line, never silent (a lineup may name the switch per failure class, Section [4](#4-the-attention-model); a task line may pick another agent for one task, Section [5.4](#54-credential-modes-egress-profiles-and-concurrency), Admitted Agents). Usage remains observed telemetry (Section [8](#8-observability-and-optimization-telemetry)); from revision 77 an allowance observation shows the stall coming (Section [5.4](#54-credential-modes-egress-profiles-and-concurrency), usage observation), and the operator's explicit choice stays the only switch. |
+| Single-provider execution capacity | Claude usage limits can stall real work. From revision 99 the hedge is a second Claude subscription under a routing policy (Section [5.4](#54-credential-modes-egress-profiles-and-concurrency), routing policy), not the Codex execution driver, which moved to Phase 2. Two subscriptions hedge a quota window, not a Claude outage or a Claude policy change; the owner accepts that residual while the Codex plan is downgraded. Every switch is a selection the policy recorded, or the operator's explicit choice on the alternate-agent card, never silent (a lineup may name the switch per failure class, Section [4](#4-the-attention-model); a task line may pick another agent for one task, Section [5.4](#54-credential-modes-egress-profiles-and-concurrency), Admitted Agents). Usage remains observed telemetry (Section [8](#8-observability-and-optimization-telemetry)); an allowance observation shows the stall coming (Section [5.4](#54-credential-modes-egress-profiles-and-concurrency), usage observation) and may mark a window exhausted for the router, and admission never reads one. |
 | Classifier mislabeling | Preserve immutable raw findings; require second adjudication for the safety case; enforce ceilings. |
 | Subscription-terms drift | Keep it as an explicit operating risk. |
 | Apple container immaturity | Prove actual runner capabilities and retain honest fallback classes. |
