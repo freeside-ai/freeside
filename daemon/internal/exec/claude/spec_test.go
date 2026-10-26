@@ -24,6 +24,7 @@ import (
 	"github.com/freeside-ai/freeside/daemon/internal/execfixture"
 	"github.com/freeside-ai/freeside/daemon/internal/export"
 	"github.com/freeside-ai/freeside/daemon/internal/golden"
+	"github.com/freeside-ai/freeside/daemon/internal/specify"
 	"github.com/freeside-ai/freeside/daemon/internal/ward"
 )
 
@@ -183,23 +184,41 @@ func TestHandoffSpecRefusesUnsupportedContainment(t *testing.T) {
 	}
 }
 
-// handoffCommandCases are the launch shapes one HandoffSpec path produces:
-// every launch protocol, each with and without the preparation command.
-// redirect is that protocol's whole output redirection while the agent runs.
-var handoffCommandCases = []struct {
-	name     string
-	delivery stage.PromptDelivery
-	prepare  []string
-	redirect string
-}{
-	{"argument", stage.PromptArgument, nil, inWorkspaceRedirect},
-	{"argument-prepare", stage.PromptArgument, []string{"/usr/local/bin/freeside-project-prepare"}, inWorkspaceRedirect},
-	{"prompt-file", stage.PromptFileV1, nil, inWorkspaceRedirect},
-	{"prompt-file-prepare", stage.PromptFileV1, []string{"/usr/local/bin/freeside-project-prepare"}, inWorkspaceRedirect},
-	{"file-v2", stage.PromptFileV2, nil, deferredRedirect},
-	{"file-v2-prepare", stage.PromptFileV2, []string{"/usr/local/bin/freeside-project-prepare"}, deferredRedirect},
-	{"file-v3", stage.PromptFileV3, nil, deferredStderrRedirect},
-	{"file-v3-prepare", stage.PromptFileV3, []string{"/usr/local/bin/freeside-project-prepare"}, deferredStderrRedirect},
+// handoffCommandCase is one launch shape a HandoffSpec path produces.
+// redirect is that protocol's whole output redirection while the agent runs,
+// and specification starts the case on a specification run's stage.
+type handoffCommandCase struct {
+	name          string
+	delivery      stage.PromptDelivery
+	prepare       []string
+	redirect      string
+	specification bool
+}
+
+func (tc handoffCommandCase) input() stage.ProviderHandoffInput {
+	in := testProviderHandoffInput()
+	in.PromptDelivery, in.Preparation = tc.delivery, tc.prepare
+	if tc.specification {
+		in.Spec.RunID = "run-provider-spec"
+		in.Spec.StageID = domain.SpecificationStageID(in.Spec.RunID)
+	}
+	return in
+}
+
+// handoffCommandCases are every launch protocol, each with and without the
+// preparation command, and file_v4 on a specification stage, the one start
+// whose command differs from file_v3's.
+var handoffCommandCases = []handoffCommandCase{
+	{"argument", stage.PromptArgument, nil, inWorkspaceRedirect, false},
+	{"argument-prepare", stage.PromptArgument, []string{"/usr/local/bin/freeside-project-prepare"}, inWorkspaceRedirect, false},
+	{"prompt-file", stage.PromptFileV1, nil, inWorkspaceRedirect, false},
+	{"prompt-file-prepare", stage.PromptFileV1, []string{"/usr/local/bin/freeside-project-prepare"}, inWorkspaceRedirect, false},
+	{"file-v2", stage.PromptFileV2, nil, deferredRedirect, false},
+	{"file-v2-prepare", stage.PromptFileV2, []string{"/usr/local/bin/freeside-project-prepare"}, deferredRedirect, false},
+	{"file-v3", stage.PromptFileV3, nil, deferredStderrRedirect, false},
+	{"file-v3-prepare", stage.PromptFileV3, []string{"/usr/local/bin/freeside-project-prepare"}, deferredStderrRedirect, false},
+	{"file-v4-specification", stage.PromptFileV4, nil, deferredStderrRedirect, true},
+	{"file-v4-specification-prepare", stage.PromptFileV4, []string{"/usr/local/bin/freeside-project-prepare"}, deferredStderrRedirect, true},
 }
 
 var (
@@ -212,7 +231,7 @@ var (
 // stdin and the launcher's own files kept out of the workspace.
 func deferredCommand(prepare []string) string {
 	return agentCommandWithInput(
-		"< "+shellQuote(ward.PromptFilePath), "session-1", "inv-1", prepare, "", "", launcherFilesDeferredStderr)[2]
+		"< "+shellQuote(ward.PromptFilePath), "session-1", "inv-1", prepare, "", "", "", launcherFilesDeferredStderr)[2]
 }
 
 // TestHandoffSpecCommandGolden pins the whole launch command of a start that
@@ -225,9 +244,7 @@ func TestHandoffSpecCommandGolden(t *testing.T) {
 	for _, tc := range handoffCommandCases {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
-			in := testProviderHandoffInput()
-			in.PromptDelivery, in.Preparation = tc.delivery, tc.prepare
-			hs, err := provider.HandoffSpec(context.Background(), in)
+			hs, err := provider.HandoffSpec(context.Background(), tc.input())
 			if err != nil {
 				t.Fatalf("HandoffSpec: %v", err)
 			}
@@ -237,6 +254,44 @@ func TestHandoffSpecCommandGolden(t *testing.T) {
 			}
 			golden.Assert(t, "handoff-command-"+tc.name, append(got, '\n'))
 		})
+	}
+}
+
+// TestHandoffSpecSchemaOnlyOnFileV4Specification proves file_v4 differs from
+// file_v3 only on a specification run's stage, where it adds the specifier
+// output schema, and that no older protocol changes on that stage.
+func TestHandoffSpecSchemaOnlyOnFileV4Specification(t *testing.T) {
+	t.Parallel()
+	provider := claudeProvider{volumes: testAuthStoreVolumes{volume: "provider-volume"}}
+	command := func(t *testing.T, tc handoffCommandCase) string {
+		t.Helper()
+		hs, err := provider.HandoffSpec(context.Background(), tc.input())
+		if err != nil {
+			t.Fatalf("HandoffSpec: %v", err)
+		}
+		return hs.Agent.Command[2]
+	}
+	schemaFlag := "--json-schema " + shellQuote(specify.OutputJSONSchema) + " "
+	for _, prepare := range [][]string{nil, {"/usr/local/bin/freeside-project-prepare"}} {
+		v3 := command(t, handoffCommandCase{delivery: stage.PromptFileV3, prepare: prepare})
+		if got := command(t, handoffCommandCase{delivery: stage.PromptFileV4, prepare: prepare}); got != v3 {
+			t.Errorf("file_v4 off a specification stage differs from file_v3:\n got %s\nwant %s", got, v3)
+		}
+		other := handoffCommandCase{delivery: stage.PromptFileV4, prepare: prepare}.input()
+		other.Spec.RunID, other.Spec.StageID = "run-provider-spec", "stage-implementation"
+		hs, err := provider.HandoffSpec(context.Background(), other)
+		if err != nil || hs.Agent.Command[2] != v3 {
+			t.Errorf("file_v4 on an implementation stage differs from file_v3: %v", err)
+		}
+		specification := command(t, handoffCommandCase{delivery: stage.PromptFileV4, prepare: prepare, specification: true})
+		if want := strings.Replace(v3, deferredStderrRedirect, schemaFlag+deferredStderrRedirect, 1); specification != want {
+			t.Errorf("file_v4 specification command:\n got %s\nwant %s", specification, want)
+		}
+		for _, delivery := range []stage.PromptDelivery{stage.PromptArgument, stage.PromptFileV1, stage.PromptFileV2, stage.PromptFileV3} {
+			if got := command(t, handoffCommandCase{delivery: delivery, prepare: prepare, specification: true}); strings.Contains(got, "--json-schema") {
+				t.Errorf("%s gained the schema on a specification stage", delivery)
+			}
+		}
 	}
 }
 
@@ -260,8 +315,7 @@ func TestHandoffSpecPassesModelAndEffort(t *testing.T) {
 			t.Run(tc.name+"/"+sel.name, func(t *testing.T) {
 				t.Parallel()
 				redirect := tc.redirect
-				in := testProviderHandoffInput()
-				in.PromptDelivery, in.Preparation = tc.delivery, tc.prepare
+				in := tc.input()
 				bare, err := provider.HandoffSpec(context.Background(), in)
 				if err != nil {
 					t.Fatalf("HandoffSpec without a selection: %v", err)

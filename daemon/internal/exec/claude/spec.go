@@ -16,6 +16,7 @@ import (
 	"github.com/freeside-ai/freeside/daemon/internal/exec"
 	"github.com/freeside-ai/freeside/daemon/internal/exec/stage"
 	"github.com/freeside-ai/freeside/daemon/internal/export"
+	"github.com/freeside-ai/freeside/daemon/internal/specify"
 	"github.com/freeside-ai/freeside/daemon/internal/ward"
 )
 
@@ -98,7 +99,7 @@ func (claudeProvider) RenderPrompt(inputs stage.ProviderPromptInputs) (string, e
 
 // launchDelivery is the protocol every new Claude launch selects. Stored
 // intents keep the member they were started under.
-const launchDelivery = stage.PromptFileV3
+const launchDelivery = stage.PromptFileV4
 
 func (claudeProvider) PromptDelivery() stage.PromptDelivery { return launchDelivery }
 
@@ -150,13 +151,13 @@ const (
 	// closes both directories to the agent and moves both files into the
 	// subtree.
 	launcherFilesDeferred
-	// launcherFilesDeferredStderr is the file_v3 command: launcherFilesDeferred
-	// except that the CLI's stderr goes to launchStderrPath, not into the
-	// transcript, so a warning line cannot break the transcript's JSONL
-	// (#2307). When the CLI exits nonzero the launcher appends that file to
-	// the transcript before placing it, so the retained failure transcript
-	// still carries the diagnostics. A successful run's stderr is discarded
-	// with the container.
+	// launcherFilesDeferredStderr is the file_v3 and file_v4 command:
+	// launcherFilesDeferred except that the CLI's stderr goes to
+	// launchStderrPath, not into the transcript, so a warning line cannot
+	// break the transcript's JSONL (#2307). When the CLI exits nonzero the
+	// launcher appends that file to the transcript before placing it, so the
+	// retained failure transcript still carries the diagnostics. A successful
+	// run's stderr is discarded with the container.
 	launcherFilesDeferredStderr
 )
 
@@ -196,14 +197,22 @@ func agentCommand(
 	prompt, sessionID string, invocationID domain.InvocationID, prepare []string, model, effort string,
 ) []string {
 	return agentCommandWithInput(
-		shellQuote(prompt), sessionID, invocationID, prepare, model, effort, launcherFilesInWorkspace)
+		shellQuote(prompt), sessionID, invocationID, prepare, model, effort, "", launcherFilesInWorkspace)
 }
 
+// agentCommandWithInput is agentCommand with the prompt's shell input and
+// launcher files chosen by the caller. A non-empty outputSchema adds
+// --json-schema, so the CLI returns the model's answer as the result record's
+// structured_output; empty passes no flag and leaves the command
+// byte-identical for every protocol before file_v4.
 func agentCommandWithInput(
 	promptInput, sessionID string, invocationID domain.InvocationID, prepare []string, model, effort string,
-	files launcherFiles,
+	outputSchema string, files launcherFiles,
 ) []string {
 	selection := ""
+	if outputSchema != "" {
+		selection += "--json-schema " + shellQuote(outputSchema) + " "
+	}
 	if model != "" {
 		selection += "--model " + shellQuote(model) + " "
 	}
@@ -325,8 +334,8 @@ func agentCommandWithInput(
 	}
 	// The in-workspace and file_v2 commands send stderr into the transcript;
 	// recovery rebuilds them, so their redirection never changes. Under file_v3
-	// the root shell opens the stderr file before the drop, so the agent
-	// reaches it only through its own fd 2.
+	// and file_v4 the root shell opens the stderr file before the drop, so the
+	// agent reaches it only through its own fd 2.
 	redirect := "> " + shellQuote(transcriptTarget) + " 2>&1"
 	if files == launcherFilesDeferredStderr {
 		redirect = "> " + shellQuote(launchTranscriptPath) + " 2> " + shellQuote(launchStderrPath)
@@ -515,7 +524,7 @@ func promptByteLimit(delivery stage.PromptDelivery) (int, error) {
 	switch delivery {
 	case "", stage.PromptArgument:
 		return maxPromptBytes, nil
-	case stage.PromptFileV1, stage.PromptFileV2, stage.PromptFileV3:
+	case stage.PromptFileV1, stage.PromptFileV2, stage.PromptFileV3, stage.PromptFileV4:
 		return ward.MaxPromptFileBytes, nil
 	}
 	return 0, fmt.Errorf("%w: unknown prompt delivery %q", ErrUnsupportedStart, delivery)
@@ -640,11 +649,19 @@ func (p claudeProvider) HandoffSpec(
 		if err := hs.Agent.PromptFile.Validate(); err != nil {
 			return ward.HandoffSpec{}, fmt.Errorf("%w: %w", ErrUnsupportedStart, err)
 		}
+		// file_v4 asks for the specifier's schema only on a specification
+		// run's stage, so a model's prose preamble cannot fail the stage
+		// (#2314). Both fields are in the durable intent, so recovery rebuilds
+		// the same command; on any other stage the command is file_v3's.
+		outputSchema := ""
+		if in.PromptDelivery == stage.PromptFileV4 && spec.StageID == domain.SpecificationStageID(spec.RunID) {
+			outputSchema = specify.OutputJSONSchema
+		}
 		// The root shell opens stdin before setpriv drops privileges. Prompt
 		// bytes never enter argv, and remain user input rather than instructions.
 		hs.Agent.Command = agentCommandWithInput(
 			"< "+shellQuote(ward.PromptFilePath), sessionIDFor(id), id, in.Preparation,
-			spec.RouteModelID, spec.NativeEffort, files)
+			spec.RouteModelID, spec.NativeEffort, outputSchema, files)
 		return hs, nil
 	}
 	switch in.PromptDelivery {
@@ -657,7 +674,7 @@ func (p claudeProvider) HandoffSpec(
 		return withPromptFile(launcherFilesInWorkspace)
 	case stage.PromptFileV2:
 		return withPromptFile(launcherFilesDeferred)
-	case stage.PromptFileV3:
+	case stage.PromptFileV3, stage.PromptFileV4:
 		return withPromptFile(launcherFilesDeferredStderr)
 	}
 	return ward.HandoffSpec{}, fmt.Errorf("%w: unknown prompt delivery", ErrUnsupportedStart)

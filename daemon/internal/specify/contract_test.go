@@ -3,6 +3,7 @@ package specify_test
 import (
 	"encoding/json"
 	"errors"
+	"reflect"
 	"strconv"
 	"strings"
 	"testing"
@@ -53,6 +54,80 @@ func TestOutputGolden(t *testing.T) {
 		t.Fatal(err)
 	}
 	golden.Assert(t, "output", append(indented, '\n'))
+}
+
+// The launch inlines the schema as one shell argument, and the model fills
+// only the fields it names, so it must parse, stay on one line, and name
+// exactly the JSON fields DecodeOutput accepts at every level.
+func TestOutputJSONSchemaMirrorsOutput(t *testing.T) {
+	if strings.ContainsAny(specify.OutputJSONSchema, "\n\r") {
+		t.Fatal("schema carries a line break")
+	}
+	var schema map[string]any
+	if err := json.Unmarshal([]byte(specify.OutputJSONSchema), &schema); err != nil {
+		t.Fatalf("schema does not parse: %v", err)
+	}
+	assertSchemaMirrors(t, "$", schema, reflect.TypeFor[specify.Output]())
+}
+
+func assertSchemaMirrors(t *testing.T, at string, node map[string]any, typ reflect.Type) {
+	t.Helper()
+	if typ.Kind() == reflect.Pointer {
+		typ = typ.Elem()
+	}
+	switch typ.Kind() {
+	case reflect.Slice:
+		items, ok := node["items"].(map[string]any)
+		if !schemaAllowsType(node, "array") || !ok {
+			t.Fatalf("%s: %s needs an array schema with items, got %v", at, typ, node)
+		}
+		assertSchemaMirrors(t, at+"[]", items, typ.Elem())
+	case reflect.Struct:
+		properties, ok := node["properties"].(map[string]any)
+		if !schemaAllowsType(node, "object") || !ok || node["additionalProperties"] != false {
+			t.Fatalf("%s: %s needs a closed object schema, got %v", at, typ, node)
+		}
+		tags := map[string]reflect.Type{}
+		for field := range typ.Fields() {
+			tags[strings.Split(field.Tag.Get("json"), ",")[0]] = field.Type
+		}
+		if len(tags) != len(properties) {
+			t.Fatalf("%s: schema names %d properties, %s has %d fields", at, len(properties), typ, len(tags))
+		}
+		for name, fieldType := range tags {
+			property, ok := properties[name].(map[string]any)
+			if !ok {
+				t.Fatalf("%s: schema lacks %s's field %q", at, typ, name)
+			}
+			assertSchemaMirrors(t, at+"."+name, property, fieldType)
+		}
+		required, _ := node["required"].([]any)
+		for _, name := range required {
+			if _, ok := tags[name.(string)]; !ok {
+				t.Fatalf("%s: required %v is not a field of %s", at, name, typ)
+			}
+		}
+	case reflect.String:
+		if !schemaAllowsType(node, "string") {
+			t.Fatalf("%s: string field needs a string schema, got %v", at, node)
+		}
+	default:
+		t.Fatalf("%s: no schema rule for kind %s", at, typ.Kind())
+	}
+}
+
+func schemaAllowsType(node map[string]any, want string) bool {
+	switch typ := node["type"].(type) {
+	case string:
+		return typ == want
+	case []any:
+		for _, member := range typ {
+			if member == want {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 func TestDecodeOutputStrictAndExclusive(t *testing.T) {

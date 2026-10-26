@@ -43,10 +43,10 @@ func TestPromptDeliveryModesAndLegacyRecord(t *testing.T) {
 }
 
 // Every file protocol binds the provider's prompt file to the durable prompt,
-// and the argument protocol refuses one. Stored file_v1 and file_v2 intents
-// must keep passing after file_v3 becomes what new launches select.
+// and the argument protocol refuses one. Stored file_v1 through file_v3
+// intents must keep passing after file_v4 becomes what new launches select.
 func TestProviderCannotSubstitutePromptFile(t *testing.T) {
-	for _, mode := range []PromptDelivery{PromptFileV1, PromptFileV2, PromptFileV3} {
+	for _, mode := range []PromptDelivery{PromptFileV1, PromptFileV2, PromptFileV3, PromptFileV4} {
 		for _, change := range []string{"none", "missing", "wrong_bytes", "wrong_digest", "legacy_mode"} {
 			t.Run(string(mode)+"/"+change, func(t *testing.T) {
 				d := newTestDriver(t, &stubGate{}, newStubExports())
