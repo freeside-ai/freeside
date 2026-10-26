@@ -384,12 +384,15 @@ gh issue reopen 2 --repo freeasinbird/freeside-review-challenge
 git ls-remote --heads origin
 ```
 
-`git ls-remote` lists `main` alone, unless the last pass's branch survived
-its merge; delete that one with `git push origin --delete <branch>`. The
-force-push works because the repository has no branch protection (a private
-repository on a free plan allows none); if it ever gains protection, the
-reset needs a bypass. Because the reset discards each pass's merge, the
-fixture's `AGENTS.md` lets the pass merge its pull request.
+`git ls-remote` lists `main` and any branch an earlier pass left behind. A
+leftover branch doesn't block the next pass, which publishes on a branch of
+its own (**Inputs**). Deleting one with `git push origin --delete <branch>`
+is optional tidying: it leaves the branch's merged pull request in place,
+and nothing can delete that. The force-push works because the repository has
+no branch protection (a private repository on a free plan allows none); if
+it ever gains protection, the reset needs a bypass. Because the reset
+discards each pass's merge, the fixture's `AGENTS.md` lets the pass merge its
+pull request.
 
 **Settings.** The fixture has settings of its own, fixed here and never
 derived from a real run's:
@@ -476,6 +479,12 @@ review configuration digest. On the fresh root, in this order:
 **Inputs.** The task file holds the canonical issue's bare URL, and the
 publication file names that URL in `source_issue`
 ([The Publication File And Work-Unit Declaration](#the-publication-file-and-work-unit-declaration)).
+The publication file declares no `branch`, so the publisher derives a
+`freeside/publish/<digest>` branch from each run's identity and no two passes
+share one. A declared branch would be reused by every pass, and the publisher
+counts a pull request of any state on it: once one pass's pull request merged
+there, every later pass would hold at publication with `external_conflict`
+(#2339).
 The work-unit declaration is `{"completion_criterion": "bound_pr_merged"}`.
 The policy file names the settings' `allowed_paths` in `paths`, includes
 `https://api.github.com` in `research.allowlist`, sets `gates.spec_approval`

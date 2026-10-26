@@ -64,6 +64,7 @@ const (
 	productionBlockReentryVerification   = domain.PublicationBlockBaseAdvancedVerification
 	productionBlockReentryRoundLimit     = domain.PublicationBlockBaseAdvancedRoundLimit
 	productionBlockExternal              = "Publication is durably held because the external service permanently refused the committed operation. Repair that external state to resume recovery."
+	productionBlockConflict              = "Publication is durably held because the external branch or pull request conflicts with the committed identity. Inspect and repair that external state to resume recovery."
 	productionBlockSuccessorPRNotListed  = "Publication is held because GitHub still lists no pull request on the successor branch after repeated checks. Confirm the pull request exists and is open on that branch; publication resumes once GitHub shows it."
 	productionBlockSuccessorHeadLagging  = "Publication is held because GitHub still shows the pull request at its previous head after repeated checks, although the branch is at the pushed head. Confirm the pull request tracks that branch; publication resumes once GitHub shows the pushed head."
 	// successorObservationPendingTolerance is how many consecutive attempts
@@ -2793,7 +2794,7 @@ func (w *productionPublicationWorkflow) reconcileTask(
 				if isDurablePublicationConflict(err) {
 					return w.holdBlockedTask(
 						ctx, task, imported,
-						"Publication is durably held because the external branch or pull request conflicts with the committed identity. Inspect and repair that external state to resume recovery.",
+						durablePublicationConflictReason(err),
 						domain.HoldExternalConflict,
 					)
 				}
@@ -2963,7 +2964,7 @@ func (w *productionPublicationWorkflow) reconcileTask(
 		if isDurablePublicationConflict(err) {
 			return w.holdBlockedTask(
 				ctx, task, checkpoint.Imported,
-				"Publication is durably held because the external branch or pull request conflicts with the committed identity. Inspect and repair that external state to resume recovery.",
+				durablePublicationConflictReason(err),
 				domain.HoldExternalConflict,
 			)
 		}
@@ -2998,7 +2999,7 @@ func (w *productionPublicationWorkflow) reconcileTask(
 		if isDurablePublicationConflict(err) {
 			return w.holdBlockedTask(
 				ctx, task, checkpoint.Imported,
-				"Publication is durably held because the external branch or pull request conflicts with the committed identity. Inspect and repair that external state to resume recovery.",
+				durablePublicationConflictReason(err),
 				domain.HoldExternalConflict,
 			)
 		}
@@ -6220,6 +6221,24 @@ func (w *productionPublicationWorkflow) loadPublicationOutcome(
 func isDurablePublicationConflict(err error) bool {
 	return errors.Is(err, publish.ErrPublicationConflict) ||
 		errors.Is(err, publish.ErrForeignResource)
+}
+
+// durablePublicationConflictReason is the publish_blocked card's reason for
+// a durable conflict. A pull request without this run's identity marker is
+// named with its branch (#2339). Usually it is another publication's, which
+// pins the branch for good: a pull request can't be deleted and the
+// committed intent can't change branch. It can also be this run's own pull
+// request with its marker edited away, which restoring the marker repairs,
+// so the reason gives both remedies.
+func durablePublicationConflictReason(err error) string {
+	var foreign *publish.ForeignPullRequestError
+	if !errors.As(err, &foreign) {
+		return productionBlockConflict
+	}
+	return fmt.Sprintf(
+		"Publication is held because pull request #%d on branch %s doesn't carry this run's identity marker. If it is this run's pull request and its marker was edited away, restore the marker to resume. Otherwise it belongs to another publication: a pull request can't be deleted, so this run can't publish on %s. Abandon the task with `freesided abandon` and resubmit it with a publication file that declares another branch or none.",
+		foreign.Number, foreign.Branch, foreign.Branch,
+	)
 }
 
 func (w *productionPublicationWorkflow) validatePublicationOutcomeAuthorization(

@@ -569,7 +569,7 @@ func (w *productionPublicationWorkflow) unpublishedReentryPublishFailure(
 	if isDurablePublicationConflict(err) {
 		return w.holdBlockedTask(
 			ctx, task, imported,
-			"Publication is durably held because the external branch or pull request conflicts with the committed identity. Inspect and repair that external state to resume recovery.",
+			durablePublicationConflictReason(err),
 			domain.HoldExternalConflict,
 		)
 	}

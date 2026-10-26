@@ -341,8 +341,8 @@ func (p *Publisher) VerifyOutcome(
 	parsed, ok := ParseMarker(pr.Body)
 	if !ok || parsed != identity.Digest() {
 		return fmt.Errorf(
-			"verify publication outcome: pull request #%d occupies branch %s: %w",
-			pr.Number, branch, ErrForeignResource,
+			"verify publication outcome: %w",
+			&ForeignPullRequestError{Number: pr.Number, Branch: branch},
 		)
 	}
 	if !prMatchesPublicationCoordinates(pr, repo, identity, c, branch) {
@@ -1160,7 +1160,7 @@ func (p *Publisher) convergePR(
 	for _, pr := range prs {
 		parsed, ok := ParseMarker(pr.Body)
 		if !ok || parsed != identity.Digest() {
-			return 0, false, fmt.Errorf("publish: pull request #%d occupies branch %s: %w", pr.Number, branch, ErrForeignResource)
+			return 0, false, fmt.Errorf("publish: %w", &ForeignPullRequestError{Number: pr.Number, Branch: branch})
 		}
 		ours = append(ours, pr)
 	}
