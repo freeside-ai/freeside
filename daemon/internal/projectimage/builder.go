@@ -57,7 +57,9 @@ var (
 var ErrInvalidRequest = errors.New("invalid project-image build request")
 
 // ErrProofFailed marks a build whose allowlist, offline, cache-dependency, or
-// repository-identity proof did not establish the contract.
+// repository-identity proof ran and did not establish the contract. A
+// container-runtime command that failed inside a proof is not one: the proof
+// produced no result, so the error carries neither this class nor a verdict.
 var ErrProofFailed = errors.New("project-image proof failed")
 
 // Request binds one build to its repository, commit, recipe, approved base,
@@ -289,10 +291,12 @@ func (b *Builder) Build(
 	if err != nil {
 		return domain.ProjectImage{}, fmt.Errorf("inspect build-time base %q: %w", normalized.BaseBuildRef, err)
 	}
+	// The base tag is the daemon's configuration, not the candidate's, so a
+	// drifted tag is not a failed proof.
 	if observedBase != baseDigest {
 		return domain.ProjectImage{}, fmt.Errorf(
-			"build-time base %q resolves to %s, expected %s: %w",
-			normalized.BaseBuildRef, observedBase, baseDigest, ErrProofFailed)
+			"build-time base %q resolves to %s, expected %s",
+			normalized.BaseBuildRef, observedBase, baseDigest)
 	}
 	baseToken, err := randomToken()
 	if err != nil {
@@ -348,14 +352,14 @@ func (b *Builder) Build(
 		RecipeDigest: recipeDigest, Layout: layout,
 	}, environment)
 	if err := b.backend.CheckProvenance(ctx, localRef, provenance); err != nil {
-		return domain.ProjectImage{}, fmt.Errorf("local image provenance: %w: %w", err, ErrProofFailed)
+		return domain.ProjectImage{}, fmt.Errorf("local image provenance: %w", proofFailure(err))
 	}
 	if err := b.backend.RemoveImage(context.WithoutCancel(ctx), privateBaseRef); err != nil {
 		return domain.ProjectImage{}, fmt.Errorf("release private base reference: %w", err)
 	}
 	basePinned = false
 	if err := b.backend.CheckAllowlist(ctx, localRef); err != nil {
-		return domain.ProjectImage{}, fmt.Errorf("local image allowlist: %w: %w", err, ErrProofFailed)
+		return domain.ProjectImage{}, fmt.Errorf("local image allowlist: %w", proofFailure(err))
 	}
 	if err := b.proveOffline(
 		ctx, repositoryDir, normalized.CommitSHA, localRef, recipe.Commands, scratch, layout,
@@ -413,7 +417,7 @@ func (b *Builder) Build(
 			ref, localDigest, ErrProofFailed)
 	}
 	if err := b.backend.CheckAllowlist(ctx, string(ref)); err != nil {
-		return domain.ProjectImage{}, fmt.Errorf("published image allowlist: %w: %w", err, ErrProofFailed)
+		return domain.ProjectImage{}, fmt.Errorf("published image allowlist: %w", proofFailure(err))
 	}
 
 	result, err = domain.NewProjectImage(domain.ProjectImageInput{
@@ -539,13 +543,17 @@ func (b *Builder) proveOffline(
 ) error {
 	probe, cache, networkAttempt := maskedProbe(layout)
 	// A failed process result means something only after the runtime has proved
-	// it can start this image under the same no-network topology.
+	// it can start this image under the same no-network topology. The
+	// preflight proves nothing about the candidate: `true` comes from the
+	// approved base's layers, which the candidate's dependencies only add files
+	// beside, and provenance has already bounded those layers. So a failure
+	// here, like a runtime error anywhere below, is not a failed proof.
 	preflight, err := b.backend.Run(ctx, runSpec{ImageRef: imageRef, Argv: []string{"true"}})
 	if err != nil {
-		return fmt.Errorf("offline preflight: %w: %w", err, ErrProofFailed)
+		return fmt.Errorf("offline preflight: %w", err)
 	}
 	if preflight.ExitCode != 0 {
-		return fmt.Errorf("offline preflight exited %d: %w", preflight.ExitCode, ErrProofFailed)
+		return fmt.Errorf("offline preflight exited %d", preflight.ExitCode)
 	}
 	if err := b.proveRecipe(ctx, sourceDir, commit, imageRef, commands, scratch, ""); err != nil {
 		return err
@@ -561,7 +569,7 @@ func (b *Builder) proveOffline(
 	})
 	switch {
 	case runErr != nil:
-		return fmt.Errorf("cache-masked preparation could not execute: %w: %w", runErr, ErrProofFailed)
+		return fmt.Errorf("cache-masked preparation could not execute: %w", runErr)
 	case result.ExitCode == 0:
 		// Hydration need not consume the cache, for example with no
 		// dependencies. Prove the complete recipe works without it rather than
@@ -597,7 +605,7 @@ func (b *Builder) proveRecipe(
 			ImageRef: imageRef, Workspace: workspace, Argv: []string{PreparationPath}, MaskedCache: maskedCache,
 		})
 		if err != nil {
-			return fmt.Errorf("hydrate positive workspace %d: %w: %w", index, err, ErrProofFailed)
+			return fmt.Errorf("hydrate positive workspace %d: %w", index, err)
 		}
 		if preparation.ExitCode != 0 {
 			return fmt.Errorf("hydrate positive workspace %d exited %d (%s): %w",
@@ -607,7 +615,7 @@ func (b *Builder) proveRecipe(
 			ImageRef: imageRef, Workspace: workspace, Argv: append([]string{}, argv...), MaskedCache: maskedCache,
 		})
 		if err != nil {
-			return fmt.Errorf("recipe command %d %q: %w: %w", index, argv[0], err, ErrProofFailed)
+			return fmt.Errorf("recipe command %d %q: %w", index, argv[0], err)
 		}
 		if result.ExitCode != 0 {
 			return fmt.Errorf("recipe command %d %q exited %d (%s): %w",
@@ -615,6 +623,18 @@ func (b *Builder) proveRecipe(
 		}
 	}
 	return nil
+}
+
+// proofFailure classes a provenance or allowlist check's error as a failed
+// proof unless a container-runtime command the check needed failed, in which
+// case the check produced no result. A check whose result failed and whose
+// cleanup then hit a runtime fault carries both, and the fault wins: the
+// build retries rather than record a verdict the runtime clouded.
+func proofFailure(err error) error {
+	if isRuntimeFault(err) {
+		return err
+	}
+	return fmt.Errorf("%w: %w", err, ErrProofFailed)
 }
 
 // ValidateRegistry refuses a registry destination the builder cannot publish

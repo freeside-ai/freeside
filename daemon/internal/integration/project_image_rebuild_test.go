@@ -406,30 +406,44 @@ func TestProductionPublicationBlocksDependencyChangeOutsidePolicy(t *testing.T) 
 	}
 }
 
-// A builder failure that is not a proof failure is the build's environment,
-// not a verdict: the task stays queued and the next pass builds again.
+// A builder failure that carries no verdict is the build's environment: the
+// task stays queued and the next pass builds again. That covers a registry
+// fault during the install, a container runtime that couldn't run a proof's
+// command, and a base tag that drifted from the approved digest.
 func TestProductionPublicationRetriesRebuildAfterBuilderFault(t *testing.T) {
 	t.Parallel()
-	p, builder := newProjectImageRebuildHarness(t, rebuildCandidate("registry.npmjs.org"), rebuildDeclaredSet)
-	builder.fail = errors.New("registry connection reset")
-	p.startAndRecordExport(t)
-	result, err := p.reconcileLanes()
-	if err != nil || result.BlockedItemsCreated != 0 || result.ReadyItemsCreated != 0 ||
-		result.PublicationTasksCompleted != 0 {
-		t.Fatalf("faulted build = %#v, %v, want the task left queued", result, err)
-	}
-	if _, err := p.attention.GetAttentionItem(p.ctx, domain.ProductionBlockedItemID(p.runID)); !errors.Is(err, store.ErrNotFound) {
-		t.Fatalf("a builder fault raised an item: %v", err)
-	}
-	if p.room.runs != 0 {
-		t.Fatalf("a faulted build ran %d verification commands", p.room.runs)
-	}
-	builder.fail = nil
-	p.now = p.now.Add(time.Hour)
-	p.reconcileUntilReady(t, 4)
-	if len(builder.requests) != 2 || len(p.recordedImages(t)) != 2 {
-		t.Fatalf("builds = %d, recorded images = %d, want 2 and 2",
-			len(builder.requests), len(p.recordedImages(t)))
+	for name, fault := range map[string]error{
+		"registry fault": errors.New("build project image: container build: exit status 1\n" +
+			"npm error code ECONNRESET"),
+		"runtime fault inside a proof": errors.New("offline preflight: run project-image command: " +
+			"exit status 1"),
+		"drifted base tag": errors.New(`build-time base "freeside-agent-claude:local" resolves to ` +
+			"sha256:" + strings.Repeat("c", 64) + ", expected sha256:" + strings.Repeat("a", 64)),
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			p, builder := newProjectImageRebuildHarness(t, rebuildCandidate("registry.npmjs.org"), rebuildDeclaredSet)
+			builder.fail = fault
+			p.startAndRecordExport(t)
+			result, err := p.reconcileLanes()
+			if err != nil || result.BlockedItemsCreated != 0 || result.ReadyItemsCreated != 0 ||
+				result.PublicationTasksCompleted != 0 {
+				t.Fatalf("faulted build = %#v, %v, want the task left queued", result, err)
+			}
+			if _, err := p.attention.GetAttentionItem(p.ctx, domain.ProductionBlockedItemID(p.runID)); !errors.Is(err, store.ErrNotFound) {
+				t.Fatalf("a builder fault raised an item: %v", err)
+			}
+			if p.room.runs != 0 {
+				t.Fatalf("a faulted build ran %d verification commands", p.room.runs)
+			}
+			builder.fail = nil
+			p.now = p.now.Add(time.Hour)
+			p.reconcileUntilReady(t, 4)
+			if len(builder.requests) != 2 || len(p.recordedImages(t)) != 2 {
+				t.Fatalf("builds = %d, recorded images = %d, want 2 and 2",
+					len(builder.requests), len(p.recordedImages(t)))
+			}
+		})
 	}
 }
 

@@ -340,10 +340,12 @@ func (a appleBackend) CheckAllowlist(ctx context.Context, ref string) (err error
 	if err != nil {
 		return err
 	}
+	// Cleanup runs after the check has its result, so a cleanup failure is a
+	// fault, never part of a failed proof.
 	defer func() {
 		removeErr := os.Remove(cidPath)
 		if removeErr != nil && !errors.Is(removeErr, os.ErrNotExist) {
-			err = errors.Join(err, fmt.Errorf("remove agent-image allowlist identity file: %w", removeErr))
+			err = errors.Join(err, runtimeFault{fmt.Errorf("remove agent-image allowlist identity file: %w", removeErr)})
 		}
 	}()
 	output, runErr := a.runner.Run(ctx, commandSpec{
@@ -362,13 +364,13 @@ func (a appleBackend) CheckAllowlist(ctx context.Context, ref string) (err error
 				context.WithoutCancel(ctx), containerID, token,
 			)
 			if cleanupErr != nil {
-				err = errors.Join(err, fmt.Errorf("clean agent-image allowlist probe: %w", cleanupErr))
+				err = errors.Join(err, runtimeFault{fmt.Errorf("clean agent-image allowlist probe: %w", cleanupErr)})
 			}
 		}()
 	} else {
 		recoverErr = a.recoverOwnedContainer(context.WithoutCancel(ctx), token)
 		if runErr == nil {
-			return errors.Join(identityErr, recoverErr)
+			return runtimeFault{errors.Join(identityErr, recoverErr)}
 		}
 	}
 	if runErr != nil {
@@ -380,7 +382,7 @@ func (a appleBackend) CheckAllowlist(ctx context.Context, ref string) (err error
 	}
 	report, err := inspect(ctx, containerID)
 	if err != nil {
-		return fmt.Errorf("inspect agent-image allowlist probe: %w", err)
+		return runtimeFault{fmt.Errorf("inspect agent-image allowlist probe: %w", err)}
 	}
 	return validateImageAllowlist(report, containerID, ref)
 }
@@ -471,7 +473,7 @@ func (a appleBackend) Run(ctx context.Context, spec runSpec) (result runResult, 
 	} else {
 		recoverErr = a.recoverOwnedContainer(context.WithoutCancel(ctx), token)
 		if runErr == nil {
-			return runResult{}, errors.Join(identityErr, recoverErr)
+			return runResult{}, runtimeFault{errors.Join(identityErr, recoverErr)}
 		}
 	}
 	if runErr != nil {

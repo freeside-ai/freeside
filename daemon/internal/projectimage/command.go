@@ -2,6 +2,7 @@ package projectimage
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os/exec"
 
@@ -90,12 +91,27 @@ func (b *tailBuffer) bytes() []byte {
 	return append([]byte{}, b.buf...)
 }
 
+// runError reports a command that failed and marks it a runtime fault.
 func runError(action string, output commandOutput, err error) error {
 	if err == nil {
 		return nil
 	}
 	if tail := boundedOutput(output.bytes); tail != "" {
-		return fmt.Errorf("%s: %w\n%s", action, err, tail)
+		return runtimeFault{fmt.Errorf("%s: %w\n%s", action, err, tail)}
 	}
-	return fmt.Errorf("%s: %w", action, err)
+	return runtimeFault{fmt.Errorf("%s: %w", action, err)}
+}
+
+// runtimeFault marks an error from a host tool or container-runtime command
+// that failed instead of answering, so the check it served has no result.
+// The builder keeps a marked error out of ErrProofFailed. The marker adds no
+// text: it changes how an error is classed, not what it says.
+type runtimeFault struct{ err error }
+
+func (f runtimeFault) Error() string { return f.err.Error() }
+func (f runtimeFault) Unwrap() error { return f.err }
+
+func isRuntimeFault(err error) bool {
+	var fault runtimeFault
+	return errors.As(err, &fault)
 }

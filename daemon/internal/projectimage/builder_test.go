@@ -96,14 +96,20 @@ type fakeBackend struct {
 	maskedFailure  string
 	maskedRunErr   bool
 	failRecipe     string
-	allowlistErr   error
-	provenanceErr  error
-	removeLocalErr error
-	containerfile  string
-	cleanups       int
-	discards       int
-	leaseReleases  int
-	publicationLog []string
+	// runFault, when it holds for a run, makes the runtime fail to run it.
+	runFault      func(runSpec) bool
+	preflightExit int
+	allowlistErr  error
+	// publishedAllowlistErr answers the allowlist check of the published
+	// reference only.
+	publishedAllowlistErr error
+	provenanceErr         error
+	removeLocalErr        error
+	containerfile         string
+	cleanups              int
+	discards              int
+	leaseReleases         int
+	publicationLog        []string
 }
 
 func newFakeBackend() *fakeBackend {
@@ -148,6 +154,9 @@ func (f *fakeBackend) Build(_ context.Context, spec buildSpec) error {
 
 func (f *fakeBackend) CheckAllowlist(_ context.Context, ref string) error {
 	f.allowlist = append(f.allowlist, ref)
+	if ref == string(f.published) {
+		return f.publishedAllowlistErr
+	}
 	return f.allowlistErr
 }
 
@@ -160,6 +169,12 @@ func (f *fakeBackend) CheckProvenance(_ context.Context, ref string, spec proven
 func (f *fakeBackend) Run(_ context.Context, spec runSpec) (runResult, error) {
 	spec.Argv = append([]string{}, spec.Argv...)
 	f.runs = append(f.runs, spec)
+	if f.runFault != nil && f.runFault(spec) {
+		return runResult{}, errors.New("runtime did not run the container")
+	}
+	if slices.Equal(spec.Argv, []string{"true"}) {
+		return runResult{ExitCode: f.preflightExit}, nil
+	}
 	if spec.MaskedCache != "" {
 		if !slices.Equal(spec.Argv, f.probe) {
 			if spec.Argv[0] == f.maskedFailure {
@@ -487,13 +502,18 @@ func TestValidateRegistry(t *testing.T) {
 	}
 }
 
-func TestBuildRefutesBaseAndProofFailures(t *testing.T) {
+// A proof that ran and failed is a verdict on the candidate. The runtime
+// faults that once shared this class are in
+// TestBuildKeepsRuntimeFaultsOutOfProofFailures.
+func TestBuildRefutesProofFailures(t *testing.T) {
 	cases := []struct {
 		name   string
 		mutate func(*fakeBackend)
 	}{
-		{"base digest mismatch", func(b *fakeBackend) { b.baseDigest = "sha256:" + strings.Repeat("c", 64) }},
 		{"allowlist rejection", func(b *fakeBackend) { b.allowlistErr = errors.New("shape mismatch") }},
+		{"published allowlist rejection", func(b *fakeBackend) {
+			b.publishedAllowlistErr = errors.New("shape mismatch")
+		}},
 		{"provenance rejection", func(b *fakeBackend) {
 			b.provenanceErr = errors.New("label mismatch")
 		}},
@@ -505,16 +525,6 @@ func TestBuildRefutesBaseAndProofFailures(t *testing.T) {
 		{"cache-independent recipe fails", func(b *fakeBackend) {
 			b.negativeErr = nil
 			b.maskedFailure = "npm"
-		}},
-		{"cache-independent hydration cannot execute", func(b *fakeBackend) {
-			b.negativeErr = nil
-			b.maskedFailure = PreparationPath
-			b.maskedRunErr = true
-		}},
-		{"cache-independent recipe cannot execute", func(b *fakeBackend) {
-			b.negativeErr = nil
-			b.maskedFailure = "npm"
-			b.maskedRunErr = true
 		}},
 		{"negative misses network class", func(b *fakeBackend) {
 			b.negativeOutput = []byte("permission denied")
@@ -533,6 +543,60 @@ func TestBuildRefutesBaseAndProofFailures(t *testing.T) {
 			}
 			if strings.HasPrefix(tc.name, "cache-independent") && len(backend.publishes) != 0 {
 				t.Fatal("failed cache-independent proof reached publication")
+			}
+		})
+	}
+}
+
+// A drifted base tag and a runtime that couldn't run a proof's command fail
+// the build without a verdict, so the publication lane retries them. These
+// cases asserted ErrProofFailed before #1792 narrowed it to a proof that ran.
+func TestBuildKeepsRuntimeFaultsOutOfProofFailures(t *testing.T) {
+	runtimeFailure := runtimeFault{errors.New("inspect image: exit status 1")}
+	runs := func(argv0 string, masked bool) func(runSpec) bool {
+		return func(spec runSpec) bool {
+			return spec.Argv[0] == argv0 && (spec.MaskedCache != "") == masked
+		}
+	}
+	cases := []struct {
+		name   string
+		mutate func(*fakeBackend)
+	}{
+		{"base digest mismatch", func(b *fakeBackend) { b.baseDigest = "sha256:" + strings.Repeat("c", 64) }},
+		{"offline preflight cannot execute", func(b *fakeBackend) { b.runFault = runs("true", false) }},
+		{"offline preflight exits non-zero", func(b *fakeBackend) { b.preflightExit = 125 }},
+		{"positive hydration cannot execute", func(b *fakeBackend) { b.runFault = runs(PreparationPath, false) }},
+		{"positive recipe cannot execute", func(b *fakeBackend) { b.runFault = runs("npm", false) }},
+		{"cache-masked probe cannot execute", func(b *fakeBackend) {
+			b.runFault = func(spec runSpec) bool { return slices.Equal(spec.Argv, b.probe) }
+		}},
+		{"cache-independent hydration cannot execute", func(b *fakeBackend) {
+			b.negativeErr = nil
+			b.maskedFailure = PreparationPath
+			b.maskedRunErr = true
+		}},
+		{"cache-independent recipe cannot execute", func(b *fakeBackend) {
+			b.negativeErr = nil
+			b.maskedFailure = "npm"
+			b.maskedRunErr = true
+		}},
+		{"provenance runtime fault", func(b *fakeBackend) { b.provenanceErr = runtimeFailure }},
+		{"allowlist runtime fault", func(b *fakeBackend) { b.allowlistErr = runtimeFailure }},
+		{"published allowlist runtime fault", func(b *fakeBackend) { b.publishedAllowlistErr = runtimeFailure }},
+		{"allowlist rejection clouded by a cleanup fault", func(b *fakeBackend) {
+			b.allowlistErr = errors.Join(errors.New("shape mismatch"), runtimeFailure)
+		}},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			backend := newFakeBackend()
+			tc.mutate(backend)
+			result, err := newBuilder(&fakeSource{}, backend, t.TempDir()).Build(t.Context(), validRequest())
+			if err == nil || result.ImageRef != "" {
+				t.Fatalf("Build = %+v, %v, want a failed build", result, err)
+			}
+			if errors.Is(err, ErrProofFailed) || errors.Is(err, ErrInvalidRequest) {
+				t.Fatalf("Build = %v, want an error without a verdict class", err)
 			}
 		})
 	}
