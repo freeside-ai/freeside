@@ -26,7 +26,11 @@ const (
 
 var issueScope = specify.ManagedRepository{Repo: issueRepo, RepositoryID: issueRepositoryID}
 
-var issueAllowlist = []string{"https://api.github.com", "https://docs.example"}
+// issueAllowlist admits the github.com host variants so the out-of-scope
+// table shows the rewrite, not the allowlist, declining them.
+var issueAllowlist = []string{
+	"https://api.github.com", "https://github.com", "https://www.github.com", "https://github.com.", "https://docs.example",
+}
 
 type fakeIssueTokens struct {
 	mu    sync.Mutex
@@ -265,6 +269,94 @@ func TestFetcherRewritesTheOwnerNamePullRequestURL(t *testing.T) {
 	}
 }
 
+// TestFetcherRewritesTheGitHubPageURL covers the task file's form (#2330):
+// the bare github.com page of the scope's issue or pull request, in any case,
+// goes to the repository-ID endpoint with the token, and the page URL stays
+// the artifact's identity so a retry recovers it. Without a token the
+// private repository answers 404.
+func TestFetcherRewritesTheGitHubPageURL(t *testing.T) {
+	t.Parallel()
+	cases := []struct {
+		name, pageURL, idURL, body string
+	}{
+		{
+			"issue", "https://github.com/Freeside-AI/Private-Repo/issues/7",
+			"https://api.github.com/repositories/4242/issues/7", `{"body":"private issue text"}`,
+		},
+		{
+			"pull request", "https://github.com/freeside-ai/private-repo/pull/1",
+			"https://api.github.com/repositories/4242/pulls/1", `{"body":"private pull request text"}`,
+		},
+		{
+			"host case and default port", "https://GitHub.com:443/freeside-ai/private-repo/issues/7",
+			"https://api.github.com/repositories/4242/issues/7", `{"body":"private issue text"}`,
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			id := "inv-page-" + strings.ReplaceAll(tc.name, " ", "-")
+			fetcher, transport, blobs := newIssueFetcher(t, validIssueTokens())
+			got, err := fetchIssue(t, fetcher, id, tc.pageURL, issueScope)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if got.URL != tc.pageURL || got.FinalURL != tc.idURL {
+				t.Fatalf("result URLs = %q, %q", got.URL, got.FinalURL)
+			}
+			seen := transport.requests()
+			if len(seen) != 1 || seen[0].url != tc.idURL || seen[0].authorization != "Bearer "+issueTokenNeedle {
+				t.Fatalf("transport saw %+v", redactSeen(seen))
+			}
+			evidence, err := specify.DecodeResearchEvidence(storedEnvelope(t, blobs, got))
+			if err != nil {
+				t.Fatal(err)
+			}
+			if evidence.Body != tc.body || evidence.Source.URL != tc.pageURL || evidence.Source.FinalURL != tc.idURL {
+				t.Fatalf("evidence = %+v", evidence)
+			}
+			recovered, err := fetchIssue(t, fetcher, id, tc.pageURL, issueScope)
+			if err != nil || recovered.Artifact.Digest != got.Artifact.Digest || len(transport.requests()) != 1 {
+				t.Fatalf("recovery = %+v, %v; transport calls = %d", recovered, err, len(transport.requests()))
+			}
+			unauthenticated, bare, _ := newIssueFetcher(t, nil)
+			if _, err := fetchIssue(t, unauthenticated, id, tc.pageURL, issueScope); !errors.Is(err, specify.ErrResearchFetchFailed) ||
+				!strings.Contains(err.Error(), "HTTP 404") {
+				t.Fatalf("unauthenticated fetch error = %v, want HTTP 404", err)
+			}
+			if seen := bare.requests(); len(seen) != 1 || seen[0].url != tc.idURL || seen[0].authorization != "" {
+				t.Fatalf("unauthenticated transport saw %+v", redactSeen(seen))
+			}
+		})
+	}
+}
+
+// TestFetcherSendsAGitHubPageAsWrittenWithoutTheAPIOrigin covers an
+// allowlist that admits github.com but not the API: rewriting would send
+// egress the policy did not admit, so the page goes as written, without
+// credentials.
+func TestFetcherSendsAGitHubPageAsWrittenWithoutTheAPIOrigin(t *testing.T) {
+	t.Parallel()
+	tokens := validIssueTokens()
+	fetcher, transport, _ := newIssueFetcher(t, tokens)
+	const pageURL = "https://github.com/freeside-ai/private-repo/issues/7"
+	got, err := fetcher.Fetch(t.Context(), "inv-page-no-api", 1,
+		specify.FetchRequest{URL: pageURL, Purpose: "read the source issue"}, issueScope,
+		[]string{"https://github.com", "https://docs.example"}, 1024)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.FinalURL != pageURL {
+		t.Fatalf("final URL = %q, want the page as written", got.FinalURL)
+	}
+	if seen := transport.requests(); len(seen) != 1 || seen[0].url != pageURL || seen[0].authorization != "" {
+		t.Fatalf("transport saw %+v, want one unauthenticated request for the page", redactSeen(seen))
+	}
+	if calls := tokens.calls(); len(calls) != 0 {
+		t.Fatalf("page request asked for a token: %v", calls)
+	}
+}
+
 func TestFetcherSendsNoCredentialOutsideTheManagedRepositoryEndpoints(t *testing.T) {
 	t.Parallel()
 	cases := []struct {
@@ -290,6 +382,22 @@ func TestFetcherSendsNoCredentialOutsideTheManagedRepositoryEndpoints(t *testing
 		{"empty segment", "https://api.github.com/repositories/4242//issues/7", issueScope},
 		{"query with a space", "https://api.github.com/repositories/4242/issues/7?a /repos/x/y/issues/1", issueScope},
 		{"malformed query escape", "https://api.github.com/repositories/4242/issues/7?a=%zz", issueScope},
+		{"page in a renamed repository", "https://github.com/freeside-ai/private-repo-renamed/issues/7", issueScope},
+		{"page in another owner's repository", "https://github.com/someone-else/private-repo/issues/7", issueScope},
+		{"page with an encoded slash", "https://github.com/freeside-ai%2Fprivate-repo/issues/7", issueScope},
+		{"page with a dot segment", "https://github.com/freeside-ai/private-repo/issues/./7", issueScope},
+		{"page with an empty segment", "https://github.com/freeside-ai//private-repo/issues/7", issueScope},
+		{"page with the API pulls spelling", "https://github.com/freeside-ai/private-repo/pulls/1", issueScope},
+		{"page issue listing", "https://github.com/freeside-ai/private-repo/issues", issueScope},
+		{"page sub-path", "https://github.com/freeside-ai/private-repo/pull/1/files", issueScope},
+		{"page with a trailing slash", "https://github.com/freeside-ai/private-repo/issues/7/", issueScope},
+		{"page with a query", "https://github.com/freeside-ai/private-repo/issues/7?per_page=1", issueScope},
+		{"page with a non-numeric issue", "https://github.com/freeside-ai/private-repo/issues/abc", issueScope},
+		{"page with a zero issue", "https://github.com/freeside-ai/private-repo/issues/0", issueScope},
+		{"page with a leading-zero issue", "https://github.com/freeside-ai/private-repo/issues/07", issueScope},
+		{"page on www", "https://www.github.com/freeside-ai/private-repo/issues/7", issueScope},
+		{"page on a trailing-dot host", "https://github.com./freeside-ai/private-repo/issues/7", issueScope},
+		{"page with a repository-ID path", "https://github.com/repositories/4242/issues/7", issueScope},
 		{"zero scope", "https://api.github.com/repositories/4242/issues/7", specify.ManagedRepository{}},
 		{
 			"scope without ID", "https://api.github.com/repos/freeside-ai/private-repo/issues/7",

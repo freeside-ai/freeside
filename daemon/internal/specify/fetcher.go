@@ -157,6 +157,11 @@ type ManagedRepository struct {
 // githubAPIOrigin is the only origin an issue-read token is sent to.
 const githubAPIOrigin = "api.github.com:443"
 
+// githubPageOrigin serves the issue and pull request pages a task's source
+// URL names. An in-scope page request is rewritten to githubAPIOrigin; the
+// token never goes to this origin.
+const githubPageOrigin = "github.com:443"
+
 // NewFetcher constructs a fetcher that sends no credentials. A nil transport
 // selects the production transport, which resolves and dials the same public
 // address and uses no ambient proxy. Tests may inject a transport without
@@ -184,7 +189,8 @@ func NewFetcherWithIssueTokens(
 // Fetch enforces the allowlist, bounds the response, stores a URL-bound
 // envelope in the blob store, then registers its immutable research artifact.
 // A request for one of the scope repository's issues or pull requests on the
-// GitHub API is sent to its repository-ID endpoint with an installation token when one can
+// GitHub API, or for the bare github.com page of one when the allowlist admits
+// the API, is sent to its repository-ID endpoint with an installation token when one can
 // be had; every other request goes exactly as written, without credentials.
 // A non-2xx status or a transport error fails with ErrResearchFetchFailed.
 func (f *Fetcher) Fetch(
@@ -269,7 +275,7 @@ func (f *Fetcher) fetch(
 	}
 	target := parsed
 	var credential *issueCredential
-	if repositoryURL, ok := managedRepositoryURL(parsed, scope); ok {
+	if repositoryURL, ok := managedRepositoryURL(parsed, scope, allowed); ok {
 		target = repositoryURL
 		resolved := f.issueCredential(ctx, scope)
 		credential = &resolved
@@ -530,20 +536,24 @@ func (c *issueCredential) explain() string {
 
 // managedRepositoryURL reports whether parsed addresses an issue or pull
 // request, or a sub-resource of one, of the scope's repository on the GitHub
-// API, and
+// API, or the bare github.com page of one, and
 // returns the repository-ID form to send. The token is bound to the ID, so
 // an owner/name path naming the scope's repository is rewritten to the ID
 // endpoint and a rename can never route the credential to another
 // repository. A path with an empty, dot, or percent-encoded segment is out
 // of scope, so the server can't resolve an in-scope spelling elsewhere, and
 // so is a query that isn't plain, so an authenticated request line carries
-// nothing the writer could use to reshape it.
-func managedRepositoryURL(parsed *url.URL, scope ManagedRepository) (*url.URL, bool) {
+// nothing the writer could use to reshape it. A page URL is in scope only as
+// exactly `<owner>/<name>/issues/<n>` or `<owner>/<name>/pull/<n>` with no
+// query, and only when allowed admits the API origin it is rewritten to, so
+// the rewrite never sends egress the allowlist did not admit.
+func managedRepositoryURL(parsed *url.URL, scope ManagedRepository, allowed allowedOrigins) (*url.URL, bool) {
 	if scope.RepositoryID <= 0 || scope.Repo == "" || parsed.RawPath != "" || parsed.Opaque != "" ||
 		!strings.HasPrefix(parsed.Path, "/") || !plainQuery(parsed.RawQuery) {
 		return nil, false
 	}
-	if origin, err := canonicalOrigin(parsed); err != nil || origin != githubAPIOrigin {
+	origin, err := canonicalOrigin(parsed)
+	if err != nil {
 		return nil, false
 	}
 	segments := strings.Split(parsed.Path[1:], "/")
@@ -554,11 +564,29 @@ func managedRepositoryURL(parsed *url.URL, scope ManagedRepository) (*url.URL, b
 	}
 	repositoryID := strconv.FormatInt(scope.RepositoryID, 10)
 	var resourcePath []string
-	switch {
-	case len(segments) >= 4 && segments[0] == "repositories" && segments[1] == repositoryID:
-		resourcePath = segments[2:]
-	case len(segments) >= 5 && segments[0] == "repos" && strings.EqualFold(segments[1]+"/"+segments[2], scope.Repo):
-		resourcePath = segments[3:]
+	switch origin {
+	case githubAPIOrigin:
+		switch {
+		case len(segments) >= 4 && segments[0] == "repositories" && segments[1] == repositoryID:
+			resourcePath = segments[2:]
+		case len(segments) >= 5 && segments[0] == "repos" && strings.EqualFold(segments[1]+"/"+segments[2], scope.Repo):
+			resourcePath = segments[3:]
+		default:
+			return nil, false
+		}
+	case githubPageOrigin:
+		if _, ok := allowed[githubAPIOrigin]; !ok || parsed.RawQuery != "" || len(segments) != 4 ||
+			!strings.EqualFold(segments[0]+"/"+segments[1], scope.Repo) {
+			return nil, false
+		}
+		switch segments[2] {
+		case "issues":
+			resourcePath = []string{"issues", segments[3]}
+		case "pull":
+			resourcePath = []string{"pulls", segments[3]}
+		default:
+			return nil, false
+		}
 	default:
 		return nil, false
 	}
