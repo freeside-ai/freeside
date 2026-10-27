@@ -75,13 +75,32 @@ func (d Doctor) ConvergeReviewConfiguration(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
-	if err := d.converge(ctx, []DoctorFinding{finding}); err != nil {
+	if err := d.converge(ctx, []DoctorFinding{finding}, domain.HealthPostureBlocking); err != nil {
 		return fmt.Errorf("doctor review configuration: %w", err)
 	}
 	if finding.Healthy {
 		if err := d.resolveReviewConfigurationItemsAcrossProjects(ctx); err != nil {
 			return err
 		}
+	}
+	return nil
+}
+
+// imageUpkeepHostFaultCode names the finding image upkeep converges.
+const imageUpkeepHostFaultCode = "image_upkeep_host_fault"
+
+// ConvergeImageUpkeep converges the image-upkeep host-fault finding (plan
+// §5.7, Project-image upkeep): fault says what kept the builder from
+// reaching a verdict, and empty clears the item. The item is advisory, since
+// a blocking one would hold every unattended run, including runs whose
+// image still serves their base.
+func (d Doctor) ConvergeImageUpkeep(ctx context.Context, fault string) error {
+	if d.Store == nil || d.Attention == nil || d.ProjectID == "" {
+		return fmt.Errorf("doctor image upkeep: nil or invalid dependency")
+	}
+	finding := DoctorFinding{Code: imageUpkeepHostFaultCode, Healthy: fault == "", Detail: fault}
+	if err := d.converge(ctx, []DoctorFinding{finding}, domain.HealthPostureAdvisory); err != nil {
+		return fmt.Errorf("doctor image upkeep: %w", err)
 	}
 	return nil
 }
@@ -199,7 +218,7 @@ func (d Doctor) Run(ctx context.Context) (DoctorReport, error) {
 		backupFinding("artifact_closure", backup.ArtifactClosure),
 		backupFinding("restore_test_age", backup.RestoreTestAge),
 	)
-	if err := d.converge(ctx, findings); err != nil {
+	if err := d.converge(ctx, findings, domain.HealthPostureBlocking); err != nil {
 		return DoctorReport{}, err
 	}
 	// The credential-integrity finding stays out of converge, which files a
@@ -322,7 +341,9 @@ func backupFinding(code string, status domain.BackupHealthStatus) DoctorFinding 
 	}
 }
 
-func (d Doctor) converge(ctx context.Context, findings []DoctorFinding) error {
+// converge files an item with posture for each unhealthy finding and clears
+// the items of each healthy one.
+func (d Doctor) converge(ctx context.Context, findings []DoctorFinding, posture domain.HealthPosture) error {
 	snapshots, err := d.Attention.ListAttentionItems(ctx)
 	if err != nil {
 		return fmt.Errorf("doctor: list health items: %w", err)
@@ -401,7 +422,6 @@ func (d Doctor) converge(ctx context.Context, findings []DoctorFinding) error {
 			if d.Now != nil {
 				createdAt = d.Now().UTC()
 			}
-			posture := domain.HealthPostureBlocking
 			item, err := domain.NewAttentionItem(domain.AttentionItemInput{
 				ID:        domain.ItemID(fmt.Sprintf("%s%s-%d", doctorItemPrefix, finding.Code, revision)),
 				ProjectID: d.ProjectID,
