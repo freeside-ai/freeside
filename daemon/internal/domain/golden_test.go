@@ -1609,6 +1609,24 @@ func TestGolden(t *testing.T) {
 		FirstObservedAt: ts.Add(time.Minute),
 		LastObservedAt:  ts.Add(2 * time.Minute),
 	}
+	upkeepRefusalID := domain.Digest("sha256:" + strings.Repeat("e1", 32))
+	upkeepItemID := domain.ItemID("item-image-policy-adoption")
+	upkeepTaskID := domain.TaskID("task-image-maintenance")
+	upkeepHold := func(fact domain.ImageUpkeepHold) domain.RunHoldObservation {
+		return domain.RunHoldObservation{
+			RunID: "run-1", Reason: domain.HoldImageUpkeepPending, ImageUpkeep: &fact,
+			FirstObservedAt: ts.Add(time.Minute), LastObservedAt: ts.Add(2 * time.Minute),
+		}
+	}
+	rebuildHold := upkeepHold(domain.ImageUpkeepHold{Pending: domain.ImageUpkeepPendingRebuild})
+	adoptionHold := upkeepHold(domain.ImageUpkeepHold{
+		Pending: domain.ImageUpkeepPendingAdoptionProposal, RefusalRecordID: &upkeepRefusalID,
+		ProposalItemID: &upkeepItemID,
+	})
+	maintenanceHold := upkeepHold(domain.ImageUpkeepHold{
+		Pending: domain.ImageUpkeepPendingMaintenanceTask, RefusalRecordID: &upkeepRefusalID,
+		MaintenanceTaskID: &upkeepTaskID,
+	})
 	runObservation := domain.RunObservation{
 		RunID:      "run-1",
 		Milestones: []domain.RunMilestone{submittedMilestone, outcomeMilestone, terminalMilestone},
@@ -2109,6 +2127,9 @@ func TestGolden(t *testing.T) {
 		{"invocation_observation", invocationObservation},
 		{"run_hold_observation", holdObservation},
 		{"run_hold_observation_admission_refusal", admissionHoldObservation},
+		{"run_hold_observation_image_upkeep_rebuild", rebuildHold},
+		{"run_hold_observation_image_upkeep_adoption", adoptionHold},
+		{"run_hold_observation_image_upkeep_maintenance", maintenanceHold},
 		{"run_observation", runObservation},
 		{"work_unit_declaration", unitDeclaration},
 		{"work_unit_pr_binding", unitPRBinding},

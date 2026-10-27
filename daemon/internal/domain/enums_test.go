@@ -470,6 +470,10 @@ func TestEnumValidity(t *testing.T) {
 		valids["RebuildRefusal"] = append(valids["RebuildRefusal"], v.valid)
 	}
 	invalids["RebuildRefusal"] = RebuildRefusal("").valid
+	for _, v := range AllImageUpkeepPendings {
+		valids["ImageUpkeepPending"] = append(valids["ImageUpkeepPending"], v.valid)
+	}
+	invalids["ImageUpkeepPending"] = ImageUpkeepPending("").valid
 
 	for name, checks := range valids {
 		for i, check := range checks {

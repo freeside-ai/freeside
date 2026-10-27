@@ -5261,6 +5261,105 @@ public enum Components {
             case trust_blocked = "trust_blocked"
             case base_advanced = "base_advanced"
             case identity_parallelism = "identity_parallelism"
+            case image_upkeep_pending = "image_upkeep_pending"
+        }
+        /// What an image_upkeep_pending hold waits on, mirrored from domain.ImageUpkeepPending (plan §5.7, Project-image upkeep): the upkeep job's rebuild, an adoption card, or a maintenance task.
+        ///
+        ///
+        /// - Remark: Generated from `#/components/schemas/ImageUpkeepPending`.
+        @frozen public enum ImageUpkeepPending: String, Codable, Hashable, Sendable, CaseIterable {
+            case rebuild = "rebuild"
+            case adoption_proposal = "adoption_proposal"
+            case maintenance_task = "maintenance_task"
+        }
+        /// The typed fact beside an image_upkeep_pending hold, mirrored from domain.ImageUpkeepHold: what the run waits on and, past a rebuild, the upkeep refusal record and the item or task that answers it, each by reference.
+        ///
+        ///
+        /// - Remark: Generated from `#/components/schemas/ImageUpkeepHold`.
+        public struct ImageUpkeepHold: Codable, Hashable, Sendable {
+            /// - Remark: Generated from `#/components/schemas/ImageUpkeepHold/pending`.
+            public var pending: Components.Schemas.ImageUpkeepPending
+            /// The upkeep refusal record; null exactly for a rebuild.
+            ///
+            /// - Remark: Generated from `#/components/schemas/ImageUpkeepHold/refusal_record_id`.
+            public struct refusal_record_idPayload: Codable, Hashable, Sendable {
+                /// - Remark: Generated from `#/components/schemas/ImageUpkeepHold/refusal_record_id/value1`.
+                public var value1: Components.Schemas.Digest
+                /// Creates a new `refusal_record_idPayload`.
+                ///
+                /// - Parameters:
+                ///   - value1:
+                public init(value1: Components.Schemas.Digest) {
+                    self.value1 = value1
+                }
+                public init(from decoder: any Swift.Decoder) throws {
+                    self.value1 = try decoder.decodeFromSingleValueContainer()
+                }
+                public func encode(to encoder: any Swift.Encoder) throws {
+                    try encoder.encodeToSingleValueContainer(self.value1)
+                }
+            }
+            /// The upkeep refusal record; null exactly for a rebuild.
+            ///
+            /// - Remark: Generated from `#/components/schemas/ImageUpkeepHold/refusal_record_id`.
+            public var refusal_record_id: Components.Schemas.ImageUpkeepHold.refusal_record_idPayload?
+            /// The adoption card's item ID; set exactly for adoption_proposal.
+            ///
+            /// - Remark: Generated from `#/components/schemas/ImageUpkeepHold/proposal_item_id`.
+            public var proposal_item_id: Swift.String?
+            /// The maintenance task's ID; set exactly for maintenance_task.
+            ///
+            /// - Remark: Generated from `#/components/schemas/ImageUpkeepHold/maintenance_task_id`.
+            public var maintenance_task_id: Swift.String?
+            /// Creates a new `ImageUpkeepHold`.
+            ///
+            /// - Parameters:
+            ///   - pending:
+            ///   - refusal_record_id: The upkeep refusal record; null exactly for a rebuild.
+            ///   - proposal_item_id: The adoption card's item ID; set exactly for adoption_proposal.
+            ///   - maintenance_task_id: The maintenance task's ID; set exactly for maintenance_task.
+            public init(
+                pending: Components.Schemas.ImageUpkeepPending,
+                refusal_record_id: Components.Schemas.ImageUpkeepHold.refusal_record_idPayload? = nil,
+                proposal_item_id: Swift.String? = nil,
+                maintenance_task_id: Swift.String? = nil
+            ) {
+                self.pending = pending
+                self.refusal_record_id = refusal_record_id
+                self.proposal_item_id = proposal_item_id
+                self.maintenance_task_id = maintenance_task_id
+            }
+            public enum CodingKeys: String, CodingKey {
+                case pending
+                case refusal_record_id
+                case proposal_item_id
+                case maintenance_task_id
+            }
+            public init(from decoder: any Swift.Decoder) throws {
+                let container = try decoder.container(keyedBy: CodingKeys.self)
+                self.pending = try container.decode(
+                    Components.Schemas.ImageUpkeepPending.self,
+                    forKey: .pending
+                )
+                self.refusal_record_id = try container.decodeIfPresent(
+                    Components.Schemas.ImageUpkeepHold.refusal_record_idPayload.self,
+                    forKey: .refusal_record_id
+                )
+                self.proposal_item_id = try container.decodeIfPresent(
+                    Swift.String.self,
+                    forKey: .proposal_item_id
+                )
+                self.maintenance_task_id = try container.decodeIfPresent(
+                    Swift.String.self,
+                    forKey: .maintenance_task_id
+                )
+                try decoder.ensureNoAdditionalProperties(knownKeys: [
+                    "pending",
+                    "refusal_record_id",
+                    "proposal_item_id",
+                    "maintenance_task_id"
+                ])
+            }
         }
         /// The closed admission-check vocabulary mirrored from domain.AdmissionCheck: the check that refused an admission_policy_refused hold. Values are typed daemon observations, never free text.
         ///
@@ -5659,6 +5758,32 @@ public enum Components {
             ///
             /// - Remark: Generated from `#/components/schemas/RunHold/detail`.
             public var detail: Components.Schemas.RunHold.detailPayload?
+            /// What an image_upkeep_pending hold waits on; present exactly beside that reason and null beside every other.
+            ///
+            ///
+            /// - Remark: Generated from `#/components/schemas/RunHold/image_upkeep`.
+            public struct image_upkeepPayload: Codable, Hashable, Sendable {
+                /// - Remark: Generated from `#/components/schemas/RunHold/image_upkeep/value1`.
+                public var value1: Components.Schemas.ImageUpkeepHold
+                /// Creates a new `image_upkeepPayload`.
+                ///
+                /// - Parameters:
+                ///   - value1:
+                public init(value1: Components.Schemas.ImageUpkeepHold) {
+                    self.value1 = value1
+                }
+                public init(from decoder: any Swift.Decoder) throws {
+                    self.value1 = try .init(from: decoder)
+                }
+                public func encode(to encoder: any Swift.Encoder) throws {
+                    try self.value1.encode(to: encoder)
+                }
+            }
+            /// What an image_upkeep_pending hold waits on; present exactly beside that reason and null beside every other.
+            ///
+            ///
+            /// - Remark: Generated from `#/components/schemas/RunHold/image_upkeep`.
+            public var image_upkeep: Components.Schemas.RunHold.image_upkeepPayload?
             /// - Remark: Generated from `#/components/schemas/RunHold/first_observed_at`.
             public var first_observed_at: Foundation.Date
             /// - Remark: Generated from `#/components/schemas/RunHold/last_observed_at`.
@@ -5670,6 +5795,7 @@ public enum Components {
             ///   - invocation_id:
             ///   - reason:
             ///   - detail: What an admission_policy_refused hold refused; null beside every other reason, and on an admission hold recorded before the detail existed or raised outside admission.
+            ///   - image_upkeep: What an image_upkeep_pending hold waits on; present exactly beside that reason and null beside every other.
             ///   - first_observed_at:
             ///   - last_observed_at:
             public init(
@@ -5677,6 +5803,7 @@ public enum Components {
                 invocation_id: Swift.String? = nil,
                 reason: Components.Schemas.RunHoldReason,
                 detail: Components.Schemas.RunHold.detailPayload? = nil,
+                image_upkeep: Components.Schemas.RunHold.image_upkeepPayload? = nil,
                 first_observed_at: Foundation.Date,
                 last_observed_at: Foundation.Date
             ) {
@@ -5684,6 +5811,7 @@ public enum Components {
                 self.invocation_id = invocation_id
                 self.reason = reason
                 self.detail = detail
+                self.image_upkeep = image_upkeep
                 self.first_observed_at = first_observed_at
                 self.last_observed_at = last_observed_at
             }
@@ -5692,6 +5820,7 @@ public enum Components {
                 case invocation_id
                 case reason
                 case detail
+                case image_upkeep
                 case first_observed_at
                 case last_observed_at
             }
@@ -5713,6 +5842,10 @@ public enum Components {
                     Components.Schemas.RunHold.detailPayload.self,
                     forKey: .detail
                 )
+                self.image_upkeep = try container.decodeIfPresent(
+                    Components.Schemas.RunHold.image_upkeepPayload.self,
+                    forKey: .image_upkeep
+                )
                 self.first_observed_at = try container.decode(
                     Foundation.Date.self,
                     forKey: .first_observed_at
@@ -5726,6 +5859,7 @@ public enum Components {
                     "invocation_id",
                     "reason",
                     "detail",
+                    "image_upkeep",
                     "first_observed_at",
                     "last_observed_at"
                 ])

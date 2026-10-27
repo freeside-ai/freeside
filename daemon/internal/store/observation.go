@@ -41,13 +41,15 @@ const (
 		FROM invocation_observations WHERE run_id = ? ORDER BY invocation_id`
 	selectRunHoldSQL = `SELECT run_id, invocation_id, reason,
 			detail_check, detail_agent, detail_launch_stage, detail_launch_digest,
+			upkeep_pending, upkeep_refusal_id, upkeep_item_id, upkeep_task_id,
 			first_observed_at, last_observed_at
 		FROM run_hold_observations WHERE run_id = ?`
 	replaceRunHoldSQL = `INSERT INTO run_hold_observations
 		(run_id, invocation_id, reason,
 			detail_check, detail_agent, detail_launch_stage, detail_launch_digest,
+			upkeep_pending, upkeep_refusal_id, upkeep_item_id, upkeep_task_id,
 			first_observed_at, last_observed_at)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 		ON CONFLICT (run_id) DO UPDATE SET
 			invocation_id = excluded.invocation_id,
 			reason = excluded.reason,
@@ -55,6 +57,10 @@ const (
 			detail_agent = excluded.detail_agent,
 			detail_launch_stage = excluded.detail_launch_stage,
 			detail_launch_digest = excluded.detail_launch_digest,
+			upkeep_pending = excluded.upkeep_pending,
+			upkeep_refusal_id = excluded.upkeep_refusal_id,
+			upkeep_item_id = excluded.upkeep_item_id,
+			upkeep_task_id = excluded.upkeep_task_id,
 			first_observed_at = excluded.first_observed_at,
 			last_observed_at = excluded.last_observed_at`
 	clearRunHoldSQL      = `DELETE FROM run_hold_observations WHERE run_id = ?`
@@ -178,9 +184,22 @@ func (tx *WriteTx) RecordRunHold(ctx context.Context, h domain.RunHoldObservatio
 			launchStage, launchDigest = string(*d.LaunchStage), string(*d.LaunchDigest)
 		}
 	}
+	var pending, refusal, item, task any
+	if u := h.ImageUpkeep; u != nil {
+		pending = string(u.Pending)
+		if u.RefusalRecordID != nil {
+			refusal = string(*u.RefusalRecordID)
+		}
+		if u.ProposalItemID != nil {
+			item = string(*u.ProposalItemID)
+		}
+		if u.MaintenanceTaskID != nil {
+			task = string(*u.MaintenanceTaskID)
+		}
+	}
 	if _, err := tx.tx.ExecContext(ctx, replaceRunHoldSQL,
 		h.RunID, invocation, h.Reason, check, agent, launchStage, launchDigest,
-		formatTime(h.FirstObservedAt), formatTime(h.LastObservedAt)); err != nil {
+		pending, refusal, item, task, formatTime(h.FirstObservedAt), formatTime(h.LastObservedAt)); err != nil {
 		return fmt.Errorf("record run hold %s: %w", h.RunID, err)
 	}
 	return nil
@@ -362,9 +381,11 @@ func (tx *ReadTx) GetRunHold(
 	var (
 		storedRun, reason, first, last                string
 		invocation, check, agent, stage, launchDigest sql.NullString
+		pending, refusal, item, task                  sql.NullString
 	)
 	err := tx.tx.QueryRowContext(ctx, selectRunHoldSQL, runID).
-		Scan(&storedRun, &invocation, &reason, &check, &agent, &stage, &launchDigest, &first, &last)
+		Scan(&storedRun, &invocation, &reason, &check, &agent, &stage, &launchDigest,
+			&pending, &refusal, &item, &task, &first, &last)
 	switch {
 	case errors.Is(err, sql.ErrNoRows):
 		return domain.RunHoldObservation{}, false, nil
@@ -411,6 +432,28 @@ func (tx *ReadTx) GetRunHold(
 		// can express; dropping it would hide the inconsistency.
 		return domain.RunHoldObservation{}, false,
 			fmt.Errorf("get run hold %s: detail without a check: %w", runID, domain.ErrHoldDetailMismatch)
+	}
+	switch {
+	case pending.Valid:
+		h.ImageUpkeep = &domain.ImageUpkeepHold{Pending: domain.ImageUpkeepPending(pending.String)}
+		if refusal.Valid {
+			id := domain.Digest(refusal.String)
+			h.ImageUpkeep.RefusalRecordID = &id
+		}
+		if item.Valid {
+			id := domain.ItemID(item.String)
+			h.ImageUpkeep.ProposalItemID = &id
+		}
+		if task.Valid {
+			id := domain.TaskID(task.String)
+			h.ImageUpkeep.MaintenanceTaskID = &id
+		}
+	case refusal.Valid || item.Valid || task.Valid:
+		// An upkeep reference without its pending kind is not a fact the
+		// contract can express.
+		return domain.RunHoldObservation{}, false,
+			fmt.Errorf("get run hold %s: upkeep reference without a pending kind: %w",
+				runID, domain.ErrHoldDetailMismatch)
 	}
 	if err := h.Validate(); err != nil {
 		return domain.RunHoldObservation{}, false, fmt.Errorf("get run hold %s: %w", runID, err)

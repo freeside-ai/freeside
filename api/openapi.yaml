@@ -2594,6 +2594,43 @@ components:
         - trust_blocked
         - base_advanced
         - identity_parallelism
+        - image_upkeep_pending
+
+    ImageUpkeepPending:
+      type: string
+      description: >
+        What an image_upkeep_pending hold waits on, mirrored from
+        domain.ImageUpkeepPending (plan §5.7, Project-image upkeep): the
+        upkeep job's rebuild, an adoption card, or a maintenance task.
+      enum: [rebuild, adoption_proposal, maintenance_task]
+
+    ImageUpkeepHold:
+      type: object
+      description: >
+        The typed fact beside an image_upkeep_pending hold, mirrored from
+        domain.ImageUpkeepHold: what the run waits on and, past a rebuild,
+        the upkeep refusal record and the item or task that answers it, each
+        by reference.
+      additionalProperties: false
+      required: [pending, refusal_record_id, proposal_item_id, maintenance_task_id]
+      properties:
+        pending:
+          $ref: "#/components/schemas/ImageUpkeepPending"
+        refusal_record_id:
+          nullable: true
+          allOf:
+            - $ref: "#/components/schemas/Digest"
+          description: The upkeep refusal record; null exactly for a rebuild.
+        proposal_item_id:
+          type: string
+          minLength: 1
+          nullable: true
+          description: The adoption card's item ID; set exactly for adoption_proposal.
+        maintenance_task_id:
+          type: string
+          minLength: 1
+          nullable: true
+          description: The maintenance task's ID; set exactly for maintenance_task.
 
     AdmissionCheck:
       type: string
@@ -2769,7 +2806,7 @@ components:
       type: object
       description: The daemon's current typed hold observation for one run.
       additionalProperties: false
-      required: [run_id, invocation_id, reason, detail, first_observed_at, last_observed_at]
+      required: [run_id, invocation_id, reason, detail, image_upkeep, first_observed_at, last_observed_at]
       properties:
         run_id:
           type: string
@@ -2788,6 +2825,13 @@ components:
             What an admission_policy_refused hold refused; null beside every
             other reason, and on an admission hold recorded before the detail
             existed or raised outside admission.
+        image_upkeep:
+          nullable: true
+          allOf:
+            - $ref: "#/components/schemas/ImageUpkeepHold"
+          description: >
+            What an image_upkeep_pending hold waits on; present exactly beside
+            that reason and null beside every other.
         first_observed_at:
           type: string
           format: date-time

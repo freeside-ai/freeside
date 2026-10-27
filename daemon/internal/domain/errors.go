@@ -176,6 +176,7 @@ var (
 	ErrTaskEventDetailMismatch       = errors.New("task event detail fields do not match the kind's contract")
 	ErrObservationInconsistent       = errors.New("invocation observation fields are internally inconsistent")
 	ErrHoldDetailMismatch            = errors.New("run hold detail fields do not match the reason's contract")
+	ErrInvalidImageUpkeepPending     = errors.New("invalid image upkeep pending kind")
 	ErrRunOutcomeDetailMismatch      = errors.New("run outcome detail mismatch")
 	ErrScheduleDetailMismatch        = errors.New("schedule detail fields do not match the kind's contract")
 	ErrBaseFreshnessInconsistent     = errors.New("base freshness fields are internally inconsistent")

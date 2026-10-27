@@ -122,6 +122,11 @@ func TestExecutionOutcomeCauseMigration(t *testing.T) {
 	s, admission := seedAdmission(t, nil)
 	seedRawAdmission(t, ctx, s, admission)
 	for _, statement := range []string{
+		`ALTER TABLE run_hold_observations DROP COLUMN upkeep_pending`,
+		`ALTER TABLE run_hold_observations DROP COLUMN upkeep_refusal_id`,
+		`ALTER TABLE run_hold_observations DROP COLUMN upkeep_item_id`,
+		`ALTER TABLE run_hold_observations DROP COLUMN upkeep_task_id`,
+		`DELETE FROM schema_migrations WHERE name = '0107_run_hold_image_upkeep.sql'`,
 		`DELETE FROM schema_migrations WHERE name = '0106_schedules_image_upkeep.sql'`,
 		`DROP TABLE admitted_image_pointers`,
 		`DELETE FROM schema_migrations WHERE name = '0105_admitted_image_pointers.sql'`,
