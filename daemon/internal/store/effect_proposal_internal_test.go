@@ -27,16 +27,16 @@ func TestEffectProposalMigrationAppliesFromHead(t *testing.T) {
 	} {
 		assertTableExists(t, db, table, true)
 	}
-	// The 0077 and 0088 rebuilds widened the effect_kind CHECK to admit the
-	// second and third registry members while still rejecting any unknown
-	// kind, and the batch index and admission_key UNIQUE constraint survived
-	// both rebuilds.
+	// The 0077, 0088, and 0110 rebuilds widened the effect_kind CHECK to
+	// admit the second, third, and fourth registry members while still
+	// rejecting any unknown kind, and the batch index and admission_key
+	// UNIQUE constraint survived every rebuild.
 	var schema string
 	if err := db.QueryRowContext(ctx,
 		`SELECT sql FROM sqlite_master WHERE type='table' AND name='effect_proposal_instances'`).Scan(&schema); err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(schema, "effect_kind IN ('run_proposal', 'source_issue_closure', 'follow_up_filing')") {
+	if !strings.Contains(schema, "effect_kind IN\n        ('run_proposal', 'source_issue_closure', 'follow_up_filing', 'image_policy_adoption')") {
 		t.Fatalf("rebuilt effect_kind CHECK missing a registered kind: %s", schema)
 	}
 	if !strings.Contains(schema, "admission_key           TEXT NOT NULL UNIQUE") {

@@ -413,7 +413,11 @@ func (tx *WriteTx) PutArtifact(ctx context.Context, artifact domain.Artifact) er
 	// Validate is policy-free, so a caller bypassing NewArtifact could otherwise
 	// persist a forged publish_eligible under an unapproved recipe (plan §5.15
 	// rule 2). Runs before the write, so an idempotent replay is gated too.
-	if err := domain.ValidatePublishEligibility(artifact, tx.approvedRecipes); err != nil {
+	recipes, err := tx.storeRecipeSet(ctx)
+	if err != nil {
+		return fmt.Errorf("put artifact %q: %w", artifact.ID, err)
+	}
+	if err := domain.ValidatePublishEligibility(artifact, recipes); err != nil {
 		return fmt.Errorf("put artifact %q: %w", artifact.ID, err)
 	}
 	if err := tx.gateEffectProposalArtifact(ctx, artifact); err != nil {
@@ -449,7 +453,11 @@ func (tx *ReadTx) GetArtifact(ctx context.Context, id domain.ArtifactID) (domain
 	// current approved-recipe set (a forged row, or one written under a policy
 	// that no longer approves the recipe) fails closed rather than leaking as
 	// valid evidence.
-	if err := domain.ValidatePublishEligibility(artifact, tx.approvedRecipes); err != nil {
+	recipes, err := tx.storeRecipeSet(ctx)
+	if err != nil {
+		return domain.Artifact{}, fmt.Errorf("get artifact %q: %w", id, err)
+	}
+	if err := domain.ValidatePublishEligibility(artifact, recipes); err != nil {
 		return domain.Artifact{}, fmt.Errorf("get artifact %q: %w", id, err)
 	}
 	if err := tx.gateEffectProposalArtifact(ctx, artifact); err != nil {
@@ -1779,12 +1787,20 @@ func (c attentionItemColumns) reconstruct() (domain.AttentionItem, Snapshot, err
 }
 
 // gateEvidence re-runs the approved-recipe evidence gate over an item's
-// snapshot at the persistence/reconstruction boundary, using the transaction's
-// policy set. It is the store's enforcement of the recipe-approval half of the
-// evidence rule that AttentionItem.Validate cannot check (it holds no policy).
+// snapshot at the persistence/reconstruction boundary, using the effective
+// set of the item's repository. It is the store's enforcement of the
+// recipe-approval half of the evidence rule that AttentionItem.Validate cannot
+// check (it holds no policy).
 func (tx *ReadTx) gateEvidence(ctx context.Context, item domain.AttentionItem) error {
+	if len(item.EvidenceSnapshot) == 0 {
+		return nil
+	}
+	recipes, err := tx.itemRecipeSet(ctx, item)
+	if err != nil {
+		return err
+	}
 	for _, a := range item.EvidenceSnapshot {
-		if err := domain.EligibleForEvidenceSnapshot(a, tx.approvedRecipes); err != nil {
+		if err := domain.EligibleForEvidenceSnapshot(a, recipes); err != nil {
 			// Name the recipe so an operator can tell which digest a read
 			// with no daemon must approve (-approved-recipe).
 			if recipe := a.Provenance.VerificationRecipeDigest; recipe != nil && errors.Is(err, domain.ErrUnapprovedRecipe) {
@@ -1797,6 +1813,26 @@ func (tx *ReadTx) gateEvidence(ctx context.Context, item domain.AttentionItem) e
 		}
 	}
 	return nil
+}
+
+// itemRecipeSet returns the effective recipe set of the item's repository:
+// the operator's set plus that repository's adopted digests, so evidence
+// under a digest adopted for another repository is refused here. With no
+// adoption in the store it is the operator's set, unchanged. An item whose
+// project has no authority row gains no adoption.
+func (tx *ReadTx) itemRecipeSet(ctx context.Context, item domain.AttentionItem) (map[domain.Digest]bool, error) {
+	adoptions, err := tx.imagePolicyAdoptions(ctx)
+	if err != nil || len(adoptions) == 0 {
+		return tx.approvedRecipes, err
+	}
+	project, err := tx.GetProject(ctx, item.ProjectID)
+	if errors.Is(err, ErrNotFound) {
+		return tx.approvedRecipes, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	return tx.EffectiveApprovedRecipes(ctx, project.RepositoryID)
 }
 
 // gateItemPRReference re-anchors an item's client-visible pull request

@@ -415,11 +415,14 @@ func (tx *ReadTx) AttentionItemWorkflowEpisode(ctx context.Context, item domain.
 		if err != nil {
 			return "", 0, err
 		}
-		declaration, err := tx.gateProposalSubject(ctx, proposal)
+		subject, err := tx.gateProposalSubject(ctx, proposal)
 		if err != nil {
 			return "", 0, err
 		}
-		runID = declaration.RunID
+		// An adoption card has no run and so no workflow episode.
+		if subject.declaration != nil {
+			runID = subject.declaration.RunID
+		}
 	case item.Subject.Type == domain.SubjectRun:
 		runID = domain.RunID(item.Subject.ID)
 	case item.Subject.RunID != nil:
@@ -517,11 +520,15 @@ func (tx *ReadTx) RequireProposalWorkflowOpen(ctx context.Context, id domain.Pro
 	if err != nil {
 		return err
 	}
-	declaration, err := tx.gateProposalSubject(ctx, instance.Proposal)
+	subject, err := tx.gateProposalSubject(ctx, instance.Proposal)
 	if err != nil {
 		return err
 	}
-	return tx.RequireRunWorkflowOpen(ctx, declaration.RunID)
+	// An adoption card has no run, so no run workflow fences it.
+	if subject.declaration == nil {
+		return nil
+	}
+	return tx.RequireRunWorkflowOpen(ctx, subject.declaration.RunID)
 }
 
 func (tx *ReadTx) ListTaskWorkflowClosures(ctx context.Context) ([]TaskWorkflowClosure, error) {

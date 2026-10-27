@@ -30,6 +30,22 @@ RETURNING instance_id, admission_key, proposal_batch_id, effect_kind,
           content_digest, resolved_policy_run_id, resolved_policy_digest,
           subject_handle, created_at, body`
 
+// gateAdmissionSource ties the upkeep_refusal source to the adoption card a
+// refusal raises: that source admits only an adoption card, keyed by the
+// refusal the card answers, and an adoption card is admitted under no other
+// source, so one refusal admits at most one card.
+func gateAdmissionSource(admission domain.ProposalAdmissionKey, proposal domain.EffectProposal) error {
+	adoption := proposal.Kind == domain.EffectImagePolicyAdoption
+	if adoption != (admission.Source == domain.ProposalSourceUpkeepRefusal) {
+		return fmt.Errorf("%s card under admission source %s: %w",
+			proposal.Kind, admission.Source, domain.ErrEffectProposalInconsistent)
+	}
+	if adoption && admission.RefusalRecordID != proposal.AdoptionProposal.RefusalRecordID {
+		return fmt.Errorf("adoption card admitted under another refusal: %w", domain.ErrEffectProposalInconsistent)
+	}
+	return nil
+}
+
 // AllocateProposalInstance atomically chooses the daemon-generated effect
 // identity under the typed occurrence key. A retry returns the surviving row;
 // changed content under one occurrence key is an immutable conflict.
@@ -46,19 +62,25 @@ func (tx *WriteTx) AllocateProposalInstance(
 	if err := proposal.Validate(); err != nil {
 		return domain.ProposalInstance{}, false, fmt.Errorf("allocate proposal instance: %w", err)
 	}
+	if err := gateAdmissionSource(admission, proposal); err != nil {
+		return domain.ProposalInstance{}, false, fmt.Errorf("allocate proposal instance admission: %w", err)
+	}
 	subjectHandle, err := ProposalSubjectHandle(proposal)
 	if err != nil {
 		return domain.ProposalInstance{}, false, fmt.Errorf("allocate proposal instance: %w", err)
 	}
-	declaration, err := tx.gateProposalSubject(ctx, proposal)
+	subject, err := tx.gateProposalSubject(ctx, proposal)
 	if err != nil {
 		return domain.ProposalInstance{}, false, fmt.Errorf("allocate proposal instance gate: %w", err)
 	}
-	if err := tx.RequireRunWorkflowOpen(ctx, declaration.RunID); err != nil {
-		return domain.ProposalInstance{}, false, err
+	// An adoption card has no run, so no run workflow fences it.
+	if subject.declaration != nil {
+		if err := tx.RequireRunWorkflowOpen(ctx, subject.declaration.RunID); err != nil {
+			return domain.ProposalInstance{}, false, err
+		}
 	}
 	if proposal.Kind == domain.EffectFollowUpFiling {
-		if err := tx.gateFollowUpFilingSourceCurrent(ctx, declaration, proposal.FilingProposal.Source); err != nil {
+		if err := tx.gateFollowUpFilingSourceCurrent(ctx, *subject.declaration, proposal.FilingProposal.Source); err != nil {
 			return domain.ProposalInstance{}, false, fmt.Errorf("allocate proposal instance gate: %w", err)
 		}
 	}
@@ -81,7 +103,8 @@ func (tx *WriteTx) AllocateProposalInstance(
 	returned, returnedKey, err := scanProposalInstance(tx.tx.QueryRowContext(ctx,
 		allocateProposalInstanceSQL,
 		want.ID, admissionKey, batchID, proposal.Kind, proposal.Digest,
-		proposal.ResolvedPolicyRunID, proposal.ResolvedPolicyDigest, subjectHandle,
+		nullableString(string(proposal.ResolvedPolicyRunID)), nullableString(string(proposal.ResolvedPolicyDigest)),
+		subjectHandle,
 		formatTime(want.CreatedAt), body,
 	))
 	if err != nil {
@@ -170,7 +193,9 @@ func sameProposalArtifact(got, want domain.Artifact) bool {
 func scanProposalInstance(sc scanner) (domain.ProposalInstance, string, error) {
 	var (
 		instanceID, admissionKey, batchID, effectKind, contentDigest string
-		policyRunID, policyDigest, subjectHandle, createdAt, body    string
+		subjectHandle, createdAt, body                               string
+		// NULL for a kind that binds no resolved policy.
+		policyRunID, policyDigest sql.NullString
 	)
 	if err := sc.Scan(&instanceID, &admissionKey, &batchID, &effectKind,
 		&contentDigest, &policyRunID, &policyDigest, &subjectHandle, &createdAt, &body); err != nil {
@@ -198,8 +223,8 @@ func scanProposalInstance(sc scanner) (domain.ProposalInstance, string, error) {
 	if string(instance.ID) != instanceID || derivedKey != admissionKey ||
 		string(instance.ProposalBatchID) != batchID || string(instance.Proposal.Kind) != effectKind ||
 		string(instance.Proposal.Digest) != contentDigest ||
-		string(instance.Proposal.ResolvedPolicyRunID) != policyRunID ||
-		string(instance.Proposal.ResolvedPolicyDigest) != policyDigest ||
+		!optionalStringEqual(policyRunID, string(instance.Proposal.ResolvedPolicyRunID)) ||
+		!optionalStringEqual(policyDigest, string(instance.Proposal.ResolvedPolicyDigest)) ||
 		string(handle) != subjectHandle ||
 		!instance.CreatedAt.Equal(storedCreatedAt) {
 		return domain.ProposalInstance{}, "", errRowInconsistent
@@ -207,9 +232,10 @@ func scanProposalInstance(sc scanner) (domain.ProposalInstance, string, error) {
 	return instance, admissionKey, nil
 }
 
-// ProposalSubjectHandle returns the opaque work-unit handle for any
-// registry kind. The switch dispatches behaviour and so omits default; the
-// trailing return guards an unregistered kind.
+// ProposalSubjectHandle returns the opaque subject handle for any registry
+// kind: the work unit for a run-bound kind, and the project for an adoption
+// card. The switch dispatches behaviour and so omits default; the trailing
+// return guards an unregistered kind.
 func ProposalSubjectHandle(proposal domain.EffectProposal) (domain.OpaqueSubjectHandle, error) {
 	switch proposal.Kind {
 	case domain.EffectTaskProposal:
@@ -228,12 +254,11 @@ func ProposalSubjectHandle(proposal domain.EffectProposal) (domain.OpaqueSubject
 		}
 		return proposal.FilingProposal.SubjectHandle, nil
 	case domain.EffectImagePolicyAdoption:
-		// An adoption card is about a repository's image policy, not a work
-		// unit, so it carries no work-unit handle. How a stored card binds its
-		// subject is #2335's, with its producer; until then the store refuses
-		// one at every boundary that resolves a subject.
-		return "", fmt.Errorf("image policy adoption has no work-unit subject: %w",
-			domain.ErrEffectProposalInconsistent)
+		// An adoption card is about a project's image policy, not a work unit.
+		if proposal.AdoptionProposal == nil {
+			return "", domain.ErrEffectProposalInconsistent
+		}
+		return domain.OpaqueSubjectHandle(proposal.AdoptionProposal.ProjectID), nil
 	}
 	return "", domain.ErrInvalidEffectKind
 }
@@ -402,7 +427,7 @@ func (tx *ReadTx) ProposalForItem(
 			return domain.ProposalInstance{}, domain.EffectProposal{}, fmt.Errorf("proposal for item %q revision: %w", itemID, err)
 		}
 	}
-	declaration, err := tx.gateProposalSubject(ctx, proposal)
+	subject, err := tx.gateProposalSubject(ctx, proposal)
 	if err != nil {
 		return domain.ProposalInstance{}, domain.EffectProposal{}, fmt.Errorf("proposal for item %q gate: %w", itemID, err)
 	}
@@ -410,7 +435,7 @@ func (tx *ReadTx) ProposalForItem(
 	if err != nil {
 		return domain.ProposalInstance{}, domain.EffectProposal{}, err
 	}
-	if item.ProjectID != declaration.ProjectID || len(item.ArtifactDigests) != 1 || item.ArtifactDigests[0] != proposal.Digest ||
+	if item.ProjectID != subject.projectID || len(item.ArtifactDigests) != 1 || item.ArtifactDigests[0] != proposal.Digest ||
 		item.Subject.ID != domain.SubjectID(instance.ProposalBatchID) {
 		return domain.ProposalInstance{}, domain.EffectProposal{}, errRowInconsistent
 	}
@@ -707,69 +732,112 @@ func (tx *ReadTx) ResolveProposalSubject(
 	return declaration, policy, nil
 }
 
+// proposalSubject is what gateProposalSubject resolved a proposal's opaque
+// handle to: the project the proposal belongs to and, for a run-bound kind,
+// its work unit. An adoption card has no run, so its declaration is nil.
+type proposalSubject struct {
+	projectID   domain.ProjectID
+	declaration *domain.WorkUnitDeclaration
+}
+
+func workUnitSubject(declaration domain.WorkUnitDeclaration) proposalSubject {
+	return proposalSubject{projectID: declaration.ProjectID, declaration: &declaration}
+}
+
 // gateProposalSubject is the single store boundary for a proposal's opaque
-// handle: resolve the durable declaration and current policy independently,
-// then run the closed effect registry gate plus each kind's re-gate against
-// state the store derives from current rows, never from the proposal body.
-// The switch dispatches behaviour and so omits default; the trailing return
-// guards an unregistered kind.
+// handle: resolve the durable subject (and, for a run-bound kind, its current
+// policy) independently, then run each kind's gate against state the store
+// derives from current rows, never from the proposal body. The switch
+// dispatches behaviour and so omits default; the trailing return guards an
+// unregistered kind.
 func (tx *ReadTx) gateProposalSubject(
 	ctx context.Context,
 	proposal domain.EffectProposal,
-) (domain.WorkUnitDeclaration, error) {
+) (proposalSubject, error) {
 	handle, err := ProposalSubjectHandle(proposal)
 	if err != nil {
-		return domain.WorkUnitDeclaration{}, err
+		return proposalSubject{}, err
+	}
+	if proposal.Kind == domain.EffectImagePolicyAdoption {
+		return tx.gateImagePolicyAdoptionCard(ctx, proposal)
 	}
 	declaration, policy, err := tx.ResolveProposalSubject(ctx, handle)
 	if err != nil {
-		return domain.WorkUnitDeclaration{}, err
+		return proposalSubject{}, err
 	}
 	switch proposal.Kind {
 	case domain.EffectTaskProposal:
 		if err := domain.GateTaskProposalScope(proposal.TaskProposal.Scope, declaration); err != nil {
-			return domain.WorkUnitDeclaration{}, err
+			return proposalSubject{}, err
 		}
 		if err := domain.GateEffectProposal(proposal, policy); err != nil {
-			return domain.WorkUnitDeclaration{}, err
+			return proposalSubject{}, err
 		}
-		return declaration, nil
+		return workUnitSubject(declaration), nil
 	case domain.EffectSourceIssueClosure:
 		if err := domain.GateEffectProposal(proposal, policy); err != nil {
-			return domain.WorkUnitDeclaration{}, err
+			return proposalSubject{}, err
 		}
 		closable, err := tx.closableSource(ctx, declaration)
 		if err != nil {
-			return domain.WorkUnitDeclaration{}, err
+			return proposalSubject{}, err
 		}
 		if err := domain.GateSourceIssueClosure(proposal, closable); err != nil {
-			return domain.WorkUnitDeclaration{}, err
+			return proposalSubject{}, err
 		}
-		return declaration, nil
+		return workUnitSubject(declaration), nil
 	case domain.EffectFollowUpFiling:
 		if err := domain.GateEffectProposal(proposal, policy); err != nil {
-			return domain.WorkUnitDeclaration{}, err
+			return proposalSubject{}, err
 		}
 		target, err := tx.followUpFilingTarget(ctx, declaration, policy)
 		if err != nil {
-			return domain.WorkUnitDeclaration{}, err
+			return proposalSubject{}, err
 		}
 		if err := domain.GateFollowUpFiling(proposal, target); err != nil {
-			return domain.WorkUnitDeclaration{}, err
+			return proposalSubject{}, err
 		}
 		if err := tx.gateFollowUpFilingSource(ctx, declaration, proposal.FilingProposal.Source); err != nil {
-			return domain.WorkUnitDeclaration{}, err
+			return proposalSubject{}, err
 		}
 		if err := screenFollowUpFilingText(*proposal.FilingProposal); err != nil {
-			return domain.WorkUnitDeclaration{}, err
+			return proposalSubject{}, err
 		}
-		return declaration, nil
+		return workUnitSubject(declaration), nil
 	case domain.EffectImagePolicyAdoption:
-		// ProposalSubjectHandle already refused the card; #2335 adds its
-		// re-gate against the refusal record and current project policy.
-		return domain.WorkUnitDeclaration{}, domain.ErrEffectProposalInconsistent
+		// Gated above: the card's handle names a project, not a work unit.
+		return proposalSubject{}, domain.ErrEffectProposalInconsistent
 	}
-	return domain.WorkUnitDeclaration{}, domain.ErrInvalidEffectKind
+	return proposalSubject{}, domain.ErrInvalidEffectKind
+}
+
+// gateImagePolicyAdoptionCard re-gates an adoption card against the project
+// it names and the refusal record it answers, read from current rows. A
+// missing project or refusal refuses the card.
+func (tx *ReadTx) gateImagePolicyAdoptionCard(
+	ctx context.Context, proposal domain.EffectProposal,
+) (proposalSubject, error) {
+	params := proposal.AdoptionProposal
+	project, err := tx.GetProject(ctx, params.ProjectID)
+	if errors.Is(err, ErrNotFound) {
+		return proposalSubject{}, fmt.Errorf("image policy adoption project %q: %w",
+			params.ProjectID, errors.Join(err, domain.ErrImagePolicyAdoptionUnbacked))
+	}
+	if err != nil {
+		return proposalSubject{}, err
+	}
+	refusal, err := tx.GetImageUpkeepRefusal(ctx, params.RefusalRecordID)
+	if errors.Is(err, ErrNotFound) {
+		return proposalSubject{}, fmt.Errorf("image policy adoption refusal %s: %w",
+			params.RefusalRecordID, errors.Join(err, domain.ErrImagePolicyAdoptionUnbacked))
+	}
+	if err != nil {
+		return proposalSubject{}, err
+	}
+	if err := domain.GateImagePolicyAdoption(proposal, project, refusal); err != nil {
+		return proposalSubject{}, err
+	}
+	return proposalSubject{projectID: project.ID}, nil
 }
 
 // followUpFilingTarget derives, from current durable rows, where a work
@@ -1064,11 +1132,11 @@ func (tx *WriteTx) PutProposalRevision(
 	// the kind's full gate against live rows (task scope + effect gate, or the
 	// closable-source re-gate for a closure), so the revised body is never its
 	// own authority.
-	declaration, err := tx.gateProposalSubject(ctx, revised)
+	subject, err := tx.gateProposalSubject(ctx, revised)
 	if err != nil {
 		return fmt.Errorf("put proposal revision command %q gate: %w", commandID, err)
 	}
-	if declaration.ProjectID != item.ProjectID {
+	if subject.projectID != item.ProjectID {
 		return fmt.Errorf("put proposal revision command %q project: %w", commandID, domain.ErrTransitionCommandMismatch)
 	}
 	body, err := revised.Encode()
@@ -1103,9 +1171,10 @@ func (tx *ReadTx) proposalInstanceKind(
 
 // gateDecisionActionKind rejects a decision action that does not belong to the
 // instance's effect kind. start and start_with_changes decide task proposals;
-// approve decides a closure or a follow-up filing; approve_with_changes decides
-// a closure only, because a filing has no parameter an operator may change;
-// decline terminates any kind. This is a predicate over the proposal-decision
+// approve decides a closure, a follow-up filing, or an adoption card;
+// approve_with_changes decides a closure only, because neither a filing nor
+// an adoption card has a parameter an operator may change; decline
+// terminates any kind. This is a predicate over the proposal-decision
 // subset of the Action union, so it uses default rather than exhaustive
 // dispatch.
 func gateDecisionActionKind(action domain.Action, kind domain.EffectKind) error {
@@ -1116,7 +1185,8 @@ func gateDecisionActionKind(action domain.Action, kind domain.EffectKind) error 
 		}
 		return nil
 	case domain.ActionApprove:
-		if kind != domain.EffectSourceIssueClosure && kind != domain.EffectFollowUpFiling {
+		if kind != domain.EffectSourceIssueClosure && kind != domain.EffectFollowUpFiling &&
+			kind != domain.EffectImagePolicyAdoption {
 			return domain.ErrTransitionCommandMismatch
 		}
 		return nil
