@@ -1532,6 +1532,11 @@ func run(parent context.Context, stop func(), cfg config) (_ *daemon, err error)
 			reviewers:        map[string]bool{defaultNativeReviewerLogin: true},
 			reviewInvalidate: claudeWiring.reviewInvalidate,
 			evictConcluded:   claudeWiring.evictConcluded,
+			tipWatch: repositoryTipWatch{
+				Repo: cfg.Claude.Repo, RepositoryID: cfg.Claude.RepositoryID, Branch: cfg.Claude.BaseRef,
+			},
+			observeTip:       claudeWiring.observeRepositoryTip,
+			upkeepTipAdvance: unwiredImageUpkeepTipAdvance(cfg.Logger),
 			now:              func() time.Time { return time.Now().UTC() },
 		}
 		intakeReconcilerLoop = &intakeReconciler{
