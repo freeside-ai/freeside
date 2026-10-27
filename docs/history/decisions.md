@@ -3209,3 +3209,20 @@ The client work is #1798 to #1803.)
 
 (Owner decisions of 2026-10-26;
 [decision note](../../devlog/2026-10-26-1238-claude-capacity-before-provider-diversity.md).)
+
+## Revision 100 ("Write Published Text in the Target's Terms"):
+
+1. **A published PR's source reference is the bare `Closes #N`, `Refs #N`,
+   or descriptive link for both closure provenances.** Section 1B.1 no
+   longer marks a recommended close in the PR body. The proposal keeps its
+   provenance, and the `effect_proposal` card shows it when the human gate
+   keeps one. The pull request's readers are the target repository's
+   maintainers, and the mark read as pipeline jargon: wrong on a CLI run
+   ("the client") and naming no one ("the approver"). Rejected: keeping
+   the sentence; rewording it in the target's terms (either provenance is
+   approved before the line is written, so the maintainer has no use for
+   the distinction). Accepted gap: on the default policy no operator read
+   shows a policy-approved close's provenance until #2359.
+
+(Owner decision of 2026-10-26 on #2349;
+[decision note](../../devlog/2026-10-26-1507-plain-source-reference.md).)

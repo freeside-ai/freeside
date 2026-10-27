@@ -1036,8 +1036,9 @@ policy's short, declared set of package-registry authorities, consumed read-only
 
 The set is control-plane policy: a writer change to it is publish-blocked like
 any other control-plane path, and a per-project addition is a reviewed operator
-change that admits only a public package registry the project's dependency
-manifests resolve against. Any other authority is not a registry entry.
+change (the operator's own edit, or an approved image-policy adoption card,
+Section [5.8](#58-control-plane-trust)) that admits only a public package registry the project's
+dependency manifests resolve against. Any other authority is not a registry entry.
 Admitting one is a `provider_web_read` decision with that profile's explicit
 wider-exposure record, because an arbitrary tunnel endpoint the operator has not
 vetted is exactly the attacker-observable host this class excludes.
@@ -2413,13 +2414,14 @@ when it stays inside the project's declared policy. The gate holds when:
 - For a Go image, the delta touches neither the named module's `go.mod` nor
   its `go.sum` (revision 92). A `go.sum` change, which every Go dependency
   change produces, keeps the fail-loud path above until the gate reads Go
-  module sources against the declared registry set (#2337). A candidate
+  module sources against the registry set (#2337). A candidate
   that adds a `vendor/`
   directory to the module, or a `go.work` to the module directory or any
   directory above it, keeps the fail-loud path under the same clause as a
   `go.mod` or `go.sum` change (#2115).
-- Every added or changed package resolves from an authority in the project
-  policy's declared registry set (the same set `provider_registry` exposes to
+- Every added or changed package resolves from an authority in the
+  project's registry set, the operator's declared set plus the project's
+  adopted hosts (Section [5.8](#58-control-plane-trust); the same set `provider_registry` exposes to
   the writer, Section [5.4](#54-credential-modes-egress-profiles-and-concurrency); the builder reads it whatever the writer's profile,
   since builder fetch authorization and writer egress are different concerns).
 - The verification recipe is unchanged.
@@ -2470,16 +2472,20 @@ and the exact base tree. Section [11](#11-roadmap-build-order-and-coordination) 
   refusal, so a refusal counts as policy-only only when no other clause
   also refuses. The classes are:
   - *Policy clause only.* The recipe digest changed at the tip, a package
-    resolves from an authority outside the declared registry set, or the
-    project declares no registry set. Recipe approval and the registry set
-    are trusted project policy, so adopting a change passes the Section [5.8](#58-control-plane-trust)
-    control-plane gate. The job raises one card, bound to the exact recipe
-    digest or authority. Approving the card opens a project-policy proposal
-    (the Section [4](#4-the-attention-model) policy-proposal path), and merging that proposal is the
-    adoption. The builder then builds a new image at the tip under the
+    resolves from an authority outside the registry set, or the project
+    has no registry set. Recipe approval and the registry set
+    are trusted policy, and an approved adoption card is one of the
+    reviewed changes Section [5.8](#58-control-plane-trust) accepts for them. The job raises one
+    card, bound to its refusal record and to the exact recipe digest or
+    registry hosts. Approving the card is the adoption: the daemon records
+    that digest or those hosts in its own trusted policy, for the card's
+    repository only. Upkeep then builds a new image at the tip under the
     adopted policy, with the same positive run and masked-cache proof, as
-    onboarding does. The policy-gated rebuild's unchanged-recipe clause
-    stays as it is.
+    onboarding does. An adopted host is held to Section [5.4](#54-credential-modes-egress-profiles-and-concurrency)'s registry
+    criterion, so the operator approves a host card only for a public
+    package registry. A declined card records nothing, and the refusal has
+    no pending resolution. The policy-gated rebuild's unchanged-recipe
+    clause stays as it is.
   - *Repair needed.* The positive run or the masked-cache proof fails at
     the tip, the install fails deterministically under #1792's
     classification, or the delta carries an input the gate never admits (an
@@ -2495,12 +2501,12 @@ and the exact base tree. Section [11](#11-roadmap-build-order-and-coordination) 
     converge pattern (Section [10](#10-operations-and-onboarding)) and retries on the next trigger. A host
     fault never opens a task.
   - *Go module delta.* A `go.mod` or `go.sum` change at the tip stays
-    refused under the Go clause above. It opens neither a proposal nor a
+    refused under the Go clause above. It raises neither a card nor a
     task until the gate reads Go module sources (#2337).
   - *Unsupported npm input.* The tip holds an npm input no project image
     supports, or changes `package.json`'s `overrides`, `workspaces`, or
     `packageManager`. Such a change is usually deliberate, and a repair
-    could only revert it, so it opens neither a proposal nor a task.
+    could only revert it, so it raises neither a card nor a task.
 - **A maintenance task runs on the image it fixes.** Its base is the refused
   tip, where no image is admissible, so an ordinary hold would make it wait
   on itself. It is therefore the one exception to composition's
@@ -2518,7 +2524,7 @@ and the exact base tree. Section [11](#11-roadmap-build-order-and-coordination) 
 - **Holds, not blocks, while a resolution is pending.** A task whose base
   needs a rebuild that the job will perform waits under a visible hold. A
   task whose base was refused waits under a hold that names the pending
-  proposal or maintenance task. Either hold releases once an admitted image
+  adoption card or maintenance task. Either hold releases once an admitted image
   serves the task's base. The advanced pointer does that for a base at the
   tip; a task on an older base can use any write-once record that still
   serves it. A task ends in the blocked outcome #1784 defines only when its
@@ -2533,8 +2539,9 @@ and the exact base tree. Section [11](#11-roadmap-build-order-and-coordination) 
   project right away (one digest comparison each) and queues the rebuilds.
 - **The trust boundary is unchanged.** No gate clause widens. The
   toolchain-only delta touches nothing the recipe or the registry set
-  governs, and an adoption changes project policy only through the Section
-  [5.8](#58-control-plane-trust) control-plane gate. The writer never fetches during verification, and
+  governs, and an adoption changes image policy only through the Section
+  [5.8](#58-control-plane-trust) control-plane gate, whose route here is the approved
+  adoption card. The writer never fetches during verification, and
   admitted images stay registry-resolved digest references. Whether the
   builder's install is held to the registry set at the point it connects is
   still #1793's question.
@@ -2895,9 +2902,10 @@ The following are control-plane content:
 - materiality rules; and
 - vendor auto-loaded instructions.
 
-Freeside loads every class except host vendor instructions only from an
-approved default-branch commit. Every running stage snapshots the trusted
-configuration digests. Copies inside an agent workspace are untrusted data.
+Freeside loads every class only from an approved default-branch commit,
+except host vendor instructions and image policy, the part of policy that
+holds recipe approval and the registry set. Every running stage snapshots the
+trusted configuration digests. Copies inside an agent workspace are untrusted data.
 
 Host vendor instructions are the narrow second trust class. At admission,
 Freeside follows the configured operator-host path and snapshots the exact
@@ -2909,6 +2917,22 @@ source fails admission. The live host path is never mounted. Materialization
 re-verifies the recorded digest. Ward then places only the admitted file (or an
 empty overlay for admitted absence), read-only, at a fixed staging mount
 outside the workspace.
+
+Image policy is the other exception. It is trusted policy in the
+operator's host configuration, not in any repository. Two reviewed changes
+may change it: the operator's own edit, and an approved image-policy
+adoption card (Section [5.7](#57-the-ward-runners-handoff-gate-and-operating-modes), project-image upkeep). The card is narrow. It
+covers one repository, and it proposes only the exact recipe digest or registry hosts bound to a
+recorded policy-class refusal for that repository, as re-derived from the
+tree at the refusal's tip. A host must also meet Section [5.4](#54-credential-modes-egress-profiles-and-concurrency)'s registry
+criterion: a public package registry, consumed read-only; admitting any
+other authority stays a `provider_web_read` decision. A card records only
+what its own refusal names, so a stale one, whose refusal no longer matches
+the tip or a newer refusal superseded, can't record anything else. The
+daemon records an approved adoption in its own store and never edits the
+operator's configuration. A repository's recipe approval and registry set
+are the operator's plus that repository's adoptions, for the builder and
+for writer egress alike.
 
 The pinned Claude CLI keeps instructions, executable configuration, and session
 data together under `CLAUDE_CONFIG_DIR`. So Phase 1A never mounts a shared
@@ -6730,8 +6754,10 @@ Clients edit one class of setting directly: an operator setting, which
 chooses among what the committed lineup already approved and approves
 nothing (the routing policy and task lines, Section [5.4](#54-credential-modes-egress-profiles-and-concurrency); revision 99).
 Every other configuration change passes Section [5.8](#58-control-plane-trust)'s control-plane gate
-through an operator-authored PR or, for recurring preferences, the Section
-[4](#4-the-attention-model) policy-proposal path. When deferred settings surfaces ship for
+through an operator-authored PR; for recurring preferences, the Section
+[4](#4-the-attention-model) policy-proposal path; or, for image policy (Section [5.8](#58-control-plane-trust)), the
+operator's own edit of their host configuration or, for one repository, an
+approved image-policy adoption card (revision 101). When deferred settings surfaces ship for
 those, a configuration-change proposal kind joins the Section [5.13](#513-deterministic-components-judgment-calls-and-the-effect-registry)
 registry with those surfaces as its consumer. Approval cards, never edit
 forms, stay the client surface for them.
@@ -6797,7 +6823,7 @@ landing tip keeps parallel work honest.
 | **9 (1B.1): Claude capacity** | Parallel; split-eligible | Freeside runs on two Claude subscriptions, routed by policy, and develops itself. First, the Claude quantitative usage spike, filed at planning on the #1713 harness: whether the pinned CLI, or a read under the setup token outside it, reports a used share per window, model-scoped windows included, with no token refresh and no auth-store write. Its result fixes what the account usage view shows, per window: a share, or status and reset only, or unsupported. The contract chain, positions assigned by the planner: the usage observation record per pool (#1715, extended with the exhausted mark per window and the model-to-window map); the routing policy record and the router at admission, filed at planning (Section [5.4](#54-credential-modes-egress-profiles-and-concurrency), routing policy); per-pool execution limits (#1596, `starts-after` the merged #1585); the host memory budget and machine-capacity hold (#1598; its prerequisites #898 and #1597 merged); the client contract for usage, refresh, reassignment, line changes, and the routing setting (#1719, with the sync-visibility question #1145 resolved before #1720 adopts its freshness contract); agent and run facts in the clients (#979); and the alternate-agent retry card (#869), now the manual path when the policy has nowhere to route. Beside the chain: the Claude collector on the spike-proven path (#1717), collection, refresh, and reassignment (#1716), and usage state into sync (#1720); the account usage view on Mac and iPhone (#1721), usage facts beside the agent choices (#1722), the New Task agent picker (#1602, `starts-after` #979), the routing settings surface in the app, filed at planning, and the hold wording (#1599, `starts-after` #1596 and #1598); the task-line change command (#1601) and the budget command (#1595, `starts-after` #1598); and, operator-run once the wave 8 exit run completes, Freeside onboarded for `daemon/` (revision 92's trigger, above). Merged before the wave: the agent-vocabulary chain (#898, #899, #900, #1421), the shared-identity writer lease (#1585), the task-line record (#1600), and the enrollment cutover (#867). Moved to Phase 2 by revision 99: the Codex execution tail (#406, #407, #408, #873, #868, #1718) and pi (#895, #897). The planner splits this wave into 9a (records and routing) and 9b (views and onboarding) at planning if the measured chain length exceeds review bandwidth; a realized split makes those halves numbered waves through a plan revision, because a wave tracker is titled `Wave N: <Name>`. Deferral drain: the agent, capacity, and subscription-usage clusters. Exit proof, which consumes no real allowance: an unattended run on a Freeside `daemon/` issue completes with the writer's subscription chosen by the routing policy and the selection recorded with its policy revision; a fixture pass that seeds one subscription's model-scoped window as exhausted, or injects a quota refusal, routes the next admission to the other subscription with the switch visible on the task timeline and cards; on Mac and iPhone the operator reads both pools' windows, reset times, and freshness, changes the routing setting from the app, and reads the recorded change; a seeded quota failure with nowhere to route raises the retry card with the latest readings beside it; and cost and independence records are correct (#901). 1B.1 exit evaluation. |
 | **10 (1B.1): subscription operations** | Folded | Folded into row 9 by revision 99. No wave 10 tracker is created; rows 11 and 12 keep their numbers. |
 | **11 (1B.2): the initiative view** | Integrated | Many work units become one picture. Typed relationship kinds in the Section [5.18](#518-the-world-model-post-merge-recompute-and-frontier-projection) capture records (#884, its position assigned by the planner), the frontier projection, and the deterministic initiative view rendering the dependency graph (#885). |
-| **12 (1B.2): image upkeep** | Parallel | Freeside keeps each project's image in service with no operator step (Section [5.7](#57-the-ward-runners-handoff-gate-and-operating-modes), project-image upkeep). Contract-first, its position assigned by the planner: the admitted-image pointer per agent base, the `image_upkeep` schedule kind, the upkeep refusal record and hold facts, and daemon-origin submission (#2332). Then, each `starts-after` #2332: the upkeep job (#2333, also `starts-after` #1792); default-branch tip observation independent of bound PRs (#2334); the adoption proposal for policy-clause refusals (#2335); and the daemon-submitted maintenance task for repairs (#2336, also `starts-after` #1792). Then the Go module-source gate (#2337, `starts-after` #2333). Agent-base upkeep (#2338) stays a deferral. Exit proof: a dependency change merged outside Freeside within policy and a daemon upgrade each end in a new admitted image with no operator action; a recipe change ends in one approved adoption card and its merged policy proposal; a recipe failing at the tip ends in a maintenance task's PR. 1B exit evaluation against recorded comprehension and operational evidence. |
+| **12 (1B.2): image upkeep** | Parallel | Freeside keeps each project's image in service with no operator step (Section [5.7](#57-the-ward-runners-handoff-gate-and-operating-modes), project-image upkeep). Contract-first, its position assigned by the planner: the admitted-image pointer per agent base, the `image_upkeep` schedule kind, the upkeep refusal record and hold facts, and daemon-origin submission (#2332). Then, each `starts-after` #2332: the upkeep job (#2333, also `starts-after` #1792); default-branch tip observation independent of bound PRs (#2334); and the daemon-submitted maintenance task for repairs (#2336, also `starts-after` #1792). Then the Go module-source gate (#2337, `starts-after` #2333). The adoption record and the card's storage (#2379, a contract unit, `starts-after` #2378, the revision 101 unit) precede the adoption card for policy-clause refusals (#2335, `starts-after` #2333 and #2379). Agent-base upkeep (#2338) stays a deferral. Exit proof: a dependency change merged outside Freeside within policy and a daemon upgrade each end in a new admitted image with no operator action; a recipe change ends in one approved adoption card and a new admitted image built at the tip under the adopted recipe; a recipe failing at the tip ends in a maintenance task's PR. 1B exit evaluation against recorded comprehension and operational evidence. |
 
 Wave 5's row stays as built: it shipped the specifier with daemon fetching
 only. The researcher (revision 76, #1656 to #1658) is Phase 1B work that no
@@ -6971,22 +6997,27 @@ Record material changes here by revision, with the decider in parentheses.
 - On first re-litigation, promote the decision to a `docs/decisions/` ADR that
   cites its history entry.
 
-Revision 100 ("Write Published Text in the Target's Terms"):
+Revision 101 ("Approve Image Policy Into the Daemon"):
 
-1. **A published PR's source reference is the bare `Closes #N`, `Refs #N`,
-   or descriptive link for both closure provenances.** Section 1B.1 no
-   longer marks a recommended close in the PR body. The proposal keeps its
-   provenance, and the `effect_proposal` card shows it when the human gate
-   keeps one. The pull request's readers are the target repository's
-   maintainers, and the mark read as pipeline jargon: wrong on a CLI run
-   ("the client") and naming no one ("the approver"). Rejected: keeping
-   the sentence; rewording it in the target's terms (either provenance is
-   approved before the line is written, so the maintainer has no use for
-   the distinction). Accepted gap: on the default policy no operator read
-   shows a policy-approved close's provenance until #2359.
+1. **Approving an image-policy adoption card is the adoption.** The daemon
+   records the card's exact recipe digest or registry hosts in its own
+   trusted policy, for the card's repository only, and project-image upkeep
+   then builds a new image at the tip under it, with the positive run and
+   masked-cache proof, as onboarding does (Section [5.7](#57-the-ward-runners-handoff-gate-and-operating-modes)). Section [5.8](#58-control-plane-trust)
+   names the approved card as a reviewed change to recipe approval and the
+   registry set, beside the operator's own edit; an adopted host still meets
+   Section [5.4](#54-credential-modes-egress-profiles-and-concurrency)'s public-registry criterion. This returns to the
+   owner's original choice on #1999, which revision 98 departed from.
+   Rejected: revision 98's route, where approving the card opens a Section
+   [4](#4-the-attention-model) project-policy PR and merging it is the adoption (recipe approval
+   and the registry set are operator host configuration, not repository
+   files, and no daemon code implements that path, so the PR has no
+   target); moving both keys into a repository-hosted control-plane tree
+   and building the Section [4](#4-the-attention-model) PR path first (a new policy tree and a new
+   path, for a decision the card already carries).
 
-(Owner decision of 2026-10-26 on #2349;
-[decision note](../devlog/2026-10-26-1507-plain-source-reference.md).)
+(Owner decision of 2026-10-27 on #2335;
+[decision note](../devlog/2026-10-27-1236-adoption-card-daemon-policy.md).)
 
 ## 14. Risks
 
