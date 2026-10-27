@@ -1526,6 +1526,24 @@ func TestGolden(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	adoptedRecipe := domain.Digest("sha256:" + strings.Repeat("c1", 32))
+	adoptionProposal, err := domain.NewImagePolicyAdoptionProposal(domain.ImagePolicyAdoptionParameters{
+		ProjectID: project.ID, RefusalRecordID: upkeepRefusal.ID, RecipeDigest: &adoptedRecipe,
+		RegistryAuthorities: []string{},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	policyAdoption, err := domain.NewImagePolicyAdoption(domain.ProposalInstance{
+		ID: "proposal-0123456789abcdef0123456789abcdef",
+		Admission: domain.ProposalAdmissionKey{
+			Source: domain.ProposalSourceUpkeepRefusal, RefusalRecordID: upkeepRefusal.ID,
+		},
+		ProposalBatchID: "batch-adoption", Proposal: adoptionProposal, CreatedAt: ts,
+	}, project, ts)
+	if err != nil {
+		t.Fatal(err)
+	}
 
 	conformanceCeiling, ok := domain.ProvableCapabilities(domain.BackendFreshVMReadOnlyVolumeHandoff)
 	if !ok {
@@ -2153,6 +2171,7 @@ func TestGolden(t *testing.T) {
 		{"image_upkeep_refusal_host_fault", hostFaultRefusal},
 		{"repository_tip_observation", tipObservation},
 		{"project", project},
+		{"image_policy_adoption", policyAdoption},
 		{"backend_conformance", backendConformance},
 		{"backend_conformance_failed", failedConformance},
 		{"backend_conformance_superseded", supersededConformance},

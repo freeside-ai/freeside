@@ -93,9 +93,10 @@ const (
 	// EffectImagePolicyAdoption is the fourth registry member: the adoption
 	// card project-image upkeep raises when only trusted-policy clauses
 	// refused a rebuild, proposing the recipe digest or registry authorities
-	// to adopt (plan §5.7, Project-image upkeep). Its parameter type lives in
-	// effect_proposal.go. Nothing raises one until #2335, so every authority
-	// boundary refuses it until then.
+	// to adopt (plan §5.7, Project-image upkeep). Approving it records the
+	// adoption in the daemon's own policy (ImagePolicyAdoption). Its parameter
+	// type and constructor live in effect_proposal.go and its gate in
+	// image_policy_adoption.go.
 	EffectImagePolicyAdoption EffectKind = "image_policy_adoption"
 )
 
@@ -111,6 +112,21 @@ func (k EffectKind) valid() bool {
 	default:
 		return false
 	}
+}
+
+// BindsResolvedPolicy reports whether a proposal of the kind carries the
+// resolved policy of the run that raised it. An adoption card does not: the
+// upkeep job raises it with no run, and its authority is the refusal record
+// it answers. The switch dispatches behaviour and so omits default; the
+// trailing return covers the invalid zero value.
+func (k EffectKind) BindsResolvedPolicy() bool {
+	switch k {
+	case EffectTaskProposal, EffectSourceIssueClosure, EffectFollowUpFiling:
+		return true
+	case EffectImagePolicyAdoption:
+		return false
+	}
+	return false
 }
 
 // ScreeningVerdict is the recorded outcome of screening one agent-controlled
@@ -330,16 +346,22 @@ const (
 	ProposalSourceUpstreamEvent ProposalAdmissionSource = "upstream_event"
 	ProposalSourceClientCommand ProposalAdmissionSource = "client_command"
 	ProposalSourceRunEmission   ProposalAdmissionSource = "run_emission"
+	// ProposalSourceUpkeepRefusal keys an adoption card by the upkeep refusal
+	// record it answers, so one refusal admits one card however often
+	// upkeep reruns.
+	ProposalSourceUpkeepRefusal ProposalAdmissionSource = "upkeep_refusal"
 )
 
 // AllProposalAdmissionSources is the single registration point for sources.
 var AllProposalAdmissionSources = []ProposalAdmissionSource{
 	ProposalSourceUpstreamEvent, ProposalSourceClientCommand, ProposalSourceRunEmission,
+	ProposalSourceUpkeepRefusal,
 }
 
 func (s ProposalAdmissionSource) valid() bool {
 	switch s {
-	case ProposalSourceUpstreamEvent, ProposalSourceClientCommand, ProposalSourceRunEmission:
+	case ProposalSourceUpstreamEvent, ProposalSourceClientCommand, ProposalSourceRunEmission,
+		ProposalSourceUpkeepRefusal:
 		return true
 	default:
 		return false

@@ -143,7 +143,7 @@ func TestProposalAdmissionKeyEnumeratesIdentitySpace(t *testing.T) {
 		domain.AllEffectKinds[3] != domain.EffectImagePolicyAdoption {
 		t.Fatalf("effect registry = %v", domain.AllEffectKinds)
 	}
-	if len(domain.AllProposalAdmissionSources) != 3 || len(domain.AllTaskProposalIntents) != 1 {
+	if len(domain.AllProposalAdmissionSources) != 4 || len(domain.AllTaskProposalIntents) != 1 {
 		t.Fatalf("admission source registry = %v", domain.AllProposalAdmissionSources)
 	}
 	if len(domain.AllClosureProvenances) != 2 || len(domain.AllClosureFlagOrigins) != 2 {
@@ -155,6 +155,7 @@ func TestProposalAdmissionKeyEnumeratesIdentitySpace(t *testing.T) {
 		{Source: domain.ProposalSourceClientCommand, SubmissionCommandID: "command-1"},
 		{Source: domain.ProposalSourceRunEmission, InvocationID: "inv-1", EmissionOrdinal: 1},
 		{Source: domain.ProposalSourceRunEmission, ExportIdentity: export, EmissionOrdinal: 2},
+		{Source: domain.ProposalSourceUpkeepRefusal, RefusalRecordID: export},
 	}
 	seen := map[string]bool{}
 	for _, key := range valid {
@@ -178,6 +179,13 @@ func TestProposalAdmissionKeyEnumeratesIdentitySpace(t *testing.T) {
 		{Source: domain.ProposalSourceUpstreamEvent, UpstreamEventID: " event"},
 		{Source: domain.ProposalSourceClientCommand, SubmissionCommandID: strings.Repeat("c", domain.MaxProposalOccurrenceIDBytes+1)},
 		{Source: domain.ProposalSourceRunEmission, InvocationID: domain.InvocationID(string([]byte{'i', 0xff})), EmissionOrdinal: 1},
+		{Source: domain.ProposalSourceUpkeepRefusal},
+		{Source: domain.ProposalSourceUpkeepRefusal, RefusalRecordID: "not-a-digest"},
+		{Source: domain.ProposalSourceUpkeepRefusal, RefusalRecordID: export, UpstreamEventID: "e"},
+		{Source: domain.ProposalSourceUpkeepRefusal, RefusalRecordID: export, EmissionOrdinal: 1},
+		{Source: domain.ProposalSourceUpstreamEvent, UpstreamEventID: "e", RefusalRecordID: export},
+		{Source: domain.ProposalSourceClientCommand, SubmissionCommandID: "c", RefusalRecordID: export},
+		{Source: domain.ProposalSourceRunEmission, InvocationID: "i", EmissionOrdinal: 1, RefusalRecordID: export},
 	}
 	for _, key := range invalid {
 		if _, err := key.String(); err == nil {

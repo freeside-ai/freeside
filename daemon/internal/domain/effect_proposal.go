@@ -87,21 +87,28 @@ func (p TaskProposalParameters) Validate() error {
 
 // ImagePolicyAdoptionParameters is the adoption card's proposal: the policy
 // change that would answer one policy-class upkeep refusal (plan §5.7,
-// Project-image upkeep). Approving it opens a project-policy proposal;
-// merging that proposal is the adoption. RecipeDigest is the recipe digest
-// to approve, nil when the recipe did not change. RegistryAuthorities are
-// the hosts to add to the registry set, strictly ascending and never nil, so
-// one proposal has one encoding. At least one of the two is present.
+// Project-image upkeep). Approving it records the adoption in the daemon's
+// own policy (ImagePolicyAdoption); no pull request carries it. ProjectID
+// names the project the card is raised for and is its subject: one
+// repository may back more than one project. RecipeDigest is the recipe
+// digest to approve, nil when the recipe did not change.
+// RegistryAuthorities are the hosts to add to the registry set, strictly
+// ascending and never nil, so one proposal has one encoding. At least one of
+// the two is present.
 type ImagePolicyAdoptionParameters struct {
-	RefusalRecordID     Digest   `json:"refusal_record_id"`
-	RecipeDigest        *Digest  `json:"recipe_digest"`
-	RegistryAuthorities []string `json:"registry_authorities"`
+	ProjectID           ProjectID `json:"project_id"`
+	RefusalRecordID     Digest    `json:"refusal_record_id"`
+	RecipeDigest        *Digest   `json:"recipe_digest"`
+	RegistryAuthorities []string  `json:"registry_authorities"`
 }
 
 // Validate reports whether the parameters are structurally sound. Whether the
-// refusal record exists and names these clauses is the store's re-gate,
-// which #2335 adds with the card's producer.
+// project and refusal record exist and back these facts is
+// GateImagePolicyAdoption, which the store runs against current rows.
 func (p ImagePolicyAdoptionParameters) Validate() error {
+	if p.ProjectID == "" {
+		return fmt.Errorf("image policy adoption project_id: %w", ErrEmptyID)
+	}
 	if !contentaddr.Valid(string(p.RefusalRecordID)) {
 		return fmt.Errorf("image policy adoption refusal_record_id %q: %w",
 			p.RefusalRecordID, ErrEffectProposalInconsistent)
@@ -135,11 +142,15 @@ func (p ImagePolicyAdoptionParameters) Validate() error {
 // EffectProposal is the digest-addressed union behind the closed registry.
 // Exactly one registered parameter pointer is present. ResolvedPolicyDigest
 // is injected by the trusted constructor rather than accepted as a parameter.
+// A kind that binds no resolved policy (EffectKind.BindsResolvedPolicy)
+// leaves both policy fields empty, and they are omitted from its encoding;
+// every other kind always carries both, so omitempty leaves their encodings
+// and digests unchanged.
 type EffectProposal struct {
 	EncodingVersion      int                     `json:"encoding_version"`
 	Kind                 EffectKind              `json:"kind"`
-	ResolvedPolicyRunID  RunID                   `json:"resolved_policy_run_id"`
-	ResolvedPolicyDigest Digest                  `json:"resolved_policy_digest"`
+	ResolvedPolicyRunID  RunID                   `json:"resolved_policy_run_id,omitempty"`
+	ResolvedPolicyDigest Digest                  `json:"resolved_policy_digest,omitempty"`
 	TaskProposal         *TaskProposalParameters `json:"run_proposal"`
 	// ClosureProposal carries source_issue_closure parameters. It is
 	// omitempty so a run_proposal encodes byte-identically to the one-kind
@@ -231,8 +242,8 @@ func (i ProposalInstance) EvidenceArtifactBody() (Artifact, []byte, error) {
 type canonicalEffectProposal struct {
 	EncodingVersion      int                            `json:"encoding_version"`
 	Kind                 EffectKind                     `json:"kind"`
-	ResolvedPolicyRunID  RunID                          `json:"resolved_policy_run_id"`
-	ResolvedPolicyDigest Digest                         `json:"resolved_policy_digest"`
+	ResolvedPolicyRunID  RunID                          `json:"resolved_policy_run_id,omitempty"`
+	ResolvedPolicyDigest Digest                         `json:"resolved_policy_digest,omitempty"`
 	TaskProposal         *TaskProposalParameters        `json:"run_proposal"`
 	ClosureProposal      *SourceIssueClosureParameters  `json:"source_issue_closure,omitempty"`
 	FilingProposal       *FollowUpFilingParameters      `json:"follow_up_filing,omitempty"`
@@ -291,22 +302,37 @@ func NewEffectProposal(
 			ResolvedPolicyDigest: policy.Digest, FilingProposal: &params,
 		}
 	case EffectImagePolicyAdoption:
-		params, ok := parameters.(ImagePolicyAdoptionParameters)
-		if !ok {
-			return EffectProposal{}, fmt.Errorf("effect kind %q requires ImagePolicyAdoptionParameters: %w", kind, ErrEffectProposalInconsistent)
-		}
-		params.RegistryAuthorities = slices.Clone(params.RegistryAuthorities)
-		proposal = EffectProposal{
-			EncodingVersion: EffectProposalEncodingVersion,
-			Kind:            kind, ResolvedPolicyRunID: policy.RunID,
-			ResolvedPolicyDigest: policy.Digest, AdoptionProposal: &params,
-		}
+		// The card binds no resolved policy, so it has its own constructor
+		// that takes none; accepting one here would silently drop it.
+		return EffectProposal{}, fmt.Errorf("effect kind %q binds no resolved policy; use NewImagePolicyAdoptionProposal: %w",
+			kind, ErrEffectProposalInconsistent)
 	}
 	if proposal.Kind == "" {
 		return EffectProposal{}, fmt.Errorf("effect kind %q: %w", kind, ErrInvalidEffectKind)
 	}
 	if err := gateEffectProposal(proposal, policy, false); err != nil {
 		return EffectProposal{}, err
+	}
+	digest, err := proposal.ComputeDigest()
+	if err != nil {
+		return EffectProposal{}, err
+	}
+	proposal.Digest = digest
+	return proposal, nil
+}
+
+// NewImagePolicyAdoptionProposal builds an adoption card's proposal. The card
+// binds no resolved policy: the upkeep job that raises it runs with no run,
+// and its authority is the refusal record it answers, which
+// GateImagePolicyAdoption re-checks against current rows.
+func NewImagePolicyAdoptionProposal(parameters ImagePolicyAdoptionParameters) (EffectProposal, error) {
+	parameters.RegistryAuthorities = slices.Clone(parameters.RegistryAuthorities)
+	if err := parameters.Validate(); err != nil {
+		return EffectProposal{}, err
+	}
+	proposal := EffectProposal{
+		EncodingVersion: EffectProposalEncodingVersion,
+		Kind:            EffectImagePolicyAdoption, AdoptionProposal: &parameters,
 	}
 	digest, err := proposal.ComputeDigest()
 	if err != nil {
@@ -326,11 +352,15 @@ func (p EffectProposal) Validate() error {
 	if !p.Kind.valid() {
 		return fmt.Errorf("effect proposal kind %q: %w", p.Kind, ErrInvalidEffectKind)
 	}
-	if !contentaddr.Valid(string(p.ResolvedPolicyDigest)) {
-		return fmt.Errorf("effect proposal resolved_policy_digest %q: %w", p.ResolvedPolicyDigest, ErrEffectProposalInconsistent)
-	}
-	if p.ResolvedPolicyRunID == "" {
-		return fmt.Errorf("effect proposal resolved_policy_run_id: %w", ErrEmptyID)
+	if p.Kind.BindsResolvedPolicy() {
+		if !contentaddr.Valid(string(p.ResolvedPolicyDigest)) {
+			return fmt.Errorf("effect proposal resolved_policy_digest %q: %w", p.ResolvedPolicyDigest, ErrEffectProposalInconsistent)
+		}
+		if p.ResolvedPolicyRunID == "" {
+			return fmt.Errorf("effect proposal resolved_policy_run_id: %w", ErrEmptyID)
+		}
+	} else if p.ResolvedPolicyRunID != "" || p.ResolvedPolicyDigest != "" {
+		return fmt.Errorf("effect proposal kind %q binds no resolved policy: %w", p.Kind, ErrEffectProposalInconsistent)
 	}
 	switch p.Kind {
 	case EffectTaskProposal:
@@ -440,6 +470,9 @@ func gateEffectProposal(
 			return err
 		}
 	}
+	if !proposal.Kind.BindsResolvedPolicy() {
+		return fmt.Errorf("effect proposal kind %q binds no resolved policy: %w", proposal.Kind, ErrProposalPolicyMismatch)
+	}
 	if err := policy.Validate(); err != nil {
 		return fmt.Errorf("effect proposal resolved policy: %w", err)
 	}
@@ -478,22 +511,18 @@ func gateEffectProposal(
 		}
 		return nil
 	case EffectImagePolicyAdoption:
-		// The structural gate only. #2335 adds the re-gate against the
-		// refusal record and current project policy when it raises the card.
-		if proposal.AdoptionProposal == nil {
-			return ErrEffectProposalInconsistent
-		}
-		if err := proposal.AdoptionProposal.Validate(); err != nil {
-			return err
-		}
-		return nil
+		// Refused above: the card binds no policy to gate against.
+		// GateImagePolicyAdoption is its gate.
+		return ErrProposalPolicyMismatch
 	}
 	return fmt.Errorf("effect proposal kind %q: %w", proposal.Kind, ErrInvalidEffectKind)
 }
 
-// ProposalAdmissionKey is the typed union of the three allowed occurrence
-// sources. Proposal content is absent, so equal semantics cannot collapse two
+// ProposalAdmissionKey is the typed union of the allowed occurrence sources.
+// Proposal content is absent, so equal semantics cannot collapse two
 // deliberate occurrences and changed semantics cannot split one retry.
+// RefusalRecordID is omitempty, so every earlier source keeps its encoding
+// and its stored key.
 type ProposalAdmissionKey struct {
 	Source              ProposalAdmissionSource `json:"source"`
 	UpstreamEventID     string                  `json:"upstream_event_id,omitempty"`
@@ -501,6 +530,7 @@ type ProposalAdmissionKey struct {
 	InvocationID        InvocationID            `json:"invocation_id,omitempty"`
 	ExportIdentity      Digest                  `json:"export_identity,omitempty"`
 	EmissionOrdinal     int                     `json:"emission_ordinal,omitempty"`
+	RefusalRecordID     Digest                  `json:"refusal_record_id,omitempty"`
 }
 
 func (k ProposalAdmissionKey) Validate() error {
@@ -509,20 +539,27 @@ func (k ProposalAdmissionKey) Validate() error {
 	}
 	switch k.Source {
 	case ProposalSourceUpstreamEvent:
-		if !validProposalOccurrenceID(k.UpstreamEventID) || k.SubmissionCommandID != "" || k.InvocationID != "" || k.ExportIdentity != "" || k.EmissionOrdinal != 0 {
+		if !validProposalOccurrenceID(k.UpstreamEventID) || k.SubmissionCommandID != "" || k.InvocationID != "" || k.ExportIdentity != "" || k.EmissionOrdinal != 0 ||
+			k.RefusalRecordID != "" {
 			return ErrProposalAdmissionKeyInconsistent
 		}
 	case ProposalSourceClientCommand:
-		if !validProposalOccurrenceID(k.SubmissionCommandID) || k.UpstreamEventID != "" || k.InvocationID != "" || k.ExportIdentity != "" || k.EmissionOrdinal != 0 {
+		if !validProposalOccurrenceID(k.SubmissionCommandID) || k.UpstreamEventID != "" || k.InvocationID != "" || k.ExportIdentity != "" || k.EmissionOrdinal != 0 ||
+			k.RefusalRecordID != "" {
 			return ErrProposalAdmissionKeyInconsistent
 		}
 	case ProposalSourceRunEmission:
 		exactlyOneIdentity := (k.InvocationID == "") != (k.ExportIdentity == "")
 		if k.UpstreamEventID != "" || k.SubmissionCommandID != "" || !exactlyOneIdentity || k.EmissionOrdinal < 1 ||
-			(k.InvocationID != "" && !validProposalOccurrenceID(string(k.InvocationID))) {
+			(k.InvocationID != "" && !validProposalOccurrenceID(string(k.InvocationID))) || k.RefusalRecordID != "" {
 			return ErrProposalAdmissionKeyInconsistent
 		}
 		if k.ExportIdentity != "" && !contentaddr.Valid(string(k.ExportIdentity)) {
+			return ErrProposalAdmissionKeyInconsistent
+		}
+	case ProposalSourceUpkeepRefusal:
+		if !contentaddr.Valid(string(k.RefusalRecordID)) || k.UpstreamEventID != "" || k.SubmissionCommandID != "" ||
+			k.InvocationID != "" || k.ExportIdentity != "" || k.EmissionOrdinal != 0 {
 			return ErrProposalAdmissionKeyInconsistent
 		}
 	}

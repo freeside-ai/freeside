@@ -206,6 +206,34 @@ func DeclaredRegistrySet(policy ResolvedPolicy) (RegistrySet, error) {
 	return set, nil
 }
 
+// EffectiveRegistrySet returns a repository's registry set: the hosts its
+// policy declares plus the hosts its approved adoption cards adopted
+// (ImagePolicyAdoption), deduplicated, in canonical order. The bool reports
+// whether either side contributed a host; adopted hosts alone form the set
+// when the policy declares none. A malformed declaration is still refused,
+// and so is an adopted host that is not a registry host.
+func EffectiveRegistrySet(policy ResolvedPolicy, adoptedHosts []string) (RegistrySet, bool, error) {
+	declared, _, err := RegistrySetFromPolicy(policy)
+	if err != nil {
+		return RegistrySet{}, false, err
+	}
+	for index, host := range adoptedHosts {
+		if err := validateRegistryHost(host); err != nil {
+			return RegistrySet{}, false, fmt.Errorf("adopted registry hosts[%d]: %w", index, err)
+		}
+	}
+	hosts := slices.Concat(declared.Hosts, adoptedHosts)
+	if len(hosts) == 0 {
+		return RegistrySet{}, false, nil
+	}
+	slices.Sort(hosts)
+	set, err := NewRegistrySet(slices.Compact(hosts))
+	if err != nil {
+		return RegistrySet{}, false, err
+	}
+	return set, true, nil
+}
+
 // EgressProfileFromPolicy returns the egress profile the resolved policy
 // requests for the writer. An absent key means provider_only, the default
 // (plan §5.4). The key selects only provider_only or provider_registry:

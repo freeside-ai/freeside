@@ -13,18 +13,11 @@ import (
 // so it cannot be admitted, gated, or served.
 func TestImagePolicyAdoptionResolvesNoSubject(t *testing.T) {
 	t.Parallel()
-	policy, err := domain.NewResolvedPolicy("run-policy", []domain.PolicyKey{{
-		Key: "paths", Value: "daemon/", Provenance: domain.KeyProvenance{
-			Source: domain.ProvenanceOverride, Digest: domain.Digest("sha256:" + strings.Repeat("a", 64)),
-		},
-	}})
-	if err != nil {
-		t.Fatal(err)
-	}
-	proposal, err := domain.NewEffectProposal(domain.EffectImagePolicyAdoption, domain.ImagePolicyAdoptionParameters{
+	proposal, err := domain.NewImagePolicyAdoptionProposal(domain.ImagePolicyAdoptionParameters{
+		ProjectID:           "project-alpha",
 		RefusalRecordID:     domain.Digest("sha256:" + strings.Repeat("e1", 32)),
 		RegistryAuthorities: []string{"registry.npmjs.org"},
-	}, policy)
+	})
 	if err != nil {
 		t.Fatal(err)
 	}
