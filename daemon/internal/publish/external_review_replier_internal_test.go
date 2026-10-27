@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"slices"
 	"strings"
 	"testing"
 	"testing/synctest"
@@ -210,6 +211,14 @@ func newReplyHarnessThreads(t *testing.T, thread, secondThread string, dispositi
 
 func newReplyHarnessForBinding(t *testing.T, f replyBindingFixture, thread, secondThread string, disposition domain.ReviewDisposition, reason string) *replyHarness {
 	t.Helper()
+	return newReplyHarnessDecided(t, f, thread, secondThread, disposition, reason, false)
+}
+
+// newReplyHarnessDecided builds the harness with the first finding's decline
+// or defer decided by the model, or, when byPerson is set, by a person
+// answering the review dispute over the model's judgment.
+func newReplyHarnessDecided(t *testing.T, f replyBindingFixture, thread, secondThread string, disposition domain.ReviewDisposition, reason string, byPerson bool) *replyHarness {
+	t.Helper()
 	h := &replyHarness{t: t, f: f, now: time.Date(2026, 10, 6, 12, 0, 0, 0, time.UTC), comments: []replyCommentWire{}}
 	prior := h.review(1, h.f.binding.HeadSHA)
 	profile := h.profile(true)
@@ -269,6 +278,9 @@ func newReplyHarnessForBinding(t *testing.T, f replyBindingFixture, thread, seco
 			t.Fatal(err)
 		}
 		h.write(func(tx *store.WriteTx) error { return tx.PutFindingAdjudication(ctx, a) })
+		if byPerson {
+			a = h.personDecides(a, finding, route)
+		}
 		d.AdjudicationDigest = &a.Digest
 	}
 	h.write(func(tx *store.WriteTx) error { return tx.PutExternalFindingDisposition(ctx, d) })
@@ -277,6 +289,76 @@ func newReplyHarnessForBinding(t *testing.T, f replyBindingFixture, thread, seco
 	h.second.FindingID = second.ID
 	h.restart()
 	return h
+}
+
+// personDecides records a person's adjudicate_findings answer to a review
+// dispute over finding and the human successor of prior it decides, as the
+// store accepts them, and returns that successor.
+func (h *replyHarness) personDecides(prior domain.FindingAdjudication, finding domain.Finding, route domain.AdjudicationRoute) domain.FindingAdjudication {
+	h.t.Helper()
+	ctx := context.Background()
+	ids := make([]domain.FindingID, 0, len(prior.Entries))
+	for _, entry := range prior.Entries {
+		ids = append(ids, entry.FindingID)
+	}
+	item, err := domain.NewAttentionItem(domain.AttentionItemInput{
+		ID:        domain.ProductionFindingAdjudicationItemID(h.f.run.ID, prior.Round, 1),
+		ProjectID: h.f.run.ProjectID, Subject: h.f.item.Subject,
+		Type: domain.AttentionReviewDispute, Priority: domain.PriorityNormal, Reason: "choose routes",
+		RequestedDecision: []domain.Action{domain.ActionAdjudicateFindings, domain.ActionStop},
+		PRHeadSHA:         h.f.binding.HeadSHA, ItemVersion: 1, InterruptionClass: domain.InterruptionPlannedGate,
+		Status: domain.StatusOpen, ReviewDispute: &domain.ReviewDisputeBinding{
+			RunID: h.f.run.ID, Round: prior.Round, FindingIDs: ids,
+			CompletionEvidence: domain.Digest("sha256:" + strings.Repeat("c", 64)),
+			Findings: []domain.DisputedFinding{{
+				FindingID: finding.ID, Message: finding.Message,
+				External:      &domain.DisputedFindingExternal{ReviewerLogin: finding.External.ReviewerLogin, ThreadID: finding.External.ThreadID},
+				OfferedRoutes: []domain.AdjudicationRoute{domain.RouteDecline, domain.RouteDefer},
+			}},
+		},
+	}, nil)
+	if err != nil {
+		h.t.Fatal(err)
+	}
+	command, err := domain.NewCommand(domain.CommandInput{
+		CommandID: "person-answer", DeviceID: "device-test", ItemID: item.ID, ItemVersion: item.ItemVersion,
+		PRHeadSHA: item.PRHeadSHA, ArtifactDigests: item.ArtifactDigests, Action: domain.ActionAdjudicateFindings,
+		Message: `[{"finding_id":"` + string(finding.ID) + `","route":"` + string(route) + `"}]`,
+	})
+	if err != nil {
+		h.t.Fatal(err)
+	}
+	decidedAt := h.now.Add(time.Minute)
+	h.write(func(tx *store.WriteTx) error {
+		if err := tx.PutAttentionItem(ctx, item); err != nil {
+			return err
+		}
+		if err := tx.PutCommand(ctx, command); err != nil {
+			return err
+		}
+		item.Status = domain.StatusResolved
+		item.ItemVersion++
+		decided, err := item.WithDecidedAt(decidedAt)
+		if err != nil {
+			return err
+		}
+		return tx.PutAttentionItem(ctx, domaintest.MustConclude(decided))
+	})
+	entries := slices.Clone(prior.Entries)
+	for index, entry := range entries {
+		if entry.FindingID == finding.ID {
+			if entries[index], err = domain.NewHumanAdjudicationEntry(finding.ID, route); err != nil {
+				h.t.Fatal(err)
+			}
+		}
+	}
+	decision := domain.AdjudicationDecision{CommandID: command.CommandID, ItemID: item.ID, ItemVersion: command.ItemVersion}
+	human, err := domain.NewHumanSuccessorFindingAdjudication(prior, entries, decision, decidedAt)
+	if err != nil {
+		h.t.Fatal(err)
+	}
+	h.write(func(tx *store.WriteTx) error { return tx.PutFindingAdjudication(ctx, human) })
+	return human
 }
 
 func (h *replyHarness) outcome() externalReplyOutcome {
@@ -305,6 +387,29 @@ func TestExternalReviewReplierPostsOnce(t *testing.T) {
 			h.pass()
 			if h.creates != 1 {
 				t.Fatalf("creates = %d", h.creates)
+			}
+		})
+	}
+}
+
+// TestExternalReviewReplierNamesAPersonsDecision posts a person's decline
+// and defer in the target repository's terms: a maintainer decided, with no
+// placeholder reason and no adjudication digest (#2349).
+func TestExternalReviewReplierNamesAPersonsDecision(t *testing.T) {
+	for disposition, want := range map[domain.ReviewDisposition]string{
+		domain.ReviewDispositionDeclined: "A maintainer declined this finding.\n",
+		domain.ReviewDispositionDeferred: "A maintainer deferred this finding.\n",
+	} {
+		t.Run(string(disposition), func(t *testing.T) {
+			f := seedReplyBinding(t, "feat/test-replies", strings.Repeat("1", 40), strings.Repeat("a", 40))
+			h := newReplyHarnessDecided(t, f, "review_comment/43", "review_comment/44", disposition, "Human decision recorded. (finding adjudication sha256:3f7b)", true)
+			h.pass()
+			h.pass()
+			if got := h.outcome(); got.CommentID != 101 || got.Code != "" {
+				t.Fatalf("outcome: %+v", got)
+			}
+			if len(h.bodies) != 1 || h.bodies[0] != want {
+				t.Fatalf("posted %q, want %q", h.bodies, want)
 			}
 		})
 	}
@@ -848,7 +953,7 @@ func TestExternalReviewReplierRejectsSubstitutedPublishedHead(t *testing.T) {
 	binding := source.binding
 	binding.HeadSHA = i.HeadSHA
 	thread, _ := parseExternalReplyThread(i.Thread)
-	body, err := externalReviewReplyText(h.d, thread, binding, i.Ruleset)
+	body, err := externalReviewReplyText(h.d, source.adjudication, thread, binding, i.Ruleset)
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -121,11 +121,12 @@ func TestRenderSourceReference(t *testing.T) {
 			absent:   []string{"recommended"},
 		},
 		{
-			name: "closes recommended joins the confirmation note to the reference line",
+			name: "closes recommended renders the same bare line as a verified close",
 			res: closureResolution{
 				outcome: domain.ClosureOutcome{Reference: domain.ClosureReferenceCloses, Recommended: true}, target: 9,
 			},
-			contains: []string{"\n\nCloses #9. The client recommended this issue; the approver confirmed it.\n\n"},
+			contains: []string{"\n\nCloses #9\n\n"},
+			absent:   []string{"recommended", "approver"},
 		},
 		{
 			name:     "refs",

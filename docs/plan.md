@@ -4472,8 +4472,10 @@ effect registry), which binds the proposal digest. The approval comes from the
 project's policy actor for both provenances, or from the `effect_proposal` action
 when project policy keeps the human gate on: a label-intake `issue_subject`
 source is a verified close, and a same-repository client-supplied source URL is a
-recommendation, marked as such on the proposal and in the PR body's Source Issue
-section so the person merging sees it for what it is. A cross-repository source URL,
+recommendation, marked as such on the proposal and, when project policy keeps the
+human gate on, on the `effect_proposal` card. The PR body's Source Issue section
+carries the same plain `Closes` line for both provenances, because the pull
+request's readers are the target repository's maintainers. A cross-repository source URL,
 or any failure to admit or approve the closure proposal or resolve its metadata,
 yields `Refs` or the descriptive Source issue link and no close. A prose-screening
 failure is independent: it falls the body back to v1 rendering but still carries an
@@ -6966,50 +6968,22 @@ Record material changes here by revision, with the decider in parentheses.
 - On first re-litigation, promote the decision to a `docs/decisions/` ADR that
   cites its history entry.
 
-Revision 99 ("Claude Capacity Before Provider Diversity"):
+Revision 100 ("Write Published Text in the Target's Terms"):
 
-1. **Two Claude subscriptions, not the Codex execution driver, are 1B's
-   execution capacity.** The Codex execution tail (#406, #407, #408, #873,
-   #868, #1718) and pi (#895, #897) move to Phase 2; Codex review stays as
-   built, and #408 still follows #397 when it returns. Rejected: keeping the
-   tail in wave 9 (with the Codex plan downgraded, a hedge that holds
-   contract-chain slots through four units delays Freeside's own
-   onboarding); dropping Codex altogether (review on a second vendor is
-   still the independence Section [7](#7-review-policy) prefers).
-2. **A router above admission reads usage readings and failures and writes
-   the task line; admission reads only the line.** This overturns revision
-   77's rule that no reading selects an agent. The balancing the owner did
-   by hand is the daily interruption Freeside exists to remove, and the
-   layering keeps every switch a recorded fact that names its reading.
-   Rejected: routing on failures only (it cannot empty one subscription
-   before its reset on purpose); routing inside admission (admission would
-   read a reading, and the line would stop being the one authority).
-3. **The routing policy and task lines are operator settings, set from a
-   client.** This narrows the rule that clients never edit settings: an
-   operator setting chooses among credentials the committed lineup already
-   approved and approves none, the class task lines already opened. Other
-   configuration still passes the Section [5.8](#58-control-plane-trust)
-   gate. Rejected: policy in the committed agent tree (a PR for every
-   change of preference); an approval card per change (the operator is the
-   one deciding, so the card would approve its own author).
-4. **The usage record, collector, and account usage view move from wave 10
-   into wave 9; wave 10 folds.** The owner decides on how full each
-   subscription is, and the router needs the record anyway. Rejected: facts
-   beside the retry card only (that answers why nothing runs, not the
-   decision the owner makes).
-5. **The Claude quantitative usage spike runs first, and the view's shape
-   follows its result.** Only status and reset per window are proved
-   (#1713). Rejected: planning the view on a used share nobody has proved.
-6. **Freeside's own onboarding, `daemon/` first, is wave 9's exit proof,
-   and the proof consumes no real allowance.** The real run proves the
-   ordinary path; a seeded exhausted window or an injected refusal proves
-   the fallback, as wave 8's fixture passes prove its alerts. Rejected:
-   onboarding all four paths at once (the baked recipe verifies only
-   `daemon/` networkless); draining a real subscription to prove the
-   fallback.
+1. **A published PR's source reference is the bare `Closes #N`, `Refs #N`,
+   or descriptive link for both closure provenances.** Section 1B.1 no
+   longer marks a recommended close in the PR body. The proposal keeps its
+   provenance, and the `effect_proposal` card shows it when the human gate
+   keeps one. The pull request's readers are the target repository's
+   maintainers, and the mark read as pipeline jargon: wrong on a CLI run
+   ("the client") and naming no one ("the approver"). Rejected: keeping
+   the sentence; rewording it in the target's terms (either provenance is
+   approved before the line is written, so the maintainer has no use for
+   the distinction). Accepted gap: on the default policy no operator read
+   shows a policy-approved close's provenance until #2359.
 
-(Owner decisions of 2026-10-26;
-[decision note](../devlog/2026-10-26-1238-claude-capacity-before-provider-diversity.md).)
+(Owner decision of 2026-10-26 on #2349;
+[decision note](../devlog/2026-10-26-1507-plain-source-reference.md).)
 
 ## 14. Risks
 
@@ -7020,7 +6994,7 @@ Revision 99 ("Claude Capacity Before Provider Diversity"):
 | Registry egress under `subscription_contained` | Keep `provider_only` the default and the floor fixed. Admit `provider_registry` only per project policy through the per-authority proxy allowlist with TLS server-name pinning and no DNS, to public package registries consumed read-only, with any other authority routed to the `provider_web_read` record. Conformance-check the realized allowlist against the declared profile. Residual: the tunnel cannot constrain method or path. So a registry that co-hosts a write endpoint accepts an attacker-credentialed publish. Exclude such hosts per project where the residual is not acceptable, and provide `api_key_isolated` as the escape for anything wider. Under `subscription_injected` the registry tunnel is unchanged, but the writer holds no provider token for such a publish to carry. |
 | CI privilege crossing | Attest effective authority; block candidate automation changes; fail closed on drift; prohibit the daemon host as a runner. |
 | Reviewer-instruction poisoning | Compose agent and reviewer instructions from the trusted base, never the candidate; detect instruction-path edits mechanically and surface them as advisories that the human merge gate reads (Section [5.8](#58-control-plane-trust)). |
-| **Rendered agent Markdown in a public PR** | Recipe v2 (Section [5.15](#515-evidence-and-images)) renders authored prose as live Markdown only through a screen at least as strict as v1's: it rejects closing and automation directives at the body source, rejects secrets and control characters, neutralizes cross-reference, bare-URL, commit-reference and mention autolinks, renders raw HTML inert, and resolves links and images only to existing publishable (`publish_eligible`) evidence artifacts. The author's evidence inputs are likewise restricted to policy-approved publishable evidence, so it cannot paraphrase sensitive evidence past the publication gate. On any screen or inference failure it falls back to frozen v1 escaped-text rendering, adding no new publication block. The author's control-plane inputs (the target repository's template and AGENTS.md) resolve from the trusted base, never the candidate head (Section [5.8](#58-control-plane-trust)). The publisher, not agent text, writes any close directive; the closure is an effect proposal whose digest-bound approval is recorded by the project's policy actor, or by the `effect_proposal` action when policy keeps the human gate on, before any `Closes` is written; a same-repository client-supplied source URL is approved as a recommendation whose provenance is recorded and shown. |
+| **Rendered agent Markdown in a public PR** | Recipe v2 (Section [5.15](#515-evidence-and-images)) renders authored prose as live Markdown only through a screen at least as strict as v1's: it rejects closing and automation directives at the body source, rejects secrets and control characters, neutralizes cross-reference, bare-URL, commit-reference and mention autolinks, renders raw HTML inert, and resolves links and images only to existing publishable (`publish_eligible`) evidence artifacts. The author's evidence inputs are likewise restricted to policy-approved publishable evidence, so it cannot paraphrase sensitive evidence past the publication gate. On any screen or inference failure it falls back to frozen v1 escaped-text rendering, adding no new publication block. The author's control-plane inputs (the target repository's template and AGENTS.md) resolve from the trusted base, never the candidate head (Section [5.8](#58-control-plane-trust)). The publisher, not agent text, writes any close directive; the closure is an effect proposal whose digest-bound approval is recorded by the project's policy actor, or by the `effect_proposal` action when policy keeps the human gate on, before any `Closes` is written; a same-repository client-supplied source URL is approved as a recommendation whose provenance is recorded on the proposal and shown on the human-gate card. |
 | **Agent text in a public issue comment** | The approved-specification comment (Section [5.11](#511-github-integration-reconciliation-plus-intake)) posts only a human-approved, digest-bound public plan inside a daemon-written frame, screened under `github-issue-comment/1`, which rejects directives, secrets, mentions, and command shapes. The workflow audit gates it on `issue_comment` triggers, and only the daemon's publisher holds the `issues: write` token. The workflow set, with a content digest of each workflow and its local dependencies, is rechecked at the default-branch tip before each post. Residual: a remote action or reusable workflow named by a mutable ref, a script a listed workflow runs from the checkout, or a workflow chained by `workflow_run` can change unseen by the digests. Also residual: a webhook-driven App that reacts to any comment or to a plain phrase cannot be enumerated, and a comment resets stale-issue timers; each sees one screened comment per approval. |
 | **Maintenance tasks Freeside opens for itself** | Project-image upkeep submits a task only for a refusal that needs a repository repair, through the ordinary submission primitive with a daemon origin and the refusal record as its source (Section [5.12](#512-workflow-definition-initiators-and-artifacts)). It passes the ordinary specification approval and the full publication gate like any operator-submitted task, never files an issue, and opens at most one task per refusal record. Residual: operator attention on a task nobody asked for, bounded by the refusal classes that may open one (Section [5.7](#57-the-ward-runners-handoff-gate-and-operating-modes)). |
 | **Wardless roles on the host** | A judgment role runs outside the ward, so nothing sandboxes it and no egress proxy sits in front of its harness. Its safety rests on the call launch, which an adapter proves per build against the real harness; Section [5.4](#54-credential-modes-egress-profiles-and-concurrency), Admission, holds the launch's clauses, the interim hand-audit exception, and credential handling on the host. The answer is schema-validated and bounded by its site's authority contract, the model sees only the site's allowlisted, redacted fields, and a shadow's output reaches only the advisory store. Residual: a harness update can change what a launch flag means, which is why the proof is per pinned build and not per harness; a host administrator policy file that no launch flag switches off is outside that per-build proof (Section [5.4](#54-credential-modes-egress-profiles-and-concurrency)); and a shadow whose agent shares its primary's usage pool draws on a vendor quota that Freeside does not meter (Section [5.13](#513-deterministic-components-judgment-calls-and-the-effect-registry)). |

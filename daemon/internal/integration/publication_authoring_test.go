@@ -396,7 +396,7 @@ func TestCLISubmissionPublishesDeclaredSourceIssue(t *testing.T) {
 		workUnit bool
 		lead     string
 	}{
-		{"work-unit declaration", true, "Closes #82."},
+		{"work-unit declaration", true, "Closes #82\n"},
 		{"no declaration", false, "Source issue: " + issue + "\n"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {

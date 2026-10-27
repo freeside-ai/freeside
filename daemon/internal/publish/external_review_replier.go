@@ -259,6 +259,9 @@ func (r *ExternalReviewReplier) pass(ctx context.Context) error {
 type externalReplySource struct {
 	finding domain.Finding
 	binding domain.ReadyItemPRBinding
+	// adjudication is the entry that decided a declined or deferred outcome,
+	// and nil for a fixed one.
+	adjudication *domain.FindingAdjudicationEntry
 }
 
 // source is the current publication and active-profile gate. A fixed reply
@@ -277,7 +280,27 @@ func replySource(ctx context.Context, tx *store.ReadTx, d domain.ExternalFinding
 	if err != nil {
 		return source, err
 	}
-	return source, nil
+	source.adjudication, err = replyAdjudication(ctx, tx, d)
+	return source, err
+}
+
+// replyAdjudication loads the entry a declined or deferred outcome names. The
+// store lists an outcome only when its adjudication authorizes it, so a
+// missing entry is a broken record and fails closed.
+func replyAdjudication(ctx context.Context, tx *store.ReadTx, d domain.ExternalFindingDisposition) (*domain.FindingAdjudicationEntry, error) {
+	if d.Disposition == domain.ReviewDispositionFixed {
+		return nil, nil
+	}
+	artifact, err := tx.GetFindingAdjudication(ctx, d.Adjudication())
+	if err != nil {
+		return nil, err
+	}
+	for _, entry := range artifact.Entries {
+		if entry.FindingID == d.FindingID {
+			return &entry, nil
+		}
+	}
+	return nil, errors.New("review reply: adjudication names no entry for the finding")
 }
 
 func replyHeadReviewed(ctx context.Context, tx *store.ReadTx, d domain.ExternalFindingDisposition, binding domain.ReadyItemPRBinding) error {
@@ -420,7 +443,7 @@ func (r *ExternalReviewReplier) open(ctx context.Context, run domain.Run, d doma
 	if err != nil {
 		return r.finish(ctx, run, d, externalReplyRefused, 0, "The source thread cannot receive a reply.")
 	}
-	body, err := externalReviewReplyText(d, thread, source.binding, domain.IssueTextRulesetGitHubIssue1)
+	body, err := externalReviewReplyText(d, source.adjudication, thread, source.binding, domain.IssueTextRulesetGitHubIssue1)
 	if err != nil {
 		return r.finish(ctx, run, d, externalReplyRefused, 0, "The reply reason failed publication screening.")
 	}
@@ -533,7 +556,7 @@ func (r *ExternalReviewReplier) send(ctx context.Context, run domain.Run, d doma
 	if err != nil {
 		return err
 	}
-	body, err := externalReviewReplyText(d, thread, binding, i.Ruleset)
+	body, err := externalReviewReplyText(d, source.adjudication, thread, binding, i.Ruleset)
 	if err != nil || contentaddr.Sum([]byte(body)) != i.TextDigest {
 		return r.finish(ctx, run, d, externalReplyRefused, 0, "The recorded reply failed publication screening or changed.")
 	}
