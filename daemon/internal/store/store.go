@@ -35,14 +35,14 @@ type Options struct {
 	// and OpenExisting honour it; OpenReadOnly ignores it.
 	ExclusiveLocking bool
 
-	// ApprovedRecipes is the set of verification-recipe digests trusted policy
-	// has approved. Every write and read of an evidence-bearing artifact
-	// re-derives publish_eligibility against it at the persistence boundary, so
-	// a caller cannot bypass NewArtifact/NewAttentionItem to persist a forged
-	// publish_eligible under an unapproved recipe (plan §5.15 rule 2, §3.1). Nil
-	// means nothing is approved: the boundary fails closed. Provisional: it is
-	// process-global here, to be replaced by a per-run/per-policy resolver when
-	// policy resolution is wired (no such source exists yet).
+	// ApprovedRecipes is the set of verification-recipe digests the operator's
+	// trusted policy has approved. Every write and read of an evidence-bearing
+	// artifact re-derives publish_eligibility at the persistence boundary
+	// against the effective set, this set plus the digests the store's
+	// image-policy adoptions approved, so a caller cannot bypass
+	// NewArtifact/NewAttentionItem to persist a forged publish_eligible under
+	// an unapproved recipe (plan §5.15 rule 2, §3.1). Nil means the operator
+	// approved nothing: with no adoption the boundary fails closed.
 	ApprovedRecipes map[domain.Digest]bool
 
 	// RecommendationRules registers deterministic daemon-policy rules by the
@@ -107,7 +107,7 @@ type Store struct {
 	// ready-for-final-review item commits. Durable reconciliation remains the
 	// source of truth, so one pending wake is sufficient.
 	readyItemCreated chan struct{}
-	// approvedRecipes is the boundary policy set (see Options.ApprovedRecipes),
+	// approvedRecipes is the operator's recipe set (see Options.ApprovedRecipes),
 	// snapshotted at Open and threaded into every transaction. Read-only after
 	// Open, so it is safe to share across concurrent transactions.
 	approvedRecipes map[domain.Digest]bool

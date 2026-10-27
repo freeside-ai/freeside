@@ -54,10 +54,18 @@ func (tx *ReadTx) gateRequirementResolution(r domain.RequirementResolution) erro
 // the gate rejects any independent-review recipe it has not asserted. This
 // keeps the returned-object trust boundary (never trust a caller-supplied
 // trust bit) intact for independent review, not only clean verification.
-func (tx *ReadTx) gateCheckProofRecipe(resolution domain.RequirementResolution, proof domain.CheckProof) error {
+func (tx *ReadTx) gateCheckProofRecipe(
+	ctx context.Context, resolution domain.RequirementResolution, proof domain.CheckProof,
+) error {
 	switch resolution.CheckClass {
 	case domain.CheckClassCleanVerification:
-		if !tx.approvedRecipes[proof.RecipeDigest] {
+		// A proof names no repository, so it gates against every adopted
+		// digest, as an artifact row does (storeRecipeSet).
+		recipes, err := tx.storeRecipeSet(ctx)
+		if err != nil {
+			return err
+		}
+		if !recipes[proof.RecipeDigest] {
 			return domain.ErrUnapprovedRecipe
 		}
 		return nil
@@ -155,7 +163,7 @@ func (tx *InternalTx) RecordCheckProof(ctx context.Context, proof domain.CheckPr
 	if _, err := domain.NewPassedCheckState(resolution, proof); err != nil {
 		return fmt.Errorf("put check proof %q: %w", proof.Digest, err)
 	}
-	if err := tx.gateCheckProofRecipe(resolution, proof); err != nil {
+	if err := tx.gateCheckProofRecipe(ctx, resolution, proof); err != nil {
 		return fmt.Errorf("put check proof %q recipe gate: %w", proof.Digest, err)
 	}
 	body, err := encode(proof)
@@ -201,7 +209,7 @@ func (tx *ReadTx) GetCheckProof(ctx context.Context, digest domain.Digest) (doma
 	if _, err := domain.NewPassedCheckState(resolution, proof); err != nil {
 		return domain.CheckProof{}, fmt.Errorf("get check proof %q binding: %w", digest, err)
 	}
-	if err := tx.gateCheckProofRecipe(resolution, proof); err != nil {
+	if err := tx.gateCheckProofRecipe(ctx, resolution, proof); err != nil {
 		return domain.CheckProof{}, fmt.Errorf("get check proof %q recipe gate: %w", digest, err)
 	}
 	return proof, nil

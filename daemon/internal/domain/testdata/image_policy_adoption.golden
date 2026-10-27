@@ -1,0 +1,11 @@
+{
+  "id": "sha256:f7f9ee0599266e7b8f1045450897e93cd19e252ee1f65cb99d6590314dfd7e5b",
+  "repository_id": 1278475858,
+  "repository": "freeasinbird/gh-imgup",
+  "project_id": "project-alpha",
+  "proposal_instance_id": "proposal-0123456789abcdef0123456789abcdef",
+  "refusal_record_id": "sha256:e6dc41a5490e9d4af535a608c9b8f641d75570f8fb11ddad7e42f937a2bffaae",
+  "recipe_digest": "sha256:c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1",
+  "registry_authorities": [],
+  "recorded_at": "2026-01-02T03:04:05Z"
+}

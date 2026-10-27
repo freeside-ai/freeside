@@ -281,3 +281,34 @@ func TestPolicyWithoutEgressKeysKeepsItsDigest(t *testing.T) {
 		t.Fatal("a policy that declares the registry set shares the digest of one that does not")
 	}
 }
+
+func TestEffectiveRegistrySetAddsAdoptedHosts(t *testing.T) {
+	declared := egressPolicy(t, map[string]string{domain.RegistrySetPolicyKey: `["proxy.golang.org","pypi.org"]`})
+	set, present, err := domain.EffectiveRegistrySet(declared, []string{"registry.npmjs.org", "npm.pkg.github.com", "pypi.org"})
+	if err != nil || !present {
+		t.Fatalf("declared plus adopted = present %v, err %v", present, err)
+	}
+	if got := strings.Join(set.Hosts, ","); got != "npm.pkg.github.com,proxy.golang.org,pypi.org,registry.npmjs.org" {
+		t.Fatalf("hosts = %s, want declared and adopted, deduplicated, in canonical order", got)
+	}
+
+	set, present, err = domain.EffectiveRegistrySet(egressPolicy(t, nil), []string{"registry.npmjs.org"})
+	if err != nil || !present || strings.Join(set.Hosts, ",") != "registry.npmjs.org" {
+		t.Fatalf("adopted alone = %#v, present %v, err %v", set, present, err)
+	}
+	set, present, err = domain.EffectiveRegistrySet(declared, nil)
+	if err != nil || !present || strings.Join(set.Hosts, ",") != "proxy.golang.org,pypi.org" {
+		t.Fatalf("declared alone = %#v, present %v, err %v", set, present, err)
+	}
+	if _, present, err := domain.EffectiveRegistrySet(egressPolicy(t, nil), nil); err != nil || present {
+		t.Fatalf("neither = present %v, err %v; want absent without error", present, err)
+	}
+
+	malformed := egressPolicy(t, map[string]string{domain.RegistrySetPolicyKey: `["pypi.org","proxy.golang.org"]`})
+	if _, _, err := domain.EffectiveRegistrySet(malformed, []string{"registry.npmjs.org"}); !errors.Is(err, domain.ErrRegistrySetInvalid) {
+		t.Fatalf("malformed declaration = %v, want ErrRegistrySetInvalid", err)
+	}
+	if _, _, err := domain.EffectiveRegistrySet(declared, []string{"localhost.test"}); !errors.Is(err, domain.ErrRegistrySetInvalid) {
+		t.Fatalf("invalid adopted host = %v, want ErrRegistrySetInvalid", err)
+	}
+}

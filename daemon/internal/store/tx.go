@@ -38,11 +38,19 @@ type ReadTx struct {
 	// readyItemPRBindingReads counts GetReadyItemPRBinding calls so a test
 	// can prove a re-entry chain authenticates each ancestor once.
 	readyItemPRBindingReads int
-	// approvedRecipes is the store's boundary policy set (see
+	// approvedRecipes is the operator's boundary policy set (see
 	// Options.ApprovedRecipes), carried on every transaction so a Get can
 	// re-derive an evidence artifact's publish_eligibility instead of trusting
-	// the decoded row. Read-only.
+	// the decoded row. It is one input to the effective set a boundary gates
+	// against; the other is the store's image-policy adoptions (storeRecipeSet,
+	// EffectiveApprovedRecipes). Read-only.
 	approvedRecipes map[domain.Digest]bool
+	// recipeScope, when set by ReadWithRecipeScope, limits which adopted
+	// digests join the effective set, as that read limits approvedRecipes.
+	recipeScope map[domain.Digest]bool
+	// adoptions memoizes the gated image-policy adoptions (nil until first
+	// read; see imagePolicyAdoptions).
+	adoptions *[]domain.ImagePolicyAdoption
 	// admissionPolicy is the execution-admission half of that boundary policy
 	// (see Options.AdmissionFloors), carried the same way so a reconstructed
 	// admission is re-gated against the floor policy states now. Read-only.
@@ -204,19 +212,22 @@ func (s *Store) Read(ctx context.Context, fn func(*ReadTx) error) error {
 }
 
 // ReadWithRecipeScope runs a read under only the requested recipes that the
-// store also approves. An empty scope approves no configured recipe. The
+// store also approves, through the operator's set or an image-policy
+// adoption. An empty scope approves no configured or adopted recipe. The
 // compiled effect-proposal recipe remains approved, as it is for every store
 // open. Restriction happens before reconstruction and affects only this
 // transaction, never the store's policy or another concurrent reader.
 func (s *Store) ReadWithRecipeScope(ctx context.Context, recipes []domain.Digest, fn func(*ReadTx) error) error {
 	return s.Read(ctx, func(tx *ReadTx) error {
 		approved := map[domain.Digest]bool{domain.EffectProposalRecipeDigest: true}
+		scope := map[domain.Digest]bool{}
 		for _, recipe := range recipes {
+			scope[recipe] = true
 			if s.approvedRecipes[recipe] {
 				approved[recipe] = true
 			}
 		}
-		tx.approvedRecipes = approved
+		tx.approvedRecipes, tx.recipeScope = approved, scope
 		return fn(tx)
 	})
 }

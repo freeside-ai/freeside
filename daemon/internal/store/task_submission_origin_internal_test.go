@@ -158,6 +158,8 @@ func TestTaskSubmissionOriginMigrationKeepsDeviceRows(t *testing.T) {
 	// Return the table to the shape a daemon at 0108 holds, then record a
 	// submission the way that daemon did.
 	for _, statement := range []string{
+		`DROP TABLE image_policy_adoptions`,
+		`DELETE FROM schema_migrations WHERE name = '0110_image_policy_adoption.sql'`,
 		`DROP TABLE task_submission_commands`,
 		`CREATE TABLE task_submission_commands (
 			command_id           TEXT PRIMARY KEY,
