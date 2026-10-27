@@ -224,14 +224,37 @@ func commandDecision(
 		AnswerRoute:       command.AnswerRoute,
 	}
 	if command.Action == domain.ActionAdjudicateFindings || command.Action == domain.ActionChooseAlternativeRoute {
-		choices, err := decodeAlternativeChoices(command.Message)
+		routes, err := concludedRoutes(command)
 		if err != nil {
 			return domain.ConclusionDecision{}, fmt.Errorf("conclude by command %q: %w", command.CommandID, err)
 		}
-		decision.FindingRoutes = make([]domain.ConcludedRoute, len(choices))
-		for index, choice := range choices {
-			decision.FindingRoutes[index] = domain.ConcludedRoute{FindingID: choice.FindingID, Route: choice.Route}
-		}
+		decision.FindingRoutes = routes
 	}
 	return decision, nil
+}
+
+// concludedRoutes reads the routes a finding decision carried. The conclusion
+// keeps each route and drops any reason: the reason travels in the
+// adjudication artifact and the reply, not on the closed card.
+func concludedRoutes(command domain.Command) ([]domain.ConcludedRoute, error) {
+	if command.Action == domain.ActionAdjudicateFindings {
+		choices, err := decodeFindingRoutes(command.Message)
+		if err != nil {
+			return nil, err
+		}
+		routes := make([]domain.ConcludedRoute, len(choices))
+		for index, choice := range choices {
+			routes[index] = domain.ConcludedRoute{FindingID: choice.FindingID, Route: choice.Route}
+		}
+		return routes, nil
+	}
+	choices, err := decodeAlternativeChoices(command.Message)
+	if err != nil {
+		return nil, err
+	}
+	routes := make([]domain.ConcludedRoute, len(choices))
+	for index, choice := range choices {
+		routes[index] = domain.ConcludedRoute{FindingID: choice.FindingID, Route: choice.Route}
+	}
+	return routes, nil
 }

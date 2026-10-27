@@ -46,7 +46,7 @@ func parkedReviewDispute(t *testing.T, prior bool) (*findingAdjudicationFixture,
 		Payload: signet.DecisionPayload{
 			ItemID: item.ID, Action: domain.ActionAdjudicateFindings, ItemVersion: item.ItemVersion,
 			PRHeadSHA: item.PRHeadSHA, ArtifactDigests: item.ArtifactDigests,
-			FindingRoutes: []signet.AlternativeChoice{{FindingID: f.finding.ID, Route: domain.RouteDecline}},
+			FindingRoutes: []signet.FindingRouteChoice{{FindingID: f.finding.ID, Route: domain.RouteDecline}},
 		},
 	}
 }
@@ -263,7 +263,7 @@ func TestHumanArtifactRequiresExactDurableDecision(t *testing.T) {
 		"version": func(a *domain.FindingAdjudication) { a.Decision.ItemVersion++ },
 		"time":    func(a *domain.FindingAdjudication) { a.CreatedAt = a.CreatedAt.Add(time.Second) },
 		"route": func(a *domain.FindingAdjudication) {
-			a.Entries[0], _ = domain.NewHumanAdjudicationEntry(a.Entries[0].FindingID, domain.RouteDefer)
+			a.Entries[0], _ = domain.NewHumanAdjudicationEntry(a.Entries[0].FindingID, domain.RouteDefer, "")
 		},
 		"rationale": func(a *domain.FindingAdjudication) { a.Entries[0].Rationale = "forged rationale" },
 	} {
@@ -277,7 +277,7 @@ func TestHumanArtifactRequiresExactDurableDecision(t *testing.T) {
 				if err != nil {
 					return err
 				}
-				entry, err := domain.NewHumanAdjudicationEntry(f.finding.ID, domain.RouteDecline)
+				entry, err := domain.NewHumanAdjudicationEntry(f.finding.ID, domain.RouteDecline, "")
 				if err != nil {
 					return err
 				}

@@ -1,0 +1,15 @@
+{
+  "finding_id": "finding-1",
+  "producer": "human",
+  "goal_relationship": "contradictory",
+  "compatibility": null,
+  "route": "decline",
+  "rationale": "The handle is closed by the caller.",
+  "evidence": null,
+  "cited_rules": null,
+  "assumptions": null,
+  "alternatives": null,
+  "open_questions": null,
+  "confidence": null,
+  "offered_alternatives": null
+}

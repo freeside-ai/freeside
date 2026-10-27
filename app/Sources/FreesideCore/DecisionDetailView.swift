@@ -97,6 +97,10 @@ struct DecisionDetailView: View {
     @State private var provenanceExpanded = false
     @State private var lostResponseExpanded = false
     @State private var alternativeSelections: [String: Components.Schemas.AdjudicationRoute]
+    /// The reply reason the operator typed for each external finding, by
+    /// finding id. Kept when the route changes, so picking Decline again
+    /// brings the draft back; only a route that replies sends it.
+    @State private var findingReasons: [String: String]
     /// The finding rows the operator opened, by finding id. Empty by default:
     /// a finding_adjudication card leads with collapsed rows so its actions
     /// stay in the first viewport (#1107).
@@ -131,6 +135,7 @@ struct DecisionDetailView: View {
         detailsExpanded: Bool = false,
         expandedFindings: Set<String> = [],
         alternativeSelections: [String: Components.Schemas.AdjudicationRoute] = [:],
+        findingReasons: [String: String] = [:],
         expandsSummaryReports: Bool = false,
         expandedDisclosures: Set<DecisionDisclosure> = [],
         detailsRevealRequest: TechnicalDetailsRevealRequest? = nil,
@@ -166,6 +171,7 @@ struct DecisionDetailView: View {
         _inspectorPresented = State(initialValue: revealsTechnicalDetails)
         _expandedFindings = State(initialValue: expandedFindings)
         _alternativeSelections = State(initialValue: alternativeSelections)
+        _findingReasons = State(initialValue: findingReasons)
         _expandedDisclosures = State(initialValue: expandedDisclosures)
         attachments = store.attachments
         self.itemID = itemID
@@ -2618,6 +2624,13 @@ struct DecisionDetailView: View {
                         set: { alternativeSelections[finding.finding_id] = $0 })
                 )
                 .disabled(!model.actionsEnabled)
+                if let route = alternativeSelections[finding.finding_id],
+                    AttentionDisplay.disputeRouteRepliesExternally(route, external: external)
+                {
+                    replyReasonField(
+                        finding.finding_id, number: number,
+                        rendersInteractiveControls: rendersInteractiveControls)
+                }
             }
             SentenceDisclosure(
                 label: "Reason and Source",
@@ -2635,6 +2648,49 @@ struct DecisionDetailView: View {
         // The ordinal left the face; VoiceOver still names the item.
         .accessibilityElement(children: .contain)
         .accessibilityLabel(Text("Finding \(number) of \(total)"))
+    }
+
+    /// The reason a Decline and Reply or Defer and Reply posts in the
+    /// reviewer's thread. The daemon refuses either route without one, so
+    /// Apply waits for it (`findingRoutesReady`).
+    @ViewBuilder private func replyReasonField(
+        _ findingID: String,
+        number: Int,
+        rendersInteractiveControls: Bool
+    ) -> some View {
+        let draft = findingReasons[findingID] ?? ""
+        let placeholder = AttentionDisplay.disputeReplyReasonPlaceholder
+        VStack(alignment: .leading, spacing: 4) {
+            Group {
+                if rendersInteractiveControls {
+                    TextField(
+                        placeholder,
+                        text: Binding(
+                            get: { findingReasons[findingID] ?? "" },
+                            set: { findingReasons[findingID] = $0 }),
+                        axis: .vertical
+                    )
+                    .lineLimit(2...6)
+                    .textFieldStyle(.plain)
+                    .disabled(!model.actionsEnabled)
+                    .accessibilityLabel("Finding \(number) reply reason")
+                } else {
+                    // ImageRenderer cannot draw the AppKit-backed field, so the
+                    // screenshot draws its text or prompt in the same frame.
+                    Text(draft.isEmpty ? placeholder : draft)
+                        .foregroundStyle(draft.isEmpty ? Color.inkDim : Color.ink)
+                        .frame(maxWidth: .infinity, minHeight: 36, alignment: .topLeading)
+                }
+            }
+            .font(FreesideFont.callout)
+            .padding(8)
+            .background(Color.ground, in: RoundedRectangle(cornerRadius: 8))
+            .overlay(RoundedRectangle(cornerRadius: 8).stroke(Color.rule))
+            Text(AttentionDisplay.disputeReplyReasonHint(draft))
+                .font(FreesideFont.cardBody)
+                .foregroundStyle(Color.inkDim)
+                .fixedSize(horizontal: false, vertical: true)
+        }
     }
 
     /// The severity chip with the message's title running in beside it.
@@ -2703,20 +2759,43 @@ struct DecisionDetailView: View {
 
     private func selectedFindingRoutes(
         _ findings: [Components.Schemas.DisputedFinding]
-    ) -> [Components.Schemas.AlternativeChoice] {
-        Self.selectedFindingRoutes(findings, selections: alternativeSelections)
+    ) -> [Components.Schemas.FindingRouteChoice] {
+        Self.selectedFindingRoutes(findings, selections: alternativeSelections, reasons: findingReasons)
     }
 
+    /// One choice per finding with an offered route picked. A route that
+    /// replies in an external thread carries the trimmed reason when it is
+    /// sendable; every other route carries none, whatever draft is kept.
     static func selectedFindingRoutes(
         _ findings: [Components.Schemas.DisputedFinding],
-        selections: [String: Components.Schemas.AdjudicationRoute]
-    ) -> [Components.Schemas.AlternativeChoice] {
+        selections: [String: Components.Schemas.AdjudicationRoute],
+        reasons: [String: String] = [:]
+    ) -> [Components.Schemas.FindingRouteChoice] {
         findings.compactMap { finding in
             guard let route = selections[finding.finding_id], finding.offered_routes.contains(route) else {
                 return nil
             }
-            return .init(finding_id: finding.finding_id, route: route)
+            let reason =
+                AttentionDisplay.disputeRouteRepliesExternally(route, external: finding.external != nil)
+                ? Components.Schemas.FindingRouteChoice.sendableReason(reasons[finding.finding_id] ?? "")
+                : nil
+            return .init(finding_id: finding.finding_id, route: route, reason: reason)
         }
+    }
+
+    /// Apply's input gate: every finding has an offered route, and every
+    /// route that replies externally has a sendable reason.
+    static func findingRoutesReady(
+        _ findings: [Components.Schemas.DisputedFinding],
+        selections: [String: Components.Schemas.AdjudicationRoute],
+        reasons: [String: String]
+    ) -> Bool {
+        let choices = selectedFindingRoutes(findings, selections: selections, reasons: reasons)
+        return !findings.isEmpty && choices.count == findings.count
+            && zip(findings, choices).allSatisfy { finding, choice in
+                !AttentionDisplay.disputeRouteRepliesExternally(choice.route, external: finding.external != nil)
+                    || choice.reason != nil
+            }
     }
 
     static func selectedAlternatives(
@@ -2778,8 +2857,8 @@ struct DecisionDetailView: View {
         item: Components.Schemas.AttentionItem
     ) -> Bool {
         if action == .adjudicate_findings {
-            guard let findings = item.review_dispute?.value1.findings, !findings.isEmpty else { return false }
-            return selectedFindingRoutes(findings).count == findings.count
+            guard let findings = item.review_dispute?.value1.findings else { return false }
+            return Self.findingRoutesReady(findings, selections: alternativeSelections, reasons: findingReasons)
         }
         guard action == .choose_alternative_route else { return true }
         guard let binding = item.finding_adjudication?.value1 else { return false }

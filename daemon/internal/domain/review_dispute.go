@@ -6,6 +6,7 @@ import (
 	"slices"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	"github.com/freeside-ai/freeside/daemon/internal/pathfold"
 )
@@ -89,12 +90,25 @@ func ReviewDisputeBindingMatches(stored, derived *ReviewDisputeBinding) bool {
 	return reflect.DeepEqual(stored, &comparable)
 }
 
+// HumanAdjudicationRationale is the rationale of a person's entry that carries
+// no reason: an internal finding's route, a remediation, or a decision made
+// before a reason could be given.
+const HumanAdjudicationRationale = "Human decision recorded."
+
+// MaxHumanAdjudicationReasonBytes bounds the reason a person gives for
+// declining or deferring an external finding, which the reply posts as written.
+const MaxHumanAdjudicationReasonBytes = 2048
+
 // NewHumanAdjudicationEntry records a final route, without model confidence or
 // alternative proposals. The artifact records the command once as its decision.
-func NewHumanAdjudicationEntry(id FindingID, route AdjudicationRoute) (FindingAdjudicationEntry, error) {
+// A non-empty reason, the person's own words for a decline or defer, becomes
+// the rationale; it must already be trimmed, so the command and the entry
+// carry the same text. An empty reason keeps HumanAdjudicationRationale, which
+// rebuilds an entry decided before reasons existed byte for byte.
+func NewHumanAdjudicationEntry(id FindingID, route AdjudicationRoute, reason string) (FindingAdjudicationEntry, error) {
 	entry := FindingAdjudicationEntry{
 		FindingID: id, Producer: AdjudicationProducerHuman,
-		Route: route, Rationale: "Human decision recorded.",
+		Route: route, Rationale: HumanAdjudicationRationale,
 	}
 	switch route {
 	case RouteRemediate:
@@ -107,7 +121,29 @@ func NewHumanAdjudicationEntry(id FindingID, route AdjudicationRoute) (FindingAd
 	default:
 		return FindingAdjudicationEntry{}, ErrInvalidAdjudicationRoute
 	}
+	if reason != "" {
+		if route == RouteRemediate || !ValidHumanAdjudicationReason(reason) {
+			return FindingAdjudicationEntry{}, ErrInvalidHumanAdjudicationReason
+		}
+		entry.Rationale = reason
+	}
 	return entry, entry.Validate()
+}
+
+// ValidHumanAdjudicationReason reports whether reason is a trimmed, non-blank,
+// valid UTF-8 text within MaxHumanAdjudicationReasonBytes.
+func ValidHumanAdjudicationReason(reason string) bool {
+	return reason != "" && strings.TrimSpace(reason) == reason && utf8.ValidString(reason) &&
+		len(reason) <= MaxHumanAdjudicationReasonBytes
+}
+
+// HumanReason returns the reason a person gave for this entry's route, or ""
+// when the entry is not a person's or carries none.
+func (e FindingAdjudicationEntry) HumanReason() string {
+	if e.Producer != AdjudicationProducerHuman || e.Rationale == HumanAdjudicationRationale {
+		return ""
+	}
+	return e.Rationale
 }
 
 // NewHumanFindingAdjudication creates the first accepted artifact for a parked

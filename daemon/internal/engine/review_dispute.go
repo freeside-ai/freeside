@@ -128,6 +128,7 @@ func (w *productionPublicationWorkflow) consumeReviewDisputeDecision(ctx context
 	var choices []struct {
 		FindingID domain.FindingID         `json:"finding_id"`
 		Route     domain.AdjudicationRoute `json:"route"`
+		Reason    string                   `json:"reason"`
 	}
 	if err := strictjson.Decode([]byte(command.Message), &choices, strictjson.RejectInvalidUTF8, domain.MaxFindingAdjudicationBytes); err != nil {
 		return nil, err
@@ -137,7 +138,7 @@ func (w *productionPublicationWorkflow) consumeReviewDisputeDecision(ctx context
 		entries = slices.Clone(prior.Entries)
 	}
 	for _, choice := range choices {
-		entry, err := domain.NewHumanAdjudicationEntry(choice.FindingID, choice.Route)
+		entry, err := domain.NewHumanAdjudicationEntry(choice.FindingID, choice.Route, choice.Reason)
 		if err != nil {
 			return nil, err
 		}

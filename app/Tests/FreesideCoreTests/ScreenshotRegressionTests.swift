@@ -3314,6 +3314,13 @@
                     alternativeSelections: ["finding-1": .remediate],
                     loadsAttachments: false, showsValidationProgress: false,
                     now: screenshotNow, model: routedModel)
+                // Decline on the external finding: the reply it posts needs
+                // the operator's reason, so the card asks for one.
+                let declineRoutedDetail = DecisionDetailView(
+                    store: routedStore, itemID: routed.item.id,
+                    alternativeSelections: ["finding-1": .decline, "finding-2": ._defer],
+                    loadsAttachments: false, showsValidationProgress: false,
+                    now: screenshotNow, model: routedModel)
                 for (suffix, width, scheme) in [
                     ("", canvasWidth, ColorScheme.light),
                     ("-dark", canvasWidth, ColorScheme.dark),
@@ -3334,6 +3341,13 @@
                                 selectedRoutedDetail.screenshotCard(
                                     routed.item, at: dynamicTypeSize, compactLayout: width < canvasWidth))))
                     if variant == "routed" {
+                        surfaces.append(
+                            Surface(
+                                name: "decision-review_dispute-routed-decline\(suffix)", width: width,
+                                colorScheme: scheme,
+                                view: AnyView(
+                                    declineRoutedDetail.screenshotCard(
+                                        routed.item, at: dynamicTypeSize, compactLayout: width < canvasWidth))))
                         surfaces.append(
                             Surface(
                                 name: "decision-review_dispute-routed-reason\(suffix)", width: width,

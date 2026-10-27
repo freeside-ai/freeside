@@ -1152,7 +1152,7 @@ func TestAdjudicationEntryRejectsMisplacedProposedRoute(t *testing.T) {
 			e.Route = domain.RouteParkSeparateWork
 		}},
 		{"human producer", func(e *domain.FindingAdjudicationEntry) {
-			human, err := domain.NewHumanAdjudicationEntry(e.FindingID, domain.RouteDecline)
+			human, err := domain.NewHumanAdjudicationEntry(e.FindingID, domain.RouteDecline, "")
 			if err != nil {
 				t.Fatalf("human entry: %v", err)
 			}

@@ -347,7 +347,7 @@ func (h *replyHarness) personDecides(prior domain.FindingAdjudication, finding d
 	entries := slices.Clone(prior.Entries)
 	for index, entry := range entries {
 		if entry.FindingID == finding.ID {
-			if entries[index], err = domain.NewHumanAdjudicationEntry(finding.ID, route); err != nil {
+			if entries[index], err = domain.NewHumanAdjudicationEntry(finding.ID, route, ""); err != nil {
 				h.t.Fatal(err)
 			}
 		}

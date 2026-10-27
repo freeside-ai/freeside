@@ -140,11 +140,19 @@ func decideSubsetDispute(t *testing.T, f externalCycleFixture, item domain.Atten
 }
 
 func TestReviewDisputeSubsetHumanAnswerPreservesPriorAndReadsBack(t *testing.T) {
-	for _, name := range []string{"valid", "missing choice", "omitted choice", "changed omitted", "dropped omitted"} {
+	// "valid" is a command stored before reasons existed. The reason cases
+	// hold the entry to the command's reason: the gate re-derives it.
+	for _, name := range []string{"valid", "with reason", "changed reason", "dropped reason", "missing choice", "omitted choice", "changed omitted", "dropped omitted"} {
 		t.Run(name, func(t *testing.T) {
 			f, item, prior := subsetDisputeFixture(t, true)
 			putSubsetDispute(t, f, &item)
 			message := `[{"finding_id":"` + string(f.internal.ID) + `","route":"defer"}]`
+			entryReason := ""
+			switch name {
+			case "with reason", "changed reason", "dropped reason":
+				message = `[{"finding_id":"` + string(f.internal.ID) + `","route":"defer","reason":"Tracked separately."}]`
+				entryReason = map[string]string{"with reason": "Tracked separately.", "changed reason": "Something else."}[name]
+			}
 			if name == "missing choice" {
 				message = `[]`
 			}
@@ -156,7 +164,7 @@ func TestReviewDisputeSubsetHumanAnswerPreservesPriorAndReadsBack(t *testing.T) 
 			for index, entry := range entries {
 				if entry.FindingID == f.internal.ID || name == "changed omitted" {
 					var err error
-					entries[index], err = domain.NewHumanAdjudicationEntry(entry.FindingID, domain.RouteDefer)
+					entries[index], err = domain.NewHumanAdjudicationEntry(entry.FindingID, domain.RouteDefer, entryReason)
 					if err != nil {
 						t.Fatal(err)
 					}
@@ -176,7 +184,7 @@ func TestReviewDisputeSubsetHumanAnswerPreservesPriorAndReadsBack(t *testing.T) 
 				t.Fatal(err)
 			}
 			err = f.putAdjudication(t, human)
-			if name != "valid" {
+			if name != "valid" && name != "with reason" {
 				if !errors.Is(err, domain.ErrParentKeyMismatch) {
 					t.Fatalf("invalid answer: %v", err)
 				}
@@ -216,7 +224,7 @@ func TestReviewDisputeSubsetRefusesHumanFirstRevisionWithoutRecursion(t *testing
 	}, 0, len(ids))
 	var entries []domain.FindingAdjudicationEntry
 	for _, id := range ids {
-		entry, err := domain.NewHumanAdjudicationEntry(id, domain.RouteDecline)
+		entry, err := domain.NewHumanAdjudicationEntry(id, domain.RouteDecline, "")
 		if err != nil {
 			t.Fatal(err)
 		}

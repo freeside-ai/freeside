@@ -112,7 +112,11 @@ func (s *Service) validateCommandContent(command domain.Command) error {
 		if len(command.Attachments) > 0 {
 			return fmt.Errorf("action %q: %w", command.Action, ErrContentNotAllowed)
 		}
-		if _, err := decodeAlternativeChoices(command.Message); err != nil {
+		decode := func(message string) error { _, err := decodeAlternativeChoices(message); return err }
+		if command.Action == domain.ActionAdjudicateFindings {
+			decode = func(message string) error { _, err := decodeFindingRoutes(message); return err }
+		}
+		if err := decode(command.Message); err != nil {
 			return fmt.Errorf("action %q: %w", command.Action, err)
 		}
 		return nil

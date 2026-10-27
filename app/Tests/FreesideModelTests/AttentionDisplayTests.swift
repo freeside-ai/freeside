@@ -31,6 +31,25 @@ import Testing
         }
     }
 
+    /// Only a route that replies in an external thread asks for the
+    /// operator's reason, and the hint says why Apply waits on a long one.
+    @Test func replyingRoutesAskForAReason() {
+        #expect(AttentionDisplay.disputeRouteRepliesExternally(.decline, external: true))
+        #expect(AttentionDisplay.disputeRouteRepliesExternally(._defer, external: true))
+        #expect(!AttentionDisplay.disputeRouteRepliesExternally(.remediate, external: true))
+        #expect(!AttentionDisplay.disputeRouteRepliesExternally(.decline, external: false))
+        #expect(!AttentionDisplay.disputeRouteRepliesExternally(._defer, external: false))
+        #expect(
+            AttentionDisplay.disputeReplyReasonHint(" \n")
+                == "Required. Posted with the reply in the reviewer's thread.")
+        #expect(
+            AttentionDisplay.disputeReplyReasonHint("Out of scope.")
+                == "Posted with the reply in the reviewer's thread.")
+        #expect(
+            AttentionDisplay.disputeReplyReasonHint(String(repeating: "a", count: 2049))
+                == "Too long to post. Shorten it to send the reply.")
+    }
+
     /// The model's route is favored, never recommended: the fold's closed
     /// line says whether one is favored, at what confidence, on which
     /// thread, and the sentence inside says why it is only favored.

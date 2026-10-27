@@ -7111,11 +7111,11 @@ public enum Components {
             ///
             /// - Remark: Generated from `#/components/schemas/DecisionPayload/alternative_choices`.
             public var alternative_choices: [Components.Schemas.AlternativeChoice]?
-            /// Complete per-finding routes for adjudicate_findings. Every finding in the dispute's findings list must occur exactly once, with an offered route. Routes for findings outside that list are refused, including bound findings already routed. Absent for every other action.
+            /// Complete per-finding routes for adjudicate_findings. Every finding in the dispute's findings list must occur exactly once, with an offered route. Routes for findings outside that list are refused, including bound findings already routed. A decline or defer on a finding whose dispute row has external requires a reason, which the reply in the reviewer's thread posts; every other choice refuses one. Absent for every other action.
             ///
             ///
             /// - Remark: Generated from `#/components/schemas/DecisionPayload/finding_routes`.
-            public var finding_routes: [Components.Schemas.AlternativeChoice]?
+            public var finding_routes: [Components.Schemas.FindingRouteChoice]?
             /// Per-role agent choices for the task a start or start_with_changes decision on a task_proposal creates; at most one line per role. Absent for every other action and item type. The daemon does not yet apply lines from a decision and rejects a decision that carries this field with 400.
             ///
             ///
@@ -7143,7 +7143,7 @@ public enum Components {
             ///   - effect_proposal_revision: Typed closure revision, present only for approve_with_changes on a source_issue_closure effect proposal. The daemon preserves the proposal's target, provenance, and origin, and rebuilds the revised proposal from the prior one inside the accepting transaction.
             ///   - snooze_until: Typed UTC deferral instant, present only for snooze. The daemon requires a future canonical instant and records it in the proposal ledger.
             ///   - alternative_choices: Per-finding offered routes selected by choose_alternative_route. Findings omitted from this list retain their recommended route. Absent for every other action; finding IDs must be distinct.
-            ///   - finding_routes: Complete per-finding routes for adjudicate_findings. Every finding in the dispute's findings list must occur exactly once, with an offered route. Routes for findings outside that list are refused, including bound findings already routed. Absent for every other action.
+            ///   - finding_routes: Complete per-finding routes for adjudicate_findings. Every finding in the dispute's findings list must occur exactly once, with an offered route. Routes for findings outside that list are refused, including bound findings already routed. A decline or defer on a finding whose dispute row has external requires a reason, which the reply in the reviewer's thread posts; every other choice refuses one. Absent for every other action.
             ///   - task_lines: Per-role agent choices for the task a start or start_with_changes decision on a task_proposal creates; at most one line per role. Absent for every other action and item type. The daemon does not yet apply lines from a decision and rejects a decision that carries this field with 400.
             ///   - decision_action_surface_digest: The digest of the DecisionActionSurface the client rendered the decision from (plan §8). Optional comprehension telemetry: the daemon revalidates it against the live device, item decision surface, capability contract, and offered-action set, and stamps it onto the command's decision_evidence. It never widens the offered actions; it can only reject. Absent for a client build that does not adopt the action surface.
             public init(
@@ -7161,7 +7161,7 @@ public enum Components {
                 effect_proposal_revision: Components.Schemas.DecisionPayload.effect_proposal_revisionPayload? = nil,
                 snooze_until: Foundation.Date? = nil,
                 alternative_choices: [Components.Schemas.AlternativeChoice]? = nil,
-                finding_routes: [Components.Schemas.AlternativeChoice]? = nil,
+                finding_routes: [Components.Schemas.FindingRouteChoice]? = nil,
                 task_lines: [Components.Schemas.TaskLineInput]? = nil,
                 decision_action_surface_digest: Swift.String? = nil
             ) {
@@ -7261,7 +7261,7 @@ public enum Components {
                     forKey: .alternative_choices
                 )
                 self.finding_routes = try container.decodeIfPresent(
-                    [Components.Schemas.AlternativeChoice].self,
+                    [Components.Schemas.FindingRouteChoice].self,
                     forKey: .finding_routes
                 )
                 self.task_lines = try container.decodeIfPresent(
@@ -15223,6 +15223,61 @@ public enum Components {
                 try decoder.ensureNoAdditionalProperties(knownKeys: [
                     "finding_id",
                     "route"
+                ])
+            }
+        }
+        /// The operator-selected offered route for one disputed finding, with the operator's reason when the route replies to an external reviewer.
+        ///
+        ///
+        /// - Remark: Generated from `#/components/schemas/FindingRouteChoice`.
+        public struct FindingRouteChoice: Codable, Hashable, Sendable {
+            /// - Remark: Generated from `#/components/schemas/FindingRouteChoice/finding_id`.
+            public var finding_id: Swift.String
+            /// - Remark: Generated from `#/components/schemas/FindingRouteChoice/route`.
+            public var route: Components.Schemas.AdjudicationRoute
+            /// Why the operator declines or defers an external finding, posted as written in the reviewer's thread. Required on decline and defer for a finding whose dispute row has external, and refused on every other choice. The daemon trims it and stores the trimmed text, which must be non-blank valid UTF-8 of at most 2048 bytes.
+            ///
+            ///
+            /// - Remark: Generated from `#/components/schemas/FindingRouteChoice/reason`.
+            public var reason: Swift.String?
+            /// Creates a new `FindingRouteChoice`.
+            ///
+            /// - Parameters:
+            ///   - finding_id:
+            ///   - route:
+            ///   - reason: Why the operator declines or defers an external finding, posted as written in the reviewer's thread. Required on decline and defer for a finding whose dispute row has external, and refused on every other choice. The daemon trims it and stores the trimmed text, which must be non-blank valid UTF-8 of at most 2048 bytes.
+            public init(
+                finding_id: Swift.String,
+                route: Components.Schemas.AdjudicationRoute,
+                reason: Swift.String? = nil
+            ) {
+                self.finding_id = finding_id
+                self.route = route
+                self.reason = reason
+            }
+            public enum CodingKeys: String, CodingKey {
+                case finding_id
+                case route
+                case reason
+            }
+            public init(from decoder: any Swift.Decoder) throws {
+                let container = try decoder.container(keyedBy: CodingKeys.self)
+                self.finding_id = try container.decode(
+                    Swift.String.self,
+                    forKey: .finding_id
+                )
+                self.route = try container.decode(
+                    Components.Schemas.AdjudicationRoute.self,
+                    forKey: .route
+                )
+                self.reason = try container.decodeIfPresent(
+                    Swift.String.self,
+                    forKey: .reason
+                )
+                try decoder.ensureNoAdditionalProperties(knownKeys: [
+                    "finding_id",
+                    "route",
+                    "reason"
                 ])
             }
         }

@@ -18,7 +18,21 @@ import (
 	"github.com/freeside-ai/freeside/daemon/internal/store"
 )
 
-func (p *productionPublicationHarness) externalDisputeCommand(t *testing.T, item domain.AttentionItem, routes ...signet.AlternativeChoice) signet.ClientCommand {
+// externalReplyReason is the operator's reason an external decline or defer
+// carries, which the reply in the reviewer's thread posts.
+const externalReplyReason = "Out of scope for this change; tracked separately."
+
+// externalChoice routes one external finding, with the reason a decline or
+// defer needs.
+func externalChoice(id domain.FindingID, route domain.AdjudicationRoute) signet.FindingRouteChoice {
+	choice := signet.FindingRouteChoice{FindingID: id, Route: route}
+	if route == domain.RouteDecline || route == domain.RouteDefer {
+		choice.Reason = externalReplyReason
+	}
+	return choice
+}
+
+func (p *productionPublicationHarness) externalDisputeCommand(t *testing.T, item domain.AttentionItem, routes ...signet.FindingRouteChoice) signet.ClientCommand {
 	t.Helper()
 	if err := p.store.Write(p.ctx, func(tx *store.WriteTx) error {
 		return tx.PutDevice(p.ctx, domain.Device{ID: "human-device", DisplayName: "Human decision device", Status: domain.DeviceActive, PairedAt: p.now})
@@ -89,7 +103,7 @@ func TestExternalReviewDecisionSurvivesRestart(t *testing.T) {
 			if again := p.externalReviewEnd(t); again.pending != 1 || len(again.reviewItems) != 1 || again.reviewItems[0].ItemVersion != item.ItemVersion {
 				t.Fatalf("restarted waiting cycle = %#v", again)
 			}
-			command := p.externalDisputeCommand(t, item, signet.AlternativeChoice{FindingID: finding.ID, Route: route})
+			command := p.externalDisputeCommand(t, item, externalChoice(finding.ID, route))
 			if _, err := p.attention.Submit(p.ctx, command); err != nil {
 				t.Fatal(err)
 			}
@@ -124,6 +138,9 @@ func TestExternalReviewDecisionSurvivesRestart(t *testing.T) {
 			}
 			if artifact.Revision != wantRevision || artifact.Decision == nil || artifact.Entries[0].Route != route || artifact.Entries[0].Producer != domain.AdjudicationProducerHuman {
 				t.Fatalf("human artifact = %#v", artifact)
+			}
+			if want := externalChoice(finding.ID, route).Reason; artifact.Entries[0].HumanReason() != want {
+				t.Fatalf("human artifact reason = %q, want %q", artifact.Entries[0].HumanReason(), want)
 			}
 			if route == domain.RouteRemediate {
 				_, input := p.remediateExternalCycle(t, 2, "production change\nfixed the handle\n")
@@ -220,10 +237,10 @@ func TestExternalReviewDecisionFreezesFindingsAndRejectsForeignChoices(t *testin
 	if current.ItemVersion != item.ItemVersion || !slices.Equal(current.ReviewDispute.FindingIDs, []domain.FindingID{findings[0].ID}) {
 		t.Fatalf("late finding changed the card: %#v", current.ReviewDispute)
 	}
-	valid := p.externalDisputeCommand(t, item, signet.AlternativeChoice{FindingID: findings[0].ID, Route: domain.RouteDecline})
+	valid := p.externalDisputeCommand(t, item, externalChoice(findings[0].ID, domain.RouteDecline))
 	for _, change := range []func(*signet.ClientCommand){
 		func(c *signet.ClientCommand) {
-			c.Payload.FindingRoutes = []signet.AlternativeChoice{{FindingID: later.ID, Route: domain.RouteDecline}}
+			c.Payload.FindingRoutes = []signet.FindingRouteChoice{externalChoice(later.ID, domain.RouteDecline)}
 		},
 		func(c *signet.ClientCommand) { c.Payload.PRHeadSHA = "foreign-head" },
 		func(c *signet.ClientCommand) {
@@ -240,7 +257,7 @@ func TestExternalReviewDecisionFreezesFindingsAndRejectsForeignChoices(t *testin
 		t.Fatal(err)
 	}
 	changed := valid
-	changed.Payload.FindingRoutes = []signet.AlternativeChoice{{FindingID: findings[0].ID, Route: domain.RouteDefer}}
+	changed.Payload.FindingRoutes = []signet.FindingRouteChoice{externalChoice(findings[0].ID, domain.RouteDefer)}
 	if _, err := p.attention.Submit(p.ctx, changed); err == nil {
 		t.Fatal("accepted replay with different route")
 	}
@@ -288,7 +305,7 @@ func TestExternalReviewDecisionRefusesFixOutsideScope(t *testing.T) {
 			if slices.Contains(item.ReviewDispute.Findings[0].OfferedRoutes, domain.RouteRemediate) {
 				t.Fatal("out-of-scope fix offered")
 			}
-			command := p.externalDisputeCommand(t, item, signet.AlternativeChoice{FindingID: finding.ID, Route: domain.RouteRemediate})
+			command := p.externalDisputeCommand(t, item, externalChoice(finding.ID, domain.RouteRemediate))
 			if _, err := p.attention.Submit(p.ctx, command); err == nil {
 				t.Fatal("out-of-scope fix accepted")
 			}

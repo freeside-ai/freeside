@@ -152,9 +152,12 @@ func (tx *ReadTx) validateHumanAdjudicationDecision(ctx context.Context, artifac
 		item.ReviewDispute.Round != artifact.Round || !artifact.CreatedAt.Equal(*item.DecidedAt) || len(command.Attachments) != 0 {
 		return domain.ErrParentKeyMismatch
 	}
+	// The command's canonical message: Reason is omitted when empty, so a
+	// command stored before reasons existed re-marshals byte for byte.
 	type choice struct {
 		FindingID domain.FindingID         `json:"finding_id"`
 		Route     domain.AdjudicationRoute `json:"route"`
+		Reason    string                   `json:"reason,omitempty"`
 	}
 	var choices []choice
 	if err := strictjson.Decode([]byte(command.Message), &choices, strictjson.RejectInvalidUTF8, domain.MaxFindingAdjudicationBytes); err != nil {
@@ -172,7 +175,7 @@ func (tx *ReadTx) validateHumanAdjudicationDecision(ctx context.Context, artifac
 	if err != nil {
 		return err
 	}
-	chosen := make(map[domain.FindingID]domain.AdjudicationRoute, len(choices))
+	chosen := make(map[domain.FindingID]choice, len(choices))
 	for _, choice := range choices {
 		if _, exists := chosen[choice.FindingID]; exists {
 			return domain.ErrParentKeyMismatch
@@ -181,11 +184,11 @@ func (tx *ReadTx) validateHumanAdjudicationDecision(ctx context.Context, artifac
 		if row < 0 || !slices.Contains(item.ReviewDispute.Findings[row].OfferedRoutes, choice.Route) {
 			return domain.ErrParentKeyMismatch
 		}
-		chosen[choice.FindingID] = choice.Route
+		chosen[choice.FindingID] = choice
 	}
 	for _, entry := range artifact.Entries {
-		if route, ok := chosen[entry.FindingID]; ok {
-			expected, err := domain.NewHumanAdjudicationEntry(entry.FindingID, route)
+		if choice, ok := chosen[entry.FindingID]; ok {
+			expected, err := domain.NewHumanAdjudicationEntry(entry.FindingID, choice.Route, choice.Reason)
 			if err != nil || !reflect.DeepEqual(expected, entry) {
 				return domain.ErrParentKeyMismatch
 			}

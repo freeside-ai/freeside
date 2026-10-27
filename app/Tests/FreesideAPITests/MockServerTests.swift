@@ -1494,7 +1494,7 @@ import Testing
         let seed = AttentionFixtures.routedReviewDispute()
         let server = MockServer(items: [seed])
         let client = APIClientFactory.mock(server: server)
-        let choices: [Components.Schemas.AlternativeChoice] = [
+        let choices: [Components.Schemas.FindingRouteChoice] = [
             .init(finding_id: "finding-2", route: ._defer),
             .init(finding_id: "finding-1", route: .remediate),
         ]
@@ -1534,11 +1534,63 @@ import Testing
         #expect(await server.snapshot(itemID: seed.item.id)?.item.status == .resolved)
     }
 
+    /// The daemon's reason rule (ErrFindingRouteReasonInvalid, 400): a
+    /// decline or defer on an external finding needs a non-blank reason of
+    /// at most 2048 bytes, every other choice refuses one, and the record
+    /// stores the reason trimmed.
+    @Test func reviewDisputeReasonRuleMatchesTheDaemon() async throws {
+        let seed = AttentionFixtures.routedReviewDispute()
+        let server = MockServer(items: [seed])
+        let client = APIClientFactory.mock(server: server)
+        let internalDefer = Components.Schemas.FindingRouteChoice(finding_id: "finding-2", route: ._defer)
+        let invalid: [[Components.Schemas.FindingRouteChoice]] = [
+            [.init(finding_id: "finding-1", route: .decline), internalDefer],
+            [.init(finding_id: "finding-1", route: ._defer, reason: " \n "), internalDefer],
+            [
+                .init(finding_id: "finding-1", route: .decline, reason: String(repeating: "é", count: 1024) + "a"),
+                internalDefer,
+            ],
+            [.init(finding_id: "finding-1", route: .remediate, reason: "Not needed."), internalDefer],
+            [
+                .init(finding_id: "finding-1", route: .decline, reason: "Out of scope."),
+                .init(finding_id: "finding-2", route: ._defer, reason: "Internal."),
+            ],
+        ]
+        for (index, choices) in invalid.enumerated() {
+            var command = Self.command(id: "reason-invalid-\(index)", against: seed, action: .adjudicate_findings)
+            command.payload.asDecision.finding_routes = choices
+            let response = try await client.submitCommand(body: .json(command))
+            guard case .undocumented(let status, _) = response else {
+                Issue.record("invalid reason \(index) was accepted")
+                continue
+            }
+            #expect(status == 400)
+            #expect(await server.snapshot(itemID: seed.item.id)?.item.status == .open)
+        }
+
+        let bound = String(repeating: "é", count: 1024)
+        var command = Self.command(id: "reason-decision", against: seed, action: .adjudicate_findings)
+        command.payload.asDecision.finding_routes = [
+            .init(finding_id: "finding-1", route: .decline, reason: " \(bound)\n"), internalDefer,
+        ]
+        let result = try await client.submitCommand(body: .json(command)).ok.body.json
+        #expect(CommandResultTrust.accepts(result, for: command))
+        #expect(
+            result.record.asDecision.message
+                == #"[{"finding_id":"finding-1","route":"decline","reason":"\#(bound)"},{"finding_id":"finding-2","route":"defer"}]"#
+        )
+        #expect(await server.snapshot(itemID: seed.item.id)?.item.status == .resolved)
+        let conclusion = try #require(await server.snapshot(itemID: seed.item.id)?.item.conclusion?.value1)
+        #expect(
+            conclusion.decision?.value1.finding_routes
+                == [.init(finding_id: "finding-1", route: .decline), .init(finding_id: "finding-2", route: ._defer)])
+    }
+
     @Test func subsetDisputeRequiresExactlyListedChoices() async throws {
         let seed = AttentionFixtures.subsetReviewDispute()
         let server = MockServer(items: [seed])
         let client = APIClientFactory.mock(server: server)
-        let invalidChoices: [[Components.Schemas.AlternativeChoice]] = [
+        let invalidChoices: [[Components.Schemas.FindingRouteChoice]] = [
             [], [.init(finding_id: "finding-2", route: .decline)],
         ]
         for (index, choices) in invalidChoices.enumerated() {
@@ -1552,9 +1604,13 @@ import Testing
             #expect(await server.snapshot(itemID: seed.item.id)?.item.status == .open)
         }
         var command = Self.command(id: "subset-answer", against: seed, action: .adjudicate_findings)
-        command.payload.asDecision.finding_routes = [.init(finding_id: "finding-1", route: .decline)]
+        command.payload.asDecision.finding_routes = [
+            .init(finding_id: "finding-1", route: .decline, reason: "Out of scope.")
+        ]
         let result = try await client.submitCommand(body: .json(command)).ok.body.json
-        #expect(result.record.asDecision.message == #"[{"finding_id":"finding-1","route":"decline"}]"#)
+        #expect(
+            result.record.asDecision.message
+                == #"[{"finding_id":"finding-1","route":"decline","reason":"Out of scope."}]"#)
         #expect(await server.snapshot(itemID: seed.item.id)?.item.status == .resolved)
     }
 

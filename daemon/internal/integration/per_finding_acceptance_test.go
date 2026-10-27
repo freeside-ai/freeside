@@ -13,7 +13,6 @@ import (
 	"github.com/freeside-ai/freeside/daemon/internal/domain"
 	"github.com/freeside-ai/freeside/daemon/internal/engine"
 	"github.com/freeside-ai/freeside/daemon/internal/publish"
-	"github.com/freeside-ai/freeside/daemon/internal/signet"
 	"github.com/freeside-ai/freeside/daemon/internal/store"
 )
 
@@ -113,7 +112,7 @@ func TestExternalReviewPerFindingAcceptance(t *testing.T) {
 		t.Fatalf("restart lost waiting dispute: %#v", again)
 	}
 	assertNoRemediation()
-	command := p.externalDisputeCommand(t, item, signet.AlternativeChoice{FindingID: findings[2].ID, Route: domain.RouteRemediate})
+	command := p.externalDisputeCommand(t, item, externalChoice(findings[2].ID, domain.RouteRemediate))
 	if _, err := p.attention.Submit(p.ctx, command); err != nil {
 		t.Fatal(err)
 	}
