@@ -2742,20 +2742,44 @@ otherwise raise. Read the verdicts in the task record's
 
 ### Rebuild A Project Image For A Dependency Change
 
-A candidate that changes `package.json` or `package-lock.json` cannot verify
-in the image onboarding approved, because that image bakes the old
-dependencies. Production driver mode rebuilds the image itself when the change
+A candidate that changes `package.json` or `package-lock.json`, or a Go
+module's `go.mod` or `go.sum`, cannot verify in the image onboarding
+approved, because that image bakes the old dependencies. Production driver mode rebuilds the image itself when the change
 stays inside the project's declared policy (`docs/plan.md` §5.7,
 **Policy-gated rebuild**), and blocks publication otherwise. The gate runs in
 the publication lane immediately before verification, on first publication
 and on every re-entered cycle. A head that keeps the manifests the image
 baked takes no gate.
 
-**A Go image refuses every dependency change.** No rule yet bounds a change
-to a Go module's `go.mod` or `go.sum`, so the gate refuses it under
-`go_dependency_changed`, as it does a candidate that adds a Go input no image
-serves, and a person builds and approves a new image. The rest of this
-section describes npm images.
+**A Go image admits a pinned module change from the declared proxy.** The
+build fetches Go modules only from `proxy.golang.org`, with no `direct`
+fallback to a module's own VCS host, so that proxy is the one authority a Go
+module resolves from. To let the gate admit Go module changes, declare
+`proxy.golang.org` in the project's `execution.registry_set`. The gate then
+admits a `go.mod` or `go.sum` change when, in this order:
+
+1. The candidate holds no `vendor` directory, no `go.work` at or above the
+   module, and no `replace` to a filesystem path; and its `go.mod` and
+   `go.sum` are regular files the gate reads: a `go` directive the baked Go
+   serves, no other `toolchain`, only directives Go reads, plain module
+   paths and canonical versions in every `require`, `exclude`, `replace`,
+   and `retract`, no two `replace` directives for one module version with
+   different targets, and `go.sum` lines of Go's own
+   `<module> <version>[/go.mod] h1:<hash>` shape.
+2. The verification recipe is unchanged.
+3. The run's policy declares a valid registry set.
+4. Every module `go.mod` requires, after its module-path `replace`
+   directives, has its `/go.mod` hash in `go.sum`.
+5. When `go.sum` adds or changes a module version, or `go.mod` comes to
+   require one its base did not, the registry set declares
+   `proxy.golang.org`. A tidy `go.sum` already pins the `go.mod` of versions
+   the build never fetched, so `go.mod` alone can choose a new one.
+
+Go verifies every downloaded module against `go.sum`, and against the
+checksum database for anything `go.sum` does not pin, so the gate checks no
+zip hash. The rebuild record counts the module versions added or changed,
+in `go.sum` or as a new requirement of `go.mod`, and those `go.sum` drops. The flags and the rest of this section apply to both
+toolchains.
 
 Three flags give the daemon the host-specific build inputs no image record
 carries:
@@ -2833,15 +2857,15 @@ A refused gate names one clause:
 
 | Clause | The candidate, or the daemon |
 | --- | --- |
-| `undeclared_authority` | Resolves a changed package from a host outside the registry set. |
-| `unpinned_source` | Declares or pins a changed package as something other than a registry package at an exact version, from an `https` tarball with a `sha512` integrity value: a link, an alias, a VCS, URL, or file source, a bundled or shrinkwrapped package, a missing pin, a lockfile field the gate does not know. |
+| `undeclared_authority` | Resolves a changed package from a host outside the registry set; for a Go image, changes a module version while the set lacks `proxy.golang.org`. |
+| `unpinned_source` | Declares or pins a changed package as something other than a registry package at an exact version, from an `https` tarball with a `sha512` integrity value: a link, an alias, a VCS, URL, or file source, a bundled or shrinkwrapped package, a missing pin, a lockfile field the gate does not know. For a Go image, requires a module whose `/go.mod` hash `go.sum` lacks. |
 | `recipe_changed` | Changes the verification recipe along with its dependencies. |
 | `lockfile_inconsistent` | Has a lockfile that is unreadable, repeats a key or holds two that differ only by case, is not v2 or v3, disagrees with `package.json`, lacks an entry for a dependency, or nests a peer dependency under its dependent; or its base's manifests cannot be read to compare with. |
 | `unsupported_npm_input` | Holds `npm-shrinkwrap.json` or `.npmrc`, or changes `package.json`'s `overrides`, `workspaces`, or `packageManager`. |
-| `go_dependency_changed` | Changes a Go image's module `go.mod` or `go.sum`, holds one no build can read, or holds a Go input no image serves (`vendor`, `go.work`). The detail names the changed files and the unsupported inputs. |
+| `go_dependency_changed` | Holds a Go input no image serves (`vendor`, `go.work`, a filesystem `replace`), or a `go.mod` or `go.sum` the gate cannot read: absent, not a regular file, a `go` or `toolchain` directive the baked Go refuses, a version that is not canonical, conflicting `replace` directives, or a line not of Go's shape. The detail names the input or the first line refused. Records from before Go module changes were bounded also hold it for any `go.mod` or `go.sum` change. |
 | `no_registry_set` | Runs under a policy with no registry set, or a malformed one. |
 | `rebuild_not_configured` | Passed the gate, but the daemon has no `-base-build-ref`. |
-| `build_or_proof_failed` | Passed the gate, but the image's dependency install failed on the candidate's own manifests, a build-time proof ran and failed, or the build did not finish within one hour. The evidence leads with npm's error lines for a failed install. |
+| `build_or_proof_failed` | Passed the gate, but the image's dependency install failed on the candidate's own manifests, a build-time proof ran and failed, or the build did not finish within one hour. The evidence leads with the installer's error lines for a failed install: npm's, or Go's for a `go.sum` checksum mismatch, a module version `proxy.golang.org` does not serve, or a `go.mod` Go refuses to read. |
 
 No verification room runs for a refused gate. Where the clause appears
 depends on the cycle:
