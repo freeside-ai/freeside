@@ -1398,6 +1398,9 @@ type claudeComposition struct {
 	// through the publish reconciler (§5.11 conditional requests; §5.16
 	// base_advance_watch consumer).
 	observeBaseTip func(context.Context, domain.ScheduleBaseWatch) (string, error)
+	// observeRepositoryTip is the same read for the active-resource
+	// reconciler's tip watch, which feeds project-image upkeep (§5.7).
+	observeRepositoryTip func(ctx context.Context, repo, branch string) (string, error)
 	// observePull and observeIssue are the §5.18 base-watch capture and
 	// status-independent completion sweep's conditional reads through the same
 	// reconciler.
@@ -1930,6 +1933,7 @@ func composeClaudeDriver(
 		// is submitted.
 		Agents: agents,
 	}
+	observeRefTip := refTipObserver(reconciler)
 	composition := &claudeComposition{
 		driver: driver, backend: backend, authority: authority,
 		selectionFailure: selectionFailure,
@@ -1937,15 +1941,9 @@ func composeClaudeDriver(
 		reviewReplier:    reviewReplier,
 		issueReadTokens:  issueReadTokens,
 		observeBaseTip: func(obsCtx context.Context, watch domain.ScheduleBaseWatch) (string, error) {
-			obs, err := reconciler.ReconcileRef(obsCtx, watch.Repo, watch.BaseRef)
-			if err != nil {
-				return "", err
-			}
-			if !obs.Exists {
-				return "", fmt.Errorf("base ref %s/%s does not exist", watch.Repo, watch.BaseRef)
-			}
-			return obs.SHA, nil
+			return observeRefTip(obsCtx, watch.Repo, watch.BaseRef)
 		},
+		observeRepositoryTip: observeRefTip,
 		observePull: func(obsCtx context.Context, repo string, number int) (publish.PullObservation, error) {
 			return reconciler.ReconcilePull(obsCtx, repo, number)
 		},
@@ -2660,4 +2658,23 @@ func (r retryableInputReadCloser) Close() error {
 		return errors.Join(exec.ErrInputUnavailable, err)
 	}
 	return nil
+}
+
+// refTipObserver reads a branch's tip SHA through the reconciler's
+// conditional ref read. A 304 returns the cached SHA, so a caller that
+// shares the cache must compare SHAs, not trust NotModified. An absent ref
+// is an error: both watches need a tip to compare.
+func refTipObserver(
+	reconciler *publish.Reconciler,
+) func(ctx context.Context, repo, branch string) (string, error) {
+	return func(ctx context.Context, repo, branch string) (string, error) {
+		obs, err := reconciler.ReconcileRef(ctx, repo, branch)
+		if err != nil {
+			return "", err
+		}
+		if !obs.Exists {
+			return "", fmt.Errorf("ref %s/%s does not exist", repo, branch)
+		}
+		return obs.SHA, nil
+	}
 }

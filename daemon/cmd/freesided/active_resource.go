@@ -48,7 +48,25 @@ type activeResourceReconciler struct {
 	evictConcluded      func(domain.ReadyItemPRBinding, *int)
 	evictedConcluded    map[domain.ItemID]bool
 	observationFailures map[domain.ItemID]int
-	now                 func() time.Time
+	// tipWatch names the branch whose tip each pass reads whether or not a
+	// bound PR moved it, so a merge made outside Freeside still reaches
+	// project-image upkeep (plan §5.7, Project-image upkeep, Triggers).
+	// observeTip reads the tip; upkeepTipAdvance is the tip-advance entry
+	// point, which runs inside the pass and so must hand the tip off and
+	// return, not do upkeep's work. A zero tipWatch watches nothing; a set one
+	// needs both functions.
+	tipWatch         repositoryTipWatch
+	observeTip       func(ctx context.Context, repo, branch string) (string, error)
+	upkeepTipAdvance func(context.Context, domain.RepositoryTipObservation) error
+	now              func() time.Time
+}
+
+// repositoryTipWatch is the one configured repository and the branch tasks
+// run against, which is the tip a project image must stay admissible at.
+type repositoryTipWatch struct {
+	Repo         string
+	RepositoryID int64
+	Branch       string
 }
 
 type activeResourceObservation struct {
@@ -369,6 +387,9 @@ func (r *activeResourceReconciler) Reconcile(
 	if r.store == nil || r.pull == nil || r.now == nil {
 		return result, errors.New("active resource reconciler is not fully configured")
 	}
+	if r.tipWatch != (repositoryTipWatch{}) && (r.observeTip == nil || r.upkeepTipAdvance == nil) {
+		return result, errors.New("active resource reconciler tip watch is not fully configured")
+	}
 	var snapshots []store.Snapshotted[domain.AttentionItem]
 	if err := r.store.Read(ctx, func(tx *store.ReadTx) error {
 		var err error
@@ -378,6 +399,12 @@ func (r *activeResourceReconciler) Reconcile(
 		return result, fmt.Errorf("list active ready resources: %w", err)
 	}
 	result.failures = make([]error, 0)
+	if r.tipWatch != (repositoryTipWatch{}) {
+		if err := r.observeRepositoryTip(ctx); err != nil {
+			result.failures = append(result.failures,
+				fmt.Errorf("observe repository tip %s %s: %w", r.tipWatch.Repo, r.tipWatch.Branch, err))
+		}
+	}
 	// A run with a ready item is observed through that item's binding alone,
 	// whatever the ready item's status, so one pull request is never polled
 	// twice. A held successor therefore keeps the watch its predecessor's
@@ -514,6 +541,88 @@ func (r *activeResourceReconciler) Reconcile(
 		}
 	}
 	return result, nil
+}
+
+// observeRepositoryTip records the watched branch's tip and hands a tip
+// upkeep has not handled yet to upkeepTipAdvance. It compares the read SHA
+// with the stored row instead of trusting a 304, because the base-advance
+// watch shares the ref cache: a tip it read first comes back NotModified
+// here. UpkeepTipSHA advances only after the entry point succeeds, so every
+// failure leaves the tip pending and the next pass retries it; a crash
+// between that success and the write repeats one call.
+//
+// Each write reads the row and writes it in one transaction and changes only
+// its own fields, so it never overwrites a field another writer set.
+func (r *activeResourceReconciler) observeRepositoryTip(ctx context.Context) error {
+	watch := r.tipWatch
+	tip, err := r.observeTip(ctx, watch.Repo, watch.Branch)
+	if err != nil {
+		return fmt.Errorf("read tip: %w", err)
+	}
+	var pending domain.RepositoryTipObservation
+	if err := r.store.WriteInternal(ctx, func(tx *store.InternalTx) error {
+		stored, found, err := tx.GetRepositoryTipObservation(ctx, watch.RepositoryID)
+		if err != nil {
+			return err
+		}
+		if !found || stored.TipSHA != tip || stored.Branch != watch.Branch || stored.Repository != watch.Repo {
+			stored = domain.RepositoryTipObservation{
+				RepositoryID: watch.RepositoryID, Repository: watch.Repo, Branch: watch.Branch,
+				TipSHA: tip, ObservedAt: r.now().UTC(), UpkeepTipSHA: stored.UpkeepTipSHA,
+			}
+			if err := tx.RecordRepositoryTipObservation(ctx, stored); err != nil {
+				return err
+			}
+		}
+		pending = stored
+		return nil
+	}); err != nil {
+		return fmt.Errorf("record tip: %w", err)
+	}
+	if pending.TipSHA == pending.UpkeepTipSHA {
+		return nil
+	}
+	if err := r.upkeepTipAdvance(ctx, pending); err != nil {
+		return fmt.Errorf("hand tip %s to image upkeep: %w", pending.TipSHA, err)
+	}
+	if err := r.store.WriteInternal(ctx, func(tx *store.InternalTx) error {
+		current, found, err := tx.GetRepositoryTipObservation(ctx, watch.RepositoryID)
+		if err != nil {
+			return err
+		}
+		if !found {
+			return errors.New("tip observation vanished")
+		}
+		// Another writer advanced UpkeepTipSHA during the call; its value
+		// stands. Otherwise record the handled tip even if the tip moved
+		// meanwhile, which leaves the newer one pending for the next pass.
+		if current.UpkeepTipSHA != pending.UpkeepTipSHA {
+			return nil
+		}
+		current.UpkeepTipSHA = pending.TipSHA
+		return tx.RecordRepositoryTipObservation(ctx, current)
+	}); err != nil {
+		return fmt.Errorf("record upkeep tip %s: %w", pending.TipSHA, err)
+	}
+	return nil
+}
+
+// unwiredImageUpkeepTipAdvance stands in for the upkeep job's tip-advance
+// entry point until that job exists (#2333). It succeeds, so the tip is
+// recorded as handled; the job's daemon-start pass, which checks every
+// project, covers any tip handled here.
+func unwiredImageUpkeepTipAdvance(
+	logger *slog.Logger,
+) func(context.Context, domain.RepositoryTipObservation) error {
+	if logger == nil {
+		logger = slog.New(slog.DiscardHandler)
+	}
+	return func(_ context.Context, observation domain.RepositoryTipObservation) error {
+		logger.Info("default-branch tip advanced; image upkeep not wired yet",
+			"subsystem", "active-resource", "repository", observation.Repository,
+			"branch", observation.Branch, "tip_sha", observation.TipSHA)
+		return nil
+	}
 }
 
 // startExternalReview starts an external review cycle for a ready item when
