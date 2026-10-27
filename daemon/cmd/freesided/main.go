@@ -1163,6 +1163,9 @@ func run(parent context.Context, stop func(), cfg config) (_ *daemon, err error)
 				claudeWiring.env, func() time.Time { return time.Now().UTC() }),
 			engine.WithAdmissionDerivation(claudeWiring.derive),
 		}
+		if claudeWiring.selectImage != nil {
+			engineOptions = append(engineOptions, engine.WithAdmissionImageSelection(claudeWiring.selectImage))
+		}
 		advisoryStore, advisoryErr := advisory.Open(
 			filepath.Join(cfg.StateDir, "advisory.json"), 2_000, 64<<10,
 		)
@@ -1321,6 +1324,9 @@ func run(parent context.Context, stop func(), cfg config) (_ *daemon, err error)
 			&doctorConvergenceLock)
 		if err != nil {
 			return nil, err
+		}
+		if claudeWiring.bindImageUpkeep != nil {
+			claudeWiring.bindImageUpkeep(imageUpkeep.PendingResolution)
 		}
 		engineOptions = append(engineOptions, engine.WithProductionPublication(engine.ProductionPublicationConfig{
 			WorkDir:   filepath.Join(cfg.Claude.SeedRoot, "production-publication"),

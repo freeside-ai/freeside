@@ -982,6 +982,42 @@ func validatePreflightProjectImage(
 	return nil
 }
 
+// projectImageBaseObserver reads what the configured base commit holds for
+// the inputs a project image's environment records.
+type projectImageBaseObserver func() (domain.ProjectImageBaseInputs, error)
+
+// admitProjectImageAtBase is preflight's base check on the configured
+// implementer image: it refuses a recorded image that may not serve a run at
+// baseSHA (domain.ProjectImage.AdmissibleAt). An image built at exactly
+// baseSHA is admitted from the record alone, so observe runs only for an
+// image built at another commit. The daemon itself no longer refuses a start
+// on this: writer selection (claudeImageSelector) holds attempts on a base
+// no image serves.
+//
+// An observation that fails is reported as itself, not as
+// ErrProjectImageComposition: the image was not found incompatible, the base
+// could not be read.
+func admitProjectImageAtBase(
+	image domain.ProjectImage, baseSHA string, observe projectImageBaseObserver,
+) error {
+	if image.CommitSHA == baseSHA {
+		return nil
+	}
+	inputs, err := observe()
+	if err != nil {
+		return fmt.Errorf("observe project-image inputs at base %s: %w", baseSHA, err)
+	}
+	if inputs.CommitSHA != baseSHA {
+		return fmt.Errorf(
+			"project-image inputs were observed at %s, not the configured base %s: %w",
+			inputs.CommitSHA, baseSHA, ErrProjectImageComposition)
+	}
+	if err := image.AdmissibleAt(inputs, projectimage.PreparationDigest()); err != nil {
+		return errors.Join(ErrProjectImageComposition, err)
+	}
+	return nil
+}
+
 func evaluateDaemonConflict(
 	ctx context.Context,
 	manifest *compositionManifest,
