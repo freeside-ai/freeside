@@ -2028,8 +2028,25 @@ a declared module is refused.
 A Go image bakes Go 1.26.10 and golangci-lint 2.12.2 from pinned archives,
 and a module cache warmed from the commit's `go.mod` and `go.sum` at
 `/opt/freeside/go-mod-cache`. It bakes no build cache, so every room compiles
-from scratch. `go`, `gofmt`, and `golangci-lint` are launchers that extract
-the toolchain once per process tree and set:
+from scratch. For Freeside's `api/` and `scripts/` checks it also bakes:
+
+| Tool | Pin | Launcher |
+| --- | --- | --- |
+| vacuum | 0.29.9 release archive | `/usr/local/bin/vacuum` |
+| shellcheck | 0.11.0 release archive | `/usr/local/bin/shellcheck` |
+| Python | CPython 3.12.16, python-build-standalone 20261026 | `/usr/bin/python3` |
+| procps `ps` | Debian trixie `procps` and `libproc2-0` 4.0.4-9, from snapshot.debian.org | `/usr/bin/ps` |
+
+Each archive is checksum-verified at build, labeled, and rehashed by the
+host-side provenance check. `python3` and `ps` sit in `/usr/bin`, where
+Debian puts them, because some scripts suites cut `PATH` to `/usr/bin:/bin`.
+`ps` runs against the base's `libsystemd0`. All seven launchers are one
+script. These four extract their archives once per room into
+`/tmp/freeside-project-<tool>` and exec the tool, so it keeps the launcher's
+PID. The reasons are in `devlog/2026-10-27-1345-go-image-script-tools.md`.
+
+`go`, `gofmt`, and `golangci-lint` extract the Go toolchain once per process
+tree and set:
 
 | Variable | Value |
 | --- | --- |
@@ -2073,19 +2090,27 @@ env GOFLAGS=-p=2 GOMEMLIMIT=768MiB bash scripts/check.sh daemon build test vet l
 CPUs, and `GOMEMLIMIT` sets each Go process's heap target, golangci-lint's
 included. Without them, lint's heap reaches the room's limit and the step
 slows under reclaim. Freeside's `.freeside/verify.json` runs this command,
-then `bash scripts/check.sh docs`. Measured at `874a5de8` in Freeside's
+then `bash scripts/check.sh docs`, then `env VACUUM=vacuum bash
+scripts/check.sh api`, then `check.sh scripts syntax shellcheck suites
+trackercollect` with the same Go limits, because `trackercollect` runs `go
+build`, `test`, and `vet`. The scripts command leaves out `vocabulary`:
+`check-vocabulary.sh` lists files with `git ls-files`, and a room holds the
+commit's tree without `.git`, so that step fails in every room (#2399). The
+required CI check still runs it. Measured at `d03b0b88` in Freeside's
 project image, one container per step, every step passing:
 
 | Step | Unreclaimable peak | Wall |
 | --- | --- | --- |
-| build | 811 MiB | 37 s |
-| test | 1041 MiB | 295 s |
-| vet | 1279 MiB | 76 s |
-| lint | 1273 MiB | 201 s |
-| docs | 1 MiB | under 1 s |
+| build | 807 MiB | 33 s |
+| test | 1040 MiB | 268 s |
+| vet | 1217 MiB | 53 s |
+| lint | 1323 MiB | 124 s |
+| docs | 15 MiB | under 1 s |
+| api | 100 MiB | under 1 s |
+| scripts (four steps) | 324 MiB | 107 s |
 
-Each step started from a cold build cache on a host at load average 30 to
-36. The decision and the rejected options are in
+Each step started from a cold build cache on a host at load average 5 to
+8. The decision and the rejected options are in
 `devlog/2026-10-22-1241-proof-memory-bound.md`.
 
 If the installation was terminally quarantined, start a fresh native
@@ -2294,13 +2319,13 @@ recorded before execution.
 
 ### Onboard Freeside
 
-Freeside onboards itself for `daemon/` and `docs/` (plan §11, revision 92;
-`api/` and `scripts/` follow in #2376). It runs the `freesided onboard` flow
-above with these inputs. `-commit` must equal the live `-base-ref` head, so
+Freeside onboards itself for `daemon/`, `docs/`, `api/`, and `scripts/`
+(plan §11, revision 92). It runs the `freesided onboard` flow above with
+these inputs. `-commit` must equal the live `-base-ref` head, so
 onboard from a `main` that already carries `.freeside/verify.json`.
 
 - **Recipe:** `.freeside/verify.json`, detected with `-source`. It runs the
-  daemon recipe sized above, then `bash scripts/check.sh docs`.
+  four commands sized above.
 - **Toolchain:** `-go-module-dir daemon`. The root has no `go.mod`.
 - **Protected paths:** exactly these flags, in this order. Quote each
   pattern so the shell does not expand `**`.
@@ -2308,7 +2333,9 @@ onboard from a `main` that already carries `.freeside/verify.json`.
   ```sh
   -protected-path 'automation_control=.githooks/**' \
   -protected-path 'verification_control=.freeside/**' \
+  -protected-path 'verification_control=api/vacuum.ruleset.yaml' \
   -protected-path 'verification_control=daemon/.golangci.yml' \
+  -protected-path 'verification_control=scripts/api-contract-digest.sh' \
   -protected-path 'verification_control=scripts/check-commit-messages.sh' \
   -protected-path 'verification_control=scripts/check-migration-history.sh' \
   -protected-path 'verification_control=scripts/check-vocabulary.sh' \
@@ -2316,6 +2343,8 @@ onboard from a `main` that already carries `.freeside/verify.json`.
   -protected-path 'verification_control=scripts/daemon-test-shards.json' \
   -protected-path 'verification_control=scripts/daemon-test-shards.py' \
   -protected-path 'verification_control=scripts/link-plan-section-refs.sh' \
+  -protected-path 'verification_control=scripts/merge-result-audit.sh' \
+  -protected-path 'verification_control=scripts/run-convergence.sh' \
   -protected-path 'prompts_and_policy=policy/**' \
   -protected-path 'prompts_and_policy=prompts/**' \
   -protected-path 'materiality_rules=docs/plan.md'
@@ -2325,9 +2354,14 @@ onboard from a `main` that already carries `.freeside/verify.json`.
   list; change both together. `docs/plan.md` is protected whole, because a
   path pattern cannot select §9, so every agent edit to the plan is a
   control-plane hold. The reasons for each entry are in
-  `devlog/2026-10-27-1204-freeside-protected-paths.md`.
+  `devlog/2026-10-27-1204-freeside-protected-paths.md`; the `api/` and
+  `scripts/` additions follow the same rule, the scripts `check.sh` or a CI
+  workflow runs to decide pass or fail, plus the API lint ruleset. The
+  `scripts/test-*.sh` suites stay unprotected, like daemon `_test.go` files.
 - **Deputy scope:** set the deputy's `repository.allowed_paths` to
-  `["daemon/**", "docs/**"]`.
+  `["api/**", "daemon/**", "docs/**", "scripts/**"]`. An `api/openapi.yaml`
+  change still fails the recipe's `api digest` step, because its fix is in
+  `app/`, outside the allowed paths, so schema work stays human-run.
 
 ### Run Real Work With The Deputy
 
