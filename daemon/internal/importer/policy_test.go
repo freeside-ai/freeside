@@ -383,7 +383,9 @@ var freesideProtectedPaths = domain.ProtectedPathConfig{
 	ExtraAutomationControlPatterns: []string{".githooks/**"},
 	ExtraVerificationControlPatterns: []string{
 		".freeside/**",
+		"api/vacuum.ruleset.yaml",
 		"daemon/.golangci.yml",
+		"scripts/api-contract-digest.sh",
 		"scripts/check-commit-messages.sh",
 		"scripts/check-migration-history.sh",
 		"scripts/check-vocabulary.sh",
@@ -391,15 +393,18 @@ var freesideProtectedPaths = domain.ProtectedPathConfig{
 		"scripts/daemon-test-shards.json",
 		"scripts/daemon-test-shards.py",
 		"scripts/link-plan-section-refs.sh",
+		"scripts/merge-result-audit.sh",
+		"scripts/run-convergence.sh",
 	},
 	ExtraPromptsAndPolicyPatterns: []string{"policy/**", "prompts/**"},
 	ExtraMaterialityRulesPatterns: []string{"docs/plan.md"},
 }
 
 // TestImportFreesideProtectedPaths shows Freeside's widening turns an
-// agent's edit to its hooks, recipe, verification scripts, prompts, or plan
-// into a publish-blocking control-plane finding, while ordinary daemon/ and
-// docs/ edits draw none.
+// agent's edit to its hooks, recipe, verification scripts, API lint
+// configuration, prompts, or plan into a publish-blocking control-plane
+// finding, while ordinary daemon/, docs/, api/, and scripts/ edits, a
+// script's own regression suite included, draw none.
 func TestImportFreesideProtectedPaths(t *testing.T) {
 	if err := freesideProtectedPaths.Validate(); err != nil {
 		t.Fatalf("Freeside's protected paths: %v", err)
@@ -413,11 +418,15 @@ func TestImportFreesideProtectedPaths(t *testing.T) {
 		"daemon/.golangci.yml":        {FindingVerificationRecipePath, domain.ControlPlaneVerificationRecipes},
 		"scripts/check.sh":            {FindingVerificationRecipePath, domain.ControlPlaneVerificationRecipes},
 		"scripts/check-vocabulary.sh": {FindingVerificationRecipePath, domain.ControlPlaneVerificationRecipes},
+		"api/vacuum.ruleset.yaml":     {FindingVerificationRecipePath, domain.ControlPlaneVerificationRecipes},
+		"scripts/run-convergence.sh":  {FindingVerificationRecipePath, domain.ControlPlaneVerificationRecipes},
 		"prompts/system.md":           {FindingPromptsPolicyPath, domain.ControlPlanePromptsAndPolicy},
 		"policy/materiality.yaml":     {FindingPromptsPolicyPath, domain.ControlPlanePromptsAndPolicy},
 		"docs/plan.md":                {FindingMaterialityRulesPath, domain.ControlPlaneMaterialityRules},
 	}
-	unflagged := []string{"daemon/cmd/freesided/main.go", "docs/intro.md"}
+	unflagged := []string{
+		"daemon/cmd/freesided/main.go", "docs/intro.md", "api/README.md", "scripts/test-check.sh",
+	}
 	baseFiles := map[string]string{}
 	for path := range want {
 		baseFiles[path] = "old\n"

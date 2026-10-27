@@ -1169,6 +1169,8 @@ const (
 	maxNodeArchiveBytes  = 64 << 20
 	maxGoArchiveBytes    = 128 << 20
 	maxLintArchiveBytes  = 64 << 20
+	maxToolArchiveBytes  = 64 << 20
+	maxDebArchiveBytes   = 4 << 20
 	maxBusyboxBytes      = 8 << 20
 )
 
@@ -1222,6 +1224,16 @@ func expectedToolchainEvidence(want provenanceSpec) toolchainEvidence {
 				"ai.freeside.project.toolchain.go.archive-sha256":            want.GoToolchainArchiveSHA256,
 				"ai.freeside.project.toolchain.golangci-lint.version":        want.GolangciLintVersion,
 				"ai.freeside.project.toolchain.golangci-lint.archive-sha256": want.GolangciLintArchiveSHA256,
+				"ai.freeside.project.toolchain.vacuum.version":               want.VacuumVersion,
+				"ai.freeside.project.toolchain.vacuum.archive-sha256":        want.VacuumArchiveSHA256,
+				"ai.freeside.project.toolchain.shellcheck.version":           want.ShellcheckVersion,
+				"ai.freeside.project.toolchain.shellcheck.archive-sha256":    want.ShellcheckArchiveSHA256,
+				"ai.freeside.project.toolchain.python.version":               want.PythonVersion,
+				"ai.freeside.project.toolchain.python.archive-sha256":        want.PythonArchiveSHA256,
+				"ai.freeside.project.toolchain.procps.version":               want.ProcpsVersion,
+				"ai.freeside.project.toolchain.procps.archive-sha256":        want.ProcpsArchiveSHA256,
+				"ai.freeside.project.toolchain.libproc2.version":             want.ProcpsVersion,
+				"ai.freeside.project.toolchain.libproc2.archive-sha256":      want.Libproc2ArchiveSHA256,
 			},
 			archives: []pinnedArchive{{
 				name: "Go toolchain", path: goToolchainArchivePath,
@@ -1229,9 +1241,24 @@ func expectedToolchainEvidence(want provenanceSpec) toolchainEvidence {
 			}, {
 				name: "golangci-lint", path: golangciLintArchivePath,
 				sha256: want.GolangciLintArchiveSHA256, maxBytes: maxLintArchiveBytes,
+			}, {
+				name: "vacuum", path: vacuumArchivePath,
+				sha256: want.VacuumArchiveSHA256, maxBytes: maxToolArchiveBytes,
+			}, {
+				name: "shellcheck", path: shellcheckArchivePath,
+				sha256: want.ShellcheckArchiveSHA256, maxBytes: maxToolArchiveBytes,
+			}, {
+				name: "Python", path: pythonArchivePath,
+				sha256: want.PythonArchiveSHA256, maxBytes: maxToolArchiveBytes,
+			}, {
+				name: "procps", path: procpsArchivePath,
+				sha256: want.ProcpsArchiveSHA256, maxBytes: maxDebArchiveBytes,
+			}, {
+				name: "libproc2", path: libproc2ArchivePath,
+				sha256: want.Libproc2ArchiveSHA256, maxBytes: maxDebArchiveBytes,
 			}},
 			launcher:  goToolchainLauncher,
-			launchers: []string{goLauncherPath, gofmtLauncherPath, golangciLintLauncherPath},
+			launchers: goLauncherPaths,
 			prepare:   goPrepareScript(want.Layout.GoModuleDir),
 			seeds: map[string]string{
 				seedGoModPath: want.GoModSHA256,

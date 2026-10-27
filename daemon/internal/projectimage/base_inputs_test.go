@@ -25,7 +25,7 @@ import (
 // Update the pin when that is the intended cost of the edit, and say so in the
 // change.
 func TestPreparationDigestPinsTheBuilderSources(t *testing.T) {
-	const want = "sha256:a0262752cf52c1826b9cdff9619ad19b89a95a6124332363fed163df14a37369"
+	const want = "sha256:85e84b1eb3a04ca2187e19c36a55b5c2f776875650f81bca163b833ae6c51a2c"
 	got := PreparationDigest()
 	if !contentaddr.Valid(string(got)) {
 		t.Fatalf("PreparationDigest() = %q, want a content address", got)
@@ -48,6 +48,16 @@ func TestPreparationDigestPinsTheBuilderSources(t *testing.T) {
 		"Go archive hash":            goToolchainArchiveSHA256,
 		"golangci-lint version":      golangciLintVersion,
 		"golangci-lint archive hash": golangciLintArchiveSHA256,
+		"vacuum version":             vacuumVersion,
+		"vacuum archive hash":        vacuumArchiveSHA256,
+		"shellcheck version":         shellcheckVersion,
+		"shellcheck archive hash":    shellcheckArchiveSHA256,
+		"Python version":             pythonVersion,
+		"Python archive hash":        pythonArchiveSHA256,
+		"procps version":             procpsVersion,
+		"procps snapshot":            procpsSnapshot,
+		"procps archive hash":        procpsArchiveSHA256,
+		"libproc2 archive hash":      libproc2ArchiveSHA256,
 	} {
 		if !slices.Contains(sources, source) {
 			t.Errorf("PreparationDigest does not address the %s", name)

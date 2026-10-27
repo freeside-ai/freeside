@@ -189,6 +189,15 @@ type provenanceSpec struct {
 	GoToolchainArchiveSHA256   string
 	GolangciLintVersion        string
 	GolangciLintArchiveSHA256  string
+	VacuumVersion              string
+	VacuumArchiveSHA256        string
+	ShellcheckVersion          string
+	ShellcheckArchiveSHA256    string
+	PythonVersion              string
+	PythonArchiveSHA256        string
+	ProcpsVersion              string
+	ProcpsArchiveSHA256        string
+	Libproc2ArchiveSHA256      string
 	GoModSHA256                string
 	GoSumSHA256                string
 }
@@ -521,6 +530,15 @@ func expectedProvenance(spec provenanceSpec, environment domain.ProjectImageEnvi
 		spec.GoToolchainArchiveSHA256 = goToolchainArchiveSHA256
 		spec.GolangciLintVersion = golangciLintVersion
 		spec.GolangciLintArchiveSHA256 = golangciLintArchiveSHA256
+		spec.VacuumVersion = vacuumVersion
+		spec.VacuumArchiveSHA256 = vacuumArchiveSHA256
+		spec.ShellcheckVersion = shellcheckVersion
+		spec.ShellcheckArchiveSHA256 = shellcheckArchiveSHA256
+		spec.PythonVersion = pythonVersion
+		spec.PythonArchiveSHA256 = pythonArchiveSHA256
+		spec.ProcpsVersion = procpsVersion
+		spec.ProcpsArchiveSHA256 = procpsArchiveSHA256
+		spec.Libproc2ArchiveSHA256 = libproc2ArchiveSHA256
 		spec.GoModSHA256 = environment.GoModSHA256
 		spec.GoSumSHA256 = environment.GoSumSHA256
 	}
