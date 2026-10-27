@@ -509,6 +509,13 @@ With no paired client on the fixture root, the record shows each run-bound
 item but no `deliveries`: the pass proves the daemon side only, and the
 `stall` item's proof is the ID `raise-item` prints.
 
+On this private fixture, both publication author sites fall back until the
+publisher can read a private repository's source issue (#2360). The pull
+request then carries `Refs #2` and the unauthored body, not `Closes #2` and
+authored prose, and the run's `closure.fallback_cause` in `inspect task`
+reads `resolve author input failed: read source issue text`. That is
+expected and doesn't fail the pass.
+
 **End it before the real run.** Apply the four record checks above, then end
 the deputy with Ctrl-C ([Complete Deliberately](#complete-deliberately)). It
 must exit 0. A nonzero exit, or a line saying it left the rig lease for the

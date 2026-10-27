@@ -18,7 +18,7 @@ import (
 // taskRecordVersion names the record's JSON shape. Any change to that shape,
 // including to signet.TaskTimeline or proposalCard, which the record embeds,
 // changes it.
-const taskRecordVersion = "freeside-task-record-v8"
+const taskRecordVersion = "freeside-task-record-v9"
 
 // taskRecord is what `freesided inspect task` prints: one task's recorded
 // facts, read under one store revision, for an agent to read. It is built
@@ -79,8 +79,22 @@ type taskRecordRun struct {
 	// ClosureCards are the closure cards of the run's work unit, open or
 	// closed, in item-id order. Each publication admits its own closure
 	// instance, so a run that published more than once can hold several.
-	ClosureCards []proposalCard       `json:"closure_cards"`
-	Errors       []taskRecordRunError `json:"errors"`
+	ClosureCards []proposalCard `json:"closure_cards"`
+	// Closure is the closure answer of the cycle Publication shows (the
+	// current cycle before any publishes), null until that cycle's closure
+	// step records one.
+	Closure *taskRecordClosure   `json:"closure"`
+	Errors  []taskRecordRunError `json:"errors"`
+}
+
+// taskRecordClosure is a publication's source-issue-closure answer. Origin is
+// null when no proposal was made. FallbackCause is a daemon_fallback's
+// fixed-text cause, null for any other origin and for a fallback recorded
+// before causes were, except an older control-file refusal, which stored the
+// refusal text alone.
+type taskRecordClosure struct {
+	Origin        *domain.ClosureFlagOrigin `json:"origin"`
+	FallbackCause *string                   `json:"fallback_cause"`
 }
 
 // taskRecordPublication is a run's last published pull request and the facts
@@ -146,19 +160,22 @@ const (
 	// taskRecordRunClosureCards is the enumeration of ClosureCards; a card
 	// whose own reads fail carries its error instead.
 	taskRecordRunClosureCards taskRecordRunSection = "closure_cards"
+	taskRecordRunClosure      taskRecordRunSection = "closure"
 )
 
 var allTaskRecordRunSections = []taskRecordRunSection{
 	taskRecordRunAdmissions, taskRecordRunPolicy, taskRecordRunCost,
 	taskRecordRunObservation, taskRecordRunConclusion,
 	taskRecordRunPublication, taskRecordRunCompletion, taskRecordRunClosureCards,
+	taskRecordRunClosure,
 }
 
 func (s taskRecordRunSection) valid() bool {
 	switch s {
 	case taskRecordRunAdmissions, taskRecordRunPolicy, taskRecordRunCost,
 		taskRecordRunObservation, taskRecordRunConclusion,
-		taskRecordRunPublication, taskRecordRunCompletion, taskRecordRunClosureCards:
+		taskRecordRunPublication, taskRecordRunCompletion, taskRecordRunClosureCards,
+		taskRecordRunClosure:
 		return true
 	default:
 		return false
@@ -482,6 +499,11 @@ func readTaskRecordRun(ctx context.Context, tx *store.ReadTx, runID domain.RunID
 			out.ClosureCards = append(out.ClosureCards, readProposalCard(ctx, tx, id))
 		}
 	}
+	if answer, found, err := engine.ProductionPublicationClosure(ctx, tx, runID); err != nil {
+		fail(taskRecordRunClosure, err)
+	} else if found {
+		out.Closure = projectTaskRecordClosure(answer)
+	}
 	observation, err := tx.ObserveRun(ctx, runID)
 	if err != nil {
 		// The conclusion is classified from the observation.
@@ -528,6 +550,20 @@ func authenticatedTaskRecordConclusion(
 		}
 	}
 	return signet.AuthenticatedRunConclusion(ctx, tx, run, observation, readyAuthenticated)
+}
+
+func projectTaskRecordClosure(answer engine.ProductionClosureAnswer) *taskRecordClosure {
+	out := &taskRecordClosure{}
+	if !answer.HasProposal {
+		return out
+	}
+	origin := answer.Origin
+	out.Origin = &origin
+	if origin == domain.ClosureFlagOriginDaemonFallback && answer.Reason != "" {
+		cause := answer.Reason
+		out.FallbackCause = &cause
+	}
+	return out
 }
 
 // readTaskRecordPublication reads the run's last published cycle the way the

@@ -71,7 +71,9 @@ func parseSourceIssueClosureHumanGate(policy domain.ResolvedPolicy) bool {
 // row is untrusted at reconstruction: HasProposal reports whether a proposal
 // was admitted, InstanceID names it, and Origin selects the default policy
 // binding (a propose_site records the approval, a daemon_fallback opens the
-// notice). HasProposal == (InstanceID != "") is the invariant.
+// notice). HasProposal == (InstanceID != "") is the invariant. Reason names a
+// daemon_fallback's cause in fixed text (proposeClosure); a row written before
+// causes were recorded carries none, and an empty Reason stays valid.
 type productionClosureCheckpoint struct {
 	Version       string                    `json:"version"`
 	RunID         domain.RunID              `json:"run_id"`
@@ -227,10 +229,49 @@ func (w *productionPublicationWorkflow) decideClosableSource(
 		domain.IssueSubjectRef{Repo: repo, RepositoryID: repositoryID, IssueNumber: number}, true, nil
 }
 
+// The fixed causes a daemon_fallback closure records in its checkpoint's Reason.
+// Each is daemon-chosen text, optionally followed by a fixed stage name, a
+// control-file refusal, or a fallback code; none copies an error, provider
+// output, or issue text.
+const (
+	closureCauseSiteUnavailable = "propose site unavailable"
+	closureCauseInputFailed     = "resolve author input failed"
+	closureCauseInputRefused    = "author input refused"
+	closureCauseCallFailed      = "propose call failed"
+	closureCauseSiteFellBack    = "propose site fell back"
+)
+
+// closureInputFailureCause names the builder step a closure input failure came
+// from. Every builder return is tagged, so the bare cause is only a backstop.
+func closureInputFailureCause(err error) string {
+	var stageErr *authorInputError
+	if errors.As(err, &stageErr) {
+		return closureCauseInputFailed + ": " + stageErr.stage
+	}
+	return closureCauseInputFailed
+}
+
+// closureCallFallbackCause names why a propose call fell back: the input
+// refusal the site reported, or the call's own fallback code. A fallback with
+// neither is an input the site refused to build.
+func closureCallFallbackCause(proposed inference.ProposedClosure) string {
+	switch {
+	case proposed.InputRefusalReason != "":
+		return closureCauseInputRefused + ": " + proposed.InputRefusalReason
+	case proposed.FallbackReason != "":
+		return closureCauseSiteFellBack + ": " + string(proposed.FallbackReason)
+	default:
+		return closureCauseInputRefused
+	}
+}
+
 // proposeClosure asks the propose site whether the pull request should close the
 // source issue. An unavailable site, an input-build fault, a call error, or a
 // returned fallback is a daemon_fallback proposal that never resolves and never
-// holds; only a clean answer carries a propose_site origin and its resolve flag.
+// holds; its reason names the cause in fixed text. Only a clean answer carries a
+// propose_site origin and its resolve flag. A source-issue checkpoint fault
+// propagates for retry, as it does in authoring, rather than fixing a
+// permanent fallback for a store fault.
 func (w *productionPublicationWorkflow) proposeClosure(
 	ctx context.Context,
 	task productionPublicationTask,
@@ -241,18 +282,24 @@ func (w *productionPublicationWorkflow) proposeClosure(
 	report []byte,
 ) (domain.ClosureFlagOrigin, bool, string, error) {
 	if w.inference == nil || !w.inference.SupportsSite(inference.PublicationAuthorProposeSiteID) {
-		return domain.ClosureFlagOriginDaemonFallback, false, "", nil
+		return domain.ClosureFlagOriginDaemonFallback, false, closureCauseSiteUnavailable, nil
 	}
 	input, err := w.buildPublicationAuthorInput(ctx, task, binding, checkpoint, reviewInstructions, checkoutDir, report)
 	if err != nil {
-		return domain.ClosureFlagOriginDaemonFallback, false, "", nil
+		if errors.Is(err, errSourceIssueCheckpoint) {
+			return "", false, "", err
+		}
+		return domain.ClosureFlagOriginDaemonFallback, false, closureInputFailureCause(err), nil
 	}
 	if err := w.claimProviderDispatch(ctx, task.RunID); err != nil {
 		return "", false, "", err
 	}
 	proposed, err := w.inference.ProposeSourceIssueClosure(ctx, input)
-	if err != nil || proposed.Fallback {
-		return domain.ClosureFlagOriginDaemonFallback, false, proposed.InputRefusalReason, nil
+	if err != nil {
+		return domain.ClosureFlagOriginDaemonFallback, false, closureCauseCallFailed, nil
+	}
+	if proposed.Fallback {
+		return domain.ClosureFlagOriginDaemonFallback, false, closureCallFallbackCause(proposed), nil
 	}
 	return domain.ClosureFlagOriginProposeSite, proposed.Resolves, "", nil
 }
@@ -489,31 +536,87 @@ func (w *productionPublicationWorkflow) loadClosureCheckpoint(
 	var checkpoint productionClosureCheckpoint
 	var found bool
 	err := w.store.Read(ctx, func(tx *store.ReadTx) error {
-		entry, err := tx.GetInbox(ctx, key)
-		if errors.Is(err, store.ErrNotFound) {
-			return nil
-		}
-		if err != nil {
-			return err
-		}
-		if entry.Kind != productionClosureCheckpointKind {
-			return fmt.Errorf("closure checkpoint kind %q: %w", entry.Kind, domain.ErrParentKeyMismatch)
-		}
-		if err := strictjson.Decode(
-			entry.Payload, &checkpoint, strictjson.TolerateInvalidUTF8, strictjson.NoLimit,
-		); err != nil {
-			return fmt.Errorf("decode closure checkpoint: %w", errors.Join(err, domain.ErrParentKeyMismatch))
-		}
-		if err := validateClosureCheckpoint(checkpoint, want); err != nil {
-			return err
-		}
-		found = true
-		return nil
+		var err error
+		checkpoint, found, err = readClosureCheckpoint(ctx, tx, key, want)
+		return err
 	})
 	if err != nil {
 		return productionClosureCheckpoint{}, false, err
 	}
 	return checkpoint, found, nil
+}
+
+// readClosureCheckpoint is loadClosureCheckpoint within a caller's read
+// transaction. found is false when no row exists under key.
+func readClosureCheckpoint(
+	ctx context.Context, tx *store.ReadTx, key string, want productionClosureCheckpoint,
+) (productionClosureCheckpoint, bool, error) {
+	entry, err := tx.GetInbox(ctx, key)
+	if errors.Is(err, store.ErrNotFound) {
+		return productionClosureCheckpoint{}, false, nil
+	}
+	if err != nil {
+		return productionClosureCheckpoint{}, false, err
+	}
+	if entry.Kind != productionClosureCheckpointKind {
+		return productionClosureCheckpoint{}, false,
+			fmt.Errorf("closure checkpoint kind %q: %w", entry.Kind, domain.ErrParentKeyMismatch)
+	}
+	var checkpoint productionClosureCheckpoint
+	if err := strictjson.Decode(
+		entry.Payload, &checkpoint, strictjson.TolerateInvalidUTF8, strictjson.NoLimit,
+	); err != nil {
+		return productionClosureCheckpoint{}, false,
+			fmt.Errorf("decode closure checkpoint: %w", errors.Join(err, domain.ErrParentKeyMismatch))
+	}
+	if err := validateClosureCheckpoint(checkpoint, want); err != nil {
+		return productionClosureCheckpoint{}, false, err
+	}
+	return checkpoint, true, nil
+}
+
+// ProductionClosureAnswer is the source-issue-closure answer a publication
+// recorded. HasProposal is false when no proposal was made (no closable
+// source). Origin is the admitted proposal's origin, and Reason a
+// daemon_fallback's fixed-text cause, empty for a row written before causes
+// were recorded.
+type ProductionClosureAnswer struct {
+	HasProposal bool
+	Origin      domain.ClosureFlagOrigin
+	Reason      string
+}
+
+// ProductionPublicationClosure reads the closure answer of runID's last
+// published cycle, the one whose pull request the run carries, so the answer
+// explains that pull request's body. Each cycle records its own answer, and a
+// successor keeps the run id, so the cycle is chosen the way the published
+// ready item is (store.ReadTx.PublishedPublicationInvocationID). Before any
+// cycle publishes it is the current cycle, whose answer the first pull request
+// will carry. found is false until the chosen cycle's closure step records an
+// answer. The row is decoded and validated as the workflow's own load does, so
+// a malformed row is an error, never an answer. It is a read-only boundary for
+// the task record; the answer is advisory and authorizes nothing.
+func ProductionPublicationClosure(
+	ctx context.Context, tx *store.ReadTx, runID domain.RunID,
+) (ProductionClosureAnswer, bool, error) {
+	publicationID, err := tx.PublishedPublicationInvocationID(ctx, runID)
+	if errors.Is(err, store.ErrNoPublishedContinuationTarget) {
+		// The run re-entered before its first publication.
+		publicationID, err = tx.CurrentPublicationInvocationID(ctx, runID)
+	}
+	if err != nil {
+		return ProductionClosureAnswer{}, false, err
+	}
+	want := productionClosureCheckpoint{
+		Version: productionClosureCheckpointVersion, RunID: runID, PublicationID: publicationID,
+	}
+	checkpoint, found, err := readClosureCheckpoint(ctx, tx, productionClosureCheckpointKey(runID, publicationID), want)
+	if err != nil || !found {
+		return ProductionClosureAnswer{}, false, err
+	}
+	return ProductionClosureAnswer{
+		HasProposal: checkpoint.HasProposal, Origin: checkpoint.Origin, Reason: checkpoint.Reason,
+	}, true, nil
 }
 
 // validateClosureCheckpoint fails closed unless the decoded row matches the run

@@ -749,3 +749,132 @@ func TestTaskRecordReportsPublication(t *testing.T) {
 		t.Fatalf("errors = %+v, want an integrity error on the completion", run.Errors)
 	}
 }
+
+// putClosureCheckpoint writes a closure checkpoint row in the engine's
+// engine-private shape, the way the publication workflow's closure step does.
+func putClosureCheckpoint(
+	t *testing.T, st *store.Store, runID domain.RunID, publication domain.InvocationID, kind, payload string,
+) {
+	t.Helper()
+	key := "production-closure/" + string(runID) + "/" + string(publication)
+	if err := st.Write(t.Context(), func(tx *store.WriteTx) error {
+		_, _, err := tx.RecordInbox(t.Context(), key, kind, []byte(payload))
+		return err
+	}); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func closureCheckpointJSON(runID domain.RunID, publication domain.InvocationID, proposal string) string {
+	return `{"version":"1","run_id":"` + string(runID) + `","publication_id":"` + string(publication) + `"` + proposal + `}`
+}
+
+func TestTaskRecordReportsClosure(t *testing.T) {
+	const kind = "production_closure_checkpoint"
+	for _, tc := range []struct {
+		label, kind, proposal string
+		// want is the run's closure as JSON; "" expects a closure error.
+		want string
+	}{
+		{"no answer yet", "", "", "null"},
+		{
+			"fallback with a cause", kind,
+			`,"has_proposal":true,"instance_id":"proposal-1","origin":"daemon_fallback","reason":"resolve author input failed: read source issue text"`,
+			`{"origin":"daemon_fallback","fallback_cause":"resolve author input failed: read source issue text"}`,
+		},
+		{
+			"fallback recorded before causes", kind,
+			`,"has_proposal":true,"instance_id":"proposal-1","origin":"daemon_fallback"`,
+			`{"origin":"daemon_fallback","fallback_cause":null}`,
+		},
+		{
+			"propose site answer", kind,
+			`,"has_proposal":true,"instance_id":"proposal-1","origin":"propose_site"`,
+			`{"origin":"propose_site","fallback_cause":null}`,
+		},
+		{"no proposal made", kind, `,"has_proposal":false`, `{"origin":null,"fallback_cause":null}`},
+		{"unreadable row", "not_a_closure_checkpoint", "", ""},
+	} {
+		t.Run(tc.label, func(t *testing.T) {
+			t.Parallel()
+			st := schedTestStore(t)
+			ctx := t.Context()
+			runID := domain.RunID("run-closure")
+			seedCaptureRun(t, st, runID)
+			if tc.kind != "" {
+				publication := domain.ProductionPublicationInvocationID(runID)
+				putClosureCheckpoint(t, st, runID, publication, tc.kind, closureCheckpointJSON(runID, publication, tc.proposal))
+			}
+			var run taskRecordRun
+			if err := st.Read(ctx, func(tx *store.ReadTx) error {
+				run = readTaskRecordRun(ctx, tx, runID)
+				return nil
+			}); err != nil {
+				t.Fatal(err)
+			}
+			sections := runErrorSections(run)
+			if slices.Contains(sections, taskRecordRunClosureCards) || run.ClosureCards == nil {
+				t.Fatalf("closure cards = %v, errors = %+v; want them read", run.ClosureCards, run.Errors)
+			}
+			if tc.want == "" {
+				index := slices.IndexFunc(run.Errors, func(e taskRecordRunError) bool { return e.Section == taskRecordRunClosure })
+				if index < 0 || run.Errors[index].Kind != taskRecordErrorIntegrity || run.Closure != nil {
+					t.Fatalf("closure = %+v, errors = %+v; want an integrity error on the closure", run.Closure, run.Errors)
+				}
+				return
+			}
+			if slices.Contains(sections, taskRecordRunClosure) {
+				t.Fatalf("errors = %+v", run.Errors)
+			}
+			if got := string(mustJSON(t, run.Closure)); got != tc.want {
+				t.Fatalf("closure = %s, want %s", got, tc.want)
+			}
+		})
+	}
+}
+
+// TestTaskRecordClosureFollowsPublishedCycle proves the record shows the
+// closure answer of the cycle whose pull request the run carries: a sealed
+// successor that has not published yet leaves the first publication's answer
+// in place, even once the successor records its own.
+func TestTaskRecordClosureFollowsPublishedCycle(t *testing.T) {
+	st := schedTestStore(t)
+	ctx := t.Context()
+	item := reentryReadyItem(t, st, "run-record-closure-cycle")
+	runID := *item.Subject.RunID
+	first := domain.ProductionPublicationInvocationID(runID)
+	putClosureCheckpoint(t, st, runID, first, "production_closure_checkpoint", closureCheckpointJSON(runID, first,
+		`,"has_proposal":true,"instance_id":"proposal-1","origin":"daemon_fallback","reason":"propose call failed"`))
+	readClosure := func() *taskRecordClosure {
+		t.Helper()
+		var run taskRecordRun
+		if err := st.Read(ctx, func(tx *store.ReadTx) error {
+			run = readTaskRecordRun(ctx, tx, runID)
+			return nil
+		}); err != nil {
+			t.Fatal(err)
+		}
+		if slices.Contains(runErrorSections(run), taskRecordRunClosure) {
+			t.Fatalf("errors = %+v", run.Errors)
+		}
+		return run.Closure
+	}
+	if got, want := string(mustJSON(t, readClosure())),
+		`{"origin":"daemon_fallback","fallback_cause":"propose call failed"}`; got != want {
+		t.Fatalf("closure of the first publication = %s, want %s", got, want)
+	}
+	armActiveTestSchedules(t, st, item)
+	activateExternalTestProfile(t, st, activeResourceTestTime.Add(-time.Hour), externalTestMaintainer())
+	reconciler := externalReentryReconciler(st, staticReview(externalReentryActivity()))
+	reconcileClean(t, &reconciler, "start cycle")
+	successor, queued := readReentry(t, st, runID)
+	if successor == nil || !queued {
+		t.Fatal("external review cycle was not queued")
+	}
+	putClosureCheckpoint(t, st, runID, successor.PublicationID(), "production_closure_checkpoint",
+		closureCheckpointJSON(runID, successor.PublicationID(), `,"has_proposal":true,"instance_id":"proposal-2","origin":"propose_site"`))
+	if got, want := string(mustJSON(t, readClosure())),
+		`{"origin":"daemon_fallback","fallback_cause":"propose call failed"}`; got != want {
+		t.Fatalf("closure with an unpublished successor = %s, want the published cycle's %s", got, want)
+	}
+}

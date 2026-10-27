@@ -360,3 +360,69 @@ func TestClosureAdmissionRetiresTheEarlierPublicationsCard(t *testing.T) {
 	f.requireOpen(t, "later publication", &second)
 	f.requireRetired(t, "later publication", 0, closureLaterPublicationReason)
 }
+
+// TestProductionPublicationClosureBeforeFirstPublication proves the task
+// record's closure read follows the current cycle while no cycle has
+// published: after an unpublished base-advance re-entry it returns the
+// re-entered publication's answer, not the first one's.
+func TestProductionPublicationClosureBeforeFirstPublication(t *testing.T) {
+	ctx := context.Background()
+	f := seedClosureSequence(t)
+	runID := f.policy.RunID
+	read := func() ProductionClosureAnswer {
+		t.Helper()
+		var answer ProductionClosureAnswer
+		var found bool
+		if err := f.st.Read(ctx, func(tx *store.ReadTx) error {
+			var err error
+			answer, found, err = ProductionPublicationClosure(ctx, tx, runID)
+			return err
+		}); err != nil || !found {
+			t.Fatalf("read closure: found=%t err=%v", found, err)
+		}
+		return answer
+	}
+	f.publish(t, domain.ProductionPublicationInvocationID(runID), closureSequenceHead1, closureSequenceBase1)
+	if got := read(); got.Origin != domain.ClosureFlagOriginProposeSite {
+		t.Fatalf("first publication's answer = %+v, want propose_site", got)
+	}
+	f.audit(t, closureSequenceBase2)
+	reentry := domain.PublicationSuccessor{
+		Version: domain.PublicationUnpublishedReentryVersion, Origin: domain.PublicationSuccessorUnpublishedBaseAdvance,
+		RunID: runID, PredecessorItemID: domain.ProductionReadyItemID(runID),
+		PriorReviewInvocationID: f.prior.InvocationID, ReviewRound: f.prior.Round + 1,
+		Reentry: &domain.PublicationSuccessorReentry{
+			Reason: domain.ReadinessInvalidationBaseAdvanced, BaseSHA: closureSequenceBase2, HeadSHA: closureSequenceHead1,
+		},
+	}
+	if err := f.st.Write(ctx, func(tx *store.WriteTx) error {
+		return tx.RecordPublicationSuccessor(ctx, reentry)
+	}); err != nil {
+		t.Fatalf("seal the unpublished re-entry: %v", err)
+	}
+	// The re-entered cycle's closure step falls back.
+	task := productionPublicationTask{
+		RunID: runID, PublicationID: reentry.PublicationID(), HeadSHA: closureSequenceHead1,
+		Publication: ProductionPublication{Recipe: clientPublicationRecipeV2},
+	}
+	binding := closureStoreBinding(f.policy, f.taskID)
+	binding.admission.Base.BaseSHA = closureSequenceBase2
+	source, target, ok, err := f.w.decideClosableSource(ctx, task, binding)
+	if err != nil || !ok {
+		t.Fatalf("decide closable source: ok=%t err=%v", ok, err)
+	}
+	want := productionClosureCheckpoint{
+		Version: productionClosureCheckpointVersion, RunID: runID, PublicationID: reentry.PublicationID(),
+	}
+	if _, admitted, err := f.w.admitClosureProposal(ctx,
+		productionClosureCheckpointKey(runID, reentry.PublicationID()), want, task, source, target,
+		domain.ClosureFlagOriginDaemonFallback, false, closureCauseCallFailed); err != nil || !admitted {
+		t.Fatalf("admit the re-entered proposal: admitted=%t err=%v", admitted, err)
+	}
+	got := read()
+	if wantAnswer := (ProductionClosureAnswer{
+		HasProposal: true, Origin: domain.ClosureFlagOriginDaemonFallback, Reason: closureCauseCallFailed,
+	}); got != wantAnswer {
+		t.Fatalf("answer = %+v, want the re-entered cycle's %+v", got, wantAnswer)
+	}
+}

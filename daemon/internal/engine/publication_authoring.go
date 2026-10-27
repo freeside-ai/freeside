@@ -149,6 +149,33 @@ func (w *productionPublicationWorkflow) reconcilePublicationAuthoring(
 	return w.storeAuthoredArtifact(ctx, key, success, artifact)
 }
 
+// The fixed names of buildPublicationAuthorInput's steps. A failure carries its
+// step so the closure step can record which one failed without copying the
+// underlying error, whose text may name forge paths or carry provider output.
+const (
+	authorInputStageVisibility      = "read target visibility"
+	authorInputStageInstructions    = "read instruction snapshot"
+	authorInputStageDiff            = "render candidate diff"
+	authorInputStageReviewOutcome   = "summarize review outcome"
+	authorInputStageSourceIssue     = "read source issue"
+	authorInputStageSourceIssueText = "read source issue text"
+)
+
+// authorInputError is a buildPublicationAuthorInput failure tagged with its
+// step. It prints and unwraps as the plain "<stage>: <cause>" wrap it replaces.
+type authorInputError struct {
+	stage string
+	err   error
+}
+
+func authorInputFailure(stage string, err error) error {
+	return &authorInputError{stage: stage, err: err}
+}
+
+func (e *authorInputError) Error() string { return e.stage + ": " + e.err.Error() }
+
+func (e *authorInputError) Unwrap() error { return e.err }
+
 // buildPublicationAuthorInput resolves the author input from real repository
 // state. #1418 put the input checks in the builder; this only resolves the
 // values. The instruction snapshot and PR template come from the trusted base,
@@ -164,33 +191,33 @@ func (w *productionPublicationWorkflow) buildPublicationAuthorInput(
 ) (inference.PublicationAuthorInput, error) {
 	class, err := w.publisher.RepositoryClass(ctx, publish.Candidate{Repo: binding.admission.Base.Repo})
 	if err != nil {
-		return inference.PublicationAuthorInput{}, fmt.Errorf("read target visibility: %w", err)
+		return inference.PublicationAuthorInput{}, authorInputFailure(authorInputStageVisibility, err)
 	}
 	visibility := repositoryVisibilityForClass(class)
 
 	instructions, err := w.readArtifactText(reviewInstructions.ResultDigest)
 	if err != nil {
-		return inference.PublicationAuthorInput{}, fmt.Errorf("read instruction snapshot: %w", err)
+		return inference.PublicationAuthorInput{}, authorInputFailure(authorInputStageInstructions, err)
 	}
 	diff, err := authoredCandidateDiff(ctx, w.workDir, checkoutDir, binding.admission.Base.BaseSHA, task.HeadSHA)
 	if err != nil {
-		return inference.PublicationAuthorInput{}, fmt.Errorf("render candidate diff: %w", err)
+		return inference.PublicationAuthorInput{}, authorInputFailure(authorInputStageDiff, err)
 	}
 
 	reviewOutcome, err := w.authoredReviewOutcome(ctx, task.RunID)
 	if err != nil {
-		return inference.PublicationAuthorInput{}, fmt.Errorf("summarize review outcome: %w", err)
+		return inference.PublicationAuthorInput{}, authorInputFailure(authorInputStageReviewOutcome, err)
 	}
 
 	sourceIssueRef, sourceIssueNumber, sameRepo, err := w.authorSourceIssue(ctx, task, binding)
 	if err != nil {
-		return inference.PublicationAuthorInput{}, fmt.Errorf("read source issue: %w", err)
+		return inference.PublicationAuthorInput{}, authorInputFailure(authorInputStageSourceIssue, err)
 	}
 	var issueText publish.IssueText
 	if sameRepo {
 		issueText, err = w.publicationSourceIssueText(ctx, task, binding, sourceIssueNumber)
 		if err != nil {
-			return inference.PublicationAuthorInput{}, fmt.Errorf("read source issue text: %w", err)
+			return inference.PublicationAuthorInput{}, authorInputFailure(authorInputStageSourceIssueText, err)
 		}
 	}
 

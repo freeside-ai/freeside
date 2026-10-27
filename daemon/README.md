@@ -1076,7 +1076,7 @@ freesided inspect proposals -db <db>
 - `tasks`: every task the store holds, with `task_id`, `project_id`,
   `created_at`, and `latest_run_id` (`null` before the first run).
 
-`freesided inspect task` prints one task's record, `freeside-task-record-v8`.
+`freesided inspect task` prints one task's record, `freeside-task-record-v9`.
 Every section is read in one transaction, at the store revision
 `as_of_revision`; `as_of` is the read time. To wait for a change, read again
 and compare `as_of_revision`. A revision that hasn't moved means no recorded
@@ -1090,7 +1090,7 @@ stays true for a run Codex reviews, because Codex reports tokens only.
 | --- | --- |
 | `task` | Project, creation time, lifecycle facts, and the current cancellation with its acknowledgement state. |
 | `timeline` | The timeline a paired client gets, unchanged: runs and attempts, milestones, the current hold, review rounds, verification, pull request, completion, and stop events. |
-| `runs` | For each run: `conclusion` (outcome, hold reason, terminal invocation status), the current `hold`, each invocation's last observed status, the governing digests of each recorded admission, the resolved policy digest, `billable_cost` (`null` when none was recorded), `publication` (`null` until the run publishes), and `closure_cards`: the closure cards of the run's work unit, open or closed, in the card shape `freesided inspect proposals` prints. |
+| `runs` | For each run: `conclusion` (outcome, hold reason, terminal invocation status), the current `hold`, each invocation's last observed status, the governing digests of each recorded admission, the resolved policy digest, `billable_cost` (`null` when none was recorded), `publication` (`null` until the run publishes), `closure_cards`: the closure cards of the run's work unit, open or closed, in the card shape `freesided inspect proposals` prints, and `closure`: the source-issue-closure answer of the cycle `publication` shows, with its `origin` and `fallback_cause` (`null` until that cycle's closure step answers). |
 | `items` | Every attention item of the task or one of its runs, open or closed, and the stall notices for the task's invocations: type, status, `created_at`, `decided_at`, the `conclusion` (how it closed: the cause, when, the daemon's reason, the successor item, and for a decision the command, action, device and its name, and the applied routes), the typed cause (`health_diagnostic`, `execution_failure` with its outcome and failure `cause`, `interpretation_failure` with the `cause` of a failure found after the invocation exported, `publish_block`, `blocked_on`), the commands applied (command id, action, device id), and the deliveries. |
 | `counts` | Items by type, with every type listed; health notices by code; refused item rows not placed in this task; runs held now; and failed stops. |
 
@@ -1115,8 +1115,8 @@ nothing.
 - **`errors` on a run** lists each of the run's reads that failed, by
   `section`: `admissions`, `resolved_policy_digest`, `billable_cost`,
   `observation` (the hold and the invocations), `conclusion`, `publication`,
-  `completion`, or `closure_cards` (the list itself; a card that could not
-  be read carries its own `error`). A null run
+  `completion`, `closure_cards` (the list itself; a card that could not
+  be read carries its own `error`), or `closure`. A null run
   field was not read exactly when `errors` names its section; otherwise the
   run has none. The admissions read scans every run's rows, so one
   unreadable admission fails that section for every run. `runs_held` counts
@@ -1168,6 +1168,28 @@ Reading the record:
   `merge.candidate_head_sha` is the outcome's `head_sha`. The record's
   `items` never list these cards, because a card's subject is its proposal
   batch, not the run.
+- **`closure` says why a pull request closes its issue or only refers to
+  it.** It is the answer of the last published cycle, the one whose pull
+  request `publication` shows, or of the current cycle before any cycle
+  publishes; it is `null` until that cycle's closure step answers. `origin` is `propose_site` (the propose site
+  answered), `daemon_fallback` (it did not, so the proposal never
+  resolves), or `null` (no proposal was made: the
+  source is absent or in another repository). `fallback_cause` names a
+  `daemon_fallback`'s cause in fixed text, and is `null` for any other
+  origin and for a fallback recorded before causes were. An older
+  control-file refusal is the exception: it shows the refusal alone,
+  without the `author input refused: ` prefix. The causes:
+  - `propose site unavailable`: no inference client, or the propose site
+    is not composed.
+  - `resolve author input failed: <stage>`: building the author input
+    failed at `read target visibility`, `read instruction snapshot`,
+    `render candidate diff`, `summarize review outcome`,
+    `read source issue`, or `read source issue text`.
+  - `author input refused`, with `: <refusal>` when the site refused a
+    control file (for example an oversized pull request template).
+  - `propose call failed`: the call returned an error and no fallback.
+  - `propose site fell back: <code>`: the call's fallback code, such as
+    `deadline_exceeded` or `output_schema_rejected`.
 - **`failed_stops` is 0 or 1.** The store keeps the latest cancellation only.
   A failed stop is a cancellation whose acknowledgement `state` is
   `failed_to_stop`; the store holds no typed reason for it, so the record
@@ -1182,7 +1204,7 @@ Reading the record:
   `unapproved_recipe` says so on stderr; stdout stays one JSON line.
 - **The timeline's and the card's shapes are part of the record's version.**
   A change to the task timeline, its events, or the proposal card changes
-  `freeside-task-record-v8`.
+  `freeside-task-record-v9`.
 
 The record never holds evidence, claims, conversation messages (a command's
 message and attachments included), transcripts, prompt text, credentials, or

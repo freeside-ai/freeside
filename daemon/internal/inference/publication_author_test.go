@@ -304,18 +304,20 @@ func TestProposeSourceIssueClosure(t *testing.T) {
 	for _, tc := range []struct {
 		label, output string
 		want, fall    bool
+		reason        inference.FallbackReason
 	}{
-		{"resolves true", `{"resolves":true}`, true, false},
-		{"resolves false", `{"resolves":false}`, false, false},
-		{"missing field", `{}`, false, true},
-		{"extra field", `{"resolves":true,"why":"x"}`, false, true},
+		{"resolves true", `{"resolves":true}`, true, false, ""},
+		{"resolves false", `{"resolves":false}`, false, false, ""},
+		{"missing field", `{}`, false, true, inference.FallbackOutputSchemaRejected},
+		{"extra field", `{"resolves":true,"why":"x"}`, false, true, inference.FallbackOutputSchemaRejected},
 	} {
 		t.Run(tc.label, func(t *testing.T) {
 			driver := fake.New()
 			scriptPropose(driver, tc.output)
 			client, _, _ := testClient(t, driver, 10)
 			result, err := client.ProposeSourceIssueClosure(t.Context(), authorInput())
-			if err != nil || result.Resolves != tc.want || result.Fallback != tc.fall {
+			if err != nil || result.Resolves != tc.want || result.Fallback != tc.fall ||
+				result.FallbackReason != tc.reason {
 				t.Fatalf("ProposeSourceIssueClosure = %+v, %v", result, err)
 			}
 		})
