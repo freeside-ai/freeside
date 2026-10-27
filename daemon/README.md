@@ -2638,16 +2638,48 @@ the record's review-configuration digest), `project_image` (set
 `images.agent` to the onboarding's `project_image.image_ref`), then
 `approved_recipe` (set it to that image's `recipe_digest`).
 
-**The admitted-image pointer.** `images.agent` and `-agent-image` also
+**The admitted-image pointer.** `images.agent` and `-agent-image` only
 seed the repository's admitted-image pointer for the Claude agent base
-(plan §5.7, Project-image upkeep). `freesided onboard` points it at the
-image it builds, and an unattended start points it at the configured
-image, once that image is admitted at the base, when the repository has
-none; a start never overwrites an existing pointer and logs when the two
-differ. The image-upkeep job advances the pointer (Keep Project Images
-Current), but selection still follows the flag until a later unit binds
-runner conformance to the selected image and switches selection to the
-pointer (#2385). The flag retires after that.
+(plan §5.7, Project-image upkeep) and give ward its first image.
+`freesided onboard` points it at the image it builds, and an unattended
+start points it at the configured image when the repository has none,
+whether or not that image serves the base; a start never overwrites an
+existing pointer and logs when the two differ. The image-upkeep job
+advances the pointer (Keep Project Images Current).
+
+Each unattended writer attempt runs in the image selected from the
+pointer and the repository's recorded images at the daemon's base
+(`-base-sha`), in this order: the image ward proves, while it serves the
+base and keeps what the pointed-to image binds; the pointed-to image;
+then the first recorded image that serves the base and keeps what the
+pointed-to image binds. Every record is re-gated before it is chosen.
+A rebuilt image of the same repository serves a later base the pointed-to
+image cannot, and the write-once records let an older base keep the image
+built for it.
+
+Ward proves one writer image at a time, so its conformance follows the
+selection. A start points ward at the selected image before it restores
+or runs conformance; a start that restores starts ward on the image the
+latest passed record proves, so the proof restores without a new pass.
+When an attempt selects an image ward does not prove, the daemon repoints
+ward and runs the full suite once, and the attempt holds under
+`backend_not_conformant` until that pass is recorded. The doctor's
+scheduled pass never runs beside it. A pass that fails leaves the
+attempt held under `backend_capability_refused` until a later pass
+succeeds.
+
+A base no recorded image serves no longer fails the start. Its attempts
+hold under `image_upkeep_pending` while image upkeep has a resolution
+pending (`rebuild` until upkeep settles the current tip, or the adoption
+proposal or maintenance task that answers its refusal), and under
+`admission_policy_refused`, with no check detail, once it has none; they
+start once an image serves the base. A readiness re-entry onto a newer
+base its run's image cannot serve verifies under the first recorded image
+that serves both that base and the commit it verifies, holds under
+`image_upkeep_pending` while upkeep has a resolution pending, and stops
+as before otherwise. A publication rebuild that finds the builder busy
+also holds under `image_upkeep_pending` (`rebuild`). `freesided preflight`
+still checks the configured image against the base.
 
 **What it writes.** `<state-root>/daemon/prelaunch.json`
 (`freeside-prelaunch-v1`, mode `0600`, replaced atomically), and the same
