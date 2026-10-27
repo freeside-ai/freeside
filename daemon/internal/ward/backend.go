@@ -43,6 +43,13 @@ type Backend struct {
 	// atomic decision across overlapping Full passes.
 	proofMu         sync.Mutex
 	proofGeneration uint64
+	// imageMu guards agentImage, the writer image this backend currently
+	// proves. It starts as Config.AgentImage and changes only through
+	// RepointAgentImage, which holds proofMu first; ConfigurationDigest
+	// takes only imageMu because a pass's record step computes it while
+	// holding proofMu.
+	imageMu    sync.RWMutex
+	agentImage string
 	// leaseMu guards activeLeases and activeReads: the identities whose
 	// §5.4 mutation window, and the identity-and-holder pairs whose shared
 	// read window, a handoff in this process currently holds. The store
@@ -102,6 +109,7 @@ func New(rt Runtime, cfg Config) (*Backend, error) {
 		daemonIdentity:  daemonIdentity,
 		runtimeIdentity: runtimeIdentity,
 		initialized:     true,
+		agentImage:      cfg.AgentImage,
 		activeLeases:    map[domain.AuthIdentityID]bool{},
 		activeReads:     map[domain.AuthIdentityID]map[domain.InvocationID]bool{},
 	}, nil
@@ -172,13 +180,35 @@ func (b *Backend) ConfigurationDigest() domain.Digest {
 	if b == nil || !b.initialized {
 		return ""
 	}
+	return b.ConfigurationDigestFor(b.currentAgentImage())
+}
+
+// ConformanceIdentity returns the writer image this backend currently
+// proves together with the configuration digest that image yields, read
+// under one lock so an admission never pairs one image with another
+// image's digest.
+func (b *Backend) ConformanceIdentity() (image string, digest domain.Digest) {
+	if b == nil || !b.initialized {
+		return "", ""
+	}
+	image = b.currentAgentImage()
+	return image, b.ConfigurationDigestFor(image)
+}
+
+// ConfigurationDigestFor is the configuration digest this backend would
+// have while proving image. Startup uses it to match a candidate image to
+// the latest durable conformance record without repointing first.
+func (b *Backend) ConfigurationDigestFor(image string) domain.Digest {
+	if b == nil || !b.initialized {
+		return ""
+	}
 	endpoints := slices.Clone(b.cfg.ProviderEndpoints)
 	slices.Sort(endpoints)
 	body, err := json.Marshal(conformanceConfiguration{
 		Version:           "freeside.ward.conformance-configuration/v4",
 		Daemon:            b.daemonIdentity,
 		Runtime:           b.runtimeIdentity,
-		AgentImage:        b.cfg.AgentImage,
+		AgentImage:        image,
 		ProviderEndpoints: endpoints,
 		ExporterImage:     b.cfg.ExporterImage,
 		ExporterCommand:   b.cfg.ExporterCommand,
@@ -196,6 +226,46 @@ func (b *Backend) ConfigurationDigest() domain.Digest {
 		panic(fmt.Sprintf("marshal ward conformance configuration: %v", err))
 	}
 	return domain.Digest(contentaddr.Sum(body))
+}
+
+// RepointAgentImage makes image the writer image this backend proves.
+// Repointing to the current image does nothing. Otherwise it supersedes
+// the in-memory proof: a Full pass already running for the old image can
+// no longer publish or record, and the suite-earned capabilities stay
+// cleared until a Full pass for the new image publishes. No durable marker
+// is needed, because the latest record names the old image's digest, which
+// no longer matches ConfigurationDigest.
+//
+// Before any pass has begun or any proof was restored there is nothing to
+// supersede, so the generation stays unset and startup can still restore
+// the durable proof of the image it repointed to.
+func (b *Backend) RepointAgentImage(image string) error {
+	if b == nil || !b.initialized {
+		return fmt.Errorf("%w: backend is not initialized", ErrInvalidConfig)
+	}
+	if !digestPinnedImagePattern.MatchString(image) {
+		return fmt.Errorf("%w: AgentImage %q is not digest-pinned", ErrInvalidConfig, image)
+	}
+	b.proofMu.Lock()
+	defer b.proofMu.Unlock()
+	b.imageMu.Lock()
+	defer b.imageMu.Unlock()
+	if image == b.agentImage {
+		return nil
+	}
+	b.agentImage = image
+	if b.proofGeneration != 0 {
+		b.proofGeneration++
+	}
+	b.networkless.Store(false)
+	b.providerEgress.Store(false)
+	return nil
+}
+
+func (b *Backend) currentAgentImage() string {
+	b.imageMu.RLock()
+	defer b.imageMu.RUnlock()
+	return b.agentImage
 }
 
 func runtimeConfigurationIdentity(rt Runtime) (string, error) {

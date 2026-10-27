@@ -579,10 +579,10 @@ func NewSuite(b *Backend, fx SuiteFixture, opts ...SuiteOption) (*Suite, error) 
 	if err := fx.validate(); err != nil {
 		return nil, err
 	}
-	if b.cfg.AgentImage != "" && fx.AgentImage != b.cfg.AgentImage {
+	if current := b.currentAgentImage(); current != "" && fx.AgentImage != current {
 		return nil, fmt.Errorf(
-			"%w: SuiteFixture.AgentImage %q disagrees with configured AgentImage %q",
-			ErrInvalidConfig, fx.AgentImage, b.cfg.AgentImage)
+			"%w: SuiteFixture.AgentImage %q disagrees with the backend's AgentImage %q",
+			ErrInvalidConfig, fx.AgentImage, current)
 	}
 	// The credential mounts alongside the workspace in the writer; a target
 	// equal to or nested under the workspace (or the reverse) collides with
@@ -1304,14 +1304,15 @@ func (s *Suite) PreJob(ctx context.Context) error {
 	return s.preJob(ctx)
 }
 
-// PreJob runs the lightweight production probe against the exact writer
-// image bound into this backend's conformance identity. runID is a
+// PreJob runs the lightweight production probe against the writer image
+// currently bound into this backend's conformance identity. runID is a
 // caller-derived, collision-resistant runtime-object namespace.
 func (b *Backend) PreJob(ctx context.Context, runID string) error {
 	if b == nil || !b.initialized {
 		return fmt.Errorf("%w: backend is not initialized", ErrInvalidConfig)
 	}
-	if b.cfg.AgentImage == "" {
+	image := b.currentAgentImage()
+	if image == "" {
 		return failf(CheckPreJobProbe, "configured agent image is missing")
 	}
 	if !runIDPattern.MatchString(runID) {
@@ -1320,7 +1321,7 @@ func (b *Backend) PreJob(ctx context.Context, runID string) error {
 	return (&Suite{
 		b: b,
 		fx: SuiteFixture{
-			AgentImage: b.cfg.AgentImage,
+			AgentImage: image,
 			RunID:      runID,
 		},
 	}).preJob(ctx)

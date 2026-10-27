@@ -366,6 +366,117 @@ func TestConformanceProofRejectsStaleGeneration(t *testing.T) {
 	}
 }
 
+// TestRepointAgentImageMovesTheConformanceIdentity pins that the image is
+// part of the identity an admission records: repointing changes the digest
+// to exactly the one ConfigurationDigestFor predicts, and repointing to the
+// current image changes nothing.
+func TestRepointAgentImageMovesTheConformanceIdentity(t *testing.T) {
+	t.Parallel()
+	cfg := testConfig()
+	initial := "example.test/agent@sha256:" + strings.Repeat("1", 64)
+	repointed := "example.test/agent@sha256:" + strings.Repeat("2", 64)
+	cfg.AgentImage = initial
+	b, err := New(stubRuntime{}, cfg)
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	image, digest := b.ConformanceIdentity()
+	if image != initial || digest != b.ConfigurationDigest() || digest != b.ConfigurationDigestFor(initial) {
+		t.Fatalf("ConformanceIdentity = (%q, %s), want the configured image and its digest", image, digest)
+	}
+
+	generation, _ := b.beginConformanceProof(nil)
+	b.finishConformanceProof(generation, true)
+	if err := b.RepointAgentImage(initial); err != nil {
+		t.Fatalf("RepointAgentImage(current) = %v", err)
+	}
+	if b.ConfigurationDigest() != digest {
+		t.Fatal("repointing to the current image changed the configuration digest")
+	}
+	for _, c := range conformancePendingCapabilities {
+		if !b.Capabilities().Has(c) {
+			t.Fatalf("repointing to the current image cleared %q", c)
+		}
+	}
+
+	if err := b.RepointAgentImage(repointed); err != nil {
+		t.Fatalf("RepointAgentImage = %v", err)
+	}
+	image, moved := b.ConformanceIdentity()
+	if image != repointed || moved != b.ConfigurationDigestFor(repointed) {
+		t.Fatalf("ConformanceIdentity = (%q, %s), want the repointed image and its digest", image, moved)
+	}
+	if moved == digest {
+		t.Fatal("repointing to another image kept the configuration digest")
+	}
+	for _, c := range conformancePendingCapabilities {
+		if b.Capabilities().Has(c) {
+			t.Fatalf("repointing kept %q declared before any pass proved the new image", c)
+		}
+	}
+	if err := b.RepointAgentImage("example.test/agent:latest"); !errors.Is(err, ErrInvalidConfig) {
+		t.Fatalf("RepointAgentImage(tag) = %v, want ErrInvalidConfig", err)
+	}
+	if got, _ := b.ConformanceIdentity(); got != repointed {
+		t.Fatalf("a refused repoint moved the image to %q", got)
+	}
+}
+
+// TestRepointBeforeAnyProofLeavesRestoreOpen pins the startup order: the
+// daemon repoints ward at the image it selected, then restores that image's
+// durable proof without running the suite again.
+func TestRepointBeforeAnyProofLeavesRestoreOpen(t *testing.T) {
+	t.Parallel()
+	b := newTestBackend(t)
+	repointed := "example.test/agent@sha256:" + strings.Repeat("2", 64)
+	if err := b.RepointAgentImage(repointed); err != nil {
+		t.Fatalf("RepointAgentImage = %v", err)
+	}
+	record, err := domain.NewBackendConformance(domain.BackendConformanceInput{
+		Backend: domain.BackendFreshVMReadOnlyVolumeHandoff, Outcome: domain.ConformancePassed,
+		ConfigurationDigest: b.ConfigurationDigestFor(repointed),
+		Capabilities:        domain.NewCapabilitySnapshot(provenCapabilities()...),
+		ProvedAt:            time.Date(2026, 10, 27, 0, 0, 0, 0, time.UTC),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	record.Generation = 3
+	if err := b.RestoreConformance(record); err != nil {
+		t.Fatalf("RestoreConformance after a startup repoint = %v", err)
+	}
+	for _, c := range conformancePendingCapabilities {
+		if !b.Capabilities().Has(c) {
+			t.Fatalf("restore did not publish %q", c)
+		}
+	}
+}
+
+// TestRepointSupersedesARunningProof pins that a Full pass begun for the old
+// image can neither publish nor record once the backend is repointed, so its
+// success never declares capabilities for an image it did not run.
+func TestRepointSupersedesARunningProof(t *testing.T) {
+	t.Parallel()
+	b := newTestBackend(t)
+	generation, _ := b.beginConformanceProof(nil)
+	if err := b.RepointAgentImage("example.test/agent@sha256:" + strings.Repeat("2", 64)); err != nil {
+		t.Fatalf("RepointAgentImage = %v", err)
+	}
+	recorded := false
+	published, err := b.concludeConformanceProof(generation, true, func() error {
+		recorded = true
+		return nil
+	})
+	if published || err != nil || recorded {
+		t.Fatalf("pass for the old image: published=%v recorded=%v err=%v, want neither", published, recorded, err)
+	}
+	for _, c := range conformancePendingCapabilities {
+		if b.Capabilities().Has(c) {
+			t.Fatalf("superseded pass declared %q", c)
+		}
+	}
+}
+
 // TestConcludeHoldsTheGuardAcrossTheRecordStep pins the publish/record
 // atomicity: a new pass cannot begin (and so cannot append its own record)
 // while an earlier pass's conclude is still inside its record step, so the
