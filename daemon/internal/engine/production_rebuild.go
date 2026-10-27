@@ -36,14 +36,18 @@ type ProjectImageBuilder interface {
 }
 
 // ProjectImageRebuild lets the publication lane rebuild a project image for a
-// candidate whose dependency change stays within the project's policy. The
-// builder must record what it builds in the store this workflow reads.
+// candidate whose dependency change stays within the project's policy, and
+// lets image upkeep rebuild one at the default-branch tip. The builder must
+// record what it builds in the store both read. Share one value per daemon:
+// its gate is what keeps two builds from running at once.
 type ProjectImageRebuild struct {
 	Builder ProjectImageBuilder
 	Inputs  projectimage.BuildInputs
 	// Timeout bounds one build with its proofs. Zero means
 	// defaultProjectImageRebuildTimeout.
 	Timeout time.Duration
+
+	gate projectImageBuildGate
 }
 
 // defaultProjectImageRebuildTimeout is far above an install and three proof
@@ -342,7 +346,7 @@ func (w *productionPublicationWorkflow) bindVerificationImage(
 	}
 	if !found {
 		var refusal *rebuildRefusal
-		rebuilt, refusal, err = w.rebuildProjectImage(ctx, task, binding, checkoutDir, verifiedSHA, decision.Head)
+		rebuilt, refusal, err = w.rebuildUnderGate(ctx, task, binding, checkoutDir, verifiedSHA, decision.Head)
 		if err != nil || refusal != nil {
 			return binding, refusal, err
 		}
@@ -401,6 +405,28 @@ func (w *productionPublicationWorkflow) recordedRebuild(
 		}
 	}
 	return domain.ProjectImage{}, false, nil
+}
+
+// rebuildUnderGate builds only when the builder is free, and looks again
+// under the gate for an image another build recorded since the first look.
+// A busy builder is retryable: the lane moves on to other work.
+func (w *productionPublicationWorkflow) rebuildUnderGate(
+	ctx context.Context,
+	task productionPublicationTask,
+	binding productionBinding,
+	checkoutDir, verifiedSHA string,
+	head domain.ProjectImageBaseInputs,
+) (domain.ProjectImage, *rebuildRefusal, error) {
+	if !w.rebuild.gate.tryAcquire() {
+		return domain.ProjectImage{}, nil, fmt.Errorf("rebuild project image at %s: %w",
+			verifiedSHA, productionPublicationRetryableError(errProjectImageBuilderBusy))
+	}
+	defer w.rebuild.gate.release()
+	rebuilt, found, err := w.recordedRebuild(ctx, binding.image, head)
+	if err != nil || found {
+		return rebuilt, nil, err
+	}
+	return w.rebuildProjectImage(ctx, task, binding, checkoutDir, verifiedSHA, head)
 }
 
 // rebuildProjectImage builds the admitted image again at verifiedSHA from the
