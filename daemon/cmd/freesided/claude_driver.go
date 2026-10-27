@@ -1401,6 +1401,9 @@ type claudeComposition struct {
 	// observeRepositoryTip is the same read for the active-resource
 	// reconciler's tip watch, which feeds project-image upkeep (§5.7).
 	observeRepositoryTip func(ctx context.Context, repo, branch string) (string, error)
+	// fetchTip fetches the configured base branch at tipSHA into dir for
+	// image upkeep and returns the repository ID the checkout carries.
+	fetchTip func(ctx context.Context, tipSHA, dir string) (int64, error)
 	// observePull and observeIssue are the §5.18 base-watch capture and
 	// status-independent completion sweep's conditional reads through the same
 	// reconciler.
@@ -1940,6 +1943,19 @@ func composeClaudeDriver(
 		followUpFiler:    followUpFiler,
 		reviewReplier:    reviewReplier,
 		issueReadTokens:  issueReadTokens,
+		fetchTip: func(fetchCtx context.Context, tipSHA, dir string) (repositoryID int64, err error) {
+			// Stable coverage keeps the fetch's installation token from
+			// failing under a concurrent janitor pass.
+			err = janitor.WithStableCoverage(func() error {
+				checkout, err := transport.FetchBase(fetchCtx, cfg.Repo, cfg.BaseRef, tipSHA, dir)
+				if err != nil {
+					return err
+				}
+				repositoryID = checkout.RepositoryID()
+				return nil
+			})
+			return repositoryID, err
+		},
 		observeBaseTip: func(obsCtx context.Context, watch domain.ScheduleBaseWatch) (string, error) {
 			return observeRefTip(obsCtx, watch.Repo, watch.BaseRef)
 		},

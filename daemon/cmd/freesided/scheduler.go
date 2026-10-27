@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log/slog"
 	"time"
 
 	"github.com/freeside-ai/freeside/daemon/internal/domain"
@@ -25,6 +26,7 @@ const (
 	schedulerSystemProjectID = domain.ProjectID("project-system")
 	doctorScheduleID         = domain.ScheduleID("schedule-doctor")
 	janitorScheduleID        = domain.ScheduleID("schedule-janitor")
+	imageUpkeepScheduleID    = domain.ScheduleID("schedule-image-upkeep")
 )
 
 // baseTipObserver reads the current tip of a watch's target base ref. The
@@ -755,9 +757,14 @@ func newClaudeScheduler(
 	cfg config,
 	wiring *claudeComposition,
 	runDoctor func(context.Context) error,
+	imageUpkeep *engine.ImageUpkeep,
 ) (*scheduler.Scheduler, error) {
 	now := func() time.Time { return time.Now().UTC() }
 	failures := newScheduledFailureTracker(now, cfg.Logger)
+	upkeepLogger := cfg.Logger
+	if upkeepLogger == nil {
+		upkeepLogger = slog.New(slog.DiscardHandler)
+	}
 	kinds := map[domain.ScheduleKind]scheduler.Registration{
 		domain.ScheduleDoctor: {Handle: func(
 			ctx context.Context, _ domain.ScheduleEvent, _ domain.Schedule,
@@ -780,11 +787,21 @@ func newClaudeScheduler(
 			}
 			return failures.consumption(domain.ScheduleJanitor, err)
 		}},
-		// Registered so every kind has a handler; the upkeep pass is #2333's,
-		// and nothing arms this schedule until then.
 		domain.ScheduleImageUpkeep: {Handle: func(
-			context.Context, domain.ScheduleEvent, domain.Schedule,
+			ctx context.Context, _ domain.ScheduleEvent, _ domain.Schedule,
 		) (scheduler.Consumption, error) {
+			// A failed pass decided nothing and changed nothing, and work
+			// still runs in the configured image, so the failure is logged
+			// and the next fire retries; it does not stop the daemon as a
+			// doctor or janitor failure does. What a person must fix is
+			// recorded as a host fault, which files an item.
+			if err := imageUpkeep.RunScheduled(ctx); err != nil {
+				if ctx.Err() != nil {
+					return scheduler.Consumption{}, err
+				}
+				upkeepLogger.Warn("scheduled image upkeep pass failed", "error", err)
+				return scheduler.Consumption{Outcome: domain.OutcomeObserveFailed}, nil
+			}
 			return failures.consumption(domain.ScheduleImageUpkeep, nil)
 		}},
 	}
@@ -815,6 +832,10 @@ func armTrustedConfigJobs(ctx context.Context, sched *scheduler.Scheduler, cfg c
 	}{
 		{doctorScheduleID, domain.ScheduleDoctor, cfg.DoctorInterval},
 		{janitorScheduleID, domain.ScheduleJanitor, defaultJanitorInterval},
+		// Upkeep's start pass runs beside startup rather than before it, and
+		// its scheduled pass is the retry for a host fault, at the doctor's
+		// cadence.
+		{imageUpkeepScheduleID, domain.ScheduleImageUpkeep, cfg.DoctorInterval},
 	} {
 		seconds := int64(job.interval / time.Second)
 		schedule, err := domain.NewSchedule(domain.ScheduleInput{

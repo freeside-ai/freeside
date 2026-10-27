@@ -862,11 +862,11 @@ func run(parent context.Context, stop func(), cfg config) (_ *daemon, err error)
 			return nil, err
 		}
 	}
-	manualInitiator, err := loadManualSubmissionConfig(cfg.ManualSubmissionConfigPath)
+	manualProjects, err := readManualSubmissionProjects(cfg.ManualSubmissionConfigPath)
 	if err != nil {
 		return nil, err
 	}
-	manualInitiator = cfg.DeputyLaunch.gateManualInitiator(manualInitiator, cfg.Logger)
+	manualInitiator := cfg.DeputyLaunch.gateManualInitiator(manualInitiatorLookup(manualProjects), cfg.Logger)
 	lock, err := daemonlock.Acquire(cfg.DBPath)
 	if err != nil {
 		return nil, fmt.Errorf("acquire database daemon lock: %w", err)
@@ -1073,6 +1073,8 @@ func run(parent context.Context, stop func(), cfg config) (_ *daemon, err error)
 	var (
 		workflow              *engine.Engine
 		claudeWiring          *claudeComposition
+		imageUpkeep           *engine.ImageUpkeep
+		upkeepTrigger         *imageUpkeepTrigger
 		scenarioWiring        *scenarioComposition
 		doctorConvergenceLock sync.Mutex
 		doctorAvailable       atomic.Bool
@@ -1314,6 +1316,12 @@ func run(parent context.Context, stop func(), cfg config) (_ *daemon, err error)
 		if err != nil {
 			return nil, err
 		}
+		// Upkeep shares the lane's rebuild, and with it the one build gate.
+		imageUpkeep, err = composeImageUpkeep(st, attention, cfg, claudeWiring, rebuild, manualProjects,
+			&doctorConvergenceLock)
+		if err != nil {
+			return nil, err
+		}
 		engineOptions = append(engineOptions, engine.WithProductionPublication(engine.ProductionPublicationConfig{
 			WorkDir:   filepath.Join(cfg.Claude.SeedRoot, "production-publication"),
 			Transport: claudeWiring.publicationTransport,
@@ -1515,7 +1523,7 @@ func run(parent context.Context, stop func(), cfg config) (_ *daemon, err error)
 	} else if claudeWiring != nil {
 		// The doctor and janitor cadences live on the §5.16 durable scheduler;
 		// their initial coverage remains the direct calls above.
-		claudeSched, err = newClaudeScheduler(st, cfg, claudeWiring, runDoctor)
+		claudeSched, err = newClaudeScheduler(st, cfg, claudeWiring, runDoctor, imageUpkeep)
 		if err != nil {
 			return nil, err
 		}
@@ -1523,6 +1531,7 @@ func run(parent context.Context, stop func(), cfg config) (_ *daemon, err error)
 		if err := armTrustedConfigJobs(parent, claudeSched, cfg); err != nil {
 			return nil, err
 		}
+		upkeepTrigger = newImageUpkeepTrigger()
 		activeReconciler = &activeResourceReconciler{
 			store: st, pull: claudeWiring.observePull,
 			issue:  claudeWiring.observeIssue,
@@ -1536,7 +1545,7 @@ func run(parent context.Context, stop func(), cfg config) (_ *daemon, err error)
 				Repo: cfg.Claude.Repo, RepositoryID: cfg.Claude.RepositoryID, Branch: cfg.Claude.BaseRef,
 			},
 			observeTip:       claudeWiring.observeRepositoryTip,
-			upkeepTipAdvance: unwiredImageUpkeepTipAdvance(cfg.Logger),
+			upkeepTipAdvance: upkeepTrigger.tipAdvanced,
 			now:              func() time.Time { return time.Now().UTC() },
 		}
 		intakeReconcilerLoop = &intakeReconciler{
@@ -1690,6 +1699,13 @@ func run(parent context.Context, stop func(), cfg config) (_ *daemon, err error)
 			defer d.wg.Done()
 			err := intakeReconcilerLoop.Run(ctx, defaultIntakeInterval, cfg.Logger)
 			d.componentExited(parent, ctx, componentLabelIntake, err)
+		}()
+		// The start and tip-advance triggers: an upgrade's rebuild can take
+		// an hour, so start does not wait for it.
+		d.wg.Add(1)
+		go func() {
+			defer d.wg.Done()
+			upkeepTrigger.run(ctx, imageUpkeep, logger)
 		}()
 	}
 	if scenarioWiring != nil {
