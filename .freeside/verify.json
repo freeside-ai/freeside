@@ -1,1 +1,1 @@
-{"commands":[["env","GOFLAGS=-p=2","GOMEMLIMIT=768MiB","bash","scripts/check.sh","daemon","build","test","vet","lint"],["bash","scripts/check.sh","docs"]],"capture":"none"}
+{"commands":[["env","GOFLAGS=-p=2","GOMEMLIMIT=768MiB","bash","scripts/check.sh","daemon","build","test","vet","lint"],["bash","scripts/check.sh","docs"],["env","VACUUM=vacuum","bash","scripts/check.sh","api"],["env","GOFLAGS=-p=2","GOMEMLIMIT=768MiB","bash","scripts/check.sh","scripts","syntax","shellcheck","suites","trackercollect"]],"capture":"none"}
