@@ -2001,6 +2001,23 @@ intent revision and returns `installation_pending`, so the next review carries
 a new approval digest. That is the one Freeside manual review; a GitHub
 organization approval remains a separate native prerequisite.
 
+**`-protected-path <class>=<pattern>` widens a protected-path class.** Repeat
+it once per pattern. The class is the trust profile's
+`extra_<class>_patterns` field: `automation_control`, `reviewer_instruction`,
+`git_metadata`, `verification_control`, `prompts_and_policy`,
+`egress_and_trust`, or `materiality_rules`. The value splits at the first
+`=`. Give each class's patterns sorted and without duplicates: onboarding
+refuses an unsorted, duplicate, absolute, dot-segment, or malformed pattern
+before any store or network work rather than reorder it. The review shows
+the patterns under `profile.protected_paths` and the approval digest binds
+them, so adding or removing one needs a fresh review. The default patterns
+always apply. Without the flag the repository-specific classes (verification
+recipes, prompts and policy, egress and trust, materiality rules) protect no
+path, so an agent's edit to them draws no import finding. A match in
+`reviewer_instruction` is advisory and one in `git_metadata` is a waivable
+repository-change finding; a match in any other class holds publication as a
+non-waivable control-plane finding.
+
 **Each project image bakes one toolchain.** `-go-module-dir <dir>`, on both
 `freesided onboard` and `freeside-project-image`, declares a
 repository-relative Go module directory, which the review shows and the

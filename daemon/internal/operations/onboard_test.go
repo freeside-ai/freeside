@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"reflect"
 	"slices"
 	"strings"
 	"testing"
@@ -355,6 +356,130 @@ func TestOnboardReRunAdmitsExternalReviewers(t *testing.T) {
 	}
 	if _, ok := active.ExternalReviewAuthorityFor(reviewer.Forge, reviewer.AccountID, reviewer.Login); !ok {
 		t.Fatal("active profile does not admit the approved reviewer")
+	}
+}
+
+// TestOnboardReRunBindsProtectedPaths pins that a protected-path widening
+// is part of what the owner reviews and approves: the review output shows
+// it, and an approval digest issued without it does not admit it.
+func TestOnboardReRunBindsProtectedPaths(t *testing.T) {
+	ctx := t.Context()
+	st, err := store.Open(ctx, t.TempDir()+"/freeside.db", store.Options{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = st.Close() })
+	evidence, err := domain.NewWorkflowAuditEvidence([]byte(
+		`{"version":"freeside-workflow-audit/v2","repo":"example/repo","workflows":[]}`,
+	))
+	if err != nil {
+		t.Fatal(err)
+	}
+	audit := domain.WorkflowAudit{
+		Repo: "example/repo", AuditedCommitSHA: "0123456789012345678901234567890123456789",
+		AuditedAt:           time.Date(2026, 10, 2, 12, 0, 0, 0, time.UTC),
+		WorkflowAuditDigest: evidence.Digest(), Evidence: &evidence,
+		EffectiveTokenPerms: domain.TokenPermissionsReadOnly,
+	}
+	onboard := operations.Onboard{
+		Store: st, Builder: &imageBuilderStub{store: st}, Auditor: workflowAuditorStub{audit: audit},
+		Authority: authorityStub{publish.InstallationAuthority{
+			TrustedInstallations: []publish.TrustedInstallation{{
+				RegistrationID: 11, InstallationID: 22,
+				Account: "example", AccountID: 33, RepositoryIDs: []int64{44},
+			}},
+		}},
+		Gate: pendingGateStub(true), Now: func() time.Time { return audit.AuditedAt },
+	}
+	req := operations.OnboardRequest{
+		Repository: "example/repo", RepositoryID: 44, RegistrationID: 11,
+		BaseRef: "main",
+		Policy: operations.OnboardPolicy{
+			PRExecution: domain.PRExecutionAuditedSameRepo,
+			CommitPlan:  domain.CommitPlanSingleCommit, MessageRuleset: domain.MessageRulesetGitHub1,
+			ReviewMode: domain.ReviewFreesideInvoked, ReviewConfig: "sha256:review",
+		},
+		Image: projectimage.Request{
+			Repository: "example/repo", RepositoryID: 44,
+			CommitSHA: "0123456789012345678901234567890123456789",
+			Recipe:    []byte(`{"commands":[["npm","test"]],"capture":"none"}`),
+			BaseImageRef: domain.ImageRef(
+				"ghcr.io/freeside-ai/agent@sha256:" + strings.Repeat("a", 64)),
+			BaseBuildRef: "local/base:v1", LocalRegistryPort: 5100,
+		},
+	}
+	review := func(t *testing.T) operations.OnboardResult {
+		t.Helper()
+		req.ApprovalDigest = ""
+		result, err := onboard.Run(ctx, req)
+		if err != nil {
+			t.Fatalf("review pass: %v", err)
+		}
+		return result
+	}
+	approve := func(t *testing.T, reviewed operations.OnboardResult) operations.OnboardResult {
+		t.Helper()
+		req.ApprovalDigest = reviewed.ApprovalDigest
+		complete, err := onboard.Run(ctx, req)
+		if err != nil {
+			t.Fatalf("approval pass: %v", err)
+		}
+		if complete.Status != "complete" {
+			t.Fatalf("completion = %+v", complete)
+		}
+		return complete
+	}
+	first := approve(t, review(t))
+	if !reflect.DeepEqual(first.Profile.ProtectedPaths, domain.ProtectedPathConfig{}) {
+		t.Fatalf("profile without the choice widens protected paths: %+v", first.Profile.ProtectedPaths)
+	}
+
+	protected := domain.ProtectedPathConfig{
+		ExtraVerificationControlPatterns: []string{".freeside/**", "scripts/check.sh"},
+		ExtraMaterialityRulesPatterns:    []string{"docs/plan.md"},
+	}
+	req.Policy.ProtectedPaths = protected
+	// The first pass's approval does not cover the widening.
+	req.ApprovalDigest = first.ApprovalDigest
+	if _, err := onboard.Run(ctx, req); err == nil ||
+		!strings.Contains(err.Error(), "does not match proposed review") {
+		t.Fatalf("earlier approval digest with a protected-path widening: err = %v, want a digest mismatch", err)
+	}
+	reviewed := review(t)
+	if reviewed.ApprovalDigest == first.ApprovalDigest {
+		t.Fatal("adding protected paths reused the earlier approval digest")
+	}
+	// The one-time review output is the profile itself, so the owner sees
+	// the patterns they approve.
+	body, err := json.Marshal(reviewed)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var shown struct {
+		Profile struct {
+			ProtectedPaths domain.ProtectedPathConfig `json:"protected_paths"`
+		} `json:"profile"`
+	}
+	if err := json.Unmarshal(body, &shown); err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(shown.Profile.ProtectedPaths, protected) {
+		t.Fatalf("review output profile.protected_paths = %+v, want %+v", shown.Profile.ProtectedPaths, protected)
+	}
+	second := approve(t, reviewed)
+	if second.ApprovalDigest != reviewed.ApprovalDigest {
+		t.Fatalf("approval digest = %s, want the reviewed %s", second.ApprovalDigest, reviewed.ApprovalDigest)
+	}
+	var active domain.AutomationTrustProfile
+	if err := st.Read(ctx, func(tx *store.ReadTx) error {
+		var readErr error
+		active, readErr = tx.LatestTrustProfile(ctx, req.Repository)
+		return readErr
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(active.ProtectedPaths, protected) {
+		t.Fatalf("active profile protected paths = %+v, want %+v", active.ProtectedPaths, protected)
 	}
 }
 
