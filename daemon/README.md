@@ -2063,8 +2063,7 @@ its rooms, never the proof, so a recipe proven here fits any room. The
 margin that matters is unreclaimable memory (`anon`, `shmem`, and `kernel` in
 the cgroup's `memory.stat`): page cache fills the room on every step and is
 reclaimed under pressure, so `memory.peak` sits near the limit whatever the
-recipe does. The recipe sized for Freeside's own daemon module, which passes
-the proof once #2140 fixes its failing tests, is:
+recipe does. The recipe sized for Freeside's own daemon module is:
 
 ```sh
 env GOFLAGS=-p=2 GOMEMLIMIT=768MiB bash scripts/check.sh daemon build test vet lint
@@ -2073,18 +2072,20 @@ env GOFLAGS=-p=2 GOMEMLIMIT=768MiB bash scripts/check.sh daemon build test vet l
 `-p=2` halves the compile, vet, and test-package parallelism Go runs on 4
 CPUs, and `GOMEMLIMIT` sets each Go process's heap target, golangci-lint's
 included. Without them, lint's heap reaches the room's limit and the step
-slows under reclaim. Measured at `bee7979b`, one container per step:
+slows under reclaim. Freeside's `.freeside/verify.json` runs this command,
+then `bash scripts/check.sh docs`. Measured at `874a5de8` in Freeside's
+project image, one container per step, every step passing:
 
 | Step | Unreclaimable peak | Wall |
 | --- | --- | --- |
-| build | 774 MiB | 34 s |
-| test | 1201 MiB | 517 s |
-| vet | 1191 MiB | 56 s |
-| lint | 1183 MiB | 158 s |
+| build | 811 MiB | 37 s |
+| test | 1041 MiB | 295 s |
+| vet | 1279 MiB | 76 s |
+| lint | 1273 MiB | 201 s |
+| docs | 1 MiB | under 1 s |
 
-Each step started from a cold build cache on a loaded host, and `test` still
-fails on the root-sensitive and `ps`-dependent tests #2140 tracks. The
-decision and the rejected options are in
+Each step started from a cold build cache on a host at load average 30 to
+36. The decision and the rejected options are in
 `devlog/2026-10-22-1241-proof-memory-bound.md`.
 
 If the installation was terminally quarantined, start a fresh native
