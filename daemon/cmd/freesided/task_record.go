@@ -511,13 +511,26 @@ func readTaskRecordRun(ctx context.Context, tx *store.ReadTx, runID domain.RunID
 		fail(taskRecordRunConclusion, err)
 		return out
 	}
-	out.Hold = observation.Hold
-	out.Invocations = append([]domain.InvocationObservation{}, observation.Invocations...)
 	run, err := tx.GetRun(ctx, runID)
 	if err != nil {
+		// The invocations' statuses are authenticated against the run, and
+		// the raw rows would print a status a recorded terminal overrides.
+		fail(taskRecordRunObservation, err)
 		fail(taskRecordRunConclusion, err)
 		return out
 	}
+	// An invocation row is a paced last look and can lag the invocation's
+	// recorded terminal indefinitely, so the record shows the authenticated
+	// terminal status the app's run views show (#785's authority rule). A
+	// terminal fact that fails authentication blanks this section only.
+	if overlaid, err := signet.AuthoritativeInvocationStatuses(ctx, tx, run, observation); err != nil {
+		fail(taskRecordRunObservation, err)
+	} else {
+		out.Hold = overlaid.Hold
+		out.Invocations = append([]domain.InvocationObservation{}, overlaid.Invocations...)
+	}
+	// The conclusion reads the store's observation, as `freesided follow`
+	// does, so the two cannot disagree about one run.
 	conclusion, err := authenticatedTaskRecordConclusion(ctx, tx, run, observation)
 	if err != nil {
 		fail(taskRecordRunConclusion, err)
