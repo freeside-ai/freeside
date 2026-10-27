@@ -101,3 +101,137 @@ func TestInstallFailureBoundsLongEntryLists(t *testing.T) {
 			len(got), got[max(0, len(got)-20):], maxInstallFailureBytes)
 	}
 }
+
+// The fixtures in testdata/go are the output of `go mod download` from Go
+// 1.26.10, the Go a Go image pins, run with the warm step's environment
+// against proxy.golang.org: a go.sum with one zip or go.mod hash altered, a
+// version the proxy does not serve, and the build proxy refusing or failing
+// to resolve. proxy-410.txt is proxy-404.txt with the status replaced, since
+// the proxy's 410 can't be produced on demand.
+func readGoFixture(t *testing.T, name string) []byte {
+	t.Helper()
+	body, err := os.ReadFile(filepath.Join("testdata", "go", name)) //nolint:gosec // G304: test-named fixture under testdata.
+	if err != nil {
+		t.Fatal(err)
+	}
+	return body
+}
+
+// buildKitPrefixed gives every line BuildKit's plain-progress prefix.
+func buildKitPrefixed(output []byte) []byte {
+	var prefixed strings.Builder
+	for line := range strings.Lines(string(output)) {
+		prefixed.WriteString("#12 3.141 " + line)
+	}
+	return []byte(prefixed.String())
+}
+
+func TestInstallFailureMatchesOnlyCandidateCausedGoFailures(t *testing.T) {
+	t.Parallel()
+	cases := []struct {
+		name    string
+		output  []byte
+		want    bool
+		wantHas []string
+	}{
+		{
+			name: "module checksum mismatch", output: readGoFixture(t, "checksum-mismatch.txt"), want: true,
+			wantHas: []string{
+				"verifying github.com/google/uuid@v1.6.0: checksum mismatch\n\tdownloaded: h1:",
+				"\n\tgo.sum:     h1:AAAA",
+			},
+		},
+		{
+			name: "go.mod checksum mismatch through BuildKit", want: true,
+			output:  buildKitPrefixed(readGoFixture(t, "gomod-checksum-mismatch.txt")),
+			wantHas: []string{"verifying github.com/google/uuid@v1.6.0/go.mod: checksum mismatch"},
+		},
+		{
+			name: "version the proxy does not serve", output: readGoFixture(t, "proxy-404.txt"), want: true,
+			wantHas: []string{
+				"reading https://proxy.golang.org/github.com/google/uuid/@v/v1.99.0.mod: 404 Not Found",
+				"\n\tserver response: not found:",
+			},
+		},
+		{
+			name: "version the proxy has dropped through BuildKit", want: true,
+			output:  buildKitPrefixed(readGoFixture(t, "proxy-410.txt")),
+			wantHas: []string{": 410 Gone"},
+		},
+		{
+			name: "dependency's requirement the proxy does not serve", want: true,
+			output: buildKitPrefixed(readGoFixture(t, "proxy-404-requires.txt")),
+			wantHas: []string{
+				"go: rsc.io/quote@v1.5.2 requires\n\trsc.io/sampler@v1.3.0 (replaced by rsc.io/sampler@v1.99.0): reading",
+				"\n\tserver response: not found:",
+			},
+		},
+		{
+			name: "replacement the proxy does not serve", output: readGoFixture(t, "proxy-404-replaced.txt"), want: true,
+			wantHas: []string{"go: rsc.io/quote@v1.5.2 (replaced by rsc.io/quote@v1.5.99): reading"},
+		},
+		{
+			name: "go.mod version the proxy does not resolve", output: readGoFixture(t, "invalid-version.txt"), want: true,
+			wantHas: []string{"go: errors parsing go.mod:\ngo.mod:5: require rsc.io/quote: version \"v1.5.2-01\" invalid"},
+		},
+		{
+			name: "go.mod Go cannot parse", output: buildKitPrefixed(readGoFixture(t, "godebug-usage.txt")), want: true,
+			wantHas: []string{"go: errors parsing go.mod:\ngo.mod:7: usage: godebug key=value"},
+		},
+		{
+			name: "go.mod Go cannot load", output: readGoFixture(t, "godebug-unknown.txt"), want: true,
+			wantHas: []string{"go: error loading go.mod:\ngo.mod:7: unknown godebug \"nosuchkey\""},
+		},
+		{
+			// Go resolves a non-canonical version through the proxy while
+			// it reads go.mod, so a fetch can fail inside its refusal.
+			name:   "go.mod query the build proxy could not answer",
+			output: readGoFixture(t, "retract-query-no-such-host.txt"),
+		},
+		{
+			name: "indented 404 heading no requires chain",
+			output: []byte("go: something else\n\texample.test/a@v1.0.0: reading " +
+				"https://proxy.golang.org/example.test/a/@v/v1.0.0.mod: 404 Not Found\n"),
+		},
+		{name: "build proxy refused", output: readGoFixture(t, "proxyconnect-refused.txt")},
+		{name: "build proxy not resolved", output: readGoFixture(t, "proxy-no-such-host.txt")},
+		{
+			// A disagreement with the checksum database names no go.sum
+			// line, so nothing the candidate wrote caused it. The text is
+			// the format cmd/go/internal/modfetch writes for it.
+			name: "checksum database mismatch",
+			output: []byte("go: github.com/google/uuid@v1.6.0: verifying module: checksum mismatch\n" +
+				"\tdownloaded: h1:NIvaJDMOsjHA8n1jAhLSgzrAzy1Hgr+hNrb57e+94F0=\n" +
+				"\tsum.golang.org: h1:AAAAJDMOsjHA8n1jAhLSgzrAzy1Hgr+hNrb57e+94F0=\n"),
+		},
+		{
+			name: "404 from another host",
+			output: []byte("go: example.test/a@v1.0.0: reading " +
+				"https://proxy.golang.org.example.test/example.test/a/@v/v1.0.0.mod: 404 Not Found\n"),
+		},
+		{
+			name:   "server error from the proxy",
+			output: []byte("go: example.test/a@v1.0.0: reading https://proxy.golang.org/example.test/a/@v/v1.0.0.mod: 502 Bad Gateway\n"),
+		},
+	}
+	for _, test := range cases {
+		t.Run(test.name, func(t *testing.T) {
+			t.Parallel()
+			got, ok := installFailure(test.output)
+			if ok != test.want {
+				t.Fatalf("installFailure matched = %v, want %v (lines %q)", ok, test.want, got)
+			}
+			if len(got) > maxInstallFailureBytes {
+				t.Fatalf("installFailure returned %d bytes, want at most %d", len(got), maxInstallFailureBytes)
+			}
+			for _, want := range test.wantHas {
+				if !strings.Contains(got, want) {
+					t.Fatalf("installFailure lines = %q, want them to contain %q", got, want)
+				}
+			}
+			if strings.Contains(got, "#12") || strings.Contains(got, "SECURITY ERROR") {
+				t.Fatalf("installFailure lines = %q, want Go's lines without BuildKit prefixes or the advice", got)
+			}
+		})
+	}
+}

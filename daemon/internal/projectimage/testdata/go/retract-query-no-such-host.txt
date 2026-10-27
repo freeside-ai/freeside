@@ -1,0 +1,2 @@
+go: errors parsing go.mod:
+go.mod:7: retract example.com/g3: version "banana" invalid: Get "https://proxy.golang.org/example.com/g3/@v/banana.info": proxyconnect tcp: dial tcp: lookup no-such-host.invalid: no such host

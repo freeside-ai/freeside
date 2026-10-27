@@ -1,0 +1,2 @@
+go: github.com/google/uuid@v1.99.0: reading https://proxy.golang.org/github.com/google/uuid/@v/v1.99.0.mod: 410 Gone
+	server response: not found: github.com/google/uuid@v1.99.0: invalid version: unknown revision v1.99.0
