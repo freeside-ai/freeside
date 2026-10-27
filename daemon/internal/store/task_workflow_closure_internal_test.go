@@ -105,7 +105,8 @@ func TestWorkflowClosureAuthenticatesLegacyHeldWorkNotices(t *testing.T) {
 					'0105_admitted_image_pointers.sql',
 					'0106_schedules_image_upkeep.sql',
 					'0107_run_hold_image_upkeep.sql',
-					'0108_image_upkeep.sql')`,
+					'0108_image_upkeep.sql',
+					'0109_task_submission_origin.sql')`,
 			} {
 				if _, err := st.db.ExecContext(ctx, statement); err != nil {
 					t.Fatal(err)
@@ -428,7 +429,8 @@ func TestWorkflowClosureMigrationDoesNotInferAuthority(t *testing.T) {
 					'0105_admitted_image_pointers.sql',
 					'0106_schedules_image_upkeep.sql',
 					'0107_run_hold_image_upkeep.sql',
-					'0108_image_upkeep.sql')`,
+					'0108_image_upkeep.sql',
+					'0109_task_submission_origin.sql')`,
 	} {
 		if _, err := st.db.ExecContext(ctx, statement); err != nil {
 			t.Fatal(err)

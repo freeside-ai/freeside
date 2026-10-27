@@ -3,6 +3,7 @@ package store_test
 import (
 	"context"
 	"errors"
+	"reflect"
 	"testing"
 
 	"github.com/freeside-ai/freeside/daemon/internal/domain"
@@ -39,7 +40,7 @@ func TestPutTaskSubmissionWriteOnceAndConvergence(t *testing.T) {
 	s := openStore(t, store.Options{})
 	taskID, runID := seedTaskSubmissionTarget(t, ctx, s)
 	submission := domain.TaskSubmission{
-		CommandID: "cmd-sub-1", DeviceID: "device-1", ProjectID: "project",
+		CommandID: "cmd-sub-1", Origin: domain.TaskSubmissionOriginDevice, DeviceID: new(domain.DeviceID("device-1")), ProjectID: "project",
 		SourceDigest: taskSubmissionDigest, TaskID: taskID, SpecificationRunID: runID,
 		Name: domain.DisplayName{Text: "First name", Source: domain.DisplayNameSourceOperator},
 	}
@@ -57,7 +58,7 @@ func TestPutTaskSubmissionWriteOnceAndConvergence(t *testing.T) {
 	}); err != nil {
 		t.Fatal(err)
 	}
-	if got != submission {
+	if !reflect.DeepEqual(got, submission) {
 		t.Fatalf("submission = %+v, want %+v", got, submission)
 	}
 	if snap.EntityVersion != 1 || snap.AsOfRevision < 1 {
@@ -89,7 +90,7 @@ func TestPutCommandRejectsTaskSubmissionCommandID(t *testing.T) {
 	taskID, runID := seedTaskSubmissionTarget(t, ctx, s)
 	if err := s.Write(ctx, func(tx *store.WriteTx) error {
 		return tx.PutTaskSubmission(ctx, domain.TaskSubmission{
-			CommandID: "cmd-shared", DeviceID: "device-1", ProjectID: "project",
+			CommandID: "cmd-shared", Origin: domain.TaskSubmissionOriginDevice, DeviceID: new(domain.DeviceID("device-1")), ProjectID: "project",
 			SourceDigest: taskSubmissionDigest, TaskID: taskID, SpecificationRunID: runID,
 			Name: domain.DisplayName{Text: "Name", Source: domain.DisplayNameSourceOperator},
 		})
@@ -120,7 +121,7 @@ func TestPutTaskSubmissionRejectsDecisionCommandID(t *testing.T) {
 	taskID, runID := seedTaskSubmissionTarget(t, ctx, s)
 	err := s.Write(ctx, func(tx *store.WriteTx) error {
 		return tx.PutTaskSubmission(ctx, domain.TaskSubmission{
-			CommandID: f.command.CommandID, DeviceID: "device-1", ProjectID: "project",
+			CommandID: f.command.CommandID, Origin: domain.TaskSubmissionOriginDevice, DeviceID: new(domain.DeviceID("device-1")), ProjectID: "project",
 			SourceDigest: taskSubmissionDigest, TaskID: taskID, SpecificationRunID: runID,
 			Name: domain.DisplayName{Text: "Name", Source: domain.DisplayNameSourceOperator},
 		})

@@ -478,6 +478,10 @@ func TestEnumValidity(t *testing.T) {
 		valids["ImageUpkeepRefusalClass"] = append(valids["ImageUpkeepRefusalClass"], v.valid)
 	}
 	invalids["ImageUpkeepRefusalClass"] = ImageUpkeepRefusalClass("").valid
+	for _, v := range AllTaskSubmissionOrigins {
+		valids["TaskSubmissionOrigin"] = append(valids["TaskSubmissionOrigin"], v.valid)
+	}
+	invalids["TaskSubmissionOrigin"] = TaskSubmissionOrigin("").valid
 
 	for name, checks := range valids {
 		for i, check := range checks {

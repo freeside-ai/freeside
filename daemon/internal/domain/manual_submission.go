@@ -20,7 +20,8 @@ type ManualSubmission struct {
 }
 
 func (s ManualSubmission) Validate() error {
-	if (!strings.HasPrefix(s.Identity, "client:") && !strings.HasPrefix(s.Identity, "cli:")) ||
+	if (!strings.HasPrefix(s.Identity, "client:") && !strings.HasPrefix(s.Identity, "cli:") &&
+		!strings.HasPrefix(s.Identity, "daemon:")) ||
 		strings.HasSuffix(s.Identity, ":") || s.ProjectID == "" || s.SourceArtifactID == "" || s.ImplementationRunID == "" {
 		return fmt.Errorf("manual submission: %w", ErrEmptyID)
 	}

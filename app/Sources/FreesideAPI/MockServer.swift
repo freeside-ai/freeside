@@ -2066,7 +2066,8 @@ public actor MockServer {
             projectID: payload.project_id, name: name, sourceDigest: digest)
         revision += 1
         let record = Components.Schemas.TaskSubmissionRecord(
-            kind: .submit_task, command_id: command.command_id, device_id: command.device_id,
+            kind: .submit_task, command_id: command.command_id, origin: .device,
+            device_id: command.device_id,
             project_id: payload.project_id, source_digest: .init(value1: digest),
             task_id: taskID, specification_run_id: runID, name: .init(value1: name))
         let result = Components.Schemas.CommandResult(record: .submit_task(record), revision: revision)

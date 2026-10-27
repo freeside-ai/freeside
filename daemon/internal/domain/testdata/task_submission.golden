@@ -1,5 +1,6 @@
 {
   "command_id": "cmd-2",
+  "origin": "device",
   "device_id": "device-1",
   "project_id": "proj-1",
   "source_digest": "sha256:1111111111111111111111111111111111111111111111111111111111111111",

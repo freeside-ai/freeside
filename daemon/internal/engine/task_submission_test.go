@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"reflect"
 	"strings"
 	"sync"
 	"testing"
@@ -327,7 +328,7 @@ func TestSubmitTaskCreatesTaskRunAndRecord(t *testing.T) {
 		if err != nil {
 			return err
 		}
-		if recorded != sub {
+		if !reflect.DeepEqual(recorded, sub) {
 			t.Fatalf("recorded submission = %+v, want %+v", recorded, sub)
 		}
 		return nil
@@ -353,7 +354,7 @@ func TestSubmitTaskReplayAndDistinctNewTasks(t *testing.T) {
 	if err != nil {
 		t.Fatalf("replay: %v", err)
 	}
-	if *replay.Submission != *first.Submission || replay.Revision != first.Revision {
+	if !reflect.DeepEqual(*replay.Submission, *first.Submission) || replay.Revision != first.Revision {
 		t.Fatalf("replay = %+v, want %+v", replay, first)
 	}
 	// A distinct command is deliberate new work, even with identical input.
@@ -570,7 +571,7 @@ func TestSubmitTaskConcurrentReplayKeepsOriginalResult(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		if *results[i].Submission != *results[0].Submission || results[i].Revision != results[0].Revision {
+		if !reflect.DeepEqual(*results[i].Submission, *results[0].Submission) || results[i].Revision != results[0].Revision {
 			t.Fatalf("delivery %d changed committed result", i)
 		}
 	}

@@ -3708,6 +3708,16 @@ components:
         answer_route: null
         decision_evidence: null
 
+    TaskSubmissionOrigin:
+      type: string
+      description: >
+        Who recorded a task submission (mirrors domain.TaskSubmissionOrigin).
+        device is a paired device's submit_task command. daemon is project-image
+        upkeep's repair task, which the daemon accepts only against a recorded
+        repair-class upkeep refusal for the project's repository and re-checks
+        whenever it reads the record back. Widening it is a contract change.
+      enum: [device, daemon]
+
     TaskSubmissionRecord:
       type: object
       description: >
@@ -3721,6 +3731,7 @@ components:
       required:
         - kind
         - command_id
+        - origin
         - device_id
         - project_id
         - source_digest
@@ -3735,9 +3746,15 @@ components:
         command_id:
           type: string
           minLength: 1
+        origin:
+          $ref: "#/components/schemas/TaskSubmissionOrigin"
         device_id:
           type: string
           minLength: 1
+          nullable: true
+          description: >
+            The submitting device for a device-origin record; null exactly
+            when origin is daemon.
         project_id:
           type: string
           minLength: 1
@@ -3762,6 +3779,7 @@ components:
       example:
         kind: "submit_task"
         command_id: "cmd-2"
+        origin: "device"
         device_id: "device-1"
         project_id: "project-1"
         source_digest: "sha256:src"

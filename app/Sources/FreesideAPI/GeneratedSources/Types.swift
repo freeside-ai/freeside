@@ -7590,6 +7590,14 @@ public enum Components {
                 ])
             }
         }
+        /// Who recorded a task submission (mirrors domain.TaskSubmissionOrigin). device is a paired device's submit_task command. daemon is project-image upkeep's repair task, which the daemon accepts only against a recorded repair-class upkeep refusal for the project's repository and re-checks whenever it reads the record back. Widening it is a contract change.
+        ///
+        ///
+        /// - Remark: Generated from `#/components/schemas/TaskSubmissionOrigin`.
+        @frozen public enum TaskSubmissionOrigin: String, Codable, Hashable, Sendable, CaseIterable {
+            case device = "device"
+            case daemon = "daemon"
+        }
         /// The durable, immutable record of one accepted submit_task command (domain.TaskSubmission; plan §5.11, §5.14). It names the task the command created and its specification run, keyed by command_id. Explicit manual Retry returns this record and its committed revision unchanged, including historical results that reused a source-keyed task. The name is the display name recorded at acceptance, not the requested-name fingerprint.
         ///
         ///
@@ -7603,8 +7611,13 @@ public enum Components {
             public var kind: Components.Schemas.TaskSubmissionRecord.kindPayload
             /// - Remark: Generated from `#/components/schemas/TaskSubmissionRecord/command_id`.
             public var command_id: Swift.String
+            /// - Remark: Generated from `#/components/schemas/TaskSubmissionRecord/origin`.
+            public var origin: Components.Schemas.TaskSubmissionOrigin
+            /// The submitting device for a device-origin record; null exactly when origin is daemon.
+            ///
+            ///
             /// - Remark: Generated from `#/components/schemas/TaskSubmissionRecord/device_id`.
-            public var device_id: Swift.String
+            public var device_id: Swift.String?
             /// - Remark: Generated from `#/components/schemas/TaskSubmissionRecord/project_id`.
             public var project_id: Swift.String
             /// The sha256 digest of the submitted source text.
@@ -7670,7 +7683,8 @@ public enum Components {
             /// - Parameters:
             ///   - kind:
             ///   - command_id:
-            ///   - device_id:
+            ///   - origin:
+            ///   - device_id: The submitting device for a device-origin record; null exactly when origin is daemon.
             ///   - project_id:
             ///   - source_digest: The sha256 digest of the submitted source text.
             ///   - task_id: The task the command created or fetched by the intake key.
@@ -7679,7 +7693,8 @@ public enum Components {
             public init(
                 kind: Components.Schemas.TaskSubmissionRecord.kindPayload,
                 command_id: Swift.String,
-                device_id: Swift.String,
+                origin: Components.Schemas.TaskSubmissionOrigin,
+                device_id: Swift.String? = nil,
                 project_id: Swift.String,
                 source_digest: Components.Schemas.TaskSubmissionRecord.source_digestPayload,
                 task_id: Swift.String,
@@ -7688,6 +7703,7 @@ public enum Components {
             ) {
                 self.kind = kind
                 self.command_id = command_id
+                self.origin = origin
                 self.device_id = device_id
                 self.project_id = project_id
                 self.source_digest = source_digest
@@ -7698,6 +7714,7 @@ public enum Components {
             public enum CodingKeys: String, CodingKey {
                 case kind
                 case command_id
+                case origin
                 case device_id
                 case project_id
                 case source_digest
@@ -7715,7 +7732,11 @@ public enum Components {
                     Swift.String.self,
                     forKey: .command_id
                 )
-                self.device_id = try container.decode(
+                self.origin = try container.decode(
+                    Components.Schemas.TaskSubmissionOrigin.self,
+                    forKey: .origin
+                )
+                self.device_id = try container.decodeIfPresent(
                     Swift.String.self,
                     forKey: .device_id
                 )
@@ -7742,6 +7763,7 @@ public enum Components {
                 try decoder.ensureNoAdditionalProperties(knownKeys: [
                     "kind",
                     "command_id",
+                    "origin",
                     "device_id",
                     "project_id",
                     "source_digest",

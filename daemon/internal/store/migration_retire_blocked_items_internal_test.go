@@ -171,7 +171,8 @@ func forgetRetireBlockedItems(t *testing.T, ctx context.Context, db *sql.DB) {
 		'0105_admitted_image_pointers.sql',
 		'0106_schedules_image_upkeep.sql',
 		'0107_run_hold_image_upkeep.sql',
-		'0108_image_upkeep.sql')`); err != nil {
+		'0108_image_upkeep.sql',
+		'0109_task_submission_origin.sql')`); err != nil {
 		t.Fatal(err)
 	}
 }

@@ -1711,6 +1711,24 @@ extension MockServerTests {
                 .init(kind: .submit_task, project_id: project, source: source, name: name)))
     }
 
+    @Test func submitTaskTrustRejectsDaemonOriginRecord() async throws {
+        let client = APIClientFactory.mock(server: MockServer())
+        let command = submitTaskCommand("cmd-origin", project: "project-1", source: "Add retries.")
+        let result = try await client.submitCommand(body: .json(command)).ok.body.json
+        guard case .submit_task(var record) = result.record else {
+            Issue.record("expected a submit_task record")
+            return
+        }
+        #expect(record.origin == .device)
+        #expect(CommandResultTrust.accepts(result, for: command))
+        // Project-image upkeep's daemon-origin submission names no device, so
+        // it can never be the answer to this device's command.
+        record.origin = .daemon
+        record.device_id = nil
+        let forged = Components.Schemas.CommandResult(record: .submit_task(record), revision: result.revision)
+        #expect(!CommandResultTrust.accepts(forged, for: command))
+    }
+
     @Test func submitTaskCreatesReplaysAndConverges() async throws {
         let client = APIClientFactory.mock(server: MockServer())
         let first = try await client.submitCommand(
