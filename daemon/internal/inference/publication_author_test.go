@@ -89,6 +89,17 @@ func TestPublicationAuthorSiteContracts(t *testing.T) {
 		propose.Annotation != nil {
 		t.Fatalf("propose contract = %+v", propose)
 	}
+	// The explain instruction names the publisher-owned parts, forbids
+	// mentioning their omission, and keeps the other template sections; the
+	// digest golden alone would let a reword drop any of these and just be
+	// regenerated.
+	for _, part := range []string{
+		"source-issue reference", "Verification section", "never mention the omission", "keep every other template section",
+	} {
+		if !strings.Contains(explain.Instruction, part) {
+			t.Errorf("explain instruction does not carry %q", part)
+		}
+	}
 	// Both sites register together with the five existing sites.
 	client, _, _ := testClient(t, nil, 10)
 	if !client.SupportsSite(inference.PublicationAuthorExplainSiteID) ||

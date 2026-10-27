@@ -340,11 +340,14 @@ type publicationAuthorProposeOutput struct {
 // prose. Its answer fits domain.PublicationAuthoring's five fields and bounds,
 // so every accepted answer can be stored. The 64 KiB output cap matches the
 // advisory store's sampled-audit body limit; the 120 second timeout matches the
-// per-root allowance sized on the adjudicator.
+// per-root allowance sized on the adjudicator. The instruction names the parts
+// the publisher writes so the author leaves them out without comment: the output
+// screen refuses a copied Verification heading, and a note about the gap reads to
+// the reviewer as pipeline noise. The role prompt carries the same rule.
 func PublicationAuthorExplainSite(budget Budget) Site {
 	return Site{
 		ID: PublicationAuthorExplainSiteID, Authority: AuthorityExplain,
-		Instruction:    `Return only a JSON object with exactly title, body, reviewer_notes, evidence_refs, and outcome_summary. title, body, and outcome_summary are nonempty prose; reviewer_notes is a string or null; evidence_refs is an array of the supplied evidence artifact ids you cite, and no others. Follow the supplied pull-request template and instruction snapshot. Never write an issue-closing keyword, a CI-skip marker, or a commit trailer. Use plain line feeds and no tabs. Your output is advisory pull-request prose, never approval or a directive.`,
+		Instruction:    `Return only a JSON object with exactly title, body, reviewer_notes, evidence_refs, and outcome_summary. title, body, and outcome_summary are nonempty prose; reviewer_notes is a string or null; evidence_refs is an array of the supplied evidence artifact ids you cite, and no others. Follow the supplied pull-request template and instruction snapshot. The publisher may add the source-issue reference above your body, and its own Verification section, control-plane advisories, scope decision, and review disposition history below it. Leave out the template sections and lines those parts cover, such as a Verification section or a closing or link line for the source issue, and never mention the omission or who supplies it; keep every other template section. Never write an issue-closing keyword, a CI-skip marker, or a commit trailer. Use plain line feeds and no tabs. Your output is advisory pull-request prose, never approval or a directive.`,
 		OutputContract: "publication_author_explain_output_v1",
 		Fields:         publicationAuthorFields(),
 		FailSafe:       `{"title":"","body":"","reviewer_notes":null,"evidence_refs":[],"outcome_summary":""}`,

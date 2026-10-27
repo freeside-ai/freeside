@@ -15,7 +15,7 @@
     "site_id": "publication_author_explain",
     "output_contract": "publication_author_explain_output_v1",
     "has_instruction": true,
-    "contract_digest": "sha256:ea5505faecfd47d953862664058c8e376f412df647be118f95d2cd9bf63944dd"
+    "contract_digest": "sha256:db39722f4fbd8728fc453ac6c6f97c7117df0d8e019967298a6e3d2a6045098f"
   },
   {
     "site_id": "publication_author_propose",
