@@ -2322,6 +2322,16 @@ container volume, not a host path.
 | `timeouts` | `writer_stop`, `writer_stall`: Go durations |
 | `build` | `proxy`, `base_build_ref`, `dns` |
 
+`repository.project` is the project ID that `submit -project` and the
+manual-submission file repeat. Use the managed repository's name (`gh-imgup`
+for `freeasinbird/gh-imgup`) and keep it the same on every root and run. The
+clients show the ID as the project's name (the run title and the project
+filter), and a reused root that changes it splits one project's records in
+two. Each root has its own database, so no run, wave, or date suffix is needed
+to keep runs apart. The exit run's fixture pass is the one exception: it keeps
+the `fixture` its settings table fixes
+([Rehearse Before The Real Run](../docs/production-walkthrough.md#rehearse-before-the-real-run)).
+
 The deputy fixes, rather than reads from settings, the Claude driver, unattended
 mode, run conformance, provider-only egress to `api.anthropic.com:443`, and
 an 8 GiB review workspace. The supervision deadline stays a `submit` flag.

@@ -166,7 +166,9 @@ with a partial run.
 - **The inputs are complete:** every input of the derived mode
   (docs/production-walkthrough.md, The Inputs And What Refuses Them), read
   against the daemon guide's settings table in this session, since the
-  table changes, and the record's `inputs` checks passed. One input only
+  table changes, and the record's `inputs` checks passed. The project ID
+  is the managed repository's name, the same on every run, with no run or
+  wave suffix (the daemon guide's rule under that table). One input only
   you can judge: a stale prompt package passes every check, so confirm the
   packages come from the approved default-branch commit. The fixture pass
   exercises the CLI-mode inputs; in client-target mode the real run's
