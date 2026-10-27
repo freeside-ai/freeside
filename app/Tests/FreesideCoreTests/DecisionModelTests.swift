@@ -1474,7 +1474,7 @@ import Testing
         await model.submit(.adjudicate_findings)
         #expect(model.appliedRecord == nil)
         await model.submitFindingRoutes([
-            .init(finding_id: "finding-1", route: .decline),
+            .init(finding_id: "finding-1", route: .decline, reason: "Out of scope."),
             .init(finding_id: "finding-2", route: ._defer),
         ])
         #expect(model.appliedRecord?.action == .adjudicate_findings)
@@ -1486,14 +1486,50 @@ import Testing
         let findings = try #require(seed.item.review_dispute?.value1.findings)
         #expect(DecisionDetailView.selectedFindingRoutes(findings, selections: ["finding-2": ._defer]).isEmpty)
         let choices = DecisionDetailView.selectedFindingRoutes(
-            findings, selections: ["finding-1": .decline, "finding-2": ._defer])
-        #expect(choices == [.init(finding_id: "finding-1", route: .decline)])
+            findings, selections: ["finding-1": .decline, "finding-2": ._defer],
+            reasons: ["finding-1": " Out of scope.\n"])
+        #expect(choices == [.init(finding_id: "finding-1", route: .decline, reason: "Out of scope.")])
         let store = await makeStore(server: MockServer(items: [seed]))
         let model = DecisionModel(store: store, itemID: seed.item.id)
         await model.validate()
         await model.submitFindingRoutes(choices)
         #expect(model.snapshot?.item.status == .resolved)
-        #expect(model.appliedRecord?.message == #"[{"finding_id":"finding-1","route":"decline"}]"#)
+        #expect(
+            model.appliedRecord?.message
+                == #"[{"finding_id":"finding-1","route":"decline","reason":"Out of scope."}]"#)
+    }
+
+    /// Apply waits for a sendable reason on each route that replies in an
+    /// external thread, and a kept draft never rides on a route that does
+    /// not reply.
+    @Test func disputeRoutesCarryAReasonOnlyWhereTheyReply() throws {
+        let findings = try #require(AttentionFixtures.routedReviewDispute().item.review_dispute?.value1.findings)
+        let declined: [String: Components.Schemas.AdjudicationRoute] = ["finding-1": .decline, "finding-2": ._defer]
+        func ready(_ selections: [String: Components.Schemas.AdjudicationRoute], _ reasons: [String: String]) -> Bool {
+            DecisionDetailView.findingRoutesReady(findings, selections: selections, reasons: reasons)
+        }
+        #expect(!ready(declined, [:]))
+        #expect(!ready(declined, ["finding-1": "  \n"]))
+        #expect(!ready(declined, ["finding-1": String(repeating: "a", count: 2049)]))
+        #expect(!ready(declined, ["finding-2": "Out of scope."]))
+        #expect(ready(declined, ["finding-1": "Out of scope."]))
+        #expect(!ready(["finding-1": .decline], ["finding-1": "Out of scope."]))
+
+        let remediated: [String: Components.Schemas.AdjudicationRoute] = [
+            "finding-1": .remediate, "finding-2": .decline,
+        ]
+        let reasons = ["finding-1": "Kept draft.", "finding-2": "Internal."]
+        #expect(ready(remediated, [:]))
+        #expect(
+            DecisionDetailView.selectedFindingRoutes(findings, selections: remediated, reasons: reasons)
+                == [.init(finding_id: "finding-1", route: .remediate), .init(finding_id: "finding-2", route: .decline)])
+        #expect(
+            DecisionDetailView.selectedFindingRoutes(
+                findings, selections: ["finding-1": ._defer, "finding-2": .decline], reasons: reasons)
+                == [
+                    .init(finding_id: "finding-1", route: ._defer, reason: "Kept draft."),
+                    .init(finding_id: "finding-2", route: .decline),
+                ])
     }
 
     @Test func findingAlternativeControlSubmitsTypedChoice() async {

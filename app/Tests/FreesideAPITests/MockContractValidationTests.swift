@@ -1064,6 +1064,31 @@ import Testing
                 == MockContractValidation.sha256Digest(of: goJSON))
     }
 
+    /// The daemon stores an adjudicate_findings message as Go's
+    /// `json.Marshal([]signet.FindingRouteChoice)` of the trimmed choices;
+    /// the reference bytes come from that call. A trust gate that disagreed
+    /// would reject every reasoned decision the daemon accepted.
+    @Test func findingRoutesMessageMatchesGoBytes() {
+        let routes: [Components.Schemas.FindingRouteChoice] = [
+            .init(finding_id: "finding-2", route: ._defer),
+            .init(
+                finding_id: "finding-1", route: .decline,
+                reason: "  Not <b>this</b> & \"that\":\na/b \\ é \u{2028} done.\n "),
+        ]
+        let goJSON =
+            #"[{"finding_id":"finding-1","route":"decline","reason":"Not \u003cb\u003ethis\u003c/b\u003e \u0026 \"that\":\na/b \\ é \u2028 done."},{"finding_id":"finding-2","route":"defer"}]"#
+
+        #expect(CommandResultTrust.findingRoutesMessage(routes) == goJSON)
+    }
+
+    @Test func findingRouteReasonIsSendableOnlyTrimmedAndBounded() {
+        typealias Choice = Components.Schemas.FindingRouteChoice
+        #expect(Choice.sendableReason("  Out of scope.\n") == "Out of scope.")
+        #expect(Choice.sendableReason(" \n\t ") == nil)
+        #expect(Choice.sendableReason(String(repeating: "é", count: 1024)) != nil)
+        #expect(Choice.sendableReason(String(repeating: "é", count: 1024) + "a") == nil)
+    }
+
     // Every fixture passes the full validity check, each text claim's digest
     // recomputes from its content, and the summary claim appears exactly on
     // the types that carry §9's summary layer (the purely mechanical

@@ -1618,6 +1618,16 @@ public actor MockServer {
             else {
                 throw InvalidFindingAdjudicationDecisionError(reason: "finding routes are incomplete or not offered")
             }
+            // A decline or defer on an external finding posts a reply, so it
+            // needs the operator's reason; every other choice refuses one.
+            for choice in choices {
+                let external = findings.first { $0.finding_id == choice.finding_id }?.external != nil
+                let repliesExternally = external && (choice.route == .decline || choice.route == ._defer)
+                guard repliesExternally == !(choice.reason ?? "").isEmpty else {
+                    throw InvalidFindingAdjudicationDecisionError(
+                        reason: "finding route reason is missing, not allowed, or invalid")
+                }
+            }
         case .concludes(_) where payload.action == .choose_alternative_route:
             guard let binding = current.item.finding_adjudication?.value1,
                 let choices = payload.alternative_choices
@@ -2415,7 +2425,9 @@ public actor MockServer {
     ) -> Components.Schemas.AttentionItem.conclusionPayload {
         let routes: [Components.Schemas.AlternativeChoice]? =
             switch payload.action {
-            case .adjudicate_findings: payload.finding_routes
+            case .adjudicate_findings:
+                // The conclusion records each route, never the reply reason.
+                payload.finding_routes?.map { .init(finding_id: $0.finding_id, route: $0.route) }
             case .choose_alternative_route: payload.alternative_choices
             default: nil
             }

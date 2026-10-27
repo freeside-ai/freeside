@@ -784,7 +784,7 @@ public final class DecisionModel {
         )
     }
 
-    public func submitFindingRoutes(_ routes: [Components.Schemas.AlternativeChoice]) async {
+    public func submitFindingRoutes(_ routes: [Components.Schemas.FindingRouteChoice]) async {
         await submit(.adjudicate_findings, findingRoutes: routes)
     }
 
@@ -795,7 +795,7 @@ public final class DecisionModel {
         effectRevision: Components.Schemas.EffectProposalRevisionInput? = nil,
         snoozeUntil: Date? = nil,
         alternativeChoices: [Components.Schemas.AlternativeChoice]? = nil,
-        findingRoutes: [Components.Schemas.AlternativeChoice]? = nil,
+        findingRoutes: [Components.Schemas.FindingRouteChoice]? = nil,
         message: String? = nil,
         answerRoute: Components.Schemas.AnswerRoute? = nil,
         reviewedSnapshot: Components.Schemas.AttentionItemSnapshot? = nil,

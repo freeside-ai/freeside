@@ -87,7 +87,7 @@ func TestFindingAdjudicationAcceptsEachAnswer(t *testing.T) {
 					CommandID: "answer-waiting", DeviceID: "device-test", ExpectedEntityVersion: snapshot.EntityVersion,
 					Payload: signet.DecisionPayload{
 						ItemID: item.ID, ItemVersion: item.ItemVersion, PRHeadSHA: item.PRHeadSHA, ArtifactDigests: item.ArtifactDigests,
-						Action: domain.ActionAdjudicateFindings, FindingRoutes: []signet.AlternativeChoice{{FindingID: waiting.FindingID, Route: domain.RouteDecline}},
+						Action: domain.ActionAdjudicateFindings, FindingRoutes: []signet.FindingRouteChoice{{FindingID: waiting.FindingID, Route: domain.RouteDecline}},
 					},
 				}
 				if _, err := f.signet.Submit(f.ctx, command); err != nil {

@@ -1193,6 +1193,17 @@ enum MockContractValidation {
                 payload.effect_proposal_revision == nil, payload.snooze_until == nil,
                 payload.capability_manifest_digest == nil
             else { throw malformed("invalid finding_routes") }
+            // The daemon's canonical message refuses a reason that trims to
+            // nothing or past the bound with ErrFindingRouteReasonInvalid (400)
+            // before it reads the item.
+            let reasonsSendable = choices.allSatisfy { choice in
+                (choice.reason ?? "").isEmpty
+                    || Components.Schemas.FindingRouteChoice.sendableReason(choice.reason ?? "") != nil
+            }
+            guard reasonsSendable else {
+                throw MockServer.InvalidFindingAdjudicationDecisionError(
+                    reason: "finding route reason is missing, not allowed, or invalid")
+            }
         case .retry_with_capabilities:
             guard let digest = payload.capability_manifest_digest?.value1,
                 !digest.isEmpty,
@@ -1519,7 +1530,7 @@ enum MockContractValidation {
         return sha256Digest(of: "[\(body)]")
     }
 
-    private static func goJSONString(_ value: String) -> String {
+    static func goJSONString(_ value: String) -> String {
         guard let encoded = try? JSONEncoder().encode(value) else {
             preconditionFailure("String JSON encoding cannot fail")
         }

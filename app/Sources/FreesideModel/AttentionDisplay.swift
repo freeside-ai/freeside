@@ -185,6 +185,28 @@ package enum AttentionDisplay {
         }
     }
 
+    /// Whether a route posts a reply in an external finding's thread: Decline
+    /// and Reply and Defer and Reply. The daemon requires the operator's
+    /// reason on exactly these and refuses one on any other route.
+    package static func disputeRouteRepliesExternally(
+        _ route: Components.Schemas.AdjudicationRoute, external: Bool
+    ) -> Bool {
+        external && (route == .decline || route == ._defer)
+    }
+
+    /// The prompt in the reply reason field of a replying route.
+    package static let disputeReplyReasonPlaceholder = "Reason for the reply"
+
+    /// The line under the reply reason field: where the reason goes, and
+    /// why Apply waits while the draft is blank or too long to send.
+    package static func disputeReplyReasonHint(_ draft: String) -> String {
+        let bytes = draft.trimmingCharacters(in: .whitespacesAndNewlines).utf8.count
+        if bytes == 0 { return "Required. Posted with the reply in the reviewer's thread." }
+        return bytes > Components.Schemas.FindingRouteChoice.maxReasonBytes
+            ? "Too long to post. Shorten it to send the reply."
+            : "Posted with the reply in the reviewer's thread."
+    }
+
     /// The mark on the offered route the adjudicator favored. The model's
     /// route is "favored", not "recommended": a recommendation is what an
     /// accept-all action applies, and this one fell below the dispatch

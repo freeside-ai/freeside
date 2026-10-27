@@ -211,7 +211,7 @@ func TestReviewDisputeLeanNeverWidensChoices(t *testing.T) {
 			Payload: signet.DecisionPayload{
 				ItemID: item.ID, Action: domain.ActionAdjudicateFindings, ItemVersion: item.ItemVersion,
 				PRHeadSHA: item.PRHeadSHA, ArtifactDigests: item.ArtifactDigests,
-				FindingRoutes: []signet.AlternativeChoice{{FindingID: f.finding.ID, Route: route}},
+				FindingRoutes: []signet.FindingRouteChoice{{FindingID: f.finding.ID, Route: route}},
 			},
 		})
 		return err

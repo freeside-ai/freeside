@@ -87,7 +87,7 @@ type DecisionPayload struct {
 	EffectProposalRevision   *EffectProposalRevisionInput
 	SnoozeUntil              *time.Time
 	AlternativeChoices       []AlternativeChoice
-	FindingRoutes            []AlternativeChoice `json:",omitempty"`
+	FindingRoutes            []FindingRouteChoice `json:",omitempty"`
 	CapabilityManifestDigest *domain.Digest
 	// TaskLines are per-role agent choices for the task a task_proposal start
 	// creates (plan §5.4). Nil means absent. No decision applies them yet, so
@@ -111,6 +111,18 @@ type DecisionPayload struct {
 type AlternativeChoice struct {
 	FindingID domain.FindingID         `json:"finding_id"`
 	Route     domain.AdjudicationRoute `json:"route"`
+}
+
+// FindingRouteChoice is one disputed finding's route in an adjudicate_findings
+// decision. Reason is the person's own words for declining or deferring an
+// external finding, which the reply in the reviewer's thread posts; every
+// other choice carries none (validateReviewDisputeDecision). omitempty keeps
+// a reasonless choice's canonical message byte-identical to one stored before
+// reasons existed, which the store gate re-marshals.
+type FindingRouteChoice struct {
+	FindingID domain.FindingID         `json:"finding_id"`
+	Route     domain.AdjudicationRoute `json:"route"`
+	Reason    string                   `json:"reason,omitempty"`
 }
 
 // TaskProposalRevisionInput deliberately omits SubjectHandle. The store keeps
@@ -152,7 +164,7 @@ func decisionMessage(payload DecisionPayload) (string, error) {
 			payload.CapabilityManifestDigest != nil {
 			return "", ErrInvalidReviewDisputeDecisionPayload
 		}
-		message, err := canonicalAlternativeChoices(payload.FindingRoutes)
+		message, err := canonicalFindingRoutes(payload.FindingRoutes)
 		if err != nil {
 			return "", fmt.Errorf("%w: %w", ErrInvalidReviewDisputeDecisionPayload, err)
 		}

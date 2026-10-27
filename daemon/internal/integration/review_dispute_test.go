@@ -79,7 +79,7 @@ func TestExternalReviewDisputeHumanDecisionSurvivesRestart(t *testing.T) {
 				CommandID: "external-human-decision", DeviceID: "human-device", ExpectedEntityVersion: snapshot.EntityVersion,
 				Payload: signet.DecisionPayload{
 					ItemID: item.ID, ItemVersion: item.ItemVersion, PRHeadSHA: item.PRHeadSHA, ArtifactDigests: item.ArtifactDigests, Action: domain.ActionAdjudicateFindings,
-					FindingRoutes: []signet.AlternativeChoice{{FindingID: finding.ID, Route: route}},
+					FindingRoutes: []signet.FindingRouteChoice{externalChoice(finding.ID, route)},
 				},
 			}); err != nil {
 				t.Fatal(err)

@@ -1,0 +1,3 @@
+A maintainer deferred this finding.
+
+Reason: The <input> is already checked by `Validate`.

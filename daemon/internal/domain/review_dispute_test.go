@@ -2,8 +2,10 @@ package domain_test
 
 import (
 	"encoding/json"
+	"errors"
 	"reflect"
 	"slices"
+	"strings"
 	"testing"
 	"time"
 
@@ -24,6 +26,45 @@ func TestReviewDisputeRoutesRespectCanonicalScope(t *testing.T) {
 	}
 }
 
+// TestHumanAdjudicationEntryCarriesTheReason pins a person's reason as the
+// entry's rationale, the golden of such an entry, and the refusals (#2352).
+func TestHumanAdjudicationEntryCarriesTheReason(t *testing.T) {
+	entry, err := domain.NewHumanAdjudicationEntry("finding-1", domain.RouteDecline, "The handle is closed by the caller.")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if entry.Rationale != "The handle is closed by the caller." || entry.HumanReason() != entry.Rationale {
+		t.Fatalf("entry = %#v", entry)
+	}
+	body, err := json.MarshalIndent(entry, "", "  ")
+	if err != nil {
+		t.Fatal(err)
+	}
+	golden.Assert(t, "finding_adjudication_entry_human_reason", append(body, '\n'))
+	reasonless, err := domain.NewHumanAdjudicationEntry("finding-1", domain.RouteDefer, "")
+	if err != nil || reasonless.Rationale != domain.HumanAdjudicationRationale || reasonless.HumanReason() != "" {
+		t.Fatalf("reasonless entry = %#v, %v", reasonless, err)
+	}
+	model := domain.FindingAdjudicationEntry{Producer: domain.AdjudicationProducerModel, Rationale: "A model's view."}
+	if model.HumanReason() != "" {
+		t.Fatal("a model rationale read as a person's reason")
+	}
+	for name, tc := range map[string]struct {
+		route  domain.AdjudicationRoute
+		reason string
+	}{
+		"remediate":  {domain.RouteRemediate, "Fix it."},
+		"untrimmed":  {domain.RouteDecline, " why"},
+		"blank":      {domain.RouteDecline, " "},
+		"invalid":    {domain.RouteDecline, "why \xff"},
+		"over bound": {domain.RouteDefer, strings.Repeat("x", domain.MaxHumanAdjudicationReasonBytes+1)},
+	} {
+		if _, err := domain.NewHumanAdjudicationEntry("finding-1", tc.route, tc.reason); !errors.Is(err, domain.ErrInvalidHumanAdjudicationReason) {
+			t.Errorf("%s: error = %v", name, err)
+		}
+	}
+}
+
 func TestReviewDisputeBindingPreservesUnfingerprintableMessage(t *testing.T) {
 	row := domain.DisputedFinding{
 		FindingID: "finding-1", Message: " \t\n", Severity: domain.FindingSeverityP1,
@@ -40,7 +81,7 @@ func TestReviewDisputeBindingPreservesUnfingerprintableMessage(t *testing.T) {
 
 func TestHumanFindingAdjudicationGoldenAndRoundTrip(t *testing.T) {
 	decision := domain.AdjudicationDecision{CommandID: "human-command", ItemID: domain.ProductionFindingAdjudicationItemID("run-human", 1, 1), ItemVersion: 2}
-	entry, err := domain.NewHumanAdjudicationEntry("finding-1", domain.RouteDecline)
+	entry, err := domain.NewHumanAdjudicationEntry("finding-1", domain.RouteDecline, "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -139,7 +180,7 @@ func TestDisputedFindingAdjudicationFor(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	human, err := domain.NewHumanAdjudicationEntry("f", domain.RouteDefer)
+	human, err := domain.NewHumanAdjudicationEntry("f", domain.RouteDefer, "")
 	if err != nil {
 		t.Fatal(err)
 	}

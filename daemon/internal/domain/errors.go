@@ -253,6 +253,7 @@ var (
 	ErrInvalidWorkUnitCompatibility       = errors.New("invalid finding-adjudication work-unit compatibility")
 	ErrInvalidProposedCompatibility       = errors.New("invalid finding-adjudication proposed compatibility")
 	ErrInvalidAdjudicationRoute           = errors.New("invalid finding-adjudication route")
+	ErrInvalidHumanAdjudicationReason     = errors.New("invalid human finding-adjudication reason")
 	ErrInvalidAdjudicationProducer        = errors.New("invalid finding-adjudication producer")
 	ErrInvalidAdjudicationConfidence      = errors.New("invalid finding-adjudication confidence")
 	ErrInvalidDispatchThreshold           = errors.New("invalid finding-adjudication dispatch threshold")

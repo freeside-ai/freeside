@@ -18,7 +18,6 @@ import (
 	"github.com/freeside-ai/freeside/daemon/internal/exec/fake"
 	"github.com/freeside-ai/freeside/daemon/internal/inference"
 	inferencefake "github.com/freeside-ai/freeside/daemon/internal/inference/fake"
-	"github.com/freeside-ai/freeside/daemon/internal/signet"
 	"github.com/freeside-ai/freeside/daemon/internal/store"
 )
 
@@ -995,7 +994,7 @@ func TestExternalReviewCycleNeverDismissesAnUnratedFindingAlone(t *testing.T) {
 	if dispositions := p.externalDispositions(t); len(dispositions) != 0 {
 		t.Fatalf("an unrated finding was dismissed without a person: %#v", dispositions)
 	}
-	command := p.externalDisputeCommand(t, end.reviewItems[0], signet.AlternativeChoice{FindingID: finding.ID, Route: domain.RouteDecline})
+	command := p.externalDisputeCommand(t, end.reviewItems[0], externalChoice(finding.ID, domain.RouteDecline))
 	if _, err := p.attention.Submit(p.ctx, command); err != nil {
 		t.Fatal(err)
 	}

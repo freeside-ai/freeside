@@ -3519,12 +3519,15 @@ components:
           type: array
           minItems: 1
           items:
-            $ref: "#/components/schemas/AlternativeChoice"
+            $ref: "#/components/schemas/FindingRouteChoice"
           description: >
             Complete per-finding routes for adjudicate_findings. Every finding
             in the dispute's findings list must occur exactly once, with an
             offered route. Routes for findings outside that list are refused,
-            including bound findings already routed. Absent for every other action.
+            including bound findings already routed. A decline or defer on a
+            finding whose dispute row has external requires a reason, which
+            the reply in the reviewer's thread posts; every other choice
+            refuses one. Absent for every other action.
         task_lines:
           type: array
           minItems: 1
@@ -7377,6 +7380,29 @@ components:
           minLength: 1
         route:
           $ref: "#/components/schemas/AdjudicationRoute"
+
+    FindingRouteChoice:
+      type: object
+      description: >
+        The operator-selected offered route for one disputed finding, with
+        the operator's reason when the route replies to an external reviewer.
+      additionalProperties: false
+      required: [finding_id, route]
+      properties:
+        finding_id:
+          type: string
+          minLength: 1
+        route:
+          $ref: "#/components/schemas/AdjudicationRoute"
+        reason:
+          type: string
+          minLength: 1
+          description: >
+            Why the operator declines or defers an external finding, posted as
+            written in the reviewer's thread. Required on decline and defer
+            for a finding whose dispute row has external, and refused on every
+            other choice. The daemon trims it and stores the trimmed text,
+            which must be non-blank valid UTF-8 of at most 2048 bytes.
 
     CodexReenrollmentRecoveryBinding:
       type: object

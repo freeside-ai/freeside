@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"slices"
 	"sort"
+	"strings"
 
 	"github.com/freeside-ai/freeside/daemon/internal/domain"
 	"github.com/freeside-ai/freeside/daemon/internal/store"
@@ -42,6 +43,59 @@ func decodeAlternativeChoices(message string) ([]AlternativeChoice, error) {
 		return nil, ErrInvalidFindingAdjudicationDecisionPayload
 	}
 	canonical, err := canonicalAlternativeChoices(choices)
+	if err != nil {
+		return nil, err
+	}
+	if canonical != message {
+		return nil, ErrInvalidFindingAdjudicationDecisionPayload
+	}
+	return choices, nil
+}
+
+// canonicalFindingRoutes is canonicalAlternativeChoices for adjudicate_findings,
+// whose choices may carry a reason. It trims each reason, so the stored
+// message holds the text the reply will post; a reason that trims to nothing
+// is refused rather than read as absent. Whether a choice needs a reason
+// depends on its dispute row, which validateReviewDisputeDecision checks.
+func canonicalFindingRoutes(choices []FindingRouteChoice) (string, error) {
+	canonical := slices.Clone(choices)
+	sort.Slice(canonical, func(left, right int) bool {
+		return canonical[left].FindingID < canonical[right].FindingID
+	})
+	for index, choice := range canonical {
+		if choice.FindingID == "" || !slices.Contains(domain.AllAdjudicationRoutes, choice.Route) {
+			return "", ErrInvalidFindingAdjudicationDecisionPayload
+		}
+		if index > 0 && canonical[index-1].FindingID == choice.FindingID {
+			return "", ErrInvalidFindingAdjudicationDecisionPayload
+		}
+		if choice.Reason != "" {
+			canonical[index].Reason = strings.TrimSpace(choice.Reason)
+			if !domain.ValidHumanAdjudicationReason(canonical[index].Reason) {
+				return "", ErrFindingRouteReasonInvalid
+			}
+		}
+	}
+	body, err := json.Marshal(canonical)
+	if err != nil {
+		return "", fmt.Errorf("%w: %w", ErrInvalidFindingAdjudicationDecisionPayload, err)
+	}
+	return string(body), nil
+}
+
+// decodeFindingRoutes reads an adjudicate_findings command message. It is the
+// only reader that accepts the reason key, and like decodeAlternativeChoices it
+// accepts only the canonical form canonicalFindingRoutes writes.
+func decodeFindingRoutes(message string) ([]FindingRouteChoice, error) {
+	var choices []FindingRouteChoice
+	if err := strictjson.Decode([]byte(message), &choices,
+		strictjson.RejectInvalidUTF8, domain.MaxFindingAdjudicationBytes); err != nil {
+		return nil, fmt.Errorf("%w: %w", ErrInvalidFindingAdjudicationDecisionPayload, err)
+	}
+	if len(choices) == 0 {
+		return nil, ErrInvalidFindingAdjudicationDecisionPayload
+	}
+	canonical, err := canonicalFindingRoutes(choices)
 	if err != nil {
 		return nil, err
 	}
