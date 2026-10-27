@@ -21,6 +21,9 @@ func TestRunHoldDetailMigrationKeepsOlderHolds(t *testing.T) {
 	// Return the store to the shape a daemon at 0102 holds, forgetting 0104
 	// and then 0103 so the recorded history stays contiguous.
 	for _, statement := range []string{
+		`DROP TABLE repository_tip_observations`,
+		`DROP TABLE image_upkeep_refusals`,
+		`DELETE FROM schema_migrations WHERE name = '0108_image_upkeep.sql'`,
 		`ALTER TABLE run_hold_observations DROP COLUMN upkeep_pending`,
 		`ALTER TABLE run_hold_observations DROP COLUMN upkeep_refusal_id`,
 		`ALTER TABLE run_hold_observations DROP COLUMN upkeep_item_id`,

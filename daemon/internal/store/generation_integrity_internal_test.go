@@ -349,7 +349,8 @@ FROM client_enrollment_generations`
 			entry.Name() == "0104_execution_outcome_cause.sql" ||
 			entry.Name() == "0105_admitted_image_pointers.sql" ||
 			entry.Name() == "0106_schedules_image_upkeep.sql" ||
-			entry.Name() == "0107_run_hold_image_upkeep.sql" || entry.IsDir() {
+			entry.Name() == "0107_run_hold_image_upkeep.sql" ||
+			entry.Name() == "0108_image_upkeep.sql" || entry.IsDir() {
 			continue
 		}
 		body, err := fs.ReadFile(migrations.FS, entry.Name())
