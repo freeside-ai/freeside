@@ -61,6 +61,7 @@ type onboardConfig struct {
 	ReviewConfig          string
 	CommitPlan            domain.CommitPlanMode
 	ExternalReviewers     []domain.ExternalReviewer
+	ProtectedPaths        domain.ProtectedPathConfig
 	Approval              string
 	Registry              string
 	LocalRegistryPort     int
@@ -101,6 +102,51 @@ func (v *externalReviewerList) Set(value string) error {
 	*v = append(*v, reviewer)
 	return nil
 }
+
+// protectedPathList collects repeatable -protected-path <class>=<pattern>
+// values into the trust profile's widening of each protected-path class.
+// Patterns keep the order given: parseOnboardConfig validates the whole
+// config afterwards, so an unsorted or duplicate list is refused rather than
+// silently canonicalized into a widening the operator never typed.
+type protectedPathList domain.ProtectedPathConfig
+
+func (v *protectedPathList) String() string { return fmt.Sprint(*v) }
+
+func (v *protectedPathList) Set(value string) error {
+	class, pattern, ok := strings.Cut(value, "=")
+	if !ok {
+		return fmt.Errorf("%q is not <class>=<pattern>", value)
+	}
+	if pattern == "" {
+		return fmt.Errorf("%q has an empty pattern", value)
+	}
+	// Each class is its ProtectedPathConfig JSON field name without the
+	// extra_ prefix and _patterns suffix, so the review output names it.
+	var patterns *[]string
+	switch class {
+	case "automation_control":
+		patterns = &v.ExtraAutomationControlPatterns
+	case "reviewer_instruction":
+		patterns = &v.ExtraReviewerInstructionPatterns
+	case "git_metadata":
+		patterns = &v.ExtraGitMetadataPatterns
+	case "verification_control":
+		patterns = &v.ExtraVerificationControlPatterns
+	case "prompts_and_policy":
+		patterns = &v.ExtraPromptsAndPolicyPatterns
+	case "egress_and_trust":
+		patterns = &v.ExtraEgressAndTrustPatterns
+	case "materiality_rules":
+		patterns = &v.ExtraMaterialityRulesPatterns
+	default:
+		return fmt.Errorf("unknown protected-path class %q; valid classes: %s", class, protectedPathClasses)
+	}
+	*patterns = append(*patterns, pattern)
+	return nil
+}
+
+const protectedPathClasses = "automation_control, reviewer_instruction, git_metadata, " +
+	"verification_control, prompts_and_policy, egress_and_trust, materiality_rules"
 
 // parseExternalReviewer reads one <forge>:<account-id>:<login>=<authority>
 // entry. The authority is split at the last "=" and the login is everything
@@ -321,14 +367,7 @@ func runOnboardCommand(
 			RegistrationID: cfg.RegistrationID,
 			BaseRef:        cfg.BaseRef,
 			ApprovalDigest: domain.Digest(cfg.Approval),
-			Policy: operations.OnboardPolicy{
-				PRExecution:       domain.PRExecutionAuditedSameRepo,
-				CommitPlan:        cfg.CommitPlan,
-				MessageRuleset:    domain.MessageRulesetGitHub1,
-				ReviewMode:        domain.ReviewFreesideInvoked,
-				ReviewConfig:      domain.Digest(cfg.ReviewConfig),
-				ExternalReviewers: cfg.ExternalReviewers,
-			},
+			Policy:         onboardPolicy(cfg),
 			Image: projectimage.Request{
 				Repository: cfg.Repository, RepositoryID: cfg.RepositoryID,
 				CommitSHA: cfg.Commit, Recipe: recipe,
@@ -360,6 +399,21 @@ func runOnboardCommand(
 	return withDurableInstallationPoll(
 		ctx, st, authority, cfg.CredentialsDir, cfg.StateDir, cfg.RegistrationID, runOnboard,
 	)
+}
+
+// onboardPolicy is the trust policy the operator proposes for review. The
+// operation binds it into the approval digest, so every field here is one
+// the one-time review shows.
+func onboardPolicy(cfg onboardConfig) operations.OnboardPolicy {
+	return operations.OnboardPolicy{
+		PRExecution:       domain.PRExecutionAuditedSameRepo,
+		CommitPlan:        cfg.CommitPlan,
+		MessageRuleset:    domain.MessageRulesetGitHub1,
+		ReviewMode:        domain.ReviewFreesideInvoked,
+		ReviewConfig:      domain.Digest(cfg.ReviewConfig),
+		ExternalReviewers: cfg.ExternalReviewers,
+		ProtectedPaths:    cfg.ProtectedPaths,
+	}
 }
 
 // installationPendingNext tells the operator that the intent stays recorded
@@ -433,6 +487,7 @@ func parseOnboardConfig(args []string, output io.Writer) (onboardConfig, error) 
 	var commitPlan string
 	var dns stringList
 	var externalReviewers externalReviewerList
+	var protectedPaths protectedPathList
 	flags.StringVar(&cfg.DBPath, "db", "", "SQLite database path (required)")
 	flags.StringVar(&cfg.StateDir, "state-dir", "", "GitHub App authority state directory (required)")
 	flags.Int64Var(&cfg.RegistrationID, "registration-id", 0, "selected numeric GitHub App ID (required)")
@@ -470,6 +525,9 @@ func parseOnboardConfig(args []string, output io.Writer) (onboardConfig, error) 
 	flags.Var(&externalReviewers, "external-reviewer",
 		"reviewer outside Freeside whose findings on a published pull request may start a review round, "+
 			"as github:<account-id>:<login>=drive_round with the login spelled as GitHub returns it; repeatable")
+	flags.Var(&protectedPaths, "protected-path",
+		"<class>=<pattern> widening a protected-path class; repeatable, patterns sorted "+
+			"and unique per class. Classes: "+protectedPathClasses)
 	flags.StringVar(&cfg.Approval, "approve", "", "exact proposed review digest; omit for the one-time review")
 	flags.StringVar(&cfg.Registry, "registry", "",
 		"shared registry host/path destination; a loopback host is refused, use -local-registry-port")
@@ -506,6 +564,10 @@ func parseOnboardConfig(args []string, output io.Writer) (onboardConfig, error) 
 	}
 	cfg.DNS = append([]string(nil), dns...)
 	cfg.ExternalReviewers = slices.Clone([]domain.ExternalReviewer(externalReviewers))
+	cfg.ProtectedPaths = domain.ProtectedPathConfig(protectedPaths)
+	if err := cfg.ProtectedPaths.Validate(); err != nil {
+		return onboardConfig{}, fmt.Errorf("-protected-path: %w", err)
+	}
 	for _, required := range []struct {
 		name  string
 		value string

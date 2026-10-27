@@ -2001,6 +2001,23 @@ intent revision and returns `installation_pending`, so the next review carries
 a new approval digest. That is the one Freeside manual review; a GitHub
 organization approval remains a separate native prerequisite.
 
+**`-protected-path <class>=<pattern>` widens a protected-path class.** Repeat
+it once per pattern. The class is the trust profile's
+`extra_<class>_patterns` field: `automation_control`, `reviewer_instruction`,
+`git_metadata`, `verification_control`, `prompts_and_policy`,
+`egress_and_trust`, or `materiality_rules`. The value splits at the first
+`=`. Give each class's patterns sorted and without duplicates: onboarding
+refuses an unsorted, duplicate, absolute, dot-segment, or malformed pattern
+before any store or network work rather than reorder it. The review shows
+the patterns under `profile.protected_paths` and the approval digest binds
+them, so adding or removing one needs a fresh review. The default patterns
+always apply. Without the flag the repository-specific classes (verification
+recipes, prompts and policy, egress and trust, materiality rules) protect no
+path, so an agent's edit to them draws no import finding. A match in
+`reviewer_instruction` is advisory and one in `git_metadata` is a waivable
+repository-change finding; a match in any other class holds publication as a
+non-waivable control-plane finding.
+
 **Each project image bakes one toolchain.** `-go-module-dir <dir>`, on both
 `freesided onboard` and `freeside-project-image`, declares a
 repository-relative Go module directory, which the review shows and the
@@ -2046,8 +2063,7 @@ its rooms, never the proof, so a recipe proven here fits any room. The
 margin that matters is unreclaimable memory (`anon`, `shmem`, and `kernel` in
 the cgroup's `memory.stat`): page cache fills the room on every step and is
 reclaimed under pressure, so `memory.peak` sits near the limit whatever the
-recipe does. The recipe sized for Freeside's own daemon module, which passes
-the proof once #2140 fixes its failing tests, is:
+recipe does. The recipe sized for Freeside's own daemon module is:
 
 ```sh
 env GOFLAGS=-p=2 GOMEMLIMIT=768MiB bash scripts/check.sh daemon build test vet lint
@@ -2056,18 +2072,20 @@ env GOFLAGS=-p=2 GOMEMLIMIT=768MiB bash scripts/check.sh daemon build test vet l
 `-p=2` halves the compile, vet, and test-package parallelism Go runs on 4
 CPUs, and `GOMEMLIMIT` sets each Go process's heap target, golangci-lint's
 included. Without them, lint's heap reaches the room's limit and the step
-slows under reclaim. Measured at `bee7979b`, one container per step:
+slows under reclaim. Freeside's `.freeside/verify.json` runs this command,
+then `bash scripts/check.sh docs`. Measured at `874a5de8` in Freeside's
+project image, one container per step, every step passing:
 
 | Step | Unreclaimable peak | Wall |
 | --- | --- | --- |
-| build | 774 MiB | 34 s |
-| test | 1201 MiB | 517 s |
-| vet | 1191 MiB | 56 s |
-| lint | 1183 MiB | 158 s |
+| build | 811 MiB | 37 s |
+| test | 1041 MiB | 295 s |
+| vet | 1279 MiB | 76 s |
+| lint | 1273 MiB | 201 s |
+| docs | 1 MiB | under 1 s |
 
-Each step started from a cold build cache on a loaded host, and `test` still
-fails on the root-sensitive and `ps`-dependent tests #2140 tracks. The
-decision and the rejected options are in
+Each step started from a cold build cache on a host at load average 30 to
+36. The decision and the rejected options are in
 `devlog/2026-10-22-1241-proof-memory-bound.md`.
 
 If the installation was terminally quarantined, start a fresh native
@@ -2273,6 +2291,43 @@ Operational results always state the operating mode and isolation class.
 currently active trust profile at import, where its protected paths are
 applied; an unattended admission remains bound to the exact profile digest it
 recorded before execution.
+
+### Onboard Freeside
+
+Freeside onboards itself for `daemon/` and `docs/` (plan §11, revision 92;
+`api/` and `scripts/` follow in #2376). It runs the `freesided onboard` flow
+above with these inputs. `-commit` must equal the live `-base-ref` head, so
+onboard from a `main` that already carries `.freeside/verify.json`.
+
+- **Recipe:** `.freeside/verify.json`, detected with `-source`. It runs the
+  daemon recipe sized above, then `bash scripts/check.sh docs`.
+- **Toolchain:** `-go-module-dir daemon`. The root has no `go.mod`.
+- **Protected paths:** exactly these flags, in this order. Quote each
+  pattern so the shell does not expand `**`.
+
+  ```sh
+  -protected-path 'automation_control=.githooks/**' \
+  -protected-path 'verification_control=.freeside/**' \
+  -protected-path 'verification_control=daemon/.golangci.yml' \
+  -protected-path 'verification_control=scripts/check-commit-messages.sh' \
+  -protected-path 'verification_control=scripts/check-migration-history.sh' \
+  -protected-path 'verification_control=scripts/check-vocabulary.sh' \
+  -protected-path 'verification_control=scripts/check.sh' \
+  -protected-path 'verification_control=scripts/daemon-test-shards.json' \
+  -protected-path 'verification_control=scripts/daemon-test-shards.py' \
+  -protected-path 'verification_control=scripts/link-plan-section-refs.sh' \
+  -protected-path 'prompts_and_policy=policy/**' \
+  -protected-path 'prompts_and_policy=prompts/**' \
+  -protected-path 'materiality_rules=docs/plan.md'
+  ```
+
+  `TestImportFreesideProtectedPaths` in `internal/importer` pins the same
+  list; change both together. `docs/plan.md` is protected whole, because a
+  path pattern cannot select §9, so every agent edit to the plan is a
+  control-plane hold. The reasons for each entry are in
+  `devlog/2026-10-27-1204-freeside-protected-paths.md`.
+- **Deputy scope:** set the deputy's `repository.allowed_paths` to
+  `["daemon/**", "docs/**"]`.
 
 ### Run Real Work With The Deputy
 

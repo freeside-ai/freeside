@@ -218,6 +218,126 @@ func TestParseOnboardConfigExternalReviewers(t *testing.T) {
 	}
 }
 
+func TestParseOnboardConfigProtectedPaths(t *testing.T) {
+	baseArgs := []string{
+		"example/repo",
+		"-db", "/tmp/freeside.db",
+		"-state-dir", "/tmp/freeside-state",
+		"-registration-id", "11",
+		"-repository-id", "44",
+		"-commit", "0123456789012345678901234567890123456789",
+		"-base-ref", "main",
+		"-base-image", "example.invalid/agent@sha256:test",
+		"-base-build-ref", "local/agent:test",
+		"-review-config-digest", "sha256:review",
+		"-recipe", "/tmp/verify.json",
+	}
+	t.Run("absent flag widens nothing", func(t *testing.T) {
+		cfg, err := parseOnboardConfig(baseArgs, io.Discard)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !reflect.DeepEqual(onboardPolicy(cfg).ProtectedPaths, domain.ProtectedPathConfig{}) {
+			t.Fatalf("ProtectedPaths = %+v, want every list nil", cfg.ProtectedPaths)
+		}
+	})
+	t.Run("each class fills its field and reaches the policy", func(t *testing.T) {
+		cfg, err := parseOnboardConfig(append(slices.Clone(baseArgs),
+			"-protected-path", "automation_control=.githooks/**",
+			"-protected-path", "reviewer_instruction=REVIEW.md",
+			"-protected-path", "git_metadata=.gitmodules.d/**",
+			"-protected-path", "verification_control=.freeside/**",
+			"-protected-path", "verification_control=scripts/check.sh",
+			"-protected-path", "prompts_and_policy=prompts/**",
+			"-protected-path", "egress_and_trust=egress/**",
+			"-protected-path", "materiality_rules=docs/plan.md",
+			"-protected-path", "materiality_rules=docs/rule=x.md",
+		), io.Discard)
+		if err != nil {
+			t.Fatal(err)
+		}
+		want := domain.ProtectedPathConfig{
+			ExtraAutomationControlPatterns:   []string{".githooks/**"},
+			ExtraReviewerInstructionPatterns: []string{"REVIEW.md"},
+			ExtraGitMetadataPatterns:         []string{".gitmodules.d/**"},
+			ExtraVerificationControlPatterns: []string{".freeside/**", "scripts/check.sh"},
+			ExtraPromptsAndPolicyPatterns:    []string{"prompts/**"},
+			ExtraEgressAndTrustPatterns:      []string{"egress/**"},
+			// The value splits at the first "=", so a pattern may hold one.
+			ExtraMaterialityRulesPatterns: []string{"docs/plan.md", "docs/rule=x.md"},
+		}
+		if got := onboardPolicy(cfg).ProtectedPaths; !reflect.DeepEqual(got, want) {
+			t.Fatalf("policy ProtectedPaths = %+v, want %+v", got, want)
+		}
+	})
+	for _, tt := range []struct {
+		name  string
+		value string
+	}{
+		{"unknown class", "verification_recipes=.freeside/**"},
+		{"field-name class", "extra_verification_control_patterns=.freeside/**"},
+		{"no equals sign", "verification_control"},
+		{"empty pattern", "verification_control="},
+		{"empty class", "=.freeside/**"},
+		{"empty value", ""},
+	} {
+		t.Run("rejects "+tt.name, func(t *testing.T) {
+			_, err := parseOnboardConfig(append(slices.Clone(baseArgs), "-protected-path", tt.value), io.Discard)
+			if err == nil {
+				t.Fatalf("accepted -protected-path %q", tt.value)
+			}
+		})
+	}
+}
+
+// TestOnboardRejectsNonCanonicalProtectedPathsBeforeStoreWork pins that the
+// command refuses a widening the profile would otherwise canonicalize or
+// record as unmatchable, with the profile validator's error, before it opens
+// the store: the -db parent does not exist, so any store work would fail
+// with a different error.
+func TestOnboardRejectsNonCanonicalProtectedPathsBeforeStoreWork(t *testing.T) {
+	recipePath := filepath.Join(t.TempDir(), "verify.json")
+	if err := os.WriteFile(
+		recipePath, []byte(`{"commands":[["go","test","./..."]],"capture":"none"}`), 0o600,
+	); err != nil {
+		t.Fatal(err)
+	}
+	for _, tt := range []struct {
+		name     string
+		patterns []string
+	}{
+		{"unsorted", []string{"scripts/check.sh", ".freeside/**"}},
+		{"duplicate", []string{".freeside/**", ".freeside/**"}},
+		{"absolute", []string{"/scripts/check.sh"}},
+		{"dot segment", []string{"scripts/../check.sh"}},
+		{"trailing slash", []string{"scripts/"}},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			args := []string{
+				"example/repo",
+				"-db", filepath.Join(t.TempDir(), "missing", "freeside.db"),
+				"-state-dir", t.TempDir(),
+				"-registration-id", "11",
+				"-repository-id", "44",
+				"-commit", "0123456789012345678901234567890123456789",
+				"-base-ref", "main",
+				"-base-image", "example.invalid/agent@sha256:test",
+				"-base-build-ref", "local/agent:test",
+				"-review-config-digest", "sha256:review",
+				"-recipe", recipePath,
+			}
+			for _, pattern := range tt.patterns {
+				args = append(args, "-protected-path", "verification_control="+pattern)
+			}
+			err := runOnboardCommand(t.Context(), args, io.Discard, io.Discard)
+			if !errors.Is(err, domain.ErrPatternsNotCanonical) ||
+				!strings.HasPrefix(err.Error(), "-protected-path: protected paths extra_verification_control_patterns") {
+				t.Fatalf("runOnboardCommand error = %v, want the -protected-path validation error", err)
+			}
+		})
+	}
+}
+
 func TestOnboardUsage(t *testing.T) {
 	for _, args := range [][]string{{"-h"}, {"example/repo", "-h"}, {"-db", "/tmp/freeside.db", "-h"}} {
 		t.Run(strings.Join(args, " "), func(t *testing.T) {
@@ -226,7 +346,7 @@ func TestOnboardUsage(t *testing.T) {
 			if !errors.Is(err, flag.ErrHelp) {
 				t.Fatalf("err = %v, want flag.ErrHelp", err)
 			}
-			for _, want := range []string{"Usage: freesided onboard <owner/name> [flags]", "-db"} {
+			for _, want := range []string{"Usage: freesided onboard <owner/name> [flags]", "-db", "-protected-path"} {
 				if !strings.Contains(output.String(), want) {
 					t.Fatalf("usage missing %q:\n%s", want, output.String())
 				}
