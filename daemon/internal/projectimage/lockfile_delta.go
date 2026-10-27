@@ -61,6 +61,22 @@ func refuseLockfile(clause RebuildRefusal, format string, args ...any) *lockfile
 	return &lockfileRefusal{clause: clause, detail: fmt.Sprintf(format, args...)}
 }
 
+// gateFindings collects every clause the gate refuses, in the order the gate
+// reaches them, keeping the first detail of each clause. The first finding
+// is the refusal the gate reported before it collected findings, which the
+// publication lane still reports alone; the upkeep job classifies them all.
+// One finding per clause bounds what a lockfile of thousands of entries adds.
+type gateFindings []lockfileRefusal
+
+func (f *gateFindings) add(refusal *lockfileRefusal) {
+	if refusal == nil || slices.ContainsFunc(*f, func(held lockfileRefusal) bool {
+		return held.clause == refusal.clause
+	}) {
+		return
+	}
+	*f = append(*f, *refusal)
+}
+
 // quotedLockfileText bounds and quotes candidate-written text for a refusal
 // detail: a lockfile key or URL can be megabytes long and hold any bytes.
 func quotedLockfileText(text string) string {
@@ -271,19 +287,22 @@ func enclosingPackage(key string) (string, bool) {
 }
 
 // examineChangedPackage applies the gate to one lock entry the candidate adds
-// or changes, and returns the declared host it resolves from.
+// or changes, adding each clause it fails to findings, and returns the host it
+// resolves from. A nil registries skips only the authority check: the run
+// declares no set to check a host against, which the gate refuses on its own.
 func examineChangedPackage(
-	key string, raw json.RawMessage, registries domain.RegistrySet,
-) (string, *lockfileRefusal) {
+	key string, raw json.RawMessage, registries *domain.RegistrySet, findings *gateFindings,
+) string {
 	quotedKey := quotedLockfileText(key)
 	if !lockfileKeyPattern.MatchString(key) {
-		return "", refuseLockfile(RebuildRefusalUnpinnedSource,
-			"package %s is not installed under node_modules by a plain package name", quotedKey)
+		findings.add(refuseLockfile(RebuildRefusalUnpinnedSource,
+			"package %s is not installed under node_modules by a plain package name", quotedKey))
 	}
 	entry, err := decodeObject(raw)
 	if err != nil {
-		return "", refuseLockfile(RebuildRefusalLockfileInconsistent,
-			"package-lock.json package %s %v", quotedKey, err)
+		findings.add(refuseLockfile(RebuildRefusalLockfileInconsistent,
+			"package-lock.json package %s %v", quotedKey, err))
+		return ""
 	}
 	var version, resolved, integrity string
 	for _, field := range slices.Sorted(maps.Keys(entry)) {
@@ -292,8 +311,9 @@ func examineChangedPackage(
 		case field == "version" || field == "resolved" || field == "integrity":
 			text, isString := jsonString(value)
 			if !isString {
-				return "", refuseLockfile(RebuildRefusalLockfileInconsistent,
-					"package-lock.json package %s has a malformed %s", quotedKey, field)
+				findings.add(refuseLockfile(RebuildRefusalLockfileInconsistent,
+					"package-lock.json package %s has a malformed %s", quotedKey, field))
+				continue
 			}
 			switch field {
 			case "version":
@@ -308,62 +328,65 @@ func examineChangedPackage(
 			// not pin: a local directory, another package's tarball, or a
 			// second lockfile inside this one's tarball.
 			if string(value) != "false" {
-				return "", refuseLockfile(RebuildRefusalUnpinnedSource,
-					"package %s is marked %s, so the lockfile does not pin its source", quotedKey, field)
+				findings.add(refuseLockfile(RebuildRefusalUnpinnedSource,
+					"package %s is marked %s, so the lockfile does not pin its source", quotedKey, field))
 			}
 		case slices.Contains(dependencyFields, field):
 			specs, err := dependencySpecs(entry, field)
 			if err != nil {
-				return "", refuseLockfile(RebuildRefusalLockfileInconsistent,
-					"package-lock.json package %s %v", quotedKey, err)
+				findings.add(refuseLockfile(RebuildRefusalLockfileInconsistent,
+					"package-lock.json package %s %v", quotedKey, err))
+				continue
 			}
 			for _, name := range slices.Sorted(maps.Keys(specs)) {
 				if !packageNameRegexp.MatchString(name) || !registrySpec(specs[name]) {
-					return "", refuseLockfile(RebuildRefusalUnpinnedSource,
+					findings.add(refuseLockfile(RebuildRefusalUnpinnedSource,
 						"package %s depends on %s as %s, which is not a registry version, range, or tag",
-						quotedKey, quotedLockfileText(name), quotedLockfileText(specs[name]))
+						quotedKey, quotedLockfileText(name), quotedLockfileText(specs[name])))
+					break
 				}
 			}
 		case slices.Contains(inertEntryFields, field):
 		default:
 			// Among them `name`, which an aliased entry is fetched under, and
 			// `bundleDependencies`.
-			return "", refuseLockfile(RebuildRefusalUnpinnedSource,
+			findings.add(refuseLockfile(RebuildRefusalUnpinnedSource,
 				"package %s carries %s, which the gate does not admit on a changed package",
-				quotedKey, quotedLockfileText(field))
+				quotedKey, quotedLockfileText(field)))
 		}
 	}
 	if !exactVersionPattern.MatchString(version) {
-		return "", refuseLockfile(RebuildRefusalUnpinnedSource,
-			"package %s has version %s, which is not an exact version", quotedKey, quotedLockfileText(version))
+		findings.add(refuseLockfile(RebuildRefusalUnpinnedSource,
+			"package %s has version %s, which is not an exact version", quotedKey, quotedLockfileText(version)))
 	}
 	if resolved == "" || !sha512IntegrityPattern.MatchString(integrity) {
-		return "", refuseLockfile(RebuildRefusalUnpinnedSource,
-			"package %s has no resolved URL or no sha512 integrity value", quotedKey)
+		findings.add(refuseLockfile(RebuildRefusalUnpinnedSource,
+			"package %s has no resolved URL or no sha512 integrity value", quotedKey))
 	}
 	source, err := url.Parse(resolved)
 	if err != nil || source.Scheme != "https" || source.Opaque != "" || source.User != nil {
-		return "", refuseLockfile(RebuildRefusalUnpinnedSource,
+		findings.add(refuseLockfile(RebuildRefusalUnpinnedSource,
 			"package %s resolves from %s, which is not an https registry URL",
-			quotedKey, quotedLockfileText(resolved))
+			quotedKey, quotedLockfileText(resolved)))
+		return ""
 	}
 	// The declared set holds bare lowercase host names. A port is part of the
 	// authority, so a URL that names one matches nothing declared. The literal
 	// prefix is the second half of the check: npm parses this string with a
 	// different URL parser, and a string that begins with exactly this scheme,
 	// host, and slash names that host to any parser.
-	if !slices.Contains(registries.Hosts, source.Host) ||
-		!strings.HasPrefix(resolved, "https://"+source.Host+"/") {
-		return "", refuseLockfile(RebuildRefusalUndeclaredAuthority,
+	if registries != nil && (!slices.Contains(registries.Hosts, source.Host) ||
+		!strings.HasPrefix(resolved, "https://"+source.Host+"/")) {
+		findings.add(refuseLockfile(RebuildRefusalUndeclaredAuthority,
 			"package %s resolves from %s, which the project's registry set does not declare",
-			quotedKey, quotedLockfileText(source.Host))
+			quotedKey, quotedLockfileText(source.Host)))
 	}
 	if slices.Contains(gitForgeHosts, strings.TrimPrefix(source.Host, "www.")) {
-		return "", refuseLockfile(RebuildRefusalUnpinnedSource,
+		findings.add(refuseLockfile(RebuildRefusalUnpinnedSource,
 			"package %s resolves from %s, where npm reads a URL as a git repository",
-			quotedKey, quotedLockfileText(source.Host))
+			quotedKey, quotedLockfileText(source.Host)))
 	}
-	return source.Host, nil
+	return source.Host
 }
 
 // optionalPeers reads the names a package's peerDependenciesMeta marks
@@ -426,12 +449,20 @@ func resolveDependency(packages map[string]json.RawMessage, key, name string) (s
 // the image a person approved. The one exception is a bundled entry with no
 // source of its own, which is only as approved as the package that ships it.
 // A package the head drops needs no check.
+//
+// Every clause is applied, and each one that refuses is returned in the order
+// the reader reaches it (gateFindings); no findings means the delta holds. A
+// lockfile or manifest that will not parse stops the reading there, because
+// nothing after it can read the tree. A nil registries skips only the
+// authority check.
 func evaluateLockfileDelta(
 	basePackageJSON, basePackageLock, headPackageJSON, headPackageLock []byte,
-	registries domain.RegistrySet,
-) (LockfileDelta, *lockfileRefusal) {
-	inconsistent := func(format string, args ...any) (LockfileDelta, *lockfileRefusal) {
-		return LockfileDelta{}, refuseLockfile(RebuildRefusalLockfileInconsistent, format, args...)
+	registries *domain.RegistrySet,
+) (LockfileDelta, gateFindings) {
+	var findings gateFindings
+	inconsistent := func(format string, args ...any) (LockfileDelta, gateFindings) {
+		findings.add(refuseLockfile(RebuildRefusalLockfileInconsistent, format, args...))
+		return LockfileDelta{}, findings
 	}
 	head, err := parseLockfile(headPackageLock)
 	if err != nil {
@@ -451,8 +482,8 @@ func evaluateLockfileDelta(
 	}
 	for _, field := range []string{"overrides", "workspaces", "packageManager"} {
 		if !sameJSON(manifest[field], baseManifest[field]) {
-			return LockfileDelta{}, refuseLockfile(RebuildRefusalUnsupportedInput,
-				"the candidate changes package.json %s", field)
+			findings.add(refuseLockfile(RebuildRefusalUnsupportedInput,
+				"the candidate changes package.json %s", field))
 		}
 	}
 	declared, err := declaredDependencies(manifest)
@@ -474,9 +505,9 @@ func evaluateLockfileDelta(
 				continue
 			}
 			if !packageNameRegexp.MatchString(name) || !registrySpec(spec) {
-				return LockfileDelta{}, refuseLockfile(RebuildRefusalUnpinnedSource,
+				findings.add(refuseLockfile(RebuildRefusalUnpinnedSource,
 					"package.json declares %s as %s, which is not a registry version, range, or tag",
-					quotedLockfileText(name), quotedLockfileText(spec))
+					quotedLockfileText(name), quotedLockfileText(spec)))
 			}
 		}
 	}
@@ -488,8 +519,9 @@ func evaluateLockfileDelta(
 	}
 	for _, field := range slices.Sorted(maps.Keys(declared)) {
 		if !maps.Equal(declared[field], locked[field]) {
-			return inconsistent(
-				"package-lock.json was not generated from this package.json: their %s differ", field)
+			findings.add(refuseLockfile(RebuildRefusalLockfileInconsistent,
+				"package-lock.json was not generated from this package.json: their %s differ", field))
+			break
 		}
 	}
 
@@ -510,16 +542,16 @@ func evaluateLockfileDelta(
 	for _, key := range slices.Sorted(maps.Keys(head.packages)) {
 		if !unchanged(key) {
 			delta.Changed++
-			host, refusal := examineChangedPackage(key, head.packages[key], registries)
-			if refusal != nil {
-				return LockfileDelta{}, refusal
+			if host := examineChangedPackage(key, head.packages[key], registries, &findings); host != "" {
+				hosts[host] = true
 			}
-			hosts[host] = true
 			continue
 		}
 		entry, err := decodeObject(head.packages[key])
 		if err != nil {
-			return inconsistent("package-lock.json package %s %v", quotedLockfileText(key), err)
+			findings.add(refuseLockfile(RebuildRefusalLockfileInconsistent,
+				"package-lock.json package %s %v", quotedLockfileText(key), err))
+			continue
 		}
 		if _, sourced := entry["resolved"]; sourced || string(entry["inBundle"]) != "true" {
 			continue
@@ -529,12 +561,14 @@ func evaluateLockfileDelta(
 		// it by name from the default registry, unpinned. An enclosing package
 		// that is itself bundled is held to this same rule in its own turn.
 		if enclosing, nested := enclosingPackage(key); !nested || !unchanged(enclosing) {
-			return LockfileDelta{}, refuseLockfile(RebuildRefusalUnpinnedSource,
-				"bundled package %s no longer ships inside an unchanged package", quotedLockfileText(key))
+			findings.add(refuseLockfile(RebuildRefusalUnpinnedSource,
+				"bundled package %s no longer ships inside an unchanged package", quotedLockfileText(key)))
 		}
 	}
-	if refusal := checkDependencyEdges(base, head, manifest, declared, unchanged); refusal != nil {
-		return LockfileDelta{}, refusal
+	// Every refusal this check makes is one clause, so its first is enough.
+	findings.add(checkDependencyEdges(base, head, manifest, declared, unchanged))
+	if len(findings) != 0 {
+		return LockfileDelta{}, findings
 	}
 	delta.Hosts = slices.Sorted(maps.Keys(hosts))
 	return delta, nil
