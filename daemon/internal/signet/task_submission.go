@@ -113,7 +113,10 @@ func (s *Service) submitTask(ctx context.Context, in ClientCommand) (CommandResu
 			if err != nil {
 				return err
 			}
-			if recorded.DeviceID != in.DeviceID || recorded.ProjectID != p.ProjectID ||
+			// A daemon-origin record names no device, so no device's retry
+			// can replay it.
+			if recorded.Origin != domain.TaskSubmissionOriginDevice || recorded.DeviceID == nil ||
+				*recorded.DeviceID != in.DeviceID || recorded.ProjectID != p.ProjectID ||
 				recorded.SourceDigest != digest || (original != "" && original != requestDigest) ||
 				(original == "" && len(p.TaskLines) != 0) {
 				return fmt.Errorf("submit command %q: %w", in.CommandID, store.ErrImmutableConflict)
@@ -138,7 +141,8 @@ func (s *Service) submitTask(ctx context.Context, in ClientCommand) (CommandResu
 			return err
 		}
 		submission := domain.TaskSubmission{
-			CommandID: in.CommandID, DeviceID: in.DeviceID, ProjectID: p.ProjectID,
+			CommandID: in.CommandID, Origin: domain.TaskSubmissionOriginDevice,
+			DeviceID: &in.DeviceID, ProjectID: p.ProjectID,
 			SourceDigest: digest, TaskID: outcome.TaskID, SpecificationRunID: outcome.SpecificationRunID,
 			Name: outcome.Name,
 		}

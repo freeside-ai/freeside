@@ -227,6 +227,13 @@ func ProposalSubjectHandle(proposal domain.EffectProposal) (domain.OpaqueSubject
 			return "", domain.ErrEffectProposalInconsistent
 		}
 		return proposal.FilingProposal.SubjectHandle, nil
+	case domain.EffectImagePolicyAdoption:
+		// An adoption card is about a repository's image policy, not a work
+		// unit, so it carries no work-unit handle. How a stored card binds its
+		// subject is #2335's, with its producer; until then the store refuses
+		// one at every boundary that resolves a subject.
+		return "", fmt.Errorf("image policy adoption has no work-unit subject: %w",
+			domain.ErrEffectProposalInconsistent)
 	}
 	return "", domain.ErrInvalidEffectKind
 }
@@ -344,6 +351,12 @@ func gateEffectProposalItemMerge(
 	case domain.EffectFollowUpFiling:
 		if merge != nil {
 			return fmt.Errorf("follow-up filing carries a merge: %w", errRowInconsistent)
+		}
+		return nil
+	case domain.EffectImagePolicyAdoption:
+		// An adoption card is decided before any pull request exists.
+		if merge != nil {
+			return fmt.Errorf("image policy adoption carries a merge: %w", errRowInconsistent)
 		}
 		return nil
 	}
@@ -558,6 +571,9 @@ func (tx *ReadTx) expectedRevision(
 		// A filing has no parameter an operator may change, so no command
 		// authors a revision of one and a stored revision row is not authority.
 		return domain.EffectProposal{}, domain.ErrTransitionCommandMismatch
+	case domain.EffectImagePolicyAdoption:
+		// No revise command is defined for an adoption card.
+		return domain.EffectProposal{}, domain.ErrTransitionCommandMismatch
 	}
 	return domain.EffectProposal{}, domain.ErrInvalidEffectKind
 }
@@ -748,6 +764,10 @@ func (tx *ReadTx) gateProposalSubject(
 			return domain.WorkUnitDeclaration{}, err
 		}
 		return declaration, nil
+	case domain.EffectImagePolicyAdoption:
+		// ProposalSubjectHandle already refused the card; #2335 adds its
+		// re-gate against the refusal record and current project policy.
+		return domain.WorkUnitDeclaration{}, domain.ErrEffectProposalInconsistent
 	}
 	return domain.WorkUnitDeclaration{}, domain.ErrInvalidEffectKind
 }
@@ -1123,6 +1143,8 @@ func revisionActionForKind(kind domain.EffectKind) (domain.Action, error) {
 	case domain.EffectSourceIssueClosure:
 		return domain.ActionApproveWithChanges, nil
 	case domain.EffectFollowUpFiling:
+		return "", domain.ErrTransitionCommandMismatch
+	case domain.EffectImagePolicyAdoption:
 		return "", domain.ErrTransitionCommandMismatch
 	}
 	return "", domain.ErrInvalidEffectKind

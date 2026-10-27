@@ -1,0 +1,16 @@
+{
+  "encoding_version": 1,
+  "kind": "image_policy_adoption",
+  "resolved_policy_run_id": "run-policy",
+  "resolved_policy_digest": "sha256:57afc93cbc6ec4a3dc987a7803b24f65f954d481569bdd5af0dc74e4fd251d11",
+  "run_proposal": null,
+  "image_policy_adoption": {
+    "refusal_record_id": "sha256:e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1",
+    "recipe_digest": "sha256:c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1",
+    "registry_authorities": [
+      "npm.pkg.github.com",
+      "registry.npmjs.org"
+    ]
+  },
+  "digest": "sha256:143d6dc29ed1e78c4ca65a0f698d2c853cdc815588df9ebcde915c3d73ec84e4"
+}

@@ -1334,7 +1334,7 @@ public enum Components {
                 ])
             }
         }
-        /// Store-authenticated, digest-bound effect-proposal facts matched to one exact attention-item snapshot before the client enables a decision. Exactly one kind member (source_issue_closure or follow_up_filing) is non-null, the one effect_kind names. The opaque subject handle and policy identities stay server-side, as they do for task_proposal.
+        /// Store-authenticated, digest-bound effect-proposal facts matched to one exact attention-item snapshot before the client enables a decision. Exactly one kind member (source_issue_closure, follow_up_filing, or image_policy_adoption) is non-null, the one effect_kind names. The opaque subject handle and policy identities stay server-side, as they do for task_proposal.
         ///
         ///
         /// - Remark: Generated from `#/components/schemas/EffectProposalFactsSnapshot`.
@@ -1427,6 +1427,32 @@ public enum Components {
             ///
             /// - Remark: Generated from `#/components/schemas/EffectProposalFactsSnapshot/follow_up_filing`.
             public var follow_up_filing: Components.Schemas.EffectProposalFactsSnapshot.follow_up_filingPayload?
+            /// The adoption facts for an image_policy_adoption effect; null for any other effect kind. The daemon serves no adoption card yet (#2335 raises it), so this is null today.
+            ///
+            ///
+            /// - Remark: Generated from `#/components/schemas/EffectProposalFactsSnapshot/image_policy_adoption`.
+            public struct image_policy_adoptionPayload: Codable, Hashable, Sendable {
+                /// - Remark: Generated from `#/components/schemas/EffectProposalFactsSnapshot/image_policy_adoption/value1`.
+                public var value1: Components.Schemas.ImagePolicyAdoptionFacts
+                /// Creates a new `image_policy_adoptionPayload`.
+                ///
+                /// - Parameters:
+                ///   - value1:
+                public init(value1: Components.Schemas.ImagePolicyAdoptionFacts) {
+                    self.value1 = value1
+                }
+                public init(from decoder: any Swift.Decoder) throws {
+                    self.value1 = try .init(from: decoder)
+                }
+                public func encode(to encoder: any Swift.Encoder) throws {
+                    try self.value1.encode(to: encoder)
+                }
+            }
+            /// The adoption facts for an image_policy_adoption effect; null for any other effect kind. The daemon serves no adoption card yet (#2335 raises it), so this is null today.
+            ///
+            ///
+            /// - Remark: Generated from `#/components/schemas/EffectProposalFactsSnapshot/image_policy_adoption`.
+            public var image_policy_adoption: Components.Schemas.EffectProposalFactsSnapshot.image_policy_adoptionPayload?
             /// Creates a new `EffectProposalFactsSnapshot`.
             ///
             /// - Parameters:
@@ -1438,6 +1464,7 @@ public enum Components {
             ///   - supersedes: The exact authenticated prior facts for a revised card; null for the initially admitted proposal, and always null for a follow_up_filing effect, which admits no revision.
             ///   - source_issue_closure: The closure facts for a source_issue_closure effect; null for any other effect kind.
             ///   - follow_up_filing: The filing facts for a follow_up_filing effect; null for any other effect kind.
+            ///   - image_policy_adoption: The adoption facts for an image_policy_adoption effect; null for any other effect kind. The daemon serves no adoption card yet (#2335 raises it), so this is null today.
             public init(
                 as_of_revision: Components.Schemas.AsOfRevision,
                 entity_version: Components.Schemas.EntityVersion,
@@ -1446,7 +1473,8 @@ public enum Components {
                 effect_kind: Components.Schemas.EffectKind,
                 supersedes: Components.Schemas.EffectProposalFactsSnapshot.supersedesPayload? = nil,
                 source_issue_closure: Components.Schemas.EffectProposalFactsSnapshot.source_issue_closurePayload? = nil,
-                follow_up_filing: Components.Schemas.EffectProposalFactsSnapshot.follow_up_filingPayload? = nil
+                follow_up_filing: Components.Schemas.EffectProposalFactsSnapshot.follow_up_filingPayload? = nil,
+                image_policy_adoption: Components.Schemas.EffectProposalFactsSnapshot.image_policy_adoptionPayload? = nil
             ) {
                 self.as_of_revision = as_of_revision
                 self.entity_version = entity_version
@@ -1456,6 +1484,7 @@ public enum Components {
                 self.supersedes = supersedes
                 self.source_issue_closure = source_issue_closure
                 self.follow_up_filing = follow_up_filing
+                self.image_policy_adoption = image_policy_adoption
             }
             public enum CodingKeys: String, CodingKey {
                 case as_of_revision
@@ -1466,6 +1495,7 @@ public enum Components {
                 case supersedes
                 case source_issue_closure
                 case follow_up_filing
+                case image_policy_adoption
             }
             public init(from decoder: any Swift.Decoder) throws {
                 let container = try decoder.container(keyedBy: CodingKeys.self)
@@ -1501,6 +1531,10 @@ public enum Components {
                     Components.Schemas.EffectProposalFactsSnapshot.follow_up_filingPayload.self,
                     forKey: .follow_up_filing
                 )
+                self.image_policy_adoption = try container.decodeIfPresent(
+                    Components.Schemas.EffectProposalFactsSnapshot.image_policy_adoptionPayload.self,
+                    forKey: .image_policy_adoption
+                )
                 try decoder.ensureNoAdditionalProperties(knownKeys: [
                     "as_of_revision",
                     "entity_version",
@@ -1509,7 +1543,85 @@ public enum Components {
                     "effect_kind",
                     "supersedes",
                     "source_issue_closure",
-                    "follow_up_filing"
+                    "follow_up_filing",
+                    "image_policy_adoption"
+                ])
+            }
+        }
+        /// The policy change an adoption card proposes to answer one policy-class project-image upkeep refusal (plan §5.7, Project-image upkeep): the refusal record it answers and the recipe digest to approve, the registry authorities to add, or both. Approving the card opens a project-policy proposal; merging that proposal is the adoption. Mirrors domain.ImagePolicyAdoptionParameters.
+        ///
+        ///
+        /// - Remark: Generated from `#/components/schemas/ImagePolicyAdoptionFacts`.
+        public struct ImagePolicyAdoptionFacts: Codable, Hashable, Sendable {
+            /// - Remark: Generated from `#/components/schemas/ImagePolicyAdoptionFacts/refusal_record_id`.
+            public var refusal_record_id: Components.Schemas.Digest
+            /// The recipe digest to approve; null when the recipe did not change.
+            ///
+            /// - Remark: Generated from `#/components/schemas/ImagePolicyAdoptionFacts/recipe_digest`.
+            public struct recipe_digestPayload: Codable, Hashable, Sendable {
+                /// - Remark: Generated from `#/components/schemas/ImagePolicyAdoptionFacts/recipe_digest/value1`.
+                public var value1: Components.Schemas.Digest
+                /// Creates a new `recipe_digestPayload`.
+                ///
+                /// - Parameters:
+                ///   - value1:
+                public init(value1: Components.Schemas.Digest) {
+                    self.value1 = value1
+                }
+                public init(from decoder: any Swift.Decoder) throws {
+                    self.value1 = try decoder.decodeFromSingleValueContainer()
+                }
+                public func encode(to encoder: any Swift.Encoder) throws {
+                    try encoder.encodeToSingleValueContainer(self.value1)
+                }
+            }
+            /// The recipe digest to approve; null when the recipe did not change.
+            ///
+            /// - Remark: Generated from `#/components/schemas/ImagePolicyAdoptionFacts/recipe_digest`.
+            public var recipe_digest: Components.Schemas.ImagePolicyAdoptionFacts.recipe_digestPayload?
+            /// Registry host names to add to the project's registry set, strictly ascending; empty when only the recipe changed.
+            ///
+            ///
+            /// - Remark: Generated from `#/components/schemas/ImagePolicyAdoptionFacts/registry_authorities`.
+            public var registry_authorities: [Swift.String]
+            /// Creates a new `ImagePolicyAdoptionFacts`.
+            ///
+            /// - Parameters:
+            ///   - refusal_record_id:
+            ///   - recipe_digest: The recipe digest to approve; null when the recipe did not change.
+            ///   - registry_authorities: Registry host names to add to the project's registry set, strictly ascending; empty when only the recipe changed.
+            public init(
+                refusal_record_id: Components.Schemas.Digest,
+                recipe_digest: Components.Schemas.ImagePolicyAdoptionFacts.recipe_digestPayload? = nil,
+                registry_authorities: [Swift.String]
+            ) {
+                self.refusal_record_id = refusal_record_id
+                self.recipe_digest = recipe_digest
+                self.registry_authorities = registry_authorities
+            }
+            public enum CodingKeys: String, CodingKey {
+                case refusal_record_id
+                case recipe_digest
+                case registry_authorities
+            }
+            public init(from decoder: any Swift.Decoder) throws {
+                let container = try decoder.container(keyedBy: CodingKeys.self)
+                self.refusal_record_id = try container.decode(
+                    Components.Schemas.Digest.self,
+                    forKey: .refusal_record_id
+                )
+                self.recipe_digest = try container.decodeIfPresent(
+                    Components.Schemas.ImagePolicyAdoptionFacts.recipe_digestPayload.self,
+                    forKey: .recipe_digest
+                )
+                self.registry_authorities = try container.decode(
+                    [Swift.String].self,
+                    forKey: .registry_authorities
+                )
+                try decoder.ensureNoAdditionalProperties(knownKeys: [
+                    "refusal_record_id",
+                    "recipe_digest",
+                    "registry_authorities"
                 ])
             }
         }
@@ -2172,7 +2284,7 @@ public enum Components {
         @frozen public enum TaskProposalIntent: String, Codable, Hashable, Sendable, CaseIterable {
             case implement_subject = "implement_subject"
         }
-        /// The effect-registry member an effect_proposal renders. run_proposal is the task-proposal encoding; source_issue_closure proposes closing the source issue a work unit's pull request resolves (plan §5.13); follow_up_filing proposes filing a follow-up issue for a deferred finding or a separate-work verdict (plan §5.17). Matches domain.AllEffectKinds.
+        /// The effect-registry member an effect_proposal renders. run_proposal is the task-proposal encoding; source_issue_closure proposes closing the source issue a work unit's pull request resolves (plan §5.13); follow_up_filing proposes filing a follow-up issue for a deferred finding or a separate-work verdict (plan §5.17); image_policy_adoption proposes adopting the recipe digest or registry authorities a project-image upkeep refusal names (plan §5.7). Matches domain.AllEffectKinds.
         ///
         ///
         /// - Remark: Generated from `#/components/schemas/EffectKind`.
@@ -2180,6 +2292,7 @@ public enum Components {
             case run_proposal = "run_proposal"
             case source_issue_closure = "source_issue_closure"
             case follow_up_filing = "follow_up_filing"
+            case image_policy_adoption = "image_policy_adoption"
         }
         /// The versioned ruleset an issue text field was screened under. Matches domain.AllIssueTextRulesets.
         ///
@@ -5261,6 +5374,105 @@ public enum Components {
             case trust_blocked = "trust_blocked"
             case base_advanced = "base_advanced"
             case identity_parallelism = "identity_parallelism"
+            case image_upkeep_pending = "image_upkeep_pending"
+        }
+        /// What an image_upkeep_pending hold waits on, mirrored from domain.ImageUpkeepPending (plan §5.7, Project-image upkeep): the upkeep job's rebuild, an adoption card, or a maintenance task.
+        ///
+        ///
+        /// - Remark: Generated from `#/components/schemas/ImageUpkeepPending`.
+        @frozen public enum ImageUpkeepPending: String, Codable, Hashable, Sendable, CaseIterable {
+            case rebuild = "rebuild"
+            case adoption_proposal = "adoption_proposal"
+            case maintenance_task = "maintenance_task"
+        }
+        /// The typed fact beside an image_upkeep_pending hold, mirrored from domain.ImageUpkeepHold: what the run waits on and, past a rebuild, the upkeep refusal record and the item or task that answers it, each by reference.
+        ///
+        ///
+        /// - Remark: Generated from `#/components/schemas/ImageUpkeepHold`.
+        public struct ImageUpkeepHold: Codable, Hashable, Sendable {
+            /// - Remark: Generated from `#/components/schemas/ImageUpkeepHold/pending`.
+            public var pending: Components.Schemas.ImageUpkeepPending
+            /// The upkeep refusal record; null exactly for a rebuild.
+            ///
+            /// - Remark: Generated from `#/components/schemas/ImageUpkeepHold/refusal_record_id`.
+            public struct refusal_record_idPayload: Codable, Hashable, Sendable {
+                /// - Remark: Generated from `#/components/schemas/ImageUpkeepHold/refusal_record_id/value1`.
+                public var value1: Components.Schemas.Digest
+                /// Creates a new `refusal_record_idPayload`.
+                ///
+                /// - Parameters:
+                ///   - value1:
+                public init(value1: Components.Schemas.Digest) {
+                    self.value1 = value1
+                }
+                public init(from decoder: any Swift.Decoder) throws {
+                    self.value1 = try decoder.decodeFromSingleValueContainer()
+                }
+                public func encode(to encoder: any Swift.Encoder) throws {
+                    try encoder.encodeToSingleValueContainer(self.value1)
+                }
+            }
+            /// The upkeep refusal record; null exactly for a rebuild.
+            ///
+            /// - Remark: Generated from `#/components/schemas/ImageUpkeepHold/refusal_record_id`.
+            public var refusal_record_id: Components.Schemas.ImageUpkeepHold.refusal_record_idPayload?
+            /// The adoption card's item ID; set exactly for adoption_proposal.
+            ///
+            /// - Remark: Generated from `#/components/schemas/ImageUpkeepHold/proposal_item_id`.
+            public var proposal_item_id: Swift.String?
+            /// The maintenance task's ID; set exactly for maintenance_task.
+            ///
+            /// - Remark: Generated from `#/components/schemas/ImageUpkeepHold/maintenance_task_id`.
+            public var maintenance_task_id: Swift.String?
+            /// Creates a new `ImageUpkeepHold`.
+            ///
+            /// - Parameters:
+            ///   - pending:
+            ///   - refusal_record_id: The upkeep refusal record; null exactly for a rebuild.
+            ///   - proposal_item_id: The adoption card's item ID; set exactly for adoption_proposal.
+            ///   - maintenance_task_id: The maintenance task's ID; set exactly for maintenance_task.
+            public init(
+                pending: Components.Schemas.ImageUpkeepPending,
+                refusal_record_id: Components.Schemas.ImageUpkeepHold.refusal_record_idPayload? = nil,
+                proposal_item_id: Swift.String? = nil,
+                maintenance_task_id: Swift.String? = nil
+            ) {
+                self.pending = pending
+                self.refusal_record_id = refusal_record_id
+                self.proposal_item_id = proposal_item_id
+                self.maintenance_task_id = maintenance_task_id
+            }
+            public enum CodingKeys: String, CodingKey {
+                case pending
+                case refusal_record_id
+                case proposal_item_id
+                case maintenance_task_id
+            }
+            public init(from decoder: any Swift.Decoder) throws {
+                let container = try decoder.container(keyedBy: CodingKeys.self)
+                self.pending = try container.decode(
+                    Components.Schemas.ImageUpkeepPending.self,
+                    forKey: .pending
+                )
+                self.refusal_record_id = try container.decodeIfPresent(
+                    Components.Schemas.ImageUpkeepHold.refusal_record_idPayload.self,
+                    forKey: .refusal_record_id
+                )
+                self.proposal_item_id = try container.decodeIfPresent(
+                    Swift.String.self,
+                    forKey: .proposal_item_id
+                )
+                self.maintenance_task_id = try container.decodeIfPresent(
+                    Swift.String.self,
+                    forKey: .maintenance_task_id
+                )
+                try decoder.ensureNoAdditionalProperties(knownKeys: [
+                    "pending",
+                    "refusal_record_id",
+                    "proposal_item_id",
+                    "maintenance_task_id"
+                ])
+            }
         }
         /// The closed admission-check vocabulary mirrored from domain.AdmissionCheck: the check that refused an admission_policy_refused hold. Values are typed daemon observations, never free text.
         ///
@@ -5659,6 +5871,32 @@ public enum Components {
             ///
             /// - Remark: Generated from `#/components/schemas/RunHold/detail`.
             public var detail: Components.Schemas.RunHold.detailPayload?
+            /// What an image_upkeep_pending hold waits on; present exactly beside that reason and null beside every other.
+            ///
+            ///
+            /// - Remark: Generated from `#/components/schemas/RunHold/image_upkeep`.
+            public struct image_upkeepPayload: Codable, Hashable, Sendable {
+                /// - Remark: Generated from `#/components/schemas/RunHold/image_upkeep/value1`.
+                public var value1: Components.Schemas.ImageUpkeepHold
+                /// Creates a new `image_upkeepPayload`.
+                ///
+                /// - Parameters:
+                ///   - value1:
+                public init(value1: Components.Schemas.ImageUpkeepHold) {
+                    self.value1 = value1
+                }
+                public init(from decoder: any Swift.Decoder) throws {
+                    self.value1 = try .init(from: decoder)
+                }
+                public func encode(to encoder: any Swift.Encoder) throws {
+                    try self.value1.encode(to: encoder)
+                }
+            }
+            /// What an image_upkeep_pending hold waits on; present exactly beside that reason and null beside every other.
+            ///
+            ///
+            /// - Remark: Generated from `#/components/schemas/RunHold/image_upkeep`.
+            public var image_upkeep: Components.Schemas.RunHold.image_upkeepPayload?
             /// - Remark: Generated from `#/components/schemas/RunHold/first_observed_at`.
             public var first_observed_at: Foundation.Date
             /// - Remark: Generated from `#/components/schemas/RunHold/last_observed_at`.
@@ -5670,6 +5908,7 @@ public enum Components {
             ///   - invocation_id:
             ///   - reason:
             ///   - detail: What an admission_policy_refused hold refused; null beside every other reason, and on an admission hold recorded before the detail existed or raised outside admission.
+            ///   - image_upkeep: What an image_upkeep_pending hold waits on; present exactly beside that reason and null beside every other.
             ///   - first_observed_at:
             ///   - last_observed_at:
             public init(
@@ -5677,6 +5916,7 @@ public enum Components {
                 invocation_id: Swift.String? = nil,
                 reason: Components.Schemas.RunHoldReason,
                 detail: Components.Schemas.RunHold.detailPayload? = nil,
+                image_upkeep: Components.Schemas.RunHold.image_upkeepPayload? = nil,
                 first_observed_at: Foundation.Date,
                 last_observed_at: Foundation.Date
             ) {
@@ -5684,6 +5924,7 @@ public enum Components {
                 self.invocation_id = invocation_id
                 self.reason = reason
                 self.detail = detail
+                self.image_upkeep = image_upkeep
                 self.first_observed_at = first_observed_at
                 self.last_observed_at = last_observed_at
             }
@@ -5692,6 +5933,7 @@ public enum Components {
                 case invocation_id
                 case reason
                 case detail
+                case image_upkeep
                 case first_observed_at
                 case last_observed_at
             }
@@ -5713,6 +5955,10 @@ public enum Components {
                     Components.Schemas.RunHold.detailPayload.self,
                     forKey: .detail
                 )
+                self.image_upkeep = try container.decodeIfPresent(
+                    Components.Schemas.RunHold.image_upkeepPayload.self,
+                    forKey: .image_upkeep
+                )
                 self.first_observed_at = try container.decode(
                     Foundation.Date.self,
                     forKey: .first_observed_at
@@ -5726,6 +5972,7 @@ public enum Components {
                     "invocation_id",
                     "reason",
                     "detail",
+                    "image_upkeep",
                     "first_observed_at",
                     "last_observed_at"
                 ])
@@ -5877,6 +6124,7 @@ public enum Components {
             case installation_poll = "installation_poll"
             case doctor = "doctor"
             case janitor = "janitor"
+            case image_upkeep = "image_upkeep"
         }
         /// A schedule's lifecycle state (mirrors domain.ScheduleStatus): armed is live; fired is a one-shot deadline that terminated fired-and-handled; resolved was explicitly resolved (the awaited condition arrived, or the subject concluded); expired ended with its validity window.
         ///
@@ -7342,6 +7590,14 @@ public enum Components {
                 ])
             }
         }
+        /// Who recorded a task submission (mirrors domain.TaskSubmissionOrigin). device is a paired device's submit_task command. daemon is project-image upkeep's repair task, which the daemon accepts only against a recorded repair-class upkeep refusal for the project's repository and re-checks whenever it reads the record back. Widening it is a contract change.
+        ///
+        ///
+        /// - Remark: Generated from `#/components/schemas/TaskSubmissionOrigin`.
+        @frozen public enum TaskSubmissionOrigin: String, Codable, Hashable, Sendable, CaseIterable {
+            case device = "device"
+            case daemon = "daemon"
+        }
         /// The durable, immutable record of one accepted submit_task command (domain.TaskSubmission; plan §5.11, §5.14). It names the task the command created and its specification run, keyed by command_id. Explicit manual Retry returns this record and its committed revision unchanged, including historical results that reused a source-keyed task. The name is the display name recorded at acceptance, not the requested-name fingerprint.
         ///
         ///
@@ -7355,8 +7611,13 @@ public enum Components {
             public var kind: Components.Schemas.TaskSubmissionRecord.kindPayload
             /// - Remark: Generated from `#/components/schemas/TaskSubmissionRecord/command_id`.
             public var command_id: Swift.String
+            /// - Remark: Generated from `#/components/schemas/TaskSubmissionRecord/origin`.
+            public var origin: Components.Schemas.TaskSubmissionOrigin
+            /// The submitting device for a device-origin record; null exactly when origin is daemon.
+            ///
+            ///
             /// - Remark: Generated from `#/components/schemas/TaskSubmissionRecord/device_id`.
-            public var device_id: Swift.String
+            public var device_id: Swift.String?
             /// - Remark: Generated from `#/components/schemas/TaskSubmissionRecord/project_id`.
             public var project_id: Swift.String
             /// The sha256 digest of the submitted source text.
@@ -7422,7 +7683,8 @@ public enum Components {
             /// - Parameters:
             ///   - kind:
             ///   - command_id:
-            ///   - device_id:
+            ///   - origin:
+            ///   - device_id: The submitting device for a device-origin record; null exactly when origin is daemon.
             ///   - project_id:
             ///   - source_digest: The sha256 digest of the submitted source text.
             ///   - task_id: The task the command created or fetched by the intake key.
@@ -7431,7 +7693,8 @@ public enum Components {
             public init(
                 kind: Components.Schemas.TaskSubmissionRecord.kindPayload,
                 command_id: Swift.String,
-                device_id: Swift.String,
+                origin: Components.Schemas.TaskSubmissionOrigin,
+                device_id: Swift.String? = nil,
                 project_id: Swift.String,
                 source_digest: Components.Schemas.TaskSubmissionRecord.source_digestPayload,
                 task_id: Swift.String,
@@ -7440,6 +7703,7 @@ public enum Components {
             ) {
                 self.kind = kind
                 self.command_id = command_id
+                self.origin = origin
                 self.device_id = device_id
                 self.project_id = project_id
                 self.source_digest = source_digest
@@ -7450,6 +7714,7 @@ public enum Components {
             public enum CodingKeys: String, CodingKey {
                 case kind
                 case command_id
+                case origin
                 case device_id
                 case project_id
                 case source_digest
@@ -7467,7 +7732,11 @@ public enum Components {
                     Swift.String.self,
                     forKey: .command_id
                 )
-                self.device_id = try container.decode(
+                self.origin = try container.decode(
+                    Components.Schemas.TaskSubmissionOrigin.self,
+                    forKey: .origin
+                )
+                self.device_id = try container.decodeIfPresent(
                     Swift.String.self,
                     forKey: .device_id
                 )
@@ -7494,6 +7763,7 @@ public enum Components {
                 try decoder.ensureNoAdditionalProperties(knownKeys: [
                     "kind",
                     "command_id",
+                    "origin",
                     "device_id",
                     "project_id",
                     "source_digest",

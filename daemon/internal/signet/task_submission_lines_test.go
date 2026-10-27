@@ -48,7 +48,7 @@ func TestSubmitTaskCommandBindsTaskLinesToItsIdentity(t *testing.T) {
 	if err != nil {
 		t.Fatalf("replay in another order: %v", err)
 	}
-	if replay.Submission == nil || *replay.Submission != *result.Submission || replay.Revision != result.Revision {
+	if replay.Submission == nil || !reflect.DeepEqual(*replay.Submission, *result.Submission) || replay.Revision != result.Revision {
 		t.Fatalf("replay result = %+v, want %+v", replay, result)
 	}
 

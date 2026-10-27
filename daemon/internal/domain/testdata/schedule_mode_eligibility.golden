@@ -40,5 +40,12 @@
       "attended_dev": true,
       "unattended": true
     }
+  },
+  {
+    "kind": "image_upkeep",
+    "eligible": {
+      "attended_dev": true,
+      "unattended": true
+    }
   }
 ]

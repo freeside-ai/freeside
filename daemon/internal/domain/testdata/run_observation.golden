@@ -34,6 +34,7 @@
     "invocation_id": "inv-1",
     "reason": "operation_stopped",
     "detail": null,
+    "image_upkeep": null,
     "first_observed_at": "2026-01-02T03:05:05Z",
     "last_observed_at": "2026-01-02T03:06:05Z"
   },

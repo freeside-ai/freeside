@@ -49,6 +49,34 @@ func janitorSchedule(t *testing.T) domain.Schedule {
 	return s
 }
 
+// Every permanent trusted-config kind passes the schedules table's kind
+// CHECK and reads back unchanged, image_upkeep included (#2332).
+func TestTrustedConfigScheduleKindsRoundTrip(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	s := openStore(t, store.Options{})
+	for _, kind := range domain.AllScheduleKinds {
+		if !kind.TrustedConfigJob() {
+			continue
+		}
+		schedule := janitorSchedule(t)
+		schedule.ID = domain.ScheduleID("schedule-" + string(kind))
+		schedule.Kind = kind
+		putSchedule(t, s, schedule)
+		var got domain.Schedule
+		if err := s.Read(ctx, func(tx *store.ReadTx) error {
+			var err error
+			got, _, err = tx.GetScheduleSnapshot(ctx, schedule.ID)
+			return err
+		}); err != nil {
+			t.Fatalf("%s: %v", kind, err)
+		}
+		if got.Kind != kind || got.ID != schedule.ID {
+			t.Fatalf("%s round trip = %+v", kind, got)
+		}
+	}
+}
+
 func putSchedule(t *testing.T, s *store.Store, schedule domain.Schedule) {
 	t.Helper()
 	if err := s.Write(context.Background(), func(tx *store.WriteTx) error {

@@ -222,7 +222,7 @@ func TestSignetWireGoldens(t *testing.T) {
 			name: "task-submission-result",
 			value: normalizeCommandResult(CommandResult{
 				Submission: &domain.TaskSubmission{
-					CommandID: "cmd-570", DeviceID: "device-569", ProjectID: "project-569",
+					CommandID: "cmd-570", Origin: domain.TaskSubmissionOriginDevice, DeviceID: new(domain.DeviceID("device-569")), ProjectID: "project-569",
 					SourceDigest:       domain.Digest("sha256:" + strings.Repeat("6", 64)),
 					TaskID:             "task-570",
 					SpecificationRunID: "run-570",

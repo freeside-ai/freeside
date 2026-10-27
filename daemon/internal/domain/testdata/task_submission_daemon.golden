@@ -1,0 +1,13 @@
+{
+  "command_id": "cmd-3",
+  "origin": "daemon",
+  "device_id": null,
+  "project_id": "proj-1",
+  "source_digest": "sha256:e6dc41a5490e9d4af535a608c9b8f641d75570f8fb11ddad7e42f937a2bffaae",
+  "task_id": "task-2",
+  "specification_run_id": "run-2",
+  "name": {
+    "text": "Repair the npm lockfile",
+    "source": "name"
+  }
+}

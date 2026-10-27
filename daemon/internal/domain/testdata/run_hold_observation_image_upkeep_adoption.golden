@@ -1,0 +1,14 @@
+{
+  "run_id": "run-1",
+  "invocation_id": null,
+  "reason": "image_upkeep_pending",
+  "detail": null,
+  "image_upkeep": {
+    "pending": "adoption_proposal",
+    "refusal_record_id": "sha256:e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1",
+    "proposal_item_id": "item-image-policy-adoption",
+    "maintenance_task_id": null
+  },
+  "first_observed_at": "2026-01-02T03:05:05Z",
+  "last_observed_at": "2026-01-02T03:06:05Z"
+}

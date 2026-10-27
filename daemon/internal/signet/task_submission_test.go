@@ -7,6 +7,7 @@ import (
 	"errors"
 	"net/http"
 	"net/http/httptest"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -131,7 +132,7 @@ func TestSubmitTaskCommandCreatesAndReplays(t *testing.T) {
 	if err != nil {
 		t.Fatalf("replay: %v", err)
 	}
-	if replay.Submission == nil || *replay.Submission != *result.Submission || replay.Revision != result.Revision {
+	if replay.Submission == nil || !reflect.DeepEqual(*replay.Submission, *result.Submission) || replay.Revision != result.Revision {
 		t.Fatalf("replay result = %+v, want %+v", replay, result)
 	}
 	if submitter.calls != 1 {
@@ -153,7 +154,7 @@ func TestLegacyTaskSubmissionReplayPreservesMissingNameFingerprint(t *testing.T)
 			return err
 		}
 		original = domain.TaskSubmission{
-			CommandID: "old-command", DeviceID: "device-1", ProjectID: "project-1",
+			CommandID: "old-command", Origin: domain.TaskSubmissionOriginDevice, DeviceID: new(domain.DeviceID("device-1")), ProjectID: "project-1",
 			SourceDigest: domain.Digest(contentaddr.Sum([]byte(source))), TaskID: outcome.TaskID,
 			SpecificationRunID: outcome.SpecificationRunID, Name: outcome.Name,
 		}
@@ -171,7 +172,7 @@ func TestLegacyTaskSubmissionReplayPreservesMissingNameFingerprint(t *testing.T)
 		if err != nil {
 			t.Fatal(err)
 		}
-		if *got.Submission != original || got.Revision != revision {
+		if !reflect.DeepEqual(*got.Submission, original) || got.Revision != revision {
 			t.Fatal("legacy result or revision changed")
 		}
 	}

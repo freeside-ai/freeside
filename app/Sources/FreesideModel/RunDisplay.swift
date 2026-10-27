@@ -379,6 +379,7 @@ package enum RunDisplay {
         case .trust_blocked: "Trust checks block publication"
         case .base_advanced: "Base branch changed"
         case .identity_parallelism: "Waiting for agent capacity"
+        case .image_upkeep_pending: "Waiting for project image upkeep"
         }
     }
 
@@ -390,6 +391,7 @@ package enum RunDisplay {
         case .installation_poll: "Install watch"
         case .doctor: "Doctor"
         case .janitor: "Janitor"
+        case .image_upkeep: "Image upkeep"
         }
     }
 }

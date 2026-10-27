@@ -110,7 +110,7 @@ func (f *agentAdmissionFixture) recordSubmitCommand(t *testing.T, commandID stri
 	task := f.task(t, runID)
 	if err := f.store.Write(ctx, func(tx *store.WriteTx) error {
 		return tx.PutTaskSubmissionRequest(ctx, domain.TaskSubmission{
-			CommandID: commandID, DeviceID: "device-1", ProjectID: task.ProjectID,
+			CommandID: commandID, Origin: domain.TaskSubmissionOriginDevice, DeviceID: new(domain.DeviceID("device-1")), ProjectID: task.ProjectID,
 			SourceDigest: agentTestDigest("4"), TaskID: task.ID, SpecificationRunID: runID,
 			Name: domain.DisplayName{Text: "Fixture task", Source: domain.DisplayNameSourceOperator},
 		}, agentTestDigest("c"))

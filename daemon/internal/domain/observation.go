@@ -3,6 +3,8 @@ package domain
 import (
 	"fmt"
 	"time"
+
+	"github.com/freeside-ai/freeside/daemon/internal/contentaddr"
 )
 
 // Run observation is the operator-facing projection of a run's progress
@@ -219,6 +221,10 @@ const (
 	// HoldIdentityParallelism: the selected provider identity is already
 	// running its experimentally established maximum number of executions.
 	HoldIdentityParallelism RunHoldReason = "identity_parallelism"
+	// HoldImageUpkeepPending: the run waits on project-image upkeep (plan
+	// §5.7, Project-image upkeep): a rebuild, an adoption proposal, or a
+	// maintenance task. The hold names which in ImageUpkeepHold.
+	HoldImageUpkeepPending RunHoldReason = "image_upkeep_pending"
 )
 
 // AllRunHoldReasons is the single registration point for hold reasons.
@@ -240,6 +246,7 @@ var AllRunHoldReasons = []RunHoldReason{
 	HoldTrustBlocked,
 	HoldBaseAdvanced,
 	HoldIdentityParallelism,
+	HoldImageUpkeepPending,
 }
 
 func (r RunHoldReason) valid() bool {
@@ -250,7 +257,7 @@ func (r RunHoldReason) valid() bool {
 		HoldProviderAuthorityUnavailable, HoldAttendedModeActive,
 		HoldPublicationEnvironment, HoldExternalConflict, HoldRecipeRevoked,
 		HoldVerificationFindings, HoldTrustBlocked, HoldBaseAdvanced,
-		HoldIdentityParallelism:
+		HoldIdentityParallelism, HoldImageUpkeepPending:
 		return true
 	default:
 		return false
@@ -420,6 +427,76 @@ func (r AdmissionRefusal) Validate() error {
 	}
 	if r.LaunchDigest != nil && *r.LaunchDigest == "" {
 		return fmt.Errorf("admission refusal %s launch digest: %w", r.Check, ErrEmptyField)
+	}
+	return nil
+}
+
+// ImageUpkeepPending names what an image_upkeep_pending hold waits on. The
+// zero value "" is invalid by design.
+type ImageUpkeepPending string
+
+const (
+	// ImageUpkeepPendingRebuild: the upkeep job is rebuilding the image; no
+	// refusal exists yet.
+	ImageUpkeepPendingRebuild ImageUpkeepPending = "rebuild"
+	// ImageUpkeepPendingAdoptionProposal: a policy-clause refusal waits on
+	// the adoption card the hold names.
+	ImageUpkeepPendingAdoptionProposal ImageUpkeepPending = "adoption_proposal"
+	// ImageUpkeepPendingMaintenanceTask: a repair refusal waits on the
+	// maintenance task the hold names.
+	ImageUpkeepPendingMaintenanceTask ImageUpkeepPending = "maintenance_task"
+)
+
+// AllImageUpkeepPendings lists every valid ImageUpkeepPending.
+var AllImageUpkeepPendings = []ImageUpkeepPending{
+	ImageUpkeepPendingRebuild, ImageUpkeepPendingAdoptionProposal, ImageUpkeepPendingMaintenanceTask,
+}
+
+func (p ImageUpkeepPending) valid() bool {
+	switch p {
+	case ImageUpkeepPendingRebuild, ImageUpkeepPendingAdoptionProposal, ImageUpkeepPendingMaintenanceTask:
+		return true
+	default:
+		return false
+	}
+}
+
+// ImageUpkeepHold is the typed fact beside an image_upkeep_pending hold:
+// what the run waits on and, past a rebuild, the refusal record and the
+// item or task that resolves it, each by reference. A rebuild has no
+// refusal yet; an adoption proposal and a maintenance task each answer one.
+type ImageUpkeepHold struct {
+	Pending ImageUpkeepPending `json:"pending"`
+	// RefusalRecordID is the ImageUpkeepRefusal the hold waits on; nil
+	// (explicit null) exactly for a rebuild.
+	RefusalRecordID *Digest `json:"refusal_record_id"`
+	// ProposalItemID is the adoption card; set exactly for
+	// adoption_proposal.
+	ProposalItemID *ItemID `json:"proposal_item_id"`
+	// MaintenanceTaskID is the maintenance task; set exactly for
+	// maintenance_task.
+	MaintenanceTaskID *TaskID `json:"maintenance_task_id"`
+}
+
+// Validate reports whether the hold names exactly the references its
+// pending kind requires.
+func (h ImageUpkeepHold) Validate() error {
+	if !h.Pending.valid() {
+		return fmt.Errorf("image upkeep hold pending %q: %w", h.Pending, ErrInvalidImageUpkeepPending)
+	}
+	if (h.RefusalRecordID != nil) != (h.Pending != ImageUpkeepPendingRebuild) ||
+		(h.ProposalItemID != nil) != (h.Pending == ImageUpkeepPendingAdoptionProposal) ||
+		(h.MaintenanceTaskID != nil) != (h.Pending == ImageUpkeepPendingMaintenanceTask) {
+		return fmt.Errorf("image upkeep hold %s names the wrong references: %w",
+			h.Pending, ErrHoldDetailMismatch)
+	}
+	if h.RefusalRecordID != nil && !contentaddr.Valid(string(*h.RefusalRecordID)) {
+		return fmt.Errorf("image upkeep hold refusal_record_id %q: %w",
+			*h.RefusalRecordID, ErrHoldDetailMismatch)
+	}
+	if (h.ProposalItemID != nil && *h.ProposalItemID == "") ||
+		(h.MaintenanceTaskID != nil && *h.MaintenanceTaskID == "") {
+		return fmt.Errorf("image upkeep hold %s reference: %w", h.Pending, ErrEmptyID)
 	}
 	return nil
 }
@@ -607,6 +684,10 @@ type RunHoldObservation struct {
 	// optional even beside that reason: rows written before it existed, and
 	// holds raised outside admission, carry none.
 	Detail *AdmissionRefusal `json:"detail"`
+	// ImageUpkeep names what an image_upkeep_pending hold waits on; it is
+	// present exactly beside that reason (nil renders explicit null). The
+	// reason is new with the field, so no older row lacks it.
+	ImageUpkeep *ImageUpkeepHold `json:"image_upkeep"`
 	// FirstObservedAt is the UTC instant the current cause was first
 	// observed; LastObservedAt the most recent.
 	FirstObservedAt time.Time `json:"first_observed_at"`
@@ -631,6 +712,15 @@ func (h RunHoldObservation) Validate() error {
 				h.RunID, h.Reason, ErrHoldDetailMismatch)
 		}
 		if err := h.Detail.Validate(); err != nil {
+			return fmt.Errorf("run hold observation %s: %w", h.RunID, err)
+		}
+	}
+	if (h.ImageUpkeep != nil) != (h.Reason == HoldImageUpkeepPending) {
+		return fmt.Errorf("run hold observation %s image_upkeep present=%t beside reason %q: %w",
+			h.RunID, h.ImageUpkeep != nil, h.Reason, ErrHoldDetailMismatch)
+	}
+	if h.ImageUpkeep != nil {
+		if err := h.ImageUpkeep.Validate(); err != nil {
 			return fmt.Errorf("run hold observation %s: %w", h.RunID, err)
 		}
 	}

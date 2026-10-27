@@ -469,7 +469,7 @@ func seedReviewedRun(t *testing.T, st *store.Store, id domain.RunID) domain.Run 
 			return err
 		}
 		return tx.PutTaskSubmissionRequest(ctx, domain.TaskSubmission{
-			CommandID: "cmd-" + string(id), DeviceID: "device-1", ProjectID: run.ProjectID,
+			CommandID: "cmd-" + string(id), Origin: domain.TaskSubmissionOriginDevice, DeviceID: new(domain.DeviceID("device-1")), ProjectID: run.ProjectID,
 			SourceDigest: domain.Digest("sha256:" + strings.Repeat("4", 64)), TaskID: run.TaskID,
 			SpecificationRunID: id,
 			Name:               domain.DisplayName{Text: "Reviewed task", Source: domain.DisplayNameSourceOperator},

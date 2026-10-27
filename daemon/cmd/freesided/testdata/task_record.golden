@@ -262,6 +262,7 @@
               "invocation_id": "inv-run-71837d21033d7251252de29a44e14d0b71cb3738b752030c981e4bc45c238315",
               "reason": "verification_findings",
               "detail": null,
+              "image_upkeep": null,
               "first_observed_at": "2026-09-01T14:10:00Z",
               "last_observed_at": "2026-09-01T14:20:00Z"
             },
@@ -463,6 +464,7 @@
         "invocation_id": "inv-run-71837d21033d7251252de29a44e14d0b71cb3738b752030c981e4bc45c238315",
         "reason": "verification_findings",
         "detail": null,
+        "image_upkeep": null,
         "first_observed_at": "2026-09-01T14:10:00Z",
         "last_observed_at": "2026-09-01T14:20:00Z"
       },

@@ -90,14 +90,23 @@ const (
 	// routed to separate work (plan §5.17). Its parameter type and gate live
 	// in follow_up_filing.go.
 	EffectFollowUpFiling EffectKind = "follow_up_filing"
+	// EffectImagePolicyAdoption is the fourth registry member: the adoption
+	// card project-image upkeep raises when only trusted-policy clauses
+	// refused a rebuild, proposing the recipe digest or registry authorities
+	// to adopt (plan §5.7, Project-image upkeep). Its parameter type lives in
+	// effect_proposal.go. Nothing raises one until #2335, so every authority
+	// boundary refuses it until then.
+	EffectImagePolicyAdoption EffectKind = "image_policy_adoption"
 )
 
 // AllEffectKinds is the single registration point for effect kinds.
-var AllEffectKinds = []EffectKind{EffectTaskProposal, EffectSourceIssueClosure, EffectFollowUpFiling}
+var AllEffectKinds = []EffectKind{
+	EffectTaskProposal, EffectSourceIssueClosure, EffectFollowUpFiling, EffectImagePolicyAdoption,
+}
 
 func (k EffectKind) valid() bool {
 	switch k {
-	case EffectTaskProposal, EffectSourceIssueClosure, EffectFollowUpFiling:
+	case EffectTaskProposal, EffectSourceIssueClosure, EffectFollowUpFiling, EffectImagePolicyAdoption:
 		return true
 	default:
 		return false

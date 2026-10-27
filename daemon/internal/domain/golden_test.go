@@ -1488,6 +1488,40 @@ func TestGolden(t *testing.T) {
 		t.Fatal(err)
 	}
 
+	admittedImagePointer := domain.AdmittedImagePointer{
+		RepositoryID: projectImage.RepositoryID, Repository: projectImage.Repository,
+		Harness: domain.HarnessClientClaudeCode, ImageID: projectImage.ID,
+		ImageRef: projectImage.ImageRef, AdvancedAt: ts,
+	}
+
+	upkeepRefusal, err := domain.NewImageUpkeepRefusal(domain.ImageUpkeepRefusalInput{
+		RepositoryID: projectImage.RepositoryID, Repository: projectImage.Repository,
+		Harness: domain.HarnessClientClaudeCode, TipSHA: strings.Repeat("e", 40),
+		MeasuredFromImageID: projectImage.ID, Class: domain.ImageUpkeepRefusalPolicy,
+		Findings: []domain.ImageUpkeepClauseFinding{{
+			Clause: domain.RebuildRefusalRecipeChanged,
+			Detail: "recipe digest changed at the tip",
+		}},
+		RecordedAt: ts,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	hostFaultRefusal, err := domain.NewImageUpkeepRefusal(domain.ImageUpkeepRefusalInput{
+		RepositoryID: projectImage.RepositoryID, Repository: projectImage.Repository,
+		Harness: domain.HarnessClientClaudeCode, TipSHA: strings.Repeat("e", 40),
+		MeasuredFromImageID: projectImage.ID, Class: domain.ImageUpkeepRefusalHostFault,
+		RecordedAt: ts,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	tipObservation := domain.RepositoryTipObservation{
+		RepositoryID: projectImage.RepositoryID, Repository: projectImage.Repository,
+		Branch: "main", TipSHA: strings.Repeat("e", 40), ObservedAt: ts,
+		UpkeepTipSHA: projectImage.CommitSHA,
+	}
+
 	project, err := domain.NewProject("project-alpha", "freeasinbird/gh-imgup", 1278475858)
 	if err != nil {
 		t.Fatal(err)
@@ -1603,6 +1637,24 @@ func TestGolden(t *testing.T) {
 		FirstObservedAt: ts.Add(time.Minute),
 		LastObservedAt:  ts.Add(2 * time.Minute),
 	}
+	upkeepRefusalID := domain.Digest("sha256:" + strings.Repeat("e1", 32))
+	upkeepItemID := domain.ItemID("item-image-policy-adoption")
+	upkeepTaskID := domain.TaskID("task-image-maintenance")
+	upkeepHold := func(fact domain.ImageUpkeepHold) domain.RunHoldObservation {
+		return domain.RunHoldObservation{
+			RunID: "run-1", Reason: domain.HoldImageUpkeepPending, ImageUpkeep: &fact,
+			FirstObservedAt: ts.Add(time.Minute), LastObservedAt: ts.Add(2 * time.Minute),
+		}
+	}
+	rebuildHold := upkeepHold(domain.ImageUpkeepHold{Pending: domain.ImageUpkeepPendingRebuild})
+	adoptionHold := upkeepHold(domain.ImageUpkeepHold{
+		Pending: domain.ImageUpkeepPendingAdoptionProposal, RefusalRecordID: &upkeepRefusalID,
+		ProposalItemID: &upkeepItemID,
+	})
+	maintenanceHold := upkeepHold(domain.ImageUpkeepHold{
+		Pending: domain.ImageUpkeepPendingMaintenanceTask, RefusalRecordID: &upkeepRefusalID,
+		MaintenanceTaskID: &upkeepTaskID,
+	})
 	runObservation := domain.RunObservation{
 		RunID:      "run-1",
 		Milestones: []domain.RunMilestone{submittedMilestone, outcomeMilestone, terminalMilestone},
@@ -1711,6 +1763,15 @@ func TestGolden(t *testing.T) {
 	janitorSchedule, err := domain.NewSchedule(domain.ScheduleInput{
 		ID: "schedule-janitor", ProjectID: "project-system",
 		Kind:      domain.ScheduleJanitor,
+		Subject:   domain.ScheduleSubject{Type: domain.ScheduleSubjectTrustedConfig},
+		CreatedAt: ts, IntervalSeconds: &janitorInterval,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	imageUpkeepSchedule, err := domain.NewSchedule(domain.ScheduleInput{
+		ID: "schedule-image-upkeep", ProjectID: "project-system",
+		Kind:      domain.ScheduleImageUpkeep,
 		Subject:   domain.ScheduleSubject{Type: domain.ScheduleSubjectTrustedConfig},
 		CreatedAt: ts, IntervalSeconds: &janitorInterval,
 	})
@@ -1931,6 +1992,7 @@ func TestGolden(t *testing.T) {
 		{"schedule_base_advance_watch", watchSchedule},
 		{"schedule_installation_poll", pollSchedule},
 		{"schedule_janitor", janitorSchedule},
+		{"schedule_image_upkeep", imageUpkeepSchedule},
 		{"schedule_fired", firedSchedule},
 		{"schedule_occurrence_pending", pendingOccurrence},
 		{"schedule_occurrence_consumed", consumedOccurrence},
@@ -2004,11 +2066,18 @@ func TestGolden(t *testing.T) {
 		{"comprehension_defect", comprehensionDefect},
 		{"command_with_decision_evidence", commandWithEvidence},
 		{"task_submission", domain.TaskSubmission{
-			CommandID: "cmd-2", DeviceID: "device-1", ProjectID: "proj-1",
+			CommandID: "cmd-2", Origin: domain.TaskSubmissionOriginDevice, DeviceID: new(domain.DeviceID("device-1")), ProjectID: "proj-1",
 			SourceDigest:       "sha256:1111111111111111111111111111111111111111111111111111111111111111",
 			TaskID:             "task-1",
 			SpecificationRunID: "run-1",
 			Name:               domain.DisplayName{Text: "Improve task navigation", Source: domain.DisplayNameSourceOperator},
+		}},
+		{"task_submission_daemon", domain.TaskSubmission{
+			CommandID: "cmd-3", Origin: domain.TaskSubmissionOriginDaemon, ProjectID: "proj-1",
+			SourceDigest:       upkeepRefusal.ID,
+			TaskID:             "task-2",
+			SpecificationRunID: "run-2",
+			Name:               domain.DisplayName{Text: "Repair the npm lockfile", Source: domain.DisplayNameSourceName},
 		}},
 		{"conversation", conversation},
 		{"message", msg},
@@ -2079,6 +2148,10 @@ func TestGolden(t *testing.T) {
 		{"project_image", projectImage},
 		{"project_image_environment", projectImageWithEnvironment},
 		{"project_image_go_environment", projectImageGoEnvironment},
+		{"admitted_image_pointer", admittedImagePointer},
+		{"image_upkeep_refusal", upkeepRefusal},
+		{"image_upkeep_refusal_host_fault", hostFaultRefusal},
+		{"repository_tip_observation", tipObservation},
 		{"project", project},
 		{"backend_conformance", backendConformance},
 		{"backend_conformance_failed", failedConformance},
@@ -2092,6 +2165,9 @@ func TestGolden(t *testing.T) {
 		{"invocation_observation", invocationObservation},
 		{"run_hold_observation", holdObservation},
 		{"run_hold_observation_admission_refusal", admissionHoldObservation},
+		{"run_hold_observation_image_upkeep_rebuild", rebuildHold},
+		{"run_hold_observation_image_upkeep_adoption", adoptionHold},
+		{"run_hold_observation_image_upkeep_maintenance", maintenanceHold},
 		{"run_observation", runObservation},
 		{"work_unit_declaration", unitDeclaration},
 		{"work_unit_pr_binding", unitPRBinding},

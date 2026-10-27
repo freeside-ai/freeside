@@ -476,6 +476,15 @@ func TestRunHoldObservationValidate(t *testing.T) {
 				Check: AdmissionCheckAgentLaunchCoverage, LaunchStage: &stage, LaunchDigest: &digest,
 			}
 		}, ErrEmptyField},
+		{"image upkeep beside another reason", func(h *RunHoldObservation) {
+			h.ImageUpkeep = &ImageUpkeepHold{Pending: ImageUpkeepPendingRebuild}
+		}, ErrHoldDetailMismatch},
+		{"image upkeep reason without its fact", func(h *RunHoldObservation) {
+			h.Reason = HoldImageUpkeepPending
+		}, ErrHoldDetailMismatch},
+		{"unknown upkeep pending", func(h *RunHoldObservation) {
+			h.Reason, h.ImageUpkeep = HoldImageUpkeepPending, &ImageUpkeepHold{Pending: "vibes"}
+		}, ErrInvalidImageUpkeepPending},
 	}
 	for _, tc := range cases {
 		h := valid
@@ -500,6 +509,61 @@ func TestRunHoldObservationValidate(t *testing.T) {
 	refused.Detail = &AdmissionRefusal{Check: AdmissionCheckCapabilityBelowFloor}
 	if err := refused.Validate(); err != nil {
 		t.Errorf("check-only admission hold rejected: %v", err)
+	}
+}
+
+func TestImageUpkeepHoldValidate(t *testing.T) {
+	refusal := Digest("sha256:" + strings.Repeat("ab", 32))
+	item, task := ItemID("item-adopt"), TaskID("task-maintain")
+	empty, emptyTask := ItemID(""), TaskID("")
+	malformed := Digest("refusal")
+	for _, tc := range []struct {
+		name string
+		hold ImageUpkeepHold
+		want error
+	}{
+		{"rebuild", ImageUpkeepHold{Pending: ImageUpkeepPendingRebuild}, nil},
+		{"adoption proposal", ImageUpkeepHold{
+			Pending: ImageUpkeepPendingAdoptionProposal, RefusalRecordID: &refusal, ProposalItemID: &item,
+		}, nil},
+		{"maintenance task", ImageUpkeepHold{
+			Pending: ImageUpkeepPendingMaintenanceTask, RefusalRecordID: &refusal, MaintenanceTaskID: &task,
+		}, nil},
+		{"zero pending", ImageUpkeepHold{}, ErrInvalidImageUpkeepPending},
+		{"rebuild names a refusal", ImageUpkeepHold{
+			Pending: ImageUpkeepPendingRebuild, RefusalRecordID: &refusal,
+		}, ErrHoldDetailMismatch},
+		{"adoption without its refusal", ImageUpkeepHold{
+			Pending: ImageUpkeepPendingAdoptionProposal, ProposalItemID: &item,
+		}, ErrHoldDetailMismatch},
+		{"adoption without its card", ImageUpkeepHold{
+			Pending: ImageUpkeepPendingAdoptionProposal, RefusalRecordID: &refusal,
+		}, ErrHoldDetailMismatch},
+		{"adoption names a task", ImageUpkeepHold{
+			Pending: ImageUpkeepPendingAdoptionProposal, RefusalRecordID: &refusal,
+			ProposalItemID: &item, MaintenanceTaskID: &task,
+		}, ErrHoldDetailMismatch},
+		{"maintenance without its task", ImageUpkeepHold{
+			Pending: ImageUpkeepPendingMaintenanceTask, RefusalRecordID: &refusal,
+		}, ErrHoldDetailMismatch},
+		{"maintenance names a card", ImageUpkeepHold{
+			Pending: ImageUpkeepPendingMaintenanceTask, RefusalRecordID: &refusal,
+			MaintenanceTaskID: &task, ProposalItemID: &item,
+		}, ErrHoldDetailMismatch},
+		{"malformed refusal", ImageUpkeepHold{
+			Pending: ImageUpkeepPendingMaintenanceTask, RefusalRecordID: &malformed, MaintenanceTaskID: &task,
+		}, ErrHoldDetailMismatch},
+		{"empty card", ImageUpkeepHold{
+			Pending: ImageUpkeepPendingAdoptionProposal, RefusalRecordID: &refusal, ProposalItemID: &empty,
+		}, ErrEmptyID},
+		{"empty task", ImageUpkeepHold{
+			Pending: ImageUpkeepPendingMaintenanceTask, RefusalRecordID: &refusal, MaintenanceTaskID: &emptyTask,
+		}, ErrEmptyID},
+	} {
+		err := tc.hold.Validate()
+		if (tc.want == nil && err != nil) || (tc.want != nil && !errors.Is(err, tc.want)) {
+			t.Errorf("%s: Validate() = %v, want %v", tc.name, err, tc.want)
+		}
 	}
 }
 

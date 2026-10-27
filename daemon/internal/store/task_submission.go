@@ -45,8 +45,48 @@ func (tx *WriteTx) PutTaskSubmissionRequest(ctx context.Context, submission doma
 
 const putTaskSubmissionSQL = `
 INSERT INTO task_submission_commands
-    (command_id, device_id, project_id, task_id, specification_run_id, entity_version, as_of_revision, body)
-VALUES (?, ?, ?, ?, ?, 1, ?, ?)`
+    (command_id, origin, device_id, project_id, task_id, specification_run_id, entity_version, as_of_revision, body)
+VALUES (?, ?, ?, ?, ?, ?, 1, ?, ?)`
+
+// ErrDaemonSubmissionUnsourced is returned (wrapped) when a daemon-origin
+// task submission does not name a recorded repair-class image upkeep refusal
+// for its project's repository.
+var ErrDaemonSubmissionUnsourced = errors.New("daemon-origin task submission names no repair-class image upkeep refusal for its project")
+
+// gateDaemonSubmissionSource is the trust gate for a daemon-origin
+// submission, run on every write and decode. Only project-image upkeep
+// submits one, and only for a refusal that needs a repository repair (plan
+// §5.7, Project-image upkeep), so the refusal record its SourceDigest names
+// must exist, be a repair, and name the repository of the submission's
+// project. The origin and source are body and column values, never trusted
+// on their own. A device submission passes through.
+func (tx *ReadTx) gateDaemonSubmissionSource(ctx context.Context, submission domain.TaskSubmission) error {
+	switch submission.Origin {
+	case domain.TaskSubmissionOriginDevice:
+		return nil
+	case domain.TaskSubmissionOriginDaemon:
+		refusal, err := tx.GetImageUpkeepRefusal(ctx, submission.SourceDigest)
+		if errors.Is(err, ErrNotFound) {
+			return fmt.Errorf("source %q: %w", submission.SourceDigest, ErrDaemonSubmissionUnsourced)
+		}
+		if err != nil {
+			return err
+		}
+		project, err := tx.GetProject(ctx, submission.ProjectID)
+		if errors.Is(err, ErrNotFound) {
+			return fmt.Errorf("project %q: %w", submission.ProjectID, ErrDaemonSubmissionUnsourced)
+		}
+		if err != nil {
+			return err
+		}
+		if refusal.Class != domain.ImageUpkeepRefusalRepair || refusal.RepositoryID != project.RepositoryID {
+			return fmt.Errorf("source %q class %q repository %d: %w",
+				submission.SourceDigest, refusal.Class, refusal.RepositoryID, ErrDaemonSubmissionUnsourced)
+		}
+		return nil
+	}
+	return fmt.Errorf("origin %q: %w", submission.Origin, domain.ErrInvalidTaskSubmissionOrigin)
+}
 
 // PutTaskSubmission write-once records one accepted submit_task command
 // (domain.TaskSubmission). It is client-visible, so it runs inside Write, which
@@ -85,8 +125,11 @@ func (tx *WriteTx) PutTaskSubmission(ctx context.Context, submission domain.Task
 	} else if conflict != nil {
 		return fmt.Errorf("put task submission %q: %w", submission.CommandID, ErrImmutableConflict)
 	}
+	if err := tx.gateDaemonSubmissionSource(ctx, submission); err != nil {
+		return fmt.Errorf("put task submission %q: %w", submission.CommandID, err)
+	}
 	if _, err := tx.tx.ExecContext(ctx, putTaskSubmissionSQL,
-		submission.CommandID, submission.DeviceID, submission.ProjectID,
+		submission.CommandID, submission.Origin, submission.DeviceID, submission.ProjectID,
 		submission.TaskID, submission.SpecificationRunID, tx.asOfRevision, body); err != nil {
 		return fmt.Errorf("put task submission %q: %w", submission.CommandID, err)
 	}
@@ -108,7 +151,8 @@ func (tx *ReadTx) GetTaskSubmissionSnapshot(
 	ctx context.Context, commandID string,
 ) (domain.TaskSubmission, Snapshot, error) {
 	var (
-		deviceID           string
+		origin             string
+		deviceID           sql.NullString
 		projectID          string
 		taskID             string
 		specificationRunID string
@@ -116,8 +160,8 @@ func (tx *ReadTx) GetTaskSubmissionSnapshot(
 		body               []byte
 	)
 	if err := tx.tx.QueryRowContext(ctx,
-		`SELECT device_id, project_id, task_id, specification_run_id, entity_version, as_of_revision, body FROM task_submission_commands WHERE command_id = ?`, commandID).
-		Scan(&deviceID, &projectID, &taskID, &specificationRunID, &snap.EntityVersion, &snap.AsOfRevision, &body); err != nil {
+		`SELECT origin, device_id, project_id, task_id, specification_run_id, entity_version, as_of_revision, body FROM task_submission_commands WHERE command_id = ?`, commandID).
+		Scan(&origin, &deviceID, &projectID, &taskID, &specificationRunID, &snap.EntityVersion, &snap.AsOfRevision, &body); err != nil {
 		return domain.TaskSubmission{}, Snapshot{}, fmt.Errorf("get task submission %q: %w", commandID, notFoundOr(err))
 	}
 	submission, err := decode[domain.TaskSubmission](body)
@@ -130,13 +174,26 @@ func (tx *ReadTx) GetTaskSubmissionSnapshot(
 	if err := submission.Validate(); err != nil {
 		return domain.TaskSubmission{}, Snapshot{}, fmt.Errorf("get task submission %q: %w", commandID, errRowInconsistent)
 	}
+	var bodyDeviceID string
+	if submission.DeviceID != nil {
+		bodyDeviceID = string(*submission.DeviceID)
+	}
 	if submission.CommandID != commandID ||
-		submission.DeviceID != domain.DeviceID(deviceID) ||
+		string(submission.Origin) != origin ||
+		!optionalStringEqual(deviceID, bodyDeviceID) ||
 		submission.ProjectID != domain.ProjectID(projectID) ||
 		submission.TaskID != domain.TaskID(taskID) ||
 		submission.SpecificationRunID != domain.RunID(specificationRunID) ||
 		snap.EntityVersion != 1 || snap.AsOfRevision < 1 {
 		return domain.TaskSubmission{}, Snapshot{}, fmt.Errorf("get task submission %q: %w", commandID, errRowInconsistent)
+	}
+	// A stored daemon-origin row whose refusal is missing or does not back it
+	// is an inconsistent row, not an absent one.
+	if err := tx.gateDaemonSubmissionSource(ctx, submission); errors.Is(err, ErrDaemonSubmissionUnsourced) {
+		return domain.TaskSubmission{}, Snapshot{}, fmt.Errorf("get task submission %q: %w",
+			commandID, errors.Join(err, errRowInconsistent))
+	} else if err != nil {
+		return domain.TaskSubmission{}, Snapshot{}, fmt.Errorf("get task submission %q: %w", commandID, err)
 	}
 	return submission, snap, nil
 }

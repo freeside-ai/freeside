@@ -1,0 +1,11 @@
+{
+  "id": "sha256:e51fbd035fa1826f27ac1b44b188daa62d6cb01261b06652babdf148c7fd9015",
+  "repository_id": 1278475858,
+  "repository": "freeasinbird/gh-imgup",
+  "harness": "claude_code",
+  "tip_sha": "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+  "measured_from_image_id": "sha256:7e7a5c42548e88175b869c057c4ad4bb221dc0069e4caf6818dfe7c4af926349",
+  "class": "host_fault",
+  "findings": [],
+  "recorded_at": "2026-01-02T03:04:05Z"
+}

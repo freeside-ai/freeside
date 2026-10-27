@@ -466,6 +466,22 @@ func TestEnumValidity(t *testing.T) {
 		valids["UsageMeasurementKind"] = append(valids["UsageMeasurementKind"], v.valid)
 	}
 	invalids["UsageMeasurementKind"] = UsageMeasurementKind("").valid
+	for _, v := range AllRebuildRefusals {
+		valids["RebuildRefusal"] = append(valids["RebuildRefusal"], v.valid)
+	}
+	invalids["RebuildRefusal"] = RebuildRefusal("").valid
+	for _, v := range AllImageUpkeepPendings {
+		valids["ImageUpkeepPending"] = append(valids["ImageUpkeepPending"], v.valid)
+	}
+	invalids["ImageUpkeepPending"] = ImageUpkeepPending("").valid
+	for _, v := range AllImageUpkeepRefusalClasses {
+		valids["ImageUpkeepRefusalClass"] = append(valids["ImageUpkeepRefusalClass"], v.valid)
+	}
+	invalids["ImageUpkeepRefusalClass"] = ImageUpkeepRefusalClass("").valid
+	for _, v := range AllTaskSubmissionOrigins {
+		valids["TaskSubmissionOrigin"] = append(valids["TaskSubmissionOrigin"], v.valid)
+	}
+	invalids["TaskSubmissionOrigin"] = TaskSubmissionOrigin("").valid
 
 	for name, checks := range valids {
 		for i, check := range checks {

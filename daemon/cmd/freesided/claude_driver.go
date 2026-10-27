@@ -1474,6 +1474,42 @@ func resolveProjectImagePreparation(
 	return slices.Clone(image.PreparationCommand), nil
 }
 
+// seedAdmittedImagePointer makes the configured agent image the pointer's
+// seed (plan §5.7, Project-image upkeep): a repository with no pointer for
+// the Claude agent base gets one naming the image composition just admitted.
+// An existing pointer is never overwritten, because once the upkeep job owns
+// it the configured flag may be the older image; a disagreement is logged and
+// the pointer kept. Selection still follows the flag until #2333 switches it
+// to the pointer.
+func seedAdmittedImagePointer(
+	ctx context.Context, st *store.Store, image domain.ProjectImage, now time.Time,
+	logger *slog.Logger,
+) error {
+	var kept domain.AdmittedImagePointer
+	err := st.WriteInternal(ctx, func(tx *store.InternalTx) error {
+		existing, _, found, err := tx.GetAdmittedImagePointer(
+			ctx, image.RepositoryID, domain.HarnessClientClaudeCode)
+		if err != nil || found {
+			kept = existing
+			return err
+		}
+		return tx.AdvanceAdmittedImagePointer(ctx, domain.AdmittedImagePointer{
+			RepositoryID: image.RepositoryID, Repository: image.Repository,
+			Harness: domain.HarnessClientClaudeCode, ImageID: image.ID,
+			ImageRef: image.ImageRef, AdvancedAt: now,
+		})
+	})
+	if err != nil {
+		return fmt.Errorf("seed admitted image pointer: %w", err)
+	}
+	if kept.ImageID != "" && kept.ImageID != image.ID {
+		logger.Info("admitted image pointer differs from the configured agent image; keeping the pointer",
+			"repository_id", image.RepositoryID, "pointer_image_ref", kept.ImageRef,
+			"configured_image_ref", image.ImageRef)
+	}
+	return nil
+}
+
 // projectImageBaseObserver reads what the configured base commit holds for
 // the inputs a project image's environment records.
 type projectImageBaseObserver func() (domain.ProjectImageBaseInputs, error)
@@ -1660,6 +1696,11 @@ func composeClaudeDriver(
 				})
 				return inputs, err
 			}); err != nil {
+			return nil, err
+		}
+		// Seed only after the image is admitted at the base: a start that
+		// refuses the image must not leave a pointer the next start keeps.
+		if err := seedAdmittedImagePointer(ctx, st, image, utcNow(), logger); err != nil {
 			return nil, err
 		}
 	}

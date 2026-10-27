@@ -472,7 +472,7 @@ package enum AttentionDisplay {
         case .follow_up_filing:
             guard let filing = facts.follow_up_filing?.value1 else { return [] }
             return followUpFilingRows(filing)
-        case .run_proposal:
+        case .run_proposal, .image_policy_adoption:
             return []
         }
     }
@@ -671,6 +671,7 @@ package enum AttentionDisplay {
         case .run_proposal: return "Run proposal"
         case .source_issue_closure: return "Source issue closure"
         case .follow_up_filing: return "Follow-up issue filing"
+        case .image_policy_adoption: return "Image policy adoption"
         }
     }
 

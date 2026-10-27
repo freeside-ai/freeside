@@ -1234,8 +1234,8 @@ components:
       description: >
         Store-authenticated, digest-bound effect-proposal facts matched to one
         exact attention-item snapshot before the client enables a decision.
-        Exactly one kind member (source_issue_closure or follow_up_filing) is
-        non-null, the one effect_kind names. The opaque subject handle and
+        Exactly one kind member (source_issue_closure, follow_up_filing, or
+        image_policy_adoption) is non-null, the one effect_kind names. The opaque subject handle and
         policy identities stay server-side, as they do for task_proposal.
       additionalProperties: false
       required:
@@ -1247,6 +1247,7 @@ components:
         - supersedes
         - source_issue_closure
         - follow_up_filing
+        - image_policy_adoption
       properties:
         as_of_revision:
           $ref: "#/components/schemas/AsOfRevision"
@@ -1281,6 +1282,44 @@ components:
           description: >
             The filing facts for a follow_up_filing effect; null for any other
             effect kind.
+        image_policy_adoption:
+          nullable: true
+          allOf:
+            - $ref: "#/components/schemas/ImagePolicyAdoptionFacts"
+          description: >
+            The adoption facts for an image_policy_adoption effect; null for
+            any other effect kind. The daemon serves no adoption card yet
+            (#2335 raises it), so this is null today.
+
+    ImagePolicyAdoptionFacts:
+      type: object
+      description: >
+        The policy change an adoption card proposes to answer one policy-class
+        project-image upkeep refusal (plan §5.7, Project-image upkeep): the
+        refusal record it answers and the recipe digest to approve, the
+        registry authorities to add, or both. Approving the card opens a
+        project-policy proposal; merging that proposal is the adoption.
+        Mirrors domain.ImagePolicyAdoptionParameters.
+      additionalProperties: false
+      required: [refusal_record_id, recipe_digest, registry_authorities]
+      properties:
+        refusal_record_id:
+          $ref: "#/components/schemas/Digest"
+        recipe_digest:
+          nullable: true
+          allOf:
+            - $ref: "#/components/schemas/Digest"
+          description: The recipe digest to approve; null when the recipe did not change.
+        registry_authorities:
+          type: array
+          maxItems: 32
+          description: >
+            Registry host names to add to the project's registry set, strictly
+            ascending; empty when only the recipe changed.
+          items:
+            type: string
+            minLength: 1
+            maxLength: 253
 
     EffectProposalRevisionFacts:
       type: object
@@ -1525,9 +1564,11 @@ components:
         the task-proposal encoding; source_issue_closure proposes closing the
         source issue a work unit's pull request resolves (plan §5.13);
         follow_up_filing proposes filing a follow-up issue for a deferred
-        finding or a separate-work verdict (plan §5.17). Matches
+        finding or a separate-work verdict (plan §5.17);
+        image_policy_adoption proposes adopting the recipe digest or registry
+        authorities a project-image upkeep refusal names (plan §5.7). Matches
         domain.AllEffectKinds.
-      enum: [run_proposal, source_issue_closure, follow_up_filing]
+      enum: [run_proposal, source_issue_closure, follow_up_filing, image_policy_adoption]
 
     IssueTextRuleset:
       type: string
@@ -2594,6 +2635,43 @@ components:
         - trust_blocked
         - base_advanced
         - identity_parallelism
+        - image_upkeep_pending
+
+    ImageUpkeepPending:
+      type: string
+      description: >
+        What an image_upkeep_pending hold waits on, mirrored from
+        domain.ImageUpkeepPending (plan §5.7, Project-image upkeep): the
+        upkeep job's rebuild, an adoption card, or a maintenance task.
+      enum: [rebuild, adoption_proposal, maintenance_task]
+
+    ImageUpkeepHold:
+      type: object
+      description: >
+        The typed fact beside an image_upkeep_pending hold, mirrored from
+        domain.ImageUpkeepHold: what the run waits on and, past a rebuild,
+        the upkeep refusal record and the item or task that answers it, each
+        by reference.
+      additionalProperties: false
+      required: [pending, refusal_record_id, proposal_item_id, maintenance_task_id]
+      properties:
+        pending:
+          $ref: "#/components/schemas/ImageUpkeepPending"
+        refusal_record_id:
+          nullable: true
+          allOf:
+            - $ref: "#/components/schemas/Digest"
+          description: The upkeep refusal record; null exactly for a rebuild.
+        proposal_item_id:
+          type: string
+          minLength: 1
+          nullable: true
+          description: The adoption card's item ID; set exactly for adoption_proposal.
+        maintenance_task_id:
+          type: string
+          minLength: 1
+          nullable: true
+          description: The maintenance task's ID; set exactly for maintenance_task.
 
     AdmissionCheck:
       type: string
@@ -2769,7 +2847,7 @@ components:
       type: object
       description: The daemon's current typed hold observation for one run.
       additionalProperties: false
-      required: [run_id, invocation_id, reason, detail, first_observed_at, last_observed_at]
+      required: [run_id, invocation_id, reason, detail, image_upkeep, first_observed_at, last_observed_at]
       properties:
         run_id:
           type: string
@@ -2788,6 +2866,13 @@ components:
             What an admission_policy_refused hold refused; null beside every
             other reason, and on an admission hold recorded before the detail
             existed or raised outside admission.
+        image_upkeep:
+          nullable: true
+          allOf:
+            - $ref: "#/components/schemas/ImageUpkeepHold"
+          description: >
+            What an image_upkeep_pending hold waits on; present exactly beside
+            that reason and null beside every other.
         first_observed_at:
           type: string
           format: date-time
@@ -2852,6 +2937,7 @@ components:
         - installation_poll
         - doctor
         - janitor
+        - image_upkeep
 
     ScheduleStatus:
       type: string
@@ -3622,6 +3708,16 @@ components:
         answer_route: null
         decision_evidence: null
 
+    TaskSubmissionOrigin:
+      type: string
+      description: >
+        Who recorded a task submission (mirrors domain.TaskSubmissionOrigin).
+        device is a paired device's submit_task command. daemon is project-image
+        upkeep's repair task, which the daemon accepts only against a recorded
+        repair-class upkeep refusal for the project's repository and re-checks
+        whenever it reads the record back. Widening it is a contract change.
+      enum: [device, daemon]
+
     TaskSubmissionRecord:
       type: object
       description: >
@@ -3635,6 +3731,7 @@ components:
       required:
         - kind
         - command_id
+        - origin
         - device_id
         - project_id
         - source_digest
@@ -3649,9 +3746,15 @@ components:
         command_id:
           type: string
           minLength: 1
+        origin:
+          $ref: "#/components/schemas/TaskSubmissionOrigin"
         device_id:
           type: string
           minLength: 1
+          nullable: true
+          description: >
+            The submitting device for a device-origin record; null exactly
+            when origin is daemon.
         project_id:
           type: string
           minLength: 1
@@ -3676,6 +3779,7 @@ components:
       example:
         kind: "submit_task"
         command_id: "cmd-2"
+        origin: "device"
         device_id: "device-1"
         project_id: "project-1"
         source_digest: "sha256:src"

@@ -341,8 +341,20 @@ func (o Onboard) Run(ctx context.Context, req OnboardRequest) (OnboardResult, er
 		return OnboardResult{}, errors.New(
 			"onboard: recorded project image differs from the builder result")
 	}
+	// The image just built seeds the admitted-image pointer in the same
+	// transaction as the trust profile (plan §5.7, Project-image upkeep).
+	// Onboarding builds from the Claude agent base only, so it seeds that
+	// harness's pointer; a re-onboard advances it to the newer image.
+	pointer := domain.AdmittedImagePointer{
+		RepositoryID: image.RepositoryID, Repository: image.Repository,
+		Harness: domain.HarnessClientClaudeCode, ImageID: image.ID,
+		ImageRef: image.ImageRef, AdvancedAt: o.Now().UTC(),
+	}
 	if err := o.Store.WriteInternal(ctx, func(tx *store.InternalTx) error {
-		return tx.RecordInactiveTrustProfile(ctx, profile, o.Now().UTC())
+		if err := tx.RecordInactiveTrustProfile(ctx, profile, o.Now().UTC()); err != nil {
+			return err
+		}
+		return tx.AdvanceAdmittedImagePointer(ctx, pointer)
 	}); err != nil {
 		return OnboardResult{}, fmt.Errorf("onboard: record inactive trust profile: %w", err)
 	}

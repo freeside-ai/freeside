@@ -666,19 +666,6 @@ func TestLockfileRefusalBoundsCandidateText(t *testing.T) {
 	}
 }
 
-func TestRebuildRefusalSetIsClosed(t *testing.T) {
-	seen := map[RebuildRefusal]bool{}
-	for _, refusal := range AllRebuildRefusals {
-		if !refusal.valid() || seen[refusal] {
-			t.Fatalf("refusal %q is invalid or listed twice", refusal)
-		}
-		seen[refusal] = true
-	}
-	if RebuildRefusal("").valid() || RebuildRefusal("other").valid() {
-		t.Fatal("a value outside the set is valid")
-	}
-}
-
 func gatePolicy(t *testing.T, registrySet string) domain.ResolvedPolicy {
 	t.Helper()
 	if registrySet == "" {

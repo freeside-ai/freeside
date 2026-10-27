@@ -25,6 +25,7 @@ import Testing
             .trust_blocked: "Trust checks block publication",
             .base_advanced: "Base branch changed",
             .identity_parallelism: "Waiting for agent capacity",
+            .image_upkeep_pending: "Waiting for project image upkeep",
         ]
         #expect(Set(labels.keys) == Set(Components.Schemas.RunHoldReason.allCases))
         for reason in Components.Schemas.RunHoldReason.allCases {

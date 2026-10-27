@@ -2539,6 +2539,16 @@ the record's review-configuration digest), `project_image` (set
 `images.agent` to the onboarding's `project_image.image_ref`), then
 `approved_recipe` (set it to that image's `recipe_digest`).
 
+**The admitted-image pointer.** `images.agent` and `-agent-image` also
+seed the repository's admitted-image pointer for the Claude agent base
+(plan §5.7, Project-image upkeep). `freesided onboard` points it at the
+image it builds, and an unattended start points it at the configured
+image, once that image is admitted at the base, when the repository has
+none; a start never overwrites an existing pointer and logs when the two
+differ. Selection still follows the flag;
+the image-upkeep job switches it to the pointer (#2333), and the flag
+retires after that.
+
 **What it writes.** `<state-root>/daemon/prelaunch.json`
 (`freeside-prelaunch-v1`, mode `0600`, replaced atomically), and the same
 JSON to stdout. It records the settings digest, the daemon build, the

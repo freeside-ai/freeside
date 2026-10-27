@@ -459,7 +459,12 @@ func migrationsBeforeScheduleAuthority(t *testing.T) fs.FS {
 			entry.Name() == "0101_work_unit_rebase_proofs.sql" ||
 			entry.Name() == "0102_usage_observations_review.sql" ||
 			entry.Name() == "0103_run_hold_admission_detail.sql" ||
-			entry.Name() == "0104_execution_outcome_cause.sql" || entry.IsDir() {
+			entry.Name() == "0104_execution_outcome_cause.sql" ||
+			entry.Name() == "0105_admitted_image_pointers.sql" ||
+			entry.Name() == "0106_schedules_image_upkeep.sql" ||
+			entry.Name() == "0107_run_hold_image_upkeep.sql" ||
+			entry.Name() == "0108_image_upkeep.sql" ||
+			entry.Name() == "0109_task_submission_origin.sql" || entry.IsDir() {
 			continue
 		}
 		body, err := fs.ReadFile(migrations.FS, entry.Name())

@@ -44,6 +44,9 @@ const (
 	// ScheduleJanitor: the permanent trusted-config installation-janitor job
 	// (§5.5, §10). Not proposable, no expiry.
 	ScheduleJanitor ScheduleKind = "janitor"
+	// ScheduleImageUpkeep: the permanent trusted-config project-image upkeep
+	// job (§5.7 Project-image upkeep, §5.16). Not proposable, no expiry.
+	ScheduleImageUpkeep ScheduleKind = "image_upkeep"
 )
 
 // AllScheduleKinds is the single registration point for schedule kinds.
@@ -54,13 +57,14 @@ var AllScheduleKinds = []ScheduleKind{
 	ScheduleInstallationPoll,
 	ScheduleDoctor,
 	ScheduleJanitor,
+	ScheduleImageUpkeep,
 }
 
 func (k ScheduleKind) valid() bool {
 	switch k {
 	case SchedulePRChecksDeadline, ScheduleReviewWaitThreshold,
 		ScheduleBaseAdvanceWatch, ScheduleInstallationPoll,
-		ScheduleDoctor, ScheduleJanitor:
+		ScheduleDoctor, ScheduleJanitor, ScheduleImageUpkeep:
 		return true
 	default:
 		return false
@@ -68,12 +72,12 @@ func (k ScheduleKind) valid() bool {
 }
 
 // TrustedConfigJob reports whether the kind is a permanent trusted-config
-// job (doctor, janitor): armed from daemon configuration, never proposable,
+// job (doctor, janitor, image upkeep): armed from daemon configuration, never proposable,
 // no expiry, running in every operating mode (§5.16). Dispatch without
 // default so the exhaustive linter forces a new kind to classify itself.
 func (k ScheduleKind) TrustedConfigJob() bool {
 	switch k {
-	case ScheduleDoctor, ScheduleJanitor:
+	case ScheduleDoctor, ScheduleJanitor, ScheduleImageUpkeep:
 		return true
 	case SchedulePRChecksDeadline, ScheduleReviewWaitThreshold,
 		ScheduleBaseAdvanceWatch, ScheduleInstallationPoll:
@@ -90,7 +94,7 @@ func (k ScheduleKind) OneShot() bool {
 	case SchedulePRChecksDeadline, ScheduleReviewWaitThreshold:
 		return true
 	case ScheduleBaseAdvanceWatch, ScheduleInstallationPoll,
-		ScheduleDoctor, ScheduleJanitor:
+		ScheduleDoctor, ScheduleJanitor, ScheduleImageUpkeep:
 		return false
 	}
 	return false // invalid zero value
@@ -111,7 +115,7 @@ func (k ScheduleKind) EligibleIn(mode OperatingMode) bool {
 		return false
 	}
 	switch k {
-	case ScheduleDoctor, ScheduleJanitor:
+	case ScheduleDoctor, ScheduleJanitor, ScheduleImageUpkeep:
 		return true
 	case SchedulePRChecksDeadline, ScheduleReviewWaitThreshold,
 		ScheduleBaseAdvanceWatch, ScheduleInstallationPoll:
@@ -129,7 +133,7 @@ func (k ScheduleKind) subjectType() ScheduleSubjectType {
 		return ScheduleSubjectAttentionItem
 	case ScheduleInstallationPoll:
 		return ScheduleSubjectInstallationIntent
-	case ScheduleDoctor, ScheduleJanitor:
+	case ScheduleDoctor, ScheduleJanitor, ScheduleImageUpkeep:
 		return ScheduleSubjectTrustedConfig
 	}
 	return "" // invalid zero value
@@ -524,7 +528,7 @@ func (s Schedule) Validate() error {
 	switch s.Kind {
 	case SchedulePRChecksDeadline, ScheduleReviewWaitThreshold, ScheduleBaseAdvanceWatch:
 		requiresPolicy = true
-	case ScheduleInstallationPoll, ScheduleDoctor, ScheduleJanitor:
+	case ScheduleInstallationPoll, ScheduleDoctor, ScheduleJanitor, ScheduleImageUpkeep:
 		requiresPolicy = false
 	}
 	if err := requireOptionalBinding("run_id", s.RunID != nil, requiresPolicy); err != nil {
@@ -594,7 +598,7 @@ func (s Schedule) Validate() error {
 			return fmt.Errorf("schedule %s one-shot kind %s carries expires_at: %w",
 				s.ID, s.Kind, ErrScheduleDetailMismatch)
 		}
-	case ScheduleDoctor, ScheduleJanitor:
+	case ScheduleDoctor, ScheduleJanitor, ScheduleImageUpkeep:
 		if s.ExpiresAt != nil {
 			return fmt.Errorf("schedule %s permanent trusted-config job carries expires_at: %w",
 				s.ID, ErrScheduleDetailMismatch)

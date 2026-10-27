@@ -589,6 +589,23 @@ func TestOnboardRequiresOneDigestBoundReviewBeforeBuildAndActivation(t *testing.
 	if active.ProfileDigest != review.Profile.ProfileDigest {
 		t.Fatalf("active profile = %s, want %s", active.ProfileDigest, review.Profile.ProfileDigest)
 	}
+	// The built image seeds the Claude agent base's admitted-image pointer.
+	var (
+		pointer domain.AdmittedImagePointer
+		found   bool
+	)
+	if err := st.Read(ctx, func(tx *store.ReadTx) error {
+		var err error
+		pointer, _, found, err = tx.GetAdmittedImagePointer(ctx, req.RepositoryID, domain.HarnessClientClaudeCode)
+		return err
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if !found || complete.ProjectImage == nil || pointer.ImageID != complete.ProjectImage.ID ||
+		pointer.ImageRef != complete.ProjectImage.ImageRef {
+		t.Fatalf("admitted image pointer = %+v found=%v, want the built image %+v",
+			pointer, found, complete.ProjectImage)
+	}
 }
 
 func TestOnboardPromotesPendingInstallationOnlyAfterApproval(t *testing.T) {

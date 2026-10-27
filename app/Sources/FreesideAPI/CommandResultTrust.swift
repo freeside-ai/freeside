@@ -38,9 +38,11 @@ public enum CommandResultTrust {
         case .submit_task(let payload):
             // A submit_task result names the created-or-fetched task; its source
             // digest must be the sha256 of exactly the submitted source, and its
-            // task and specification-run identities must be present.
+            // task and specification-run identities must be present. A
+            // daemon-origin record is never the answer to a device's command.
             guard case .submit_task(let record) = result.record else { return false }
             return record.command_id == command.command_id
+                && record.origin == .device
                 && record.device_id == command.device_id
                 && record.project_id == payload.project_id
                 && record.source_digest.value1 == MockContractValidation.sha256Digest(of: payload.source)

@@ -3,6 +3,7 @@ package domain
 import (
 	"encoding/json"
 	"fmt"
+	"slices"
 	"strings"
 	"time"
 	"unicode/utf8"
@@ -24,6 +25,9 @@ const (
 	MaxTaskProposalComponentCount = 32
 	MaxTaskProposalPathCount      = 4096
 	MaxProposalOccurrenceIDBytes  = 512
+	// MaxImagePolicyAdoptionAuthorities bounds one adoption card's registry
+	// authorities, as MaxFollowUpFilingLabels bounds a filing's labels.
+	MaxImagePolicyAdoptionAuthorities = 32
 )
 
 // TaskProposalParameters is the fixed parameter type for task_proposal. It
@@ -81,6 +85,53 @@ func (p TaskProposalParameters) Validate() error {
 	return nil
 }
 
+// ImagePolicyAdoptionParameters is the adoption card's proposal: the policy
+// change that would answer one policy-class upkeep refusal (plan §5.7,
+// Project-image upkeep). Approving it opens a project-policy proposal;
+// merging that proposal is the adoption. RecipeDigest is the recipe digest
+// to approve, nil when the recipe did not change. RegistryAuthorities are
+// the hosts to add to the registry set, strictly ascending and never nil, so
+// one proposal has one encoding. At least one of the two is present.
+type ImagePolicyAdoptionParameters struct {
+	RefusalRecordID     Digest   `json:"refusal_record_id"`
+	RecipeDigest        *Digest  `json:"recipe_digest"`
+	RegistryAuthorities []string `json:"registry_authorities"`
+}
+
+// Validate reports whether the parameters are structurally sound. Whether the
+// refusal record exists and names these clauses is the store's re-gate,
+// which #2335 adds with the card's producer.
+func (p ImagePolicyAdoptionParameters) Validate() error {
+	if !contentaddr.Valid(string(p.RefusalRecordID)) {
+		return fmt.Errorf("image policy adoption refusal_record_id %q: %w",
+			p.RefusalRecordID, ErrEffectProposalInconsistent)
+	}
+	if p.RecipeDigest != nil && !contentaddr.Valid(string(*p.RecipeDigest)) {
+		return fmt.Errorf("image policy adoption recipe_digest %q: %w",
+			*p.RecipeDigest, ErrEffectProposalInconsistent)
+	}
+	if p.RegistryAuthorities == nil {
+		return fmt.Errorf("image policy adoption registry_authorities is null: %w", ErrEffectProposalInconsistent)
+	}
+	if p.RecipeDigest == nil && len(p.RegistryAuthorities) == 0 {
+		return fmt.Errorf("image policy adoption proposes nothing: %w", ErrEffectProposalInconsistent)
+	}
+	if len(p.RegistryAuthorities) > MaxImagePolicyAdoptionAuthorities {
+		return fmt.Errorf("image policy adoption has %d registry authorities, limit %d: %w",
+			len(p.RegistryAuthorities), MaxImagePolicyAdoptionAuthorities, ErrProposalParameterTooLarge)
+	}
+	for index, host := range p.RegistryAuthorities {
+		if err := validateRegistryHost(host); err != nil {
+			return fmt.Errorf("image policy adoption registry_authorities[%d]: %w", index, err)
+		}
+		if index > 0 && host <= p.RegistryAuthorities[index-1] {
+			return fmt.Errorf("image policy adoption authority %q after %q is not strictly ascending: %w",
+				host, p.RegistryAuthorities[index-1], ErrEffectProposalInconsistent)
+		}
+	}
+	return nil
+}
+
 // EffectProposal is the digest-addressed union behind the closed registry.
 // Exactly one registered parameter pointer is present. ResolvedPolicyDigest
 // is injected by the trusted constructor rather than accepted as a parameter.
@@ -98,7 +149,10 @@ type EffectProposal struct {
 	// FilingProposal carries follow_up_filing parameters. It is omitempty for
 	// the same reason: the two earlier kinds keep their encodings and digests.
 	FilingProposal *FollowUpFilingParameters `json:"follow_up_filing,omitempty"`
-	Digest         Digest                    `json:"digest"`
+	// AdoptionProposal carries image_policy_adoption parameters, omitempty
+	// so the earlier kinds keep their encodings and digests.
+	AdoptionProposal *ImagePolicyAdoptionParameters `json:"image_policy_adoption,omitempty"`
+	Digest           Digest                         `json:"digest"`
 }
 
 // ProposalInstance is one admitted occurrence. Its admission key, not the
@@ -175,13 +229,14 @@ func (i ProposalInstance) EvidenceArtifactBody() (Artifact, []byte, error) {
 }
 
 type canonicalEffectProposal struct {
-	EncodingVersion      int                           `json:"encoding_version"`
-	Kind                 EffectKind                    `json:"kind"`
-	ResolvedPolicyRunID  RunID                         `json:"resolved_policy_run_id"`
-	ResolvedPolicyDigest Digest                        `json:"resolved_policy_digest"`
-	TaskProposal         *TaskProposalParameters       `json:"run_proposal"`
-	ClosureProposal      *SourceIssueClosureParameters `json:"source_issue_closure,omitempty"`
-	FilingProposal       *FollowUpFilingParameters     `json:"follow_up_filing,omitempty"`
+	EncodingVersion      int                            `json:"encoding_version"`
+	Kind                 EffectKind                     `json:"kind"`
+	ResolvedPolicyRunID  RunID                          `json:"resolved_policy_run_id"`
+	ResolvedPolicyDigest Digest                         `json:"resolved_policy_digest"`
+	TaskProposal         *TaskProposalParameters        `json:"run_proposal"`
+	ClosureProposal      *SourceIssueClosureParameters  `json:"source_issue_closure,omitempty"`
+	FilingProposal       *FollowUpFilingParameters      `json:"follow_up_filing,omitempty"`
+	AdoptionProposal     *ImagePolicyAdoptionParameters `json:"image_policy_adoption,omitempty"`
 }
 
 // NewEffectProposal dispatches construction through the kind's fixed Go type.
@@ -235,6 +290,17 @@ func NewEffectProposal(
 			Kind:            kind, ResolvedPolicyRunID: policy.RunID,
 			ResolvedPolicyDigest: policy.Digest, FilingProposal: &params,
 		}
+	case EffectImagePolicyAdoption:
+		params, ok := parameters.(ImagePolicyAdoptionParameters)
+		if !ok {
+			return EffectProposal{}, fmt.Errorf("effect kind %q requires ImagePolicyAdoptionParameters: %w", kind, ErrEffectProposalInconsistent)
+		}
+		params.RegistryAuthorities = slices.Clone(params.RegistryAuthorities)
+		proposal = EffectProposal{
+			EncodingVersion: EffectProposalEncodingVersion,
+			Kind:            kind, ResolvedPolicyRunID: policy.RunID,
+			ResolvedPolicyDigest: policy.Digest, AdoptionProposal: &params,
+		}
 	}
 	if proposal.Kind == "" {
 		return EffectProposal{}, fmt.Errorf("effect kind %q: %w", kind, ErrInvalidEffectKind)
@@ -268,24 +334,31 @@ func (p EffectProposal) Validate() error {
 	}
 	switch p.Kind {
 	case EffectTaskProposal:
-		if p.TaskProposal == nil || p.ClosureProposal != nil || p.FilingProposal != nil {
+		if p.TaskProposal == nil || p.ClosureProposal != nil || p.FilingProposal != nil || p.AdoptionProposal != nil {
 			return fmt.Errorf("effect proposal kind %q parameters: %w", p.Kind, ErrEffectProposalInconsistent)
 		}
 		if err := p.TaskProposal.Validate(); err != nil {
 			return err
 		}
 	case EffectSourceIssueClosure:
-		if p.ClosureProposal == nil || p.TaskProposal != nil || p.FilingProposal != nil {
+		if p.ClosureProposal == nil || p.TaskProposal != nil || p.FilingProposal != nil || p.AdoptionProposal != nil {
 			return fmt.Errorf("effect proposal kind %q parameters: %w", p.Kind, ErrEffectProposalInconsistent)
 		}
 		if err := p.ClosureProposal.Validate(); err != nil {
 			return err
 		}
 	case EffectFollowUpFiling:
-		if p.FilingProposal == nil || p.TaskProposal != nil || p.ClosureProposal != nil {
+		if p.FilingProposal == nil || p.TaskProposal != nil || p.ClosureProposal != nil || p.AdoptionProposal != nil {
 			return fmt.Errorf("effect proposal kind %q parameters: %w", p.Kind, ErrEffectProposalInconsistent)
 		}
 		if err := p.FilingProposal.Validate(); err != nil {
+			return err
+		}
+	case EffectImagePolicyAdoption:
+		if p.AdoptionProposal == nil || p.TaskProposal != nil || p.ClosureProposal != nil || p.FilingProposal != nil {
+			return fmt.Errorf("effect proposal kind %q parameters: %w", p.Kind, ErrEffectProposalInconsistent)
+		}
+		if err := p.AdoptionProposal.Validate(); err != nil {
 			return err
 		}
 	}
@@ -308,6 +381,7 @@ func (p EffectProposal) canonical() canonicalEffectProposal {
 		ResolvedPolicyRunID:  p.ResolvedPolicyRunID,
 		ResolvedPolicyDigest: p.ResolvedPolicyDigest, TaskProposal: p.TaskProposal,
 		ClosureProposal: p.ClosureProposal, FilingProposal: p.FilingProposal,
+		AdoptionProposal: p.AdoptionProposal,
 	}
 }
 
@@ -400,6 +474,16 @@ func gateEffectProposal(
 			return ErrEffectProposalInconsistent
 		}
 		if err := proposal.FilingProposal.Validate(); err != nil {
+			return err
+		}
+		return nil
+	case EffectImagePolicyAdoption:
+		// The structural gate only. #2335 adds the re-gate against the
+		// refusal record and current project policy when it raises the card.
+		if proposal.AdoptionProposal == nil {
+			return ErrEffectProposalInconsistent
+		}
+		if err := proposal.AdoptionProposal.Validate(); err != nil {
 			return err
 		}
 		return nil
