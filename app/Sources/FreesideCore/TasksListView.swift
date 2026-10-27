@@ -8,6 +8,9 @@ struct TasksListView: View {
     let runs: [Components.Schemas.RunSnapshot]
     let attentionItems: [Components.Schemas.AttentionItemSnapshot]
     let taskTimelines: [String: Components.Schemas.TaskTimeline]
+    /// Run timelines by run id, whose review rounds tell the task rail a
+    /// remediation from a review, as the task detail header reads them.
+    let runTimelines: [String: Components.Schemas.RunTimeline]
     let cursors: SyncCursors?
     /// The coordinator's cache generation, so a row's timeline read that a
     /// same-revision bootstrap dropped is reissued
@@ -27,6 +30,7 @@ struct TasksListView: View {
         runs: [Components.Schemas.RunSnapshot],
         attentionItems: [Components.Schemas.AttentionItemSnapshot] = [],
         taskTimelines: [String: Components.Schemas.TaskTimeline] = [:],
+        runTimelines: [String: Components.Schemas.RunTimeline] = [:],
         cursors: SyncCursors? = nil,
         cacheGeneration: Int = 0,
         onLoadTimeline: @escaping @MainActor (String) async -> Void = { _ in },
@@ -40,6 +44,7 @@ struct TasksListView: View {
         self.runs = runs
         self.attentionItems = attentionItems
         self.taskTimelines = taskTimelines
+        self.runTimelines = runTimelines
         self.cursors = cursors
         self.cacheGeneration = cacheGeneration
         self.onLoadTimeline = onLoadTimeline
@@ -192,10 +197,16 @@ struct TasksListView: View {
         _ snapshot: Components.Schemas.TaskSnapshot,
         now: Date? = nil
     ) -> some View {
-        TaskRowView(
+        let history = taskTimelines[snapshot.task.id]
+        // The stage and round the task detail header reads too, so the two
+        // agree (`TaskDisplay.currentStage`).
+        let stage = TaskDisplay.currentStage(
+            snapshot.task, runs: runs, history: history,
+            reviewRounds: history.map { TaskTimelinePresentation.reviewRounds($0, runTimelines: runTimelines) } ?? [:])
+        return TaskRowView(
             task: snapshot.task,
             position: TaskDisplay.position(
-                snapshot.task, runs: runs, attentionItems: attentionItems, history: taskTimelines[snapshot.task.id]),
+                snapshot.task, runs: runs, attentionItems: attentionItems, history: history, stage: stage),
             isSelected: selection == snapshot.task.id,
             now: now,
             showsIdentifier: ambiguousTaskIDs.contains(snapshot.task.id))

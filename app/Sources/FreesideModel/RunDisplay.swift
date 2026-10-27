@@ -48,17 +48,19 @@ package enum RunDisplay {
     /// Production runs append implementation passes without recording review
     /// or verification stages. Publication progress supplies that position;
     /// Review is completed by position, never shown as a live review round.
+    /// The holds that place a run in Verification: the publication cycle's
+    /// (daemon/internal/domain/observation.go).
+    package static let publicationHoldReasons: Set<Components.Schemas.RunHoldReason> = [
+        .verification_findings, .trust_blocked, .base_advanced, .recipe_revoked,
+        .scope_conflict, .publication_environment, .external_conflict,
+    ]
+
     package static func workflowPhase(_ run: Components.Schemas.Run) -> WorkflowPhase? {
         guard let stage = run.stages.last, canonicalStageName(stage.name) == "implementation" else { return nil }
         let milestone = run.latest_milestone?.value1
         let completed = run.outcome == .completed || milestone == .work_unit_completed
         let published = run.outcome == .published || milestone == .publication_ready
-        // Publication-cycle holds: daemon/internal/domain/observation.go.
-        let publicationHolds: Set<Components.Schemas.RunHoldReason> = [
-            .verification_findings, .trust_blocked, .base_advanced, .recipe_revoked,
-            .scope_conflict, .publication_environment, .external_conflict,
-        ]
-        let publicationHold = run.hold_reason.map { publicationHolds.contains($0.value1) } ?? false
+        let publicationHold = run.hold_reason.map { publicationHoldReasons.contains($0.value1) } ?? false
         if completed || published || publicationHold || milestone == .publication_blocked || run.outcome == .blocked {
             let passes = run.stages.filter { canonicalStageName($0.name) == "implementation" }.count
             return WorkflowPhase(
@@ -160,7 +162,12 @@ package enum RunDisplay {
     /// recorded under another name. Production uses its derived workflow
     /// phase; other runs use the last recorded stage. Stages left behind read
     /// completed, the current stage carries outcome and lifecycle, and the rest are pending.
-    static func stageRail(_ run: Components.Schemas.Run) -> DecisionStageRailPresentation {
+    /// A `stage` the task names over the run's own phase (`TaskDisplay.CurrentStage`)
+    /// is current instead, with the stages before it completed, so the
+    /// spoken rail says what the heading does.
+    static func stageRail(
+        _ run: Components.Schemas.Run, stage named: Components.Schemas.StageName? = nil
+    ) -> DecisionStageRailPresentation {
         var names = Components.Schemas.StageName.allCases.map {
             (name: $0.rawValue, label: AttentionDisplay.label($0))
         }
@@ -169,14 +176,20 @@ package enum RunDisplay {
             names.append((name: name, label: stageLabel(name)))
         }
         let phase = workflowPhase(run)
-        let current = phase?.stage.rawValue ?? recorded.last
-        let completed = phase?.completed.map(\.rawValue) ?? []
+        let override = named.flatMap { $0 == phase?.stage ? nil : $0 }
+        let current = override?.rawValue ?? phase?.stage.rawValue ?? recorded.last
+        let completed =
+            override.map { stage in
+                Components.Schemas.StageName.allCases.prefix { $0 != stage }.map(\.rawValue)
+            } ?? phase?.completed.map(\.rawValue) ?? []
         let entries = names.map { name, label in
             let state: DecisionStageRailPresentation.State =
                 if completed.contains(name) {
                     .completed
                 } else if name == current {
-                    currentStageState(run)
+                    // A run that finished its own phase is under way again
+                    // in the stage the task names.
+                    override != nil && currentStageState(run) == .completed ? .current : currentStageState(run)
                 } else if recorded.contains(name) {
                     .completed
                 } else {

@@ -205,22 +205,29 @@ enum TaskStageFixtures {
     /// `history(scenario)`: the run is working, with no hold, except that a
     /// task at Verification is held on its findings.
     static func page(_ scenario: Scenario) -> TaskProgressFixtures.Case {
-        let history = history(scenario)
+        page(history(scenario), heldOnFindings: scenario == .verification)
+    }
+
+    /// `page(_:)` for any history whose newest section's newest run is the
+    /// current one.
+    static func page(
+        _ history: Components.Schemas.TaskTimeline, heldOnFindings: Bool = false
+    ) -> TaskProgressFixtures.Case {
         guard let current = history.sections.first?.runs.first else {
             preconditionFailure("A stage fixture's history names its current run")
         }
         var page = TaskProgressFixtures.make("Implementation")
         var run = page.runs[current.role?.value1 == .specification ? 1 : 0]
         run.run.id = current.run_id
-        run.run.task_id = taskID
+        run.run.task_id = history.task_id
         run.run.campaign_id = history.sections[0].campaign_id
         run.run.lifecycle = .active
         run.run.superseded_by = nil
         run.run.outcome = .pending
-        if scenario == .verification { run.run.hold_reason = .init(value1: .verification_findings) }
+        if heldOnFindings { run.run.hold_reason = .init(value1: .verification_findings) }
         page.runs = [run]
         page.history = history
-        page.task.id = taskID
+        page.task.id = history.task_id
         page.task.display_names.task = history.name
         page.task.campaign_ids = history.sections.compactMap(\.campaign_id).reversed()
         page.task.run_ids = history.sections.flatMap(\.runs).map(\.run_id).reversed()

@@ -1953,6 +1953,7 @@ components:
             milestone: null
             review: null
             verification: null
+            external_review: null
         sections: []
 
     TaskTimelineSection:
@@ -2057,9 +2058,14 @@ components:
         completed, failure only for failed. verification_recorded requires
         run_id and verification, referring to a dated readiness decision with
         detailed results. It never establishes current readiness.
+        external_review_reentered requires run_id, pr_number and
+        external_review: an admitted external reviewer's finding withdrew the
+        run's ready card and opened another review round. Its instant is the
+        card's conclusion. It reads the recorded finding, not current
+        admission, so a later trust-profile change does not hide it.
         All other details are null. Events are observations, never authority.
       additionalProperties: false
-      required: [kind, recorded_at, campaign_id, run_id, approved_spec_digest, specification_run_id, pr_number, merge_commit_sha, milestone, review, verification]
+      required: [kind, recorded_at, campaign_id, run_id, approved_spec_digest, specification_run_id, pr_number, merge_commit_sha, milestone, review, verification, external_review]
       properties:
         milestone:
           nullable: true
@@ -2073,6 +2079,10 @@ components:
           nullable: true
           allOf:
             - $ref: "#/components/schemas/TaskEventVerification"
+        external_review:
+          nullable: true
+          allOf:
+            - $ref: "#/components/schemas/TaskEventExternalReview"
         kind:
           $ref: "#/components/schemas/TaskEventKind"
         recorded_at:
@@ -2114,6 +2124,7 @@ components:
         milestone: null
         review: null
         verification: null
+        external_review: null
 
     TaskEventReview:
       type: object
@@ -2161,10 +2172,35 @@ components:
           type: string
           minLength: 1
 
+    TaskEventExternalReview:
+      type: object
+      description: >
+        An external review re-entry: the ready card it withdrew, the admitted
+        finding that started the cycle with its reviewer's forge login and the
+        published head it was left on, and the review round the cycle opens.
+      additionalProperties: false
+      required: [item_id, finding_id, reviewer_login, round, head_sha]
+      properties:
+        item_id:
+          type: string
+          minLength: 1
+        finding_id:
+          type: string
+          minLength: 1
+        reviewer_login:
+          type: string
+          minLength: 1
+        round:
+          type: integer
+          minimum: 1
+        head_sha:
+          type: string
+          minLength: 1
+
     TaskEventKind:
       type: string
       description: Closed vocabulary of recorded task-wide milestone history.
-      enum: [task_created, task_started, task_completed, task_abandoned, stop_requested, task_stopped, stop_failed, run_milestone, review_requested, review_completed, review_failed, verification_recorded, campaign_allocated, specification_approved, pr_opened, pr_merged]
+      enum: [task_created, task_started, task_completed, task_abandoned, stop_requested, task_stopped, stop_failed, run_milestone, review_requested, review_completed, review_failed, verification_recorded, campaign_allocated, specification_approved, pr_opened, pr_merged, external_review_reentered]
       example: task_created
 
     TaskRunRole:

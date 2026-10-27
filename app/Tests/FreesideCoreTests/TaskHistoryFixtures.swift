@@ -134,6 +134,35 @@ enum TaskHistoryFixtures {
             events: events, sections: sections)
     }
 
+    /// `.published` after an admitted external review sent it back: the
+    /// re-entry withdrew the ready card two minutes after publication and
+    /// opened round 2, whose request follows two minutes on when
+    /// `requested`.
+    static func externallyReviewed(requested: Bool) -> Components.Schemas.TaskTimeline {
+        func at(_ minutes: Int) -> Date { instant.addingTimeInterval(TimeInterval(minutes * 60)) }
+        let run = "history-implementation-1"
+        let head = String(repeating: "a", count: 40)
+        var timeline = history(.published)
+        var events: [Components.Schemas.TaskEvent] = [
+            .init(
+                external_review: .init(
+                    value1: .init(
+                        item_id: "history-ready", finding_id: "history-finding-1", reviewer_login: "maintainer",
+                        round: 2, head_sha: head)),
+                kind: .external_review_reentered, recorded_at: at(-8), run_id: run, pr_number: 110)
+        ]
+        if requested {
+            events.insert(
+                .init(
+                    review: .init(
+                        value1: .init(invocation_id: "review-\(run)-2", round: 2, head_sha: head, base_sha: head)),
+                    kind: .review_requested, recorded_at: at(-6), run_id: run),
+                at: 0)
+        }
+        timeline.events.insert(contentsOf: events, at: 0)
+        return timeline
+    }
+
     /// Folds for a capture of what a campaign holds: every campaign starts
     /// collapsed, so a surface that is about the current campaign's runs
     /// opens it; `identifiersOpen` also opens the page's Identifiers footer.
