@@ -1,0 +1,8 @@
+npm error code E404
+npm error 404 Not Found - GET http://127.0.0.1:18404/is-number/-/is-number-7.0.0.tgz - fixture
+npm error 404
+npm error 404  The requested resource 'is-number@http://127.0.0.1:18404/is-number/-/is-number-7.0.0.tgz' could not be found or you do not have permission to access it.
+npm error 404
+npm error 404 Note that you can also install from a
+npm error 404 tarball, folder, http url, or git url.
+npm error A complete log of this run can be found in: /tmp/npmcap/cache-e404/_logs/2026-10-26T20_01_01_945Z-debug-0.log

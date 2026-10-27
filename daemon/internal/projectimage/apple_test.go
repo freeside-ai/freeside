@@ -396,6 +396,9 @@ func TestAppleCheckAllowlistRecoversLostProbeIdentity(t *testing.T) {
 	if err == nil {
 		t.Fatal("CheckAllowlist passed without a probe identity")
 	}
+	if !isRuntimeFault(err) {
+		t.Fatalf("CheckAllowlist = %v, want a runtime fault for a lost probe identity", err)
+	}
 	if !slices.Equal(deleted, []string{"orphan-1"}) {
 		t.Fatalf("ownership recovery deleted %q, want only the token-owned probe", deleted)
 	}
@@ -480,11 +483,70 @@ func TestAppleCheckAllowlistCleansProbeAfterInspectionFailure(t *testing.T) {
 			return ward.InspectReport{}, errors.New("runtime inspection failed")
 		},
 	}
-	if err := backend.CheckAllowlist(t.Context(), "project:local"); err == nil {
+	err := backend.CheckAllowlist(t.Context(), "project:local")
+	if err == nil {
 		t.Fatal("CheckAllowlist accepted a failed inspection")
+	}
+	if !isRuntimeFault(err) {
+		t.Fatalf("CheckAllowlist = %v, want a runtime fault for a failed inspection", err)
 	}
 	if runner.deletes != 1 || len(runner.containers) != 0 {
 		t.Fatal("failed allowlist inspection left its owned probe container")
+	}
+}
+
+// A probe the runtime ran and reported is a result: its drift is a failed
+// proof, not a fault, so the builder records it as a verdict.
+func TestAppleCheckAllowlistDriftIsNotARuntimeFault(t *testing.T) {
+	runner := &managedRunner{}
+	backend := appleBackend{
+		containerPath: "container", runner: runner,
+		inspectAllowlist: func(_ context.Context, id string) (ward.InspectReport, error) {
+			report := compliantImageAllowlistReport(id)
+			report.SSH = true
+			return report, nil
+		},
+	}
+	err := backend.CheckAllowlist(t.Context(), "project:local")
+	if err == nil || isRuntimeFault(err) {
+		t.Fatalf("CheckAllowlist = %v, want a drift failure that is not a runtime fault", err)
+	}
+}
+
+func TestAppleBuildClassesCandidateInstallFailures(t *testing.T) {
+	for _, tc := range []struct {
+		name    string
+		fixture string
+		install bool
+	}{
+		{name: "integrity mismatch", fixture: "buildkit-eintegrity.txt", install: true},
+		{name: "lockfile out of sync", fixture: "buildkit-out-of-sync.txt", install: true},
+		{name: "registry connection reset", fixture: "econnreset.txt"},
+		{name: "registry 5xx", fixture: "e503.txt"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			output := readNPMFixture(t, tc.fixture)
+			runner := &recordingRunner{run: func(commandSpec) (commandOutput, error) {
+				return commandOutput{bytes: output, exited: true, exitCode: 1}, errors.New("exit status 1")
+			}}
+			spec := testBuildSpec()
+			spec.BuildProxy = "http://192.168.64.1:53536"
+			err := appleBackend{containerPath: "container", runner: runner}.Build(t.Context(), spec)
+			if err == nil {
+				t.Fatal("Build accepted a failed container build")
+			}
+			if got := errors.Is(err, ErrInstallFailed); got != tc.install {
+				t.Fatalf("Build = %v, ErrInstallFailed %t, want %t", err, got, tc.install)
+			}
+			// A recognized install failure is the candidate's; anything else
+			// stays a failed runtime command, retryable as before.
+			if isRuntimeFault(err) == tc.install {
+				t.Fatalf("Build = %v, runtime fault %t, want %t", err, !tc.install, !tc.install)
+			}
+			if tc.install && !strings.HasPrefix(err.Error(), ErrInstallFailed.Error()+":\nnpm error code E") {
+				t.Fatalf("Build = %q, want it to lead with npm's error lines", err)
+			}
+		})
 	}
 }
 
@@ -511,8 +573,29 @@ func TestAppleCheckAllowlistFailsWhenIdentityFileCleanupFails(t *testing.T) {
 	if err == nil || !strings.Contains(err.Error(), "remove agent-image allowlist identity file") {
 		t.Fatalf("CheckAllowlist = %v, want identity-file cleanup failure", err)
 	}
+	// The probe passed; only its cleanup failed, so the builder must not
+	// record a failed proof.
+	if !isRuntimeFault(err) {
+		t.Fatalf("CheckAllowlist = %v, want a runtime fault for a cleanup failure after a passing check", err)
+	}
 	if runner.deletes != 1 || len(runner.containers) != 0 {
 		t.Fatal("identity-file cleanup failure prevented owned probe cleanup")
+	}
+}
+
+func TestRunErrorMarksARuntimeFaultWithoutChangingItsText(t *testing.T) {
+	err := runError("save image as OCI archive", commandOutput{bytes: []byte("disk full\n")}, errors.New("exit status 1"))
+	if !isRuntimeFault(err) {
+		t.Fatalf("runError = %v, want a runtime fault", err)
+	}
+	if want := "save image as OCI archive: exit status 1\ndisk full"; err.Error() != want {
+		t.Fatalf("runError text = %q, want %q", err, want)
+	}
+	if wrapped := fmt.Errorf("local image provenance: %w", errors.Join(errors.New("other"), err)); !isRuntimeFault(wrapped) {
+		t.Fatalf("a wrapped, joined runError lost its marker: %v", wrapped)
+	}
+	if runError("unused", commandOutput{}, nil) != nil {
+		t.Fatal("runError marked a command that succeeded")
 	}
 }
 

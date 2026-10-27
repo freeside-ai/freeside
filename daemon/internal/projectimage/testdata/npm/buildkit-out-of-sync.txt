@@ -1,0 +1,146 @@
+#1 [resolver] fetching image...docker.io/library/freeside-agent-claude:local
+#1 DONE 0.0s
+
+#2 [internal] load build definition from Dockerfile
+#2 transferring dockerfile:
+#2 transferring dockerfile: 2B 0.0s done
+#2 DONE 0.1s
+
+#3 [internal] load .dockerignore
+#3 transferring context: 2B 0.0s done
+#3 DONE 0.1s
+
+#4 [internal] load build context
+#4 DONE 0.0s
+
+#5 oci-layout://docker.io/library/freeside-agent-claude:local@sha256:a4eff5d20113e919eff91399acc64d5eb77e611b9f018e746d63e259fa998d89
+#5 resolve docker.io/library/freeside-agent-claude:local@sha256:a4eff5d20113e919eff91399acc64d5eb77e611b9f018e746d63e259fa998d89 0.0s done
+#5 DONE 0.1s
+
+#4 [internal] load build context
+#4 transferring context: 768B 0.0s done
+#4 DONE 0.1s
+
+#5 oci-layout://docker.io/library/freeside-agent-claude:local@sha256:a4eff5d20113e919eff91399acc64d5eb77e611b9f018e746d63e259fa998d89
+#5 CACHED
+
+#6 [linux/arm64/v8 1/3] COPY package.json package-lock.json /opt/freeside/project-seed/
+#6 DONE 0.1s
+
+#7 [linux/arm64 2/3] RUN set -eux; 	cd /opt/freeside/project-seed; 	NPM_CONFIG_USERCONFIG=/dev/null 		npm ci --ignore-scripts --audit=false --fund=false --update-notifier=false; 	rm -rf node_modules
+#7 0.233 + cd /opt/freeside/project-seed
+#7 0.233 + NPM_CONFIG_USERCONFIG=/dev/null npm ci --ignore-scripts --audit=false --fund=false --update-notifier=false
+#7 1.322 npm error code EUSAGE
+#7 1.335 npm error
+#7 1.335 npm error `npm ci` can only install packages when your package.json and package-lock.json or npm-shrinkwrap.json are in sync. Please update your lock file with `npm install` before continuing.
+#7 1.335 npm error
+#7 1.335 npm error Missing: is-odd@3.0.1 from lock file
+#7 1.335 npm error Missing: is-number@6.0.0 from lock file
+#7 1.335 npm error
+#7 1.335 npm error Clean install a project
+#7 1.335 npm error
+#7 1.335 npm error Usage:
+#7 1.335 npm error npm ci
+#7 1.335 npm error
+#7 1.335 npm error Options:
+#7 1.335 npm error [--install-strategy <hoisted|nested|shallow|linked>] [--legacy-bundling]
+#7 1.335 npm error [--global-style] [--omit <dev|optional|peer> [--omit <dev|optional|peer> ...]]
+#7 1.335 npm error [--include <prod|dev|optional|peer> [--include <prod|dev|optional|peer> ...]]
+#7 1.335 npm error [--strict-peer-deps] [--foreground-scripts] [--ignore-scripts]
+#7 1.335 npm error [--allow-directory <all|none|root>] [--allow-file <all|none|root>]
+#7 1.335 npm error [--allow-git <all|none|root>] [--allow-remote <all|none|root>]
+#7 1.335 npm error [--allow-scripts <package-list> [--allow-scripts <package-list> ...]]
+#7 1.335 npm error [--strict-allow-scripts] [--dangerously-allow-all-scripts] [--no-audit]
+#7 1.335 npm error [--no-bin-links] [--no-fund] [--dry-run]
+#7 1.335 npm error [-w|--workspace <workspace-name> [-w|--workspace <workspace-name> ...]]
+#7 1.335 npm error [--workspaces] [--include-workspace-root] [--install-links]
+#7 1.335 npm error
+#7 1.335 npm error   --install-strategy
+#7 1.335 npm error     Sets the strategy for installing packages in node_modules.
+#7 1.335 npm error
+#7 1.335 npm error   --legacy-bundling
+#7 1.335 npm error     Instead of hoisting package installs in `node_modules`, install packages
+#7 1.335 npm error
+#7 1.335 npm error   --global-style
+#7 1.335 npm error     Only install direct dependencies in the top level `node_modules`,
+#7 1.335 npm error
+#7 1.335 npm error   --omit
+#7 1.335 npm error     Dependency types to omit from the installation tree on disk.
+#7 1.335 npm error
+#7 1.335 npm error   --include
+#7 1.335 npm error     Option that allows for defining which types of dependencies to install.
+#7 1.335 npm error
+#7 1.335 npm error   --strict-peer-deps
+#7 1.335 npm error     If set to `true`, and `--legacy-peer-deps` is not set, then _any_
+#7 1.335 npm error
+#7 1.335 npm error   --foreground-scripts
+#7 1.335 npm error     Run all build scripts (ie, `preinstall`, `install`, and
+#7 1.335 npm error
+#7 1.335 npm error   --ignore-scripts
+#7 1.335 npm error     If true, npm does not run scripts specified in package.json files.
+#7 1.335 npm error
+#7 1.335 npm error   --allow-directory
+#7 1.335 npm error     Limits the ability for npm to install dependencies from directories.
+#7 1.335 npm error
+#7 1.335 npm error   --allow-file
+#7 1.335 npm error     Limits the ability for npm to install dependencies from tarball files.
+#7 1.335 npm error
+#7 1.335 npm error   --allow-git
+#7 1.335 npm error     Limits the ability for npm to fetch dependencies from git references.
+#7 1.335 npm error
+#7 1.335 npm error   --allow-remote
+#7 1.335 npm error     Limits the ability for npm to fetch dependencies from urls.
+#7 1.335 npm error
+#7 1.335 npm error   --allow-scripts
+#7 1.335 npm error     Comma-separated list of packages whose install-time lifecycle scripts
+#7 1.335 npm error
+#7 1.335 npm error   --strict-allow-scripts
+#7 1.335 npm error     If `true`, turn the install-script policy from a warning into a hard
+#7 1.335 npm error
+#7 1.335 npm error   --dangerously-allow-all-scripts
+#7 1.335 npm error     If `true`, bypass the `allowScripts` policy entirely and run every
+#7 1.335 npm error
+#7 1.335 npm error   --audit
+#7 1.335 npm error     When "true" submit audit reports alongside the current npm command to the
+#7 1.335 npm error
+#7 1.335 npm error   --bin-links
+#7 1.335 npm error     Tells npm to create symlinks (or `.cmd` shims on Windows) for package
+#7 1.335 npm error
+#7 1.335 npm error   --fund
+#7 1.335 npm error     When "true" displays the message at the end of each `npm install`
+#7 1.335 npm error
+#7 1.335 npm error   --dry-run
+#7 1.335 npm error     Indicates that you don't want npm to make any changes and that it should
+#7 1.335 npm error
+#7 1.335 npm error   -w|--workspace
+#7 1.335 npm error     Enable running a command in the context of the configured workspaces of the
+#7 1.335 npm error
+#7 1.335 npm error   --workspaces
+#7 1.335 npm error     Set to true to run the command in the context of **all** configured
+#7 1.335 npm error
+#7 1.335 npm error   --include-workspace-root
+#7 1.335 npm error     Include the workspace root when workspaces are enabled for a command.
+#7 1.335 npm error
+#7 1.335 npm error   --install-links
+#7 1.335 npm error     When set file: protocol dependencies will be packed and installed as
+#7 1.335 npm error
+#7 1.335 npm error
+#7 1.335 npm error aliases: clean-install, ic, install-clean, isntall-clean
+#7 1.335 npm error
+#7 1.335 npm error Run "npm help ci" for more info
+#7 1.341 npm error A complete log of this run can be found in: /root/.npm/_logs/2026-10-26T20_03_19_940Z-debug-0.log
+#7 ERROR: process "/bin/sh -c set -eux; \tcd /opt/freeside/project-seed; \tNPM_CONFIG_USERCONFIG=/dev/null \t\tnpm ci --ignore-scripts --audit=false --fund=false --update-notifier=false; \trm -rf node_modules" did not complete successfully: exit code: 1
+------
+ > [linux/arm64 2/3] RUN set -eux; 	cd /opt/freeside/project-seed; 	NPM_CONFIG_USERCONFIG=/dev/null 		npm ci --ignore-scripts --audit=false --fund=false --update-notifier=false; 	rm -rf node_modules:
+1.335 npm error     Include the workspace root when workspaces are enabled for a command.
+1.335 npm error
+1.335 npm error   --install-links
+1.335 npm error     When set file: protocol dependencies will be packed and installed as
+1.335 npm error
+1.335 npm error
+1.335 npm error aliases: clean-install, ic, install-clean, isntall-clean
+1.335 npm error
+1.335 npm error Run "npm help ci" for more info
+1.341 npm error A complete log of this run can be found in: /root/.npm/_logs/2026-10-26T20_03_19_940Z-debug-0.log
+------
+Error: unknown: "failed to solve: process "/bin/sh -c set -eux; \tcd /opt/freeside/project-seed; \tNPM_CONFIG_USERCONFIG=/dev/null \t\tnpm ci --ignore-scripts --audit=false --fund=false --update-notifier=false; \trm -rf node_modules" did not complete successfully: exit code: 1"

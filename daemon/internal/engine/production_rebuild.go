@@ -137,7 +137,7 @@ func rebuildRefusalMeaning(clause projectimage.RebuildRefusal) string {
 	case projectimage.RebuildRefusalNotConfigured:
 		return "The dependency change is within policy, but this daemon is not configured to rebuild project images."
 	case projectimage.RebuildRefusalProofFailed:
-		return "The dependency change is within policy, but the rebuilt image failed its proofs or did not finish building in time."
+		return "The dependency change is within policy, but the rebuilt image failed its dependency install or its proofs, or did not finish building in time."
 	case projectimage.RebuildRefusalGoDependencyChanged:
 		return "The candidate changes its Go module's go.mod or go.sum, or adds a Go input no project image supports; a Go dependency change needs a newly reviewed project image."
 	}
@@ -428,13 +428,16 @@ func (w *productionPublicationWorkflow) rebuildProjectImage(
 		return refuse(err)
 	}
 	built, timedOut, err := w.rebuild.build(ctx, request)
-	if timedOut || errors.Is(err, projectimage.ErrProofFailed) || errors.Is(err, projectimage.ErrInvalidRequest) {
+	if timedOut || errors.Is(err, projectimage.ErrProofFailed) ||
+		errors.Is(err, projectimage.ErrInstallFailed) || errors.Is(err, projectimage.ErrInvalidRequest) {
 		return refuse(err)
 	}
 	if err != nil {
-		// Anything else is the build's environment (the registry, the proxy,
-		// the container runtime, a cancelled pass), not a verdict on the
-		// candidate, so the task stays queued and the next pass builds again.
+		// The builder names a verdict only on positive evidence: a proof that
+		// ran and failed, or an install failure only the candidate's manifests
+		// cause. Anything else (the registry, the proxy, the container runtime,
+		// a drifted base tag, an install failure it doesn't recognize, a
+		// cancelled pass) keeps the task queued, and the next pass builds again.
 		return domain.ProjectImage{}, nil, fmt.Errorf("rebuild project image at %s: %w",
 			verifiedSHA, productionPublicationRetryableError(err))
 	}

@@ -1,0 +1,9 @@
+npm error code EAI_AGAIN
+npm error syscall getaddrinfo
+npm error errno EAI_AGAIN
+npm error network request to http://registry.invalid/is-number/-/is-number-7.0.0.tgz failed, reason: getaddrinfo EAI_AGAIN registry.invalid
+npm error network This is a problem related to network connectivity.
+npm error network In most cases you are behind a proxy or have bad network settings.
+npm error network
+npm error network If you are behind a proxy, please make sure that the 'proxy' config is set properly.  See: 'npm help config'
+npm error A complete log of this run can be found in: /tmp/npmcap/cache-enotfound/_logs/2026-10-26T20_01_00_610Z-debug-0.log

@@ -1,0 +1,4 @@
+npm error code ETARGET
+npm error notarget No matching version found for is-number@99.0.0.
+npm error notarget In most cases you or one of your dependencies are requesting a package version that doesn't exist.
+npm error A complete log of this run can be found in: /tmp/npmcap/cache-etarget/_logs/2026-10-26T20_00_59_115Z-debug-0.log

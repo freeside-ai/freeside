@@ -1,0 +1,5 @@
+npm warn deprecated is-number@7.0.0: old
+npm warn deprecated npm error code EINTEGRITY
+npm warn deprecated npm error code EUSAGE
+
+added 1 package in 2s
