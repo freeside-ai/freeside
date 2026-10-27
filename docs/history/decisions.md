@@ -3226,3 +3226,25 @@ The client work is #1798 to #1803.)
 
 (Owner decision of 2026-10-26 on #2349;
 [decision note](../../devlog/2026-10-26-1507-plain-source-reference.md).)
+
+## Revision 101 ("Approve Image Policy Into the Daemon"):
+
+1. **Approving an image-policy adoption card is the adoption.** The daemon
+   records the card's exact recipe digest or registry hosts in its own
+   trusted policy, for the card's repository only, and project-image upkeep
+   then builds a new image at the tip under it, with the positive run and
+   masked-cache proof, as onboarding does (Section [5.7](#57-the-ward-runners-handoff-gate-and-operating-modes)). Section [5.8](#58-control-plane-trust)
+   names the approved card as a reviewed change to recipe approval and the
+   registry set, beside the operator's own edit; an adopted host still meets
+   Section [5.4](#54-credential-modes-egress-profiles-and-concurrency)'s public-registry criterion. This returns to the
+   owner's original choice on #1999, which revision 98 departed from.
+   Rejected: revision 98's route, where approving the card opens a Section
+   [4](#4-the-attention-model) project-policy PR and merging it is the adoption (recipe approval
+   and the registry set are operator host configuration, not repository
+   files, and no daemon code implements that path, so the PR has no
+   target); moving both keys into a repository-hosted control-plane tree
+   and building the Section [4](#4-the-attention-model) PR path first (a new policy tree and a new
+   path, for a decision the card already carries).
+
+(Owner decision of 2026-10-27 on #2335;
+[decision note](../../devlog/2026-10-27-1236-adoption-card-daemon-policy.md).)
