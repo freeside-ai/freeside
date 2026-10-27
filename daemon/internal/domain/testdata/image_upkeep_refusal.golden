@@ -1,0 +1,16 @@
+{
+  "id": "sha256:e6dc41a5490e9d4af535a608c9b8f641d75570f8fb11ddad7e42f937a2bffaae",
+  "repository_id": 1278475858,
+  "repository": "freeasinbird/gh-imgup",
+  "harness": "claude_code",
+  "tip_sha": "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+  "measured_from_image_id": "sha256:7e7a5c42548e88175b869c057c4ad4bb221dc0069e4caf6818dfe7c4af926349",
+  "class": "policy",
+  "findings": [
+    {
+      "clause": "recipe_changed",
+      "detail": "recipe digest changed at the tip"
+    }
+  ],
+  "recorded_at": "2026-01-02T03:04:05Z"
+}

@@ -1494,6 +1494,34 @@ func TestGolden(t *testing.T) {
 		ImageRef: projectImage.ImageRef, AdvancedAt: ts,
 	}
 
+	upkeepRefusal, err := domain.NewImageUpkeepRefusal(domain.ImageUpkeepRefusalInput{
+		RepositoryID: projectImage.RepositoryID, Repository: projectImage.Repository,
+		Harness: domain.HarnessClientClaudeCode, TipSHA: strings.Repeat("e", 40),
+		MeasuredFromImageID: projectImage.ID, Class: domain.ImageUpkeepRefusalPolicy,
+		Findings: []domain.ImageUpkeepClauseFinding{{
+			Clause: domain.RebuildRefusalRecipeChanged,
+			Detail: "recipe digest changed at the tip",
+		}},
+		RecordedAt: ts,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	hostFaultRefusal, err := domain.NewImageUpkeepRefusal(domain.ImageUpkeepRefusalInput{
+		RepositoryID: projectImage.RepositoryID, Repository: projectImage.Repository,
+		Harness: domain.HarnessClientClaudeCode, TipSHA: strings.Repeat("e", 40),
+		MeasuredFromImageID: projectImage.ID, Class: domain.ImageUpkeepRefusalHostFault,
+		RecordedAt: ts,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	tipObservation := domain.RepositoryTipObservation{
+		RepositoryID: projectImage.RepositoryID, Repository: projectImage.Repository,
+		Branch: "main", TipSHA: strings.Repeat("e", 40), ObservedAt: ts,
+		UpkeepTipSHA: projectImage.CommitSHA,
+	}
+
 	project, err := domain.NewProject("project-alpha", "freeasinbird/gh-imgup", 1278475858)
 	if err != nil {
 		t.Fatal(err)
@@ -2114,6 +2142,9 @@ func TestGolden(t *testing.T) {
 		{"project_image_environment", projectImageWithEnvironment},
 		{"project_image_go_environment", projectImageGoEnvironment},
 		{"admitted_image_pointer", admittedImagePointer},
+		{"image_upkeep_refusal", upkeepRefusal},
+		{"image_upkeep_refusal_host_fault", hostFaultRefusal},
+		{"repository_tip_observation", tipObservation},
 		{"project", project},
 		{"backend_conformance", backendConformance},
 		{"backend_conformance_failed", failedConformance},
