@@ -52,31 +52,36 @@ are the only sources of active work state; a note records why, never status.
 
 ### Coordination model
 
-- **Current shape:** Shapes 2–5 combined: path-and-dependency units, typed
-  relations, stable named work streams, and an integration
-  spine/shared-contract domain. Current demonstrated width is four fronts,
-  further bounded by each wave tracker, live claims, conflicting changes, review
-  bandwidth, and spine integration capacity. Within that width, at most two
-  contract implementations are active at once (Contract Changes).
-- **Evidence basis:** Waves 3–6 show recurring lane fronts; PR #801 established
-  typed relations; Wave 6 tracker #835 identifies review bandwidth as the
-  constraint. After Wave 8's seven-link chain serialized units with no recorded
-  code dependence, owner decision #1709 (2026-10-02) limited contract
-  serialization to assessed conflicts under a cap of two.
+- **Current shape:** Shapes 2 and 3 on the landing baseline:
+  path-and-dependency units with forge-visible claims, and typed relations
+  for start order (`starts-after`), merge order (`merges-after`), and
+  stacking (`stacked-on`), with no mutual exclusion. Authorized units start
+  in isolated checkouts unless a recorded `starts-after` says otherwise, and
+  the `required` check on the landing tip validates every merge
+  (Coordination). No fixed width: open units are bounded by each wave
+  tracker, live claims, and review bandwidth.
+- **Evidence basis:** Waves 3–6 show recurring parallel fronts; PR #801
+  established typed relations; Wave 6 tracker #835 identifies review bandwidth
+  as the constraint. After Wave 8's seven-link chain serialized units with no
+  recorded code dependence, owner decision #1709 (2026-10-02) limited contract
+  serialization to assessed conflicts under a cap of two. The parallel-work
+  proposal (freeasinbird/free-skills#291) found that start-time checks held
+  back safe work yet let untested combinations reach `main`, and the owner
+  adopted its rules on 2026-10-14
+  (`devlog/2026-10-26-1505-start-freely-validate-at-landing.md`).
 - **Detailed mechanics:** [`docs/coordination.md`](docs/coordination.md).
-- **Reassess when:** A planned wave needs more than four fronts;
-  review or integration queueing persists at four or fewer; work repeatedly
-  crosses lane boundaries; owner review hours per merged contract rise while
-  elapsed time from claim to merge does not fall; or shared-contract
-  serialization or the spine role materially changes.
+- **Reassess when:** After the first wave under these rules, read the four
+  measures (how often a PR fails at landing and why, how often a rebase
+  conflicts and in which files, how long a PR waits to land, and how much
+  work is discarded because a dependency was missed) and reassess when any
+  of them shows the rules costing more than the serialization they replaced.
 
 ## Work-Unit Stages
 
 Freeside's work-unit stages are planning and implementation. Review
 convergence, the human merge gate, and post-merge cleanup stay phases of the
 finish-line workflow, not stages. A stage adds no authorization door and
-weakens none of the claim, overlap, contract, relationship, review, or merge
-gates in this file.
+weakens none of the claim, relationship, review, or merge gates in this file.
 
 ### Planning
 
@@ -89,22 +94,15 @@ gates in this file.
   planning-reservation comment, replaced in place by the current
   implementation-plan comment or an explicit release marker; an edit or
   explicit non-current marker on a superseded plan comment; and trackers
-  whose projections derive from an edited Dependencies field. On a contract
-  unit, the contract-assessment lines in the assigned unit's and each
-  partner's Dependencies fields (Contract Changes) may be written before the
-  reservation, to place the unit, as well as under it. A first verdict on an
-  unassessed pair restricts nothing, because the pair already serialized,
-  and recording independence only relaxes, so that write needs neither a
-  reservation nor the `exclusive-with` edit protocol. Expiry ends
+  whose projections derive from an edited Dependencies field. Expiry ends
   planning-write authority; continue only with a fresh reservation obtained
   through that document's recovery procedure. A mutation whose verification
   finishes after expiry stays visible but unverified and never satisfies the
   planning finish line; the only write allowed then is the recovery-only
   partial-state report that procedure requires, which is neither planning
   output nor authority to continue. While active, the reservation blocks
-  implementation of the issue and its direct `exclusive-with` partners and,
-  on a contract unit, of the contract units a claim there would block
-  (Contract Changes); it is not a claim or an authorization door. No claim,
+  implementation of its own issue and no other unit; it is not a claim or an
+  authorization door. No claim,
   branch, PR, code, or implementation change is allowed.
 - **Required input:** The assigned issue and freshly resolved default-branch
   state; when changing Dependencies, the complete containing-tracker discovery
@@ -129,9 +127,7 @@ gates in this file.
   ran first, the input includes the plan in comments.
 - **Allowed mutations:** The ordinary work-unit surface: its claim, isolated
   branch or worktree, declared paths, implementation and verification
-  artifacts, review responses, and PR; on a contract unit, also the
-  contract-assessment lines in its own and each partner's Dependencies
-  fields (Contract Changes).
+  artifacts, review responses, and PR.
 - **Required input:** The authoritative issue contract or, for a direct
   session-contained assignment, its prompt-backed work contract; when a
   planning stage ran, its single current implementation-plan comment. Execute
@@ -160,8 +156,9 @@ gates in this file.
   from `docs/coordination.md` (Tracking Issues). The tracker carries start
   order only; there is no **Mergeable next** to recompute.
 - **Detailed mechanics:** `docs/coordination.md`.
-- **Report:** Name newly unblocked units without claiming or starting them,
-  and name the integration evidence the base advance invalidated.
+- **Report:** Name newly unblocked units without claiming or starting them.
+  The required check reruns on each open PR when it is next brought up to
+  date, so the report names no invalidated integration evidence.
 
 <!-- agents-md:managed:finish-line -->
 
@@ -304,9 +301,9 @@ requires that check and an up-to-date branch. Leave a PR behind `main`, before
 handoff and after it: the lander (`land-approved-prs`) refreshes it when it
 selects the PR. Refresh it onto `main` yourself only when the merge-result
 audit finds a conflict, a landed change needs a fix in it (including a
-contract PR's regenerated consumers, Integration Ordering and Merge-Result
-Audit), the lander hands it back (`needs-human`), or the owner asks
-(`docs/agent-workflow.md` §handing-off step 3).
+contract PR's regenerated consumers, Contract Changes), the lander hands it
+back (`needs-human`), or the owner asks (`docs/agent-workflow.md`
+§handing-off step 3).
 
 Operator
 tools that are not checks live with their component: installers in
@@ -492,36 +489,55 @@ escalation.
 
 ## Integration Ordering and Merge-Result Audit
 
-Integration evidence applies to one base commit (Pull Requests). The
-merge-result audit's script header explains its purpose and guarantees.
+Rule 2 (Coordination) carries integration: branch protection's up-to-date
+rule makes a PR's branch contain the tip it lands on, and the `required`
+check passes on that commit, so the check reruns on every refresh and nobody
+revalidates a waiting PR after each base advance. A refresh the author pushes
+still gets the review of the refreshed diff in `docs/agent-workflow.md`
+§handing-off step 3, and the audit below. The merge-result audit's script
+header explains its purpose and guarantees.
 
-- The spine orders integration when several PRs are ready. Record
-  `merges-after` constraints and `stacked-on` bases in each unit's Dependencies
-  field (Stacked PRs).
-- After any merge to `main`, other open PRs' integration evidence is stale.
-  Revalidate a waiting PR once against the exact tip selected for its
-  integration; never merge on stale evidence. Each intervening tip does not
-  require a separate run.
-- Refresh a PR branch, including a stacked child, by rebasing onto its
-  freshly fetched base, then pushing with `--force-with-lease`. Never merge
-  the base into a PR branch, locally, through the forge, or through a host tool
-  (`docs/agent-workflow.md` §handing-off). Resolve each conflict in the commit
-  that owns the change and recheck that every rebased commit is green.
-  Decision record:
+- **The owner orders landing.** `land-approved-prs` lands a batch in
+  approval order or in the order the owner types (`--order`), and reads no
+  typed relation. A `merges-after` relation is therefore enforced only by
+  the order the owner approves PRs or types to the landing batch. The
+  planner tells the owner at handoff when a unit needs one, and a unit's
+  handoff report names any `merges-after` prerequisite that has not merged.
+  Record `stacked-on` bases in each unit's Dependencies field (Stacked PRs).
+- **Refresh by rebase only.** Refresh a PR branch, including a stacked child,
+  by rebasing onto its freshly fetched base, then pushing with
+  `--force-with-lease`. Never merge the base into a PR branch, locally,
+  through the forge, or through a host tool (`docs/agent-workflow.md`
+  §handing-off). Resolve each conflict in the commit that owns the change
+  and recheck that every rebased commit is green. Refresh before handoff
+  only for a conflict or a landed change that needs a fix in this PR, such
+  as another contract unit whose change this contract PR's generated
+  consumers must be regenerated against (Contract Changes). Decision record:
   `devlog/2026-10-06-1236-rebase-base-refresh.md`.
-- Before final handoff, and after a base advance when revalidating: fetch the
-  default branch and run
+- **Read a conflicted rebase (rule 3).** After a rebase that conflicted,
+  read what the resolution changed with `git range-diff` and leave the
+  rebase record. The record has two forms: the author's, the range-diff
+  reading in the PR's Verification section after a rebase the author ran;
+  and the lander's, the PR comment with the range-diff that a
+  `land-approved-prs` batch posts when it rebased or reworked the PR beyond
+  a clean rebase (that skill's Comments and the Batch Report).
+  `scripts/landing-measures.py` counts both, within the limits its header
+  states. Detail: `docs/coordination.md`
+  (Reading a Rebase).
+- **Run the audit before handoff and after each rebase.** Fetch the default
+  branch and run
   `scripts/merge-result-audit.sh origin/main <head-branch> <allowed-path>...`
   against that exact tip, allowing only the unit's declared paths. Read the
   whole printed change set; an in-scope reversion still passes the audit.
   Name that tip's SHA in the handoff report's Status line
   (`docs/agent-workflow.md` §handing-off step 7), not the PR body. A
   passing audit needs no other record; a failing one means the PR is not
-  ready to merge.
-- When the base advance landed another contract unit, a contract PR's
-  revalidation also regenerates its generated consumers and reruns
-  `scripts/check.sh` for its components against the new tip, even if the text
-  merges cleanly.
+  ready to merge. A clean rebase can change the paths a branch touches by
+  following an upstream rename, so until the audit's scope check runs in
+  the `required` check, it runs after every rebase: the author runs it
+  after a rebase the author ran, and the landing batch runs it per PR by
+  hand after each rebase it makes, because the Landing Record names no
+  base-advance checks (`devlog/2026-10-19-1500-landing-record.md`).
 
 <!-- agents-md:managed:branches -->
 
@@ -770,10 +786,25 @@ this section holds the gates that govern finding, claiming, and finishing
 one. Runtime AttentionItems (docs/plan.md §4) are a different system: this
 section governs building Freeside, not running it.
 
+Three rules govern parallel work:
+
+1. A unit starts when it is authorized, nobody holds its claim, and every
+   unit it lists as `starts-after` has merged.
+2. A PR merges only after the required checks pass on its content combined
+   with the tip it lands on.
+3. A unit that must be written against another unit's result lists it as
+   `starts-after`. Everything else, including a conflict in text, is
+   resolved at landing, and after a rebase that conflicted, the author reads
+   what the resolution changed.
+
+Rule 2 proves what the required checks test and nothing else; Integration
+Ordering and Merge-Result Audit holds the landing mechanics. Decision record:
+`devlog/2026-10-26-1505-start-freely-validate-at-landing.md`.
+
 The gates below bind every session and live here. The mechanics that
-implement them (the lane glossary, the work-unit issue shape, the claim-lease
-protocol, the session-start queries, session end, the escalation routing
-rules, and Freeside's additions to the tracker format) live in
+implement them (the work-unit issue shape, the claim-lease protocol, the
+session-start queries, the migration protocol, reading a rebase, session end,
+the escalation rules, and Freeside's additions to the tracker format) live in
 [`docs/coordination.md`](docs/coordination.md). Read it before claiming a
 unit, creating a work-unit issue, filing a deferral, starting an issue-backed
 session, creating or updating a tracking issue, or starting any work that
@@ -792,25 +823,24 @@ unchanged by the persistence rule.
 
 One issue per issue-backed work unit, created from the work-unit template;
 its Dependencies field takes only the typed relationships `starts-after`,
-`merges-after`, `stacked-on`, and `exclusive-with`, and an unknown or
-materially ambiguous relationship is recorded as `starts-after` until the
-spine resolves it. A contract unit's field also carries the spine's contract
-assessments (Contract Changes). The template's fields, the labels and
-milestones, the §11 three-state wave resolver (open issues carrying the
-`tracker` label and a milestone), and the definition of **scheduled** (a
-milestone plus a listing on the current tracking issue, set together by the
-spine) are in docs/coordination.md §Work-Unit Issues. Every tracker's shape
-is in [`docs/tracker-format.md`](docs/tracker-format.md), with Freeside's
-additions under Tracking Issues in docs/coordination.md. Fiat (`Plan #N`,
-`Handle #N`) is independent of wave state; the scheduling door exists only
-in active-wave state.
+`merges-after`, and `stacked-on`, and an unknown or materially ambiguous
+relationship is recorded as `starts-after` until the planner resolves it.
+The template's fields, the labels and milestones, the §11 three-state wave
+resolver (open issues carrying the `tracker` label and a milestone), and the
+definition of **scheduled** (a milestone plus a listing on the current
+tracking issue, set together by the planner) are in docs/coordination.md
+§Work-Unit Issues. Every tracker's shape is in
+[`docs/tracker-format.md`](docs/tracker-format.md), with Freeside's additions
+under Tracking Issues in docs/coordination.md. Fiat (`Plan #N`, `Handle #N`)
+is independent of wave state; the scheduling door exists only in active-wave
+state.
 
-### Lane Names
-
-Lane names are search keys and territory labels. They never appear in code
-identifiers, package names, or API vocabulary, which stay functional (the
-attention type is AttentionItem, not SignetItem). The canonical lane table,
-with each lane's owned paths, is in docs/coordination.md.
+The planner is the planning role: the owner, or a session the owner runs for
+it. It assigns milestones and tracker listings, writes `starts-after` edges,
+and runs the deferral sweep. It assesses no pairs and orders no integration;
+the owner orders landing (Integration Ordering and Merge-Result Audit). A
+`Plan #N` session is a planning session, not the planner: it makes only the
+writes the Planning stage allows (Work-Unit Stages).
 
 ### Forge Edits
 
@@ -825,7 +855,7 @@ recoverable concurrent-update errors. Ordinary care is sufficient:
 - **Recheck for a reason.** Refresh evidence when a change could affect the
   result. Don't repeatedly check unchanged state or restart planning for
   unrelated default-branch movement. This does not relax implementation's
-  base-freshness and integration checks.
+  integration checks.
 - **Repair from current records.** Reconcile observed conflicts and partial
   updates within authorized scope. Complete straightforward repairs; ask only
   when the resolution needs judgment. Report anything still incomplete, and
@@ -833,11 +863,10 @@ recoverable concurrent-update errors. Ordinary care is sufficient:
 - **Do not require unavailable forge guarantees.** Missing writer locks or
   atomic transactions do not block routine edits. No additional reservation
   scheme or permanent incomplete-state marker is required.
-- **Keep consequential gates.** When an edit could start conflicting work or
-  materially change authorization, apply the claim, relationship, and
-  authorization checks below. Unverifiable required state and unresolved
-  conflicts still block the dependent action. Never report an incomplete
-  update as complete.
+- **Keep consequential gates.** When an edit could start work or materially
+  change authorization, apply the claim, relationship, and authorization
+  checks below. Unverifiable required state and unresolved conflicts still
+  block the dependent action. Never report an incomplete update as complete.
 
 ### Coordination Gates
 
@@ -847,170 +876,83 @@ which work. Keep that shape when editing, because a gate that names only a
 condition is inert until something else tells you to go look.
 
 - **Labels never authorize work.** An issue becomes agent-actionable through
-  exactly two doors: scheduling (a spine sweep assigns its milestone and lists
-  it on the current tracking issue, so this door is open only in active-wave
-  state per the §11 resolver) or fiat (the human hands its number to a
-  work-unit session, independent of wave state). Never select work by label
-  or by browsing open issues.
+  exactly two doors: scheduling (a planner sweep assigns its milestone and
+  lists it on the current tracking issue, so this door is open only in
+  active-wave state per the §11 resolver) or fiat (the human hands its number
+  to a work-unit session, independent of wave state). Never select work by
+  label or by browsing open issues.
 - **`needs-human` is never agent-selected.** It stays unmilestoned and
   fiat-only, and returns to a session by fiat after the maintainer acts.
-- **One claim per unit, with exclusivity arbitration.** Before claiming, check
-  the current unit and every forward or reverse `exclusive-with` partner.
-  After posting, repeat the complete query; among conflicting claims, the
-  earliest forge-issued claim comment wins by `created_at`, then numeric
-  comment ID. A losing claimant releases and stops. A bare cross-reference
+- **One claim per unit.** Before claiming, check the unit's own claims and
+  planning reservation. After posting, repeat that query; among claims on the
+  unit, the earliest forge-issued claim comment wins by `created_at`, then
+  numeric comment ID. A losing claimant releases and stops. A claim or
+  reservation on another unit never blocks yours. A bare cross-reference
   (`Refs #N`) is never a claim, and no new empty claim commits are created.
 - **Claim state is verified, never assumed.** A comment or PR API read or
   write failure at any step fails closed: work does not begin, or continue
   past the failed step, while claim state cannot be verified.
-- **Typed relationships govern start, integration, stacks, and exclusivity.**
-  Check every relationship before starting, whatever shape the work takes; a
+- **Typed relationships govern start, landing order, and stacks.** Check
+  every relationship before starting, whatever shape the work takes; a
   direct, session-contained assignment carries the same relationship contract
   as an issue-backed unit and reaches this gate without claiming anything.
   - `starts-after`: the prerequisite must be merged before the unit starts.
-  - `merges-after`: never blocks start, but recheck it at handoff and before
-    integration. A contract unit is the exception: before claiming one,
-    check its own Dependencies field, and treat a `merges-after` whose
-    prerequisite has not merged as `starts-after` (Contract Changes).
+  - `merges-after`: never blocks start, for any unit. Name a prerequisite
+    that has not merged in the handoff report; only the owner's approval
+    order or `--order` to the landing batch enforces it (Integration Ordering
+    and Merge-Result Audit).
   - `stacked-on`: names the intended base branch. Use that branch explicitly
     while the base PR is open and verify any existing child stays based
     there. After the base merges the relation is satisfied, but an existing
     child PR must be retargeted to the default branch before it can
     integrate.
-  - `exclusive-with`: a declaration on either unit forbids both from being
-    active concurrently. Before starting, check the current unit's
-    declarations and reverse declarations in every open work-unit issue, then
-    run the cross-unit claim arbitration. Between two contract units the
-    relation comes only from the recorded contract assessment (Contract
-    Changes); the `kind:contract` label implies none.
-  - Adding an `exclusive-with` declaration: the editor checks both endpoints
-    and must not edit while any claim or foreign planning reservation is
-    active; a planner may retain only its own unexpired
-    reservation, with sufficient write-and-verification margin, on its
-    assigned endpoint. The editor waits for the blocking record to release
-    before changing the relationship. A first contract assessment of an
-    unassessed pair needs no such wait, because the pair already serialized
-    (Contract Changes). A declaration that appears during claim
-    arbitration stops that claimant until the edit completes and a fresh
-    relationship, claim, and reservation read is done.
   - Treat an unknown or materially ambiguous relationship as `starts-after`
-    until the spine resolves it.
-- **Check concurrent work for conflicting changes before you start.** Compare
-  your scope with active work-unit claims and open PRs, whatever shape the work
-  takes. Shared paths trigger inspection, not an automatic stop or ownership
-  of an entire file. Use the work contracts, plans, and available diffs to
-  identify the behavior or content each unit changes.
-- **Proceed with independent edits within the existing gates.** Authorization,
-  claims, planning reservations, explicit dependencies and exclusivity,
-  contract serialization, and integration checks still apply. Independent
-  edits may proceed in isolated checkouts after recording their boundaries on
-  the issue; they need no acknowledgement when neither unit's scope is
-  reassigned.
-- **Pause affected edits when changes conflict or depend on unfinished work.**
-  Pause edits when units make competing changes to the same behavior or
-  content, or when one needs the other's unfinished result. Name the conflict
-  and required resolution; continue independent work within the assigned scope,
-  subject to the other coordination gates. Expected textual merge conflicts
-  alone do not require waiting for another PR to merge. Follow Shared-Path
-  Coordination in `docs/coordination.md`.
-- **Contract work serializes where it conflicts or is unassessed.** Before
-  you start, whatever shape the work takes, check open `kind:contract`
-  issues. For work that is not itself a contract unit, one touching the
-  shared-package surfaces your work will change blocks you. An issue-backed
-  unit names those surfaces in its Affected interfaces/contracts field; a
-  direct assignment derives them from its declared scope. A
-  `deferral`-labelled contract unit counts only once it is scheduled or
-  actively claimed. Between contract units the recorded assessment decides,
-  not surface overlap. Claiming a `kind:contract` unit checks every
-  other open contract unit that holds an active claim or planning
-  reservation:
-  - Any of them that lacks a recorded independence assessment with your unit
-    blocks you (Contract Changes), except a planning reservation on a unit
-    recorded to start after yours. An unassessed pair is treated as
-    conflicting, so missing evidence never opens concurrency.
-  - The cap blocks you when the number of contract units with an active claim
-    already equals it. After posting your claim, recount: when active
-    contract claims exceed the cap, the latest by `created_at`, then numeric
-    comment ID, releases and stops.
+    until the planner resolves it.
+  - A leftover `exclusive-with` or contract-assessment line in an older
+    issue is retired, not unknown: it gates nothing, and the planner deletes
+    it when it next edits that field (`docs/coordination.md`, Relationship
+    Types).
+- **Start without comparing scope with open work.** Whatever shape the work
+  takes, rule 1 is the whole start check: authorization, the unit's own
+  claim, and its `starts-after` prerequisites. Don't compare your scope with
+  other claims or open PRs, wait on another unit's reservation, or count
+  open contract units. Overlapping edits and textual conflicts resolve at
+  landing (rule 3).
 
 ### Contract Changes
 
 Shared packages (domain types, migrations, the
 StageDriver/ReviewSource/RunnerBackend interfaces, the API schema) change only
-through `kind:contract` units: spine-owned, in their own PR, and merged before
-dependents start. `kind:contract` is a classification that invokes this
-contract review and verification; it implies no relationship to any other
-unit. A contract PR carries its required generated consumers and
-mechanical adapters (the cross-component one-work-unit rule under Monorepo
-Scope Discipline). It may also carry its first behavioral consumer, under the
-conditions in `docs/coordination.md` (Unit Sizing); all other downstream
-feature work waits for the merge. Lane work never edits shared packages in
-passing: needing a contract change means filing the contract issue, linking
-it as a dependency, and blocking or switching units.
+through `kind:contract` units, each in its own PR and merged before
+dependents start: a unit written against a contract change lists it as
+`starts-after` (rule 3). `kind:contract` is a classification that invokes
+this contract review and verification; it implies no relationship to any
+other unit and no limit on how many contract units are open. A contract PR
+carries its required generated consumers and mechanical adapters (the
+cross-component one-work-unit rule under Monorepo Scope Discipline). It may
+also carry its first behavioral consumer, under the conditions in
+`docs/coordination.md` (Unit Sizing); all other downstream feature work waits
+for the merge. Other work never edits shared packages in passing: needing a
+contract change means filing the contract issue and listing it as
+`starts-after`.
 
-Contract units serialize by assessed conflict, not by label:
+Contract units need no coordination rule beyond rule 3, because of how a
+contract change is made:
 
-- **An assessor compares each pair.** The assessor is the spine, or a
-  session that created one of the two units or holds owner fiat (`Plan #N`
-  or `Handle #N`) for one of them. For two contract units, the assessor
-  compares intended behavior, affected invariants, consumers,
-  persistence, generated artifacts, and recovery paths. Different files or a
-  clean merge do not prove independence.
-- **Both issues' Dependencies fields carry the record.** A contract
-  assessment names the other unit, the verdict, the rationale, and the issue
-  state or base commit it was assessed against. A conflict is recorded as
-  `exclusive-with`, and a dependency or a required integration order as
-  `starts-after`; a pair with neither is recorded as independent. The
-  record's form is in `docs/coordination.md` (Relationship Types).
-- **A contract unit declares no `merges-after`.** Its open PR is an active
-  claim that never expires and counts toward the cap, so a contract PR that
-  waits on another unit's merge holds a slot through that unit's work. The
-  spine records every ordering prerequisite of a contract unit as
-  `starts-after`, whatever kind of unit the prerequisite is, and records no
-  order that nothing requires. The claim gate reads a `merges-after`
-  already on a contract unit as `starts-after` until the spine retypes or
-  removes it; a tracker's diagram and **Startable now** still follow the
-  field as written. Another unit may still declare `merges-after` on a
-  contract unit.
-- **A scope edit withdraws the record.** Before saving an edit to a
-  contract unit's Objective, Scope, or Affected interfaces/contracts, check
-  its Dependencies field for independence records. Whoever makes the edit
-  removes them from that issue in the same edit, at once, and names the
-  removal on both issues. The pair is then unassessed until an assessor
-  reassesses it and records the result on both issues again; while the
-  partner unit is claimed or reserved, the edited unit does no work on the
-  changed scope until then. The planner's case, and why this removal does
-  not wait as a withdrawal on unchanged scope does, are in
-  `docs/coordination.md` (Relationship Types). An assessor also reassesses
-  when a recorded assumption changes.
-- **An unassessed pair stays serialized.** Two contract units may be active
-  together only when both issues record them as independent. Without that
-  record the pair is treated as conflicting, and an assessor records an
-  unknown interaction as `starts-after`, the same fallback every unknown
-  relationship takes.
-- **At most two contract implementations are active at once,** within the
-  four-front width. The cap is this number; the spine raises it to three, by
-  changing it here in a reviewed PR, only when all of these hold: a third
-  contract unlocks a cluster nothing active unlocks; a contract PR waits
-  under a day for owner review at two; and all three units are pairwise
-  assessed on their issues. Planning reservations do not count toward it.
-- **A planning reservation reaches what a claim would, with one exception.**
-  A reservation on a contract unit blocks claims on the units a claim
-  there would block, and no others, except a unit it is recorded to start
-  after: a dependent's planning never holds back its prerequisite.
-- **The authorization doors are unchanged.** Scheduling and fiat remain the
-  only two; an assessment or a free cap slot never authorizes work.
-
-A `kind:contract` deferral gets its place in the assessed contract order
-before it is scheduled or worked under fiat. The session that creates it,
-and any session that receives `Plan #N` or `Handle #N` for it, records each
-missing assessment against a contract unit holding an active claim or
-planning reservation; that write is part of the session's assignment, not a
-separate step. The spine, when it schedules the unit, records each missing
-one against a scheduled or active contract unit. Either writes on both
-issues, in the Relationship Types form in `docs/coordination.md`, with
-`starts-after` for any pair it cannot assess. It records no independence
-against a partner whose planning reservation is active, because that
-partner's scope may still change, and never makes a claimed partner start
-after the unit it places. With no valid position the unit stays
-dormant. Fiat never bypasses contract ordering.
+- **A breaking change fixes every user in the same PR.** Another open unit
+  that still uses the old shape fails to compile or fails a test at landing.
+- **A change of meaning is a rename in the same PR.** A field that keeps its
+  shape but means something new gets a new name, so every open PR using the
+  old name fails to compile at landing and its author has to look.
+- **Stored data is the exception.** Rows and stored documents already exist
+  under the old shape, so a change to them is added first and migrated.
+- **Generated files meet at landing.** When another contract unit lands
+  first, the second rebases and regenerates its consumers (Integration
+  Ordering and Merge-Result Audit).
+- **Migrations keep their numbering.** Take the next number; when another
+  migration lands first, rename yours behind it at rebase; every migration
+  after 0099 declares each name it removes with a `-- drop:` line, which
+  `TestMigrationsDeclareDrops` enforces. Two migrations that rewrite the same
+  rows, or rebuild one table, are written one against the other's result, so
+  the planner orders them with `starts-after`. Detail: `docs/coordination.md`
+  (Migrations).
