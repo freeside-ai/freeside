@@ -34,3 +34,6 @@ c6a298611f7463e5633da56aa4cb9d8617cb4b2f
 
 # Move the loopback forge and local-git transport out of test code (#1937)
 c5e65942551bb0ec863b0c882bc8904036ecccb5
+
+# Move the rebuild refusal clauses into domain (#2332)
+5d773309c3e30dae689e415f1e2940458f6e07e1
