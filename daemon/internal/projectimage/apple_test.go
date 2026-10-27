@@ -832,11 +832,16 @@ func TestAppleCheckProvenanceBindsLabelsAndEmbeddedFiles(t *testing.T) {
 	t.Run("Go image", testAppleCheckProvenanceBindsGoImage)
 }
 
-// A Go image carries the Go and golangci-lint archives, the Go launcher at
-// every launcher path, the module-specific preparation helper, and the
-// go.mod and go.sum seeds; CheckProvenance proves each against the spec.
+// A Go image carries the Go, golangci-lint, vacuum, shellcheck, Python, and
+// procps archives, the Go launcher at every launcher path, the
+// module-specific preparation helper, and the go.mod and go.sum seeds;
+// CheckProvenance proves each against the spec.
 func testAppleCheckProvenanceBindsGoImage(t *testing.T) {
 	goArchive, lintArchive := []byte("pinned Go archive"), []byte("pinned golangci-lint archive")
+	vacuumArchive, shellcheckArchive := []byte("pinned vacuum archive"), []byte("pinned shellcheck archive")
+	pythonArchive := []byte("pinned Python archive")
+	procpsArchive, libproc2Archive := []byte("pinned procps package"), []byte("pinned libproc2 package")
+	sum := func(content []byte) string { return fmt.Sprintf("%x", sha256.Sum256(content)) }
 	goMod, goSum := []byte("module example.test/m\n\ngo 1.26\n"), []byte("example.test/dep v1.0.0 h1:x=\n")
 	spec := provenanceSpec{
 		ImageDigest:  testImageDigest,
@@ -851,6 +856,15 @@ func testAppleCheckProvenanceBindsGoImage(t *testing.T) {
 		GoToolchainArchiveSHA256:  fmt.Sprintf("%x", sha256.Sum256(goArchive)),
 		GolangciLintVersion:       golangciLintVersion,
 		GolangciLintArchiveSHA256: fmt.Sprintf("%x", sha256.Sum256(lintArchive)),
+		VacuumVersion:             vacuumVersion,
+		VacuumArchiveSHA256:       sum(vacuumArchive),
+		ShellcheckVersion:         shellcheckVersion,
+		ShellcheckArchiveSHA256:   sum(shellcheckArchive),
+		PythonVersion:             pythonVersion,
+		PythonArchiveSHA256:       sum(pythonArchive),
+		ProcpsVersion:             procpsVersion,
+		ProcpsArchiveSHA256:       sum(procpsArchive),
+		Libproc2ArchiveSHA256:     sum(libproc2Archive),
 		GoModSHA256:               manifestSHA256(goMod),
 		GoSumSHA256:               manifestSHA256(goSum),
 	}
@@ -866,6 +880,16 @@ func testAppleCheckProvenanceBindsGoImage(t *testing.T) {
 		"ai.freeside.project.toolchain.go.archive-sha256":            spec.GoToolchainArchiveSHA256,
 		"ai.freeside.project.toolchain.golangci-lint.version":        spec.GolangciLintVersion,
 		"ai.freeside.project.toolchain.golangci-lint.archive-sha256": spec.GolangciLintArchiveSHA256,
+		"ai.freeside.project.toolchain.vacuum.version":               spec.VacuumVersion,
+		"ai.freeside.project.toolchain.vacuum.archive-sha256":        spec.VacuumArchiveSHA256,
+		"ai.freeside.project.toolchain.shellcheck.version":           spec.ShellcheckVersion,
+		"ai.freeside.project.toolchain.shellcheck.archive-sha256":    spec.ShellcheckArchiveSHA256,
+		"ai.freeside.project.toolchain.python.version":               spec.PythonVersion,
+		"ai.freeside.project.toolchain.python.archive-sha256":        spec.PythonArchiveSHA256,
+		"ai.freeside.project.toolchain.procps.version":               spec.ProcpsVersion,
+		"ai.freeside.project.toolchain.procps.archive-sha256":        spec.ProcpsArchiveSHA256,
+		"ai.freeside.project.toolchain.libproc2.version":             spec.ProcpsVersion,
+		"ai.freeside.project.toolchain.libproc2.archive-sha256":      spec.Libproc2ArchiveSHA256,
 	}
 	runner := &recordingRunner{run: func(call commandSpec) (commandOutput, error) {
 		if len(call.Args) >= 3 && call.Args[0] == "image" && call.Args[1] == "inspect" {
@@ -889,6 +913,15 @@ func testAppleCheckProvenanceBindsGoImage(t *testing.T) {
 		goLauncherPath:           []byte(goToolchainLauncher),
 		gofmtLauncherPath:        []byte(goToolchainLauncher),
 		golangciLintLauncherPath: []byte(goToolchainLauncher),
+		vacuumArchivePath:        vacuumArchive,
+		shellcheckArchivePath:    shellcheckArchive,
+		pythonArchivePath:        pythonArchive,
+		procpsArchivePath:        procpsArchive,
+		libproc2ArchivePath:      libproc2Archive,
+		vacuumLauncherPath:       []byte(goToolchainLauncher),
+		shellcheckLauncherPath:   []byte(goToolchainLauncher),
+		pythonLauncherPath:       []byte(goToolchainLauncher),
+		psLauncherPath:           []byte(goToolchainLauncher),
 		busyboxPath:              busybox,
 		seedGoModPath:            goMod,
 		seedGoSumPath:            goSum,
@@ -896,7 +929,11 @@ func testAppleCheckProvenanceBindsGoImage(t *testing.T) {
 	modes := map[string]int64{
 		ward.ProjectRecipePath: 0o600, PreparationPath: 0o700,
 		goToolchainArchivePath: 0o644, golangciLintArchivePath: 0o644,
+		vacuumArchivePath: 0o644, shellcheckArchivePath: 0o644, pythonArchivePath: 0o644,
+		procpsArchivePath: 0o644, libproc2ArchivePath: 0o644,
 		goLauncherPath: 0o755, gofmtLauncherPath: 0o755, golangciLintLauncherPath: 0o755,
+		vacuumLauncherPath: 0o755, shellcheckLauncherPath: 0o755,
+		pythonLauncherPath: 0o755, psLauncherPath: 0o755,
 		busyboxPath: 0o755,
 	}
 	var requested map[string]int64
@@ -938,23 +975,36 @@ func testAppleCheckProvenanceBindsGoImage(t *testing.T) {
 		"ai.freeside.project.toolchain.go.archive-sha256",
 		"ai.freeside.project.toolchain.golangci-lint.version",
 		"ai.freeside.project.toolchain.golangci-lint.archive-sha256",
+		"ai.freeside.project.toolchain.vacuum.version",
+		"ai.freeside.project.toolchain.vacuum.archive-sha256",
+		"ai.freeside.project.toolchain.shellcheck.version",
+		"ai.freeside.project.toolchain.shellcheck.archive-sha256",
+		"ai.freeside.project.toolchain.python.version",
+		"ai.freeside.project.toolchain.python.archive-sha256",
+		"ai.freeside.project.toolchain.procps.version",
+		"ai.freeside.project.toolchain.procps.archive-sha256",
+		"ai.freeside.project.toolchain.libproc2.version",
+		"ai.freeside.project.toolchain.libproc2.archive-sha256",
 	} {
 		original := labels[label]
 		reject("a mismatched "+label+" label",
 			func() { labels[label] = "0" }, func() { labels[label] = original })
 	}
-	for _, path := range []string{
-		goToolchainArchivePath, golangciLintArchivePath,
-		goLauncherPath, gofmtLauncherPath, golangciLintLauncherPath,
+	for _, path := range append([]string{
+		goToolchainArchivePath, golangciLintArchivePath, vacuumArchivePath, shellcheckArchivePath,
+		pythonArchivePath, procpsArchivePath, libproc2ArchivePath,
 		seedGoModPath, seedGoSumPath, PreparationPath,
-	} {
+	}, goLauncherPaths...) {
 		original := files[path]
 		reject("tampered "+path,
 			func() { files[path] = []byte("tampered") }, func() { files[path] = original })
 		reject("missing "+path,
 			func() { delete(files, path) }, func() { files[path] = original })
 	}
-	for _, path := range []string{goToolchainArchivePath, golangciLintArchivePath, goLauncherPath} {
+	for _, path := range []string{
+		goToolchainArchivePath, golangciLintArchivePath, vacuumArchivePath, shellcheckArchivePath,
+		pythonArchivePath, procpsArchivePath, libproc2ArchivePath, goLauncherPath, psLauncherPath,
+	} {
 		original := modes[path]
 		reject("a wrong mode on "+path,
 			func() { modes[path] = 0o4755 }, func() { modes[path] = original })

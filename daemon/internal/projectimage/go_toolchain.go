@@ -38,22 +38,130 @@ const (
 	seedGoSumPath = "/opt/freeside/project-seed/go.sum"
 )
 
-// goToolchainLauncher is installed at goLauncherPath, gofmtLauncherPath, and
-// golangciLintLauncherPath and dispatches on the name it was run as. Like the
-// Node launcher, it extracts the verified archives once per process tree into
-// a private directory, and every descendant reuses that tree through
-// FREESIDE_PROJECT_GO_ROOT.
+// The tools a Go image bakes beside Go so Freeside's own api/ and scripts/
+// checks run offline (#2376): the OpenAPI linter, shellcheck, a Python for
+// the scripts and their suites, and procps for the process-group checks
+// BusyBox's ps cannot run (it has no -p). vacuum and shellcheck are the
+// releases CI pins; Python is a python-build-standalone build, named by its
+// CPython version and release tag. procps has no upstream release binary, so
+// it is Debian trixie's package and the library it links, fetched from a
+// fixed snapshot.debian.org timestamp so the URL never moves.
+const (
+	vacuumVersion       = "0.29.9"
+	vacuumArchiveSHA256 = "058c377bb837faf24a940b41c15be8775f2c4770df910a71dc608fdd96c93c1b"
+	vacuumArchivePath   = "/opt/freeside/project-toolchain/vacuum.tar.gz"
+
+	shellcheckVersion       = "0.11.0"
+	shellcheckArchiveSHA256 = "12b331c1d2db6b9eb13cfca64306b1b157a86eb69db83023e261eaa7e7c14588"
+	shellcheckArchivePath   = "/opt/freeside/project-toolchain/shellcheck.tar.xz"
+
+	pythonVersion       = "3.12.16+20261026"
+	pythonArchiveSHA256 = "bb4b6392670c5d3f93876996fcaa19858a4a413a0c7720144c18b0d6f1f0db2d"
+	pythonArchivePath   = "/opt/freeside/project-toolchain/python.tar.gz"
+
+	procpsVersion         = "4.0.4-9"
+	procpsSnapshot        = "20250730T150507Z"
+	procpsArchiveSHA256   = "9afd4ad2e8da92322715114fb9555c63ce92f6c72bf72867e76ab2d6a7a3b541"
+	procpsArchivePath     = "/opt/freeside/project-toolchain/procps.deb"
+	libproc2ArchiveSHA256 = "e81069b58fe82223c71fcd74c760cb0fd3b0e61792fbaf2e5675fd948dc16dba"
+	libproc2ArchivePath   = "/opt/freeside/project-toolchain/libproc2.deb"
+
+	vacuumLauncherPath     = "/usr/local/bin/vacuum"
+	shellcheckLauncherPath = "/usr/local/bin/shellcheck"
+	pythonLauncherPath     = "/usr/bin/python3"
+	psLauncherPath         = "/usr/bin/ps"
+)
+
+// goLauncherPaths is every path a Go image installs goToolchainLauncher at.
+var goLauncherPaths = []string{
+	goLauncherPath, gofmtLauncherPath, golangciLintLauncherPath,
+	vacuumLauncherPath, shellcheckLauncherPath, pythonLauncherPath, psLauncherPath,
+}
+
+// goToolchainLauncher is installed at every Go image launcher path and
+// dispatches on the name it was run as.
 //
-// It owns the Go environment of a project room: the room passes only HOME and
-// LC_ALL, and the image may set no ENV. GOTOOLCHAIN=local forbids Go from
-// fetching a toolchain, GOPROXY=off makes a missing module an immediate
-// offline refusal instead of a network attempt, GOWORK=off ignores any
-// go.work, and GOMODCACHE is the baked module cache. GOCACHE keeps a caller's
-// value and otherwise lives under HOME, so build output never lands in the
-// image's own paths. The umask is left alone: the extraction directory is
-// already private, and a recipe's tests may assert the modes they create.
+// For go, gofmt, and golangci-lint it works like the Node launcher: it
+// extracts the verified archives once per process tree into a private
+// directory, and every descendant reuses that tree through
+// FREESIDE_PROJECT_GO_ROOT. It owns the Go environment of a project room: the
+// room passes only HOME and LC_ALL, and the image may set no ENV.
+// GOTOOLCHAIN=local forbids Go from fetching a toolchain, GOPROXY=off makes a
+// missing module an immediate offline refusal instead of a network attempt,
+// GOWORK=off ignores any go.work, and GOMODCACHE is the baked module cache.
+// GOCACHE keeps a caller's value and otherwise lives under HOME, so build
+// output never lands in the image's own paths. The umask is left alone: the
+// extraction directory is already private, and a recipe's tests may assert
+// the modes they create.
+//
+// vacuum, shellcheck, python3, and ps instead extract their own archives once
+// per room into a fixed /tmp tree and exec the tool, so it keeps the
+// launcher's PID: scripts/test-check.sh runs python3 to setsid and then
+// signals the group named by the PID it started. Concurrent first calls each
+// extract into a staging directory and rename it into place; the rename
+// fails onto a populated tree, and the loser discards its copy. A per-tree
+// root would need the launcher to outlive the tool to remove it, and
+// scripts call python3 many times, each extraction costing about a second.
 const goToolchainLauncher = `#!/usr/bin/busybox sh
 set -eu
+case "${0##*/}" in
+go | gofmt | golangci-lint) family=go ;;
+vacuum) family=vacuum ;;
+shellcheck) family=shellcheck ;;
+python3) family=python ;;
+ps) family=procps ;;
+*)
+	echo "unknown project Go launcher name: ${0##*/}" >&2
+	exit 127
+	;;
+esac
+if [ "$family" != go ]; then
+	toolchain=/tmp/freeside-project-$family
+	complete() {
+		case "$family" in
+		vacuum) [ -x "$toolchain/vacuum" ] ;;
+		shellcheck) [ -x "$toolchain/shellcheck" ] ;;
+		python) [ -x "$toolchain/bin/python3" ] ;;
+		procps) [ -x "$toolchain/usr/bin/ps" ] && [ -f "$toolchain/usr/lib/aarch64-linux-gnu/libproc2.so.0" ] ;;
+		esac
+	}
+	if ! complete; then
+		staging=$(/usr/bin/busybox mktemp -d "/tmp/freeside-project-$family.XXXXXX")
+		case "$family" in
+		vacuum)
+			/usr/bin/busybox gzip -dc /opt/freeside/project-toolchain/vacuum.tar.gz |
+				/usr/bin/busybox tar -xf - -C "$staging" vacuum
+			;;
+		shellcheck)
+			/usr/bin/busybox xz -dc /opt/freeside/project-toolchain/shellcheck.tar.xz |
+				/usr/bin/busybox tar -xf - -C "$staging" --strip-components=1
+			;;
+		python)
+			/usr/bin/busybox gzip -dc /opt/freeside/project-toolchain/python.tar.gz |
+				/usr/bin/busybox tar -xf - -C "$staging" --strip-components=1
+			;;
+		procps)
+			/usr/bin/busybox dpkg-deb -x /opt/freeside/project-toolchain/procps.deb "$staging"
+			/usr/bin/busybox dpkg-deb -x /opt/freeside/project-toolchain/libproc2.deb "$staging"
+			;;
+		esac
+		/usr/bin/busybox mv -T "$staging" "$toolchain" 2>/dev/null ||
+			/usr/bin/busybox rm -rf "$staging"
+		if ! complete; then
+			echo "project $family root is incomplete" >&2
+			exit 126
+		fi
+	fi
+	case "$family" in
+	vacuum) exec "$toolchain/vacuum" "$@" ;;
+	shellcheck) exec "$toolchain/shellcheck" "$@" ;;
+	python) exec "$toolchain/bin/python3" "$@" ;;
+	procps)
+		export LD_LIBRARY_PATH="$toolchain/usr/lib/aarch64-linux-gnu"
+		exec "$toolchain/usr/bin/ps" "$@"
+		;;
+	esac
+fi
 owned_toolchain=false
 if [ -n "${FREESIDE_PROJECT_GO_ROOT:-}" ]; then
 	toolchain=$FREESIDE_PROJECT_GO_ROOT
@@ -90,10 +198,6 @@ gofmt)
 	;;
 golangci-lint)
 	set -- "$toolchain/golangci-lint/golangci-lint" "$@"
-	;;
-*)
-	echo "unknown project Go launcher name: ${0##*/}" >&2
-	exit 127
 	;;
 esac
 if [ "$owned_toolchain" = false ]; then
@@ -145,6 +249,10 @@ func goMaskedProbe(moduleDir string) []string {
 }
 
 func renderGoContainerfile(request Request, recipeDigest domain.Digest) string {
+	var launcherCopies strings.Builder
+	for _, launcher := range goLauncherPaths {
+		launcherCopies.WriteString("COPY toolchain-launcher " + launcher + "\n")
+	}
 	// Every interpolated value is a builder constant or has passed
 	// validateRequest's restricted grammar. The module manifests and exact
 	// recipe bytes enter through COPY, never through instruction text.
@@ -157,22 +265,42 @@ ARG PROJECT_GO_VERSION=%s
 ARG PROJECT_GO_SHA256=%s
 ARG PROJECT_GOLANGCI_LINT_VERSION=%s
 ARG PROJECT_GOLANGCI_LINT_SHA256=%s
+ARG PROJECT_VACUUM_VERSION=%s
+ARG PROJECT_VACUUM_SHA256=%s
+ARG PROJECT_SHELLCHECK_VERSION=%s
+ARG PROJECT_SHELLCHECK_SHA256=%s
+ARG PROJECT_PYTHON_VERSION=%s
+ARG PROJECT_PYTHON_SHA256=%s
+ARG PROJECT_PROCPS_VERSION=%s
+ARG PROJECT_PROCPS_SNAPSHOT=%s
+ARG PROJECT_PROCPS_SHA256=%s
+ARG PROJECT_LIBPROC2_SHA256=%s
 
 # Verification toolchains belong to the project image, not the provider base.
-# This stage downloads and verifies the exact Go and golangci-lint archives
-# independently and proves each runs. The final image carries those
-# compressed bytes plus a fixed launcher, so host-side provenance can hash the
-# runtime source instead of trusting an extracted tree.
+# This stage downloads and verifies every pinned archive independently and
+# proves each runs. The final image carries those compressed bytes plus a
+# fixed launcher, so host-side provenance can hash the runtime source instead
+# of trusting an extracted tree.
 FROM ${PROJECT_TOOLCHAIN_BASE_IMAGE} AS project-toolchain
 
 ARG PROJECT_GO_VERSION
 ARG PROJECT_GO_SHA256
 ARG PROJECT_GOLANGCI_LINT_VERSION
 ARG PROJECT_GOLANGCI_LINT_SHA256
+ARG PROJECT_VACUUM_VERSION
+ARG PROJECT_VACUUM_SHA256
+ARG PROJECT_SHELLCHECK_VERSION
+ARG PROJECT_SHELLCHECK_SHA256
+ARG PROJECT_PYTHON_VERSION
+ARG PROJECT_PYTHON_SHA256
+ARG PROJECT_PROCPS_VERSION
+ARG PROJECT_PROCPS_SNAPSHOT
+ARG PROJECT_PROCPS_SHA256
+ARG PROJECT_LIBPROC2_SHA256
 
 RUN set -eux; \
 	apt-get update; \
-	apt-get install -y --no-install-recommends ca-certificates curl; \
+	apt-get install -y --no-install-recommends ca-certificates curl xz-utils; \
 	rm -rf /var/lib/apt/lists/*
 
 RUN set -eux; \
@@ -192,6 +320,38 @@ RUN set -eux; \
 	/opt/freeside/project-toolchain/golangci-lint-root/golangci-lint --version | \
 		grep -F "version ${PROJECT_GOLANGCI_LINT_VERSION} "
 
+# The tools the scripts and API checks run. The python-build-standalone asset
+# is named by the full version, whose part after + is the release tag; ps
+# runs against the Debian library it links, as the launcher runs it.
+RUN set -eux; \
+	cd /opt/freeside/project-toolchain; \
+	mkdir vacuum-root shellcheck-root python-root procps-root; \
+	curl -fsSLo vacuum.tar.gz \
+		"https://github.com/daveshanley/vacuum/releases/download/v${PROJECT_VACUUM_VERSION}/vacuum_${PROJECT_VACUUM_VERSION}_linux_arm64.tar.gz"; \
+	echo "${PROJECT_VACUUM_SHA256}  vacuum.tar.gz" | sha256sum -c -; \
+	tar -xzf vacuum.tar.gz -C vacuum-root vacuum; \
+	test "$(vacuum-root/vacuum version)" = "${PROJECT_VACUUM_VERSION}"; \
+	curl -fsSLo shellcheck.tar.xz \
+		"https://github.com/koalaman/shellcheck/releases/download/v${PROJECT_SHELLCHECK_VERSION}/shellcheck-v${PROJECT_SHELLCHECK_VERSION}.linux.aarch64.tar.xz"; \
+	echo "${PROJECT_SHELLCHECK_SHA256}  shellcheck.tar.xz" | sha256sum -c -; \
+	tar -xJf shellcheck.tar.xz -C shellcheck-root --strip-components=1; \
+	shellcheck-root/shellcheck --version | grep -Fx "version: ${PROJECT_SHELLCHECK_VERSION}"; \
+	curl -fsSLo python.tar.gz \
+		"https://github.com/astral-sh/python-build-standalone/releases/download/${PROJECT_PYTHON_VERSION#*+}/cpython-${PROJECT_PYTHON_VERSION}-aarch64-unknown-linux-gnu-install_only_stripped.tar.gz"; \
+	echo "${PROJECT_PYTHON_SHA256}  python.tar.gz" | sha256sum -c -; \
+	tar -xzf python.tar.gz -C python-root --strip-components=1; \
+	test "$(python-root/bin/python3 --version)" = "Python ${PROJECT_PYTHON_VERSION%%+*}"; \
+	curl -fsSLo procps.deb \
+		"https://snapshot.debian.org/archive/debian/${PROJECT_PROCPS_SNAPSHOT}/pool/main/p/procps/procps_${PROJECT_PROCPS_VERSION}_arm64.deb"; \
+	echo "${PROJECT_PROCPS_SHA256}  procps.deb" | sha256sum -c -; \
+	curl -fsSLo libproc2.deb \
+		"https://snapshot.debian.org/archive/debian/${PROJECT_PROCPS_SNAPSHOT}/pool/main/p/procps/libproc2-0_${PROJECT_PROCPS_VERSION}_arm64.deb"; \
+	echo "${PROJECT_LIBPROC2_SHA256}  libproc2.deb" | sha256sum -c -; \
+	dpkg-deb -x procps.deb procps-root; \
+	dpkg-deb -x libproc2.deb procps-root; \
+	test "$(LD_LIBRARY_PATH=procps-root/usr/lib/aarch64-linux-gnu procps-root/usr/bin/ps --version)" = \
+		"ps from procps-ng ${PROJECT_PROCPS_VERSION%%-*}"
+
 FROM ${BASE_IMAGE}
 
 ARG BASE_DIGEST
@@ -203,23 +363,38 @@ ARG PROJECT_GO_VERSION
 ARG PROJECT_GO_SHA256
 ARG PROJECT_GOLANGCI_LINT_VERSION
 ARG PROJECT_GOLANGCI_LINT_SHA256
+ARG PROJECT_VACUUM_VERSION
+ARG PROJECT_VACUUM_SHA256
+ARG PROJECT_SHELLCHECK_VERSION
+ARG PROJECT_SHELLCHECK_SHA256
+ARG PROJECT_PYTHON_VERSION
+ARG PROJECT_PYTHON_SHA256
+ARG PROJECT_PROCPS_VERSION
+ARG PROJECT_PROCPS_SHA256
+ARG PROJECT_LIBPROC2_SHA256
 
 COPY --from=project-toolchain /opt/freeside/project-toolchain/go.tar.gz %s
 COPY --from=project-toolchain /opt/freeside/project-toolchain/golangci-lint.tar.gz %s
+COPY --from=project-toolchain /opt/freeside/project-toolchain/vacuum.tar.gz %s
+COPY --from=project-toolchain /opt/freeside/project-toolchain/shellcheck.tar.xz %s
+COPY --from=project-toolchain /opt/freeside/project-toolchain/python.tar.gz %s
+COPY --from=project-toolchain /opt/freeside/project-toolchain/procps.deb %s
+COPY --from=project-toolchain /opt/freeside/project-toolchain/libproc2.deb %s
 # Clear the launcher paths with the base's own already-trusted static BusyBox
 # before each COPY, so COPY lands a fresh regular file and never writes
 # through a symlink an approved base may carry there (the Node path's #518).
-RUN ["/usr/bin/busybox", "rm", "-f", "%s", "%s", "%s"]
-COPY toolchain-launcher %s
-COPY toolchain-launcher %s
-COPY toolchain-launcher %s
-
+RUN ["/usr/bin/busybox", "rm", "-f", %s]
+%s
 RUN set -eux; \
 	test "$(go env GOVERSION)" = "go${PROJECT_GO_VERSION}"; \
 	test "$(go env GOTOOLCHAIN GOPROXY GOWORK GOMODCACHE)" = "$(printf '%%s\n' local off off %s)"; \
 	golangci-lint --version | grep -F "version ${PROJECT_GOLANGCI_LINT_VERSION} "; \
+	test "$(vacuum version)" = "${PROJECT_VACUUM_VERSION}"; \
+	shellcheck --version | grep -Fx "version: ${PROJECT_SHELLCHECK_VERSION}"; \
+	test "$(python3 --version)" = "Python ${PROJECT_PYTHON_VERSION%%+*}"; \
+	test "$(ps --version)" = "ps from procps-ng ${PROJECT_PROCPS_VERSION%%-*}"; \
 	mkdir -p %s /opt/freeside/project-seed; \
-	rm -rf /tmp/freeside-project-go.*
+	rm -rf /tmp/freeside-project-*
 
 COPY go.mod go.sum /opt/freeside/project-seed/
 COPY recipe.json %s
@@ -245,6 +420,16 @@ LABEL org.opencontainers.image.title="freeside-project-image" \
 	ai.freeside.project.toolchain.go.archive-sha256="${PROJECT_GO_SHA256}" \
 	ai.freeside.project.toolchain.golangci-lint.version="${PROJECT_GOLANGCI_LINT_VERSION}" \
 	ai.freeside.project.toolchain.golangci-lint.archive-sha256="${PROJECT_GOLANGCI_LINT_SHA256}" \
+	ai.freeside.project.toolchain.vacuum.version="${PROJECT_VACUUM_VERSION}" \
+	ai.freeside.project.toolchain.vacuum.archive-sha256="${PROJECT_VACUUM_SHA256}" \
+	ai.freeside.project.toolchain.shellcheck.version="${PROJECT_SHELLCHECK_VERSION}" \
+	ai.freeside.project.toolchain.shellcheck.archive-sha256="${PROJECT_SHELLCHECK_SHA256}" \
+	ai.freeside.project.toolchain.python.version="${PROJECT_PYTHON_VERSION}" \
+	ai.freeside.project.toolchain.python.archive-sha256="${PROJECT_PYTHON_SHA256}" \
+	ai.freeside.project.toolchain.procps.version="${PROJECT_PROCPS_VERSION}" \
+	ai.freeside.project.toolchain.procps.archive-sha256="${PROJECT_PROCPS_SHA256}" \
+	ai.freeside.project.toolchain.libproc2.version="${PROJECT_PROCPS_VERSION}" \
+	ai.freeside.project.toolchain.libproc2.archive-sha256="${PROJECT_LIBPROC2_SHA256}" \
 	ai.freeside.project.repository="${PROJECT_REPOSITORY}" \
 	ai.freeside.project.repository-id="${PROJECT_REPOSITORY_ID}" \
 	ai.freeside.project.commit="${PROJECT_COMMIT}" \
@@ -252,9 +437,14 @@ LABEL org.opencontainers.image.title="freeside-project-image" \
 `, request.Repository, request.CommitSHA,
 		nodeToolchainBaseImage, goToolchainVersion, goToolchainArchiveSHA256,
 		golangciLintVersion, golangciLintArchiveSHA256,
+		vacuumVersion, vacuumArchiveSHA256, shellcheckVersion, shellcheckArchiveSHA256,
+		pythonVersion, pythonArchiveSHA256,
+		procpsVersion, procpsSnapshot, procpsArchiveSHA256, libproc2ArchiveSHA256,
 		goToolchainArchivePath, golangciLintArchivePath,
-		goLauncherPath, gofmtLauncherPath, golangciLintLauncherPath,
-		goLauncherPath, gofmtLauncherPath, golangciLintLauncherPath,
+		vacuumArchivePath, shellcheckArchivePath, pythonArchivePath,
+		procpsArchivePath, libproc2ArchivePath,
+		`"`+strings.Join(goLauncherPaths, `", "`)+`"`,
+		launcherCopies.String(),
 		GoModuleCachePath, GoModuleCachePath,
 		ward.ProjectRecipePath, PreparationPath,
 		goToolchainArchivePath, GoModuleCachePath) +

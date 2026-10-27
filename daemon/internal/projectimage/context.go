@@ -23,8 +23,9 @@ const (
 	seedPackageJSONPath = "/opt/freeside/project-seed/package.json"
 	seedPackageLockPath = "/opt/freeside/project-seed/package-lock.json"
 
-	// v2 added the Go toolchain sources to the digested set.
-	preparationDigestVersion = "freeside.project-image-preparation/v2"
+	// v2 added the Go toolchain sources to the digested set; v3 added the
+	// vacuum, shellcheck, Python, and procps pins a Go image bakes (#2376).
+	preparationDigestVersion = "freeside.project-image-preparation/v3"
 )
 
 const nodeToolchainLauncher = `#!/usr/bin/busybox sh
@@ -125,6 +126,16 @@ func preparationSources() []string {
 		goToolchainArchiveSHA256,
 		golangciLintVersion,
 		golangciLintArchiveSHA256,
+		vacuumVersion,
+		vacuumArchiveSHA256,
+		shellcheckVersion,
+		shellcheckArchiveSHA256,
+		pythonVersion,
+		pythonArchiveSHA256,
+		procpsVersion,
+		procpsSnapshot,
+		procpsArchiveSHA256,
+		libproc2ArchiveSHA256,
 	}
 }
 
