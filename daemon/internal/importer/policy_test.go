@@ -376,6 +376,105 @@ func TestImportControlPlanePaths(t *testing.T) {
 	goldenResult(t, "import_control_plane_paths", res)
 }
 
+// freesideProtectedPaths is the protected-path widening Freeside's own
+// onboarding passes as -protected-path flags. daemon/README.md (Onboard
+// Freeside) carries the copy the owner runs; change both together.
+var freesideProtectedPaths = domain.ProtectedPathConfig{
+	ExtraAutomationControlPatterns: []string{".githooks/**"},
+	ExtraVerificationControlPatterns: []string{
+		".freeside/**",
+		"daemon/.golangci.yml",
+		"scripts/check-commit-messages.sh",
+		"scripts/check-migration-history.sh",
+		"scripts/check-vocabulary.sh",
+		"scripts/check.sh",
+		"scripts/daemon-test-shards.json",
+		"scripts/daemon-test-shards.py",
+		"scripts/link-plan-section-refs.sh",
+	},
+	ExtraPromptsAndPolicyPatterns: []string{"policy/**", "prompts/**"},
+	ExtraMaterialityRulesPatterns: []string{"docs/plan.md"},
+}
+
+// TestImportFreesideProtectedPaths shows Freeside's widening turns an
+// agent's edit to its hooks, recipe, verification scripts, prompts, or plan
+// into a publish-blocking control-plane finding, while ordinary daemon/ and
+// docs/ edits draw none.
+func TestImportFreesideProtectedPaths(t *testing.T) {
+	if err := freesideProtectedPaths.Validate(); err != nil {
+		t.Fatalf("Freeside's protected paths: %v", err)
+	}
+	want := map[string]struct {
+		kind     FindingKind
+		category domain.ControlPlaneCategory
+	}{
+		".githooks/pre-commit":        {FindingAutomationControlPath, domain.ControlPlaneWorkflowConfiguration},
+		".freeside/verify.json":       {FindingVerificationRecipePath, domain.ControlPlaneVerificationRecipes},
+		"daemon/.golangci.yml":        {FindingVerificationRecipePath, domain.ControlPlaneVerificationRecipes},
+		"scripts/check.sh":            {FindingVerificationRecipePath, domain.ControlPlaneVerificationRecipes},
+		"scripts/check-vocabulary.sh": {FindingVerificationRecipePath, domain.ControlPlaneVerificationRecipes},
+		"prompts/system.md":           {FindingPromptsPolicyPath, domain.ControlPlanePromptsAndPolicy},
+		"policy/materiality.yaml":     {FindingPromptsPolicyPath, domain.ControlPlanePromptsAndPolicy},
+		"docs/plan.md":                {FindingMaterialityRulesPath, domain.ControlPlaneMaterialityRules},
+	}
+	unflagged := []string{"daemon/cmd/freesided/main.go", "docs/intro.md"}
+	baseFiles := map[string]string{}
+	for path := range want {
+		baseFiles[path] = "old\n"
+	}
+	for _, path := range unflagged {
+		baseFiles[path] = "old\n"
+	}
+	checkout, base := initBaseRepo(t, baseFiles)
+	ws := t.TempDir()
+	for path := range baseFiles {
+		full := filepath.Join(ws, filepath.FromSlash(path))
+		if err := os.MkdirAll(filepath.Dir(full), 0o750); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(full, []byte("new\n"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	handoff := exportWorkspace(t, ws)
+	clone := cloneAtBase(t, checkout)
+	opts := testImportOptions(base)
+	pol, err := opts.Policy.WithProtectedPaths(fixtureTrustProfileProtecting(t, freesideProtectedPaths))
+	if err != nil {
+		t.Fatalf("WithProtectedPaths: %v", err)
+	}
+	opts.Policy = pol
+	res, err := Import(t.Context(), handoff, clone, opts)
+	if err != nil {
+		t.Fatalf("Import: %v", err)
+	}
+	if res.CommitSHA == "" {
+		t.Fatal("control-plane findings must not withhold the commit; the route needs it")
+	}
+	seen := map[string]bool{}
+	for _, finding := range res.Findings {
+		expected, ok := want[finding.Path]
+		if !ok || finding.Kind != expected.kind || seen[finding.Path] {
+			t.Fatalf("unexpected finding %+v; findings = %+v", finding, res.Findings)
+		}
+		seen[finding.Path] = true
+		lifted := finding.Candidate()
+		if err := lifted.Validate(); err != nil {
+			t.Fatalf("lifted finding for %s: %v", finding.Path, err)
+		}
+		if lifted.Class != domain.FindingClassControlPlane || lifted.Disposition != domain.DispositionBlocking ||
+			lifted.Category == nil || *lifted.Category != expected.category {
+			t.Fatalf("lifted finding for %s = %+v, want a blocking %s control-plane finding",
+				finding.Path, lifted, expected.category)
+		}
+	}
+	for path := range want {
+		if !seen[path] {
+			t.Fatalf("no finding for protected %s; findings = %+v", path, res.Findings)
+		}
+	}
+}
+
 // TestImportRegistrySetDeclarationIsControlPlane shows the plan §5.4 rule that
 // the declared registry set is control-plane policy: a writer change to the
 // file that declares it draws a prompts_and_policy finding that lifts to a

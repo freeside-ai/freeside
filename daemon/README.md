@@ -2292,6 +2292,43 @@ currently active trust profile at import, where its protected paths are
 applied; an unattended admission remains bound to the exact profile digest it
 recorded before execution.
 
+### Onboard Freeside
+
+Freeside onboards itself for `daemon/` and `docs/` (plan §11, revision 92;
+`api/` and `scripts/` follow in #2376). It runs the `freesided onboard` flow
+above with these inputs. `-commit` must equal the live `-base-ref` head, so
+onboard from a `main` that already carries `.freeside/verify.json`.
+
+- **Recipe:** `.freeside/verify.json`, detected with `-source`. It runs the
+  daemon recipe sized above, then `bash scripts/check.sh docs`.
+- **Toolchain:** `-go-module-dir daemon`. The root has no `go.mod`.
+- **Protected paths:** exactly these flags, in this order. Quote each
+  pattern so the shell does not expand `**`.
+
+  ```sh
+  -protected-path 'automation_control=.githooks/**' \
+  -protected-path 'verification_control=.freeside/**' \
+  -protected-path 'verification_control=daemon/.golangci.yml' \
+  -protected-path 'verification_control=scripts/check-commit-messages.sh' \
+  -protected-path 'verification_control=scripts/check-migration-history.sh' \
+  -protected-path 'verification_control=scripts/check-vocabulary.sh' \
+  -protected-path 'verification_control=scripts/check.sh' \
+  -protected-path 'verification_control=scripts/daemon-test-shards.json' \
+  -protected-path 'verification_control=scripts/daemon-test-shards.py' \
+  -protected-path 'verification_control=scripts/link-plan-section-refs.sh' \
+  -protected-path 'prompts_and_policy=policy/**' \
+  -protected-path 'prompts_and_policy=prompts/**' \
+  -protected-path 'materiality_rules=docs/plan.md'
+  ```
+
+  `TestImportFreesideProtectedPaths` in `internal/importer` pins the same
+  list; change both together. `docs/plan.md` is protected whole, because a
+  path pattern cannot select §9, so every agent edit to the plan is a
+  control-plane hold. The reasons for each entry are in
+  `devlog/2026-10-27-1204-freeside-protected-paths.md`.
+- **Deputy scope:** set the deputy's `repository.allowed_paths` to
+  `["daemon/**", "docs/**"]`.
+
 ### Run Real Work With The Deputy
 
 `freesided deputy -root <state-root>` is the real-work daemon in one
