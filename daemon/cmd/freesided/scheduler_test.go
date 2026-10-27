@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"errors"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -328,7 +329,7 @@ func TestClaudeSchedulerRegistersEveryKind(t *testing.T) {
 		observeBaseTip: staticBaseObserver,
 	}
 	cfg := config{Claude: &claudeDriverConfig{OperatingMode: domain.ModeAttendedDev}}
-	sched, err := newClaudeScheduler(st, cfg, wiring, func(context.Context) error { return nil })
+	sched, err := newClaudeScheduler(st, cfg, wiring, func(context.Context) error { return nil }, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -343,6 +344,40 @@ func TestClaudeSchedulerRegistersEveryKind(t *testing.T) {
 	}
 	if len(registered) != len(domain.AllScheduleKinds) {
 		t.Errorf("registered %d kinds, union has %d", len(registered), len(domain.AllScheduleKinds))
+	}
+}
+
+// Image upkeep runs as a trusted-config schedule at the doctor's cadence. A
+// restart arms it again without resetting its clock.
+func TestArmTrustedConfigJobsArmsImageUpkeepAndKeepsItsClock(t *testing.T) {
+	st := schedTestStore(t)
+	cfg := config{
+		Claude:         &claudeDriverConfig{OperatingMode: domain.ModeAttendedDev},
+		DoctorInterval: 15 * time.Minute,
+	}
+	arm := func() domain.Schedule {
+		t.Helper()
+		wiring := &claudeComposition{
+			janitor:        &janitorSession{janitor: &stubJanitorRunner{}},
+			observeBaseTip: staticBaseObserver,
+		}
+		sched, err := newClaudeScheduler(st, cfg, wiring, func(context.Context) error { return nil }, nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := armTrustedConfigJobs(context.Background(), sched, cfg); err != nil {
+			t.Fatal(err)
+		}
+		return readScheduleRow(t, st, imageUpkeepScheduleID)
+	}
+	first := arm()
+	if first.Kind != domain.ScheduleImageUpkeep || first.IntervalSeconds == nil ||
+		*first.IntervalSeconds != int64(cfg.DoctorInterval/time.Second) ||
+		first.Subject.Type != domain.ScheduleSubjectTrustedConfig {
+		t.Fatalf("image upkeep schedule = %+v, want a trusted-config job at the doctor's interval", first)
+	}
+	if again := arm(); !reflect.DeepEqual(again, first) {
+		t.Fatalf("re-armed schedule = %+v, want the first one kept: %+v", again, first)
 	}
 }
 
@@ -375,7 +410,7 @@ func TestClaudeSchedulerCapturesCompletionWithBaseAdvance(t *testing.T) {
 				},
 			}
 			cfg := config{Claude: &claudeDriverConfig{OperatingMode: domain.ModeAttendedDev}}
-			sched, err := newClaudeScheduler(st, cfg, wiring, func(context.Context) error { return nil })
+			sched, err := newClaudeScheduler(st, cfg, wiring, func(context.Context) error { return nil }, nil)
 			if err != nil {
 				t.Fatal(err)
 			}

@@ -21,11 +21,16 @@ type RebuildDecision struct {
 	// image then verifies the head as it always did, and nothing else in the
 	// decision is set but Head.
 	Needed bool
-	// Refusal is the clause that failed, empty when the gate holds.
+	// Refusal is the clause that failed, empty when the gate holds. When
+	// several clauses fail it is the one the gate reaches first, the order
+	// the publication lane reports.
 	Refusal RebuildRefusal
 	// Detail says what failed the clause. It may quote text the candidate
 	// wrote, always bounded and quoted.
 	Detail string
+	// Findings are every clause that failed, Refusal's first, each with the
+	// first detail the gate found for it. The upkeep job classifies them.
+	Findings []domain.ImageUpkeepClauseFinding
 	// Head is what the head commit holds for the inputs an image records.
 	Head domain.ProjectImageBaseInputs
 	// Delta summarizes the lockfile change of a decision that holds.
@@ -72,10 +77,79 @@ func EvaluateRebuild(
 			headSHA, unsupportedInputNames[0], err)
 	}
 	defer reader.Close()
-	refuse := func(head domain.ProjectImageBaseInputs, clause RebuildRefusal, format string, args ...any) RebuildDecision {
-		return RebuildDecision{
-			Needed: true, Refusal: clause, Detail: fmt.Sprintf(format, args...), Head: head,
+	return evaluateGate(ctx, reader, image, baseSHA, headSHA, policy, false)
+}
+
+// EvaluateUpkeep is the gate the upkeep job applies to an image that is not
+// current at the default-branch tip (plan §5.7, Project-image upkeep). Its
+// base is the image's own build commit, and it differs from EvaluateRebuild
+// in three ways:
+//
+//   - It always applies, so Needed is always true: the caller has found the
+//     image not current at tipSHA. A tip whose manifests are the ones the
+//     image baked still takes the unsupported-input and recipe clauses, and
+//     with neither refusing, the toolchain-only delta (a preparation digest
+//     other than currentPreparation) holds with no lockfile delta.
+//   - A Go image also takes the recipe clause, since a rebuild bakes the
+//     image's recipe and a tip declaring another would refuse the rebuilt
+//     image too.
+//   - A record with no environment is measured against the inputs observed
+//     at its build commit, as if it had baked them.
+//
+// checkoutDir must hold the build commit and tipSHA.
+func EvaluateUpkeep(
+	ctx context.Context,
+	gitPath string,
+	checkoutDir string,
+	image domain.ProjectImage,
+	tipSHA string,
+	policy domain.ResolvedPolicy,
+) (RebuildDecision, error) {
+	reader, err := verify.OpenCommitReader(ctx, gitPath, checkoutDir)
+	if err != nil {
+		return RebuildDecision{}, fmt.Errorf("observe project-image inputs at tip %s: %w", tipSHA, err)
+	}
+	defer reader.Close()
+	measured := image
+	if image.Environment == nil {
+		built, err := observeBaseInputs(ctx, reader, image.CommitSHA, image.InputLayout())
+		if err != nil {
+			return RebuildDecision{}, fmt.Errorf(
+				"observe project-image inputs at build commit %s: %w", image.CommitSHA, err)
 		}
+		// No preparation digest: the record names none, so it is never
+		// the current one.
+		measured.Environment = &domain.ProjectImageEnvironment{
+			PackageJSONSHA256: built.PackageJSONSHA256, PackageLockSHA256: built.PackageLockSHA256,
+		}
+	}
+	return evaluateGate(ctx, reader, measured, image.CommitSHA, tipSHA, policy, true)
+}
+
+// evaluateGate is the gate both entries share. upkeep selects EvaluateUpkeep's
+// rules; without it the verdict is exactly the publication lane's.
+func evaluateGate(
+	ctx context.Context,
+	reader *verify.CommitReader,
+	image domain.ProjectImage,
+	baseSHA string,
+	headSHA string,
+	policy domain.ResolvedPolicy,
+	upkeep bool,
+) (RebuildDecision, error) {
+	var findings gateFindings
+	decide := func(head domain.ProjectImageBaseInputs, delta LockfileDelta) RebuildDecision {
+		decision := RebuildDecision{Needed: true, Head: head}
+		if len(findings) == 0 {
+			decision.Delta = delta
+			return decision
+		}
+		decision.Refusal, decision.Detail = findings[0].clause, findings[0].detail
+		for _, finding := range findings {
+			decision.Findings = append(decision.Findings,
+				domain.ImageUpkeepClauseFinding{Clause: finding.clause, Detail: finding.detail})
+		}
+		return decision
 	}
 	head, err := observeBaseInputs(ctx, reader, headSHA, image.InputLayout())
 	if errors.Is(err, verify.ErrCommitFileUnreadable) {
@@ -89,8 +163,9 @@ func EvaluateRebuild(
 		if image.InputLayout().Toolchain == domain.ProjectToolchainGo {
 			clause = RebuildRefusalGoDependencyChanged
 		}
-		return refuse(domain.ProjectImageBaseInputs{CommitSHA: headSHA}, clause,
-			"a dependency manifest or the recipe at the candidate is not a readable regular file"), nil
+		findings.add(refuseLockfile(clause,
+			"a dependency manifest or the recipe at the candidate is not a readable regular file"))
+		return decide(domain.ProjectImageBaseInputs{CommitSHA: headSHA}, LockfileDelta{}), nil
 	}
 	if err != nil {
 		return RebuildDecision{}, fmt.Errorf("observe project-image inputs at head %s: %w", headSHA, err)
@@ -99,46 +174,70 @@ func EvaluateRebuild(
 		return RebuildDecision{Head: head}, nil
 	}
 	changed := image.Environment.ChangedManifests(head)
+	recipeClause := func() error {
+		base, err := observeBaseInputs(ctx, reader, baseSHA, image.InputLayout())
+		if err != nil {
+			return fmt.Errorf("observe project-image inputs at base %s: %w", baseSHA, err)
+		}
+		if head.RecipeDigest != base.RecipeDigest {
+			findings.add(refuseLockfile(RebuildRefusalRecipeChanged,
+				"the candidate declares verification recipe %s and its base declares %s",
+				strconv.Quote(string(head.RecipeDigest)), strconv.Quote(string(base.RecipeDigest))))
+		}
+		return nil
+	}
 	if image.InputLayout().Toolchain == domain.ProjectToolchainGo {
 		// A Go head that keeps its manifests but adds a vendor directory or a
 		// go.work would otherwise fail only inside the room, at the
 		// preparation helper; the gate names it instead.
-		if len(changed) == 0 && len(head.UnsupportedInputs) == 0 {
-			return RebuildDecision{Head: head}, nil
+		if len(changed) != 0 || len(head.UnsupportedInputs) != 0 {
+			var parts []string
+			if len(changed) != 0 {
+				parts = append(parts, "changes "+strings.Join(changed, ", "))
+			}
+			if len(head.UnsupportedInputs) != 0 {
+				parts = append(parts, "contains "+strings.Join(head.UnsupportedInputs, ", "))
+			}
+			findings.add(refuseLockfile(RebuildRefusalGoDependencyChanged,
+				"the candidate %s", strings.Join(parts, " and ")))
 		}
-		var parts []string
-		if len(changed) != 0 {
-			parts = append(parts, "changes "+strings.Join(changed, ", "))
+		if !upkeep {
+			if len(findings) == 0 {
+				return RebuildDecision{Head: head}, nil
+			}
+			return decide(head, LockfileDelta{}), nil
 		}
-		if len(head.UnsupportedInputs) != 0 {
-			parts = append(parts, "contains "+strings.Join(head.UnsupportedInputs, ", "))
+		if err := recipeClause(); err != nil {
+			return RebuildDecision{}, err
 		}
-		return refuse(head, RebuildRefusalGoDependencyChanged, "the candidate %s", strings.Join(parts, " and ")), nil
+		return decide(head, LockfileDelta{}), nil
 	}
-	if len(changed) == 0 {
+	if len(changed) == 0 && !upkeep {
 		return RebuildDecision{Head: head}, nil
 	}
 	if len(head.UnsupportedInputs) != 0 {
-		return refuse(head, RebuildRefusalUnsupportedInput,
-			"the candidate contains %s", strings.Join(head.UnsupportedInputs, ", ")), nil
+		findings.add(refuseLockfile(RebuildRefusalUnsupportedInput,
+			"the candidate contains %s", strings.Join(head.UnsupportedInputs, ", ")))
 	}
-	base, err := observeBaseInputs(ctx, reader, baseSHA, image.InputLayout())
-	if err != nil {
-		return RebuildDecision{}, fmt.Errorf("observe project-image inputs at base %s: %w", baseSHA, err)
+	if err := recipeClause(); err != nil {
+		return RebuildDecision{}, err
 	}
-	if head.RecipeDigest != base.RecipeDigest {
-		return refuse(head, RebuildRefusalRecipeChanged,
-			"the candidate declares verification recipe %s and its base declares %s",
-			strconv.Quote(string(head.RecipeDigest)), strconv.Quote(string(base.RecipeDigest))), nil
+	if len(changed) == 0 {
+		// The toolchain-only delta: the lockfile the image baked is the
+		// tip's, so it has nothing for the registry or lockfile clauses.
+		return decide(head, LockfileDelta{}), nil
 	}
+	var authority *domain.RegistrySet
 	registries, declared, err := domain.RegistrySetFromPolicy(policy)
-	if err != nil {
-		return refuse(head, RebuildRefusalNoRegistrySet,
-			"the run's policy declares a malformed %s", domain.RegistrySetPolicyKey), nil
-	}
-	if !declared {
-		return refuse(head, RebuildRefusalNoRegistrySet,
-			"the run's policy declares no %s", domain.RegistrySetPolicyKey), nil
+	switch {
+	case err != nil:
+		findings.add(refuseLockfile(RebuildRefusalNoRegistrySet,
+			"the run's policy declares a malformed %s", domain.RegistrySetPolicyKey))
+	case !declared:
+		findings.add(refuseLockfile(RebuildRefusalNoRegistrySet,
+			"the run's policy declares no %s", domain.RegistrySetPolicyKey))
+	default:
+		authority = &registries
 	}
 	read := func(commitSHA, name string) ([]byte, error) {
 		content, present, err := reader.ReadFile(ctx, commitSHA, name, maxManifestBytes)
@@ -168,12 +267,12 @@ func EvaluateRebuild(
 	if err != nil {
 		return RebuildDecision{}, err
 	}
-	delta, refusal := evaluateLockfileDelta(
-		basePackageJSON, basePackageLock, headPackageJSON, headPackageLock, registries)
-	if refusal != nil {
-		return refuse(head, refusal.clause, "%s", refusal.detail), nil
+	delta, lockfileFindings := evaluateLockfileDelta(
+		basePackageJSON, basePackageLock, headPackageJSON, headPackageLock, authority)
+	for _, finding := range lockfileFindings {
+		findings.add(&finding)
 	}
-	return RebuildDecision{Needed: true, Head: head, Delta: delta}, nil
+	return decide(head, delta), nil
 }
 
 // BuildInputs are the operator-configured, host-specific inputs a rebuild

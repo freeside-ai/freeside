@@ -70,13 +70,22 @@ func gateHeadLock(added string, members ...string) string {
 		append([]string{gateLeftMember, `"node_modules/right":` + added}, members...)...)
 }
 
-func gateRegistrySet(t *testing.T, hosts ...string) domain.RegistrySet {
+func gateRegistrySet(t *testing.T, hosts ...string) *domain.RegistrySet {
 	t.Helper()
 	set, err := domain.NewRegistrySet(hosts)
 	if err != nil {
 		t.Fatal(err)
 	}
-	return set
+	return &set
+}
+
+// firstRefusal is the refusal the publication lane reports: the first clause
+// the gate reached, nil when the delta holds.
+func firstRefusal(findings gateFindings) *lockfileRefusal {
+	if len(findings) == 0 {
+		return nil
+	}
+	return &findings[0]
 }
 
 func TestLockfileDeltaAdmitsOnlyPinnedPackagesFromDeclaredHosts(t *testing.T) {
@@ -527,13 +536,14 @@ func TestLockfileDeltaAdmitsOnlyPinnedPackagesFromDeclaredHosts(t *testing.T) {
 				}
 				return []byte(value)
 			}
-			delta, refusal := evaluateLockfileDelta(
+			delta, findings := evaluateLockfileDelta(
 				pick(test.basePackageJSON, gateBasePackageJSON),
 				pick(test.basePackageLock, gateBasePackageLock),
 				pick(test.headPackageJSON, gateHeadPackageJSON),
 				pick(test.headPackageLock, gateHeadLock(gateDeclaredEntry)),
 				registries,
 			)
+			refusal := firstRefusal(findings)
 			if test.want == "" {
 				if refusal != nil {
 					t.Fatalf("refused under %s: %s", refusal.clause, refusal.detail)
@@ -573,9 +583,9 @@ func TestLockfileDeltaAdmitsOnlyRegistrySpecsInWhatTheCandidateDeclares(t *testi
 		// The lockfile root agrees with package.json and pins the package to a
 		// declared host, as a lockfile npm wrote for a registry spec would.
 		lock := gateLock(string(manifest), gateLeftMember, `"node_modules/right":`+gateDeclaredEntry)
-		_, refusal := evaluateLockfileDelta(
+		_, findings := evaluateLockfileDelta(
 			[]byte(gateBasePackageJSON), []byte(gateBasePackageLock), manifest, []byte(lock), registries)
-		return refusal
+		return firstRefusal(findings)
 	}
 	for _, field := range dependencyFields {
 		for _, spec := range []string{"^2.0.0", "2.0.0", "", "*", "latest", ">=2.0.0 <3.0.0", "1.x || 2.x", "~2.0.0-rc.1"} {
@@ -621,11 +631,11 @@ func TestLockfileDeltaSummarizesTheChange(t *testing.T) {
 		`"node_modules/@scope/other":` + gatePinned("1.2.3", "https://npm.pkg.github.com/other.tgz") + `}}`
 	// npm may record an optional dependency under either name at the root.
 	manifest := `{"dependencies":{"right":"^2.0.0","@scope/other":"1"}}`
-	delta, refusal := evaluateLockfileDelta(
+	delta, findings := evaluateLockfileDelta(
 		[]byte(gateBasePackageJSON), []byte(gateBasePackageLock), []byte(manifest), []byte(head),
 		gateRegistrySet(t, "npm.pkg.github.com", "registry.npmjs.org"),
 	)
-	if refusal != nil {
+	if refusal := firstRefusal(findings); refusal != nil {
 		t.Fatalf("refused under %s: %s", refusal.clause, refusal.detail)
 	}
 	want := LockfileDelta{Changed: 2, Removed: 1, Hosts: []string{"npm.pkg.github.com", "registry.npmjs.org"}}
@@ -639,10 +649,10 @@ func TestLockfileDeltaSummarizesTheChange(t *testing.T) {
 func TestLockfileDeltaRefusesARegistryOnAGitForgeHost(t *testing.T) {
 	registries := gateRegistrySet(t, "gitlab.com", "www.github.com")
 	for _, resolved := range []string{"https://gitlab.com/owner/right", "https://www.github.com/owner/right.tgz"} {
-		_, refusal := evaluateLockfileDelta(
+		_, findings := evaluateLockfileDelta(
 			[]byte(gateBasePackageJSON), []byte(gateBasePackageLock), []byte(gateHeadPackageJSON),
 			[]byte(gateHeadLock(gateResolvedFrom(resolved))), registries)
-		if refusal == nil || refusal.clause != RebuildRefusalUnpinnedSource {
+		if refusal := firstRefusal(findings); refusal == nil || refusal.clause != RebuildRefusalUnpinnedSource {
 			t.Errorf("%s: refusal = %+v, want %s", resolved, refusal, RebuildRefusalUnpinnedSource)
 		}
 	}
@@ -656,12 +666,17 @@ func TestLockfileRefusalBoundsCandidateText(t *testing.T) {
 		"field": gateHeadLock(gateDeclaredWith(`"` + long + `":1`)),
 		"spec":  gateHeadLock(gateDeclaredWith(`"dependencies":{"inner":"` + long + `:"}`)),
 	} {
-		_, refusal := evaluateLockfileDelta(
+		_, findings := evaluateLockfileDelta(
 			[]byte(gateBasePackageJSON), []byte(gateBasePackageLock), []byte(gateHeadPackageJSON),
 			[]byte(lock), gateRegistrySet(t, "registry.npmjs.org"),
 		)
-		if refusal == nil || len(refusal.detail) > 1000 {
-			t.Fatalf("%s: refusal = %+v, want a bounded detail", name, refusal)
+		if len(findings) == 0 {
+			t.Fatalf("%s: admitted, want a refusal", name)
+		}
+		for _, refusal := range findings {
+			if len(refusal.detail) > 1000 {
+				t.Fatalf("%s: refusal = %+v, want a bounded detail", name, refusal)
+			}
 		}
 	}
 }
@@ -951,5 +966,249 @@ func TestRebuildRequestRefusesInputsTheImageDoesNotBind(t *testing.T) {
 				t.Fatalf("error = %v, want ErrInvalidRequest", err)
 			}
 		})
+	}
+}
+
+// newGateRepo commits the gate's base fixture and records an npm image built
+// there with this binary's preparation sources.
+func newGateRepo(t *testing.T) (baseInputsRepo, string, domain.ProjectImage) {
+	t.Helper()
+	repo := newBaseInputsRepo(t)
+	base := repo.commit(map[string]string{
+		"package.json": gateBasePackageJSON, "package-lock.json": gateBasePackageLock,
+		verify.DefaultRecipePath: testRecipe, "src/index.js": "export {};\n",
+	})
+	image, err := domain.NewProjectImage(domain.ProjectImageInput{
+		Repository: "freeasinbird/gh-imgup", RepositoryID: 1278475858,
+		CommitSHA: base, RecipeDigest: verify.RecipeDigest([]byte(testRecipe)),
+		PreparationCommand: []string{PreparationPath},
+		BaseImageRef:       validRequest().BaseImageRef,
+		ImageRef:           domain.ImageRef("127.0.0.1:5100/project@" + testImageDigest),
+		Environment: &domain.ProjectImageEnvironment{
+			PackageJSONSHA256: manifestSHA256([]byte(gateBasePackageJSON)),
+			PackageLockSHA256: manifestSHA256([]byte(gateBasePackageLock)),
+			PreparationDigest: PreparationDigest(),
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return repo, base, image
+}
+
+func findingClauses(findings []domain.ImageUpkeepClauseFinding) []RebuildRefusal {
+	clauses := make([]RebuildRefusal, 0, len(findings))
+	for _, finding := range findings {
+		if finding.Detail == "" {
+			return nil
+		}
+		clauses = append(clauses, finding.Clause)
+	}
+	return clauses
+}
+
+// The upkeep job classifies every clause that refused, so the gate reports
+// them all, the publication lane's one still first.
+func TestEvaluateRebuildReportsEveryRefusingClause(t *testing.T) {
+	const declared = `["registry.npmjs.org"]`
+	repo, base, image := newGateRepo(t)
+	unpinned := gateHeadLock(gateResolvedFrom("http://registry.npmjs.org/right.tgz"))
+	undeclared := gateHeadLock(gateResolvedFrom("https://registry.example.com/right.tgz"))
+	for _, test := range []struct {
+		name    string
+		changes map[string]string
+		policy  string
+		want    []RebuildRefusal
+		class   domain.ImageUpkeepRefusalClass
+	}{
+		{
+			name: "recipe change with an unpinned source", policy: declared,
+			changes: map[string]string{
+				"package.json": gateHeadPackageJSON, "package-lock.json": unpinned,
+				verify.DefaultRecipePath: `{"commands":[["true"]],"capture":"none"}`,
+			},
+			want:  []RebuildRefusal{RebuildRefusalRecipeChanged, RebuildRefusalUnpinnedSource},
+			class: domain.ImageUpkeepRefusalRepair,
+		},
+		{
+			name: "recipe change alone", policy: declared,
+			changes: map[string]string{
+				"package.json": gateHeadPackageJSON, "package-lock.json": gateHeadLock(gateDeclaredEntry),
+				verify.DefaultRecipePath: `{"commands":[["true"]],"capture":"none"}`,
+			},
+			want:  []RebuildRefusal{RebuildRefusalRecipeChanged},
+			class: domain.ImageUpkeepRefusalPolicy,
+		},
+		{
+			// With no set to check a host against, the authority clause is
+			// the registry set's own refusal.
+			name:    "no registry set with an undeclared host",
+			changes: map[string]string{"package.json": gateHeadPackageJSON, "package-lock.json": undeclared},
+			want:    []RebuildRefusal{RebuildRefusalNoRegistrySet},
+			class:   domain.ImageUpkeepRefusalPolicy,
+		},
+		{
+			name:    "no registry set with an inconsistent lockfile",
+			changes: map[string]string{"package.json": gateHeadPackageJSON},
+			want:    []RebuildRefusal{RebuildRefusalNoRegistrySet, RebuildRefusalLockfileInconsistent},
+			class:   domain.ImageUpkeepRefusalRepair,
+		},
+		{
+			name: "undeclared host and an unpinned package", policy: declared,
+			changes: map[string]string{
+				"package.json": gateHeadPackageJSON,
+				"package-lock.json": gateHeadLock(gateResolvedFrom("https://registry.example.com/right.tgz"),
+					`"node_modules/other":`+gatePinned("1.0.0", "http://registry.npmjs.org/other.tgz")),
+			},
+			// Entries are read in key order, so "other" comes first.
+			want:  []RebuildRefusal{RebuildRefusalUnpinnedSource, RebuildRefusalUndeclaredAuthority},
+			class: domain.ImageUpkeepRefusalRepair,
+		},
+		{
+			name: "npmrc with a recipe change", policy: declared,
+			changes: map[string]string{
+				"package.json": gateHeadPackageJSON, "package-lock.json": gateHeadLock(gateDeclaredEntry),
+				".npmrc": "registry=https://registry.example.com/\n", verify.DefaultRecipePath: `{"commands":[["true"]],"capture":"none"}`,
+			},
+			want:  []RebuildRefusal{RebuildRefusalUnsupportedInput, RebuildRefusalRecipeChanged},
+			class: domain.ImageUpkeepRefusalUnsupportedNPMInput,
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			repo.git("checkout", "-q", "--detach", base)
+			head := repo.commit(test.changes)
+			decision, err := EvaluateRebuild(
+				t.Context(), "git", repo.dir, image, base, head, gatePolicy(t, test.policy))
+			if err != nil {
+				t.Fatalf("EvaluateRebuild: %v", err)
+			}
+			if got := findingClauses(decision.Findings); !slices.Equal(got, test.want) {
+				t.Fatalf("findings = %+v, want clauses %v", decision.Findings, test.want)
+			}
+			if decision.Refusal != test.want[0] || decision.Detail != decision.Findings[0].Detail {
+				t.Fatalf("decision = %+v, want the first finding as its refusal", decision)
+			}
+			class, err := ClassifyUpkeepFindings(decision.Findings)
+			if err != nil || class != test.class {
+				t.Fatalf("class = %q, %v; want %q", class, err, test.class)
+			}
+		})
+	}
+}
+
+func TestEvaluateUpkeepMeasuresTheTipFromTheBuildCommit(t *testing.T) {
+	const declared = `["registry.npmjs.org"]`
+	repo, base, current := newGateRepo(t)
+	upgraded := current
+	upgradedEnvironment := *current.Environment
+	upgradedEnvironment.PreparationDigest = domain.Digest("sha256:" + strings.Repeat("c", 64))
+	upgraded.Environment = &upgradedEnvironment
+	legacy := current
+	legacy.Environment = nil
+	for _, test := range []struct {
+		name    string
+		image   domain.ProjectImage
+		changes map[string]string
+		policy  string
+		want    []RebuildRefusal
+		changed int
+	}{
+		{name: "upgrade at the build commit", image: upgraded},
+		{
+			name: "upgrade at a source-only tip", image: upgraded,
+			changes: map[string]string{"src/index.js": "export default 1;\n"},
+		},
+		{
+			// The toolchain-only delta needs no registry set: the lockfile
+			// is the one the image baked.
+			name: "upgrade with no registry set", image: upgraded,
+			changes: map[string]string{"src/index.js": "export default 2;\n"},
+		},
+		{
+			name: "dependency change within policy", image: current, policy: declared, changed: 1,
+			changes: map[string]string{
+				"package.json": gateHeadPackageJSON, "package-lock.json": gateHeadLock(gateDeclaredEntry),
+			},
+		},
+		{
+			name: "record without environment at an unchanged tip", image: legacy,
+			changes: map[string]string{"src/index.js": "export default 3;\n"},
+		},
+		{
+			name: "record without environment and a dependency change", image: legacy, policy: declared, changed: 1,
+			changes: map[string]string{
+				"package.json": gateHeadPackageJSON, "package-lock.json": gateHeadLock(gateDeclaredEntry),
+			},
+		},
+		{
+			name: "record without environment and an undeclared host", image: legacy, policy: declared,
+			changes: map[string]string{
+				"package.json":      gateHeadPackageJSON,
+				"package-lock.json": gateHeadLock(gateResolvedFrom("https://registry.example.com/right.tgz")),
+			},
+			want: []RebuildRefusal{RebuildRefusalUndeclaredAuthority},
+		},
+		{
+			name: "recipe change with unchanged manifests", image: upgraded, policy: declared,
+			changes: map[string]string{verify.DefaultRecipePath: `{"commands":[["true"]],"capture":"none"}`},
+			want:    []RebuildRefusal{RebuildRefusalRecipeChanged},
+		},
+		{
+			name: "npmrc with unchanged manifests", image: upgraded, policy: declared,
+			changes: map[string]string{".npmrc": "registry=https://registry.example.com/\n"},
+			want:    []RebuildRefusal{RebuildRefusalUnsupportedInput},
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			repo.git("checkout", "-q", "--detach", base)
+			tip := base
+			if test.changes != nil {
+				tip = repo.commit(test.changes)
+			}
+			decision, err := EvaluateUpkeep(t.Context(), "git", repo.dir, test.image, tip, gatePolicy(t, test.policy))
+			if err != nil {
+				t.Fatalf("EvaluateUpkeep: %v", err)
+			}
+			if !decision.Needed || decision.Head.CommitSHA != tip {
+				t.Fatalf("decision = %+v, want the gate applied at %s", decision, tip)
+			}
+			if got := findingClauses(decision.Findings); !slices.Equal(got, test.want) && len(got)+len(test.want) != 0 {
+				t.Fatalf("findings = %+v, want clauses %v", decision.Findings, test.want)
+			}
+			if decision.Delta.Changed != test.changed {
+				t.Fatalf("delta = %+v, want %d changed", decision.Delta, test.changed)
+			}
+		})
+	}
+}
+
+func TestEvaluateUpkeepAdmitsAGoToolchainOnlyDelta(t *testing.T) {
+	const goMod = "module example.test/app\n\ngo 1.22\n"
+	repo := newBaseInputsRepo(t)
+	base := repo.commit(map[string]string{
+		"go.mod": goMod, verify.DefaultRecipePath: testRecipe, "main.go": "package main\n",
+	})
+	image := domain.ProjectImage{
+		CommitSHA: base, RecipeDigest: verify.RecipeDigest([]byte(testRecipe)),
+		Environment: &domain.ProjectImageEnvironment{
+			Toolchain: domain.ProjectToolchainGo, GoModSHA256: manifestSHA256([]byte(goMod)),
+			PreparationDigest: domain.Digest("sha256:" + strings.Repeat("c", 64)),
+		},
+	}
+	sourceOnly := repo.commit(map[string]string{"main.go": "package main\n\nfunc main() {}\n"})
+	decision, err := EvaluateUpkeep(t.Context(), "git", repo.dir, image, sourceOnly, domain.ResolvedPolicy{})
+	if err != nil || !decision.Needed || len(decision.Findings) != 0 {
+		t.Fatalf("decision = %+v, %v; want the toolchain-only delta admitted", decision, err)
+	}
+	recipe := repo.commit(map[string]string{verify.DefaultRecipePath: `{"commands":[["true"]],"capture":"none"}`})
+	decision, err = EvaluateUpkeep(t.Context(), "git", repo.dir, image, recipe, domain.ResolvedPolicy{})
+	if err != nil || !slices.Equal(findingClauses(decision.Findings), []RebuildRefusal{RebuildRefusalRecipeChanged}) {
+		t.Fatalf("decision = %+v, %v; want the recipe change refused", decision, err)
+	}
+	module := repo.commit(map[string]string{"go.mod": goMod + "\nrequire example.test/dep v1.0.0\n"})
+	decision, err = EvaluateUpkeep(t.Context(), "git", repo.dir, image, module, domain.ResolvedPolicy{})
+	if err != nil || !slices.Equal(findingClauses(decision.Findings),
+		[]RebuildRefusal{RebuildRefusalGoDependencyChanged, RebuildRefusalRecipeChanged}) {
+		t.Fatalf("decision = %+v, %v; want the module change and the recipe change refused", decision, err)
 	}
 }

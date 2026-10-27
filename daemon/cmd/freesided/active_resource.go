@@ -607,24 +607,6 @@ func (r *activeResourceReconciler) observeRepositoryTip(ctx context.Context) err
 	return nil
 }
 
-// unwiredImageUpkeepTipAdvance stands in for the upkeep job's tip-advance
-// entry point until that job exists (#2333). It succeeds, so the tip is
-// recorded as handled; the job's daemon-start pass, which checks every
-// project, covers any tip handled here.
-func unwiredImageUpkeepTipAdvance(
-	logger *slog.Logger,
-) func(context.Context, domain.RepositoryTipObservation) error {
-	if logger == nil {
-		logger = slog.New(slog.DiscardHandler)
-	}
-	return func(_ context.Context, observation domain.RepositoryTipObservation) error {
-		logger.Info("default-branch tip advanced; image upkeep not wired yet",
-			"subsystem", "active-resource", "repository", observation.Repository,
-			"branch", observation.Branch, "tip_sha", observation.TipSHA)
-		return nil
-	}
-}
-
 // startExternalReview starts an external review cycle for a ready item when
 // one is due. The cycle starts in its own transaction: the store seals its
 // authority only against an item that is already superseded, so the

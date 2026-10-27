@@ -2610,9 +2610,10 @@ seed the repository's admitted-image pointer for the Claude agent base
 image it builds, and an unattended start points it at the configured
 image, once that image is admitted at the base, when the repository has
 none; a start never overwrites an existing pointer and logs when the two
-differ. Selection still follows the flag;
-the image-upkeep job switches it to the pointer (#2333), and the flag
-retires after that.
+differ. The image-upkeep job advances the pointer (Keep Project Images
+Current), but selection still follows the flag until a later unit binds
+runner conformance to the selected image and switches selection to the
+pointer (#2385). The flag retires after that.
 
 **What it writes.** `<state-root>/daemon/prelaunch.json`
 (`freeside-prelaunch-v1`, mode `0600`, replaced atomically), and the same
@@ -2812,6 +2813,61 @@ A refusal is the task's recorded verification result, so it does not clear
 when the daemon is later given `-base-build-ref` or the policy changes. It
 reruns as any failed verification does: after a revised trust profile,
 through the item's rerun action, or in a new run.
+
+### Keep Project Images Current
+
+The image-upkeep job keeps the repository's admitted-image pointer on an
+image that serves the default-branch tip (`docs/plan.md` §5.7,
+**Project-image upkeep**). A production driver daemon runs it at three
+points: once at start; whenever the active-resource reconciler sees the
+base branch's tip move, whether or not a bound PR moved it; and as the
+`schedule-image-upkeep` trusted-config job on the doctor's cadence
+(`-doctor-interval`), a backstop for a missed tip. Start and tip passes run
+one at a time on one worker, and a tip still waiting when a newer one
+arrives is skipped for the newer one.
+
+Each pass reads the tip, fetches it into a scratch checkout under
+`<seed-root>/image-upkeep`, and reaches one verdict:
+
+- **Current.** The pointed-to image is admissible at the tip and was
+  prepared by this daemon's preparation command. Nothing changes.
+- **Rebuilt.** The policy-gated rebuild's gate admits the delta from the
+  image's build commit to the tip. The job reuses a recorded image that
+  serves the tip, or builds one at the tip with the same proofs as a
+  publication rebuild, then advances the pointer. No item is raised. A
+  daemon upgrade that changes the preparation command rebuilds this way
+  even when the tip is the image's build commit.
+- **Refused.** The gate refuses. The job evaluates every clause, classes
+  the refusal `policy`, `repair`, `go_module_delta`,
+  `unsupported_npm_input`, or `host_fault`, and records one
+  content-addressed refusal. A scheduled pass takes a refusal already
+  recorded for the image at the tip as standing and does not fetch or
+  build again; the start pass measures again, since a new daemon can
+  decide differently. Raising the policy card and submitting the repair
+  task are later units (#2335, #2336).
+
+**Host faults.** A failure that is the host's, not the repository's,
+records a `host_fault` refusal and converges the advisory
+`image_upkeep_host_fault` doctor item: a room or builder failure, an
+invalid build request, a build past its one-hour bound, a tip the job could
+not measure, an image whose build commit is not on the branch, an image
+record that disagrees with its recipe or with the build, or a daemon
+without `-base-build-ref`. A host fault is measured again on every pass.
+The item is advisory, so it does not stop unattended admission, and the
+next pass that reaches a verdict resolves it.
+
+**Shared builder.** Upkeep and the publication lane run one build at a
+time. Upkeep waits its turn. A publication rebuild that finds the builder
+busy stays queued under `publication_environment`, and its next attempt
+reuses the image upkeep built when that image serves its commit.
+
+**Registry set.** Upkeep reads the registry set from the projects in the
+manual-submission config. A production driver daemon refuses to start when
+two projects declare different sets, because the repository has one
+pointer.
+
+A failed scheduled pass logs and waits for the next one; it does not stop
+the daemon.
 
 ## External Review Replies
 
