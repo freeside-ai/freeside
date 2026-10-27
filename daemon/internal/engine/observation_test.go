@@ -50,6 +50,8 @@ var holdClassifiedSentinels = []error{
 	domain.ErrReviewConfigurationUnapproved,
 	ErrEgressProfileNotEnforceable,
 	ErrEgressPolicyRefused,
+	ErrImageUpkeepPending,
+	ErrProjectImageUnserved,
 }
 
 // TestDispatchHoldReasonCoversEveryHoldClass: every sentinel the dispatch
@@ -139,7 +141,9 @@ func TestAdmissionRefusalDetailCoversEveryAdmissionClass(t *testing.T) {
 	for _, sentinel := range holdClassifiedSentinels {
 		reason, _ := dispatchHoldReason(sentinel)
 		detail := admissionRefusalDetail(sentinel)
-		if reason != domain.HoldAdmissionPolicyRefused {
+		// An unserved base has no check in the vocabulary, so its hold
+		// carries none rather than a check that would name another cause.
+		if reason != domain.HoldAdmissionPolicyRefused || errors.Is(sentinel, ErrProjectImageUnserved) {
 			if detail != nil {
 				t.Errorf("%v: reason %q carries detail %+v", sentinel, reason, detail)
 			}
@@ -178,6 +182,44 @@ func TestAdmissionRefusalDetailCoversEveryAdmissionClass(t *testing.T) {
 	}
 	if got := admissionRefusalDetail(errors.New("an unclassified failure")); got != nil {
 		t.Errorf("an unclassified error carries detail %+v", got)
+	}
+}
+
+// An image-upkeep hold carries what it waits on and nothing else, through
+// any wrapping, and a changed kind or reference is a changed pace state, so
+// it is written at once.
+func TestImageUpkeepHoldDetail(t *testing.T) {
+	refusal := domain.Digest("sha256:" + strings.Repeat("1", 64))
+	other := domain.Digest("sha256:" + strings.Repeat("2", 64))
+	item, task := domain.ItemID("card-1"), domain.TaskID("task-1")
+	holds := []domain.ImageUpkeepHold{
+		{Pending: domain.ImageUpkeepPendingRebuild},
+		{Pending: domain.ImageUpkeepPendingAdoptionProposal, RefusalRecordID: &refusal, ProposalItemID: &item},
+		{Pending: domain.ImageUpkeepPendingAdoptionProposal, RefusalRecordID: &other, ProposalItemID: &item},
+		{Pending: domain.ImageUpkeepPendingMaintenanceTask, RefusalRecordID: &refusal, MaintenanceTaskID: &task},
+	}
+	states := map[string]bool{}
+	for _, hold := range holds {
+		err := fmt.Errorf("admit invocation %q: select image: %w", "inv-1", &ImageUpkeepPendingError{Hold: hold})
+		if reason, ok := dispatchHoldReason(err); !ok || reason != domain.HoldImageUpkeepPending {
+			t.Fatalf("%+v: reason = %q, %t", hold, reason, ok)
+		}
+		if !invocationDispatchHold(err) {
+			t.Fatalf("%+v: the hold does not hold its own invocation", hold)
+		}
+		detail := holdDetailFor(err)
+		if detail.refusal != nil || detail.imageUpkeep == nil || !reflect.DeepEqual(*detail.imageUpkeep, hold) {
+			t.Fatalf("%+v: detail = %+v", hold, detail)
+		}
+		state := holdPaceState(domain.HoldImageUpkeepPending, detail)
+		if states[state] {
+			t.Fatalf("%+v: pace state %q repeats another hold's", hold, state)
+		}
+		states[state] = true
+	}
+	notProved := errors.Join(ErrImageNotProved, domain.ErrAdmissionConfigurationMismatch)
+	if reason, _ := dispatchHoldReason(notProved); reason != domain.HoldBackendNotConformant {
+		t.Fatalf("an unproved image holds under %q, want backend_not_conformant", reason)
 	}
 }
 

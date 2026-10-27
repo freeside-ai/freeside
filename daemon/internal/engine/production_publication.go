@@ -5473,7 +5473,7 @@ func (w *productionPublicationWorkflow) holdBlockedTask(
 	// derived from the operator prose; the retry window paces the write
 	// (issue #394).
 	if err := w.store.Write(ctx, func(tx *store.WriteTx) error {
-		return recordRunHold(ctx, tx, task.RunID, task.PublicationID, cause, nil, w.now().UTC())
+		return recordRunHold(ctx, tx, task.RunID, task.PublicationID, cause, holdDetail{}, w.now().UTC())
 	}); err != nil {
 		return productionTaskOutcome{}, err
 	}
@@ -5728,7 +5728,7 @@ func (w *productionPublicationWorkflow) recordAttendedPublicationHolds(ctx conte
 		if err := w.store.Write(ctx, func(tx *store.WriteTx) error {
 			return recordRunHold(ctx, tx, runID,
 				domain.ProductionPublicationInvocationID(runID),
-				domain.HoldAttendedModeActive, nil, now)
+				domain.HoldAttendedModeActive, holdDetail{}, now)
 		}); err != nil {
 			w.holdPace.forget("hold:" + string(runID))
 			return err
@@ -5945,7 +5945,7 @@ func (w *productionPublicationWorkflow) recordPublicationEnvironmentHold(
 	}
 	return w.store.Write(ctx, func(tx *store.WriteTx) error {
 		return recordRunHold(ctx, tx, task.RunID, task.PublicationID,
-			domain.HoldPublicationEnvironment, nil, w.now().UTC())
+			domain.HoldPublicationEnvironment, holdDetail{}, w.now().UTC())
 	})
 }
 

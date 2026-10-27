@@ -785,3 +785,94 @@ func TestImageUpkeepReusesOnlyAnImageBuiltOnTheBranch(t *testing.T) {
 		})
 	}
 }
+
+// PendingResolution says what an attempt whose base no image serves waits
+// on: a rebuild until this process settles a verdict at the observed tip,
+// the card or task that answers a settled refusal, and nothing once the
+// verdict stands with no answer.
+func TestImageUpkeepPendingResolution(t *testing.T) {
+	t.Parallel()
+	const otherRecipe = `{"commands":[["true"]],"capture":"none"}`
+	repo := newUpkeepRepo(t)
+	built := repo.npmBase()
+	h := newUpkeepHarness(t, openUpkeepStore(t), repo, upkeepRegistrySet)
+	h.seed(upkeepImage(t, built, func(input *domain.ProjectImageInput) {
+		input.Environment.PreparationDigest = projectimage.PreparationDigest()
+	}))
+	pending := func() *domain.ImageUpkeepHold {
+		t.Helper()
+		hold, err := h.upkeep.PendingResolution(t.Context())
+		if err != nil {
+			t.Fatal(err)
+		}
+		if hold != nil {
+			if err := hold.Validate(); err != nil {
+				t.Fatalf("PendingResolution returned an invalid hold: %v", err)
+			}
+		}
+		return hold
+	}
+	if hold := pending(); hold == nil || hold.Pending != domain.ImageUpkeepPendingRebuild {
+		t.Fatalf("before any pass = %+v, want a rebuild", hold)
+	}
+
+	h.observeTip(built)
+	if err := h.upkeep.RunAll(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	if hold := pending(); hold != nil {
+		t.Fatalf("with the image current at the tip = %+v, want nothing pending", hold)
+	}
+	h.observeTip(repo.commit(map[string]string{"src/index.js": "export const a = 1;\n"}))
+	if hold := pending(); hold == nil || hold.Pending != domain.ImageUpkeepPendingRebuild {
+		t.Fatalf("after the tip moved = %+v, want a rebuild", hold)
+	}
+
+	refused := repo.commit(map[string]string{verify.DefaultRecipePath: otherRecipe})
+	h.observeTip(refused)
+	if err := h.upkeep.TipAdvanced(t.Context(), 42, refused); err != nil {
+		t.Fatal(err)
+	}
+	refusals := h.refusals()
+	if len(refusals) != 1 {
+		t.Fatalf("refusals = %+v, want one", refusals)
+	}
+	if hold := pending(); hold != nil {
+		t.Fatalf("a refusal nothing answers = %+v, want nothing pending", hold)
+	}
+	h.upkeep.MaintenancePending = func(_ context.Context, refusal domain.ImageUpkeepRefusal) (domain.TaskID, bool, error) {
+		return "task-1", refusal.ID == refusals[0].ID, nil
+	}
+	if hold := pending(); hold == nil || hold.Pending != domain.ImageUpkeepPendingMaintenanceTask ||
+		*hold.RefusalRecordID != refusals[0].ID || *hold.MaintenanceTaskID != "task-1" {
+		t.Fatalf("a refusal a maintenance task answers = %+v", hold)
+	}
+	h.upkeep.AdoptionPending = func(_ context.Context, refusal domain.ImageUpkeepRefusal) (domain.ItemID, bool, error) {
+		return "card-1", refusal.ID == refusals[0].ID, nil
+	}
+	if hold := pending(); hold == nil || hold.Pending != domain.ImageUpkeepPendingAdoptionProposal ||
+		*hold.RefusalRecordID != refusals[0].ID || *hold.ProposalItemID != "card-1" {
+		t.Fatalf("a refusal an adoption card answers = %+v", hold)
+	}
+}
+
+// A host fault is not a verdict: an attempt keeps waiting on a rebuild.
+func TestImageUpkeepPendingResolutionTreatsAHostFaultAsARebuild(t *testing.T) {
+	t.Parallel()
+	repo := newUpkeepRepo(t)
+	built := repo.npmBase()
+	h := newUpkeepHarness(t, openUpkeepStore(t), repo, "")
+	h.seed(upkeepImage(t, built, nil))
+	h.upkeep.Rebuild = nil
+	h.observeTip(built)
+	if err := h.upkeep.RunAll(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	if refusals := h.refusals(); len(refusals) != 1 || refusals[0].Class != domain.ImageUpkeepRefusalHostFault {
+		t.Fatalf("refusals = %+v, want one host fault", refusals)
+	}
+	hold, err := h.upkeep.PendingResolution(t.Context())
+	if err != nil || hold == nil || hold.Pending != domain.ImageUpkeepPendingRebuild {
+		t.Fatalf("after a host fault = %+v, %v; want a rebuild", hold, err)
+	}
+}

@@ -160,7 +160,7 @@ func (w *productionPublicationWorkflow) observeClosedPublication(ctx context.Con
 		if found && held.Reason == domain.HoldExternalConflict && held.InvocationID != nil {
 			invocation = *held.InvocationID
 		}
-		return recordRunHold(ctx, tx, runID, invocation, domain.HoldExternalConflict, nil, now.UTC())
+		return recordRunHold(ctx, tx, runID, invocation, domain.HoldExternalConflict, holdDetail{}, now.UTC())
 	}); err != nil {
 		w.logger.Warn("closed workflow publication hold was not recorded", "run", runID, "error", err)
 	}

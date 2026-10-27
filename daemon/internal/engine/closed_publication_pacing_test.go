@@ -239,7 +239,7 @@ func TestClosedPublicationObservationKeepsBlockedTaskHold(t *testing.T) {
 		publication := domain.InvocationID("publish-run-closed-publication")
 		if err := h.store.Write(t.Context(), func(tx *store.WriteTx) error {
 			return recordRunHold(t.Context(), tx, h.runID, publication,
-				domain.HoldExternalConflict, nil, blockedAt)
+				domain.HoldExternalConflict, holdDetail{}, blockedAt)
 		}); err != nil {
 			t.Fatal(err)
 		}

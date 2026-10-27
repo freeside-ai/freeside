@@ -134,7 +134,7 @@ func (e *Engine) dispatchPendingInvocations(ctx context.Context) (int, error) {
 			if !attributable {
 				continue
 			}
-			if err := e.observeRunHold(ctx, runID, invocationID, holdReason, nil); err != nil {
+			if err := e.observeRunHold(ctx, runID, invocationID, holdReason, holdDetail{}); err != nil {
 				return 0, err
 			}
 		}
@@ -150,7 +150,7 @@ func (e *Engine) dispatchPendingInvocations(ctx context.Context) (int, error) {
 				}
 				return 0, err
 			}
-			if err := e.observeRunHold(ctx, binding.run.ID, request.InvocationID, holdReason, nil); err != nil {
+			if err := e.observeRunHold(ctx, binding.run.ID, request.InvocationID, holdReason, holdDetail{}); err != nil {
 				return 0, err
 			}
 		}
@@ -166,7 +166,7 @@ func (e *Engine) dispatchPendingInvocations(ctx context.Context) (int, error) {
 				}
 				return 0, err
 			}
-			if err := e.observeRunHold(ctx, binding.run.ID, request.InvocationID, holdReason, nil); err != nil {
+			if err := e.observeRunHold(ctx, binding.run.ID, request.InvocationID, holdReason, holdDetail{}); err != nil {
 				return 0, err
 			}
 		}
@@ -193,7 +193,7 @@ func (e *Engine) dispatchPendingInvocations(ctx context.Context) (int, error) {
 				}
 				return 0, err
 			}
-			if err := e.observeRunHold(ctx, binding.run.ID, request.InvocationID, holdReason, nil); err != nil {
+			if err := e.observeRunHold(ctx, binding.run.ID, request.InvocationID, holdReason, holdDetail{}); err != nil {
 				return 0, err
 			}
 		}
@@ -209,7 +209,7 @@ func (e *Engine) dispatchPendingInvocations(ctx context.Context) (int, error) {
 				}
 				return 0, err
 			}
-			if err := e.observeRunHold(ctx, binding.run.ID, request.InvocationID, holdReason, nil); err != nil {
+			if err := e.observeRunHold(ctx, binding.run.ID, request.InvocationID, holdReason, holdDetail{}); err != nil {
 				return 0, err
 			}
 		}
@@ -242,7 +242,7 @@ func (e *Engine) dispatchPendingInvocations(ctx context.Context) (int, error) {
 		started += boolCount(startedNow)
 		if err != nil {
 			if reason, ok := dispatchHoldReason(err); ok {
-				if obsErr := e.observeRunHold(ctx, binding.run.ID, request.InvocationID, reason, admissionRefusalDetail(err)); obsErr != nil {
+				if obsErr := e.observeRunHold(ctx, binding.run.ID, request.InvocationID, reason, holdDetailFor(err)); obsErr != nil {
 					return started, obsErr
 				}
 			}
@@ -346,7 +346,7 @@ func (e *Engine) dispatchPendingInvocations(ctx context.Context) (int, error) {
 		}
 		if err != nil {
 			if reason, ok := dispatchHoldReason(err); ok {
-				if obsErr := e.observeRunHold(ctx, binding.run.ID, request.InvocationID, reason, admissionRefusalDetail(err)); obsErr != nil {
+				if obsErr := e.observeRunHold(ctx, binding.run.ID, request.InvocationID, reason, holdDetailFor(err)); obsErr != nil {
 					return started, obsErr
 				}
 			}
@@ -428,7 +428,7 @@ func (e *Engine) dispatchPendingInvocations(ctx context.Context) (int, error) {
 		started += boolCount(startedNow)
 		if err != nil {
 			if reason, ok := dispatchHoldReason(err); ok {
-				if obsErr := e.observeRunHold(ctx, binding.run.ID, request.InvocationID, reason, admissionRefusalDetail(err)); obsErr != nil {
+				if obsErr := e.observeRunHold(ctx, binding.run.ID, request.InvocationID, reason, holdDetailFor(err)); obsErr != nil {
 					return started, obsErr
 				}
 			}
@@ -489,7 +489,7 @@ func (e *Engine) dispatchPendingInvocations(ctx context.Context) (int, error) {
 				continue
 			}
 			if reason, ok := dispatchHoldReason(err); ok {
-				if obsErr := e.observeRunHold(ctx, binding.run.ID, request.InvocationID, reason, admissionRefusalDetail(err)); obsErr != nil {
+				if obsErr := e.observeRunHold(ctx, binding.run.ID, request.InvocationID, reason, holdDetailFor(err)); obsErr != nil {
 					return started, obsErr
 				}
 			}
@@ -544,7 +544,7 @@ func (e *Engine) dispatchPendingInvocations(ctx context.Context) (int, error) {
 			// unattended composition that eventually dispatches them), then
 			// return exactly as before.
 			if err := e.observeRunHold(ctx, request.RunID, request.InvocationID,
-				domain.HoldAttendedModeActive, nil); err != nil {
+				domain.HoldAttendedModeActive, holdDetail{}); err != nil {
 				return started, err
 			}
 			for _, held := range pendingProduction {
@@ -557,7 +557,7 @@ func (e *Engine) dispatchPendingInvocations(ctx context.Context) (int, error) {
 					continue
 				}
 				if err := e.observeRunHold(ctx, runID, invocationID,
-					domain.HoldAttendedModeActive, nil); err != nil {
+					domain.HoldAttendedModeActive, holdDetail{}); err != nil {
 					return started, err
 				}
 			}
@@ -591,7 +591,7 @@ func (e *Engine) dispatchPendingInvocations(ctx context.Context) (int, error) {
 			// before (issue #394).
 			if reason, ok := dispatchHoldReason(err); ok &&
 				(invocationDispatchHold(err) || unattendedDispatchRefusal(err)) {
-				if obsErr := e.observeRunHold(ctx, request.RunID, request.InvocationID, reason, admissionRefusalDetail(err)); obsErr != nil {
+				if obsErr := e.observeRunHold(ctx, request.RunID, request.InvocationID, reason, holdDetailFor(err)); obsErr != nil {
 					return started, obsErr
 				}
 			}
@@ -651,7 +651,7 @@ func (e *Engine) dispatchPendingInvocations(ctx context.Context) (int, error) {
 				continue
 			}
 			if reason, ok := dispatchHoldReason(err); ok {
-				if obsErr := e.observeRunHold(ctx, binding.run.ID, request.InvocationID, reason, admissionRefusalDetail(err)); obsErr != nil {
+				if obsErr := e.observeRunHold(ctx, binding.run.ID, request.InvocationID, reason, holdDetailFor(err)); obsErr != nil {
 					return started, obsErr
 				}
 			}
@@ -685,7 +685,13 @@ func invocationDispatchHold(err error) bool {
 	// transaction: the mark landed after role resolution read the store, so
 	// the refusal arrives from the store without ErrAgentNotAdmissible. It
 	// holds like the read-side refusal, and re-enrollment clears it.
+	//
+	// A base no admitted image serves holds its own invocation too, whether
+	// upkeep may still serve it or not: an image that later serves the base
+	// resumes it without anyone acting.
 	return errors.Is(err, exec.ErrInputUnavailable) ||
+		errors.Is(err, ErrImageUpkeepPending) ||
+		errors.Is(err, ErrProjectImageUnserved) ||
 		workflowAdvancementFenced(err) ||
 		errors.Is(err, domain.ErrIdentityParallelismExhausted) ||
 		errors.Is(err, ErrAgentNotAdmissible) ||
@@ -787,7 +793,7 @@ func (e *Engine) dispatchIntent(
 		if errors.Is(err, domain.ErrUnattendedOperationStopped) ||
 			errors.Is(err, domain.ErrBlockingSystemHealth) {
 			if reason, ok := dispatchHoldReason(err); ok {
-				if obsErr := e.observeRunHold(ctx, binding.run.ID, invocationID, reason, admissionRefusalDetail(err)); obsErr != nil {
+				if obsErr := e.observeRunHold(ctx, binding.run.ID, invocationID, reason, holdDetailFor(err)); obsErr != nil {
 					return false, false, obsErr
 				}
 			}
@@ -832,13 +838,16 @@ func (e *Engine) dispatchIntent(
 		if err := tx.MarkOutboxDispatched(ctx, entry.IdempotencyKey); err != nil {
 			return err
 		}
-		// A capacity hold is current scheduling state, not history. Clear only
-		// that exact cause when this invocation starts; the store's predicate
-		// preserves a newer, different hold that may have replaced it.
-		if err := tx.ClearRunHoldCause(
-			ctx, binding.run.ID, domain.HoldIdentityParallelism,
-		); err != nil {
-			return err
+		// A capacity or image-upkeep hold is current scheduling state, not
+		// history. Clear only those exact causes when this invocation starts;
+		// the store's predicate preserves a newer, different hold that may
+		// have replaced them.
+		for _, cause := range []domain.RunHoldReason{
+			domain.HoldIdentityParallelism, domain.HoldImageUpkeepPending,
+		} {
+			if err := tx.ClearRunHoldCause(ctx, binding.run.ID, cause); err != nil {
+				return err
+			}
 		}
 		// The started milestone rides the dispatch bookkeeping transaction:
 		// it also converges for a replay whose Start already happened

@@ -72,6 +72,9 @@ type Engine struct {
 	// derive supplies the per-attempt workspace and base when configured
 	// (see WithAdmissionDerivation); nil keeps the static environment.
 	derive AdmissionDerivation
+	// selectImage supplies the per-attempt writer image when configured (see
+	// WithAdmissionImageSelection); nil keeps the environment's ImageRef.
+	selectImage ImageSelection
 	// refreshUnattendedHealth re-evaluates activation-dependent health before
 	// the per-pass operating-state gate. The admitting transaction remains the
 	// race-free authority; this refresh keeps a repaired blocker from waiting
