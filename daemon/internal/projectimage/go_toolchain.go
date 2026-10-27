@@ -36,6 +36,11 @@ const (
 
 	seedGoModPath = "/opt/freeside/project-seed/go.mod"
 	seedGoSumPath = "/opt/freeside/project-seed/go.sum"
+
+	// goModuleProxyHost is the one host a Go image's build fetches modules
+	// from, with no direct fallback to a module's VCS host. The rebuild gate
+	// reads it as the authority every Go module resolves from.
+	goModuleProxyHost = "proxy.golang.org"
 )
 
 // The tools a Go image bakes beside Go so Freeside's own api/ and scripts/
@@ -402,15 +407,21 @@ COPY prepare %s
 
 # Cache warming builds and runs nothing from the repository: it downloads the
 # module closure go.mod and go.sum pin into the module cache, verifying every
-# module against go.sum. The launcher pins GOPROXY=off for every later
-# process, so this one step runs the same verified archive directly with the
-# default proxy. The fresh verification workspace hydrates offline from this
-# cache through the image-owned preparation helper.
+# module against go.sum, and anything go.sum lacks against the checksum
+# database. The launcher pins GOPROXY=off for every later process, so this one
+# step runs the same verified archive directly. It fetches from one proxy with
+# no direct fallback, so no module comes from its own VCS host: GOENV=off
+# drops any go env file the base carries, which an empty variable would not
+# override, and the private and insecure lists are cleared. The fresh
+# verification workspace hydrates offline from this cache through the
+# image-owned preparation helper.
 RUN set -eux; \
 	warm=$(mktemp -d /tmp/freeside-go-warm.XXXXXX); \
 	tar -xzf %s -C "$warm"; \
 	cd /opt/freeside/project-seed; \
-	env GOTOOLCHAIN=local GOWORK=off GOFLAGS= GOMODCACHE=%s GOCACHE="$warm/cache" \
+	env GOENV=off GOTOOLCHAIN=local GOWORK=off GOFLAGS= GOPROXY=https://%s \
+		GONOPROXY= GOPRIVATE= GOINSECURE= GONOSUMDB= GOSUMDB=sum.golang.org \
+		GOMODCACHE=%s GOCACHE="$warm/cache" \
 		"$warm/go/bin/go" mod download; \
 	rm -rf "$warm"
 
@@ -447,7 +458,7 @@ LABEL org.opencontainers.image.title="freeside-project-image" \
 		launcherCopies.String(),
 		GoModuleCachePath, GoModuleCachePath,
 		ward.ProjectRecipePath, PreparationPath,
-		goToolchainArchivePath, GoModuleCachePath) +
+		goToolchainArchivePath, goModuleProxyHost, GoModuleCachePath) +
 		"# Bound recipe digest: " + string(recipeDigest) + "\n"
 }
 

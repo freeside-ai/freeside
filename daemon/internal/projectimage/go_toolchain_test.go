@@ -126,6 +126,10 @@ func TestBuildContextPreparationBindsGoInputs(t *testing.T) {
 				"COPY go.mod go.sum /opt/freeside/project-seed/",
 				"COPY prepare " + PreparationPath,
 				"GOMODCACHE=" + GoModuleCachePath,
+				// One proxy, no direct fallback, and nothing inherited that
+				// could route a module around it or skip the checksum database.
+				"env GOENV=off GOTOOLCHAIN=local GOWORK=off GOFLAGS= GOPROXY=https://proxy.golang.org \\\n" +
+					"\t\tGONOPROXY= GOPRIVATE= GOINSECURE= GONOSUMDB= GOSUMDB=sum.golang.org \\\n",
 				`"$warm/go/bin/go" mod download`,
 				`ai.freeside.project.toolchain.go.version="${PROJECT_GO_VERSION}"`,
 				`ai.freeside.project.toolchain.go.archive-sha256="${PROJECT_GO_SHA256}"`,
@@ -148,7 +152,7 @@ func TestBuildContextPreparationBindsGoInputs(t *testing.T) {
 				}
 			}
 			for _, forbidden := range []string{
-				"\nENV ", "\nWORKDIR ", "\nENTRYPOINT ", "\nCMD ", "\nUSER ", "\nVOLUME ", "node", "npm",
+				"\nENV ", "\nWORKDIR ", "\nENTRYPOINT ", "\nCMD ", "\nUSER ", "\nVOLUME ", "node", "npm", ",direct",
 			} {
 				if strings.Contains(containerfile, forbidden) {
 					t.Errorf("Go Containerfile carries %q", strings.TrimSpace(forbidden))

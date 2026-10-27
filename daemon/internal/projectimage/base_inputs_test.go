@@ -25,7 +25,7 @@ import (
 // Update the pin when that is the intended cost of the edit, and say so in the
 // change.
 func TestPreparationDigestPinsTheBuilderSources(t *testing.T) {
-	const want = "sha256:85e84b1eb3a04ca2187e19c36a55b5c2f776875650f81bca163b833ae6c51a2c"
+	const want = "sha256:6d7281a0896fb13f447c44dbcd36ef08f92f29d63a8570858794b8a45ccb8b02"
 	got := PreparationDigest()
 	if !contentaddr.Valid(string(got)) {
 		t.Fatalf("PreparationDigest() = %q, want a content address", got)
