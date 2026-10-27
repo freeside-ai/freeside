@@ -37,15 +37,18 @@ const (
 // AllRebuildRefusals is domain.AllRebuildRefusals.
 var AllRebuildRefusals = domain.AllRebuildRefusals
 
-// LockfileDelta summarizes what a candidate's package-lock.json changes
-// against its base's. It is the account a rebuild record keeps, never the
-// parsed tree.
+// LockfileDelta summarizes what a candidate's lockfile changes against its
+// base's: package-lock.json for an npm image, go.sum for a Go image. It is the
+// account a rebuild record keeps, never the parsed tree.
 type LockfileDelta struct {
-	// Changed counts packages the head lockfile adds or pins differently.
+	// Changed counts packages, or Go module versions, the head lockfile adds
+	// or pins differently; for Go, also a version go.mod newly requires.
 	Changed int `json:"changed"`
-	// Removed counts packages only the base lockfile holds.
+	// Removed counts packages, or Go module versions, only the base lockfile
+	// holds.
 	Removed int `json:"removed"`
 	// Hosts are the registry hosts the changed packages resolve from, sorted.
+	// For a Go image that is the build's one module proxy.
 	Hosts []string `json:"hosts"`
 }
 

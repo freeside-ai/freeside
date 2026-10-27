@@ -154,6 +154,8 @@ type upkeepBuilder struct {
 	// instead of the current one: a builder whose record disagrees with
 	// the build it was asked for.
 	prepared domain.Digest
+	// goModule builds a Go image of the root module instead of an npm one.
+	goModule bool
 }
 
 func (b *upkeepBuilder) Build(ctx context.Context, request projectimage.Request) (domain.ProjectImage, error) {
@@ -168,8 +170,11 @@ func (b *upkeepBuilder) Build(ctx context.Context, request projectimage.Request)
 		<-ctx.Done()
 		return domain.ProjectImage{}, ctx.Err()
 	}
-	inputs, err := projectimage.ObserveBaseInputs(ctx, "git", request.SourceDir, request.CommitSHA,
-		domain.ProjectImageInputLayout{Toolchain: domain.ProjectToolchainNPM})
+	layout := domain.ProjectImageInputLayout{Toolchain: domain.ProjectToolchainNPM}
+	if b.goModule {
+		layout.Toolchain = domain.ProjectToolchainGo
+	}
+	inputs, err := projectimage.ObserveBaseInputs(ctx, "git", request.SourceDir, request.CommitSHA, layout)
 	if err != nil {
 		return domain.ProjectImage{}, err
 	}
@@ -178,6 +183,16 @@ func (b *upkeepBuilder) Build(ctx context.Context, request projectimage.Request)
 	if b.prepared != "" {
 		prepared = b.prepared
 	}
+	environment := &domain.ProjectImageEnvironment{
+		PackageJSONSHA256: inputs.PackageJSONSHA256, PackageLockSHA256: inputs.PackageLockSHA256,
+		PreparationDigest: prepared,
+	}
+	if b.goModule {
+		environment = &domain.ProjectImageEnvironment{
+			Toolchain: domain.ProjectToolchainGo, GoModSHA256: inputs.GoModSHA256, GoSumSHA256: inputs.GoSumSHA256,
+			PreparationDigest: prepared,
+		}
+	}
 	image, err := domain.NewProjectImage(domain.ProjectImageInput{
 		Repository: request.Repository, RepositoryID: request.RepositoryID,
 		CommitSHA: request.CommitSHA, RecipeDigest: verify.RecipeDigest(request.Recipe),
@@ -185,10 +200,7 @@ func (b *upkeepBuilder) Build(ctx context.Context, request projectimage.Request)
 		BaseImageRef:       request.BaseImageRef,
 		ImageRef: domain.ImageRef(fmt.Sprintf("%s/%s@sha256:%s",
 			request.Registry, request.ImageName, hex.EncodeToString(sum[:]))),
-		Environment: &domain.ProjectImageEnvironment{
-			PackageJSONSHA256: inputs.PackageJSONSHA256, PackageLockSHA256: inputs.PackageLockSHA256,
-			PreparationDigest: prepared,
-		},
+		Environment: environment,
 	})
 	if err != nil {
 		return domain.ProjectImage{}, err
@@ -413,6 +425,44 @@ func TestImageUpkeepAdvancesForAWithinPolicyDependencyChange(t *testing.T) {
 	}
 }
 
+// A Go module change pinned in go.sum is rebuilt for too, once the project
+// declares the module proxy. The go.sum lines are go mod tidy output.
+func TestImageUpkeepAdvancesForAWithinPolicyGoModuleChange(t *testing.T) {
+	t.Parallel()
+	const (
+		goMod = "module example.test/app\n\ngo 1.26\n\nrequire github.com/google/uuid v1.6.0\n"
+		goSum = "github.com/google/uuid v1.6.0 h1:NIvaJDMOsjHA8n1jAhLSgzrAzy1Hgr+hNrb57e+94F0=\n" +
+			"github.com/google/uuid v1.6.0/go.mod h1:TIyPZe4MgqvfeYDBFedMoGGpEw/LqOeaOT+nhxU+yHo=\n"
+		headGoMod = goMod + "\nrequire golang.org/x/text v0.21.0\n"
+		headGoSum = goSum + "golang.org/x/text v0.21.0 h1:zyQAAkrwaneQ066sspRyJaG9VNi/YJ1NfzcGB3hZ/qo=\n" +
+			"golang.org/x/text v0.21.0/go.mod h1:4IBbMaMmOPCJ8SecivzSH54+73PCFmPWxNTLm+vZkEQ=\n"
+	)
+	repo := newUpkeepRepo(t)
+	built := repo.commit(map[string]string{
+		"go.mod": goMod, "go.sum": goSum, verify.DefaultRecipePath: upkeepRecipe, "main.go": "package main\n",
+	})
+	h := newUpkeepHarness(t, openUpkeepStore(t), repo, `["proxy.golang.org"]`)
+	h.builder.goModule = true
+	h.seed(upkeepImage(t, built, func(input *domain.ProjectImageInput) {
+		input.Environment = &domain.ProjectImageEnvironment{
+			Toolchain: domain.ProjectToolchainGo, GoModSHA256: upkeepSHA256(goMod), GoSumSHA256: upkeepSHA256(goSum),
+			PreparationDigest: projectimage.PreparationDigest(),
+		}
+	}))
+	tip := repo.commit(map[string]string{"go.mod": headGoMod, "go.sum": headGoSum})
+
+	if err := h.upkeep.TipAdvanced(t.Context(), 42, tip); err != nil {
+		t.Fatal(err)
+	}
+	advanced := h.pointer()
+	if advanced.CommitSHA != tip || advanced.Environment.GoSumSHA256 != upkeepSHA256(headGoSum) {
+		t.Fatalf("pointer names %+v, want the image rebuilt at the tip", advanced)
+	}
+	if len(h.refusals()) != 0 {
+		t.Fatalf("refusals = %v, want none", h.refusals())
+	}
+}
+
 // Each refusal is classified and recorded once: a rerun at the same tip
 // converges on the first record. Only a host fault files the health item.
 func TestImageUpkeepRecordsEachRefusalClassOnce(t *testing.T) {
@@ -459,7 +509,7 @@ func TestImageUpkeepRecordsEachRefusalClassOnce(t *testing.T) {
 			want: domain.ImageUpkeepRefusalUnsupportedNPMInput,
 		},
 		{
-			name: "a Go module change",
+			name: "a Go input no image supports",
 			base: map[string]string{
 				"go.mod": goMod, "go.sum": goSum, verify.DefaultRecipePath: upkeepRecipe, "main.go": "package main\n",
 			},
@@ -470,7 +520,7 @@ func TestImageUpkeepRecordsEachRefusalClassOnce(t *testing.T) {
 					PreparationDigest: upkeepStaleDigest,
 				}
 			},
-			tip:  map[string]string{"go.mod": goMod + "\nrequire example.test/dep v1.0.0\n"},
+			tip:  map[string]string{"vendor/modules.txt": "# example.test/dep v1.0.0\n"},
 			want: domain.ImageUpkeepRefusalGoModuleDelta,
 		},
 		{

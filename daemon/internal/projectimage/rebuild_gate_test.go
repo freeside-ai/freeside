@@ -1205,10 +1205,14 @@ func TestEvaluateUpkeepAdmitsAGoToolchainOnlyDelta(t *testing.T) {
 	if err != nil || !slices.Equal(findingClauses(decision.Findings), []RebuildRefusal{RebuildRefusalRecipeChanged}) {
 		t.Fatalf("decision = %+v, %v; want the recipe change refused", decision, err)
 	}
-	module := repo.commit(map[string]string{"go.mod": goMod + "\nrequire example.test/dep v1.0.0\n"})
-	decision, err = EvaluateUpkeep(t.Context(), "git", repo.dir, image, module, domain.ResolvedPolicy{})
+	// A module change now takes the module clauses too; this go.sum pins the
+	// dependency's zip but not its go.mod.
+	module := repo.commit(map[string]string{
+		"go.mod": goMod + "\nrequire example.test/dep v1.0.0\n", "go.sum": strings.SplitAfter(testGoSum, "\n")[0],
+	})
+	decision, err = EvaluateUpkeep(t.Context(), "git", repo.dir, image, module, gatePolicy(t, `["proxy.golang.org"]`))
 	if err != nil || !slices.Equal(findingClauses(decision.Findings),
-		[]RebuildRefusal{RebuildRefusalGoDependencyChanged, RebuildRefusalRecipeChanged}) {
-		t.Fatalf("decision = %+v, %v; want the module change and the recipe change refused", decision, err)
+		[]RebuildRefusal{RebuildRefusalRecipeChanged, RebuildRefusalUnpinnedSource}) {
+		t.Fatalf("decision = %+v, %v; want the recipe change and the unpinned module refused", decision, err)
 	}
 }

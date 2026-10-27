@@ -15,7 +15,8 @@ const (
 	// registry tarball pinned by an https URL and a sha512 integrity value (a
 	// link, a workspace member, a VCS or file source, a bundled package, a
 	// missing pin), or the change declares a dependency by anything but a
-	// registry version, range, or tag.
+	// registry version, range, or tag. For a Go image: a module version
+	// go.mod requires has no go.mod hash in go.sum.
 	RebuildRefusalUnpinnedSource RebuildRefusal = "unpinned_source"
 	// RebuildRefusalRecipeChanged: the candidate changes the verification
 	// recipe its tree declares.
@@ -28,11 +29,12 @@ const (
 	// project image supports, or changes one a rebuild cannot bound
 	// (package.json's overrides, workspaces, or packageManager).
 	RebuildRefusalUnsupportedInput RebuildRefusal = "unsupported_npm_input"
-	// RebuildRefusalGoDependencyChanged: the candidate changes the go.mod or
-	// go.sum of a Go image's module, holds one in a shape no build reads, or
-	// holds a Go input no project image supports (a vendor directory, a
-	// go.work). No rule bounds a Go dependency change yet, so every one needs
-	// a newly reviewed image.
+	// RebuildRefusalGoDependencyChanged: the candidate holds a Go input no
+	// project image supports (a vendor directory, a go.work, a replace with a
+	// filesystem path), or a go.mod or go.sum no build reads: absent, not a
+	// regular file, a go or toolchain directive the baked Go refuses, or a
+	// line not of Go's own shape. Records written before Go module changes
+	// were bounded also hold it for any go.mod or go.sum change.
 	RebuildRefusalGoDependencyChanged RebuildRefusal = "go_dependency_changed"
 	// RebuildRefusalNoRegistrySet: the run's policy declares no registry set,
 	// or a malformed one.

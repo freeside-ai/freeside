@@ -608,25 +608,62 @@ func TestObserveGoBaseInputsAtTheModuleDirectory(t *testing.T) {
 	}
 }
 
-func TestEvaluateRebuildRefusesEveryGoDependencyChange(t *testing.T) {
-	const declared = `["registry.npmjs.org"]`
+// The real go.sum lines below are `go mod tidy` output against
+// proxy.golang.org, so the admitted cases hold what Go actually writes:
+// uuidSum for a module requiring github.com/google/uuid, testifySum for one
+// requiring testify and x/text, whose go.mod is testifyRequires.
+const (
+	uuidSum = "github.com/google/uuid v1.6.0 h1:NIvaJDMOsjHA8n1jAhLSgzrAzy1Hgr+hNrb57e+94F0=\n" +
+		"github.com/google/uuid v1.6.0/go.mod h1:TIyPZe4MgqvfeYDBFedMoGGpEw/LqOeaOT+nhxU+yHo=\n"
+	testifyRequires = "require (\n\tgithub.com/stretchr/testify v1.9.0\n\tgolang.org/x/text v0.21.0\n)\n\n" +
+		"require (\n\tgithub.com/davecgh/go-spew v1.1.1 // indirect\n\tgithub.com/pmezard/go-difflib v1.0.0 // indirect\n" +
+		"\tgopkg.in/yaml.v3 v3.0.1 // indirect\n)\n"
+	testifySum = "github.com/davecgh/go-spew v1.1.1 h1:vj9j/u1bqnvCEfJOwUhtlOARqs3+rkHYY13jYWTU97c=\n" +
+		"github.com/davecgh/go-spew v1.1.1/go.mod h1:J7Y8YcW2NihsgmVo/mv3lAwl/skON4iLHjSsI+c5H38=\n" +
+		"github.com/pmezard/go-difflib v1.0.0 h1:4DBwDE0NGyQoBHbLQYPwSUPoCMWR5BEzIk/f1lZbAQM=\n" +
+		"github.com/pmezard/go-difflib v1.0.0/go.mod h1:iKH77koFhYxTK1pcRnkKkqfTogsbg7gZNVY4sRDYZ/4=\n" +
+		"github.com/stretchr/testify v1.9.0 h1:HtqpIVDClZ4nwg75+f6Lvsy/wHu+3BoSGCbBAcpTsTg=\n" +
+		"github.com/stretchr/testify v1.9.0/go.mod h1:r2ic/lqez/lEtzL7wO/rwa5dbSLXVDPFyf8C91i36aY=\n" +
+		"golang.org/x/text v0.21.0 h1:zyQAAkrwaneQ066sspRyJaG9VNi/YJ1NfzcGB3hZ/qo=\n" +
+		"golang.org/x/text v0.21.0/go.mod h1:4IBbMaMmOPCJ8SecivzSH54+73PCFmPWxNTLm+vZkEQ=\n" +
+		"gopkg.in/check.v1 v0.0.0-20161208181325-20d25e280405 h1:yhCVgyC4o1eVCa2tZl7eS0r+SDo693bJlVdllGtEeKM=\n" +
+		"gopkg.in/check.v1 v0.0.0-20161208181325-20d25e280405/go.mod h1:Co6ibVJAznAaIkqp8huTwlJQCZ016jof/cbN4VW5Yz0=\n" +
+		"gopkg.in/yaml.v3 v3.0.1 h1:fxVm/GzAzEWqLHuvctI91KS9hhNmmWOoWu0XTYJS7CA=\n" +
+		"gopkg.in/yaml.v3 v3.0.1/go.mod h1:K4uyk7z7BCEPqu6E+C64Yfv1cQ7kz7rIZviUmN+EgEM=\n"
+)
+
+func TestEvaluateRebuildAppliesTheGoModuleClauses(t *testing.T) {
+	const (
+		proxy       = `["proxy.golang.org"]`
+		npmOnly     = `["registry.npmjs.org"]`
+		uuid        = "require github.com/google/uuid v1.6.0\n"
+		otherRecipe = `{"commands":[["true"]],"capture":"none"}`
+	)
 	repo := newBaseInputsRepo(t)
 	base := repo.commit(map[string]string{
 		"daemon/go.mod": testGoMod, "daemon/go.sum": testGoSum, "daemon/main.go": "package main\n",
 		verify.DefaultRecipePath: testRecipe,
 	})
-	image := domain.ProjectImage{Environment: &domain.ProjectImageEnvironment{
-		Toolchain: domain.ProjectToolchainGo, GoModuleDir: "daemon",
-		GoModSHA256:       manifestSHA256([]byte(testGoMod)),
-		GoSumSHA256:       manifestSHA256([]byte(testGoSum)),
-		PreparationDigest: PreparationDigest(),
-	}}
+	image := domain.ProjectImage{
+		CommitSHA: base, RecipeDigest: verify.RecipeDigest([]byte(testRecipe)),
+		Environment: &domain.ProjectImageEnvironment{
+			Toolchain: domain.ProjectToolchainGo, GoModuleDir: "daemon",
+			GoModSHA256:       manifestSHA256([]byte(testGoMod)),
+			GoSumSHA256:       manifestSHA256([]byte(testGoSum)),
+			PreparationDigest: PreparationDigest(),
+		},
+	}
+	withUUID := map[string]string{"daemon/go.mod": testGoMod + uuid, "daemon/go.sum": testGoSum + uuidSum}
 	for _, test := range []struct {
 		name    string
 		changes map[string]string
-		needed  bool
-		// detail lists what the refusal names.
+		policy  string
+		// needed is false for a head the publication gate does not apply to.
+		needed bool
+		want   []RebuildRefusal
+		// detail lists what the first refusal names.
 		detail []string
+		delta  LockfileDelta
 	}{
 		{name: "source-only head", changes: map[string]string{"daemon/main.go": "package main\n\nfunc main() {}\n"}},
 		{
@@ -635,51 +672,170 @@ func TestEvaluateRebuildRefusesEveryGoDependencyChange(t *testing.T) {
 			changes: map[string]string{"package.json": gateBasePackageJSON, "package-lock.json": gateBasePackageLock},
 		},
 		{
-			name: "vendor added alone", needed: true,
+			name: "pinned module from the declared proxy", changes: withUUID, policy: proxy, needed: true,
+			delta: LockfileDelta{Changed: 1, Hosts: []string{"proxy.golang.org"}},
+		},
+		{
+			name: "tidy module graph replacing the base's", policy: proxy, needed: true,
+			changes: map[string]string{
+				"daemon/go.mod": "module example.test/m\n\ngo 1.26.9\n\n" + testifyRequires, "daemon/go.sum": testifySum,
+			},
+			delta: LockfileDelta{Changed: 6, Removed: 1, Hosts: []string{"proxy.golang.org"}},
+		},
+		{
+			// Dropping a module fetches nothing, so no host is checked.
+			name: "module removed", policy: npmOnly, needed: true,
+			changes: map[string]string{"daemon/go.mod": "module example.test/m\n\ngo 1.26.9\n", "daemon/go.sum": "\n"},
+			delta:   LockfileDelta{Removed: 1},
+		},
+		{
+			// A replace naming another version leaves this one as required.
+			name: "replace of another version", policy: npmOnly, needed: true,
+			changes: map[string]string{
+				"daemon/go.mod": testGoMod + "replace example.test/dep v0.9.0 => github.com/google/uuid v1.6.0\n",
+			},
+		},
+		{
+			name: "module through a replace pinned", policy: proxy, needed: true,
+			changes: map[string]string{
+				"daemon/go.mod": testGoMod + "replace example.test/dep => github.com/google/uuid v1.6.0\n",
+				"daemon/go.sum": testGoSum + uuidSum,
+			},
+			delta: LockfileDelta{Changed: 1, Hosts: []string{"proxy.golang.org"}},
+		},
+		{
+			name: "undeclared proxy", changes: withUUID, policy: npmOnly, needed: true,
+			want:   []RebuildRefusal{RebuildRefusalUndeclaredAuthority},
+			detail: []string{`"github.com/google/uuid@v1.6.0"`, `"proxy.golang.org"`},
+		},
+		{
+			name: "no registry set", changes: withUUID, needed: true,
+			want: []RebuildRefusal{RebuildRefusalNoRegistrySet},
+		},
+		{
+			name: "malformed registry set", changes: withUUID, policy: `["Proxy.golang.org"]`, needed: true,
+			want: []RebuildRefusal{RebuildRefusalNoRegistrySet},
+		},
+		{
+			name: "required module without its go.mod hash", policy: proxy, needed: true,
+			changes: map[string]string{
+				"daemon/go.mod": testGoMod + uuid, "daemon/go.sum": testGoSum + strings.SplitAfter(uuidSum, "\n")[0],
+			},
+			want:   []RebuildRefusal{RebuildRefusalUnpinnedSource},
+			detail: []string{`"github.com/google/uuid@v1.6.0"`},
+		},
+		{
+			name: "module through a replace unpinned", policy: proxy, needed: true,
+			changes: map[string]string{
+				"daemon/go.mod": testGoMod + "replace example.test/dep => github.com/google/uuid v1.6.0\n",
+			},
+			want:   []RebuildRefusal{RebuildRefusalUnpinnedSource},
+			detail: []string{`"github.com/google/uuid@v1.6.0"`},
+		},
+		{
+			name: "vendor added alone", policy: proxy, needed: true,
 			changes: map[string]string{"daemon/vendor/modules.txt": "x\n"},
+			want:    []RebuildRefusal{RebuildRefusalGoDependencyChanged},
 			detail:  []string{"the candidate contains daemon/vendor"},
 		},
 		{
-			name: "go.work added above the module", needed: true,
+			name: "go.work added above the module", policy: proxy, needed: true,
 			changes: map[string]string{"go.work": "go 1.26\n"},
+			want:    []RebuildRefusal{RebuildRefusalGoDependencyChanged},
 			detail:  []string{"the candidate contains go.work"},
 		},
 		{
-			name: "go.sum changed", needed: true,
-			changes: map[string]string{"daemon/go.sum": testGoSum + "example.test/x v1.0.0 h1:y=\n"},
-			detail:  []string{"the candidate changes daemon/go.sum"},
-		},
-		{
-			name: "go.mod and go.sum changed with a vendor directory", needed: true,
-			changes: map[string]string{
-				"daemon/go.mod": testGoMod + "require example.test/x v1.0.0\n",
-				"daemon/go.sum": "", "daemon/vendor/modules.txt": "x\n",
-			},
-			detail: []string{"the candidate changes daemon/go.mod, daemon/go.sum and contains daemon/vendor"},
-		},
-		{
-			name: "local-path replace", needed: true,
+			name: "local-path replace", policy: proxy, needed: true,
 			changes: map[string]string{"daemon/go.mod": testGoMod + "replace example.test/dep => ../dep\n"},
-			detail:  []string{"daemon/go.mod", goLocalReplaceInput("daemon")},
+			want:    []RebuildRefusal{RebuildRefusalGoDependencyChanged},
+			detail:  []string{goLocalReplaceInput("daemon")},
+		},
+		{
+			name: "malformed go.sum line", policy: proxy, needed: true,
+			changes: map[string]string{"daemon/go.sum": testGoSum + "example.test/x v1.0.0 h1:y=\n"},
+			want:    []RebuildRefusal{RebuildRefusalGoDependencyChanged},
+			detail:  []string{"go.sum line 3"},
+		},
+		{
+			name: "go.sum removed", policy: proxy, needed: true,
+			changes: map[string]string{"daemon/go.sum": ""},
+			want:    []RebuildRefusal{RebuildRefusalGoDependencyChanged},
+			detail:  []string{"holds no daemon/go.sum"},
+		},
+		{
+			name: "go directive above the baked Go", policy: proxy, needed: true,
+			changes: map[string]string{"daemon/go.mod": strings.Replace(testGoMod, "go 1.26.9", "go 1.99", 1)},
+			want:    []RebuildRefusal{RebuildRefusalGoDependencyChanged},
+			detail:  []string{"above the baked Go"},
+		},
+		{
+			name: "directive Go does not read", policy: proxy, needed: true,
+			changes: map[string]string{"daemon/go.mod": testGoMod + "vendor example.test/dep\n"},
+			want:    []RebuildRefusal{RebuildRefusalGoDependencyChanged},
+			detail:  []string{"unknown directive"},
+		},
+		{
+			name: "recipe changed with a pinned module", policy: proxy, needed: true,
+			changes: map[string]string{
+				"daemon/go.mod": testGoMod + uuid, "daemon/go.sum": testGoSum + uuidSum,
+				verify.DefaultRecipePath: otherRecipe,
+			},
+			want: []RebuildRefusal{RebuildRefusalRecipeChanged},
+		},
+		{
+			name: "every clause in gate order", needed: true,
+			changes: map[string]string{
+				"daemon/go.mod": testGoMod + uuid, "daemon/vendor/modules.txt": "x\n",
+				verify.DefaultRecipePath: otherRecipe,
+			},
+			want: []RebuildRefusal{
+				RebuildRefusalGoDependencyChanged, RebuildRefusalRecipeChanged,
+				RebuildRefusalNoRegistrySet, RebuildRefusalUnpinnedSource,
+			},
 		},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			repo.git("checkout", "-q", "--detach", base)
 			head := repo.commit(test.changes)
-			decision, err := EvaluateRebuild(t.Context(), "git", repo.dir, image, base, head, gatePolicy(t, declared))
+			check := func(t *testing.T, decision RebuildDecision) {
+				t.Helper()
+				if got := findingClauses(decision.Findings); !slices.Equal(got, test.want) {
+					t.Fatalf("findings = %+v, want clauses %v", decision.Findings, test.want)
+				}
+				if len(test.want) != 0 && (decision.Refusal != test.want[0] || decision.Detail != decision.Findings[0].Detail) {
+					t.Fatalf("decision = %+v, want the first finding as its refusal", decision)
+				}
+				for _, name := range test.detail {
+					if !strings.Contains(decision.Detail, name) {
+						t.Errorf("detail %q does not name %q", decision.Detail, name)
+					}
+				}
+				if decision.Delta.Changed != test.delta.Changed || decision.Delta.Removed != test.delta.Removed ||
+					!slices.Equal(decision.Delta.Hosts, test.delta.Hosts) {
+					t.Fatalf("delta = %+v, want %+v", decision.Delta, test.delta)
+				}
+			}
+			decision, err := EvaluateRebuild(t.Context(), "git", repo.dir, image, base, head, gatePolicy(t, test.policy))
 			if err != nil {
 				t.Fatalf("EvaluateRebuild: %v", err)
 			}
-			want := RebuildRefusal("")
-			if test.needed {
-				want = RebuildRefusalGoDependencyChanged
+			if decision.Needed != test.needed || decision.Head.CommitSHA != head {
+				t.Fatalf("decision = %+v, want needed=%t", decision, test.needed)
 			}
-			if decision.Needed != test.needed || decision.Refusal != want || decision.Head.CommitSHA != head {
-				t.Fatalf("decision = %+v, want needed=%t refusal=%q", decision, test.needed, want)
+			check(t, decision)
+			// Upkeep applies the same clauses, from the image's build commit.
+			decision, err = EvaluateUpkeep(t.Context(), "git", repo.dir, image, head, gatePolicy(t, test.policy))
+			if err != nil || !decision.Needed {
+				t.Fatalf("EvaluateUpkeep = %+v, %v; want the gate applied", decision, err)
 			}
-			for _, name := range test.detail {
-				if !strings.Contains(decision.Detail, name) {
-					t.Errorf("detail %q does not name %q", decision.Detail, name)
+			check(t, decision)
+			if len(test.want) != 0 {
+				class, err := ClassifyUpkeepFindings(decision.Findings)
+				if err != nil {
+					t.Fatal(err)
+				}
+				if test.want[0] == RebuildRefusalGoDependencyChanged && class != domain.ImageUpkeepRefusalGoModuleDelta {
+					t.Fatalf("class = %q, want %q", class, domain.ImageUpkeepRefusalGoModuleDelta)
 				}
 			}
 		})
@@ -691,7 +847,7 @@ func TestEvaluateRebuildRefusesEveryGoDependencyChange(t *testing.T) {
 			repo.git("hash-object", "-w", "daemon/go.sum")+",daemon/go.mod")
 		repo.git("commit", "-q", "-m", "symlink")
 		head := repo.git("rev-parse", "HEAD")
-		decision, err := EvaluateRebuild(t.Context(), "git", repo.dir, image, base, head, gatePolicy(t, declared))
+		decision, err := EvaluateRebuild(t.Context(), "git", repo.dir, image, base, head, gatePolicy(t, proxy))
 		if err != nil || !decision.Needed || decision.Refusal != RebuildRefusalGoDependencyChanged {
 			t.Fatalf("decision = %+v, %v; want the Go clause", decision, err)
 		}

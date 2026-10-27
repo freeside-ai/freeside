@@ -129,7 +129,7 @@ func rebuildRefusalMeaning(clause projectimage.RebuildRefusal) string {
 	case projectimage.RebuildRefusalUndeclaredAuthority:
 		return "A changed dependency resolves from a registry host the project's policy does not declare."
 	case projectimage.RebuildRefusalUnpinnedSource:
-		return "A changed dependency is not a registry package declared by version and pinned by an https URL and a sha512 integrity value."
+		return "A changed dependency is not a registry package declared by version and pinned by an https URL and a sha512 integrity value, or a required Go module that go.sum does not pin."
 	case projectimage.RebuildRefusalRecipeChanged:
 		return "The candidate changes the verification recipe along with its dependencies."
 	case projectimage.RebuildRefusalLockfileInconsistent:
@@ -143,7 +143,7 @@ func rebuildRefusalMeaning(clause projectimage.RebuildRefusal) string {
 	case projectimage.RebuildRefusalProofFailed:
 		return "The dependency change is within policy, but the rebuilt image failed its dependency install or its proofs, or did not finish building in time."
 	case projectimage.RebuildRefusalGoDependencyChanged:
-		return "The candidate changes its Go module's go.mod or go.sum, or adds a Go input no project image supports; a Go dependency change needs a newly reviewed project image."
+		return "The candidate holds a Go input no project image supports, or a go.mod or go.sum no build can read."
 	}
 	return "The project image could not be rebuilt for this candidate."
 }
