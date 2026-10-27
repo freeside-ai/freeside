@@ -1346,6 +1346,7 @@ func run(parent context.Context, stop func(), cfg config) (_ *daemon, err error)
 			ReviewHostInstructions: claudeWiring.reviewHostInstructions,
 			HoldOnly:               cfg.Claude.OperatingMode != domain.ModeUnattended,
 			RebuildProjectImage:    rebuild,
+			ImageUpkeepPending:     imageUpkeep.PendingResolution,
 			NewRoom: func(image domain.ProjectImage, size ward.ContainerSize) (engine.ProductionVerificationRoom, error) {
 				return ward.NewProjectImageRoom(claudeWiring.containerBin, image, size, cfg.Logger)
 			},
