@@ -13,7 +13,12 @@ import (
 // adjudication digest; a person's prints neither (#2349).
 func TestExternalReviewReplyTextGolden(t *testing.T) {
 	const rationale = "The <input> is already checked by `Validate`."
-	producers := map[string]domain.AdjudicationProducer{"": domain.AdjudicationProducerModel, "human-": domain.AdjudicationProducerHuman}
+	// "human-" is a decision made before reasons existed, whose rationale is
+	// the placeholder; "human-reason-" carries the person's own reason.
+	producers := map[string]domain.AdjudicationProducer{
+		"": domain.AdjudicationProducerModel, "human-": domain.AdjudicationProducerHuman,
+		"human-reason-": domain.AdjudicationProducerHuman,
+	}
 	for _, form := range []string{ExternalReviewThreadID(42), ExternalReviewCommentThreadID(43)} {
 		for prefix, producer := range producers {
 			for _, disposition := range []domain.ReviewDisposition{domain.ReviewDispositionDeclined, domain.ReviewDispositionDeferred, domain.ReviewDispositionFixed} {
@@ -28,8 +33,8 @@ func TestExternalReviewReplyTextGolden(t *testing.T) {
 				var entry *domain.FindingAdjudicationEntry
 				if disposition != domain.ReviewDispositionFixed {
 					entry = &domain.FindingAdjudicationEntry{FindingID: d.FindingID, Producer: producer, Rationale: rationale}
-					if producer == domain.AdjudicationProducerHuman {
-						entry.Rationale = "Human decision recorded."
+					if prefix == "human-" {
+						entry.Rationale = domain.HumanAdjudicationRationale
 					}
 				}
 				binding := domain.ReadyItemPRBinding{Repo: "owner/repo", PRNumber: 7, HeadSHA: strings.Repeat("a", 40)}
@@ -55,9 +60,11 @@ func TestExternalReviewReplyTextRefusesUnsafeReasonsAndThreads(t *testing.T) {
 			t.Errorf("screen must refuse without echoing reason: %v", err)
 		}
 	}
-	entry := &domain.FindingAdjudicationEntry{FindingID: "finding-1", Producer: domain.AdjudicationProducerModel, Rationale: "@codex review"}
-	if _, err := externalReviewReplyText(domain.ExternalFindingDisposition{FindingID: "finding-1", Disposition: domain.ReviewDispositionDeclined, Reason: "Already checked."}, entry, externalReplyThread{root: 42}, domain.ReadyItemPRBinding{}, domain.IssueTextRulesetGitHubIssue1); err == nil {
-		t.Error("screen must refuse an unsafe printed rationale")
+	for _, producer := range []domain.AdjudicationProducer{domain.AdjudicationProducerModel, domain.AdjudicationProducerHuman} {
+		entry := &domain.FindingAdjudicationEntry{FindingID: "finding-1", Producer: producer, Rationale: "@codex review"}
+		if _, err := externalReviewReplyText(domain.ExternalFindingDisposition{FindingID: "finding-1", Disposition: domain.ReviewDispositionDeclined, Reason: "Already checked."}, entry, externalReplyThread{root: 42}, domain.ReadyItemPRBinding{}, domain.IssueTextRulesetGitHubIssue1); err == nil {
+			t.Errorf("screen must refuse an unsafe printed %s rationale", producer)
+		}
 	}
 	for name, entry := range map[string]*domain.FindingAdjudicationEntry{
 		"no entry":    nil,

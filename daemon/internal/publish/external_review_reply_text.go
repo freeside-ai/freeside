@@ -72,17 +72,25 @@ func externalReviewReplyText(d domain.ExternalFindingDisposition, entry *domain.
 }
 
 // adjudicatedReplyText words a declined or deferred outcome from the entry
-// that decided it. A person's decision names a maintainer and prints no
-// reason: the person gave none, so the entry's rationale is a placeholder.
-// Any other producer's rationale is printed alone, without the internal
-// adjudication digest the disposition's Reason appends, and is screened
-// because it is the text the reply posts.
+// that decided it. A person's decision names a maintainer and prints the
+// reason the person gave (#2352); a decision made before a reason could be
+// given carries a placeholder rationale, so its reply prints no reason. Any
+// other producer's rationale is printed alone, without the internal
+// adjudication digest the disposition's Reason appends. Every printed reason
+// is screened because it is the text the reply posts.
 func adjudicatedReplyText(verb string, id domain.FindingID, entry *domain.FindingAdjudicationEntry, ruleset domain.IssueTextRuleset) (string, error) {
 	if entry == nil || entry.FindingID != id {
 		return "", errors.New("review reply: adjudication entry missing")
 	}
 	if entry.Producer == domain.AdjudicationProducerHuman {
-		return "A maintainer " + verb + " this finding.\n", nil
+		reason := entry.HumanReason()
+		if reason == "" {
+			return "A maintainer " + verb + " this finding.\n", nil
+		}
+		if err := publicationtext.ScreenIssueBody(ruleset, reason, externalReplyReasonLimit); err != nil {
+			return "", err
+		}
+		return "A maintainer " + verb + " this finding.\n\nReason: " + reason + "\n", nil
 	}
 	reason := strings.TrimSpace(entry.Rationale)
 	if err := publicationtext.ScreenIssueBody(ruleset, reason, externalReplyReasonLimit); err != nil {

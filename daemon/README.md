@@ -2756,7 +2756,14 @@ is admitted by the repository's active trust profile. Inline findings receive
 a reply in their original thread. Findings on a review body receive a pull
 request conversation comment linking that review.
 
-Declined and deferred replies include the screened reason. Fixed replies wait
+Declined and deferred replies include the screened reason: the adjudicator's
+rationale, or on a human decision the reason the operator gave with the route.
+The decision command requires that reason on every decline or defer of an
+external finding and refuses one on any other choice. It also refuses a
+reason the reply's screen would refuse, such as one with a mention, so an
+accepted reason is one that posts. The daemon stores it trimmed, at most 2048
+bytes. A human decision recorded before the reason existed replies without
+one. Fixed replies wait
 until a head reviewed in the remediation round or later has been published.
 They name the published commit and say that Freeside has not proven the finding
 fixed. The fake driver posts no replies.
