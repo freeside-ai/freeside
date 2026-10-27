@@ -325,7 +325,7 @@ is the authority for the settings, and it changes. The pre-spend record's
 | Input | Where it lives | What refuses it |
 | --- | --- | --- |
 | Settings, every key | `<root>/daemon/settings.json`, mode `0600`: prompt packages from the approved default-branch commit, the approved recipe digest | The deputy, before it takes the lease: a missing, unknown, or repeated key (`requireEveryKey`, `daemon/cmd/freesided/deputy_settings.go`), a relative path, an invalid prompt package. A stale package passes every check; only the person preparing the run catches it (run-70 lost its publication to one). |
-| Project | `submit -project`: the settings' `repository.project` | `freesided submit`, which requires it; composition preflight refuses a project the launch does not admit |
+| Project | `submit -project`: the settings' `repository.project`, the managed repository's name with no run suffix | `freesided submit`, which requires it; composition preflight refuses a project the launch does not admit |
 | Specification | `submit -task`: a file holding exactly the target's bare canonical issue URL, or a specification file | `freesided submit`, which requires it |
 | Policy | `submit -policy`: the resolved policy keys, including `gates.spec_approval` and `gates.source_issue_closure` | `freesided submit`, which validates the keys and the specification policy (`specify.ParsePolicy`, `daemon/internal/specify/policy.go`) |
 | Publication | `submit -publication`: for a bare-URL target, the client record with `source_issue` set to that same URL ([The Publication File And Work-Unit Declaration](#the-publication-file-and-work-unit-declaration)) | Composition preflight and `freesided submit` (`submittedSourceReference`, `daemon/cmd/freesided/submit.go`) |
