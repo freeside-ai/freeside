@@ -2334,15 +2334,16 @@ the manifests at the repository root or in one module directory the project
 image names. Node, keyed by `package.json` and `package-lock.json` at the
 root: a pinned Node distribution and the `npm ci` closure, as built today. Go,
 keyed by the named module's `go.mod`: a pinned Go distribution, the module
-cache that its `go.sum` pins, and the lint binary the recipe runs, pinned by
-the Go unit (`scripts/check.sh` defaults to an unversioned `golangci-lint`;
-only CI pins its version today). Freeside has no root `go.mod`; its image
-names `daemon/`, so `bash scripts/check.sh daemon` runs with networking
-disabled. Each pinned distribution and binary is part of the builder's fixed
-toolchain digest below. The Go
-path is its own unit (#2115, `kind:contract` because the image record gains
-the Go manifest hashes) and is needed before Freeside is onboarded (Section
-[11](#11-roadmap-build-order-and-coordination)).
+cache that its `go.sum` pins, and the pinned binaries the recipe runs:
+golangci-lint, plus vacuum, shellcheck, Python, and procps for Freeside's
+`api/` and `scripts/` checks (#2376). Freeside has no root `go.mod`; its
+image names `daemon/`, so `bash scripts/check.sh` runs its `daemon`, `docs`,
+and `api` checks, and every `scripts` step but `vocabulary`, which needs a
+`.git` the room lacks (#2399), with networking disabled. Each pinned
+distribution and binary is part of the builder's fixed toolchain digest
+below. The Go path is its own unit (#2115, `kind:contract` because the
+image record gains the Go manifest hashes) and is needed before Freeside is
+onboarded (Section [11](#11-roadmap-build-order-and-coordination)).
 
 The declared verification recipe runs verbatim with networking disabled. The
 builder proves both that this clean run passes and that the baked dependency
@@ -6530,7 +6531,8 @@ Section [5.7](#57-the-ward-runners-handoff-gate-and-operating-modes)).
 Onboarding needs the Go toolchain path in Section
 [5.7](#57-the-ward-runners-handoff-gate-and-operating-modes) (#2115), and the
 image's baked recipe must verify every onboarded path networkless under the
-criteria above; so far it covers only `daemon/`.
+criteria above; it covers `daemon/`, `docs/`, `api/`, and `scripts/`, except
+the `scripts` vocabulary step, which needs `.git` (#2399).
 
 **macOS execution: Linux-first cores and a credential-free verifier (revision
 96).** The class revision 92 left open is decided in Section [5.7](#57-the-ward-runners-handoff-gate-and-operating-modes), macOS
