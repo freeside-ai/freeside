@@ -1234,8 +1234,8 @@ components:
       description: >
         Store-authenticated, digest-bound effect-proposal facts matched to one
         exact attention-item snapshot before the client enables a decision.
-        Exactly one kind member (source_issue_closure or follow_up_filing) is
-        non-null, the one effect_kind names. The opaque subject handle and
+        Exactly one kind member (source_issue_closure, follow_up_filing, or
+        image_policy_adoption) is non-null, the one effect_kind names. The opaque subject handle and
         policy identities stay server-side, as they do for task_proposal.
       additionalProperties: false
       required:
@@ -1247,6 +1247,7 @@ components:
         - supersedes
         - source_issue_closure
         - follow_up_filing
+        - image_policy_adoption
       properties:
         as_of_revision:
           $ref: "#/components/schemas/AsOfRevision"
@@ -1281,6 +1282,44 @@ components:
           description: >
             The filing facts for a follow_up_filing effect; null for any other
             effect kind.
+        image_policy_adoption:
+          nullable: true
+          allOf:
+            - $ref: "#/components/schemas/ImagePolicyAdoptionFacts"
+          description: >
+            The adoption facts for an image_policy_adoption effect; null for
+            any other effect kind. The daemon serves no adoption card yet
+            (#2335 raises it), so this is null today.
+
+    ImagePolicyAdoptionFacts:
+      type: object
+      description: >
+        The policy change an adoption card proposes to answer one policy-class
+        project-image upkeep refusal (plan §5.7, Project-image upkeep): the
+        refusal record it answers and the recipe digest to approve, the
+        registry authorities to add, or both. Approving the card opens a
+        project-policy proposal; merging that proposal is the adoption.
+        Mirrors domain.ImagePolicyAdoptionParameters.
+      additionalProperties: false
+      required: [refusal_record_id, recipe_digest, registry_authorities]
+      properties:
+        refusal_record_id:
+          $ref: "#/components/schemas/Digest"
+        recipe_digest:
+          nullable: true
+          allOf:
+            - $ref: "#/components/schemas/Digest"
+          description: The recipe digest to approve; null when the recipe did not change.
+        registry_authorities:
+          type: array
+          maxItems: 32
+          description: >
+            Registry host names to add to the project's registry set, strictly
+            ascending; empty when only the recipe changed.
+          items:
+            type: string
+            minLength: 1
+            maxLength: 253
 
     EffectProposalRevisionFacts:
       type: object
@@ -1525,9 +1564,11 @@ components:
         the task-proposal encoding; source_issue_closure proposes closing the
         source issue a work unit's pull request resolves (plan §5.13);
         follow_up_filing proposes filing a follow-up issue for a deferred
-        finding or a separate-work verdict (plan §5.17). Matches
+        finding or a separate-work verdict (plan §5.17);
+        image_policy_adoption proposes adopting the recipe digest or registry
+        authorities a project-image upkeep refusal names (plan §5.7). Matches
         domain.AllEffectKinds.
-      enum: [run_proposal, source_issue_closure, follow_up_filing]
+      enum: [run_proposal, source_issue_closure, follow_up_filing, image_policy_adoption]
 
     IssueTextRuleset:
       type: string

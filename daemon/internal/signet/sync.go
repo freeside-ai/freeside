@@ -92,6 +92,10 @@ type EffectProposalFactsSnapshot struct {
 	Supersedes         *EffectProposalRevisionFacts `json:"supersedes"`
 	SourceIssueClosure *SourceIssueClosureFacts     `json:"source_issue_closure"`
 	FollowUpFiling     *FollowUpFilingFacts         `json:"follow_up_filing"`
+	// ImagePolicyAdoption carries an adoption card's parameters, which hold
+	// no opaque handle or policy identity. It is always null until #2335
+	// raises the card.
+	ImagePolicyAdoption *domain.ImagePolicyAdoptionParameters `json:"image_policy_adoption"`
 }
 
 // FollowUpFilingFacts carries the bounded filing facts: the daemon-derived
@@ -666,6 +670,10 @@ func (s *Service) GetEffectProposalFacts(ctx context.Context, id domain.ItemID) 
 			out.FollowUpFiling, err = followUpFilingFacts(project, proposal, superseded, merge)
 			return err
 		case domain.EffectTaskProposal:
+		case domain.EffectImagePolicyAdoption:
+			// The store refuses to resolve an adoption card's subject until
+			// #2335 raises one, so no item reaches this arm; the facts read
+			// is #2335's.
 		}
 		return ErrInvalidSyncSnapshot
 	})

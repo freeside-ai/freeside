@@ -633,6 +633,7 @@ public final class DecisionModel {
             // and the submitted binding the same head, so the card can never
             // show one head and approve another.
             return facts.follow_up_filing == nil
+                && facts.image_policy_adoption == nil
                 && facts.source_issue_closure?.value1.merge.candidate_head_sha
                     == snapshot.item.pr_head_sha
         case .follow_up_filing:
@@ -644,11 +645,16 @@ public final class DecisionModel {
             // may approve.
             guard let filing = facts.follow_up_filing?.value1 else { return false }
             return facts.source_issue_closure == nil
+                && facts.image_policy_adoption == nil
                 && facts.supersedes == nil
                 && filing.title.verdict == .passed
                 && filing.body.verdict == .passed
         case .run_proposal:
             // The task-proposal card and its own facts read carry this kind.
+            return false
+        case .image_policy_adoption:
+            // The daemon serves no adoption card until #2335, which decides
+            // its approval rule; until then nothing here may approve one.
             return false
         }
     }

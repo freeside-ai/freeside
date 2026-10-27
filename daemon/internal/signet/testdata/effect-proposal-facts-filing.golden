@@ -31,5 +31,6 @@
       "adjudication_digest": "sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
       "kind": "deferred_disposition"
     }
-  }
+  },
+  "image_policy_adoption": null
 }

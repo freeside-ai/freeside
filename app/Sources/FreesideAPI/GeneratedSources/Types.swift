@@ -1334,7 +1334,7 @@ public enum Components {
                 ])
             }
         }
-        /// Store-authenticated, digest-bound effect-proposal facts matched to one exact attention-item snapshot before the client enables a decision. Exactly one kind member (source_issue_closure or follow_up_filing) is non-null, the one effect_kind names. The opaque subject handle and policy identities stay server-side, as they do for task_proposal.
+        /// Store-authenticated, digest-bound effect-proposal facts matched to one exact attention-item snapshot before the client enables a decision. Exactly one kind member (source_issue_closure, follow_up_filing, or image_policy_adoption) is non-null, the one effect_kind names. The opaque subject handle and policy identities stay server-side, as they do for task_proposal.
         ///
         ///
         /// - Remark: Generated from `#/components/schemas/EffectProposalFactsSnapshot`.
@@ -1427,6 +1427,32 @@ public enum Components {
             ///
             /// - Remark: Generated from `#/components/schemas/EffectProposalFactsSnapshot/follow_up_filing`.
             public var follow_up_filing: Components.Schemas.EffectProposalFactsSnapshot.follow_up_filingPayload?
+            /// The adoption facts for an image_policy_adoption effect; null for any other effect kind. The daemon serves no adoption card yet (#2335 raises it), so this is null today.
+            ///
+            ///
+            /// - Remark: Generated from `#/components/schemas/EffectProposalFactsSnapshot/image_policy_adoption`.
+            public struct image_policy_adoptionPayload: Codable, Hashable, Sendable {
+                /// - Remark: Generated from `#/components/schemas/EffectProposalFactsSnapshot/image_policy_adoption/value1`.
+                public var value1: Components.Schemas.ImagePolicyAdoptionFacts
+                /// Creates a new `image_policy_adoptionPayload`.
+                ///
+                /// - Parameters:
+                ///   - value1:
+                public init(value1: Components.Schemas.ImagePolicyAdoptionFacts) {
+                    self.value1 = value1
+                }
+                public init(from decoder: any Swift.Decoder) throws {
+                    self.value1 = try .init(from: decoder)
+                }
+                public func encode(to encoder: any Swift.Encoder) throws {
+                    try self.value1.encode(to: encoder)
+                }
+            }
+            /// The adoption facts for an image_policy_adoption effect; null for any other effect kind. The daemon serves no adoption card yet (#2335 raises it), so this is null today.
+            ///
+            ///
+            /// - Remark: Generated from `#/components/schemas/EffectProposalFactsSnapshot/image_policy_adoption`.
+            public var image_policy_adoption: Components.Schemas.EffectProposalFactsSnapshot.image_policy_adoptionPayload?
             /// Creates a new `EffectProposalFactsSnapshot`.
             ///
             /// - Parameters:
@@ -1438,6 +1464,7 @@ public enum Components {
             ///   - supersedes: The exact authenticated prior facts for a revised card; null for the initially admitted proposal, and always null for a follow_up_filing effect, which admits no revision.
             ///   - source_issue_closure: The closure facts for a source_issue_closure effect; null for any other effect kind.
             ///   - follow_up_filing: The filing facts for a follow_up_filing effect; null for any other effect kind.
+            ///   - image_policy_adoption: The adoption facts for an image_policy_adoption effect; null for any other effect kind. The daemon serves no adoption card yet (#2335 raises it), so this is null today.
             public init(
                 as_of_revision: Components.Schemas.AsOfRevision,
                 entity_version: Components.Schemas.EntityVersion,
@@ -1446,7 +1473,8 @@ public enum Components {
                 effect_kind: Components.Schemas.EffectKind,
                 supersedes: Components.Schemas.EffectProposalFactsSnapshot.supersedesPayload? = nil,
                 source_issue_closure: Components.Schemas.EffectProposalFactsSnapshot.source_issue_closurePayload? = nil,
-                follow_up_filing: Components.Schemas.EffectProposalFactsSnapshot.follow_up_filingPayload? = nil
+                follow_up_filing: Components.Schemas.EffectProposalFactsSnapshot.follow_up_filingPayload? = nil,
+                image_policy_adoption: Components.Schemas.EffectProposalFactsSnapshot.image_policy_adoptionPayload? = nil
             ) {
                 self.as_of_revision = as_of_revision
                 self.entity_version = entity_version
@@ -1456,6 +1484,7 @@ public enum Components {
                 self.supersedes = supersedes
                 self.source_issue_closure = source_issue_closure
                 self.follow_up_filing = follow_up_filing
+                self.image_policy_adoption = image_policy_adoption
             }
             public enum CodingKeys: String, CodingKey {
                 case as_of_revision
@@ -1466,6 +1495,7 @@ public enum Components {
                 case supersedes
                 case source_issue_closure
                 case follow_up_filing
+                case image_policy_adoption
             }
             public init(from decoder: any Swift.Decoder) throws {
                 let container = try decoder.container(keyedBy: CodingKeys.self)
@@ -1501,6 +1531,10 @@ public enum Components {
                     Components.Schemas.EffectProposalFactsSnapshot.follow_up_filingPayload.self,
                     forKey: .follow_up_filing
                 )
+                self.image_policy_adoption = try container.decodeIfPresent(
+                    Components.Schemas.EffectProposalFactsSnapshot.image_policy_adoptionPayload.self,
+                    forKey: .image_policy_adoption
+                )
                 try decoder.ensureNoAdditionalProperties(knownKeys: [
                     "as_of_revision",
                     "entity_version",
@@ -1509,7 +1543,85 @@ public enum Components {
                     "effect_kind",
                     "supersedes",
                     "source_issue_closure",
-                    "follow_up_filing"
+                    "follow_up_filing",
+                    "image_policy_adoption"
+                ])
+            }
+        }
+        /// The policy change an adoption card proposes to answer one policy-class project-image upkeep refusal (plan §5.7, Project-image upkeep): the refusal record it answers and the recipe digest to approve, the registry authorities to add, or both. Approving the card opens a project-policy proposal; merging that proposal is the adoption. Mirrors domain.ImagePolicyAdoptionParameters.
+        ///
+        ///
+        /// - Remark: Generated from `#/components/schemas/ImagePolicyAdoptionFacts`.
+        public struct ImagePolicyAdoptionFacts: Codable, Hashable, Sendable {
+            /// - Remark: Generated from `#/components/schemas/ImagePolicyAdoptionFacts/refusal_record_id`.
+            public var refusal_record_id: Components.Schemas.Digest
+            /// The recipe digest to approve; null when the recipe did not change.
+            ///
+            /// - Remark: Generated from `#/components/schemas/ImagePolicyAdoptionFacts/recipe_digest`.
+            public struct recipe_digestPayload: Codable, Hashable, Sendable {
+                /// - Remark: Generated from `#/components/schemas/ImagePolicyAdoptionFacts/recipe_digest/value1`.
+                public var value1: Components.Schemas.Digest
+                /// Creates a new `recipe_digestPayload`.
+                ///
+                /// - Parameters:
+                ///   - value1:
+                public init(value1: Components.Schemas.Digest) {
+                    self.value1 = value1
+                }
+                public init(from decoder: any Swift.Decoder) throws {
+                    self.value1 = try decoder.decodeFromSingleValueContainer()
+                }
+                public func encode(to encoder: any Swift.Encoder) throws {
+                    try encoder.encodeToSingleValueContainer(self.value1)
+                }
+            }
+            /// The recipe digest to approve; null when the recipe did not change.
+            ///
+            /// - Remark: Generated from `#/components/schemas/ImagePolicyAdoptionFacts/recipe_digest`.
+            public var recipe_digest: Components.Schemas.ImagePolicyAdoptionFacts.recipe_digestPayload?
+            /// Registry host names to add to the project's registry set, strictly ascending; empty when only the recipe changed.
+            ///
+            ///
+            /// - Remark: Generated from `#/components/schemas/ImagePolicyAdoptionFacts/registry_authorities`.
+            public var registry_authorities: [Swift.String]
+            /// Creates a new `ImagePolicyAdoptionFacts`.
+            ///
+            /// - Parameters:
+            ///   - refusal_record_id:
+            ///   - recipe_digest: The recipe digest to approve; null when the recipe did not change.
+            ///   - registry_authorities: Registry host names to add to the project's registry set, strictly ascending; empty when only the recipe changed.
+            public init(
+                refusal_record_id: Components.Schemas.Digest,
+                recipe_digest: Components.Schemas.ImagePolicyAdoptionFacts.recipe_digestPayload? = nil,
+                registry_authorities: [Swift.String]
+            ) {
+                self.refusal_record_id = refusal_record_id
+                self.recipe_digest = recipe_digest
+                self.registry_authorities = registry_authorities
+            }
+            public enum CodingKeys: String, CodingKey {
+                case refusal_record_id
+                case recipe_digest
+                case registry_authorities
+            }
+            public init(from decoder: any Swift.Decoder) throws {
+                let container = try decoder.container(keyedBy: CodingKeys.self)
+                self.refusal_record_id = try container.decode(
+                    Components.Schemas.Digest.self,
+                    forKey: .refusal_record_id
+                )
+                self.recipe_digest = try container.decodeIfPresent(
+                    Components.Schemas.ImagePolicyAdoptionFacts.recipe_digestPayload.self,
+                    forKey: .recipe_digest
+                )
+                self.registry_authorities = try container.decode(
+                    [Swift.String].self,
+                    forKey: .registry_authorities
+                )
+                try decoder.ensureNoAdditionalProperties(knownKeys: [
+                    "refusal_record_id",
+                    "recipe_digest",
+                    "registry_authorities"
                 ])
             }
         }
@@ -2172,7 +2284,7 @@ public enum Components {
         @frozen public enum TaskProposalIntent: String, Codable, Hashable, Sendable, CaseIterable {
             case implement_subject = "implement_subject"
         }
-        /// The effect-registry member an effect_proposal renders. run_proposal is the task-proposal encoding; source_issue_closure proposes closing the source issue a work unit's pull request resolves (plan §5.13); follow_up_filing proposes filing a follow-up issue for a deferred finding or a separate-work verdict (plan §5.17). Matches domain.AllEffectKinds.
+        /// The effect-registry member an effect_proposal renders. run_proposal is the task-proposal encoding; source_issue_closure proposes closing the source issue a work unit's pull request resolves (plan §5.13); follow_up_filing proposes filing a follow-up issue for a deferred finding or a separate-work verdict (plan §5.17); image_policy_adoption proposes adopting the recipe digest or registry authorities a project-image upkeep refusal names (plan §5.7). Matches domain.AllEffectKinds.
         ///
         ///
         /// - Remark: Generated from `#/components/schemas/EffectKind`.
@@ -2180,6 +2292,7 @@ public enum Components {
             case run_proposal = "run_proposal"
             case source_issue_closure = "source_issue_closure"
             case follow_up_filing = "follow_up_filing"
+            case image_policy_adoption = "image_policy_adoption"
         }
         /// The versioned ruleset an issue text field was screened under. Matches domain.AllIssueTextRulesets.
         ///
