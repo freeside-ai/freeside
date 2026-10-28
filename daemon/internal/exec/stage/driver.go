@@ -23,8 +23,9 @@ import (
 	"github.com/freeside-ai/freeside/daemon/internal/ward"
 )
 
-// Config is the driver's composition. Every field is required: a nil port
-// would turn a containment or durability guarantee into a silent no-op.
+// Config is the driver's composition. Ports are required unless documented
+// otherwise: a nil required port would silently drop a containment or
+// durability guarantee.
 type Config struct {
 	// ErrorPrefix preserves provider-specific error text at this shared boundary.
 	ErrorPrefix string
@@ -69,6 +70,13 @@ type Config struct {
 	// invocation (ward.HandoffSpec.Stall). It is advisory: it never changes
 	// the handoff's result, the writer's budget, or the journaled spec.
 	Stall func(ctx context.Context, id domain.InvocationID, stalled bool) error
+	// AdoptedRegistryHosts, when set, returns the registry hosts the
+	// repository's approved image-policy adoption cards added. A
+	// provider_registry start reads it once and records the effective set
+	// (declared plus adopted) in its intent; every later handoff rebuild
+	// reuses that record and reads the hook again only to re-gate the
+	// recorded hosts beyond the declared set. Nil means declared hosts only.
+	AdoptedRegistryHosts func(ctx context.Context, repositoryID int64) ([]string, error)
 	// Import carries the gauntlet policy the candidate is imported under:
 	// the declared path allowlist. Authority widens it with the exact
 	// admitted trust profile before every import.
@@ -135,6 +143,7 @@ type Driver struct {
 	credentialMount   CredentialMountPolicy
 	preJob            func(context.Context, domain.InvocationID) error
 	stall             func(context.Context, domain.InvocationID, bool) error
+	adoptedHosts      func(context.Context, int64) ([]string, error)
 	imports           importer.Options
 	prepare           []string
 	now               func() time.Time
@@ -342,17 +351,103 @@ func (d *Driver) handoffSpec(ctx context.Context, in intent) (ward.HandoffSpec, 
 		return ward.HandoffSpec{}, fmt.Errorf("%w: %w", ErrUnsupportedStart, err)
 	}
 	hs.Class, hs.Size = ward.LaunchWriter, sizes.Writer
-	// The registry set is the run's durable policy too, read strictly: the
-	// profile was admitted against this policy, and a set that is missing or
-	// malformed here refuses the start instead of narrowing to provider_only.
 	if providerInput.Spec.EgressProfile == domain.EgressProviderRegistry {
-		set, err := domain.DeclaredRegistrySet(domain.ResolvedPolicy{Keys: keys})
+		hosts, err := d.handoffRegistryHosts(ctx, in, keys)
 		if err != nil {
-			return ward.HandoffSpec{}, fmt.Errorf("%w: %w", ErrUnsupportedStart, err)
+			return ward.HandoffSpec{}, err
 		}
-		hs.RegistryHosts = set.Hosts
+		hs.RegistryHosts = hosts
 	}
 	return hs, nil
+}
+
+// handoffRegistryHosts returns the registry set a provider_registry handoff
+// carries. The declared set comes from the run's durable policy, read
+// strictly: the profile was admitted against this policy, and a set that is
+// missing or malformed refuses the start instead of narrowing to
+// provider_only. An intent written before adopted hosts existed records no
+// set and carries the declared one.
+//
+// Otherwise the handoff carries the set recorded at start, never a live read:
+// ward binds RegistryHosts into the journaled spec digest, so a host adopted
+// mid-run must not change a recovery's rebuild. The record is decoded from
+// the state file, so it is re-gated here: it must hold every declared host,
+// and every other host must be adopted for the run's repository now.
+// Adoptions are append-only, so a record written at start always passes. A
+// failed read of the adoptions is not a refusal, so recovery stays
+// retryable.
+func (d *Driver) handoffRegistryHosts(
+	ctx context.Context, in intent, keys []domain.PolicyKey,
+) ([]string, error) {
+	declared, err := domain.DeclaredRegistrySet(domain.ResolvedPolicy{Keys: keys})
+	if err != nil {
+		return nil, fmt.Errorf("%w: %w", ErrUnsupportedStart, err)
+	}
+	if len(in.RegistryHosts) == 0 {
+		return declared.Hosts, nil
+	}
+	for _, host := range declared.Hosts {
+		if !slices.Contains(in.RegistryHosts, host) {
+			return nil, fmt.Errorf(
+				"%w: recorded registry set omits declared host %q",
+				ErrUnsupportedStart, host)
+		}
+	}
+	extra := slices.DeleteFunc(slices.Clone(in.RegistryHosts), func(host string) bool {
+		return slices.Contains(declared.Hosts, host)
+	})
+	if len(extra) > 0 {
+		if d.adoptedHosts == nil {
+			return nil, fmt.Errorf(
+				"%w: recorded registry set holds hosts beyond the declared set and no adoption source is configured",
+				ErrUnsupportedStart)
+		}
+		adopted, err := d.adoptedHosts(ctx, in.Spec.Base.RepositoryID)
+		if err != nil {
+			return nil, fmt.Errorf("read adopted registry hosts: %w", err)
+		}
+		for _, host := range extra {
+			if !slices.Contains(adopted, host) {
+				return nil, fmt.Errorf(
+					"%w: recorded registry host %q is neither declared nor adopted for repository %d",
+					ErrUnsupportedStart, host, in.Spec.Base.RepositoryID)
+			}
+		}
+	}
+	return slices.Clone(in.RegistryHosts), nil
+}
+
+// startRegistryHosts reads the registry set a provider_registry start
+// records: the declared hosts plus the hosts adopted for the run's
+// repository now, in canonical order. A failed read of the adoptions stays
+// retryable; an unsupported set commits a failed outcome like prompt refusal.
+func (d *Driver) startRegistryHosts(ctx context.Context, spec exec.StartSpec, policy []byte) ([]string, error) {
+	if spec.EgressProfile != domain.EgressProviderRegistry {
+		return nil, nil
+	}
+	var keys []domain.PolicyKey
+	if err := json.Unmarshal(policy, &keys); err != nil {
+		return nil, fmt.Errorf("%w: decode durable policy: %w", ErrUnsupportedStart, err)
+	}
+	resolved := domain.ResolvedPolicy{Keys: keys}
+	// An adopted host widens a registry opt-in the operator already made; it
+	// never turns registry egress on, so the declared set stays required.
+	if _, err := domain.DeclaredRegistrySet(resolved); err != nil {
+		return nil, fmt.Errorf("%w: %w", ErrUnsupportedStart, err)
+	}
+	var adopted []string
+	if d.adoptedHosts != nil {
+		var err error
+		adopted, err = d.adoptedHosts(ctx, spec.Base.RepositoryID)
+		if err != nil {
+			return nil, fmt.Errorf("read adopted registry hosts: %w", err)
+		}
+	}
+	set, _, err := domain.EffectiveRegistrySet(resolved, adopted)
+	if err != nil {
+		return nil, fmt.Errorf("%w: %w", ErrUnsupportedStart, err)
+	}
+	return set.Hosts, nil
 }
 
 func detachProviderHandoffSpec(hs ward.HandoffSpec) ward.HandoffSpec {
@@ -453,6 +548,7 @@ func New(cfg Config) (*Driver, error) {
 		credentialMount: cfg.CredentialMount,
 		preJob:          cfg.PreJob,
 		stall:           cfg.Stall,
+		adoptedHosts:    cfg.AdoptedRegistryHosts,
 		imports:         cfg.Import, prepare: slices.Clone(cfg.Preparation),
 		now: cfg.Now, lifetime: cfg.Lifetime,
 		logger: pipelineLogger(
@@ -543,6 +639,7 @@ func (d *Driver) StartWithInputs(
 	promptInputs := providerPromptInputsFrom(materialized)
 	promptInputs.Delivery = delivery
 	prompt, err := d.provider.RenderPrompt(promptInputs)
+	promptErr := err
 
 	// Capture the composition-derived hydration argv into the durable record
 	// so recovery rebuilds the launch command from the intent, not from a
@@ -565,6 +662,13 @@ func (d *Driver) StartWithInputs(
 		Preparation: preparation,
 		RecordedAt:  now, CommitDate: now,
 	}
+	if err == nil {
+		// Authenticate the repository before reading its adopted hosts.
+		if err := d.regate(ctx, in, true); err != nil {
+			return err
+		}
+		in.RegistryHosts, err = d.startRegistryHosts(ctx, spec, materialized.Policy)
+	}
 	if err != nil {
 		if !errors.Is(err, ErrUnsupportedStart) {
 			return err
@@ -574,16 +678,18 @@ func (d *Driver) StartWithInputs(
 			InvocationID: id, Status: exec.StatusFailed,
 			Summary: truncateSummary(err.Error()),
 		}
-		if err := d.regate(ctx, in, true); err != nil {
-			return err
+		if promptErr != nil {
+			// Prompt refusals have their own reconstruction gate. Registry
+			// refusals already authenticated the seeding intent above; their
+			// terminal gate requires the outcome we are about to record.
+			if err := d.regate(ctx, in, true); err != nil {
+				return err
+			}
 		}
 		if err := d.recordOutcome(ctx, in, *in.Result); err != nil {
 			return err
 		}
 		return d.saveIntent(in)
-	}
-	if err := d.regate(ctx, in, true); err != nil {
-		return err
 	}
 	// The handoff spec is built and rejected before the intent is durable:
 	// a refusal must leave no record claiming an invocation this driver
