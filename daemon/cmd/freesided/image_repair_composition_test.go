@@ -120,7 +120,7 @@ func TestImageUpkeepSubmitsMaintenanceOnlyWithImageSelection(t *testing.T) {
 	cfg := config{Claude: &claudeDriverConfig{SeedRoot: t.TempDir(), Repo: "owner/repo", RepositoryID: 7}}
 	for name, selection := range map[string]engine.ImageSelection{
 		"attended": nil,
-		"unattended": func(context.Context, domain.InvocationID) (domain.ImageRef, error) {
+		"unattended": func(context.Context, domain.InvocationID, *domain.ImageUpkeepRefusal) (domain.ImageRef, error) {
 			return "", nil
 		},
 	} {

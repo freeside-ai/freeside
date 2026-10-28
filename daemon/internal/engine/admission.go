@@ -265,7 +265,10 @@ func WithAdmission(backend exec.RunnerBackend, floor []exec.Capability, env Admi
 // once more than one run flows through a daemon (each handoff owns its
 // workspace volume, and the trusted base tip moves between submissions), and
 // the composition, not the engine, knows the ward's workspace naming scheme
-// and how the operator resolves a base (#237).
+// and how the operator resolves a base (#237). The engine replaces the
+// derived base commit for a maintenance task alone: it runs at its refusal's
+// tip, read from the immutable refusal record, so every attempt derives the
+// same base without the Run carrying one (repairTaskRefusal).
 type AdmissionDerivation func(ctx context.Context, invocationID domain.InvocationID) (workspace string, base domain.BaseRevision, err error)
 
 // WithAdmissionDerivation configures per-attempt workspace and base
@@ -286,7 +289,14 @@ func WithAdmissionDerivation(derive AdmissionDerivation) Option {
 // the image, or an error that holds the attempt: an ImageUpkeepPendingError
 // while upkeep may still make an image serve the base, or
 // ErrProjectImageUnserved when nothing pending would.
-type ImageSelection func(ctx context.Context, invocationID domain.InvocationID) (domain.ImageRef, error)
+//
+// repair is the refusal a maintenance task's run repairs, nil for every
+// other run. A repair run takes the image the refusal was measured from
+// while the admitted-image pointer still names it, instead of an image that
+// serves the daemon's base, and holds as unserved once the pointer moves.
+type ImageSelection func(
+	ctx context.Context, invocationID domain.InvocationID, repair *domain.ImageUpkeepRefusal,
+) (domain.ImageRef, error)
 
 // WithAdmissionImageSelection makes every admission name the image
 // selection returns instead of the environment's static ImageRef.
@@ -381,9 +391,18 @@ func (e *Engine) admitAttempt(
 	env := e.admission.environment
 	// The image is decided before the capability gate, so an attempt waiting
 	// on upkeep, or on a proof of its image, holds under that cause rather
-	// than under the capabilities a repoint cleared.
+	// than under the capabilities a repoint cleared. A maintenance task's
+	// exception applies only where images are selected per attempt: with a
+	// static image there is no pointer for its refusal to name.
+	var repair *domain.ImageUpkeepRefusal
 	if e.selectImage != nil {
-		image, err := e.selectImage(ctx, invocationID)
+		var err error
+		repair, err = readRepairTaskRefusal(ctx, e.store, binding.run)
+		if err != nil {
+			return domain.ExecutionAdmission{}, false, fmt.Errorf(
+				"admit invocation %q: read repair refusal: %w", invocationID, err)
+		}
+		image, err := e.selectImage(ctx, invocationID, repair)
 		if err != nil {
 			return domain.ExecutionAdmission{}, false, fmt.Errorf(
 				"admit invocation %q: select image: %w", invocationID, err)
@@ -421,6 +440,20 @@ func (e *Engine) admitAttempt(
 				"admit invocation %q: derive environment: %w", invocationID, err)
 		}
 		env.Workspace, env.Base = workspace, base
+	}
+	// A maintenance task runs at its refusal's tip and starts without
+	// hydration: the image's baked manifests disagree with that tip's, so the
+	// hydration helper would fail the attempt before the agent starts.
+	var hydration domain.WorkspaceHydration
+	if repair != nil {
+		if env.Base.RepositoryID != repair.RepositoryID {
+			return domain.ExecutionAdmission{}, false, fmt.Errorf(
+				"admit invocation %q: base repository %d, repair refusal %s names %d: %w",
+				invocationID, env.Base.RepositoryID, repair.ID, repair.RepositoryID,
+				domain.ErrRepositoryIdentityMismatch)
+		}
+		env.Base.BaseSHA = repair.TipSHA
+		hydration = domain.WorkspaceHydrationNone
 	}
 	promptPackageDigest := e.admission.environment.PromptPackageDigest
 	isSpecification := stage.ID == specificationStageID(binding.run.ID) && stage.Name == specificationStageName
@@ -596,6 +629,7 @@ func (e *Engine) admitAttempt(
 		TrustProfileDigest:         profileDigest,
 		BackupEncryptionWaiver:     env.BackupEncryptionWaiver,
 		AgentBinding:               agentBinding,
+		WorkspaceHydration:         hydration,
 		AdmittedAt:                 admittedAt,
 	})
 	if err != nil {
