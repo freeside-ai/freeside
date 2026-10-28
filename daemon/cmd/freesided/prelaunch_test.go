@@ -915,6 +915,9 @@ func TestPrelaunchNamesTheTreeMissingOnlyForAnUnresolvedLineup(t *testing.T) {
 	}{
 		"unresolved role": {&roleAdmissionError{Role: domain.RoleReviewer, Err: engine.ErrAgentNotAdmissible}, true},
 		"unreadable":      {errors.New("store unreadable"), false},
+		"marked generation": {&roleAdmissionError{Role: domain.RoleReviewer, Err: &domain.GenerationIntegrityMarkedError{
+			Mark: domain.GenerationIntegrityMark{EnrollmentID: "marked/codex_cli", Ordinal: 2, Finding: domain.CredentialIntegrityCorruption},
+		}}, false},
 	}
 	for name, tc := range cases {
 		t.Run(name, func(t *testing.T) {

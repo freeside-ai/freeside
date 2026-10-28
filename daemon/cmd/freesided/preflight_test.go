@@ -1549,6 +1549,42 @@ func TestPreflightRejectsAClaudeReviewCredentialAsReviewInstructions(t *testing.
 	}
 }
 
+func TestPreflightNamesAMarkedGeneration(t *testing.T) {
+	t.Parallel()
+	for _, role := range []domain.RoleName{domain.RoleImplementer, domain.RoleReviewer, domain.RoleShadowReviewer} {
+		t.Run(string(role), func(t *testing.T) {
+			t.Parallel()
+			args, environment := preflightFixture(t)
+			mark := domain.GenerationIntegrityMark{
+				EnrollmentID: "marked/claude_code", Ordinal: 3,
+				Finding: domain.CredentialIntegrityCorruption,
+			}
+			environment.agentsError = &roleAdmissionError{Role: role, Err: errors.Join(
+				engine.ErrAgentNotAdmissible, &domain.GenerationIntegrityMarkedError{Mark: mark})}
+			manifest, err := runSourcePreflight(t, args, environment)
+			if !errors.Is(err, errCompositionPreflight) {
+				t.Fatalf("preflight = %v", err)
+			}
+			for _, check := range manifest.Checks {
+				if check.Name != "agent_selection" {
+					continue
+				}
+				if check.Status != compositionFailed || check.Remediation != agentSelectionMarkedFix(mark.EnrollmentID) ||
+					check.Remediation == agentSelectionUnresolvedFix {
+					t.Fatalf("marked selection = %+v", check)
+				}
+				for _, want := range []string{string(role), string(mark.EnrollmentID), "generation 3", string(mark.Finding)} {
+					if !strings.Contains(check.Evidence, want) {
+						t.Fatalf("evidence %q lacks %q", check.Evidence, want)
+					}
+				}
+				return
+			}
+			t.Fatal("manifest has no agent_selection check")
+		})
+	}
+}
+
 // A reviewer line whose harness has no routed provider, or whose provider
 // does not accept -review-auth-mode, fails agent selection naming why.
 func TestPreflightNamesAReviewProviderMismatch(t *testing.T) {

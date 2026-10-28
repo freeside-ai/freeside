@@ -876,6 +876,239 @@ func TestWriterRoleFailureHoldsAdmissionAndRaisesOneItem(t *testing.T) {
 	})
 }
 
+func markStartupGeneration(t *testing.T, st *store.Store, id domain.ClientEnrollmentID) domain.GenerationIntegrityMark {
+	t.Helper()
+	ctx := t.Context()
+	var mark domain.GenerationIntegrityMark
+	if err := st.WriteInternal(ctx, func(tx *store.InternalTx) error {
+		generation, err := tx.CurrentEnrollmentGeneration(ctx, id)
+		if err != nil {
+			return err
+		}
+		mark = domain.GenerationIntegrityMark{
+			EnrollmentID: id, Ordinal: generation.Ordinal,
+			Finding: domain.CredentialIntegrityCorruption, ObservedAt: time.Now().UTC(),
+		}
+		_, err = tx.RecordGenerationIntegrityMark(ctx, mark)
+		return err
+	}); err != nil {
+		t.Fatal(err)
+	}
+	return mark
+}
+
+func reenrollStartupRole(t *testing.T, st *store.Store, enrollment domain.ClientEnrollment) {
+	t.Helper()
+	ctx, at := t.Context(), time.Now().UTC()
+	if err := st.WriteInternal(ctx, func(tx *store.InternalTx) error {
+		generation, err := tx.CurrentEnrollmentGeneration(ctx, enrollment.ID)
+		if err != nil {
+			return err
+		}
+		lease, err := tx.AcquireAuthStoreMutationLeaseBound(ctx, enrollment.AuthIdentityID, "reenroll-startup",
+			&domain.LeaseGenerationBinding{
+				EnrollmentID: enrollment.ID, Generation: generation.Ordinal,
+				AuthStoreVolume: generation.AuthStoreVolume, StoreManifestDigest: generation.StoreManifestDigest,
+			}, at, at.Add(time.Minute))
+		if err != nil {
+			return err
+		}
+		generation.Ordinal, generation.LeaseFence, generation.RecordedAt = 0, lease.Fence, at
+		if _, err := tx.AppendEnrollmentGeneration(ctx, generation, at); err != nil {
+			return err
+		}
+		return tx.ReleaseAuthStoreMutationLease(ctx, enrollment.AuthIdentityID, "reenroll-startup", lease.Fence, at)
+	}); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestMarkedWriterRoleDoesNotHoldTheLineup(t *testing.T) {
+	t.Parallel()
+	ctx := t.Context()
+	f := newAuthAdoptFixture(t)
+	_, patch, err := f.run(t, f.args())
+	if err != nil {
+		t.Fatal(err)
+	}
+	tree := loadAdoptedPatch(t, patch)
+	prompts := map[domain.RoleName]domain.Digest{}
+	for _, line := range tree.Lineup {
+		prompts[domain.RoleName(line.Key)] = line.Selection.PromptDigest
+	}
+	f.withStore(t, func(st *store.Store) {
+		at := time.Now().UTC()
+		if err := recordBaselineAdapterConformance(ctx, st, at); err != nil {
+			t.Fatal(err)
+		}
+		source, err := engine.ResolveRole(ctx, st, tree, domain.RoleSpecifier)
+		if err != nil {
+			t.Fatal(err)
+		}
+		// A second subscription runs the implementer and remediator. The
+		// specifier stays on the generation that will be marked.
+		identity, enrollment, generation := source.Identity, source.Enrollment, source.Generation
+		identity.ID, identity.AccountBinding = "claude-second", "second@example.test"
+		enrollment.ID, enrollment.AuthIdentityID = "claude-second/claude_code", identity.ID
+		enrollment.AccountBinding = identity.AccountBinding
+		if err := st.WriteInternal(ctx, func(tx *store.InternalTx) error {
+			if err := tx.RecordAuthIdentity(ctx, identity, at); err != nil {
+				return err
+			}
+			if err := tx.RecordClientEnrollment(ctx, enrollment, at); err != nil {
+				return err
+			}
+			lease, err := tx.AcquireAuthStoreMutationLeaseBound(ctx, identity.ID, "second-enroll",
+				&domain.LeaseGenerationBinding{
+					EnrollmentID: enrollment.ID, AuthStoreVolume: "second-auth", StoreManifestDigest: generation.StoreManifestDigest,
+				}, at, at.Add(time.Minute))
+			if err != nil {
+				return err
+			}
+			generation.EnrollmentID, generation.AuthStoreVolume = enrollment.ID, "second-auth"
+			generation.Ordinal = 0
+			generation.AccountBinding, generation.LeaseFence, generation.RecordedAt = identity.AccountBinding, lease.Fence, at
+			if _, err := tx.AppendEnrollmentGeneration(ctx, generation, at); err != nil {
+				return err
+			}
+			return tx.ReleaseAuthStoreMutationLease(ctx, identity.ID, "second-enroll", lease.Fence, at)
+		}); err != nil {
+			t.Fatal(err)
+		}
+		name := agentbaseline.WriterAgentName(domain.RoleImplementer)
+		for i := range tree.Agents {
+			if tree.Agents[i].Name == name {
+				tree.Agents[i].Enrollment = string(enrollment.ID)
+			}
+		}
+		digest, err := tree.AgentDigest(name)
+		if err != nil {
+			t.Fatal(err)
+		}
+		for i := range tree.Lineup {
+			if tree.Lineup[i].Selection.AgentName == name {
+				tree.Lineup[i].Selection.AgentDigest = digest
+			}
+		}
+		revision, err := treeRevision(tree)
+		if err != nil {
+			t.Fatal(err)
+		}
+		selection := engine.AgentSelection{
+			Tree: tree, LineupRevision: revision, Launch: agentbaseline.RoleLaunch,
+			EffectiveEgress: []string{"api.anthropic.com:443"}, AttemptBudget: time.Hour,
+		}
+		markStartupGeneration(t, st, source.Enrollment.ID)
+		_, markedErr := selection.CheckRole(ctx, st, domain.RoleSpecifier, prompts[domain.RoleSpecifier], at)
+		if !errors.Is(markedErr, domain.ErrGenerationIntegrityMarked) {
+			t.Fatalf("marked role = %v", markedErr)
+		}
+		if err := reportRoleFailure(ctx, st, &roleAdmissionError{Role: domain.RoleSpecifier, Err: markedErr}, at); err != nil {
+			t.Fatal(err)
+		}
+		if len(agentSelectionItems(t, st)) != 1 {
+			t.Fatal("the earlier startup did not leave its role item")
+		}
+		failure := checkWriterRoles(ctx, st, selection, prompts, at)
+		if failure != nil {
+			t.Fatal(failure)
+		}
+		selection.Gate = agentSelectionGate(st, failure)
+		if err := selection.Gate(ctx); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := selection.CheckRole(ctx, st, domain.RoleImplementer, prompts[domain.RoleImplementer], at); err != nil {
+			t.Fatalf("healthy second subscription: %v", err)
+		}
+		if err := activateAgentSelection(ctx, st, failure, at); err != nil {
+			t.Fatal(err)
+		}
+		if items := agentSelectionItems(t, st); len(items) != 0 {
+			t.Fatalf("items after marked-only startup = %+v", items)
+		}
+		prompts[domain.RoleRemediator] = prompts[domain.RoleSpecifier]
+		if failure := checkWriterRoles(ctx, st, selection, prompts, at); failure == nil || failure.Role != domain.RoleRemediator {
+			t.Fatalf("another role's real failure = %v", failure)
+		}
+		reenrollStartupRole(t, st, source.Enrollment)
+		if _, err := selection.CheckRole(ctx, st, domain.RoleSpecifier, prompts[domain.RoleSpecifier], at); err != nil {
+			t.Fatalf("same selection after re-enrollment: %v", err)
+		}
+	})
+}
+
+func TestReviewSelectionOnAMarkedGeneration(t *testing.T) {
+	t.Parallel()
+	for _, role := range []domain.RoleName{domain.RoleReviewer, domain.RoleShadowReviewer} {
+		t.Run(string(role), func(t *testing.T) {
+			t.Parallel()
+			ctx, at := t.Context(), time.Now().UTC()
+			f := newAuthAdoptFixture(t)
+			_, patch, err := f.run(t, f.shadowArgs())
+			if err != nil {
+				t.Fatal(err)
+			}
+			tree := loadAdoptedPatch(t, patch)
+			f.withStore(t, func(st *store.Store) {
+				cfg, err := resolveReviewSelection(ctx, st, tree, flagEraReviewConfig(), at)
+				if err != nil {
+					t.Fatal(err)
+				}
+				agent, err := reviewRoleAgent(ctx, st, tree, role, at)
+				if err != nil {
+					t.Fatal(err)
+				}
+				run := seedReviewedRun(t, st, "run-marked-review")
+				req := admittedReviewRequest(t, st, tree, role, run.ID)
+				admit := reviewAdmission(st, tree, testReviewRole(role, nil), agent.Identity.ID, func() time.Time { return at })
+				mark := markStartupGeneration(t, st, agent.Enrollment.ID)
+				got, err := resolveReviewSelection(ctx, st, tree, flagEraReviewConfig(), at)
+				if err != nil || !reflect.DeepEqual(got, cfg) {
+					t.Fatalf("marked startup = %+v, %v; want %+v", got, err, cfg)
+				}
+				checked, err := engine.CheckReviewRole(ctx, st, tree, agentbaseline.RoleLaunch, testReviewRole(role, nil), "", at)
+				var marked *domain.GenerationIntegrityMarkedError
+				if !errors.Is(err, engine.ErrAgentNotAdmissible) || !errors.As(err, &marked) || marked.Mark != mark ||
+					!reflect.DeepEqual(checked, agent) {
+					t.Fatalf("marked review check = %+v, %v", checked, err)
+				}
+				if err := admit(ctx, req); !errors.Is(err, domain.ErrGenerationIntegrityMarked) {
+					t.Fatalf("marked review launch = %v", err)
+				}
+				selection := engine.AgentSelection{Tree: tree, LineupRevision: req.Admission.AgentBinding.LineupRevision, Launch: agentbaseline.RoleLaunch}
+				spec := testReviewRole(role, []string{"review.example:443"})
+				refused, err := selection.AdmitReview(ctx, st, spec, run.ID, "review-marked", at)
+				if !errors.Is(err, domain.ErrGenerationIntegrityMarked) || !reflect.DeepEqual(refused, domain.ReviewAdmission{}) {
+					t.Fatalf("marked review admission = %+v, %v", refused, err)
+				}
+				_, err = resolvePreflightAgents(ctx, st, tree, req.Admission.AgentBinding.LineupRevision, ward.CodexAuthSubscription, true, at)
+				if !errors.As(err, &marked) || marked.Mark != mark {
+					t.Fatalf("marked preflight resolution = %v", err)
+				}
+				broken := tree
+				broken.Lineup = slices.Clone(tree.Lineup)
+				for i := range broken.Lineup {
+					if broken.Lineup[i].Key == string(role) {
+						broken.Lineup[i].Selection.PromptDigest = domain.Digest("sha256:" + strings.Repeat("7", 64))
+					}
+				}
+				if _, err := resolveReviewSelection(ctx, st, broken, flagEraReviewConfig(), at); err == nil ||
+					errors.Is(err, domain.ErrGenerationIntegrityMarked) || !strings.Contains(err.Error(), "this daemon reviews with") {
+					t.Fatalf("mark plus prompt mismatch = %v", err)
+				}
+				reenrollStartupRole(t, st, agent.Enrollment)
+				if err := admit(ctx, req); err != nil {
+					t.Fatalf("same review source after re-enrollment: %v", err)
+				}
+				admission, err := selection.AdmitReview(ctx, st, spec, run.ID, "review-reenrolled", at)
+				if err != nil || admission.AgentBinding.EnrollmentGeneration != mark.Ordinal+1 {
+					t.Fatalf("review admission after re-enrollment = %+v, %v", admission, err)
+				}
+			})
+		})
+	}
+}
+
 // TestRetiredIdentityWorkHoldsAdmissionUntilItIsStopped covers retirement and
 // cancellation. An open task admitted under an identity that is then disabled
 // with no enrollment holds the gate and raises one item naming the identity
