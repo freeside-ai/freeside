@@ -2091,13 +2091,10 @@ CPUs, and `GOMEMLIMIT` sets each Go process's heap target, golangci-lint's
 included. Without them, lint's heap reaches the room's limit and the step
 slows under reclaim. Freeside's `.freeside/verify.json` runs this command,
 then `bash scripts/check.sh docs`, then `env VACUUM=vacuum bash
-scripts/check.sh api`, then `check.sh scripts syntax shellcheck suites
-trackercollect` with the same Go limits, because `trackercollect` runs `go
-build`, `test`, and `vet`. The scripts command leaves out `vocabulary`:
-`check-vocabulary.sh` lists files with `git ls-files`, and a room holds the
-commit's tree without `.git`, so that step fails in every room (#2399). The
-required CI check still runs it. Measured at `d03b0b88` in Freeside's
-project image, one container per step, every step passing:
+scripts/check.sh api`, then `check.sh scripts` with the same Go limits,
+because `trackercollect` runs `go build`, `test`, and `vet`. Measured at
+`d03b0b88` in Freeside's project image, one container per step, every step
+passing:
 
 | Step | Unreclaimable peak | Wall |
 | --- | --- | --- |
@@ -2107,7 +2104,7 @@ project image, one container per step, every step passing:
 | lint | 1323 MiB | 124 s |
 | docs | 15 MiB | under 1 s |
 | api | 100 MiB | under 1 s |
-| scripts (four steps) | 324 MiB | 107 s |
+| scripts (four steps, before vocabulary) | 324 MiB | 107 s |
 
 Each step started from a cold build cache on a host at load average 5 to
 8. The decision and the rejected options are in
