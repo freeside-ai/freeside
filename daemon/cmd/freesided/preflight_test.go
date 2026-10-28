@@ -37,6 +37,7 @@ type fakePreflightEnvironment struct {
 	imageMissing         map[string]bool
 	imageVersions        map[string]string
 	imageCalls           map[string]int
+	writerImageRefs      []string
 	topicError           error
 	seedError            error
 	authVolumeError      error
@@ -126,6 +127,9 @@ func (e *fakePreflightEnvironment) InspectImage(
 		role = "exporter"
 	}
 	e.imageCalls[role]++
+	if role == "claude" {
+		e.writerImageRefs = append(e.writerImageRefs, ref)
+	}
 	if e.imageMissing[role] {
 		return imageInspection{Error: errors.New("inspect image " + ref + ": exit status 1\nError: image not found")}
 	}
@@ -368,6 +372,130 @@ func TestPreflightLaunchManifestGolden(t *testing.T) {
 		t.Fatal(err)
 	}
 	golden.Assert(t, "preflight-launch-manifest", append(body, '\n'))
+}
+
+func TestPreflightProbesSelectedWriterImage(t *testing.T) {
+	t.Parallel()
+	fixture := newCompositionImageFixture(t)
+	const lock = `{"lockfileVersion":2}`
+	base := compositionCommit(t, fixture.root, map[string]string{"package-lock.json": lock})
+	rebuilt := fixture.rebuild(t, base, lock, "e")
+	unserved := compositionCommit(t, fixture.root, map[string]string{"package.json": `{"scripts":{"build":"tsc"}}`})
+	for _, tc := range []struct {
+		name     string
+		pointer  *domain.ProjectImage
+		images   []domain.ProjectImage
+		base     string
+		want     domain.ProjectImage
+		hold     bool
+		probeErr bool
+	}{
+		{"seed fallback holds", nil, []domain.ProjectImage{fixture.image}, base, fixture.image, true, false},
+		{"pointer serves", &rebuilt, []domain.ProjectImage{fixture.image, rebuilt}, base, rebuilt, false, false},
+		{"recorded rebuild serves", &fixture.image, []domain.ProjectImage{fixture.image, rebuilt}, base, rebuilt, false, false},
+		{"seed fallback selects rebuild", nil, []domain.ProjectImage{fixture.image, rebuilt}, base, rebuilt, false, false},
+		{"pointer holds", &rebuilt, []domain.ProjectImage{fixture.image, rebuilt}, unserved, rebuilt, true, false},
+		{"hold still requires probes", &rebuilt, []domain.ProjectImage{fixture.image, rebuilt}, unserved, rebuilt, true, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			args, environment := preflightFixture(t)
+			cfg, err := parsePreflightConfig(args, io.Discard)
+			if err != nil {
+				t.Fatal(err)
+			}
+			cfg.Repo, cfg.RepositoryID = fixture.image.Repository, fixture.image.RepositoryID
+			cfg.AgentImage, cfg.BaseSHA = string(fixture.image.ImageRef), tc.base
+			cfg.RepositoryCheckout, cfg.ApprovedRecipe = fixture.root, fixture.image.RecipeDigest
+			environment.database.ProfileRepo = cfg.Repo
+			environment.database.ProjectImage = fixture.image
+			environment.database.ProjectImages = tc.images
+			if tc.pointer != nil {
+				environment.database.AdmittedImage, environment.database.AdmittedImageFound = *tc.pointer, true
+			}
+			if tc.probeErr {
+				environment.imageErrors["claude"] = errors.New("required tool absent")
+			}
+			manifest, err := composePreflight(t.Context(), cfg, environment,
+				time.Date(2026, 8, 17, 12, 0, 0, 0, time.UTC), "2dce6570ee23")
+			if err != nil {
+				t.Fatal(err)
+			}
+			wantStatus := compositionPassed
+			if tc.probeErr {
+				wantStatus = compositionFailed
+			}
+			if manifest.Status != wantStatus {
+				t.Fatalf("manifest status = %s, want %s: %+v", manifest.Status, wantStatus, manifest.Checks)
+			}
+			if !slices.Equal(environment.writerImageRefs, []string{string(tc.want.ImageRef)}) {
+				t.Fatalf("writer probes = %v, want only %s", environment.writerImageRefs, tc.want.ImageRef)
+			}
+			wantInspected := ""
+			if tc.want.ImageRef != fixture.image.ImageRef {
+				wantInspected = string(tc.want.ImageRef)
+			}
+			image := manifest.Images[1]
+			if image.Requested != cfg.AgentImage || image.Inspected != wantInspected ||
+				image.ResolvedDigest != imageDigestFromRef(string(tc.want.ImageRef)) {
+				t.Fatalf("implementer image = %+v, want inspected %q", image, wantInspected)
+			}
+			for _, check := range manifest.Checks {
+				if check.Name != "implementer_image" {
+					continue
+				}
+				if check.Status != wantStatus {
+					t.Fatalf("implementer check = %+v", check)
+				}
+				if !tc.probeErr && tc.hold && (!strings.Contains(check.Evidence, "image_upkeep_pending") ||
+					!strings.Contains(check.Evidence, tc.base) || !strings.Contains(check.Evidence, "writer attempts will hold")) {
+					t.Fatalf("hold evidence = %q", check.Evidence)
+				}
+				return
+			}
+			t.Fatal("manifest has no implementer_image check")
+		})
+	}
+}
+
+func TestProductionPreflightReadsWriterImageRecords(t *testing.T) {
+	t.Parallel()
+	fixture := newCompositionImageFixture(t)
+	rebuilt := fixture.rebuild(t, fixture.buildCommit, compositionPackageLock, "e")
+	dbPath := filepath.Join(t.TempDir(), "freeside.db")
+	st := storetest.Open(t, dbPath, store.Options{})
+	if err := st.WriteInternal(t.Context(), func(tx *store.InternalTx) error {
+		for _, image := range []domain.ProjectImage{fixture.image, rebuilt} {
+			if err := tx.RecordProjectImage(t.Context(), image); err != nil {
+				return err
+			}
+		}
+		return tx.AdvanceAdmittedImagePointer(t.Context(), domain.AdmittedImagePointer{
+			Repository: rebuilt.Repository, RepositoryID: rebuilt.RepositoryID, Harness: domain.HarnessClientClaudeCode,
+			ImageID: rebuilt.ID, ImageRef: rebuilt.ImageRef,
+			AdvancedAt: time.Date(2026, 10, 28, 12, 0, 0, 0, time.UTC),
+		})
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := st.Close(); err != nil {
+		t.Fatal(err)
+	}
+	cfg := fixture.config(fixture.image, fixture.buildCommit)
+	cfg.DBPath = dbPath
+	inspection := (productionPreflightEnvironment{}).InspectDatabase(t.Context(), cfg, "")
+	if inspection.OpenError != nil || inspection.ProjectImageError != nil {
+		t.Fatalf("database inspection: open=%v image=%v", inspection.OpenError, inspection.ProjectImageError)
+	}
+	if !inspection.ProjectImageFound || inspection.ProjectImage.ID != fixture.image.ID ||
+		!inspection.AdmittedImageFound || inspection.AdmittedImage.ID != rebuilt.ID {
+		t.Fatalf("seed=%s found=%t pointer=%s found=%t", inspection.ProjectImage.ID,
+			inspection.ProjectImageFound, inspection.AdmittedImage.ID, inspection.AdmittedImageFound)
+	}
+	if len(inspection.ProjectImages) != 2 || inspection.ProjectImages[0].ID != fixture.image.ID ||
+		inspection.ProjectImages[1].ID != rebuilt.ID {
+		t.Fatalf("recorded images = %+v", inspection.ProjectImages)
+	}
 }
 
 func TestPreflightCoversEnabledShadowReviewConfiguration(t *testing.T) {
@@ -1120,6 +1248,12 @@ func preflightFixture(t *testing.T) ([]string, *fakePreflightEnvironment) {
 		RecipeDigest: reviewDigest, PreparationCommand: []string{projectimage.PreparationPath},
 		BaseImageRef: domain.ImageRef("registry.test/base@" + digest),
 		ImageRef:     domain.ImageRef("registry.test/agent@" + digest),
+		// Writer selection refuses an image with no environment from this
+		// binary's preparation sources, even at its build commit.
+		Environment: &domain.ProjectImageEnvironment{
+			PackageJSONSHA256: strings.Repeat("1", 64), PackageLockSHA256: strings.Repeat("2", 64),
+			PreparationDigest: projectimage.PreparationDigest(),
+		},
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -1144,6 +1278,7 @@ func preflightFixture(t *testing.T) ([]string, *fakePreflightEnvironment) {
 			ProfileDigest: reviewDigest, ProfileRepo: "owner/repo", ProfileRepositoryID: 42,
 			ReviewAuthStoreVolume: reviewSnapshot, ReviewRefreshStrategy: domain.RefreshOnDemand,
 			ProjectImage: projectImage, ProjectImageFound: true,
+			ProjectImages: []domain.ProjectImage{projectImage},
 		},
 	}
 	args := []string{

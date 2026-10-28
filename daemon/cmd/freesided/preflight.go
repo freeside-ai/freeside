@@ -28,6 +28,7 @@ import (
 	"github.com/freeside-ai/freeside/daemon/internal/daemonlock"
 	"github.com/freeside-ai/freeside/daemon/internal/domain"
 	"github.com/freeside-ai/freeside/daemon/internal/engine"
+	"github.com/freeside-ai/freeside/daemon/internal/exec"
 	"github.com/freeside-ai/freeside/daemon/internal/inference"
 	"github.com/freeside-ai/freeside/daemon/internal/procbound"
 	"github.com/freeside-ai/freeside/daemon/internal/projectimage"
@@ -91,8 +92,12 @@ type compositionIdentity struct {
 }
 
 type compositionImage struct {
-	Role           string `json:"role"`
-	Requested      string `json:"requested"`
+	Role      string `json:"role"`
+	Requested string `json:"requested"`
+	// Inspected names the image the probes ran on when it is not Requested:
+	// the writer image the daemon selects at the base, which can be another
+	// recorded image than the configured seed. ResolvedDigest is its digest.
+	Inspected      string `json:"inspected,omitempty"`
 	ResolvedDigest string `json:"resolved_digest,omitempty"`
 }
 
@@ -233,9 +238,16 @@ type databaseInspection struct {
 	ReviewReenrollmentError error
 	ReviewAuthStoreVolume   string
 	ReviewRefreshStrategy   domain.RefreshStrategy
-	ProjectImage            domain.ProjectImage
-	ProjectImageFound       bool
-	ProjectImageError       error
+	// ProjectImage is the -agent-image record, the seed.
+	ProjectImage      domain.ProjectImage
+	ProjectImageFound bool
+	// AdmittedImage is the image the admitted-image pointer names, and
+	// ProjectImages the repository's recorded images: what writer selection
+	// reads (selectPreflightWriterImage).
+	AdmittedImage      domain.ProjectImage
+	AdmittedImageFound bool
+	ProjectImages      []domain.ProjectImage
+	ProjectImageError  error
 }
 
 type imageInspection struct {
@@ -826,14 +838,42 @@ func evaluateComposition(
 			failCheck(manifest, image.check, image.role+" image reference is not a canonical digest pin", "rebuild and re-pin the "+image.role+" image")
 			continue
 		}
+		// The implementer probes run on the image the daemon would run, not
+		// the configured seed; selection says how it was reached.
+		selection := ""
 		if image.role == "implementer" {
 			if database.OpenError != nil {
 				notRunCheck(manifest, image.check, "project-image provenance could not be read from the production database")
 				continue
 			}
-			if err := validatePreflightProjectImage(ctx, database.ProjectImage, database.ProjectImageFound, cfg); err != nil || database.ProjectImageError != nil {
+			writer, serves, err := selectPreflightWriterImage(ctx, database, cfg)
+			switch {
+			case errors.Is(err, exec.ErrInputUnavailable):
+				failCheck(manifest, image.check, fmt.Sprintf(
+					"configured base %s could not be read from the repository checkout to select the writer image", cfg.BaseSHA,
+				), "fetch the configured base commit into -repository-checkout")
+				continue
+			case errors.Is(err, domain.ErrRepositoryIdentityMismatch):
+				failCheck(manifest, image.check, "admitted image pointer names an image recorded for another repository than -repo",
+					"correct -repo and -repository-id to the repository the admitted image pointer belongs to")
+				continue
+			case err != nil:
 				failCheck(manifest, image.check, "implementer image has no matching approved project-image provenance", "build and record an image for this repository, recipe, and approved preparation command whose environment inputs match this base")
 				continue
+			}
+			image.ref = string(writer.ImageRef)
+			if image.ref != cfg.AgentImage {
+				manifest.Images[image.index].Inspected = image.ref
+			}
+			switch {
+			case !serves:
+				selection = fmt.Sprintf("; no recorded image serves base %s, so ward starts on the admitted image and "+
+					"writer attempts will hold under image_upkeep_pending until image upkeep records an image for the base", cfg.BaseSHA)
+			case image.ref != cfg.AgentImage:
+				selection = fmt.Sprintf("; the daemon selects recorded image %s at base %s over the configured seed",
+					image.ref, cfg.BaseSHA)
+			default:
+				selection = fmt.Sprintf("; it serves base %s", cfg.BaseSHA)
 			}
 		}
 		inspection := environment.InspectImage(ctx, cfg.ContainerBin, image.ref, image.tools, image.versionTool)
@@ -870,8 +910,8 @@ func evaluateComposition(
 			}
 		}
 		passCheck(manifest, image.check, fmt.Sprintf(
-			"%s image resolved exact digest %s and passed required tool probes",
-			image.role, inspection.Digest,
+			"%s image resolved exact digest %s and passed required tool probes%s",
+			image.role, inspection.Digest, selection,
 		))
 	}
 
@@ -952,70 +992,54 @@ func validateCompositionRepositoryBase(cfg preflightConfig) error {
 	return nil
 }
 
-// validatePreflightProjectImage is the composition gate's image check run
-// from the operator's checkout: the record-only refusals, compatibility with
-// the configured base, and the approved recipe. An image built at another
-// commit is checked against the base tree read from cfg.RepositoryCheckout,
-// so preflight reports an incompatible base without minting a token.
-func validatePreflightProjectImage(
-	ctx context.Context,
-	image domain.ProjectImage,
-	found bool,
-	cfg preflightConfig,
-) error {
-	if _, err := resolveProjectImagePreparation(image, found, claudeDriverConfig{
+// selectPreflightWriterImage is the composition gate's image check run from
+// the operator's checkout. It returns the image the implementer probes run
+// on: the writer image the daemon's start selects at cfg.BaseSHA, or, when
+// no recorded image serves that base (serves false), the pointed-to image
+// ward starts on while writer attempts hold (startupWriterImage).
+//
+// It first runs the record-only refusals the daemon's start runs on the
+// -agent-image seed (resolveProjectImagePreparation). With no pointer
+// recorded the seed stands in for it, as an unattended start seeds the
+// pointer with it (seedAdmittedImagePointer). The base tree is read from
+// cfg.RepositoryCheckout; a base it cannot read is exec.ErrInputUnavailable,
+// which fails the daemon's start too.
+//
+// Selection runs with no proved image. A restored proof can change which
+// serving image the daemon picks, never whether one serves: every image the
+// proved-image rule can pick, the pointer or record-order rule can pick too.
+func selectPreflightWriterImage(
+	ctx context.Context, database databaseInspection, cfg preflightConfig,
+) (image domain.ProjectImage, serves bool, err error) {
+	if database.ProjectImageError != nil {
+		return domain.ProjectImage{}, false, errors.Join(ErrProjectImageComposition, database.ProjectImageError)
+	}
+	if _, err := resolveProjectImagePreparation(database.ProjectImage, database.ProjectImageFound, claudeDriverConfig{
 		AgentImage: domain.ImageRef(cfg.AgentImage), Repo: cfg.Repo,
 		RepositoryID: cfg.RepositoryID,
 	}); err != nil {
-		return err
+		return domain.ProjectImage{}, false, err
 	}
-	if err := admitProjectImageAtBase(image, cfg.BaseSHA,
-		func() (domain.ProjectImageBaseInputs, error) {
-			return projectimage.ObserveBaseInputs(ctx, "git", cfg.RepositoryCheckout, cfg.BaseSHA, image.InputLayout())
-		}); err != nil {
-		return err
+	pointed := database.ProjectImage
+	if database.AdmittedImageFound {
+		pointed = database.AdmittedImage
+	}
+	selected, serves, err := selectAmongRecordedImages(pointed, database.ProjectImages, cfg.Repo, cfg.BaseSHA, "",
+		func(layout domain.ProjectImageInputLayout) (domain.ProjectImageBaseInputs, error) {
+			return projectimage.ObserveBaseInputs(ctx, "git", cfg.RepositoryCheckout, cfg.BaseSHA, layout)
+		})
+	if err != nil {
+		return domain.ProjectImage{}, false, err
+	}
+	image = pointed
+	if serves {
+		image = selected
 	}
 	if image.RecipeDigest != cfg.ApprovedRecipe {
-		return fmt.Errorf("project-image recipe %s disagrees with approved recipe %s: %w",
+		return domain.ProjectImage{}, false, fmt.Errorf("project-image recipe %s disagrees with approved recipe %s: %w",
 			image.RecipeDigest, cfg.ApprovedRecipe, ErrProjectImageComposition)
 	}
-	return nil
-}
-
-// projectImageBaseObserver reads what the configured base commit holds for
-// the inputs a project image's environment records.
-type projectImageBaseObserver func() (domain.ProjectImageBaseInputs, error)
-
-// admitProjectImageAtBase is preflight's base check on the configured
-// implementer image: it refuses a recorded image that may not serve a run at
-// baseSHA (domain.ProjectImage.AdmissibleAt). An image built at exactly
-// baseSHA is admitted from the record alone, so observe runs only for an
-// image built at another commit. The daemon itself no longer refuses a start
-// on this: writer selection (claudeImageSelector) holds attempts on a base
-// no image serves.
-//
-// An observation that fails is reported as itself, not as
-// ErrProjectImageComposition: the image was not found incompatible, the base
-// could not be read.
-func admitProjectImageAtBase(
-	image domain.ProjectImage, baseSHA string, observe projectImageBaseObserver,
-) error {
-	if image.CommitSHA == baseSHA {
-		return nil
-	}
-	inputs, err := observe()
-	if err != nil {
-		return fmt.Errorf("observe project-image inputs at base %s: %w", baseSHA, err)
-	}
-	if inputs.CommitSHA != baseSHA {
-		return fmt.Errorf(
-			"project-image inputs were observed at %s, not the configured base %s: %w",
-			inputs.CommitSHA, baseSHA, ErrProjectImageComposition)
-	}
-	if err := image.AdmissibleAt(inputs, projectimage.PreparationDigest()); err != nil {
-		return errors.Join(ErrProjectImageComposition, err)
-	}
-	return nil
+	return image, serves, nil
 }
 
 func evaluateDaemonConflict(
@@ -1822,6 +1846,13 @@ func (productionPreflightEnvironment) InspectDatabase(
 			// for it to inspect.
 		}
 		inspection.ProjectImage, inspection.ProjectImageFound, inspection.ProjectImageError = tx.GetProjectImageByRef(ctx, domain.ImageRef(cfg.AgentImage))
+		if inspection.ProjectImageError == nil {
+			_, inspection.AdmittedImage, inspection.AdmittedImageFound, inspection.ProjectImageError = tx.GetAdmittedImagePointer(
+				ctx, cfg.RepositoryID, domain.HarnessClientClaudeCode)
+		}
+		if inspection.ProjectImageError == nil {
+			inspection.ProjectImages, inspection.ProjectImageError = tx.ListProjectImages(ctx, cfg.RepositoryID)
+		}
 		return nil
 	})
 	if err != nil {
