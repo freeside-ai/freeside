@@ -310,6 +310,61 @@ func (w *productionPublicationWorkflow) bindVerificationImage(
 		}
 		return binding, nil, nil
 	}
+	return w.bindRebuiltImage(ctx, task, binding, checkoutDir, verifiedSHA, decision)
+}
+
+// bindRepairVerificationImage is bindVerificationImage for a maintenance
+// task at its refusal's tip, whose admitted image is the one the refusal was
+// measured from and so may not serve the base. The refusal record stands in
+// for the image serving the base: the gate is upkeep's
+// (projectimage.EvaluateUpkeep), measured from the image's own build commit,
+// and it always applies, so the candidate is verified only in a rebuilt image
+// that serves verifiedSHA, never in the admitted image. A gate refusal and a
+// failed build are refusals like any other.
+//
+// The caller has proved checkoutDir is the run's repository and that the run
+// qualifies (repairVerification). The checkout holds the image's build
+// commit, an ancestor of the refused tip on the base branch.
+func (w *productionPublicationWorkflow) bindRepairVerificationImage(
+	ctx context.Context,
+	task productionPublicationTask,
+	binding productionBinding,
+	checkoutDir, verifiedSHA string,
+) (productionBinding, *rebuildRefusal, error) {
+	decision, err := projectimage.EvaluateUpkeep(
+		ctx, "git", checkoutDir, binding.image, verifiedSHA, binding.resolvedPolicy)
+	if err != nil {
+		return productionBinding{}, nil, err
+	}
+	return w.bindRebuiltImage(ctx, task, binding, checkoutDir, verifiedSHA, decision)
+}
+
+// repairVerification reports whether a verification at baseSHA takes the
+// maintenance task's exception: the run is a repair task's
+// (repairTaskRefusal), baseSHA is its refusal's tip, and the admitted image
+// is the one the refusal was measured from. Any other run, base, or image
+// takes the ordinary checks.
+func (w *productionPublicationWorkflow) repairVerification(
+	ctx context.Context, binding productionBinding, baseSHA string,
+) (bool, error) {
+	refusal, err := readRepairTaskRefusal(ctx, w.store, binding.run)
+	if err != nil || refusal == nil {
+		return false, err
+	}
+	return refusal.TipSHA == baseSHA && refusal.MeasuredFromImageID == binding.image.ID, nil
+}
+
+// bindRebuiltImage binds the image a gate decision that needs a rebuild
+// verifies verifiedSHA in: the refusal when the gate refused, the image
+// the run is already bound to, a recorded image serving the head, or one
+// built now under the shared gate.
+func (w *productionPublicationWorkflow) bindRebuiltImage(
+	ctx context.Context,
+	task productionPublicationTask,
+	binding productionBinding,
+	checkoutDir, verifiedSHA string,
+	decision projectimage.RebuildDecision,
+) (productionBinding, *rebuildRefusal, error) {
 	if decision.Refusal != "" {
 		return binding, &rebuildRefusal{clause: decision.Refusal, detail: decision.Detail}, nil
 	}

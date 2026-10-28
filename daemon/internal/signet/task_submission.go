@@ -23,11 +23,15 @@ type TaskSubmitter interface {
 	SubmitTask(ctx context.Context, tx *store.WriteTx, in TaskSubmissionInput) (TaskSubmissionResult, error)
 }
 
-// TaskSubmissionInput is the submitter's input: the project, the submitted
-// source and its digest (already stored in the blob store), an optional
-// operator-chosen name, and the operator's task lines.
+// TaskSubmissionInput is the submitter's input: who submitted it, the
+// project, the submitted source and its digest (already stored in the blob
+// store), an optional operator-chosen name, and the operator's task lines.
 type TaskSubmissionInput struct {
-	CommandID     string
+	CommandID string
+	// Origin selects the task's manual-submission identity: a device
+	// command's is namespaced under client:, and a daemon one's is its
+	// command ID, already in the daemon: namespace.
+	Origin        domain.TaskSubmissionOrigin
 	RequestDigest domain.Digest
 	ProjectID     domain.ProjectID
 	Source        []byte
@@ -133,7 +137,7 @@ func (s *Service) submitTask(ctx context.Context, in ClientCommand) (CommandResu
 			return err
 		}
 		outcome, err := s.taskSubmitter.SubmitTask(ctx, tx, TaskSubmissionInput{
-			CommandID: in.CommandID, RequestDigest: requestDigest,
+			CommandID: in.CommandID, Origin: domain.TaskSubmissionOriginDevice, RequestDigest: requestDigest,
 			ProjectID: p.ProjectID, Source: source, SourceDigest: digest, OperatorName: p.Name,
 			TaskLines: p.TaskLines,
 		})
@@ -160,6 +164,90 @@ func (s *Service) submitTask(ctx context.Context, in ClientCommand) (CommandResu
 		return CommandResult{}, err
 	}
 	return result, nil
+}
+
+// SubmitImageRepairTask submits the one maintenance task project-image upkeep
+// opens for a repair-class refusal (plan §5.7, Project-image upkeep). The task
+// has a daemon origin and names no device; its source is the refusal record's
+// v1 preimage, so its source digest is the refusal ID, which the store's
+// daemon-origin gate re-checks on write. Its command ID and manual-submission
+// identity are domain.ImageUpkeepSubmissionIdentity(refusal ID), so submitting
+// the same refusal again returns the recorded submission and opens no second
+// task. A refusal of another class is refused before any write, and a project
+// with no configured submission policy is store.ErrNotFound from the submitter.
+func (s *Service) SubmitImageRepairTask(
+	ctx context.Context, projectID domain.ProjectID, refusalID domain.Digest,
+) (domain.TaskSubmission, error) {
+	if s.blobs == nil || s.taskSubmitter == nil {
+		return domain.TaskSubmission{}, fmt.Errorf("submit image repair task: %w", ErrTaskSubmissionUnavailable)
+	}
+	var refusal domain.ImageUpkeepRefusal
+	if err := s.store.Read(ctx, func(tx *store.ReadTx) error {
+		var err error
+		refusal, err = tx.GetImageUpkeepRefusal(ctx, refusalID)
+		return err
+	}); err != nil {
+		return domain.TaskSubmission{}, fmt.Errorf("submit image repair task: %w", err)
+	}
+	if refusal.Class != domain.ImageUpkeepRefusalRepair {
+		return domain.TaskSubmission{}, fmt.Errorf("submit image repair task for refusal %s of class %q: %w",
+			refusal.ID, refusal.Class, store.ErrDaemonSubmissionUnsourced)
+	}
+	source, err := refusal.Preimage()
+	if err != nil {
+		return domain.TaskSubmission{}, err
+	}
+	commandID := domain.ImageUpkeepSubmissionIdentity(refusal.ID)
+	requestBytes, err := json.Marshal(struct {
+		Origin    domain.TaskSubmissionOrigin
+		ProjectID domain.ProjectID
+		RefusalID domain.Digest
+	}{domain.TaskSubmissionOriginDaemon, projectID, refusal.ID})
+	if err != nil {
+		return domain.TaskSubmission{}, err
+	}
+	requestDigest := domain.Digest(contentaddr.Sum(requestBytes))
+	// As in submitTask, the bytes land first so no artifact row names a
+	// digest the blob store cannot serve. The store refuses bytes that do not
+	// hash to the refusal ID.
+	if _, err := s.blobs.Put(refusal.ID, bytes.NewReader(source)); err != nil {
+		return domain.TaskSubmission{}, fmt.Errorf("submit image repair task store source: %w", err)
+	}
+	var submission domain.TaskSubmission
+	err = s.store.Write(ctx, func(tx *store.WriteTx) error {
+		if recorded, getErr := tx.GetTaskSubmission(ctx, commandID); getErr == nil {
+			original, err := tx.TaskSubmissionRequestDigest(ctx, commandID)
+			if err != nil {
+				return err
+			}
+			if recorded.Origin != domain.TaskSubmissionOriginDaemon || recorded.ProjectID != projectID ||
+				recorded.SourceDigest != refusal.ID || original != requestDigest {
+				return fmt.Errorf("submit image repair task %q: %w", commandID, store.ErrImmutableConflict)
+			}
+			submission = recorded
+			return errReplay
+		} else if !errors.Is(getErr, store.ErrNotFound) {
+			return getErr
+		}
+		outcome, err := s.taskSubmitter.SubmitTask(ctx, tx, TaskSubmissionInput{
+			CommandID: commandID, Origin: domain.TaskSubmissionOriginDaemon, RequestDigest: requestDigest,
+			ProjectID: projectID, Source: source, SourceDigest: refusal.ID,
+			OperatorName: "Repair the project image at " + refusal.TipSHA[:12],
+		})
+		if err != nil {
+			return err
+		}
+		submission = domain.TaskSubmission{
+			CommandID: commandID, Origin: domain.TaskSubmissionOriginDaemon, ProjectID: projectID,
+			SourceDigest: refusal.ID, TaskID: outcome.TaskID, SpecificationRunID: outcome.SpecificationRunID,
+			Name: outcome.Name,
+		}
+		return tx.PutTaskSubmissionRequest(ctx, submission, requestDigest)
+	})
+	if err != nil && !errors.Is(err, errReplay) {
+		return domain.TaskSubmission{}, err
+	}
+	return submission, nil
 }
 
 // errEmptyTaskLines rejects a task_lines list that is present but names no

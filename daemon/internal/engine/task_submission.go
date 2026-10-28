@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"strings"
 
 	"github.com/freeside-ai/freeside/daemon/internal/contentaddr"
 	"github.com/freeside-ai/freeside/daemon/internal/domain"
@@ -66,6 +67,10 @@ func (t *TaskSubmitter) submit(ctx context.Context, tx *store.WriteTx, in signet
 			return signet.TaskSubmissionResult{}, fmt.Errorf("submit task: %w: %w", signet.ErrInvalidSubmitTaskPayload, nameErr)
 		}
 	}
+	identity, err := submissionIdentity(in.Origin, in.CommandID)
+	if err != nil {
+		return signet.TaskSubmissionResult{}, err
+	}
 	sourceArtifact, err := SubmissionArtifact(
 		domain.ArtifactKindSpecification, in.SourceDigest, domain.EvidenceMediaTextMarkdown, int64(len(in.Source)))
 	if err != nil {
@@ -103,7 +108,6 @@ func (t *TaskSubmitter) submit(ctx context.Context, tx *store.WriteTx, in signet
 	if err != nil {
 		return signet.TaskSubmissionResult{}, err
 	}
-	identity := "client:" + in.CommandID
 	implementationRunID := ManualSubmissionRunID(identity, in.ProjectID, in.SourceDigest, policyKeysDigest, publicationDigest, "")
 	specificationRunID, err := SpecificationRunIDForImplementation(implementationRunID)
 	if err != nil {
@@ -186,4 +190,22 @@ func (t *TaskSubmitter) submit(ctx context.Context, tx *store.WriteTx, in signet
 		}
 	}
 	return signet.TaskSubmissionResult{TaskID: task.ID, SpecificationRunID: submitted.Run.ID, Name: task.Name}, nil
+}
+
+// submissionIdentity is the manual-submission identity a command's task is
+// keyed by. A device command is namespaced under client:, so no client can
+// name another origin's task. A daemon command ID is already the daemon's own
+// identity (domain.ImageUpkeepSubmissionIdentity), so it is used as it stands.
+func submissionIdentity(origin domain.TaskSubmissionOrigin, commandID string) (string, error) {
+	switch origin {
+	case domain.TaskSubmissionOriginDevice:
+		return "client:" + commandID, nil
+	case domain.TaskSubmissionOriginDaemon:
+		if !strings.HasPrefix(commandID, "daemon:") {
+			return "", fmt.Errorf("daemon submission %q is outside the daemon namespace: %w",
+				commandID, domain.ErrTaskSubmissionOriginMismatch)
+		}
+		return commandID, nil
+	}
+	return "", fmt.Errorf("submit task origin %q: %w", origin, domain.ErrInvalidTaskSubmissionOrigin)
 }

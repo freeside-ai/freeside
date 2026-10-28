@@ -801,12 +801,26 @@ func (w *productionPublicationWorkflow) verifyReentry(
 	if err != nil {
 		return productionReentryCheckpoint{}, err
 	}
+	repair, err := w.repairVerification(ctx, binding, baseSHA)
+	if err != nil {
+		return productionReentryCheckpoint{}, err
+	}
 	// The cycle's own base, not the one its producer was admitted at. When
 	// the admitted image cannot serve it, a recorded image that does
 	// verifies the cycle instead; with none, the caller turns the refusal
 	// into this cycle's stop, or the lane holds it while image upkeep has a
-	// resolution pending.
-	if refused := requireProjectImageServesBase(
+	// resolution pending. A maintenance task's cycle still at its refusal's
+	// tip takes the first cycle's repair gate instead.
+	if repair {
+		bound, refusal, err := w.bindRepairVerificationImage(ctx, task, binding, checkoutDir, workspaceSHA)
+		if err != nil {
+			return productionReentryCheckpoint{}, err
+		}
+		if refusal != nil {
+			return productionReentryCheckpoint{}, &reentryRebuildRefusal{refusal: *refusal}
+		}
+		binding = bound
+	} else if refused := requireProjectImageServesBase(
 		ctx, binding.image, checkoutDir, baseSHA, w.preparationDigest,
 	); refused != nil {
 		// A cycle that verifies the head itself shares the rebuild row key

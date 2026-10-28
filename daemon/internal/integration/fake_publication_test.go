@@ -104,6 +104,11 @@ type publicationHarness struct {
 	tokens                    publish.TokenSource
 	now                       time.Time
 	afterPublicationFinalized func() error
+
+	// repairRefusal, when set, makes a client submission the maintenance
+	// task image upkeep submits for the refusal it returns, given the
+	// harness's project image, in place of a device's task.
+	repairRefusal func(domain.ProjectImage) domain.ImageUpkeepRefusalInput
 }
 
 func newPublicationHarness(t *testing.T) *publicationHarness {

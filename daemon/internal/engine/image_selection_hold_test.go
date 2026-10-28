@@ -22,9 +22,20 @@ type selectionHoldFixture struct {
 	// selected is what the selection returns; selectErr, when set, wins.
 	selected  domain.ImageRef
 	selectErr error
+	// repairs records the repair refusal each selection was passed.
+	repairs []*domain.ImageUpkeepRefusal
 }
 
 func newSelectionHoldFixture(t *testing.T) *selectionHoldFixture {
+	t.Helper()
+	return newSelectionHoldFixtureSubmitting(t, specificationFixture.submit)
+}
+
+// newSelectionHoldFixtureSubmitting submits the specification run with
+// submit instead of the fixture's default submission.
+func newSelectionHoldFixtureSubmitting(
+	t *testing.T, submit func(specificationFixture, *testing.T),
+) *selectionHoldFixture {
 	t.Helper()
 	f := newSpecificationFixture(t, false, 4)
 	driver := f.newDriver(t)
@@ -34,9 +45,12 @@ func newSelectionHoldFixture(t *testing.T) *selectionHoldFixture {
 	}}); err != nil {
 		t.Fatal(err)
 	}
-	f.submit(t)
+	submit(f, t)
 	h := &selectionHoldFixture{fixture: f, engine: f.newEngine(t, driver), invocationID: invocationID}
-	h.engine.selectImage = func(context.Context, domain.InvocationID) (domain.ImageRef, error) {
+	h.engine.selectImage = func(
+		_ context.Context, _ domain.InvocationID, repair *domain.ImageUpkeepRefusal,
+	) (domain.ImageRef, error) {
+		h.repairs = append(h.repairs, repair)
 		return h.selected, h.selectErr
 	}
 	return h

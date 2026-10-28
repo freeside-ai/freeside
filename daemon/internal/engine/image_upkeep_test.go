@@ -906,6 +906,66 @@ func TestImageUpkeepPendingResolution(t *testing.T) {
 	}
 }
 
+// A settled repair refusal submits its maintenance task on every pass that
+// reaches it, the scheduled pass that reuses the verdict included, and a
+// failed submit is the pass's error. Other classes submit nothing.
+func TestImageUpkeepSubmitsMaintenanceForARepairRefusal(t *testing.T) {
+	t.Parallel()
+	const otherRecipe = `{"commands":[["true"]],"capture":"none"}`
+	repo := newUpkeepRepo(t)
+	h := newUpkeepHarness(t, openUpkeepStore(t), repo, upkeepRegistrySet)
+	h.seed(upkeepImage(t, repo.npmBase(), nil))
+	var submitted []domain.Digest
+	submitErr := errors.New("no project is configured")
+	var failSubmit bool
+	h.upkeep.SubmitMaintenance = func(_ context.Context, refusal domain.ImageUpkeepRefusal) error {
+		submitted = append(submitted, refusal.ID)
+		if failSubmit {
+			return submitErr
+		}
+		return nil
+	}
+
+	policy := repo.commit(map[string]string{verify.DefaultRecipePath: otherRecipe})
+	h.observeTip(policy)
+	if err := h.upkeep.RunAll(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	if len(submitted) != 0 {
+		t.Fatalf("a policy refusal submitted %v, want nothing", submitted)
+	}
+
+	h.builder.fail = projectimage.ErrProofFailed
+	tip := repo.commit(map[string]string{
+		verify.DefaultRecipePath: upkeepRecipe, "src/index.js": "export const a = 1;\n",
+	})
+	h.observeTip(tip)
+	failSubmit = true
+	if err := h.upkeep.RunAll(t.Context()); !errors.Is(err, submitErr) {
+		t.Fatalf("pass with a failing submit = %v, want its error", err)
+	}
+	var repair domain.ImageUpkeepRefusal
+	for _, refusal := range h.refusals() {
+		if refusal.TipSHA == tip {
+			repair = refusal
+		}
+	}
+	if repair.Class != domain.ImageUpkeepRefusalRepair {
+		t.Fatalf("refusal at the tip = %+v, want a recorded repair refusal", repair)
+	}
+	failSubmit = false
+	builds := len(h.builder.requests)
+	if err := h.upkeep.RunScheduled(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	if len(h.builder.requests) != builds {
+		t.Fatal("the scheduled pass built again instead of reusing the verdict")
+	}
+	if len(submitted) != 2 || submitted[0] != repair.ID || submitted[1] != repair.ID {
+		t.Fatalf("submitted = %v, want the repair refusal twice", submitted)
+	}
+}
+
 // A host fault is not a verdict: an attempt keeps waiting on a rebuild.
 func TestImageUpkeepPendingResolutionTreatsAHostFaultAsARebuild(t *testing.T) {
 	t.Parallel()

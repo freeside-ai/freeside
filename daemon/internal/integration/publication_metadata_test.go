@@ -56,7 +56,9 @@ func submitClientForPublication(t *testing.T, h *publicationHarness, image domai
 		t.Fatal(err)
 	}
 	var specificationRunID domain.RunID
-	if h.cliSubmission != nil {
+	if h.repairRefusal != nil {
+		specificationRunID = submitImageRepairForPublication(t, h, service, image, project)
+	} else if h.cliSubmission != nil {
 		specificationRunID = submitCLIForPublication(t, h, project, source, keys, commandID)
 	} else {
 		result, err := service.Submit(h.ctx, signet.ClientCommand{
@@ -68,7 +70,7 @@ func submitClientForPublication(t *testing.T, h *publicationHarness, image domai
 		}
 		specificationRunID = result.Submission.SpecificationRunID
 	}
-	if prior == nil {
+	if prior == nil && h.repairRefusal == nil {
 		assertProjectAuthority(t, h, project, false)
 	}
 	var request struct {

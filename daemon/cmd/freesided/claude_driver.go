@@ -2372,6 +2372,10 @@ func runClaudeConformance(
 // publish-lane transport capability that does not exist yet. Deferred
 // deliberately: pinning the base per run, rather than per daemon, is a
 // shared-contract change (the Run carries no base).
+//
+// One exception needs no such change: the engine admits a maintenance
+// task at its refusal's tip instead of this base. That tip comes from the
+// immutable refusal record, so every attempt derives the same one.
 func claudeAdmissionDerivation(cfg claudeDriverConfig) engine.AdmissionDerivation {
 	base := domain.BaseRevision{
 		Repo: cfg.Repo, RepositoryID: cfg.RepositoryID,
