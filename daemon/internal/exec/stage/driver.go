@@ -79,7 +79,9 @@ type Config struct {
 	// admitted verification recipe over hydrated dependencies (#522). It is
 	// composition config resolved from the immutable project_images record, not
 	// per-attempt state, so recovery re-derives the same command; empty leaves
-	// the attended launch command unchanged. New re-gates it to empty or the
+	// the attended launch command unchanged. An admission whose
+	// exec.StartSpec.WorkspaceHydration skips hydration runs without it for
+	// that start alone. New re-gates it to empty or the
 	// fixed helper (projectimage.PreparationPath): the value reaches root argv,
 	// so this exported constructor is a trust boundary that re-runs the policy
 	// gate rather than trusting an arbitrary caller-supplied command (AGENTS.md
@@ -542,16 +544,25 @@ func (d *Driver) StartWithInputs(
 	promptInputs.Delivery = delivery
 	prompt, err := d.provider.RenderPrompt(promptInputs)
 
+	// Capture the composition-derived hydration argv into the durable record
+	// so recovery rebuilds the launch command from the intent, not from a
+	// d.prepare that a later deploy or mode change may have altered. An
+	// admission that skips hydration overrides composition: its start records
+	// no argv, so neither the launch nor its recovery runs the helper. The
+	// switch has no default so the exhaustive linter makes a new mode decide
+	// here; unset falls through to composition.
+	preparation := slices.Clone(d.prepare)
+	switch spec.WorkspaceHydration {
+	case domain.WorkspaceHydrationNone:
+		preparation = nil
+	}
 	now := d.now().UTC()
 	in := intent{
 		InvocationID: id, RunID: runID, Phase: phaseSeeding, Spec: spec,
 		Seed: filepath.Join(d.seedRoot, runID), Prompt: prompt,
 		PromptDelivery: delivery,
 		Inputs:         materialized, Instructions: instructions,
-		// Capture the composition-derived hydration argv into the durable
-		// record so recovery rebuilds the launch command from the intent, not
-		// from a d.prepare that a later deploy or mode change may have altered.
-		Preparation: slices.Clone(d.prepare),
+		Preparation: preparation,
 		RecordedAt:  now, CommitDate: now,
 	}
 	if err != nil {
