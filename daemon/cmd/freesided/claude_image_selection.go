@@ -407,6 +407,22 @@ func selectRecordedImage(
 	if !found {
 		return domain.ProjectImage{}, false, nil
 	}
+	return selectAmongRecordedImages(pointed, images, repo, baseSHA, proved,
+		func(layout domain.ProjectImageInputLayout) (domain.ProjectImageBaseInputs, error) {
+			return base.read(ctx, layout)
+		})
+}
+
+// selectAmongRecordedImages selects among a pointer and record list already
+// read. The daemon (selectRecordedImage) and preflight
+// (selectPreflightWriterImage) share it so both answer the same question. A
+// pointer whose repository disagrees with repo is
+// domain.ErrRepositoryIdentityMismatch; a base that cannot be read is
+// exec.ErrInputUnavailable.
+func selectAmongRecordedImages(
+	pointed domain.ProjectImage, images []domain.ProjectImage, repo, baseSHA string, proved domain.ImageRef,
+	baseInputs func(domain.ProjectImageInputLayout) (domain.ProjectImageBaseInputs, error),
+) (domain.ProjectImage, bool, error) {
 	if pointed.Repository != repo {
 		return domain.ProjectImage{}, false, fmt.Errorf(
 			"admitted image repository %q disagrees with configured %q: %w",
@@ -414,10 +430,7 @@ func selectRecordedImage(
 	}
 	selected, found, err := engine.SelectProjectImage(engine.ProjectImageSelection{
 		Proved: proved, Pointed: pointed, Images: images, BaseSHA: baseSHA,
-		BaseInputs: func(layout domain.ProjectImageInputLayout) (domain.ProjectImageBaseInputs, error) {
-			return base.read(ctx, layout)
-		},
-		Preparation: projectimage.PreparationDigest(),
+		BaseInputs: baseInputs, Preparation: projectimage.PreparationDigest(),
 	})
 	if err != nil {
 		return domain.ProjectImage{}, false, fmt.Errorf("select project image: %w",
