@@ -380,16 +380,60 @@ func RebuildRequest(
 	recipe []byte,
 	inputs BuildInputs,
 ) (Request, error) {
+	if got := verify.RecipeDigest(recipe); got != image.RecipeDigest {
+		return Request{}, fmt.Errorf("rebuild recipe digest %s, want the image's %s: %w",
+			got, image.RecipeDigest, ErrInvalidRequest)
+	}
+	return imageRequest(image, headSHA, sourceDir, recipe, "rebuild-", inputs)
+}
+
+// AdoptedRecipeRequest derives the request that builds a new image at tipSHA
+// under a recipe an image-policy adoption approved (plan §5.7, Project-image
+// upkeep). It is RebuildRequest with the recipe read from the tip's tree
+// instead of the admitted image: the recipe at verify.DefaultRecipePath must
+// hash to adopted. Everything else the image binds carries over, and the tag
+// names the tip.
+func AdoptedRecipeRequest(
+	ctx context.Context,
+	gitPath string,
+	image domain.ProjectImage,
+	tipSHA string,
+	sourceDir string,
+	adopted domain.Digest,
+	inputs BuildInputs,
+) (Request, error) {
+	reader, err := verify.OpenCommitReader(ctx, gitPath, sourceDir)
+	if err != nil {
+		return Request{}, fmt.Errorf("read the adopted recipe at %s: %w", tipSHA, err)
+	}
+	defer reader.Close()
+	recipe, present, err := reader.ReadFile(ctx, tipSHA, verify.DefaultRecipePath, verify.DefaultMaxRecipeBytes)
+	if err != nil {
+		return Request{}, fmt.Errorf("read the adopted recipe at %s: %w", tipSHA, err)
+	}
+	if !present {
+		return Request{}, fmt.Errorf("tip %s declares no recipe at %s: %w",
+			tipSHA, verify.DefaultRecipePath, ErrInvalidRequest)
+	}
+	if got := verify.RecipeDigest(recipe); got != adopted {
+		return Request{}, fmt.Errorf("recipe digest %s at tip %s, want the adopted %s: %w",
+			got, tipSHA, adopted, ErrInvalidRequest)
+	}
+	return imageRequest(image, tipSHA, sourceDir, recipe, "adopt-", inputs)
+}
+
+// imageRequest builds the request for a new image of image's repository at
+// headSHA from recipe. The registry destination is parsed back out of the
+// image's own reference.
+func imageRequest(
+	image domain.ProjectImage, headSHA, sourceDir string, recipe []byte, tagPrefix string, inputs BuildInputs,
+) (Request, error) {
 	if !commitPattern.MatchString(headSHA) {
 		return Request{}, fmt.Errorf("rebuild commit %q is not a full lowercase SHA-1: %w",
 			headSHA, ErrInvalidRequest)
 	}
 	if sourceDir == "" {
 		return Request{}, fmt.Errorf("rebuild source checkout is required: %w", ErrInvalidRequest)
-	}
-	if got := verify.RecipeDigest(recipe); got != image.RecipeDigest {
-		return Request{}, fmt.Errorf("rebuild recipe digest %s, want the image's %s: %w",
-			got, image.RecipeDigest, ErrInvalidRequest)
 	}
 	destination, _, _ := strings.Cut(string(image.ImageRef), "@")
 	separator := strings.LastIndex(destination, "/")
@@ -406,7 +450,7 @@ func RebuildRequest(
 		BaseImageRef: image.BaseImageRef,
 		BaseBuildRef: inputs.BaseBuildRef,
 		ImageName:    destination[separator+1:],
-		RefTag:       "rebuild-" + headSHA[:12],
+		RefTag:       tagPrefix + headSHA[:12],
 		DNS:          append([]string{}, inputs.DNS...),
 		BuildProxy:   inputs.BuildProxy,
 	}

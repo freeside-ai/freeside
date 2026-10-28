@@ -7,11 +7,13 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
+	"slices"
 	"sync"
 	"time"
 
 	"github.com/freeside-ai/freeside/daemon/internal/domain"
 	"github.com/freeside-ai/freeside/daemon/internal/projectimage"
+	"github.com/freeside-ai/freeside/daemon/internal/signet"
 	"github.com/freeside-ai/freeside/daemon/internal/store"
 	"github.com/freeside-ai/freeside/daemon/internal/verify"
 	"github.com/freeside-ai/freeside/daemon/internal/ward"
@@ -21,9 +23,10 @@ import (
 // default-branch tip (plan §5.7, Project-image upkeep). A pass reads the
 // admitted-image pointer, and when the image it names is not current at the
 // tip, either rebuilds the image and advances the pointer, or records why it
-// could not. Neither outcome raises an AttentionItem: a refusal is a record
-// the adoption and maintenance units act on, and a host fault is an advisory
-// system_health item the Health hook converges.
+// could not. A refusal is a record the adoption and maintenance units act
+// on: one that only policy can answer raises an image-policy adoption card
+// (proposeAdoption), and a host fault is an advisory system_health item the
+// Health hook converges.
 //
 // The daemon serves one repository, so one ImageUpkeep covers it.
 type ImageUpkeep struct {
@@ -69,6 +72,11 @@ type ImageUpkeep struct {
 	// measuring again, so a submit that failed after the refusal was recorded
 	// is retried on the next fire. Nil means no task is submitted.
 	SubmitMaintenance func(context.Context, domain.ImageUpkeepRefusal) error
+	// Projects are the configured projects an adoption card may be raised
+	// in; the first one registered for RepositoryID takes it. Empty means
+	// no card is raised. Blobs receives a card's evidence body.
+	Projects []domain.ProjectID
+	Blobs    signet.EvidenceBlobWriter
 
 	// settledMu guards settled, the last settled outcome this process
 	// reached, which PendingResolution reads.
@@ -168,6 +176,9 @@ func (u *ImageUpkeep) run(ctx context.Context, tipSHA string, reuseVerdict bool)
 		u.settledMu.Lock()
 		u.settled = &outcome
 		u.settledMu.Unlock()
+		if err := u.withdrawAdoptions(ctx, outcome.refusal); err != nil {
+			return outcome, err
+		}
 	}
 	if err := u.Health(ctx, outcome.hostFault); err != nil {
 		return outcome, fmt.Errorf("converge image upkeep health: %w", err)
@@ -295,14 +306,22 @@ func (u *ImageUpkeep) pass(ctx context.Context, tipSHA string, reuseVerdict bool
 		return u.refuse(ctx, image, tipSHA, domain.ImageUpkeepRefusalHostFault, nil,
 			"the admitted image could not be measured against the tip: "+boundedRebuildText(err.Error()))
 	}
-	if decision.Refusal != "" {
+	adopted, err := u.adoptedRecipe(ctx, decision)
+	if err != nil {
+		return imageUpkeepOutcome{}, err
+	}
+	if decision.Refusal != "" && adopted == nil {
 		class, err := projectimage.ClassifyUpkeepFindings(decision.Findings)
 		if err != nil {
 			return imageUpkeepOutcome{}, err
 		}
-		return u.refuse(ctx, image, tipSHA, class, decision.Findings, "")
+		outcome, err := u.refuse(ctx, image, tipSHA, class, decision.Findings, "")
+		if err != nil || class != domain.ImageUpkeepRefusalPolicy {
+			return outcome, err
+		}
+		return outcome, u.proposeAdoption(ctx, dir, image, *outcome.refusal)
 	}
-	target, found, err := u.recordedServing(ctx, dir, image, decision.Head)
+	target, found, err := u.recordedServing(ctx, dir, keeps(image, adopted), decision.Head)
 	if err != nil {
 		return imageUpkeepOutcome{}, err
 	}
@@ -313,7 +332,7 @@ func (u *ImageUpkeep) pass(ctx context.Context, tipSHA string, reuseVerdict bool
 				[]domain.ImageUpkeepClauseFinding{{Clause: projectimage.RebuildRefusalNotConfigured, Detail: detail}},
 				"this daemon is not configured to rebuild project images: "+detail)
 		}
-		built, outcome, err := u.rebuild(ctx, pointer, image, dir, tipSHA, decision.Head)
+		built, outcome, err := u.rebuild(ctx, pointer, image, dir, tipSHA, decision.Head, adopted)
 		if err != nil || built == nil {
 			return outcome, err
 		}
@@ -383,13 +402,15 @@ func (u *ImageUpkeep) recordedServing(
 // rebuild builds the pointed-to image again at the tip under the shared
 // gate. It returns the image to advance to, or, with a nil image, the
 // outcome that ends the pass: a refusal, or none when another pass moved the
-// pointer.
+// pointer. A non-nil adopted builds a new image from the tip's recipe, which
+// must hash to adopted, instead of the image's own.
 func (u *ImageUpkeep) rebuild(
 	ctx context.Context,
 	pointer domain.AdmittedImagePointer,
 	image domain.ProjectImage,
 	dir, tipSHA string,
 	tip domain.ProjectImageBaseInputs,
+	adopted *domain.Digest,
 ) (*domain.ProjectImage, imageUpkeepOutcome, error) {
 	if err := u.Rebuild.gate.acquire(ctx); err != nil {
 		return nil, imageUpkeepOutcome{}, err
@@ -401,7 +422,8 @@ func (u *ImageUpkeep) rebuild(
 	if err != nil || !found || again.ImageID != pointer.ImageID {
 		return nil, imageUpkeepOutcome{}, err
 	}
-	if recorded, found, err := u.recordedServing(ctx, dir, image, tip); err != nil || found {
+	want := keeps(image, adopted)
+	if recorded, found, err := u.recordedServing(ctx, dir, want, tip); err != nil || found {
 		return &recorded, imageUpkeepOutcome{}, err
 	}
 	refuse := func(class domain.ImageUpkeepRefusalClass, cause error) (*domain.ProjectImage, imageUpkeepOutcome, error) {
@@ -417,15 +439,25 @@ func (u *ImageUpkeep) rebuild(
 		outcome, err := u.refuse(ctx, image, tipSHA, class, findings, fault)
 		return nil, outcome, err
 	}
-	recipe, err := u.readRecipe(ctx, image)
-	if errors.Is(err, errImageUpkeepHostFault) {
-		return refuse(domain.ImageUpkeepRefusalHostFault, err)
+	var request projectimage.Request
+	if adopted != nil {
+		// A new image under the adopted recipe, read from the tip's tree.
+		request, err = projectimage.AdoptedRecipeRequest(ctx, "git", image, tipSHA, dir, *adopted, u.Rebuild.Inputs)
+	} else {
+		var recipe []byte
+		recipe, err = u.readRecipe(ctx, image)
+		if errors.Is(err, errImageUpkeepHostFault) {
+			return refuse(domain.ImageUpkeepRefusalHostFault, err)
+		}
+		if err != nil {
+			return nil, imageUpkeepOutcome{}, err
+		}
+		request, err = projectimage.RebuildRequest(image, tipSHA, dir, recipe, u.Rebuild.Inputs)
 	}
 	if err != nil {
-		return nil, imageUpkeepOutcome{}, err
-	}
-	request, err := projectimage.RebuildRequest(image, tipSHA, dir, recipe, u.Rebuild.Inputs)
-	if err != nil {
+		if ctx.Err() != nil {
+			return nil, imageUpkeepOutcome{}, err
+		}
 		return refuse(projectimage.ClassifyUpkeepBuildFailure(err), err)
 	}
 	built, timedOut, err := u.Rebuild.build(ctx, request)
@@ -456,11 +488,49 @@ func (u *ImageUpkeep) rebuild(
 			"rebuilt project image was built at %s, not %s: %w",
 			recorded.CommitSHA, tipSHA, domain.ErrParentKeyMismatch))
 	}
-	if err := rebuiltImageServes(recorded, image, tip, u.PreparationDigest); err != nil {
+	if err := rebuiltImageServes(recorded, want, tip, u.PreparationDigest); err != nil {
 		return refuse(domain.ImageUpkeepRefusalHostFault, fmt.Errorf("rebuilt project image at %s: %w",
 			tipSHA, errors.Join(domain.ErrParentKeyMismatch, err)))
 	}
 	return &recorded, imageUpkeepOutcome{}, nil
+}
+
+// adoptedRecipe returns the tip's recipe digest when the gate's only
+// finding is a changed recipe and an image-policy adoption approved that
+// digest for the repository (plan §5.7, Project-image upkeep). The
+// unchanged-recipe clause itself is unchanged: an adoption is the policy
+// that answers it, and nothing else does.
+func (u *ImageUpkeep) adoptedRecipe(
+	ctx context.Context, decision projectimage.RebuildDecision,
+) (*domain.Digest, error) {
+	if len(decision.Findings) != 1 || decision.Findings[0].Clause != domain.RebuildRefusalRecipeChanged ||
+		decision.Head.RecipeDigest == "" {
+		return nil, nil
+	}
+	digest := decision.Head.RecipeDigest
+	adopted := false
+	if err := u.Store.Read(ctx, func(tx *store.ReadTx) error {
+		adoptions, err := tx.ListImagePolicyAdoptions(ctx, u.RepositoryID)
+		for _, adoption := range adoptions {
+			adopted = adopted || (adoption.RecipeDigest != nil && *adoption.RecipeDigest == digest)
+		}
+		return err
+	}); err != nil {
+		return nil, fmt.Errorf("read the repository's adopted recipes: %w", err)
+	}
+	if !adopted {
+		return nil, nil
+	}
+	return &digest, nil
+}
+
+// keeps is what an image that replaces image must keep: everything image
+// binds, with the adopted recipe in place of its own when one is given.
+func keeps(image domain.ProjectImage, adopted *domain.Digest) domain.ProjectImage {
+	if adopted != nil {
+		image.RecipeDigest = *adopted
+	}
+	return image
 }
 
 // errImageUpkeepHostFault marks a failure of the host rather than of the
@@ -509,21 +579,32 @@ func (u *ImageUpkeep) readRecipe(ctx context.Context, image domain.ProjectImage)
 }
 
 // settledRefusal finds a refusal other than a host fault already recorded
-// for imageID at tipSHA.
+// for imageID at tipSHA. A refusal an adoption answers is not settled: the
+// adoption changed what the tip may build under, so the tip is measured
+// again, and a refusal that pass records is the one found next time.
 func (u *ImageUpkeep) settledRefusal(
 	ctx context.Context, imageID domain.Digest, tipSHA string,
 ) (domain.ImageUpkeepRefusal, bool, error) {
-	var refusals []domain.ImageUpkeepRefusal
+	var (
+		refusals  []domain.ImageUpkeepRefusal
+		adoptions []domain.ImagePolicyAdoption
+	)
 	if err := u.Store.Read(ctx, func(tx *store.ReadTx) error {
 		var err error
-		refusals, err = tx.ListImageUpkeepRefusals(ctx, u.RepositoryID)
+		if refusals, err = tx.ListImageUpkeepRefusals(ctx, u.RepositoryID); err != nil {
+			return err
+		}
+		adoptions, err = tx.ListImagePolicyAdoptions(ctx, u.RepositoryID)
 		return err
 	}); err != nil {
 		return domain.ImageUpkeepRefusal{}, false, fmt.Errorf("list image upkeep refusals: %w", err)
 	}
 	for _, refusal := range refusals {
+		answered := slices.ContainsFunc(adoptions, func(adoption domain.ImagePolicyAdoption) bool {
+			return adoption.RefusalRecordID == refusal.ID
+		})
 		if refusal.MeasuredFromImageID == imageID && refusal.TipSHA == tipSHA &&
-			refusal.Class != domain.ImageUpkeepRefusalHostFault {
+			refusal.Class != domain.ImageUpkeepRefusalHostFault && !answered {
 			return refusal, true, nil
 		}
 	}
