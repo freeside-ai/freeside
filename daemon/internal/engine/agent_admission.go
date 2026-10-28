@@ -83,14 +83,14 @@ type RoleAgent struct {
 // ResolveRole runs the admission steps that need no launch (plan §5.4): the
 // role's line resolves to an agent whose fragments, enrollment, and enabled
 // identity join; the line selects that agent's current digest; and the
-// enrollment holds a store generation. Stage admission adds the launch,
+// enrollment holds an unmarked store generation. Stage admission adds the launch,
 // conformance, and deadline checks; the review roles, whose launch coverage
 // is not enforced yet (#1980), add only the offer's not_after, in the
 // daemon's review check.
 //
 // It reads the lineup only. No task is in view here, so no task line is: the
-// startup and preflight checks, the shadow reviewer, and the review source's
-// own agent all resolve through it.
+// startup and preflight checks resolve through it. Review checks resolve the
+// same line, but report a mark after their other admission steps.
 func ResolveRole(
 	ctx context.Context, st *store.Store, tree agenttree.Tree, role domain.RoleName,
 ) (RoleAgent, error) {
@@ -106,6 +106,26 @@ func ResolveRole(
 	return agent, nil
 }
 
+// RoleHarnessClient is the harness client the role's lineup line runs. It
+// runs ResolveRole's steps except the generation's integrity mark, and
+// returns no agent, so nothing launches on it: it picks the review source the
+// daemon composes for the reviewer, and CheckReviewRole, which every review
+// launch runs, refuses a marked generation.
+func RoleHarnessClient(
+	ctx context.Context, st *store.Store, tree agenttree.Tree, role domain.RoleName,
+) (domain.HarnessClientKind, error) {
+	var agent RoleAgent
+	err := st.Read(ctx, func(tx *store.ReadTx) error {
+		var err error
+		agent, err = resolveRoleLine(ctx, tx, tree, role)
+		return err
+	})
+	if err != nil {
+		return "", fmt.Errorf("role %s: %w", role, errors.Join(ErrAgentNotAdmissible, err))
+	}
+	return agent.Enrollment.HarnessClient, nil
+}
+
 func lineupLine(tree agenttree.Tree, role domain.RoleName) (domain.LineupSelection, error) {
 	lineup, err := tree.ResolveLineup()
 	if err != nil {
@@ -119,6 +139,22 @@ func lineupLine(tree agenttree.Tree, role domain.RoleName) (domain.LineupSelecti
 }
 
 func resolveRole(
+	ctx context.Context, tx *store.ReadTx, tree agenttree.Tree, role domain.RoleName,
+) (RoleAgent, error) {
+	agent, err := resolveRoleLine(ctx, tx, tree, role)
+	if err != nil {
+		return RoleAgent{}, err
+	}
+	if err := agent.requireUnmarked(ctx, tx); err != nil {
+		return RoleAgent{}, err
+	}
+	return agent, nil
+}
+
+// resolveRoleLine is resolveRole without the generation's integrity mark.
+// Admission callers must also read the mark in the same transaction and
+// refuse on it. RoleHarnessClient only selects a source; it admits nothing.
+func resolveRoleLine(
 	ctx context.Context, tx *store.ReadTx, tree agenttree.Tree, role domain.RoleName,
 ) (RoleAgent, error) {
 	line, err := lineupLine(tree, role)
@@ -175,6 +211,9 @@ func resolveAttemptRole(
 	if err := agent.readGeneration(ctx, tx); err != nil {
 		return RoleAgent{}, err
 	}
+	if err := agent.requireUnmarked(ctx, tx); err != nil {
+		return RoleAgent{}, err
+	}
 	return agent, nil
 }
 
@@ -212,10 +251,16 @@ func (a *RoleAgent) readGeneration(ctx context.Context, tx *store.ReadTx) error 
 	if a.Generation, err = tx.CurrentEnrollmentGeneration(ctx, a.Enrollment.ID); err != nil {
 		return fmt.Errorf("enrollment %s holds no store generation: %w", a.Enrollment.ID, err)
 	}
-	// Credentialed, in part (§5.4 admission rule 4): a generation the
-	// credential-integrity probe marked is not a valid one. The mark is read
-	// here, in the transaction that read the generation, and not carried on
-	// it; re-enrollment appends an unmarked successor, which clears this.
+	return nil
+}
+
+// requireUnmarked refuses the generation readGeneration read when the
+// credential-integrity probe marked it: credentialed, in part (§5.4 admission
+// rule 4), since a marked generation is not a valid one. The caller reads the
+// mark in the transaction that read the generation, so the two are one view;
+// the mark is not carried on the generation, and re-enrollment appends an
+// unmarked successor, which clears this.
+func (a *RoleAgent) requireUnmarked(ctx context.Context, tx *store.ReadTx) error {
 	return tx.RequireGenerationUnmarked(ctx, a.Enrollment.ID, a.Generation.Ordinal)
 }
 

@@ -73,20 +73,22 @@ func shadowReviewProvider() ward.RoutedReviewProvider {
 // the routed source, and a harness ward keeps no routed provider for is
 // refused rather than run on an unproven source. There is no flag or setting
 // beside the line, so a restart with the same lineup composes the same source.
+// A marked generation does not stop the selection: the review check that
+// follows reports it.
 func reviewProviderFor(
 	ctx context.Context, st *store.Store, tree agenttree.Tree, role domain.RoleName,
 ) (ward.RoutedReviewProvider, error) {
 	if role == domain.RoleShadowReviewer {
 		return shadowReviewProvider(), nil
 	}
-	agent, err := engine.ResolveRole(ctx, st, tree, role)
+	harness, err := engine.RoleHarnessClient(ctx, st, tree, role)
 	if err != nil {
 		return ward.RoutedReviewProvider{}, &roleAdmissionError{Role: role, Err: err}
 	}
-	provider, ok := ward.LookupRoutedReviewProvider(agent.Enrollment.HarnessClient)
+	provider, ok := ward.LookupRoutedReviewProvider(harness)
 	if !ok {
 		return ward.RoutedReviewProvider{}, &roleAdmissionError{Role: role, Err: &reviewProviderMismatch{
-			Harness: agent.Enrollment.HarnessClient,
+			Harness: harness,
 		}}
 	}
 	return provider, nil
@@ -129,7 +131,7 @@ func checkReviewRoleAgent(
 ) (engine.ReviewRoleAgent, error) {
 	agent, err := engine.CheckReviewRole(ctx, st, tree, agentbaseline.RoleLaunch, spec, "", now)
 	if err != nil {
-		return engine.ReviewRoleAgent{}, &roleAdmissionError{Role: spec.Role, Err: err}
+		return agent, &roleAdmissionError{Role: spec.Role, Err: err}
 	}
 	return agent, nil
 }
@@ -139,7 +141,9 @@ func checkReviewRoleAgent(
 // the reviewer and shadow reviewer lines, so the review sources and the
 // approved configuration digests read the values the lineup selects. A role
 // the configuration does not use is not resolved. The routed review auth mode
-// stays a flag, and it must be one the selected provider delivers.
+// stays a flag, and it must be one the selected provider delivers. A role
+// whose only failure is a marked generation is composed anyway
+// (composableReviewAgent).
 func resolveReviewSelection(
 	ctx context.Context, st *store.Store, tree agenttree.Tree, cfg claudeDriverConfig, now time.Time,
 ) (claudeDriverConfig, error) {
@@ -153,7 +157,8 @@ func resolveReviewSelection(
 	if err := requireReviewAuthMode(provider, cfg.ReviewAuthMode); err != nil {
 		return cfg, err
 	}
-	reviewer, err := checkReviewRoleAgent(ctx, st, tree, reviewRole(domain.RoleReviewer, provider, nil), now)
+	reviewer, err := composableReviewAgent(
+		checkReviewRoleAgent(ctx, st, tree, reviewRole(domain.RoleReviewer, provider, nil), now))
 	if err != nil {
 		return cfg, err
 	}
@@ -163,13 +168,26 @@ func resolveReviewSelection(
 	if cfg.ShadowReviewImage == "" {
 		return cfg, nil
 	}
-	shadow, err := reviewRoleAgent(ctx, st, tree, domain.RoleShadowReviewer, now)
+	shadow, err := composableReviewAgent(reviewRoleAgent(ctx, st, tree, domain.RoleShadowReviewer, now))
 	if err != nil {
 		return cfg, err
 	}
 	cfg.ShadowReviewAuthIdentityID, cfg.ShadowReviewCostOwner = shadow.Identity.ID, shadow.Identity.CostOwner
 	cfg.ShadowReviewModel, cfg.ShadowReviewReasoningEffort = shadow.Model, shadow.NativeEffort
 	return cfg, nil
+}
+
+// composableReviewAgent accepts a review role whose only failure is a marked
+// generation, with the agent the check returned alongside its refusal. A mark
+// holds only the admissions that would run on that generation (the owner decision
+// on #1740): the source is composed from the line, and its admission refuses
+// each launch until the enrollment is re-enrolled. Any other failure still
+// stops startup.
+func composableReviewAgent(agent engine.ReviewRoleAgent, err error) (engine.ReviewRoleAgent, error) {
+	if errors.Is(err, domain.ErrGenerationIntegrityMarked) {
+		return agent, nil
+	}
+	return agent, err
 }
 
 // requireReviewAuthMode refuses a -review-auth-mode the routed provider does
@@ -286,12 +304,20 @@ func reviewAdmitter(
 
 // checkWriterRoles runs the five admission steps for each writer role with
 // the prompt the daemon runs it on, and returns the first role that fails.
+//
+// A role whose generation is marked is skipped, not returned. A mark holds
+// only the admissions that would run on that generation (the owner decision
+// on #1740), and each attempt's own admission refuses those until the
+// enrollment is re-enrolled; returning it here would hold the whole lineup
+// for the daemon's run. The mark refuses at resolution, so that role's later
+// steps go unchecked until an attempt runs them.
 func checkWriterRoles(
 	ctx context.Context, st *store.Store, agents engine.AgentSelection,
 	prompts map[domain.RoleName]domain.Digest, now time.Time,
 ) *roleAdmissionError {
 	for _, role := range []domain.RoleName{domain.RoleSpecifier, domain.RoleImplementer, domain.RoleRemediator} {
-		if _, err := agents.CheckRole(ctx, st, role, prompts[role], now); err != nil {
+		_, err := agents.CheckRole(ctx, st, role, prompts[role], now)
+		if err != nil && !errors.Is(err, domain.ErrGenerationIntegrityMarked) {
 			return &roleAdmissionError{Role: role, Err: err}
 		}
 	}
@@ -345,8 +371,10 @@ func retiredOpenWork(ctx context.Context, tx *store.ReadTx) ([]retiredWork, erro
 
 // agentSelectionGate holds every lineup admission while selection is not
 // active: a writer role failed its startup check, or a retired identity still
-// owns open work. The role check is fixed for the daemon's run. The retired
-// work is read again on each admission, so the gate opens once that work is
+// owns open work. The role check is fixed for the daemon's run; a marked
+// generation is not a failure of it (checkWriterRoles), so it holds nothing
+// here and re-enrollment needs no restart. The retired work is read again on
+// each admission, so the gate opens once that work is
 // closed; the item activation raised stays open until the next start.
 func agentSelectionGate(st *store.Store, failure *roleAdmissionError) func(context.Context) error {
 	return func(ctx context.Context) error {

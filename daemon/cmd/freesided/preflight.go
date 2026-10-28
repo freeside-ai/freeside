@@ -616,11 +616,20 @@ func evaluateComposition(
 		var (
 			roleFailure      *roleAdmissionError
 			providerMismatch *reviewProviderMismatch
+			marked           *domain.GenerationIntegrityMarkedError
 		)
 		switch {
 		case errors.As(agentsErr, &providerMismatch):
 			failCheck(manifest, "agent_selection", providerMismatch.Error(),
 				"select a reviewer agent on codex_cli or claude_code and pass the -review-auth-mode it accepts: subscription or api_key for Codex, setup_token for Claude")
+		// The line resolves; its generation is what admits nothing. This is
+		// checked before the unresolved case so prelaunch, which keys on that
+		// case's fix, does not report the tree as unadopted.
+		case errors.As(agentsErr, &roleFailure) && errors.As(agentsErr, &marked):
+			failCheck(manifest, "agent_selection",
+				fmt.Sprintf("role %s runs enrollment %s, whose current generation %d the credential-integrity probe marked %s",
+					roleFailure.Role, marked.Mark.EnrollmentID, marked.Mark.Ordinal, marked.Mark.Finding),
+				agentSelectionMarkedFix(marked.Mark.EnrollmentID))
 		case errors.As(agentsErr, &roleFailure):
 			failCheck(manifest, "agent_selection",
 				fmt.Sprintf("role %s has no lineup line that resolves against the store", roleFailure.Role),
@@ -1113,6 +1122,13 @@ func evaluateProdExecution(
 // lineup line that resolves: the one failure of that check that means the
 // tree is not adopted. Prelaunch's walk keys on it.
 const agentSelectionUnresolvedFix = "run freesided auth adopt, commit its tree patch, and pass that commit as -agent-tree-commit"
+
+// agentSelectionMarkedFix is agent_selection's fix when a role's line
+// resolves but its enrollment's current generation is marked. Only
+// re-enrollment, which appends an unmarked successor, clears a mark.
+func agentSelectionMarkedFix(enrollment domain.ClientEnrollmentID) string {
+	return fmt.Sprintf("re-enroll enrollment %s so it holds an unmarked generation, then rerun preflight", enrollment)
+}
 
 func inspectCompositionIdentity(ctx context.Context, cfg preflightConfig) (compositionIdentity, error) {
 	spec, err := readSubmissionFile(cfg.TaskPath)

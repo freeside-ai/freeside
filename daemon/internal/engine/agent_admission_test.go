@@ -829,6 +829,75 @@ func TestLineupAdmissionRefusesAMarkedGeneration(t *testing.T) {
 	}
 }
 
+func TestReviewCheckRefusesAMarkedGenerationAfterOtherChecks(t *testing.T) {
+	t.Parallel()
+	f := newAgentAdmissionFixture(t)
+	ctx := t.Context()
+	prompts := make(map[domain.RoleName]agentbaseline.Prompt)
+	for role, prompt := range agentTestPrompts {
+		prompts[role] = prompt
+	}
+	prompts[domain.RoleReviewer] = agentbaseline.Prompt{Name: "review", Digest: agentTestDigest("6")}
+	tree, err := agentbaseline.Tree(agentbaseline.TreeInput{
+		ClaudeEnrollment: f.enrollment, ClaudeReviewEnrollment: &f.enrollment,
+		Writers: agentTestWriters(), ReviewModel: "claude-review-test", ReviewEffort: domain.EffortHigh,
+		TermsBasisDate: "2026-08-01", PricingRevision: "pricing-2026-08",
+		OfferNotAfter: agentTestAt.Add(24 * time.Hour), Prompts: prompts,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	spec := ReviewRole{
+		Role: domain.RoleReviewer, PromptName: "review", PromptDigest: agentTestDigest("6"),
+		HarnessClient: domain.HarnessClientClaudeCode, Vendor: domain.AgentVendorClaude,
+	}
+	check := func(spec ReviewRole, launch func(domain.RoleName) (domain.LaunchSpec, error), at time.Time) (ReviewRoleAgent, error) {
+		return CheckReviewRole(ctx, f.store, tree, launch, spec, "", at)
+	}
+	want, err := check(spec, agentbaseline.RoleLaunch, agentTestAt)
+	if err != nil {
+		t.Fatal(err)
+	}
+	mark := domain.GenerationIntegrityMark{
+		EnrollmentID: f.enrollment.ID, Ordinal: f.generation.Ordinal,
+		Finding: domain.CredentialIntegrityCorruption, ObservedAt: agentTestAt,
+	}
+	if err := f.store.WriteInternal(ctx, func(tx *store.InternalTx) error {
+		_, err := tx.RecordGenerationIntegrityMark(ctx, mark)
+		return err
+	}); err != nil {
+		t.Fatal(err)
+	}
+	got, err := check(spec, agentbaseline.RoleLaunch, agentTestAt)
+	var marked *domain.GenerationIntegrityMarkedError
+	if !errors.Is(err, ErrAgentNotAdmissible) || !errors.Is(err, domain.ErrGenerationIntegrityMarked) ||
+		!errors.As(err, &marked) || marked.Mark != mark || !reflect.DeepEqual(got, want) {
+		t.Fatalf("marked review check = %+v, %v; want checked agent and typed mark", got, err)
+	}
+	badPrompt := spec
+	badPrompt.PromptDigest = agentTestDigest("9")
+	for name, tc := range map[string]struct {
+		spec   ReviewRole
+		launch func(domain.RoleName) (domain.LaunchSpec, error)
+		at     time.Time
+		want   string
+	}{
+		"prompt": {badPrompt, agentbaseline.RoleLaunch, agentTestAt, "this daemon reviews with"},
+		"offer":  {spec, agentbaseline.RoleLaunch, agentTestAt.Add(25 * time.Hour), "not_after"},
+		"launch": {spec, func(domain.RoleName) (domain.LaunchSpec, error) {
+			return domain.LaunchSpec{}, errors.New("launch unavailable")
+		}, agentTestAt, "launch unavailable"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			got, err := check(tc.spec, tc.launch, tc.at)
+			if !errors.Is(err, ErrAgentNotAdmissible) || errors.Is(err, domain.ErrGenerationIntegrityMarked) ||
+				!strings.Contains(err.Error(), tc.want) || !reflect.DeepEqual(got, ReviewRoleAgent{}) {
+				t.Fatalf("mark plus %s failure = %+v, %v", name, got, err)
+			}
+		})
+	}
+}
+
 // TestMarkAfterResolutionHoldsTheInvocation covers the race the admitting
 // transaction's check exists for: role resolution read an unmarked
 // generation, and the mark landed before the admission was recorded. The

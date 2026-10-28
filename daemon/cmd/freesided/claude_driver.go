@@ -1895,6 +1895,7 @@ func composeClaudeDriver(
 
 	// Selection activates only when every writer role passes admission for the
 	// prompt this daemon runs it on; until then the gate holds every attempt.
+	// A marked generation is left to each attempt's admission.
 	agents.AttemptBudget = backend.HandoffTimeout()
 	selectionFailure := checkWriterRoles(ctx, st, *agents, map[domain.RoleName]domain.Digest{
 		domain.RoleSpecifier: specificationPromptPackage, domain.RoleImplementer: promptPackage,

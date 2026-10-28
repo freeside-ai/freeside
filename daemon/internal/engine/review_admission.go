@@ -71,6 +71,12 @@ type ReviewAdmitter func(
 // is one whose line does not hold against the command that set it. The shadow
 // reviewer takes no task line and is not checked for one.
 //
+// The generation's integrity mark is read in the same transaction as the
+// rest but reported after every other step. Any non-nil error refuses
+// admission. Only a *domain.GenerationIntegrityMarkedError returns a checked
+// agent alongside the error, so startup can compose the source while each
+// launch still refuses. Every other error returns a zero agent.
+//
 // The selection gate is not consulted. It holds new writer work until no
 // retired identity owns open work, and that work finishes through its
 // reviews.
@@ -87,16 +93,24 @@ func CheckReviewRole(
 		return refuse("role %s is not a review role", role)
 	}
 	var (
-		agent ReviewRoleAgent
-		line  domain.TaskLine
-		found bool
+		agent  ReviewRoleAgent
+		line   domain.TaskLine
+		found  bool
+		marked error
 	)
 	// One read transaction, so the enrollment, its identity, its current
-	// generation, and the task's line are one consistent view.
+	// generation, its mark, and the task's line are one consistent view.
 	err := st.Read(ctx, func(tx *store.ReadTx) error {
 		var err error
-		if agent.RoleAgent, err = resolveRole(ctx, tx, tree, role); err != nil {
+		if agent.RoleAgent, err = resolveRoleLine(ctx, tx, tree, role); err != nil {
 			return fmt.Errorf("role %s: %w", role, err)
+		}
+		if err := agent.requireUnmarked(ctx, tx); err != nil {
+			// Only the mark is held for last; a failed read refuses now.
+			if !errors.Is(err, domain.ErrGenerationIntegrityMarked) {
+				return fmt.Errorf("role %s: %w", role, err)
+			}
+			marked = fmt.Errorf("role %s: %w", role, err)
 		}
 		if runID == "" || !role.TaskLineEligible() {
 			return nil
@@ -161,6 +175,9 @@ func CheckReviewRole(
 			agent.Line.AgentName)
 	}
 	agent.Model, agent.NativeEffort = agent.passes.RouteModelID, agent.passes.NativeEffort
+	if marked != nil {
+		return agent, errors.Join(ErrAgentNotAdmissible, marked)
+	}
 	return agent, nil
 }
 
