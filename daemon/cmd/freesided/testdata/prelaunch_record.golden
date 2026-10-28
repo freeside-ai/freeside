@@ -191,7 +191,7 @@
       "group": "composition",
       "name": "implementer_image",
       "status": "passed",
-      "evidence": "implementer image resolved exact digest sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa and passed required tool probes"
+      "evidence": "implementer image resolved exact digest sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa and passed required tool probes; no recorded image serves base cccccccccccccccccccccccccccccccccccccccc, so ward starts on the admitted image and writer attempts will hold under image_upkeep_pending until image upkeep records an image for the base"
     },
     {
       "group": "composition",

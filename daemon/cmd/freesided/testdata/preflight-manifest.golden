@@ -151,7 +151,7 @@
     {
       "name": "implementer_image",
       "status": "passed",
-      "evidence": "implementer image resolved exact digest sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa and passed required tool probes"
+      "evidence": "implementer image resolved exact digest sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa and passed required tool probes; it serves base cccccccccccccccccccccccccccccccccccccccc"
     },
     {
       "name": "reviewer_image",
