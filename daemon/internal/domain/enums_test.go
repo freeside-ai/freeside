@@ -76,6 +76,10 @@ func TestEnumValidity(t *testing.T) {
 		valids["AgentSelectionSource"] = append(valids["AgentSelectionSource"], v.valid)
 	}
 	invalids["AgentSelectionSource"] = AgentSelectionSource("").valid
+	for _, v := range AllWorkspaceHydrations {
+		valids["WorkspaceHydration"] = append(valids["WorkspaceHydration"], v.valid)
+	}
+	invalids["WorkspaceHydration"] = WorkspaceHydration("").valid
 	for _, v := range AllArtifactKinds {
 		valids["ArtifactKind"] = append(valids["ArtifactKind"], v.valid)
 	}

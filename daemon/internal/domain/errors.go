@@ -64,6 +64,7 @@ var (
 	ErrInvalidOperatingMode             = errors.New("invalid operating mode")
 	ErrInvalidCredentialMode            = errors.New("invalid credential mode")
 	ErrInvalidEgressProfile             = errors.New("invalid egress profile")
+	ErrInvalidWorkspaceHydration        = errors.New("invalid workspace hydration")
 	ErrInvalidRefreshStrategy           = errors.New("invalid refresh strategy")
 	ErrInvalidBackupHealthStatus        = errors.New("invalid backup health status")
 	ErrInvalidExecOutcome               = errors.New("invalid execution outcome status")
