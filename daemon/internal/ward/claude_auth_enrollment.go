@@ -111,6 +111,9 @@ type ClaudeAuthEnrollmentConfig struct {
 	Volume        string
 	Runtime       Runtime
 	ExporterImage string
+	// AgentImage is the digest-pinned Claude agent image the provider probe
+	// runs the token through, the image a writer launches.
+	AgentImage string
 	// Authorize, when set, durably records each helper container's name
 	// before it is created, as preflight's credential inspection does.
 	Authorize RuntimeResourceAuthorizer
@@ -121,6 +124,11 @@ type ClaudeAuthEnrollmentConfig struct {
 
 	LeaseDuration   time.Duration
 	TeardownTimeout time.Duration
+
+	// probe runs the provider probe; nil is ProbeLineupImage. Tests replace
+	// it inside a synctest bubble, where the real probe's proxy listener
+	// would keep bubble time from advancing.
+	probe func(context.Context, Runtime, LineupProbe, RuntimeResourceAuthorizer) (LineupProbeOutput, error)
 }
 
 // ClaudeAuthEnrollmentResult carries only non-secret coordinates.
@@ -140,12 +148,18 @@ var ErrCredentialVolumeExists = errors.New("credential volume already exists")
 // identity and enrollment under the bound bootstrap lease, authors the
 // credential volume as the single root-owned 0400 token file the setup_token
 // manifest policy requires, proves that shape with the same observer
-// preflight uses, and appends generation one. Any failure after the volume
-// exists deletes it, so a failed enrollment leaves no store and no
-// generation; the recorded enrollment stays and a retry reuses it.
+// preflight uses, proves the provider accepts the token, and appends
+// generation one. Any failure after the volume exists deletes it, so a failed
+// enrollment leaves no store and no generation; the recorded enrollment stays
+// and a retry reuses it.
 //
-// The token is not checked against the provider: the pinned CLI's auth status
-// reports only local state, and a bad token fails closed at its first use.
+// The provider proof reads the token back out of the authored volume with
+// ReadSetupToken, so it checks the bytes a launch would load, and spends one
+// one-turn, toolless call through ProbeLineupImage in the agent image. It
+// sends no model, so a model the subscription refuses cannot read as a bad
+// token. A refusal wraps ErrSetupTokenRejected or
+// ErrClaudeProviderUnavailable (classifyEnrollmentProbe); a probe that could
+// not run returns the runtime's error.
 func EnrollClaudeSetupToken(
 	ctx context.Context, cfg ClaudeAuthEnrollmentConfig,
 ) (_ ClaudeAuthEnrollmentResult, retErr error) {
@@ -232,6 +246,9 @@ func EnrollClaudeSetupToken(
 	); err != nil {
 		return removeVolume(fmt.Errorf("authored credential volume failed its manifest proof: %w", err))
 	}
+	if err := probeEnrolledToken(ctx, cfg, digest); err != nil {
+		return removeVolume(err)
+	}
 	generation, err := cfg.Store.AppendGeneration(ctx, domain.EnrollmentGeneration{
 		EnrollmentID: cfg.EnrollmentID, AuthStoreVolume: cfg.Volume,
 		StoreManifestDigest: digest, LeaseFence: lease.Fence,
@@ -250,7 +267,7 @@ func EnrollClaudeSetupToken(
 func normalizeClaudeAuthEnrollmentConfig(cfg *ClaudeAuthEnrollmentConfig) error {
 	if cfg == nil || len(cfg.Token.value) == 0 || cfg.AuthIdentityID == "" ||
 		cfg.EnrollmentID == "" || cfg.Route == "" || cfg.AccountBinding == "" ||
-		cfg.Volume == "" || cfg.Runtime == nil || cfg.ExporterImage == "" ||
+		cfg.Volume == "" || cfg.Runtime == nil || cfg.ExporterImage == "" || cfg.AgentImage == "" ||
 		cfg.Store == nil || cfg.AuthStoreLeaser == nil {
 		return errors.New("claude auth enrollment configuration is incomplete")
 	}
@@ -270,6 +287,14 @@ func normalizeClaudeAuthEnrollmentConfig(cfg *ClaudeAuthEnrollmentConfig) error 
 	if !digestPinnedImagePattern.MatchString(cfg.ExporterImage) {
 		return errors.New("exporter image is not digest-pinned")
 	}
+	// The probe hands this image the token, so the same rule holds, checked
+	// here for the same reason.
+	if !digestPinnedImagePattern.MatchString(cfg.AgentImage) {
+		return errors.New("agent image is not digest-pinned")
+	}
+	if cfg.probe == nil {
+		cfg.probe = ProbeLineupImage
+	}
 	if cfg.Now == nil {
 		cfg.Now = func() time.Time { return time.Now().UTC() }
 	}
@@ -286,6 +311,26 @@ func normalizeClaudeAuthEnrollmentConfig(cfg *ClaudeAuthEnrollmentConfig) error 
 		return errors.New("claude auth enrollment clock must return nonzero UTC instants")
 	}
 	return nil
+}
+
+// probeEnrolledToken reads the token back out of the authored volume, checks
+// it is the one entered, and runs it through one provider call.
+func probeEnrolledToken(ctx context.Context, cfg ClaudeAuthEnrollmentConfig, digest domain.Digest) error {
+	read, err := ReadSetupToken(ctx, cfg.Runtime, cfg.ExporterImage, cfg.Volume, cfg.Authorize)
+	if err != nil {
+		return fmt.Errorf("read the authored token back: %w", err)
+	}
+	if read.TokenDigest != digest {
+		return errors.New("the authored credential volume holds a different token than the one entered")
+	}
+	out, err := cfg.probe(ctx, cfg.Runtime, LineupProbe{
+		Harness: domain.HarnessClientClaudeCode, Image: cfg.AgentImage,
+		Credential: SetupTokenProbeCredential(read.Token),
+	}, cfg.Authorize)
+	if err != nil {
+		return fmt.Errorf("run provider probe: %w", err)
+	}
+	return classifyEnrollmentProbe(out, read.Token)
 }
 
 // credentialVolumeAuthor creates one credential volume and seeds its token

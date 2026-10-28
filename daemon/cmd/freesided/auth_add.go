@@ -43,8 +43,9 @@ type authAddConfig struct {
 	// Codex: the enroll-codex input and live-store flags.
 	InputRoot, InputFile, AuthStoreRoot, AuthStorePath string
 
-	// Claude: the attested account and the volume to author.
-	Account, AuthVolume, ContainerBin, ExporterImage string
+	// Claude: the attested account, the volume to author, and the images
+	// that author it and probe the token.
+	Account, AuthVolume, ContainerBin, ExporterImage, AgentImage string
 }
 
 // runAuthAddCommand enrolls one harness client for a new or existing
@@ -102,8 +103,8 @@ func runAuthAddCommand(
 			Token: token, AuthIdentityID: identityID, EnrollmentID: enrollmentID,
 			Route: cfg.Route, CostOwner: cfg.CostOwner, AccountBinding: cfg.Account,
 			Volume: cfg.AuthVolume, Runtime: deps.runtime(cfg.ContainerBin),
-			ExporterImage: cfg.ExporterImage,
-			Store:         adapters.Claude, AuthStoreLeaser: adapters.Leaser,
+			ExporterImage: cfg.ExporterImage, AgentImage: cfg.AgentImage,
+			Store: adapters.Claude, AuthStoreLeaser: adapters.Leaser,
 		})
 	}
 	if err != nil {
@@ -142,6 +143,8 @@ func parseAuthAddConfig(args []string, stderr io.Writer) (authAddConfig, error) 
 	flags.StringVar(&cfg.AuthVolume, "auth-volume", "", "claude_code: credential volume to create")
 	flags.StringVar(&cfg.ContainerBin, "container-bin", "container", "claude_code: Apple container CLI path")
 	flags.StringVar(&cfg.ExporterImage, "exporter-image", "", "claude_code: digest-pinned exporter image")
+	flags.StringVar(&cfg.AgentImage, "agent-image", "",
+		"claude_code: digest-pinned Claude agent image the provider probe runs")
 	if err := flags.Parse(args); err != nil {
 		return authAddConfig{}, err
 	}
@@ -163,7 +166,10 @@ func parseAuthAddConfig(args []string, stderr io.Writer) (authAddConfig, error) 
 		}...)
 	case domain.HarnessClientClaudeCode:
 		required = append(required, []struct{ name, value string }{
-			{"account", cfg.Account}, {"auth-volume", cfg.AuthVolume}, {"exporter-image", cfg.ExporterImage},
+			{"account", cfg.Account},
+			{"auth-volume", cfg.AuthVolume},
+			{"exporter-image", cfg.ExporterImage},
+			{"agent-image", cfg.AgentImage},
 		}...)
 	default:
 		if client != "" {
@@ -174,6 +180,9 @@ func parseAuthAddConfig(args []string, stderr io.Writer) (authAddConfig, error) 
 		if flag.value == "" {
 			return authAddConfig{}, fmt.Errorf("-%s is required", flag.name)
 		}
+	}
+	if cfg.Client == domain.HarnessClientClaudeCode && domain.ImageRef(cfg.AgentImage).Validate() != nil {
+		return authAddConfig{}, errors.New("-agent-image must be digest-pinned")
 	}
 	return cfg, nil
 }
