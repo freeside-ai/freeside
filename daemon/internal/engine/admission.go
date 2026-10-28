@@ -360,10 +360,9 @@ func (e *Engine) writerEgressPolicy(ctx context.Context, run domain.Run) (domain
 // selected to run under, whichever of policy or a capability manifest
 // selected it. Recording the profile promises the writer runs under it, so
 // one this composition cannot materialize is refused: a policy request alone
-// never widens egress. A manifest names a profile, not a set, and the
-// registry profile exposes only what the policy declares, so a manifest that
-// selects it under a policy with no valid set is refused as the policy opt-in
-// is.
+// never widens egress. A manifest names a profile, not a set, so the registry
+// profile still requires a valid declared set. The driver adds the run's
+// repository's adopted hosts at writer start; adoptions alone never opt in.
 func writerEgressRefusal(
 	enforceable []domain.EgressProfile, policy domain.ResolvedPolicy, profile domain.EgressProfile,
 ) error {

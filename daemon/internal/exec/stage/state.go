@@ -91,6 +91,15 @@ type intent struct {
 	// record written before this field existed, so an old intent reproduces its
 	// original no-prepare command.
 	Preparation []string `json:"preparation,omitempty"`
+	// RegistryHosts is the provider_registry writer's registry set captured at
+	// start: the declared hosts plus those adopted for the run's repository
+	// then. Ward binds RegistryHosts into SpecDigest, so recovery replays this
+	// record rather than re-reading adoptions, the same byte-identical-replay
+	// reason as Preparation. handoffRegistryHosts re-gates it on every
+	// rebuild. Empty under provider_only and on any record written before this
+	// field existed (omitempty preserves the old encoding). Old registry
+	// intents carry the declared set.
+	RegistryHosts []string `json:"registry_hosts,omitempty"`
 	// Export carries what the gate released, recorded the moment Handoff
 	// returns. The gate closes its journal at that point and refuses to
 	// recover a closed record, so without this the whole import-and-record
@@ -205,6 +214,15 @@ func (i intent) validate() error {
 		return fmt.Errorf(
 			"driver intent %q preparation must be empty or the fixed project-image helper",
 			i.InvocationID)
+	case len(i.RegistryHosts) > 0 && i.Spec.EgressProfile != domain.EgressProviderRegistry:
+		return fmt.Errorf("driver intent %q records a registry set under egress profile %q",
+			i.InvocationID, i.Spec.EgressProfile)
+	}
+	if len(i.RegistryHosts) > 0 {
+		// Shape only; handoffRegistryHosts applies the policy check.
+		if _, err := domain.NewRegistrySet(i.RegistryHosts); err != nil {
+			return fmt.Errorf("driver intent %q registry set: %w", i.InvocationID, err)
+		}
 	}
 	if i.Export != nil && i.Export.Replay != nil && i.Export.Replay.CommitPlanDigest != nil &&
 		!contentaddr.Valid(string(*i.Export.Replay.CommitPlanDigest)) {

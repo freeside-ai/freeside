@@ -3,6 +3,7 @@ package engine
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"io"
 	"os"
@@ -469,6 +470,56 @@ func TestWriterEgressRefusalRequiresADeclaredSetForTheRegistryProfile(t *testing
 				}
 			}
 		})
+	}
+}
+
+func TestWriterAdmissionRequiresDeclaredRegistriesEvenAfterAdoption(t *testing.T) {
+	t.Parallel()
+	h, _ := newAdoptionHarness(t, upkeepRegistrySet)
+	h.advanceTip(map[string]string{
+		"package.json": upkeepHeadJSON, "package-lock.json": upkeepUndeclaredLock,
+	})
+	card, _ := h.onlyCard()
+	h.decide(card, domain.ActionApprove)
+	var adopted []string
+	if err := h.st.Read(t.Context(), func(tx *store.ReadTx) error {
+		var err error
+		adopted, err = tx.AdoptedRegistryHosts(t.Context(), 42)
+		return err
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if len(adopted) != 1 || adopted[0] != adoptionUndeclaredAt {
+		t.Fatalf("adopted hosts = %v", adopted)
+	}
+	manifest, err := domain.NewCapabilityManifest("Package registries", domain.EgressProviderRegistry)
+	if err != nil {
+		t.Fatal(err)
+	}
+	body, err := json.Marshal([]domain.CapabilityManifest{manifest})
+	if err != nil {
+		t.Fatal(err)
+	}
+	run := seedRunPolicy(t, h.st, domain.Run{
+		ID: "run-adopted-egress", ProjectID: adoptionProject, SpecDigest: agentTestDigest("1"),
+	}, map[string]string{
+		domain.CapabilityManifestPolicyKey: string(body),
+	})
+	e := &Engine{store: h.st, admission: &admitter{environment: AdmissionEnvironment{
+		EnforceableEgressProfiles: []domain.EgressProfile{domain.EgressProviderOnly, domain.EgressProviderRegistry},
+	}}}
+	selected, err := e.capabilityManifestForRun(t.Context(), run, manifest.Digest)
+	if err != nil {
+		t.Fatal(err)
+	}
+	policy, err := e.writerEgressPolicy(t.Context(), run)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// This is the admission gate after resolving the retry's manifest. Even
+	// a genuine approved adoption cannot replace the required declaration.
+	if err := writerEgressRefusal(e.admission.environment.EnforceableEgressProfiles, policy, selected.EgressProfile); !errors.Is(err, ErrEgressPolicyRefused) || !errors.Is(err, domain.ErrRegistrySetInvalid) {
+		t.Fatalf("manifest-selected registry admission = %v, want missing declaration refusal", err)
 	}
 }
 

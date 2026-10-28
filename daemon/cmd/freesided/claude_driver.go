@@ -1873,6 +1873,15 @@ func composeClaudeDriver(
 			return backend.PreJob(ctx, ward.PreJobRunIDForInvocation(id))
 		},
 		Stall: invocationStallNotice(st, stallInterval(cfg.WriterStallInterval), time.Now),
+		AdoptedRegistryHosts: func(ctx context.Context, repositoryID int64) ([]string, error) {
+			var hosts []string
+			err := st.Read(ctx, func(tx *store.ReadTx) error {
+				var err error
+				hosts, err = tx.AdoptedRegistryHosts(ctx, repositoryID)
+				return err
+			})
+			return hosts, err
+		},
 		Import: importer.Options{
 			Policy: importer.Policy{Allowlist: cfg.AllowedPaths},
 		},

@@ -219,7 +219,8 @@ func (d *Driver) handoffAndImport(ctx context.Context, in intent) (exec.StageRes
 	if err != nil {
 		// Start authenticated the same immutable spec before committing this
 		// seeding intent. After the exact-base fetch, the only fallible state
-		// lookup is the trusted auth-store binding. No journal or writer exists
+		// lookups are the trusted auth-store binding and the adopted registry
+		// hosts that re-gate a recorded registry set. No journal or writer exists
 		// yet, so cancellation or operational lookup failure must preserve the
 		// rerunnable seeding phase rather than minting a terminal outcome.
 		if !errors.Is(err, ErrUnsupportedStart) {

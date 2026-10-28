@@ -55,6 +55,9 @@ type Config struct {
 	Preparation  []string
 	Now          func() time.Time
 	Logger       *slog.Logger
+
+	// AdoptedRegistryHosts is stage.Config.AdoptedRegistryHosts.
+	AdoptedRegistryHosts func(context.Context, int64) ([]string, error)
 }
 
 // New constructs the Claude provider over the shared durable stage machine.
@@ -88,5 +91,7 @@ func New(cfg Config) (*Driver, error) {
 		Preparation:         cfg.Preparation,
 		Now:                 cfg.Now,
 		Logger:              cfg.Logger,
+
+		AdoptedRegistryHosts: cfg.AdoptedRegistryHosts,
 	})
 }
