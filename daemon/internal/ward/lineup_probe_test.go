@@ -1,11 +1,17 @@
 package ward
 
 import (
+	"bufio"
 	"bytes"
 	"context"
+	"crypto/tls"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
+	"net"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"slices"
@@ -202,13 +208,17 @@ func TestJudgeLineupProbeBoundsRefusalText(t *testing.T) {
 }
 
 // lineupProbeFakeRuntime is the fake runtime with the probe container's
-// export replaced by the files its command would have written.
+// export replaced by the files its command would have written. Every other
+// container exports as the fake runtime does.
 type lineupProbeFakeRuntime struct {
 	*fakeRuntime
 	files []tarFile
 }
 
-func (r *lineupProbeFakeRuntime) ExportRootFS(ctx context.Context, id string, dest io.Writer, _ int64) error {
+func (r *lineupProbeFakeRuntime) ExportRootFS(ctx context.Context, id string, dest io.Writer, limit int64) error {
+	if !strings.HasPrefix(id, "freeside-lineup-probe-") {
+		return r.fakeRuntime.ExportRootFS(ctx, id, dest, limit)
+	}
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	r.record("export %s", id)
@@ -265,7 +275,8 @@ func TestProbeLineupImageRunsOneContainedCallAndRemovesEverything(t *testing.T) 
 			if want := (LineupProbeOutput{
 				Version: []byte("2.1.282 (Claude Code)\n"), Stdout: []byte(`{"type":"result"}`), Stderr: []byte("warn\n"), ExitStatus: 1,
 			}); !bytes.Equal(out.Version, want.Version) || !bytes.Equal(out.Stdout, want.Stdout) ||
-				!bytes.Equal(out.Stderr, want.Stderr) || out.ExitStatus != want.ExitStatus {
+				!bytes.Equal(out.Stderr, want.Stderr) || out.ExitStatus != want.ExitStatus ||
+				out.ProviderReached {
 				t.Fatalf("output = %+v", out)
 			}
 			if !slices.Equal(copied, []string{lineupProbeStageDir, lineupProbeReadyDir}) {
@@ -299,6 +310,83 @@ func TestProbeLineupImageRunsOneContainedCallAndRemovesEverything(t *testing.T) 
 			}
 		})
 	}
+}
+
+// TestProbeLineupImageReportsWhetherTheProviderAnswered drives a client
+// through the probe's proxy to a stand-in provider: ProviderReached is true
+// once the provider sends a byte back, and false when the client only reached
+// the proxy.
+func TestProbeLineupImageReportsWhetherTheProviderAnswered(t *testing.T) {
+	provider := httptest.NewTLSServer(http.NotFoundHandler())
+	t.Cleanup(provider.Close)
+	dial := func(ctx context.Context, _, _ string) (net.Conn, error) {
+		var d net.Dialer
+		return d.DialContext(ctx, "tcp4", provider.Listener.Addr().String())
+	}
+	for name, tc := range map[string]struct {
+		handshake bool
+		want      bool
+	}{
+		"provider answered":       {handshake: true, want: true},
+		"only connected to proxy": {handshake: false, want: false},
+	} {
+		t.Run(name, func(t *testing.T) {
+			rt := newLineupProbeFakeRuntime(t, lineupProbeOutputFiles("v\n", "", "", "1\n")...)
+			var spec ContainerSpec
+			rt.onCreateContainer = func(s ContainerSpec) error { spec = s; return nil }
+			var clientErr error
+			rt.onCopyIntoContainer = func(_, _, targetDir string) error {
+				if targetDir == lineupProbeReadyDir {
+					clientErr = probeClientThroughProxy(spec.Env, tc.handshake)
+				}
+				return nil
+			}
+			out, err := probeLineupImage(t.Context(), rt, claudeWriterProbe(t), nil, Config{EgressDialContext: dial})
+			if err != nil || clientErr != nil {
+				t.Fatalf("probe = %v, client = %v", err, clientErr)
+			}
+			if out.ProviderReached != tc.want {
+				t.Fatalf("ProviderReached = %v, want %v", out.ProviderReached, tc.want)
+			}
+		})
+	}
+}
+
+// probeClientThroughProxy does what the CLI does first: it opens a CONNECT
+// tunnel to the Claude endpoint through the proxy env names and, with
+// handshake, completes TLS through it, which takes bytes from the provider.
+func probeClientThroughProxy(env []string, handshake bool) error {
+	var proxyURL string
+	for _, e := range env {
+		if v, ok := strings.CutPrefix(e, "HTTPS_PROXY="); ok {
+			proxyURL = v
+		}
+	}
+	address, err := proxyAddress(proxyURL)
+	if err != nil {
+		return err
+	}
+	conn, err := net.DialTimeout("tcp4", address, time.Second)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = conn.Close() }()
+	if !handshake {
+		return nil
+	}
+	if _, err := io.WriteString(conn, "CONNECT api.anthropic.com:443 HTTP/1.1\r\nHost: api.anthropic.com:443\r\n\r\n"); err != nil {
+		return err
+	}
+	response, err := http.ReadResponse(bufio.NewReader(conn), nil)
+	if err != nil {
+		return fmt.Errorf("read CONNECT response: %w", err)
+	}
+	if response.StatusCode != http.StatusOK {
+		return fmt.Errorf("CONNECT status = %d", response.StatusCode)
+	}
+	//nolint:gosec // G402: the stand-in provider's certificate is self-signed
+	client := tls.Client(conn, &tls.Config{ServerName: "api.anthropic.com", InsecureSkipVerify: true})
+	return client.Handshake()
 }
 
 // The probe's names must pass the production rig manifest's namespace check,

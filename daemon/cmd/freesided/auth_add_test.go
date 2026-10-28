@@ -45,6 +45,7 @@ func claudeAuthAddArgs(dbPath string) []string {
 		"-route", "anthropic-subscription", "-cost-owner", "operator",
 		"-account", "acct-fixture-0002", "-auth-volume", "freeside-claude-main-auth",
 		"-exporter-image", "example.test/exporter@sha256:" + strings.Repeat("0", 64),
+		"-agent-image", "example.test/agent-claude@sha256:" + strings.Repeat("1", 64),
 	}
 }
 
@@ -167,6 +168,11 @@ func TestAuthAddRequiresEachClientsFlags(t *testing.T) {
 		"no route":       {without(claude, "-route"), "-route is required"},
 		"claude account": {without(claude, "-account"), "-account is required"},
 		"claude volume":  {without(claude, "-auth-volume"), "-auth-volume is required"},
+		"claude agent":   {without(claude, "-agent-image"), "-agent-image is required"},
+		"tag-only claude agent": {
+			append(without(claude, "-agent-image"), "-agent-image", "example.test/agent-claude:latest"),
+			"-agent-image must be digest-pinned",
+		},
 		"codex input": {
 			[]string{"-db", dbPath, "-client", "codex_cli", "-auth-identity", "a", "-route", "r"},
 			"-project is required",
@@ -177,6 +183,9 @@ func TestAuthAddRequiresEachClientsFlags(t *testing.T) {
 				io.Discard, io.Discard, authAddTestDeps())
 			if err == nil || !strings.Contains(err.Error(), tc.want) {
 				t.Fatalf("auth add = %v, want %q", err, tc.want)
+			}
+			if _, statErr := os.Stat(dbPath); !errors.Is(statErr, os.ErrNotExist) {
+				t.Fatalf("refused flags still opened the store: %v", statErr)
 			}
 		})
 	}

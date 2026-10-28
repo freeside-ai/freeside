@@ -133,12 +133,15 @@ type LineupProbe struct {
 
 // LineupProbeOutput is what a probe printed, unjudged. Version is the CLI's
 // --version output; Stdout and Stderr are the call's; ExitStatus is its exit
-// status.
+// status. ProviderReached reports whether the egress proxy relayed at least
+// one byte from the provider, which tells a call the provider refused from
+// one that never reached it; JudgeLineupProbe does not read it.
 type LineupProbeOutput struct {
-	Version    []byte
-	Stdout     []byte
-	Stderr     []byte
-	ExitStatus int
+	Version         []byte
+	Stdout          []byte
+	Stderr          []byte
+	ExitStatus      int
+	ProviderReached bool
 }
 
 func (p LineupProbe) validate() error {
@@ -241,13 +244,21 @@ func lineupProbeOption(flag, value string) string {
 func ProbeLineupImage(
 	ctx context.Context, rt Runtime, p LineupProbe, authorize RuntimeResourceAuthorizer,
 ) (LineupProbeOutput, error) {
+	return probeLineupImage(ctx, rt, p, authorize, Config{})
+}
+
+// probeLineupImage is ProbeLineupImage with the ward settings it runs under,
+// so a test can inject the proxy's upstream dialer.
+func probeLineupImage(
+	ctx context.Context, rt Runtime, p LineupProbe, authorize RuntimeResourceAuthorizer, base Config,
+) (LineupProbeOutput, error) {
 	if rt == nil {
 		return LineupProbeOutput{}, errors.New("lineup probe requires a runtime")
 	}
 	if err := p.validate(); err != nil {
 		return LineupProbeOutput{}, err
 	}
-	cfg := (Config{}).withDefaults()
+	cfg := base.withDefaults()
 	owner, err := newOwnershipLabel()
 	if err != nil {
 		return LineupProbeOutput{}, err
@@ -347,6 +358,7 @@ func (r *lineupProbeRun) probe(ctx context.Context, p LineupProbe) (LineupProbeO
 	if err != nil {
 		return LineupProbeOutput{}, err
 	}
+	out.ProviderReached = !r.proxy.LastProviderByte().IsZero()
 	if err := r.rt.DeleteContainer(ctx, r.name); err != nil {
 		return LineupProbeOutput{}, fmt.Errorf("delete lineup probe container: %w", err)
 	}

@@ -1478,13 +1478,21 @@ freesided auth add \
   -db /path/to/freeside.db -client claude_code \
   -auth-identity claude-main -route anthropic-subscription -cost-owner <owner> \
   -account <subscription-account> -auth-volume freeside-claude-main-auth \
-  -exporter-image <digest-pinned-exporter-image>
+  -exporter-image <digest-pinned-exporter-image> \
+  -agent-image <digest-pinned-agent-claude-image>
 ```
 
-The token is not checked against the provider: `claude auth status` reports
-only local state, so a bad or revoked token fails closed at its first use.
-A provider probe is tracked in #1647. `auth add` cannot enroll a Claude
-identity whose volume already exists; `auth adopt` (below) enrolls an identity
+Before recording the generation, the command reads the token back from the
+volume, checks its digest, and probes it in the required digest-pinned
+`-agent-image`. The probe spends one one-turn `claude -p` call with no tools,
+model, or effort override. Its host-only network admits only
+`api.anthropic.com:443` through the ward proxy. A rejected token tells you to
+mint a new one with `claude setup-token`; an unreachable provider or another
+provider error tells you to rerun. Both refuse enrollment and delete the
+new volume, as does a runtime failure that prevents the probe from running.
+
+`auth add` cannot enroll a Claude identity whose volume already exists;
+`auth adopt` (below) enrolls an identity
 over the volume it already holds. An enrollment runs nothing until an agent in
 the admitted-agent tree names it and a lineup line selects that agent.
 
