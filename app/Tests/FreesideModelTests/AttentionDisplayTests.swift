@@ -1101,6 +1101,99 @@ import Testing
         #expect(value(rows, "Milestone") == "None")
     }
 
+    private func adoptionFacts() throws -> Components.Schemas.EffectProposalFactsSnapshot {
+        try #require(
+            AttentionFixtures.effectProposalFacts(
+                for: AttentionFixtures.imagePolicyAdoptionEffectProposal()))
+    }
+
+    @Test func imagePolicyAdoptionRowsNameTheShortDigestAndHosts() throws {
+        let rows = AttentionDisplay.effectProposalRows(try adoptionFacts())
+
+        #expect(
+            rows == [
+                .init("Effect", "Image policy adoption"),
+                .init("Recipe", "sha256:dddddddd", monospaced: true),
+                .init("Registry Hosts", "proxy.golang.org", monospaced: true),
+            ])
+    }
+
+    @Test func imagePolicyAdoptionCardLeadsWithItsSentenceInPlaceOfTheEffectRow() throws {
+        let facts = try adoptionFacts()
+
+        #expect(
+            AttentionDisplay.effectBinding(facts)
+                == .init(
+                    lead: "Approving adds the tip's recipe and registry host ",
+                    head: "proxy.golang.org",
+                    outcome: " to the repository's image policy, so upkeep can rebuild the image."))
+        #expect(
+            AttentionDisplay.effectProposalCardRows(facts).map(\.label) == ["Recipe", "Registry Hosts"])
+    }
+
+    @Test func imagePolicyAdoptionSentenceNamesOnlyWhatTheAdoptionAdds() throws {
+        var facts = try adoptionFacts()
+        facts.image_policy_adoption?.value1.recipe_digest = nil
+        facts.image_policy_adoption?.value1.registry_authorities = ["proxy.golang.org", "registry.npmjs.org"]
+        #expect(
+            AttentionDisplay.effectBinding(facts)?.plain
+                == "Approving adds registry hosts proxy.golang.org, registry.npmjs.org "
+                + "to the repository's image policy, so upkeep can rebuild the image.")
+
+        facts = try adoptionFacts()
+        facts.image_policy_adoption?.value1.registry_authorities = []
+        #expect(
+            AttentionDisplay.effectBinding(facts)?.plain
+                == "Approving adds the tip's recipe to the repository's image policy, so upkeep can rebuild the image.")
+
+        // Facts that add nothing state nothing, and keep the "Effect" row.
+        facts.image_policy_adoption?.value1.recipe_digest = nil
+        #expect(AttentionDisplay.effectBinding(facts) == nil)
+        #expect(AttentionDisplay.effectProposalCardRows(facts).first?.label == "Effect")
+    }
+
+    @Test func imagePolicyAdoptionDetailRowsCarryTheFullDigestAndRefusal() throws {
+        var facts = try adoptionFacts()
+        #expect(
+            AttentionDisplay.imagePolicyAdoptionDetailRows(facts) == [
+                .init(label: "Recipe Digest", value: "sha256:" + String(repeating: "d", count: 64)),
+                .init(label: "Upkeep Refusal", value: "sha256:" + String(repeating: "e", count: 64)),
+            ])
+
+        facts.image_policy_adoption?.value1.recipe_digest = nil
+        #expect(AttentionDisplay.imagePolicyAdoptionDetailRows(facts).map(\.label) == ["Upkeep Refusal"])
+
+        let closure = try #require(
+            AttentionFixtures.effectProposalFacts(for: AttentionFixtures.fixture(type: .effect_proposal)))
+        #expect(AttentionDisplay.imagePolicyAdoptionDetailRows(closure).isEmpty)
+    }
+
+    @Test func imagePolicyAdoptionRowsSayWhatTheAdoptionLeavesAlone() throws {
+        var facts = try adoptionFacts()
+        facts.image_policy_adoption?.value1.recipe_digest = nil
+        facts.image_policy_adoption?.value1.registry_authorities = []
+
+        let rows = AttentionDisplay.effectProposalRows(facts)
+        #expect(value(rows, "Recipe") == "Unchanged")
+        #expect(value(rows, "Registry Hosts") == "None")
+    }
+
+    @Test func imagePolicyAdoptionRowsListEveryHost() throws {
+        var facts = try adoptionFacts()
+        facts.image_policy_adoption?.value1.registry_authorities = ["proxy.golang.org", "registry.npmjs.org"]
+
+        #expect(
+            value(AttentionDisplay.effectProposalRows(facts), "Registry Hosts")
+                == "proxy.golang.org, registry.npmjs.org")
+    }
+
+    @Test func imagePolicyAdoptionKindWithoutItsArmHasNoRows() throws {
+        var facts = try adoptionFacts()
+        facts.image_policy_adoption = nil
+
+        #expect(AttentionDisplay.effectProposalRows(facts).isEmpty)
+    }
+
     @Test func followUpFilingSourceRowNamesASeparateWorkVerdict() throws {
         var facts = try filingFacts()
         facts.follow_up_filing?.value1.source.kind = .separate_work_verdict

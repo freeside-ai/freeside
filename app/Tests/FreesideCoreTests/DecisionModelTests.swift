@@ -1277,6 +1277,133 @@ import Testing
         #expect(!model.actionsEnabled)
     }
 
+    private func adoptionModel(server: MockServer) async -> DecisionModel {
+        let store = await makeStore(server: server)
+        return DecisionModel(
+            store: store, itemID: AttentionFixtures.imagePolicyAdoptionEffectProposal().item.id)
+    }
+
+    private static func adoptionServer() -> MockServer {
+        MockServer(items: [AttentionFixtures.imagePolicyAdoptionEffectProposal()])
+    }
+
+    @Test func imagePolicyAdoptionFactsValidateAndEnableTheOfferedActions() async throws {
+        let model = await adoptionModel(server: Self.adoptionServer())
+
+        await model.validate()
+
+        let facts = try #require(model.effectProposalFacts)
+        #expect(facts.effect_kind == .image_policy_adoption)
+        #expect(facts.image_policy_adoption != nil)
+        #expect(model.actionsEnabled)
+        // An adoption admits no revision, so the item never offers one.
+        #expect(model.offeredActions == [.approve, .decline, .snooze])
+    }
+
+    @Test func imagePolicyAdoptionApproveSubmitsAndResolvesTheItem() async {
+        let model = await adoptionModel(server: Self.adoptionServer())
+        await model.validate()
+
+        await model.submit(.approve)
+
+        #expect(model.appliedRecord?.action == .approve)
+        #expect(model.snapshot?.item.status == .resolved)
+    }
+
+    @Test func imagePolicyAdoptionDeclineSubmitsAndDismissesTheItem() async {
+        let model = await adoptionModel(server: Self.adoptionServer())
+        await model.validate()
+
+        await model.submit(.decline)
+
+        #expect(model.appliedRecord?.action == .decline)
+        #expect(model.snapshot?.item.status == .dismissed)
+    }
+
+    /// One way served adoption facts can disagree with the item or with
+    /// themselves, or adopt nothing. Each must fail the match gate on its
+    /// own.
+    enum AdoptionFactsMismatch: String, CaseIterable {
+        case filingKind, runProposalKind, missingAdoptionArm, closureArmPresent, filingArmPresent
+        case supersedesPresent, adoptsNothing, staleItemVersion, wrongProposalDigest
+
+        func apply(
+            to facts: Components.Schemas.EffectProposalFactsSnapshot
+        ) -> Components.Schemas.EffectProposalFactsSnapshot {
+            var mutated = facts
+            switch self {
+            case .filingKind:
+                mutated.effect_kind = .follow_up_filing
+            case .runProposalKind:
+                mutated.effect_kind = .run_proposal
+            case .missingAdoptionArm:
+                mutated.image_policy_adoption = nil
+            case .closureArmPresent:
+                mutated.source_issue_closure =
+                    AttentionFixtures.effectProposalFacts(
+                        for: AttentionFixtures.fixture(type: .effect_proposal))?.source_issue_closure
+            case .filingArmPresent:
+                mutated.follow_up_filing =
+                    AttentionFixtures.effectProposalFacts(
+                        for: AttentionFixtures.followUpFilingEffectProposal())?.follow_up_filing
+            case .supersedesPresent:
+                mutated.supersedes = .init(
+                    value1: .init(proposal_digest: "sha256:prior-effect", source_issue_closure: nil))
+            case .adoptsNothing:
+                mutated.image_policy_adoption?.value1.recipe_digest = nil
+                mutated.image_policy_adoption?.value1.registry_authorities = []
+            case .staleItemVersion:
+                mutated.item_version += 1
+            case .wrongProposalDigest:
+                mutated.proposal_digest = "sha256:another-proposal"
+            }
+            return mutated
+        }
+    }
+
+    @Test(arguments: AdoptionFactsMismatch.allCases)
+    func mismatchedImagePolicyAdoptionFactsAreDroppedAndActionsStayDisabled(
+        mismatch: AdoptionFactsMismatch
+    ) async throws {
+        let server = Self.adoptionServer()
+        // The mutation must change the served facts, or the case would pass
+        // by proving nothing.
+        let served = try #require(
+            AttentionFixtures.effectProposalFacts(
+                for: AttentionFixtures.imagePolicyAdoptionEffectProposal()))
+        #expect(mismatch.apply(to: served) != served)
+        await server.setEffectProposalFactsTransform { mismatch.apply(to: $0) }
+        let model = await adoptionModel(server: server)
+
+        await model.validate()
+
+        #expect(model.effectProposalFacts == nil)
+        #expect(!model.actionsEnabled)
+    }
+
+    @Test func imagePolicyAdoptionWithOnlyARecipeOrOnlyAHostValidates() async {
+        // An adoption need not carry both halves: a recipe change alone, or
+        // a registry host alone, is a card the operator may approve.
+        for onlyRecipe in [true, false] {
+            let server = Self.adoptionServer()
+            await server.setEffectProposalFactsTransform { facts in
+                var mutated = facts
+                if onlyRecipe {
+                    mutated.image_policy_adoption?.value1.registry_authorities = []
+                } else {
+                    mutated.image_policy_adoption?.value1.recipe_digest = nil
+                }
+                return mutated
+            }
+            let model = await adoptionModel(server: server)
+
+            await model.validate()
+
+            #expect(model.effectProposalFacts?.effect_kind == .image_policy_adoption)
+            #expect(model.actionsEnabled)
+        }
+    }
+
     @Test func closureFactsCarryingAFilingArmAreDropped() async throws {
         let server = MockServer()
         // Exactly one kind arm is non-null. A closure that also carries a
