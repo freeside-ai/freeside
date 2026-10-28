@@ -63,9 +63,12 @@ type ImageUpkeep struct {
 	Logger *slog.Logger
 	// AdoptionPending and MaintenancePending answer a settled refusal with
 	// the adoption card or maintenance task that resolves it, when one does
-	// (PendingResolution). Nil means that arm is not composed.
+	// (PendingResolution). Nil means that arm is not composed. The
+	// maintenance task is the open one for the image the refusal was
+	// measured from, so it may answer an earlier refusal, whose ID
+	// MaintenancePending also returns.
 	AdoptionPending    func(context.Context, domain.ImageUpkeepRefusal) (domain.ItemID, bool, error)
-	MaintenancePending func(context.Context, domain.ImageUpkeepRefusal) (domain.TaskID, bool, error)
+	MaintenancePending func(context.Context, domain.ImageUpkeepRefusal) (domain.Digest, domain.TaskID, bool, error)
 	// SubmitMaintenance submits the maintenance task for a repair-class
 	// refusal a pass settled on. It must converge when called again for the
 	// same refusal: a scheduled pass returns a settled refusal without
@@ -200,7 +203,10 @@ func (u *ImageUpkeep) run(ctx context.Context, tipSHA string, reuseVerdict bool)
 //     repository's observed tip has moved past the one it settled at. A
 //     host fault never settles, so it stays a rebuild.
 //   - An adoption proposal or a maintenance task, when the settled verdict
-//     is a refusal that AdoptionPending or MaintenancePending answers.
+//     is a refusal that AdoptionPending or MaintenancePending answers. A
+//     maintenance hold names the refusal its task was opened for, which may
+//     be an earlier refusal measured from the same image, so the hold stays
+//     the same across tip advances and restarts while that task is open.
 //   - Nothing otherwise: the image is current at the tip, or the refusal
 //     has no answer yet.
 func (u *ImageUpkeep) PendingResolution(ctx context.Context) (*domain.ImageUpkeepHold, error) {
@@ -243,13 +249,13 @@ func (u *ImageUpkeep) PendingResolution(ctx context.Context) (*domain.ImageUpkee
 		}
 	}
 	if u.MaintenancePending != nil {
-		task, ok, err := u.MaintenancePending(ctx, *refusal)
+		answered, task, ok, err := u.MaintenancePending(ctx, *refusal)
 		if err != nil {
 			return nil, fmt.Errorf("find the maintenance task for refusal %s: %w", refusalID, err)
 		}
 		if ok {
 			return &domain.ImageUpkeepHold{
-				Pending: domain.ImageUpkeepPendingMaintenanceTask, RefusalRecordID: &refusalID,
+				Pending: domain.ImageUpkeepPendingMaintenanceTask, RefusalRecordID: &answered,
 				MaintenanceTaskID: &task,
 			}, nil
 		}

@@ -15,6 +15,7 @@ import (
 	"testing/synctest"
 	"time"
 
+	"github.com/freeside-ai/freeside/daemon/internal/contentaddr"
 	"github.com/freeside-ai/freeside/daemon/internal/domain"
 	"github.com/freeside-ai/freeside/daemon/internal/gitenv"
 	"github.com/freeside-ai/freeside/daemon/internal/projectimage"
@@ -890,11 +891,16 @@ func TestImageUpkeepPendingResolution(t *testing.T) {
 	if hold := pending(); hold != nil {
 		t.Fatalf("a refusal nothing answers = %+v, want nothing pending", hold)
 	}
-	h.upkeep.MaintenancePending = func(_ context.Context, refusal domain.ImageUpkeepRefusal) (domain.TaskID, bool, error) {
-		return "task-1", refusal.ID == refusals[0].ID, nil
+	// The open task may answer an earlier refusal measured from the same
+	// image; the hold names that refusal, not the settled one.
+	answered := domain.Digest(contentaddr.Sum([]byte("earlier refusal")))
+	h.upkeep.MaintenancePending = func(
+		_ context.Context, refusal domain.ImageUpkeepRefusal,
+	) (domain.Digest, domain.TaskID, bool, error) {
+		return answered, "task-1", refusal.ID == refusals[0].ID, nil
 	}
 	if hold := pending(); hold == nil || hold.Pending != domain.ImageUpkeepPendingMaintenanceTask ||
-		*hold.RefusalRecordID != refusals[0].ID || *hold.MaintenanceTaskID != "task-1" {
+		*hold.RefusalRecordID != answered || *hold.MaintenanceTaskID != "task-1" {
 		t.Fatalf("a refusal a maintenance task answers = %+v", hold)
 	}
 	h.upkeep.AdoptionPending = func(_ context.Context, refusal domain.ImageUpkeepRefusal) (domain.ItemID, bool, error) {

@@ -173,7 +173,12 @@ func (s *Service) submitTask(ctx context.Context, in ClientCommand) (CommandResu
 // daemon-origin gate re-checks on write. Its command ID and manual-submission
 // identity are domain.ImageUpkeepSubmissionIdentity(refusal ID), so submitting
 // the same refusal again returns the recorded submission and opens no second
-// task. A refusal of another class is refused before any write, and a project
+// task. While another refusal measured from the same image has an open task
+// (OpenImageRepairTask), it returns that task's submission and writes
+// nothing, so a tip advance or a restart that records a new refusal for a
+// still-broken image opens no second task. The check runs in the submit's
+// write transaction, so concurrent upkeep passes open one task between them.
+// A refusal of another class is refused before any write, and a project
 // with no configured submission policy is store.ErrNotFound from the submitter.
 func (s *Service) SubmitImageRepairTask(
 	ctx context.Context, projectID domain.ProjectID, refusalID domain.Digest,
@@ -229,6 +234,17 @@ func (s *Service) SubmitImageRepairTask(
 		} else if !errors.Is(getErr, store.ErrNotFound) {
 			return getErr
 		}
+		open, found, err := OpenImageRepairTask(ctx, &tx.ReadTx, refusal)
+		if err != nil {
+			return err
+		}
+		if found {
+			submission, err = tx.GetTaskSubmission(ctx, domain.ImageUpkeepSubmissionIdentity(open.RefusalID))
+			if err != nil {
+				return err
+			}
+			return errReplay
+		}
 		outcome, err := s.taskSubmitter.SubmitTask(ctx, tx, TaskSubmissionInput{
 			CommandID: commandID, Origin: domain.TaskSubmissionOriginDaemon, RequestDigest: requestDigest,
 			ProjectID: projectID, Source: source, SourceDigest: refusal.ID,
@@ -248,6 +264,60 @@ func (s *Service) SubmitImageRepairTask(
 		return domain.TaskSubmission{}, err
 	}
 	return submission, nil
+}
+
+// ImageRepairTask is an open maintenance task and the refusal it was
+// opened for.
+type ImageRepairTask struct {
+	RefusalID domain.Digest
+	TaskID    domain.TaskID
+}
+
+// OpenImageRepairTask finds the open maintenance task for the image refusal
+// was measured from: the oldest repair-class refusal on its repository,
+// measured from the same image, whose daemon-origin task has no cancellation
+// (requested or confirmed) and whose current episode has no completion or
+// abandonment. A refusal at another tip or with other findings still matches,
+// so one broken image has at most one open task. A closed task no longer
+// counts: a repair that merged without fixing the image must not block the
+// next one. A refusal of another class has no open task: a repair task
+// cannot resolve it, so its writers must not hold on one. The lookup lists
+// every refusal for the repository, which is one per refused tip, image, and
+// finding set.
+func OpenImageRepairTask(
+	ctx context.Context, tx *store.ReadTx, refusal domain.ImageUpkeepRefusal,
+) (ImageRepairTask, bool, error) {
+	if refusal.Class != domain.ImageUpkeepRefusalRepair {
+		return ImageRepairTask{}, false, nil
+	}
+	refusals, err := tx.ListImageUpkeepRefusals(ctx, refusal.RepositoryID)
+	if err != nil {
+		return ImageRepairTask{}, false, err
+	}
+	for _, candidate := range refusals {
+		if candidate.Class != domain.ImageUpkeepRefusalRepair ||
+			candidate.MeasuredFromImageID != refusal.MeasuredFromImageID {
+			continue
+		}
+		submission, err := tx.GetTaskSubmission(ctx, domain.ImageUpkeepSubmissionIdentity(candidate.ID))
+		if errors.Is(err, store.ErrNotFound) {
+			continue
+		}
+		if err != nil {
+			return ImageRepairTask{}, false, err
+		}
+		if submission.Origin != domain.TaskSubmissionOriginDaemon || submission.SourceDigest != candidate.ID {
+			continue
+		}
+		task, err := tx.GetTask(ctx, submission.TaskID)
+		if err != nil {
+			return ImageRepairTask{}, false, err
+		}
+		if task.Cancellation == nil && task.DisplayLifecycle(nil) == nil {
+			return ImageRepairTask{RefusalID: candidate.ID, TaskID: task.ID}, true, nil
+		}
+	}
+	return ImageRepairTask{}, false, nil
 }
 
 // errEmptyTaskLines rejects a task_lines list that is present but names no

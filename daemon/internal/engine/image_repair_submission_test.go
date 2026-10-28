@@ -5,6 +5,7 @@ import (
 	"errors"
 	"slices"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -28,15 +29,24 @@ func repairTestRefusal(
 	t *testing.T, class domain.ImageUpkeepRefusalClass, repositoryID int64, tip string,
 ) domain.ImageUpkeepRefusal {
 	t.Helper()
+	return repairTestRefusalFrom(t, class, repositoryID, tip, "pointed image", "lockfile root disagrees")
+}
+
+// repairTestRefusalFrom builds a refusal measured from the image image names,
+// whose finding carries detail.
+func repairTestRefusalFrom(
+	t *testing.T, class domain.ImageUpkeepRefusalClass, repositoryID int64, tip, image, detail string,
+) domain.ImageUpkeepRefusal {
+	t.Helper()
 	var findings []domain.ImageUpkeepClauseFinding
 	if class != domain.ImageUpkeepRefusalHostFault {
 		findings = []domain.ImageUpkeepClauseFinding{{
-			Clause: domain.RebuildRefusalLockfileInconsistent, Detail: "lockfile root disagrees",
+			Clause: domain.RebuildRefusalLockfileInconsistent, Detail: detail,
 		}}
 	}
 	refusal, err := domain.NewImageUpkeepRefusal(domain.ImageUpkeepRefusalInput{
 		RepositoryID: repositoryID, Repository: repairTestRepository, Harness: domain.HarnessClientClaudeCode,
-		TipSHA: tip, MeasuredFromImageID: domain.Digest(contentaddr.Sum([]byte("pointed image"))),
+		TipSHA: tip, MeasuredFromImageID: domain.Digest(contentaddr.Sum([]byte(image))),
 		Class: class, Findings: findings, RecordedAt: time.Date(2026, 10, 27, 12, 0, 0, 0, time.UTC),
 	})
 	if err != nil {
@@ -258,5 +268,195 @@ func TestDeviceSubmissionCannotTakeTheDaemonIdentity(t *testing.T) {
 	if got, err := submissionIdentity(domain.TaskSubmissionOriginDevice, "daemon:image-upkeep:x"); err != nil ||
 		got != "client:daemon:image-upkeep:x" {
 		t.Fatalf("device identity = %q err=%v", got, err)
+	}
+}
+
+// requireNoRepairSubmission fails unless no submission and no task are
+// recorded under refusal's identity.
+func requireNoRepairSubmission(t *testing.T, st *store.Store, refusal domain.ImageUpkeepRefusal) {
+	t.Helper()
+	ctx := context.Background()
+	identity := domain.ImageUpkeepSubmissionIdentity(refusal.ID)
+	if err := st.Read(ctx, func(tx *store.ReadTx) error {
+		if _, err := tx.GetTaskSubmission(ctx, identity); !errors.Is(err, store.ErrNotFound) {
+			t.Fatalf("submission for refusal %s = %v, want ErrNotFound", refusal.ID, err)
+		}
+		if _, err := tx.GetTaskByIntakeKey(ctx, repairTestProject, "submission:"+identity); !errors.Is(err, store.ErrNotFound) {
+			t.Fatalf("task for refusal %s = %v, want ErrNotFound", refusal.ID, err)
+		}
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// TestSubmitImageRepairTaskOpensOneTaskPerImage: while a repair task is open,
+// a later refusal measured from the same image returns that task's
+// submission and records nothing, whether the tip moved (an unrelated merge)
+// or only the findings' detail changed (a restart that measured again). A
+// refusal measured from another image opens its own task.
+func TestSubmitImageRepairTaskOpensOneTaskPerImage(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	tip := strings.Repeat("a", 40)
+	first := repairTestRefusalFrom(t, domain.ImageUpkeepRefusalRepair, repairTestRepositoryID, tip,
+		"broken image", "proof failed after 1.2s")
+	advanced := repairTestRefusalFrom(t, domain.ImageUpkeepRefusalRepair, repairTestRepositoryID,
+		strings.Repeat("b", 40), "broken image", "proof failed after 1.2s")
+	restarted := repairTestRefusalFrom(t, domain.ImageUpkeepRefusalRepair, repairTestRepositoryID, tip,
+		"broken image", "proof failed after 3.4s")
+	other := repairTestRefusalFrom(t, domain.ImageUpkeepRefusalRepair, repairTestRepositoryID, tip,
+		"other image", "proof failed after 1.2s")
+	service, st := newImageRepairHarness(t, []domain.ProjectID{repairTestProject}, first, advanced, restarted, other)
+
+	submission, err := service.SubmitImageRepairTask(ctx, repairTestProject, first.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for name, refusal := range map[string]domain.ImageUpkeepRefusal{"tip advance": advanced, "restart": restarted} {
+		got, err := service.SubmitImageRepairTask(ctx, repairTestProject, refusal.ID)
+		if err != nil || got != submission {
+			t.Fatalf("%s: submit = %+v err=%v, want the open %+v", name, got, err, submission)
+		}
+		requireNoRepairSubmission(t, st, refusal)
+	}
+	own, err := service.SubmitImageRepairTask(ctx, repairTestProject, other.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if own.CommandID != domain.ImageUpkeepSubmissionIdentity(other.ID) || own.TaskID == submission.TaskID {
+		t.Fatalf("another image's submission = %+v, want its own task", own)
+	}
+}
+
+// TestSubmitImageRepairTaskReopensAfterTheTaskCloses: a started task still
+// holds its image, but once it is stopped, completed, or abandoned, a later
+// refusal measured from the same image opens a new task, and submitting the
+// closed task's own refusal still replays it.
+func TestSubmitImageRepairTaskReopensAfterTheTaskCloses(t *testing.T) {
+	t.Parallel()
+	at := time.Date(2026, 10, 28, 12, 0, 0, 0, time.UTC)
+	for name, closeTask := range map[string]func(*testing.T, *store.Store, domain.TaskSubmission) error{
+		"stopped": func(t *testing.T, st *store.Store, submission domain.TaskSubmission) error {
+			ctx := t.Context()
+			state, err := st.ServerState(ctx)
+			if err != nil {
+				return err
+			}
+			return st.Write(ctx, func(tx *store.WriteTx) error {
+				if err := tx.PutDevice(ctx, domain.Device{
+					ID: "device-1", DisplayName: "Mac", Status: domain.DeviceActive, PairedAt: at,
+				}); err != nil {
+					return err
+				}
+				_, _, err := tx.StopTask(ctx, domain.StopTaskRequest{
+					CommandID: "stop-1", DeviceID: "device-1", TaskID: submission.TaskID,
+					ProjectID: repairTestProject, ExpectedSyncEpoch: state.SyncEpoch,
+					ExpectedEntityVersion: state.Revision,
+				}, at)
+				return err
+			})
+		},
+		// A completion needs a recorded work-unit completion behind it, so
+		// this reuses the completion tests' bound-PR-merged chain on the
+		// task's specification run.
+		"completed": func(t *testing.T, st *store.Store, submission domain.TaskSubmission) error {
+			ctx := t.Context()
+			var (
+				run    domain.Run
+				policy domain.ResolvedPolicy
+			)
+			if err := st.Read(ctx, func(tx *store.ReadTx) error {
+				var err error
+				if run, err = tx.GetRun(ctx, submission.SpecificationRunID); err != nil {
+					return err
+				}
+				policy, err = tx.GetResolvedPolicy(ctx, run.ID)
+				return err
+			}); err != nil {
+				return err
+			}
+			seedRunCompletion(t, st, run, policy, completionFixturePR, at)
+			return nil
+		},
+		"abandoned": func(t *testing.T, st *store.Store, submission domain.TaskSubmission) error {
+			ctx := t.Context()
+			return st.Write(ctx, func(tx *store.WriteTx) error {
+				_, err := tx.AbandonTask(ctx, submission.TaskID, at)
+				return err
+			})
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			ctx := context.Background()
+			first := repairTestRefusal(t, domain.ImageUpkeepRefusalRepair, repairTestRepositoryID, strings.Repeat("a", 40))
+			later := repairTestRefusal(t, domain.ImageUpkeepRefusalRepair, repairTestRepositoryID, strings.Repeat("b", 40))
+			service, st := newImageRepairHarness(t, []domain.ProjectID{repairTestProject}, first, later)
+			submission, err := service.SubmitImageRepairTask(ctx, repairTestProject, first.ID)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := st.Write(ctx, func(tx *store.WriteTx) error {
+				return tx.RecordTaskStart(ctx, submission.SpecificationRunID, at.Add(-time.Hour))
+			}); err != nil {
+				t.Fatal(err)
+			}
+			if got, err := service.SubmitImageRepairTask(ctx, repairTestProject, later.ID); err != nil || got != submission {
+				t.Fatalf("started task: submit = %+v err=%v, want the open %+v", got, err, submission)
+			}
+			requireNoRepairSubmission(t, st, later)
+
+			if err := closeTask(t, st, submission); err != nil {
+				t.Fatal(err)
+			}
+			reopened, err := service.SubmitImageRepairTask(ctx, repairTestProject, later.ID)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if reopened.CommandID != domain.ImageUpkeepSubmissionIdentity(later.ID) ||
+				reopened.TaskID == submission.TaskID {
+				t.Fatalf("after the task closed: submission = %+v, want a new task", reopened)
+			}
+			if again, err := service.SubmitImageRepairTask(ctx, repairTestProject, first.ID); err != nil ||
+				again != submission {
+				t.Fatalf("closed task's own refusal: submit = %+v err=%v, want the recorded %+v", again, err, submission)
+			}
+		})
+	}
+}
+
+// TestSubmitImageRepairTaskConcurrentSubmitsOpenOneTask: two upkeep passes
+// submitting refusals measured from the same image at once open one task.
+// It pins the outcome; the race window is small, so it would not reliably
+// catch a check moved out of the write transaction, which is what store
+// write serialization makes atomic.
+func TestSubmitImageRepairTaskConcurrentSubmitsOpenOneTask(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	refusals := []domain.ImageUpkeepRefusal{
+		repairTestRefusal(t, domain.ImageUpkeepRefusalRepair, repairTestRepositoryID, strings.Repeat("a", 40)),
+		repairTestRefusal(t, domain.ImageUpkeepRefusalRepair, repairTestRepositoryID, strings.Repeat("b", 40)),
+	}
+	service, st := newImageRepairHarness(t, []domain.ProjectID{repairTestProject}, refusals...)
+	submissions := make([]domain.TaskSubmission, len(refusals))
+	errs := make([]error, len(refusals))
+	var wg sync.WaitGroup
+	for i, refusal := range refusals {
+		wg.Go(func() {
+			submissions[i], errs[i] = service.SubmitImageRepairTask(ctx, repairTestProject, refusal.ID)
+		})
+	}
+	wg.Wait()
+	if err := errors.Join(errs...); err != nil {
+		t.Fatal(err)
+	}
+	if submissions[0] != submissions[1] {
+		t.Fatalf("concurrent submissions = %+v and %+v, want one task", submissions[0], submissions[1])
+	}
+	for _, refusal := range refusals {
+		if domain.ImageUpkeepSubmissionIdentity(refusal.ID) != submissions[0].CommandID {
+			requireNoRepairSubmission(t, st, refusal)
+		}
 	}
 }
