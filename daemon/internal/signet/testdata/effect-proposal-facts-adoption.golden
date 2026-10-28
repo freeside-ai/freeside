@@ -1,0 +1,17 @@
+{
+  "as_of_revision": 27,
+  "entity_version": 5,
+  "item_version": 1,
+  "proposal_digest": "sha256:7777777777777777777777777777777777777777777777777777777777777777",
+  "effect_kind": "image_policy_adoption",
+  "supersedes": null,
+  "source_issue_closure": null,
+  "follow_up_filing": null,
+  "image_policy_adoption": {
+    "refusal_record_id": "sha256:eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+    "recipe_digest": "sha256:dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+    "registry_authorities": [
+      "registry.example.com"
+    ]
+  }
+}

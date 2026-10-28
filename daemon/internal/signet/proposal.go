@@ -103,8 +103,9 @@ func (s *Service) StartTaskProposalUnattended(
 }
 
 // applyStartProposal records the decision on the item's current proposal and
-// concludes the item. It returns the proposal's kind, which the caller needs
-// to tell which effect the decision started.
+// concludes the item. An approved image-policy adoption card also records its
+// adoption in the same transaction. It returns the proposal's kind, which the
+// caller needs to tell which effect the decision started.
 func (s *Service) applyStartProposal(
 	ctx context.Context,
 	tx *store.WriteTx,
@@ -119,6 +120,11 @@ func (s *Service) applyStartProposal(
 	digest := proposal.Digest
 	if err := tx.RecordProposalDecision(ctx, instance.ID, command.CommandID, command.Action, &digest, now); err != nil {
 		return "", err
+	}
+	if proposal.Kind == domain.EffectImagePolicyAdoption {
+		if err := recordImagePolicyAdoption(ctx, tx, instance.ID, now); err != nil {
+			return "", err
+		}
 	}
 	return proposal.Kind, concludeItem(ctx, tx, command, item, domain.StatusResolved, now)
 }

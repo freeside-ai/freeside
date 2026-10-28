@@ -931,6 +931,7 @@ func isCommandAuthorityRejection(err error) bool {
 	for _, target := range []error{
 		ErrDoctorUnavailable,
 		ErrProposalSnoozed,
+		ErrImagePolicyAdoptionStale,
 		domain.ErrReviewConfigAdoptionIneffective,
 		domain.ErrReviewConfigSupersessionInvalid,
 		domain.ErrReviewConfigRecoveryBindingMissing,

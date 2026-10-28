@@ -266,6 +266,12 @@ func TestSignetWireGoldens(t *testing.T) {
 			name:  "effect-proposal-facts-filing",
 			value: followUpFilingFactsFixture(),
 		},
+		{
+			// The adoption arm naming both a recipe digest and a host; the
+			// closure and filing arms and supersedes render explicit null.
+			name:  "effect-proposal-facts-adoption",
+			value: imagePolicyAdoptionFactsFixture(),
+		},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -337,6 +343,22 @@ func followUpFilingFactsFixture() EffectProposalFactsSnapshot {
 				AdjudicationDigest: domain.Digest("sha256:" + strings.Repeat("c", 64)),
 				Kind:               domain.FollowUpSourceDeferredDisposition,
 			},
+		},
+	}
+}
+
+// imagePolicyAdoptionFactsFixture builds a fixed, valid adoption-arm
+// facts snapshot.
+func imagePolicyAdoptionFactsFixture() EffectProposalFactsSnapshot {
+	recipe := domain.Digest("sha256:" + strings.Repeat("d", 64))
+	return EffectProposalFactsSnapshot{
+		AsOfRevision: 27, EntityVersion: 5, ItemVersion: 1,
+		ProposalDigest: domain.Digest("sha256:" + strings.Repeat("7", 64)),
+		EffectKind:     domain.EffectImagePolicyAdoption,
+		ImagePolicyAdoption: &ImagePolicyAdoptionFacts{
+			RefusalRecordID:     domain.Digest("sha256:" + strings.Repeat("e", 64)),
+			RecipeDigest:        &recipe,
+			RegistryAuthorities: []string{"registry.example.com"},
 		},
 	}
 }
