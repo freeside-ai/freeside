@@ -1089,6 +1089,12 @@ func run(parent context.Context, stop func(), cfg config) (_ *daemon, err error)
 		signet.WithFollowUpFiler(func() signet.FollowUpFiler {
 			return followUpFilerBinding(claudeWiring)
 		}),
+		// An approved image-policy adoption wakes upkeep to build under it.
+		signet.WithImageUpkeepWake(func() {
+			if upkeepTrigger != nil {
+				upkeepTrigger.wake()
+			}
+		}),
 		signet.WithPairingKey(pairingKey),
 		signet.WithHostFacts(signet.HostFacts{DisplayName: hostName, ConnectionMode: connectionMode}),
 		signet.WithClock(cfg.now),
@@ -1320,7 +1326,7 @@ func run(parent context.Context, stop func(), cfg config) (_ *daemon, err error)
 			return nil, err
 		}
 		// Upkeep shares the lane's rebuild, and with it the one build gate.
-		imageUpkeep, err = composeImageUpkeep(st, attention, cfg, claudeWiring, rebuild, manualProjects,
+		imageUpkeep, err = composeImageUpkeep(st, attention, blobs, cfg, claudeWiring, rebuild, manualProjects,
 			&doctorConvergenceLock)
 		if err != nil {
 			return nil, err
@@ -1333,6 +1339,7 @@ func run(parent context.Context, stop func(), cfg config) (_ *daemon, err error)
 			Transport: claudeWiring.publicationTransport,
 			Publisher: claudeWiring.publisher, Artifacts: blobs,
 			ApprovedRecipes:                 cfg.ApprovedRecipes,
+			RepositoryID:                    cfg.Claude.RepositoryID,
 			RemediationPromptPackageDigest:  claudeWiring.remediationPromptPackage,
 			ReviewSource:                    claudeWiring.reviewSource,
 			ShadowReviewSource:              claudeWiring.shadowReviewSource,
@@ -1506,9 +1513,14 @@ func run(parent context.Context, stop func(), cfg config) (_ *daemon, err error)
 	}
 	d.pairing.configure(d.readiness().APIURL, attention.MintPairingCode)
 	// The control routes approve the store's recipe set, which a scenario
-	// extends with its own recipe.
+	// extends with its own recipe, and the recipes adopted for the Claude
+	// driver's repository; with no Claude driver there is none.
+	var repositoryID int64
+	if cfg.Claude != nil {
+		repositoryID = cfg.Claude.RepositoryID
+	}
 	d.pairing.registerControlRoutes(
-		d.pairing.mux, st, blobs, localBackupFiles, storeOptions.ApprovedRecipes, integrityProbe, cfg.Environment,
+		d.pairing.mux, st, blobs, localBackupFiles, storeOptions.ApprovedRecipes, repositoryID, integrityProbe, cfg.Environment,
 		cfg.execution(), attention, cfg.DeputyLaunch, func(ctx context.Context, id domain.TaskID, commit func() error) error {
 			if workflow == nil {
 				return commit()

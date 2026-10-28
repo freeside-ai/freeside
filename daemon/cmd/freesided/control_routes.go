@@ -5,7 +5,6 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
-	"fmt"
 	"io"
 	"net/http"
 	"net/url"
@@ -132,7 +131,7 @@ func decodeControlPayload[T any](body json.RawMessage) (T, error) {
 
 func (p *pairingControl) registerControlRoutes(
 	mux *http.ServeMux, st *store.Store, blobs *signet.BlobStore, backupFiles *store.LocalBackupFiles,
-	approved map[domain.Digest]bool, integrityProbe credentialIntegrityProbe, env environment,
+	approved map[domain.Digest]bool, repositoryID int64, integrityProbe credentialIntegrityProbe, env environment,
 	execution executionMode, attention *signet.Service, launch *deputyLaunch,
 	commitWorkflowClosure func(context.Context, domain.TaskID, func() error) error,
 ) {
@@ -140,6 +139,11 @@ func (p *pairingControl) registerControlRoutes(
 	p.handleGet(mux, "/execution", func(context.Context, *http.Request) (any, error) {
 		return executionReport{Version: executionReportVersion, Environment: env, Execution: execution}, nil
 	})
+	daemon := daemonStoreContext{
+		store: st, blobs: blobs, backupFiles: backupFiles, dbPath: p.dbPath, approvedRecipes: approved,
+		repositoryID: repositoryID, credentialIntegrityProbe: integrityProbe,
+		commitWorkflowClosure: commitWorkflowClosure,
+	}
 	observation := observedb.Borrow(st)
 	p.handleGet(mux, "/observe/runs/{run_id}", func(ctx context.Context, r *http.Request) (any, error) {
 		return observation.ObserveRun(ctx, domain.RunID(r.PathValue("run_id")))
@@ -150,21 +154,19 @@ func (p *pairingControl) registerControlRoutes(
 	})
 	p.handleGet(mux, "/observe/runs/{run_id}/snapshot", func(ctx context.Context, r *http.Request) (any, error) {
 		var recipes []domain.Digest
+		requested := map[domain.Digest]bool{}
 		for _, recipe := range r.URL.Query()["approved_recipe"] {
-			if domain.Digest(recipe) != domain.EffectProposalRecipeDigest && !approved[domain.Digest(recipe)] {
-				return nil, fmt.Errorf("%w: recipe %s is not approved by the running daemon", domain.ErrUnapprovedRecipe, recipe)
-			}
 			recipes = append(recipes, domain.Digest(recipe))
+			requested[domain.Digest(recipe)] = true
+		}
+		if err := daemon.requireApproved(ctx, requested); err != nil {
+			return nil, err
 		}
 		view, err := observedb.Borrow(st, recipes...).ObserveSnapshot(ctx, domain.RunID(r.PathValue("run_id")))
 		return wireSnapshot(view), err
 	})
 	withStore := func(ctx context.Context) context.Context {
-		return context.WithValue(ctx, daemonStoreContextKey{}, daemonStoreContext{
-			store: st, blobs: blobs, backupFiles: backupFiles, dbPath: p.dbPath, approvedRecipes: approved,
-			credentialIntegrityProbe: integrityProbe,
-			commitWorkflowClosure:    commitWorkflowClosure,
-		})
+		return context.WithValue(ctx, daemonStoreContextKey{}, daemon)
 	}
 	command := func(route string, run func(context.Context, []string, io.Writer, io.Writer) error) {
 		p.handle(mux, route, func(ctx context.Context, body json.RawMessage) (any, error) {

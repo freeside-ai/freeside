@@ -16,13 +16,33 @@ import (
 // image current at the tip, not at every commit it passed through. One
 // worker also keeps the start pass and a tip pass from fetching and
 // measuring the same tip side by side.
+//
+// An approved image-policy adoption wakes the worker for another start pass
+// (wake), so upkeep builds under the adopted policy without waiting for the
+// next tip.
 type imageUpkeepTrigger struct {
 	// pending holds at most the newest tip the worker has not taken yet.
 	pending chan domain.RepositoryTipObservation
+	// rerun holds at most one wake the worker has not taken yet.
+	rerun chan struct{}
 }
 
 func newImageUpkeepTrigger() *imageUpkeepTrigger {
-	return &imageUpkeepTrigger{pending: make(chan domain.RepositoryTipObservation, 1)}
+	return &imageUpkeepTrigger{
+		pending: make(chan domain.RepositoryTipObservation, 1),
+		rerun:   make(chan struct{}, 1),
+	}
+}
+
+// wake is signet's image-upkeep wake. It never blocks: a wake already
+// pending covers this one, because the pass it runs reads the current
+// adoptions. The wake is a latency hint; the start pass and the doctor's
+// schedule cover a missed one.
+func (t *imageUpkeepTrigger) wake() {
+	select {
+	case t.rerun <- struct{}{}:
+	default:
+	}
 }
 
 // tipAdvanced is the reconciler's upkeepTipAdvance entry point. It never
@@ -42,8 +62,8 @@ func (t *imageUpkeepTrigger) tipAdvanced(_ context.Context, observation domain.R
 	}
 }
 
-// run is the worker: the start pass, then one pass per handed-off tip, until
-// ctx ends. A failed pass is not fatal; the doctor's schedule retries. A tip
+// run is the worker: the start pass, then one pass per handed-off tip or
+// wake, until ctx ends. A failed pass is not fatal; the doctor's schedule retries. A tip
 // handed off but not yet run when the daemon stops is covered by the next
 // start pass, which reads the tip itself.
 func (t *imageUpkeepTrigger) run(ctx context.Context, upkeep *engine.ImageUpkeep, logger *slog.Logger) {
@@ -58,6 +78,10 @@ func (t *imageUpkeepTrigger) run(ctx context.Context, upkeep *engine.ImageUpkeep
 			if err := upkeep.TipAdvanced(ctx, observation.RepositoryID, observation.TipSHA); err != nil &&
 				ctx.Err() == nil {
 				logger.Warn("image upkeep tip pass failed", "tip_sha", observation.TipSHA, "error", err)
+			}
+		case <-t.rerun:
+			if err := upkeep.RunAll(ctx); err != nil && ctx.Err() == nil {
+				logger.Warn("image upkeep adoption pass failed", "error", err)
 			}
 		}
 	}

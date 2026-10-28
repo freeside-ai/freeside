@@ -52,3 +52,34 @@ func TestImageUpkeepTriggerRunsTheStartPassThenTheNewestTip(t *testing.T) {
 		<-done
 	})
 }
+
+// A wake runs one more start pass, and wakes the worker has not taken yet
+// collapse into one.
+func TestImageUpkeepTriggerRunsAPassPerWake(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		trigger := newImageUpkeepTrigger()
+		trigger.wake()
+		trigger.wake()
+		starts := 0
+		upkeep := &engine.ImageUpkeep{
+			RepositoryID: 42,
+			ReadTip: func(context.Context) (string, error) {
+				starts++
+				return "", errors.New("tip unreadable")
+			},
+		}
+		var logs lockedBuffer
+		ctx, cancel := context.WithCancel(t.Context())
+		done := make(chan struct{})
+		go func() {
+			defer close(done)
+			trigger.run(ctx, upkeep, slog.New(slog.NewTextHandler(&logs, nil)))
+		}()
+		synctest.Wait()
+		if got := logs.String(); starts != 2 || strings.Count(got, "image upkeep adoption pass failed") != 1 {
+			t.Fatalf("starts = %d, logs:\n%s\nwant the start pass and one pass for the wakes", starts, got)
+		}
+		cancel()
+		<-done
+	})
+}

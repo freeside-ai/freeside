@@ -107,6 +107,9 @@ type (
 		backupFiles     *store.LocalBackupFiles
 		dbPath          string
 		approvedRecipes map[domain.Digest]bool
+		// repositoryID is the daemon's repository, whose adopted recipes
+		// (plan §5.7, Project-image upkeep) the daemon approves too.
+		repositoryID int64
 		// credentialIntegrityProbe is the running daemon's live probe, nil
 		// when the daemon has no runtime to observe with. A command that
 		// opens the store itself never has one.
@@ -114,6 +117,32 @@ type (
 		commitWorkflowClosure    func(context.Context, domain.TaskID, func() error) error
 	}
 )
+
+// requireApproved refuses any of recipes the running daemon does not
+// approve. The daemon approves the operator's set and every recipe adopted
+// for its repository; the effect-proposal recipe is the store's own, so it
+// always passes.
+func (d daemonStoreContext) requireApproved(ctx context.Context, recipes map[domain.Digest]bool) error {
+	var effective map[domain.Digest]bool
+	for digest := range recipes {
+		if digest == domain.EffectProposalRecipeDigest || d.approvedRecipes[digest] {
+			continue
+		}
+		if effective == nil {
+			if err := d.store.Read(ctx, func(tx *store.ReadTx) error {
+				var err error
+				effective, err = tx.EffectiveApprovedRecipes(ctx, d.repositoryID)
+				return err
+			}); err != nil {
+				return err
+			}
+		}
+		if !effective[digest] {
+			return fmt.Errorf("%w: recipe %s is not approved by the running daemon", domain.ErrUnapprovedRecipe, digest)
+		}
+	}
+	return nil
+}
 
 type commandStoreHandle struct {
 	store    *store.Store
@@ -149,10 +178,8 @@ func openCommandStore(ctx context.Context, dbPath string, opts store.Options, mo
 		if canonical != daemon.dbPath {
 			return nil, nil, errors.New("database path mismatch")
 		}
-		for digest := range opts.ApprovedRecipes {
-			if !daemon.approvedRecipes[digest] {
-				return nil, nil, fmt.Errorf("recipe %s is not approved by the running daemon", digest)
-			}
+		if err := daemon.requireApproved(ctx, opts.ApprovedRecipes); err != nil {
+			return nil, nil, err
 		}
 		return &commandStoreHandle{store: daemon.store, borrowed: true}, nil, nil
 	}

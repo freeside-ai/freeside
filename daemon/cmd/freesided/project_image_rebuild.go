@@ -68,6 +68,7 @@ func newProjectImageRebuild(cfg claudeDriverConfig, st *store.Store) (*engine.Pr
 func composeImageUpkeep(
 	st *store.Store,
 	attention *signet.Service,
+	blobs signet.EvidenceBlobWriter,
 	cfg config,
 	wiring *claudeComposition,
 	rebuild *engine.ProjectImageRebuild,
@@ -89,6 +90,7 @@ func composeImageUpkeep(
 	watch := domain.ScheduleBaseWatch{Repo: cfg.Claude.Repo, BaseRef: cfg.Claude.BaseRef}
 	upkeep := &engine.ImageUpkeep{
 		Store: st, Rebuild: rebuild, RepositoryID: cfg.Claude.RepositoryID,
+		Projects: imageUpkeepProjects(cfg, manualProjects), Blobs: blobs,
 		ReadTip: func(ctx context.Context) (string, error) {
 			return wiring.observeBaseTip(ctx, watch)
 		},
@@ -127,6 +129,7 @@ func composeImageUpkeep(
 			return pendingImageRepairTask(ctx, st, refusal.ID)
 		}
 	}
+	upkeep.AdoptionPending = upkeep.PendingAdoption
 	return upkeep, nil
 }
 
@@ -169,4 +172,24 @@ func pendingImageRepairTask(
 		return nil
 	})
 	return taskID, pending, err
+}
+
+// imageUpkeepProjects are the configured projects an adoption card may be
+// raised in, in a stable order: the label-intake projects of the daemon's
+// repository, then the manual-submission projects. Upkeep takes the first
+// one registered for the repository.
+func imageUpkeepProjects(cfg config, manualProjects map[domain.ProjectID]engine.ManualInitiator) []domain.ProjectID {
+	var projects []domain.ProjectID
+	for _, initiator := range cfg.IntakeInitiators {
+		if initiator.RepositoryID == cfg.Claude.RepositoryID {
+			projects = append(projects, initiator.ProjectID)
+		}
+	}
+	manual := slices.Sorted(maps.Keys(manualProjects))
+	for _, project := range manual {
+		if !slices.Contains(projects, project) {
+			projects = append(projects, project)
+		}
+	}
+	return projects
 }

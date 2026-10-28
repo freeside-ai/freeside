@@ -97,10 +97,8 @@ func runDoctorCommand(
 	var integrityProbe credentialIntegrityProbe
 	if daemon, borrowed := ctx.Value(daemonStoreContextKey{}).(daemonStoreContext); borrowed {
 		integrityProbe = daemon.credentialIntegrityProbe
-		for digest := range approvedRecipes {
-			if digest != domain.EffectProposalRecipeDigest && !daemon.approvedRecipes[digest] {
-				return fmt.Errorf("recipe %s is not approved by the running daemon", digest)
-			}
+		if err := daemon.requireApproved(ctx, approvedRecipes); err != nil {
+			return err
 		}
 		st = daemon.store
 		blobs = daemon.blobs
