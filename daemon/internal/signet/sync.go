@@ -95,14 +95,17 @@ type EffectProposalFactsSnapshot struct {
 	ImagePolicyAdoption *ImagePolicyAdoptionFacts    `json:"image_policy_adoption"`
 }
 
-// ImagePolicyAdoptionFacts carries an adoption card's parameters: the refusal
-// record it answers and the recipe digest and registry hosts it would adopt.
-// The card's project is the item's own, so it is not repeated here.
-// RegistryAuthorities is strictly ascending and never nil.
+// ImagePolicyAdoptionFacts carries an adoption card's parameters: the
+// repository the adoption widens, the refusal record it answers, and the
+// recipe digest and registry hosts it would adopt. The repository is the
+// card's project's current record, so a rename shows the new name, as
+// followUpFilingFacts explains. RegistryAuthorities is strictly ascending and
+// never nil.
 type ImagePolicyAdoptionFacts struct {
-	RefusalRecordID     domain.Digest  `json:"refusal_record_id"`
-	RecipeDigest        *domain.Digest `json:"recipe_digest"`
-	RegistryAuthorities []string       `json:"registry_authorities"`
+	Repository          domain.FollowUpFilingRepository `json:"repository"`
+	RefusalRecordID     domain.Digest                   `json:"refusal_record_id"`
+	RecipeDigest        *domain.Digest                  `json:"recipe_digest"`
+	RegistryAuthorities []string                        `json:"registry_authorities"`
 }
 
 // FollowUpFilingFacts carries the bounded filing facts: the daemon-derived
@@ -679,7 +682,11 @@ func (s *Service) GetEffectProposalFacts(ctx context.Context, id domain.ItemID) 
 		case domain.EffectImagePolicyAdoption:
 			// ProposalForItem re-gated the card against its project and
 			// refusal record, and tied the item's project to the card's.
-			out.ImagePolicyAdoption, err = imagePolicyAdoptionFacts(proposal, superseded, merge)
+			project, err := tx.GetProject(ctx, item.ProjectID)
+			if err != nil {
+				return err
+			}
+			out.ImagePolicyAdoption, err = imagePolicyAdoptionFacts(project, proposal, superseded, merge)
 			return err
 		case domain.EffectTaskProposal:
 		}
@@ -694,13 +701,15 @@ func (s *Service) GetEffectProposalFacts(ctx context.Context, id domain.ItemID) 
 // imagePolicyAdoptionFacts rebuilds the adoption arm. A card binds no merge
 // and has no revision, so either is an inconsistent row.
 func imagePolicyAdoptionFacts(
-	proposal domain.EffectProposal, superseded *domain.EffectProposal, merge *domain.ProspectiveMerge,
+	project domain.Project, proposal domain.EffectProposal,
+	superseded *domain.EffectProposal, merge *domain.ProspectiveMerge,
 ) (*ImagePolicyAdoptionFacts, error) {
 	params := proposal.AdoptionProposal
 	if params == nil || superseded != nil || merge != nil {
 		return nil, ErrInvalidSyncSnapshot
 	}
 	facts := &ImagePolicyAdoptionFacts{
+		Repository:          domain.FollowUpFilingRepository{Repo: project.Repo, RepositoryID: project.RepositoryID},
 		RefusalRecordID:     params.RefusalRecordID,
 		RegistryAuthorities: slices.Clone(params.RegistryAuthorities),
 	}

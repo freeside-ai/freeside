@@ -1288,8 +1288,7 @@ components:
             - $ref: "#/components/schemas/ImagePolicyAdoptionFacts"
           description: >
             The adoption facts for an image_policy_adoption effect; null for
-            any other effect kind. The daemon serves no adoption card yet
-            (#2335 raises it), so this is null today.
+            any other effect kind.
 
     ImagePolicyAdoptionFacts:
       type: object
@@ -1297,12 +1296,16 @@ components:
         The policy change an adoption card proposes to answer one policy-class
         project-image upkeep refusal (plan §5.7, Project-image upkeep): the
         refusal record it answers and the recipe digest to approve, the
-        registry authorities to add, or both. Approving the card opens a
-        project-policy proposal; merging that proposal is the adoption.
-        Mirrors domain.ImagePolicyAdoptionParameters.
+        registry authorities to add, or both, and the repository the
+        adoption widens, served from the card's project's current record.
+        Approving the card records the adoption in the daemon's own image
+        policy, for the card's repository only. Mirrors
+        domain.ImagePolicyAdoptionParameters plus the repository.
       additionalProperties: false
-      required: [refusal_record_id, recipe_digest, registry_authorities]
+      required: [repository, refusal_record_id, recipe_digest, registry_authorities]
       properties:
+        repository:
+          $ref: "#/components/schemas/ProjectRepository"
         refusal_record_id:
           $ref: "#/components/schemas/Digest"
         recipe_digest:
@@ -1391,7 +1394,7 @@ components:
       required: [repository, labels, milestone, title, body, source]
       properties:
         repository:
-          $ref: "#/components/schemas/FollowUpFilingRepository"
+          $ref: "#/components/schemas/ProjectRepository"
         labels:
           type: array
           maxItems: 32
@@ -1417,12 +1420,13 @@ components:
         source:
           $ref: "#/components/schemas/FollowUpFilingSource"
 
-    FollowUpFilingRepository:
+    ProjectRepository:
       type: object
       description: >
-        The repository a follow-up issue is filed in. repository_id is the
-        forge identity; repo is the project's current name for it, so a
-        rename after the proposal was made shows the new name.
+        A project's repository, such as the one a follow-up issue is filed
+        in or an image-policy adoption widens. repository_id is the forge
+        identity; repo is the project's current name for it, so a rename
+        after the proposal was made shows the new name.
       additionalProperties: false
       required: [repo, repository_id]
       properties:

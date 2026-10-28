@@ -505,13 +505,13 @@ package enum AttentionDisplay {
     /// What approving an adoption adds to the repository's image policy.
     /// The recipe digest is shortened as a card row shortens a revision; the
     /// full digest and the refusal the card answers are audit coordinates,
-    /// kept for Details (`imagePolicyAdoptionDetailRows`). The facts name no
-    /// repository; the card's project names it.
+    /// kept for Details (`imagePolicyAdoptionDetailRows`).
     private static func imagePolicyAdoptionRows(
         _ adoption: Components.Schemas.ImagePolicyAdoptionFacts
     ) -> [FactRow] {
         [
             .init(effectFactLabel, effectKindLabel(.image_policy_adoption)),
+            .init("Repository", adoption.repository.repo, monospaced: true),
             .init(
                 "Recipe",
                 adoption.recipe_digest.map { shortDigest($0.value1) } ?? "Unchanged",
@@ -727,16 +727,18 @@ package enum AttentionDisplay {
     package static let screenedIssueTextExplanation =
         "Written by the agent. The daemon screened this text; it did not check that it is true."
 
-    /// The adoption's audit coordinates for Details, in full: the recipe
-    /// digest the card row shortens, when the adoption names one, and the
-    /// upkeep refusal the card answers.
+    /// The adoption's audit coordinates for Details, in full: the repository
+    /// identity, the recipe digest the card row shortens, when the adoption
+    /// names one, and the upkeep refusal the card answers.
     package static func imagePolicyAdoptionDetailRows(
         _ facts: Components.Schemas.EffectProposalFactsSnapshot
     ) -> [BindingRow] {
         guard facts.effect_kind == .image_policy_adoption,
             let adoption = facts.image_policy_adoption?.value1
         else { return [] }
-        var rows: [BindingRow] = []
+        var rows: [BindingRow] = [
+            .init(label: "Repository ID", value: String(adoption.repository.repository_id))
+        ]
         if let digest = adoption.recipe_digest?.value1 {
             rows.append(.init(label: "Recipe Digest", value: digest))
         }

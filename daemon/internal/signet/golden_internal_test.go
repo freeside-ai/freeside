@@ -356,6 +356,7 @@ func imagePolicyAdoptionFactsFixture() EffectProposalFactsSnapshot {
 		ProposalDigest: domain.Digest("sha256:" + strings.Repeat("7", 64)),
 		EffectKind:     domain.EffectImagePolicyAdoption,
 		ImagePolicyAdoption: &ImagePolicyAdoptionFacts{
+			Repository:          domain.FollowUpFilingRepository{Repo: "owner/repo", RepositoryID: 123},
 			RefusalRecordID:     domain.Digest("sha256:" + strings.Repeat("e", 64)),
 			RecipeDigest:        &recipe,
 			RegistryAuthorities: []string{"registry.example.com"},

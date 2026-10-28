@@ -1113,6 +1113,7 @@ import Testing
         #expect(
             rows == [
                 .init("Effect", "Image policy adoption"),
+                .init("Repository", "owner/repo", monospaced: true),
                 .init("Recipe", "sha256:dddddddd", monospaced: true),
                 .init("Registry Hosts", "proxy.golang.org", monospaced: true),
             ])
@@ -1128,7 +1129,7 @@ import Testing
                     head: "proxy.golang.org",
                     outcome: " to the repository's image policy, so upkeep can rebuild the image."))
         #expect(
-            AttentionDisplay.effectProposalCardRows(facts).map(\.label) == ["Recipe", "Registry Hosts"])
+            AttentionDisplay.effectProposalCardRows(facts).map(\.label) == ["Repository", "Recipe", "Registry Hosts"])
     }
 
     @Test func imagePolicyAdoptionSentenceNamesOnlyWhatTheAdoptionAdds() throws {
@@ -1156,12 +1157,14 @@ import Testing
         var facts = try adoptionFacts()
         #expect(
             AttentionDisplay.imagePolicyAdoptionDetailRows(facts) == [
+                .init(label: "Repository ID", value: "84958515"),
                 .init(label: "Recipe Digest", value: "sha256:" + String(repeating: "d", count: 64)),
                 .init(label: "Upkeep Refusal", value: "sha256:" + String(repeating: "e", count: 64)),
             ])
 
         facts.image_policy_adoption?.value1.recipe_digest = nil
-        #expect(AttentionDisplay.imagePolicyAdoptionDetailRows(facts).map(\.label) == ["Upkeep Refusal"])
+        #expect(
+            AttentionDisplay.imagePolicyAdoptionDetailRows(facts).map(\.label) == ["Repository ID", "Upkeep Refusal"])
 
         let closure = try #require(
             AttentionFixtures.effectProposalFacts(for: AttentionFixtures.fixture(type: .effect_proposal)))
