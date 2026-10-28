@@ -1338,7 +1338,7 @@ func (w *productionPublicationWorkflow) prepareRemediationIntent(
 			CreatedAt: w.now().UTC(), Source: domain.EvidenceSourceRun,
 			Availability: domain.EvidenceAvailable,
 		},
-	}, w.approvedRecipes)
+	}, w.operatorRecipes)
 	if err != nil {
 		return nil, err
 	}

@@ -297,8 +297,12 @@ func (w *productionPublicationWorkflow) bindVerificationImage(
 	binding productionBinding,
 	checkoutDir, baseSHA, verifiedSHA string,
 ) (productionBinding, *rebuildRefusal, error) {
+	adoptedHosts, err := adoptedRegistryHosts(ctx, w.store, binding.image.RepositoryID)
+	if err != nil {
+		return productionBinding{}, nil, err
+	}
 	decision, err := projectimage.EvaluateRebuild(
-		ctx, "git", checkoutDir, binding.image, baseSHA, verifiedSHA, binding.resolvedPolicy)
+		ctx, "git", checkoutDir, binding.image, baseSHA, verifiedSHA, binding.resolvedPolicy, adoptedHosts)
 	if err != nil {
 		return productionBinding{}, nil, err
 	}
@@ -331,8 +335,12 @@ func (w *productionPublicationWorkflow) bindRepairVerificationImage(
 	binding productionBinding,
 	checkoutDir, verifiedSHA string,
 ) (productionBinding, *rebuildRefusal, error) {
+	adoptedHosts, err := adoptedRegistryHosts(ctx, w.store, binding.image.RepositoryID)
+	if err != nil {
+		return productionBinding{}, nil, err
+	}
 	decision, err := projectimage.EvaluateUpkeep(
-		ctx, "git", checkoutDir, binding.image, verifiedSHA, binding.resolvedPolicy)
+		ctx, "git", checkoutDir, binding.image, verifiedSHA, binding.resolvedPolicy, adoptedHosts)
 	if err != nil {
 		return productionBinding{}, nil, err
 	}
@@ -611,4 +619,19 @@ func reentryRebuildRefusedReason(
 	return fmt.Sprintf(
 		"Readiness re-entry stopped because pull request head %s changes its dependency manifests against base %s and Freeside could not rebuild the project image for it: %s No verification ran. Rerun the work once the change is within the project's policy, or rebuild the project image.",
 		task.HeadSHA, baseSHA, refused.refusal.account()), true
+}
+
+// adoptedRegistryHosts reads the registry hosts the repository's approved
+// image-policy adoption cards added, which join its declared registry set at
+// the rebuild gate (domain.EffectiveRegistrySet).
+func adoptedRegistryHosts(ctx context.Context, st *store.Store, repositoryID int64) ([]string, error) {
+	var hosts []string
+	if err := st.Read(ctx, func(tx *store.ReadTx) error {
+		var err error
+		hosts, err = tx.AdoptedRegistryHosts(ctx, repositoryID)
+		return err
+	}); err != nil {
+		return nil, fmt.Errorf("read adopted registry hosts: %w", err)
+	}
+	return hosts, nil
 }

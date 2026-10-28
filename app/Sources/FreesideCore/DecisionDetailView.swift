@@ -930,8 +930,9 @@ struct DecisionDetailView: View {
                     }
                 }
             }
-            // A closure states what approving binds as the card's statement
-            // (frame 7.9), ahead of the facts that qualify it.
+            // A closure or an adoption states what approving binds as the
+            // card's statement (frame 7.9), ahead of the facts that qualify
+            // it.
             if let effectProposalFacts,
                 let binding = AttentionDisplay.effectBinding(effectProposalFacts)
             {
@@ -944,7 +945,8 @@ struct DecisionDetailView: View {
                 .accessibilityLabel(Text(binding.plain))
             }
             // effectProposalCardRows is empty for an effect kind this card
-            // has no rows for (it draws a closure and a follow-up filing),
+            // has no rows for (it draws a closure, a follow-up filing, and an
+            // image-policy adoption),
             // so the titled section is suppressed rather than drawn empty.
             if let effectProposalFacts,
                 case let effectRows = AttentionDisplay.effectProposalCardRows(effectProposalFacts),
@@ -2887,6 +2889,7 @@ struct DecisionDetailView: View {
         }
         if let facts = model.effectProposalFacts {
             rows.append(contentsOf: AttentionDisplay.followUpFilingDetailRows(facts))
+            rows.append(contentsOf: AttentionDisplay.imagePolicyAdoptionDetailRows(facts))
         }
         rows.append(
             contentsOf: AttentionDisplay.unavailableActionRows(actionRanking(item).unavailable))

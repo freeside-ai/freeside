@@ -2838,6 +2838,38 @@
                                 at: dynamicTypeSize,
                                 effectProposalFacts: filingEffectFacts))))
             }
+            // The image policy adoption card is not in the default inbox
+            // either. Its facts carry the digest and hosts one upkeep refusal
+            // needs, so these pin its rows and its approve and decline at
+            // Mac and iPhone width in both schemes.
+            let adoptionEffect = AttentionFixtures.imagePolicyAdoptionEffectProposal()
+            let adoptionEffectStore = InboxStore(client: client)
+            adoptionEffectStore.replaceAll(with: [adoptionEffect])
+            let adoptionEffectDetail = DecisionDetailView(
+                store: adoptionEffectStore,
+                itemID: adoptionEffect.item.id,
+                graphics: .init(),
+                loadsAttachments: false,
+                showsValidationProgress: false,
+                now: screenshotNow)
+            let adoptionEffectFacts = AttentionFixtures.effectProposalFacts(for: adoptionEffect)
+            for (suffix, width, scheme) in [
+                ("", canvasWidth, ColorScheme.light),
+                ("-phone", CGFloat(390), ColorScheme.light),
+                ("-dark", canvasWidth, ColorScheme.dark),
+                ("-phone-dark", CGFloat(390), ColorScheme.dark),
+            ] {
+                surfaces.append(
+                    Surface(
+                        name: "decision-effect_proposal-adoption\(suffix)",
+                        width: width,
+                        colorScheme: scheme,
+                        view: AnyView(
+                            adoptionEffectDetail.screenshotCard(
+                                adoptionEffect.item,
+                                at: dynamicTypeSize,
+                                effectProposalFacts: adoptionEffectFacts))))
+            }
             surfaces.append(
                 Surface(
                     name: "task-proposal-snooze-sheet",

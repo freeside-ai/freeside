@@ -67,6 +67,9 @@ type Service struct {
 	// followUpFiler is the filer an approved follow-up filing wakes
 	// (WithFollowUpFiler). Nil means no filer is bound.
 	followUpFiler func() FollowUpFiler
+	// imageUpkeepWake asks image upkeep for a pass after an approved
+	// adoption card commits (WithImageUpkeepWake). Nil means none is bound.
+	imageUpkeepWake func()
 }
 
 // FollowUpFiler is the dispatcher that files approved follow-up issues. It is
@@ -94,6 +97,15 @@ func (s *Service) wakeFollowUpFiler() {
 	if filer := s.followUpFiler(); filer != nil {
 		filer.Wake()
 	}
+}
+
+// WithImageUpkeepWake supplies the wake a committed approval of an
+// image-policy adoption card calls, so upkeep builds under the adoption
+// without waiting for its next trigger. It must not block. The wake is a
+// latency hint only: with no option, the adoption is recorded all the same
+// and upkeep's start and doctor-schedule triggers find it.
+func WithImageUpkeepWake(wake func()) Option {
+	return func(s *Service) { s.imageUpkeepWake = wake }
 }
 
 // WithTaskStopGuard connects Stop acceptance to the runtime's short launch
@@ -290,10 +302,11 @@ func (s *Service) submitDecisionTransaction(ctx context.Context, in ClientComman
 	}
 
 	var result CommandResult
-	// approvedFiling is set only by a new command that approves a follow-up
-	// filing. A replay never sets it and a failed write returns before the
-	// wake, so only a committed approval wakes the filer.
-	approvedFiling := false
+	// approvedFiling and approvedAdoption are set only by a new command that
+	// approves a follow-up filing or an image-policy adoption card. A replay
+	// never sets them and a failed write returns before the wake, so only a
+	// committed approval wakes the filer or upkeep.
+	approvedFiling, approvedAdoption := false, false
 	err = s.store.Write(ctx, func(tx *store.WriteTx) error {
 		_, _, getErr := tx.GetCommandSnapshot(ctx, command.CommandID)
 		if getErr != nil && !errors.Is(getErr, store.ErrNotFound) {
@@ -466,6 +479,8 @@ func (s *Service) submitDecisionTransaction(ctx context.Context, in ClientComman
 					return fmt.Errorf("submit command %q: %w", command.CommandID, err)
 				}
 				approvedFiling = item.Type == domain.AttentionEffectProposal && kind == domain.EffectFollowUpFiling
+				approvedAdoption = item.Type == domain.AttentionEffectProposal &&
+					kind == domain.EffectImagePolicyAdoption
 			case outcomeRevisesAndStartsProposal:
 				if err := s.applyStartProposalWithChanges(ctx, tx, command, item, s.now().UTC()); err != nil {
 					return fmt.Errorf("submit command %q: %w", command.CommandID, err)
@@ -528,6 +543,9 @@ func (s *Service) submitDecisionTransaction(ctx context.Context, in ClientComman
 	}
 	if approvedFiling {
 		s.wakeFollowUpFiler()
+	}
+	if approvedAdoption && s.imageUpkeepWake != nil {
+		s.imageUpkeepWake()
 	}
 	return result, nil
 }

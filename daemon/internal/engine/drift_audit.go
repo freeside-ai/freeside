@@ -341,7 +341,7 @@ func (w *productionPublicationWorkflow) recordDriftAuditFailure(
 			CreatedAt: w.now().UTC(), Source: domain.EvidenceSourceRun,
 			Availability: domain.EvidenceAvailable,
 		},
-	}, w.approvedRecipes)
+	}, w.operatorRecipes)
 	if err != nil {
 		return err
 	}

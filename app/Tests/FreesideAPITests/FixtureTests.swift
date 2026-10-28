@@ -296,6 +296,32 @@ import Testing
         #expect(AttentionFixtures.effectProposalFacts(for: AttentionFixtures.fixture(type: .task_proposal)) == nil)
     }
 
+    @Test func imagePolicyAdoptionIsAValidNamedFixtureOfferingApproveDeclineAndSnooze() throws {
+        let adoption = AttentionFixtures.imagePolicyAdoptionEffectProposal()
+        #expect(adoption.item._type == .effect_proposal)
+        #expect(adoption.item.id == "item-effect_proposal-adoption")
+        #expect(adoption.item.status == .open)
+        // An adoption admits no revision and binds no merge, and its subject
+        // is its proposal batch, as the daemon's card is.
+        #expect(adoption.item.requested_decision == [.approve, .decline, .snooze])
+        #expect(adoption.item.pr_head_sha.isEmpty)
+        guard case .proposal_batch = adoption.item.subject else {
+            Issue.record("subject = \(adoption.item.subject), want a proposal batch")
+            return
+        }
+        #expect(!AttentionFixtures.defaultInboxItemIDs().contains(adoption.item.id))
+
+        let facts = try #require(AttentionFixtures.effectProposalFacts(for: adoption))
+        #expect(facts.effect_kind == .image_policy_adoption)
+        #expect(facts.source_issue_closure == nil)
+        #expect(facts.follow_up_filing == nil)
+        #expect(facts.supersedes == nil)
+        #expect(adoption.item.artifact_digests == [facts.proposal_digest])
+        let adopted = try #require(facts.image_policy_adoption?.value1)
+        #expect(adopted.recipe_digest != nil)
+        #expect(adopted.registry_authorities == adopted.registry_authorities.sorted())
+    }
+
     @Test func followUpFilingIsAValidNamedFixtureOfferingApproveDeclineAndSnooze() throws {
         let filing = AttentionFixtures.followUpFilingEffectProposal()
         #expect(filing.item._type == .effect_proposal)

@@ -406,7 +406,11 @@ func (w *productionPublicationWorkflow) reconcileUnpublishedReentry(
 			"ready item %q has no re-entry verification checkpoint: %w",
 			task.readyItemID(), domain.ErrParentKeyMismatch)
 	}
-	if !readyExists && !w.approvedRecipes[cycle.image.RecipeDigest] {
+	recipes, err := w.recipes(ctx)
+	if err != nil {
+		return productionTaskOutcome{}, err
+	}
+	if !readyExists && !recipes[cycle.image.RecipeDigest] {
 		return w.holdBlockedTask(ctx, task, imported,
 			"Publication is durably held because current trust no longer approves the admitted project-image recipe. Restore that approval to resume.",
 			domain.HoldRecipeRevoked)

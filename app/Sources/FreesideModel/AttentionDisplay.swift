@@ -494,9 +494,42 @@ package enum AttentionDisplay {
         case .follow_up_filing:
             guard let filing = facts.follow_up_filing?.value1 else { return [] }
             return followUpFilingRows(filing)
-        case .run_proposal, .image_policy_adoption:
+        case .image_policy_adoption:
+            guard let adoption = facts.image_policy_adoption?.value1 else { return [] }
+            return imagePolicyAdoptionRows(adoption)
+        case .run_proposal:
             return []
         }
+    }
+
+    /// What approving an adoption adds to the repository's image policy.
+    /// The recipe digest is shortened as a card row shortens a revision; the
+    /// full digest and the refusal the card answers are audit coordinates,
+    /// kept for Details (`imagePolicyAdoptionDetailRows`). The facts name no
+    /// repository; the card's project names it.
+    private static func imagePolicyAdoptionRows(
+        _ adoption: Components.Schemas.ImagePolicyAdoptionFacts
+    ) -> [FactRow] {
+        [
+            .init(effectFactLabel, effectKindLabel(.image_policy_adoption)),
+            .init(
+                "Recipe",
+                adoption.recipe_digest.map { shortDigest($0.value1) } ?? "Unchanged",
+                monospaced: adoption.recipe_digest != nil),
+            .init(
+                "Registry Hosts",
+                adoption.registry_authorities.isEmpty ? "None" : adoption.registry_authorities.joined(separator: ", "),
+                monospaced: !adoption.registry_authorities.isEmpty),
+        ]
+    }
+
+    /// A `sha256:` digest with its hex shortened as `shortRevision` shortens
+    /// a revision, the algorithm kept so the value still reads as a digest.
+    /// Any other value is returned whole.
+    static func shortDigest(_ digest: String) -> String {
+        let algorithm = "sha256:"
+        guard digest.hasPrefix(algorithm) else { return digest }
+        return algorithm + shortRevision(String(digest.dropFirst(algorithm.count)))
     }
 
     static let effectFactLabel = "Effect"
@@ -506,11 +539,14 @@ package enum AttentionDisplay {
         "\(issue.repo)#\(issue.issue_number)"
     }
 
-    /// What approving a source-issue closure binds, as one sentence (frame
-    /// 7.9): the candidate head, the base it would merge into, and what the
-    /// merge would do to the issue. The head is kept apart so the card can
-    /// set it in the identifier face. Nil for an effect with no merge to
-    /// state, which keeps its rows instead.
+    /// What approving an effect binds, as one sentence (frame 7.9). For a
+    /// source-issue closure: the candidate head, the base it would merge
+    /// into, and what the merge would do to the issue. For an image-policy
+    /// adoption: what it adds to the repository's image policy, and why.
+    /// The identifier (the head, or the registry hosts) is kept apart so the
+    /// card can set it in the identifier face; it is empty when the sentence
+    /// names none. Nil for an effect with nothing to state, which keeps its
+    /// rows instead.
     package struct EffectBinding: Equatable {
         package let lead: String
         package let head: String
@@ -522,6 +558,9 @@ package enum AttentionDisplay {
     package static func effectBinding(
         _ facts: Components.Schemas.EffectProposalFactsSnapshot
     ) -> EffectBinding? {
+        if facts.effect_kind == .image_policy_adoption {
+            return facts.image_policy_adoption.flatMap { adoptionBinding($0.value1) }
+        }
         guard facts.effect_kind == .source_issue_closure,
             let closure = facts.source_issue_closure?.value1
         else { return nil }
@@ -532,6 +571,26 @@ package enum AttentionDisplay {
             outcome: closure.resolves
                 ? " into \(closure.merge.base_ref) would close \(issue)."
                 : " into \(closure.merge.base_ref) would leave \(issue) open.")
+    }
+
+    /// The adoption sentence: the tip's recipe, the registry hosts, or both,
+    /// added to the policy so upkeep can rebuild. It names the effect, so the
+    /// card drops the "Effect" row under it. Nil for facts that add nothing,
+    /// which the decision model already refuses.
+    private static func adoptionBinding(_ adoption: Components.Schemas.ImagePolicyAdoptionFacts) -> EffectBinding? {
+        let hosts = adoption.registry_authorities
+        let hostNoun = hosts.count == 1 ? "registry host " : "registry hosts "
+        let lead: String
+        switch (adoption.recipe_digest != nil, hosts.isEmpty) {
+        case (true, false): lead = "Approving adds the tip's recipe and " + hostNoun
+        case (false, false): lead = "Approving adds " + hostNoun
+        case (true, true): lead = "Approving adds the tip's recipe"
+        case (false, true): return nil
+        }
+        return .init(
+            lead: lead,
+            head: hosts.joined(separator: ", "),
+            outcome: " to the repository's image policy, so upkeep can rebuild the image.")
     }
 
     /// The effect's rows as the card draws them. Where the binding
@@ -667,6 +726,23 @@ package enum AttentionDisplay {
     /// what that screening does not establish.
     package static let screenedIssueTextExplanation =
         "Written by the agent. The daemon screened this text; it did not check that it is true."
+
+    /// The adoption's audit coordinates for Details, in full: the recipe
+    /// digest the card row shortens, when the adoption names one, and the
+    /// upkeep refusal the card answers.
+    package static func imagePolicyAdoptionDetailRows(
+        _ facts: Components.Schemas.EffectProposalFactsSnapshot
+    ) -> [BindingRow] {
+        guard facts.effect_kind == .image_policy_adoption,
+            let adoption = facts.image_policy_adoption?.value1
+        else { return [] }
+        var rows: [BindingRow] = []
+        if let digest = adoption.recipe_digest?.value1 {
+            rows.append(.init(label: "Recipe Digest", value: digest))
+        }
+        rows.append(.init(label: "Upkeep Refusal", value: adoption.refusal_record_id))
+        return rows
+    }
 
     /// The filing's audit coordinates for Details, in full: the card's rows
     /// name the repository and finding for reading, and these are the

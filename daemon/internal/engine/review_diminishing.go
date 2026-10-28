@@ -109,7 +109,7 @@ func (w *productionPublicationWorkflow) parkReviewDiminishing(
 		DisplayNames:      names,
 		ItemVersion:       1, InterruptionClass: domain.InterruptionPlannedGate,
 		CreatedAt: &createdAt, Status: domain.StatusOpen,
-	}, w.approvedRecipes)
+	}, w.operatorRecipes)
 	if err != nil {
 		return err
 	}

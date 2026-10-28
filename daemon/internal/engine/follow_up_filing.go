@@ -401,7 +401,7 @@ func (w *productionPublicationWorkflow) recordFollowUpFilingRefused(
 		},
 		ItemVersion: 1, InterruptionClass: domain.InterruptionExceptional,
 		CreatedAt: &createdAt, DisplayNames: names, Status: domain.StatusOpen, Posture: &advisory,
-	}, w.approvedRecipes)
+	}, w.operatorRecipes)
 	if err != nil {
 		return err
 	}

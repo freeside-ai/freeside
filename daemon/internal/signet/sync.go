@@ -84,18 +84,25 @@ type TaskProposalRevisionFacts struct {
 // proposal revision. Exactly one kind arm is set, the one EffectKind names;
 // every other arm renders an explicit null.
 type EffectProposalFactsSnapshot struct {
-	AsOfRevision       int64                        `json:"as_of_revision"`
-	EntityVersion      int64                        `json:"entity_version"`
-	ItemVersion        int                          `json:"item_version"`
-	ProposalDigest     domain.Digest                `json:"proposal_digest"`
-	EffectKind         domain.EffectKind            `json:"effect_kind"`
-	Supersedes         *EffectProposalRevisionFacts `json:"supersedes"`
-	SourceIssueClosure *SourceIssueClosureFacts     `json:"source_issue_closure"`
-	FollowUpFiling     *FollowUpFilingFacts         `json:"follow_up_filing"`
-	// ImagePolicyAdoption carries an adoption card's parameters, which hold
-	// no opaque handle or policy identity. It is always null until #2335
-	// raises the card.
-	ImagePolicyAdoption *domain.ImagePolicyAdoptionParameters `json:"image_policy_adoption"`
+	AsOfRevision        int64                        `json:"as_of_revision"`
+	EntityVersion       int64                        `json:"entity_version"`
+	ItemVersion         int                          `json:"item_version"`
+	ProposalDigest      domain.Digest                `json:"proposal_digest"`
+	EffectKind          domain.EffectKind            `json:"effect_kind"`
+	Supersedes          *EffectProposalRevisionFacts `json:"supersedes"`
+	SourceIssueClosure  *SourceIssueClosureFacts     `json:"source_issue_closure"`
+	FollowUpFiling      *FollowUpFilingFacts         `json:"follow_up_filing"`
+	ImagePolicyAdoption *ImagePolicyAdoptionFacts    `json:"image_policy_adoption"`
+}
+
+// ImagePolicyAdoptionFacts carries an adoption card's parameters: the refusal
+// record it answers and the recipe digest and registry hosts it would adopt.
+// The card's project is the item's own, so it is not repeated here.
+// RegistryAuthorities is strictly ascending and never nil.
+type ImagePolicyAdoptionFacts struct {
+	RefusalRecordID     domain.Digest  `json:"refusal_record_id"`
+	RecipeDigest        *domain.Digest `json:"recipe_digest"`
+	RegistryAuthorities []string       `json:"registry_authorities"`
 }
 
 // FollowUpFilingFacts carries the bounded filing facts: the daemon-derived
@@ -669,11 +676,12 @@ func (s *Service) GetEffectProposalFacts(ctx context.Context, id domain.ItemID) 
 			}
 			out.FollowUpFiling, err = followUpFilingFacts(project, proposal, superseded, merge)
 			return err
-		case domain.EffectTaskProposal:
 		case domain.EffectImagePolicyAdoption:
-			// The store refuses to resolve an adoption card's subject until
-			// #2335 raises one, so no item reaches this arm; the facts read
-			// is #2335's.
+			// ProposalForItem re-gated the card against its project and
+			// refusal record, and tied the item's project to the card's.
+			out.ImagePolicyAdoption, err = imagePolicyAdoptionFacts(proposal, superseded, merge)
+			return err
+		case domain.EffectTaskProposal:
 		}
 		return ErrInvalidSyncSnapshot
 	})
@@ -681,6 +689,26 @@ func (s *Service) GetEffectProposalFacts(ctx context.Context, id domain.ItemID) 
 		return EffectProposalFactsSnapshot{}, fmt.Errorf("get effect proposal facts %q: %w", id, err)
 	}
 	return out, nil
+}
+
+// imagePolicyAdoptionFacts rebuilds the adoption arm. A card binds no merge
+// and has no revision, so either is an inconsistent row.
+func imagePolicyAdoptionFacts(
+	proposal domain.EffectProposal, superseded *domain.EffectProposal, merge *domain.ProspectiveMerge,
+) (*ImagePolicyAdoptionFacts, error) {
+	params := proposal.AdoptionProposal
+	if params == nil || superseded != nil || merge != nil {
+		return nil, ErrInvalidSyncSnapshot
+	}
+	facts := &ImagePolicyAdoptionFacts{
+		RefusalRecordID:     params.RefusalRecordID,
+		RegistryAuthorities: slices.Clone(params.RegistryAuthorities),
+	}
+	if params.RecipeDigest != nil {
+		digest := *params.RecipeDigest
+		facts.RecipeDigest = &digest
+	}
+	return facts, nil
 }
 
 // sourceIssueClosureFacts rebuilds the closure arm and the merge the approval

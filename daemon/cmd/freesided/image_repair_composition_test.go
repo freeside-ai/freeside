@@ -124,7 +124,7 @@ func TestImageUpkeepSubmitsMaintenanceOnlyWithImageSelection(t *testing.T) {
 			return "", nil
 		},
 	} {
-		upkeep, err := composeImageUpkeep(st, signet.NewService(st), cfg,
+		upkeep, err := composeImageUpkeep(st, signet.NewService(st), nil, cfg,
 			&claudeComposition{selectImage: selection}, nil, nil, nil)
 		if err != nil {
 			t.Fatal(err)

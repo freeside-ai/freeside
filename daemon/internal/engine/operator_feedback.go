@@ -882,7 +882,7 @@ func (e *Engine) persistImplementationFeedback(
 			CreatedAt: e.productionPublication.now().UTC(), Source: domain.EvidenceSourceRun,
 			Availability: domain.EvidenceAvailable,
 		},
-	}, e.productionPublication.approvedRecipes)
+	}, e.productionPublication.operatorRecipes)
 	if err != nil {
 		return false, err
 	}
@@ -1106,7 +1106,7 @@ func (e *Engine) recordOperatorFeedbackFailure(ctx context.Context, source domai
 			},
 			ItemVersion: 1, InterruptionClass: domain.InterruptionExceptional,
 			CreatedAt: &createdAt, DisplayNames: names, Status: domain.StatusOpen, Posture: &advisory,
-		}, e.productionPublication.approvedRecipes)
+		}, e.productionPublication.operatorRecipes)
 		if err != nil {
 			return err
 		}

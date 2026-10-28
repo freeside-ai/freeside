@@ -347,6 +347,34 @@ import Testing
         #expect(filed.body.verdict == .passed)
     }
 
+    @Test func imagePolicyAdoptionItemServesAdoptionFactsAndConcludesOnApproveAndDecline() async throws {
+        for action in [Components.Schemas.Action.approve, .decline] {
+            let adoption = AttentionFixtures.imagePolicyAdoptionEffectProposal()
+            let server = MockServer(items: [adoption])
+            let client = APIClientFactory.mock(server: server)
+            let before = try await client.getAttentionItem(
+                path: .init(item_id: adoption.item.id)
+            ).ok.body.json
+            let facts = try await client.getEffectProposalFacts(
+                path: .init(item_id: adoption.item.id)
+            ).ok.body.json
+            #expect(facts.effect_kind == .image_policy_adoption)
+            #expect(facts.item_version == before.item.item_version)
+            #expect(before.item.artifact_digests == [facts.proposal_digest])
+            #expect(facts.source_issue_closure == nil)
+            #expect(facts.follow_up_filing == nil)
+            #expect(facts.image_policy_adoption != nil)
+
+            var command = Self.command(id: "cmd-\(action.rawValue)-adoption", against: before, action: action)
+            command.payload.asDecision.attachments = []
+            _ = try await client.submitCommand(body: .json(command)).ok.body.json
+            let decided = try await client.getAttentionItem(
+                path: .init(item_id: before.item.id)
+            ).ok.body.json
+            #expect(decided.item.status == (action == .approve ? .resolved : .dismissed))
+        }
+    }
+
     @Test func followUpFilingConcludesOnApproveAndDeclineAndHidesOnSnooze() async throws {
         // The filing item offers approve, decline, and snooze, and the mock
         // applies each: approve resolves, decline dismisses, snooze hides.

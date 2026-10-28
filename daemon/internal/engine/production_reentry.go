@@ -477,7 +477,11 @@ func (w *productionPublicationWorkflow) reconcileReentryTask(
 	}
 	// New readiness needs a still-approved recipe; an item that is already
 	// durably ready finishes without re-deriving its proofs (issue #527).
-	if !readyExists && !w.approvedRecipes[binding.image.RecipeDigest] {
+	recipes, err := w.recipes(ctx)
+	if err != nil {
+		return productionTaskOutcome{}, err
+	}
+	if !readyExists && !recipes[binding.image.RecipeDigest] {
 		return w.holdBlockedTask(ctx, task, held,
 			"Readiness re-entry is durably held because current trust no longer approves the admitted project-image recipe. Restore that approval to resume.",
 			domain.HoldRecipeRevoked)
@@ -672,9 +676,13 @@ func (w *productionPublicationWorkflow) stopReentryCycle(
 		return productionTaskOutcome{}, err
 	}
 	reference := pull.reference()
+	recipes, err := w.recipes(ctx)
+	if err != nil {
+		return productionTaskOutcome{}, err
+	}
 	item, err := w.newBlockedItem(
 		ctx, task, importer.Result{CommitSHA: task.HeadSHA}, artifacts, reason,
-		reentryStopActions, w.approvedRecipes, nil, &reference,
+		reentryStopActions, recipes, nil, &reference,
 	)
 	if err != nil {
 		return productionTaskOutcome{}, err
@@ -853,11 +861,15 @@ func (w *productionPublicationWorkflow) verifyReentry(
 	if err != nil {
 		return productionReentryCheckpoint{}, err
 	}
+	recipes, err := w.recipes(ctx)
+	if err != nil {
+		return productionReentryCheckpoint{}, err
+	}
 	verified, err := verify.Verify(ctx, checkoutDir, verify.Options{
 		HeadSHA: task.HeadSHA, BaseSHA: baseSHA, EvaluatedSHA: binding.evaluatedSHA,
 		InvocationID: task.verificationInvocationID(), RecipeSource: verify.ConfigRecipe(recipe),
 		RecipePath: verify.DefaultRecipePath, Room: room,
-		ApprovedRecipes: w.approvedRecipes, Changes: changes,
+		ApprovedRecipes: recipes, Changes: changes,
 		// A stable per-cycle time, as on a first cycle: the evidence is
 		// content-addressed and write-once, so a re-run must reproduce it.
 		Now: binding.reentry.createdAt,

@@ -224,6 +224,10 @@ func (w *productionPublicationWorkflow) bindSuccessorCandidate(ctx context.Conte
 
 func (w *productionPublicationWorkflow) publishCandidate(ctx context.Context, task productionPublicationTask, candidate publish.Candidate, checkout PublicationCheckout) (publish.Result, error) {
 	execution := publish.ExecutionCandidate{Candidate: candidate, ProducingInvocationID: task.ProducingInvocationID}
+	recipes, err := w.recipes(ctx)
+	if err != nil {
+		return publish.Result{}, err
+	}
 	if task.Successor != nil && !task.Successor.RepublishesUnpublished() {
 		transport, ok := w.transport.(interface {
 			UpdateHead(context.Context, PublicationCheckout, publish.GatedUpdate) (publish.PushResult, error)
@@ -231,7 +235,7 @@ func (w *productionPublicationWorkflow) publishCandidate(ctx context.Context, ta
 		if !ok {
 			return publish.Result{}, errors.New("publication transport does not support authenticated successor updates")
 		}
-		return w.publisher.PublishSuccessorAfterGateAndFinalize(ctx, execution, w.approvedRecipes,
+		return w.publisher.PublishSuccessorAfterGateAndFinalize(ctx, execution, recipes,
 			func(ctx context.Context, gated publish.GatedUpdate) error {
 				_, err := transport.UpdateHead(ctx, checkout, gated)
 				if err != nil && productionPublicationRetryableFailure(err) {
@@ -240,7 +244,7 @@ func (w *productionPublicationWorkflow) publishCandidate(ctx context.Context, ta
 				return err
 			})
 	}
-	return w.publisher.PublishExecutionAfterGateAndFinalize(ctx, execution, w.approvedRecipes,
+	return w.publisher.PublishExecutionAfterGateAndFinalize(ctx, execution, recipes,
 		func(ctx context.Context, gated publish.GatedHead) error {
 			_, err := w.transport.PushHead(ctx, checkout, gated)
 			if err != nil && productionPublicationRetryableFailure(err) {

@@ -1242,7 +1242,7 @@ func (w *productionPublicationWorkflow) newFindingAdjudicationAttentionItem(
 		DisplayNames:      names,
 		InterruptionClass: domain.InterruptionPlannedGate, CreatedAt: &createdAt,
 		Status: domain.StatusOpen,
-	}, w.approvedRecipes)
+	}, w.operatorRecipes)
 }
 
 // maxReasonAllowedPaths caps the allowed paths the card lists; the rest are
@@ -1585,7 +1585,7 @@ func (w *productionPublicationWorkflow) recordRemediationUndeliverable(
 			CreatedAt:         &createdAt,
 			DisplayNames:      names,
 			Status:            domain.StatusOpen,
-		}, w.approvedRecipes)
+		}, w.operatorRecipes)
 		if err != nil {
 			return err
 		}

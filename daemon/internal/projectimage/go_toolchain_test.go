@@ -815,7 +815,7 @@ func TestEvaluateRebuildAppliesTheGoModuleClauses(t *testing.T) {
 					t.Fatalf("delta = %+v, want %+v", decision.Delta, test.delta)
 				}
 			}
-			decision, err := EvaluateRebuild(t.Context(), "git", repo.dir, image, base, head, gatePolicy(t, test.policy))
+			decision, err := EvaluateRebuild(t.Context(), "git", repo.dir, image, base, head, gatePolicy(t, test.policy), nil)
 			if err != nil {
 				t.Fatalf("EvaluateRebuild: %v", err)
 			}
@@ -824,7 +824,7 @@ func TestEvaluateRebuildAppliesTheGoModuleClauses(t *testing.T) {
 			}
 			check(t, decision)
 			// Upkeep applies the same clauses, from the image's build commit.
-			decision, err = EvaluateUpkeep(t.Context(), "git", repo.dir, image, head, gatePolicy(t, test.policy))
+			decision, err = EvaluateUpkeep(t.Context(), "git", repo.dir, image, head, gatePolicy(t, test.policy), nil)
 			if err != nil || !decision.Needed {
 				t.Fatalf("EvaluateUpkeep = %+v, %v; want the gate applied", decision, err)
 			}
@@ -847,7 +847,7 @@ func TestEvaluateRebuildAppliesTheGoModuleClauses(t *testing.T) {
 			repo.git("hash-object", "-w", "daemon/go.sum")+",daemon/go.mod")
 		repo.git("commit", "-q", "-m", "symlink")
 		head := repo.git("rev-parse", "HEAD")
-		decision, err := EvaluateRebuild(t.Context(), "git", repo.dir, image, base, head, gatePolicy(t, proxy))
+		decision, err := EvaluateRebuild(t.Context(), "git", repo.dir, image, base, head, gatePolicy(t, proxy), nil)
 		if err != nil || !decision.Needed || decision.Refusal != RebuildRefusalGoDependencyChanged {
 			t.Fatalf("decision = %+v, %v; want the Go clause", decision, err)
 		}

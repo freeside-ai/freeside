@@ -653,9 +653,15 @@ public final class DecisionModel {
             // The task-proposal card and its own facts read carry this kind.
             return false
         case .image_policy_adoption:
-            // The daemon serves no adoption card until #2335, which decides
-            // its approval rule; until then nothing here may approve one.
-            return false
+            // An adoption binds no merge, so like a filing it has no head
+            // rule, and it admits no revision. It must adopt something: a
+            // recipe digest, a registry host, or both. The daemon re-checks
+            // at approval that the card still matches the repository.
+            guard let adoption = facts.image_policy_adoption?.value1 else { return false }
+            return facts.source_issue_closure == nil
+                && facts.follow_up_filing == nil
+                && facts.supersedes == nil
+                && (adoption.recipe_digest != nil || !adoption.registry_authorities.isEmpty)
         }
     }
 
