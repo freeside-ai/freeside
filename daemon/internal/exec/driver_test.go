@@ -81,12 +81,28 @@ func fullAdmission(
 	return a
 }
 
+// skippingHydration re-addresses an admission with the hydration skip set, the
+// one fact fullAdmission leaves unset.
+func skippingHydration(t *testing.T, a domain.ExecutionAdmission) domain.ExecutionAdmission {
+	t.Helper()
+	a.WorkspaceHydration = domain.WorkspaceHydrationNone
+	id, err := a.ComputeID()
+	if err != nil {
+		t.Fatal(err)
+	}
+	a.ID = id
+	if err := a.Validate(); err != nil {
+		t.Fatalf("skipping admission: %v", err)
+	}
+	return a
+}
+
 // TestStartSpecFromAdmissionCarriesEveryField is the drift guard between the
 // spec and the record it is rendered from: a field added to StartSpec and left
 // unmapped stays zero here and fails, rather than reaching a driver empty.
 func TestStartSpecFromAdmissionCarriesEveryField(t *testing.T) {
 	identity := domain.AuthIdentityID("auth-1")
-	admission := fullAdmission(t, &identity, domain.EgressProviderOnly, explicitAgentBinding())
+	admission := skippingHydration(t, fullAdmission(t, &identity, domain.EgressProviderOnly, explicitAgentBinding()))
 	spec := exec.StartSpecFromAdmission(admission)
 
 	v := reflect.ValueOf(spec)
@@ -111,6 +127,27 @@ func TestStartSpecFromAdmissionCarriesEveryField(t *testing.T) {
 	if spec.RouteModelID != "claude-opus-5-5" || spec.NativeEffort != "max" {
 		t.Errorf("spec model/effort = %q/%q, want the binding's claude-opus-5-5/max",
 			spec.RouteModelID, spec.NativeEffort)
+	}
+}
+
+// The stage driver reads the hydration skip from the spec, so the conversion
+// must carry it when set and leave it unset otherwise: an unset value keeps
+// the composition's hydration and the journaled spec equal to today's.
+func TestStartSpecFromAdmissionCarriesWorkspaceHydration(t *testing.T) {
+	identity := domain.AuthIdentityID("auth-1")
+	unset := fullAdmission(t, &identity, domain.EgressProviderOnly, agentBinding())
+	for name, tc := range map[string]struct {
+		admission domain.ExecutionAdmission
+		want      domain.WorkspaceHydration
+	}{
+		"unset":   {unset, ""},
+		"skipped": {skippingHydration(t, unset), domain.WorkspaceHydrationNone},
+	} {
+		t.Run(name, func(t *testing.T) {
+			if got := exec.StartSpecFromAdmission(tc.admission).WorkspaceHydration; got != tc.want {
+				t.Fatalf("spec workspace_hydration = %q, want %q", got, tc.want)
+			}
+		})
 	}
 }
 
