@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"log/slog"
 	"sync"
+	"time"
 
 	"github.com/freeside-ai/freeside/daemon/internal/domain"
 	"github.com/freeside-ai/freeside/daemon/internal/engine"
@@ -18,7 +19,18 @@ import (
 // Project-image upkeep), and ward's conformance follows it: ward proves one
 // writer image at a time, so when selection picks another image the daemon
 // repoints ward at it and runs the full suite once, and the attempt holds
-// under backend_not_conformant until that pass is recorded.
+// under backend_not_conformant until that pass is recorded. An attempt also
+// holds there while ward names the selected image but has published no proof
+// for it, after a failed pass or during one; a failed follower pass is retried
+// once its backoff has passed.
+
+// A failed follower pass may be retried after followerRetryBackoff, doubled
+// for each consecutive failure up to followerRetryBackoffCap, so a suite that
+// keeps failing does not run back to back.
+const (
+	followerRetryBackoff    = 5 * time.Minute
+	followerRetryBackoffCap = time.Hour
+)
 
 // baseInputsMemo reads what the daemon's base holds for each input layout
 // once. The base is fixed per daemon (-base-sha) and its tree cannot change,
@@ -67,17 +79,25 @@ type startupWardBackend interface {
 // conformanceFollower moves ward's proof to the image selection picks. It
 // runs at most one conformance pass at a time, its own or the doctor's
 // scheduled one, so a scheduled pass never proves an image the follower is
-// about to leave.
+// about to leave. It remembers the image its last pass failed on, so a later
+// selection of that image can retry it once the backoff has passed.
 type conformanceFollower struct {
 	backend imageRepointer
 	// prove runs the full suite for the backend's current image.
 	prove  func(context.Context) error
+	now    func() time.Time
 	logger *slog.Logger
 
 	passMu sync.Mutex
 
 	mu        sync.Mutex
 	following domain.ImageRef
+	// failed is the image the last follower pass failed on, failures the
+	// consecutive failed follower passes, and retryAt when failed may be
+	// retried. Any successful pass clears all three.
+	failed   domain.ImageRef
+	failures int
+	retryAt  time.Time
 
 	ctx    context.Context
 	cancel context.CancelFunc
@@ -85,10 +105,10 @@ type conformanceFollower struct {
 }
 
 func newConformanceFollower(
-	backend imageRepointer, prove func(context.Context) error, logger *slog.Logger,
+	backend imageRepointer, prove func(context.Context) error, now func() time.Time, logger *slog.Logger,
 ) *conformanceFollower {
 	ctx, cancel := context.WithCancel(context.Background())
-	return &conformanceFollower{backend: backend, prove: prove, logger: logger, ctx: ctx, cancel: cancel}
+	return &conformanceFollower{backend: backend, prove: prove, now: now, logger: logger, ctx: ctx, cancel: cancel}
 }
 
 // follow starts repointing ward at image and proving it, unless a pass is
@@ -100,6 +120,25 @@ func (f *conformanceFollower) follow(image domain.ImageRef) {
 	if f.following != "" || f.ctx.Err() != nil {
 		return
 	}
+	f.startPass(image, false)
+}
+
+// retry proves image again when the follower's last pass failed on it and
+// its backoff has passed, unless a pass is already following an image. It
+// never blocks the caller.
+func (f *conformanceFollower) retry(image domain.ImageRef) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.following != "" || f.ctx.Err() != nil || f.failed != image || f.now().Before(f.retryAt) {
+		return
+	}
+	f.startPass(image, true)
+}
+
+// startPass runs one follower pass for image in the background; f.mu must be
+// held. A retry that waited behind a scheduled pass runs no suite when that
+// pass cleared the failure, because ward then already proves image.
+func (f *conformanceFollower) startPass(image domain.ImageRef, retry bool) {
 	f.following = image
 	f.wg.Add(1)
 	go func() {
@@ -111,19 +150,62 @@ func (f *conformanceFollower) follow(image domain.ImageRef) {
 		}()
 		f.passMu.Lock()
 		defer f.passMu.Unlock()
+		if retry && !f.stillFailed(image) {
+			return
+		}
 		if err := f.backend.RepointAgentImage(string(image)); err != nil {
 			f.logger.Error("repoint ward at the selected writer image", "image", image, "error", err)
 			return
 		}
-		f.logger.Info("ward repointed at the selected writer image; running conformance", "image", image)
+		if retry {
+			f.logger.Info("retrying conformance for the selected writer image", "image", image)
+		} else {
+			f.logger.Info("ward repointed at the selected writer image; running conformance", "image", image)
+		}
 		if err := f.prove(f.ctx); err != nil {
+			// A pass Close cancelled did not fail; it says nothing of the image.
 			if f.ctx.Err() == nil {
-				f.logger.Warn("conformance for the selected writer image failed", "image", image, "error", err)
+				retryAt := f.recordFailure(image)
+				f.logger.Warn("conformance for the selected writer image failed",
+					"image", image, "retry_at", retryAt, "error", err)
 			}
 			return
 		}
+		f.clearFailure()
 		f.logger.Info("conformance recorded for the selected writer image", "image", image)
 	}()
+}
+
+func (f *conformanceFollower) stillFailed(image domain.ImageRef) bool {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.failed == image
+}
+
+// recordFailure remembers a failed follower pass on image and returns when it
+// may be retried.
+func (f *conformanceFollower) recordFailure(image domain.ImageRef) time.Time {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.failed = image
+	f.failures++
+	f.retryAt = f.now().Add(followerBackoff(f.failures))
+	return f.retryAt
+}
+
+func (f *conformanceFollower) clearFailure() {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.failed, f.failures, f.retryAt = "", 0, time.Time{}
+}
+
+// followerBackoff is the wait after failures consecutive failed passes.
+func followerBackoff(failures int) time.Duration {
+	backoff := followerRetryBackoff
+	for i := 1; i < failures && backoff < followerRetryBackoffCap; i++ {
+		backoff *= 2
+	}
+	return min(backoff, followerRetryBackoffCap)
 }
 
 // pendingFor reports whether a pass is following image right now.
@@ -134,11 +216,17 @@ func (f *conformanceFollower) pendingFor(image domain.ImageRef) bool {
 }
 
 // runScheduled is the doctor's scheduled pass, serialized with the
-// follower's. It proves ward's current image.
+// follower's. It proves ward's current image. A success clears the follower's
+// failure; a failure is not remembered, so it arms no retry and waits for the
+// next scheduled pass.
 func (f *conformanceFollower) runScheduled(ctx context.Context) error {
 	f.passMu.Lock()
 	defer f.passMu.Unlock()
-	return f.prove(ctx)
+	if err := f.prove(ctx); err != nil {
+		return err
+	}
+	f.clearFailure()
+	return nil
 }
 
 // Close stops a pass in flight and waits for it.
@@ -157,9 +245,11 @@ func (f *conformanceFollower) Close(ctx context.Context) error {
 	}
 }
 
-// conformanceIdentity reads the image ward proves.
-type conformanceIdentity interface {
+// wardConformance reads the image ward proves and the capabilities it
+// declares for it.
+type wardConformance interface {
 	ConformanceIdentity() (image string, digest domain.Digest)
+	Capabilities() exec.CapabilitySet
 }
 
 // claudeImageSelector selects each writer attempt's image from the pointer
@@ -169,7 +259,7 @@ type claudeImageSelector struct {
 	repo         string
 	repositoryID int64
 	baseSHA      string
-	backend      conformanceIdentity
+	backend      wardConformance
 	base         *baseInputsMemo
 	follower     *conformanceFollower
 
@@ -191,6 +281,13 @@ func (s *claudeImageSelector) bindImageUpkeep(pending func(context.Context) (*do
 // admission_policy_refused hold when no image serves the base,
 // backend_not_conformant while ward does not yet prove the selected image,
 // and input_unavailable when the base could not be read.
+//
+// Ward proves the selected image only once it also publishes the two
+// capabilities a pass earns, supports_networkless_export and
+// supports_enforced_provider_egress: a pass publishes both on success, and
+// one that is running or failed leaves both cleared. Until then the attempt
+// holds as unproved rather than reaching admission's capability check, and a
+// failed follower pass is retried.
 //
 // A maintenance task's run (repair non-nil) skips that choice: it runs on the
 // image its refusal was measured from while the pointer still names it, and
@@ -237,12 +334,22 @@ func (s *claudeImageSelector) selectImage(
 		}
 		return "", &engine.ImageUpkeepPendingError{Hold: *hold}
 	}
-	if string(selected.ImageRef) != proved || s.follower.pendingFor(selected.ImageRef) {
+	notProved := errors.Join(engine.ErrImageNotProved, domain.ErrAdmissionConfigurationMismatch)
+	switch {
+	case string(selected.ImageRef) != proved:
 		s.follower.follow(selected.ImageRef)
-		return "", fmt.Errorf("image %s waits on its conformance pass: %w", selected.ImageRef,
-			errors.Join(engine.ErrImageNotProved, domain.ErrAdmissionConfigurationMismatch))
+		return "", fmt.Errorf("image %s waits on its conformance pass: %w", selected.ImageRef, notProved)
+	case s.follower.pendingFor(selected.ImageRef):
+		return "", fmt.Errorf("image %s waits on its conformance pass: %w", selected.ImageRef, notProved)
+	case !publishedProof(s.backend.Capabilities()):
+		s.follower.retry(selected.ImageRef)
+		return "", fmt.Errorf("image %s has no published conformance proof: %w", selected.ImageRef, notProved)
 	}
 	return selected.ImageRef, nil
+}
+
+func publishedProof(caps exec.CapabilitySet) bool {
+	return caps.Has(exec.CapNetworklessExport) && caps.Has(exec.CapEnforcedProviderEgress)
 }
 
 // repairImage returns the pointed-to image when it is the one refusal was

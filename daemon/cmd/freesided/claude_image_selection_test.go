@@ -85,10 +85,12 @@ func selectorBaseInputs(manifest string, failure error) *baseInputsMemo {
 	})
 }
 
-// fakeWard proves one writer image at a time, as ward's backend does.
+// fakeWard proves one writer image at a time, as ward's backend does:
+// repointing at another image clears its published proof.
 type fakeWard struct {
 	mu       sync.Mutex
 	image    string
+	proved   bool
 	repoints []string
 }
 
@@ -97,9 +99,29 @@ func (w *fakeWard) RepointAgentImage(image string) error {
 	defer w.mu.Unlock()
 	if image != w.image {
 		w.image = image
+		w.proved = false
 		w.repoints = append(w.repoints, image)
 	}
 	return nil
+}
+
+// Capabilities declares the suite-earned capabilities only while a proof is
+// published, as ward's backend does.
+func (w *fakeWard) Capabilities() exec.CapabilitySet {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	caps := exec.NewCapabilitySet(exec.CapDetachableWorkspace, exec.CapPostExitExport, exec.CapReadOnlyRemount)
+	if w.proved {
+		caps[exec.CapNetworklessExport] = struct{}{}
+		caps[exec.CapEnforcedProviderEgress] = struct{}{}
+	}
+	return caps
+}
+
+func (w *fakeWard) publish(proved bool) {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	w.proved = proved
 }
 
 func (w *fakeWard) ConfigurationDigestFor(image string) domain.Digest {
@@ -117,6 +139,79 @@ func (w *fakeWard) repointed() []string {
 	w.mu.Lock()
 	defer w.mu.Unlock()
 	return append([]string(nil), w.repoints...)
+}
+
+// fakeClock is a follower's clock that moves only when the test advances it.
+type fakeClock struct {
+	mu  sync.Mutex
+	now time.Time
+}
+
+func newFakeClock() *fakeClock {
+	return &fakeClock{now: time.Date(2026, 10, 28, 9, 0, 0, 0, time.UTC)}
+}
+
+func (c *fakeClock) Now() time.Time {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.now
+}
+
+func (c *fakeClock) advance(d time.Duration) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.now = c.now.Add(d)
+}
+
+// fakeSuite is a conformance suite whose passes the test ends one at a time.
+// A pass clears ward's published proof, as ward does when a pass begins, and
+// publishes it when the test ends the pass with a nil result. Once results is
+// closed, a pass the test did not expect fails at once instead of hanging.
+type fakeSuite struct {
+	ward    *fakeWard
+	started chan struct{}
+	results chan error
+
+	mu     sync.Mutex
+	passes int
+}
+
+func newFakeSuite(ward *fakeWard) *fakeSuite {
+	return &fakeSuite{ward: ward, started: make(chan struct{}, 1), results: make(chan error)}
+}
+
+func (s *fakeSuite) prove(ctx context.Context) error {
+	s.mu.Lock()
+	s.passes++
+	s.mu.Unlock()
+	s.ward.publish(false)
+	s.started <- struct{}{}
+	select {
+	case err, ok := <-s.results:
+		if !ok {
+			return errors.New("a pass the test did not expect")
+		}
+		s.ward.publish(err == nil)
+		return err
+	case <-ctx.Done():
+		return ctx.Err()
+	}
+}
+
+// end waits for a pass to start and ends it with err.
+func (s *fakeSuite) end(err error) {
+	<-s.started
+	s.results <- err
+}
+
+func (s *fakeSuite) ran() int {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.passes
+}
+
+func unproved(err error) bool {
+	return errors.Is(err, engine.ErrImageNotProved) && errors.Is(err, domain.ErrAdmissionConfigurationMismatch)
 }
 
 func TestStartWardOnSelectedImage(t *testing.T) {
@@ -217,7 +312,7 @@ func TestClaudeImageSelectorHoldsAnUnservedBase(t *testing.T) {
 	follower := newConformanceFollower(backend, func(context.Context) error {
 		t.Error("an unserved base ran a conformance pass")
 		return nil
-	}, slog.New(slog.DiscardHandler))
+	}, time.Now, slog.New(slog.DiscardHandler))
 	t.Cleanup(func() { _ = follower.Close(context.Background()) })
 	selector := &claudeImageSelector{
 		store: st, repo: selectorRepo, repositoryID: selectorRepositoryID, baseSHA: selectorBase,
@@ -266,14 +361,12 @@ func TestClaudeImageSelectorFollowsTheSelectedImage(t *testing.T) {
 		proves++
 		close(started)
 		<-release
+		backend.publish(true)
 		return nil
-	}, slog.New(slog.DiscardHandler))
+	}, time.Now, slog.New(slog.DiscardHandler))
 	selector := &claudeImageSelector{
 		store: st, repo: selectorRepo, repositoryID: selectorRepositoryID, baseSHA: selectorBase,
 		backend: backend, base: selectorBaseInputs("2", nil), follower: follower,
-	}
-	unproved := func(err error) bool {
-		return errors.Is(err, engine.ErrImageNotProved) && errors.Is(err, domain.ErrAdmissionConfigurationMismatch)
 	}
 
 	if _, err := selector.selectImage(t.Context(), "", nil); !unproved(err) {
@@ -312,9 +405,10 @@ func TestClaudeImageSelectorRunsARepairOnItsRefusalsImage(t *testing.T) {
 	backend := &fakeWard{image: string(other.ImageRef)}
 	passed := make(chan struct{})
 	follower := newConformanceFollower(backend, func(context.Context) error {
+		backend.publish(true)
 		close(passed)
 		return nil
-	}, slog.New(slog.DiscardHandler))
+	}, time.Now, slog.New(slog.DiscardHandler))
 	t.Cleanup(func() { _ = follower.Close(context.Background()) })
 	selector := &claudeImageSelector{
 		store: st, repo: selectorRepo, repositoryID: selectorRepositoryID, baseSHA: selectorBase,
@@ -349,8 +443,192 @@ func TestClaudeImageSelectorRunsARepairOnItsRefusalsImage(t *testing.T) {
 	}
 }
 
-// Close cancels a pass in flight and waits for it; a closed follower starts
-// nothing.
+// After a failed follower pass, ward names the selected image with no proof
+// published: attempts hold as unproved, and once the backoff has passed the
+// next one retries the pass, after which the image is admitted.
+func TestClaudeImageSelectorRetriesAFailedPass(t *testing.T) {
+	t.Parallel()
+	pointed := selectorImage(t, strings.Repeat("a", 40), "2", "d")
+	stale := selectorImage(t, strings.Repeat("c", 40), "9", "f")
+	st := selectorStore(t, pointed, stale)
+	backend := &fakeWard{image: string(stale.ImageRef), proved: true}
+	clock := newFakeClock()
+	suite := newFakeSuite(backend)
+	follower := newConformanceFollower(backend, suite.prove, clock.Now, slog.New(slog.DiscardHandler))
+	t.Cleanup(func() { _ = follower.Close(context.Background()) })
+	selector := &claudeImageSelector{
+		store: st, repo: selectorRepo, repositoryID: selectorRepositoryID, baseSHA: selectorBase,
+		backend: backend, base: selectorBaseInputs("2", nil), follower: follower,
+	}
+
+	if _, err := selector.selectImage(t.Context(), "", nil); !unproved(err) {
+		t.Fatalf("select under the stale proof = %v, want the image held as unproved", err)
+	}
+	suite.end(errors.New("the VM did not start"))
+	follower.wg.Wait()
+
+	clock.advance(followerRetryBackoff - time.Nanosecond)
+	if _, err := selector.selectImage(t.Context(), "", nil); !unproved(err) ||
+		!strings.Contains(err.Error(), "no published conformance proof") {
+		t.Fatalf("select after the failed pass = %v, want the image held as having no published proof", err)
+	}
+	if follower.pendingFor(pointed.ImageRef) {
+		t.Fatal("the failed pass was retried before its backoff")
+	}
+	clock.advance(time.Nanosecond)
+	if _, err := selector.selectImage(t.Context(), "", nil); !unproved(err) {
+		t.Fatalf("select after the backoff = %v, want the image held as unproved", err)
+	}
+	if !follower.pendingFor(pointed.ImageRef) {
+		t.Fatal("the failed pass was not retried after its backoff")
+	}
+	suite.end(nil)
+	follower.wg.Wait()
+
+	got, err := selector.selectImage(t.Context(), "", nil)
+	if err != nil || got != pointed.ImageRef {
+		t.Fatalf("select after the retry = (%s, %v), want %s", got, err, pointed.ImageRef)
+	}
+	if repoints, passes := backend.repointed(), suite.ran(); passes != 2 || len(repoints) != 1 {
+		t.Fatalf("ward repointed %v with %d passes, want one repoint and two passes", repoints, passes)
+	}
+}
+
+// The wait before a retry starts at followerRetryBackoff, doubles for each
+// consecutive failed pass up to followerRetryBackoffCap, and resets after a
+// success; only the image the last pass failed on is retried.
+func TestConformanceFollowerBacksOffFailedPasses(t *testing.T) {
+	t.Parallel()
+	image := "ghcr.io/owner/project@sha256:" + domain.ImageRef(strings.Repeat("d", 64))
+	other := "ghcr.io/owner/project@sha256:" + domain.ImageRef(strings.Repeat("e", 64))
+	backend := &fakeWard{}
+	clock := newFakeClock()
+	suite := newFakeSuite(backend)
+	follower := newConformanceFollower(backend, suite.prove, clock.Now, slog.New(slog.DiscardHandler))
+	t.Cleanup(func() { _ = follower.Close(context.Background()) })
+	failure := errors.New("the VM did not start")
+
+	follower.follow(image)
+	suite.end(failure)
+	follower.wg.Wait()
+	for i, wait := range []time.Duration{
+		5 * time.Minute, 10 * time.Minute, 20 * time.Minute, 40 * time.Minute, time.Hour, time.Hour,
+	} {
+		clock.advance(wait - time.Nanosecond)
+		follower.retry(image)
+		if follower.pendingFor(image) {
+			t.Fatalf("after %d failures a retry started before %s", i+1, wait)
+		}
+		clock.advance(time.Nanosecond)
+		follower.retry(image)
+		if !follower.pendingFor(image) {
+			t.Fatalf("after %d failures no retry started at %s", i+1, wait)
+		}
+		suite.end(failure)
+		follower.wg.Wait()
+	}
+
+	clock.advance(time.Hour)
+	follower.retry(image)
+	suite.end(nil)
+	follower.wg.Wait()
+	clock.advance(24 * time.Hour)
+	follower.retry(image)
+	if follower.pendingFor(image) {
+		t.Fatal("a proved image was retried")
+	}
+
+	follower.follow(other)
+	suite.end(failure)
+	follower.wg.Wait()
+	clock.advance(followerRetryBackoff)
+	follower.retry(image)
+	if follower.pendingFor(image) {
+		t.Fatal("an image the last pass did not fail on was retried")
+	}
+	follower.retry(other)
+	if !follower.pendingFor(other) {
+		t.Fatalf("no retry started %s after a failure that followed a success", followerRetryBackoff)
+	}
+	suite.end(nil)
+	follower.wg.Wait()
+}
+
+// A retry that queued behind the doctor's scheduled pass runs no suite when
+// that pass proved ward's image.
+func TestConformanceFollowerRetrySkipsAfterAScheduledProof(t *testing.T) {
+	t.Parallel()
+	image := "ghcr.io/owner/project@sha256:" + domain.ImageRef(strings.Repeat("d", 64))
+	backend := &fakeWard{}
+	clock := newFakeClock()
+	suite := newFakeSuite(backend)
+	follower := newConformanceFollower(backend, suite.prove, clock.Now, slog.New(slog.DiscardHandler))
+	t.Cleanup(func() { _ = follower.Close(context.Background()) })
+
+	follower.follow(image)
+	suite.end(errors.New("the VM did not start"))
+	follower.wg.Wait()
+	clock.advance(followerRetryBackoff)
+
+	scheduled := make(chan error, 1)
+	go func() { scheduled <- follower.runScheduled(t.Context()) }()
+	<-suite.started
+	follower.retry(image)
+	if !follower.pendingFor(image) {
+		t.Fatal("the retry did not queue behind the scheduled pass")
+	}
+	suite.results <- nil
+	close(suite.results)
+	if err := <-scheduled; err != nil {
+		t.Fatalf("scheduled pass = %v, want it to succeed", err)
+	}
+	follower.wg.Wait()
+	if passes := suite.ran(); passes != 2 {
+		t.Fatalf("%d passes ran, want the failed one and the scheduled one only", passes)
+	}
+}
+
+// A failed scheduled pass leaves ward with no published proof: attempts hold
+// as unproved until the next scheduled pass, and no follower pass starts.
+func TestClaudeImageSelectorHoldsAfterAFailedScheduledPass(t *testing.T) {
+	t.Parallel()
+	pointed := selectorImage(t, strings.Repeat("a", 40), "2", "d")
+	st := selectorStore(t, pointed)
+	backend := &fakeWard{image: string(pointed.ImageRef), proved: true}
+	clock := newFakeClock()
+	suite := newFakeSuite(backend)
+	follower := newConformanceFollower(backend, suite.prove, clock.Now, slog.New(slog.DiscardHandler))
+	t.Cleanup(func() { _ = follower.Close(context.Background()) })
+	selector := &claudeImageSelector{
+		store: st, repo: selectorRepo, repositoryID: selectorRepositoryID, baseSHA: selectorBase,
+		backend: backend, base: selectorBaseInputs("2", nil), follower: follower,
+	}
+
+	if got, err := selector.selectImage(t.Context(), "", nil); err != nil || got != pointed.ImageRef {
+		t.Fatalf("select under the proof = (%s, %v), want %s", got, err, pointed.ImageRef)
+	}
+	scheduled := make(chan error, 1)
+	go func() { scheduled <- follower.runScheduled(t.Context()) }()
+	suite.end(errors.New("the egress probe failed"))
+	if err := <-scheduled; err == nil {
+		t.Fatal("scheduled pass succeeded, want it to fail")
+	}
+	for _, wait := range []time.Duration{0, 24 * time.Hour} {
+		clock.advance(wait)
+		if _, err := selector.selectImage(t.Context(), "", nil); !unproved(err) {
+			t.Fatalf("select %s after the failed scheduled pass = %v, want the image held as unproved", wait, err)
+		}
+		if follower.pendingFor(pointed.ImageRef) {
+			t.Fatalf("a follower pass started %s after the failed scheduled pass", wait)
+		}
+	}
+	if passes := suite.ran(); passes != 1 {
+		t.Fatalf("%d passes ran, want the scheduled one only", passes)
+	}
+}
+
+// Close cancels a pass in flight and waits for it; the cancelled pass is not
+// a failure, and a closed follower starts nothing.
 func TestConformanceFollowerStopsOnClose(t *testing.T) {
 	t.Parallel()
 	backend := &fakeWard{}
@@ -359,11 +637,14 @@ func TestConformanceFollowerStopsOnClose(t *testing.T) {
 		close(started)
 		<-ctx.Done()
 		return ctx.Err()
-	}, slog.New(slog.DiscardHandler))
+	}, time.Now, slog.New(slog.DiscardHandler))
 	follower.follow("ghcr.io/owner/project@sha256:" + domain.ImageRef(strings.Repeat("d", 64)))
 	<-started
 	if err := follower.Close(t.Context()); err != nil {
 		t.Fatalf("Close = %v, want the pass cancelled and awaited", err)
+	}
+	if follower.stillFailed("ghcr.io/owner/project@sha256:" + domain.ImageRef(strings.Repeat("d", 64))) {
+		t.Fatal("the cancelled pass was remembered as a failure")
 	}
 	follower.follow("ghcr.io/owner/project@sha256:" + domain.ImageRef(strings.Repeat("e", 64)))
 	if repoints := backend.repointed(); len(repoints) != 1 {
