@@ -1,0 +1,2 @@
+go: rsc.io/quote@v1.5.2 (replaced by rsc.io/quote@v1.5.99): reading https://proxy.golang.org/rsc.io/quote/@v/v1.5.99.mod: 404 Not Found
+	server response: not found: rsc.io/quote@v1.5.99: invalid version: unknown revision v1.5.99

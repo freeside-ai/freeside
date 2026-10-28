@@ -2412,16 +2412,21 @@ the build's proof at its own commit never stands in for that evidence.
 when it stays inside the project's declared policy. The gate holds when:
 
 - The candidate's dependency-manifest delta is lockfile-consistent.
-- For a Go image, the delta touches neither the named module's `go.mod` nor
-  its `go.sum` (revision 92). A `go.sum` change, which every Go dependency
-  change produces, keeps the fail-loud path above until the gate reads Go
-  module sources against the registry set (#2337). A candidate
-  that adds a `vendor/`
-  directory to the module, or a `go.work` to the module directory or any
-  directory above it, keeps the fail-loud path under the same clause as a
-  `go.mod` or `go.sum` change (#2115).
-- Every added or changed package resolves from an authority in the
-  project's registry set, the operator's declared set plus the project's
+- For a Go image (revisions 92 and 102), the candidate's `go.mod` and
+  `go.sum` are readable and in Go's own shape, and `go.sum` holds the
+  `go.mod` hash of every module `go.mod` requires, after its module-path
+  `replace` directives. The build fetches every module from one proxy,
+  `proxy.golang.org`, with no `direct` fallback to a module's own VCS host
+  and no inherited Go environment able to route around it, so that proxy's
+  host is the authority every Go module resolves from (#2337). Go verifies
+  each download against `go.sum`, and against the checksum database for
+  anything `go.sum` does not pin, so the gate checks no module content. A
+  candidate that adds a `vendor/` directory to the module, a `go.work` to
+  the module directory or any directory above it, or a `replace` to a
+  filesystem path, or whose `go.mod` or `go.sum` the gate cannot read,
+  keeps the fail-loud path (#2115).
+- Every added or changed package, or Go module version, resolves from an
+  authority in the project's registry set, the operator's declared set plus the project's
   adopted hosts (Section [5.8](#58-control-plane-trust); the same set `provider_registry` exposes to
   the writer, Section [5.4](#54-credential-modes-egress-profiles-and-concurrency); the builder reads it whatever the writer's profile,
   since builder fetch authorization and writer egress are different concerns).
@@ -2501,9 +2506,11 @@ and the exact base tree. Section [11](#11-roadmap-build-order-and-coordination) 
     project. The job raises a `system_health` item through the doctor's
     converge pattern (Section [10](#10-operations-and-onboarding)) and retries on the next trigger. A host
     fault never opens a task.
-  - *Go module delta.* A `go.mod` or `go.sum` change at the tip stays
-    refused under the Go clause above. It raises neither a card nor a
-    task until the gate reads Go module sources (#2337).
+  - *Unsupported Go input.* The tip holds a Go input no project image
+    supports, or a `go.mod` or `go.sum` the gate cannot read, the Go
+    clause's fail-loud path above. It raises neither a card nor a task, and
+    keeps its recorded name, `go_module_delta`. A Go module change the gate
+    reads is classed like an npm one (revision 102).
   - *Unsupported npm input.* The tip holds an npm input no project image
     supports, or changes `package.json`'s `overrides`, `workspaces`, or
     `packageManager`. Such a change is usually deliberate, and a repair
@@ -2529,8 +2536,8 @@ and the exact base tree. Section [11](#11-roadmap-build-order-and-coordination) 
   serves the task's base. The advanced pointer does that for a base at the
   tip; a task on an older base can use any write-once record that still
   serves it. A task ends in the blocked outcome #1784 defines only when its
-  refusal has no pending resolution (a Go module delta, an unsupported npm
-  input, a declined adoption) or when no admitted image can serve its base.
+  refusal has no pending resolution (an unsupported Go or npm input, a
+  declined adoption) or when no admitted image can serve its base.
 - **Serialization.** One builder runs at a time per daemon, within the
   rebuild's time limit (one hour by default), oldest request first. An
   upkeep rebuild and a run's policy-gated rebuild take turns on the
@@ -6999,27 +7006,30 @@ Record material changes here by revision, with the decider in parentheses.
 - On first re-litigation, promote the decision to a `docs/decisions/` ADR that
   cites its history entry.
 
-Revision 101 ("Approve Image Policy Into the Daemon"):
+Revision 102 ("Go Modules Resolve From One Proxy"):
 
-1. **Approving an image-policy adoption card is the adoption.** The daemon
-   records the card's exact recipe digest or registry hosts in its own
-   trusted policy, for the card's repository only, and project-image upkeep
-   then builds a new image at the tip under it, with the positive run and
-   masked-cache proof, as onboarding does (Section [5.7](#57-the-ward-runners-handoff-gate-and-operating-modes)). Section [5.8](#58-control-plane-trust)
-   names the approved card as a reviewed change to recipe approval and the
-   registry set, beside the operator's own edit; an adopted host still meets
-   Section [5.4](#54-credential-modes-egress-profiles-and-concurrency)'s public-registry criterion. This returns to the
-   owner's original choice on #1999, which revision 98 departed from.
-   Rejected: revision 98's route, where approving the card opens a Section
-   [4](#4-the-attention-model) project-policy PR and merging it is the adoption (recipe approval
-   and the registry set are operator host configuration, not repository
-   files, and no daemon code implements that path, so the PR has no
-   target); moving both keys into a repository-hosted control-plane tree
-   and building the Section [4](#4-the-attention-model) PR path first (a new policy tree and a new
-   path, for a decision the card already carries).
+1. **A Go image's build fetches modules only from `proxy.golang.org`, and
+   that host is the authority the policy-gated rebuild checks for a Go
+   module.** The cache-warming step pins `GOPROXY` to the proxy with no
+   `direct` fallback, drops any inherited Go environment file, and clears
+   the private and insecure lists, so a candidate's `go.mod` and `go.sum`
+   choose which module versions are fetched but never where from. The gate
+   then admits a `go.mod` or `go.sum` change whose required modules
+   `go.sum` pins, when the registry set declares the proxy (Section
+   [5.7](#57-the-ward-runners-handoff-gate-and-operating-modes)), lifting revision 92's refusal of every Go dependency change. A
+   `go.sum` checksum mismatch, a module version the proxy answers 404 or
+   410 for, or a `go.mod` Go refuses to read is a failed install the
+   candidate caused. Rejected: a module
+   path's host as its authority (it names the VCS origin `direct` clones
+   from, not where a pinned build fetches); keeping the `direct` fallback (a
+   module the proxy does not serve would come from a host the set never
+   declared); an operator-configured proxy, or several (no project needs
+   one yet); requiring every zip hash in `go.sum` (a tidy `go.sum` omits it
+   for a module that provides no packages, and Go verifies each download
+   anyway).
 
-(Owner decision of 2026-10-27 on #2335;
-[decision note](../devlog/2026-10-27-1236-adoption-card-daemon-policy.md).)
+(Owner's work contract on #2337, 2026-10-27;
+[decision note](../devlog/2026-10-27-1627-go-module-gate.md).)
 
 ## 14. Risks
 

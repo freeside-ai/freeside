@@ -43,10 +43,8 @@ type RebuildDecision struct {
 //
 // The gate applies only to a head whose dependency manifests differ from the
 // ones image baked (ProjectImageEnvironment.ChangedManifests), or, for a Go
-// image, to a head holding a Go input no image supports. For a Go image it
-// then always refuses: no rule yet bounds a change to go.mod or go.sum, so
-// each one needs a newly reviewed image. For an npm image it holds when all
-// of these do:
+// image, to a head holding a Go input no image supports. For an npm image it
+// holds when all of these do:
 //
 //   - The head holds neither npm-shrinkwrap.json nor .npmrc.
 //   - The head declares the verification recipe its base declares.
@@ -54,6 +52,20 @@ type RebuildDecision struct {
 //   - The head's manifests change nothing but dependencies the registry
 //     serves, pinned in a consistent npm v2 or v3 lockfile to https URLs on
 //     declared hosts (evaluateLockfileDelta has the exact rules).
+//
+// For a Go image it holds when all of these do, and reports the first that
+// fails in this order:
+//
+//   - The head holds no vendor directory or go.work, and a go.mod and go.sum
+//     the reader accepts: no filesystem replace, no go or toolchain directive
+//     the baked Go refuses, and go.sum lines of Go's own shape
+//     (readGoModuleChange). The base's must read too, or the change cannot
+//     be bounded.
+//   - The head declares the verification recipe its base declares.
+//   - The run's policy declares a valid registry set.
+//   - go.sum pins every module go.mod requires, and the registry set
+//     declares the module proxy when go.sum changes any module version or
+//     go.mod newly requires one (evaluateGoModuleDelta).
 //
 // The manifests are compared with the base's, not with the image's, because
 // only hashes of the image's manifests are recorded. The caller has already
@@ -83,16 +95,13 @@ func EvaluateRebuild(
 // EvaluateUpkeep is the gate the upkeep job applies to an image that is not
 // current at the default-branch tip (plan §5.7, Project-image upkeep). Its
 // base is the image's own build commit, and it differs from EvaluateRebuild
-// in three ways:
+// in two ways:
 //
 //   - It always applies, so Needed is always true: the caller has found the
 //     image not current at tipSHA. A tip whose manifests are the ones the
 //     image baked still takes the unsupported-input and recipe clauses, and
 //     with neither refusing, the toolchain-only delta (a preparation digest
 //     other than currentPreparation) holds with no lockfile delta.
-//   - A Go image also takes the recipe clause, since a rebuild bakes the
-//     image's recipe and a tip declaring another would refuse the rebuilt
-//     image too.
 //   - A record with no environment is measured against the inputs observed
 //     at its build commit, as if it had baked them.
 //
@@ -186,31 +195,74 @@ func evaluateGate(
 		}
 		return nil
 	}
+	// registryClause returns the run's declared registry set, or nil after
+	// refusing the clause.
+	registryClause := func() *domain.RegistrySet {
+		registries, declared, err := domain.RegistrySetFromPolicy(policy)
+		switch {
+		case err != nil:
+			findings.add(refuseLockfile(RebuildRefusalNoRegistrySet,
+				"the run's policy declares a malformed %s", domain.RegistrySetPolicyKey))
+		case !declared:
+			findings.add(refuseLockfile(RebuildRefusalNoRegistrySet,
+				"the run's policy declares no %s", domain.RegistrySetPolicyKey))
+		default:
+			return &registries
+		}
+		return nil
+	}
+	read := func(commitSHA, name string) ([]byte, error) {
+		content, present, err := reader.ReadFile(ctx, commitSHA, name, maxManifestBytes)
+		if err != nil {
+			return nil, fmt.Errorf("read %s at %s: %w", name, commitSHA, err)
+		}
+		if !present {
+			// Not an error: an absent manifest parses as no JSON object, or
+			// as a Go module with no requirements, and its reader refuses
+			// what that leaves under its own clause.
+			return nil, nil
+		}
+		return content, nil
+	}
 	if image.InputLayout().Toolchain == domain.ProjectToolchainGo {
 		// A Go head that keeps its manifests but adds a vendor directory or a
 		// go.work would otherwise fail only inside the room, at the
 		// preparation helper; the gate names it instead.
-		if len(changed) != 0 || len(head.UnsupportedInputs) != 0 {
-			var parts []string
-			if len(changed) != 0 {
-				parts = append(parts, "changes "+strings.Join(changed, ", "))
-			}
-			if len(head.UnsupportedInputs) != 0 {
-				parts = append(parts, "contains "+strings.Join(head.UnsupportedInputs, ", "))
-			}
-			findings.add(refuseLockfile(RebuildRefusalGoDependencyChanged,
-				"the candidate %s", strings.Join(parts, " and ")))
+		if len(changed) == 0 && len(head.UnsupportedInputs) == 0 && !upkeep {
+			return RebuildDecision{Head: head}, nil
 		}
-		if !upkeep {
-			if len(findings) == 0 {
-				return RebuildDecision{Head: head}, nil
+		if len(head.UnsupportedInputs) != 0 {
+			findings.add(refuseLockfile(RebuildRefusalGoDependencyChanged,
+				"the candidate contains %s", strings.Join(head.UnsupportedInputs, ", ")))
+		}
+		var baseModule, headModule goModuleManifests
+		readable := false
+		if len(changed) != 0 {
+			var refusal *lockfileRefusal
+			baseModule, headModule, refusal, err = readGoModuleChange(
+				read, image.InputLayout().GoModuleDir, head, baseSHA)
+			if err != nil {
+				return RebuildDecision{}, err
 			}
-			return decide(head, LockfileDelta{}), nil
+			findings.add(refusal)
+			readable = refusal == nil
 		}
 		if err := recipeClause(); err != nil {
 			return RebuildDecision{}, err
 		}
-		return decide(head, LockfileDelta{}), nil
+		if len(changed) == 0 {
+			// The toolchain-only delta, as for npm below.
+			return decide(head, LockfileDelta{}), nil
+		}
+		authority := registryClause()
+		if !readable {
+			return decide(head, LockfileDelta{}), nil
+		}
+		delta, moduleFindings := evaluateGoModuleDelta(baseModule, headModule, authority)
+		for _, finding := range moduleFindings {
+			findings.add(&finding)
+		}
+		return decide(head, delta), nil
 	}
 	if len(changed) == 0 && !upkeep {
 		return RebuildDecision{Head: head}, nil
@@ -227,30 +279,7 @@ func evaluateGate(
 		// tip's, so it has nothing for the registry or lockfile clauses.
 		return decide(head, LockfileDelta{}), nil
 	}
-	var authority *domain.RegistrySet
-	registries, declared, err := domain.RegistrySetFromPolicy(policy)
-	switch {
-	case err != nil:
-		findings.add(refuseLockfile(RebuildRefusalNoRegistrySet,
-			"the run's policy declares a malformed %s", domain.RegistrySetPolicyKey))
-	case !declared:
-		findings.add(refuseLockfile(RebuildRefusalNoRegistrySet,
-			"the run's policy declares no %s", domain.RegistrySetPolicyKey))
-	default:
-		authority = &registries
-	}
-	read := func(commitSHA, name string) ([]byte, error) {
-		content, present, err := reader.ReadFile(ctx, commitSHA, name, maxManifestBytes)
-		if err != nil {
-			return nil, fmt.Errorf("read %s at %s: %w", name, commitSHA, err)
-		}
-		if !present {
-			// Not an error: an absent manifest parses as no JSON object and
-			// the lockfile reader refuses it under its own clause.
-			return nil, nil
-		}
-		return content, nil
-	}
+	authority := registryClause()
 	basePackageJSON, err := read(baseSHA, "package.json")
 	if err != nil {
 		return RebuildDecision{}, err

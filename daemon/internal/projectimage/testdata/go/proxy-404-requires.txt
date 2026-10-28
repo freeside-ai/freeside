@@ -1,0 +1,3 @@
+go: rsc.io/quote@v1.5.2 requires
+	rsc.io/sampler@v1.3.0 (replaced by rsc.io/sampler@v1.99.0): reading https://proxy.golang.org/rsc.io/sampler/@v/v1.99.0.mod: 404 Not Found
+	server response: not found: rsc.io/sampler@v1.99.0: invalid version: unknown revision v1.99.0

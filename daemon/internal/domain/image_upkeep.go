@@ -58,8 +58,10 @@ const (
 	// configuration failed for a reason outside the project. It never opens
 	// a task, and the record may name no clause.
 	ImageUpkeepRefusalHostFault ImageUpkeepRefusalClass = "host_fault"
-	// ImageUpkeepRefusalGoModuleDelta: a go.mod or go.sum change the gate
-	// cannot yet bound. It opens neither a proposal nor a task.
+	// ImageUpkeepRefusalGoModuleDelta: a Go input no image supports, or a
+	// go.mod or go.sum the gate cannot read. Records written before Go module
+	// changes were bounded also hold it for any go.mod or go.sum change. It
+	// opens neither a proposal nor a task.
 	ImageUpkeepRefusalGoModuleDelta ImageUpkeepRefusalClass = "go_module_delta"
 	// ImageUpkeepRefusalUnsupportedNPMInput: an npm input no project image
 	// supports, usually a deliberate change a repair could only revert. It

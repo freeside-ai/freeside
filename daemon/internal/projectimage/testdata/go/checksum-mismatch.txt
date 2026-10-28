@@ -1,0 +1,10 @@
+verifying github.com/google/uuid@v1.6.0: checksum mismatch
+	downloaded: h1:NIvaJDMOsjHA8n1jAhLSgzrAzy1Hgr+hNrb57e+94F0=
+	go.sum:     h1:AAAAJDMOsjHA8n1jAhLSgzrAzy1Hgr+hNrb57e+94F0=
+
+SECURITY ERROR
+This download does NOT match an earlier download recorded in go.sum.
+The bits may have been replaced on the origin server, or an attacker may
+have intercepted the download attempt.
+
+For more information, see 'go help module-auth'.
