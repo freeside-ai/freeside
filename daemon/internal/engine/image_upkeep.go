@@ -63,6 +63,12 @@ type ImageUpkeep struct {
 	// (PendingResolution). Nil means that arm is not composed.
 	AdoptionPending    func(context.Context, domain.ImageUpkeepRefusal) (domain.ItemID, bool, error)
 	MaintenancePending func(context.Context, domain.ImageUpkeepRefusal) (domain.TaskID, bool, error)
+	// SubmitMaintenance submits the maintenance task for a repair-class
+	// refusal a pass settled on. It must converge when called again for the
+	// same refusal: a scheduled pass returns a settled refusal without
+	// measuring again, so a submit that failed after the refusal was recorded
+	// is retried on the next fire. Nil means no task is submitted.
+	SubmitMaintenance func(context.Context, domain.ImageUpkeepRefusal) error
 
 	// settledMu guards settled, the last settled outcome this process
 	// reached, which PendingResolution reads.
@@ -165,6 +171,12 @@ func (u *ImageUpkeep) run(ctx context.Context, tipSHA string, reuseVerdict bool)
 	}
 	if err := u.Health(ctx, outcome.hostFault); err != nil {
 		return outcome, fmt.Errorf("converge image upkeep health: %w", err)
+	}
+	if refusal := outcome.refusal; refusal != nil && refusal.Class == domain.ImageUpkeepRefusalRepair &&
+		u.SubmitMaintenance != nil {
+		if err := u.SubmitMaintenance(ctx, *refusal); err != nil {
+			return outcome, fmt.Errorf("submit the maintenance task for refusal %s: %w", refusal.ID, err)
+		}
 	}
 	return outcome, nil
 }

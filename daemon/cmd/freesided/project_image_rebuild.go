@@ -2,10 +2,13 @@ package main
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
+	"maps"
 	"os"
 	"path/filepath"
+	"slices"
 	"sync"
 
 	"github.com/freeside-ai/freeside/daemon/internal/domain"
@@ -84,7 +87,7 @@ func composeImageUpkeep(
 		logger = slog.New(slog.DiscardHandler)
 	}
 	watch := domain.ScheduleBaseWatch{Repo: cfg.Claude.Repo, BaseRef: cfg.Claude.BaseRef}
-	return &engine.ImageUpkeep{
+	upkeep := &engine.ImageUpkeep{
 		Store: st, Rebuild: rebuild, RepositoryID: cfg.Claude.RepositoryID,
 		ReadTip: func(ctx context.Context) (string, error) {
 			return wiring.observeBaseTip(ctx, watch)
@@ -106,5 +109,64 @@ func composeImageUpkeep(
 		},
 		Now:    cfg.now,
 		Logger: logger.With("subsystem", "image_upkeep"),
-	}, nil
+	}
+	// A maintenance task runs at its refusal's tip only through per-attempt
+	// image selection, which only the unattended composition has. Without it
+	// the task would be admitted at -base-sha with hydration, so none is
+	// submitted.
+	if wiring.selectImage != nil {
+		upkeep.SubmitMaintenance = func(ctx context.Context, refusal domain.ImageUpkeepRefusal) error {
+			project, ok := imageRepairProject(manualProjects)
+			if !ok {
+				return fmt.Errorf("no project is configured for manual submission: %w", store.ErrNotFound)
+			}
+			_, err := attention.SubmitImageRepairTask(ctx, project, refusal.ID)
+			return err
+		}
+		upkeep.MaintenancePending = func(ctx context.Context, refusal domain.ImageUpkeepRefusal) (domain.TaskID, bool, error) {
+			return pendingImageRepairTask(ctx, st, refusal.ID)
+		}
+	}
+	return upkeep, nil
+}
+
+// imageRepairProject is the project a maintenance task is submitted to: the
+// first configured manual-submission project in ProjectID order. Every
+// configured project shares the daemon's one repository (imageUpkeepPolicy
+// already assumes this), and the store's daemon-origin gate refuses a
+// project on another repository.
+func imageRepairProject(projects map[domain.ProjectID]engine.ManualInitiator) (domain.ProjectID, bool) {
+	if len(projects) == 0 {
+		return "", false
+	}
+	return slices.Min(slices.Collect(maps.Keys(projects))), true
+}
+
+// pendingImageRepairTask names the maintenance task submitted for a refusal
+// while that task exists and has not been cancelled, so other writer
+// attempts no image serves hold on it. A cancelled task resolves nothing,
+// so they go back to the ordinary hold.
+func pendingImageRepairTask(
+	ctx context.Context, st *store.Store, refusalID domain.Digest,
+) (domain.TaskID, bool, error) {
+	var (
+		taskID  domain.TaskID
+		pending bool
+	)
+	err := st.Read(ctx, func(tx *store.ReadTx) error {
+		submission, err := tx.GetTaskSubmission(ctx, domain.ImageUpkeepSubmissionIdentity(refusalID))
+		if errors.Is(err, store.ErrNotFound) {
+			return nil
+		}
+		if err != nil {
+			return err
+		}
+		task, err := tx.GetTask(ctx, submission.TaskID)
+		if err != nil {
+			return err
+		}
+		taskID, pending = task.ID, task.Cancellation == nil
+		return nil
+	})
+	return taskID, pending, err
 }
