@@ -3248,3 +3248,28 @@ The client work is #1798 to #1803.)
 
 (Owner decision of 2026-10-27 on #2335;
 [decision note](../../devlog/2026-10-27-1236-adoption-card-daemon-policy.md).)
+
+## Revision 102 ("Go Modules Resolve From One Proxy"):
+
+1. **A Go image's build fetches modules only from `proxy.golang.org`, and
+   that host is the authority the policy-gated rebuild checks for a Go
+   module.** The cache-warming step pins `GOPROXY` to the proxy with no
+   `direct` fallback, drops any inherited Go environment file, and clears
+   the private and insecure lists, so a candidate's `go.mod` and `go.sum`
+   choose which module versions are fetched but never where from. The gate
+   then admits a `go.mod` or `go.sum` change whose required modules
+   `go.sum` pins, when the registry set declares the proxy (Section
+   [5.7](#57-the-ward-runners-handoff-gate-and-operating-modes)), lifting revision 92's refusal of every Go dependency change. A
+   `go.sum` checksum mismatch, a module version the proxy answers 404 or
+   410 for, or a `go.mod` Go refuses to read is a failed install the
+   candidate caused. Rejected: a module
+   path's host as its authority (it names the VCS origin `direct` clones
+   from, not where a pinned build fetches); keeping the `direct` fallback (a
+   module the proxy does not serve would come from a host the set never
+   declared); an operator-configured proxy, or several (no project needs
+   one yet); requiring every zip hash in `go.sum` (a tidy `go.sum` omits it
+   for a module that provides no packages, and Go verifies each download
+   anyway).
+
+(Owner's work contract on #2337, 2026-10-27;
+[decision note](../../devlog/2026-10-27-1627-go-module-gate.md).)

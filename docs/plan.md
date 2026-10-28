@@ -283,8 +283,9 @@ maintenance still decide whether Freeside creates a positive return.
    hot-modified.
 5. Silent provider fallback, voice, a pipeline DSL, and briefings are out of
    scope until recorded outcomes from later phases justify them. A project
-   lineup may name a switch for each failure class; that switch is explicit and
-   recorded, so it is not fallback (Section [4](#4-the-attention-model)).
+   lineup may name a switch for an expiry or capacity failure, never a quota
+   failure; that switch is explicit and recorded, so it is not fallback
+   (Section [4](#4-the-attention-model)).
 6. It is neither a formal pre-build validation study nor a generic CI security
    auditor.
 7. It is not a general-purpose synchronization platform. Server-authoritative
@@ -356,6 +357,8 @@ A Linux host enters as an execution host (Section
 never as the control plane. The credential exposure above applies to every
 execution host, and `subscription_injected` (Section [5.4](#54-credential-modes-egress-profiles-and-concurrency))
 is required on any host the owner does not physically hold (revision 95).
+That mode is held by owner decision (revision 103), so no such host is
+enrolled until a revision lifts the hold.
 
 ### 3.4 Simplicity
 
@@ -455,8 +458,9 @@ unattended admission; a restart alone never does.
 Section [9](#9-comprehension) governs each type's presentation: what its card leads with and what
 layers below.
 
-**Explicit alternate-agent retry.** A provider quota, credential expiry, or
-capacity failure offers three resolutions beyond discuss: retry under a
+**Explicit alternate-agent retry.** A credential expiry or capacity failure,
+or a provider quota failure with no known reset (below), offers three
+resolutions beyond discuss: retry under a
 qualified alternate agent (Section [5.4](#54-credential-modes-egress-profiles-and-concurrency)), wait, or stop. Qualified is
 failure-specific, read from recorded facts:
 
@@ -466,10 +470,22 @@ failure-specific, read from recorded facts:
 - An expiry or revocation needs an enrollment with a valid generation.
 - A capacity failure needs a different service route.
 
-A routing policy's fallback runs before the card (Section [5.4](#54-credential-modes-egress-profiles-and-concurrency), routing
-policy; revision 99): a quota failure on a pool whose policy names another
-agent with allowance for the role's model is retried there as a recorded
-selection, and the card is raised only when the policy has nowhere to route.
+A quota failure parks the task instead of raising the card (revision 103).
+The task keeps its line, and so its subscription, under a visible hold that
+names the window's reset time, and at the reset, or sooner when a fresh
+reading clears the exhausted mark, the role's next attempt is admitted on the
+same line with no operator step. Nothing moves a task in flight to another
+subscription automatically: the routing policy picks a subscription only for
+a task's first admission (Section [5.4](#54-credential-modes-egress-profiles-and-concurrency), routing policy). Only the operator
+moves a parked task, as a recorded handoff: with the alternate-agent retry
+opened from the parked task, or with a task-line change. Either releases the
+hold. The card's move re-pins the task: the router-sourced lines of every
+role move to the chosen agent's pool, as the router would have written them
+there, so a later role does not park again on the exhausted pool. Operator
+lines stay as they are. The reset time comes from the
+refusal or from a usage reading (Section [5.4](#54-credential-modes-egress-profiles-and-concurrency), usage observation). When
+neither gives one, nothing can resume the task on its own, so the ordinary
+card is raised with retry, wait, and stop.
 
 Wait leaves the task parked with the same card until the operator returns to it.
 The offer is stated once here and applies on whichever card surfaces such a
@@ -483,7 +499,9 @@ proves compatibility (Section [5.8](#58-control-plane-trust); a different adapte
 
 By default the operator chooses from the card. A project lineup may instead name
 the switch per failure class; it then happens and is carded, a recorded choice
-like any other. Freeside never learns a preferred agent from past switches, and
+like any other. That switch covers expiry and capacity failures only. A quota
+failure parks the task as above, because a switch named for it would move a
+task in flight automatically (revision 103). Freeside never learns a preferred agent from past switches, and
 a switch is never silent (Section [2](#2-goals-and-non-goals) item 5; Section [14](#14-risks), single-provider
 execution capacity). Switching the review agent opens a new convergence segment
 (Section [7](#7-review-policy)): the new reviewer's first pass is not the old reviewer's next round.
@@ -945,8 +963,8 @@ Every run declares and records one credential mode:
 | Mode | Meaning |
 | --- | --- |
 | `subscription_contained` | Phase 1 default. The native vendor CLI runs in the agent VM. Its credential mount is read-only where permitted. The remaining exposure is an accepted, documented residual risk. |
-| `subscription_injected` | Supported in Phase 2; fiat pulls it forward for the first host the owner does not physically hold (revision 95). The native vendor CLI runs unmodified with a per-run placeholder in the token's place. The run's proxy on the daemon host terminates provider TLS under a per-run CA and substitutes the identity's token on the declared provider authorities and paths only. The writer, and any execution host, holds no provider secret. |
-| `api_key_isolated` | Supported in Phase 2. Reuses the `subscription_injected` path with an API key in the token's place. |
+| `subscription_injected` | Held by owner decision (revision 103); nothing schedules it until a revision lifts the hold. The design: the native vendor CLI runs unmodified with a per-run placeholder in the token's place. The run's proxy on the daemon host terminates provider TLS under a per-run CA and substitutes the identity's token on the declared provider authorities and paths only. The writer, and any execution host, holds no provider secret. |
+| `api_key_isolated` | Held with `subscription_injected` (revision 103), because it reuses that path with an API key in the token's place. |
 | `local_trusted` | Permitted only for explicitly trusted inputs. |
 
 **Credential delivery under `subscription_contained` (Claude).** The setup token
@@ -975,7 +993,9 @@ guarantees; the work unit's decision note lists them. Where a harness's web
 search runs, on the provider's servers or inside the ward, is one of them
 (research for the specifier, below).
 
-**Credential delivery under `subscription_injected`.** The writer receives a
+**Credential delivery under `subscription_injected`.** This paragraph
+describes held design (revision 103): nothing runs it until a revision lifts
+the hold. The writer receives a
 placeholder minted at handoff in the shape and place the vendor CLI expects
 (the launcher's environment variable; for Codex, an `auth.json` snapshot whose
 access token is well formed, carries the identity's claims, and bears a void
@@ -1180,8 +1200,8 @@ account binding, and the token expiry where the auth method exposes one
 2. Inference execution has a separate parallelism limit, declared on the
    usage pool and counted per pool (revision 72). The provider enforces
    quota and rate limits on the pool, not on one credential, so two
-   credentials on one pool (two clients on one subscription, or
-   `api_key_isolated` keys under one organization) share one limit. Every
+   credentials on one pool (two clients on one subscription, or keys under
+   one organization in the held `api_key_isolated` mode) share one limit. Every
    ward stage launch that draws on a pool holds one slot from its admission
    until the daemon proves every container of the launch absent, the point
    its memory reservation also ends (Machine Capacity): the specifier,
@@ -1204,9 +1224,9 @@ account binding, and the token expiry where the auth method exposes one
    experimental proof 1B first required (#730).
 
 If only one execution is safe, scheduling shows that constraint instead of
-hiding it in a lock. The `api_key_isolated` escape arrives in Phase 2 as an
-explicit mode, never a silent fallback. Vendor tooling stays native and
-unmodified.
+hiding it in a lock. The `api_key_isolated` escape, an explicit mode and never
+a silent fallback, is held with `subscription_injected` (revision 103).
+Vendor tooling stays native and unmodified.
 
 #### Machine Capacity
 
@@ -1380,7 +1400,8 @@ the one its lineup line names.
   reason: no task has needed its own researcher agent yet. A task
   records one line per role, and one role never borrows another's line; a
   client may still set several lines from one choice, such as one writer
-  agent for the specifier, implementer, and remediator. Only an
+  agent for the specifier, implementer, and remediator. Apart from the
+  router-sourced lines the routing policy writes (below), only an
   authenticated operator sets a task line: at submission (`freesided submit`
   or `submit_task`), when starting a `task_proposal` card (Section [4](#4-the-attention-model)), or later by a recorded operator command while no attempt
   of that role is running. A change records a new line that supersedes the
@@ -1393,33 +1414,48 @@ the one its lineup line names.
   and raises the ordinary card; it never falls back to the lineup.
 - **The Section [4](#4-the-attention-model) alternate-agent card** is the one per-attempt selection:
   a recorded choice for one attempt, for a stage attempt and for a call
-  alike. It overrides a task line for that attempt only. It never selects
+  alike. It overrides a task line for that attempt only, except that a move
+  of a task parked on a quota failure re-pins its router-sourced lines
+  (Section [4](#4-the-attention-model); revision 103). It never selects
   the researcher: a failed research request fails safe and blocks no stage
   (Roles and Launch Shapes), so there is no blocked attempt for the card to
   retry and only the lineup picks that agent.
-- **A routing policy** (revision 99) is the standing rule for which of the
-  agents the lineup admits for a role a task line names when the operator
-  has not chosen one. It is an operator setting of the deployment, not a
-  lineup line: it ranks or weights agents the lineup already carries for the
-  role and never adds one. Its modes are a priority order with fallback, a
-  percentage split, and round robin. Priority with fallback is the default,
-  and the one that different reset dates make useful: the first agent in the
-  order takes every task until its pool's window for the role's model is
-  marked exhausted, so one subscription empties before its reset while the
-  other keeps its allowance, and the next agent in the order takes over
-  until that window resets. A window is marked exhausted by a provider
-  refusal (a quota failure, Section [4](#4-the-attention-model)) or by a usage observation
-  the collector reports as exhausted (usage observation, below), and the
-  mark clears at the window's reset time or on a fresh reading that says
-  otherwise. The router applies the policy at a role's first admission on a
-  task and writes the task line; later admissions of that role read the
-  line, so a task stays on its agent until a fallback, the alternate-agent
-  card, or an operator's line change supersedes it. Every selection the
-  router writes cites the policy revision, the mark or reading it acted on,
-  and the agent it passed over, and shows on the task's timeline and cards.
-  An authenticated operator sets the policy from a client or the CLI, and
-  each change is a new revision that supersedes the last and never edits it,
-  as a task line is. The policy is an operator setting rather than
+- **A routing policy** (revision 99) is the standing rule for which usage
+  pool a new task runs on, and so which of the agents the lineup admits for
+  each role a task line names, when the operator has not chosen one. It is an
+  operator setting of the deployment, not a lineup line: it orders agents
+  the lineup already carries for the role and never adds one. Its one mode
+  is a priority order with fallback (revision 103), and different reset
+  dates are what make it useful: the first
+  agent in the order takes every new task until its pool's window for the
+  model of the task's first role is marked exhausted, and the next agent in
+  the order takes new tasks until that window resets. Tasks already running
+  stay where they are. A window is marked exhausted by a provider refusal (a
+  quota failure, Section [4](#4-the-attention-model)) or by a usage observation the collector
+  reports as exhausted (usage observation, below), and the mark clears at
+  the window's reset time or on a fresh reading that says otherwise. The
+  router chooses once per task (revision 103). At the first admission of
+  the task's first task-line role that has no operator line, it picks one
+  usage pool, then writes a router-sourced line for every task-line role
+  without an operator line, naming the agent the lineup carries for that
+  role on that pool (the first in the policy order when it carries
+  several). A role whose lineup carries no agent on that pool keeps its
+  lineup agent, and an operator-set line always wins. Later admissions read
+  the lines, so every role of the task with an agent on that pool stays on
+  it until the alternate-agent card or an operator's line change supersedes
+  it. When every agent in the order is marked exhausted at a task's first
+  admission, the router picks none: the role parks until the earliest reset
+  and the router then chooses as above, and with no known reset the
+  ordinary quota card is raised (Section [4](#4-the-attention-model)). Choosing
+  per role would let review run on one subscription after implementation
+  used up the other. A later role whose model window on the pinned pool is
+  exhausted parks until that window resets, as a quota failure does
+  (Section [4](#4-the-attention-model)), and never reroutes. Every selection the router writes
+  cites the policy revision, the mark or reading it acted on, and the agent
+  it passed over, and shows on the task's timeline and cards. An
+  authenticated operator sets the policy from a client or the CLI, and each
+  change is a new revision that supersedes the last and never edits it, as
+  a task line is. The policy is an operator setting rather than
   control-plane configuration for the reason a task line is: it chooses
   among credentials the committed lineup already approved and approves none.
 
@@ -1902,10 +1938,11 @@ never reads a reading: the router reads readings and marks and writes the
 task line, so every selection a reading influenced is a recorded fact that
 names the reading, never a silent switch. A task line the operator set by
 hand admits whatever its pool's reading shows; when the provider then
-refuses the run, that attempt fails as a provider quota failure, the router
-applies the policy's fallback when it has one, and otherwise the
-alternate-agent retry card (Section [4](#4-the-attention-model)) offers the choice with the
-latest reading shown beside it.
+refuses the run, that attempt fails as a provider quota failure and the task
+parks on its line until the window resets (Section [4](#4-the-attention-model); revision 103),
+with the latest reading shown beside the hold. The router never moves it;
+the alternate-agent retry card offers the move, with the same reading beside
+it, when the operator opens it or when no reset time is known.
 
 ### 5.5 The CI Trust Boundary
 
@@ -2188,9 +2225,10 @@ silently downgrades. Named capabilities are:
   placeholder, or naming an undeclared path, is refused; that the identity's
   token is absent from the writer's filesystem, environment, inspect report,
   and export; that registry tunnels are unchanged; and that the run's CA key
-  is absent after teardown. It joins the provable set, and a credential-mode
-  floor the contract unit adds makes it a minimum of every
-  `subscription_injected` admission.
+  is absent after teardown. It belongs to the held mode (revision 103): it
+  joins the provable set, and a credential-mode floor the contract unit adds
+  makes it a minimum of every `subscription_injected` admission, only once a
+  revision lifts the hold.
 
 #### The First Ward Gate
 
@@ -2598,7 +2636,8 @@ the trusted recipe against the daemon-materialized exact head and authors
 only the evidence channel. It never runs an agent, and it holds no provider
 or GitHub credential and no placeholder, so it sits outside the credential
 modes (Section [5.4](#54-credential-modes-egress-profiles-and-concurrency)): that is what admits it now, where a host-run writer
-context waits for `subscription_injected` (revision 95). It is the
+context waits for `subscription_injected` (revision 95), which is held
+(revision 103). It is the
 verification room (Section [5.6](#56-the-gauntlet-workspace-handoff-import-and-clean-verification)) of the runner on a macOS execution host
 (Execution Hosts): the daemon host by default, in-process, or a second Mac
 enrolled in the runner role, the Capability start trigger's case; admission
@@ -2654,6 +2693,8 @@ execution host (Execution Hosts). A writer in a VM guest holds its provider
 token as a file under `subscription_contained`, as a ward does; a host-run
 writer context, on either Mac, waits for `subscription_injected`, where it
 holds a placeholder, which is what makes it defensible at all (revision 95).
+That mode is held (revision 103), so host-run writers keep waiting; they
+never fall back to copying the token.
 The two-guest limit is a kernel quota per Apple host
 (`hv_apple_isa_vm_quota`), not only a license term; its one bypass, a KDK
 kernel with SIP off, is rejected, and the reference host's memory and disk
@@ -2817,8 +2858,9 @@ transaction (Section
 [5.4](#54-credential-modes-egress-profiles-and-concurrency)) pushes each
 identity's setup token over that link, and the runner authors the same read-only
 per-identity credential volume the local path authors, writing the token nowhere
-else. Under `subscription_injected` no execution host receives a credential
-volume (control-plane injection, below; revision 95). Rotation re-authors the volume on every
+else. Under the held `subscription_injected` mode no execution host would
+receive a credential volume (control-plane injection, below; revisions 95 and
+103). Rotation re-authors the volume on every
 enrolled host while no execution can use the identity; removing a host names
 the identities it held so the operator can rotate them at the vendor. An identity whose credential store
 mutates under the Section
@@ -2830,16 +2872,18 @@ enrolled host, accepted for owner-held machines on the owner's tailnet. Proxy
 credential injection, where the writer holds a placeholder and a TLS-terminating
 proxy substitutes the credential, is the `subscription_injected` mode
 (Section [5.4](#54-credential-modes-egress-profiles-and-concurrency); revision 95; #2175,
-with spikes #2173 and #2174). On an execution host it changes where the token
-lives, not the runner: the runner's per-run proxy terminates the writer's TLS
+with spikes #2173 and #2174), held by owner decision with the control-plane
+injection below (revision 103). On an execution host it changes where the
+token lives, not the runner: the runner's per-run proxy terminates the writer's TLS
 under the per-run CA as the local proxy does, but forwards the request over the
 runner session to the control plane, which substitutes the credential and
 originates the provider connection from the daemon host, so the host holds the
 per-run CA key and the placeholder and never the token. That control-plane
-injection is a unit of its own, filed once #2175 merges; until it lands every
-execution host runs under `subscription_contained` with the volume above. It is
+injection is a unit of its own, held with #2175 and filed once #2175
+merges; until it lands every execution host runs under `subscription_contained` with the volume above. It is
 required on any execution host the owner does not physically hold, so the Linux
-host waits for it; the MacBook does not. Relaying the writer's CONNECT tunnel to
+host waits for it and no such host is enrolled while the hold stands; the
+MacBook does not wait. Relaying the writer's CONNECT tunnel to
 the control plane's proxy without termination is rejected as a credential
 measure: it centralizes the allowlist but leaves the token in the writer.
 
@@ -2894,7 +2938,7 @@ the host memory budget (#1598) merged first:
   measure.
 
 The Linux desktop is a later increment. It needs `subscription_injected` (#2175)
-and the control-plane-injection unit filed after it, multi-arch project images
+and the control-plane-injection unit filed after it, both held (revision 103), multi-arch project images
 with per-arch digests (images are `linux/arm64` only), and a `linux_vm` backend
 on KVM that passes the full suite (Section [3.3](#33-portability)), developed on
 that machine because nested virtualization is unavailable on Apple silicon.
@@ -3052,14 +3096,15 @@ This topology is an empirical contract with the pinned CLI. Before a CLI
 version change may enter the image, the exact image must pass these probes:
 minimal-writable-state, workspace/config poison, exact-resume, fresh-invocation
 isolation, crash-matrix, and live-race. Under `subscription_injected`
-(Section [5.4](#54-credential-modes-egress-profiles-and-concurrency)), two more: CA trust (the
+(Section [5.4](#54-credential-modes-egress-profiles-and-concurrency)), once a revision lifts its hold (revision 103),
+two more: CA trust (the
 CLI accepts the per-run CA through its additive trust variable and pins no
 provider certificate) and placeholder acceptance (the CLI starts, parses, and
 sends the placeholder as its token, on every host and path it uses).
 
-Under `subscription_injected` the run's proxy is the credential holder and
-the provider's TLS peer. That adds no principal: the daemon process already
-holds every identity's token, refreshes Codex tokens on the host, composes
+Under `subscription_injected`, held design (revision 103), the run's proxy
+is the credential holder and the provider's TLS peer. That adds no
+principal: the daemon process already holds every identity's token, refreshes Codex tokens on the host, composes
 every prompt, and reads every transcript, so a compromised proxy is the
 compromised daemon host of Section [5.2](#52-the-daemon-and-its-supervisor),
 not a new one. What it adds is the daemon's HTTP stack parsing bytes the
@@ -5780,9 +5825,11 @@ the two by pool and time; it never derives one from the other.
 
 Routing policy sits above the harness. Usage-limit-driven switching between
 subscriptions is the first routing it absorbs (Section [5.4](#54-credential-modes-egress-profiles-and-concurrency), routing
-policy; revision 99): the provider balancing I did by hand was attention
-work, and it still counts in the attention accounting wherever the policy
-has nowhere to route. Routing on task class, quality, latency, and cost waits
+policy; revisions 99 and 103), for new tasks only: the provider balancing I
+did by hand was attention work. A quota failure parks the task until its
+window resets (Section [4](#4-the-attention-model)), and parked time counts in the attention
+accounting only when the operator acts on it or a card is raised because no
+reset is known. Routing on task class, quality, latency, and cost waits
 for Phase 3 and draws on the same records.
 
 ## 9. Comprehension
@@ -6554,7 +6601,8 @@ sits outside the credential modes. A UI writer in a VM guest holds a provider
 token as a file under `subscription_contained`, as a ward does; a host-run
 writer context, on either Mac, waits for `subscription_injected` (Section
 [5.4](#54-credential-modes-egress-profiles-and-concurrency)), where it holds a placeholder, which is what makes it defensible at
-all (revision 95). Two spikes on the reference host gated the text:
+all (revision 95). That mode is held (revision 103), so these writers keep
+waiting and never fall back to copying the token. Two spikes on the reference host gated the text:
 SwiftUI `ImageRenderer` renders for a uid with no window-server session, and
 per-uid packet-filter rules refute off-host egress while a sandbox profile
 closes loopback and the system resolver. The order of work: the Swift
@@ -6744,7 +6792,8 @@ once all three have closed.
   usage observations per pool and window, their collection and refresh, and
   the account usage view on Mac and iPhone (Sections [5.4](#54-credential-modes-egress-profiles-and-concurrency), [8](#8-observability-and-optimization-telemetry), and
   [10](#10-operations-and-onboarding)), so the operator sees how full each subscription is and the
-  policy empties one before its reset; and Freeside onboarded as a managed
+  policy sends new tasks to one subscription until its window is exhausted
+  (revision 103); and Freeside onboarded as a managed
   repository for `daemon/`. The Codex execution driver and pi moved to
   Phase 2 (revision 99).
 
@@ -6829,7 +6878,7 @@ landing tip keeps parallel work honest.
 | **6 (1B.0): convergence and yield** | Integrated | Convergence policy and the Section [7](#7-review-policy) finding-adjudication routing (#697; the spine assigns its contract splits at wave planning); the Claude shadow arm with second adjudication and sampled classification accuracy; automatic re-review of remediation heads as a standing integration test; yield history on ready-for-final-review; the full chain on the real backlog. iOS on-device install (Section [10](#10-operations-and-onboarding)). 1B.0 exit. |
 | **7 (1B.1): the decision surface** | Parallel lanes | The decision surface closes and reads from the phone. Contract-first, positions assessed by the spine at planning (unassessed pairs serialize): the revision-40 attention-presentation cluster (the Section [4](#4-the-attention-model) recommendation shape and Section [9](#9-comprehension) typed minimum card facts, #917, which must retire `adjudicate` or reassign it to an executable `review_dispute` transaction before client adoption; decision-surface identity, #942; per-type card facts, #724; adjudication finding context, #892; per-invocation cost observations, #901), then transaction closure for the remaining Phase 1 pending actions (#918, #919, #920, #921) and the retirement of `choose_alternate_profile` (#936), then Section [5.15](#515-evidence-and-images) evidence metadata (#922), pairing identity facts (#923), readiness rendering (#982), and the Section [8](#8-observability-and-optimization-telemetry)/9 comprehension-telemetry contracts the wave-11 exit evaluation reads (#924, the first unit to slip to wave 8 if review bandwidth binds). Beside the chain: the daemon fact producers, client adoption (the provisional Swift `ActionOutcome` and mock server converge with the daemon's `discuss` and spec-approval `request_changes`), and the Section [9](#9-comprehension) summary layer (#723, stage-agent-sourced, no daemon-inference call). The adjudication-size contract (#961) is placed here or in wave 9 at planning. Deferral drain: the attention-presentation and card-fact clusters only. Exit proof: every rendered Phase 1 action executes on Mac and iPhone; no action stays pending, disabled, or decorative; every card is self-contained at its Section [9](#9-comprehension) altitude; facts stay distinct from claims. |
 | **8 (1B.1): operational closure** | Parallel lanes | Freeside runs unattended, says when it is stuck, and lets published-PR activity back in. The `effect_proposal` card, arriving with the source-issue closure proposal (Section [5.13](#513-deterministic-components-judgment-calls-and-the-effect-registry)) and reused by human-gated follow-up filing (Section [5.17](#517-follow-up-issue-filing)); the doctor credential-integrity probe (Section [10](#10-operations-and-onboarding)); the stall heartbeat (Section [5.12](#512-workflow-definition-initiators-and-artifacts)); the external daemon-liveness probe (Section [5.2](#52-the-daemon-and-its-supervisor), #510); the held-work item (#766); the review drift audit (Section [7](#7-review-policy); the #1048 contract, then #1049–#1053, floor before model site); the standing stopped-operation indicator (#980); device listing and revocation (#981); and the egress floor's first capabilities above it (Sections [5.4](#54-credential-modes-egress-profiles-and-concurrency), [5.7](#57-the-ward-runners-handoff-gate-and-operating-modes)): (a) the `provider_registry` profile, its policy field, and ward allowlist conformance, `kind:contract` because `EgressProfile` is a domain enum carried in the admission record, then (b) the policy-gated project-image rebuild in the reusable builder, `starts-after` (a) because its gate reads the registry set (a) declares; both build on merged #302 and #334. Ward container limits (#1597, revision 72) launch every ward container with a declared CPU cap and memory limit and measure real peak memory, so wave 9's memory budget reserves against recorded sizes; it has no open prerequisite and is startable at wave start. Re-entry after a ready-item invalidation (#502; the spine splits its contract half at planning) and external review ingestion on published PRs (#524) share the re-entry trigger shape and land together. Deferral drain: the operational and re-entry clusters, plus #1597. External first-round adjudication fallbacks wait for per-finding human decisions (#1989), using #1016’s executable dispute contract. Exit proof: an unattended real run completes; daemon death, crash loops, stalls, held work, a stopped state, a review loop that grows past its specification, and external review each alert without terminal patrol or manual polling. |
-| **9 (1B.1): Claude capacity** | Parallel; split-eligible | Freeside runs on two Claude subscriptions, routed by policy, and develops itself. First, the Claude quantitative usage spike, filed at planning on the #1713 harness: whether the pinned CLI, or a read under the setup token outside it, reports a used share per window, model-scoped windows included, with no token refresh and no auth-store write. Its result fixes what the account usage view shows, per window: a share, or status and reset only, or unsupported. The contract chain, positions assigned by the planner: the usage observation record per pool (#1715, extended with the exhausted mark per window and the model-to-window map); the routing policy record and the router at admission, filed at planning (Section [5.4](#54-credential-modes-egress-profiles-and-concurrency), routing policy); per-pool execution limits (#1596, `starts-after` the merged #1585); the host memory budget and machine-capacity hold (#1598; its prerequisites #898 and #1597 merged); the client contract for usage, refresh, reassignment, line changes, and the routing setting (#1719, with the sync-visibility question #1145 resolved before #1720 adopts its freshness contract); agent and run facts in the clients (#979); and the alternate-agent retry card (#869), now the manual path when the policy has nowhere to route. Beside the chain: the Claude collector on the spike-proven path (#1717), collection, refresh, and reassignment (#1716), and usage state into sync (#1720); the account usage view on Mac and iPhone (#1721), usage facts beside the agent choices (#1722), the New Task agent picker (#1602, `starts-after` #979), the routing settings surface in the app, filed at planning, and the hold wording (#1599, `starts-after` #1596 and #1598); the task-line change command (#1601) and the budget command (#1595, `starts-after` #1598); and, operator-run once the wave 8 exit run completes, Freeside onboarded for `daemon/` (revision 92's trigger, above). Merged before the wave: the agent-vocabulary chain (#898, #899, #900, #1421), the shared-identity writer lease (#1585), the task-line record (#1600), and the enrollment cutover (#867). Moved to Phase 2 by revision 99: the Codex execution tail (#406, #407, #408, #873, #868, #1718) and pi (#895, #897). The planner splits this wave into 9a (records and routing) and 9b (views and onboarding) at planning if the measured chain length exceeds review bandwidth; a realized split makes those halves numbered waves through a plan revision, because a wave tracker is titled `Wave N: <Name>`. Deferral drain: the agent, capacity, and subscription-usage clusters. Exit proof, which consumes no real allowance: an unattended run on a Freeside `daemon/` issue completes with the writer's subscription chosen by the routing policy and the selection recorded with its policy revision; a fixture pass that seeds one subscription's model-scoped window as exhausted, or injects a quota refusal, routes the next admission to the other subscription with the switch visible on the task timeline and cards; on Mac and iPhone the operator reads both pools' windows, reset times, and freshness, changes the routing setting from the app, and reads the recorded change; a seeded quota failure with nowhere to route raises the retry card with the latest readings beside it; and cost and independence records are correct (#901). 1B.1 exit evaluation. |
+| **9 (1B.1): Claude capacity** | Parallel; split-eligible | Freeside runs on two Claude subscriptions, routed by policy, and develops itself. First, the Claude quantitative usage spike, filed at planning on the #1713 harness: whether the pinned CLI, or a read under the setup token outside it, reports a used share per window, model-scoped windows included, with no token refresh and no auth-store write. Its result fixes what the account usage view shows, per window: a share, or status and reset only, or unsupported. The contract chain, positions assigned by the planner: the usage observation record per pool (#1715, extended with the exhausted mark per window and the model-to-window map); the routing policy record and the router at a task's first admission, filed at planning (Section [5.4](#54-credential-modes-egress-profiles-and-concurrency), routing policy); per-pool execution limits (#1596, `starts-after` the merged #1585); the host memory budget and machine-capacity hold (#1598; its prerequisites #898 and #1597 merged); the client contract for usage, refresh, reassignment, line changes, and the routing setting (#1719, with the sync-visibility question #1145 resolved before #1720 adopts its freshness contract); agent and run facts in the clients (#979); and the alternate-agent retry card (#869), the operator's move for a parked task (revision 103). Beside the chain: the Claude collector on the spike-proven path (#1717), collection, refresh, and reassignment (#1716), and usage state into sync (#1720); the account usage view on Mac and iPhone (#1721), usage facts beside the agent choices (#1722), the New Task agent picker (#1602, `starts-after` #979), the routing settings surface in the app, filed at planning, and the hold wording (#1599, `starts-after` #1596 and #1598); the task-line change command (#1601) and the budget command (#1595, `starts-after` #1598); and, operator-run once the wave 8 exit run completes, Freeside onboarded for `daemon/` (revision 92's trigger, above). Merged before the wave: the agent-vocabulary chain (#898, #899, #900, #1421), the shared-identity writer lease (#1585), the task-line record (#1600), and the enrollment cutover (#867). Moved to Phase 2 by revision 99: the Codex execution tail (#406, #407, #408, #873, #868, #1718) and pi (#895, #897). The planner splits this wave into 9a (records and routing) and 9b (views and onboarding) at planning if the measured chain length exceeds review bandwidth; a realized split makes those halves numbered waves through a plan revision, because a wave tracker is titled `Wave N: <Name>`. Deferral drain: the agent, capacity, and subscription-usage clusters. Exit proof, which consumes no real allowance: an unattended run on a Freeside `daemon/` issue completes with the writer's subscription chosen by the routing policy and the selection recorded with its policy revision; a fixture pass that seeds one subscription's model-scoped window as exhausted routes the next task's first admission to the other subscription, with the switch visible on the task timeline and cards, and every role of that task stays there; a quota refusal injected mid-task parks the task on its subscription with no card and resumes it at the seeded reset; the operator moves a parked task with the alternate-agent card, and the move is recorded on the timeline; on Mac and iPhone the operator reads both pools' windows, reset times, and freshness, changes the routing setting from the app, and reads the recorded change; a seeded quota failure with no known reset raises the retry card with the latest readings beside it; and cost and independence records are correct (#901). 1B.1 exit evaluation. |
 | **10 (1B.1): subscription operations** | Folded | Folded into row 9 by revision 99. No wave 10 tracker is created; rows 11 and 12 keep their numbers. |
 | **11 (1B.2): the initiative view** | Integrated | Many work units become one picture. Typed relationship kinds in the Section [5.18](#518-the-world-model-post-merge-recompute-and-frontier-projection) capture records (#884, its position assigned by the planner), the frontier projection, and the deterministic initiative view rendering the dependency graph (#885). |
 | **12 (1B.2): image upkeep** | Parallel | Freeside keeps each project's image in service with no operator step (Section [5.7](#57-the-ward-runners-handoff-gate-and-operating-modes), project-image upkeep). Contract-first, its position assigned by the planner: the admitted-image pointer per agent base, the `image_upkeep` schedule kind, the upkeep refusal record and hold facts, and daemon-origin submission (#2332). Then, each `starts-after` #2332: the upkeep job (#2333, also `starts-after` #1792); default-branch tip observation independent of bound PRs (#2334); and the daemon-submitted maintenance task for repairs (#2336, also `starts-after` #1792). Then the Go module-source gate (#2337, `starts-after` #2333). The adoption record and the card's storage (#2379, a contract unit, `starts-after` #2378, the revision 101 unit) precede the adoption card for policy-clause refusals (#2335, `starts-after` #2333 and #2379). Agent-base upkeep (#2338) stays a deferral. Exit proof: a dependency change merged outside Freeside within policy and a daemon upgrade each end in a new admitted image with no operator action; a recipe change ends in one approved adoption card and a new admitted image built at the tip under the adopted recipe; a recipe failing at the tip ends in a maintenance task's PR. 1B exit evaluation against recorded comprehension and operational evidence. |
@@ -6930,8 +6979,6 @@ Expand beyond the first constrained path:
   usage collector (#1718), moved out of wave 9 by revision 99: a hedge not
   worth its contract-chain slots while the Codex plan is downgraded;
 - the pi adapter and its specification agent (#895, #897), on the same path;
-- `subscription_injected`, the proxy-injected credential mode (Section [5.4](#54-credential-modes-egress-profiles-and-concurrency); revision 95), after its spikes;
-- `api_key_isolated`, on the same path;
 - full failure-injection and restore drills;
 - portable mode and host enrollment, the movable control plane (Sections [5.9](#59-durability-effectively-once)
   and [5.10](#510-coherent-backup-encrypted-checkpoints); #266, with its domain contract #265; revision 46);
@@ -6945,6 +6992,12 @@ Expand beyond the first constrained path:
   [5.7](#57-the-ward-runners-handoff-gate-and-operating-modes), Execution Hosts;
   tracker #2161), fenced until a start trigger there holds (revision 94); and
 - the Linux deployment matrix if wanted, entering as an execution host.
+
+`subscription_injected` and `api_key_isolated` (Section [5.4](#54-credential-modes-egress-profiles-and-concurrency)) are held by
+owner decision and no phase schedules them (revision 103; #2175, with spikes
+#2173 and #2174). Lifting the hold is a later revision. Until then an
+execution host the owner does not physically hold, the Linux host included,
+is not enrolled.
 
 ### Phase 3: Comprehension and Interaction
 
@@ -7006,38 +7059,58 @@ Record material changes here by revision, with the decider in parentheses.
 - On first re-litigation, promote the decision to a `docs/decisions/` ADR that
   cites its history entry.
 
-Revision 102 ("Go Modules Resolve From One Proxy"):
+Revision 103 ("Pin Each Task to One Subscription"):
 
-1. **A Go image's build fetches modules only from `proxy.golang.org`, and
-   that host is the authority the policy-gated rebuild checks for a Go
-   module.** The cache-warming step pins `GOPROXY` to the proxy with no
-   `direct` fallback, drops any inherited Go environment file, and clears
-   the private and insecure lists, so a candidate's `go.mod` and `go.sum`
-   choose which module versions are fetched but never where from. The gate
-   then admits a `go.mod` or `go.sum` change whose required modules
-   `go.sum` pins, when the registry set declares the proxy (Section
-   [5.7](#57-the-ward-runners-handoff-gate-and-operating-modes)), lifting revision 92's refusal of every Go dependency change. A
-   `go.sum` checksum mismatch, a module version the proxy answers 404 or
-   410 for, or a `go.mod` Go refuses to read is a failed install the
-   candidate caused. Rejected: a module
-   path's host as its authority (it names the VCS origin `direct` clones
-   from, not where a pinned build fetches); keeping the `direct` fallback (a
-   module the proxy does not serve would come from a host the set never
-   declared); an operator-configured proxy, or several (no project needs
-   one yet); requiring every zip hash in `go.sum` (a tidy `go.sum` omits it
-   for a module that provides no packages, and Go verifies each download
-   anyway).
+1. **The router picks a subscription only for a new task, and every role of
+   that task stays on it.** At the first admission of a task's first
+   task-line role with no operator line, the router picks one usage pool and
+   writes a line for every task-line role without an operator line (Section
+   [5.4](#54-credential-modes-egress-profiles-and-concurrency), routing policy). A quota failure parks the task under a visible hold
+   naming the window's reset, with no card, and the role's next attempt is
+   admitted on the same line at the reset (Section [4](#4-the-attention-model)). Only the operator
+   moves a parked task, as a recorded handoff, with the alternate-agent card
+   (which re-pins every router-sourced line) or a task-line change; with no
+   known reset the ordinary quota card is raised. When every pool is
+   exhausted at a task's first admission, it parks until the earliest
+   reset. A later role whose
+   model window on the pinned pool is exhausted parks the same way. A
+   lineup's per-failure-class switch no longer applies to a quota failure.
+   Priority with fallback stays as the only routing mode, for new tasks.
+   The aim is to stay close to Anthropic's terms: the Consumer Terms forbid
+   "bypassing any of our systems or protective measures", and Claude Code's
+   legal page says advertised Pro and Max limits "assume ordinary,
+   individual usage". Whether drain-first selection across subscriptions is
+   permitted stays an operating risk (Section [14](#14-risks)). Rejected: revision
+   99's automatic failover to another subscription mid-task, the riskiest
+   reading of those terms; choosing per role, which would let review run on
+   one subscription after implementation used up the other; keeping the
+   percentage split and round robin, which spread load to stretch capacity
+   across plans; and an account manager outside Freeside, which would make
+   the same selection and leave the terms question where it is.
+2. **`subscription_injected` and `api_key_isolated` are held, and nothing
+   schedules them.** Their design text stays in Sections [5.4](#54-credential-modes-egress-profiles-and-concurrency) and [5.7](#57-the-ward-runners-handoff-gate-and-operating-modes),
+   marked as held; lifting the hold is a later revision. #2175, #2173, and
+   #2174 stay open and deferred. Hosts the owner does not physically hold,
+   and host-run writers on either Mac, keep waiting; they never fall back to
+   copying the token. The mode is off the near-term map, adds little yet,
+   and adds work and complexity. With a subscription token, Anthropic would
+   also see the daemon's TLS and HTTP client sending Claude Code's requests,
+   close to the Usage Policy's bar on services that "route requests through
+   consumer subscriptions or misrepresent the product or client being used".
+   Rejected: keeping injection in Phase 2 with a fiat pull-forward (revision
+   95), and keeping `api_key_isolated` scheduled alone, since it reuses the
+   same proxy path.
 
-(Owner's work contract on #2337, 2026-10-27;
-[decision note](../devlog/2026-10-27-1627-go-module-gate.md).)
+(Owner decision of 2026-10-28 on #2416;
+[decision note](../devlog/2026-10-28-1154-pin-tasks-hold-injection.md).)
 
 ## 14. Risks
 
 | Risk | Current response |
 | --- | --- |
-| Provider credentials in `subscription_contained` | Document the residual; enforce egress floors; keep the most exposed stage, the specifier, off the web: the daemon fetches its allowlisted sources and a researcher in its own ward does its web search (Section [5.4](#54-credential-modes-egress-profiles-and-concurrency)); provide `api_key_isolated` as the escape. Residual: the researcher's ward holds a provider credential. Its ward connects only to the provider, so its search queries are its one outward channel. That is reasoning from the #1620 connection record on one CLI build, not a tested exfiltration case. `subscription_injected` removes the token from the writer and bounds a leak to the run's own provider use on declared paths; the search channel remains. |
-| Provider traffic terminated at the control plane under `subscription_injected` | The proxy holds no durable key: a per-run CA, discarded at teardown; the identity's token stays on the credential volume and in the run's proxy memory. It substitutes the placeholder on the declared provider authorities and paths only, refuses credential shape anywhere else and every refresh or account path, verifies the provider's certificate against the system roots with the server name pinned, admits only the run's network, and records every substitution without bodies. The owner accepts what the provider now sees: the daemon's TLS and HTTP client in place of the vendor CLI's, which a provider's bot defence may treat differently; the egress address is unchanged, since the daemon host already originates every tunnel. Residual: a compromised writer still spends the run's identity, request by request, visibly. The subscription-terms judgment on a substituting proxy is the owner's, per vendor. |
-| Registry egress under `subscription_contained` | Keep `provider_only` the default and the floor fixed. Admit `provider_registry` only per project policy through the per-authority proxy allowlist with TLS server-name pinning and no DNS, to public package registries consumed read-only, with any other authority routed to the `provider_web_read` record. Conformance-check the realized allowlist against the declared profile. Residual: the tunnel cannot constrain method or path. So a registry that co-hosts a write endpoint accepts an attacker-credentialed publish. Exclude such hosts per project where the residual is not acceptable, and provide `api_key_isolated` as the escape for anything wider. Under `subscription_injected` the registry tunnel is unchanged, but the writer holds no provider token for such a publish to carry. |
+| Provider credentials in `subscription_contained` | Document the residual; enforce egress floors; keep the most exposed stage, the specifier, off the web: the daemon fetches its allowlisted sources and a researcher in its own ward does its web search (Section [5.4](#54-credential-modes-egress-profiles-and-concurrency)). Residual: the researcher's ward holds a provider credential. Its ward connects only to the provider, so its search queries are its one outward channel. That is reasoning from the #1620 connection record on one CLI build, not a tested exfiltration case. `subscription_injected`, held by owner decision (revision 103), would remove the token from the writer and bound a leak to the run's own provider use on declared paths; the search channel would remain. |
+| Provider traffic terminated at the control plane under `subscription_injected` | Held by owner decision (revision 103): nothing runs this design until a revision lifts the hold, and the rest of this row is the held design's response. The proxy holds no durable key: a per-run CA, discarded at teardown; the identity's token stays on the credential volume and in the run's proxy memory. It substitutes the placeholder on the declared provider authorities and paths only, refuses credential shape anywhere else and every refresh or account path, verifies the provider's certificate against the system roots with the server name pinned, admits only the run's network, and records every substitution without bodies. The owner accepts what the provider now sees: the daemon's TLS and HTTP client in place of the vendor CLI's, which a provider's bot defence may treat differently; the egress address is unchanged, since the daemon host already originates every tunnel. Residual: a compromised writer still spends the run's identity, request by request, visibly. The subscription-terms judgment on a substituting proxy is the owner's, per vendor. For Claude it is one reason for the hold: with a subscription token, Anthropic would see the daemon's TLS and HTTP client sending Claude Code's requests, close to the Usage Policy's bar on services that "route requests through consumer subscriptions or misrepresent the product or client being used" (effective 2026-11-12). |
+| Registry egress under `subscription_contained` | Keep `provider_only` the default and the floor fixed. Admit `provider_registry` only per project policy through the per-authority proxy allowlist with TLS server-name pinning and no DNS, to public package registries consumed read-only, with any other authority routed to the `provider_web_read` record. Conformance-check the realized allowlist against the declared profile. Residual: the tunnel cannot constrain method or path. So a registry that co-hosts a write endpoint accepts an attacker-credentialed publish. Exclude such hosts per project where the residual is not acceptable; no wider escape is offered while `api_key_isolated` is held (revision 103). Under the held `subscription_injected` design the registry tunnel would be unchanged, but the writer would hold no provider token for such a publish to carry. |
 | CI privilege crossing | Attest effective authority; block candidate automation changes; fail closed on drift; prohibit the daemon host as a runner. |
 | Reviewer-instruction poisoning | Compose agent and reviewer instructions from the trusted base, never the candidate; detect instruction-path edits mechanically and surface them as advisories that the human merge gate reads (Section [5.8](#58-control-plane-trust)). |
 | **Rendered agent Markdown in a public PR** | Recipe v2 (Section [5.15](#515-evidence-and-images)) renders authored prose as live Markdown only through a screen at least as strict as v1's: it rejects closing and automation directives at the body source, rejects secrets and control characters, neutralizes cross-reference, bare-URL, commit-reference and mention autolinks, renders raw HTML inert, and resolves links and images only to existing publishable (`publish_eligible`) evidence artifacts. The author's evidence inputs are likewise restricted to policy-approved publishable evidence, so it cannot paraphrase sensitive evidence past the publication gate. On any screen or inference failure it falls back to frozen v1 escaped-text rendering, adding no new publication block. The author's control-plane inputs (the target repository's template and AGENTS.md) resolve from the trusted base, never the candidate head (Section [5.8](#58-control-plane-trust)). The publisher, not agent text, writes any close directive; the closure is an effect proposal whose digest-bound approval is recorded by the project's policy actor, or by the `effect_proposal` action when policy keeps the human gate on, before any `Closes` is written; a same-repository client-supplied source URL is approved as a recommendation whose provenance is recorded on the proposal and shown on the human-gate card. |
@@ -7048,10 +7121,10 @@ Revision 102 ("Go Modules Resolve From One Proxy"):
 | **Workspace-handoff uncertainty** | Resolved by the workspace-handoff spike: the strong class is declared and conformance-gated (Section [5.7](#57-the-ward-runners-handoff-gate-and-operating-modes)); the same-VM fallback is refuted by execution, never implemented or declared. |
 | **Codex cloud review as a load-bearing dependency** | Realized 2026-07-31: the live-run trigger falsification (#427) showed no App-visible trigger path. The dependency is removed. Review is Freeside-invoked (Section [7](#7-review-policy)), and native review is best-effort extra evidence. |
 | Host capacity | Several accounts' limits can add up to more containers than one machine holds. Give every ward container a CPU cap and a declared memory size, and bound their memory by each instance's declared budget, so a launch that doesn't fit waits under a visible hold instead of exhausting memory; waiting launches go oldest task first, and a size that can never fit fails at once (Section [5.4](#54-credential-modes-egress-profiles-and-concurrency), Machine Capacity). Residual: the budget can't see load outside Freeside or another instance's containers, so the operator declares it with room for interactive use and keeps the budgets of every instance on one host within what the host holds. |
-| Execution host credential copies | Every enrolled execution host holds a copy of each identity's setup token in its credential volume (Section [5.7](#57-the-ward-runners-handoff-gate-and-operating-modes), Execution Hosts). Accepted for owner-held machines on the owner's tailnet: rotation re-authors every host, and removal names the identities to rotate. Residual: a host removed while unreachable keeps its copy until the owner rotates at the vendor. Any host the owner does not hold waits for `subscription_injected` through control-plane injection and then receives no copy (revision 95). |
-| Single-provider execution capacity | Claude usage limits can stall real work. From revision 99 the hedge is a second Claude subscription under a routing policy (Section [5.4](#54-credential-modes-egress-profiles-and-concurrency), routing policy), not the Codex execution driver, which moved to Phase 2. Two subscriptions hedge a quota window, not a Claude outage or a Claude policy change; the owner accepts that residual while the Codex plan is downgraded. Every switch is a selection the policy recorded, or the operator's explicit choice on the alternate-agent card, never silent (a lineup may name the switch per failure class, Section [4](#4-the-attention-model); a task line may pick another agent for one task, Section [5.4](#54-credential-modes-egress-profiles-and-concurrency), Admitted Agents). Usage remains observed telemetry (Section [8](#8-observability-and-optimization-telemetry)); an allowance observation shows the stall coming (Section [5.4](#54-credential-modes-egress-profiles-and-concurrency), usage observation) and may mark a window exhausted for the router, and admission never reads one. |
+| Execution host credential copies | Every enrolled execution host holds a copy of each identity's setup token in its credential volume (Section [5.7](#57-the-ward-runners-handoff-gate-and-operating-modes), Execution Hosts). Accepted for owner-held machines on the owner's tailnet: rotation re-authors every host, and removal names the identities to rotate. Residual: a host removed while unreachable keeps its copy until the owner rotates at the vendor. Any host the owner does not hold needs `subscription_injected` through control-plane injection, under which it would receive no copy (revision 95); that mode is held (revision 103), so such a host waits and is not enrolled meanwhile. |
+| Single-provider execution capacity | Claude usage limits can stall real work. From revision 99 the hedge is a second Claude subscription under a routing policy (Section [5.4](#54-credential-modes-egress-profiles-and-concurrency), routing policy), not the Codex execution driver, which moved to Phase 2. Two subscriptions hedge a quota window, not a Claude outage or a Claude policy change; the owner accepts that residual while the Codex plan is downgraded. The router picks a subscription only at a new task's first admission, records the selection with its policy revision, and keeps every role of the task with an agent on that pool there; a quota failure parks the task until its window resets instead of moving it (Section [4](#4-the-attention-model); revision 103). A task in flight moves to another subscription only by the operator's explicit choice on the alternate-agent card or a task line change (Section [5.4](#54-credential-modes-egress-profiles-and-concurrency), Admitted Agents), never silently and never automatically. Usage remains observed telemetry (Section [8](#8-observability-and-optimization-telemetry)); an allowance observation shows the stall coming (Section [5.4](#54-credential-modes-egress-profiles-and-concurrency), usage observation) and may mark a window exhausted for the router, and admission never reads one. |
 | Classifier mislabeling | Preserve immutable raw findings; require second adjudication for the safety case; enforce ceilings. |
-| Subscription-terms drift | Keep it as an explicit operating risk. |
+| Subscription-terms drift | Keep it as an explicit operating risk. Open question: whether Anthropic permits drain-first selection (the routing policy's priority with fallback, Section [5.4](#54-credential-modes-egress-profiles-and-concurrency)) across one owner's Claude subscriptions. The Consumer Terms (effective 2025-10-08) forbid "bypassing any of our systems or protective measures", and Claude Code's legal page says advertised Pro and Max limits "assume ordinary, individual usage". Current response (revision 103): the router chooses a subscription only for new tasks and pins each task to it, nothing fails over mid-task, and proxy credential injection is held. Recommended: ask Anthropic; its answer reopens revision 103. |
 | Apple container immaturity | Prove actual runner capabilities and retain honest fallback classes. |
 | Vendor CLI churn | Pin tooling in golden images and verify its contracts. |
 | Review saturation | Bound work by review bandwidth and use yield policy; the Section [7](#7-review-policy) drift audit stops a loop that converges finding by finding into an over-built change. |
