@@ -48,10 +48,13 @@ type RebuildDecision struct {
 //
 //   - The head holds neither npm-shrinkwrap.json nor .npmrc.
 //   - The head declares the verification recipe its base declares.
-//   - The run's policy declares a valid registry set.
+//   - The repository's effective registry set is valid and not empty: the
+//     set the run's policy declares plus adoptedHosts, the hosts the
+//     repository's approved adoption cards added
+//     (domain.EffectiveRegistrySet).
 //   - The head's manifests change nothing but dependencies the registry
 //     serves, pinned in a consistent npm v2 or v3 lockfile to https URLs on
-//     declared hosts (evaluateLockfileDelta has the exact rules).
+//     hosts in that set (evaluateLockfileDelta has the exact rules).
 //
 // For a Go image it holds when all of these do, and reports the first that
 // fails in this order:
@@ -62,10 +65,11 @@ type RebuildDecision struct {
 //     (readGoModuleChange). The base's must read too, or the change cannot
 //     be bounded.
 //   - The head declares the verification recipe its base declares.
-//   - The run's policy declares a valid registry set.
-//   - go.sum pins every module go.mod requires, and the registry set
-//     declares the module proxy when go.sum changes any module version or
-//     go.mod newly requires one (evaluateGoModuleDelta).
+//   - The repository's effective registry set is valid and not empty, as
+//     for npm.
+//   - go.sum pins every module go.mod requires, and that set holds the
+//     module proxy when go.sum changes any module version or go.mod newly
+//     requires one (evaluateGoModuleDelta).
 //
 // The manifests are compared with the base's, not with the image's, because
 // only hashes of the image's manifests are recorded. The caller has already
@@ -82,6 +86,7 @@ func EvaluateRebuild(
 	baseSHA string,
 	headSHA string,
 	policy domain.ResolvedPolicy,
+	adoptedHosts []string,
 ) (RebuildDecision, error) {
 	reader, err := verify.OpenCommitReader(ctx, gitPath, checkoutDir)
 	if err != nil {
@@ -89,7 +94,7 @@ func EvaluateRebuild(
 			headSHA, unsupportedInputNames[0], err)
 	}
 	defer reader.Close()
-	return evaluateGate(ctx, reader, image, baseSHA, headSHA, policy, false)
+	return evaluateGate(ctx, reader, image, baseSHA, headSHA, policy, adoptedHosts, false)
 }
 
 // EvaluateUpkeep is the gate the upkeep job applies to an image that is not
@@ -113,26 +118,40 @@ func EvaluateUpkeep(
 	image domain.ProjectImage,
 	tipSHA string,
 	policy domain.ResolvedPolicy,
+	adoptedHosts []string,
 ) (RebuildDecision, error) {
 	reader, err := verify.OpenCommitReader(ctx, gitPath, checkoutDir)
 	if err != nil {
 		return RebuildDecision{}, fmt.Errorf("observe project-image inputs at tip %s: %w", tipSHA, err)
 	}
 	defer reader.Close()
-	measured := image
-	if image.Environment == nil {
-		built, err := observeBaseInputs(ctx, reader, image.CommitSHA, image.InputLayout())
-		if err != nil {
-			return RebuildDecision{}, fmt.Errorf(
-				"observe project-image inputs at build commit %s: %w", image.CommitSHA, err)
-		}
-		// No preparation digest: the record names none, so it is never
-		// the current one.
-		measured.Environment = &domain.ProjectImageEnvironment{
-			PackageJSONSHA256: built.PackageJSONSHA256, PackageLockSHA256: built.PackageLockSHA256,
-		}
+	measured, err := measuredForUpkeep(ctx, reader, image)
+	if err != nil {
+		return RebuildDecision{}, err
 	}
-	return evaluateGate(ctx, reader, measured, image.CommitSHA, tipSHA, policy, true)
+	return evaluateGate(ctx, reader, measured, image.CommitSHA, tipSHA, policy, adoptedHosts, true)
+}
+
+// measuredForUpkeep is the image as upkeep measures it: a record with no
+// environment takes the manifests observed at its build commit, as if it had
+// baked them.
+func measuredForUpkeep(
+	ctx context.Context, reader *verify.CommitReader, image domain.ProjectImage,
+) (domain.ProjectImage, error) {
+	if image.Environment != nil {
+		return image, nil
+	}
+	built, err := observeBaseInputs(ctx, reader, image.CommitSHA, image.InputLayout())
+	if err != nil {
+		return domain.ProjectImage{}, fmt.Errorf(
+			"observe project-image inputs at build commit %s: %w", image.CommitSHA, err)
+	}
+	// No preparation digest: the record names none, so it is never the
+	// current one.
+	image.Environment = &domain.ProjectImageEnvironment{
+		PackageJSONSHA256: built.PackageJSONSHA256, PackageLockSHA256: built.PackageLockSHA256,
+	}
+	return image, nil
 }
 
 // evaluateGate is the gate both entries share. upkeep selects EvaluateUpkeep's
@@ -144,6 +163,7 @@ func evaluateGate(
 	baseSHA string,
 	headSHA string,
 	policy domain.ResolvedPolicy,
+	adoptedHosts []string,
 	upkeep bool,
 ) (RebuildDecision, error) {
 	var findings gateFindings
@@ -195,10 +215,11 @@ func evaluateGate(
 		}
 		return nil
 	}
-	// registryClause returns the run's declared registry set, or nil after
-	// refusing the clause.
+	// registryClause returns the repository's effective registry set, or
+	// nil after refusing the clause. A malformed declaration still refuses,
+	// since an adoption cannot repair the operator's own value.
 	registryClause := func() *domain.RegistrySet {
-		registries, declared, err := domain.RegistrySetFromPolicy(policy)
+		registries, declared, err := domain.EffectiveRegistrySet(policy, adoptedHosts)
 		switch {
 		case err != nil:
 			findings.add(refuseLockfile(RebuildRefusalNoRegistrySet,
@@ -212,17 +233,7 @@ func evaluateGate(
 		return nil
 	}
 	read := func(commitSHA, name string) ([]byte, error) {
-		content, present, err := reader.ReadFile(ctx, commitSHA, name, maxManifestBytes)
-		if err != nil {
-			return nil, fmt.Errorf("read %s at %s: %w", name, commitSHA, err)
-		}
-		if !present {
-			// Not an error: an absent manifest parses as no JSON object, or
-			// as a Go module with no requirements, and its reader refuses
-			// what that leaves under its own clause.
-			return nil, nil
-		}
-		return content, nil
+		return readManifest(ctx, reader, commitSHA, name)
 	}
 	if image.InputLayout().Toolchain == domain.ProjectToolchainGo {
 		// A Go head that keeps its manifests but adds a vendor directory or a
@@ -280,28 +291,52 @@ func evaluateGate(
 		return decide(head, LockfileDelta{}), nil
 	}
 	authority := registryClause()
-	basePackageJSON, err := read(baseSHA, "package.json")
+	delta, lockfileFindings, err := readLockfileDelta(ctx, reader, baseSHA, headSHA, authority)
 	if err != nil {
 		return RebuildDecision{}, err
 	}
-	basePackageLock, err := read(baseSHA, "package-lock.json")
-	if err != nil {
-		return RebuildDecision{}, err
-	}
-	headPackageJSON, err := read(headSHA, "package.json")
-	if err != nil {
-		return RebuildDecision{}, err
-	}
-	headPackageLock, err := read(headSHA, "package-lock.json")
-	if err != nil {
-		return RebuildDecision{}, err
-	}
-	delta, lockfileFindings := evaluateLockfileDelta(
-		basePackageJSON, basePackageLock, headPackageJSON, headPackageLock, authority)
 	for _, finding := range lockfileFindings {
 		findings.add(&finding)
 	}
 	return decide(head, delta), nil
+}
+
+// readManifest reads one dependency manifest at a commit. An absent file is
+// no content, not an error: it parses as no JSON object, or as a Go module
+// with no requirements, and its reader refuses what that leaves under its
+// own clause.
+func readManifest(ctx context.Context, reader *verify.CommitReader, commitSHA, name string) ([]byte, error) {
+	content, present, err := reader.ReadFile(ctx, commitSHA, name, maxManifestBytes)
+	if err != nil {
+		return nil, fmt.Errorf("read %s at %s: %w", name, commitSHA, err)
+	}
+	if !present {
+		return nil, nil
+	}
+	return content, nil
+}
+
+// readLockfileDelta reads both commits' npm manifests and measures the delta
+// between them (evaluateLockfileDelta). A nil registries skips only the
+// authority check.
+func readLockfileDelta(
+	ctx context.Context, reader *verify.CommitReader, baseSHA, headSHA string, registries *domain.RegistrySet,
+) (LockfileDelta, gateFindings, error) {
+	var files [4][]byte
+	for index, file := range []struct{ commit, name string }{
+		{baseSHA, "package.json"},
+		{baseSHA, "package-lock.json"},
+		{headSHA, "package.json"},
+		{headSHA, "package-lock.json"},
+	} {
+		content, err := readManifest(ctx, reader, file.commit, file.name)
+		if err != nil {
+			return LockfileDelta{}, nil, err
+		}
+		files[index] = content
+	}
+	delta, findings := evaluateLockfileDelta(files[0], files[1], files[2], files[3], registries)
+	return delta, findings, nil
 }
 
 // BuildInputs are the operator-configured, host-specific inputs a rebuild

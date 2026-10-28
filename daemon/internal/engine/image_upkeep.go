@@ -280,7 +280,11 @@ func (u *ImageUpkeep) pass(ctx context.Context, tipSHA string, reuseVerdict bool
 	if u.current(ctx, dir, image, tipSHA) {
 		return imageUpkeepOutcome{tipSHA: tipSHA, current: true}, nil
 	}
-	decision, err := projectimage.EvaluateUpkeep(ctx, "git", dir, image, tipSHA, u.Policy)
+	adoptedHosts, err := adoptedRegistryHosts(ctx, u.Store, u.RepositoryID)
+	if err != nil {
+		return imageUpkeepOutcome{}, err
+	}
+	decision, err := projectimage.EvaluateUpkeep(ctx, "git", dir, image, tipSHA, u.Policy, adoptedHosts)
 	if err != nil {
 		if ctx.Err() != nil {
 			return imageUpkeepOutcome{}, err

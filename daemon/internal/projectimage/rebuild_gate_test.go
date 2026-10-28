@@ -796,7 +796,7 @@ func TestEvaluateRebuildAppliesEachClauseAtTheExactCommits(t *testing.T) {
 				admitted.Environment = nil
 			}
 			decision, err := EvaluateRebuild(
-				t.Context(), "git", repo.dir, admitted, base, head, gatePolicy(t, test.policy))
+				t.Context(), "git", repo.dir, admitted, base, head, gatePolicy(t, test.policy), nil)
 			if err != nil {
 				t.Fatalf("EvaluateRebuild: %v", err)
 			}
@@ -830,7 +830,7 @@ func TestEvaluateRebuildRefusesAnUnreadableManifest(t *testing.T) {
 		PackageLockSHA256: manifestSHA256([]byte(gateBasePackageLock)),
 	}}
 	decision, err := EvaluateRebuild(
-		t.Context(), "git", repo.dir, image, base, head, gatePolicy(t, `["registry.npmjs.org"]`))
+		t.Context(), "git", repo.dir, image, base, head, gatePolicy(t, `["registry.npmjs.org"]`), nil)
 	if err != nil {
 		t.Fatalf("EvaluateRebuild: %v", err)
 	}
@@ -840,7 +840,7 @@ func TestEvaluateRebuildRefusesAnUnreadableManifest(t *testing.T) {
 	// An image with no recorded environment takes no gate, readable or not.
 	image.Environment = nil
 	decision, err = EvaluateRebuild(
-		t.Context(), "git", repo.dir, image, base, head, gatePolicy(t, `["registry.npmjs.org"]`))
+		t.Context(), "git", repo.dir, image, base, head, gatePolicy(t, `["registry.npmjs.org"]`), nil)
 	if err != nil || decision.Needed || decision.Head.CommitSHA != head {
 		t.Fatalf("decision = %+v, %v; want no gate for an image without environment evidence", decision, err)
 	}
@@ -850,7 +850,7 @@ func TestEvaluateRebuildReturnsACheckoutFaultAsAnError(t *testing.T) {
 	repo := newBaseInputsRepo(t)
 	base := repo.commit(map[string]string{"package.json": gateBasePackageJSON})
 	_, err := EvaluateRebuild(t.Context(), "git", repo.dir, domain.ProjectImage{},
-		base, strings.Repeat("0", 40), domain.ResolvedPolicy{})
+		base, strings.Repeat("0", 40), domain.ResolvedPolicy{}, nil)
 	if err == nil {
 		t.Fatal("a head the checkout does not hold produced a decision")
 	}
@@ -872,12 +872,12 @@ func TestEvaluateRebuildPinsOnceAcrossBothCommitsAndClosesItsReader(t *testing.T
 	git, check := countedCommitGit(t)
 	scratch := t.TempDir()
 	t.Setenv("TMPDIR", scratch)
-	decision, err := EvaluateRebuild(t.Context(), git, repo.dir, image, base, head, gatePolicy(t, `["registry.npmjs.org"]`))
+	decision, err := EvaluateRebuild(t.Context(), git, repo.dir, image, base, head, gatePolicy(t, `["registry.npmjs.org"]`), nil)
 	if err != nil || !decision.Needed || decision.Refusal != "" || decision.Delta.Changed != 1 {
 		t.Fatalf("decision = %+v, %v; want one admitted dependency", decision, err)
 	}
 	check(14, 10)
-	if _, err := EvaluateRebuild(t.Context(), "git", repo.dir, image, base, strings.Repeat("0", 40), domain.ResolvedPolicy{}); !errors.Is(err, verify.ErrGitPlumbing) {
+	if _, err := EvaluateRebuild(t.Context(), "git", repo.dir, image, base, strings.Repeat("0", 40), domain.ResolvedPolicy{}, nil); !errors.Is(err, verify.ErrGitPlumbing) {
 		t.Fatalf("missing commit = %v, want plumbing fault", err)
 	}
 	entries, err := os.ReadDir(scratch)
@@ -1078,7 +1078,7 @@ func TestEvaluateRebuildReportsEveryRefusingClause(t *testing.T) {
 			repo.git("checkout", "-q", "--detach", base)
 			head := repo.commit(test.changes)
 			decision, err := EvaluateRebuild(
-				t.Context(), "git", repo.dir, image, base, head, gatePolicy(t, test.policy))
+				t.Context(), "git", repo.dir, image, base, head, gatePolicy(t, test.policy), nil)
 			if err != nil {
 				t.Fatalf("EvaluateRebuild: %v", err)
 			}
@@ -1165,7 +1165,7 @@ func TestEvaluateUpkeepMeasuresTheTipFromTheBuildCommit(t *testing.T) {
 			if test.changes != nil {
 				tip = repo.commit(test.changes)
 			}
-			decision, err := EvaluateUpkeep(t.Context(), "git", repo.dir, test.image, tip, gatePolicy(t, test.policy))
+			decision, err := EvaluateUpkeep(t.Context(), "git", repo.dir, test.image, tip, gatePolicy(t, test.policy), nil)
 			if err != nil {
 				t.Fatalf("EvaluateUpkeep: %v", err)
 			}
@@ -1196,12 +1196,12 @@ func TestEvaluateUpkeepAdmitsAGoToolchainOnlyDelta(t *testing.T) {
 		},
 	}
 	sourceOnly := repo.commit(map[string]string{"main.go": "package main\n\nfunc main() {}\n"})
-	decision, err := EvaluateUpkeep(t.Context(), "git", repo.dir, image, sourceOnly, domain.ResolvedPolicy{})
+	decision, err := EvaluateUpkeep(t.Context(), "git", repo.dir, image, sourceOnly, domain.ResolvedPolicy{}, nil)
 	if err != nil || !decision.Needed || len(decision.Findings) != 0 {
 		t.Fatalf("decision = %+v, %v; want the toolchain-only delta admitted", decision, err)
 	}
 	recipe := repo.commit(map[string]string{verify.DefaultRecipePath: `{"commands":[["true"]],"capture":"none"}`})
-	decision, err = EvaluateUpkeep(t.Context(), "git", repo.dir, image, recipe, domain.ResolvedPolicy{})
+	decision, err = EvaluateUpkeep(t.Context(), "git", repo.dir, image, recipe, domain.ResolvedPolicy{}, nil)
 	if err != nil || !slices.Equal(findingClauses(decision.Findings), []RebuildRefusal{RebuildRefusalRecipeChanged}) {
 		t.Fatalf("decision = %+v, %v; want the recipe change refused", decision, err)
 	}
@@ -1210,9 +1210,48 @@ func TestEvaluateUpkeepAdmitsAGoToolchainOnlyDelta(t *testing.T) {
 	module := repo.commit(map[string]string{
 		"go.mod": goMod + "\nrequire example.test/dep v1.0.0\n", "go.sum": strings.SplitAfter(testGoSum, "\n")[0],
 	})
-	decision, err = EvaluateUpkeep(t.Context(), "git", repo.dir, image, module, gatePolicy(t, `["proxy.golang.org"]`))
+	decision, err = EvaluateUpkeep(t.Context(), "git", repo.dir, image, module, gatePolicy(t, `["proxy.golang.org"]`), nil)
 	if err != nil || !slices.Equal(findingClauses(decision.Findings),
 		[]RebuildRefusal{RebuildRefusalRecipeChanged, RebuildRefusalUnpinnedSource}) {
 		t.Fatalf("decision = %+v, %v; want the recipe change and the unpinned module refused", decision, err)
+	}
+}
+
+// An adopted host joins the declared set at the gate, for the publication
+// lane and upkeep alike, and alone forms the set when none is declared.
+func TestRebuildGateAdmitsAnAdoptedHost(t *testing.T) {
+	repo, base, image := newGateRepo(t)
+	head := repo.commit(map[string]string{
+		"package.json": gateHeadPackageJSON,
+		"package-lock.json": gateHeadLock(
+			gateResolvedFrom("https://registry.example.com/right/-/right-2.0.0.tgz")),
+	})
+	for _, test := range []struct {
+		name    string
+		policy  string
+		adopted []string
+		want    RebuildRefusal
+	}{
+		{name: "declared only", policy: `["registry.npmjs.org"]`, want: RebuildRefusalUndeclaredAuthority},
+		{name: "none declared or adopted", want: RebuildRefusalNoRegistrySet},
+		{name: "declared plus adopted", policy: `["registry.npmjs.org"]`, adopted: []string{"registry.example.com"}},
+		{name: "adopted only", adopted: []string{"registry.example.com"}},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			rebuild, err := EvaluateRebuild(
+				t.Context(), "git", repo.dir, image, base, head, gatePolicy(t, test.policy), test.adopted)
+			if err != nil {
+				t.Fatalf("EvaluateRebuild: %v", err)
+			}
+			upkeep, err := EvaluateUpkeep(t.Context(), "git", repo.dir, image, head, gatePolicy(t, test.policy), test.adopted)
+			if err != nil {
+				t.Fatalf("EvaluateUpkeep: %v", err)
+			}
+			for _, decision := range []RebuildDecision{rebuild, upkeep} {
+				if !decision.Needed || decision.Refusal != test.want {
+					t.Fatalf("decision = %+v, want refusal %q", decision, test.want)
+				}
+			}
+		})
 	}
 }
