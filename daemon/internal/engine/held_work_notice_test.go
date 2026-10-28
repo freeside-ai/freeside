@@ -489,13 +489,13 @@ func TestHeldWorkNoticeIgnoresHoldsOutsideTheRefusalClass(t *testing.T) {
 	f := newFailedImplementationFixture(t, execfake.OutcomeFail, "unused")
 	engine := f.newEngine(t, f.driver)
 	if err := engine.observeRunHold(
-		t.Context(), f.run.ID, f.attempt.InvocationID, domain.HoldIdentityParallelism, nil,
+		t.Context(), f.run.ID, f.attempt.InvocationID, domain.HoldIdentityParallelism, holdDetail{},
 	); err != nil {
 		t.Fatal(err)
 	}
 	backdateRunHold(t, f.store, f.run.ID, heldWorkNoticeAfter+time.Minute)
 	if err := f.newEngine(t, f.driver).observeRunHold(
-		t.Context(), f.run.ID, f.attempt.InvocationID, domain.HoldIdentityParallelism, nil,
+		t.Context(), f.run.ID, f.attempt.InvocationID, domain.HoldIdentityParallelism, holdDetail{},
 	); err != nil {
 		t.Fatal(err)
 	}
@@ -579,7 +579,7 @@ func TestHeldWorkNoticeSkipsAStoppedTask(t *testing.T) {
 	start := now.Add(-heldWorkNoticeAfter - time.Minute)
 	if err := f.store.Write(t.Context(), func(tx *store.WriteTx) error {
 		if err := recordRunHold(
-			t.Context(), tx, f.run.ID, f.attempt.InvocationID, domain.HoldBackendNotConformant, nil, start,
+			t.Context(), tx, f.run.ID, f.attempt.InvocationID, domain.HoldBackendNotConformant, holdDetail{}, start,
 		); err != nil {
 			return err
 		}

@@ -7,6 +7,7 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
+	"sync"
 	"time"
 
 	"github.com/freeside-ai/freeside/daemon/internal/domain"
@@ -57,6 +58,16 @@ type ImageUpkeep struct {
 	Health func(ctx context.Context, fault string) error
 	Now    func() time.Time
 	Logger *slog.Logger
+	// AdoptionPending and MaintenancePending answer a settled refusal with
+	// the adoption card or maintenance task that resolves it, when one does
+	// (PendingResolution). Nil means that arm is not composed.
+	AdoptionPending    func(context.Context, domain.ImageUpkeepRefusal) (domain.ItemID, bool, error)
+	MaintenancePending func(context.Context, domain.ImageUpkeepRefusal) (domain.TaskID, bool, error)
+
+	// settledMu guards settled, the last settled outcome this process
+	// reached, which PendingResolution reads.
+	settledMu sync.Mutex
+	settled   *imageUpkeepOutcome
 }
 
 // imageUpkeepHarness is the agent base upkeep keeps. Claude Code is the only
@@ -147,10 +158,80 @@ func (u *ImageUpkeep) run(ctx context.Context, tipSHA string, reuseVerdict bool)
 	default:
 		return outcome, nil
 	}
+	if outcome.settled() {
+		u.settledMu.Lock()
+		u.settled = &outcome
+		u.settledMu.Unlock()
+	}
 	if err := u.Health(ctx, outcome.hostFault); err != nil {
 		return outcome, fmt.Errorf("converge image upkeep health: %w", err)
 	}
 	return outcome, nil
+}
+
+// PendingResolution reports what a writer attempt whose base no admitted
+// image serves is waiting on, or nil when upkeep has nothing pending that
+// could change that:
+//
+//   - A rebuild, while this process has no settled verdict, or the
+//     repository's observed tip has moved past the one it settled at. A
+//     host fault never settles, so it stays a rebuild.
+//   - An adoption proposal or a maintenance task, when the settled verdict
+//     is a refusal that AdoptionPending or MaintenancePending answers.
+//   - Nothing otherwise: the image is current at the tip, or the refusal
+//     has no answer yet.
+func (u *ImageUpkeep) PendingResolution(ctx context.Context) (*domain.ImageUpkeepHold, error) {
+	u.settledMu.Lock()
+	settled := u.settled
+	u.settledMu.Unlock()
+	rebuild := &domain.ImageUpkeepHold{Pending: domain.ImageUpkeepPendingRebuild}
+	if settled == nil {
+		return rebuild, nil
+	}
+	var (
+		observation domain.RepositoryTipObservation
+		found       bool
+	)
+	if err := u.Store.Read(ctx, func(tx *store.ReadTx) error {
+		var err error
+		observation, found, err = tx.GetRepositoryTipObservation(ctx, u.RepositoryID)
+		return err
+	}); err != nil {
+		return nil, fmt.Errorf("read repository tip observation: %w", err)
+	}
+	if found && observation.TipSHA != settled.tipSHA {
+		return rebuild, nil
+	}
+	refusal := settled.refusal
+	if refusal == nil {
+		return nil, nil
+	}
+	refusalID := refusal.ID
+	if u.AdoptionPending != nil {
+		item, ok, err := u.AdoptionPending(ctx, *refusal)
+		if err != nil {
+			return nil, fmt.Errorf("find the adoption proposal for refusal %s: %w", refusalID, err)
+		}
+		if ok {
+			return &domain.ImageUpkeepHold{
+				Pending: domain.ImageUpkeepPendingAdoptionProposal, RefusalRecordID: &refusalID,
+				ProposalItemID: &item,
+			}, nil
+		}
+	}
+	if u.MaintenancePending != nil {
+		task, ok, err := u.MaintenancePending(ctx, *refusal)
+		if err != nil {
+			return nil, fmt.Errorf("find the maintenance task for refusal %s: %w", refusalID, err)
+		}
+		if ok {
+			return &domain.ImageUpkeepHold{
+				Pending: domain.ImageUpkeepPendingMaintenanceTask, RefusalRecordID: &refusalID,
+				MaintenanceTaskID: &task,
+			}, nil
+		}
+	}
+	return nil, nil
 }
 
 // pass decides the pointed-to image at tipSHA.

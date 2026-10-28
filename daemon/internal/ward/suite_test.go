@@ -1811,12 +1811,74 @@ func TestSuitePreJobSuccess(t *testing.T) {
 
 func TestBackendPreJobUsesConfiguredAgentImage(t *testing.T) {
 	s, _ := newSuiteTest(t)
-	s.b.cfg.AgentImage = s.fx.AgentImage
+	s.b.agentImage = s.fx.AgentImage
 	if err := s.b.PreJob(context.Background(), "job-1"); err != nil {
 		t.Fatalf("Backend.PreJob = %v, want nil", err)
 	}
-	s.b.cfg.AgentImage = ""
+	s.b.agentImage = ""
 	wantCheckFailure(t, s.b.PreJob(context.Background(), "job-2"), CheckPreJobProbe)
+}
+
+// TestBackendPreJobProbesTheRepointedImage pins that PreJob follows the
+// image the backend currently proves, not the one it was configured with.
+func TestBackendPreJobProbesTheRepointedImage(t *testing.T) {
+	s, rt := newSuiteTest(t)
+	s.b.agentImage = s.fx.AgentImage
+	repointed := "example.test/agent@sha256:" + strings.Repeat("2", 64)
+	if err := s.b.RepointAgentImage(repointed); err != nil {
+		t.Fatalf("RepointAgentImage = %v", err)
+	}
+	// The repoint cleared the declaration; model the Full pass that would
+	// have earned it again for the new image.
+	s.b.networkless.Store(true)
+	s.b.providerEgress.Store(true)
+	var probed []string
+	rt.onCreateContainer = func(spec ContainerSpec) error {
+		probed = append(probed, spec.Image)
+		return nil
+	}
+	if err := s.b.PreJob(context.Background(), "job-1"); err != nil {
+		t.Fatalf("Backend.PreJob = %v, want nil", err)
+	}
+	if !slices.Equal(probed, []string{repointed}) {
+		t.Fatalf("PreJob probed %q, want only the repointed image %q", probed, repointed)
+	}
+}
+
+// TestNewSuiteRefusesAFixtureForAnyButTheCurrentImage pins that a suite
+// can only prove the image the backend currently names, so a pass never
+// records one image's outcome under another image's configuration digest.
+func TestNewSuiteRefusesAFixtureForAnyButTheCurrentImage(t *testing.T) {
+	fx := newHandoffFixture(t)
+	cfg := fx.cfg
+	initial := "example.test/agent@sha256:" + strings.Repeat("1", 64)
+	repointed := "example.test/agent@sha256:" + strings.Repeat("2", 64)
+	cfg.AgentImage = initial
+	b, err := New(fx.rt, cfg)
+	if err != nil {
+		t.Fatalf("New = %v", err)
+	}
+	fixture := func(image string) SuiteFixture {
+		return SuiteFixture{
+			AgentImage:       image,
+			CredentialMarker: suiteMarker,
+			RunID:            "conf-run",
+			RegistryRunID:    "conf-run-registry",
+			Seed:             suiteSeed(t, fx),
+		}
+	}
+	if _, err := NewSuite(b, fixture(repointed)); !errors.Is(err, ErrInvalidConfig) {
+		t.Fatalf("NewSuite(other image) = %v, want ErrInvalidConfig", err)
+	}
+	if err := b.RepointAgentImage(repointed); err != nil {
+		t.Fatalf("RepointAgentImage = %v", err)
+	}
+	if _, err := NewSuite(b, fixture(initial)); !errors.Is(err, ErrInvalidConfig) {
+		t.Fatalf("NewSuite(previous image) = %v, want ErrInvalidConfig", err)
+	}
+	if _, err := NewSuite(b, fixture(repointed)); err != nil {
+		t.Fatalf("NewSuite(current image) = %v, want nil", err)
+	}
 }
 
 func TestSuitePreJobFailures(t *testing.T) {

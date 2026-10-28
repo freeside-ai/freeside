@@ -132,7 +132,12 @@ type ProductionPublicationConfig struct {
 	// candidate whose dependency change stays within policy (plan §5.7). Nil
 	// leaves every such candidate refused as rebuild_not_configured.
 	RebuildProjectImage *ProjectImageRebuild
-	ReviewSource        exec.ReviewSource
+	// ImageUpkeepPending is image upkeep's pending-resolution lookup
+	// (ImageUpkeep.PendingResolution). A re-entry whose base no recorded
+	// image serves holds while it reports a resolution and stops as before
+	// when it reports none. Nil reports none.
+	ImageUpkeepPending func(context.Context) (*domain.ImageUpkeepHold, error)
+	ReviewSource       exec.ReviewSource
 	// ReviewAdmission admits a routed or shadow review invocation before its
 	// source is asked (plan §5.4). The workflow stores the snapshot it returns
 	// once and puts that stored snapshot on every request for the invocation.
@@ -305,6 +310,7 @@ type productionPublicationWorkflow struct {
 	// never authority.
 	holdPace             observationPace
 	preparationDigest    domain.Digest
+	imageUpkeepPending   func(context.Context) (*domain.ImageUpkeepHold, error)
 	afterVerification    func() error
 	afterPublication     func() error
 	afterReady           func() error
@@ -404,6 +410,7 @@ func newProductionPublicationWorkflow(
 		reviewAdmitter:           cfg.ReviewAdmission,
 		newBoundRoom:             cfg.NewBoundRoom,
 		rebuild:                  cfg.RebuildProjectImage,
+		imageUpkeepPending:       cfg.ImageUpkeepPending,
 		remediationPromptPackage: cfg.RemediationPromptPackageDigest,
 		shadowReviewSource:       cfg.ShadowReviewSource,
 		reviewRecovery:           cfg.ReviewRecovery, reviewRecoveryPending: true,
@@ -2093,6 +2100,11 @@ func (w *productionPublicationWorkflow) reconcile(ctx context.Context) (producti
 			// lock cleanup is environmental and cannot invalidate committed work.
 			w.deferHeldTask(task)
 		}
+		if !waitsOnImage(reconcileErr) {
+			if obsErr := w.clearImageUpkeepHold(ctx, task); obsErr != nil {
+				joined = errors.Join(joined, fmt.Errorf("task %q: %w", entry.IdempotencyKey, obsErr))
+			}
+		}
 		if reconcileErr != nil {
 			if workflowAdvancementFenced(reconcileErr) {
 				continue
@@ -2102,7 +2114,7 @@ func (w *productionPublicationWorkflow) reconcile(ctx context.Context) (producti
 				// record its typed cause beside the retry window (issue
 				// #394). A failed observation write is a store fault, joined
 				// loud like any other.
-				if obsErr := w.recordPublicationEnvironmentHold(ctx, task); obsErr != nil {
+				if obsErr := w.recordRetryableHold(ctx, task, reconcileErr); obsErr != nil {
 					joined = errors.Join(joined, fmt.Errorf("task %q: %w", entry.IdempotencyKey, obsErr))
 				}
 				w.deferHeldTask(task)
@@ -5473,7 +5485,7 @@ func (w *productionPublicationWorkflow) holdBlockedTask(
 	// derived from the operator prose; the retry window paces the write
 	// (issue #394).
 	if err := w.store.Write(ctx, func(tx *store.WriteTx) error {
-		return recordRunHold(ctx, tx, task.RunID, task.PublicationID, cause, nil, w.now().UTC())
+		return recordRunHold(ctx, tx, task.RunID, task.PublicationID, cause, holdDetail{}, w.now().UTC())
 	}); err != nil {
 		return productionTaskOutcome{}, err
 	}
@@ -5728,7 +5740,7 @@ func (w *productionPublicationWorkflow) recordAttendedPublicationHolds(ctx conte
 		if err := w.store.Write(ctx, func(tx *store.WriteTx) error {
 			return recordRunHold(ctx, tx, runID,
 				domain.ProductionPublicationInvocationID(runID),
-				domain.HoldAttendedModeActive, nil, now)
+				domain.HoldAttendedModeActive, holdDetail{}, now)
 		}); err != nil {
 			w.holdPace.forget("hold:" + string(runID))
 			return err
@@ -5945,8 +5957,71 @@ func (w *productionPublicationWorkflow) recordPublicationEnvironmentHold(
 	}
 	return w.store.Write(ctx, func(tx *store.WriteTx) error {
 		return recordRunHold(ctx, tx, task.RunID, task.PublicationID,
-			domain.HoldPublicationEnvironment, nil, w.now().UTC())
+			domain.HoldPublicationEnvironment, holdDetail{}, w.now().UTC())
 	})
+}
+
+// recordRetryableHold records the hold behind a retryable reconcile failure:
+// image_upkeep_pending for a task waiting on an image (a re-entry whose base
+// waits on upkeep, or a rebuild the busy builder could not start), and
+// publication_environment for any other environmental back-off.
+func (w *productionPublicationWorkflow) recordRetryableHold(
+	ctx context.Context, task productionPublicationTask, err error,
+) error {
+	var pending *ImageUpkeepPendingError
+	upkeep := errors.As(err, &pending)
+	if !upkeep && !errors.Is(err, errProjectImageBuilderBusy) {
+		return w.recordPublicationEnvironmentHold(ctx, task)
+	}
+	if ctx.Err() != nil {
+		return nil
+	}
+	hold := domain.ImageUpkeepHold{Pending: domain.ImageUpkeepPendingRebuild}
+	if upkeep {
+		hold = pending.Hold
+	}
+	if err := w.store.Write(ctx, func(tx *store.WriteTx) error {
+		return recordRunHold(ctx, tx, task.RunID, task.PublicationID,
+			domain.HoldImageUpkeepPending, holdDetail{imageUpkeep: &hold}, w.now().UTC())
+	}); err != nil {
+		return err
+	}
+	// The clear after an attempt that no longer waits must not be paced
+	// away while this hold is on the read surface.
+	w.holdPace.forget(imageUpkeepClearKey(task))
+	return nil
+}
+
+// imageUpkeepClearKey paces clearImageUpkeepHold per run.
+func imageUpkeepClearKey(task productionPublicationTask) string {
+	return "image-upkeep:" + string(task.RunID)
+}
+
+// clearImageUpkeepHold ends the image_upkeep_pending hold once an attempt
+// ends without waiting on an image again. It runs after the attempt, not at
+// its start, so a wait that recurs keeps its row and its span. Paced, so a
+// run that never held costs one delete per pacing window, not one per pass.
+func (w *productionPublicationWorkflow) clearImageUpkeepHold(
+	ctx context.Context, task productionPublicationTask,
+) error {
+	key := imageUpkeepClearKey(task)
+	if !w.holdPace.due(key, publicationAttemptPaceState, w.now().UTC()) {
+		return nil
+	}
+	if err := w.store.Write(ctx, func(tx *store.WriteTx) error {
+		return tx.ClearRunHoldCause(ctx, task.RunID, domain.HoldImageUpkeepPending)
+	}); err != nil {
+		w.holdPace.forget(key)
+		return err
+	}
+	return nil
+}
+
+// waitsOnImage reports whether a reconcile failure is a wait on a project
+// image (recordRetryableHold), which keeps the image_upkeep_pending hold.
+func waitsOnImage(err error) bool {
+	return productionPublicationRetryableFailure(err) &&
+		(errors.Is(err, ErrImageUpkeepPending) || errors.Is(err, errProjectImageBuilderBusy))
 }
 
 // publicationAttemptPaceState paces the clear below on the hold key without

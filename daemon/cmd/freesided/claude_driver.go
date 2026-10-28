@@ -1391,9 +1391,15 @@ type claudeComposition struct {
 	specificationPromptPackage domain.Digest
 	remediationPromptPackage   domain.Digest
 	derive                     engine.AdmissionDerivation
-	runConformance             func(context.Context) error
-	closer                     sessionCloser
-	janitor                    *janitorSession
+	// selectImage selects each unattended writer attempt's image from the
+	// admitted-image pointer, and bindImageUpkeep gives it image upkeep's
+	// pending-resolution lookup once upkeep is composed. Both are nil for
+	// an attended composition, which runs no project image.
+	selectImage     engine.ImageSelection
+	bindImageUpkeep func(func(context.Context) (*domain.ImageUpkeepHold, error))
+	runConformance  func(context.Context) error
+	closer          sessionCloser
+	janitor         *janitorSession
 	// observeBaseTip is the base-advance watch's conditional ref read
 	// through the publish reconciler (§5.11 conditional requests; §5.16
 	// base_advance_watch consumer).
@@ -1448,8 +1454,9 @@ var ErrProjectImageComposition = errors.New("configured agent image has no match
 // mismatch.
 //
 // These are the checks the record alone decides, so they run before anything
-// reaches the network. Whether the image may serve the configured base is
-// admitProjectImageAtBase's question, which can need the base tree.
+// reaches the network. Whether an image may serve the configured base is
+// writer selection's question (claudeImageSelector), which can need the base
+// tree; a base no image serves holds attempts instead of refusing the start.
 //
 // The command re-gate is the reconstruction trust boundary (AGENTS.md daemon
 // conventions): PreparationCommand is a store field decoded here, so a
@@ -1482,11 +1489,12 @@ func resolveProjectImagePreparation(
 
 // seedAdmittedImagePointer makes the configured agent image the pointer's
 // seed (plan §5.7, Project-image upkeep): a repository with no pointer for
-// the Claude agent base gets one naming the image composition just admitted.
-// An existing pointer is never overwritten, because once the upkeep job owns
-// it the configured flag may be the older image; a disagreement is logged and
-// the pointer kept. Selection still follows the flag until #2333 switches it
-// to the pointer.
+// the Claude agent base gets one naming the configured image, whether or not
+// it serves the configured base, since a base no image serves holds attempts
+// rather than refusing the start. An existing pointer is never overwritten,
+// because once the upkeep job owns it the configured flag may be the older
+// image; a disagreement is logged and the pointer kept. Writer selection
+// reads the pointer (claudeImageSelector).
 func seedAdmittedImagePointer(
 	ctx context.Context, st *store.Store, image domain.ProjectImage, now time.Time,
 	logger *slog.Logger,
@@ -1512,43 +1520,6 @@ func seedAdmittedImagePointer(
 		logger.Info("admitted image pointer differs from the configured agent image; keeping the pointer",
 			"repository_id", image.RepositoryID, "pointer_image_ref", kept.ImageRef,
 			"configured_image_ref", image.ImageRef)
-	}
-	return nil
-}
-
-// projectImageBaseObserver reads what the configured base commit holds for
-// the inputs a project image's environment records.
-type projectImageBaseObserver func() (domain.ProjectImageBaseInputs, error)
-
-// admitProjectImageAtBase refuses a recorded image that may not serve a run at
-// baseSHA (domain.ProjectImage.AdmissibleAt). An image built at exactly
-// baseSHA is admitted from the record alone, so observe runs only for an
-// image built at another commit; that keeps the common start free of a base
-// read. A base the image is not compatible with is the same startup refusal
-// the run-482 defense gives a mismatched commit: without it the preparation
-// helper's manifest guard would exit 42 only after a run had spent
-// implementation.
-//
-// An observation that fails is reported as itself, not as
-// ErrProjectImageComposition: the image was not found incompatible, the base
-// could not be read.
-func admitProjectImageAtBase(
-	image domain.ProjectImage, baseSHA string, observe projectImageBaseObserver,
-) error {
-	if image.CommitSHA == baseSHA {
-		return nil
-	}
-	inputs, err := observe()
-	if err != nil {
-		return fmt.Errorf("observe project-image inputs at base %s: %w", baseSHA, err)
-	}
-	if inputs.CommitSHA != baseSHA {
-		return fmt.Errorf(
-			"project-image inputs were observed at %s, not the configured base %s: %w",
-			inputs.CommitSHA, baseSHA, ErrProjectImageComposition)
-	}
-	if err := image.AdmissibleAt(inputs, projectimage.PreparationDigest()); err != nil {
-		return errors.Join(ErrProjectImageComposition, err)
 	}
 	return nil
 }
@@ -1682,30 +1653,26 @@ func composeClaudeDriver(
 			err = errors.Join(err, janitor.Close(context.Background()))
 		}
 	}()
+	// The base tree exists only on the remote, so reading it waits for the
+	// transport. Stable coverage keeps the fetch's installation token from
+	// failing under a concurrent pass.
+	baseInputs := newBaseInputsMemo(func(
+		ctx context.Context, layout domain.ProjectImageInputLayout,
+	) (inputs domain.ProjectImageBaseInputs, err error) {
+		err = janitor.WithStableCoverage(func() error {
+			inputs, err = observeCompositionBaseInputs(ctx,
+				func(ctx context.Context, dir string) (int64, error) {
+					checkout, err := transport.FetchBase(ctx, cfg.Repo, cfg.BaseRef, cfg.BaseSHA, dir)
+					if err != nil {
+						return 0, err
+					}
+					return checkout.RepositoryID(), nil
+				}, cfg, layout)
+			return err
+		})
+		return inputs, err
+	})
 	if cfg.OperatingMode == domain.ModeUnattended {
-		// The base tree exists only on the remote at startup, so this half of
-		// the image gate waits for the transport. Stable coverage keeps the
-		// fetch's installation token from failing under a concurrent pass.
-		if err := admitProjectImageAtBase(image, cfg.BaseSHA,
-			func() (inputs domain.ProjectImageBaseInputs, err error) {
-				err = janitor.WithStableCoverage(func() error {
-					inputs, err = observeCompositionBaseInputs(ctx,
-						func(ctx context.Context, dir string) (int64, error) {
-							checkout, err := transport.FetchBase(
-								ctx, cfg.Repo, cfg.BaseRef, cfg.BaseSHA, dir)
-							if err != nil {
-								return 0, err
-							}
-							return checkout.RepositoryID(), nil
-						}, cfg, image.InputLayout())
-					return err
-				})
-				return inputs, err
-			}); err != nil {
-			return nil, err
-		}
-		// Seed only after the image is admitted at the base: a start that
-		// refuses the image must not leave a pointer the next start keeps.
 		if err := seedAdmittedImagePointer(ctx, st, image, utcNow(), logger); err != nil {
 			return nil, err
 		}
@@ -1863,6 +1830,13 @@ func composeClaudeDriver(
 	}); err != nil {
 		return nil, fmt.Errorf("restore ward backend conformance: %w", err)
 	}
+	if cfg.OperatingMode == domain.ModeUnattended {
+		if err := startWardOnSelectedImage(
+			ctx, st, backend, cfg, baseInputs, image.ImageRef, conformance, haveConformance, logger,
+		); err != nil {
+			return nil, err
+		}
+	}
 	if cfg.RunConformance {
 		if err := runClaudeConformance(
 			ctx, st, transport, backend, cfg, janitor.WithStableCoverage,
@@ -1923,6 +1897,8 @@ func composeClaudeDriver(
 		CredentialMode:            domain.CredentialSubscriptionContained,
 		EgressProfile:             domain.EgressProviderOnly,
 		EnforceableEgressProfiles: wardEnforceableEgressProfiles(),
+		// An unattended attempt's image is selected per attempt
+		// (selectImage below); this is the attended composition's.
 		ImageRef:                  cfg.AgentImage,
 		PromptPackageDigest:       promptPackage,
 		ReviewConfigurationDigest: reviewConfigurationDigest,
@@ -1935,6 +1911,20 @@ func composeClaudeDriver(
 		// the static values here would be wrong the moment a second task
 		// is submitted.
 		Agents: agents,
+	}
+	follower := newConformanceFollower(backend, func(runCtx context.Context) error {
+		return runClaudeConformance(runCtx, st, transport, backend, cfg, janitor.WithStableCoverage)
+	}, logger.With("subsystem", "writer_image_conformance"))
+	var (
+		selectImage     engine.ImageSelection
+		bindImageUpkeep func(func(context.Context) (*domain.ImageUpkeepHold, error))
+	)
+	if cfg.OperatingMode == domain.ModeUnattended {
+		selector := &claudeImageSelector{
+			store: st, repo: cfg.Repo, repositoryID: cfg.RepositoryID, baseSHA: cfg.BaseSHA,
+			backend: backend, base: baseInputs, follower: follower,
+		}
+		selectImage, bindImageUpkeep = selector.selectImage, selector.bindImageUpkeep
 	}
 	observeRefTip := refTipObserver(reconciler)
 	composition := &claudeComposition{
@@ -2000,15 +1990,56 @@ func composeClaudeDriver(
 		specificationPromptPackage:      specificationPromptPackage,
 		remediationPromptPackage:        remediationPromptPackage,
 		derive:                          claudeAdmissionDerivation(cfg),
-		runConformance: func(runCtx context.Context) error {
-			return runClaudeConformance(
-				runCtx, st, transport, backend, cfg, janitor.WithStableCoverage,
-			)
-		},
-		closer:  sessionGroup{driver, janitor},
+		selectImage:                     selectImage,
+		bindImageUpkeep:                 bindImageUpkeep,
+		runConformance:                  follower.runScheduled,
+		// The follower stops first, so a pass in flight ends before the
+		// janitor its fetches ride on closes.
+		closer:  sessionGroup{follower, driver, janitor},
 		janitor: janitor,
 	}
 	return composition, nil
+}
+
+// startWardOnSelectedImage points ward at the image this start selects
+// before any proof is restored or run (startupWriterImage). A base the start
+// cannot read fails the start, as reading it always has; a base no image
+// serves does not.
+func startWardOnSelectedImage(
+	ctx context.Context, st *store.Store, backend startupWardBackend, cfg claudeDriverConfig,
+	base *baseInputsMemo, pointed domain.ImageRef, conformance domain.BackendConformance, haveConformance bool,
+	logger *slog.Logger,
+) error {
+	proved, err := startupProvedImage(ctx, st, cfg.RepositoryID, backend.ConfigurationDigestFor,
+		conformance, haveConformance)
+	if err != nil {
+		return fmt.Errorf("find the proved writer image: %w", err)
+	}
+	selected, found, err := selectRecordedImage(ctx, st, cfg.Repo, cfg.RepositoryID, cfg.BaseSHA, proved, base)
+	if err != nil {
+		return err
+	}
+	if !found {
+		// The pointer may have moved since the seed was read; ward starts on
+		// whatever it names now.
+		if err := st.Read(ctx, func(tx *store.ReadTx) error {
+			_, image, ok, err := tx.GetAdmittedImagePointer(ctx, cfg.RepositoryID, domain.HarnessClientClaudeCode)
+			if ok {
+				pointed = image.ImageRef
+			}
+			return err
+		}); err != nil {
+			return fmt.Errorf("read admitted image pointer: %w", err)
+		}
+		logger.Warn("no admitted project image serves the configured base; writer attempts hold until one does",
+			"base_sha", cfg.BaseSHA, "pointer_image_ref", pointed)
+	}
+	initial := startupWriterImage(selected, found, pointed, proved, cfg.RunConformance)
+	if err := backend.RepointAgentImage(string(initial)); err != nil {
+		return fmt.Errorf("start ward on writer image %s: %w", initial, err)
+	}
+	logger.Info("ward starts on writer image", "image", initial, "selected", selected.ImageRef, "proved", proved)
+	return nil
 }
 
 type backendConformanceRestorer interface {
@@ -2301,8 +2332,11 @@ func runClaudeConformance(
 	}); err != nil {
 		return fmt.Errorf("fetch exact conformance base: %w", err)
 	}
+	// The suite proves the image ward currently names, which follows writer
+	// selection, not the configured seed.
+	agentImage, _ := backend.ConformanceIdentity()
 	suite, err := ward.NewSuite(backend, ward.SuiteFixture{ //nolint:gosec // G101: fixture carries an inert synthetic marker, never a credential
-		AgentImage:       string(cfg.AgentImage),
+		AgentImage:       agentImage,
 		CredentialTarget: "/var/lib/freeside/conformance-token",
 		CredentialMarker: "FREESIDE_CONF_" + strings.ToUpper(hex.EncodeToString(nonce[:])),
 		RunID:            runID,

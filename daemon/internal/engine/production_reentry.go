@@ -20,6 +20,7 @@ import (
 	"github.com/freeside-ai/freeside/daemon/internal/exec"
 	"github.com/freeside-ai/freeside/daemon/internal/gitrun"
 	"github.com/freeside-ai/freeside/daemon/internal/importer"
+	"github.com/freeside-ai/freeside/daemon/internal/projectimage"
 	"github.com/freeside-ai/freeside/daemon/internal/publish"
 	"github.com/freeside-ai/freeside/daemon/internal/signet"
 	"github.com/freeside-ai/freeside/daemon/internal/store"
@@ -605,10 +606,11 @@ func reentryUnverifiableTreeReason(
 		task.HeadSHA, baseSHA, cause, reentryQuoted(err.Error())), true
 }
 
-// reentryUnservedBaseReason reports the stop for a cycle whose image cannot
-// serve the base it re-entered on. The cycle keeps its producer's image and a
-// base advance is ordinary, so this ends the one cycle on an item a person can
-// read. As a lane error it would stop publication for every run on each pass.
+// reentryUnservedBaseReason reports the stop for a cycle whose base neither
+// its producer's image nor any recorded image serves, with nothing pending in
+// image upkeep (bindBaseServingImage, unservedReentryBase). A base advance is
+// ordinary, so this ends the one cycle on an item a person can read. As a lane
+// error it would stop publication for every run on each pass.
 func reentryUnservedBaseReason(
 	task productionPublicationTask, baseSHA string, err error,
 ) (string, bool) {
@@ -799,20 +801,39 @@ func (w *productionPublicationWorkflow) verifyReentry(
 	if err != nil {
 		return productionReentryCheckpoint{}, err
 	}
-	// The cycle's own base, not the one its producer was admitted at. The
-	// caller turns a refusal into this cycle's stop.
-	if err := requireProjectImageServesBase(
+	// The cycle's own base, not the one its producer was admitted at. When
+	// the admitted image cannot serve it, a recorded image that does
+	// verifies the cycle instead; with none, the caller turns the refusal
+	// into this cycle's stop, or the lane holds it while image upkeep has a
+	// resolution pending.
+	if refused := requireProjectImageServesBase(
 		ctx, binding.image, checkoutDir, baseSHA, w.preparationDigest,
-	); err != nil {
-		return productionReentryCheckpoint{}, err
-	}
-	// The same gate a first cycle takes, at the commit this cycle verifies.
-	binding, refusal, err := w.bindVerificationImage(ctx, task, binding, checkoutDir, baseSHA, workspaceSHA)
-	if err != nil {
-		return productionReentryCheckpoint{}, err
-	}
-	if refusal != nil {
-		return productionReentryCheckpoint{}, &reentryRebuildRefusal{refusal: *refusal}
+	); refused != nil {
+		// A cycle that verifies the head itself shares the rebuild row key
+		// (run, head) with the run's first cycle, so binding another image
+		// there would rebind that cycle's checkpoint. Only a prospective
+		// merge, a commit of this cycle's own, takes the fallback.
+		if !errors.Is(refused, domain.ErrProjectImageIncompatible) || workspaceSHA == task.HeadSHA {
+			return productionReentryCheckpoint{}, refused
+		}
+		served, found, err := w.bindBaseServingImage(ctx, binding, checkoutDir, baseSHA, workspaceSHA)
+		if err != nil {
+			return productionReentryCheckpoint{}, err
+		}
+		if !found {
+			return productionReentryCheckpoint{}, w.unservedReentryBase(ctx, baseSHA, refused)
+		}
+		binding = served
+	} else {
+		// The same gate a first cycle takes, at the commit this cycle verifies.
+		bound, refusal, err := w.bindVerificationImage(ctx, task, binding, checkoutDir, baseSHA, workspaceSHA)
+		if err != nil {
+			return productionReentryCheckpoint{}, err
+		}
+		if refusal != nil {
+			return productionReentryCheckpoint{}, &reentryRebuildRefusal{refusal: *refusal}
+		}
+		binding = bound
 	}
 	room, recipe, err := w.verificationRoomAndRecipe(ctx, task, binding)
 	if err != nil {
@@ -871,6 +892,100 @@ func (w *productionPublicationWorkflow) verifyReentry(
 		return productionReentryCheckpoint{}, err
 	}
 	return checkpoint, nil
+}
+
+// bindBaseServingImage binds a cycle whose admitted image cannot serve its
+// base to the first recorded image that can (plan §5.7, Project-image
+// upkeep): one that keeps what the admitted image binds and serves both the
+// base and the commit the cycle verifies. Serving both means the candidate
+// changed no dependency manifest the base holds, so the image verifies no
+// change the run's rebuild policy would have to judge; a candidate that did
+// change one is left unserved.
+//
+// The choice is recorded as the run's rebuild binding for verifiedSHA, the
+// row every later reader of this cycle's checkpoint resolves
+// (resolveVerificationImage). The row is write-once, so first-recorded order
+// keeps a retry choosing the same image, and a binding a previous pass
+// recorded is kept only while it still serves. found is false when nothing
+// serves.
+func (w *productionPublicationWorkflow) bindBaseServingImage(
+	ctx context.Context, binding productionBinding, checkoutDir, baseSHA, verifiedSHA string,
+) (productionBinding, bool, error) {
+	layout := binding.image.InputLayout()
+	observe := func(commit string) (domain.ProjectImageBaseInputs, bool, error) {
+		inputs, err := projectimage.ObserveBaseInputs(ctx, "git", checkoutDir, commit, layout)
+		if errors.Is(err, verify.ErrCommitFileUnreadable) {
+			// A manifest no image can have baked: nothing serves the commit.
+			return domain.ProjectImageBaseInputs{}, false, nil
+		}
+		if err != nil {
+			return domain.ProjectImageBaseInputs{}, false, fmt.Errorf("observe project-image inputs at %s: %w", commit, err)
+		}
+		return inputs, true, nil
+	}
+	base, ok, err := observe(baseSHA)
+	if err != nil || !ok {
+		return binding, false, err
+	}
+	head, ok, err := observe(verifiedSHA)
+	if err != nil || !ok {
+		return binding, false, err
+	}
+	serves := func(image domain.ProjectImage) bool {
+		return rebuiltImageServes(image, binding.image, base, w.preparationDigest) == nil &&
+			rebuiltImageServes(image, binding.image, head, w.preparationDigest) == nil
+	}
+	if binding.rebuilt != nil {
+		return binding, serves(*binding.rebuilt), nil
+	}
+	var images []domain.ProjectImage
+	if err := w.store.Read(ctx, func(tx *store.ReadTx) error {
+		var err error
+		images, err = tx.ListProjectImages(ctx, binding.image.RepositoryID)
+		return err
+	}); err != nil {
+		return binding, false, err
+	}
+	for _, image := range images {
+		if !serves(image) {
+			continue
+		}
+		if err := w.recordRebuildRow(ctx, productionRebuildImageKind, binding.run.ID, verifiedSHA,
+			productionRebuildRecord{
+				Version: productionRebuildVersion, RunID: binding.run.ID, VerifiedSHA: verifiedSHA,
+				AdmittedImage: binding.image.ID, ProjectImage: image.ID,
+			}); err != nil {
+			return binding, false, err
+		}
+		binding.rebuilt = &image
+		return binding, true, nil
+	}
+	return binding, false, nil
+}
+
+// unservedReentryBase is a re-entry's answer when no recorded image serves
+// its base. While image upkeep has a resolution pending, which may record an
+// image that does, it is a retryable ImageUpkeepPendingError the lane holds
+// the task under. Otherwise it is the refusal itself, which stops the cycle
+// as it always has. The pending error does not wrap the refusal, so the
+// caller's stop never matches it.
+func (w *productionPublicationWorkflow) unservedReentryBase(
+	ctx context.Context, baseSHA string, refusal error,
+) error {
+	if w.imageUpkeepPending == nil {
+		return refusal
+	}
+	hold, err := w.imageUpkeepPending(ctx)
+	if err != nil {
+		return productionPublicationRetryableError(
+			fmt.Errorf("read image upkeep's pending resolution for base %s: %w", baseSHA, err))
+	}
+	if hold == nil {
+		return refusal
+	}
+	return productionPublicationRetryableError(fmt.Errorf(
+		"no recorded project image serves re-entry base %s (%s): %w",
+		baseSHA, refusal.Error(), &ImageUpkeepPendingError{Hold: *hold}))
 }
 
 func reentryOutcome(outcome verify.Outcome) domain.VerificationOutcome {

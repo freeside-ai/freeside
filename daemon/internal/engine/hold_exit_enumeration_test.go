@@ -36,6 +36,7 @@ var holdRecorders = map[string]bool{
 	"recordRunHold":                    true,
 	"holdBlockedTask":                  true,
 	"recordPublicationEnvironmentHold": true,
+	"recordRetryableHold":              true,
 }
 
 // holdlessPauseExits names the functions that use a pause classifier yet

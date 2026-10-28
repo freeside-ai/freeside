@@ -146,7 +146,9 @@ func waivedPostureItem(
 
 // admitter holds the configured admission inputs.
 type admitter struct {
-	backend                    exec.RunnerBackend
+	backend exec.RunnerBackend
+	// backendConfigurationDigest is read once, for a backend whose proved
+	// image is fixed; a conformanceIdentityBackend's is read per attempt.
 	backendConfigurationDigest domain.Digest
 	floor                      []exec.Capability
 	environment                AdmissionEnvironment
@@ -280,6 +282,37 @@ func WithAdmissionDerivation(derive AdmissionDerivation) Option {
 	}
 }
 
+// ImageSelection selects the writer image one attempt runs in. It returns
+// the image, or an error that holds the attempt: an ImageUpkeepPendingError
+// while upkeep may still make an image serve the base, or
+// ErrProjectImageUnserved when nothing pending would.
+type ImageSelection func(ctx context.Context, invocationID domain.InvocationID) (domain.ImageRef, error)
+
+// WithAdmissionImageSelection makes every admission name the image
+// selection returns instead of the environment's static ImageRef.
+func WithAdmissionImageSelection(selectImage ImageSelection) Option {
+	return func(e *Engine) error {
+		if selectImage == nil {
+			return errors.New("with admission image selection: nil selection")
+		}
+		e.selectImage = selectImage
+		return nil
+	}
+}
+
+// ErrImageNotProved refuses an unattended attempt whose image is not the one
+// the runner backend's conformance identity proves. It is joined with
+// domain.ErrAdmissionConfigurationMismatch, so it holds under
+// backend_not_conformant until the backend proves the image.
+var ErrImageNotProved = errors.New("selected image is not the image the runner backend proves")
+
+// conformanceIdentityBackend is a runner backend whose proved image can
+// change while the daemon runs. Its identity is read per attempt so an
+// admission records the digest of the image it names, never another's.
+type conformanceIdentityBackend interface {
+	ConformanceIdentity() (image string, digest domain.Digest)
+}
+
 // ErrEgressProfileNotEnforceable refuses an attempt whose requested egress
 // profile is outside the composition's EnforceableEgressProfiles.
 var ErrEgressProfileNotEnforceable = errors.New("egress profile is not enforceable by this composition")
@@ -345,6 +378,34 @@ func (e *Engine) admitAttempt(
 	if e.admission == nil {
 		return domain.ExecutionAdmission{}, false, nil
 	}
+	env := e.admission.environment
+	// The image is decided before the capability gate, so an attempt waiting
+	// on upkeep, or on a proof of its image, holds under that cause rather
+	// than under the capabilities a repoint cleared.
+	if e.selectImage != nil {
+		image, err := e.selectImage(ctx, invocationID)
+		if err != nil {
+			return domain.ExecutionAdmission{}, false, fmt.Errorf(
+				"admit invocation %q: select image: %w", invocationID, err)
+		}
+		env.ImageRef = image
+	}
+	backendConfigurationDigest := e.admission.backendConfigurationDigest
+	if identity, ok := e.admission.backend.(conformanceIdentityBackend); ok &&
+		env.OperatingMode == domain.ModeUnattended {
+		image, digest := identity.ConformanceIdentity()
+		if image != string(env.ImageRef) {
+			return domain.ExecutionAdmission{}, false, fmt.Errorf(
+				"admit invocation %q: image %s, backend proves %q: %w", invocationID, env.ImageRef, image,
+				errors.Join(ErrImageNotProved, domain.ErrAdmissionConfigurationMismatch))
+		}
+		if !contentaddr.Valid(string(digest)) || digest == domain.UnboundBackendConfigurationDigest {
+			return domain.ExecutionAdmission{}, false, fmt.Errorf(
+				"admit invocation %q: backend configuration digest %q: %w",
+				invocationID, digest, domain.ErrConformanceConfigurationUnbound)
+		}
+		backendConfigurationDigest = digest
+	}
 	snapshot, err := exec.CheckCapabilities(e.admission.backend, e.admission.floor)
 	if err != nil {
 		return domain.ExecutionAdmission{}, false, fmt.Errorf("admit invocation %q: %w", invocationID, err)
@@ -353,7 +414,6 @@ func (e *Engine) admitAttempt(
 	if err != nil {
 		return domain.ExecutionAdmission{}, false, fmt.Errorf("admit invocation %q: %w", invocationID, err)
 	}
-	env := e.admission.environment
 	if e.derive != nil {
 		workspace, base, err := e.derive(ctx, invocationID)
 		if err != nil {
@@ -520,7 +580,7 @@ func (e *Engine) admitAttempt(
 		AttemptID:                  attemptIDFor(invocationID),
 		Backend:                    snapshot.Backend,
 		Capabilities:               snapshot.Declared.Snapshot(),
-		BackendConfigurationDigest: e.admission.backendConfigurationDigest,
+		BackendConfigurationDigest: backendConfigurationDigest,
 		OperatingMode:              env.OperatingMode,
 		CredentialMode:             env.CredentialMode,
 		EgressProfile:              env.EgressProfile,

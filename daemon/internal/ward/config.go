@@ -135,11 +135,12 @@ const DefaultStallInterval = 5 * time.Minute
 // (check 6), while everything the gate enforces about the exporter (checks 4,
 // 5, 7) comes from here.
 type Config struct {
-	// AgentImage is the digest-pinned writer image whose realized topology
-	// Suite.Full proves and whose liveness PreJob checks. It is optional for
-	// one-shot library users that never restore or run production
+	// AgentImage is the backend's initial digest-pinned writer image: the
+	// one whose realized topology Suite.Full proves and whose liveness
+	// PreJob checks until RepointAgentImage names another. It is optional
+	// for one-shot library users that never restore or run production
 	// conformance, but production composition must set it. When set,
-	// NewSuite refuses a fixture for any other image.
+	// NewSuite refuses a fixture for any image but the current one.
 	AgentImage string
 	// ProviderEndpoints is the exact CONNECT authority allowlist for
 	// provider_only writer egress, and the part of the provider_registry

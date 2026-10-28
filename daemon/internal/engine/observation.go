@@ -3,6 +3,7 @@ package engine
 import (
 	"context"
 	"errors"
+	"fmt"
 	"sync"
 	"time"
 
@@ -115,6 +116,24 @@ func observedStatus(s exec.Status) (domain.ObservedInvocationStatus, bool) {
 	return "", false
 }
 
+// ErrImageUpkeepPending holds a writer attempt whose base no admitted image
+// serves yet while image upkeep has a resolution pending. Errors carrying it
+// are ImageUpkeepPendingError, which names what the hold waits on.
+var ErrImageUpkeepPending = errors.New("image upkeep is pending for the run's base")
+
+// ImageUpkeepPendingError is an ErrImageUpkeepPending hold with the typed
+// fact the run's image_upkeep_pending hold records.
+type ImageUpkeepPendingError struct {
+	Hold domain.ImageUpkeepHold
+}
+
+func (e *ImageUpkeepPendingError) Error() string {
+	return fmt.Sprintf("%s: waiting on %s", ErrImageUpkeepPending, e.Hold.Pending)
+}
+
+// Is matches ErrImageUpkeepPending.
+func (e *ImageUpkeepPendingError) Is(target error) bool { return target == ErrImageUpkeepPending }
+
 // dispatchHoldReason classifies a dispatch-path hold or refusal error onto
 // the closed reason vocabulary. Only the code crosses into the observation;
 // an error that classifies onto no code records no hold and keeps its
@@ -131,6 +150,8 @@ func dispatchHoldReason(err error) (domain.RunHoldReason, bool) {
 		return domain.HoldInputUnavailable, true
 	case errors.Is(err, domain.ErrIdentityParallelismExhausted):
 		return domain.HoldIdentityParallelism, true
+	case errors.Is(err, ErrImageUpkeepPending):
+		return domain.HoldImageUpkeepPending, true
 	case backendConformanceRefusal(err):
 		return domain.HoldBackendNotConformant, true
 	case errors.Is(err, domain.ErrBackupHealthUnavailable),
@@ -145,6 +166,7 @@ func dispatchHoldReason(err error) (domain.RunHoldReason, bool) {
 	case errors.Is(err, publish.ErrJanitorInactive):
 		return domain.HoldProviderAuthorityUnavailable, true
 	case errors.Is(err, ErrAgentNotAdmissible),
+		errors.Is(err, ErrProjectImageUnserved),
 		errors.Is(err, domain.ErrGenerationIntegrityMarked),
 		egressAdmissionRefusal(err),
 		errors.Is(err, exec.ErrCapabilityRefused),
@@ -175,6 +197,11 @@ func admissionRefusalDetail(err error) *domain.AdmissionRefusal {
 	if errors.As(err, &agent) {
 		refusal := agent.Refusal
 		return &refusal
+	}
+	// An unserved base has no check in the vocabulary, and naming the agent
+	// check would blame an agent that was never asked.
+	if errors.Is(err, ErrProjectImageUnserved) {
+		return nil
 	}
 	var check domain.AdmissionCheck
 	switch {
@@ -209,6 +236,25 @@ func admissionRefusalDetail(err error) *domain.AdmissionRefusal {
 		check = domain.AdmissionCheckAgentAdmission
 	}
 	return &domain.AdmissionRefusal{Check: check}
+}
+
+// holdDetail is the typed fact beside a hold reason: an admission refusal
+// beside admission_policy_refused, what image upkeep waits on beside
+// image_upkeep_pending, and neither otherwise.
+type holdDetail struct {
+	refusal     *domain.AdmissionRefusal
+	imageUpkeep *domain.ImageUpkeepHold
+}
+
+// holdDetailFor derives the detail an error's hold records.
+func holdDetailFor(err error) holdDetail {
+	detail := holdDetail{refusal: admissionRefusalDetail(err)}
+	var pending *ImageUpkeepPendingError
+	if errors.As(err, &pending) {
+		hold := pending.Hold
+		detail.imageUpkeep = &hold
+	}
+	return detail
 }
 
 // productionBlockReason maps a definitive publication block reason onto its
@@ -260,10 +306,11 @@ func (e *Engine) observeInvocation(
 }
 
 // observeRunHold records one paced hold observation for a run. detail is
-// nil except beside admission_policy_refused (admissionRefusalDetail).
+// empty except beside admission_policy_refused and image_upkeep_pending
+// (holdDetailFor).
 func (e *Engine) observeRunHold(
 	ctx context.Context, runID domain.RunID,
-	invocationID domain.InvocationID, reason domain.RunHoldReason, detail *domain.AdmissionRefusal,
+	invocationID domain.InvocationID, reason domain.RunHoldReason, detail holdDetail,
 ) error {
 	now := time.Now().UTC()
 	key := "hold:" + string(runID)
@@ -286,8 +333,11 @@ func (e *Engine) observeRunHold(
 	// signal this line adds.
 	if changed {
 		attrs := []any{"run", string(runID), "invocation", string(invocationID), "reason", string(reason)}
-		if detail != nil {
-			attrs = append(attrs, "check", string(detail.Check))
+		if detail.refusal != nil {
+			attrs = append(attrs, "check", string(detail.refusal.Check))
+		}
+		if detail.imageUpkeep != nil {
+			attrs = append(attrs, "pending", string(detail.imageUpkeep.Pending))
 		}
 		e.logger.Info("run hold recorded", attrs...)
 	}
@@ -296,17 +346,28 @@ func (e *Engine) observeRunHold(
 
 // holdPaceState is the pacer's state for a hold: a changed detail is a
 // changed state, so it is written at once rather than at the next refresh.
-func holdPaceState(reason domain.RunHoldReason, detail *domain.AdmissionRefusal) string {
+func holdPaceState(reason domain.RunHoldReason, detail holdDetail) string {
 	state := string(reason)
-	if detail == nil {
-		return state
+	if refusal := detail.refusal; refusal != nil {
+		state += "+" + string(refusal.Check)
+		if refusal.Agent != nil {
+			state += "+" + *refusal.Agent
+		}
+		if refusal.LaunchDigest != nil {
+			state += "+" + string(*refusal.LaunchDigest)
+		}
 	}
-	state += "+" + string(detail.Check)
-	if detail.Agent != nil {
-		state += "+" + *detail.Agent
-	}
-	if detail.LaunchDigest != nil {
-		state += "+" + string(*detail.LaunchDigest)
+	if upkeep := detail.imageUpkeep; upkeep != nil {
+		state += "+" + string(upkeep.Pending)
+		if upkeep.RefusalRecordID != nil {
+			state += "+" + string(*upkeep.RefusalRecordID)
+		}
+		if upkeep.ProposalItemID != nil {
+			state += "+" + string(*upkeep.ProposalItemID)
+		}
+		if upkeep.MaintenanceTaskID != nil {
+			state += "+" + string(*upkeep.MaintenanceTaskID)
+		}
 	}
 	return state
 }
@@ -316,10 +377,10 @@ func holdPaceState(reason domain.RunHoldReason, detail *domain.AdmissionRefusal)
 func recordRunHold(
 	ctx context.Context, tx *store.WriteTx, runID domain.RunID,
 	invocationID domain.InvocationID, reason domain.RunHoldReason,
-	detail *domain.AdmissionRefusal, now time.Time,
+	detail holdDetail, now time.Time,
 ) error {
 	hold := domain.RunHoldObservation{
-		RunID: runID, Reason: reason, Detail: detail,
+		RunID: runID, Reason: reason, Detail: detail.refusal, ImageUpkeep: detail.imageUpkeep,
 		FirstObservedAt: now, LastObservedAt: now,
 	}
 	if invocationID != "" {
@@ -359,7 +420,7 @@ func (e *Engine) observeRefusalHold(
 	if !ok {
 		return nil
 	}
-	return e.observeRunHold(ctx, runID, invocationID, reason, admissionRefusalDetail(err))
+	return e.observeRunHold(ctx, runID, invocationID, reason, holdDetailFor(err))
 }
 
 // refusalRecoveredPaceState paces clearRefusalHold on the run's hold key
