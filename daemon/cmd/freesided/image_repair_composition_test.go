@@ -27,7 +27,9 @@ func TestImageRepairProjectIsTheFirstConfiguredProject(t *testing.T) {
 }
 
 // The upkeep hold names the maintenance task while it exists and is not
-// cancelled.
+// cancelled, and a later repair refusal measured from the same image names
+// the same task and the refusal it was opened for. A refusal of another
+// class from that image names none: the repair task cannot resolve it.
 func TestPendingImageRepairTaskFollowsTheTask(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
@@ -37,18 +39,24 @@ func TestPendingImageRepairTaskFollowsTheTask(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	refusal, err := domain.NewImageUpkeepRefusal(domain.ImageUpkeepRefusalInput{
-		RepositoryID: 7, Repository: "owner/repo", Harness: domain.HarnessClientClaudeCode,
-		TipSHA: strings.Repeat("a", 40), MeasuredFromImageID: domain.Digest(contentaddr.Sum([]byte("image"))),
-		Class: domain.ImageUpkeepRefusalRepair,
-		Findings: []domain.ImageUpkeepClauseFinding{{
-			Clause: domain.RebuildRefusalLockfileInconsistent, Detail: "lockfile root disagrees",
-		}},
-		RecordedAt: time.Date(2026, 10, 27, 12, 0, 0, 0, time.UTC),
-	})
-	if err != nil {
-		t.Fatal(err)
+	refusalAt := func(tip string, class domain.ImageUpkeepRefusalClass) domain.ImageUpkeepRefusal {
+		refusal, err := domain.NewImageUpkeepRefusal(domain.ImageUpkeepRefusalInput{
+			RepositoryID: 7, Repository: "owner/repo", Harness: domain.HarnessClientClaudeCode,
+			TipSHA: tip, MeasuredFromImageID: domain.Digest(contentaddr.Sum([]byte("image"))),
+			Class: class,
+			Findings: []domain.ImageUpkeepClauseFinding{{
+				Clause: domain.RebuildRefusalLockfileInconsistent, Detail: "lockfile root disagrees",
+			}},
+			RecordedAt: time.Date(2026, 10, 27, 12, 0, 0, 0, time.UTC),
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		return refusal
 	}
+	refusal := refusalAt(strings.Repeat("a", 40), domain.ImageUpkeepRefusalRepair)
+	later := refusalAt(strings.Repeat("b", 40), domain.ImageUpkeepRefusalRepair)
+	policy := refusalAt(strings.Repeat("c", 40), domain.ImageUpkeepRefusalPolicy)
 	if err := st.Write(ctx, func(tx *store.WriteTx) error {
 		if err := tx.PutDevice(ctx, domain.Device{
 			ID: "device-1", DisplayName: "Mac", Status: domain.DeviceActive,
@@ -61,8 +69,12 @@ func TestPendingImageRepairTaskFollowsTheTask(t *testing.T) {
 		t.Fatal(err)
 	}
 	if err := st.WriteInternal(ctx, func(tx *store.InternalTx) error {
-		_, err := tx.RecordImageUpkeepRefusal(ctx, refusal)
-		return err
+		for _, r := range []domain.ImageUpkeepRefusal{refusal, later, policy} {
+			if _, err := tx.RecordImageUpkeepRefusal(ctx, r); err != nil {
+				return err
+			}
+		}
+		return nil
 	}); err != nil {
 		t.Fatal(err)
 	}
@@ -81,7 +93,7 @@ func TestPendingImageRepairTaskFollowsTheTask(t *testing.T) {
 	service := signet.NewService(st, signet.WithBlobStore(blobs),
 		signet.WithTaskSubmitter(engine.NewTaskSubmitter(blobs, manualInitiatorLookup(projects))))
 
-	if _, pending, err := pendingImageRepairTask(ctx, st, refusal.ID); err != nil || pending {
+	if _, _, pending, err := pendingImageRepairTask(ctx, st, refusal); err != nil || pending {
 		t.Fatalf("before any submit: pending = %v err=%v, want none", pending, err)
 	}
 	project, _ := imageRepairProject(projects)
@@ -89,9 +101,15 @@ func TestPendingImageRepairTaskFollowsTheTask(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if task, pending, err := pendingImageRepairTask(ctx, st, refusal.ID); err != nil || !pending ||
-		task != submission.TaskID {
-		t.Fatalf("open task: pending = %q %v err=%v, want %s", task, pending, err, submission.TaskID)
+	for name, settled := range map[string]domain.ImageUpkeepRefusal{"its refusal": refusal, "a later refusal": later} {
+		if answered, task, pending, err := pendingImageRepairTask(ctx, st, settled); err != nil || !pending ||
+			task != submission.TaskID || answered != refusal.ID {
+			t.Fatalf("open task for %s: pending = %s %q %v err=%v, want %s for %s",
+				name, answered, task, pending, err, submission.TaskID, refusal.ID)
+		}
+	}
+	if _, _, pending, err := pendingImageRepairTask(ctx, st, policy); err != nil || pending {
+		t.Fatalf("policy refusal from the same image: pending = %v err=%v, want none", pending, err)
 	}
 	state, err := st.ServerState(ctx)
 	if err != nil {
@@ -106,7 +124,7 @@ func TestPendingImageRepairTaskFollowsTheTask(t *testing.T) {
 	}); err != nil {
 		t.Fatal(err)
 	}
-	if _, pending, err := pendingImageRepairTask(ctx, st, refusal.ID); err != nil || pending {
+	if _, _, pending, err := pendingImageRepairTask(ctx, st, later); err != nil || pending {
 		t.Fatalf("cancelled task: pending = %v err=%v, want none", pending, err)
 	}
 }

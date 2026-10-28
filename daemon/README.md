@@ -2670,8 +2670,9 @@ succeeds.
 
 A base no recorded image serves no longer fails the start. Its attempts
 hold under `image_upkeep_pending` while image upkeep has a resolution
-pending (`rebuild` until upkeep settles the current tip, or the adoption
-proposal or maintenance task that answers its refusal), and under
+pending (`rebuild` until upkeep settles the current tip, the adoption
+proposal that answers its refusal, or the open maintenance task for the
+image its refusal was measured from), and under
 `admission_policy_refused`, with no check detail, once it has none; they
 start once an image serves the base. A readiness re-entry onto a newer
 base its run's image cannot serve verifies under the first recorded image

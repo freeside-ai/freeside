@@ -2,7 +2,6 @@ package main
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"log/slog"
 	"maps"
@@ -125,8 +124,10 @@ func composeImageUpkeep(
 			_, err := attention.SubmitImageRepairTask(ctx, project, refusal.ID)
 			return err
 		}
-		upkeep.MaintenancePending = func(ctx context.Context, refusal domain.ImageUpkeepRefusal) (domain.TaskID, bool, error) {
-			return pendingImageRepairTask(ctx, st, refusal.ID)
+		upkeep.MaintenancePending = func(
+			ctx context.Context, refusal domain.ImageUpkeepRefusal,
+		) (domain.Digest, domain.TaskID, bool, error) {
+			return pendingImageRepairTask(ctx, st, refusal)
 		}
 	}
 	upkeep.AdoptionPending = upkeep.PendingAdoption
@@ -145,33 +146,23 @@ func imageRepairProject(projects map[domain.ProjectID]engine.ManualInitiator) (d
 	return slices.Min(slices.Collect(maps.Keys(projects))), true
 }
 
-// pendingImageRepairTask names the maintenance task submitted for a refusal
-// while that task exists and has not been cancelled, so other writer
-// attempts no image serves hold on it. A cancelled task resolves nothing,
-// so they go back to the ordinary hold.
+// pendingImageRepairTask names the open maintenance task for the image a
+// refusal was measured from, and the refusal that task was opened for, so
+// other writer attempts no image serves hold on it. A cancelled, completed,
+// or abandoned task resolves nothing, so they go back to the ordinary hold.
 func pendingImageRepairTask(
-	ctx context.Context, st *store.Store, refusalID domain.Digest,
-) (domain.TaskID, bool, error) {
+	ctx context.Context, st *store.Store, refusal domain.ImageUpkeepRefusal,
+) (domain.Digest, domain.TaskID, bool, error) {
 	var (
-		taskID  domain.TaskID
+		open    signet.ImageRepairTask
 		pending bool
 	)
 	err := st.Read(ctx, func(tx *store.ReadTx) error {
-		submission, err := tx.GetTaskSubmission(ctx, domain.ImageUpkeepSubmissionIdentity(refusalID))
-		if errors.Is(err, store.ErrNotFound) {
-			return nil
-		}
-		if err != nil {
-			return err
-		}
-		task, err := tx.GetTask(ctx, submission.TaskID)
-		if err != nil {
-			return err
-		}
-		taskID, pending = task.ID, task.Cancellation == nil
-		return nil
+		var err error
+		open, pending, err = signet.OpenImageRepairTask(ctx, tx, refusal)
+		return err
 	})
-	return taskID, pending, err
+	return open.RefusalID, open.TaskID, pending, err
 }
 
 // imageUpkeepProjects are the configured projects an adoption card may be
