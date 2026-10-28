@@ -189,8 +189,8 @@ func TestOpenImagePolicyAdoptionItemOpensTheCard(t *testing.T) {
 }
 
 // TestEffectProposalFactsServeTheAdoptionArm proves the facts read serves
-// the card's exact digest and hosts on the adoption arm, with every other
-// arm null.
+// the card's project repository, exact digest, and hosts on the adoption arm,
+// with every other arm null.
 func TestEffectProposalFactsServeTheAdoptionArm(t *testing.T) {
 	f := newAdoptionFixture(t)
 	facts, err := f.service.GetEffectProposalFacts(context.Background(), f.item.ID)
@@ -206,6 +206,27 @@ func TestEffectProposalFactsServeTheAdoptionArm(t *testing.T) {
 		*adoption.RecipeDigest != adoptionRecipe || adoption.RegistryAuthorities == nil ||
 		len(adoption.RegistryAuthorities) != 0 {
 		t.Fatalf("adoption facts = %#v", adoption)
+	}
+	wantRepository := domain.FollowUpFilingRepository{Repo: "owner/repo", RepositoryID: adoptionRepositoryID}
+	if adoption.Repository != wantRepository {
+		t.Fatalf("adoption repository = %+v, want the project's %+v", adoption.Repository, wantRepository)
+	}
+	renamed, err := domain.NewProject(adoptionProject, "owner/renamed", adoptionRepositoryID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := f.store.WriteInternal(context.Background(), func(tx *store.InternalTx) error {
+		return tx.RegisterProject(context.Background(), renamed)
+	}); err != nil {
+		t.Fatal(err)
+	}
+	facts, err = f.service.GetEffectProposalFacts(context.Background(), f.item.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	wantRepository.Repo = renamed.Repo
+	if facts.ImagePolicyAdoption == nil || facts.ImagePolicyAdoption.Repository != wantRepository {
+		t.Fatalf("adoption facts after a rename = %+v, want repository %+v", facts.ImagePolicyAdoption, wantRepository)
 	}
 }
 

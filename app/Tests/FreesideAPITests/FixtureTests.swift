@@ -318,6 +318,8 @@ import Testing
         #expect(facts.supersedes == nil)
         #expect(adoption.item.artifact_digests == [facts.proposal_digest])
         let adopted = try #require(facts.image_policy_adoption?.value1)
+        #expect(adopted.repository.repo == "owner/repo")
+        #expect(adopted.repository.repository_id == 84_958_515)
         #expect(adopted.recipe_digest != nil)
         #expect(adopted.registry_authorities == adopted.registry_authorities.sorted())
     }

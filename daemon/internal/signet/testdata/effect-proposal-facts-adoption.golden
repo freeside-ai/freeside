@@ -8,6 +8,10 @@
   "source_issue_closure": null,
   "follow_up_filing": null,
   "image_policy_adoption": {
+    "repository": {
+      "repo": "owner/repo",
+      "repository_id": 123
+    },
     "refusal_record_id": "sha256:eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
     "recipe_digest": "sha256:dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
     "registry_authorities": [

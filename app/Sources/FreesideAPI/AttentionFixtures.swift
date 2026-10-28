@@ -816,6 +816,7 @@ public enum AttentionFixtures {
                 follow_up_filing: nil,
                 image_policy_adoption: .init(
                     value1: .init(
+                        repository: .init(repo: "owner/repo", repository_id: 84_958_515),
                         refusal_record_id: "sha256:" + String(repeating: "e", count: 64),
                         recipe_digest: .init(value1: "sha256:" + String(repeating: "d", count: 64)),
                         registry_authorities: ["proxy.golang.org"])))

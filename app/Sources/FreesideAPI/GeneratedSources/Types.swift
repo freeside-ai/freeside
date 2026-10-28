@@ -1427,7 +1427,7 @@ public enum Components {
             ///
             /// - Remark: Generated from `#/components/schemas/EffectProposalFactsSnapshot/follow_up_filing`.
             public var follow_up_filing: Components.Schemas.EffectProposalFactsSnapshot.follow_up_filingPayload?
-            /// The adoption facts for an image_policy_adoption effect; null for any other effect kind. The daemon serves no adoption card yet (#2335 raises it), so this is null today.
+            /// The adoption facts for an image_policy_adoption effect; null for any other effect kind.
             ///
             ///
             /// - Remark: Generated from `#/components/schemas/EffectProposalFactsSnapshot/image_policy_adoption`.
@@ -1448,7 +1448,7 @@ public enum Components {
                     try self.value1.encode(to: encoder)
                 }
             }
-            /// The adoption facts for an image_policy_adoption effect; null for any other effect kind. The daemon serves no adoption card yet (#2335 raises it), so this is null today.
+            /// The adoption facts for an image_policy_adoption effect; null for any other effect kind.
             ///
             ///
             /// - Remark: Generated from `#/components/schemas/EffectProposalFactsSnapshot/image_policy_adoption`.
@@ -1464,7 +1464,7 @@ public enum Components {
             ///   - supersedes: The exact authenticated prior facts for a revised card; null for the initially admitted proposal, and always null for a follow_up_filing effect, which admits no revision.
             ///   - source_issue_closure: The closure facts for a source_issue_closure effect; null for any other effect kind.
             ///   - follow_up_filing: The filing facts for a follow_up_filing effect; null for any other effect kind.
-            ///   - image_policy_adoption: The adoption facts for an image_policy_adoption effect; null for any other effect kind. The daemon serves no adoption card yet (#2335 raises it), so this is null today.
+            ///   - image_policy_adoption: The adoption facts for an image_policy_adoption effect; null for any other effect kind.
             public init(
                 as_of_revision: Components.Schemas.AsOfRevision,
                 entity_version: Components.Schemas.EntityVersion,
@@ -1548,11 +1548,13 @@ public enum Components {
                 ])
             }
         }
-        /// The policy change an adoption card proposes to answer one policy-class project-image upkeep refusal (plan §5.7, Project-image upkeep): the refusal record it answers and the recipe digest to approve, the registry authorities to add, or both. Approving the card opens a project-policy proposal; merging that proposal is the adoption. Mirrors domain.ImagePolicyAdoptionParameters.
+        /// The policy change an adoption card proposes to answer one policy-class project-image upkeep refusal (plan §5.7, Project-image upkeep): the refusal record it answers and the recipe digest to approve, the registry authorities to add, or both, and the repository the adoption widens, served from the card's project's current record. Approving the card records the adoption in the daemon's own image policy, for the card's repository only. Mirrors domain.ImagePolicyAdoptionParameters plus the repository.
         ///
         ///
         /// - Remark: Generated from `#/components/schemas/ImagePolicyAdoptionFacts`.
         public struct ImagePolicyAdoptionFacts: Codable, Hashable, Sendable {
+            /// - Remark: Generated from `#/components/schemas/ImagePolicyAdoptionFacts/repository`.
+            public var repository: Components.Schemas.ProjectRepository
             /// - Remark: Generated from `#/components/schemas/ImagePolicyAdoptionFacts/refusal_record_id`.
             public var refusal_record_id: Components.Schemas.Digest
             /// The recipe digest to approve; null when the recipe did not change.
@@ -1587,25 +1589,33 @@ public enum Components {
             /// Creates a new `ImagePolicyAdoptionFacts`.
             ///
             /// - Parameters:
+            ///   - repository:
             ///   - refusal_record_id:
             ///   - recipe_digest: The recipe digest to approve; null when the recipe did not change.
             ///   - registry_authorities: Registry host names to add to the project's registry set, strictly ascending; empty when only the recipe changed.
             public init(
+                repository: Components.Schemas.ProjectRepository,
                 refusal_record_id: Components.Schemas.Digest,
                 recipe_digest: Components.Schemas.ImagePolicyAdoptionFacts.recipe_digestPayload? = nil,
                 registry_authorities: [Swift.String]
             ) {
+                self.repository = repository
                 self.refusal_record_id = refusal_record_id
                 self.recipe_digest = recipe_digest
                 self.registry_authorities = registry_authorities
             }
             public enum CodingKeys: String, CodingKey {
+                case repository
                 case refusal_record_id
                 case recipe_digest
                 case registry_authorities
             }
             public init(from decoder: any Swift.Decoder) throws {
                 let container = try decoder.container(keyedBy: CodingKeys.self)
+                self.repository = try container.decode(
+                    Components.Schemas.ProjectRepository.self,
+                    forKey: .repository
+                )
                 self.refusal_record_id = try container.decode(
                     Components.Schemas.Digest.self,
                     forKey: .refusal_record_id
@@ -1619,6 +1629,7 @@ public enum Components {
                     forKey: .registry_authorities
                 )
                 try decoder.ensureNoAdditionalProperties(knownKeys: [
+                    "repository",
                     "refusal_record_id",
                     "recipe_digest",
                     "registry_authorities"
@@ -1839,7 +1850,7 @@ public enum Components {
         /// - Remark: Generated from `#/components/schemas/FollowUpFilingFacts`.
         public struct FollowUpFilingFacts: Codable, Hashable, Sendable {
             /// - Remark: Generated from `#/components/schemas/FollowUpFilingFacts/repository`.
-            public var repository: Components.Schemas.FollowUpFilingRepository
+            public var repository: Components.Schemas.ProjectRepository
             /// The labels the filed issue carries, sorted and duplicate-free; empty when policy names none.
             ///
             ///
@@ -1866,7 +1877,7 @@ public enum Components {
             ///   - body:
             ///   - source:
             public init(
-                repository: Components.Schemas.FollowUpFilingRepository,
+                repository: Components.Schemas.ProjectRepository,
                 labels: [Swift.String],
                 milestone: Swift.String? = nil,
                 title: Components.Schemas.ScreenedIssueText,
@@ -1891,7 +1902,7 @@ public enum Components {
             public init(from decoder: any Swift.Decoder) throws {
                 let container = try decoder.container(keyedBy: CodingKeys.self)
                 self.repository = try container.decode(
-                    Components.Schemas.FollowUpFilingRepository.self,
+                    Components.Schemas.ProjectRepository.self,
                     forKey: .repository
                 )
                 self.labels = try container.decode(
@@ -1924,16 +1935,16 @@ public enum Components {
                 ])
             }
         }
-        /// The repository a follow-up issue is filed in. repository_id is the forge identity; repo is the project's current name for it, so a rename after the proposal was made shows the new name.
+        /// A project's repository, such as the one a follow-up issue is filed in or an image-policy adoption widens. repository_id is the forge identity; repo is the project's current name for it, so a rename after the proposal was made shows the new name.
         ///
         ///
-        /// - Remark: Generated from `#/components/schemas/FollowUpFilingRepository`.
-        public struct FollowUpFilingRepository: Codable, Hashable, Sendable {
-            /// - Remark: Generated from `#/components/schemas/FollowUpFilingRepository/repo`.
+        /// - Remark: Generated from `#/components/schemas/ProjectRepository`.
+        public struct ProjectRepository: Codable, Hashable, Sendable {
+            /// - Remark: Generated from `#/components/schemas/ProjectRepository/repo`.
             public var repo: Swift.String
-            /// - Remark: Generated from `#/components/schemas/FollowUpFilingRepository/repository_id`.
+            /// - Remark: Generated from `#/components/schemas/ProjectRepository/repository_id`.
             public var repository_id: Swift.Int64
-            /// Creates a new `FollowUpFilingRepository`.
+            /// Creates a new `ProjectRepository`.
             ///
             /// - Parameters:
             ///   - repo:
