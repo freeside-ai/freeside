@@ -6,6 +6,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/freeside-ai/freeside/daemon/internal/contentaddr"
 	"github.com/freeside-ai/freeside/daemon/internal/domain"
 )
 
@@ -19,6 +20,40 @@ func validUpkeepRefusalInput() domain.ImageUpkeepRefusalInput {
 			Clause: domain.RebuildRefusalLockfileInconsistent, Detail: "lockfile root disagrees",
 		}},
 		RecordedAt: time.Date(2026, 10, 26, 12, 0, 0, 0, time.UTC),
+	}
+}
+
+// The exported preimage is what #2336 stores as the maintenance task's source
+// artifact: the blob store accepts it only because it hashes to the refusal's
+// ID, and a nil and an empty Findings list must yield the same bytes because
+// both decode to the same ID.
+func TestImageUpkeepRefusalPreimageAddressesItsID(t *testing.T) {
+	t.Parallel()
+	refusal, err := domain.NewImageUpkeepRefusal(validUpkeepRefusalInput())
+	if err != nil {
+		t.Fatalf("valid refusal: %v", err)
+	}
+	preimage, err := refusal.Preimage()
+	if err != nil {
+		t.Fatalf("Preimage: %v", err)
+	}
+	if got := contentaddr.Sum(preimage); got != string(refusal.ID) {
+		t.Fatalf("preimage addresses %s, want the refusal id %s", got, refusal.ID)
+	}
+
+	nilFindings, emptyFindings := refusal, refusal
+	nilFindings.Findings = nil
+	emptyFindings.Findings = []domain.ImageUpkeepClauseFinding{}
+	nilBytes, err := nilFindings.Preimage()
+	if err != nil {
+		t.Fatalf("nil-findings Preimage: %v", err)
+	}
+	emptyBytes, err := emptyFindings.Preimage()
+	if err != nil {
+		t.Fatalf("empty-findings Preimage: %v", err)
+	}
+	if string(nilBytes) != string(emptyBytes) {
+		t.Fatalf("nil and empty findings encode differently:\n nil=%s\n empty=%s", nilBytes, emptyBytes)
 	}
 }
 
