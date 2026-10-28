@@ -6571,19 +6571,32 @@ func (w *productionPublicationWorkflow) verifyAndCheckpoint(
 	imported importer.Result,
 	checkoutDir string,
 ) (productionVerificationCheckpoint, error) {
-	// Composition admitted this image at this base before the run started, so
-	// a refusal here is a disagreement with durable authority, not a hold.
-	if err := requireProjectImageServesBase(
-		ctx, binding.image, checkoutDir, binding.admission.Base.BaseSHA, w.preparationDigest,
-	); err != nil {
-		if errors.Is(err, domain.ErrProjectImageIncompatible) {
-			err = fmt.Errorf("production publication binding disagrees with durable authority: %w",
-				errors.Join(domain.ErrParentKeyMismatch, err))
-		}
+	repair, err := w.repairVerification(ctx, binding, binding.admission.Base.BaseSHA)
+	if err != nil {
 		return productionVerificationCheckpoint{}, err
 	}
-	binding, refusal, err := w.bindVerificationImage(
-		ctx, task, binding, checkoutDir, binding.admission.Base.BaseSHA, imported.CommitSHA)
+	var refusal *rebuildRefusal
+	if repair {
+		// A maintenance task's image is the one its refusal says does not
+		// serve the base; the candidate is verified only in an image rebuilt
+		// for its head.
+		binding, refusal, err = w.bindRepairVerificationImage(ctx, task, binding, checkoutDir, imported.CommitSHA)
+	} else {
+		// Composition admitted this image at this base before the run started,
+		// so a refusal here is a disagreement with durable authority, not a
+		// hold.
+		if err := requireProjectImageServesBase(
+			ctx, binding.image, checkoutDir, binding.admission.Base.BaseSHA, w.preparationDigest,
+		); err != nil {
+			if errors.Is(err, domain.ErrProjectImageIncompatible) {
+				err = fmt.Errorf("production publication binding disagrees with durable authority: %w",
+					errors.Join(domain.ErrParentKeyMismatch, err))
+			}
+			return productionVerificationCheckpoint{}, err
+		}
+		binding, refusal, err = w.bindVerificationImage(
+			ctx, task, binding, checkoutDir, binding.admission.Base.BaseSHA, imported.CommitSHA)
+	}
 	if err != nil {
 		// A rebuilt image the run is bound to is durable authority as the
 		// admitted one is, so its refusal is the same disagreement.
