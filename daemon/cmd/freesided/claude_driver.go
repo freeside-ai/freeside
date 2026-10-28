@@ -1923,7 +1923,7 @@ func composeClaudeDriver(
 	}
 	follower := newConformanceFollower(backend, func(runCtx context.Context) error {
 		return runClaudeConformance(runCtx, st, transport, backend, cfg, janitor.WithStableCoverage)
-	}, logger.With("subsystem", "writer_image_conformance"))
+	}, time.Now, logger.With("subsystem", "writer_image_conformance"))
 	var (
 		selectImage     engine.ImageSelection
 		bindImageUpkeep func(func(context.Context) (*domain.ImageUpkeepHold, error))
