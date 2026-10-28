@@ -20,6 +20,7 @@ const (
 	admissionBackendConfigEncodingVersion      = "freeside.execution.admission/v3"
 	admissionAgentEncodingVersion              = "freeside.execution.admission/v4"
 	admissionCapabilityManifestEncodingVersion = "freeside.execution.admission/v5"
+	admissionHydrationEncodingVersion          = "freeside.execution.admission/v6"
 )
 
 // AgentSelectionSource is which selection chose an admission's agent (plan
@@ -42,6 +43,33 @@ var AllAgentSelectionSources = []AgentSelectionSource{
 func (s AgentSelectionSource) valid() bool {
 	switch s {
 	case AgentSelectionSourceLineup, AgentSelectionSourceTaskLine, AgentSelectionSourceCard:
+		return true
+	default:
+		return false
+	}
+}
+
+// WorkspaceHydration is an admission's recorded override of the driver's
+// workspace hydration. The zero value "" is unset and valid on an admission:
+// the start hydrates as the driver's composition says, which is every
+// admission written before the field existed. A set value is admitted and
+// content-addressed, so recovery replays the same choice and an edited row
+// fails the identity check.
+type WorkspaceHydration string
+
+// WorkspaceHydrationNone skips the project image's hydration helper for one
+// start: a repair task at a refused tip runs in an image whose baked manifests
+// disagree with the workspace, so the helper would fail the attempt before
+// the agent starts (#2336).
+const WorkspaceHydrationNone WorkspaceHydration = "none"
+
+// AllWorkspaceHydrations lists every valid set WorkspaceHydration; it is the
+// single registration point.
+var AllWorkspaceHydrations = []WorkspaceHydration{WorkspaceHydrationNone}
+
+func (h WorkspaceHydration) valid() bool {
+	switch h {
+	case WorkspaceHydrationNone:
 		return true
 	default:
 		return false
@@ -198,7 +226,11 @@ type ExecutionAdmission struct {
 	// admitted identity and credential mode and is never resolved against a
 	// current agent, however the tree has moved since.
 	AgentBinding *AdmissionAgentBinding `json:"agent_binding,omitempty"`
-	AdmittedAt   time.Time              `json:"admitted_at"`
+	// WorkspaceHydration is unset on every admission but a start that must
+	// skip the driver's hydration; a set value selects the v6 encoding. Only
+	// #2336's repair path is meant to set it.
+	WorkspaceHydration WorkspaceHydration `json:"workspace_hydration,omitempty"`
+	AdmittedAt         time.Time          `json:"admitted_at"`
 }
 
 // AdmissionAgentBinding is what §5.4 admission step 5 snapshots beyond the
@@ -369,6 +401,7 @@ type ExecutionAdmissionInput struct {
 	TrustProfileDigest         *Digest
 	BackupEncryptionWaiver     *BackupEncryptionWaiver
 	AgentBinding               *AdmissionAgentBinding
+	WorkspaceHydration         WorkspaceHydration
 	AdmittedAt                 time.Time
 }
 
@@ -408,6 +441,7 @@ func NewExecutionAdmission(in ExecutionAdmissionInput) (ExecutionAdmission, erro
 		TrustProfileDigest:         clonePtr(in.TrustProfileDigest),
 		BackupEncryptionWaiver:     clonePtr(in.BackupEncryptionWaiver),
 		AgentBinding:               canonicalAgentBinding(in.AgentBinding),
+		WorkspaceHydration:         in.WorkspaceHydration,
 		AdmittedAt:                 in.AdmittedAt.UTC(),
 	}
 	id, err := a.ComputeID()
@@ -449,6 +483,7 @@ type canonicalAdmission struct {
 	TrustProfileDigest         *Digest                 `json:"trust_profile_digest"`
 	BackupEncryptionWaiver     *BackupEncryptionWaiver `json:"backup_encryption_waiver"`
 	AgentBinding               *AdmissionAgentBinding  `json:"agent_binding,omitempty"`
+	WorkspaceHydration         WorkspaceHydration      `json:"workspace_hydration,omitempty"`
 	AdmittedAt                 time.Time               `json:"admitted_at"`
 }
 
@@ -472,6 +507,11 @@ func (a ExecutionAdmission) ComputeID() (Digest, error) {
 	}
 	if a.CapabilityManifestDigest != nil {
 		version = admissionCapabilityManifestEncodingVersion
+	}
+	// Checked last so a skipping start always carries the v6 label, whatever
+	// else it binds.
+	if a.WorkspaceHydration != "" {
+		version = admissionHydrationEncodingVersion
 	}
 	body, err := json.Marshal(canonicalAdmission{
 		Version:                    version,
@@ -497,6 +537,7 @@ func (a ExecutionAdmission) ComputeID() (Digest, error) {
 		TrustProfileDigest:         a.TrustProfileDigest,
 		BackupEncryptionWaiver:     a.BackupEncryptionWaiver,
 		AgentBinding:               canonicalAgentBinding(a.AgentBinding),
+		WorkspaceHydration:         a.WorkspaceHydration,
 		AdmittedAt:                 a.AdmittedAt,
 	})
 	if err != nil {
@@ -613,6 +654,10 @@ func (a ExecutionAdmission) Validate() error {
 				"execution admission %s carries an agent binding without an explicit vendor-instruction snapshot: %w",
 				a.InvocationID, ErrAdmissionInconsistent)
 		}
+	}
+	if a.WorkspaceHydration != "" && !a.WorkspaceHydration.valid() {
+		return fmt.Errorf("execution admission %s workspace_hydration %q: %w",
+			a.InvocationID, a.WorkspaceHydration, ErrInvalidWorkspaceHydration)
 	}
 	if a.AdmittedAt.IsZero() {
 		return fmt.Errorf("execution admission %s admitted_at: %w", a.InvocationID, ErrMissingTimestamp)

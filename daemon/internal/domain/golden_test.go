@@ -1239,6 +1239,21 @@ func TestGolden(t *testing.T) {
 	if id, err := legacyAgentAdmission.ComputeID(); err != nil || id != legacyAgentAdmissionID {
 		t.Fatalf("sourceless agent admission id = %s (%v), want %s", id, err, legacyAgentAdmissionID)
 	}
+	// The hydration-skipping (v6) variant: the agent-bound admission with a
+	// backend configuration, a capability manifest, and the skip set, so the
+	// golden pins v6 winning over every earlier label (v2 through v5).
+	noHydrationManifest := stageDigest("e")
+	noHydrationAdmission := agentAdmission
+	noHydrationAdmission.BackendConfigurationDigest = stageDigest("f")
+	noHydrationAdmission.CapabilityManifestDigest = &noHydrationManifest
+	noHydrationAdmission.WorkspaceHydration = domain.WorkspaceHydrationNone
+	noHydrationAdmission.ID, err = noHydrationAdmission.ComputeID()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := noHydrationAdmission.Validate(); err != nil {
+		t.Fatal(err)
+	}
 	// The task-line variant: the same agent chosen by a task line, which the
 	// binding names by the line's id.
 	taskLineBinding := *agentAdmission.AgentBinding
@@ -2148,6 +2163,7 @@ func TestGolden(t *testing.T) {
 		{"registry_set", registrySetDeclaration},
 		{"execution_admission_waived", waivedAdmission},
 		{"execution_admission_agent", agentAdmission},
+		{"execution_admission_no_hydration", noHydrationAdmission},
 		{"execution_admission_agent_explicit_model", claudeAdmission},
 		{"review_admission", reviewAdmission},
 		{"execution_admission_task_line", taskLineAdmission},

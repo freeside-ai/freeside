@@ -956,6 +956,65 @@ func newPreparingTestDriver(t *testing.T) *Driver {
 	return d
 }
 
+// An admission that skips hydration overrides a hydrating composition for its
+// own start: the intent records no argv and the launch command has no helper.
+// An unset admission under the same composition records the helper and
+// launches today's command, which is the skipping command behind the helper.
+func TestStartHonorsAdmissionHydrationSkip(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	start := func(t *testing.T, hydration domain.WorkspaceHydration) (intent, string) {
+		t.Helper()
+		d := newPreparingTestDriver(t)
+		spec := testStartSpec()
+		spec.WorkspaceHydration = hydration
+		inputs := stageInputs(t, &spec)
+		if err := d.StartWithInputs(ctx, testInvoke, spec,
+			func(context.Context) (exec.StageInputs, error) { return inputs, nil },
+		); err != nil {
+			t.Fatalf("StartWithInputs: %v", err)
+		}
+		waitSessionDone(t, d, testInvoke)
+		in, err := d.loadIntent(ctx, testInvoke)
+		if err != nil {
+			t.Fatalf("load intent: %v", err)
+		}
+		command := d.gate.(*stubGate).lastSpec(t).Agent.Command
+		return in, command[len(command)-1]
+	}
+
+	skipped, skippedCommand := start(t, domain.WorkspaceHydrationNone)
+	if len(skipped.Preparation) != 0 {
+		t.Fatalf("skipping start recorded preparation %v, want none", skipped.Preparation)
+	}
+	if skipped.Spec.WorkspaceHydration != domain.WorkspaceHydrationNone {
+		t.Fatalf("skipping start journaled hydration %q, want none", skipped.Spec.WorkspaceHydration)
+	}
+	for _, absent := range []string{"prepare_status", "freeside-project-prepare"} {
+		if strings.Contains(skippedCommand, absent) {
+			t.Errorf("skipping start launched with %q: %q", absent, skippedCommand)
+		}
+	}
+
+	// Recovery from the reloaded record, under a composition that still
+	// hydrates, rebuilds the command the skipping start launched.
+	recovered, err := newPreparingTestDriver(t).handoffSpec(ctx, skipped)
+	if err != nil {
+		t.Fatalf("handoffSpec from reloaded intent: %v", err)
+	}
+	if got := recovered.Agent.Command[len(recovered.Agent.Command)-1]; got != skippedCommand {
+		t.Fatalf("recovered command = %q, want the launched %q", got, skippedCommand)
+	}
+
+	hydrated, hydratedCommand := start(t, "")
+	if !reflect.DeepEqual(hydrated.Preparation, []string{projectimage.PreparationPath}) {
+		t.Fatalf("unset start recorded preparation %v, want the fixed helper", hydrated.Preparation)
+	}
+	if want := "prepare_status=0 " + projectimage.PreparationPath + " " + skippedCommand; hydratedCommand != want {
+		t.Fatalf("unset start command = %q, want %q", hydratedCommand, want)
+	}
+}
+
 func TestProviderRunIDRefusesTraversalBeforeIntentRead(t *testing.T) {
 	t.Parallel()
 	d := newTestDriver(t, &stubGate{}, newStubExports())
@@ -1825,6 +1884,31 @@ func TestHandoffSpecCommandTracksTheRecordNotComposition(t *testing.T) {
 	for _, absent := range []string{"prepare_status", "freeside-project-prepare"} {
 		if strings.Contains(oldRecord, absent) {
 			t.Errorf("no-prepare record leaked %q from composition: %q", absent, oldRecord)
+		}
+	}
+
+	// A skipping start's record (the admission's skip journaled, no argv)
+	// rebuilds a byte-identical no-prepare command whatever the daemon's
+	// composition is now.
+	skipCommandFor := func(t *testing.T, d *Driver) string {
+		t.Helper()
+		in := record(d, nil)
+		in.Spec.WorkspaceHydration = domain.WorkspaceHydrationNone
+		hs, err := d.handoffSpec(context.Background(), in)
+		if err != nil {
+			t.Fatalf("handoffSpec: %v", err)
+		}
+		return strings.Join(hs.Agent.Command, " ")
+	}
+	skipUnderAttended := skipCommandFor(t, attended)
+	skipUnderHydrating := skipCommandFor(t, hydrating)
+	if skipUnderAttended != skipUnderHydrating {
+		t.Fatalf("skipping record depends on composition:\n attended=%q\n hydrating=%q",
+			skipUnderAttended, skipUnderHydrating)
+	}
+	for _, absent := range []string{"prepare_status", "freeside-project-prepare"} {
+		if strings.Contains(skipUnderHydrating, absent) {
+			t.Errorf("skipping record leaked %q from composition: %q", absent, skipUnderHydrating)
 		}
 	}
 }

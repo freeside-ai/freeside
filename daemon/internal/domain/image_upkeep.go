@@ -180,10 +180,11 @@ func NewImageUpkeepRefusal(in ImageUpkeepRefusalInput) (ImageUpkeepRefusal, erro
 	return refusal, nil
 }
 
-// ComputeID returns the versioned content address of every fact but
-// RecordedAt. A nil and an empty Findings list address alike, so a record
-// decoded from either form keeps its ID.
-func (r ImageUpkeepRefusal) ComputeID() (Digest, error) {
+// Preimage returns the canonical v1 bytes the ID addresses: every fact but
+// RecordedAt. A nil and an empty Findings list encode alike, so a record
+// decoded from either form keeps its ID. A caller that stores these bytes in
+// the content-addressed blob store gets them back under the refusal's ID.
+func (r ImageUpkeepRefusal) Preimage() ([]byte, error) {
 	findings := r.Findings
 	if findings == nil {
 		findings = []ImageUpkeepClauseFinding{}
@@ -194,6 +195,16 @@ func (r ImageUpkeepRefusal) ComputeID() (Digest, error) {
 		TipSHA: r.TipSHA, MeasuredFromImageID: r.MeasuredFromImageID, Class: r.Class,
 		Findings: findings,
 	})
+	if err != nil {
+		return nil, fmt.Errorf("image upkeep refusal preimage: %w", err)
+	}
+	return body, nil
+}
+
+// ComputeID returns the versioned content address of Preimage, so the
+// exported bytes and the ID cannot drift apart.
+func (r ImageUpkeepRefusal) ComputeID() (Digest, error) {
+	body, err := r.Preimage()
 	if err != nil {
 		return "", fmt.Errorf("image upkeep refusal id: %w", err)
 	}

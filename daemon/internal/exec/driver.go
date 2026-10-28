@@ -122,6 +122,10 @@ type StartSpec struct {
 	// them; it does not choose them.
 	RouteModelID string `json:"route_model_id,omitempty"`
 	NativeEffort string `json:"native_effort,omitempty"`
+	// WorkspaceHydration is the admission's hydration override. Unset means
+	// hydrate as the driver's composition says; omitempty keeps every
+	// existing journaled spec byte-identical to the one its admission renders.
+	WorkspaceHydration domain.WorkspaceHydration `json:"workspace_hydration,omitempty"`
 }
 
 // StartSpecFromAdmission renders the durable admission record as the spec its
@@ -131,19 +135,20 @@ type StartSpec struct {
 // retargeting a publication intent's bound authorization exists to prevent.
 func StartSpecFromAdmission(a domain.ExecutionAdmission) StartSpec {
 	spec := StartSpec{
-		RunID:          a.RunID,
-		StageID:        a.StageID,
-		AttemptID:      a.AttemptID,
-		InputDigest:    a.InputDigest,
-		SpecDigest:     a.SpecDigest,
-		PolicyDigest:   a.PolicyDigest,
-		Base:           a.Base,
-		Workspace:      a.Workspace,
-		ImageRef:       a.ImageRef,
-		CredentialMode: a.CredentialMode,
-		EgressProfile:  a.EgressProfile,
-		AdmissionID:    a.ID,
-		StageInputs:    cloneStageInputSnapshot(a.StageInputs),
+		RunID:              a.RunID,
+		StageID:            a.StageID,
+		AttemptID:          a.AttemptID,
+		InputDigest:        a.InputDigest,
+		SpecDigest:         a.SpecDigest,
+		PolicyDigest:       a.PolicyDigest,
+		Base:               a.Base,
+		Workspace:          a.Workspace,
+		ImageRef:           a.ImageRef,
+		CredentialMode:     a.CredentialMode,
+		EgressProfile:      a.EgressProfile,
+		AdmissionID:        a.ID,
+		StageInputs:        cloneStageInputSnapshot(a.StageInputs),
+		WorkspaceHydration: a.WorkspaceHydration,
 	}
 	if a.AuthIdentityID != nil {
 		spec.AuthIdentityID = *a.AuthIdentityID

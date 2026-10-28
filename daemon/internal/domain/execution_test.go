@@ -177,6 +177,12 @@ func TestExecutionAdmissionTamperFailsClosed(t *testing.T) {
 				a.TrustProfileDigest = &digest
 			}, domain.ErrTrustProfileInconsistent,
 		},
+		{"added hydration skip", func(a *domain.ExecutionAdmission) {
+			a.WorkspaceHydration = domain.WorkspaceHydrationNone
+		}, domain.ErrAdmissionInconsistent},
+		{"unknown hydration", func(a *domain.ExecutionAdmission) {
+			a.WorkspaceHydration = "partial"
+		}, domain.ErrInvalidWorkspaceHydration},
 		{"cleared id", func(a *domain.ExecutionAdmission) { a.ID = "" }, domain.ErrEmptyID},
 	}
 	for _, tc := range cases {
@@ -279,6 +285,12 @@ func TestExecutionAdmissionValidate(t *testing.T) {
 		{"no admitted_at", func(in *domain.ExecutionAdmissionInput) {
 			in.AdmittedAt = time.Time{}
 		}, domain.ErrMissingTimestamp},
+		{"hydration skipped", func(in *domain.ExecutionAdmissionInput) {
+			in.WorkspaceHydration = domain.WorkspaceHydrationNone
+		}, nil},
+		{"unknown hydration", func(in *domain.ExecutionAdmissionInput) {
+			in.WorkspaceHydration = "None"
+		}, domain.ErrInvalidWorkspaceHydration},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -289,6 +301,50 @@ func TestExecutionAdmissionValidate(t *testing.T) {
 				t.Fatalf("NewExecutionAdmission = %v, want %v", err, tc.wantErr)
 			}
 		})
+	}
+}
+
+// A hydration skip is a bound fact: it moves the identity, survives the
+// store's JSON round trip, and leaves every admission without it encoded
+// exactly as before, so no stored ID changes.
+func TestAdmissionWorkspaceHydrationEncoding(t *testing.T) {
+	unset := mustAdmission(t, admissionInput())
+	in := admissionInput()
+	in.WorkspaceHydration = domain.WorkspaceHydrationNone
+	skipping := mustAdmission(t, in)
+	if skipping.ID == unset.ID {
+		t.Fatal("hydration skip did not change the admission identity")
+	}
+
+	unsetBody, err := json.Marshal(unset)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(unsetBody), "workspace_hydration") {
+		t.Fatalf("unset hydration reached the body: %s", unsetBody)
+	}
+
+	body, err := json.Marshal(skipping)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var decoded domain.ExecutionAdmission
+	if err := json.Unmarshal(body, &decoded); err != nil {
+		t.Fatal(err)
+	}
+	if err := decoded.Validate(); err != nil {
+		t.Fatalf("decoded skipping admission: %v", err)
+	}
+	if decoded.WorkspaceHydration != domain.WorkspaceHydrationNone || decoded.ID != skipping.ID {
+		t.Fatalf("round trip = %q/%s, want none/%s", decoded.WorkspaceHydration, decoded.ID, skipping.ID)
+	}
+
+	// A row edited to drop the skip resolves to a different address, so the
+	// decode gate refuses it rather than replaying a hydrating start.
+	stripped := decoded
+	stripped.WorkspaceHydration = ""
+	if err := stripped.Validate(); !errors.Is(err, domain.ErrAdmissionInconsistent) {
+		t.Fatalf("stripped skip Validate() = %v, want ErrAdmissionInconsistent", err)
 	}
 }
 
