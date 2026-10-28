@@ -1197,7 +1197,7 @@ func seedLegacyExecutionFailureNotice(t *testing.T, s oversizedFeedbackScenario)
 			RequestedDecision: []domain.Action{domain.ActionAcknowledge},
 			ItemVersion:       1, InterruptionClass: domain.InterruptionExceptional,
 			CreatedAt: &createdAt, DisplayNames: names, Status: domain.StatusOpen,
-		}, s.engine.productionPublication.approvedRecipes)
+		}, s.engine.productionPublication.operatorRecipes)
 		if err != nil {
 			return err
 		}

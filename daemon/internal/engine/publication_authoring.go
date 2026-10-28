@@ -193,6 +193,10 @@ func (w *productionPublicationWorkflow) buildPublicationAuthorInput(
 	if err != nil {
 		return inference.PublicationAuthorInput{}, authorInputFailure(authorInputStageVisibility, err)
 	}
+	recipes, err := w.recipes(ctx)
+	if err != nil {
+		return inference.PublicationAuthorInput{}, err
+	}
 	visibility := repositoryVisibilityForClass(class)
 
 	instructions, err := w.readArtifactText(reviewInstructions.ResultDigest)
@@ -244,7 +248,7 @@ func (w *productionPublicationWorkflow) buildPublicationAuthorInput(
 		InstructionSnapshot: trustedControlFile(instructions, baseSHA),
 
 		Evidence:        checkpoint.Artifacts,
-		ApprovedRecipes: w.approvedRecipes,
+		ApprovedRecipes: recipes,
 	}, nil
 }
 
