@@ -326,7 +326,8 @@ func RunTaskLine(
 // decodes. Choosing an agent chooses which credential runs (§5.8), so the
 // record SetBy names must exist, be of the kind Source claims, and
 // name this task. Submission lines must be set at task creation; proposal
-// lines must be set at the recorded decision's instant.
+// lines must be set at the recorded decision's instant. A router line is
+// refused until its router exists (#2393).
 //
 // This proves the line rests on a real operator action on this task. It does
 // not prove the agent is the one that action sent: the records do not store the
@@ -411,6 +412,10 @@ func anchorTaskLine(ctx context.Context, tx *store.ReadTx, line domain.TaskLine)
 			return fmt.Errorf("that proposal starts task %s", taskID)
 		}
 		return nil
+	case domain.TaskLineSourceRouter:
+		// No record backs a router line yet: the router that writes one,
+		// and the anchor that holds it to its routing decision, is #2393.
+		return errors.New("nothing routes a task line yet (#2393)")
 	}
 	return fmt.Errorf("source %q is not a task line source", line.Source)
 }

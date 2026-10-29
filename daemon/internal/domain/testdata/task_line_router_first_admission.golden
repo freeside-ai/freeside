@@ -1,0 +1,17 @@
+{
+  "id": "sha256:1f3bef5ff32f4fc1a4955ba2e7c2a04c1615aed5e18a072480938984a66c9e3d",
+  "task_id": "task-1",
+  "role": "implementer",
+  "agent": "claude-a",
+  "version": 1,
+  "predecessor_id": null,
+  "source": "router",
+  "set_by": "router:task-1",
+  "set_at": "2026-01-02T03:04:05Z",
+  "provenance": {
+    "policy_revision": 1,
+    "trigger": "first_admission",
+    "reading": null,
+    "passed_over": null
+  }
+}

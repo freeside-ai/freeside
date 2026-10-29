@@ -1,0 +1,21 @@
+{
+  "id": "sha256:4a25fd87accba4dfc84cd0b66e3dfc342d8bd65d4210e2942ea8b45a09b22a79",
+  "task_id": "task-1",
+  "role": "implementer",
+  "agent": "claude-b",
+  "version": 1,
+  "predecessor_id": null,
+  "source": "router",
+  "set_by": "router:task-1",
+  "set_at": "2026-01-02T03:04:05Z",
+  "provenance": {
+    "policy_revision": 2,
+    "trigger": "exhausted_mark",
+    "reading": {
+      "pool": "claude-a",
+      "window": "seven_day_opus",
+      "observed_at": "2026-01-02T02:04:05Z"
+    },
+    "passed_over": "claude-a"
+  }
+}

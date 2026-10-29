@@ -391,7 +391,13 @@ var (
 	ErrDuplicateTaskLineRole = errors.New(
 		"task lines name a role more than once")
 	ErrInvalidTaskLineSource = errors.New(
-		"task line source is not an operator path that may set a line")
+		"task line source is not a path that may set a line")
+	ErrInvalidTaskLineSelectionTrigger = errors.New(
+		"task line selection trigger is not first_admission or exhausted_mark")
+	ErrTaskLineProvenanceInconsistent = errors.New(
+		"task line provenance does not fit its source or trigger")
+	ErrTaskLineReadingNotUTF8 = errors.New(
+		"task line reading pool or window is not valid UTF-8")
 	ErrTaskLineInconsistent = errors.New(
 		"task line id or predecessor does not match its content")
 	ErrInvalidAgentSelectionSource = errors.New(
