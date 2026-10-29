@@ -2277,6 +2277,16 @@ and the lineup's reviewer never runs in its place. The shadow reviewer reads
 no line. The review configuration digest stays the composed source's: the
 snapshot records what the line selected.
 
+Every line records its `source`: `submit_task`, `cli_submit`, or
+`proposal_start` for an operator's choice, or `router` for the routing
+policy's choice at a task's first admission. Nothing writes a router line
+yet (#2393), and admission refuses one. A router line carries its selection
+`provenance`: the policy revision, the trigger (`first_admission` or
+`exhausted_mark`), and, for an exhausted mark, the reading acted on and the
+agent passed over. `GET /tasks/{task_id}/timeline` shows every line version
+as a `task_line_set` event at its `set_at`, and the synced task carries each
+role's current line in `task_lines`.
+
 For a preflight-bound submission, choose one `--submission-id <identity>` and
 pass it to both `preflight` and `submit`. Reusing it with different input
 values is refused. Legacy `--run-id` is lookup-only: it may recover an existing
