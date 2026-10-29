@@ -74,8 +74,8 @@ func TestReviewAdmissionIsWrittenOnce(t *testing.T) {
 		}
 	}
 	invalid := first
-	// No task line selects a review agent.
-	invalid.AgentBinding.SelectionSource = domain.AgentSelectionSourceTaskLine
+	// No card selects a review agent.
+	invalid.AgentBinding.SelectionSource = domain.AgentSelectionSourceCard
 	invalid.AgentBinding.SelectionRecordID = invalid.AgentBinding.AgentDigest
 	if err := st.Write(ctx, func(tx *WriteTx) error {
 		return tx.PutReviewAdmission(ctx, invalid)
