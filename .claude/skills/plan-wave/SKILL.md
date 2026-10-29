@@ -283,6 +283,11 @@ resolve it.
   issues' Dependencies fields. Write three to six Exit bullets as outcomes
   an operator can observe, each naming its evidence unit as Tracking Issues
   requires, and end the section with: "Closure is the owner's call."
+- **Check the Dependencies fields.** Run both readers docs/coordination.md
+  (Work-Unit Issues) names over every unit and the new tracker. Fix any
+  field either one can't parse, and rerun until neither reports one: merge
+  cleanup reads these fields at every merge, and a field it can't parse
+  drops its unit from **Startable now**.
 - **Notes.** In the collapsed Notes block: the Row drift list; one
   paragraph of calibration naming the classes from the prior wave the
   planner looked for and what the premise check found; each reference PR

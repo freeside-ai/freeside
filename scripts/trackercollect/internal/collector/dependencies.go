@@ -43,12 +43,13 @@ var (
 	// keyword anywhere else on a line is prose and never types the line.
 	dependencyLeadPattern = regexp.MustCompile("(?i)^(?:(?:[-*+]|[0-9]+[.)])[ \t]+)?`?(starts-after|merges-after|stacked-on|exclusive-with)\\b`?[ \t]*:?[ \t]*(.*)$")
 	// dependencyNonePattern matches a line whose first word is "none".
-	dependencyNonePattern      = regexp.MustCompile("(?i)^(?:(?:[-*+]|[0-9]+[.)])[ \t]+)?[*_`]*none\\b")
-	dependencyKeywordNone      = regexp.MustCompile("(?i)^[*_`]*none\\b")
-	dependencyTargetPattern    = regexp.MustCompile("(?i)^(?:(PR)[ \t]+)?#([0-9]+)\\b`?")
-	dependencySeparatorPattern = regexp.MustCompile(`(?i)^[ \t]*(?:,[ \t]*and\b|,|/|&|and\b)[ \t]*`)
-	issueReferencePattern      = regexp.MustCompile(`#([0-9]+)\b`)
-	codeIndentPattern          = regexp.MustCompile(`(?m)^(?:    |\t)[ \t]*`)
+	dependencyNonePattern       = regexp.MustCompile("(?i)^(?:(?:[-*+]|[0-9]+[.)])[ \t]+)?[*_`]*none\\b")
+	dependencyKeywordNone       = regexp.MustCompile("(?i)^[*_`]*none\\b")
+	dependencyTargetPattern     = regexp.MustCompile("(?i)^(?:(PR)[ \t]+)?#([0-9]+)\\b`?")
+	dependencySeparatorPattern  = regexp.MustCompile(`(?i)^[ \t]*(?:,[ \t]*and\b|,|/|&|and\b)[ \t]*`)
+	dependencyAnnotationPattern = regexp.MustCompile(`^[ \t]*\([^)]*\)`)
+	issueReferencePattern       = regexp.MustCompile(`#([0-9]+)\b`)
+	codeIndentPattern           = regexp.MustCompile(`(?m)^(?:    |\t)[ \t]*`)
 )
 
 type DependencyTarget struct {
@@ -138,8 +139,8 @@ func parseDependencies(section string) []dependencyEntry {
 
 // parseDependencyTargets reads the targets that follow a relationship
 // keyword: one #N or PR #N, then more after a comma, slash, ampersand, or
-// "and". It stops at the first text that is not a target, which is the
-// line's rationale.
+// "and", past a parenthetical between two targets. It stops at the first
+// other text that is not a target, which is the line's rationale.
 func parseDependencyTargets(rest string) (string, []DependencyTarget, string) {
 	if dependencyKeywordNone.MatchString(rest) {
 		return DependencyNone, nil, ""
@@ -160,6 +161,15 @@ func parseDependencyTargets(rest string) (string, []DependencyTarget, string) {
 		}
 		targets = append(targets, DependencyTarget{Kind: kind, Number: int(parsed)})
 		rest = rest[len(match[0]):]
+		// A parenthetical may annotate one target before the next, as in
+		// "#10 (the record) and #11". Stopping at it would drop #11 without
+		// a report, so it is skipped when another target follows it.
+		if annotation := dependencyAnnotationPattern.FindString(rest); annotation != "" {
+			after := rest[len(annotation):]
+			if separator := dependencySeparatorPattern.FindString(after); separator != "" && dependencyTargetPattern.MatchString(after[len(separator):]) {
+				rest = after
+			}
+		}
 		separator := dependencySeparatorPattern.FindString(rest)
 		if separator == "" {
 			break

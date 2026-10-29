@@ -69,8 +69,12 @@ body:
         Type every relationship as starts-after (this unit must be written
         against the prerequisite's result, so the prerequisite's PR must
         merge before this unit starts), merges-after (this unit may start,
-        but its PR lands later), or stacked-on (name the open PR branch used
-        as the base). Write "none" if none; ambiguous relationships
-        serialize as starts-after until the planner resolves them.
+        but its PR lands later), or stacked-on (name the open base PR and
+        its branch: "stacked-on PR #12: feat/x"). Write "none" if none;
+        ambiguous relationships serialize as starts-after until the planner
+        resolves them. One relationship per line, targets first, any note
+        after a colon ("starts-after #10, #11: why"), or a bare "none"
+        line; put other notes in a later section (docs/coordination.md,
+        Work-Unit Issues).
     validations:
       required: true

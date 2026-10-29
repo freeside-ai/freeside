@@ -98,6 +98,23 @@ func TestDependencyLinesThatAreNotTypedStayUnknownWordForWord(t *testing.T) {
 	}
 }
 
+func TestDependencyTargetsReadPastAnAnnotatedTarget(t *testing.T) {
+	// The first two are spellings wave 9 issues used until 2026-10-29, when
+	// the parser read only the first target of each.
+	cases := []struct{ line, targets string }{
+		{"- `starts-after` #2382 (Freeside onboarded) and #2392 (both subscriptions enrolled), both owner-run.", "#2382, #2392"},
+		{"- `starts-after`: #894 (merged, PR #903) and #898 (review admission and provenance).", "#894, #898"},
+		{"- starts-after #10 (the record), #11", "#10, #11"},
+		{"- starts-after #10 (the record), which #11 reads", "#10"},
+	}
+	for _, tc := range cases {
+		entries := parseDependencies(dependenciesSection(tc.line))
+		if len(entries) != 1 || entries[0].kind != DependencyTyped || dependencyTargetList(entries[0].targets) != tc.targets {
+			t.Errorf("%q: entries = %#v", tc.line, entries)
+		}
+	}
+}
+
 func TestDependencyTargetsStopAtTheRationale(t *testing.T) {
 	entries := parseDependencies(dependenciesSection("- `starts-after` #10 and the migration in #11, then #12"))
 	if len(entries) != 1 || dependencyTargetList(entries[0].targets) != "#10" {
