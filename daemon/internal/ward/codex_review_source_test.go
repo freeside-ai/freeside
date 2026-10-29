@@ -594,7 +594,7 @@ func TestCodexReviewSourceCleansPreparedWorkspaceWhenInstructionClosureFails(t *
 			var failure *exec.ReviewSourceFailure
 			var startErr error
 			if tc.directStart {
-				startErr = source.startRequestedReview(ctx, id, request)
+				startErr = source.startRequestedReview(ctx, id, request, testRequestLaunch(t, source, request))
 			} else {
 				startErr = source.RequestReview(ctx, id, request)
 			}
@@ -2011,7 +2011,7 @@ func TestCodexReviewSourceReapsPreparedWorkspaceForRejectedUnstartedRequest(t *t
 		t.Fatalf("bare rejection outcome = %#v, ready=%v, %v", outcome, ready, err)
 	}
 	failure = nil
-	if err := source.startRequestedReview(ctx, bare, request); !errors.As(err, &failure) ||
+	if err := source.startRequestedReview(ctx, bare, request, testRequestLaunch(t, source, request)); !errors.As(err, &failure) ||
 		failure.Class != domain.ReviewFailureContradiction {
 		t.Fatalf("launch after bare rejection fence = %v, want contradiction", err)
 	}
@@ -4177,7 +4177,7 @@ func codexGoldenReviewCollection(events string) CodexReviewCollection {
 func codexGoldenReviewOutcome(events string) CodexReviewSourceOutcome {
 	source := newEquivalenceReviewSource()
 	req := exec.ReviewRequest{
-		Admission:    testReviewAdmission("run-golden"),
+		Admission:    testRecordedReviewAdmission("run-golden"),
 		RunID:        "run-golden",
 		BaseSHA:      strings.Repeat("a", 40),
 		HeadSHA:      strings.Repeat("b", 40),
@@ -4449,4 +4449,97 @@ func TestCodexReviewSourceAdmitRefusalRecordsNothing(t *testing.T) {
 	if len(admitted) != 2 || admitted[0].RunID != request.RunID || admitted[1].RunID != request.RunID {
 		t.Fatalf("the admit hook saw %+v, want the request from RequestReview and from Inspect", admitted)
 	}
+}
+
+// TestCodexReviewSourceLaunchFollowsTheAdmission: a request launches the
+// model, effort, and identity its admission snapshot names (#1981). The
+// composed identity keeps its host snapshot, and a source asked for another
+// identity refuses the request before anything is recorded.
+func TestCodexReviewSourceLaunchFollowsTheAdmission(t *testing.T) {
+	ctx := t.Context()
+	composed := CodexReviewSourceConfig{
+		Review:         CodexReviewConfig{Model: "gpt-5.2-codex", ReasoningEffort: "high"},
+		AuthIdentityID: "codex-reviewer", AuthSnapshot: "auth.json",
+	}
+	admission := testReviewAdmission("run-launch")
+	admission.AgentBinding.RouteModelID, admission.AgentBinding.NativeEffort = "gpt-5.3-codex", "medium"
+
+	legacy, err := (&CodexReviewSource{cfg: composed}).requestLaunch(exec.ReviewRequest{RunID: "run-launch"})
+	if err != nil || legacy.review.Model != "gpt-5.2-codex" || legacy.identity != "codex-reviewer" {
+		t.Fatalf("legacy launch = %+v, %v; want the composed launch", legacy, err)
+	}
+	same, err := (&CodexReviewSource{cfg: composed}).requestLaunch(exec.ReviewRequest{Admission: admission})
+	switch {
+	case err != nil:
+		t.Fatal(err)
+	case same.review.Model != "gpt-5.3-codex" || same.review.ReasoningEffort != "medium":
+		t.Errorf("launch runs %s/%s, want the snapshot's gpt-5.3-codex/medium",
+			same.review.Model, same.review.ReasoningEffort)
+	case same.identity != "codex-reviewer" || same.snapshot != "auth.json":
+		t.Errorf("composed identity launch = %+v, want its host snapshot", same)
+	}
+
+	admission.AuthIdentityID = "codex-other"
+	if _, err := (&CodexReviewSource{cfg: composed}).requestLaunch(
+		exec.ReviewRequest{Admission: admission},
+	); !errors.Is(err, ErrInvalidCodexReviewSpec) || !strings.Contains(err.Error(), "codex-other") {
+		t.Fatalf("another identity = %v, want a refusal naming it", err)
+	}
+	// Through RequestReview, a request the source cannot launch records
+	// nothing and fails as configuration.
+	fx := newHandoffFixture(t)
+	seedSpec := fx.seed(t)
+	backend := fx.codexReviewLifecycle(t)
+	cfg, requestSpec := testCodexReview(t)
+	journal := &fakeCodexReviewJournal{}
+	source, err := NewCodexReviewSource(codexReviewSourceConfigForTest(t, backend, cfg, requestSpec, journal))
+	if err != nil {
+		t.Fatal(err)
+	}
+	id := domain.InvocationID("review-other-identity")
+	admission.RunID = "run-other-identity"
+	request := exec.ReviewRequest{
+		Admission: admission,
+		RunID:     "run-other-identity", Round: 1, Repo: seedSpec.Seed.Base.Repo,
+		RepositoryID: seedSpec.Seed.Base.RepositoryID, BaseRef: seedSpec.Seed.Base.BaseRef,
+		BaseSHA: strings.Repeat("a", 40), HeadSHA: seedSpec.Seed.Base.BaseSHA,
+		Workspace: seedSpec.Seed.SourceDir, Verification: testReviewVerificationEvidence(),
+		Instructions: requestSpec.InstructionBinding, RequestedAt: codexReviewEpoch,
+	}
+	var failure *exec.ReviewSourceFailure
+	err = source.RequestReview(ctx, id, request)
+	if !errors.As(err, &failure) || failure.Class != domain.ReviewFailureConfiguration {
+		t.Fatalf("another identity's review = %v, want a configuration failure", err)
+	}
+	if _, err := journal.GetCodexReviewRequest(ctx, string(id)); !errors.Is(err, exec.ErrUnknownInvocation) {
+		t.Fatalf("a refused review recorded its request: %v", err)
+	}
+	if journal.intent != nil {
+		t.Fatal("a refused review began a credential-bearing launch")
+	}
+	// A recorded request relaunched from Inspect derives its launch the same
+	// way, so it is refused the same way and starts nothing.
+	if err := journal.PutCodexReviewRequest(ctx, string(id), request); err != nil {
+		t.Fatal(err)
+	}
+	failure = nil
+	if _, err := source.Inspect(ctx, id); !errors.As(err, &failure) ||
+		failure.Class != domain.ReviewFailureConfiguration || !errors.Is(err, ErrInvalidCodexReviewSpec) {
+		t.Fatalf("relaunch under another identity = %v, want a configuration failure", err)
+	}
+	if journal.intent != nil {
+		t.Fatal("a refused relaunch began a credential-bearing launch")
+	}
+
+}
+
+// testRequestLaunch derives the launch a direct startRequestedReview call
+// runs, as RequestReview does before it records the request.
+func testRequestLaunch(t *testing.T, source *CodexReviewSource, request exec.ReviewRequest) reviewLaunch {
+	t.Helper()
+	launch, err := source.requestLaunch(request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return launch
 }

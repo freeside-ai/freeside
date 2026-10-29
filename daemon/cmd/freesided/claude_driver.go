@@ -1774,8 +1774,7 @@ func composeClaudeDriver(
 			AuthSnapshot: cfg.ShadowReviewAuthSnapshot, InstructionArtifacts: blobs,
 			ConfigurationDigest: shadowReviewDigests.runtime,
 			CostOwner:           cfg.ShadowReviewCostOwner, Now: utcNow,
-			Admit: reviewAdmission(
-				st, agents.Tree, shadowRole, cfg.ShadowReviewAuthIdentityID, utcNow),
+			Admit: reviewAdmission(st, agents.Tree, shadowRole, utcNow),
 		})
 		if err != nil {
 			return nil, fmt.Errorf("compose Claude shadow review source: %w", err)
@@ -1811,7 +1810,7 @@ func composeClaudeDriver(
 			InstructionArtifacts: blobs,
 			ConfigurationDigest:  reviewConfigurationDigest,
 			CostOwner:            cfg.ReviewCostOwner, Now: utcNow,
-			Admit: reviewAdmission(st, agents.Tree, routedRole, cfg.ReviewAuthIdentityID, utcNow),
+			Admit: reviewAdmission(st, agents.Tree, routedRole, utcNow),
 		}
 		reviewSource, err = newRoutedReviewSource(cfg.ReviewProvider, sourceConfig, claudeLifecycle)
 		if err != nil {

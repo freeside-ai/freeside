@@ -6,7 +6,12 @@ import (
 )
 
 // testReviewAdmission is the admission snapshot a fixture review request
-// carries where the test is not about admission.
+// carries where the test is not about admission. A review source launches
+// the identity, model, and effort the snapshot names, so it names the ones
+// the Codex fixture source runs (testCodexReview).
 func testReviewAdmission(runID domain.RunID) domain.ReviewAdmission {
-	return fake.ReviewAdmission(domain.RoleReviewer, runID, "review-fixture")
+	admission := fake.ReviewAdmission(domain.RoleReviewer, runID, "review-fixture")
+	admission.AuthIdentityID = "codex-reviewer"
+	admission.AgentBinding.RouteModelID, admission.AgentBinding.NativeEffort = "gpt-5.2-codex", "high"
+	return admission
 }

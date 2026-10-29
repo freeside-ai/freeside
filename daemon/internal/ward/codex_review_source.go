@@ -61,10 +61,9 @@ type CodexReviewSourceConfig struct {
 	Now                  func() time.Time
 	// Admit, when set, runs before a new review request is recorded, and
 	// again before a recorded request whose launch never started is launched.
-	// The daemon uses it to recheck that the review role's lineup line still
-	// resolves to this source's identity, that the request's task has no line
-	// asking for another agent, and that the request's admission snapshot
-	// names what this source launches (plan §5.4). It is a recheck: the
+	// The daemon uses it to recheck that the review role's line, the task's or
+	// else the lineup's, still resolves to the agent the request's admission
+	// snapshot names, which this source launches (plan §5.4). It is a recheck: the
 	// engine admitted the invocation and the request carries that snapshot.
 	// A refusal fails the request as a configuration failure and nothing is
 	// recorded or started.
@@ -313,17 +312,53 @@ func (s *CodexReviewSource) RequestReview(
 			return &exec.ReviewSourceFailure{Class: domain.ReviewFailureConfiguration, Err: err}
 		}
 	}
+	launch, err := s.requestLaunch(req)
+	if err != nil {
+		return &exec.ReviewSourceFailure{Class: domain.ReviewFailureConfiguration, Err: err}
+	}
 	if err := s.cfg.Journal.PutCodexReviewRequest(ctx, string(id), req); err != nil {
 		return &exec.ReviewSourceFailure{Class: classifyCodexObservationFailure(err), Err: err}
 	}
-	if err := s.startRequestedReview(ctx, id, req); err != nil {
+	if err := s.startRequestedReview(ctx, id, req, launch); err != nil {
 		return err
 	}
 	return nil
 }
 
+// reviewLaunch is what one request's launch runs: the review configuration
+// with the model and effort its admission snapshot names, under the identity
+// the snapshot names, with that identity's host snapshot.
+type reviewLaunch struct {
+	review   CodexReviewConfig
+	identity domain.AuthIdentityID
+	snapshot string
+}
+
+// requestLaunch derives a request's launch from its admission snapshot, so a
+// task's reviewer line runs the agent it selected (#1981). The request-time
+// launch and the relaunch of a recorded request both derive it here. A request
+// recorded before review admission carries no snapshot and runs what the
+// source was composed with. The configuration digest stays the composed one:
+// the snapshot records the selected agent's values, and they are not
+// re-approved.
+func (s *CodexReviewSource) requestLaunch(req exec.ReviewRequest) (reviewLaunch, error) {
+	launch := reviewLaunch{review: s.cfg.Review, identity: s.cfg.AuthIdentityID, snapshot: s.cfg.AuthSnapshot}
+	admission := req.Admission
+	if admission.InvocationID == "" {
+		return launch, nil
+	}
+	launch.review.Model = admission.AgentBinding.RouteModelID
+	launch.review.ReasoningEffort = admission.AgentBinding.NativeEffort
+	if admission.AuthIdentityID == s.cfg.AuthIdentityID {
+		return launch, nil
+	}
+	return reviewLaunch{}, fmt.Errorf(
+		"%w: the request was admitted under identity %s, and this source delivers only %s's credential",
+		ErrInvalidCodexReviewSpec, admission.AuthIdentityID, s.cfg.AuthIdentityID)
+}
+
 func (s *CodexReviewSource) startRequestedReview(
-	ctx context.Context, id domain.InvocationID, req exec.ReviewRequest,
+	ctx context.Context, id domain.InvocationID, req exec.ReviewRequest, run reviewLaunch,
 ) (err error) {
 	// Collection records every review launch that ran; this records an
 	// attempt that failed first, a helper killed at its limit among them.
@@ -398,13 +433,13 @@ func (s *CodexReviewSource) startRequestedReview(
 	if s.reviewProvider().vendor() == domain.AgentVendorCodex {
 		expectedBase = req.BaseSHA
 	}
-	launch, err := s.cfg.Lifecycle.codexReview(ctx, s.cfg.Review, CodexReviewLaunchSpec{
+	launch, err := s.cfg.Lifecycle.codexReview(ctx, run.review, CodexReviewLaunchSpec{
 		RunID: string(id), WorkflowRunID: req.RunID, Image: s.cfg.Review.ApprovedImage,
 		WorkspaceSourceRunID: string(id), WorkspaceVolume: workspace.Volume,
 		ExpectedHead: req.HeadSHA, ExpectedBase: expectedBase, ExpectedEvaluated: req.EvaluatedSHA,
 		Prompt:   s.reviewProvider().reviewPrompt(req),
 		Boundary: CodexReviewFreshStart, AuthMode: s.cfg.AuthMode,
-		AuthIdentityID: s.cfg.AuthIdentityID, AuthSnapshot: s.cfg.AuthSnapshot,
+		AuthIdentityID: run.identity, AuthSnapshot: run.snapshot,
 		Instructions: instructions, InstructionFile: instructionFile,
 		InstructionBinding: req.Instructions, ConfigurationDigest: s.cfg.ConfigurationDigest,
 	})
@@ -824,7 +859,11 @@ func (s *CodexReviewSource) Inspect(
 				return "", &exec.ReviewSourceFailure{Class: domain.ReviewFailureConfiguration, Err: err}
 			}
 		}
-		if err := s.startRequestedReview(ctx, id, request); err != nil {
+		launch, err := s.requestLaunch(request)
+		if err != nil {
+			return "", &exec.ReviewSourceFailure{Class: domain.ReviewFailureConfiguration, Err: err}
+		}
+		if err := s.startRequestedReview(ctx, id, request, launch); err != nil {
 			return "", err
 		}
 		return exec.StatusRunning, nil

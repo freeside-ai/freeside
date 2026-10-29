@@ -206,7 +206,7 @@ func TestLiveClaudeReviewLifecycleCrossesReconstructionStartBoundary(t *testing.
 	outcome := testClaudeReviewSourceForCollection().normalizeCollection(
 		domain.InvocationID(runID),
 		exec.ReviewRequest{
-			Admission: testReviewAdmission(domain.RunID(runID)),
+			Admission: testClaudeReviewAdmission(domain.RunID(runID)),
 			RunID:     domain.RunID(runID), BaseSHA: candidate.BaseSHA, HeadSHA: candidate.BaseSHA,
 			Instructions: instructionBinding,
 		},

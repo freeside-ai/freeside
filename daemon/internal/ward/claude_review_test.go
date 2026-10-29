@@ -397,7 +397,7 @@ func TestCodexReviewRecoveryDispatchesStartedClaudeIntent(t *testing.T) {
 	}
 	id := domain.InvocationID("review-claude-restart-1")
 	request := exec.ReviewRequest{
-		Admission: testReviewAdmission("run-claude-restart"),
+		Admission: testClaudeReviewAdmission("run-claude-restart"),
 		RunID:     "run-claude-restart", Round: 1, Repo: seedSpec.Seed.Base.Repo,
 		RepositoryID: seedSpec.Seed.Base.RepositoryID, BaseRef: seedSpec.Seed.Base.BaseRef,
 		BaseSHA: strings.Repeat("a", 40), HeadSHA: seedSpec.Seed.Base.BaseSHA,
@@ -540,7 +540,7 @@ func testClaudeReviewSourceForCollection() *CodexReviewSource {
 func TestClaudeReviewCollectionEnvelope(t *testing.T) {
 	source := testClaudeReviewSourceForCollection()
 	id := domain.InvocationID("review-run-1-1")
-	req := exec.ReviewRequest{Admission: testReviewAdmission("run-1"), RunID: "run-1", BaseSHA: strings.Repeat("a", 40), HeadSHA: strings.Repeat("b", 40)}
+	req := exec.ReviewRequest{Admission: testClaudeReviewAdmission("run-1"), RunID: "run-1", BaseSHA: strings.Repeat("a", 40), HeadSHA: strings.Repeat("b", 40)}
 
 	valid := source.normalizeCollection(id, req, CodexReviewCollection{
 		Result:              []byte(`{"findings":[{"severity":"P1","location":{"path":"a.go","start_line":3,"end_line":5},"explanation":"x"}]}`),
@@ -624,7 +624,7 @@ func TestClaudeReviewCollectionCarriesUsage(t *testing.T) {
 	source := testClaudeReviewSourceForCollection()
 	id := domain.InvocationID("review-run-1-1")
 	req := exec.ReviewRequest{
-		Admission: testReviewAdmission("run-1"),
+		Admission: testClaudeReviewAdmission("run-1"),
 		RunID:     "run-1", BaseSHA: strings.Repeat("a", 40), HeadSHA: strings.Repeat("b", 40),
 	}
 	outcome := source.normalizeCollection(id, req, CodexReviewCollection{
@@ -683,7 +683,7 @@ func TestClaudeReviewOutcomeValidationProviderAware(t *testing.T) {
 	source := testClaudeReviewSourceForCollection()
 	id := domain.InvocationID("review-run-1-1")
 	req := exec.ReviewRequest{
-		Admission: testReviewAdmission("run-1"),
+		Admission: testClaudeReviewAdmission("run-1"),
 		RunID:     "run-1", BaseSHA: strings.Repeat("a", 40), HeadSHA: strings.Repeat("b", 40),
 		Instructions: exec.ReviewInstructionBinding{ResultDigest: domain.Digest(contentaddr.Sum([]byte("instr")))},
 	}
