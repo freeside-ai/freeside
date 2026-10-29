@@ -597,34 +597,36 @@ func (tx *ReadTx) gateReconstructedAdmission(
 // that the id is a well-formed digest, which a caller can supply for a line
 // that was never recorded; here it must resolve to a recorded line of the
 // admission run's task. The lineup has no record to resolve, and a card's
-// stays shape-only until the card has a writer (#869).
+// stays shape-only until the card has a writer (#869). It serves execution
+// and review admissions alike, and returns the line it resolved, or a zero
+// line when the binding cites none.
 func (tx *ReadTx) gateTaskLineSelection(
-	ctx context.Context, admission domain.ExecutionAdmission, binding domain.AdmissionAgentBinding,
-) error {
+	ctx context.Context, invocationID domain.InvocationID, runID domain.RunID, binding domain.AdmissionAgentBinding,
+) (domain.TaskLine, error) {
 	if binding.SelectionSource != domain.AgentSelectionSourceTaskLine {
-		return nil
+		return domain.TaskLine{}, nil
 	}
 	line, err := tx.GetTaskLine(ctx, binding.SelectionRecordID)
 	if errors.Is(err, ErrNotFound) {
 		// Not reported as ErrNotFound: the admission row is present and was
 		// refused, and a caller asking whether a record exists must not read
 		// this as none.
-		return fmt.Errorf("admission %q cites task line %q, which is not recorded: %w",
-			admission.InvocationID, binding.SelectionRecordID, domain.ErrAdmissionDerivationMismatch)
+		return domain.TaskLine{}, fmt.Errorf("admission %q cites task line %q, which is not recorded: %w",
+			invocationID, binding.SelectionRecordID, domain.ErrAdmissionDerivationMismatch)
 	}
 	if err != nil {
-		return fmt.Errorf("admission %q cites task line %q: %w",
-			admission.InvocationID, binding.SelectionRecordID, err)
+		return domain.TaskLine{}, fmt.Errorf("admission %q cites task line %q: %w",
+			invocationID, binding.SelectionRecordID, err)
 	}
-	run, err := tx.GetRun(ctx, admission.RunID)
+	run, err := tx.GetRun(ctx, runID)
 	if err != nil {
-		return fmt.Errorf("admission %q: %w", admission.InvocationID, err)
+		return domain.TaskLine{}, fmt.Errorf("admission %q: %w", invocationID, err)
 	}
 	if line.TaskID != run.TaskID {
-		return fmt.Errorf("admission %q cites task line %q of task %q, its run belongs to task %q: %w",
-			admission.InvocationID, line.ID, line.TaskID, run.TaskID, domain.ErrAdmissionDerivationMismatch)
+		return domain.TaskLine{}, fmt.Errorf("admission %q cites task line %q of task %q, its run belongs to task %q: %w",
+			invocationID, line.ID, line.TaskID, run.TaskID, domain.ErrAdmissionDerivationMismatch)
 	}
-	return nil
+	return line, nil
 }
 
 func (tx *ReadTx) gateAdmissionWithReviewConfigurationRecovery(
@@ -692,7 +694,7 @@ func (tx *ReadTx) gateAdmissionWithReviewConfigurationRecovery(
 				admission.InvocationID, binding.StoreManifestDigest, generation.StoreManifestDigest,
 				domain.ErrAdmissionDerivationMismatch)
 		}
-		if err := tx.gateTaskLineSelection(ctx, admission, *binding); err != nil {
+		if _, err := tx.gateTaskLineSelection(ctx, admission.InvocationID, admission.RunID, *binding); err != nil {
 			return err
 		}
 	}

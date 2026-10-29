@@ -197,3 +197,120 @@ func TestReviewAdmissionWithTheAttendedFlagReconstructs(t *testing.T) {
 		t.Fatalf("replay of the stored snapshot = %v", err)
 	}
 }
+
+// TestReviewAdmissionResolvesTheTaskLineItCites pins the re-gate of a review
+// snapshot under task_line, as TestTaskLineAdmissionResolvesTheLineItCites
+// pins an execution admission's: the id must resolve to a recorded reviewer
+// line of the snapshot run's task, when the snapshot is put and on every read.
+func TestReviewAdmissionResolvesTheTaskLineItCites(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	open := func(t *testing.T) *Store {
+		t.Helper()
+		st := openTemplateStoreAt(t, t.TempDir()+"/admissions.db", Options{})
+		if err := st.Write(ctx, func(tx *WriteTx) error {
+			for _, id := range []domain.RunID{"run-1", "run-2"} {
+				if err := tx.PutRun(ctx, domain.Run{
+					ID: id, ProjectID: "project", SpecDigest: "sha256:spec", PolicyDigest: "sha256:policy",
+				}); err != nil {
+					return err
+				}
+			}
+			return nil
+		}); err != nil {
+			t.Fatal(err)
+		}
+		return st
+	}
+	appendLine := func(t *testing.T, st *Store, runID domain.RunID, role domain.RoleName) domain.TaskLine {
+		t.Helper()
+		var line domain.TaskLine
+		if err := st.Write(ctx, func(tx *WriteTx) error {
+			run, err := tx.GetRun(ctx, runID)
+			if err != nil {
+				return err
+			}
+			line, err = tx.AppendTaskLine(ctx, domain.TaskLineInput{
+				TaskID: run.TaskID, Role: role, Agent: "claude-second",
+				Source: domain.TaskLineSourceSubmitTask, SetBy: "cmd-1",
+			}, time.Date(2026, 9, 7, 11, 0, 0, 0, time.UTC))
+			return err
+		}); err != nil {
+			t.Fatal(err)
+		}
+		return line
+	}
+	citing := func(lineID domain.Digest) domain.ReviewAdmission {
+		admission := storedReviewAdmission(t, domain.RoleReviewer)
+		admission.AgentBinding.SelectionSource = domain.AgentSelectionSourceTaskLine
+		admission.AgentBinding.SelectionRecordID = lineID
+		return admission
+	}
+	put := func(st *Store, a domain.ReviewAdmission) error {
+		return st.Write(ctx, func(tx *WriteTx) error { return tx.PutReviewAdmission(ctx, a) })
+	}
+	read := func(st *Store) (domain.ReviewAdmission, error) {
+		var got domain.ReviewAdmission
+		err := st.Read(ctx, func(tx *ReadTx) error {
+			var err error
+			got, err = tx.GetReviewAdmission(ctx, "review-1")
+			return err
+		})
+		return got, err
+	}
+	refused := func(t *testing.T, err error) {
+		t.Helper()
+		// Not ErrNotFound: a refused snapshot must not read as absent.
+		if !errors.Is(err, domain.ErrAdmissionDerivationMismatch) || errors.Is(err, ErrNotFound) {
+			t.Fatalf("err = %v, want %v and not %v", err, domain.ErrAdmissionDerivationMismatch, ErrNotFound)
+		}
+	}
+
+	t.Run("a recorded reviewer line of the run's task", func(t *testing.T) {
+		t.Parallel()
+		st := open(t)
+		admission := citing(appendLine(t, st, "run-1", domain.RoleReviewer).ID)
+		if err := put(st, admission); err != nil {
+			t.Fatalf("put = %v", err)
+		}
+		got, err := read(st)
+		if err != nil || !got.Equal(admission) {
+			t.Fatalf("read back = %+v, %v", got, err)
+		}
+	})
+	t.Run("an id no line was recorded under", func(t *testing.T) {
+		t.Parallel()
+		st := open(t)
+		appendLine(t, st, "run-1", domain.RoleReviewer)
+		refused(t, put(st, citing(domain.Digest("sha256:"+strings.Repeat("e", 64)))))
+	})
+	t.Run("another task's line", func(t *testing.T) {
+		t.Parallel()
+		st := open(t)
+		refused(t, put(st, citing(appendLine(t, st, "run-2", domain.RoleReviewer).ID)))
+	})
+	t.Run("a writer's line", func(t *testing.T) {
+		t.Parallel()
+		st := open(t)
+		refused(t, put(st, citing(appendLine(t, st, "run-1", domain.RoleImplementer).ID)))
+	})
+	t.Run("a row rewritten to cite another task's line", func(t *testing.T) {
+		t.Parallel()
+		st := open(t)
+		if err := put(st, citing(appendLine(t, st, "run-1", domain.RoleReviewer).ID)); err != nil {
+			t.Fatal(err)
+		}
+		// The body and its digest agree, so only the line's re-gate can
+		// refuse the row.
+		body, err := encode(citing(appendLine(t, st, "run-2", domain.RoleReviewer).ID))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := st.db.ExecContext(ctx, `UPDATE review_admissions SET body = ?, body_digest = ?`,
+			body, reviewBodyDigest(body)); err != nil {
+			t.Fatal(err)
+		}
+		_, err = read(st)
+		refused(t, err)
+	})
+}
