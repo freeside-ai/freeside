@@ -3,6 +3,8 @@ package domain
 import (
 	"fmt"
 	"time"
+
+	"github.com/freeside-ai/freeside/daemon/internal/contentaddr"
 )
 
 // TaskEventKind names a recorded daemon fact, never inferred task history.
@@ -30,6 +32,11 @@ const (
 	// sending a published run back to review: the ready card it withdrew and
 	// the finding that started the cycle.
 	TaskEventExternalReviewReentered TaskEventKind = "external_review_reentered"
+	// TaskEventTaskLineSet marks one task line version: who set it, the
+	// agent it took, the agent it superseded, and, for a router line, the
+	// selection's provenance. A switch is the event whose detail names both
+	// the agent left and the agent taken.
+	TaskEventTaskLineSet TaskEventKind = "task_line_set"
 )
 
 var AllTaskEventKinds = []TaskEventKind{
@@ -38,6 +45,7 @@ var AllTaskEventKinds = []TaskEventKind{
 	TaskEventReviewRequested, TaskEventReviewCompleted, TaskEventReviewFailed, TaskEventVerificationRecorded,
 	TaskEventCampaignAllocated, TaskEventSpecificationApproved,
 	TaskEventPROpened, TaskEventPRMerged, TaskEventExternalReviewReentered,
+	TaskEventTaskLineSet,
 }
 
 func (k TaskEventKind) valid() bool {
@@ -46,7 +54,8 @@ func (k TaskEventKind) valid() bool {
 		TaskEventStopRequested, TaskEventStopped, TaskEventStopFailed, TaskEventRunMilestone,
 		TaskEventReviewRequested, TaskEventReviewCompleted, TaskEventReviewFailed, TaskEventVerificationRecorded,
 		TaskEventCampaignAllocated, TaskEventSpecificationApproved,
-		TaskEventPROpened, TaskEventPRMerged, TaskEventExternalReviewReentered:
+		TaskEventPROpened, TaskEventPRMerged, TaskEventExternalReviewReentered,
+		TaskEventTaskLineSet:
 		return true
 	default:
 		return false
@@ -105,15 +114,48 @@ type TaskEventExternalReview struct {
 	HeadSHA       string    `json:"head_sha"`
 }
 
+// TaskEventTaskLine names one task line version as the timeline shows it.
+// SupersededAgent is the agent of the version this one supersedes, nil for
+// version 1. Provenance is the router's citation, nil for an operator line;
+// its passed-over agent is the agent a first admission left.
+type TaskEventTaskLine struct {
+	LineID          Digest              `json:"line_id"`
+	Role            RoleName            `json:"role"`
+	Agent           string              `json:"agent"`
+	Version         int                 `json:"version"`
+	Source          TaskLineSource      `json:"source"`
+	SupersededAgent *string             `json:"superseded_agent"`
+	Provenance      *TaskLineProvenance `json:"provenance"`
+}
+
+func (l TaskEventTaskLine) validate() error {
+	if !contentaddr.Valid(string(l.LineID)) || !l.Role.TaskLineEligible() || !validAgentName(l.Agent) ||
+		l.Version < 1 || (l.Version == 1) != (l.SupersededAgent == nil) || !l.Source.valid() ||
+		(l.Provenance != nil) != (l.Source == TaskLineSourceRouter) {
+		return ErrTaskEventDetailMismatch
+	}
+	if l.SupersededAgent != nil && !validAgentName(*l.SupersededAgent) {
+		return ErrTaskEventDetailMismatch
+	}
+	if l.Provenance != nil {
+		if err := l.Provenance.validate(l.Agent); err != nil {
+			return fmt.Errorf("task event line provenance: %w: %w", ErrTaskEventDetailMismatch, err)
+		}
+	}
+	return nil
+}
+
 // TaskEvent is a kind-scoped fact with explicit-null details. Campaign
 // allocation names its specification run; approval also names the bound
 // implementation run. PR events name their run, including legacy runs, and
-// an external review re-entry names its run and pull request.
+// an external review re-entry names its run and pull request. A task line
+// event is task-scoped and names no run.
 type TaskEvent struct {
 	Milestone          *RunMilestone            `json:"milestone"`
 	Review             *TaskEventReview         `json:"review"`
 	Verification       *TaskEventVerification   `json:"verification"`
 	ExternalReview     *TaskEventExternalReview `json:"external_review"`
+	Line               *TaskEventTaskLine       `json:"line"`
 	Kind               TaskEventKind            `json:"kind"`
 	RecordedAt         time.Time                `json:"recorded_at"`
 	CampaignID         *CampaignID              `json:"campaign_id"`
@@ -153,7 +195,8 @@ func (e TaskEvent) Validate() error {
 	if (e.Milestone != nil) != (e.Kind == TaskEventRunMilestone) ||
 		(e.Review != nil) != (e.Kind == TaskEventReviewRequested || e.Kind == TaskEventReviewCompleted || e.Kind == TaskEventReviewFailed) ||
 		(e.Verification != nil) != (e.Kind == TaskEventVerificationRecorded) ||
-		(e.ExternalReview != nil) != (e.Kind == TaskEventExternalReviewReentered) {
+		(e.ExternalReview != nil) != (e.Kind == TaskEventExternalReviewReentered) ||
+		(e.Line != nil) != (e.Kind == TaskEventTaskLineSet) {
 		return ErrTaskEventDetailMismatch
 	}
 	switch e.Kind {
@@ -205,6 +248,11 @@ func (e TaskEvent) Validate() error {
 			return ErrTaskEventDetailMismatch
 		}
 		return check(false, true, false, false, true, false)
+	case TaskEventTaskLineSet:
+		if err := e.Line.validate(); err != nil {
+			return err
+		}
+		return check(false, false, false, false, false, false)
 	}
 	return ErrInvalidTaskEventKind
 }

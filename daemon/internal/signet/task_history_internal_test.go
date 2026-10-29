@@ -18,7 +18,7 @@ func TestTaskHistoryIncludesRecordedWorkflowAndStableSourceBindings(t *testing.T
 	outcome := domain.ReviewClean
 	inputs[1].facts.review = &RunReviewFacts{Rounds: []RunReviewRound{{Round: 1, InvocationID: "review-1", HeadSHA: "review-head", BaseSHA: "review-base", RequestedAt: &requested, CompletedAt: &completed, Outcome: &outcome}}}
 	inputs[1].readiness = []domain.AttentionItem{{ID: "ready-1", CreatedAt: &completed, Readiness: &domain.ReadinessSummary{Class: domain.ReadinessReadyClean}, ReadinessDetail: &domain.ReadinessDetail{CandidateHead: "ready-head", Base: domain.ReadinessBoundBase{BaseSHA: "ready-base"}}}}
-	got, err := taskTimeline(task, inputs, 42, at.Add(8*time.Hour))
+	got, err := taskTimeline(task, nil, inputs, 42, at.Add(8*time.Hour))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -40,19 +40,19 @@ func TestTaskHistoryIncludesRecordedWorkflowAndStableSourceBindings(t *testing.T
 			t.Errorf("%s: got %d want %d", kind, counts[kind], want)
 		}
 	}
-	again, err := taskTimeline(task, inputs, 42, at.Add(8*time.Hour))
+	again, err := taskTimeline(task, nil, inputs, 42, at.Add(8*time.Hour))
 	if err != nil || !reflect.DeepEqual(got.Events, again.Events) {
 		t.Fatal("read changed recorded events", err)
 	}
 	// Source enumeration changes cannot reorder coincident workflow events.
 	reversed := slices.Clone(inputs)
 	slices.Reverse(reversed)
-	events, err := taskHistoryEvents(task, reversed, got.Sections)
+	events, err := taskHistoryEvents(task, nil, reversed, got.Sections)
 	if err != nil || !reflect.DeepEqual(events, got.Events) {
 		t.Fatal("source order changed history", err)
 	}
 	inputs[1].readiness[0].CreatedAt = nil
-	legacy, err := taskTimeline(task, inputs, 42, at)
+	legacy, err := taskTimeline(task, nil, inputs, 42, at)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -79,7 +79,7 @@ func TestTaskHistoryLifecycleAndQueuedStopping(t *testing.T) {
 			if state != domain.TaskCancellationRequested {
 				task.Cancellation.Acknowledgement = &domain.TaskCancellationAcknowledgement{State: state, RecordedAt: at.Add(2 * time.Minute)}
 			}
-			events, err := taskHistoryEvents(task, nil, nil)
+			events, err := taskHistoryEvents(task, nil, nil, nil)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -94,7 +94,7 @@ func TestTaskHistoryLifecycleAndQueuedStopping(t *testing.T) {
 		})
 	}
 	task := domain.Task{CreatedAt: at, LifecycleFacts: []domain.TaskLifecycleFact{{Kind: domain.TaskLifecycleStarted, RunID: "old", RecordedAt: at.Add(time.Minute)}, {Kind: domain.TaskLifecycleCompleted, RunID: "old", RecordedAt: at.Add(2 * time.Minute)}, {Kind: domain.TaskLifecycleStarted, RunID: "new", RecordedAt: at.Add(3 * time.Minute)}, {Kind: domain.TaskLifecycleAbandoned, RunID: "new", RecordedAt: at.Add(4 * time.Minute)}}}
-	events, err := taskHistoryEvents(task, nil, nil)
+	events, err := taskHistoryEvents(task, nil, nil, nil)
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -1519,6 +1519,113 @@ components:
           pattern: '^[a-z0-9]([a-z0-9_-]*[a-z0-9])?$'
           description: The agent's name in the control-plane tree.
 
+    TaskLineSource:
+      type: string
+      description: >
+        The path that set a task line (plan §5.4). submit_task, cli_submit,
+        and proposal_start are authenticated operator actions. router is the
+        routing policy's choice at a task's first admission for a role with
+        no operator line, and is the only source that carries provenance.
+      enum: [submit_task, cli_submit, proposal_start, router]
+
+    TaskLineSelectionTrigger:
+      type: string
+      description: >
+        What made the router write a line. first_admission: the policy
+        order's first agent took the task, so no reading was acted on and no
+        agent passed over. exhausted_mark: the router passed over an agent
+        whose pool's window was marked exhausted. A quota refusal parks a task
+        instead of rerouting it, so it is not a trigger.
+      enum: [first_admission, exhausted_mark]
+
+    TaskLineSelectionReading:
+      type: object
+      description: >
+        The usage mark the router acted on, cited by the usage pool and
+        window names and the observation's instant.
+      additionalProperties: false
+      required: [pool, window, observed_at]
+      properties:
+        pool:
+          type: string
+          minLength: 1
+        window:
+          type: string
+          minLength: 1
+        observed_at:
+          type: string
+          format: date-time
+
+    TaskLineProvenance:
+      type: object
+      description: >
+        How the router chose a line's agent: the routing policy revision it
+        applied, the trigger, and, for exhausted_mark only, the reading acted
+        on and the agent passed over. Both are null for first_admission.
+      additionalProperties: false
+      required: [policy_revision, trigger, reading, passed_over]
+      properties:
+        policy_revision:
+          type: integer
+          minimum: 1
+        trigger:
+          $ref: "#/components/schemas/TaskLineSelectionTrigger"
+        reading:
+          nullable: true
+          allOf:
+            - $ref: "#/components/schemas/TaskLineSelectionReading"
+        passed_over:
+          type: string
+          minLength: 1
+          maxLength: 246
+          pattern: '^[a-z0-9]([a-z0-9_-]*[a-z0-9])?$'
+          nullable: true
+          description: The agent the policy order put ahead of the chosen one.
+
+    TaskLine:
+      type: object
+      description: >
+        One version of a task's line for one role: the agent chosen for that
+        role in that task. A change is a new version naming the one it
+        supersedes; a version is never edited. id is the content address of
+        every other field. provenance is set exactly when source is router.
+      additionalProperties: false
+      required: [id, task_id, role, agent, version, predecessor_id, source, set_by, set_at, provenance]
+      properties:
+        id:
+          $ref: "#/components/schemas/Digest"
+        task_id:
+          type: string
+          minLength: 1
+        role:
+          $ref: "#/components/schemas/TaskLineRole"
+        agent:
+          type: string
+          minLength: 1
+          maxLength: 246
+          pattern: '^[a-z0-9]([a-z0-9_-]*[a-z0-9])?$'
+        version:
+          type: integer
+          minimum: 1
+        predecessor_id:
+          nullable: true
+          description: The version this one supersedes; null for version 1.
+          allOf:
+            - $ref: "#/components/schemas/Digest"
+        source:
+          $ref: "#/components/schemas/TaskLineSource"
+        set_by:
+          type: string
+          minLength: 1
+          description: The command or submission identity that set the line.
+        set_at:
+          type: string
+          format: date-time
+        provenance:
+          nullable: true
+          allOf:
+            - $ref: "#/components/schemas/TaskLineProvenance"
+
     EffectProposalRevisionInput:
       type: object
       description: >
@@ -1656,7 +1763,8 @@ components:
         work without a recoverable intake reference.
       additionalProperties: false
       required: [id, project_id, display_names, source, created_at, last_activity_at,
-                 lifecycle, current_position, campaign_ids, run_ids, wip, lifecycle_facts, cancellation]
+                 lifecycle, current_position, campaign_ids, run_ids, wip, lifecycle_facts, cancellation,
+                 task_lines]
       properties:
         id:
           type: string
@@ -1725,6 +1833,14 @@ components:
           description: Null when no Stop was accepted; acceptance alone remains requested.
           allOf:
             - $ref: "#/components/schemas/TaskCancellation"
+        task_lines:
+          type: array
+          description: >
+            Each role's current line, in TaskLineRole order: the lines the
+            task's next admission of that role reads. A role with no line
+            takes its agent from the lineup and is absent.
+          items:
+            $ref: "#/components/schemas/TaskLine"
 
     TaskCancellationState:
       type: string
@@ -1999,6 +2115,7 @@ components:
             review: null
             verification: null
             external_review: null
+            line: null
         sections: []
 
     TaskTimelineSection:
@@ -2108,9 +2225,12 @@ components:
         run's ready card and opened another review round. Its instant is the
         card's conclusion. It reads the recorded finding, not current
         admission, so a later trust-profile change does not hide it.
+        task_line_set requires line and no run_id: one task line version, at
+        its set_at. A switch is the event whose line names the agent left
+        (superseded_agent, or provenance.passed_over) and the agent taken.
         All other details are null. Events are observations, never authority.
       additionalProperties: false
-      required: [kind, recorded_at, campaign_id, run_id, approved_spec_digest, specification_run_id, pr_number, merge_commit_sha, milestone, review, verification, external_review]
+      required: [kind, recorded_at, campaign_id, run_id, approved_spec_digest, specification_run_id, pr_number, merge_commit_sha, milestone, review, verification, external_review, line]
       properties:
         milestone:
           nullable: true
@@ -2128,6 +2248,10 @@ components:
           nullable: true
           allOf:
             - $ref: "#/components/schemas/TaskEventExternalReview"
+        line:
+          nullable: true
+          allOf:
+            - $ref: "#/components/schemas/TaskEventTaskLine"
         kind:
           $ref: "#/components/schemas/TaskEventKind"
         recorded_at:
@@ -2170,6 +2294,7 @@ components:
         review: null
         verification: null
         external_review: null
+        line: null
 
     TaskEventReview:
       type: object
@@ -2242,10 +2367,44 @@ components:
           type: string
           minLength: 1
 
+    TaskEventTaskLine:
+      type: object
+      description: >
+        One task line version as the timeline shows it. superseded_agent is
+        the agent of the version this one supersedes, null for version 1.
+        provenance is the router's citation, null for an operator line.
+      additionalProperties: false
+      required: [line_id, role, agent, version, source, superseded_agent, provenance]
+      properties:
+        line_id:
+          $ref: "#/components/schemas/Digest"
+        role:
+          $ref: "#/components/schemas/TaskLineRole"
+        agent:
+          type: string
+          minLength: 1
+          maxLength: 246
+          pattern: '^[a-z0-9]([a-z0-9_-]*[a-z0-9])?$'
+        version:
+          type: integer
+          minimum: 1
+        source:
+          $ref: "#/components/schemas/TaskLineSource"
+        superseded_agent:
+          type: string
+          minLength: 1
+          maxLength: 246
+          pattern: '^[a-z0-9]([a-z0-9_-]*[a-z0-9])?$'
+          nullable: true
+        provenance:
+          nullable: true
+          allOf:
+            - $ref: "#/components/schemas/TaskLineProvenance"
+
     TaskEventKind:
       type: string
       description: Closed vocabulary of recorded task-wide milestone history.
-      enum: [task_created, task_started, task_completed, task_abandoned, stop_requested, task_stopped, stop_failed, run_milestone, review_requested, review_completed, review_failed, verification_recorded, campaign_allocated, specification_approved, pr_opened, pr_merged, external_review_reentered]
+      enum: [task_created, task_started, task_completed, task_abandoned, stop_requested, task_stopped, stop_failed, run_milestone, review_requested, review_completed, review_failed, verification_recorded, campaign_allocated, specification_approved, pr_opened, pr_merged, external_review_reentered, task_line_set]
       example: task_created
 
     TaskRunRole:

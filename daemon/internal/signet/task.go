@@ -35,6 +35,10 @@ type Task struct {
 	WIP            bool                     `json:"wip"`
 	LifecycleFacts []TaskLifecycleFact      `json:"lifecycle_facts"`
 	Cancellation   *domain.TaskCancellation `json:"cancellation"`
+	// TaskLines is each role's current line in domain.TaskLineRoles order:
+	// the lines the task's next admission of that role reads. A role with
+	// no line stays on the lineup and is absent; no lines is an empty array.
+	TaskLines []domain.TaskLine `json:"task_lines"`
 }
 
 // TaskLifecycleFact renders one recorded lifecycle event for display. The
@@ -93,6 +97,19 @@ func projectTaskSnapshot(ctx context.Context, tx *store.ReadTx, state store.Serv
 		ID: task.ID, ProjectID: task.ProjectID, DisplayNames: *names, Source: projectTaskSource(task.Source),
 		CreatedAt: task.CreatedAt, LastActivityAt: task.CreatedAt, CampaignIDs: task.CampaignIDs, RunIDs: ids,
 		WIP: domain.TaskWIP(task), LifecycleFacts: projectTaskLifecycleFacts(task.LifecycleFacts), Cancellation: task.Cancellation,
+	}
+	current, err := tx.CurrentTaskLines(ctx, task.ID)
+	if err != nil {
+		if errors.Is(err, store.ErrRowInconsistent) {
+			return TaskSnapshot{}, fmt.Errorf("task %s lines: %w: %w", task.ID, ErrRunObservationIntegrity, err)
+		}
+		return TaskSnapshot{}, err
+	}
+	value.TaskLines = make([]domain.TaskLine, 0, len(current))
+	for _, role := range domain.TaskLineRoles {
+		if line, ok := current[role]; ok {
+			value.TaskLines = append(value.TaskLines, line)
+		}
 	}
 	campaigns := []domain.CampaignID{}
 	for _, id := range ids {

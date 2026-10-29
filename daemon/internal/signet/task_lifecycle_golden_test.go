@@ -29,6 +29,7 @@ func TestStoppedQueuedTaskWireGolden(t *testing.T) {
 		ID: task.ID, ProjectID: task.ProjectID, CreatedAt: at, LastActivityAt: at,
 		DisplayNames: domain.DisplayNames{Task: task.Name, Project: domain.DisplayName{Text: "project", Source: domain.DisplayNameSourceIdentifier}},
 		Lifecycle:    task.DisplayLifecycle(nil), CampaignIDs: task.CampaignIDs, RunIDs: []domain.RunID{}, WIP: domain.TaskWIP(task), LifecycleFacts: []TaskLifecycleFact{}, Cancellation: &c,
+		TaskLines: []domain.TaskLine{},
 	}}
 	data, err := json.MarshalIndent(snapshot, "", "  ")
 	if err != nil {
