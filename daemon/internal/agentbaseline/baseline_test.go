@@ -547,21 +547,18 @@ func TestBaselineLineupCoversEveryRole(t *testing.T) {
 
 // The declared sets cover the two writer launches and nothing more: review's
 // `forbidden` policy needs a control no adapter has, so its coverage fails
-// closed until an adapter proves it (#1980). Both review adapters have a
-// record, and neither can be admitted to a ward launch: capability coverage
-// refuses them whatever effort they can send.
-func TestConformanceRecordsCoverTheWriterLaunchesOnly(t *testing.T) {
+// closed until an adapter proves it (#1980).
+func TestDeclaredCapabilitiesCoverTheWriterLaunchesOnly(t *testing.T) {
 	provedAt := time.Date(2026, 10, 1, 12, 0, 0, 0, time.UTC)
-	records := must(agentbaseline.ConformanceRecords(provedAt))
 	claude := must(agentbaseline.ClaudeWardAdapter())
 	codex := must(agentbaseline.CodexReviewAdapter())
 	codexV1 := must(agentbaseline.CodexReviewAdapterV1())
 	byDigest := map[domain.Digest]domain.AdapterConformance{}
-	for _, record := range records {
-		byDigest[record.AdapterDigest] = record
-	}
-	if len(byDigest) != 3 {
-		t.Fatalf("records = %+v", records)
+	for _, adapter := range []domain.AdapterFragment{claude, codex, codexV1} {
+		byDigest[adapter.Digest] = must(domain.NewAdapterConformance(domain.AdapterConformanceInput{
+			AdapterDigest: adapter.Digest, Outcome: domain.ConformancePassed,
+			ProvedCapabilities: adapter.LaunchCapabilities, ProvedAt: provedAt,
+		}))
 	}
 	for _, stage := range []domain.StageName{domain.StageNameSpecification, domain.StageNameImplementation} {
 		launch := must(agentbaseline.Launch(stage))

@@ -137,16 +137,21 @@ func bindProductionWriters(t *testing.T, p *productionPublicationHarness) {
 		}, fakePublicationTime.Add(-time.Minute)); err != nil {
 			return err
 		}
-		records, err := agentbaseline.ConformanceRecords(fakePublicationTime.Add(-time.Minute))
+		adapter, err := agentbaseline.ClaudeWardAdapter()
 		if err != nil {
 			return err
 		}
-		for _, record := range records {
-			if _, err := tx.RecordAdapterConformance(p.ctx, record); err != nil {
-				return err
-			}
+		record, err := domain.NewAdapterConformance(domain.AdapterConformanceInput{
+			AdapterDigest: adapter.Digest, Outcome: domain.ConformancePassed,
+			ProvedCapabilities: domain.NewLaunchCapabilitySet(domain.LaunchCapReadTools, domain.LaunchCapMutationTools,
+				domain.LaunchCapInstructionDelivery, domain.LaunchCapStructuredOutput, domain.LaunchCapContextSeverance, domain.LaunchCapRouteStoreContract),
+			ProvedAt: fakePublicationTime.Add(-time.Minute),
+		})
+		if err != nil {
+			return err
 		}
-		return nil
+		_, err = tx.RecordAdapterConformance(p.ctx, record)
+		return err
 	}); err != nil {
 		t.Fatal(err)
 	}

@@ -132,16 +132,21 @@ func newAgentAdmissionFixture(t *testing.T) *agentAdmissionFixture {
 		if err != nil {
 			return err
 		}
-		records, err := agentbaseline.ConformanceRecords(agentTestAt.Add(-time.Minute))
+		adapter, err := agentbaseline.ClaudeWardAdapter()
 		if err != nil {
 			return err
 		}
-		for _, record := range records {
-			if _, err := tx.RecordAdapterConformance(ctx, record); err != nil {
-				return err
-			}
+		record, err := domain.NewAdapterConformance(domain.AdapterConformanceInput{
+			AdapterDigest: adapter.Digest, Outcome: domain.ConformancePassed,
+			ProvedCapabilities: domain.NewLaunchCapabilitySet(domain.LaunchCapReadTools, domain.LaunchCapMutationTools,
+				domain.LaunchCapInstructionDelivery, domain.LaunchCapStructuredOutput, domain.LaunchCapContextSeverance, domain.LaunchCapRouteStoreContract),
+			ProvedAt: agentTestAt.Add(-time.Minute),
+		})
+		if err != nil {
+			return err
 		}
-		return nil
+		_, err = tx.RecordAdapterConformance(ctx, record)
+		return err
 	}); err != nil {
 		t.Fatal(err)
 	}

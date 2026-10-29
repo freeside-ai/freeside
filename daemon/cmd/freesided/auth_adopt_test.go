@@ -1101,7 +1101,7 @@ func assertAdoptedPatchResolvesAndAdmitsEveryRole(t *testing.T, f *authAdoptFixt
 	}
 	f.withStore(t, func(st *store.Store) {
 		now := time.Now().UTC()
-		if err := recordBaselineAdapterConformance(ctx, st, now); err != nil {
+		if err := recordTestClaudeAdapterConformance(ctx, st, now); err != nil {
 			t.Fatal(err)
 		}
 		for role, identity := range wantIdentity {

@@ -132,7 +132,7 @@ selected components can keep `required` running longer.
 
 ## Protected Prompt Delivery
 
-New Claude stage intents select `file_v4`. The renderer accepts at most 1 MiB
+New Claude stage intents select `file_v5`. The renderer accepts at most 1 MiB
 of complete UTF-8 input. Ward verifies its digest on a separate protected
 volume before writer creation, journals the volume binding with launch state,
 and supplies the root-opened file as Claude's user stdin. `file_v2` delivers
@@ -146,8 +146,12 @@ successful run's stderr is discarded with the container. `file_v4` delivers
 it as `file_v3` does and differs only on a specification run's stage, where it
 passes the specifier output schema with `--json-schema`: the model's decision
 arrives in the result record's `structured_output`, so a prose preamble no
-longer fails the stage, and the decoder still gates every byte of it. Existing
-intents retain the protocol they started under: `file_v1` through `file_v3`
+longer fails the stage, and the decoder still gates every byte of it. `file_v5`
+also explicitly disables the pinned CLI's bundled `agents-md` plugin through
+`--settings`: `--safe-mode` leaves built-in plugins enabled, and this plugin
+can load repository instructions outside the daemon's instruction bundle.
+The conformance transcript must still report no plugins. Existing
+intents retain the protocol they started under: `file_v1` through `file_v4`
 their launch commands, and argument delivery its original 31-KiB limit. This
 changes transport; it neither retries a failed invocation nor grants successor
 publication.
@@ -1589,7 +1593,7 @@ Each agent names the model and the effort its launch passes:
 
 The review agent runs through the adapter `codex_review_v2`, which can send
 every effort above. `codex_review_v1` sends `harness_default` only; it stays
-defined and conformance still records it, so a tree committed on it parses,
+defined so a tree committed on it parses,
 but its reviewer asks no effort and is refused.
 
 **A Claude reviewer.** `-review-harness claude_code` (the default is
@@ -2136,6 +2140,39 @@ under the repository plan, the audit retains `plan_unavailable: true` for each
 affected feature. All automation-authority reads still run; ordinary permission
 errors and incomplete audits still refuse onboarding. Enabling those features
 later changes the audit digest and requires the existing profile reapproval.
+
+After each passed full ward conformance suite, the daemon runs a Claude
+adapter contract suite through the production writer launcher. It reads a
+random challenge, follows a separate instruction challenge, writes an output
+file and summary, and checks the transcript, clean session, provider allowlist,
+and unchanged read-only credential store. Only observed capabilities become
+the adapter's proved set. A missing observation holds writer admission; a
+failed or timed-out run supersedes the prior proof with a failed record.
+Codex review adapters receive no new records; their proof and enforcement
+belong to #1980. Historical records remain in the database.
+
+Each full pass spends one bounded writer launch (at most three minutes) on
+the implementer identity's real subscription. This includes startup with
+`-run-conformance`, scheduled doctor passes (24 hours by default), and full
+passes following writer-image changes. The implementer's model, effort, and
+enrolled credential generation are used. Other implementer adapters are
+skipped. No synthetic provider substitutes for this observation.
+
+The opt-in live test requires Apple `container` running, the pinned Claude
+2.1.282 agent image, the exporter image, and an existing setup token supplied
+through `CLAUDE_CODE_OAUTH_TOKEN`. It fails on missing inputs once opted in:
+
+```sh
+FREESIDE_WARD_LIVE_TEST=1 \
+FREESIDE_WARD_CLAUDE_AGENT_IMAGE='<registry>/freeside-agent-claude@sha256:<digest>' \
+FREESIDE_WARD_EXPORTER_IMAGE='<registry>/freeside-exporter@sha256:<digest>' \
+go -C daemon test ./internal/exec/claude -run '^TestLiveClaudeAdapterConformance$' -v
+```
+
+The test enrolls a disposable credential volume, including the ordinary
+enrollment provider probe, then runs one conformance launch and checks all six
+capabilities. It removes its credential volume after verifying ownership.
+The default test run skips it.
 
 `freesided doctor -db <path> -backend-configuration-digest <digest>` reports
 the current config-bound conformance and workspace-handoff declaration plus

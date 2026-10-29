@@ -99,7 +99,7 @@ func (claudeProvider) RenderPrompt(inputs stage.ProviderPromptInputs) (string, e
 
 // launchDelivery is the protocol every new Claude launch selects. Stored
 // intents keep the member they were started under.
-const launchDelivery = stage.PromptFileV4
+const launchDelivery = stage.PromptFileV5
 
 func (claudeProvider) PromptDelivery() stage.PromptDelivery { return launchDelivery }
 
@@ -209,7 +209,19 @@ func agentCommandWithInput(
 	promptInput, sessionID string, invocationID domain.InvocationID, prepare []string, model, effort string,
 	outputSchema string, files launcherFiles,
 ) []string {
+	return agentCommandWithSettings(promptInput, sessionID, invocationID, prepare, model, effort, outputSchema, "", files)
+}
+
+// Settings are part of the versioned command. Older protocols pass none so
+// their recovery digests remain unchanged.
+func agentCommandWithSettings(
+	promptInput, sessionID string, invocationID domain.InvocationID, prepare []string, model, effort string,
+	outputSchema, settings string, files launcherFiles,
+) []string {
 	selection := ""
+	if settings != "" {
+		selection += "--settings " + shellQuote(settings) + " "
+	}
 	if outputSchema != "" {
 		selection += "--json-schema " + shellQuote(outputSchema) + " "
 	}
@@ -524,7 +536,7 @@ func promptByteLimit(delivery stage.PromptDelivery) (int, error) {
 	switch delivery {
 	case "", stage.PromptArgument:
 		return maxPromptBytes, nil
-	case stage.PromptFileV1, stage.PromptFileV2, stage.PromptFileV3, stage.PromptFileV4:
+	case stage.PromptFileV1, stage.PromptFileV2, stage.PromptFileV3, stage.PromptFileV4, stage.PromptFileV5:
 		return ward.MaxPromptFileBytes, nil
 	}
 	return 0, fmt.Errorf("%w: unknown prompt delivery %q", ErrUnsupportedStart, delivery)
@@ -654,14 +666,20 @@ func (p claudeProvider) HandoffSpec(
 		// (#2314). Both fields are in the durable intent, so recovery rebuilds
 		// the same command; on any other stage the command is file_v3's.
 		outputSchema := ""
-		if in.PromptDelivery == stage.PromptFileV4 && spec.StageID == domain.SpecificationStageID(spec.RunID) {
+		if (in.PromptDelivery == stage.PromptFileV4 || in.PromptDelivery == stage.PromptFileV5) && spec.StageID == domain.SpecificationStageID(spec.RunID) {
 			outputSchema = specify.OutputJSONSchema
+		}
+		settings := ""
+		if in.PromptDelivery == stage.PromptFileV5 {
+			// The pinned CLI's safe mode excludes installed plugins, but its
+			// bundled agents-md plugin can still load repository instructions.
+			settings = `{"enabledPlugins":{"agents-md@builtin":false}}`
 		}
 		// The root shell opens stdin before setpriv drops privileges. Prompt
 		// bytes never enter argv, and remain user input rather than instructions.
-		hs.Agent.Command = agentCommandWithInput(
+		hs.Agent.Command = agentCommandWithSettings(
 			"< "+shellQuote(ward.PromptFilePath), sessionIDFor(id), id, in.Preparation,
-			spec.RouteModelID, spec.NativeEffort, outputSchema, files)
+			spec.RouteModelID, spec.NativeEffort, outputSchema, settings, files)
 		return hs, nil
 	}
 	switch in.PromptDelivery {
@@ -674,7 +692,7 @@ func (p claudeProvider) HandoffSpec(
 		return withPromptFile(launcherFilesInWorkspace)
 	case stage.PromptFileV2:
 		return withPromptFile(launcherFilesDeferred)
-	case stage.PromptFileV3, stage.PromptFileV4:
+	case stage.PromptFileV3, stage.PromptFileV4, stage.PromptFileV5:
 		return withPromptFile(launcherFilesDeferredStderr)
 	}
 	return ward.HandoffSpec{}, fmt.Errorf("%w: unknown prompt delivery", ErrUnsupportedStart)

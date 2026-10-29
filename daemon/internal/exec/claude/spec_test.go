@@ -219,6 +219,10 @@ var handoffCommandCases = []handoffCommandCase{
 	{"file-v3-prepare", stage.PromptFileV3, []string{"/usr/local/bin/freeside-project-prepare"}, deferredStderrRedirect, false},
 	{"file-v4-specification", stage.PromptFileV4, nil, deferredStderrRedirect, true},
 	{"file-v4-specification-prepare", stage.PromptFileV4, []string{"/usr/local/bin/freeside-project-prepare"}, deferredStderrRedirect, true},
+	{"file-v5", stage.PromptFileV5, nil, deferredStderrRedirect, false},
+	{"file-v5-prepare", stage.PromptFileV5, []string{"/usr/local/bin/freeside-project-prepare"}, deferredStderrRedirect, false},
+	{"file-v5-specification", stage.PromptFileV5, nil, deferredStderrRedirect, true},
+	{"file-v5-specification-prepare", stage.PromptFileV5, []string{"/usr/local/bin/freeside-project-prepare"}, deferredStderrRedirect, true},
 }
 
 var (
@@ -290,6 +294,33 @@ func TestHandoffSpecSchemaOnlyOnFileV4Specification(t *testing.T) {
 		for _, delivery := range []stage.PromptDelivery{stage.PromptArgument, stage.PromptFileV1, stage.PromptFileV2, stage.PromptFileV3} {
 			if got := command(t, handoffCommandCase{delivery: delivery, prepare: prepare, specification: true}); strings.Contains(got, "--json-schema") {
 				t.Errorf("%s gained the schema on a specification stage", delivery)
+			}
+		}
+	}
+}
+
+func TestHandoffSpecFileV5DisablesBuiltinInstructions(t *testing.T) {
+	t.Parallel()
+	provider := claudeProvider{volumes: testAuthStoreVolumes{volume: "provider-volume"}}
+	if provider.PromptDelivery() != stage.PromptFileV5 {
+		t.Fatal("new launches do not select the severed protocol")
+	}
+	const settings = `--settings '{"enabledPlugins":{"agents-md@builtin":false}}' `
+	for _, specification := range []bool{false, true} {
+		for _, prepare := range [][]string{nil, {"/usr/local/bin/freeside-project-prepare"}} {
+			in := handoffCommandCase{delivery: stage.PromptFileV4, prepare: prepare, specification: specification}.input()
+			v4, err := provider.HandoffSpec(t.Context(), in)
+			if err != nil {
+				t.Fatal(err)
+			}
+			in.PromptDelivery = stage.PromptFileV5
+			v5, err := provider.HandoffSpec(t.Context(), in)
+			if err != nil {
+				t.Fatal(err)
+			}
+			want := strings.Replace(v4.Agent.Command[2], "--append-system-prompt-file '"+instructionBundlePath+"' ", "--append-system-prompt-file '"+instructionBundlePath+"' "+settings, 1)
+			if want == v4.Agent.Command[2] || v5.Agent.Command[2] != want {
+				t.Fatal("file_v5 must add only the explicit plugin-disable setting to file_v4")
 			}
 		}
 	}

@@ -522,7 +522,7 @@ func TestRunClaudeConformanceBindsExactNamespaceBeforeSetup(t *testing.T) {
 	}
 	err = runClaudeConformance(t.Context(), nil, nil, nil, claudeDriverConfig{
 		StateDir: stateRoot, RigTokenFile: tokenFile, SeedRoot: blockedSeedRoot,
-	}, nil)
+	}, nil, nil)
 	if err == nil || !strings.Contains(err.Error(), "create conformance seed root") {
 		t.Fatalf("conformance setup error = %v, want blocked seed root", err)
 	}
