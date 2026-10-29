@@ -1072,3 +1072,24 @@ func TestProposalCardReads(t *testing.T) {
 		})
 	}
 }
+
+// TestProposalTaskRefusesAnEffectCard: only a task_proposal starts a task, so
+// a card of another kind resolves to none.
+func TestProposalTaskRefusesAnEffectCard(t *testing.T) {
+	ctx := context.Background()
+	fx := newAdoptionFixture(t)
+	instance, _, err := fx.admit(t, fx.params())
+	if err != nil {
+		t.Fatal(err)
+	}
+	fx.decide(t, instance, domain.ActionApprove)
+	if err := fx.s.Read(ctx, func(tx *ReadTx) error {
+		_, err := tx.ProposalTask(ctx, domain.ItemID(string(instance.ID)+"/effect"))
+		if !errors.Is(err, domain.ErrParentKeyMismatch) {
+			t.Fatalf("adoption card: error = %v, want ErrParentKeyMismatch", err)
+		}
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+}

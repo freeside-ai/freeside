@@ -11,6 +11,7 @@ import (
 	"github.com/freeside-ai/freeside/daemon/internal/agenttree"
 	"github.com/freeside-ai/freeside/daemon/internal/contentaddr"
 	"github.com/freeside-ai/freeside/daemon/internal/domain"
+	"github.com/freeside-ai/freeside/daemon/internal/signet"
 	"github.com/freeside-ai/freeside/daemon/internal/store"
 )
 
@@ -323,25 +324,25 @@ func RunTaskLine(
 // it. The store's read proves only that the row is self-consistent: a line's
 // id is an unkeyed hash of its own columns, so a row nobody submitted still
 // decodes. Choosing an agent chooses which credential runs (§5.8), so the
-// record SetBy names must exist, be of the kind Source claims, and have
-// created this task at the instant the line was set.
+// record SetBy names must exist, be of the kind Source claims, and
+// name this task. Submission lines must be set at task creation; proposal
+// lines must be set at the recorded decision's instant.
 //
 // This proves the line rests on a real operator action on this task. It does
-// not prove the agent is the one that action sent: neither record stores the
+// not prove the agent is the one that action sent: the records do not store the
 // lines, and the request digest cannot be recomputed from stored state.
 func anchorTaskLine(ctx context.Context, tx *store.ReadTx, line domain.TaskLine) error {
 	task, err := tx.GetTask(ctx, line.TaskID)
 	if err != nil {
 		return err
 	}
-	// Every writer sets a line in the transaction that creates its task.
-	if !line.SetAt.Equal(task.CreatedAt) {
-		return fmt.Errorf("it was set at %s, its task was created at %s",
-			line.SetAt.Format(time.RFC3339Nano), task.CreatedAt.Format(time.RFC3339Nano))
-	}
 	// No default: a new source's author decides what record backs it.
 	switch line.Source {
 	case domain.TaskLineSourceSubmitTask:
+		if !line.SetAt.Equal(task.CreatedAt) {
+			return fmt.Errorf("it was set at %s, its task was created at %s",
+				line.SetAt.Format(time.RFC3339Nano), task.CreatedAt.Format(time.RFC3339Nano))
+		}
 		submission, err := tx.GetTaskSubmission(ctx, line.SetBy)
 		if err != nil {
 			return err
@@ -351,6 +352,10 @@ func anchorTaskLine(ctx context.Context, tx *store.ReadTx, line domain.TaskLine)
 		}
 		return nil
 	case domain.TaskLineSourceCLISubmit:
+		if !line.SetAt.Equal(task.CreatedAt) {
+			return fmt.Errorf("it was set at %s, its task was created at %s",
+				line.SetAt.Format(time.RFC3339Nano), task.CreatedAt.Format(time.RFC3339Nano))
+		}
 		// submit_task records a manual submission too, under a client:
 		// identity; only a cli: one is a `freesided submit`.
 		if !strings.HasPrefix(line.SetBy, cliSubmissionIdentityPrefix) {
@@ -374,9 +379,38 @@ func anchorTaskLine(ctx context.Context, tx *store.ReadTx, line domain.TaskLine)
 		}
 		return nil
 	case domain.TaskLineSourceProposalStart:
-		// Nothing writes this source yet. Its arm, against the decision
-		// command, arrives with its writer (#1641).
-		return errors.New("no proposal start records a task line yet")
+		command, err := tx.GetCommand(ctx, line.SetBy)
+		if err != nil {
+			return err
+		}
+		if command.Action != domain.ActionStart && command.Action != domain.ActionStartWithChanges {
+			return errors.New("that command is not a proposal start")
+		}
+		if command.DeviceID == signet.UnattendedInitiatorDeviceID {
+			return errors.New("that command is an unattended start, not an operator choice")
+		}
+		instance, _, err := tx.ProposalForItem(ctx, command.ItemID)
+		if err != nil {
+			return err
+		}
+		decision, err := tx.ProposalDecisionForInstance(ctx, instance.ID)
+		if err != nil {
+			return err
+		}
+		if decision == nil || decision.CommandID != line.SetBy {
+			return errors.New("that command is not the proposal's recorded decision")
+		}
+		if !decision.DecidedAt.Equal(line.SetAt) {
+			return errors.New("the line was not set at the proposal's decision instant")
+		}
+		taskID, err := tx.ProposalTask(ctx, command.ItemID)
+		if err != nil {
+			return err
+		}
+		if taskID != line.TaskID {
+			return fmt.Errorf("that proposal starts task %s", taskID)
+		}
+		return nil
 	}
 	return fmt.Errorf("source %q is not a task line source", line.Source)
 }

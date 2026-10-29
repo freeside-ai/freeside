@@ -26,8 +26,8 @@ const (
 	// TaskLineSourceCLISubmit is `freesided submit` on the daemon host.
 	TaskLineSourceCLISubmit TaskLineSource = "cli_submit"
 	// TaskLineSourceProposalStart is the operator's Start or "start with
-	// changes" decision on a task_proposal card. Nothing writes it until
-	// #1641 binds the lines to the item version.
+	// changes" decision on a task_proposal card, bound to the item version
+	// and recorded at the decision's instant.
 	TaskLineSourceProposalStart TaskLineSource = "proposal_start"
 )
 
