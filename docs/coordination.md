@@ -32,7 +32,27 @@ One issue per issue-backed work unit, created from the work-unit template:
 - Dependencies: `starts-after`, `merges-after`, and `stacked-on` (see
   Relationship Types), never untyped issue refs. Record an unknown or
   materially ambiguous relationship as `starts-after` until the planner
-  resolves it.
+  resolves it. Two tools read the field mechanically: trackercollect
+  reports a line it can't type, and merge cleanup's tracker refresh holds
+  a unit off **Startable now** when it can't parse a `starts-after` line.
+  So the field takes one shape:
+  - Each line is one relationship with its targets first, then any note
+    after a colon: `starts-after #10, #11: the record both define`.
+    Targets are issue numbers (`#N`) joined by `,` or `and`. A note names
+    no relationship keyword, and no parenthetical sits between two
+    targets.
+  - A `stacked-on` line names the base PR as its target and the base
+    branch in its note: `stacked-on PR #12: feat/store-snapshot-meta`.
+  - Or the field is one bare `none` line.
+  - Nothing else goes in the field: history, readers, and planning notes
+    go in a later section at the same heading level (such as Dependency
+    Notes), never in a subsection under Dependencies.
+
+  After writing or changing the field, check it with both readers:
+  `scripts/trackercollect unit` must report no `UNKNOWN relationship`
+  entry on the issue, and, when a tracker lists the unit, the merge-cleanup
+  skill's `tracker-refresh.sh` run against that tracker must leave no unit
+  held for a field it cannot parse. Both only read the forge.
 
 Labels: `kind:*` for type, and `tracker` for an issue that tracks other
 issues. Milestones carry the phase (1A, 1B). Each wave has a tracking issue
