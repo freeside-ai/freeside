@@ -221,3 +221,70 @@ func TestProposalBuiltInRecipeBindsAttentionItem(t *testing.T) {
 		t.Fatal(err)
 	}
 }
+
+// TestProposalTaskNamesTheSubjectRunsTask: a task_proposal card resolves to
+// the task of the run its work-unit subject declares, the task a start adds
+// its lines to.
+func TestProposalTaskNamesTheSubjectRunsTask(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	st := openStore(t, store.Options{})
+	policy, proposal, _ := proposalFixture(t)
+	at := time.Date(2026, 8, 11, 12, 0, 0, 0, time.UTC)
+	key := domain.ProposalAdmissionKey{Source: domain.ProposalSourceClientCommand, SubmissionCommandID: "command-1"}
+	var itemID domain.ItemID
+	if err := st.Write(ctx, func(tx *store.WriteTx) error {
+		if err := putProposalPolicy(t, ctx, tx, policy); err != nil {
+			return err
+		}
+		instance, _, err := tx.AllocateProposalInstance(ctx, key, "batch-1", proposal, at)
+		if err != nil {
+			return err
+		}
+		artifact, err := instance.EvidenceArtifact()
+		if err != nil {
+			return err
+		}
+		if err := tx.PutArtifact(ctx, artifact); err != nil {
+			return err
+		}
+		item, err := domain.NewAttentionItem(domain.AttentionItemInput{
+			ID: domain.ItemID(instance.ID), ProjectID: "project-1",
+			Subject: domain.Subject{Type: domain.SubjectProposalBatch, ID: "batch-1"},
+			Type:    domain.AttentionTaskProposal, Priority: domain.PriorityNormal,
+			Reason:            "start the accepted work",
+			RequestedDecision: []domain.Action{domain.ActionStart, domain.ActionDecline},
+			EvidenceSnapshot:  []domain.Artifact{artifact}, ItemVersion: 1,
+			InterruptionClass: domain.InterruptionPlannedGate, Status: domain.StatusOpen,
+		}, map[domain.Digest]bool{domain.EffectProposalRecipeDigest: true})
+		if err != nil {
+			return err
+		}
+		if err := tx.PutAttentionItem(ctx, item); err != nil {
+			return err
+		}
+		itemID = item.ID
+		return tx.BindProposalItem(ctx, item.ID, instance.ID, proposal.Digest, nil)
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := st.Read(ctx, func(tx *store.ReadTx) error {
+		run, err := tx.GetRun(ctx, policy.RunID)
+		if err != nil {
+			return err
+		}
+		task, err := tx.ProposalTask(ctx, itemID)
+		if err != nil {
+			return err
+		}
+		if run.TaskID == "" || task != run.TaskID {
+			t.Fatalf("proposal task = %q, want the subject run's task %q", task, run.TaskID)
+		}
+		if _, err := tx.ProposalTask(ctx, "item-never-bound"); !errors.Is(err, store.ErrNotFound) {
+			t.Fatalf("unbound item: error = %v, want ErrNotFound", err)
+		}
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+}

@@ -90,10 +90,9 @@ type DecisionPayload struct {
 	FindingRoutes            []FindingRouteChoice `json:",omitempty"`
 	CapabilityManifestDigest *domain.Digest
 	// TaskLines are per-role agent choices for the task a task_proposal start
-	// creates (plan §5.4). Nil means absent. No decision applies them yet, so
-	// acceptance refuses any decision that carries the field, an empty list
-	// included (submitDecisionTransaction); #1641 binds them to the item
-	// version and lifts the refusal for the two start actions.
+	// names (plan §5.4). Nil means absent; a present, empty list is malformed.
+	// Only start and start_with_changes apply them, in the decision's
+	// transaction and bound to the same item version.
 	TaskLines []domain.TaskLineChoice
 	// AnswerRoute is required for answer_and_retry on an implementation-stage
 	// agent_question and forbidden everywhere else (validateAnswerRoute).

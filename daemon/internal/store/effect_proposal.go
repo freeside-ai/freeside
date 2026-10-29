@@ -442,6 +442,38 @@ func (tx *ReadTx) ProposalForItem(
 	return instance, proposal, nil
 }
 
+// ProposalTask returns the task a task_proposal card would start: the task
+// of the run its work-unit subject declares. Label intake creates that task
+// before it admits the card, so a start decision adds to an existing task.
+// The proposal decision writer and the task-line anchor both resolve the
+// task here, so the two cannot disagree on which task a start names.
+func (tx *ReadTx) ProposalTask(ctx context.Context, itemID domain.ItemID) (domain.TaskID, error) {
+	_, proposal, err := tx.ProposalForItem(ctx, itemID)
+	if err != nil {
+		return "", err
+	}
+	if proposal.Kind != domain.EffectTaskProposal {
+		return "", fmt.Errorf("proposal task for item %q: a %q proposal starts no task: %w",
+			itemID, proposal.Kind, domain.ErrParentKeyMismatch)
+	}
+	handle, err := ProposalSubjectHandle(proposal)
+	if err != nil {
+		return "", fmt.Errorf("proposal task for item %q: %w", itemID, err)
+	}
+	declaration, _, err := tx.ResolveProposalSubject(ctx, handle)
+	if err != nil {
+		return "", fmt.Errorf("proposal task for item %q: %w", itemID, err)
+	}
+	run, err := tx.GetRun(ctx, declaration.RunID)
+	if err != nil {
+		return "", fmt.Errorf("proposal task for item %q: %w", itemID, err)
+	}
+	if run.TaskID == "" {
+		return "", fmt.Errorf("proposal task for item %q: run %q names no task: %w", itemID, run.ID, errRowInconsistent)
+	}
+	return run.TaskID, nil
+}
+
 // ProposalForItemWithRevisionContext returns the authenticated rendered
 // proposal plus the exact digest it supersedes. The extra context is a read
 // projection for operator review; it is reconstructed from the append-only

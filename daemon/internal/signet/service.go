@@ -266,15 +266,15 @@ func (s *Service) Submit(ctx context.Context, in ClientCommand) (CommandResult, 
 // accepting transaction. Command-id replay and durable item policy take
 // precedence over per-action content policy.
 func (s *Service) submitDecisionTransaction(ctx context.Context, in ClientCommand) (CommandResult, error) {
-	// No decision applies task lines yet (#1641), and the recorded command
-	// has no field that would hold them. Accepting the field and dropping it
-	// would start the task on the lineup while the operator believes an agent
-	// was chosen, so every action refuses it, before any write and before the
-	// command-id replay: a retry that adds lines to a recorded decision is
-	// not the request that was recorded.
-	if in.Payload.TaskLines != nil {
-		return CommandResult{}, fmt.Errorf("submit command %q: task_lines are not accepted on a decision: %w",
+	// Validate before replay as well: only proposal starts can set lines,
+	// and a malformed list must never appear to have been accepted.
+	if in.Payload.TaskLines != nil && in.Payload.Action != domain.ActionStart && in.Payload.Action != domain.ActionStartWithChanges {
+		return CommandResult{}, fmt.Errorf("submit command %q: task_lines require a proposal start: %w",
 			in.CommandID, ErrInvalidProposalDecisionPayload)
+	}
+	lines, err := canonicalTaskLines(in.Payload.TaskLines)
+	if err != nil {
+		return CommandResult{}, fmt.Errorf("submit command %q: %w: %w", in.CommandID, ErrInvalidProposalDecisionPayload, err)
 	}
 	if err := s.convergeProposalSnoozes(ctx, s.now().UTC()); err != nil {
 		return CommandResult{}, fmt.Errorf("submit command %q proposal snoozes: %w", in.CommandID, err)
@@ -474,7 +474,7 @@ func (s *Service) submitDecisionTransaction(ctx context.Context, in ClientComman
 					return fmt.Errorf("submit command %q: %w", command.CommandID, err)
 				}
 			case outcomeStartsProposal:
-				kind, err := s.applyStartProposal(ctx, tx, command, item, s.now().UTC())
+				kind, err := s.applyStartProposal(ctx, tx, command, item, lines, s.now().UTC())
 				if err != nil {
 					return fmt.Errorf("submit command %q: %w", command.CommandID, err)
 				}
@@ -482,7 +482,7 @@ func (s *Service) submitDecisionTransaction(ctx context.Context, in ClientComman
 				approvedAdoption = item.Type == domain.AttentionEffectProposal &&
 					kind == domain.EffectImagePolicyAdoption
 			case outcomeRevisesAndStartsProposal:
-				if err := s.applyStartProposalWithChanges(ctx, tx, command, item, s.now().UTC()); err != nil {
+				if err := s.applyStartProposalWithChanges(ctx, tx, command, item, lines, s.now().UTC()); err != nil {
 					return fmt.Errorf("submit command %q: %w", command.CommandID, err)
 				}
 			case outcomeDeclinesProposal:
@@ -526,6 +526,11 @@ func (s *Service) submitDecisionTransaction(ctx context.Context, in ClientComman
 			// occur on this path and no translation is needed.
 			if err := tx.PutCommand(ctx, command); err != nil {
 				return err
+			}
+			if command.Action == domain.ActionStart || command.Action == domain.ActionStartWithChanges {
+				if err := replayProposalTaskLines(ctx, tx, command, lines); err != nil {
+					return err
+				}
 			}
 		}
 		record, snap, err := tx.GetCommandSnapshot(ctx, command.CommandID)

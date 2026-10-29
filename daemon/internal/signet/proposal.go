@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"slices"
 	"time"
 
 	"github.com/freeside-ai/freeside/daemon/internal/domain"
@@ -93,7 +94,7 @@ func (s *Service) StartTaskProposalUnattended(
 		if err := tx.PutCommand(ctx, command); err != nil {
 			return fmt.Errorf("start task proposal unattended: %w", err)
 		}
-		if _, err := s.applyStartProposal(ctx, tx, command, item, s.now().UTC()); err != nil {
+		if _, err := s.applyStartProposal(ctx, tx, command, item, nil, s.now().UTC()); err != nil {
 			return err
 		}
 		started = true
@@ -111,6 +112,7 @@ func (s *Service) applyStartProposal(
 	tx *store.WriteTx,
 	command domain.Command,
 	item domain.AttentionItem,
+	lines []domain.TaskLineChoice,
 	now time.Time,
 ) (domain.EffectKind, error) {
 	instance, proposal, err := s.currentProposal(ctx, tx, item.ID)
@@ -119,6 +121,9 @@ func (s *Service) applyStartProposal(
 	}
 	digest := proposal.Digest
 	if err := tx.RecordProposalDecision(ctx, instance.ID, command.CommandID, command.Action, &digest, now); err != nil {
+		return "", err
+	}
+	if err := recordProposalTaskLines(ctx, tx, command, lines, now); err != nil {
 		return "", err
 	}
 	if proposal.Kind == domain.EffectImagePolicyAdoption {
@@ -174,6 +179,7 @@ func (s *Service) applyStartProposalWithChanges(
 	tx *store.WriteTx,
 	command domain.Command,
 	item domain.AttentionItem,
+	lines []domain.TaskLineChoice,
 	now time.Time,
 ) error {
 	instance, prior, err := s.currentProposal(ctx, tx, item.ID)
@@ -251,7 +257,58 @@ func (s *Service) applyStartProposalWithChanges(
 		return err
 	}
 	digest := revised.Digest
-	return tx.RecordProposalDecision(ctx, instance.ID, command.CommandID, command.Action, &digest, now)
+	if err := tx.RecordProposalDecision(ctx, instance.ID, command.CommandID, command.Action, &digest, now); err != nil {
+		return err
+	}
+	return recordProposalTaskLines(ctx, tx, command, lines, now)
+}
+
+// Lines share the decision's transaction and instant. A later start without
+// lines leaves any earlier choices on a reused task in place.
+func recordProposalTaskLines(ctx context.Context, tx *store.WriteTx, command domain.Command, lines []domain.TaskLineChoice, now time.Time) error {
+	if len(lines) == 0 {
+		return nil
+	}
+	taskID, err := tx.ProposalTask(ctx, command.ItemID)
+	if err != nil {
+		return err
+	}
+	for _, choice := range lines {
+		if _, err := tx.AppendTaskLine(ctx, domain.TaskLineInput{
+			TaskID: taskID, Role: choice.Role, Agent: choice.Agent,
+			Source: domain.TaskLineSourceProposalStart, SetBy: command.CommandID,
+		}, now); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// The command row has no line payload. Compare all versions this command
+// wrote, including choices that a later start on the same task superseded.
+func replayProposalTaskLines(ctx context.Context, tx *store.WriteTx, command domain.Command, lines []domain.TaskLineChoice) error {
+	taskID, err := tx.ProposalTask(ctx, command.ItemID)
+	if err != nil {
+		return err
+	}
+	stored, err := tx.TaskLines(ctx, taskID)
+	if err != nil {
+		return err
+	}
+	var recorded []domain.TaskLineChoice
+	for _, line := range stored {
+		if line.Source == domain.TaskLineSourceProposalStart && line.SetBy == command.CommandID {
+			recorded = append(recorded, domain.TaskLineChoice{Role: line.Role, Agent: line.Agent})
+		}
+	}
+	recorded, err = domain.CanonicalTaskLineChoices(recorded)
+	if err != nil {
+		return err
+	}
+	if !slices.Equal(recorded, lines) {
+		return fmt.Errorf("proposal start command %q task lines: %w", command.CommandID, store.ErrImmutableConflict)
+	}
+	return nil
 }
 
 // reviseTaskProposal decodes the bounded task-proposal delta from the command,

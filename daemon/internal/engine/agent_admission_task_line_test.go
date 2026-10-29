@@ -12,6 +12,7 @@ import (
 	"github.com/freeside-ai/freeside/daemon/internal/agentbaseline"
 	"github.com/freeside-ai/freeside/daemon/internal/agenttree"
 	"github.com/freeside-ai/freeside/daemon/internal/domain"
+	"github.com/freeside-ai/freeside/daemon/internal/signet"
 	"github.com/freeside-ai/freeside/daemon/internal/store"
 )
 
@@ -435,15 +436,13 @@ func TestTaskLineAdmissionRefusals(t *testing.T) {
 			want: "not found",
 		},
 		{
-			// No writer exists for this source until #1641, so nothing can
-			// back the line.
-			name: "a proposal_start line",
+			name: "a proposal_start line names a submit_task command",
 			setup: func(t *testing.T, f *agentAdmissionFixture) {
 				f.addSecondAgent(t)
 				f.recordSubmitCommand(t, agentTestSubmitCommand, f.run.ID)
 				line(t, f, domain.TaskLineSourceProposalStart, agentTestSubmitCommand, f.task(t, f.run.ID).CreatedAt)
 			},
-			want: "no proposal start records a task line yet",
+			want: "not found",
 		},
 	}
 	for _, tc := range cases {
@@ -474,6 +473,194 @@ func TestTaskLineAdmissionRefusals(t *testing.T) {
 				t.Fatalf("stored admission after a refusal = %v, want %v", err, store.ErrNotFound)
 			}
 		})
+	}
+}
+
+func taskLineProposal(t *testing.T, f *agentAdmissionFixture) (ProposalAdmissionResult, *signet.Service, signet.ClientCommand) {
+	t.Helper()
+	ctx := t.Context()
+	request := proposalAdmissionFixture(t, "admit-task-line")
+	seedProposalAdmissionPolicy(t, ctx, f.store, request)
+	engine := newProposalAdmissionEngine(t, f.store)
+	proposal, err := engine.admitProposalAt(ctx, request, agentTestAt)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := f.store.Write(ctx, func(tx *store.WriteTx) error {
+		return tx.PutDevice(ctx, domain.Device{
+			ID: "device-lines", DisplayName: "Mac", Status: domain.DeviceActive, PairedAt: agentTestAt.Add(-time.Hour),
+		})
+	}); err != nil {
+		t.Fatal(err)
+	}
+	service := signet.NewService(f.store, signet.WithBlobStore(engine.artifacts.(*signet.BlobStore)),
+		signet.WithClock(func() time.Time { return agentTestAt.Add(time.Minute) }))
+	return proposal, service, signet.ClientCommand{
+		CommandID: "start-task-line", DeviceID: "device-lines", ExpectedEntityVersion: 1,
+		Payload: signet.DecisionPayload{
+			ItemID: proposal.Item.ID, ItemVersion: proposal.Item.ItemVersion, Action: domain.ActionStart,
+			ArtifactDigests: proposal.Item.ArtifactDigests,
+		},
+	}
+}
+
+func TestProposalTaskLineAdmitsChosenSpecifier(t *testing.T) {
+	f := newAgentAdmissionFixture(t)
+	_, enrollment := f.addSecondAgent(t)
+	_, service, command := taskLineProposal(t, f)
+	command.Payload.TaskLines = []domain.TaskLineChoice{{Role: domain.RoleSpecifier, Agent: agentTestSecondAgent}}
+	if _, err := service.Submit(t.Context(), command); err != nil {
+		t.Fatal(err)
+	}
+	runID := proposalAdmissionPolicy(t).RunID
+	var line domain.TaskLine
+	if err := f.store.Read(t.Context(), func(tx *store.ReadTx) error {
+		var found bool
+		var err error
+		line, found, err = RunTaskLine(t.Context(), tx, runID, domain.RoleSpecifier)
+		if err == nil && !found {
+			t.Fatal("the proposal's specification run has no line")
+		}
+		return err
+	}); err != nil {
+		t.Fatal(err)
+	}
+	admission, err := resolveAgentAdmission(t.Context(), f.store, f.selection, runID, domain.RoleSpecifier,
+		agentTestPrompts[domain.RoleSpecifier].Digest, agentTestAt)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if admission.binding.SelectionSource != domain.AgentSelectionSourceTaskLine ||
+		admission.binding.SelectionRecordID != line.ID || admission.binding.EnrollmentID != enrollment.ID {
+		t.Fatalf("binding = %+v, want the proposal line and its agent's enrollment", admission.binding)
+	}
+}
+
+func TestProposalTaskLineAnchorRefusals(t *testing.T) {
+	for _, tc := range []struct {
+		name, want string
+	}{
+		{"missing command", "not found"},
+		{"wrong action", "not a proposal start"},
+		{"unattended start", "unattended start"},
+		{"no decision", "not the proposal's recorded decision"},
+		{"different decision", "not the proposal's recorded decision"},
+		{"different task", "that proposal starts task"},
+		{"different instant", "decision instant"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			f := newAgentAdmissionFixture(t)
+			f.addSecondAgent(t)
+			proposal, service, command := taskLineProposal(t, f)
+			task := f.task(t, proposalAdmissionPolicy(t).RunID)
+			setBy := command.CommandID
+			setAt := agentTestAt.Add(time.Minute)
+			switch tc.name {
+			case "missing command":
+				setBy = "never-recorded"
+			case "wrong action", "no decision", "different decision":
+				action := domain.ActionStart
+				if tc.name == "wrong action" {
+					action = domain.ActionDecline
+				}
+				if err := f.store.Write(t.Context(), func(tx *store.WriteTx) error {
+					record, err := domain.NewCommand(domain.CommandInput{
+						CommandID: command.CommandID, DeviceID: command.DeviceID, ItemID: proposal.Item.ID,
+						ItemVersion: proposal.Item.ItemVersion, ArtifactDigests: proposal.Item.ArtifactDigests, Action: action,
+					})
+					if err != nil {
+						return err
+					}
+					return tx.PutCommand(t.Context(), record)
+				}); err != nil {
+					t.Fatal(err)
+				}
+				if tc.name == "different decision" {
+					command.CommandID = "actual-decision"
+					if _, err := service.Submit(t.Context(), command); err != nil {
+						t.Fatal(err)
+					}
+				}
+			case "unattended start":
+				if started, err := service.StartTaskProposalUnattended(t.Context(), proposal.Item.ID, command.CommandID); err != nil || !started {
+					t.Fatalf("unattended start = %t, %v", started, err)
+				}
+			case "different task", "different instant":
+				if _, err := service.Submit(t.Context(), command); err != nil {
+					t.Fatal(err)
+				}
+				if tc.name == "different task" {
+					task = f.task(t, f.run.ID)
+				} else {
+					setAt = setAt.Add(time.Nanosecond)
+				}
+			}
+			f.appendLine(t, domain.TaskLineInput{
+				TaskID: task.ID, Role: domain.RoleImplementer, Agent: agentTestSecondAgent,
+				Source: domain.TaskLineSourceProposalStart, SetBy: setBy,
+			}, setAt)
+			runID := proposalAdmissionPolicy(t).RunID
+			if tc.name == "different task" {
+				runID = f.run.ID
+			}
+			admission, err := resolveAgentAdmission(t.Context(), f.store, f.selection, runID, domain.RoleImplementer,
+				agentTestPrompts[domain.RoleImplementer].Digest, agentTestAt)
+			if !errors.Is(err, ErrAgentNotAdmissible) || !strings.Contains(err.Error(), tc.want) || admission.binding.AgentDigest != "" {
+				t.Fatalf("admission = %+v, %v; want refusal naming %q", admission.binding, err, tc.want)
+			}
+		})
+	}
+}
+
+func TestRepeatedProposalStartsKeepTaskLineHistory(t *testing.T) {
+	f := newAgentAdmissionFixture(t)
+	f.addSecondAgent(t)
+	_, service, first := taskLineProposal(t, f)
+	first.Payload.TaskLines = []domain.TaskLineChoice{{Role: domain.RoleSpecifier, Agent: agentTestSecondAgent}}
+	result, err := service.Submit(t.Context(), first)
+	if err != nil {
+		t.Fatal(err)
+	}
+	runID := proposalAdmissionPolicy(t).RunID
+	readLine := func() domain.TaskLine {
+		t.Helper()
+		var line domain.TaskLine
+		if err := f.store.Read(t.Context(), func(tx *store.ReadTx) error {
+			var err error
+			line, _, err = RunTaskLine(t.Context(), tx, runID, domain.RoleSpecifier)
+			return err
+		}); err != nil {
+			t.Fatal(err)
+		}
+		return line
+	}
+	original := readLine()
+	engine := newProposalAdmissionEngine(t, f.store)
+	for i, choices := range [][]domain.TaskLineChoice{nil, {{Role: domain.RoleSpecifier, Agent: agentTestWriterAgent}}} {
+		id := []string{"lineless-repeat", "changed-repeat"}[i]
+		request := proposalAdmissionFixture(t, id)
+		proposal, err := engine.admitProposalAt(t.Context(), request, agentTestAt)
+		if err != nil {
+			t.Fatal(err)
+		}
+		command := first
+		command.CommandID = id
+		command.Payload.ItemID = proposal.Item.ID
+		command.Payload.ArtifactDigests = proposal.Item.ArtifactDigests
+		command.Payload.TaskLines = choices
+		if _, err := service.Submit(t.Context(), command); err != nil {
+			t.Fatal(err)
+		}
+		line := readLine()
+		if i == 0 && line.ID != original.ID {
+			t.Fatal("a lineless start replaced the reused task's earlier choice")
+		}
+		if i == 1 && (line.Version != 2 || line.PredecessorID == nil || *line.PredecessorID != original.ID || line.Agent != agentTestWriterAgent) {
+			t.Fatalf("changed start did not supersede the earlier line: %+v", line)
+		}
+	}
+	if replay, err := service.Submit(t.Context(), first); err != nil || replay.Revision != result.Revision {
+		t.Fatalf("replay after supersession = %+v, %v; want original result", replay, err)
 	}
 }
 
