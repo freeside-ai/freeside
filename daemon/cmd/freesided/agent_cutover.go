@@ -16,6 +16,7 @@ import (
 	"github.com/freeside-ai/freeside/daemon/internal/exec"
 	"github.com/freeside-ai/freeside/daemon/internal/store"
 	"github.com/freeside-ai/freeside/daemon/internal/ward"
+	"github.com/freeside-ai/freeside/daemon/internal/wardstore"
 )
 
 // Agent selection replaced the identity flags (plan §5.4, issue #867). The
@@ -267,6 +268,44 @@ func reviewAdmission(
 				role, agent.Identity.ID, agent.Model, agent.NativeEffort, engine.ErrAgentNotAdmissible)}
 		}
 		return nil
+	}
+}
+
+// reviewCredential reads the credential of an identity other than the one
+// the routed review source was composed with, for a request whose task's
+// reviewer line selected an agent under it (#1981): the token of the
+// enrollment generation the request's snapshot admitted, read under the
+// identity's read hold and held to that generation's digest (read is
+// wardstore.CredentialReader.Read). The composed identity keeps its host
+// snapshot. A Codex credential is a host snapshot under the composed
+// identity's refresh lease, so a Codex source refuses every other identity.
+func reviewCredential(
+	provider ward.RoutedReviewProvider,
+	read func(context.Context, domain.ClientEnrollmentID, int) (ward.SetupToken, error),
+) func(context.Context, domain.ReviewAdmission) (ward.ReviewCredential, error) {
+	return func(ctx context.Context, admission domain.ReviewAdmission) (ward.ReviewCredential, error) {
+		binding := admission.AgentBinding
+		if provider.Vendor != domain.AgentVendorClaude {
+			return ward.ReviewCredential{}, fmt.Errorf(
+				"a %s review source reads no credential of another identity: %w",
+				provider.HarnessClient, engine.ErrAgentNotAdmissible)
+		}
+		token, err := read(ctx, binding.EnrollmentID, binding.EnrollmentGeneration)
+		if err != nil {
+			err = fmt.Errorf("enrollment %s generation %d: %w", binding.EnrollmentID, binding.EnrollmentGeneration, err)
+			// A store that is not the admitted one fails the review as the
+			// snapshot does: no retry makes it the admitted one. A store that
+			// is changing or a read that did not finish is retried.
+			if errors.Is(err, wardstore.ErrCredentialReadUnsupported) ||
+				errors.Is(err, wardstore.ErrCredentialReadGenerationChanged) ||
+				errors.Is(err, wardstore.ErrCredentialReadDigestMismatch) {
+				return ward.ReviewCredential{}, errors.Join(engine.ErrAgentNotAdmissible, err)
+			}
+			return ward.ReviewCredential{}, &exec.ReviewSourceFailure{Class: domain.ReviewFailureTransient, Err: err}
+		}
+		body := token.Reveal()
+		defer clear(body)
+		return ward.NewReviewCredential(body), nil
 	}
 }
 

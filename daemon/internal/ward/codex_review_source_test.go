@@ -4453,8 +4453,9 @@ func TestCodexReviewSourceAdmitRefusalRecordsNothing(t *testing.T) {
 
 // TestCodexReviewSourceLaunchFollowsTheAdmission: a request launches the
 // model, effort, and identity its admission snapshot names (#1981). The
-// composed identity keeps its host snapshot, and a source asked for another
-// identity refuses the request before anything is recorded.
+// composed identity keeps its host snapshot; another identity's credential is
+// read for the launch, and a source that cannot read one refuses the request
+// before anything is recorded.
 func TestCodexReviewSourceLaunchFollowsTheAdmission(t *testing.T) {
 	ctx := t.Context()
 	composed := CodexReviewSourceConfig{
@@ -4464,27 +4465,55 @@ func TestCodexReviewSourceLaunchFollowsTheAdmission(t *testing.T) {
 	admission := testReviewAdmission("run-launch")
 	admission.AgentBinding.RouteModelID, admission.AgentBinding.NativeEffort = "gpt-5.3-codex", "medium"
 
-	legacy, err := (&CodexReviewSource{cfg: composed}).requestLaunch(exec.ReviewRequest{RunID: "run-launch"})
+	legacy, err := (&CodexReviewSource{cfg: composed}).requestLaunch(ctx, exec.ReviewRequest{RunID: "run-launch"})
 	if err != nil || legacy.review.Model != "gpt-5.2-codex" || legacy.identity != "codex-reviewer" {
 		t.Fatalf("legacy launch = %+v, %v; want the composed launch", legacy, err)
 	}
-	same, err := (&CodexReviewSource{cfg: composed}).requestLaunch(exec.ReviewRequest{Admission: admission})
+	same, err := (&CodexReviewSource{cfg: composed}).requestLaunch(ctx, exec.ReviewRequest{Admission: admission})
 	switch {
 	case err != nil:
 		t.Fatal(err)
 	case same.review.Model != "gpt-5.3-codex" || same.review.ReasoningEffort != "medium":
 		t.Errorf("launch runs %s/%s, want the snapshot's gpt-5.3-codex/medium",
 			same.review.Model, same.review.ReasoningEffort)
-	case same.identity != "codex-reviewer" || same.snapshot != "auth.json":
+	case same.identity != "codex-reviewer" || same.snapshot != "auth.json" || same.credential != nil:
 		t.Errorf("composed identity launch = %+v, want its host snapshot", same)
 	}
 
 	admission.AuthIdentityID = "codex-other"
 	if _, err := (&CodexReviewSource{cfg: composed}).requestLaunch(
-		exec.ReviewRequest{Admission: admission},
+		ctx, exec.ReviewRequest{Admission: admission},
 	); !errors.Is(err, ErrInvalidCodexReviewSpec) || !strings.Contains(err.Error(), "codex-other") {
-		t.Fatalf("another identity = %v, want a refusal naming it", err)
+		t.Fatalf("another identity without a credential reader = %v, want a refusal naming it", err)
 	}
+	reading := composed
+	var read []domain.ReviewAdmission
+	reading.Credential = func(_ context.Context, a domain.ReviewAdmission) (ReviewCredential, error) {
+		read = append(read, a)
+		return NewReviewCredential([]byte("token")), nil
+	}
+	other, err := (&CodexReviewSource{cfg: reading}).requestLaunch(ctx, exec.ReviewRequest{Admission: admission})
+	switch {
+	case err != nil:
+		t.Fatal(err)
+	case len(read) != 1 || !read[0].Equal(admission):
+		t.Errorf("the credential reader saw %+v, want the request's admission", read)
+	case other.identity != "codex-other" || other.snapshot != "" || other.credential == nil:
+		t.Errorf("another identity's launch = %+v, want its read credential and no host snapshot", other)
+	case other.review.Model != "gpt-5.3-codex":
+		t.Errorf("another identity's launch runs %s, want the snapshot's model", other.review.Model)
+	}
+	failing := composed
+	readErr := errors.New("generation 2 is not current")
+	failing.Credential = func(context.Context, domain.ReviewAdmission) (ReviewCredential, error) {
+		return ReviewCredential{}, readErr
+	}
+	if _, err := (&CodexReviewSource{cfg: failing}).requestLaunch(
+		ctx, exec.ReviewRequest{Admission: admission},
+	); !errors.Is(err, readErr) || !errors.Is(err, ErrInvalidCodexReviewSpec) {
+		t.Fatalf("a failed credential read = %v, want it wrapped as an invalid spec", err)
+	}
+
 	// Through RequestReview, a request the source cannot launch records
 	// nothing and fails as configuration.
 	fx := newHandoffFixture(t)
@@ -4531,13 +4560,29 @@ func TestCodexReviewSourceLaunchFollowsTheAdmission(t *testing.T) {
 		t.Fatal("a refused relaunch began a credential-bearing launch")
 	}
 
+	// A read the reader classifies keeps its class, so a read that can
+	// succeed later is retried instead of parking the run.
+	transient := &exec.ReviewSourceFailure{Class: domain.ReviewFailureTransient, Err: errors.New("the store is changing")}
+	if _, err := (&CodexReviewSource{cfg: CodexReviewSourceConfig{
+		AuthIdentityID: "codex-reviewer",
+		Credential: func(context.Context, domain.ReviewAdmission) (ReviewCredential, error) {
+			return ReviewCredential{}, transient
+		},
+	}}).requestLaunch(ctx, request); exec.ClassifyReviewSourceFailure(requestLaunchFailure(err)) !=
+		domain.ReviewFailureTransient {
+		t.Fatalf("a transient credential read = %v, want it kept transient", err)
+	}
+	if got := exec.ClassifyReviewSourceFailure(requestLaunchFailure(errors.New("unclassified"))); got !=
+		domain.ReviewFailureConfiguration {
+		t.Fatalf("an unclassified launch failure is %s, want configuration", got)
+	}
 }
 
 // testRequestLaunch derives the launch a direct startRequestedReview call
 // runs, as RequestReview does before it records the request.
 func testRequestLaunch(t *testing.T, source *CodexReviewSource, request exec.ReviewRequest) reviewLaunch {
 	t.Helper()
-	launch, err := source.requestLaunch(request)
+	launch, err := source.requestLaunch(context.Background(), request)
 	if err != nil {
 		t.Fatal(err)
 	}

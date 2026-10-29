@@ -758,3 +758,44 @@ func TestClaudeReviewBindingRefusesV2LegacyTopology(t *testing.T) {
 		t.Error("Codex provider no longer lists its v2 legacy topology")
 	}
 }
+
+// TestClaudeReviewBuildsFromAnInMemoryCredential: a credential read for the
+// launch from an enrollment generation (#1981) builds the same spec a host
+// snapshot of the same bytes does, and the snapshot volume is held to that
+// body: a credential whose bytes the seeded volume does not hold is refused.
+func TestClaudeReviewBuildsFromAnInMemoryCredential(t *testing.T) {
+	cfg, req := testClaudeReview(t)
+	fromSnapshot, _, err := buildReviewAgentSpec(claudeReviewProvider{}, cfg, req)
+	if err != nil {
+		t.Fatalf("buildReviewAgentSpec from the snapshot: %v", err)
+	}
+	credential := NewReviewCredential([]byte(testClaudeSetupToken))
+	req.AuthSnapshot, req.Credential = "", &credential
+	fromCredential, binding, err := buildReviewAgentSpec(claudeReviewProvider{}, cfg, req)
+	if err != nil {
+		t.Fatalf("buildReviewAgentSpec from the credential: %v", err)
+	}
+	if !reflect.DeepEqual(fromCredential, fromSnapshot) {
+		t.Errorf("the credential built %+v, the snapshot %+v", fromCredential, fromSnapshot)
+	}
+	if err := validateReviewAgentSpec(claudeReviewProvider{}, cfg, req, fromCredential, binding); err != nil {
+		t.Fatalf("validateReviewAgentSpec rejected the credential's spec: %v", err)
+	}
+	for _, rendered := range []string{fmt.Sprintf("%#v", req.Credential), fmt.Sprintf("%+v", req)} {
+		if strings.Contains(rendered, testClaudeSetupToken) {
+			t.Fatalf("formatting the credential leaks the token: %q", rendered)
+		}
+	}
+	for _, verb := range []string{"%v", "%+v", "%#v", "%s", "%q", "%x", "%d", "%b"} {
+		if rendered := fmt.Sprintf(verb, credential); rendered != fmt.Sprint(credential) {
+			t.Errorf("%s renders the credential as %q", verb, rendered)
+		}
+	}
+
+	other := NewReviewCredential([]byte(strings.Replace(testClaudeSetupToken, "a", "b", 1)))
+	req.Credential = &other
+	if _, _, err := buildReviewAgentSpec(claudeReviewProvider{}, cfg, req); err == nil ||
+		!strings.Contains(err.Error(), "does not hold the admitted credential") {
+		t.Fatalf("a credential the snapshot volume does not hold = %v, want a refusal", err)
+	}
+}

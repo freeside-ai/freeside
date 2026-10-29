@@ -1,11 +1,16 @@
 package ward
 
 import (
+	"context"
+	"crypto/sha256"
+	"errors"
 	"fmt"
+	"os"
 	"strings"
 	"testing"
 	"time"
 
+	"github.com/freeside-ai/freeside/daemon/internal/contentaddr"
 	"github.com/freeside-ai/freeside/daemon/internal/domain"
 	"github.com/freeside-ai/freeside/daemon/internal/exec"
 	"github.com/freeside-ai/freeside/daemon/internal/exec/contract"
@@ -23,6 +28,8 @@ type reviewSourceContractHarness struct {
 		*testing.T, *CodexReviewLifecycle, CodexReviewConfig, CodexReviewSpec, CodexReviewJournal,
 	) CodexReviewSourceConfig
 	construct func(CodexReviewSourceConfig) (*CodexReviewSource, error)
+	// credential, when set, is the source's Credential.
+	credential func(context.Context, domain.ReviewAdmission) (ReviewCredential, error)
 }
 
 func newCodexReviewContractHarness(t *testing.T) contract.ReviewSourceHarness {
@@ -55,6 +62,7 @@ func (h *reviewSourceContractHarness) Prepare(
 		InstructionBinding: launch.InstructionBinding,
 	}
 	sourceConfig := h.configure(t, lifecycle, cfg, requestSpec, journal)
+	sourceConfig.Credential = h.credential
 	source, err := h.construct(sourceConfig)
 	if err != nil {
 		t.Fatal(err)
@@ -176,3 +184,42 @@ func reviewSourceKnownDivergences() []contract.KnownDivergence {
 }
 
 var _ contract.ReviewSourceHarness = (*reviewSourceContractHarness)(nil)
+
+// TestClaudeReviewLaunchesUnderAReadCredential: a request admitted under an
+// identity the source was not composed with launches end to end on the
+// credential read for it (#1981). The host snapshot is gone, so only the read
+// body can reach the snapshot volume; the binding records that body's digest
+// and the request's identity, and the host stage holding the plaintext is
+// wiped once the launch starts.
+func TestClaudeReviewLaunchesUnderAReadCredential(t *testing.T) {
+	read := []byte("sk-ant-oat01-" + "readFromTheEnrollmentVolume0123456789")
+	h := newClaudeReviewContractHarness(t).(*reviewSourceContractHarness)
+	var admitted []domain.ReviewAdmission
+	h.credential = func(_ context.Context, a domain.ReviewAdmission) (ReviewCredential, error) {
+		admitted = append(admitted, a)
+		return NewReviewCredential(read), nil
+	}
+	id := domain.InvocationID("review-" + strings.Repeat("c", 24))
+	request := h.Prepare(t, id, contract.Scenario{})
+	request.Admission.AuthIdentityID = "claude-second"
+	if err := os.Remove(h.config.AuthSnapshot); err != nil {
+		t.Fatal(err)
+	}
+	if err := h.source.RequestReview(t.Context(), id, request); err != nil {
+		t.Fatalf("RequestReview under a read credential: %v", err)
+	}
+	if len(admitted) != 1 || admitted[0].AuthIdentityID != "claude-second" {
+		t.Fatalf("the credential reader saw %+v, want the request's admission once", admitted)
+	}
+	sum := sha256.Sum256(read)
+	if h.journal.binding.AuthSnapshotDigest != contentaddr.Format(sum[:]) {
+		t.Errorf("binding auth digest = %s, want the read credential's", h.journal.binding.AuthSnapshotDigest)
+	}
+	if h.journal.intent == nil || h.journal.intent.State != CodexReviewIntentStarted {
+		t.Fatalf("launch intent = %+v, want a started launch", h.journal.intent)
+	}
+	stage := codexReviewSnapshotStagePath(h.config.Lifecycle.cfg.ExportRoot, h.journal.intent.RunID)
+	if _, err := os.Stat(stage); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("the host stage holding the credential survived the launch: %v", err)
+	}
+}

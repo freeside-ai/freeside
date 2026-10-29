@@ -68,6 +68,16 @@ type CodexReviewSourceConfig struct {
 	// A refusal fails the request as a configuration failure and nothing is
 	// recorded or started.
 	Admit func(context.Context, exec.ReviewRequest) error
+	// Credential, when set, reads the credential of an identity other than
+	// AuthIdentityID that a request's admission snapshot names, so a task's
+	// reviewer line can select an agent under another identity (#1981). It
+	// is called once per launch; the body is held for that launch only. A
+	// nil Credential, or an error from it, fails such a request before
+	// anything is recorded or started: as a configuration failure, unless the
+	// error is an *exec.ReviewSourceFailure, whose class is kept, so a read
+	// that can succeed later is retried. The composed identity keeps
+	// AuthSnapshot.
+	Credential func(context.Context, domain.ReviewAdmission) (ReviewCredential, error)
 
 	// provider supplies the vendor-varying labels, version tags, and review
 	// command. It is unexported so external callers cannot set it; the
@@ -312,9 +322,9 @@ func (s *CodexReviewSource) RequestReview(
 			return &exec.ReviewSourceFailure{Class: domain.ReviewFailureConfiguration, Err: err}
 		}
 	}
-	launch, err := s.requestLaunch(req)
+	launch, err := s.requestLaunch(ctx, req)
 	if err != nil {
-		return &exec.ReviewSourceFailure{Class: domain.ReviewFailureConfiguration, Err: err}
+		return requestLaunchFailure(err)
 	}
 	if err := s.cfg.Journal.PutCodexReviewRequest(ctx, string(id), req); err != nil {
 		return &exec.ReviewSourceFailure{Class: classifyCodexObservationFailure(err), Err: err}
@@ -327,11 +337,13 @@ func (s *CodexReviewSource) RequestReview(
 
 // reviewLaunch is what one request's launch runs: the review configuration
 // with the model and effort its admission snapshot names, under the identity
-// the snapshot names, with that identity's host snapshot.
+// the snapshot names, with that identity's credential: the host snapshot for
+// the composed identity, else the body Credential read.
 type reviewLaunch struct {
-	review   CodexReviewConfig
-	identity domain.AuthIdentityID
-	snapshot string
+	review     CodexReviewConfig
+	identity   domain.AuthIdentityID
+	snapshot   string
+	credential *ReviewCredential
 }
 
 // requestLaunch derives a request's launch from its admission snapshot, so a
@@ -341,7 +353,7 @@ type reviewLaunch struct {
 // source was composed with. The configuration digest stays the composed one:
 // the snapshot records the selected agent's values, and they are not
 // re-approved.
-func (s *CodexReviewSource) requestLaunch(req exec.ReviewRequest) (reviewLaunch, error) {
+func (s *CodexReviewSource) requestLaunch(ctx context.Context, req exec.ReviewRequest) (reviewLaunch, error) {
 	launch := reviewLaunch{review: s.cfg.Review, identity: s.cfg.AuthIdentityID, snapshot: s.cfg.AuthSnapshot}
 	admission := req.Admission
 	if admission.InvocationID == "" {
@@ -352,9 +364,30 @@ func (s *CodexReviewSource) requestLaunch(req exec.ReviewRequest) (reviewLaunch,
 	if admission.AuthIdentityID == s.cfg.AuthIdentityID {
 		return launch, nil
 	}
-	return reviewLaunch{}, fmt.Errorf(
-		"%w: the request was admitted under identity %s, and this source delivers only %s's credential",
-		ErrInvalidCodexReviewSpec, admission.AuthIdentityID, s.cfg.AuthIdentityID)
+	if s.cfg.Credential == nil {
+		return reviewLaunch{}, fmt.Errorf(
+			"%w: the request was admitted under identity %s, and this source delivers only %s's credential",
+			ErrInvalidCodexReviewSpec, admission.AuthIdentityID, s.cfg.AuthIdentityID)
+	}
+	credential, err := s.cfg.Credential(ctx, admission)
+	if err != nil {
+		return reviewLaunch{}, fmt.Errorf("%w: credential of identity %s: %w",
+			ErrInvalidCodexReviewSpec, admission.AuthIdentityID, err)
+	}
+	launch.identity, launch.snapshot, launch.credential = admission.AuthIdentityID, "", &credential
+	return launch, nil
+}
+
+// requestLaunchFailure classifies a request whose launch could not be
+// derived: a configuration failure, unless the credential reader classified
+// its own failure.
+func requestLaunchFailure(err error) error {
+	class := domain.ReviewFailureConfiguration
+	var failure *exec.ReviewSourceFailure
+	if errors.As(err, &failure) && failure.Class != "" {
+		class = failure.Class
+	}
+	return &exec.ReviewSourceFailure{Class: class, Err: err}
 }
 
 func (s *CodexReviewSource) startRequestedReview(
@@ -439,7 +472,7 @@ func (s *CodexReviewSource) startRequestedReview(
 		ExpectedHead: req.HeadSHA, ExpectedBase: expectedBase, ExpectedEvaluated: req.EvaluatedSHA,
 		Prompt:   s.reviewProvider().reviewPrompt(req),
 		Boundary: CodexReviewFreshStart, AuthMode: s.cfg.AuthMode,
-		AuthIdentityID: run.identity, AuthSnapshot: run.snapshot,
+		AuthIdentityID: run.identity, AuthSnapshot: run.snapshot, Credential: run.credential,
 		Instructions: instructions, InstructionFile: instructionFile,
 		InstructionBinding: req.Instructions, ConfigurationDigest: s.cfg.ConfigurationDigest,
 	})
@@ -859,9 +892,9 @@ func (s *CodexReviewSource) Inspect(
 				return "", &exec.ReviewSourceFailure{Class: domain.ReviewFailureConfiguration, Err: err}
 			}
 		}
-		launch, err := s.requestLaunch(request)
+		launch, err := s.requestLaunch(ctx, request)
 		if err != nil {
-			return "", &exec.ReviewSourceFailure{Class: domain.ReviewFailureConfiguration, Err: err}
+			return "", requestLaunchFailure(err)
 		}
 		if err := s.startRequestedReview(ctx, id, request, launch); err != nil {
 			return "", err

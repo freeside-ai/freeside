@@ -1811,6 +1811,12 @@ func composeClaudeDriver(
 			ConfigurationDigest:  reviewConfigurationDigest,
 			CostOwner:            cfg.ReviewCostOwner, Now: utcNow,
 			Admit: reviewAdmission(st, agents.Tree, routedRole, utcNow),
+			Credential: reviewCredential(cfg.ReviewProvider, wardstore.CredentialReader{
+				Store: st,
+				ReadSetupToken: productionSetupTokenReader(
+					runtime, cfg.ExporterImage, productionRigRuntimeAuthorizer(cfg.StateDir, cfg.RigTokenFile)),
+				Now: utcNow,
+			}.Read),
 		}
 		reviewSource, err = newRoutedReviewSource(cfg.ReviewProvider, sourceConfig, claudeLifecycle)
 		if err != nil {

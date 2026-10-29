@@ -197,12 +197,16 @@ type CodexReviewLaunchSpec struct {
 	ExpectedBase         string
 	// ExpectedEvaluated is empty unless the workspace must hold the unpushed
 	// merge of ExpectedHead into the base instead of ExpectedHead itself.
-	ExpectedEvaluated  string
-	Prompt             string
-	Boundary           CodexReviewBoundary
-	AuthMode           CodexAuthMode
-	AuthIdentityID     domain.AuthIdentityID
+	ExpectedEvaluated string
+	Prompt            string
+	Boundary          CodexReviewBoundary
+	AuthMode          CodexAuthMode
+	AuthIdentityID    domain.AuthIdentityID
+	// AuthSnapshot is the host snapshot of the identity's credential, under
+	// the input root. Credential replaces it for an identity that has none
+	// (#1981); exactly one of the two is set.
 	AuthSnapshot       string
+	Credential         *ReviewCredential
 	Instructions       VendorInstructions
 	InstructionFile    string
 	InstructionBinding exec.ReviewInstructionBinding
@@ -591,7 +595,7 @@ func (b *CodexReviewLifecycle) codexReview(
 		Workspace: workspace, Network: network, Prompt: launch.Prompt, Boundary: launch.Boundary,
 		BaseSHA:  launch.ExpectedBase,
 		AuthMode: launch.AuthMode, AuthIdentityID: launch.AuthIdentityID,
-		AuthSnapshot: launch.AuthSnapshot, Instructions: launch.Instructions,
+		AuthSnapshot: launch.AuthSnapshot, Credential: launch.Credential, Instructions: launch.Instructions,
 		InstructionFile: launch.InstructionFile, InstructionBinding: launch.InstructionBinding,
 		AgentsShadow: shadow, Snapshot: snapshot, ConfigurationDigest: launch.ConfigurationDigest,
 	}
@@ -854,6 +858,12 @@ func validateCodexReviewLaunchShape(provider reviewProvider, cfg CodexReviewConf
 		return fmt.Errorf("%w: %w", ErrInvalidCodexReviewSpec, ErrCodexReviewContinuityRefused)
 	case !launch.AuthMode.valid() || launch.AuthIdentityID == "":
 		return fmt.Errorf("%w: auth identity is invalid", ErrInvalidCodexReviewSpec)
+	case (launch.AuthSnapshot == "") == (launch.Credential == nil):
+		return fmt.Errorf("%w: exactly one of a host snapshot and a credential is required", ErrInvalidCodexReviewSpec)
+	// A credential read for one launch has no host file for a refresh to
+	// rewrite, so only a setup token, which takes no refresh, is delivered so.
+	case launch.Credential != nil && launch.AuthMode != CodexAuthSetupToken:
+		return fmt.Errorf("%w: only a setup token is delivered without a host snapshot", ErrInvalidCodexReviewSpec)
 	case !contentaddr.Valid(string(launch.ConfigurationDigest)):
 		return fmt.Errorf("%w: ConfigurationDigest is invalid", ErrInvalidCodexReviewSpec)
 	case !cleanAbs(cfg.InputRoot):
@@ -900,9 +910,7 @@ func validateCodexReviewLaunchStructure(provider reviewProvider, cfg CodexReview
 	if err := validateCodexReviewLaunchShape(provider, cfg, launch); err != nil {
 		return err
 	}
-	authPath, authBody, err := readCodexReviewInput(
-		cfg.InputRoot, launch.AuthSnapshot, maxCodexAuthSnapshotBytes,
-	)
+	authPath, authBody, err := readReviewAuth(cfg.InputRoot, launch.AuthSnapshot, launch.Credential)
 	if err != nil {
 		return fmt.Errorf("%w: auth snapshot: %w", ErrInvalidCodexReviewSpec, err)
 	}
@@ -923,9 +931,7 @@ func validateCodexReviewLaunch(provider reviewProvider, cfg CodexReviewConfig, l
 	if err := validateCodexReviewLaunchStructure(provider, cfg, launch); err != nil {
 		return err
 	}
-	_, authBody, err := readCodexReviewInput(
-		cfg.InputRoot, launch.AuthSnapshot, maxCodexAuthSnapshotBytes,
-	)
+	_, authBody, err := readReviewAuth(cfg.InputRoot, launch.AuthSnapshot, launch.Credential)
 	if err != nil {
 		return fmt.Errorf("%w: auth snapshot: %w", ErrInvalidCodexReviewSpec, err)
 	}
@@ -1878,7 +1884,7 @@ func (b *CodexReviewLifecycle) seedCodexReviewSnapshot(
 	mark func(CodexReviewIntentResource) error,
 ) (retErr error) {
 	provider := b.reviewProvider()
-	_, hostAuthBody, err := readCodexReviewInput(cfg.InputRoot, launch.AuthSnapshot, maxCodexAuthSnapshotBytes)
+	_, hostAuthBody, err := readReviewAuth(cfg.InputRoot, launch.AuthSnapshot, launch.Credential)
 	if err != nil {
 		return failf(CheckCredentialSeparation, "Codex review auth snapshot changed before snapshot seeding")
 	}
@@ -2284,9 +2290,7 @@ func (b *CodexReviewLifecycle) verifyCodexReviewWorkspaceExclusive(
 func validateCodexReviewStartLifetime(
 	provider reviewProvider, cfg CodexReviewConfig, launch CodexReviewLaunchSpec,
 ) error {
-	_, authBody, err := readCodexReviewInput(
-		cfg.InputRoot, launch.AuthSnapshot, maxCodexAuthSnapshotBytes,
-	)
+	_, authBody, err := readReviewAuth(cfg.InputRoot, launch.AuthSnapshot, launch.Credential)
 	if err != nil {
 		return failf(CheckCredentialSeparation, "Codex review auth snapshot changed before start")
 	}
