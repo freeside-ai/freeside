@@ -34,6 +34,8 @@ type Provider interface {
 // and differs only in the Claude launch command's handling of the CLI's
 // stderr. PromptFileV4 carries it as PromptFileV3 does and differs only in
 // passing the specifier output schema to the CLI on a specification stage.
+// PromptFileV5 also disables Claude's bundled agents-md plugin explicitly;
+// safe mode alone leaves built-in plugins enabled.
 type PromptDelivery string
 
 const (
@@ -42,13 +44,14 @@ const (
 	PromptFileV2   PromptDelivery = "file_v2"
 	PromptFileV3   PromptDelivery = "file_v3"
 	PromptFileV4   PromptDelivery = "file_v4"
+	PromptFileV5   PromptDelivery = "file_v5"
 )
 
-var AllPromptDeliveries = []PromptDelivery{PromptArgument, PromptFileV1, PromptFileV2, PromptFileV3, PromptFileV4}
+var AllPromptDeliveries = []PromptDelivery{PromptArgument, PromptFileV1, PromptFileV2, PromptFileV3, PromptFileV4, PromptFileV5}
 
 func (d PromptDelivery) valid() bool {
 	switch d {
-	case PromptArgument, PromptFileV1, PromptFileV2, PromptFileV3, PromptFileV4:
+	case PromptArgument, PromptFileV1, PromptFileV2, PromptFileV3, PromptFileV4, PromptFileV5:
 		return true
 	default:
 		return false
@@ -59,7 +62,7 @@ func (d PromptDelivery) valid() bool {
 // ward's protected prompt file instead of the launch argv.
 func (d PromptDelivery) usesPromptFile() bool {
 	switch d {
-	case PromptFileV1, PromptFileV2, PromptFileV3, PromptFileV4:
+	case PromptFileV1, PromptFileV2, PromptFileV3, PromptFileV4, PromptFileV5:
 		return true
 	case PromptArgument:
 		return false

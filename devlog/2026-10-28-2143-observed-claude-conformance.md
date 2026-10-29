@@ -66,7 +66,25 @@ empty, while the plugin array has one entry. This invalidates the plan's
 assumption that this launch would report no plugins. It does not by itself
 prove that user configuration entered the launch.
 
-The judge keeps `context_severance` absent rather than interpreting an
-unexplained plugin as safe. Per #1672's explicit stop condition, the change
-must stay a draft until the plugin's origin and the appropriate severance
-evidence are resolved. The issue carries the next decision.
+The plugin is `agents-md@builtin`. An offline launch with no installed plugins
+reports it too. The pinned CLI's help explicitly excludes built-in plugins
+from safe mode, and its bundled code registers instruction-loading hooks.
+Bundled origin therefore does not justify accepting it as severed context.
+
+New production launches select `file_v5`, which passes
+`--settings '{"enabledPlugins":{"agents-md@builtin":false}}'`. The judge
+retains the original empty-plugin requirement. Existing protocols and their
+golden commands remain byte-identical for recovery. This internal protocol
+extension follows #2307 and #2314, whose contracts explicitly distinguish
+`stage.PromptDelivery` members from shared-contract changes. The scope now
+includes `daemon/internal/exec/stage/` for registration and recovery tests.
+
+The adapter's declared capability and effort sets retain their meaning and
+digest: this corrects the implementation of its existing context-severance
+promise rather than introducing another adapter or capability. Keeping that
+digest also lets the observed record supersede its declaration-only proof,
+as #1672 requires. The durable command version is independently `file_v5`.
+
+The real pinned-image conformance test passed with `file_v5`, observing all
+six capabilities, including the unchanged empty-plugin observation. The
+earlier live-proof stop condition is resolved.

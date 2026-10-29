@@ -132,7 +132,7 @@ selected components can keep `required` running longer.
 
 ## Protected Prompt Delivery
 
-New Claude stage intents select `file_v4`. The renderer accepts at most 1 MiB
+New Claude stage intents select `file_v5`. The renderer accepts at most 1 MiB
 of complete UTF-8 input. Ward verifies its digest on a separate protected
 volume before writer creation, journals the volume binding with launch state,
 and supplies the root-opened file as Claude's user stdin. `file_v2` delivers
@@ -146,8 +146,12 @@ successful run's stderr is discarded with the container. `file_v4` delivers
 it as `file_v3` does and differs only on a specification run's stage, where it
 passes the specifier output schema with `--json-schema`: the model's decision
 arrives in the result record's `structured_output`, so a prose preamble no
-longer fails the stage, and the decoder still gates every byte of it. Existing
-intents retain the protocol they started under: `file_v1` through `file_v3`
+longer fails the stage, and the decoder still gates every byte of it. `file_v5`
+also explicitly disables the pinned CLI's bundled `agents-md` plugin through
+`--settings`: `--safe-mode` leaves built-in plugins enabled, and this plugin
+can load repository instructions outside the daemon's instruction bundle.
+The conformance transcript must still report no plugins. Existing
+intents retain the protocol they started under: `file_v1` through `file_v4`
 their launch commands, and argument delivery its original 31-KiB limit. This
 changes transport; it neither retries a failed invocation nor grants successor
 publication.
