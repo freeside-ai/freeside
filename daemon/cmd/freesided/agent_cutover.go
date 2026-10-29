@@ -16,6 +16,7 @@ import (
 	"github.com/freeside-ai/freeside/daemon/internal/exec"
 	"github.com/freeside-ai/freeside/daemon/internal/store"
 	"github.com/freeside-ai/freeside/daemon/internal/ward"
+	"github.com/freeside-ai/freeside/daemon/internal/wardstore"
 )
 
 // Agent selection replaced the identity flags (plan §5.4, issue #867). The
@@ -231,25 +232,24 @@ func routedReviewConfig(provider ward.RoutedReviewProvider, cfg ward.CodexReview
 }
 
 // reviewAdmission is the check a review source runs before each launch: the
-// role's line still resolves, still holds a current credential, and still
-// selects the identity the source was composed with, and the request's task
-// has no line asking for another agent (engine.CheckReviewRole). The tree is
-// fixed for the daemon's run, so what can change is the store (a disabled
-// identity, a credential that expired, a task line) and the clock (an offer
-// past its not_after).
+// role's line, the task's reviewer line or else the lineup's, still resolves,
+// still holds a current credential, and still selects the agent the request's
+// snapshot names (engine.CheckReviewRole). The tree is fixed for the daemon's
+// run, so what can change is the store (a disabled identity, a credential that
+// expired, a task line) and the clock (an offer past its not_after).
 //
 // The engine admitted the request's invocation once, before it asked the
 // source, and the request carries that snapshot. This check is not that
 // admission and never replaces the snapshot: it is the recheck at the instant
 // a launch starts, which may be a restart and a lineup later. The source
-// launches under the identity, model, and effort it was composed with, so a
-// snapshot that names another of the three is refused: the launch would run
-// one agent and the review record would name another. spec is the role the
-// source was composed for, so a line that moved to another harness or vendor
-// is refused as well.
+// launches the identity, model, and effort the snapshot names, so a snapshot
+// naming another of the three than the line resolves now is refused: the
+// launch would run one agent and the line would select another. spec is the
+// role the source was composed for, so a line that moved to another harness
+// or vendor is refused as well. Whether the source can deliver the selected
+// identity's credential is the source's own check.
 func reviewAdmission(
-	st *store.Store, tree agenttree.Tree, spec engine.ReviewRole, identity domain.AuthIdentityID,
-	now func() time.Time,
+	st *store.Store, tree agenttree.Tree, spec engine.ReviewRole, now func() time.Time,
 ) func(context.Context, exec.ReviewRequest) error {
 	role := spec.Role
 	return func(ctx context.Context, req exec.ReviewRequest) error {
@@ -258,21 +258,54 @@ func reviewAdmission(
 		if err != nil {
 			return &roleAdmissionError{Role: role, Err: err}
 		}
-		if agent.Identity.ID != identity {
-			return &roleAdmissionError{Role: role, Err: fmt.Errorf(
-				"the line now resolves identity %s, the review source runs under %s: %w",
-				agent.Identity.ID, identity, engine.ErrAgentNotAdmissible)}
-		}
 		admitted := req.Admission
-		if admitted.Role != role || admitted.AuthIdentityID != identity ||
+		if admitted.Role != role || admitted.AuthIdentityID != agent.Identity.ID ||
 			admitted.AgentBinding.RouteModelID != agent.Model ||
 			admitted.AgentBinding.NativeEffort != agent.NativeEffort {
 			return &roleAdmissionError{Role: role, Err: fmt.Errorf(
-				"the invocation was admitted as %s under identity %s with %s, the review source runs %s under %s with %s/%s: %w",
+				"the invocation was admitted as %s under identity %s with %s, the line now selects %s under %s with %s/%s: %w",
 				admitted.Role, admitted.AuthIdentityID, admitted.ModelConfiguration(),
-				role, identity, agent.Model, agent.NativeEffort, engine.ErrAgentNotAdmissible)}
+				role, agent.Identity.ID, agent.Model, agent.NativeEffort, engine.ErrAgentNotAdmissible)}
 		}
 		return nil
+	}
+}
+
+// reviewCredential reads the credential of an identity other than the one
+// the routed review source was composed with, for a request whose task's
+// reviewer line selected an agent under it (#1981): the token of the
+// enrollment generation the request's snapshot admitted, read under the
+// identity's read hold and held to that generation's digest (read is
+// wardstore.CredentialReader.Read). The composed identity keeps its host
+// snapshot. A Codex credential is a host snapshot under the composed
+// identity's refresh lease, so a Codex source refuses every other identity.
+func reviewCredential(
+	provider ward.RoutedReviewProvider,
+	read func(context.Context, domain.ClientEnrollmentID, int) (ward.SetupToken, error),
+) func(context.Context, domain.ReviewAdmission) (ward.ReviewCredential, error) {
+	return func(ctx context.Context, admission domain.ReviewAdmission) (ward.ReviewCredential, error) {
+		binding := admission.AgentBinding
+		if provider.Vendor != domain.AgentVendorClaude {
+			return ward.ReviewCredential{}, fmt.Errorf(
+				"a %s review source reads no credential of another identity: %w",
+				provider.HarnessClient, engine.ErrAgentNotAdmissible)
+		}
+		token, err := read(ctx, binding.EnrollmentID, binding.EnrollmentGeneration)
+		if err != nil {
+			err = fmt.Errorf("enrollment %s generation %d: %w", binding.EnrollmentID, binding.EnrollmentGeneration, err)
+			// A store that is not the admitted one fails the review as the
+			// snapshot does: no retry makes it the admitted one. A store that
+			// is changing or a read that did not finish is retried.
+			if errors.Is(err, wardstore.ErrCredentialReadUnsupported) ||
+				errors.Is(err, wardstore.ErrCredentialReadGenerationChanged) ||
+				errors.Is(err, wardstore.ErrCredentialReadDigestMismatch) {
+				return ward.ReviewCredential{}, errors.Join(engine.ErrAgentNotAdmissible, err)
+			}
+			return ward.ReviewCredential{}, &exec.ReviewSourceFailure{Class: domain.ReviewFailureTransient, Err: err}
+		}
+		body := token.Reveal()
+		defer clear(body)
+		return ward.NewReviewCredential(body), nil
 	}
 }
 

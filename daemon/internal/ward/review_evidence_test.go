@@ -17,7 +17,7 @@ func TestDecodeRetainedCodexReviewPreservesInvalidUTF8(t *testing.T) {
 	events := []byte{'e', 0xff, 0x00}
 	outcome := codexGoldenReviewOutcome(string(events))
 	request := exec.ReviewRequest{
-		Admission: testReviewAdmission("run-golden"),
+		Admission: testRecordedReviewAdmission("run-golden"),
 		RunID:     "run-golden", Round: 1, Repo: "owner/repo", RepositoryID: 1, BaseRef: "main",
 		BaseSHA: outcome.Result.BaseSHA, HeadSHA: outcome.Result.HeadSHA, Workspace: "/workspace",
 		Verification: testReviewVerificationEvidence(), Instructions: testReviewInstructionBinding(), RequestedAt: codexReviewEpoch,
@@ -45,7 +45,7 @@ func TestDecodeRetainedCodexReview(t *testing.T) {
 		t.Run(corruption, func(t *testing.T) {
 			outcome := codexGoldenReviewOutcome("{}")
 			request := exec.ReviewRequest{
-				Admission: testReviewAdmission("run-golden"),
+				Admission: testRecordedReviewAdmission("run-golden"),
 				RunID:     "run-golden", Round: 1, Repo: "owner/repo", RepositoryID: 1, BaseRef: "main",
 				BaseSHA: strings.Repeat("a", 40), HeadSHA: strings.Repeat("b", 40), Workspace: "/workspace",
 				Verification: testReviewVerificationEvidence(), Instructions: testReviewInstructionBinding(), RequestedAt: codexReviewEpoch,
@@ -141,7 +141,7 @@ func TestDecodeRetainedCodexReviewRequestFacts(t *testing.T) {
 		t.Run(corruption, func(t *testing.T) {
 			t.Parallel()
 			request := exec.ReviewRequest{
-				Admission: testReviewAdmission("run-golden"),
+				Admission: testRecordedReviewAdmission("run-golden"),
 				RunID:     "run-golden", Round: 1, Repo: "owner/repo", RepositoryID: 1, BaseRef: "main",
 				BaseSHA: strings.Repeat("a", 40), HeadSHA: strings.Repeat("b", 40), Workspace: "/workspace",
 				Verification: testReviewVerificationEvidence(), Instructions: testReviewInstructionBinding(), RequestedAt: codexReviewEpoch,

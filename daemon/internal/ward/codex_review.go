@@ -386,6 +386,7 @@ type CodexReviewSpec struct {
 	AuthMode             CodexAuthMode
 	AuthIdentityID       domain.AuthIdentityID
 	AuthSnapshot         string
+	Credential           *ReviewCredential
 	Instructions         VendorInstructions
 	InstructionFile      string
 	InstructionBinding   exec.ReviewInstructionBinding
@@ -1012,7 +1013,7 @@ func buildReviewAgentSpec(
 	if err := validateCodexReviewRequest(provider, cfg, req); err != nil {
 		return ContainerSpec{}, CodexReviewJournalBinding{}, err
 	}
-	authPath, hostAuthBody, err := readCodexReviewInput(cfg.InputRoot, req.AuthSnapshot, maxCodexAuthSnapshotBytes)
+	authPath, hostAuthBody, err := readReviewAuth(cfg.InputRoot, req.AuthSnapshot, req.Credential)
 	if err != nil {
 		return ContainerSpec{}, CodexReviewJournalBinding{}, fmt.Errorf("%w: auth snapshot: %w", ErrInvalidCodexReviewSpec, err)
 	}
@@ -2080,9 +2081,7 @@ func validateReviewAgentSpec(
 	if err := validateCodexReviewRequest(provider, cfg, req); err != nil {
 		return err
 	}
-	_, hostAuthBody, err := readCodexReviewInput(
-		cfg.InputRoot, req.AuthSnapshot, maxCodexAuthSnapshotBytes,
-	)
+	_, hostAuthBody, err := readReviewAuth(cfg.InputRoot, req.AuthSnapshot, req.Credential)
 	if err != nil {
 		return failf(CheckCredentialSeparation, "Codex review auth snapshot changed after admission")
 	}

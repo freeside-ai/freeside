@@ -2226,10 +2226,19 @@ lineup line's prompt, and its admission cites the line. A line picks the
 agent only, so the role still needs its lineup line. A line that cannot be
 honored refuses the attempt, and the lineup's agent never runs in its place:
 that covers an agent the tree lacks, a disabled identity, and a line that
-does not hold against the submission that set it. The review source runs one
-agent for every task, so a `reviewer` line must name that agent. A review for
-a task whose line names any other agent is refused as a review configuration
-failure instead of run under the composed one.
+does not hold against the submission that set it.
+
+Review admission reads the task's `reviewer` line the same way: the routed
+review runs the line's agent with its model and effort, under its identity,
+and the review's admission snapshot cites the line. The agent must run on the
+harness the routed review source drives. A Claude source reads another
+identity's setup token from that identity's admitted enrollment generation
+for each launch; the lineup reviewer's identity keeps its host snapshot. A
+Codex source runs only its composed identity. A line that cannot be honored
+fails the review as a review configuration failure that names the line by id,
+and the lineup's reviewer never runs in its place. The shadow reviewer reads
+no line. The review configuration digest stays the composed source's: the
+snapshot records what the line selected.
 
 For a preflight-bound submission, choose one `--submission-id <identity>` and
 pass it to both `preflight` and `submit`. Reusing it with different input

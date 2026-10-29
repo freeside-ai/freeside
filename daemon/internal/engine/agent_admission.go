@@ -89,8 +89,9 @@ type RoleAgent struct {
 // daemon's review check.
 //
 // It reads the lineup only. No task is in view here, so no task line is: the
-// startup and preflight checks resolve through it. Review checks resolve the
-// same line, but report a mark after their other admission steps.
+// startup and preflight checks resolve through it. A review check for a run
+// with no reviewer line resolves the same line, but reports a mark after its
+// other admission steps.
 func ResolveRole(
 	ctx context.Context, st *store.Store, tree agenttree.Tree, role domain.RoleName,
 ) (RoleAgent, error) {
@@ -196,6 +197,22 @@ func resolveAttemptRole(
 	if !found {
 		return resolveRole(ctx, tx, tree, role)
 	}
+	agent, err := resolveLineAgent(ctx, tx, tree, role, taskLine)
+	if err != nil {
+		return RoleAgent{}, err
+	}
+	if err := agent.requireUnmarked(ctx, tx); err != nil {
+		return RoleAgent{}, err
+	}
+	return agent, nil
+}
+
+// resolveLineAgent is resolveRoleLine for an agent a task line names. It runs
+// without the generation's integrity mark, which the caller reads in the same
+// transaction.
+func resolveLineAgent(
+	ctx context.Context, tx *store.ReadTx, tree agenttree.Tree, role domain.RoleName, taskLine domain.TaskLine,
+) (RoleAgent, error) {
 	line, err := lineupLine(tree, role)
 	if err != nil {
 		return RoleAgent{}, err
@@ -211,10 +228,17 @@ func resolveAttemptRole(
 	if err := agent.readGeneration(ctx, tx); err != nil {
 		return RoleAgent{}, err
 	}
-	if err := agent.requireUnmarked(ctx, tx); err != nil {
-		return RoleAgent{}, err
-	}
 	return agent, nil
+}
+
+// Selection is the selection source that chose the agent and the record an
+// admission cites for it. The lineup has no record beyond its revision; a
+// task line is cited by its id.
+func (a RoleAgent) Selection() (domain.AgentSelectionSource, domain.Digest) {
+	if a.TaskLine != nil {
+		return domain.AgentSelectionSourceTaskLine, a.TaskLine.ID
+	}
+	return domain.AgentSelectionSourceLineup, ""
 }
 
 // resolveAgent joins the named agent to its fragments and to its enrollment
@@ -513,12 +537,8 @@ func resolveAgentAdmission(
 			return refuse(domain.AdmissionCheckAgentEgressAuthority, "provider endpoint %q is outside the route's inference authorities", authority)
 		}
 	}
-	// Step 5, snapshot. The lineup has no selection record beyond its
-	// revision; a task line is cited by its id.
-	source, record := domain.AgentSelectionSourceLineup, domain.Digest("")
-	if agent.TaskLine != nil {
-		source, record = domain.AgentSelectionSourceTaskLine, agent.TaskLine.ID
-	}
+	// Step 5, snapshot.
+	source, record := agent.Selection()
 	passes, err := domain.DeriveAgentLaunchSelection(definition, resolved.Adapter, resolved.Offer)
 	if err != nil {
 		return refuse(domain.AdmissionCheckAgentSnapshot, "%v", err)

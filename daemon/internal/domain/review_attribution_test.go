@@ -228,6 +228,16 @@ func TestReviewRecordSharesSegment(t *testing.T) {
 		},
 		{name: "another reviewer", left: admitted(configuration, "a", nil), right: admitted(configuration, "b", nil)},
 		{
+			// A reviewer line set between rounds selects another agent under
+			// the same configuration, which opens a new segment.
+			name: "a reviewer line selects another agent", left: admitted(configuration, "a", nil),
+			right: admitted(configuration, "b", func(a *domain.ReviewAdmission) {
+				a.InvocationID = "review-run-1-2"
+				a.AgentBinding.SelectionSource = domain.AgentSelectionSourceTaskLine
+				a.AgentBinding.SelectionRecordID = domain.Digest("sha256:" + strings.Repeat("e", 64))
+			}),
+		},
+		{
 			name: "another configuration", left: admitted(configuration, "a", nil),
 			right: admitted(otherConfiguration, "a", nil),
 		},

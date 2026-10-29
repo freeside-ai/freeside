@@ -51,6 +51,13 @@ func TestReviewAdmissionValidate(t *testing.T) {
 	if err := unknown.Validate(); err != nil {
 		t.Fatalf("review admission of unknown lineage = %v", err)
 	}
+	// A task line selects a review agent, citing the line by id.
+	taskLine := valid
+	taskLine.AgentBinding.SelectionSource = domain.AgentSelectionSourceTaskLine
+	taskLine.AgentBinding.SelectionRecordID = taskLine.AgentBinding.AgentDigest
+	if err := taskLine.Validate(); err != nil {
+		t.Fatalf("task line review admission = %v", err)
+	}
 	cases := []struct {
 		name   string
 		mutate func(*domain.ReviewAdmission)
@@ -70,10 +77,13 @@ func TestReviewAdmissionValidate(t *testing.T) {
 		{"no effort", func(a *domain.ReviewAdmission) {
 			a.AgentBinding.RequestedEffort, a.AgentBinding.NativeEffort = "", ""
 		}, domain.ErrEmptyField},
-		{"task line selection", func(a *domain.ReviewAdmission) {
-			a.AgentBinding.SelectionSource = domain.AgentSelectionSourceTaskLine
+		{"card selection", func(a *domain.ReviewAdmission) {
+			a.AgentBinding.SelectionSource = domain.AgentSelectionSourceCard
 			a.AgentBinding.SelectionRecordID = a.AgentBinding.AgentDigest
 		}, domain.ErrReviewAdmissionInvalid},
+		{"task line selection without a record", func(a *domain.ReviewAdmission) {
+			a.AgentBinding.SelectionSource = domain.AgentSelectionSourceTaskLine
+		}, domain.ErrInvalidDigest},
 		{"no selection source", func(a *domain.ReviewAdmission) { a.AgentBinding.SelectionSource = "" }, domain.ErrReviewAdmissionInvalid},
 	}
 	for _, tc := range cases {

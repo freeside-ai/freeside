@@ -5,6 +5,7 @@ import (
 	"context"
 	"errors"
 	"flag"
+	"fmt"
 	"io"
 	"path/filepath"
 	"reflect"
@@ -22,6 +23,7 @@ import (
 	"github.com/freeside-ai/freeside/daemon/internal/golden"
 	"github.com/freeside-ai/freeside/daemon/internal/store"
 	"github.com/freeside-ai/freeside/daemon/internal/ward"
+	"github.com/freeside-ai/freeside/daemon/internal/wardstore"
 )
 
 // flagEraReviewConfig is a daemon configuration as the removed flags set it
@@ -268,7 +270,7 @@ func TestReviewRoleNeedsAModelAndAnEffort(t *testing.T) {
 			}
 			// The identity is never compared: the agent is refused first, so
 			// the refusal has to name what the agent lacks.
-			admit := reviewAdmission(st, old, testReviewRole(role, nil), "", time.Now)
+			admit := reviewAdmission(st, old, testReviewRole(role, nil), time.Now)
 			if err := admit(ctx, exec.ReviewRequest{}); !errors.Is(err, engine.ErrAgentNotAdmissible) ||
 				!strings.Contains(err.Error(), lacks) {
 				t.Fatalf("%s review admission on the earlier tree = %v, want it refused because its agent %s", role, err, lacks)
@@ -418,7 +420,7 @@ func TestReviewSelectionFailsClosed(t *testing.T) {
 					!errors.Is(err, engine.ErrAgentNotAdmissible) || !strings.Contains(err.Error(), "not_after") {
 					t.Fatalf("%s after the offer's not_after = %v", role, err)
 				}
-				admit := reviewAdmission(st, tree, testReviewRole(role, nil), agent.Identity.ID, func() time.Time { return expired })
+				admit := reviewAdmission(st, tree, testReviewRole(role, nil), func() time.Time { return expired })
 				if err := admit(ctx, exec.ReviewRequest{}); !errors.Is(err, engine.ErrAgentNotAdmissible) {
 					t.Fatalf("%s review admission after the offer's not_after = %v", role, err)
 				}
@@ -435,13 +437,9 @@ func TestReviewSelectionFailsClosed(t *testing.T) {
 		tree := loadAdoptedPatch(t, patch)
 		f.withStore(t, func(st *store.Store) {
 			req := admittedReviewRequest(t, st, tree, domain.RoleReviewer, seedReviewedRun(t, st, "run-reviewed").ID)
-			admit := reviewAdmission(st, tree, testReviewRole(domain.RoleReviewer, nil), "codex-review", time.Now)
+			admit := reviewAdmission(st, tree, testReviewRole(domain.RoleReviewer, nil), time.Now)
 			if err := admit(ctx, req); err != nil {
 				t.Fatalf("review admission of the adopted reviewer: %v", err)
-			}
-			other := reviewAdmission(st, tree, testReviewRole(domain.RoleReviewer, nil), "codex-other", time.Now)
-			if err := other(ctx, req); !errors.Is(err, engine.ErrAgentNotAdmissible) {
-				t.Fatalf("review admission under another identity = %v", err)
 			}
 			setIdentityEnabled(t, st, "codex-review", false)
 			var failure *roleAdmissionError
@@ -503,10 +501,11 @@ func setReviewedRunLine(
 	return line
 }
 
-// TestReviewAdmissionHoldsTheReviewerTaskLine: the review source runs one
-// agent, fixed when the daemon composed it, so a task's reviewer line cannot
-// move its review. The line is never passed over: a request for a task whose
-// line names another agent is refused, and so is one whose line does not hold
+// TestReviewAdmissionHoldsTheReviewerTaskLine: a task's reviewer line selects
+// the agent its review runs, within the harness the source was composed for
+// (#1981). The recheck accepts the snapshot of the agent the line selects and
+// refuses one naming another identity, model, or effort. A line naming an
+// agent on another harness is refused, and so is one that does not hold
 // against the command that set it. The shadow reviewer takes no task line.
 func TestReviewAdmissionHoldsTheReviewerTaskLine(t *testing.T) {
 	t.Parallel()
@@ -517,6 +516,9 @@ func TestReviewAdmissionHoldsTheReviewerTaskLine(t *testing.T) {
 		t.Fatalf("auth adopt: %v", err)
 	}
 	tree := loadAdoptedPatch(t, patch)
+	// A second agent on the reviewer's enrollment, which a line can select.
+	const second = "codex-review-second"
+	tree = withAgentCopy(t, tree, lineupAgent(t, tree, domain.RoleReviewer), second)
 	now := time.Now().UTC()
 	f.withStore(t, func(st *store.Store) {
 		reviewer, err := reviewRoleAgent(ctx, st, tree, domain.RoleReviewer, now)
@@ -527,8 +529,8 @@ func TestReviewAdmissionHoldsTheReviewerTaskLine(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		admit := reviewAdmission(st, tree, testReviewRole(domain.RoleReviewer, nil), reviewer.Identity.ID, time.Now)
-		admitShadow := reviewAdmission(st, tree, testReviewRole(domain.RoleShadowReviewer, nil), shadow.Identity.ID, time.Now)
+		admit := reviewAdmission(st, tree, testReviewRole(domain.RoleReviewer, nil), time.Now)
+		admitShadow := reviewAdmission(st, tree, testReviewRole(domain.RoleShadowReviewer, nil), time.Now)
 		refused := func(t *testing.T, req exec.ReviewRequest, want string) {
 			t.Helper()
 			err := admit(ctx, req)
@@ -547,9 +549,9 @@ func TestReviewAdmissionHoldsTheReviewerTaskLine(t *testing.T) {
 			if err := admit(ctx, req); err != nil {
 				t.Fatalf("review admission with no reviewer line: %v", err)
 			}
-			// The source launches under the identity, model, and effort it was
-			// composed with, so a snapshot naming another of them, or the
-			// other review role, is not this source's to run.
+			// The source launches the identity, model, and effort the snapshot
+			// names, so a snapshot naming another than the line selects, or the
+			// other review role, is refused.
 			for name, change := range map[string]func(*domain.ReviewAdmission){
 				"another role":     func(a *domain.ReviewAdmission) { a.Role = domain.RoleShadowReviewer },
 				"another identity": func(a *domain.ReviewAdmission) { a.AuthIdentityID = shadow.Identity.ID },
@@ -559,7 +561,7 @@ func TestReviewAdmissionHoldsTheReviewerTaskLine(t *testing.T) {
 				changed := req
 				change(&changed.Admission)
 				refused(t, changed, "the invocation was admitted as")
-				if err := admit(ctx, changed); err == nil || !strings.Contains(err.Error(), "the review source runs") {
+				if err := admit(ctx, changed); err == nil || !strings.Contains(err.Error(), "the line now selects") {
 					t.Fatalf("review admission of a snapshot naming %s = %v", name, err)
 				}
 			}
@@ -606,14 +608,14 @@ func TestReviewAdmissionHoldsTheReviewerTaskLine(t *testing.T) {
 					t.Fatalf("the %s source refused the engine's admission: %v", role, err)
 				}
 			}
-			// The reviewer line of this task names another agent: the engine
-			// refuses the invocation before any snapshot exists. The shadow
-			// reviewer reads no line.
+			// The reviewer line of this task names an agent on another
+			// harness: the engine refuses the invocation before any snapshot
+			// exists. The shadow reviewer reads no line.
 			setReviewedRunLine(t, st, run, domain.RoleReviewer, shadow.Line.AgentName, "cmd-run-admitted", 0)
 			var failure *roleAdmissionError
 			if _, err := admitter(ctx, domain.RoleReviewer, run.ID, "review-admitted-refused", now); !errors.As(err, &failure) ||
 				failure.Role != domain.RoleReviewer || !errors.Is(err, engine.ErrAgentNotAdmissible) {
-				t.Fatalf("admit a reviewer invocation whose task line names another agent = %v", err)
+				t.Fatalf("admit a reviewer invocation whose task line names an agent on another harness = %v", err)
 			}
 			if _, err := admitter(ctx, domain.RoleShadowReviewer, run.ID, "review-admitted-shadow-2", now); err != nil {
 				t.Fatalf("admit a shadow invocation beside a refused reviewer line: %v", err)
@@ -628,18 +630,43 @@ func TestReviewAdmissionHoldsTheReviewerTaskLine(t *testing.T) {
 			}
 		})
 
-		t.Run("the line names another agent", func(t *testing.T) {
+		t.Run("the line selects another agent", func(t *testing.T) {
+			run := seedReviewedRun(t, st, "run-second-agent")
+			line := setReviewedRunLine(t, st, run, domain.RoleReviewer, second, "cmd-run-second-agent", 0)
+			revision, err := treeRevision(tree)
+			if err != nil {
+				t.Fatal(err)
+			}
+			admission, err := engine.AgentSelection{
+				Tree: tree, LineupRevision: revision, Launch: agentbaseline.RoleLaunch,
+			}.AdmitReview(ctx, st, testReviewRole(domain.RoleReviewer, []string{"chatgpt.com:443"}),
+				run.ID, "review-second-agent", time.Now().UTC())
+			if err != nil {
+				t.Fatalf("admit a review whose line selects another agent: %v", err)
+			}
+			// The copy's definition is the lineup agent's, so its digest is
+			// too; the selection is what shows the line chose it.
+			if admission.AgentBinding.SelectionSource != domain.AgentSelectionSourceTaskLine ||
+				admission.AgentBinding.SelectionRecordID != line.ID {
+				t.Fatalf("admission = %+v, want the line's agent cited by the line", admission.AgentBinding)
+			}
+			if err := admit(ctx, exec.ReviewRequest{RunID: run.ID, Admission: admission}); err != nil {
+				t.Fatalf("recheck of the line's agent: %v", err)
+			}
+		})
+
+		t.Run("the line names an agent on another harness", func(t *testing.T) {
 			run := seedReviewedRun(t, st, "run-other-agent")
 			// The other agent is a real one that passes every admission step
-			// for its own role: the refusal is the source's limit, not the
-			// agent's.
+			// for its own role: the refusal is the source's harness, not the
+			// agent.
 			if shadow.Line.AgentName == reviewer.Line.AgentName {
 				t.Fatal("the fixture's two review roles share an agent")
 			}
 			line := setReviewedRunLine(t, st, run, domain.RoleReviewer, shadow.Line.AgentName, "cmd-run-other-agent", 0)
 			req := exec.ReviewRequest{RunID: run.ID}
 			refused(t, req, string(line.ID))
-			refused(t, req, "cannot run another agent for one task")
+			refused(t, req, "harness client")
 			// The shadow reviewer reads no line, this task's included.
 			if err := admitShadow(ctx, admittedReviewRequest(t, st, tree, domain.RoleShadowReviewer, run.ID)); err != nil {
 				t.Fatalf("shadow review admission beside a refused reviewer line: %v", err)
@@ -742,12 +769,12 @@ func TestReviewInvocationIsRefusedBeforeItIsAdmitted(t *testing.T) {
 			want: "role ",
 		},
 		// Only the routed reviewer reads a task line.
-		"the task's line names another agent": {
+		"the task's line names an agent on another harness": {
 			roles: []domain.RoleName{domain.RoleReviewer},
 			breakIt: func(t *testing.T, f *fixture, role domain.RoleName, _ engine.ReviewRoleAgent) {
 				setReviewedRunLine(t, f.st, f.run, role, lineOf(f.tree, other[role]).AgentName, "cmd-run-refused", 0)
 			},
-			want: "cannot run another agent for one task",
+			want: "harness client",
 		},
 	} {
 		roles := tc.roles
@@ -1060,7 +1087,7 @@ func TestReviewSelectionOnAMarkedGeneration(t *testing.T) {
 				}
 				run := seedReviewedRun(t, st, "run-marked-review")
 				req := admittedReviewRequest(t, st, tree, role, run.ID)
-				admit := reviewAdmission(st, tree, testReviewRole(role, nil), agent.Identity.ID, func() time.Time { return at })
+				admit := reviewAdmission(st, tree, testReviewRole(role, nil), func() time.Time { return at })
 				mark := markStartupGeneration(t, st, agent.Enrollment.ID)
 				got, err := resolveReviewSelection(ctx, st, tree, flagEraReviewConfig(), at)
 				if err != nil || !reflect.DeepEqual(got, cfg) {
@@ -1348,18 +1375,17 @@ func TestReviewAdmissionRefusesALineOnAnotherHarness(t *testing.T) {
 		codexReq := admittedReviewRequest(t, st, codexTree, domain.RoleReviewer, run)
 		claudeReq := admittedReviewRequest(t, st, claudeTree, domain.RoleReviewer, run)
 		for name, tc := range map[string]struct {
-			tree     agenttree.Tree
-			spec     engine.ReviewRole
-			identity domain.AuthIdentityID
-			req      exec.ReviewRequest
-			refusal  string
+			tree    agenttree.Tree
+			spec    engine.ReviewRole
+			req     exec.ReviewRequest
+			refusal string
 		}{
-			"Codex source, Claude line":    {claudeTree, codexSpec, "claude-review", claudeReq, "harness"},
-			"Claude source, Codex line":    {codexTree, claudeSpec, "codex-review", codexReq, "harness"},
-			"Claude harness, Codex vendor": {claudeTree, wrongVendor, "claude-review", claudeReq, "adapter"},
-			"recomposed Claude source":     {claudeTree, claudeSpec, "claude-review", claudeReq, ""},
+			"Codex source, Claude line":    {claudeTree, codexSpec, claudeReq, "harness"},
+			"Claude source, Codex line":    {codexTree, claudeSpec, codexReq, "harness"},
+			"Claude harness, Codex vendor": {claudeTree, wrongVendor, claudeReq, "adapter"},
+			"recomposed Claude source":     {claudeTree, claudeSpec, claudeReq, ""},
 		} {
-			err := reviewAdmission(st, tc.tree, tc.spec, tc.identity, time.Now)(ctx, tc.req)
+			err := reviewAdmission(st, tc.tree, tc.spec, time.Now)(ctx, tc.req)
 			if tc.refusal == "" {
 				if err != nil {
 					t.Fatalf("%s: %v", name, err)
@@ -1373,4 +1399,104 @@ func TestReviewAdmissionRefusesALineOnAnotherHarness(t *testing.T) {
 			}
 		}
 	})
+}
+
+// lineupAgent is the agent the tree's lineup line for role names.
+func lineupAgent(t *testing.T, tree agenttree.Tree, role domain.RoleName) string {
+	t.Helper()
+	for _, line := range tree.Lineup {
+		if domain.RoleName(line.Key) == role {
+			return line.Selection.AgentName
+		}
+	}
+	t.Fatalf("the tree has no %s line", role)
+	return ""
+}
+
+// withAgentCopy adds an agent named name on the fragments of the agent named
+// source, so a task line can select an agent other than the lineup's on the
+// same enrollment.
+func withAgentCopy(t *testing.T, tree agenttree.Tree, source, name string) agenttree.Tree {
+	t.Helper()
+	agent, ok := tree.Agent(source)
+	if !ok {
+		t.Fatalf("the tree lacks agent %s", source)
+	}
+	agent.Name = name
+	tree.Agents = append(slices.Clone(tree.Agents), agent)
+	tree.Sort()
+	files, err := agenttree.Render(tree)
+	if err != nil {
+		t.Fatal(err)
+	}
+	parsed, err := agenttree.Parse(files)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return parsed
+}
+
+// TestReviewCredentialReadsTheAdmittedGeneration: the routed Claude source
+// reads another identity's token from the enrollment generation the request
+// was admitted under, refuses a read the store refuses, and never prints the
+// token. A Codex source reads no other identity's credential.
+func TestReviewCredentialReadsTheAdmittedGeneration(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	admission := fake.ReviewAdmission(domain.RoleReviewer, "run-1", "review-1")
+	admission.AgentBinding.EnrollmentID, admission.AgentBinding.EnrollmentGeneration = "claude-second/claude_code", 3
+	token := judgmentTestToken(t, judgmentSecondToken)
+	var reads []string
+	read := func(_ context.Context, id domain.ClientEnrollmentID, ordinal int) (ward.SetupToken, error) {
+		reads = append(reads, fmt.Sprintf("%s@%d", id, ordinal))
+		return token, nil
+	}
+	claude := mustRoutedReviewProvider(domain.HarnessClientClaudeCode)
+
+	credential, err := reviewCredential(claude, read)(ctx, admission)
+	if err != nil {
+		t.Fatalf("read the admitted generation: %v", err)
+	}
+	if !slices.Equal(reads, []string{"claude-second/claude_code@3"}) {
+		t.Fatalf("reads = %v, want the admitted generation", reads)
+	}
+	if printed := fmt.Sprintf("%v %+v %#v %s", credential, credential, credential, credential); strings.Contains(printed, judgmentSecondToken) {
+		t.Fatalf("a formatted credential prints the token: %s", printed)
+	}
+
+	// A store that is not the admitted one refuses the review; a store that
+	// is changing, or a read that did not finish, is retried.
+	for cause, want := range map[error]domain.ReviewFailureClass{
+		wardstore.ErrCredentialReadDigestMismatch:    domain.ReviewFailureConfiguration,
+		wardstore.ErrCredentialReadGenerationChanged: domain.ReviewFailureConfiguration,
+		wardstore.ErrCredentialReadUnsupported:       domain.ReviewFailureConfiguration,
+		wardstore.ErrCredentialReadMutationLeaseLive: domain.ReviewFailureTransient,
+		wardstore.ErrCredentialReadHoldEnded:         domain.ReviewFailureTransient,
+		errors.New("exporter container exited"):      domain.ReviewFailureTransient,
+	} {
+		refusing := func(context.Context, domain.ClientEnrollmentID, int) (ward.SetupToken, error) {
+			return ward.SetupToken{}, cause
+		}
+		_, err := reviewCredential(claude, refusing)(ctx, admission)
+		if !errors.Is(err, cause) {
+			t.Fatalf("a failed read = %v, want it to wrap %v", err, cause)
+		}
+		var failure *exec.ReviewSourceFailure
+		switch want {
+		case domain.ReviewFailureConfiguration:
+			if !errors.Is(err, engine.ErrAgentNotAdmissible) || errors.As(err, &failure) {
+				t.Errorf("read failing with %v = %v, want a refusal", cause, err)
+			}
+		default:
+			if exec.ClassifyReviewSourceFailure(err) != want || errors.Is(err, engine.ErrAgentNotAdmissible) {
+				t.Errorf("read failing with %v = %v, want a %s failure", cause, err, want)
+			}
+		}
+	}
+
+	reads = nil
+	codex := mustRoutedReviewProvider(domain.HarnessClientCodexCLI)
+	if _, err := reviewCredential(codex, read)(ctx, admission); !errors.Is(err, engine.ErrAgentNotAdmissible) || reads != nil {
+		t.Fatalf("a Codex source = %v after reads %v, want a refusal that reads nothing", err, reads)
+	}
 }

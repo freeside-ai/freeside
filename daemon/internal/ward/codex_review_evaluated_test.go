@@ -245,13 +245,14 @@ func TestReviewSourcesSeedTheEvaluatedCommit(t *testing.T) {
 				}
 				cfg, requestSpec := provider.fixture(t)
 				journal := &fakeCodexReviewJournal{}
-				source, err := provider.construct(provider.configure(t, lifecycle, cfg, requestSpec, journal))
+				sourceConfig := provider.configure(t, lifecycle, cfg, requestSpec, journal)
+				source, err := provider.construct(sourceConfig)
 				if err != nil {
 					t.Fatal(err)
 				}
 				id := domain.InvocationID("review-" + strings.Repeat("e", 24))
 				request := exec.ReviewRequest{
-					Admission: testReviewAdmission("run-1"),
+					Admission: testSourceReviewAdmission("run-1", sourceConfig),
 					RunID:     "run-1", Round: 1, Repo: seedSpec.Seed.Base.Repo,
 					RepositoryID: seedSpec.Seed.Base.RepositoryID, BaseRef: seedSpec.Seed.Base.BaseRef,
 					BaseSHA: strings.Repeat("a", 40), HeadSHA: strings.Repeat("b", 40),

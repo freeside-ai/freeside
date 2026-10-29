@@ -49,7 +49,8 @@ type ReviewAdmitter func(
 ) (domain.ReviewAdmission, error)
 
 // CheckReviewRole runs the review admission steps for one role (plan §5.4
-// steps 1, 2, and 4): the role's line resolves to an agent whose fragments,
+// steps 1, 2, and 4): the role's line, the task's or else the lineup's,
+// resolves to an agent whose fragments,
 // enrollment, and enabled identity join; the line selects that agent's
 // current digest and the code-owned review prompt; the agent's harness is the
 // one the role's source drives and its adapter is that source's vendor; the
@@ -63,13 +64,14 @@ type ReviewAdmitter func(
 // credential are held to the instant of the check.
 //
 // runID names the run a review is about to be requested for; it is empty at
-// startup and preflight, where no task is in view. A task line cannot move a
-// review to another agent: the source runs one identity and one agent, fixed
-// when the daemon composed it from the role's lineup line, whose harness
-// selected the source (#397, #1981). So a line is never silently ignored, a
-// run whose task's line for the role names any other agent is refused, and so
-// is one whose line does not hold against the command that set it. The shadow
-// reviewer takes no task line and is not checked for one.
+// startup and preflight, where no task is in view. A task line for the role
+// selects the agent the way it does for a writer (resolveAttemptRole): the
+// prompt stays the lineup line's, and a line that fails any step refuses the
+// review and never falls back to the lineup's agent. So is a line that does
+// not hold against the command that set it. The line selects within the
+// source the daemon composed: the harness and vendor checks refuse an agent
+// the role's source does not drive (#397). The shadow reviewer takes no task
+// line and is not checked for one.
 //
 // The generation's integrity mark is read in the same transaction as the
 // rest but reported after every other step. Any non-nil error refuses
@@ -98,11 +100,21 @@ func CheckReviewRole(
 		found  bool
 		marked error
 	)
-	// One read transaction, so the enrollment, its identity, its current
-	// generation, its mark, and the task's line are one consistent view.
+	// One read transaction, so the task's line, the enrollment, its
+	// identity, its current generation, and its mark are one consistent view.
 	err := st.Read(ctx, func(tx *store.ReadTx) error {
 		var err error
-		if agent.RoleAgent, err = resolveRoleLine(ctx, tx, tree, role); err != nil {
+		if runID != "" && role.TaskLineEligible() {
+			if line, found, err = RunTaskLine(ctx, tx, runID, role); err != nil {
+				return err
+			}
+		}
+		if found {
+			agent.RoleAgent, err = resolveReviewLine(ctx, tx, tree, role, line)
+		} else {
+			agent.RoleAgent, err = resolveRoleLine(ctx, tx, tree, role)
+		}
+		if err != nil {
 			return fmt.Errorf("role %s: %w", role, err)
 		}
 		if err := agent.requireUnmarked(ctx, tx); err != nil {
@@ -112,21 +124,18 @@ func CheckReviewRole(
 			}
 			marked = fmt.Errorf("role %s: %w", role, err)
 		}
-		if runID == "" || !role.TaskLineEligible() {
-			return nil
-		}
-		line, found, err = RunTaskLine(ctx, tx, runID, role)
-		return err
+		return nil
 	})
 	if err != nil {
 		return ReviewRoleAgent{}, errors.Join(ErrAgentNotAdmissible, err)
 	}
-	// The refusal names the line by its id and never by its agent. That name
-	// is text an operator typed, and a credential pasted there can pass the
-	// name grammar; this error becomes the review failure's recorded reason.
-	if found && line.Agent != agent.Line.AgentName {
-		return refuse("task line %s names an agent other than %q, the one the review source runs; "+
-			"it cannot run another agent for one task", line.ID, agent.Line.AgentName)
+	if found {
+		// Every later refusal names the line that selected the agent. The
+		// agent's name is the tree's own by now, so it may be printed.
+		refuseRole := refuse
+		refuse = func(format string, args ...any) (ReviewRoleAgent, error) {
+			return refuseRole("task line %s: "+format, append([]any{line.ID}, args...)...)
+		}
 	}
 	if agent.Line.PromptName != spec.PromptName || agent.Line.PromptDigest != spec.PromptDigest {
 		return refuse("the lineup selects prompt %s %s, this daemon reviews with %s %s",
@@ -181,11 +190,29 @@ func CheckReviewRole(
 	return agent, nil
 }
 
+// resolveReviewLine resolves the agent a reviewer line names, refusing by the
+// line's id and never by the name it holds. That name is text an operator
+// typed, and a credential pasted there can pass the name grammar; a refusal
+// becomes the review failure's recorded reason. Once the tree holds the
+// agent, the name is the tree's own, so later refusals may print it.
+func resolveReviewLine(
+	ctx context.Context, tx *store.ReadTx, tree agenttree.Tree, role domain.RoleName, line domain.TaskLine,
+) (RoleAgent, error) {
+	if _, ok := tree.Agent(line.Agent); !ok {
+		return RoleAgent{}, fmt.Errorf("task line %s names an agent the tree lacks", line.ID)
+	}
+	agent, err := resolveLineAgent(ctx, tx, tree, role, line)
+	if err != nil {
+		return RoleAgent{}, fmt.Errorf("task line %s: %w", line.ID, err)
+	}
+	return agent, nil
+}
+
 // AdmitReview resolves the snapshot one review invocation is admitted under
 // (plan §5.4 step 5): CheckReviewRole's checks for the invocation's run at
 // admittedAt, then the binding an execution admission records, built the same
-// way, with the offer's lineage group and the identity the enrollment belongs
-// to. The caller stores it once and never resolves the invocation again.
+// way and citing the task line that chose the agent, with the offer's lineage
+// group and the identity the enrollment belongs to. The caller stores it once and never resolves the invocation again.
 func (s AgentSelection) AdmitReview(
 	ctx context.Context, st *store.Store, spec ReviewRole, runID domain.RunID,
 	invocationID domain.InvocationID, admittedAt time.Time,
@@ -201,6 +228,7 @@ func (s AgentSelection) AdmitReview(
 		return domain.ReviewAdmission{}, err
 	}
 	resolved, definition := agent.Resolved, agent.Resolved.Definition
+	source, record := agent.Selection()
 	effort, err := domain.TranslateEffort(resolved.Adapter.ClientKind, definition.Effort)
 	if err != nil {
 		return refuse(err)
@@ -223,7 +251,7 @@ func (s AgentSelection) AdmitReview(
 			EffectiveEgress:     slices.Clone(spec.EffectiveEgress),
 			RouteModelID:        agent.passes.RouteModelID, RequestedEffort: agent.passes.RequestedEffort,
 			NativeEffort:    agent.passes.NativeEffort,
-			SelectionSource: domain.AgentSelectionSourceLineup,
+			SelectionSource: source, SelectionRecordID: record,
 		},
 		AdmittedAt: admittedAt,
 	})
