@@ -4,10 +4,9 @@
 // pinned Claude Code and Codex builds, and the baseline tree `freesided auth
 // adopt` proposes.
 //
-// The adapters' capability sets are declarations. No stage contract suite
-// drives the real harness yet, so each set names only what the launch the
-// daemon builds today does, and the adapter conformance record written from
-// it attests exactly that. A capability no launch control backs
-// (auxiliary-inference control, exact resume) is deliberately absent, so a
-// launch that needs one fails admission closed.
+// The adapters' capability sets are declarations. The Claude stage contract
+// suite in exec/claude observes the real harness before the daemon records
+// its proved set. Codex review proof belongs to its admission cutover (#1980).
+// Capabilities no launch control backs (auxiliary-inference control, exact
+// resume) remain absent, so a launch needing one fails admission closed.
 package agentbaseline

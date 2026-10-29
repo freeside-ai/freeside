@@ -858,7 +858,7 @@ func TestWriterRoleFailureHoldsAdmissionAndRaisesOneItem(t *testing.T) {
 	}
 	f.withStore(t, func(st *store.Store) {
 		now := time.Now().UTC()
-		if err := recordBaselineAdapterConformance(ctx, st, now); err != nil {
+		if err := recordTestClaudeAdapterConformance(ctx, st, now); err != nil {
 			t.Fatal(err)
 		}
 		if failure := checkWriterRoles(ctx, st, *selection, prompts, now); failure != nil {
@@ -965,7 +965,7 @@ func TestMarkedWriterRoleDoesNotHoldTheLineup(t *testing.T) {
 	}
 	f.withStore(t, func(st *store.Store) {
 		at := time.Now().UTC()
-		if err := recordBaselineAdapterConformance(ctx, st, at); err != nil {
+		if err := recordTestClaudeAdapterConformance(ctx, st, at); err != nil {
 			t.Fatal(err)
 		}
 		source, err := engine.ResolveRole(ctx, st, tree, domain.RoleSpecifier)

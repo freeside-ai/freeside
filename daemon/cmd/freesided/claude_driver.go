@@ -1682,6 +1682,7 @@ func composeClaudeDriver(
 		return nil, fmt.Errorf("compose ward store adapters: %w", adapterErr)
 	}
 	runtime := ward.NewCLIRuntime(cfg.ContainerBin)
+	conformanceLeaser := &adapterConformanceLeaser{Leaser: adapters.Leaser, store: st}
 	wardConfig := ward.Config{
 		AgentImage:    string(cfg.AgentImage),
 		ExporterImage: cfg.ExporterImage,
@@ -1696,13 +1697,16 @@ func composeClaudeDriver(
 		WriterStopTimeout: cfg.WriterStopTimeout,
 		StallInterval:     cfg.WriterStallInterval,
 		Scanner:           credentialScanner{},
-		AuthStoreLeaser:   adapters.Leaser,
+		AuthStoreLeaser:   conformanceLeaser,
 		Journal:           adapters.Journal,
 		Logger:            logger,
 	}
 	backend, backendErr := ward.New(runtime, wardConfig)
 	if backendErr != nil {
 		return nil, fmt.Errorf("compose ward backend: %w", backendErr)
+	}
+	if err := recoverAdapterConformance(ctx, st, backend, cfg, conformanceLeaser); err != nil {
+		return nil, err
 	}
 	// The Codex review lifecycle, volume leaser, and recovery stay composed
 	// whatever the reviewer line's harness, so a restart onto a Claude
@@ -1844,7 +1848,7 @@ func composeClaudeDriver(
 	}
 	if cfg.RunConformance {
 		if err := runClaudeConformance(
-			ctx, st, transport, backend, cfg, janitor.WithStableCoverage,
+			ctx, st, transport, backend, cfg, janitor.WithStableCoverage, conformanceLeaser,
 		); err != nil {
 			return nil, fmt.Errorf("run ward conformance: %w", err)
 		}
@@ -1928,7 +1932,7 @@ func composeClaudeDriver(
 		Agents: agents,
 	}
 	follower := newConformanceFollower(backend, func(runCtx context.Context) error {
-		return runClaudeConformance(runCtx, st, transport, backend, cfg, janitor.WithStableCoverage)
+		return runClaudeConformance(runCtx, st, transport, backend, cfg, janitor.WithStableCoverage, conformanceLeaser)
 	}, time.Now, logger.With("subsystem", "writer_image_conformance"))
 	var (
 		selectImage     engine.ImageSelection
@@ -2302,7 +2306,13 @@ func runClaudeConformance(
 	backend *ward.Backend,
 	cfg claudeDriverConfig,
 	withStableCoverage func(func() error) error,
+	leaser *adapterConformanceLeaser,
 ) error {
+	if backend != nil {
+		if err := recoverAdapterConformance(ctx, st, backend, cfg, leaser); err != nil {
+			return err
+		}
+	}
 	// Full runs two synthetic handoffs, one per enforced egress profile. Each
 	// is a run of its own, minted in the same conf-<16 hex> shape so both sets
 	// of objects stay inside the namespace the production rig owns.
@@ -2373,7 +2383,7 @@ func runClaudeConformance(
 	}
 	// Only a passed ward suite reaches here, so an adapter record never
 	// outlives the runner proof it rests on.
-	return recordBaselineAdapterConformance(ctx, st, time.Now().UTC())
+	return proveClaudeAdapter(ctx, st, backend, cfg, leaser)
 }
 
 // claudeAdmissionDerivation supplies the per-attempt workspace, and the

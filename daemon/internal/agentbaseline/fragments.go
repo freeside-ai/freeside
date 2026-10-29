@@ -1,11 +1,6 @@
 package agentbaseline
 
-import (
-	"fmt"
-	"time"
-
-	"github.com/freeside-ai/freeside/daemon/internal/domain"
-)
+import "github.com/freeside-ai/freeside/daemon/internal/domain"
 
 // The harness builds the agent images pin (images/agent-claude and
 // images/agent-codex Containerfiles). A test holds these to the
@@ -176,9 +171,8 @@ func sealAdapter(adapter domain.AdapterFragment) (domain.AdapterFragment, error)
 	return adapter, adapter.Validate()
 }
 
-// Adapters returns the baseline ward adapters, the builds whose capability
-// sets a conformance record proves. Both review builds are among them, so a
-// tree adopted on v1 keeps its record. The call adapter is not.
+// Adapters returns the baseline ward adapter declarations, including the
+// retained review build. Declarations are not conformance observations.
 func Adapters() ([]domain.AdapterFragment, error) {
 	claude, err := ClaudeWardAdapter()
 	if err != nil {
@@ -193,28 +187,4 @@ func Adapters() ([]domain.AdapterFragment, error) {
 		return nil, err
 	}
 	return []domain.AdapterFragment{claude, codex, codexV1}, nil
-}
-
-// ConformanceRecords returns one passed adapter conformance record for each
-// baseline adapter, proving exactly its declared set. The caller records
-// them only after the ward suite passed for the running configuration: the
-// record says the launch code for this build honours the set, and the ward
-// pass says the runner it launches into conforms.
-func ConformanceRecords(provedAt time.Time) ([]domain.AdapterConformance, error) {
-	adapters, err := Adapters()
-	if err != nil {
-		return nil, err
-	}
-	records := make([]domain.AdapterConformance, 0, len(adapters))
-	for _, adapter := range adapters {
-		record, err := domain.NewAdapterConformance(domain.AdapterConformanceInput{
-			AdapterDigest: adapter.Digest, Outcome: domain.ConformancePassed,
-			ProvedCapabilities: adapter.LaunchCapabilities, ProvedAt: provedAt,
-		})
-		if err != nil {
-			return nil, fmt.Errorf("adapter %s conformance: %w", adapter.AdapterBuild, err)
-		}
-		records = append(records, record)
-	}
-	return records, nil
 }
