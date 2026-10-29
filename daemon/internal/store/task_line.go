@@ -3,6 +3,7 @@ package store
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
 	"fmt"
 	"time"
 
@@ -11,9 +12,10 @@ import (
 
 // Task lines (migration 0095; plan §5.4, Admitted Agents) are append-only: a
 // row is one line version and no statement here updates one. A change is the
-// next version for its task and role.
+// next version for its task and role. Migration 0111 adds a router line's
+// provenance as JSON, NULL for every operator line.
 
-const taskLineColumns = `task_id, role, version, id, agent, predecessor_id, source, set_by, set_at`
+const taskLineColumns = `task_id, role, version, id, agent, predecessor_id, source, set_by, set_at, provenance`
 
 // AppendTaskLine records the next version of a task's line for one role and
 // returns it. The version and the predecessor are assigned here, from the
@@ -26,8 +28,8 @@ const taskLineColumns = `task_id, role, version, id, agent, predecessor_id, sour
 // return their recorded result before reaching it).
 //
 // The role, the agent name's shape, and the source are refused by
-// domain.TaskLine.Validate before any row is written, so a line no operator
-// path set never reaches the table.
+// domain.TaskLine.Validate before any row is written, so a line no known
+// path set, or a router line without its provenance, never reaches the table.
 func (tx *WriteTx) AppendTaskLine(ctx context.Context, in domain.TaskLineInput, setAt time.Time) (domain.TaskLine, error) {
 	// The role's whole chain is read and checked, not only its last row, so
 	// a chain that already fails a read is never extended.
@@ -50,14 +52,21 @@ func (tx *WriteTx) AppendTaskLine(ctx context.Context, in domain.TaskLineInput, 
 	if err != nil {
 		return domain.TaskLine{}, fmt.Errorf("append task line %q %q: %w", in.TaskID, in.Role, err)
 	}
-	var predecessorID any
+	var predecessorID, provenance any
 	if line.PredecessorID != nil {
 		predecessorID = string(*line.PredecessorID)
 	}
+	if line.Provenance != nil {
+		body, err := json.Marshal(line.Provenance)
+		if err != nil {
+			return domain.TaskLine{}, fmt.Errorf("append task line %q %q provenance: %w", in.TaskID, in.Role, err)
+		}
+		provenance = string(body)
+	}
 	if _, err := tx.tx.ExecContext(ctx, `INSERT INTO task_lines (`+taskLineColumns+`)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		line.TaskID, line.Role, line.Version, line.ID, line.Agent, predecessorID,
-		line.Source, line.SetBy, formatTime(line.SetAt)); err != nil {
+		line.Source, line.SetBy, formatTime(line.SetAt), provenance); err != nil {
 		return domain.TaskLine{}, fmt.Errorf("append task line %q %q: %w", in.TaskID, in.Role, err)
 	}
 	return line, nil
@@ -139,10 +148,17 @@ func (tx *ReadTx) queryTaskLines(ctx context.Context, query string, args ...any)
 			line        domain.TaskLine
 			predecessor sql.NullString
 			setAt       string
+			provenance  sql.NullString
 		)
 		if err := rows.Scan(&line.TaskID, &line.Role, &line.Version, &line.ID, &line.Agent,
-			&predecessor, &line.Source, &line.SetBy, &setAt); err != nil {
+			&predecessor, &line.Source, &line.SetBy, &setAt, &provenance); err != nil {
 			return nil, err
+		}
+		if provenance.Valid {
+			line.Provenance = new(domain.TaskLineProvenance)
+			if err := json.Unmarshal([]byte(provenance.String), line.Provenance); err != nil {
+				return nil, errRowInconsistent
+			}
 		}
 		if predecessor.Valid {
 			id := domain.Digest(predecessor.String)

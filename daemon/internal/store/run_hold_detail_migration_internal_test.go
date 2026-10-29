@@ -21,6 +21,8 @@ func TestRunHoldDetailMigrationKeepsOlderHolds(t *testing.T) {
 	// Return the store to the shape a daemon at 0102 holds, forgetting 0104
 	// and then 0103 so the recorded history stays contiguous.
 	for _, statement := range []string{
+		`ALTER TABLE task_lines DROP COLUMN provenance`,
+		`DELETE FROM schema_migrations WHERE name = '0111_task_line_provenance.sql'`,
 		`DROP TABLE image_policy_adoptions`,
 		`DELETE FROM schema_migrations WHERE name = '0110_image_policy_adoption.sql'`,
 		`DELETE FROM schema_migrations WHERE name = '0109_task_submission_origin.sql'`,
