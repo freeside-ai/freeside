@@ -26,7 +26,7 @@ magick "$source_image" \
     -draw 'rectangle 0,0 264,1023 rectangle 684,0 1023,1023 rectangle 0,0 1023,100 rectangle 0,924 1023,1023' \
     "$scratch_dir/dark-mask.png"
 
-magick -size 1024x1024 xc:'#16120E' \
+magick -size 1024x1024 xc:'#131416' \
     \( -size 1024x1024 xc:'#C2912E' "$scratch_dir/dark-mask.png" \
     -alpha off -compose CopyOpacity -composite \) \
     -compose Over -composite -depth 8 -alpha set \
