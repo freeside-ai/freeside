@@ -44,6 +44,7 @@
         "evidence_digest": "sha256:5d54733ff7564ba7bbc8e604b3bb36e538830fed518d43d6494653b909e00b1a",
         "recorded_at": "2026-09-17T12:00:00Z"
       }
-    }
+    },
+    "task_lines": []
   }
 }

@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"errors"
 	"path/filepath"
+	"reflect"
 	"testing"
 	"time"
 
@@ -222,6 +223,110 @@ func TestTaskLinesFailClosedOnEditedRow(t *testing.T) {
 			// An append refuses the same chain instead of extending it.
 			if _, err := appendTaskLine(t, s, input, taskLineSetAt); !errors.Is(err, store.ErrRowInconsistent) {
 				t.Fatalf("append after tampering: err = %v, want %v", err, store.ErrRowInconsistent)
+			}
+		})
+	}
+}
+
+// routerTaskLineInput is a router line that passed over an exhausted pool:
+// the provenance shape that carries every optional citation.
+func routerTaskLineInput(taskID domain.TaskID) domain.TaskLineInput {
+	return domain.TaskLineInput{
+		TaskID: taskID, Role: domain.RoleImplementer, Agent: "claude-b",
+		Source: domain.TaskLineSourceRouter, SetBy: "router:" + string(taskID),
+		Provenance: &domain.TaskLineProvenance{
+			PolicyRevision: 2, Trigger: domain.TaskLineSelectionExhaustedMark,
+			Reading: &domain.TaskLineSelectionReading{
+				Pool: "claude-a", Window: "seven_day_opus", ObservedAt: taskLineSetAt.Add(-time.Hour),
+			},
+			PassedOver: new("claude-a"),
+		},
+	}
+}
+
+// TestTaskLineProvenanceRoundTrip: a router line's provenance is stored as
+// JSON and decodes to the line it was written as, an operator line stores
+// NULL, and the table's CHECK holds the column to the source for a writer
+// that bypasses the store.
+func TestTaskLineProvenanceRoundTrip(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	path := filepath.Join(t.TempDir(), "task-lines.db")
+	s := openStoreAt(t, path, store.Options{})
+	taskID, _ := seedTaskSubmissionTarget(t, ctx, s)
+	routed, err := appendTaskLine(t, s, routerTaskLineInput(taskID), taskLineSetAt)
+	if err != nil {
+		t.Fatal(err)
+	}
+	operator, err := appendTaskLine(t, s, domain.TaskLineInput{
+		TaskID: taskID, Role: domain.RoleReviewer, Agent: "codex",
+		Source: domain.TaskLineSourceSubmitTask, SetBy: "cmd-1",
+	}, taskLineSetAt)
+	if err != nil {
+		t.Fatal(err)
+	}
+	all, current, err := readTaskLines(t, s, taskID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(all, []domain.TaskLine{routed, operator}) {
+		t.Fatalf("lines = %+v, want %+v then %+v", all, routed, operator)
+	}
+	if !reflect.DeepEqual(current[domain.RoleImplementer], routed) {
+		t.Fatalf("current implementer line = %+v, want %+v", current[domain.RoleImplementer], routed)
+	}
+
+	db, err := sql.Open("sqlite", path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = db.Close() }()
+	var provenance sql.NullString
+	if err := db.QueryRowContext(ctx, `SELECT provenance FROM task_lines WHERE role = 'reviewer'`).
+		Scan(&provenance); err != nil || provenance.Valid {
+		t.Fatalf("operator line provenance column = %+v (%v), want NULL", provenance, err)
+	}
+	for name, statement := range map[string]string{
+		"router without provenance": `INSERT INTO task_lines (task_id, role, version, id, agent, source, set_by, set_at)
+			VALUES (?, 'specifier', 1, 'sha256:x', 'codex', 'router', 'router:x', '2026-01-02T03:04:05Z')`,
+		"operator with provenance": `INSERT INTO task_lines (task_id, role, version, id, agent, source, set_by, set_at, provenance)
+			VALUES (?, 'specifier', 1, 'sha256:y', 'codex', 'submit_task', 'cmd-1', '2026-01-02T03:04:05Z', '{}')`,
+	} {
+		if _, err := db.ExecContext(ctx, statement, taskID); err == nil {
+			t.Fatalf("%s: the table accepted the row", name)
+		}
+	}
+}
+
+// TestTaskLinesFailClosedOnEditedProvenance: provenance is bound into the
+// line's id, so an edited or unparsable column fails the read like any other
+// edited column.
+func TestTaskLinesFailClosedOnEditedProvenance(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	for name, tamper := range map[string]string{
+		"edited revision":    `UPDATE task_lines SET provenance = json_set(provenance, '$.policy_revision', 3)`,
+		"edited passed over": `UPDATE task_lines SET provenance = json_set(provenance, '$.passed_over', 'codex')`,
+		"unparsable":         `UPDATE task_lines SET provenance = '{'`,
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			path := filepath.Join(t.TempDir(), "task-lines.db")
+			s := openStoreAt(t, path, store.Options{})
+			taskID, _ := seedTaskSubmissionTarget(t, ctx, s)
+			if _, err := appendTaskLine(t, s, routerTaskLineInput(taskID), taskLineSetAt); err != nil {
+				t.Fatal(err)
+			}
+			db, err := sql.Open("sqlite", path)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer func() { _ = db.Close() }()
+			if _, err := db.ExecContext(ctx, tamper); err != nil {
+				t.Fatal(err)
+			}
+			if _, _, err := readTaskLines(t, s, taskID); !errors.Is(err, store.ErrRowInconsistent) {
+				t.Fatalf("read after tampering: err = %v, want %v", err, store.ErrRowInconsistent)
 			}
 		})
 	}

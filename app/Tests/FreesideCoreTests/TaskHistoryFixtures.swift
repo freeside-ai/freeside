@@ -163,6 +163,52 @@ enum TaskHistoryFixtures {
         return timeline
     }
 
+    /// `.published` with the task's agent choices: the router's implementer
+    /// line, which passed over an exhausted pool, and an operator's change of
+    /// the reviewer line, which supersedes the one set at submission.
+    static func linesSet() -> Components.Schemas.TaskTimeline {
+        func at(_ minutes: Int) -> Date { instant.addingTimeInterval(TimeInterval(minutes * 60)) }
+        let digest = "sha256:" + String(repeating: "a", count: 64)
+        var timeline = history(.published)
+        let exhausted = Components.Schemas.TaskLineProvenance(
+            policy_revision: 2, trigger: .exhausted_mark,
+            reading: .init(value1: .init(pool: "claude-a", window: "seven_day_opus", observed_at: at(-60))),
+            passed_over: "claude-a")
+        let events: [Components.Schemas.TaskEvent] = [
+            .init(
+                line: .init(
+                    value1: .init(
+                        line_id: digest, role: .specifier, agent: "claude-a", version: 2, source: .router,
+                        superseded_agent: "claude-b", provenance: .init(value1: exhausted))),
+                kind: .task_line_set, recorded_at: at(-3)),
+            .init(
+                line: .init(
+                    value1: .init(
+                        line_id: digest, role: .reviewer, agent: "codex", version: 2, source: .cli_submit,
+                        superseded_agent: "claude-a")),
+                kind: .task_line_set, recorded_at: at(-4)),
+            .init(
+                line: .init(
+                    value1: .init(
+                        line_id: digest, role: .implementer, agent: "claude-b", version: 1, source: .router,
+                        provenance: .init(value1: exhausted))),
+                kind: .task_line_set, recorded_at: at(-5)),
+            .init(
+                line: .init(
+                    value1: .init(
+                        line_id: digest, role: .specifier, agent: "claude-b", version: 1, source: .router,
+                        provenance: .init(value1: .init(policy_revision: 2, trigger: .first_admission)))),
+                kind: .task_line_set, recorded_at: at(-6)),
+            .init(
+                line: .init(
+                    value1: .init(
+                        line_id: digest, role: .remediator, agent: "claude-a", version: 1, source: .cli_submit)),
+                kind: .task_line_set, recorded_at: at(-7)),
+        ]
+        timeline.events.insert(contentsOf: events, at: 0)
+        return timeline
+    }
+
     /// Folds for a capture of what a campaign holds: every campaign starts
     /// collapsed, so a surface that is about the current campaign's runs
     /// opens it; `identifiersOpen` also opens the page's Identifiers footer.
@@ -198,7 +244,8 @@ enum TaskHistoryFixtures {
                             kind: .started, run_id: $0.run_id,
                             recorded_at: creation.recorded_at.addingTimeInterval(5 * 60))
                     ]
-                } ?? []))
+                } ?? [],
+                task_lines: []))
     }
 
     @MainActor

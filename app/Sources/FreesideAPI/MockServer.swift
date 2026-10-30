@@ -2162,7 +2162,8 @@ public actor MockServer {
             lifecycle: .active,
             current_position: .init(value1: .init(run_id: runID)),
             campaign_ids: [campaignID], run_ids: [runID], wip: true,
-            lifecycle_facts: [.init(kind: .started, run_id: runID, recorded_at: currentTime)])
+            lifecycle_facts: [.init(kind: .started, run_id: runID, recorded_at: currentTime)],
+            task_lines: [])
         tasksByID[taskID] = .init(as_of_revision: revision, entity_version: 1, task: task)
     }
 

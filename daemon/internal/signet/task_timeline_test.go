@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"net/http"
+	"reflect"
 	"testing"
 	"time"
 
@@ -180,6 +181,40 @@ func TestTaskTimelineUnknownAndEmptyTask(t *testing.T) {
 	got, err := f.service.GetTaskTimeline(t.Context(), task.ID)
 	if err != nil || got.Sections == nil || len(got.Sections) != 0 || len(got.Events) != 1 {
 		t.Fatalf("empty task = %+v, %v", got, err)
+	}
+}
+
+// TestTaskTimelineShowsStoredTaskLines: the timeline read reaches the
+// task's stored lines, so a router line shows with its provenance.
+func TestTaskTimelineShowsStoredTaskLines(t *testing.T) {
+	f := newRunFixture(t)
+	ctx := t.Context()
+	var line domain.TaskLine
+	if err := f.store.Write(ctx, func(tx *store.WriteTx) error {
+		task, err := tx.GetOrCreateTask(ctx, "proj-1", domain.SpecificationSource{
+			Kind:         domain.SpecificationSourceIssueSubject,
+			IssueSubject: &domain.IssueSubjectRef{Repo: "owner/repo", RepositoryID: 123, IssueNumber: 78},
+		})
+		if err != nil {
+			return err
+		}
+		line, err = tx.AppendTaskLine(ctx, domain.TaskLineInput{
+			TaskID: task.ID, Role: domain.RoleImplementer, Agent: "claude-b",
+			Source: domain.TaskLineSourceRouter, SetBy: "router:" + string(task.ID),
+			Provenance: &domain.TaskLineProvenance{PolicyRevision: 1, Trigger: domain.TaskLineSelectionFirstAdmission},
+		}, task.CreatedAt.Add(time.Minute))
+		return err
+	}); err != nil {
+		t.Fatal(err)
+	}
+	got, err := f.service.GetTaskTimeline(ctx, line.TaskID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got.Events) != 2 || got.Events[0].Kind != domain.TaskEventTaskLineSet || got.Events[0].Line == nil ||
+		got.Events[0].Line.LineID != line.ID || got.Events[0].Line.Provenance == nil ||
+		got.Events[0].Line.Provenance.Trigger != domain.TaskLineSelectionFirstAdmission {
+		t.Fatalf("timeline events = %+v, want the router line above task_created", got.Events)
 	}
 }
 
@@ -507,4 +542,57 @@ func TestTaskTimelineAuthenticatesOpenedPRWithoutCompletionMilestone(t *testing.
 			}
 		})
 	}
+}
+
+// TestBootstrapTaskCarriesCurrentLinesInRoleOrder: the synced task carries
+// each role's current line in TaskLineRoles order, not the store's
+// alphabetical role order, and only the latest version of a changed role.
+func TestBootstrapTaskCarriesCurrentLinesInRoleOrder(t *testing.T) {
+	f := newRunFixture(t)
+	ctx := t.Context()
+	var want []domain.TaskLine
+	if err := f.store.Write(ctx, func(tx *store.WriteTx) error {
+		task, err := tx.GetOrCreateTask(ctx, "proj-1", domain.SpecificationSource{
+			Kind:         domain.SpecificationSourceIssueSubject,
+			IssueSubject: &domain.IssueSubjectRef{Repo: "owner/repo", RepositoryID: 123, IssueNumber: 79},
+		})
+		if err != nil {
+			return err
+		}
+		appendLine := func(role domain.RoleName, agent string) (domain.TaskLine, error) {
+			return tx.AppendTaskLine(ctx, domain.TaskLineInput{
+				TaskID: task.ID, Role: role, Agent: agent, Source: domain.TaskLineSourceSubmitTask, SetBy: "cmd-1",
+			}, task.CreatedAt)
+		}
+		reviewer, err := appendLine(domain.RoleReviewer, "codex")
+		if err == nil {
+			reviewer, err = appendLine(domain.RoleReviewer, "claude-a")
+		}
+		if err != nil {
+			return err
+		}
+		implementer, err := appendLine(domain.RoleImplementer, "claude-b")
+		if err != nil {
+			return err
+		}
+		specifier, err := appendLine(domain.RoleSpecifier, "claude-b")
+		want = []domain.TaskLine{specifier, implementer, reviewer}
+		return err
+	}); err != nil {
+		t.Fatal(err)
+	}
+	bootstrap, err := f.service.Bootstrap(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, snapshot := range bootstrap.Tasks {
+		if snapshot.Task.ID != want[0].TaskID {
+			continue
+		}
+		if !reflect.DeepEqual(snapshot.Task.TaskLines, want) {
+			t.Fatalf("task lines = %+v, want %+v", snapshot.Task.TaskLines, want)
+		}
+		return
+	}
+	t.Fatalf("bootstrap has no task %s", want[0].TaskID)
 }

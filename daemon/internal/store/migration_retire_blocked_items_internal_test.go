@@ -159,6 +159,9 @@ func forgetRetireBlockedItems(t *testing.T, ctx context.Context, db *sql.DB) {
 	if _, err := db.ExecContext(ctx, `DROP TABLE repository_tip_observations`); err != nil {
 		t.Fatal(err)
 	}
+	if _, err := db.ExecContext(ctx, `ALTER TABLE task_lines DROP COLUMN provenance`); err != nil {
+		t.Fatal(err)
+	}
 	if _, err := db.ExecContext(ctx, `DROP TABLE image_policy_adoptions`); err != nil {
 		t.Fatal(err)
 	}
@@ -176,7 +179,8 @@ func forgetRetireBlockedItems(t *testing.T, ctx context.Context, db *sql.DB) {
 		'0107_run_hold_image_upkeep.sql',
 		'0108_image_upkeep.sql',
 		'0109_task_submission_origin.sql',
-		'0110_image_policy_adoption.sql')`); err != nil {
+		'0110_image_policy_adoption.sql',
+		'0111_task_line_provenance.sql')`); err != nil {
 		t.Fatal(err)
 	}
 }

@@ -145,6 +145,99 @@ func TestTaskLineValidate(t *testing.T) {
 	}
 }
 
+// TestTaskLineProvenanceValidate pins that provenance rides exactly on a
+// router line, and that each trigger carries exactly the citations it acted
+// on: a reading and a passed-over agent for an exhausted mark, neither for a
+// plain first admission.
+func TestTaskLineProvenanceValidate(t *testing.T) {
+	t.Parallel()
+	at := time.Date(2026, 1, 2, 3, 4, 5, 0, time.UTC)
+	passedOver := "claude-a"
+	input := domain.TaskLineInput{
+		TaskID: "task-1", Role: domain.RoleImplementer, Agent: "claude-b",
+		Source: domain.TaskLineSourceRouter, SetBy: "router:task-1",
+		Provenance: &domain.TaskLineProvenance{
+			PolicyRevision: 2, Trigger: domain.TaskLineSelectionExhaustedMark,
+			Reading: &domain.TaskLineSelectionReading{
+				Pool: "claude-a", Window: "seven_day_opus", ObservedAt: at.Add(-time.Hour).In(time.FixedZone("x", 3600)),
+			},
+			PassedOver: &passedOver,
+		},
+	}
+	routed, err := domain.NewTaskLine(input, 1, nil, at)
+	if err != nil {
+		t.Fatalf("router line: %v", err)
+	}
+	// The reading's instant is normalized, and the input stays the caller's.
+	if routed.Provenance.Reading.ObservedAt.Location() != time.UTC || routed.Provenance == input.Provenance {
+		t.Fatalf("router line provenance = %+v, want a detached UTC copy", routed.Provenance)
+	}
+	// Provenance is bound into the id.
+	plain := input
+	plain.Provenance = &domain.TaskLineProvenance{PolicyRevision: 2, Trigger: domain.TaskLineSelectionFirstAdmission}
+	first, err := domain.NewTaskLine(plain, 1, nil, at)
+	if err != nil {
+		t.Fatalf("first-admission line: %v", err)
+	}
+	if first.ID == routed.ID {
+		t.Fatalf("provenance does not change the id %s", first.ID)
+	}
+
+	other := "codex"
+	for name, tc := range map[string]struct {
+		mutate func(*domain.TaskLine)
+		want   error
+	}{
+		"router without provenance": {func(l *domain.TaskLine) { l.Provenance = nil }, domain.ErrTaskLineProvenanceInconsistent},
+		"operator with provenance":  {func(l *domain.TaskLine) { l.Source = domain.TaskLineSourceSubmitTask }, domain.ErrTaskLineProvenanceInconsistent},
+		"zero revision":             {func(l *domain.TaskLine) { l.Provenance.PolicyRevision = 0 }, domain.ErrNonPositive},
+		"unknown trigger":           {func(l *domain.TaskLine) { l.Provenance.Trigger = "quota_refusal" }, domain.ErrInvalidTaskLineSelectionTrigger},
+		"mark without reading":      {func(l *domain.TaskLine) { l.Provenance.Reading = nil }, domain.ErrTaskLineProvenanceInconsistent},
+		"mark without passed over":  {func(l *domain.TaskLine) { l.Provenance.PassedOver = nil }, domain.ErrTaskLineProvenanceInconsistent},
+		"first admission with mark": {func(l *domain.TaskLine) { l.Provenance.Trigger = domain.TaskLineSelectionFirstAdmission }, domain.ErrTaskLineProvenanceInconsistent},
+		"empty pool":                {func(l *domain.TaskLine) { l.Provenance.Reading.Pool = "" }, domain.ErrEmptyField},
+		"empty window":              {func(l *domain.TaskLine) { l.Provenance.Reading.Window = "" }, domain.ErrEmptyField},
+		"zero observed_at":          {func(l *domain.TaskLine) { l.Provenance.Reading.ObservedAt = time.Time{} }, domain.ErrMissingTimestamp},
+		// JSON would store a replacement rune the id was not computed over.
+		"non-UTF-8 pool":   {func(l *domain.TaskLine) { l.Provenance.Reading.Pool = "pool\xff" }, domain.ErrTaskLineReadingNotUTF8},
+		"non-UTF-8 window": {func(l *domain.TaskLine) { l.Provenance.Reading.Window = "window\xfe" }, domain.ErrTaskLineReadingNotUTF8},
+		"non-UTC observed_at": {func(l *domain.TaskLine) {
+			l.Provenance.Reading.ObservedAt = l.Provenance.Reading.ObservedAt.In(time.FixedZone("x", 3600))
+		}, domain.ErrTimestampNotUTC},
+		"bad passed over":        {func(l *domain.TaskLine) { bad := "Bad Agent"; l.Provenance.PassedOver = &bad }, domain.ErrInvalidAgentName},
+		"passed over the chosen": {func(l *domain.TaskLine) { l.Provenance.PassedOver = &l.Agent }, domain.ErrTaskLineProvenanceInconsistent},
+		// An edited provenance keeps the old id, which no longer addresses it.
+		"edited passed over": {func(l *domain.TaskLine) { l.Provenance.PassedOver = &other }, domain.ErrTaskLineInconsistent},
+	} {
+		line := routed
+		line.Provenance = cloneProvenance(routed.Provenance)
+		tc.mutate(&line)
+		if err := line.Validate(); !errors.Is(err, tc.want) {
+			t.Fatalf("%s: err = %v, want %v", name, err, tc.want)
+		}
+	}
+	firstWithReading := first
+	firstWithReading.Provenance = &domain.TaskLineProvenance{
+		PolicyRevision: 2, Trigger: domain.TaskLineSelectionFirstAdmission, PassedOver: &passedOver,
+	}
+	if err := firstWithReading.Validate(); !errors.Is(err, domain.ErrTaskLineProvenanceInconsistent) {
+		t.Fatalf("first admission with passed over: err = %v", err)
+	}
+}
+
+func cloneProvenance(p *domain.TaskLineProvenance) *domain.TaskLineProvenance {
+	out := *p
+	if p.Reading != nil {
+		reading := *p.Reading
+		out.Reading = &reading
+	}
+	if p.PassedOver != nil {
+		passed := *p.PassedOver
+		out.PassedOver = &passed
+	}
+	return &out
+}
+
 // TestValidateTaskLineChoicesErrorOmitsRefusedText pins that a refused role
 // or agent never appears in the error: both are request text that a response
 // or a log line would otherwise repeat.

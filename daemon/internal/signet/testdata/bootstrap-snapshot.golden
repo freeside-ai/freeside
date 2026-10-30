@@ -188,7 +188,30 @@
             "recorded_at": "2026-08-10T15:34:56Z"
           }
         ],
-        "cancellation": null
+        "cancellation": null,
+        "task_lines": [
+          {
+            "id": "sha256:6b3562342849cff9eea3ebb971109e635dad817266e628bf77168cfb8a85e6f7",
+            "task_id": "task-569",
+            "role": "implementer",
+            "agent": "claude-b",
+            "version": 1,
+            "predecessor_id": null,
+            "source": "router",
+            "set_by": "router:task-569",
+            "set_at": "2026-08-10T12:34:56Z",
+            "provenance": {
+              "policy_revision": 1,
+              "trigger": "exhausted_mark",
+              "reading": {
+                "pool": "claude-a",
+                "window": "seven_day_opus",
+                "observed_at": "2026-08-10T12:34:56Z"
+              },
+              "passed_over": "claude-a"
+            }
+          }
+        ]
       }
     }
   ],

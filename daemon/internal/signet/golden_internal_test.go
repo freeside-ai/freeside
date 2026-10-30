@@ -19,6 +19,20 @@ func TestSignetWireGoldens(t *testing.T) {
 	taskID := domain.TaskID("task-569")
 	conversationID := domain.ConversationID("conversation-569")
 	intervalSeconds := int64(3600)
+	// The task's implementer line, written by the router at first admission
+	// after it passed over an exhausted pool.
+	taskLine, err := domain.NewTaskLine(domain.TaskLineInput{
+		TaskID: taskID, Role: domain.RoleImplementer, Agent: "claude-b",
+		Source: domain.TaskLineSourceRouter, SetBy: "router:" + string(taskID),
+		Provenance: &domain.TaskLineProvenance{
+			PolicyRevision: 1, Trigger: domain.TaskLineSelectionExhaustedMark,
+			Reading:    &domain.TaskLineSelectionReading{Pool: "claude-a", Window: "seven_day_opus", ObservedAt: createdAt},
+			PassedOver: new("claude-a"),
+		},
+	}, 1, nil, createdAt)
+	if err != nil {
+		t.Fatal(err)
+	}
 
 	item := domain.AttentionItem{
 		ID: "item-569", ProjectID: "project-569",
@@ -147,6 +161,7 @@ func TestSignetWireGoldens(t *testing.T) {
 						{Kind: domain.TaskLifecycleStarted, RunID: runID, RecordedAt: createdAt},
 						{Kind: domain.TaskLifecycleCompleted, RunID: runID, BindingUnitID: new(domain.WorkUnitIDForRun(runID)), RecordedAt: mergedAt},
 					},
+					TaskLines: []domain.TaskLine{taskLine},
 				}}},
 				Runs: []RunSnapshot{
 					runSnapshot(

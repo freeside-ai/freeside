@@ -7,5 +7,6 @@
   "predecessor_id": null,
   "source": "submit_task",
   "set_by": "cmd-1",
-  "set_at": "2026-01-02T03:04:05Z"
+  "set_at": "2026-01-02T03:04:05Z",
+  "provenance": null
 }

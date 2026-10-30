@@ -2185,6 +2185,330 @@ public enum Components {
                 ])
             }
         }
+        /// The path that set a task line (plan §5.4). submit_task, cli_submit, and proposal_start are authenticated operator actions. router is the routing policy's choice at a task's first admission for a role with no operator line, and is the only source that carries provenance.
+        ///
+        ///
+        /// - Remark: Generated from `#/components/schemas/TaskLineSource`.
+        @frozen public enum TaskLineSource: String, Codable, Hashable, Sendable, CaseIterable {
+            case submit_task = "submit_task"
+            case cli_submit = "cli_submit"
+            case proposal_start = "proposal_start"
+            case router = "router"
+        }
+        /// What made the router write a line. first_admission: the policy order's first agent took the task, so no reading was acted on and no agent passed over. exhausted_mark: the router passed over an agent whose pool's window was marked exhausted. A quota refusal parks a task instead of rerouting it, so it is not a trigger.
+        ///
+        ///
+        /// - Remark: Generated from `#/components/schemas/TaskLineSelectionTrigger`.
+        @frozen public enum TaskLineSelectionTrigger: String, Codable, Hashable, Sendable, CaseIterable {
+            case first_admission = "first_admission"
+            case exhausted_mark = "exhausted_mark"
+        }
+        /// The usage mark the router acted on, cited by the usage pool and window names and the observation's instant.
+        ///
+        ///
+        /// - Remark: Generated from `#/components/schemas/TaskLineSelectionReading`.
+        public struct TaskLineSelectionReading: Codable, Hashable, Sendable {
+            /// - Remark: Generated from `#/components/schemas/TaskLineSelectionReading/pool`.
+            public var pool: Swift.String
+            /// - Remark: Generated from `#/components/schemas/TaskLineSelectionReading/window`.
+            public var window: Swift.String
+            /// - Remark: Generated from `#/components/schemas/TaskLineSelectionReading/observed_at`.
+            public var observed_at: Foundation.Date
+            /// Creates a new `TaskLineSelectionReading`.
+            ///
+            /// - Parameters:
+            ///   - pool:
+            ///   - window:
+            ///   - observed_at:
+            public init(
+                pool: Swift.String,
+                window: Swift.String,
+                observed_at: Foundation.Date
+            ) {
+                self.pool = pool
+                self.window = window
+                self.observed_at = observed_at
+            }
+            public enum CodingKeys: String, CodingKey {
+                case pool
+                case window
+                case observed_at
+            }
+            public init(from decoder: any Swift.Decoder) throws {
+                let container = try decoder.container(keyedBy: CodingKeys.self)
+                self.pool = try container.decode(
+                    Swift.String.self,
+                    forKey: .pool
+                )
+                self.window = try container.decode(
+                    Swift.String.self,
+                    forKey: .window
+                )
+                self.observed_at = try container.decode(
+                    Foundation.Date.self,
+                    forKey: .observed_at
+                )
+                try decoder.ensureNoAdditionalProperties(knownKeys: [
+                    "pool",
+                    "window",
+                    "observed_at"
+                ])
+            }
+        }
+        /// How the router chose a line's agent: the routing policy revision it applied, the trigger, and, for exhausted_mark only, the reading acted on and the agent passed over. Both are null for first_admission.
+        ///
+        ///
+        /// - Remark: Generated from `#/components/schemas/TaskLineProvenance`.
+        public struct TaskLineProvenance: Codable, Hashable, Sendable {
+            /// - Remark: Generated from `#/components/schemas/TaskLineProvenance/policy_revision`.
+            public var policy_revision: Swift.Int
+            /// - Remark: Generated from `#/components/schemas/TaskLineProvenance/trigger`.
+            public var trigger: Components.Schemas.TaskLineSelectionTrigger
+            /// - Remark: Generated from `#/components/schemas/TaskLineProvenance/reading`.
+            public struct readingPayload: Codable, Hashable, Sendable {
+                /// - Remark: Generated from `#/components/schemas/TaskLineProvenance/reading/value1`.
+                public var value1: Components.Schemas.TaskLineSelectionReading
+                /// Creates a new `readingPayload`.
+                ///
+                /// - Parameters:
+                ///   - value1:
+                public init(value1: Components.Schemas.TaskLineSelectionReading) {
+                    self.value1 = value1
+                }
+                public init(from decoder: any Swift.Decoder) throws {
+                    self.value1 = try .init(from: decoder)
+                }
+                public func encode(to encoder: any Swift.Encoder) throws {
+                    try self.value1.encode(to: encoder)
+                }
+            }
+            /// - Remark: Generated from `#/components/schemas/TaskLineProvenance/reading`.
+            public var reading: Components.Schemas.TaskLineProvenance.readingPayload?
+            /// The agent the policy order put ahead of the chosen one.
+            ///
+            /// - Remark: Generated from `#/components/schemas/TaskLineProvenance/passed_over`.
+            public var passed_over: Swift.String?
+            /// Creates a new `TaskLineProvenance`.
+            ///
+            /// - Parameters:
+            ///   - policy_revision:
+            ///   - trigger:
+            ///   - reading:
+            ///   - passed_over: The agent the policy order put ahead of the chosen one.
+            public init(
+                policy_revision: Swift.Int,
+                trigger: Components.Schemas.TaskLineSelectionTrigger,
+                reading: Components.Schemas.TaskLineProvenance.readingPayload? = nil,
+                passed_over: Swift.String? = nil
+            ) {
+                self.policy_revision = policy_revision
+                self.trigger = trigger
+                self.reading = reading
+                self.passed_over = passed_over
+            }
+            public enum CodingKeys: String, CodingKey {
+                case policy_revision
+                case trigger
+                case reading
+                case passed_over
+            }
+            public init(from decoder: any Swift.Decoder) throws {
+                let container = try decoder.container(keyedBy: CodingKeys.self)
+                self.policy_revision = try container.decode(
+                    Swift.Int.self,
+                    forKey: .policy_revision
+                )
+                self.trigger = try container.decode(
+                    Components.Schemas.TaskLineSelectionTrigger.self,
+                    forKey: .trigger
+                )
+                self.reading = try container.decodeIfPresent(
+                    Components.Schemas.TaskLineProvenance.readingPayload.self,
+                    forKey: .reading
+                )
+                self.passed_over = try container.decodeIfPresent(
+                    Swift.String.self,
+                    forKey: .passed_over
+                )
+                try decoder.ensureNoAdditionalProperties(knownKeys: [
+                    "policy_revision",
+                    "trigger",
+                    "reading",
+                    "passed_over"
+                ])
+            }
+        }
+        /// One version of a task's line for one role: the agent chosen for that role in that task. A change is a new version naming the one it supersedes; a version is never edited. id is the content address of every other field. provenance is set exactly when source is router.
+        ///
+        ///
+        /// - Remark: Generated from `#/components/schemas/TaskLine`.
+        public struct TaskLine: Codable, Hashable, Sendable {
+            /// - Remark: Generated from `#/components/schemas/TaskLine/id`.
+            public var id: Components.Schemas.Digest
+            /// - Remark: Generated from `#/components/schemas/TaskLine/task_id`.
+            public var task_id: Swift.String
+            /// - Remark: Generated from `#/components/schemas/TaskLine/role`.
+            public var role: Components.Schemas.TaskLineRole
+            /// - Remark: Generated from `#/components/schemas/TaskLine/agent`.
+            public var agent: Swift.String
+            /// - Remark: Generated from `#/components/schemas/TaskLine/version`.
+            public var version: Swift.Int
+            /// The version this one supersedes; null for version 1.
+            ///
+            /// - Remark: Generated from `#/components/schemas/TaskLine/predecessor_id`.
+            public struct predecessor_idPayload: Codable, Hashable, Sendable {
+                /// - Remark: Generated from `#/components/schemas/TaskLine/predecessor_id/value1`.
+                public var value1: Components.Schemas.Digest
+                /// Creates a new `predecessor_idPayload`.
+                ///
+                /// - Parameters:
+                ///   - value1:
+                public init(value1: Components.Schemas.Digest) {
+                    self.value1 = value1
+                }
+                public init(from decoder: any Swift.Decoder) throws {
+                    self.value1 = try decoder.decodeFromSingleValueContainer()
+                }
+                public func encode(to encoder: any Swift.Encoder) throws {
+                    try encoder.encodeToSingleValueContainer(self.value1)
+                }
+            }
+            /// The version this one supersedes; null for version 1.
+            ///
+            /// - Remark: Generated from `#/components/schemas/TaskLine/predecessor_id`.
+            public var predecessor_id: Components.Schemas.TaskLine.predecessor_idPayload?
+            /// - Remark: Generated from `#/components/schemas/TaskLine/source`.
+            public var source: Components.Schemas.TaskLineSource
+            /// The command or submission identity that set the line.
+            ///
+            /// - Remark: Generated from `#/components/schemas/TaskLine/set_by`.
+            public var set_by: Swift.String
+            /// - Remark: Generated from `#/components/schemas/TaskLine/set_at`.
+            public var set_at: Foundation.Date
+            /// - Remark: Generated from `#/components/schemas/TaskLine/provenance`.
+            public struct provenancePayload: Codable, Hashable, Sendable {
+                /// - Remark: Generated from `#/components/schemas/TaskLine/provenance/value1`.
+                public var value1: Components.Schemas.TaskLineProvenance
+                /// Creates a new `provenancePayload`.
+                ///
+                /// - Parameters:
+                ///   - value1:
+                public init(value1: Components.Schemas.TaskLineProvenance) {
+                    self.value1 = value1
+                }
+                public init(from decoder: any Swift.Decoder) throws {
+                    self.value1 = try .init(from: decoder)
+                }
+                public func encode(to encoder: any Swift.Encoder) throws {
+                    try self.value1.encode(to: encoder)
+                }
+            }
+            /// - Remark: Generated from `#/components/schemas/TaskLine/provenance`.
+            public var provenance: Components.Schemas.TaskLine.provenancePayload?
+            /// Creates a new `TaskLine`.
+            ///
+            /// - Parameters:
+            ///   - id:
+            ///   - task_id:
+            ///   - role:
+            ///   - agent:
+            ///   - version:
+            ///   - predecessor_id: The version this one supersedes; null for version 1.
+            ///   - source:
+            ///   - set_by: The command or submission identity that set the line.
+            ///   - set_at:
+            ///   - provenance:
+            public init(
+                id: Components.Schemas.Digest,
+                task_id: Swift.String,
+                role: Components.Schemas.TaskLineRole,
+                agent: Swift.String,
+                version: Swift.Int,
+                predecessor_id: Components.Schemas.TaskLine.predecessor_idPayload? = nil,
+                source: Components.Schemas.TaskLineSource,
+                set_by: Swift.String,
+                set_at: Foundation.Date,
+                provenance: Components.Schemas.TaskLine.provenancePayload? = nil
+            ) {
+                self.id = id
+                self.task_id = task_id
+                self.role = role
+                self.agent = agent
+                self.version = version
+                self.predecessor_id = predecessor_id
+                self.source = source
+                self.set_by = set_by
+                self.set_at = set_at
+                self.provenance = provenance
+            }
+            public enum CodingKeys: String, CodingKey {
+                case id
+                case task_id
+                case role
+                case agent
+                case version
+                case predecessor_id
+                case source
+                case set_by
+                case set_at
+                case provenance
+            }
+            public init(from decoder: any Swift.Decoder) throws {
+                let container = try decoder.container(keyedBy: CodingKeys.self)
+                self.id = try container.decode(
+                    Components.Schemas.Digest.self,
+                    forKey: .id
+                )
+                self.task_id = try container.decode(
+                    Swift.String.self,
+                    forKey: .task_id
+                )
+                self.role = try container.decode(
+                    Components.Schemas.TaskLineRole.self,
+                    forKey: .role
+                )
+                self.agent = try container.decode(
+                    Swift.String.self,
+                    forKey: .agent
+                )
+                self.version = try container.decode(
+                    Swift.Int.self,
+                    forKey: .version
+                )
+                self.predecessor_id = try container.decodeIfPresent(
+                    Components.Schemas.TaskLine.predecessor_idPayload.self,
+                    forKey: .predecessor_id
+                )
+                self.source = try container.decode(
+                    Components.Schemas.TaskLineSource.self,
+                    forKey: .source
+                )
+                self.set_by = try container.decode(
+                    Swift.String.self,
+                    forKey: .set_by
+                )
+                self.set_at = try container.decode(
+                    Foundation.Date.self,
+                    forKey: .set_at
+                )
+                self.provenance = try container.decodeIfPresent(
+                    Components.Schemas.TaskLine.provenancePayload.self,
+                    forKey: .provenance
+                )
+                try decoder.ensureNoAdditionalProperties(knownKeys: [
+                    "id",
+                    "task_id",
+                    "role",
+                    "agent",
+                    "version",
+                    "predecessor_id",
+                    "source",
+                    "set_by",
+                    "set_at",
+                    "provenance"
+                ])
+            }
+        }
         /// The bounded revision an operator may apply to a source_issue_closure proposal with approve_with_changes. It carries one required source_issue_closure arm holding only the resolve flag; the daemon owns the target, provenance, and origin, and rebuilds the revised proposal from the prior one. The arm is the sole kind today; a second effect kind would relax this to a union requiring exactly one non-null arm.
         ///
         ///
@@ -2535,6 +2859,11 @@ public enum Components {
             ///
             /// - Remark: Generated from `#/components/schemas/Task/cancellation`.
             public var cancellation: Components.Schemas.Task.cancellationPayload?
+            /// Each role's current line, in TaskLineRole order: the lines the task's next admission of that role reads. A role with no line takes its agent from the lineup and is absent.
+            ///
+            ///
+            /// - Remark: Generated from `#/components/schemas/Task/task_lines`.
+            public var task_lines: [Components.Schemas.TaskLine]
             /// Creates a new `Task`.
             ///
             /// - Parameters:
@@ -2551,6 +2880,7 @@ public enum Components {
             ///   - wip: Whether the task holds a work-in-progress admission slot, derived from its lifecycle facts (an admitted start with no later current-campaign completion and no later abandonment), never from the newest run.
             ///   - lifecycle_facts: The task's recorded lifecycle log in order: admitted starts, work-unit completions, and explicit abandonments. A display record; wip is the derived slot state clients should read.
             ///   - cancellation: Null when no Stop was accepted; acceptance alone remains requested.
+            ///   - task_lines: Each role's current line, in TaskLineRole order: the lines the task's next admission of that role reads. A role with no line takes its agent from the lineup and is absent.
             public init(
                 id: Swift.String,
                 project_id: Swift.String,
@@ -2564,7 +2894,8 @@ public enum Components {
                 run_ids: [Swift.String],
                 wip: Swift.Bool,
                 lifecycle_facts: [Components.Schemas.TaskLifecycleFact],
-                cancellation: Components.Schemas.Task.cancellationPayload? = nil
+                cancellation: Components.Schemas.Task.cancellationPayload? = nil,
+                task_lines: [Components.Schemas.TaskLine]
             ) {
                 self.id = id
                 self.project_id = project_id
@@ -2579,6 +2910,7 @@ public enum Components {
                 self.wip = wip
                 self.lifecycle_facts = lifecycle_facts
                 self.cancellation = cancellation
+                self.task_lines = task_lines
             }
             public enum CodingKeys: String, CodingKey {
                 case id
@@ -2594,6 +2926,7 @@ public enum Components {
                 case wip
                 case lifecycle_facts
                 case cancellation
+                case task_lines
             }
             public init(from decoder: any Swift.Decoder) throws {
                 let container = try decoder.container(keyedBy: CodingKeys.self)
@@ -2649,6 +2982,10 @@ public enum Components {
                     Components.Schemas.Task.cancellationPayload.self,
                     forKey: .cancellation
                 )
+                self.task_lines = try container.decode(
+                    [Components.Schemas.TaskLine].self,
+                    forKey: .task_lines
+                )
                 try decoder.ensureNoAdditionalProperties(knownKeys: [
                     "id",
                     "project_id",
@@ -2662,7 +2999,8 @@ public enum Components {
                     "run_ids",
                     "wip",
                     "lifecycle_facts",
-                    "cancellation"
+                    "cancellation",
+                    "task_lines"
                 ])
             }
         }
@@ -3691,7 +4029,7 @@ public enum Components {
                 ])
             }
         }
-        /// A recorded fact and its instant, with kind-scoped details. task_created has no details. campaign_allocated requires campaign_id and specification_run_id. specification_approved also requires run_id (the initial implementation) and approved_spec_digest; its instant is that run's submission, committed with approval. Retries reuse approval and emit no new approval event. pr_opened requires run_id and pr_number and uses the daemon's PR binding instant. pr_merged also requires merge_commit_sha and uses the re-gated completion record's instant. task_started, task_completed and task_abandoned require the recorded run_id and retain campaign_id when the lifecycle fact has one. stop_requested, task_stopped and stop_failed have no details; request acceptance and confirmed stopping are distinct events, including for queued tasks with no run. run_milestone requires run_id and milestone, with matching run and timestamp. review_requested, review_completed and review_failed require run_id and review; outcome is present only for completed, failure only for failed. verification_recorded requires run_id and verification, referring to a dated readiness decision with detailed results. It never establishes current readiness. external_review_reentered requires run_id, pr_number and external_review: an admitted external reviewer's finding withdrew the run's ready card and opened another review round. Its instant is the card's conclusion. It reads the recorded finding, not current admission, so a later trust-profile change does not hide it. All other details are null. Events are observations, never authority.
+        /// A recorded fact and its instant, with kind-scoped details. task_created has no details. campaign_allocated requires campaign_id and specification_run_id. specification_approved also requires run_id (the initial implementation) and approved_spec_digest; its instant is that run's submission, committed with approval. Retries reuse approval and emit no new approval event. pr_opened requires run_id and pr_number and uses the daemon's PR binding instant. pr_merged also requires merge_commit_sha and uses the re-gated completion record's instant. task_started, task_completed and task_abandoned require the recorded run_id and retain campaign_id when the lifecycle fact has one. stop_requested, task_stopped and stop_failed have no details; request acceptance and confirmed stopping are distinct events, including for queued tasks with no run. run_milestone requires run_id and milestone, with matching run and timestamp. review_requested, review_completed and review_failed require run_id and review; outcome is present only for completed, failure only for failed. verification_recorded requires run_id and verification, referring to a dated readiness decision with detailed results. It never establishes current readiness. external_review_reentered requires run_id, pr_number and external_review: an admitted external reviewer's finding withdrew the run's ready card and opened another review round. Its instant is the card's conclusion. It reads the recorded finding, not current admission, so a later trust-profile change does not hide it. task_line_set requires line and no run_id: one task line version, at its set_at. A switch is the event whose line names the agent left (superseded_agent, or provenance.passed_over) and the agent taken. All other details are null. Events are observations, never authority.
         ///
         ///
         /// - Remark: Generated from `#/components/schemas/TaskEvent`.
@@ -3776,6 +4114,26 @@ public enum Components {
             }
             /// - Remark: Generated from `#/components/schemas/TaskEvent/external_review`.
             public var external_review: Components.Schemas.TaskEvent.external_reviewPayload?
+            /// - Remark: Generated from `#/components/schemas/TaskEvent/line`.
+            public struct linePayload: Codable, Hashable, Sendable {
+                /// - Remark: Generated from `#/components/schemas/TaskEvent/line/value1`.
+                public var value1: Components.Schemas.TaskEventTaskLine
+                /// Creates a new `linePayload`.
+                ///
+                /// - Parameters:
+                ///   - value1:
+                public init(value1: Components.Schemas.TaskEventTaskLine) {
+                    self.value1 = value1
+                }
+                public init(from decoder: any Swift.Decoder) throws {
+                    self.value1 = try .init(from: decoder)
+                }
+                public func encode(to encoder: any Swift.Encoder) throws {
+                    try self.value1.encode(to: encoder)
+                }
+            }
+            /// - Remark: Generated from `#/components/schemas/TaskEvent/line`.
+            public var line: Components.Schemas.TaskEvent.linePayload?
             /// - Remark: Generated from `#/components/schemas/TaskEvent/kind`.
             public var kind: Components.Schemas.TaskEventKind
             /// - Remark: Generated from `#/components/schemas/TaskEvent/recorded_at`.
@@ -3817,6 +4175,7 @@ public enum Components {
             ///   - review:
             ///   - verification:
             ///   - external_review:
+            ///   - line:
             ///   - kind:
             ///   - recorded_at:
             ///   - campaign_id:
@@ -3830,6 +4189,7 @@ public enum Components {
                 review: Components.Schemas.TaskEvent.reviewPayload? = nil,
                 verification: Components.Schemas.TaskEvent.verificationPayload? = nil,
                 external_review: Components.Schemas.TaskEvent.external_reviewPayload? = nil,
+                line: Components.Schemas.TaskEvent.linePayload? = nil,
                 kind: Components.Schemas.TaskEventKind,
                 recorded_at: Foundation.Date,
                 campaign_id: Swift.String? = nil,
@@ -3843,6 +4203,7 @@ public enum Components {
                 self.review = review
                 self.verification = verification
                 self.external_review = external_review
+                self.line = line
                 self.kind = kind
                 self.recorded_at = recorded_at
                 self.campaign_id = campaign_id
@@ -3857,6 +4218,7 @@ public enum Components {
                 case review
                 case verification
                 case external_review
+                case line
                 case kind
                 case recorded_at
                 case campaign_id
@@ -3883,6 +4245,10 @@ public enum Components {
                 self.external_review = try container.decodeIfPresent(
                     Components.Schemas.TaskEvent.external_reviewPayload.self,
                     forKey: .external_review
+                )
+                self.line = try container.decodeIfPresent(
+                    Components.Schemas.TaskEvent.linePayload.self,
+                    forKey: .line
                 )
                 self.kind = try container.decode(
                     Components.Schemas.TaskEventKind.self,
@@ -3921,6 +4287,7 @@ public enum Components {
                     "review",
                     "verification",
                     "external_review",
+                    "line",
                     "kind",
                     "recorded_at",
                     "campaign_id",
@@ -4175,6 +4542,120 @@ public enum Components {
                 ])
             }
         }
+        /// One task line version as the timeline shows it. superseded_agent is the agent of the version this one supersedes, null for version 1. provenance is the router's citation, null for an operator line.
+        ///
+        ///
+        /// - Remark: Generated from `#/components/schemas/TaskEventTaskLine`.
+        public struct TaskEventTaskLine: Codable, Hashable, Sendable {
+            /// - Remark: Generated from `#/components/schemas/TaskEventTaskLine/line_id`.
+            public var line_id: Components.Schemas.Digest
+            /// - Remark: Generated from `#/components/schemas/TaskEventTaskLine/role`.
+            public var role: Components.Schemas.TaskLineRole
+            /// - Remark: Generated from `#/components/schemas/TaskEventTaskLine/agent`.
+            public var agent: Swift.String
+            /// - Remark: Generated from `#/components/schemas/TaskEventTaskLine/version`.
+            public var version: Swift.Int
+            /// - Remark: Generated from `#/components/schemas/TaskEventTaskLine/source`.
+            public var source: Components.Schemas.TaskLineSource
+            /// - Remark: Generated from `#/components/schemas/TaskEventTaskLine/superseded_agent`.
+            public var superseded_agent: Swift.String?
+            /// - Remark: Generated from `#/components/schemas/TaskEventTaskLine/provenance`.
+            public struct provenancePayload: Codable, Hashable, Sendable {
+                /// - Remark: Generated from `#/components/schemas/TaskEventTaskLine/provenance/value1`.
+                public var value1: Components.Schemas.TaskLineProvenance
+                /// Creates a new `provenancePayload`.
+                ///
+                /// - Parameters:
+                ///   - value1:
+                public init(value1: Components.Schemas.TaskLineProvenance) {
+                    self.value1 = value1
+                }
+                public init(from decoder: any Swift.Decoder) throws {
+                    self.value1 = try .init(from: decoder)
+                }
+                public func encode(to encoder: any Swift.Encoder) throws {
+                    try self.value1.encode(to: encoder)
+                }
+            }
+            /// - Remark: Generated from `#/components/schemas/TaskEventTaskLine/provenance`.
+            public var provenance: Components.Schemas.TaskEventTaskLine.provenancePayload?
+            /// Creates a new `TaskEventTaskLine`.
+            ///
+            /// - Parameters:
+            ///   - line_id:
+            ///   - role:
+            ///   - agent:
+            ///   - version:
+            ///   - source:
+            ///   - superseded_agent:
+            ///   - provenance:
+            public init(
+                line_id: Components.Schemas.Digest,
+                role: Components.Schemas.TaskLineRole,
+                agent: Swift.String,
+                version: Swift.Int,
+                source: Components.Schemas.TaskLineSource,
+                superseded_agent: Swift.String? = nil,
+                provenance: Components.Schemas.TaskEventTaskLine.provenancePayload? = nil
+            ) {
+                self.line_id = line_id
+                self.role = role
+                self.agent = agent
+                self.version = version
+                self.source = source
+                self.superseded_agent = superseded_agent
+                self.provenance = provenance
+            }
+            public enum CodingKeys: String, CodingKey {
+                case line_id
+                case role
+                case agent
+                case version
+                case source
+                case superseded_agent
+                case provenance
+            }
+            public init(from decoder: any Swift.Decoder) throws {
+                let container = try decoder.container(keyedBy: CodingKeys.self)
+                self.line_id = try container.decode(
+                    Components.Schemas.Digest.self,
+                    forKey: .line_id
+                )
+                self.role = try container.decode(
+                    Components.Schemas.TaskLineRole.self,
+                    forKey: .role
+                )
+                self.agent = try container.decode(
+                    Swift.String.self,
+                    forKey: .agent
+                )
+                self.version = try container.decode(
+                    Swift.Int.self,
+                    forKey: .version
+                )
+                self.source = try container.decode(
+                    Components.Schemas.TaskLineSource.self,
+                    forKey: .source
+                )
+                self.superseded_agent = try container.decodeIfPresent(
+                    Swift.String.self,
+                    forKey: .superseded_agent
+                )
+                self.provenance = try container.decodeIfPresent(
+                    Components.Schemas.TaskEventTaskLine.provenancePayload.self,
+                    forKey: .provenance
+                )
+                try decoder.ensureNoAdditionalProperties(knownKeys: [
+                    "line_id",
+                    "role",
+                    "agent",
+                    "version",
+                    "source",
+                    "superseded_agent",
+                    "provenance"
+                ])
+            }
+        }
         /// Closed vocabulary of recorded task-wide milestone history.
         ///
         /// - Remark: Generated from `#/components/schemas/TaskEventKind`.
@@ -4196,6 +4677,7 @@ public enum Components {
             case pr_opened = "pr_opened"
             case pr_merged = "pr_merged"
             case external_review_reentered = "external_review_reentered"
+            case task_line_set = "task_line_set"
         }
         /// The run's role in its production attempt.
         ///

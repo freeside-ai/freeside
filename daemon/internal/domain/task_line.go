@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"time"
+	"unicode/utf8"
 
 	"github.com/freeside-ai/freeside/daemon/internal/contentaddr"
 )
@@ -13,11 +14,12 @@ import (
 // identity, and an admission cites a line by that identity.
 const taskLineEncodingVersion = "freeside.task_line/v1"
 
-// TaskLineSource is the operator path that set a task line (plan §5.4,
-// Admitted Agents). Every member is an authenticated operator action: intake
-// from an issue, a label, or repository content never sets a line, because
-// choosing an agent chooses which credential runs (§5.8). There is
-// deliberately no intake member, so a line claiming one fails validation.
+// TaskLineSource is the path that set a task line (plan §5.4, Admitted
+// Agents). Every member but the router is an authenticated operator action,
+// and the router chooses only among agents the committed lineup already
+// approved. Intake from an issue, a label, or repository content never sets a
+// line, because choosing an agent chooses which credential runs (§5.8). There
+// is deliberately no intake member, so a line claiming one fails validation.
 type TaskLineSource string
 
 const (
@@ -29,21 +31,142 @@ const (
 	// changes" decision on a task_proposal card, bound to the item version
 	// and recorded at the decision's instant.
 	TaskLineSourceProposalStart TaskLineSource = "proposal_start"
+	// TaskLineSourceRouter is the routing policy's choice at a task's first
+	// admission for a role with no operator line (plan §5.4, routing policy;
+	// revision 103). It is the only source that carries a TaskLineProvenance.
+	TaskLineSourceRouter TaskLineSource = "router"
 )
 
 // AllTaskLineSources lists every valid TaskLineSource; it is the single
 // registration point.
 var AllTaskLineSources = []TaskLineSource{
 	TaskLineSourceSubmitTask, TaskLineSourceCLISubmit, TaskLineSourceProposalStart,
+	TaskLineSourceRouter,
 }
 
 func (s TaskLineSource) valid() bool {
 	switch s {
-	case TaskLineSourceSubmitTask, TaskLineSourceCLISubmit, TaskLineSourceProposalStart:
+	case TaskLineSourceSubmitTask, TaskLineSourceCLISubmit, TaskLineSourceProposalStart,
+		TaskLineSourceRouter:
 		return true
 	default:
 		return false
 	}
+}
+
+// TaskLineSelectionTrigger is what made the router write a line (plan §5.4,
+// routing policy). There is no quota-refusal member: under revision 103 the
+// router writes lines only at a task's first admission, and a quota refusal
+// parks the task instead of rerouting it.
+type TaskLineSelectionTrigger string
+
+const (
+	// TaskLineSelectionFirstAdmission is a first admission with no window
+	// marked exhausted ahead of the chosen agent: the policy order's first
+	// agent took the task, so no reading was acted on and none passed over.
+	TaskLineSelectionFirstAdmission TaskLineSelectionTrigger = "first_admission"
+	// TaskLineSelectionExhaustedMark is a first admission that passed over an
+	// agent whose pool's window was marked exhausted.
+	TaskLineSelectionExhaustedMark TaskLineSelectionTrigger = "exhausted_mark"
+)
+
+// AllTaskLineSelectionTriggers lists every valid TaskLineSelectionTrigger; it
+// is the single registration point.
+var AllTaskLineSelectionTriggers = []TaskLineSelectionTrigger{
+	TaskLineSelectionFirstAdmission, TaskLineSelectionExhaustedMark,
+}
+
+func (t TaskLineSelectionTrigger) valid() bool {
+	switch t {
+	case TaskLineSelectionFirstAdmission, TaskLineSelectionExhaustedMark:
+		return true
+	default:
+		return false
+	}
+}
+
+// TaskLineSelectionReading cites the usage mark the router acted on. The
+// usage observation record does not exist yet (#1715), so the citation is an
+// opaque reference: the pool and window by name and the observation's
+// instant.
+type TaskLineSelectionReading struct {
+	Pool       string    `json:"pool"`
+	Window     string    `json:"window"`
+	ObservedAt time.Time `json:"observed_at"`
+}
+
+// TaskLineProvenance records how the router came to write a line: the policy
+// revision it applied, what triggered the selection, the reading it acted on,
+// and the agent it passed over (plan §5.4, routing policy).
+type TaskLineProvenance struct {
+	// PolicyRevision is the routing policy revision applied, from 1.
+	PolicyRevision int                      `json:"policy_revision"`
+	Trigger        TaskLineSelectionTrigger `json:"trigger"`
+	// Reading is the exhausted mark acted on: set exactly when Trigger is
+	// exhausted_mark.
+	Reading *TaskLineSelectionReading `json:"reading"`
+	// PassedOver is the agent the policy order put ahead of the chosen one:
+	// set exactly when Trigger is exhausted_mark.
+	PassedOver *string `json:"passed_over"`
+}
+
+// validate checks the provenance against the line's agent, which it may
+// not pass over.
+func (p TaskLineProvenance) validate(agent string) error {
+	if p.PolicyRevision < 1 {
+		return fmt.Errorf("policy_revision %d: %w", p.PolicyRevision, ErrNonPositive)
+	}
+	if !p.Trigger.valid() {
+		return fmt.Errorf("trigger %q: %w", p.Trigger, ErrInvalidTaskLineSelectionTrigger)
+	}
+	acted := p.Trigger == TaskLineSelectionExhaustedMark
+	if (p.Reading != nil) != acted || (p.PassedOver != nil) != acted {
+		return fmt.Errorf("trigger %s reading and passed_over: %w", p.Trigger, ErrTaskLineProvenanceInconsistent)
+	}
+	if p.Reading != nil {
+		switch {
+		case p.Reading.Pool == "":
+			return fmt.Errorf("reading pool: %w", ErrEmptyField)
+		case p.Reading.Window == "":
+			return fmt.Errorf("reading window: %w", ErrEmptyField)
+		// JSON encoding replaces invalid UTF-8, so a name holding it would
+		// be digested in one form and decoded in another: the stored line
+		// could never read back.
+		case !utf8.ValidString(p.Reading.Pool) || !utf8.ValidString(p.Reading.Window):
+			return fmt.Errorf("reading pool or window: %w", ErrTaskLineReadingNotUTF8)
+		case p.Reading.ObservedAt.IsZero():
+			return fmt.Errorf("reading observed_at: %w", ErrMissingTimestamp)
+		// observed_at is part of the canonical encoding the line's id
+		// addresses, so one instant must have one byte form.
+		case p.Reading.ObservedAt.Location() != time.UTC:
+			return fmt.Errorf("reading observed_at: %w", ErrTimestampNotUTC)
+		}
+	}
+	if p.PassedOver != nil {
+		if !validAgentName(*p.PassedOver) {
+			return fmt.Errorf("passed_over %q: %w", *p.PassedOver, ErrInvalidAgentName)
+		}
+		if *p.PassedOver == agent {
+			return fmt.Errorf("passed_over is the chosen agent: %w", ErrTaskLineProvenanceInconsistent)
+		}
+	}
+	return nil
+}
+
+// clone returns a deep copy with the reading's instant in UTC, the canonical
+// byte form the line's id digests.
+func (p *TaskLineProvenance) clone() *TaskLineProvenance {
+	if p == nil {
+		return nil
+	}
+	out := *p
+	if p.Reading != nil {
+		reading := *p.Reading
+		reading.ObservedAt = reading.ObservedAt.UTC()
+		out.Reading = &reading
+	}
+	out.PassedOver = clonePtr(p.PassedOver)
+	return &out
 }
 
 // TaskLineRoles lists the roles a task line may choose an agent for, in the
@@ -134,6 +257,8 @@ type TaskLineInput struct {
 	Source TaskLineSource
 	// SetBy is the command or submission identity that set the line.
 	SetBy string
+	// Provenance is set exactly for a router line.
+	Provenance *TaskLineProvenance
 }
 
 // TaskLine is one version of a task's line for one role (plan §5.4, Admitted
@@ -158,11 +283,14 @@ type TaskLine struct {
 	Source        TaskLineSource `json:"source"`
 	SetBy         string         `json:"set_by"`
 	SetAt         time.Time      `json:"set_at"`
+	// Provenance is how the router chose the agent: set exactly when Source
+	// is router, nil for every operator source.
+	Provenance *TaskLineProvenance `json:"provenance"`
 }
 
 // NewTaskLine builds a validated line version in canonical byte-form: the
-// predecessor pointer is detached, the timestamp is normalized to UTC, and
-// the ID is computed last from the bound facts.
+// predecessor and provenance are detached, the timestamps are normalized to
+// UTC, and the ID is computed last from the bound facts.
 func NewTaskLine(in TaskLineInput, version int, predecessor *Digest, setAt time.Time) (TaskLine, error) {
 	line := TaskLine{
 		TaskID:        in.TaskID,
@@ -173,6 +301,7 @@ func NewTaskLine(in TaskLineInput, version int, predecessor *Digest, setAt time.
 		Source:        in.Source,
 		SetBy:         in.SetBy,
 		SetAt:         setAt.UTC(),
+		Provenance:    in.Provenance.clone(),
 	}
 	id, err := line.ComputeID()
 	if err != nil {
@@ -197,6 +326,9 @@ type canonicalTaskLine struct {
 	Source        TaskLineSource `json:"source"`
 	SetBy         string         `json:"set_by"`
 	SetAt         time.Time      `json:"set_at"`
+	// Provenance is omitted when nil, so an operator line keeps the v1 byte
+	// form and the id it was stored under before router lines existed.
+	Provenance *TaskLineProvenance `json:"provenance,omitempty"`
 }
 
 // ComputeID returns the content address of the line: a sha256 over its
@@ -212,6 +344,7 @@ func (l TaskLine) ComputeID() (Digest, error) {
 		Source:        l.Source,
 		SetBy:         l.SetBy,
 		SetAt:         l.SetAt,
+		Provenance:    l.Provenance,
 	})
 	if err != nil {
 		return "", fmt.Errorf("task line id: %w", err)
@@ -248,6 +381,15 @@ func (l TaskLine) Validate() error {
 	}
 	if l.SetBy == "" {
 		return fmt.Errorf("task line %s %s set_by: %w", l.TaskID, l.Role, ErrEmptyField)
+	}
+	if (l.Provenance != nil) != (l.Source == TaskLineSourceRouter) {
+		return fmt.Errorf("task line %s %s source %s provenance: %w",
+			l.TaskID, l.Role, l.Source, ErrTaskLineProvenanceInconsistent)
+	}
+	if l.Provenance != nil {
+		if err := l.Provenance.validate(l.Agent); err != nil {
+			return fmt.Errorf("task line %s %s provenance %w", l.TaskID, l.Role, err)
+		}
 	}
 	if l.SetAt.IsZero() {
 		return fmt.Errorf("task line %s %s set_at: %w", l.TaskID, l.Role, ErrMissingTimestamp)

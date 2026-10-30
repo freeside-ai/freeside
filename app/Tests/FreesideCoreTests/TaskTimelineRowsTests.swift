@@ -376,6 +376,23 @@ import Testing
             TaskTimelinePresentation.newestReviewRound(TaskHistoryFixtures.externallyReviewed(requested: false)) == 2)
     }
 
+    @Test func aTaskLineNamesTheActorOnlyWhenItIsTheRouter() {
+        // Only a replaced agent takes the arrow: the router's fallback never
+        // ran the agent it passed over. No line event starts a stage.
+        let published = lines(TaskHistoryFixtures.history(.published)).map {
+            $0.replacingOccurrences(of: " *", with: "")
+        }
+        #expect(
+            lines(TaskHistoryFixtures.linesSet())
+                == [
+                    "Specifying agent changed by router · claude-b → claude-a *",
+                    "Reviewing agent changed · claude-a → codex",
+                    "Implementing agent set by router · claude-b instead of claude-a",
+                    "Specifying agent set by router · claude-b",
+                    "Remediating agent set · claude-a",
+                ] + published)
+    }
+
     @Test func aRunWithNoRoleKeepsItsLabelsAndDrawsNoStart() {
         // Its review is still a stage the events name.
         #expect(

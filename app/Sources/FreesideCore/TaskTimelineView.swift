@@ -1290,6 +1290,7 @@ enum TaskTimelinePresentation {
         case .pr_opened: "PR opened"
         case .pr_merged: "PR merged"
         case .external_review_reentered: "External review re-entered"
+        case .task_line_set: "Agent set"
         }
     }
 
@@ -1302,6 +1303,32 @@ enum TaskTimelinePresentation {
             return verification._class == .ready_clean
                 ? "Verification recorded · Clean" : "Verification recorded · Degraded"
         }
+        if let line = event.line?.value1 {
+            return label(line)
+        }
         return label(event.kind)
+    }
+
+    static func label(_ role: Components.Schemas.TaskLineRole) -> String {
+        switch role {
+        case .specifier: "Specifying agent"
+        case .implementer: "Implementing agent"
+        case .remediator: "Remediating agent"
+        case .reviewer: "Reviewing agent"
+        }
+    }
+
+    // The arrow is reserved for an agent that held the role and was replaced.
+    // An agent the router passed over never ran, and falling back is routine,
+    // so that row names it without a reason or a warning. The operator stays
+    // implied, as on the other rows it causes.
+    static func label(_ line: Components.Schemas.TaskEventTaskLine) -> String {
+        let subject = label(line.role)
+        let actor = line.source == .router ? " by router" : ""
+        if let superseded = line.superseded_agent {
+            return "\(subject) changed\(actor) · \(superseded) → \(line.agent)"
+        }
+        let fallback = line.provenance?.value1.passed_over.map { " instead of \($0)" } ?? ""
+        return "\(subject) set\(actor) · \(line.agent)\(fallback)"
     }
 }

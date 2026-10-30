@@ -2,6 +2,7 @@ package domain
 
 import (
 	"errors"
+	"strings"
 	"testing"
 	"time"
 )
@@ -26,6 +27,15 @@ func TestTaskTimelineEnums(t *testing.T) {
 func TestTaskEventDetailContract(t *testing.T) {
 	at := time.Date(2026, 9, 12, 12, 0, 0, 0, time.UTC)
 	externalReview := TaskEventExternalReview{ItemID: "ready", FindingID: "finding", ReviewerLogin: "octocat", Round: 2, HeadSHA: "head"}
+	line := TaskEventTaskLine{
+		LineID: Digest("sha256:" + strings.Repeat("a", 64)), Role: RoleImplementer, Agent: "claude-b", Version: 1,
+		Source: TaskLineSourceRouter,
+		Provenance: &TaskLineProvenance{
+			PolicyRevision: 1, Trigger: TaskLineSelectionExhaustedMark,
+			Reading:    &TaskLineSelectionReading{Pool: "claude-a", Window: "seven_day_opus", ObservedAt: at},
+			PassedOver: ptr("claude-a"),
+		},
+	}
 	fixtures := []TaskEvent{
 		{Kind: TaskEventCreated, RecordedAt: at},
 		{Kind: TaskEventCampaignAllocated, RecordedAt: at, CampaignID: ptr(CampaignID("campaign-1")), SpecificationRunID: ptr(RunID("spec-1"))},
@@ -33,6 +43,7 @@ func TestTaskEventDetailContract(t *testing.T) {
 		{Kind: TaskEventPROpened, RecordedAt: at, RunID: ptr(RunID("impl-1")), PRNumber: ptr(42)},
 		{Kind: TaskEventPRMerged, RecordedAt: at, RunID: ptr(RunID("impl-1")), PRNumber: ptr(42), MergeCommitSHA: ptr("abc123")},
 		{Kind: TaskEventExternalReviewReentered, RecordedAt: at, RunID: ptr(RunID("impl-1")), PRNumber: ptr(42), ExternalReview: &externalReview},
+		{Kind: TaskEventTaskLineSet, RecordedAt: at, Line: &line},
 	}
 	for _, event := range fixtures {
 		t.Run(string(event.Kind), func(t *testing.T) {
@@ -49,6 +60,7 @@ func TestTaskEventDetailContract(t *testing.T) {
 				func(e *TaskEvent) { e.PRNumber = toggled(e.PRNumber, 42) },
 				func(e *TaskEvent) { e.MergeCommitSHA = toggled(e.MergeCommitSHA, "abc123") },
 				func(e *TaskEvent) { e.ExternalReview = toggled(e.ExternalReview, externalReview) },
+				func(e *TaskEvent) { e.Line = toggled(e.Line, line) },
 			} {
 				invalid := event
 				change(&invalid)
@@ -87,6 +99,38 @@ func TestTaskEventDetailContract(t *testing.T) {
 			t.Errorf("%s: %v", name, err)
 		}
 	}
+	// A line detail is the line version's own shape: an operator line has no
+	// provenance, a router line has one that validates, and only a later
+	// version names the agent it superseded.
+	operator := TaskEventTaskLine{
+		LineID: line.LineID, Role: RoleReviewer, Agent: "codex", Version: 2,
+		Source: TaskLineSourceSubmitTask, SupersededAgent: ptr("claude-a"),
+	}
+	if err := (TaskEvent{Kind: TaskEventTaskLineSet, RecordedAt: at, Line: &operator}).Validate(); err != nil {
+		t.Fatalf("operator line event: %v", err)
+	}
+	for name, change := range map[string]func(*TaskEventTaskLine){
+		"bad line id":                   func(l *TaskEventTaskLine) { l.LineID = "line-1" },
+		"ineligible role":               func(l *TaskEventTaskLine) { l.Role = RoleShadowReviewer },
+		"bad agent":                     func(l *TaskEventTaskLine) { l.Agent = "Bad Agent" },
+		"zero version":                  func(l *TaskEventTaskLine) { l.Version = 0 },
+		"first that supersedes":         func(l *TaskEventTaskLine) { l.SupersededAgent = ptr("codex") },
+		"later that supersedes nothing": func(l *TaskEventTaskLine) { l.Version = 2 },
+		"bad superseded agent":          func(l *TaskEventTaskLine) { l.Version = 2; l.SupersededAgent = ptr("Bad Agent") },
+		"unknown source":                func(l *TaskEventTaskLine) { l.Source = "intake" },
+		"router without provenance":     func(l *TaskEventTaskLine) { l.Provenance = nil },
+		"operator with provenance":      func(l *TaskEventTaskLine) { l.Source = TaskLineSourceCLISubmit },
+		"invalid provenance": func(l *TaskEventTaskLine) {
+			l.Provenance = &TaskLineProvenance{PolicyRevision: 1, Trigger: TaskLineSelectionFirstAdmission, PassedOver: ptr("claude-a")}
+		},
+	} {
+		detail := line
+		change(&detail)
+		invalid := TaskEvent{Kind: TaskEventTaskLineSet, RecordedAt: at, Line: &detail}
+		if err := invalid.Validate(); !errors.Is(err, ErrTaskEventDetailMismatch) {
+			t.Errorf("%s: %v", name, err)
+		}
+	}
 }
 
 func toggled[T any](value *T, replacement T) *T {
@@ -117,7 +161,7 @@ func TestTaskHistoryEventDetails(t *testing.T) {
 		{Kind: TaskEventReviewFailed, RecordedAt: at, RunID: &run, Review: &failed},
 		{Kind: TaskEventVerificationRecorded, RecordedAt: at, RunID: &run, Verification: &TaskEventVerification{ItemID: "ready", Class: ReadinessReadyClean, HeadSHA: "head", BaseSHA: "base"}},
 	}
-	if len(fixtures)+6 != len(AllTaskEventKinds) {
+	if len(fixtures)+7 != len(AllTaskEventKinds) {
 		t.Fatal("new event kinds need detail fixtures")
 	}
 	for _, e := range fixtures {

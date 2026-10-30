@@ -9,8 +9,21 @@ import (
 
 // taskHistoryEvents summarizes already authenticated records. It never derives
 // an event from a current status, and does not create a second persistence log.
-func taskHistoryEvents(task domain.Task, inputs []taskTimelineInput, sections []TaskTimelineSection) ([]domain.TaskEvent, error) {
+// The lines arrive ordered by role and then version, as the store reads them.
+func taskHistoryEvents(task domain.Task, lines []domain.TaskLine, inputs []taskTimelineInput, sections []TaskTimelineSection) ([]domain.TaskEvent, error) {
 	events := []domain.TaskEvent{{Kind: domain.TaskEventCreated, RecordedAt: task.CreatedAt}}
+	for i, line := range lines {
+		detail := domain.TaskEventTaskLine{
+			LineID: line.ID, Role: line.Role, Agent: line.Agent, Version: line.Version,
+			Source: line.Source, Provenance: line.Provenance,
+		}
+		// The store checked each chain, so a later version's predecessor is
+		// the line just before it.
+		if line.Version > 1 {
+			detail.SupersededAgent = &lines[i-1].Agent
+		}
+		events = append(events, domain.TaskEvent{Kind: domain.TaskEventTaskLineSet, RecordedAt: line.SetAt, Line: &detail})
+	}
 	for _, fact := range task.LifecycleFacts {
 		var kind domain.TaskEventKind
 		switch fact.Kind {
@@ -127,6 +140,9 @@ func historyEventSource(event domain.TaskEvent) string {
 	}
 	if event.ExternalReview != nil {
 		source += ":" + string(event.ExternalReview.ItemID) + ":" + string(event.ExternalReview.FindingID)
+	}
+	if event.Line != nil {
+		source += ":" + string(event.Line.LineID)
 	}
 	return source
 }

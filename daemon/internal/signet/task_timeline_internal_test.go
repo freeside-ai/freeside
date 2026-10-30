@@ -2,6 +2,7 @@ package signet
 
 import (
 	"errors"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -23,11 +24,41 @@ func taskTimelineFixture(t *testing.T) TaskTimeline {
 			t.Fatal(err)
 		}
 	}
-	timeline, err := taskTimeline(task, inputs, 42, task.CreatedAt.Add(8*time.Hour))
+	lines := taskTimelineFixtureLines(t, task)
+	timeline, err := taskTimeline(task, lines, inputs, 42, task.CreatedAt.Add(8*time.Hour))
 	if err != nil {
 		t.Fatal(err)
 	}
 	return timeline
+}
+
+// taskTimelineFixtureLines is an operator's reviewer line set at submission
+// and a router's implementer line, written at first admission, that passed
+// over an exhausted pool. They come ordered by role, as the store reads them.
+func taskTimelineFixtureLines(t *testing.T, task domain.Task) []domain.TaskLine {
+	t.Helper()
+	routed, err := domain.NewTaskLine(domain.TaskLineInput{
+		TaskID: task.ID, Role: domain.RoleImplementer, Agent: "claude-b",
+		Source: domain.TaskLineSourceRouter, SetBy: "router:" + string(task.ID),
+		Provenance: &domain.TaskLineProvenance{
+			PolicyRevision: 2, Trigger: domain.TaskLineSelectionExhaustedMark,
+			Reading: &domain.TaskLineSelectionReading{
+				Pool: "claude-a", Window: "seven_day_opus", ObservedAt: task.CreatedAt.Add(-time.Hour),
+			},
+			PassedOver: new("claude-a"),
+		},
+	}, 1, nil, task.CreatedAt.Add(90*time.Minute))
+	if err != nil {
+		t.Fatal(err)
+	}
+	operator, err := domain.NewTaskLine(domain.TaskLineInput{
+		TaskID: task.ID, Role: domain.RoleReviewer, Agent: "codex",
+		Source: domain.TaskLineSourceSubmitTask, SetBy: "cmd-submit-1",
+	}, 1, nil, task.CreatedAt)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return []domain.TaskLine{routed, operator}
 }
 
 func taskTimelineFixtureInputs() (domain.Task, []taskTimelineInput) {
@@ -143,7 +174,7 @@ func TestTaskTimelineRejectsContradictoryMembershipAndMissingAllocation(t *testi
 		t.Run(name, func(t *testing.T) {
 			task, inputs := taskTimelineFixtureInputs()
 			change(&task, inputs)
-			if _, err := taskTimeline(task, inputs, 42, task.CreatedAt); !errors.Is(err, ErrRunObservationIntegrity) {
+			if _, err := taskTimeline(task, nil, inputs, 42, task.CreatedAt); !errors.Is(err, ErrRunObservationIntegrity) {
 				t.Fatalf("error = %v, want ErrRunObservationIntegrity", err)
 			}
 		})
@@ -153,7 +184,7 @@ func TestTaskTimelineRejectsContradictoryMembershipAndMissingAllocation(t *testi
 func TestTaskTimelineLegacyAndEmptyHistory(t *testing.T) {
 	task, _ := taskTimelineFixtureInputs()
 	task.CampaignIDs = []domain.CampaignID{}
-	empty, err := taskTimeline(task, nil, 42, task.CreatedAt)
+	empty, err := taskTimeline(task, nil, nil, 42, task.CreatedAt)
 	if err != nil || empty.Sections == nil || len(empty.Sections) != 0 || len(empty.Events) != 1 {
 		t.Fatalf("empty history = %+v, %v", empty, err)
 	}
@@ -161,7 +192,7 @@ func TestTaskTimelineLegacyAndEmptyHistory(t *testing.T) {
 		run:         domain.Run{ID: "legacy", TaskID: task.ID, ProjectID: task.ProjectID},
 		observation: domain.RunObservation{RunID: "legacy"},
 	}
-	got, err := taskTimeline(task, []taskTimelineInput{legacy}, 42, task.CreatedAt)
+	got, err := taskTimeline(task, nil, []taskTimelineInput{legacy}, 42, task.CreatedAt)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -169,5 +200,51 @@ func TestTaskTimelineLegacyAndEmptyHistory(t *testing.T) {
 	run := section.Runs[0]
 	if section.CampaignID != nil || len(section.Events) != 0 || run.Role != nil || run.AttemptNumber != nil || run.Milestones == nil || run.Events == nil {
 		t.Fatalf("legacy group = %+v", section)
+	}
+}
+
+// TestTaskTimelineEmitsOneEventPerLineVersion: each line version is one
+// task_line_set event at its set_at, a later version names the agent it
+// superseded, and a router line carries its provenance. A switch is
+// readable from either: the agent superseded or the agent passed over.
+func TestTaskTimelineEmitsOneEventPerLineVersion(t *testing.T) {
+	task, _ := taskTimelineFixtureInputs()
+	task.CampaignIDs = []domain.CampaignID{}
+	fixture := taskTimelineFixtureLines(t, task)
+	routed, operator := fixture[0], fixture[1]
+	changed, err := domain.NewTaskLine(domain.TaskLineInput{
+		TaskID: task.ID, Role: domain.RoleReviewer, Agent: "claude-a",
+		Source: domain.TaskLineSourceCLISubmit, SetBy: "cli:submission-1",
+	}, 2, &operator.ID, task.CreatedAt.Add(2*time.Hour))
+	if err != nil {
+		t.Fatal(err)
+	}
+	got, err := taskTimeline(task, []domain.TaskLine{routed, operator, changed}, nil, 42, task.CreatedAt)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var events []domain.TaskEvent
+	for _, event := range got.Events {
+		if event.Kind == domain.TaskEventTaskLineSet {
+			events = append(events, event)
+		}
+	}
+	// Newest first: the reviewer change, the router line, the submitted line.
+	want := []struct {
+		line       domain.TaskLine
+		superseded *string
+	}{{changed, new("codex")}, {routed, nil}, {operator, nil}}
+	if len(events) != len(want) {
+		t.Fatalf("line events = %+v, want %d", events, len(want))
+	}
+	for i, w := range want {
+		event := events[i]
+		detail := domain.TaskEventTaskLine{
+			LineID: w.line.ID, Role: w.line.Role, Agent: w.line.Agent, Version: w.line.Version,
+			Source: w.line.Source, SupersededAgent: w.superseded, Provenance: w.line.Provenance,
+		}
+		if !event.RecordedAt.Equal(w.line.SetAt) || event.RunID != nil || !reflect.DeepEqual(*event.Line, detail) {
+			t.Fatalf("event %d = %+v (%+v), want %+v at %s", i, event, *event.Line, detail, w.line.SetAt)
+		}
 	}
 }

@@ -277,7 +277,7 @@ public enum TaskFixtures {
                             run_id: newest.id, stage: newest.stages.last?.name,
                             hold_reason: newest.hold_reason.map { .init(value1: $0.value1) })),
                     campaign_ids: campaigns, run_ids: runs.map(\.id),
-                    wip: wip, lifecycle_facts: lifecycleFacts))
+                    wip: wip, lifecycle_facts: lifecycleFacts, task_lines: []))
         }
     }
 }

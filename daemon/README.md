@@ -1080,7 +1080,7 @@ freesided inspect proposals -db <db>
 - `tasks`: every task the store holds, with `task_id`, `project_id`,
   `created_at`, and `latest_run_id` (`null` before the first run).
 
-`freesided inspect task` prints one task's record, `freeside-task-record-v10`.
+`freesided inspect task` prints one task's record, `freeside-task-record-v11`.
 Every section is read in one transaction, at the store revision
 `as_of_revision`; `as_of` is the read time. To wait for a change, read again
 and compare `as_of_revision`. A revision that hasn't moved means no recorded
@@ -1214,7 +1214,7 @@ Reading the record:
   `unapproved_recipe` says so on stderr; stdout stays one JSON line.
 - **The timeline's and the card's shapes are part of the record's version.**
   A change to the task timeline, its events, or the proposal card changes
-  `freeside-task-record-v10`.
+  `freeside-task-record-v11`.
 
 The record never holds evidence, claims, conversation messages (a command's
 message and attachments included), transcripts, prompt text, credentials, or
@@ -2276,6 +2276,16 @@ fails the review as a review configuration failure that names the line by id,
 and the lineup's reviewer never runs in its place. The shadow reviewer reads
 no line. The review configuration digest stays the composed source's: the
 snapshot records what the line selected.
+
+Every line records its `source`: `submit_task`, `cli_submit`, or
+`proposal_start` for an operator's choice, or `router` for the routing
+policy's choice at a task's first admission. Nothing writes a router line
+yet (#2393), and admission refuses one. A router line carries its selection
+`provenance`: the policy revision, the trigger (`first_admission` or
+`exhausted_mark`), and, for an exhausted mark, the reading acted on and the
+agent passed over. `GET /tasks/{task_id}/timeline` shows every line version
+as a `task_line_set` event at its `set_at`, and the synced task carries each
+role's current line in `task_lines`.
 
 For a preflight-bound submission, choose one `--submission-id <identity>` and
 pass it to both `preflight` and `submit`. Reusing it with different input

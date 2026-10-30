@@ -1188,6 +1188,29 @@ func TestGolden(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	// Router lines, one per trigger: a plain first admission cites only the
+	// policy revision; an exhausted mark also cites the reading acted on and
+	// the agent passed over.
+	routerFirstAdmissionTaskLine, err := domain.NewTaskLine(domain.TaskLineInput{
+		TaskID: "task-1", Role: domain.RoleImplementer, Agent: "claude-a",
+		Source: domain.TaskLineSourceRouter, SetBy: "router:task-1",
+		Provenance: &domain.TaskLineProvenance{PolicyRevision: 1, Trigger: domain.TaskLineSelectionFirstAdmission},
+	}, 1, nil, ts)
+	if err != nil {
+		t.Fatal(err)
+	}
+	routerExhaustedMarkTaskLine, err := domain.NewTaskLine(domain.TaskLineInput{
+		TaskID: "task-1", Role: domain.RoleImplementer, Agent: "claude-b",
+		Source: domain.TaskLineSourceRouter, SetBy: "router:task-1",
+		Provenance: &domain.TaskLineProvenance{
+			PolicyRevision: 2, Trigger: domain.TaskLineSelectionExhaustedMark,
+			Reading:    &domain.TaskLineSelectionReading{Pool: "claude-a", Window: "seven_day_opus", ObservedAt: ts.Add(-time.Hour)},
+			PassedOver: new("claude-a"),
+		},
+	}, 1, nil, ts)
+	if err != nil {
+		t.Fatal(err)
+	}
 
 	// The agent-bound (v4) variant: the §5.4 admission step 5 snapshot rides
 	// beside the existing fields, and its presence selects the new encoding
@@ -2137,6 +2160,8 @@ func TestGolden(t *testing.T) {
 		}},
 		{"task_line", taskLine},
 		{"task_line_superseding", supersedingTaskLine},
+		{"task_line_router_first_admission", routerFirstAdmissionTaskLine},
+		{"task_line_router_exhausted_mark", routerExhaustedMarkTaskLine},
 		{"subject_task", domain.Subject{Type: domain.SubjectTask, ID: "task-1", TaskID: new(domain.TaskID("task-1"))}},
 		{"production_attempt", productionAttempt},
 		{"production_attempt_revision", productionRevisionAttempt},

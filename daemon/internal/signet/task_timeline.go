@@ -118,6 +118,12 @@ func loadedTaskTimeline(
 		return TaskTimeline{}, err
 	}
 	task.Name = names.Task
+	// The store re-derives each line's id and checks every role's chain, so
+	// an edited or missing version fails this read instead of showing.
+	lines, err := tx.TaskLines(ctx, id)
+	if err != nil {
+		return TaskTimeline{}, asRunObservationIntegrityError(err)
+	}
 	ids, err := tx.TaskRunIDs(ctx, id)
 	if err != nil {
 		return TaskTimeline{}, err
@@ -212,7 +218,7 @@ func loadedTaskTimeline(
 		}
 		inputs = append(inputs, input)
 	}
-	return taskTimeline(task, inputs, state.Revision, asOf)
+	return taskTimeline(task, lines, inputs, state.Revision, asOf)
 }
 
 func taskTimelineReadinessBinding(ctx context.Context, tx *store.ReadTx, runID domain.RunID, itemID domain.ItemID) (bool, error) {
@@ -329,7 +335,7 @@ func taskTimelinePRBinding(ctx context.Context, tx *store.ReadTx, runID domain.R
 	return &binding, nil
 }
 
-func taskTimeline(task domain.Task, inputs []taskTimelineInput, revision int64, asOf time.Time) (TaskTimeline, error) {
+func taskTimeline(task domain.Task, lines []domain.TaskLine, inputs []taskTimelineInput, revision int64, asOf time.Time) (TaskTimeline, error) {
 	out := TaskTimeline{
 		AsOfRevision: revision, AsOf: asOf, TaskID: task.ID, ProjectID: task.ProjectID, Name: task.Name,
 		Events:   []domain.TaskEvent{{Kind: domain.TaskEventCreated, RecordedAt: task.CreatedAt}},
@@ -439,7 +445,7 @@ func taskTimeline(task domain.Task, inputs []taskTimelineInput, revision int64, 
 		}
 		return cmp.Or(allocated[bID].Compare(allocated[aID]), cmp.Compare(bID, aID))
 	})
-	events, err := taskHistoryEvents(task, inputs, out.Sections)
+	events, err := taskHistoryEvents(task, lines, inputs, out.Sections)
 	if err != nil {
 		return TaskTimeline{}, err
 	}
