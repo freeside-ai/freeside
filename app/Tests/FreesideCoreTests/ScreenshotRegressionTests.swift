@@ -2341,14 +2341,14 @@
             }
             surfaces.append(
                 Surface(
-                    name: "task-timeline",
+                    name: "task-page-parked",
                     view: AnyView(
                         TaskPageView(coordinator: coordinator, snapshot: retryTask, onOpenRun: { _ in })
                             .screenshotContent(retryTimeline)
                     )))
             surfaces.append(
                 Surface(
-                    name: "task-timeline-390",
+                    name: "task-page-parked-390",
                     width: 390,
                     view: AnyView(
                         TaskPageView(coordinator: coordinator, snapshot: retryTask, onOpenRun: { _ in })
@@ -2359,7 +2359,7 @@
             // copy controls, and the current campaign open over it.
             surfaces.append(
                 Surface(
-                    name: "task-timeline-details",
+                    name: "task-page-details",
                     view: AnyView(
                         TaskPageView(coordinator: coordinator, snapshot: retryTask, onOpenRun: { _ in })
                             .screenshotContent(
@@ -2369,7 +2369,7 @@
                     )))
             surfaces.append(
                 Surface(
-                    name: "task-timeline-details-390",
+                    name: "task-page-details-390",
                     width: 390,
                     view: AnyView(
                         TaskPageView(coordinator: coordinator, snapshot: retryTask, onOpenRun: { _ in })
@@ -2385,8 +2385,7 @@
             let remediationScript = TaskStageFixtures.script(.remediation)
             let remediation = try TaskStageFixtures.coordinator(
                 TaskStageFixtures.page(.remediation), runTimelines: remediationScript.runTimelines)
-            for (name, width) in [("task-timeline-remediation", CGFloat?.none), ("task-timeline-remediation-390", 390)]
-            {
+            for (name, width) in [("task-page-remediation", CGFloat?.none), ("task-page-remediation-390", 390)] {
                 surfaces.append(
                     Surface(
                         name: name,
@@ -3235,6 +3234,7 @@
             }
 
             surfaces.append(contentsOf: try taskStopSurfaces())
+            surfaces.append(contentsOf: try taskPageSurfaces(at: dynamicTypeSize))
             surfaces.append(contentsOf: taskStyleSurfaces())
             surfaces.append(contentsOf: cardStyleSurfaces())
             surfaces.append(contentsOf: choiceListSurfaces())
@@ -3962,6 +3962,74 @@
                     name: "task-stop-pending-\(scheme)", width: 390, colorScheme: scheme,
                     view: AnyView(TaskStopRecoveryView(coordinator: coordinator).content))
             }
+        }
+
+        /// The task page in each state the 30 Oct canvas draws, at Mac and
+        /// phone width and in both appearances: a card leading alone
+        /// (bands 3, 4), with others under it (band 3), working and finished
+        /// (band 5), and with the outline row pinned (band 3).
+        private func taskPageSurfaces(at dynamicTypeSize: DynamicTypeSize) throws -> [Surface] {
+            let lines = [
+                TaskStageFixtures.line(.implementer, agent: "claude", pool: "A"),
+                TaskStageFixtures.line(.reviewer, agent: "codex", pool: nil),
+            ]
+            let question = TaskStageFixtures.item(.agent_question, id: "page-question", hoursOld: 0)
+            let approval = TaskStageFixtures.item(.spec_approval, id: "page-approval", hoursOld: 2)
+            let adjudication = TaskStageFixtures.item(.finding_adjudication, id: "page-adjudication", hoursOld: 6)
+
+            var open = TaskStageFixtures.page(.review)
+            open.task.task_lines = lines
+            open.items = [question]
+            var several = open
+            several.items = [question, approval, adjudication]
+            var working = TaskStageFixtures.page(.implementation)
+            working.task.task_lines = lines
+            var finished = TaskStageFixtures.page(.review)
+            finished.task.task_lines = lines
+            finished.task.lifecycle = .finished
+            finished.task.wip = false
+            finished.runs[0].run.lifecycle = .finished
+            finished.runs[0].run.outcome = .published
+            finished.runs[0].run.completion = .init(
+                value1: .init(
+                    pr_number: 2431, merge_commit_sha: "4be1d0a7",
+                    recorded_at: Date(timeIntervalSince1970: 1_786_500_000)))
+
+            var surfaces: [Surface] = []
+            for (name, page, leading, pinned) in [
+                ("task-page-open", open, Optional(question), false),
+                ("task-page-several", several, Optional(question), false),
+                ("task-page-working", working, nil, false),
+                ("task-page-finished", finished, nil, false),
+                ("task-page-pinned", several, Optional(question), true),
+            ] {
+                let (coordinator, task) = try TaskStageFixtures.coordinator(
+                    page, conversations: AttentionFixtures.defaultConversations())
+                let timeline = try #require(page.history)
+                let view = TaskPageView(coordinator: coordinator, snapshot: task, onOpenRun: { _ in })
+                let card = DecisionDetailView(
+                    store: coordinator.store, itemID: question.item.id, loadsAttachments: false,
+                    showsValidationProgress: false)
+                for scheme in [ColorScheme.light, .dark] {
+                    let suffix = scheme == .dark ? "-dark" : ""
+                    for (width, compact, tail) in [(CGFloat?.none, false, ""), (390, true, "-390")] {
+                        surfaces.append(
+                            Surface(
+                                name: name + tail + suffix, width: width, colorScheme: scheme,
+                                nativeAppearance: true,
+                                view: AnyView(
+                                    view.screenshotContent(
+                                        timeline, leadingItemID: leading?.item.id,
+                                        leadingCard: leading.map {
+                                            AnyView(
+                                                card.screenshotPageCard(
+                                                    $0.item, at: dynamicTypeSize, compactLayout: compact))
+                                        },
+                                        pinned: pinned))))
+                    }
+                }
+            }
+            return surfaces
         }
 
         private func taskStopSurfaces() throws -> [Surface] {

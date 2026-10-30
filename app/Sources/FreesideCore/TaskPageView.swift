@@ -1,11 +1,17 @@
 import FreesideAPI
 import SwiftUI
 
-/// A task's history as the daemon computes it (`GET /tasks/{id}/timeline`):
-/// the task's events lead the page as one open rail that marks where each
-/// stage began, then every campaign folds its runs and detailed milestones.
-/// Every list keeps the daemon's newest-first order; unlike the run rail,
-/// nothing here is reversed or sorted by timestamp.
+/// One page per task, in every state: the header, the pinned outline, the
+/// leading card and the other open items, then the body (the Task fold, the
+/// controls, Conversation, and the Timeline). The body's history is as the
+/// daemon computes it (`GET /tasks/{id}/timeline`): the task's events as one
+/// open rail that marks where each stage began, then every campaign folds
+/// its runs and detailed milestones. Every list keeps the daemon's
+/// newest-first order; unlike the run rail, nothing here is reversed or
+/// sorted by timestamp.
+///
+/// This view is the page's content. `TaskPageHost` gives it a scroll view:
+/// `DecisionDetailView`'s when a card leads, its own otherwise.
 struct TaskPageView: View {
     /// Keys the timeline refetch task, as `RunTimelineView.TimelineRequestKey`
     /// does: the task's own revision plus the epoch, full-snapshot revision,
@@ -33,15 +39,23 @@ struct TaskPageView: View {
     /// Opens a run's timeline from its section header: the iOS stack pushes
     /// it, the macOS detail column shows it in place of this view.
     let onOpenRun: (String) -> Void
-    /// Opens an Inbox item by id: where the header's guidance leads when it
-    /// names one. Nil (a screenshot, a host with no Inbox route) draws the
-    /// guidance as a plain sentence, never as a link that goes nowhere.
-    var onOpenInboxItem: ((String) -> Void)?
+    /// Routes to an item by id, which leads this page with its card: a
+    /// one-line row, the Decisions popup, and the header's guidance. Nil (a screenshot) draws plain text, never a link
+    /// that goes nowhere.
+    var onOpenItem: ((String) -> Void)?
+    /// The item whose card `leadingCard` draws.
+    private let leadingItemID: String?
+    private let leadingCard: AnyView?
+    /// The scroll view the outline row jumps through. Nil in a screenshot.
+    private let scrollProxy: ScrollViewProxy?
     /// Supplies the existing screenshot composition without loading tasks or
     /// a scroll viewport. Rendering through body installs environment values
     /// before the content helpers read locale, time zone, and text size.
     var screenshotTimeline: Components.Schemas.TaskTimeline?
-    /// The gap above the card where a standing notice sits over it. Nil
+    /// Draws the outline row as pinned: at the page's top, with the header
+    /// scrolled away. A renderer can't scroll to that state.
+    private let screenshotPinned: Bool
+    /// The gap above the page where a standing notice sits over it. Nil
     /// keeps the detail column's top margin.
     private let topMargin: CGFloat?
     @Environment(\.dynamicTypeSize) private var dynamicTypeSize
@@ -52,20 +66,30 @@ struct TaskPageView: View {
     /// Which folds are open, per task id on this device. A screenshot
     /// passes its own instance over throwaway defaults.
     @State private var disclosures: TaskTimelineDisclosurePreferences
+    /// The chip last chosen. Nil is the page's default: Decisions with an
+    /// open item, Task otherwise.
+    @State private var chosenSection: TaskPageSection?
+    @State private var outlineHeight: CGFloat = 0
 
     init(
         coordinator: SyncCoordinator, snapshot: Components.Schemas.TaskSnapshot,
-        onOpenRun: @escaping (String) -> Void, onOpenInboxItem: ((String) -> Void)? = nil,
+        onOpenRun: @escaping (String) -> Void, onOpenItem: ((String) -> Void)? = nil,
+        leadingItemID: String? = nil, leadingCard: AnyView? = nil, scrollProxy: ScrollViewProxy? = nil,
         topMargin: CGFloat? = nil,
         screenshotTimeline: Components.Schemas.TaskTimeline? = nil,
+        screenshotPinned: Bool = false,
         disclosures: TaskTimelineDisclosurePreferences? = nil
     ) {
         self.coordinator = coordinator
         self.snapshot = snapshot
         self.onOpenRun = onOpenRun
-        self.onOpenInboxItem = onOpenInboxItem
+        self.onOpenItem = onOpenItem
+        self.leadingItemID = leadingItemID
+        self.leadingCard = leadingCard
+        self.scrollProxy = scrollProxy
         self.topMargin = topMargin
         self.screenshotTimeline = screenshotTimeline
+        self.screenshotPinned = screenshotPinned
         _disclosures = State(initialValue: disclosures ?? .shared)
     }
 
@@ -79,140 +103,333 @@ struct TaskPageView: View {
         coordinator.taskTimelinesByTaskID[snapshot.task.id]
     }
 
+    private var compact: Bool { horizontalSizeClass == .compact }
+
+    private var list: UnifiedList { coordinator.unifiedList }
+
+    /// The task's open items, newest first.
+    private var openItems: [Components.Schemas.AttentionItemSnapshot] {
+        list.openItems(inTask: snapshot.task.id)
+    }
+
+    /// Every item the client holds under this task, open or closed.
+    private var taskItems: [Components.Schemas.AttentionItemSnapshot] {
+        let list = list
+        return coordinator.store.orderedSnapshots.filter { list.taskID(ofItem: $0.item.id) == snapshot.task.id }
+    }
+
+    private var conversations: [Components.Schemas.ConversationSnapshot] {
+        TaskTimelinePresentation.conversations(taskItems.map(\.item)) { coordinator.store.conversationsByID[$0] }
+    }
+
+    /// The gap between the page's parts: header, outline row, card, one-line
+    /// rows, and body.
+    private static let contentGap: CGFloat = 16
+
     @ViewBuilder var body: some View {
         if let screenshotTimeline {
-            VStack(alignment: .leading, spacing: 22) {
-                header(screenshotTimeline)
-                schedules
-                content(screenshotTimeline)
+            VStack(alignment: .leading, spacing: 0) {
+                if !screenshotPinned {
+                    header(screenshotTimeline)
+                        .padding(.bottom, Self.contentGap - 6)
+                }
+                outlineRow(screenshotTimeline)
+                sections(screenshotTimeline)
+                    .padding(.top, Self.contentGap)
             }
-            .foregroundStyle(Color.ink)
-            .timelinePage(compact: horizontalSizeClass == .compact, topMargin: topMargin)
+            .pageColumn(compact: compact, topMargin: topMargin)
         } else {
-            liveContent
+            LazyVStack(alignment: .leading, spacing: 0, pinnedViews: [.sectionHeaders]) {
+                header(timeline)
+                    .padding(.bottom, Self.contentGap - 6)
+                Section {
+                    sections(timeline)
+                        .padding(.top, Self.contentGap)
+                } header: {
+                    outlineRow(timeline)
+                        .onGeometryChange(for: CGFloat.self, of: \.size.height) { outlineHeight = $0 }
+                }
+            }
+            .pageColumn(compact: compact, topMargin: topMargin)
         }
     }
 
-    private var liveContent: some View {
-        ScrollView {
-            VStack(alignment: .leading, spacing: 22) {
-                header
-                schedules
-                if let timeline {
-                    content(timeline)
-                } else if coordinator.taskTimelineLoadStates[snapshot.task.id] == .unavailable {
-                    UnavailableStateView(
-                        glyph: .tasks, title: "Timeline unavailable",
-                        description: "Freeside could not load the daemon's history for this task."
-                    )
-                    .frame(maxWidth: .infinity, minHeight: 180)
-                } else {
-                    ProgressView("Loading timeline…")
-                        .tint(.waterText)
-                        .font(FreesideFont.cardBody)
-                        .foregroundStyle(Color.inkDim)
-                        .frame(maxWidth: .infinity, minHeight: 180)
+    /// Everything under the outline row. One container, so a lazy stack
+    /// holds every jump target as soon as the page draws.
+    private func sections(_ timeline: Components.Schemas.TaskTimeline?) -> some View {
+        VStack(alignment: .leading, spacing: Self.contentGap) {
+            if let leadingCard {
+                leadingCard
+                    .background(alignment: .top) { jumpTarget(.section(.decisions)) }
+            }
+            let others = openItems.filter { $0.item.id != leadingItemID }
+            if !others.isEmpty {
+                VStack(alignment: .leading, spacing: 6) {
+                    ForEach(others, id: \.item.id) { other in
+                        OneLineItemRow(
+                            ask: AttentionDisplay.ask(other.item),
+                            type: AttentionDisplay.title(other.item._type)
+                        ) {
+                            onOpenItem?(other.item.id)
+                        }
+                    }
                 }
             }
+            VStack(alignment: .leading, spacing: 22) {
+                taskFold(timeline)
+                    .background(alignment: .top) { jumpTarget(.section(.task)) }
+                controls(timeline)
+                schedules
+                conversationSection
+                    .background(alignment: .top) { jumpTarget(.section(.conversation)) }
+                timelineSection(timeline)
+                    .background(alignment: .top) { jumpTarget(.section(.timeline)) }
+            }
             .foregroundStyle(Color.ink)
-            .timelinePage(compact: horizontalSizeClass == .compact, topMargin: topMargin)
-        }
-        .navigationTitle(TaskDisplay.projectName(snapshot.task))
-        .task(
-            id: TimelineRequestKey(
-                snapshot: snapshot, cursors: coordinator.cursors, cacheGeneration: coordinator.cacheGeneration)
-        ) {
-            await coordinator.refreshTaskTimeline(for: snapshot.task.id)
-        }
-        .task(id: coordinator.taskReviewRequestKey(for: snapshot.task.id, revision: snapshot.as_of_revision)) {
-            await coordinator.refreshTaskReviews(for: snapshot.task.id, revision: snapshot.as_of_revision)
+            .pageBody(compact: compact)
         }
     }
 
     /// The composition with fixture data supplied directly, because
     /// ImageRenderer never executes the loading task.
     func screenshotContent(
-        _ timeline: Components.Schemas.TaskTimeline, disclosures: TaskTimelineDisclosurePreferences? = nil
+        _ timeline: Components.Schemas.TaskTimeline, disclosures: TaskTimelineDisclosurePreferences? = nil,
+        leadingItemID: String? = nil, leadingCard: AnyView? = nil, pinned: Bool = false
     ) -> some View {
         TaskPageView(
             coordinator: coordinator, snapshot: snapshot, onOpenRun: onOpenRun,
-            onOpenInboxItem: onOpenInboxItem, screenshotTimeline: timeline,
+            onOpenItem: onOpenItem, leadingItemID: leadingItemID, leadingCard: leadingCard,
+            screenshotTimeline: timeline, screenshotPinned: pinned,
             disclosures: disclosures ?? TaskTimelineDisclosurePreferences(defaults: nil))
     }
 
-    private var header: some View {
-        header(timeline)
+    // MARK: Jumps
+
+    /// Where a jump lands.
+    private enum JumpTarget: Hashable {
+        case section(TaskPageSection)
+        case run(String)
+    }
+
+    /// A target above its view by the outline row's height, so a jump lands
+    /// clear of the row pinned over the scroll view's top.
+    private func jumpTarget(_ target: JumpTarget) -> some View {
+        Color.clear
+            .frame(height: outlineHeight)
+            .id(target)
+            .padding(.top, -outlineHeight)
+            .accessibilityHidden(true)
+    }
+
+    private func jump(to target: JumpTarget) {
+        withAnimation { scrollProxy?.scrollTo(target, anchor: .top) }
+    }
+
+    /// Opens the folds that hold a run, then jumps to it once they've drawn.
+    private func jump(toRun runID: String, in timeline: Components.Schemas.TaskTimeline?) {
+        chosenSection = .runs
+        let section = timeline?.sections.first { $0.runs.contains { $0.run_id == runID } }
+        if let section {
+            fold(.campaign(section.campaign_id)).wrappedValue = true
+        }
+        fold(.run(runID)).wrappedValue = true
+        // The folds lay out on a later commit, and no transaction completes
+        // when they were already open, so the jump waits a beat for either.
+        Task { @MainActor in
+            try? await Task.sleep(for: .milliseconds(120))
+            jump(to: .run(runID))
+        }
+    }
+
+    // MARK: Header
+
+    private func reviewRounds(
+        _ timeline: Components.Schemas.TaskTimeline?
+    ) -> [String: [Components.Schemas.RunReviewRound]] {
+        timeline.map { TaskTimelinePresentation.reviewRounds($0, runTimelines: coordinator.timelinesByRunID) } ?? [:]
+    }
+
+    /// The task's position with the same stage and round its list row reads
+    /// (`UnifiedListView.taskPosition`).
+    private func position(_ timeline: Components.Schemas.TaskTimeline?) -> TaskDisplay.Position? {
+        let task = snapshot.task
+        return TaskDisplay.position(
+            task, runs: coordinator.runs, attentionItems: coordinator.store.orderedSnapshots, history: timeline,
+            stage: currentStage(timeline))
+    }
+
+    private func currentStage(_ timeline: Components.Schemas.TaskTimeline?) -> TaskDisplay.CurrentStage? {
+        TaskDisplay.currentStage(
+            snapshot.task, runs: coordinator.runs, history: timeline, reviewRounds: reviewRounds(timeline))
     }
 
     /// Layer 0: what the work is and where it stands, without scrolling
-    /// (5.6): the screen's name with the state beside it, the task's name
-    /// over its identity line, the hold when there is one, and where to act.
-    /// Stop sits last, behind More Actions. Internal so a screenshot golden
-    /// can draw the header on its own.
+    /// (5.6): the task's project, issue, and stage over its name, one status
+    /// line, the hold when there is one, and where to act. The task id lives
+    /// in the page's Identifiers footer; the copy menu keeps a quick path to
+    /// it. Internal so a screenshot golden can draw the header on its own.
     func header(_ timeline: Components.Schemas.TaskTimeline?) -> some View {
         let task = snapshot.task
-        let reviewRounds =
-            timeline.map { TaskTimelinePresentation.reviewRounds($0, runTimelines: coordinator.timelinesByRunID) }
-            ?? [:]
-        // The task row reads the same stage and round (`UnifiedListView.taskPosition`).
-        let position = TaskDisplay.position(
-            task, runs: coordinator.runs, attentionItems: coordinator.store.orderedSnapshots, history: timeline,
-            stage: TaskDisplay.currentStage(
-                task, runs: coordinator.runs, history: timeline, reviewRounds: reviewRounds))
+        let position = position(timeline)
         let lines = TaskDisplay.rowLines(task, position: position)
         let stage = TaskDisplay.detailStage(
-            task, runs: coordinator.runs, history: timeline, reviewRounds: reviewRounds)
-        return VStack(alignment: .leading, spacing: 12) {
-            // The task id lives in the page's Identifiers footer; the copy
-            // menu keeps a quick path to it.
-            CardEyebrow(
-                keyword: "Task timeline",
-                chip: StateChip(
-                    label: TaskDisplay.detailStatus(lines.status, stage: stage),
-                    cut: TaskDisplay.statusCut(task, position: position))
-            )
-            .copyMenu {
-                Button("Copy task ID") { Clipboard.copy(snapshot.task.id) }
-            }
-            TaskNameLabel(
+            task, runs: coordinator.runs, history: timeline, reviewRounds: reviewRounds(timeline))
+        let open = openItems
+        let status = TaskTimelinePresentation.statusLine(
+            task, position: position, stage: currentStage(timeline), openItems: open.map(\.item),
+            run: TaskTimelinePresentation.currentRun(task, in: timeline),
+            completion: TaskTimelinePresentation.completion(task, runs: coordinator.runs),
+            now: now, locale: locale, timeZone: timeZone)
+        return PageHeader(
+            eyebrow: TaskDisplay.rowContext(task, position: position),
+            title: TaskNameLabel(
                 name: TaskTimelinePresentation.headerName(timeline: timeline, snapshot: snapshot),
                 font: FreesideFont.ask,
                 monoFont: FreesideFont.mono(.title2),
-                lineLimit: 3)
-            // The run timeline's identity line, in the same place and face.
-            Text(TaskTimelinePresentation.headerMetaLine(task))
-                .font(FreesideFont.trailingSummary)
-                .foregroundStyle(Color.inkDim)
-                .fixedSize(horizontal: false, vertical: true)
-            if let hold = TaskDisplay.holdCallout(task, position: position, stage: stage) {
+                lineLimit: 3),
+            status: status
+        ) {
+            // A parked status line already names the hold.
+            if let hold = TaskDisplay.holdCallout(task, position: position, stage: stage),
+                position?.hold.map(status.hasSuffix) != true
+            {
                 holdCallout(hold)
             }
             switch lines.visibleGuidance(attention: position?.attention == true) {
             case .link(let title):
-                // Link styling promises navigation, so it is drawn only
-                // where tapping it opens the item the guidance names.
-                if let itemID = position?.attentionItemID, let onOpenInboxItem {
-                    Button {
-                        onOpenInboxItem(itemID)
-                    } label: {
-                        FreesideLink(title: title, face: FreesideFont.noticeAction)
-                            .multilineTextAlignment(.leading)
-                            .fixedSize(horizontal: false, vertical: true)
+                // The card the guidance names is on the page, so it says
+                // nothing the page doesn't. Link styling promises navigation,
+                // so it is drawn only where tapping it opens that item.
+                if open.isEmpty {
+                    if let itemID = position?.attentionItemID, let onOpenItem {
+                        Button {
+                            onOpenItem(itemID)
+                        } label: {
+                            FreesideLink(title: title, face: FreesideFont.noticeAction)
+                                .multilineTextAlignment(.leading)
+                                .fixedSize(horizontal: false, vertical: true)
+                        }
+                        .buttonStyle(.plain)
+                    } else {
+                        guidanceSentence(lines.guidance)
                     }
-                    .buttonStyle(.plain)
-                } else {
-                    guidanceSentence(lines.guidance)
                 }
             case .sentence(let sentence): guidanceSentence(sentence)
             case nil: EmptyView()
             }
-            TaskStopView(
-                coordinator: coordinator, taskID: task.id,
-                moreActions: timeline.map { timeline in
-                    let text = TaskTimelinePresentation.allIdentifiersText(
-                        TaskTimelinePresentation.identifierGroups(timeline, taskID: task.id))
-                    return [.init(title: "Copy all identifiers") { Clipboard.copy(text) }]
-                } ?? [])
+        }
+        .copyMenu {
+            Button("Copy task ID") { Clipboard.copy(snapshot.task.id) }
+        }
+    }
+
+    private func outlineRow(_ timeline: Components.Schemas.TaskTimeline?) -> some View {
+        let open = openItems
+        return OutlineRow(
+            decisions: open.map { .init(id: $0.item.id, title: AttentionDisplay.ask($0.item)) },
+            leadingItemID: leadingItemID,
+            conversationMessages: conversations.reduce(0) { $0 + $1.conversation.messages.count },
+            runs: (timeline?.sections.flatMap(\.runs) ?? []).map {
+                .init(id: $0.run_id, title: TaskTimelinePresentation.runTitle($0))
+            },
+            selected: chosenSection ?? (open.isEmpty ? .task : .decisions),
+            rendersInteractiveControls: screenshotTimeline == nil,
+            onSelect: { section in
+                chosenSection = section
+                // A one-run page's Runs chip lands on that run's history.
+                jump(to: .section(section == .runs ? .timeline : section))
+            },
+            onChooseDecision: { onOpenItem?($0) },
+            onChooseRun: { jump(toRun: $0, in: timeline) }
+        )
+    }
+
+    // MARK: Body
+
+    /// What the task is bound to, one mono line closed. Isolation and branch
+    /// have no client source yet, so the fold omits them rather than guess.
+    private func taskFold(_ timeline: Components.Schemas.TaskTimeline?) -> some View {
+        let task = snapshot.task
+        let position = position(timeline)
+        let run = TaskTimelinePresentation.currentRun(task, in: timeline)
+        let stage = currentStage(timeline)?.stage
+        let completion = TaskTimelinePresentation.completion(task, runs: coordinator.runs)
+        return SentenceDisclosure(
+            label: "Task",
+            summary: TaskTimelinePresentation.taskSummary(task, position: position, stage: stage, run: run),
+            isExpanded: fold(.task)
+        ) {
+            VStack(alignment: .leading, spacing: 8) {
+                ForEach(
+                    TaskTimelinePresentation.taskFacts(
+                        task, position: position, stage: stage, run: run,
+                        policyDigest: run.flatMap { current in
+                            coordinator.runs.first { $0.run.id == current.run_id }?.run.policy_digest
+                        },
+                        pullRequest: completion?.pr_number ?? timeline.flatMap(TaskTimelinePresentation.pullRequest),
+                        historyLoaded: timeline != nil),
+                    id: \.label
+                ) { row in
+                    FactRow(label: row.label, value: row.value)
+                }
+            }
+            .padding(.leading, 19)
+            .frame(maxWidth: .infinity, alignment: .leading)
+        }
+    }
+
+    private func controls(_ timeline: Components.Schemas.TaskTimeline?) -> some View {
+        TaskStopView(
+            coordinator: coordinator, taskID: snapshot.task.id,
+            moreActions: timeline.map { timeline in
+                let text = TaskTimelinePresentation.allIdentifiersText(
+                    TaskTimelinePresentation.identifierGroups(timeline, taskID: snapshot.task.id))
+                return [.init(title: "Copy all identifiers") { Clipboard.copy(text) }]
+            } ?? [])
+    }
+
+    /// Every conversation the task's items name, read-only: a reply goes
+    /// through the leading card, which is what the thread's item asks.
+    @ViewBuilder private var conversationSection: some View {
+        let conversations = conversations
+        VStack(alignment: .leading, spacing: 22) {
+            if conversations.isEmpty {
+                VStack(alignment: .leading, spacing: 12) {
+                    KeywordLabel(text: "Conversation")
+                        .accessibilityAddTraits(.isHeader)
+                    Text("No messages on this task.")
+                        .font(FreesideFont.cardBody)
+                        .foregroundStyle(Color.inkDim)
+                }
+            }
+            ForEach(conversations, id: \.conversation.id) { conversation in
+                ConversationView(
+                    snapshot: conversation,
+                    attachments: coordinator.store.attachments,
+                    loadsAttachments: screenshotTimeline == nil,
+                    now: now,
+                    rendersInteractiveControls: screenshotTimeline == nil)
+            }
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+    }
+
+    @ViewBuilder
+    private func timelineSection(_ timeline: Components.Schemas.TaskTimeline?) -> some View {
+        if let timeline {
+            content(timeline)
+        } else if coordinator.taskTimelineLoadStates[snapshot.task.id] == .unavailable {
+            UnavailableStateView(
+                glyph: .tasks, title: "Timeline unavailable",
+                description: "Freeside could not load the daemon's history for this task."
+            )
+            .frame(maxWidth: .infinity, minHeight: 180)
+        } else {
+            ProgressView("Loading timeline…")
+                .tint(.waterText)
+                .font(FreesideFont.cardBody)
+                .foregroundStyle(Color.inkDim)
+                .frame(maxWidth: .infinity, minHeight: 180)
         }
     }
 
@@ -279,7 +496,8 @@ struct TaskPageView: View {
         let disambiguate = TaskTimelinePresentation.campaignCount(timeline) > 1
         return VStack(alignment: .leading, spacing: 22) {
             VStack(alignment: .leading, spacing: 11) {
-                KeywordLabel(text: "Task Events")
+                KeywordLabel(text: "Timeline")
+                    .accessibilityAddTraits(.isHeader)
                 if let message = TaskTimelinePresentation.availabilityMessage(
                     state: coordinator.taskTimelineLoadStates[snapshot.task.id], freshness: coordinator.store.freshness)
                 {
@@ -358,8 +576,10 @@ struct TaskPageView: View {
                             runBody(run, in: timeline)
                         }
                     }
+                    .background(alignment: .top) { jumpTarget(.run(run.run_id)) }
                 } else {
                     item(verticalPadding: 12, horizontalPadding: 18) { priorRun(run, in: timeline) }
+                        .background(alignment: .top) { jumpTarget(.run(run.run_id)) }
                 }
             }
         }
@@ -571,6 +791,56 @@ struct TaskPageView: View {
         } else {
             FactRow(label: label, value: ShortIdentifier.short(runID))
         }
+    }
+}
+
+/// Hosts the page in a scroll view and keeps its history fresh. A leading
+/// card's `DecisionDetailView` owns the scroll view, so the card keeps its
+/// sheets, keyboard commands, and sticky footer; the page draws inside it.
+struct TaskPageHost: View {
+    let coordinator: SyncCoordinator
+    let snapshot: Components.Schemas.TaskSnapshot
+    let leadingItemID: String?
+    var topMargin: CGFloat? = nil
+    let onOpenRun: (String) -> Void
+    let onOpenItem: (String) -> Void
+    /// Builds the leading item's card, seated in the page it's given.
+    let card: (String, DecisionDetailView.Page) -> DecisionDetailView
+
+    private var title: String { TaskDisplay.projectName(snapshot.task) }
+
+    var body: some View {
+        Group {
+            if let leadingItemID {
+                card(
+                    leadingItemID,
+                    .init(title: title) { card, proxy in
+                        AnyView(page(card: card, proxy: proxy))
+                    }
+                )
+                .id(leadingItemID)
+            } else {
+                ScrollViewReader { proxy in
+                    ScrollView { page(card: nil, proxy: proxy) }
+                }
+                .navigationTitle(title)
+            }
+        }
+        .task(
+            id: TaskPageView.TimelineRequestKey(
+                snapshot: snapshot, cursors: coordinator.cursors, cacheGeneration: coordinator.cacheGeneration)
+        ) {
+            await coordinator.refreshTaskTimeline(for: snapshot.task.id)
+        }
+        .task(id: coordinator.taskReviewRequestKey(for: snapshot.task.id, revision: snapshot.as_of_revision)) {
+            await coordinator.refreshTaskReviews(for: snapshot.task.id, revision: snapshot.as_of_revision)
+        }
+    }
+
+    private func page(card: AnyView?, proxy: ScrollViewProxy) -> TaskPageView {
+        TaskPageView(
+            coordinator: coordinator, snapshot: snapshot, onOpenRun: onOpenRun, onOpenItem: onOpenItem,
+            leadingItemID: leadingItemID, leadingCard: card, scrollProxy: proxy, topMargin: topMargin)
     }
 }
 
@@ -813,6 +1083,130 @@ enum TaskTimelinePresentation {
             if let review = runTimelines[run.run_id]?.review?.value1 { rounds[run.run_id] = review.rounds }
         }
         return rounds
+    }
+
+    /// The run the page's status line and Task fold name: the task's current
+    /// one, else the history's newest.
+    static func currentRun(
+        _ task: Components.Schemas.Task, in timeline: Components.Schemas.TaskTimeline?
+    ) -> Components.Schemas.TaskTimelineRun? {
+        let runs = timeline?.sections.flatMap(\.runs) ?? []
+        return runs.first { $0.run_id == task.current_position?.value1.run_id } ?? runs.first
+    }
+
+    /// The pull request the task opened, by the history's newest record of it.
+    static func pullRequest(_ timeline: Components.Schemas.TaskTimeline) -> Int? {
+        events(timeline).first { $0.kind == .pr_opened }?.pr_number
+    }
+
+    /// The merge a finished task's run records.
+    static func completion(
+        _ task: Components.Schemas.Task, runs: [Components.Schemas.RunSnapshot]
+    ) -> Components.Schemas.WorkUnitCompletionFacts? {
+        task.run_ids.lazy.compactMap { id in
+            runs.first { $0.run.id == id }?.run.completion?.value1
+        }.first
+    }
+
+    /// The agent the task's line for `stage` names, and its pool. The line
+    /// is what the next admission reads: the wire names no agent for a run
+    /// in progress, so this is the nearest fact, and a remediation reads as
+    /// its stage's implementer. The daemon records a pool only where the
+    /// router read a usage mark.
+    private static func agentAndPool(
+        _ task: Components.Schemas.Task, stage: Components.Schemas.StageName?
+    ) -> [String] {
+        let role: Components.Schemas.TaskLineRole =
+            switch stage {
+            case .specification: .specifier
+            case .review: .reviewer
+            case .implementation, .verification, nil: .implementer
+            }
+        guard let line = task.task_lines.first(where: { $0.role == role }) else { return [] }
+        return [line.agent] + [line.provenance?.value1.reading?.value1.pool].compactMap { $0.map { "pool \($0)" } }
+    }
+
+    /// The header's one status line, which reads the same words the task's
+    /// list row keys on. No resume time reaches the client, so a parked task
+    /// says what parked it and not until when.
+    static func statusLine(
+        _ task: Components.Schemas.Task, position: TaskDisplay.Position?, stage: TaskDisplay.CurrentStage?,
+        openItems: [Components.Schemas.AttentionItem], run: Components.Schemas.TaskTimelineRun?,
+        completion: Components.Schemas.WorkUnitCompletionFacts?, now: Date, locale: Locale, timeZone: TimeZone
+    ) -> String {
+        if let oldest = openItems.compactMap(\.created_at).min() {
+            let age = AttentionDisplay.relativeRowTime(oldest, now: now)
+            let count = openItems.count == 1 ? "1 open decision" : "\(openItems.count) open decisions"
+            return "Waiting on you since \(age) · \(count)"
+        }
+        if TaskDisplay.isActive(task) {
+            let row = TaskDisplay.workingRow(task, position: position, stage: stage)
+            if row.keyword == TaskDisplay.parked {
+                return ([row.keyword] + [position?.hold].compactMap { $0 }).joined(separator: " · ")
+            }
+            let attempt = run?.attempt_number.map { "run \($0)" }
+            return ([row.keyword] + [attempt].compactMap { $0 } + agentAndPool(task, stage: stage?.stage)).joined(
+                separator: " · ")
+        }
+        if let completion {
+            let merged = FreesideFormat.shortTime(completion.recorded_at, now: now, locale: locale, timeZone: timeZone)
+            return "Merged as PR #\(completion.pr_number) · \(merged)"
+        }
+        let finished = FreesideFormat.shortTime(task.last_activity_at, now: now, locale: locale, timeZone: timeZone)
+        return "\(TaskDisplay.finishedRow(task, position: position).keyword) · \(finished)"
+    }
+
+    /// The closed Task fold's one mono line.
+    static func taskSummary(
+        _ task: Components.Schemas.Task, position: TaskDisplay.Position?, stage: Components.Schemas.StageName?,
+        run: Components.Schemas.TaskTimelineRun?
+    ) -> String {
+        ([TaskDisplay.projectName(task), TaskDisplay.currentPhaseAndRound(position)].compactMap { $0 }
+            + [run?.attempt_number.map { "run \($0)" }].compactMap { $0 } + agentAndPool(task, stage: stage))
+            .joined(separator: " · ")
+    }
+
+    /// The open Task fold's facts: each one a client source can state.
+    static func taskFacts(
+        _ task: Components.Schemas.Task, position: TaskDisplay.Position?, stage: Components.Schemas.StageName?,
+        run: Components.Schemas.TaskTimelineRun?, policyDigest: String?, pullRequest: Int?, historyLoaded: Bool
+    ) -> [AttentionDisplay.BindingRow] {
+        var rows: [AttentionDisplay.BindingRow] = [.init(label: "Project", value: TaskDisplay.projectName(task))]
+        if let stage = TaskDisplay.currentPhaseAndRound(position) {
+            rows.append(.init(label: "Stage", value: stage))
+        }
+        if let run {
+            rows.append(.init(label: "Current Run", value: runTitle(run)))
+        }
+        let agent = agentAndPool(task, stage: stage)
+        if !agent.isEmpty {
+            rows.append(.init(label: "Agent and Pool", value: agent.joined(separator: " · ")))
+        }
+        // Only a loaded history can say that no pull request exists yet.
+        if let pullRequest {
+            rows.append(.init(label: "Pull Request", value: "#\(pullRequest)"))
+        } else if historyLoaded {
+            rows.append(.init(label: "Pull Request", value: "None yet"))
+        }
+        if let policyDigest {
+            rows.append(.init(label: "Policy Digest", value: ShortIdentifier.short(policyDigest)))
+        }
+        return rows
+    }
+
+    /// The conversations `items` name, each once, by its newest-first item.
+    static func conversations(
+        _ items: [Components.Schemas.AttentionItem],
+        lookup: (String) -> Components.Schemas.ConversationSnapshot?
+    ) -> [Components.Schemas.ConversationSnapshot] {
+        var seen: Set<String> = []
+        return
+            items
+            .sorted { ($0.created_at ?? .distantPast) > ($1.created_at ?? .distantPast) }
+            .compactMap { item in
+                guard let id = item.conversation_id, seen.insert(id).inserted else { return nil }
+                return lookup(id)
+            }
     }
 
     /// The stage the rail's newest start point names, which the header's

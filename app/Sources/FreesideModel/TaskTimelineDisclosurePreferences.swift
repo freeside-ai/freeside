@@ -26,6 +26,8 @@ package final class TaskTimelineDisclosurePreferences {
         case priorRounds(String)
         /// The page's one Identifiers footer.
         case identifiers
+        /// The page's Task fold.
+        case task
 
         var id: String {
             switch self {
@@ -35,6 +37,7 @@ package final class TaskTimelineDisclosurePreferences {
             case .roundFacts(let invocationID): "facts:\(invocationID)"
             case .priorRounds(let runID): "rounds:\(runID)"
             case .identifiers: "identifiers"
+            case .task: "task"
             }
         }
     }

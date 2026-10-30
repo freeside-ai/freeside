@@ -44,6 +44,15 @@ enum DecisionLaunchComposerGate {
 /// and exactly the item's requested actions. Actions stay disabled until
 /// the model's revalidation of current state succeeds.
 struct DecisionDetailView: View {
+    /// The task page around the card, drawn inside this view's scroll view
+    /// so the card keeps its sheets, keyboard commands, sticky footer, and
+    /// scroll targets while the page scrolls with it. `content` takes the
+    /// seated card and the scroll view's proxy.
+    struct Page {
+        let title: String
+        let content: (AnyView, ScrollViewProxy) -> AnyView
+    }
+
     private enum ScrollTarget: Hashable {
         case technicalDetails
     }
@@ -116,6 +125,10 @@ struct DecisionDetailView: View {
     /// The gap above the card where a standing notice sits over it. Nil
     /// keeps the pane's own margin.
     private let topMargin: CGFloat?
+    /// Seats the card in the task page. Nil is the card alone in the pane.
+    private let page: Page?
+    /// Room for the task page's pinned outline row above a scroll target.
+    @ScaledMetric(relativeTo: .caption) private var pinnedClearance: CGFloat = 44
     private let onSelectItem: (String) -> Void
     /// The tasks a closed card's timeline link resolves its item against.
     private let tasks: [Components.Schemas.TaskSnapshot]
@@ -141,6 +154,7 @@ struct DecisionDetailView: View {
         now: Date = .now,
         sectionPreferences: DecisionSectionPreferences? = nil,
         topMargin: CGFloat? = nil,
+        page: Page? = nil,
         onSelectItem: @escaping (String) -> Void = { _ in },
         tasks: [Components.Schemas.TaskSnapshot] = [],
         onSelectTask: @escaping (String) -> Void = { _ in },
@@ -172,6 +186,7 @@ struct DecisionDetailView: View {
         self.launchComposer = launchComposer
         self.onConsumeLaunchComposer = onConsumeLaunchComposer
         self.topMargin = topMargin
+        self.page = page
         self.onSelectItem = onSelectItem
         self.tasks = tasks
         self.onSelectTask = onSelectTask
@@ -187,15 +202,23 @@ struct DecisionDetailView: View {
                 if let snapshot = model.snapshot {
                     ScrollViewReader { scrollProxy in
                         ScrollView {
-                            card(
+                            let drawn = card(
                                 snapshot.item,
                                 proposalFacts: model.proposalFacts,
                                 effectProposalFacts: model.effectProposalFacts,
                                 accessibilityLayout: isAccessibilityLayout,
                                 compactLayout: horizontalSizeClass == .compact
                             )
-                            .detailCard(
-                                compact: horizontalSizeClass == .compact, topMargin: topMargin)
+                            if let page {
+                                page.content(
+                                    AnyView(
+                                        takesRecommendationOnReturn(
+                                            drawn.pageCard(compact: horizontalSizeClass == .compact))),
+                                    scrollProxy)
+                            } else {
+                                drawn.detailCard(
+                                    compact: horizontalSizeClass == .compact, topMargin: topMargin)
+                            }
                         }
                         .coordinateSpace(name: "decision-card-scroll")
                         .onChange(of: detailsRevealRequest) {
@@ -338,7 +361,9 @@ struct DecisionDetailView: View {
                     specApprovalReaderSheet(reader, item: item)
                 }
             }
-            .navigationTitle(model.snapshot.map { AttentionDisplay.title($0.item) } ?? "Decision")
+            .navigationTitle(
+                page?.title ?? model.snapshot.map { AttentionDisplay.title($0.item) } ?? "Decision"
+            )
             .sheet(item: $pendingConfirmation) { confirmation in
                 ConsequenceSheet(
                     action: confirmation.action,
@@ -370,13 +395,22 @@ struct DecisionDetailView: View {
                 // nothing to announce, and swallowing the key to post an
                 // unavailability banner made every card without a
                 // recommendation answer Return with a notice.
-                .onKeyPress(.return) {
-                    guard canTakeRecommendation else { return .ignored }
-                    takeRecommendationFromKeyboard()
-                    return .handled
-                }
+                //
+                // On a task page the handler sits on the card alone: Return
+                // on a one-line row or a task control must not decide this
+                // card.
+                .onKeyPress(.return) { page == nil ? takeRecommendationOnReturn() : .ignored }
             #endif
         }
+    }
+
+    @ViewBuilder
+    private func takesRecommendationOnReturn<Content: View>(_ content: Content) -> some View {
+        #if os(macOS)
+            content.onKeyPress(.return) { takeRecommendationOnReturn() }
+        #else
+            content
+        #endif
     }
 
     private var detailsRevealRequest: TechnicalDetailsRevealRequest? {
@@ -768,7 +802,14 @@ struct DecisionDetailView: View {
                 TechnicalDetailRow(row: row, rendersInteractiveControls: rendersInteractiveControls)
             }
         }
-        .id(ScrollTarget.technicalDetails)
+        // A task page pins its outline row over the scroll view's top, so the
+        // target stands clear of it. The card alone pins nothing.
+        .background(alignment: .top) {
+            Color.clear
+                .frame(height: page == nil ? 0 : pinnedClearance)
+                .id(ScrollTarget.technicalDetails)
+                .padding(.top, page == nil ? 0 : -pinnedClearance)
+        }
         .foregroundStyle(Color.inkDim)
         .textSelection(.enabled)
     }
@@ -1866,6 +1907,23 @@ struct DecisionDetailView: View {
     /// The project-owned card content without navigation and presentation
     /// containers that ImageRenderer cannot draw off-screen on macOS.
     @ViewBuilder
+    /// The card as the task page seats it, for a screenshot of the page.
+    func screenshotPageCard(
+        _ item: Components.Schemas.AttentionItem,
+        at dynamicTypeSize: DynamicTypeSize,
+        compactLayout: Bool = false
+    ) -> some View {
+        card(
+            item,
+            proposalFacts: nil,
+            effectProposalFacts: nil,
+            rendersInteractiveControls: false,
+            accessibilityLayout: dynamicTypeSize >= .accessibility1,
+            compactLayout: compactLayout
+        )
+        .pageCard(compact: compactLayout)
+    }
+
     func screenshotCard(
         _ item: Components.Schemas.AttentionItem,
         at dynamicTypeSize: DynamicTypeSize,
@@ -3952,6 +4010,12 @@ struct DecisionDetailView: View {
                 cancelPendingAction: cancelPendingAction)
         }
 
+        private func takeRecommendationOnReturn() -> KeyPress.Result {
+            guard canTakeRecommendation else { return .ignored }
+            takeRecommendationFromKeyboard()
+            return .handled
+        }
+
         private var canTakeRecommendation: Bool {
             guard let item = model.snapshot?.item else { return false }
             let recommendation = DecisionRecommendationPresentation.of(item)
@@ -4363,10 +4427,35 @@ extension View {
     func detailCard(compact: Bool, topMargin: CGFloat? = nil) -> some View {
         var margin = CardScale.paneMargin(compact: compact)
         if let topMargin { margin.top = topMargin }
-        return padding(CardScale.padding(compact: compact))
+        return pageCard(compact: compact)
+            .frame(maxWidth: CardScale.cardWidth, alignment: .topLeading)
+            .padding(margin)
+            .frame(maxWidth: .infinity, alignment: .topLeading)
+    }
+
+    /// The card with no seat of its own, for the task page to place.
+    func pageCard(compact: Bool) -> some View {
+        padding(CardScale.padding(compact: compact))
             .frame(maxWidth: .infinity, alignment: .topLeading)
             .freesideCard(cornerRadius: CardScale.cornerRadius)
-            .frame(maxWidth: CardScale.cardWidth, alignment: .topLeading)
+    }
+
+    /// The task page's body. At regular width it draws in the detail card;
+    /// at compact width on the page's ground, as a timeline does. One chain
+    /// serves both, for the reason `timelinePage` gives.
+    func pageBody(compact: Bool) -> some View {
+        padding(compact ? EdgeInsets() : CardScale.padding(compact: false))
+            .frame(maxWidth: .infinity, alignment: .topLeading)
+            .background {
+                if !compact { Color.clear.freesideCard(cornerRadius: CardScale.cornerRadius) }
+            }
+    }
+
+    /// The task page's column: the card's x and width at any pane width.
+    func pageColumn(compact: Bool, topMargin: CGFloat? = nil) -> some View {
+        var margin = CardScale.paneMargin(compact: compact)
+        if let topMargin { margin.top = topMargin }
+        return frame(maxWidth: CardScale.cardWidth, alignment: .topLeading)
             .padding(margin)
             .frame(maxWidth: .infinity, alignment: .topLeading)
     }

@@ -388,6 +388,40 @@ public struct FreesideRootView: View {
         #endif
     }
 
+    /// A decision card, alone in the pane or seated in `page`.
+    private func decisionCard(
+        _ itemID: String, coordinator: SyncCoordinator, topMargin: CGFloat? = nil,
+        page: DecisionDetailView.Page? = nil
+    ) -> DecisionDetailView {
+        DecisionDetailView(
+            store: coordinator.store,
+            itemID: itemID,
+            detailsExpanded: launchDetailsExpanded,
+            detailsRevealRequest: technicalDetailsRequest,
+            onConsumeDetailsRevealRequest: consumeTechnicalDetailsRequest,
+            launchComposer: navigation.launchComposer(for: itemID),
+            onConsumeLaunchComposer: navigation.consumeLaunchComposer,
+            topMargin: topMargin,
+            page: page,
+            onSelectItem: { navigation.route(to: .attentionItem($0)) },
+            tasks: coordinator.tasks,
+            onSelectTask: { navigation.route(to: .task($0)) },
+            onConclusion: { conclusion in
+                handleConclusion(conclusion, coordinator: coordinator)
+            })
+    }
+
+    private func taskPage(
+        _ task: Components.Schemas.TaskSnapshot, leadingItemID: String?, coordinator: SyncCoordinator,
+        topMargin: CGFloat? = nil
+    ) -> TaskPageHost {
+        TaskPageHost(
+            coordinator: coordinator, snapshot: task, leadingItemID: leadingItemID, topMargin: topMargin,
+            onOpenRun: { navigation.openRun(taskID: task.task.id, runID: $0) },
+            onOpenItem: { navigation.route(to: .attentionItem($0)) },
+            card: { itemID, page in decisionCard(itemID, coordinator: coordinator, page: page) })
+    }
+
     private func unifiedList(_ coordinator: SyncCoordinator) -> some View {
         UnifiedListView(
             store: coordinator.store,
@@ -484,28 +518,12 @@ public struct FreesideRootView: View {
         private func phoneDetail(
             _ destination: NavigationModel.Destination, coordinator: SyncCoordinator
         ) -> some View {
-            switch destination {
-            case .attentionItem(let itemID):
-                DecisionDetailView(
-                    store: coordinator.store,
-                    itemID: itemID,
-                    detailsExpanded: launchDetailsExpanded,
-                    detailsRevealRequest: technicalDetailsRequest,
-                    onConsumeDetailsRevealRequest: consumeTechnicalDetailsRequest,
-                    launchComposer: navigation.launchComposer(for: itemID),
-                    onConsumeLaunchComposer: navigation.consumeLaunchComposer,
-                    onSelectItem: { navigation.route(to: .attentionItem($0)) },
-                    tasks: coordinator.tasks,
-                    onSelectTask: { navigation.route(to: .task($0)) },
-                    onConclusion: { conclusion in
-                        handleConclusion(conclusion, coordinator: coordinator)
-                    })
-            case .task(let taskID):
+            switch NavigationModel.surface(for: destination, in: coordinator.unifiedList) {
+            case .card(let itemID):
+                decisionCard(itemID, coordinator: coordinator)
+            case .taskPage(let taskID, let leadingItemID):
                 if let task = coordinator.tasks.first(where: { $0.task.id == taskID }) {
-                    TaskPageView(
-                        coordinator: coordinator, snapshot: task,
-                        onOpenRun: { navigation.route(to: .run(taskID: taskID, runID: $0)) },
-                        onOpenInboxItem: { navigation.route(to: .attentionItem($0)) })
+                    taskPage(task, leadingItemID: leadingItemID, coordinator: coordinator)
                 } else {
                     unavailableDetail
                 }
@@ -541,30 +559,16 @@ public struct FreesideRootView: View {
             _ coordinator: SyncCoordinator,
             topMargin: CGFloat?
         ) -> some View {
-            if let attentionSelection = navigation.attentionSelection {
-                DecisionDetailView(
-                    store: coordinator.store,
-                    itemID: attentionSelection,
-                    detailsExpanded: launchDetailsExpanded,
-                    detailsRevealRequest: technicalDetailsRequest,
-                    onConsumeDetailsRevealRequest: consumeTechnicalDetailsRequest,
-                    launchComposer: navigation.launchComposer(for: attentionSelection),
-                    onConsumeLaunchComposer: navigation.consumeLaunchComposer,
-                    topMargin: topMargin,
-                    onSelectItem: { navigation.route(to: .attentionItem($0)) },
-                    tasks: coordinator.tasks,
-                    onSelectTask: { navigation.route(to: .task($0)) },
-                    onConclusion: { conclusion in
-                        handleConclusion(conclusion, coordinator: coordinator)
-                    }
-                )
-                .id(attentionSelection)
-            } else if let runSelection = navigation.runSelection {
+            let surface = navigation.detailSurface(in: coordinator.unifiedList)
+            if case .card(let itemID) = surface {
+                decisionCard(itemID, coordinator: coordinator, topMargin: topMargin)
+                    .id(itemID)
+            } else if case .run(_, let runID) = surface {
                 // A run opened under its task: the column has no stack to
                 // pop, so a return row leads back to the task.
                 VStack(spacing: 0) {
                     runReturnRow(topMargin: topMargin)
-                    if let run = coordinator.runs.first(where: { $0.run.id == runSelection }) {
+                    if let run = coordinator.runs.first(where: { $0.run.id == runID }) {
                         RunTimelineView(coordinator: coordinator, snapshot: run, topMargin: 10)
                     } else {
                         UnavailableStateView(
@@ -573,17 +577,12 @@ public struct FreesideRootView: View {
                             seat: .detailColumn)
                     }
                 }
-                .id(runSelection)
-            } else if let taskSelection = navigation.taskSelection,
-                let task = coordinator.tasks.first(where: { $0.task.id == taskSelection })
+                .id(runID)
+            } else if case .taskPage(let taskID, let leadingItemID) = surface,
+                let task = coordinator.tasks.first(where: { $0.task.id == taskID })
             {
-                TaskPageView(
-                    coordinator: coordinator, snapshot: task,
-                    onOpenRun: { navigation.route(to: .run(taskID: task.task.id, runID: $0)) },
-                    onOpenInboxItem: { navigation.route(to: .attentionItem($0)) },
-                    topMargin: topMargin
-                )
-                .id(taskSelection)
+                taskPage(task, leadingItemID: leadingItemID, coordinator: coordinator, topMargin: topMargin)
+                    .id(taskID)
             } else if showsInboxClearResult {
                 // The same two lines the empty Needs you draws in the
                 // sidebar, so the two panes agree.
