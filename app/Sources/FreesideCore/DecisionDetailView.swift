@@ -2944,9 +2944,6 @@ struct DecisionDetailView: View {
             {
                 StateChip(label: "Revision \(iteration)", color: .inkDim)
             }
-            if AttentionDisplay.showsPriorityBadge(item.priority) {
-                PriorityBadge(priority: item.priority)
-            }
             if AttentionDisplay.showsLifecycleBadge(item.status) {
                 StatusBadge(status: item.status)
             }

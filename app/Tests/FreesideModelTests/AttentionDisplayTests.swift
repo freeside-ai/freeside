@@ -516,11 +516,6 @@ import Testing
     }
 
     @Test func rowBadgePolicyKeepsOnlyExceptionalStates() {
-        #expect(AttentionDisplay.showsPriorityBadge(.urgent))
-        #expect(AttentionDisplay.showsPriorityBadge(.high))
-        #expect(!AttentionDisplay.showsPriorityBadge(.normal))
-        #expect(!AttentionDisplay.showsPriorityBadge(.low))
-
         #expect(!AttentionDisplay.showsLifecycleBadge(.open))
         #expect(AttentionDisplay.showsLifecycleBadge(.resolved))
         #expect(AttentionDisplay.showsLifecycleBadge(.superseded))

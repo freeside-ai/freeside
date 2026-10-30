@@ -1158,13 +1158,6 @@ package enum AttentionDisplay {
         return item.created_at?.formatted(.iso8601)
     }
 
-    package static func showsPriorityBadge(_ priority: Components.Schemas.Priority) -> Bool {
-        switch priority {
-        case .urgent, .high: return true
-        case .normal, .low: return false
-        }
-    }
-
     package static func showsLifecycleBadge(_ status: Components.Schemas.ItemStatus) -> Bool {
         status != .open
     }

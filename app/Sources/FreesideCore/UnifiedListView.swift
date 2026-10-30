@@ -812,24 +812,6 @@ struct InboxRowView: View {
     }
 }
 
-/// Urgent is wax, high is the accent, normal is water, low is faint.
-struct PriorityBadge: View {
-    let priority: Components.Schemas.Priority
-
-    var body: some View {
-        StateChip(label: AttentionDisplay.label(priority), color: color)
-    }
-
-    private var color: Color {
-        switch priority {
-        case .urgent: return .waxText
-        case .high: return .accentText
-        case .normal: return .waterText
-        case .low: return .inkDim
-        }
-    }
-}
-
 struct StatusBadge: View {
     let status: Components.Schemas.ItemStatus
 
