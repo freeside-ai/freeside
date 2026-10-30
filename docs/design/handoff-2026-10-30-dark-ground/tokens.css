@@ -1,0 +1,75 @@
+/* Freeside design tokens — light = Freeside (day) on the Overcast ground, dark = Straylight (dusk) on the Dead Channel ground (both 30 Oct 2026).
+   Modes follow the viewer's system; override with [data-theme].
+   Mirrors app/Sources/FreesideCore/DesignLanguage.swift (synced 8 Oct 2026; both grounds retuned 30 Oct 2026 — see docs/design/handoff-2026-10-30-dark-ground/): the brand
+   tokens keep their identity values; the -text / -border / -wash cuts are the
+   contrast-safe working set every built surface uses. */
+:root {
+  --ground: #eeeeeb; --ground-2: #fafaf8; --ground-3: #e4e4e0; --sidebar-ground: #e4e4e0;
+  --rule: #d5d5d1; --rule-strong: #7b7b76; --secondary-border: #c8c8c3;
+  --text: #212120; --text-dim: #5c5c58; --text-faint: #777772;
+  --accent: #8f6b14; /* bronze — identity value, borders, marks */ --accent-text: #7a5a0c; --accent-border: #8f6b14; --accent-dim: #b99a4a;
+  --accent-wash: #ede4cd; --accent-wash-soft: #f1ecdd;
+  --wax: #8a2d1c; --wax-text: #8a2d1c; --wax-wash: #eedad3;
+  --water: #6f9ea3; --water-text: #3b6b70; --water-wash: #dae6e5;
+  --neutral-wash: #f1ecdd; --milestone-prior: #b6b6b0; --milestone-connector: #d5d5d1;
+  --diff-add: #357040; --diff-add-wash: #dde8da; --diff-remove: #a83d2c; --diff-remove-wash: #f2dbd4;
+  --quote-wash: #f1ecdd; --quote-rule: #7b7b76; --item-border: #d5d5d1;
+  --notice-accent-wash: #ede4cd; --notice-wax-wash: #eedad3; --hover: #e4e4e0;
+  --ic-accent-text: #6b4e0b; --ic-wax-text: #71230f; --ic-water-text: #33595e;
+  --mark-frame-w: 3.5; --mark-inlay-w: 2.6;
+  --serif: "Source Serif Pro", "Source Serif 4", "Iowan Old Style", Palatino, Georgia, serif;
+  --sans: "IBM Plex Sans", "Avenir Next", "Helvetica Neue", system-ui, sans-serif;
+  --mono: "IBM Plex Mono", ui-monospace, "SF Mono", Menlo, monospace;
+}
+@media (prefers-color-scheme: dark) {
+  :root {
+    --ground: #131416; --ground-2: #1a1c1f; --ground-3: #25282c; --sidebar-ground: #1a1c1f;
+    --rule: #2b2f33; --rule-strong: #7e838a; --secondary-border: #393e44;
+    --text: #e9e7e0; --text-dim: #b2b0a6; --text-faint: #7f8287;
+    --accent: #d4a23a; /* tawny, unchanged in hue */ --accent-text: #d4a23a; --accent-border: #96742b; --accent-dim: #96742b;
+    --accent-wash: #2b2515; --accent-wash-soft: #221f19;
+    --wax: #9a3520; --wax-text: #d97553; --wax-wash: #2a1816;
+    --water: #5d8489; --water-text: #86b1b6; --water-wash: #18252a;
+    --neutral-wash: #221f19; --milestone-prior: #4a4e55; --milestone-connector: #25282c;
+    --diff-add: #82b78e; --diff-add-wash: #17281b; --diff-remove: #e27e66; --diff-remove-wash: #2f1a17;
+    --quote-wash: #25282c; --quote-rule: #96742b; --item-border: #3e434a;
+    --notice-accent-wash: #2e2716; --notice-wax-wash: #311b17;
+    --hover: #25282c; /* ground-3; waxText on it 4.67:1 */
+    --ic-accent-text: #e3b449; --ic-wax-text: #e2855f; --ic-water-text: #9fc5ca;
+    --mark-frame-w: 3.2; --mark-inlay-w: 2.4;
+  }
+}
+:root[data-theme="dark"] {
+  --ground: #131416; --ground-2: #1a1c1f; --ground-3: #25282c; --sidebar-ground: #1a1c1f;
+  --rule: #2b2f33; --rule-strong: #7e838a; --secondary-border: #393e44;
+  --text: #e9e7e0; --text-dim: #b2b0a6; --text-faint: #7f8287;
+  --accent: #d4a23a; /* tawny, unchanged in hue */ --accent-text: #d4a23a; --accent-border: #96742b; --accent-dim: #96742b;
+  --accent-wash: #2b2515; --accent-wash-soft: #221f19;
+  --wax: #9a3520; --wax-text: #d97553; --wax-wash: #2a1816;
+  --water: #5d8489; --water-text: #86b1b6; --water-wash: #18252a;
+  --neutral-wash: #221f19; --milestone-prior: #4a4e55; --milestone-connector: #25282c;
+  --diff-add: #82b78e; --diff-add-wash: #17281b; --diff-remove: #e27e66; --diff-remove-wash: #2f1a17;
+  --quote-wash: #25282c; --quote-rule: #96742b; --item-border: #3e434a;
+  --notice-accent-wash: #2e2716; --notice-wax-wash: #311b17;
+  --hover: #25282c; /* ground-3; waxText on it 4.67:1 */
+  --ic-accent-text: #e3b449; --ic-wax-text: #e2855f; --ic-water-text: #9fc5ca;
+  --mark-frame-w: 3.2; --mark-inlay-w: 2.4;
+}
+:root[data-theme="light"] {
+  --ground: #eeeeeb; --ground-2: #fafaf8; --ground-3: #e4e4e0; --sidebar-ground: #e4e4e0;
+  --rule: #d5d5d1; --rule-strong: #7b7b76; --secondary-border: #c8c8c3;
+  --text: #212120; --text-dim: #5c5c58; --text-faint: #777772;
+  --accent: #8f6b14; /* bronze — identity value, borders, marks */ --accent-text: #7a5a0c; --accent-border: #8f6b14; --accent-dim: #b99a4a;
+  --accent-wash: #ede4cd; --accent-wash-soft: #f1ecdd;
+  --wax: #8a2d1c; --wax-text: #8a2d1c; --wax-wash: #eedad3;
+  --water: #6f9ea3; --water-text: #3b6b70; --water-wash: #dae6e5;
+  --neutral-wash: #f1ecdd; --milestone-prior: #b6b6b0; --milestone-connector: #d5d5d1;
+  --diff-add: #357040; --diff-add-wash: #dde8da; --diff-remove: #a83d2c; --diff-remove-wash: #f2dbd4;
+  --quote-wash: #f1ecdd; --quote-rule: #7b7b76; --item-border: #d5d5d1;
+  --notice-accent-wash: #ede4cd; --notice-wax-wash: #eedad3; --hover: #e4e4e0;
+  --ic-accent-text: #6b4e0b; --ic-wax-text: #71230f; --ic-water-text: #33595e;
+  --mark-frame-w: 3.5; --mark-inlay-w: 2.6;
+}
+/* Semantic reminder: green belongs to success/go and never brands anything;
+   success is quiet (shape + neutral tick on --neutral-wash); failure uses wax;
+   attention uses the accent; in-progress uses water. Semantic colors never borrow the accent. */
