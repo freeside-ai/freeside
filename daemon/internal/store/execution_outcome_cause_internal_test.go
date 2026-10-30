@@ -121,6 +121,7 @@ func TestExecutionOutcomeCauseMigration(t *testing.T) {
 	ctx := context.Background()
 	s, admission := seedAdmission(t, nil)
 	seedRawAdmission(t, ctx, s, admission)
+	rewindUsagePools(t, ctx, s.db)
 	for _, statement := range []string{
 		`ALTER TABLE task_lines DROP COLUMN provenance`,
 		`DELETE FROM schema_migrations WHERE name = '0111_task_line_provenance.sql'`,

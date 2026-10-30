@@ -147,7 +147,7 @@ func (f corpusFixture) seedAuthIdentity(t *testing.T) {
 	t.Helper()
 	f.mustWrite(t, func(tx *store.WriteTx) error {
 		return tx.RecordAuthIdentity(context.Background(), domain.AuthIdentity{
-			ID: "auth-1", Provider: "claude", AuthStoreMutationLease: true, MaxParallelExecutions: 1,
+			ID: "auth-1", Provider: "claude", AuthStoreMutationLease: true,
 			Interim: domain.InterimClientFacts{AuthStoreVolume: "provider-cred", RefreshStrategy: domain.RefreshOnDemand},
 		}, f.at)
 	})
@@ -986,6 +986,62 @@ func TestRunObservationCorpusValidBaselines(t *testing.T) {
 			t.Fatalf("valid hold-on-reserved baseline: %v", err)
 		}
 	})
+}
+
+// TestRunHoldNamesItsPoolInTheAPI: the projection carries a pool hold's pool to
+// the wire, and a hold stored under the retired reason still reads, with no pool.
+func TestRunHoldNamesItsPoolInTheAPI(t *testing.T) {
+	ctx := context.Background()
+	pool := domain.UsagePoolID("pool-shared")
+	for _, tc := range []struct {
+		name string
+		hold domain.RunHoldObservation
+		want string
+	}{
+		{
+			"usage_pool_exhausted",
+			domain.RunHoldObservation{Reason: domain.HoldUsagePoolExhausted, UsagePool: &pool},
+			`"usage_pool":"pool-shared"`,
+		},
+		{
+			"stored_identity_parallelism",
+			domain.RunHoldObservation{Reason: domain.HoldIdentityParallelism},
+			`"usage_pool":null`,
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			f := newCorpusFixture(t)
+			runID := domain.RunID("run-held")
+			invocation := domain.InvocationID("inv-held")
+			f.mustWrite(t, func(tx *store.WriteTx) error { return tx.PutRun(ctx, corpusRun(runID)) })
+			f.mustWriteInternal(t, func(tx *store.InternalTx) error {
+				_, _, err := tx.EnqueueOutbox(ctx, string(invocation), string(domain.ProductionInvocationRequestedKind),
+					productionIntentPayload(invocation, runID, corpusStageID(runID)))
+				return err
+			})
+			f.appendMilestone(t, domain.RunMilestone{
+				RunID: runID, Kind: domain.MilestoneRunSubmitted, InvocationID: &invocation, RecordedAt: f.at,
+			})
+			hold := tc.hold
+			hold.RunID, hold.InvocationID = runID, &invocation
+			hold.FirstObservedAt, hold.LastObservedAt = f.at, f.at.Add(time.Minute)
+			f.mustWrite(t, func(tx *store.WriteTx) error { return tx.RecordRunHold(ctx, hold) })
+			timeline, err := f.service.GetRunTimeline(ctx, runID)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if timeline.Hold == nil || timeline.Hold.Reason != hold.Reason {
+				t.Fatalf("hold = %#v, want %s", timeline.Hold, hold.Reason)
+			}
+			body, err := json.Marshal(timeline.Hold)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if !strings.Contains(string(body), tc.want) {
+				t.Fatalf("hold body = %s, want %s", body, tc.want)
+			}
+		})
+	}
 }
 
 // seedForeignRunAdmission records a valid admission for invocation, bound to a

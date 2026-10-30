@@ -200,7 +200,6 @@ func seedExecutionPublicationChain(
 	identity := domain.AuthIdentity{
 		ID: "auth-producing-0001", Provider: "claude",
 		AuthStoreMutationLease: true,
-		MaxParallelExecutions:  1,
 		Interim:                domain.InterimClientFacts{AuthStoreVolume: "provider-cred", RefreshStrategy: domain.RefreshOnDemand},
 	}
 	identityID := identity.ID

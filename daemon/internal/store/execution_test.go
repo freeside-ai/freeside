@@ -21,6 +21,8 @@ type admissionFixture struct {
 	run       domain.Run
 	identity  domain.AuthIdentity
 	admission domain.ExecutionAdmission
+	// poolLimit widens the identity's pool past a new pool's one slot.
+	poolLimit int
 }
 
 func newAdmissionFixture(t *testing.T, mutate func(*domain.ExecutionAdmissionInput)) admissionFixture {
@@ -36,8 +38,7 @@ func newAdmissionFixture(t *testing.T, mutate func(*domain.ExecutionAdmissionInp
 	}
 	identity := domain.AuthIdentity{
 		ID: "auth-1", Provider: "claude", AuthStoreMutationLease: true,
-		MaxParallelExecutions: 1,
-		Interim:               domain.InterimClientFacts{AuthStoreVolume: "provider-cred", RefreshStrategy: domain.RefreshOnDemand},
+		Interim: domain.InterimClientFacts{AuthStoreVolume: "provider-cred", RefreshStrategy: domain.RefreshOnDemand},
 	}
 	identityID := identity.ID
 	in := domain.ExecutionAdmissionInput{
@@ -136,6 +137,14 @@ func openWithFixture(t *testing.T, f admissionFixture, opts store.Options) *stor
 		if err := tx.PutRun(ctx, f.run); err != nil {
 			return err
 		}
+		if f.poolLimit > 0 {
+			if err := tx.RecordUsagePool(ctx, domain.UsagePool{
+				ID: f.identity.EffectiveUsagePool(), Provider: f.identity.Provider,
+				MaxParallelExecutions: f.poolLimit,
+			}, admissionEpoch); err != nil {
+				return err
+			}
+		}
 		return tx.RecordAuthIdentity(ctx, f.identity, admissionEpoch)
 	}); err != nil {
 		t.Fatalf("seed: %v", err)
@@ -202,16 +211,16 @@ func TestExecutionAdmissionRoundTrip(t *testing.T) {
 	}
 }
 
-func TestActiveIdentityExecutionCountRejectsUnknownIdentity(t *testing.T) {
+func TestActiveUsagePoolExecutionCountRejectsUnknownPool(t *testing.T) {
 	t.Parallel()
 	f := newAdmissionFixture(t, nil)
 	s := openWithFixture(t, f, store.Options{AdmissionFloors: attendedFloors()})
 	err := s.Read(context.Background(), func(tx *store.ReadTx) error {
-		_, err := tx.ActiveIdentityExecutionCount(context.Background(), "auth-unknown")
+		_, err := tx.ActiveUsagePoolExecutionCount(context.Background(), "pool-unknown")
 		return err
 	})
 	if !errors.Is(err, store.ErrNotFound) {
-		t.Fatalf("unknown identity count = %v, want %v", err, store.ErrNotFound)
+		t.Fatalf("unknown pool count = %v, want %v", err, store.ErrNotFound)
 	}
 }
 
@@ -822,7 +831,7 @@ func TestListUnattendedAdmissionsEvaluatesBackupHealthOnce(t *testing.T) {
 		in.InputDigest = "sha256:input-2"
 		in.Workspace = "ws-2"
 	})
-	first.identity.MaxParallelExecutions = 2
+	first.poolLimit = 2
 	first.run.Stages[0].Attempts = append(first.run.Stages[0].Attempts, domain.Attempt{
 		ID: "attempt-2", StageID: "stage-1", Number: 2, InvocationID: "inv-2",
 	})
@@ -1630,10 +1639,10 @@ func TestFailedOutcomeFreesDispatchedExecutionSlot(t *testing.T) {
 		var got int
 		if err := s.Read(ctx, func(tx *store.ReadTx) error {
 			var err error
-			got, err = tx.ActiveIdentityExecutionCount(ctx, "auth-1")
+			got, err = tx.ActiveUsagePoolExecutionCount(ctx, "identity:auth-1")
 			return err
 		}); err != nil {
-			t.Fatalf("ActiveIdentityExecutionCount: %v", err)
+			t.Fatalf("ActiveUsagePoolExecutionCount: %v", err)
 		}
 		return got
 	}

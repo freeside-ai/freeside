@@ -32,17 +32,17 @@ func submitParallelismRun(
 	return submitted
 }
 
-func activeIdentityExecutions(
-	t *testing.T, st *store.Store, identityID domain.AuthIdentityID,
+func activePoolExecutions(
+	t *testing.T, st *store.Store, pool domain.UsagePoolID,
 ) int {
 	t.Helper()
 	var active int
 	if err := st.Read(context.Background(), func(tx *store.ReadTx) error {
 		var err error
-		active, err = tx.ActiveIdentityExecutionCount(context.Background(), identityID)
+		active, err = tx.ActiveUsagePoolExecutionCount(context.Background(), pool)
 		return err
 	}); err != nil {
-		t.Fatalf("count active executions for %s: %v", identityID, err)
+		t.Fatalf("count active executions for %s: %v", pool, err)
 	}
 	return active
 }
@@ -68,15 +68,14 @@ func lockFixtureEngine(t *testing.T, f *workflowFixture, identity domain.AuthIde
 	f.engine = workflow
 }
 
-// TestIdentityParallelismIgnoresUnstartedAdmissions keeps a transient input
+// TestUsagePoolParallelismIgnoresUnstartedAdmissions keeps a transient input
 // materialization refusal from reserving a slot that no provider execution
 // ever received, so later healthy work can still start under a serial limit.
-func TestIdentityParallelismIgnoresUnstartedAdmissions(t *testing.T) {
+func TestUsagePoolParallelismIgnoresUnstartedAdmissions(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
 	identity := testIdentity
-	identity.MaxParallelExecutions = 1
-	f := openUnattendedFixtureWithIdentity(t, identity)
+	f := openUnattendedFixtureWithPoolLimit(t, identity, 1)
 	lockFixtureEngine(t, f, identity)
 	held := submitParallelismRun(t, f, "run-parallel-unstarted")
 	healthy := submitParallelismRun(t, f, "run-parallel-healthy")
@@ -107,20 +106,19 @@ func TestIdentityParallelismIgnoresUnstartedAdmissions(t *testing.T) {
 	if _, started := f.driver.StartSpec(healthy.InvocationID); !started {
 		t.Fatal("healthy invocation was blocked by an unstarted admission")
 	}
-	if got := activeIdentityExecutions(t, f.store, identity.ID); got != 1 {
+	if got := activePoolExecutions(t, f.store, identity.EffectiveUsagePool()); got != 1 {
 		t.Fatalf("active executions = %d, want only the healthy started invocation", got)
 	}
 }
 
-// TestIdentityParallelismRecoversDispatchReservation proves a daemon restart
+// TestUsagePoolParallelismRecoversDispatchReservation proves a daemon restart
 // after recording the pre-start reservation can reclaim it and invoke the
 // durable driver rather than leaving the identity permanently occupied.
-func TestIdentityParallelismRecoversDispatchReservation(t *testing.T) {
+func TestUsagePoolParallelismRecoversDispatchReservation(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
 	identity := testIdentity
-	identity.MaxParallelExecutions = 1
-	f := openUnattendedFixtureWithIdentity(t, identity)
+	f := openUnattendedFixtureWithPoolLimit(t, identity, 1)
 	lockFixtureEngine(t, f, identity)
 	run := submitParallelismRun(t, f, "run-parallel-recover-reservation")
 	f.driver.Script(run.InvocationID, fake.StageScript{
@@ -151,17 +149,16 @@ func TestIdentityParallelismRecoversDispatchReservation(t *testing.T) {
 	}
 }
 
-// TestIdentityParallelismKeepsReservationDuringConcurrentInputRetry proves
+// TestUsagePoolParallelismKeepsReservationDuringConcurrentInputRetry proves
 // that only the dispatcher that claimed an invocation's reservation enters
 // the driver. A concurrent reconcile therefore cannot release the first
 // caller's reservation while it is materializing inputs, and a later
 // same-identity invocation stays below the serial limit.
-func TestIdentityParallelismKeepsReservationDuringConcurrentInputRetry(t *testing.T) {
+func TestUsagePoolParallelismKeepsReservationDuringConcurrentInputRetry(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
 	identity := testIdentity
-	identity.MaxParallelExecutions = 1
-	f := openUnattendedFixtureWithIdentity(t, identity)
+	f := openUnattendedFixtureWithPoolLimit(t, identity, 1)
 	lockFixtureEngine(t, f, identity)
 	first := submitParallelismRun(t, f, "run-parallel-racing-retry")
 	later := submitParallelismRun(t, f, "run-parallel-racing-later")
@@ -219,7 +216,7 @@ func TestIdentityParallelismKeepsReservationDuringConcurrentInputRetry(t *testin
 	if started != 1 {
 		t.Fatalf("starts after concurrent retry = %d, want exactly one", started)
 	}
-	if got := activeIdentityExecutions(t, f.store, identity.ID); got != 1 {
+	if got := activePoolExecutions(t, f.store, identity.EffectiveUsagePool()); got != 1 {
 		t.Fatalf("active executions after reservation release = %d, want 1", got)
 	}
 }
@@ -251,15 +248,14 @@ func (d *blockingOnceRefusingDriver) Start(
 	return fmt.Errorf("materialize input: %w", exec.ErrInputUnavailable)
 }
 
-// TestIdentityParallelismRechecksReplayedAdmissionsAfterLimitReduction proves
+// TestUsagePoolParallelismRechecksReplayedAdmissionsAfterLimitReduction proves
 // that durable pre-start admissions do not let a restored lower limit launch
 // more than one replay in the same pass.
-func TestIdentityParallelismRechecksReplayedAdmissionsAfterLimitReduction(t *testing.T) {
+func TestUsagePoolParallelismRechecksReplayedAdmissionsAfterLimitReduction(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
 	identity := testIdentity
-	identity.MaxParallelExecutions = 2
-	f := openUnattendedFixtureWithIdentity(t, identity)
+	f := openUnattendedFixtureWithPoolLimit(t, identity, 2)
 	runs := []engine.ProductionRun{
 		submitParallelismRun(t, f, "run-parallel-replay-one"),
 		submitParallelismRun(t, f, "run-parallel-replay-two"),
@@ -281,17 +277,17 @@ func TestIdentityParallelismRechecksReplayedAdmissionsAfterLimitReduction(t *tes
 	if result, err := refusing.Reconcile(ctx); err != nil || result.InvocationsStarted != 0 {
 		t.Fatalf("pre-reduction reconcile = %#v, %v", result, err)
 	}
-	lower := identity
-	lower.MaxParallelExecutions = 1
 	if err := f.store.WriteInternal(ctx, func(tx *store.InternalTx) error {
-		return tx.RecordAuthIdentity(ctx, lower, admittedAt.Add(time.Hour))
+		return tx.RecordUsagePool(ctx, domain.UsagePool{
+			ID: identity.EffectiveUsagePool(), Provider: identity.Provider, MaxParallelExecutions: 1,
+		}, admittedAt.Add(time.Hour))
 	}); err != nil {
-		t.Fatalf("restore lower identity limit: %v", err)
+		t.Fatalf("restore lower pool limit: %v", err)
 	}
 	if result, err := f.engine.Reconcile(ctx); err != nil || result.InvocationsStarted != 1 {
 		t.Fatalf("replay under restored limit = %#v, %v", result, err)
 	}
-	if got := activeIdentityExecutions(t, f.store, identity.ID); got != 1 {
+	if got := activePoolExecutions(t, f.store, identity.EffectiveUsagePool()); got != 1 {
 		t.Fatalf("active executions after replay = %d, want 1", got)
 	}
 	started := 0
@@ -305,18 +301,17 @@ func TestIdentityParallelismRechecksReplayedAdmissionsAfterLimitReduction(t *tes
 	}
 }
 
-// TestIdentityParallelismEnforcesLimitsAndCompletionRelease exercises the
+// TestUsagePoolParallelismEnforcesLimitsAndCompletionRelease exercises the
 // production dispatcher with the permanent fake at both a serial limit and a
 // wider experimentally established limit. The N+1th intent stays pending with
 // a typed scheduling hold until an export terminal releases one derived slot.
-func TestIdentityParallelismEnforcesLimitsAndCompletionRelease(t *testing.T) {
+func TestUsagePoolParallelismEnforcesLimitsAndCompletionRelease(t *testing.T) {
 	for _, limit := range []int{1, 2} {
 		t.Run(fmt.Sprintf("limit_%d", limit), func(t *testing.T) {
 			t.Parallel()
 			ctx := context.Background()
 			identity := testIdentity
-			identity.MaxParallelExecutions = limit
-			f := openUnattendedFixtureWithIdentity(t, identity)
+			f := openUnattendedFixtureWithPoolLimit(t, identity, limit)
 
 			runs := make([]engine.ProductionRun, limit+1)
 			for i := range runs {
@@ -334,7 +329,7 @@ func TestIdentityParallelismEnforcesLimitsAndCompletionRelease(t *testing.T) {
 			if result.InvocationsStarted != limit {
 				t.Fatalf("initial starts = %d, want limit %d", result.InvocationsStarted, limit)
 			}
-			if got := activeIdentityExecutions(t, f.store, identity.ID); got != limit {
+			if got := activePoolExecutions(t, f.store, identity.EffectiveUsagePool()); got != limit {
 				t.Fatalf("active executions = %d, want %d", got, limit)
 			}
 			held := runs[len(runs)-1]
@@ -342,9 +337,7 @@ func TestIdentityParallelismEnforcesLimitsAndCompletionRelease(t *testing.T) {
 				t.Fatalf("invocation %s started past limit %d", held.InvocationID, limit)
 			}
 			observation := observeProductionRun(t, f.store, held.Run.ID)
-			if observation.Hold == nil || observation.Hold.Reason != domain.HoldIdentityParallelism {
-				t.Fatalf("held observation = %#v, want identity_parallelism", observation.Hold)
-			}
+			requireUsagePoolHold(t, observation.Hold, identity.EffectiveUsagePool())
 
 			var admission domain.ExecutionAdmission
 			if err := f.store.Read(ctx, func(tx *store.ReadTx) error {
@@ -355,7 +348,7 @@ func TestIdentityParallelismEnforcesLimitsAndCompletionRelease(t *testing.T) {
 				t.Fatalf("read admitted execution: %v", err)
 			}
 			recordParallelismCompletion(t, f.store, admission)
-			if got := activeIdentityExecutions(t, f.store, identity.ID); got != limit-1 {
+			if got := activePoolExecutions(t, f.store, identity.EffectiveUsagePool()); got != limit-1 {
 				t.Fatalf("active executions after completion = %d, want %d", got, limit-1)
 			}
 
@@ -376,14 +369,13 @@ func TestIdentityParallelismEnforcesLimitsAndCompletionRelease(t *testing.T) {
 	}
 }
 
-// TestIdentityParallelismFailureRelease proves the driver's non-export
+// TestUsagePoolParallelismFailureRelease proves the driver's non-export
 // terminal authority also releases capacity without decrement bookkeeping.
-func TestIdentityParallelismFailureRelease(t *testing.T) {
+func TestUsagePoolParallelismFailureRelease(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
 	identity := testIdentity
-	identity.MaxParallelExecutions = 1
-	f := openUnattendedFixtureWithIdentity(t, identity)
+	f := openUnattendedFixtureWithPoolLimit(t, identity, 1)
 	failed := submitParallelismRun(t, f, "run-parallel-failed")
 	held := submitParallelismRun(t, f, "run-parallel-after-failure")
 	f.driver.Script(failed.InvocationID, fake.StageScript{
@@ -416,7 +408,7 @@ func TestIdentityParallelismFailureRelease(t *testing.T) {
 	}); err != nil {
 		t.Fatalf("record failed execution outcome: %v", err)
 	}
-	if got := activeIdentityExecutions(t, f.store, identity.ID); got != 0 {
+	if got := activePoolExecutions(t, f.store, identity.EffectiveUsagePool()); got != 0 {
 		t.Fatalf("active executions after failure = %d, want 0", got)
 	}
 	if resumed, err := f.engine.Reconcile(ctx); err != nil || resumed.InvocationsStarted != 1 {
@@ -427,15 +419,14 @@ func TestIdentityParallelismFailureRelease(t *testing.T) {
 	}
 }
 
-// TestIdentityParallelismIsScopedPerIdentity proves an occupied identity does
+// TestUsagePoolParallelismIsScopedPerIdentity proves an occupied identity does
 // not consume another identity's capacity. The second engine models a distinct
 // configured provider identity over the same durable scheduler state.
-func TestIdentityParallelismIsScopedPerIdentity(t *testing.T) {
+func TestUsagePoolParallelismIsScopedPerIdentity(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
 	firstIdentity := testIdentity
-	firstIdentity.MaxParallelExecutions = 1
-	f := openUnattendedFixtureWithIdentity(t, firstIdentity)
+	f := openUnattendedFixtureWithPoolLimit(t, firstIdentity, 1)
 	first := submitParallelismRun(t, f, "run-parallel-identity-a")
 	f.driver.Script(first.InvocationID, fake.StageScript{
 		Outcome: fake.OutcomeComplete, RunningInspects: 20,
@@ -468,8 +459,73 @@ func TestIdentityParallelismIsScopedPerIdentity(t *testing.T) {
 	if result, err := other.Reconcile(ctx); err != nil || result.InvocationsStarted != 1 {
 		t.Fatalf("start identity B beside A = %#v, %v", result, err)
 	}
-	if got := activeIdentityExecutions(t, f.store, secondIdentity.ID); got != 1 {
+	if got := activePoolExecutions(t, f.store, secondIdentity.EffectiveUsagePool()); got != 1 {
 		t.Fatalf("identity B active executions = %d, want 1", got)
+	}
+}
+
+// TestUsagePoolSharedByTwoIdentities proves the limit is the pool's: with both
+// slots taken, a launch waits under the pool hold whichever identity it runs
+// on, while an identity on another pool is untouched. The first identity's
+// launch keeps its slot though the second engine admitted the others.
+func TestUsagePoolSharedByTwoIdentities(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	firstIdentity := testIdentity
+	firstIdentity.UsagePool = "pool-shared"
+	secondIdentity := firstIdentity
+	secondIdentity.ID = "auth-claude-secondary"
+	secondIdentity.Interim.AuthStoreVolume = "claude-secondary-credentials"
+	pool := firstIdentity.EffectiveUsagePool()
+
+	f := openUnattendedFixtureWithPoolLimit(t, firstIdentity, 2)
+	if err := f.store.WriteInternal(ctx, func(tx *store.InternalTx) error {
+		return tx.RecordAuthIdentity(ctx, secondIdentity, admittedAt)
+	}); err != nil {
+		t.Fatalf("record second identity: %v", err)
+	}
+	second, err := engine.New(f.store, f.signet, f.driver,
+		unattendedProductionOptionsForIdentity(t, secondIdentity.ID)...)
+	if err != nil {
+		t.Fatalf("compose second-identity engine: %v", err)
+	}
+	script := func(run engine.ProductionRun) engine.ProductionRun {
+		f.driver.Script(run.InvocationID, fake.StageScript{
+			Outcome: fake.OutcomeComplete, RunningInspects: 20,
+			Result: exec.StageResult{Summary: "shared pool fixture"},
+		})
+		return run
+	}
+
+	script(submitParallelismRun(t, f, "run-pool-first"))
+	if result, err := f.engine.Reconcile(ctx); err != nil || result.InvocationsStarted != 1 {
+		t.Fatalf("start on the first identity = %#v, %v", result, err)
+	}
+	script(submitParallelismRun(t, f, "run-pool-second"))
+	if result, err := second.Reconcile(ctx); err != nil || result.InvocationsStarted != 1 {
+		t.Fatalf("start on the second identity = %#v, %v", result, err)
+	}
+	if got := activePoolExecutions(t, f.store, pool); got != 2 {
+		t.Fatalf("active executions = %d, want both identities' launches", got)
+	}
+
+	for name, workflow := range map[string]*engine.Engine{"first": f.engine, "second": second} {
+		held := script(submitParallelismRun(t, f, "run-pool-held-"+name))
+		if result, err := workflow.Reconcile(ctx); err != nil || result.InvocationsStarted != 0 {
+			t.Fatalf("%s identity past the limit = %#v, %v", name, result, err)
+		}
+		if _, started := f.driver.StartSpec(held.InvocationID); started {
+			t.Fatalf("%s identity started past the pool limit", name)
+		}
+		requireUsagePoolHold(t, observeProductionRun(t, f.store, held.Run.ID).Hold, pool)
+	}
+}
+
+func requireUsagePoolHold(t *testing.T, hold *domain.RunHoldObservation, pool domain.UsagePoolID) {
+	t.Helper()
+	if hold == nil || hold.Reason != domain.HoldUsagePoolExhausted ||
+		hold.UsagePool == nil || *hold.UsagePool != pool {
+		t.Fatalf("hold = %#v, want usage_pool_exhausted naming %s", hold, pool)
 	}
 }
 

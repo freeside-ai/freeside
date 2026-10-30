@@ -218,9 +218,13 @@ const (
 	// HoldBaseAdvanced: the target base advanced after admission; the run
 	// must be rerun against the current base.
 	HoldBaseAdvanced RunHoldReason = "base_advanced"
-	// HoldIdentityParallelism: the selected provider identity is already
-	// running its experimentally established maximum number of executions.
+	// HoldIdentityParallelism: the selected provider identity was running its
+	// maximum number of executions. Nothing records it any more; a stored row
+	// from before limits moved to usage pools stays readable.
 	HoldIdentityParallelism RunHoldReason = "identity_parallelism"
+	// HoldUsagePoolExhausted: every slot of the launch's usage pool is held.
+	// The hold names the pool, because several identities can fill one pool.
+	HoldUsagePoolExhausted RunHoldReason = "usage_pool_exhausted"
 	// HoldImageUpkeepPending: the run waits on project-image upkeep (plan
 	// §5.7, Project-image upkeep): a rebuild, an adoption proposal, or a
 	// maintenance task. The hold names which in ImageUpkeepHold.
@@ -246,6 +250,7 @@ var AllRunHoldReasons = []RunHoldReason{
 	HoldTrustBlocked,
 	HoldBaseAdvanced,
 	HoldIdentityParallelism,
+	HoldUsagePoolExhausted,
 	HoldImageUpkeepPending,
 }
 
@@ -257,7 +262,7 @@ func (r RunHoldReason) valid() bool {
 		HoldProviderAuthorityUnavailable, HoldAttendedModeActive,
 		HoldPublicationEnvironment, HoldExternalConflict, HoldRecipeRevoked,
 		HoldVerificationFindings, HoldTrustBlocked, HoldBaseAdvanced,
-		HoldIdentityParallelism, HoldImageUpkeepPending:
+		HoldIdentityParallelism, HoldUsagePoolExhausted, HoldImageUpkeepPending:
 		return true
 	default:
 		return false
@@ -688,6 +693,10 @@ type RunHoldObservation struct {
 	// present exactly beside that reason (nil renders explicit null). The
 	// reason is new with the field, so no older row lacks it.
 	ImageUpkeep *ImageUpkeepHold `json:"image_upkeep"`
+	// UsagePool names the full pool of a usage_pool_exhausted hold; it is
+	// present exactly beside that reason (nil renders explicit null). The
+	// reason is new with the field, so no older row lacks it.
+	UsagePool *UsagePoolID `json:"usage_pool"`
 	// FirstObservedAt is the UTC instant the current cause was first
 	// observed; LastObservedAt the most recent.
 	FirstObservedAt time.Time `json:"first_observed_at"`
@@ -723,6 +732,13 @@ func (h RunHoldObservation) Validate() error {
 		if err := h.ImageUpkeep.Validate(); err != nil {
 			return fmt.Errorf("run hold observation %s: %w", h.RunID, err)
 		}
+	}
+	if (h.UsagePool != nil) != (h.Reason == HoldUsagePoolExhausted) {
+		return fmt.Errorf("run hold observation %s usage_pool present=%t beside reason %q: %w",
+			h.RunID, h.UsagePool != nil, h.Reason, ErrHoldDetailMismatch)
+	}
+	if h.UsagePool != nil && *h.UsagePool == "" {
+		return fmt.Errorf("run hold observation %s usage_pool: %w", h.RunID, ErrEmptyID)
 	}
 	for name, ts := range map[string]time.Time{
 		"first_observed_at": h.FirstObservedAt,

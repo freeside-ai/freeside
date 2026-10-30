@@ -169,7 +169,7 @@ func EnrollClaudeSetupToken(
 	digest := domain.Digest(contentaddr.Sum(cfg.Token.value))
 	identity := domain.AuthIdentity{
 		ID: cfg.AuthIdentityID, Provider: "claude", AccountBinding: cfg.AccountBinding,
-		AuthStoreMutationLease: true, MaxParallelExecutions: 1, Enabled: true,
+		AuthStoreMutationLease: true, Enabled: true,
 		CostOwner: cfg.CostOwner,
 		// The interim facts the flag path reads today (-auth-identity with
 		// -auth-volume), so the daemon runs this identity unchanged until

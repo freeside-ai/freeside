@@ -112,7 +112,7 @@ func TestReleasedImportKeepsCurrentPolicyAcrossBackendChange(t *testing.T) {
 	}
 	recordProof(oldDigest)
 	identity := domain.AuthIdentity{
-		ID: "released-auth", Provider: "claude", AuthStoreMutationLease: true, MaxParallelExecutions: 1,
+		ID: "released-auth", Provider: "claude", AuthStoreMutationLease: true,
 		Interim: domain.InterimClientFacts{AuthStoreVolume: "test-volume", RefreshStrategy: domain.RefreshOnDemand},
 	}
 	run := production.Run

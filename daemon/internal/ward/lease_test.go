@@ -151,7 +151,7 @@ func (l *fakeLeaser) GetIdentity(
 		}
 	}
 	return domain.AuthIdentity{
-		ID: id, Provider: "openai", AuthStoreMutationLease: true, MaxParallelExecutions: 1,
+		ID: id, Provider: "openai", AuthStoreMutationLease: true,
 		Interim: domain.InterimClientFacts{AuthStoreVolume: store, RefreshStrategy: domain.RefreshOnDemand, SupportsReadOnlyAuthSnapshot: true},
 	}, nil
 }

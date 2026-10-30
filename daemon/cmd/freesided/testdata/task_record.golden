@@ -274,6 +274,7 @@
               "reason": "verification_findings",
               "detail": null,
               "image_upkeep": null,
+              "usage_pool": null,
               "first_observed_at": "2026-09-01T14:10:00Z",
               "last_observed_at": "2026-09-01T14:20:00Z"
             },
@@ -476,6 +477,7 @@
         "reason": "verification_findings",
         "detail": null,
         "image_upkeep": null,
+        "usage_pool": null,
         "first_observed_at": "2026-09-01T14:10:00Z",
         "last_observed_at": "2026-09-01T14:20:00Z"
       },

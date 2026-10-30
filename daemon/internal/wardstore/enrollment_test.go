@@ -236,7 +236,7 @@ func TestCodexAuthAddRefusesASecondIdentityForOneAccount(t *testing.T) {
 	if err := rig.st.WriteInternal(ctx, func(tx *store.InternalTx) error {
 		return tx.RecordAuthIdentity(ctx, domain.AuthIdentity{
 			ID: "codex-other", Provider: "openai", AccountBinding: "acct-fixture-0001",
-			AuthStoreMutationLease: true, MaxParallelExecutions: 1, Enabled: true, CostOwner: "operator",
+			AuthStoreMutationLease: true, Enabled: true, CostOwner: "operator",
 		}, enrollmentTestAt)
 	}); err != nil {
 		t.Fatal(err)
@@ -319,7 +319,7 @@ func TestClaudeEnrollmentBeginEnforcesIdentityBindings(t *testing.T) {
 		"account taken by another identity": {
 			seed: &domain.AuthIdentity{
 				ID: "claude-other", Provider: "claude", AccountBinding: "acct-fixture-0002",
-				AuthStoreMutationLease: true, MaxParallelExecutions: 1, Enabled: true, CostOwner: "operator",
+				AuthStoreMutationLease: true, Enabled: true, CostOwner: "operator",
 			},
 			want: domain.ErrAccountBindingTaken,
 		},
@@ -400,7 +400,7 @@ func TestClaudeEnrollmentBeginBindsAnUnboundInterimIdentity(t *testing.T) {
 	ctx := context.Background()
 	st, adapters := openEnrollmentStore(t)
 	stored, _ := claudeEnrollmentFixture("claude-main", "")
-	stored.CostOwner, stored.Enabled, stored.MaxParallelExecutions = "", false, 3
+	stored.CostOwner, stored.Enabled = "", false
 	if err := st.WriteInternal(ctx, func(tx *store.InternalTx) error {
 		return tx.RecordAuthIdentity(ctx, stored, enrollmentTestAt)
 	}); err != nil {
@@ -431,7 +431,7 @@ func TestClaudeEnrollmentBeginBindsAnUnboundInterimIdentity(t *testing.T) {
 func TestClaudeEnrollmentBeginEnablesAnIdentityWhenAsked(t *testing.T) {
 	ctx := context.Background()
 	stored, _ := claudeEnrollmentFixture("claude-main", "")
-	stored.CostOwner, stored.Enabled, stored.MaxParallelExecutions = "", false, 3
+	stored.CostOwner, stored.Enabled = "", false
 	bound := stored
 	bound.AccountBinding, bound.CostOwner, bound.Enabled = "acct-fixture-0002", "operator", true
 	for name, tc := range map[string]struct {
@@ -448,7 +448,7 @@ func TestClaudeEnrollmentBeginEnablesAnIdentityWhenAsked(t *testing.T) {
 				if tc.accountHolder {
 					if err := tx.RecordAuthIdentity(ctx, domain.AuthIdentity{
 						ID: "claude-other", Provider: "claude", AccountBinding: "acct-fixture-0002",
-						AuthStoreMutationLease: true, MaxParallelExecutions: 1, Enabled: true, CostOwner: "operator",
+						AuthStoreMutationLease: true, Enabled: true, CostOwner: "operator",
 					}, enrollmentTestAt); err != nil {
 						return err
 					}
@@ -547,7 +547,7 @@ func claudeEnrollmentFixture(id domain.AuthIdentityID, account string) (domain.A
 	enrollmentID := domain.ClientEnrollmentID(string(id) + "/claude_code")
 	return domain.AuthIdentity{
 			ID: id, Provider: "claude", AccountBinding: account, AuthStoreMutationLease: true,
-			MaxParallelExecutions: 1, Enabled: true, CostOwner: "operator",
+			Enabled: true, CostOwner: "operator",
 			Interim: domain.InterimClientFacts{AuthStoreVolume: "claude-main-auth", RefreshStrategy: domain.RefreshOnDemand},
 		}, ward.EnrollmentBootstrap{
 			Enrollment: domain.ClientEnrollment{

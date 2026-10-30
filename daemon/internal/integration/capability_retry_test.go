@@ -84,7 +84,7 @@ func openCapabilityRetryFixture(
 	t *testing.T, root string, seed bool, enforceable ...domain.EgressProfile,
 ) *workflowFixture {
 	t.Helper()
-	return openUnattendedFixtureWith(t, root, seed, testIdentity,
+	return openUnattendedFixtureWith(t, root, seed, testIdentity, testPoolLimit,
 		func(env *engine.AdmissionEnvironment) { env.EnforceableEgressProfiles = enforceable },
 		func(st *store.Store, blobs *signet.BlobStore) []engine.Option {
 			fetcher, err := specify.NewFetcher(st, blobs, nil)

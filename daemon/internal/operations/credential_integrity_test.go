@@ -75,7 +75,7 @@ func newIntegrityDoctor(t *testing.T) *integrityDoctor {
 	digest := domain.Digest(contentaddr.Sum([]byte("token")))
 	identity := domain.AuthIdentity{
 		ID: integrityIdentity, Provider: "claude", AccountBinding: integrityAccount,
-		AuthStoreMutationLease: true, MaxParallelExecutions: 1, Enabled: true, CostOwner: "operator",
+		AuthStoreMutationLease: true, Enabled: true, CostOwner: "operator",
 		Interim: domain.InterimClientFacts{
 			AuthStoreVolume: "claude-main-auth", RefreshStrategy: domain.RefreshOnDemand,
 		},

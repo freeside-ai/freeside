@@ -50,7 +50,7 @@ func usageEngineFixture(t *testing.T, bound bool) (*Engine, domain.Run, domain.A
 	identity := domain.AuthIdentity{
 		ID: "auth-usage-1", Provider: "openai", AccountBinding: "acct-usage-1",
 		UsagePool: "pool-usage-1", AuthStoreMutationLease: true,
-		MaxParallelExecutions: 1, Enabled: true,
+		Enabled: true,
 	}
 	enrollment := domain.ClientEnrollment{
 		ID: "enrollment-usage-1", AuthIdentityID: identity.ID,

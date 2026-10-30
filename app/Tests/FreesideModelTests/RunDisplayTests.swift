@@ -201,7 +201,7 @@ import Testing
 
     @Test(arguments: [
         Components.Schemas.RunHoldReason.operation_stopped, .admission_policy_refused,
-        .input_unavailable, .identity_parallelism,
+        .input_unavailable, .identity_parallelism, .usage_pool_exhausted,
     ])
     func preImplementationHoldsKeepImplementationCurrent(hold: Components.Schemas.RunHoldReason) {
         var run = RunFixtures.defaultRuns()[0].run

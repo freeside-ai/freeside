@@ -27,7 +27,7 @@ func codexAuthRenewalFixture(t *testing.T) (CodexAuthRenewalConfig, *fakeLeaser,
 		t.Fatal(err)
 	}
 	leaser.identity = domain.AuthIdentity{
-		ID: enrollment.AuthIdentityID, Provider: "openai", Enabled: false, AuthStoreMutationLease: true, MaxParallelExecutions: 1,
+		ID: enrollment.AuthIdentityID, Provider: "openai", Enabled: false, AuthStoreMutationLease: true,
 		Interim: domain.InterimClientFacts{AuthStoreVolume: resolved, RefreshStrategy: domain.RefreshOnDemand, SupportsReadOnlyAuthSnapshot: true},
 	}
 	state := &fakeCodexAuthState{}

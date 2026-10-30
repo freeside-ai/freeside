@@ -277,7 +277,7 @@ func (r *judgmentCredentialRig) enroll(
 	enrollment.AuthIdentityID, enrollment.AccountBinding = id, string(id)+"@example.test"
 	identity := domain.AuthIdentity{
 		ID: id, Provider: "claude", AccountBinding: enrollment.AccountBinding, AuthStoreMutationLease: true,
-		MaxParallelExecutions: 1, Enabled: true, CostOwner: "operator",
+		Enabled: true, CostOwner: "operator",
 		Interim: domain.InterimClientFacts{
 			AuthStoreVolume: volume, RefreshStrategy: domain.RefreshOnDemand, SupportsReadOnlyAuthSnapshot: true,
 		},

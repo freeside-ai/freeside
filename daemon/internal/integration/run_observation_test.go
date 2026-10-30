@@ -153,10 +153,10 @@ func TestApprovedImplementationRemainsServedWhenObservationLagsExport(t *testing
 		}); err != nil {
 			return err
 		}
-		return tx.RecordAuthIdentity(ctx, domain.AuthIdentity{
-			ID: "auth-785", Provider: "codex", AuthStoreMutationLease: true, MaxParallelExecutions: 64,
+		return storetest.RecordIdentityOnPool(ctx, &tx.InternalTx, domain.AuthIdentity{
+			ID: "auth-785", Provider: "codex", AuthStoreMutationLease: true,
 			Interim: domain.InterimClientFacts{AuthStoreVolume: "provider-credentials", RefreshStrategy: domain.RefreshOnDemand},
-		}, now)
+		}, testPoolLimit, now)
 	}); err != nil {
 		t.Fatal(err)
 	}
@@ -1159,7 +1159,7 @@ func TestRunObservationShowsInTransactionBlockOnEveryLane(t *testing.T) {
 		armed atomic.Bool
 		f     *workflowFixture
 	)
-	f = openUnattendedFixtureWith(t, t.TempDir(), true, testIdentity,
+	f = openUnattendedFixtureWith(t, t.TempDir(), true, testIdentity, testPoolLimit,
 		func(e *engine.AdmissionEnvironment) { env = *e },
 		func(*store.Store, *signet.BlobStore) []engine.Option {
 			backend := stoppingBackend{

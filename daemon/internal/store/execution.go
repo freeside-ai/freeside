@@ -57,13 +57,14 @@ FROM execution_admissions WHERE run_id = ? ORDER BY rowid`
 SELECT invocation_id, id, run_id, stage_id, attempt_id, operating_mode, auth_identity_id,
        agent_digest, enrollment_id, enrollment_generation, admitted_at, body
 FROM execution_admissions ORDER BY rowid`
-	listActiveIdentityExecutionCandidatesSQL = `
+	// The indexed auth_identity_id deliberately plays no part: the count
+	// attributes each admission by its authenticated body (#731).
+	listSlotCandidateExecutionsSQL = `
 SELECT admission.invocation_id
 FROM execution_admissions AS admission
 JOIN outbox AS dispatch
     ON dispatch.idempotency_key = admission.invocation_id
-WHERE admission.auth_identity_id = ?
-  AND admission.invocation_id <> ?
+WHERE admission.invocation_id <> ?
   AND dispatch.status IN ('dispatching', 'dispatched')`
 
 	recordExecutionExportSQL = `
@@ -197,7 +198,7 @@ func (tx *WriteTx) RecordExecutionAdmission(ctx context.Context, admission domai
 	if err := tx.registerAdmittedProject(ctx, run.ProjectID, admission.Base, true); err != nil {
 		return fmt.Errorf("record execution admission %q: %w", admission.InvocationID, err)
 	}
-	if err := tx.RequireIdentityExecutionCapacity(ctx, admission); err != nil {
+	if err := tx.RequireUsagePoolCapacity(ctx, admission); err != nil {
 		return fmt.Errorf("record execution admission %q: %w", admission.InvocationID, err)
 	}
 	var identity any
@@ -240,84 +241,6 @@ func (tx *WriteTx) RecordExecutionAdmission(ctx context.Context, admission domai
 		InvocationID: &invocation, RecordedAt: admission.AdmittedAt,
 	}); err != nil {
 		return fmt.Errorf("record execution admission %q: %w", admission.InvocationID, err)
-	}
-	return nil
-}
-
-// ActiveIdentityExecutionCount derives current inference occupancy from the
-// write-once execution record: an admission is active after its durable
-// pre-start reservation or driver-accepted handoff, and until either mutually
-// exclusive terminal row exists. There is no counter to leak across a crash.
-func (tx *ReadTx) ActiveIdentityExecutionCount(
-	ctx context.Context, identityID domain.AuthIdentityID,
-) (int, error) {
-	if _, err := tx.GetAuthIdentity(ctx, identityID); err != nil {
-		return 0, fmt.Errorf("count active executions for auth identity %q: %w", identityID, err)
-	}
-	return tx.activeIdentityExecutionCount(ctx, identityID, "")
-}
-
-func (tx *ReadTx) activeIdentityExecutionCount(
-	ctx context.Context, identityID domain.AuthIdentityID, exclude domain.InvocationID,
-) (int, error) {
-	rows, err := tx.tx.QueryContext(ctx, listActiveIdentityExecutionCandidatesSQL, identityID, exclude)
-	if err != nil {
-		return 0, fmt.Errorf("list active executions for auth identity %q: %w", identityID, err)
-	}
-	defer func() { _ = rows.Close() }()
-	count := 0
-	for rows.Next() {
-		var invocationID domain.InvocationID
-		if err := rows.Scan(&invocationID); err != nil {
-			return 0, fmt.Errorf("list active executions for auth identity %q: %w", identityID, err)
-		}
-		if _, err := tx.GetExecutionExportRecord(ctx, invocationID); err == nil {
-			continue
-		} else if !errors.Is(err, ErrNotFound) {
-			return 0, fmt.Errorf("validate execution export %q: %w", invocationID, err)
-		}
-		if _, err := tx.GetExecutionOutcomeRecord(ctx, invocationID); err == nil {
-			continue
-		} else if !errors.Is(err, ErrNotFound) {
-			return 0, fmt.Errorf("validate execution outcome %q: %w", invocationID, err)
-		}
-		count++
-	}
-	if err := rows.Err(); err != nil {
-		return 0, fmt.Errorf("list active executions for auth identity %q: %w", identityID, err)
-	}
-	return count, nil
-}
-
-// RequireIdentityExecutionCapacity is the transactional scheduling gate. The
-// store begins writes with SQLite's immediate lock, so this derived count and
-// the admission insert serialize as one decision across concurrent callers.
-// A durable pre-start reservation or driver-accepted handoff counts, closing
-// the cross-daemon interval between admission and Start. A synchronous driver
-// refusal releases that reservation, so an input-materialization refusal does
-// not consume an execution slot. A replay excludes its own invocation so the
-// write-once convergence contract remains intact. Provider-free clean
-// verification carries no identity and is outside this limit by definition.
-func (tx *ReadTx) RequireIdentityExecutionCapacity(
-	ctx context.Context, admission domain.ExecutionAdmission,
-) error {
-	if admission.AuthIdentityID == nil {
-		return nil
-	}
-	identity, err := tx.GetAuthIdentity(ctx, *admission.AuthIdentityID)
-	if err != nil {
-		return fmt.Errorf("load auth identity %q parallelism: %w", *admission.AuthIdentityID, err)
-	}
-	active, err := tx.activeIdentityExecutionCount(
-		ctx, identity.ID, admission.InvocationID,
-	)
-	if err != nil {
-		return err
-	}
-	if active >= identity.MaxParallelExecutions {
-		return fmt.Errorf("auth identity %q has %d active executions at limit %d: %w",
-			identity.ID, active, identity.MaxParallelExecutions,
-			domain.ErrIdentityParallelismExhausted)
 	}
 	return nil
 }
@@ -387,8 +310,9 @@ func (tx *ReadTx) getExecutionAdmissionForWrite(
 
 // GetExecutionAdmissionRecord authenticates the immutable recorded admission
 // without re-applying mutable current admission policy. It is for terminal
-// history and backup closure only; any path that may still start, recover, or
-// accept work must use GetExecutionAdmission.
+// history, backup closure, and the usage pool count, which needs only who holds
+// a slot; any path that may still start, recover, or accept work must use
+// GetExecutionAdmission.
 func (tx *ReadTx) GetExecutionAdmissionRecord(
 	ctx context.Context, id domain.InvocationID,
 ) (domain.ExecutionAdmission, error) {

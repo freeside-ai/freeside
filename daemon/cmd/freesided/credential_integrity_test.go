@@ -47,7 +47,7 @@ func enrollIntegrityFixture(
 	binding := string(id) + "-" + integrityAccountBinding
 	identity := domain.AuthIdentity{
 		ID: id, Provider: "claude", AccountBinding: binding, AuthStoreMutationLease: true,
-		MaxParallelExecutions: 1, Enabled: true, CostOwner: "operator",
+		Enabled: true, CostOwner: "operator",
 		Interim: domain.InterimClientFacts{
 			AuthStoreVolume: locator, RefreshStrategy: domain.RefreshOnDemand, SupportsReadOnlyAuthSnapshot: true,
 		},

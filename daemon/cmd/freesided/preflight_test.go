@@ -1624,18 +1624,18 @@ func TestProductionPreflightDatabaseChecksAClaudeReviewIdentity(t *testing.T) {
 		ok       bool
 	}{
 		"leased Claude identity": {&domain.AuthIdentity{
-			ID: "review", Provider: "claude", AuthStoreMutationLease: true, MaxParallelExecutions: 1, Enabled: true,
+			ID: "review", Provider: "claude", AuthStoreMutationLease: true, Enabled: true,
 			Interim: domain.InterimClientFacts{AuthStoreVolume: "claude-review-auth", RefreshStrategy: domain.RefreshOnDemand},
 		}, true},
 		"Codex identity": {&domain.AuthIdentity{
-			ID: "review", Provider: "openai", AuthStoreMutationLease: true, MaxParallelExecutions: 1, Enabled: true,
+			ID: "review", Provider: "openai", AuthStoreMutationLease: true, Enabled: true,
 			Interim: domain.InterimClientFacts{
 				AuthStoreVolume: "/private/auth.json", RefreshStrategy: domain.RefreshOnDemand,
 				SupportsReadOnlyAuthSnapshot: true,
 			},
 		}, false},
 		"unleased Claude identity": {&domain.AuthIdentity{
-			ID: "review", Provider: "claude", MaxParallelExecutions: 1, Enabled: true,
+			ID: "review", Provider: "claude", Enabled: true,
 			Interim: domain.InterimClientFacts{AuthStoreVolume: "claude-review-auth", RefreshStrategy: domain.RefreshOnDemand},
 		}, false},
 		"missing identity": {nil, false},

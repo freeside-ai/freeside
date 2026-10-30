@@ -101,7 +101,7 @@ func TestRecordExecutionExportSpecificationArmMintsNoPublicationTask(t *testing.
 			return err
 		}
 		return tx.RecordAuthIdentity(ctx, domain.AuthIdentity{
-			ID: identityID, Provider: "claude", AuthStoreMutationLease: true, MaxParallelExecutions: 1,
+			ID: identityID, Provider: "claude", AuthStoreMutationLease: true,
 			Interim: domain.InterimClientFacts{AuthStoreVolume: "provider-cred", RefreshStrategy: domain.RefreshOnDemand},
 		}, epoch)
 	}); err != nil {

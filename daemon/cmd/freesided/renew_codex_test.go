@@ -96,7 +96,7 @@ func renewalCommandFixture(t *testing.T, dbPath string, approved map[domain.Dige
 	}
 	if err := st.WriteInternal(t.Context(), func(tx *store.InternalTx) error {
 		return tx.RecordAuthIdentity(t.Context(), domain.AuthIdentity{
-			ID: "codex-primary", Provider: "openai", Enabled: false, AuthStoreMutationLease: true, MaxParallelExecutions: 1,
+			ID: "codex-primary", Provider: "openai", Enabled: false, AuthStoreMutationLease: true,
 			Interim: domain.InterimClientFacts{AuthStoreVolume: path, RefreshStrategy: domain.RefreshOnDemand, SupportsReadOnlyAuthSnapshot: true},
 		}, time.Now().UTC())
 	}); err != nil {

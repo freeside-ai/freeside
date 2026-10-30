@@ -114,8 +114,7 @@ func TestHandoffJournalColumnsAreCrossChecked(t *testing.T) {
 			s := openTemplateStoreAt(t, filepath.Join(t.TempDir(), "store.db"), Options{})
 			identity := domain.AuthIdentity{
 				ID: "auth-1", Provider: "claude", AuthStoreMutationLease: true,
-				MaxParallelExecutions: 1,
-				Interim:               domain.InterimClientFacts{AuthStoreVolume: "provider-cred", RefreshStrategy: domain.RefreshOnDemand},
+				Interim: domain.InterimClientFacts{AuthStoreVolume: "provider-cred", RefreshStrategy: domain.RefreshOnDemand},
 			}
 			at := time.Date(2026, 7, 28, 12, 0, 0, 0, time.UTC)
 			if err := s.WriteInternal(ctx, func(tx *InternalTx) error {

@@ -323,8 +323,7 @@ func seedAdmission(t *testing.T, waiver *domain.BackupEncryptionWaiver) (*Store,
 		}
 		if err := tx.RecordAuthIdentity(ctx, domain.AuthIdentity{
 			ID: identityID, Provider: "claude", AuthStoreMutationLease: true,
-			MaxParallelExecutions: 1,
-			Interim:               domain.InterimClientFacts{AuthStoreVolume: "provider-cred", RefreshStrategy: domain.RefreshOnDemand},
+			Interim: domain.InterimClientFacts{AuthStoreVolume: "provider-cred", RefreshStrategy: domain.RefreshOnDemand},
 		}, admission.AdmittedAt); err != nil {
 			return err
 		}
@@ -572,9 +571,9 @@ func TestExecutionAdmissionAuthIdentityColumnCrossChecked(t *testing.T) {
 			s, _ := seedAdmission(t, nil)
 			if _, err := s.db.ExecContext(ctx,
 				`INSERT INTO auth_identities
-				   (id, provider, auth_store_mutation_lease, max_parallel_executions,
+				   (id, provider, auth_store_mutation_lease,
 				    refresh_strategy, supports_read_only_auth_snapshot, recorded_at, body)
-				 VALUES ('auth-2', 'claude', 1, 1, 'refresh_on_demand', 0, '2026-01-02T03:04:05Z', '{}')`); err != nil {
+				 VALUES ('auth-2', 'claude', 1, 'refresh_on_demand', 0, '2026-01-02T03:04:05Z', '{}')`); err != nil {
 				t.Fatalf("seed second identity: %v", err)
 			}
 			if _, err := s.db.ExecContext(ctx, tc.stmt); err != nil {

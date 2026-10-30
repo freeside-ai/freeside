@@ -24,8 +24,8 @@ const (
 	// work-in-progress admission slot (counted from recorded lifecycle facts,
 	// issue #1318; two runs of one task use one slot). The key name is retained
 	// for policy compatibility though the cap is now task-level. A distinct axis
-	// from AuthIdentity.MaxParallelExecutions, which caps an inference identity's
-	// parallel executions, not a project's tasks (issue #720 non-goal). Value: a
+	// from UsagePool.MaxParallelExecutions, which caps a usage pool's parallel
+	// executions, not a project's tasks (issue #720 non-goal). Value: a
 	// positive integer.
 	PolicyRunWIPCap = "budgets.run_wip_cap"
 	// PolicyInitiatorMode is the resolved-policy key whose value is the

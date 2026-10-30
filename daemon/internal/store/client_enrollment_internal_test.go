@@ -27,7 +27,7 @@ func enrollmentIdentity() domain.AuthIdentity {
 	return domain.AuthIdentity{
 		ID: "auth-1", Provider: "openai", AccountBinding: "acct-1",
 		UsagePool: "pool-1", AuthStoreMutationLease: true,
-		MaxParallelExecutions: 1, Enabled: true,
+		Enabled: true,
 	}
 }
 
@@ -149,7 +149,8 @@ func TestAdmittedAgentsMigrationNarrowsIdentities(t *testing.T) {
 			entry.Name() == "0108_image_upkeep.sql" ||
 			entry.Name() == "0109_task_submission_origin.sql" ||
 			entry.Name() == "0110_image_policy_adoption.sql" ||
-			entry.Name() == "0111_task_line_provenance.sql" || entry.IsDir() {
+			entry.Name() == "0111_task_line_provenance.sql" ||
+			entry.Name() == "0112_usage_pools.sql" || entry.IsDir() {
 			continue
 		}
 		body, err := fs.ReadFile(migrations.FS, entry.Name())
@@ -195,7 +196,7 @@ VALUES ('auth-legacy', 'claude', 1, 'claude-cred', 2, 'refresh_external', 1,
 	}
 	want := domain.AuthIdentity{
 		ID: "auth-legacy", Provider: "claude", AuthStoreMutationLease: true,
-		MaxParallelExecutions: 2, Enabled: true,
+		Enabled: true,
 		Interim: domain.InterimClientFacts{
 			AuthStoreVolume: "claude-cred", RefreshStrategy: domain.RefreshExternal,
 			SupportsReadOnlyAuthSnapshot: true,
@@ -316,7 +317,7 @@ func TestListIdentitiesAndEnrollments(t *testing.T) {
 		recordEnrollmentFixtures(t, s)
 		interim := domain.AuthIdentity{
 			ID: "auth-0", Provider: "claude", AuthStoreMutationLease: true,
-			MaxParallelExecutions: 1, Enabled: true,
+			Enabled: true,
 			Interim: domain.InterimClientFacts{
 				AuthStoreVolume: "claude-auth", RefreshStrategy: domain.RefreshOnDemand,
 			},

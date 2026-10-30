@@ -31,7 +31,7 @@ func seedCodexReenrollmentIdentity(
 ) domain.AuthIdentity {
 	t.Helper()
 	identity := domain.AuthIdentity{
-		ID: "codex-primary", Provider: "codex", AuthStoreMutationLease: true, MaxParallelExecutions: 1,
+		ID: "codex-primary", Provider: "codex", AuthStoreMutationLease: true,
 		Interim: domain.InterimClientFacts{AuthStoreVolume: "codex-auth", RefreshStrategy: domain.RefreshOnDemand},
 	}
 	if err := st.WriteInternal(context.Background(), func(tx *store.InternalTx) error {

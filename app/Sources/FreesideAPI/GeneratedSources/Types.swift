@@ -5868,6 +5868,7 @@ public enum Components {
             case base_advanced = "base_advanced"
             case identity_parallelism = "identity_parallelism"
             case image_upkeep_pending = "image_upkeep_pending"
+            case usage_pool_exhausted = "usage_pool_exhausted"
         }
         /// What an image_upkeep_pending hold waits on, mirrored from domain.ImageUpkeepPending (plan §5.7, Project-image upkeep): the upkeep job's rebuild, an adoption card, or a maintenance task.
         ///
@@ -6390,6 +6391,11 @@ public enum Components {
             ///
             /// - Remark: Generated from `#/components/schemas/RunHold/image_upkeep`.
             public var image_upkeep: Components.Schemas.RunHold.image_upkeepPayload?
+            /// The full pool of a usage_pool_exhausted hold; present exactly beside that reason and null beside every other. An identity_parallelism hold, which nothing records any more, names no pool.
+            ///
+            ///
+            /// - Remark: Generated from `#/components/schemas/RunHold/usage_pool`.
+            public var usage_pool: Swift.String?
             /// - Remark: Generated from `#/components/schemas/RunHold/first_observed_at`.
             public var first_observed_at: Foundation.Date
             /// - Remark: Generated from `#/components/schemas/RunHold/last_observed_at`.
@@ -6402,6 +6408,7 @@ public enum Components {
             ///   - reason:
             ///   - detail: What an admission_policy_refused hold refused; null beside every other reason, and on an admission hold recorded before the detail existed or raised outside admission.
             ///   - image_upkeep: What an image_upkeep_pending hold waits on; present exactly beside that reason and null beside every other.
+            ///   - usage_pool: The full pool of a usage_pool_exhausted hold; present exactly beside that reason and null beside every other. An identity_parallelism hold, which nothing records any more, names no pool.
             ///   - first_observed_at:
             ///   - last_observed_at:
             public init(
@@ -6410,6 +6417,7 @@ public enum Components {
                 reason: Components.Schemas.RunHoldReason,
                 detail: Components.Schemas.RunHold.detailPayload? = nil,
                 image_upkeep: Components.Schemas.RunHold.image_upkeepPayload? = nil,
+                usage_pool: Swift.String? = nil,
                 first_observed_at: Foundation.Date,
                 last_observed_at: Foundation.Date
             ) {
@@ -6418,6 +6426,7 @@ public enum Components {
                 self.reason = reason
                 self.detail = detail
                 self.image_upkeep = image_upkeep
+                self.usage_pool = usage_pool
                 self.first_observed_at = first_observed_at
                 self.last_observed_at = last_observed_at
             }
@@ -6427,6 +6436,7 @@ public enum Components {
                 case reason
                 case detail
                 case image_upkeep
+                case usage_pool
                 case first_observed_at
                 case last_observed_at
             }
@@ -6452,6 +6462,10 @@ public enum Components {
                     Components.Schemas.RunHold.image_upkeepPayload.self,
                     forKey: .image_upkeep
                 )
+                self.usage_pool = try container.decodeIfPresent(
+                    Swift.String.self,
+                    forKey: .usage_pool
+                )
                 self.first_observed_at = try container.decode(
                     Foundation.Date.self,
                     forKey: .first_observed_at
@@ -6466,6 +6480,7 @@ public enum Components {
                     "reason",
                     "detail",
                     "image_upkeep",
+                    "usage_pool",
                     "first_observed_at",
                     "last_observed_at"
                 ])

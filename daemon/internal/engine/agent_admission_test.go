@@ -97,7 +97,7 @@ func newAgentAdmissionFixture(t *testing.T) *agentAdmissionFixture {
 	f := &agentAdmissionFixture{store: st, adapters: adapters}
 	f.identity = domain.AuthIdentity{
 		ID: "claude-main", Provider: "claude", AccountBinding: "acct-fixture-0001",
-		AuthStoreMutationLease: true, MaxParallelExecutions: 1, Enabled: true, CostOwner: "operator",
+		AuthStoreMutationLease: true, Enabled: true, CostOwner: "operator",
 		Interim: domain.InterimClientFacts{
 			AuthStoreVolume: agentTestInterimVolume, RefreshStrategy: domain.RefreshExternal,
 		},

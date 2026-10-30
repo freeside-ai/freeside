@@ -211,7 +211,7 @@ package enum TaskDisplay {
         if !suppressesGuidanceForCancellation(task), !position.historical,
             run?.outcome != .failed, run?.outcome != .lost
         {
-            if position.holdReason == .identity_parallelism, run == nil || run?.outcome == .pending {
+            if isCapacityWait(position.holdReason), run == nil || run?.outcome == .pending {
                 position.guidance =
                     "The configured agent account is busy. This work is queued; no action is needed for this wait."
             }
@@ -243,6 +243,13 @@ package enum TaskDisplay {
             }
         }
         return position
+    }
+
+    /// A wait for a free execution slot: queued work, not a held run. A stored
+    /// `identity_parallelism` hold reads the same as the pool hold that
+    /// replaced it.
+    private static func isCapacityWait(_ reason: Components.Schemas.RunHoldReason?) -> Bool {
+        reason == .usage_pool_exhausted || reason == .identity_parallelism
     }
 
     private static func suppressesGuidanceForCancellation(_ task: Components.Schemas.Task) -> Bool {
@@ -290,7 +297,7 @@ package enum TaskDisplay {
         if task.lifecycle == .finished { return "Finished · See Recorded Outcome" }
         if run?.lifecycle == .finished { return "Run Finished · See Recorded Outcome" }
         let hold = run.map { $0.hold_reason?.value1 } ?? task.current_position?.value1.hold_reason?.value1
-        if hold == .identity_parallelism { return "Queued" }
+        if isCapacityWait(hold) { return "Queued" }
         if hold != nil { return "On Hold" }
         if run?.outcome == .blocked { return "Publication Blocked" }
         if run?.outcome == .unobserved { return "Execution Status Unavailable" }

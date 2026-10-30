@@ -8,7 +8,9 @@ import (
 	"os"
 	"sync"
 	"testing"
+	"time"
 
+	"github.com/freeside-ai/freeside/daemon/internal/domain"
 	"github.com/freeside-ai/freeside/daemon/internal/store"
 )
 
@@ -59,4 +61,19 @@ func Copy(t testing.TB, path string) {
 	if err := f.Close(); err != nil {
 		t.Fatalf("close store copy: %v", err)
 	}
+}
+
+// RecordIdentityOnPool records identity with its effective pool at limit, for a
+// fixture that needs more than a new pool's one slot. The pool goes first
+// because an identity recorded alone creates its pool at one, and the limit
+// revision would then share that revision's instant.
+func RecordIdentityOnPool(
+	ctx context.Context, tx *store.InternalTx, identity domain.AuthIdentity, limit int, at time.Time,
+) error {
+	if err := tx.RecordUsagePool(ctx, domain.UsagePool{
+		ID: identity.EffectiveUsagePool(), Provider: identity.Provider, MaxParallelExecutions: limit,
+	}, at); err != nil {
+		return err
+	}
+	return tx.RecordAuthIdentity(ctx, identity, at)
 }

@@ -41,8 +41,7 @@ func TestClaudeAdoptionRetriesAfterAFailedAppendAndReleasesItsLease(t *testing.T
 	st, adapters := openEnrollmentStore(t)
 	identity := domain.AuthIdentity{
 		ID: "claude-main", Provider: "claude", AuthStoreMutationLease: true,
-		MaxParallelExecutions: 1,
-		Interim:               domain.InterimClientFacts{AuthStoreVolume: "claude-main-auth", RefreshStrategy: domain.RefreshOnDemand},
+		Interim: domain.InterimClientFacts{AuthStoreVolume: "claude-main-auth", RefreshStrategy: domain.RefreshOnDemand},
 	}
 	if err := st.WriteInternal(ctx, func(tx *store.InternalTx) error {
 		return tx.RecordAuthIdentity(ctx, identity, enrollmentTestAt)

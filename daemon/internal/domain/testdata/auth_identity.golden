@@ -5,7 +5,6 @@
   "usage_pool": "claude-owner-subscription",
   "budget": 500000,
   "auth_store_mutation_lease": true,
-  "max_parallel_executions": 1,
   "enabled": true,
   "cost_owner": "owner",
   "interim": {

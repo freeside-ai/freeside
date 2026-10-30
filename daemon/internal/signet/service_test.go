@@ -1107,10 +1107,10 @@ func putTestItem(t *testing.T, f fixture, item domain.AttentionItem) error {
 		if err := tx.PutAgentInvocation(t.Context(), invocation); err != nil {
 			return err
 		}
-		if err := tx.RecordAuthIdentity(t.Context(), domain.AuthIdentity{
-			ID: identityID, Provider: "codex", AuthStoreMutationLease: true, MaxParallelExecutions: 8,
+		if err := storetest.RecordIdentityOnPool(t.Context(), &tx.InternalTx, domain.AuthIdentity{
+			ID: identityID, Provider: "codex", AuthStoreMutationLease: true,
 			Interim: domain.InterimClientFacts{AuthStoreVolume: "provider-credentials", RefreshStrategy: domain.RefreshOnDemand},
-		}, *f.now); err != nil {
+		}, 8, *f.now); err != nil {
 			return err
 		}
 		if err := tx.RecordExecutionAdmission(t.Context(), admission); err != nil {

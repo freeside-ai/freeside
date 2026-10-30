@@ -996,7 +996,7 @@ func TestGolden(t *testing.T) {
 		ID: "auth-claude-owner", Provider: "claude",
 		AccountBinding: "acct-claude-owner-7f3a", UsagePool: "claude-owner-subscription",
 		Budget: 500_000, AuthStoreMutationLease: true,
-		MaxParallelExecutions: 1, Enabled: true, CostOwner: "owner",
+		Enabled: true, CostOwner: "owner",
 		Interim: domain.InterimClientFacts{AuthStoreVolume: "claude-owner-credentials", RefreshStrategy: domain.RefreshOnDemand},
 	}
 	mutationLease := domain.AuthStoreMutationLease{
@@ -1052,7 +1052,7 @@ func TestGolden(t *testing.T) {
 	goldenLaunch := launchSpec(t)
 	agentIdentity := domain.AuthIdentity{
 		ID: "auth-openai-A", Provider: "openai", AccountBinding: "acct-openai-a",
-		AuthStoreMutationLease: true, MaxParallelExecutions: 1, Enabled: true,
+		AuthStoreMutationLease: true, Enabled: true,
 	}
 	agentEnrollment := domain.ClientEnrollment{
 		ID: "enroll-openai-A-codex", AuthIdentityID: agentIdentity.ID,
@@ -1677,6 +1677,10 @@ func TestGolden(t *testing.T) {
 		FirstObservedAt: ts.Add(time.Minute),
 		LastObservedAt:  ts.Add(2 * time.Minute),
 	}
+	exhaustedPool := domain.UsagePoolID("claude-owner-subscription")
+	usagePoolHold := holdObservation
+	usagePoolHold.Reason = domain.HoldUsagePoolExhausted
+	usagePoolHold.UsagePool = &exhaustedPool
 	// An unattended specification attempt whose task line names an agent
 	// refused after it resolved: the attempt runs a prompt the line does not
 	// select.
@@ -2170,6 +2174,9 @@ func TestGolden(t *testing.T) {
 		{"stage", stage},
 		{"attempt", attempt},
 		{"auth_identity", identity},
+		{"usage_pool", domain.UsagePool{
+			ID: "claude-owner-subscription", Provider: "claude", MaxParallelExecutions: 2,
+		}},
 		{"auth_store_mutation_lease", mutationLease},
 		{"auth_store_mutation_lease_bound", boundLease},
 		{"auth_store_read_hold", readHold},
@@ -2225,6 +2232,7 @@ func TestGolden(t *testing.T) {
 		{"invocation_observation", invocationObservation},
 		{"run_hold_observation", holdObservation},
 		{"run_hold_observation_admission_refusal", admissionHoldObservation},
+		{"run_hold_observation_usage_pool", usagePoolHold},
 		{"run_hold_observation_image_upkeep_rebuild", rebuildHold},
 		{"run_hold_observation_image_upkeep_adoption", adoptionHold},
 		{"run_hold_observation_image_upkeep_maintenance", maintenanceHold},

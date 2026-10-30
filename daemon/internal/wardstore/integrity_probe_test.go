@@ -102,7 +102,7 @@ func (r *probeRig) enrollCodex(id domain.AuthIdentityID, path string, recorded d
 	account := "acct-" + string(id)
 	identity := domain.AuthIdentity{
 		ID: id, Provider: "openai", AccountBinding: account, AuthStoreMutationLease: true,
-		MaxParallelExecutions: 1, Enabled: true, CostOwner: "operator",
+		Enabled: true, CostOwner: "operator",
 		Interim: domain.InterimClientFacts{
 			AuthStoreVolume: path, RefreshStrategy: domain.RefreshOnDemand, SupportsReadOnlyAuthSnapshot: true,
 		},

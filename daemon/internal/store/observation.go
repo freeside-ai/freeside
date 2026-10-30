@@ -42,14 +42,14 @@ const (
 	selectRunHoldSQL = `SELECT run_id, invocation_id, reason,
 			detail_check, detail_agent, detail_launch_stage, detail_launch_digest,
 			upkeep_pending, upkeep_refusal_id, upkeep_item_id, upkeep_task_id,
-			first_observed_at, last_observed_at
+			usage_pool, first_observed_at, last_observed_at
 		FROM run_hold_observations WHERE run_id = ?`
 	replaceRunHoldSQL = `INSERT INTO run_hold_observations
 		(run_id, invocation_id, reason,
 			detail_check, detail_agent, detail_launch_stage, detail_launch_digest,
 			upkeep_pending, upkeep_refusal_id, upkeep_item_id, upkeep_task_id,
-			first_observed_at, last_observed_at)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+			usage_pool, first_observed_at, last_observed_at)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 		ON CONFLICT (run_id) DO UPDATE SET
 			invocation_id = excluded.invocation_id,
 			reason = excluded.reason,
@@ -61,6 +61,7 @@ const (
 			upkeep_refusal_id = excluded.upkeep_refusal_id,
 			upkeep_item_id = excluded.upkeep_item_id,
 			upkeep_task_id = excluded.upkeep_task_id,
+			usage_pool = excluded.usage_pool,
 			first_observed_at = excluded.first_observed_at,
 			last_observed_at = excluded.last_observed_at`
 	clearRunHoldSQL      = `DELETE FROM run_hold_observations WHERE run_id = ?`
@@ -197,9 +198,14 @@ func (tx *WriteTx) RecordRunHold(ctx context.Context, h domain.RunHoldObservatio
 			task = string(*u.MaintenanceTaskID)
 		}
 	}
+	var usagePool any
+	if h.UsagePool != nil {
+		usagePool = string(*h.UsagePool)
+	}
 	if _, err := tx.tx.ExecContext(ctx, replaceRunHoldSQL,
 		h.RunID, invocation, h.Reason, check, agent, launchStage, launchDigest,
-		pending, refusal, item, task, formatTime(h.FirstObservedAt), formatTime(h.LastObservedAt)); err != nil {
+		pending, refusal, item, task, usagePool,
+		formatTime(h.FirstObservedAt), formatTime(h.LastObservedAt)); err != nil {
 		return fmt.Errorf("record run hold %s: %w", h.RunID, err)
 	}
 	return nil
@@ -381,11 +387,11 @@ func (tx *ReadTx) GetRunHold(
 	var (
 		storedRun, reason, first, last                string
 		invocation, check, agent, stage, launchDigest sql.NullString
-		pending, refusal, item, task                  sql.NullString
+		pending, refusal, item, task, usagePool       sql.NullString
 	)
 	err := tx.tx.QueryRowContext(ctx, selectRunHoldSQL, runID).
 		Scan(&storedRun, &invocation, &reason, &check, &agent, &stage, &launchDigest,
-			&pending, &refusal, &item, &task, &first, &last)
+			&pending, &refusal, &item, &task, &usagePool, &first, &last)
 	switch {
 	case errors.Is(err, sql.ErrNoRows):
 		return domain.RunHoldObservation{}, false, nil
@@ -454,6 +460,10 @@ func (tx *ReadTx) GetRunHold(
 		return domain.RunHoldObservation{}, false,
 			fmt.Errorf("get run hold %s: upkeep reference without a pending kind: %w",
 				runID, domain.ErrHoldDetailMismatch)
+	}
+	if usagePool.Valid {
+		pool := domain.UsagePoolID(usagePool.String)
+		h.UsagePool = &pool
 	}
 	if err := h.Validate(); err != nil {
 		return domain.RunHoldObservation{}, false, fmt.Errorf("get run hold %s: %w", runID, err)

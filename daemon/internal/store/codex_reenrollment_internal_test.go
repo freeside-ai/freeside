@@ -565,7 +565,7 @@ func TestCodexReenrollmentReconstructionRejectsUnknownAndTrailingBody(t *testing
 			st := openTemplateStoreAt(t, t.TempDir()+"/freeside.db", Options{})
 			at := time.Date(2026, 8, 11, 1, 2, 3, 0, time.UTC)
 			identity := domain.AuthIdentity{
-				ID: "codex-primary", Provider: "codex", AuthStoreMutationLease: true, MaxParallelExecutions: 1,
+				ID: "codex-primary", Provider: "codex", AuthStoreMutationLease: true,
 				Interim: domain.InterimClientFacts{AuthStoreVolume: "codex-auth", RefreshStrategy: domain.RefreshOnDemand},
 			}
 			markerID := domain.ItemID(CodexReenrollmentMarkerPrefix(identity.ID) + "1")

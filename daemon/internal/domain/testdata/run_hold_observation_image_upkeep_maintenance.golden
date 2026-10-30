@@ -9,6 +9,7 @@
     "proposal_item_id": null,
     "maintenance_task_id": "task-image-maintenance"
   },
+  "usage_pool": null,
   "first_observed_at": "2026-01-02T03:05:05Z",
   "last_observed_at": "2026-01-02T03:06:05Z"
 }
