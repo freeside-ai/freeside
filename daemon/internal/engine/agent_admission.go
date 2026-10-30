@@ -163,7 +163,7 @@ func resolveRoleLine(
 	if err != nil {
 		return RoleAgent{}, err
 	}
-	agent, err := resolveAgent(ctx, tx, tree, line.AgentName, "lineup")
+	agent, err := resolveAgent(ctx, tx, tree, line.AgentName)
 	if err != nil {
 		return RoleAgent{}, err
 	}
@@ -218,9 +218,16 @@ func resolveLineAgent(
 	if err != nil {
 		return RoleAgent{}, err
 	}
-	agent, err := resolveAgent(ctx, tx, tree, taskLine.Agent, "task line")
+	// Refuse by the line's id, never the name it holds. That name is text an
+	// operator typed, and a credential pasted there can pass the name grammar.
+	// Once the tree holds the agent, the name is the tree's own, so later
+	// refusals may print it.
+	if _, ok := tree.Agent(taskLine.Agent); !ok {
+		return RoleAgent{}, fmt.Errorf("task line %s names an agent the tree lacks", taskLine.ID)
+	}
+	agent, err := resolveAgent(ctx, tx, tree, taskLine.Agent)
 	if err != nil {
-		return RoleAgent{}, err
+		return RoleAgent{}, fmt.Errorf("task line %s: %w", taskLine.ID, err)
 	}
 	// A task line names no digest to match (step 2, selected): it names the
 	// agent, and the binding records the digest the tree resolves now.
@@ -243,14 +250,13 @@ func (a RoleAgent) Selection() (domain.AgentSelectionSource, domain.Digest) {
 }
 
 // resolveAgent joins the named agent to its fragments and to its enrollment
-// and identity as the store holds them now. chosenBy names the selection
-// that picked the agent, for the refusal.
+// and identity as the store holds them now.
 func resolveAgent(
-	ctx context.Context, tx *store.ReadTx, tree agenttree.Tree, name, chosenBy string,
+	ctx context.Context, tx *store.ReadTx, tree agenttree.Tree, name string,
 ) (RoleAgent, error) {
 	source, ok := tree.Agent(name)
 	if !ok {
-		return RoleAgent{}, fmt.Errorf("the %s names agent %q, which the tree lacks", chosenBy, name)
+		return RoleAgent{}, fmt.Errorf("the lineup names agent %q, which the tree lacks", name)
 	}
 	var (
 		agent RoleAgent

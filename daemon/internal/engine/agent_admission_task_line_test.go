@@ -24,6 +24,9 @@ import (
 const (
 	agentTestSecondAgent   = "claude-second"
 	agentTestSubmitCommand = "cmd-submit-lines"
+	// agentTestPastedName passes the agent grammar and reads like a pasted
+	// credential.
+	agentTestPastedName = "sk-ant-oat01-fixture-not-a-token"
 )
 
 // addSecondAgent seeds a second adopted Claude identity and adds an agent on
@@ -341,9 +344,9 @@ func TestTaskLineAdmissionRefusals(t *testing.T) {
 		{
 			name: "the line names an agent the tree lacks",
 			setup: func(t *testing.T, f *agentAdmissionFixture) {
-				f.submitLine(t, domain.RoleImplementer, "ghost")
+				f.submitLine(t, domain.RoleImplementer, agentTestPastedName)
 			},
-			want: `the task line names agent "ghost", which the tree lacks`,
+			want: "names an agent the tree lacks",
 		},
 		{
 			name: "the line's agent runs under a disabled identity",
@@ -471,6 +474,9 @@ func TestTaskLineAdmissionRefusals(t *testing.T) {
 			if admitted || admission.AgentBinding != nil || !errors.Is(err, ErrAgentNotAdmissible) ||
 				!strings.Contains(err.Error(), tc.want) {
 				t.Fatalf("admitAttempt = %t, %v; want a refusal naming %q", admitted, err, tc.want)
+			}
+			if strings.Contains(err.Error(), agentTestPastedName) {
+				t.Errorf("refusal %q repeats the line's agent text", err)
 			}
 			// The ordinary hold and card path, and nothing recorded.
 			if !invocationDispatchHold(err) {

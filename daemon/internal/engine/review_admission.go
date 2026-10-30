@@ -110,7 +110,7 @@ func CheckReviewRole(
 			}
 		}
 		if found {
-			agent.RoleAgent, err = resolveReviewLine(ctx, tx, tree, role, line)
+			agent.RoleAgent, err = resolveLineAgent(ctx, tx, tree, role, line)
 		} else {
 			agent.RoleAgent, err = resolveRoleLine(ctx, tx, tree, role)
 		}
@@ -186,24 +186,6 @@ func CheckReviewRole(
 	agent.Model, agent.NativeEffort = agent.passes.RouteModelID, agent.passes.NativeEffort
 	if marked != nil {
 		return agent, errors.Join(ErrAgentNotAdmissible, marked)
-	}
-	return agent, nil
-}
-
-// resolveReviewLine resolves the agent a reviewer line names, refusing by the
-// line's id and never by the name it holds. That name is text an operator
-// typed, and a credential pasted there can pass the name grammar; a refusal
-// becomes the review failure's recorded reason. Once the tree holds the
-// agent, the name is the tree's own, so later refusals may print it.
-func resolveReviewLine(
-	ctx context.Context, tx *store.ReadTx, tree agenttree.Tree, role domain.RoleName, line domain.TaskLine,
-) (RoleAgent, error) {
-	if _, ok := tree.Agent(line.Agent); !ok {
-		return RoleAgent{}, fmt.Errorf("task line %s names an agent the tree lacks", line.ID)
-	}
-	agent, err := resolveLineAgent(ctx, tx, tree, role, line)
-	if err != nil {
-		return RoleAgent{}, fmt.Errorf("task line %s: %w", line.ID, err)
 	}
 	return agent, nil
 }
