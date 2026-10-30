@@ -7057,50 +7057,18 @@ Record material changes here by revision, with the decider in parentheses.
 - On first re-litigation, promote the decision to a `docs/decisions/` ADR that
   cites its history entry.
 
-Revision 103 ("Pin Each Task to One Subscription"):
+Revision 104 ("Neutral Grounds"):
 
-1. **The router picks a subscription only for a new task, and every role of
-   that task stays on it.** At the first admission of a task's first
-   task-line role with no operator line, the router picks one usage pool and
-   writes a line for every task-line role without an operator line (Section
-   [5.4](#54-credential-modes-egress-profiles-and-concurrency), routing policy). A quota failure parks the task under a visible hold
-   naming the window's reset, with no card, and the role's next attempt is
-   admitted on the same line at the reset (Section [4](#4-the-attention-model)). Only the operator
-   moves a parked task, as a recorded handoff, with the alternate-agent card
-   (which re-pins every router-sourced line) or a task-line change; with no
-   known reset the ordinary quota card is raised. When every pool is
-   exhausted at a task's first admission, it parks until the earliest
-   reset. A later role whose
-   model window on the pinned pool is exhausted parks the same way. A
-   lineup's per-failure-class switch no longer applies to a quota failure.
-   Priority with fallback stays as the only routing mode, for new tasks.
-   The aim is to stay close to Anthropic's terms: the Consumer Terms forbid
-   "bypassing any of our systems or protective measures", and Claude Code's
-   legal page says advertised Pro and Max limits "assume ordinary,
-   individual usage". Whether drain-first selection across subscriptions is
-   permitted stays an operating risk (Section [14](#14-risks)). Rejected: revision
-   99's automatic failover to another subscription mid-task, the riskiest
-   reading of those terms; choosing per role, which would let review run on
-   one subscription after implementation used up the other; keeping the
-   percentage split and round robin, which spread load to stretch capacity
-   across plans; and an account manager outside Freeside, which would make
-   the same selection and leave the terms question where it is.
-2. **`subscription_injected` and `api_key_isolated` are held, and nothing
-   schedules them.** Their design text stays in Sections [5.4](#54-credential-modes-egress-profiles-and-concurrency) and [5.7](#57-the-ward-runners-handoff-gate-and-operating-modes),
-   marked as held; lifting the hold is a later revision. #2175, #2173, and
-   #2174 stay open and deferred. Hosts the owner does not physically hold,
-   and host-run writers on either Mac, keep waiting; they never fall back to
-   copying the token. The mode is off the near-term map, adds little yet,
-   and adds work and complexity. With a subscription token, Anthropic would
-   also see the daemon's TLS and HTTP client sending Claude Code's requests,
-   close to the Usage Policy's bar on services that "route requests through
-   consumer subscriptions or misrepresent the product or client being used".
-   Rejected: keeping injection in Phase 2 with a fiat pull-forward (revision
-   95), and keeping `api_key_isolated` scheduled alone, since it reuses the
-   same proxy path.
+1. **Both appearances move to neutral grounds so the accent is the only warm
+   thing on screen.** Freeside's ground becomes Overcast and Straylight's
+   becomes Dead Channel (Section [15](#15-naming-and-references)); the two appearance names, the
+   identity accents, the mark, and the palette grammar are unchanged, and the
+   contrast-safe working cuts retune to the new grounds. Rejected: Soot,
+   Lacquer, Daylight, Plaster, and Bone, which either kept the warmth or left
+   the card and pane as one white panel.
 
-(Owner decision of 2026-10-28 on #2416;
-[decision note](../devlog/2026-10-28-1154-pin-tasks-hold-injection.md).)
+(Owner decision of 2026-10-30 on #2433;
+[decision note](../devlog/2026-10-30-1229-neutral-grounds.md).)
 
 ## 14. Risks
 
@@ -7157,8 +7125,8 @@ names.
 
 ### Visual Identity
 
-- Light surfaces are **Freeside**: vellum ground and bronze accent.
-- Dark surfaces are **Straylight**: umber ground and tawny accent.
+- Light surfaces are **Freeside**: Overcast ground and bronze accent.
+- Dark surfaces are **Straylight**: Dead Channel ground and tawny accent.
 - Appearance follows the viewer's system setting. The distinction carries
   meaning; it does not mark who the audience is.
 - Semantic colors never borrow the accent. Green remains success and go.
@@ -7167,7 +7135,8 @@ names.
 - Identity assets never depict the agent.
 
 The full identity system and rejected alternatives are in
-`devlog/2026-07-17-0050-brand-register.md`.
+`devlog/2026-07-17-0050-brand-register.md`, and the grounds in
+`devlog/2026-10-30-1229-neutral-grounds.md`.
 
 ### Coordination Names
 

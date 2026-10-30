@@ -28,49 +28,48 @@ struct FreesideColorCuts: Sendable {
 }
 
 enum FreesidePalette {
-    static let ground = FreesideColorCuts(day: 0xEDE7D6, dusk: 0x16120E)
-    static let ground2 = FreesideColorCuts(day: 0xF3EEE1, dusk: 0x1E1812)
-    static let ground3 = FreesideColorCuts(day: 0xE4DDC7, dusk: 0x292117)
-    static let sidebarGround = FreesideColorCuts(day: 0xE4DDC7, dusk: 0x1E1812)
-    static let ruleStrong = FreesideColorCuts(day: 0x877D5C, dusk: 0x786D58)
+    static let ground = FreesideColorCuts(day: 0xEEEEEB, dusk: 0x131416)
+    static let ground2 = FreesideColorCuts(day: 0xFAFAF8, dusk: 0x1A1C1F)
+    static let ground3 = FreesideColorCuts(day: 0xE4E4E0, dusk: 0x25282C)
+    static let sidebarGround = FreesideColorCuts(day: 0xE4E4E0, dusk: 0x1A1C1F)
+    static let ruleStrong = FreesideColorCuts(day: 0x7B7B76, dusk: 0x7E838A)
     static let rule = FreesideColorCuts(
-        day: 0xD6CDB2, dusk: 0x322A1E,
+        day: 0xD5D5D1, dusk: 0x2B2F33,
         dayIC: ruleStrong.day, duskIC: ruleStrong.dusk)
     // The outline of quiet chrome (the faint chip, the segmented control,
     // the menu panel): promoted to ruleStrong under Increased Contrast the
     // way every other structural hairline is. An outlined action takes
     // ruleStrong itself (R6), since its outline is what makes it a button.
     static let secondaryBorder = FreesideColorCuts(
-        day: 0xC9BFA2, dusk: 0x3D3426,
+        day: 0xC8C8C3, dusk: 0x393E44,
         dayIC: ruleStrong.day, duskIC: ruleStrong.dusk)
-    static let ink = FreesideColorCuts(day: 0x2B2416, dusk: 0xEAE3CF)
-    static let inkDim = FreesideColorCuts(day: 0x675D49, dusk: 0xB3A88E)
-    // Disabled and validating text. Darker than the handoff's #94896E,
-    // which is 2.99:1 on ground-2 by day and misses the project's 3:1
-    // floor for disabled text; Increased Contrast promotes it to inkDim.
+    static let ink = FreesideColorCuts(day: 0x212120, dusk: 0xE9E7E0)
+    static let inkDim = FreesideColorCuts(day: 0x5C5C58, dusk: 0xB2B0A6)
+    // Disabled and validating text: over the project's 3:1 floor for
+    // disabled text, and Increased Contrast promotes it to inkDim.
     static let inkFaint = FreesideColorCuts(
-        day: 0x827858, dusk: 0x7D7460,
+        day: 0x777772, dusk: 0x7F8287,
         dayIC: inkDim.day, duskIC: inkDim.dusk)
     static let accentText = FreesideColorCuts(
-        day: 0x7D5C0E, dusk: 0xC2912E, dayIC: 0x6B4E0B, duskIC: 0xE0AE46)
+        day: 0x7A5A0C, dusk: 0xD4A23A, dayIC: 0x6B4E0B, duskIC: 0xE3B449)
     static let accentBorder = FreesideColorCuts(
-        day: 0x8F6B14, dusk: 0x8A6A26, dayIC: 0x6B4E0B, duskIC: 0xE0AE46)
-    static let accentWash = FreesideColorCuts(day: 0xE9DFC2, dusk: 0x26200F)
-    static let accentWashSoft = FreesideColorCuts(day: 0xECE4CD, dusk: 0x221C11)
+        day: 0x8F6B14, dusk: 0x96742B, dayIC: 0x6B4E0B, duskIC: 0xE3B449)
+    static let accentWash = FreesideColorCuts(day: 0xEDE4CD, dusk: 0x2B2515)
+    static let accentWashSoft = FreesideColorCuts(day: 0xF1ECDD, dusk: 0x221F19)
     static let waxText = FreesideColorCuts(
-        day: 0x8A2D1C, dusk: 0xD26D4A, dayIC: 0x71230F, duskIC: 0xDC7A57)
-    static let waxWash = FreesideColorCuts(day: 0xE8D5C9, dusk: 0x241310)
-    static let neutralWash = FreesideColorCuts(day: 0xE8E2CD, dusk: 0x221C11)
+        day: 0x8A2D1C, dusk: 0xD97553, dayIC: 0x71230F, duskIC: 0xE2855F)
+    static let waxWash = FreesideColorCuts(day: 0xEEDAD3, dusk: 0x2A1816)
+    static let neutralWash = FreesideColorCuts(day: accentWashSoft.day, dusk: accentWashSoft.dusk)
     // The selected segment of the sidebar's segmented control: ground-2 by
     // day, ground-3 by dusk, so it lifts off the ground container in both.
     static let segmentSelected = FreesideColorCuts(day: ground2.day, dusk: ground3.dusk)
     static let waterText = FreesideColorCuts(
-        day: 0x3E6D72, dusk: 0x7FAAAF, dayIC: 0x33595E, duskIC: 0x9CC3C7)
-    static let waterWash = FreesideColorCuts(day: 0xDCE6E4, dusk: 0x17201F)
+        day: 0x3B6B70, dusk: 0x86B1B6, dayIC: 0x33595E, duskIC: 0x9FC5CA)
+    static let waterWash = FreesideColorCuts(day: 0xDAE6E5, dusk: 0x18252A)
 
     // Stage-rail decoration pairs with labels and does not carry meaning alone.
-    static let milestonePrior = FreesideColorCuts(day: 0xB9AF92, dusk: 0x4A3F2C)
-    static let milestoneConnector = FreesideColorCuts(day: 0xDDD4B9, dusk: 0x292117)
+    static let milestonePrior = FreesideColorCuts(day: 0xB6B6B0, dusk: 0x4A4E55)
+    static let milestoneConnector = FreesideColorCuts(day: rule.day, dusk: ground3.dusk)
 
     // The refined-interfaces cuts (handoff of 2026-10-06). By day each one
     // repeats an existing cut under the name of its job. By dusk the token
@@ -81,27 +80,25 @@ enum FreesidePalette {
     static let quoteWash = FreesideColorCuts(day: accentWashSoft.day, dusk: ground3.dusk)
     static let quoteRule = FreesideColorCuts(day: ruleStrong.day, dusk: accentBorder.dusk)
     /// A bordered item's hairline. Structural, so Increased Contrast
-    /// promotes it to ruleStrong as it does `rule`.
+    /// promotes it to ruleStrong as it does `rule`. Dusk takes its own cut:
+    /// the card edge on graphite needs a step between the hairlines.
     static let itemBorder = FreesideColorCuts(
-        day: rule.day, dusk: milestonePrior.dusk,
+        day: rule.day, dusk: 0x3E434A,
         dayIC: ruleStrong.day, duskIC: ruleStrong.dusk)
-    static let noticeAccentWash = FreesideColorCuts(day: accentWash.day, dusk: 0x2C2412)
-    static let noticeWaxWash = FreesideColorCuts(day: waxWash.day, dusk: 0x2E1812)
-    // A hovered control (R19). The handoff lifts dusk to #2F261A, which
-    // leaves a wax-outlined control's label at 4.27:1; ground-3 is the
-    // lightest dusk fill that keeps it at the 4.5:1 text floor.
+    static let noticeAccentWash = FreesideColorCuts(day: accentWash.day, dusk: 0x2E2716)
+    static let noticeWaxWash = FreesideColorCuts(day: waxWash.day, dusk: 0x311B17)
+    // A hovered control (R19): ground-3, which keeps a wax-outlined
+    // control's label over the 4.5:1 text floor in both appearances.
     static let hover = FreesideColorCuts(day: ground3.day, dusk: ground3.dusk)
 
     // Diff counts and diff lines (R28), and one use beyond them: diffAdd
     // fills the marker on a stage start in the task timeline
-    // (devlog/2026-10-11-1140-task-stage-timeline.md). The day cuts are
-    // darker than the handoff's #3B7A47 and #B0412F, which are 4.46:1 on
-    // ground-2 and 4.08:1 and 4.27:1 on their own washes; these are the
-    // nearest that clear the 4.5:1 text floor on both.
-    static let diffAdd = FreesideColorCuts(day: 0x377142, dusk: 0x7FB38A)
-    static let diffRemove = FreesideColorCuts(day: 0xA93E2D, dusk: 0xE07A62)
-    static let diffAddWash = FreesideColorCuts(day: 0xDCE8D9, dusk: 0x16261A)
-    static let diffRemoveWash = FreesideColorCuts(day: 0xF0D9D2, dusk: 0x2E1812)
+    // (devlog/2026-10-11-1140-task-stage-timeline.md). Each cut holds the
+    // 4.5:1 text floor on the grounds and on its own wash.
+    static let diffAdd = FreesideColorCuts(day: 0x357040, dusk: 0x82B78E)
+    static let diffRemove = FreesideColorCuts(day: 0xA83D2C, dusk: 0xE27E66)
+    static let diffAddWash = FreesideColorCuts(day: 0xDDE8DA, dusk: 0x17281B)
+    static let diffRemoveWash = FreesideColorCuts(day: 0xF2DBD4, dusk: 0x2F1A17)
 }
 
 extension Color {
