@@ -36,8 +36,9 @@ package struct UnifiedRow: Identifiable {
         }
     }
 
-    /// What selecting the row opens: a task that needs you opens its newest
-    /// open item's card, any other task its timeline, an item its card.
+    /// What selecting the row opens: a task that needs you opens its page
+    /// with its newest open item leading, any other task its page, an item
+    /// its card.
     package var destination: NavigationModel.Destination {
         switch content {
         case .task(let snapshot, let openItems):
@@ -200,6 +201,12 @@ package struct UnifiedList {
     /// until the next full rebuild, and that item is no card to open.
     package func nextOpenItemID(excluding itemID: String) -> String? {
         needsYou.lazy.compactMap { $0.nextOpenItemID(excluding: itemID) }.first
+    }
+
+    /// A task's open items, newest first, by their live status. Empty for a
+    /// task with no Needs you row.
+    package func openItems(inTask taskID: String) -> [Components.Schemas.AttentionItemSnapshot] {
+        needsYou.first { $0.id == .task(taskID) }?.openItems.filter { $0.item.status == .open } ?? []
     }
 
     /// The same rule within one task's row.

@@ -513,4 +513,126 @@ import Testing
         navigation.moveAttentionSelection(by: -1, list: rows)
         #expect(navigation.path == [.attentionItem("item-a")])
     }
+
+    @Test func anItemItsTaskOwnsLeadsTheTasksPage() {
+        let (store, task) = task(holding: ["item-a", "item-b"])
+        let rows = list(store, tasks: [task])
+
+        // A row, a link, and a popup all route to the item; the page reads
+        // the same route and leads with that card.
+        #expect(
+            NavigationModel.surface(for: .attentionItem("item-b"), in: rows)
+                == .taskPage(taskID: task.task.id, leadingItemID: "item-b"))
+        // Opening the task leads with its newest open item.
+        #expect(
+            NavigationModel.surface(for: .task(task.task.id), in: rows)
+                == .taskPage(taskID: task.task.id, leadingItemID: "item-a"))
+    }
+
+    @Test func aResolvedItemItsTaskOwnsLeadsThePageInItsCurrentState() {
+        let (store, task) = task()
+        var resolved = AttentionFixtures.closedByDaemon(
+            AttentionFixtures.fixture(type: .agent_question), id: "item-resolved", cause: .expired, after: 60,
+            reason: "Expired.")
+        resolved.item.subject = .task(
+            .init(subject_type: .task, subject_id: task.task.id, task_id: task.task.id))
+        store.replaceAll(with: store.orderedSnapshots + [resolved])
+
+        #expect(
+            NavigationModel.surface(for: .attentionItem("item-resolved"), in: list(store, tasks: [task]))
+                == .taskPage(taskID: task.task.id, leadingItemID: "item-resolved"))
+    }
+
+    @Test func anItemNoHeldTaskOwnsIsItsCardAlone() {
+        let (store, _) = task()
+        // The store's item names a task this list doesn't hold, as a scoped
+        // item and a link ahead of the list both do.
+        #expect(
+            NavigationModel.surface(for: .attentionItem("item-a"), in: list(store))
+                == .card(itemID: "item-a"))
+    }
+
+    @Test func aQuietTasksPageHasNoLeadingCard() {
+        let (store, task) = task(holding: [])
+        #expect(
+            NavigationModel.surface(for: .task(task.task.id), in: list(store, tasks: [task]))
+                == .taskPage(taskID: task.task.id, leadingItemID: nil))
+    }
+
+    @Test func theLastOpenItemResolvingKeepsThePageAndDropsTheCard() {
+        let (store, task) = task()
+        let navigation = NavigationModel(launchInputs: LaunchInputs(colorSchemeRaw: nil, selectionRaw: nil))
+        navigation.route(to: .attentionItem("item-a"))
+
+        store.replaceAll(with: [
+            AttentionFixtures.closedByDaemon(
+                store.orderedSnapshots[0], id: "item-a", cause: .expired, after: 60, reason: "Expired.")
+        ])
+        let rows = list(store, tasks: [task])
+        navigation.repairSelection(in: rows, previouslyOpen: ["item-a"])
+
+        #expect(
+            navigation.detailSurface(in: rows)
+                == .taskPage(taskID: task.task.id, leadingItemID: nil))
+    }
+
+    @Test func aRunSurfacesOverItsTask() {
+        let (store, task) = task(holding: [])
+        let navigation = NavigationModel(launchInputs: LaunchInputs(colorSchemeRaw: nil, selectionRaw: nil))
+        navigation.route(to: .run(taskID: task.task.id, runID: "run-a"))
+
+        #expect(
+            navigation.detailSurface(in: list(store, tasks: [task]))
+                == .run(taskID: task.task.id, runID: "run-a"))
+    }
+
+    @Test func aRunOpenedFromThePageReturnsToItsLeadingCard() {
+        let (store, task) = task(holding: ["item-a", "item-b"])
+        let rows = list(store, tasks: [task])
+        let navigation = NavigationModel(launchInputs: LaunchInputs(colorSchemeRaw: nil, selectionRaw: nil))
+        navigation.route(to: .attentionItem("item-b"))
+
+        navigation.openRun(taskID: task.task.id, runID: "run-a")
+        #expect(navigation.detailSurface(in: rows) == .run(taskID: task.task.id, runID: "run-a"))
+        #expect(navigation.holdsCard(in: rows))
+
+        navigation.closeRun()
+        #expect(
+            navigation.detailSurface(in: rows)
+                == .taskPage(taskID: task.task.id, leadingItemID: "item-b"))
+    }
+
+    @Test func anItemResolvingUnderARunKeepsTheRunOpen() {
+        let (store, task) = task()
+        let navigation = NavigationModel(launchInputs: LaunchInputs(colorSchemeRaw: nil, selectionRaw: nil))
+        navigation.route(to: .attentionItem("item-a"))
+        navigation.openRun(taskID: task.task.id, runID: "run-a")
+
+        store.replaceAll(with: [
+            AttentionFixtures.closedByDaemon(
+                store.orderedSnapshots[0], id: "item-a", cause: .expired, after: 60, reason: "Expired.")
+        ])
+        navigation.repairSelection(in: list(store, tasks: [task]), previouslyOpen: ["item-a"])
+
+        #expect(navigation.path == [.task(task.task.id), .run(taskID: task.task.id, runID: "run-a")])
+    }
+
+    /// The card leading a task's route stays when a newer item arrives, so
+    /// the sheet or composer open on it stays too.
+    @Test func aNewerItemDoesNotSwapTheCardLeadingATask() {
+        let (store, task) = task(holding: ["item-new", "item-lead"])
+        let navigation = NavigationModel(launchInputs: LaunchInputs(colorSchemeRaw: nil, selectionRaw: nil))
+        navigation.route(to: .task(task.task.id))
+
+        navigation.repairSelection(in: list(store, tasks: [task]), previouslyOpen: ["item-lead"])
+
+        #expect(navigation.path == [.attentionItem("item-lead")])
+    }
+
+    @Test func aQuietTaskHoldsNoCard() {
+        let (store, task) = task(holding: [])
+        let navigation = NavigationModel(launchInputs: LaunchInputs(colorSchemeRaw: nil, selectionRaw: nil))
+        navigation.route(to: .task(task.task.id))
+        #expect(!navigation.holdsCard(in: list(store, tasks: [task])))
+    }
 }

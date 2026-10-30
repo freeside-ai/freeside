@@ -237,7 +237,7 @@ public final class AppSession {
         case .inbox:
             // Back to the list, except over an open card: a link any app can
             // send must not discard what the operator has in progress on it.
-            if navigation.attentionSelection == nil { navigation.setPath([]) }
+            if !navigation.holdsCard(in: coordinator.unifiedList) { navigation.setPath([]) }
         case .attentionItem(let itemID, let channel, let attempt):
             // Whichever finishes first ends the wait. Awaiting the cancelled
             // receipt instead would wait on the transport to honor it.
