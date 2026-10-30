@@ -78,7 +78,11 @@ var targets: [Target] = [
                 "FreesideCore", "FreesideModel", "FreesideAPI", "FreesideTestSupport",
                 .product(name: "Crypto", package: "swift-crypto"),
             ],
-            resources: [.copy("Resources")]
+            // Processed, not copied: `.copy` keeps the folder, and the
+            // two build systems then disagree on whether it is the
+            // bundle's own resource directory. Processing places the
+            // digest files at the resource root under both.
+            resources: [.process("Resources")]
         )
     )
     // The §5.14 real-daemon convergence pass (issue #72): every suite is
