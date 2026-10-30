@@ -2,24 +2,13 @@ import FreesideAPI
 import SwiftUI
 
 public struct FreesideRootView: View {
-    /// The macOS sidebar's section switcher; iOS keeps its tab bar. Each
-    /// segment carries the count its list's scope control used to show:
-    /// open items beside Inbox, active tasks beside Tasks.
-    static func sectionSegments(
-        openCount: Int?, activeTaskCount: Int?
-    ) -> [FreesideSegmentedControl<LaunchInputs.Screen>.Segment] {
-        [
-            .init(value: .inbox, label: "Inbox", count: openCount),
-            .init(value: .tasks, label: "Tasks", count: activeTaskCount),
-        ]
-    }
-
     @Environment(\.dynamicTypeSize) private var systemDynamicTypeSize
     @Environment(\.scenePhase) private var scenePhase
     @State private var session: AppSession
     @State private var navigation: NavigationModel
     @State private var feedback: DecisionFeedbackModel
     @State private var flowPreferences: DecisionFlowPreferences
+    @State private var listPreferences = ListSectionPreferences()
     private let notificationOpens: NotificationOpenLog
     @State private var technicalDetailsRequest: TechnicalDetailsRevealRequest?
     @State private var showsInboxClearResult: Bool
@@ -31,7 +20,6 @@ public struct FreesideRootView: View {
     /// where the standing notices take the window's width again.
     @State private var splitVisibility = NavigationSplitViewVisibility.automatic
     private let launchColorScheme: ColorScheme?
-    private let launchInboxScope: InboxStore.Scope?
     private let launchProjectID: String?
     private let launchDetailsExpanded: Bool
     private let launchDynamicTypeSize: DynamicTypeSize?
@@ -60,7 +48,6 @@ public struct FreesideRootView: View {
         _technicalDetailsRequest = State(initialValue: nil)
         _showsInboxClearResult = State(initialValue: false)
         launchColorScheme = launchInputs.colorScheme
-        launchInboxScope = launchInputs.inboxScope
         launchProjectID = launchInputs.projectID
         launchDetailsExpanded = launchInputs.detailsExpanded
         launchDynamicTypeSize = launchInputs.dynamicTypeSize
@@ -125,14 +112,9 @@ public struct FreesideRootView: View {
     /// cache and can still resend a command whose answer was lost (plan
     /// §5.14); Pair Again is then the banner's button, as on iPhone.
     static func showsRevokedPane(
-        freshness: InboxStore.Freshness, screen: LaunchInputs.Screen,
-        attentionSelection: String?, taskSelection: String?, runSelection: String?
+        freshness: InboxStore.Freshness, path: [NavigationModel.Destination]
     ) -> Bool {
-        guard FreshnessBanner.showsRePairAction(for: freshness, hasHandler: true) else { return false }
-        switch screen {
-        case .inbox: return attentionSelection == nil
-        case .tasks: return taskSelection == nil && runSelection == nil
-        }
+        FreshnessBanner.showsRePairAction(for: freshness, hasHandler: true) && path.isEmpty
     }
 
     /// Pair Again on the Revoked banner. Where the Mac's detail pane holds
@@ -140,13 +122,7 @@ public struct FreesideRootView: View {
     /// pane beside its list, and always keeps the button under the sentence.
     private func bannerRePair(_ freshness: InboxStore.Freshness) -> (() -> Void)? {
         #if os(macOS)
-            if Self.showsRevokedPane(
-                freshness: freshness,
-                screen: operatorSelectedTabBinding.wrappedValue,
-                attentionSelection: rawAttentionSelectionBinding.wrappedValue,
-                taskSelection: operatorTaskSelectionBinding.wrappedValue,
-                runSelection: navigation.runSelection)
-            {
+            if Self.showsRevokedPane(freshness: freshness, path: navigation.path) {
                 return nil
             }
         #endif
@@ -177,10 +153,7 @@ public struct FreesideRootView: View {
             onRePair: bannerRePair(coordinator.store.freshness),
             operation: coordinator.unattendedOperation,
             reason: { coordinator.store.openItemReason($0) },
-            onOpenItem: { itemID in
-                navigation.selectTab(.inbox)
-                navigation.selectAttentionItem(itemID)
-            },
+            onOpenItem: { navigation.route(to: .attentionItem($0)) },
             placement: placement)
     }
 
@@ -194,13 +167,7 @@ public struct FreesideRootView: View {
             if !standingNoticesDrawInDetailColumn {
                 standingNotices(coordinator, placement: .window)
             }
-            platformNavigation(
-                coordinator,
-                selectedTab: operatorSelectedTabBinding,
-                inboxPath: operatorInboxPathBinding,
-                tasksPath: operatorTasksPathBinding,
-                attentionSelection: rawAttentionSelectionBinding,
-                taskSelection: operatorTaskSelectionBinding)
+            platformNavigation(coordinator)
         }
         // The heartbeat is the loss detector (plan §5.14); its first
         // round trip also bootstraps a session with no cursors yet.
@@ -235,7 +202,7 @@ public struct FreesideRootView: View {
             }
         }
         // One sheet for both platforms, above the navigation containers, so
-        // the Mac toolbar and both iPhone stacks open the same one.
+        // the Mac toolbar and the iPhone stack open the same one.
         .sheet(isPresented: $navigation.devicesPresented) {
             DevicesView(
                 model: DevicesModel(
@@ -363,90 +330,14 @@ public struct FreesideRootView: View {
     }
 
     @ViewBuilder
-    private func platformNavigation(
-        _ coordinator: SyncCoordinator,
-        selectedTab: Binding<LaunchInputs.Screen>,
-        inboxPath: Binding<[String]>,
-        tasksPath: Binding<[String]>,
-        attentionSelection: Binding<String?>,
-        taskSelection: Binding<String?>
-    ) -> some View {
+    private func platformNavigation(_ coordinator: SyncCoordinator) -> some View {
         #if os(iOS)
-            if #available(iOS 18.0, *) {
-                TabView(selection: selectedTab) {
-                    Tab("Inbox", systemImage: "tray.full", value: LaunchInputs.Screen.inbox) {
-                        inboxStack(
-                            coordinator,
-                            path: inboxPath,
-                            selection: attentionSelection)
-                    }
-                    .badge(coordinator.store.urgentOpenCount)
-
-                    Tab("Tasks", systemImage: "checklist", value: LaunchInputs.Screen.tasks) {
-                        tasksStack(coordinator, path: tasksPath)
-                    }
-                }
-                .tabViewStyle(.sidebarAdaptable)
-            } else {
-                TabView(selection: selectedTab) {
-                    inboxStack(
-                        coordinator,
-                        path: inboxPath,
-                        selection: attentionSelection
-                    )
-                    .tabItem { Label("Inbox", systemImage: "tray.full") }
-                    .tag(LaunchInputs.Screen.inbox)
-                    .badge(coordinator.store.urgentOpenCount)
-
-                    tasksStack(coordinator, path: tasksPath)
-                        .tabItem { Label("Tasks", systemImage: "checklist") }
-                        .tag(LaunchInputs.Screen.tasks)
-                }
-            }
+            listStack(coordinator)
         #else
             NavigationSplitView(columnVisibility: $splitVisibility) {
-                VStack(spacing: 0) {
-                    FreesideSegmentedControl(
-                        accessibilityLabel: "Section",
-                        segments: Self.sectionSegments(
-                            openCount: InboxView.openCount(in: coordinator.store),
-                            activeTaskCount: TasksListView.activeCount(
-                                in: coordinator.tasks, loaded: coordinator.store.loadState == .loaded)),
-                        selection: selectedTab
-                    )
-                    .padding()
-                    switch selectedTab.wrappedValue {
-                    case .inbox:
-                        InboxView(
-                            store: coordinator.store, selection: attentionSelection,
-                            launchScope: launchInboxScope, launchProjectID: launchProjectID,
-                            interactiveSelection: operatorAttentionSelectionBinding,
-                            onFilterChange: navigation.recordOperatorNavigation,
-                            onMoveSelection: {
-                                navigation.moveAttentionSelection(
-                                    by: $0, store: coordinator.store)
-                            },
-                            lastUpdatedAt: coordinator.lastUpdatedAt,
-                            onRefresh: coordinator.refresh,
-                            onRevealTechnicalDetails: revealTechnicalDetails)
-                    case .tasks:
-                        TasksListView(
-                            tasks: coordinator.tasks,
-                            runs: coordinator.runs,
-                            attentionItems: coordinator.store.orderedSnapshots,
-                            taskTimelines: coordinator.taskTimelinesByTaskID,
-                            runTimelines: coordinator.timelinesByRunID,
-                            cursors: coordinator.cursors,
-                            cacheGeneration: coordinator.cacheGeneration,
-                            onLoadTimeline: coordinator.refreshTaskTimeline,
-                            selection: taskSelection,
-                            onRefresh: coordinator.refresh,
-                            newTaskBlockedReason: TaskSubmissionModel.composeBlockedReason(
-                                freshness: coordinator.store.freshness))
-                    }
-                }
-                .background(Color.sidebarGround)
-                .navigationSplitViewColumnWidth(min: 280, ideal: 320)
+                unifiedList(coordinator)
+                    .background(Color.sidebarGround)
+                    .navigationSplitViewColumnWidth(min: 280, ideal: 320)
             } detail: {
                 VStack(spacing: 0) {
                     DecisionFeedbackBanner(
@@ -459,27 +350,15 @@ public struct FreesideRootView: View {
                     // inspector, so the inspector spans the pane's height
                     // instead of starting under them. Every other surface
                     // takes them from the column.
-                    let decisionIsOpen =
-                        selectedTab.wrappedValue == .inbox && attentionSelection.wrappedValue != nil
+                    let decisionIsOpen = navigation.attentionSelection != nil
                     StandingDetailColumn(notices: decisionIsOpen ? nil : notices) { topMargin in
                         Group {
                             if Self.showsRevokedPane(
-                                freshness: coordinator.store.freshness,
-                                screen: selectedTab.wrappedValue,
-                                attentionSelection: attentionSelection.wrappedValue,
-                                taskSelection: taskSelection.wrappedValue,
-                                runSelection: navigation.runSelection)
+                                freshness: coordinator.store.freshness, path: navigation.path)
                             {
                                 RevokedPane { rePairConfirmationPresented = true }
                             } else {
-                                macDetail(
-                                    coordinator,
-                                    screen: selectedTab.wrappedValue,
-                                    attentionSelection: attentionSelection.wrappedValue,
-                                    taskSelection: taskSelection.wrappedValue,
-                                    runSelection: navigation.runSelection,
-                                    topMargin: topMargin,
-                                    decisionNotices: notices)
+                                macDetail(coordinator, topMargin: topMargin, decisionNotices: notices)
                             }
                         }
                         .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -488,28 +367,8 @@ public struct FreesideRootView: View {
                 }
             }
             .toolbar {
-                ToolbarItem(placement: .navigation) {
-                    // The composer lives on the Tasks screen, so its action
-                    // shows only there. Setting the shared flag is the one way
-                    // the sheet opens, so this gate covers ⌘N and the menu too.
-                    if selectedTab.wrappedValue == .tasks {
-                        Button {
-                            navigation.newTaskComposerPresented = true
-                        } label: {
-                            Label("New task", systemImage: "plus")
-                        }
-                        .help(
-                            TaskSubmissionModel.composeBlockedReason(
-                                freshness: coordinator.store.freshness) ?? "New task"
-                        )
-                        .disabled(
-                            !TaskSubmissionModel.canCompose(freshness: coordinator.store.freshness))
-                    }
-                }
                 ToolbarItemGroup {
-                    if selectedTab.wrappedValue == .tasks {
-                        submissionRecoveryButton(coordinator)
-                    }
+                    submissionRecoveryButton(coordinator)
                     Button {
                         Task { await coordinator.refresh() }
                     } label: {
@@ -539,6 +398,26 @@ public struct FreesideRootView: View {
                 submissionRecoverySheet(coordinator)
             }
         #endif
+    }
+
+    private func unifiedList(_ coordinator: SyncCoordinator) -> some View {
+        UnifiedListView(
+            store: coordinator.store,
+            tasks: coordinator.tasks,
+            runs: coordinator.runs,
+            taskTimelines: coordinator.taskTimelinesByTaskID,
+            runTimelines: coordinator.timelinesByRunID,
+            cursors: coordinator.cursors,
+            cacheGeneration: coordinator.cacheGeneration,
+            onLoadTimeline: coordinator.refreshTaskTimeline,
+            navigation: navigation,
+            preferences: listPreferences,
+            launchProjectID: launchProjectID,
+            newTaskBlockedReason: TaskSubmissionModel.composeBlockedReason(
+                freshness: coordinator.store.freshness),
+            lastUpdatedAt: coordinator.lastUpdatedAt,
+            onRefresh: coordinator.refresh,
+            onRevealTechnicalDetails: revealTechnicalDetails)
     }
 
     private var devicesButton: some View {
@@ -576,123 +455,86 @@ public struct FreesideRootView: View {
     }
 
     #if os(iOS)
-        private func inboxStack(
-            _ coordinator: SyncCoordinator,
-            path: Binding<[String]>,
-            selection: Binding<String?>
-        ) -> some View {
+        private func listStack(_ coordinator: SyncCoordinator) -> some View {
             VStack(spacing: 0) {
                 DecisionFeedbackBanner(feedback: feedback, onView: viewConcludedItem)
-                NavigationStack(path: path) {
-                    InboxView(
-                        store: coordinator.store,
-                        selection: selection,
-                        launchScope: launchInboxScope,
-                        launchProjectID: launchProjectID,
-                        navigationPath: rawInboxPathBinding,
-                        linkedItemID: navigation.linkedItemID,
-                        onFilterChange: navigation.recordOperatorNavigation,
-                        lastUpdatedAt: coordinator.lastUpdatedAt,
-                        onRefresh: coordinator.refresh,
-                        onRevealTechnicalDetails: revealTechnicalDetails
-                    )
-                    .navigationDestination(for: String.self) { itemID in
-                        DecisionDetailView(
-                            store: coordinator.store,
-                            itemID: itemID,
-                            detailsExpanded: launchDetailsExpanded,
-                            detailsRevealRequest: technicalDetailsRequest,
-                            onConsumeDetailsRevealRequest: consumeTechnicalDetailsRequest,
-                            launchComposer: navigation.launchComposer(for: itemID),
-                            onConsumeLaunchComposer: navigation.consumeLaunchComposer,
-                            onSelectItem: { navigation.route(to: .attentionItem($0)) },
-                            tasks: coordinator.tasks,
-                            onSelectTask: { navigation.route(to: .task($0)) },
-                            onConclusion: { conclusion in
-                                handleConclusion(conclusion, coordinator: coordinator)
-                            })
-                    }
-                    // The toolbar rides the stack's root content, not the
-                    // NavigationStack, so the gear renders in the inbox's
-                    // navigation bar and stays off the pushed decision detail.
-                    // iOS drops a toolbar attached to the NavigationStack.
-                    .toolbar {
-                        ToolbarItemGroup(placement: .topBarTrailing) {
-                            devicesButton
-                            decisionFlowMenu
+                NavigationStack(
+                    path: Binding(get: { navigation.path }, set: { navigation.setPath($0) })
+                ) {
+                    unifiedList(coordinator)
+                        // The toolbar and sheets ride the stack's root content,
+                        // not the NavigationStack, so the trailing items render
+                        // in the list's navigation bar and stay off the pushed
+                        // detail. iOS drops a toolbar attached to the
+                        // NavigationStack.
+                        .toolbar {
+                            ToolbarItemGroup(placement: .topBarTrailing) {
+                                submissionRecoveryButton(coordinator)
+                                devicesButton
+                                decisionFlowMenu
+                            }
                         }
-                    }
+                        .sheet(isPresented: Bindable(navigation).newTaskComposerPresented) {
+                            NewTaskSheet(
+                                projects: TaskDisplay.knownProjects(in: coordinator.tasks),
+                                model: TaskSubmissionModel(coordinator: coordinator),
+                                onSubmitted: { routeToSubmittedTask($0, coordinator: coordinator) }
+                            )
+                            .dynamicTypeSize(launchDynamicTypeSize ?? systemDynamicTypeSize)
+                        }
+                        .sheet(isPresented: Bindable(navigation).submissionRecoveryPresented) {
+                            submissionRecoverySheet(coordinator)
+                        }
+                        .navigationDestination(for: NavigationModel.Destination.self) { destination in
+                            phoneDetail(destination, coordinator: coordinator)
+                        }
                 }
             }
         }
 
-        /// The stack is rooted at a task and may hold that task's run above
-        /// it, so one destination resolves either id: task ids and run ids
-        /// never collide.
-        private func tasksStack(
-            _ coordinator: SyncCoordinator,
-            path: Binding<[String]>
+        @ViewBuilder
+        private func phoneDetail(
+            _ destination: NavigationModel.Destination, coordinator: SyncCoordinator
         ) -> some View {
-            NavigationStack(path: path) {
-                TasksListView(
+            switch destination {
+            case .attentionItem(let itemID):
+                DecisionDetailView(
+                    store: coordinator.store,
+                    itemID: itemID,
+                    detailsExpanded: launchDetailsExpanded,
+                    detailsRevealRequest: technicalDetailsRequest,
+                    onConsumeDetailsRevealRequest: consumeTechnicalDetailsRequest,
+                    launchComposer: navigation.launchComposer(for: itemID),
+                    onConsumeLaunchComposer: navigation.consumeLaunchComposer,
+                    onSelectItem: { navigation.route(to: .attentionItem($0)) },
                     tasks: coordinator.tasks,
-                    runs: coordinator.runs,
-                    attentionItems: coordinator.store.orderedSnapshots,
-                    taskTimelines: coordinator.taskTimelinesByTaskID,
-                    runTimelines: coordinator.timelinesByRunID,
-                    cursors: coordinator.cursors,
-                    cacheGeneration: coordinator.cacheGeneration,
-                    onLoadTimeline: coordinator.refreshTaskTimeline,
-                    selection: rawTaskSelectionBinding,
-                    navigationPath: rawTasksPathBinding,
-                    onRefresh: coordinator.refresh,
-                    newTaskBlockedReason: TaskSubmissionModel.composeBlockedReason(
-                        freshness: coordinator.store.freshness)
-                )
-                // The toolbar and sheet ride the stack's root content, not the
-                // NavigationStack, so the trailing items render in the list's
-                // navigation bar and stay off the pushed task and run detail.
-                .toolbar {
-                    ToolbarItemGroup(placement: .topBarTrailing) {
-                        Button {
-                            navigation.newTaskComposerPresented = true
-                        } label: {
-                            Label("New task", systemImage: "plus")
-                        }
-                        .disabled(
-                            !TaskSubmissionModel.canCompose(freshness: coordinator.store.freshness))
-                        submissionRecoveryButton(coordinator)
-                        devicesButton
-                        decisionFlowMenu
-                    }
+                    onSelectTask: { navigation.route(to: .task($0)) },
+                    onConclusion: { conclusion in
+                        handleConclusion(conclusion, coordinator: coordinator)
+                    })
+            case .task(let taskID):
+                if let task = coordinator.tasks.first(where: { $0.task.id == taskID }) {
+                    TaskTimelineView(
+                        coordinator: coordinator, snapshot: task,
+                        onOpenRun: { navigation.route(to: .run(taskID: taskID, runID: $0)) },
+                        onOpenInboxItem: { navigation.route(to: .attentionItem($0)) })
+                } else {
+                    unavailableDetail
                 }
-                .sheet(isPresented: Bindable(navigation).newTaskComposerPresented) {
-                    NewTaskSheet(
-                        projects: TaskDisplay.knownProjects(in: coordinator.tasks),
-                        model: TaskSubmissionModel(coordinator: coordinator),
-                        onSubmitted: { routeToSubmittedTask($0, coordinator: coordinator) }
-                    )
-                    .dynamicTypeSize(launchDynamicTypeSize ?? systemDynamicTypeSize)
-                }
-                .sheet(isPresented: Bindable(navigation).submissionRecoveryPresented) {
-                    submissionRecoverySheet(coordinator)
-                }
-                .navigationDestination(for: String.self) { id in
-                    if let task = coordinator.tasks.first(where: { $0.task.id == id }) {
-                        TaskTimelineView(
-                            coordinator: coordinator, snapshot: task,
-                            onOpenRun: { navigation.route(to: .run(taskID: task.task.id, runID: $0)) },
-                            onOpenInboxItem: { navigation.route(to: .attentionItem($0)) })
-                    } else if let run = coordinator.runs.first(where: { $0.run.id == id }) {
-                        RunTimelineView(coordinator: coordinator, snapshot: run)
-                    } else {
-                        UnavailableStateView(
-                            glyph: .tasks, title: "Not available",
-                            description: "This task or run is no longer available.",
-                            seat: .detailColumn)
-                    }
+            case .run(_, let runID):
+                if let run = coordinator.runs.first(where: { $0.run.id == runID }) {
+                    RunTimelineView(coordinator: coordinator, snapshot: run)
+                } else {
+                    unavailableDetail
                 }
             }
+        }
+
+        private var unavailableDetail: some View {
+            UnavailableStateView(
+                glyph: .tasks, title: "Not available",
+                description: "This task or run is no longer available.",
+                seat: .detailColumn)
         }
 
         private var decisionFlowMenu: some View {
@@ -709,90 +551,75 @@ public struct FreesideRootView: View {
         @ViewBuilder
         private func macDetail(
             _ coordinator: SyncCoordinator,
-            screen: LaunchInputs.Screen,
-            attentionSelection: String?,
-            taskSelection: String?,
-            runSelection: String?,
             topMargin: CGFloat?,
             decisionNotices: StandingNotices?
         ) -> some View {
-            switch screen {
-            case .inbox:
-                // The detail closure's `decisionIsOpen` names this branch:
-                // the column gives up the notices exactly when this view
-                // draws them, so a condition added here belongs there too.
-                if let attentionSelection {
-                    DecisionDetailView(
-                        store: coordinator.store,
-                        itemID: attentionSelection,
-                        detailsExpanded: launchDetailsExpanded,
-                        detailsRevealRequest: technicalDetailsRequest,
-                        onConsumeDetailsRevealRequest: consumeTechnicalDetailsRequest,
-                        launchComposer: navigation.launchComposer(for: attentionSelection),
-                        onConsumeLaunchComposer: navigation.consumeLaunchComposer,
-                        inspectorPresented: Bindable(navigation).inspectorPresented,
-                        standingNotices: decisionNotices,
-                        onSelectItem: { navigation.route(to: .attentionItem($0)) },
-                        tasks: coordinator.tasks,
-                        onSelectTask: { navigation.route(to: .task($0)) },
-                        onConclusion: { conclusion in
-                            handleConclusion(conclusion, coordinator: coordinator)
-                        }
-                    )
-                    .id(attentionSelection)
-                } else if showsInboxClearResult {
-                    // The same two lines the empty Open scope draws in the
-                    // sidebar, so the two panes agree.
-                    let empty = InboxView.emptyScope(.open, projectID: coordinator.store.projectID)
-                    UnavailableStateView(
-                        glyph: .inbox, title: empty.title, description: empty.description,
-                        seat: .detailColumn)
-                } else {
-                    OperationalSummaryView(
-                        summary: OperationalSummary(
-                            openSnapshots: coordinator.store.openSnapshots,
-                            tasks: coordinator.tasks,
-                            freshness: coordinator.store.freshness),
-                        onSelectItem: { navigation.route(to: .attentionItem($0)) },
-                        onShowTasks: { navigation.showActiveTasks() },
-                        topMargin: topMargin
-                    )
-                    // Pinned to the column's top, where the decision card
-                    // it stands in for begins, instead of floating at its
-                    // center.
-                    .frame(maxHeight: .infinity, alignment: .top)
-                }
-            case .tasks:
-                if let runSelection {
-                    // A run opened under its task: the column has no stack to
-                    // pop, so a return row leads back to the task.
-                    VStack(spacing: 0) {
-                        runReturnRow(topMargin: topMargin)
-                        if let run = coordinator.runs.first(where: { $0.run.id == runSelection }) {
-                            RunTimelineView(coordinator: coordinator, snapshot: run, topMargin: 10)
-                        } else {
-                            UnavailableStateView(
-                                glyph: .tasks, title: "Run unavailable",
-                                description: "This run is no longer available.",
-                                seat: .detailColumn)
-                        }
+            // The detail closure's `decisionIsOpen` names the first branch:
+            // the column gives up the notices exactly when this view draws
+            // them, so a condition added here belongs there too.
+            if let attentionSelection = navigation.attentionSelection {
+                DecisionDetailView(
+                    store: coordinator.store,
+                    itemID: attentionSelection,
+                    detailsExpanded: launchDetailsExpanded,
+                    detailsRevealRequest: technicalDetailsRequest,
+                    onConsumeDetailsRevealRequest: consumeTechnicalDetailsRequest,
+                    launchComposer: navigation.launchComposer(for: attentionSelection),
+                    onConsumeLaunchComposer: navigation.consumeLaunchComposer,
+                    inspectorPresented: Bindable(navigation).inspectorPresented,
+                    standingNotices: decisionNotices,
+                    onSelectItem: { navigation.route(to: .attentionItem($0)) },
+                    tasks: coordinator.tasks,
+                    onSelectTask: { navigation.route(to: .task($0)) },
+                    onConclusion: { conclusion in
+                        handleConclusion(conclusion, coordinator: coordinator)
                     }
-                    .id(runSelection)
-                } else if let taskSelection,
-                    let task = coordinator.tasks.first(where: { $0.task.id == taskSelection })
-                {
-                    TaskTimelineView(
-                        coordinator: coordinator, snapshot: task,
-                        onOpenRun: { navigation.route(to: .run(taskID: task.task.id, runID: $0)) },
-                        onOpenInboxItem: { navigation.route(to: .attentionItem($0)) },
-                        topMargin: topMargin
-                    )
-                    .id(taskSelection)
-                } else {
-                    UnavailableStateView(
-                        glyph: .tasks, title: "Tasks", description: "Select a task to inspect its history.",
-                        seat: .detailColumn)
+                )
+                .id(attentionSelection)
+            } else if let runSelection = navigation.runSelection {
+                // A run opened under its task: the column has no stack to
+                // pop, so a return row leads back to the task.
+                VStack(spacing: 0) {
+                    runReturnRow(topMargin: topMargin)
+                    if let run = coordinator.runs.first(where: { $0.run.id == runSelection }) {
+                        RunTimelineView(coordinator: coordinator, snapshot: run, topMargin: 10)
+                    } else {
+                        UnavailableStateView(
+                            glyph: .tasks, title: "Run unavailable",
+                            description: "This run is no longer available.",
+                            seat: .detailColumn)
+                    }
                 }
+                .id(runSelection)
+            } else if let taskSelection = navigation.taskSelection,
+                let task = coordinator.tasks.first(where: { $0.task.id == taskSelection })
+            {
+                TaskTimelineView(
+                    coordinator: coordinator, snapshot: task,
+                    onOpenRun: { navigation.route(to: .run(taskID: task.task.id, runID: $0)) },
+                    onOpenInboxItem: { navigation.route(to: .attentionItem($0)) },
+                    topMargin: topMargin
+                )
+                .id(taskSelection)
+            } else if showsInboxClearResult {
+                // The same two lines the empty Needs you draws in the
+                // sidebar, so the two panes agree.
+                let empty = UnifiedListView.emptyNeedsYou(projectID: coordinator.store.projectID)
+                UnavailableStateView(
+                    glyph: .inbox, title: empty.title, description: empty.description,
+                    seat: .detailColumn)
+            } else {
+                OperationalSummaryView(
+                    summary: OperationalSummary(
+                        list: coordinator.unifiedList, freshness: coordinator.store.freshness),
+                    onSelectItem: { navigation.route(to: .attentionItem($0)) },
+                    onShowTasks: showWorking,
+                    topMargin: topMargin
+                )
+                // Pinned to the column's top, where the decision card
+                // it stands in for begins, instead of floating at its
+                // center.
+                .frame(maxHeight: .infinity, alignment: .top)
             }
         }
 
@@ -832,9 +659,9 @@ public struct FreesideRootView: View {
                 itemID: conclusion.itemID,
                 expectedOperatorNavigationRevision: operatorNavigationRevision,
                 advancesToNextItem: flowPreferences.advancesToNextItem,
-                store: coordinator.store)
+                list: coordinator.unifiedList)
             {
-            case .advanced, .returnedToInbox:
+            case .advanced, .returnedToList:
                 showsInboxClearResult = false
             case .inboxClear:
                 showsInboxClearResult = true
@@ -844,81 +671,35 @@ public struct FreesideRootView: View {
         }
     }
 
-    private var operatorSelectedTabBinding: Binding<LaunchInputs.Screen> {
-        Binding(
-            get: { navigation.selectedTab },
-            set: { navigation.selectTab($0) })
-    }
-
-    private var operatorInboxPathBinding: Binding<[String]> {
-        Binding(
-            get: { navigation.inboxPath },
-            set: { navigation.setInboxPath($0) })
-    }
-
-    private var rawInboxPathBinding: Binding<[String]> {
-        Binding(
-            get: { navigation.inboxPath },
-            set: { navigation.inboxPath = $0 })
-    }
-
-    private var operatorTasksPathBinding: Binding<[String]> {
-        Binding(
-            get: { navigation.tasksPath },
-            set: { navigation.setTasksPath($0) })
-    }
-
-    private var rawTasksPathBinding: Binding<[String]> {
-        Binding(
-            get: { navigation.tasksPath },
-            set: { navigation.applyTasksPath($0) })
-    }
-
-    private var operatorTaskSelectionBinding: Binding<String?> {
-        Binding(
-            get: { navigation.taskSelection },
-            set: { navigation.selectTask($0) })
-    }
-
-    /// The iOS list's selection binding: the stack carries the selection
-    /// there, so the list's own writes need no routing.
-    private var rawTaskSelectionBinding: Binding<String?> {
-        Binding(
-            get: { navigation.taskSelection },
-            set: { navigation.taskSelection = $0 })
-    }
-
-    private var rawAttentionSelectionBinding: Binding<String?> {
-        Binding(
-            get: { navigation.attentionSelection },
-            set: { navigation.attentionSelection = $0 })
-    }
-
-    private var operatorAttentionSelectionBinding: Binding<String?> {
-        Binding(
-            get: { navigation.attentionSelection },
-            set: { navigation.selectAttentionItem($0) })
-    }
-
     private func viewConcludedItem(_ itemID: String) {
         feedback.dismiss()
         showsInboxClearResult = false
-        navigation.route(to: .attentionItem(itemID))
+        // The operator asked for this card, whether or not it's still open.
+        navigation.route(toLinkedItem: itemID)
+    }
+
+    /// Clears the selection and opens Working: where the active tasks are,
+    /// and where a task the cache hasn't caught up to will land.
+    private func showWorking() {
+        navigation.select(nil)
+        listPreferences.workingExpanded = true
     }
 
     private func consumeTechnicalDetailsRequest(_ nonce: UUID) {
         technicalDetailsRequest = technicalDetailsRequest?.consuming(nonce)
     }
 
-    /// Routes to the newly created task after a submit. The model confirms the
-    /// task is synced before reporting success, but a failed post-submit
-    /// refresh can still leave it absent from the cache; fall back to the Tasks
-    /// list so a successful submission never lands on a "Not available" detail.
+    /// Routes to the newly created task after a submit, with Working open so
+    /// its row shows. The model confirms the task is synced before reporting
+    /// success, but a failed post-submit refresh can still leave it absent
+    /// from the cache; fall back to the list so a successful submission never
+    /// lands on a "Not available" detail.
     private func routeToSubmittedTask(_ taskID: String, coordinator: SyncCoordinator) {
         if coordinator.tasks.contains(where: { $0.task.id == taskID }) {
+            listPreferences.workingExpanded = true
             navigation.route(to: .task(taskID))
         } else {
-            navigation.showActiveTasks()
+            showWorking()
         }
     }
 

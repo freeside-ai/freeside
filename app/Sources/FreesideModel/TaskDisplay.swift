@@ -597,7 +597,7 @@ package enum TaskDisplay {
     /// coarse under a day, the one short time format from a day on.
     package static func rowTime(_ task: Components.Schemas.Task, now: Date) -> String {
         if now.timeIntervalSince(task.last_activity_at) < 86_400 {
-            return "\(AttentionDisplay.relativeRowTime(task.last_activity_at, now: now)) ago"
+            return AttentionDisplay.relativeRowTime(task.last_activity_at, now: now)
         }
         return FreesideFormat.shortTime(task.last_activity_at, now: now)
     }

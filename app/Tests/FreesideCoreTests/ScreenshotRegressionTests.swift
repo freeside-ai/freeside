@@ -65,7 +65,7 @@
         /// one wrapped-text case per family, where a contrast bug could show
         /// only at a large size.
         private static let darkWrappedTextSpecimens: Set<String> = [
-            "inbox-sidebar-dark",
+            "unified-list-dark",
             "discuss-composer-phone-dark",
             "new-task-sheet-phone-filled-dark",
             "run-review-findings-390-dark",
@@ -457,9 +457,9 @@
         }
 
         @Test func matrixSizesCoverEveryLayoutBreakpointButRepeatNone() {
-            #expect(Self.matrixSizeNames(for: "inbox-sidebar", colorScheme: .light) == Self.lightMatrixSizes)
+            #expect(Self.matrixSizeNames(for: "unified-list", colorScheme: .light) == Self.lightMatrixSizes)
             #expect(Self.lightMatrixSizes == ["large", "xxxlarge", "ax1", "ax5"])
-            #expect(Self.matrixSizeNames(for: "inbox-dark", colorScheme: .dark) == ["large"])
+            #expect(Self.matrixSizeNames(for: "unified-list-phone-dark", colorScheme: .dark) == ["large"])
             for specimen in Self.darkWrappedTextSpecimens {
                 #expect(Self.matrixSizeNames(for: specimen, colorScheme: .dark) == ["large", "ax5"])
             }
@@ -525,49 +525,91 @@
             }
         }
 
+        private func screenshotNavigation(selecting itemID: String?) -> NavigationModel {
+            let navigation = NavigationModel(
+                launchInputs: LaunchInputs(colorSchemeRaw: nil, selectionRaw: nil))
+            if let itemID { navigation.route(to: .attentionItem(itemID)) }
+            return navigation
+        }
+
+        private func screenshotListPreferences(expanded: Bool = false) throws -> ListSectionPreferences {
+            let defaults = try #require(UserDefaults(suiteName: "FreesideScreenshotList-\(UUID().uuidString)"))
+            let preferences = ListSectionPreferences(defaults: defaults)
+            preferences.workingExpanded = expanded
+            preferences.finishedExpanded = expanded
+            return preferences
+        }
+
+        /// The list with its sections held open or shut, one task standing in
+        /// Needs you among the scoped items. The canvas frames these match
+        /// are named in the unit's decision note.
+        private func unifiedListSurfaces(
+            inbox: [Components.Schemas.AttentionItemSnapshot],
+            tasks: [Components.Schemas.TaskSnapshot],
+            runs: [Components.Schemas.RunSnapshot]
+        ) throws -> [Surface] {
+            let store = InboxStore(client: APIClientFactory.mock(server: MockServer()))
+            store.replaceAll(
+                with: inbox.map { snapshot in
+                    var snapshot = snapshot
+                    if snapshot.item.id == "item-spec_approval" {
+                        snapshot.item.subject = .task(
+                            .init(
+                                subject_type: .task, subject_id: TaskFixtures.retryTaskID,
+                                task_id: TaskFixtures.retryTaskID))
+                    }
+                    return snapshot
+                })
+            func list(_ store: InboxStore, expanded: Bool = false) throws -> AnyView {
+                try AnyView(
+                    UnifiedListView(
+                        store: store, tasks: tasks, runs: runs,
+                        navigation: screenshotNavigation(selecting: "item-spec_approval"),
+                        preferences: screenshotListPreferences(expanded: expanded)
+                    ).screenshotContent(now: screenshotNow))
+            }
+            var surfaces: [Surface] = []
+            for colorScheme in [ColorScheme.light, .dark] {
+                let suffix = colorScheme == .dark ? "-dark" : ""
+                surfaces += try [
+                    Surface(
+                        name: "unified-list" + suffix, width: 320, colorScheme: colorScheme, view: list(store)),
+                    Surface(
+                        name: "unified-list-working-expanded" + suffix, width: 320, colorScheme: colorScheme,
+                        view: list(store, expanded: true)),
+                    Surface(
+                        name: "unified-list-phone" + suffix, width: 390, colorScheme: colorScheme,
+                        view: list(store, expanded: true)),
+                    Surface(
+                        name: "project-filter-popover" + suffix, width: 288, colorScheme: colorScheme,
+                        view: AnyView(
+                            ProjectFilterPopover(
+                                projects: ["freeside", "freeside-ai/oriole"], offersNoProject: true,
+                                selection: "freeside", onSelect: { _ in },
+                                rendersInteractiveControls: false
+                            ).padding(10))),
+                ]
+            }
+            let filtered = InboxStore(client: APIClientFactory.mock(server: MockServer()))
+            filtered.replaceAll(with: store.orderedSnapshots)
+            filtered.selectProjectFilter("freeside")
+            try surfaces.append(
+                Surface(name: "unified-list-project-filter", width: 320, view: list(filtered, expanded: true)))
+            return surfaces
+        }
+
         private func makeSurfaces(at dynamicTypeSize: DynamicTypeSize) async throws -> [Surface] {
             let server = MockServer()
             let client = APIClientFactory.mock(server: server)
             let inbox = AttentionFixtures.defaultInbox()
-            let store = InboxStore(client: client, now: { screenshotNow })
+            let store = InboxStore(client: client)
             store.replaceAll(with: inbox)
             store.replaceAllConversations(with: AttentionFixtures.defaultConversations())
             for snapshot in inbox {
                 await preloadReferences(snapshot.item, into: store)
             }
 
-            var surfaces = [
-                Surface(
-                    name: "inbox",
-                    view: AnyView(
-                        InboxView(
-                            store: store,
-                            selection: .constant(inbox.first?.item.id),
-                            launchScope: nil,
-                            launchProjectID: nil
-                        ).screenshotContent(now: screenshotNow)
-                    ))
-            ]
-            // The macOS sidebar chrome in the design language: the section
-            // switcher and scope control as Freeside segments, the project
-            // trigger, and the first rows, by day and by dusk (the size loop
-            // covers the stacked layout from xxxLarge up). The switcher
-            // carries both counts, so the task fixtures supply the second.
-            let sidebarTaskCount = TasksListView.activeCount(in: TaskFixtures.defaultTasks(), loaded: true)
-            for colorScheme in [ColorScheme.light, .dark] {
-                surfaces.append(
-                    Surface(
-                        name: "inbox-sidebar" + (colorScheme == .dark ? "-dark" : ""),
-                        width: 320,
-                        colorScheme: colorScheme,
-                        view: AnyView(
-                            InboxView(
-                                store: store,
-                                selection: .constant(inbox.first?.item.id),
-                                launchScope: nil,
-                                launchProjectID: nil
-                            ).screenshotSidebar(now: screenshotNow, activeTaskCount: sidebarTaskCount))))
-            }
+            var surfaces: [Surface] = []
             let feedback = DecisionFeedbackModel(
                 announce: { _ in },
                 schedule: { _, _ in Task {} })
@@ -978,7 +1020,7 @@
                 ("publish_blocked-expired", AttentionFixtures.expiredPublishBlocked()),
                 ("effect_proposal-superseded", AttentionFixtures.supersededEffectProposal()),
             ]
-            let closedStore = InboxStore(client: client, now: { screenshotNow })
+            let closedStore = InboxStore(client: client)
             closedStore.replaceAll(with: closedMatrix.map(\.snapshot) + [dispute, specification, health])
             let closedTasks = closedMatrix.compactMap { entry -> Components.Schemas.TaskSnapshot? in
                 guard case .run(let run) = entry.snapshot.item.subject, let taskID = run.task_id,
@@ -1818,47 +1860,7 @@
             guard let retryTask = tasks.first(where: { $0.task.id == TaskFixtures.retryTaskID }) else {
                 throw ScreenshotError.missingRetryTask
             }
-            surfaces.append(
-                Surface(
-                    name: "tasks-list",
-                    view: AnyView(
-                        TasksListView(
-                            tasks: tasks,
-                            runs: runs,
-                            selection: .constant(retryTask.task.id)
-                        ).screenshotContent(now: RunFixtures.screenshotInstant)
-                    )))
-            // The empty scope at the sidebar's width, by day and by dusk:
-            // the empty state the list centers under its filters.
-            for colorScheme in [ColorScheme.light, .dark] {
-                surfaces.append(
-                    Surface(
-                        name: "tasks-list-empty" + (colorScheme == .dark ? "-dark" : ""),
-                        width: 320,
-                        colorScheme: colorScheme,
-                        view: AnyView(
-                            TasksListView(
-                                tasks: [],
-                                runs: [],
-                                selection: .constant(nil)
-                            ).screenshotContent(now: RunFixtures.screenshotInstant)
-                                .padding(.top, 32)
-                                .background(Color.sidebarGround)
-                        )))
-            }
-            for scope in [TaskListFilter.Scope.finished, .all] {
-                surfaces.append(
-                    Surface(
-                        name: "tasks-list-\(scope.rawValue)",
-                        view: AnyView(
-                            TasksListView(
-                                tasks: tasks,
-                                runs: runs,
-                                selection: .constant(nil),
-                                initialScope: scope
-                            ).screenshotContent(now: RunFixtures.screenshotInstant)
-                        )))
-            }
+            surfaces += try unifiedListSurfaces(inbox: inbox, tasks: tasks, runs: runs)
             // The three name sources side by side: an operator name, an
             // agent-proposed name with its claim mark, and the identifier
             // fallback, in every scheme and contrast.
@@ -3326,7 +3328,7 @@
                 ("subset", AttentionFixtures.subsetReviewDispute()),
             ] {
                 let routedClient = APIClientFactory.mock(server: MockServer(items: [routed]))
-                let routedStore = InboxStore(client: routedClient, now: { screenshotNow })
+                let routedStore = InboxStore(client: routedClient)
                 routedStore.replaceAll(with: [routed])
                 await preloadReferences(routed.item, into: routedStore)
                 let routedModel = DecisionModel(store: routedStore, itemID: routed.item.id)
@@ -3517,30 +3519,25 @@
                     view: AnyView(
                         selectedAlternativeDetail.screenshotCard(
                             realisticFindings, at: dynamicTypeSize))))
-            // The Open scope under a project filter that leaves nothing open
-            // (R13): the glyph, the statement, and the line that names the
-            // filter. The project's one item is resolved, so the filter
-            // survives and the scope is empty. Drawn last: ahead of another
-            // surface it moves that surface's glyph antialiasing (#1698).
+            // Needs you with nothing open (R13): the glyph, the statement, and
+            // Working one line below. Drawn last: ahead of another surface it
+            // moves that surface's glyph antialiasing (#1698).
             var settled = try #require(inbox.first)
-            settled.item.project_id = "freeside-docs"
             settled.item.status = .resolved
-            let emptyStore = InboxStore(client: client, now: { screenshotNow })
+            let emptyStore = InboxStore(client: client)
             emptyStore.replaceAll(with: [settled])
-            emptyStore.selectProjectFilter("freeside-docs")
             for colorScheme in [ColorScheme.light, .dark] {
-                surfaces.append(
+                try surfaces.append(
                     Surface(
-                        name: "inbox-empty-scope" + (colorScheme == .dark ? "-dark" : ""),
+                        name: "unified-list-empty-needs-you" + (colorScheme == .dark ? "-dark" : ""),
                         width: 320,
                         colorScheme: colorScheme,
                         view: AnyView(
-                            InboxView(
-                                store: emptyStore,
-                                selection: .constant(nil),
-                                launchScope: nil,
-                                launchProjectID: nil
-                            ).screenshotSidebar(now: screenshotNow, activeTaskCount: sidebarTaskCount))))
+                            UnifiedListView(
+                                store: emptyStore, tasks: tasks,
+                                navigation: screenshotNavigation(selecting: nil),
+                                preferences: screenshotListPreferences()
+                            ).screenshotContent(now: screenshotNow))))
             }
             // Frame 6.9 (R18): the finding card with the inspector open, and
             // that inspector, by day and by dusk. The item carries the frame's three attachments and
@@ -3775,8 +3772,7 @@
             // given above (#1698).
             let markdownDispute = AttentionFixtures.markdownReviewDispute()
             let markdownDisputeStore = InboxStore(
-                client: APIClientFactory.mock(server: MockServer(items: [markdownDispute])),
-                now: { screenshotNow })
+                client: APIClientFactory.mock(server: MockServer(items: [markdownDispute])))
             markdownDisputeStore.replaceAll(with: [markdownDispute])
             await preloadReferences(markdownDispute.item, into: markdownDisputeStore)
             let markdownDisputeModel = DecisionModel(store: markdownDisputeStore, itemID: markdownDispute.item.id)
@@ -4190,7 +4186,7 @@
                 + "possibly a long tool command, and its hard budget is unchanged. This notice resolves "
                 + "itself when provider responses resume or the writer stops."
             let server = MockServer(items: [stall])
-            let store = InboxStore(client: APIClientFactory.mock(server: server), now: { screenshotNow })
+            let store = InboxStore(client: APIClientFactory.mock(server: server))
             store.replaceAll(with: [stall])
             await preloadReferences(stall.item, into: store)
 

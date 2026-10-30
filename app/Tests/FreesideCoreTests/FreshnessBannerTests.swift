@@ -31,24 +31,16 @@ import Testing
         // when nothing is open there, and the banner holds Pair Again
         // otherwise.
         func shows(
-            _ screen: LaunchInputs.Screen, freshness: InboxStore.Freshness = .unauthenticated,
-            item: String? = nil, task: String? = nil, run: String? = nil
+            freshness: InboxStore.Freshness = .unauthenticated, path: [NavigationModel.Destination] = []
         ) -> Bool {
-            FreesideRootView.showsRevokedPane(
-                freshness: freshness, screen: screen, attentionSelection: item, taskSelection: task,
-                runSelection: run)
+            FreesideRootView.showsRevokedPane(freshness: freshness, path: path)
         }
-        #expect(shows(.inbox))
-        #expect(shows(.tasks))
-        #expect(!shows(.inbox, item: "item-spec_approval"))
-        #expect(!shows(.tasks, task: "task-1"))
-        #expect(!shows(.tasks, task: "task-1", run: "run-1"))
-        // The other section's selection is not what this pane draws.
-        #expect(shows(.inbox, task: "task-1", run: "run-1"))
-        #expect(shows(.tasks, item: "item-spec_approval"))
+        #expect(shows())
+        #expect(!shows(path: [.attentionItem("item-spec_approval")]))
+        #expect(!shows(path: [.task("task-1")]))
+        #expect(!shows(path: [.task("task-1"), .run(taskID: "task-1", runID: "run-1")]))
         for fresh in [InboxStore.Freshness.fresh, .unreachable, .syncFailing, .unvalidated] {
-            #expect(!shows(.inbox, freshness: fresh))
-            #expect(!shows(.tasks, freshness: fresh))
+            #expect(!shows(freshness: fresh))
         }
     }
 

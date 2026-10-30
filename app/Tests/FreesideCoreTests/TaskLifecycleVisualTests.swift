@@ -49,8 +49,12 @@
             #expect(tasks.count == 3)
             tasks[0] = TaskFixtures.confirmedStopped(tasks[0])
             tasks[1] = TaskFixtures.explicitlyAbandoned(tasks[1])
-            #expect(TaskListFilter(scope: .active).rows(in: tasks).count == 1)
-            #expect(TaskListFilter(scope: .finished).rows(in: tasks).count == 2)
+            let list = UnifiedList(open: [], closed: [], tasks: tasks, projectFilter: nil)
+            #expect(list.working.count == 1)
+            #expect(list.finished.count == 2)
+            let expandedPreferences = ListSectionPreferences(
+                defaults: try #require(UserDefaults(suiteName: "TaskLifecycleVisualTests-\(UUID().uuidString)")))
+            expandedPreferences.workingExpanded = true
             for legacyProjection in [true, false] {
                 var visible = tasks
                 if legacyProjection {
@@ -69,10 +73,13 @@
                             )
                             .font(.headline)
                             .padding(.horizontal)
-                            TasksListView(
+                            UnifiedListView(
+                                store: InboxStore(client: APIClientFactory.mock(server: MockServer())),
                                 tasks: visible, runs: RunFixtures.defaultRuns(),
-                                selection: .constant(nil), initialScope: .active
-                            ).screenshotContent(now: RunFixtures.screenshotInstant)
+                                navigation: NavigationModel(
+                                    launchInputs: LaunchInputs(colorSchemeRaw: nil, selectionRaw: nil)),
+                                preferences: expandedPreferences
+                            ).screenshotContent(now: RunFixtures.screenshotInstant, rowLimit: 5)
                         }
                         .environment(\.dynamicTypeSize, .large)
                         .environment(\.locale, Locale(identifier: "en_US_POSIX"))

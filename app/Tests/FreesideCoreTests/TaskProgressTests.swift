@@ -177,7 +177,7 @@ import Testing
         let task = TaskProgressFixtures.make("Implementation").task
         let recent = task.last_activity_at.addingTimeInterval(300)
         let old = task.last_activity_at.addingTimeInterval(3 * 86_400)
-        #expect(TaskDisplay.rowTime(task, now: recent) == "5m ago")
+        #expect(TaskDisplay.rowTime(task, now: recent) == "5m")
         #expect(TaskDisplay.rowTime(task, now: old) == FreesideFormat.shortTime(task.last_activity_at, now: old))
         #expect(TaskDisplay.metaLine(task, now: recent) == "freeside · #654 · last active 5m ago")
     }

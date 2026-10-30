@@ -11,7 +11,7 @@ import Testing
     import SwiftUI
 #endif
 
-@Suite struct TasksListViewTests {
+@Suite struct TaskRowViewTests {
     @Test func publishedHandoffRequiresCurrentBoundReadiness() throws {
         let run = try #require(RunFixtures.defaultRuns().first { $0.run.id == RunFixtures.readyRunID })
         let task = try #require(TaskFixtures.defaultTasks().first { $0.task.id == run.run.task_id }).task
@@ -95,9 +95,6 @@ import Testing
             }
         }
         #expect(TaskDisplay.isActive(task))
-        #expect(TaskListFilter(scope: .active).rows(in: TaskFixtures.defaultTasks()).contains { $0.task.id == task.id })
-        #expect(
-            !TaskListFilter(scope: .finished).rows(in: TaskFixtures.defaultTasks()).contains { $0.task.id == task.id })
         #expect(TaskDisplay.position(task, runs: [run])?.heading?.text == "Verification · Round 1")
         #expect(
             TaskDisplay.position(task, runs: [run], attentionItems: [ready])?.rail
@@ -175,8 +172,7 @@ import Testing
     }
 
     @Test func theRetryCampaignIsOneRowHoldingBothAttempts() throws {
-        let rows = TaskListFilter(scope: .all).rows(in: TaskFixtures.defaultTasks())
-        let holders = rows.filter {
+        let holders = TaskFixtures.defaultTasks().filter {
             $0.task.run_ids.contains("run-freeside-656") || $0.task.run_ids.contains(RunFixtures.activeRunID)
         }
 
@@ -209,65 +205,15 @@ import Testing
         unstarted.task.campaign_ids = []
         tasks.append(unstarted)
 
-        let active = TaskListFilter().rows(in: tasks.reversed())
-        let finished = TaskListFilter(scope: .finished).rows(in: tasks.reversed())
+        let list = UnifiedList(open: [], closed: [], tasks: tasks.reversed(), projectFilter: nil)
+        let active = list.working.compactMap(\.taskSnapshot)
+        let finished = list.finished.compactMap(\.taskSnapshot)
 
         #expect(active.contains { $0.task.id == unstarted.task.id })
         #expect(active.allSatisfy { $0.task.lifecycle != .finished })
         #expect(finished.allSatisfy { $0.task.lifecycle == .finished })
         #expect(finished.contains { $0.task.id == TaskFixtures.legacyTaskID })
         #expect(active.count + finished.count == tasks.count)
-        #expect(TaskListFilter().scope == .active)
-        #expect(
-            TaskListFilter(scope: .all).rows(in: tasks.reversed()).map(\.task.id)
-                == TaskDisplay.sortedTasks(tasks).map(\.task.id))
-    }
-
-    @Test func scopeCountsMatchRowsWithinTheProjectFilter() {
-        let tasks = TaskFixtures.defaultTasks()
-        for project in [nil, "freeside", "oriole", "missing"] as [String?] {
-            for scope in TaskListFilter.Scope.allCases {
-                let filter = TaskListFilter(scope: scope, projectID: project)
-                let rows = filter.rows(in: tasks)
-                #expect(rows.allSatisfy { project == nil || $0.task.project_id == project })
-                #expect(filter.count(in: tasks, scope: scope) == rows.count)
-                #expect(
-                    filter.count(in: tasks, scope: .all)
-                        == filter.count(in: tasks, scope: .active) + filter.count(in: tasks, scope: .finished))
-                #expect(filter.rows(in: []).isEmpty)
-                #expect(filter.count(in: [], scope: scope) == 0)
-            }
-        }
-        let finishedProject = TaskListFilter(scope: .active, projectID: "oriole")
-        #expect(finishedProject.rows(in: tasks).isEmpty)
-        #expect(finishedProject.count(in: tasks, scope: .finished) > 0)
-    }
-
-    @Test func explicitTaskLinksRevealTheirScopeAndProject() throws {
-        let tasks = TaskFixtures.defaultTasks()
-        let finished = try #require(tasks.first { $0.task.id == "task-campaign-freeside-completed" }).task
-        let active = try #require(tasks.first { $0.task.id == TaskFixtures.retryTaskID }).task
-        var filter = TaskListFilter(projectID: "oriole")
-        filter.reveal(finished)
-        #expect(filter.scope == .finished)
-        #expect(filter.projectID == nil)
-
-        filter.reveal(active)
-        #expect(filter.scope == .active)
-        filter = TaskListFilter(scope: .all, projectID: active.project_id)
-        filter.reveal(active)
-        #expect(filter.scope == .all)
-        #expect(filter.projectID == active.project_id)
-    }
-
-    @Test @MainActor func changingScopeRepairsTheWholeStackAgainstVisibleTasks() {
-        let tasks = TaskFixtures.defaultTasks()
-        let path = ["task-campaign-freeside-completed", RunFixtures.completedRunID]
-        let activeIDs = Set(TaskListFilter().rows(in: tasks).map(\.task.id))
-        let finishedIDs = Set(TaskListFilter(scope: .finished).rows(in: tasks).map(\.task.id))
-        #expect(NavigationModel.repairedTaskPath(path, availableTaskIDs: activeIDs).isEmpty)
-        #expect(NavigationModel.repairedTaskPath(path, availableTaskIDs: finishedIDs) == path)
-        #expect(NavigationModel.repairedTaskPath([], availableTaskIDs: activeIDs).isEmpty)
     }
 
     @Test func stageLineFollowsTheListedRunAndFallsBackToTheDaemonPosition() throws {
@@ -335,7 +281,7 @@ import Testing
         #expect(dated.hasPrefix("freeside · last active "))
         // The visible row drops the label and, from a day on, prints the
         // one short time format; VoiceOver keeps the labeled line above.
-        #expect(TaskDisplay.metaLine(retry, now: now, labelsActivity: false) == "freeside · #724 · 30m ago")
+        #expect(TaskDisplay.metaLine(retry, now: now, labelsActivity: false) == "freeside · #724 · 30m")
         let datedNow = legacy.last_activity_at.addingTimeInterval(3 * 86_400)
         #expect(
             TaskDisplay.metaLine(legacy, now: datedNow, labelsActivity: false)
@@ -349,7 +295,7 @@ import Testing
     #if os(macOS)
         @Test @MainActor func visibleRowsRequestHistoryWithoutSelection() throws {
             let fixture = TaskFixtures.approvedCampaign()
-            let state = TaskListProbeState(tasks: [fixture.task], selection: nil)
+            let state = try TaskListProbeState(tasks: [fixture.task])
             let host = NSHostingView(rootView: TaskListProbe(state: state))
             let window = NSWindow(
                 contentRect: NSRect(x: 0, y: 0, width: 400, height: 600),
@@ -360,14 +306,14 @@ import Testing
             host.setFrameSize(NSSize(width: 400, height: 600))
             host.layoutSubtreeIfNeeded()
             try #require(pumpUntil { state.requests[fixture.task.task.id] == 1 })
-            #expect(state.selection == nil)
+            #expect(state.navigation.path.isEmpty)
             state.tasks[0].as_of_revision += 1
             try #require(pumpUntil { state.requests[fixture.task.task.id] == 2 })
             withExtendedLifetime(host) {}
         }
 
         @Test @MainActor func finishedSelectionSurvivesColdSnapshotLoad() throws {
-            let state = TaskListProbeState(tasks: [], selection: "task-campaign-freeside-completed")
+            let state = try TaskListProbeState(selection: "task-campaign-freeside-completed")
             let host = NSHostingView(rootView: TaskListProbe(state: state))
             host.setFrameSize(NSSize(width: 400, height: 600))
             host.layoutSubtreeIfNeeded()
@@ -375,12 +321,12 @@ import Testing
 
             state.tasks = TaskFixtures.defaultTasks()
             try #require(pumpUntil { state.updates > 0 })
-            #expect(state.selection == "task-campaign-freeside-completed")
+            #expect(state.navigation.taskSelection == "task-campaign-freeside-completed")
             withExtendedLifetime(host) {}
         }
 
         @Test @MainActor func lifecycleUpdateKeepsTheOpenDetailSelected() throws {
-            let state = TaskListProbeState(
+            let state = try TaskListProbeState(
                 tasks: TaskFixtures.defaultTasks(), selection: TaskFixtures.retryTaskID)
             let host = NSHostingView(rootView: TaskListProbe(state: state))
             host.setFrameSize(NSSize(width: 400, height: 600))
@@ -390,7 +336,7 @@ import Testing
             let index = try #require(state.tasks.firstIndex { $0.task.id == TaskFixtures.retryTaskID })
             state.tasks[index].task.lifecycle = .finished
             try #require(pumpUntil { state.updates > 0 })
-            #expect(state.selection == TaskFixtures.retryTaskID)
+            #expect(state.navigation.taskSelection == TaskFixtures.retryTaskID)
             withExtendedLifetime(host) {}
         }
 
@@ -407,14 +353,22 @@ import Testing
 #if os(macOS)
     @MainActor @Observable private final class TaskListProbeState {
         var tasks: [Components.Schemas.TaskSnapshot]
-        var selection: String?
+        let navigation = NavigationModel(
+            launchInputs: LaunchInputs(colorSchemeRaw: nil, selectionRaw: nil))
+        let store = InboxStore(client: APIClientFactory.mock(server: MockServer()))
+        let preferences: ListSectionPreferences
         var appeared = false
         var updates = 0
         var requests: [String: Int] = [:]
 
-        init(tasks: [Components.Schemas.TaskSnapshot], selection: String?) {
+        init(tasks: [Components.Schemas.TaskSnapshot] = [], selection: String? = nil) throws {
             self.tasks = tasks
-            self.selection = selection
+            preferences = ListSectionPreferences(
+                defaults: try #require(UserDefaults(suiteName: "TaskListProbe-\(UUID().uuidString)")))
+            if let selection { navigation.route(to: .task(selection)) }
+            store.replaceAll(with: [])
+            preferences.workingExpanded = true
+            preferences.finishedExpanded = true
         }
     }
 
@@ -422,9 +376,10 @@ import Testing
         @Bindable var state: TaskListProbeState
 
         var body: some View {
-            TasksListView(
-                tasks: state.tasks, runs: [],
-                onLoadTimeline: { state.requests[$0, default: 0] += 1 }, selection: $state.selection
+            UnifiedListView(
+                store: state.store, tasks: state.tasks,
+                onLoadTimeline: { state.requests[$0, default: 0] += 1 },
+                navigation: state.navigation, preferences: state.preferences
             )
             .onAppear { state.appeared = true }
             .onChange(of: state.tasks.map(\.task.id)) { state.updates += 1 }

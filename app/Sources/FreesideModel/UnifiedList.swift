@@ -28,6 +28,14 @@ package struct UnifiedRow: Identifiable {
         }
     }
 
+    /// The open items a Needs you row stands for, newest first.
+    package var openItems: [Components.Schemas.AttentionItemSnapshot] {
+        switch content {
+        case .task(_, let openItems): openItems
+        case .item(let snapshot): [snapshot]
+        }
+    }
+
     /// What selecting the row opens: a task that needs you opens its newest
     /// open item's card, any other task its timeline, an item its card.
     package var destination: NavigationModel.Destination {

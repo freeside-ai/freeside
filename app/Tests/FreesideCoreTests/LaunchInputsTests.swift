@@ -66,7 +66,7 @@ import Testing
 
     @Test(arguments: AttentionFixtures.defaultInboxItemIDs())
     func everyCanonicalItemIDIsAccepted(id: String) {
-        #expect(LaunchInputs(colorSchemeRaw: nil, selectionRaw: id).selection == id)
+        #expect(LaunchInputs(colorSchemeRaw: nil, selectionRaw: id).selection == .attentionItem(id))
     }
 
     @Test(arguments: ["item-nope", "blocked", "ITEM-BLOCKED", ""])
@@ -81,14 +81,10 @@ import Testing
     @Test func screenshotPresentationInputsAreExplicitAndOptional() {
         let inputs = LaunchInputs(
             colorSchemeRaw: "dark", selectionRaw: "item-review_configuration",
-            inboxScopeRaw: "resolved", projectIDRaw: "proj-1", detailsExpanded: true)
+            projectIDRaw: "proj-1", detailsExpanded: true)
 
-        #expect(inputs.inboxScope == .resolved)
         #expect(inputs.projectID == "proj-1")
         #expect(inputs.detailsExpanded)
-        #expect(
-            LaunchInputs(colorSchemeRaw: nil, selectionRaw: nil, inboxScopeRaw: "nope")
-                .inboxScope == nil)
     }
 
     @Test(arguments: [
@@ -103,7 +99,7 @@ import Testing
     ) {
         let inputs = LaunchInputs(colorSchemeRaw: nil, selectionRaw: itemID, composerRaw: raw)
         #expect(inputs.composer == composer)
-        #expect(inputs.selection == itemID)
+        #expect(inputs.selection == .attentionItem(itemID))
     }
 
     /// The argument takes the API's action names, so each case must name
@@ -130,7 +126,7 @@ import Testing
             colorSchemeRaw: nil, selectionRaw: "item-agent_question", composerRaw: "discuss")
         #expect(inputs.composer == nil)
         // Only the composer is dropped: the item still opens.
-        #expect(inputs.selection == "item-agent_question")
+        #expect(inputs.selection == .attentionItem("item-agent_question"))
     }
 
     @Test func aComposerWithoutASelectedInboxItemIsIgnored() {
@@ -140,16 +136,10 @@ import Testing
         #expect(
             LaunchInputs(colorSchemeRaw: nil, selectionRaw: "item-nope", composerRaw: "discuss")
                 .composer == nil)
-        // The tasks screen selects a task or run, never an inbox item.
+        // A composer opens on an item, never on a task.
         #expect(
             LaunchInputs(
-                colorSchemeRaw: nil, selectionRaw: "item-spec_approval", screenRaw: "tasks",
-                composerRaw: "discuss"
-            ).composer == nil)
-        #expect(
-            LaunchInputs(
-                colorSchemeRaw: nil, selectionRaw: TaskFixtures.retryTaskID, screenRaw: "tasks",
-                composerRaw: "discuss"
+                colorSchemeRaw: nil, selectionRaw: TaskFixtures.retryTaskID, composerRaw: "discuss"
             ).composer == nil)
     }
 
@@ -158,30 +148,25 @@ import Testing
             LaunchInputs(colorSchemeRaw: nil, selectionRaw: "item-spec_approval").composer == nil)
     }
 
-    @Test func tasksScreenAcceptsTaskAndRunFixtureSelections() {
-        let task = LaunchInputs(
-            colorSchemeRaw: nil, selectionRaw: TaskFixtures.retryTaskID, screenRaw: "tasks")
-        #expect(task.screen == .tasks)
-        #expect(task.selection == TaskFixtures.retryTaskID)
-        #expect(task.taskSelection == .task(TaskFixtures.retryTaskID))
-
+    @Test func aSelectionResolvesAnItemATaskOrARunWithoutAScreen() {
+        #expect(
+            LaunchInputs(colorSchemeRaw: nil, selectionRaw: "item-spec_approval").selection
+                == .attentionItem("item-spec_approval"))
+        #expect(
+            LaunchInputs(colorSchemeRaw: nil, selectionRaw: TaskFixtures.retryTaskID).selection
+                == .task(TaskFixtures.retryTaskID))
         // A run id opens the run's task with the run pushed.
-        let run = LaunchInputs(
-            colorSchemeRaw: nil, selectionRaw: RunFixtures.activeRunID, screenRaw: "tasks")
-        #expect(run.selection == RunFixtures.activeRunID)
-        #expect(run.taskSelection == .run(taskID: TaskFixtures.retryTaskID, runID: RunFixtures.activeRunID))
+        #expect(
+            LaunchInputs(colorSchemeRaw: nil, selectionRaw: RunFixtures.activeRunID).selection
+                == .run(taskID: TaskFixtures.retryTaskID, runID: RunFixtures.activeRunID))
+    }
 
-        let item = LaunchInputs(
-            colorSchemeRaw: nil, selectionRaw: "item-spec_approval", screenRaw: "tasks")
-        #expect(item.selection == nil)
-        #expect(item.taskSelection == nil)
-
-        // The inbox screen does not take a task or run id, and never
-        // carries a task selection.
-        let inbox = LaunchInputs(colorSchemeRaw: nil, selectionRaw: TaskFixtures.retryTaskID)
-        #expect(inbox.screen == .inbox)
-        #expect(inbox.selection == nil)
-        #expect(inbox.taskSelection == nil)
-        #expect(LaunchInputs(colorSchemeRaw: nil, selectionRaw: nil, screenRaw: "runs").screen == .inbox)
+    @Test func noFixtureIDNamesTwoKindsOfThing() {
+        let items = Set(AttentionFixtures.defaultInboxItemIDs())
+        let tasks = Set(TaskFixtures.defaultTaskIDs())
+        let runs = Set(RunFixtures.defaultRuns().map(\.run.id))
+        #expect(items.isDisjoint(with: tasks))
+        #expect(items.isDisjoint(with: runs))
+        #expect(tasks.isDisjoint(with: runs))
     }
 }

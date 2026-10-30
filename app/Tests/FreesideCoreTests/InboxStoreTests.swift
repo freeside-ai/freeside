@@ -8,12 +8,7 @@ import Testing
 
 @MainActor
 @Suite struct InboxStoreTests {
-    @Test func scopeBarStacksFromXXXLargeThroughAccessibilitySizes() {
-        #expect(!InboxView.stacksScopeBar(at: .xxLarge))
-        #expect(InboxView.stacksScopeBar(at: .xxxLarge))
-        #expect(InboxView.stacksScopeBar(at: .accessibility1))
-        #expect(InboxView.stacksScopeBar(at: .accessibility5))
-
+    @Test func rowHeaderStacksFromXXXLargeThroughAccessibilitySizes() {
         #expect(!InboxRowView.stacksHeader(at: .xxLarge))
         #expect(InboxRowView.stacksHeader(at: .xxxLarge))
         #expect(InboxRowView.stacksHeader(at: .accessibility1))
@@ -75,144 +70,36 @@ import Testing
         return snapshot
     }
 
-    @Test func rowsSortOpenBeforeConcludedThenNewestConclusionFirst() {
-        let store = InboxStore(client: APIClientFactory.mock(server: MockServer()), now: { orderNow })
-        let open = orderingItem("open", age: 172_800, priority: .low)
-        var older = orderingItem("older", age: 60, priority: .urgent)
-        older.item.status = .resolved
-        older.item.decided_at = orderNow.addingTimeInterval(-600)
-        var newer = orderingItem("newer", age: 172_800, priority: .low)
-        newer.item.status = .dismissed
-        newer.item.decided_at = orderNow.addingTimeInterval(-60)
-        var fallback = orderingItem("fallback", age: 300)
-        fallback.item.status = .superseded
-        var tied = fallback
-        tied.item.id = "tied"
-        tied.item.priority = .urgent
-        var undated = orderingItem("undated", age: nil)
-        undated.item.status = .resolved
-        store.replaceAll(with: [older, fallback, undated, newer, tied, open])
-        store.scope = .all
-
-        #expect(store.rows.map(\.item.id) == ["open", "newer", "fallback", "tied", "older", "undated"])
-        store.scope = .resolved
-        #expect(store.rows.map(\.item.id) == ["newer", "fallback", "tied", "older", "undated"])
-    }
-
-    @Test func recentNormalDecisionLeadsOlderHighPriorityAndIsTheNextItem() {
-        let store = InboxStore(client: APIClientFactory.mock(server: MockServer()), now: { orderNow })
-        store.replaceAll(with: [
-            orderingItem("old-high", age: 172_800, priority: .high),
-            orderingItem("current", age: 0),
-            orderingItem("recent-normal", age: 300),
-        ])
-
-        #expect(store.rows.map(\.item.id) == ["current", "recent-normal", "old-high"])
-        #expect(store.nextOpenItemID(excluding: "current") == "recent-normal")
-    }
-
-    @Test func sameBandUsesPriorityThenRecencyThenServerOrder() {
-        let store = InboxStore(client: APIClientFactory.mock(server: MockServer()), now: { orderNow })
-        store.replaceAll(with: [
-            orderingItem("low", age: 0, priority: .low),
-            orderingItem("normal-older", age: 600),
-            orderingItem("tie-first", age: 60),
-            orderingItem("high", age: 900, priority: .high),
-            orderingItem("tie-second", age: 60),
-            orderingItem("urgent", age: 1800, priority: .urgent),
-        ])
-
-        #expect(
-            store.rows.map(\.item.id) == [
-                "urgent", "high", "tie-first", "tie-second", "normal-older", "low",
-            ])
-    }
-
-    @Test func overdueLeadsAndFutureDeadlineDoesNotReorder() {
-        let store = InboxStore(client: APIClientFactory.mock(server: MockServer()), now: { orderNow })
-        var overdue = orderingItem("overdue", age: 172_800, priority: .low)
-        overdue.item.expires_when = orderNow.addingTimeInterval(-1)
-        var atDeadline = orderingItem("at-deadline", age: 172_800)
-        atDeadline.item.expires_when = orderNow
-        var future = orderingItem("future", age: 1800)
-        future.item.expires_when = orderNow.addingTimeInterval(1)
-        store.replaceAll(with: [
-            orderingItem("urgent", age: 0, priority: .urgent), future,
-            orderingItem("newer", age: 60), overdue, atDeadline,
-        ])
-
-        #expect(store.rows.map(\.item.id) == ["at-deadline", "overdue", "urgent", "newer", "future"])
-    }
-
-    @Test func ageBandEdgesAndMissingDatesAreOrderedExplicitly() {
-        let store = InboxStore(client: APIClientFactory.mock(server: MockServer()), now: { orderNow })
+    @Test func rowsAreOpenItemsNewestFirstWithServerOrderBreakingTies() {
+        let store = InboxStore(client: APIClientFactory.mock(server: MockServer()))
+        var closed = orderingItem("closed", age: 0)
+        closed.item.status = .resolved
         store.replaceAll(with: [
             orderingItem("undated-first", age: nil),
-            orderingItem("day", age: 86_400),
+            orderingItem("old-urgent", age: 172_800, priority: .urgent),
+            orderingItem("tie-first", age: 60),
+            closed,
+            orderingItem("tie-second", age: 60, priority: .low),
+            orderingItem("newest", age: 0, priority: .low),
             orderingItem("undated-second", age: nil),
-            orderingItem("hour", age: 3600, priority: .urgent),
-            orderingItem("under-day", age: 86_399, priority: .low),
-            orderingItem("under-hour", age: 3599, priority: .low),
-            orderingItem("older", age: 172_800),
         ])
 
         #expect(
             store.rows.map(\.item.id) == [
-                "under-hour", "hour", "under-day", "day", "older", "undated-first", "undated-second",
+                "newest", "tie-first", "tie-second", "old-urgent", "undated-first", "undated-second",
             ])
     }
 
-    @Test(arguments: [false, true])
-    func orderClockChangesOnlyWhenExplicitlyRebuilt(refresh: Bool) async {
-        var instant = orderNow
-        var clockReads = 0
-        let snapshots = [
-            orderingItem("older-high", age: 3600, priority: .high),
-            orderingItem("recent-normal", age: 3599),
-        ]
-        let store = InboxStore(
-            client: APIClientFactory.mock(server: MockServer(items: snapshots)),
-            now: {
-                clockReads += 1
-                return instant
-            })
-        store.replaceAll(with: snapshots)
-        #expect(clockReads == 1)
-        #expect(store.rows.map(\.item.id) == ["recent-normal", "older-high"])
+    @Test func aDeadlineDoesNotReorderTheRows() {
+        let store = InboxStore(client: APIClientFactory.mock(server: MockServer()))
+        var overdue = orderingItem("overdue", age: 172_800, priority: .low)
+        overdue.item.expires_when = orderNow.addingTimeInterval(-1)
+        store.replaceAll(with: [overdue, orderingItem("newer", age: 60)])
 
-        instant = orderNow.addingTimeInterval(1)
-        #expect(store.rows.map(\.item.id) == ["recent-normal", "older-high"])
-        #expect(store.nextOpenItemID(excluding: "other") == "recent-normal")
-        #expect(clockReads == 1)
-        if refresh {
-            await store.refresh()
-        } else {
-            store.replaceAll(with: snapshots)
-        }
-        #expect(clockReads == 2)
-        #expect(store.rows.map(\.item.id) == ["older-high", "recent-normal"])
+        #expect(store.rows.map(\.item.id) == ["newer", "overdue"])
     }
 
-    @Test func timeBasedOrderRebuildRetainsLocalConclusionFeedback() {
-        let store = InboxStore(client: APIClientFactory.mock(server: MockServer()), now: { orderNow })
-        var snapshot = orderingItem("confirmed", age: 60)
-        store.replaceAll(with: [snapshot])
-        snapshot.item.status = .resolved
-        snapshot.entity_version += 1
-        store.apply(snapshot)
-
-        store.rebuildTimeBasedOrder()
-
-        #expect(store.rows.map(\.item.id) == ["confirmed"])
-        #expect(store.count(in: .open) == 1)
-        #expect(store.count(in: .resolved) == 0)
-        #expect(store.nextOpenItemID(excluding: "other") == nil)
-        store.replaceAll(with: [snapshot])
-        #expect(store.rows.isEmpty)
-        #expect(store.count(in: .resolved) == 1)
-    }
-
-    @Test func scopeDefaultsToOpenAndResolvedItemsRemainFindable() async throws {
+    @Test func closedSnapshotsHoldWhatTheOpenRowsDoNot() async throws {
         let store = await makeStore(server: MockServer())
         var resolved = try #require(store.snapshotsByID["item-execution_failure"])
         resolved.item.status = .resolved
@@ -227,17 +114,13 @@ import Testing
         }
         store.replaceAll(with: snapshots)
 
-        #expect(store.scope == .open)
         #expect(!store.rows.contains { $0.item.status != .open })
-
-        store.scope = .resolved
         // The seeded inbox already holds one closed item per conclusion cause.
         let seededClosed = Set(AttentionFixtures.closedInbox().map(\.item.id))
-        #expect(Set(store.rows.map(\.item.id)) == seededClosed.union([resolved.item.id, dismissed.item.id]))
-        #expect(store.urgentCount(in: .resolved) == 1)
-
-        store.scope = .all
-        #expect(store.rows.count == snapshots.count)
+        #expect(
+            Set(store.closedSnapshots.map(\.item.id))
+                == seededClosed.union([resolved.item.id, dismissed.item.id]))
+        #expect(store.openSnapshots.count + store.closedSnapshots.count == snapshots.count)
     }
 
     @Test func locallyResolvedItemStaysOpenUntilTheNextFullRebuild() async throws {
@@ -248,58 +131,31 @@ import Testing
         store.apply(resolved)
         #expect(store.rows.contains { $0.item.id == resolved.item.id })
         #expect(store.openSnapshots.contains { $0.item.id == resolved.item.id })
-        #expect(store.openSnapshots.count == store.count(in: .open))
         #expect(
             OperationalSummary(
-                openSnapshots: store.openSnapshots,
-                tasks: [],
+                list: UnifiedList(
+                    open: store.openSnapshots, closed: [], tasks: [], projectFilter: nil),
                 freshness: .fresh
-            ).openCount == store.count(in: .open))
-        store.scope = .resolved
-        #expect(!store.rows.contains { $0.item.id == resolved.item.id })
+            ).openCount == store.openSnapshots.count)
+        #expect(!store.closedSnapshots.contains { $0.item.id == resolved.item.id })
 
         store.replaceAll(with: Array(store.snapshotsByID.values))
-        store.scope = .open
         #expect(!store.rows.contains { $0.item.id == resolved.item.id })
         #expect(!store.openSnapshots.contains { $0.item.id == resolved.item.id })
-        store.scope = .resolved
-        #expect(store.rows.contains { $0.item.id == resolved.item.id })
+        #expect(store.closedSnapshots.contains { $0.item.id == resolved.item.id })
     }
 
-    @Test func countsShareTheRowsScopeProjectAndCapturedStatusPredicate() async throws {
-        let store = await makeStore(server: MockServer())
-        var snapshots = Array(store.snapshotsByID.values)
-        for index in snapshots.indices {
-            snapshots[index].item.project_id = index.isMultiple(of: 2) ? "proj-a" : "proj-b"
-            if index.isMultiple(of: 4) {
-                snapshots[index].item.status = .resolved
-            }
-        }
-        store.replaceAll(with: snapshots)
+    @Test func urgentOpenCountIgnoresTheProjectFilter() {
+        let store = InboxStore(client: APIClientFactory.mock(server: MockServer()))
+        var other = orderingItem("other-project", age: 0, priority: .urgent)
+        other.item.project_id = "proj-other"
+        store.replaceAll(with: [other, orderingItem("normal", age: 0)])
+        store.projectID = "proj-none-urgent"
 
-        var locallyResolved = try #require(
-            store.rows.first(where: { $0.item.status == .open }))
-        locallyResolved.item.status = .resolved
-        store.apply(locallyResolved)
-
-        for projectID in [String?.none, "proj-a", "proj-b"] {
-            store.projectID = projectID
-            for scope in InboxStore.Scope.allCases {
-                store.scope = scope
-                #expect(store.count(in: scope) == store.rows.count)
-                #expect(
-                    store.urgentCount(in: scope)
-                        == store.rows.count { $0.item.priority == .urgent })
-            }
-        }
-
-        store.projectID = nil
-        store.scope = .open
-        #expect(store.rows.contains { $0.item.id == locallyResolved.item.id })
-        #expect(store.count(in: .open) == store.rows.count)
+        #expect(store.urgentOpenCount == 1)
     }
 
-    @Test func projectFilterIsSortedDeduplicatedAndComposesWithScope() async throws {
+    @Test func projectFilterIsSortedDeduplicatedAndLeavesTheOpenProjectionAlone() async throws {
         let store = await makeStore(server: MockServer())
         var first = try #require(store.snapshotsByID["item-spec_approval"])
         first.item.project_id = "proj-b"
@@ -314,26 +170,20 @@ import Testing
         store.projectID = "proj-a"
         #expect(store.rows.map(\.item.id) == [third.item.id])
         #expect(Set(store.openSnapshots.map(\.item.id)) == [first.item.id, third.item.id])
-        store.scope = .resolved
-        #expect(store.rows.map(\.item.id) == [second.item.id])
-        #expect(store.urgentCount(in: .resolved) == 1)
-        store.scope = .all
-        #expect(Set(store.rows.map(\.item.id)) == [second.item.id, third.item.id])
     }
 
-    @Test func conclusionAdvanceStaysInsideTheSelectedProject() async throws {
-        let store = await makeStore(server: MockServer())
-        var current = try #require(store.snapshotsByID["item-spec_approval"])
-        current.item.project_id = "proj-a"
-        var sameProject = try #require(store.snapshotsByID["item-agent_question"])
-        sameProject.item.project_id = "proj-a"
-        var otherProject = try #require(store.snapshotsByID["item-execution_failure"])
-        otherProject.item.project_id = "proj-b"
-        otherProject.item.priority = .urgent
-        store.replaceAll(with: [current, sameProject, otherProject])
-        store.projectID = "proj-a"
+    @Test func aFilterOnAProjectOnlyTasksNameSurvivesRepair() {
+        let store = InboxStore(client: APIClientFactory.mock(server: MockServer()))
+        store.taskProjectsProvider = { ["task-only"] }
+        store.replaceAll(with: [orderingItem("item", age: 0)])
+        store.selectProjectFilter("task-only")
 
-        #expect(store.nextOpenItemID(excluding: current.item.id) == sameProject.item.id)
+        store.repairProjectFilter()
+        #expect(store.projectID == "task-only")
+
+        store.taskProjectsProvider = { [] }
+        store.repairProjectFilter()
+        #expect(store.projectID == nil)
     }
 
     @Test func projectFilterRepairsWhenItsProjectDisappears() async throws {
@@ -352,9 +202,8 @@ import Testing
     @Test func invalidLaunchProjectIsRepairedAgainstTheLoadedCache() async {
         let store = await makeStore(server: MockServer())
 
-        InboxView.applyLaunchFilters(to: store, scope: .all, projectID: "proj-missing")
+        store.applyLaunchProjectFilter("proj-missing")
 
-        #expect(store.scope == .all)
         #expect(store.projectID == nil)
         #expect(!store.rows.isEmpty)
     }
@@ -362,7 +211,7 @@ import Testing
     @Test func launchProjectSurvivesUntilTheInitialLoadCanValidateIt() {
         let store = InboxStore(client: APIClientFactory.mock(server: MockServer()))
 
-        InboxView.applyLaunchFilters(to: store, scope: nil, projectID: "proj-1")
+        store.applyLaunchProjectFilter("proj-1")
         #expect(store.projectID == "proj-1")
 
         store.replaceAll(with: [AttentionFixtures.fixture(type: .spec_approval)])
@@ -375,7 +224,7 @@ import Testing
         cached.item.project_id = "proj-cached"
         store.replaceAll(with: [cached])
 
-        InboxView.applyLaunchFilters(to: store, scope: nil, projectID: "proj-bootstrap")
+        store.applyLaunchProjectFilter("proj-bootstrap")
         #expect(store.projectID == nil)
 
         var authoritative = cached
@@ -389,7 +238,7 @@ import Testing
         let cached = AttentionFixtures.fixture(type: .spec_approval)
         store.replaceAll(with: [cached])
 
-        InboxView.applyLaunchFilters(to: store, scope: nil, projectID: "proj-missing")
+        store.applyLaunchProjectFilter("proj-missing")
         store.replaceAll(with: [cached])
         store.finishLaunchProjectRepair()
 
@@ -402,7 +251,7 @@ import Testing
         store.replaceAll(with: [current])
         store.freshness = .fresh
 
-        InboxView.applyLaunchFilters(to: store, scope: nil, projectID: "proj-later")
+        store.applyLaunchProjectFilter("proj-later")
         #expect(store.projectID == nil)
 
         current.item.project_id = "proj-later"
@@ -414,7 +263,7 @@ import Testing
         let store = InboxStore(client: APIClientFactory.mock(server: MockServer()))
         let authoritative = AttentionFixtures.fixture(type: .spec_approval)
         store.replaceAll(with: [authoritative])
-        InboxView.applyLaunchFilters(to: store, scope: nil, projectID: "proj-1")
+        store.applyLaunchProjectFilter("proj-1")
 
         store.discardSnapshots()
         #expect(store.projectID == nil)

@@ -17,6 +17,10 @@ import Testing
             })
     }
 
+    @Test func theListHasNoSectionsToSwitch() {
+        #expect(!FreesideCommandDescriptor.all.contains { $0.shortcut?.key == "1" || $0.shortcut?.key == "2" })
+    }
+
     @Test func newTaskCommandCarriesCommandN() {
         let descriptor = FreesideCommandDescriptor.all.first { $0.id == .newTask }
         #expect(descriptor?.shortcut?.key == "n")

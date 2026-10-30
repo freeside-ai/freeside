@@ -33,10 +33,8 @@ Launch arguments also pin the presentation per launch (`LaunchInputs`), so scree
 - `-FreesideColorScheme light|dark`: force an appearance without touching the system setting; unset follows the system.
 - `-FreesideContrast standard|increased`: force accessibility contrast without touching the system setting; unset follows the system.
 - `-FreesideDynamicType x-small|small|medium|large|x-large|xx-large|xxx-large|ax1|ax2|ax3|ax4|ax5`: force a Dynamic Type size without touching the system setting; unset follows the system.
-- `-FreesideScreen inbox|tasks`: open the given screen at launch; unset opens the inbox.
-- `-FreesideSelect <id>`: select the given inbox item at launch, or on the tasks screen open the given task or run. `AttentionFixtures.defaultInboxItemIDs()` is the source of truth for the inbox values, today the default mock inbox's ids: `item-spec_approval`, `item-execution_failure`, `item-agent_question`, `item-review_diminishing_returns`, `item-review_dispute`, `item-review_contradiction`, `item-review_configuration`, `item-finding_adjudication`, `item-ready_for_final_review`, `item-publish_blocked`, `item-task_proposal`, `item-effect_proposal`, `item-system_health`, and the closed items, one per conclusion cause: `production-review-run-review_dispute-1`, `item-publish_blocked-expired`, `item-effect_proposal-superseded`, `item-system_health-resolved`. With `-FreesideScreen tasks`, `TaskFixtures.defaultTaskIDs()` and `RunFixtures.defaultRunIDs()` are the accepted values: a task id opens the task's timeline, and a run id (for example `run-freeside-657`) opens the run's task with the run timeline pushed. An unknown id is ignored with a note on stderr.
-- `-FreesideInboxScope open|resolved|all`: select the inbox scope for a screenshot or automation launch.
-- `-FreesideProject <project-id>`: select the inbox project filter for a screenshot or automation launch.
+- `-FreesideSelect <id>`: select the given attention item, task, or run at launch. `AttentionFixtures.defaultInboxItemIDs()` is the source of truth for the item values, today the default mock inbox's ids: `item-spec_approval`, `item-execution_failure`, `item-agent_question`, `item-review_diminishing_returns`, `item-review_dispute`, `item-review_contradiction`, `item-review_configuration`, `item-finding_adjudication`, `item-ready_for_final_review`, `item-publish_blocked`, `item-task_proposal`, `item-effect_proposal`, `item-system_health`, and the closed items, one per conclusion cause: `production-review-run-review_dispute-1`, `item-publish_blocked-expired`, `item-effect_proposal-superseded`, `item-system_health-resolved`. `TaskFixtures.defaultTaskIDs()` and `RunFixtures.defaultRunIDs()` are also accepted: a task id opens the task's timeline, and a run id (for example `run-freeside-657`) opens the run's task with the run timeline pushed. An unknown id is ignored with a note on stderr.
+- `-FreesideProject <project-id>`: select the list's project filter for a screenshot or automation launch.
 - `-FreesideDetailsExpanded YES`: open the selected decision card's Details disclosure at launch.
 - `-FreesideDevices YES`: open the Devices sheet at launch. The mock lists three devices (this one, another active one, and a revoked one), so one capture shows every state.
 - `-FreesideComposer discuss|request_changes|return_to_agent|answer_and_retry|answer_without_retry`: present that action's message composer on the item `-FreesideSelect` names, once per launch. The values are the API's action names. In the default mock inbox, `discuss` opens on `item-spec_approval`, `item-execution_failure`, `item-review_dispute`, `item-review_configuration`, and `item-finding_adjudication`; `request_changes` on `item-spec_approval`; `return_to_agent` on `item-ready_for_final_review`; and both answer composers on `item-agent_question`. The composer opens as soon as the action's button is enabled, the way one click on it would, so it follows the card's validation. A value that names no composer, a launch with no inbox item selected, and an item that doesn't offer the action are each ignored with a note on stderr. Don't combine it with `-FreesideDevices YES`: that asks for two sheets at once.
@@ -55,8 +53,8 @@ The daemon README lists [the production identifiers and persistent stores](../da
 
 ## macOS Keyboard Commands
 
-- ⌘1 shows Inbox; ⌘2 shows Tasks; ⌘R refreshes; ⌥⌘I toggles the inspector; ⌘N opens the New Task composer on the Tasks screen (File > New Task), enabled only while the sync is fresh.
-- With the inbox list focused, J selects the next item and K the previous one; the arrow keys keep their native list behavior.
+- ⌘R refreshes; ⌥⌘I toggles the inspector; ⌘N opens the New Task composer (File > New Task), enabled only while the sync is fresh.
+- With the list focused, J selects the next Needs you row and K the previous one; the arrow keys keep their native list behavior.
 - Return takes only a validated authoritative recommendation. Esc dismisses pending action UI without resolving the item. Space is unbound.
 
 ## Installing the Operator Client
@@ -618,7 +616,7 @@ A view opts out only with a reason in a comment beside its
 
 - **Rows.** `SidebarRow` turns selection off, because a selectable title
   takes the click that selects a Mac list row and the long press that opens
-  the row's menu. The inbox row's menu offers Copy summary, and the task
+  the row's menu. A list item row's menu offers Copy summary, and a task
   row's offers Copy task name; the card or timeline the row opens shows the
   same text selectable.
 - **Context menus.** Selectable text claims the long press on iOS for its

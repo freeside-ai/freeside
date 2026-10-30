@@ -154,7 +154,7 @@ struct TaskTimelineView: View {
         let reviewRounds =
             timeline.map { TaskTimelinePresentation.reviewRounds($0, runTimelines: coordinator.timelinesByRunID) }
             ?? [:]
-        // The task row reads the same stage and round (`TasksListView.row`).
+        // The task row reads the same stage and round (`UnifiedListView.taskPosition`).
         let position = TaskDisplay.position(
             task, runs: coordinator.runs, attentionItems: coordinator.store.orderedSnapshots, history: timeline,
             stage: TaskDisplay.currentStage(
