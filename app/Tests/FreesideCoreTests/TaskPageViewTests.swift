@@ -1176,4 +1176,45 @@ import Testing
 
         #expect(drawn.map(\.conversation.id) == ["conv-newer", "conv-older"])
     }
+
+    @Test func aRecordedDecisionLinksToItsItemOnlyWhenTheClientHoldsIt() throws {
+        let script = TaskStageFixtures.script(.remediation)
+        let decidedRow = { (rows: [TimelineRail.Row]) in rows.first { $0.label.contains("findings decided") } }
+        let approvedRow = { (rows: [TimelineRail.Row]) in rows.first { $0.label == "Specification approved" } }
+
+        let plain = TaskTimelinePresentation.rows(script.timeline, reviewRounds: script.reviewRounds)
+        #expect(try #require(decidedRow(plain)).itemID == nil)
+        #expect(try #require(approvedRow(plain)).itemID == nil)
+
+        let decidedAt = try #require(
+            script.reviewRounds[TaskStageFixtures.implementationRun]?.first?.remediation?.value1.decided_at)
+        var adjudication = TaskStageFixtures.item(.finding_adjudication, id: "decided", hoursOld: 0).item
+        adjudication.decided_at = decidedAt
+        var approval = TaskStageFixtures.item(.spec_approval, id: "approved", hoursOld: 0).item
+        approval.status = .resolved
+        approval.decided_at = decidedAt
+        approval.subject = .run(
+            .init(
+                subject_type: .run, subject_id: TaskStageFixtures.specificationRun,
+                run_id: TaskStageFixtures.specificationRun, task_id: TaskStageFixtures.taskID))
+
+        // The iteration a request for changes replaced shares the run.
+        var replaced = approval
+        replaced.id = "replaced"
+        replaced.status = .superseded
+
+        let linked = TaskTimelinePresentation.rows(
+            script.timeline, reviewRounds: script.reviewRounds, items: [replaced, adjudication, approval])
+        #expect(try #require(decidedRow(linked)).itemID == "decided")
+        #expect(try #require(approvedRow(linked)).itemID == "approved")
+    }
+
+    @Test func anEventThatNamesAnItemLinksToIt() throws {
+        let timeline = TaskHistoryFixtures.externallyReviewed(requested: false)
+        let held = TaskStageFixtures.item(.ready_for_final_review, id: "history-ready", hoursOld: 0).item
+
+        let linked = TaskTimelinePresentation.rows(timeline, items: [held])
+        #expect(linked.contains { $0.itemID == "history-ready" })
+        #expect(!TaskTimelinePresentation.rows(timeline).contains { $0.itemID != nil })
+    }
 }

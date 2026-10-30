@@ -40,7 +40,8 @@ struct TaskPageView: View {
     /// it, the macOS detail column shows it in place of this view.
     let onOpenRun: (String) -> Void
     /// Routes to an item by id, which leads this page with its card: a
-    /// one-line row, the Decisions popup, and the header's guidance. Nil (a screenshot) draws plain text, never a link
+    /// one-line row, the Decisions popup, a linked timeline row, and the
+    /// header's guidance. Nil (a screenshot) draws plain text, never a link
     /// that goes nowhere.
     var onOpenItem: ((String) -> Void)?
     /// The item whose card `leadingCard` draws.
@@ -492,7 +493,8 @@ struct TaskPageView: View {
     private func content(_ timeline: Components.Schemas.TaskTimeline) -> some View {
         let rows = TaskTimelinePresentation.rows(
             timeline,
-            reviewRounds: TaskTimelinePresentation.reviewRounds(timeline, runTimelines: coordinator.timelinesByRunID))
+            reviewRounds: TaskTimelinePresentation.reviewRounds(timeline, runTimelines: coordinator.timelinesByRunID),
+            items: taskItems.map(\.item))
         let disambiguate = TaskTimelinePresentation.campaignCount(timeline) > 1
         return VStack(alignment: .leading, spacing: 22) {
             VStack(alignment: .leading, spacing: 11) {
@@ -510,7 +512,7 @@ struct TaskPageView: View {
                         .font(FreesideFont.cardBody)
                         .foregroundStyle(Color.inkDim)
                 } else {
-                    TimelineRail(rows: rows)
+                    TimelineRail(rows: rows, onOpenItem: onOpenItem)
                 }
             }
             if timeline.sections.isEmpty {
@@ -934,9 +936,15 @@ enum TaskTimelinePresentation {
     /// Three kinds of event are machinery and leave the rail: a campaign's
     /// allocation, any other invocation's start, and the result of a review
     /// round's own invocation, which the round's entry already states.
+    ///
+    /// `items` are the task's items the client holds. A row that records a
+    /// decision links to its item's card: by the id the event names where it
+    /// names one, and otherwise by a join the wire doesn't promise, so a row
+    /// with no match stays plain (`linkedItemID`).
     static func rows(
         _ timeline: Components.Schemas.TaskTimeline,
-        reviewRounds: [String: [Components.Schemas.RunReviewRound]] = [:]
+        reviewRounds: [String: [Components.Schemas.RunReviewRound]] = [:],
+        items: [Components.Schemas.AttentionItem] = []
     ) -> [TimelineRail.Row] {
         let events = events(timeline)
         var runs: [String: (run: Components.Schemas.TaskTimelineRun, campaignID: String?)] = [:]
@@ -982,7 +990,7 @@ enum TaskTimelinePresentation {
             while let next = unstarted.first, let decidedAt = next.remediation.decided_at,
                 decidedAt < event.recorded_at
             {
-                oldestFirst.append(decidedRow(next.round, next.remediation))
+                oldestFirst.append(decidedRow(next.round, next.remediation, items: items))
                 unstarted.removeFirst()
             }
             let milestone = event.milestone?.value1
@@ -994,7 +1002,7 @@ enum TaskTimelinePresentation {
                 guard let round = remediated(milestone), let remediation = round.remediation?.value1,
                     startedRemediations.insert(remediation.invocation_id).inserted
                 else { continue }
-                oldestFirst.append(decidedRow(round, remediation))
+                oldestFirst.append(decidedRow(round, remediation, items: items))
                 let next = StagePosition(stage: .implementation, campaignID: source?.campaignID)
                 if next != position {
                     oldestFirst.append(
@@ -1054,9 +1062,10 @@ enum TaskTimelinePresentation {
             oldestFirst.append(
                 TimelineRail.Row(
                     kind: recordsFailure(event) ? .failure : .event,
-                    label: rowLabel(event, run: source?.run, pass: pass), recordedAt: event.recorded_at))
+                    label: rowLabel(event, run: source?.run, pass: pass), recordedAt: event.recorded_at,
+                    itemID: linkedItemID(event, items: items)))
         }
-        oldestFirst += unstarted.map { decidedRow($0.round, $0.remediation) }
+        oldestFirst += unstarted.map { decidedRow($0.round, $0.remediation, items: items) }
         var rows = Array(oldestFirst.reversed())
         if !rows.isEmpty { rows[0].isNewest = true }
         if rows.count > 1, case .stageStart = rows[1].kind { rows[1].isNewest = true }
@@ -1066,11 +1075,39 @@ enum TaskTimelinePresentation {
     /// The decision that sent a round's findings to a remediator, with the
     /// findings the operator declined when the record counts them.
     private static func decidedRow(
-        _ round: Components.Schemas.RunReviewRound, _ remediation: Components.Schemas.ReviewRoundRemediation
+        _ round: Components.Schemas.RunReviewRound, _ remediation: Components.Schemas.ReviewRoundRemediation,
+        items: [Components.Schemas.AttentionItem]
     ) -> TimelineRail.Row {
         var label = "Round \(round.round) findings decided · \(remediation.finding_ids.count) to remediation"
         if let declined = round.dispositions?.value1.declined, declined > 0 { label += " · \(declined) declined" }
-        return TimelineRail.Row(kind: .event, label: label, recordedAt: remediation.decided_at)
+        // The round names no item: the adjudication that sent the findings
+        // there is the one decided at the same recorded instant. The daemon
+        // copies that instant from the item (`findingAdjudicationDecidedAt`).
+        let item = remediation.decided_at.flatMap { decidedAt in
+            items.first {
+                [.finding_adjudication, .review_dispute].contains($0._type) && $0.decided_at == decidedAt
+            }
+        }
+        return TimelineRail.Row(kind: .event, label: label, recordedAt: remediation.decided_at, itemID: item?.id)
+    }
+
+    /// The item an event records a decision on, if the client holds it. A
+    /// verification and an external review name theirs. A specification
+    /// approval names none, so it joins to the decided approval on the run
+    /// that specified it. A request for changes supersedes its item on the
+    /// same run, so only the resolved one approved it.
+    private static func linkedItemID(
+        _ event: Components.Schemas.TaskEvent, items: [Components.Schemas.AttentionItem]
+    ) -> String? {
+        if let named = event.verification?.value1.item_id ?? event.external_review?.value1.item_id {
+            return items.contains { $0.id == named } ? named : nil
+        }
+        guard event.kind == .specification_approved, let runID = event.specification_run_id else { return nil }
+        return items.first { item in
+            guard item._type == .spec_approval, item.status == .resolved, case .run(let subject) = item.subject
+            else { return false }
+            return subject.run_id == runID
+        }?.id
     }
 
     /// Each run's review rounds by run id, for `rows(_:reviewRounds:)`:
