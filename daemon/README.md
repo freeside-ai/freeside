@@ -1438,6 +1438,47 @@ that ran cleanly, or to 1. The
 [decision note](../devlog/2026-09-28-1220-identity-limit-rollout.md) records
 why this rollout check replaced the provider-overlap experiment.
 
+### Change A Task's Agent For A Role
+
+`freesided task-line` moves a role of a task to another agent, or clears the
+role's line so it returns to the lineup. It works against the task's record
+and needs no restart: on a running daemon it goes through that daemon, which
+holds the store. It prints the result as JSON.
+
+```sh
+freesided task-line -db "$DB" -task "$TASK" -role reviewer -agent codex
+freesided task-line -db "$DB" -task "$TASK" -role reviewer -clear
+```
+
+`-role` is `specifier`, `implementer`, `remediator`, or `reviewer`. Pass exactly
+one of `-agent` and `-clear`.
+
+- **Each change is a record.** The command writes a line-change record and a
+  new line version citing it, and leaves earlier versions alone. Admission
+  honors a change only when that record exists and names the same task, role,
+  agent or clear, and replaced version; otherwise it refuses the attempt as
+  agent-not-admissible instead of using the lineup.
+- **Refused while the role runs.** A writer role's attempt runs from its
+  execution admission until its export or outcome is recorded, even if its
+  dispatch went back to pending, because it replays under the admission it
+  already holds. A reviewer's runs from its review request until the review's
+  record or failure is recorded. The command then exits non-zero and records
+  nothing. A running attempt of another role doesn't refuse it, and neither
+  does one in a closed workflow, so a line can change after `abandon` and before
+  `reattempt`.
+- **The same line records nothing.** Asking for the agent the role already has,
+  or clearing a role with no line or a cleared one, prints `"recorded": false`
+  and moves nothing. `line` is the role's newest version, `null` if it never
+  had one, and a version with `"cleared": true` names no agent.
+- **The agent isn't checked here.** Admission resolves it at the next attempt,
+  as it does a line set at submission. An agent it can't run refuses that
+  attempt and doesn't fall back to the lineup.
+- **Changes apply to later admissions.** An admission that read the old line
+  before the change committed may still run on it.
+- **It starts nothing.** A task parked on a refused attempt stays parked until
+  its own path retries; a review refused at admission requested nothing, so
+  its line can change straight away.
+
 ### Enroll An Agent Credential
 
 `freesided auth add` enrolls one harness client (`codex_cli` or
@@ -2288,15 +2329,17 @@ and the lineup's reviewer never runs in its place. The shadow reviewer reads
 no line. The review configuration digest stays the composed source's: the
 snapshot records what the line selected.
 
-Every line records its `source`: `submit_task`, `cli_submit`, or
-`proposal_start` for an operator's choice, or `router` for the routing
-policy's choice at a task's first admission. Nothing writes a router line
+Every line records its `source`: `submit_task`, `cli_submit`,
+`proposal_start`, or `cli_line_change` for an operator's choice, or `router`
+for the routing policy's choice at a task's first admission. Nothing writes a router line
 yet (#2393), and admission refuses one. A router line carries its selection
 `provenance`: the policy revision, the trigger (`first_admission` or
 `exhausted_mark`), and, for an exhausted mark, the reading acted on and the
 agent passed over. `GET /tasks/{task_id}/timeline` shows every line version
 as a `task_line_set` event at its `set_at`, and the synced task carries each
-role's current line in `task_lines`.
+role's current line in `task_lines`. A version from `freesided task-line
+-clear` shows as an event with a null `agent`, and the synced task then
+carries no line for that role.
 
 For a preflight-bound submission, choose one `--submission-id <identity>` and
 pass it to both `preflight` and `submit`. Reusing it with different input

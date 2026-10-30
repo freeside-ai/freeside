@@ -209,6 +209,9 @@ func main() {
 		case "set-pool-limit":
 			runSetPoolLimitMain(os.Args[2:])
 			return
+		case "task-line":
+			runTaskLineMain(os.Args[2:])
+			return
 		case "rig":
 			runRigMain(os.Args[2:])
 			return

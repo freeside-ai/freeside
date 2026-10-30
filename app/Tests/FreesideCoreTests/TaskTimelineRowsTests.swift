@@ -393,6 +393,17 @@ import Testing
                 ] + published)
     }
 
+    @Test func aClearedLineReadsAsBackToTheLineup() {
+        let digest = "sha256:" + String(repeating: "a", count: 64)
+        let cleared = Components.Schemas.TaskEventTaskLine(
+            line_id: digest, role: .reviewer, version: 2, source: .cli_line_change, superseded_agent: "codex")
+        #expect(TaskTimelinePresentation.label(cleared) == "Reviewing agent back to lineup · codex")
+        // The version after a clear replaces no agent, so it has no arrow.
+        let again = Components.Schemas.TaskEventTaskLine(
+            line_id: digest, role: .reviewer, agent: "claude-a", version: 3, source: .cli_line_change)
+        #expect(TaskTimelinePresentation.label(again) == "Reviewing agent set · claude-a")
+    }
+
     @Test func aRunWithNoRoleKeepsItsLabelsAndDrawsNoStart() {
         // Its review is still a stage the events name.
         #expect(

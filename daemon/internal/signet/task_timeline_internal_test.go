@@ -240,11 +240,46 @@ func TestTaskTimelineEmitsOneEventPerLineVersion(t *testing.T) {
 	for i, w := range want {
 		event := events[i]
 		detail := domain.TaskEventTaskLine{
-			LineID: w.line.ID, Role: w.line.Role, Agent: w.line.Agent, Version: w.line.Version,
+			LineID: w.line.ID, Role: w.line.Role, Agent: &w.line.Agent, Version: w.line.Version,
 			Source: w.line.Source, SupersededAgent: w.superseded, Provenance: w.line.Provenance,
 		}
 		if !event.RecordedAt.Equal(w.line.SetAt) || event.RunID != nil || !reflect.DeepEqual(*event.Line, detail) {
 			t.Fatalf("event %d = %+v (%+v), want %+v at %s", i, event, *event.Line, detail, w.line.SetAt)
 		}
+	}
+}
+
+// TestTaskTimelineShowsAClearAndTheLineAfterIt: a cleared version is an event
+// that names no agent, and the version after it supersedes none, so a role
+// cleared and set again still reads.
+func TestTaskTimelineShowsAClearAndTheLineAfterIt(t *testing.T) {
+	task, _ := taskTimelineFixtureInputs()
+	task.CampaignIDs = []domain.CampaignID{}
+	first := taskTimelineFixtureLines(t, task)[1]
+	line := func(in domain.TaskLineInput, version int, predecessor domain.TaskLine, offset time.Duration) domain.TaskLine {
+		in.TaskID, in.Role, in.Source, in.SetBy = task.ID, first.Role, domain.TaskLineSourceCLILineChange, "change"
+		built, err := domain.NewTaskLine(in, version, &predecessor.ID, task.CreatedAt.Add(offset))
+		if err != nil {
+			t.Fatal(err)
+		}
+		return built
+	}
+	cleared := line(domain.TaskLineInput{Cleared: true}, 2, first, 2*time.Hour)
+	again := line(domain.TaskLineInput{Agent: "claude-a"}, 3, cleared, 3*time.Hour)
+	got, err := taskTimeline(task, []domain.TaskLine{first, cleared, again}, nil, 42, task.CreatedAt)
+	if err != nil {
+		t.Fatal(err)
+	}
+	details := map[int]domain.TaskEventTaskLine{}
+	for _, event := range got.Events {
+		if event.Kind == domain.TaskEventTaskLineSet {
+			details[event.Line.Version] = *event.Line
+		}
+	}
+	if clear := details[2]; clear.Agent != nil || clear.SupersededAgent == nil || *clear.SupersededAgent != first.Agent {
+		t.Fatalf("cleared version = %+v, want no agent, superseding %s", clear, first.Agent)
+	}
+	if set := details[3]; set.Agent == nil || *set.Agent != "claude-a" || set.SupersededAgent != nil {
+		t.Fatalf("version after the clear = %+v, want claude-a superseding nothing", set)
 	}
 }

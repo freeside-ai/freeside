@@ -123,6 +123,8 @@ func TestExecutionOutcomeCauseMigration(t *testing.T) {
 	seedRawAdmission(t, ctx, s, admission)
 	rewindUsagePools(t, ctx, s.db)
 	for _, statement := range []string{
+		`DROP TABLE task_line_changes`,
+		`DELETE FROM schema_migrations WHERE name = '0113_task_line_changes.sql'`,
 		`ALTER TABLE task_lines DROP COLUMN provenance`,
 		`DELETE FROM schema_migrations WHERE name = '0111_task_line_provenance.sql'`,
 		`DROP TABLE image_policy_adoptions`,

@@ -398,6 +398,8 @@ var (
 		"task line provenance does not fit its source or trigger")
 	ErrTaskLineReadingNotUTF8 = errors.New(
 		"task line reading pool or window is not valid UTF-8")
+	ErrTaskLineRoleRunning = errors.New(
+		"an attempt of the role is running")
 	ErrTaskLineInconsistent = errors.New(
 		"task line id or predecessor does not match its content")
 	ErrInvalidAgentSelectionSource = errors.New(

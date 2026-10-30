@@ -67,6 +67,11 @@ JOIN outbox AS dispatch
 WHERE admission.invocation_id <> ?
   AND dispatch.status IN ('dispatching', 'dispatched')`
 
+	// A run's admissions by insertion order, without decoding one: asking
+	// whether an attempt ended must not depend on re-gating its admission.
+	listRunExecutionAttemptsSQL = `
+SELECT invocation_id, stage_id FROM execution_admissions WHERE run_id = ? ORDER BY rowid`
+
 	recordExecutionExportSQL = `
 INSERT INTO execution_exports
     (invocation_id, admission_id, observed_base_sha, head_sha, manifest_digest,
@@ -243,6 +248,50 @@ func (tx *WriteTx) RecordExecutionAdmission(ctx context.Context, admission domai
 		return fmt.Errorf("record execution admission %q: %w", admission.InvocationID, err)
 	}
 	return nil
+}
+
+// ExecutionAttempt names one admitted attempt of a run.
+type ExecutionAttempt struct {
+	InvocationID domain.InvocationID
+	StageID      domain.StageID
+}
+
+// OpenRunExecutionAttempts returns the run's admitted attempts that recorded
+// neither an export nor an outcome. Unlike the identity count, it keeps an
+// attempt whose dispatch went back to pending after a driver refusal: that
+// invocation replays under the admission it already holds.
+func (tx *ReadTx) OpenRunExecutionAttempts(ctx context.Context, runID domain.RunID) ([]ExecutionAttempt, error) {
+	rows, err := tx.tx.QueryContext(ctx, listRunExecutionAttemptsSQL, runID)
+	if err != nil {
+		return nil, fmt.Errorf("list execution attempts for run %q: %w", runID, err)
+	}
+	var attempts []ExecutionAttempt
+	for rows.Next() {
+		var attempt ExecutionAttempt
+		if err := rows.Scan(&attempt.InvocationID, &attempt.StageID); err != nil {
+			_ = rows.Close()
+			return nil, fmt.Errorf("list execution attempts for run %q: %w", runID, err)
+		}
+		attempts = append(attempts, attempt)
+	}
+	if err := rows.Err(); err != nil {
+		_ = rows.Close()
+		return nil, fmt.Errorf("list execution attempts for run %q: %w", runID, err)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	open := attempts[:0]
+	for _, attempt := range attempts {
+		ended, err := tx.executionTerminal(ctx, attempt.InvocationID)
+		if err != nil {
+			return nil, err
+		}
+		if !ended {
+			open = append(open, attempt)
+		}
+	}
+	return open, nil
 }
 
 // LookupExecutionAdmission reconstructs one attempt's admission and reports
@@ -541,6 +590,10 @@ func (tx *ReadTx) gateTaskLineSelection(
 	if err != nil {
 		return domain.TaskLine{}, fmt.Errorf("admission %q cites task line %q: %w",
 			invocationID, binding.SelectionRecordID, err)
+	}
+	if line.Cleared {
+		return domain.TaskLine{}, fmt.Errorf("admission %q cites task line %q, which names no agent: %w",
+			invocationID, line.ID, domain.ErrAdmissionDerivationMismatch)
 	}
 	run, err := tx.GetRun(ctx, runID)
 	if err != nil {

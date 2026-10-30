@@ -13,9 +13,11 @@ import (
 // Task lines (migration 0095; plan §5.4, Admitted Agents) are append-only: a
 // row is one line version and no statement here updates one. A change is the
 // next version for its task and role. Migration 0111 adds a router line's
-// provenance as JSON, NULL for every operator line.
+// provenance as JSON, NULL for every operator line. Migration 0113 adds the
+// cleared version, whose agent is NULL, and the change records that back a
+// cli_line_change line.
 
-const taskLineColumns = `task_id, role, version, id, agent, predecessor_id, source, set_by, set_at, provenance`
+const taskLineColumns = `task_id, role, version, id, agent, predecessor_id, source, set_by, set_at, provenance, cleared`
 
 // AppendTaskLine records the next version of a task's line for one role and
 // returns it. The version and the predecessor are assigned here, from the
@@ -52,7 +54,10 @@ func (tx *WriteTx) AppendTaskLine(ctx context.Context, in domain.TaskLineInput, 
 	if err != nil {
 		return domain.TaskLine{}, fmt.Errorf("append task line %q %q: %w", in.TaskID, in.Role, err)
 	}
-	var predecessorID, provenance any
+	var agent, predecessorID, provenance any
+	if !line.Cleared {
+		agent = line.Agent
+	}
 	if line.PredecessorID != nil {
 		predecessorID = string(*line.PredecessorID)
 	}
@@ -64,12 +69,74 @@ func (tx *WriteTx) AppendTaskLine(ctx context.Context, in domain.TaskLineInput, 
 		provenance = string(body)
 	}
 	if _, err := tx.tx.ExecContext(ctx, `INSERT INTO task_lines (`+taskLineColumns+`)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-		line.TaskID, line.Role, line.Version, line.ID, line.Agent, predecessorID,
-		line.Source, line.SetBy, formatTime(line.SetAt), provenance); err != nil {
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		line.TaskID, line.Role, line.Version, line.ID, agent, predecessorID,
+		line.Source, line.SetBy, formatTime(line.SetAt), provenance, line.Cleared); err != nil {
 		return domain.TaskLine{}, fmt.Errorf("append task line %q %q: %w", in.TaskID, in.Role, err)
 	}
 	return line, nil
+}
+
+// RecordTaskLineChange records an operator's change and the line version that
+// cites it, in the caller's transaction, and returns the line. Refusing a
+// change whose ReplacesID is not the role's newest version keeps it from
+// landing on a version it didn't see; the caller's error rolls back the
+// change row with it.
+//
+// A change writes nothing else a client syncs, so this advances the task's
+// own version. Without that, sync would keep serving the task's old
+// task_lines.
+func (tx *WriteTx) RecordTaskLineChange(ctx context.Context, change domain.TaskLineChange) (domain.TaskLine, error) {
+	if err := change.Validate(); err != nil {
+		return domain.TaskLine{}, fmt.Errorf("record task line change %q: %w", change.TaskID, err)
+	}
+	body, err := json.Marshal(change)
+	if err != nil {
+		return domain.TaskLine{}, fmt.Errorf("record task line change %q: %w", change.TaskID, err)
+	}
+	if _, err := tx.tx.ExecContext(ctx, `INSERT INTO task_line_changes (id, task_id, role, recorded_at, body)
+		VALUES (?, ?, ?, ?, ?)`, change.ID, change.TaskID, change.Role, formatTime(change.RecordedAt), string(body)); err != nil {
+		return domain.TaskLine{}, fmt.Errorf("record task line change %q: %w", change.TaskID, err)
+	}
+	line, err := tx.AppendTaskLine(ctx, domain.TaskLineInput{
+		TaskID: change.TaskID, Role: change.Role, Agent: change.Agent, Cleared: change.Cleared,
+		Source: domain.TaskLineSourceCLILineChange, SetBy: string(change.ID),
+	}, change.RecordedAt)
+	if err != nil {
+		return domain.TaskLine{}, err
+	}
+	if !change.Replaces(line.PredecessorID) {
+		return domain.TaskLine{}, fmt.Errorf("record task line change %q %s: the role's newest version is not the one it replaces: %w",
+			change.TaskID, change.Role, domain.ErrTaskLineInconsistent)
+	}
+	task, err := tx.GetTask(ctx, change.TaskID)
+	if err != nil {
+		return domain.TaskLine{}, fmt.Errorf("record task line change %q: %w", change.TaskID, err)
+	}
+	if err := tx.updateTask(ctx, task); err != nil {
+		return domain.TaskLine{}, fmt.Errorf("record task line change %q: %w", change.TaskID, err)
+	}
+	return line, nil
+}
+
+// GetTaskLineChange returns the change record with the given id. The decoded
+// body is the authority: it must resolve to its own id and agree with the
+// copied columns, so a row edited in place fails closed as a corrupt row.
+func (tx *ReadTx) GetTaskLineChange(ctx context.Context, id domain.Digest) (domain.TaskLineChange, error) {
+	var taskID, role, recordedAt, body string
+	if err := tx.tx.QueryRowContext(ctx, `SELECT task_id, role, recorded_at, body FROM task_line_changes WHERE id = ?`, id).
+		Scan(&taskID, &role, &recordedAt, &body); err != nil {
+		return domain.TaskLineChange{}, fmt.Errorf("task line change %q: %w", id, notFoundOr(err))
+	}
+	var change domain.TaskLineChange
+	if err := json.Unmarshal([]byte(body), &change); err != nil {
+		return domain.TaskLineChange{}, fmt.Errorf("task line change %q: %w", id, errRowInconsistent)
+	}
+	if change.Validate() != nil || change.ID != id || string(change.TaskID) != taskID ||
+		string(change.Role) != role || formatTime(change.RecordedAt) != recordedAt {
+		return domain.TaskLineChange{}, fmt.Errorf("task line change %q: %w", id, errRowInconsistent)
+	}
+	return change, nil
 }
 
 // TaskLines returns every line version recorded for the task, ordered by
@@ -86,19 +153,36 @@ func (tx *ReadTx) TaskLines(ctx context.Context, taskID domain.TaskID) ([]domain
 	return lines, nil
 }
 
-// CurrentTaskLines returns each role's latest line for the task: the lines
-// an admission reads. A role absent from the map has no line and stays on
-// the lineup. It reads every version, so a chain with an edited row or a
-// missing earlier version fails the read instead of serving its head.
-func (tx *ReadTx) CurrentTaskLines(ctx context.Context, taskID domain.TaskID) (map[domain.RoleName]domain.TaskLine, error) {
+// TaskLineHeads returns each role's newest version for the task, cleared or
+// not. Only a reader that holds a clear against its record, or that records
+// the next change, reads this; everyone else reads CurrentTaskLines. It reads
+// every version, so a chain with an edited row or a missing earlier version
+// fails the read instead of serving its head.
+func (tx *ReadTx) TaskLineHeads(ctx context.Context, taskID domain.TaskID) (map[domain.RoleName]domain.TaskLine, error) {
 	lines, err := tx.TaskLines(ctx, taskID)
 	if err != nil {
 		return nil, err
 	}
-	current := make(map[domain.RoleName]domain.TaskLine, len(domain.TaskLineRoles))
+	heads := make(map[domain.RoleName]domain.TaskLine, len(domain.TaskLineRoles))
 	for _, line := range lines {
-		// Ordered by version within a role, so the last one seen is current.
-		current[line.Role] = line
+		// Ordered by version within a role, so the last one seen is newest.
+		heads[line.Role] = line
+	}
+	return heads, nil
+}
+
+// CurrentTaskLines returns each role's latest line for the task. A role
+// absent from the map has no line and stays on the lineup: it never had one,
+// or its newest version is cleared.
+func (tx *ReadTx) CurrentTaskLines(ctx context.Context, taskID domain.TaskID) (map[domain.RoleName]domain.TaskLine, error) {
+	current, err := tx.TaskLineHeads(ctx, taskID)
+	if err != nil {
+		return nil, err
+	}
+	for role, line := range current {
+		if line.Cleared {
+			delete(current, role)
+		}
 	}
 	return current, nil
 }
@@ -146,14 +230,16 @@ func (tx *ReadTx) queryTaskLines(ctx context.Context, query string, args ...any)
 	for rows.Next() {
 		var (
 			line        domain.TaskLine
+			agent       sql.NullString
 			predecessor sql.NullString
 			setAt       string
 			provenance  sql.NullString
 		)
-		if err := rows.Scan(&line.TaskID, &line.Role, &line.Version, &line.ID, &line.Agent,
-			&predecessor, &line.Source, &line.SetBy, &setAt, &provenance); err != nil {
+		if err := rows.Scan(&line.TaskID, &line.Role, &line.Version, &line.ID, &agent,
+			&predecessor, &line.Source, &line.SetBy, &setAt, &provenance, &line.Cleared); err != nil {
 			return nil, err
 		}
+		line.Agent = agent.String
 		if provenance.Valid {
 			line.Provenance = new(domain.TaskLineProvenance)
 			if err := json.Unmarshal([]byte(provenance.String), line.Provenance); err != nil {

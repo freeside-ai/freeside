@@ -2185,7 +2185,7 @@ public enum Components {
                 ])
             }
         }
-        /// The path that set a task line (plan §5.4). submit_task, cli_submit, and proposal_start are authenticated operator actions. router is the routing policy's choice at a task's first admission for a role with no operator line, and is the only source that carries provenance.
+        /// The path that set a task line (plan §5.4). submit_task, cli_submit, proposal_start, and cli_line_change are authenticated operator actions; cli_line_change is a later change on the daemon host, and the only source that may clear a line. router is the routing policy's choice at a task's first admission for a role with no operator line, and is the only source that carries provenance.
         ///
         ///
         /// - Remark: Generated from `#/components/schemas/TaskLineSource`.
@@ -2194,6 +2194,7 @@ public enum Components {
             case cli_submit = "cli_submit"
             case proposal_start = "proposal_start"
             case router = "router"
+            case cli_line_change = "cli_line_change"
         }
         /// What made the router write a line. first_admission: the policy order's first agent took the task, so no reading was acted on and no agent passed over. exhausted_mark: the router passed over an agent whose pool's window was marked exhausted. A quota refusal parks a task instead of rerouting it, so it is not a trigger.
         ///
@@ -4542,7 +4543,7 @@ public enum Components {
                 ])
             }
         }
-        /// One task line version as the timeline shows it. superseded_agent is the agent of the version this one supersedes, null for version 1. provenance is the router's citation, null for an operator line.
+        /// One task line version as the timeline shows it. agent is null on a cleared version, which returned the role to the lineup. superseded_agent is the agent of the version this one supersedes, null for version 1 and after a cleared version. provenance is the router's citation, null for an operator line.
         ///
         ///
         /// - Remark: Generated from `#/components/schemas/TaskEventTaskLine`.
@@ -4552,7 +4553,7 @@ public enum Components {
             /// - Remark: Generated from `#/components/schemas/TaskEventTaskLine/role`.
             public var role: Components.Schemas.TaskLineRole
             /// - Remark: Generated from `#/components/schemas/TaskEventTaskLine/agent`.
-            public var agent: Swift.String
+            public var agent: Swift.String?
             /// - Remark: Generated from `#/components/schemas/TaskEventTaskLine/version`.
             public var version: Swift.Int
             /// - Remark: Generated from `#/components/schemas/TaskEventTaskLine/source`.
@@ -4592,7 +4593,7 @@ public enum Components {
             public init(
                 line_id: Components.Schemas.Digest,
                 role: Components.Schemas.TaskLineRole,
-                agent: Swift.String,
+                agent: Swift.String? = nil,
                 version: Swift.Int,
                 source: Components.Schemas.TaskLineSource,
                 superseded_agent: Swift.String? = nil,
@@ -4625,7 +4626,7 @@ public enum Components {
                     Components.Schemas.TaskLineRole.self,
                     forKey: .role
                 )
-                self.agent = try container.decode(
+                self.agent = try container.decodeIfPresent(
                     Swift.String.self,
                     forKey: .agent
                 )

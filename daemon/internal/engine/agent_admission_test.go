@@ -44,6 +44,7 @@ func agentTestDigest(fill string) domain.Digest {
 type agentAdmissionFixture struct {
 	engine     *Engine
 	store      *store.Store
+	storePath  string
 	adapters   *wardstore.Adapters
 	selection  AgentSelection
 	identity   domain.AuthIdentity
@@ -80,7 +81,8 @@ var agentTestWriterAgent = agentbaseline.WriterAgentName(domain.RoleImplementer)
 func newAgentAdmissionFixture(t *testing.T) *agentAdmissionFixture {
 	t.Helper()
 	ctx := context.Background()
-	st := storetest.Open(t, filepath.Join(t.TempDir(), "store.db"), store.Options{
+	storePath := filepath.Join(t.TempDir(), "store.db")
+	st := storetest.Open(t, storePath, store.Options{
 		AdmissionFloors: map[domain.OperatingMode]domain.CapabilitySnapshot{
 			domain.ModeAttendedDev: domain.NewCapabilitySnapshot(domain.CapPostExitExport),
 		},
@@ -94,7 +96,7 @@ func newAgentAdmissionFixture(t *testing.T) *agentAdmissionFixture {
 	if err != nil {
 		t.Fatal(err)
 	}
-	f := &agentAdmissionFixture{store: st, adapters: adapters}
+	f := &agentAdmissionFixture{store: st, storePath: storePath, adapters: adapters}
 	f.identity = domain.AuthIdentity{
 		ID: "claude-main", Provider: "claude", AccountBinding: "acct-fixture-0001",
 		AuthStoreMutationLease: true, Enabled: true, CostOwner: "operator",

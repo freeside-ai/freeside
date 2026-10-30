@@ -35,19 +35,24 @@ const (
 	// admission for a role with no operator line (plan §5.4, routing policy;
 	// revision 103). It is the only source that carries a TaskLineProvenance.
 	TaskLineSourceRouter TaskLineSource = "router"
+	// TaskLineSourceCLILineChange is `freesided task-line` on the daemon host:
+	// a change to a task's line after the task exists, while no attempt of
+	// the role runs. SetBy names its TaskLineChange. It is the only source
+	// that may clear a line.
+	TaskLineSourceCLILineChange TaskLineSource = "cli_line_change"
 )
 
 // AllTaskLineSources lists every valid TaskLineSource; it is the single
 // registration point.
 var AllTaskLineSources = []TaskLineSource{
 	TaskLineSourceSubmitTask, TaskLineSourceCLISubmit, TaskLineSourceProposalStart,
-	TaskLineSourceRouter,
+	TaskLineSourceRouter, TaskLineSourceCLILineChange,
 }
 
 func (s TaskLineSource) valid() bool {
 	switch s {
 	case TaskLineSourceSubmitTask, TaskLineSourceCLISubmit, TaskLineSourceProposalStart,
-		TaskLineSourceRouter:
+		TaskLineSourceRouter, TaskLineSourceCLILineChange:
 		return true
 	default:
 		return false
@@ -259,6 +264,8 @@ type TaskLineInput struct {
 	SetBy string
 	// Provenance is set exactly for a router line.
 	Provenance *TaskLineProvenance
+	// Cleared records a version that names no agent; Agent stays empty.
+	Cleared bool
 }
 
 // TaskLine is one version of a task's line for one role (plan §5.4, Admitted
@@ -272,8 +279,9 @@ type TaskLine struct {
 	ID     Digest   `json:"id"`
 	TaskID TaskID   `json:"task_id"`
 	Role   RoleName `json:"role"`
-	// Agent is the agent's name in the project's tree. It is not resolved
-	// here: admission resolves it at the admitting revision.
+	// Agent is the agent's name in the project's tree, empty exactly when
+	// Cleared. It is not resolved here: admission resolves it at the
+	// admitting revision.
 	Agent string `json:"agent"`
 	// Version counts the role's lines in this task from 1.
 	Version int `json:"version"`
@@ -286,6 +294,11 @@ type TaskLine struct {
 	// Provenance is how the router chose the agent: set exactly when Source
 	// is router, nil for every operator source.
 	Provenance *TaskLineProvenance `json:"provenance"`
+	// Cleared is a version that takes the role back to the lineup. It is
+	// omitted when false because the API's TaskLine has no such field: the
+	// synced task carries only each role's current line, and a cleared role
+	// has none.
+	Cleared bool `json:"cleared,omitempty"`
 }
 
 // NewTaskLine builds a validated line version in canonical byte-form: the
@@ -302,6 +315,7 @@ func NewTaskLine(in TaskLineInput, version int, predecessor *Digest, setAt time.
 		SetBy:         in.SetBy,
 		SetAt:         setAt.UTC(),
 		Provenance:    in.Provenance.clone(),
+		Cleared:       in.Cleared,
 	}
 	id, err := line.ComputeID()
 	if err != nil {
@@ -329,6 +343,9 @@ type canonicalTaskLine struct {
 	// Provenance is omitted when nil, so an operator line keeps the v1 byte
 	// form and the id it was stored under before router lines existed.
 	Provenance *TaskLineProvenance `json:"provenance,omitempty"`
+	// Cleared is omitted when false, so every line that isn't a clear keeps
+	// its id.
+	Cleared bool `json:"cleared,omitempty"`
 }
 
 // ComputeID returns the content address of the line: a sha256 over its
@@ -345,6 +362,7 @@ func (l TaskLine) ComputeID() (Digest, error) {
 		SetBy:         l.SetBy,
 		SetAt:         l.SetAt,
 		Provenance:    l.Provenance,
+		Cleared:       l.Cleared,
 	})
 	if err != nil {
 		return "", fmt.Errorf("task line id: %w", err)
@@ -362,7 +380,12 @@ func (l TaskLine) Validate() error {
 	if !l.Role.TaskLineEligible() {
 		return fmt.Errorf("task line %s role %q: %w", l.TaskID, l.Role, ErrTaskLineRoleIneligible)
 	}
-	if !validAgentName(l.Agent) {
+	if l.Cleared {
+		// A clear supersedes a line, so it never starts a chain.
+		if l.Agent != "" || l.Source != TaskLineSourceCLILineChange || l.Version == 1 {
+			return fmt.Errorf("task line %s %s version %d clear: %w", l.TaskID, l.Role, l.Version, ErrTaskLineInconsistent)
+		}
+	} else if !validAgentName(l.Agent) {
 		return fmt.Errorf("task line %s %s agent %q: %w", l.TaskID, l.Role, l.Agent, ErrInvalidAgentName)
 	}
 	if l.Version < 1 {

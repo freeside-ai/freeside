@@ -674,6 +674,27 @@ func TestTaskLineAdmissionResolvesTheLineItCites(t *testing.T) {
 		}
 	})
 
+	t.Run("a cleared version names no agent to bind", func(t *testing.T) {
+		s := openAgentAdmissionStore(t)
+		generation := seedAgentClosure(t, s)
+		cited := appendRunTaskLine(t, s, "run-1", "codex")
+		change, err := domain.NewTaskLineChange(cited.TaskID, cited.Role, "", true, &cited.ID, cited.SetAt)
+		if err != nil {
+			t.Fatal(err)
+		}
+		var cleared domain.TaskLine
+		if err := s.Write(ctx, func(tx *WriteTx) error {
+			var err error
+			cleared, err = tx.RecordTaskLineChange(ctx, change)
+			return err
+		}); err != nil {
+			t.Fatal(err)
+		}
+		if err := record(s, agentAdmissionCiting(t, generation, cleared.ID)); !errors.Is(err, domain.ErrAdmissionDerivationMismatch) {
+			t.Fatalf("record = %v, want %v", err, domain.ErrAdmissionDerivationMismatch)
+		}
+	})
+
 	t.Run("an id no line was recorded under", func(t *testing.T) {
 		s := openAgentAdmissionStore(t)
 		generation := seedAgentClosure(t, s)

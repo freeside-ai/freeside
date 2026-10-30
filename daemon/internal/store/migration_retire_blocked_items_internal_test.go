@@ -117,6 +117,9 @@ func TestRetireBlockedItemsMigrationClosesOpenRows(t *testing.T) {
 // records so the recorded history stays contiguous.
 func forgetRetireBlockedItems(t *testing.T, ctx context.Context, db *sql.DB) {
 	t.Helper()
+	if _, err := db.ExecContext(ctx, `DROP TABLE task_line_changes`); err != nil {
+		t.Fatal(err)
+	}
 	if _, err := db.ExecContext(ctx, `ALTER TABLE execution_outcomes DROP COLUMN cause`); err != nil {
 		t.Fatal(err)
 	}
@@ -181,7 +184,8 @@ func forgetRetireBlockedItems(t *testing.T, ctx context.Context, db *sql.DB) {
 		'0108_image_upkeep.sql',
 		'0109_task_submission_origin.sql',
 		'0110_image_policy_adoption.sql',
-		'0111_task_line_provenance.sql')`); err != nil {
+		'0111_task_line_provenance.sql',
+		'0113_task_line_changes.sql')`); err != nil {
 		t.Fatal(err)
 	}
 }

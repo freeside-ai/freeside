@@ -22,6 +22,8 @@ func TestRunHoldDetailMigrationKeepsOlderHolds(t *testing.T) {
 	// and then 0103 so the recorded history stays contiguous.
 	rewindUsagePools(t, ctx, st.db)
 	for _, statement := range []string{
+		`DROP TABLE task_line_changes`,
+		`DELETE FROM schema_migrations WHERE name = '0113_task_line_changes.sql'`,
 		`ALTER TABLE task_lines DROP COLUMN provenance`,
 		`DELETE FROM schema_migrations WHERE name = '0111_task_line_provenance.sql'`,
 		`DROP TABLE image_policy_adoptions`,
