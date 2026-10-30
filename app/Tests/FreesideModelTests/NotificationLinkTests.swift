@@ -140,12 +140,11 @@ import Testing
                 receiptBound: .seconds(60))
         }
         await arrived.wait()
-        #expect(navigation.inboxPath.isEmpty)
+        #expect(navigation.path.isEmpty)
 
         await release.open()
         await opening.value
-        #expect(navigation.selectedTab == .inbox)
-        #expect(navigation.inboxPath == [Self.itemID])
+        #expect(navigation.path == [.attentionItem(Self.itemID)])
         #expect(navigation.linkedItemID == Self.itemID)
         #expect(try await openedAttempts(server) == [1])
     }
@@ -163,7 +162,7 @@ import Testing
             .attentionItem(itemID: Self.itemID, channel: "ntfy", attempt: 1), in: navigation,
             receiptBound: .milliseconds(20))
 
-        #expect(navigation.inboxPath == [Self.itemID])
+        #expect(navigation.path == [.attentionItem(Self.itemID)])
         await never.open()
     }
 
@@ -199,11 +198,11 @@ import Testing
         // while the older link is still waiting.
         await session.open(
             .attentionItem(itemID: "item-newer", channel: "ntfy", attempt: 1), in: navigation)
-        #expect(navigation.inboxPath == ["item-newer"])
+        #expect(navigation.path == [.attentionItem("item-newer")])
 
         await release.open()
         await older.value
-        #expect(navigation.inboxPath == ["item-newer"])
+        #expect(navigation.path == [.attentionItem("item-newer")])
     }
 
     @Test func theInboxLinkWinsOverAnOlderItemLinkStillWaiting() async throws {
@@ -217,7 +216,7 @@ import Testing
 
         await release.open()
         await older.value
-        #expect(navigation.inboxPath.isEmpty)
+        #expect(navigation.path.isEmpty)
     }
 
     @Test func operatorNavigationDuringTheWaitWinsOverTheLink() async throws {
@@ -226,12 +225,11 @@ import Testing
         let navigation = NavigationModel(launchInputs: .standard())
         let (opening, release) = await openWithHeldReceipt(session, server, in: navigation)
 
-        navigation.selectTab(.tasks)
+        navigation.route(to: .task("task-other"))
 
         await release.open()
         await opening.value
-        #expect(navigation.selectedTab == .tasks)
-        #expect(navigation.inboxPath.isEmpty)
+        #expect(navigation.path == [.task("task-other")])
     }
 
     /// Either link form came from a notification's tap, so each is logged
@@ -260,32 +258,37 @@ import Testing
         await session.open(
             .attentionItem(itemID: Self.itemID, channel: "ntfy", attempt: 9), in: navigation)
 
-        #expect(navigation.inboxPath == [Self.itemID])
+        #expect(navigation.path == [.attentionItem(Self.itemID)])
         #expect(try await openedAttempts(server).isEmpty)
     }
 
-    @Test func theInboxLinkShowsTheInbox() async throws {
+    @Test func theInboxLinkShowsTheListAsItStands() async throws {
         let session = try session(server())
-        let navigation = NavigationModel(
-            launchInputs: LaunchInputs(colorSchemeRaw: nil, selectionRaw: nil, screenRaw: "tasks"))
-        #expect(navigation.selectedTab == .tasks)
+        let navigation = NavigationModel(launchInputs: .standard())
 
         await session.open(.inbox, in: navigation)
 
-        #expect(navigation.selectedTab == .inbox)
-        #expect(navigation.inboxPath.isEmpty)
+        #expect(navigation.path.isEmpty)
     }
 
     @Test func theInboxLinkLeavesAnOpenCardOpen() async throws {
         let session = try session(server())
-        let navigation = NavigationModel(
-            launchInputs: LaunchInputs(colorSchemeRaw: nil, selectionRaw: nil, screenRaw: "tasks"))
-        navigation.inboxPath = [Self.itemID]
+        let navigation = NavigationModel(launchInputs: .standard())
+        navigation.route(to: .attentionItem(Self.itemID))
 
         await session.open(.inbox, in: navigation)
 
-        #expect(navigation.selectedTab == .inbox)
-        #expect(navigation.inboxPath == [Self.itemID])
+        #expect(navigation.path == [.attentionItem(Self.itemID)])
+    }
+
+    @Test func theInboxLinkReturnsToTheListFromATask() async throws {
+        let session = try session(server())
+        let navigation = NavigationModel(launchInputs: .standard())
+        navigation.route(to: .run(taskID: "task-1", runID: "run-1"))
+
+        await session.open(.inbox, in: navigation)
+
+        #expect(navigation.path.isEmpty)
     }
 
     @Test func anUnpairedSessionIgnoresALink() async throws {
@@ -296,7 +299,7 @@ import Testing
         await session.open(
             .attentionItem(itemID: Self.itemID, channel: "ntfy", attempt: 1), in: navigation)
 
-        #expect(navigation.inboxPath.isEmpty)
+        #expect(navigation.path.isEmpty)
         #expect(try await openedAttempts(server).isEmpty)
     }
 

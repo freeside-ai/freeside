@@ -1,3 +1,4 @@
+import Foundation
 import FreesideAPI
 import FreesideTestSupport
 import Testing
@@ -5,19 +6,40 @@ import Testing
 @testable import FreesideModel
 
 @Suite @MainActor struct NavigationModelTests {
-    @Test func launchSelectionStartsInsideItsRequestedStack() {
-        let inputs = LaunchInputs(
-            colorSchemeRaw: nil,
-            selectionRaw: TaskFixtures.retryTaskID,
-            screenRaw: "tasks")
+    private func list(
+        _ store: InboxStore, tasks: [Components.Schemas.TaskSnapshot] = []
+    ) -> UnifiedList {
+        UnifiedList(
+            open: store.openSnapshots, closed: store.closedSnapshots, tasks: tasks,
+            projectFilter: store.projectID)
+    }
 
-        let navigation = NavigationModel(launchInputs: inputs)
+    /// A store holding `items` of a held task, and that task.
+    private func task(
+        holding itemIDs: [String] = ["item-a"]
+    ) -> (store: InboxStore, task: Components.Schemas.TaskSnapshot) {
+        let task = TaskFixtures.defaultTasks()[0]
+        let store = InboxStore(client: APIClientFactory.mock(server: MockServer()))
+        store.replaceAll(
+            with: itemIDs.enumerated().map { index, id in
+                var snapshot = AttentionFixtures.fixture(type: .agent_question)
+                snapshot.item.id = id
+                snapshot.item.created_at = Date(timeIntervalSince1970: 1000 - Double(index))
+                snapshot.item.subject = .task(
+                    .init(subject_type: .task, subject_id: task.task.id, task_id: task.task.id))
+                return snapshot
+            })
+        return (store, task)
+    }
 
-        #expect(navigation.selectedTab == .tasks)
-        #expect(navigation.tasksPath == [TaskFixtures.retryTaskID])
+    @Test func aTaskLaunchOpensTheTask() {
+        let navigation = NavigationModel(
+            launchInputs: LaunchInputs(colorSchemeRaw: nil, selectionRaw: TaskFixtures.retryTaskID))
+
+        #expect(navigation.path == [.task(TaskFixtures.retryTaskID)])
         #expect(navigation.taskSelection == TaskFixtures.retryTaskID)
         #expect(navigation.runSelection == nil)
-        #expect(navigation.inboxPath.isEmpty)
+        #expect(navigation.attentionSelection == nil)
     }
 
     @Test func aLaunchComposerIsOfferedToItsItemUntilConsumed() {
@@ -52,57 +74,65 @@ import Testing
     }
 
     @Test func aRunLaunchLinkOpensItsTaskWithTheRunPushed() {
-        let inputs = LaunchInputs(
-            colorSchemeRaw: nil,
-            selectionRaw: RunFixtures.activeRunID,
-            screenRaw: "tasks")
+        let navigation = NavigationModel(
+            launchInputs: LaunchInputs(colorSchemeRaw: nil, selectionRaw: RunFixtures.activeRunID))
 
-        let navigation = NavigationModel(launchInputs: inputs)
-
-        #expect(navigation.selectedTab == .tasks)
-        #expect(navigation.tasksPath == [TaskFixtures.retryTaskID, RunFixtures.activeRunID])
+        #expect(
+            navigation.path == [
+                .task(TaskFixtures.retryTaskID),
+                .run(taskID: TaskFixtures.retryTaskID, runID: RunFixtures.activeRunID),
+            ])
         #expect(navigation.taskSelection == TaskFixtures.retryTaskID)
         #expect(navigation.runSelection == RunFixtures.activeRunID)
     }
 
-    @Test func theTasksStackDrivesBothSelectionsAndARepairIsNotOperatorNavigation() {
+    @Test func anItemLaunchStaysRoutedAsALinkDoes() {
         let navigation = NavigationModel(
-            launchInputs: LaunchInputs(colorSchemeRaw: nil, selectionRaw: nil, screenRaw: "tasks"))
-        let revision = navigation.operatorNavigationRevision
+            launchInputs: LaunchInputs(colorSchemeRaw: nil, selectionRaw: "item-spec_approval"))
 
-        navigation.setTasksPath([TaskFixtures.retryTaskID, RunFixtures.activeRunID])
+        #expect(navigation.path == [.attentionItem("item-spec_approval")])
+        #expect(navigation.linkedItemID == "item-spec_approval")
+    }
+
+    @Test func theStackDrivesTheSelectionsAndARepairIsNotOperatorNavigation() {
+        let navigation = NavigationModel(launchInputs: LaunchInputs(colorSchemeRaw: nil, selectionRaw: nil))
+        let revision = navigation.operatorNavigationRevision
+        let task = NavigationModel.Destination.task(TaskFixtures.retryTaskID)
+        let run = NavigationModel.Destination.run(
+            taskID: TaskFixtures.retryTaskID, runID: RunFixtures.activeRunID)
+
+        navigation.setPath([task, run])
         #expect(navigation.taskSelection == TaskFixtures.retryTaskID)
         #expect(navigation.runSelection == RunFixtures.activeRunID)
         #expect(navigation.operatorNavigationRevision == revision + 1)
 
         // Popping the run clears its selection; the task stays.
-        navigation.setTasksPath([TaskFixtures.retryTaskID])
+        navigation.setPath([task])
         #expect(navigation.runSelection == nil)
         #expect(navigation.taskSelection == TaskFixtures.retryTaskID)
 
-        navigation.applyTasksPath([])
+        navigation.repairSelection(in: list(InboxStore(client: APIClientFactory.mock(server: MockServer()))))
         #expect(navigation.taskSelection == nil)
         #expect(navigation.operatorNavigationRevision == revision + 2)
     }
 
-    @Test func macTaskSelectionDropsTheRunAndCloseRunReturnsToTheTask() {
-        let navigation = NavigationModel(
-            launchInputs: LaunchInputs(colorSchemeRaw: nil, selectionRaw: nil, screenRaw: "tasks"))
+    @Test func macSelectionDropsTheRunAndCloseRunReturnsToTheTask() {
+        let navigation = NavigationModel(launchInputs: LaunchInputs(colorSchemeRaw: nil, selectionRaw: nil))
         navigation.route(to: .run(taskID: TaskFixtures.retryTaskID, runID: RunFixtures.activeRunID))
 
         navigation.closeRun()
         #expect(navigation.runSelection == nil)
         #expect(navigation.taskSelection == TaskFixtures.retryTaskID)
-        #expect(navigation.tasksPath == [TaskFixtures.retryTaskID])
+        #expect(navigation.path == [.task(TaskFixtures.retryTaskID)])
 
         navigation.route(to: .run(taskID: TaskFixtures.retryTaskID, runID: RunFixtures.activeRunID))
-        navigation.selectTask(TaskFixtures.retryTaskID)
+        navigation.select(.task(TaskFixtures.retryTaskID))
         #expect(navigation.runSelection == RunFixtures.activeRunID, "reselecting the same task keeps its run")
-        navigation.selectTask(TaskFixtures.legacyTaskID)
+        navigation.select(.task(TaskFixtures.legacyTaskID))
         #expect(navigation.runSelection == nil)
-        #expect(navigation.tasksPath == [TaskFixtures.legacyTaskID])
-        navigation.selectTask(nil)
-        #expect(navigation.tasksPath.isEmpty)
+        #expect(navigation.path == [.task(TaskFixtures.legacyTaskID)])
+        navigation.select(nil)
+        #expect(navigation.path.isEmpty)
     }
 
     @Test func launchExpandedDetailsAlsoOpensTheSharedInspector() {
@@ -115,70 +145,39 @@ import Testing
         #expect(navigation.inspectorPresented)
     }
 
-    @Test func routingSelectsThenPushesWithoutDiscardingTheOtherTab() {
+    @Test func oneRouteHoldsAnItemOrATaskNeverBoth() {
         let navigation = NavigationModel(
             launchInputs: LaunchInputs(
                 colorSchemeRaw: nil,
                 selectionRaw: "item-spec_approval"))
 
         navigation.route(to: .run(taskID: TaskFixtures.retryTaskID, runID: RunFixtures.activeRunID))
-
-        #expect(navigation.selectedTab == .tasks)
-        #expect(navigation.tasksPath == [TaskFixtures.retryTaskID, RunFixtures.activeRunID])
-        #expect(navigation.inboxPath == ["item-spec_approval"])
+        #expect(navigation.attentionSelection == nil)
+        #expect(navigation.taskSelection == TaskFixtures.retryTaskID)
 
         navigation.route(to: .attentionItem("item-blocked"))
-
-        #expect(navigation.selectedTab == .inbox)
-        #expect(navigation.inboxPath == ["item-blocked"])
-        #expect(navigation.tasksPath == [TaskFixtures.retryTaskID, RunFixtures.activeRunID])
-    }
-
-    @Test func showingActiveTasksDropsARetainedSelection() {
-        let navigation = NavigationModel(
-            launchInputs: LaunchInputs(
-                colorSchemeRaw: nil,
-                selectionRaw: "item-spec_approval"))
-        navigation.route(
-            to: .run(taskID: "task-campaign-freeside-completed", runID: RunFixtures.completedRunID))
-        navigation.selectTab(.inbox)
-        let revision = navigation.operatorNavigationRevision
-
-        navigation.showActiveTasks()
-
-        #expect(navigation.selectedTab == .tasks)
+        #expect(navigation.path == [.attentionItem("item-blocked")])
         #expect(navigation.taskSelection == nil)
         #expect(navigation.runSelection == nil)
-        #expect(navigation.tasksPath.isEmpty)
-        #expect(navigation.operatorNavigationRevision == revision + 1)
-        #expect(navigation.inboxPath == ["item-spec_approval"])
     }
 
     @Test func aLinkedItemStaysRoutedWhenTheListDoesNotHoldIt() {
-        // A notification's link can name an item that has since resolved:
-        // the Open scope doesn't list it, and its card must stay up.
+        // A notification's link can name an item the list doesn't hold, one
+        // a cold start's cache hasn't caught up to, and its card must stay up.
         let store = InboxStore(client: APIClientFactory.mock(server: MockServer()))
-        var snapshots = AttentionFixtures.defaultInbox()
-        let resolved = snapshots.indices.first { snapshots[$0].item.id == "item-spec_approval" }!
-        snapshots[resolved].item.status = .resolved
-        store.replaceAll(with: snapshots)
-        let listed = Set(store.rows.map(\.item.id))
-        #expect(store.scope == .open)
-        #expect(!listed.contains("item-spec_approval"))
+        store.replaceAll(with: AttentionFixtures.defaultInbox().filter { $0.item.id == "item-blocked" })
         let navigation = NavigationModel(launchInputs: .standard())
 
         navigation.route(toLinkedItem: "item-spec_approval")
-        navigation.inboxPath = NavigationModel.repairedPath(
-            navigation.inboxPath, availableIDs: listed, keeping: navigation.linkedItemID)
-        #expect(navigation.inboxPath == ["item-spec_approval"])
+        navigation.repairSelection(in: list(store))
+        #expect(navigation.path == [.attentionItem("item-spec_approval")])
 
         // The same item reached any other way is repaired as before.
         navigation.route(to: .attentionItem("item-blocked"))
         navigation.route(to: .attentionItem("item-spec_approval"))
         #expect(navigation.linkedItemID == nil)
-        navigation.inboxPath = NavigationModel.repairedPath(
-            navigation.inboxPath, availableIDs: listed, keeping: navigation.linkedItemID)
-        #expect(navigation.inboxPath.isEmpty)
+        navigation.repairSelection(in: list(store))
+        #expect(navigation.path.isEmpty)
     }
 
     @Test func leavingALinkedItemEndsItsExemption() {
@@ -191,34 +190,95 @@ import Testing
         #expect(navigation.linkedItemID == "item-spec_approval")
 
         // Back to the list, as the stack's back button writes it.
-        navigation.setInboxPath([])
+        navigation.setPath([])
         #expect(navigation.linkedItemID == nil)
 
         navigation.route(toLinkedItem: "item-spec_approval")
-        navigation.selectAttentionItem("item-blocked")
+        navigation.select(.attentionItem("item-blocked"))
         #expect(navigation.linkedItemID == nil)
     }
 
-    @Test func repairPopsOnlyAPathWhoseDestinationDisappeared() {
-        let navigation = NavigationModel(
-            launchInputs: LaunchInputs(
-                colorSchemeRaw: nil,
-                selectionRaw: "item-spec_approval"))
-        navigation.route(to: .run(taskID: TaskFixtures.retryTaskID, runID: RunFixtures.activeRunID))
+    @Test func aTaskThatLeavesTheListTakesItsRunWithIt() {
+        let (store, task) = task()
+        let navigation = NavigationModel(launchInputs: .standard())
+        navigation.route(to: .run(taskID: task.task.id, runID: "run-1"))
 
-        navigation.inboxPath = NavigationModel.repairedPath(
-            navigation.inboxPath,
-            availableIDs: ["item-blocked"])
-        navigation.applyTasksPath(
-            NavigationModel.repairedTaskPath(
-                navigation.tasksPath,
-                availableTaskIDs: [TaskFixtures.retryTaskID]))
+        navigation.repairSelection(in: list(store, tasks: [task]))
+        #expect(navigation.runSelection == "run-1")
 
-        #expect(navigation.inboxPath.isEmpty)
-        #expect(navigation.tasksPath == [TaskFixtures.retryTaskID, RunFixtures.activeRunID])
+        navigation.repairSelection(in: list(store, tasks: []))
+        #expect(navigation.path.isEmpty)
     }
 
-    @Test func conclusionAdvancesByInboxPriorityThenRendersInboxClear() async throws {
+    @Test func theLastOpenItemResolvingMovesTheRouteToItsTask() throws {
+        let (store, task) = task()
+        let navigation = NavigationModel(launchInputs: .standard())
+        navigation.route(to: .attentionItem("item-a"))
+        let revision = navigation.operatorNavigationRevision
+        let previouslyOpen = Set(store.openSnapshots.map(\.item.id))
+
+        var resolved = try #require(store.snapshotsByID["item-a"])
+        resolved.item.status = .resolved
+        store.replaceAll(with: [resolved])
+
+        navigation.repairSelection(in: list(store, tasks: [task]), previouslyOpen: previouslyOpen)
+        #expect(navigation.path == [.task(task.task.id)])
+        #expect(navigation.operatorNavigationRevision == revision)
+    }
+
+    @Test func anItemResolvingBesideASiblingMovesTheRouteToTheSibling() throws {
+        let (store, task) = task(holding: ["item-a", "item-b"])
+        let navigation = NavigationModel(launchInputs: LaunchInputs(colorSchemeRaw: nil, selectionRaw: nil))
+        navigation.route(to: .attentionItem("item-a"))
+        let previouslyOpen = Set(store.openSnapshots.map(\.item.id))
+        let revision = navigation.operatorNavigationRevision
+
+        var resolved = try #require(store.snapshotsByID["item-a"])
+        resolved.item.status = .resolved
+        store.replaceAll(with: [resolved, try #require(store.snapshotsByID["item-b"])])
+        navigation.repairSelection(in: list(store, tasks: [task]), previouslyOpen: previouslyOpen)
+
+        #expect(navigation.path == [.attentionItem("item-b")])
+        // The repair is the list's move, so the next-item preference still
+        // runs when the concluded item's delay ends.
+        #expect(
+            navigation.advanceAfterConclusion(
+                itemID: "item-a", expectedOperatorNavigationRevision: revision,
+                advancesToNextItem: true, list: list(store, tasks: [task])) == .advanced)
+    }
+
+    @Test func aClosedItemOpenedOnPurposeStaysOpen() throws {
+        let (store, task) = task()
+        var resolved = try #require(store.snapshotsByID["item-a"])
+        resolved.item.status = .resolved
+        store.replaceAll(with: [resolved])
+        let navigation = NavigationModel(launchInputs: .standard())
+
+        navigation.route(to: .attentionItem("item-a"))
+        navigation.repairSelection(in: list(store, tasks: [task]))
+
+        #expect(navigation.path == [.attentionItem("item-a")])
+    }
+
+    @Test func aResolvedScopedItemStaysSelectedInFinished() throws {
+        let store = InboxStore(client: APIClientFactory.mock(server: MockServer()))
+        var scoped = AttentionFixtures.fixture(type: .agent_question)
+        scoped.item.id = "item-scoped"
+        store.replaceAll(with: [scoped])
+        let navigation = NavigationModel(launchInputs: .standard())
+        navigation.route(to: .attentionItem("item-scoped"))
+        let previouslyOpen = Set(store.openSnapshots.map(\.item.id))
+
+        scoped.item.status = .resolved
+        store.replaceAll(with: [scoped])
+        let after = list(store)
+        navigation.repairSelection(in: after, previouslyOpen: previouslyOpen)
+
+        #expect(navigation.path == [.attentionItem("item-scoped")])
+        #expect(after.finished.map(\.id) == [.item("item-scoped")])
+    }
+
+    @Test func conclusionAdvancesAlongNeedsYouThenRendersInboxClear() async throws {
         let server = MockServer()
         let store = await makeStore(server: server)
         let navigation = NavigationModel(
@@ -233,52 +293,90 @@ import Testing
                 itemID: "item-spec_approval",
                 expectedOperatorNavigationRevision: navigation.operatorNavigationRevision,
                 advancesToNextItem: true,
-                store: store) == .advanced)
+                list: list(store)) == .advanced)
         #expect(navigation.attentionSelection == expectedNext)
 
-        let only = try #require(store.snapshotsByID["item-spec_approval"])
-        store.replaceAll(with: [only])
+        // The item left the list while its receipt showed, and nothing is left.
+        store.replaceAll(with: [])
         navigation.route(to: .attentionItem("item-spec_approval"))
         #expect(
             navigation.advanceAfterConclusion(
                 itemID: "item-spec_approval",
                 expectedOperatorNavigationRevision: navigation.operatorNavigationRevision,
                 advancesToNextItem: true,
-                store: store) == .inboxClear)
-        #expect(navigation.selectedTab == .inbox)
+                list: list(store)) == .inboxClear)
         #expect(navigation.attentionSelection == nil)
-        #expect(navigation.inboxPath.isEmpty)
+        #expect(navigation.path.isEmpty)
     }
 
-    @Test func conclusionReturnsToTheInboxWhenNotAdvancingToTheNextItem() async throws {
-        let server = MockServer()
-        let store = await makeStore(server: server)
-        let navigation = NavigationModel(
-            launchInputs: LaunchInputs(
-                colorSchemeRaw: nil,
-                selectionRaw: "item-spec_approval"))
+    @Test func conclusionKeepsItsTaskSelectedWithoutThePreference() throws {
+        let (store, task) = task()
+        let navigation = NavigationModel(launchInputs: .standard())
+        navigation.route(to: .attentionItem("item-a"))
+        var resolved = try #require(store.snapshotsByID["item-a"])
+        resolved.item.status = .resolved
+        store.replaceAll(with: [resolved])
 
-        // Default path: open items remain, but the operator has not opted into
-        // advancing, so focus returns to the inbox with nothing selected.
         #expect(
             navigation.advanceAfterConclusion(
-                itemID: "item-spec_approval",
+                itemID: "item-a",
                 expectedOperatorNavigationRevision: navigation.operatorNavigationRevision,
                 advancesToNextItem: false,
-                store: store) == .returnedToInbox)
-        #expect(navigation.selectedTab == .inbox)
-        #expect(navigation.attentionSelection == nil)
-        #expect(navigation.inboxPath.isEmpty)
+                list: list(store, tasks: [task])) == .returnedToList)
+        #expect(navigation.path == [.task(task.task.id)])
+    }
 
-        let only = try #require(store.snapshotsByID["item-spec_approval"])
-        store.replaceAll(with: [only])
-        navigation.route(to: .attentionItem("item-spec_approval"))
+    @Test func conclusionAfterTheListMovedTheRouteToTheTaskIsTheSameRoute() throws {
+        let (store, task) = task()
+        let navigation = NavigationModel(launchInputs: .standard())
+        navigation.route(to: .attentionItem("item-a"))
+        let revision = navigation.operatorNavigationRevision
+        let previouslyOpen = Set(store.openSnapshots.map(\.item.id))
+        var resolved = try #require(store.snapshotsByID["item-a"])
+        resolved.item.status = .resolved
+        store.replaceAll(with: [resolved])
+        let after = list(store, tasks: [task])
+        navigation.repairSelection(in: after, previouslyOpen: previouslyOpen)
+
         #expect(
             navigation.advanceAfterConclusion(
-                itemID: "item-spec_approval",
+                itemID: "item-a", expectedOperatorNavigationRevision: revision,
+                advancesToNextItem: false, list: after) == .returnedToList)
+        #expect(navigation.path == [.task(task.task.id)])
+    }
+
+    @Test func conclusionOpensTheTasksNextItemWithoutThePreference() {
+        // The task's row stays selected and still needs the operator, and
+        // selecting the row again can't open a card it already shows.
+        let (store, task) = task(holding: ["item-a", "item-b"])
+        let navigation = NavigationModel(launchInputs: .standard())
+        navigation.route(to: .attentionItem("item-a"))
+
+        #expect(
+            navigation.advanceAfterConclusion(
+                itemID: "item-a",
                 expectedOperatorNavigationRevision: navigation.operatorNavigationRevision,
                 advancesToNextItem: false,
-                store: store) == .inboxClear)
+                list: list(store, tasks: [task])) == .returnedToList)
+        #expect(navigation.path == [.attentionItem("item-b")])
+    }
+
+    @Test func conclusionKeepsAScopedItemSelectedInFinished() throws {
+        var scoped = AttentionFixtures.fixture(type: .system_health)
+        scoped.item.status = .resolved
+        scoped.item.decided_at = nil
+        let store = InboxStore(client: APIClientFactory.mock(server: MockServer()))
+        store.replaceAll(with: [scoped])
+        let navigation = NavigationModel(launchInputs: LaunchInputs(colorSchemeRaw: nil, selectionRaw: nil))
+        navigation.route(to: .attentionItem(scoped.item.id))
+
+        let result = navigation.advanceAfterConclusion(
+            itemID: scoped.item.id,
+            expectedOperatorNavigationRevision: navigation.operatorNavigationRevision,
+            advancesToNextItem: true, list: list(store))
+
+        #expect(result == .returnedToList)
+        #expect(navigation.path == [.attentionItem(scoped.item.id)])
     }
 
     @Test func conclusionDoesNotOverrideManualNavigationDuringTheDelay() async {
@@ -296,7 +394,7 @@ import Testing
                 itemID: "item-spec_approval",
                 expectedOperatorNavigationRevision: expectedRevision,
                 advancesToNextItem: false,
-                store: store) == .cancelled)
+                list: list(store)) == .cancelled)
         #expect(navigation.attentionSelection == "item-blocked")
 
         let runExpectedRevision = navigation.operatorNavigationRevision
@@ -306,8 +404,8 @@ import Testing
                 itemID: "item-spec_approval",
                 expectedOperatorNavigationRevision: runExpectedRevision,
                 advancesToNextItem: false,
-                store: store) == .cancelled)
-        #expect(navigation.selectedTab == .tasks)
+                list: list(store)) == .cancelled)
+        #expect(navigation.taskSelection == TaskFixtures.retryTaskID)
     }
 
     @Test func macSelectionSynchronizesItsPathBeforeConclusionAdvance() async {
@@ -317,17 +415,17 @@ import Testing
                 colorSchemeRaw: nil,
                 selectionRaw: "item-spec_approval"))
 
-        navigation.selectAttentionItem("item-blocked")
+        navigation.select(.attentionItem("item-blocked"))
         let expectedRevision = navigation.operatorNavigationRevision
 
         #expect(navigation.attentionSelection == "item-blocked")
-        #expect(navigation.inboxPath == ["item-blocked"])
+        #expect(navigation.path == [.attentionItem("item-blocked")])
         #expect(
             navigation.advanceAfterConclusion(
                 itemID: "item-blocked",
                 expectedOperatorNavigationRevision: expectedRevision,
                 advancesToNextItem: true,
-                store: store) == .advanced)
+                list: list(store)) == .advanced)
     }
 
     @Test func conclusionDoesNotOverrideBackNavigationAfterItemDisappears() async {
@@ -338,15 +436,14 @@ import Testing
                 selectionRaw: "item-spec_approval"))
         let expectedRevision = navigation.operatorNavigationRevision
 
-        navigation.setInboxPath([])
-        navigation.attentionSelection = nil
+        navigation.setPath([])
 
         #expect(
             navigation.advanceAfterConclusion(
                 itemID: "item-spec_approval",
                 expectedOperatorNavigationRevision: expectedRevision,
                 advancesToNextItem: false,
-                store: store) == .cancelled)
+                list: list(store)) == .cancelled)
     }
 
     @Test func conclusionDoesNotOverrideFilterDrivenNavigationRepair() async {
@@ -358,15 +455,13 @@ import Testing
         let expectedRevision = navigation.operatorNavigationRevision
 
         navigation.recordOperatorNavigation()
-        navigation.inboxPath = []
-        navigation.attentionSelection = nil
 
         #expect(
             navigation.advanceAfterConclusion(
                 itemID: "item-spec_approval",
                 expectedOperatorNavigationRevision: expectedRevision,
                 advancesToNextItem: false,
-                store: store) == .cancelled)
+                list: list(store)) == .cancelled)
     }
 
     @Test func conclusionDoesNotOverrideAnAwayAndBackNavigationSequence() async {
@@ -385,7 +480,7 @@ import Testing
                 itemID: "item-spec_approval",
                 expectedOperatorNavigationRevision: expectedRevision,
                 advancesToNextItem: false,
-                store: store) == .cancelled)
+                list: list(store)) == .cancelled)
     }
 
     @Test func automaticDisappearanceStillAllowsConclusionAdvance() async {
@@ -396,14 +491,36 @@ import Testing
                 selectionRaw: "item-spec_approval"))
         let expectedRevision = navigation.operatorNavigationRevision
 
-        navigation.inboxPath = []
-        navigation.attentionSelection = nil
+        // The list dropped the item, which a filter or a rebuild can.
+        navigation.repairSelection(in: UnifiedList(open: [], closed: [], tasks: [], projectFilter: nil))
 
         #expect(
             navigation.advanceAfterConclusion(
                 itemID: "item-spec_approval",
                 expectedOperatorNavigationRevision: expectedRevision,
                 advancesToNextItem: true,
-                store: store) == .advanced)
+                list: list(store)) == .advanced)
+    }
+
+    @Test func nextAndPreviousMoveAlongNeedsYouRows() {
+        let (store, task) = task(holding: ["item-a", "item-b"])
+        var scoped = AttentionFixtures.fixture(type: .agent_question)
+        scoped.item.id = "item-scoped"
+        scoped.item.created_at = Date(timeIntervalSince1970: 1)
+        store.replaceAll(with: store.openSnapshots + [scoped])
+        let rows = list(store, tasks: [task])
+        let navigation = NavigationModel(launchInputs: .standard())
+
+        navigation.moveAttentionSelection(by: 1, list: rows)
+        #expect(navigation.path == [.attentionItem("item-a")])
+
+        navigation.moveAttentionSelection(by: 1, list: rows)
+        #expect(navigation.path == [.attentionItem("item-scoped")])
+
+        navigation.moveAttentionSelection(by: 1, list: rows)
+        #expect(navigation.path == [.attentionItem("item-scoped")], "the last row holds")
+
+        navigation.moveAttentionSelection(by: -1, list: rows)
+        #expect(navigation.path == [.attentionItem("item-a")])
     }
 }

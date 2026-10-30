@@ -7,7 +7,7 @@ import Observation
 public final class NavigationModel {
     package enum ConclusionAdvanceResult: Equatable {
         case advanced
-        case returnedToInbox
+        case returnedToList
         case inboxClear
         case cancelled
     }
@@ -18,7 +18,7 @@ public final class NavigationModel {
         public let composer: LaunchInputs.Composer
     }
 
-    public enum Destination: Equatable {
+    public enum Destination: Hashable {
         case attentionItem(String)
         case task(String)
         /// A run is reached through its task: routing selects the task and
@@ -26,26 +26,22 @@ public final class NavigationModel {
         case run(taskID: String, runID: String)
     }
 
-    public var selectedTab: LaunchInputs.Screen
-    public var inboxPath: [String] {
+    /// The one route: an item, a task, or a task with its run over it. The
+    /// selections read from it, so an item and a task can't both be open.
+    public private(set) var path: [Destination] {
         didSet {
-            if inboxPath.last != linkedItemID { linkedItemID = nil }
+            if path.last != linkedItemID.map(Destination.attentionItem) { linkedItemID = nil }
         }
     }
     /// The item a notification link opened, while it is still the routed
-    /// item. The inbox's list repair keeps it routed even when the rows
+    /// item. List repair keeps it routed even when the rows
     /// don't hold it: a link can name an item that has since resolved, or
     /// one that a cold start's cached list hasn't caught up to, and the card
     /// shows either from canonical state. Leaving the card ends it.
     public private(set) var linkedItemID: String?
-    /// The tasks stack: the selected task, then the run opened under it.
-    public var tasksPath: [String]
-    public var attentionSelection: String?
-    public var taskSelection: String?
-    public var runSelection: String?
     public var inspectorPresented: Bool
-    /// The New Task composer's presentation flag, shared by the Tasks toolbar
-    /// button, ⌘N, and the File > New Task menu item, so all three open the one
+    /// The New Task composer's presentation flag, shared by the list's tools
+    /// row, ⌘N, and the File > New Task menu item, so all three open the one
     /// sheet through the same gated path.
     public var newTaskComposerPresented = false
     public var submissionRecoveryPresented = false
@@ -60,34 +56,32 @@ public final class NavigationModel {
     public private(set) var operatorNavigationRevision = 0
 
     public init(launchInputs: LaunchInputs) {
-        selectedTab = launchInputs.screen
-        inboxPath = []
-        tasksPath = []
-        attentionSelection = nil
-        taskSelection = nil
-        runSelection = nil
+        path = []
         inspectorPresented = launchInputs.detailsExpanded
         devicesPresented = launchInputs.devicesPresented
-        // `LaunchInputs` leaves the composer nil without an inbox selection.
-        launchComposer = launchInputs.selection.flatMap { itemID in
-            launchInputs.composer.map { LaunchComposerRequest(itemID: itemID, composer: $0) }
+        // `LaunchInputs` leaves the composer nil without an item selection.
+        if case .attentionItem(let itemID)? = launchInputs.selection {
+            launchComposer = launchInputs.composer.map {
+                LaunchComposerRequest(itemID: itemID, composer: $0)
+            }
+            // A launch names its item on purpose, as a link does, so it stays
+            // routed whether or not the item is open.
+            route(toLinkedItem: itemID)
+        } else if let selection = launchInputs.selection {
+            route(to: selection)
         }
+    }
 
-        switch launchInputs.screen {
-        case .inbox:
-            if let selection = launchInputs.selection {
-                route(to: .attentionItem(selection))
-            }
-        case .tasks:
-            switch launchInputs.taskSelection {
-            case .task(let taskID)?:
-                route(to: .task(taskID))
-            case .run(let taskID, let runID)?:
-                route(to: .run(taskID: taskID, runID: runID))
-            case nil:
-                break
-            }
-        }
+    public var attentionSelection: String? {
+        if case .attentionItem(let itemID)? = path.first { itemID } else { nil }
+    }
+
+    public var taskSelection: String? {
+        if case .task(let taskID)? = path.first { taskID } else { nil }
+    }
+
+    public var runSelection: String? {
+        if case .run(_, let runID)? = path.last { runID } else { nil }
     }
 
     /// The launch's composer for this item's card, or nil for any other item
@@ -100,28 +94,19 @@ public final class NavigationModel {
         launchComposer = nil
     }
 
-    /// Select the destination's top-level section before replacing that
-    /// section's stack with the canonical detail route.
+    /// Replace the stack with the destination's canonical route.
     public func route(to destination: Destination) {
         // Routing is operator intent even when it targets the currently
         // rendered item (for example, Reveal Technical Details).
         operatorNavigationRevision += 1
-        switch destination {
-        case .attentionItem(let itemID):
-            selectedTab = .inbox
-            attentionSelection = itemID
-            inboxPath = [itemID]
-        case .task(let taskID):
-            selectedTab = .tasks
-            taskSelection = taskID
-            runSelection = nil
-            tasksPath = [taskID]
-        case .run(let taskID, let runID):
-            selectedTab = .tasks
-            taskSelection = taskID
-            runSelection = runID
-            tasksPath = [taskID, runID]
+        path = Self.route(to: destination)
+    }
+
+    private static func route(to destination: Destination) -> [Destination] {
+        if case .run(let taskID, _) = destination {
+            return [.task(taskID), destination]
         }
+        return [destination]
     }
 
     /// Route to the item a notification link named; see `linkedItemID`.
@@ -130,138 +115,116 @@ public final class NavigationModel {
         linkedItemID = itemID
     }
 
-    public func selectTab(_ screen: LaunchInputs.Screen) {
-        guard selectedTab != screen else { return }
+    /// The iOS stack as the operator drives it (a push, a pop).
+    public func setPath(_ path: [Destination]) {
+        guard self.path != path else { return }
         operatorNavigationRevision += 1
-        selectedTab = screen
+        self.path = path
     }
 
-    /// Open the Tasks screen on its active list. A selection kept from an
-    /// earlier visit is dropped first, because the list reveals its selected
-    /// task's scope on appear and a finished task would open the Finished
-    /// list under a link that named the active count.
-    public func showActiveTasks() {
-        operatorNavigationRevision += 1
-        selectedTab = .tasks
-        taskSelection = nil
-        runSelection = nil
-        tasksPath = []
-    }
-
-    /// The iOS tasks stack as the operator drives it (a push, a pop). The
-    /// selections follow the path, so popping the run clears its selection.
-    public func setTasksPath(_ path: [String]) {
-        guard tasksPath != path else { return }
-        operatorNavigationRevision += 1
-        applyTasksPath(path)
-    }
-
-    /// A list repair after a filter change or a data update, not operator
-    /// navigation: it must not count as such against a pending inbox
-    /// conclusion advance.
-    public func applyTasksPath(_ path: [String]) {
-        tasksPath = path
-        taskSelection = path.first
-        runSelection = path.count > 1 ? path[1] : nil
-    }
-
-    /// The macOS sidebar selection. Choosing another task drops a run opened
-    /// under the previous one; a repair that clears the selection drops it
-    /// too, so the detail column never shows a run of a task no longer listed.
-    public func selectTask(_ taskID: String?) {
-        guard taskSelection != taskID else { return }
-        operatorNavigationRevision += 1
-        taskSelection = taskID
-        runSelection = nil
-        tasksPath = taskID.map { [$0] } ?? []
+    /// The macOS sidebar selection, or its absence. Choosing the row already
+    /// selected keeps a run opened under it.
+    public func select(_ destination: Destination?) {
+        guard path.first != destination else { return }
+        setPath(destination.map(Self.route(to:)) ?? [])
     }
 
     /// Returns from a run timeline to its task on macOS, which has no stack
     /// to pop.
     public func closeRun() {
         guard runSelection != nil else { return }
-        operatorNavigationRevision += 1
-        runSelection = nil
-        tasksPath = taskSelection.map { [$0] } ?? []
-    }
-
-    public func setInboxPath(_ path: [String]) {
-        guard inboxPath != path else { return }
-        operatorNavigationRevision += 1
-        inboxPath = path
-        attentionSelection = path.last
-    }
-
-    public func selectAttentionItem(_ itemID: String?) {
-        let path = itemID.map { [$0] } ?? []
-        guard attentionSelection != itemID || inboxPath != path else { return }
-        operatorNavigationRevision += 1
-        attentionSelection = itemID
-        inboxPath = path
+        setPath(Array(path.dropLast()))
     }
 
     package func recordOperatorNavigation() {
         operatorNavigationRevision += 1
     }
 
-    /// Leave a just-concluded item once its receipt delay expires. The default
-    /// destination is the inbox: clear the selection so the list stays visible
-    /// with no item open. Only when `advancesToNextItem` is set, and an open
-    /// item remains, does focus move to the next one instead.
+    /// Leave a just-concluded item once its receipt delay expires. The
+    /// default keeps the item's row selected: its task's timeline, or another
+    /// of the task's open items, since selecting the row again can't reach
+    /// those, or a scoped item's own card. Only when `advancesToNextItem` is
+    /// set, and an open item remains, does focus move to the next row.
     package func advanceAfterConclusion(
         itemID: String,
         expectedOperatorNavigationRevision: Int,
         advancesToNextItem: Bool,
-        store: InboxStore
+        list: UnifiedList
     ) -> ConclusionAdvanceResult {
-        // Rebuilding the open scope may remove the concluded item from either
-        // navigation container before the delay expires, so nil remains the
-        // same route. A different concrete destination is deliberate operator
-        // navigation and must win over the automatic move.
+        let taskID = list.taskID(ofItem: itemID)
+        // A list rebuild may move the route off the concluded item before the
+        // delay expires, along its task's row or to nothing, so those remain
+        // the same route. A different concrete destination is deliberate
+        // operator navigation and must win over the automatic move.
+        let selected = list.selection(attentionItemID: attentionSelection, taskID: taskSelection)
         guard operatorNavigationRevision == expectedOperatorNavigationRevision,
-            selectedTab == .inbox,
-            attentionSelection == nil || attentionSelection == itemID,
-            inboxPath.last == nil || inboxPath.last == itemID
+            path.isEmpty || path == [.attentionItem(itemID)]
+                || taskID.map({ selected == .task($0) }) == true
         else {
             return .cancelled
         }
-        let nextItemID = store.nextOpenItemID(excluding: itemID)
+        let nextItemID = list.nextOpenItemID(excluding: itemID)
         if advancesToNextItem, let nextItemID {
             route(to: .attentionItem(nextItemID))
             return .advanced
         }
-        selectedTab = .inbox
-        attentionSelection = nil
-        inboxPath = []
-        return nextItemID == nil ? .inboxClear : .returnedToInbox
+        if let taskID, list.holds(.task(taskID)) {
+            let sibling = list.nextOpenItemID(inTask: taskID, excluding: itemID)
+            path = [sibling.map(Destination.attentionItem) ?? .task(taskID)]
+            return .returnedToList
+        }
+        if list.holds(.item(itemID)) {
+            path = [.attentionItem(itemID)]
+            return .returnedToList
+        }
+        path = []
+        return nextItemID == nil ? .inboxClear : .returnedToList
     }
 
-    public func moveAttentionSelection(by offset: Int, store: InboxStore) {
-        let itemIDs = store.rows.map(\.item.id)
-        guard !itemIDs.isEmpty else { return }
-        let currentIndex = attentionSelection.flatMap(itemIDs.firstIndex(of:))
+    /// Next Item and Previous Item, and the sidebar's j and k: one step along
+    /// the Needs you rows, opening what the row opens.
+    package func moveAttentionSelection(by offset: Int, list: UnifiedList) {
+        let rows = list.needsYou
+        guard !rows.isEmpty else { return }
+        let selected = list.selection(attentionItemID: attentionSelection, taskID: taskSelection)
+        let currentIndex = rows.firstIndex { $0.id == selected }
         let nextIndex: Int
         if let currentIndex {
-            nextIndex = min(max(currentIndex + offset, itemIDs.startIndex), itemIDs.index(before: itemIDs.endIndex))
+            nextIndex = min(max(currentIndex + offset, rows.startIndex), rows.index(before: rows.endIndex))
         } else {
-            nextIndex = offset < 0 ? itemIDs.index(before: itemIDs.endIndex) : itemIDs.startIndex
+            nextIndex = offset < 0 ? rows.index(before: rows.endIndex) : rows.startIndex
         }
-        route(to: .attentionItem(itemIDs[nextIndex]))
+        route(to: rows[nextIndex].destination)
     }
 
-    package static func repairedPath(
-        _ path: [String], availableIDs: Set<String>, keeping linkedItemID: String? = nil
-    ) -> [String] {
-        guard let routedID = path.last, routedID != linkedItemID, !availableIDs.contains(routedID)
-        else { return path }
-        return Array(path.dropLast())
+    public func moveAttentionSelection(by offset: Int, coordinator: SyncCoordinator) {
+        moveAttentionSelection(by: offset, list: coordinator.unifiedList)
     }
 
-    /// The tasks stack is rooted at a task and may hold that task's run
-    /// above it, so it stands or falls with its root: a task that left the
-    /// visible rows takes the run pushed over it along.
-    package static func repairedTaskPath(_ path: [String], availableTaskIDs: Set<String>) -> [String] {
-        guard let taskID = path.first, !availableTaskIDs.contains(taskID) else { return path }
-        return []
+    /// Keep the route on a row after the list changed under it, without
+    /// counting as operator navigation against a pending conclusion advance.
+    /// An item that was open and has resolved under its task hands the route
+    /// along the task's row: to another of its open items, else the task, so
+    /// the row stays selected and the timeline shows. A closed item opened on
+    /// purpose stays. A selection with no row left
+    /// clears, taking any run with it. `previouslyOpen` is the open item ids
+    /// before this change.
+    package func repairSelection(in list: UnifiedList, previouslyOpen: Set<String> = []) {
+        switch path.first {
+        case .attentionItem(let itemID):
+            guard itemID != linkedItemID else { return }
+            guard let row = list.selection(attentionItemID: itemID, taskID: nil), list.holds(row) else {
+                path = []
+                return
+            }
+            if case .task(let taskID) = row, !list.isOpen(itemID: itemID), previouslyOpen.contains(itemID) {
+                let sibling = list.nextOpenItemID(inTask: taskID, excluding: itemID)
+                path = [sibling.map(Destination.attentionItem) ?? .task(taskID)]
+            }
+        case .task(let taskID):
+            if !list.holds(.task(taskID)) { path = [] }
+        case .run, nil:
+            break
+        }
     }
 }

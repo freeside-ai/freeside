@@ -23,12 +23,10 @@ struct OperationalSummary: Equatable {
     let activeTaskCount: Int
     let daemonState: DaemonState
 
-    init(
-        openSnapshots: some Sequence<Components.Schemas.AttentionItemSnapshot>,
-        tasks: some Sequence<Components.Schemas.TaskSnapshot>,
-        freshness: InboxStore.Freshness
-    ) {
-        let openItems = openSnapshots.map(\.item)
+    /// Counts are the list's own rows, so the pane and the sidebar beside it
+    /// agree under a project filter and for a task holding several items.
+    init(list: UnifiedList, freshness: InboxStore.Freshness) {
+        let openItems = list.needsYou.flatMap(\.openItems).map(\.item)
         let highestPriority = openItems.min { lhs, rhs in
             let lhsRank = Self.priorityRank(lhs.priority)
             let rhsRank = Self.priorityRank(rhs.priority)
@@ -45,14 +43,14 @@ struct OperationalSummary: Equatable {
             return lhs.id < rhs.id
         }
 
-        openCount = openItems.count
+        openCount = list.needsYou.count
         highestPriorityID = highestPriority?.id
         highestPriorityTitle = highestPriority.map(AttentionDisplay.title)
         highestPriorityLabel = highestPriority.map { AttentionDisplay.label($0.priority) }
         waitingLongestID = waitingLongest?.id
         waitingLongestTitle = waitingLongest.map(AttentionDisplay.title)
         waitingLongestItem = waitingLongest
-        activeTaskCount = tasks.count { TaskDisplay.isActive($0.task) }
+        activeTaskCount = list.working.count
         daemonState =
             switch freshness {
             case .unvalidated: .checking
@@ -88,7 +86,7 @@ struct OperationalSummary: Equatable {
 /// open, what to take first, and the daemon's state folded under one
 /// hairline, in the card a decision takes its place in (R18). Every
 /// value that names something is a link that opens it: an item in the
-/// detail column, the task count on the Tasks screen. A value with
+/// detail column, the task count on the Working section. A value with
 /// nothing to name stays a plain fact.
 struct OperationalSummaryView: View {
     let summary: OperationalSummary
@@ -115,7 +113,11 @@ struct OperationalSummaryView: View {
     }
 
     static func openStatement(_ openCount: Int) -> String {
-        openCount == 1 ? "1 open item" : "\(openCount) open items"
+        switch openCount {
+        case 0: "Nothing needs you."
+        case 1: "1 needs you"
+        default: "\(openCount) need you"
+        }
     }
 
     private func content(at now: Date) -> some View {

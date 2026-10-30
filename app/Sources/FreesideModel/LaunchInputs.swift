@@ -15,19 +15,6 @@ public struct LaunchInputs {
         case increased
     }
 
-    public enum Screen: String, Hashable {
-        case inbox
-        case tasks
-    }
-
-    /// What `-FreesideSelect` names on the tasks screen: a task, or a run
-    /// reached through its task, so a run link opens the task with the run
-    /// timeline pushed.
-    public enum TaskSelection: Equatable {
-        case task(String)
-        case run(taskID: String, runID: String)
-    }
-
     /// What `-FreesideComposer` names: a decision card's message composer, by
     /// the API action whose button opens it. Five cases, not the whole
     /// `Action` type, so a launch can't name an action that has no composer.
@@ -49,9 +36,6 @@ public struct LaunchInputs {
         }
     }
 
-    /// `-FreesideScreen inbox|tasks`; defaults to the attention inbox.
-    public let screen: Screen
-
     /// `-FreesideColorScheme` as given; `colorScheme` reads it as the
     /// SwiftUI value in FreesideCore.
     package let colorSchemeRaw: String?
@@ -64,21 +48,15 @@ public struct LaunchInputs {
     /// SwiftUI value in FreesideCore.
     package let dynamicTypeSizeRaw: String?
 
-    /// `-FreesideSelect <id>`: the inbox item selected at launch, or on
-    /// the tasks screen the task or run opened at launch.
+    /// `-FreesideSelect <id>`: the item, task, or run opened at launch; a run
+    /// opens through its task, with the run timeline pushed.
     /// `AttentionFixtures.defaultInboxItemIDs()`,
     /// `TaskFixtures.defaultTaskIDs()`, and `RunFixtures.defaultRunIDs()` are
     /// the canonical value lists. An unknown id is ignored with a stderr
     /// note, never a crash: the capture recipe's content check catches the
     /// typo, and a stray persisted default must not take the app down.
-    public let selection: String?
+    public let selection: NavigationModel.Destination?
 
-    /// The tasks-screen reading of `selection`: nil on the inbox screen or
-    /// when nothing valid was selected.
-    public let taskSelection: TaskSelection?
-
-    /// Optional deterministic inbox presentation for screenshot launches.
-    public let inboxScope: InboxStore.Scope?
     public let projectID: String?
     public let detailsExpanded: Bool
 
@@ -97,27 +75,22 @@ public struct LaunchInputs {
 
     public init(
         colorSchemeRaw: String?, contrastRaw: String? = nil, selectionRaw: String?,
-        inboxScopeRaw: String? = nil, projectIDRaw: String? = nil,
-        detailsExpanded: Bool = false, screenRaw: String? = nil,
+        projectIDRaw: String? = nil, detailsExpanded: Bool = false,
         dynamicTypeSizeRaw: String? = nil, devicesPresented: Bool = false,
         composerRaw: String? = nil
     ) {
-        screen = Screen(rawValue: screenRaw ?? "") ?? .inbox
         self.colorSchemeRaw = colorSchemeRaw
         contrast = Contrast(rawValue: contrastRaw ?? "")
         self.dynamicTypeSizeRaw = dynamicTypeSizeRaw
-        let resolved = Self.resolveSelection(selectionRaw, screen: screen)
-        selection = resolved.selection
-        taskSelection = resolved.taskSelection
+        selection = Self.resolveSelection(selectionRaw)
         if selectionRaw != nil, selection == nil {
             FileHandle.standardError.write(
-                Data("FreesideSelect ignored: unknown item id \(selectionRaw ?? "")\n".utf8))
+                Data("FreesideSelect ignored: unknown id \(selectionRaw ?? "")\n".utf8))
         }
-        inboxScope = inboxScopeRaw.flatMap(InboxStore.Scope.init(rawValue:))
         projectID = projectIDRaw
         self.detailsExpanded = detailsExpanded
         self.devicesPresented = devicesPresented
-        switch Self.resolveComposer(composerRaw, screen: screen, selection: selection) {
+        switch Self.resolveComposer(composerRaw, selection: selection) {
         case .resolved(let resolved):
             composer = resolved
         case .ignored(let reason):
@@ -127,24 +100,17 @@ public struct LaunchInputs {
         }
     }
 
-    /// The screen decides which fixture ids a selection may name. On the
-    /// tasks screen a run id resolves to its task, from the run fixtures,
-    /// so the launch routes to the task with that run pushed.
-    private static func resolveSelection(
-        _ raw: String?, screen: Screen
-    ) -> (selection: String?, taskSelection: TaskSelection?) {
-        guard let raw else { return (nil, nil) }
-        switch screen {
-        case .inbox:
-            return AttentionFixtures.defaultInboxItemIDs().contains(raw) ? (raw, nil) : (nil, nil)
-        case .tasks:
-            if TaskFixtures.defaultTaskIDs().contains(raw) {
-                return (raw, .task(raw))
-            }
-            if let run = RunFixtures.defaultRuns().first(where: { $0.run.id == raw })?.run {
-                return (raw, .run(taskID: run.task_id, runID: run.id))
-            }
-            return (nil, nil)
+    /// An id names one kind of thing: the fixture sets never share one.
+    private static func resolveSelection(_ raw: String?) -> NavigationModel.Destination? {
+        guard let raw else { return nil }
+        if AttentionFixtures.defaultInboxItemIDs().contains(raw) {
+            return .attentionItem(raw)
+        }
+        if TaskFixtures.defaultTaskIDs().contains(raw) {
+            return .task(raw)
+        }
+        return RunFixtures.defaultRuns().first { $0.run.id == raw }.map {
+            .run(taskID: $0.run.task_id, runID: $0.run.id)
         }
     }
 
@@ -157,13 +123,13 @@ public struct LaunchInputs {
     /// A composer needs an inbox item that offers its action, checked against
     /// the same fixtures that decide which ids a selection may name.
     private static func resolveComposer(
-        _ raw: String?, screen: Screen, selection: String?
+        _ raw: String?, selection: NavigationModel.Destination?
     ) -> ComposerResolution {
         guard let raw else { return .resolved(nil) }
         guard let composer = Composer(rawValue: raw) else {
             return .ignored(reason: "\(raw) names no composer")
         }
-        guard screen == .inbox, let selection else {
+        guard case .attentionItem(let selection)? = selection else {
             return .ignored(reason: "\(raw) needs an inbox item from FreesideSelect")
         }
         let item = AttentionFixtures.defaultInbox().first { $0.item.id == selection }?.item
@@ -181,10 +147,8 @@ public struct LaunchInputs {
             colorSchemeRaw: defaults.string(forKey: "FreesideColorScheme"),
             contrastRaw: accessibilityContrastOverride(defaults: defaults)?.rawValue,
             selectionRaw: defaults.string(forKey: "FreesideSelect"),
-            inboxScopeRaw: defaults.string(forKey: "FreesideInboxScope"),
             projectIDRaw: defaults.string(forKey: "FreesideProject"),
             detailsExpanded: defaults.bool(forKey: "FreesideDetailsExpanded"),
-            screenRaw: defaults.string(forKey: "FreesideScreen"),
             dynamicTypeSizeRaw: defaults.string(forKey: "FreesideDynamicType"),
             devicesPresented: defaults.bool(forKey: "FreesideDevices"),
             composerRaw: defaults.string(forKey: "FreesideComposer"))

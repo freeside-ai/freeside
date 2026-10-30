@@ -297,8 +297,8 @@ package enum TaskDisplay {
         if task.lifecycle == .finished { return "Finished · See Recorded Outcome" }
         if run?.lifecycle == .finished { return "Run Finished · See Recorded Outcome" }
         let hold = run.map { $0.hold_reason?.value1 } ?? task.current_position?.value1.hold_reason?.value1
-        if isCapacityWait(hold) { return "Queued" }
-        if hold != nil { return "On Hold" }
+        if isCapacityWait(hold) { return queued }
+        if hold != nil { return onHold }
         if run?.outcome == .blocked { return "Publication Blocked" }
         if run?.outcome == .unobserved { return "Execution Status Unavailable" }
         if run?.outcome == .published { return "Published · See Review Status" }
@@ -310,6 +310,8 @@ package enum TaskDisplay {
     /// row shows these words; the task detail page names the stage in their
     /// place (`detailStatus`).
     static let inProgress = "In Progress"
+    private static let queued = "Queued"
+    private static let onHold = "On Hold"
 
     /// The status chip on the task detail page: the row's status, except
     /// that a working task names its stage ("In Review") where the row says
@@ -595,7 +597,7 @@ package enum TaskDisplay {
     /// coarse under a day, the one short time format from a day on.
     package static func rowTime(_ task: Components.Schemas.Task, now: Date) -> String {
         if now.timeIntervalSince(task.last_activity_at) < 86_400 {
-            return "\(AttentionDisplay.relativeRowTime(task.last_activity_at, now: now)) ago"
+            return AttentionDisplay.relativeRowTime(task.last_activity_at, now: now)
         }
         return FreesideFormat.shortTime(task.last_activity_at, now: now)
     }
@@ -622,6 +624,55 @@ package enum TaskDisplay {
 
     /// The exact last-activity instant behind the row's coarse segment,
     /// for the macOS hover help.
+    /// A section's reading of a task row: what the keyword says, in which
+    /// cut, over what context.
+    package struct SectionRow: Equatable {
+        package let keyword: String
+        package let context: String
+        package let cut: StateChipCut
+    }
+
+    /// A Working row, keyed by stage: running work reads as the stage's
+    /// gerund, and held work as `Parked` with the hold reason in its context,
+    /// since the daemon sends no resume time. Any other live status keeps its
+    /// own word, so a failure or a stop never reads as progress.
+    package static func workingRow(
+        _ task: Components.Schemas.Task, position: Position?, stage: CurrentStage?
+    ) -> SectionRow {
+        let status = position?.status ?? rowStatus(task)
+        let cut = statusCut(task, position: position)
+        switch status {
+        case queued, onHold:
+            let context = [projectName(task), issueReference(task), position?.hold].compactMap { $0 }
+            return SectionRow(keyword: "Parked", context: context.joined(separator: " · "), cut: cut)
+        case inProgress:
+            let name = task.current_position?.value1.stage.map(RunDisplay.canonicalStageName)
+            let keyword =
+                (stage?.stage ?? name.flatMap(Components.Schemas.StageName.init(rawValue:)))
+                .map(gerund) ?? status
+            return SectionRow(keyword: keyword, context: rowContext(task, position: position), cut: cut)
+        default:
+            return SectionRow(keyword: status, context: rowContext(task, position: position), cut: cut)
+        }
+    }
+
+    private static func gerund(_ stage: Components.Schemas.StageName) -> String {
+        switch stage {
+        case .specification: "Specifying"
+        case .implementation: "Implementing"
+        case .review: "Reviewing"
+        case .verification: "Verifying"
+        }
+    }
+
+    /// A Finished row: the recorded status, in the faint cut every finished
+    /// row shares.
+    package static func finishedRow(_ task: Components.Schemas.Task, position: Position?) -> SectionRow {
+        SectionRow(
+            keyword: position?.status ?? rowStatus(task), context: rowContext(task, position: position),
+            cut: .faint)
+    }
+
     package static func exactActivityTimestamp(_ task: Components.Schemas.Task) -> String {
         task.last_activity_at.formatted(.iso8601)
     }

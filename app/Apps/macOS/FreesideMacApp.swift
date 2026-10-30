@@ -213,10 +213,7 @@ private struct DaemonMenu: View {
             unattendedStopped: coordinator?.unattendedStoppedMessage(),
             actions: DaemonMenuPanel.Actions(
                 openApp: showApp,
-                showInbox: {
-                    navigation.selectTab(.inbox)
-                    showApp()
-                },
+                showInbox: showApp,
                 start: { Task { await model?.start() } },
                 stop: { Task { await model?.stop() } },
                 openApprovalSettings: { model?.openApprovalSettings() },
@@ -269,12 +266,12 @@ private struct FreesideAppCommands: Commands {
 
     private func isDisabled(_ action: FreesideCommandAction) -> Bool {
         switch action {
-        case .showInbox, .showTasks, .toggleInspector:
+        case .toggleInspector:
             false
         case .refresh:
             coordinator == nil
         case .nextItem, .previousItem:
-            coordinator?.store.rows.isEmpty != false
+            coordinator?.hasNeedsYouRows != true
         case .takeRecommendation:
             decisionActions?.canTakeRecommendation != true
         case .cancelPendingAction:
@@ -286,10 +283,6 @@ private struct FreesideAppCommands: Commands {
 
     private func perform(_ action: FreesideCommandAction) {
         switch action {
-        case .showInbox:
-            navigation.selectTab(.inbox)
-        case .showTasks:
-            navigation.selectTab(.tasks)
         case .refresh:
             guard let coordinator else { return }
             Task { await coordinator.refresh() }
@@ -297,16 +290,15 @@ private struct FreesideAppCommands: Commands {
             navigation.inspectorPresented.toggle()
         case .nextItem:
             guard let coordinator else { return }
-            navigation.moveAttentionSelection(by: 1, store: coordinator.store)
+            navigation.moveAttentionSelection(by: 1, coordinator: coordinator)
         case .previousItem:
             guard let coordinator else { return }
-            navigation.moveAttentionSelection(by: -1, store: coordinator.store)
+            navigation.moveAttentionSelection(by: -1, coordinator: coordinator)
         case .takeRecommendation:
             decisionActions?.takeRecommendation()
         case .cancelPendingAction:
             decisionActions?.cancelPendingAction()
         case .newTask:
-            navigation.selectTab(.tasks)
             navigation.newTaskComposerPresented = true
         }
     }

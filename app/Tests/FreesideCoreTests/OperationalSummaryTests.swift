@@ -5,6 +5,17 @@ import Testing
 
 @testable import FreesideCore
 
+extension OperationalSummary {
+    init(
+        openSnapshots: [Components.Schemas.AttentionItemSnapshot],
+        tasks: [Components.Schemas.TaskSnapshot], freshness: InboxStore.Freshness
+    ) {
+        self.init(
+            list: UnifiedList(open: openSnapshots, closed: [], tasks: tasks, projectFilter: nil),
+            freshness: freshness)
+    }
+}
+
 @Suite @MainActor struct OperationalSummaryTests {
     @Test func terminalLifecycleLabelsDoNotImplyCompletion() throws {
         var task = try #require(TaskFixtures.defaultTasks().first { $0.task.lifecycle == .active }).task
@@ -36,16 +47,10 @@ import Testing
         queued.task.wip = false
         let stoppedQueued = TaskFixtures.confirmedStopped(queued)
         let tasks = [active, stopped, abandoned, queued, stoppedQueued]
-        let filter = TaskListFilter()
+        let list = UnifiedList(open: [], closed: [], tasks: tasks, projectFilter: nil)
         #expect(OperationalSummary(openSnapshots: [], tasks: tasks, freshness: .fresh).activeTaskCount == 2)
-        #expect(filter.count(in: tasks, scope: .active) == 2)
-        #expect(filter.count(in: tasks, scope: .finished) == 3)
-        #expect(filter.count(in: tasks, scope: .all) == 5)
-        for terminal in [stopped, abandoned, stoppedQueued] {
-            var reveal = TaskListFilter()
-            reveal.reveal(terminal.task)
-            #expect(reveal.scope == .finished)
-        }
+        #expect(list.working.count == 2)
+        #expect(list.finished.count == 3)
     }
 
     @Test func fixtureStateDerivesPriorityAgeRunsAndDaemonState() {
@@ -104,7 +109,9 @@ import Testing
         unstarted.task.campaign_ids = []
         let tasks = TaskFixtures.defaultTasks() + [unstarted]
         let summary = OperationalSummary(openSnapshots: [], tasks: tasks, freshness: .fresh)
-        #expect(summary.activeTaskCount == TaskListFilter().count(in: tasks, scope: .active))
+        #expect(
+            summary.activeTaskCount
+                == UnifiedList(open: [], closed: [], tasks: tasks, projectFilter: nil).working.count)
         #expect(summary.activeTaskCount == 4)
 
         let finished = try #require(tasks.first { $0.task.lifecycle == .finished })
@@ -128,10 +135,36 @@ import Testing
         #expect(summary.waitingLongestTitle == AttentionDisplay.title(retained.item))
     }
 
-    @Test func openStatementCountsOneItemInTheSingular() {
-        #expect(OperationalSummaryView.openStatement(0) == "0 open items")
-        #expect(OperationalSummaryView.openStatement(1) == "1 open item")
-        #expect(OperationalSummaryView.openStatement(14) == "14 open items")
+    @Test func openStatementSpeaksOfTheRowsThatNeedYou() {
+        #expect(OperationalSummaryView.openStatement(0) == "Nothing needs you.")
+        #expect(OperationalSummaryView.openStatement(1) == "1 needs you")
+        #expect(OperationalSummaryView.openStatement(14) == "14 need you")
+    }
+
+    /// The pane sits beside the sidebar, so it counts what the sidebar shows.
+    @Test func countsAreTheFilteredListsRows() throws {
+        let task = try #require(TaskFixtures.defaultTasks().first { $0.task.lifecycle == .active })
+        let held = ["item-a", "item-b"].map { id in
+            var snapshot = AttentionFixtures.fixture(type: .agent_question)
+            snapshot.item.id = id
+            snapshot.item.project_id = task.task.project_id
+            snapshot.item.subject = .task(
+                .init(subject_type: .task, subject_id: task.task.id, task_id: task.task.id))
+            return snapshot
+        }
+        var elsewhere = AttentionFixtures.fixture(type: .spec_approval)
+        elsewhere.item.project_id = "elsewhere"
+        let open = held + [elsewhere]
+
+        let all = OperationalSummary(openSnapshots: open, tasks: [task], freshness: .fresh)
+        #expect(all.openCount == 2)
+        #expect(all.activeTaskCount == 0)
+
+        let filtered = OperationalSummary(
+            list: UnifiedList(open: open, closed: [], tasks: [task], projectFilter: "elsewhere"),
+            freshness: .fresh)
+        #expect(filtered.openCount == 1)
+        #expect(filtered.highestPriorityID == elsewhere.item.id)
     }
 
     #if os(macOS)

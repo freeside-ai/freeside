@@ -235,10 +235,9 @@ public final class AppSession {
         let arrival = navigation.operatorNavigationRevision
         switch link {
         case .inbox:
-            // The inbox as it stands: a card already open stays open, since
-            // a link any app can send must not discard what the operator has
-            // in progress on it.
-            navigation.selectTab(.inbox)
+            // Back to the list, except over an open card: a link any app can
+            // send must not discard what the operator has in progress on it.
+            if navigation.attentionSelection == nil { navigation.setPath([]) }
         case .attentionItem(let itemID, let channel, let attempt):
             // Whichever finishes first ends the wait. Awaiting the cancelled
             // receipt instead would wait on the transport to honor it.

@@ -11,22 +11,6 @@ import OpenAPIRuntime
 @MainActor
 @Observable
 public final class InboxStore {
-    public enum Scope: String, CaseIterable, Identifiable {
-        case open
-        case resolved
-        case all
-
-        public var id: Self { self }
-
-        package var label: String {
-            switch self {
-            case .open: "Open"
-            case .resolved: "Resolved"
-            case .all: "All"
-            }
-        }
-    }
-
     public enum LoadState: Equatable {
         case idle
         case loading
@@ -117,12 +101,20 @@ public final class InboxStore {
     public var comprehensionObserver: (() -> Void)?
     public private(set) var snapshotsByID: [String: Components.Schemas.AttentionItemSnapshot] = [:]
     public private(set) var conversationsByID: [String: Components.Schemas.ConversationSnapshot] = [:]
-    public var scope: Scope = .open
     public var projectID: String?
     private var pendingLaunchProjectID: String?
 
+    /// The project ids the tasks name, so a filter on a project that holds
+    /// tasks and no item survives repair. Supplied by the coordinator, which
+    /// owns the tasks.
+    var taskProjectsProvider: (() -> [String])?
+
     public var projects: [String] {
         Array(Set(snapshotsByID.values.map(\.item.project_id))).sorted()
+    }
+
+    private var filterableProjects: Set<String> {
+        Set(projects).union(taskProjectsProvider?() ?? [])
     }
     /// A pending command's shared lifecycle: in flight while an attempt
     /// awaits its response (no retry affordance — the request may still
@@ -192,11 +184,8 @@ public final class InboxStore {
     private var serverOrder: [String] = []
     /// Filtering uses the status captured by the last full list rebuild. A
     /// resolving command can therefore show its applied confirmation on the
-    /// open card; the next full list rebuild moves it into the resolved scope.
+    /// open card; the next full list rebuild closes it.
     private var statusAtOrderRebuild: [String: Components.Schemas.ItemStatus] = [:]
-    private let now: () -> Date
-    /// Age bands and deadlines advance when a refresh confirms the list current.
-    private var orderInstant = Date.distantPast
     /// Same-epoch visibility removals retain the last rendered entity version
     /// so an older in-flight list/bootstrap cannot resurrect a snoozed row.
     /// A strictly newer snapshot is the release transition and clears it.
@@ -214,61 +203,37 @@ public final class InboxStore {
     /// completion cannot clobber a newer one in either direction.
     private var refreshGeneration = 0
 
-    public init(
-        client: any APIProtocol, device: DeviceIdentity = .mock,
-        now: @escaping () -> Date = Date.init
-    ) {
+    public init(client: any APIProtocol, device: DeviceIdentity = .mock) {
         self.client = client
         self.device = device
-        self.now = now
     }
 
-    /// The inbox rows in the selected scope: open items first when scopes are
-    /// combined; overdue open items lead, then age bands, priority and recency.
-    /// Concluded items use conclusion time. Server order breaks remaining ties.
+    /// The open rows under the project filter, newest first.
     public var rows: [Components.Schemas.AttentionItemSnapshot] {
-        filteredRows(in: scope, projectID: projectID).sorted { lhs, rhs in
-            let (lhsKey, rhsKey) = (
-                sortKey(
-                    lhs.1, index: lhs.0,
-                    status: statusAtOrderRebuild[lhs.1.item.id] ?? lhs.1.item.status),
-                sortKey(
-                    rhs.1, index: rhs.0,
-                    status: statusAtOrderRebuild[rhs.1.item.id] ?? rhs.1.item.status)
-            )
-            return lhsKey < rhsKey
-        }.map(\.1)
+        openSnapshots.filter { UnifiedList.keeps($0.item, projectFilter: projectID) }
     }
 
-    /// All rows whose status was open at the last full list rebuild. This
+    /// All rows whose status was open at the last full list rebuild, newest
+    /// first with server order breaking ties and an undated row last. This
     /// projection deliberately ignores the interactive project filter so
     /// top-level app summaries cannot contradict the retained Open state.
     public var openSnapshots: [Components.Schemas.AttentionItemSnapshot] {
-        filteredRows(in: .open, projectID: nil).map(\.1)
+        indexedRows(open: true).sorted { lhs, rhs in
+            let (lhsDate, rhsDate) = (lhs.1.item.created_at, rhs.1.item.created_at)
+            guard lhsDate != rhsDate else { return lhs.0 < rhs.0 }
+            return (lhsDate ?? .distantPast) > (rhsDate ?? .distantPast)
+        }.map(\.1)
     }
 
-    /// One global urgent-open projection for every top-level navigation
-    /// surface: iOS badge, macOS sidebar, and menu-bar extra.
+    /// All rows whose status was not open at the last full list rebuild, in
+    /// server order: the closed half of `openSnapshots`.
+    public var closedSnapshots: [Components.Schemas.AttentionItemSnapshot] {
+        indexedRows(open: false).map(\.1)
+    }
+
+    /// One global urgent-open projection for the menu-bar extra.
     public var urgentOpenCount: Int {
-        filteredRows(in: .open, projectID: nil).count { $0.1.item.priority == .urgent }
-    }
-
-    public func nextOpenItemID(excluding itemID: String) -> String? {
-        filteredRows(in: .open, projectID: projectID)
-            .filter { $0.1.item.id != itemID && $0.1.item.status == .open }
-            .sorted {
-                sortKey($0.1, index: $0.0, status: .open)
-                    < sortKey($1.1, index: $1.0, status: .open)
-            }
-            .first?.1.item.id
-    }
-
-    public func count(in scope: Scope) -> Int {
-        filteredRows(in: scope, projectID: projectID).count
-    }
-
-    public func urgentCount(in scope: Scope) -> Int {
-        filteredRows(in: scope, projectID: projectID).count { $0.1.item.priority == .urgent }
+        indexedRows(open: true).count { $0.1.item.priority == .urgent }
     }
 
     /// Rebuilds the inbox from the canonical list (plan §5.14 sync test 3:
@@ -420,7 +385,6 @@ public final class InboxStore {
         conversationsByID = [:]
         serverOrder = []
         statusAtOrderRebuild = [:]
-        orderInstant = .distantPast
         projectID = nil
         removalVersionFloors = [:]
         loadState = .idle
@@ -436,31 +400,24 @@ public final class InboxStore {
     }
 
     private func captureStatusesForCurrentOrder() {
-        rebuildTimeBasedOrder()
         statusAtOrderRebuild = [:]
         for id in serverOrder {
             statusAtOrderRebuild[id] = snapshotsByID[id]?.item.status
         }
     }
 
-    /// Re-bands the list without clearing the captured statuses
-    /// that keep local decision confirmations visible until a full list rebuild.
-    func rebuildTimeBasedOrder() {
-        orderInstant = now()
-    }
-
     public func repairProjectFilter() {
         if let pendingLaunchProjectID {
-            if projects.contains(pendingLaunchProjectID) {
+            if filterableProjects.contains(pendingLaunchProjectID) {
                 projectID = pendingLaunchProjectID
-            } else if projects.isEmpty, loadState != .loaded {
+            } else if filterableProjects.isEmpty, loadState != .loaded {
                 projectID = pendingLaunchProjectID
             } else {
                 projectID = nil
             }
             return
         }
-        if let projectID, !projects.contains(projectID) {
+        if let projectID, !filterableProjects.contains(projectID) {
             self.projectID = nil
         }
     }
@@ -484,7 +441,7 @@ public final class InboxStore {
             repairProjectFilter()
             return
         }
-        if projects.contains(pendingLaunchProjectID) {
+        if filterableProjects.contains(pendingLaunchProjectID) {
             projectID = pendingLaunchProjectID
         } else {
             projectID = nil
@@ -696,44 +653,13 @@ public final class InboxStore {
         registeredCapabilityFingerprint = fingerprint
     }
 
-    private func sortKey(
-        _ snapshot: Components.Schemas.AttentionItemSnapshot, index: Int,
-        status: Components.Schemas.ItemStatus
-    ) -> (Int, Int, Int, Int, TimeInterval, Int) {
-        let item = snapshot.item
-        guard status == .open else {
-            let conclusion = item.decided_at ?? item.created_at
-            return (1, 0, 0, 0, conclusion.map { -$0.timeIntervalSince1970 } ?? .infinity, index)
-        }
-        let overdueRank = item.expires_when.map { $0 <= orderInstant ? 0 : 1 } ?? 1
-        let age = item.created_at.map { orderInstant.timeIntervalSince($0) } ?? .infinity
-        let ageBand = age < 3600 ? 0 : (age < 86_400 ? 1 : 2)
-        let priorityRank: Int
-        switch item.priority {
-        case .urgent: priorityRank = 0
-        case .high: priorityRank = 1
-        case .normal: priorityRank = 2
-        case .low: priorityRank = 3
-        }
-        let recency = item.created_at.map { -$0.timeIntervalSince1970 } ?? .infinity
-        return (0, overdueRank, ageBand, priorityRank, recency, index)
-    }
-
-    private func filteredRows(
-        in scope: Scope,
-        projectID: String?
-    ) -> [(Int, Components.Schemas.AttentionItemSnapshot)] {
+    /// Rows in server order with their index, by the status captured at the
+    /// last full list rebuild.
+    private func indexedRows(open: Bool) -> [(Int, Components.Schemas.AttentionItemSnapshot)] {
         serverOrder.enumerated().compactMap { index, id in
             snapshotsByID[id].map { (index, $0) }
         }.filter { _, snapshot in
-            let status = statusAtOrderRebuild[snapshot.item.id] ?? snapshot.item.status
-            let isInScope =
-                switch scope {
-                case .open: status == .open
-                case .resolved: status != .open
-                case .all: true
-                }
-            return isInScope && (projectID == nil || snapshot.item.project_id == projectID)
+            ((statusAtOrderRebuild[snapshot.item.id] ?? snapshot.item.status) == .open) == open
         }
     }
 }

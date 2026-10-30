@@ -171,9 +171,8 @@ public final class SyncCoordinator {
         cache: CacheStore,
         submissionDaemonID: String = "mock",
         promptHistory: TaskPromptHistory? = nil,
-        inboxOrderNow: @escaping () -> Date = Date.init
     ) {
-        store = InboxStore(client: client, device: device, now: inboxOrderNow)
+        store = InboxStore(client: client, device: device)
         self.cache = cache
         self.submissionDaemonID = submissionDaemonID
         self.promptHistory =
@@ -233,6 +232,7 @@ public final class SyncCoordinator {
             self?.observe(revision: revision)
         }
         store.syncCursorsProvider = { [weak self] in self?.cursors }
+        store.taskProjectsProvider = { [weak self] in self?.tasks.map(\.task.project_id) ?? [] }
         store.snapshotObserver = { [weak self] revision in
             self?.observe(snapshotRevision: revision)
         }
@@ -382,7 +382,6 @@ public final class SyncCoordinator {
                         // Only bootstrap replaces the adopted verdict.
                         await bootstrap()
                     } else {
-                        store.rebuildTimeBasedOrder()
                         store.freshness = .fresh
                         lastUpdatedAt = .now
                         settleTaskStops()
