@@ -40,6 +40,9 @@ Mac and iOS match on every line unless a line says otherwise.
   packet viewer, proposal batches, the account usage view, the
   initiative view, push notifications.
 - **Open:** twelve placement questions, listed at the end.
+- **Grounds:** Overcast by day and Dead Channel by dusk (decision pages:
+  [Overcast](../docs/design/handoff-2026-10-30-dark-ground/Light%20Ground%20-%2030%20Oct%202026.dc.html),
+  [Dead Channel](../docs/design/handoff-2026-10-30-dark-ground/Dark%20Ground%20-%2030%20Oct%202026.dc.html)).
 
 ## Screens
 
