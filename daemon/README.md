@@ -1400,9 +1400,9 @@ submission to the deputy, use the [production walkthrough](../docs/production-wa
 ### Set A Usage Pool's Parallel Limit
 
 `freesided set-pool-limit` records a newer revision of a usage pool that
-changes only `max_parallel_executions`, the number of executions the pool may
+changes only `max_parallel_executions`, the number of launches the pool may
 run at once. The limit is the pool's, not an identity's: identities sharing a
-pool share one limit.
+pool share one limit, and execution and review launches both count against it.
 An identity with no recorded `usage_pool` has a pool of its own named
 `identity:<auth-identity>`, the id `freesided auth list` prints. New pools
 start at 1. The command works whether `freesided` is stopped or running; a
@@ -1417,10 +1417,10 @@ freesided set-pool-limit \
   -max-parallel-executions 4
 ```
 
-An execution at the limit waits under a `usage_pool_exhausted` hold naming the
-pool and starts when a slot frees. An execution keeps its slot until its
-terminal record exists. Review launches don't count yet, so a limit on a pool
-that only reviewers use gates nothing.
+A launch at the limit waits under a `usage_pool_exhausted` hold naming the
+pool and starts when a slot frees. An execution keeps its slot until its runtime
+is proved gone, and a cancelled review keeps its slot until its containers are
+proved absent.
 
 Characterizing an identity into a shared pool never raises concurrency: the
 pool takes the lower of its limit and the limit the identity brings.

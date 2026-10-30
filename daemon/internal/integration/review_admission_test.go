@@ -38,6 +38,11 @@ func TestProductionReviewInvocationKeepsItsFirstAdmission(t *testing.T) {
 		admission.AdmittedAt = at
 		return admission, nil
 	}
+	if err := p.store.WriteInternal(p.ctx, func(tx *store.InternalTx) error {
+		return tx.RecordAuthIdentity(p.ctx, domain.AuthIdentity{ID: "review-identity-1", Provider: "fake"}, p.now)
+	}); err != nil {
+		t.Fatal(err)
+	}
 	faults := &faultReviewSource{ReviewSource: p.reviewer}
 	p.reviewSource = faults
 	crash := errors.New("crash before review launch")
@@ -148,5 +153,72 @@ func TestProductionReviewRefusedAdmissionAsksTheSourceNothing(t *testing.T) {
 		return nil
 	}); err != nil {
 		t.Fatal(err)
+	}
+}
+
+// TestProductionReviewWaitsForItsUsagePool: a review past its pool's limit
+// waits under the pool hold with nothing admitted or requested and no retry
+// budget spent, and is requested once a slot frees.
+func TestProductionReviewWaitsForItsUsagePool(t *testing.T) {
+	t.Parallel()
+	p := newProductionPublicationHarness(t, "")
+	id := engine.ProductionReviewInvocationID(p.runID, 1)
+	blocker := engine.ProductionReviewInvocationID(p.runID, 2)
+	identity := fake.ReviewIdentities()[0]
+	pool := identity.EffectiveUsagePool()
+	if err := p.store.WriteInternal(p.ctx, func(tx *store.InternalTx) error {
+		return tx.RecordUsagePool(p.ctx, domain.UsagePool{
+			ID: pool, Provider: identity.Provider, MaxParallelExecutions: 1,
+		}, p.now.Add(time.Second))
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := p.store.Write(p.ctx, func(tx *store.WriteTx) error {
+		return tx.PutReviewAdmission(p.ctx, fake.ReviewAdmission(domain.RoleReviewer, p.runID, blocker))
+	}); err != nil {
+		t.Fatal(err)
+	}
+	faults := &faultReviewSource{ReviewSource: p.reviewer}
+	p.reviewSource = faults
+	p.workflow = p.newEngine(t, productionCrashSeams{}, true)
+	p.reviewer.Script(id, fake.ReviewScript{Outcome: fake.OutcomeComplete, Result: exec.ReviewResult{
+		BaseSHA: p.baseSHA, HeadSHA: p.replay.HeadSHA,
+		CompletedAt: p.now, CompletionEvidence: productionDigest([]byte("review after the wait")),
+	}})
+	p.startAndRecordExport(t)
+	for range 2 {
+		if _, err := p.reconcileLanes(); err != nil {
+			t.Fatal(err)
+		}
+	}
+	requireUsagePoolHold(t, observeProductionRun(t, p.store, p.runID).Hold, pool)
+	if faults.requestCalls != 0 {
+		t.Fatalf("the source was asked %d times at the limit", faults.requestCalls)
+	}
+	if err := p.store.Read(p.ctx, func(tx *store.ReadTx) error {
+		if _, err := tx.GetReviewAdmission(p.ctx, id); !errors.Is(err, store.ErrNotFound) {
+			t.Fatalf("a waiting review stored an admission: %v", err)
+		}
+		if _, err := tx.LatestReviewFailure(p.ctx, p.runID); !errors.Is(err, store.ErrNotFound) {
+			t.Fatalf("the wait recorded a review failure: %v", err)
+		}
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := p.store.WriteInternal(p.ctx, func(tx *store.InternalTx) error {
+		return tx.ReleaseReviewSlot(p.ctx, blocker, p.now)
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := p.reconcileLanes(); err != nil {
+		t.Fatal(err)
+	}
+	if faults.requestIDs[id] != 1 {
+		t.Fatalf("requests after the slot freed = %v", faults.requestIDs)
+	}
+	if hold := observeProductionRun(t, p.store, p.runID).Hold; hold != nil {
+		t.Fatalf("the admitted review kept the hold: %#v", hold)
 	}
 }

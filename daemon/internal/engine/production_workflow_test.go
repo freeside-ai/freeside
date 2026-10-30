@@ -443,6 +443,7 @@ func TestProductionReviewTransientCleanupFailureSchedulesSameInvocationRetry(t *
 	}); err != nil {
 		t.Fatal(err)
 	}
+	recordFakeReviewIdentities(t, st)
 	now := time.Date(2026, 8, 11, 12, 0, 0, 0, time.UTC)
 	cleanupErr := errors.New("runtime cleanup temporarily unavailable")
 	source := &transientCleanupReviewSource{cause: cleanupErr}

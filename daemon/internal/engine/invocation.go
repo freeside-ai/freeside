@@ -867,6 +867,10 @@ func (e *Engine) dispatchIntent(
 		// returning the error.
 		return startedNow, false, fmt.Errorf("intent %q: mark dispatched: %w", entry.IdempotencyKey, err)
 	}
+	// The hold those clears ended no longer paces the next one: the same
+	// reason returning inside the refresh interval is a new wait, and
+	// skipping it would leave the run showing no hold at all (#727).
+	e.pace.forget("hold:" + string(binding.run.ID))
 	return startedNow, false, nil
 }
 

@@ -47,6 +47,16 @@ func ReviewAdmission(
 	return admission
 }
 
+// ReviewIdentities are the identities the ReviewAdmission fixture names. A
+// review admission takes a slot on its identity's usage pool, so a store under
+// a workflow composed over the fake must record them.
+func ReviewIdentities() []domain.AuthIdentity {
+	return []domain.AuthIdentity{
+		{ID: "fake-review-identity", Provider: "fake"},
+		{ID: "fake-shadow-identity", Provider: "fake"},
+	}
+}
+
 // RecordAdmission is the ReviewAdmission fixture as a review record carries
 // it.
 func RecordAdmission(

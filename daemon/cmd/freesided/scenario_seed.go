@@ -117,7 +117,7 @@ func seedScenario(ctx context.Context, st *store.Store, dbPath string, sc scenar
 	return world, nil
 }
 
-// seedScenarioRecords records the auth identity, project image, backend
+// seedScenarioRecords records the auth identities, project image, backend
 // conformance, and trust profile in one transaction, so a crash leaves all
 // of them or none. A store that already holds the trust profile was seeded.
 func seedScenarioRecords(
@@ -149,6 +149,16 @@ func seedScenarioRecords(
 		}
 		if err := tx.RecordAuthIdentity(ctx, identity, now); err != nil {
 			return err
+		}
+		for _, reviewer := range fake.ReviewIdentities() {
+			if err := tx.RecordUsagePool(ctx, domain.UsagePool{
+				ID: reviewer.EffectiveUsagePool(), Provider: reviewer.Provider, MaxParallelExecutions: 4,
+			}, now); err != nil {
+				return err
+			}
+			if err := tx.RecordAuthIdentity(ctx, reviewer, now); err != nil {
+				return err
+			}
 		}
 		if err := tx.RecordProjectImage(ctx, world.Image); err != nil {
 			return err

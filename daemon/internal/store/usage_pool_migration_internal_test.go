@@ -14,12 +14,25 @@ import (
 // for the tests that seed an older schema and migrate forward again.
 func rewindUsagePools(t *testing.T, ctx context.Context, db *sql.DB) {
 	t.Helper()
+	rewindReviewSlotReleases(t, ctx, db)
 	for _, statement := range []string{
 		`ALTER TABLE run_hold_observations DROP COLUMN usage_pool`,
 		`DROP TABLE usage_pools`,
 		`ALTER TABLE auth_identities ADD COLUMN max_parallel_executions INTEGER NOT NULL DEFAULT 1
 			CHECK (max_parallel_executions >= 1)`,
 		`DELETE FROM schema_migrations WHERE name = '0112_usage_pools.sql'`,
+	} {
+		if _, err := db.ExecContext(ctx, statement); err != nil {
+			t.Fatal(err)
+		}
+	}
+}
+
+func rewindReviewSlotReleases(t *testing.T, ctx context.Context, db *sql.DB) {
+	t.Helper()
+	for _, statement := range []string{
+		`DROP TABLE review_slot_releases`,
+		`DELETE FROM schema_migrations WHERE name = '0113_review_slot_releases.sql'`,
 	} {
 		if _, err := db.ExecContext(ctx, statement); err != nil {
 			t.Fatal(err)
@@ -125,5 +138,49 @@ func TestUsagePoolsMigrationNeverRaisesConcurrency(t *testing.T) {
 		return nil
 	}); err != nil {
 		t.Fatal(err)
+	}
+}
+
+// TestUsagePoolsMigrationReleasesAbandonedShadowAdmissions keeps an upgrade from
+// pinning slots: a shadow admission that never reached its source left no record
+// and gets its release row, while a requested one and a routed one do not.
+func TestUsagePoolsMigrationReleasesAbandonedShadowAdmissions(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	st := openTemplateStoreAt(t, t.TempDir()+"/shadow-release.db", Options{})
+	_, runID := seedOriginTestTarget(t, ctx, st)
+	if _, err := st.db.ExecContext(ctx, `INSERT INTO review_admissions
+		(invocation_id, run_id, role, agent_digest, admitted_at, body_digest, body)
+		VALUES ('shadow-abandoned', ?1, 'shadow_reviewer', 'a', '2026-01-02T03:04:05Z', 'd', '{}'),
+		       ('shadow-requested', ?1, 'shadow_reviewer', 'a', '2026-01-02T03:04:05Z', 'd', '{}'),
+		       ('routed', ?1, 'reviewer', 'a', '2026-01-02T03:04:05Z', 'd', '{}')`, runID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := st.db.ExecContext(ctx, `INSERT INTO codex_review_requests (invocation_id, body_digest, body)
+		VALUES ('shadow-requested', 'd', '{}')`); err != nil {
+		t.Fatal(err)
+	}
+	rewindReviewSlotReleases(t, ctx, st.db)
+	if err := migrate(ctx, st.db, migrations.FS); err != nil {
+		t.Fatal(err)
+	}
+	var released []string
+	rows, err := st.db.QueryContext(ctx, `SELECT invocation_id FROM review_slot_releases`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = rows.Close() }()
+	for rows.Next() {
+		var id string
+		if err := rows.Scan(&id); err != nil {
+			t.Fatal(err)
+		}
+		released = append(released, id)
+	}
+	if err := rows.Err(); err != nil {
+		t.Fatal(err)
+	}
+	if len(released) != 1 || released[0] != "shadow-abandoned" {
+		t.Fatalf("released = %v, want only the abandoned shadow admission", released)
 	}
 }

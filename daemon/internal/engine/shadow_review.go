@@ -126,7 +126,10 @@ func (w *productionPublicationWorkflow) reconcileShadowReview(
 	if err != nil {
 		var refusal *exec.ReviewSourceFailure
 		if errors.As(err, &refusal) {
-			return w.abandonShadowReview(task, routed.Round, id, err)
+			return w.abandonShadowReview(ctx, task, routed.Round, id, err)
+		}
+		if errors.Is(err, domain.ErrUsagePoolExhausted) {
+			return w.waitForShadowReviewSlot(ctx, task, routed, id, err)
 		}
 		return false, err
 	}
@@ -138,7 +141,7 @@ func (w *productionPublicationWorkflow) reconcileShadowReview(
 	}
 	authorityVerifier, ok := w.shadowReviewSource.(exec.ReviewRequestAuthorityVerifier)
 	if !ok {
-		return w.abandonShadowReview(task, routed.Round, id, &exec.ReviewSourceFailure{
+		return w.abandonShadowReview(ctx, task, routed.Round, id, &exec.ReviewSourceFailure{
 			Class: domain.ReviewFailureConfiguration,
 			Err:   errors.New("shadow review source cannot verify request authority"),
 		})
@@ -170,7 +173,7 @@ func (w *productionPublicationWorkflow) reconcileShadowReview(
 		}
 		retained, retainErr := w.ensureReviewWorkspace(ctx, id, workspace, req.WorkspaceSHA())
 		if retainErr != nil {
-			return w.abandonShadowReview(task, routed.Round, id, retainErr)
+			return w.abandonShadowReview(ctx, task, routed.Round, id, retainErr)
 		}
 		if retained != req.Workspace {
 			return false, fmt.Errorf("retained shadow review workspace changed: %w",
@@ -311,11 +314,39 @@ func (w *productionPublicationWorkflow) reconcileShadowReview(
 	return true, w.removeReviewWorkspace(id)
 }
 
+// waitForShadowReviewSlot holds a shadow review refused for a full pool until
+// a slot frees, within the window that bounds any shadow pass: past it the
+// observation is abandoned rather than holding the routed gate longer.
+func (w *productionPublicationWorkflow) waitForShadowReviewSlot(
+	ctx context.Context, task productionPublicationTask, routed domain.ReviewRecord,
+	id domain.InvocationID, cause error,
+) (bool, error) {
+	if w.now().Before(routed.CompletedAt.Add(shadowReviewWait)) {
+		return false, w.holdReviewForUsagePool(ctx, task.RunID, id, cause)
+	}
+	if err := w.store.Write(ctx, func(tx *store.WriteTx) error {
+		return tx.ClearRunHoldCause(ctx, task.RunID, domain.HoldUsagePoolExhausted)
+	}); err != nil {
+		return false, err
+	}
+	w.holdPace.forget("hold:" + string(task.RunID))
+	return w.abandonShadowReview(ctx, task, routed.Round, id, cause)
+}
+
+// abandonShadowReview ends the observation. The shadow arm leaves no durable
+// record of its own, so it releases the admission's slot here; the release
+// does not outrank the ward, and a launched review keeps its slot until the
+// ward proves it gone.
 func (w *productionPublicationWorkflow) abandonShadowReview(
-	task productionPublicationTask, round int, id domain.InvocationID, cause error,
+	ctx context.Context, task productionPublicationTask, round int, id domain.InvocationID, cause error,
 ) (bool, error) {
 	class := exec.ClassifyReviewSourceFailure(cause)
 	w.shadowReviewFailure(task.RunID, round, class, cause)
+	if err := w.store.Write(ctx, func(tx *store.WriteTx) error {
+		return tx.ReleaseReviewSlot(ctx, id, w.now().UTC())
+	}); err != nil {
+		return false, err
+	}
 	if err := w.removeReviewWorkspace(id); err != nil {
 		return false, err
 	}
@@ -363,7 +394,7 @@ func (w *productionPublicationWorkflow) abandonStartedShadowReview(
 		!errors.Is(err, domain.ErrParentKeyMismatch) {
 		return false, err
 	}
-	return w.abandonShadowReview(task, round, id, cause)
+	return w.abandonShadowReview(ctx, task, round, id, cause)
 }
 
 func (w *productionPublicationWorkflow) finishShadowReviewEvidence(

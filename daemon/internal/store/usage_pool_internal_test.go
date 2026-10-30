@@ -243,6 +243,175 @@ func TestUsagePoolCountRefusesDivergentIndexedIdentity(t *testing.T) {
 	}
 }
 
+// reviewSlotFixture admits one review on auth-1's pool, whose run belongs to a
+// task, and leaves its launch to each case.
+func reviewSlotFixture(t *testing.T) (*Store, domain.ReviewAdmission) {
+	t.Helper()
+	ctx := t.Context()
+	st := openSlotStore(t)
+	_, runID := seedOriginTestTarget(t, ctx, st)
+	recordSlotIdentity(t, st, slotIdentity("auth-1", ""), slotAt)
+	admission := storedReviewAdmission(t, domain.RoleReviewer)
+	admission.RunID = runID
+	admission, err := domain.NewReviewAdmission(admission)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := st.Write(ctx, func(tx *WriteTx) error {
+		return tx.PutReviewAdmission(ctx, admission)
+	}); err != nil {
+		t.Fatal(err)
+	}
+	return st, admission
+}
+
+func openReviewIntent(ctx context.Context, tx *InternalTx, id domain.InvocationID) error {
+	return tx.BeginCodexReviewIntent(ctx, string(id), "preparing", []byte(`{"state":"preparing"}`))
+}
+
+func closeReviewIntent(ctx context.Context, tx *InternalTx, id domain.InvocationID) error {
+	return tx.UpdateCodexReviewIntent(ctx, string(id), "preparing", "closed",
+		[]byte(`{"state":"preparing"}`), []byte(`{"state":"closed"}`))
+}
+
+func collectReviewOutcome(ctx context.Context, tx *InternalTx, id domain.InvocationID) error {
+	if err := tx.RecordCodexReviewRequest(ctx, string(id), []byte(`{}`)); err != nil {
+		return err
+	}
+	return tx.RecordCodexReviewOutcome(ctx, string(id), []byte(`{"status":"canceled"}`))
+}
+
+// TestReviewSlotRelease pins the release rule. For a launch the ward journalled,
+// only the ward's proof ends the slot: above all, a cancelled review whose
+// outcome is written while its containers still run keeps it.
+func TestReviewSlotRelease(t *testing.T) {
+	t.Parallel()
+	for name, tc := range map[string]struct {
+		arrange func(context.Context, *InternalTx, domain.InvocationID) error
+		want    int
+	}{
+		"admitted, nothing launched yet": {
+			func(context.Context, *InternalTx, domain.InvocationID) error { return nil }, 1,
+		},
+		"released before a launch": {
+			func(ctx context.Context, tx *InternalTx, id domain.InvocationID) error {
+				return tx.ReleaseReviewSlot(ctx, id, slotAt)
+			}, 0,
+		},
+		"open launch": {openReviewIntent, 1},
+		"a release does not outrank the ward": {
+			func(ctx context.Context, tx *InternalTx, id domain.InvocationID) error {
+				if err := openReviewIntent(ctx, tx, id); err != nil {
+					return err
+				}
+				return tx.ReleaseReviewSlot(ctx, id, slotAt)
+			}, 1,
+		},
+		"cancelled, outcome written, containers not proved absent": {
+			func(ctx context.Context, tx *InternalTx, id domain.InvocationID) error {
+				if err := openReviewIntent(ctx, tx, id); err != nil {
+					return err
+				}
+				return collectReviewOutcome(ctx, tx, id)
+			}, 1,
+		},
+		"cancelled, ready proves the containers absent": {
+			func(ctx context.Context, tx *InternalTx, id domain.InvocationID) error {
+				if err := openReviewIntent(ctx, tx, id); err != nil {
+					return err
+				}
+				if err := collectReviewOutcome(ctx, tx, id); err != nil {
+					return err
+				}
+				return tx.MarkCodexReviewOutcomeReady(ctx, string(id))
+			}, 0,
+		},
+		"closed intent": {
+			func(ctx context.Context, tx *InternalTx, id domain.InvocationID) error {
+				if err := openReviewIntent(ctx, tx, id); err != nil {
+					return err
+				}
+				return closeReviewIntent(ctx, tx, id)
+			}, 0,
+		},
+		"historic outcome left collected behind a closed intent": {
+			func(ctx context.Context, tx *InternalTx, id domain.InvocationID) error {
+				if err := openReviewIntent(ctx, tx, id); err != nil {
+					return err
+				}
+				if err := collectReviewOutcome(ctx, tx, id); err != nil {
+					return err
+				}
+				return closeReviewIntent(ctx, tx, id)
+			}, 0,
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			ctx := t.Context()
+			st, admission := reviewSlotFixture(t)
+			if err := st.WriteInternal(ctx, func(tx *InternalTx) error {
+				return tc.arrange(ctx, tx, admission.InvocationID)
+			}); err != nil {
+				t.Fatal(err)
+			}
+			if err := st.Read(ctx, func(tx *ReadTx) error {
+				got, err := tx.ActiveUsagePoolExecutionCount(ctx, "identity:auth-1")
+				if err == nil && got != tc.want {
+					t.Errorf("active = %d, want %d", got, tc.want)
+				}
+				return err
+			}); err != nil {
+				t.Fatal(err)
+			}
+		})
+	}
+}
+
+// TestReviewSlotProofIsAuthenticated: a rewritten state column reads as an
+// error, never as a released slot.
+func TestReviewSlotProofIsAuthenticated(t *testing.T) {
+	t.Parallel()
+	ctx := t.Context()
+	st, admission := reviewSlotFixture(t)
+	if err := st.WriteInternal(ctx, func(tx *InternalTx) error {
+		return openReviewIntent(ctx, tx, admission.InvocationID)
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := st.db.ExecContext(ctx, `UPDATE codex_review_intents SET state = 'closed'`); err != nil {
+		t.Fatal(err)
+	}
+	if err := st.Read(ctx, func(tx *ReadTx) error {
+		_, err := tx.ActiveUsagePoolExecutionCount(ctx, "identity:auth-1")
+		return err
+	}); !errors.Is(err, ErrRowInconsistent) {
+		t.Fatalf("count = %v, want %v", err, ErrRowInconsistent)
+	}
+}
+
+func TestReviewGateExcludesItsOwnAdmission(t *testing.T) {
+	t.Parallel()
+	ctx := t.Context()
+	st, admission := reviewSlotFixture(t)
+	other := admission
+	other.InvocationID = "review-2"
+	if err := st.Read(ctx, func(tx *ReadTx) error {
+		if err := tx.RequireReviewUsagePoolCapacity(ctx, admission); err != nil {
+			t.Errorf("replay of the holder = %v", err)
+		}
+		err := tx.RequireReviewUsagePoolCapacity(ctx, other)
+		var exhausted *domain.UsagePoolExhaustedError
+		if !errors.As(err, &exhausted) || exhausted.Pool != "identity:auth-1" ||
+			!errors.Is(err, domain.ErrUsagePoolExhausted) {
+			t.Errorf("second review = %v, want the pool named", err)
+		}
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+}
+
 // TestRunHoldRoundTripsItsUsagePool reads a pool hold back with its pool, and a
 // stored identity_parallelism hold with none. A pool without its reason has no
 // reading the contract can express, so it fails rather than decoding.

@@ -1607,6 +1607,72 @@ func TestExportRejectionAbsent(t *testing.T) {
 	}
 }
 
+// TestExecutionKeepsSlotUntilItsJournalCloses: an outcome written while the
+// handoff journal stays open has not proved the launch's runtime gone, so the
+// slot stays taken until the journal's outcome. A cancelled launch writes in
+// that order.
+func TestExecutionKeepsSlotUntilItsJournalCloses(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	f := newAdmissionFixture(t, nil)
+	s := openWithFixture(t, f, store.Options{AdmissionFloors: attendedFloors()})
+	if err := recordAdmission(t, s, f.admission); err != nil {
+		t.Fatalf("record admission: %v", err)
+	}
+	// A journal's run id is the handoff's, not the invocation; the lease holder
+	// is what names the invocation.
+	rec := journalRecord("handoff-run")
+	if err := s.WriteInternal(ctx, func(tx *store.InternalTx) error {
+		if _, _, err := tx.EnqueueOutbox(
+			ctx, "inv-1", string(domain.AgentInvocationRequestedKind), []byte("{}"),
+		); err != nil {
+			return err
+		}
+		if err := tx.MarkOutboxDispatched(ctx, "inv-1"); err != nil {
+			return err
+		}
+		_, err := tx.BeginLeasedHandoffJournal(ctx, rec, "auth-1", "inv-1", leaseEpoch, leaseEpoch.Add(time.Hour))
+		return err
+	}); err != nil {
+		t.Fatalf("open handoff: %v", err)
+	}
+	if err := s.Write(ctx, func(tx *store.WriteTx) error {
+		return tx.RecordExecutionOutcome(ctx, domain.ExecutionOutcome{
+			InvocationID: "inv-1", AdmissionID: f.admission.ID,
+			Status: domain.ExecutionOutcomeFailed, Summary: "stopped",
+			Cause: domain.FailureCauseUnknown, RecordedAt: admissionEpoch.Add(time.Hour),
+		})
+	}); err != nil {
+		t.Fatalf("record outcome: %v", err)
+	}
+	count := func() int {
+		t.Helper()
+		var got int
+		if err := s.Read(ctx, func(tx *store.ReadTx) error {
+			var err error
+			got, err = tx.ActiveUsagePoolExecutionCount(ctx, "identity:auth-1")
+			return err
+		}); err != nil {
+			t.Fatalf("ActiveUsagePoolExecutionCount: %v", err)
+		}
+		return got
+	}
+	if got := count(); got != 1 {
+		t.Fatalf("slot with an open journal = %d, want 1", got)
+	}
+	if err := s.WriteInternal(ctx, func(tx *store.InternalTx) error {
+		if err := tx.MarkHandoffCancellationRequested(ctx, rec.RunID); err != nil {
+			return err
+		}
+		return tx.CloseHandoffJournal(ctx, rec.RunID, store.HandoffCanceled)
+	}); err != nil {
+		t.Fatalf("close journal: %v", err)
+	}
+	if got := count(); got != 0 {
+		t.Fatalf("slot after the journal closed = %d, want 0", got)
+	}
+}
+
 // TestFailedOutcomeFreesDispatchedExecutionSlot pins the slot-release mechanism
 // the stranded-dispatch grace relies on (issue #1181): an admission with a
 // dispatched outbox row, no export, and no outcome counts as one active
