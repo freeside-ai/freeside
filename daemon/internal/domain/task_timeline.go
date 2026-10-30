@@ -115,13 +115,14 @@ type TaskEventExternalReview struct {
 }
 
 // TaskEventTaskLine names one task line version as the timeline shows it.
-// SupersededAgent is the agent of the version this one supersedes, nil for
-// version 1. Provenance is the router's citation, nil for an operator line;
-// its passed-over agent is the agent a first admission left.
+// Agent is nil on a cleared version. SupersededAgent is the agent of the
+// version this one supersedes, nil for version 1 and after a cleared version,
+// which names none. Provenance is the router's citation, nil for an operator
+// line; its passed-over agent is the agent a first admission left.
 type TaskEventTaskLine struct {
 	LineID          Digest              `json:"line_id"`
 	Role            RoleName            `json:"role"`
-	Agent           string              `json:"agent"`
+	Agent           *string             `json:"agent"`
 	Version         int                 `json:"version"`
 	Source          TaskLineSource      `json:"source"`
 	SupersededAgent *string             `json:"superseded_agent"`
@@ -129,16 +130,25 @@ type TaskEventTaskLine struct {
 }
 
 func (l TaskEventTaskLine) validate() error {
-	if !contentaddr.Valid(string(l.LineID)) || !l.Role.TaskLineEligible() || !validAgentName(l.Agent) ||
-		l.Version < 1 || (l.Version == 1) != (l.SupersededAgent == nil) || !l.Source.valid() ||
+	if !contentaddr.Valid(string(l.LineID)) || !l.Role.TaskLineEligible() ||
+		l.Version < 1 || (l.Version == 1 && l.SupersededAgent != nil) || !l.Source.valid() ||
 		(l.Provenance != nil) != (l.Source == TaskLineSourceRouter) {
+		return ErrTaskEventDetailMismatch
+	}
+	if l.Agent == nil {
+		// A cleared version, which only a line change writes and never as
+		// the first of its chain. The router's check below needs an agent.
+		if l.Source != TaskLineSourceCLILineChange || l.Version == 1 {
+			return ErrTaskEventDetailMismatch
+		}
+	} else if !validAgentName(*l.Agent) {
 		return ErrTaskEventDetailMismatch
 	}
 	if l.SupersededAgent != nil && !validAgentName(*l.SupersededAgent) {
 		return ErrTaskEventDetailMismatch
 	}
 	if l.Provenance != nil {
-		if err := l.Provenance.validate(l.Agent); err != nil {
+		if err := l.Provenance.validate(*l.Agent); err != nil {
 			return fmt.Errorf("task event line provenance: %w: %w", ErrTaskEventDetailMismatch, err)
 		}
 	}

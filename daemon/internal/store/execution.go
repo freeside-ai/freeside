@@ -542,6 +542,10 @@ func (tx *ReadTx) gateTaskLineSelection(
 		return domain.TaskLine{}, fmt.Errorf("admission %q cites task line %q: %w",
 			invocationID, binding.SelectionRecordID, err)
 	}
+	if line.Cleared {
+		return domain.TaskLine{}, fmt.Errorf("admission %q cites task line %q, which names no agent: %w",
+			invocationID, line.ID, domain.ErrAdmissionDerivationMismatch)
+	}
 	run, err := tx.GetRun(ctx, runID)
 	if err != nil {
 		return domain.TaskLine{}, fmt.Errorf("admission %q: %w", invocationID, err)

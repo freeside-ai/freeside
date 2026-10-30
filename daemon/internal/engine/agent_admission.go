@@ -297,7 +297,9 @@ func (a *RoleAgent) requireUnmarked(ctx context.Context, tx *store.ReadTx) error
 
 // RunTaskLine returns the line the run's task holds for the role, once that
 // line is held against the command that set it. found is false when the task
-// has no line for the role, which leaves the role on the lineup.
+// has no line for the role, which leaves the role on the lineup. A cleared
+// version is anchored like any other first: it moves the role to the lineup,
+// so a row nobody cleared must not do that.
 //
 // An error means a line exists that the caller must neither honor nor pass
 // over: it refuses, and never runs the lineup's agent instead (plan §5.4).
@@ -313,15 +315,18 @@ func RunTaskLine(
 	if run.TaskID == "" {
 		return domain.TaskLine{}, false, fmt.Errorf("run %s names no task, so its task lines cannot be read", runID)
 	}
-	lines, err := tx.CurrentTaskLines(ctx, run.TaskID)
+	heads, err := tx.TaskLineHeads(ctx, run.TaskID)
 	if err != nil {
 		return domain.TaskLine{}, false, err
 	}
-	if line, found = lines[role]; !found {
+	if line, found = heads[role]; !found {
 		return domain.TaskLine{}, false, nil
 	}
 	if err := anchorTaskLine(ctx, tx, line); err != nil {
 		return domain.TaskLine{}, false, fmt.Errorf("task line %s, set by %s %q: %w", line.ID, line.Source, line.SetBy, err)
+	}
+	if line.Cleared {
+		return domain.TaskLine{}, false, nil
 	}
 	return line, true, nil
 }
@@ -332,12 +337,14 @@ func RunTaskLine(
 // decodes. Choosing an agent chooses which credential runs (§5.8), so the
 // record SetBy names must exist, be of the kind Source claims, and
 // name this task. Submission lines must be set at task creation; proposal
-// lines must be set at the recorded decision's instant. A router line is
-// refused until its router exists (#2393).
+// lines must be set at the recorded decision's instant; a changed line at its
+// change's. A router line is refused until its router exists (#2393).
 //
-// This proves the line rests on a real operator action on this task. It does
-// not prove the agent is the one that action sent: the records do not store the
-// lines, and the request digest cannot be recomputed from stored state.
+// For the submission and proposal sources, this proves the line rests on a
+// real operator action on this task. It does not prove the agent is the one
+// that action sent: those records do not store the lines, and the request
+// digest cannot be recomputed from stored state (#1939). A change record does
+// store them, so that arm binds the agent, the clear, and the version replaced.
 func anchorTaskLine(ctx context.Context, tx *store.ReadTx, line domain.TaskLine) error {
 	task, err := tx.GetTask(ctx, line.TaskID)
 	if err != nil {
@@ -422,6 +429,15 @@ func anchorTaskLine(ctx context.Context, tx *store.ReadTx, line domain.TaskLine)
 		// No record backs a router line yet: the router that writes one,
 		// and the anchor that holds it to its routing decision, is #2393.
 		return errors.New("nothing routes a task line yet (#2393)")
+	case domain.TaskLineSourceCLILineChange:
+		change, err := tx.GetTaskLineChange(ctx, domain.Digest(line.SetBy))
+		if err != nil {
+			return err
+		}
+		if !change.Backs(line) {
+			return errors.New("that change names another task, role, agent, version, or instant")
+		}
+		return nil
 	}
 	return fmt.Errorf("source %q is not a task line source", line.Source)
 }

@@ -28,7 +28,7 @@ func TestTaskEventDetailContract(t *testing.T) {
 	at := time.Date(2026, 9, 12, 12, 0, 0, 0, time.UTC)
 	externalReview := TaskEventExternalReview{ItemID: "ready", FindingID: "finding", ReviewerLogin: "octocat", Round: 2, HeadSHA: "head"}
 	line := TaskEventTaskLine{
-		LineID: Digest("sha256:" + strings.Repeat("a", 64)), Role: RoleImplementer, Agent: "claude-b", Version: 1,
+		LineID: Digest("sha256:" + strings.Repeat("a", 64)), Role: RoleImplementer, Agent: ptr("claude-b"), Version: 1,
 		Source: TaskLineSourceRouter,
 		Provenance: &TaskLineProvenance{
 			PolicyRevision: 1, Trigger: TaskLineSelectionExhaustedMark,
@@ -103,23 +103,41 @@ func TestTaskEventDetailContract(t *testing.T) {
 	// provenance, a router line has one that validates, and only a later
 	// version names the agent it superseded.
 	operator := TaskEventTaskLine{
-		LineID: line.LineID, Role: RoleReviewer, Agent: "codex", Version: 2,
+		LineID: line.LineID, Role: RoleReviewer, Agent: ptr("codex"), Version: 2,
 		Source: TaskLineSourceSubmitTask, SupersededAgent: ptr("claude-a"),
 	}
-	if err := (TaskEvent{Kind: TaskEventTaskLineSet, RecordedAt: at, Line: &operator}).Validate(); err != nil {
-		t.Fatalf("operator line event: %v", err)
+	// A cleared version names no agent, and the version after it supersedes
+	// none.
+	cleared := TaskEventTaskLine{
+		LineID: line.LineID, Role: RoleReviewer, Version: 3,
+		Source: TaskLineSourceCLILineChange, SupersededAgent: ptr("codex"),
+	}
+	afterClear := TaskEventTaskLine{
+		LineID: line.LineID, Role: RoleReviewer, Agent: ptr("codex"), Version: 4,
+		Source: TaskLineSourceCLILineChange,
+	}
+	for name, detail := range map[string]TaskEventTaskLine{"operator": operator, "cleared": cleared, "after clear": afterClear} {
+		if err := (TaskEvent{Kind: TaskEventTaskLineSet, RecordedAt: at, Line: &detail}).Validate(); err != nil {
+			t.Fatalf("%s line event: %v", name, err)
+		}
 	}
 	for name, change := range map[string]func(*TaskEventTaskLine){
-		"bad line id":                   func(l *TaskEventTaskLine) { l.LineID = "line-1" },
-		"ineligible role":               func(l *TaskEventTaskLine) { l.Role = RoleShadowReviewer },
-		"bad agent":                     func(l *TaskEventTaskLine) { l.Agent = "Bad Agent" },
-		"zero version":                  func(l *TaskEventTaskLine) { l.Version = 0 },
-		"first that supersedes":         func(l *TaskEventTaskLine) { l.SupersededAgent = ptr("codex") },
-		"later that supersedes nothing": func(l *TaskEventTaskLine) { l.Version = 2 },
-		"bad superseded agent":          func(l *TaskEventTaskLine) { l.Version = 2; l.SupersededAgent = ptr("Bad Agent") },
-		"unknown source":                func(l *TaskEventTaskLine) { l.Source = "intake" },
-		"router without provenance":     func(l *TaskEventTaskLine) { l.Provenance = nil },
-		"operator with provenance":      func(l *TaskEventTaskLine) { l.Source = TaskLineSourceCLISubmit },
+		"bad line id":                func(l *TaskEventTaskLine) { l.LineID = "line-1" },
+		"ineligible role":            func(l *TaskEventTaskLine) { l.Role = RoleShadowReviewer },
+		"bad agent":                  func(l *TaskEventTaskLine) { l.Agent = ptr("Bad Agent") },
+		"zero version":               func(l *TaskEventTaskLine) { l.Version = 0 },
+		"first that supersedes":      func(l *TaskEventTaskLine) { l.SupersededAgent = ptr("codex") },
+		"bad superseded agent":       func(l *TaskEventTaskLine) { l.Version = 2; l.SupersededAgent = ptr("Bad Agent") },
+		"unknown source":             func(l *TaskEventTaskLine) { l.Source = "intake" },
+		"router without provenance":  func(l *TaskEventTaskLine) { l.Provenance = nil },
+		"operator with provenance":   func(l *TaskEventTaskLine) { l.Source = TaskLineSourceCLISubmit },
+		"router line names no agent": func(l *TaskEventTaskLine) { l.Agent = nil },
+		"cleared version 1": func(l *TaskEventTaskLine) {
+			l.Agent, l.Provenance, l.Source = nil, nil, TaskLineSourceCLILineChange
+		},
+		"cleared by a submission": func(l *TaskEventTaskLine) {
+			l.Agent, l.Provenance, l.Version, l.Source = nil, nil, 2, TaskLineSourceCLISubmit
+		},
 		"invalid provenance": func(l *TaskEventTaskLine) {
 			l.Provenance = &TaskLineProvenance{PolicyRevision: 1, Trigger: TaskLineSelectionFirstAdmission, PassedOver: ptr("claude-a")}
 		},

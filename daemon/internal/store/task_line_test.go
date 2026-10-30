@@ -422,3 +422,216 @@ func TestGetTaskLineFailsClosedOnABrokenChain(t *testing.T) {
 		})
 	}
 }
+
+// recordTaskLineChange records a change and its line, as the engine does.
+func recordTaskLineChange(
+	t *testing.T, s *store.Store, taskID domain.TaskID, role domain.RoleName, agent string, cleared bool,
+	replaces *domain.Digest, at time.Time,
+) (domain.TaskLine, error) {
+	t.Helper()
+	ctx := context.Background()
+	change, err := domain.NewTaskLineChange(taskID, role, agent, cleared, replaces, at)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var line domain.TaskLine
+	err = s.Write(ctx, func(tx *store.WriteTx) error {
+		var err error
+		line, err = tx.RecordTaskLineChange(ctx, change)
+		return err
+	})
+	return line, err
+}
+
+// TestClearedHeadReadsAsNoLine: a role whose newest version is cleared has no
+// current line, a later change gives it one again, and the whole chain stays
+// readable.
+func TestClearedHeadReadsAsNoLine(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	path := filepath.Join(t.TempDir(), "task-lines.db")
+	s := openStoreAt(t, path, store.Options{})
+	taskID, _ := seedTaskSubmissionTarget(t, ctx, s)
+	first, err := appendTaskLine(t, s, domain.TaskLineInput{
+		TaskID: taskID, Role: domain.RoleReviewer, Agent: "codex",
+		Source: domain.TaskLineSourceSubmitTask, SetBy: "cmd-1",
+	}, taskLineSetAt)
+	if err != nil {
+		t.Fatal(err)
+	}
+	cleared, err := recordTaskLineChange(t, s, taskID, domain.RoleReviewer, "", true, &first.ID, taskLineSetAt.Add(time.Hour))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !cleared.Cleared || cleared.Agent != "" || cleared.Version != 2 || cleared.Source != domain.TaskLineSourceCLILineChange {
+		t.Fatalf("cleared version = %+v", cleared)
+	}
+	all, current, err := readTaskLines(t, s, taskID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := current[domain.RoleReviewer]; ok || !reflect.DeepEqual(all, []domain.TaskLine{first, cleared}) {
+		t.Fatalf("current = %+v, all = %+v; want no current line over both versions", current, all)
+	}
+	if err := s.Read(ctx, func(tx *store.ReadTx) error {
+		heads, err := tx.TaskLineHeads(ctx, taskID)
+		if err != nil {
+			return err
+		}
+		if !reflect.DeepEqual(heads[domain.RoleReviewer], cleared) {
+			t.Errorf("head = %+v, want the cleared version", heads[domain.RoleReviewer])
+		}
+		got, err := tx.GetTaskLine(ctx, cleared.ID)
+		if err != nil || !reflect.DeepEqual(got, cleared) {
+			t.Errorf("GetTaskLine = %+v, %v", got, err)
+		}
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	db, err := sql.Open("sqlite", path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = db.Close() }()
+	var agent sql.NullString
+	if err := db.QueryRowContext(ctx, `SELECT agent FROM task_lines WHERE id = ?`, cleared.ID).Scan(&agent); err != nil {
+		t.Fatal(err)
+	}
+	if agent.Valid {
+		t.Fatalf("a cleared version stored agent %q, want NULL", agent.String)
+	}
+
+	again, err := recordTaskLineChange(t, s, taskID, domain.RoleReviewer, "claude-b", false, &cleared.ID, taskLineSetAt.Add(2*time.Hour))
+	if err != nil {
+		t.Fatal(err)
+	}
+	all, current, err = readTaskLines(t, s, taskID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(current[domain.RoleReviewer], again) || len(all) != 3 || again.Version != 3 {
+		t.Fatalf("current = %+v, all = %+v", current, all)
+	}
+}
+
+// TestRecordTaskLineChangeRefusesAVersionItDidNotSee: a change whose replaced
+// version isn't the role's newest writes neither its record nor its line.
+func TestRecordTaskLineChangeRefusesAVersionItDidNotSee(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	s := openStoreAt(t, filepath.Join(t.TempDir(), "task-lines.db"), store.Options{})
+	taskID, _ := seedTaskSubmissionTarget(t, ctx, s)
+	first, err := recordTaskLineChange(t, s, taskID, domain.RoleImplementer, "codex", false, nil, taskLineSetAt)
+	if err != nil {
+		t.Fatal(err)
+	}
+	second, err := recordTaskLineChange(t, s, taskID, domain.RoleImplementer, "claude-b", false, &first.ID, taskLineSetAt.Add(time.Hour))
+	if err != nil {
+		t.Fatal(err)
+	}
+	stale, err := domain.NewTaskLineChange(taskID, domain.RoleImplementer, "claude-c", false, &first.ID, taskLineSetAt.Add(2*time.Hour))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := s.Write(ctx, func(tx *store.WriteTx) error {
+		_, err := tx.RecordTaskLineChange(ctx, stale)
+		return err
+	}); !errors.Is(err, domain.ErrTaskLineInconsistent) {
+		t.Fatalf("a stale change: %v", err)
+	}
+	if _, err := recordTaskLineChange(t, s, taskID, domain.RoleSpecifier, "codex", false, &first.ID, taskLineSetAt); err == nil {
+		t.Fatal("a change replacing a version of a role with no line was recorded")
+	}
+	all, _, err := readTaskLines(t, s, taskID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(all, []domain.TaskLine{first, second}) {
+		t.Fatalf("lines = %+v", all)
+	}
+	if err := s.Read(ctx, func(tx *store.ReadTx) error {
+		_, err := tx.GetTaskLineChange(ctx, stale.ID)
+		return err
+	}); !errors.Is(err, store.ErrNotFound) {
+		t.Fatalf("the stale change's record: %v", err)
+	}
+}
+
+// TestRecordTaskLineChangeAdvancesTheTask: sync reads a task by its version,
+// so a change that moved none would leave clients on the old task_lines.
+func TestRecordTaskLineChangeAdvancesTheTask(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	s := openStoreAt(t, filepath.Join(t.TempDir(), "task-lines.db"), store.Options{})
+	taskID, _ := seedTaskSubmissionTarget(t, ctx, s)
+	version := func() store.Snapshot {
+		t.Helper()
+		var snapshot store.Snapshot
+		if err := s.Read(ctx, func(tx *store.ReadTx) error {
+			got, err := tx.GetTaskSnapshot(ctx, taskID)
+			snapshot = got.Snapshot
+			return err
+		}); err != nil {
+			t.Fatal(err)
+		}
+		return snapshot
+	}
+	before := version()
+	if _, err := recordTaskLineChange(t, s, taskID, domain.RoleImplementer, "codex", false, nil, taskLineSetAt); err != nil {
+		t.Fatal(err)
+	}
+	if after := version(); after.EntityVersion != before.EntityVersion+1 || after.AsOfRevision <= before.AsOfRevision {
+		t.Fatalf("task snapshot = %+v after %+v, want it advanced", after, before)
+	}
+}
+
+func TestGetTaskLineChangeFailsClosedOnAnEditedRow(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	for name, tamper := range map[string]string{
+		"edited body":        `UPDATE task_line_changes SET body = replace(body, '"codex"', '"claude-b"')`,
+		"unparsable body":    `UPDATE task_line_changes SET body = 'not json'`,
+		"edited role":        `UPDATE task_line_changes SET role = 'reviewer'`,
+		"edited recorded_at": `UPDATE task_line_changes SET recorded_at = '2027-01-01T00:00:00Z'`,
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			path := filepath.Join(t.TempDir(), "task-lines.db")
+			s := openStoreAt(t, path, store.Options{})
+			taskID, _ := seedTaskSubmissionTarget(t, ctx, s)
+			line, err := recordTaskLineChange(t, s, taskID, domain.RoleImplementer, "codex", false, nil, taskLineSetAt)
+			if err != nil {
+				t.Fatal(err)
+			}
+			id := domain.Digest(line.SetBy)
+			read := func() (domain.TaskLineChange, error) {
+				var change domain.TaskLineChange
+				err := s.Read(ctx, func(tx *store.ReadTx) error {
+					var err error
+					change, err = tx.GetTaskLineChange(ctx, id)
+					return err
+				})
+				return change, err
+			}
+			change, err := read()
+			if err != nil {
+				t.Fatal(err)
+			}
+			if !change.Backs(line) {
+				t.Fatalf("change = %+v does not back %+v", change, line)
+			}
+			db, err := sql.Open("sqlite", path)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer func() { _ = db.Close() }()
+			if _, err := db.ExecContext(ctx, tamper); err != nil {
+				t.Fatal(err)
+			}
+			if _, err := read(); !errors.Is(err, store.ErrRowInconsistent) {
+				t.Fatalf("read after tampering: err = %v, want %v", err, store.ErrRowInconsistent)
+			}
+		})
+	}
+}

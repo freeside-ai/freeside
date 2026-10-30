@@ -1324,11 +1324,14 @@ enum TaskTimelinePresentation {
     // implied, as on the other rows it causes.
     static func label(_ line: Components.Schemas.TaskEventTaskLine) -> String {
         let subject = label(line.role)
+        guard let agent = line.agent else {
+            return "\(subject) back to lineup" + (line.superseded_agent.map { " · \($0)" } ?? "")
+        }
         let actor = line.source == .router ? " by router" : ""
         if let superseded = line.superseded_agent {
-            return "\(subject) changed\(actor) · \(superseded) → \(line.agent)"
+            return "\(subject) changed\(actor) · \(superseded) → \(agent)"
         }
         let fallback = line.provenance?.value1.passed_over.map { " instead of \($0)" } ?? ""
-        return "\(subject) set\(actor) · \(line.agent)\(fallback)"
+        return "\(subject) set\(actor) · \(agent)\(fallback)"
     }
 }

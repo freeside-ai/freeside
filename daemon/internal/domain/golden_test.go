@@ -1188,6 +1188,30 @@ func TestGolden(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	// A line change and the line that cites it, and the clear that follows:
+	// a cleared line names no agent.
+	taskLineChange, err := domain.NewTaskLineChange("task-1", domain.RoleImplementer, "claude-b", false, &taskLine.ID, ts)
+	if err != nil {
+		t.Fatal(err)
+	}
+	changedTaskLine, err := domain.NewTaskLine(domain.TaskLineInput{
+		TaskID: "task-1", Role: domain.RoleImplementer, Agent: "claude-b",
+		Source: domain.TaskLineSourceCLILineChange, SetBy: string(taskLineChange.ID),
+	}, 2, &taskLine.ID, ts)
+	if err != nil {
+		t.Fatal(err)
+	}
+	taskLineClear, err := domain.NewTaskLineChange("task-1", domain.RoleImplementer, "", true, &changedTaskLine.ID, ts)
+	if err != nil {
+		t.Fatal(err)
+	}
+	clearedTaskLine, err := domain.NewTaskLine(domain.TaskLineInput{
+		TaskID: "task-1", Role: domain.RoleImplementer, Cleared: true,
+		Source: domain.TaskLineSourceCLILineChange, SetBy: string(taskLineClear.ID),
+	}, 3, &changedTaskLine.ID, ts)
+	if err != nil {
+		t.Fatal(err)
+	}
 	// Router lines, one per trigger: a plain first admission cites only the
 	// policy revision; an exhausted mark also cites the reading acted on and
 	// the agent passed over.
@@ -2164,6 +2188,10 @@ func TestGolden(t *testing.T) {
 		}},
 		{"task_line", taskLine},
 		{"task_line_superseding", supersedingTaskLine},
+		{"task_line_change", taskLineChange},
+		{"task_line_change_clear", taskLineClear},
+		{"task_line_changed", changedTaskLine},
+		{"task_line_cleared", clearedTaskLine},
 		{"task_line_router_first_admission", routerFirstAdmissionTaskLine},
 		{"task_line_router_exhausted_mark", routerExhaustedMarkTaskLine},
 		{"subject_task", domain.Subject{Type: domain.SubjectTask, ID: "task-1", TaskID: new(domain.TaskID("task-1"))}},

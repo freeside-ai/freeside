@@ -98,6 +98,8 @@ func TestWorkflowClosureAuthenticatesLegacyHeldWorkNotices(t *testing.T) {
 				`ALTER TABLE run_hold_observations DROP COLUMN upkeep_item_id`,
 				`ALTER TABLE run_hold_observations DROP COLUMN upkeep_task_id`,
 				`DROP TABLE repository_tip_observations`,
+				`DROP TABLE task_line_changes`,
+				`DELETE FROM schema_migrations WHERE name = '0113_task_line_changes.sql'`,
 				`ALTER TABLE task_lines DROP COLUMN provenance`,
 				`DROP TABLE image_policy_adoptions`,
 				`DROP TABLE image_upkeep_refusals`,
@@ -111,7 +113,8 @@ func TestWorkflowClosureAuthenticatesLegacyHeldWorkNotices(t *testing.T) {
 					'0108_image_upkeep.sql',
 					'0109_task_submission_origin.sql',
 					'0110_image_policy_adoption.sql',
-					'0111_task_line_provenance.sql')`,
+					'0111_task_line_provenance.sql',
+					'0113_task_line_changes.sql')`,
 			} {
 				if _, err := st.db.ExecContext(ctx, statement); err != nil {
 					t.Fatal(err)
@@ -427,6 +430,8 @@ func TestWorkflowClosureMigrationDoesNotInferAuthority(t *testing.T) {
 		`ALTER TABLE run_hold_observations DROP COLUMN upkeep_item_id`,
 		`ALTER TABLE run_hold_observations DROP COLUMN upkeep_task_id`,
 		`DROP TABLE repository_tip_observations`,
+		`DROP TABLE task_line_changes`,
+		`DELETE FROM schema_migrations WHERE name = '0113_task_line_changes.sql'`,
 		`ALTER TABLE task_lines DROP COLUMN provenance`,
 		`DROP TABLE image_policy_adoptions`,
 		`DROP TABLE image_upkeep_refusals`,
@@ -440,7 +445,8 @@ func TestWorkflowClosureMigrationDoesNotInferAuthority(t *testing.T) {
 					'0108_image_upkeep.sql',
 					'0109_task_submission_origin.sql',
 					'0110_image_policy_adoption.sql',
-					'0111_task_line_provenance.sql')`,
+					'0111_task_line_provenance.sql',
+					'0113_task_line_changes.sql')`,
 	} {
 		if _, err := st.db.ExecContext(ctx, statement); err != nil {
 			t.Fatal(err)

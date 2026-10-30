@@ -14,12 +14,15 @@ func taskHistoryEvents(task domain.Task, lines []domain.TaskLine, inputs []taskT
 	events := []domain.TaskEvent{{Kind: domain.TaskEventCreated, RecordedAt: task.CreatedAt}}
 	for i, line := range lines {
 		detail := domain.TaskEventTaskLine{
-			LineID: line.ID, Role: line.Role, Agent: line.Agent, Version: line.Version,
+			LineID: line.ID, Role: line.Role, Version: line.Version,
 			Source: line.Source, Provenance: line.Provenance,
 		}
+		if !line.Cleared {
+			detail.Agent = &line.Agent
+		}
 		// The store checked each chain, so a later version's predecessor is
-		// the line just before it.
-		if line.Version > 1 {
+		// the line just before it. A cleared predecessor names no agent.
+		if line.Version > 1 && !lines[i-1].Cleared {
 			detail.SupersededAgent = &lines[i-1].Agent
 		}
 		events = append(events, domain.TaskEvent{Kind: domain.TaskEventTaskLineSet, RecordedAt: line.SetAt, Line: &detail})
