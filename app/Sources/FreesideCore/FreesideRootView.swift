@@ -346,19 +346,14 @@ public struct FreesideRootView: View {
                     let notices =
                         standingNoticesDrawInDetailColumn
                         ? standingNotices(coordinator, placement: .detailColumn) : nil
-                    // An open decision draws the notices itself, beside its
-                    // inspector, so the inspector spans the pane's height
-                    // instead of starting under them. Every other surface
-                    // takes them from the column.
-                    let decisionIsOpen = navigation.attentionSelection != nil
-                    StandingDetailColumn(notices: decisionIsOpen ? nil : notices) { topMargin in
+                    StandingDetailColumn(notices: notices) { topMargin in
                         Group {
                             if Self.showsRevokedPane(
                                 freshness: coordinator.store.freshness, path: navigation.path)
                             {
                                 RevokedPane { rePairConfirmationPresented = true }
                             } else {
-                                macDetail(coordinator, topMargin: topMargin, decisionNotices: notices)
+                                macDetail(coordinator, topMargin: topMargin)
                             }
                         }
                         .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -377,13 +372,6 @@ public struct FreesideRootView: View {
                     .help("Refresh")
                     LastUpdatedLabel(lastUpdatedAt: coordinator.lastUpdatedAt)
                     devicesButton
-                    Button {
-                        navigation.inspectorPresented.toggle()
-                    } label: {
-                        Label("Inspector", systemImage: "sidebar.trailing")
-                    }
-                    .help(
-                        navigation.inspectorPresented ? "Hide Inspector" : "Show Inspector")
                 }
             }
             .sheet(isPresented: Bindable(navigation).newTaskComposerPresented) {
@@ -551,12 +539,8 @@ public struct FreesideRootView: View {
         @ViewBuilder
         private func macDetail(
             _ coordinator: SyncCoordinator,
-            topMargin: CGFloat?,
-            decisionNotices: StandingNotices?
+            topMargin: CGFloat?
         ) -> some View {
-            // The detail closure's `decisionIsOpen` names the first branch:
-            // the column gives up the notices exactly when this view draws
-            // them, so a condition added here belongs there too.
             if let attentionSelection = navigation.attentionSelection {
                 DecisionDetailView(
                     store: coordinator.store,
@@ -566,8 +550,7 @@ public struct FreesideRootView: View {
                     onConsumeDetailsRevealRequest: consumeTechnicalDetailsRequest,
                     launchComposer: navigation.launchComposer(for: attentionSelection),
                     onConsumeLaunchComposer: navigation.consumeLaunchComposer,
-                    inspectorPresented: Bindable(navigation).inspectorPresented,
-                    standingNotices: decisionNotices,
+                    topMargin: topMargin,
                     onSelectItem: { navigation.route(to: .attentionItem($0)) },
                     tasks: coordinator.tasks,
                     onSelectTask: { navigation.route(to: .task($0)) },

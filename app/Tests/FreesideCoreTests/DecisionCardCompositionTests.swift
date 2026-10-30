@@ -293,18 +293,21 @@ import Testing
     /// A card whose only unverified keyword is a disclosure's own label has
     /// no label to carry the control, so it names no slot and the section
     /// explains itself when opened. The health card's one claim is an
-    /// attachment: macOS lists it in the inspector, and a phone folds the
-    /// supporting claims at an accessibility size.
+    /// attachment, which both platforms list in the foot; a readable claim
+    /// stays in a phone's module, which folds at an accessibility size.
     @Test func aCardWithOnlyFoldedUnverifiedKeywordsNamesNoSlot() throws {
-        let item = AttentionFixtures.fixture(type: .system_health).item
+        var item = AttentionFixtures.fixture(type: .system_health).item
         let composition = DecisionCardComposition.forType(.system_health)
         let claims = try #require(composition.modules.firstIndex(of: .claims))
 
+        #expect(composition.infoSlot(for: item, in: .init(platform: .phone)) == nil)
+        #expect(composition.infoSlot(for: item, in: .init(platform: .mac)) == nil)
+
+        item.agent_claims[0].text = .init(media_type: .text_sol_plain, content: "The daemon restarted cleanly.")
         #expect(composition.infoSlot(for: item, in: .init(platform: .phone)) == .module(claims))
         #expect(
             composition.infoSlot(
                 for: item, in: .init(platform: .phone, accessibilityLayout: true)) == nil)
-        #expect(composition.infoSlot(for: item, in: .init(platform: .mac)) == nil)
     }
 
     /// An agent-written reason under the ask is the first thing the agent
@@ -908,20 +911,34 @@ import Testing
                 <= composition.modules.count)
     }
 
-    /// R18: while the inspector is open the Mac card points at the
-    /// attachments there, whichever type it is and whether or not the
-    /// inspector's Evidence section is open, because the pointer's link opens
-    /// it. With the inspector closed only the final review, the one type
-    /// with a reviewing action, keeps its rows in the card.
+    /// The foot lists attachment claims on both platforms, so an attachment
+    /// claim renders once: never in the foot and a claims module both, and
+    /// never in neither.
     @Test(arguments: Components.Schemas.AttentionType.allCases)
-    func theMacCardPointsAtTheOpenInspectorsEvidence(type: Components.Schemas.AttentionType) {
+    func anAttachmentClaimRendersOnce(type: Components.Schemas.AttentionType) {
         let composition = DecisionCardComposition.forType(type)
-        #expect(composition.macEvidence(inspectorPresented: true, attachmentCount: 3) == .pointer)
-        #expect(composition.macEvidence(inspectorPresented: true, attachmentCount: 0) == .nothing)
-        #expect(
-            composition.macEvidence(inspectorPresented: false, attachmentCount: 3)
-                == (type == .ready_for_final_review ? .rows : .nothing))
-        #expect(composition.macEvidence(inspectorPresented: false, attachmentCount: 0) == .nothing)
+        let claims = AttentionFixtures.fixture(type: type).item.agent_claims
+        let modules = composition.modules.indices.filter { composition.modules[$0] == .claims }
+        let foot = composition.footClaims(from: claims, prominentClaimIndex: nil)
+        for platform in DecisionCardComposition.UnverifiedContext.Platform.allCases {
+            let inCard = modules.flatMap {
+                composition.claimsInCard(from: claims, at: $0, prominentClaimIndex: nil, on: platform)
+            }
+            #expect(inCard.allSatisfy { !foot.contains($0) })
+            for claim in claims where claim.text == nil && !AgentClaimLabels.isApprovalMaterial(claim.label) {
+                #expect((inCard + foot).filter { $0 == claim }.count == 1)
+            }
+        }
+    }
+
+    /// The foot draws evidence and bindings, so no composition may place
+    /// those two modules anywhere but the card's trailing supporting range,
+    /// where dropping them leaves every other module where it was.
+    @Test(arguments: Components.Schemas.AttentionType.allCases)
+    func evidenceAndDetailsOnlyTrailTheCard(type: Components.Schemas.AttentionType) {
+        let modules = DecisionCardComposition.forType(type).modules
+        #expect(Array(modules.suffix(2)) == [.evidence, .details])
+        #expect(modules.dropLast(2).allSatisfy { $0 != .evidence && $0 != .details })
     }
 
     /// Survey card 4b: the review yield is the final review's one folded
@@ -1292,7 +1309,10 @@ import Testing
             #expect(claims < rail)
             #expect(rail < composition.actionInsertionIndex)
             for platform in [DecisionCardComposition.UnverifiedContext.Platform.mac, .phone] {
-                #expect(composition.drawsClaimsInCard(at: claims, on: platform))
+                #expect(
+                    !composition.claimsInCard(
+                        from: item.agent_claims, at: claims, prominentClaimIndex: nil, on: platform
+                    ).isEmpty)
             }
             let readable = composition.claims(
                 from: item.agent_claims, at: claims, prominentClaimIndex: nil)
@@ -1744,26 +1764,28 @@ import Testing
                 == "Option 2, API first, then store, Clients move immediately.")
     }
 
-    /// The card's Evidence module points at the open inspector rather than
-    /// drawing the same attachments beside it. The pointer counts them in
-    /// the operator's words, and its link says where it leads when
-    /// VoiceOver reaches it without the count (frame 6.9).
-    @Test func theEvidencePointerCountsTheAttachmentsItStandsFor() {
-        #expect(DecisionDetailView.evidencePointerCount(1) == "1 attachment")
-        #expect(DecisionDetailView.evidencePointerCount(3) == "3 attachments")
-        #expect(DecisionDetailView.evidencePointerLinkTitle == "In inspector")
+    /// The closed foot's mono lines say what each fold holds in the
+    /// operator's words.
+    @MainActor @Test func theFootSummariesCountWhatEachFoldHolds() {
+        #expect(DecisionDetailView.footClaimsSummary(count: 1) == "1 agent claim")
+        #expect(DecisionDetailView.footClaimsSummary(count: 3) == "3 agent claims")
+        #expect(DecisionDetailView.footEvidenceSummary(count: 1) == "1 attachment · digests")
+        #expect(DecisionDetailView.footEvidenceSummary(count: 2) == "2 attachments · digests")
         #expect(
-            DecisionDetailView.evidencePointerLinkAccessibilityLabel
-                == "Show the attachments in the inspector")
+            DecisionDetailView.footBindingsSummary([
+                .init(label: "Item", value: "a"), .init(label: "Task", value: "b"),
+                .init(label: "Run", value: "c"), .init(label: "Digest", value: "d"),
+                .init(label: "Policy", value: "e"),
+            ]) == "item · task · run · digest")
     }
 
     /// A sentence disclosure's label carries no unverified register. The
-    /// inspector's `Claims` and a one-pane card's folded `Agent Claims`
+    /// foot's `Claims` and a one-pane card's folded `Agent Claims`
     /// draw the mark inside the section, so the closed disclosure says
     /// aloud that the claims are the agent's and unverified.
     @Test func aClaimsDisclosureSaysTheClaimsAreUnverified() {
         #expect(
-            DecisionDetailView.inspectorClaimsSpokenLabel(count: 2)
+            DecisionDetailView.footClaimsSpokenLabel(count: 2)
                 == "Claims, 2, unverified agent claims")
         #expect(
             DecisionDetailView.unverifiedDisclosureSpokenLabel("Agent Claims")

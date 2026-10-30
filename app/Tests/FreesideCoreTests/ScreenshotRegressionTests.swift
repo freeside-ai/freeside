@@ -1187,7 +1187,7 @@
                 if snapshot.item._type == .agent_question {
                     // Visual audit D06: the question card on both platforms
                     // and themes, and a long question with more than one
-                    // decision. Its inspector is appended last, below.
+                    // decision. Its open foot is appended last, below.
                     let name = "decision-\(snapshot.item._type.rawValue)"
                     for (suffix, width, scheme) in [
                         ("phone", CGFloat(390), ColorScheme.light),
@@ -1341,15 +1341,14 @@
                         if name == "structured" {
                             // Details carry the approval's reason, which is
                             // the same summary, in full and drawn the same.
-                            let reasonInspector = DecisionDetailView(
+                            let reasonDetail = DecisionDetailView(
                                 store: store, itemID: summarySnapshot.item.id, detailsExpanded: true,
                                 loadsAttachments: false, showsValidationProgress: false)
                             surfaces.append(
                                 Surface(
                                     name: "decision-spec_approval-summary-structured-details",
-                                    width: 360,
                                     view: AnyView(
-                                        reasonInspector.screenshotInspector(
+                                        reasonDetail.screenshotCard(
                                             summarySnapshot.item, at: dynamicTypeSize))))
                         }
                     }
@@ -1407,7 +1406,7 @@
                             width: 390,
                             view: AnyView(
                                 revisedDetail.screenshotSpecApprovalReader(
-                                    .specification, item: revised.item, asSheet: true))))
+                                    .specification, item: revised.item))))
                     surfaces.append(
                         Surface(
                             name: "decision-spec_approval-specification-reader-dark",
@@ -1423,7 +1422,7 @@
                             colorScheme: .dark,
                             view: AnyView(
                                 revisedDetail.screenshotSpecApprovalReader(
-                                    .specification, item: revised.item, asSheet: true))))
+                                    .specification, item: revised.item))))
                     surfaces.append(
                         Surface(
                             name: "decision-spec_approval-specification-reader-details",
@@ -1445,7 +1444,7 @@
                             width: 390,
                             view: AnyView(
                                 revisedDetail.screenshotSpecApprovalReader(
-                                    .diff, item: revised.item, asSheet: true))))
+                                    .diff, item: revised.item))))
                     surfaces.append(
                         Surface(
                             name: "decision-spec_approval-diff-reader-dark",
@@ -1461,7 +1460,7 @@
                             colorScheme: .dark,
                             view: AnyView(
                                 revisedDetail.screenshotSpecApprovalReader(
-                                    .diff, item: revised.item, asSheet: true))))
+                                    .diff, item: revised.item))))
                 }
 
                 if snapshot.item._type == .finding_adjudication {
@@ -1529,7 +1528,7 @@
                         }
                     }
                     // The card carries this item's commit-plan fact, so the
-                    // inspector beside it must not repeat a Facts section.
+                    // card's foot must not repeat a Facts section.
                     let readyPreferencesSuite = "FreesideScreenshotReadyPreferences-\(UUID().uuidString)"
                     guard let readyDefaults = UserDefaults(suiteName: readyPreferencesSuite)
                     else {
@@ -1540,57 +1539,21 @@
                     readyPreferences.claimsExpanded = true
                     readyPreferences.evidenceExpanded = true
                     readyPreferences.detailsExpanded = true
-                    let readyInspector = DecisionDetailView(
-                        store: store,
-                        itemID: snapshot.item.id,
-                        loadsAttachments: false,
-                        showsValidationProgress: false,
-                        sectionPreferences: readyPreferences)
-                    surfaces.append(
-                        Surface(
-                            name: "decision-ready_for_final_review-inspector",
-                            width: 360,
-                            view: AnyView(
-                                readyInspector.screenshotInspector(
-                                    snapshot.item,
-                                    at: dynamicTypeSize))))
-                    // The card with the inspector open and the inspector's
-                    // Evidence disclosure open with it, which is the state
-                    // the pointer row exists for: the packet is being drawn
-                    // beside the card, so the card's own Evidence module
-                    // stands down to "N attachments → inspector" (#1107).
-                    // Only the evidence preference is raised here, so this
-                    // surface differs from decision-ready_for_final_review
-                    // in exactly the module under test; with the default
-                    // preferences the
-                    // inspector shows nothing and the card keeps its rows, so
-                    // recording that state would pin a card identical to the
-                    // one above and catch no pointer regression at all.
-                    let openEvidenceSuite = "FreesideScreenshotReadyInspectorOpenPreferences-\(UUID().uuidString)"
-                    guard let openEvidenceDefaults = UserDefaults(suiteName: openEvidenceSuite)
-                    else {
-                        throw ScreenshotError.preferencesUnavailable
-                    }
-                    defer { openEvidenceDefaults.removePersistentDomain(forName: openEvidenceSuite) }
-                    let openEvidencePreferences = DecisionSectionPreferences(
-                        defaults: openEvidenceDefaults)
-                    openEvidencePreferences.evidenceExpanded = true
-                    let readyInspectorOpen = DecisionDetailView(
+                    let readyFoot = DecisionDetailView(
                         store: store,
                         itemID: snapshot.item.id,
                         graphics: graphics,
                         loadsAttachments: false,
                         showsValidationProgress: false,
                         now: screenshotNow,
-                        sectionPreferences: openEvidencePreferences)
+                        sectionPreferences: readyPreferences)
                     surfaces.append(
                         Surface(
-                            name: "decision-ready_for_final_review-inspector-open",
+                            name: "decision-ready_for_final_review-foot",
                             view: AnyView(
-                                readyInspectorOpen.screenshotCard(
+                                readyFoot.screenshotCard(
                                     snapshot.item,
-                                    at: dynamicTypeSize,
-                                    inspectorPresented: true))))
+                                    at: dynamicTypeSize))))
                     // A verdict the daemon invalidated (issue #982), rendered
                     // stale beside the bound and observed heads (frame 7.3),
                     // and the other staleness axis (the base watch) on the
@@ -1701,21 +1664,22 @@
                         throw ScreenshotError.preferencesUnavailable
                     }
                     defer { preferencesDefaults.removePersistentDomain(forName: preferencesSuite) }
-                    let inspectorPreferences = DecisionSectionPreferences(
+                    let footPreferences = DecisionSectionPreferences(
                         defaults: preferencesDefaults)
-                    inspectorPreferences.detailsExpanded = true
-                    let inspectorDetail = DecisionDetailView(
+                    footPreferences.detailsExpanded = true
+                    let footDetail = DecisionDetailView(
                         store: store,
                         itemID: snapshot.item.id,
+                        graphics: graphics,
                         loadsAttachments: false,
                         showsValidationProgress: false,
-                        sectionPreferences: inspectorPreferences)
+                        now: screenshotNow,
+                        sectionPreferences: footPreferences)
                     surfaces.append(
                         Surface(
-                            name: "decision-review_diminishing_returns-inspector",
-                            width: 360,
+                            name: "decision-review_diminishing_returns-foot",
                             view: AnyView(
-                                inspectorDetail.screenshotInspector(
+                                footDetail.screenshotCard(
                                     snapshot.item,
                                     at: dynamicTypeSize))))
                 }
@@ -1731,20 +1695,20 @@
                 loadsAttachments: false,
                 showsValidationProgress: false
             )
-            let preferencesSuite = "FreesideScreenshotInspectorPreferences-\(UUID().uuidString)"
+            let preferencesSuite = "FreesideScreenshotFootPreferences-\(UUID().uuidString)"
             guard let preferencesDefaults = UserDefaults(suiteName: preferencesSuite) else {
                 throw ScreenshotError.preferencesUnavailable
             }
             defer { preferencesDefaults.removePersistentDomain(forName: preferencesSuite) }
-            let inspectorPreferences = DecisionSectionPreferences(defaults: preferencesDefaults)
-            inspectorPreferences.claimsExpanded = true
-            inspectorPreferences.evidenceExpanded = true
-            inspectorPreferences.detailsExpanded = true
-            let inspectorDetail = DecisionDetailView(
+            let footPreferences = DecisionSectionPreferences(defaults: preferencesDefaults)
+            footPreferences.claimsExpanded = true
+            footPreferences.evidenceExpanded = true
+            footPreferences.detailsExpanded = true
+            let footDetail = DecisionDetailView(
                 store: store,
                 itemID: adjudication.id,
                 showsValidationProgress: false,
-                sectionPreferences: inspectorPreferences)
+                sectionPreferences: footPreferences)
             // The same surface without the item's recommendation: every
             // requested action is offered with equal weight, and offer order
             // carries no endorsement.
@@ -1797,12 +1761,20 @@
             }
             surfaces.append(
                 Surface(
-                    name: "decision-finding_adjudication-inspector",
-                    width: 360,
+                    name: "decision-finding_adjudication-foot",
                     view: AnyView(
-                        inspectorDetail.screenshotInspector(
+                        footDetail.screenshotCard(
                             adjudication,
                             at: dynamicTypeSize))))
+            surfaces.append(
+                Surface(
+                    name: "decision-finding_adjudication-foot-phone",
+                    width: 390,
+                    view: AnyView(
+                        footDetail.screenshotCard(
+                            adjudication,
+                            at: dynamicTypeSize,
+                            compactLayout: true))))
 
             // A daemon-policy recommendation whose action is destructive: the
             // card must lead with it in the fact register and still demand the
@@ -3272,7 +3244,7 @@
             // themes with the positions the screenshot graphics supply, then
             // the shape production sends, which has no positions: one claim
             // with its text, and one that arrived as an attachment. These
-            // render after the surfaces above for the reason the inspectors
+            // render after the surfaces above for the reason the open feet
             // below do.
             if let snapshot = inbox.first(where: { $0.item._type == .review_dispute }) {
                 let detail = DecisionDetailView(
@@ -3428,17 +3400,17 @@
                                 untyped, at: dynamicTypeSize, compactLayout: true))))
             }
 
-            // The question and dispute cards' inspectors (visual audit D06,
-            // D08), which keep their layout and change only their label. They
+            // The question and dispute cards with their foot open (visual
+            // audit D06, D08). They
             // render after every other surface: a glyph's antialiasing
             // depends on what was rasterized before it (#1698), and drawing
-            // one ahead of the final-review inspector moved one of that
-            // surface's pixels.
+            // one ahead of the final-review foot moved one of that surface's
+            // pixels.
             for type in [Components.Schemas.AttentionType.agent_question, .review_dispute] {
                 guard let item = inbox.first(where: { $0.item._type == type })?.item else {
                     continue
                 }
-                let suite = "FreesideScreenshotCardInspectorPreferences-\(UUID().uuidString)"
+                let suite = "FreesideScreenshotCardFootPreferences-\(UUID().uuidString)"
                 guard let defaults = UserDefaults(suiteName: suite) else {
                     throw ScreenshotError.preferencesUnavailable
                 }
@@ -3447,18 +3419,18 @@
                 preferences.claimsExpanded = true
                 preferences.evidenceExpanded = true
                 preferences.detailsExpanded = true
-                let inspector = DecisionDetailView(
+                let foot = DecisionDetailView(
                     store: store,
                     itemID: item.id,
+                    graphics: graphicPresentations(for: item),
                     loadsAttachments: false,
                     showsValidationProgress: false,
+                    now: screenshotNow,
                     sectionPreferences: preferences)
                 surfaces.append(
                     Surface(
-                        name: "decision-\(type.rawValue)-inspector",
-                        width: 360,
-                        view: AnyView(
-                            inspector.screenshotInspector(item, at: dynamicTypeSize))))
+                        name: "decision-\(type.rawValue)-foot",
+                        view: AnyView(foot.screenshotCard(item, at: dynamicTypeSize))))
             }
 
             // The per-finding card (visual audit D09) with messages of the
@@ -3466,7 +3438,7 @@
             // appearances, and the phone card with one finding open. Each
             // card shows its whole message, so the card is pinned with text
             // that wraps (#1033, #1141). Appended last for the same reason
-            // as the inspectors above.
+            // as the open feet above.
             let realisticFindings = AttentionFixtures.findingAdjudicationRealisticMessages().item
             let findingsDetail = DecisionDetailView(
                 store: store,
@@ -3539,11 +3511,10 @@
                                 preferences: screenshotListPreferences()
                             ).screenshotContent(now: screenshotNow))))
             }
-            // Frame 6.9 (R18): the finding card with the inspector open, and
-            // that inspector, by day and by dusk. The item carries the frame's three attachments and
-            // two attachment claims, so the pointer row and both counts have
-            // something to count, and the inspector opens Evidence and its
-            // bindings and leaves Claims closed, as the frame draws it.
+            // The finding card's foot by day and by dusk, with three
+            // attachments and two attachment claims so both counts have
+            // something to count, Evidence and Technical Bindings open and
+            // Claims closed.
             // Drawn last, for the reason given above (#1698).
             var framed = adjudication
             var report = try #require(framed.evidence_snapshot.first)
@@ -3564,7 +3535,7 @@
             reviewerLog.artifact_id = "art-reviewer-log-finding_adjudication"
             reviewerLog.digest = "sha256:reviewer-log-finding_adjudication"
             framed.agent_claims.append(reviewerLog)
-            let framedSuite = "FreesideScreenshotFramedInspectorPreferences-\(UUID().uuidString)"
+            let framedSuite = "FreesideScreenshotFramedFootPreferences-\(UUID().uuidString)"
             guard let framedDefaults = UserDefaults(suiteName: framedSuite) else {
                 throw ScreenshotError.preferencesUnavailable
             }
@@ -3581,18 +3552,10 @@
             for (suffix, colorScheme) in [("", ColorScheme.light), ("-dark", .dark)] {
                 surfaces.append(
                     Surface(
-                        name: "decision-finding_adjudication-inspector-open\(suffix)",
+                        name: "decision-finding_adjudication-foot-attachments\(suffix)",
                         colorScheme: colorScheme,
                         view: AnyView(
-                            framedDetail.screenshotCard(
-                                framed, at: dynamicTypeSize, inspectorPresented: true))))
-                surfaces.append(
-                    Surface(
-                        name: "decision-finding_adjudication-frame-inspector\(suffix)",
-                        width: 360,
-                        colorScheme: colorScheme,
-                        view: AnyView(
-                            framedDetail.screenshotInspector(framed, at: dynamicTypeSize))))
+                            framedDetail.screenshotCard(framed, at: dynamicTypeSize))))
             }
             // The two pointer states no other surface can draw: the first
             // control with a segment hovered, the second with one pressed.
@@ -3716,8 +3679,7 @@
                     view: AnyView(
                         PairingView(model: pairing) { _ in }.screenshotContent(
                             now: pairingFacts.code_expires_at.addingTimeInterval(-45)))))
-            // The readers at the inspector's two narrow widths, where the
-            // header row shortens its keyword, and the diff with its later
+            // The readers at two narrow widths, and the diff with its later
             // hunks open.
             let paneRevised = AttentionFixtures.revisedSpecification()
             let paneStore = InboxStore(client: client)

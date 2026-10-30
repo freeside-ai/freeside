@@ -135,16 +135,6 @@ import Testing
         #expect(navigation.path.isEmpty)
     }
 
-    @Test func launchExpandedDetailsAlsoOpensTheSharedInspector() {
-        let navigation = NavigationModel(
-            launchInputs: LaunchInputs(
-                colorSchemeRaw: nil,
-                selectionRaw: "item-spec_approval",
-                detailsExpanded: true))
-
-        #expect(navigation.inspectorPresented)
-    }
-
     @Test func oneRouteHoldsAnItemOrATaskNeverBoth() {
         let navigation = NavigationModel(
             launchInputs: LaunchInputs(

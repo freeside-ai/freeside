@@ -1364,7 +1364,7 @@ package enum AttentionDisplay {
     }
 
     /// A revision shortened for a card row to the eight characters every
-    /// binding line uses; the inspector keeps the full daemon value. Only a
+    /// binding line uses; Technical Bindings keeps the full daemon value. Only a
     /// hex object name is abbreviated. The other
     /// coordinates a readiness invalidation carries on its axis, a base ref
     /// and a "repository_id#pr_number" identity, put their meaning in the

@@ -39,7 +39,6 @@ public final class NavigationModel {
     /// one that a cold start's cached list hasn't caught up to, and the card
     /// shows either from canonical state. Leaving the card ends it.
     public private(set) var linkedItemID: String?
-    public var inspectorPresented: Bool
     /// The New Task composer's presentation flag, shared by the list's tools
     /// row, ⌘N, and the File > New Task menu item, so all three open the one
     /// sheet through the same gated path.
@@ -57,7 +56,6 @@ public final class NavigationModel {
 
     public init(launchInputs: LaunchInputs) {
         path = []
-        inspectorPresented = launchInputs.detailsExpanded
         devicesPresented = launchInputs.devicesPresented
         // `LaunchInputs` leaves the composer nil without an item selection.
         if case .attentionItem(let itemID)? = launchInputs.selection {

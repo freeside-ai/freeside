@@ -266,8 +266,6 @@ private struct FreesideAppCommands: Commands {
 
     private func isDisabled(_ action: FreesideCommandAction) -> Bool {
         switch action {
-        case .toggleInspector:
-            false
         case .refresh:
             coordinator == nil
         case .nextItem, .previousItem:
@@ -286,8 +284,6 @@ private struct FreesideAppCommands: Commands {
         case .refresh:
             guard let coordinator else { return }
             Task { await coordinator.refresh() }
-        case .toggleInspector:
-            navigation.inspectorPresented.toggle()
         case .nextItem:
             guard let coordinator else { return }
             navigation.moveAttentionSelection(by: 1, coordinator: coordinator)

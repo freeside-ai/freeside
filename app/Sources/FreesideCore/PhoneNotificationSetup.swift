@@ -42,8 +42,16 @@ struct PhoneNotificationSetup: View {
                     if !subscription.usesHostedServer {
                         // The copy control draws in a screenshot too: a touch
                         // platform has no hover to reveal it.
-                        TechnicalDetailRow(
-                            row: .init(label: "Server", value: subscription.serverURL), stacksAlways: true)
+                        HStack(alignment: .firstTextBaseline, spacing: 10) {
+                            StackedFact(label: "Server") {
+                                Text(subscription.serverURL)
+                                    .font(FreesideFont.monoValue)
+                                    .foregroundStyle(Color.inkDim)
+                            }
+                            .textSelection(.enabled)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                            CopyValueButton(value: subscription.serverURL, spokenLabel: "Copy Server")
+                        }
                     }
                     Button(copiedTopic ? "Topic Copied" : "Copy Topic") {
                         Clipboard.copy(subscription.topic)
