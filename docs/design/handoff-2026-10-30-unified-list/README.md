@@ -81,18 +81,18 @@ Screenshot digests re-recorded per PR for the surfaces it names, both appearance
 
 ## ◆ Gate
 
-**Decide first, daemon-side, before PR 2:** should a task be allowed more than one open attention item? Most second items are the daemon raising again because the first was not answered. If the answer is one-per-task (the newest supersedes and folds the older one's content in), then ◆1, the Decisions chip and menu, the one-line item rows and the "N open decisions" status line are not built. Out of this handoff's scope; it decides how much of PR 2 exists.
+**Decide first, daemon-side, before PR 2:** should a task be allowed more than one open attention item? Most second items are the daemon raising again because the first was not answered. If the answer is one-per-task (the newest supersedes and folds the older one's content in), then ◆1, the Decisions chip and menu, the one-line item rows and the "N open decisions" status line are not built. Out of this handoff's scope; it decides how much of PR 2 exists. **Decided 30 Oct (owner):** more than one, as the daemon allows today; revisit if it proves a usability problem. PR 2 builds the Decisions chip and menu, the one-line item rows and the status-line count.
 
-**Verify before PR 1:** the client has the snooze-until time for a snoozed proposal (◆2 needs it in the context line). If it is daemon-only, ◆2 waits on a contract unit.
+**Verify before PR 1:** the client has the snooze-until time for a snoozed proposal (◆2 needs it in the context line). If it is daemon-only, ◆2 waits on a contract unit. **Verified 30 Oct:** it is daemon-only. The daemon drops a snoozed item from the sync snapshot and no sync field carries the instant, so ◆2 waits on a contract unit; the owner deferred it (no contract issue filed) and the row shows no time.
 
-Nothing behind a ◆ lands until the owner marks it decided here. Six open; defaults drawn:
+Nothing behind a ◆ lands until the owner marks it decided here. Three decided on 30 Oct, three open; defaults drawn:
 
 1. **Multi-item row** — newest item's type as keyword, no count; the newest card leads. Alternatives: an accent `2 Open` chip; `2 findings` in the context line. Moot if one-per-task.
-2. **Snoozed proposal** — snooze exists only on `task_proposal` / `effect_proposal` (SURFACES open question 5). Its task moves to Working under `Snoozed`, context `Back at <time>`, returns to Needs you when the snooze ends.
+2. **Snoozed proposal** — snooze exists only on `task_proposal` / `effect_proposal` (SURFACES open question 5). Its task moves to Working under `Snoozed`, context `Back at <time>`, returns to Needs you when the snooze ends. **Deferred (owner, 30 Oct):** build nothing; a snoozed proposal leaves the list while snoozed, as today, and its task rows under Working by its stage.
 3. **Pinning** — none this round.
-4. **Naming** — Needs you / Working / Finished. Alternatives: Attention / Active / Done; Inbox / Running / Finished.
+4. **Naming** — Needs you / Working / Finished. Alternatives: Attention / Active / Done; Inbox / Running / Finished. **Decided (owner, 30 Oct): as drawn.**
 5. **Outline trailing slot** — empty.
-6. **Items without a task** — rows in Needs you; system-scoped survive the filter; closed ones row in Finished. Alternative: a System page under Settings.
+6. **Items without a task** — rows in Needs you; system-scoped survive the filter; closed ones row in Finished. Alternative: a System page under Settings. **Decided (owner, 30 Oct): as drawn.**
 
 ## Still the owner's (do not settle)
 
