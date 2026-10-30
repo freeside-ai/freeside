@@ -106,10 +106,6 @@ func TestAuthIdentityFieldsCrossChecked(t *testing.T) {
 		stmt string
 	}{
 		{
-			"limit raised in the body alone",
-			`UPDATE auth_identities SET body = json_set(body, '$.identity.max_parallel_executions', 8) WHERE id = 'auth-1'`,
-		},
-		{
 			"refresh strategy rewritten in the body alone",
 			`UPDATE auth_identities SET body = json_set(body, '$.identity.interim.refresh_strategy', 'refresh_external') WHERE id = 'auth-1'`,
 		},
@@ -133,8 +129,7 @@ func TestAuthIdentityFieldsCrossChecked(t *testing.T) {
 			s := openTemplateStoreAt(t, filepath.Join(t.TempDir(), "store.db"), Options{})
 			identity := domain.AuthIdentity{
 				ID: "auth-1", Provider: "claude", AuthStoreMutationLease: true,
-				MaxParallelExecutions: 1,
-				Interim:               domain.InterimClientFacts{AuthStoreVolume: "provider-cred", RefreshStrategy: domain.RefreshOnDemand},
+				Interim: domain.InterimClientFacts{AuthStoreVolume: "provider-cred", RefreshStrategy: domain.RefreshOnDemand},
 			}
 			if err := s.WriteInternal(ctx, func(tx *InternalTx) error {
 				return tx.RecordAuthIdentity(ctx, identity, time.Date(2026, 1, 2, 3, 4, 5, 0, time.UTC))

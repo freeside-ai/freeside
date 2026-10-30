@@ -1,0 +1,10 @@
+{
+  "run_id": "run-1",
+  "invocation_id": "inv-1",
+  "reason": "usage_pool_exhausted",
+  "detail": null,
+  "image_upkeep": null,
+  "usage_pool": "claude-owner-subscription",
+  "first_observed_at": "2026-01-02T03:05:05Z",
+  "last_observed_at": "2026-01-02T03:06:05Z"
+}

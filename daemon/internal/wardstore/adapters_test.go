@@ -27,8 +27,7 @@ func TestAdaptersRoundTripAcrossStoreReopen(t *testing.T) {
 	st := storetest.Open(t, path, store.Options{})
 	identity := domain.AuthIdentity{
 		ID: "auth-1", Provider: "claude", AuthStoreMutationLease: true,
-		MaxParallelExecutions: 1,
-		Interim:               domain.InterimClientFacts{AuthStoreVolume: "provider-cred", RefreshStrategy: domain.RefreshOnDemand},
+		Interim: domain.InterimClientFacts{AuthStoreVolume: "provider-cred", RefreshStrategy: domain.RefreshOnDemand},
 	}
 	if err := st.WriteInternal(ctx, func(tx *store.InternalTx) error {
 		return tx.RecordAuthIdentity(ctx, identity, at)
@@ -131,7 +130,7 @@ func TestLeaserHeldMutationBlocksExpiredTakeoverUntilFilesystemMutationReturns(t
 	st := storetest.Open(t, path, store.Options{})
 	at := time.Date(2026, 8, 11, 20, 0, 0, 0, time.UTC)
 	identity := domain.AuthIdentity{
-		ID: "codex-atomic-mutation", Provider: "openai", AuthStoreMutationLease: true, MaxParallelExecutions: 1,
+		ID: "codex-atomic-mutation", Provider: "openai", AuthStoreMutationLease: true,
 		Interim: domain.InterimClientFacts{AuthStoreVolume: "codex-auth", RefreshStrategy: domain.RefreshOnDemand, SupportsReadOnlyAuthSnapshot: true},
 	}
 	if err := st.WriteInternal(ctx, func(tx *store.InternalTx) error {
@@ -426,8 +425,7 @@ func TestLeaserExcludesConcurrentHolderAndMapsEndedWindow(t *testing.T) {
 	at := time.Date(2026, 7, 28, 12, 0, 0, 0, time.UTC)
 	identity := domain.AuthIdentity{
 		ID: "auth-1", Provider: "claude", AuthStoreMutationLease: true,
-		MaxParallelExecutions: 1,
-		Interim:               domain.InterimClientFacts{AuthStoreVolume: "provider-cred", RefreshStrategy: domain.RefreshOnDemand},
+		Interim: domain.InterimClientFacts{AuthStoreVolume: "provider-cred", RefreshStrategy: domain.RefreshOnDemand},
 	}
 	if err := st.WriteInternal(ctx, func(tx *store.InternalTx) error {
 		return tx.RecordAuthIdentity(ctx, identity, at)
@@ -464,7 +462,7 @@ func TestEnrollmentAdapterCreatesExclusiveRecoverableOperation(t *testing.T) {
 	}
 	at := time.Date(2026, 8, 11, 12, 0, 0, 0, time.UTC)
 	identity := domain.AuthIdentity{
-		ID: "codex-enrollment", Provider: "openai", AuthStoreMutationLease: true, MaxParallelExecutions: 1,
+		ID: "codex-enrollment", Provider: "openai", AuthStoreMutationLease: true,
 		Interim: domain.InterimClientFacts{AuthStoreVolume: "/private/auth/codex.json", RefreshStrategy: domain.RefreshOnDemand, SupportsReadOnlyAuthSnapshot: true},
 	}
 	lease, err := adapters.Enrollment.Begin(
@@ -531,7 +529,7 @@ func TestEnrollmentAdapterRefusesChangedIdentityBindings(t *testing.T) {
 	}
 	at := time.Date(2026, 8, 11, 12, 0, 0, 0, time.UTC)
 	stored := domain.AuthIdentity{
-		ID: "codex-fixed", Provider: "openai", AuthStoreMutationLease: true, MaxParallelExecutions: 1,
+		ID: "codex-fixed", Provider: "openai", AuthStoreMutationLease: true,
 		Interim: domain.InterimClientFacts{AuthStoreVolume: "/private/auth/original.json", RefreshStrategy: domain.RefreshOnDemand, SupportsReadOnlyAuthSnapshot: true},
 	}
 	if err := st.WriteInternal(ctx, func(tx *store.InternalTx) error {
@@ -670,7 +668,7 @@ func TestCodexAuthStateRequiresVerifiedCommandBackedRecovery(t *testing.T) {
 	}
 	at := time.Date(2026, 8, 11, 1, 2, 3, 0, time.UTC)
 	identity := domain.AuthIdentity{
-		ID: "codex-primary", Provider: "codex", AuthStoreMutationLease: true, MaxParallelExecutions: 1,
+		ID: "codex-primary", Provider: "codex", AuthStoreMutationLease: true,
 		Interim: domain.InterimClientFacts{AuthStoreVolume: "codex-auth", RefreshStrategy: domain.RefreshOnDemand},
 	}
 	run := domain.Run{
@@ -813,7 +811,7 @@ func TestFailedCodexReenrollmentCannotProjectOrClearAdmission(t *testing.T) {
 	}
 	at := time.Date(2026, 8, 11, 1, 2, 3, 0, time.UTC)
 	identity := domain.AuthIdentity{
-		ID: "codex-failed", Provider: "codex", AuthStoreMutationLease: true, MaxParallelExecutions: 1,
+		ID: "codex-failed", Provider: "codex", AuthStoreMutationLease: true,
 		Interim: domain.InterimClientFacts{AuthStoreVolume: "codex-auth-failed", RefreshStrategy: domain.RefreshOnDemand},
 	}
 	run := domain.Run{
@@ -872,7 +870,7 @@ func TestCodexReenrollmentOperationCannotCrossMarkerOccurrences(t *testing.T) {
 	}
 	at := time.Date(2026, 8, 11, 1, 2, 3, 0, time.UTC)
 	identity := domain.AuthIdentity{
-		ID: "codex-occurrence", Provider: "codex", AuthStoreMutationLease: true, MaxParallelExecutions: 1,
+		ID: "codex-occurrence", Provider: "codex", AuthStoreMutationLease: true,
 		Interim: domain.InterimClientFacts{AuthStoreVolume: "codex-auth-occurrence", RefreshStrategy: domain.RefreshOnDemand},
 	}
 	run := domain.Run{
@@ -1098,8 +1096,7 @@ func TestReadHoldAdaptersShareIdentityAndExcludeTheLease(t *testing.T) {
 	at := time.Date(2026, 9, 29, 12, 0, 0, 0, time.UTC)
 	identity := domain.AuthIdentity{
 		ID: "auth-1", Provider: "claude", AuthStoreMutationLease: true,
-		MaxParallelExecutions: 2,
-		Interim:               domain.InterimClientFacts{AuthStoreVolume: "provider-cred", RefreshStrategy: domain.RefreshOnDemand},
+		Interim: domain.InterimClientFacts{AuthStoreVolume: "provider-cred", RefreshStrategy: domain.RefreshOnDemand},
 	}
 	if err := st.WriteInternal(ctx, func(tx *store.InternalTx) error {
 		return tx.RecordAuthIdentity(ctx, identity, at)

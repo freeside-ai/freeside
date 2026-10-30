@@ -333,7 +333,7 @@ func TestObserveSnapshotProjectsLineageAdmissionAndActionableAttention(t *testin
 		t.Fatalf("NewAutomationTrustProfile: %v", err)
 	}
 	identity := domain.AuthIdentity{
-		ID: "auth-snapshot", Provider: "claude", AuthStoreMutationLease: true, MaxParallelExecutions: 1,
+		ID: "auth-snapshot", Provider: "claude", AuthStoreMutationLease: true,
 		Interim: domain.InterimClientFacts{AuthStoreVolume: "provider-cred", RefreshStrategy: domain.RefreshOnDemand},
 	}
 	identityID := identity.ID

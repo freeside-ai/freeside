@@ -50,8 +50,7 @@ func recordProjectAdmission(
 		}
 		return tx.RecordAuthIdentity(ctx, domain.AuthIdentity{
 			ID: identityID, Provider: "claude", AuthStoreMutationLease: true,
-			MaxParallelExecutions: 1,
-			Interim:               domain.InterimClientFacts{AuthStoreVolume: "provider-cred", RefreshStrategy: domain.RefreshOnDemand},
+			Interim: domain.InterimClientFacts{AuthStoreVolume: "provider-cred", RefreshStrategy: domain.RefreshOnDemand},
 		}, template.AdmittedAt)
 	}); err != nil {
 		t.Fatalf("put run %q: %v", runID, err)

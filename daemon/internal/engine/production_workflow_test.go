@@ -46,7 +46,6 @@ func TestProductionDeliveryRefusalRecordsStandardOutcome(t *testing.T) {
 	stageID := remediationStageID(runID, 1)
 	identity := domain.AuthIdentity{
 		ID: "auth-delivery-refusal", Provider: "claude", AuthStoreMutationLease: true,
-		MaxParallelExecutions: 1,
 		Interim: domain.InterimClientFacts{
 			AuthStoreVolume: "provider-cred", RefreshStrategy: domain.RefreshOnDemand,
 		},
@@ -118,7 +117,7 @@ func TestProductionDeliveryRefusalRecordsStandardOutcome(t *testing.T) {
 		if outcome.Status != domain.ExecutionOutcomeFailed || outcome.AdmissionID != admission.ID {
 			return fmt.Errorf("delivery refusal outcome = %#v", outcome)
 		}
-		active, err := tx.ActiveIdentityExecutionCount(ctx, identity.ID)
+		active, err := tx.ActiveUsagePoolExecutionCount(ctx, identity.EffectiveUsagePool())
 		if err != nil {
 			return err
 		}

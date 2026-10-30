@@ -156,6 +156,7 @@ func forgetRetireBlockedItems(t *testing.T, ctx context.Context, db *sql.DB) {
 	if _, err := db.ExecContext(ctx, `ALTER TABLE run_hold_observations DROP COLUMN upkeep_task_id`); err != nil {
 		t.Fatal(err)
 	}
+	rewindUsagePools(t, ctx, db)
 	if _, err := db.ExecContext(ctx, `DROP TABLE repository_tip_observations`); err != nil {
 		t.Fatal(err)
 	}

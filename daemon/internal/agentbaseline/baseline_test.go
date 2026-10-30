@@ -33,7 +33,7 @@ func claudeRecords() (domain.ClientEnrollment, domain.AuthIdentity) {
 			AccountBinding: "operator@example.com",
 		}, domain.AuthIdentity{
 			ID: "claude-a", Provider: "claude", AuthStoreMutationLease: true,
-			MaxParallelExecutions: 1, Enabled: true, AccountBinding: "operator@example.com", CostOwner: "operator",
+			Enabled: true, AccountBinding: "operator@example.com", CostOwner: "operator",
 			Interim: domain.InterimClientFacts{AuthStoreVolume: "claude-cred", RefreshStrategy: domain.RefreshOnDemand},
 		}
 }
@@ -47,7 +47,7 @@ func codexRecords() (domain.ClientEnrollment, domain.AuthIdentity) {
 			AccountBinding: "acct-1",
 		}, domain.AuthIdentity{
 			ID: "codex-a", Provider: "openai", AuthStoreMutationLease: true,
-			MaxParallelExecutions: 1, Enabled: true, AccountBinding: "acct-1", CostOwner: "operator",
+			Enabled: true, AccountBinding: "acct-1", CostOwner: "operator",
 			Interim: domain.InterimClientFacts{
 				AuthStoreVolume: "/private/auth.json", RefreshStrategy: domain.RefreshOnDemand,
 				SupportsReadOnlyAuthSnapshot: true,

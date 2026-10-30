@@ -353,7 +353,8 @@ FROM client_enrollment_generations`
 			entry.Name() == "0108_image_upkeep.sql" ||
 			entry.Name() == "0109_task_submission_origin.sql" ||
 			entry.Name() == "0110_image_policy_adoption.sql" ||
-			entry.Name() == "0111_task_line_provenance.sql" || entry.IsDir() {
+			entry.Name() == "0111_task_line_provenance.sql" ||
+			entry.Name() == "0112_usage_pools.sql" || entry.IsDir() {
 			continue
 		}
 		body, err := fs.ReadFile(migrations.FS, entry.Name())
@@ -375,7 +376,14 @@ FROM client_enrollment_generations`
 	}
 	for _, statement := range []string{
 		`ATTACH DATABASE '` + sourcePath + `' AS source`,
-		`INSERT INTO auth_identities SELECT * FROM source.auth_identities`,
+		`INSERT INTO auth_identities
+			(id, provider, account_binding, usage_pool, budget, auth_store_mutation_lease,
+			 auth_store_volume, max_parallel_executions, refresh_strategy,
+			 supports_read_only_auth_snapshot, enabled, cost_owner, recorded_at, body)
+			SELECT id, provider, account_binding, usage_pool, budget, auth_store_mutation_lease,
+			 auth_store_volume, 1, refresh_strategy,
+			 supports_read_only_auth_snapshot, enabled, cost_owner, recorded_at, body
+			FROM source.auth_identities`,
 		`INSERT INTO client_enrollments SELECT * FROM source.client_enrollments`,
 		`INSERT INTO client_enrollment_generations SELECT * FROM source.client_enrollment_generations`,
 		`DETACH DATABASE source`,

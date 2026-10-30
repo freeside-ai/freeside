@@ -125,7 +125,6 @@ func seedScenarioRecords(
 ) error {
 	identity := domain.AuthIdentity{
 		ID: scenarioIdentityID, Provider: "claude", AuthStoreMutationLease: true,
-		MaxParallelExecutions: 4,
 		Interim: domain.InterimClientFacts{
 			AuthStoreVolume: "scenario-credentials", RefreshStrategy: domain.RefreshOnDemand,
 		},
@@ -141,6 +140,11 @@ func seedScenarioRecords(
 		if _, err := tx.LatestTrustProfile(ctx, scenarioRepo); err == nil {
 			return nil
 		} else if !errors.Is(err, store.ErrNotFound) {
+			return err
+		}
+		if err := tx.RecordUsagePool(ctx, domain.UsagePool{
+			ID: identity.EffectiveUsagePool(), Provider: identity.Provider, MaxParallelExecutions: 4,
+		}, now); err != nil {
 			return err
 		}
 		if err := tx.RecordAuthIdentity(ctx, identity, now); err != nil {

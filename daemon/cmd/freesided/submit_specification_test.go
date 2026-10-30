@@ -134,10 +134,10 @@ func testSubmitCommandSpecificationDigest(
 		}); err != nil {
 			return err
 		}
-		return tx.RecordAuthIdentity(t.Context(), domain.AuthIdentity{
-			ID: "auth-submit", Provider: "codex", AuthStoreMutationLease: true, MaxParallelExecutions: 2,
+		return storetest.RecordIdentityOnPool(t.Context(), &tx.InternalTx, domain.AuthIdentity{
+			ID: "auth-submit", Provider: "codex", AuthStoreMutationLease: true,
 			Interim: domain.InterimClientFacts{AuthStoreVolume: "provider-credentials", RefreshStrategy: domain.RefreshOnDemand},
-		}, now)
+		}, 64, now)
 	}); err != nil {
 		t.Fatal(err)
 	}

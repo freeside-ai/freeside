@@ -11,8 +11,7 @@ import (
 func authIdentity() domain.AuthIdentity {
 	return domain.AuthIdentity{
 		ID: "auth-1", Provider: "claude", AuthStoreMutationLease: true,
-		MaxParallelExecutions: 1,
-		Interim:               domain.InterimClientFacts{AuthStoreVolume: "provider-cred", RefreshStrategy: domain.RefreshOnDemand},
+		Interim: domain.InterimClientFacts{AuthStoreVolume: "provider-cred", RefreshStrategy: domain.RefreshOnDemand},
 	}
 }
 
@@ -28,7 +27,6 @@ func TestAuthIdentityValidate(t *testing.T) {
 		{"leased without auth-store volume", func(i *domain.AuthIdentity) {
 			i.Interim.AuthStoreVolume = ""
 		}, domain.ErrEmptyField},
-		{"zero parallelism", func(i *domain.AuthIdentity) { i.MaxParallelExecutions = 0 }, domain.ErrNonPositive},
 		{"unknown refresh strategy", func(i *domain.AuthIdentity) {
 			i.Interim.RefreshStrategy = domain.RefreshStrategy("magic")
 		}, domain.ErrInvalidRefreshStrategy},
@@ -64,7 +62,6 @@ func TestValidateAuthIdentityTransition(t *testing.T) {
 		wantErr error
 	}{
 		{"unchanged", func(*domain.AuthIdentity) {}, nil},
-		{"remeasured parallelism", func(i *domain.AuthIdentity) { i.MaxParallelExecutions = 4 }, nil},
 		{"gained snapshot support", func(i *domain.AuthIdentity) { i.Interim.SupportsReadOnlyAuthSnapshot = true }, domain.ErrImmutableTransition},
 		{"restrategized refresh", func(i *domain.AuthIdentity) { i.Interim.RefreshStrategy = domain.RefreshExternal }, domain.ErrImmutableTransition},
 		{"other identity", func(i *domain.AuthIdentity) { i.ID = "auth-2" }, domain.ErrImmutableTransition},

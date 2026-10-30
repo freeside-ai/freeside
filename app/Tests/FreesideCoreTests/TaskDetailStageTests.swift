@@ -260,6 +260,7 @@ import Testing
         #expect(TaskDisplay.detailStatus(TaskDisplay.inProgress, stage: nil) == "In Progress")
         #expect(chip(TaskStageFixtures.page(.verification)) == "On Hold")
         #expect(chip(held(TaskStageFixtures.page(.specification), on: .identity_parallelism)) == "Queued")
+        #expect(chip(held(TaskStageFixtures.page(.specification), on: .usage_pool_exhausted)) == "Queued")
         #expect(chip(TaskProgressFixtures.make("Approval required")) == "Specification Approval Required")
     }
 

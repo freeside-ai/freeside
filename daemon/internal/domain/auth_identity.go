@@ -8,14 +8,14 @@ import (
 )
 
 // AuthIdentity is one provider identity the daemon executes under: the
-// account, its budget and usage attribution, and the two independent
-// concurrency controls plan §5.4 attaches to it. Auth-store mutation
+// account, its budget and usage attribution, and the mutation half of the two
+// independent concurrency controls plan §5.4 names. Auth-store mutation
 // (refresh, login state, configuration writes, store replacement) is
 // serialized per identity — the one lease fences every enrollment's store —
-// and inference execution has a separate parallelism limit. Scheduling shows
-// the constraint rather than hiding it in a lock, which is why the limit is a
-// recorded declaration and not an implementation detail of whatever holds the
-// lock.
+// while inference execution has a separate parallelism limit on the usage
+// pool (UsagePool). Scheduling shows the constraint rather than hiding it in a
+// lock, which is why the limit is a recorded declaration and not an
+// implementation detail of whatever holds the lock.
 //
 // The declaration says a mutation lease is required; the store's lease table
 // is what enforces it. Keeping the two apart means a writer cannot satisfy the
@@ -48,10 +48,6 @@ type AuthIdentity struct {
 	// take one: the store refuses, rather than treating the declaration as
 	// advice.
 	AuthStoreMutationLease bool `json:"auth_store_mutation_lease"`
-	// MaxParallelExecutions is the inference-execution limit, independent of
-	// the mutation lease (§5.4). 1B establishes it experimentally; it is at
-	// least one, since an identity that can run nothing is not an identity.
-	MaxParallelExecutions int `json:"max_parallel_executions"`
 	// Enabled and CostOwner are the operator fields the dissolved
 	// ProviderProfile left behind (§5.4): agent resolution refuses a disabled
 	// identity, and every selection reads and records the cost owner.
@@ -85,8 +81,8 @@ func (f InterimClientFacts) Present() bool { return f != InterimClientFacts{} }
 
 // SameFixedBindings reports whether two declarations agree on the identity's
 // fixed bindings: provider, lease declaration, and interim client facts.
-// Everything else — the parallelism limit, the operator fields, and the
-// set-once account binding and usage pool — may lawfully differ between a
+// Everything else — the operator fields and the set-once account binding and
+// usage pool — may lawfully differ between a
 // caller's expectation and the stored declaration, so a boundary that needs
 // "this is the same identity I enrolled" compares through this, never whole
 // records.
@@ -94,6 +90,17 @@ func (i AuthIdentity) SameFixedBindings(other AuthIdentity) bool {
 	return i.Provider == other.Provider &&
 		i.AuthStoreMutationLease == other.AuthStoreMutationLease &&
 		i.Interim == other.Interim
+}
+
+// EffectiveUsagePool is the pool this identity's executions count against: its
+// characterized pool, or, while UsagePool is empty, a pool of its own. The
+// derived id leaves the set-once UsagePool field unset, so a later
+// characterization can still name the shared pool.
+func (i AuthIdentity) EffectiveUsagePool() UsagePoolID {
+	if i.UsagePool != "" {
+		return UsagePoolID(i.UsagePool)
+	}
+	return UsagePoolID("identity:" + string(i.ID))
 }
 
 // Validate reports whether the identity declaration is well-formed.
@@ -106,10 +113,6 @@ func (i AuthIdentity) Validate() error {
 	}
 	if i.Budget < 0 {
 		return fmt.Errorf("auth identity %s budget %d: %w", i.ID, i.Budget, ErrNonPositive)
-	}
-	if i.MaxParallelExecutions < 1 {
-		return fmt.Errorf("auth identity %s max_parallel_executions %d: %w",
-			i.ID, i.MaxParallelExecutions, ErrNonPositive)
 	}
 	if i.Interim.Present() {
 		if !i.Interim.RefreshStrategy.valid() {
@@ -317,9 +320,8 @@ func (h AuthStoreReadHold) HeldAt(now time.Time) bool {
 // while a holder relies on the recorded identity would invalidate that
 // lease's authority. The account binding and usage pool are set once — empty
 // to a value at enrollment or adoption, never rebound, since rebinding would
-// re-home recorded usage onto a different account. The independently measured
-// parallelism limit and the operator fields (enabled, cost owner, budget) may
-// change freely.
+// re-home recorded usage onto a different account. The operator fields
+// (enabled, cost owner, budget) may change freely.
 func ValidateAuthIdentityTransition(old, updated AuthIdentity) error {
 	if updated.ID != old.ID {
 		return fmt.Errorf("auth identity %s: identity would change from %s: %w",

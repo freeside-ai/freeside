@@ -356,7 +356,7 @@ func newProductionPublicationHarnessWithMetadata(
 		t.Fatal(err)
 	}
 	if err := h.store.WriteInternal(h.ctx, func(tx *store.InternalTx) error {
-		if err := tx.RecordAuthIdentity(h.ctx, testIdentity, fakePublicationTime); err != nil {
+		if err := storetest.RecordIdentityOnPool(h.ctx, tx, testIdentity, testPoolLimit, fakePublicationTime); err != nil {
 			return err
 		}
 		if err := tx.RecordProjectImage(h.ctx, image); err != nil {

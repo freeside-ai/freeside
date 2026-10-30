@@ -374,7 +374,7 @@ func TestAdmissionGateRejectsAnIneffectiveReviewConfigurationRecovery(t *testing
 		}),
 	})
 	identity := domain.AuthIdentity{
-		ID: "auth-config-recovery", Provider: "claude", AuthStoreMutationLease: true, MaxParallelExecutions: 1,
+		ID: "auth-config-recovery", Provider: "claude", AuthStoreMutationLease: true,
 		Interim: domain.InterimClientFacts{AuthStoreVolume: "provider-cred", RefreshStrategy: domain.RefreshOnDemand},
 	}
 	if err := st.Write(ctx, func(tx *WriteTx) error {

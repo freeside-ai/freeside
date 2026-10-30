@@ -157,6 +157,7 @@ func TestTaskSubmissionOriginMigrationKeepsDeviceRows(t *testing.T) {
 
 	// Return the table to the shape a daemon at 0108 holds, then record a
 	// submission the way that daemon did.
+	rewindUsagePools(t, ctx, st.db)
 	for _, statement := range []string{
 		`ALTER TABLE task_lines DROP COLUMN provenance`,
 		`DELETE FROM schema_migrations WHERE name = '0111_task_line_provenance.sql'`,

@@ -199,7 +199,7 @@ func (p *pairingControl) registerControlRoutes(
 	})
 	command("/comprehension/defects", runComprehensionCommand)
 	command("/shadow-review/configuration-approvals", runApproveShadowReviewCommand)
-	command("/auth-identities/limit", runSetIdentityLimitCommand)
+	command("/usage-pools/limit", runSetPoolLimitCommand)
 	command("/auth/list", runAuthListCommand)
 	command("/doctor", runDoctorCommand)
 	p.handle(mux, "/snapshot", func(ctx context.Context, body json.RawMessage) (any, error) {

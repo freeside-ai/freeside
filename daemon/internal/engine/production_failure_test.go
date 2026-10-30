@@ -315,16 +315,16 @@ func TestProductionDeliveryRefusalReplayStaysInert(t *testing.T) {
 	}
 }
 
-// activeExecutionCount reads the identity's active execution count.
+// activeExecutionCount reads the active execution count of the identity's pool.
 func (f failedImplementationFixture) activeExecutionCount(t *testing.T, id domain.AuthIdentityID) int {
 	t.Helper()
 	var got int
 	if err := f.store.Read(t.Context(), func(tx *store.ReadTx) error {
 		var err error
-		got, err = tx.ActiveIdentityExecutionCount(t.Context(), id)
+		got, err = tx.ActiveUsagePoolExecutionCount(t.Context(), domain.AuthIdentity{ID: id}.EffectiveUsagePool())
 		return err
 	}); err != nil {
-		t.Fatalf("ActiveIdentityExecutionCount: %v", err)
+		t.Fatalf("ActiveUsagePoolExecutionCount: %v", err)
 	}
 	return got
 }

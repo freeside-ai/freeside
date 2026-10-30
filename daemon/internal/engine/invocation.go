@@ -693,7 +693,7 @@ func invocationDispatchHold(err error) bool {
 		errors.Is(err, ErrImageUpkeepPending) ||
 		errors.Is(err, ErrProjectImageUnserved) ||
 		workflowAdvancementFenced(err) ||
-		errors.Is(err, domain.ErrIdentityParallelismExhausted) ||
+		errors.Is(err, domain.ErrUsagePoolExhausted) ||
 		errors.Is(err, ErrAgentNotAdmissible) ||
 		errors.Is(err, domain.ErrGenerationIntegrityMarked) ||
 		egressAdmissionRefusal(err)
@@ -841,9 +841,11 @@ func (e *Engine) dispatchIntent(
 		// A capacity or image-upkeep hold is current scheduling state, not
 		// history. Clear only those exact causes when this invocation starts;
 		// the store's predicate preserves a newer, different hold that may
-		// have replaced them.
+		// have replaced them. A stored identity_parallelism row clears with
+		// the pool hold that replaced its reason.
 		for _, cause := range []domain.RunHoldReason{
-			domain.HoldIdentityParallelism, domain.HoldImageUpkeepPending,
+			domain.HoldUsagePoolExhausted, domain.HoldIdentityParallelism,
+			domain.HoldImageUpkeepPending,
 		} {
 			if err := tx.ClearRunHoldCause(ctx, binding.run.ID, cause); err != nil {
 				return err
@@ -1341,7 +1343,7 @@ func (e *Engine) recordAttempt(
 						if err := e.requireReviewConfigurationApproved(ctx, tx, stored); err != nil {
 							return fmt.Errorf("replayed invocation %q: %w", invocationID, err)
 						}
-						if err := tx.RequireIdentityExecutionCapacity(ctx, stored); err != nil {
+						if err := tx.RequireUsagePoolCapacity(ctx, stored); err != nil {
 							return fmt.Errorf("replayed invocation %q: %w", invocationID, err)
 						}
 						effective, bound = stored, true

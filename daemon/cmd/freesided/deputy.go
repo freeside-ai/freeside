@@ -433,7 +433,7 @@ func recordDeputyIdentities(
 func deputyIdentities(settings loadedDeputySettings) ([]domain.AuthIdentity, error) {
 	identities := []domain.AuthIdentity{{
 		ID: domain.AuthIdentityID(settings.AgentTree.AuthIdentity), Provider: "claude",
-		AuthStoreMutationLease: true, MaxParallelExecutions: 1, Enabled: true,
+		AuthStoreMutationLease: true, Enabled: true,
 		Interim: domain.InterimClientFacts{
 			AuthStoreVolume: settings.AgentTree.AuthVolume, RefreshStrategy: domain.RefreshOnDemand,
 		},
@@ -445,7 +445,7 @@ func deputyIdentities(settings loadedDeputySettings) ([]domain.AuthIdentity, err
 		}
 		identities = append(identities, domain.AuthIdentity{
 			ID: domain.AuthIdentityID(settings.AgentTree.ReviewAuthIdentity), Provider: "openai",
-			AuthStoreMutationLease: true, MaxParallelExecutions: 1, Enabled: true,
+			AuthStoreMutationLease: true, Enabled: true,
 			Interim: domain.InterimClientFacts{
 				AuthStoreVolume: reviewSnapshot, RefreshStrategy: domain.RefreshOnDemand,
 				SupportsReadOnlyAuthSnapshot: true,

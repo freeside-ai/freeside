@@ -65,14 +65,14 @@ func newAuthAdoptFixture(t *testing.T) *authAdoptFixture {
 	}
 	f.recordIdentity(t, domain.AuthIdentity{
 		ID: "claude-main", Provider: "claude", AuthStoreMutationLease: true,
-		MaxParallelExecutions: 1, Enabled: true,
+		Enabled: true,
 		Interim: domain.InterimClientFacts{
 			AuthStoreVolume: adoptClaudeVolume, RefreshStrategy: domain.RefreshOnDemand,
 		},
 	})
 	f.recordIdentity(t, domain.AuthIdentity{
 		ID: "codex-review", Provider: "openai", AuthStoreMutationLease: true,
-		MaxParallelExecutions: 1, Enabled: true,
+		Enabled: true,
 		Interim: domain.InterimClientFacts{
 			AuthStoreVolume: f.storePath, RefreshStrategy: domain.RefreshOnDemand,
 			SupportsReadOnlyAuthSnapshot: true,
@@ -868,7 +868,7 @@ func TestAuthAdoptReportsAnUnadoptableReviewIdentity(t *testing.T) {
 		"account bound to another identity": func(t *testing.T, f *authAdoptFixture) {
 			f.recordIdentity(t, domain.AuthIdentity{
 				ID: "codex-other", Provider: "openai", AccountBinding: adoptCodexAccount,
-				MaxParallelExecutions: 1, Enabled: true, CostOwner: "operator",
+				Enabled: true, CostOwner: "operator",
 			})
 		},
 	} {
@@ -1159,7 +1159,7 @@ func (f *authAdoptFixture) recordClaudeReviewIdentity(t *testing.T) {
 	t.Helper()
 	f.recordIdentity(t, domain.AuthIdentity{
 		ID: "claude-review", Provider: "claude", AuthStoreMutationLease: true,
-		MaxParallelExecutions: 1, Enabled: true,
+		Enabled: true,
 		Interim: domain.InterimClientFacts{
 			AuthStoreVolume: "freeside-claude-review-auth", RefreshStrategy: domain.RefreshOnDemand,
 		},

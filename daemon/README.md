@@ -1397,22 +1397,33 @@ even if configuration changed or was removed. A new command always creates
 new work, including with identical project, source, and name. For a client
 submission to the deputy, use the [production walkthrough](../docs/production-walkthrough.md#submit-a-new-task-from-a-client).
 
-### Set A Claude Identity's Parallel Limit
+### Set A Usage Pool's Parallel Limit
 
-`freesided set-identity-limit` records a newer revision of a Claude writer
-identity that changes only `max_parallel_executions`, the number of
-executions that identity may run at once. Identities start at 1. The command
-works whether `freesided` is stopped or running; a running daemon applies the
-new limit at its next admission. It refuses a non-Claude identity and an
-identity the store has not recorded, and it prints the previous and new limits
-as JSON. Repeating the current limit writes nothing.
+`freesided set-pool-limit` records a newer revision of a usage pool that
+changes only `max_parallel_executions`, the number of executions the pool may
+run at once. The limit is the pool's, not an identity's: identities sharing a
+pool share one limit.
+An identity with no recorded `usage_pool` has a pool of its own named
+`identity:<auth-identity>`, the id `freesided auth list` prints. New pools
+start at 1. The command works whether `freesided` is stopped or running; a
+running daemon applies the new limit at its next admission. It refuses a pool
+the store has not recorded, and it prints the previous and new limits as JSON.
+Repeating the current limit writes nothing.
 
 ```sh
-freesided set-identity-limit \
+freesided set-pool-limit \
   -db <state-root>/daemon/freeside.db \
-  -identity <agent_tree.auth_identity from settings.json> \
+  -pool <usage_pool from freesided auth list> \
   -max-parallel-executions 4
 ```
+
+An execution at the limit waits under a `usage_pool_exhausted` hold naming the
+pool and starts when a slot frees. An execution keeps its slot until its
+terminal record exists. Review launches don't count yet, so a limit on a pool
+that only reviewers use gates nothing.
+
+Characterizing an identity into a shared pool never raises concurrency: the
+pool takes the lower of its limit and the limit the identity brings.
 
 **A limit above 1 does not yet give parallel writer runs.** Every Claude
 writer handoff still holds the identity's exclusive auth-store lease for the

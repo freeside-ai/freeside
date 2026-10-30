@@ -206,8 +206,8 @@ func main() {
 		case "auth":
 			runAuthMain(os.Args[2:])
 			return
-		case "set-identity-limit":
-			runSetIdentityLimitMain(os.Args[2:])
+		case "set-pool-limit":
+			runSetPoolLimitMain(os.Args[2:])
 			return
 		case "rig":
 			runRigMain(os.Args[2:])

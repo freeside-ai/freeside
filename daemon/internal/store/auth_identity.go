@@ -114,9 +114,9 @@ const (
 	recordAuthIdentitySQL = `
 INSERT INTO auth_identities
     (id, provider, account_binding, usage_pool, budget, auth_store_mutation_lease,
-     auth_store_volume, max_parallel_executions, refresh_strategy,
+     auth_store_volume, refresh_strategy,
      supports_read_only_auth_snapshot, enabled, cost_owner, recorded_at, body)
-VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 ON CONFLICT (id) DO UPDATE SET
     provider                         = excluded.provider,
     account_binding                  = excluded.account_binding,
@@ -124,7 +124,6 @@ ON CONFLICT (id) DO UPDATE SET
     budget                           = excluded.budget,
     auth_store_mutation_lease        = excluded.auth_store_mutation_lease,
     auth_store_volume                = excluded.auth_store_volume,
-    max_parallel_executions          = excluded.max_parallel_executions,
     refresh_strategy                 = excluded.refresh_strategy,
     supports_read_only_auth_snapshot = excluded.supports_read_only_auth_snapshot,
     enabled                          = excluded.enabled,
@@ -133,7 +132,7 @@ ON CONFLICT (id) DO UPDATE SET
     body                             = excluded.body`
 	getAuthIdentitySQL = `
 SELECT provider, account_binding, usage_pool, budget, auth_store_mutation_lease,
-       auth_store_volume, max_parallel_executions, refresh_strategy,
+       auth_store_volume, refresh_strategy,
        supports_read_only_auth_snapshot, enabled, cost_owner, recorded_at, body
 FROM auth_identities WHERE id = ?`
 	listAuthIdentityIDsSQL = `
@@ -194,9 +193,10 @@ ORDER BY holder`
 )
 
 // RecordAuthIdentity persists an identity declaration, guarded by the domain
-// transition rule: the provider and the lease requirement are fixed, so an
-// update may only re-measure the parallelism limit or record new snapshot
-// support. recordedAt orders revisions; it is not part of the declaration.
+// transition rule: the provider and the lease requirement are fixed.
+// recordedAt orders revisions; it is not part of the declaration. The identity's
+// usage pool is settled in the same transaction (settleIdentityUsagePool), so
+// admission never meets an identity without a pool to count it against.
 func (tx *InternalTx) RecordAuthIdentity(ctx context.Context, identity domain.AuthIdentity, recordedAt time.Time) error {
 	if recordedAt.IsZero() {
 		return fmt.Errorf("record auth identity %q: zero recorded_at", identity.ID)
@@ -205,6 +205,7 @@ func (tx *InternalTx) RecordAuthIdentity(ctx context.Context, identity domain.Au
 	if err != nil {
 		return fmt.Errorf("record auth identity %q: %w", identity.ID, err)
 	}
+	var previous *domain.AuthIdentity
 	stored, err := tx.GetAuthIdentity(ctx, identity.ID)
 	switch {
 	case err == nil:
@@ -214,6 +215,7 @@ func (tx *InternalTx) RecordAuthIdentity(ctx context.Context, identity domain.Au
 		if err := tx.requireForwardRevision(ctx, identity.ID, recordedAt, stored, identity); err != nil {
 			return fmt.Errorf("record auth identity %q: %w", identity.ID, err)
 		}
+		previous = &stored
 	case !errors.Is(err, ErrNotFound):
 		return fmt.Errorf("record auth identity %q: %w", identity.ID, err)
 	}
@@ -223,9 +225,12 @@ func (tx *InternalTx) RecordAuthIdentity(ctx context.Context, identity domain.Au
 	if _, err := tx.tx.ExecContext(ctx, recordAuthIdentitySQL,
 		identity.ID, identity.Provider, identity.AccountBinding, identity.UsagePool,
 		identity.Budget, identity.AuthStoreMutationLease,
-		identity.Interim.AuthStoreVolume, identity.MaxParallelExecutions,
+		identity.Interim.AuthStoreVolume,
 		interimRefreshColumn(identity), identity.Interim.SupportsReadOnlyAuthSnapshot,
 		identity.Enabled, identity.CostOwner, formatTime(recordedAt), body); err != nil {
+		return fmt.Errorf("record auth identity %q: %w", identity.ID, err)
+	}
+	if err := tx.settleIdentityUsagePool(ctx, previous, identity, recordedAt); err != nil {
 		return fmt.Errorf("record auth identity %q: %w", identity.ID, err)
 	}
 	return nil
@@ -265,16 +270,14 @@ func (tx *InternalTx) requireAccountBindingFree(ctx context.Context, identity do
 }
 
 // requireForwardRevision refuses a declaration stamped before the stored one.
-// recorded_at is what orders revisions, and 1B re-measures the parallelism
-// limit, so a delayed older measurement arriving after a newer one would
-// otherwise reinstate a superseded limit — raising concurrency past the latest
-// safe result, which is the direction that matters.
+// recorded_at is what orders revisions, so a delayed older declaration arriving
+// after a newer one would otherwise reinstate superseded operator fields.
 //
 // The same instant is only accepted for an identical declaration. A reused or
 // coarse timestamp carries no ordering evidence at all, so a divergent body
 // sharing it is a conflict rather than an update: taking it would let a
-// conflicting retry restore a superseded limit through the equality case the
-// staleness check leaves open.
+// conflicting retry restore a superseded declaration through the equality case
+// the staleness check leaves open.
 func (tx *InternalTx) requireForwardRevision(
 	ctx context.Context, id domain.AuthIdentityID, recordedAt time.Time,
 	stored, proposed domain.AuthIdentity,
@@ -363,7 +366,6 @@ func (tx *ReadTx) getAuthIdentityRecord(
 		budget         int64
 		lease          bool
 		volume         sql.NullString
-		parallel       int
 		refresh        string
 		snapshots      bool
 		enabled        bool
@@ -373,7 +375,7 @@ func (tx *ReadTx) getAuthIdentityRecord(
 	)
 	err := tx.tx.QueryRowContext(ctx, getAuthIdentitySQL, id).
 		Scan(&provider, &accountBinding, &usagePool, &budget, &lease, &volume,
-			&parallel, &refresh, &snapshots, &enabled, &costOwner, &recordedAt, &body)
+			&refresh, &snapshots, &enabled, &costOwner, &recordedAt, &body)
 	if err != nil {
 		return domain.AuthIdentity{}, time.Time{}, fmt.Errorf("get auth identity %q: %w", id, notFoundOr(err))
 	}
@@ -388,7 +390,6 @@ func (tx *ReadTx) getAuthIdentityRecord(
 		identity.Budget != budget ||
 		identity.AuthStoreMutationLease != lease ||
 		identity.Interim.AuthStoreVolume != volume.String ||
-		identity.MaxParallelExecutions != parallel ||
 		interimRefreshColumn(identity) != refresh ||
 		identity.Interim.SupportsReadOnlyAuthSnapshot != snapshots ||
 		identity.Enabled != enabled ||

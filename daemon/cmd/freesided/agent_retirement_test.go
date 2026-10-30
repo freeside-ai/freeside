@@ -73,7 +73,7 @@ func TestAuthAdoptRetiresAnUnadoptableIdentityStoredDisabled(t *testing.T) {
 	f := newAuthAdoptFixture(t)
 	f.recordIdentity(t, domain.AuthIdentity{
 		ID: "codex-other", Provider: "openai", AccountBinding: adoptCodexAccount,
-		MaxParallelExecutions: 1, Enabled: true, CostOwner: "operator",
+		Enabled: true, CostOwner: "operator",
 	})
 	f.withStore(t, func(st *store.Store) { setIdentityEnabled(t, st, "codex-review", false) })
 	before := f.snapshot(t).identity(t, "codex-review")
@@ -101,7 +101,7 @@ func TestRetiredOwnershipFollowsTheNewestAdmission(t *testing.T) {
 	}
 
 	later := domain.AuthIdentity{
-		ID: "later-auth", Provider: "claude", AuthStoreMutationLease: true, MaxParallelExecutions: 1, Enabled: true,
+		ID: "later-auth", Provider: "claude", AuthStoreMutationLease: true, Enabled: true,
 		Interim: domain.InterimClientFacts{AuthStoreVolume: "later-volume", RefreshStrategy: domain.RefreshOnDemand},
 	}
 	if err := st.Write(ctx, func(tx *store.WriteTx) error {
@@ -314,7 +314,7 @@ func legacyAdmittedTask(t *testing.T, identityID domain.AuthIdentityID) (*store.
 		t.Fatal(err)
 	}
 	identity := domain.AuthIdentity{
-		ID: identityID, Provider: "claude", AuthStoreMutationLease: true, MaxParallelExecutions: 1, Enabled: true,
+		ID: identityID, Provider: "claude", AuthStoreMutationLease: true, Enabled: true,
 		Interim: domain.InterimClientFacts{AuthStoreVolume: "test-volume", RefreshStrategy: domain.RefreshOnDemand},
 	}
 	run := production.Run

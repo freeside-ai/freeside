@@ -23,13 +23,15 @@ var (
 	admittedAt = time.Date(2026, 7, 26, 12, 0, 0, 0, time.UTC)
 	agentImage = domain.ImageRef("ghcr.io/freeside-ai/agent@sha256:" + strings.Repeat("ab", 32))
 	// Shared workflow fixtures exercise multi-invocation behavior unrelated to
-	// capacity; parallelism tests copy this identity and set the exact limit.
+	// capacity, so they record it on a pool of testPoolLimit slots; parallelism
+	// tests choose the exact limit.
 	testIdentity = domain.AuthIdentity{
 		ID: "auth-claude-owner", Provider: "claude", AuthStoreMutationLease: true,
-		MaxParallelExecutions: 64,
-		Interim:               domain.InterimClientFacts{AuthStoreVolume: "claude-owner-credentials", RefreshStrategy: domain.RefreshOnDemand},
+		Interim: domain.InterimClientFacts{AuthStoreVolume: "claude-owner-credentials", RefreshStrategy: domain.RefreshOnDemand},
 	}
 )
+
+const testPoolLimit = 64
 
 func admissionEnvironment() engine.AdmissionEnvironment {
 	identity := testIdentity.ID
@@ -72,7 +74,7 @@ func openAdmittingFixture(
 		},
 	})
 	if err := st.WriteInternal(ctx, func(tx *store.InternalTx) error {
-		return tx.RecordAuthIdentity(ctx, testIdentity, admittedAt)
+		return storetest.RecordIdentityOnPool(ctx, tx, testIdentity, testPoolLimit, admittedAt)
 	}); err != nil {
 		t.Fatalf("record auth identity: %v", err)
 	}
@@ -226,7 +228,7 @@ func TestAdmissionConfigurationIsDetached(t *testing.T) {
 		},
 	})
 	if err := st.WriteInternal(ctx, func(tx *store.InternalTx) error {
-		return tx.RecordAuthIdentity(ctx, testIdentity, admittedAt)
+		return storetest.RecordIdentityOnPool(ctx, tx, testIdentity, testPoolLimit, admittedAt)
 	}); err != nil {
 		t.Fatalf("record auth identity: %v", err)
 	}

@@ -378,7 +378,7 @@ package enum RunDisplay {
         case .verification_findings: "Verification findings block publication"
         case .trust_blocked: "Trust checks block publication"
         case .base_advanced: "Base branch changed"
-        case .identity_parallelism: "Waiting for agent capacity"
+        case .identity_parallelism, .usage_pool_exhausted: "Waiting for agent capacity"
         case .image_upkeep_pending: "Waiting for project image upkeep"
         }
     }

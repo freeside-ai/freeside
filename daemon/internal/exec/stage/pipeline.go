@@ -1844,7 +1844,7 @@ func (d *Driver) reconcileIntent(ctx context.Context, in intent) error {
 // original retryable error so Inspect keeps reporting the invocation running.
 // Once recovery has failed for longer than the grace it commits a failed
 // outcome that names the last error and the retained export directory: the
-// execution_outcomes row frees the identity's execution slot, and the ordinary
+// execution_outcomes row frees the usage pool's slot, and the ordinary
 // collection path raises the operator's execution_failure card. The export
 // directory is never removed; the agent's work survives on disk for a later
 // retry or manual inspection.

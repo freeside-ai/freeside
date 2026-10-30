@@ -43,6 +43,14 @@ func openUnattendedFixtureWithIdentity(
 	return openUnattendedFixtureAtWithIdentity(t, t.TempDir(), true, identity)
 }
 
+// openUnattendedFixtureWithPoolLimit gives the identity's pool an exact limit.
+func openUnattendedFixtureWithPoolLimit(
+	t *testing.T, identity domain.AuthIdentity, limit int,
+) *workflowFixture {
+	t.Helper()
+	return openUnattendedFixtureWith(t, t.TempDir(), true, identity, limit, nil, nil)
+}
+
 // openUnattendedFixtureAt opens the unattended fixture over an explicit
 // root. seed is false on a reopen of an already-seeded root (the restart
 // scenarios), where re-recording the trust and conformance fixtures would
@@ -56,7 +64,7 @@ func openUnattendedFixtureAtWithIdentity(
 	t *testing.T, root string, seed bool, identity domain.AuthIdentity,
 ) *workflowFixture {
 	t.Helper()
-	return openUnattendedFixtureWith(t, root, seed, identity, nil, nil)
+	return openUnattendedFixtureWith(t, root, seed, identity, testPoolLimit, nil, nil)
 }
 
 // openUnattendedFixtureWith composes the unattended fixture through two
@@ -66,7 +74,7 @@ func openUnattendedFixtureAtWithIdentity(
 // compose contributes engine options that need the fixture's own store and
 // blob store, such as the specification workflow.
 func openUnattendedFixtureWith(
-	t *testing.T, root string, seed bool, identity domain.AuthIdentity,
+	t *testing.T, root string, seed bool, identity domain.AuthIdentity, poolLimit int,
 	environment func(*engine.AdmissionEnvironment),
 	compose func(*store.Store, *signet.BlobStore) []engine.Option,
 ) *workflowFixture {
@@ -109,7 +117,7 @@ func openUnattendedFixtureWith(
 		if !seed {
 			return nil
 		}
-		if err := tx.RecordAuthIdentity(ctx, identity, admittedAt); err != nil {
+		if err := storetest.RecordIdentityOnPool(ctx, tx, identity, poolLimit, admittedAt); err != nil {
 			return err
 		}
 		if err := tx.RecordTrustProfile(ctx, profile, admittedAt); err != nil {

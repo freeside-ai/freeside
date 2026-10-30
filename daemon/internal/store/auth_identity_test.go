@@ -16,8 +16,7 @@ var leaseEpoch = time.Date(2026, 1, 2, 3, 4, 5, 0, time.UTC)
 func testAuthIdentity() domain.AuthIdentity {
 	return domain.AuthIdentity{
 		ID: "auth-1", Provider: "claude", AuthStoreMutationLease: true,
-		MaxParallelExecutions: 1,
-		Interim:               domain.InterimClientFacts{AuthStoreVolume: "provider-cred", RefreshStrategy: domain.RefreshOnDemand},
+		Interim: domain.InterimClientFacts{AuthStoreVolume: "provider-cred", RefreshStrategy: domain.RefreshOnDemand},
 	}
 }
 
@@ -52,16 +51,7 @@ func TestAuthIdentityRoundTrip(t *testing.T) {
 		t.Fatalf("identity = %+v, want %+v", got, identity)
 	}
 
-	// A re-measured parallelism limit is a legal successor; a changed
-	// provider or a dropped lease requirement is not.
-	remeasured := identity
-	remeasured.MaxParallelExecutions = 4
-	if err := s.WriteInternal(ctx, func(tx *store.InternalTx) error {
-		return tx.RecordAuthIdentity(ctx, remeasured, leaseEpoch.Add(time.Hour))
-	}); err != nil {
-		t.Fatalf("re-measured limit must be recordable: %v", err)
-	}
-
+	// A changed provider or a dropped lease requirement is no legal successor.
 	retired := identity
 	retired.AuthStoreMutationLease = false
 	err := s.WriteInternal(ctx, func(tx *store.InternalTx) error {
@@ -82,10 +72,8 @@ func TestAuthIdentityRoundTrip(t *testing.T) {
 }
 
 // TestAuthIdentityRevisionsOnlyMoveForward refuses a declaration stamped
-// before the stored one. 1B re-measures the parallelism limit, so a delayed
-// older measurement landing after a newer one would otherwise reinstate a
-// superseded limit, and the direction that matters is the one that raises
-// concurrency past the latest safe result.
+// before the stored one, so a delayed older declaration landing after a newer
+// one cannot reinstate superseded operator fields.
 func TestAuthIdentityRevisionsOnlyMoveForward(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
@@ -93,7 +81,7 @@ func TestAuthIdentityRevisionsOnlyMoveForward(t *testing.T) {
 	s := openWithIdentity(t, identity)
 
 	newer := identity
-	newer.MaxParallelExecutions = 1
+	newer.CostOwner = "newer-owner"
 	if err := s.WriteInternal(ctx, func(tx *store.InternalTx) error {
 		return tx.RecordAuthIdentity(ctx, newer, leaseEpoch.Add(time.Hour))
 	}); err != nil {
@@ -101,7 +89,7 @@ func TestAuthIdentityRevisionsOnlyMoveForward(t *testing.T) {
 	}
 
 	stale := identity
-	stale.MaxParallelExecutions = 8
+	stale.CostOwner = "stale-owner"
 	err := s.WriteInternal(ctx, func(tx *store.InternalTx) error {
 		return tx.RecordAuthIdentity(ctx, stale, leaseEpoch.Add(time.Minute))
 	})
@@ -117,8 +105,8 @@ func TestAuthIdentityRevisionsOnlyMoveForward(t *testing.T) {
 	}); err != nil {
 		t.Fatalf("GetAuthIdentity: %v", err)
 	}
-	if got.MaxParallelExecutions != 1 {
-		t.Fatalf("max_parallel_executions = %d, want the newer revision's 1", got.MaxParallelExecutions)
+	if got.CostOwner != newer.CostOwner {
+		t.Fatalf("cost owner = %q, want the newer revision's %q", got.CostOwner, newer.CostOwner)
 	}
 
 	// The same instant is a retry of the recorded revision, not a regression.
@@ -130,9 +118,9 @@ func TestAuthIdentityRevisionsOnlyMoveForward(t *testing.T) {
 
 	// A divergent declaration sharing that instant is a conflict, not an
 	// update: an equal timestamp is no ordering evidence, so it must not be
-	// the gap a superseded limit comes back through.
+	// the gap a superseded declaration comes back through.
 	conflicting := newer
-	conflicting.MaxParallelExecutions = 8
+	conflicting.CostOwner = "conflicting-owner"
 	err = s.WriteInternal(ctx, func(tx *store.InternalTx) error {
 		return tx.RecordAuthIdentity(ctx, conflicting, leaseEpoch.Add(time.Hour))
 	})

@@ -1,0 +1,5 @@
+{
+  "id": "claude-owner-subscription",
+  "provider": "claude",
+  "max_parallel_executions": 2
+}

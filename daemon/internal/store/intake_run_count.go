@@ -12,9 +12,9 @@ import (
 // production intake caller therefore uses its own resolution-aware count; this
 // helper remains valid only where publication reevaluation is unreachable.
 //
-// It is deliberately distinct from RequireIdentityExecutionCapacity, which
-// limits one inference identity's concurrent executions; the #659 non-goal
-// forbids reusing that inference-parallelism limit as a run cap.
+// It is deliberately distinct from RequireUsagePoolCapacity, which limits one
+// usage pool's concurrent launches; the #659 non-goal forbids reusing that
+// inference-parallelism limit as a run cap.
 func (tx *ReadTx) CountActiveProjectRuns(ctx context.Context, projectID domain.ProjectID) (int, error) {
 	if projectID == "" {
 		return 0, fmt.Errorf("count active project runs: %w", domain.ErrEmptyID)

@@ -23,10 +23,12 @@ type authListIdentity struct {
 	// Label is the masked account binding. It is computed here, at render
 	// time, because the account probe plan §5.4 names as its source (#868)
 	// does not exist yet; it is never stored and never enters evidence.
-	Label                 string               `json:"label"`
-	Enabled               bool                 `json:"enabled"`
-	CostOwner             string               `json:"cost_owner"`
-	UsagePool             string               `json:"usage_pool"`
+	Label     string `json:"label"`
+	Enabled   bool   `json:"enabled"`
+	CostOwner string `json:"cost_owner"`
+	// UsagePool is the effective pool, and MaxParallelExecutions its limit:
+	// the id set-pool-limit takes, even for an identity with no pool of its own.
+	UsagePool             domain.UsagePoolID   `json:"usage_pool"`
 	MaxParallelExecutions int                  `json:"max_parallel_executions"`
 	Interim               bool                 `json:"interim"`
 	Enrollments           []authListEnrollment `json:"enrollments"`
@@ -95,11 +97,15 @@ func readAuthList(ctx context.Context, tx *store.ReadTx) (authListOutput, error)
 		if err != nil {
 			return authListOutput{}, err
 		}
+		pool, err := tx.GetUsagePool(ctx, identity.EffectiveUsagePool())
+		if err != nil {
+			return authListOutput{}, err
+		}
 		listed := authListIdentity{
 			ID: identity.ID, Provider: identity.Provider,
 			Label:   maskAccountBinding(identity.AccountBinding),
-			Enabled: identity.Enabled, CostOwner: identity.CostOwner, UsagePool: identity.UsagePool,
-			MaxParallelExecutions: identity.MaxParallelExecutions,
+			Enabled: identity.Enabled, CostOwner: identity.CostOwner, UsagePool: pool.ID,
+			MaxParallelExecutions: pool.MaxParallelExecutions,
 			Interim:               identity.Interim.Present(),
 			Enrollments:           make([]authListEnrollment, 0, len(enrollments)),
 		}

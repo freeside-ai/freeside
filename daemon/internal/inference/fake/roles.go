@@ -76,7 +76,7 @@ func (r Roles) ResolveRole(_ context.Context, role domain.RoleName) (inference.R
 	}
 	identity := domain.AuthIdentity{
 		ID: "fake-a", Provider: "claude", AuthStoreMutationLease: true,
-		MaxParallelExecutions: 1, Enabled: true, AccountBinding: enrollment.AccountBinding, CostOwner: "operator",
+		Enabled: true, AccountBinding: enrollment.AccountBinding, CostOwner: "operator",
 		Interim: domain.InterimClientFacts{AuthStoreVolume: "fake-cred", RefreshStrategy: domain.RefreshOnDemand},
 	}
 	route := domain.RouteFragment{

@@ -24,7 +24,7 @@ import (
 var holdClassifiedSentinels = []error{
 	domain.ErrUnattendedOperationStopped,
 	domain.ErrBlockingSystemHealth,
-	domain.ErrIdentityParallelismExhausted,
+	domain.ErrUsagePoolExhausted,
 	exec.ErrInputUnavailable,
 	exec.ErrCapabilityRefused,
 	exec.ErrPreJobRefused,
@@ -220,6 +220,31 @@ func TestImageUpkeepHoldDetail(t *testing.T) {
 	notProved := errors.Join(ErrImageNotProved, domain.ErrAdmissionConfigurationMismatch)
 	if reason, _ := dispatchHoldReason(notProved); reason != domain.HoldBackendNotConformant {
 		t.Fatalf("an unproved image holds under %q, want backend_not_conformant", reason)
+	}
+}
+
+// TestUsagePoolRefusalHoldsNamingItsPool: the store's refusal holds its own
+// invocation under the pool hold, and a different pool is a different hold, so
+// the pacer does not hold back the new name.
+func TestUsagePoolRefusalHoldsNamingItsPool(t *testing.T) {
+	refusal := func(pool domain.UsagePoolID) error {
+		return fmt.Errorf("admit invocation %q: %w", "inv-1",
+			&domain.UsagePoolExhaustedError{Pool: pool, Active: 2, Limit: 2})
+	}
+	err := refusal("pool-a")
+	if reason, ok := dispatchHoldReason(err); !ok || reason != domain.HoldUsagePoolExhausted {
+		t.Fatalf("reason = %q, %t", reason, ok)
+	}
+	if !invocationDispatchHold(err) {
+		t.Fatal("the refusal does not hold its own invocation")
+	}
+	detail := holdDetailFor(err)
+	if detail.usagePool == nil || *detail.usagePool != "pool-a" {
+		t.Fatalf("detail = %+v, want pool-a", detail)
+	}
+	if holdPaceState(domain.HoldUsagePoolExhausted, detail) ==
+		holdPaceState(domain.HoldUsagePoolExhausted, holdDetailFor(refusal("pool-b"))) {
+		t.Fatal("two pools share one pace state")
 	}
 }
 

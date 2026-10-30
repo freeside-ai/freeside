@@ -82,6 +82,7 @@ func TestWorkflowClosureAuthenticatesLegacyHeldWorkNotices(t *testing.T) {
 			}); err != nil {
 				t.Fatal(err)
 			}
+			rewindUsagePools(t, ctx, st.db)
 			for _, statement := range []string{
 				`ALTER TABLE run_hold_observations DROP COLUMN detail_check`,
 				`ALTER TABLE run_hold_observations DROP COLUMN detail_agent`,
@@ -410,6 +411,7 @@ func TestWorkflowClosureMigrationDoesNotInferAuthority(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	rewindUsagePools(t, ctx, st.db)
 	for _, statement := range []string{
 		`ALTER TABLE run_hold_observations DROP COLUMN detail_check`,
 		`ALTER TABLE run_hold_observations DROP COLUMN detail_agent`,

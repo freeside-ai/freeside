@@ -11,6 +11,7 @@ import (
 	"github.com/freeside-ai/freeside/daemon/internal/exec"
 	"github.com/freeside-ai/freeside/daemon/internal/exec/fake"
 	"github.com/freeside-ai/freeside/daemon/internal/store"
+	"github.com/freeside-ai/freeside/daemon/internal/store/storetest"
 )
 
 // TestPublishedRunRecordsWriterAndReviewUsage is #2212's end-to-end case. An
@@ -103,7 +104,7 @@ func bindProductionWriters(t *testing.T, p *productionPublicationHarness) {
 	t.Helper()
 	identity := domain.AuthIdentity{
 		ID: "auth-claude-writer", Provider: "claude", AccountBinding: "acct-writer-0001",
-		AuthStoreMutationLease: true, MaxParallelExecutions: 64, Enabled: true, CostOwner: "operator",
+		AuthStoreMutationLease: true, Enabled: true, CostOwner: "operator",
 		Interim: domain.InterimClientFacts{
 			AuthStoreVolume: "claude-writer-interim", RefreshStrategy: domain.RefreshExternal,
 		},
@@ -116,7 +117,7 @@ func bindProductionWriters(t *testing.T, p *productionPublicationHarness) {
 	}
 	manifest := productionDigest([]byte("writer auth store"))
 	if err := p.store.WriteInternal(p.ctx, func(tx *store.InternalTx) error {
-		if err := tx.RecordAuthIdentity(p.ctx, identity, fakePublicationTime.Add(-4*time.Minute)); err != nil {
+		if err := storetest.RecordIdentityOnPool(p.ctx, tx, identity, testPoolLimit, fakePublicationTime.Add(-4*time.Minute)); err != nil {
 			return err
 		}
 		if err := tx.RecordClientEnrollment(p.ctx, enrollment, fakePublicationTime.Add(-3*time.Minute)); err != nil {

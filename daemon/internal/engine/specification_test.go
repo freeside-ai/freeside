@@ -261,15 +261,14 @@ func newSpecificationFixtureAllowing(t *testing.T, specApproval bool, maxIterati
 		}); err != nil {
 			return err
 		}
-		return tx.RecordAuthIdentity(t.Context(), domain.AuthIdentity{
+		// Revision and restart cases intentionally retain several fake
+		// admissions; capacity itself is covered by integration tests.
+		return storetest.RecordIdentityOnPool(t.Context(), &tx.InternalTx, domain.AuthIdentity{
 			ID: "auth-1", Provider: "codex", AuthStoreMutationLease: true,
-			// Revision and restart cases intentionally retain several fake
-			// admissions; capacity itself is covered by integration tests.
-			MaxParallelExecutions: 64,
 			Interim: domain.InterimClientFacts{
 				AuthStoreVolume: "provider-credentials", RefreshStrategy: domain.RefreshOnDemand,
 			},
-		}, now)
+		}, 64, now)
 	}); err != nil {
 		t.Fatal(err)
 	}
