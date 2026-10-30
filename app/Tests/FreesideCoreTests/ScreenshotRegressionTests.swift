@@ -468,6 +468,13 @@
             #expect(Self.lightMatrixSizes.isDisjoint(with: ["xsmall", "ax3"]))
         }
 
+        @Test func digestFilesResolveAndAMissingOneFailsLoudly() throws {
+            #expect(!(try loadManifest(overrides: try loadOverrides()).isEmpty))
+            #expect(throws: ScreenshotError.self) {
+                try digestFileURL(named: "NoSuchDigestFile")
+            }
+        }
+
         @Test func shardsPartitionTheManifest() throws {
             let keys = Set(try loadManifest(overrides: [:]).keys)
             for count in [2, 3] {
@@ -4394,10 +4401,7 @@
         private func loadManifest(
             overrides: [String: [String: String]]
         ) throws -> [String: String] {
-            guard
-                let url = Bundle.module.url(
-                    forResource: "ScreenshotDigests", withExtension: "json")
-            else { throw ScreenshotError.missingManifest }
+            let url = try digestFileURL(named: "ScreenshotDigests")
             let baseline = try JSONDecoder().decode(
                 [String: String].self, from: Data(contentsOf: url))
             let applicable = isHostedRunner ? overrides[operatingSystemKey] ?? [:] : [:]
@@ -4417,13 +4421,20 @@
         }
 
         private func loadOverrides() throws -> [String: [String: String]] {
-            guard
-                let overridesURL = Bundle.module.url(
-                    forResource: "ScreenshotDigestOverrides", withExtension: "json")
-            else { return [:] }
+            let overridesURL = try digestFileURL(named: "ScreenshotDigestOverrides")
             return try JSONDecoder().decode(
                 [String: [String: String]].self,
                 from: Data(contentsOf: overridesURL))
+        }
+
+        /// Both digest files always ship, even with no overrides to apply,
+        /// so a failed lookup means the bundle is wrong. Reading it as "no
+        /// overrides" would compare a hosted runner to the wrong digests.
+        private func digestFileURL(named name: String) throws -> URL {
+            guard let url = Bundle.module.url(forResource: name, withExtension: "json") else {
+                throw ScreenshotError.missingDigestFile(name)
+            }
+            return url
         }
 
         private func validateRecordingOperatingSystem(
@@ -4468,9 +4479,9 @@
         case invalidShardSelection(String)
         case missingActiveRun
         case missingActiveTimeline
+        case missingDigestFile(String)
         case missingRetryTask
         case missingGMT
-        case missingManifest
         case missingSeededImage
         case pngEncodingFailed
         case preferencesUnavailable
