@@ -18,7 +18,7 @@ public final class NavigationModel {
         public let composer: LaunchInputs.Composer
     }
 
-    public enum Destination: Equatable {
+    public enum Destination: Hashable {
         case attentionItem(String)
         case task(String)
         /// A run is reached through its task: routing selects the task and

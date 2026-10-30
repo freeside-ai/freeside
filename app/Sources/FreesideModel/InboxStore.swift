@@ -247,6 +247,12 @@ public final class InboxStore {
         filteredRows(in: .open, projectID: nil).map(\.1)
     }
 
+    /// All rows whose status was not open at the last full list rebuild, in
+    /// server order: the closed half of `openSnapshots`.
+    public var closedSnapshots: [Components.Schemas.AttentionItemSnapshot] {
+        filteredRows(in: .resolved, projectID: nil).map(\.1)
+    }
+
     /// One global urgent-open projection for every top-level navigation
     /// surface: iOS badge, macOS sidebar, and menu-bar extra.
     public var urgentOpenCount: Int {
