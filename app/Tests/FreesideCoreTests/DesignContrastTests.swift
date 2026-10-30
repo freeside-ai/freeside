@@ -168,7 +168,7 @@ import Testing
         // Meaningful outlines and indicators. Standard structural hairlines
         // stay decorative; Increased Contrast promotes them to ruleStrong.
         // secondaryBorder is intentionally absent for the same reason rule
-        // is: it is a hairline at 1.58:1 by day and relies on the Increased
+        // is: it is a hairline at 1.61:1 by day and relies on the Increased
         // Contrast promotion to ruleStrong, asserted above.
         border(
             "accentBorder", FreesidePalette.accentBorder, on: "ground",

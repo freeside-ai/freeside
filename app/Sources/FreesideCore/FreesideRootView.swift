@@ -100,7 +100,7 @@ public struct FreesideRootView: View {
         .background(Color.ground)
         .tint(.accentText)
         // The default titlebar renders a bright system material that reads
-        // as a hard white, square-cornered band over the warm ground.
+        // as a hard white, square-cornered band over the ground.
         // Hiding it lets each screen's own ground rise into the titlebar, so
         // the toolbar blends into the body and the window's rounded corners
         // carry the top edge. Applied above the phase switch so it also
