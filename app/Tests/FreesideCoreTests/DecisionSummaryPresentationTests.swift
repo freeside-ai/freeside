@@ -164,10 +164,10 @@ import Testing
         }
     }
 
-    /// The 800-character cut is made on source text, so it can land inside
-    /// a list item or an emphasis span. The excerpt must not then print the
-    /// half-open marker.
-    @Test(arguments: [
+    /// Typed apart from the `@Test` macro: inside it the array has no
+    /// contextual type, and Swift 6.4's solver gives up on these
+    /// concatenations however long it is allowed to run.
+    private static let sourcesCutInsideAStructure: [String] = [
         "Leading line.\n\n"
             + (1...40).map { "- **Item \($0) is strong from its first word to its last one**" }
             .joined(separator: "\n"),
@@ -175,7 +175,12 @@ import Testing
         String(repeating: "word ", count: 150) + "_" + String(repeating: "soft ", count: 60) + "end_ tail.",
         "## Change\n" + String(repeating: "word ", count: 150) + "**"
             + String(repeating: "bold ", count: 60) + "end**\n## Remaining concerns\n- One",
-    ])
+    ]
+
+    /// The 800-character cut is made on source text, so it can land inside
+    /// a list item or an emphasis span. The excerpt must not then print the
+    /// half-open marker.
+    @Test(arguments: sourcesCutInsideAStructure)
     func anExcerptCutInsideAStructureLeavesNoStrayMarkers(source: String) {
         let presentation = DecisionSummaryPresentation(.init(media_type: .text_sol_markdown, content: source))
         #expect(presentation.isExcerpt)
