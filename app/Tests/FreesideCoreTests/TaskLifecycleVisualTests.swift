@@ -17,7 +17,7 @@
                 for scheme in [ColorScheme.light, .dark] {
                     let view = VStack(spacing: 0) {
                         ForEach(terminals.indices, id: \.self) { index in
-                            TaskTimelineView(coordinator: coordinator, snapshot: terminals[index], onOpenRun: { _ in })
+                            TaskPageView(coordinator: coordinator, snapshot: terminals[index], onOpenRun: { _ in })
                                 .screenshotContent(timeline)
                                 .frame(width: width, height: 220, alignment: .topLeading)
                                 .clipped()

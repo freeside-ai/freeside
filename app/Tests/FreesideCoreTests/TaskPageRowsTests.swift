@@ -6,7 +6,7 @@ import Testing
 
 /// The task's event rail as rows: which daemon events it keeps, how each
 /// reads, and where a stage start is drawn.
-@Suite struct TaskTimelineRowsTests {
+@Suite struct TaskPageRowsTests {
     private typealias Row = TimelineRail.Row
 
     /// A row as one line: `>` for a stage start, `!` for a failure, and a

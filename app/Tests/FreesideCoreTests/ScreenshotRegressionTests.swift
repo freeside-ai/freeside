@@ -348,7 +348,7 @@
             for size in [DynamicTypeSize.large, .accessibility1] {
                 for width in [CGFloat(820), CGFloat(390)] {
                     for scheme in [ColorScheme.light, .dark] {
-                        let view = TaskTimelineView(
+                        let view = TaskPageView(
                             coordinator: coordinator, snapshot: TaskHistoryFixtures.snapshot(history),
                             onOpenRun: { _ in }
                         ).screenshotContent(history)
@@ -2002,7 +2002,7 @@
                 return (
                     name,
                     AnyView(
-                        TaskTimelineView(coordinator: coordinator, snapshot: task, onOpenRun: { _ in })
+                        TaskPageView(coordinator: coordinator, snapshot: task, onOpenRun: { _ in })
                             .header(fixture.history))
                 )
             }
@@ -2036,7 +2036,7 @@
                             VStack(alignment: .leading, spacing: 28) {
                                 TaskRowView(
                                     task: reentry.task, position: reentryPosition, now: RunFixtures.screenshotInstant)
-                                TaskTimelineView(
+                                TaskPageView(
                                     coordinator: reentryCoordinator, snapshot: reentryTask, onOpenRun: { _ in }
                                 ).header(reentry.history)
                             }
@@ -2165,7 +2165,7 @@
                             name: "task-history-\(Int(width))-\(scheme)", width: width, colorScheme: scheme,
                             nativeAppearance: true,
                             view: AnyView(
-                                TaskTimelineView(
+                                TaskPageView(
                                     coordinator: historyCoordinator,
                                     snapshot: TaskHistoryFixtures.snapshot(completeHistory),
                                     onOpenRun: { _ in }
@@ -2203,7 +2203,7 @@
                             name: "task-history-\(name)-390-\(scheme)", width: 390, colorScheme: scheme,
                             nativeAppearance: true,
                             view: AnyView(
-                                TaskTimelineView(
+                                TaskPageView(
                                     coordinator: display, snapshot: TaskHistoryFixtures.snapshot(history),
                                     onOpenRun: { _ in }
                                 ).screenshotContent(history))))
@@ -2232,7 +2232,7 @@
                         name: "task-history-revised-fresh-\(Int(width))-\(scheme)", width: width,
                         colorScheme: scheme, nativeAppearance: true,
                         view: AnyView(
-                            TaskTimelineView(
+                            TaskPageView(
                                 coordinator: freshCoordinator,
                                 snapshot: TaskHistoryFixtures.snapshot(revisedHistory), onOpenRun: { _ in }
                             ).screenshotContent(revisedHistory))))
@@ -2242,7 +2242,7 @@
                     Surface(
                         name: "task-history-revised-\(name)-820-light", width: 820, nativeAppearance: true,
                         view: AnyView(
-                            TaskTimelineView(
+                            TaskPageView(
                                 coordinator: revisedCoordinator,
                                 snapshot: TaskHistoryFixtures.snapshot(revisedHistory), onOpenRun: { _ in }
                             ).screenshotContent(revisedHistory, disclosures: disclosures))))
@@ -2264,7 +2264,7 @@
                                 name: "task-stage-\(name)-\(Int(width))-\(scheme)", width: width,
                                 colorScheme: scheme, nativeAppearance: true,
                                 view: AnyView(
-                                    TaskTimelineView(
+                                    TaskPageView(
                                         coordinator: stage.coordinator, snapshot: stage.task, onOpenRun: { _ in }
                                     ).screenshotContent(history))))
                     }
@@ -2283,7 +2283,7 @@
                             name: "task-stage-markers-\(scheme)-\(contrast)", width: 390, colorScheme: scheme,
                             contrast: contrast, nativeAppearance: true,
                             view: AnyView(
-                                TaskTimelineView(
+                                TaskPageView(
                                     coordinator: markers.coordinator, snapshot: markers.task, onOpenRun: { _ in }
                                 ).screenshotContent(markersHistory))))
                 }
@@ -2308,7 +2308,7 @@
                             name: "task-published-review-\(Int(width))-\(scheme == .dark ? "dark" : "light")",
                             width: width, colorScheme: scheme, nativeAppearance: true,
                             view: AnyView(
-                                TaskTimelineView(
+                                TaskPageView(
                                     coordinator: publishedCoordinator, snapshot: publishedTask, onOpenRun: { _ in }
                                 )
                                 .screenshotContent(
@@ -2333,7 +2333,7 @@
                         name: "task-legacy-review-390-\(scheme == .dark ? "dark" : "light")",
                         width: 390, colorScheme: scheme, nativeAppearance: true,
                         view: AnyView(
-                            TaskTimelineView(
+                            TaskPageView(
                                 coordinator: legacyCoordinator, snapshot: legacyTask, onOpenRun: { _ in }
                             )
                             .screenshotContent(
@@ -2343,7 +2343,7 @@
                 Surface(
                     name: "task-timeline",
                     view: AnyView(
-                        TaskTimelineView(coordinator: coordinator, snapshot: retryTask, onOpenRun: { _ in })
+                        TaskPageView(coordinator: coordinator, snapshot: retryTask, onOpenRun: { _ in })
                             .screenshotContent(retryTimeline)
                     )))
             surfaces.append(
@@ -2351,7 +2351,7 @@
                     name: "task-timeline-390",
                     width: 390,
                     view: AnyView(
-                        TaskTimelineView(coordinator: coordinator, snapshot: retryTask, onOpenRun: { _ in })
+                        TaskPageView(coordinator: coordinator, snapshot: retryTask, onOpenRun: { _ in })
                             .screenshotContent(retryTimeline)
                     )))
             // The page's Identifiers footer expanded (#1379, #2117): the
@@ -2361,7 +2361,7 @@
                 Surface(
                     name: "task-timeline-details",
                     view: AnyView(
-                        TaskTimelineView(coordinator: coordinator, snapshot: retryTask, onOpenRun: { _ in })
+                        TaskPageView(coordinator: coordinator, snapshot: retryTask, onOpenRun: { _ in })
                             .screenshotContent(
                                 retryTimeline,
                                 disclosures: TaskHistoryFixtures.currentCampaignOpen(
@@ -2372,7 +2372,7 @@
                     name: "task-timeline-details-390",
                     width: 390,
                     view: AnyView(
-                        TaskTimelineView(coordinator: coordinator, snapshot: retryTask, onOpenRun: { _ in })
+                        TaskPageView(coordinator: coordinator, snapshot: retryTask, onOpenRun: { _ in })
                             .screenshotContent(
                                 retryTimeline,
                                 disclosures: TaskHistoryFixtures.currentCampaignOpen(
@@ -2392,7 +2392,7 @@
                         name: name,
                         width: width,
                         view: AnyView(
-                            TaskTimelineView(
+                            TaskPageView(
                                 coordinator: remediation.coordinator, snapshot: remediation.task, onOpenRun: { _ in }
                             )
                             .screenshotContent(

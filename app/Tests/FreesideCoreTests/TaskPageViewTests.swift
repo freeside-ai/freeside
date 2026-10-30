@@ -415,7 +415,7 @@ import Testing
     }
 }
 
-@Suite struct TaskTimelineViewTests {
+@Suite struct TaskPageViewTests {
     @Test(arguments: TaskHistoryFixtures.Scenario.allCases)
     func completeHistoryRetainsEveryPartition(scenario: TaskHistoryFixtures.Scenario) throws {
         let history = TaskHistoryFixtures.history(scenario)
@@ -1049,8 +1049,8 @@ import Testing
             syncEpoch: "epoch-1", lastFullSnapshotRevision: 10, highestObservedServerRevision: 10)
         func key(
             _ snapshot: Components.Schemas.TaskSnapshot, cursors: SyncCursors, cacheGeneration: Int = 1
-        ) -> TaskTimelineView.TimelineRequestKey {
-            TaskTimelineView.TimelineRequestKey(
+        ) -> TaskPageView.TimelineRequestKey {
+            TaskPageView.TimelineRequestKey(
                 snapshot: snapshot, cursors: cursors, cacheGeneration: cacheGeneration)
         }
         let original = key(snapshot, cursors: cursors)

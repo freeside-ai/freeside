@@ -6,7 +6,7 @@ import SwiftUI
 /// stage began, then every campaign folds its runs and detailed milestones.
 /// Every list keeps the daemon's newest-first order; unlike the run rail,
 /// nothing here is reversed or sorted by timestamp.
-struct TaskTimelineView: View {
+struct TaskPageView: View {
     /// Keys the timeline refetch task, as `RunTimelineView.TimelineRequestKey`
     /// does: the task's own revision plus the epoch, full-snapshot revision,
     /// and cache generation, so every canonical replacement refetches while
@@ -134,7 +134,7 @@ struct TaskTimelineView: View {
     func screenshotContent(
         _ timeline: Components.Schemas.TaskTimeline, disclosures: TaskTimelineDisclosurePreferences? = nil
     ) -> some View {
-        TaskTimelineView(
+        TaskPageView(
             coordinator: coordinator, snapshot: snapshot, onOpenRun: onOpenRun,
             onOpenInboxItem: onOpenInboxItem, screenshotTimeline: timeline,
             disclosures: disclosures ?? TaskTimelineDisclosurePreferences(defaults: nil))

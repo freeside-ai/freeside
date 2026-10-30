@@ -56,7 +56,7 @@ struct UnifiedListView: View {
     var cursors: SyncCursors?
     /// The coordinator's cache generation, so a row's timeline read that a
     /// same-revision bootstrap dropped is reissued
-    /// (`TaskTimelineView.TimelineRequestKey`).
+    /// (`TaskPageView.TimelineRequestKey`).
     var cacheGeneration = 0
     var onLoadTimeline: @MainActor (String) async -> Void = { _ in }
     let navigation: NavigationModel
@@ -327,9 +327,9 @@ struct UnifiedListView: View {
         }
     }
 
-    private func timelineKey(_ row: UnifiedRow) -> TaskTimelineView.TimelineRequestKey? {
+    private func timelineKey(_ row: UnifiedRow) -> TaskPageView.TimelineRequestKey? {
         row.taskSnapshot.map {
-            TaskTimelineView.TimelineRequestKey(
+            TaskPageView.TimelineRequestKey(
                 snapshot: $0, cursors: cursors, cacheGeneration: cacheGeneration)
         }
     }

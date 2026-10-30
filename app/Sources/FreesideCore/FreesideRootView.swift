@@ -502,7 +502,7 @@ public struct FreesideRootView: View {
                     })
             case .task(let taskID):
                 if let task = coordinator.tasks.first(where: { $0.task.id == taskID }) {
-                    TaskTimelineView(
+                    TaskPageView(
                         coordinator: coordinator, snapshot: task,
                         onOpenRun: { navigation.route(to: .run(taskID: taskID, runID: $0)) },
                         onOpenInboxItem: { navigation.route(to: .attentionItem($0)) })
@@ -577,7 +577,7 @@ public struct FreesideRootView: View {
             } else if let taskSelection = navigation.taskSelection,
                 let task = coordinator.tasks.first(where: { $0.task.id == taskSelection })
             {
-                TaskTimelineView(
+                TaskPageView(
                     coordinator: coordinator, snapshot: task,
                     onOpenRun: { navigation.route(to: .run(taskID: task.task.id, runID: $0)) },
                     onOpenInboxItem: { navigation.route(to: .attentionItem($0)) },

@@ -637,9 +637,9 @@ private final class CountingCacheStore: CacheStore, @unchecked Sendable {
         let taskID = try #require(
             coordinator.tasks.first { $0.task.run_ids.contains(RunFixtures.activeRunID) }
         ).task.id
-        func requestKey() throws -> TaskTimelineView.TimelineRequestKey {
+        func requestKey() throws -> TaskPageView.TimelineRequestKey {
             let snapshot = try #require(coordinator.tasks.first { $0.task.id == taskID })
-            return TaskTimelineView.TimelineRequestKey(
+            return TaskPageView.TimelineRequestKey(
                 snapshot: snapshot, cursors: coordinator.cursors, cacheGeneration: coordinator.cacheGeneration)
         }
         let keyBefore = try requestKey()
