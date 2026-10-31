@@ -56,7 +56,7 @@ struct UnifiedListView: View {
     var cursors: SyncCursors?
     /// The coordinator's cache generation, so a row's timeline read that a
     /// same-revision bootstrap dropped is reissued
-    /// (`TaskTimelineView.TimelineRequestKey`).
+    /// (`TaskPageView.TimelineRequestKey`).
     var cacheGeneration = 0
     var onLoadTimeline: @MainActor (String) async -> Void = { _ in }
     let navigation: NavigationModel
@@ -327,9 +327,9 @@ struct UnifiedListView: View {
         }
     }
 
-    private func timelineKey(_ row: UnifiedRow) -> TaskTimelineView.TimelineRequestKey? {
+    private func timelineKey(_ row: UnifiedRow) -> TaskPageView.TimelineRequestKey? {
         row.taskSnapshot.map {
-            TaskTimelineView.TimelineRequestKey(
+            TaskPageView.TimelineRequestKey(
                 snapshot: $0, cursors: cursors, cacheGeneration: cacheGeneration)
         }
     }
@@ -809,24 +809,6 @@ struct InboxRowView: View {
         #elseif os(iOS)
             UIPasteboard.general.string = value
         #endif
-    }
-}
-
-/// Urgent is wax, high is the accent, normal is water, low is faint.
-struct PriorityBadge: View {
-    let priority: Components.Schemas.Priority
-
-    var body: some View {
-        StateChip(label: AttentionDisplay.label(priority), color: color)
-    }
-
-    private var color: Color {
-        switch priority {
-        case .urgent: return .waxText
-        case .high: return .accentText
-        case .normal: return .waterText
-        case .low: return .inkDim
-        }
     }
 }
 

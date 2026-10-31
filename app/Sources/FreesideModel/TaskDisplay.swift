@@ -31,7 +31,7 @@ package enum TaskDisplay {
         let heading: Heading?
         let rail: DecisionStageRailPresentation
         let holdReason: Components.Schemas.RunHoldReason?
-        var hold: String? { holdReason.map(RunDisplay.label) }
+        package var hold: String? { holdReason.map(RunDisplay.label) }
         var qualification: String? = nil
         package var status: String? = nil
         var guidance: String = Position.defaultGuidance
@@ -608,7 +608,7 @@ package enum TaskDisplay {
     /// current phase, so its line carries the round alone; so does one
     /// whose heading is its status word ("Ready for Final Review"), which
     /// the keyword line above already states.
-    static func currentPhaseAndRound(_ position: Position?) -> String? {
+    package static func currentPhaseAndRound(_ position: Position?) -> String? {
         guard let position, let heading = position.heading else { return nil }
         return position.historical || heading.label == position.status ? heading.round : heading.text
     }
@@ -632,6 +632,9 @@ package enum TaskDisplay {
         package let cut: StateChipCut
     }
 
+    /// The keyword of a Working row that holds no running work.
+    package static let parked = "Parked"
+
     /// A Working row, keyed by stage: running work reads as the stage's
     /// gerund, and held work as `Parked` with the hold reason in its context,
     /// since the daemon sends no resume time. Any other live status keeps its
@@ -644,7 +647,7 @@ package enum TaskDisplay {
         switch status {
         case queued, onHold:
             let context = [projectName(task), issueReference(task), position?.hold].compactMap { $0 }
-            return SectionRow(keyword: "Parked", context: context.joined(separator: " · "), cut: cut)
+            return SectionRow(keyword: parked, context: context.joined(separator: " · "), cut: cut)
         case inProgress:
             let name = task.current_position?.value1.stage.map(RunDisplay.canonicalStageName)
             let keyword =

@@ -346,19 +346,14 @@ public struct FreesideRootView: View {
                     let notices =
                         standingNoticesDrawInDetailColumn
                         ? standingNotices(coordinator, placement: .detailColumn) : nil
-                    // An open decision draws the notices itself, beside its
-                    // inspector, so the inspector spans the pane's height
-                    // instead of starting under them. Every other surface
-                    // takes them from the column.
-                    let decisionIsOpen = navigation.attentionSelection != nil
-                    StandingDetailColumn(notices: decisionIsOpen ? nil : notices) { topMargin in
+                    StandingDetailColumn(notices: notices) { topMargin in
                         Group {
                             if Self.showsRevokedPane(
                                 freshness: coordinator.store.freshness, path: navigation.path)
                             {
                                 RevokedPane { rePairConfirmationPresented = true }
                             } else {
-                                macDetail(coordinator, topMargin: topMargin, decisionNotices: notices)
+                                macDetail(coordinator, topMargin: topMargin)
                             }
                         }
                         .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -377,13 +372,6 @@ public struct FreesideRootView: View {
                     .help("Refresh")
                     LastUpdatedLabel(lastUpdatedAt: coordinator.lastUpdatedAt)
                     devicesButton
-                    Button {
-                        navigation.inspectorPresented.toggle()
-                    } label: {
-                        Label("Inspector", systemImage: "sidebar.trailing")
-                    }
-                    .help(
-                        navigation.inspectorPresented ? "Hide Inspector" : "Show Inspector")
                 }
             }
             .sheet(isPresented: Bindable(navigation).newTaskComposerPresented) {
@@ -398,6 +386,40 @@ public struct FreesideRootView: View {
                 submissionRecoverySheet(coordinator)
             }
         #endif
+    }
+
+    /// A decision card, alone in the pane or seated in `page`.
+    private func decisionCard(
+        _ itemID: String, coordinator: SyncCoordinator, topMargin: CGFloat? = nil,
+        page: DecisionDetailView.Page? = nil
+    ) -> DecisionDetailView {
+        DecisionDetailView(
+            store: coordinator.store,
+            itemID: itemID,
+            detailsExpanded: launchDetailsExpanded,
+            detailsRevealRequest: technicalDetailsRequest,
+            onConsumeDetailsRevealRequest: consumeTechnicalDetailsRequest,
+            launchComposer: navigation.launchComposer(for: itemID),
+            onConsumeLaunchComposer: navigation.consumeLaunchComposer,
+            topMargin: topMargin,
+            page: page,
+            onSelectItem: { navigation.route(to: .attentionItem($0)) },
+            tasks: coordinator.tasks,
+            onSelectTask: { navigation.route(to: .task($0)) },
+            onConclusion: { conclusion in
+                handleConclusion(conclusion, coordinator: coordinator)
+            })
+    }
+
+    private func taskPage(
+        _ task: Components.Schemas.TaskSnapshot, leadingItemID: String?, coordinator: SyncCoordinator,
+        topMargin: CGFloat? = nil
+    ) -> TaskPageHost {
+        TaskPageHost(
+            coordinator: coordinator, snapshot: task, leadingItemID: leadingItemID, topMargin: topMargin,
+            onOpenRun: { navigation.openRun(taskID: task.task.id, runID: $0) },
+            onOpenItem: { navigation.route(to: .attentionItem($0)) },
+            card: { itemID, page in decisionCard(itemID, coordinator: coordinator, page: page) })
     }
 
     private func unifiedList(_ coordinator: SyncCoordinator) -> some View {
@@ -496,28 +518,12 @@ public struct FreesideRootView: View {
         private func phoneDetail(
             _ destination: NavigationModel.Destination, coordinator: SyncCoordinator
         ) -> some View {
-            switch destination {
-            case .attentionItem(let itemID):
-                DecisionDetailView(
-                    store: coordinator.store,
-                    itemID: itemID,
-                    detailsExpanded: launchDetailsExpanded,
-                    detailsRevealRequest: technicalDetailsRequest,
-                    onConsumeDetailsRevealRequest: consumeTechnicalDetailsRequest,
-                    launchComposer: navigation.launchComposer(for: itemID),
-                    onConsumeLaunchComposer: navigation.consumeLaunchComposer,
-                    onSelectItem: { navigation.route(to: .attentionItem($0)) },
-                    tasks: coordinator.tasks,
-                    onSelectTask: { navigation.route(to: .task($0)) },
-                    onConclusion: { conclusion in
-                        handleConclusion(conclusion, coordinator: coordinator)
-                    })
-            case .task(let taskID):
+            switch NavigationModel.surface(for: destination, in: coordinator.unifiedList) {
+            case .card(let itemID):
+                decisionCard(itemID, coordinator: coordinator)
+            case .taskPage(let taskID, let leadingItemID):
                 if let task = coordinator.tasks.first(where: { $0.task.id == taskID }) {
-                    TaskTimelineView(
-                        coordinator: coordinator, snapshot: task,
-                        onOpenRun: { navigation.route(to: .run(taskID: taskID, runID: $0)) },
-                        onOpenInboxItem: { navigation.route(to: .attentionItem($0)) })
+                    taskPage(task, leadingItemID: leadingItemID, coordinator: coordinator)
                 } else {
                     unavailableDetail
                 }
@@ -551,37 +557,18 @@ public struct FreesideRootView: View {
         @ViewBuilder
         private func macDetail(
             _ coordinator: SyncCoordinator,
-            topMargin: CGFloat?,
-            decisionNotices: StandingNotices?
+            topMargin: CGFloat?
         ) -> some View {
-            // The detail closure's `decisionIsOpen` names the first branch:
-            // the column gives up the notices exactly when this view draws
-            // them, so a condition added here belongs there too.
-            if let attentionSelection = navigation.attentionSelection {
-                DecisionDetailView(
-                    store: coordinator.store,
-                    itemID: attentionSelection,
-                    detailsExpanded: launchDetailsExpanded,
-                    detailsRevealRequest: technicalDetailsRequest,
-                    onConsumeDetailsRevealRequest: consumeTechnicalDetailsRequest,
-                    launchComposer: navigation.launchComposer(for: attentionSelection),
-                    onConsumeLaunchComposer: navigation.consumeLaunchComposer,
-                    inspectorPresented: Bindable(navigation).inspectorPresented,
-                    standingNotices: decisionNotices,
-                    onSelectItem: { navigation.route(to: .attentionItem($0)) },
-                    tasks: coordinator.tasks,
-                    onSelectTask: { navigation.route(to: .task($0)) },
-                    onConclusion: { conclusion in
-                        handleConclusion(conclusion, coordinator: coordinator)
-                    }
-                )
-                .id(attentionSelection)
-            } else if let runSelection = navigation.runSelection {
+            let surface = navigation.detailSurface(in: coordinator.unifiedList)
+            if case .card(let itemID) = surface {
+                decisionCard(itemID, coordinator: coordinator, topMargin: topMargin)
+                    .id(itemID)
+            } else if case .run(_, let runID) = surface {
                 // A run opened under its task: the column has no stack to
                 // pop, so a return row leads back to the task.
                 VStack(spacing: 0) {
                     runReturnRow(topMargin: topMargin)
-                    if let run = coordinator.runs.first(where: { $0.run.id == runSelection }) {
+                    if let run = coordinator.runs.first(where: { $0.run.id == runID }) {
                         RunTimelineView(coordinator: coordinator, snapshot: run, topMargin: 10)
                     } else {
                         UnavailableStateView(
@@ -590,17 +577,12 @@ public struct FreesideRootView: View {
                             seat: .detailColumn)
                     }
                 }
-                .id(runSelection)
-            } else if let taskSelection = navigation.taskSelection,
-                let task = coordinator.tasks.first(where: { $0.task.id == taskSelection })
+                .id(runID)
+            } else if case .taskPage(let taskID, let leadingItemID) = surface,
+                let task = coordinator.tasks.first(where: { $0.task.id == taskID })
             {
-                TaskTimelineView(
-                    coordinator: coordinator, snapshot: task,
-                    onOpenRun: { navigation.route(to: .run(taskID: task.task.id, runID: $0)) },
-                    onOpenInboxItem: { navigation.route(to: .attentionItem($0)) },
-                    topMargin: topMargin
-                )
-                .id(taskSelection)
+                taskPage(task, leadingItemID: leadingItemID, coordinator: coordinator, topMargin: topMargin)
+                    .id(taskID)
             } else if showsInboxClearResult {
                 // The same two lines the empty Needs you draws in the
                 // sidebar, so the two panes agree.

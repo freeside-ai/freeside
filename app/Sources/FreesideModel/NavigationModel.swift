@@ -26,6 +26,15 @@ public final class NavigationModel {
         case run(taskID: String, runID: String)
     }
 
+    /// What the detail column draws for a route.
+    package enum DetailSurface: Equatable {
+        /// A task's page, with the item whose card leads it, if any.
+        case taskPage(taskID: String, leadingItemID: String?)
+        /// An item with no held task: its card alone.
+        case card(itemID: String)
+        case run(taskID: String, runID: String)
+    }
+
     /// The one route: an item, a task, or a task with its run over it. The
     /// selections read from it, so an item and a task can't both be open.
     public private(set) var path: [Destination] {
@@ -39,7 +48,6 @@ public final class NavigationModel {
     /// one that a cold start's cached list hasn't caught up to, and the card
     /// shows either from canonical state. Leaving the card ends it.
     public private(set) var linkedItemID: String?
-    public var inspectorPresented: Bool
     /// The New Task composer's presentation flag, shared by the list's tools
     /// row, ⌘N, and the File > New Task menu item, so all three open the one
     /// sheet through the same gated path.
@@ -57,7 +65,6 @@ public final class NavigationModel {
 
     public init(launchInputs: LaunchInputs) {
         path = []
-        inspectorPresented = launchInputs.detailsExpanded
         devicesPresented = launchInputs.devicesPresented
         // `LaunchInputs` leaves the composer nil without an item selection.
         if case .attentionItem(let itemID)? = launchInputs.selection {
@@ -82,6 +89,29 @@ public final class NavigationModel {
 
     public var runSelection: String? {
         if case .run(_, let runID)? = path.last { runID } else { nil }
+    }
+
+    /// The surface a destination opens. An item a held task owns leads that
+    /// task's page, open or resolved, so a link and a list row land in the
+    /// same place; one no held task owns, which covers a scoped item and a
+    /// link the list hasn't caught up to, is its card alone. A task leads
+    /// with its newest open item.
+    package static func surface(for destination: Destination, in list: UnifiedList) -> DetailSurface {
+        switch destination {
+        case .attentionItem(let itemID):
+            list.taskID(ofItem: itemID).map { .taskPage(taskID: $0, leadingItemID: itemID) }
+                ?? .card(itemID: itemID)
+        case .task(let taskID):
+            .taskPage(taskID: taskID, leadingItemID: list.openItems(inTask: taskID).first?.item.id)
+        case .run(let taskID, let runID):
+            .run(taskID: taskID, runID: runID)
+        }
+    }
+
+    /// The surface the macOS detail column draws for the route, which shows
+    /// its last destination. Nil with nothing routed.
+    package func detailSurface(in list: UnifiedList) -> DetailSurface? {
+        path.last.map { Self.surface(for: $0, in: list) }
     }
 
     /// The launch's composer for this item's card, or nil for any other item
@@ -109,6 +139,12 @@ public final class NavigationModel {
         return [destination]
     }
 
+    /// Open a run from the task page: over the route that page came from, so
+    /// returning lands on the same page with the same card leading.
+    public func openRun(taskID: String, runID: String) {
+        setPath(Array(path.prefix(1)) + [.run(taskID: taskID, runID: runID)])
+    }
+
     /// Route to the item a notification link named; see `linkedItemID`.
     public func route(toLinkedItem itemID: String) {
         route(to: .attentionItem(itemID))
@@ -129,6 +165,16 @@ public final class NavigationModel {
         setPath(destination.map(Self.route(to:)) ?? [])
     }
 
+    /// Whether the route's page holds a card, which is what an operator may
+    /// have work in progress on. A run over the page leaves the card held.
+    package func holdsCard(in list: UnifiedList) -> Bool {
+        switch path.first.map({ Self.surface(for: $0, in: list) }) {
+        case .card: true
+        case .taskPage(_, let leadingItemID): leadingItemID != nil
+        case .run, nil: false
+        }
+    }
+
     /// Returns from a run timeline to its task on macOS, which has no stack
     /// to pop.
     public func closeRun() {
@@ -141,7 +187,7 @@ public final class NavigationModel {
     }
 
     /// Leave a just-concluded item once its receipt delay expires. The
-    /// default keeps the item's row selected: its task's timeline, or another
+    /// default keeps the item's row selected: its task's page, or another
     /// of the task's open items, since selecting the row again can't reach
     /// those, or a scoped item's own card. Only when `advancesToNextItem` is
     /// set, and an open item remains, does focus move to the next row.
@@ -205,9 +251,12 @@ public final class NavigationModel {
     /// counting as operator navigation against a pending conclusion advance.
     /// An item that was open and has resolved under its task hands the route
     /// along the task's row: to another of its open items, else the task, so
-    /// the row stays selected and the timeline shows. A closed item opened on
+    /// the row stays selected and the page stays, its card gone. A closed
+    /// item opened on
     /// purpose stays. A selection with no row left
-    /// clears, taking any run with it. `previouslyOpen` is the open item ids
+    /// clears, taking any run with it. A task with an open item settles on
+    /// the item leading its page, so a newer item can't swap the card under
+    /// an operator working on it. `previouslyOpen` is the open item ids
     /// before this change.
     package func repairSelection(in list: UnifiedList, previouslyOpen: Set<String> = []) {
         switch path.first {
@@ -219,10 +268,17 @@ public final class NavigationModel {
             }
             if case .task(let taskID) = row, !list.isOpen(itemID: itemID), previouslyOpen.contains(itemID) {
                 let sibling = list.nextOpenItemID(inTask: taskID, excluding: itemID)
-                path = [sibling.map(Destination.attentionItem) ?? .task(taskID)]
+                path = [sibling.map(Destination.attentionItem) ?? .task(taskID)] + path.dropFirst()
             }
         case .task(let taskID):
-            if !list.holds(.task(taskID)) { path = [] }
+            guard list.holds(.task(taskID)) else {
+                path = []
+                return
+            }
+            let open = list.openItems(inTask: taskID)
+            if path.count == 1, let lead = open.first(where: { previouslyOpen.contains($0.item.id) }) ?? open.first {
+                path = [.attentionItem(lead.item.id)]
+            }
         case .run, nil:
             break
         }

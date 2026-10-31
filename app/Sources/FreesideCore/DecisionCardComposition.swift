@@ -65,27 +65,6 @@ struct DecisionCardComposition: Equatable {
 
     private var controlGroupStart: Int { reviewingActionInsertionIndex ?? actionInsertionIndex }
 
-    /// What the Mac card's Evidence module draws.
-    enum MacEvidence: Equatable {
-        /// One row that counts the attachments and links to the inspector's
-        /// Evidence section.
-        case pointer
-        /// The attachment rows themselves.
-        case rows
-        case nothing
-    }
-
-    /// The open inspector holds the attachments, so the card points at them
-    /// there and never draws a second copy (R18). The pointer does not wait
-    /// for the inspector's Evidence section to be open, because its link
-    /// opens that section. With the inspector closed, only a type with a
-    /// reviewing action keeps its rows in the card.
-    func macEvidence(inspectorPresented: Bool, attachmentCount: Int) -> MacEvidence {
-        guard attachmentCount > 0 else { return .nothing }
-        if inspectorPresented { return .pointer }
-        return reviewingActionInsertionIndex == nil ? .nothing : .rows
-    }
-
     /// A claim module leads when it renders above the action region: that is
     /// the whole meaning of prominence here, so it is read from
     /// `actionInsertionIndex` rather than from another module's position.
@@ -111,7 +90,7 @@ struct DecisionCardComposition: Equatable {
             // can read leads and an attachment stays supporting context
             // (plan §9). This is the split the macOS action region already
             // applies, where text claims sit above the actions and attachment
-            // claims move to the inspector.
+            // claims move to the card's foot.
             if leadsWithItsClaim, !claims.contains(where: { $0.text != nil }) {
                 return leads ? claims : []
             }
@@ -133,6 +112,18 @@ struct DecisionCardComposition: Equatable {
             claimsAreProminent(at: lead)
         else { return [] }
         return self.claims(from: claims, at: lead, prominentClaimIndex: prominentClaimIndex)
+    }
+
+    /// The attachment claims the card's foot lists, on both platforms. A
+    /// claim the card leads with stays out, so it renders once.
+    func footClaims(
+        from claims: [Components.Schemas.AgentClaim],
+        prominentClaimIndex: Int?
+    ) -> [Components.Schemas.AgentClaim] {
+        let lead = cardLeadClaims(from: claims, prominentClaimIndex: prominentClaimIndex)
+        return claims.filter {
+            $0.text == nil && !AgentClaimLabels.isApprovalMaterial($0.label) && !lead.contains($0)
+        }
     }
 
     func summaries(
@@ -511,9 +502,10 @@ struct DecisionCardComposition: Equatable {
     struct UnverifiedContext: Equatable {
         enum Platform: CaseIterable {
             /// Claims and the recommendation draw in the action region and
-            /// the inspector.
+            /// the card's foot.
             case mac
-            /// Every module draws in the card.
+            /// Claims and the recommendation draw in their own modules and
+            /// the card's foot.
             case phone
         }
 
@@ -600,13 +592,22 @@ struct DecisionCardComposition: Equatable {
         }
     }
 
-    /// Whether a claims module draws in the card at all. macOS lists claims
-    /// in the action region and the inspector, so a claims module draws in
-    /// the card there only where the claim is the card's own lead (D08).
-    func drawsClaimsInCard(at moduleIndex: Int, on platform: UnverifiedContext.Platform) -> Bool {
+    /// What a claims module draws in the card, which leaves out what the
+    /// foot lists. macOS lists text claims in the action region, so a claims
+    /// module draws there only where the claim is the card's own lead (D08).
+    func claimsInCard(
+        from claims: [Components.Schemas.AgentClaim],
+        at moduleIndex: Int,
+        prominentClaimIndex: Int?,
+        on platform: UnverifiedContext.Platform
+    ) -> [Components.Schemas.AgentClaim] {
+        let module = self.claims(from: claims, at: moduleIndex, prominentClaimIndex: prominentClaimIndex)
         switch platform {
-        case .mac: drawsLeadClaimsInCard && claimsAreProminent(at: moduleIndex)
-        case .phone: true
+        case .mac:
+            return drawsLeadClaimsInCard && claimsAreProminent(at: moduleIndex) ? module : []
+        case .phone:
+            let foot = footClaims(from: claims, prominentClaimIndex: prominentClaimIndex)
+            return module.filter { !foot.contains($0) }
         }
     }
 
@@ -641,18 +642,12 @@ struct DecisionCardComposition: Equatable {
             return item._type == .ready_for_final_review
                 || !summaries(from: item.agent_claims).isEmpty
         case .claims:
-            guard drawsClaimsInCard(at: index, on: context.platform) else { return false }
-            let drawn = claims(
+            let drawn = claimsInCard(
                 from: item.agent_claims, at: index,
-                prominentClaimIndex: context.prominentClaimIndex)
+                prominentClaimIndex: context.prominentClaimIndex, on: context.platform)
             // A supporting claims section is a disclosure at an accessibility
             // size, and its keyword is that disclosure's label.
             return !drawn.isEmpty && (claimsAreProminent(at: index) || !context.accessibilityLayout)
-        case .details:
-            // A phone draws Details open in the card at an ordinary size, so
-            // an agent-written reason there shows its keyword.
-            return context.platform == .phone && !context.accessibilityLayout
-                && Self.reason(for: item)?.isAgentWritten == true
         case .stopCause:
             // The drift audit's explanation and fixes are the audit model's
             // words, drawn under an unverified keyword (frame 5.2).
@@ -660,7 +655,7 @@ struct DecisionCardComposition: Equatable {
         case .comparison:
             return context.hasComparison
         case .foldedFacts, .specRevision, .specification, .checklist, .stageRail,
-            .yieldChart, .evidence:
+            .yieldChart, .evidence, .details:
             return false
         }
     }

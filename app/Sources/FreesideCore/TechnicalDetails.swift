@@ -36,40 +36,46 @@ extension View {
 /// for VoiceOver.
 ///
 /// `rendersInteractiveControls` is false only where a non-interactive copy of a
-/// card draws the row (the decision inspector's screenshot), matching the flag
+/// card draws the row (a card's foot in a screenshot), matching the flag
 /// the composers already take; every live surface, and every screenshot of
 /// these sections, shows the button, because a touch platform has no hover to
 /// reveal it.
 struct TechnicalDetailRow: View {
     let row: AttentionDisplay.BindingRow
     var rendersInteractiveControls = true
-    /// Stacks the value under its label whatever its length, for a pane
-    /// too narrow for a trailing column (`FactRow.stacksAlways`).
-    var stacksAlways = false
     /// Whose value this is, spoken after the label, where one section
     /// holds several owners' rows of the same label.
     var owner: String? = nil
 
     var body: some View {
         HStack(alignment: .firstTextBaseline, spacing: 10) {
-            FactRow(
-                label: row.label, value: row.value, valueColor: .inkDim,
-                stacksAlways: stacksAlways
-            )
-            .textSelection(.enabled)
-            .frame(maxWidth: .infinity, alignment: .leading)
+            FactRow(label: row.label, value: row.value, valueColor: .inkDim)
+                .textSelection(.enabled)
+                .frame(maxWidth: .infinity, alignment: .leading)
             if rendersInteractiveControls {
-                Button {
-                    Clipboard.copy(row.value)
-                } label: {
-                    Image(systemName: "doc.on.doc")
-                        .font(FreesideFont.keyword)
-                        .foregroundStyle(Color.accentText)
-                }
-                .buttonStyle(.plain)
-                .accessibilityLabel("Copy \(row.label)\(owner.map { ", \($0)" } ?? "")")
+                CopyValueButton(
+                    value: row.value,
+                    spokenLabel: "Copy \(row.label)\(owner.map { ", \($0)" } ?? "")")
             }
         }
+    }
+}
+
+/// The copy control beside a technical value.
+struct CopyValueButton: View {
+    let value: String
+    let spokenLabel: String
+
+    var body: some View {
+        Button {
+            Clipboard.copy(value)
+        } label: {
+            Image(systemName: "doc.on.doc")
+                .font(FreesideFont.keyword)
+                .foregroundStyle(Color.accentText)
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel(spokenLabel)
     }
 }
 

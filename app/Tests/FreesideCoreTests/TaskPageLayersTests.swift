@@ -6,7 +6,7 @@ import Testing
 @testable import FreesideModel
 
 @MainActor
-@Suite struct TaskTimelineLayersTests {
+@Suite struct TaskPageLayersTests {
     private let utc = TimeZone.gmt
     private let enUS = Locale(identifier: "en_US")
 
@@ -118,7 +118,7 @@ import Testing
     }
 
     @Test func foldsPersistPerTaskAndStartCollapsed() throws {
-        let suite = "TaskTimelineLayersTests-\(UUID().uuidString)"
+        let suite = "TaskPageLayersTests-\(UUID().uuidString)"
         let defaults = try #require(UserDefaults(suiteName: suite))
         defer { defaults.removePersistentDomain(forName: suite) }
 
@@ -147,7 +147,7 @@ import Testing
     /// The Task Events fold is gone: a device that stored it open keeps the
     /// value, and it opens nothing.
     @Test func aStoredFoldForTheOldEventsDisclosureOpensNothing() throws {
-        let suite = "TaskTimelineLayersTests-\(UUID().uuidString)"
+        let suite = "TaskPageLayersTests-\(UUID().uuidString)"
         let defaults = try #require(UserDefaults(suiteName: suite))
         defer { defaults.removePersistentDomain(forName: suite) }
         defaults.set(["task-a": ["events"]], forKey: "FreesideTaskTimelineExpandedSections")
@@ -171,7 +171,7 @@ import Testing
         ]
         #expect(!others.map(\.id).contains("identifiers"))
 
-        let suite = "TaskTimelineLayersTests-\(UUID().uuidString)"
+        let suite = "TaskPageLayersTests-\(UUID().uuidString)"
         let defaults = try #require(UserDefaults(suiteName: suite))
         defer { defaults.removePersistentDomain(forName: suite) }
         let store = TaskTimelineDisclosurePreferences(defaults: defaults)

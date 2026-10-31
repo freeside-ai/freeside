@@ -35,13 +35,20 @@ struct TimelineRail: View {
         /// from it: the two share one instant, so both read as the head of
         /// the rail.
         var isNewest = false
+        /// The attention item the entry records a decision on, which opens
+        /// its card. Nil where the client holds no such item.
+        var itemID: String?
 
-        init(kind: Kind, label: String, recordedAt: Date?, context: String? = nil, isNewest: Bool = false) {
+        init(
+            kind: Kind, label: String, recordedAt: Date?, context: String? = nil, isNewest: Bool = false,
+            itemID: String? = nil
+        ) {
             self.kind = kind
             self.label = label
             self.recordedAt = recordedAt
             self.context = context
             self.isNewest = isNewest
+            self.itemID = itemID
         }
 
         var isStageStart: Bool {
@@ -50,6 +57,9 @@ struct TimelineRail: View {
     }
 
     let rows: [Row]
+    /// Opens a row's item. Nil (a run's page, a screenshot of one) draws
+    /// every row as plain text, never as a link that goes nowhere.
+    var onOpenItem: ((String) -> Void)? = nil
     @Environment(\.timeZone) private var timeZone
     @Environment(\.locale) private var locale
     @Environment(\.pinnedNow) private var pinnedNow
@@ -129,10 +139,24 @@ struct TimelineRail: View {
     /// under the label in the mono a trailing summary uses.
     private func label(_ row: Row) -> some View {
         VStack(alignment: .leading, spacing: 2) {
-            Text(row.label)
-                .font(FreesideFont.sans(.callout, weight: row.isNewest ? .semibold : .regular))
-                .foregroundStyle(Self.labelColor(row))
-                .fixedSize(horizontal: false, vertical: true)
+            if let itemID = row.itemID, let onOpenItem {
+                Button {
+                    onOpenItem(itemID)
+                } label: {
+                    FreesideLink(
+                        title: row.label,
+                        face: FreesideFont.sans(.callout, weight: row.isNewest ? .semibold : .regular)
+                    )
+                    .multilineTextAlignment(.leading)
+                    .fixedSize(horizontal: false, vertical: true)
+                }
+                .buttonStyle(.plain)
+            } else {
+                Text(row.label)
+                    .font(FreesideFont.sans(.callout, weight: row.isNewest ? .semibold : .regular))
+                    .foregroundStyle(Self.labelColor(row))
+                    .fixedSize(horizontal: false, vertical: true)
+            }
             if let context = row.context {
                 Text(context)
                     .font(FreesideFont.trailingSummary)

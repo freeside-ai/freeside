@@ -8,70 +8,11 @@ enum SpecApprovalReader: String, Identifiable {
 
     var id: String { rawValue }
 
-    /// The reader's name in its header row, and the shorter form a narrow
-    /// pane falls back to.
-    var keyword: (full: String, short: String) {
+    /// The reader's name in its sheet's header.
+    var keyword: String {
         switch self {
-        case .specification: ("Specification reader", "Specification")
-        case .diff: ("Diff reader", "Diff")
-        }
-    }
-}
-
-/// The Mac reader's header row (R16): the reader's keyword with the
-/// revision as a chip, and `Close Reader` as a text control fixed in the
-/// row, so closing never scrolls away with the content. A pane too narrow
-/// for the full keyword draws the short one, and one too narrow for the row
-/// stacks the control under the keyword.
-struct SpecApprovalReaderHeader: View {
-    let reader: SpecApprovalReader
-    let revision: Int?
-    var rendersInteractiveControls = true
-    let close: () -> Void
-
-    var body: some View {
-        ViewThatFits(in: .horizontal) {
-            row(reader.keyword.full)
-            row(reader.keyword.short)
-            VStack(alignment: .leading, spacing: 8) {
-                identity(reader.keyword.short)
-                closeControl
-            }
-            .frame(maxWidth: .infinity, alignment: .leading)
-        }
-    }
-
-    private func row(_ keyword: String) -> some View {
-        HStack(alignment: .center, spacing: 12) {
-            identity(keyword)
-            Spacer(minLength: 0)
-            closeControl
-        }
-    }
-
-    private func identity(_ keyword: String) -> some View {
-        HStack(alignment: .center, spacing: 10) {
-            KeywordLabel(text: keyword)
-                .accessibilityAddTraits(.isHeader)
-            if let chip = SpecApprovalReader.revisionChip(revision) { chip }
-        }
-        .fixedSize()
-    }
-
-    @ViewBuilder private var closeControl: some View {
-        if rendersInteractiveControls {
-            Button("Close Reader", action: close)
-                .buttonStyle(.plain)
-                .font(FreesideFont.noticeAction)
-                .foregroundStyle(Color.accentText)
-                .fixedSize()
-                .freesideFocusRing(cornerRadius: 4)
-                .help("Close reader and show evidence and details")
-        } else {
-            Text("Close Reader")
-                .font(FreesideFont.noticeAction)
-                .foregroundStyle(Color.accentText)
-                .fixedSize()
+        case .specification: "Specification reader"
+        case .diff: "Diff reader"
         }
     }
 }

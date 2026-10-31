@@ -240,7 +240,8 @@ enum TaskStageFixtures {
     /// sync would, and the task's snapshot, for drawing the whole task page.
     @MainActor
     static func coordinator(
-        _ page: TaskProgressFixtures.Case, runTimelines: [Components.Schemas.RunTimeline] = []
+        _ page: TaskProgressFixtures.Case, runTimelines: [Components.Schemas.RunTimeline] = [],
+        conversations: [Components.Schemas.ConversationSnapshot] = []
     ) throws -> (coordinator: SyncCoordinator, task: Components.Schemas.TaskSnapshot) {
         var task = TaskFixtures.approvedCampaign().task
         task.task = page.task
@@ -250,11 +251,39 @@ enum TaskStageFixtures {
                 cursors: .init(
                     syncEpoch: "stage-epoch", lastFullSnapshotRevision: task.as_of_revision,
                     highestObservedServerRevision: task.as_of_revision),
-                attentionItems: page.items, runs: page.runs, runTimelines: runTimelines, tasks: [task],
-                taskTimelines: [page.history].compactMap { $0 }))
+                attentionItems: page.items, conversations: conversations, runs: page.runs, runTimelines: runTimelines,
+                tasks: [task], taskTimelines: [page.history].compactMap { $0 }))
         let coordinator = SyncCoordinator(client: APIClientFactory.mock(server: MockServer()), cache: cache)
         coordinator.store.freshness = .fresh
         return (coordinator, task)
+    }
+
+    /// An item of `type` under this fixture's task, created `hoursOld` hours before
+    /// the fixture's newest item.
+    static func item(
+        _ type: Components.Schemas.AttentionType, id: String, hoursOld: Int
+    ) -> Components.Schemas.AttentionItemSnapshot {
+        var snapshot = AttentionFixtures.fixture(type: type)
+        snapshot.item.id = id
+        snapshot.item.subject = .task(.init(subject_type: .task, subject_id: taskID, task_id: taskID))
+        snapshot.item.created_at = snapshot.item.created_at?.addingTimeInterval(TimeInterval(-3600 * hoursOld))
+        return snapshot
+    }
+
+    /// The task line a page's status line names for `role`.
+    static func line(
+        _ role: Components.Schemas.TaskLineRole, agent: String, pool: String?
+    ) -> Components.Schemas.TaskLine {
+        let observed = Date(timeIntervalSince1970: 0)
+        return .init(
+            id: "sha256:\(String(repeating: "c", count: 64))", task_id: taskID, role: role, agent: agent, version: 1,
+            source: .router, set_by: "daemon", set_at: observed,
+            provenance: .init(
+                value1: .init(
+                    policy_revision: 1, trigger: .first_admission,
+                    reading: pool.map {
+                        .init(value1: .init(pool: $0, window: "5h", observed_at: observed))
+                    })))
     }
 
     static func history(_ scenario: Scenario) -> Components.Schemas.TaskTimeline {

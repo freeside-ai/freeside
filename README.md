@@ -149,9 +149,9 @@ In a configured real workflow:
 4. Review the resulting pull request and its verification evidence before
    deciding whether to merge.
 
-On Mac, **⌘1** opens Inbox, **⌘2** opens Tasks, **⌘R** refreshes, and **⌥⌘I**
-toggles the inspector. The app shows its last-updated state; refresh and check
-the connection if the information looks stale. The [client guide](app/README.md)
+On Mac, **⌘1** opens Inbox, **⌘2** opens Tasks, and **⌘R** refreshes. The app
+shows its last-updated state; refresh and check the connection if the
+information looks stale. The [client guide](app/README.md)
 describes keyboard commands and connection modes in more detail.
 
 ## Prepare a Real Repository Run

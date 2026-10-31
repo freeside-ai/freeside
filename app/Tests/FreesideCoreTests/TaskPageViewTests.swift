@@ -415,7 +415,7 @@ import Testing
     }
 }
 
-@Suite struct TaskTimelineViewTests {
+@Suite struct TaskPageViewTests {
     @Test(arguments: TaskHistoryFixtures.Scenario.allCases)
     func completeHistoryRetainsEveryPartition(scenario: TaskHistoryFixtures.Scenario) throws {
         let history = TaskHistoryFixtures.history(scenario)
@@ -1049,8 +1049,8 @@ import Testing
             syncEpoch: "epoch-1", lastFullSnapshotRevision: 10, highestObservedServerRevision: 10)
         func key(
             _ snapshot: Components.Schemas.TaskSnapshot, cursors: SyncCursors, cacheGeneration: Int = 1
-        ) -> TaskTimelineView.TimelineRequestKey {
-            TaskTimelineView.TimelineRequestKey(
+        ) -> TaskPageView.TimelineRequestKey {
+            TaskPageView.TimelineRequestKey(
                 snapshot: snapshot, cursors: cursors, cacheGeneration: cacheGeneration)
         }
         let original = key(snapshot, cursors: cursors)
@@ -1067,5 +1067,154 @@ import Testing
         #expect(original != key(revised, cursors: cursors))
         // A same-revision bootstrap moves only the cache generation.
         #expect(original != key(snapshot, cursors: cursors, cacheGeneration: 2))
+    }
+}
+
+@Suite @MainActor struct TaskPagePresentationTests {
+    private let now = Date(timeIntervalSince1970: 1_800_000_000)
+    private let locale = Locale(identifier: "en_US_POSIX")
+    private let timeZone = TimeZone(identifier: "UTC") ?? .gmt
+
+    private func status(
+        _ page: TaskProgressFixtures.Case,
+        open: [Components.Schemas.AttentionItemSnapshot] = [],
+        completion: Components.Schemas.WorkUnitCompletionFacts? = nil
+    ) -> String {
+        TaskTimelinePresentation.statusLine(
+            page.task, position: page.position, stage: nil, openItems: open.map(\.item),
+            run: TaskTimelinePresentation.currentRun(page.task, in: page.history), completion: completion,
+            now: now, locale: locale, timeZone: timeZone)
+    }
+
+    private func question(_ id: String, hoursOld: Double) -> Components.Schemas.AttentionItemSnapshot {
+        var snapshot = TaskStageFixtures.item(.agent_question, id: id, hoursOld: 0)
+        snapshot.item.created_at = now.addingTimeInterval(-3600 * hoursOld)
+        return snapshot
+    }
+
+    @Test func theStatusLineCountsOpenDecisionsFromTheOldest() {
+        let page = TaskStageFixtures.page(.review)
+        #expect(
+            status(page, open: [question("newest", hoursOld: 1), question("oldest", hoursOld: 6)])
+                == "Waiting on you since 6h · 2 open decisions")
+        #expect(status(page, open: [question("only", hoursOld: 2)]) == "Waiting on you since 2h · 1 open decision")
+    }
+
+    @Test func theStatusLineNamesTheRunAgentAndPoolWhileWorking() {
+        var page = TaskStageFixtures.page(.implementation)
+        page.task.task_lines = [
+            TaskStageFixtures.line(.implementer, agent: "claude", pool: "A"),
+            TaskStageFixtures.line(.reviewer, agent: "codex", pool: "B"),
+        ]
+        let stage = TaskDisplay.CurrentStage(stage: .implementation, round: nil)
+        #expect(
+            TaskTimelinePresentation.statusLine(
+                page.task, position: page.position, stage: stage, openItems: [],
+                run: TaskTimelinePresentation.currentRun(page.task, in: page.history), completion: nil,
+                now: now, locale: locale, timeZone: timeZone) == "Implementing · run 1 · claude · pool A")
+    }
+
+    @Test func aParkedStatusLineNamesWhatParkedIt() {
+        let page = TaskStageFixtures.page(.verification)
+        #expect(status(page) == "Parked · Verification findings block publication")
+    }
+
+    @Test func aMergedTaskNamesItsPullRequest() {
+        var page = TaskStageFixtures.page(.review)
+        page.task.lifecycle = .finished
+        let completion = Components.Schemas.WorkUnitCompletionFacts(
+            pr_number: 2431, merge_commit_sha: "4be1d0a7", recorded_at: now.addingTimeInterval(-3600))
+        let line = status(page, completion: completion)
+        #expect(line.hasPrefix("Merged as PR #2431 · "))
+    }
+
+    /// Nothing is invented for a fact no client source holds: Isolation and
+    /// Branch stay out, and a pull request reads as not yet opened.
+    @Test func theTaskFoldStatesOnlyWhatTheClientHolds() {
+        var page = TaskStageFixtures.page(.implementation)
+        page.task.task_lines = [TaskStageFixtures.line(.implementer, agent: "claude", pool: "A")]
+        let run = TaskTimelinePresentation.currentRun(page.task, in: page.history)
+        let facts = TaskTimelinePresentation.taskFacts(
+            page.task, position: page.position, stage: .implementation, run: run,
+            policyDigest: "sha256:\(String(repeating: "a", count: 64))", pullRequest: nil, historyLoaded: true)
+
+        #expect(
+            facts.map(\.label)
+                == ["Project", "Stage", "Current Run", "Agent and Pool", "Pull Request", "Policy Digest"])
+        #expect(facts.first { $0.label == "Agent and Pool" }?.value == "claude · pool A")
+        #expect(facts.first { $0.label == "Pull Request" }?.value == "None yet")
+        // A history still loading can't say that no pull request exists.
+        let loading = TaskTimelinePresentation.taskFacts(
+            page.task, position: page.position, stage: .implementation, run: run, policyDigest: nil,
+            pullRequest: nil, historyLoaded: false)
+        #expect(!loading.map(\.label).contains("Pull Request"))
+        #expect(
+            TaskTimelinePresentation.taskSummary(
+                page.task, position: page.position, stage: .implementation, run: run
+            ).hasSuffix("run 1 · claude · pool A"))
+    }
+
+    @Test func eachNamedConversationDrawsOnceNewestFirst() {
+        func item(_ id: String, _ conversation: String?, hoursOld: Double) -> Components.Schemas.AttentionItem {
+            var item = question(id, hoursOld: hoursOld).item
+            item.conversation_id = conversation
+            return item
+        }
+        var older = AttentionFixtures.defaultConversations()[0]
+        older.conversation.id = "conv-older"
+        var newer = older
+        newer.conversation.id = "conv-newer"
+        let held = ["conv-older": older, "conv-newer": newer]
+
+        let drawn = TaskTimelinePresentation.conversations([
+            item("a", "conv-older", hoursOld: 9),
+            item("b", "conv-newer", hoursOld: 1),
+            item("c", "conv-older", hoursOld: 2),
+            item("d", nil, hoursOld: 0),
+            item("e", "conv-unheld", hoursOld: 0),
+        ]) { held[$0] }
+
+        #expect(drawn.map(\.conversation.id) == ["conv-newer", "conv-older"])
+    }
+
+    @Test func aRecordedDecisionLinksToItsItemOnlyWhenTheClientHoldsIt() throws {
+        let script = TaskStageFixtures.script(.remediation)
+        let decidedRow = { (rows: [TimelineRail.Row]) in rows.first { $0.label.contains("findings decided") } }
+        let approvedRow = { (rows: [TimelineRail.Row]) in rows.first { $0.label == "Specification approved" } }
+
+        let plain = TaskTimelinePresentation.rows(script.timeline, reviewRounds: script.reviewRounds)
+        #expect(try #require(decidedRow(plain)).itemID == nil)
+        #expect(try #require(approvedRow(plain)).itemID == nil)
+
+        let decidedAt = try #require(
+            script.reviewRounds[TaskStageFixtures.implementationRun]?.first?.remediation?.value1.decided_at)
+        var adjudication = TaskStageFixtures.item(.finding_adjudication, id: "decided", hoursOld: 0).item
+        adjudication.decided_at = decidedAt
+        var approval = TaskStageFixtures.item(.spec_approval, id: "approved", hoursOld: 0).item
+        approval.status = .resolved
+        approval.decided_at = decidedAt
+        approval.subject = .run(
+            .init(
+                subject_type: .run, subject_id: TaskStageFixtures.specificationRun,
+                run_id: TaskStageFixtures.specificationRun, task_id: TaskStageFixtures.taskID))
+
+        // The iteration a request for changes replaced shares the run.
+        var replaced = approval
+        replaced.id = "replaced"
+        replaced.status = .superseded
+
+        let linked = TaskTimelinePresentation.rows(
+            script.timeline, reviewRounds: script.reviewRounds, items: [replaced, adjudication, approval])
+        #expect(try #require(decidedRow(linked)).itemID == "decided")
+        #expect(try #require(approvedRow(linked)).itemID == "approved")
+    }
+
+    @Test func anEventThatNamesAnItemLinksToIt() throws {
+        let timeline = TaskHistoryFixtures.externallyReviewed(requested: false)
+        let held = TaskStageFixtures.item(.ready_for_final_review, id: "history-ready", hoursOld: 0).item
+
+        let linked = TaskTimelinePresentation.rows(timeline, items: [held])
+        #expect(linked.contains { $0.itemID == "history-ready" })
+        #expect(!TaskTimelinePresentation.rows(timeline).contains { $0.itemID != nil })
     }
 }
