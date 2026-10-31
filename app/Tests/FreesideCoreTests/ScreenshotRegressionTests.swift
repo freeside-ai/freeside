@@ -777,24 +777,32 @@
                                 rendersInteractiveControls: false))))
             }
 
-            // The Devices sheet (#981) with every state it renders: this
-            // device, another active one, and a revoked one never seen.
+            // The Settings sheet (#2446), then Devices open in it (#981) with
+            // every state it renders: this device, another active one, and a
+            // revoked one never seen.
             // The phone's own card also shows how to set its notifications
             // up (#1924): here on a server that is not ntfy's own, after a
             // notification was opened.
             let devicesModel = await DevicesScreenshots.model()
             let phoneDevicesModel = await DevicesScreenshots.model(
                 notificationSubscription: .mock, openedAt: screenshotNow.addingTimeInterval(-3600))
-            for (name, width, scheme, model) in [
-                ("devices", CGFloat(380), ColorScheme.light, devicesModel),
-                ("devices-dark", CGFloat(380), ColorScheme.dark, devicesModel),
-                ("devices-phone", CGFloat(390), ColorScheme.light, phoneDevicesModel),
-                ("devices-phone-dark", CGFloat(390), ColorScheme.dark, phoneDevicesModel),
+            for (name, width, scheme, model, client) in [
+                ("", CGFloat(380), ColorScheme.light, devicesModel, SettingsSheet.Client.mac),
+                ("-dark", CGFloat(380), ColorScheme.dark, devicesModel, SettingsSheet.Client.mac),
+                ("-phone", CGFloat(390), ColorScheme.light, phoneDevicesModel, SettingsSheet.Client.iPhone),
+                ("-phone-dark", CGFloat(390), ColorScheme.dark, phoneDevicesModel, SettingsSheet.Client.iPhone),
             ] {
-                surfaces.append(
-                    Surface(
-                        name: name, width: width, colorScheme: scheme,
-                        view: AnyView(DevicesView(model: model, rendersInteractiveControls: false))))
+                for (surface, opensDevices) in [("settings", false), ("devices", true)] {
+                    surfaces.append(
+                        Surface(
+                            name: surface + name, width: width, colorScheme: scheme,
+                            view: AnyView(
+                                SettingsSheet(
+                                    devices: model, opensDevices: opensDevices,
+                                    projects: ["freeside-ai/freeside", "freeside-ai/teloleo", "free-skills"],
+                                    projectFilter: "free-skills", freshness: .fresh, client: client,
+                                    rendersInteractiveControls: false))))
+                }
             }
 
             // The notification setup the iPhone offers after pairing: on
@@ -3132,7 +3140,7 @@
                 version: "1.0.0", startedAt: AttentionFixtures.createdInstant,
                 contractDigest: "sha256:" + String(repeating: "a", count: 64))
             let panelActions = DaemonMenuPanel.Actions(
-                openApp: {}, showInbox: {}, start: {}, stop: {}, openApprovalSettings: {}, quit: {})
+                openApp: {}, showNeedsYou: {}, start: {}, stop: {}, openApprovalSettings: {}, quit: {})
             surfaces.append(
                 Surface(
                     name: "menu-panel-running",
@@ -3141,10 +3149,10 @@
                         DaemonMenuPanel(
                             state: .running(panelHealth, restartObserved: false),
                             actionError: nil,
-                            inbox: .init(open: 6, urgent: 2),
+                            needsYou: .init(rows: 6),
                             actions: panelActions
                         )
-                        .screenshotHovering(.showInbox))))
+                        .screenshotHovering(.showNeedsYou))))
             // A healthy daemon whose unattended operation is stopped (#980):
             // the Running block stands and the wax card says what is stopped.
             surfaces.append(
@@ -3155,7 +3163,7 @@
                         DaemonMenuPanel(
                             state: .running(panelHealth, restartObserved: false),
                             actionError: nil,
-                            inbox: .init(open: 6, urgent: 2),
+                            needsYou: .init(rows: 6),
                             unattendedStopped:
                                 "Unattended operation is stopped by operator decision.",
                             actions: panelActions))))
@@ -3168,7 +3176,7 @@
                         DaemonMenuPanel(
                             state: .running(panelMismatch, restartObserved: true),
                             actionError: nil,
-                            inbox: .init(open: 6, urgent: 2),
+                            needsYou: .init(rows: 6),
                             actions: panelActions))))
             surfaces.append(
                 Surface(
@@ -3178,7 +3186,7 @@
                         DaemonMenuPanel(
                             state: .stopped,
                             actionError: nil,
-                            inbox: .init(open: 6, urgent: 0),
+                            needsYou: .init(rows: 6),
                             actions: panelActions))))
             surfaces.append(
                 Surface(
@@ -3188,7 +3196,7 @@
                         DaemonMenuPanel(
                             state: .unsupervised,
                             actionError: nil,
-                            inbox: .init(open: 6, urgent: 0),
+                            needsYou: .init(rows: 6),
                             actions: panelActions))))
             surfaces.append(
                 Surface(
@@ -3199,7 +3207,7 @@
                         DaemonMenuPanel(
                             state: .unreachable,
                             actionError: "The daemon could not be stopped: launchctl exited 3.",
-                            inbox: .init(open: 6, urgent: 0),
+                            needsYou: .init(rows: 6),
                             actions: panelActions))))
 
             var due = AttentionFixtures.degradedReady().item
@@ -3722,10 +3730,10 @@
                         DaemonMenuPanel(
                             state: .running(panelHealth, restartObserved: false),
                             actionError: nil,
-                            inbox: .init(open: 6, urgent: 2),
+                            needsYou: .init(rows: 6),
                             actions: panelActions
                         )
-                        .screenshotHovering(.showInbox)
+                        .screenshotHovering(.showNeedsYou)
                         .screenshotHighlighting(.control))))
             surfaces.append(contentsOf: try pendingStopsSurfaces())
             // A finding whose message carries Markdown, on the dispute card

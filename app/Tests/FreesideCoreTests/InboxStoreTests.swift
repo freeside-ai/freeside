@@ -145,16 +145,6 @@ import Testing
         #expect(store.closedSnapshots.contains { $0.item.id == resolved.item.id })
     }
 
-    @Test func urgentOpenCountIgnoresTheProjectFilter() {
-        let store = InboxStore(client: APIClientFactory.mock(server: MockServer()))
-        var other = orderingItem("other-project", age: 0, priority: .urgent)
-        other.item.project_id = "proj-other"
-        store.replaceAll(with: [other, orderingItem("normal", age: 0)])
-        store.projectID = "proj-none-urgent"
-
-        #expect(store.urgentOpenCount == 1)
-    }
-
     @Test func projectFilterIsSortedDeduplicatedAndLeavesTheOpenProjectionAlone() async throws {
         let store = await makeStore(server: MockServer())
         var first = try #require(store.snapshotsByID["item-spec_approval"])

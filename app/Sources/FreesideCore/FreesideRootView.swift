@@ -203,9 +203,9 @@ public struct FreesideRootView: View {
         }
         // One sheet for both platforms, above the navigation containers, so
         // the Mac toolbar and the iPhone stack open the same one.
-        .sheet(isPresented: $navigation.devicesPresented) {
-            DevicesView(
-                model: DevicesModel(
+        .sheet(isPresented: $navigation.settingsPresented) {
+            SettingsSheet(
+                devices: DevicesModel(
                     coordinator: coordinator,
                     notificationSubscription: phoneNotificationSubscription,
                     notificationOpens: notificationOpens,
@@ -214,9 +214,13 @@ public struct FreesideRootView: View {
                         // The sheet leaves with the synced surface, but the
                         // flag outlives it: left set, the sheet would open
                         // again by itself once the operator pairs.
-                        if case .needsPairing = session.phase { navigation.devicesPresented = false }
+                        if case .needsPairing = session.phase { navigation.settingsPresented = false }
                     }),
-                unresolvedActionCount: pendingUnderOldPairing
+                opensDevices: navigation.settingsOpensDevices,
+                unresolvedActionCount: pendingUnderOldPairing,
+                projects: coordinator.unifiedList.knownProjects,
+                projectFilter: coordinator.store.projectID,
+                freshness: coordinator.store.freshness
             )
             .dynamicTypeSize(launchDynamicTypeSize ?? systemDynamicTypeSize)
         }
@@ -371,7 +375,7 @@ public struct FreesideRootView: View {
                     }
                     .help("Refresh")
                     LastUpdatedLabel(lastUpdatedAt: coordinator.lastUpdatedAt)
-                    devicesButton
+                    settingsButton
                 }
             }
             .sheet(isPresented: Bindable(navigation).newTaskComposerPresented) {
@@ -442,13 +446,18 @@ public struct FreesideRootView: View {
             onRevealTechnicalDetails: revealTechnicalDetails)
     }
 
-    private var devicesButton: some View {
+    /// The slot Devices held on both toolbars. The iPhone's bar draws the
+    /// word, beside the Decision Flow menu's gear.
+    private var settingsButton: some View {
         Button {
-            navigation.devicesPresented = true
+            navigation.openSettings()
         } label: {
-            Label("Devices", systemImage: "laptopcomputer.and.iphone")
+            Label("Settings", systemImage: "gearshape")
+                #if os(iOS)
+                    .labelStyle(.titleOnly)
+                #endif
         }
-        .help("Devices")
+        .help("Settings")
     }
 
     @ViewBuilder
@@ -492,7 +501,7 @@ public struct FreesideRootView: View {
                         .toolbar {
                             ToolbarItemGroup(placement: .topBarTrailing) {
                                 submissionRecoveryButton(coordinator)
-                                devicesButton
+                                settingsButton
                                 decisionFlowMenu
                             }
                         }

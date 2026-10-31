@@ -60,8 +60,8 @@ public struct LaunchInputs {
     public let projectID: String?
     public let detailsExpanded: Bool
 
-    /// `-FreesideDevices YES`: the Devices sheet is open at launch, so a
-    /// capture needs no click on the toolbar.
+    /// `-FreesideDevices YES`: the Settings sheet is open on Devices at
+    /// launch, so a capture needs no click on the toolbar.
     public let devicesPresented: Bool
 
     /// `-FreesideComposer <action>`: the selected inbox item's composer for

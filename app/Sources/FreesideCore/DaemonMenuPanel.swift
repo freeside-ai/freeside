@@ -10,24 +10,34 @@
     ///
     /// The view takes plain state, so the screenshot suite renders every
     /// daemon state; the app binds it to `DaemonMenuModel` and the session's
-    /// inbox counts. Click-outside dismissal comes from the window style;
+    /// Needs you count. Click-outside dismissal comes from the window style;
     /// Escape and each row action dismiss through the environment.
     public struct DaemonMenuPanel: View {
-        /// The Show Inbox row's counts; `nil` until the session is ready,
-        /// which disables the row.
-        public struct InboxCounts: Equatable, Sendable {
-            public let open: Int
-            public let urgent: Int
+        /// The Show Needs You row's count: rows, the same as the list's Needs
+        /// you head, under the same project filter. `nil` until the list has
+        /// loaded, when a zero would read as nothing needing you, which also
+        /// disables the row.
+        public struct NeedsYouCount: Equatable, Sendable {
+            public let rows: Int
 
-            public init(open: Int, urgent: Int) {
-                self.open = open
-                self.urgent = urgent
+            public init(rows: Int) {
+                self.rows = rows
+            }
+
+            /// The session's count, or nil before its list has loaded.
+            @MainActor
+            public init?(coordinator: SyncCoordinator) {
+                guard
+                    let rows = UnifiedListView.needsYouCount(
+                        in: coordinator.unifiedList, store: coordinator.store)
+                else { return nil }
+                self.rows = rows
             }
         }
 
         public struct Actions {
             public let openApp: () -> Void
-            public let showInbox: () -> Void
+            public let showNeedsYou: () -> Void
             public let start: () -> Void
             public let stop: () -> Void
             public let openApprovalSettings: () -> Void
@@ -35,14 +45,14 @@
 
             public init(
                 openApp: @escaping () -> Void,
-                showInbox: @escaping () -> Void,
+                showNeedsYou: @escaping () -> Void,
                 start: @escaping () -> Void,
                 stop: @escaping () -> Void,
                 openApprovalSettings: @escaping () -> Void,
                 quit: @escaping () -> Void
             ) {
                 self.openApp = openApp
-                self.showInbox = showInbox
+                self.showNeedsYou = showNeedsYou
                 self.start = start
                 self.stop = stop
                 self.openApprovalSettings = openApprovalSettings
@@ -54,7 +64,7 @@
         /// lines (the state block, the cards) are skipped.
         enum Row: Hashable {
             case openApp
-            case showInbox
+            case showNeedsYou
             case openApprovalSettings
             case control
             case quit
@@ -67,7 +77,7 @@
 
         let state: DaemonMenuState
         let actionError: String?
-        let inbox: InboxCounts?
+        let needsYou: NeedsYouCount?
         /// The standing stopped indicator's message while unattended
         /// operation is stopped; nil when admission is open or unknown. This
         /// is the daemon's operating state, not its process state: a running
@@ -96,13 +106,13 @@
         public init(
             state: DaemonMenuState,
             actionError: String?,
-            inbox: InboxCounts?,
+            needsYou: NeedsYouCount?,
             unattendedStopped: String? = nil,
             actions: Actions
         ) {
             self.state = state
             self.actionError = actionError
-            self.inbox = inbox
+            self.needsYou = needsYou
             self.unattendedStopped = unattendedStopped
             self.actions = actions
         }
@@ -124,8 +134,8 @@
         public var body: some View {
             VStack(alignment: .leading, spacing: 2) {
                 row(.openApp, "Open Freeside") { actions.openApp() }
-                row(.showInbox, "Show Inbox", enabled: inbox != nil, trailing: inboxTrailing) {
-                    actions.showInbox()
+                row(.showNeedsYou, "Show Needs You", enabled: needsYou != nil, trailing: needsYouTrailing) {
+                    actions.showNeedsYou()
                 }
                 divider
                 stateBlock
@@ -236,14 +246,11 @@
             hoveredRow == id || screenshotHoveredRow == id
         }
 
-        @ViewBuilder private var inboxTrailing: some View {
-            if let inbox {
-                Text("\(inbox.open)")
+        @ViewBuilder private var needsYouTrailing: some View {
+            if let needsYou {
+                Text("\(needsYou.rows)")
                     .font(FreesideFont.trailingSummary)
                     .foregroundStyle(Color.inkDim)
-                if inbox.urgent > 0 {
-                    StateChip(label: "\(inbox.urgent) Urgent", color: .waxText)
-                }
             }
         }
 
@@ -425,8 +432,8 @@
 
         private var keyboardOrder: [Row] {
             var order: [Row] = [.openApp]
-            if inbox != nil {
-                order.append(.showInbox)
+            if needsYou != nil {
+                order.append(.showNeedsYou)
             }
             if state == .needsApproval {
                 order.append(.openApprovalSettings)
@@ -454,8 +461,8 @@
             switch keyboardRow {
             case .openApp:
                 perform(actions.openApp)
-            case .showInbox:
-                perform(actions.showInbox)
+            case .showNeedsYou:
+                perform(actions.showNeedsYou)
             case .openApprovalSettings:
                 perform(actions.openApprovalSettings)
             case .control:

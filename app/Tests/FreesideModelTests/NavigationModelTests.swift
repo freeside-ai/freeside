@@ -42,6 +42,22 @@ import Testing
         #expect(navigation.attentionSelection == nil)
     }
 
+    @Test func theDevicesLaunchOpensSettingsOnDevicesAndTheToolbarOpensItsRows() {
+        let plain = NavigationModel(launchInputs: LaunchInputs(colorSchemeRaw: nil, selectionRaw: nil))
+        #expect(!plain.settingsPresented)
+        #expect(!plain.settingsOpensDevices)
+
+        let navigation = NavigationModel(
+            launchInputs: LaunchInputs(colorSchemeRaw: nil, selectionRaw: nil, devicesPresented: true))
+        #expect(navigation.settingsPresented)
+        #expect(navigation.settingsOpensDevices)
+
+        navigation.settingsPresented = false
+        navigation.openSettings()
+        #expect(navigation.settingsPresented)
+        #expect(!navigation.settingsOpensDevices)
+    }
+
     @Test func aLaunchComposerIsOfferedToItsItemUntilConsumed() {
         let navigation = NavigationModel(
             launchInputs: LaunchInputs(
@@ -550,6 +566,33 @@ import Testing
         #expect(
             NavigationModel.surface(for: .attentionItem("item-a"), in: list(store))
                 == .card(itemID: "item-a"))
+    }
+
+    /// The iPhone's one stack: a row pushes what the Mac's column draws, and
+    /// a deep link lands on the same page as the row.
+    @Test func theOneStackPushesATaskAScopedItemAndADeepLink() {
+        let (store, task) = task()
+        let list = list(store, tasks: [task])
+        let scoped = self.list(store)
+        let navigation = NavigationModel(launchInputs: LaunchInputs(colorSchemeRaw: nil, selectionRaw: nil))
+
+        navigation.setPath([.task(task.task.id)])
+        #expect(navigation.path == [.task(task.task.id)])
+        #expect(
+            NavigationModel.surface(for: navigation.path[0], in: list)
+                == .taskPage(taskID: task.task.id, leadingItemID: "item-a"))
+
+        navigation.setPath([.attentionItem("item-a")])
+        #expect(navigation.path == [.attentionItem("item-a")])
+        #expect(NavigationModel.surface(for: navigation.path[0], in: scoped) == .card(itemID: "item-a"))
+
+        navigation.setPath([])
+        navigation.route(toLinkedItem: "item-a")
+        #expect(navigation.path == [.attentionItem("item-a")])
+        #expect(navigation.linkedItemID == "item-a")
+        #expect(
+            NavigationModel.surface(for: navigation.path[0], in: list)
+                == .taskPage(taskID: task.task.id, leadingItemID: "item-a"))
     }
 
     @Test func aQuietTasksPageHasNoLeadingCard() {
