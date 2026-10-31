@@ -37,3 +37,6 @@ c5e65942551bb0ec863b0c882bc8904036ecccb5
 
 # Move the rebuild refusal clauses into domain (#2332)
 5d773309c3e30dae689e415f1e2940458f6e07e1
+
+# Rename the task timeline view to the task page (#2445)
+7c747a30dbf4f8802e86b0edbf8dbf7c9fdc0dac
