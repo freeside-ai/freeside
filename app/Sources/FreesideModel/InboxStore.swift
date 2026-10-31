@@ -231,11 +231,6 @@ public final class InboxStore {
         indexedRows(open: false).map(\.1)
     }
 
-    /// One global urgent-open projection for the menu-bar extra.
-    public var urgentOpenCount: Int {
-        indexedRows(open: true).count { $0.1.item.priority == .urgent }
-    }
-
     /// Rebuilds the inbox from the canonical list (plan §5.14 sync test 3:
     /// a foreground refresh reconstructs the inbox with no notifications).
     public func refresh() async {

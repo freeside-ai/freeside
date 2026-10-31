@@ -3140,7 +3140,7 @@
                 version: "1.0.0", startedAt: AttentionFixtures.createdInstant,
                 contractDigest: "sha256:" + String(repeating: "a", count: 64))
             let panelActions = DaemonMenuPanel.Actions(
-                openApp: {}, showInbox: {}, start: {}, stop: {}, openApprovalSettings: {}, quit: {})
+                openApp: {}, showNeedsYou: {}, start: {}, stop: {}, openApprovalSettings: {}, quit: {})
             surfaces.append(
                 Surface(
                     name: "menu-panel-running",
@@ -3149,10 +3149,10 @@
                         DaemonMenuPanel(
                             state: .running(panelHealth, restartObserved: false),
                             actionError: nil,
-                            inbox: .init(open: 6, urgent: 2),
+                            needsYou: .init(rows: 6),
                             actions: panelActions
                         )
-                        .screenshotHovering(.showInbox))))
+                        .screenshotHovering(.showNeedsYou))))
             // A healthy daemon whose unattended operation is stopped (#980):
             // the Running block stands and the wax card says what is stopped.
             surfaces.append(
@@ -3163,7 +3163,7 @@
                         DaemonMenuPanel(
                             state: .running(panelHealth, restartObserved: false),
                             actionError: nil,
-                            inbox: .init(open: 6, urgent: 2),
+                            needsYou: .init(rows: 6),
                             unattendedStopped:
                                 "Unattended operation is stopped by operator decision.",
                             actions: panelActions))))
@@ -3176,7 +3176,7 @@
                         DaemonMenuPanel(
                             state: .running(panelMismatch, restartObserved: true),
                             actionError: nil,
-                            inbox: .init(open: 6, urgent: 2),
+                            needsYou: .init(rows: 6),
                             actions: panelActions))))
             surfaces.append(
                 Surface(
@@ -3186,7 +3186,7 @@
                         DaemonMenuPanel(
                             state: .stopped,
                             actionError: nil,
-                            inbox: .init(open: 6, urgent: 0),
+                            needsYou: .init(rows: 6),
                             actions: panelActions))))
             surfaces.append(
                 Surface(
@@ -3196,7 +3196,7 @@
                         DaemonMenuPanel(
                             state: .unsupervised,
                             actionError: nil,
-                            inbox: .init(open: 6, urgent: 0),
+                            needsYou: .init(rows: 6),
                             actions: panelActions))))
             surfaces.append(
                 Surface(
@@ -3207,7 +3207,7 @@
                         DaemonMenuPanel(
                             state: .unreachable,
                             actionError: "The daemon could not be stopped: launchctl exited 3.",
-                            inbox: .init(open: 6, urgent: 0),
+                            needsYou: .init(rows: 6),
                             actions: panelActions))))
 
             var due = AttentionFixtures.degradedReady().item
@@ -3730,10 +3730,10 @@
                         DaemonMenuPanel(
                             state: .running(panelHealth, restartObserved: false),
                             actionError: nil,
-                            inbox: .init(open: 6, urgent: 2),
+                            needsYou: .init(rows: 6),
                             actions: panelActions
                         )
-                        .screenshotHovering(.showInbox)
+                        .screenshotHovering(.showNeedsYou)
                         .screenshotHighlighting(.control))))
             surfaces.append(contentsOf: try pendingStopsSurfaces())
             // A finding whose message carries Markdown, on the dispute card

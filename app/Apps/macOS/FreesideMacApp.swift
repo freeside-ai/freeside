@@ -205,15 +205,11 @@ private struct DaemonMenu: View {
         DaemonMenuPanel(
             state: model?.state ?? .unsupervised,
             actionError: model?.actionError,
-            inbox: coordinator.map {
-                DaemonMenuPanel.InboxCounts(
-                    open: $0.store.openSnapshots.count,
-                    urgent: $0.store.urgentOpenCount)
-            },
+            needsYou: coordinator.flatMap(DaemonMenuPanel.NeedsYouCount.init(coordinator:)),
             unattendedStopped: coordinator?.unattendedStoppedMessage(),
             actions: DaemonMenuPanel.Actions(
                 openApp: showApp,
-                showInbox: showApp,
+                showNeedsYou: showApp,
                 start: { Task { await model?.start() } },
                 stop: { Task { await model?.stop() } },
                 openApprovalSettings: { model?.openApprovalSettings() },
