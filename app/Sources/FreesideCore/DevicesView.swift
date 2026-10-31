@@ -1,59 +1,37 @@
 import FreesideAPI
 import SwiftUI
 
-/// The Devices screen: every device paired with this daemon, with this
+/// The Devices view: every device paired with this daemon, with this
 /// device first and revoked ones grouped apart, and revocation behind a
-/// confirmation. Presented as a sheet on both platforms.
+/// confirmation. `SettingsSheet` hosts it on both platforms and owns the
+/// sheet's shell and the model's loading.
 struct DevicesView: View {
-    @Environment(\.dismiss) private var dismiss
     @Environment(\.locale) private var locale
     @Environment(\.timeZone) private var timeZone
     @Environment(\.pinnedNow) private var pinnedNow
-    @State private var model: DevicesModel
+    let model: DevicesModel
     @State private var confirming: DevicesModel.Row?
     /// Actions made under this pairing whose delivery is unresolved; the
     /// confirmation for revoking this device says they will not be retried.
     let unresolvedActionCount: Int
-    var rendersInteractiveControls = true
-
-    init(model: DevicesModel, unresolvedActionCount: Int = 0, rendersInteractiveControls: Bool = true) {
-        _model = State(initialValue: model)
-        self.unresolvedActionCount = unresolvedActionCount
-        self.rendersInteractiveControls = rendersInteractiveControls
-    }
 
     var body: some View {
-        VStack(spacing: 0) {
-            if rendersInteractiveControls {
-                ScrollView { content }
-            } else {
-                content
+        content
+            .confirmationDialog(
+                confirming.map { Self.confirmationTitle(for: $0) } ?? "",
+                isPresented: Binding(
+                    get: { confirming != nil },
+                    set: { if !$0 { confirming = nil } }),
+                titleVisibility: .visible,
+                presenting: confirming
+            ) { row in
+                Button(row.isCurrent ? "Revoke and Sign Out" : "Revoke", role: .destructive) {
+                    Task { await model.revoke(row.id) }
+                }
+                Button("Cancel", role: .cancel) {}
+            } message: { row in
+                Text(Self.confirmationMessage(for: row, unresolvedActionCount: unresolvedActionCount))
             }
-            FreesideSheetActionRow.done { dismiss() }
-        }
-        .background(Color.ground2)
-        .freesideSheetPresentation()
-        .frame(minWidth: 380, minHeight: 320)
-        // On appear, and again when the heartbeat observes a newer revision.
-        .task(id: model.observedRevision) {
-            guard rendersInteractiveControls else { return }
-            await model.loadIfStale()
-        }
-        .confirmationDialog(
-            confirming.map { Self.confirmationTitle(for: $0) } ?? "",
-            isPresented: Binding(
-                get: { confirming != nil },
-                set: { if !$0 { confirming = nil } }),
-            titleVisibility: .visible,
-            presenting: confirming
-        ) { row in
-            Button(row.isCurrent ? "Revoke and Sign Out" : "Revoke", role: .destructive) {
-                Task { await model.revoke(row.id) }
-            }
-            Button("Cancel", role: .cancel) {}
-        } message: { row in
-            Text(Self.confirmationMessage(for: row, unresolvedActionCount: unresolvedActionCount))
-        }
     }
 
     private var content: some View {

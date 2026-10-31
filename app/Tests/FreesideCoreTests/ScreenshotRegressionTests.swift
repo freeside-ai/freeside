@@ -777,24 +777,32 @@
                                 rendersInteractiveControls: false))))
             }
 
-            // The Devices sheet (#981) with every state it renders: this
-            // device, another active one, and a revoked one never seen.
+            // The Settings sheet (#2446), then Devices open in it (#981) with
+            // every state it renders: this device, another active one, and a
+            // revoked one never seen.
             // The phone's own card also shows how to set its notifications
             // up (#1924): here on a server that is not ntfy's own, after a
             // notification was opened.
             let devicesModel = await DevicesScreenshots.model()
             let phoneDevicesModel = await DevicesScreenshots.model(
                 notificationSubscription: .mock, openedAt: screenshotNow.addingTimeInterval(-3600))
-            for (name, width, scheme, model) in [
-                ("devices", CGFloat(380), ColorScheme.light, devicesModel),
-                ("devices-dark", CGFloat(380), ColorScheme.dark, devicesModel),
-                ("devices-phone", CGFloat(390), ColorScheme.light, phoneDevicesModel),
-                ("devices-phone-dark", CGFloat(390), ColorScheme.dark, phoneDevicesModel),
+            for (name, width, scheme, model, client) in [
+                ("", CGFloat(380), ColorScheme.light, devicesModel, SettingsSheet.Client.mac),
+                ("-dark", CGFloat(380), ColorScheme.dark, devicesModel, SettingsSheet.Client.mac),
+                ("-phone", CGFloat(390), ColorScheme.light, phoneDevicesModel, SettingsSheet.Client.iPhone),
+                ("-phone-dark", CGFloat(390), ColorScheme.dark, phoneDevicesModel, SettingsSheet.Client.iPhone),
             ] {
-                surfaces.append(
-                    Surface(
-                        name: name, width: width, colorScheme: scheme,
-                        view: AnyView(DevicesView(model: model, rendersInteractiveControls: false))))
+                for (surface, opensDevices) in [("settings", false), ("devices", true)] {
+                    surfaces.append(
+                        Surface(
+                            name: surface + name, width: width, colorScheme: scheme,
+                            view: AnyView(
+                                SettingsSheet(
+                                    devices: model, opensDevices: opensDevices,
+                                    projects: ["freeside-ai/freeside", "freeside-ai/teloleo", "free-skills"],
+                                    projectFilter: "free-skills", freshness: .fresh, client: client,
+                                    rendersInteractiveControls: false))))
+                }
             }
 
             // The notification setup the iPhone offers after pairing: on

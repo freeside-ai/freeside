@@ -53,9 +53,13 @@ public final class NavigationModel {
     /// sheet through the same gated path.
     public var newTaskComposerPresented = false
     public var submissionRecoveryPresented = false
-    /// The Devices sheet's presentation flag, shared by the toolbar buttons
+    /// The Settings sheet's presentation flag, shared by the toolbar buttons
     /// and the `-FreesideDevices` launch argument.
-    public var devicesPresented: Bool
+    public var settingsPresented: Bool
+    /// Whether the sheet opens on Devices rather than its rows: that launch
+    /// argument alone asks for it, so a capture needs no click. `openSettings`
+    /// clears it, so a later open starts at the rows.
+    public private(set) var settingsOpensDevices: Bool
     /// The `-FreesideComposer` launch argument until the card acts on it.
     /// Held here, not in the card, because the Mac detail view is rebuilt on
     /// every selection: view state would reopen the composer each time the
@@ -65,7 +69,8 @@ public final class NavigationModel {
 
     public init(launchInputs: LaunchInputs) {
         path = []
-        devicesPresented = launchInputs.devicesPresented
+        settingsPresented = launchInputs.devicesPresented
+        settingsOpensDevices = launchInputs.devicesPresented
         // `LaunchInputs` leaves the composer nil without an item selection.
         if case .attentionItem(let itemID)? = launchInputs.selection {
             launchComposer = launchInputs.composer.map {
@@ -112,6 +117,12 @@ public final class NavigationModel {
     /// its last destination. Nil with nothing routed.
     package func detailSurface(in list: UnifiedList) -> DetailSurface? {
         path.last.map { Self.surface(for: $0, in: list) }
+    }
+
+    /// The toolbar's Settings button.
+    public func openSettings() {
+        settingsOpensDevices = false
+        settingsPresented = true
     }
 
     /// The launch's composer for this item's card, or nil for any other item

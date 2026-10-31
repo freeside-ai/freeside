@@ -42,6 +42,22 @@ import Testing
         #expect(navigation.attentionSelection == nil)
     }
 
+    @Test func theDevicesLaunchOpensSettingsOnDevicesAndTheToolbarOpensItsRows() {
+        let plain = NavigationModel(launchInputs: LaunchInputs(colorSchemeRaw: nil, selectionRaw: nil))
+        #expect(!plain.settingsPresented)
+        #expect(!plain.settingsOpensDevices)
+
+        let navigation = NavigationModel(
+            launchInputs: LaunchInputs(colorSchemeRaw: nil, selectionRaw: nil, devicesPresented: true))
+        #expect(navigation.settingsPresented)
+        #expect(navigation.settingsOpensDevices)
+
+        navigation.settingsPresented = false
+        navigation.openSettings()
+        #expect(navigation.settingsPresented)
+        #expect(!navigation.settingsOpensDevices)
+    }
+
     @Test func aLaunchComposerIsOfferedToItsItemUntilConsumed() {
         let navigation = NavigationModel(
             launchInputs: LaunchInputs(
