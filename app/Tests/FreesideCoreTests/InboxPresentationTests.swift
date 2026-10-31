@@ -4,8 +4,7 @@ import Testing
 
 @testable import FreesideCore
 
-/// Where the list states its counts: each section's head, and the Needs you
-/// count in the iPhone navigation title.
+/// Where the list states its counts: each section's head.
 @MainActor
 @Suite struct InboxPresentationTests {
     private func list(_ store: InboxStore) -> UnifiedList {
@@ -45,12 +44,6 @@ import Testing
 
         store.replaceAll(with: [])
         #expect(UnifiedListView.needsYouCount(in: list(store), store: store) == 0)
-    }
-
-    @Test func phoneTitleCarriesTheNeedsYouCount() {
-        #expect(UnifiedListView.phoneNavigationTitle(needsYouCount: 14) == "Inbox · 14")
-        #expect(UnifiedListView.phoneNavigationTitle(needsYouCount: 0) == "Inbox · 0")
-        #expect(UnifiedListView.phoneNavigationTitle(needsYouCount: nil) == "Inbox")
     }
 
     /// An empty Needs you answers for the project when one is filtered (R13).

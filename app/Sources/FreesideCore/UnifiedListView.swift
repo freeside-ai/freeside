@@ -18,11 +18,6 @@ struct UnifiedListView: View {
         store.loadState == .loaded ? list.needsYou.count : nil
     }
 
-    /// The iPhone navigation title, which carries the Needs you count.
-    static func phoneNavigationTitle(needsYouCount: Int?) -> String {
-        needsYouCount.map { "Inbox · \($0)" } ?? "Inbox"
-    }
-
     /// What an empty Needs you says (R13), naming the project when one is
     /// filtered; the detail pane beside it says the same two lines.
     static func emptyNeedsYou(projectID: String?) -> (title: String, description: String) {
@@ -102,11 +97,11 @@ struct UnifiedListView: View {
                 }
             }
         }
+        .navigationTitle("Freeside")
         #if os(iOS)
-            .navigationTitle(
-                Self.phoneNavigationTitle(needsYouCount: Self.needsYouCount(in: list, store: store)))
-        #else
-            .navigationTitle("Inbox")
+            // The tools row sits between the bar and the list, so a large
+            // title would hold its height through the list's scroll.
+            .navigationBarTitleDisplayMode(.inline)
         #endif
         .task {
             if let launchProjectID { store.applyLaunchProjectFilter(launchProjectID) }
