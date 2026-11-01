@@ -1,6 +1,6 @@
 import SwiftUI
 
-/// The project filter's list: a search field over `All projects`, every known
+/// The project filter's list: a search field over `All Projects`, every known
 /// project, and `No project` when a scoped item names none. Read only: the
 /// daemon owns the projects, so nothing here creates or edits one.
 struct ProjectFilterPopover: View {
@@ -41,7 +41,7 @@ struct ProjectFilterPopover: View {
             .overlay(alignment: .bottom) {
                 Rectangle().fill(Color.accentText).frame(height: 1)
             }
-            row(title: "All projects", value: nil) {
+            row(title: "All Projects", value: nil) {
                 tile {
                     Image(systemName: "checkmark")
                         .foregroundStyle(Color.accentText)

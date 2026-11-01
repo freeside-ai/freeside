@@ -30,7 +30,7 @@ struct UnifiedListView: View {
     /// The tools row's filter state.
     static func filterState(projectID: String?) -> String {
         switch projectID {
-        case nil: "All projects"
+        case nil: "All Projects"
         case UnifiedList.noProject: "No project"
         case let projectID?: projectID
         }
