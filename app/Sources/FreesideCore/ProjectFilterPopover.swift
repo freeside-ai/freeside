@@ -20,6 +20,8 @@ struct ProjectFilterPopover: View {
     var rendersInteractiveControls = true
     @State private var query = ""
     @FocusState private var searchFocused: Bool
+    @ScaledMetric(relativeTo: .body) private var searchGlyphSize: CGFloat = screenshotMetricBase(
+        13, relativeTo: .body)
 
     private var matches: [String] {
         query.isEmpty ? projects : projects.filter { $0.localizedCaseInsensitiveContains(query) }
@@ -27,16 +29,22 @@ struct ProjectFilterPopover: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
-            Group {
-                if rendersInteractiveControls {
-                    TextField("Search projects…", text: $query)
-                        .textFieldStyle(.plain)
-                        .focused($searchFocused)
-                } else {
-                    Text("Search projects…").foregroundStyle(Color.inkDim)
+            HStack(spacing: 8) {
+                Image(systemName: "magnifyingglass")
+                    .font(.system(size: searchGlyphSize, weight: .medium))
+                    .foregroundStyle(Color.inkDim)
+                    .accessibilityHidden(true)
+                Group {
+                    if rendersInteractiveControls {
+                        TextField("Search projects…", text: $query)
+                            .textFieldStyle(.plain)
+                            .focused($searchFocused)
+                    } else {
+                        Text("Search projects…").foregroundStyle(Color.inkDim)
+                    }
                 }
+                .font(FreesideFont.cardBody)
             }
-            .font(FreesideFont.cardBody)
             .padding(.vertical, 6)
             .overlay(alignment: .bottom) {
                 Rectangle().fill(Color.accentText).frame(height: 1)
