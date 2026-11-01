@@ -95,6 +95,13 @@ import Testing
         #expect(UnifiedListView.filterState(projectID: UnifiedList.noProject) == "No project")
     }
 
+    @Test func theFilterButtonIsActiveWhenFilteredOrOpen() {
+        #expect(!UnifiedListView.filterIsActive(projectID: nil, isPresented: false))
+        #expect(UnifiedListView.filterIsActive(projectID: nil, isPresented: true))
+        #expect(UnifiedListView.filterIsActive(projectID: "freeside", isPresented: false))
+        #expect(UnifiedListView.filterIsActive(projectID: UnifiedList.noProject, isPresented: false))
+    }
+
     @Test func aMonogramReadsTheProjectsLastWord() {
         #expect(ProjectFilterPopover.monogram("freeside") == "FR")
         #expect(ProjectFilterPopover.monogram("freeside-ai/oriole") == "OR")
