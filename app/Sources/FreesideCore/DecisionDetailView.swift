@@ -231,7 +231,7 @@ struct DecisionDetailView: View {
                 } else {
                     UnavailableStateView(
                         glyph: .inbox, title: "Item unavailable",
-                        description: "This attention item is not in the inbox.",
+                        description: "This attention item is not in the list.",
                         seat: .detailColumn)
                 }
             }
@@ -710,7 +710,7 @@ struct DecisionDetailView: View {
             }
         }
         if item.status != .open, let taskID = ConclusionDisplay.timelineTaskID(for: item, in: tasks) {
-            let link = FreesideLink(title: "Open task timeline", face: FreesideFont.noticeAction)
+            let link = FreesideLink(title: "Open task page", face: FreesideFont.noticeAction)
             if rendersInteractiveControls {
                 Button {
                     onSelectTask(taskID)
@@ -4385,7 +4385,7 @@ struct TaskProposalSnoozeSheet: View {
                 .font(FreesideFont.body)
                 .padding(14)
                 .freesideCard()
-                Text("The proposal returns to the inbox at this date and time.")
+                Text("The proposal becomes active again at this date or time.")
                     .font(FreesideFont.cardBody)
                     .foregroundStyle(Color.inkDim)
             }

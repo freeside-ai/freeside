@@ -93,7 +93,7 @@ import Testing
                 #expect(
                     position.guidance
                         == (name == "Approval beside capacity"
-                            ? "Review the specification in Inbox." : "Open task details."))
+                            ? "Review the specification." : "Open task details."))
             }
         }
         var stoppedApproval = HoldPresentationFixtures.make("Approval beside capacity")

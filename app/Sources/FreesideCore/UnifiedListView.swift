@@ -8,17 +8,17 @@ import SwiftUI
     import UIKit
 #endif
 
-/// The one list both clients draw: Needs you, then Working and Finished
+/// The one list both clients draw: Needs You, then Working and Finished
 /// behind their disclosures, under a tools row. The list is a projection of
 /// what the client already holds (`UnifiedList`).
 struct UnifiedListView: View {
-    /// The Needs you count: the rows the filtered list draws. Absent until
+    /// The Needs You count: the rows the filtered list draws. Absent until
     /// the list has loaded, when a zero would read as nothing needing you.
     static func needsYouCount(in list: UnifiedList, store: InboxStore) -> Int? {
         store.loadState == .loaded ? list.needsYou.count : nil
     }
 
-    /// What an empty Needs you says (R13), naming the project when one is
+    /// What an empty Needs You says (R13), naming the project when one is
     /// filtered; the detail pane beside it says the same two lines.
     static func emptyNeedsYou(projectID: String?) -> (title: String, description: String) {
         (
@@ -83,7 +83,7 @@ struct UnifiedListView: View {
             case .idle, .loading:
                 ProgressView()
             case .failed(let message):
-                UnavailableStateView(glyph: .inbox, title: "Couldn't load the inbox", description: message)
+                UnavailableStateView(glyph: .inbox, title: "Couldn't load the list", description: message)
             case .loaded:
                 VStack(spacing: 0) {
                     tools(list)
@@ -263,7 +263,7 @@ struct UnifiedListView: View {
     private func sections(_ list: UnifiedList, ambiguousTaskIDs: Set<String>) -> some View {
         @Bindable var preferences = preferences
         sectionRow {
-            ListSectionHead(title: "Needs you", count: list.needsYou.count)
+            ListSectionHead(title: "Needs You", count: list.needsYou.count)
         }
         if list.needsYou.isEmpty {
             sectionRow { needsYouEmptyState }
@@ -373,7 +373,7 @@ struct UnifiedListView: View {
 
     /// The stage and round the task detail header reads too, so the two
     /// agree (`TaskDisplay.currentStage`). No attention items: a row says
-    /// where the task stands, and Needs you already says what it asks.
+    /// where the task stands, and Needs You already says what it asks.
     private func taskPosition(
         _ snapshot: Components.Schemas.TaskSnapshot
     ) -> (position: TaskDisplay.Position?, stage: TaskDisplay.CurrentStage?) {
@@ -398,7 +398,7 @@ struct UnifiedListView: View {
         return VStack(alignment: .leading, spacing: 8) {
             tools(list)
                 .padding(.horizontal, -16)
-            ListSectionHead(title: "Needs you", count: list.needsYou.count)
+            ListSectionHead(title: "Needs You", count: list.needsYou.count)
             if list.needsYou.isEmpty {
                 needsYouEmptyState
             }
@@ -654,7 +654,7 @@ struct SidebarRowTime {
 
 /// One attention row (R31) on the shared row: the type as a keyword with its
 /// chips trailing, the summary, and one context line. An item that stands for
-/// its task in Needs you takes the task's name and context in their place.
+/// its task in Needs You takes the task's name and context in their place.
 struct InboxRowView: View {
     struct TaskHeading {
         let task: Components.Schemas.Task

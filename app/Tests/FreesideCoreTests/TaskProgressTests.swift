@@ -13,7 +13,7 @@ import Testing
             #expect(fixture.position?.heading?.label == "Review Dispute")
             #expect(fixture.position?.heading?.round == nil)
             #expect(fixture.position?.attentionItemID == fixture.items[0].item.id)
-            #expect(fixture.position?.guidance == "Resolve the review dispute in Inbox.")
+            #expect(fixture.position?.guidance == "Resolve the review dispute.")
             #expect(!TaskDisplay.progressLines(fixture.task, position: fixture.position).contains("Round 1"))
         }
         let fixture = TaskProgressFixtures.make("Review dispute")
@@ -71,9 +71,9 @@ import Testing
             #expect(Set(lines).count == lines.count)
             let guidance =
                 name.hasPrefix("Ready")
-                ? "Review the pull request from Inbox."
+                ? "Review the pull request."
                 : name == "Approval required"
-                    ? "Review the specification in Inbox."
+                    ? "Review the specification."
                     : name == "Queued"
                         ? "The configured agent account is busy. This work is queued; no action is needed for this wait."
                         : "Open task details."
@@ -82,12 +82,15 @@ import Testing
     }
 
     /// The chip's cut comes from what the operator can do, not the status
-    /// word: accent only where the guidance names a bound Inbox item, faint
+    /// word: accent only where the guidance points at a bound Needs You item, faint
     /// only for a superseded run or an abandoned task, ink for everything
     /// the daemon is doing or has said, a stopped or finished task included.
     @Test func chipCutFollowsInboxGuidanceAndHistory() {
         let attention: Set = ["Approval required", "Ready", "Ready degraded"]
         let faint: Set = ["Superseded record", "Abandoned"]
+        let attentionGuidance: Set = [
+            "Resolve the review dispute.", "Review the pull request.", "Review the specification.",
+        ]
         let ink = [
             "Queued", "No position", "Implementation", "Review", "Verification", "Stop pending", "Stop failed",
             "Stopped", "Failed", "Finished", "History unavailable", "Run unavailable",
@@ -98,13 +101,13 @@ import Testing
             #expect(TaskDisplay.statusCut(fixture.task, position: fixture.position) == expected, "\(name)")
             if let position = fixture.position {
                 #expect(position.attention == attention.contains(name), "\(name)")
-                #expect(position.attention == position.guidance.contains("Inbox"), "\(name)")
+                #expect(position.attention == attentionGuidance.contains(position.guidance), "\(name)")
             }
         }
     }
 
     /// The row draws the same strings VoiceOver reads, by slot: round and
-    /// hold share a line, an Inbox sentence becomes a link title without
+    /// hold share a line, a Needs You sentence becomes a link title without
     /// its full stop, a capacity wait stays a sentence, and the default
     /// guidance draws nothing while staying in the spoken order.
     @Test func rowLinesKeepTheSpokenOrderAndChooseVisibleGuidance() throws {
@@ -117,7 +120,7 @@ import Testing
         let approval = TaskProgressFixtures.make("Approval required")
         #expect(
             TaskDisplay.rowLines(approval.task, position: approval.position).visibleGuidance(attention: true)
-                == .link("Review the specification in Inbox"))
+                == .link("Review the specification"))
         let queued = TaskProgressFixtures.make("Queued")
         let queuedLines = TaskDisplay.rowLines(queued.task, position: queued.position)
         #expect(queuedLines.visibleGuidance(attention: false) == .sentence(queuedLines.guidance))
