@@ -262,9 +262,6 @@ struct UnifiedListView: View {
     @ViewBuilder
     private func sections(_ list: UnifiedList, ambiguousTaskIDs: Set<String>) -> some View {
         @Bindable var preferences = preferences
-        sectionRow {
-            ListSectionHead(title: "Needs You", count: list.needsYou.count)
-        }
         if list.needsYou.isEmpty {
             sectionRow { needsYouEmptyState }
         } else {
@@ -398,7 +395,6 @@ struct UnifiedListView: View {
         return VStack(alignment: .leading, spacing: 8) {
             tools(list)
                 .padding(.horizontal, -16)
-            ListSectionHead(title: "Needs You", count: list.needsYou.count)
             if list.needsYou.isEmpty {
                 needsYouEmptyState
             }
