@@ -17,7 +17,7 @@ public struct DecisionFlowSettingsView: View {
                     "Advance to the next item",
                     isOn: $preferences.advancesToNextItem)
                 Text(
-                    "After a decision is applied, open the next highest-priority inbox item instead of returning to the inbox."
+                    "After a decision is applied, open the next item that needs you instead of returning to the list."
                 )
                 .font(.callout)
                 .foregroundStyle(.secondary)

@@ -97,7 +97,7 @@ struct TaskRowView: View {
     }
 
     /// What closes the row: a recorded stop confirmation, then the guidance
-    /// that says what the row does not, Inbox guidance as a link or a
+    /// that says what the row does not, Needs You guidance as a link or a
     /// capacity wait as a sentence. Most rows draw neither.
     private struct Closing {
         let recorded: String?

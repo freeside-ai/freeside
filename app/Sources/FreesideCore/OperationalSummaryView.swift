@@ -123,7 +123,7 @@ struct OperationalSummaryView: View {
     private func content(at now: Date) -> some View {
         VStack(alignment: .leading, spacing: 22) {
             VStack(alignment: .leading, spacing: 12) {
-                CardEyebrow(keyword: "Inbox")
+                CardEyebrow(keyword: "Needs You")
                 Text(Self.openStatement(summary.openCount))
                     .font(FreesideFont.ask)
                     .foregroundStyle(Color.ink)

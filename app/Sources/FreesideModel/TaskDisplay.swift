@@ -36,13 +36,13 @@ package enum TaskDisplay {
         package var status: String? = nil
         var guidance: String = Position.defaultGuidance
         var historical = false
-        /// The current open Inbox item `guidance` points at, when it points
-        /// at one. The lookups that produce that guidance set it, so the
-        /// accent chip, the Inbox sentence, and the place the sentence leads
-        /// can never disagree.
+        /// The current open Needs You item `guidance` points at, when it
+        /// points at one. The lookups that produce that guidance set it, so
+        /// the accent chip, the Needs You sentence, and the place the
+        /// sentence leads can never disagree.
         package var attentionItemID: String? = nil
-        /// True iff `guidance` targets a current open Inbox item bound to
-        /// this task.
+        /// True iff `guidance` targets a current open Needs You item bound
+        /// to this task.
         package var attention: Bool { attentionItemID != nil }
         /// True iff `status` names history rather than a state (a superseded
         /// run, an abandoned task). Narrower than `historical`, which also
@@ -217,11 +217,11 @@ package enum TaskDisplay {
             }
             if let dispute = reviewDisputeItem(task, run: run, attentionItems: attentionItems) {
                 position.status = AttentionDisplay.title(dispute.item)
-                position.guidance = "Resolve the review dispute in Inbox."
+                position.guidance = "Resolve the review dispute."
                 position.attentionItemID = dispute.item.id
             } else if let handoff = finalReviewItem(task, run: run, attentionItems: attentionItems) {
                 position.status = AttentionDisplay.title(handoff.item)
-                position.guidance = "Review the pull request from Inbox."
+                position.guidance = "Review the pull request."
                 position.attentionItemID = handoff.item.id
             } else if run?.lifecycle != .finished,
                 run == nil || (run?.task_id == task.id && run?.project_id == task.project_id),
@@ -238,7 +238,7 @@ package enum TaskDisplay {
                 })
             {
                 position.status = "Specification Approval Required"
-                position.guidance = "Review the specification in Inbox."
+                position.guidance = "Review the specification."
                 position.attentionItemID = approval.item.id
             }
         }
@@ -337,7 +337,7 @@ package enum TaskDisplay {
         package var all: [String] { [status] + [phases].compactMap { $0 } + facts + [guidance] }
 
         package enum VisibleGuidance: Equatable {
-            /// Names an Inbox destination: drawn in the link style, without
+            /// Opens a Needs You item: drawn in the link style, without
             /// the sentence's full stop.
             case link(String)
             /// Says something the row does not (a capacity wait), neutrally.
