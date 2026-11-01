@@ -396,9 +396,28 @@ records capture start/end timestamps, the explicit contrast, current launch/defa
 contrast at each sample boundary; it does not establish their values during
 an earlier capture.
 
-Baseline recording still requires the designated local macOS version and
-reviewed images. Hosted-runner overrides still require hosted image evidence;
-local pixels cannot establish an override.
+Baseline recording requires the designated host and reviewed images. The host
+is the development Mac on macOS 27.2 with Xcode 27.2, named by
+`baselineOperatingSystemKey` (`macOS-27.2`) in `ScreenshotRegressionTests.swift`.
+The key holds the major and minor version, so a patch update still records.
+Recording refuses any other minor version, a hosted runner, and a sharded run.
+CI compares on the `xcode-27` image with Xcode 27.2
+(`.github/workflows/convergence-ci.yml`), whose build was 27B48 when the Mac's
+27B52 recorded this baseline. Hosted-runner overrides still require
+hosted image evidence; local pixels cannot establish an override.
+
+After the host's next minor OS update, recording refuses until someone re-pins
+it. Change the key and the guard test beside it, then record every key:
+
+```sh
+FREESIDE_RECORD_SCREENSHOTS=1 swift test --package-path app --only-use-versions-from-resolved-file --filter ScreenshotRegressionTests/surfacesMatchRecordedPixels
+```
+
+A recording with no diff needs nothing else. A recording with a diff is a full
+re-baseline: CI has to agree with it, so review the new renders against the
+runner's `screenshot-mismatches` artifact, move CI to a matching image and
+Xcode in `convergence-ci.yml` and `app-ci.yml`, and confirm both screenshot
+slices pass with `ScreenshotDigestOverrides.json` still `{}`.
 
 ## Structure
 
@@ -489,7 +508,7 @@ CI's Swift build cache holds `app/.build`, test bundle included, so a PR
 that leaves `app/` alone skips the Swift build in the `convergence` job
 (#2291). Its key is
 `swift-build-v1-<os>-<arch>-<image OS>-<Xcode build>-<toolchain>-<app/ tree>`.
-The image OS is `$ImageOS`; the Xcode build is the default Xcode's
+The image OS is `$ImageOS`; the Xcode build is the pinned Xcode's
 `xcodebuild -version` build number; the toolchain is the `swiftlang-` token
 of its `swift --version`; and the tree is `git rev-parse HEAD:app`, which
 covers every file's name, mode, and content. The key leaves out
@@ -574,7 +593,7 @@ can; use the installed app path for these procedures.
 ## Style
 
 Swift formatting and style analysis both come from the toolchain's
-`swift-format` (swift-format 6.3.0, shipped with Xcode 26.6; CI pins the
+`swift-format` (swift-format 6.4.4, shipped with Xcode 27.2; CI pins the
 matching Xcode and fails if the tool version drifts). The configuration is
 `.swift-format` in this directory; the decision record is
 `devlog/2026-07-20-1140-swift-style-tooling.md`. In CI the gate runs at the

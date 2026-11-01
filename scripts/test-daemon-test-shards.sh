@@ -343,7 +343,7 @@ class Coverage(unittest.TestCase):
                         convergence.index('- name: Run the convergence pass'))
         app = (root / '.github/workflows/app-ci.yml').read_text()
         app_jobs = dict(re.findall(r'^  ([a-z-]+):\n(.*?)(?=^  [a-z-]+:|\Z)', app, re.M | re.S))
-        self.assertEqual({name for name, body in app_jobs.items() if 'runs-on: macos' in body},
+        self.assertEqual({name for name, body in app_jobs.items() if re.search(r'runs-on: (?:macos|xcode)', body)},
                          {'apps', 'swift-build-cache'})
         self.assertIn("    if: github.event_name != 'push'\n", app_jobs['apps'])
         self.assertNotIn('swift test', app_jobs['apps'])
@@ -368,6 +368,10 @@ class Coverage(unittest.TestCase):
                                job, re.M | re.S).group(0) for job in (convergence, writer)]
         self.assertEqual(key_steps[0], key_steps[1])
         self.assertIn('        id: swift-key\n', key_steps[0])
+        # The key names the image and the Xcode, so a writer on another
+        # one saves entries the reader never asks for.
+        for pin in (r'^    runs-on: (.+)$', r'^      DEVELOPER_DIR: (.+)$'):
+            self.assertEqual(*[re.search(pin, job, re.M).group(1) for job in (convergence, writer)])
         # The writer's build is the bundle run-convergence.sh runs with
         # --skip-build, so the script's `swift test` arguments stay pinned:
         # a build flag added there needs the same flag in the writer's
