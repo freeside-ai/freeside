@@ -99,8 +99,8 @@ struct UnifiedListView: View {
         }
         .navigationTitle("Freeside")
         #if os(iOS)
-            // The tools row sits between the bar and the list, so a large
-            // title would hold its height through the list's scroll.
+            // The list hides its bar, so this is for the pages it pushes,
+            // which inherit the mode.
             .navigationBarTitleDisplayMode(.inline)
         #endif
         .task {
@@ -151,8 +151,9 @@ struct UnifiedListView: View {
         }
     }
 
-    /// One line: the filter's state, the filter, and New Task. A disabled
-    /// New Task says why on a line of its own.
+    /// One line: the filter's state, the filter, and on the Mac New Task (the
+    /// iPhone's is in its bottom bar). A disabled New Task says why on a line
+    /// of its own.
     private func tools(_ list: UnifiedList) -> some View {
         VStack(alignment: .leading, spacing: 8) {
             if let newTaskBlockedReason {
@@ -194,19 +195,21 @@ struct UnifiedListView: View {
                     )
                     .presentationCompactAdaptation(.popover)
                 }
-                Button {
-                    navigation.newTaskComposerPresented = true
-                } label: {
-                    Label("New Task", systemImage: "plus")
-                        .labelStyle(.iconOnly)
-                        .font(FreesideFont.sans(.subheadline, weight: .medium))
-                        .foregroundStyle(Color.accentText)
-                        .frame(minWidth: 28, minHeight: 28)
-                        .contentShape(Rectangle())
-                }
-                .buttonStyle(.plain)
-                .help(newTaskBlockedReason ?? "New Task")
-                .disabled(newTaskBlockedReason != nil)
+                #if os(macOS)
+                    Button {
+                        navigation.newTaskComposerPresented = true
+                    } label: {
+                        Label("New Task", systemImage: "plus")
+                            .labelStyle(.iconOnly)
+                            .font(FreesideFont.sans(.subheadline, weight: .medium))
+                            .foregroundStyle(Color.accentText)
+                            .frame(minWidth: 28, minHeight: 28)
+                            .contentShape(Rectangle())
+                    }
+                    .buttonStyle(.plain)
+                    .help(newTaskBlockedReason ?? "New Task")
+                    .disabled(newTaskBlockedReason != nil)
+                #endif
             }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
