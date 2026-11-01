@@ -138,8 +138,13 @@ jobs:
   # then build as before until the next app-path push saves the entry.
   swift-build-cache:
     name: swift build cache (main)
-    runs-on: macos-26
+    runs-on: xcode-27
     if: github.event_name == 'push'
+    env:
+      # The image and Xcode of convergence-ci.yml's `convergence` job, which
+      # carries the rationale; the workflow guard pins them equal, because
+      # the build key names both.
+      DEVELOPER_DIR: /Applications/Xcode_27.2.app
     steps:
       - uses: actions/checkout@v4
       # Byte for byte the step in convergence-ci.yml's `convergence` job,
