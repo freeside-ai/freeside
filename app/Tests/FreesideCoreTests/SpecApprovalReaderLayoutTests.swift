@@ -15,7 +15,7 @@
         @Test func byteLimitSpecificationMountsOnlyVisibleBlocks() {
             let host = mount(text: String(repeating: "# task\n\n", count: 8192), width: 480, height: 900)
             defer { host.close() }
-            #expect((1..<256).contains(textFields(in: host).count))
+            #expect((1..<256).contains(mountedText(in: host).count))
         }
 
         @Test func denseDiffUsesBoundedChunksAndMeasuresTheFinalLine() throws {
@@ -29,13 +29,13 @@
                     .id("reader-content")
                 }, width: 480, height: 900)
             defer { host.close() }
-            #expect((1..<400).contains(textFields(in: host).count))
+            #expect((1..<400).contains(mountedText(in: host).count))
             try reachesEnd(verticalScroll(in: host))
             let scroll = try #require(scrolls(in: host).first { $0.hasHorizontalScroller })
             #expect(try #require(scroll.documentView).frame.width > scroll.contentSize.width)
             #expect(
-                textFields(in: host).contains {
-                    $0.stringValue.hasSuffix(String(repeating: "long offscreen row ", count: 100))
+                mountedText(in: host).contains {
+                    $0.string.hasSuffix(String(repeating: "long offscreen row ", count: 100))
                 })
         }
 
@@ -105,8 +105,8 @@
             let lines = try #require(horizontal.documentView)
             #expect(lines.frame.width > horizontal.contentSize.width)
             #expect(lines.frame.height <= horizontal.contentSize.height + 1)
-            let lastRow = try #require(textFields(in: host).first { $0.stringValue.hasSuffix(lastLine) })
-            let lastRowFrame = lastRow.convert(lastRow.bounds, to: vertical.documentView)
+            let lastRow = try #require(mountedText(in: host).first { $0.string.hasSuffix(lastLine) })
+            let lastRowFrame = lastRow.view.convert(lastRow.view.bounds, to: vertical.documentView)
             #expect(lastRowFrame.maxY <= vertical.documentVisibleRect.maxY + 1)
         }
 
@@ -119,8 +119,8 @@
                         linesAdded: 201, linesRemoved: 1, truncated: false)
                 }, width: 480, height: 900)
             defer { host.close() }
-            #expect(textFields(in: host).contains { $0.stringValue == "+new" })
-            #expect(!textFields(in: host).contains { $0.stringValue.contains("hidden row") })
+            #expect(mountedText(in: host).contains { $0.string == "+new" })
+            #expect(!mountedText(in: host).contains { $0.string.contains("hidden row") })
         }
 
         // A wash is its row's background, so a short line's band reaches
@@ -220,8 +220,26 @@
             ((view as? NSScrollView).map { [$0] } ?? []) + view.subviews.flatMap { scrolls(in: $0) }
         }
 
-        private func textFields(in view: NSView) -> [NSTextField] {
-            ((view as? NSTextField).map { [$0] } ?? []) + view.subviews.flatMap { textFields(in: $0) }
+        /// A line of mounted text. SwiftUI's selectable text is an
+        /// `NSTextField` on macOS 26. On macOS 27 it's a private view that
+        /// reports its string only through the accessibility API.
+        private struct MountedText {
+            let view: NSView
+            let string: String
+        }
+
+        private func mountedText(in view: NSView) -> [MountedText] {
+            let own: [MountedText]
+            if let field = view as? NSTextField {
+                own = [MountedText(view: field, string: field.stringValue)]
+            } else if view.accessibilityRole() == .staticText,
+                let string = view.accessibilityValue() as? String
+            {
+                own = [MountedText(view: view, string: string)]
+            } else {
+                own = []
+            }
+            return own + view.subviews.flatMap { mountedText(in: $0) }
         }
 
         private func settle(_ host: NSView) {
