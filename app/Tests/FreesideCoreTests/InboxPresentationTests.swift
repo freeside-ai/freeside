@@ -90,7 +90,7 @@ import Testing
     }
 
     @Test func theToolsRowStatesTheFilter() {
-        #expect(UnifiedListView.filterState(projectID: nil) == "All projects")
+        #expect(UnifiedListView.filterState(projectID: nil) == "All Projects")
         #expect(UnifiedListView.filterState(projectID: "freeside") == "freeside")
         #expect(UnifiedListView.filterState(projectID: UnifiedList.noProject) == "No project")
     }
