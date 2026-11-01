@@ -48,9 +48,9 @@ public final class NavigationModel {
     /// one that a cold start's cached list hasn't caught up to, and the card
     /// shows either from canonical state. Leaving the card ends it.
     public private(set) var linkedItemID: String?
-    /// The New Task composer's presentation flag, shared by the list's tools
-    /// row, ⌘N, and the File > New Task menu item, so all three open the one
-    /// sheet through the same gated path.
+    /// The New Task composer's presentation flag, shared by the Mac list's tools
+    /// row, the iPhone's bottom bar, ⌘N, and the File > New Task menu item, so
+    /// all of them open the one sheet through the same gated path.
     public var newTaskComposerPresented = false
     public var submissionRecoveryPresented = false
     /// The Settings sheet's presentation flag, shared by the toolbar buttons

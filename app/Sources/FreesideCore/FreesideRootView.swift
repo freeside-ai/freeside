@@ -446,16 +446,12 @@ public struct FreesideRootView: View {
             onRevealTechnicalDetails: revealTechnicalDetails)
     }
 
-    /// The slot Devices held on both toolbars. The iPhone's bar draws the
-    /// word, beside the Decision Flow menu's gear.
+    /// The slot Devices held on both toolbars.
     private var settingsButton: some View {
         Button {
             navigation.openSettings()
         } label: {
             Label("Settings", systemImage: "gearshape")
-                #if os(iOS)
-                    .labelStyle(.titleOnly)
-                #endif
         }
         .help("Settings")
     }
@@ -493,18 +489,26 @@ public struct FreesideRootView: View {
                     path: Binding(get: { navigation.path }, set: { navigation.setPath($0) })
                 ) {
                     unifiedList(coordinator)
+                        .safeAreaInset(edge: .top, spacing: 0) { recoveryRow(coordinator) }
                         // The toolbar and sheets ride the stack's root content,
-                        // not the NavigationStack, so the trailing items render
-                        // in the list's navigation bar and stay off the pushed
-                        // detail. iOS drops a toolbar attached to the
+                        // not the NavigationStack, so the bottom bar stays off
+                        // the pushed detail. iOS drops a toolbar attached to the
                         // NavigationStack.
                         .toolbar {
-                            ToolbarItemGroup(placement: .topBarTrailing) {
-                                submissionRecoveryButton(coordinator)
+                            ToolbarItemGroup(placement: .bottomBar) {
                                 settingsButton
-                                decisionFlowMenu
+                                Spacer()
+                                // New Task's disabled reason draws with the
+                                // loaded list, so the button waits for it too.
+                                if case .loaded = coordinator.store.loadState {
+                                    newTaskButton(coordinator)
+                                }
                             }
                         }
+                        // The bottom bar holds the list's actions, so it draws
+                        // no top bar. The title stays for VoiceOver and for the
+                        // back button of a pushed page.
+                        .toolbar(.hidden, for: .navigationBar)
                         .sheet(isPresented: Bindable(navigation).newTaskComposerPresented) {
                             NewTaskSheet(
                                 projects: TaskDisplay.knownProjects(in: coordinator.tasks),
@@ -552,15 +556,31 @@ public struct FreesideRootView: View {
                 seat: .detailColumn)
         }
 
-        private var decisionFlowMenu: some View {
-            @Bindable var preferences = flowPreferences
-            return Menu {
-                Toggle(
-                    "Advance to the next item",
-                    isOn: $preferences.advancesToNextItem)
-            } label: {
-                Label("Decision Flow", systemImage: "gearshape")
+        /// Pending stops and unconfirmed submissions, while there are any. They
+        /// get a row of their own because the bottom bar has no overflow: both
+        /// beside its two actions run off the edges.
+        @ViewBuilder
+        private func recoveryRow(_ coordinator: SyncCoordinator) -> some View {
+            if !coordinator.pendingTaskStops.isEmpty || !coordinator.pendingTaskSubmissions.isEmpty {
+                HStack(spacing: 16) {
+                    Spacer()
+                    submissionRecoveryButton(coordinator)
+                }
+                .padding(.horizontal)
+                .padding(.bottom, 8)
             }
+        }
+
+        private func newTaskButton(_ coordinator: SyncCoordinator) -> some View {
+            let blockedReason = TaskSubmissionModel.composeBlockedReason(
+                freshness: coordinator.store.freshness)
+            return Button {
+                navigation.newTaskComposerPresented = true
+            } label: {
+                Label("New Task", systemImage: "plus")
+            }
+            .help(blockedReason ?? "New Task")
+            .disabled(blockedReason != nil)
         }
     #else
         @ViewBuilder
