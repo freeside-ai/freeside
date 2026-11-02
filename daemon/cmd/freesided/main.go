@@ -45,6 +45,7 @@ import (
 	"github.com/freeside-ai/freeside/daemon/internal/signet"
 	"github.com/freeside-ai/freeside/daemon/internal/specify"
 	"github.com/freeside-ai/freeside/daemon/internal/store"
+	"github.com/freeside-ai/freeside/daemon/internal/usagecollect"
 	"github.com/freeside-ai/freeside/daemon/internal/verify"
 	"github.com/freeside-ai/freeside/daemon/internal/ward"
 )
@@ -656,6 +657,10 @@ type config struct {
 	// beforeStoreClose is a test seam for observing failed-start cleanup at
 	// the store-close boundary. Production leaves it nil.
 	beforeStoreClose func()
+	// usageCollectors are the usage collectors by harness client. None ships
+	// yet (#1717 adds Claude's), so production collects nothing; tests set a
+	// fake.
+	usageCollectors map[domain.HarnessClientKind]ward.UsageCollector
 	// now is the attention service clock. Production leaves it nil for the
 	// wall clock; tests can advance startup across pairing-code expiry.
 	now func() time.Time
@@ -838,6 +843,7 @@ type daemon struct {
 	runID         string
 	logger        *slog.Logger
 	now           func() time.Time
+	usage         *usagecollect.Coordinator
 }
 
 func run(parent context.Context, stop func(), cfg config) (_ *daemon, err error) {
@@ -1517,6 +1523,11 @@ func run(parent context.Context, stop func(), cfg config) (_ *daemon, err error)
 	if claudeWiring != nil {
 		d.sessionCloser = claudeWiring.closer
 	}
+	// A reading is stale once one scheduled doctor pass, the collection's
+	// cadence, has been missed.
+	d.usage = usagecollect.New(st, cfg.usageCollectors, usagecollect.Config{
+		RefreshAge: 2 * cfg.DoctorInterval, Logger: cfg.Logger,
+	})
 	d.pairing.configure(d.readiness().APIURL, attention.MintPairingCode)
 	// The control routes approve the store's recipe set, which a scenario
 	// extends with its own recipe, and the recipes adopted for the Claude
@@ -1526,7 +1537,8 @@ func run(parent context.Context, stop func(), cfg config) (_ *daemon, err error)
 		repositoryID = cfg.Claude.RepositoryID
 	}
 	d.pairing.registerControlRoutes(
-		d.pairing.mux, st, blobs, localBackupFiles, storeOptions.ApprovedRecipes, repositoryID, integrityProbe, cfg.Environment,
+		d.pairing.mux, st, blobs, localBackupFiles, storeOptions.ApprovedRecipes, repositoryID, integrityProbe, d.usage,
+		cfg.Environment,
 		cfg.execution(), attention, cfg.DeputyLaunch, func(ctx context.Context, id domain.TaskID, commit func() error) error {
 			if workflow == nil {
 				return commit()
@@ -1548,7 +1560,7 @@ func run(parent context.Context, stop func(), cfg config) (_ *daemon, err error)
 	} else if claudeWiring != nil {
 		// The doctor and janitor cadences live on the §5.16 durable scheduler;
 		// their initial coverage remains the direct calls above.
-		claudeSched, err = newClaudeScheduler(st, cfg, claudeWiring, runDoctor, imageUpkeep)
+		claudeSched, err = newClaudeScheduler(st, cfg, claudeWiring, runDoctor, d.usage.CollectAll, imageUpkeep)
 		if err != nil {
 			return nil, err
 		}
@@ -1588,6 +1600,16 @@ func run(parent context.Context, stop func(), cfg config) (_ *daemon, err error)
 		}
 	}
 
+	// Usage collection starts before the control socket serves and the
+	// scheduler runs, either of which can trigger it. It only observes and
+	// ends only at shutdown, so it is not a supervised component: nothing it
+	// meets stops the daemon.
+	d.usage.Start(ctx)
+	d.wg.Add(1)
+	go func() {
+		defer d.wg.Done()
+		d.usage.Wait()
+	}()
 	d.wg.Add(2)
 	go func() {
 		defer d.wg.Done()

@@ -757,6 +757,7 @@ func newClaudeScheduler(
 	cfg config,
 	wiring *claudeComposition,
 	runDoctor func(context.Context) error,
+	collectUsage func(context.Context) error,
 	imageUpkeep *engine.ImageUpkeep,
 ) (*scheduler.Scheduler, error) {
 	now := func() time.Time { return time.Now().UTC() }
@@ -772,6 +773,13 @@ func newClaudeScheduler(
 			err := runScheduledDoctorPass(ctx, wiring.runConformance, runDoctor)
 			if err != nil {
 				err = fmt.Errorf("scheduled doctor pass: %w", err)
+			}
+			// Each pass starts usage collection without waiting for it (plan
+			// §10). A collection failure shows only as its pool's refresh
+			// status, so it stays out of the consumption: a failed doctor
+			// pass stops the daemon.
+			if collectErr := collectUsage(ctx); collectErr != nil && ctx.Err() == nil {
+				upkeepLogger.Warn("scheduled usage collection did not start", "error", collectErr)
 			}
 			return failures.consumption(domain.ScheduleDoctor, err)
 		}},

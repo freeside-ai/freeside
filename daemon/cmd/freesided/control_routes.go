@@ -16,6 +16,7 @@ import (
 	"github.com/freeside-ai/freeside/daemon/internal/signet"
 	"github.com/freeside-ai/freeside/daemon/internal/store"
 	"github.com/freeside-ai/freeside/daemon/internal/strictjson"
+	"github.com/freeside-ai/freeside/daemon/internal/usagecollect"
 )
 
 type conclusionResponse struct {
@@ -131,7 +132,8 @@ func decodeControlPayload[T any](body json.RawMessage) (T, error) {
 
 func (p *pairingControl) registerControlRoutes(
 	mux *http.ServeMux, st *store.Store, blobs *signet.BlobStore, backupFiles *store.LocalBackupFiles,
-	approved map[domain.Digest]bool, repositoryID int64, integrityProbe credentialIntegrityProbe, env environment,
+	approved map[domain.Digest]bool, repositoryID int64, integrityProbe credentialIntegrityProbe,
+	usage *usagecollect.Coordinator, env environment,
 	execution executionMode, attention *signet.Service, launch *deputyLaunch,
 	commitWorkflowClosure func(context.Context, domain.TaskID, func() error) error,
 ) {
@@ -142,7 +144,7 @@ func (p *pairingControl) registerControlRoutes(
 	daemon := daemonStoreContext{
 		store: st, blobs: blobs, backupFiles: backupFiles, dbPath: p.dbPath, approvedRecipes: approved,
 		repositoryID: repositoryID, credentialIntegrityProbe: integrityProbe,
-		commitWorkflowClosure: commitWorkflowClosure,
+		commitWorkflowClosure: commitWorkflowClosure, usageCollection: usage,
 	}
 	observation := observedb.Borrow(st)
 	p.handleGet(mux, "/observe/runs/{run_id}", func(ctx context.Context, r *http.Request) (any, error) {
@@ -203,6 +205,8 @@ func (p *pairingControl) registerControlRoutes(
 	command("/tasks/lines", runTaskLineCommand)
 	command(routingPolicyRoute, runRoutingCommand)
 	command("/auth/list", runAuthListCommand)
+	command("/auth/usage/refresh", runAuthRefreshUsageCommand)
+	command("/auth/collector", runAuthSetCollectorCommand)
 	command("/doctor", runDoctorCommand)
 	p.handle(mux, "/snapshot", func(ctx context.Context, body json.RawMessage) (any, error) {
 		return runSnapshotControl(ctx, st, body)

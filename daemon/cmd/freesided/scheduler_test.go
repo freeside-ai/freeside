@@ -329,7 +329,7 @@ func TestClaudeSchedulerRegistersEveryKind(t *testing.T) {
 		observeBaseTip: staticBaseObserver,
 	}
 	cfg := config{Claude: &claudeDriverConfig{OperatingMode: domain.ModeAttendedDev}}
-	sched, err := newClaudeScheduler(st, cfg, wiring, func(context.Context) error { return nil }, nil)
+	sched, err := newClaudeScheduler(st, cfg, wiring, func(context.Context) error { return nil }, func(context.Context) error { return nil }, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -361,7 +361,7 @@ func TestArmTrustedConfigJobsArmsImageUpkeepAndKeepsItsClock(t *testing.T) {
 			janitor:        &janitorSession{janitor: &stubJanitorRunner{}},
 			observeBaseTip: staticBaseObserver,
 		}
-		sched, err := newClaudeScheduler(st, cfg, wiring, func(context.Context) error { return nil }, nil)
+		sched, err := newClaudeScheduler(st, cfg, wiring, func(context.Context) error { return nil }, func(context.Context) error { return nil }, nil)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -378,6 +378,48 @@ func TestArmTrustedConfigJobsArmsImageUpkeepAndKeepsItsClock(t *testing.T) {
 	}
 	if again := arm(); !reflect.DeepEqual(again, first) {
 		t.Fatalf("re-armed schedule = %+v, want the first one kept: %+v", again, first)
+	}
+}
+
+// TestScheduledDoctorPassStartsUsageCollection: each scheduled doctor pass
+// starts usage collection (plan §10), and a collection that cannot start
+// fails nothing, because a failed doctor consumption stops the daemon.
+func TestScheduledDoctorPassStartsUsageCollection(t *testing.T) {
+	ctx := context.Background()
+	st := schedTestStore(t)
+	wiring := &claudeComposition{
+		janitor:        &janitorSession{janitor: &stubJanitorRunner{}},
+		observeBaseTip: staticBaseObserver,
+		runConformance: func(context.Context) error { return nil },
+	}
+	collections := 0
+	sched, err := newClaudeScheduler(st, config{Claude: &claudeDriverConfig{OperatingMode: domain.ModeAttendedDev}},
+		wiring, func(context.Context) error { return nil },
+		func(context.Context) error {
+			collections++
+			return errors.New("usage pools unreadable")
+		}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	now := time.Now().UTC()
+	seconds := int64(3600)
+	schedule, err := domain.NewSchedule(domain.ScheduleInput{
+		ID: doctorScheduleID, ProjectID: "project-system", Kind: domain.ScheduleDoctor,
+		Subject:   domain.ScheduleSubject{Type: domain.ScheduleSubjectTrustedConfig},
+		CreatedAt: now.Add(-time.Hour), IntervalSeconds: &seconds,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := sched.Arm(ctx, schedule, now.Add(-time.Second)); err != nil {
+		t.Fatal(err)
+	}
+	if err := sched.RunOnce(ctx); err != nil {
+		t.Fatalf("a collection that could not start failed the doctor pass: %v", err)
+	}
+	if collections != 1 {
+		t.Fatalf("scheduled doctor pass started %d collections, want 1", collections)
 	}
 }
 
@@ -410,7 +452,7 @@ func TestClaudeSchedulerCapturesCompletionWithBaseAdvance(t *testing.T) {
 				},
 			}
 			cfg := config{Claude: &claudeDriverConfig{OperatingMode: domain.ModeAttendedDev}}
-			sched, err := newClaudeScheduler(st, cfg, wiring, func(context.Context) error { return nil }, nil)
+			sched, err := newClaudeScheduler(st, cfg, wiring, func(context.Context) error { return nil }, func(context.Context) error { return nil }, nil)
 			if err != nil {
 				t.Fatal(err)
 			}
