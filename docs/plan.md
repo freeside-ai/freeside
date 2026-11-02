@@ -4275,8 +4275,11 @@ the same revision, epoch, and read-transaction guarantees below as run data.
 - A usage observation and its refresh status are client-visible state
   (revision 77). They reach the clients through this revision and heartbeat
   path on their own, never waiting for unrelated task activity, and the manual
-  refresh is an ordinary client command. How an observation append advances
-  the revision is the #1145 contract decision, which this clause depends on.
+  refresh is an ordinary client command. An observation row that feeds a
+  client-visible projection, whether this record or the run usage rows behind
+  `billable_cost_so_far`, is appended in a client-visible transaction, so the
+  append raises the revision. A run's `entity_version` does not move, because
+  its spend figure refreshes with `as_of_revision` (#1145).
 
 #### Devices, Commands, and Caches
 

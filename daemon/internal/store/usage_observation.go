@@ -163,7 +163,13 @@ const (
 // when it has none. A missing admission, or an execution admission without an
 // agent binding, records nothing because it cannot supply the required agent,
 // launch, treatment, and pricing identity.
-func (tx *InternalTx) AppendUsageObservations(
+//
+// It lives on WriteTx because these rows feed the run's billable_cost_so_far
+// (#1134): an append can change a client-visible figure, and the revision is
+// the only signal a client has that the figure moved (#1145). It returns the
+// rows it inserted, so a caller with nothing else to commit can roll a replay
+// back instead of raising the revision for no change.
+func (tx *WriteTx) AppendUsageObservations(
 	ctx context.Context,
 	invocationID domain.InvocationID,
 	measurements []exec.UsageMeasurement,

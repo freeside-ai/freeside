@@ -96,16 +96,17 @@ func (tx *ReadTx) AuthorizeIndependentReviewRecipe(recipe domain.Digest) {
 
 // InternalTx is the transaction handle passed to WriteInternal callbacks:
 // everything a ReadTx can do, plus non-synchronized bookkeeping writes such
-// as inbox/outbox state and append-only usage observations. It
-// deliberately exposes no Put method, so a transaction that does not bump the
-// revision cannot mutate any state exposed through synchronization (§5.14):
-// the Put methods live only on WriteTx, unreachable from here at compile
-// time, not by convention. Only valid until the callback returns.
+// as inbox/outbox state. It deliberately exposes no Put method, so a
+// transaction that does not bump the revision cannot mutate any state exposed
+// through synchronization (§5.14): the Put methods live only on WriteTx,
+// unreachable from here at compile time, not by convention. Only valid until
+// the callback returns.
 //
-// Only non-synchronized bookkeeping (inbox, outbox, dispatch, observation-only
-// usage telemetry) belongs on this type; a write to any entity carrying
-// as_of_revision must live on WriteTx, or the §5.14 guarantee is broken without
-// a revision bump.
+// Only non-synchronized bookkeeping (inbox, outbox, dispatch) belongs on this
+// type; a write to any entity carrying as_of_revision, or to a row a client
+// projection reads even though it carries none of its own (usage observations,
+// #1145), must live on WriteTx, or the §5.14 guarantee is broken without a
+// revision bump.
 type InternalTx struct {
 	ReadTx
 }
@@ -167,10 +168,9 @@ func (s *Store) Write(ctx context.Context, fn func(*WriteTx) error) error {
 }
 
 // WriteInternal runs fn in a write transaction without a revision bump, for
-// bookkeeping invisible to clients (inbox intake, dispatch status, usage
-// observations). Its callback receives an InternalTx, which exposes no Put
-// method, so a non-bumping transaction cannot mutate synchronized state even
-// by mistake.
+// bookkeeping invisible to clients (inbox intake, dispatch status). Its
+// callback receives an InternalTx, which exposes no Put method, so a
+// non-bumping transaction cannot mutate synchronized state even by mistake.
 func (s *Store) WriteInternal(ctx context.Context, fn func(*InternalTx) error) error {
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {

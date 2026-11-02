@@ -88,6 +88,34 @@ func TestAppendUsageObservationsRoundTripsAndReplays(t *testing.T) {
 	}
 }
 
+// An append feeds the run's billable_cost_so_far, so it has to reach clients
+// through the revision on its own (#1145).
+func TestAppendUsageObservationsRaisesRevision(t *testing.T) {
+	s, admission := seedUsageAdmission(t)
+	ctx := context.Background()
+	before, err := s.ServerState(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := s.Write(ctx, func(tx *WriteTx) error {
+		inserted, err := tx.AppendUsageObservations(ctx, admission.InvocationID,
+			[]exec.UsageMeasurement{usageMeasurementFixture()})
+		if err == nil && inserted != 1 {
+			t.Fatalf("inserted = %d, want 1", inserted)
+		}
+		return err
+	}); err != nil {
+		t.Fatal(err)
+	}
+	after, err := s.ServerState(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if after.Revision != before.Revision+1 {
+		t.Fatalf("revision after append = %d, want %d", after.Revision, before.Revision+1)
+	}
+}
+
 func TestAppendUsageObservationsConflictingReplayFailsClosed(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()

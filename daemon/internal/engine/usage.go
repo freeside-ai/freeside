@@ -2,6 +2,7 @@ package engine
 
 import (
 	"context"
+	"errors"
 	"fmt"
 
 	"github.com/freeside-ai/freeside/daemon/internal/domain"
@@ -26,6 +27,11 @@ func billableCostSoFar(
 	return cost, nil
 }
 
+// appendUsageObservations records measurements in their own client-visible
+// transaction, so the revision moves as soon as the spend figure does (#1145).
+// A collect repeats for the same terminal, including to authenticate one
+// already recorded, so a replay that inserts nothing rolls back rather than
+// raising the revision on every pass.
 func appendUsageObservations(
 	ctx context.Context,
 	st *store.Store,
@@ -35,10 +41,17 @@ func appendUsageObservations(
 	if len(measurements) == 0 {
 		return nil
 	}
-	if err := st.WriteInternal(ctx, func(tx *store.InternalTx) error {
-		_, err := tx.AppendUsageObservations(ctx, invocationID, measurements)
-		return err
-	}); err != nil {
+	err := st.Write(ctx, func(tx *store.WriteTx) error {
+		inserted, err := tx.AppendUsageObservations(ctx, invocationID, measurements)
+		if err != nil {
+			return err
+		}
+		if inserted == 0 {
+			return errReplay
+		}
+		return nil
+	})
+	if err != nil && !errors.Is(err, errReplay) {
 		return fmt.Errorf("persist usage observations for %q: %w", invocationID, err)
 	}
 	return nil

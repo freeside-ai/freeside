@@ -11,6 +11,7 @@ import (
 	"github.com/freeside-ai/freeside/daemon/internal/domain"
 	"github.com/freeside-ai/freeside/daemon/internal/exec"
 	"github.com/freeside-ai/freeside/daemon/internal/exec/fake"
+	"github.com/freeside-ai/freeside/daemon/internal/signet"
 	"github.com/freeside-ai/freeside/daemon/internal/store"
 	"github.com/freeside-ai/freeside/daemon/internal/store/storetest"
 )
@@ -158,6 +159,10 @@ func TestUsageObservationsPersistAfterStageCollect(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			engine, run, attempt := usageEngineFixture(t, tc.bound)
+			before, err := engine.store.ServerState(context.Background())
+			if err != nil {
+				t.Fatal(err)
+			}
 			var afterFirst store.ServerState
 			for collect := 0; collect < 2; collect++ {
 				if _, ready, err := engine.collectTerminal(context.Background(), run.ID, attempt); err != nil || !ready {
@@ -168,6 +173,9 @@ func TestUsageObservationsPersistAfterStageCollect(t *testing.T) {
 					t.Fatal(err)
 				}
 				if collect == 0 {
+					if state.Revision <= before.Revision {
+						t.Fatalf("revision after collect = %d, want above %d", state.Revision, before.Revision)
+					}
 					afterFirst = state
 				} else if state != afterFirst {
 					t.Fatalf("duplicate collect changed server state from %+v to %+v", afterFirst, state)
@@ -185,6 +193,82 @@ func TestUsageObservationsPersistAfterStageCollect(t *testing.T) {
 				t.Fatalf("observations after duplicate collect = %d, want %d", len(observations), tc.want)
 			}
 		})
+	}
+}
+
+// The collect tests cannot tell the append's revision from the observation
+// write beside it, so this pins the helper alone: one revision for an insert,
+// none for a replay or for measurements with no agent binding to attribute.
+func TestAppendUsageObservationsRaisesRevisionOnlyOnInsert(t *testing.T) {
+	ctx := context.Background()
+	measurements := []exec.UsageMeasurement{{
+		Source: domain.UsageSourceAdapterTranscript, Kind: domain.UsageMeasurementBillableCost,
+		Metric: "cost", Unit: "usd_micros", Quantity: 5, Sequence: 1,
+		ObservedAt: time.Date(2026, 1, 2, 4, 5, 6, 0, time.UTC),
+	}}
+	revision := func(t *testing.T, st *store.Store) int64 {
+		t.Helper()
+		state, err := st.ServerState(ctx)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return state.Revision
+	}
+	for _, tc := range []struct {
+		name  string
+		bound bool
+		wants []int64
+	}{
+		{"bound admission", true, []int64{1, 0}},
+		{"unbound admission", false, []int64{0, 0}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			engine, _, attempt := usageEngineFixture(t, tc.bound)
+			for i, want := range tc.wants {
+				before := revision(t, engine.store)
+				if err := appendUsageObservations(ctx, engine.store, attempt.InvocationID, measurements); err != nil {
+					t.Fatalf("append %d: %v", i+1, err)
+				}
+				if got := revision(t, engine.store) - before; got != want {
+					t.Fatalf("append %d raised the revision by %d, want %d", i+1, got, want)
+				}
+			}
+		})
+	}
+}
+
+// The client contract end to end: an append reaches the sync read under a
+// higher as_of_revision and leaves the run's entity_version alone (#1145).
+func TestUsageAppendRefreshesTheRunByRevisionAlone(t *testing.T) {
+	ctx := context.Background()
+	engine, run, attempt := usageEngineFixture(t, true)
+	service := signet.NewService(engine.store)
+	before, err := service.GetRun(ctx, run.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if before.Run.BillableCostSoFar != nil {
+		t.Fatalf("cost before the append = %#v, want nil", before.Run.BillableCostSoFar)
+	}
+	if err := appendUsageObservations(ctx, engine.store, attempt.InvocationID, []exec.UsageMeasurement{{
+		Source: domain.UsageSourceAdapterTranscript, Kind: domain.UsageMeasurementBillableCost,
+		Metric: "billable_cost", Unit: "usd_micros", Quantity: 17_500_000, Sequence: 1,
+		ObservedAt: time.Date(2026, 1, 2, 4, 5, 6, 0, time.UTC),
+	}}); err != nil {
+		t.Fatal(err)
+	}
+	after, err := service.GetRun(ctx, run.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if after.Run.BillableCostSoFar == nil || after.Run.BillableCostSoFar.Amount != "17.5" {
+		t.Fatalf("cost after the append = %#v, want 17.5", after.Run.BillableCostSoFar)
+	}
+	if after.AsOfRevision != before.AsOfRevision+1 {
+		t.Fatalf("as_of_revision = %d, want %d", after.AsOfRevision, before.AsOfRevision+1)
+	}
+	if after.EntityVersion != before.EntityVersion {
+		t.Fatalf("entity_version = %d, want %d", after.EntityVersion, before.EntityVersion)
 	}
 }
 
@@ -246,6 +330,10 @@ func TestUsageObservationsPersistWithTheExport(t *testing.T) {
 
 func TestUsageObservationsPersistWithRoutedReviewFailure(t *testing.T) {
 	engine, run, attempt := usageEngineFixture(t, true)
+	before, err := engine.store.ServerState(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
 	observedAt := time.Date(2026, 1, 2, 4, 5, 6, 0, time.UTC)
 	measurement := exec.UsageMeasurement{
 		Source: domain.UsageSourceReviewSource, Kind: domain.UsageMeasurementReportedUsage,
@@ -256,7 +344,7 @@ func TestUsageObservationsPersistWithRoutedReviewFailure(t *testing.T) {
 		store: engine.store, workDir: t.TempDir(), now: func() time.Time { return observedAt },
 		reviewRetryAfter: make(map[domain.RunID]time.Time),
 	}
-	_, err := w.recordReviewSourceFailure(
+	_, err = w.recordReviewSourceFailure(
 		context.Background(), productionPublicationTask{RunID: run.ID}, attempt.InvocationID, 1,
 		strings.Repeat("a", 40), strings.Repeat("b", 40),
 		reviewSourceFailureWithUsage(
@@ -279,6 +367,13 @@ func TestUsageObservationsPersistWithRoutedReviewFailure(t *testing.T) {
 	if len(observations) != 1 || observations[0].Quantity != measurement.Quantity ||
 		observations[0].Source != domain.UsageSourceReviewSource {
 		t.Fatalf("failed review usage = %#v, want %#v", observations, measurement)
+	}
+	after, err := engine.store.ServerState(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if after.Revision <= before.Revision {
+		t.Fatalf("revision after failed review = %d, want above %d", after.Revision, before.Revision)
 	}
 }
 
