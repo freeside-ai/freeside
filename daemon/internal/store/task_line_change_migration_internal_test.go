@@ -45,6 +45,8 @@ func TestTaskLineChangesMigrationKeepsEveryLine(t *testing.T) {
 	// Return the table to the shape a daemon at 0111 holds, then store each
 	// line the way that daemon did.
 	for _, statement := range []string{
+		`DROP TABLE pool_usage_observations`,
+		`DELETE FROM schema_migrations WHERE name = '0116_pool_usage_observations.sql'`,
 		`DROP TABLE routing_policies`,
 		`DELETE FROM schema_migrations WHERE name = '0115_routing_policies.sql'`,
 		`DROP TABLE review_slot_releases`,

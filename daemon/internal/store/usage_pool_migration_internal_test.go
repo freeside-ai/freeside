@@ -16,6 +16,8 @@ func rewindUsagePools(t *testing.T, ctx context.Context, db *sql.DB) {
 	t.Helper()
 	rewindReviewSlotReleases(t, ctx, db)
 	for _, statement := range []string{
+		`DROP TABLE pool_usage_observations`,
+		`DELETE FROM schema_migrations WHERE name = '0116_pool_usage_observations.sql'`,
 		`ALTER TABLE run_hold_observations DROP COLUMN usage_pool`,
 		`DROP TABLE usage_pools`,
 		`ALTER TABLE auth_identities ADD COLUMN max_parallel_executions INTEGER NOT NULL DEFAULT 1
@@ -161,6 +163,8 @@ func TestUsagePoolsMigrationReleasesAbandonedShadowAdmissions(t *testing.T) {
 		t.Fatal(err)
 	}
 	for _, statement := range []string{
+		`DROP TABLE pool_usage_observations`,
+		`DELETE FROM schema_migrations WHERE name = '0116_pool_usage_observations.sql'`,
 		`DROP TABLE routing_policies`,
 		`DELETE FROM schema_migrations WHERE name = '0115_routing_policies.sql'`,
 	} {
