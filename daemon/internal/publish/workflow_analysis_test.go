@@ -159,6 +159,8 @@ func TestAnalyzeWorkflowsSelfHostedRunnerSelection(t *testing.T) {
 		{"unaudited label set", "[linux, gpu]", []auditRunner{{Labels: []string{"self-hosted", "linux"}}}, true},
 		{"github hosted", "ubuntu-latest", []auditRunner{{Labels: []string{"self-hosted", "linux"}}}, false},
 		{"versioned github hosted", "ubuntu-24.04-arm", nil, false},
+		{"xcode image hosted", "xcode-27", nil, false},
+		{"xcode label on self-hosted runner", "xcode-27", []auditRunner{{Labels: []string{"self-hosted", "xcode-27"}}}, true},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
 			workflow := []workflowSource{{Path: ".github/workflows/ci.yml", Active: true, Content: []byte(`on: pull_request

@@ -321,7 +321,8 @@ func standardGitHubHostedRunnerLabel(label string) bool {
 		"ubuntu-22.04-arm", "ubuntu-24.04-arm", "ubuntu-26.04-arm",
 		"windows-latest", "windows-2022", "windows-2025", "windows-2025-vs2026",
 		"windows-11-arm", "windows-11-vs2026-arm",
-		"macos-latest", "macos-14", "macos-15", "macos-26", "macos-15-intel", "macos-26-intel":
+		"macos-latest", "macos-14", "macos-15", "macos-26", "macos-15-intel", "macos-26-intel",
+		"xcode-27":
 		return true
 	}
 	return false
