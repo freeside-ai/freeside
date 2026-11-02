@@ -342,6 +342,87 @@ func TestFindingAdjudicationRoundTripAndReplay(t *testing.T) {
 	}
 }
 
+// TestFindingAdjudicationPutEnforcesPersistedBound pins the admission check
+// (#961): an artifact above the persisted bound leaves no row, and one exactly
+// at it persists and reconstructs.
+func TestFindingAdjudicationPutEnforcesPersistedBound(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	runID := domain.RunID("run-adj-bound")
+	at := time.Date(2026, 8, 21, 12, 0, 0, 0, time.UTC)
+	findings := []domain.Finding{adjudicationFinding("finding-a", runID, "daemon/a.go", at)}
+	st := seedReviewRound(t, runID, 1, findings, at)
+
+	oversized := adjudicationOfBodySize(t, runID, domain.MaxFindingAdjudicationBytes+1, at)
+	err := st.Write(ctx, func(tx *store.WriteTx) error {
+		return tx.PutFindingAdjudication(ctx, oversized)
+	})
+	if !errors.Is(err, domain.ErrFindingAdjudicationOversized) {
+		t.Fatalf("put oversized = %v, want ErrFindingAdjudicationOversized", err)
+	}
+	if err := st.Read(ctx, func(tx *store.ReadTx) error {
+		_, err := tx.GetFindingAdjudicationForRound(ctx, runID, 1)
+		return err
+	}); !errors.Is(err, store.ErrNotFound) {
+		t.Fatalf("round head after oversized put = %v, want ErrNotFound", err)
+	}
+
+	atBound := adjudicationOfBodySize(t, runID, domain.MaxFindingAdjudicationBytes, at)
+	if err := st.Write(ctx, func(tx *store.WriteTx) error {
+		return tx.PutFindingAdjudication(ctx, atBound)
+	}); err != nil {
+		t.Fatalf("put at bound: %v", err)
+	}
+	if err := st.Read(ctx, func(tx *store.ReadTx) error {
+		got, err := tx.GetFindingAdjudication(ctx, atBound.Digest)
+		if err != nil {
+			return err
+		}
+		if got.Digest != atBound.Digest {
+			t.Fatalf("reconstructed digest = %q, want %q", got.Digest, atBound.Digest)
+		}
+		return nil
+	}); err != nil {
+		t.Fatalf("read at bound: %v", err)
+	}
+}
+
+// adjudicationOfBodySize builds a one-entry artifact for finding-a whose
+// canonical body is exactly size bytes, by padding the entry's ASCII rationale.
+func adjudicationOfBodySize(
+	t *testing.T, runID domain.RunID, size int, createdAt time.Time,
+) domain.FindingAdjudication {
+	t.Helper()
+	build := func(rationale string) domain.FindingAdjudication {
+		entry, err := domain.NewEngineAdjudicationEntry(
+			"finding-a", domain.GoalRequired, ptrCompat(domain.CompatibilityAllowed), domain.RouteRemediate,
+			rationale, nil, nil, nil, nil, nil)
+		if err != nil {
+			t.Fatalf("engine entry: %v", err)
+		}
+		artifact, err := domain.NewFindingAdjudication(
+			runID, 1, adjSpecDigest, adjInstructionDigest, adjPolicyDigest,
+			[]domain.FindingAdjudicationEntry{entry}, "", createdAt)
+		if err != nil {
+			t.Fatalf("new adjudication: %v", err)
+		}
+		return artifact
+	}
+	base, err := json.Marshal(build("x"))
+	if err != nil {
+		t.Fatalf("marshal base: %v", err)
+	}
+	artifact := build(strings.Repeat("x", 1+size-len(base)))
+	body, err := json.Marshal(artifact)
+	if err != nil {
+		t.Fatalf("marshal padded: %v", err)
+	}
+	if len(body) != size {
+		t.Fatalf("padded body = %d bytes, want %d", len(body), size)
+	}
+	return artifact
+}
+
 func TestFindingAdjudicationDecisionSurfaceCommitmentRoundTrip(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
