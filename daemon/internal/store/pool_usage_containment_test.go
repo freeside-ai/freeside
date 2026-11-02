@@ -12,11 +12,12 @@ import (
 
 // poolUsageReaders are the usage observation record's readers.
 var poolUsageReaders = map[string]bool{
-	"GetPoolUsageObservation":   true,
-	"ListPoolUsageObservations": true,
-	"ExhaustedMarks":            true,
-	"ExhaustedMarksForModel":    true,
-	"WindowsForModel":           true,
+	"GetPoolUsageObservation":           true,
+	"ListPoolUsageObservations":         true,
+	"ListPoolUsageObservationSnapshots": true,
+	"ExhaustedMarks":                    true,
+	"ExhaustedMarksForModel":            true,
+	"WindowsForModel":                   true,
 }
 
 // poolUsageReaderFiles are the only non-test daemon files, or directories,

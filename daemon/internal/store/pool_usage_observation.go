@@ -26,16 +26,18 @@ var ErrReadingGenerationReplaced = errors.New(
 const (
 	recordPoolUsageObservationSQL = `
 INSERT INTO pool_usage_observations
-    (pool, collector, last_attempt_status, last_attempt_at, recorded_at, body)
-VALUES (?, ?, ?, ?, ?, ?)
+    (pool, collector, last_attempt_status, last_attempt_at, recorded_at, body, as_of_revision, entity_version)
+VALUES (?, ?, ?, ?, ?, ?, ?, 1)
 ON CONFLICT (pool) DO UPDATE SET
     collector           = excluded.collector,
     last_attempt_status = excluded.last_attempt_status,
     last_attempt_at     = excluded.last_attempt_at,
     recorded_at         = excluded.recorded_at,
-    body                = excluded.body`
+    body                = excluded.body,
+    as_of_revision      = excluded.as_of_revision,
+    entity_version      = pool_usage_observations.entity_version + 1`
 	getPoolUsageObservationSQL = `
-SELECT collector, last_attempt_status, last_attempt_at, recorded_at, body
+SELECT collector, last_attempt_status, last_attempt_at, recorded_at, body, as_of_revision, entity_version
 FROM pool_usage_observations WHERE pool = ?`
 	deletePoolUsageObservationSQL    = `DELETE FROM pool_usage_observations WHERE pool = ?`
 	listPoolUsageObservationPoolsSQL = `SELECT pool FROM pool_usage_observations ORDER BY pool`
@@ -66,7 +68,10 @@ func (r poolUsageObservationRecord) Validate() error {
 // after a later generation. Any other reading is new. It needs a succeeded
 // attempt and the collector's current generation, and must be observed after
 // the one it replaces.
-func (tx *InternalTx) RecordPoolUsageObservation(
+//
+// Clients sync the record (plan §5.14), so it is written only in a
+// revision-bumping transaction.
+func (tx *WriteTx) RecordPoolUsageObservation(
 	ctx context.Context, observation domain.PoolUsageObservation, recordedAt time.Time,
 ) error {
 	fail := func(err error) error {
@@ -78,7 +83,7 @@ func (tx *InternalTx) RecordPoolUsageObservation(
 		return fail(err)
 	}
 	var carried []domain.WindowReading
-	stored, err := tx.getPoolUsageObservationRecord(ctx, observation.Pool)
+	stored, _, err := tx.getPoolUsageObservationRecord(ctx, observation.Pool)
 	switch {
 	case err == nil:
 		// As for a pool revision: a delayed older record must not reinstate a
@@ -100,7 +105,7 @@ func (tx *InternalTx) RecordPoolUsageObservation(
 
 // writePoolUsageObservation upserts a record that passed its caller's ordering
 // gate, holding every enrollment it names to the pool.
-func (tx *InternalTx) writePoolUsageObservation(ctx context.Context, record poolUsageObservationRecord) error {
+func (tx *WriteTx) writePoolUsageObservation(ctx context.Context, record poolUsageObservationRecord) error {
 	observation := record.Observation
 	fail := func(err error) error {
 		return fmt.Errorf("record pool usage observation %q: %w", observation.Pool, err)
@@ -117,7 +122,7 @@ func (tx *InternalTx) writePoolUsageObservation(ctx context.Context, record pool
 		attemptStatus, attemptAt = string(attempt.Status), formatTime(attempt.At)
 	}
 	if _, err := tx.tx.ExecContext(ctx, recordPoolUsageObservationSQL, observation.Pool, observation.Collector,
-		attemptStatus, attemptAt, formatTime(record.RecordedAt), body); err != nil {
+		attemptStatus, attemptAt, formatTime(record.RecordedAt), body, tx.asOfRevision); err != nil {
 		return fail(err)
 	}
 	return nil
@@ -127,7 +132,7 @@ func (tx *InternalTx) writePoolUsageObservation(ctx context.Context, record pool
 // already hold, which domain validation can't tell from a kept one: a failed
 // attempt can't produce a reading, a replaced generation's reading is
 // discarded, and a reading observed earlier must not undo a later one.
-func (tx *InternalTx) requireNewReadingsCurrent(
+func (tx *ReadTx) requireNewReadingsCurrent(
 	ctx context.Context, observation domain.PoolUsageObservation, carried []domain.WindowReading,
 ) error {
 	for _, reading := range observation.Windows {
@@ -165,8 +170,9 @@ func (tx *InternalTx) requireNewReadingsCurrent(
 // revision ordering of RecordPoolUsageObservation has nothing to protect here:
 // a late or same-instant caller must not lose a provider refusal, and the
 // record keeps the later instant. The mark's own order decides which mark a
-// window holds (PoolUsageObservation.WithRefusalMark).
-func (tx *InternalTx) RecordWindowRefusalMark(
+// window holds (PoolUsageObservation.WithRefusalMark). Like any record write,
+// it raises the revision.
+func (tx *WriteTx) RecordWindowRefusalMark(
 	ctx context.Context, pool domain.UsagePoolID, mark domain.RefusalMark, recordedAt time.Time,
 ) error {
 	fail := func(err error) error {
@@ -176,7 +182,7 @@ func (tx *InternalTx) RecordWindowRefusalMark(
 		return fail(domain.ErrMissingTimestamp)
 	}
 	record := poolUsageObservationRecord{RecordedAt: recordedAt.UTC()}
-	stored, err := tx.getPoolUsageObservationRecord(ctx, pool)
+	stored, _, err := tx.getPoolUsageObservationRecord(ctx, pool)
 	switch {
 	case err == nil:
 		record.Observation = stored.Observation
@@ -262,9 +268,18 @@ func (tx *ReadTx) DefaultPoolCollector(
 func (tx *ReadTx) GetPoolUsageObservation(
 	ctx context.Context, pool domain.UsagePoolID,
 ) (domain.PoolUsageObservation, error) {
-	record, err := tx.getPoolUsageObservationRecord(ctx, pool)
+	snapshotted, err := tx.GetPoolUsageObservationSnapshot(ctx, pool)
+	return snapshotted.Value, err
+}
+
+// GetPoolUsageObservationSnapshot is GetPoolUsageObservation with the row's
+// sync metadata: the revision that last wrote the record and its version.
+func (tx *ReadTx) GetPoolUsageObservationSnapshot(
+	ctx context.Context, pool domain.UsagePoolID,
+) (Snapshotted[domain.PoolUsageObservation], error) {
+	record, snapshot, err := tx.getPoolUsageObservationRecord(ctx, pool)
 	if err != nil {
-		return domain.PoolUsageObservation{}, err
+		return Snapshotted[domain.PoolUsageObservation]{}, err
 	}
 	observation := record.Observation
 	err = tx.requireEnrollmentsOnPool(ctx, observation)
@@ -275,31 +290,32 @@ func (tx *ReadTx) GetPoolUsageObservation(
 		err = errRowInconsistent
 	}
 	if err != nil {
-		return domain.PoolUsageObservation{}, fmt.Errorf("get pool usage observation %q: %w", pool, err)
+		return Snapshotted[domain.PoolUsageObservation]{}, fmt.Errorf("get pool usage observation %q: %w", pool, err)
 	}
-	return observation, nil
+	return Snapshotted[domain.PoolUsageObservation]{Value: observation, Snapshot: snapshot}, nil
 }
 
 // getPoolUsageObservationRecord reads one row without the enrollment gate: a
 // write gates the record it writes, not the one it replaces.
 func (tx *ReadTx) getPoolUsageObservationRecord(
 	ctx context.Context, pool domain.UsagePoolID,
-) (poolUsageObservationRecord, error) {
+) (poolUsageObservationRecord, Snapshot, error) {
 	var (
 		collector  string
 		status     sql.NullString
 		attemptAt  sql.NullString
 		recordedAt string
 		body       []byte
+		snapshot   Snapshot
 	)
 	err := tx.tx.QueryRowContext(ctx, getPoolUsageObservationSQL, pool).
-		Scan(&collector, &status, &attemptAt, &recordedAt, &body)
+		Scan(&collector, &status, &attemptAt, &recordedAt, &body, &snapshot.AsOfRevision, &snapshot.EntityVersion)
 	if err != nil {
-		return poolUsageObservationRecord{}, fmt.Errorf("get pool usage observation %q: %w", pool, notFoundOr(err))
+		return poolUsageObservationRecord{}, Snapshot{}, fmt.Errorf("get pool usage observation %q: %w", pool, notFoundOr(err))
 	}
 	record, err := decode[poolUsageObservationRecord](body)
 	if err != nil {
-		return poolUsageObservationRecord{}, fmt.Errorf("get pool usage observation %q: %w", pool, err)
+		return poolUsageObservationRecord{}, Snapshot{}, fmt.Errorf("get pool usage observation %q: %w", pool, err)
 	}
 	observation := record.Observation
 	attemptMatches := !status.Valid && !attemptAt.Valid && observation.LastAttempt == nil
@@ -307,29 +323,46 @@ func (tx *ReadTx) getPoolUsageObservationRecord(
 		attemptMatches = status.Valid && status.String == string(attempt.Status) &&
 			optionalTimeColumnEqual(attemptAt, &attempt.At)
 	}
+	// Every write stamps both from 1, so a zero is a row no writer produced.
 	if observation.Pool != pool || string(observation.Collector) != collector || !attemptMatches ||
-		!timeColumnEqual(recordedAt, record.RecordedAt) {
-		return poolUsageObservationRecord{}, fmt.Errorf("get pool usage observation %q: %w", pool, errRowInconsistent)
+		!timeColumnEqual(recordedAt, record.RecordedAt) || snapshot.AsOfRevision < 1 || snapshot.EntityVersion < 1 {
+		return poolUsageObservationRecord{}, Snapshot{}, fmt.Errorf("get pool usage observation %q: %w", pool, errRowInconsistent)
 	}
-	return record, nil
+	return record, snapshot, nil
 }
 
 // ListPoolUsageObservations reconstructs every record in pool id order; one
 // that fails its gates fails the whole listing.
 func (tx *ReadTx) ListPoolUsageObservations(ctx context.Context) ([]domain.PoolUsageObservation, error) {
+	snapshots, err := tx.ListPoolUsageObservationSnapshots(ctx)
+	if err != nil {
+		return nil, err
+	}
+	observations := make([]domain.PoolUsageObservation, 0, len(snapshots))
+	for _, snapshotted := range snapshots {
+		observations = append(observations, snapshotted.Value)
+	}
+	return observations, nil
+}
+
+// ListPoolUsageObservationSnapshots is ListPoolUsageObservations with each
+// row's sync metadata.
+func (tx *ReadTx) ListPoolUsageObservationSnapshots(
+	ctx context.Context,
+) ([]Snapshotted[domain.PoolUsageObservation], error) {
 	pools, err := queryIDs[domain.UsagePoolID](ctx, tx, listPoolUsageObservationPoolsSQL)
 	if err != nil {
 		return nil, fmt.Errorf("list pool usage observations: %w", err)
 	}
-	observations := make([]domain.PoolUsageObservation, 0, len(pools))
+	snapshots := make([]Snapshotted[domain.PoolUsageObservation], 0, len(pools))
 	for _, pool := range pools {
-		observation, err := tx.GetPoolUsageObservation(ctx, pool)
+		snapshotted, err := tx.GetPoolUsageObservationSnapshot(ctx, pool)
 		if err != nil {
 			return nil, fmt.Errorf("list pool usage observations: %w", err)
 		}
-		observations = append(observations, observation)
+		snapshots = append(snapshots, snapshotted)
 	}
-	return observations, nil
+	return snapshots, nil
 }
 
 // requireEnrollmentsOnPool holds the collector and every availability answer
