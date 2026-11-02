@@ -47,6 +47,7 @@ func rewindUsageOperatorContract(t *testing.T, ctx context.Context, db *sql.DB) 
 
 func rewindReviewSlotReleases(t *testing.T, ctx context.Context, db *sql.DB) {
 	t.Helper()
+	rewindRunHoldQuotaWindow(t, ctx, db)
 	for _, statement := range []string{
 		`DROP TABLE review_slot_releases`,
 		`DELETE FROM schema_migrations WHERE name = '0114_review_slot_releases.sql'`,

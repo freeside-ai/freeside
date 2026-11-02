@@ -236,6 +236,11 @@ const (
 	// its declared memory limit, so publication is definitively blocked until
 	// a new run verifies at a larger size.
 	HoldVerificationMemoryLimit RunHoldReason = "verification_memory_limit"
+	// HoldQuotaWindowExhausted: the provider refused the task's last attempt
+	// for quota, and the next attempt waits on the task line until the
+	// refused window resets (plan §4, §5.4). The hold names the pool, the
+	// window, the reset, and what marked it in QuotaWindowHold.
+	HoldQuotaWindowExhausted RunHoldReason = "quota_window_exhausted"
 )
 
 // AllRunHoldReasons is the single registration point for hold reasons.
@@ -260,6 +265,7 @@ var AllRunHoldReasons = []RunHoldReason{
 	HoldUsagePoolExhausted,
 	HoldImageUpkeepPending,
 	HoldVerificationMemoryLimit,
+	HoldQuotaWindowExhausted,
 }
 
 func (r RunHoldReason) valid() bool {
@@ -271,7 +277,8 @@ func (r RunHoldReason) valid() bool {
 		HoldPublicationEnvironment, HoldExternalConflict, HoldRecipeRevoked,
 		HoldVerificationFindings, HoldTrustBlocked, HoldBaseAdvanced,
 		HoldIdentityParallelism, HoldUsagePoolExhausted, HoldImageUpkeepPending,
-		HoldVerificationMemoryLimit:
+		HoldVerificationMemoryLimit,
+		HoldQuotaWindowExhausted:
 		return true
 	default:
 		return false
@@ -515,6 +522,30 @@ func (h ImageUpkeepHold) Validate() error {
 	return nil
 }
 
+// QuotaWindowHold is the typed fact beside a quota_window_exhausted hold:
+// the pool and the exhausted window the parked attempt waits on, with the
+// derived mark that says so. A hold exists only with a reset, because
+// nothing else would resume the attempt.
+type QuotaWindowHold struct {
+	Pool UsagePoolID `json:"pool"`
+	ExhaustedMark
+}
+
+// Validate reports whether the hold names a pool and a well-formed mark that
+// carries a reset.
+func (h QuotaWindowHold) Validate() error {
+	if h.Pool == "" {
+		return fmt.Errorf("quota window hold pool: %w", ErrEmptyID)
+	}
+	if err := h.ExhaustedMark.Validate(); err != nil {
+		return fmt.Errorf("quota window hold: %w", err)
+	}
+	if h.ResetsAt == nil {
+		return fmt.Errorf("quota window hold %s resets_at: %w", h.Window, ErrMissingTimestamp)
+	}
+	return nil
+}
+
 // DefinitivePublicationBlockReason maps the exact durable terminal-item
 // reason onto its operator-safe code. Transient publication holds deliberately
 // have no member here, even when they use the same AttentionType.
@@ -708,6 +739,11 @@ type RunHoldObservation struct {
 	// present exactly beside that reason (nil renders explicit null). The
 	// reason is new with the field, so no older row lacks it.
 	UsagePool *UsagePoolID `json:"usage_pool"`
+	// QuotaWindow names the exhausted window a quota_window_exhausted hold
+	// waits on; it is present exactly beside that reason (nil renders
+	// explicit null). The reason is new with the field, so no older row
+	// lacks it.
+	QuotaWindow *QuotaWindowHold `json:"quota_window"`
 	// FirstObservedAt is the UTC instant the current cause was first
 	// observed; LastObservedAt the most recent.
 	FirstObservedAt time.Time `json:"first_observed_at"`
@@ -750,6 +786,15 @@ func (h RunHoldObservation) Validate() error {
 	}
 	if h.UsagePool != nil && *h.UsagePool == "" {
 		return fmt.Errorf("run hold observation %s usage_pool: %w", h.RunID, ErrEmptyID)
+	}
+	if (h.QuotaWindow != nil) != (h.Reason == HoldQuotaWindowExhausted) {
+		return fmt.Errorf("run hold observation %s quota_window present=%t beside reason %q: %w",
+			h.RunID, h.QuotaWindow != nil, h.Reason, ErrHoldDetailMismatch)
+	}
+	if h.QuotaWindow != nil {
+		if err := h.QuotaWindow.Validate(); err != nil {
+			return fmt.Errorf("run hold observation %s: %w", h.RunID, err)
+		}
 	}
 	for name, ts := range map[string]time.Time{
 		"first_observed_at": h.FirstObservedAt,

@@ -3202,6 +3202,7 @@ components:
         - image_upkeep_pending
         - usage_pool_exhausted
         - verification_memory_limit
+        - quota_window_exhausted
 
     ImageUpkeepPending:
       type: string
@@ -3210,6 +3211,41 @@ components:
         domain.ImageUpkeepPending (plan §5.7, Project-image upkeep): the
         upkeep job's rebuild, an adoption card, or a maintenance task.
       enum: [rebuild, adoption_proposal, maintenance_task]
+
+    QuotaWindowHold:
+      type: object
+      description: >
+        The typed fact beside a quota_window_exhausted hold, mirrored from
+        domain.QuotaWindowHold: the pool and window a provider refused on and
+        the mark that keeps the parked attempt waiting until its reset.
+      additionalProperties: false
+      required: [pool, window, source, invocation_id, reading_observed_at, resets_at, set_at]
+      properties:
+        pool:
+          type: string
+          minLength: 1
+        window:
+          type: string
+          minLength: 1
+        source:
+          $ref: "#/components/schemas/ExhaustedMarkSource"
+        invocation_id:
+          type: string
+          minLength: 1
+          nullable: true
+          description: The refused invocation; set exactly for provider_refusal.
+        reading_observed_at:
+          type: string
+          format: date-time
+          nullable: true
+          description: The reading that set the mark; set exactly for usage_reading.
+        resets_at:
+          type: string
+          format: date-time
+          description: When the window resets and the parked attempt starts.
+        set_at:
+          type: string
+          format: date-time
 
     ImageUpkeepHold:
       type: object
@@ -3414,7 +3450,7 @@ components:
       type: object
       description: The daemon's current typed hold observation for one run.
       additionalProperties: false
-      required: [run_id, invocation_id, reason, detail, image_upkeep, usage_pool, first_observed_at, last_observed_at]
+      required: [run_id, invocation_id, reason, detail, image_upkeep, usage_pool, quota_window, first_observed_at, last_observed_at]
       properties:
         run_id:
           type: string
@@ -3449,6 +3485,13 @@ components:
             beside that reason and null beside every other. An
             identity_parallelism hold, which nothing records any more, names
             no pool.
+        quota_window:
+          nullable: true
+          allOf:
+            - $ref: "#/components/schemas/QuotaWindowHold"
+          description: >
+            The refused window a quota_window_exhausted hold waits on; present
+            exactly beside that reason and null beside every other.
         first_observed_at:
           type: string
           format: date-time

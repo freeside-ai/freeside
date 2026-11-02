@@ -77,6 +77,7 @@ func TestManualSubmissionLinesMigrationKeepsOlderRows(t *testing.T) {
 	ctx := context.Background()
 	st := openTemplateStoreAt(t, t.TempDir()+"/manual-submission-lines.db", Options{})
 	want := seedManualSubmissionTarget(t, ctx, st)
+	rewindRunHoldQuotaWindow(t, ctx, st.db)
 	for _, statement := range []string{
 		`DROP TABLE client_command_receipts`,
 		`ALTER TABLE pool_usage_observations DROP COLUMN entity_version`,

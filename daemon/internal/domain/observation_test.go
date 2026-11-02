@@ -485,6 +485,17 @@ func TestRunHoldObservationValidate(t *testing.T) {
 		{"unknown upkeep pending", func(h *RunHoldObservation) {
 			h.Reason, h.ImageUpkeep = HoldImageUpkeepPending, &ImageUpkeepHold{Pending: "vibes"}
 		}, ErrInvalidImageUpkeepPending},
+		{"quota window beside another reason", func(h *RunHoldObservation) {
+			h.QuotaWindow = new(validQuotaWindowHold())
+		}, ErrHoldDetailMismatch},
+		{"quota window reason without its fact", func(h *RunHoldObservation) {
+			h.Reason = HoldQuotaWindowExhausted
+		}, ErrHoldDetailMismatch},
+		{"quota window without a reset", func(h *RunHoldObservation) {
+			hold := validQuotaWindowHold()
+			hold.ResetsAt = nil
+			h.Reason, h.QuotaWindow = HoldQuotaWindowExhausted, &hold
+		}, ErrMissingTimestamp},
 	}
 	for _, tc := range cases {
 		h := valid
@@ -561,6 +572,51 @@ func TestImageUpkeepHoldValidate(t *testing.T) {
 		}, ErrEmptyID},
 	} {
 		err := tc.hold.Validate()
+		if (tc.want == nil && err != nil) || (tc.want != nil && !errors.Is(err, tc.want)) {
+			t.Errorf("%s: Validate() = %v, want %v", tc.name, err, tc.want)
+		}
+	}
+}
+
+func validQuotaWindowHold() QuotaWindowHold {
+	at := time.Date(2026, 11, 2, 9, 0, 0, 0, time.UTC)
+	return QuotaWindowHold{Pool: "claude-owner-subscription", ExhaustedMark: ExhaustedMark{
+		Window: "five_hour", Source: ExhaustedMarkProviderRefusal, InvocationID: new(InvocationID("inv-1")),
+		ResetsAt: new(at.Add(2 * time.Hour)), SetAt: at,
+	}}
+}
+
+func TestQuotaWindowHoldValidate(t *testing.T) {
+	t.Parallel()
+	readAt := time.Date(2026, 11, 2, 9, 30, 0, 0, time.UTC)
+	for _, tc := range []struct {
+		name   string
+		mutate func(*QuotaWindowHold)
+		want   error
+	}{
+		{"provider refusal", func(*QuotaWindowHold) {}, nil},
+		{"usage reading", func(h *QuotaWindowHold) {
+			h.Source, h.InvocationID, h.ReadingObservedAt = ExhaustedMarkUsageReading, nil, &readAt
+		}, nil},
+		{"empty pool", func(h *QuotaWindowHold) { h.Pool = "" }, ErrEmptyID},
+		{"no reset", func(h *QuotaWindowHold) { h.ResetsAt = nil }, ErrMissingTimestamp},
+		{"empty window", func(h *QuotaWindowHold) { h.Window = "" }, ErrEmptyField},
+		{"unknown source", func(h *QuotaWindowHold) { h.Source = "vibes" }, ErrInvalidExhaustedMarkSource},
+		{
+			"refusal without its invocation", func(h *QuotaWindowHold) { h.InvocationID = nil },
+			ErrExhaustedMarkInconsistent,
+		},
+		{
+			"refusal naming a reading", func(h *QuotaWindowHold) { h.ReadingObservedAt = &readAt },
+			ErrExhaustedMarkInconsistent,
+		},
+		{"non-UTC reset", func(h *QuotaWindowHold) {
+			h.ResetsAt = new(h.ResetsAt.In(time.FixedZone("PST", -8*3600)))
+		}, ErrTimestampNotUTC},
+	} {
+		hold := validQuotaWindowHold()
+		tc.mutate(&hold)
+		err := hold.Validate()
 		if (tc.want == nil && err != nil) || (tc.want != nil && !errors.Is(err, tc.want)) {
 			t.Errorf("%s: Validate() = %v, want %v", tc.name, err, tc.want)
 		}
