@@ -83,6 +83,51 @@ func TestPutTaskSubmissionWriteOnceAndConvergence(t *testing.T) {
 // before the attention-item lookup, so no item scaffolding is needed. The
 // reverse direction (a submission reusing a decision id) is covered end to end
 // by the signet acceptance tests.
+// TestTaskSubmissionLinesRoundTrip: a submission's lines live in its body. A
+// body whose lines are out of form reads as inconsistent, so a line that cites
+// it refuses rather than binding to a list no writer stored.
+func TestTaskSubmissionLinesRoundTrip(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	s := openStore(t, store.Options{})
+	taskID, runID := seedTaskSubmissionTarget(t, ctx, s)
+	implementer := domain.TaskLineChoice{Role: domain.RoleImplementer, Agent: "claude-b"}
+	reviewer := domain.TaskLineChoice{Role: domain.RoleReviewer, Agent: "codex"}
+	submission := domain.TaskSubmission{
+		CommandID: "cmd-lines", Origin: domain.TaskSubmissionOriginDevice, DeviceID: new(domain.DeviceID("device-1")), ProjectID: "project",
+		SourceDigest: taskSubmissionDigest, TaskID: taskID, SpecificationRunID: runID,
+		Name:      domain.DisplayName{Text: "With lines", Source: domain.DisplayNameSourceOperator},
+		TaskLines: []domain.TaskLineChoice{implementer, reviewer},
+	}
+	if err := s.Write(ctx, func(tx *store.WriteTx) error { return tx.PutTaskSubmission(ctx, submission) }); err != nil {
+		t.Fatal(err)
+	}
+	var got domain.TaskSubmission
+	if err := s.Read(ctx, func(tx *store.ReadTx) error {
+		var err error
+		got, err = tx.GetTaskSubmission(ctx, "cmd-lines")
+		return err
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(got, submission) {
+		t.Fatalf("submission = %+v, want %+v", got, submission)
+	}
+	if err := s.Write(ctx, func(tx *store.WriteTx) error { return tx.PutTaskSubmission(ctx, submission) }); err != nil {
+		t.Fatalf("idempotent replay: %v", err)
+	}
+	changed := submission
+	changed.TaskLines = []domain.TaskLineChoice{implementer}
+	if err := s.Write(ctx, func(tx *store.WriteTx) error { return tx.PutTaskSubmission(ctx, changed) }); !errors.Is(err, store.ErrImmutableConflict) {
+		t.Fatalf("changed lines: error = %v, want ErrImmutableConflict", err)
+	}
+	outOfOrder := submission
+	outOfOrder.TaskLines = []domain.TaskLineChoice{reviewer, implementer}
+	if err := s.Write(ctx, func(tx *store.WriteTx) error { return tx.PutTaskSubmission(ctx, outOfOrder) }); !errors.Is(err, domain.ErrTaskLinesNotCanonical) {
+		t.Fatalf("out-of-order lines: error = %v, want ErrTaskLinesNotCanonical", err)
+	}
+}
+
 func TestPutCommandRejectsTaskSubmissionCommandID(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()

@@ -3,6 +3,7 @@ package domain
 import (
 	"encoding/json"
 	"fmt"
+	"slices"
 	"time"
 	"unicode/utf8"
 
@@ -249,6 +250,24 @@ func CanonicalTaskLineChoices(choices []TaskLineChoice) ([]TaskLineChoice, error
 		}
 	}
 	return canonical, nil
+}
+
+// ValidateRecordedTaskLines reports whether a submission record's lines are
+// the form a writer stores: absent, or a non-empty set in canonical order. An
+// out-of-order list is refused rather than reordered, because no writer
+// stores one. Like ValidateTaskLineChoices, the error carries no refused text.
+func ValidateRecordedTaskLines(lines []TaskLineChoice) error {
+	if lines == nil {
+		return nil
+	}
+	canonical, err := CanonicalTaskLineChoices(lines)
+	if err != nil {
+		return err
+	}
+	if len(lines) == 0 || !slices.Equal(lines, canonical) {
+		return ErrTaskLinesNotCanonical
+	}
+	return nil
 }
 
 // TaskLineInput carries the caller-supplied fields of a TaskLine. It has no

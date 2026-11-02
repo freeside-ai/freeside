@@ -61,7 +61,7 @@ func lineLessFingerprint(t *testing.T, project domain.ProjectID, result submitRe
 	return fingerprint
 }
 
-func recordedRequestDigest(t *testing.T, dbPath, submissionID string) domain.Digest {
+func recordedManualSubmission(t *testing.T, dbPath, submissionID string) domain.ManualSubmission {
 	t.Helper()
 	ctx := t.Context()
 	st := storetest.Open(t, dbPath, store.Options{})
@@ -74,7 +74,12 @@ func recordedRequestDigest(t *testing.T, dbPath, submissionID string) domain.Dig
 	}); err != nil {
 		t.Fatalf("read manual submission: %v", err)
 	}
-	return recorded.RequestDigest
+	return recorded
+}
+
+func recordedRequestDigest(t *testing.T, dbPath, submissionID string) domain.Digest {
+	t.Helper()
+	return recordedManualSubmission(t, dbPath, submissionID).RequestDigest
 }
 
 // TestSubmitCommandRecordsTaskLines covers the CLI's --task-line path: the
@@ -109,6 +114,11 @@ func TestSubmitCommandRecordsTaskLines(t *testing.T) {
 	}
 	if want := map[domain.RoleName]string{domain.RoleReviewer: "codex", domain.RoleImplementer: "claude-b"}; !reflect.DeepEqual(agents, want) {
 		t.Fatalf("recorded lines = %v, want %v", agents, want)
+	}
+	// The submission record holds the lines in canonical role order.
+	if got, want := recordedManualSubmission(t, cfg.DBPath, cfg.SubmissionID).TaskLines,
+		([]domain.TaskLineChoice{implementer, reviewer}); !reflect.DeepEqual(got, want) {
+		t.Fatalf("submission lines = %+v, want %+v", got, want)
 	}
 	// The fingerprint covers the lines in canonical role order under their
 	// wire names; a change to either strands every recorded submission that
@@ -190,8 +200,9 @@ func TestSubmitFingerprintWithoutLinesIsUnchanged(t *testing.T) {
 		t.Fatalf("line-less submission recorded %+v", lines)
 	}
 	want := domain.Digest(contentaddr.Sum(lineLessFingerprint(t, cfg.ProjectID, result)))
-	if got := recordedRequestDigest(t, cfg.DBPath, cfg.SubmissionID); got != want {
-		t.Fatalf("request digest = %s, want %s", got, want)
+	recorded := recordedManualSubmission(t, cfg.DBPath, cfg.SubmissionID)
+	if recorded.RequestDigest != want || recorded.TaskLines != nil {
+		t.Fatalf("recorded submission = %+v, want request digest %s and no lines", recorded, want)
 	}
 	if journal, err := os.ReadFile(submissionJournalPath(cfg.DBPath, cfg.SubmissionID)); err != nil {
 		t.Fatal(err)
@@ -317,22 +328,46 @@ func TestSubmitCommandTaskLinesHoldAtAdmission(t *testing.T) {
 	}
 	st := storetest.Open(t, cfg.DBPath, store.Options{})
 	defer func() { _ = st.Close() }()
+	check := func(runID domain.RunID) {
+		t.Helper()
+		if err := st.Read(ctx, func(tx *store.ReadTx) error {
+			for _, want := range cfg.TaskLines {
+				line, found, err := engine.RunTaskLine(ctx, tx, runID, want.Role)
+				if err != nil || !found || line.Agent != want.Agent || line.Source != domain.TaskLineSourceCLISubmit {
+					t.Fatalf("%s line at admission = %+v, %t, %v; want agent %q", want.Role, line, found, err, want.Agent)
+				}
+			}
+			// A role the submission named no line for stays on the lineup.
+			if _, found, err := engine.RunTaskLine(ctx, tx, runID, domain.RoleImplementer); err != nil || found {
+				t.Fatalf("implementer line at admission = %t, %v; want none", found, err)
+			}
+			return nil
+		}); err != nil {
+			t.Fatal(err)
+		}
+	}
 	if err := st.Read(ctx, func(tx *store.ReadTx) error {
 		if _, err := tx.GetRun(ctx, result.ImplementationRunID); !errors.Is(err, store.ErrNotFound) {
 			t.Fatalf("implementation run at submission = %v, want it not yet stored", err)
-		}
-		for _, want := range cfg.TaskLines {
-			line, found, err := engine.RunTaskLine(ctx, tx, result.SpecificationRunID, want.Role)
-			if err != nil || !found || line.Agent != want.Agent || line.Source != domain.TaskLineSourceCLISubmit {
-				t.Fatalf("%s line at admission = %+v, %t, %v; want agent %q", want.Role, line, found, err, want.Agent)
-			}
-		}
-		// A role the submission named no line for stays on the lineup.
-		if _, found, err := engine.RunTaskLine(ctx, tx, result.SpecificationRunID, domain.RoleImplementer); err != nil || found {
-			t.Fatalf("implementer line at admission = %t, %v; want none", found, err)
 		}
 		return nil
 	}); err != nil {
 		t.Fatal(err)
 	}
+	check(result.SpecificationRunID)
+
+	// The implementation run, once stored, reads the same lines.
+	if err := st.Write(ctx, func(tx *store.WriteTx) error {
+		specification, err := tx.GetRun(ctx, result.SpecificationRunID)
+		if err != nil {
+			return err
+		}
+		return tx.PutRun(ctx, domain.Run{
+			ID: result.ImplementationRunID, ProjectID: specification.ProjectID, TaskID: specification.TaskID,
+			SpecDigest: "sha256:spec", PolicyDigest: "sha256:policy", Stages: []domain.Stage{},
+		})
+	}); err != nil {
+		t.Fatalf("store the implementation run: %v", err)
+	}
+	check(result.ImplementationRunID)
 }

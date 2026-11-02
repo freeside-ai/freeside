@@ -2,6 +2,8 @@ package store
 
 import (
 	"context"
+	"database/sql"
+	"encoding/json"
 	"errors"
 	"time"
 
@@ -10,11 +12,17 @@ import (
 
 func (tx *ReadTx) GetManualSubmission(ctx context.Context, identity string) (domain.ManualSubmission, error) {
 	s := domain.ManualSubmission{Identity: identity}
+	var lines sql.NullString
 	err := tx.tx.QueryRowContext(ctx, `SELECT project_id, source_artifact_id, source_digest,
-		request_digest, implementation_run_id FROM manual_submissions WHERE identity = ?`, identity).
-		Scan(&s.ProjectID, &s.SourceArtifactID, &s.SourceDigest, &s.RequestDigest, &s.ImplementationRunID)
+		request_digest, implementation_run_id, task_lines FROM manual_submissions WHERE identity = ?`, identity).
+		Scan(&s.ProjectID, &s.SourceArtifactID, &s.SourceDigest, &s.RequestDigest, &s.ImplementationRunID, &lines)
 	if err != nil {
 		return s, notFoundOr(err)
+	}
+	if lines.Valid {
+		if err := json.Unmarshal([]byte(lines.String), &s.TaskLines); err != nil {
+			return s, errRowInconsistent
+		}
 	}
 	if err := s.Validate(); err != nil {
 		return s, errRowInconsistent
@@ -36,16 +44,26 @@ func (tx *WriteTx) AcceptManualSubmission(ctx context.Context, s domain.ManualSu
 		return domain.Task{}, err
 	}
 	if existing, err := tx.GetManualSubmission(ctx, s.Identity); err == nil {
-		if existing != s {
+		if !existing.SameRequest(s) {
 			return domain.Task{}, ErrImmutableConflict
 		}
 	} else if !errors.Is(err, ErrNotFound) {
 		return domain.Task{}, err
-	} else if _, err := tx.tx.ExecContext(ctx, `INSERT INTO manual_submissions
-		(identity, project_id, source_artifact_id, source_digest, request_digest, implementation_run_id)
-		VALUES (?, ?, ?, ?, ?, ?)`, s.Identity, s.ProjectID, s.SourceArtifactID, s.SourceDigest,
-		s.RequestDigest, s.ImplementationRunID); err != nil {
-		return domain.Task{}, err
+	} else {
+		var lines sql.NullString
+		if s.TaskLines != nil {
+			encoded, err := json.Marshal(s.TaskLines)
+			if err != nil {
+				return domain.Task{}, err
+			}
+			lines = sql.NullString{String: string(encoded), Valid: true}
+		}
+		if _, err := tx.tx.ExecContext(ctx, `INSERT INTO manual_submissions
+			(identity, project_id, source_artifact_id, source_digest, request_digest, implementation_run_id, task_lines)
+			VALUES (?, ?, ?, ?, ?, ?, ?)`, s.Identity, s.ProjectID, s.SourceArtifactID, s.SourceDigest,
+			s.RequestDigest, s.ImplementationRunID, lines); err != nil {
+			return domain.Task{}, err
+		}
 	}
 	source := domain.SpecificationSource{Kind: domain.SpecificationSourceWorkItemArtifact, WorkItemArtifactID: s.SourceArtifactID}
 	return tx.getOrCreateTask(ctx, s.ProjectID, "submission:"+s.Identity, &source, time.Now().UTC())

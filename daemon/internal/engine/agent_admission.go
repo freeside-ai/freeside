@@ -336,15 +336,14 @@ func RunTaskLine(
 // id is an unkeyed hash of its own columns, so a row nobody submitted still
 // decodes. Choosing an agent chooses which credential runs (§5.8), so the
 // record SetBy names must exist, be of the kind Source claims, and
-// name this task. Submission lines must be set at task creation; proposal
-// lines must be set at the recorded decision's instant; a changed line at its
-// change's. A router line is refused until its router exists (#2393).
+// name this task. Submission lines must be set at task creation and name the
+// agent their command recorded for the role; proposal lines must be set at
+// the recorded decision's instant; a changed line at its change's. A router
+// line is refused until its router exists (#2393).
 //
-// For the submission and proposal sources, this proves the line rests on a
-// real operator action on this task. It does not prove the agent is the one
-// that action sent: those records do not store the lines, and the request
-// digest cannot be recomputed from stored state (#1939). A change record does
-// store them, so that arm binds the agent, the clear, and the version replaced.
+// A submission or change record stores what the operator chose, so those arms
+// bind the agent. A proposal line rests on a real operator action on this
+// task, but its record does not store the lines, so that arm cannot (#1641).
 func anchorTaskLine(ctx context.Context, tx *store.ReadTx, line domain.TaskLine) error {
 	task, err := tx.GetTask(ctx, line.TaskID)
 	if err != nil {
@@ -364,7 +363,7 @@ func anchorTaskLine(ctx context.Context, tx *store.ReadTx, line domain.TaskLine)
 		if submission.TaskID != line.TaskID {
 			return fmt.Errorf("that command created task %s", submission.TaskID)
 		}
-		return nil
+		return submittedLineBacked(submission.TaskLines, line)
 	case domain.TaskLineSourceCLISubmit:
 		if !line.SetAt.Equal(task.CreatedAt) {
 			return fmt.Errorf("it was set at %s, its task was created at %s",
@@ -391,7 +390,7 @@ func anchorTaskLine(ctx context.Context, tx *store.ReadTx, line domain.TaskLine)
 		if run.TaskID != line.TaskID {
 			return fmt.Errorf("that submission created task %s", run.TaskID)
 		}
-		return nil
+		return submittedLineBacked(submission.TaskLines, line)
 	case domain.TaskLineSourceProposalStart:
 		command, err := tx.GetCommand(ctx, line.SetBy)
 		if err != nil {
@@ -440,6 +439,26 @@ func anchorTaskLine(ctx context.Context, tx *store.ReadTx, line domain.TaskLine)
 		return nil
 	}
 	return fmt.Errorf("source %q is not a task line source", line.Source)
+}
+
+// submittedLineBacked holds a line to the choices its submission recorded. A
+// submission sets only a role's first version, so a later one citing it would
+// undo the operator's change. A record from before the field holds no choices,
+// so it refuses every line that cites it; `freesided task-line` sets a version
+// its own change record backs. The refusal repeats neither agent: the line's
+// is operator text a credential can be pasted into, and the refusal is stored.
+func submittedLineBacked(recorded []domain.TaskLineChoice, line domain.TaskLine) error {
+	if line.Version != 1 {
+		return errors.New("a submission sets only a role's first version")
+	}
+	i := slices.IndexFunc(recorded, func(choice domain.TaskLineChoice) bool { return choice.Role == line.Role })
+	if i < 0 {
+		return errors.New("that command's record names no agent for this role")
+	}
+	if recorded[i].Agent != line.Agent {
+		return errors.New("that command's record names another agent for this role")
+	}
+	return nil
 }
 
 func (s AgentSelection) validate() error {

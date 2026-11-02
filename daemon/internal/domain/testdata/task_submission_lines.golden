@@ -1,0 +1,23 @@
+{
+  "command_id": "cmd-4",
+  "origin": "device",
+  "device_id": "device-1",
+  "project_id": "proj-1",
+  "source_digest": "sha256:1111111111111111111111111111111111111111111111111111111111111111",
+  "task_id": "task-3",
+  "specification_run_id": "run-3",
+  "name": {
+    "text": "Improve task navigation",
+    "source": "operator"
+  },
+  "task_lines": [
+    {
+      "role": "implementer",
+      "agent": "claude-b"
+    },
+    {
+      "role": "reviewer",
+      "agent": "codex"
+    }
+  ]
+}

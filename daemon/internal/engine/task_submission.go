@@ -152,6 +152,7 @@ func (t *TaskSubmitter) submit(ctx context.Context, tx *store.WriteTx, in signet
 		ManualSubmission: &domain.ManualSubmission{
 			Identity: identity, ProjectID: in.ProjectID, SourceArtifactID: sourceArtifact.ID,
 			SourceDigest: in.SourceDigest, RequestDigest: in.RequestDigest, ImplementationRunID: implementationRunID,
+			TaskLines: in.TaskLines,
 		},
 		SpecificationRunID:  specificationRunID,
 		ImplementationRunID: implementationRunID,

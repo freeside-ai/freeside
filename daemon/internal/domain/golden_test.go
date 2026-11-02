@@ -2216,6 +2216,17 @@ func TestGolden(t *testing.T) {
 			SpecificationRunID: "run-1",
 			Name:               domain.DisplayName{Text: "Improve task navigation", Source: domain.DisplayNameSourceOperator},
 		}},
+		{"task_submission_lines", domain.TaskSubmission{
+			CommandID: "cmd-4", Origin: domain.TaskSubmissionOriginDevice, DeviceID: new(domain.DeviceID("device-1")), ProjectID: "proj-1",
+			SourceDigest:       "sha256:1111111111111111111111111111111111111111111111111111111111111111",
+			TaskID:             "task-3",
+			SpecificationRunID: "run-3",
+			Name:               domain.DisplayName{Text: "Improve task navigation", Source: domain.DisplayNameSourceOperator},
+			TaskLines: []domain.TaskLineChoice{
+				{Role: domain.RoleImplementer, Agent: "claude-b"},
+				{Role: domain.RoleReviewer, Agent: "codex"},
+			},
+		}},
 		{"task_submission_daemon", domain.TaskSubmission{
 			CommandID: "cmd-3", Origin: domain.TaskSubmissionOriginDaemon, ProjectID: "proj-1",
 			SourceDigest:       upkeepRefusal.ID,

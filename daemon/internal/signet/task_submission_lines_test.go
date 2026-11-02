@@ -196,6 +196,22 @@ func TestSubmitTaskCommandHTTPRecordsTaskLines(t *testing.T) {
 	}); err != nil {
 		t.Fatalf("read task: %v", err)
 	}
+	// The wire record carries the lines in canonical role order, under the
+	// names the contract gives them.
+	recordOf := func(response *httptest.ResponseRecorder) string {
+		t.Helper()
+		var envelope struct {
+			Record json.RawMessage `json:"record"`
+		}
+		if err := json.Unmarshal(response.Body.Bytes(), &envelope); err != nil {
+			t.Fatalf("decode record from %s: %v", response.Body.String(), err)
+		}
+		return string(envelope.Record)
+	}
+	const wireLines = `"task_lines":[{"role":"implementer","agent":"claude-b"},{"role":"reviewer","agent":"codex"}]`
+	if !strings.Contains(recordOf(ok), wireLines) {
+		t.Fatalf("record = %s, want it to carry %s", recordOf(ok), wireLines)
+	}
 	lines := linesOf(taskID)
 	agents := map[domain.RoleName]string{}
 	for _, line := range lines {
@@ -209,17 +225,48 @@ func TestSubmitTaskCommandHTTPRecordsTaskLines(t *testing.T) {
 		t.Fatalf("recorded lines = %v, want %v", agents, want)
 	}
 
-	// Admission honors a line only when it holds against the command that
-	// set it, so the lines this command writes must pass that read.
+	// Both records the command wrote hold the lines in canonical role order.
+	canonical := []domain.TaskLineChoice{
+		{Role: domain.RoleImplementer, Agent: "claude-b"}, {Role: domain.RoleReviewer, Agent: "codex"},
+	}
+	var specificationRun domain.RunID
 	if err := s.Read(ctx, func(tx *store.ReadTx) error {
 		submission, err := tx.GetTaskSubmission(ctx, "cmd-lines")
 		if err != nil {
 			return err
 		}
-		for role, agent := range agents {
-			line, found, err := engine.RunTaskLine(ctx, tx, submission.SpecificationRunID, role)
-			if err != nil || !found || line.Agent != agent {
-				t.Fatalf("%s line at admission = %+v, %t, %v; want agent %q", role, line, found, err, agent)
+		specificationRun = submission.SpecificationRunID
+		manual, err := tx.GetManualSubmission(ctx, "client:cmd-lines")
+		if err != nil {
+			return err
+		}
+		if !reflect.DeepEqual(submission.TaskLines, canonical) || !reflect.DeepEqual(manual.TaskLines, canonical) {
+			t.Fatalf("recorded lines = %+v and %+v, want %+v", submission.TaskLines, manual.TaskLines, canonical)
+		}
+		return nil
+	}); err != nil {
+		t.Fatalf("read the records: %v", err)
+	}
+
+	// Admission honors a line only when it holds against the command that
+	// set it, so the lines this command writes must pass that read, at the
+	// specification run and at a later run of the task.
+	const laterRun domain.RunID = "run-later"
+	if err := s.Write(ctx, func(tx *store.WriteTx) error {
+		return tx.PutRun(ctx, domain.Run{
+			ID: laterRun, ProjectID: "project-1", TaskID: taskID,
+			SpecDigest: "sha256:spec", PolicyDigest: "sha256:policy", Stages: []domain.Stage{},
+		})
+	}); err != nil {
+		t.Fatalf("store a later run: %v", err)
+	}
+	if err := s.Read(ctx, func(tx *store.ReadTx) error {
+		for _, run := range []domain.RunID{specificationRun, laterRun} {
+			for role, agent := range agents {
+				line, found, err := engine.RunTaskLine(ctx, tx, run, role)
+				if err != nil || !found || line.Agent != agent {
+					t.Fatalf("%s %s line at admission = %+v, %t, %v; want agent %q", run, role, line, found, err, agent)
+				}
 			}
 		}
 		return nil
@@ -227,10 +274,10 @@ func TestSubmitTaskCommandHTTPRecordsTaskLines(t *testing.T) {
 		t.Fatalf("read the lines as admission does: %v", err)
 	}
 
-	// A retry returns the same task and appends no second version.
+	// A retry returns the same record and appends no second version.
 	retry := post("cmd-lines", chosen)
-	if retry.Code != http.StatusOK || taskOf(retry) != taskID {
-		t.Fatalf("retry status = %d body=%s, want the original task", retry.Code, retry.Body.String())
+	if retry.Code != http.StatusOK || recordOf(retry) != recordOf(ok) {
+		t.Fatalf("retry status = %d body=%s, want the original record %s", retry.Code, retry.Body.String(), recordOf(ok))
 	}
 	if after := linesOf(taskID); !reflect.DeepEqual(after, lines) {
 		t.Fatalf("lines after retry = %+v, want %+v", after, lines)
@@ -253,6 +300,9 @@ func TestSubmitTaskCommandHTTPRecordsTaskLines(t *testing.T) {
 	}
 	if got := linesOf(taskOf(plain)); len(got) != 0 {
 		t.Fatalf("line-less submission recorded %+v", got)
+	}
+	if record := recordOf(plain); strings.Contains(record, "task_lines") {
+		t.Fatalf("line-less record = %s, want no task_lines", record)
 	}
 }
 

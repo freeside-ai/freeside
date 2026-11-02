@@ -163,6 +163,8 @@ func TestUsagePoolsMigrationReleasesAbandonedShadowAdmissions(t *testing.T) {
 		t.Fatal(err)
 	}
 	for _, statement := range []string{
+		`ALTER TABLE manual_submissions DROP COLUMN task_lines`,
+		`DELETE FROM schema_migrations WHERE name = '0117_manual_submission_task_lines.sql'`,
 		`DROP TABLE pool_usage_observations`,
 		`DELETE FROM schema_migrations WHERE name = '0116_pool_usage_observations.sql'`,
 		`DROP TABLE routing_policies`,

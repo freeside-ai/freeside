@@ -148,7 +148,7 @@ func (s *Service) submitTask(ctx context.Context, in ClientCommand) (CommandResu
 			CommandID: in.CommandID, Origin: domain.TaskSubmissionOriginDevice,
 			DeviceID: &in.DeviceID, ProjectID: p.ProjectID,
 			SourceDigest: digest, TaskID: outcome.TaskID, SpecificationRunID: outcome.SpecificationRunID,
-			Name: outcome.Name,
+			Name: outcome.Name, TaskLines: p.TaskLines,
 		}
 		if err := tx.PutTaskSubmissionRequest(ctx, submission, requestDigest); err != nil {
 			return err
