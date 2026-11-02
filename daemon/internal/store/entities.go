@@ -2209,6 +2209,9 @@ func (tx *WriteTx) PutCommand(ctx context.Context, command domain.Command) error
 	if err := tx.rejectStopCommandID(ctx, command.CommandID); err != nil {
 		return err
 	}
+	if err := tx.rejectRecordedCommandID(ctx, command.CommandID); err != nil {
+		return err
+	}
 	commandBody, err := encode(command)
 	if err != nil {
 		return fmt.Errorf("put command %q: %w", command.CommandID, err)

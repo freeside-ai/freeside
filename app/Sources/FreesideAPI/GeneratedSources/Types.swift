@@ -232,6 +232,20 @@ public protocol APIProtocol: Sendable {
     /// Active-device authority is rechecked inside the transaction, including
     /// receipt replay. Acceptance is pending, never proof of termination or
     /// WIP release.
+    /// The operator commands refresh_usage, reassign_collector,
+    /// change_task_line, and set_routing_policy carry neither envelope field
+    /// and are rejected as malformed if they do. Each records a receipt in
+    /// the transaction that applies it, and a replay returns that receipt and
+    /// its revision. A request for the line or the role orders already held
+    /// records a receipt with recorded false and moves no entity. An unknown
+    /// pool, enrollment, or task is 404. An enrollment whose identity meters
+    /// another pool (reassign_collector) and an agent the daemon's agent tree
+    /// does not carry (set_routing_policy) are 400. A role whose attempt is
+    /// running (change_task_line) is 409 with the current task snapshot, and
+    /// a set_routing_policy whose expected_revision is not the current policy
+    /// revision is 409 with the current policy. Until the daemon routes
+    /// refresh_usage and reassign_collector to its collection lifecycle, it
+    /// answers them with 500 and records nothing.
     ///
     ///
     /// - Remark: HTTP `POST /commands`.
@@ -680,6 +694,20 @@ extension APIProtocol {
     /// Active-device authority is rechecked inside the transaction, including
     /// receipt replay. Acceptance is pending, never proof of termination or
     /// WIP release.
+    /// The operator commands refresh_usage, reassign_collector,
+    /// change_task_line, and set_routing_policy carry neither envelope field
+    /// and are rejected as malformed if they do. Each records a receipt in
+    /// the transaction that applies it, and a replay returns that receipt and
+    /// its revision. A request for the line or the role orders already held
+    /// records a receipt with recorded false and moves no entity. An unknown
+    /// pool, enrollment, or task is 404. An enrollment whose identity meters
+    /// another pool (reassign_collector) and an agent the daemon's agent tree
+    /// does not carry (set_routing_policy) are 400. A role whose attempt is
+    /// running (change_task_line) is 409 with the current task snapshot, and
+    /// a set_routing_policy whose expected_revision is not the current policy
+    /// revision is 409 with the current policy. Until the daemon routes
+    /// refresh_usage and reassign_collector to its collection lifecycle, it
+    /// answers them with 500 and records nothing.
     ///
     ///
     /// - Remark: HTTP `POST /commands`.
@@ -7992,7 +8020,7 @@ public enum Components {
         ///
         /// - Remark: Generated from `#/components/schemas/EntityVersion`.
         public typealias EntityVersion = Swift.Int64
-        /// Every client mutation. The payload's kind discriminates the command type: a decision command (the first exercised type) decides an attention item and carries expected_entity_version and expected_bindings; a submit_task command creates a new task from source text and binds to no entity, so it carries neither envelope field and is rejected as malformed if it does. New command types are typed as the signet/saddle pair exercises the surface, via kind:contract changes.
+        /// Every client mutation. The payload's kind discriminates the command type: a decision command (the first exercised type) decides an attention item and carries expected_entity_version and expected_bindings; a submit_task command creates a new task from source text and binds to no entity, so it carries neither envelope field and is rejected as malformed if it does, as are the operator commands refresh_usage, reassign_collector, change_task_line, and set_routing_policy. New command types are typed as the signet/saddle pair exercises the surface, via kind:contract changes.
         ///
         ///
         /// - Remark: Generated from `#/components/schemas/ClientCommand`.
@@ -8006,12 +8034,12 @@ public enum Components {
             ///
             /// - Remark: Generated from `#/components/schemas/ClientCommand/device_id`.
             public var device_id: Swift.String
-            /// Required for decision and stop_task; absent for submit_task. For a decision command this is the entity_version of the target entity the command was prepared against; a mismatch rejects the command with the replacement state. For Stop this is the observed TaskSnapshot.entity_version (the server revision), never the private task row version; it is accepted when between 1 and the current revision, and only a greater value (or a stale epoch) is rejected, so unrelated revision movement no longer rejects a Stop.
+            /// Required for decision and stop_task; absent for submit_task and the operator commands (refresh_usage, reassign_collector, change_task_line, set_routing_policy). For a decision command this is the entity_version of the target entity the command was prepared against; a mismatch rejects the command with the replacement state. For Stop this is the observed TaskSnapshot.entity_version (the server revision), never the private task row version; it is accepted when between 1 and the current revision, and only a greater value (or a stale epoch) is rejected, so unrelated revision movement no longer rejects a Stop.
             ///
             ///
             /// - Remark: Generated from `#/components/schemas/ClientCommand/expected_entity_version`.
             public var expected_entity_version: Swift.Int64?
-            /// Required for decision; forbidden for submit_task and stop_task. The digest-bound inputs the command was prepared against, keyed by binding name; checked with expected_entity_version. For a decision command the authoritative binding set is the payload's item_version, pr_head_sha, and artifact_digests (the daemon cross-checks those against the live item); this map stays for command types that name individual bindings.
+            /// Required for decision; forbidden for every other kind. The digest-bound inputs the command was prepared against, keyed by binding name; checked with expected_entity_version. For a decision command the authoritative binding set is the payload's item_version, pr_head_sha, and artifact_digests (the daemon cross-checks those against the live item); this map stays for command types that name individual bindings.
             ///
             ///
             /// - Remark: Generated from `#/components/schemas/ClientCommand/expected_bindings`.
@@ -8032,15 +8060,23 @@ public enum Components {
                     try encoder.encodeAdditionalProperties(additionalProperties)
                 }
             }
-            /// Required for decision; forbidden for submit_task and stop_task. The digest-bound inputs the command was prepared against, keyed by binding name; checked with expected_entity_version. For a decision command the authoritative binding set is the payload's item_version, pr_head_sha, and artifact_digests (the daemon cross-checks those against the live item); this map stays for command types that name individual bindings.
+            /// Required for decision; forbidden for every other kind. The digest-bound inputs the command was prepared against, keyed by binding name; checked with expected_entity_version. For a decision command the authoritative binding set is the payload's item_version, pr_head_sha, and artifact_digests (the daemon cross-checks those against the live item); this map stays for command types that name individual bindings.
             ///
             ///
             /// - Remark: Generated from `#/components/schemas/ClientCommand/expected_bindings`.
             public var expected_bindings: Components.Schemas.ClientCommand.expected_bindingsPayload?
             /// - Remark: Generated from `#/components/schemas/ClientCommand/payload`.
             @frozen public enum payloadPayload: Codable, Hashable, Sendable {
+                /// - Remark: Generated from `#/components/schemas/ClientCommand/payload/ChangeTaskLinePayload`.
+                case change_task_line(Components.Schemas.ChangeTaskLinePayload)
                 /// - Remark: Generated from `#/components/schemas/ClientCommand/payload/DecisionPayload`.
                 case decision(Components.Schemas.DecisionPayload)
+                /// - Remark: Generated from `#/components/schemas/ClientCommand/payload/ReassignCollectorPayload`.
+                case reassign_collector(Components.Schemas.ReassignCollectorPayload)
+                /// - Remark: Generated from `#/components/schemas/ClientCommand/payload/RefreshUsagePayload`.
+                case refresh_usage(Components.Schemas.RefreshUsagePayload)
+                /// - Remark: Generated from `#/components/schemas/ClientCommand/payload/SetRoutingPolicyPayload`.
+                case set_routing_policy(Components.Schemas.SetRoutingPolicyPayload)
                 /// - Remark: Generated from `#/components/schemas/ClientCommand/payload/StopTaskPayload`.
                 case stop_task(Components.Schemas.StopTaskPayload)
                 /// - Remark: Generated from `#/components/schemas/ClientCommand/payload/SubmitTaskPayload`.
@@ -8055,8 +8091,16 @@ public enum Components {
                         forKey: .kind
                     )
                     switch discriminator {
+                    case "change_task_line":
+                        self = .change_task_line(try .init(from: decoder))
                     case "decision":
                         self = .decision(try .init(from: decoder))
+                    case "reassign_collector":
+                        self = .reassign_collector(try .init(from: decoder))
+                    case "refresh_usage":
+                        self = .refresh_usage(try .init(from: decoder))
+                    case "set_routing_policy":
+                        self = .set_routing_policy(try .init(from: decoder))
                     case "stop_task":
                         self = .stop_task(try .init(from: decoder))
                     case "submit_task":
@@ -8071,7 +8115,15 @@ public enum Components {
                 }
                 public func encode(to encoder: any Swift.Encoder) throws {
                     switch self {
+                    case let .change_task_line(value):
+                        try value.encode(to: encoder)
                     case let .decision(value):
+                        try value.encode(to: encoder)
+                    case let .reassign_collector(value):
+                        try value.encode(to: encoder)
+                    case let .refresh_usage(value):
+                        try value.encode(to: encoder)
+                    case let .set_routing_policy(value):
                         try value.encode(to: encoder)
                     case let .stop_task(value):
                         try value.encode(to: encoder)
@@ -8087,8 +8139,8 @@ public enum Components {
             /// - Parameters:
             ///   - command_id: Client-generated idempotency key; a retry with the same command_id returns the original recorded result. A command_id is unique across command kinds.
             ///   - device_id: The paired device submitting the command.
-            ///   - expected_entity_version: Required for decision and stop_task; absent for submit_task. For a decision command this is the entity_version of the target entity the command was prepared against; a mismatch rejects the command with the replacement state. For Stop this is the observed TaskSnapshot.entity_version (the server revision), never the private task row version; it is accepted when between 1 and the current revision, and only a greater value (or a stale epoch) is rejected, so unrelated revision movement no longer rejects a Stop.
-            ///   - expected_bindings: Required for decision; forbidden for submit_task and stop_task. The digest-bound inputs the command was prepared against, keyed by binding name; checked with expected_entity_version. For a decision command the authoritative binding set is the payload's item_version, pr_head_sha, and artifact_digests (the daemon cross-checks those against the live item); this map stays for command types that name individual bindings.
+            ///   - expected_entity_version: Required for decision and stop_task; absent for submit_task and the operator commands (refresh_usage, reassign_collector, change_task_line, set_routing_policy). For a decision command this is the entity_version of the target entity the command was prepared against; a mismatch rejects the command with the replacement state. For Stop this is the observed TaskSnapshot.entity_version (the server revision), never the private task row version; it is accepted when between 1 and the current revision, and only a greater value (or a stale epoch) is rejected, so unrelated revision movement no longer rejects a Stop.
+            ///   - expected_bindings: Required for decision; forbidden for every other kind. The digest-bound inputs the command was prepared against, keyed by binding name; checked with expected_entity_version. For a decision command the authoritative binding set is the payload's item_version, pr_head_sha, and artifact_digests (the daemon cross-checks those against the live item); this map stays for command types that name individual bindings.
             ///   - payload:
             public init(
                 command_id: Swift.String,
@@ -8322,7 +8374,614 @@ public enum Components {
                 ])
             }
         }
-        /// A decision or task concurrency conflict with replacement state.
+        /// Ask the daemon to collect the pool's usage now. The receipt records the request; new readings arrive through the pool's usage record on the revision path, never in the command result.
+        ///
+        ///
+        /// - Remark: Generated from `#/components/schemas/RefreshUsagePayload`.
+        public struct RefreshUsagePayload: Codable, Hashable, Sendable {
+            /// - Remark: Generated from `#/components/schemas/RefreshUsagePayload/kind`.
+            @frozen public enum kindPayload: String, Codable, Hashable, Sendable, CaseIterable {
+                case refresh_usage = "refresh_usage"
+            }
+            /// - Remark: Generated from `#/components/schemas/RefreshUsagePayload/kind`.
+            public var kind: Components.Schemas.RefreshUsagePayload.kindPayload
+            /// - Remark: Generated from `#/components/schemas/RefreshUsagePayload/pool`.
+            public var pool: Swift.String
+            /// Creates a new `RefreshUsagePayload`.
+            ///
+            /// - Parameters:
+            ///   - kind:
+            ///   - pool:
+            public init(
+                kind: Components.Schemas.RefreshUsagePayload.kindPayload,
+                pool: Swift.String
+            ) {
+                self.kind = kind
+                self.pool = pool
+            }
+            public enum CodingKeys: String, CodingKey {
+                case kind
+                case pool
+            }
+            public init(from decoder: any Swift.Decoder) throws {
+                let container = try decoder.container(keyedBy: CodingKeys.self)
+                self.kind = try container.decode(
+                    Components.Schemas.RefreshUsagePayload.kindPayload.self,
+                    forKey: .kind
+                )
+                self.pool = try container.decode(
+                    Swift.String.self,
+                    forKey: .pool
+                )
+                try decoder.ensureNoAdditionalProperties(knownKeys: [
+                    "kind",
+                    "pool"
+                ])
+            }
+        }
+        /// Make one enrollment on the pool its collector. Collection never fails over on its own; this is how the operator moves it. The enrollment's identity must meter the pool.
+        ///
+        ///
+        /// - Remark: Generated from `#/components/schemas/ReassignCollectorPayload`.
+        public struct ReassignCollectorPayload: Codable, Hashable, Sendable {
+            /// - Remark: Generated from `#/components/schemas/ReassignCollectorPayload/kind`.
+            @frozen public enum kindPayload: String, Codable, Hashable, Sendable, CaseIterable {
+                case reassign_collector = "reassign_collector"
+            }
+            /// - Remark: Generated from `#/components/schemas/ReassignCollectorPayload/kind`.
+            public var kind: Components.Schemas.ReassignCollectorPayload.kindPayload
+            /// - Remark: Generated from `#/components/schemas/ReassignCollectorPayload/pool`.
+            public var pool: Swift.String
+            /// - Remark: Generated from `#/components/schemas/ReassignCollectorPayload/enrollment_id`.
+            public var enrollment_id: Swift.String
+            /// Creates a new `ReassignCollectorPayload`.
+            ///
+            /// - Parameters:
+            ///   - kind:
+            ///   - pool:
+            ///   - enrollment_id:
+            public init(
+                kind: Components.Schemas.ReassignCollectorPayload.kindPayload,
+                pool: Swift.String,
+                enrollment_id: Swift.String
+            ) {
+                self.kind = kind
+                self.pool = pool
+                self.enrollment_id = enrollment_id
+            }
+            public enum CodingKeys: String, CodingKey {
+                case kind
+                case pool
+                case enrollment_id
+            }
+            public init(from decoder: any Swift.Decoder) throws {
+                let container = try decoder.container(keyedBy: CodingKeys.self)
+                self.kind = try container.decode(
+                    Components.Schemas.ReassignCollectorPayload.kindPayload.self,
+                    forKey: .kind
+                )
+                self.pool = try container.decode(
+                    Swift.String.self,
+                    forKey: .pool
+                )
+                self.enrollment_id = try container.decode(
+                    Swift.String.self,
+                    forKey: .enrollment_id
+                )
+                try decoder.ensureNoAdditionalProperties(knownKeys: [
+                    "kind",
+                    "pool",
+                    "enrollment_id"
+                ])
+            }
+        }
+        /// Change a waiting task's line for one role, as `freesided task-line` does on the daemon host: name an agent, or null to clear the line and return the role to the lineup. Refused while an attempt of the role runs. The new version's source is client_line_change.
+        ///
+        ///
+        /// - Remark: Generated from `#/components/schemas/ChangeTaskLinePayload`.
+        public struct ChangeTaskLinePayload: Codable, Hashable, Sendable {
+            /// - Remark: Generated from `#/components/schemas/ChangeTaskLinePayload/kind`.
+            @frozen public enum kindPayload: String, Codable, Hashable, Sendable, CaseIterable {
+                case change_task_line = "change_task_line"
+            }
+            /// - Remark: Generated from `#/components/schemas/ChangeTaskLinePayload/kind`.
+            public var kind: Components.Schemas.ChangeTaskLinePayload.kindPayload
+            /// - Remark: Generated from `#/components/schemas/ChangeTaskLinePayload/task_id`.
+            public var task_id: Swift.String
+            /// - Remark: Generated from `#/components/schemas/ChangeTaskLinePayload/role`.
+            public var role: Components.Schemas.TaskLineRole
+            /// - Remark: Generated from `#/components/schemas/ChangeTaskLinePayload/agent`.
+            public var agent: Swift.String?
+            /// Creates a new `ChangeTaskLinePayload`.
+            ///
+            /// - Parameters:
+            ///   - kind:
+            ///   - task_id:
+            ///   - role:
+            ///   - agent:
+            public init(
+                kind: Components.Schemas.ChangeTaskLinePayload.kindPayload,
+                task_id: Swift.String,
+                role: Components.Schemas.TaskLineRole,
+                agent: Swift.String? = nil
+            ) {
+                self.kind = kind
+                self.task_id = task_id
+                self.role = role
+                self.agent = agent
+            }
+            public enum CodingKeys: String, CodingKey {
+                case kind
+                case task_id
+                case role
+                case agent
+            }
+            public init(from decoder: any Swift.Decoder) throws {
+                let container = try decoder.container(keyedBy: CodingKeys.self)
+                self.kind = try container.decode(
+                    Components.Schemas.ChangeTaskLinePayload.kindPayload.self,
+                    forKey: .kind
+                )
+                self.task_id = try container.decode(
+                    Swift.String.self,
+                    forKey: .task_id
+                )
+                self.role = try container.decode(
+                    Components.Schemas.TaskLineRole.self,
+                    forKey: .role
+                )
+                self.agent = try container.decodeIfPresent(
+                    Swift.String.self,
+                    forKey: .agent
+                )
+                try decoder.ensureNoAdditionalProperties(knownKeys: [
+                    "kind",
+                    "task_id",
+                    "role",
+                    "agent"
+                ])
+            }
+        }
+        /// Set the routing policy, as `freesided routing set` does on the daemon host: one priority order per role, replacing the whole policy. Every agent must be in the daemon's agent tree. expected_revision is the policy revision the client saw, null when it saw none; any other current revision refuses the change, so two operators cannot silently overwrite each other. The new revision's source is client_routing_set and its set_by is device:<device_id>.
+        ///
+        ///
+        /// - Remark: Generated from `#/components/schemas/SetRoutingPolicyPayload`.
+        public struct SetRoutingPolicyPayload: Codable, Hashable, Sendable {
+            /// - Remark: Generated from `#/components/schemas/SetRoutingPolicyPayload/kind`.
+            @frozen public enum kindPayload: String, Codable, Hashable, Sendable, CaseIterable {
+                case set_routing_policy = "set_routing_policy"
+            }
+            /// - Remark: Generated from `#/components/schemas/SetRoutingPolicyPayload/kind`.
+            public var kind: Components.Schemas.SetRoutingPolicyPayload.kindPayload
+            /// - Remark: Generated from `#/components/schemas/SetRoutingPolicyPayload/roles`.
+            public var roles: [Components.Schemas.RoutingPolicyRole]
+            /// - Remark: Generated from `#/components/schemas/SetRoutingPolicyPayload/expected_revision`.
+            public var expected_revision: Swift.Int?
+            /// Creates a new `SetRoutingPolicyPayload`.
+            ///
+            /// - Parameters:
+            ///   - kind:
+            ///   - roles:
+            ///   - expected_revision:
+            public init(
+                kind: Components.Schemas.SetRoutingPolicyPayload.kindPayload,
+                roles: [Components.Schemas.RoutingPolicyRole],
+                expected_revision: Swift.Int? = nil
+            ) {
+                self.kind = kind
+                self.roles = roles
+                self.expected_revision = expected_revision
+            }
+            public enum CodingKeys: String, CodingKey {
+                case kind
+                case roles
+                case expected_revision
+            }
+            public init(from decoder: any Swift.Decoder) throws {
+                let container = try decoder.container(keyedBy: CodingKeys.self)
+                self.kind = try container.decode(
+                    Components.Schemas.SetRoutingPolicyPayload.kindPayload.self,
+                    forKey: .kind
+                )
+                self.roles = try container.decode(
+                    [Components.Schemas.RoutingPolicyRole].self,
+                    forKey: .roles
+                )
+                self.expected_revision = try container.decodeIfPresent(
+                    Swift.Int.self,
+                    forKey: .expected_revision
+                )
+                try decoder.ensureNoAdditionalProperties(knownKeys: [
+                    "kind",
+                    "roles",
+                    "expected_revision"
+                ])
+            }
+        }
+        /// The receipt that a refresh was requested for the pool.
+        ///
+        /// - Remark: Generated from `#/components/schemas/UsageRefreshRecord`.
+        public struct UsageRefreshRecord: Codable, Hashable, Sendable {
+            /// - Remark: Generated from `#/components/schemas/UsageRefreshRecord/kind`.
+            @frozen public enum kindPayload: String, Codable, Hashable, Sendable, CaseIterable {
+                case refresh_usage = "refresh_usage"
+            }
+            /// - Remark: Generated from `#/components/schemas/UsageRefreshRecord/kind`.
+            public var kind: Components.Schemas.UsageRefreshRecord.kindPayload
+            /// - Remark: Generated from `#/components/schemas/UsageRefreshRecord/command_id`.
+            public var command_id: Swift.String
+            /// - Remark: Generated from `#/components/schemas/UsageRefreshRecord/device_id`.
+            public var device_id: Swift.String
+            /// - Remark: Generated from `#/components/schemas/UsageRefreshRecord/pool`.
+            public var pool: Swift.String
+            /// - Remark: Generated from `#/components/schemas/UsageRefreshRecord/requested_at`.
+            public var requested_at: Foundation.Date
+            /// Creates a new `UsageRefreshRecord`.
+            ///
+            /// - Parameters:
+            ///   - kind:
+            ///   - command_id:
+            ///   - device_id:
+            ///   - pool:
+            ///   - requested_at:
+            public init(
+                kind: Components.Schemas.UsageRefreshRecord.kindPayload,
+                command_id: Swift.String,
+                device_id: Swift.String,
+                pool: Swift.String,
+                requested_at: Foundation.Date
+            ) {
+                self.kind = kind
+                self.command_id = command_id
+                self.device_id = device_id
+                self.pool = pool
+                self.requested_at = requested_at
+            }
+            public enum CodingKeys: String, CodingKey {
+                case kind
+                case command_id
+                case device_id
+                case pool
+                case requested_at
+            }
+            public init(from decoder: any Swift.Decoder) throws {
+                let container = try decoder.container(keyedBy: CodingKeys.self)
+                self.kind = try container.decode(
+                    Components.Schemas.UsageRefreshRecord.kindPayload.self,
+                    forKey: .kind
+                )
+                self.command_id = try container.decode(
+                    Swift.String.self,
+                    forKey: .command_id
+                )
+                self.device_id = try container.decode(
+                    Swift.String.self,
+                    forKey: .device_id
+                )
+                self.pool = try container.decode(
+                    Swift.String.self,
+                    forKey: .pool
+                )
+                self.requested_at = try container.decode(
+                    Foundation.Date.self,
+                    forKey: .requested_at
+                )
+                try decoder.ensureNoAdditionalProperties(knownKeys: [
+                    "kind",
+                    "command_id",
+                    "device_id",
+                    "pool",
+                    "requested_at"
+                ])
+            }
+        }
+        /// The receipt that the pool's collector was reassigned.
+        ///
+        /// - Remark: Generated from `#/components/schemas/CollectorReassignmentRecord`.
+        public struct CollectorReassignmentRecord: Codable, Hashable, Sendable {
+            /// - Remark: Generated from `#/components/schemas/CollectorReassignmentRecord/kind`.
+            @frozen public enum kindPayload: String, Codable, Hashable, Sendable, CaseIterable {
+                case reassign_collector = "reassign_collector"
+            }
+            /// - Remark: Generated from `#/components/schemas/CollectorReassignmentRecord/kind`.
+            public var kind: Components.Schemas.CollectorReassignmentRecord.kindPayload
+            /// - Remark: Generated from `#/components/schemas/CollectorReassignmentRecord/command_id`.
+            public var command_id: Swift.String
+            /// - Remark: Generated from `#/components/schemas/CollectorReassignmentRecord/device_id`.
+            public var device_id: Swift.String
+            /// - Remark: Generated from `#/components/schemas/CollectorReassignmentRecord/pool`.
+            public var pool: Swift.String
+            /// - Remark: Generated from `#/components/schemas/CollectorReassignmentRecord/collector`.
+            public var collector: Swift.String
+            /// - Remark: Generated from `#/components/schemas/CollectorReassignmentRecord/recorded_at`.
+            public var recorded_at: Foundation.Date
+            /// Creates a new `CollectorReassignmentRecord`.
+            ///
+            /// - Parameters:
+            ///   - kind:
+            ///   - command_id:
+            ///   - device_id:
+            ///   - pool:
+            ///   - collector:
+            ///   - recorded_at:
+            public init(
+                kind: Components.Schemas.CollectorReassignmentRecord.kindPayload,
+                command_id: Swift.String,
+                device_id: Swift.String,
+                pool: Swift.String,
+                collector: Swift.String,
+                recorded_at: Foundation.Date
+            ) {
+                self.kind = kind
+                self.command_id = command_id
+                self.device_id = device_id
+                self.pool = pool
+                self.collector = collector
+                self.recorded_at = recorded_at
+            }
+            public enum CodingKeys: String, CodingKey {
+                case kind
+                case command_id
+                case device_id
+                case pool
+                case collector
+                case recorded_at
+            }
+            public init(from decoder: any Swift.Decoder) throws {
+                let container = try decoder.container(keyedBy: CodingKeys.self)
+                self.kind = try container.decode(
+                    Components.Schemas.CollectorReassignmentRecord.kindPayload.self,
+                    forKey: .kind
+                )
+                self.command_id = try container.decode(
+                    Swift.String.self,
+                    forKey: .command_id
+                )
+                self.device_id = try container.decode(
+                    Swift.String.self,
+                    forKey: .device_id
+                )
+                self.pool = try container.decode(
+                    Swift.String.self,
+                    forKey: .pool
+                )
+                self.collector = try container.decode(
+                    Swift.String.self,
+                    forKey: .collector
+                )
+                self.recorded_at = try container.decode(
+                    Foundation.Date.self,
+                    forKey: .recorded_at
+                )
+                try decoder.ensureNoAdditionalProperties(knownKeys: [
+                    "kind",
+                    "command_id",
+                    "device_id",
+                    "pool",
+                    "collector",
+                    "recorded_at"
+                ])
+            }
+        }
+        /// The receipt of a line change: the request, whether it recorded a new version, and the role's current line after it. recorded false means the role already had that line. line is null when the role has no line: it never had one, or the change cleared it.
+        ///
+        ///
+        /// - Remark: Generated from `#/components/schemas/TaskLineChangeRecord`.
+        public struct TaskLineChangeRecord: Codable, Hashable, Sendable {
+            /// - Remark: Generated from `#/components/schemas/TaskLineChangeRecord/kind`.
+            @frozen public enum kindPayload: String, Codable, Hashable, Sendable, CaseIterable {
+                case change_task_line = "change_task_line"
+            }
+            /// - Remark: Generated from `#/components/schemas/TaskLineChangeRecord/kind`.
+            public var kind: Components.Schemas.TaskLineChangeRecord.kindPayload
+            /// - Remark: Generated from `#/components/schemas/TaskLineChangeRecord/command_id`.
+            public var command_id: Swift.String
+            /// - Remark: Generated from `#/components/schemas/TaskLineChangeRecord/device_id`.
+            public var device_id: Swift.String
+            /// - Remark: Generated from `#/components/schemas/TaskLineChangeRecord/task_id`.
+            public var task_id: Swift.String
+            /// - Remark: Generated from `#/components/schemas/TaskLineChangeRecord/role`.
+            public var role: Components.Schemas.TaskLineRole
+            /// - Remark: Generated from `#/components/schemas/TaskLineChangeRecord/agent`.
+            public var agent: Swift.String?
+            /// - Remark: Generated from `#/components/schemas/TaskLineChangeRecord/recorded`.
+            public var recorded: Swift.Bool
+            /// - Remark: Generated from `#/components/schemas/TaskLineChangeRecord/line`.
+            public struct linePayload: Codable, Hashable, Sendable {
+                /// - Remark: Generated from `#/components/schemas/TaskLineChangeRecord/line/value1`.
+                public var value1: Components.Schemas.TaskLine
+                /// Creates a new `linePayload`.
+                ///
+                /// - Parameters:
+                ///   - value1:
+                public init(value1: Components.Schemas.TaskLine) {
+                    self.value1 = value1
+                }
+                public init(from decoder: any Swift.Decoder) throws {
+                    self.value1 = try .init(from: decoder)
+                }
+                public func encode(to encoder: any Swift.Encoder) throws {
+                    try self.value1.encode(to: encoder)
+                }
+            }
+            /// - Remark: Generated from `#/components/schemas/TaskLineChangeRecord/line`.
+            public var line: Components.Schemas.TaskLineChangeRecord.linePayload?
+            /// Creates a new `TaskLineChangeRecord`.
+            ///
+            /// - Parameters:
+            ///   - kind:
+            ///   - command_id:
+            ///   - device_id:
+            ///   - task_id:
+            ///   - role:
+            ///   - agent:
+            ///   - recorded:
+            ///   - line:
+            public init(
+                kind: Components.Schemas.TaskLineChangeRecord.kindPayload,
+                command_id: Swift.String,
+                device_id: Swift.String,
+                task_id: Swift.String,
+                role: Components.Schemas.TaskLineRole,
+                agent: Swift.String? = nil,
+                recorded: Swift.Bool,
+                line: Components.Schemas.TaskLineChangeRecord.linePayload? = nil
+            ) {
+                self.kind = kind
+                self.command_id = command_id
+                self.device_id = device_id
+                self.task_id = task_id
+                self.role = role
+                self.agent = agent
+                self.recorded = recorded
+                self.line = line
+            }
+            public enum CodingKeys: String, CodingKey {
+                case kind
+                case command_id
+                case device_id
+                case task_id
+                case role
+                case agent
+                case recorded
+                case line
+            }
+            public init(from decoder: any Swift.Decoder) throws {
+                let container = try decoder.container(keyedBy: CodingKeys.self)
+                self.kind = try container.decode(
+                    Components.Schemas.TaskLineChangeRecord.kindPayload.self,
+                    forKey: .kind
+                )
+                self.command_id = try container.decode(
+                    Swift.String.self,
+                    forKey: .command_id
+                )
+                self.device_id = try container.decode(
+                    Swift.String.self,
+                    forKey: .device_id
+                )
+                self.task_id = try container.decode(
+                    Swift.String.self,
+                    forKey: .task_id
+                )
+                self.role = try container.decode(
+                    Components.Schemas.TaskLineRole.self,
+                    forKey: .role
+                )
+                self.agent = try container.decodeIfPresent(
+                    Swift.String.self,
+                    forKey: .agent
+                )
+                self.recorded = try container.decode(
+                    Swift.Bool.self,
+                    forKey: .recorded
+                )
+                self.line = try container.decodeIfPresent(
+                    Components.Schemas.TaskLineChangeRecord.linePayload.self,
+                    forKey: .line
+                )
+                try decoder.ensureNoAdditionalProperties(knownKeys: [
+                    "kind",
+                    "command_id",
+                    "device_id",
+                    "task_id",
+                    "role",
+                    "agent",
+                    "recorded",
+                    "line"
+                ])
+            }
+        }
+        /// The receipt of a routing policy change: the request's expected revision, whether it recorded a new revision, and the policy current after it. recorded false means the policy already held these orders.
+        ///
+        ///
+        /// - Remark: Generated from `#/components/schemas/RoutingPolicyChangeRecord`.
+        public struct RoutingPolicyChangeRecord: Codable, Hashable, Sendable {
+            /// - Remark: Generated from `#/components/schemas/RoutingPolicyChangeRecord/kind`.
+            @frozen public enum kindPayload: String, Codable, Hashable, Sendable, CaseIterable {
+                case set_routing_policy = "set_routing_policy"
+            }
+            /// - Remark: Generated from `#/components/schemas/RoutingPolicyChangeRecord/kind`.
+            public var kind: Components.Schemas.RoutingPolicyChangeRecord.kindPayload
+            /// - Remark: Generated from `#/components/schemas/RoutingPolicyChangeRecord/command_id`.
+            public var command_id: Swift.String
+            /// - Remark: Generated from `#/components/schemas/RoutingPolicyChangeRecord/device_id`.
+            public var device_id: Swift.String
+            /// - Remark: Generated from `#/components/schemas/RoutingPolicyChangeRecord/expected_revision`.
+            public var expected_revision: Swift.Int?
+            /// - Remark: Generated from `#/components/schemas/RoutingPolicyChangeRecord/recorded`.
+            public var recorded: Swift.Bool
+            /// - Remark: Generated from `#/components/schemas/RoutingPolicyChangeRecord/policy`.
+            public var policy: Components.Schemas.RoutingPolicy
+            /// Creates a new `RoutingPolicyChangeRecord`.
+            ///
+            /// - Parameters:
+            ///   - kind:
+            ///   - command_id:
+            ///   - device_id:
+            ///   - expected_revision:
+            ///   - recorded:
+            ///   - policy:
+            public init(
+                kind: Components.Schemas.RoutingPolicyChangeRecord.kindPayload,
+                command_id: Swift.String,
+                device_id: Swift.String,
+                expected_revision: Swift.Int? = nil,
+                recorded: Swift.Bool,
+                policy: Components.Schemas.RoutingPolicy
+            ) {
+                self.kind = kind
+                self.command_id = command_id
+                self.device_id = device_id
+                self.expected_revision = expected_revision
+                self.recorded = recorded
+                self.policy = policy
+            }
+            public enum CodingKeys: String, CodingKey {
+                case kind
+                case command_id
+                case device_id
+                case expected_revision
+                case recorded
+                case policy
+            }
+            public init(from decoder: any Swift.Decoder) throws {
+                let container = try decoder.container(keyedBy: CodingKeys.self)
+                self.kind = try container.decode(
+                    Components.Schemas.RoutingPolicyChangeRecord.kindPayload.self,
+                    forKey: .kind
+                )
+                self.command_id = try container.decode(
+                    Swift.String.self,
+                    forKey: .command_id
+                )
+                self.device_id = try container.decode(
+                    Swift.String.self,
+                    forKey: .device_id
+                )
+                self.expected_revision = try container.decodeIfPresent(
+                    Swift.Int.self,
+                    forKey: .expected_revision
+                )
+                self.recorded = try container.decode(
+                    Swift.Bool.self,
+                    forKey: .recorded
+                )
+                self.policy = try container.decode(
+                    Components.Schemas.RoutingPolicy.self,
+                    forKey: .policy
+                )
+                try decoder.ensureNoAdditionalProperties(knownKeys: [
+                    "kind",
+                    "command_id",
+                    "device_id",
+                    "expected_revision",
+                    "recorded",
+                    "policy"
+                ])
+            }
+        }
+        /// A command conflict with the replacement state it was refused against.
         ///
         /// - Remark: Generated from `#/components/schemas/CommandRejection`.
         @frozen public enum CommandRejection: Codable, Hashable, Sendable {
@@ -8330,6 +8989,10 @@ public enum Components {
             case StaleVersionRejection(Components.Schemas.StaleVersionRejection)
             /// - Remark: Generated from `#/components/schemas/CommandRejection/case2`.
             case StaleTaskRejection(Components.Schemas.StaleTaskRejection)
+            /// - Remark: Generated from `#/components/schemas/CommandRejection/case3`.
+            case TaskLineChangeRejection(Components.Schemas.TaskLineChangeRejection)
+            /// - Remark: Generated from `#/components/schemas/CommandRejection/case4`.
+            case RoutingPolicyRejection(Components.Schemas.RoutingPolicyRejection)
             public init(from decoder: any Swift.Decoder) throws {
                 var errors: [any Swift.Error] = []
                 do {
@@ -8340,6 +9003,18 @@ public enum Components {
                 }
                 do {
                     self = .StaleTaskRejection(try .init(from: decoder))
+                    return
+                } catch {
+                    errors.append(error)
+                }
+                do {
+                    self = .TaskLineChangeRejection(try .init(from: decoder))
+                    return
+                } catch {
+                    errors.append(error)
+                }
+                do {
+                    self = .RoutingPolicyRejection(try .init(from: decoder))
                     return
                 } catch {
                     errors.append(error)
@@ -8356,7 +9031,137 @@ public enum Components {
                     try value.encode(to: encoder)
                 case let .StaleTaskRejection(value):
                     try value.encode(to: encoder)
+                case let .TaskLineChangeRejection(value):
+                    try value.encode(to: encoder)
+                case let .RoutingPolicyRejection(value):
+                    try value.encode(to: encoder)
                 }
+            }
+        }
+        /// A line change refused because an attempt of the role runs, with the current task projection and epoch.
+        ///
+        ///
+        /// - Remark: Generated from `#/components/schemas/TaskLineChangeRejection`.
+        public struct TaskLineChangeRejection: Codable, Hashable, Sendable {
+            /// - Remark: Generated from `#/components/schemas/TaskLineChangeRejection/message`.
+            public var message: Swift.String
+            /// - Remark: Generated from `#/components/schemas/TaskLineChangeRejection/reason`.
+            @frozen public enum reasonPayload: String, Codable, Hashable, Sendable, CaseIterable {
+                case role_running = "role_running"
+            }
+            /// - Remark: Generated from `#/components/schemas/TaskLineChangeRejection/reason`.
+            public var reason: Components.Schemas.TaskLineChangeRejection.reasonPayload
+            /// - Remark: Generated from `#/components/schemas/TaskLineChangeRejection/replacement_task`.
+            public var replacement_task: Components.Schemas.TaskSnapshot
+            /// - Remark: Generated from `#/components/schemas/TaskLineChangeRejection/sync_epoch`.
+            public var sync_epoch: Swift.String
+            /// Creates a new `TaskLineChangeRejection`.
+            ///
+            /// - Parameters:
+            ///   - message:
+            ///   - reason:
+            ///   - replacement_task:
+            ///   - sync_epoch:
+            public init(
+                message: Swift.String,
+                reason: Components.Schemas.TaskLineChangeRejection.reasonPayload,
+                replacement_task: Components.Schemas.TaskSnapshot,
+                sync_epoch: Swift.String
+            ) {
+                self.message = message
+                self.reason = reason
+                self.replacement_task = replacement_task
+                self.sync_epoch = sync_epoch
+            }
+            public enum CodingKeys: String, CodingKey {
+                case message
+                case reason
+                case replacement_task
+                case sync_epoch
+            }
+            public init(from decoder: any Swift.Decoder) throws {
+                let container = try decoder.container(keyedBy: CodingKeys.self)
+                self.message = try container.decode(
+                    Swift.String.self,
+                    forKey: .message
+                )
+                self.reason = try container.decode(
+                    Components.Schemas.TaskLineChangeRejection.reasonPayload.self,
+                    forKey: .reason
+                )
+                self.replacement_task = try container.decode(
+                    Components.Schemas.TaskSnapshot.self,
+                    forKey: .replacement_task
+                )
+                self.sync_epoch = try container.decode(
+                    Swift.String.self,
+                    forKey: .sync_epoch
+                )
+                try decoder.ensureNoAdditionalProperties(knownKeys: [
+                    "message",
+                    "reason",
+                    "replacement_task",
+                    "sync_epoch"
+                ])
+            }
+        }
+        /// A routing policy change refused because expected_revision is not the current policy revision, with the current policy (null when none was ever set).
+        ///
+        ///
+        /// - Remark: Generated from `#/components/schemas/RoutingPolicyRejection`.
+        public struct RoutingPolicyRejection: Codable, Hashable, Sendable {
+            /// - Remark: Generated from `#/components/schemas/RoutingPolicyRejection/message`.
+            public var message: Swift.String
+            /// - Remark: Generated from `#/components/schemas/RoutingPolicyRejection/current_policy`.
+            public struct current_policyPayload: Codable, Hashable, Sendable {
+                /// - Remark: Generated from `#/components/schemas/RoutingPolicyRejection/current_policy/value1`.
+                public var value1: Components.Schemas.RoutingPolicy
+                /// Creates a new `current_policyPayload`.
+                ///
+                /// - Parameters:
+                ///   - value1:
+                public init(value1: Components.Schemas.RoutingPolicy) {
+                    self.value1 = value1
+                }
+                public init(from decoder: any Swift.Decoder) throws {
+                    self.value1 = try .init(from: decoder)
+                }
+                public func encode(to encoder: any Swift.Encoder) throws {
+                    try self.value1.encode(to: encoder)
+                }
+            }
+            /// - Remark: Generated from `#/components/schemas/RoutingPolicyRejection/current_policy`.
+            public var current_policy: Components.Schemas.RoutingPolicyRejection.current_policyPayload?
+            /// Creates a new `RoutingPolicyRejection`.
+            ///
+            /// - Parameters:
+            ///   - message:
+            ///   - current_policy:
+            public init(
+                message: Swift.String,
+                current_policy: Components.Schemas.RoutingPolicyRejection.current_policyPayload? = nil
+            ) {
+                self.message = message
+                self.current_policy = current_policy
+            }
+            public enum CodingKeys: String, CodingKey {
+                case message
+                case current_policy
+            }
+            public init(from decoder: any Swift.Decoder) throws {
+                let container = try decoder.container(keyedBy: CodingKeys.self)
+                self.message = try container.decode(
+                    Swift.String.self,
+                    forKey: .message
+                )
+                self.current_policy = try container.decodeIfPresent(
+                    Components.Schemas.RoutingPolicyRejection.current_policyPayload.self,
+                    forKey: .current_policy
+                )
+                try decoder.ensureNoAdditionalProperties(knownKeys: [
+                    "message",
+                    "current_policy"
+                ])
             }
         }
         /// Current task projection and epoch for an obsolete prepared Stop.
@@ -9349,8 +10154,16 @@ public enum Components {
         public struct CommandResult: Codable, Hashable, Sendable {
             /// - Remark: Generated from `#/components/schemas/CommandResult/record`.
             @frozen public enum recordPayload: Codable, Hashable, Sendable {
+                /// - Remark: Generated from `#/components/schemas/CommandResult/record/TaskLineChangeRecord`.
+                case change_task_line(Components.Schemas.TaskLineChangeRecord)
                 /// - Remark: Generated from `#/components/schemas/CommandResult/record/CommandRecord`.
                 case decision(Components.Schemas.CommandRecord)
+                /// - Remark: Generated from `#/components/schemas/CommandResult/record/CollectorReassignmentRecord`.
+                case reassign_collector(Components.Schemas.CollectorReassignmentRecord)
+                /// - Remark: Generated from `#/components/schemas/CommandResult/record/UsageRefreshRecord`.
+                case refresh_usage(Components.Schemas.UsageRefreshRecord)
+                /// - Remark: Generated from `#/components/schemas/CommandResult/record/RoutingPolicyChangeRecord`.
+                case set_routing_policy(Components.Schemas.RoutingPolicyChangeRecord)
                 /// - Remark: Generated from `#/components/schemas/CommandResult/record/StopTaskRecord`.
                 case stop_task(Components.Schemas.StopTaskRecord)
                 /// - Remark: Generated from `#/components/schemas/CommandResult/record/TaskSubmissionRecord`.
@@ -9365,8 +10178,16 @@ public enum Components {
                         forKey: .kind
                     )
                     switch discriminator {
+                    case "change_task_line":
+                        self = .change_task_line(try .init(from: decoder))
                     case "decision":
                         self = .decision(try .init(from: decoder))
+                    case "reassign_collector":
+                        self = .reassign_collector(try .init(from: decoder))
+                    case "refresh_usage":
+                        self = .refresh_usage(try .init(from: decoder))
+                    case "set_routing_policy":
+                        self = .set_routing_policy(try .init(from: decoder))
                     case "stop_task":
                         self = .stop_task(try .init(from: decoder))
                     case "submit_task":
@@ -9381,7 +10202,15 @@ public enum Components {
                 }
                 public func encode(to encoder: any Swift.Encoder) throws {
                     switch self {
+                    case let .change_task_line(value):
+                        try value.encode(to: encoder)
                     case let .decision(value):
+                        try value.encode(to: encoder)
+                    case let .reassign_collector(value):
+                        try value.encode(to: encoder)
+                    case let .refresh_usage(value):
+                        try value.encode(to: encoder)
+                    case let .set_routing_policy(value):
                         try value.encode(to: encoder)
                     case let .stop_task(value):
                         try value.encode(to: encoder)
@@ -20236,6 +21065,20 @@ public enum Operations {
     /// Active-device authority is rechecked inside the transaction, including
     /// receipt replay. Acceptance is pending, never proof of termination or
     /// WIP release.
+    /// The operator commands refresh_usage, reassign_collector,
+    /// change_task_line, and set_routing_policy carry neither envelope field
+    /// and are rejected as malformed if they do. Each records a receipt in
+    /// the transaction that applies it, and a replay returns that receipt and
+    /// its revision. A request for the line or the role orders already held
+    /// records a receipt with recorded false and moves no entity. An unknown
+    /// pool, enrollment, or task is 404. An enrollment whose identity meters
+    /// another pool (reassign_collector) and an agent the daemon's agent tree
+    /// does not carry (set_routing_policy) are 400. A role whose attempt is
+    /// running (change_task_line) is 409 with the current task snapshot, and
+    /// a set_routing_policy whose expected_revision is not the current policy
+    /// revision is 409 with the current policy. Until the daemon routes
+    /// refresh_usage and reassign_collector to its collection lifecycle, it
+    /// answers them with 500 and records nothing.
     ///
     ///
     /// - Remark: HTTP `POST /commands`.
@@ -20355,7 +21198,7 @@ public enum Operations {
                     self.body = body
                 }
             }
-            /// Optimistic-concurrency rejection: the command's expected_entity_version or expected_bindings no longer match canonical state. Carries the replacement item snapshot so the client can re-render without a refetch (sync test 2). No side effect was applied.
+            /// Optimistic-concurrency rejection: the command's expected_entity_version or expected_bindings no longer match canonical state. Carries the replacement item snapshot so the client can re-render without a refetch (sync test 2). A Stop carries the current task instead, a line change refused for a running role carries the current task, and a stale routing policy change carries the current policy. No side effect was applied.
             ///
             ///
             /// - Remark: Generated from `#/paths//commands/post(submitCommand)/responses/409`.

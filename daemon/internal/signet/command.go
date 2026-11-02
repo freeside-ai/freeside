@@ -37,6 +37,12 @@ type ClientCommand struct {
 	StopTask StopTaskPayload
 	// SubmitTask carries the submit_task payload; zero for other command kinds.
 	SubmitTask SubmitTaskPayload
+	// The operator commands' payloads; each is zero for every other kind, and
+	// an operator command carries no ExpectedEntityVersion.
+	RefreshUsage      RefreshUsagePayload
+	ReassignCollector ReassignCollectorPayload
+	ChangeTaskLine    ChangeTaskLinePayload
+	SetRoutingPolicy  SetRoutingPolicyPayload
 }
 
 // SubmitTaskPayload mirrors the API contract's SubmitTaskPayload: the project
@@ -250,7 +256,10 @@ type CommandResult struct {
 	// the wire record is the submission with kind submit_task instead of the
 	// decision Record.
 	Submission *domain.TaskSubmission
-	Revision   int64
+	// Receipt is set only for an accepted operator command; the wire record is
+	// its arm with the arm's kind.
+	Receipt  *domain.CommandReceipt
+	Revision int64
 }
 
 // kindedCommandRecord and kindedSubmissionRecord embed the domain record so its
@@ -276,10 +285,47 @@ func (r CommandResult) MarshalJSON() ([]byte, error) {
 			Kind domain.CommandKind `json:"kind"`
 			domain.StopTaskReceipt
 		}{domain.CommandKindStopTask, *r.Stop}
+	} else if r.Receipt != nil {
+		record, err := kindedReceiptRecord(*r.Receipt)
+		if err != nil {
+			return nil, err
+		}
+		wire.Record = record
 	} else if r.Submission != nil {
 		wire.Record = kindedSubmissionRecord{Kind: domain.CommandKindSubmitTask, TaskSubmission: *r.Submission}
 	} else {
 		wire.Record = kindedCommandRecord{Kind: domain.CommandKindDecision, Command: r.Record}
 	}
 	return json.Marshal(wire)
+}
+
+// kindedReceiptRecord flattens a receipt's arm beside its kind, producing the
+// wire UsageRefreshRecord, CollectorReassignmentRecord, TaskLineChangeRecord,
+// or RoutingPolicyChangeRecord.
+func kindedReceiptRecord(receipt domain.CommandReceipt) (any, error) {
+	kind := receipt.Kind()
+	switch kind {
+	case domain.CommandKindRefreshUsage:
+		return struct {
+			Kind domain.CommandKind `json:"kind"`
+			*domain.UsageRefreshReceipt
+		}{kind, receipt.UsageRefresh}, nil
+	case domain.CommandKindReassignCollector:
+		return struct {
+			Kind domain.CommandKind `json:"kind"`
+			*domain.CollectorReassignmentReceipt
+		}{kind, receipt.CollectorReassignment}, nil
+	case domain.CommandKindChangeTaskLine:
+		return struct {
+			Kind domain.CommandKind `json:"kind"`
+			*domain.TaskLineChangeReceipt
+		}{kind, receipt.TaskLineChange}, nil
+	case domain.CommandKindSetRoutingPolicy:
+		return struct {
+			Kind domain.CommandKind `json:"kind"`
+			*domain.RoutingPolicyChangeReceipt
+		}{kind, receipt.RoutingPolicyChange}, nil
+	case domain.CommandKindDecision, domain.CommandKindSubmitTask, domain.CommandKindStopTask:
+	}
+	return nil, domain.ErrCommandReceiptArms
 }

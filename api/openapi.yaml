@@ -571,6 +571,20 @@ paths:
         Active-device authority is rechecked inside the transaction, including
         receipt replay. Acceptance is pending, never proof of termination or
         WIP release.
+        The operator commands refresh_usage, reassign_collector,
+        change_task_line, and set_routing_policy carry neither envelope field
+        and are rejected as malformed if they do. Each records a receipt in
+        the transaction that applies it, and a replay returns that receipt and
+        its revision. A request for the line or the role orders already held
+        records a receipt with recorded false and moves no entity. An unknown
+        pool, enrollment, or task is 404. An enrollment whose identity meters
+        another pool (reassign_collector) and an agent the daemon's agent tree
+        does not carry (set_routing_policy) are 400. A role whose attempt is
+        running (change_task_line) is 409 with the current task snapshot, and
+        a set_routing_policy whose expected_revision is not the current policy
+        revision is 409 with the current policy. Until the daemon routes
+        refresh_usage and reassign_collector to its collection lifecycle, it
+        answers them with 500 and records nothing.
       requestBody:
         required: true
         description: The command to apply, prepared against canonical state.
@@ -593,8 +607,10 @@ paths:
             Optimistic-concurrency rejection: the command's
             expected_entity_version or expected_bindings no longer match
             canonical state. Carries the replacement item snapshot so the
-            client can re-render without a refetch (sync test 2). No side
-            effect was applied.
+            client can re-render without a refetch (sync test 2). A Stop
+            carries the current task instead, a line change refused for a
+            running role carries the current task, and a stale routing policy
+            change carries the current policy. No side effect was applied.
           content:
             application/json:
               schema:
@@ -3811,7 +3827,9 @@ components:
         attention item and carries expected_entity_version and
         expected_bindings; a submit_task command creates a new task
         from source text and binds to no entity, so it carries neither
-        envelope field and is rejected as malformed if it does. New command
+        envelope field and is rejected as malformed if it does, as are the
+        operator commands refresh_usage, reassign_collector, change_task_line,
+        and set_routing_policy. New command
         types are typed as the signet/saddle pair exercises the surface, via
         kind:contract changes.
       required:
@@ -3836,7 +3854,9 @@ components:
           format: int64
           minimum: 1
           description: >
-            Required for decision and stop_task; absent for submit_task.
+            Required for decision and stop_task; absent for submit_task and the
+            operator commands (refresh_usage, reassign_collector,
+            change_task_line, set_routing_policy).
             For a decision command this is the entity_version of the target
             entity the command was prepared against; a mismatch rejects the
             command with the replacement state. For Stop this is the observed
@@ -3849,7 +3869,7 @@ components:
           additionalProperties:
             $ref: "#/components/schemas/Digest"
           description: >
-            Required for decision; forbidden for submit_task and stop_task.
+            Required for decision; forbidden for every other kind.
             The digest-bound inputs the command was prepared against, keyed by
             binding name; checked with expected_entity_version. For a decision
             command the authoritative binding set is the payload's
@@ -3861,12 +3881,20 @@ components:
             - $ref: "#/components/schemas/DecisionPayload"
             - $ref: "#/components/schemas/SubmitTaskPayload"
             - $ref: "#/components/schemas/StopTaskPayload"
+            - $ref: "#/components/schemas/RefreshUsagePayload"
+            - $ref: "#/components/schemas/ReassignCollectorPayload"
+            - $ref: "#/components/schemas/ChangeTaskLinePayload"
+            - $ref: "#/components/schemas/SetRoutingPolicyPayload"
           discriminator:
             propertyName: kind
             mapping:
               decision: "#/components/schemas/DecisionPayload"
               submit_task: "#/components/schemas/SubmitTaskPayload"
               stop_task: "#/components/schemas/StopTaskPayload"
+              refresh_usage: "#/components/schemas/RefreshUsagePayload"
+              reassign_collector: "#/components/schemas/ReassignCollectorPayload"
+              change_task_line: "#/components/schemas/ChangeTaskLinePayload"
+              set_routing_policy: "#/components/schemas/SetRoutingPolicyPayload"
       example:
         command_id: "cmd-1"
         device_id: "device-1"
@@ -3945,11 +3973,245 @@ components:
         cancellation:
           $ref: "#/components/schemas/TaskCancellation"
 
+    RefreshUsagePayload:
+      type: object
+      additionalProperties: false
+      description: >
+        Ask the daemon to collect the pool's usage now. The receipt records
+        the request; new readings arrive through the pool's usage record on
+        the revision path, never in the command result.
+      required: [kind, pool]
+      properties:
+        kind:
+          type: string
+          enum: [refresh_usage]
+        pool:
+          type: string
+          minLength: 1
+
+    ReassignCollectorPayload:
+      type: object
+      additionalProperties: false
+      description: >
+        Make one enrollment on the pool its collector. Collection never fails
+        over on its own; this is how the operator moves it. The enrollment's
+        identity must meter the pool.
+      required: [kind, pool, enrollment_id]
+      properties:
+        kind:
+          type: string
+          enum: [reassign_collector]
+        pool:
+          type: string
+          minLength: 1
+        enrollment_id:
+          type: string
+          minLength: 1
+
+    ChangeTaskLinePayload:
+      type: object
+      additionalProperties: false
+      description: >
+        Change a waiting task's line for one role, as `freesided task-line`
+        does on the daemon host: name an agent, or null to clear the line and
+        return the role to the lineup. Refused while an attempt of the role
+        runs. The new version's source is client_line_change.
+      required: [kind, task_id, role, agent]
+      properties:
+        kind:
+          type: string
+          enum: [change_task_line]
+        task_id:
+          type: string
+          minLength: 1
+        role:
+          $ref: "#/components/schemas/TaskLineRole"
+        agent:
+          type: string
+          minLength: 1
+          maxLength: 246
+          pattern: '^[a-z0-9]([a-z0-9_-]*[a-z0-9])?$'
+          nullable: true
+
+    SetRoutingPolicyPayload:
+      type: object
+      additionalProperties: false
+      description: >
+        Set the routing policy, as `freesided routing set` does on the daemon
+        host: one priority order per role, replacing the whole policy. Every
+        agent must be in the daemon's agent tree. expected_revision is the
+        policy revision the client saw, null when it saw none; any other
+        current revision refuses the change, so two operators cannot silently
+        overwrite each other. The new revision's source is client_routing_set
+        and its set_by is device:<device_id>.
+      required: [kind, roles, expected_revision]
+      properties:
+        kind:
+          type: string
+          enum: [set_routing_policy]
+        roles:
+          type: array
+          minItems: 1
+          items:
+            $ref: "#/components/schemas/RoutingPolicyRole"
+        expected_revision:
+          type: integer
+          minimum: 1
+          nullable: true
+
+    UsageRefreshRecord:
+      type: object
+      additionalProperties: false
+      description: The receipt that a refresh was requested for the pool.
+      required: [kind, command_id, device_id, pool, requested_at]
+      properties:
+        kind:
+          type: string
+          enum: [refresh_usage]
+        command_id:
+          type: string
+          minLength: 1
+        device_id:
+          type: string
+          minLength: 1
+        pool:
+          type: string
+          minLength: 1
+        requested_at:
+          type: string
+          format: date-time
+
+    CollectorReassignmentRecord:
+      type: object
+      additionalProperties: false
+      description: The receipt that the pool's collector was reassigned.
+      required: [kind, command_id, device_id, pool, collector, recorded_at]
+      properties:
+        kind:
+          type: string
+          enum: [reassign_collector]
+        command_id:
+          type: string
+          minLength: 1
+        device_id:
+          type: string
+          minLength: 1
+        pool:
+          type: string
+          minLength: 1
+        collector:
+          type: string
+          minLength: 1
+        recorded_at:
+          type: string
+          format: date-time
+
+    TaskLineChangeRecord:
+      type: object
+      additionalProperties: false
+      description: >
+        The receipt of a line change: the request, whether it recorded a new
+        version, and the role's current line after it. recorded false means
+        the role already had that line. line is null when the role has no
+        line: it never had one, or the change cleared it.
+      required: [kind, command_id, device_id, task_id, role, agent, recorded, line]
+      properties:
+        kind:
+          type: string
+          enum: [change_task_line]
+        command_id:
+          type: string
+          minLength: 1
+        device_id:
+          type: string
+          minLength: 1
+        task_id:
+          type: string
+          minLength: 1
+        role:
+          $ref: "#/components/schemas/TaskLineRole"
+        agent:
+          type: string
+          minLength: 1
+          maxLength: 246
+          pattern: '^[a-z0-9]([a-z0-9_-]*[a-z0-9])?$'
+          nullable: true
+        recorded:
+          type: boolean
+        line:
+          nullable: true
+          allOf:
+            - $ref: "#/components/schemas/TaskLine"
+
+    RoutingPolicyChangeRecord:
+      type: object
+      additionalProperties: false
+      description: >
+        The receipt of a routing policy change: the request's expected
+        revision, whether it recorded a new revision, and the policy current
+        after it. recorded false means the policy already held these orders.
+      required: [kind, command_id, device_id, expected_revision, recorded, policy]
+      properties:
+        kind:
+          type: string
+          enum: [set_routing_policy]
+        command_id:
+          type: string
+          minLength: 1
+        device_id:
+          type: string
+          minLength: 1
+        expected_revision:
+          type: integer
+          minimum: 1
+          nullable: true
+        recorded:
+          type: boolean
+        policy:
+          $ref: "#/components/schemas/RoutingPolicy"
+
     CommandRejection:
-      description: A decision or task concurrency conflict with replacement state.
+      description: A command conflict with the replacement state it was refused against.
       oneOf:
         - $ref: "#/components/schemas/StaleVersionRejection"
         - $ref: "#/components/schemas/StaleTaskRejection"
+        - $ref: "#/components/schemas/TaskLineChangeRejection"
+        - $ref: "#/components/schemas/RoutingPolicyRejection"
+
+    TaskLineChangeRejection:
+      description: >
+        A line change refused because an attempt of the role runs, with the
+        current task projection and epoch.
+      type: object
+      additionalProperties: false
+      required: [message, reason, replacement_task, sync_epoch]
+      properties:
+        message:
+          type: string
+        reason:
+          type: string
+          enum: [role_running]
+        replacement_task:
+          $ref: "#/components/schemas/TaskSnapshot"
+        sync_epoch:
+          type: string
+          minLength: 1
+
+    RoutingPolicyRejection:
+      description: >
+        A routing policy change refused because expected_revision is not the
+        current policy revision, with the current policy (null when none was
+        ever set).
+      type: object
+      additionalProperties: false
+      required: [message, current_policy]
+      properties:
+        message:
+          type: string
+        current_policy:
+          nullable: true
+          allOf:
+            - $ref: "#/components/schemas/RoutingPolicy"
 
     StaleTaskRejection:
       description: Current task projection and epoch for an obsolete prepared Stop.
@@ -4410,12 +4672,20 @@ components:
             - $ref: "#/components/schemas/CommandRecord"
             - $ref: "#/components/schemas/TaskSubmissionRecord"
             - $ref: "#/components/schemas/StopTaskRecord"
+            - $ref: "#/components/schemas/UsageRefreshRecord"
+            - $ref: "#/components/schemas/CollectorReassignmentRecord"
+            - $ref: "#/components/schemas/TaskLineChangeRecord"
+            - $ref: "#/components/schemas/RoutingPolicyChangeRecord"
           discriminator:
             propertyName: kind
             mapping:
               decision: "#/components/schemas/CommandRecord"
               submit_task: "#/components/schemas/TaskSubmissionRecord"
               stop_task: "#/components/schemas/StopTaskRecord"
+              refresh_usage: "#/components/schemas/UsageRefreshRecord"
+              reassign_collector: "#/components/schemas/CollectorReassignmentRecord"
+              change_task_line: "#/components/schemas/TaskLineChangeRecord"
+              set_routing_policy: "#/components/schemas/RoutingPolicyChangeRecord"
         revision:
           type: integer
           format: int64

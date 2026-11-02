@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"reflect"
 	"testing"
+	"time"
 
 	"github.com/freeside-ai/freeside/daemon/internal/domain"
 	"github.com/freeside-ai/freeside/daemon/internal/signet"
@@ -91,11 +92,14 @@ func TestStopCommandCrossKindCollisions(t *testing.T) {
 			t.Run(string(firstKind)+"/"+string(secondKind), func(t *testing.T) {
 				f := newFixture(t)
 				id := seedStopTask(t, f.store)
+				seedUsageEnrollment(t, f.store, operatorAt.Add(-time.Hour))
 				blobs, err := signet.NewBlobStore(t.TempDir())
 				if err != nil {
 					t.Fatal(err)
 				}
-				svc := signet.NewService(f.store, signet.WithBlobStore(blobs), signet.WithTaskSubmitter(&fakeTaskSubmitter{}))
+				svc := signet.NewService(f.store, signet.WithBlobStore(blobs), signet.WithTaskSubmitter(&fakeTaskSubmitter{}),
+					signet.WithUsageOperator(&recordingUsageOperator{}), signet.WithTaskLineChanger(engineTaskLineChanger),
+					signet.WithRoutingPolicySetter(engineRoutingPolicySetter))
 				command := func(kind domain.CommandKind) signet.ClientCommand {
 					switch kind {
 					case domain.CommandKindDecision:
@@ -104,6 +108,14 @@ func TestStopCommandCrossKindCollisions(t *testing.T) {
 						return submitTaskCommand("shared", "source", "")
 					case domain.CommandKindStopTask:
 						return stopCommand(t, f.store, id, "shared")
+					case domain.CommandKindRefreshUsage:
+						return refreshCommand("shared", "pool-a")
+					case domain.CommandKindReassignCollector:
+						return reassignCommand("shared", "pool-a", "enrollment-usage-1")
+					case domain.CommandKindChangeTaskLine:
+						return lineCommand("shared", id, new("codex-primary"))
+					case domain.CommandKindSetRoutingPolicy:
+						return policyCommand("shared", nil, "codex-primary")
 					}
 					t.Fatal("unknown kind")
 					return signet.ClientCommand{}

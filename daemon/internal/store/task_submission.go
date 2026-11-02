@@ -99,6 +99,9 @@ func (tx *WriteTx) PutTaskSubmission(ctx context.Context, submission domain.Task
 	if err := tx.rejectStopCommandID(ctx, submission.CommandID); err != nil {
 		return err
 	}
+	if err := tx.rejectRecordedCommandID(ctx, submission.CommandID); err != nil {
+		return err
+	}
 	if err := submission.Validate(); err != nil {
 		return fmt.Errorf("put task submission %q: %w", submission.CommandID, err)
 	}

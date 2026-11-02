@@ -36,6 +36,7 @@ func rewindUsagePools(t *testing.T, ctx context.Context, db *sql.DB) {
 func rewindUsageOperatorContract(t *testing.T, ctx context.Context, db *sql.DB) {
 	t.Helper()
 	for _, statement := range []string{
+		`DROP TABLE client_command_receipts`,
 		`DELETE FROM schema_migrations WHERE name = '0118_usage_operator_contract.sql'`,
 	} {
 		if _, err := db.ExecContext(ctx, statement); err != nil {
@@ -177,6 +178,7 @@ func TestUsagePoolsMigrationReleasesAbandonedShadowAdmissions(t *testing.T) {
 		t.Fatal(err)
 	}
 	for _, statement := range []string{
+		`DROP TABLE client_command_receipts`,
 		`DELETE FROM schema_migrations WHERE name = '0118_usage_operator_contract.sql'`,
 		`ALTER TABLE manual_submissions DROP COLUMN task_lines`,
 		`DELETE FROM schema_migrations WHERE name = '0117_manual_submission_task_lines.sql'`,

@@ -439,6 +439,9 @@ func (h httpHandler) submitCommand(w http.ResponseWriter, r *http.Request, authe
 		h.stopTaskCommand(w, r, request)
 	case domain.CommandKindSubmitTask:
 		h.submitTaskCommand(w, r, request)
+	case domain.CommandKindRefreshUsage, domain.CommandKindReassignCollector,
+		domain.CommandKindChangeTaskLine, domain.CommandKindSetRoutingPolicy:
+		h.operatorCommand(w, r, request, kindProbe.Kind)
 	case domain.CommandKindDecision, "":
 		// A missing kind is treated as a decision for clients that predate the
 		// discriminator; the decision arm is otherwise unchanged.
@@ -600,6 +603,58 @@ func (h httpHandler) submitTaskCommand(w http.ResponseWriter, r *http.Request, r
 		return
 	}
 	writeJSON(w, http.StatusOK, normalizeCommandResult(result))
+}
+
+// operatorCommand decodes one operator command's payload strictly and submits
+// it. None carries the decision envelope. An omitted agent or
+// expected_revision decodes as null, as an omitted pr_head_sha does for a
+// decision: the generated client leaves a nil member out of the body.
+func (h httpHandler) operatorCommand(
+	w http.ResponseWriter, r *http.Request, request clientCommandRequest, kind domain.CommandKind,
+) {
+	if request.ExpectedEntityVersion != nil || request.ExpectedBindings != nil {
+		writeJSON(w, http.StatusBadRequest, errorResponse{
+			Message: string(kind) + " command must not carry expected_entity_version or expected_bindings",
+		})
+		return
+	}
+	in := ClientCommand{CommandID: request.CommandID, DeviceID: request.DeviceID, Kind: kind}
+	var arm any
+	switch kind {
+	case domain.CommandKindRefreshUsage:
+		arm = &struct {
+			Kind domain.CommandKind `json:"kind"`
+			*RefreshUsagePayload
+		}{RefreshUsagePayload: &in.RefreshUsage}
+	case domain.CommandKindReassignCollector:
+		arm = &struct {
+			Kind domain.CommandKind `json:"kind"`
+			*ReassignCollectorPayload
+		}{ReassignCollectorPayload: &in.ReassignCollector}
+	case domain.CommandKindChangeTaskLine:
+		arm = &struct {
+			Kind domain.CommandKind `json:"kind"`
+			*ChangeTaskLinePayload
+		}{ChangeTaskLinePayload: &in.ChangeTaskLine}
+	case domain.CommandKindSetRoutingPolicy:
+		arm = &struct {
+			Kind domain.CommandKind `json:"kind"`
+			*SetRoutingPolicyPayload
+		}{SetRoutingPolicyPayload: &in.SetRoutingPolicy}
+	case domain.CommandKindDecision, domain.CommandKindSubmitTask, domain.CommandKindStopTask:
+		writeJSON(w, http.StatusInternalServerError, errorResponse{Message: "internal server error"})
+		return
+	}
+	if err := strictjson.Decode(request.Payload, arm, strictjson.RejectInvalidUTF8, strictjson.Limit(maxCommandBodyBytes)); err != nil {
+		writeJSON(w, http.StatusBadRequest, errorResponse{Message: err.Error()})
+		return
+	}
+	result, err := h.service.Submit(r.Context(), in)
+	if err != nil {
+		writeCommandError(w, h.service.blobs, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, result)
 }
 
 type capabilityContractRequest struct {
@@ -843,6 +898,22 @@ type errorResponse struct {
 }
 
 func writeCommandError(w http.ResponseWriter, blobs *BlobStore, err error) {
+	var roleRunning *TaskLineChangeRejectionError
+	if errors.As(err, &roleRunning) {
+		writeJSON(w, http.StatusConflict, struct {
+			Message string `json:"message"`
+			*TaskLineChangeRejectionError
+		}{Message: roleRunning.Error(), TaskLineChangeRejectionError: roleRunning})
+		return
+	}
+	var policyChanged *RoutingPolicyRejectionError
+	if errors.As(err, &policyChanged) {
+		writeJSON(w, http.StatusConflict, struct {
+			Message string `json:"message"`
+			*RoutingPolicyRejectionError
+		}{Message: policyChanged.Error(), RoutingPolicyRejectionError: policyChanged})
+		return
+	}
 	var staleTask *StaleTaskError
 	if errors.As(err, &staleTask) {
 		writeJSON(w, http.StatusConflict, struct {
@@ -910,7 +981,10 @@ func isCommandRequestError(err error) bool {
 		// it, so it is a request error like the unstored-digest case.
 		ErrInvalidDigest,
 		store.ErrActionNotOffered, store.ErrImmutableConflict,
-		ErrInvalidSubmitTaskPayload, ErrInvalidStopTaskPayload,
+		ErrInvalidSubmitTaskPayload, ErrInvalidStopTaskPayload, ErrInvalidOperatorCommandPayload,
+		// A collector must be enrolled on its pool, and a policy names only
+		// agents the daemon's tree carries: both are the client's request.
+		store.ErrEnrollmentNotOnPool, domain.ErrRoutingPolicyAgentUnknown,
 		domain.ErrEmptyID, domain.ErrEmptyField, domain.ErrInvalidAction, domain.ErrInvalidAnswerRoute,
 		domain.ErrNonPositive, domain.ErrDigestsNotCanonical, domain.ErrDuplicate,
 	} {

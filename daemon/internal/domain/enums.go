@@ -441,13 +441,18 @@ func (s DisplayNameSource) valid() bool {
 // CommandKind discriminates a ClientCommand's payload (plan §5.14). A decision
 // command decides an attention item (domain.Command); a submit_task command
 // creates or fetches a task from source text (domain.TaskSubmission, plan
-// §5.11). The wire contract keys a command_id uniquely across kinds.
+// §5.11). The four operator commands record a CommandReceipt. The wire
+// contract keys a command_id uniquely across kinds.
 type CommandKind string
 
 const (
-	CommandKindDecision   CommandKind = "decision"
-	CommandKindSubmitTask CommandKind = "submit_task"
-	CommandKindStopTask   CommandKind = "stop_task"
+	CommandKindDecision          CommandKind = "decision"
+	CommandKindSubmitTask        CommandKind = "submit_task"
+	CommandKindStopTask          CommandKind = "stop_task"
+	CommandKindRefreshUsage      CommandKind = "refresh_usage"
+	CommandKindReassignCollector CommandKind = "reassign_collector"
+	CommandKindChangeTaskLine    CommandKind = "change_task_line"
+	CommandKindSetRoutingPolicy  CommandKind = "set_routing_policy"
 )
 
 // AllCommandKinds lists every valid CommandKind; it is the single registration
@@ -456,11 +461,16 @@ var AllCommandKinds = []CommandKind{
 	CommandKindDecision,
 	CommandKindSubmitTask,
 	CommandKindStopTask,
+	CommandKindRefreshUsage,
+	CommandKindReassignCollector,
+	CommandKindChangeTaskLine,
+	CommandKindSetRoutingPolicy,
 }
 
 func (k CommandKind) valid() bool {
 	switch k {
-	case CommandKindDecision, CommandKindSubmitTask, CommandKindStopTask:
+	case CommandKindDecision, CommandKindSubmitTask, CommandKindStopTask, CommandKindRefreshUsage,
+		CommandKindReassignCollector, CommandKindChangeTaskLine, CommandKindSetRoutingPolicy:
 		return true
 	default:
 		return false

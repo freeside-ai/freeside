@@ -731,3 +731,24 @@ func TestGetPoolUsageObservationRequiresSyncMetadata(t *testing.T) {
 		})
 	}
 }
+
+// RequireEnrollmentOnPool names the two ways a reassignment target fails.
+func TestRequireEnrollmentOnPool(t *testing.T) {
+	t.Parallel()
+	st := openObservationStore(t)
+	recordPoolEnrollment(t, st, "auth-other", "enroll-other", "pool-2", observationAt)
+	check := func(id domain.ClientEnrollmentID) error {
+		return st.Read(t.Context(), func(tx *ReadTx) error {
+			return tx.RequireEnrollmentOnPool(t.Context(), observedPool, id)
+		})
+	}
+	if err := check("enroll-1"); err != nil {
+		t.Fatalf("collector on the pool = %v", err)
+	}
+	if err := check("enroll-other"); !errors.Is(err, ErrEnrollmentNotOnPool) {
+		t.Fatalf("enrollment on another pool = %v, want %v", err, ErrEnrollmentNotOnPool)
+	}
+	if err := check("enroll-missing"); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("missing enrollment = %v, want %v", err, ErrNotFound)
+	}
+}

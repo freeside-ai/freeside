@@ -62,6 +62,9 @@ func (tx *WriteTx) StopTask(ctx context.Context, request domain.StopTaskRequest,
 			return empty, Snapshot{}, ErrImmutableConflict
 		}
 	}
+	if err := tx.rejectRecordedCommandID(ctx, request.CommandID); err != nil {
+		return empty, Snapshot{}, err
+	}
 	task, err := tx.GetTask(ctx, request.TaskID)
 	if err != nil {
 		return empty, Snapshot{}, err

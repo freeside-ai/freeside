@@ -365,6 +365,16 @@ func (tx *ReadTx) ListPoolUsageObservationSnapshots(
 	return snapshots, nil
 }
 
+// RequireEnrollmentOnPool reports whether an enrollment's identity meters the
+// pool: ErrNotFound when the enrollment doesn't exist, ErrEnrollmentNotOnPool
+// when its identity meters another. A collector must pass it before a
+// reassignment names it.
+func (tx *ReadTx) RequireEnrollmentOnPool(
+	ctx context.Context, pool domain.UsagePoolID, id domain.ClientEnrollmentID,
+) error {
+	return tx.requireEnrollmentsOnPool(ctx, domain.PoolUsageObservation{Pool: pool, Collector: id})
+}
+
 // requireEnrollmentsOnPool holds the collector and every availability answer
 // to the identities' current pool.
 func (tx *ReadTx) requireEnrollmentsOnPool(ctx context.Context, observation domain.PoolUsageObservation) error {

@@ -8,3 +8,14 @@
 ALTER TABLE pool_usage_observations ADD COLUMN as_of_revision INTEGER NOT NULL DEFAULT 0;
 ALTER TABLE pool_usage_observations ADD COLUMN entity_version INTEGER NOT NULL DEFAULT 0;
 
+-- One receipt per accepted refresh_usage, reassign_collector,
+-- change_task_line, or set_routing_policy command, keyed by its command_id,
+-- which is unique across command kinds. body is the kind's record
+-- (domain.CommandReceipt); as_of_revision is the revision of the transaction
+-- that accepted it, which a replay returns unchanged.
+CREATE TABLE client_command_receipts (
+    command_id     TEXT    NOT NULL PRIMARY KEY CHECK (command_id <> ''),
+    kind           TEXT    NOT NULL CHECK (kind <> ''),
+    as_of_revision INTEGER NOT NULL CHECK (as_of_revision > 0),
+    body           TEXT    NOT NULL CHECK (body <> '')
+) STRICT;
