@@ -86,6 +86,9 @@ func TestLiveClaudeUsage(t *testing.T) {
 				}
 			})
 			save()
+			// A killed run skips every cleanup, so name the manifest before anything
+			// exists.
+			t.Logf("recovery manifest until cleanup: %s", filepath.Join(recovery, "resources.json"))
 			ctx, cancel := context.WithTimeout(t.Context(), 2*time.Minute)
 			defer cancel()
 			labels := []Label{{Key: "freeside.usage-probe", Value: name}}
@@ -175,7 +178,10 @@ func TestLiveClaudeUsage(t *testing.T) {
 					t.Fatal(err)
 				}
 			}
-			// Each secret remains in a private input directory, mounted read-only.
+			// A killed run skips t.TempDir cleanup too, so the manifest names this
+			// copy before it exists and until it is removed.
+			manifest["host_snapshot_copy"] = filepath.Join(auth, "token")
+			save()
 			if err := os.WriteFile(filepath.Join(auth, "token"), []byte(token), 0o400); err != nil { //nolint:gosec // fixed basename in private t.TempDir; token taints contents, never the path
 				t.Fatal("write private token input")
 			}
@@ -227,7 +233,7 @@ func TestLiveClaudeUsage(t *testing.T) {
 				Name: seeder, Image: image, NetworkDisabled: true, Labels: labels,
 				Size:    DefaultLaunchSize(LaunchConformance),
 				Mounts:  []Mount{{Type: MountVolume, Source: volume, Target: "/snapshot"}},
-				Command: []string{"sh", "-c", "set -eu; n=0; while [ ! -f /ready/ready ]; do n=$((n+1)); [ \"$n\" -lt 90 ]; sleep 1; done; cp -R /input/. /snapshot/; cp /auth/token /snapshot/token; chmod 0400 /snapshot/token; touch /seeded; sleep 90"},
+				Command: []string{"sh", "-c", "set -eu; n=0; while [ ! -f /ready/ready ]; do n=$((n+1)); [ \"$n\" -lt 90 ]; sleep 1; done; cp -R /input/. /snapshot/; cp /auth/token /snapshot/token; chmod 0400 /snapshot/token; rm /auth/token; touch /seeded; sleep 90"},
 			})
 			if err := rt.StartContainer(ctx, seeder); err != nil {
 				t.Fatal(err)
@@ -254,6 +260,12 @@ func TestLiveClaudeUsage(t *testing.T) {
 				}
 			}
 			waitFile(seeder, "/seeded")
+			// From here the only copy is the read-only volume the manifest names.
+			if err := os.Remove(filepath.Join(auth, "token")); err != nil {
+				t.Fatal("remove private token input")
+			}
+			manifest["host_snapshot_copy"] = "removed"
+			save()
 			// Stop the only writable attachment before mounting the snapshot read-only.
 			if err := rt.StopContainer(ctx, seeder); err != nil {
 				t.Fatal(err)
@@ -291,7 +303,22 @@ func TestLiveClaudeUsage(t *testing.T) {
 			if err := json.NewDecoder(bytes.NewReader(body)).Decode(&result); err != nil {
 				t.Fatal("invalid private capture")
 			}
-			if !claudeUsageAuthUnchanged(auth, config, token) {
+			// Read the token back from the snapshot the same way; it never leaves
+			// memory.
+			read := exec.CommandContext(ctx, bin, "exec", name, "cat", "/probe/token") //nolint:gosec // fixed command and test-owned container
+			tokenPipe, err := read.StdoutPipe()
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := read.Start(); err != nil {
+				t.Fatal("snapshot token unavailable")
+			}
+			snapshotToken, readErr := io.ReadAll(io.LimitReader(tokenPipe, 64<<10))
+			_ = tokenPipe.Close()
+			if err := read.Wait(); err != nil || readErr != nil {
+				t.Fatal("snapshot token read failed")
+			}
+			if !claudeUsageAuthUnchanged(snapshotToken, config, token) {
 				t.Fatal("auth input or store changed")
 			}
 			// The CLI and descendants have exited; include late body/relay errors

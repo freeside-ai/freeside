@@ -207,12 +207,17 @@ FREESIDE_WARD_LIVE_TEST=1 go -C daemon test ./internal/ward \
 The test skips unless opted in; missing inputs then fail. It creates fresh
 randomly named containers and host-only networks and checks labels and creation
 dates before cleanup. A private, non-secret recovery manifest survives failed
-cleanup; the test reports its path. Never delete a resource whose ownership
-cannot be proved. A networkless seeder populates a named snapshot volume, then
-stops before the probe mounts it read-only. The setup token stays on that
-snapshot. An empty, root-owned auth file and sticky parent directories prevent
-the dropped CLI identity from changing or replacing auth storage while allowing
-ordinary config writes. The driver tests both append and unlink rejection.
+cleanup. Each case logs its path before creating anything, because an
+interrupted run skips cleanup. Never delete a resource whose ownership cannot
+be proved. A networkless seeder populates a named snapshot volume, then stops
+before the probe mounts it read-only. Until seeding finishes the setup token
+also sits in a host temporary file; the manifest's `host_snapshot_copy` entry
+holds its path, and reads `removed` once the test deletes that file after
+seeding. From then on the snapshot holds the only stored copy, and the post-run
+auth check reads it back from the probe container through a private pipe. An
+empty, root-owned auth file and sticky parent directories prevent the dropped
+CLI identity from changing or replacing auth storage while allowing ordinary
+config writes. The driver tests both append and unlink rejection.
 A fresh environment excludes interactive login, API keys, refresh credentials
 and alternate backends. Ordinary scratch is disposable.
 
