@@ -376,6 +376,74 @@ import Testing
         #expect(RunDisplay.spendLine(absent) == nil)
     }
 
+    @Test func admissionFactsRenderAsTheAdmissionRecordedThem() {
+        let writer = RunFixtures.writerAdmission("inv-1", at: RunFixtures.screenshotInstant)
+        #expect(RunDisplay.admissionLine(writer) == "Claude Code · claude-opus-5-5 · effort high")
+        let rows = RunDisplay.admissionRows(writer)
+        #expect(
+            rows.map(\.label) == [
+                "Harness", "Model", "Effort", "Cost Owner", "Credential Mode", "Egress Profile",
+                "Isolation Class", "Operating Mode",
+            ])
+        #expect(
+            rows.map(\.value) == [
+                "Claude Code", "claude-opus-5-5", "High", "platform-team", "Subscription, contained",
+                "Provider only", "Fresh VM, read-only volume handoff", "Unattended",
+            ])
+    }
+
+    /// A fact the admission did not record reads as unavailable, never as a
+    /// value from current configuration (#979).
+    @Test func unrecordedAdmissionFactsReadUnavailable() {
+        let legacy = RunFixtures.legacyAdmission("inv-1", at: RunFixtures.screenshotInstant)
+        #expect(RunDisplay.admissionLine(legacy) == nil)
+        let values = Dictionary(uniqueKeysWithValues: RunDisplay.admissionRows(legacy).map { ($0.label, $0.value) })
+        for label in ["Harness", "Model", "Effort", "Cost Owner"] {
+            #expect(values[label] == RunDisplay.unavailable)
+        }
+        #expect(values["Operating Mode"] == "Attended")
+        #expect(values["Isolation Class"] == "Fresh VM, read-only volume handoff")
+        var unknown = legacy
+        unknown.isolation_class = "future_backend"
+        #expect(RunDisplay.admissionRows(unknown).first { $0.label == "Isolation Class" }?.value == "future_backend")
+    }
+
+    @Test func aReviewShowsItsIndependenceFromEachWritingRole() {
+        let review = RunFixtures.reviewerAdmission(
+            "review-1", at: RunFixtures.screenshotInstant, implementer: .differed, remediator: .unknown)
+        let rows = RunDisplay.admissionRows(review)
+        #expect(
+            rows.filter { $0.label == "Independence" }.map(\.value) == [
+                "Differed from implementer", "Unknown against remediator",
+            ])
+        // A review admission records no containment facts.
+        #expect(rows.first { $0.label == "Credential Mode" }?.value == RunDisplay.unavailable)
+        var matched = review
+        matched.independence = [.init(writing_role: .implementer, lineage: .matched)]
+        #expect(RunDisplay.admissionRows(matched).last?.value == "Matched implementer")
+    }
+
+    @Test func aClampedEffortNamesWhatTheHarnessWasPassed() {
+        var facts = RunFixtures.writerAdmission("inv-1", at: RunFixtures.screenshotInstant)
+        facts.requested_effort = .init(value1: .max)
+        facts.native_effort = "xhigh"
+        #expect(RunDisplay.admissionRows(facts).first { $0.label == "Effort" }?.value == "Max (passed as xhigh)")
+        facts.requested_effort = nil
+        #expect(RunDisplay.admissionRows(facts).first { $0.label == "Effort" }?.value == "xhigh")
+    }
+
+    @Test func theLatestImplementerAdmissionSkipsReviewsAndOtherRoles() throws {
+        let active = try #require(RunFixtures.defaultTimelines().first { $0.run_id == RunFixtures.activeRunID })
+        #expect(RunDisplay.latestImplementerAdmission(active)?.invocation_id == "inv-\(RunFixtures.activeRunID)-2")
+        #expect(RunDisplay.admission(for: "review-\(RunFixtures.activeRunID)-1", in: active)?.kind == .review)
+        var reviewsOnly = active
+        reviewsOnly.admissions.removeAll { $0.kind == .execution }
+        #expect(RunDisplay.latestImplementerAdmission(reviewsOnly) == nil)
+        let refreshed = RunFixtures.refreshedHistoryTimeline()
+        #expect(
+            RunDisplay.latestImplementerAdmission(refreshed)?.invocation_id == "inv-\(RunFixtures.refreshedRunID)-2")
+    }
+
     @Test func outcomeVocabularyStaysUnchanged() {
         let cases: [(Components.Schemas.RunOutcome, String)] = [
             (.pending, "In Progress"), (.published, "Ready"), (.completed, "Merged"),

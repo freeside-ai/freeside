@@ -1375,7 +1375,10 @@ public enum AttentionFixtures {
                             digest: MockContractValidation.capabilityManifestDigest(
                                 name: "Provider web read",
                                 egressProfile: "provider_web_read")),
-                    ]))
+                    ],
+                    admitted: .init(
+                        value1: RunFixtures.writerAdmission(
+                            "inv-\(key)", at: createdInstant.addingTimeInterval(-600)))))
             : nil
         let publishBlock: Components.Schemas.AttentionItem.publish_blockPayload? =
             type == .publish_blocked

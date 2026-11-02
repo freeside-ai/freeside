@@ -2386,6 +2386,20 @@
                                 disclosures: TaskHistoryFixtures.currentCampaignOpen(
                                     retryTimeline, identifiersOpen: true))
                     )))
+            // The Task fold open (#979): the current run's latest implementer
+            // admission follows Agent and Pool, as that admission recorded it.
+            for (name, width) in [("task-page-task-fold", CGFloat?.none), ("task-page-task-fold-390", 390)] {
+                let disclosures = TaskHistoryFixtures.currentCampaignOpen(retryTimeline)
+                disclosures.setExpanded(true, .task, taskID: retryTimeline.task_id)
+                surfaces.append(
+                    Surface(
+                        name: name,
+                        width: width,
+                        view: AnyView(
+                            TaskPageView(coordinator: coordinator, snapshot: retryTask, onOpenRun: { _ in })
+                                .screenshotContent(retryTimeline, disclosures: disclosures)
+                        )))
+            }
             // A remediation under way (#2100): the task's events return to
             // Implementation at the remediator's start, under the decision
             // that sent the findings there, and the open run card draws the

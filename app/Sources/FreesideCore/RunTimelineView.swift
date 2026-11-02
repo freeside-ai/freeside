@@ -189,6 +189,10 @@ struct RunTimelineView: View {
                 if let qualification = specificationApproval.qualification {
                     Text(qualification)
                 }
+                // A run with no billable observation yet shows no spend.
+                if let spend = RunDisplay.spendLine(snapshot.run) {
+                    Text("Spend: \(spend)")
+                }
             }
             .font(FreesideFont.cardBody)
             .foregroundStyle(Color.inkDim)
@@ -412,12 +416,19 @@ struct RunTimelineView: View {
     ) -> some View {
         let presentation = InvocationPresentation(invocation, asOf: timeline.as_of)
         let chip = StateChip(label: presentation.label, color: presentation.color, glyph: presentation.glyph)
+        let admission = RunDisplay.admission(for: invocation.invocation_id, in: timeline)
         let lines = VStack(alignment: .leading, spacing: 3) {
             Text(
                 attemptContext(invocationID: invocation.invocation_id, in: timeline)
                     ?? invocation.invocation_id
             )
             .font(FreesideFont.sans(.headline, weight: .semibold))
+            if let line = admission.flatMap(RunDisplay.admissionLine) {
+                Text(line)
+                    .font(FreesideFont.trailingSummary)
+                    .foregroundStyle(Color.inkDim)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
             // The observed time is freshness (the daemon's last look), not
             // the attempt's place in history; the "Observed" prefix says so.
             Text("Observed \(shortTime(invocation.observed_at))")
@@ -426,7 +437,7 @@ struct RunTimelineView: View {
                 .exactInstant(invocation.observed_at)
         }
         // Beside its chip an accessibility-size title breaks mid-word.
-        return Group {
+        return VStack(alignment: .leading, spacing: 8) {
             if dynamicTypeSize.isAccessibilitySize {
                 VStack(alignment: .leading, spacing: 6) {
                     lines
@@ -438,6 +449,15 @@ struct RunTimelineView: View {
                     Spacer()
                     chip
                 }
+            }
+            // What ran the attempt, as its admission recorded it (#979).
+            if let admission {
+                VStack(alignment: .leading, spacing: 6) {
+                    ForEach(Array(RunDisplay.admissionRows(admission).enumerated()), id: \.offset) { _, row in
+                        FactRow(label: row.label, value: row.value)
+                    }
+                }
+                .padding(.leading, 19)
             }
         }
     }

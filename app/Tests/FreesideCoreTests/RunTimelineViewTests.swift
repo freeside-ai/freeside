@@ -46,6 +46,24 @@ import Testing
         #expect(!RunReviewSection.ticks([], pinnedNow: nil))
     }
 
+    /// Each observed invocation of the active, ready, and completed runs
+    /// draws its admission under its row, and a reviewer records its
+    /// lineage against the implementer (MockServer parity, #979).
+    @Test func observedInvocationsCarryTheirAdmissions() throws {
+        let timelines = RunFixtures.defaultTimelines()
+        for runID in [RunFixtures.activeRunID, RunFixtures.readyRunID, RunFixtures.completedRunID] {
+            let timeline = try #require(timelines.first { $0.run_id == runID })
+            #expect(!timeline.invocations.isEmpty)
+            for invocation in timeline.invocations {
+                let admission = try #require(RunDisplay.admission(for: invocation.invocation_id, in: timeline))
+                #expect(RunDisplay.admissionLine(admission) != nil)
+            }
+        }
+        let active = try #require(timelines.first { $0.run_id == RunFixtures.activeRunID })
+        let review = try #require(active.admissions.first { $0.kind == .review })
+        #expect(review.independence?.first { $0.writing_role == .implementer }?.lineage == .differed)
+    }
+
     @Test func currentRunHandoffAgreesWithTaskRowAndHistoricalRunsKeepTheirPhase() throws {
         let snapshot = try #require(RunFixtures.defaultRuns().first { $0.run.id == RunFixtures.readyRunID })
         let task = try #require(TaskFixtures.defaultTasks().first { $0.task.id == snapshot.run.task_id }).task

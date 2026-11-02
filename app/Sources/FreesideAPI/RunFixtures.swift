@@ -165,7 +165,15 @@ public enum RunFixtures {
                     status: .completed, live: false, observed_at: date(3_700)),
             ],
             review: .init(value1: .init(rounds: [round])),
-            billable_cost_so_far: nil, admissions: [])
+            billable_cost_so_far: nil,
+            admissions: [
+                writerAdmission("inv-\(refreshedRunID)-1", at: date(60)),
+                writerAdmission("inv-\(refreshedRunID)-2", at: date(1_200)),
+                writerAdmission(remediationInvocation, role: .remediator, at: date(2_400)),
+                reviewerAdmission(
+                    round.invocation_id, at: date(3_600),
+                    implementer: .differed, remediator: .differed),
+            ])
     }
 
     public static func completedTimeline() -> Components.Schemas.RunTimeline {
@@ -184,7 +192,57 @@ public enum RunFixtures {
                     status: .completed, live: false, observed_at: date(720))
             ],
             completion: .init(value1: completedFacts),
-            billable_cost_so_far: .init(value1: completedCost), admissions: [])
+            billable_cost_so_far: .init(value1: completedCost),
+            admissions: [writerAdmission("inv-\(completedRunID)-1", at: date(60))])
+    }
+
+    /// What ran a writing invocation, as its execution admission recorded
+    /// it: Claude Code under the operator's subscription.
+    public static func writerAdmission(
+        _ invocationID: String, role: Components.Schemas.RoleName = .implementer, at admittedAt: Date
+    ) -> Components.Schemas.InvocationAdmissionFacts {
+        .init(
+            invocation_id: invocationID, kind: .execution, role: .init(value1: role),
+            admitted_at: admittedAt,
+            agent_digest: .init(value1: "sha256:" + String(repeating: "c", count: 64)),
+            selection_source: .init(value1: .lineup), harness: .init(value1: .claude_code),
+            model: "claude-opus-5-5", requested_effort: .init(value1: .high), native_effort: "high",
+            cost_owner: "platform-team", lineage_group: "anthropic",
+            credential_mode: .init(value1: .subscription_contained),
+            egress_profile: .init(value1: .provider_only), operating_mode: .init(value1: .unattended),
+            isolation_class: "fresh_vm_read_only_volume_handoff")
+    }
+
+    /// What ran a review, as its review admission recorded it: Codex, whose
+    /// lineage is compared against each writing role's. A review admission
+    /// records no credential mode, egress, operating mode, or isolation.
+    public static func reviewerAdmission(
+        _ invocationID: String, at admittedAt: Date,
+        implementer: Components.Schemas.LineageRelation, remediator: Components.Schemas.LineageRelation
+    ) -> Components.Schemas.InvocationAdmissionFacts {
+        .init(
+            invocation_id: invocationID, kind: .review, role: .init(value1: .reviewer),
+            admitted_at: admittedAt,
+            agent_digest: .init(value1: "sha256:" + String(repeating: "d", count: 64)),
+            selection_source: .init(value1: .lineup), harness: .init(value1: .codex_cli),
+            model: "gpt-5.2-codex", requested_effort: .init(value1: .high), native_effort: "high",
+            cost_owner: "platform-team", lineage_group: "openai",
+            independence: [
+                .init(writing_role: .implementer, lineage: implementer),
+                .init(writing_role: .remediator, lineage: remediator),
+            ])
+    }
+
+    /// An execution admission recorded before admissions carried an agent
+    /// binding: every agent fact is null and renders as unavailable.
+    public static func legacyAdmission(
+        _ invocationID: String, at admittedAt: Date
+    ) -> Components.Schemas.InvocationAdmissionFacts {
+        .init(
+            invocation_id: invocationID, kind: .execution, admitted_at: admittedAt,
+            credential_mode: .init(value1: .subscription_contained),
+            egress_profile: .init(value1: .provider_only), operating_mode: .init(value1: .attended_dev),
+            isolation_class: "fresh_vm_read_only_volume_handoff")
     }
 
     private static let completedFacts = Components.Schemas.WorkUnitCompletionFacts(
@@ -324,7 +382,17 @@ public enum RunFixtures {
                         reviewRound(.running, round: 2),
                     ])),
                 completion: nil,
-                billable_cost_so_far: .init(value1: activeCost), admissions: []),
+                billable_cost_so_far: .init(value1: activeCost),
+                admissions: [
+                    writerAdmission("inv-\(activeRunID)-1", at: date(60)),
+                    writerAdmission("inv-\(activeRunID)-2", at: date(1_200)),
+                    reviewerAdmission(
+                        "review-\(activeRunID)-1", at: date(1_800),
+                        implementer: .differed, remediator: .unknown),
+                    reviewerAdmission(
+                        "review-\(activeRunID)-2", at: date(1_800),
+                        implementer: .differed, remediator: .unknown),
+                ]),
             .init(
                 as_of_revision: 12, as_of: date(1_080), run_id: readyRunID,
                 milestones: [
@@ -339,7 +407,8 @@ public enum RunFixtures {
                         status: .completed, live: false, observed_at: date(1_080))
                 ],
                 completion: nil,
-                billable_cost_so_far: nil, admissions: []),
+                billable_cost_so_far: nil,
+                admissions: [writerAdmission("inv-\(readyRunID)-1", at: date(60))]),
             .init(
                 as_of_revision: 12, as_of: date(600), run_id: "run-oriole-121",
                 milestones: [
@@ -353,7 +422,8 @@ public enum RunFixtures {
                         status: .failed, live: false, observed_at: date(600))
                 ],
                 completion: nil,
-                billable_cost_so_far: nil, admissions: []),
+                billable_cost_so_far: nil,
+                admissions: [legacyAdmission("inv-run-oriole-121-1", at: date(60))]),
             // The legacy run's timeline is empty: no milestones synthesized,
             // matching the daemon's no-backfill projection of an unobserved run.
             .init(
@@ -361,7 +431,8 @@ public enum RunFixtures {
                 milestones: [],
                 invocations: [],
                 completion: nil,
-                billable_cost_so_far: nil, admissions: []),
+                billable_cost_so_far: nil,
+                admissions: []),
             .init(
                 as_of_revision: 12, as_of: date(900), run_id: "run-freeside-656",
                 milestones: [
