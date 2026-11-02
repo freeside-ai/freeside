@@ -58,7 +58,7 @@ func TestHandoffCreatesEveryContainerAtTheDeclaredSize(t *testing.T) {
 
 func TestHandoffNamesAWriterKilledAtItsMemoryLimit(t *testing.T) {
 	fx := newHandoffFixture(t)
-	fx.journalled()
+	j := fx.journalled()
 	var logs bytes.Buffer
 	fx.cfg.Logger = slog.New(slog.NewTextHandler(&logs, nil))
 	hs := markerWriterSpec(fx, "137")
@@ -74,6 +74,17 @@ func TestHandoffNamesAWriterKilledAtItsMemoryLimit(t *testing.T) {
 	if limit.Class != LaunchWriter || limit.Size != hs.Size {
 		t.Fatalf("named %s at %s, want writer at %s", limit.Class, limit.Size, hs.Size)
 	}
+	// The journal carries the kill, amended before the delete erases the
+	// boot log, so a crash at any point before the result commits still
+	// recovers it.
+	if rec := j.snapshot(hs.RunID); rec == nil || !rec.WriterMemoryLimitKill {
+		t.Fatalf("journal record = %+v, want the kill amended", rec)
+	}
+	kill := slices.Index(fx.rt.calls, "journal-writer-memory-limit-kill "+hs.RunID)
+	deleted := slices.Index(fx.rt.calls, "delete-container "+names.Agent)
+	if kill < 0 || deleted < 0 || kill > deleted {
+		t.Fatalf("kill amendment at %d, agent delete at %d; want the amendment first:\n%v", kill, deleted, fx.rt.calls)
+	}
 	if got := strings.Count(logs.String(), `msg="ward launch"`); got != 1 {
 		t.Fatalf("launch records = %d, want 1:\n%s", got, logs.String())
 	}
@@ -87,7 +98,7 @@ func TestHandoffNamesAWriterKilledAtItsMemoryLimit(t *testing.T) {
 
 func TestHandoffDoesNotNameAnOrdinaryWriterFailure(t *testing.T) {
 	fx := newHandoffFixture(t)
-	fx.journalled()
+	j := fx.journalled()
 	hs := markerWriterSpec(fx, "137")
 	fx.rt.writerStatus = 137
 	names := namesFor(hs.RunID)
@@ -97,6 +108,9 @@ func TestHandoffDoesNotNameAnOrdinaryWriterFailure(t *testing.T) {
 	_, err := fx.runSpec(t, hs)
 	if !errors.Is(err, ErrWriterFailed) || errors.Is(err, ErrMemoryLimit) {
 		t.Fatalf("Handoff error = %v, want only ErrWriterFailed", err)
+	}
+	if rec := j.snapshot(hs.RunID); rec == nil || rec.WriterMemoryLimitKill {
+		t.Fatalf("journal record = %+v, want a failure with no kill", rec)
 	}
 }
 

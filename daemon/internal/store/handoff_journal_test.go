@@ -289,6 +289,54 @@ func TestHandoffJournalProofAmendmentsAreImmutable(t *testing.T) {
 	}
 }
 
+// The memory-limit kill is amended before the writer's delete, ahead of the
+// failure status it later names; retries converge, and the status amendment
+// keeps it.
+func TestHandoffWriterMemoryLimitKillPrecedesTheFailure(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	s := openWithIdentity(t, testAuthIdentity())
+	rec := journalRecord("killed-run")
+	if err := s.WriteInternal(ctx, func(tx *store.InternalTx) error {
+		if err := tx.BeginHandoffJournal(ctx, rec); err != nil {
+			return err
+		}
+		for range 2 {
+			if err := tx.MarkHandoffWriterMemoryLimitKill(ctx, rec.RunID); err != nil {
+				return err
+			}
+		}
+		return tx.MarkHandoffWriterFailed(ctx, rec.RunID, 137)
+	}); err != nil {
+		t.Fatalf("mark writer kill and failure: %v", err)
+	}
+	var got store.HandoffJournalRecord
+	if err := s.Read(ctx, func(tx *store.ReadTx) error {
+		var err error
+		got, err = tx.GetHandoffJournal(ctx, rec.RunID)
+		return err
+	}); err != nil {
+		t.Fatalf("GetHandoffJournal: %v", err)
+	}
+	if !got.WriterMemoryLimitKill || got.WriterFailureStatus == nil || *got.WriterFailureStatus != 137 {
+		t.Fatalf("record = %+v, want status 137 with the kill kept", got)
+	}
+}
+
+func TestBeginHandoffJournalRejectsAKill(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	s := openWithIdentity(t, testAuthIdentity())
+	rec := journalRecord("killed-run")
+	rec.WriterMemoryLimitKill = true
+	err := s.WriteInternal(ctx, func(tx *store.InternalTx) error {
+		return tx.BeginHandoffJournal(ctx, rec)
+	})
+	if err == nil {
+		t.Fatal("BeginHandoffJournal accepted a record already carrying a kill")
+	}
+}
+
 // TestReadHeldHandoffJournalLifecycle covers the #1585 atomic open: the
 // read hold and its journal reference land together, the credential proof is
 // accepted for the shared window, and a second run on the same identity opens

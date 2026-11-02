@@ -65,3 +65,40 @@ func TestFailureEvidenceDispositionSurvivesStoreReopen(t *testing.T) {
 		}
 	}
 }
+
+// The memory-limit kill rides the journal body, amended before the status,
+// so a recovery after a restart still names it once the container is gone.
+func TestWriterMemoryLimitKillSurvivesStoreReopen(t *testing.T) {
+	ctx := context.Background()
+	path := filepath.Join(t.TempDir(), "freeside.db")
+	st := storetest.Open(t, path, store.Options{})
+	adapters, err := wardstore.New(st)
+	if err != nil {
+		t.Fatal(err)
+	}
+	rec := ward.HandoffJournalRecord{RunID: "killed-run", OwnershipToken: strings.Repeat("01", 16), SpecDigest: strings.Repeat("ab", 32), OpenedAt: time.Now().UTC()}
+	if err := adapters.Journal.Begin(ctx, rec); err != nil {
+		t.Fatal(err)
+	}
+	if err := adapters.Journal.MarkWriterMemoryLimitKill(ctx, rec.RunID); err != nil {
+		t.Fatal(err)
+	}
+	if err := adapters.Journal.MarkWriterFailed(ctx, rec.RunID, 137); err != nil {
+		t.Fatal(err)
+	}
+	if err := st.Close(); err != nil {
+		t.Fatal(err)
+	}
+	st = storetest.Open(t, path, store.Options{})
+	adapters, err = wardstore.New(st)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got, err := adapters.Journal.Get(ctx, rec.RunID)
+	if err != nil || !got.WriterMemoryLimitKill || got.WriterFailureStatus == nil || *got.WriterFailureStatus != 137 {
+		t.Fatalf("reopened kill: %+v, %v", got, err)
+	}
+	if err := st.Close(); err != nil {
+		t.Fatal(err)
+	}
+}

@@ -1447,6 +1447,13 @@ func (a *Journal) MarkCancellationRequested(ctx context.Context, runID string) e
 	})
 }
 
+// MarkWriterMemoryLimitKill commits the stopped writer's memory-limit kill.
+func (a *Journal) MarkWriterMemoryLimitKill(ctx context.Context, runID string) error {
+	return a.store.WriteInternal(ctx, func(tx *store.InternalTx) error {
+		return tx.MarkHandoffWriterMemoryLimitKill(ctx, runID)
+	})
+}
+
 // MarkWriterFailed commits the authenticated nonzero launcher status.
 func (a *Journal) MarkWriterFailed(ctx context.Context, runID string, status int) error {
 	return a.store.WriteInternal(ctx, func(tx *store.InternalTx) error {
@@ -1489,6 +1496,7 @@ func toStoreRecord(rec ward.HandoffJournalRecord) store.HandoffJournalRecord {
 		WriterComplete:             rec.WriterComplete,
 		CancellationRequested:      rec.CancellationRequested,
 		WriterFailureStatus:        rec.WriterFailureStatus,
+		WriterMemoryLimitKill:      rec.WriterMemoryLimitKill,
 		ExportDir:                  rec.ExportDir,
 		OpenedAt:                   rec.OpenedAt.UTC(),
 	}
@@ -1554,6 +1562,7 @@ func fromStoreRecord(rec store.HandoffJournalRecord) ward.HandoffJournalRecord {
 		WriterComplete:             rec.WriterComplete,
 		CancellationRequested:      rec.CancellationRequested,
 		WriterFailureStatus:        rec.WriterFailureStatus,
+		WriterMemoryLimitKill:      rec.WriterMemoryLimitKill,
 		ExportDir:                  rec.ExportDir,
 		OpenedAt:                   rec.OpenedAt,
 	}

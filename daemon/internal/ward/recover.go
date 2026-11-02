@@ -60,7 +60,11 @@ type RecoveryResult struct {
 	// exported outcomes.
 	LossCause string
 	// FailureStatus is populated only for RecoveryFailed.
-	FailureStatus   int
+	FailureStatus int
+	// MemoryLimitKill reports, only for RecoveryFailed, that the journal
+	// recorded the failed writer's container killed at its declared memory
+	// limit.
+	MemoryLimitKill bool
 	FailureEvidence *FailureEvidence
 	// ExportDir holds the freshly verified manifest and blobs; the caller
 	// owns the directory and removes it when done.
@@ -631,10 +635,10 @@ func (b *Backend) Recover(ctx context.Context, runID string, hs HandoffSpec) (re
 		if hs.Agent.OutcomeMarkerPath != "" {
 			// A dead daemon cannot recover the proxy-health half of success,
 			// but it can still classify failure. Quiesce the exact recorded
-			// writer, then authenticate the durable workspace marker.
-			if err := b.reapRecoveredContainer(
-				ctx, names.Agent, &st.agent, st.ownershipLabel,
-			); err != nil {
+			// writer, journaling a memory-limit kill its boot log names
+			// before the delete, then authenticate the durable workspace
+			// marker.
+			if err := b.reapRecoveredAgent(ctx, rec.RunID, names.Agent, &st.agent, st.ownershipLabel); err != nil {
 				return nil, err
 			}
 			ours, werr := b.workspaceOurs(ctx, names.Workspace, st)
@@ -977,6 +981,38 @@ func (b *Backend) verifyRecordedWriterAbsent(ctx context.Context, id string, cla
 // squatter blocks the fresh create, and an unprovable row authorizes
 // nothing.
 func (b *Backend) reapRecoveredContainer(ctx context.Context, id string, claim *objectClaim, ownershipLabel Label) error {
+	return b.reapRecovered(ctx, id, claim, ownershipLabel, nil)
+}
+
+// reapRecoveredAgent is reapRecoveredContainer for the recorded writer. It
+// also reads an ours-classified writer's boot log once the writer is stopped
+// and journals a memory-limit kill before the delete, because the log goes
+// with the container. A writer already gone was deleted after the live path
+// journaled any kill; one whose stop fails leaves the kill unobserved, so
+// the plain failure stands.
+func (b *Backend) reapRecoveredAgent(
+	ctx context.Context, runID, id string, claim *objectClaim, ownershipLabel Label,
+) error {
+	return b.reapRecovered(ctx, id, claim, ownershipLabel, func(candidate ContainerSummary) error {
+		if candidate.State != StateStopped && b.rt.StopContainer(ctx, candidate.ID) == nil {
+			candidate.State = StateStopped
+		}
+		if candidate.State != StateStopped || !b.runtimeOps.memoryLimitKilled(ctx, candidate.ID).memoryLimitKill {
+			return nil
+		}
+		if err := b.cfg.Journal.MarkWriterMemoryLimitKill(ctx, runID); err != nil {
+			return fmt.Errorf("journal recovered writer memory-limit kill: %w", err)
+		}
+		return nil
+	})
+}
+
+// reapRecovered runs beforeDelete, when set, on an ours-classified leftover
+// before deleting it.
+func (b *Backend) reapRecovered(
+	ctx context.Context, id string, claim *objectClaim, ownershipLabel Label,
+	beforeDelete func(ContainerSummary) error,
+) error {
 	ctrs, err := b.rt.ListContainers(ctx)
 	if err != nil {
 		return failf(CheckRecovery, "list containers: %v", err)
@@ -995,6 +1031,11 @@ func (b *Backend) reapRecoveredContainer(ctx context.Context, id string, claim *
 	}
 	switch ev {
 	case evidenceOurs:
+		if beforeDelete != nil {
+			if err := beforeDelete(candidate); err != nil {
+				return err
+			}
+		}
 		if rerr := b.reapContainer(ctx, candidate); rerr != nil {
 			return failf(CheckRecovery, "remove leftover %q: %v", id, rerr)
 		}
