@@ -134,6 +134,26 @@ func (e *ImageUpkeepPendingError) Error() string {
 // Is matches ErrImageUpkeepPending.
 func (e *ImageUpkeepPendingError) Is(target error) bool { return target == ErrImageUpkeepPending }
 
+// ErrQuotaWindowExhausted holds a parked attempt: the provider refused the
+// attempt before it for quota, and the pool's record still marks the refused
+// window exhausted. Errors carrying it are QuotaWindowExhaustedError, which
+// names the window and its reset.
+var ErrQuotaWindowExhausted = errors.New("the refused quota window has not reset")
+
+// QuotaWindowExhaustedError is an ErrQuotaWindowExhausted hold with the typed
+// fact the run's quota_window_exhausted hold records.
+type QuotaWindowExhaustedError struct {
+	Hold domain.QuotaWindowHold
+}
+
+func (e *QuotaWindowExhaustedError) Error() string {
+	return fmt.Sprintf("%s: %s on %s resets at %s", ErrQuotaWindowExhausted,
+		e.Hold.Window, e.Hold.Pool, e.Hold.ResetsAt.Format(time.RFC3339))
+}
+
+// Is matches ErrQuotaWindowExhausted.
+func (e *QuotaWindowExhaustedError) Is(target error) bool { return target == ErrQuotaWindowExhausted }
+
 // dispatchHoldReason classifies a dispatch-path hold or refusal error onto
 // the closed reason vocabulary. Only the code crosses into the observation;
 // an error that classifies onto no code records no hold and keeps its
@@ -152,6 +172,8 @@ func dispatchHoldReason(err error) (domain.RunHoldReason, bool) {
 		return domain.HoldUsagePoolExhausted, true
 	case errors.Is(err, ErrImageUpkeepPending):
 		return domain.HoldImageUpkeepPending, true
+	case errors.Is(err, ErrQuotaWindowExhausted):
+		return domain.HoldQuotaWindowExhausted, true
 	case backendConformanceRefusal(err):
 		return domain.HoldBackendNotConformant, true
 	case errors.Is(err, domain.ErrBackupHealthUnavailable),
@@ -240,12 +262,13 @@ func admissionRefusalDetail(err error) *domain.AdmissionRefusal {
 
 // holdDetail is the typed fact beside a hold reason: an admission refusal
 // beside admission_policy_refused, what image upkeep waits on beside
-// image_upkeep_pending, the full pool beside usage_pool_exhausted, and none of
-// them otherwise.
+// image_upkeep_pending, the full pool beside usage_pool_exhausted, the
+// exhausted window beside quota_window_exhausted, and none of them otherwise.
 type holdDetail struct {
 	refusal     *domain.AdmissionRefusal
 	imageUpkeep *domain.ImageUpkeepHold
 	usagePool   *domain.UsagePoolID
+	quotaWindow *domain.QuotaWindowHold
 }
 
 // holdDetailFor derives the detail an error's hold records.
@@ -260,6 +283,11 @@ func holdDetailFor(err error) holdDetail {
 	if errors.As(err, &exhausted) {
 		pool := exhausted.Pool
 		detail.usagePool = &pool
+	}
+	var quota *QuotaWindowExhaustedError
+	if errors.As(err, &quota) {
+		hold := quota.Hold
+		detail.quotaWindow = &hold
 	}
 	return detail
 }
@@ -313,8 +341,8 @@ func (e *Engine) observeInvocation(
 }
 
 // observeRunHold records one paced hold observation for a run. detail is
-// empty except beside admission_policy_refused, image_upkeep_pending, and
-// usage_pool_exhausted (holdDetailFor).
+// empty except beside admission_policy_refused, image_upkeep_pending,
+// usage_pool_exhausted, and quota_window_exhausted (holdDetailFor).
 func (e *Engine) observeRunHold(
 	ctx context.Context, runID domain.RunID,
 	invocationID domain.InvocationID, reason domain.RunHoldReason, detail holdDetail,
@@ -349,6 +377,10 @@ func (e *Engine) observeRunHold(
 		if detail.usagePool != nil {
 			attrs = append(attrs, "usage_pool", string(*detail.usagePool))
 		}
+		if quota := detail.quotaWindow; quota != nil {
+			attrs = append(attrs, "usage_pool", string(quota.Pool), "window", quota.Window,
+				"resets_at", quota.ResetsAt.Format(time.RFC3339))
+		}
 		e.logger.Info("run hold recorded", attrs...)
 	}
 	return nil
@@ -382,6 +414,9 @@ func holdPaceState(reason domain.RunHoldReason, detail holdDetail) string {
 	if pool := detail.usagePool; pool != nil {
 		state += "+" + string(*pool)
 	}
+	if quota := detail.quotaWindow; quota != nil {
+		state += "+" + string(quota.Pool) + "+" + quota.Window + "+" + quota.ResetsAt.Format(time.RFC3339Nano)
+	}
 	return state
 }
 
@@ -394,7 +429,7 @@ func recordRunHold(
 ) error {
 	hold := domain.RunHoldObservation{
 		RunID: runID, Reason: reason, Detail: detail.refusal, ImageUpkeep: detail.imageUpkeep,
-		UsagePool: detail.usagePool, FirstObservedAt: now, LastObservedAt: now,
+		UsagePool: detail.usagePool, QuotaWindow: detail.quotaWindow, FirstObservedAt: now, LastObservedAt: now,
 	}
 	if invocationID != "" {
 		hold.InvocationID = &invocationID

@@ -1198,6 +1198,9 @@ type productionTerminalRecord struct {
 	// engine records names it; omitempty keeps rows written before causes
 	// existed byte-identical.
 	Cause domain.FailureCause `json:"cause,omitempty"`
+	// QuotaRefusal is the refused window and reset a quota failure named;
+	// omitempty keeps rows written before it existed byte-identical.
+	QuotaRefusal *domain.QuotaRefusal `json:"quota_refusal,omitempty"`
 }
 
 // decodeProductionTerminal reconstructs and re-gates one stored terminal
@@ -1241,6 +1244,18 @@ func decodeProductionTerminal(
 		return productionTerminalRecord{}, fmt.Errorf(
 			"terminal record %q carries status %q: %w",
 			entry.IdempotencyKey, terminal.Status, exec.ErrInvalidStatus)
+	}
+	// The resume gate reads the refusal's window, so a stored refusal is held
+	// to the rule StageResult.Validate applied before it was recorded.
+	if refusal := terminal.QuotaRefusal; refusal != nil {
+		if terminal.Status != exec.StatusFailed || terminal.Cause != domain.FailureCauseQuota {
+			return productionTerminalRecord{}, fmt.Errorf("terminal record %q: %w",
+				entry.IdempotencyKey, exec.ErrQuotaRefusalWithoutQuota)
+		}
+		if err := refusal.Validate(); err != nil {
+			return productionTerminalRecord{}, fmt.Errorf("terminal record %q quota refusal: %w",
+				entry.IdempotencyKey, err)
+		}
 	}
 	return terminal, nil
 }
@@ -1438,6 +1453,7 @@ func (e *Engine) settleProductionAttempt(
 		terminal.Artifacts = result.Artifacts
 		terminal.Summary = result.Summary
 		terminal.Cause = productionTerminalCause(result.Status, result.Cause)
+		terminal.QuotaRefusal = result.QuotaRefusal
 	}
 	if terminal.Status == exec.StatusCompleted {
 		// Re-gated at the last point the engine controls before the
@@ -1551,6 +1567,7 @@ func (e *Engine) authenticateProductionTerminal(
 		actual.Artifacts = result.Artifacts
 		actual.Summary = result.Summary
 		actual.Cause = productionTerminalCause(result.Status, result.Cause)
+		actual.QuotaRefusal = result.QuotaRefusal
 	}
 	if !sameProductionTerminal(recorded, actual) {
 		return fmt.Errorf("terminal record for %q disagrees with collected outcome: %w",
@@ -1571,7 +1588,17 @@ func sameProductionTerminal(recorded, actual productionTerminalRecord) bool {
 		slices.Equal(recorded.Artifacts, actual.Artifacts) &&
 		recorded.Summary == actual.Summary &&
 		productionTerminalCause(recorded.Status, recorded.Cause) ==
-			productionTerminalCause(actual.Status, actual.Cause)
+			productionTerminalCause(actual.Status, actual.Cause) &&
+		sameQuotaRefusal(recorded.QuotaRefusal, actual.QuotaRefusal)
+}
+
+func sameQuotaRefusal(recorded, actual *domain.QuotaRefusal) bool {
+	if recorded == nil || actual == nil {
+		return recorded == actual
+	}
+	return recorded.Window == actual.Window &&
+		(recorded.ResetsAt == nil) == (actual.ResetsAt == nil) &&
+		(recorded.ResetsAt == nil || recorded.ResetsAt.Equal(*actual.ResetsAt))
 }
 
 // productionTerminalCause is the cause a terminal with this status records:
@@ -1667,7 +1694,11 @@ func (e *Engine) recordProductionTerminalWithCompletion(
 		return false, fmt.Errorf("record terminal for %q: %w", terminal.InvocationID, err)
 	}
 	inserted := false
+	// parked is the hold a quota refusal parks the run's next attempt under,
+	// in place of the failure card (quotaParkHold).
+	var parked *domain.QuotaWindowHold
 	err = e.store.Write(ctx, func(tx *store.WriteTx) error {
+		parked = nil
 		if terminal.Status == exec.StatusCompleted {
 			// Repeat the current-policy gate in the terminal write
 			// transaction. The earlier check closes the driver-call window;
@@ -1713,35 +1744,44 @@ func (e *Engine) recordProductionTerminalWithCompletion(
 			if err != nil {
 				return err
 			}
-			if facts != nil && e.admission != nil {
-				policy, policyErr := tx.GetResolvedPolicy(ctx, run.ID)
-				admission, admissionErr := tx.GetExecutionAdmissionRecord(ctx, terminal.InvocationID)
-				if policyErr != nil {
-					return policyErr
+			// A parked quota refusal raises no card: the next attempt waits
+			// under a hold instead. The outcome above still records the cause.
+			if completion == nil {
+				if parked, err = quotaParkHold(ctx, tx, run, terminal, createdAt); err != nil {
+					return err
 				}
-				if admissionErr != nil {
-					return admissionErr
+			}
+			if parked == nil {
+				if facts != nil && e.admission != nil {
+					policy, policyErr := tx.GetResolvedPolicy(ctx, run.ID)
+					admission, admissionErr := tx.GetExecutionAdmissionRecord(ctx, terminal.InvocationID)
+					if policyErr != nil {
+						return policyErr
+					}
+					if admissionErr != nil {
+						return admissionErr
+					}
+					facts.OfferedManifests = append(facts.OfferedManifests, offerableManifests(
+						e.admission.environment.EnforceableEgressProfiles, policy, admission.EgressProfile,
+					)...)
 				}
-				facts.OfferedManifests = append(facts.OfferedManifests, offerableManifests(
-					e.admission.environment.EnforceableEgressProfiles, policy, admission.EgressProfile,
-				)...)
-			}
-			names, err := tx.DisplayNamesFor(ctx, run.ProjectID, domain.Subject{
-				Type: domain.SubjectRun, ID: domain.SubjectID(run.ID), RunID: &run.ID,
-			})
-			if err != nil {
-				return err
-			}
-			claims, err := failureTranscriptClaims(ctx, tx, facts)
-			if err != nil {
-				return err
-			}
-			item, err := productionFailureItem(run, terminal, createdAt, facts, names, claims)
-			if err != nil {
-				return err
-			}
-			if err := tx.PutAttentionItem(ctx, item); err != nil {
-				return err
+				names, err := tx.DisplayNamesFor(ctx, run.ProjectID, domain.Subject{
+					Type: domain.SubjectRun, ID: domain.SubjectID(run.ID), RunID: &run.ID,
+				})
+				if err != nil {
+					return err
+				}
+				claims, err := failureTranscriptClaims(ctx, tx, facts)
+				if err != nil {
+					return err
+				}
+				item, err := productionFailureItem(run, terminal, createdAt, facts, names, claims)
+				if err != nil {
+					return err
+				}
+				if err := tx.PutAttentionItem(ctx, item); err != nil {
+					return err
+				}
 			}
 		}
 		// The terminal milestone rides the recording transaction; only the
@@ -1759,6 +1799,11 @@ func (e *Engine) recordProductionTerminalWithCompletion(
 				InvocationID: &invocation, Terminal: &observed,
 				RecordedAt: time.Now().UTC(),
 			}); err != nil {
+				return err
+			}
+		}
+		if parked != nil {
+			if err := parkProductionAttempt(ctx, tx, run, *parked, time.Now().UTC()); err != nil {
 				return err
 			}
 		}
@@ -1802,7 +1847,7 @@ func (e *Engine) recordProductionTerminalWithCompletion(
 		return false, fmt.Errorf("record terminal for %q: %w", terminal.InvocationID, err)
 	}
 	if inserted && terminal.Status != exec.StatusCompleted && terminal.Status != exec.StatusBlocked &&
-		e.inference != nil {
+		parked == nil && e.inference != nil {
 		// A diagnostic claim is advisory-only. Failure to produce or retain one
 		// cannot roll back the durable failure fact or make the engine unavailable.
 		workCtx, finish, workErr := e.beginTaskWork(ctx, run)
