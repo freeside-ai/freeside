@@ -417,6 +417,10 @@ func (w *productionPublicationWorkflow) reconcileUnpublishedReentry(
 	}
 	if !storedFound {
 		stored, err = w.verifyReentry(ctx, verifyTask, cycle, checkoutDir)
+		if verificationMemoryLimit(err) {
+			return w.blockUnpublishedReentry(
+				ctx, task, binding.run, checkpoint, checkpoint.Artifacts, productionBlockMemoryLimit)
+		}
 		if stop := unpublishedReentryVerifyStop(task, newBase, err); stop {
 			return w.blockUnpublishedReentry(
 				ctx, task, binding.run, checkpoint, checkpoint.Artifacts, productionBlockBaseAdvanced)

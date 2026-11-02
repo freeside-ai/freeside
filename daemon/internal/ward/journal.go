@@ -223,6 +223,12 @@ type HandoffJournalRecord struct {
 	// journal-bound nonce marker. It is amended before cleanup can erase the
 	// marker and outranks later marker absence during recovery.
 	WriterFailureStatus *int `json:"writer_failure_status"`
+	// WriterMemoryLimitKill records that the stopped writer's boot log named
+	// a kill at its container's declared memory limit. It is amended before
+	// the container's delete, so a recovery after a crash still names the
+	// kill once the container and its log are gone. It only names a failure
+	// WriterFailureStatus records.
+	WriterMemoryLimitKill bool `json:"writer_memory_limit_kill,omitempty"`
 	// FailureEvidenceDigest binds a scanned private transcript. Unavailable
 	// records a permanent capture refusal; neither means capture is pending.
 	FailureEvidenceDigest      string `json:"failure_evidence_digest,omitempty"`
@@ -385,6 +391,10 @@ type HandoffJournal interface {
 	// MarkCancellationRequested durably records daemon cancellation before
 	// teardown can stop the writer.
 	MarkCancellationRequested(ctx context.Context, runID string) error
+	// MarkWriterMemoryLimitKill durably records that the stopped writer's
+	// boot log named a memory-limit kill, before the container's delete
+	// erases the log.
+	MarkWriterMemoryLimitKill(ctx context.Context, runID string) error
 	// MarkWriterFailed durably records an authenticated nonzero launcher
 	// status before cleanup removes its workspace evidence.
 	MarkWriterFailed(ctx context.Context, runID string, status int) error

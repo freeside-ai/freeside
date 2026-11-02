@@ -442,6 +442,103 @@ func TestRecoverUnamendedNonzeroMarkerCommitsFailure(t *testing.T) {
 	fx.assertReaped(t)
 }
 
+// TestRecoverUnamendedMemoryLimitKillNamesTheKill closes the same crash
+// window for a writer killed at its memory limit: recovery reads the
+// recorded agent's boot log and journals the kill before deleting it, so
+// the journal and the result both carry the kill. A writer still running at recovery is stopped
+// first, and its log read once it is stopped.
+func TestRecoverUnamendedMemoryLimitKillNamesTheKill(t *testing.T) {
+	for _, running := range []bool{false, true} {
+		t.Run(fmt.Sprintf("running=%v", running), func(t *testing.T) {
+			fx := newRecoveryFixture(t)
+			hs := testHandoffSpec()
+			hs.Agent.OutcomeMarkerPath = fx.cfg.WorkspaceTarget + "/.freeside/evidence/writer-outcome"
+			hs.Agent.Command = []string{"sh", "-c", "run; echo " + WriterNoncePlaceholder}
+			fx.openRecord(t, hs)
+			names := namesFor(hs.RunID)
+			labels := fx.runLabels(hs.RunID)
+			fx.worldVolume(t, names.Workspace, labels)
+			fx.worldContainer(t, ContainerSpec{
+				Size: testContainerSize,
+				Name: names.Agent, Image: hs.Agent.Image, Command: hs.Agent.Command, Labels: labels,
+			}, running)
+			fx.rt.writerStatus = 137
+			fx.rt.bootLogs = map[string][]byte{names.Agent: bootLogKilling(t, names.Agent)}
+
+			res, err := fx.recover(t, hs.RunID, hs)
+			if err != nil {
+				t.Fatalf("Recover = %v, want committed failure", err)
+			}
+			if res.Outcome != RecoveryFailed || res.FailureStatus != 137 || !res.MemoryLimitKill {
+				t.Fatalf("result = %+v, want failed status 137 naming the kill", res)
+			}
+			if rec := fx.j.snapshot(hs.RunID); !rec.WriterMemoryLimitKill {
+				t.Fatalf("record = %+v, want the durable kill", rec)
+			}
+			kill := slices.Index(fx.rt.calls, "journal-writer-memory-limit-kill "+hs.RunID)
+			deleted := slices.Index(fx.rt.calls, "delete-container "+names.Agent)
+			if kill < 0 || deleted < 0 || kill > deleted {
+				t.Fatalf("kill amendment at %d, agent delete at %d; want the amendment first:\n%v", kill, deleted, fx.rt.calls)
+			}
+			fx.wantClosed(t, hs.RunID, HandoffFailed)
+			fx.assertReaped(t)
+		})
+	}
+}
+
+// TestRecoverJournaledMemoryLimitKillNamesTheFailure covers the window
+// after the live daemon journaled the kill and deleted the writer, but
+// before it amended the failure status: the boot log is gone, the journal
+// carries the kill, and recovery classifies the status from the marker.
+func TestRecoverJournaledMemoryLimitKillNamesTheFailure(t *testing.T) {
+	fx := newRecoveryFixture(t)
+	hs := testHandoffSpec()
+	hs.Agent.OutcomeMarkerPath = fx.cfg.WorkspaceTarget + "/.freeside/evidence/writer-outcome"
+	hs.Agent.Command = []string{"sh", "-c", "run; echo " + WriterNoncePlaceholder}
+	fx.openRecord(t, hs)
+	if err := fx.j.MarkWriterMemoryLimitKill(context.Background(), hs.RunID); err != nil {
+		t.Fatal(err)
+	}
+	fx.worldVolume(t, namesFor(hs.RunID).Workspace, fx.runLabels(hs.RunID))
+	fx.rt.writerStatus = 137
+
+	res, err := fx.recover(t, hs.RunID, hs)
+	if err != nil {
+		t.Fatalf("Recover = %v, want committed failure", err)
+	}
+	if res.Outcome != RecoveryFailed || res.FailureStatus != 137 || !res.MemoryLimitKill {
+		t.Fatalf("result = %+v, want failed status 137 naming the kill", res)
+	}
+	fx.wantClosed(t, hs.RunID, HandoffFailed)
+	fx.assertReaped(t)
+}
+
+// TestRecoverAmendedMemoryLimitKillReportsIt covers the window after the
+// live daemon amended both the kill and the failure status: the journal
+// alone carries the result.
+func TestRecoverAmendedMemoryLimitKillReportsIt(t *testing.T) {
+	fx := newRecoveryFixture(t)
+	hs := testHandoffSpec()
+	hs.Agent.OutcomeMarkerPath = fx.cfg.WorkspaceTarget + "/.freeside/evidence/writer-outcome"
+	hs.Agent.Command = []string{"sh", "-c", "run; echo " + WriterNoncePlaceholder}
+	fx.openRecord(t, hs)
+	if err := fx.j.MarkWriterMemoryLimitKill(context.Background(), hs.RunID); err != nil {
+		t.Fatal(err)
+	}
+	if err := fx.j.MarkWriterFailed(context.Background(), hs.RunID, 137); err != nil {
+		t.Fatal(err)
+	}
+
+	res, err := fx.recover(t, hs.RunID, hs)
+	if err != nil {
+		t.Fatalf("Recover = %v, want committed failure", err)
+	}
+	if res.Outcome != RecoveryFailed || res.FailureStatus != 137 || !res.MemoryLimitKill {
+		t.Fatalf("result = %+v, want failed status 137 naming the kill", res)
+	}
+	fx.wantClosed(t, hs.RunID, HandoffFailed)
+}
+
 // TestRecoverLegacyPreWriterCompleteCommitsLoss proves an open journal from
 // the pre-upgrade digest encoding remains tear-downable. The caller supplies
 // the only safe current-only values: explicit vendor-instruction absence and

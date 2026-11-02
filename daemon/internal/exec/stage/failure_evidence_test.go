@@ -45,7 +45,7 @@ func TestFailedWriterEvidenceCommitsLiveAndRecovers(t *testing.T) {
 	if err != nil || !ok || len(restored.Result.Artifacts) != 1 || restored.Result.Artifacts[0] != got.Artifacts[0] {
 		t.Fatalf("restored: %+v, %v, %v", restored, ok, err)
 	}
-	if _, err := d.failedWriterResult(context.Background(), in, recovered); err != nil {
+	if _, err := d.failedWriterResult(context.Background(), in, recovered, ward.ContainerSize{}); err != nil {
 		t.Fatalf("idempotent evidence persistence: %v", err)
 	}
 }
@@ -58,7 +58,7 @@ func TestFailedWriterEvidencePersistenceFailureRemainsRetryable(t *testing.T) {
 	_, err := d.failedWriterResult(context.Background(), in, &ward.RecoveryResult{
 		Outcome: ward.RecoveryFailed, FailureStatus: 1,
 		FailureEvidence: &ward.FailureEvidence{Body: body, Digest: contentaddr.Sum(body)},
-	})
+	}, ward.ContainerSize{})
 	if !errors.Is(err, ErrRecoveryRetryable) {
 		t.Fatalf("error: %v", err)
 	}
@@ -75,7 +75,7 @@ func TestFailedWriterRejectsConflictingEvidence(t *testing.T) {
 		{Body: []byte("hidden"), Unavailable: true},
 		{Body: []byte{0xff}, Digest: contentaddr.Sum([]byte{0xff})},
 	} {
-		if _, err := d.failedWriterResult(context.Background(), in, &ward.RecoveryResult{Outcome: ward.RecoveryFailed, FailureStatus: 1, FailureEvidence: evidence}); err == nil {
+		if _, err := d.failedWriterResult(context.Background(), in, &ward.RecoveryResult{Outcome: ward.RecoveryFailed, FailureStatus: 1, FailureEvidence: evidence}, ward.ContainerSize{}); err == nil {
 			t.Fatal("accepted invalid evidence")
 		}
 	}

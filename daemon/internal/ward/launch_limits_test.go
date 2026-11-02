@@ -7,6 +7,8 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"os"
+	osexec "os/exec"
 	"path/filepath"
 	"slices"
 	"strings"
@@ -58,7 +60,7 @@ func TestHandoffCreatesEveryContainerAtTheDeclaredSize(t *testing.T) {
 
 func TestHandoffNamesAWriterKilledAtItsMemoryLimit(t *testing.T) {
 	fx := newHandoffFixture(t)
-	fx.journalled()
+	j := fx.journalled()
 	var logs bytes.Buffer
 	fx.cfg.Logger = slog.New(slog.NewTextHandler(&logs, nil))
 	hs := markerWriterSpec(fx, "137")
@@ -74,6 +76,17 @@ func TestHandoffNamesAWriterKilledAtItsMemoryLimit(t *testing.T) {
 	if limit.Class != LaunchWriter || limit.Size != hs.Size {
 		t.Fatalf("named %s at %s, want writer at %s", limit.Class, limit.Size, hs.Size)
 	}
+	// The journal carries the kill, amended before the delete erases the
+	// boot log, so a crash at any point before the result commits still
+	// recovers it.
+	if rec := j.snapshot(hs.RunID); rec == nil || !rec.WriterMemoryLimitKill {
+		t.Fatalf("journal record = %+v, want the kill amended", rec)
+	}
+	kill := slices.Index(fx.rt.calls, "journal-writer-memory-limit-kill "+hs.RunID)
+	deleted := slices.Index(fx.rt.calls, "delete-container "+names.Agent)
+	if kill < 0 || deleted < 0 || kill > deleted {
+		t.Fatalf("kill amendment at %d, agent delete at %d; want the amendment first:\n%v", kill, deleted, fx.rt.calls)
+	}
 	if got := strings.Count(logs.String(), `msg="ward launch"`); got != 1 {
 		t.Fatalf("launch records = %d, want 1:\n%s", got, logs.String())
 	}
@@ -87,7 +100,7 @@ func TestHandoffNamesAWriterKilledAtItsMemoryLimit(t *testing.T) {
 
 func TestHandoffDoesNotNameAnOrdinaryWriterFailure(t *testing.T) {
 	fx := newHandoffFixture(t)
-	fx.journalled()
+	j := fx.journalled()
 	hs := markerWriterSpec(fx, "137")
 	fx.rt.writerStatus = 137
 	names := namesFor(hs.RunID)
@@ -97,6 +110,9 @@ func TestHandoffDoesNotNameAnOrdinaryWriterFailure(t *testing.T) {
 	_, err := fx.runSpec(t, hs)
 	if !errors.Is(err, ErrWriterFailed) || errors.Is(err, ErrMemoryLimit) {
 		t.Fatalf("Handoff error = %v, want only ErrWriterFailed", err)
+	}
+	if rec := j.snapshot(hs.RunID); rec == nil || rec.WriterMemoryLimitKill {
+		t.Fatalf("journal record = %+v, want a failure with no kill", rec)
 	}
 }
 
@@ -364,6 +380,73 @@ func TestProjectImageRoomDeclaresItsSizeAndNamesAMemoryLimitKill(t *testing.T) {
 			}
 		})
 	}
+}
+
+// The engine's disposition matches the kill on the error verify.Verify
+// returns, so the room's MemoryLimitError must survive the verifier's
+// wrapping: a recipe command whose container the guest kernel killed at the
+// limit reaches the caller as the kill, not as a failed step (#1617).
+func TestVerifyReturnsTheRoomsMemoryLimitKill(t *testing.T) {
+	size := DefaultLaunchSize(LaunchVerification)
+	runtime := newFakeRuntime(t)
+	var calls [][]string
+	room := newProjectImageRoom(
+		"container", verificationProjectImage(t, []string{"prepare"}), runtime,
+		verificationRunner(t, runtime, []verify.StepResult{{}, {ExitCode: 137}}, &calls),
+		nil, verify.DefaultMaxRoomOutputBytes, size,
+	)
+	runtime.bootLogs = map[string][]byte{"verification-2": bootLogKilling(t, "verification-2")}
+	checkout, base, head := verificationCandidateRepo(t)
+
+	_, err := verify.Verify(t.Context(), checkout, verify.Options{
+		HeadSHA: head, BaseSHA: base, InvocationID: "inv-verify",
+		RecipeSource: verify.ConfigRecipe([]byte(`{"commands": [["verify"]], "capture": "none"}`)),
+		Room:         room,
+	})
+	var limit *MemoryLimitError
+	if !errors.As(err, &limit) || limit.Class != LaunchVerification || limit.Size != size {
+		t.Fatalf("Verify = %v; want the room's verification MemoryLimitError at %s", err, size)
+	}
+}
+
+// verificationCandidateRepo builds a checkout at a base commit with a
+// candidate commit on top, as the importer leaves it, under a git
+// environment that inherits nothing but PATH.
+func verificationCandidateRepo(t *testing.T) (dir, base, head string) {
+	t.Helper()
+	dir = t.TempDir()
+	git := func(args ...string) string {
+		t.Helper()
+		cmd := osexec.Command("git", args...) //nolint:gosec // G204: test fixture running git over a test-owned repo
+		cmd.Dir = dir
+		cmd.Env = []string{
+			"PATH=" + os.Getenv("PATH"), "HOME=" + t.TempDir(),
+			"GIT_CONFIG_GLOBAL=" + os.DevNull, "GIT_CONFIG_NOSYSTEM=1",
+			"GIT_AUTHOR_NAME=test", "GIT_AUTHOR_EMAIL=test@example.invalid",
+			"GIT_COMMITTER_NAME=test", "GIT_COMMITTER_EMAIL=test@example.invalid",
+		}
+		out, err := cmd.CombinedOutput()
+		if err != nil {
+			t.Fatalf("git %s: %v\n%s", strings.Join(args, " "), err, out)
+		}
+		return strings.TrimSpace(string(out))
+	}
+	git("init", "-q", "-b", "main", "--object-format=sha1")
+	if err := os.WriteFile(filepath.Join(dir, "README.md"), []byte("base\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	git("add", "-A")
+	git("commit", "-q", "-m", "base")
+	base = git("rev-parse", "HEAD")
+	if err := os.WriteFile(filepath.Join(dir, "main.go"), []byte("package main\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	git("add", "-A")
+	git("commit", "-q", "-m", "candidate")
+	head = git("rev-parse", "HEAD")
+	git("update-ref", "refs/freeside/candidate", head)
+	git("reset", "-q", "--hard", base)
+	return dir, base, head
 }
 
 // A production room is always bound to verification ownership, whose finish

@@ -358,6 +358,21 @@ func (j *fakeJournal) MarkFailureEvidence(_ context.Context, runID, digest strin
 	return nil
 }
 
+func (j *fakeJournal) MarkWriterMemoryLimitKill(_ context.Context, runID string) error {
+	j.mu.Lock()
+	defer j.mu.Unlock()
+	j.recordCall("journal-writer-memory-limit-kill " + runID)
+	if j.failMark != nil {
+		return j.failMark
+	}
+	rec, err := j.open(runID)
+	if err != nil {
+		return err
+	}
+	rec.WriterMemoryLimitKill = true
+	return nil
+}
+
 func (j *fakeJournal) MarkWriterFailed(_ context.Context, runID string, status int) error {
 	j.mu.Lock()
 	defer j.mu.Unlock()

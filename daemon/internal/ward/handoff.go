@@ -772,8 +772,16 @@ func (b *Backend) Handoff(ctx context.Context, hs HandoffSpec) (result *HandoffR
 	}
 	st.stall.finish()
 	st.stall = nil
-	// The boot log goes with the container, so read it before the delete.
+	// The boot log goes with the container, so read it before the delete,
+	// and journal a kill before the delete too: a crash before the failure
+	// amendment then still names it. A failed write fails the handoff, and
+	// teardown closes it as a loss rather than an unnamed failure.
 	st.agentLaunch = b.runtimeOps.memoryLimitKilled(ctx, names.Agent)
+	if st.agentLaunch.memoryLimitKill && st.journalOpen {
+		if err := b.cfg.Journal.MarkWriterMemoryLimitKill(ctx, hs.RunID); err != nil {
+			return nil, fmt.Errorf("journal writer memory-limit kill: %w", err)
+		}
+	}
 	if err := b.rt.DeleteContainer(ctx, names.Agent); err != nil {
 		return nil, failf(CheckWriterTermination, "delete stopped agent: %v", err)
 	}

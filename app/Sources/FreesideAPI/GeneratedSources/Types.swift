@@ -5870,6 +5870,7 @@ public enum Components {
             case identity_parallelism = "identity_parallelism"
             case image_upkeep_pending = "image_upkeep_pending"
             case usage_pool_exhausted = "usage_pool_exhausted"
+            case verification_memory_limit = "verification_memory_limit"
         }
         /// What an image_upkeep_pending hold waits on, mirrored from domain.ImageUpkeepPending (plan §5.7, Project-image upkeep): the upkeep job's rebuild, an adoption card, or a maintenance task.
         ///
@@ -6165,6 +6166,7 @@ public enum Components {
             case provider_unavailable = "provider_unavailable"
             case invalid_configuration = "invalid_configuration"
             case contract_contradiction = "contract_contradiction"
+            case memory_limit = "memory_limit"
             case unknown = "unknown"
         }
         /// Why the daemon could not carry a completed, exported invocation's output forward. A separate vocabulary from FailureCause, which rides on an execution outcome that never sits beside an export. It has no unknown member: every writer names its cause.

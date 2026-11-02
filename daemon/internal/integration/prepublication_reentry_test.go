@@ -14,6 +14,7 @@ import (
 	"github.com/freeside-ai/freeside/daemon/internal/inference"
 	inferencefake "github.com/freeside-ai/freeside/daemon/internal/inference/fake"
 	"github.com/freeside-ai/freeside/daemon/internal/store"
+	"github.com/freeside-ai/freeside/daemon/internal/ward"
 )
 
 // advanceBaseBeforePublication moves the target branch after the run was
@@ -376,6 +377,35 @@ func TestUnpublishedReentryVerificationFailureBlocks(t *testing.T) {
 	p.assertUnpublishedReentryBlocked(t, successor, domain.PublicationBlockBaseAdvancedVerification)
 	if len(reviews.requests) != 1 || p.room.runs != 2 {
 		t.Fatalf("failed re-entry reviewed %d times, verified %d times, want 1 and 2",
+			len(reviews.requests), p.room.runs)
+	}
+}
+
+// TestUnpublishedReentryVerificationMemoryLimitBlocks: a merge whose
+// verification room is killed at its memory limit would meet the same limit
+// on every retry, so the re-entry blocks naming the limit, with nothing
+// published, and no later pass verifies again.
+func TestUnpublishedReentryVerificationMemoryLimitBlocks(t *testing.T) {
+	t.Parallel()
+	p := newProductionPublicationHarness(t, "")
+	p.startAndRecordExport(t)
+	advanced, reviews := p.advanceBaseBeforePublication(t, "UPSTREAM.md", "upstream change\n")
+	if _, err := p.reconcileLanes(); err != nil {
+		t.Fatal(err)
+	}
+	successor := p.unpublishedReentry(t, advanced)
+	p.room.runErr = &ward.MemoryLimitError{
+		Class: ward.LaunchVerification, Size: ward.DefaultLaunchSize(ward.LaunchVerification),
+		Cause: errors.New("verification container exited 137"),
+	}
+	for range 3 {
+		if _, err := p.reconcileLanes(); err != nil {
+			t.Fatal(err)
+		}
+	}
+	p.assertUnpublishedReentryBlocked(t, successor, domain.PublicationBlockVerificationMemoryLimit)
+	if len(reviews.requests) != 1 || p.room.runs != 2 {
+		t.Fatalf("killed re-entry reviewed %d times, verified %d times, want 1 and 2",
 			len(reviews.requests), p.room.runs)
 	}
 }

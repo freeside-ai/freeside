@@ -28,6 +28,7 @@ const (
 	FailureCauseProviderUnavailable   FailureCause = "provider_unavailable"
 	FailureCauseInvalidConfiguration  FailureCause = "invalid_configuration"
 	FailureCauseContractContradiction FailureCause = "contract_contradiction"
+	FailureCauseMemoryLimit           FailureCause = "memory_limit"
 	FailureCauseUnknown               FailureCause = "unknown"
 )
 
@@ -41,6 +42,7 @@ var AllFailureCauses = []FailureCause{
 	FailureCauseProviderUnavailable,
 	FailureCauseInvalidConfiguration,
 	FailureCauseContractContradiction,
+	FailureCauseMemoryLimit,
 	FailureCauseUnknown,
 }
 
@@ -49,7 +51,7 @@ func (c FailureCause) valid() bool {
 	case FailureCauseQuota, FailureCauseCredentialExpired, FailureCauseCredentialRevoked,
 		FailureCauseServiceCapacity, FailureCauseProviderUnavailable,
 		FailureCauseInvalidConfiguration, FailureCauseContractContradiction,
-		FailureCauseUnknown:
+		FailureCauseMemoryLimit, FailureCauseUnknown:
 		return true
 	default:
 		return false
@@ -166,6 +168,11 @@ func DecideFailureDisposition(cause FailureCause, facts FailureFacts) FailureDis
 		return FailureDispositionAttention
 	case FailureCauseContractContradiction:
 		return FailureDispositionFailLoud
+	case FailureCauseMemoryLimit:
+		// Every agent of a launch class runs at the class's declared size, so
+		// no alternate escapes the limit; a retry at a larger size is the
+		// capacity card's (#1598), not a disposition here.
+		return FailureDispositionAttention
 	}
 	return FailureDispositionAttention
 }

@@ -571,6 +571,7 @@ import Testing
             .provider_unavailable: "Provider unavailable",
             .invalid_configuration: "Invalid configuration",
             .contract_contradiction: "Contract contradiction",
+            .memory_limit: "Memory limit reached",
             .unknown: "Unknown",
         ]
         #expect(Set(labels.keys) == Set(Components.Schemas.FailureCause.allCases))

@@ -19,6 +19,7 @@ import (
 	"github.com/freeside-ai/freeside/daemon/internal/store"
 	"github.com/freeside-ai/freeside/daemon/internal/store/storetest"
 	"github.com/freeside-ai/freeside/daemon/internal/verify"
+	"github.com/freeside-ai/freeside/daemon/internal/ward"
 )
 
 func reentrySuccessorForTest(
@@ -383,6 +384,43 @@ func TestReentryStopsOnBaseTheImageCannotServe(t *testing.T) {
 		if reason, stop := reentryUnservedBaseReason(task, base, cause); stop || reason != "" {
 			t.Errorf("%v: stop = %t, reason = %q; want an error the lane sees", cause, stop, reason)
 		}
+	}
+}
+
+// A re-entered cycle whose verification room was killed at its memory limit
+// stops on a readable item, and an unpublished re-entry blocks on the
+// memory-limit reason: either retry would verify at the same size. Only the
+// verification class counts; a writer's or review's kill is not this cycle's.
+func TestReentryStopsOnAVerificationMemoryLimitKill(t *testing.T) {
+	t.Parallel()
+	task := newReentryTask("project-reentry", reentrySuccessorForTest(
+		productionReadyItemID("run-reentry"), domain.ReadinessInvalidationBaseAdvanced))
+	base := task.Successor.Reentry.BaseSHA
+	kill := func(class ward.LaunchClass) error {
+		return fmt.Errorf("clean re-entry verification: %w", &ward.MemoryLimitError{
+			Class: class, Size: ward.DefaultLaunchSize(class), Cause: errors.New("exited 137"),
+		})
+	}
+	reason, stop := reentryMemoryLimitReason(task, base, kill(ward.LaunchVerification))
+	if !stop || !strings.Contains(reason, task.HeadSHA) || !strings.Contains(reason, base) ||
+		!strings.Contains(reason, ward.PolicyVerificationMemoryMiB) {
+		t.Errorf("stop = %t, reason = %q", stop, reason)
+	}
+	for _, cause := range []error{
+		nil, kill(ward.LaunchWriter), kill(ward.LaunchReview), verify.ErrGitPlumbing,
+		productionPublicationRetryableError(errors.New("runtime unavailable")),
+	} {
+		if reason, stop := reentryMemoryLimitReason(task, base, cause); stop || reason != "" {
+			t.Errorf("%v: stop = %t, reason = %q; want no memory-limit stop", cause, stop, reason)
+		}
+	}
+	facts, err := definitivePublishBlockFacts(productionBlockMemoryLimit)
+	if err != nil || facts.HoldReason == nil || *facts.HoldReason != domain.HoldVerificationMemoryLimit ||
+		facts.TrustRule != nil {
+		t.Fatalf("memory-limit block facts = %+v, %v", facts, err)
+	}
+	if cause, ok := productionBlockReason(productionBlockMemoryLimit); !ok || cause != domain.HoldVerificationMemoryLimit {
+		t.Fatalf("memory-limit block observation = %q, %t", cause, ok)
 	}
 }
 

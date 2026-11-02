@@ -162,6 +162,7 @@ type HandoffJournalRecord struct {
 	WriterComplete             bool                        `json:"writer_complete"`
 	CancellationRequested      bool                        `json:"cancellation_requested"`
 	WriterFailureStatus        *int                        `json:"writer_failure_status"`
+	WriterMemoryLimitKill      bool                        `json:"writer_memory_limit_kill,omitempty"`
 	FailureEvidenceDigest      string                      `json:"failure_evidence_digest,omitempty"`
 	FailureEvidenceUnavailable bool                        `json:"failure_evidence_unavailable,omitempty"`
 	State                      *HandoffJournalState        `json:"state"`
@@ -305,6 +306,7 @@ func validateNewHandoffJournal(rec HandoffJournalRecord) error {
 	if rec.ObservedBaseSHA != "" || rec.CredentialPreDigest != "" ||
 		rec.FailureEvidenceDigest != "" || rec.FailureEvidenceUnavailable ||
 		rec.WriterComplete || rec.CancellationRequested || rec.WriterFailureStatus != nil ||
+		rec.WriterMemoryLimitKill ||
 		rec.State != nil || rec.Instructions != nil ||
 		rec.ExportDir != "" || rec.Outcome != nil {
 		return errors.New("begin handoff journal: new record carries unearned progress")
@@ -554,6 +556,17 @@ func (tx *InternalTx) MarkHandoffCancellationRequested(
 ) error {
 	return tx.amendHandoffJournal(ctx, runID, func(rec *HandoffJournalRecord) error {
 		rec.CancellationRequested = true
+		return nil
+	})
+}
+
+// MarkHandoffWriterMemoryLimitKill commits that the stopped writer's boot
+// log named a kill at its container's memory limit. Ward amends it before
+// deleting the container, because the log goes with the delete; the bit
+// only names a failure the status amendment later records. Retries converge.
+func (tx *InternalTx) MarkHandoffWriterMemoryLimitKill(ctx context.Context, runID string) error {
+	return tx.amendHandoffJournal(ctx, runID, func(rec *HandoffJournalRecord) error {
+		rec.WriterMemoryLimitKill = true
 		return nil
 	})
 }

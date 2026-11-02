@@ -37,6 +37,8 @@ func definitivePublishBlockFacts(reason string) (*domain.PublishBlockFacts, erro
 	case productionBlockBaseAdvanced, productionBlockReentryConflict,
 		productionBlockReentryVerification, productionBlockReentryRoundLimit:
 		return publishBlockTrustRule(domain.TrustRuleTargetBaseAdvanced), nil
+	case productionBlockMemoryLimit:
+		return publishBlockHoldReason(domain.HoldVerificationMemoryLimit), nil
 	default:
 		return nil, domain.ErrParentKeyMismatch
 	}

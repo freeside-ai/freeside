@@ -984,6 +984,7 @@ package enum AttentionDisplay {
         case .provider_unavailable: return "Provider unavailable"
         case .invalid_configuration: return "Invalid configuration"
         case .contract_contradiction: return "Contract contradiction"
+        case .memory_limit: return "Memory limit reached"
         case .unknown: return "Unknown"
         }
     }

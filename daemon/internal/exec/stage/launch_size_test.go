@@ -105,25 +105,75 @@ func TestHandoffSpecIgnoresAProviderChosenSize(t *testing.T) {
 	}
 }
 
+// A writer killed at its memory limit records the memory_limit cause and a
+// summary naming the limit, the size, and the status, both on the live path
+// and after a restart before the result commits: ward's journal, not the
+// live handoff error, carries the kill to the recovered result.
 func TestWriterMemoryLimitKillNamesTheFailedResult(t *testing.T) {
 	size := ward.DefaultLaunchSize(ward.LaunchWriter)
-	gate := &stubGate{
-		handoffFn: func(ward.HandoffSpec) (*ward.HandoffResult, error) {
-			return nil, &ward.MemoryLimitError{Class: ward.LaunchWriter, Size: size, Cause: ward.ErrWriterFailed}
-		},
-		recoverFn: func(string, ward.HandoffSpec) (*ward.RecoveryResult, error) {
-			return &ward.RecoveryResult{Outcome: ward.RecoveryFailed, FailureStatus: 137}, nil
-		},
+	killed := func(string, ward.HandoffSpec) (*ward.RecoveryResult, error) {
+		return &ward.RecoveryResult{Outcome: ward.RecoveryFailed, FailureStatus: 137, MemoryLimitKill: true}, nil
 	}
-	d := newTestDriver(t, gate, newStubExports())
-	d.seeder = &recordingSeeder{}
-	d.runPipeline(context.Background(), orphan(t, d, phaseSeeding, nil))
-	got, err := d.Collect(context.Background(), testInvoke)
-	if err != nil || got.Status != exec.StatusFailed {
-		t.Fatalf("result = %+v, %v; want failed", got, err)
+	for _, tc := range []struct {
+		name string
+		run  func(t *testing.T, d *Driver)
+	}{
+		{"live", func(t *testing.T, d *Driver) {
+			d.seeder = &recordingSeeder{}
+			d.runPipeline(context.Background(), orphan(t, d, phaseSeeding, nil))
+		}},
+		{"restart", func(t *testing.T, d *Driver) {
+			orphan(t, d, phaseRunning, nil)
+			if err := d.Reconcile(context.Background()); err != nil {
+				t.Fatalf("Reconcile: %v", err)
+			}
+		}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			ctx := context.Background()
+			outcomes := newStubExports()
+			gate := &stubGate{
+				handoffFn: func(ward.HandoffSpec) (*ward.HandoffResult, error) {
+					return nil, &ward.MemoryLimitError{Class: ward.LaunchWriter, Size: size, Cause: ward.ErrWriterFailed}
+				},
+				recoverFn: killed,
+			}
+			d := newTestDriver(t, gate, outcomes)
+			tc.run(t, d)
+			got, err := d.Collect(ctx, testInvoke)
+			if err != nil || got.Status != exec.StatusFailed {
+				t.Fatalf("result = %+v, %v; want failed", got, err)
+			}
+			if !strings.Contains(got.Summary, "memory limit") || !strings.Contains(got.Summary, size.String()) ||
+				!strings.Contains(got.Summary, "status 137") {
+				t.Fatalf("summary %q does not name the memory limit, size, and status", got.Summary)
+			}
+			outcome, found, err := outcomes.LookupExecutionOutcome(ctx, testInvoke)
+			if err != nil || !found || outcome.Cause != domain.FailureCauseMemoryLimit {
+				t.Fatalf("outcome = (%+v, %v, %v), want cause memory_limit", outcome, found, err)
+			}
+		})
 	}
-	if !strings.Contains(got.Summary, "memory limit") || !strings.Contains(got.Summary, size.String()) ||
-		!strings.Contains(got.Summary, "status 137") {
-		t.Fatalf("summary %q does not name the memory limit, size, and status", got.Summary)
+}
+
+// A writer failure ward recovered without a kill keeps no cause of its own.
+func TestWriterFailureWithoutAKillRecordsNoMemoryLimit(t *testing.T) {
+	ctx := context.Background()
+	outcomes := newStubExports()
+	gate := &stubGate{recoverFn: func(string, ward.HandoffSpec) (*ward.RecoveryResult, error) {
+		return &ward.RecoveryResult{Outcome: ward.RecoveryFailed, FailureStatus: 137}, nil
+	}}
+	d := newTestDriver(t, gate, outcomes)
+	orphan(t, d, phaseRunning, nil)
+	if err := d.Reconcile(ctx); err != nil {
+		t.Fatalf("Reconcile: %v", err)
+	}
+	got, err := d.Collect(ctx, testInvoke)
+	if err != nil || strings.Contains(got.Summary, "memory limit") {
+		t.Fatalf("result = %+v, %v; want a plain failure", got, err)
+	}
+	outcome, found, err := outcomes.LookupExecutionOutcome(ctx, testInvoke)
+	if err != nil || !found || outcome.Cause == domain.FailureCauseMemoryLimit {
+		t.Fatalf("outcome = (%+v, %v, %v), want no memory_limit cause", outcome, found, err)
 	}
 }

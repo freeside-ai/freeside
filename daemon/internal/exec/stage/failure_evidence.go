@@ -14,13 +14,24 @@ import (
 // failedWriterResult consumes diagnostic evidence without ever importing the
 // writer's source tree. Blobs and the invocation-bound claim precede terminal
 // persistence; retries use the same immutable timestamp and claim identity.
-func (d *Driver) failedWriterResult(ctx context.Context, in intent, recovered *ward.RecoveryResult) (exec.StageResult, error) {
+// size is the writer's declared container size from the rebuilt handoff
+// spec; a recorded memory-limit kill names it.
+func (d *Driver) failedWriterResult(
+	ctx context.Context, in intent, recovered *ward.RecoveryResult, size ward.ContainerSize,
+) (exec.StageResult, error) {
 	result := exec.StageResult{
 		InvocationID: in.InvocationID, Status: exec.StatusFailed,
 		Summary: fmt.Sprintf("%s writer exited with status %d.", d.displayName, recovered.FailureStatus),
 	}
 	if recovered.FailureStatus == d.provider.PrepareFailedStatus() {
 		result.Summary = fmt.Sprintf("Workspace preparation failed before the agent started (status %d): the project-image hydration helper exited nonzero.", recovered.FailureStatus)
+	}
+	// The kill comes from ward's journal, not the live handoff error, so the
+	// live path and a restart before the result commits name it alike.
+	if recovered.MemoryLimitKill {
+		result.Cause = domain.FailureCauseMemoryLimit
+		result.Summary = truncateSummary(fmt.Sprintf(
+			"Writer container was killed at its memory limit (%s). %s", size, result.Summary))
 	}
 	if recovered.FailureStatus < 1 || recovered.FailureStatus > 255 || recovered.Outcome != ward.RecoveryFailed ||
 		recovered.ExportDir != "" || len(recovered.Manifest.Entries) != 0 {

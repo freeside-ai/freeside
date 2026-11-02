@@ -192,7 +192,10 @@ func (b *Backend) failedRecoveryResult(ctx context.Context, hs HandoffSpec, rec 
 	if rec.RunID != hs.RunID || rec.WriterFailureStatus == nil {
 		return nil, fmt.Errorf("%w: invalid failure record identity", ErrInvalidJournalRecord)
 	}
-	out := &RecoveryResult{Outcome: RecoveryFailed, FailureStatus: *rec.WriterFailureStatus}
+	out := &RecoveryResult{
+		Outcome: RecoveryFailed, FailureStatus: *rec.WriterFailureStatus,
+		MemoryLimitKill: rec.WriterMemoryLimitKill,
+	}
 	if hs.Agent.FailureTranscript == nil {
 		return out, nil
 	}
