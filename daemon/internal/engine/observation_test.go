@@ -13,6 +13,8 @@ import (
 	"github.com/freeside-ai/freeside/daemon/internal/domain"
 	"github.com/freeside-ai/freeside/daemon/internal/exec"
 	"github.com/freeside-ai/freeside/daemon/internal/publish"
+	"github.com/freeside-ai/freeside/daemon/internal/specify"
+	specifyfake "github.com/freeside-ai/freeside/daemon/internal/specify/fake"
 	"github.com/freeside-ai/freeside/daemon/internal/store"
 )
 
@@ -245,6 +247,47 @@ func TestUsagePoolRefusalHoldsNamingItsPool(t *testing.T) {
 	if holdPaceState(domain.HoldUsagePoolExhausted, detail) ==
 		holdPaceState(domain.HoldUsagePoolExhausted, holdDetailFor(refusal("pool-b"))) {
 		t.Fatal("two pools share one pace state")
+	}
+}
+
+// TestDispatchResetsThePaceOfTheHoldItClears is the regression for #727. A
+// dispatch clears the run's pool hold; the same hold returning inside the
+// refresh interval is a new wait and must be recorded, or the run shows pending
+// work with no explanation.
+func TestDispatchResetsThePaceOfTheHoldItClears(t *testing.T) {
+	ctx := t.Context()
+	f := newSpecificationFixture(t, false, 4)
+	driver := f.newDriver(t)
+	runID := domain.RunID("specification-run")
+	id := specificationInvocationID(runID, 1)
+	if err := specifyfake.Script(driver, id, 0, 0, specify.Output{Specification: &specify.Specification{
+		Summary: "The implementation plan is ready.", Body: "# Specification\n\nImplement.",
+		Addressals: []specify.Addressal{},
+	}}); err != nil {
+		t.Fatal(err)
+	}
+	f.submit(t)
+	engine := f.newEngine(t, driver)
+	pool := domain.UsagePoolID("pool-a")
+	hold := func() *domain.RunHoldObservation {
+		t.Helper()
+		if err := engine.observeRunHold(ctx, runID, id, domain.HoldUsagePoolExhausted,
+			holdDetail{usagePool: &pool}); err != nil {
+			t.Fatal(err)
+		}
+		return storedRunHold(t, f.store, runID)
+	}
+	if got := hold(); got == nil || got.UsagePool == nil || *got.UsagePool != pool {
+		t.Fatalf("first hold = %+v", got)
+	}
+	if _, err := engine.Reconcile(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if got := storedRunHold(t, f.store, runID); got != nil {
+		t.Fatalf("dispatch left the hold in place: %+v", got)
+	}
+	if got := hold(); got == nil || got.Reason != domain.HoldUsagePoolExhausted {
+		t.Fatalf("hold returning inside the refresh interval = %+v, want it recorded", got)
 	}
 }
 
