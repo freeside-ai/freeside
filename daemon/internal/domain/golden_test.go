@@ -1223,6 +1223,17 @@ func TestGolden(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	routingPolicy, err := domain.NewRoutingPolicy(domain.RoutingPolicyInput{
+		Roles: []domain.RoutingPolicyRole{
+			{Role: domain.RoleImplementer, Agents: []string{"claude-a", "claude-b"}},
+			{Role: domain.RoleReviewer, Agents: []string{"claude-b"}},
+		},
+		Source: domain.RoutingPolicySourceCLISet, SetBy: "cli:operator",
+		LineupRevision: domain.Digest("sha256:" + strings.Repeat("a", 64)),
+	}, 1, ts)
+	if err != nil {
+		t.Fatal(err)
+	}
 	routerExhaustedMarkTaskLine, err := domain.NewTaskLine(domain.TaskLineInput{
 		TaskID: "task-1", Role: domain.RoleImplementer, Agent: "claude-b",
 		Source: domain.TaskLineSourceRouter, SetBy: "router:task-1",
@@ -2205,6 +2216,7 @@ func TestGolden(t *testing.T) {
 		{"usage_pool", domain.UsagePool{
 			ID: "claude-owner-subscription", Provider: "claude", MaxParallelExecutions: 2,
 		}},
+		{"routing_policy", routingPolicy},
 		{"auth_store_mutation_lease", mutationLease},
 		{"auth_store_mutation_lease_bound", boundLease},
 		{"auth_store_read_hold", readHold},

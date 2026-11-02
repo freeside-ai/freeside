@@ -1,0 +1,22 @@
+{
+  "revision": 1,
+  "roles": [
+    {
+      "role": "implementer",
+      "agents": [
+        "claude-a",
+        "claude-b"
+      ]
+    },
+    {
+      "role": "reviewer",
+      "agents": [
+        "claude-b"
+      ]
+    }
+  ],
+  "source": "cli_routing_set",
+  "set_by": "cli:operator",
+  "set_at": "2026-01-02T03:04:05Z",
+  "lineup_revision": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+}
