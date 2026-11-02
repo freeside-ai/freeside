@@ -38,18 +38,20 @@ concurrency:
 jobs:
   convergence:
     name: convergence (real daemon + Swift client)
-    runs-on: macos-26
+    runs-on: xcode-27
     env:
-      # Pin the toolchain-bundled swift-format via Xcode selection on the
-      # format steps only; a floating tool version would make the
-      # formatting gate nondeterministic (same reasoning as the shellcheck
-      # and vacuum pins). The test steps keep the image's default Xcode.
-      # Bump together with the version documented in app/README.md.
-      SWIFT_FORMAT_DEVELOPER_DIR: /Applications/Xcode_26.6.app
-      SWIFT_FORMAT_VERSION: 6.3.0
+      # Pin one Xcode for the whole job, the recording host's where the
+      # image offers it. The screenshot digests compare against what that
+      # host drew, and a floating swift-format would make the formatting
+      # gate nondeterministic (same reasoning as the shellcheck and vacuum
+      # pins). app-ci.yml's `swift-build-cache` job pins the same image and
+      # Xcode, and the workflow guard holds them equal. Bump together with
+      # the versions documented in app/README.md.
+      DEVELOPER_DIR: /Applications/Xcode_27.2.app
+      SWIFT_FORMAT_VERSION: 6.4.4
     steps:
       - uses: actions/checkout@v4
-      # The Swift build cache key's parts: the OS, the default Xcode build,
+      # The Swift build cache key's parts: the OS, the pinned Xcode build,
       # the toolchain, and app/'s git tree, which covers every file's name,
       # mode, and content (hashFiles hashes contents only, so a rename would
       # keep its key). Not $ImageVersion: GitHub rolls the image about weekly,
@@ -57,8 +59,7 @@ jobs:
       # image, so a third of #2291's warm runs missed on an identical
       # toolchain. app-ci.yml's `swift-build-cache` job carries the same
       # step byte for byte, and the workflow guard pins the two equal, or
-      # writer and reader would never share an entry. No DEVELOPER_DIR: the
-      # test step builds with the image's default Xcode, not the format pin.
+      # writer and reader would never share an entry.
       - name: Resolve the Swift build key
         id: swift-key
         run: |
@@ -75,8 +76,6 @@ jobs:
           echo "tree=${tree}" >>"$GITHUB_OUTPUT"
       - name: Verify pinned swift-format version
         if: inputs.app_tests
-        env:
-          DEVELOPER_DIR: ${{ env.SWIFT_FORMAT_DEVELOPER_DIR }}
         run: |
           version="$(xcrun swift-format --version)"
           if [ "${version}" != "${SWIFT_FORMAT_VERSION}" ]; then
@@ -85,13 +84,9 @@ jobs:
           fi
       - name: Lint (scripts/check.sh)
         if: inputs.app_tests
-        env:
-          DEVELOPER_DIR: ${{ env.SWIFT_FORMAT_DEVELOPER_DIR }}
         run: bash scripts/check.sh app format
       - name: Check formatting drift
         if: inputs.app_tests
-        env:
-          DEVELOPER_DIR: ${{ env.SWIFT_FORMAT_DEVELOPER_DIR }}
         working-directory: app
         run: |
           files=(Package.swift)

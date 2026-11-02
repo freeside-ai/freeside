@@ -30,10 +30,16 @@ struct UnifiedListView: View {
     /// The tools row's filter state.
     static func filterState(projectID: String?) -> String {
         switch projectID {
-        case nil: "All projects"
+        case nil: "All Projects"
         case UnifiedList.noProject: "No project"
         case let projectID?: projectID
         }
+    }
+
+    /// Whether the filter button takes its active face: a filter is applied,
+    /// `No project` included, or the popover is open.
+    static func filterIsActive(projectID: String?, isPresented: Bool) -> Bool {
+        projectID != nil || isPresented
     }
 
     #if os(macOS)
@@ -172,12 +178,17 @@ struct UnifiedListView: View {
                 Button {
                     projectFilterPresented = true
                 } label: {
-                    FreesideMenuTriggerLabel(title: "Project")
-                        .fixedSize()
+                    ToolsRowGlyphFace(
+                        title: "Filter by project", symbol: "line.3.horizontal.decrease", glyphSize: 14,
+                        isActive: Self.filterIsActive(
+                            projectID: store.projectID, isPresented: projectFilterPresented))
                 }
                 .buttonStyle(.plain)
                 .accessibilityLabel("Filter by project")
                 .accessibilityValue(Self.filterState(projectID: store.projectID))
+                #if os(macOS)
+                    .help("Filter by project")
+                #endif
                 .popover(isPresented: $projectFilterPresented) {
                     ProjectFilterPopover(
                         projects: list.knownProjects, offersNoProject: list.offersNoProject,
@@ -199,12 +210,7 @@ struct UnifiedListView: View {
                     Button {
                         navigation.newTaskComposerPresented = true
                     } label: {
-                        Label("New Task", systemImage: "plus")
-                            .labelStyle(.iconOnly)
-                            .font(FreesideFont.sans(.subheadline, weight: .medium))
-                            .foregroundStyle(Color.accentText)
-                            .frame(minWidth: 28, minHeight: 28)
-                            .contentShape(Rectangle())
+                        ToolsRowGlyphFace(title: "New Task", symbol: "plus.square", glyphSize: 15)
                     }
                     .buttonStyle(.plain)
                     .help(newTaskBlockedReason ?? "New Task")
@@ -414,6 +420,49 @@ struct UnifiedListView: View {
         }
         .padding()
         .background(Color.sidebarGround)
+    }
+}
+
+/// The tools row's icon button face, as the 30 Oct handoff draws it (`glyphBtn`):
+/// 30 by 26pt, growing with Dynamic Type rather than clipping the icon. The
+/// tap target stays 28pt tall around the 26pt face. The title is the icon's
+/// accessibility label.
+private struct ToolsRowGlyphFace: View {
+    let title: String
+    let symbol: String
+    let isActive: Bool
+
+    @Environment(\.isEnabled) private var isEnabled
+    @ScaledMetric private var glyphSize: CGFloat
+
+    init(title: String, symbol: String, glyphSize: CGFloat, isActive: Bool = false) {
+        self.title = title
+        self.symbol = symbol
+        self.isActive = isActive
+        _glyphSize = ScaledMetric(
+            wrappedValue: screenshotMetricBase(glyphSize, relativeTo: .subheadline), relativeTo: .subheadline)
+    }
+
+    private var glyphColor: Color {
+        guard isEnabled else { return .inkFaint }
+        return isActive ? .ground2 : .inkDim
+    }
+
+    var body: some View {
+        Label(title, systemImage: symbol)
+            .labelStyle(.iconOnly)
+            .font(.system(size: glyphSize, weight: .medium))
+            .foregroundStyle(glyphColor)
+            .padding(4)
+            .frame(minWidth: 30, minHeight: 26)
+            .background(isActive ? Color.accentText : Color.ground2, in: RoundedRectangle(cornerRadius: 6))
+            .overlay {
+                if !isActive {
+                    RoundedRectangle(cornerRadius: 6).strokeBorder(Color.secondaryBorder, lineWidth: 1)
+                }
+            }
+            .frame(minHeight: 28)
+            .contentShape(Rectangle())
     }
 }
 

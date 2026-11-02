@@ -90,9 +90,16 @@ import Testing
     }
 
     @Test func theToolsRowStatesTheFilter() {
-        #expect(UnifiedListView.filterState(projectID: nil) == "All projects")
+        #expect(UnifiedListView.filterState(projectID: nil) == "All Projects")
         #expect(UnifiedListView.filterState(projectID: "freeside") == "freeside")
         #expect(UnifiedListView.filterState(projectID: UnifiedList.noProject) == "No project")
+    }
+
+    @Test func theFilterButtonIsActiveWhenFilteredOrOpen() {
+        #expect(!UnifiedListView.filterIsActive(projectID: nil, isPresented: false))
+        #expect(UnifiedListView.filterIsActive(projectID: nil, isPresented: true))
+        #expect(UnifiedListView.filterIsActive(projectID: "freeside", isPresented: false))
+        #expect(UnifiedListView.filterIsActive(projectID: UnifiedList.noProject, isPresented: false))
     }
 
     @Test func aMonogramReadsTheProjectsLastWord() {

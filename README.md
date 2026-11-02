@@ -38,8 +38,8 @@ records implementation progress.
 
 ## Get the Source
 
-The Mac paths below use **Xcode 26.6**, the toolchain used by this repository's
-CI. Install full Xcode and complete its first-launch setup; Command Line Tools
+The Mac paths below use **Xcode 27.2**, the toolchain used by this repository's
+Swift tests. Install full Xcode and complete its first-launch setup; Command Line Tools
 alone cannot build the app. Building the daemon also needs **Go 1.26.10**, as
 declared in [daemon/go.mod](daemon/go.mod). The daemon core builds on Linux,
 but the installation and real execution paths here are Mac-first.

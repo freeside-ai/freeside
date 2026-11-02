@@ -42,7 +42,7 @@
         /// A detail column just wide enough for the one-column card at its
         /// cap (R18): the card and the pane's 24pt margins.
         private static let detailColumnWidth = DecisionCardComposition.Scale.cardWidth + 48
-        private let baselineOperatingSystemKey = "macOS-26.7"
+        private let baselineOperatingSystemKey = "macOS-27.2"
         private let screenshotNow = AttentionFixtures.createdInstant.addingTimeInterval(18 * 3_600)
         private let screenshotTimeZone = TimeZone(identifier: "UTC") ?? .current
         private let textSizes = [
@@ -449,10 +449,10 @@
 
         @Test func recordingRequiresTheDesignatedBaselineOperatingSystem() throws {
             try validateRecordingOperatingSystem(
-                "macOS-26.7", baselineKey: "macOS-26.7")
+                "macOS-27.2", baselineKey: "macOS-27.2")
             #expect(throws: ScreenshotError.self) {
                 try validateRecordingOperatingSystem(
-                    "macOS-26.6", baselineKey: "macOS-26.7")
+                    "macOS-26.7", baselineKey: "macOS-27.2")
             }
         }
 
@@ -4430,7 +4430,7 @@
         }
 
         /// Optional hosted-runner overrides layer on the universal baseline.
-        /// The current macOS 26.6 runner passes without one; a local run
+        /// The current macOS 27 runner passes without one; a local run
         /// always uses the universal baseline.
         private func loadManifest(
             overrides: [String: [String: String]]
