@@ -201,6 +201,7 @@ func (p *pairingControl) registerControlRoutes(
 	command("/shadow-review/configuration-approvals", runApproveShadowReviewCommand)
 	command("/usage-pools/limit", runSetPoolLimitCommand)
 	command("/tasks/lines", runTaskLineCommand)
+	command(routingPolicyRoute, runRoutingCommand)
 	command("/auth/list", runAuthListCommand)
 	command("/doctor", runDoctorCommand)
 	p.handle(mux, "/snapshot", func(ctx context.Context, body json.RawMessage) (any, error) {

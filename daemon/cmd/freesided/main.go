@@ -212,6 +212,9 @@ func main() {
 		case "task-line":
 			runTaskLineMain(os.Args[2:])
 			return
+		case "routing":
+			runRoutingMain(os.Args[2:])
+			return
 		case "rig":
 			runRigMain(os.Args[2:])
 			return

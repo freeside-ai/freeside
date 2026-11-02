@@ -402,6 +402,20 @@ var (
 		"an attempt of the role is running")
 	ErrTaskLineInconsistent = errors.New(
 		"task line id or predecessor does not match its content")
+	ErrRoutingPolicyNoRoles = errors.New(
+		"routing policy orders no role")
+	ErrRoutingPolicyRoleRepeated = errors.New(
+		"routing policy names a role more than once")
+	ErrRoutingPolicyOrderEmpty = errors.New(
+		"routing policy role has an empty order")
+	ErrRoutingPolicyAgentRepeated = errors.New(
+		"routing policy role lists an agent more than once")
+	ErrRoutingPolicyNotCanonical = errors.New(
+		"routing policy roles are not in task-line role order")
+	ErrInvalidRoutingPolicySource = errors.New(
+		"routing policy source is not a path that may set a policy")
+	ErrRoutingPolicyAgentUnknown = errors.New(
+		"routing policy agent is not in the committed agent tree")
 	ErrInvalidAgentSelectionSource = errors.New(
 		"agent selection source is not lineup, task_line, or card")
 	ErrAgentSelectionInconsistent = errors.New(

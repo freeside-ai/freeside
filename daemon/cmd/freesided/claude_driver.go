@@ -233,22 +233,9 @@ const agentExpiryMargin = 5 * time.Minute
 // start, so every admission of one daemon run cites one revision. The caller
 // sets the attempt budget and the gate once the backend is composed.
 func loadAgentSelection(ctx context.Context, cfg claudeDriverConfig) (*engine.AgentSelection, error) {
-	scratch, err := os.MkdirTemp("", "freesided-agent-tree-")
+	tree, revision, err := readAgentTree(ctx, cfg.AgentTreeCheckout, cfg.AgentTreeCommit)
 	if err != nil {
-		return nil, fmt.Errorf("agent tree scratch: %w", err)
-	}
-	defer func() { _ = os.RemoveAll(scratch) }()
-	files, err := agenttree.ReadCommit(ctx, cfg.AgentTreeCheckout, scratch, cfg.AgentTreeCommit)
-	if err != nil {
-		return nil, fmt.Errorf("read agent tree: %w", err)
-	}
-	tree, err := agenttree.Parse(files)
-	if err != nil {
-		return nil, fmt.Errorf("parse agent tree at %s: %w", cfg.AgentTreeCommit, err)
-	}
-	revision, err := agenttree.Revision(files)
-	if err != nil {
-		return nil, fmt.Errorf("agent tree revision at %s: %w", cfg.AgentTreeCommit, err)
+		return nil, err
 	}
 	egress := slices.Clone(cfg.ProviderEndpoints)
 	slices.Sort(egress)
@@ -256,6 +243,29 @@ func loadAgentSelection(ctx context.Context, cfg claudeDriverConfig) (*engine.Ag
 		Tree: tree, LineupRevision: revision, Launch: agentbaseline.RoleLaunch,
 		EffectiveEgress: egress, ExpiryMargin: agentExpiryMargin,
 	}, nil
+}
+
+// readAgentTree reads and parses the admitted-agent tree at an exact commit
+// of a local checkout and returns it with its revision.
+func readAgentTree(ctx context.Context, checkout, commit string) (agenttree.Tree, domain.Digest, error) {
+	scratch, err := os.MkdirTemp("", "freesided-agent-tree-")
+	if err != nil {
+		return agenttree.Tree{}, "", fmt.Errorf("agent tree scratch: %w", err)
+	}
+	defer func() { _ = os.RemoveAll(scratch) }()
+	files, err := agenttree.ReadCommit(ctx, checkout, scratch, commit)
+	if err != nil {
+		return agenttree.Tree{}, "", fmt.Errorf("read agent tree: %w", err)
+	}
+	tree, err := agenttree.Parse(files)
+	if err != nil {
+		return agenttree.Tree{}, "", fmt.Errorf("parse agent tree at %s: %w", commit, err)
+	}
+	revision, err := agenttree.Revision(files)
+	if err != nil {
+		return agenttree.Tree{}, "", fmt.Errorf("agent tree revision at %s: %w", commit, err)
+	}
+	return tree, revision, nil
 }
 
 func readPromptPackage(path string) ([]byte, error) {

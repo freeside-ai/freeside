@@ -109,7 +109,8 @@ func migrationsBeforeReadyResource(t *testing.T) fs.FS {
 			entry.Name() == "0110_image_policy_adoption.sql" ||
 			entry.Name() == "0111_task_line_provenance.sql" ||
 			entry.Name() == "0112_usage_pools.sql" || entry.Name() == "0113_task_line_changes.sql" ||
-			entry.Name() == "0114_review_slot_releases.sql" || entry.IsDir() {
+			entry.Name() == "0114_review_slot_releases.sql" ||
+			entry.Name() == "0115_routing_policies.sql" || entry.IsDir() {
 			continue
 		}
 		body, err := fs.ReadFile(migrations.FS, entry.Name())
