@@ -78,6 +78,9 @@ type ReviewSource struct {
 	failed    map[domain.InvocationID]bool
 	rejected  map[domain.InvocationID]bool
 	intents   map[domain.InvocationID]exec.ReviewRequest
+	// recoveredAborts counts AbortRecoveredReview calls; transient, like a
+	// real source's in-process launches.
+	recoveredAborts map[domain.InvocationID]int
 }
 
 // NewReviewSource returns an empty in-memory fake; register scenarios with
@@ -408,6 +411,30 @@ func (s *ReviewSource) VerifyRequestAuthority(
 			id, errors.Join(err, domain.ErrParentKeyMismatch))
 	}
 	return nil
+}
+
+// AbortRecoveredReview stands in for the ward's reap of a review whose
+// contradiction the operator recovered. The fake owns no containers and
+// writes no ward journal, so it only counts the call; a test that needs the
+// usage pool slot to end writes the ward's proof itself.
+func (s *ReviewSource) AbortRecoveredReview(_ context.Context, id domain.InvocationID) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if _, ok := s.intents[id]; !ok {
+		return fmt.Errorf("fake review source abort recovered %s: %w", id, exec.ErrUnknownInvocation)
+	}
+	if s.recoveredAborts == nil {
+		s.recoveredAborts = make(map[domain.InvocationID]int)
+	}
+	s.recoveredAborts[id]++
+	return nil
+}
+
+// RecoveredAborts reports how many times AbortRecoveredReview reached id.
+func (s *ReviewSource) RecoveredAborts(id domain.InvocationID) int {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.recoveredAborts[id]
 }
 
 // finishedReviewStatus is the terminal execution status a finished review

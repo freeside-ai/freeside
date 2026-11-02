@@ -1963,6 +1963,9 @@ func (w *productionPublicationWorkflow) reconcile(ctx context.Context) (producti
 	w.reconcileMu.Lock()
 	defer w.reconcileMu.Unlock()
 	if w.reviewRecoveryPending {
+		// Startup only: recovery aborts every started review as orphaned, so a
+		// runtime pass would kill live ones. abortRecoveredReview reaps the one
+		// review an operator recovery frees.
 		if err := w.reviewRecovery(ctx); err != nil {
 			return productionPublicationResult{}, fmt.Errorf("recover reviews at startup: %w", err)
 		}
@@ -3469,6 +3472,9 @@ func (w *productionPublicationWorkflow) reconcileReviewGate(
 			}
 			return productionReviewPending, nil
 		}
+		if err := w.abortRecoveredReview(ctx, latestFailure.InvocationID); err != nil {
+			return productionReviewPending, err
+		}
 		recoveredContradiction = true
 	}
 	if binding.profile.Review.ConfigDigest != w.reviewConfigurationDigest {
@@ -4479,6 +4485,32 @@ func (w *productionPublicationWorkflow) reviewContradictionRecovered(
 		return nil
 	})
 	return recovered, err
+}
+
+// abortRecoveredReview reaps a recovered contradiction's invocation before the
+// next round reaches the usage pool gate. The gate never inspects that
+// invocation again, so only this abort, or a restart's recovery, writes the
+// ward's proof that ends its slot. The source makes a repeat call a no-op once
+// the proof exists. A transient failure keeps the slot and retries on a later
+// pass; any other failure fails loud, as startup recovery does.
+func (w *productionPublicationWorkflow) abortRecoveredReview(
+	ctx context.Context, id domain.InvocationID,
+) error {
+	adapter, ok := w.reviewSource.(interface {
+		AbortRecoveredReview(context.Context, domain.InvocationID) error
+	})
+	if !ok {
+		return errors.New("review source has no recovered-review abort adapter")
+	}
+	err := adapter.AbortRecoveredReview(ctx, id)
+	if err == nil || errors.Is(err, exec.ErrUnknownInvocation) {
+		return nil // An unknown invocation was never journaled, so nothing runs.
+	}
+	err = fmt.Errorf("abort recovered review %q: %w", id, err)
+	if exec.ClassifyReviewSourceFailure(err) == domain.ReviewFailureTransient {
+		return productionPublicationRetryableError(err)
+	}
+	return err
 }
 
 // putReviewContradictionAttention exposes one persisted contradiction without

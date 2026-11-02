@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strings"
 	"testing"
 	"time"
 
@@ -11,6 +12,7 @@ import (
 	"github.com/freeside-ai/freeside/daemon/internal/engine"
 	"github.com/freeside-ai/freeside/daemon/internal/exec"
 	"github.com/freeside-ai/freeside/daemon/internal/exec/fake"
+	"github.com/freeside-ai/freeside/daemon/internal/signet"
 	"github.com/freeside-ai/freeside/daemon/internal/store"
 )
 
@@ -220,5 +222,184 @@ func TestProductionReviewWaitsForItsUsagePool(t *testing.T) {
 	}
 	if hold := observeProductionRun(t, p.store, p.runID).Hold; hold != nil {
 		t.Fatalf("the admitted review kept the hold: %#v", hold)
+	}
+}
+
+// recoveredAbortSource writes the ward's proof when the fake reaps a recovered
+// review, as CodexReviewSource marks the outcome ready once its containers are
+// gone. fail, when set, is returned once before the abort reaches the fake.
+type recoveredAbortSource struct {
+	*fake.ReviewSource
+	store *store.Store
+	fail  error
+}
+
+func (s *recoveredAbortSource) AbortRecoveredReview(ctx context.Context, id domain.InvocationID) error {
+	if err := s.fail; err != nil {
+		s.fail = nil
+		return err
+	}
+	if err := s.ReviewSource.AbortRecoveredReview(ctx, id); err != nil {
+		return err
+	}
+	return s.store.WriteInternal(ctx, func(tx *store.InternalTx) error {
+		if err := tx.RecordCodexReviewOutcome(ctx, string(id),
+			[]byte(fmt.Sprintf(`{"invocation_id":%q,"status":"aborted"}`, id))); err != nil {
+			return err
+		}
+		return tx.MarkCodexReviewOutcomeReady(ctx, string(id))
+	})
+}
+
+// TestProductionRecoveredReviewContradictionFreesItsSlot: a started review
+// that hit a contradiction holds its limit-1 pool slot while it is parked,
+// because its containers may still run. Once the operator recovers it, the
+// next pass reaps it, which ends the slot, and requests the next round with no
+// restart. A failed reap keeps the slot: a transient one retries on a later
+// pass, and any other fails loud.
+func TestProductionRecoveredReviewContradictionFreesItsSlot(t *testing.T) {
+	t.Parallel()
+	for name, tc := range map[string]struct {
+		fail      error
+		retryable bool
+	}{
+		"reaped":          {},
+		"transient retry": {fail: &exec.ReviewSourceFailure{Class: domain.ReviewFailureTransient, Err: errors.New("runtime unavailable")}, retryable: true},
+		"contradiction":   {fail: &exec.ReviewSourceFailure{Class: domain.ReviewFailureContradiction, Err: errors.New("foreign container")}},
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			p := newProductionPublicationHarness(t, "")
+			firstID := engine.ProductionReviewInvocationID(p.runID, 1)
+			secondID := engine.ProductionReviewInvocationID(p.runID, 2)
+			identity := fake.ReviewIdentities()[0]
+			pool := identity.EffectiveUsagePool()
+			if err := p.store.WriteInternal(p.ctx, func(tx *store.InternalTx) error {
+				return tx.RecordUsagePool(p.ctx, domain.UsagePool{
+					ID: pool, Provider: identity.Provider, MaxParallelExecutions: 1,
+				}, p.now.Add(time.Second))
+			}); err != nil {
+				t.Fatal(err)
+			}
+			source := &recoveredAbortSource{ReviewSource: p.reviewer, store: p.store}
+			p.reviewSource = source
+			p.workflow = p.newEngine(t, productionCrashSeams{}, true)
+			p.reviewer.Script(firstID, fake.ReviewScript{
+				Outcome: fake.OutcomeComplete,
+				Result: exec.ReviewResult{
+					BaseSHA: strings.Repeat("e", 40), HeadSHA: p.replay.HeadSHA,
+					CompletedAt: p.now, CompletionEvidence: productionDigest([]byte("contradiction")),
+				},
+			})
+			p.startAndRecordExport(t)
+			if _, err := p.reconcileLanes(); err != nil {
+				t.Fatalf("park contradiction: %v", err)
+			}
+			// The fake writes no ward journal. A real launch leaves its request
+			// and a started intent, and nothing marks its outcome ready while the
+			// contradiction is parked, so the slot stays held.
+			if err := p.store.WriteInternal(p.ctx, func(tx *store.InternalTx) error {
+				intent := func(state string) []byte {
+					return []byte(fmt.Sprintf(`{"run_id":%q,"state":%q}`, firstID, state))
+				}
+				if err := tx.RecordCodexReviewRequest(p.ctx, string(firstID), []byte(`{}`)); err != nil {
+					return err
+				}
+				if err := tx.BeginCodexReviewIntent(p.ctx, string(firstID), "preparing", intent("preparing")); err != nil {
+					return err
+				}
+				return tx.UpdateCodexReviewIntent(p.ctx, string(firstID),
+					"preparing", "started", intent("preparing"), intent("started"))
+			}); err != nil {
+				t.Fatal(err)
+			}
+			if _, err := p.reconcileLanes(); err != nil {
+				t.Fatalf("parked pass: %v", err)
+			}
+			if aborts := p.reviewer.RecoveredAborts(firstID); aborts != 0 {
+				t.Fatalf("an unrecovered contradiction was reaped %d times", aborts)
+			}
+
+			snapshot, err := p.attention.GetAttentionItem(p.ctx, productionReviewItemIDForTest(p.runID, 1))
+			if err != nil {
+				t.Fatal(err)
+			}
+			deviceID := domain.DeviceID("device-recovered-slot")
+			if err := p.store.Write(p.ctx, func(tx *store.WriteTx) error {
+				return tx.PutDevice(p.ctx, domain.Device{
+					ID: deviceID, DisplayName: "Recovered slot device",
+					Status: domain.DeviceActive, PairedAt: p.now,
+				})
+			}); err != nil {
+				t.Fatal(err)
+			}
+			if _, err := p.attention.Submit(p.ctx, signet.ClientCommand{
+				CommandID: "recover-review-slot", DeviceID: deviceID,
+				ExpectedEntityVersion: snapshot.EntityVersion,
+				Payload: signet.DecisionPayload{
+					ItemID: snapshot.Item.ID, ItemVersion: snapshot.Item.ItemVersion,
+					PRHeadSHA:       snapshot.Item.PRHeadSHA,
+					ArtifactDigests: snapshot.Item.ArtifactDigests,
+					Action:          domain.ActionRecoverReview,
+				},
+			}); err != nil {
+				t.Fatalf("submit recovery: %v", err)
+			}
+			p.now = p.now.Add(time.Second)
+			p.reviewer.Script(secondID, fake.ReviewScript{
+				Outcome: fake.OutcomeComplete,
+				Result: exec.ReviewResult{
+					BaseSHA: p.baseSHA, HeadSHA: p.replay.HeadSHA,
+					CompletedAt: p.now, CompletionEvidence: productionDigest([]byte("review after the reap")),
+				},
+			})
+			requested := func() bool {
+				t.Helper()
+				var found bool
+				if err := p.store.Read(p.ctx, func(tx *store.ReadTx) error {
+					_, err := tx.GetReviewRequest(p.ctx, secondID)
+					found = err == nil
+					if errors.Is(err, store.ErrNotFound) {
+						return nil
+					}
+					return err
+				}); err != nil {
+					t.Fatal(err)
+				}
+				return found
+			}
+
+			source.fail = tc.fail
+			_, err = p.reconcileLanes()
+			if tc.fail != nil {
+				if tc.retryable != (err == nil) {
+					t.Fatalf("failed reap: retryable=%v, pass error %v", tc.retryable, err)
+				}
+				if p.reviewer.RecoveredAborts(firstID) != 0 || requested() {
+					t.Fatal("a failed reap freed the slot")
+				}
+				if !tc.retryable {
+					return
+				}
+				if hold := observeProductionRun(t, p.store, p.runID).Hold; hold == nil ||
+					hold.Reason != domain.HoldPublicationEnvironment {
+					t.Fatalf("hold after a transient reap failure = %#v", hold)
+				}
+				p.now = p.now.Add(time.Hour)
+				_, err = p.reconcileLanes()
+			}
+			if err != nil {
+				t.Fatalf("recovered pass: %v", err)
+			}
+			if aborts := p.reviewer.RecoveredAborts(firstID); aborts != 1 {
+				t.Fatalf("the recovered review was reaped %d times, want once", aborts)
+			}
+			if !requested() {
+				t.Fatalf("round 2 was not requested; hold = %#v", observeProductionRun(t, p.store, p.runID).Hold)
+			}
+			if hold := observeProductionRun(t, p.store, p.runID).Hold; hold != nil {
+				t.Fatalf("the next round kept a hold: %#v", hold)
+			}
+		})
 	}
 }
