@@ -294,7 +294,7 @@ func AdjudicatorSite(budget Budget) Site {
 			{Name: "diff_metrics", Sensitivity: SensitivityOperational},
 		},
 		FailSafe: `{"entries":[]}`, Retention: 30 * 24 * time.Hour, Timeout: 120 * time.Second,
-		MaxInputBytes: 2 << 20, MaxOutputBytes: domain.MaxFindingAdjudicationBytes,
+		MaxInputBytes: 2 << 20, MaxOutputBytes: domain.MaxFindingAdjudicationProposalBytes,
 		MaxComputeUnits: 10_000, Budget: budget, AuditEvery: 10,
 		Adjudication: &AdjudicationContract{
 			GoalRelationships: []string{
@@ -323,7 +323,7 @@ func AdjudicatorSite(budget Budget) Site {
 		},
 		ValidateOutput: func(data []byte) error {
 			var output adjudicatorOutput
-			if err := decodeStrictObject(data, &output, domain.MaxFindingAdjudicationBytes); err != nil {
+			if err := decodeStrictObject(data, &output, domain.MaxFindingAdjudicationProposalBytes); err != nil {
 				return err
 			}
 			return output.validateEntries()
