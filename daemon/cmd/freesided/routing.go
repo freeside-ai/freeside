@@ -1,0 +1,201 @@
+package main
+
+import (
+	"context"
+	"encoding/json"
+	"errors"
+	"flag"
+	"fmt"
+	"io"
+	"os"
+	"os/signal"
+	"os/user"
+	"path/filepath"
+	"strings"
+	"syscall"
+	"time"
+
+	"github.com/freeside-ai/freeside/daemon/internal/domain"
+	"github.com/freeside-ai/freeside/daemon/internal/engine"
+	"github.com/freeside-ai/freeside/daemon/internal/store"
+)
+
+// routingPolicyRoute carries both verbs: the args it forwards name the verb,
+// so the running daemon runs the same dispatch.
+const routingPolicyRoute = "/routing-policy"
+
+// runRoutingMain is the routing policy verb (plan §5.4, routing policy):
+// `routing set` records a new revision and `routing show` prints the current
+// one. Nothing reads the policy until the router does (#2393).
+func runRoutingMain(args []string) {
+	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
+	defer stop()
+	if err := runRoutingCommand(ctx, args, os.Stdout, os.Stderr); err != nil {
+		fmt.Fprintln(os.Stderr, "freesided routing:", err)
+		os.Exit(1)
+	}
+}
+
+func runRoutingCommand(ctx context.Context, args []string, stdout, stderr io.Writer) error {
+	if len(args) == 0 {
+		return errors.New("usage: freesided routing set|show [flags]")
+	}
+	switch args[0] {
+	case "set":
+		return runRoutingSetCommand(ctx, args, stdout, stderr)
+	case "show":
+		return runRoutingShowCommand(ctx, args, stdout, stderr)
+	}
+	return errors.New("unknown routing command (want set or show)")
+}
+
+// routingOrderFlag collects repeated -order role=agent1,agent2 values. It
+// checks only that form; the engine validates the set.
+type routingOrderFlag []domain.RoutingPolicyRole
+
+func (f *routingOrderFlag) String() string { return "" }
+
+func (f *routingOrderFlag) Set(value string) error {
+	role, agents, found := strings.Cut(value, "=")
+	if !found || role == "" || agents == "" {
+		return errors.New("want role=agent1,agent2")
+	}
+	*f = append(*f, domain.RoutingPolicyRole{Role: domain.RoleName(role), Agents: strings.Split(agents, ",")})
+	return nil
+}
+
+type routingSetConfig struct {
+	DBPath            string
+	AgentTreeCheckout string
+	AgentTreeCommit   string
+	Orders            routingOrderFlag
+}
+
+// routingSetResult reports the request. Recorded is false when the current
+// revision already held the orders, so nothing was written. Policy is the
+// current revision after the request.
+type routingSetResult struct {
+	Recorded bool                 `json:"recorded"`
+	Policy   domain.RoutingPolicy `json:"policy"`
+}
+
+// runRoutingSetCommand records a new revision validated against the committed
+// tree at -agent-tree-commit. A running daemon runs it from its forwarded
+// args, so the daemon's process reads the tree and the record names its
+// account, which the control socket's peer check makes the caller's.
+func runRoutingSetCommand(ctx context.Context, args []string, stdout, stderr io.Writer) (err error) {
+	cfg, err := parseRoutingSetConfig(args[1:], stderr)
+	if err != nil {
+		return err
+	}
+	handle, client, err := openCommandStore(ctx, cfg.DBPath, store.Options{}, storeExisting)
+	if err != nil {
+		return fmt.Errorf("open store: %w", err)
+	}
+	if client != nil {
+		return callCommand(ctx, client, routingPolicyRoute, args, stdout)
+	}
+	defer func() { err = errors.Join(err, handle.Close()) }()
+	tree, revision, err := readAgentTree(ctx, cfg.AgentTreeCheckout, cfg.AgentTreeCommit)
+	if err != nil {
+		return err
+	}
+	account, err := user.Current()
+	if err != nil {
+		return fmt.Errorf("current account: %w", err)
+	}
+	set, err := engine.SetRoutingPolicy(ctx, handle.store, tree, revision, engine.SetRoutingPolicyRequest{
+		Roles: cfg.Orders, Source: domain.RoutingPolicySourceCLISet, SetBy: "cli:" + account.Username,
+	}, time.Now().UTC())
+	if err != nil {
+		return err
+	}
+	if err := json.NewEncoder(stdout).Encode(routingSetResult{Recorded: set.Recorded, Policy: set.Policy}); err != nil {
+		return fmt.Errorf("write routing policy result: %w", err)
+	}
+	return nil
+}
+
+func parseRoutingSetConfig(args []string, output io.Writer) (routingSetConfig, error) {
+	var cfg routingSetConfig
+	flags := flag.NewFlagSet("freesided routing set", flag.ContinueOnError)
+	flags.SetOutput(output)
+	flags.StringVar(&cfg.DBPath, "db", "", "existing SQLite database path (required)")
+	flags.StringVar(&cfg.AgentTreeCheckout, "agent-tree", "",
+		"absolute path of a local checkout holding the admitted-agent tree under policy/ (required)")
+	flags.StringVar(&cfg.AgentTreeCommit, "agent-tree-commit", "", "exact commit of -agent-tree whose tree is read (required)")
+	flags.Var(&cfg.Orders, "order", "role=agent1,agent2: the role's agents in priority order; repeat per role (required)")
+	if err := flags.Parse(args); err != nil {
+		return routingSetConfig{}, err
+	}
+	switch {
+	case flags.NArg() != 0:
+		return routingSetConfig{}, errors.New("unexpected positional arguments")
+	case cfg.DBPath == "":
+		return routingSetConfig{}, errors.New("-db is required")
+	case cfg.AgentTreeCheckout == "":
+		return routingSetConfig{}, errors.New("-agent-tree is required")
+	// A running daemon reads this path from its own working directory, so a
+	// relative one would name a different checkout there than here.
+	case !filepath.IsAbs(cfg.AgentTreeCheckout):
+		return routingSetConfig{}, errors.New("-agent-tree must be an absolute path")
+	case cfg.AgentTreeCommit == "":
+		return routingSetConfig{}, errors.New("-agent-tree-commit is required")
+	case len(cfg.Orders) == 0:
+		return routingSetConfig{}, errors.New("-order is required")
+	}
+	return cfg, nil
+}
+
+// runRoutingShowCommand prints the current revision, null when none was set,
+// or with -revisions every revision in order.
+func runRoutingShowCommand(ctx context.Context, args []string, stdout, stderr io.Writer) (err error) {
+	flags := flag.NewFlagSet("freesided routing show", flag.ContinueOnError)
+	flags.SetOutput(stderr)
+	dbPath := flags.String("db", "", "existing SQLite database path (required)")
+	revisions := flags.Bool("revisions", false, "print every revision instead of the current one")
+	if err := flags.Parse(args[1:]); err != nil {
+		return err
+	}
+	if flags.NArg() != 0 {
+		return errors.New("unexpected positional arguments")
+	}
+	if *dbPath == "" {
+		return errors.New("-db is required")
+	}
+	handle, client, err := openCommandStore(ctx, *dbPath, store.Options{}, storeExisting)
+	if err != nil {
+		return fmt.Errorf("open store: %w", err)
+	}
+	if client != nil {
+		return callCommand(ctx, client, routingPolicyRoute, args, stdout)
+	}
+	defer func() { err = errors.Join(err, handle.Close()) }()
+	var output any
+	if err := handle.store.Read(ctx, func(tx *store.ReadTx) error {
+		var err error
+		if *revisions {
+			output, err = tx.RoutingPolicyRevisions(ctx)
+			return err
+		}
+		output, err = currentRoutingPolicyOrNil(ctx, tx)
+		return err
+	}); err != nil {
+		return err
+	}
+	if err := json.NewEncoder(stdout).Encode(output); err != nil {
+		return fmt.Errorf("write routing policy: %w", err)
+	}
+	return nil
+}
+
+func currentRoutingPolicyOrNil(ctx context.Context, tx *store.ReadTx) (*domain.RoutingPolicy, error) {
+	policy, err := tx.CurrentRoutingPolicy(ctx)
+	if errors.Is(err, store.ErrNotFound) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	return &policy, nil
+}
