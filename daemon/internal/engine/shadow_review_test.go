@@ -230,6 +230,7 @@ func TestShadowReviewRecordsClassifiesSamplesAndBlocksReady(t *testing.T) {
 	attention := signet.NewService(st, signet.WithClock(func() time.Time {
 		return now.Add(3 * time.Minute)
 	}))
+	recordFakeReviewIdentities(t, st)
 	w := &productionPublicationWorkflow{
 		store: st, attention: attention, workDir: dir,
 		transport: retainingShadowTransport{}, now: func() time.Time { return now.Add(2 * time.Minute) },
@@ -580,6 +581,7 @@ func TestShadowReviewFailureIsClassifiedAndDoesNotBlockRoutedGate(t *testing.T) 
 	declared := &exec.ReviewSourceFailure{Class: domain.ReviewFailureQuota, Err: errors.New("quota exhausted")}
 	source := &immediateShadowSource{status: exec.StatusRunning}
 	var gotClass domain.ReviewFailureClass
+	recordFakeReviewIdentities(t, st)
 	w := &productionPublicationWorkflow{
 		store: st, attention: signet.NewService(st), workDir: t.TempDir(),
 		transport: retainingShadowTransport{}, shadowReviewSource: source,
@@ -623,6 +625,16 @@ func TestShadowReviewFailureIsClassifiedAndDoesNotBlockRoutedGate(t *testing.T) 
 	}
 	if source.teardowns != 1 || source.requested {
 		t.Fatalf("started shadow teardown = %d, requested %v", source.teardowns, source.requested)
+	}
+	// An abandoned review stays abandoned: the gate re-enters while the run is
+	// parked, and another pass neither launches it past the pool nor writes.
+	before := serverRevision(t, st)
+	complete, err = w.reconcileShadowReview(ctx, task, binding, checkpoint, nil, instructions, routed)
+	if err != nil || !complete || source.requested {
+		t.Fatalf("pass after abandoning = complete %v, requested %v, err %v", complete, source.requested, err)
+	}
+	if after := serverRevision(t, st); after != before {
+		t.Fatalf("pass after abandoning moved the revision from %d to %d", before, after)
 	}
 	if err := st.Read(ctx, func(tx *store.ReadTx) error {
 		records, err := tx.ListShadowReviewRecords(ctx, runID)
@@ -691,6 +703,7 @@ func TestShadowReviewRejectsResultUnderAnotherAdmission(t *testing.T) {
 	}
 	var gotClass domain.ReviewFailureClass
 	var gotErr error
+	recordFakeReviewIdentities(t, st)
 	w := &productionPublicationWorkflow{
 		store: st, attention: signet.NewService(st), workDir: t.TempDir(),
 		transport: retainingShadowTransport{}, shadowReviewSource: source,
@@ -776,6 +789,7 @@ func TestLateCompletedShadowReviewExpiresWithoutBlockingRoutedGate(t *testing.T)
 		CompletedAt:         completedAt.Add(shadowReviewWait), CompletionEvidence: shadowTestDigest("0"),
 	}}
 	var gotClass domain.ReviewFailureClass
+	recordFakeReviewIdentities(t, st)
 	w := &productionPublicationWorkflow{
 		store: st, attention: signet.NewService(st), workDir: t.TempDir(),
 		transport: retainingShadowTransport{}, shadowReviewSource: source,
@@ -832,6 +846,104 @@ func TestLateCompletedShadowReviewExpiresWithoutBlockingRoutedGate(t *testing.T)
 	}); err != nil {
 		t.Fatal(err)
 	}
+}
+
+// TestShadowReviewWaitsForAPoolSlotWithinItsWindow: a shadow review refused for
+// a full pool waits under the pool hold, and past the window that bounds any
+// shadow pass it is abandoned with the hold cleared, so a full pool never holds
+// the routed gate longer than a slow shadow review would.
+func TestShadowReviewWaitsForAPoolSlotWithinItsWindow(t *testing.T) {
+	ctx := t.Context()
+	st := storetest.Open(t, filepath.Join(t.TempDir(), "freeside.db"), store.Options{})
+	runID := domain.RunID("run-shadow-pool")
+	run := domain.Run{ID: runID, ProjectID: "project-shadow", SpecDigest: shadowTestDigest("3"), PolicyDigest: shadowTestDigest("2")}
+	if err := st.Write(ctx, func(tx *store.WriteTx) error { return tx.PutRun(ctx, run) }); err != nil {
+		t.Fatal(err)
+	}
+	completedAt := time.Date(2026, 8, 24, 15, 0, 0, 0, time.UTC)
+	current := completedAt.Add(time.Minute)
+	abandoned := 0
+	w := &productionPublicationWorkflow{
+		store: st, workDir: t.TempDir(), now: func() time.Time { return current },
+		shadowReviewFailure: func(domain.RunID, int, domain.ReviewFailureClass, error) { abandoned++ },
+	}
+	task := productionPublicationTask{RunID: runID, ProjectID: run.ProjectID}
+	routed := domain.ReviewRecord{RunID: runID, Round: 1, CompletedAt: completedAt}
+	id := domain.InvocationID("shadow-invocation")
+	refusal := &domain.UsagePoolExhaustedError{Pool: "identity:fake-shadow-identity", Active: 1, Limit: 1}
+
+	complete, err := w.waitForShadowReviewSlot(ctx, task, routed, id, refusal)
+	if err != nil || complete || abandoned != 0 {
+		t.Fatalf("inside the window = complete %t, abandoned %d, %v", complete, abandoned, err)
+	}
+	hold := storedRunHold(t, st, runID)
+	if hold == nil || hold.Reason != domain.HoldUsagePoolExhausted ||
+		hold.UsagePool == nil || *hold.UsagePool != refusal.Pool {
+		t.Fatalf("hold = %+v, want one naming %s", hold, refusal.Pool)
+	}
+
+	current = completedAt.Add(shadowReviewWait)
+	complete, err = w.waitForShadowReviewSlot(ctx, task, routed, id, refusal)
+	if err != nil || !complete || abandoned != 1 {
+		t.Fatalf("past the window = complete %t, abandoned %d, %v", complete, abandoned, err)
+	}
+	if hold := storedRunHold(t, st, runID); hold != nil {
+		t.Fatalf("the abandoned review left its hold: %+v", hold)
+	}
+	// The refusal repeats while the run stays parked, and moves no revision.
+	before := serverRevision(t, st)
+	if complete, err = w.waitForShadowReviewSlot(ctx, task, routed, id, refusal); err != nil || !complete {
+		t.Fatalf("repeat past the window = complete %t, %v", complete, err)
+	}
+	if after := serverRevision(t, st); after != before {
+		t.Fatalf("repeat past the window moved the revision from %d to %d", before, after)
+	}
+}
+
+// TestReviewAdmissionResetsThePaceOfTheHoldItEnds: the same wait returning
+// inside the refresh interval is a new wait, not a repeat of the one that ended.
+func TestReviewAdmissionResetsThePaceOfTheHoldItEnds(t *testing.T) {
+	ctx := t.Context()
+	st := storetest.Open(t, filepath.Join(t.TempDir(), "freeside.db"), store.Options{})
+	runID := domain.RunID("run-review-pace")
+	run := domain.Run{ID: runID, ProjectID: "project-shadow", SpecDigest: shadowTestDigest("3"), PolicyDigest: shadowTestDigest("2")}
+	if err := st.Write(ctx, func(tx *store.WriteTx) error { return tx.PutRun(ctx, run) }); err != nil {
+		t.Fatal(err)
+	}
+	recordFakeReviewIdentities(t, st)
+	current := time.Date(2026, 8, 24, 15, 0, 0, 0, time.UTC)
+	w := &productionPublicationWorkflow{
+		store: st, reviewAdmitter: fake.AdmitReview, now: func() time.Time { return current },
+	}
+	id := ProductionReviewInvocationID(runID, 1)
+	refusal := &domain.UsagePoolExhaustedError{Pool: "identity:fake-review-identity", Active: 1, Limit: 1}
+	if err := w.holdReviewForUsagePool(ctx, runID, id, refusal); err != nil {
+		t.Fatal(err)
+	}
+	if storedRunHold(t, st, runID) == nil {
+		t.Fatal("the wait recorded no hold")
+	}
+	if _, err := w.ensureReviewAdmission(ctx, domain.RoleReviewer, runID, id); err != nil {
+		t.Fatal(err)
+	}
+	if hold := storedRunHold(t, st, runID); hold != nil {
+		t.Fatalf("the admission kept the hold: %+v", hold)
+	}
+	if err := w.holdReviewForUsagePool(ctx, runID, ProductionReviewInvocationID(runID, 2), refusal); err != nil {
+		t.Fatal(err)
+	}
+	if storedRunHold(t, st, runID) == nil {
+		t.Fatal("the returning wait was skipped by the pace of the one that ended")
+	}
+}
+
+func serverRevision(t *testing.T, st *store.Store) int64 {
+	t.Helper()
+	state, err := st.ServerState(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	return state.Revision
 }
 
 func TestResolvedShadowReviewRateFallsBackClampsAndSelectsStably(t *testing.T) {
@@ -987,4 +1099,21 @@ func TestShadowReviewAttentionBindsCurrentTaskAndRecord(t *testing.T) {
 
 func shadowTestDigest(seed string) domain.Digest {
 	return domain.Digest("sha256:" + strings.Repeat(seed, 64))
+}
+
+// recordFakeReviewIdentities records the identities fake.AdmitReview names, on
+// pools wide enough that a fixture's several admissions never meet the limit.
+func recordFakeReviewIdentities(t *testing.T, st *store.Store) {
+	t.Helper()
+	at := time.Unix(1, 0).UTC()
+	if err := st.WriteInternal(t.Context(), func(tx *store.InternalTx) error {
+		for _, identity := range fake.ReviewIdentities() {
+			if err := storetest.RecordIdentityOnPool(t.Context(), tx, identity, 64, at); err != nil {
+				return err
+			}
+		}
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
 }

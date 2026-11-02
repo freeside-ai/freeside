@@ -3,6 +3,7 @@ package store
 import (
 	"context"
 	"errors"
+	"fmt"
 	"path/filepath"
 	"testing"
 	"time"
@@ -215,7 +216,7 @@ func TestUsagePoolCountRefusesDivergentIndexedIdentity(t *testing.T) {
 		var got int
 		err := s.Read(ctx, func(tx *ReadTx) error {
 			var err error
-			got, err = tx.ActiveUsagePoolExecutionCount(ctx, pool)
+			got, err = tx.ActiveUsagePoolSlotCount(ctx, pool)
 			return err
 		})
 		return got, err
@@ -240,6 +241,272 @@ func TestUsagePoolCountRefusesDivergentIndexedIdentity(t *testing.T) {
 	})
 	if !errors.Is(err, ErrRowInconsistent) {
 		t.Fatalf("gate = %v, want it to fail closed with %v", err, ErrRowInconsistent)
+	}
+}
+
+// reviewSlotFixture admits one review on auth-1's pool, whose run belongs to a
+// task, and leaves its launch to each case.
+func reviewSlotFixture(t *testing.T) (*Store, domain.ReviewAdmission) {
+	t.Helper()
+	ctx := t.Context()
+	st := openSlotStore(t)
+	_, runID := seedOriginTestTarget(t, ctx, st)
+	recordSlotIdentity(t, st, slotIdentity("auth-1", ""), slotAt)
+	admission := storedReviewAdmission(t, domain.RoleReviewer)
+	admission.RunID = runID
+	admission, err := domain.NewReviewAdmission(admission)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := st.Write(ctx, func(tx *WriteTx) error {
+		return tx.PutReviewAdmission(ctx, admission)
+	}); err != nil {
+		t.Fatal(err)
+	}
+	return st, admission
+}
+
+func reviewIntentBody(id domain.InvocationID, state string) []byte {
+	return []byte(fmt.Sprintf(`{"run_id":%q,"state":%q}`, id, state))
+}
+
+func openReviewIntent(ctx context.Context, tx *WriteTx, id domain.InvocationID) error {
+	return tx.BeginCodexReviewIntent(ctx, string(id), "preparing", reviewIntentBody(id, "preparing"))
+}
+
+func closeReviewIntent(ctx context.Context, tx *WriteTx, id domain.InvocationID) error {
+	return tx.UpdateCodexReviewIntent(ctx, string(id), "preparing", "closed",
+		reviewIntentBody(id, "preparing"), reviewIntentBody(id, "closed"))
+}
+
+func openAndCloseReviewIntent(ctx context.Context, tx *WriteTx, id domain.InvocationID) error {
+	if err := openReviewIntent(ctx, tx, id); err != nil {
+		return err
+	}
+	return closeReviewIntent(ctx, tx, id)
+}
+
+func collectReviewOutcome(ctx context.Context, tx *WriteTx, id domain.InvocationID) error {
+	if err := tx.RecordCodexReviewRequest(ctx, string(id), []byte(`{}`)); err != nil {
+		return err
+	}
+	return tx.RecordCodexReviewOutcome(ctx, string(id),
+		[]byte(fmt.Sprintf(`{"invocation_id":%q,"status":"canceled"}`, id)))
+}
+
+func stopReviewSlotTask(ctx context.Context, tx *WriteTx) error {
+	run, err := tx.GetRun(ctx, "run-origin-1")
+	if err != nil {
+		return err
+	}
+	state, err := tx.ServerState(ctx)
+	if err != nil {
+		return err
+	}
+	_, _, err = tx.StopTask(ctx, domain.StopTaskRequest{
+		CommandID: "stop", DeviceID: "device", TaskID: run.TaskID, ProjectID: run.ProjectID,
+		ExpectedSyncEpoch: state.SyncEpoch, ExpectedEntityVersion: state.Revision,
+	}, slotAt)
+	return err
+}
+
+// TestReviewSlotRelease pins the release rule. For a launch the ward journalled,
+// only the ward's proof ends the slot: above all, a cancelled review whose
+// outcome is written while its containers still run keeps it.
+func TestReviewSlotRelease(t *testing.T) {
+	t.Parallel()
+	for name, tc := range map[string]struct {
+		arrange func(context.Context, *WriteTx, domain.InvocationID) error
+		want    int
+	}{
+		"admitted, nothing launched yet": {
+			func(context.Context, *WriteTx, domain.InvocationID) error { return nil }, 1,
+		},
+		"released before a launch": {
+			func(ctx context.Context, tx *WriteTx, id domain.InvocationID) error {
+				return tx.ReleaseReviewSlot(ctx, id, slotAt)
+			}, 0,
+		},
+		"open launch": {openReviewIntent, 1},
+		"a release does not outrank the ward": {
+			func(ctx context.Context, tx *WriteTx, id domain.InvocationID) error {
+				if err := openReviewIntent(ctx, tx, id); err != nil {
+					return err
+				}
+				return tx.ReleaseReviewSlot(ctx, id, slotAt)
+			}, 1,
+		},
+		"cancelled, outcome written, containers not proved absent": {
+			func(ctx context.Context, tx *WriteTx, id domain.InvocationID) error {
+				if err := openReviewIntent(ctx, tx, id); err != nil {
+					return err
+				}
+				return collectReviewOutcome(ctx, tx, id)
+			}, 1,
+		},
+		"cancelled, ready proves the containers absent": {
+			func(ctx context.Context, tx *WriteTx, id domain.InvocationID) error {
+				if err := openReviewIntent(ctx, tx, id); err != nil {
+					return err
+				}
+				if err := collectReviewOutcome(ctx, tx, id); err != nil {
+					return err
+				}
+				return tx.MarkCodexReviewOutcomeReady(ctx, string(id))
+			}, 0,
+		},
+		// A launch that fails before it starts closes its intent with no
+		// outcome, and Inspect relaunches the recorded request past the gate.
+		"closed intent, no outcome, retry pending": {openAndCloseReviewIntent, 1},
+		"closed intent, no outcome, review failed": {
+			func(ctx context.Context, tx *WriteTx, id domain.InvocationID) error {
+				if err := openAndCloseReviewIntent(ctx, tx, id); err != nil {
+					return err
+				}
+				return tx.PutReviewFailure(ctx, domain.ReviewFailure{
+					InvocationID: id, RunID: "run-origin-1", Round: 1, BaseSHA: "base", HeadSHA: "head",
+					Class: domain.ReviewFailureTransient, Reason: "retries spent", ObservedAt: slotAt,
+				})
+			}, 0,
+		},
+		"closed intent, no outcome, released": {
+			func(ctx context.Context, tx *WriteTx, id domain.InvocationID) error {
+				if err := openAndCloseReviewIntent(ctx, tx, id); err != nil {
+					return err
+				}
+				return tx.ReleaseReviewSlot(ctx, id, slotAt)
+			}, 0,
+		},
+		"closed intent, no outcome, task cancelled": {
+			func(ctx context.Context, tx *WriteTx, id domain.InvocationID) error {
+				if err := openAndCloseReviewIntent(ctx, tx, id); err != nil {
+					return err
+				}
+				return stopReviewSlotTask(ctx, tx)
+			}, 0,
+		},
+		"historic outcome left collected behind a closed intent": {
+			func(ctx context.Context, tx *WriteTx, id domain.InvocationID) error {
+				if err := openReviewIntent(ctx, tx, id); err != nil {
+					return err
+				}
+				if err := collectReviewOutcome(ctx, tx, id); err != nil {
+					return err
+				}
+				return closeReviewIntent(ctx, tx, id)
+			}, 0,
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			ctx := t.Context()
+			st, admission := reviewSlotFixture(t)
+			if err := st.Write(ctx, func(tx *WriteTx) error {
+				return tc.arrange(ctx, tx, admission.InvocationID)
+			}); err != nil {
+				t.Fatal(err)
+			}
+			if err := st.Read(ctx, func(tx *ReadTx) error {
+				got, err := tx.ActiveUsagePoolSlotCount(ctx, "identity:auth-1")
+				if err == nil && got != tc.want {
+					t.Errorf("active = %d, want %d", got, tc.want)
+				}
+				return err
+			}); err != nil {
+				t.Fatal(err)
+			}
+		})
+	}
+}
+
+// TestReviewSlotProofIsAuthenticated: a rewritten journal row reads as an error,
+// never as a released slot, including a finished review's row whose digest
+// matches because it was copied whole onto a live one.
+func TestReviewSlotProofIsAuthenticated(t *testing.T) {
+	t.Parallel()
+	const finished = domain.InvocationID("finished-review")
+	copyRow := func(table, key string) string {
+		return fmt.Sprintf(`UPDATE %[1]s SET (state, body_digest, body) = (
+			SELECT state, body_digest, body FROM %[1]s WHERE %[2]s = '%[3]s'
+		) WHERE %[2]s = 'review-1'`, table, key, finished)
+	}
+	for name, tc := range map[string]struct {
+		arrange func(context.Context, *WriteTx, domain.InvocationID) error
+		rewrite string
+	}{
+		"intent state": {openReviewIntent, `UPDATE codex_review_intents SET state = 'closed'`},
+		"outcome state": {
+			func(ctx context.Context, tx *WriteTx, id domain.InvocationID) error {
+				if err := openReviewIntent(ctx, tx, id); err != nil {
+					return err
+				}
+				return collectReviewOutcome(ctx, tx, id)
+			},
+			`UPDATE codex_review_outcomes SET state = 'ready'`,
+		},
+		"intent copied from a finished review": {
+			openReviewIntent, copyRow("codex_review_intents", "run_id"),
+		},
+		"outcome copied from a finished review": {
+			func(ctx context.Context, tx *WriteTx, id domain.InvocationID) error {
+				if err := openReviewIntent(ctx, tx, id); err != nil {
+					return err
+				}
+				return collectReviewOutcome(ctx, tx, id)
+			},
+			copyRow("codex_review_outcomes", "invocation_id"),
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			ctx := t.Context()
+			st, admission := reviewSlotFixture(t)
+			if err := st.Write(ctx, func(tx *WriteTx) error {
+				if err := tc.arrange(ctx, tx, admission.InvocationID); err != nil {
+					return err
+				}
+				if err := openAndCloseReviewIntent(ctx, tx, finished); err != nil {
+					return err
+				}
+				if err := collectReviewOutcome(ctx, tx, finished); err != nil {
+					return err
+				}
+				return tx.MarkCodexReviewOutcomeReady(ctx, string(finished))
+			}); err != nil {
+				t.Fatal(err)
+			}
+			if _, err := st.db.ExecContext(ctx, tc.rewrite); err != nil {
+				t.Fatal(err)
+			}
+			if err := st.Read(ctx, func(tx *ReadTx) error {
+				_, err := tx.ActiveUsagePoolSlotCount(ctx, "identity:auth-1")
+				return err
+			}); !errors.Is(err, ErrRowInconsistent) {
+				t.Fatalf("count = %v, want %v", err, ErrRowInconsistent)
+			}
+		})
+	}
+}
+
+func TestReviewGateExcludesItsOwnAdmission(t *testing.T) {
+	t.Parallel()
+	ctx := t.Context()
+	st, admission := reviewSlotFixture(t)
+	other := admission
+	other.InvocationID = "review-2"
+	if err := st.Read(ctx, func(tx *ReadTx) error {
+		if err := tx.RequireReviewUsagePoolCapacity(ctx, admission); err != nil {
+			t.Errorf("replay of the holder = %v", err)
+		}
+		err := tx.RequireReviewUsagePoolCapacity(ctx, other)
+		var exhausted *domain.UsagePoolExhaustedError
+		if !errors.As(err, &exhausted) || exhausted.Pool != "identity:auth-1" ||
+			!errors.Is(err, domain.ErrUsagePoolExhausted) {
+			t.Errorf("second review = %v, want the pool named", err)
+		}
+		return nil
+	}); err != nil {
+		t.Fatal(err)
 	}
 }
 

@@ -39,7 +39,7 @@ func activePoolExecutions(
 	var active int
 	if err := st.Read(context.Background(), func(tx *store.ReadTx) error {
 		var err error
-		active, err = tx.ActiveUsagePoolExecutionCount(context.Background(), pool)
+		active, err = tx.ActiveUsagePoolSlotCount(context.Background(), pool)
 		return err
 	}); err != nil {
 		t.Fatalf("count active executions for %s: %v", pool, err)

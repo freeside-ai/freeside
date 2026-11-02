@@ -117,7 +117,7 @@ func TestProductionDeliveryRefusalRecordsStandardOutcome(t *testing.T) {
 		if outcome.Status != domain.ExecutionOutcomeFailed || outcome.AdmissionID != admission.ID {
 			return fmt.Errorf("delivery refusal outcome = %#v", outcome)
 		}
-		active, err := tx.ActiveUsagePoolExecutionCount(ctx, identity.EffectiveUsagePool())
+		active, err := tx.ActiveUsagePoolSlotCount(ctx, identity.EffectiveUsagePool())
 		if err != nil {
 			return err
 		}
@@ -443,6 +443,7 @@ func TestProductionReviewTransientCleanupFailureSchedulesSameInvocationRetry(t *
 	}); err != nil {
 		t.Fatal(err)
 	}
+	recordFakeReviewIdentities(t, st)
 	now := time.Date(2026, 8, 11, 12, 0, 0, 0, time.UTC)
 	cleanupErr := errors.New("runtime cleanup temporarily unavailable")
 	source := &transientCleanupReviewSource{cause: cleanupErr}

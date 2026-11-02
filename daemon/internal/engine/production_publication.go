@@ -3776,6 +3776,11 @@ func (w *productionPublicationWorkflow) reconcileReviewGate(
 			return w.retryOrRecordReviewFailure(ctx, task, id, round,
 				binding.admission.Base.BaseSHA, task.HeadSHA, err)
 		}
+		// A full pool is a wait, not a source failure: it spends no retry
+		// budget, and a later pass asks again once a slot frees.
+		if errors.Is(err, domain.ErrUsagePoolExhausted) {
+			return productionReviewPending, w.holdReviewForUsagePool(ctx, task.RunID, id, err)
+		}
 		return productionReviewPending, err
 	}
 	req, requestAuthority, err := w.productionReviewRequest(
@@ -7828,6 +7833,11 @@ func (w *productionPublicationWorkflow) storedReviewAdmission(
 // stores it; every later pass reads the stored row, so a restart, a retry, or
 // a lineup change never replaces it. A refusal is a configuration failure of
 // the invocation, returned as a *exec.ReviewSourceFailure, and stores nothing.
+//
+// The admission takes a slot on its identity's usage pool, so the gate runs in
+// the transaction that writes the row. A full pool stores nothing and returns
+// ErrUsagePoolExhausted, for the caller to wait on; writing the admission ends
+// the wait, and with it the hold the wait recorded and that hold's pace.
 func (w *productionPublicationWorkflow) ensureReviewAdmission(
 	ctx context.Context, role domain.RoleName, runID domain.RunID, id domain.InvocationID,
 ) (domain.ReviewAdmission, error) {
@@ -7854,15 +7864,51 @@ func (w *productionPublicationWorkflow) ensureReviewAdmission(
 			"review admission for %q resolved %q of run %q as %s: %w",
 			id, admission.InvocationID, admission.RunID, admission.Role, domain.ErrParentKeyMismatch)
 	}
+	var waited bool
 	if err := w.store.Write(ctx, func(tx *store.WriteTx) error {
 		if err := requireTaskExecutionOpen(ctx, &tx.ReadTx, runID); err != nil {
 			return err
 		}
-		return tx.PutReviewAdmission(ctx, admission)
+		if err := tx.RequireReviewUsagePoolCapacity(ctx, admission); err != nil {
+			return err
+		}
+		if err := tx.PutReviewAdmission(ctx, admission); err != nil {
+			return err
+		}
+		hold, present, err := tx.GetRunHold(ctx, runID)
+		if err != nil {
+			return err
+		}
+		waited = present && hold.Reason == domain.HoldUsagePoolExhausted
+		return tx.ClearRunHoldCause(ctx, runID, domain.HoldUsagePoolExhausted)
 	}); err != nil {
 		return domain.ReviewAdmission{}, err
 	}
+	// The key also paces the attended clear, so only an ended wait resets it.
+	if waited {
+		w.holdPace.forget("hold:" + string(runID))
+	}
 	return admission, nil
+}
+
+// holdReviewForUsagePool records the wait of a review refused for a full pool.
+// cause is that refusal, which names the pool.
+func (w *productionPublicationWorkflow) holdReviewForUsagePool(
+	ctx context.Context, runID domain.RunID, id domain.InvocationID, cause error,
+) error {
+	detail := holdDetailFor(cause)
+	now := w.now().UTC()
+	key := "hold:" + string(runID)
+	if !w.holdPace.due(key, holdPaceState(domain.HoldUsagePoolExhausted, detail), now) {
+		return nil
+	}
+	if err := w.store.Write(ctx, func(tx *store.WriteTx) error {
+		return recordRunHold(ctx, tx, runID, id, domain.HoldUsagePoolExhausted, detail, now)
+	}); err != nil {
+		w.holdPace.forget(key)
+		return err
+	}
+	return nil
 }
 
 // recordReviewRequest preserves the first attempt instant. RequestReview may

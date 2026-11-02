@@ -321,10 +321,10 @@ func (f failedImplementationFixture) activeExecutionCount(t *testing.T, id domai
 	var got int
 	if err := f.store.Read(t.Context(), func(tx *store.ReadTx) error {
 		var err error
-		got, err = tx.ActiveUsagePoolExecutionCount(t.Context(), domain.AuthIdentity{ID: id}.EffectiveUsagePool())
+		got, err = tx.ActiveUsagePoolSlotCount(t.Context(), domain.AuthIdentity{ID: id}.EffectiveUsagePool())
 		return err
 	}); err != nil {
-		t.Fatalf("ActiveUsagePoolExecutionCount: %v", err)
+		t.Fatalf("ActiveUsagePoolSlotCount: %v", err)
 	}
 	return got
 }
