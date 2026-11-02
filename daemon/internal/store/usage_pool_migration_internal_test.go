@@ -160,6 +160,14 @@ func TestUsagePoolsMigrationReleasesAbandonedShadowAdmissions(t *testing.T) {
 		VALUES ('shadow-requested', 'd', '{}')`); err != nil {
 		t.Fatal(err)
 	}
+	for _, statement := range []string{
+		`DROP TABLE routing_policies`,
+		`DELETE FROM schema_migrations WHERE name = '0115_routing_policies.sql'`,
+	} {
+		if _, err := st.db.ExecContext(ctx, statement); err != nil {
+			t.Fatal(err)
+		}
+	}
 	rewindReviewSlotReleases(t, ctx, st.db)
 	if err := migrate(ctx, st.db, migrations.FS); err != nil {
 		t.Fatal(err)

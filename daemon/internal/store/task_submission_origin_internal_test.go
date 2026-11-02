@@ -159,6 +159,8 @@ func TestTaskSubmissionOriginMigrationKeepsDeviceRows(t *testing.T) {
 	// submission the way that daemon did.
 	rewindUsagePools(t, ctx, st.db)
 	for _, statement := range []string{
+		`DROP TABLE routing_policies`,
+		`DELETE FROM schema_migrations WHERE name = '0115_routing_policies.sql'`,
 		`DROP TABLE task_line_changes`,
 		`DELETE FROM schema_migrations WHERE name = '0113_task_line_changes.sql'`,
 		`ALTER TABLE task_lines DROP COLUMN provenance`,
