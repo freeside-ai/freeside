@@ -216,6 +216,10 @@ type StageResult struct {
 	// sets it only when it positively knows the cause; empty on a failed
 	// result means unknown, which is what the stage driver records.
 	Cause domain.FailureCause `json:"cause,omitempty"`
+	// QuotaRefusal names the provider window behind a quota failure and its
+	// reset, when the driver knows them; present only beside a quota cause.
+	// No real driver classifies one yet, so only the fake sets it.
+	QuotaRefusal *domain.QuotaRefusal `json:"quota_refusal,omitempty"`
 	// Usage carries numbers-only route telemetry. Nil means not observed.
 	Usage []UsageMeasurement `json:"usage"`
 }
@@ -239,6 +243,15 @@ func (r StageResult) Validate() error {
 				r.Status, r.Cause, ErrCauseWithoutFailure)
 		}
 		if err := r.Cause.Validate(); err != nil {
+			return fmt.Errorf("stage result: %w", err)
+		}
+	}
+	if r.QuotaRefusal != nil {
+		if r.Cause != domain.FailureCauseQuota {
+			return fmt.Errorf("stage result cause %q with a quota refusal: %w",
+				r.Cause, ErrQuotaRefusalWithoutQuota)
+		}
+		if err := r.QuotaRefusal.Validate(); err != nil {
 			return fmt.Errorf("stage result: %w", err)
 		}
 	}

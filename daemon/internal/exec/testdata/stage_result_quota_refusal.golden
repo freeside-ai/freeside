@@ -1,0 +1,13 @@
+{
+  "invocation_id": "inv-1",
+  "status": "failed",
+  "head_sha": "",
+  "artifacts": null,
+  "summary": "provider refused: quota exhausted",
+  "cause": "quota",
+  "quota_refusal": {
+    "window": "five_hour",
+    "resets_at": "2026-01-02T08:00:00Z"
+  },
+  "usage": null
+}

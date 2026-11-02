@@ -503,3 +503,40 @@ func TestPoolUsageObservationWithRefusalMark(t *testing.T) {
 		t.Fatalf("outdated mark kept: %+v", got)
 	}
 }
+
+func TestPoolUsageObservationExhaustedWindowMark(t *testing.T) {
+	t.Parallel()
+	o := validPoolUsageObservation()
+	o.Windows[0].ObservedAt = observationAt.Add(-2 * time.Hour)
+	mark, ok := o.ExhaustedWindowMark("five_hour", observationAt)
+	if !ok || mark.Source != domain.ExhaustedMarkProviderRefusal || mark.Window != "five_hour" {
+		t.Fatalf("ExhaustedWindowMark(five_hour) = %+v, %t, want the refusal mark", mark, ok)
+	}
+	if _, ok := o.ExhaustedWindowMark("seven_day_a", observationAt); ok {
+		t.Fatal("ExhaustedWindowMark(seven_day_a) reports an allowed window exhausted")
+	}
+	// The allowed reading observed after the refusal clears it.
+	o.Windows[0].ObservedAt = observationAt
+	if _, ok := o.ExhaustedWindowMark("five_hour", observationAt); ok {
+		t.Fatal("ExhaustedWindowMark(five_hour) survives a later allowed reading")
+	}
+}
+
+func TestPoolUsageObservationReadingReset(t *testing.T) {
+	t.Parallel()
+	resetsAt := observationAt.Add(time.Hour)
+	o := validPoolUsageObservation()
+	o.Windows[0].ResetsAt = &resetsAt
+	if got := o.ReadingReset("five_hour", observationAt); got == nil || !got.Equal(resetsAt) {
+		t.Fatalf("ReadingReset ahead of now = %v, want %s", got, resetsAt)
+	}
+	if got := o.ReadingReset("five_hour", resetsAt); got != nil {
+		t.Fatalf("ReadingReset at the reset = %s, want none", got)
+	}
+	if got := o.ReadingReset("seven_day_a", observationAt); got != nil {
+		t.Fatalf("ReadingReset for a reading with no reset = %s, want none", got)
+	}
+	if got := o.ReadingReset("seven_day_b", observationAt); got != nil {
+		t.Fatalf("ReadingReset for an unread window = %s, want none", got)
+	}
+}
