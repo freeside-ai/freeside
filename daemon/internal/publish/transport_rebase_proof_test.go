@@ -138,7 +138,10 @@ func TestProveRebaseRefusesRewrittenHeads(t *testing.T) {
 			rewrite: func(t *testing.T, f *rebaseFixture, work string) {
 				// The reviewed commits re-recorded where they started: same
 				// patches and tree history, but not on the reviewed base.
-				gitOut(t, work, "commit", "--amend", "--no-edit", "--date=@1")
+				// The zone makes git read @1 as a timestamp: alone it means
+				// day 1 of this month, which on the 1st can leave the commit
+				// unchanged.
+				gitOut(t, work, "commit", "--amend", "--no-edit", "--date=@1 +0000")
 			},
 			detail: "the head does not descend from the reviewed base",
 		},
