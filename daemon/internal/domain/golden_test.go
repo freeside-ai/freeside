@@ -1028,6 +1028,55 @@ func TestGolden(t *testing.T) {
 		AccountBinding:      identity.AccountBinding,
 		RecordedAt:          ts,
 	}
+	// The usage record of the pool that identity meters against. The model id
+	// is a fixture value, not a provider claim. The five-hour reading carries a
+	// status and reset alone, the shape #1713 proved. The refusal mark on that
+	// window shares its instant, so the reading doesn't clear it and both windows
+	// are exhausted at ts: the exhausted_mark golden is the reading's, the second.
+	poolUsageObservation := domain.PoolUsageObservation{
+		Pool: "claude-owner-subscription", Plan: new("max"), Collector: enrollment.ID,
+		LastAttempt: &domain.CollectionAttempt{Status: domain.CollectionAttemptSucceeded, At: ts},
+		Enrollments: []domain.EnrollmentAvailability{
+			{EnrollmentID: enrollment.ID, Answer: domain.AvailabilitySupported, ObservedAt: ts},
+		},
+		ModelWindows: []domain.ModelWindow{{RouteModelID: "claude-opus-4-1", Window: "seven_day_opus"}},
+		Windows: []domain.WindowReading{
+			{
+				Window: "five_hour", EnrollmentID: enrollment.ID, Generation: enrollmentGeneration.Ordinal,
+				Status: domain.WindowStatusAllowed, ResetsAt: new(ts.Add(5 * time.Hour)), ObservedAt: ts,
+			},
+			{
+				Window: "seven_day_opus", EnrollmentID: enrollment.ID, Generation: enrollmentGeneration.Ordinal,
+				Status: domain.WindowStatusExhausted, UsedPercent: new(100),
+				ResetsAt: new(ts.Add(72 * time.Hour)), Length: new(7 * 24 * time.Hour), ObservedAt: ts,
+			},
+		},
+		RefusalMarks: []domain.RefusalMark{
+			{Window: "five_hour", InvocationID: "inv-1", ResetsAt: new(ts.Add(5 * time.Hour)), SetAt: ts},
+		},
+	}
+	poolUsageObservationUnsupported := domain.PoolUsageObservation{
+		Pool: "claude-owner-subscription", Collector: enrollment.ID,
+		LastAttempt: &domain.CollectionAttempt{Status: domain.CollectionAttemptUnsupported, At: ts},
+		Enrollments: []domain.EnrollmentAvailability{
+			{EnrollmentID: enrollment.ID, Answer: domain.AvailabilityUnsupported, ObservedAt: ts},
+			{EnrollmentID: "enroll-claude-owner-cowork", Answer: domain.AvailabilityFailed, ObservedAt: ts},
+		},
+	}
+	poolUsageObservationFailed := domain.PoolUsageObservation{
+		Pool: "claude-owner-subscription", Collector: enrollment.ID,
+		LastAttempt: &domain.CollectionAttempt{
+			Status: domain.CollectionAttemptFailed, At: ts, Detail: "provider returned 503",
+		},
+		Enrollments: []domain.EnrollmentAvailability{
+			{EnrollmentID: enrollment.ID, Answer: domain.AvailabilityFailed, ObservedAt: ts},
+		},
+		Windows: []domain.WindowReading{{
+			Window: "five_hour", EnrollmentID: enrollment.ID, Generation: enrollmentGeneration.Ordinal,
+			Status: domain.WindowStatusAllowed, Quantity: new(int64(1200)), Unit: new("messages"),
+			ObservedAt: ts.Add(-time.Hour),
+		}},
+	}
 	// The credential-integrity probe's mark on that generation (issue #1624):
 	// a record beside the generation, so the generation's own golden above
 	// stays as it was.
@@ -2217,6 +2266,10 @@ func TestGolden(t *testing.T) {
 			ID: "claude-owner-subscription", Provider: "claude", MaxParallelExecutions: 2,
 		}},
 		{"routing_policy", routingPolicy},
+		{"pool_usage_observation", poolUsageObservation},
+		{"pool_usage_observation_unsupported", poolUsageObservationUnsupported},
+		{"pool_usage_observation_failed_keeps_readings", poolUsageObservationFailed},
+		{"exhausted_mark", poolUsageObservation.ExhaustedMarks(ts)[1]},
 		{"auth_store_mutation_lease", mutationLease},
 		{"auth_store_mutation_lease_bound", boundLease},
 		{"auth_store_read_hold", readHold},

@@ -1,0 +1,8 @@
+{
+  "window": "seven_day_opus",
+  "source": "usage_reading",
+  "invocation_id": null,
+  "reading_observed_at": "2026-01-02T03:04:05Z",
+  "resets_at": "2026-01-05T03:04:05Z",
+  "set_at": "2026-01-02T03:04:05Z"
+}
