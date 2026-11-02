@@ -63,6 +63,7 @@ const (
 	productionBlockReentryConflict       = domain.PublicationBlockBaseAdvancedConflict
 	productionBlockReentryVerification   = domain.PublicationBlockBaseAdvancedVerification
 	productionBlockReentryRoundLimit     = domain.PublicationBlockBaseAdvancedRoundLimit
+	productionBlockMemoryLimit           = domain.PublicationBlockVerificationMemoryLimit
 	productionBlockExternal              = "Publication is durably held because the external service permanently refused the committed operation. Repair that external state to resume recovery."
 	productionBlockConflict              = "Publication is durably held because the external branch or pull request conflicts with the committed identity. Inspect and repair that external state to resume recovery."
 	productionBlockSuccessorPRNotListed  = "Publication is held because GitHub still lists no pull request on the successor branch after repeated checks. Confirm the pull request exists and is open on that branch; publication resumes once GitHub shows it."
@@ -2918,6 +2919,13 @@ func (w *productionPublicationWorkflow) reconcileTask(
 	}
 	if !found {
 		checkpoint, err = w.verifyAndCheckpoint(ctx, task, binding, imported, checkoutDir)
+		if verificationMemoryLimit(err) {
+			return w.completeBlockedTask(
+				ctx, task, binding.run, imported, nil,
+				productionBlockMemoryLimit, productionRerunnableBlockActions,
+				publishBlockHoldReason(domain.HoldVerificationMemoryLimit),
+			)
+		}
 		if err != nil {
 			return productionTaskOutcome{}, err
 		}
@@ -6742,7 +6750,7 @@ func (w *productionPublicationWorkflow) verifyAndCheckpoint(
 			)},
 		})
 		if err != nil {
-			if !productionVerificationStateContradiction(err) {
+			if !productionVerificationStateContradiction(err) && !verificationMemoryLimit(err) {
 				err = productionPublicationRetryableError(err)
 			}
 			return productionVerificationCheckpoint{}, fmt.Errorf("clean production verification: %w", err)
@@ -6805,6 +6813,15 @@ func (w *productionPublicationWorkflow) verifyAndCheckpoint(
 		return productionVerificationCheckpoint{}, err
 	}
 	return checkpoint, nil
+}
+
+// verificationMemoryLimit reports a verification room killed at its declared
+// memory limit. The room runs at the size the run's durable policy resolved,
+// so a retry meets the same limit: the caller ends the cycle on it instead of
+// holding for a retry. A larger size is the capacity card's (#1598).
+func verificationMemoryLimit(err error) bool {
+	var limit *ward.MemoryLimitError
+	return errors.As(err, &limit) && limit.Class == ward.LaunchVerification
 }
 
 func productionVerificationStateContradiction(err error) bool {
@@ -7550,6 +7567,7 @@ func (w *productionPublicationWorkflow) recoverDefinitiveBlockedTask(
 		productionBlockReentryConflict,
 		productionBlockReentryVerification,
 		productionBlockReentryRoundLimit,
+		productionBlockMemoryLimit,
 	}, current.Reason) {
 		return nil, fmt.Errorf("production blocked item %q has unexpected reason: %w",
 			current.ID, domain.ErrParentKeyMismatch)
@@ -7572,6 +7590,17 @@ func (w *productionPublicationWorkflow) recoverDefinitiveBlockedTask(
 				current.ID, domain.ErrParentKeyMismatch)
 		}
 		artifacts = checkpoint.Artifacts
+	case productionBlockMemoryLimit:
+		// A first cycle's killed verification records no checkpoint and no
+		// evidence. An unpublished re-entry's carries the authorizing
+		// checkpoint it re-verified, like its other base-advance blocks.
+		if checkpointFound {
+			if !checkpoint.Authorization.AuthorizesPublication {
+				return nil, fmt.Errorf("production blocked item %q has an impossible memory-limit reason: %w",
+					current.ID, domain.ErrParentKeyMismatch)
+			}
+			artifacts = checkpoint.Artifacts
+		}
 	default:
 		// The known-reason gate above keeps this switch exhaustive if another
 		// definitive reason is added without its own reconstruction contract.

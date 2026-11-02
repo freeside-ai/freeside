@@ -497,6 +497,9 @@ func (w *productionPublicationWorkflow) reconcileReentryTask(
 		if reason, stop := reentryUnservedBaseReason(task, base.BaseSHA, err); stop {
 			return w.stopReentryCycle(ctx, task, reason, nil)
 		}
+		if reason, stop := reentryMemoryLimitReason(task, base.BaseSHA, err); stop {
+			return w.stopReentryCycle(ctx, task, reason, nil)
+		}
 		if err != nil {
 			return productionTaskOutcome{}, err
 		}
@@ -624,6 +627,21 @@ func reentryUnservedBaseReason(
 	return fmt.Sprintf(
 		"Readiness re-entry stopped because the project image this run was admitted with cannot serve base %s, so pull request head %s was not verified against it (%s). Rerun the work with a project image that serves that base.",
 		baseSHA, task.HeadSHA, reentryQuoted(err.Error())), true
+}
+
+// reentryMemoryLimitReason reports the stop for a cycle whose verification
+// room was killed at its declared memory limit. A retry runs at the same
+// size and meets the same limit, so this ends the cycle on an item a person
+// can read instead of holding it.
+func reentryMemoryLimitReason(
+	task productionPublicationTask, baseSHA string, err error,
+) (string, bool) {
+	if !verificationMemoryLimit(err) {
+		return "", false
+	}
+	return fmt.Sprintf(
+		"Readiness re-entry stopped because the verification container was killed at its declared memory limit while verifying pull request head %s against base %s. Raise execution.verification_memory_mib and rerun the work.",
+		task.HeadSHA, baseSHA), true
 }
 
 // reentryConflictReason names both commits and the conflicting paths. The
@@ -878,7 +896,7 @@ func (w *productionPublicationWorkflow) verifyReentry(
 		)},
 	})
 	if err != nil {
-		if !productionVerificationStateContradiction(err) {
+		if !productionVerificationStateContradiction(err) && !verificationMemoryLimit(err) {
 			err = productionPublicationRetryableError(err)
 		}
 		return productionReentryCheckpoint{}, fmt.Errorf("clean re-entry verification: %w", err)

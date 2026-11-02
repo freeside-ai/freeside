@@ -55,6 +55,9 @@ type productionRoom struct {
 	reads  int
 	runs   int
 	fail   bool
+	// runErr, when set, is the room's own failure for every command, as a
+	// verification container killed at its memory limit returns it.
+	runErr error
 	// sizes records the verification size each room construction received.
 	sizes []ward.ContainerSize
 	// images records the project image each room construction received.
@@ -73,6 +76,9 @@ func (r *productionRoom) Run(
 	_ context.Context, _ string, _ []string,
 ) (verify.StepResult, error) {
 	r.runs++
+	if r.runErr != nil {
+		return verify.StepResult{}, r.runErr
+	}
 	if r.fail {
 		return verify.StepResult{ExitCode: 1, Output: []byte("injected verification failure\n")}, nil
 	}
@@ -5741,6 +5747,79 @@ func TestProductionPublicationHoldAdvancesToDefinitiveBlock(t *testing.T) {
 		!reflect.DeepEqual(blocked.Item.ExpiresWhen, hold.Item.ExpiresWhen) {
 		t.Fatalf("definitive successor lost hold metadata: before=%#v after=%#v",
 			hold.Item, blocked.Item)
+	}
+}
+
+// A verification room killed at its memory limit ends the publication task as
+// a definitive block instead of a retryable hold: the rerun would verify at the
+// same policy size and meet the same limit (#1617). The block survives a crash
+// between the item and the terminal record, and no later pass re-verifies.
+func TestProductionVerificationMemoryLimitKillBlocksDefinitively(t *testing.T) {
+	t.Parallel()
+	for _, crash := range []bool{false, true} {
+		t.Run(fmt.Sprintf("crash=%v", crash), func(t *testing.T) {
+			t.Parallel()
+			p := newProductionPublicationHarness(t, "")
+			p.room.runErr = &ward.MemoryLimitError{
+				Class: ward.LaunchVerification, Size: ward.DefaultLaunchSize(ward.LaunchVerification),
+				Cause: errors.New("verification container exited 137"),
+			}
+			if crash {
+				p.workflow = p.newEngine(t, productionCrashSeams{
+					afterBlocked: func() error { return errors.New("stop after blocked item") },
+				}, true)
+			}
+			p.startAndRecordExport(t)
+			result, err := p.reconcileLanes()
+			if crash {
+				if err == nil {
+					t.Fatal("blocked-item seam did not interrupt reconciliation")
+				}
+				p.workflow = p.newEngine(t, productionCrashSeams{}, true)
+				result, err = p.reconcileLanes()
+				if err != nil || result.PublicationTasksCompleted != 1 {
+					t.Fatalf("recovered memory-limit block = %#v, %v", result, err)
+				}
+			} else if err != nil || result.PublicationTasksCompleted != 1 || result.BlockedItemsCreated != 1 {
+				t.Fatalf("memory-limit block = %#v, %v", result, err)
+			}
+			blocked, err := p.attention.GetAttentionItem(p.ctx, domain.ProductionBlockedItemID(p.runID))
+			if err != nil {
+				t.Fatal(err)
+			}
+			if blocked.Item.Reason != domain.PublicationBlockVerificationMemoryLimit ||
+				!slices.Equal(blocked.Item.RequestedDecision, []domain.Action{
+					domain.ActionRerunTrustEvaluation, domain.ActionInspectTrustFailure, domain.ActionStop,
+				}) || len(blocked.Item.EvidenceSnapshot) != 0 ||
+				blocked.Item.PublishBlock == nil || blocked.Item.PublishBlock.HoldReason == nil ||
+				*blocked.Item.PublishBlock.HoldReason != domain.HoldVerificationMemoryLimit {
+				t.Fatalf("memory-limit block item = %#v", blocked.Item)
+			}
+			if err := p.store.Read(p.ctx, func(tx *store.ReadTx) error {
+				if hold, found, err := tx.GetRunHold(p.ctx, p.runID); err != nil || found {
+					t.Errorf("memory-limit block left a retry hold: %+v, %v, %v", hold, found, err)
+				}
+				return nil
+			}); err != nil {
+				t.Fatal(err)
+			}
+			if conclusion := authenticatedProductionConclusion(t, p); !conclusion.Final ||
+				conclusion.Outcome != domain.RunOutcomeBlocked ||
+				conclusion.Reason == nil || *conclusion.Reason != domain.HoldVerificationMemoryLimit {
+				t.Fatalf("memory-limit block conclusion = %#v", conclusion)
+			}
+			runs := p.room.runs
+			p.now = p.now.Add(time.Hour)
+			if result, err := p.reconcileLanes(); err != nil || result != (engine.ReconcileResult{}) {
+				t.Fatalf("later pass = %#v, %v; want nothing to do", result, err)
+			}
+			if p.room.runs != runs {
+				t.Fatalf("later pass re-verified: %d verification commands, want %d", p.room.runs, runs)
+			}
+			if refs, prs := p.forge.Counts(); refs != 0 || prs != 0 {
+				t.Fatalf("memory-limit block caused forge effects: %d/%d", refs, prs)
+			}
+		})
 	}
 }
 
