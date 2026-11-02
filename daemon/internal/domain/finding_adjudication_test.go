@@ -1,6 +1,7 @@
 package domain_test
 
 import (
+	"bytes"
 	"encoding/json"
 	"errors"
 	"os"
@@ -13,6 +14,7 @@ import (
 	"github.com/freeside-ai/freeside/daemon/internal/contentaddr"
 	"github.com/freeside-ai/freeside/daemon/internal/domain"
 	"github.com/freeside-ai/freeside/daemon/internal/golden"
+	"github.com/freeside-ai/freeside/daemon/internal/strictjson"
 )
 
 func adjDigest(seed string) domain.Digest {
@@ -969,6 +971,80 @@ func TestFindingAdjudicationDecodeRejects(t *testing.T) {
 	if _, err := domain.DecodeFindingAdjudication(unknownFeedbackBody); err == nil {
 		t.Fatal("unknown feedback field: want error, got nil")
 	}
+}
+
+// TestFindingAdjudicationEncodeEnforcesPersistedBound pins that Encode and
+// DecodeFindingAdjudication accept the same bodies at the persisted bound, and
+// that the provider-output bound sits below it (#961).
+func TestFindingAdjudicationEncodeEnforcesPersistedBound(t *testing.T) {
+	t.Parallel()
+	if domain.MaxFindingAdjudicationProposalBytes >= domain.MaxFindingAdjudicationBytes {
+		t.Fatalf("proposal bound %d not below persisted bound %d",
+			domain.MaxFindingAdjudicationProposalBytes, domain.MaxFindingAdjudicationBytes)
+	}
+
+	atBound, wantBody := adjudicationOfBodySize(t, domain.MaxFindingAdjudicationBytes)
+	body, err := atBound.Encode()
+	if err != nil {
+		t.Fatalf("encode at bound: %v", err)
+	}
+	if !bytes.Equal(body, wantBody) {
+		t.Fatal("encode at bound differs from the canonical marshal")
+	}
+	decoded, err := domain.DecodeFindingAdjudication(body)
+	if err != nil {
+		t.Fatalf("decode at bound: %v", err)
+	}
+	if decoded.Digest != atBound.Digest {
+		t.Fatalf("decoded digest = %q, want %q", decoded.Digest, atBound.Digest)
+	}
+
+	over, overBody := adjudicationOfBodySize(t, domain.MaxFindingAdjudicationBytes+1)
+	if _, err := over.Encode(); !errors.Is(err, domain.ErrFindingAdjudicationOversized) {
+		t.Fatalf("encode one byte over = %v, want ErrFindingAdjudicationOversized", err)
+	}
+	if _, err := domain.DecodeFindingAdjudication(overBody); !errors.Is(err, strictjson.ErrLimitExceeded) {
+		t.Fatalf("decode one byte over = %v, want ErrLimitExceeded", err)
+	}
+}
+
+// adjudicationOfBodySize builds a one-entry artifact whose canonical body is
+// exactly size bytes by padding the entry's ASCII rationale, and returns it
+// with that body. The body comes from json.Marshal, not Encode, so a size above
+// the persisted bound is still observable.
+func adjudicationOfBodySize(t *testing.T, size int) (domain.FindingAdjudication, []byte) {
+	t.Helper()
+	build := func(rationale string) domain.FindingAdjudication {
+		entry, err := domain.NewModelAdjudicationEntry(
+			"finding-0001", domain.GoalContradictory, nil, domain.RouteDecline,
+			domain.ConfidenceHigh, rationale, nil, nil, nil, nil, nil)
+		if err != nil {
+			t.Fatalf("model entry: %v", err)
+		}
+		artifact, err := domain.NewFindingAdjudication(
+			"run-abc", 2,
+			adjDigest("approved-spec"), adjDigest("instruction-snapshot"), adjDigest("resolved-policy"),
+			[]domain.FindingAdjudicationEntry{entry}, "",
+			time.Date(2026, 8, 21, 15, 0, 0, 0, time.UTC),
+		)
+		if err != nil {
+			t.Fatalf("artifact: %v", err)
+		}
+		return artifact
+	}
+	base, err := json.Marshal(build("x"))
+	if err != nil {
+		t.Fatalf("marshal base: %v", err)
+	}
+	artifact := build(strings.Repeat("x", 1+size-len(base)))
+	body, err := json.Marshal(artifact)
+	if err != nil {
+		t.Fatalf("marshal padded: %v", err)
+	}
+	if len(body) != size {
+		t.Fatalf("padded body = %d bytes, want %d", len(body), size)
+	}
+	return artifact, body
 }
 
 // TestFindingAdjudicationEntryOffersAlternatives locks the digest-bound offered
