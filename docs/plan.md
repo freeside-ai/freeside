@@ -1244,15 +1244,25 @@ far more than one machine holds.
   short helpers (seeders, observers, the exporter) inside that reservation,
   because they run one after another within the launch. A verification job
   declares one size for its command containers, which also run one at a time.
+  So no launch or job ever runs two container VMs at once: a writer's agent is
+  deleted before its post-writer helpers start, a review's helpers run only
+  before its review container starts, and a job's containers run in turn.
   Sizes are control-plane policy per launch class, and project policy may
   raise a project's writer and verification sizes for heavy builds.
 - **A memory budget bounds them; CPU is only capped.** Each daemon instance
   has a budget in memory. Before a ward stage launch or a verification
-  job starts, the daemon reserves its declared memory against the budget, in
-  the same transaction that takes the launch's pool slot when it has one
-  (verification draws on no pool). CPU caps are not reserved and may add up
-  past the host's cores: an agent spends most of its run waiting on the model,
-  and CPU contention slows a run while running out of memory breaks the host.
+  job starts, the daemon reserves its declared memory plus one per-VM overhead
+  against the budget, in the same transaction that takes the launch's pool
+  slot when it has one (verification draws on no pool); this sum is the
+  launch's reservation (revision 105). Once a build has touched the guest, a
+  container's VM costs the host more than its declared size (137 to 155 MiB
+  more on Apple container 1.1.0), and it keeps that memory until the
+  container is deleted, because freed guest memory isn't returned. So the
+  full declared size stays reserved, never a recorded peak, and one overhead
+  per launch covers it because its containers run one at a time. CPU caps
+  are not reserved and may add up past the host's cores: an agent spends
+  most of its run waiting on the model, and CPU contention slows a run while
+  running out of memory breaks the host.
   The reservation ends once the daemon proves every container of the launch
   or job absent. Cleanup that fails after that (clean roots and volumes,
   Section [5.8](#58-control-plane-trust)) stays open for recovery on its own and holds no capacity. A
@@ -1265,14 +1275,17 @@ far more than one machine holds.
   So a task's review or verification goes ahead of a newer task's first
   writer run, work doesn't pile up half done, and no launch waits forever
   behind a stream of smaller ones. The memory this leaves idle is at most one
-  launch's size. A launch still waiting on its pool slot joins the order only
-  once the slot is free, so one full pool never holds up another pool's work.
-- **A launch that can never fit fails at once.** Project policy that
-  declares a size larger than the instance's whole budget does not resolve,
-  and the error names both numbers. A launch larger than the whole budget
+  launch's reservation. A launch still waiting on its pool slot joins the
+  order only once the slot is free, so one full pool never holds up another
+  pool's work.
+- **A launch that can never fit fails at once.** Every such check compares
+  the declared size plus the per-VM overhead with the budget. Project policy
+  that declares a size whose reservation is larger than the instance's whole
+  budget does not resolve, and the error names the size, the overhead, and
+  the budget. A launch whose reservation is larger than the whole budget
   (after the operator lowers it, for example) raises an `execution_failure`
-  item that names its size and the budget, instead of waiting under a hold
-  that can never clear.
+  item that names its size, the overhead, and the budget, instead of waiting
+  under a hold that can never clear.
 - **A too-small container is a named failure.** A container killed at its
   memory limit fails its attempt as that failure, recorded with its declared
   size, and its card offers a retry at the next larger size policy allows
@@ -1285,6 +1298,21 @@ far more than one machine holds.
   holds a starting size per launch class. Each launch records its declared
   size, how it ended, and its peak memory where the runtime reports it, so
   sizes are tuned from recorded runs, not guessed.
+- **The per-VM overhead is a fixed policy value per runtime.** Control-plane
+  policy holds one overhead per container runtime, recorded with the runtime
+  version it was measured on. For Apple container 1.1.0 it is 256 MiB, which
+  leaves margin over the measured 137 to 155 MiB for images and sizes the
+  measurement didn't build. Another runtime, or a new version of this one,
+  records its own value before it runs launches under a budget. A host whose
+  runtime and version have no recorded overhead is eligible for no launch,
+  rather than reserving a guess, and a launch that this leaves with no
+  eligible host raises an `execution_failure` item naming the unrecorded
+  runtime version. The value is
+  not measured at conformance time: conformance probes boot idle VMs, and the
+  overhead that matters appears only once a build has touched guest memory,
+  so a probe can't see it without a build-sized workload; and a reading taken
+  on a loaded host would make admission depend on noise. Recorded peak memory
+  per launch is the evidence for revising the value.
 - **Waiting on the operator costs nothing.** Every container belongs to one
   stage invocation and is deleted when that invocation ends; none stays alive
   while a task waits on a human (revision 1 item 6). So open tasks are not
@@ -1296,7 +1324,8 @@ far more than one machine holds.
   the budget, when the operator chooses to run them.
 
 The budget is a scheduling bound, not a measurement. The runtime enforces each
-container's limits, and the budget keeps their sum within what the operator
+container's limits, and the budget keeps the sum of the launches'
+reservations, each declared size plus its VM overhead, within what the operator
 declared. It can't see other load on the host, so an operator who also uses the
 machine interactively declares a budget that leaves room for that use.
 
@@ -1312,15 +1341,19 @@ Execution hosts (Section
 [5.7](#57-the-ward-runners-handoff-gate-and-operating-modes), Execution Hosts)
 extend the budget per host, not across instances (revision 94). Each enrolled
 execution host declares its own budget at host enrollment; the daemon host's
-budget is the instance budget above. The admission transaction reserves a
-launch's declared size against the host it is placed on, and the reservation
-ends when every container of the launch is proved absent on that host. The
-waiting order stays oldest task first across hosts, with one addition: a launch
-at the head waits only for the hosts it is eligible for and never holds back a
-launch that is eligible only for hosts the head cannot use. A launch larger than
-every host's whole budget fails at once, naming its size and the largest budget.
-The runner refuses a launch above its own declared budget as a fail-closed
-check, never as a second scheduler.
+budget is the instance budget above. Each host counts the per-VM overhead
+recorded for its own runtime and version (revision 105). The admission
+transaction reserves a launch's declared size plus that host's overhead against
+the host it is placed on, and the reservation ends when every container of the
+launch is proved absent on that host. The waiting order stays oldest task first
+across hosts, with one addition: a launch at the head waits only for the hosts
+it is eligible for and never holds back a launch that is eligible only for hosts
+the head cannot use. A launch whose reservation is larger than every host's
+whole budget fails at once, naming its size and, for the host that comes
+closest to fitting it, that host's overhead and budget. The runner refuses a
+launch whose declared size plus the overhead recorded for the runner's runtime
+and version is above its own declared budget as a fail-closed check, never as a
+second scheduler.
 
 #### Admitted Agents
 
@@ -2889,7 +2922,8 @@ measure: it centralizes the allowlist but leaves the token in the writer.
 **Placement.** Admission chooses the host in the launch transaction. A host is
 eligible when its current durable conformance record covers the launch's
 capability minimums and class, it has the approved image digest for its
-architecture, and the launch's declared size fits its budget (Section
+architecture, and the launch's declared size plus the host's per-VM overhead
+fits its budget (Section
 [5.4](#54-credential-modes-egress-profiles-and-concurrency), Machine Capacity).
 The daemon host is preferred; among eligible remote hosts, the one with the most
 free budget, its budget less its reservations. Review launches stay on the
@@ -7060,18 +7094,37 @@ Record material changes here by revision, with the decider in parentheses.
 - On first re-litigation, promote the decision to a `docs/decisions/` ADR that
   cites its history entry.
 
-Revision 104 ("Neutral Grounds"):
+Revision 105 ("Count the VM"):
 
-1. **Both appearances move to neutral grounds so the accent is the only warm
-   thing on screen.** Freeside's ground becomes Overcast and Straylight's
-   becomes Dead Channel (Section [15](#15-naming-and-references)); the two appearance names, the
-   identity accents, the mark, and the palette grammar are unchanged, and the
-   contrast-safe working cuts retune to the new grounds. Rejected: Soot,
-   Lacquer, Daylight, Plaster, and Bone, which either kept the warmth or left
-   the card and pane as one white panel.
+1. **A launch reserves its declared memory plus one per-VM overhead.** A ward
+   stage launch or verification job reserves its declared size plus the
+   overhead of the VM its containers run in, on the instance budget and on an
+   execution host's budget alike, and every never-fits check and the runner's
+   fail-closed refusal compare that sum with the budget, naming both parts
+   (Sections [5.4](#54-credential-modes-egress-profiles-and-concurrency), Machine Capacity, and [5.7](#57-the-ward-runners-handoff-gate-and-operating-modes), Placement). On Apple
+   container 1.1.0 a VM that has run a build costs the host 137 to 155 MiB
+   above its declared size and keeps it until delete
+   ([ward density spike](spikes/ward-density.md)), so reserving the
+   declared size alone undercounts every launch: half of a 32 GiB host fits
+   seven 2048 MiB writers, not eight. One overhead per launch is enough
+   because a launch's helpers and a job's command containers each run alone,
+   never beside another container VM. Rejected: reserving declared size
+   alone, which undercounts; reserving recorded peak, which overcommits
+   because freed guest memory isn't returned; and one overhead per container,
+   which would reserve for VMs that never run at once.
+2. **The overhead is a fixed control-plane policy value per runtime.** Policy
+   records it with the runtime version it was measured on: 256 MiB for Apple
+   container 1.1.0. Another runtime or version records its own before it runs
+   launches under a budget; a host without one is eligible for no launch.
+   Rejected: measuring it per runtime at conformance
+   time, because conformance probes boot idle VMs, which can't show the
+   overhead a build brings without a build-sized workload, and a reading on a
+   loaded host would make admission depend on noise. Recorded peak memory per
+   launch, and the concurrent density measurement (#2187), are the evidence
+   for revising the value.
 
-(Owner decision of 2026-10-30 on #2433;
-[decision note](../devlog/2026-10-30-1229-neutral-grounds.md).)
+(Owner's work contract on #2188, 2026-11-02;
+[decision note](../devlog/2026-11-02-1210-vm-overhead-reservation.md).)
 
 ## 14. Risks
 
@@ -7089,7 +7142,7 @@ Revision 104 ("Neutral Grounds"):
 | **Host-side macOS verification** | The executor holds no credential and runs no agent; a network-denying sandbox profile plus per-uid packet-filter rules, write confinement to the job directory, a digest-keyed offline dependency cache, and a home reset confine each job, each conformance-proven and probed live before the recipe runs (Section [5.7](#57-the-ward-runners-handoff-gate-and-operating-modes), macOS Execution). Residual: candidate test code runs as a pooled uid on the operator's host, so a sandbox or kernel escape reaches the host, with the operator's state behind uid separation and `0700` modes; placing the executor on a second Mac enrolled as an execution host shrinks the blast radius. |
 | **Workspace-handoff uncertainty** | Resolved by the workspace-handoff spike: the strong class is declared and conformance-gated (Section [5.7](#57-the-ward-runners-handoff-gate-and-operating-modes)); the same-VM fallback is refuted by execution, never implemented or declared. |
 | **Codex cloud review as a load-bearing dependency** | Realized 2026-07-31: the live-run trigger falsification (#427) showed no App-visible trigger path. The dependency is removed. Review is Freeside-invoked (Section [7](#7-review-policy)), and native review is best-effort extra evidence. |
-| Host capacity | Several accounts' limits can add up to more containers than one machine holds. Give every ward container a CPU cap and a declared memory size, and bound their memory by each instance's declared budget, so a launch that doesn't fit waits under a visible hold instead of exhausting memory; waiting launches go oldest task first, and a size that can never fit fails at once (Section [5.4](#54-credential-modes-egress-profiles-and-concurrency), Machine Capacity). Residual: the budget can't see load outside Freeside or another instance's containers, so the operator declares it with room for interactive use and keeps the budgets of every instance on one host within what the host holds. |
+| Host capacity | Several accounts' limits can add up to more containers than one machine holds. Give every ward container a CPU cap and a declared memory size, and bound their memory by each instance's declared budget, with each launch reserving its declared size plus its VM's overhead, so a launch that doesn't fit waits under a visible hold instead of exhausting memory; waiting launches go oldest task first, and a size that can never fit fails at once (Section [5.4](#54-credential-modes-egress-profiles-and-concurrency), Machine Capacity). Residual: the budget can't see load outside Freeside or another instance's containers, so the operator declares it with room for interactive use and keeps the budgets of every instance on one host within what the host holds. |
 | Execution host credential copies | Every enrolled execution host holds a copy of each identity's setup token in its credential volume (Section [5.7](#57-the-ward-runners-handoff-gate-and-operating-modes), Execution Hosts). Accepted for owner-held machines on the owner's tailnet: rotation re-authors every host, and removal names the identities to rotate. Residual: a host removed while unreachable keeps its copy until the owner rotates at the vendor. Any host the owner does not hold needs `subscription_injected` through control-plane injection, under which it would receive no copy (revision 95); that mode is held (revision 103), so such a host waits and is not enrolled meanwhile. |
 | Single-provider execution capacity | Claude usage limits can stall real work. From revision 99 the hedge is a second Claude subscription under a routing policy (Section [5.4](#54-credential-modes-egress-profiles-and-concurrency), routing policy), not the Codex execution driver, which moved to Phase 2. Two subscriptions hedge a quota window, not a Claude outage or a Claude policy change; the owner accepts that residual while the Codex plan is downgraded. The router picks a subscription only at a new task's first admission, records the selection with its policy revision, and keeps every role of the task with an agent on that pool there; a quota failure parks the task until its window resets instead of moving it (Section [4](#4-the-attention-model); revision 103). A task in flight moves to another subscription only by the operator's explicit choice on the alternate-agent card or a task line change (Section [5.4](#54-credential-modes-egress-profiles-and-concurrency), Admitted Agents), never silently and never automatically. Usage remains observed telemetry (Section [8](#8-observability-and-optimization-telemetry)); an allowance observation shows the stall coming (Section [5.4](#54-credential-modes-egress-profiles-and-concurrency), usage observation) and may mark a window exhausted for the router, and admission never reads one. |
 | Classifier mislabeling | Preserve immutable raw findings; require second adjudication for the safety case; enforce ceilings. |

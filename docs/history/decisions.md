@@ -3318,3 +3318,16 @@ The client work is #1798 to #1803.)
 
 (Owner decision of 2026-10-28 on #2416;
 [decision note](../../devlog/2026-10-28-1154-pin-tasks-hold-injection.md).)
+
+## Revision 104 ("Neutral Grounds"):
+
+1. **Both appearances move to neutral grounds so the accent is the only warm
+   thing on screen.** Freeside's ground becomes Overcast and Straylight's
+   becomes Dead Channel (Section [15](../plan.md#15-naming-and-references)); the two appearance names, the
+   identity accents, the mark, and the palette grammar are unchanged, and the
+   contrast-safe working cuts retune to the new grounds. Rejected: Soot,
+   Lacquer, Daylight, Plaster, and Bone, which either kept the warmth or left
+   the card and pane as one white panel.
+
+(Owner decision of 2026-10-30 on #2433;
+[decision note](../../devlog/2026-10-30-1229-neutral-grounds.md).)
