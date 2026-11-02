@@ -401,41 +401,35 @@ type claudeUsageEvidence struct {
 
 var claudeUsageDate = regexp.MustCompile(`^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(\.\d+)?(Z|[+-]\d{2}:\d{2})$`)
 
-func claudeUsageAuthUnchanged(auth, config, token string) bool {
-	body, err := os.ReadFile(filepath.Join(auth, "token")) //nolint:gosec // fixed basename in test-owned private input directory
-	if err != nil || string(body) != token {
+// claudeUsageAuthUnchanged reports whether snapshotToken, the token bytes
+// read back from the probe's snapshot volume, still equal token and the
+// isolated auth store in config still holds the empty sentinel.
+func claudeUsageAuthUnchanged(snapshotToken []byte, config, token string) bool {
+	if string(snapshotToken) != token {
 		return false
 	}
-	body, err = os.ReadFile(filepath.Join(config, ".credentials.json")) //nolint:gosec // fixed sentinel basename in test-owned isolated configuration
+	body, err := os.ReadFile(filepath.Join(config, ".credentials.json")) //nolint:gosec // fixed sentinel basename in test-owned isolated configuration
 	return err == nil && string(body) == "{}"
 }
 
 func TestClaudeUsageAuthMutation(t *testing.T) {
-	auth, config := t.TempDir(), t.TempDir()
-	for _, tc := range []struct{ path, body string }{
-		{filepath.Join(auth, "token"), "synthetic-token"},
-		{filepath.Join(config, ".credentials.json"), "{}"},
-	} {
-		if err := os.WriteFile(tc.path, []byte(tc.body), 0o600); err != nil {
-			t.Fatal(err)
-		}
+	config := t.TempDir()
+	if err := os.WriteFile(filepath.Join(config, ".credentials.json"), []byte("{}"), 0o600); err != nil {
+		t.Fatal(err)
 	}
-	if !claudeUsageAuthUnchanged(auth, config, "synthetic-token") {
+	if !claudeUsageAuthUnchanged([]byte("synthetic-token"), config, "synthetic-token") {
 		t.Fatal("baseline mismatch")
 	}
 	if err := os.WriteFile(filepath.Join(config, ".credentials.json"), []byte(`{"refreshToken":"synthetic"}`), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	if claudeUsageAuthUnchanged(auth, config, "synthetic-token") {
+	if claudeUsageAuthUnchanged([]byte("synthetic-token"), config, "synthetic-token") {
 		t.Fatal("auth store mutation missed")
 	}
 	if err := os.WriteFile(filepath.Join(config, ".credentials.json"), []byte("{}"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(filepath.Join(auth, "token"), []byte("changed"), 0o600); err != nil {
-		t.Fatal(err)
-	}
-	if claudeUsageAuthUnchanged(auth, config, "synthetic-token") {
+	if claudeUsageAuthUnchanged([]byte("changed"), config, "synthetic-token") {
 		t.Fatal("token mutation missed")
 	}
 }
