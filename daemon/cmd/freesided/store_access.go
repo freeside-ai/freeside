@@ -19,6 +19,7 @@ import (
 	"github.com/freeside-ai/freeside/daemon/internal/signet"
 	"github.com/freeside-ai/freeside/daemon/internal/store"
 	"github.com/freeside-ai/freeside/daemon/internal/strictjson"
+	"github.com/freeside-ai/freeside/daemon/internal/usagecollect"
 )
 
 // storeAccess selects the direct store only while holding the daemon's lock.
@@ -115,6 +116,9 @@ type (
 		// opens the store itself never has one.
 		credentialIntegrityProbe credentialIntegrityProbe
 		commitWorkflowClosure    func(context.Context, domain.TaskID, func() error) error
+		// usageCollection is the running daemon's usage collection. A
+		// command that opens the store itself never has one.
+		usageCollection *usagecollect.Coordinator
 	}
 )
 

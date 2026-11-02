@@ -1454,6 +1454,53 @@ that ran cleanly, or to 1. The
 [decision note](../devlog/2026-09-28-1220-identity-limit-rollout.md) records
 why this rollout check replaced the provider-overlap experiment.
 
+### Refresh A Usage Pool's Usage Record
+
+The daemon keeps one usage record per usage pool: what the provider reports
+about the pool's allowance, read under one enrollment's credential, the pool's
+collector. Each scheduled doctor pass starts a collection for every pool, and
+a pool also collects once after a window's reported reset. Collection only
+reads: it never redeems a reset credit, refreshes a token, or writes an auth
+store. **No collector ships yet**, so the daemon collects nothing until the
+Claude collector lands (#1717); until then `refresh-usage` reports that the
+pool has no collector.
+
+`freesided auth refresh-usage` asks the running daemon to collect a pool now,
+joining a collection already in flight, and prints the record as JSON with
+each window's freshness. A reading past its reset or older than twice the
+doctor interval shows as stale, with the time it was observed; it is never
+shown as replenished. A failed collection keeps the last readings, records
+the failure as the pool's `last_attempt`, and backs off (5 minutes, doubling
+to 6 hours, or longer when the provider asks) before any trigger tries again;
+the command exits nonzero for a failure or a backoff. It needs the running
+daemon, which owns collection.
+
+```sh
+freesided auth refresh-usage \
+  -db <state-root>/daemon/freeside.db \
+  -pool <usage_pool from freesided auth list>
+```
+
+### Change A Usage Pool's Collector
+
+A pool's first enrollment collects for it. `freesided auth set-collector`
+makes another enrollment on the same pool the collector, as a new revision of
+the pool's usage record; this is the only way the collector changes, and
+collection never fails over to another enrollment on its own. The old
+collector's readings, plan, and refresh status are dropped, because every
+reading must come from the current collector; availability answers and
+provider refusal marks stay. The command works whether `freesided` is stopped
+or running, and a running daemon starts a collection under the new collector.
+It refuses an enrollment on another pool, prints the previous and new
+collector as JSON, and writes nothing when the enrollment already collects.
+
+```sh
+freesided auth set-collector \
+  -db <state-root>/daemon/freeside.db \
+  -pool <usage_pool from freesided auth list> \
+  -enrollment <enrollment id from freesided auth list>
+```
+
 ### Change A Task's Agent For A Role
 
 `freesided task-line` moves a role of a task to another agent, or clears the
