@@ -14,6 +14,9 @@ public struct FreesideRootView: View {
     @State private var showsInboxClearResult: Bool
     @State private var connectionAddress = ""
     @State private var stopRecoveryPresented = false
+    /// The routed task page's place and unsent Stop, kept across the page
+    /// remounting when a leading card comes or goes.
+    @State private var pageMemory = TaskPageMemory()
     @State private var rePairConfirmationPresented = false
     @State private var rePairFailure: String?
     /// Which of the Mac's columns show. Read to tell a collapsed sidebar,
@@ -153,7 +156,7 @@ public struct FreesideRootView: View {
             onRePair: bannerRePair(coordinator.store.freshness),
             operation: coordinator.unattendedOperation,
             reason: { coordinator.store.openItemReason($0) },
-            onOpenItem: { navigation.route(to: .attentionItem($0)) },
+            onOpenItem: openItem,
             placement: placement)
     }
 
@@ -181,6 +184,9 @@ public struct FreesideRootView: View {
         .onChange(of: scenePhase) {
             guard scenePhase == .active else { return }
             Task { await coordinator.automaticRefresh() }
+        }
+        .onChange(of: Self.routedTaskID(navigation.path, in: coordinator.unifiedList), initial: true) {
+            pageMemory.reset(forRoutedTaskID: $1)
         }
         .onChange(of: navigation.attentionSelection) {
             technicalDetailsRequest = technicalDetailsRequest?.retained(
@@ -224,6 +230,12 @@ public struct FreesideRootView: View {
             )
             .dynamicTypeSize(launchDynamicTypeSize ?? systemDynamicTypeSize)
         }
+        // The task page's Stop confirmation, above the navigation containers
+        // so it stays up while the page remounts under it.
+        .taskStopConfirmation(
+            pageMemory, model: coordinator.taskStop,
+            dynamicTypeSize: launchDynamicTypeSize ?? systemDynamicTypeSize
+        )
         // Offered once after a pairing, on the iPhone only.
         .sheet(
             isPresented: Binding(
@@ -407,7 +419,7 @@ public struct FreesideRootView: View {
             onConsumeLaunchComposer: navigation.consumeLaunchComposer,
             topMargin: topMargin,
             page: page,
-            onSelectItem: { navigation.route(to: .attentionItem($0)) },
+            onSelectItem: openItem,
             tasks: coordinator.tasks,
             onSelectTask: { navigation.route(to: .task($0)) },
             onConclusion: { conclusion in
@@ -421,8 +433,9 @@ public struct FreesideRootView: View {
     ) -> TaskPageHost {
         TaskPageHost(
             coordinator: coordinator, snapshot: task, leadingItemID: leadingItemID, topMargin: topMargin,
+            memory: pageMemory,
             onOpenRun: { navigation.openRun(taskID: task.task.id, runID: $0) },
-            onOpenItem: { navigation.route(to: .attentionItem($0)) },
+            onOpenItem: openItem,
             card: { itemID, page in decisionCard(itemID, coordinator: coordinator, page: page) })
     }
 
@@ -623,7 +636,7 @@ public struct FreesideRootView: View {
                 OperationalSummaryView(
                     summary: OperationalSummary(
                         list: coordinator.unifiedList, freshness: coordinator.store.freshness),
-                    onSelectItem: { navigation.route(to: .attentionItem($0)) },
+                    onSelectItem: openItem,
                     onShowTasks: showWorking,
                     topMargin: topMargin
                 )
@@ -655,7 +668,25 @@ public struct FreesideRootView: View {
         }
     #endif
 
+    /// Routes to an item the operator chose. Its task page opens on the
+    /// card rather than at the place it held, including when the card
+    /// already leads and routing changes nothing.
+    private func openItem(_ itemID: String) {
+        pageMemory.openCard()
+        navigation.route(to: .attentionItem(itemID))
+    }
+
+    /// The task the route holds a page for, whether the page or a run over
+    /// it is showing. The page memory keeps that task's entry alone.
+    static func routedTaskID(_ path: [NavigationModel.Destination], in list: UnifiedList) -> String? {
+        switch path.first.map({ NavigationModel.surface(for: $0, in: list) }) {
+        case .taskPage(let taskID, _), .run(let taskID, _): taskID
+        case .card, nil: nil
+        }
+    }
+
     private func revealTechnicalDetails(_ itemID: String) {
+        pageMemory.forgetPlace()
         navigation.route(to: .attentionItem(itemID))
         technicalDetailsRequest = .init(itemID: itemID, nonce: UUID())
     }
@@ -685,6 +716,7 @@ public struct FreesideRootView: View {
     private func viewConcludedItem(_ itemID: String) {
         feedback.dismiss()
         showsInboxClearResult = false
+        pageMemory.forgetPlace()
         // The operator asked for this card, whether or not it's still open.
         navigation.route(toLinkedItem: itemID)
     }

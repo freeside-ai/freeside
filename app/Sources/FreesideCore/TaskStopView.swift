@@ -15,6 +15,12 @@ struct TaskStopView: View {
     /// the menu holding one stays on the page, and enabled, while Stop is
     /// unavailable, in flight, or done.
     var moreActions: [MoreAction] = []
+    /// Where a prepared Stop confirmation goes when the caller presents it.
+    /// The task page passes one so the sheet outlives the page remounting
+    /// under it; nil keeps the confirmation here, in this view's own sheet.
+    var presentedConfirmation: Binding<TaskStopModel.Confirmation?>? = nil
+    /// The What Happened fold, held by the caller when given.
+    var explanationExpanded: Binding<Bool>? = nil
     @State private var confirmation: TaskStopModel.Confirmation?
     @State private var showsExplanation = false
 
@@ -80,7 +86,7 @@ struct TaskStopView: View {
             if let reason = model.unavailableReason { note(reason) }
             if let message = model.messages[taskID] { note(message, color: .ink) }
             if let explanation {
-                SentenceDisclosure(label: "What Happened", isExpanded: $showsExplanation) {
+                SentenceDisclosure(label: "What Happened", isExpanded: explanationExpanded ?? $showsExplanation) {
                     note(explanation)
                 }
             }
@@ -100,11 +106,24 @@ struct TaskStopView: View {
             }
         }
         .fixedSize(horizontal: false, vertical: true)
-        .sheet(item: $confirmation) { prepared in
+        .sheet(item: presentsConfirmation ? $confirmation : .constant(nil)) { prepared in
             TaskStopConfirmationView(entry: prepared.entry) {
                 confirmation = nil
                 Task { await model.confirm(prepared) }
             }
+        }
+    }
+
+    /// Whether this view presents the Stop confirmation itself.
+    var presentsConfirmation: Bool { presentedConfirmation == nil }
+
+    /// Stop Task…: prepares the confirmation where it is presented.
+    func requestStop() {
+        let prepared = model.prepare(taskID: taskID)
+        if let presentedConfirmation {
+            presentedConfirmation.wrappedValue = prepared
+        } else {
+            confirmation = prepared
         }
     }
 
@@ -136,10 +155,8 @@ struct TaskStopView: View {
             }
             if offersStop {
                 if !moreActions.isEmpty { Divider() }
-                Button("Stop Task…", role: .destructive) {
-                    confirmation = model.prepare(taskID: taskID)
-                }
-                .disabled(stopIsUnavailable)
+                Button("Stop Task…", role: .destructive, action: requestStop)
+                    .disabled(stopIsUnavailable)
             }
         } label: {
             Text("More Actions \u{25BE}")
@@ -219,6 +236,23 @@ struct TaskStopView: View {
         case .requested: "Stop sent; waiting for the daemon to confirm."
         case .failed_to_stop: "The task did not stop. Execution may continue."
         case .confirmed: "Stop confirmed by the daemon. Existing history and PRs remain available."
+        }
+    }
+}
+
+extension View {
+    /// Presents the task page's Stop confirmation held in `memory`. The root
+    /// attaches it above the page, so the sheet stays up while the page
+    /// remounts under it.
+    func taskStopConfirmation(
+        _ memory: TaskPageMemory, model: TaskStopModel, dynamicTypeSize: DynamicTypeSize
+    ) -> some View {
+        sheet(item: Bindable(memory).confirmation) { prepared in
+            TaskStopConfirmationView(entry: prepared.entry) {
+                memory.confirmation = nil
+                Task { await model.confirm(prepared) }
+            }
+            .dynamicTypeSize(dynamicTypeSize)
         }
     }
 }

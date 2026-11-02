@@ -71,16 +71,38 @@ struct TaskPageView: View {
     /// open item, Task otherwise.
     @State private var chosenSection: TaskPageSection?
     @State private var outlineHeight: CGFloat = 0
+    /// Holds the reader's place and the controls' unsent state across a
+    /// remount. Nil in a screenshot and in tests that don't exercise it.
+    private let memory: TaskPageMemory?
+    @State private var place = PlaceTracker()
+
+    /// The jump targets' latest tops in the scroll view, kept off the view's
+    /// observed state so scrolling doesn't redraw the page every frame.
+    @MainActor private final class PlaceTracker {
+        var targetTops: [TaskPageAnchor: CGFloat] = [:]
+        var rowTop: CGFloat = 0
+        /// Set once the mount has returned to the held place. Until then
+        /// the page records nothing, so its first position, the top it
+        /// mounts at, doesn't overwrite the place it is returning to. A page
+        /// that reappears from under a run keeps its own offset, so it
+        /// restores once.
+        var restored = false
+        /// The open items the recorded layout drew.
+        var itemIDs: Set<String> = []
+        /// Set while a change in the open items lays out.
+        var paused = false
+    }
 
     init(
         coordinator: SyncCoordinator, snapshot: Components.Schemas.TaskSnapshot,
         onOpenRun: @escaping (String) -> Void, onOpenItem: ((String) -> Void)? = nil,
         leadingItemID: String? = nil, leadingCard: AnyView? = nil, scrollProxy: ScrollViewProxy? = nil,
-        topMargin: CGFloat? = nil,
+        topMargin: CGFloat? = nil, memory: TaskPageMemory? = nil,
         screenshotTimeline: Components.Schemas.TaskTimeline? = nil,
         screenshotPinned: Bool = false,
         disclosures: TaskTimelineDisclosurePreferences? = nil
     ) {
+        self.memory = memory
         self.coordinator = coordinator
         self.snapshot = snapshot
         self.onOpenRun = onOpenRun
@@ -149,9 +171,16 @@ struct TaskPageView: View {
                 } header: {
                     outlineRow(timeline)
                         .onGeometryChange(for: CGFloat.self, of: \.size.height) { outlineHeight = $0 }
+                        .onGeometryChange(for: CGFloat.self, of: { $0.frame(in: .scrollView).minY }) { top in
+                            place.rowTop = top
+                            recordPlace()
+                        }
                 }
             }
             .pageColumn(compact: compact, topMargin: topMargin)
+            .task { await restorePlace() }
+            .onChange(of: chosenSection) { held?.chosenSection = chosenSection }
+            .onChange(of: memory?.cardOpenings) { openLeadingCard() }
         }
     }
 
@@ -206,24 +235,75 @@ struct TaskPageView: View {
 
     // MARK: Jumps
 
-    /// Where a jump lands.
-    private enum JumpTarget: Hashable {
-        case section(TaskPageSection)
-        case run(String)
-    }
-
     /// A target above its view by the outline row's height, so a jump lands
-    /// clear of the row pinned over the scroll view's top.
-    private func jumpTarget(_ target: JumpTarget) -> some View {
+    /// clear of the row pinned over the scroll view's top. It reports its
+    /// top as the page scrolls, which is how the page knows its place.
+    private func jumpTarget(_ target: TaskPageAnchor) -> some View {
         Color.clear
             .frame(height: outlineHeight)
+            .onGeometryChange(for: CGFloat.self, of: { $0.frame(in: .scrollView).minY }) { top in
+                place.targetTops[target] = top
+                recordPlace()
+            }
+            .onDisappear { place.targetTops[target] = nil }
             .id(target)
             .padding(.top, -outlineHeight)
             .accessibilityHidden(true)
     }
 
-    private func jump(to target: JumpTarget) {
+    private func jump(to target: TaskPageAnchor) {
         withAnimation { scrollProxy?.scrollTo(target, anchor: .top) }
+    }
+
+    // MARK: Place
+
+    /// The memory's entry when it is this task's. Nil in a screenshot, and
+    /// for the moment before a mount claims the memory.
+    private var held: TaskPageMemory? {
+        memory?.taskID == snapshot.task.id ? memory : nil
+    }
+
+    /// Writes the reader's place to the memory when it changes.
+    private func recordPlace() {
+        guard let held, place.restored, !place.paused else { return }
+        // A card coming or going first draws in the page it leaves, which
+        // the remount then replaces, so that layout isn't the reader's
+        // place. The route's repair follows the store change in a later
+        // transaction, so recording waits as long as a restore does.
+        let itemIDs = Set(openItems.map(\.item.id))
+        if itemIDs != place.itemIDs {
+            place.itemIDs = itemIDs
+            place.paused = true
+            Task { @MainActor [place] in
+                try? await Task.sleep(for: .milliseconds(120))
+                place.paused = false
+            }
+            return
+        }
+        let anchor = TaskPageAnchor.reading(offsets: place.targetTops.mapValues { $0 - place.rowTop })
+        if held.anchor != anchor { held.anchor = anchor }
+    }
+
+    /// Moves to the leading card when the operator opens it while it already
+    /// leads: routing then changes nothing, so the page doesn't remount.
+    private func openLeadingCard() {
+        guard leadingCard != nil else { return }
+        chosenSection = nil
+        jump(to: .section(.decisions))
+    }
+
+    /// Returns a fresh mount to the place the page held before a card came
+    /// or went, and to the chip last chosen.
+    private func restorePlace() async {
+        guard let memory, !place.restored else { return }
+        defer { place.restored = true }
+        place.itemIDs = Set(openItems.map(\.item.id))
+        let target = memory.restore(taskID: snapshot.task.id, leadingItemID: leadingItemID, openItemIDs: place.itemIDs)
+        chosenSection = memory.chosenSection
+        guard let target else { return }
+        // The page lays out over a later commit, as `jump(toRun:)` waits for.
+        guard (try? await Task.sleep(for: .milliseconds(120))) != nil else { return }
+        scrollProxy?.scrollTo(target, anchor: .top)
     }
 
     /// Opens the folds that hold a run, then jumps to it once they've drawn.
@@ -379,14 +459,19 @@ struct TaskPageView: View {
         }
     }
 
+    /// The controls keep their unsent state in the memory, which the root
+    /// presents the Stop confirmation from, so both outlast a remount.
     private func controls(_ timeline: Components.Schemas.TaskTimeline?) -> some View {
-        TaskStopView(
+        let held = held
+        return TaskStopView(
             coordinator: coordinator, taskID: snapshot.task.id,
             moreActions: timeline.map { timeline in
                 let text = TaskTimelinePresentation.allIdentifiersText(
                     TaskTimelinePresentation.identifierGroups(timeline, taskID: snapshot.task.id))
                 return [.init(title: "Copy all identifiers") { Clipboard.copy(text) }]
-            } ?? [])
+            } ?? [],
+            presentedConfirmation: held.map { Bindable($0).confirmation },
+            explanationExpanded: held.map { Bindable($0).showsStopExplanation })
     }
 
     /// Every conversation the task's items name, read-only: a reply goes
@@ -796,14 +881,36 @@ struct TaskPageView: View {
     }
 }
 
+/// Where a jump lands, and the place the page keeps across a remount: a
+/// section, or a run inside the Timeline.
+enum TaskPageAnchor: Hashable {
+    case section(TaskPageSection)
+    case run(String)
+
+    /// The anchor the reader is at, from each jump target's top measured
+    /// from the outline row's top. A jump target sits the row's height above
+    /// its view, so a target at or above the row's top has its view under
+    /// the pinned row; the lowest such target is the one being read. Nil
+    /// while every target is below the row, which is where the row sits
+    /// while the header is in view.
+    static func reading(offsets: [TaskPageAnchor: CGFloat]) -> TaskPageAnchor? {
+        // A jump lands its target on the row's top, give or take rounding.
+        let tolerance: CGFloat = 1
+        return offsets.filter { $0.value <= tolerance }.max { $0.value < $1.value }?.key
+    }
+}
+
 /// Hosts the page in a scroll view and keeps its history fresh. A leading
 /// card's `DecisionDetailView` owns the scroll view, so the card keeps its
 /// sheets, keyboard commands, and sticky footer; the page draws inside it.
+/// A card coming or going swaps the scroll view and remounts the page, so
+/// `memory` carries the page's place across.
 struct TaskPageHost: View {
     let coordinator: SyncCoordinator
     let snapshot: Components.Schemas.TaskSnapshot
     let leadingItemID: String?
     var topMargin: CGFloat? = nil
+    var memory: TaskPageMemory? = nil
     let onOpenRun: (String) -> Void
     let onOpenItem: (String) -> Void
     /// Builds the leading item's card, seated in the page it's given.
@@ -842,7 +949,8 @@ struct TaskPageHost: View {
     private func page(card: AnyView?, proxy: ScrollViewProxy) -> TaskPageView {
         TaskPageView(
             coordinator: coordinator, snapshot: snapshot, onOpenRun: onOpenRun, onOpenItem: onOpenItem,
-            leadingItemID: leadingItemID, leadingCard: card, scrollProxy: proxy, topMargin: topMargin)
+            leadingItemID: leadingItemID, leadingCard: card, scrollProxy: proxy, topMargin: topMargin,
+            memory: memory)
     }
 }
 
