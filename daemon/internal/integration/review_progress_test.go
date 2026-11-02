@@ -75,6 +75,7 @@ func TestProductionReviewUpgradePreservesRequestTime(t *testing.T) {
 				t.Fatal(err)
 			}
 			for _, query := range []string{
+				"DROP TABLE review_slot_releases",
 				"ALTER TABLE run_hold_observations DROP COLUMN usage_pool",
 				"DROP TABLE usage_pools",
 				"ALTER TABLE auth_identities ADD COLUMN max_parallel_executions INTEGER NOT NULL DEFAULT 1",

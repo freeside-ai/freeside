@@ -248,6 +248,21 @@ func TestUsagePoolRefusalHoldsNamingItsPool(t *testing.T) {
 	}
 }
 
+func storedRunHold(t *testing.T, st *store.Store, runID domain.RunID) *domain.RunHoldObservation {
+	t.Helper()
+	var hold *domain.RunHoldObservation
+	if err := st.Read(t.Context(), func(tx *store.ReadTx) error {
+		stored, present, err := tx.GetRunHold(t.Context(), runID)
+		if present {
+			hold = &stored
+		}
+		return err
+	}); err != nil {
+		t.Fatal(err)
+	}
+	return hold
+}
+
 // TestProductionBlockReasonIsTotalOverDefinitiveReasons: the definitive
 // block strings are a closed set and each maps to its code; anything else
 // maps to nothing, matching recovery's fail-closed reason gate.
