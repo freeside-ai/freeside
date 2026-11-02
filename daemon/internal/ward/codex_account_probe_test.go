@@ -24,6 +24,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/freeside-ai/freeside/daemon/internal/strayrequest"
 	"github.com/freeside-ai/freeside/daemon/internal/strictjson"
 )
 
@@ -182,7 +183,7 @@ func newCodexAccountProxy(t *testing.T, subnet string) *codexAccountProxy {
 		t.Fatal(err)
 	}
 	p := &codexAccountProxy{subnet: network, certificate: cert, ca: ca, active: map[net.Conn]bool{}, requests: []string{}}
-	p.server = httptest.NewUnstartedServer(http.HandlerFunc(p.serve))
+	p.server = httptest.NewUnstartedServer(strayrequest.Ignore(http.HandlerFunc(p.serve)))
 	if err := p.server.Listener.Close(); err != nil {
 		t.Fatal(err)
 	}

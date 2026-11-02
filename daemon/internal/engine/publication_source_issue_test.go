@@ -15,6 +15,7 @@ import (
 	"github.com/freeside-ai/freeside/daemon/internal/publish"
 	"github.com/freeside-ai/freeside/daemon/internal/store"
 	"github.com/freeside-ai/freeside/daemon/internal/store/storetest"
+	"github.com/freeside-ai/freeside/daemon/internal/strayrequest"
 )
 
 type sourceIssueTestToken struct{}
@@ -27,14 +28,14 @@ func TestPublicationSourceIssueSnapshotSurvivesRestart(t *testing.T) {
 	for _, failed := range []bool{false, true} {
 		t.Run(fmt.Sprintf("first_read_failed_%t", failed), func(t *testing.T) {
 			var reads atomic.Int32
-			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+			server := httptest.NewServer(strayrequest.Ignore(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 				first := reads.Add(1) == 1
 				if failed == first {
 					w.WriteHeader(http.StatusServiceUnavailable)
 					return
 				}
 				_, _ = w.Write([]byte(`{"number":7,"state":"open","title":"Original requirements","body":"Original body"}`))
-			}))
+			})))
 			defer server.Close()
 			path := filepath.Join(t.TempDir(), "store.db")
 			s := storetest.Open(t, path, store.Options{})
@@ -104,10 +105,10 @@ func TestPublicationSourceIssueRestartRejectsMalformedText(t *testing.T) {
 				t.Fatal(err)
 			}
 			var reads atomic.Int32
-			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+			server := httptest.NewServer(strayrequest.Ignore(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 				reads.Add(1)
 				w.WriteHeader(http.StatusServiceUnavailable)
-			}))
+			})))
 			defer server.Close()
 			workflow := &productionPublicationWorkflow{
 				store:     storetest.Open(t, path, store.Options{}),

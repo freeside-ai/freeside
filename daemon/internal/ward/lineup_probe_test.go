@@ -22,6 +22,7 @@ import (
 	"github.com/freeside-ai/freeside/daemon/internal/daemonlock"
 	"github.com/freeside-ai/freeside/daemon/internal/domain"
 	"github.com/freeside-ai/freeside/daemon/internal/golden"
+	"github.com/freeside-ai/freeside/daemon/internal/strayrequest"
 )
 
 const (
@@ -317,7 +318,7 @@ func TestProbeLineupImageRunsOneContainedCallAndRemovesEverything(t *testing.T) 
 // once the provider sends a byte back, and false when the client only reached
 // the proxy.
 func TestProbeLineupImageReportsWhetherTheProviderAnswered(t *testing.T) {
-	provider := httptest.NewTLSServer(http.NotFoundHandler())
+	provider := httptest.NewTLSServer(strayrequest.Ignore(http.NotFoundHandler()))
 	t.Cleanup(provider.Close)
 	dial := func(ctx context.Context, _, _ string) (net.Conn, error) {
 		var d net.Dialer

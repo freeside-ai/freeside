@@ -17,6 +17,8 @@ import (
 	"testing"
 	"testing/synctest"
 	"time"
+
+	"github.com/freeside-ai/freeside/daemon/internal/strayrequest"
 )
 
 func TestCanonicalAuthority(t *testing.T) {
@@ -43,7 +45,7 @@ func TestConnectProxyExactAllowlist(t *testing.T) {
 	const allowed = "provider.example:443"
 	payload := strings.Repeat("p", maxProxyHeaderBytes*2)
 	upstreamResult := make(chan error, 1)
-	upstream := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
+	upstream := httptest.NewTLSServer(strayrequest.Ignore(http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
 		body, err := io.ReadAll(req.Body)
 		if err == nil && string(body) != payload {
 			err = fmt.Errorf("upstream payload differed")
@@ -52,7 +54,7 @@ func TestConnectProxyExactAllowlist(t *testing.T) {
 			_, err = w.Write([]byte("pong"))
 		}
 		upstreamResult <- err
-	}))
+	})))
 	defer upstream.Close()
 
 	dial := func(ctx context.Context, network, address string) (net.Conn, error) {
@@ -400,9 +402,9 @@ func newRegistryProxy(t *testing.T) *registryProxy {
 		addrs:  []netip.Addr{netip.MustParseAddr(testRegistryAddr)},
 		refuse: map[string]bool{},
 	}
-	rp.upstream = httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+	rp.upstream = httptest.NewTLSServer(strayrequest.Ignore(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		_, _ = w.Write([]byte("pong"))
-	}))
+	})))
 	t.Cleanup(rp.upstream.Close)
 	dial := func(ctx context.Context, _, address string) (net.Conn, error) {
 		rp.mu.Lock()
@@ -494,7 +496,7 @@ func (rp *registryProxy) get(conn net.Conn, serverName string) (string, error) {
 		ServerName:         serverName,
 		InsecureSkipVerify: true, //nolint:gosec // test server certificate is intentionally local
 	})
-	request, err := http.NewRequest(http.MethodGet, "https://"+serverName+"/", nil)
+	request, err := http.NewRequest(http.MethodGet, "https://"+serverName+"/ping", nil)
 	if err != nil {
 		rp.t.Fatal(err)
 	}

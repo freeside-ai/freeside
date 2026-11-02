@@ -18,6 +18,7 @@ import (
 	"github.com/freeside-ai/freeside/daemon/internal/claudeinference"
 	"github.com/freeside-ai/freeside/daemon/internal/execfixture"
 	"github.com/freeside-ai/freeside/daemon/internal/inference"
+	"github.com/freeside-ai/freeside/daemon/internal/strayrequest"
 	"github.com/freeside-ai/freeside/daemon/internal/ward"
 )
 
@@ -51,7 +52,7 @@ func TestTaskCancellationPinnedNativeCLI(t *testing.T) {
 
 	entered, release := make(chan struct{}), make(chan struct{})
 	var first sync.Once
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	server := httptest.NewServer(strayrequest.Ignore(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path != "/v1/messages" {
 			http.NotFound(w, r)
 			return
@@ -76,7 +77,7 @@ func TestTaskCancellationPinnedNativeCLI(t *testing.T) {
 		case <-r.Context().Done():
 		case <-release:
 		}
-	}))
+	})))
 	defer server.Close()
 	defer close(release)
 	quote := func(s string) string { return "'" + strings.ReplaceAll(s, "'", "'\\''") + "'" }

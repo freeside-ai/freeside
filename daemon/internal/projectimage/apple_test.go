@@ -20,6 +20,7 @@ import (
 	"time"
 
 	"github.com/freeside-ai/freeside/daemon/internal/domain"
+	"github.com/freeside-ai/freeside/daemon/internal/strayrequest"
 	"github.com/freeside-ai/freeside/daemon/internal/verify"
 	"github.com/freeside-ai/freeside/daemon/internal/ward"
 )
@@ -2015,10 +2016,10 @@ func TestDeleteRegistryManifestAcceptsDisabledDeleteAsRetention(t *testing.T) {
 		{http.StatusInternalServerError, true},
 	} {
 		var method, path string
-		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		server := httptest.NewServer(strayrequest.Ignore(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			method, path = r.Method, r.URL.Path
 			w.WriteHeader(tc.status)
-		}))
+		})))
 		err := deleteRegistryManifest(t.Context(), server.URL+"/v2/project/manifests/"+testImageDigest)
 		server.Close()
 		if (err != nil) != tc.wantErr {

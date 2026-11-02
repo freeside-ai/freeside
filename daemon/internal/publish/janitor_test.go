@@ -18,6 +18,7 @@ import (
 
 	"github.com/freeside-ai/freeside/daemon/internal/publish"
 	"github.com/freeside-ai/freeside/daemon/internal/store"
+	"github.com/freeside-ai/freeside/daemon/internal/strayrequest"
 )
 
 type installationAuthoritySource map[int64]publish.InstallationAuthority
@@ -249,7 +250,7 @@ func TestInstallationJanitorRemovesUnknownOwner(t *testing.T) {
 	ks := publicJanitorKeystore(t)
 	var deletes []string
 	recorder := &removalRecorder{}
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	srv := httptest.NewServer(strayrequest.Ignore(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if handleExactGrant(w, r, fixtureRepositoryID) {
 			return
 		}
@@ -268,7 +269,7 @@ func TestInstallationJanitorRemovesUnknownOwner(t *testing.T) {
 		default:
 			t.Errorf("unexpected request %s %s", r.Method, r.URL.Path)
 		}
-	}))
+	})))
 	defer srv.Close()
 
 	janitor := newJanitor(t, ks, srv, publicAuthority(publish.TrustedInstallation{
@@ -310,7 +311,7 @@ func TestInstallationJanitorBoundsRemovalWork(t *testing.T) {
 	t.Parallel()
 	ks := publicJanitorKeystore(t)
 	deletes := 0
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	srv := httptest.NewServer(strayrequest.Ignore(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Method == http.MethodGet {
 			_, _ = io.WriteString(w, `[
 				{"id":701,"app_id":501,"target_id":201,"account":{"login":"unknown-one","id":201}},
@@ -321,7 +322,7 @@ func TestInstallationJanitorBoundsRemovalWork(t *testing.T) {
 		}
 		deletes++
 		w.WriteHeader(http.StatusNoContent)
-	}))
+	})))
 	defer srv.Close()
 
 	janitor := newJanitor(t, ks, srv, publicAuthority(), &removalRecorder{}, 2)
@@ -366,7 +367,7 @@ func TestInstallationJanitorAttemptsRemovalSiblings(t *testing.T) {
 			ks := publicJanitorKeystore(t)
 			recorder := &removalRecorder{}
 			var deletes []string
-			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			srv := httptest.NewServer(strayrequest.Ignore(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 				if handleExactGrant(w, r, fixtureRepositoryID) {
 					return
 				}
@@ -388,7 +389,7 @@ func TestInstallationJanitorAttemptsRemovalSiblings(t *testing.T) {
 				default:
 					t.Errorf("unexpected request %s %s", r.Method, r.URL.Path)
 				}
-			}))
+			})))
 			defer srv.Close()
 
 			janitor := newJanitor(t, ks, srv, publicAuthority(publish.TrustedInstallation{
@@ -420,7 +421,7 @@ func TestInstallationJanitorAttemptsRemovalSiblingsAfterSuspendFailure(t *testin
 	ks := publicJanitorKeystore(t)
 	recorder := &removalRecorder{}
 	var effects []string
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	srv := httptest.NewServer(strayrequest.Ignore(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if handleExactGrant(w, r, fixtureRepositoryID) {
 			return
 		}
@@ -439,7 +440,7 @@ func TestInstallationJanitorAttemptsRemovalSiblingsAfterSuspendFailure(t *testin
 		default:
 			t.Errorf("unexpected request %s %s", r.Method, r.URL.Path)
 		}
-	}))
+	})))
 	defer srv.Close()
 
 	janitor := newJanitor(t, ks, srv, publicAuthority(publish.TrustedInstallation{
@@ -473,7 +474,7 @@ func TestInstallationJanitorKeepsEarlierFailureWhenAuditBarrierFails(t *testing.
 	ks := publicJanitorKeystore(t)
 	errJournal := errors.New("journal became unwritable")
 	recorder := &failSecondRemovalRecorder{err: errJournal}
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	srv := httptest.NewServer(strayrequest.Ignore(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch {
 		case r.Method == http.MethodGet:
 			_, _ = io.WriteString(w, `[
@@ -485,7 +486,7 @@ func TestInstallationJanitorKeepsEarlierFailureWhenAuditBarrierFails(t *testing.
 		default:
 			t.Errorf("unexpected request %s %s", r.Method, r.URL.Path)
 		}
-	}))
+	})))
 	defer srv.Close()
 
 	janitor := newJanitor(t, ks, srv, publicAuthority(), recorder, 2)
@@ -531,7 +532,7 @@ func TestInstallationJanitorEnumeratesBeforePaginatedDeletes(t *testing.T) {
 
 	var mu sync.Mutex
 	var events []string
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	srv := httptest.NewServer(strayrequest.Ignore(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		mu.Lock()
 		defer mu.Unlock()
 		switch r.Method {
@@ -555,7 +556,7 @@ func TestInstallationJanitorEnumeratesBeforePaginatedDeletes(t *testing.T) {
 			}
 			w.WriteHeader(http.StatusNoContent)
 		}
-	}))
+	})))
 	defer srv.Close()
 
 	janitor := newJanitor(t, ks, srv, publicAuthority(), &removalRecorder{}, 101)
@@ -579,7 +580,7 @@ func TestInstallationJanitorAuditFailurePreventsDelete(t *testing.T) {
 	t.Parallel()
 	ks := publicJanitorKeystore(t)
 	deletes := 0
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	srv := httptest.NewServer(strayrequest.Ignore(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Method == http.MethodGet {
 			_, _ = io.WriteString(w,
 				`[{"id":701,"app_id":501,"target_id":201,"account":{"login":"unknown","id":201}}]`)
@@ -587,7 +588,7 @@ func TestInstallationJanitorAuditFailurePreventsDelete(t *testing.T) {
 		}
 		deletes++
 		w.WriteHeader(http.StatusNoContent)
-	}))
+	})))
 	defer srv.Close()
 
 	recorder := &removalRecorder{err: errors.New("audit unavailable")}
@@ -642,7 +643,7 @@ func TestInstallationJanitorRejectsMalformedIdentityBeforeDelete(t *testing.T) {
 	const untrustedLogin = "attacker-ghs_LEAKY"
 	deletes := 0
 	recorder := &removalRecorder{}
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	srv := httptest.NewServer(strayrequest.Ignore(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Method == http.MethodGet {
 			_, _ = fmt.Fprintf(w,
 				`[{"id":701,"app_id":999,"target_id":201,"account":{"login":%q,"id":201}}]`,
@@ -652,7 +653,7 @@ func TestInstallationJanitorRejectsMalformedIdentityBeforeDelete(t *testing.T) {
 		}
 		deletes++
 		w.WriteHeader(http.StatusNoContent)
-	}))
+	})))
 	defer srv.Close()
 
 	janitor := newJanitor(t, ks, srv, publicAuthority(), recorder, 1)
@@ -801,7 +802,7 @@ func TestUnknownInstallationCannotMintOrCreateAttention(t *testing.T) {
 		t.Fatalf("NewStoreTrustSource: %v", err)
 	}
 	tokenRequests := 0
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	srv := httptest.NewServer(strayrequest.Ignore(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Method == http.MethodGet && r.URL.Path == "/app/installations" {
 			_, _ = fmt.Fprint(w,
 				`[{"id":702,"app_id":501,"target_id":202,"repository_selection":"selected","account":{"login":"unsolicited-owner","id":202}}]`)
@@ -809,7 +810,7 @@ func TestUnknownInstallationCannotMintOrCreateAttention(t *testing.T) {
 		}
 		tokenRequests++
 		w.WriteHeader(http.StatusCreated)
-	}))
+	})))
 	defer srv.Close()
 
 	m := publish.NewMinterWithJanitor(

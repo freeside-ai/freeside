@@ -12,6 +12,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/freeside-ai/freeside/daemon/internal/strayrequest"
 )
 
 // filingForgeFake serves the three follow-up filing endpoints from canned
@@ -35,7 +37,7 @@ type filingForgeFake struct {
 func newFilingForgeFake(t *testing.T) (*forge, *filingForgeFake, repoRef) {
 	t.Helper()
 	fake := &filingForgeFake{t: t}
-	srv := httptest.NewServer(http.HandlerFunc(fake.handle))
+	srv := httptest.NewServer(strayrequest.Ignore(http.HandlerFunc(fake.handle)))
 	t.Cleanup(srv.Close)
 	return newForge(draftTestTokenSource{}, srv.Client(), srv.URL+"/api/v3"), fake, repoRef{owner: "owner", name: "name"}
 }

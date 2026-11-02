@@ -13,6 +13,7 @@ import (
 	"testing"
 
 	"github.com/freeside-ai/freeside/daemon/internal/publish"
+	"github.com/freeside-ai/freeside/daemon/internal/strayrequest"
 )
 
 func saveResolverApp(t *testing.T, ks *publish.Keystore, owner string, ownerID, appID int64, visibility publish.AppVisibility) {
@@ -65,7 +66,7 @@ func TestInstallationResolverPublicRegistrationMatchesOwner(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	srv := httptest.NewServer(strayrequest.Ignore(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodGet || r.URL.Path != "/app/installations" ||
 			r.URL.Query().Get("per_page") != "100" || r.URL.Query().Get("page") != "1" {
 			t.Errorf("request = %s %s?%s", r.Method, r.URL.Path, r.URL.RawQuery)
@@ -78,7 +79,7 @@ func TestInstallationResolverPublicRegistrationMatchesOwner(t *testing.T) {
 			{"id":702,"app_id":501,"target_id":202,"repository_selection":"selected","account":{"login":"freeasinbird","id":202}},
 			{"id":703,"app_id":501,"target_id":303,"repository_selection":"selected","account":{"login":"another-org","id":303}}
 		]`)
-	}))
+	})))
 	defer srv.Close()
 
 	resolver := newActiveResolver(ks, srv.Client(), srv.URL)
@@ -111,9 +112,9 @@ func TestInstallationResolverSurvivesFinderArtifact(t *testing.T) {
 	if err := os.WriteFile(artifact, []byte("finder"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+	srv := httptest.NewServer(strayrequest.Ignore(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		_, _ = io.WriteString(w, `[{"id":701,"app_id":501,"target_id":101,"repository_selection":"selected","account":{"login":"operator","id":101}}]`)
-	}))
+	})))
 	defer srv.Close()
 
 	resolver := newActiveResolver(ks, srv.Client(), srv.URL)
@@ -132,9 +133,9 @@ func TestInstallationResolverUnknownOwnerFailsClosed(t *testing.T) {
 	t.Parallel()
 	ks := newTestKeystore(t)
 	saveResolverApp(t, ks, "operator", 101, 501, publish.AppVisibilityPublic)
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+	srv := httptest.NewServer(strayrequest.Ignore(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		_, _ = io.WriteString(w, `[{"id":701,"app_id":501,"target_id":101,"repository_selection":"selected","account":{"login":"operator","id":101}}]`)
-	}))
+	})))
 	defer srv.Close()
 
 	resolver := newActiveResolver(ks, srv.Client(), srv.URL)
@@ -150,9 +151,9 @@ func TestInstallationResolverRejectsPrivateOwnerMismatch(t *testing.T) {
 	ks := newTestKeystore(t)
 	saveResolverApp(t, ks, "operator", 101, 501, publish.AppVisibilityPrivate)
 	const untrustedOwner = "attacker-account"
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+	srv := httptest.NewServer(strayrequest.Ignore(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		_, _ = fmt.Fprintf(w, `[{"id":701,"app_id":501,"target_id":202,"repository_selection":"selected","account":{"login":%q,"id":202}}]`, untrustedOwner)
-	}))
+	})))
 	defer srv.Close()
 
 	resolver := newActiveResolver(ks, srv.Client(), srv.URL)
@@ -179,9 +180,9 @@ func TestInstallationResolverRejectsUnknownRegistrationIdentity(t *testing.T) {
 	t.Parallel()
 	ks := newTestKeystore(t)
 	saveResolverApp(t, ks, "operator", 101, 501, publish.AppVisibilityPublic)
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+	srv := httptest.NewServer(strayrequest.Ignore(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		_, _ = io.WriteString(w, `[{"id":701,"app_id":999,"target_id":202,"repository_selection":"selected","account":{"login":"freeasinbird","id":202}}]`)
-	}))
+	})))
 	defer srv.Close()
 
 	resolver := newActiveResolver(ks, srv.Client(), srv.URL)
@@ -200,11 +201,11 @@ func TestInstallationResolverRejectsBroadRepositorySelection(t *testing.T) {
 		t.Run(selection, func(t *testing.T) {
 			ks := newTestKeystore(t)
 			saveResolverApp(t, ks, "operator", 101, 501, publish.AppVisibilityPublic)
-			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+			srv := httptest.NewServer(strayrequest.Ignore(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 				_, _ = fmt.Fprintf(w,
 					`[{"id":701,"app_id":501,"target_id":202,"repository_selection":%q,"account":{"login":"freeasinbird","id":202}}]`,
 					selection)
-			}))
+			})))
 			defer srv.Close()
 
 			resolver := newActiveResolver(ks, srv.Client(), srv.URL)
@@ -239,7 +240,7 @@ func TestInstallationResolverRejectsAmbiguousRegistrations(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	srv := httptest.NewServer(strayrequest.Ignore(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch r.Header.Get("Authorization") {
 		case "Bearer " + firstJWT.Reveal():
 			_, _ = io.WriteString(w, `[{"id":701,"app_id":501,"target_id":202,"repository_selection":"selected","account":{"login":"freeasinbird","id":202}}]`)
@@ -248,7 +249,7 @@ func TestInstallationResolverRejectsAmbiguousRegistrations(t *testing.T) {
 		default:
 			t.Error("unexpected registration JWT")
 		}
-	}))
+	})))
 	defer srv.Close()
 
 	resolver := newActiveResolver(ks, srv.Client(), srv.URL)

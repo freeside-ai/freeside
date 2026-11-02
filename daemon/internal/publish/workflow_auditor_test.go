@@ -13,6 +13,7 @@ import (
 
 	"github.com/freeside-ai/freeside/daemon/internal/domain"
 	"github.com/freeside-ai/freeside/daemon/internal/publish"
+	"github.com/freeside-ai/freeside/daemon/internal/strayrequest"
 )
 
 const auditedWorkflowYAML = `name: publish
@@ -136,7 +137,7 @@ func (f *auditFixtureServer) handler(w http.ResponseWriter, r *http.Request) {
 
 func runAuditFixture(t *testing.T, fixture *auditFixtureServer) domain.WorkflowAudit {
 	t.Helper()
-	server := httptest.NewServer(http.HandlerFunc(fixture.handler))
+	server := httptest.NewServer(strayrequest.Ignore(http.HandlerFunc(fixture.handler)))
 	t.Cleanup(server.Close)
 	auditor, err := publish.NewGitHubWorkflowAuditor(testTokenSource(), server.Client(), server.URL, time.Now)
 	if err != nil {
@@ -152,7 +153,7 @@ func runAuditFixture(t *testing.T, fixture *auditFixtureServer) domain.WorkflowA
 func TestGitHubWorkflowAuditorProducesFreshObservation(t *testing.T) {
 	t.Parallel()
 	fixture := &auditFixtureServer{t: t, changeOnce: true}
-	server := httptest.NewServer(http.HandlerFunc(fixture.handler))
+	server := httptest.NewServer(strayrequest.Ignore(http.HandlerFunc(fixture.handler)))
 	defer server.Close()
 	now := time.Date(2026, 7, 21, 19, 0, 0, 0, time.FixedZone("CDT", -5*60*60))
 	auditor, err := publish.NewGitHubWorkflowAuditor(testTokenSource(), server.Client(), server.URL, func() time.Time { return now })
@@ -207,7 +208,7 @@ func TestGitHubWorkflowAuditorProducesFreshObservation(t *testing.T) {
 
 func TestGitHubWorkflowAuditorFailsClosedOnMissingScope(t *testing.T) {
 	t.Parallel()
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	server := httptest.NewServer(strayrequest.Ignore(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		if strings.Contains(r.URL.Path, "/git/ref/") {
 			_, _ = w.Write([]byte(`{"ref":"refs/heads/main","object":{"sha":"base-sha"}}`))
@@ -215,7 +216,7 @@ func TestGitHubWorkflowAuditorFailsClosedOnMissingScope(t *testing.T) {
 		}
 		w.WriteHeader(http.StatusForbidden)
 		_, _ = w.Write([]byte(`{"message":"scope missing","token":"must-not-leak"}`))
-	}))
+	})))
 	defer server.Close()
 	auditor, err := publish.NewGitHubWorkflowAuditor(testTokenSource(), server.Client(), server.URL, time.Now)
 	if err != nil {
@@ -233,7 +234,7 @@ func TestGitHubWorkflowAuditorFailsClosedOnMissingScope(t *testing.T) {
 func TestGitHubWorkflowAuditorFailsClosedAtPaginationLimit(t *testing.T) {
 	t.Parallel()
 	fixture := &auditFixtureServer{t: t, runnerOverflow: true}
-	server := httptest.NewServer(http.HandlerFunc(fixture.handler))
+	server := httptest.NewServer(strayrequest.Ignore(http.HandlerFunc(fixture.handler)))
 	defer server.Close()
 	auditor, err := publish.NewGitHubWorkflowAuditor(testTokenSource(), server.Client(), server.URL, time.Now)
 	if err != nil {
@@ -311,7 +312,7 @@ func TestGitHubWorkflowAuditorFailsClosedOnMalformedWorkflowRows(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			fixture := &auditFixtureServer{t: t, extraWorkflowRows: tt.rows}
-			server := httptest.NewServer(http.HandlerFunc(fixture.handler))
+			server := httptest.NewServer(strayrequest.Ignore(http.HandlerFunc(fixture.handler)))
 			defer server.Close()
 			auditor, err := publish.NewGitHubWorkflowAuditor(testTokenSource(), server.Client(), server.URL, time.Now)
 			if err != nil {

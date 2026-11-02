@@ -13,6 +13,7 @@ import (
 
 	"github.com/freeside-ai/freeside/daemon/internal/domain"
 	"github.com/freeside-ai/freeside/daemon/internal/store"
+	"github.com/freeside-ai/freeside/daemon/internal/strayrequest"
 )
 
 // notifyTestFixture is a running daemon with a state directory, which is what
@@ -181,7 +182,7 @@ func TestNotifyTestReportsAFailureWithoutTheTopic(t *testing.T) {
 	})
 
 	t.Run("unreachable", func(t *testing.T) {
-		gone := httptest.NewServer(http.NotFoundHandler())
+		gone := httptest.NewServer(strayrequest.Ignore(http.NotFoundHandler()))
 		goneURL := gone.URL
 		gone.Close()
 		f := startNotifyTestFixture(t, goneURL)

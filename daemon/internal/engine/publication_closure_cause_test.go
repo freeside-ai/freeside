@@ -19,6 +19,7 @@ import (
 	inferencefake "github.com/freeside-ai/freeside/daemon/internal/inference/fake"
 	"github.com/freeside-ai/freeside/daemon/internal/publish"
 	"github.com/freeside-ai/freeside/daemon/internal/store"
+	"github.com/freeside-ai/freeside/daemon/internal/strayrequest"
 )
 
 // closureCauseForge is the fake forge's answers: whether the repository
@@ -169,7 +170,7 @@ func TestProposeClosureRecordsFallbackCause(t *testing.T) {
 		t.Run(tc.label, func(t *testing.T) {
 			t.Parallel()
 			ctx := t.Context()
-			server := httptest.NewServer(http.HandlerFunc(tc.forge.serve))
+			server := httptest.NewServer(strayrequest.Ignore(http.HandlerFunc(tc.forge.serve)))
 			defer server.Close()
 			s, policy, taskID := seedClosureChain(t, "run-closure-cause")
 			repo, baseSHA, headSHA := closureCauseRepo(t, tc.template)
@@ -234,7 +235,7 @@ func TestProposeClosureRecordsFallbackCause(t *testing.T) {
 func TestProposeClosureRetriesSourceIssueCheckpointFault(t *testing.T) {
 	t.Parallel()
 	ctx := t.Context()
-	server := httptest.NewServer(http.HandlerFunc(closureCauseForge{visibility: true, issue: true}.serve))
+	server := httptest.NewServer(strayrequest.Ignore(http.HandlerFunc(closureCauseForge{visibility: true, issue: true}.serve)))
 	defer server.Close()
 	s, policy, taskID := seedClosureChain(t, "run-closure-retry")
 	repo, baseSHA, headSHA := closureCauseRepo(t, "")

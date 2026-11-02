@@ -16,6 +16,7 @@ import (
 	"github.com/freeside-ai/freeside/daemon/internal/publish"
 	"github.com/freeside-ai/freeside/daemon/internal/signet"
 	"github.com/freeside-ai/freeside/daemon/internal/store"
+	"github.com/freeside-ai/freeside/daemon/internal/strayrequest"
 )
 
 // externalReplyReason is the operator's reason an external decline or defer
@@ -181,13 +182,13 @@ func (externalDecisionIdentity) Resolve(context.Context, string) (publish.AppBot
 
 func (p *productionPublicationHarness) assertExternalReplyQueued(t *testing.T, finding domain.Finding) {
 	t.Helper()
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	server := httptest.NewServer(strayrequest.Ignore(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodGet {
 			t.Errorf("queue pass made unexpected request %s %s", r.Method, r.URL.Path)
 		}
 		w.Header().Set("Content-Type", "application/json")
 		_, _ = w.Write([]byte("[]"))
-	}))
+	})))
 	t.Cleanup(server.Close)
 	replier, err := publish.NewExternalReviewReplier(p.store, integrationTokenSource(), server.Client(), server.URL, externalDecisionIdentity{}, func() time.Time { return p.now })
 	if err != nil {

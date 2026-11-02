@@ -15,6 +15,7 @@ import (
 
 	"github.com/freeside-ai/freeside/daemon/internal/agentbaseline"
 	"github.com/freeside-ai/freeside/daemon/internal/domain"
+	"github.com/freeside-ai/freeside/daemon/internal/strayrequest"
 )
 
 // This opt-in protocol probe uses no real credential or provider. It executes
@@ -67,7 +68,7 @@ func probePinnedCLI(t *testing.T, driver *Driver, effort string) {
 	input, _ := json.Marshal(req.Fields)
 	var mu sync.Mutex
 	calls := 0
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	server := httptest.NewServer(strayrequest.Ignore(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path != "/v1/messages" {
 			http.NotFound(w, r)
 			return
@@ -136,7 +137,7 @@ func probePinnedCLI(t *testing.T, driver *Driver, effort string) {
 		event("content_block_stop", map[string]any{"index": 0})
 		event("message_delta", map[string]any{"delta": map[string]any{"stop_reason": "end_turn", "stop_sequence": nil}, "usage": map[string]int{"output_tokens": 12}})
 		event("message_stop", map[string]any{})
-	}))
+	})))
 	defer server.Close()
 	root := t.TempDir()
 	copyPath := root + "/claude"

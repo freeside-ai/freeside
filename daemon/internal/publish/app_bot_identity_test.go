@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/freeside-ai/freeside/daemon/internal/publish"
+	"github.com/freeside-ai/freeside/daemon/internal/strayrequest"
 )
 
 var appBotIdentityNow = time.Date(2026, 7, 31, 12, 0, 0, 0, time.UTC)
@@ -69,7 +70,7 @@ func appBotIdentityToken() publish.InstallationToken {
 
 func TestGitHubAppBotIdentityResolverBindsSelectedRegistration(t *testing.T) {
 	t.Parallel()
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	server := httptest.NewServer(strayrequest.Ignore(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodGet || r.URL.Path != "/users/freeside-publish[bot]" {
 			t.Errorf("request = %s %s", r.Method, r.URL.Path)
 		}
@@ -81,7 +82,7 @@ func TestGitHubAppBotIdentityResolverBindsSelectedRegistration(t *testing.T) {
 		}
 		w.Header().Set("Content-Type", "application/json")
 		_, _ = w.Write([]byte(`{"login":"freeside-publish[bot]","id":308829240,"type":"Bot"}`))
-	}))
+	})))
 	t.Cleanup(server.Close)
 	resolver, err := publish.NewGitHubAppBotIdentityResolver(
 		fixedTokenSource{token: appBotIdentityToken()},
@@ -101,7 +102,7 @@ func TestGitHubAppBotIdentityResolverBindsSelectedRegistration(t *testing.T) {
 
 func TestInspectAppBotIdentityUsesPublicRegistrationLookup(t *testing.T) {
 	t.Parallel()
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	server := httptest.NewServer(strayrequest.Ignore(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodGet || r.URL.EscapedPath() != "/users/freeside-publish%5Bbot%5D" {
 			t.Errorf("request = %s %s", r.Method, r.URL.EscapedPath())
 		}
@@ -110,7 +111,7 @@ func TestInspectAppBotIdentityUsesPublicRegistrationLookup(t *testing.T) {
 		}
 		w.Header().Set("Content-Type", "application/json")
 		_, _ = w.Write([]byte(`{"login":"freeside-publish[bot]","id":308829240,"type":"Bot"}`))
-	}))
+	})))
 	t.Cleanup(server.Close)
 	identity, err := publish.InspectAppBotIdentity(
 		t.Context(), testCredentials(), server.Client(), server.URL,
@@ -123,11 +124,11 @@ func TestInspectAppBotIdentityUsesPublicRegistrationLookup(t *testing.T) {
 func TestGitHubAppBotIdentityResolverCachesOneTokenBinding(t *testing.T) {
 	t.Parallel()
 	var requests atomic.Int64
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+	server := httptest.NewServer(strayrequest.Ignore(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		requests.Add(1)
 		w.Header().Set("Content-Type", "application/json")
 		_, _ = w.Write([]byte(`{"login":"freeside-publish[bot]","id":308829240,"type":"Bot"}`))
-	}))
+	})))
 	t.Cleanup(server.Close)
 	now := appBotIdentityNow
 	source := &appBotIdentityTokenSource{token: appBotIdentityToken()}
@@ -183,11 +184,11 @@ func TestGitHubAppBotIdentityResolverCachesOneTokenBinding(t *testing.T) {
 func TestGitHubAppBotIdentityResolverCoalescesColdCallers(t *testing.T) {
 	t.Parallel()
 	var requests atomic.Int64
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+	server := httptest.NewServer(strayrequest.Ignore(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		requests.Add(1)
 		w.Header().Set("Content-Type", "application/json")
 		_, _ = w.Write([]byte(`{"login":"freeside-publish[bot]","id":308829240,"type":"Bot"}`))
-	}))
+	})))
 	t.Cleanup(server.Close)
 	source := &appBotIdentityTokenSource{token: appBotIdentityToken()}
 	resolver, err := publish.NewGitHubAppBotIdentityResolver(
@@ -233,11 +234,11 @@ func TestGitHubAppBotIdentityResolverRejectsUnboundIdentity(t *testing.T) {
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
 			var requests atomic.Int64
-			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+			server := httptest.NewServer(strayrequest.Ignore(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 				requests.Add(1)
 				w.Header().Set("Content-Type", "application/json")
 				_, _ = w.Write([]byte(tc.body))
-			}))
+			})))
 			t.Cleanup(server.Close)
 			resolver, err := publish.NewGitHubAppBotIdentityResolver(
 				fixedTokenSource{token: appBotIdentityToken()},
@@ -263,9 +264,9 @@ func TestGitHubAppBotIdentityResolverRejectsUnboundIdentity(t *testing.T) {
 func TestGitHubAppBotIdentityResolverRejectsTokenForUnknownRegistration(t *testing.T) {
 	t.Parallel()
 	requests := 0
-	server := httptest.NewServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {
+	server := httptest.NewServer(strayrequest.Ignore(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {
 		requests++
-	}))
+	})))
 	t.Cleanup(server.Close)
 	token := appBotIdentityToken()
 	token.RegistrationID++

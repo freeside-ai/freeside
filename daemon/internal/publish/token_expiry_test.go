@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/freeside-ai/freeside/daemon/internal/publish"
+	"github.com/freeside-ai/freeside/daemon/internal/strayrequest"
 )
 
 // The mint clock is fixtureTime (2026-07-16T12:00:00Z), so GitHub's
@@ -270,7 +271,7 @@ func TestInstallationJanitorKeepsGrantMismatchForAnOverLongGrant(t *testing.T) {
 	ks := publicJanitorKeystore(t)
 	recorder := &removalRecorder{}
 	revokes := 0
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	srv := httptest.NewServer(strayrequest.Ignore(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch {
 		case r.Method == http.MethodGet && r.URL.Path == "/app/installations":
 			_, _ = io.WriteString(w,
@@ -286,7 +287,7 @@ func TestInstallationJanitorKeepsGrantMismatchForAnOverLongGrant(t *testing.T) {
 		default:
 			t.Errorf("unexpected request %s %s", r.Method, r.URL.Path)
 		}
-	}))
+	})))
 	defer srv.Close()
 
 	janitor := newJanitor(t, ks, srv, trustedPublicBinding(fixtureRepositoryID), recorder, 1)
@@ -351,11 +352,11 @@ func TestOnboardingTokenSourceRejectsExpiryOutsideTheDeclaredBound(t *testing.T)
 	for _, tc := range rejectedExpiries {
 		t.Run(tc.name, func(t *testing.T) {
 			mints := 0
-			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+			srv := httptest.NewServer(strayrequest.Ignore(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 				mints++
 				w.WriteHeader(http.StatusCreated)
 				_, _ = io.WriteString(w, onboardingMintBody(tc.member))
-			}))
+			})))
 			defer srv.Close()
 
 			rec := &captureRecorder{}
@@ -388,7 +389,7 @@ func TestInstallationJanitorRejectsGrantReadExpiryOutsideTheDeclaredBound(t *tes
 		t.Run(tc.name, func(t *testing.T) {
 			var lists, revokes, destructive int
 			recorder := &removalRecorder{}
-			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			srv := httptest.NewServer(strayrequest.Ignore(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 				switch {
 				case r.Method == http.MethodGet && r.URL.Path == "/app/installations":
 					_, _ = io.WriteString(w,
@@ -407,7 +408,7 @@ func TestInstallationJanitorRejectsGrantReadExpiryOutsideTheDeclaredBound(t *tes
 					destructive++
 					w.WriteHeader(http.StatusNoContent)
 				}
-			}))
+			})))
 			defer srv.Close()
 
 			janitor := newJanitor(t, ks, srv, trustedPublicBinding(fixtureRepositoryID), recorder, 1)

@@ -17,6 +17,7 @@ import (
 	"github.com/freeside-ai/freeside/daemon/internal/signet"
 	"github.com/freeside-ai/freeside/daemon/internal/store"
 	"github.com/freeside-ai/freeside/daemon/internal/store/storetest"
+	"github.com/freeside-ai/freeside/daemon/internal/strayrequest"
 )
 
 // fakeNtfy records what the pipeline actually publishes and answers with a
@@ -56,7 +57,7 @@ func newDeliveryFixture(t *testing.T) deliveryFixture {
 	t.Helper()
 	f := newFixture(t)
 	fake := &fakeNtfy{status: http.StatusOK}
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	server := httptest.NewServer(strayrequest.Ignore(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		fake.mu.Lock()
 		defer fake.mu.Unlock()
 		body, err := io.ReadAll(r.Body)
@@ -78,7 +79,7 @@ func newDeliveryFixture(t *testing.T) deliveryFixture {
 			w.Header().Set("Location", fake.location)
 		}
 		w.WriteHeader(fake.status)
-	}))
+	})))
 	t.Cleanup(server.Close)
 	service := signet.NewService(f.store,
 		signet.WithPairingKey(testPairingKey),
@@ -842,12 +843,12 @@ func TestSubmitDeliveryFollowsNoRedirect(t *testing.T) {
 		mu       sync.Mutex
 		followed []string
 	)
-	landing := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	landing := httptest.NewServer(strayrequest.Ignore(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		mu.Lock()
 		defer mu.Unlock()
 		followed = append(followed, r.Method+" "+r.URL.Path)
 		w.WriteHeader(http.StatusOK)
-	}))
+	})))
 	t.Cleanup(landing.Close)
 	f.ntfy.location = landing.URL + "/sign-in"
 

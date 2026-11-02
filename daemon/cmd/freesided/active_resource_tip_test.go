@@ -14,6 +14,7 @@ import (
 	"github.com/freeside-ai/freeside/daemon/internal/domain"
 	"github.com/freeside-ai/freeside/daemon/internal/publish"
 	"github.com/freeside-ai/freeside/daemon/internal/store"
+	"github.com/freeside-ai/freeside/daemon/internal/strayrequest"
 )
 
 const (
@@ -171,7 +172,7 @@ func TestActiveResourceTipWatchFiresOnSharedCacheNotModified(t *testing.T) {
 	st := schedTestStore(t)
 	seedTipObservation(t, st, tipA, tipA)
 	forge := &tipWatchForge{sha: tipB}
-	server := httptest.NewServer(http.HandlerFunc(forge.serveHTTP))
+	server := httptest.NewServer(strayrequest.Ignore(http.HandlerFunc(forge.serveHTTP)))
 	t.Cleanup(server.Close)
 	publishReconciler := publish.NewReconciler(activeResourceCacheTokenSource{}, server.Client(), server.URL)
 	readTip := refTipObserver(publishReconciler)

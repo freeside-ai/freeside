@@ -15,6 +15,7 @@ import (
 	"github.com/freeside-ai/freeside/daemon/internal/domain"
 	"github.com/freeside-ai/freeside/daemon/internal/signet"
 	"github.com/freeside-ai/freeside/daemon/internal/store"
+	"github.com/freeside-ai/freeside/daemon/internal/strayrequest"
 )
 
 func TestEachDurableStopNotifiesEveryDevice(t *testing.T) {
@@ -107,7 +108,7 @@ type ntfySink struct {
 func newNtfySink(t *testing.T, status int) *ntfySink {
 	t.Helper()
 	sink := &ntfySink{status: status}
-	sink.Server = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	sink.Server = httptest.NewServer(strayrequest.Ignore(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if sink.onPublish != nil {
 			sink.onPublish(r.Header.Get("Click"))
 		}
@@ -116,7 +117,7 @@ func newNtfySink(t *testing.T, status int) *ntfySink {
 		sink.topics = append(sink.topics, strings.TrimPrefix(r.URL.Path, "/"))
 		sink.clicks = append(sink.clicks, r.Header.Get("Click"))
 		w.WriteHeader(sink.status)
-	}))
+	})))
 	t.Cleanup(sink.Close)
 	return sink
 }
@@ -416,7 +417,7 @@ func TestDaemonSurvivesANotificationOutage(t *testing.T) {
 
 	t.Run("unreachable", func(t *testing.T) {
 		// A server that is gone: its address refuses every connection.
-		gone := httptest.NewServer(http.NotFoundHandler())
+		gone := httptest.NewServer(strayrequest.Ignore(http.NotFoundHandler()))
 		goneURL := gone.URL
 		gone.Close()
 		var logs lockedBuffer

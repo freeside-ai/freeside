@@ -16,6 +16,7 @@ import (
 	"time"
 
 	"github.com/freeside-ai/freeside/daemon/internal/publish"
+	"github.com/freeside-ai/freeside/daemon/internal/strayrequest"
 )
 
 const (
@@ -406,7 +407,7 @@ func newStoreJanitor(
 func TestStoreBackedJanitorPublishesCoverage(t *testing.T) {
 	t.Parallel()
 	ks := publicJanitorKeystore(t)
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	srv := httptest.NewServer(strayrequest.Ignore(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if handleExactGrant(w, r, fixtureRepositoryID) {
 			return
 		}
@@ -417,7 +418,7 @@ func TestStoreBackedJanitorPublishesCoverage(t *testing.T) {
 			return
 		}
 		t.Errorf("unexpected request %s %s", r.Method, r.URL.Path)
-	}))
+	})))
 	defer srv.Close()
 
 	dir, store := newDocumentStore(t, operatorDocument(operatorBinding(701, fixtureRepositoryID)))
@@ -452,7 +453,7 @@ func TestStoreBackedJanitorDeniesAPassWithoutTheRegistrationOwner(t *testing.T) 
 	t.Parallel()
 	ks := publicJanitorKeystore(t)
 	deletes := 0
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	srv := httptest.NewServer(strayrequest.Ignore(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Method == http.MethodDelete {
 			deletes++
 			w.WriteHeader(http.StatusNoContent)
@@ -465,7 +466,7 @@ func TestStoreBackedJanitorDeniesAPassWithoutTheRegistrationOwner(t *testing.T) 
 			return
 		}
 		t.Errorf("unexpected request %s %s", r.Method, r.URL.Path)
-	}))
+	})))
 	defer srv.Close()
 
 	// The document is well-formed on its own; only the registration's own
@@ -492,7 +493,7 @@ func TestStoreBackedJanitorFailsThePassWhenTheJournalCannotBeWritten(t *testing.
 	}
 	ks := publicJanitorKeystore(t)
 	deletes := 0
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	srv := httptest.NewServer(strayrequest.Ignore(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Method == http.MethodDelete {
 			deletes++
 			w.WriteHeader(http.StatusNoContent)
@@ -505,7 +506,7 @@ func TestStoreBackedJanitorFailsThePassWhenTheJournalCannotBeWritten(t *testing.
 			return
 		}
 		t.Errorf("unexpected request %s %s", r.Method, r.URL.Path)
-	}))
+	})))
 	defer srv.Close()
 
 	dir, store := newDocumentStore(t, operatorDocument())
@@ -533,7 +534,7 @@ func TestQuarantinedInstallationIsDeletedRatherThanRetrustedAfterRestart(t *test
 	t.Parallel()
 	ks := publicJanitorKeystore(t)
 	var requests []string
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	srv := httptest.NewServer(strayrequest.Ignore(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if handleExactGrant(w, r, fixtureRepositoryID, fixtureRepositoryID+1) {
 			return
 		}
@@ -548,7 +549,7 @@ func TestQuarantinedInstallationIsDeletedRatherThanRetrustedAfterRestart(t *test
 		default:
 			t.Errorf("unexpected request %s %s", r.Method, r.URL.Path)
 		}
-	}))
+	})))
 	defer srv.Close()
 
 	dir, store := newDocumentStore(t, operatorDocument(operatorBinding(701, fixtureRepositoryID)))

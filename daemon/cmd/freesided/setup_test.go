@@ -24,6 +24,7 @@ import (
 	"github.com/freeside-ai/freeside/daemon/internal/golden"
 	"github.com/freeside-ai/freeside/daemon/internal/operations"
 	"github.com/freeside-ai/freeside/daemon/internal/publish"
+	"github.com/freeside-ai/freeside/daemon/internal/strayrequest"
 )
 
 func TestSetupCommandCreatesCorrectedFakeDriverDirectory(t *testing.T) {
@@ -108,7 +109,7 @@ func TestSetupCommandRegistersAppAndInitializesAuthority(t *testing.T) {
 	const manifestCode = "FREESIDE_TEST_MANIFEST_CODE"
 	var conversionCalls atomic.Int32
 	var interruptAuthority atomic.Bool
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	server := httptest.NewServer(strayrequest.Ignore(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch {
 		case r.Method == http.MethodPost &&
 			r.URL.Path == "/app-manifests/"+manifestCode+"/conversions":
@@ -146,7 +147,7 @@ func TestSetupCommandRegistersAppAndInitializesAuthority(t *testing.T) {
 		default:
 			http.Error(w, fmt.Sprintf("unexpected %s %s", r.Method, r.URL.Path), http.StatusNotFound)
 		}
-	}))
+	})))
 	defer server.Close()
 
 	args := []string{
@@ -468,7 +469,7 @@ func TestSetupCommandKeepsRegistrationCodeOutOfProcessArgumentsAndOutput(t *test
 	})
 	const manifestCode = "FREESIDE_PROCESS_LIST_MANIFEST_CODE"
 	var conversionCalls atomic.Int32
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	server := httptest.NewServer(strayrequest.Ignore(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch {
 		case r.Method == http.MethodPost &&
 			r.URL.Path == "/app-manifests/"+manifestCode+"/conversions":
@@ -489,7 +490,7 @@ func TestSetupCommandKeepsRegistrationCodeOutOfProcessArgumentsAndOutput(t *test
 		default:
 			http.Error(w, "unexpected request", http.StatusNotFound)
 		}
-	}))
+	})))
 	defer server.Close()
 
 	configDir := filepath.Join(t.TempDir(), "freeside")

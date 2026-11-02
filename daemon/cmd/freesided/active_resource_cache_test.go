@@ -12,6 +12,7 @@ import (
 
 	"github.com/freeside-ai/freeside/daemon/internal/domain"
 	"github.com/freeside-ai/freeside/daemon/internal/publish"
+	"github.com/freeside-ai/freeside/daemon/internal/strayrequest"
 )
 
 type activeResourceCacheTokenSource struct{}
@@ -106,7 +107,7 @@ func TestActiveResourceReconcileEvictsConcludedCachesAndAllowsResumption(t *test
 	st := schedTestStore(t)
 	item := capturedRun(t, st)
 	forge := &activeResourceCacheForge{pullState: "open", pullRevision: 1}
-	server := httptest.NewServer(http.HandlerFunc(forge.serveHTTP))
+	server := httptest.NewServer(strayrequest.Ignore(http.HandlerFunc(forge.serveHTTP)))
 	t.Cleanup(server.Close)
 	cache := publish.NewReconciler(activeResourceCacheTokenSource{}, server.Client(), server.URL)
 

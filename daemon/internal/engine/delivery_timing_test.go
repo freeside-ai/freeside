@@ -10,6 +10,7 @@ import (
 	"github.com/freeside-ai/freeside/daemon/internal/domain"
 	"github.com/freeside-ai/freeside/daemon/internal/signet"
 	"github.com/freeside-ai/freeside/daemon/internal/store"
+	"github.com/freeside-ai/freeside/daemon/internal/strayrequest"
 )
 
 // deliveryNotifier records real delivery writes on a test's store: a signet
@@ -25,9 +26,9 @@ type deliveryNotifier struct {
 
 func newDeliveryNotifier(t *testing.T, st *store.Store) *deliveryNotifier {
 	t.Helper()
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+	server := httptest.NewServer(strayrequest.Ignore(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusOK)
-	}))
+	})))
 	t.Cleanup(server.Close)
 	// Each receipt needs its own instant, in lifecycle order.
 	now := time.Date(2026, 10, 11, 12, 0, 0, 0, time.UTC)

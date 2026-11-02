@@ -12,6 +12,8 @@ import (
 	"net/url"
 	"strings"
 	"testing"
+
+	"github.com/freeside-ai/freeside/daemon/internal/strayrequest"
 )
 
 var (
@@ -121,15 +123,15 @@ func TestStartValidatesTheReportedNetwork(t *testing.T) {
 
 func TestForwardsPlainHTTP(t *testing.T) {
 	t.Parallel()
-	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	upstream := httptest.NewServer(strayrequest.Ignore(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if forwarded := r.Header.Get("X-Forwarded-For"); forwarded != "" {
 			t.Errorf("upstream saw X-Forwarded-For %q, want the client address withheld", forwarded)
 		}
 		_, _ = io.WriteString(w, "index")
-	}))
+	})))
 	t.Cleanup(upstream.Close)
 
-	status, body := get(t, proxiedClient(t, startLoopback(t, nil), nil), upstream.URL)
+	status, body := get(t, proxiedClient(t, startLoopback(t, nil), nil), upstream.URL+"/index")
 	if status != http.StatusOK || body != "index" {
 		t.Fatalf("got %d %q, want 200 \"index\"", status, body)
 	}
@@ -137,13 +139,13 @@ func TestForwardsPlainHTTP(t *testing.T) {
 
 func TestTunnelsConnect(t *testing.T) {
 	t.Parallel()
-	upstream := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+	upstream := httptest.NewTLSServer(strayrequest.Ignore(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		_, _ = io.WriteString(w, "tarball")
-	}))
+	})))
 	t.Cleanup(upstream.Close)
 
 	client := proxiedClient(t, startLoopback(t, nil), upstream.Client().Transport.(*http.Transport).TLSClientConfig)
-	status, body := get(t, client, upstream.URL)
+	status, body := get(t, client, upstream.URL+"/tarball")
 	if status != http.StatusOK || body != "tarball" {
 		t.Fatalf("got %d %q, want 200 \"tarball\"", status, body)
 	}
@@ -151,13 +153,13 @@ func TestTunnelsConnect(t *testing.T) {
 
 func TestRefusesNonPublicDestinations(t *testing.T) {
 	t.Parallel()
-	upstream := httptest.NewServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {
+	upstream := httptest.NewServer(strayrequest.Ignore(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {
 		t.Error("the proxy reached a loopback upstream")
-	}))
+	})))
 	t.Cleanup(upstream.Close)
 	proxy := startLoopback(t, forwardableDestinationOnly)
 
-	if status, _ := get(t, proxiedClient(t, proxy, nil), upstream.URL); status != http.StatusBadGateway {
+	if status, _ := get(t, proxiedClient(t, proxy, nil), upstream.URL+"/index"); status != http.StatusBadGateway {
 		t.Errorf("plain HTTP to loopback: status %d, want 502", status)
 	}
 	// "localhost" exercises the post-resolution check, not literal matching.
