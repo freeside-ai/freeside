@@ -52,7 +52,7 @@ package enum RunDisplay {
     /// (daemon/internal/domain/observation.go).
     package static let publicationHoldReasons: Set<Components.Schemas.RunHoldReason> = [
         .verification_findings, .trust_blocked, .base_advanced, .recipe_revoked,
-        .scope_conflict, .publication_environment, .external_conflict,
+        .scope_conflict, .publication_environment, .external_conflict, .verification_memory_limit,
     ]
 
     package static func workflowPhase(_ run: Components.Schemas.Run) -> WorkflowPhase? {
@@ -380,6 +380,7 @@ package enum RunDisplay {
         case .base_advanced: "Base branch changed"
         case .identity_parallelism, .usage_pool_exhausted: "Waiting for agent capacity"
         case .image_upkeep_pending: "Waiting for project image upkeep"
+        case .verification_memory_limit: "Verification ran out of memory"
         }
     }
 

@@ -2805,6 +2805,7 @@ components:
         - identity_parallelism
         - image_upkeep_pending
         - usage_pool_exhausted
+        - verification_memory_limit
 
     ImageUpkeepPending:
       type: string
@@ -2961,6 +2962,7 @@ components:
         - provider_unavailable
         - invalid_configuration
         - contract_contradiction
+        - memory_limit
         - unknown
 
     InterpretationFailureCause:

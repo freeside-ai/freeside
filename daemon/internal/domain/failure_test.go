@@ -111,6 +111,22 @@ func TestDecideFailureDisposition(t *testing.T) {
 			with(otherPool, otherRoute), domain.FailureDispositionFailLoud,
 		},
 		{
+			// Every agent of a class runs at the class size, so no
+			// alternate escapes the limit, whatever the lineup offers.
+			"memory limit with alternates", domain.FailureCauseMemoryLimit,
+			with(otherPool, samePool, otherRoute, invalidGeneration, unattributed),
+			domain.FailureDispositionAttention,
+		},
+		{
+			"memory limit with no alternate", domain.FailureCauseMemoryLimit,
+			failed, domain.FailureDispositionAttention,
+		},
+		{
+			"memory limit with no recorded facts", domain.FailureCauseMemoryLimit,
+			domain.FailureFacts{},
+			domain.FailureDispositionAttention,
+		},
+		{
 			"invalid zero cause", "",
 			with(otherPool, otherRoute), domain.FailureDispositionAttention,
 		},

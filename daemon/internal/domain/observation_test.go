@@ -578,6 +578,7 @@ func TestDefinitivePublicationBlockReason(t *testing.T) {
 		PublicationBlockBaseAdvancedConflict:     HoldBaseAdvanced,
 		PublicationBlockBaseAdvancedVerification: HoldBaseAdvanced,
 		PublicationBlockBaseAdvancedRoundLimit:   HoldBaseAdvanced,
+		PublicationBlockVerificationMemoryLimit:  HoldVerificationMemoryLimit,
 	} {
 		got, ok := DefinitivePublicationBlockReason(reason)
 		if !ok || got != want {

@@ -169,6 +169,9 @@ const (
 	PublicationBlockBaseAdvancedConflict     = "The target base advanced after admission, and the candidate conflicts with the new base; resolve the conflict and start a new run against the current base."
 	PublicationBlockBaseAdvancedVerification = "The target base advanced after admission, and the candidate merged into the new base did not pass verification; inspect the verification evidence and start a new run against the current base."
 	PublicationBlockBaseAdvancedRoundLimit   = "The target base advanced after admission, and the review hard round limit leaves no round to re-review the candidate against the new base; start a new run against the current base."
+	// Verification runs at the size the run's policy resolved, so a rerun
+	// meets the same limit; only a larger declared size clears it.
+	PublicationBlockVerificationMemoryLimit = "The verification container was killed at its declared memory limit; raise execution.verification_memory_mib and start a new run."
 )
 
 const (
@@ -229,6 +232,10 @@ const (
 	// §5.7, Project-image upkeep): a rebuild, an adoption proposal, or a
 	// maintenance task. The hold names which in ImageUpkeepHold.
 	HoldImageUpkeepPending RunHoldReason = "image_upkeep_pending"
+	// HoldVerificationMemoryLimit: the verification container was killed at
+	// its declared memory limit, so publication is definitively blocked until
+	// a new run verifies at a larger size.
+	HoldVerificationMemoryLimit RunHoldReason = "verification_memory_limit"
 )
 
 // AllRunHoldReasons is the single registration point for hold reasons.
@@ -252,6 +259,7 @@ var AllRunHoldReasons = []RunHoldReason{
 	HoldIdentityParallelism,
 	HoldUsagePoolExhausted,
 	HoldImageUpkeepPending,
+	HoldVerificationMemoryLimit,
 }
 
 func (r RunHoldReason) valid() bool {
@@ -262,7 +270,8 @@ func (r RunHoldReason) valid() bool {
 		HoldProviderAuthorityUnavailable, HoldAttendedModeActive,
 		HoldPublicationEnvironment, HoldExternalConflict, HoldRecipeRevoked,
 		HoldVerificationFindings, HoldTrustBlocked, HoldBaseAdvanced,
-		HoldIdentityParallelism, HoldUsagePoolExhausted, HoldImageUpkeepPending:
+		HoldIdentityParallelism, HoldUsagePoolExhausted, HoldImageUpkeepPending,
+		HoldVerificationMemoryLimit:
 		return true
 	default:
 		return false
@@ -520,6 +529,8 @@ func DefinitivePublicationBlockReason(reason string) (RunHoldReason, bool) {
 	case PublicationBlockBaseAdvanced, PublicationBlockBaseAdvancedConflict,
 		PublicationBlockBaseAdvancedVerification, PublicationBlockBaseAdvancedRoundLimit:
 		return HoldBaseAdvanced, true
+	case PublicationBlockVerificationMemoryLimit:
+		return HoldVerificationMemoryLimit, true
 	}
 	return "", false
 }

@@ -190,6 +190,7 @@ import Testing
     @Test(arguments: [
         Components.Schemas.RunHoldReason.verification_findings, .trust_blocked, .base_advanced,
         .recipe_revoked, .scope_conflict, .publication_environment, .external_conflict,
+        .verification_memory_limit,
     ])
     func publicationCycleHoldsAdvanceToVerification(hold: Components.Schemas.RunHoldReason) {
         var run = RunFixtures.defaultRuns()[0].run

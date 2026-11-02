@@ -27,6 +27,7 @@ import Testing
             .identity_parallelism: "Waiting for agent capacity",
             .usage_pool_exhausted: "Waiting for agent capacity",
             .image_upkeep_pending: "Waiting for project image upkeep",
+            .verification_memory_limit: "Verification ran out of memory",
         ]
         #expect(Set(labels.keys) == Set(Components.Schemas.RunHoldReason.allCases))
         for reason in Components.Schemas.RunHoldReason.allCases {
