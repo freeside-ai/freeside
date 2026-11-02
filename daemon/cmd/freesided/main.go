@@ -1117,6 +1117,32 @@ func run(parent context.Context, stop func(), cfg config) (_ *daemon, err error)
 		// its operator-configured startup snapshot, independently of label intake.
 		// An omitted manual-submission file disables new client tasks.
 		signet.WithTaskSubmitter(engine.NewTaskSubmitter(blobs, manualInitiator)),
+		// A client line change runs the engine's rule inside the command's
+		// transaction, so the receipt commits with the line.
+		signet.WithTaskLineChanger(func(
+			ctx context.Context, tx *store.WriteTx, change signet.TaskLineChange, now time.Time,
+		) (signet.TaskLineChangeOutcome, error) {
+			result, err := engine.ChangeTaskLineTx(ctx, tx, engine.ChangeTaskLineRequest{
+				TaskID: change.TaskID, Role: change.Role, Agent: change.Agent, Clear: change.Clear, Source: change.Source,
+			}, now)
+			return signet.TaskLineChangeOutcome{Recorded: result.Recorded, Line: result.Line}, err
+		}),
+		// A policy names agents of the committed tree, which exists only after
+		// the Claude composition below; without it the command fails closed.
+		signet.WithRoutingPolicySetter(func(
+			ctx context.Context, tx *store.WriteTx, change signet.RoutingPolicyChange, now time.Time,
+		) (signet.RoutingPolicyOutcome, error) {
+			if claudeWiring == nil {
+				return signet.RoutingPolicyOutcome{}, signet.ErrOperatorSettingUnavailable
+			}
+			result, err := engine.SetRoutingPolicyTx(ctx, tx,
+				claudeWiring.env.Agents.Tree, claudeWiring.env.Agents.LineupRevision,
+				engine.SetRoutingPolicyRequest{Roles: change.Roles, Source: change.Source, SetBy: change.SetBy}, now)
+			return signet.RoutingPolicyOutcome{Recorded: result.Recorded, Policy: result.Policy}, err
+		}),
+		// A window reading counts as fresh for one doctor interval; #1716's
+		// collection cadence decides the lasting value.
+		signet.WithUsageRefreshAge(cfg.DoctorInterval),
 		signet.WithNtfy(signet.NtfyConfig{
 			BaseURL: cfg.NtfyURL, TopicKey: topicKey,
 		}),
