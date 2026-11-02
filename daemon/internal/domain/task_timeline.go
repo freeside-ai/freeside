@@ -138,7 +138,7 @@ func (l TaskEventTaskLine) validate() error {
 	if l.Agent == nil {
 		// A cleared version, which only a line change writes and never as
 		// the first of its chain. The router's check below needs an agent.
-		if l.Source != TaskLineSourceCLILineChange || l.Version == 1 {
+		if !l.Source.IsLineChange() || l.Version == 1 {
 			return ErrTaskEventDetailMismatch
 		}
 	} else if !validAgentName(*l.Agent) {

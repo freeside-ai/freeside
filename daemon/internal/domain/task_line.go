@@ -38,26 +38,37 @@ const (
 	TaskLineSourceRouter TaskLineSource = "router"
 	// TaskLineSourceCLILineChange is `freesided task-line` on the daemon host:
 	// a change to a task's line after the task exists, while no attempt of
-	// the role runs. SetBy names its TaskLineChange. It is the only source
-	// that may clear a line.
+	// the role runs. SetBy names its TaskLineChange. It and
+	// TaskLineSourceClientLineChange are the only sources that may clear a
+	// line.
 	TaskLineSourceCLILineChange TaskLineSource = "cli_line_change"
+	// TaskLineSourceClientLineChange is a paired client's change_task_line
+	// command: the same change as cli_line_change, made from a client, with
+	// SetBy naming its TaskLineChange too.
+	TaskLineSourceClientLineChange TaskLineSource = "client_line_change"
 )
 
 // AllTaskLineSources lists every valid TaskLineSource; it is the single
 // registration point.
 var AllTaskLineSources = []TaskLineSource{
 	TaskLineSourceSubmitTask, TaskLineSourceCLISubmit, TaskLineSourceProposalStart,
-	TaskLineSourceRouter, TaskLineSourceCLILineChange,
+	TaskLineSourceRouter, TaskLineSourceCLILineChange, TaskLineSourceClientLineChange,
 }
 
 func (s TaskLineSource) valid() bool {
 	switch s {
 	case TaskLineSourceSubmitTask, TaskLineSourceCLISubmit, TaskLineSourceProposalStart,
-		TaskLineSourceRouter, TaskLineSourceCLILineChange:
+		TaskLineSourceRouter, TaskLineSourceCLILineChange, TaskLineSourceClientLineChange:
 		return true
 	default:
 		return false
 	}
+}
+
+// IsLineChange reports whether the source is a change to an existing task's
+// line, whose SetBy names a TaskLineChange record.
+func (s TaskLineSource) IsLineChange() bool {
+	return s == TaskLineSourceCLILineChange || s == TaskLineSourceClientLineChange
 }
 
 // TaskLineSelectionTrigger is what made the router write a line (plan §5.4,
@@ -401,7 +412,7 @@ func (l TaskLine) Validate() error {
 	}
 	if l.Cleared {
 		// A clear supersedes a line, so it never starts a chain.
-		if l.Agent != "" || l.Source != TaskLineSourceCLILineChange || l.Version == 1 {
+		if l.Agent != "" || !l.Source.IsLineChange() || l.Version == 1 {
 			return fmt.Errorf("task line %s %s version %d clear: %w", l.TaskID, l.Role, l.Version, ErrTaskLineInconsistent)
 		}
 	} else if !validAgentName(l.Agent) {

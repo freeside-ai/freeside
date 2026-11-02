@@ -12,16 +12,21 @@ import (
 // §5.4, routing policy). Every member is an authenticated operator action.
 type RoutingPolicySource string
 
-// RoutingPolicySourceCLISet is `freesided routing set` on the daemon host.
-const RoutingPolicySourceCLISet RoutingPolicySource = "cli_routing_set"
+const (
+	// RoutingPolicySourceCLISet is `freesided routing set` on the daemon host.
+	RoutingPolicySourceCLISet RoutingPolicySource = "cli_routing_set"
+	// RoutingPolicySourceClientSet is a paired client's set_routing_policy
+	// command; SetBy names the device.
+	RoutingPolicySourceClientSet RoutingPolicySource = "client_routing_set"
+)
 
 // AllRoutingPolicySources lists every valid RoutingPolicySource; it is the
 // single registration point.
-var AllRoutingPolicySources = []RoutingPolicySource{RoutingPolicySourceCLISet}
+var AllRoutingPolicySources = []RoutingPolicySource{RoutingPolicySourceCLISet, RoutingPolicySourceClientSet}
 
 func (s RoutingPolicySource) valid() bool {
 	switch s {
-	case RoutingPolicySourceCLISet:
+	case RoutingPolicySourceCLISet, RoutingPolicySourceClientSet:
 		return true
 	default:
 		return false

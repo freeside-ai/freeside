@@ -685,7 +685,7 @@ func TestTaskLineAdmissionResolvesTheLineItCites(t *testing.T) {
 		var cleared domain.TaskLine
 		if err := s.Write(ctx, func(tx *WriteTx) error {
 			var err error
-			cleared, err = tx.RecordTaskLineChange(ctx, change)
+			cleared, err = tx.RecordTaskLineChange(ctx, change, domain.TaskLineSourceCLILineChange)
 			return err
 		}); err != nil {
 			t.Fatal(err)

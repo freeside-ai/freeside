@@ -102,5 +102,6 @@ func parseTaskLineConfig(args []string, output io.Writer) (taskLineConfig, error
 		return taskLineConfig{}, errors.New("exactly one of -agent and -clear is required")
 	}
 	cfg.Request.TaskID, cfg.Request.Role = domain.TaskID(task), domain.RoleName(role)
+	cfg.Request.Source = domain.TaskLineSourceCLILineChange
 	return cfg, nil
 }

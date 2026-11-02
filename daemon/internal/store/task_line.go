@@ -15,7 +15,7 @@ import (
 // next version for its task and role. Migration 0111 adds a router line's
 // provenance as JSON, NULL for every operator line. Migration 0113 adds the
 // cleared version, whose agent is NULL, and the change records that back a
-// cli_line_change line.
+// cli_line_change or client_line_change line.
 
 const taskLineColumns = `task_id, role, version, id, agent, predecessor_id, source, set_by, set_at, provenance, cleared`
 
@@ -86,7 +86,15 @@ func (tx *WriteTx) AppendTaskLine(ctx context.Context, in domain.TaskLineInput, 
 // A change writes nothing else a client syncs, so this advances the task's
 // own version. Without that, sync would keep serving the task's old
 // task_lines.
-func (tx *WriteTx) RecordTaskLineChange(ctx context.Context, change domain.TaskLineChange) (domain.TaskLine, error) {
+//
+// source is the path that made the change, one of the line-change sources.
+func (tx *WriteTx) RecordTaskLineChange(
+	ctx context.Context, change domain.TaskLineChange, source domain.TaskLineSource,
+) (domain.TaskLine, error) {
+	if !source.IsLineChange() {
+		return domain.TaskLine{}, fmt.Errorf("record task line change %q source %q: %w",
+			change.TaskID, source, domain.ErrInvalidTaskLineSource)
+	}
 	if err := change.Validate(); err != nil {
 		return domain.TaskLine{}, fmt.Errorf("record task line change %q: %w", change.TaskID, err)
 	}
@@ -100,7 +108,7 @@ func (tx *WriteTx) RecordTaskLineChange(ctx context.Context, change domain.TaskL
 	}
 	line, err := tx.AppendTaskLine(ctx, domain.TaskLineInput{
 		TaskID: change.TaskID, Role: change.Role, Agent: change.Agent, Cleared: change.Cleared,
-		Source: domain.TaskLineSourceCLILineChange, SetBy: string(change.ID),
+		Source: source, SetBy: string(change.ID),
 	}, change.RecordedAt)
 	if err != nil {
 		return domain.TaskLine{}, err

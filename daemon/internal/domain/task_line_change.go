@@ -14,8 +14,8 @@ import (
 const taskLineChangeEncodingVersion = "freeside.task_line_change/v1"
 
 // TaskLineChange is an operator's recorded change to a task's line for one
-// role (plan §5.4, Admitted Agents): the record a cli_line_change line cites
-// as its SetBy. Unlike a submission record, it stores the agent it chose and
+// role (plan §5.4, Admitted Agents): the record a cli_line_change or
+// client_line_change line cites as its SetBy. Unlike a submission record, it stores the agent it chose and
 // the version it replaced, so admission can hold the line to both. A row in
 // task_lines alone proves nothing, because its id is an unkeyed hash of its
 // own columns.
@@ -93,7 +93,7 @@ func (c TaskLineChange) Replaces(predecessor *Digest) bool {
 // this record, and they agree on the task, role, agent or clear, the version
 // replaced, and the instant.
 func (c TaskLineChange) Backs(line TaskLine) bool {
-	return line.Source == TaskLineSourceCLILineChange && line.SetBy == string(c.ID) &&
+	return line.Source.IsLineChange() && line.SetBy == string(c.ID) &&
 		c.TaskID == line.TaskID && c.Role == line.Role && c.Agent == line.Agent &&
 		c.Cleared == line.Cleared && c.Replaces(line.PredecessorID) && c.RecordedAt.Equal(line.SetAt)
 }

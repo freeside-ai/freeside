@@ -437,7 +437,7 @@ func recordTaskLineChange(
 	var line domain.TaskLine
 	err = s.Write(ctx, func(tx *store.WriteTx) error {
 		var err error
-		line, err = tx.RecordTaskLineChange(ctx, change)
+		line, err = tx.RecordTaskLineChange(ctx, change, domain.TaskLineSourceCLILineChange)
 		return err
 	})
 	return line, err
@@ -535,7 +535,7 @@ func TestRecordTaskLineChangeRefusesAVersionItDidNotSee(t *testing.T) {
 		t.Fatal(err)
 	}
 	if err := s.Write(ctx, func(tx *store.WriteTx) error {
-		_, err := tx.RecordTaskLineChange(ctx, stale)
+		_, err := tx.RecordTaskLineChange(ctx, stale, domain.TaskLineSourceCLILineChange)
 		return err
 	}); !errors.Is(err, domain.ErrTaskLineInconsistent) {
 		t.Fatalf("a stale change: %v", err)

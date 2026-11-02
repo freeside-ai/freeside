@@ -21,6 +21,7 @@ func (f *agentAdmissionFixture) changeLine(t *testing.T, role domain.RoleName, a
 	t.Helper()
 	result, err := ChangeTaskLine(context.Background(), f.store, ChangeTaskLineRequest{
 		TaskID: f.task(t, f.run.ID).ID, Role: role, Agent: agent, Clear: clear,
+		Source: domain.TaskLineSourceCLILineChange,
 	}, agentTestAt)
 	if err != nil {
 		t.Fatalf("change the %s line: %v", role, err)
@@ -179,7 +180,10 @@ func TestRecoveryIsRefusedWhileItsRoleRuns(t *testing.T) {
 		Source: domain.TaskLineSourceSubmitTask, SetBy: agentTestSubmitCommand,
 	}, task.CreatedAt)
 
-	request := ChangeTaskLineRequest{TaskID: task.ID, Role: domain.RoleImplementer, Agent: agentTestSecondAgent}
+	request := ChangeTaskLineRequest{
+		TaskID: task.ID, Role: domain.RoleImplementer, Agent: agentTestSecondAgent,
+		Source: domain.TaskLineSourceCLILineChange,
+	}
 	if result, err := ChangeTaskLine(ctx, f.store, request, agentTestAt); !errors.Is(err, domain.ErrTaskLineRoleRunning) {
 		t.Fatalf("recovery while the role runs = %+v, %v", result, err)
 	}
@@ -266,7 +270,7 @@ func TestChangeIsRefusedWhileItsRoleRuns(t *testing.T) {
 		"a change": {Role: domain.RoleImplementer, Agent: agentTestSecondAgent},
 		"a clear":  {Role: domain.RoleImplementer, Clear: true},
 	} {
-		request.TaskID = f.task(t, f.run.ID).ID
+		request.TaskID, request.Source = f.task(t, f.run.ID).ID, domain.TaskLineSourceCLILineChange
 		if result, err := ChangeTaskLine(ctx, f.store, request, agentTestAt); !errors.Is(err, domain.ErrTaskLineRoleRunning) {
 			t.Fatalf("%s while the role runs = %+v, %v", name, result, err)
 		}
@@ -344,6 +348,7 @@ func TestAReviewRequestHoldsTheReviewerLine(t *testing.T) {
 			}
 			if _, err := ChangeTaskLine(ctx, f.store, ChangeTaskLineRequest{
 				TaskID: task.ID, Role: domain.RoleReviewer, Agent: agentTestSecondAgent,
+				Source: domain.TaskLineSourceCLILineChange,
 			}, agentTestAt); !errors.Is(err, domain.ErrTaskLineRoleRunning) {
 				t.Fatalf("a change while the review runs: %v", err)
 			}
@@ -391,6 +396,7 @@ func TestClosedWorkflowHoldsNoLine(t *testing.T) {
 	for _, role := range roles {
 		if _, err := ChangeTaskLine(ctx, f.store, ChangeTaskLineRequest{
 			TaskID: task.ID, Role: role, Agent: agentTestSecondAgent,
+			Source: domain.TaskLineSourceCLILineChange,
 		}, agentTestAt); !errors.Is(err, domain.ErrTaskLineRoleRunning) {
 			t.Fatalf("the %s line while the episode is open: %v", role, err)
 		}
@@ -423,14 +429,20 @@ func TestChangeRequestRefusals(t *testing.T) {
 	task := f.task(t, f.run.ID)
 	// Fails the agent grammar and reads like a pasted credential.
 	const pasted = "sk-ant-oat01 fixture not a token"
+	const cli = domain.TaskLineSourceCLILineChange
 	for name, request := range map[string]ChangeTaskLineRequest{
-		"an ineligible role":  {TaskID: task.ID, Role: domain.RoleShadowReviewer, Agent: agentTestSecondAgent},
-		"an unknown role":     {TaskID: task.ID, Role: pasted, Agent: agentTestSecondAgent},
-		"an ineligible clear": {TaskID: task.ID, Role: pasted, Clear: true},
-		"a malformed agent":   {TaskID: task.ID, Role: domain.RoleImplementer, Agent: pasted},
-		"no agent":            {TaskID: task.ID, Role: domain.RoleImplementer},
-		"a clear with text":   {TaskID: task.ID, Role: domain.RoleImplementer, Agent: pasted, Clear: true},
-		"an unknown task":     {TaskID: "task-unknown", Role: domain.RoleImplementer, Agent: agentTestSecondAgent},
+		"an ineligible role":  {TaskID: task.ID, Role: domain.RoleShadowReviewer, Agent: agentTestSecondAgent, Source: cli},
+		"an unknown role":     {TaskID: task.ID, Role: pasted, Agent: agentTestSecondAgent, Source: cli},
+		"an ineligible clear": {TaskID: task.ID, Role: pasted, Clear: true, Source: cli},
+		"a malformed agent":   {TaskID: task.ID, Role: domain.RoleImplementer, Agent: pasted, Source: cli},
+		"no agent":            {TaskID: task.ID, Role: domain.RoleImplementer, Source: cli},
+		"a clear with text":   {TaskID: task.ID, Role: domain.RoleImplementer, Agent: pasted, Clear: true, Source: cli},
+		"an unknown task":     {TaskID: "task-unknown", Role: domain.RoleImplementer, Agent: agentTestSecondAgent, Source: cli},
+		"no source":           {TaskID: task.ID, Role: domain.RoleImplementer, Agent: agentTestSecondAgent},
+		"a submission source": {
+			TaskID: task.ID, Role: domain.RoleImplementer, Agent: agentTestSecondAgent,
+			Source: domain.TaskLineSourceSubmitTask,
+		},
 	} {
 		result, err := ChangeTaskLine(ctx, f.store, request, agentTestAt)
 		if err == nil || result.Recorded {
@@ -458,6 +470,7 @@ func TestForgedLineChangesRefuseAdmission(t *testing.T) {
 		t.Helper()
 		result, err := ChangeTaskLine(ctx, f.store, ChangeTaskLineRequest{
 			TaskID: taskID, Role: role, Agent: agentTestSecondAgent,
+			Source: domain.TaskLineSourceCLILineChange,
 		}, agentTestAt)
 		if err != nil {
 			t.Fatal(err)

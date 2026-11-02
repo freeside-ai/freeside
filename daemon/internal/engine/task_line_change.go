@@ -23,9 +23,15 @@ type ChangeTaskLineRequest struct {
 	Role   domain.RoleName
 	Agent  string
 	Clear  bool
+	// Source is the path that made the change: cli_line_change or
+	// client_line_change.
+	Source domain.TaskLineSource
 }
 
 func (r ChangeTaskLineRequest) validate() error {
+	if !r.Source.IsLineChange() {
+		return fmt.Errorf("task line change source %q: %w", r.Source, domain.ErrInvalidTaskLineSource)
+	}
 	if !r.Clear {
 		return domain.ValidateTaskLineChoices([]domain.TaskLineChoice{{Role: r.Role, Agent: r.Agent}})
 	}
@@ -107,7 +113,7 @@ func ChangeTaskLine(
 		if err != nil {
 			return err
 		}
-		line, err := tx.RecordTaskLineChange(ctx, change)
+		line, err := tx.RecordTaskLineChange(ctx, change, req.Source)
 		if err != nil {
 			return err
 		}

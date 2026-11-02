@@ -2185,7 +2185,7 @@ public enum Components {
                 ])
             }
         }
-        /// The path that set a task line (plan §5.4). submit_task, cli_submit, proposal_start, and cli_line_change are authenticated operator actions; cli_line_change is a later change on the daemon host, and the only source that may clear a line. router is the routing policy's choice at a task's first admission for a role with no operator line, and is the only source that carries provenance.
+        /// The path that set a task line (plan §5.4). submit_task, cli_submit, proposal_start, cli_line_change, and client_line_change are authenticated operator actions; cli_line_change is a later change on the daemon host and client_line_change the same change from a paired client's change_task_line command, and they are the only sources that may clear a line. router is the routing policy's choice at a task's first admission for a role with no operator line, and is the only source that carries provenance.
         ///
         ///
         /// - Remark: Generated from `#/components/schemas/TaskLineSource`.
@@ -2195,6 +2195,7 @@ public enum Components {
             case proposal_start = "proposal_start"
             case router = "router"
             case cli_line_change = "cli_line_change"
+            case client_line_change = "client_line_change"
         }
         /// What made the router write a line. first_admission: the policy order's first agent took the task, so no reading was acted on and no agent passed over. exhausted_mark: the router passed over an agent whose pool's window was marked exhausted. A quota refusal parks a task instead of rerouting it, so it is not a trigger.
         ///
