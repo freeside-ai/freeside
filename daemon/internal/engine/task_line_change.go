@@ -38,7 +38,8 @@ func (r ChangeTaskLineRequest) validate() error {
 	return nil
 }
 
-// sameLine reports whether the role's newest version already is the request.
+// sameLine reports whether the role's newest version already names the
+// request.
 // head is nil when the role has no line.
 func (r ChangeTaskLineRequest) sameLine(head *domain.TaskLine) bool {
 	if r.Clear {
@@ -56,7 +57,8 @@ type TaskLineChangeResult struct {
 }
 
 // ChangeTaskLine records a change to a task's line for a role, unless the
-// role already has that line. An attempt of the role running refuses it with
+// role already has that line and it holds against the action that set it. An
+// attempt of the role running refuses it with
 // domain.ErrTaskLineRoleRunning and records nothing: that attempt holds the
 // line that authorized it, and a change must not read as applying to it.
 //
@@ -86,7 +88,12 @@ func ChangeTaskLine(
 		if head, ok := heads[req.Role]; ok {
 			result.Line, replaces = &head, &head.ID
 		}
-		if req.sameLine(result.Line) {
+		// A version that no longer holds is not the line the role has, so
+		// asking for it again records one that does: to keep an agent, a
+		// clear first would let the lineup's credential run in between. Any
+		// failure to hold counts, since a request for another agent would
+		// supersede this head unchecked too, and admission reports the fault.
+		if req.sameLine(result.Line) && (replaces == nil || anchorTaskLine(ctx, &tx.ReadTx, *result.Line) == nil) {
 			return errTaskLineUnchanged
 		}
 		running, err := taskRoleAttemptRunning(ctx, &tx.ReadTx, req.TaskID, req.Role)

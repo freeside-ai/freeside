@@ -466,16 +466,41 @@ func seedReviewedRun(t *testing.T, st *store.Store, id domain.RunID) domain.Run 
 		if run, err = tx.GetRun(ctx, id); err != nil {
 			return err
 		}
-		return tx.PutTaskSubmissionRequest(ctx, domain.TaskSubmission{
-			CommandID: "cmd-" + string(id), Origin: domain.TaskSubmissionOriginDevice, DeviceID: new(domain.DeviceID("device-1")), ProjectID: run.ProjectID,
-			SourceDigest: domain.Digest("sha256:" + strings.Repeat("4", 64)), TaskID: run.TaskID,
-			SpecificationRunID: id,
-			Name:               domain.DisplayName{Text: "Reviewed task", Source: domain.DisplayNameSourceOperator},
-		}, domain.Digest("sha256:"+strings.Repeat("c", 64)))
+		return recordReviewedRunCommand(ctx, tx, run, "cmd-"+string(id))
 	}); err != nil {
 		t.Fatal(err)
 	}
 	return run
+}
+
+// recordReviewedRunCommand records a submit_task command that created the
+// run's task and carried the lines.
+func recordReviewedRunCommand(
+	ctx context.Context, tx *store.WriteTx, run domain.Run, commandID string, lines ...domain.TaskLineChoice,
+) error {
+	return tx.PutTaskSubmissionRequest(ctx, domain.TaskSubmission{
+		CommandID: commandID, Origin: domain.TaskSubmissionOriginDevice, DeviceID: new(domain.DeviceID("device-1")), ProjectID: run.ProjectID,
+		SourceDigest: domain.Digest("sha256:" + strings.Repeat("4", 64)), TaskID: run.TaskID,
+		SpecificationRunID: run.ID,
+		Name:               domain.DisplayName{Text: "Reviewed task", Source: domain.DisplayNameSourceOperator},
+		TaskLines:          lines,
+	}, domain.Digest("sha256:"+strings.Repeat("c", 64)))
+}
+
+// submitReviewedRunLine records a line on the run's task as submit_task does:
+// set by a command that carried it, at the task's creation instant.
+func submitReviewedRunLine(
+	t *testing.T, st *store.Store, run domain.Run, role domain.RoleName, agent string,
+) domain.TaskLine {
+	t.Helper()
+	ctx := context.Background()
+	commandID := "cmd-" + string(run.ID) + "-" + string(role)
+	if err := st.Write(ctx, func(tx *store.WriteTx) error {
+		return recordReviewedRunCommand(ctx, tx, run, commandID, domain.TaskLineChoice{Role: role, Agent: agent})
+	}); err != nil {
+		t.Fatal(err)
+	}
+	return setReviewedRunLine(t, st, run, role, agent, commandID, 0)
 }
 
 // setReviewedRunLine records a line on the run's task, set by setBy at the
@@ -544,7 +569,7 @@ func TestReviewAdmissionHoldsTheReviewerTaskLine(t *testing.T) {
 		t.Run("no reviewer line", func(t *testing.T) {
 			run := seedReviewedRun(t, st, "run-lineless")
 			// A line for another role is not the reviewer's.
-			setReviewedRunLine(t, st, run, domain.RoleImplementer, "some-other-agent", "cmd-run-lineless", 0)
+			submitReviewedRunLine(t, st, run, domain.RoleImplementer, "some-other-agent")
 			req := admittedReviewRequest(t, st, tree, domain.RoleReviewer, run.ID)
 			if err := admit(ctx, req); err != nil {
 				t.Fatalf("review admission with no reviewer line: %v", err)
@@ -611,7 +636,7 @@ func TestReviewAdmissionHoldsTheReviewerTaskLine(t *testing.T) {
 			// The reviewer line of this task names an agent on another
 			// harness: the engine refuses the invocation before any snapshot
 			// exists. The shadow reviewer reads no line.
-			setReviewedRunLine(t, st, run, domain.RoleReviewer, shadow.Line.AgentName, "cmd-run-admitted", 0)
+			submitReviewedRunLine(t, st, run, domain.RoleReviewer, shadow.Line.AgentName)
 			var failure *roleAdmissionError
 			if _, err := admitter(ctx, domain.RoleReviewer, run.ID, "review-admitted-refused", now); !errors.As(err, &failure) ||
 				failure.Role != domain.RoleReviewer || !errors.Is(err, engine.ErrAgentNotAdmissible) {
@@ -624,7 +649,7 @@ func TestReviewAdmissionHoldsTheReviewerTaskLine(t *testing.T) {
 
 		t.Run("the line names the agent the source runs", func(t *testing.T) {
 			run := seedReviewedRun(t, st, "run-same-agent")
-			setReviewedRunLine(t, st, run, domain.RoleReviewer, reviewer.Line.AgentName, "cmd-run-same-agent", 0)
+			submitReviewedRunLine(t, st, run, domain.RoleReviewer, reviewer.Line.AgentName)
 			if err := admit(ctx, admittedReviewRequest(t, st, tree, domain.RoleReviewer, run.ID)); err != nil {
 				t.Fatalf("review admission with a line naming the composed agent: %v", err)
 			}
@@ -632,7 +657,7 @@ func TestReviewAdmissionHoldsTheReviewerTaskLine(t *testing.T) {
 
 		t.Run("the line selects another agent", func(t *testing.T) {
 			run := seedReviewedRun(t, st, "run-second-agent")
-			line := setReviewedRunLine(t, st, run, domain.RoleReviewer, second, "cmd-run-second-agent", 0)
+			line := submitReviewedRunLine(t, st, run, domain.RoleReviewer, second)
 			revision, err := treeRevision(tree)
 			if err != nil {
 				t.Fatal(err)
@@ -663,7 +688,7 @@ func TestReviewAdmissionHoldsTheReviewerTaskLine(t *testing.T) {
 			if shadow.Line.AgentName == reviewer.Line.AgentName {
 				t.Fatal("the fixture's two review roles share an agent")
 			}
-			line := setReviewedRunLine(t, st, run, domain.RoleReviewer, shadow.Line.AgentName, "cmd-run-other-agent", 0)
+			line := submitReviewedRunLine(t, st, run, domain.RoleReviewer, shadow.Line.AgentName)
 			req := exec.ReviewRequest{RunID: run.ID}
 			refused(t, req, string(line.ID))
 			refused(t, req, "harness client")
@@ -679,7 +704,7 @@ func TestReviewAdmissionHoldsTheReviewerTaskLine(t *testing.T) {
 			// refusal becomes the review failure's recorded reason, so it
 			// names the line and not the text.
 			const pasted = "0123456789abcdef0123456789abcdef"
-			line := setReviewedRunLine(t, st, run, domain.RoleReviewer, pasted, "cmd-run-pasted-agent", 0)
+			line := submitReviewedRunLine(t, st, run, domain.RoleReviewer, pasted)
 			req := exec.ReviewRequest{RunID: run.ID}
 			refused(t, req, string(line.ID))
 			if err := admit(ctx, req); strings.Contains(err.Error(), pasted) {
@@ -772,7 +797,7 @@ func TestReviewInvocationIsRefusedBeforeItIsAdmitted(t *testing.T) {
 		"the task's line names an agent on another harness": {
 			roles: []domain.RoleName{domain.RoleReviewer},
 			breakIt: func(t *testing.T, f *fixture, role domain.RoleName, _ engine.ReviewRoleAgent) {
-				setReviewedRunLine(t, f.st, f.run, role, lineOf(f.tree, other[role]).AgentName, "cmd-run-refused", 0)
+				submitReviewedRunLine(t, f.st, f.run, role, lineOf(f.tree, other[role]).AgentName)
 			},
 			want: "harness client",
 		},

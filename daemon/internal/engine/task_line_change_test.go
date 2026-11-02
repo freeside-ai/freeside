@@ -117,6 +117,77 @@ func TestFirstChangeOfALinelessRole(t *testing.T) {
 	}
 }
 
+// TestTaskLineChangeRecoversAPreFieldLine: a submission recorded before task
+// lines were stored backs no line, so the line holds the attempt. Setting the
+// line, to another agent or to the one it already names, records a version
+// its own change backs. The role never goes through the lineup.
+func TestTaskLineChangeRecoversAPreFieldLine(t *testing.T) {
+	for name, agent := range map[string]string{
+		"to another agent":  agentTestWriterAgent,
+		"to the same agent": agentTestSecondAgent,
+	} {
+		t.Run(name, func(t *testing.T) {
+			f := newAgentAdmissionFixture(t)
+			_, enrollment := f.addSecondAgent(t)
+			f.recordSubmitCommand(t, agentTestSubmitCommand, f.run.ID)
+			task := f.task(t, f.run.ID)
+			refused := f.appendLine(t, domain.TaskLineInput{
+				TaskID: task.ID, Role: domain.RoleImplementer, Agent: agentTestSecondAgent,
+				Source: domain.TaskLineSourceSubmitTask, SetBy: agentTestSubmitCommand,
+			}, task.CreatedAt)
+			if _, admitted, err := f.admit(t); admitted || !errors.Is(err, ErrAgentNotAdmissible) {
+				t.Fatalf("admitAttempt on the pre-field line = %t, %v", admitted, err)
+			}
+
+			changed := f.changeLine(t, domain.RoleImplementer, agent, false)
+			if !changed.Recorded || changed.Line.Version != 2 || *changed.Line.PredecessorID != refused.ID {
+				t.Fatalf("change = %+v, %+v", changed, changed.Line)
+			}
+			admission, admitted, err := f.admit(t)
+			if err != nil || !admitted {
+				t.Fatalf("admitAttempt after the change = %t, %v", admitted, err)
+			}
+			if admission.AgentBinding.SelectionRecordID != changed.Line.ID {
+				t.Fatalf("binding cites %s, want the changed line %s", admission.AgentBinding.SelectionRecordID, changed.Line.ID)
+			}
+			if agent == agentTestSecondAgent && admission.AgentBinding.EnrollmentID != enrollment.ID {
+				t.Fatalf("binding enrollment = %s, want %s", admission.AgentBinding.EnrollmentID, enrollment.ID)
+			}
+			if again := f.changeLine(t, domain.RoleImplementer, agent, false); again.Recorded {
+				t.Fatal("repeating the change recorded a version over a line that holds")
+			}
+		})
+	}
+}
+
+// TestRecoveryIsRefusedWhileItsRoleRuns: a line that does not hold is still
+// the role's line, so the running attempt keeps it until it ends. Asking for
+// its agent is a change, and refused like any other, not a no-op.
+func TestRecoveryIsRefusedWhileItsRoleRuns(t *testing.T) {
+	ctx := context.Background()
+	f := newAgentAdmissionFixture(t)
+	f.addSecondAgent(t)
+	admission, admitted, err := f.admit(t)
+	if err != nil || !admitted {
+		t.Fatalf("admitAttempt = %t, %v", admitted, err)
+	}
+	f.record(t, admission)
+	f.recordSubmitCommand(t, agentTestSubmitCommand, f.run.ID)
+	task := f.task(t, f.run.ID)
+	f.appendLine(t, domain.TaskLineInput{
+		TaskID: task.ID, Role: domain.RoleImplementer, Agent: agentTestSecondAgent,
+		Source: domain.TaskLineSourceSubmitTask, SetBy: agentTestSubmitCommand,
+	}, task.CreatedAt)
+
+	request := ChangeTaskLineRequest{TaskID: task.ID, Role: domain.RoleImplementer, Agent: agentTestSecondAgent}
+	if result, err := ChangeTaskLine(ctx, f.store, request, agentTestAt); !errors.Is(err, domain.ErrTaskLineRoleRunning) {
+		t.Fatalf("recovery while the role runs = %+v, %v", result, err)
+	}
+	if versions := f.lineVersions(t, domain.RoleImplementer); len(versions) != 1 {
+		t.Fatalf("versions = %+v, want the refused line only", versions)
+	}
+}
+
 // TestClearReturnsARoleToTheLineup: a clear cites its record, the next
 // admission binds the lineup's selection, and a later change takes the role
 // off the lineup again.

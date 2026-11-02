@@ -107,8 +107,11 @@ func (f *agentAdmissionFixture) task(t *testing.T, runID domain.RunID) domain.Ta
 }
 
 // recordSubmitCommand records the submit_task command that created the run's
-// task: the record a submit_task line's set_by names.
-func (f *agentAdmissionFixture) recordSubmitCommand(t *testing.T, commandID string, runID domain.RunID) {
+// task, with the lines it carried: the record a submit_task line's set_by
+// names.
+func (f *agentAdmissionFixture) recordSubmitCommand(
+	t *testing.T, commandID string, runID domain.RunID, lines ...domain.TaskLineChoice,
+) {
 	t.Helper()
 	ctx := context.Background()
 	task := f.task(t, runID)
@@ -116,7 +119,8 @@ func (f *agentAdmissionFixture) recordSubmitCommand(t *testing.T, commandID stri
 		return tx.PutTaskSubmissionRequest(ctx, domain.TaskSubmission{
 			CommandID: commandID, Origin: domain.TaskSubmissionOriginDevice, DeviceID: new(domain.DeviceID("device-1")), ProjectID: task.ProjectID,
 			SourceDigest: agentTestDigest("4"), TaskID: task.ID, SpecificationRunID: runID,
-			Name: domain.DisplayName{Text: "Fixture task", Source: domain.DisplayNameSourceOperator},
+			Name:      domain.DisplayName{Text: "Fixture task", Source: domain.DisplayNameSourceOperator},
+			TaskLines: lines,
 		}, agentTestDigest("c"))
 	}); err != nil {
 		t.Fatal(err)
@@ -138,23 +142,28 @@ func (f *agentAdmissionFixture) appendLine(t *testing.T, in domain.TaskLineInput
 }
 
 // submitLine records a line on the fixture run's task as submit_task does:
-// set by a recorded command that created the task, at the task's creation
-// instant.
+// set by a recorded command that created the task and carried the line, at
+// the task's creation instant. Each role gets its own command so that a test
+// can give several roles a line.
 func (f *agentAdmissionFixture) submitLine(t *testing.T, role domain.RoleName, agent string) domain.TaskLine {
 	t.Helper()
-	f.recordSubmitCommand(t, agentTestSubmitCommand, f.run.ID)
+	commandID := agentTestSubmitCommand + "-" + string(role)
+	f.recordSubmitCommand(t, commandID, f.run.ID, domain.TaskLineChoice{Role: role, Agent: agent})
 	task := f.task(t, f.run.ID)
 	return f.appendLine(t, domain.TaskLineInput{
 		TaskID: task.ID, Role: role, Agent: agent,
-		Source: domain.TaskLineSourceSubmitTask, SetBy: agentTestSubmitCommand,
+		Source: domain.TaskLineSourceSubmitTask, SetBy: commandID,
 	}, task.CreatedAt)
 }
 
 // recordCLISubmission records a `freesided submit` that created the task of
-// taskRun, and returns the identity a cli_submit line's set_by names. As the
-// command does, it stores the specification run derived from the
-// implementation run the submission names, and not that implementation run.
-func (f *agentAdmissionFixture) recordCLISubmission(t *testing.T, id string, taskRun domain.RunID) string {
+// taskRun, with the lines it carried, and returns the identity a cli_submit
+// line's set_by names. As the command does, it stores the specification run
+// derived from the implementation run the submission names, and not that
+// implementation run.
+func (f *agentAdmissionFixture) recordCLISubmission(
+	t *testing.T, id string, taskRun domain.RunID, lines ...domain.TaskLineChoice,
+) string {
 	t.Helper()
 	ctx := context.Background()
 	task := f.task(t, taskRun)
@@ -176,6 +185,7 @@ func (f *agentAdmissionFixture) recordCLISubmission(t *testing.T, id string, tas
 		_, err := tx.AcceptManualSubmission(ctx, domain.ManualSubmission{
 			Identity: identity, ProjectID: task.ProjectID, SourceArtifactID: artifact.ID,
 			SourceDigest: digest, RequestDigest: agentTestDigest("c"), ImplementationRunID: implementation,
+			TaskLines: lines,
 		})
 		return err
 	}); err != nil {
@@ -252,7 +262,7 @@ func TestTaskLineAdmissionReadsTheCurrentLineOfItsRole(t *testing.T) {
 		f := newAgentAdmissionFixture(t)
 		_, enrollment := f.addSecondAgent(t)
 		first := f.submitLine(t, domain.RoleImplementer, agentTestWriterAgent)
-		second := f.submitLine(t, domain.RoleImplementer, agentTestSecondAgent)
+		second := *f.changeLine(t, domain.RoleImplementer, agentTestSecondAgent, false).Line
 		if second.Version != 2 || second.PredecessorID == nil || *second.PredecessorID != first.ID {
 			t.Fatalf("second line = %+v, want version 2 superseding %s", second, first.ID)
 		}
@@ -302,7 +312,8 @@ func TestTaskLineAdmissionReadsTheCurrentLineOfItsRole(t *testing.T) {
 		task := f.task(t, f.run.ID)
 		line := f.appendLine(t, domain.TaskLineInput{
 			TaskID: task.ID, Role: domain.RoleImplementer, Agent: agentTestSecondAgent,
-			Source: domain.TaskLineSourceCLISubmit, SetBy: f.recordCLISubmission(t, "submission-1", f.run.ID),
+			Source: domain.TaskLineSourceCLISubmit, SetBy: f.recordCLISubmission(t, "submission-1", f.run.ID,
+				domain.TaskLineChoice{Role: domain.RoleImplementer, Agent: agentTestSecondAgent}),
 		}, task.CreatedAt)
 		admission, admitted, err := f.admit(t)
 		if err != nil || !admitted {
@@ -417,6 +428,97 @@ func TestTaskLineAdmissionRefusals(t *testing.T) {
 				line(t, f, domain.TaskLineSourceCLISubmit, identity, f.task(t, f.run.ID).CreatedAt)
 			},
 			want: "that submission created task",
+		},
+		{
+			// The swapped-agent attack: a real command, the right instant,
+			// and another credential. Both agents are pasted text, so the
+			// loop's check also proves the refusal repeats neither.
+			name: "the command recorded another agent for the role",
+			setup: func(t *testing.T, f *agentAdmissionFixture) {
+				f.addSecondAgent(t)
+				f.recordSubmitCommand(t, agentTestSubmitCommand, f.run.ID, domain.TaskLineChoice{
+					Role: domain.RoleImplementer, Agent: agentTestPastedName + "-recorded",
+				})
+				task := f.task(t, f.run.ID)
+				f.appendLine(t, domain.TaskLineInput{
+					TaskID: task.ID, Role: domain.RoleImplementer, Agent: agentTestPastedName,
+					Source: domain.TaskLineSourceSubmitTask, SetBy: agentTestSubmitCommand,
+				}, task.CreatedAt)
+			},
+			want: "that command's record names another agent for this role",
+		},
+		{
+			name: "the CLI submission recorded another agent for the role",
+			setup: func(t *testing.T, f *agentAdmissionFixture) {
+				f.addSecondAgent(t)
+				identity := f.recordCLISubmission(t, "submission-1", f.run.ID, domain.TaskLineChoice{
+					Role: domain.RoleImplementer, Agent: agentTestPastedName + "-recorded",
+				})
+				task := f.task(t, f.run.ID)
+				f.appendLine(t, domain.TaskLineInput{
+					TaskID: task.ID, Role: domain.RoleImplementer, Agent: agentTestPastedName,
+					Source: domain.TaskLineSourceCLISubmit, SetBy: identity,
+				}, task.CreatedAt)
+			},
+			want: "that command's record names another agent for this role",
+		},
+		{
+			name: "the command recorded no line for the role",
+			setup: func(t *testing.T, f *agentAdmissionFixture) {
+				f.addSecondAgent(t)
+				f.recordSubmitCommand(t, agentTestSubmitCommand, f.run.ID, domain.TaskLineChoice{
+					Role: domain.RoleReviewer, Agent: agentTestSecondAgent,
+				})
+				line(t, f, domain.TaskLineSourceSubmitTask, agentTestSubmitCommand, f.task(t, f.run.ID).CreatedAt)
+			},
+			want: "that command's record names no agent for this role",
+		},
+		{
+			name: "the CLI submission recorded no line for the role",
+			setup: func(t *testing.T, f *agentAdmissionFixture) {
+				f.addSecondAgent(t)
+				identity := f.recordCLISubmission(t, "submission-1", f.run.ID, domain.TaskLineChoice{
+					Role: domain.RoleReviewer, Agent: agentTestSecondAgent,
+				})
+				line(t, f, domain.TaskLineSourceCLISubmit, identity, f.task(t, f.run.ID).CreatedAt)
+			},
+			want: "that command's record names no agent for this role",
+		},
+		{
+			// A forged later version naming the recorded agent would undo the
+			// operator's change to the role.
+			name: "a later version cites the submission",
+			setup: func(t *testing.T, f *agentAdmissionFixture) {
+				f.addSecondAgent(t)
+				f.submitLine(t, domain.RoleImplementer, agentTestSecondAgent)
+				f.changeLine(t, domain.RoleImplementer, agentTestWriterAgent, false)
+				task := f.task(t, f.run.ID)
+				f.appendLine(t, domain.TaskLineInput{
+					TaskID: task.ID, Role: domain.RoleImplementer, Agent: agentTestSecondAgent,
+					Source: domain.TaskLineSourceSubmitTask, SetBy: agentTestSubmitCommand + "-" + string(domain.RoleImplementer),
+				}, task.CreatedAt)
+			},
+			want: "a submission sets only a role's first version",
+		},
+		{
+			// A record from before the field decodes with no lines, so it
+			// backs no line (TestTaskLineChangeRecoversAPreFieldLine).
+			name: "the command predates recorded lines",
+			setup: func(t *testing.T, f *agentAdmissionFixture) {
+				f.addSecondAgent(t)
+				f.recordSubmitCommand(t, agentTestSubmitCommand, f.run.ID)
+				line(t, f, domain.TaskLineSourceSubmitTask, agentTestSubmitCommand, f.task(t, f.run.ID).CreatedAt)
+			},
+			want: "that command's record names no agent for this role",
+		},
+		{
+			name: "the CLI submission predates recorded lines",
+			setup: func(t *testing.T, f *agentAdmissionFixture) {
+				f.addSecondAgent(t)
+				identity := f.recordCLISubmission(t, "submission-1", f.run.ID)
+				line(t, f, domain.TaskLineSourceCLISubmit, identity, f.task(t, f.run.ID).CreatedAt)
+			},
+			want: "that command's record names no agent for this role",
 		},
 		{
 			// submit_task records a manual submission too, under client:. A

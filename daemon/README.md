@@ -1472,7 +1472,10 @@ one of `-agent` and `-clear`.
 - **The same line records nothing.** Asking for the agent the role already has,
   or clearing a role with no line or a cleared one, prints `"recorded": false`
   and moves nothing. `line` is the role's newest version, `null` if it never
-  had one, and a version with `"cleared": true` names no agent.
+  had one, and a version with `"cleared": true` names no agent. The exception
+  is a newest version admission would refuse against the action that set it:
+  asking for the same thing records a version that holds, which recovers a
+  line submitted before submissions stored their lines.
 - **The agent isn't checked here.** Admission resolves it at the next attempt,
   as it does a line set at submission. An agent it can't run refuses that
   attempt and doesn't fall back to the lineup.
@@ -2350,7 +2353,8 @@ database and its access controls.
 of the new task; repeat it for more roles. The roles are `specifier`,
 `implementer`, `remediator`, and `reviewer`. Submit checks only the name's
 shape and saves the lines in the journal with the other inputs, so a retry
-replays them and takes no `--task-line` of its own.
+replays them and takes no `--task-line` of its own. The submission record
+stores the lines too, in role order, and so does a `submit_task` command's.
 
 Admission reads the task's line for `specifier`, `implementer`, and
 `remediator`: an attempt of that role runs the agent the line names, on the
@@ -2358,7 +2362,15 @@ lineup line's prompt, and its admission cites the line. A line picks the
 agent only, so the role still needs its lineup line. A line that cannot be
 honored refuses the attempt, and the lineup's agent never runs in its place:
 that covers an agent the tree lacks, a disabled identity, and a line that
-does not hold against the submission that set it.
+does not hold against the submission that set it. A submitted line holds only
+when that submission's record names the same agent for the role.
+
+A submission recorded before its lines were stored holds none, so a line that
+cites it refuses the attempt as agent-not-admissible. To recover that task, run
+`freesided task-line` for the role, naming the same agent or another (Change A
+Task's Agent For A Role). The new version cites its own change record, and the
+task's next attempt admits on it. Don't use `-clear` then `-agent` to keep the
+agent: the lineup's agent could run in between.
 
 Review admission reads the task's `reviewer` line the same way: the routed
 review runs the line's agent with its model and effort, under its identity,
