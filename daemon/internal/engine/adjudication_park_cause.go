@@ -19,18 +19,19 @@ const (
 	parkBindingMismatch         adjudicationParkCause = "binding_mismatch"
 	parkBatchMismatch           adjudicationParkCause = "batch_mismatch"
 	parkEntryNotAccepted        adjudicationParkCause = "entry_not_accepted"
+	parkBatchOversized          adjudicationParkCause = "batch_oversized"
 	parkInternalError           adjudicationParkCause = "internal_error"
 )
 
 var AllAdjudicationParkCauses = []adjudicationParkCause{
 	parkAdjudicatorUnconfigured, parkJudgmentFallback, parkInputRefused, parkOutputRefused,
-	parkBindingMismatch, parkBatchMismatch, parkEntryNotAccepted, parkInternalError,
+	parkBindingMismatch, parkBatchMismatch, parkEntryNotAccepted, parkBatchOversized, parkInternalError,
 }
 
 func (c adjudicationParkCause) valid() bool {
 	switch c {
 	case parkAdjudicatorUnconfigured, parkJudgmentFallback, parkInputRefused, parkOutputRefused,
-		parkBindingMismatch, parkBatchMismatch, parkEntryNotAccepted, parkInternalError:
+		parkBindingMismatch, parkBatchMismatch, parkEntryNotAccepted, parkBatchOversized, parkInternalError:
 		return true
 	default:
 		return false

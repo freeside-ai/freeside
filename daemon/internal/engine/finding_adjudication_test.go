@@ -982,6 +982,182 @@ func TestFindingAdjudicationDiscussRecoversAcceptedCompletion(t *testing.T) {
 	}
 }
 
+// TestFindingAdjudicationDiscussOversizedSuccessorEndsUnavailable pins the
+// Discuss size guard (#961): a revised batch whose successor cannot fit the
+// persisted bound ends the discussion without a lane error, keeps the prior
+// revision as the round head, and persists no successor, whether the batch is
+// fresh or comes from a completion accepted before a restart.
+func TestFindingAdjudicationDiscussOversizedSuccessorEndsUnavailable(t *testing.T) {
+	const commandID = "oversized-adjudication"
+	paddedEntry := func(t *testing.T, id domain.FindingID, rationale int) domain.FindingAdjudicationEntry {
+		t.Helper()
+		entry := modelRouteEntry(t, id, domain.RouteParkSeparateWork, domain.ConfidenceHigh)
+		entry.Rationale = strings.Repeat("x", rationale)
+		return entry
+	}
+	// discuss adjudicates the round once, then submits Discuss on its item.
+	discuss := func(t *testing.T) (*findingAdjudicationFixture, *scriptedFindingAdjudicator, *bytes.Buffer) {
+		t.Helper()
+		location := &domain.FindingLocation{Path: "daemon/a.go", StartLine: 1, EndLine: 1}
+		f := newFindingAdjudicationFixture(t, domain.FindingSeverityP2, location, "low", "high")
+		f.writePath(t, f.headRoot)
+		adjudicator := &scriptedFindingAdjudicator{entries: []domain.FindingAdjudicationEntry{
+			modelRouteEntry(t, f.finding.ID, domain.RouteParkRevision, domain.ConfidenceHigh),
+		}}
+		f.workflow.findingAdjudicator = adjudicator
+		if _, err := f.workflow.reconcileFindingAdjudication(
+			f.ctx, f.task, f.binding, f.record, f.baseRoot, f.headRoot); err != nil {
+			t.Fatal(err)
+		}
+		f.workflow.artifacts = f.blobs
+		var logs bytes.Buffer
+		f.workflow.logger = slog.New(slog.NewTextHandler(&logs, nil))
+		var item domain.AttentionItem
+		var snapshot store.Snapshot
+		if err := f.store.Read(f.ctx, func(tx *store.ReadTx) error {
+			var err error
+			item, snapshot, err = tx.GetAttentionItemSnapshot(
+				f.ctx, productionFindingAdjudicationItemID(f.task.RunID, 1, 1))
+			return err
+		}); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := f.signet.Submit(f.ctx, signet.ClientCommand{
+			CommandID: commandID, DeviceID: "device-test", ExpectedEntityVersion: snapshot.EntityVersion,
+			Payload: signet.DecisionPayload{
+				ItemID: item.ID, Action: domain.ActionDiscuss, ItemVersion: item.ItemVersion,
+				PRHeadSHA: item.PRHeadSHA, ArtifactDigests: item.ArtifactDigests,
+				Message: "Please reconsider this route.",
+			},
+		}); err != nil {
+			t.Fatal(err)
+		}
+		return f, adjudicator, &logs
+	}
+	roundHead := func(t *testing.T, f *findingAdjudicationFixture) domain.FindingAdjudication {
+		t.Helper()
+		var head domain.FindingAdjudication
+		if err := f.store.Read(f.ctx, func(tx *store.ReadTx) error {
+			var err error
+			head, err = tx.GetFindingAdjudicationForRound(f.ctx, f.task.RunID, 1)
+			return err
+		}); err != nil {
+			t.Fatal(err)
+		}
+		return head
+	}
+	reviseAndCheck := func(t *testing.T, f *findingAdjudicationFixture, logs *bytes.Buffer) {
+		t.Helper()
+		state, err := f.workflow.reconcileFindingAdjudication(
+			f.ctx, f.task, f.binding, f.record, f.baseRoot, f.headRoot)
+		if err != nil || state != productionReviewPending {
+			t.Fatalf("oversized revision = %d, %v", state, err)
+		}
+		if !strings.Contains(logs.String(), "cause=batch_oversized") {
+			t.Fatalf("refusal log = %s", logs.String())
+		}
+		if err := f.store.Read(f.ctx, func(tx *store.ReadTx) error {
+			history, err := tx.ListFindingAdjudications(f.ctx, f.task.RunID)
+			if err != nil {
+				return err
+			}
+			if len(history) != 1 || history[0].Revision != 1 {
+				t.Fatalf("adjudication history = %#v", history)
+			}
+			intent, err := tx.GetOutbox(f.ctx, "inv-"+commandID)
+			if err != nil || !intent.Dispatched() {
+				t.Fatalf("discussion intent = %#v, %v", intent, err)
+			}
+			return nil
+		}); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	// underBoundResult pads one entry so its result attachment lands 100 bytes
+	// under the bound: the successor envelope outgrows the result envelope, so
+	// the result fits while its successor cannot.
+	underBoundResult := func(
+		t *testing.T, f *findingAdjudicationFixture, prior domain.FindingAdjudication,
+	) ([]domain.FindingAdjudicationEntry, []byte, domain.Digest) {
+		t.Helper()
+		base, _, err := encodeFindingAdjudicationResult(prior,
+			[]domain.FindingAdjudicationEntry{paddedEntry(t, f.finding.ID, 1)})
+		if err != nil {
+			t.Fatal(err)
+		}
+		entries := []domain.FindingAdjudicationEntry{
+			paddedEntry(t, f.finding.ID, 1+domain.MaxFindingAdjudicationBytes-100-len(base)),
+		}
+		body, digest, err := encodeFindingAdjudicationResult(prior, entries)
+		if err != nil {
+			t.Fatalf("result under the bound: %v", err)
+		}
+		return entries, body, digest
+	}
+
+	t.Run("fresh batch", func(t *testing.T) {
+		f, adjudicator, logs := discuss(t)
+		// The result attachment fits, so only the successor check, which must
+		// precede acceptance, keeps the reply from claiming a revision.
+		adjudicator.entries, _, _ = underBoundResult(t, f, roundHead(t, f))
+		reviseAndCheck(t, f, logs)
+		var reply domain.Message
+		if err := f.store.Read(f.ctx, func(tx *store.ReadTx) error {
+			conversation, err := tx.GetConversation(f.ctx, domain.ConversationID(
+				"conv-"+string(productionFindingAdjudicationItemID(f.task.RunID, 1, 1))))
+			if err != nil {
+				return err
+			}
+			reply = conversation.Messages[len(conversation.Messages)-1]
+			return nil
+		}); err != nil {
+			t.Fatal(err)
+		}
+		if reply.Author != domain.AuthorAgent ||
+			!strings.HasPrefix(reply.Body, "I could not safely use the supplied feedback") ||
+			len(reply.Attachments) != 1 {
+			t.Fatalf("discussion reply = %#v", reply)
+		}
+		reader, err := f.blobs.Open(reply.Attachments[0])
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer func() { _ = reader.Close() }()
+		var result findingAdjudicationResult
+		if err := json.NewDecoder(reader).Decode(&result); err != nil {
+			t.Fatal(err)
+		}
+		if !result.Unavailable || len(result.Entries) != 0 {
+			t.Fatalf("result attachment = %#v", result)
+		}
+	})
+
+	t.Run("accepted completion", func(t *testing.T) {
+		f, adjudicator, logs := discuss(t)
+		prior := roundHead(t, f)
+		discussion, err := f.workflow.findingAdjudicationDiscussion(f.ctx, f.task, prior)
+		if err != nil || discussion == nil || discussion.reply != nil {
+			t.Fatalf("pending discussion = %#v, %v", discussion, err)
+		}
+		// Only an earlier daemon, which accepted before the size check, could
+		// have accepted this completion.
+		_, body, digest := underBoundResult(t, f, prior)
+		if _, err := f.blobs.Put(digest, bytes.NewReader(body)); err != nil {
+			t.Fatal(err)
+		}
+		if err := f.workflow.acceptFindingAdjudicationCompletion(f.ctx, *discussion, prior, signet.AgentReply{
+			Body: "Accepted before the size guard.", Attachments: []domain.Digest{digest},
+		}); err != nil {
+			t.Fatal(err)
+		}
+		reviseAndCheck(t, f, logs)
+		if adjudicator.calls != 1 {
+			t.Fatalf("recovery re-invoked the model: calls = %d", adjudicator.calls)
+		}
+	})
+}
+
 func TestFindingAdjudicationDiscussReconsidersEngineEntries(t *testing.T) {
 	location := &domain.FindingLocation{Path: "daemon/a.go", StartLine: 1, EndLine: 1}
 	f := newFindingAdjudicationFixture(t, domain.FindingSeverityP2, location, "high", "high")
