@@ -327,6 +327,13 @@ func (w *productionPublicationWorkflow) reconcileFindingAdjudicationWithDissent(
 	if err != nil {
 		return productionReviewPending, err
 	}
+	// A batch that cannot fit the persisted bound parks the round rather than
+	// failing the lane at PutFindingAdjudication (#961).
+	if _, err := artifact.Encode(); errors.Is(err, domain.ErrFindingAdjudicationOversized) {
+		return w.parkUnacceptedFindingBatch(ctx, task, record, parkBatchOversized, "")
+	} else if err != nil {
+		return productionReviewPending, err
+	}
 	if err := runDurableTransitionHook(w.transitionHook,
 		DurableTransitionFindingAdjudication, DurableTransitionBefore); err != nil {
 		return productionReviewPending, err
@@ -432,19 +439,6 @@ func (w *productionPublicationWorkflow) reviseFindingAdjudication(
 		if err != nil {
 			return prior, err
 		}
-		body, digest, err := encodeFindingAdjudicationResult(prior, entries)
-		if err != nil {
-			return prior, err
-		}
-		if _, err := w.artifacts.Put(digest, bytes.NewReader(body)); err != nil {
-			return prior, fmt.Errorf("store finding-adjudication result: %w", err)
-		}
-		reply := signet.AgentReply{
-			Body: findingAdjudicationReplySummary(prior, entries), Attachments: []domain.Digest{digest},
-		}
-		if err := w.acceptFindingAdjudicationCompletion(ctx, *discussion, prior, reply); err != nil {
-			return prior, err
-		}
 	}
 
 	durableFeedback := domain.AdjudicationFeedback{
@@ -460,6 +454,33 @@ func (w *productionPublicationWorkflow) reviseFindingAdjudication(
 		prior, durableFeedback, entries, decisionSurfaceDigest, w.now().UTC())
 	if err != nil {
 		return prior, err
+	}
+	// The size check precedes acceptance because a completion is accepted
+	// once: a successor that cannot fit the persisted bound ends the
+	// discussion as unavailable with prior still the round head (#961).
+	if _, err := successor.Encode(); errors.Is(err, domain.ErrFindingAdjudicationOversized) {
+		w.logAdjudicationRefusal(ctx, task, record, parkBatchOversized, "")
+		if discussion.reply != nil {
+			return prior, w.retireFindingAdjudicationDiscussion(ctx, *discussion)
+		}
+		return prior, w.completeUnavailableFindingAdjudicationDiscussion(ctx, *discussion, prior)
+	} else if err != nil {
+		return prior, err
+	}
+	if discussion.reply == nil {
+		body, digest, err := encodeFindingAdjudicationResult(prior, entries)
+		if err != nil {
+			return prior, err
+		}
+		if _, err := w.artifacts.Put(digest, bytes.NewReader(body)); err != nil {
+			return prior, fmt.Errorf("store finding-adjudication result: %w", err)
+		}
+		reply := signet.AgentReply{
+			Body: findingAdjudicationReplySummary(prior, entries), Attachments: []domain.Digest{digest},
+		}
+		if err := w.acceptFindingAdjudicationCompletion(ctx, *discussion, prior, reply); err != nil {
+			return prior, err
+		}
 	}
 	if err := runDurableTransitionHook(w.transitionHook,
 		DurableTransitionFindingAdjudication, DurableTransitionBefore); err != nil {

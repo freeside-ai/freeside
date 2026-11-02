@@ -381,10 +381,13 @@ func (tx *WriteTx) PutFindingAdjudication(
 			return err
 		}
 	}
-	body, err := encode(artifact)
+	// Admit only a body the bounded public decoder also accepts (#961);
+	// reconstruction keeps the generic unlimited decoder.
+	encoded, err := artifact.Encode()
 	if err != nil {
 		return fmt.Errorf("put finding adjudication %q round %d: %w", artifact.RunID, artifact.Round, err)
 	}
+	body := string(encoded)
 	// Reconstruct an existing exact revision before replay comparison. Otherwise
 	// corruption in a copied lookup column could hide behind an unchanged body.
 	if _, err := tx.getFindingAdjudicationRevision(ctx, artifact.RunID, artifact.Round, artifact.Revision); err == nil {

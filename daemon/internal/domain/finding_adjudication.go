@@ -20,10 +20,30 @@ const (
 	// each entry; a version-1 body no longer decodes, which is a clean break for
 	// this pre-release artifact type rather than a graceful upgrade.
 	FindingAdjudicationEncodingVersion = 2
-	// MaxFindingAdjudicationBytes bounds a decoded artifact body: a review batch
-	// carries one entry per finding, each with bounded prose, so this cap is
-	// generous headroom, not a design limit.
+	// MaxFindingAdjudicationBytes bounds a persisted artifact body: Encode
+	// refuses a body above it and DecodeFindingAdjudication rejects one, so the
+	// two accept the same set. A review batch carries one entry per finding,
+	// each with bounded prose, so this cap is generous headroom, not a design
+	// limit.
 	MaxFindingAdjudicationBytes = 512 << 10
+	// FindingAdjudicationEnvelopeHeadroomBytes is the growth reserved between
+	// the adjudicator's provider output and the persisted artifact (#961). The
+	// artifact envelope is under 1 KiB (five 71-byte digests, the feedback
+	// record, ids, timestamps), and converting a proposal to a domain entry adds
+	// a bounded constant per entry: the producer label, the offered
+	// alternatives (at most one route and its consequence text), and the
+	// proposed route on demotion. 128 KiB covers that structure for a batch of
+	// a few hundred entries at the full provider cap. It does not cover text
+	// escaping: json.Marshal writes each '<', '>', and '&' as a six-byte
+	// escape, so prose dense in them grows with its content. The guarantee
+	// does not rest on the headroom: a batch that outgrows it, by entry count
+	// or by escaping, fails the exact Encode check and the engine parks the
+	// round.
+	FindingAdjudicationEnvelopeHeadroomBytes = 128 << 10
+	// MaxFindingAdjudicationProposalBytes bounds the adjudicator's provider
+	// output, below the persisted bound by the envelope headroom, so an
+	// ordinary accepted batch always fits the persisted artifact.
+	MaxFindingAdjudicationProposalBytes = MaxFindingAdjudicationBytes - FindingAdjudicationEnvelopeHeadroomBytes
 )
 
 // FindingAdjudicationEntry is the per-finding adjudication of one review finding
@@ -1185,7 +1205,9 @@ func (a FindingAdjudication) ComputeDigest() (Digest, error) {
 	return Digest(contentaddr.Sum(body)), nil
 }
 
-// Encode emits the validated canonical persisted form.
+// Encode emits the validated canonical persisted form. A body above
+// MaxFindingAdjudicationBytes fails with ErrFindingAdjudicationOversized, so
+// every encoded artifact also decodes through DecodeFindingAdjudication.
 func (a FindingAdjudication) Encode() ([]byte, error) {
 	if err := a.Validate(); err != nil {
 		return nil, err
@@ -1193,6 +1215,10 @@ func (a FindingAdjudication) Encode() ([]byte, error) {
 	body, err := json.Marshal(a)
 	if err != nil {
 		return nil, fmt.Errorf("finding adjudication encode: %w", err)
+	}
+	if len(body) > MaxFindingAdjudicationBytes {
+		return nil, fmt.Errorf("finding adjudication encode: got %d bytes, limit %d: %w",
+			len(body), MaxFindingAdjudicationBytes, ErrFindingAdjudicationOversized)
 	}
 	return body, nil
 }

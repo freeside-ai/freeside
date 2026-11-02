@@ -10,6 +10,7 @@ import (
 
 	"github.com/freeside-ai/freeside/daemon/internal/domain"
 	"github.com/freeside-ai/freeside/daemon/internal/inference"
+	"github.com/freeside-ai/freeside/daemon/internal/store"
 )
 
 func TestAdjudicationParkCauses(t *testing.T) {
@@ -27,6 +28,7 @@ func TestAdjudicationParkCauses(t *testing.T) {
 		{parkInternalError, errors.New(marker)},
 		{parkBatchMismatch, nil},
 		{parkEntryNotAccepted, nil},
+		{parkBatchOversized, nil},
 	} {
 		t.Run(string(tc.cause), func(t *testing.T) {
 			var logs bytes.Buffer
@@ -45,6 +47,17 @@ func TestAdjudicationParkCauses(t *testing.T) {
 					entry.Confidence = nil
 					adjudicator.entries = []domain.FindingAdjudicationEntry{entry}
 				}
+				if tc.cause == parkBatchOversized {
+					// An accepted entry whose artifact cannot fit the
+					// persisted bound.
+					rationale := marker + strings.Repeat("x", domain.MaxFindingAdjudicationBytes)
+					entry, err := domain.NewModelAdjudicationEntry(f.finding.ID, domain.GoalAdjacent, nil,
+						domain.RouteDefer, "high", rationale, nil, nil, nil, nil, nil)
+					if err != nil {
+						t.Fatal(err)
+					}
+					adjudicator.entries = []domain.FindingAdjudicationEntry{entry}
+				}
 				f.workflow.findingAdjudicator = adjudicator
 			} else {
 				f.workflow.findingAdjudicator = nil
@@ -56,6 +69,14 @@ func TestAdjudicationParkCauses(t *testing.T) {
 			for _, want := range []string{"run=" + string(f.record.RunID), "round=1", "external_first_round=false", "cause=" + string(tc.cause)} {
 				if !strings.Contains(logs.String(), want) {
 					t.Errorf("log missing %q: %s", want, logs.String())
+				}
+			}
+			if tc.cause == parkBatchOversized {
+				if err := f.store.Read(f.ctx, func(tx *store.ReadTx) error {
+					_, err := tx.GetFindingAdjudicationForRound(f.ctx, f.record.RunID, f.record.Round)
+					return err
+				}); !errors.Is(err, store.ErrNotFound) {
+					t.Fatalf("round adjudication after oversized park = %v, want ErrNotFound", err)
 				}
 			}
 			if tc.cause == parkJudgmentFallback && !strings.Contains(logs.String(), "fallback=driver_failed") {
