@@ -474,6 +474,22 @@ func TestEnumValidity(t *testing.T) {
 		valids["UsageMeasurementKind"] = append(valids["UsageMeasurementKind"], v.valid)
 	}
 	invalids["UsageMeasurementKind"] = UsageMeasurementKind("").valid
+	for _, v := range AllCollectionAttemptStatuses {
+		valids["CollectionAttemptStatus"] = append(valids["CollectionAttemptStatus"], v.valid)
+	}
+	invalids["CollectionAttemptStatus"] = CollectionAttemptStatus("").valid
+	for _, v := range AllAvailabilityAnswers {
+		valids["AvailabilityAnswer"] = append(valids["AvailabilityAnswer"], v.valid)
+	}
+	invalids["AvailabilityAnswer"] = AvailabilityAnswer("").valid
+	for _, v := range AllWindowStatuses {
+		valids["WindowStatus"] = append(valids["WindowStatus"], v.valid)
+	}
+	invalids["WindowStatus"] = WindowStatus("").valid
+	for _, v := range AllExhaustedMarkSources {
+		valids["ExhaustedMarkSource"] = append(valids["ExhaustedMarkSource"], v.valid)
+	}
+	invalids["ExhaustedMarkSource"] = ExhaustedMarkSource("").valid
 	for _, v := range AllRebuildRefusals {
 		valids["RebuildRefusal"] = append(valids["RebuildRefusal"], v.valid)
 	}

@@ -1,0 +1,33 @@
+{
+  "pool": "claude-owner-subscription",
+  "plan": null,
+  "collector": "enroll-claude-owner-cli",
+  "last_attempt": {
+    "status": "failed",
+    "at": "2026-01-02T03:04:05Z",
+    "detail": "provider returned 503"
+  },
+  "enrollments": [
+    {
+      "enrollment_id": "enroll-claude-owner-cli",
+      "answer": "failed",
+      "observed_at": "2026-01-02T03:04:05Z"
+    }
+  ],
+  "model_windows": null,
+  "windows": [
+    {
+      "window": "five_hour",
+      "enrollment_id": "enroll-claude-owner-cli",
+      "generation": 3,
+      "status": "allowed",
+      "used_percent": null,
+      "quantity": 1200,
+      "unit": "messages",
+      "resets_at": null,
+      "length": null,
+      "observed_at": "2026-01-02T02:04:05Z"
+    }
+  ],
+  "refusal_marks": null
+}

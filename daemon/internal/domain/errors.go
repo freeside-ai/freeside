@@ -115,6 +115,10 @@ var (
 	ErrInvalidJudgmentSite              = errors.New("invalid judgment site")
 	ErrInvalidUsageSource               = errors.New("invalid usage source")
 	ErrInvalidUsageMeasurementKind      = errors.New("invalid usage measurement kind")
+	ErrInvalidCollectionAttemptStatus   = errors.New("invalid collection attempt status")
+	ErrInvalidAvailabilityAnswer        = errors.New("invalid availability answer")
+	ErrInvalidWindowStatus              = errors.New("invalid window status")
+	ErrInvalidExhaustedMarkSource       = errors.New("invalid exhausted mark source")
 	ErrInvalidEvidenceMediaType         = errors.New("invalid evidence media type")
 	ErrInvalidEvidenceSource            = errors.New("invalid evidence source")
 	ErrInvalidEvidenceAvailability      = errors.New("invalid evidence availability")
@@ -392,6 +396,14 @@ var (
 		"task lines name a role more than once")
 	ErrInvalidTaskLineSource = errors.New(
 		"task line source is not a path that may set a line")
+	ErrSyntheticWindow = errors.New(
+		"usage record carries a window reading its collector never answered with")
+	ErrReadingNotFromCollector = errors.New(
+		"window reading comes from an enrollment other than the pool's collector")
+	ErrWindowReadingMeasureConflict = errors.New(
+		"window reading must carry at most one of used_percent and quantity, and quantity and unit together")
+	ErrExhaustedMarkInconsistent = errors.New(
+		"exhausted mark must name exactly the invocation or the reading its source implies")
 	ErrInvalidTaskLineSelectionTrigger = errors.New(
 		"task line selection trigger is not first_admission or exhausted_mark")
 	ErrTaskLineProvenanceInconsistent = errors.New(

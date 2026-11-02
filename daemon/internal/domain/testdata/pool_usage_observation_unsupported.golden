@@ -1,0 +1,25 @@
+{
+  "pool": "claude-owner-subscription",
+  "plan": null,
+  "collector": "enroll-claude-owner-cli",
+  "last_attempt": {
+    "status": "unsupported",
+    "at": "2026-01-02T03:04:05Z",
+    "detail": ""
+  },
+  "enrollments": [
+    {
+      "enrollment_id": "enroll-claude-owner-cli",
+      "answer": "unsupported",
+      "observed_at": "2026-01-02T03:04:05Z"
+    },
+    {
+      "enrollment_id": "enroll-claude-owner-cowork",
+      "answer": "failed",
+      "observed_at": "2026-01-02T03:04:05Z"
+    }
+  ],
+  "model_windows": null,
+  "windows": null,
+  "refusal_marks": null
+}

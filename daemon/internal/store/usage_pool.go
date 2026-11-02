@@ -108,6 +108,11 @@ func (tx *InternalTx) settleIdentityUsagePool(
 		if from == target {
 			return nil
 		}
+		// UsagePool is set once, so the pool left behind is the derived pool
+		// of this identity alone.
+		if err := tx.deletePoolUsageObservation(ctx, from); err != nil {
+			return err
+		}
 		left, err := tx.GetUsagePool(ctx, from)
 		if err != nil {
 			return err

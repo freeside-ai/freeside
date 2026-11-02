@@ -1,0 +1,57 @@
+{
+  "pool": "claude-owner-subscription",
+  "plan": "max",
+  "collector": "enroll-claude-owner-cli",
+  "last_attempt": {
+    "status": "succeeded",
+    "at": "2026-01-02T03:04:05Z",
+    "detail": ""
+  },
+  "enrollments": [
+    {
+      "enrollment_id": "enroll-claude-owner-cli",
+      "answer": "supported",
+      "observed_at": "2026-01-02T03:04:05Z"
+    }
+  ],
+  "model_windows": [
+    {
+      "route_model_id": "claude-opus-4-1",
+      "window": "seven_day_opus"
+    }
+  ],
+  "windows": [
+    {
+      "window": "five_hour",
+      "enrollment_id": "enroll-claude-owner-cli",
+      "generation": 3,
+      "status": "allowed",
+      "used_percent": null,
+      "quantity": null,
+      "unit": null,
+      "resets_at": "2026-01-02T08:04:05Z",
+      "length": null,
+      "observed_at": "2026-01-02T03:04:05Z"
+    },
+    {
+      "window": "seven_day_opus",
+      "enrollment_id": "enroll-claude-owner-cli",
+      "generation": 3,
+      "status": "exhausted",
+      "used_percent": 100,
+      "quantity": null,
+      "unit": null,
+      "resets_at": "2026-01-05T03:04:05Z",
+      "length": 604800000000000,
+      "observed_at": "2026-01-02T03:04:05Z"
+    }
+  ],
+  "refusal_marks": [
+    {
+      "window": "five_hour",
+      "invocation_id": "inv-1",
+      "resets_at": "2026-01-02T08:04:05Z",
+      "set_at": "2026-01-02T03:04:05Z"
+    }
+  ]
+}
