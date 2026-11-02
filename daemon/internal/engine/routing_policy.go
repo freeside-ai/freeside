@@ -42,38 +42,18 @@ func SetRoutingPolicy(
 	ctx context.Context, st *store.Store, tree agenttree.Tree, lineupRevision domain.Digest,
 	req SetRoutingPolicyRequest, now time.Time,
 ) (SetRoutingPolicyResult, error) {
-	roles, err := domain.CanonicalRoutingPolicyRoles(req.Roles)
-	if err != nil {
+	// A refusal opens no transaction.
+	if _, err := routingPolicyRoles(tree, req); err != nil {
 		return SetRoutingPolicyResult{}, err
 	}
-	for _, role := range roles {
-		for _, agent := range role.Agents {
-			if _, ok := tree.Agent(agent); !ok {
-				return SetRoutingPolicyResult{}, fmt.Errorf("routing policy role %s agent %s: %w",
-					role.Role, agent, domain.ErrRoutingPolicyAgentUnknown)
-			}
-		}
-	}
 	var result SetRoutingPolicyResult
-	err = st.Write(ctx, func(tx *store.WriteTx) error {
-		current, err := tx.CurrentRoutingPolicy(ctx)
-		switch {
-		case err == nil:
-			if current.SameOrder(roles) {
-				result.Policy = current
-				return errRoutingPolicyUnchanged
-			}
-		case !errors.Is(err, store.ErrNotFound):
-			return err
+	err := st.Write(ctx, func(tx *store.WriteTx) error {
+		var err error
+		result, err = SetRoutingPolicyTx(ctx, tx, tree, lineupRevision, req, now)
+		if err == nil && !result.Recorded {
+			return errRoutingPolicyUnchanged
 		}
-		policy, err := tx.AppendRoutingPolicy(ctx, domain.RoutingPolicyInput{
-			Roles: roles, Source: req.Source, SetBy: req.SetBy, LineupRevision: lineupRevision,
-		}, now)
-		if err != nil {
-			return err
-		}
-		result = SetRoutingPolicyResult{Recorded: true, Policy: policy}
-		return nil
+		return err
 	})
 	if errors.Is(err, errRoutingPolicyUnchanged) {
 		return result, nil
@@ -82,4 +62,52 @@ func SetRoutingPolicy(
 		return SetRoutingPolicyResult{}, err
 	}
 	return result, nil
+}
+
+// SetRoutingPolicyTx is SetRoutingPolicy inside the caller's transaction, so
+// a command can commit its receipt with the revision. A request for the
+// orders the current revision holds returns Recorded false and a nil error,
+// leaving the caller to decide whether its transaction commits.
+func SetRoutingPolicyTx(
+	ctx context.Context, tx *store.WriteTx, tree agenttree.Tree, lineupRevision domain.Digest,
+	req SetRoutingPolicyRequest, now time.Time,
+) (SetRoutingPolicyResult, error) {
+	roles, err := routingPolicyRoles(tree, req)
+	if err != nil {
+		return SetRoutingPolicyResult{}, err
+	}
+	current, err := tx.CurrentRoutingPolicy(ctx)
+	switch {
+	case err == nil:
+		if current.SameOrder(roles) {
+			return SetRoutingPolicyResult{Policy: current}, nil
+		}
+	case !errors.Is(err, store.ErrNotFound):
+		return SetRoutingPolicyResult{}, err
+	}
+	policy, err := tx.AppendRoutingPolicy(ctx, domain.RoutingPolicyInput{
+		Roles: roles, Source: req.Source, SetBy: req.SetBy, LineupRevision: lineupRevision,
+	}, now)
+	if err != nil {
+		return SetRoutingPolicyResult{}, err
+	}
+	return SetRoutingPolicyResult{Recorded: true, Policy: policy}, nil
+}
+
+// routingPolicyRoles returns the request's roles in canonical form, refusing
+// a malformed shape or an agent the tree doesn't carry.
+func routingPolicyRoles(tree agenttree.Tree, req SetRoutingPolicyRequest) ([]domain.RoutingPolicyRole, error) {
+	roles, err := domain.CanonicalRoutingPolicyRoles(req.Roles)
+	if err != nil {
+		return nil, err
+	}
+	for _, role := range roles {
+		for _, agent := range role.Agents {
+			if _, ok := tree.Agent(agent); !ok {
+				return nil, fmt.Errorf("routing policy role %s agent %s: %w",
+					role.Role, agent, domain.ErrRoutingPolicyAgentUnknown)
+			}
+		}
+	}
+	return roles, nil
 }
