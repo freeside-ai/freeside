@@ -279,6 +279,17 @@ type AdmissionAgentBinding struct {
 	// its bytes and id and reads as carrying no recorded source.
 	SelectionSource   AgentSelectionSource `json:"selection_source,omitempty"`
 	SelectionRecordID Digest               `json:"selection_record_id,omitempty"`
+	// HarnessClient, LineageGroup, and CostOwner are the adapter's client,
+	// the offer's lineage group, and the identity's cost owner at admission
+	// (§5.4, §7), recorded so a run's facts are read from the admission and
+	// never re-derived from a tree or identity that has since moved. Each is
+	// omitted when empty, so a binding admitted before they existed keeps its
+	// bytes and id. HarnessClient is set on every binding admitted since; an
+	// empty LineageGroup or CostOwner beside it is the offer's unknown
+	// lineage or the identity's absent owner, not a missing record.
+	HarnessClient HarnessClientKind `json:"harness_client,omitempty"`
+	LineageGroup  string            `json:"lineage_group,omitempty"`
+	CostOwner     string            `json:"cost_owner,omitempty"`
 }
 
 // Validate reports whether the binding is well-formed.
@@ -323,6 +334,10 @@ func (b AdmissionAgentBinding) Validate() error {
 	if b.RequestedEffort != "" && (!b.RequestedEffort.valid() || b.RequestedEffort == EffortHarnessDefault) {
 		return fmt.Errorf("admission agent binding requested_effort %q: %w",
 			b.RequestedEffort, ErrInvalidEffortLevel)
+	}
+	if b.HarnessClient != "" && !b.HarnessClient.valid() {
+		return fmt.Errorf("admission agent binding harness_client %q: %w",
+			b.HarnessClient, ErrInvalidHarnessClientKind)
 	}
 	return b.validateSelection()
 }
@@ -1117,8 +1132,8 @@ func ValidateOutcomeBinding(a ExecutionAdmission, x ExecutionOutcome) error {
 // "Reconstruction reads by digest and rechecks the derivations"). The caller
 // supplies the closure it resolved by digest — the agent, its adapter,
 // route, and offer fragments, the stage's launch with the role the
-// admission's stage resolves to, and the enrollment and generation records —
-// and every derived field must agree: the identity and credential mode with
+// admission's stage resolves to, and the enrollment, generation, and identity
+// records — and every derived field must agree: the identity and credential mode with
 // the enrollment, the store manifest with the generation, the egress with
 // the route, the instruction-delivery vendor with the adapter, the model and
 // effort the launch passes with DeriveAgentLaunchSelection over the agent,
@@ -1146,7 +1161,7 @@ func ValidateOutcomeBinding(a ExecutionAdmission, x ExecutionOutcome) error {
 func ValidateAdmissionAgentDerivations(
 	a ExecutionAdmission, agent AgentDefinition, adapter AdapterFragment,
 	route RouteFragment, offer OfferFragment, launch LaunchSpec, role StageName,
-	enrollment ClientEnrollment, generation EnrollmentGeneration,
+	enrollment ClientEnrollment, generation EnrollmentGeneration, identity AuthIdentity,
 ) error {
 	if err := a.Validate(); err != nil {
 		return err
@@ -1161,7 +1176,7 @@ func ValidateAdmissionAgentDerivations(
 		return fail("no agent binding to recheck")
 	}
 	if err := validateBindingClosure(
-		fail, *binding, agent, adapter, route, offer, launch, role, enrollment, generation,
+		fail, *binding, agent, adapter, route, offer, launch, role, enrollment, generation, identity,
 	); err != nil {
 		return err
 	}
@@ -1193,13 +1208,15 @@ func ValidateAdmissionAgentDerivations(
 // well-formed and authentic, the agent pins them, the launch is the one the
 // binding names and is for the role's stage, the effort is one the offer
 // allows and the adapter sends, the model and effort are the ones the closure
-// derives, and the enrollment and generation are the ones the binding names.
-// What only one of the two records holds (launch capabilities, the egress
+// derives, the enrollment and generation are the ones the binding names, and
+// the recorded harness, lineage group, and cost owner are the adapter's, the
+// offer's, and the enrollment identity's. What only one of the two records holds (launch capabilities, the egress
 // join, the credential mode, instruction delivery) stays with its caller.
 func validateBindingClosure(
 	fail func(format string, args ...any) error, binding AdmissionAgentBinding,
 	agent AgentDefinition, adapter AdapterFragment, route RouteFragment, offer OfferFragment,
 	launch LaunchSpec, role StageName, enrollment ClientEnrollment, generation EnrollmentGeneration,
+	identity AuthIdentity,
 ) error {
 	if err := agent.Validate(); err != nil {
 		return err
@@ -1273,6 +1290,20 @@ func validateBindingClosure(
 	if generation.StoreManifestDigest != binding.StoreManifestDigest {
 		return fail("store manifest %s, binding names %s",
 			generation.StoreManifestDigest, binding.StoreManifestDigest)
+	}
+	// The recorded run facts: a new admission must carry each as its closure
+	// derives it, so an empty value here is a resolver that forgot one.
+	if identity.ID != enrollment.AuthIdentityID {
+		return fail("identity %s is not the enrollment's identity %s", identity.ID, enrollment.AuthIdentityID)
+	}
+	if binding.HarnessClient != adapter.ClientKind {
+		return fail("binding records harness %q, adapter drives %q", binding.HarnessClient, adapter.ClientKind)
+	}
+	if binding.LineageGroup != offer.LineageGroup {
+		return fail("binding records lineage group %q, the offer carries %q", binding.LineageGroup, offer.LineageGroup)
+	}
+	if binding.CostOwner != identity.CostOwner {
+		return fail("binding records cost owner %q, the identity carries %q", binding.CostOwner, identity.CostOwner)
 	}
 	return nil
 }

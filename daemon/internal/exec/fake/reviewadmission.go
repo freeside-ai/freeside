@@ -36,11 +36,13 @@ func ReviewAdmission(
 			EffectiveEgress:     []string{"review.fake.example:443"},
 			RouteModelID:        "fake", RequestedEffort: domain.EffortHigh, NativeEffort: "review-v1",
 			SelectionSource: domain.AgentSelectionSourceLineup,
+			HarnessClient:   domain.HarnessClientCodexCLI, LineageGroup: "fake",
 		},
 		AdmittedAt: ReviewAdmissionAt,
 	}
 	if role == domain.RoleShadowReviewer {
 		admission.AuthIdentityID, admission.LineageGroup = "fake-shadow-identity", "fake-shadow"
+		admission.AgentBinding.LineageGroup = "fake-shadow"
 		admission.AgentBinding.AgentDigest = digest("e")
 		admission.AgentBinding.EnrollmentID = "fake-shadow-enrollment"
 	}
@@ -73,7 +75,7 @@ func SeededReviewAdmission(
 	runID domain.RunID, id domain.InvocationID,
 ) *domain.ReviewAdmission {
 	admission := ReviewAdmission(domain.RoleReviewer, runID, id)
-	admission.LineageGroup = "openai"
+	admission.LineageGroup, admission.AgentBinding.LineageGroup = "openai", "openai"
 	admission.AgentBinding.RouteModelID, admission.AgentBinding.NativeEffort = "gpt-codex", "high"
 	return &admission
 }

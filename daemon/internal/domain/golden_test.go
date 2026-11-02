@@ -1445,6 +1445,33 @@ func TestGolden(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	// The run facts #979 records on a binding: the Claude variant again, with
+	// the harness, lineage group, and cost owner its closure held. Every
+	// binding above omits them and keeps the id it had before they existed.
+	recordedFactsBinding := *claudeAdmission.AgentBinding
+	recordedFactsBinding.HarnessClient = domain.HarnessClientClaudeCode
+	recordedFactsBinding.LineageGroup = "anthropic"
+	recordedFactsBinding.CostOwner = "platform-team"
+	recordedFactsAdmission, err := domain.NewExecutionAdmission(domain.ExecutionAdmissionInput{
+		InvocationID: "inv-6", RunID: claudeAdmission.RunID, StageID: claudeAdmission.StageID, AttemptID: "attempt-6",
+		Backend: claudeAdmission.Backend, Capabilities: claudeAdmission.Capabilities,
+		OperatingMode: claudeAdmission.OperatingMode, CredentialMode: claudeAdmission.CredentialMode,
+		EgressProfile: claudeAdmission.EgressProfile, ImageRef: claudeAdmission.ImageRef,
+		SpecDigest: claudeAdmission.SpecDigest, PolicyDigest: claudeAdmission.PolicyDigest,
+		InputDigest: claudeAdmission.InputDigest, Base: claudeAdmission.Base,
+		Workspace: claudeAdmission.Workspace, StageInputs: claudeAdmission.StageInputs,
+		AuthIdentityID: claudeAdmission.AuthIdentityID, AgentBinding: &recordedFactsBinding,
+		AdmittedAt: ts,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	recordedFactsReviewBinding := reviewAdmission.AgentBinding
+	recordedFactsReviewBinding.HarnessClient = domain.HarnessClientCodexCLI
+	recordedFactsReviewBinding.LineageGroup = reviewAdmission.LineageGroup
+	recordedFactsReviewBinding.CostOwner = "platform-team"
+	recordedFactsReview := reviewAdmission
+	recordedFactsReview.AgentBinding = recordedFactsReviewBinding
 	adapterConformance := adapterConformanceRecord(t)
 
 	waivedProfileDigest := domain.Digest("sha256:trust-profile-v1")
@@ -2303,6 +2330,8 @@ func TestGolden(t *testing.T) {
 		{"execution_admission_agent_explicit_model", claudeAdmission},
 		{"review_admission", reviewAdmission},
 		{"execution_admission_task_line", taskLineAdmission},
+		{"execution_admission_recorded_facts", recordedFactsAdmission},
+		{"review_admission_recorded_facts", recordedFactsReview},
 		{"adapter_conformance", adapterConformance},
 		{"execution_export", export},
 		{"execution_outcome_failed", domain.ExecutionOutcome{

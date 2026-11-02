@@ -25,14 +25,16 @@
         "route_model_id": "fake",
         "requested_effort": "high",
         "native_effort": "review-v1",
-        "selection_source": "lineup"
+        "selection_source": "lineup",
+        "harness_client": "codex_cli",
+        "lineage_group": "fake"
       },
       "admitted_at": "2026-01-02T03:04:05Z"
     },
     "configuration_digest": "sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
     "instruction_digest": "sha256:0be72fc9d7967e681492f7dbbb6ef4fc66e1f7fc8e4d1a887fb766fc38282a35",
     "completed_at": "2026-08-03T12:00:00Z",
-    "completion_evidence": "sha256:63fbe5b1e4a1c9d0be5cf61a79cc150f18f80d423b146f338b111b0190f1999f",
+    "completion_evidence": "sha256:c031752be29ccedfeb66138a977cc4b82f63efe431ed2b533d83af8356cab2b1",
     "findings": [
       {
         "id": "review-99ed897149dddfe622171aac",

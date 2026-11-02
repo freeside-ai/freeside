@@ -190,9 +190,9 @@ func detachedReviewAdmission(admission *ReviewAdmission) *ReviewAdmission {
 // ValidateReviewAdmissionDerivations re-runs the closure joins a review
 // snapshot rests on, as ValidateAdmissionAgentDerivations does for an
 // execution admission: the binding against the agent, its fragments, the
-// launch for the role's stage, and the enrollment and generation records,
-// plus the identity against the enrollment and the lineage group against the
-// offer. The resolver runs it before it returns a snapshot, so a resolver
+// launch for the role's stage, and the enrollment, generation, and identity
+// records, plus the admitted identity against the enrollment and the lineage
+// group against the offer. The resolver runs it before it returns a snapshot, so a resolver
 // bug cannot store one this check would refuse.
 //
 // Two joins of the execution check are left out, and each is a recorded gap,
@@ -207,7 +207,7 @@ func detachedReviewAdmission(admission *ReviewAdmission) *ReviewAdmission {
 func ValidateReviewAdmissionDerivations(
 	a ReviewAdmission, agent AgentDefinition, adapter AdapterFragment,
 	route RouteFragment, offer OfferFragment, launch LaunchSpec,
-	enrollment ClientEnrollment, generation EnrollmentGeneration,
+	enrollment ClientEnrollment, generation EnrollmentGeneration, identity AuthIdentity,
 ) error {
 	if err := a.Validate(); err != nil {
 		return err
@@ -221,7 +221,7 @@ func ValidateReviewAdmissionDerivations(
 		return fail("role %q runs in no ward stage", a.Role)
 	}
 	if err := validateBindingClosure(
-		fail, a.AgentBinding, agent, adapter, route, offer, launch, stage, enrollment, generation,
+		fail, a.AgentBinding, agent, adapter, route, offer, launch, stage, enrollment, generation, identity,
 	); err != nil {
 		return err
 	}

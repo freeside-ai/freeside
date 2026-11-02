@@ -338,6 +338,13 @@ func derivationClosure(t *testing.T) (
 	return derivationClosureFor(t, agentResolution(t), domain.AgentVendorCodex)
 }
 
+// derivationIdentity is the identity derivationClosure's enrollment belongs
+// to.
+func derivationIdentity(t *testing.T) domain.AuthIdentity {
+	t.Helper()
+	return agentResolution(t).Identity
+}
+
 // derivationClosureFor builds a coherent closure around one resolution, the
 // binding recording the launch selection the closure derives.
 func derivationClosureFor(t *testing.T, resolution domain.AgentResolutionInput, vendor domain.AgentVendor) (
@@ -382,6 +389,9 @@ func derivationClosureFor(t *testing.T, resolution domain.AgentResolutionInput, 
 		RouteModelID:         selection.RouteModelID,
 		RequestedEffort:      selection.RequestedEffort,
 		NativeEffort:         selection.NativeEffort,
+		HarnessClient:        resolution.Adapter.ClientKind,
+		LineageGroup:         resolution.Offer.LineageGroup,
+		CostOwner:            resolution.Identity.CostOwner,
 	}
 	offer := resolution.Offer
 	digest, err := offer.ComputeDigest()
@@ -400,7 +410,7 @@ func TestValidateAdmissionAgentDerivations(t *testing.T) {
 	admission, agent, adapter, route, offer, launch, enrollment, generationEntry := derivationClosure(t)
 	if err := domain.ValidateAdmissionAgentDerivations(
 		admission, agent, adapter, route, offer, launch, domain.StageNameReview,
-		enrollment, generationEntry); err != nil {
+		enrollment, generationEntry, derivationIdentity(t)); err != nil {
 		t.Fatalf("coherent closure = %v", err)
 	}
 
@@ -461,7 +471,7 @@ func TestValidateAdmissionAgentDerivations(t *testing.T) {
 			tc.mutate(&admission, &agent, &enrollment, &generationEntry)
 			err := domain.ValidateAdmissionAgentDerivations(
 				admission, agent, adapter, route, offer, launch, domain.StageNameReview,
-				enrollment, generationEntry)
+				enrollment, generationEntry, derivationIdentity(t))
 			if !errors.Is(err, domain.ErrAdmissionDerivationMismatch) {
 				t.Fatalf("ValidateAdmissionAgentDerivations = %v, want %v",
 					err, domain.ErrAdmissionDerivationMismatch)
@@ -481,7 +491,7 @@ func TestValidateAdmissionAgentDerivations(t *testing.T) {
 		launch.Digest = digest
 		err = domain.ValidateAdmissionAgentDerivations(
 			admission, agent, adapter, route, offer, launch, domain.StageNameReview,
-			enrollment, generationEntry)
+			enrollment, generationEntry, derivationIdentity(t))
 		if !errors.Is(err, domain.ErrAdmissionDerivationMismatch) {
 			t.Fatalf("ValidateAdmissionAgentDerivations = %v, want %v",
 				err, domain.ErrAdmissionDerivationMismatch)
@@ -500,7 +510,7 @@ func TestValidateAdmissionAgentDerivations(t *testing.T) {
 		offer.Digest = digest
 		err = domain.ValidateAdmissionAgentDerivations(
 			admission, agent, adapter, route, offer, launch, domain.StageNameReview,
-			enrollment, generationEntry)
+			enrollment, generationEntry, derivationIdentity(t))
 		if !errors.Is(err, domain.ErrAdmissionDerivationMismatch) {
 			t.Fatalf("ValidateAdmissionAgentDerivations = %v, want %v",
 				err, domain.ErrAdmissionDerivationMismatch)
@@ -531,7 +541,7 @@ func TestValidateAdmissionAgentDerivations(t *testing.T) {
 		admission.ID = id
 		err = domain.ValidateAdmissionAgentDerivations(
 			admission, agent, adapter, route, offer, launch, domain.StageNameReview,
-			enrollment, generationEntry)
+			enrollment, generationEntry, derivationIdentity(t))
 		if !errors.Is(err, domain.ErrAdmissionDerivationMismatch) {
 			t.Fatalf("ValidateAdmissionAgentDerivations = %v, want %v",
 				err, domain.ErrAdmissionDerivationMismatch)
@@ -543,7 +553,7 @@ func TestValidateAdmissionAgentDerivations(t *testing.T) {
 		enrollment.HarnessClient = domain.HarnessClientClaudeCode
 		err := domain.ValidateAdmissionAgentDerivations(
 			admission, agent, adapter, route, offer, launch, domain.StageNameReview,
-			enrollment, generationEntry)
+			enrollment, generationEntry, derivationIdentity(t))
 		if !errors.Is(err, domain.ErrAdmissionDerivationMismatch) {
 			t.Fatalf("ValidateAdmissionAgentDerivations = %v, want %v",
 				err, domain.ErrAdmissionDerivationMismatch)
@@ -572,7 +582,7 @@ func TestValidateAdmissionAgentDerivations(t *testing.T) {
 		admission.ID = id
 		err = domain.ValidateAdmissionAgentDerivations(
 			admission, agent, adapter, route, offer, launch, domain.StageNameReview,
-			enrollment, generationEntry)
+			enrollment, generationEntry, derivationIdentity(t))
 		if !errors.Is(err, domain.ErrAdmissionDerivationMismatch) {
 			t.Fatalf("ValidateAdmissionAgentDerivations = %v, want %v",
 				err, domain.ErrAdmissionDerivationMismatch)
@@ -598,7 +608,7 @@ func TestValidateAdmissionAgentDerivations(t *testing.T) {
 		admission.ID = id
 		err = domain.ValidateAdmissionAgentDerivations(
 			admission, agent, adapter, route, offer, launch, domain.StageNameReview,
-			enrollment, generationEntry)
+			enrollment, generationEntry, derivationIdentity(t))
 		if !errors.Is(err, domain.ErrAdmissionDerivationMismatch) {
 			t.Fatalf("ValidateAdmissionAgentDerivations = %v, want %v",
 				err, domain.ErrAdmissionDerivationMismatch)
@@ -611,7 +621,7 @@ func TestValidateAdmissionAgentDerivations(t *testing.T) {
 		// different role than the one the launch was authored for.
 		err := domain.ValidateAdmissionAgentDerivations(
 			admission, agent, adapter, route, offer, launch, domain.StageNameImplementation,
-			enrollment, generationEntry)
+			enrollment, generationEntry, derivationIdentity(t))
 		if !errors.Is(err, domain.ErrAdmissionDerivationMismatch) {
 			t.Fatalf("ValidateAdmissionAgentDerivations = %v, want %v",
 				err, domain.ErrAdmissionDerivationMismatch)
@@ -640,7 +650,7 @@ func TestValidateAdmissionAgentDerivations(t *testing.T) {
 		admission.ID = id
 		err = domain.ValidateAdmissionAgentDerivations(
 			admission, agent, adapter, route, offer, launch, domain.StageNameReview,
-			enrollment, generationEntry)
+			enrollment, generationEntry, derivationIdentity(t))
 		if !errors.Is(err, domain.ErrAdmissionDerivationMismatch) {
 			t.Fatalf("ValidateAdmissionAgentDerivations = %v, want %v",
 				err, domain.ErrAdmissionDerivationMismatch)
@@ -665,7 +675,7 @@ func TestValidateAdmissionAgentLaunchSelection(t *testing.T) {
 		admission.ID = id
 		return domain.ValidateAdmissionAgentDerivations(
 			admission, agent, adapter, route, offer, launch, domain.StageNameReview,
-			enrollment, generationEntry)
+			enrollment, generationEntry, resolution.Identity)
 	}
 
 	t.Run("coherent claude closures", func(t *testing.T) {
@@ -741,6 +751,65 @@ func TestValidateAdmissionAgentLaunchSelection(t *testing.T) {
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			err := validate(t, tc.resolution(t), tc.vendor, tc.mutate)
+			if !errors.Is(err, domain.ErrAdmissionDerivationMismatch) {
+				t.Fatalf("ValidateAdmissionAgentDerivations = %v, want %v",
+					err, domain.ErrAdmissionDerivationMismatch)
+			}
+		})
+	}
+}
+
+// TestValidateAdmissionAgentRecordedFacts pins the recheck of the run facts a
+// binding records for its clients: the harness, lineage group, and cost owner
+// must be the adapter's, the offer's, and the enrollment identity's, so a
+// projection that reads them never shows a value the closure did not hold.
+func TestValidateAdmissionAgentRecordedFacts(t *testing.T) {
+	resolution := func(t *testing.T) domain.AgentResolutionInput {
+		t.Helper()
+		in := agentResolution(t)
+		in.Offer.LineageGroup = "openai"
+		in.Offer.Digest = mustComputeDigest(t, in.Offer.ComputeDigest)
+		in.Identity.CostOwner = "platform-team"
+		return in
+	}
+	validate := func(t *testing.T, in domain.AgentResolutionInput,
+		mutate func(*domain.AdmissionAgentBinding, *domain.AuthIdentity),
+	) error {
+		t.Helper()
+		admission, agent, adapter, route, offer, launch, enrollment, generationEntry := derivationClosureFor(t, in, domain.AgentVendorCodex)
+		identity := in.Identity
+		mutate(admission.AgentBinding, &identity)
+		admission.ID = mustComputeDigest(t, admission.ComputeID)
+		return domain.ValidateAdmissionAgentDerivations(
+			admission, agent, adapter, route, offer, launch, domain.StageNameReview,
+			enrollment, generationEntry, identity)
+	}
+	if err := validate(t, resolution(t), func(b *domain.AdmissionAgentBinding, _ *domain.AuthIdentity) {
+		if b.HarnessClient != domain.HarnessClientCodexCLI || b.LineageGroup != "openai" ||
+			b.CostOwner != "platform-team" {
+			t.Fatalf("binding records %+v", b)
+		}
+	}); err != nil {
+		t.Fatalf("coherent closure = %v", err)
+	}
+
+	cases := []struct {
+		name   string
+		mutate func(*domain.AdmissionAgentBinding, *domain.AuthIdentity)
+	}{
+		{"harness omitted", func(b *domain.AdmissionAgentBinding, _ *domain.AuthIdentity) { b.HarnessClient = "" }},
+		{"foreign harness", func(b *domain.AdmissionAgentBinding, _ *domain.AuthIdentity) {
+			b.HarnessClient = domain.HarnessClientClaudeCode
+		}},
+		{"lineage omitted", func(b *domain.AdmissionAgentBinding, _ *domain.AuthIdentity) { b.LineageGroup = "" }},
+		{"foreign lineage", func(b *domain.AdmissionAgentBinding, _ *domain.AuthIdentity) { b.LineageGroup = "anthropic" }},
+		{"cost owner omitted", func(b *domain.AdmissionAgentBinding, _ *domain.AuthIdentity) { b.CostOwner = "" }},
+		{"cost owner moved", func(_ *domain.AdmissionAgentBinding, i *domain.AuthIdentity) { i.CostOwner = "research" }},
+		{"identity not the enrollment's", func(_ *domain.AdmissionAgentBinding, i *domain.AuthIdentity) { i.ID = "auth-2" }},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			err := validate(t, resolution(t), tc.mutate)
 			if !errors.Is(err, domain.ErrAdmissionDerivationMismatch) {
 				t.Fatalf("ValidateAdmissionAgentDerivations = %v, want %v",
 					err, domain.ErrAdmissionDerivationMismatch)
