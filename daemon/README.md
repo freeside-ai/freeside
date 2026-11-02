@@ -1086,7 +1086,7 @@ freesided inspect proposals -db <db>
 - `tasks`: every task the store holds, with `task_id`, `project_id`,
   `created_at`, and `latest_run_id` (`null` before the first run).
 
-`freesided inspect task` prints one task's record, `freeside-task-record-v11`.
+`freesided inspect task` prints one task's record, `freeside-task-record-v12`.
 Every section is read in one transaction, at the store revision
 `as_of_revision`; `as_of` is the read time. To wait for a change, read again
 and compare `as_of_revision`. A revision that hasn't moved means no recorded
@@ -1100,7 +1100,7 @@ stays true for a run Codex reviews, because Codex reports tokens only.
 | --- | --- |
 | `task` | Project, creation time, lifecycle facts, and the current cancellation with its acknowledgement state. |
 | `timeline` | The timeline a paired client gets, unchanged: runs and attempts, milestones, the current hold, review rounds, verification, pull request, completion, and stop events. |
-| `runs` | For each run: `conclusion` (outcome, hold reason, terminal invocation status), the current `hold`, each invocation's last observed status, the governing digests of each recorded admission, the resolved policy digest, `billable_cost` (`null` when none was recorded), `publication` (`null` until the run publishes), `closure_cards`: the closure cards of the run's work unit, open or closed, in the card shape `freesided inspect proposals` prints, and `closure`: the source-issue-closure answer of the cycle `publication` shows, with its `origin` and `fallback_cause` (`null` until that cycle's closure step answers). |
+| `runs` | For each run: `conclusion` (outcome, hold reason, terminal invocation status), the current `hold`, each invocation's last observed status, the governing digests of each recorded admission, the resolved policy digest, `billable_cost` (`null` when none was recorded), `publication` (`null` until the run publishes), `closure_cards`: the closure cards of the run's work unit, open or closed, in the card shape `freesided inspect proposals` prints, and `closure`: the source-issue-closure answer of the cycle `publication` shows, with its `origin` and `fallback_cause` (`null` until that cycle's closure step answers), and `specification_retries`: each operator retry of a failed specification invocation, with the `invocation_id` it added, the `retried_invocation_id`, and the `reason`. |
 | `items` | Every attention item of the task or one of its runs, open or closed, and the stall notices for the task's invocations: type, status, `created_at`, `decided_at`, the `conclusion` (how it closed: the cause, when, the daemon's reason, the successor item, and for a decision the command, action, device and its name, and the applied routes), the typed cause (`health_diagnostic`, `execution_failure` with its outcome and failure `cause`, `interpretation_failure` with the `cause` of a failure found after the invocation exported, `publish_block`, `blocked_on`), the commands applied (command id, action, device id), and the deliveries. |
 | `counts` | Items by type, with every type listed; health notices by code; refused item rows not placed in this task; runs held now; and failed stops. |
 
@@ -1220,13 +1220,20 @@ Reading the record:
   `unapproved_recipe` says so on stderr; stdout stays one JSON line.
 - **The timeline's and the card's shapes are part of the record's version.**
   A change to the task timeline, its events, or the proposal card changes
-  `freeside-task-record-v11`.
+  `freeside-task-record-v12`.
+- **`specification_retries` names each specification retry.** A retry adds
+  an iteration to the same specification run, so the run's `invocations`
+  list the failed invocation and the one that repeats it. The entries are
+  read after the run's whole specification chain authenticates; when it
+  does not, the list is `null` and the `specification_retries` section
+  names the error. A run with one specification iteration has none.
 
 The record never holds evidence, claims, conversation messages (a command's
 message and attachments included), transcripts, prompt text, credentials, or
 workspace and auth identity. The timeline is the exception a client already
 has: it carries the task's display name, which an agent may have written,
-and an operator's reattempt reason. The record also leaves out four facts no
+and an operator's reattempt reason. A run's `specification_retries` also
+carry an operator's reason. The record also leaves out four facts no
 store read returns today:
 
 - Which device sent a Stop.

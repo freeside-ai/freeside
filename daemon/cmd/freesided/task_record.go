@@ -18,7 +18,7 @@ import (
 // taskRecordVersion names the record's JSON shape. Any change to that shape,
 // including to signet.TaskTimeline or proposalCard, which the record embeds,
 // changes it.
-const taskRecordVersion = "freeside-task-record-v11"
+const taskRecordVersion = "freeside-task-record-v12"
 
 // taskRecord is what `freesided inspect task` prints: one task's recorded
 // facts, read under one store revision, for an agent to read. It is built
@@ -83,8 +83,19 @@ type taskRecordRun struct {
 	// Closure is the closure answer of the cycle Publication shows (the
 	// current cycle before any publishes), null until that cycle's closure
 	// step records one.
-	Closure *taskRecordClosure   `json:"closure"`
-	Errors  []taskRecordRunError `json:"errors"`
+	Closure *taskRecordClosure `json:"closure"`
+	// SpecificationRetries are the operator's retries of the run's failed
+	// specification invocations, oldest first; empty for a run with none.
+	SpecificationRetries []taskRecordSpecificationRetry `json:"specification_retries"`
+	Errors               []taskRecordRunError           `json:"errors"`
+}
+
+// taskRecordSpecificationRetry is one retry: the iteration it added, the
+// failed invocation it repeats, and the operator's reason.
+type taskRecordSpecificationRetry struct {
+	InvocationID        domain.InvocationID `json:"invocation_id"`
+	RetriedInvocationID domain.InvocationID `json:"retried_invocation_id"`
+	Reason              string              `json:"reason"`
 }
 
 // taskRecordClosure is a publication's source-issue-closure answer. Origin is
@@ -161,13 +172,16 @@ const (
 	// whose own reads fail carries its error instead.
 	taskRecordRunClosureCards taskRecordRunSection = "closure_cards"
 	taskRecordRunClosure      taskRecordRunSection = "closure"
+	// taskRecordRunSpecificationRetries reads the retries after
+	// authenticating the run's specification chain.
+	taskRecordRunSpecificationRetries taskRecordRunSection = "specification_retries"
 )
 
 var allTaskRecordRunSections = []taskRecordRunSection{
 	taskRecordRunAdmissions, taskRecordRunPolicy, taskRecordRunCost,
 	taskRecordRunObservation, taskRecordRunConclusion,
 	taskRecordRunPublication, taskRecordRunCompletion, taskRecordRunClosureCards,
-	taskRecordRunClosure,
+	taskRecordRunClosure, taskRecordRunSpecificationRetries,
 }
 
 func (s taskRecordRunSection) valid() bool {
@@ -175,7 +189,7 @@ func (s taskRecordRunSection) valid() bool {
 	case taskRecordRunAdmissions, taskRecordRunPolicy, taskRecordRunCost,
 		taskRecordRunObservation, taskRecordRunConclusion,
 		taskRecordRunPublication, taskRecordRunCompletion, taskRecordRunClosureCards,
-		taskRecordRunClosure:
+		taskRecordRunClosure, taskRecordRunSpecificationRetries:
 		return true
 	default:
 		return false
@@ -503,6 +517,17 @@ func readTaskRecordRun(ctx context.Context, tx *store.ReadTx, runID domain.RunID
 		fail(taskRecordRunClosure, err)
 	} else if found {
 		out.Closure = projectTaskRecordClosure(answer)
+	}
+	if retries, err := engine.SpecificationRetries(ctx, tx, runID); err != nil {
+		fail(taskRecordRunSpecificationRetries, err)
+	} else {
+		out.SpecificationRetries = make([]taskRecordSpecificationRetry, 0, len(retries))
+		for _, retry := range retries {
+			out.SpecificationRetries = append(out.SpecificationRetries, taskRecordSpecificationRetry{
+				InvocationID: retry.InvocationID, RetriedInvocationID: retry.RetriedInvocationID,
+				Reason: retry.Reason,
+			})
+		}
 	}
 	observation, err := tx.ObserveRun(ctx, runID)
 	if err != nil {
