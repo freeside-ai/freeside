@@ -8187,6 +8187,11 @@ public enum Components {
             ///
             /// - Remark: Generated from `#/components/schemas/TaskSubmissionRecord/name`.
             public var name: Components.Schemas.TaskSubmissionRecord.namePayload
+            /// The per-role agent choices the command carried, in TaskLineRole order; admission holds a submitted line to them (plan §5.4). Absent when the command carried none, or was recorded before the field existed. Manual Retry returns the record as it was recorded.
+            ///
+            ///
+            /// - Remark: Generated from `#/components/schemas/TaskSubmissionRecord/task_lines`.
+            public var task_lines: [Components.Schemas.TaskLineInput]?
             /// Creates a new `TaskSubmissionRecord`.
             ///
             /// - Parameters:
@@ -8199,6 +8204,7 @@ public enum Components {
             ///   - task_id: The task the command created or fetched by the intake key.
             ///   - specification_run_id: The task's specification run started (or already present).
             ///   - name: The task's display name at acceptance. Manual Retry returns the original recorded name, even if the task has since been renamed.
+            ///   - task_lines: The per-role agent choices the command carried, in TaskLineRole order; admission holds a submitted line to them (plan §5.4). Absent when the command carried none, or was recorded before the field existed. Manual Retry returns the record as it was recorded.
             public init(
                 kind: Components.Schemas.TaskSubmissionRecord.kindPayload,
                 command_id: Swift.String,
@@ -8208,7 +8214,8 @@ public enum Components {
                 source_digest: Components.Schemas.TaskSubmissionRecord.source_digestPayload,
                 task_id: Swift.String,
                 specification_run_id: Swift.String,
-                name: Components.Schemas.TaskSubmissionRecord.namePayload
+                name: Components.Schemas.TaskSubmissionRecord.namePayload,
+                task_lines: [Components.Schemas.TaskLineInput]? = nil
             ) {
                 self.kind = kind
                 self.command_id = command_id
@@ -8219,6 +8226,7 @@ public enum Components {
                 self.task_id = task_id
                 self.specification_run_id = specification_run_id
                 self.name = name
+                self.task_lines = task_lines
             }
             public enum CodingKeys: String, CodingKey {
                 case kind
@@ -8230,6 +8238,7 @@ public enum Components {
                 case task_id
                 case specification_run_id
                 case name
+                case task_lines
             }
             public init(from decoder: any Swift.Decoder) throws {
                 let container = try decoder.container(keyedBy: CodingKeys.self)
@@ -8269,6 +8278,10 @@ public enum Components {
                     Components.Schemas.TaskSubmissionRecord.namePayload.self,
                     forKey: .name
                 )
+                self.task_lines = try container.decodeIfPresent(
+                    [Components.Schemas.TaskLineInput].self,
+                    forKey: .task_lines
+                )
                 try decoder.ensureNoAdditionalProperties(knownKeys: [
                     "kind",
                     "command_id",
@@ -8278,7 +8291,8 @@ public enum Components {
                     "source_digest",
                     "task_id",
                     "specification_run_id",
-                    "name"
+                    "name",
+                    "task_lines"
                 ])
             }
         }

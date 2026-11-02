@@ -3,6 +3,7 @@ package engine
 import (
 	"context"
 	"errors"
+	"reflect"
 	"slices"
 	"strings"
 	"sync"
@@ -138,7 +139,7 @@ func TestSubmitImageRepairTaskOpensOneTask(t *testing.T) {
 		if err != nil {
 			return err
 		}
-		if recorded != submission {
+		if !reflect.DeepEqual(recorded, submission) {
 			t.Fatalf("recorded = %+v, want %+v", recorded, submission)
 		}
 		task, err := tx.GetTask(ctx, submission.TaskID)
@@ -192,7 +193,7 @@ func TestSubmitImageRepairTaskOpensOneTask(t *testing.T) {
 	}
 
 	again, err := service.SubmitImageRepairTask(ctx, repairTestProject, refusal.ID)
-	if err != nil || again != submission {
+	if err != nil || !reflect.DeepEqual(again, submission) {
 		t.Fatalf("resubmit = %+v err=%v, want the recorded %+v", again, err, submission)
 	}
 	if err := st.Read(ctx, func(tx *store.ReadTx) error {
@@ -315,7 +316,7 @@ func TestSubmitImageRepairTaskOpensOneTaskPerImage(t *testing.T) {
 	}
 	for name, refusal := range map[string]domain.ImageUpkeepRefusal{"tip advance": advanced, "restart": restarted} {
 		got, err := service.SubmitImageRepairTask(ctx, repairTestProject, refusal.ID)
-		if err != nil || got != submission {
+		if err != nil || !reflect.DeepEqual(got, submission) {
 			t.Fatalf("%s: submit = %+v err=%v, want the open %+v", name, got, err, submission)
 		}
 		requireNoRepairSubmission(t, st, refusal)
@@ -402,7 +403,7 @@ func TestSubmitImageRepairTaskReopensAfterTheTaskCloses(t *testing.T) {
 			}); err != nil {
 				t.Fatal(err)
 			}
-			if got, err := service.SubmitImageRepairTask(ctx, repairTestProject, later.ID); err != nil || got != submission {
+			if got, err := service.SubmitImageRepairTask(ctx, repairTestProject, later.ID); err != nil || !reflect.DeepEqual(got, submission) {
 				t.Fatalf("started task: submit = %+v err=%v, want the open %+v", got, err, submission)
 			}
 			requireNoRepairSubmission(t, st, later)
@@ -419,7 +420,7 @@ func TestSubmitImageRepairTaskReopensAfterTheTaskCloses(t *testing.T) {
 				t.Fatalf("after the task closed: submission = %+v, want a new task", reopened)
 			}
 			if again, err := service.SubmitImageRepairTask(ctx, repairTestProject, first.ID); err != nil ||
-				again != submission {
+				!reflect.DeepEqual(again, submission) {
 				t.Fatalf("closed task's own refusal: submit = %+v err=%v, want the recorded %+v", again, err, submission)
 			}
 		})
@@ -451,7 +452,7 @@ func TestSubmitImageRepairTaskConcurrentSubmitsOpenOneTask(t *testing.T) {
 	if err := errors.Join(errs...); err != nil {
 		t.Fatal(err)
 	}
-	if submissions[0] != submissions[1] {
+	if !reflect.DeepEqual(submissions[0], submissions[1]) {
 		t.Fatalf("concurrent submissions = %+v and %+v, want one task", submissions[0], submissions[1])
 	}
 	for _, refusal := range refusals {

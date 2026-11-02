@@ -30,6 +30,8 @@ func TestTaskLineProvenanceMigrationKeepsOperatorRows(t *testing.T) {
 	// line the way that daemon did.
 	rewindUsagePools(t, ctx, st.db)
 	for _, statement := range []string{
+		`ALTER TABLE manual_submissions DROP COLUMN task_lines`,
+		`DELETE FROM schema_migrations WHERE name = '0117_manual_submission_task_lines.sql'`,
 		`DROP TABLE routing_policies`,
 		`DELETE FROM schema_migrations WHERE name = '0115_routing_policies.sql'`,
 		`DROP TABLE task_line_changes`,

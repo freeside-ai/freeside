@@ -750,6 +750,7 @@ func applyLaunchSubmission(
 		manual = &domain.ManualSubmission{
 			Identity: "cli:" + cfg.SubmissionID, ProjectID: cfg.ProjectID, SourceArtifactID: specArtifact.ID,
 			SourceDigest: spec.digest, RequestDigest: domain.Digest(contentaddr.Sum(fingerprint)), ImplementationRunID: implementationRunID,
+			TaskLines: req.TaskLines,
 		}
 	}
 	egressErr := engine.SubmittedEgressPolicy(resolvedPolicy)
@@ -779,7 +780,7 @@ func applyLaunchSubmission(
 			if err != nil {
 				return err
 			}
-			if original != *manual {
+			if !original.SameRequest(*manual) {
 				return store.ErrImmutableConflict
 			}
 			acceptedManual = true
@@ -816,7 +817,7 @@ func applyLaunchSubmission(
 		replay := cfg.RunID != ""
 		if manual != nil {
 			if original, err := tx.GetManualSubmission(ctx, manual.Identity); err == nil {
-				if original != *manual {
+				if !original.SameRequest(*manual) {
 					return store.ErrImmutableConflict
 				}
 				replay = true

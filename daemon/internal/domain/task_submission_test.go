@@ -101,3 +101,76 @@ func TestImageUpkeepSubmissionIdentityIsAManualIdentity(t *testing.T) {
 		t.Fatal("unknown namespace: Validate = nil")
 	}
 }
+
+// TestSubmissionRecordsHoldTheirLinesInRecordedForm: both records accept no
+// lines or a canonical set, and refuse what no writer stores. A body or row
+// out of form fails at the store's decode, because this is its backstop.
+func TestSubmissionRecordsHoldTheirLinesInRecordedForm(t *testing.T) {
+	t.Parallel()
+	implementer := domain.TaskLineChoice{Role: domain.RoleImplementer, Agent: "claude-b"}
+	reviewer := domain.TaskLineChoice{Role: domain.RoleReviewer, Agent: "codex"}
+	digest := domain.Digest("sha256:" + strings.Repeat("e1", 32))
+	cases := map[string]struct {
+		lines []domain.TaskLineChoice
+		want  error
+	}{
+		"none":              {nil, nil},
+		"one":               {[]domain.TaskLineChoice{reviewer}, nil},
+		"canonical":         {[]domain.TaskLineChoice{implementer, reviewer}, nil},
+		"empty":             {[]domain.TaskLineChoice{}, domain.ErrTaskLinesNotCanonical},
+		"out of role order": {[]domain.TaskLineChoice{reviewer, implementer}, domain.ErrTaskLinesNotCanonical},
+		"duplicate role":    {[]domain.TaskLineChoice{implementer, implementer}, domain.ErrDuplicateTaskLineRole},
+		"ineligible role":   {[]domain.TaskLineChoice{{Role: domain.RoleShadowReviewer, Agent: "codex"}}, domain.ErrTaskLineRoleIneligible},
+		"malformed agent":   {[]domain.TaskLineChoice{{Role: domain.RoleImplementer, Agent: "Not An Agent"}}, domain.ErrInvalidAgentName},
+	}
+	for name, tc := range cases {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			submission := validDeviceSubmission()
+			submission.TaskLines = tc.lines
+			if err := submission.Validate(); !errors.Is(err, tc.want) {
+				t.Errorf("TaskSubmission.Validate = %v, want %v", err, tc.want)
+			}
+			manual := domain.ManualSubmission{
+				Identity: "cli:lines", ProjectID: "proj-1", SourceArtifactID: "artifact-1",
+				SourceDigest: digest, RequestDigest: digest, ImplementationRunID: "run-1", TaskLines: tc.lines,
+			}
+			if err := manual.Validate(); !errors.Is(err, tc.want) {
+				t.Errorf("ManualSubmission.Validate = %v, want %v", err, tc.want)
+			}
+		})
+	}
+}
+
+// TestManualSubmissionSameRequest: the request digest stands for the lines, so
+// a record from before they were stored is still the request that carried
+// them. Every other field still tells two requests apart.
+func TestManualSubmissionSameRequest(t *testing.T) {
+	t.Parallel()
+	digest := domain.Digest("sha256:" + strings.Repeat("e1", 32))
+	recorded := domain.ManualSubmission{
+		Identity: "cli:lines", ProjectID: "proj-1", SourceArtifactID: "artifact-1",
+		SourceDigest: digest, RequestDigest: digest, ImplementationRunID: "run-1",
+	}
+	retry := recorded
+	retry.TaskLines = []domain.TaskLineChoice{{Role: domain.RoleReviewer, Agent: "codex"}}
+	if !recorded.SameRequest(retry) {
+		t.Fatal("a retry of a record from before the field is not the same request")
+	}
+	for name, mutate := range map[string]func(*domain.ManualSubmission){
+		"identity":        func(s *domain.ManualSubmission) { s.Identity = "cli:other" },
+		"project":         func(s *domain.ManualSubmission) { s.ProjectID = "proj-2" },
+		"source artifact": func(s *domain.ManualSubmission) { s.SourceArtifactID = "artifact-2" },
+		"source digest":   func(s *domain.ManualSubmission) { s.SourceDigest = "sha256:" + domain.Digest(strings.Repeat("f1", 32)) },
+		"request digest": func(s *domain.ManualSubmission) {
+			s.RequestDigest = "sha256:" + domain.Digest(strings.Repeat("f1", 32))
+		},
+		"implementation run": func(s *domain.ManualSubmission) { s.ImplementationRunID = "run-2" },
+	} {
+		other := recorded
+		mutate(&other)
+		if recorded.SameRequest(other) {
+			t.Errorf("records that differ in %s are the same request", name)
+		}
+	}
+}

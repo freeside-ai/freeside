@@ -68,6 +68,11 @@ func ImageUpkeepSubmissionIdentity(refusalID Digest) string {
 // Origin says who submitted it. A device submission names its DeviceID; a
 // daemon one (project-image upkeep's maintenance task) names none, and its
 // SourceDigest is the refusal record that caused it.
+//
+// TaskLines are the per-role agent choices the command carried, in canonical
+// order: the record admission holds a submit_task line to (plan §5.4). A
+// command with none, or one recorded before the field existed, holds nil. The
+// tag omits nil, so such a body keeps its bytes.
 type TaskSubmission struct {
 	CommandID          string               `json:"command_id"`
 	Origin             TaskSubmissionOrigin `json:"origin"`
@@ -77,12 +82,14 @@ type TaskSubmission struct {
 	TaskID             TaskID               `json:"task_id"`
 	SpecificationRunID RunID                `json:"specification_run_id"`
 	Name               DisplayName          `json:"name"`
+	TaskLines          []TaskLineChoice     `json:"task_lines,omitempty"`
 }
 
 // Validate reports whether the submission record is well-formed: identified by
 // a command id, an origin with its matching device, project, task, and
 // specification run; binding a
-// sha256 source digest; and carrying a valid display name. It is the
+// sha256 source digest; carrying a valid display name; and holding its task
+// lines, if any, in the recorded form. It is the
 // reconstruction backstop for records that did not pass through the accepting
 // transaction (store decode, struct literals).
 func (s TaskSubmission) Validate() error {
@@ -117,6 +124,9 @@ func (s TaskSubmission) Validate() error {
 	}
 	if err := s.Name.Validate(); err != nil {
 		return fmt.Errorf("task submission %s name: %w", s.CommandID, err)
+	}
+	if err := ValidateRecordedTaskLines(s.TaskLines); err != nil {
+		return fmt.Errorf("task submission %s: %w", s.CommandID, err)
 	}
 	return nil
 }

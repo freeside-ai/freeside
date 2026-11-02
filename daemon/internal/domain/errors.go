@@ -428,6 +428,9 @@ var (
 		"routing policy source is not a path that may set a policy")
 	ErrRoutingPolicyAgentUnknown = errors.New(
 		"routing policy agent is not in the committed agent tree")
+	// ErrTaskLinesNotCanonical marks a submission record whose lines are
+	// present but empty or out of role order.
+	ErrTaskLinesNotCanonical       = errors.New("recorded task lines are empty or out of role order")
 	ErrInvalidAgentSelectionSource = errors.New(
 		"agent selection source is not lineup, task_line, or card")
 	ErrAgentSelectionInconsistent = errors.New(
