@@ -158,6 +158,13 @@ public actor MockServer {
     private var runsByID: [String: Components.Schemas.RunSnapshot] = [:]
     private var tasksByID: [String: Components.Schemas.TaskSnapshot] = [:]
     private var schedulesByID: [String: Components.Schemas.ScheduleSnapshot] = [:]
+    /// Usage records by pool id. A pool with no record yet keeps
+    /// entity_version 0 and is stamped with the serving revision, as the
+    /// daemon projects it.
+    private var usagePoolsByID: [String: Components.Schemas.UsagePoolSnapshot] = [:]
+    /// The current routing policy revision; the daemon stamps it with the
+    /// serving revision because the policy row stores none of its own.
+    private var routingPolicy: Components.Schemas.RoutingPolicy?
     private var timelinesByRunID: [String: Components.Schemas.RunTimeline] = [:]
     // Comprehension telemetry (plan §8): the device capability contracts, the
     // derived action surfaces keyed by their digest, and the recorded events
@@ -199,6 +206,8 @@ public actor MockServer {
         schedules: [Components.Schemas.ScheduleSnapshot] = RunFixtures.defaultSchedules(),
         timelines: [Components.Schemas.RunTimeline] = RunFixtures.defaultTimelines(),
         taskTimelines: [Components.Schemas.TaskTimeline] = [],
+        usagePools: [Components.Schemas.UsagePoolSnapshot] = UsageFixtures.defaultUsagePools(),
+        routingPolicy: Components.Schemas.RoutingPolicy? = UsageFixtures.defaultRoutingPolicy(),
         approvedRecipes: Set<String> = [AttentionFixtures.approvedRecipeDigest],
         authMode: AuthMode = .permissive,
         pairingCodes: [String: PairingCodeState] = [:],
@@ -234,6 +243,10 @@ public actor MockServer {
         for snapshot in tasks {
             tasksByID[snapshot.task.id] = snapshot
         }
+        for snapshot in usagePools {
+            usagePoolsByID[snapshot.pool.id] = snapshot
+        }
+        self.routingPolicy = routingPolicy
         // The server revision starts at or beyond every seeded snapshot's
         // as_of_revision, so the heartbeat and the next CommandResult can
         // never run backwards relative to what this mock lists.
@@ -244,7 +257,8 @@ public actor MockServer {
             runs.map(\.as_of_revision).max() ?? 1,
             tasks.map(\.as_of_revision).max() ?? 1,
             schedules.map(\.as_of_revision).max() ?? 1,
-            timelines.map(\.as_of_revision).max() ?? 1)
+            timelines.map(\.as_of_revision).max() ?? 1,
+            usagePools.map(\.as_of_revision).max() ?? 1)
         // Seeded delivery rows exist only because the daemon's pipeline
         // would have recorded them, and that pipeline re-derives the
         // item's timing and raises its entity_version in the same write
@@ -428,6 +442,17 @@ public actor MockServer {
         runsByID[runID] = snapshot
     }
 
+    /// Advances one pool's usage record under the next revision, modeling a
+    /// daemon collection write: the write stamps the revision and raises the
+    /// record's version, so a pool with no record gains its first.
+    public func advanceUsagePool(id: String) {
+        guard var snapshot = usagePoolsByID[id] else { return }
+        revision += 1
+        snapshot.as_of_revision = revision
+        snapshot.entity_version += 1
+        usagePoolsByID[id] = snapshot
+    }
+
     public func advanceTime(to instant: Date) {
         currentTime = instant
         convergeProposalSnoozes()
@@ -455,6 +480,9 @@ public actor MockServer {
             }
             for id in schedulesByID.keys {
                 schedulesByID[id]?.as_of_revision = revision
+            }
+            for id in usagePoolsByID.keys {
+                usagePoolsByID[id]?.as_of_revision = revision
             }
             for id in timelinesByRunID.keys {
                 timelinesByRunID[id]?.as_of_revision = revision
@@ -821,9 +849,29 @@ public actor MockServer {
             tasks: try listTasks(),
             conversations: conversationsByID.keys.sorted().compactMap { conversationsByID[$0] },
             schedules: listSchedules(),
-            unattended_operation: unattendedOperationSnapshot()
+            unattended_operation: unattendedOperationSnapshot(),
+            usage_pools: listUsagePools(),
+            routing_policy: routingPolicySnapshot().map { .init(value1: $0) }
         )
         return bootstrapTransform?(snapshot) ?? snapshot
+    }
+
+    /// Every pool's usage record in pool id order, a pool with no record
+    /// stamped with the serving revision (signet usagePoolSnapshots).
+    func listUsagePools() -> [Components.Schemas.UsagePoolSnapshot] {
+        usagePoolsByID.keys.sorted().compactMap { id in
+            guard var snapshot = usagePoolsByID[id] else { return nil }
+            if snapshot.entity_version == 0 { snapshot.as_of_revision = revision }
+            return snapshot
+        }
+    }
+
+    /// The current routing policy at the serving revision, its version the
+    /// policy revision (signet currentRoutingPolicySnapshot).
+    func routingPolicySnapshot() -> Components.Schemas.RoutingPolicySnapshot? {
+        routingPolicy.map {
+            .init(as_of_revision: revision, entity_version: Int64($0.revision), policy: $0)
+        }
     }
 
     /// The finding code on the notice an operator stop raises, as the

@@ -24,12 +24,15 @@ var poolUsageReaders = map[string]bool{
 // that may name a reader, relative to daemon/. The record is observation,
 // never authority (plan §5.4): no preflight, admission, or scheduling path
 // reads it. A new reader, such as the router, joins this list as a visible
-// change.
+// change. The bootstrap's usage projection reads it because the record
+// informs the account usage view in the clients (plan §5.4, usage
+// observation); it projects, and decides nothing.
 var poolUsageReaderFiles = []string{
 	"internal/domain/pool_usage_observation.go",
 	"internal/store/pool_usage_observation.go",
 	"internal/usagecollect/",
 	"cmd/freesided/auth_usage.go",
+	"internal/signet/usage.go",
 }
 
 func TestOnlyAllowlistedFilesReadPoolUsageObservations(t *testing.T) {

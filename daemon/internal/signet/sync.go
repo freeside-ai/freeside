@@ -304,6 +304,9 @@ type BootstrapSnapshot struct {
 	Conversations       []ConversationSnapshot      `json:"conversations"`
 	Schedules           []ScheduleSnapshot          `json:"schedules"`
 	UnattendedOperation UnattendedOperationSnapshot `json:"unattended_operation"`
+	UsagePools          []UsagePoolSnapshot         `json:"usage_pools"`
+	// RoutingPolicy is nil until a policy is first set.
+	RoutingPolicy *RoutingPolicySnapshot `json:"routing_policy"`
 }
 
 // Bootstrap returns the one response that advances a client's
@@ -352,6 +355,14 @@ func (s *Service) Bootstrap(ctx context.Context) (BootstrapSnapshot, error) {
 		if err != nil {
 			return fmt.Errorf("unattended operation gate: %w", err)
 		}
+		usagePools, err := usagePoolSnapshots(ctx, tx, state, now, s.usageRefreshAge)
+		if err != nil {
+			return err
+		}
+		routingPolicy, err := currentRoutingPolicySnapshot(ctx, tx, state)
+		if err != nil {
+			return err
+		}
 
 		out = BootstrapSnapshot{
 			SyncEpoch: state.SyncEpoch, Revision: state.Revision,
@@ -362,6 +373,8 @@ func (s *Service) Bootstrap(ctx context.Context) (BootstrapSnapshot, error) {
 			Conversations:       make([]ConversationSnapshot, 0, len(conversations)),
 			Schedules:           make([]ScheduleSnapshot, 0, len(schedules)),
 			UnattendedOperation: unattendedOperationSnapshot(gate),
+			UsagePools:          usagePools,
+			RoutingPolicy:       routingPolicy,
 		}
 		snoozedItems := make(map[domain.ItemID]bool)
 		for _, item := range items {

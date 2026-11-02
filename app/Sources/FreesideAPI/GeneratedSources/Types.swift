@@ -934,6 +934,34 @@ public enum Components {
             public var schedules: [Components.Schemas.ScheduleSnapshot]
             /// - Remark: Generated from `#/components/schemas/BootstrapSnapshot/unattended_operation`.
             public var unattended_operation: Components.Schemas.UnattendedOperationSnapshot
+            /// Every usage pool's usage record, in pool id order.
+            ///
+            /// - Remark: Generated from `#/components/schemas/BootstrapSnapshot/usage_pools`.
+            public var usage_pools: [Components.Schemas.UsagePoolSnapshot]
+            /// The current routing policy revision; null until one is set.
+            ///
+            /// - Remark: Generated from `#/components/schemas/BootstrapSnapshot/routing_policy`.
+            public struct routing_policyPayload: Codable, Hashable, Sendable {
+                /// - Remark: Generated from `#/components/schemas/BootstrapSnapshot/routing_policy/value1`.
+                public var value1: Components.Schemas.RoutingPolicySnapshot
+                /// Creates a new `routing_policyPayload`.
+                ///
+                /// - Parameters:
+                ///   - value1:
+                public init(value1: Components.Schemas.RoutingPolicySnapshot) {
+                    self.value1 = value1
+                }
+                public init(from decoder: any Swift.Decoder) throws {
+                    self.value1 = try .init(from: decoder)
+                }
+                public func encode(to encoder: any Swift.Encoder) throws {
+                    try self.value1.encode(to: encoder)
+                }
+            }
+            /// The current routing policy revision; null until one is set.
+            ///
+            /// - Remark: Generated from `#/components/schemas/BootstrapSnapshot/routing_policy`.
+            public var routing_policy: Components.Schemas.BootstrapSnapshot.routing_policyPayload?
             /// Creates a new `BootstrapSnapshot`.
             ///
             /// - Parameters:
@@ -946,6 +974,8 @@ public enum Components {
             ///   - conversations:
             ///   - schedules:
             ///   - unattended_operation:
+            ///   - usage_pools: Every usage pool's usage record, in pool id order.
+            ///   - routing_policy: The current routing policy revision; null until one is set.
             public init(
                 sync_epoch: Swift.String,
                 revision: Swift.Int64,
@@ -955,7 +985,9 @@ public enum Components {
                 tasks: [Components.Schemas.TaskSnapshot],
                 conversations: [Components.Schemas.ConversationSnapshot],
                 schedules: [Components.Schemas.ScheduleSnapshot],
-                unattended_operation: Components.Schemas.UnattendedOperationSnapshot
+                unattended_operation: Components.Schemas.UnattendedOperationSnapshot,
+                usage_pools: [Components.Schemas.UsagePoolSnapshot],
+                routing_policy: Components.Schemas.BootstrapSnapshot.routing_policyPayload? = nil
             ) {
                 self.sync_epoch = sync_epoch
                 self.revision = revision
@@ -966,6 +998,8 @@ public enum Components {
                 self.conversations = conversations
                 self.schedules = schedules
                 self.unattended_operation = unattended_operation
+                self.usage_pools = usage_pools
+                self.routing_policy = routing_policy
             }
             public enum CodingKeys: String, CodingKey {
                 case sync_epoch
@@ -977,6 +1011,8 @@ public enum Components {
                 case conversations
                 case schedules
                 case unattended_operation
+                case usage_pools
+                case routing_policy
             }
         }
         /// Whether the daemon admits new unattended work, and what stops it (plan §4 stop_unattended, §5.7). It is the verdict of the one gate admission enforces at the read that produced it. Live inputs can change the verdict without moving the sync revision, so it carries no sync metadata of its own. A client renders it as a standing indicator and never infers the state from attention items: acknowledging or dismissing an item does not change it.
@@ -1107,6 +1143,898 @@ public enum Components {
                     "item_id",
                     "command_id",
                     "since"
+                ])
+            }
+        }
+        /// One usage pool's usage record with its sync metadata (plan §5.4 usage observation, §5.14). Every write of the record is a client-visible transaction, so a new reading reaches a client through the revision and heartbeat path with no task activity. A pool with no record yet carries the snapshot's revision and entity_version 0.
+        ///
+        ///
+        /// - Remark: Generated from `#/components/schemas/UsagePoolSnapshot`.
+        public struct UsagePoolSnapshot: Codable, Hashable, Sendable {
+            /// - Remark: Generated from `#/components/schemas/UsagePoolSnapshot/as_of_revision`.
+            public var as_of_revision: Components.Schemas.AsOfRevision
+            /// The record's version: 0 before its first write, and each write adds one.
+            ///
+            ///
+            /// - Remark: Generated from `#/components/schemas/UsagePoolSnapshot/entity_version`.
+            public var entity_version: Swift.Int64
+            /// - Remark: Generated from `#/components/schemas/UsagePoolSnapshot/pool`.
+            public var pool: Components.Schemas.UsagePoolUsage
+            /// Creates a new `UsagePoolSnapshot`.
+            ///
+            /// - Parameters:
+            ///   - as_of_revision:
+            ///   - entity_version: The record's version: 0 before its first write, and each write adds one.
+            ///   - pool:
+            public init(
+                as_of_revision: Components.Schemas.AsOfRevision,
+                entity_version: Swift.Int64,
+                pool: Components.Schemas.UsagePoolUsage
+            ) {
+                self.as_of_revision = as_of_revision
+                self.entity_version = entity_version
+                self.pool = pool
+            }
+            public enum CodingKeys: String, CodingKey {
+                case as_of_revision
+                case entity_version
+                case pool
+            }
+            public init(from decoder: any Swift.Decoder) throws {
+                let container = try decoder.container(keyedBy: CodingKeys.self)
+                self.as_of_revision = try container.decode(
+                    Components.Schemas.AsOfRevision.self,
+                    forKey: .as_of_revision
+                )
+                self.entity_version = try container.decode(
+                    Swift.Int64.self,
+                    forKey: .entity_version
+                )
+                self.pool = try container.decode(
+                    Components.Schemas.UsagePoolUsage.self,
+                    forKey: .pool
+                )
+                try decoder.ensureNoAdditionalProperties(knownKeys: [
+                    "as_of_revision",
+                    "entity_version",
+                    "pool"
+                ])
+            }
+        }
+        /// What the daemon recorded about one pool: its declaration, collector, refresh status, every enrollment on it, its readings, and the exhausted marks derived at the read. It is observation, never authority, and nothing is added across pools. A client derives no value the daemon did not record: freshness is as_of_revision and each reading's own instants, and exhausted_marks is computed by the daemon. Credential expiry, billing renewal, and reset credit are not recorded, so no field carries them.
+        ///
+        ///
+        /// - Remark: Generated from `#/components/schemas/UsagePoolUsage`.
+        public struct UsagePoolUsage: Codable, Hashable, Sendable {
+            /// - Remark: Generated from `#/components/schemas/UsagePoolUsage/id`.
+            public var id: Swift.String
+            /// - Remark: Generated from `#/components/schemas/UsagePoolUsage/provider`.
+            public var provider: Swift.String
+            /// How many ward launches may hold a slot on the pool at once.
+            ///
+            /// - Remark: Generated from `#/components/schemas/UsagePoolUsage/max_parallel_executions`.
+            public var max_parallel_executions: Swift.Int
+            /// The provider's plan name, where known.
+            ///
+            /// - Remark: Generated from `#/components/schemas/UsagePoolUsage/plan`.
+            public var plan: Swift.String?
+            /// The one enrollment that collects for the pool: the record's, or before the first record the pool's earliest enrollment. Null when the pool has no enrollment. Collection never fails over on its own; reassign_collector moves it.
+            ///
+            ///
+            /// - Remark: Generated from `#/components/schemas/UsagePoolUsage/collector`.
+            public var collector: Swift.String?
+            /// The refresh status; null until the collector's first attempt.
+            ///
+            /// - Remark: Generated from `#/components/schemas/UsagePoolUsage/last_attempt`.
+            public struct last_attemptPayload: Codable, Hashable, Sendable {
+                /// - Remark: Generated from `#/components/schemas/UsagePoolUsage/last_attempt/value1`.
+                public var value1: Components.Schemas.CollectionAttempt
+                /// Creates a new `last_attemptPayload`.
+                ///
+                /// - Parameters:
+                ///   - value1:
+                public init(value1: Components.Schemas.CollectionAttempt) {
+                    self.value1 = value1
+                }
+                public init(from decoder: any Swift.Decoder) throws {
+                    self.value1 = try .init(from: decoder)
+                }
+                public func encode(to encoder: any Swift.Encoder) throws {
+                    try self.value1.encode(to: encoder)
+                }
+            }
+            /// The refresh status; null until the collector's first attempt.
+            ///
+            /// - Remark: Generated from `#/components/schemas/UsagePoolUsage/last_attempt`.
+            public var last_attempt: Components.Schemas.UsagePoolUsage.last_attemptPayload?
+            /// Every enrollment whose identity meters the pool, in enrollment id order: the candidates reassign_collector accepts.
+            ///
+            ///
+            /// - Remark: Generated from `#/components/schemas/UsagePoolUsage/enrollments`.
+            public var enrollments: [Components.Schemas.UsagePoolEnrollment]
+            /// Which windows limit which route model ids. A window named in no entry is general and limits every model.
+            ///
+            ///
+            /// - Remark: Generated from `#/components/schemas/UsagePoolUsage/model_windows`.
+            public var model_windows: [Components.Schemas.UsageModelWindow]
+            /// One reading per provider window, in window order.
+            ///
+            /// - Remark: Generated from `#/components/schemas/UsagePoolUsage/windows`.
+            public var windows: [Components.Schemas.UsageWindowReading]
+            /// The windows exhausted at the read, one mark per window, derived by the daemon. Empty does not mean allowance remains.
+            ///
+            ///
+            /// - Remark: Generated from `#/components/schemas/UsagePoolUsage/exhausted_marks`.
+            public var exhausted_marks: [Components.Schemas.UsageExhaustedMark]
+            /// Creates a new `UsagePoolUsage`.
+            ///
+            /// - Parameters:
+            ///   - id:
+            ///   - provider:
+            ///   - max_parallel_executions: How many ward launches may hold a slot on the pool at once.
+            ///   - plan: The provider's plan name, where known.
+            ///   - collector: The one enrollment that collects for the pool: the record's, or before the first record the pool's earliest enrollment. Null when the pool has no enrollment. Collection never fails over on its own; reassign_collector moves it.
+            ///   - last_attempt: The refresh status; null until the collector's first attempt.
+            ///   - enrollments: Every enrollment whose identity meters the pool, in enrollment id order: the candidates reassign_collector accepts.
+            ///   - model_windows: Which windows limit which route model ids. A window named in no entry is general and limits every model.
+            ///   - windows: One reading per provider window, in window order.
+            ///   - exhausted_marks: The windows exhausted at the read, one mark per window, derived by the daemon. Empty does not mean allowance remains.
+            public init(
+                id: Swift.String,
+                provider: Swift.String,
+                max_parallel_executions: Swift.Int,
+                plan: Swift.String? = nil,
+                collector: Swift.String? = nil,
+                last_attempt: Components.Schemas.UsagePoolUsage.last_attemptPayload? = nil,
+                enrollments: [Components.Schemas.UsagePoolEnrollment],
+                model_windows: [Components.Schemas.UsageModelWindow],
+                windows: [Components.Schemas.UsageWindowReading],
+                exhausted_marks: [Components.Schemas.UsageExhaustedMark]
+            ) {
+                self.id = id
+                self.provider = provider
+                self.max_parallel_executions = max_parallel_executions
+                self.plan = plan
+                self.collector = collector
+                self.last_attempt = last_attempt
+                self.enrollments = enrollments
+                self.model_windows = model_windows
+                self.windows = windows
+                self.exhausted_marks = exhausted_marks
+            }
+            public enum CodingKeys: String, CodingKey {
+                case id
+                case provider
+                case max_parallel_executions
+                case plan
+                case collector
+                case last_attempt
+                case enrollments
+                case model_windows
+                case windows
+                case exhausted_marks
+            }
+            public init(from decoder: any Swift.Decoder) throws {
+                let container = try decoder.container(keyedBy: CodingKeys.self)
+                self.id = try container.decode(
+                    Swift.String.self,
+                    forKey: .id
+                )
+                self.provider = try container.decode(
+                    Swift.String.self,
+                    forKey: .provider
+                )
+                self.max_parallel_executions = try container.decode(
+                    Swift.Int.self,
+                    forKey: .max_parallel_executions
+                )
+                self.plan = try container.decodeIfPresent(
+                    Swift.String.self,
+                    forKey: .plan
+                )
+                self.collector = try container.decodeIfPresent(
+                    Swift.String.self,
+                    forKey: .collector
+                )
+                self.last_attempt = try container.decodeIfPresent(
+                    Components.Schemas.UsagePoolUsage.last_attemptPayload.self,
+                    forKey: .last_attempt
+                )
+                self.enrollments = try container.decode(
+                    [Components.Schemas.UsagePoolEnrollment].self,
+                    forKey: .enrollments
+                )
+                self.model_windows = try container.decode(
+                    [Components.Schemas.UsageModelWindow].self,
+                    forKey: .model_windows
+                )
+                self.windows = try container.decode(
+                    [Components.Schemas.UsageWindowReading].self,
+                    forKey: .windows
+                )
+                self.exhausted_marks = try container.decode(
+                    [Components.Schemas.UsageExhaustedMark].self,
+                    forKey: .exhausted_marks
+                )
+                try decoder.ensureNoAdditionalProperties(knownKeys: [
+                    "id",
+                    "provider",
+                    "max_parallel_executions",
+                    "plan",
+                    "collector",
+                    "last_attempt",
+                    "enrollments",
+                    "model_windows",
+                    "windows",
+                    "exhausted_marks"
+                ])
+            }
+        }
+        /// How the collector's last attempt ended (mirrors domain.CollectionAttemptStatus).
+        ///
+        /// - Remark: Generated from `#/components/schemas/CollectionAttemptStatus`.
+        @frozen public enum CollectionAttemptStatus: String, Codable, Hashable, Sendable, CaseIterable {
+            case succeeded = "succeeded"
+            case failed = "failed"
+            case unsupported = "unsupported"
+        }
+        /// The collector's last attempt to read the pool, and how it ended.
+        ///
+        /// - Remark: Generated from `#/components/schemas/CollectionAttempt`.
+        public struct CollectionAttempt: Codable, Hashable, Sendable {
+            /// - Remark: Generated from `#/components/schemas/CollectionAttempt/status`.
+            public var status: Components.Schemas.CollectionAttemptStatus
+            /// - Remark: Generated from `#/components/schemas/CollectionAttempt/at`.
+            public var at: Foundation.Date
+            /// The provider's or collector's explanation; empty when none.
+            ///
+            /// - Remark: Generated from `#/components/schemas/CollectionAttempt/detail`.
+            public var detail: Swift.String
+            /// Creates a new `CollectionAttempt`.
+            ///
+            /// - Parameters:
+            ///   - status:
+            ///   - at:
+            ///   - detail: The provider's or collector's explanation; empty when none.
+            public init(
+                status: Components.Schemas.CollectionAttemptStatus,
+                at: Foundation.Date,
+                detail: Swift.String
+            ) {
+                self.status = status
+                self.at = at
+                self.detail = detail
+            }
+            public enum CodingKeys: String, CodingKey {
+                case status
+                case at
+                case detail
+            }
+            public init(from decoder: any Swift.Decoder) throws {
+                let container = try decoder.container(keyedBy: CodingKeys.self)
+                self.status = try container.decode(
+                    Components.Schemas.CollectionAttemptStatus.self,
+                    forKey: .status
+                )
+                self.at = try container.decode(
+                    Foundation.Date.self,
+                    forKey: .at
+                )
+                self.detail = try container.decode(
+                    Swift.String.self,
+                    forKey: .detail
+                )
+                try decoder.ensureNoAdditionalProperties(knownKeys: [
+                    "status",
+                    "at",
+                    "detail"
+                ])
+            }
+        }
+        /// The provider's answer under one enrollment's own credential (mirrors domain.AvailabilityAnswer).
+        ///
+        ///
+        /// - Remark: Generated from `#/components/schemas/AvailabilityAnswer`.
+        @frozen public enum AvailabilityAnswer: String, Codable, Hashable, Sendable, CaseIterable {
+            case supported = "supported"
+            case unsupported = "unsupported"
+            case failed = "failed"
+        }
+        /// One enrollment whose identity meters the pool, with its recorded availability answer.
+        ///
+        /// - Remark: Generated from `#/components/schemas/UsagePoolEnrollment`.
+        public struct UsagePoolEnrollment: Codable, Hashable, Sendable {
+            /// - Remark: Generated from `#/components/schemas/UsagePoolEnrollment/enrollment_id`.
+            public var enrollment_id: Swift.String
+            /// - Remark: Generated from `#/components/schemas/UsagePoolEnrollment/auth_identity_id`.
+            public var auth_identity_id: Swift.String
+            /// - Remark: Generated from `#/components/schemas/UsagePoolEnrollment/harness_client`.
+            public var harness_client: Components.Schemas.HarnessClientKind
+            /// The recorded availability answer; null when none was recorded.
+            ///
+            /// - Remark: Generated from `#/components/schemas/UsagePoolEnrollment/availability`.
+            public struct availabilityPayload: Codable, Hashable, Sendable {
+                /// - Remark: Generated from `#/components/schemas/UsagePoolEnrollment/availability/value1`.
+                public var value1: Components.Schemas.UsageAvailability
+                /// Creates a new `availabilityPayload`.
+                ///
+                /// - Parameters:
+                ///   - value1:
+                public init(value1: Components.Schemas.UsageAvailability) {
+                    self.value1 = value1
+                }
+                public init(from decoder: any Swift.Decoder) throws {
+                    self.value1 = try .init(from: decoder)
+                }
+                public func encode(to encoder: any Swift.Encoder) throws {
+                    try self.value1.encode(to: encoder)
+                }
+            }
+            /// The recorded availability answer; null when none was recorded.
+            ///
+            /// - Remark: Generated from `#/components/schemas/UsagePoolEnrollment/availability`.
+            public var availability: Components.Schemas.UsagePoolEnrollment.availabilityPayload?
+            /// Creates a new `UsagePoolEnrollment`.
+            ///
+            /// - Parameters:
+            ///   - enrollment_id:
+            ///   - auth_identity_id:
+            ///   - harness_client:
+            ///   - availability: The recorded availability answer; null when none was recorded.
+            public init(
+                enrollment_id: Swift.String,
+                auth_identity_id: Swift.String,
+                harness_client: Components.Schemas.HarnessClientKind,
+                availability: Components.Schemas.UsagePoolEnrollment.availabilityPayload? = nil
+            ) {
+                self.enrollment_id = enrollment_id
+                self.auth_identity_id = auth_identity_id
+                self.harness_client = harness_client
+                self.availability = availability
+            }
+            public enum CodingKeys: String, CodingKey {
+                case enrollment_id
+                case auth_identity_id
+                case harness_client
+                case availability
+            }
+            public init(from decoder: any Swift.Decoder) throws {
+                let container = try decoder.container(keyedBy: CodingKeys.self)
+                self.enrollment_id = try container.decode(
+                    Swift.String.self,
+                    forKey: .enrollment_id
+                )
+                self.auth_identity_id = try container.decode(
+                    Swift.String.self,
+                    forKey: .auth_identity_id
+                )
+                self.harness_client = try container.decode(
+                    Components.Schemas.HarnessClientKind.self,
+                    forKey: .harness_client
+                )
+                self.availability = try container.decodeIfPresent(
+                    Components.Schemas.UsagePoolEnrollment.availabilityPayload.self,
+                    forKey: .availability
+                )
+                try decoder.ensureNoAdditionalProperties(knownKeys: [
+                    "enrollment_id",
+                    "auth_identity_id",
+                    "harness_client",
+                    "availability"
+                ])
+            }
+        }
+        /// An enrollment's availability answer and when it was observed.
+        ///
+        /// - Remark: Generated from `#/components/schemas/UsageAvailability`.
+        public struct UsageAvailability: Codable, Hashable, Sendable {
+            /// - Remark: Generated from `#/components/schemas/UsageAvailability/answer`.
+            public var answer: Components.Schemas.AvailabilityAnswer
+            /// - Remark: Generated from `#/components/schemas/UsageAvailability/observed_at`.
+            public var observed_at: Foundation.Date
+            /// Creates a new `UsageAvailability`.
+            ///
+            /// - Parameters:
+            ///   - answer:
+            ///   - observed_at:
+            public init(
+                answer: Components.Schemas.AvailabilityAnswer,
+                observed_at: Foundation.Date
+            ) {
+                self.answer = answer
+                self.observed_at = observed_at
+            }
+            public enum CodingKeys: String, CodingKey {
+                case answer
+                case observed_at
+            }
+            public init(from decoder: any Swift.Decoder) throws {
+                let container = try decoder.container(keyedBy: CodingKeys.self)
+                self.answer = try container.decode(
+                    Components.Schemas.AvailabilityAnswer.self,
+                    forKey: .answer
+                )
+                self.observed_at = try container.decode(
+                    Foundation.Date.self,
+                    forKey: .observed_at
+                )
+                try decoder.ensureNoAdditionalProperties(knownKeys: [
+                    "answer",
+                    "observed_at"
+                ])
+            }
+        }
+        /// One provider window that limits one route model id.
+        ///
+        /// - Remark: Generated from `#/components/schemas/UsageModelWindow`.
+        public struct UsageModelWindow: Codable, Hashable, Sendable {
+            /// - Remark: Generated from `#/components/schemas/UsageModelWindow/route_model_id`.
+            public var route_model_id: Swift.String
+            /// - Remark: Generated from `#/components/schemas/UsageModelWindow/window`.
+            public var window: Swift.String
+            /// Creates a new `UsageModelWindow`.
+            ///
+            /// - Parameters:
+            ///   - route_model_id:
+            ///   - window:
+            public init(
+                route_model_id: Swift.String,
+                window: Swift.String
+            ) {
+                self.route_model_id = route_model_id
+                self.window = window
+            }
+            public enum CodingKeys: String, CodingKey {
+                case route_model_id
+                case window
+            }
+            public init(from decoder: any Swift.Decoder) throws {
+                let container = try decoder.container(keyedBy: CodingKeys.self)
+                self.route_model_id = try container.decode(
+                    Swift.String.self,
+                    forKey: .route_model_id
+                )
+                self.window = try container.decode(
+                    Swift.String.self,
+                    forKey: .window
+                )
+                try decoder.ensureNoAdditionalProperties(knownKeys: [
+                    "route_model_id",
+                    "window"
+                ])
+            }
+        }
+        /// What a reading says about a provider window (mirrors domain.WindowStatus).
+        ///
+        /// - Remark: Generated from `#/components/schemas/WindowStatus`.
+        @frozen public enum WindowStatus: String, Codable, Hashable, Sendable, CaseIterable {
+            case allowed = "allowed"
+            case exhausted = "exhausted"
+        }
+        /// One provider window as the collector last saw it, under the named enrollment generation. Unknown stays unknown: a reading with a status alone is complete. used_percent and quantity are the provider's two report forms, at most one set; unit is set exactly when quantity is.
+        ///
+        ///
+        /// - Remark: Generated from `#/components/schemas/UsageWindowReading`.
+        public struct UsageWindowReading: Codable, Hashable, Sendable {
+            /// - Remark: Generated from `#/components/schemas/UsageWindowReading/window`.
+            public var window: Swift.String
+            /// - Remark: Generated from `#/components/schemas/UsageWindowReading/enrollment_id`.
+            public var enrollment_id: Swift.String
+            /// - Remark: Generated from `#/components/schemas/UsageWindowReading/generation`.
+            public var generation: Swift.Int
+            /// - Remark: Generated from `#/components/schemas/UsageWindowReading/status`.
+            public var status: Components.Schemas.WindowStatus
+            /// - Remark: Generated from `#/components/schemas/UsageWindowReading/used_percent`.
+            public var used_percent: Swift.Int?
+            /// - Remark: Generated from `#/components/schemas/UsageWindowReading/quantity`.
+            public var quantity: Swift.Int64?
+            /// - Remark: Generated from `#/components/schemas/UsageWindowReading/unit`.
+            public var unit: Swift.String?
+            /// The window's usage reset, where the provider gave one.
+            ///
+            /// - Remark: Generated from `#/components/schemas/UsageWindowReading/resets_at`.
+            public var resets_at: Foundation.Date?
+            /// - Remark: Generated from `#/components/schemas/UsageWindowReading/length_seconds`.
+            public var length_seconds: Swift.Int64?
+            /// - Remark: Generated from `#/components/schemas/UsageWindowReading/observed_at`.
+            public var observed_at: Foundation.Date
+            /// When the daemon counts the reading stale: the earlier of resets_at and observed_at plus the daemon's refresh age. Null when neither is known. A client compares it with its own clock and never computes it.
+            ///
+            ///
+            /// - Remark: Generated from `#/components/schemas/UsageWindowReading/stale_at`.
+            public var stale_at: Foundation.Date?
+            /// Creates a new `UsageWindowReading`.
+            ///
+            /// - Parameters:
+            ///   - window:
+            ///   - enrollment_id:
+            ///   - generation:
+            ///   - status:
+            ///   - used_percent:
+            ///   - quantity:
+            ///   - unit:
+            ///   - resets_at: The window's usage reset, where the provider gave one.
+            ///   - length_seconds:
+            ///   - observed_at:
+            ///   - stale_at: When the daemon counts the reading stale: the earlier of resets_at and observed_at plus the daemon's refresh age. Null when neither is known. A client compares it with its own clock and never computes it.
+            public init(
+                window: Swift.String,
+                enrollment_id: Swift.String,
+                generation: Swift.Int,
+                status: Components.Schemas.WindowStatus,
+                used_percent: Swift.Int? = nil,
+                quantity: Swift.Int64? = nil,
+                unit: Swift.String? = nil,
+                resets_at: Foundation.Date? = nil,
+                length_seconds: Swift.Int64? = nil,
+                observed_at: Foundation.Date,
+                stale_at: Foundation.Date? = nil
+            ) {
+                self.window = window
+                self.enrollment_id = enrollment_id
+                self.generation = generation
+                self.status = status
+                self.used_percent = used_percent
+                self.quantity = quantity
+                self.unit = unit
+                self.resets_at = resets_at
+                self.length_seconds = length_seconds
+                self.observed_at = observed_at
+                self.stale_at = stale_at
+            }
+            public enum CodingKeys: String, CodingKey {
+                case window
+                case enrollment_id
+                case generation
+                case status
+                case used_percent
+                case quantity
+                case unit
+                case resets_at
+                case length_seconds
+                case observed_at
+                case stale_at
+            }
+            public init(from decoder: any Swift.Decoder) throws {
+                let container = try decoder.container(keyedBy: CodingKeys.self)
+                self.window = try container.decode(
+                    Swift.String.self,
+                    forKey: .window
+                )
+                self.enrollment_id = try container.decode(
+                    Swift.String.self,
+                    forKey: .enrollment_id
+                )
+                self.generation = try container.decode(
+                    Swift.Int.self,
+                    forKey: .generation
+                )
+                self.status = try container.decode(
+                    Components.Schemas.WindowStatus.self,
+                    forKey: .status
+                )
+                self.used_percent = try container.decodeIfPresent(
+                    Swift.Int.self,
+                    forKey: .used_percent
+                )
+                self.quantity = try container.decodeIfPresent(
+                    Swift.Int64.self,
+                    forKey: .quantity
+                )
+                self.unit = try container.decodeIfPresent(
+                    Swift.String.self,
+                    forKey: .unit
+                )
+                self.resets_at = try container.decodeIfPresent(
+                    Foundation.Date.self,
+                    forKey: .resets_at
+                )
+                self.length_seconds = try container.decodeIfPresent(
+                    Swift.Int64.self,
+                    forKey: .length_seconds
+                )
+                self.observed_at = try container.decode(
+                    Foundation.Date.self,
+                    forKey: .observed_at
+                )
+                self.stale_at = try container.decodeIfPresent(
+                    Foundation.Date.self,
+                    forKey: .stale_at
+                )
+                try decoder.ensureNoAdditionalProperties(knownKeys: [
+                    "window",
+                    "enrollment_id",
+                    "generation",
+                    "status",
+                    "used_percent",
+                    "quantity",
+                    "unit",
+                    "resets_at",
+                    "length_seconds",
+                    "observed_at",
+                    "stale_at"
+                ])
+            }
+        }
+        /// What made a window exhausted (mirrors domain.ExhaustedMarkSource).
+        ///
+        /// - Remark: Generated from `#/components/schemas/ExhaustedMarkSource`.
+        @frozen public enum ExhaustedMarkSource: String, Codable, Hashable, Sendable, CaseIterable {
+            case provider_refusal = "provider_refusal"
+            case usage_reading = "usage_reading"
+        }
+        /// One window exhausted at the read, and what says so. invocation_id is set exactly for provider_refusal, reading_observed_at exactly for usage_reading.
+        ///
+        ///
+        /// - Remark: Generated from `#/components/schemas/UsageExhaustedMark`.
+        public struct UsageExhaustedMark: Codable, Hashable, Sendable {
+            /// - Remark: Generated from `#/components/schemas/UsageExhaustedMark/window`.
+            public var window: Swift.String
+            /// - Remark: Generated from `#/components/schemas/UsageExhaustedMark/source`.
+            public var source: Components.Schemas.ExhaustedMarkSource
+            /// - Remark: Generated from `#/components/schemas/UsageExhaustedMark/invocation_id`.
+            public var invocation_id: Swift.String?
+            /// - Remark: Generated from `#/components/schemas/UsageExhaustedMark/reading_observed_at`.
+            public var reading_observed_at: Foundation.Date?
+            /// - Remark: Generated from `#/components/schemas/UsageExhaustedMark/resets_at`.
+            public var resets_at: Foundation.Date?
+            /// - Remark: Generated from `#/components/schemas/UsageExhaustedMark/set_at`.
+            public var set_at: Foundation.Date
+            /// Creates a new `UsageExhaustedMark`.
+            ///
+            /// - Parameters:
+            ///   - window:
+            ///   - source:
+            ///   - invocation_id:
+            ///   - reading_observed_at:
+            ///   - resets_at:
+            ///   - set_at:
+            public init(
+                window: Swift.String,
+                source: Components.Schemas.ExhaustedMarkSource,
+                invocation_id: Swift.String? = nil,
+                reading_observed_at: Foundation.Date? = nil,
+                resets_at: Foundation.Date? = nil,
+                set_at: Foundation.Date
+            ) {
+                self.window = window
+                self.source = source
+                self.invocation_id = invocation_id
+                self.reading_observed_at = reading_observed_at
+                self.resets_at = resets_at
+                self.set_at = set_at
+            }
+            public enum CodingKeys: String, CodingKey {
+                case window
+                case source
+                case invocation_id
+                case reading_observed_at
+                case resets_at
+                case set_at
+            }
+            public init(from decoder: any Swift.Decoder) throws {
+                let container = try decoder.container(keyedBy: CodingKeys.self)
+                self.window = try container.decode(
+                    Swift.String.self,
+                    forKey: .window
+                )
+                self.source = try container.decode(
+                    Components.Schemas.ExhaustedMarkSource.self,
+                    forKey: .source
+                )
+                self.invocation_id = try container.decodeIfPresent(
+                    Swift.String.self,
+                    forKey: .invocation_id
+                )
+                self.reading_observed_at = try container.decodeIfPresent(
+                    Foundation.Date.self,
+                    forKey: .reading_observed_at
+                )
+                self.resets_at = try container.decodeIfPresent(
+                    Foundation.Date.self,
+                    forKey: .resets_at
+                )
+                self.set_at = try container.decode(
+                    Foundation.Date.self,
+                    forKey: .set_at
+                )
+                try decoder.ensureNoAdditionalProperties(knownKeys: [
+                    "window",
+                    "source",
+                    "invocation_id",
+                    "reading_observed_at",
+                    "resets_at",
+                    "set_at"
+                ])
+            }
+        }
+        /// The current routing policy revision (plan §5.4 routing policy). as_of_revision is the snapshot's revision; entity_version is the policy revision, which every change advances.
+        ///
+        ///
+        /// - Remark: Generated from `#/components/schemas/RoutingPolicySnapshot`.
+        public struct RoutingPolicySnapshot: Codable, Hashable, Sendable {
+            /// - Remark: Generated from `#/components/schemas/RoutingPolicySnapshot/as_of_revision`.
+            public var as_of_revision: Components.Schemas.AsOfRevision
+            /// - Remark: Generated from `#/components/schemas/RoutingPolicySnapshot/entity_version`.
+            public var entity_version: Components.Schemas.EntityVersion
+            /// - Remark: Generated from `#/components/schemas/RoutingPolicySnapshot/policy`.
+            public var policy: Components.Schemas.RoutingPolicy
+            /// Creates a new `RoutingPolicySnapshot`.
+            ///
+            /// - Parameters:
+            ///   - as_of_revision:
+            ///   - entity_version:
+            ///   - policy:
+            public init(
+                as_of_revision: Components.Schemas.AsOfRevision,
+                entity_version: Components.Schemas.EntityVersion,
+                policy: Components.Schemas.RoutingPolicy
+            ) {
+                self.as_of_revision = as_of_revision
+                self.entity_version = entity_version
+                self.policy = policy
+            }
+            public enum CodingKeys: String, CodingKey {
+                case as_of_revision
+                case entity_version
+                case policy
+            }
+            public init(from decoder: any Swift.Decoder) throws {
+                let container = try decoder.container(keyedBy: CodingKeys.self)
+                self.as_of_revision = try container.decode(
+                    Components.Schemas.AsOfRevision.self,
+                    forKey: .as_of_revision
+                )
+                self.entity_version = try container.decode(
+                    Components.Schemas.EntityVersion.self,
+                    forKey: .entity_version
+                )
+                self.policy = try container.decode(
+                    Components.Schemas.RoutingPolicy.self,
+                    forKey: .policy
+                )
+                try decoder.ensureNoAdditionalProperties(knownKeys: [
+                    "as_of_revision",
+                    "entity_version",
+                    "policy"
+                ])
+            }
+        }
+        /// The path that set a routing policy revision (mirrors domain.RoutingPolicySource): cli_routing_set is `freesided routing set` on the daemon host, client_routing_set a paired client's set_routing_policy command.
+        ///
+        ///
+        /// - Remark: Generated from `#/components/schemas/RoutingPolicySource`.
+        @frozen public enum RoutingPolicySource: String, Codable, Hashable, Sendable, CaseIterable {
+            case cli_routing_set = "cli_routing_set"
+            case client_routing_set = "client_routing_set"
+        }
+        /// One role's priority order: the first agent takes new tasks until its pool's window is marked exhausted, then the next.
+        ///
+        ///
+        /// - Remark: Generated from `#/components/schemas/RoutingPolicyRole`.
+        public struct RoutingPolicyRole: Codable, Hashable, Sendable {
+            /// - Remark: Generated from `#/components/schemas/RoutingPolicyRole/role`.
+            public var role: Components.Schemas.TaskLineRole
+            /// - Remark: Generated from `#/components/schemas/RoutingPolicyRole/agents`.
+            public var agents: [Swift.String]
+            /// Creates a new `RoutingPolicyRole`.
+            ///
+            /// - Parameters:
+            ///   - role:
+            ///   - agents:
+            public init(
+                role: Components.Schemas.TaskLineRole,
+                agents: [Swift.String]
+            ) {
+                self.role = role
+                self.agents = agents
+            }
+            public enum CodingKeys: String, CodingKey {
+                case role
+                case agents
+            }
+            public init(from decoder: any Swift.Decoder) throws {
+                let container = try decoder.container(keyedBy: CodingKeys.self)
+                self.role = try container.decode(
+                    Components.Schemas.TaskLineRole.self,
+                    forKey: .role
+                )
+                self.agents = try container.decode(
+                    [Swift.String].self,
+                    forKey: .agents
+                )
+                try decoder.ensureNoAdditionalProperties(knownKeys: [
+                    "role",
+                    "agents"
+                ])
+            }
+        }
+        /// One revision of the routing policy: the standing rule for which agent takes a new task when the operator chose none for the role. A role absent from it keeps lineup behaviour. A revision is never edited.
+        ///
+        ///
+        /// - Remark: Generated from `#/components/schemas/RoutingPolicy`.
+        public struct RoutingPolicy: Codable, Hashable, Sendable {
+            /// - Remark: Generated from `#/components/schemas/RoutingPolicy/revision`.
+            public var revision: Swift.Int
+            /// One order per role, in TaskLineRole order.
+            ///
+            /// - Remark: Generated from `#/components/schemas/RoutingPolicy/roles`.
+            public var roles: [Components.Schemas.RoutingPolicyRole]
+            /// - Remark: Generated from `#/components/schemas/RoutingPolicy/source`.
+            public var source: Components.Schemas.RoutingPolicySource
+            /// The operator identity that set it; device:<device_id> for a client.
+            ///
+            /// - Remark: Generated from `#/components/schemas/RoutingPolicy/set_by`.
+            public var set_by: Swift.String
+            /// - Remark: Generated from `#/components/schemas/RoutingPolicy/set_at`.
+            public var set_at: Foundation.Date
+            /// - Remark: Generated from `#/components/schemas/RoutingPolicy/lineup_revision`.
+            public var lineup_revision: Components.Schemas.Digest
+            /// Creates a new `RoutingPolicy`.
+            ///
+            /// - Parameters:
+            ///   - revision:
+            ///   - roles: One order per role, in TaskLineRole order.
+            ///   - source:
+            ///   - set_by: The operator identity that set it; device:<device_id> for a client.
+            ///   - set_at:
+            ///   - lineup_revision:
+            public init(
+                revision: Swift.Int,
+                roles: [Components.Schemas.RoutingPolicyRole],
+                source: Components.Schemas.RoutingPolicySource,
+                set_by: Swift.String,
+                set_at: Foundation.Date,
+                lineup_revision: Components.Schemas.Digest
+            ) {
+                self.revision = revision
+                self.roles = roles
+                self.source = source
+                self.set_by = set_by
+                self.set_at = set_at
+                self.lineup_revision = lineup_revision
+            }
+            public enum CodingKeys: String, CodingKey {
+                case revision
+                case roles
+                case source
+                case set_by
+                case set_at
+                case lineup_revision
+            }
+            public init(from decoder: any Swift.Decoder) throws {
+                let container = try decoder.container(keyedBy: CodingKeys.self)
+                self.revision = try container.decode(
+                    Swift.Int.self,
+                    forKey: .revision
+                )
+                self.roles = try container.decode(
+                    [Components.Schemas.RoutingPolicyRole].self,
+                    forKey: .roles
+                )
+                self.source = try container.decode(
+                    Components.Schemas.RoutingPolicySource.self,
+                    forKey: .source
+                )
+                self.set_by = try container.decode(
+                    Swift.String.self,
+                    forKey: .set_by
+                )
+                self.set_at = try container.decode(
+                    Foundation.Date.self,
+                    forKey: .set_at
+                )
+                self.lineup_revision = try container.decode(
+                    Components.Schemas.Digest.self,
+                    forKey: .lineup_revision
+                )
+                try decoder.ensureNoAdditionalProperties(knownKeys: [
+                    "revision",
+                    "roles",
+                    "source",
+                    "set_by",
+                    "set_at",
+                    "lineup_revision"
                 ])
             }
         }
@@ -11298,7 +12226,7 @@ public enum Components {
             case differed = "differed"
             case unknown = "unknown"
         }
-        /// The harness client that ran an agent.
+        /// The harness client an agent or enrollment runs (mirrors domain.HarnessClientKind).
         ///
         /// - Remark: Generated from `#/components/schemas/HarnessClientKind`.
         @frozen public enum HarnessClientKind: String, Codable, Hashable, Sendable, CaseIterable {

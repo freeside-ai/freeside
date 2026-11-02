@@ -64,6 +64,9 @@ type Service struct {
 	// cannot call the engine directly.
 	taskSubmitter TaskSubmitter
 	taskStopGuard func(context.Context, domain.TaskID, func() error) error
+	// usageRefreshAge bounds how long a usage reading counts as fresh in the
+	// projection (WithUsageRefreshAge); zero means only its reset does.
+	usageRefreshAge time.Duration
 	// followUpFiler is the filer an approved follow-up filing wakes
 	// (WithFollowUpFiler). Nil means no filer is bound.
 	followUpFiler func() FollowUpFiler

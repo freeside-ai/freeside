@@ -1029,6 +1029,8 @@ components:
         - conversations
         - schedules
         - unattended_operation
+        - usage_pools
+        - routing_policy
       properties:
         sync_epoch:
           type: string
@@ -1067,6 +1069,16 @@ components:
             $ref: "#/components/schemas/ScheduleSnapshot"
         unattended_operation:
           $ref: "#/components/schemas/UnattendedOperationSnapshot"
+        usage_pools:
+          type: array
+          description: Every usage pool's usage record, in pool id order.
+          items:
+            $ref: "#/components/schemas/UsagePoolSnapshot"
+        routing_policy:
+          nullable: true
+          description: The current routing policy revision; null until one is set.
+          allOf:
+            - $ref: "#/components/schemas/RoutingPolicySnapshot"
 
     UnattendedOperationSnapshot:
       type: object
@@ -1158,6 +1170,363 @@ components:
             When the stop took effect: the accepting instant of the stop
             command, or the blocking item's creation instant. Null only for
             an item recorded without a creation instant.
+
+    UsagePoolSnapshot:
+      type: object
+      description: >
+        One usage pool's usage record with its sync metadata (plan §5.4 usage
+        observation, §5.14). Every write of the record is a client-visible
+        transaction, so a new reading reaches a client through the revision
+        and heartbeat path with no task activity. A pool with no record yet
+        carries the snapshot's revision and entity_version 0.
+      additionalProperties: false
+      required: [as_of_revision, entity_version, pool]
+      properties:
+        as_of_revision:
+          $ref: "#/components/schemas/AsOfRevision"
+        entity_version:
+          type: integer
+          format: int64
+          minimum: 0
+          description: >
+            The record's version: 0 before its first write, and each write
+            adds one.
+        pool:
+          $ref: "#/components/schemas/UsagePoolUsage"
+
+    UsagePoolUsage:
+      type: object
+      description: >
+        What the daemon recorded about one pool: its declaration, collector,
+        refresh status, every enrollment on it, its readings, and the
+        exhausted marks derived at the read. It is observation, never
+        authority, and nothing is added across pools. A client derives no
+        value the daemon did not record: freshness is as_of_revision and each
+        reading's own instants, and exhausted_marks is computed by the daemon.
+        Credential expiry, billing renewal, and reset credit are not recorded,
+        so no field carries them.
+      additionalProperties: false
+      required:
+        - id
+        - provider
+        - max_parallel_executions
+        - plan
+        - collector
+        - last_attempt
+        - enrollments
+        - model_windows
+        - windows
+        - exhausted_marks
+      properties:
+        id:
+          type: string
+          minLength: 1
+        provider:
+          type: string
+          minLength: 1
+        max_parallel_executions:
+          type: integer
+          minimum: 1
+          description: How many ward launches may hold a slot on the pool at once.
+        plan:
+          type: string
+          minLength: 1
+          nullable: true
+          description: The provider's plan name, where known.
+        collector:
+          type: string
+          minLength: 1
+          nullable: true
+          description: >
+            The one enrollment that collects for the pool: the record's, or
+            before the first record the pool's earliest enrollment. Null when
+            the pool has no enrollment. Collection never fails over on its
+            own; reassign_collector moves it.
+        last_attempt:
+          nullable: true
+          description: The refresh status; null until the collector's first attempt.
+          allOf:
+            - $ref: "#/components/schemas/CollectionAttempt"
+        enrollments:
+          type: array
+          description: >
+            Every enrollment whose identity meters the pool, in enrollment id
+            order: the candidates reassign_collector accepts.
+          items:
+            $ref: "#/components/schemas/UsagePoolEnrollment"
+        model_windows:
+          type: array
+          description: >
+            Which windows limit which route model ids. A window named in no
+            entry is general and limits every model.
+          items:
+            $ref: "#/components/schemas/UsageModelWindow"
+        windows:
+          type: array
+          description: One reading per provider window, in window order.
+          items:
+            $ref: "#/components/schemas/UsageWindowReading"
+        exhausted_marks:
+          type: array
+          description: >
+            The windows exhausted at the read, one mark per window, derived by
+            the daemon. Empty does not mean allowance remains.
+          items:
+            $ref: "#/components/schemas/UsageExhaustedMark"
+
+    CollectionAttemptStatus:
+      type: string
+      description: How the collector's last attempt ended (mirrors domain.CollectionAttemptStatus).
+      enum: [succeeded, failed, unsupported]
+
+    CollectionAttempt:
+      type: object
+      description: The collector's last attempt to read the pool, and how it ended.
+      additionalProperties: false
+      required: [status, at, detail]
+      properties:
+        status:
+          $ref: "#/components/schemas/CollectionAttemptStatus"
+        at:
+          type: string
+          format: date-time
+        detail:
+          type: string
+          description: The provider's or collector's explanation; empty when none.
+
+    AvailabilityAnswer:
+      type: string
+      description: >
+        The provider's answer under one enrollment's own credential (mirrors
+        domain.AvailabilityAnswer).
+      enum: [supported, unsupported, failed]
+
+    UsagePoolEnrollment:
+      type: object
+      description: One enrollment whose identity meters the pool, with its recorded availability answer.
+      additionalProperties: false
+      required: [enrollment_id, auth_identity_id, harness_client, availability]
+      properties:
+        enrollment_id:
+          type: string
+          minLength: 1
+        auth_identity_id:
+          type: string
+          minLength: 1
+        harness_client:
+          $ref: "#/components/schemas/HarnessClientKind"
+        availability:
+          nullable: true
+          description: The recorded availability answer; null when none was recorded.
+          allOf:
+            - $ref: "#/components/schemas/UsageAvailability"
+
+    UsageAvailability:
+      type: object
+      description: An enrollment's availability answer and when it was observed.
+      additionalProperties: false
+      required: [answer, observed_at]
+      properties:
+        answer:
+          $ref: "#/components/schemas/AvailabilityAnswer"
+        observed_at:
+          type: string
+          format: date-time
+
+    UsageModelWindow:
+      type: object
+      description: One provider window that limits one route model id.
+      additionalProperties: false
+      required: [route_model_id, window]
+      properties:
+        route_model_id:
+          type: string
+          minLength: 1
+        window:
+          type: string
+          minLength: 1
+
+    WindowStatus:
+      type: string
+      description: What a reading says about a provider window (mirrors domain.WindowStatus).
+      enum: [allowed, exhausted]
+
+    UsageWindowReading:
+      type: object
+      description: >
+        One provider window as the collector last saw it, under the named
+        enrollment generation. Unknown stays unknown: a reading with a status
+        alone is complete. used_percent and quantity are the provider's two
+        report forms, at most one set; unit is set exactly when quantity is.
+      additionalProperties: false
+      required:
+        - window
+        - enrollment_id
+        - generation
+        - status
+        - used_percent
+        - quantity
+        - unit
+        - resets_at
+        - length_seconds
+        - observed_at
+        - stale_at
+      properties:
+        window:
+          type: string
+          minLength: 1
+        enrollment_id:
+          type: string
+          minLength: 1
+        generation:
+          type: integer
+          minimum: 1
+        status:
+          $ref: "#/components/schemas/WindowStatus"
+        used_percent:
+          type: integer
+          minimum: 0
+          nullable: true
+        quantity:
+          type: integer
+          format: int64
+          minimum: 0
+          nullable: true
+        unit:
+          type: string
+          minLength: 1
+          nullable: true
+        resets_at:
+          type: string
+          format: date-time
+          nullable: true
+          description: The window's usage reset, where the provider gave one.
+        length_seconds:
+          type: integer
+          format: int64
+          minimum: 1
+          nullable: true
+        observed_at:
+          type: string
+          format: date-time
+        stale_at:
+          type: string
+          format: date-time
+          nullable: true
+          description: >
+            When the daemon counts the reading stale: the earlier of resets_at
+            and observed_at plus the daemon's refresh age. Null when neither
+            is known. A client compares it with its own clock and never
+            computes it.
+
+    ExhaustedMarkSource:
+      type: string
+      description: What made a window exhausted (mirrors domain.ExhaustedMarkSource).
+      enum: [provider_refusal, usage_reading]
+
+    UsageExhaustedMark:
+      type: object
+      description: >
+        One window exhausted at the read, and what says so. invocation_id is
+        set exactly for provider_refusal, reading_observed_at exactly for
+        usage_reading.
+      additionalProperties: false
+      required: [window, source, invocation_id, reading_observed_at, resets_at, set_at]
+      properties:
+        window:
+          type: string
+          minLength: 1
+        source:
+          $ref: "#/components/schemas/ExhaustedMarkSource"
+        invocation_id:
+          type: string
+          minLength: 1
+          nullable: true
+        reading_observed_at:
+          type: string
+          format: date-time
+          nullable: true
+        resets_at:
+          type: string
+          format: date-time
+          nullable: true
+        set_at:
+          type: string
+          format: date-time
+
+    RoutingPolicySnapshot:
+      type: object
+      description: >
+        The current routing policy revision (plan §5.4 routing policy).
+        as_of_revision is the snapshot's revision; entity_version is the
+        policy revision, which every change advances.
+      additionalProperties: false
+      required: [as_of_revision, entity_version, policy]
+      properties:
+        as_of_revision:
+          $ref: "#/components/schemas/AsOfRevision"
+        entity_version:
+          $ref: "#/components/schemas/EntityVersion"
+        policy:
+          $ref: "#/components/schemas/RoutingPolicy"
+
+    RoutingPolicySource:
+      type: string
+      description: >
+        The path that set a routing policy revision (mirrors
+        domain.RoutingPolicySource): cli_routing_set is `freesided routing
+        set` on the daemon host, client_routing_set a paired client's
+        set_routing_policy command.
+      enum: [cli_routing_set, client_routing_set]
+
+    RoutingPolicyRole:
+      type: object
+      description: >
+        One role's priority order: the first agent takes new tasks until its
+        pool's window is marked exhausted, then the next.
+      additionalProperties: false
+      required: [role, agents]
+      properties:
+        role:
+          $ref: "#/components/schemas/TaskLineRole"
+        agents:
+          type: array
+          minItems: 1
+          items:
+            type: string
+            minLength: 1
+            maxLength: 246
+            pattern: '^[a-z0-9]([a-z0-9_-]*[a-z0-9])?$'
+
+    RoutingPolicy:
+      type: object
+      description: >
+        One revision of the routing policy: the standing rule for which agent
+        takes a new task when the operator chose none for the role. A role
+        absent from it keeps lineup behaviour. A revision is never edited.
+      additionalProperties: false
+      required: [revision, roles, source, set_by, set_at, lineup_revision]
+      properties:
+        revision:
+          type: integer
+          minimum: 1
+        roles:
+          type: array
+          minItems: 1
+          description: One order per role, in TaskLineRole order.
+          items:
+            $ref: "#/components/schemas/RoutingPolicyRole"
+        source:
+          $ref: "#/components/schemas/RoutingPolicySource"
+        set_by:
+          type: string
+          minLength: 1
+          description: The operator identity that set it; device:<device_id> for a client.
+        set_at:
+          type: string
+          format: date-time
+        lineup_revision:
+          $ref: "#/components/schemas/Digest"
 
     AttentionItemSnapshot:
       type: object
@@ -5232,7 +5601,7 @@ components:
 
     HarnessClientKind:
       type: string
-      description: The harness client that ran an agent.
+      description: The harness client an agent or enrollment runs (mirrors domain.HarnessClientKind).
       enum: [claude_code, codex_cli]
 
     EffortLevel:
