@@ -1607,6 +1607,47 @@ func (s *CodexReviewSource) CancelReview(ctx context.Context, id domain.Invocati
 	})
 }
 
+// AbortRecoveredReview reaps the authenticated containers of a review whose
+// contradiction the operator recovered. The engine never inspects that
+// invocation again, so without this only startup recovery would mark its
+// outcome ready, and its usage pool slot would stay held until a restart.
+// It keeps an existing outcome, and a call after the outcome is ready is a
+// no-op, so the engine may repeat it on every pass.
+//
+// A rejected outcome or request row may be the very contradiction the
+// operator recovered, so neither is raised again; re-raising it would fail
+// every pass and the recovery could never take effect. A rejected outcome is
+// reaped directly, as rejectPersistedOutcome does, and a rejected request
+// still gets its abort, because reaping needs only the durable intent.
+func (s *CodexReviewSource) AbortRecoveredReview(ctx context.Context, id domain.InvocationID) error {
+	if !runIDPattern.MatchString(string(id)) {
+		return ErrInvalidCodexReviewSpec
+	}
+	_, ready, err := s.cfg.Journal.GetCodexReviewOutcome(ctx, string(id))
+	if err == nil && ready {
+		return nil
+	}
+	if errors.Is(err, ErrCodexReviewOutcomeRejected) {
+		if cleanupErr := s.finishCleanup(ctx, id, true); cleanupErr != nil {
+			return &exec.ReviewSourceFailure{
+				Class: classifyCodexObservationFailure(cleanupErr), Err: cleanupErr,
+			}
+		}
+		return nil
+	}
+	if _, err := s.cfg.Journal.GetCodexReviewRequest(ctx, string(id)); errors.Is(err, exec.ErrUnknownInvocation) {
+		return err
+	} else if err != nil && !errors.Is(err, ErrCodexReviewRequestRejected) {
+		return &exec.ReviewSourceFailure{Class: domain.ReviewFailureTransient, Err: err}
+	}
+	return s.reconcileAbortedRequest(ctx, id, CodexReviewSourceOutcome{
+		InvocationID:  id,
+		FailureClass:  domain.ReviewFailureContradiction,
+		Failure:       "review contradiction recovered by the operator; its containers were reaped",
+		AbortRequired: true,
+	})
+}
+
 func (s *CodexReviewSource) reconcileAbortedRequest(
 	ctx context.Context, id domain.InvocationID, stopped CodexReviewSourceOutcome,
 ) error {
