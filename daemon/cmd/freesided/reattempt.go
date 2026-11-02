@@ -9,6 +9,7 @@ import (
 	"io"
 	"os"
 	"os/signal"
+	"slices"
 	"strings"
 	"syscall"
 
@@ -40,7 +41,8 @@ func parseReattemptCommand(args []string, stderr io.Writer) (reattemptCommandCon
 	flags := flag.NewFlagSet("freesided reattempt", flag.ContinueOnError)
 	flags.SetOutput(stderr)
 	dbPath := flags.String("db", "", "SQLite database path (required)")
-	task := flags.String("task", "", "task whose newest campaign's latest terminal run to retry")
+	task := flags.String("task", "", "task to retry: its failed specification invocation before approval, "+
+		"else its newest campaign's latest terminal run")
 	parentRun := flags.String("parent-run", "", "terminal campaign run to retry")
 	campaign := flags.String("campaign", "", "campaign whose latest terminal run to retry")
 	reason := flags.String("reason", "", "operator reason for the deliberate new attempt (required)")
@@ -85,6 +87,10 @@ func runReattemptCommand(ctx context.Context, cfg reattemptCommandConfig) (submi
 	}
 	defer func() { _ = handle.Close() }()
 	st := handle.store
+	// specificationRunID is set when -task names a task whose specification
+	// is not approved yet: the retry then repeats its failed specification
+	// invocation instead of starting an implementation attempt.
+	var specificationRunID domain.RunID
 	if cfg.TaskID != "" {
 		if err := st.Read(ctx, func(tx *store.ReadTx) error {
 			task, err := tx.GetTask(ctx, cfg.TaskID)
@@ -92,7 +98,16 @@ func runReattemptCommand(ctx context.Context, cfg reattemptCommandConfig) (submi
 				return fmt.Errorf("reattempt: task %q: %w", cfg.TaskID, err)
 			}
 			if len(task.CampaignIDs) == 0 {
-				return fmt.Errorf("reattempt: task %q has no campaign yet; approve its specification first", cfg.TaskID)
+				// Label intake starts no campaign; its one specification run
+				// is the only thing to retry.
+				specificationRunID, err = onlySpecificationRun(ctx, tx, task.ID)
+				if err != nil {
+					return err
+				}
+				if specificationRunID == "" {
+					return fmt.Errorf("reattempt: task %q has no campaign yet; approve its specification first", cfg.TaskID)
+				}
+				return nil
 			}
 			cfg.CampaignID = task.CampaignIDs[len(task.CampaignIDs)-1]
 			initial, err := tx.GetProductionAttempt(ctx, cfg.CampaignID, 1)
@@ -108,10 +123,20 @@ func runReattemptCommand(ctx context.Context, cfg reattemptCommandConfig) (submi
 			if root.TaskID != task.ID || root.ProjectID != task.ProjectID {
 				return fmt.Errorf("reattempt: task %q campaign %q: %w", task.ID, cfg.CampaignID, domain.ErrParentKeyMismatch)
 			}
+			// The implementation run exists only once its specification is
+			// approved.
+			if _, err := tx.GetRun(ctx, initial.ImplementationRunID); errors.Is(err, store.ErrNotFound) {
+				specificationRunID = root.ID
+			} else if err != nil {
+				return err
+			}
 			return nil
 		}); err != nil {
 			return submitResult{}, err
 		}
+	}
+	if specificationRunID != "" {
+		return retrySpecification(ctx, st, specificationRunID, cfg.Reason)
 	}
 	created, err := engine.ReattemptProductionRun(ctx, st, engine.ProductionReattemptSpec{
 		ParentRunID: cfg.ParentRunID, CampaignID: cfg.CampaignID, Reason: cfg.Reason,
@@ -144,6 +169,61 @@ func runReattemptCommand(ctx context.Context, cfg reattemptCommandConfig) (submi
 		result.WorkUnitID = domain.WorkUnitIDForRun(created.Run.Run.ID)
 	}
 	return result, nil
+}
+
+// retrySpecification repeats a specification run's failed invocation. The
+// result's specification fields name the new iteration; it starts no
+// implementation run, so the implementation fields and their run, invocation,
+// and stage aliases stay empty.
+func retrySpecification(
+	ctx context.Context, st *store.Store, runID domain.RunID, reason string,
+) (submitResult, error) {
+	retried, err := engine.RetrySpecificationRun(ctx, st, engine.SpecificationRetrySpec{
+		SpecificationRunID: runID, Reason: reason,
+	})
+	if err != nil {
+		return submitResult{}, fmt.Errorf("reattempt: %w", err)
+	}
+	return submitResult{
+		TaskID: retried.Run.TaskID, ProjectID: retried.Run.ProjectID,
+		SpecificationRunID:            retried.Run.ID,
+		SpecificationInvocationID:     retried.InvocationID,
+		SpecificationStageID:          retried.StageID,
+		SourceDigest:                  retried.Run.SpecDigest,
+		SpecificationPolicyDigest:     retried.Run.PolicyDigest,
+		SourceArtifactID:              retried.SourceArtifactID,
+		SpecificationPolicyArtifactID: retried.PolicyArtifactID,
+		PublicationDigest:             retried.PublicationDigest,
+		CampaignID:                    retried.CampaignID,
+		AttemptReason:                 retried.Reason,
+	}, nil
+}
+
+// onlySpecificationRun returns the task's one run with a specification
+// stage, or "" when it has none.
+func onlySpecificationRun(ctx context.Context, tx *store.ReadTx, taskID domain.TaskID) (domain.RunID, error) {
+	runIDs, err := tx.TaskRunIDs(ctx, taskID)
+	if err != nil {
+		return "", err
+	}
+	var found domain.RunID
+	for _, runID := range runIDs {
+		run, err := tx.GetRun(ctx, runID)
+		if err != nil {
+			return "", err
+		}
+		if !slices.ContainsFunc(run.Stages, func(stage domain.Stage) bool {
+			return stage.ID == domain.SpecificationStageID(run.ID)
+		}) {
+			continue
+		}
+		if found != "" {
+			return "", fmt.Errorf("reattempt: task %q has more than one specification run: %w",
+				taskID, domain.ErrParentKeyMismatch)
+		}
+		found = run.ID
+	}
+	return found, nil
 }
 
 func validateReattemptConfig(cfg reattemptCommandConfig) error {

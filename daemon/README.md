@@ -3690,7 +3690,19 @@ An explicit `freesided reattempt` with a reason may use a closed parent that
 has an approved implementation specification, even while its provider remains
 live. It still checks lineage, cancellation, the policy cap, and execution
 admission. A closed specification-only task without approved implementation
-input is ineligible. Ordinary submission, Resume, and automatic retries cannot
+input is ineligible.
+Before approval, `freesided reattempt -task <task> -reason <text>` instead
+retries a specification invocation that ended failed, canceled, or lost
+(#2315). It adds one iteration to the same specification run with the failed
+invocation's inputs, records the reason, and supersedes the failure card; it
+creates no run, campaign, or task. The retry counts against
+`specification.max_iterations`, and the reason never reaches the specifier.
+It is refused, writing nothing, while the newest invocation runs or after it
+completed or blocked, when the failure card is already closed, when the task
+is cancelled or its workflow closed, and when the budget is spent. Repeating
+the command with the same reason returns the pending iteration. `-task` is
+the only selector for it; for a label-intake task, which has no campaign, it
+reaches the task's one specification run. Ordinary submission, Resume, and automatic retries cannot
 reopen the episode.
 Stopped and abandoned tasks leave Active filters and remain
 in Finished/All history. A confirmed queued task needs no run or position.
