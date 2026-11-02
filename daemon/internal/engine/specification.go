@@ -209,6 +209,13 @@ type specificationRequest struct {
 	// encode/decode and re-checked in authenticateSpecificationRoot so a retargeted
 	// request cannot swap the bound subject.
 	IssueSubject *domain.IssueSubjectRef `json:"issue_subject,omitempty"`
+	// RetryReason is the operator's reason for an explicit retry (#2315): set
+	// only on an iteration that repeats the preceding one's inputs after that
+	// invocation ended failed, canceled, or lost. It belongs to that one
+	// iteration, so every other transition clears it. It never reaches the
+	// specifier. Absent on every other request, so rows written before the
+	// field stay canonical.
+	RetryReason string `json:"retry_reason,omitempty"`
 }
 
 type specificationTerminal struct {
@@ -1159,6 +1166,11 @@ func (r specificationRequest) validateWithPublication(validatePublication func(P
 	if (r.FirstIteration != 0 && r.FirstIteration != 2) || r.Iteration < r.firstIteration() {
 		return fmt.Errorf("invalid specification request first iteration: %w", domain.ErrParentKeyMismatch)
 	}
+	// A retry repeats an earlier iteration, so a run's first one cannot be one.
+	if r.RetryReason != strings.TrimSpace(r.RetryReason) ||
+		r.RetryReason != "" && r.Iteration == r.firstIteration() {
+		return fmt.Errorf("invalid specification retry reason: %w", domain.ErrParentKeyMismatch)
+	}
 	if err := validatePublication(r.Publication); err != nil {
 		return err
 	}
@@ -1619,7 +1631,8 @@ func sameSpecificationRequest(left, right specificationRequest) bool {
 		left.Publication == right.Publication &&
 		left.PublicationDigest == right.PublicationDigest &&
 		sameSpecificationWorkUnit(left.WorkUnit, right.WorkUnit) &&
-		sameIssueSubject(left.IssueSubject, right.IssueSubject)
+		sameIssueSubject(left.IssueSubject, right.IssueSubject) &&
+		left.RetryReason == right.RetryReason
 }
 
 func sameSpecificationRoot(left, right specificationRequest) bool {
@@ -1666,6 +1679,7 @@ func nextSpecificationAnswerRequest(
 	next := request
 	next.Iteration++
 	next.InvocationID = specificationInvocationID(request.SpecificationRunID, next.Iteration)
+	next.RetryReason = ""
 	next.AnswerArtifactIDs = append(slices.Clone(request.AnswerArtifactIDs), answerID)
 	next.InputArtifactIDs = specificationInputs(
 		request.InputArtifactIDs[0], specificationResearchArtifactIDs(request),
@@ -1680,12 +1694,28 @@ func nextSpecificationRevisionRequest(
 	next := request
 	next.Iteration++
 	next.InvocationID = specificationInvocationID(request.SpecificationRunID, next.Iteration)
+	next.RetryReason = ""
 	next.PriorSpecArtifactID = &priorSpec
 	next.FeedbackArtifactIDs = append(slices.Clone(request.FeedbackArtifactIDs), feedbackID)
 	next.InputArtifactIDs = specificationInputs(
 		request.InputArtifactIDs[0], specificationResearchArtifactIDs(request),
 		next.PriorSpecArtifactID, next.FeedbackArtifactIDs, request.AnswerArtifactIDs,
 	)
+	return next
+}
+
+// nextSpecificationRetryRequest repeats request as the next iteration after
+// its invocation ended failed, canceled, or lost. Every input stays as it
+// was, including the vector's stored order; only the identity advances and
+// the operator's reason is recorded.
+func nextSpecificationRetryRequest(request specificationRequest, reason string) specificationRequest {
+	next := request
+	next.Iteration++
+	next.InvocationID = specificationInvocationID(request.SpecificationRunID, next.Iteration)
+	next.InputArtifactIDs = slices.Clone(request.InputArtifactIDs)
+	next.FeedbackArtifactIDs = slices.Clone(request.FeedbackArtifactIDs)
+	next.AnswerArtifactIDs = slices.Clone(request.AnswerArtifactIDs)
+	next.RetryReason = reason
 	return next
 }
 
@@ -2061,6 +2091,10 @@ func verifySpecificationChain(
 	answers := []domain.ArtifactID{}
 	var priorSpec *domain.ArtifactID
 	var legacyPostRevisionResearch []domain.ArtifactID
+	// retryReason is the reason the preceding transition authorized for this
+	// iteration: empty except after a retry, so a reason no retry
+	// authorized is refused.
+	var retryReason string
 	var currentInvocation domain.AgentInvocation
 	// A revision run's root already carries the prior specification and feedback,
 	// authorized by verifyRevisionRoot in authenticateSpecificationRoot; seed the
@@ -2085,7 +2119,8 @@ func verifySpecificationChain(
 			!acceptsSpecificationInputOrder(request.InputArtifactIDs, expectedInputs, legacyPostRevisionResearch) ||
 			!sameArtifactID(request.PriorSpecArtifactID, priorSpec) ||
 			!slices.Equal(request.FeedbackArtifactIDs, feedback) ||
-			!slices.Equal(request.AnswerArtifactIDs, answers) {
+			!slices.Equal(request.AnswerArtifactIDs, answers) ||
+			request.RetryReason != retryReason {
 			return verifiedSpecificationBinding{}, fmt.Errorf(
 				"specification request %q is not authorized by its preceding transition: %w",
 				invocationID, domain.ErrParentKeyMismatch)
@@ -2118,6 +2153,7 @@ func verifySpecificationChain(
 		if err != nil {
 			return verifiedSpecificationBinding{}, err
 		}
+		retryReason = ""
 		if len(nextRequest.AnswerArtifactIDs) == len(answers)+1 &&
 			slices.Equal(nextRequest.AnswerArtifactIDs[:len(answers)], answers) {
 			answerID := nextRequest.AnswerArtifactIDs[len(answers)]
@@ -2138,6 +2174,16 @@ func verifySpecificationChain(
 		terminal, err := decodeSpecificationTerminal(terminalEntry)
 		if err != nil {
 			return verifiedSpecificationBinding{}, err
+		}
+		if terminal.InvocationID == invocationID && terminal.Iteration == iteration &&
+			retryableSpecificationStatus(terminal.Status) {
+			// The research, feedback, answers, and legacy order the failed
+			// request carried all stay as they were for its retry.
+			if err := authenticateSpecificationRetryTransition(ctx, tx, run, request, nextRequest); err != nil {
+				return verifiedSpecificationBinding{}, err
+			}
+			retryReason = nextRequest.RetryReason
+			continue
 		}
 		if terminal.InvocationID != invocationID || terminal.Iteration != iteration ||
 			terminal.Status != exec.StatusCompleted {
@@ -2791,6 +2837,7 @@ func (e *Engine) acceptResearchRequests(ctx context.Context, run domain.Run, req
 	next := request
 	next.Iteration++
 	next.InvocationID = specificationInvocationID(request.SpecificationRunID, next.Iteration)
+	next.RetryReason = ""
 	next.InputArtifactIDs = inputs
 	invocation, err := domain.NewAgentInvocation(next.InvocationID, inputs, nil, 0)
 	if err != nil {
@@ -3515,7 +3562,7 @@ func (e *Engine) recordSpecificationFailureWithCause(
 			return err
 		}
 		item, err := specificationFailureItem(run,
-			domain.ItemID("execution-failure-"+string(request.InvocationID)), status, summary,
+			specificationFailureItemID(request.InvocationID), status, summary,
 			createdAt, facts, interpretationFacts, names, claims)
 		if err != nil {
 			return err

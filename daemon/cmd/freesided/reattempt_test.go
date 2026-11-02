@@ -153,13 +153,20 @@ func TestReattemptTaskSelectsNewestCampaign(t *testing.T) {
 		t.Fatal(err)
 	}
 	// The new campaign has no implementation yet. Both selectors must refuse
-	// it, rather than falling back to the older campaign's live implementation.
+	// it, rather than falling back to the older campaign's live implementation:
+	// the campaign selector finds no implementation run, and the task selector
+	// tries the campaign's unapproved specification instead, which here has
+	// no failed invocation to retry.
 	cfg := reattemptCommandConfig{DBPath: dbPath, CampaignID: campaignID, Reason: "Repair the fixture"}
 	_, campaignErr := runReattemptCommand(t.Context(), cfg)
 	cfg.CampaignID, cfg.TaskID = "", parent.TaskID
 	_, taskErr := runReattemptCommand(t.Context(), cfg)
-	if !errors.Is(campaignErr, store.ErrNotFound) || !errors.Is(taskErr, store.ErrNotFound) || taskErr.Error() != campaignErr.Error() {
-		t.Fatalf("newest campaign errors: task=%v campaign=%v, want matching missing implementation", taskErr, campaignErr)
+	if !errors.Is(campaignErr, store.ErrNotFound) {
+		t.Fatalf("newest campaign error = %v, want missing implementation", campaignErr)
+	}
+	specificationID := domain.SpecificationRunIDForImplementation(implementationID)
+	if !errors.Is(taskErr, engine.ErrSpecificationNotRetryable) || !strings.Contains(taskErr.Error(), string(specificationID)) {
+		t.Fatalf("newest campaign task error = %v, want its specification run %q refused", taskErr, specificationID)
 	}
 }
 
