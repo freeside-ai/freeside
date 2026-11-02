@@ -50,6 +50,19 @@ implementation chose differently, and why.
 - **A pool with no usage record projects version 0 at the serving
   revision.** The enrollment generation isn't projected: no client decision
   reads it.
+- **Owner decision: the bootstrap's usage projection may read the pool
+  usage record.** #2486's containment test admits only allowlisted
+  readers, and the landing batch handed this PR back rather than widen
+  that list. Plan §5.4 says the record informs the account usage view in
+  the clients, and the projection decides nothing, so the owner chose to
+  allowlist `internal/signet/usage.go` over renaming the field and routing
+  the read through an allowlisted package, which would only dodge the
+  identifier check. `ListPoolUsageObservationSnapshots`, which this unit
+  adds, joins the reader set, so a caller anywhere else still fails it.
+- **Reused `HarnessClientKind` over a second enum schema.** #2492 landed
+  `HarnessClientKind` with the same values as this unit's `HarnessClient`,
+  so the enrollment's `harness_client` now refers to it. Two schemas for
+  one domain enum would give the generated client two distinct types.
 
 ## Deferred
 

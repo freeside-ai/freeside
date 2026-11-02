@@ -37,3 +37,36 @@ Acceptance stays pending until #1368 supplies bound quiescence evidence;
 cancellation state. The mock also stays pending unless a test explicitly seeds
 acknowledgement evidence. See [the plan](../docs/plan.md#59-durability-effectively-once)
 for admission/publication ordering, late results, and restart reconciliation.
+
+## Usage and Routing Command Contract
+
+The bootstrap carries `usage_pools`, each pool's usage record, and
+`routing_policy`, the current routing policy or null. Each record is written
+at a new revision, so the heartbeat sees it change. A pool with no record yet
+projects version 0 at the serving revision. Each window reading carries
+`stale_at`, the earlier of its reset and `observed_at` plus the daemon's
+refresh age.
+
+Four `/commands` kinds act on them. None carries `expected_entity_version` or
+`expected_bindings`. Each records an immutable receipt in the transaction that
+applies it, and an exact replay of its `command_id` returns that receipt and
+revision. A `command_id` names one command of any kind.
+
+- **`refresh_usage`** asks for a pool's usage to be read now. New readings
+  arrive in the pool's usage record, never in the receipt. An unknown pool is
+  404.
+- **`reassign_collector`** names the enrollment that reads a pool's usage. An
+  enrollment not on that pool is 400.
+- **`change_task_line`** sets one role's line on a task, as `freesided
+  task-line` does, or clears it when `agent` is null or omitted. The record
+  carries `recorded: false` when the role already had that line, and `line`,
+  the role's line afterwards or null when it has none. A role whose attempt
+  runs is 409 with the current task snapshot and sync epoch.
+- **`set_routing_policy`** replaces the whole policy, as `freesided routing
+  set` does. `expected_revision` is the revision the client saw, null or
+  omitted when it saw none. Any other current revision is 409 with the
+  current policy, so two operators can't overwrite each other. An agent
+  outside the daemon's agent tree is 400.
+
+Until #1720 wires the collection lifecycle, the daemon answers `refresh_usage`
+and `reassign_collector` with 500 and records nothing.
