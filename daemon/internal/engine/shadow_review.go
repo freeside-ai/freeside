@@ -401,13 +401,10 @@ func (w *productionPublicationWorkflow) abandonStartedShadowReview(
 	verifier exec.ReviewRequestAuthorityVerifier,
 	cause error,
 ) (bool, error) {
-	if usage := exec.ReviewSourceFailureUsage(cause); len(usage) > 0 {
-		if err := w.store.WriteInternal(ctx, func(tx *store.InternalTx) error {
-			_, err := tx.AppendUsageObservations(ctx, id, usage)
-			return err
-		}); err != nil {
-			return false, err
-		}
+	if err := appendUsageObservations(
+		ctx, w.store, id, exec.ReviewSourceFailureUsage(cause),
+	); err != nil {
+		return false, err
 	}
 	// The authority verifier's contract includes durable teardown before it
 	// rejects a mismatched authority. Use that existing source boundary to reap

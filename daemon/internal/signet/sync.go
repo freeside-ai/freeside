@@ -212,7 +212,9 @@ type Run struct {
 	Completion *WorkUnitCompletionFacts `json:"completion"`
 	// BillableCostSoFar is the run's render-only spend figure, computed the
 	// same way the attention cards compute theirs, or null before any
-	// billable observation.
+	// billable observation. Like the other facts runProjectionFactsFor reads
+	// from other rows, it refreshes with as_of_revision: a usage append raises
+	// the server revision and leaves this run's entity_version alone (#1145).
 	BillableCostSoFar *domain.CostSoFar `json:"billable_cost_so_far"`
 }
 
