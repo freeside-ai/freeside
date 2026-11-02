@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/freeside-ai/freeside/daemon/internal/publish"
+	"github.com/freeside-ai/freeside/daemon/internal/strayrequest"
 )
 
 // grantReadExpiry is the expiry the grant-read mint body declares, one hour
@@ -47,7 +48,7 @@ func newMintAuditJanitor(
 // granted (issue #545 acceptance 1).
 func TestInstallationJanitorAuditsEveryMint(t *testing.T) {
 	t.Parallel()
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	srv := httptest.NewServer(strayrequest.Ignore(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if handleExactGrant(w, r, fixtureRepositoryID) {
 			return
 		}
@@ -58,7 +59,7 @@ func TestInstallationJanitorAuditsEveryMint(t *testing.T) {
 		default:
 			t.Errorf("unexpected request %s %s", r.Method, r.URL.Path)
 		}
-	}))
+	})))
 	defer srv.Close()
 
 	mintRec := &captureMintRecorder{}
@@ -100,7 +101,7 @@ func TestInstallationJanitorAuditsEveryMint(t *testing.T) {
 // (janitor.go's unrevoked-token path).
 func TestInstallationJanitorAuditsMintBeforeFailedRevoke(t *testing.T) {
 	t.Parallel()
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	srv := httptest.NewServer(strayrequest.Ignore(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch {
 		case r.Method == http.MethodGet && r.URL.Path == "/app/installations":
 			_, _ = io.WriteString(w,
@@ -116,7 +117,7 @@ func TestInstallationJanitorAuditsMintBeforeFailedRevoke(t *testing.T) {
 		default:
 			t.Errorf("unexpected request %s %s", r.Method, r.URL.Path)
 		}
-	}))
+	})))
 	defer srv.Close()
 
 	mintRec := &captureMintRecorder{}
@@ -153,7 +154,7 @@ func TestInstallationJanitorAuditsMintBeforeFailedRevoke(t *testing.T) {
 func TestInstallationJanitorAuditsRejectedMintBeforeFailedRevoke(t *testing.T) {
 	t.Parallel()
 	listed := 0
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	srv := httptest.NewServer(strayrequest.Ignore(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch {
 		case r.Method == http.MethodGet && r.URL.Path == "/app/installations":
 			_, _ = io.WriteString(w,
@@ -173,7 +174,7 @@ func TestInstallationJanitorAuditsRejectedMintBeforeFailedRevoke(t *testing.T) {
 		default:
 			t.Errorf("unexpected request %s %s", r.Method, r.URL.Path)
 		}
-	}))
+	})))
 	defer srv.Close()
 
 	mintRec := &captureMintRecorder{}
@@ -221,7 +222,7 @@ func TestInstallationJanitorMintAuditFailureBlocksTokenUse(t *testing.T) {
 	t.Parallel()
 	listed := 0
 	revokes := 0
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	srv := httptest.NewServer(strayrequest.Ignore(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch {
 		case r.Method == http.MethodGet && r.URL.Path == "/app/installations":
 			_, _ = io.WriteString(w,
@@ -238,7 +239,7 @@ func TestInstallationJanitorMintAuditFailureBlocksTokenUse(t *testing.T) {
 		default:
 			t.Errorf("unexpected request %s %s", r.Method, r.URL.Path)
 		}
-	}))
+	})))
 	defer srv.Close()
 
 	auditErr := errors.New("audit ledger unavailable")

@@ -12,6 +12,7 @@ import (
 
 	"github.com/freeside-ai/freeside/daemon/internal/domain"
 	"github.com/freeside-ai/freeside/daemon/internal/publish"
+	"github.com/freeside-ai/freeside/daemon/internal/strayrequest"
 )
 
 const (
@@ -27,7 +28,7 @@ type auditResponse struct {
 func auditWithResponses(t *testing.T, responses map[string]auditResponse) (domain.WorkflowAudit, error) {
 	t.Helper()
 	fixture := &auditFixtureServer{t: t}
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	server := httptest.NewServer(strayrequest.Ignore(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		response, ok := responses[r.URL.RequestURI()]
 		if !ok {
 			response, ok = responses[r.URL.Path]
@@ -39,7 +40,7 @@ func auditWithResponses(t *testing.T, responses map[string]auditResponse) (domai
 			return
 		}
 		fixture.handler(w, r)
-	}))
+	})))
 	t.Cleanup(server.Close)
 	auditor, err := publish.NewGitHubWorkflowAuditor(testTokenSource(), server.Client(), server.URL, func() time.Time {
 		return time.Date(2026, 9, 10, 4, 0, 0, 0, time.UTC)

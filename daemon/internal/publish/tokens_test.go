@@ -16,6 +16,7 @@ import (
 	"github.com/freeside-ai/freeside/daemon/internal/domain"
 	"github.com/freeside-ai/freeside/daemon/internal/publish"
 	"github.com/freeside-ai/freeside/daemon/internal/store"
+	"github.com/freeside-ai/freeside/daemon/internal/strayrequest"
 )
 
 func TestFollowUpFilingTokenSourceScopesCacheAndAudit(t *testing.T) {
@@ -127,7 +128,7 @@ func TestFollowUpFilingTokenSourceRejectsDifferentGrants(t *testing.T) {
 func TestFollowUpFilingTokenSourceRevalidatesInstallationBeforeCacheHit(t *testing.T) {
 	t.Parallel()
 	discoveries, mints := 0, 0
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	srv := httptest.NewServer(strayrequest.Ignore(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Method == http.MethodGet && r.URL.Path == "/app/installations" {
 			discoveries++
 			if discoveries == 1 {
@@ -139,7 +140,7 @@ func TestFollowUpFilingTokenSourceRevalidatesInstallationBeforeCacheHit(t *testi
 		}
 		mints++
 		writeFilingTokenResponse(t, w, map[string]string{"issues": "write", "metadata": "read"})
-	}))
+	})))
 	defer srv.Close()
 	m := newCoveredMinter(newRegisteredKeystore(t), srv.Client(), srv.URL, &captureRecorder{}, conformantTrust(t), fixedNow)
 	source := publish.NewFollowUpFilingTokenSource(m, fixedNow)
@@ -234,7 +235,7 @@ func TestIssueReadTokenSourceRejectsDifferentGrants(t *testing.T) {
 func TestIssueReadTokenSourceRevalidatesInstallationBeforeCacheHit(t *testing.T) {
 	t.Parallel()
 	discoveries, mints := 0, 0
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	srv := httptest.NewServer(strayrequest.Ignore(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Method == http.MethodGet && r.URL.Path == "/app/installations" {
 			discoveries++
 			if discoveries == 1 {
@@ -246,7 +247,7 @@ func TestIssueReadTokenSourceRevalidatesInstallationBeforeCacheHit(t *testing.T)
 		}
 		mints++
 		writeFilingTokenResponse(t, w, issueReadGrant)
-	}))
+	})))
 	defer srv.Close()
 	m := newCoveredMinter(newRegisteredKeystore(t), srv.Client(), srv.URL, &captureRecorder{}, conformantTrust(t), fixedNow)
 	source := publish.NewIssueReadTokenSource(m, fixedNow)
@@ -337,7 +338,7 @@ func TestCachedTokenSourceRevalidatesInstallationBeforeCacheHit(t *testing.T) {
 	t.Parallel()
 	discoveries := 0
 	mints := 0
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	srv := httptest.NewServer(strayrequest.Ignore(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Method == http.MethodGet && r.URL.Path == "/app/installations" {
 			discoveries++
 			if discoveries == 1 {
@@ -352,7 +353,7 @@ func TestCachedTokenSourceRevalidatesInstallationBeforeCacheHit(t *testing.T) {
 		w.WriteHeader(http.StatusCreated)
 		fixture, _ := os.ReadFile(filepath.Join("testdata", "token-response.json"))
 		_, _ = w.Write(fixture)
-	}))
+	})))
 	defer srv.Close()
 
 	m := newCoveredMinter(newRegisteredKeystore(t), srv.Client(), srv.URL, &captureRecorder{}, conformantTrust(t), fixedNow)
@@ -410,7 +411,7 @@ func TestCachedTokenSourceIsolatesRegistrations(t *testing.T) {
 		t.Fatal(err)
 	}
 	mints := map[string]int{}
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	srv := httptest.NewServer(strayrequest.Ignore(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		auth := r.Header.Get("Authorization")
 		if r.Method == http.MethodGet && r.URL.Path == "/app/installations" {
 			switch auth {
@@ -432,7 +433,7 @@ func TestCachedTokenSourceIsolatesRegistrations(t *testing.T) {
 			fixture = bytes.Replace(fixture, []byte(`"id": 990011`), []byte(`"id": 990012`), 1)
 		}
 		_, _ = w.Write(fixture)
-	}))
+	})))
 	defer srv.Close()
 
 	firstProfile := trustProfileForRepo(t, testTrustRepo)

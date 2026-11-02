@@ -17,6 +17,7 @@ import (
 	"github.com/freeside-ai/freeside/daemon/internal/gitenv"
 	"github.com/freeside-ai/freeside/daemon/internal/importer"
 	"github.com/freeside-ai/freeside/daemon/internal/publish"
+	"github.com/freeside-ai/freeside/daemon/internal/strayrequest"
 )
 
 // This is the composition the issue #168 evidence found missing: no merged
@@ -294,10 +295,10 @@ func TestImportFindingsBlockPublication(t *testing.T) {
 
 	// A forge that fails the test on any request: an authorized-refusal must
 	// touch nothing.
-	forge := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	forge := httptest.NewServer(strayrequest.Ignore(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		t.Errorf("forge received %s %s: unauthorized candidate reached an external effect", r.Method, r.URL.Path)
 		http.Error(w, "must not be called", http.StatusTeapot)
-	}))
+	})))
 	t.Cleanup(forge.Close)
 
 	pub := publish.NewPublisher(

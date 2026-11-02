@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/freeside-ai/freeside/daemon/internal/publish"
+	"github.com/freeside-ai/freeside/daemon/internal/strayrequest"
 )
 
 // coveredJanitorStatus reports coverage per registration, the state a real
@@ -54,7 +55,7 @@ func twoRegistrationForge(t *testing.T) (*publish.Keystore, *httptest.Server, fu
 	ks := twoRegistrationKeystore(t)
 	var mu sync.Mutex
 	contacted := map[int64]int{}
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	srv := httptest.NewServer(strayrequest.Ignore(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodGet || r.URL.Path != "/app/installations" {
 			t.Errorf("unexpected request %s %s", r.Method, r.URL.Path)
 			return
@@ -68,7 +69,7 @@ func twoRegistrationForge(t *testing.T) (*publish.Keystore, *httptest.Server, fu
 			return
 		}
 		_, _ = io.WriteString(w, operatorInstallations)
-	}))
+	})))
 	t.Cleanup(srv.Close)
 	return ks, srv, func(registrationID int64) int {
 		mu.Lock()
@@ -196,9 +197,9 @@ func TestMintNamesEveryCompletedPassWithdrawal(t *testing.T) {
 		t.Run(test.name, func(t *testing.T) {
 			t.Parallel()
 			ks := newRegisteredKeystore(t)
-			forge := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			forge := httptest.NewServer(strayrequest.Ignore(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 				t.Errorf("unexpected request %s %s", r.Method, r.URL.Path)
-			}))
+			})))
 			defer forge.Close()
 			test.status.covered = map[int64]bool{}
 			minter := publish.NewMinterWithJanitor(
@@ -227,7 +228,7 @@ func TestMintNamesEveryCompletedPassWithdrawal(t *testing.T) {
 func TestResolutionSurvivesARealJanitorFault(t *testing.T) {
 	t.Parallel()
 	ks := twoRegistrationKeystore(t)
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	srv := httptest.NewServer(strayrequest.Ignore(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Method == http.MethodGet && r.URL.Path == "/app/installations" {
 			if requestingRegistration(t, r) == 601 {
 				_, _ = io.WriteString(w, partnerInstallations)
@@ -239,7 +240,7 @@ func TestResolutionSurvivesARealJanitorFault(t *testing.T) {
 		if !handleExactGrant(w, r, fixtureRepositoryID) {
 			t.Errorf("unexpected request %s %s", r.Method, r.URL.Path)
 		}
-	}))
+	})))
 	defer srv.Close()
 
 	// The onboarding order #276 describes: the keystore record for 601 exists
@@ -317,7 +318,7 @@ func TestResolutionDeniesAnAmbiguousMatchWithOneInactiveRegistration(t *testing.
 			if err != nil {
 				t.Fatal(err)
 			}
-			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			srv := httptest.NewServer(strayrequest.Ignore(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 				switch r.Header.Get("Authorization") {
 				case "Bearer " + firstJWT.Reveal():
 					_, _ = io.WriteString(w,
@@ -328,7 +329,7 @@ func TestResolutionDeniesAnAmbiguousMatchWithOneInactiveRegistration(t *testing.
 				default:
 					t.Error("unexpected registration JWT")
 				}
-			}))
+			})))
 			defer srv.Close()
 
 			resolver := publish.NewInstallationResolverWithJanitor(

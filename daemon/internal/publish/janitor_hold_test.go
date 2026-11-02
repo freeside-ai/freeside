@@ -18,6 +18,7 @@ import (
 	"github.com/freeside-ai/freeside/daemon/internal/publish"
 	"github.com/freeside-ai/freeside/daemon/internal/store"
 	"github.com/freeside-ai/freeside/daemon/internal/store/storetest"
+	"github.com/freeside-ai/freeside/daemon/internal/strayrequest"
 )
 
 // The forge records credential effects in order and uses the same injected
@@ -120,7 +121,7 @@ func newHoldFixture(t *testing.T, f *heldTokenForge) *holdFixture {
 	if err != nil {
 		t.Fatal(err)
 	}
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { f.serve(t, w, r) }))
+	srv := httptest.NewServer(strayrequest.Ignore(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { f.serve(t, w, r) })))
 	t.Cleanup(srv.Close)
 	return &holdFixture{
 		forge: f, ks: twoRegistrationKeystore(t), srv: srv,
@@ -332,7 +333,7 @@ func TestJanitorMintRefusalReleasesHold(t *testing.T) {
 
 func memoryHoldJanitor(t *testing.T, f *heldTokenForge, holds *memoryMintHolds) *publish.InstallationJanitor {
 	t.Helper()
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { f.serve(t, w, r) }))
+	srv := httptest.NewServer(strayrequest.Ignore(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { f.serve(t, w, r) })))
 	t.Cleanup(srv.Close)
 	j, err := publish.NewInstallationJanitor(twoRegistrationKeystore(t), srv.Client(), srv.URL,
 		twoRegistrationAuthority(), &removalRecorder{}, &captureMintRecorder{}, holds, f.clock, 4)
@@ -388,7 +389,7 @@ func TestJanitorCanceledBeforeMintReleasesHold(t *testing.T) {
 	f := &heldTokenForge{now: fixedNow()}
 	ctx, cancel := context.WithCancel(t.Context())
 	holds := &cancelOnRecordHolds{memoryMintHolds: newMemoryMintHolds(), cancel: cancel}
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { f.serve(t, w, r) }))
+	srv := httptest.NewServer(strayrequest.Ignore(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { f.serve(t, w, r) })))
 	t.Cleanup(srv.Close)
 	j, err := publish.NewInstallationJanitor(twoRegistrationKeystore(t), srv.Client(), srv.URL,
 		twoRegistrationAuthority(), &removalRecorder{}, &captureMintRecorder{}, holds, f.clock, 4)
@@ -427,7 +428,7 @@ func (c *cancelOnRecordHolds) RecordInstallationMintHold(hold publish.Installati
 func TestJanitorCanceledAtMintDispatchFinishesRequest(t *testing.T) {
 	f := &heldTokenForge{now: fixedNow()}
 	ctx, cancel := context.WithCancel(t.Context())
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { f.serve(t, w, r) }))
+	srv := httptest.NewServer(strayrequest.Ignore(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { f.serve(t, w, r) })))
 	t.Cleanup(srv.Close)
 	client := srv.Client()
 	client.Transport = cancelAtMintTransport{next: client.Transport, cancel: cancel}

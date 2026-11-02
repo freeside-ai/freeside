@@ -14,6 +14,7 @@ import (
 	"github.com/freeside-ai/freeside/daemon/internal/engine"
 	"github.com/freeside-ai/freeside/daemon/internal/publish"
 	"github.com/freeside-ai/freeside/daemon/internal/store"
+	"github.com/freeside-ai/freeside/daemon/internal/strayrequest"
 )
 
 func TestExternalReviewPerFindingAcceptance(t *testing.T) {
@@ -64,7 +65,7 @@ func TestExternalReviewPerFindingAcceptance(t *testing.T) {
 	// the dispute is still open, using a local forge fixture.
 	posts := 0
 	var server *httptest.Server
-	server = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	server = httptest.NewServer(strayrequest.Ignore(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		if r.Method == http.MethodGet {
 			_, _ = w.Write([]byte("[]"))
@@ -85,7 +86,7 @@ func TestExternalReviewPerFindingAcceptance(t *testing.T) {
 		posts++
 		w.WriteHeader(http.StatusCreated)
 		_ = json.NewEncoder(w).Encode(map[string]any{"id": 901, "user": map[string]any{"id": 7001, "type": "Bot"}, "in_reply_to_id": 1, "created_at": p.now.Format(time.RFC3339), "pull_request_url": fmt.Sprintf("%s/repos/%s/pulls/%d", server.URL, p.profile.Repo, pr.Number)})
-	}))
+	})))
 	t.Cleanup(server.Close)
 	replier, err := publish.NewExternalReviewReplier(p.store, integrationTokenSource(), server.Client(), server.URL, externalDecisionIdentity{}, func() time.Time { return p.now })
 	if err != nil {

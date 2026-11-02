@@ -15,6 +15,7 @@ import (
 
 	"github.com/freeside-ai/freeside/daemon/internal/domain"
 	"github.com/freeside-ai/freeside/daemon/internal/publish"
+	"github.com/freeside-ai/freeside/daemon/internal/strayrequest"
 )
 
 // supervisionJanitorPorts keeps mint holds in memory: these tests exercise
@@ -87,7 +88,7 @@ func TestScheduledJanitorCredentialFailures(t *testing.T) {
 			}); err != nil {
 				t.Fatal(err)
 			}
-			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			srv := httptest.NewServer(strayrequest.Ignore(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 				switch r.URL.Path {
 				case "/app/installations":
 					_, _ = io.WriteString(w, `[{"id":777,"app_id":91,"target_id":42,"repository_selection":"selected","account":{"login":"example","id":42}}]`)
@@ -113,7 +114,7 @@ func TestScheduledJanitorCredentialFailures(t *testing.T) {
 				default:
 					t.Errorf("unexpected request %s", r.URL.Path)
 				}
-			}))
+			})))
 			defer srv.Close()
 			ports := &supervisionJanitorPorts{}
 			j, err := publish.NewInstallationJanitor(ks, srv.Client(), srv.URL, ports, ports, ports, ports, func() time.Time { return now }, 4)

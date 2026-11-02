@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/freeside-ai/freeside/daemon/internal/publish"
+	"github.com/freeside-ai/freeside/daemon/internal/strayrequest"
 )
 
 func TestAuthorityInspectionTokenSourceUsesDurableReadOnlyAuthority(t *testing.T) {
@@ -26,7 +27,7 @@ func TestAuthorityInspectionTokenSourceUsesDurableReadOnlyAuthority(t *testing.T
 	}}
 	readOnly := publish.Permissions{Contents: "read", Metadata: "read"}
 	requests := 0
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	server := httptest.NewServer(strayrequest.Ignore(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		requests++
 		if r.Method != http.MethodPost || r.URL.Path != "/app/installations/777/access_tokens" {
 			t.Errorf("mint request = %s %s", r.Method, r.URL.Path)
@@ -50,7 +51,7 @@ func TestAuthorityInspectionTokenSourceUsesDurableReadOnlyAuthority(t *testing.T
 			"repository_selection":"selected",
 			"repositories":[{"id":990011,"name":"evidence-repo"}]
 		}`)
-	}))
+	})))
 	defer server.Close()
 
 	recorder := &captureRecorder{}

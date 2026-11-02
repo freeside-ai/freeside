@@ -40,6 +40,7 @@ import (
 	"github.com/freeside-ai/freeside/daemon/internal/export"
 	"github.com/freeside-ai/freeside/daemon/internal/gitenv"
 	"github.com/freeside-ai/freeside/daemon/internal/importer"
+	"github.com/freeside-ai/freeside/daemon/internal/strayrequest"
 )
 
 // liveImage is the spike's pinned agent/base image: alpine 3.22, by digest.
@@ -169,9 +170,9 @@ func startLiveFreesided(t *testing.T) *liveFreesided {
 		t.Fatalf("build freesided listener fixture: %v\n%s", err, output)
 	}
 
-	ntfy := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+	ntfy := httptest.NewServer(strayrequest.Ignore(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusOK)
-	}))
+	})))
 	t.Cleanup(ntfy.Close)
 	root := t.TempDir()
 	cmd := osexec.Command(binary, //nolint:gosec // test-built binary with fixed arguments

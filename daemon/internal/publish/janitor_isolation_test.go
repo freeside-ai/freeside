@@ -17,6 +17,7 @@ import (
 	"time"
 
 	"github.com/freeside-ai/freeside/daemon/internal/publish"
+	"github.com/freeside-ai/freeside/daemon/internal/strayrequest"
 )
 
 // errAuthorityUnavailable stands in for the state-directory authority store's
@@ -228,7 +229,7 @@ func assertShutdown(t *testing.T, cancel context.CancelFunc, done <-chan error) 
 func TestInstallationJanitorIsolatesAnAuthorityFailure(t *testing.T) {
 	t.Parallel()
 	ks := twoRegistrationKeystore(t)
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	srv := httptest.NewServer(strayrequest.Ignore(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Method == http.MethodGet && r.URL.Path == "/app/installations" {
 			if requestingRegistration(t, r) == 501 {
 				_, _ = io.WriteString(w, operatorInstallations)
@@ -240,7 +241,7 @@ func TestInstallationJanitorIsolatesAnAuthorityFailure(t *testing.T) {
 		if !handleExactGrant(w, r, fixtureRepositoryID) {
 			t.Errorf("unexpected request %s %s", r.Method, r.URL.Path)
 		}
-	}))
+	})))
 	defer srv.Close()
 
 	authority := &faultyAuthoritySource{
@@ -281,7 +282,7 @@ func TestInstallationJanitorIsolatesAnAuthorityFailure(t *testing.T) {
 func TestInstallationJanitorIsolatesAReconcileFailure(t *testing.T) {
 	t.Parallel()
 	ks := twoRegistrationKeystore(t)
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	srv := httptest.NewServer(strayrequest.Ignore(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Method == http.MethodGet && r.URL.Path == "/app/installations" {
 			if requestingRegistration(t, r) == 501 {
 				_, _ = io.WriteString(w, operatorInstallations)
@@ -293,7 +294,7 @@ func TestInstallationJanitorIsolatesAReconcileFailure(t *testing.T) {
 		if !handleExactGrant(w, r, fixtureRepositoryID) {
 			t.Errorf("unexpected request %s %s", r.Method, r.URL.Path)
 		}
-	}))
+	})))
 	defer srv.Close()
 
 	janitor := newJanitor(t, ks, srv, twoRegistrationAuthority(), &removalRecorder{}, 4)
@@ -321,7 +322,7 @@ func TestInstallationJanitorIsolatesAReconcileFailure(t *testing.T) {
 func TestInstallationJanitorRecoversWhenAnAuthorityFaultClears(t *testing.T) {
 	t.Parallel()
 	ks := twoRegistrationKeystore(t)
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	srv := httptest.NewServer(strayrequest.Ignore(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Method == http.MethodGet && r.URL.Path == "/app/installations" {
 			if requestingRegistration(t, r) == 501 {
 				_, _ = io.WriteString(w, operatorInstallations)
@@ -333,7 +334,7 @@ func TestInstallationJanitorRecoversWhenAnAuthorityFaultClears(t *testing.T) {
 		if !handleExactGrant(w, r, fixtureRepositoryID) {
 			t.Errorf("unexpected request %s %s", r.Method, r.URL.Path)
 		}
-	}))
+	})))
 	defer srv.Close()
 
 	authority := &faultyAuthoritySource{
@@ -367,9 +368,9 @@ func TestInstallationJanitorStopsOnAKeystoreFailure(t *testing.T) {
 	if err := os.Mkdir(filepath.Join(ks.Dir(), "github-app", "not-an-owner"), 0o700); err != nil {
 		t.Fatal(err)
 	}
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	srv := httptest.NewServer(strayrequest.Ignore(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		t.Errorf("unexpected request %s %s", r.Method, r.URL.Path)
-	}))
+	})))
 	defer srv.Close()
 
 	janitor := newJanitor(t, ks, srv, twoRegistrationAuthority(), &removalRecorder{}, 4)
@@ -396,7 +397,7 @@ func TestInstallationJanitorStopsOnAKeystoreFailure(t *testing.T) {
 func TestInstallationJanitorRemovalDoesNotDenyASibling(t *testing.T) {
 	t.Parallel()
 	ks := twoRegistrationKeystore(t)
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	srv := httptest.NewServer(strayrequest.Ignore(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch {
 		case r.Method == http.MethodGet && r.URL.Path == "/app/installations":
 			if requestingRegistration(t, r) == 601 {
@@ -416,7 +417,7 @@ func TestInstallationJanitorRemovalDoesNotDenyASibling(t *testing.T) {
 				t.Errorf("unexpected request %s %s", r.Method, r.URL.Path)
 			}
 		}
-	}))
+	})))
 	defer srv.Close()
 
 	recorder := &removalRecorder{}
@@ -463,7 +464,7 @@ func TestInstallationJanitorPreservesSkippedRemovalChurn(t *testing.T) {
 	releaseFourth501 := make(chan struct{})
 	var callsMu sync.Mutex
 	calls := map[int64]int{}
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	srv := httptest.NewServer(strayrequest.Ignore(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Method == http.MethodGet && r.URL.Path == "/app/installations" {
 			registrationID := requestingRegistration(t, r)
 			callsMu.Lock()
@@ -508,7 +509,7 @@ func TestInstallationJanitorPreservesSkippedRemovalChurn(t *testing.T) {
 		if !handleExactGrant(w, r, fixtureRepositoryID) {
 			t.Errorf("unexpected request %s %s", r.Method, r.URL.Path)
 		}
-	}))
+	})))
 	defer srv.Close()
 
 	janitor := newJanitor(t, ks, srv, twoRegistrationAuthority(), &removalRecorder{}, 1)
@@ -558,7 +559,7 @@ func TestInstallationJanitorPreservesSkippedRemovalChurn(t *testing.T) {
 func TestInstallationJanitorStopsOnAnAuditBarrierFailure(t *testing.T) {
 	t.Parallel()
 	ks := twoRegistrationKeystore(t)
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	srv := httptest.NewServer(strayrequest.Ignore(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Method == http.MethodGet && r.URL.Path == "/app/installations" {
 			if requestingRegistration(t, r) == 601 {
 				_, _ = io.WriteString(w, partnerInstallations)
@@ -573,7 +574,7 @@ func TestInstallationJanitorStopsOnAnAuditBarrierFailure(t *testing.T) {
 		if !handleExactGrant(w, r, fixtureRepositoryID) {
 			t.Errorf("unexpected request %s %s", r.Method, r.URL.Path)
 		}
-	}))
+	})))
 	defer srv.Close()
 
 	recorder := &removalRecorder{err: errors.New("journal: no space left on device")}
@@ -593,7 +594,7 @@ func TestInstallationJanitorStopsOnAnUnrevokedToken(t *testing.T) {
 	ks := twoRegistrationKeystore(t)
 	var mintsMu sync.Mutex
 	mints := 0
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	srv := httptest.NewServer(strayrequest.Ignore(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch {
 		case r.Method == http.MethodGet && r.URL.Path == "/app/installations":
 			if requestingRegistration(t, r) == 601 {
@@ -614,7 +615,7 @@ func TestInstallationJanitorStopsOnAnUnrevokedToken(t *testing.T) {
 		default:
 			t.Errorf("unexpected request %s %s", r.Method, r.URL.Path)
 		}
-	}))
+	})))
 	defer srv.Close()
 
 	janitor := newJanitor(t, ks, srv, twoRegistrationAuthority(), &removalRecorder{}, 4)
@@ -677,7 +678,7 @@ func TestInstallationJanitorStopsOnAnUnaccountableMint(t *testing.T) {
 			ks := publicJanitorKeystore(t)
 			var mintsMu sync.Mutex
 			mints := 0
-			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			srv := httptest.NewServer(strayrequest.Ignore(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 				switch {
 				case r.Method == http.MethodGet && r.URL.Path == "/app/installations":
 					_, _ = io.WriteString(w, operatorInstallations)
@@ -703,7 +704,7 @@ func TestInstallationJanitorStopsOnAnUnaccountableMint(t *testing.T) {
 				default:
 					t.Errorf("unexpected request %s %s", r.Method, r.URL.Path)
 				}
-			}))
+			})))
 			defer srv.Close()
 
 			janitor := newJanitor(t, ks, srv, trustedPublicBinding(fixtureRepositoryID), &removalRecorder{}, 4)
@@ -739,7 +740,7 @@ func TestInstallationJanitorBoundsDestructiveAttempts(t *testing.T) {
 	ks := twoRegistrationKeystore(t)
 	var effectsMu sync.Mutex
 	var suspends []string
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	srv := httptest.NewServer(strayrequest.Ignore(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch {
 		case r.Method == http.MethodGet && r.URL.Path == "/app/installations":
 			// Each registration's own trusted installation drifts its
@@ -761,7 +762,7 @@ func TestInstallationJanitorBoundsDestructiveAttempts(t *testing.T) {
 		default:
 			t.Errorf("unexpected request %s %s", r.Method, r.URL.Path)
 		}
-	}))
+	})))
 	defer srv.Close()
 
 	janitor := newJanitor(t, ks, srv, twoRegistrationAuthority(), &removalRecorder{}, 1)
@@ -789,7 +790,7 @@ func TestInstallationJanitorWithdrawsCoverageFromADuplicatedRegistration(t *test
 	ks := newTestKeystore(t)
 	saveResolverApp(t, ks, "operator", 101, 501, publish.AppVisibilityPublic)
 	saveResolverApp(t, ks, "partner", 202, 501, publish.AppVisibilityPublic)
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	srv := httptest.NewServer(strayrequest.Ignore(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Method == http.MethodGet && r.URL.Path == "/app/installations" {
 			_, _ = io.WriteString(w, operatorInstallations)
 			return
@@ -797,7 +798,7 @@ func TestInstallationJanitorWithdrawsCoverageFromADuplicatedRegistration(t *test
 		if !handleExactGrant(w, r, fixtureRepositoryID) {
 			t.Errorf("unexpected request %s %s", r.Method, r.URL.Path)
 		}
-	}))
+	})))
 	defer srv.Close()
 
 	janitor := newJanitor(t, ks, srv, twoRegistrationAuthority(), &removalRecorder{}, 4)
@@ -838,7 +839,7 @@ func TestInstallationJanitorWithdrawsChurningCoverageFromADuplicatedRegistration
 	}
 	var callsMu sync.Mutex
 	calls := 0
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	srv := httptest.NewServer(strayrequest.Ignore(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Method == http.MethodGet && r.URL.Path == "/app/installations" {
 			callsMu.Lock()
 			calls++
@@ -861,7 +862,7 @@ func TestInstallationJanitorWithdrawsChurningCoverageFromADuplicatedRegistration
 		if !handleExactGrant(w, r, fixtureRepositoryID) {
 			t.Errorf("unexpected request %s %s", r.Method, r.URL.Path)
 		}
-	}))
+	})))
 	defer srv.Close()
 
 	janitor := newJanitor(t, ks, srv, authority, &removalRecorder{}, 4)
@@ -949,7 +950,7 @@ func testInstallationJanitorWithdrawsIncompleteDuplicateCoverage(
 	}
 	var callsMu sync.Mutex
 	calls501 := 0
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	srv := httptest.NewServer(strayrequest.Ignore(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Method == http.MethodGet && r.URL.Path == "/app/installations" {
 			switch requestingRegistration(t, r) {
 			case 501:
@@ -974,7 +975,7 @@ func testInstallationJanitorWithdrawsIncompleteDuplicateCoverage(
 		if !handleExactGrant(w, r, fixtureRepositoryID) {
 			t.Errorf("unexpected request %s %s", r.Method, r.URL.Path)
 		}
-	}))
+	})))
 	defer srv.Close()
 
 	janitor := newJanitor(t, ks, srv, authority, &removalRecorder{}, 1)
@@ -1015,7 +1016,7 @@ func TestInstallationJanitorFaultsOutliveTheGateTheyExplain(t *testing.T) {
 	release := make(chan struct{})
 	var callsMu sync.Mutex
 	calls := 0
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	srv := httptest.NewServer(strayrequest.Ignore(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Method == http.MethodGet && r.URL.Path == "/app/installations" {
 			callsMu.Lock()
 			calls++
@@ -1031,7 +1032,7 @@ func TestInstallationJanitorFaultsOutliveTheGateTheyExplain(t *testing.T) {
 		if !handleExactGrant(w, r, fixtureRepositoryID) {
 			t.Errorf("unexpected request %s %s", r.Method, r.URL.Path)
 		}
-	}))
+	})))
 	defer srv.Close()
 
 	authority := &faultyAuthoritySource{
@@ -1098,7 +1099,7 @@ func TestResolverWaitsForScheduledPassPublication(t *testing.T) {
 	release := make(chan struct{})
 	var callsMu sync.Mutex
 	calls := 0
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	srv := httptest.NewServer(strayrequest.Ignore(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Method == http.MethodGet && r.URL.Path == "/app/installations" {
 			callsMu.Lock()
 			calls++
@@ -1114,7 +1115,7 @@ func TestResolverWaitsForScheduledPassPublication(t *testing.T) {
 		if !handleExactGrant(w, r, fixtureRepositoryID) {
 			t.Errorf("unexpected request %s %s", r.Method, r.URL.Path)
 		}
-	}))
+	})))
 	defer srv.Close()
 
 	janitor := newJanitor(
@@ -1174,7 +1175,7 @@ func TestScheduledJanitorRecoversCoverageAfterDriftClears(t *testing.T) {
 	ks := publicJanitorKeystore(t)
 	var callsMu sync.Mutex
 	calls := 0
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	srv := httptest.NewServer(strayrequest.Ignore(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch {
 		case r.Method == http.MethodGet && r.URL.Path == "/app/installations":
 			callsMu.Lock()
@@ -1199,7 +1200,7 @@ func TestScheduledJanitorRecoversCoverageAfterDriftClears(t *testing.T) {
 				t.Errorf("unexpected request %s %s", r.Method, r.URL.Path)
 			}
 		}
-	}))
+	})))
 	defer srv.Close()
 	janitor := newJanitor(
 		t, ks, srv,
@@ -1244,9 +1245,9 @@ func TestScheduledJanitorRecoversCoverageAfterDriftClears(t *testing.T) {
 func TestInstallationJanitorOrdersFaultsAndReportsCancellation(t *testing.T) {
 	t.Parallel()
 	ks := twoRegistrationKeystore(t)
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	srv := httptest.NewServer(strayrequest.Ignore(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		t.Errorf("unexpected request %s %s", r.Method, r.URL.Path)
-	}))
+	})))
 	defer srv.Close()
 
 	authority := &faultyAuthoritySource{
@@ -1284,7 +1285,7 @@ func TestInstallationJanitorRemovalLimitStopsThePass(t *testing.T) {
 	ks := twoRegistrationKeystore(t)
 	examined := map[int64]int{}
 	var examinedMu sync.Mutex
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	srv := httptest.NewServer(strayrequest.Ignore(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch {
 		case r.Method == http.MethodGet && r.URL.Path == "/app/installations":
 			registrationID := requestingRegistration(t, r)
@@ -1308,7 +1309,7 @@ func TestInstallationJanitorRemovalLimitStopsThePass(t *testing.T) {
 				t.Errorf("unexpected request %s %s", r.Method, r.URL.Path)
 			}
 		}
-	}))
+	})))
 	defer srv.Close()
 
 	recorder := &removalRecorder{}
@@ -1335,7 +1336,7 @@ func TestInstallationJanitorFailedAttemptLimitStopsThePass(t *testing.T) {
 	ks := twoRegistrationKeystore(t)
 	examined := map[int64]int{}
 	var examinedMu sync.Mutex
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	srv := httptest.NewServer(strayrequest.Ignore(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch {
 		case r.Method == http.MethodGet && r.URL.Path == "/app/installations":
 			registrationID := requestingRegistration(t, r)
@@ -1360,7 +1361,7 @@ func TestInstallationJanitorFailedAttemptLimitStopsThePass(t *testing.T) {
 				t.Errorf("unexpected request %s %s", r.Method, r.URL.Path)
 			}
 		}
-	}))
+	})))
 	defer srv.Close()
 
 	janitor := newJanitor(t, ks, srv, twoRegistrationAuthority(), &removalRecorder{}, 1)

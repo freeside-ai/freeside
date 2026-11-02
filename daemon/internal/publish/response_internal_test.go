@@ -9,6 +9,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/freeside-ai/freeside/daemon/internal/strayrequest"
 )
 
 func TestDecodeResponseSizeBound(t *testing.T) {
@@ -81,7 +83,7 @@ func TestDecodeResponseRejectsTrailingData(t *testing.T) {
 
 func TestExchangeCodeRejectsTrailingDataBeforeSaving(t *testing.T) {
 	t.Parallel()
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+	server := httptest.NewServer(strayrequest.Ignore(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		fixture, err := os.ReadFile(filepath.Join("testdata", "conversion-response.json"))
 		if err != nil {
 			t.Errorf("read fixture: %v", err)
@@ -89,7 +91,7 @@ func TestExchangeCodeRejectsTrailingDataBeforeSaving(t *testing.T) {
 		}
 		w.WriteHeader(http.StatusCreated)
 		_, _ = w.Write(append(fixture, []byte(" trailing")...))
-	}))
+	})))
 	defer server.Close()
 
 	registrar := NewRegistrar(nil, server.Client(), server.URL, "https://github.example")

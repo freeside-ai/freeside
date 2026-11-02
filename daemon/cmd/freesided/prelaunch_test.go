@@ -25,6 +25,7 @@ import (
 	"github.com/freeside-ai/freeside/daemon/internal/publish"
 	"github.com/freeside-ai/freeside/daemon/internal/store"
 	"github.com/freeside-ai/freeside/daemon/internal/store/storetest"
+	"github.com/freeside-ai/freeside/daemon/internal/strayrequest"
 )
 
 var prelaunchTestNow = time.Date(2026, 10, 24, 15, 0, 0, 0, time.UTC)
@@ -1220,7 +1221,7 @@ func newPrelaunchIssueReaderFixture(
 	}
 
 	var requests []string
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	server := httptest.NewServer(strayrequest.Ignore(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch r.URL.Path {
 		case "/app/installations/555/access_tokens":
 			var body struct {
@@ -1242,7 +1243,7 @@ func newPrelaunchIssueReaderFixture(
 			requests = append(requests, r.Method+" "+r.URL.Path)
 			w.WriteHeader(http.StatusNotFound)
 		}
-	}))
+	})))
 	t.Cleanup(server.Close)
 	return preflightConfig{
 		PublicationStateDir: state, PublicationCredentialsDir: credentials,

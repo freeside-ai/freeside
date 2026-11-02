@@ -14,6 +14,7 @@ import (
 	"testing"
 
 	"github.com/freeside-ai/freeside/daemon/internal/domain"
+	"github.com/freeside-ai/freeside/daemon/internal/strayrequest"
 )
 
 // The draft hold (issue #1419 Part C) opens a closable-source publication as a
@@ -77,7 +78,7 @@ func newDraftFake(t *testing.T) (*forge, *draftFakeGitHub, repoRef) {
 		refs:   map[string]string{},
 		nextPR: 101,
 	}
-	srv := httptest.NewServer(http.HandlerFunc(g.handle))
+	srv := httptest.NewServer(strayrequest.Ignore(http.HandlerFunc(g.handle)))
 	t.Cleanup(srv.Close)
 	f := newForge(draftTestTokenSource{}, srv.Client(), srv.URL)
 	return f, g, repoRef{owner: "owner", name: "name"}

@@ -16,6 +16,7 @@ import (
 
 	"github.com/freeside-ai/freeside/daemon/internal/publish"
 	"github.com/freeside-ai/freeside/daemon/internal/store"
+	"github.com/freeside-ai/freeside/daemon/internal/strayrequest"
 )
 
 func trustedPublicBinding(repositoryIDs ...int64) installationAuthoritySource {
@@ -37,7 +38,7 @@ func TestInstallationJanitorQuarantinesGrantDrift(t *testing.T) {
 	ks := publicJanitorKeystore(t)
 	recorder := &removalRecorder{}
 	var events []string
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	srv := httptest.NewServer(strayrequest.Ignore(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch {
 		case r.Method == http.MethodGet && r.URL.Path == "/app/installations":
 			_, _ = io.WriteString(w,
@@ -70,7 +71,7 @@ func TestInstallationJanitorQuarantinesGrantDrift(t *testing.T) {
 		default:
 			t.Errorf("unexpected request %s %s", r.Method, r.URL.Path)
 		}
-	}))
+	})))
 	defer srv.Close()
 
 	janitor := newJanitor(
@@ -109,7 +110,7 @@ func TestInstallationJanitorQuarantinesRepositorySelectionDrift(t *testing.T) {
 			ks := publicJanitorKeystore(t)
 			recorder := &removalRecorder{}
 			tokenMints := 0
-			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			srv := httptest.NewServer(strayrequest.Ignore(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 				switch {
 				case r.Method == http.MethodGet && r.URL.Path == "/app/installations":
 					_, _ = fmt.Fprintf(w,
@@ -126,7 +127,7 @@ func TestInstallationJanitorQuarantinesRepositorySelectionDrift(t *testing.T) {
 				default:
 					t.Errorf("unexpected request %s %s", r.Method, r.URL.Path)
 				}
-			}))
+			})))
 			defer srv.Close()
 
 			janitor := newJanitor(
@@ -187,7 +188,7 @@ func TestInstallationJanitorRejectsUntrustedRepositoryPages(t *testing.T) {
 			recorder := &removalRecorder{}
 			revokes := 0
 			destructive := 0
-			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			srv := httptest.NewServer(strayrequest.Ignore(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 				switch {
 				case r.Method == http.MethodGet && r.URL.Path == "/app/installations":
 					_, _ = io.WriteString(w,
@@ -207,7 +208,7 @@ func TestInstallationJanitorRejectsUntrustedRepositoryPages(t *testing.T) {
 				default:
 					t.Errorf("unexpected request %s %s", r.Method, r.URL.Path)
 				}
-			}))
+			})))
 			defer srv.Close()
 
 			janitor := newJanitor(
@@ -273,7 +274,7 @@ func TestInstallationJanitorTokenFailuresNeverPublishCoverage(t *testing.T) {
 			ks := publicJanitorKeystore(t)
 			recorder := &removalRecorder{}
 			revokes := 0
-			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			srv := httptest.NewServer(strayrequest.Ignore(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 				switch {
 				case r.Method == http.MethodGet && r.URL.Path == "/app/installations":
 					_, _ = io.WriteString(w,
@@ -290,7 +291,7 @@ func TestInstallationJanitorTokenFailuresNeverPublishCoverage(t *testing.T) {
 				default:
 					t.Errorf("unexpected request %s %s", r.Method, r.URL.Path)
 				}
-			}))
+			})))
 			defer srv.Close()
 
 			janitor := newJanitor(
@@ -333,7 +334,7 @@ func TestInstallationJanitorRemovesTrustedOwnerWithoutBindingBeforeMint(t *testi
 	ks := publicJanitorKeystore(t)
 	recorder := &removalRecorder{}
 	tokenMints := 0
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	srv := httptest.NewServer(strayrequest.Ignore(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch r.Method {
 		case http.MethodGet:
 			_, _ = io.WriteString(w,
@@ -344,7 +345,7 @@ func TestInstallationJanitorRemovesTrustedOwnerWithoutBindingBeforeMint(t *testi
 		case http.MethodDelete:
 			w.WriteHeader(http.StatusNoContent)
 		}
-	}))
+	})))
 	defer srv.Close()
 
 	janitor := newJanitor(t, ks, srv, publicAuthority(), recorder, 1)
@@ -406,7 +407,7 @@ func TestStalePendingEnvelopeResumesOrdinaryCleanup(t *testing.T) {
 			tc.mutate(&snapshot)
 			tokenMints := 0
 			recorder := &removalRecorder{}
-			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			srv := httptest.NewServer(strayrequest.Ignore(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 				switch r.Method {
 				case http.MethodGet:
 					_, _ = io.WriteString(w,
@@ -417,7 +418,7 @@ func TestStalePendingEnvelopeResumesOrdinaryCleanup(t *testing.T) {
 				case http.MethodDelete:
 					w.WriteHeader(http.StatusNoContent)
 				}
-			}))
+			})))
 			defer srv.Close()
 
 			janitor := newJanitor(
@@ -506,7 +507,7 @@ func TestPendingExpansionPreservesOnlyCurrentMintAuthority(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			ks := newRegisteredKeystore(t)
-			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			srv := httptest.NewServer(strayrequest.Ignore(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 				switch {
 				case r.Method == http.MethodGet && r.URL.Path == "/app/installations":
 					_, _ = fmt.Fprintf(w,
@@ -519,7 +520,7 @@ func TestPendingExpansionPreservesOnlyCurrentMintAuthority(t *testing.T) {
 				default:
 					t.Errorf("unexpected request %s %s", r.Method, r.URL.Path)
 				}
-			}))
+			})))
 			defer srv.Close()
 
 			janitor, err := publish.NewInstallationJanitor(
@@ -580,7 +581,7 @@ func TestPublicPendingEnvelopeTemporarilyExemptsExpectedOwner(t *testing.T) {
 	}
 	authority[501] = snapshot
 	recorder := &removalRecorder{}
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	srv := httptest.NewServer(strayrequest.Ignore(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch {
 		case r.Method == http.MethodGet && r.URL.Path == "/app/installations":
 			_, _ = io.WriteString(w,
@@ -589,7 +590,7 @@ func TestPublicPendingEnvelopeTemporarilyExemptsExpectedOwner(t *testing.T) {
 		default:
 			t.Errorf("unexpected request %s %s", r.Method, r.URL.Path)
 		}
-	}))
+	})))
 	defer srv.Close()
 
 	janitor := newJanitor(
@@ -632,7 +633,7 @@ func TestPendingEnvelopeNeverAuthorizesMint(t *testing.T) {
 	}
 	var janitorMints atomic.Int32
 	var workerMints atomic.Int32
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	srv := httptest.NewServer(strayrequest.Ignore(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch {
 		case r.Method == http.MethodGet && r.URL.Path == "/app/installations":
 			_, _ = fmt.Fprintf(w,
@@ -661,7 +662,7 @@ func TestPendingEnvelopeNeverAuthorizesMint(t *testing.T) {
 		default:
 			t.Errorf("unexpected request %s %s", r.Method, r.URL.Path)
 		}
-	}))
+	})))
 	defer srv.Close()
 
 	janitor, err := publish.NewInstallationJanitor(

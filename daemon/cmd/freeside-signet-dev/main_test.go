@@ -16,6 +16,8 @@ import (
 	"strings"
 	"sync"
 	"testing"
+
+	"github.com/freeside-ai/freeside/daemon/internal/strayrequest"
 )
 
 func startHarness(t *testing.T) (*harness, readiness) {
@@ -152,13 +154,15 @@ func TestControlSubmitDeliveryDrivesThePipeline(t *testing.T) {
 		clicksMu sync.Mutex
 		clicks   []string
 	)
-	fake := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	fake := httptest.NewServer(strayrequest.Ignore(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		clicksMu.Lock()
 		clicks = append(clicks, r.Header.Get("Click"))
 		clicksMu.Unlock()
 		w.WriteHeader(http.StatusOK)
-	}))
+	})))
 	t.Cleanup(fake.Close)
+	// A local tool's probe must not count as a published notification (#2465).
+	strayrequest.Probe(t, fake.URL)
 
 	h, err := run(context.Background(), config{
 		DBPath:      t.TempDir() + "/signet.db",
@@ -255,12 +259,12 @@ func TestTopicSurvivesRestart(t *testing.T) {
 		topicsMu sync.Mutex
 		topics   []string
 	)
-	fake := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	fake := httptest.NewServer(strayrequest.Ignore(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		topicsMu.Lock()
 		topics = append(topics, strings.TrimPrefix(r.URL.Path, "/"))
 		topicsMu.Unlock()
 		w.WriteHeader(http.StatusOK)
-	}))
+	})))
 	t.Cleanup(fake.Close)
 
 	dbPath := filepath.Join(t.TempDir(), "signet.db")

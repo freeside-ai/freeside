@@ -9,6 +9,7 @@ import (
 	"testing"
 
 	"github.com/freeside-ai/freeside/daemon/internal/publish"
+	"github.com/freeside-ai/freeside/daemon/internal/strayrequest"
 )
 
 func newTestReconciler(t *testing.T, gh *fakeGitHub) *publish.Reconciler {
@@ -322,9 +323,9 @@ func TestReconcileRefRejectsWrongRefName(t *testing.T) {
 // empty cache.
 func TestReconcileRefusesUnsolicited304(t *testing.T) {
 	t.Parallel()
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+	srv := httptest.NewServer(strayrequest.Ignore(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusNotModified)
-	}))
+	})))
 	t.Cleanup(srv.Close)
 	r := publish.NewReconciler(testTokenSource(), srv.Client(), srv.URL)
 

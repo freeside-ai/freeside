@@ -8,6 +8,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"net/http"
 	"net/http/httptest"
 	"os"
 	"path/filepath"
@@ -26,6 +27,7 @@ import (
 	"github.com/freeside-ai/freeside/daemon/internal/signet"
 	"github.com/freeside-ai/freeside/daemon/internal/store"
 	"github.com/freeside-ai/freeside/daemon/internal/store/storetest"
+	"github.com/freeside-ai/freeside/daemon/internal/strayrequest"
 	"github.com/freeside-ai/freeside/daemon/internal/verify"
 )
 
@@ -65,9 +67,35 @@ func newIntegrationForge(t *testing.T) (*fakeforge.Forge, *httptest.Server) {
 		},
 		Report: t.Errorf,
 	})
-	server := httptest.NewServer(forge)
+	server := httptest.NewServer(strayrequest.Ignore(forge))
 	t.Cleanup(server.Close)
 	return forge, server
+}
+
+// TestIntegrationForgeIgnoresStrayRootProbe: a local tool's GET / to the
+// forge double is not an unexpected forge request, and the double still
+// answers the requests a publication sends (#2465).
+func TestIntegrationForgeIgnoresStrayRootProbe(t *testing.T) {
+	t.Parallel()
+	forge, server := newIntegrationForge(t)
+	strayrequest.Probe(t, server.URL)
+
+	req, err := http.NewRequestWithContext(t.Context(), http.MethodGet, server.URL+"/repos/"+fakePublicationRepo+"/issues/82", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	req.Header.Set("Authorization", "Bearer integration-token")
+	resp, err := server.Client().Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_ = resp.Body.Close()
+	forge.Mu.Lock()
+	reads := forge.IssueReads
+	forge.Mu.Unlock()
+	if resp.StatusCode != http.StatusOK || reads != 1 {
+		t.Errorf("issue read status %d, reads %d; want 200 and 1", resp.StatusCode, reads)
+	}
 }
 
 // headRepo is the transport's remote side of the pull request branches.

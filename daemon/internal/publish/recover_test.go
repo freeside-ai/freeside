@@ -15,6 +15,7 @@ import (
 	"github.com/freeside-ai/freeside/daemon/internal/publish"
 	"github.com/freeside-ai/freeside/daemon/internal/store"
 	"github.com/freeside-ai/freeside/daemon/internal/store/storetest"
+	"github.com/freeside-ai/freeside/daemon/internal/strayrequest"
 )
 
 // The kill-test matrix (issue #82 acceptance 1, plan §5.9). Each test
@@ -30,7 +31,7 @@ import (
 // deliberate failpoint panics do not spew http.Server panic traces.
 func (g *fakeGitHub) quietServer(t *testing.T) *httptest.Server {
 	t.Helper()
-	srv := httptest.NewUnstartedServer(http.HandlerFunc(g.handle))
+	srv := httptest.NewUnstartedServer(strayrequest.Ignore(http.HandlerFunc(g.handle)))
 	srv.Config.ErrorLog = log.New(io.Discard, "", 0)
 	srv.Start()
 	t.Cleanup(srv.Close)

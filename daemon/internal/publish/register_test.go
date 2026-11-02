@@ -18,6 +18,7 @@ import (
 	"time"
 
 	"github.com/freeside-ai/freeside/daemon/internal/publish"
+	"github.com/freeside-ai/freeside/daemon/internal/strayrequest"
 )
 
 func testManifest() publish.Manifest {
@@ -39,7 +40,7 @@ func testRegistrationTarget() publish.RegistrationTarget {
 // captures the request path.
 func conversionServer(t *testing.T, gotPath *string) *httptest.Server {
 	t.Helper()
-	return httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	return httptest.NewServer(strayrequest.Ignore(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Method == http.MethodGet && r.URL.Path == "/apps/freeside-publish" {
 			w.WriteHeader(http.StatusNotFound)
 			return
@@ -58,7 +59,7 @@ func conversionServer(t *testing.T, gotPath *string) *httptest.Server {
 			t.Errorf("read fixture: %v", err)
 		}
 		_, _ = w.Write(fixture)
-	}))
+	})))
 }
 
 // TestExchangeCodeVerifiesVisibility proves a relayed code cannot substitute a
@@ -163,7 +164,7 @@ func TestExchangeCodeVerifiesVisibility(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			srv := httptest.NewServer(strayrequest.Ignore(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 				if r.Method == http.MethodGet {
 					switch r.URL.Path {
 					case "/apps/freeside-publish":
@@ -196,7 +197,7 @@ func TestExchangeCodeVerifiesVisibility(t *testing.T) {
 				resp["owner"].(map[string]any)["type"] = tt.ownerType
 				w.WriteHeader(http.StatusCreated)
 				_ = json.NewEncoder(w).Encode(resp)
-			}))
+			})))
 			defer srv.Close()
 
 			ks := newTestKeystore(t)
@@ -516,7 +517,7 @@ func TestExchangeCodeRejectsOwnerTypeMismatch(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+			srv := httptest.NewServer(strayrequest.Ignore(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 				fixture, err := os.ReadFile(filepath.Join("testdata", "conversion-response.json"))
 				if err != nil {
 					t.Errorf("read fixture: %v", err)
@@ -529,7 +530,7 @@ func TestExchangeCodeRejectsOwnerTypeMismatch(t *testing.T) {
 				owner["type"] = tt.actualType
 				w.WriteHeader(http.StatusCreated)
 				_ = json.NewEncoder(w).Encode(resp)
-			}))
+			})))
 			defer srv.Close()
 
 			ks := newTestKeystore(t)
@@ -549,7 +550,7 @@ func TestExchangeCodeRejectsOwnerTypeMismatch(t *testing.T) {
 func TestExchangeCodeRedactsReturnedOwner(t *testing.T) {
 	t.Parallel()
 	const secret = "SECRET_RETURNED_OWNER_VALUE"
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+	srv := httptest.NewServer(strayrequest.Ignore(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		fixture, err := os.ReadFile(filepath.Join("testdata", "conversion-response.json"))
 		if err != nil {
 			t.Errorf("read fixture: %v", err)
@@ -561,7 +562,7 @@ func TestExchangeCodeRedactsReturnedOwner(t *testing.T) {
 		resp["owner"] = map[string]any{"login": secret, "id": testOwnerID}
 		w.WriteHeader(http.StatusCreated)
 		_ = json.NewEncoder(w).Encode(resp)
-	}))
+	})))
 	defer srv.Close()
 
 	ks := newTestKeystore(t)
@@ -606,10 +607,10 @@ func TestExchangeCodeRejectsOwnerIDMismatch(t *testing.T) {
 // APIError carrier and writes nothing to the keystore.
 func TestExchangeCodeAPIError(t *testing.T) {
 	t.Parallel()
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+	srv := httptest.NewServer(strayrequest.Ignore(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusNotFound)
 		_, _ = io.WriteString(w, `{"message":"Not Found"}`)
-	}))
+	})))
 	defer srv.Close()
 
 	ks := newTestKeystore(t)
@@ -648,14 +649,14 @@ func TestExchangeCodeTransportErrorRedactsCode(t *testing.T) {
 func TestExchangeCodeRefusesRedirect(t *testing.T) {
 	t.Parallel()
 	var targetHits int
-	target := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+	target := httptest.NewServer(strayrequest.Ignore(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		targetHits++
 		w.WriteHeader(http.StatusOK)
-	}))
+	})))
 	defer target.Close()
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		http.Redirect(w, r, target.URL, http.StatusFound)
-	}))
+	srv := httptest.NewServer(strayrequest.Ignore(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		http.Redirect(w, r, target.URL+"/landing", http.StatusFound)
+	})))
 	defer srv.Close()
 
 	ks := newTestKeystore(t)
@@ -705,7 +706,7 @@ func fetchRedirectURL(t *testing.T, formURL string) string {
 // working ones and fail every later mint.
 func TestExchangeCodeRejectsMissingAppID(t *testing.T) {
 	t.Parallel()
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+	srv := httptest.NewServer(strayrequest.Ignore(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		fixture, err := os.ReadFile(filepath.Join("testdata", "conversion-response.json"))
 		if err != nil {
 			t.Errorf("read fixture: %v", err)
@@ -717,7 +718,7 @@ func TestExchangeCodeRejectsMissingAppID(t *testing.T) {
 		delete(resp, "id")
 		w.WriteHeader(http.StatusCreated)
 		_ = json.NewEncoder(w).Encode(resp)
-	}))
+	})))
 	defer srv.Close()
 
 	ks := newTestKeystore(t)
@@ -736,7 +737,7 @@ func TestExchangeCodeRejectsMissingCanonicalMetadata(t *testing.T) {
 	t.Parallel()
 	for _, field := range []string{"name", "slug"} {
 		t.Run(field, func(t *testing.T) {
-			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+			srv := httptest.NewServer(strayrequest.Ignore(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 				fixture, err := os.ReadFile(filepath.Join("testdata", "conversion-response.json"))
 				if err != nil {
 					t.Errorf("read fixture: %v", err)
@@ -748,7 +749,7 @@ func TestExchangeCodeRejectsMissingCanonicalMetadata(t *testing.T) {
 				delete(resp, field)
 				w.WriteHeader(http.StatusCreated)
 				_ = json.NewEncoder(w).Encode(resp)
-			}))
+			})))
 			defer srv.Close()
 
 			ks := newTestKeystore(t)
@@ -768,7 +769,7 @@ func TestExchangeCodeRejectsMissingCanonicalMetadata(t *testing.T) {
 // credentials can replace the keystore.
 func TestExchangeCodeRejectsPermissionMismatch(t *testing.T) {
 	t.Parallel()
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+	srv := httptest.NewServer(strayrequest.Ignore(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		fixture, err := os.ReadFile(filepath.Join("testdata", "conversion-response.json"))
 		if err != nil {
 			t.Errorf("read fixture: %v", err)
@@ -780,7 +781,7 @@ func TestExchangeCodeRejectsPermissionMismatch(t *testing.T) {
 		resp["permissions"] = map[string]string{"metadata": "read"}
 		w.WriteHeader(http.StatusCreated)
 		_ = json.NewEncoder(w).Encode(resp)
-	}))
+	})))
 	defer srv.Close()
 
 	ks := newTestKeystore(t)

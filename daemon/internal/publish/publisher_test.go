@@ -24,6 +24,7 @@ import (
 	"github.com/freeside-ai/freeside/daemon/internal/importer"
 	"github.com/freeside-ai/freeside/daemon/internal/publish"
 	"github.com/freeside-ai/freeside/daemon/internal/store"
+	"github.com/freeside-ai/freeside/daemon/internal/strayrequest"
 	"github.com/freeside-ai/freeside/daemon/internal/verify"
 )
 
@@ -250,7 +251,7 @@ type fakeReaction struct {
 }
 
 func (g *fakeGitHub) server() *httptest.Server {
-	srv := httptest.NewServer(http.HandlerFunc(g.handle))
+	srv := httptest.NewServer(strayrequest.Ignore(http.HandlerFunc(g.handle)))
 	g.t.Cleanup(srv.Close)
 	return srv
 }
@@ -1134,6 +1135,29 @@ func TestPublishCreatesBranchAndPR(t *testing.T) {
 	}
 	if key := ledger.keys[0]; key != "publish/inv-0001/publish.publication" {
 		t.Errorf("intent key = %q", key)
+	}
+}
+
+// TestPublishIgnoresStrayRootProbe: a local tool's GET / to the fake forge
+// before a publish reaches neither the fake's checks nor its request log
+// (#2465).
+func TestPublishIgnoresStrayRootProbe(t *testing.T) {
+	t.Parallel()
+	gh := newFakeGitHub(t)
+	trust := conformantTrust(t)
+	srv := gh.server()
+	strayrequest.Probe(t, srv.URL)
+	p := publish.NewPublisher(testTokenSource(), srv.Client(), srv.URL, sourceWorkflowAuditor{source: trust}, newMemoryLedger(), trust, conformantAuthz(t))
+
+	res, err := p.Publish(context.Background(), testCandidate(t), testApprovedRecipes())
+	if err != nil {
+		t.Fatalf("Publish: %v", err)
+	}
+	if !res.BranchCreated || !res.PRCreated {
+		t.Errorf("result = %+v, want branch and PR created", res)
+	}
+	if log := gh.requestLog(); slices.Contains(log, "GET /") {
+		t.Errorf("request log = %v, want no stray GET /", log)
 	}
 }
 

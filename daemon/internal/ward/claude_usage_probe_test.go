@@ -27,6 +27,8 @@ import (
 	"testing"
 	"testing/iotest"
 	"time"
+
+	"github.com/freeside-ai/freeside/daemon/internal/strayrequest"
 )
 
 // These are measurement helpers, not a production collector. Unknown fields
@@ -104,7 +106,7 @@ func newClaudeUsageProxy(t *testing.T, mode, subnet string, transport http.Round
 		transport = &http.Transport{Protocols: protocols, TLSHandshakeTimeout: 10 * time.Second, ResponseHeaderTimeout: 30 * time.Second}
 	}
 	p := &claudeUsageProxy{mode: mode, subnet: network, certificate: certificate, ca: ca, transport: transport, active: map[net.Conn]bool{}}
-	p.server = httptest.NewUnstartedServer(http.HandlerFunc(p.serve))
+	p.server = httptest.NewUnstartedServer(strayrequest.Ignore(http.HandlerFunc(p.serve)))
 	if err := p.server.Listener.Close(); err != nil {
 		t.Fatal(err)
 	}

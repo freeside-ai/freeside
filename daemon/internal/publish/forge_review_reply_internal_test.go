@@ -9,6 +9,7 @@ import (
 	"testing"
 
 	"github.com/freeside-ai/freeside/daemon/internal/domain"
+	"github.com/freeside-ai/freeside/daemon/internal/strayrequest"
 )
 
 func TestReviewReplyForgeCalls(t *testing.T) {
@@ -28,7 +29,7 @@ func TestReviewReplyForgeCalls(t *testing.T) {
 				path = fmt.Sprintf("/repos/%s/pulls/7/comments/%d/replies", test.repo.path(), test.root)
 			}
 			sent := 0
-			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			server := httptest.NewServer(strayrequest.Ignore(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 				if r.Method != http.MethodPost || r.URL.Path != path {
 					t.Errorf("request = %s %s", r.Method, r.URL.Path)
 				}
@@ -45,7 +46,7 @@ func TestReviewReplyForgeCalls(t *testing.T) {
 					"in_reply_to_id": test.root, "created_at": "2026-10-06T12:00:00Z",
 					"issue_url": "http://" + r.Host + "/repos/" + test.repo.path() + "/issues/7",
 				})
-			}))
+			})))
 			defer server.Close()
 			f := newForge(draftTestTokenSource{}, server.Client(), server.URL)
 			req, err := f.newReviewReplyRequest(context.Background(), test.repo, 7, test.root, "reply")
@@ -63,14 +64,14 @@ func TestReviewReplyForgeCalls(t *testing.T) {
 func TestReviewReplyRejectsIncompleteCommentIdentities(t *testing.T) {
 	for _, body := range []string{`{}`, `{"id":1}`, `{"id":1,"user":{"id":2,"type":"Bot"}}`, `{"id":1,"user":{"id":2,"type":"Bot"},"created_at":"invalid"}`} {
 		t.Run(body, func(t *testing.T) {
-			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			server := httptest.NewServer(strayrequest.Ignore(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 				if r.Method == http.MethodGet {
 					_, _ = fmt.Fprintf(w, "[%s]", body)
 					return
 				}
 				w.WriteHeader(http.StatusCreated)
 				_, _ = w.Write([]byte(body))
-			}))
+			})))
 			defer server.Close()
 			f := newForge(draftTestTokenSource{}, server.Client(), server.URL)
 			repo := repoRef{"owner", "repo"}
@@ -90,7 +91,7 @@ func TestReviewReplyRejectsIncompleteCommentIdentities(t *testing.T) {
 }
 
 func TestReviewReplyRejectsPaginationOntoAnotherPullRequest(t *testing.T) {
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	server := httptest.NewServer(strayrequest.Ignore(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path == "/repos/owner/repo/issues/7/comments" {
 			w.Header().Set("Link", fmt.Sprintf(`<http://%s/repos/owner/repo/issues/8/comments>; rel="next"`, r.Host))
 			_, _ = w.Write([]byte("[]"))
@@ -101,7 +102,7 @@ func TestReviewReplyRejectsPaginationOntoAnotherPullRequest(t *testing.T) {
 			"created_at": "2026-10-06T12:00:00Z",
 			"issue_url":  "http://" + r.Host + "/repos/owner/repo/issues/8",
 		}})
-	}))
+	})))
 	defer server.Close()
 	f := newForge(draftTestTokenSource{}, server.Client(), server.URL)
 	if _, err := f.listConversationComments(context.Background(), repoRef{"owner", "repo"}, 7); err == nil {

@@ -19,6 +19,7 @@ import (
 	"time"
 
 	"github.com/freeside-ai/freeside/daemon/internal/publish"
+	"github.com/freeside-ai/freeside/daemon/internal/strayrequest"
 )
 
 const fixtureRepositoryOwnerID = int64(98765)
@@ -181,7 +182,7 @@ func newTestOnboarder(
 ) (*publish.CredentialOnboarder, *credentialForge, *httptest.Server) {
 	t.Helper()
 	forge := newCredentialForge(t)
-	srv := httptest.NewServer(forge)
+	srv := httptest.NewServer(strayrequest.Ignore(forge))
 	t.Cleanup(srv.Close)
 	return publish.NewCredentialOnboarder(
 		ks,
@@ -549,7 +550,7 @@ func TestCredentialOnboardingNormalizesTrailingSlashBaseURLs(t *testing.T) {
 	t.Parallel()
 	ks := newTestKeystore(t)
 	forge := newCredentialForge(t)
-	srv := httptest.NewServer(forge)
+	srv := httptest.NewServer(strayrequest.Ignore(forge))
 	t.Cleanup(srv.Close)
 	// Trailing slashes on both bases must not survive into emitted URLs: the
 	// registrar and the onboarder's own builders concatenate leading-slash

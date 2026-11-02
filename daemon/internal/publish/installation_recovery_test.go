@@ -13,6 +13,7 @@ import (
 
 	"github.com/freeside-ai/freeside/daemon/internal/operations"
 	"github.com/freeside-ai/freeside/daemon/internal/publish"
+	"github.com/freeside-ai/freeside/daemon/internal/strayrequest"
 )
 
 func recoveryStore(t *testing.T) (string, *publish.InstallationAuthorityStore, operations.InstallationIntentRequest) {
@@ -177,7 +178,7 @@ func TestInstallationRecoveryJanitorRejectsOldAndAdmitsNewAfterRestart(t *testin
 	// It must be removed without token minting; the new ID gets the exception.
 	oldDeleted, newMinted := false, false
 	listedRepository := int64(44)
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	server := httptest.NewServer(strayrequest.Ignore(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch {
 		case r.Method == http.MethodGet && r.URL.Path == "/app/installations":
 			items := `{"id":702,"app_id":501,"target_id":102,"repository_selection":"selected","account":{"login":"other","id":102}},{"id":703,"app_id":501,"target_id":101,"repository_selection":"selected","account":{"login":"operator","id":101}}`
@@ -204,7 +205,7 @@ func TestInstallationRecoveryJanitorRejectsOldAndAdmitsNewAfterRestart(t *testin
 				w.WriteHeader(http.StatusNotFound)
 			}
 		}
-	}))
+	})))
 	t.Cleanup(server.Close)
 	reopened := reopenAuthorityStore(t, dir)
 	janitor := newJanitor(t, publicJanitorKeystore(t), server, reopened, reopened, 2)

@@ -18,6 +18,7 @@ import (
 	"github.com/freeside-ai/freeside/daemon/internal/publish"
 	"github.com/freeside-ai/freeside/daemon/internal/store"
 	"github.com/freeside-ai/freeside/daemon/internal/store/storetest"
+	"github.com/freeside-ai/freeside/daemon/internal/strayrequest"
 )
 
 // fixtureTokenValue must match testdata/token-response.json.
@@ -83,7 +84,7 @@ func newCoveredMinter(
 // before delegating the token request to handler.
 func newMintServer(t *testing.T, handler http.HandlerFunc) *httptest.Server {
 	t.Helper()
-	return httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	return httptest.NewServer(strayrequest.Ignore(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Method == http.MethodGet && r.URL.Path == "/app/installations" {
 			_, _ = io.WriteString(w, `[{"id":777,"app_id":`+
 				fmt.Sprint(fixtureAppID)+`,"target_id":`+fmt.Sprint(testOwnerID)+
@@ -93,7 +94,7 @@ func newMintServer(t *testing.T, handler http.HandlerFunc) *httptest.Server {
 			return
 		}
 		handler(w, r)
-	}))
+	})))
 }
 
 // TestMintInstallationToken drives the full lifecycle against the
@@ -391,7 +392,7 @@ func TestMintRejectsRegistrationChangeAfterResolution(t *testing.T) {
 	t.Parallel()
 	ks := newRegisteredKeystore(t)
 	tokenRequests := 0
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	srv := httptest.NewServer(strayrequest.Ignore(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Method == http.MethodGet && r.URL.Path == "/app/installations" {
 			_, _ = io.WriteString(w, `[{"id":777,"app_id":`+
 				fmt.Sprint(fixtureAppID)+`,"target_id":`+fmt.Sprint(testOwnerID)+
@@ -411,7 +412,7 @@ func TestMintRejectsRegistrationChangeAfterResolution(t *testing.T) {
 		}
 		tokenRequests++
 		w.WriteHeader(http.StatusCreated)
-	}))
+	})))
 	defer srv.Close()
 
 	rec := &captureRecorder{}

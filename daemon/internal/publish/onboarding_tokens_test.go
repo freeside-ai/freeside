@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/freeside-ai/freeside/daemon/internal/publish"
+	"github.com/freeside-ai/freeside/daemon/internal/strayrequest"
 )
 
 type onboardingAuthoritySource struct {
@@ -64,7 +65,7 @@ func TestOnboardingTokenSourceRegatesCachedReadOnlyMint(t *testing.T) {
 	}}
 	gate := &onboardingGate{installationID: 777, pendingReady: true}
 	var requests int
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	server := httptest.NewServer(strayrequest.Ignore(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		requests++
 		if r.Method != http.MethodPost ||
 			r.URL.Path != "/app/installations/777/access_tokens" {
@@ -96,7 +97,7 @@ func TestOnboardingTokenSourceRegatesCachedReadOnlyMint(t *testing.T) {
 			"repository_selection":"selected",
 			"repositories":[{"id":990011,"name":"evidence-repo"}]
 		}`)
-	}))
+	})))
 	defer server.Close()
 
 	recorder := &captureRecorder{}
