@@ -290,7 +290,11 @@ that was observed, but they always prevent a safe read pass.
 Fresh resources have random names and ownership labels. Cleanup verifies
 labels and creation dates. A private recovery manifest survives failed
 cleanup; retained containers or volumes may contain credentials or raw
-responses. Use the manifest to prove ownership before removing them.
+responses. Use the manifest to prove ownership before removing them. Each case
+logs its manifest path before creating anything, because an interrupted run
+skips cleanup. Until the volume is seeded the synthetic `auth.json` also sits
+in a host temporary file; the manifest's `host_snapshot_copy` entry holds its
+path, and reads `removed` once the test deletes that file after seeding.
 
 ## Codex Usage Spike
 
@@ -367,12 +371,9 @@ provider refusal), `probe_failed` (broken or incomplete measurement),
 owner-only directory that receives each case's raw app-server stream for
 diagnosis. With a real credential those files hold account identifiers and
 usage values; never commit or paste them. Resource naming, cleanup, and the
-recovery manifest follow the account probe. Each case logs its manifest path
-before creating anything, because an interrupted run skips cleanup and can
-leave a volume holding the access-only snapshot. Until the volume is seeded
-the snapshot also sits in a host temporary file; the manifest's
-`host_snapshot_copy` entry holds its path, and reads `removed` once seeding
-has deleted it.
+recovery manifest follow the account probe, including the logged manifest path
+and the `host_snapshot_copy` entry for the host copy of the access-only
+snapshot. An interrupted run can leave a volume holding that snapshot.
 
 The measured behavior and the constants later collectors inherit are recorded
 in

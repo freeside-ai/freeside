@@ -132,6 +132,9 @@ func codexAccountRun(t *testing.T, rt *CLIRuntime, bin, image, mode string, body
 		}
 	})
 	save()
+	// A killed run skips every cleanup, so name the manifest before anything
+	// exists.
+	t.Logf("recovery manifest until cleanup: %s", filepath.Join(recovery, "resources.json"))
 	ctx, cancel := context.WithTimeout(t.Context(), 2*time.Minute)
 	defer cancel()
 	labels := []Label{{Key: "freeside.account-probe", Value: name}}
@@ -217,6 +220,10 @@ func codexAccountRun(t *testing.T, rt *CLIRuntime, bin, image, mode string, body
 		t.Fatal(err)
 	}
 	input, auth := t.TempDir(), t.TempDir()
+	// A killed run skips t.TempDir cleanup too, so the manifest names this
+	// copy before it exists and until it is removed.
+	manifest["host_snapshot_copy"] = filepath.Join(auth, "auth.json")
+	save()
 	if err := os.WriteFile(filepath.Join(auth, "auth.json"), body, 0o600); err != nil {
 		t.Fatal("write private access-only input")
 	}
@@ -282,10 +289,16 @@ func codexAccountRun(t *testing.T, rt *CLIRuntime, bin, image, mode string, body
 			t.Fatal("seed copy failed")
 		}
 	}
-	seed := exec.CommandContext(ctx, bin, "exec", seeder, "sh", "-c", "set -eu; cp -R /input/. /snapshot/; cp /auth/auth.json /snapshot/auth.json; chmod 0400 /snapshot/auth.json") //nolint:gosec // fixed command and test-owned resources
+	seed := exec.CommandContext(ctx, bin, "exec", seeder, "sh", "-c", "set -eu; cp -R /input/. /snapshot/; cp /auth/auth.json /snapshot/auth.json; chmod 0400 /snapshot/auth.json; rm /auth/auth.json") //nolint:gosec // fixed command and test-owned resources
 	if err := seed.Run(); err != nil {
 		t.Fatal("snapshot seed failed")
 	}
+	// From here the only copy is the read-only volume the manifest names.
+	if err := os.Remove(filepath.Join(auth, "auth.json")); err != nil {
+		t.Fatal("remove private access-only input")
+	}
+	manifest["host_snapshot_copy"] = "removed"
+	save()
 	if err := rt.StopContainer(ctx, seeder); err != nil {
 		t.Fatal(err)
 	}
