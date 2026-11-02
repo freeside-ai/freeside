@@ -6,6 +6,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"errors"
+	"reflect"
 	"slices"
 	"strings"
 	"testing"
@@ -674,4 +675,50 @@ func TestRunReviewSubjectNullCases(t *testing.T) {
 			t.Fatalf("legacy producer claimed: %#v", rounds[0].Subject)
 		}
 	})
+}
+
+// TestRunTimelineAdmittedFacts pins the timeline's admitted facts (#979):
+// the writer's facts read from its execution admission with its role from
+// the authenticated dispatch intent, a legacy admission's binding facts null
+// rather than resolved from the current tree, and the reviewer's facts with
+// one independence entry per writing role, unknown when no writer was
+// admitted before it.
+func TestRunTimelineAdmittedFacts(t *testing.T) {
+	ctx := context.Background()
+	f := newReviewSubjectFixture(t)
+	f.mustWrite(t, func(tx *store.WriteTx) error {
+		return tx.PutReviewAdmission(ctx, *f.round1.Admission)
+	})
+	timeline, err := f.service.GetRunTimeline(ctx, f.run.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(timeline.Admissions) != 2 {
+		t.Fatalf("admissions = %+v, want the implementer's and the reviewer's", timeline.Admissions)
+	}
+	// Admission order: the fake review snapshot predates the fixture's
+	// writer, so independence also shows no writer to compare with yet.
+	reviewer, writer := timeline.Admissions[0], timeline.Admissions[1]
+	if writer.Kind != domain.AdmissionKindExecution || writer.InvocationID != f.run.Stages[0].Attempts[0].InvocationID ||
+		writer.Role == nil || *writer.Role != domain.RoleImplementer {
+		t.Fatalf("writer facts = %+v", writer)
+	}
+	if writer.AgentDigest != nil || writer.Harness != nil || writer.Model != nil || writer.CostOwner != nil ||
+		writer.LineageGroup != nil || writer.Independence != nil {
+		t.Fatalf("legacy writer facts carry binding facts: %+v", writer)
+	}
+	if writer.OperatingMode == nil || *writer.OperatingMode != domain.ModeAttendedDev ||
+		writer.IsolationClass == nil || *writer.IsolationClass != "fresh_vm_read_only_volume_handoff" ||
+		writer.CredentialMode == nil || writer.EgressProfile == nil {
+		t.Fatalf("writer admission facts = %+v", writer)
+	}
+	want := domain.AdmittedFactsOfReview(*f.round1.Admission, nil)
+	if !reflect.DeepEqual(reviewer, want) {
+		t.Fatalf("reviewer facts = %+v, want %+v", reviewer, want)
+	}
+	for _, entry := range reviewer.Independence {
+		if entry.Lineage != domain.LineageUnknown {
+			t.Fatalf("independence with no earlier writer = %+v", reviewer.Independence)
+		}
+	}
 }

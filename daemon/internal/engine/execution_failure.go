@@ -34,6 +34,7 @@ func executionFailureFacts(
 	cause domain.FailureCause,
 	recordedAt time.Time,
 	stage domain.StageName,
+	role domain.RoleName,
 ) (*domain.ExecutionFailureFacts, error) {
 	admission, err := tx.GetExecutionAdmissionRecord(ctx, invocationID)
 	if errors.Is(err, store.ErrNotFound) {
@@ -54,6 +55,7 @@ func executionFailureFacts(
 		}
 		return &domain.ExecutionFailureFacts{
 			Outcome: mapped, Cause: outcome.Cause, Stage: stage, InvocationID: invocationID,
+			Admitted: admittedFacts(admission, role),
 		}, nil
 	}
 	if !errors.Is(err, store.ErrNotFound) {
@@ -79,7 +81,16 @@ func executionFailureFacts(
 	}
 	return &domain.ExecutionFailureFacts{
 		Outcome: mapped, Cause: cause, Stage: stage, InvocationID: invocationID,
+		Admitted: admittedFacts(admission, role),
 	}, nil
+}
+
+// admittedFacts is what ran the failed invocation, as its admission recorded
+// it, for the card's admitted facts (#979). role is the ward role the attempt
+// ran as, or empty when no ward role runs its stage.
+func admittedFacts(admission domain.ExecutionAdmission, role domain.RoleName) *domain.InvocationAdmissionFacts {
+	facts := domain.AdmittedFactsOfExecution(admission, role)
+	return &facts
 }
 
 // interpretationFailureFacts types a failure the engine found after

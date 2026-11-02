@@ -1,0 +1,28 @@
+{
+  "invocation_id": "review-run-1-1",
+  "kind": "review",
+  "role": "reviewer",
+  "admitted_at": "2026-01-02T03:04:05Z",
+  "agent_digest": "sha256:fba2e91b81488102b4193bb2a7730f4ec9e5198a98b9baa6c0f2fc6ee60c3b8a",
+  "selection_source": "lineup",
+  "harness": "codex_cli",
+  "model": "gpt-5.2-codex",
+  "requested_effort": "high",
+  "native_effort": "high",
+  "cost_owner": "platform-team",
+  "lineage_group": "openai",
+  "credential_mode": null,
+  "egress_profile": null,
+  "operating_mode": null,
+  "isolation_class": null,
+  "independence": [
+    {
+      "writing_role": "implementer",
+      "lineage": "differed"
+    },
+    {
+      "writing_role": "remediator",
+      "lineage": "unknown"
+    }
+  ]
+}

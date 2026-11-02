@@ -1,5 +1,5 @@
 {
-  "version": "freeside-task-record-v12",
+  "version": "freeside-task-record-v13",
   "as_of_revision": 22,
   "as_of": "2026-10-01T09:00:00Z",
   "task_id": "task-GOLDEN",
@@ -580,7 +580,26 @@
         "outcome": "failed",
         "cause": "unknown",
         "stage": "implementation",
-        "invocation_id": "inv-run-freeside-656"
+        "invocation_id": "inv-run-freeside-656",
+        "admitted": {
+          "invocation_id": "inv-run-freeside-656",
+          "kind": "execution",
+          "role": "implementer",
+          "admitted_at": "2026-09-01T13:32:00Z",
+          "agent_digest": null,
+          "selection_source": null,
+          "harness": null,
+          "model": null,
+          "requested_effort": null,
+          "native_effort": null,
+          "cost_owner": null,
+          "lineage_group": null,
+          "credential_mode": "local_trusted",
+          "egress_profile": "clean_verification",
+          "operating_mode": "attended_dev",
+          "isolation_class": "fresh_vm_read_only_volume_handoff",
+          "independence": null
+        }
       },
       "interpretation_failure": null,
       "publish_block": null,

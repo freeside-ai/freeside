@@ -67,10 +67,19 @@ func seedItems(s seeder, failed, active, verification domain.Run) error {
 		actions: []domain.Action{domain.ActionRetry, domain.ActionDiscuss, domain.ActionStop}, createdAt: at,
 	}.input()
 	failedStage := failed.Stages[len(failed.Stages)-1]
+	failedInvocation := failedStage.Attempts[len(failedStage.Attempts)-1].InvocationID
+	var failedAdmission domain.ExecutionAdmission
+	if err := s.st.Read(s.ctx, func(tx *store.ReadTx) error {
+		var err error
+		failedAdmission, err = tx.GetExecutionAdmissionRecord(s.ctx, failedInvocation)
+		return err
+	}); err != nil {
+		return err
+	}
+	admitted := domain.AdmittedFactsOfExecution(failedAdmission, domain.RoleImplementer)
 	executionFailure.ExecutionFailure = &domain.ExecutionFailureFacts{
 		Outcome: domain.ExecutionOutcomeFailed, Cause: domain.FailureCauseUnknown,
-		Stage:        domain.StageNameImplementation,
-		InvocationID: failedStage.Attempts[len(failedStage.Attempts)-1].InvocationID,
+		Stage: domain.StageNameImplementation, InvocationID: failedInvocation, Admitted: &admitted,
 	}
 	inputs = append(inputs, executionFailure)
 

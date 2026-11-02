@@ -4796,6 +4796,11 @@ public enum Components {
             ///
             /// - Remark: Generated from `#/components/schemas/RunTimeline/billable_cost_so_far`.
             public var billable_cost_so_far: Components.Schemas.RunTimeline.billable_cost_so_farPayload?
+            /// What ran each admitted invocation of the run, as its execution or review admission recorded it, ordered by admitted_at then invocation_id. Only the run timeline carries it.
+            ///
+            ///
+            /// - Remark: Generated from `#/components/schemas/RunTimeline/admissions`.
+            public var admissions: [Components.Schemas.InvocationAdmissionFacts]
             /// Creates a new `RunTimeline`.
             ///
             /// - Parameters:
@@ -4808,6 +4813,7 @@ public enum Components {
             ///   - review:
             ///   - completion: The work unit's completion facts once a work_unit_completed milestone ends the timeline; null before then.
             ///   - billable_cost_so_far: The run's billable spend so far, computed the same way attention cards compute theirs; null before any billable observation.
+            ///   - admissions: What ran each admitted invocation of the run, as its execution or review admission recorded it, ordered by admitted_at then invocation_id. Only the run timeline carries it.
             public init(
                 as_of_revision: Components.Schemas.AsOfRevision,
                 as_of: Foundation.Date,
@@ -4817,7 +4823,8 @@ public enum Components {
                 invocations: [Components.Schemas.InvocationObservation],
                 review: Components.Schemas.RunTimeline.reviewPayload? = nil,
                 completion: Components.Schemas.RunTimeline.completionPayload? = nil,
-                billable_cost_so_far: Components.Schemas.RunTimeline.billable_cost_so_farPayload? = nil
+                billable_cost_so_far: Components.Schemas.RunTimeline.billable_cost_so_farPayload? = nil,
+                admissions: [Components.Schemas.InvocationAdmissionFacts]
             ) {
                 self.as_of_revision = as_of_revision
                 self.as_of = as_of
@@ -4828,6 +4835,7 @@ public enum Components {
                 self.review = review
                 self.completion = completion
                 self.billable_cost_so_far = billable_cost_so_far
+                self.admissions = admissions
             }
             public enum CodingKeys: String, CodingKey {
                 case as_of_revision
@@ -4839,6 +4847,7 @@ public enum Components {
                 case review
                 case completion
                 case billable_cost_so_far
+                case admissions
             }
             public init(from decoder: any Swift.Decoder) throws {
                 let container = try decoder.container(keyedBy: CodingKeys.self)
@@ -4878,6 +4887,10 @@ public enum Components {
                     Components.Schemas.RunTimeline.billable_cost_so_farPayload.self,
                     forKey: .billable_cost_so_far
                 )
+                self.admissions = try container.decode(
+                    [Components.Schemas.InvocationAdmissionFacts].self,
+                    forKey: .admissions
+                )
                 try decoder.ensureNoAdditionalProperties(knownKeys: [
                     "as_of_revision",
                     "as_of",
@@ -4887,7 +4900,8 @@ public enum Components {
                     "invocations",
                     "review",
                     "completion",
-                    "billable_cost_so_far"
+                    "billable_cost_so_far",
+                    "admissions"
                 ])
             }
         }
@@ -10846,6 +10860,483 @@ public enum Components {
                 ])
             }
         }
+        /// What ran one invocation, as its admission recorded it (plan §5.4, §7). Every value is read from the admission record. A field the record does not carry is null and never filled from current configuration: a legacy execution admission has no agent binding; a binding admitted before harness, lineage group, and cost owner were recorded lacks those; a review admission never records credential mode, egress profile, operating mode, or isolation class. Clients render null as unavailable.
+        ///
+        ///
+        /// - Remark: Generated from `#/components/schemas/InvocationAdmissionFacts`.
+        public struct InvocationAdmissionFacts: Codable, Hashable, Sendable {
+            /// - Remark: Generated from `#/components/schemas/InvocationAdmissionFacts/invocation_id`.
+            public var invocation_id: Swift.String
+            /// - Remark: Generated from `#/components/schemas/InvocationAdmissionFacts/kind`.
+            public var kind: Components.Schemas.AdmissionKind
+            /// The ward role the invocation ran as, when its recording names one.
+            ///
+            /// - Remark: Generated from `#/components/schemas/InvocationAdmissionFacts/role`.
+            public struct rolePayload: Codable, Hashable, Sendable {
+                /// - Remark: Generated from `#/components/schemas/InvocationAdmissionFacts/role/value1`.
+                public var value1: Components.Schemas.RoleName
+                /// Creates a new `rolePayload`.
+                ///
+                /// - Parameters:
+                ///   - value1:
+                public init(value1: Components.Schemas.RoleName) {
+                    self.value1 = value1
+                }
+                public init(from decoder: any Swift.Decoder) throws {
+                    self.value1 = try decoder.decodeFromSingleValueContainer()
+                }
+                public func encode(to encoder: any Swift.Encoder) throws {
+                    try encoder.encodeToSingleValueContainer(self.value1)
+                }
+            }
+            /// The ward role the invocation ran as, when its recording names one.
+            ///
+            /// - Remark: Generated from `#/components/schemas/InvocationAdmissionFacts/role`.
+            public var role: Components.Schemas.InvocationAdmissionFacts.rolePayload?
+            /// - Remark: Generated from `#/components/schemas/InvocationAdmissionFacts/admitted_at`.
+            public var admitted_at: Foundation.Date
+            /// - Remark: Generated from `#/components/schemas/InvocationAdmissionFacts/agent_digest`.
+            public struct agent_digestPayload: Codable, Hashable, Sendable {
+                /// - Remark: Generated from `#/components/schemas/InvocationAdmissionFacts/agent_digest/value1`.
+                public var value1: Components.Schemas.Digest
+                /// Creates a new `agent_digestPayload`.
+                ///
+                /// - Parameters:
+                ///   - value1:
+                public init(value1: Components.Schemas.Digest) {
+                    self.value1 = value1
+                }
+                public init(from decoder: any Swift.Decoder) throws {
+                    self.value1 = try decoder.decodeFromSingleValueContainer()
+                }
+                public func encode(to encoder: any Swift.Encoder) throws {
+                    try encoder.encodeToSingleValueContainer(self.value1)
+                }
+            }
+            /// - Remark: Generated from `#/components/schemas/InvocationAdmissionFacts/agent_digest`.
+            public var agent_digest: Components.Schemas.InvocationAdmissionFacts.agent_digestPayload?
+            /// - Remark: Generated from `#/components/schemas/InvocationAdmissionFacts/selection_source`.
+            public struct selection_sourcePayload: Codable, Hashable, Sendable {
+                /// - Remark: Generated from `#/components/schemas/InvocationAdmissionFacts/selection_source/value1`.
+                public var value1: Components.Schemas.AgentSelectionSource
+                /// Creates a new `selection_sourcePayload`.
+                ///
+                /// - Parameters:
+                ///   - value1:
+                public init(value1: Components.Schemas.AgentSelectionSource) {
+                    self.value1 = value1
+                }
+                public init(from decoder: any Swift.Decoder) throws {
+                    self.value1 = try decoder.decodeFromSingleValueContainer()
+                }
+                public func encode(to encoder: any Swift.Encoder) throws {
+                    try encoder.encodeToSingleValueContainer(self.value1)
+                }
+            }
+            /// - Remark: Generated from `#/components/schemas/InvocationAdmissionFacts/selection_source`.
+            public var selection_source: Components.Schemas.InvocationAdmissionFacts.selection_sourcePayload?
+            /// - Remark: Generated from `#/components/schemas/InvocationAdmissionFacts/harness`.
+            public struct harnessPayload: Codable, Hashable, Sendable {
+                /// - Remark: Generated from `#/components/schemas/InvocationAdmissionFacts/harness/value1`.
+                public var value1: Components.Schemas.HarnessClientKind
+                /// Creates a new `harnessPayload`.
+                ///
+                /// - Parameters:
+                ///   - value1:
+                public init(value1: Components.Schemas.HarnessClientKind) {
+                    self.value1 = value1
+                }
+                public init(from decoder: any Swift.Decoder) throws {
+                    self.value1 = try decoder.decodeFromSingleValueContainer()
+                }
+                public func encode(to encoder: any Swift.Encoder) throws {
+                    try encoder.encodeToSingleValueContainer(self.value1)
+                }
+            }
+            /// - Remark: Generated from `#/components/schemas/InvocationAdmissionFacts/harness`.
+            public var harness: Components.Schemas.InvocationAdmissionFacts.harnessPayload?
+            /// The model the route passed to the harness.
+            ///
+            /// - Remark: Generated from `#/components/schemas/InvocationAdmissionFacts/model`.
+            public var model: Swift.String?
+            /// - Remark: Generated from `#/components/schemas/InvocationAdmissionFacts/requested_effort`.
+            public struct requested_effortPayload: Codable, Hashable, Sendable {
+                /// - Remark: Generated from `#/components/schemas/InvocationAdmissionFacts/requested_effort/value1`.
+                public var value1: Components.Schemas.EffortLevel
+                /// Creates a new `requested_effortPayload`.
+                ///
+                /// - Parameters:
+                ///   - value1:
+                public init(value1: Components.Schemas.EffortLevel) {
+                    self.value1 = value1
+                }
+                public init(from decoder: any Swift.Decoder) throws {
+                    self.value1 = try decoder.decodeFromSingleValueContainer()
+                }
+                public func encode(to encoder: any Swift.Encoder) throws {
+                    try encoder.encodeToSingleValueContainer(self.value1)
+                }
+            }
+            /// - Remark: Generated from `#/components/schemas/InvocationAdmissionFacts/requested_effort`.
+            public var requested_effort: Components.Schemas.InvocationAdmissionFacts.requested_effortPayload?
+            /// The effort as the harness names it, after any rendered clamp.
+            ///
+            /// - Remark: Generated from `#/components/schemas/InvocationAdmissionFacts/native_effort`.
+            public var native_effort: Swift.String?
+            /// - Remark: Generated from `#/components/schemas/InvocationAdmissionFacts/cost_owner`.
+            public var cost_owner: Swift.String?
+            /// - Remark: Generated from `#/components/schemas/InvocationAdmissionFacts/lineage_group`.
+            public var lineage_group: Swift.String?
+            /// - Remark: Generated from `#/components/schemas/InvocationAdmissionFacts/credential_mode`.
+            public struct credential_modePayload: Codable, Hashable, Sendable {
+                /// - Remark: Generated from `#/components/schemas/InvocationAdmissionFacts/credential_mode/value1`.
+                public var value1: Components.Schemas.CredentialMode
+                /// Creates a new `credential_modePayload`.
+                ///
+                /// - Parameters:
+                ///   - value1:
+                public init(value1: Components.Schemas.CredentialMode) {
+                    self.value1 = value1
+                }
+                public init(from decoder: any Swift.Decoder) throws {
+                    self.value1 = try decoder.decodeFromSingleValueContainer()
+                }
+                public func encode(to encoder: any Swift.Encoder) throws {
+                    try encoder.encodeToSingleValueContainer(self.value1)
+                }
+            }
+            /// - Remark: Generated from `#/components/schemas/InvocationAdmissionFacts/credential_mode`.
+            public var credential_mode: Components.Schemas.InvocationAdmissionFacts.credential_modePayload?
+            /// - Remark: Generated from `#/components/schemas/InvocationAdmissionFacts/egress_profile`.
+            public struct egress_profilePayload: Codable, Hashable, Sendable {
+                /// - Remark: Generated from `#/components/schemas/InvocationAdmissionFacts/egress_profile/value1`.
+                public var value1: Components.Schemas.EgressProfile
+                /// Creates a new `egress_profilePayload`.
+                ///
+                /// - Parameters:
+                ///   - value1:
+                public init(value1: Components.Schemas.EgressProfile) {
+                    self.value1 = value1
+                }
+                public init(from decoder: any Swift.Decoder) throws {
+                    self.value1 = try decoder.decodeFromSingleValueContainer()
+                }
+                public func encode(to encoder: any Swift.Encoder) throws {
+                    try encoder.encodeToSingleValueContainer(self.value1)
+                }
+            }
+            /// - Remark: Generated from `#/components/schemas/InvocationAdmissionFacts/egress_profile`.
+            public var egress_profile: Components.Schemas.InvocationAdmissionFacts.egress_profilePayload?
+            /// - Remark: Generated from `#/components/schemas/InvocationAdmissionFacts/operating_mode`.
+            public struct operating_modePayload: Codable, Hashable, Sendable {
+                /// - Remark: Generated from `#/components/schemas/InvocationAdmissionFacts/operating_mode/value1`.
+                public var value1: Components.Schemas.OperatingMode
+                /// Creates a new `operating_modePayload`.
+                ///
+                /// - Parameters:
+                ///   - value1:
+                public init(value1: Components.Schemas.OperatingMode) {
+                    self.value1 = value1
+                }
+                public init(from decoder: any Swift.Decoder) throws {
+                    self.value1 = try decoder.decodeFromSingleValueContainer()
+                }
+                public func encode(to encoder: any Swift.Encoder) throws {
+                    try encoder.encodeToSingleValueContainer(self.value1)
+                }
+            }
+            /// - Remark: Generated from `#/components/schemas/InvocationAdmissionFacts/operating_mode`.
+            public var operating_mode: Components.Schemas.InvocationAdmissionFacts.operating_modePayload?
+            /// The admitting backend, the class `freesided doctor` reports.
+            ///
+            /// - Remark: Generated from `#/components/schemas/InvocationAdmissionFacts/isolation_class`.
+            public var isolation_class: Swift.String?
+            /// Present exactly on a review admission's facts: the reviewer's lineage relation to each writing role, compared against the latest writer admitted at or before the review. A recorded fact, never a gate.
+            ///
+            ///
+            /// - Remark: Generated from `#/components/schemas/InvocationAdmissionFacts/independence`.
+            public var independence: [Components.Schemas.IndependenceEntry]?
+            /// Creates a new `InvocationAdmissionFacts`.
+            ///
+            /// - Parameters:
+            ///   - invocation_id:
+            ///   - kind:
+            ///   - role: The ward role the invocation ran as, when its recording names one.
+            ///   - admitted_at:
+            ///   - agent_digest:
+            ///   - selection_source:
+            ///   - harness:
+            ///   - model: The model the route passed to the harness.
+            ///   - requested_effort:
+            ///   - native_effort: The effort as the harness names it, after any rendered clamp.
+            ///   - cost_owner:
+            ///   - lineage_group:
+            ///   - credential_mode:
+            ///   - egress_profile:
+            ///   - operating_mode:
+            ///   - isolation_class: The admitting backend, the class `freesided doctor` reports.
+            ///   - independence: Present exactly on a review admission's facts: the reviewer's lineage relation to each writing role, compared against the latest writer admitted at or before the review. A recorded fact, never a gate.
+            public init(
+                invocation_id: Swift.String,
+                kind: Components.Schemas.AdmissionKind,
+                role: Components.Schemas.InvocationAdmissionFacts.rolePayload? = nil,
+                admitted_at: Foundation.Date,
+                agent_digest: Components.Schemas.InvocationAdmissionFacts.agent_digestPayload? = nil,
+                selection_source: Components.Schemas.InvocationAdmissionFacts.selection_sourcePayload? = nil,
+                harness: Components.Schemas.InvocationAdmissionFacts.harnessPayload? = nil,
+                model: Swift.String? = nil,
+                requested_effort: Components.Schemas.InvocationAdmissionFacts.requested_effortPayload? = nil,
+                native_effort: Swift.String? = nil,
+                cost_owner: Swift.String? = nil,
+                lineage_group: Swift.String? = nil,
+                credential_mode: Components.Schemas.InvocationAdmissionFacts.credential_modePayload? = nil,
+                egress_profile: Components.Schemas.InvocationAdmissionFacts.egress_profilePayload? = nil,
+                operating_mode: Components.Schemas.InvocationAdmissionFacts.operating_modePayload? = nil,
+                isolation_class: Swift.String? = nil,
+                independence: [Components.Schemas.IndependenceEntry]? = nil
+            ) {
+                self.invocation_id = invocation_id
+                self.kind = kind
+                self.role = role
+                self.admitted_at = admitted_at
+                self.agent_digest = agent_digest
+                self.selection_source = selection_source
+                self.harness = harness
+                self.model = model
+                self.requested_effort = requested_effort
+                self.native_effort = native_effort
+                self.cost_owner = cost_owner
+                self.lineage_group = lineage_group
+                self.credential_mode = credential_mode
+                self.egress_profile = egress_profile
+                self.operating_mode = operating_mode
+                self.isolation_class = isolation_class
+                self.independence = independence
+            }
+            public enum CodingKeys: String, CodingKey {
+                case invocation_id
+                case kind
+                case role
+                case admitted_at
+                case agent_digest
+                case selection_source
+                case harness
+                case model
+                case requested_effort
+                case native_effort
+                case cost_owner
+                case lineage_group
+                case credential_mode
+                case egress_profile
+                case operating_mode
+                case isolation_class
+                case independence
+            }
+            public init(from decoder: any Swift.Decoder) throws {
+                let container = try decoder.container(keyedBy: CodingKeys.self)
+                self.invocation_id = try container.decode(
+                    Swift.String.self,
+                    forKey: .invocation_id
+                )
+                self.kind = try container.decode(
+                    Components.Schemas.AdmissionKind.self,
+                    forKey: .kind
+                )
+                self.role = try container.decodeIfPresent(
+                    Components.Schemas.InvocationAdmissionFacts.rolePayload.self,
+                    forKey: .role
+                )
+                self.admitted_at = try container.decode(
+                    Foundation.Date.self,
+                    forKey: .admitted_at
+                )
+                self.agent_digest = try container.decodeIfPresent(
+                    Components.Schemas.InvocationAdmissionFacts.agent_digestPayload.self,
+                    forKey: .agent_digest
+                )
+                self.selection_source = try container.decodeIfPresent(
+                    Components.Schemas.InvocationAdmissionFacts.selection_sourcePayload.self,
+                    forKey: .selection_source
+                )
+                self.harness = try container.decodeIfPresent(
+                    Components.Schemas.InvocationAdmissionFacts.harnessPayload.self,
+                    forKey: .harness
+                )
+                self.model = try container.decodeIfPresent(
+                    Swift.String.self,
+                    forKey: .model
+                )
+                self.requested_effort = try container.decodeIfPresent(
+                    Components.Schemas.InvocationAdmissionFacts.requested_effortPayload.self,
+                    forKey: .requested_effort
+                )
+                self.native_effort = try container.decodeIfPresent(
+                    Swift.String.self,
+                    forKey: .native_effort
+                )
+                self.cost_owner = try container.decodeIfPresent(
+                    Swift.String.self,
+                    forKey: .cost_owner
+                )
+                self.lineage_group = try container.decodeIfPresent(
+                    Swift.String.self,
+                    forKey: .lineage_group
+                )
+                self.credential_mode = try container.decodeIfPresent(
+                    Components.Schemas.InvocationAdmissionFacts.credential_modePayload.self,
+                    forKey: .credential_mode
+                )
+                self.egress_profile = try container.decodeIfPresent(
+                    Components.Schemas.InvocationAdmissionFacts.egress_profilePayload.self,
+                    forKey: .egress_profile
+                )
+                self.operating_mode = try container.decodeIfPresent(
+                    Components.Schemas.InvocationAdmissionFacts.operating_modePayload.self,
+                    forKey: .operating_mode
+                )
+                self.isolation_class = try container.decodeIfPresent(
+                    Swift.String.self,
+                    forKey: .isolation_class
+                )
+                self.independence = try container.decodeIfPresent(
+                    [Components.Schemas.IndependenceEntry].self,
+                    forKey: .independence
+                )
+                try decoder.ensureNoAdditionalProperties(knownKeys: [
+                    "invocation_id",
+                    "kind",
+                    "role",
+                    "admitted_at",
+                    "agent_digest",
+                    "selection_source",
+                    "harness",
+                    "model",
+                    "requested_effort",
+                    "native_effort",
+                    "cost_owner",
+                    "lineage_group",
+                    "credential_mode",
+                    "egress_profile",
+                    "operating_mode",
+                    "isolation_class",
+                    "independence"
+                ])
+            }
+        }
+        /// A judging role's lineage relation to one writing role (plan §7).
+        ///
+        /// - Remark: Generated from `#/components/schemas/IndependenceEntry`.
+        public struct IndependenceEntry: Codable, Hashable, Sendable {
+            /// - Remark: Generated from `#/components/schemas/IndependenceEntry/writing_role`.
+            public var writing_role: Components.Schemas.RoleName
+            /// - Remark: Generated from `#/components/schemas/IndependenceEntry/lineage`.
+            public var lineage: Components.Schemas.LineageRelation
+            /// Creates a new `IndependenceEntry`.
+            ///
+            /// - Parameters:
+            ///   - writing_role:
+            ///   - lineage:
+            public init(
+                writing_role: Components.Schemas.RoleName,
+                lineage: Components.Schemas.LineageRelation
+            ) {
+                self.writing_role = writing_role
+                self.lineage = lineage
+            }
+            public enum CodingKeys: String, CodingKey {
+                case writing_role
+                case lineage
+            }
+            public init(from decoder: any Swift.Decoder) throws {
+                let container = try decoder.container(keyedBy: CodingKeys.self)
+                self.writing_role = try container.decode(
+                    Components.Schemas.RoleName.self,
+                    forKey: .writing_role
+                )
+                self.lineage = try container.decode(
+                    Components.Schemas.LineageRelation.self,
+                    forKey: .lineage
+                )
+                try decoder.ensureNoAdditionalProperties(knownKeys: [
+                    "writing_role",
+                    "lineage"
+                ])
+            }
+        }
+        /// The admission record an invocation's facts are read from.
+        ///
+        /// - Remark: Generated from `#/components/schemas/AdmissionKind`.
+        @frozen public enum AdmissionKind: String, Codable, Hashable, Sendable, CaseIterable {
+            case execution = "execution"
+            case review = "review"
+        }
+        /// A role an invocation runs as (plan §5.4).
+        ///
+        /// - Remark: Generated from `#/components/schemas/RoleName`.
+        @frozen public enum RoleName: String, Codable, Hashable, Sendable, CaseIterable {
+            case specifier = "specifier"
+            case implementer = "implementer"
+            case remediator = "remediator"
+            case reviewer = "reviewer"
+            case shadow_reviewer = "shadow_reviewer"
+            case diagnostic = "diagnostic"
+            case task_namer = "task_namer"
+            case publication_author = "publication_author"
+            case finding_classifier = "finding_classifier"
+            case finding_adjudicator = "finding_adjudicator"
+            case drift_auditor = "drift_auditor"
+            case attention_discussion = "attention_discussion"
+            case briefer = "briefer"
+        }
+        /// A judging role's lineage group against a writing role's. unknown when either side records no lineage group or no writer was admitted.
+        ///
+        ///
+        /// - Remark: Generated from `#/components/schemas/LineageRelation`.
+        @frozen public enum LineageRelation: String, Codable, Hashable, Sendable, CaseIterable {
+            case matched = "matched"
+            case differed = "differed"
+            case unknown = "unknown"
+        }
+        /// The harness client that ran an agent.
+        ///
+        /// - Remark: Generated from `#/components/schemas/HarnessClientKind`.
+        @frozen public enum HarnessClientKind: String, Codable, Hashable, Sendable, CaseIterable {
+            case claude_code = "claude_code"
+            case codex_cli = "codex_cli"
+        }
+        /// The effort an agent requested, in Freeside's vocabulary (plan §5.4).
+        ///
+        /// - Remark: Generated from `#/components/schemas/EffortLevel`.
+        @frozen public enum EffortLevel: String, Codable, Hashable, Sendable, CaseIterable {
+            case harness_default = "harness_default"
+            case low = "low"
+            case medium = "medium"
+            case high = "high"
+            case max = "max"
+        }
+        /// What chose the agent an invocation was admitted with.
+        ///
+        /// - Remark: Generated from `#/components/schemas/AgentSelectionSource`.
+        @frozen public enum AgentSelectionSource: String, Codable, Hashable, Sendable, CaseIterable {
+            case lineup = "lineup"
+            case task_line = "task_line"
+            case card = "card"
+        }
+        /// The provider-credential containment an attempt was admitted under (plan §5.4).
+        ///
+        /// - Remark: Generated from `#/components/schemas/CredentialMode`.
+        @frozen public enum CredentialMode: String, Codable, Hashable, Sendable, CaseIterable {
+            case subscription_contained = "subscription_contained"
+            case api_key_isolated = "api_key_isolated"
+            case local_trusted = "local_trusted"
+        }
+        /// Whether an attempt was admitted attended or unattended.
+        ///
+        /// - Remark: Generated from `#/components/schemas/OperatingMode`.
+        @frozen public enum OperatingMode: String, Codable, Hashable, Sendable, CaseIterable {
+            case attended_dev = "attended_dev"
+            case unattended = "unattended"
+        }
         /// The terminal execution outcome and invocation that failed within a workflow stage. cause is present exactly when outcome is failed, copied from the recorded outcome, and absent for canceled and lost.
         ///
         ///
@@ -10864,6 +11355,32 @@ public enum Components {
             ///
             /// - Remark: Generated from `#/components/schemas/ExecutionFailureFacts/offered_manifests`.
             public var offered_manifests: [Components.Schemas.CapabilityManifestOffer]?
+            /// What ran the failed attempt, as its admission recorded it. Absent on items recorded before the field existed.
+            ///
+            ///
+            /// - Remark: Generated from `#/components/schemas/ExecutionFailureFacts/admitted`.
+            public struct admittedPayload: Codable, Hashable, Sendable {
+                /// - Remark: Generated from `#/components/schemas/ExecutionFailureFacts/admitted/value1`.
+                public var value1: Components.Schemas.InvocationAdmissionFacts
+                /// Creates a new `admittedPayload`.
+                ///
+                /// - Parameters:
+                ///   - value1:
+                public init(value1: Components.Schemas.InvocationAdmissionFacts) {
+                    self.value1 = value1
+                }
+                public init(from decoder: any Swift.Decoder) throws {
+                    self.value1 = try .init(from: decoder)
+                }
+                public func encode(to encoder: any Swift.Encoder) throws {
+                    try self.value1.encode(to: encoder)
+                }
+            }
+            /// What ran the failed attempt, as its admission recorded it. Absent on items recorded before the field existed.
+            ///
+            ///
+            /// - Remark: Generated from `#/components/schemas/ExecutionFailureFacts/admitted`.
+            public var admitted: Components.Schemas.ExecutionFailureFacts.admittedPayload?
             /// Creates a new `ExecutionFailureFacts`.
             ///
             /// - Parameters:
@@ -10872,18 +11389,21 @@ public enum Components {
             ///   - stage:
             ///   - invocation_id:
             ///   - offered_manifests: Canonically name-sorted capability alternatives that the current daemon composition can enforce and that differ from the failed admission. Presence is what authorizes retry_with_capabilities.
+            ///   - admitted: What ran the failed attempt, as its admission recorded it. Absent on items recorded before the field existed.
             public init(
                 outcome: Components.Schemas.ExecutionOutcomeStatus,
                 cause: Components.Schemas.FailureCause? = nil,
                 stage: Components.Schemas.StageName,
                 invocation_id: Swift.String,
-                offered_manifests: [Components.Schemas.CapabilityManifestOffer]? = nil
+                offered_manifests: [Components.Schemas.CapabilityManifestOffer]? = nil,
+                admitted: Components.Schemas.ExecutionFailureFacts.admittedPayload? = nil
             ) {
                 self.outcome = outcome
                 self.cause = cause
                 self.stage = stage
                 self.invocation_id = invocation_id
                 self.offered_manifests = offered_manifests
+                self.admitted = admitted
             }
             public enum CodingKeys: String, CodingKey {
                 case outcome
@@ -10891,6 +11411,7 @@ public enum Components {
                 case stage
                 case invocation_id
                 case offered_manifests
+                case admitted
             }
             public init(from decoder: any Swift.Decoder) throws {
                 let container = try decoder.container(keyedBy: CodingKeys.self)
@@ -10914,12 +11435,17 @@ public enum Components {
                     [Components.Schemas.CapabilityManifestOffer].self,
                     forKey: .offered_manifests
                 )
+                self.admitted = try container.decodeIfPresent(
+                    Components.Schemas.ExecutionFailureFacts.admittedPayload.self,
+                    forKey: .admitted
+                )
                 try decoder.ensureNoAdditionalProperties(knownKeys: [
                     "outcome",
                     "cause",
                     "stage",
                     "invocation_id",
-                    "offered_manifests"
+                    "offered_manifests",
+                    "admitted"
                 ])
             }
         }

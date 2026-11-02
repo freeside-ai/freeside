@@ -1,0 +1,19 @@
+{
+  "invocation_id": "inv-1",
+  "kind": "execution",
+  "role": null,
+  "admitted_at": "2026-01-02T03:04:05Z",
+  "agent_digest": null,
+  "selection_source": null,
+  "harness": null,
+  "model": null,
+  "requested_effort": null,
+  "native_effort": null,
+  "cost_owner": null,
+  "lineage_group": null,
+  "credential_mode": "subscription_contained",
+  "egress_profile": "provider_only",
+  "operating_mode": "attended_dev",
+  "isolation_class": "fresh_vm_read_only_volume_handoff",
+  "independence": null
+}

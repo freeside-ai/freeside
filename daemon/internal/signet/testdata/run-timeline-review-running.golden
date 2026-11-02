@@ -44,5 +44,35 @@
       }
     ]
   },
-  "billable_cost_so_far": null
+  "billable_cost_so_far": null,
+  "admissions": [
+    {
+      "invocation_id": "review-1",
+      "kind": "review",
+      "role": "reviewer",
+      "admitted_at": "2026-01-02T03:04:05Z",
+      "agent_digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "selection_source": "lineup",
+      "harness": "codex_cli",
+      "model": "gpt-codex",
+      "requested_effort": "high",
+      "native_effort": "high",
+      "cost_owner": null,
+      "lineage_group": "openai",
+      "credential_mode": null,
+      "egress_profile": null,
+      "operating_mode": null,
+      "isolation_class": null,
+      "independence": [
+        {
+          "writing_role": "implementer",
+          "lineage": "unknown"
+        },
+        {
+          "writing_role": "remediator",
+          "lineage": "unknown"
+        }
+      ]
+    }
+  ]
 }

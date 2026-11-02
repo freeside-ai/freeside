@@ -165,7 +165,7 @@ public enum RunFixtures {
                     status: .completed, live: false, observed_at: date(3_700)),
             ],
             review: .init(value1: .init(rounds: [round])),
-            billable_cost_so_far: nil)
+            billable_cost_so_far: nil, admissions: [])
     }
 
     public static func completedTimeline() -> Components.Schemas.RunTimeline {
@@ -184,7 +184,7 @@ public enum RunFixtures {
                     status: .completed, live: false, observed_at: date(720))
             ],
             completion: .init(value1: completedFacts),
-            billable_cost_so_far: .init(value1: completedCost))
+            billable_cost_so_far: .init(value1: completedCost), admissions: [])
     }
 
     private static let completedFacts = Components.Schemas.WorkUnitCompletionFacts(
@@ -324,7 +324,7 @@ public enum RunFixtures {
                         reviewRound(.running, round: 2),
                     ])),
                 completion: nil,
-                billable_cost_so_far: .init(value1: activeCost)),
+                billable_cost_so_far: .init(value1: activeCost), admissions: []),
             .init(
                 as_of_revision: 12, as_of: date(1_080), run_id: readyRunID,
                 milestones: [
@@ -339,7 +339,7 @@ public enum RunFixtures {
                         status: .completed, live: false, observed_at: date(1_080))
                 ],
                 completion: nil,
-                billable_cost_so_far: nil),
+                billable_cost_so_far: nil, admissions: []),
             .init(
                 as_of_revision: 12, as_of: date(600), run_id: "run-oriole-121",
                 milestones: [
@@ -353,7 +353,7 @@ public enum RunFixtures {
                         status: .failed, live: false, observed_at: date(600))
                 ],
                 completion: nil,
-                billable_cost_so_far: nil),
+                billable_cost_so_far: nil, admissions: []),
             // The legacy run's timeline is empty: no milestones synthesized,
             // matching the daemon's no-backfill projection of an unobserved run.
             .init(
@@ -361,21 +361,21 @@ public enum RunFixtures {
                 milestones: [],
                 invocations: [],
                 completion: nil,
-                billable_cost_so_far: nil),
+                billable_cost_so_far: nil, admissions: []),
             .init(
                 as_of_revision: 12, as_of: date(900), run_id: "run-freeside-656",
                 milestones: [
                     milestone(.run_submitted, runID: "run-freeside-656", minute: 0),
                     milestone(.terminal_recorded, runID: "run-freeside-656", minute: 15),
                 ],
-                invocations: [], completion: nil, billable_cost_so_far: nil),
+                invocations: [], completion: nil, billable_cost_so_far: nil, admissions: []),
             .init(
                 as_of_revision: 12, as_of: date(300), run_id: "run-freeside-specification",
                 milestones: [
                     milestone(.run_submitted, runID: "run-freeside-specification", minute: 0),
                     milestone(.execution_export_recorded, runID: "run-freeside-specification", minute: 5),
                 ],
-                invocations: [], completion: nil, billable_cost_so_far: nil),
+                invocations: [], completion: nil, billable_cost_so_far: nil, admissions: []),
             completedTimeline(),
         ]
     }

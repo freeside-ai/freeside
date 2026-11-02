@@ -262,7 +262,7 @@ enum TaskHistoryFixtures {
             return Components.Schemas.RunTimeline(
                 as_of_revision: history.as_of_revision, as_of: history.as_of,
                 run_id: run.run_id, milestones: run.milestones, invocations: [],
-                review: .init(value1: .init(rounds: [round])))
+                review: .init(value1: .init(rounds: [round])), admissions: [])
         }
         try cache.save(
             .init(

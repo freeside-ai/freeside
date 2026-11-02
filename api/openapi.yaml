@@ -2427,7 +2427,7 @@ components:
       additionalProperties: false
       required:
         [as_of_revision, as_of, run_id, milestones, hold, invocations,
-         completion, review, billable_cost_so_far]
+         completion, review, billable_cost_so_far, admissions]
       properties:
         as_of_revision:
           $ref: "#/components/schemas/AsOfRevision"
@@ -2468,6 +2468,14 @@ components:
           description: >
             The run's billable spend so far, computed the same way attention
             cards compute theirs; null before any billable observation.
+        admissions:
+          type: array
+          description: >
+            What ran each admitted invocation of the run, as its execution or
+            review admission recorded it, ordered by admitted_at then
+            invocation_id. Only the run timeline carries it.
+          items:
+            $ref: "#/components/schemas/InvocationAdmissionFacts"
       example:
         as_of_revision: 42
         as_of: "2026-01-02T03:14:06Z"
@@ -2501,6 +2509,7 @@ components:
           amount: "17.5"
           invocations: 1
           complete: true
+        admissions: []
 
     RunReviewFacts:
       type: "object"
@@ -5072,6 +5081,178 @@ components:
           items:
             $ref: "#/components/schemas/Decision"
 
+    InvocationAdmissionFacts:
+      type: object
+      description: >
+        What ran one invocation, as its admission recorded it (plan §5.4, §7).
+        Every value is read from the admission record. A field the record does
+        not carry is null and never filled from current configuration: a
+        legacy execution admission has no agent binding; a binding admitted
+        before harness, lineage group, and cost owner were recorded lacks
+        those; a review admission never records credential mode, egress
+        profile, operating mode, or isolation class. Clients render null as
+        unavailable.
+      additionalProperties: false
+      required:
+        - invocation_id
+        - kind
+        - role
+        - admitted_at
+        - agent_digest
+        - selection_source
+        - harness
+        - model
+        - requested_effort
+        - native_effort
+        - cost_owner
+        - lineage_group
+        - credential_mode
+        - egress_profile
+        - operating_mode
+        - isolation_class
+        - independence
+      properties:
+        invocation_id:
+          type: string
+          minLength: 1
+        kind:
+          $ref: "#/components/schemas/AdmissionKind"
+        role:
+          nullable: true
+          allOf:
+            - $ref: "#/components/schemas/RoleName"
+          description: The ward role the invocation ran as, when its recording names one.
+        admitted_at:
+          type: string
+          format: date-time
+        agent_digest:
+          nullable: true
+          allOf:
+            - $ref: "#/components/schemas/Digest"
+        selection_source:
+          nullable: true
+          allOf:
+            - $ref: "#/components/schemas/AgentSelectionSource"
+        harness:
+          nullable: true
+          allOf:
+            - $ref: "#/components/schemas/HarnessClientKind"
+        model:
+          type: string
+          nullable: true
+          minLength: 1
+          description: The model the route passed to the harness.
+        requested_effort:
+          nullable: true
+          allOf:
+            - $ref: "#/components/schemas/EffortLevel"
+        native_effort:
+          type: string
+          nullable: true
+          minLength: 1
+          description: The effort as the harness names it, after any rendered clamp.
+        cost_owner:
+          type: string
+          nullable: true
+          minLength: 1
+        lineage_group:
+          type: string
+          nullable: true
+          minLength: 1
+        credential_mode:
+          nullable: true
+          allOf:
+            - $ref: "#/components/schemas/CredentialMode"
+        egress_profile:
+          nullable: true
+          allOf:
+            - $ref: "#/components/schemas/EgressProfile"
+        operating_mode:
+          nullable: true
+          allOf:
+            - $ref: "#/components/schemas/OperatingMode"
+        isolation_class:
+          type: string
+          nullable: true
+          minLength: 1
+          description: The admitting backend, the class `freesided doctor` reports.
+        independence:
+          type: array
+          nullable: true
+          description: >
+            Present exactly on a review admission's facts: the reviewer's
+            lineage relation to each writing role, compared against the latest
+            writer admitted at or before the review. A recorded fact, never a
+            gate.
+          items:
+            $ref: "#/components/schemas/IndependenceEntry"
+
+    IndependenceEntry:
+      type: object
+      description: A judging role's lineage relation to one writing role (plan §7).
+      additionalProperties: false
+      required: [writing_role, lineage]
+      properties:
+        writing_role:
+          $ref: "#/components/schemas/RoleName"
+        lineage:
+          $ref: "#/components/schemas/LineageRelation"
+
+    AdmissionKind:
+      type: string
+      description: The admission record an invocation's facts are read from.
+      enum: [execution, review]
+
+    RoleName:
+      type: string
+      description: A role an invocation runs as (plan §5.4).
+      enum:
+        - specifier
+        - implementer
+        - remediator
+        - reviewer
+        - shadow_reviewer
+        - diagnostic
+        - task_namer
+        - publication_author
+        - finding_classifier
+        - finding_adjudicator
+        - drift_auditor
+        - attention_discussion
+        - briefer
+
+    LineageRelation:
+      type: string
+      description: >
+        A judging role's lineage group against a writing role's. unknown when
+        either side records no lineage group or no writer was admitted.
+      enum: [matched, differed, unknown]
+
+    HarnessClientKind:
+      type: string
+      description: The harness client that ran an agent.
+      enum: [claude_code, codex_cli]
+
+    EffortLevel:
+      type: string
+      description: The effort an agent requested, in Freeside's vocabulary (plan §5.4).
+      enum: [harness_default, low, medium, high, max]
+
+    AgentSelectionSource:
+      type: string
+      description: What chose the agent an invocation was admitted with.
+      enum: [lineup, task_line, card]
+
+    CredentialMode:
+      type: string
+      description: The provider-credential containment an attempt was admitted under (plan §5.4).
+      enum: [subscription_contained, api_key_isolated, local_trusted]
+
+    OperatingMode:
+      type: string
+      description: Whether an attempt was admitted attended or unattended.
+      enum: [attended_dev, unattended]
+
     ExecutionFailureFacts:
       type: object
       description: >
@@ -5098,6 +5279,12 @@ components:
             Canonically name-sorted capability alternatives that the current
             daemon composition can enforce and that differ from the failed
             admission. Presence is what authorizes retry_with_capabilities.
+        admitted:
+          allOf:
+            - $ref: "#/components/schemas/InvocationAdmissionFacts"
+          description: >
+            What ran the failed attempt, as its admission recorded it. Absent
+            on items recorded before the field existed.
 
     InterpretationFailureFacts:
       type: object

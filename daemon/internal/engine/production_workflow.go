@@ -1702,9 +1702,13 @@ func (e *Engine) recordProductionTerminalWithCompletion(
 		}
 		if insertedNow && terminal.Status != exec.StatusCompleted && terminal.Status != exec.StatusBlocked {
 			createdAt := time.Now().UTC()
+			var role domain.RoleName
+			if stage, ok := productionStageForInvocation(run, terminal.InvocationID); ok {
+				role, _ = wardRole(run, stage, terminal.InvocationID)
+			}
 			facts, err := executionFailureFacts(
 				ctx, tx, terminal.InvocationID, terminal.Status, terminal.Summary,
-				terminal.Cause, createdAt, domain.StageNameImplementation,
+				terminal.Cause, createdAt, domain.StageNameImplementation, role,
 			)
 			if err != nil {
 				return err
@@ -1889,9 +1893,11 @@ func (e *Engine) recordProductionDeliveryRefusal(
 		}
 		var facts *domain.ExecutionFailureFacts
 		if admissionErr == nil {
+			role, _ := wardRole(current, currentStage, invocationID)
 			facts = &domain.ExecutionFailureFacts{
 				Outcome: domain.ExecutionOutcomeFailed, Cause: domain.FailureCauseUnknown,
 				Stage: domain.StageNameImplementation, InvocationID: invocationID,
+				Admitted: admittedFacts(admission, role),
 			}
 		}
 		item, itemErr := tx.GetAttentionItem(ctx, itemID)
@@ -1906,6 +1912,11 @@ func (e *Engine) recordProductionDeliveryRefusal(
 		} else if itemErr != nil {
 			return itemErr
 		} else {
+			// An item raised before the admitted facts existed (#979) is
+			// stored without them, and a replay must converge on that body.
+			if facts != nil && item.ExecutionFailure != nil && item.ExecutionFailure.Admitted == nil {
+				facts.Admitted = nil
+			}
 			want, err := productionDeliveryRefusalItem(current, terminal, *item.CreatedAt, facts, names)
 			if err != nil {
 				return err

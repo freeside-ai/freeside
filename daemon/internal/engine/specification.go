@@ -3537,7 +3537,7 @@ func (e *Engine) recordSpecificationFailureWithCause(
 		createdAt := e.specification.now().UTC()
 		facts, err := executionFailureFacts(
 			ctx, tx, request.InvocationID, status, summary, cause, createdAt,
-			domain.StageNameSpecification,
+			domain.StageNameSpecification, domain.RoleSpecifier,
 		)
 		if err != nil {
 			return err
