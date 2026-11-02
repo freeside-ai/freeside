@@ -54,6 +54,9 @@ func (d scenarioStageDriver) Start(ctx context.Context, id domain.InvocationID, 
 		}
 		return d.StageDriver.Start(ctx, id, spec)
 	}
+	if refused, err := d.refuseOnQuota(ctx, id, spec); err != nil || refused {
+		return err
+	}
 	if err := d.deliver(ctx, id, spec); err != nil {
 		return fmt.Errorf("scenario %s: deliver %s: %w", d.scenario.Name, id, err)
 	}
@@ -62,6 +65,41 @@ func (d scenarioStageDriver) Start(ctx context.Context, id domain.InvocationID, 
 		Result: exec.StageResult{Summary: "The scenario implementer delivered its files."},
 	})
 	return d.StageDriver.Start(ctx, id, spec)
+}
+
+// refuseOnQuota starts the scenario's quota refusal in place of a delivery
+// when the scenario has one and the run is its campaign's first attempt. A
+// later attempt delivers.
+func (d scenarioStageDriver) refuseOnQuota(
+	ctx context.Context, id domain.InvocationID, spec exec.StartSpec,
+) (bool, error) {
+	refusal := d.scenario.QuotaRefusal
+	if refusal == nil {
+		return false, nil
+	}
+	var run domain.Run
+	if err := d.store.Read(ctx, func(tx *store.ReadTx) error {
+		var err error
+		run, err = tx.GetRun(ctx, spec.RunID)
+		return err
+	}); err != nil {
+		return false, fmt.Errorf("scenario %s: read run %s: %w", d.scenario.Name, spec.RunID, err)
+	}
+	if run.AttemptNumber > 1 {
+		return false, nil
+	}
+	resetsAt := time.Now().UTC().Add(refusal.ResetAfter)
+	d.Script(id, fake.StageScript{
+		Outcome: fake.OutcomeFail,
+		Result: exec.StageResult{
+			Summary: "The scenario provider refused the run: its quota window is exhausted.",
+			Cause:   domain.FailureCauseQuota,
+			QuotaRefusal: &domain.QuotaRefusal{
+				Window: refusal.Window, ResetsAt: &resetsAt,
+			},
+		},
+	})
+	return true, d.StageDriver.Start(ctx, id, spec)
 }
 
 // scenarioCommitDate is every delivery's commit date. The replay carries

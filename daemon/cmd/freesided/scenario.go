@@ -7,6 +7,7 @@ import (
 	"maps"
 	"slices"
 	"strings"
+	"time"
 
 	"github.com/freeside-ai/freeside/daemon/internal/specify"
 )
@@ -28,9 +29,22 @@ type scenario struct {
 	// Delivery is the files the implementer writes over BaseFiles. Their
 	// paths are the run's path allowlist.
 	Delivery map[string]string
+	// QuotaRefusal, when set, makes the provider refuse the first
+	// implementation attempt on a quota window. The task parks until the
+	// window resets, then the next attempt delivers.
+	QuotaRefusal *scenarioQuotaRefusal
 }
 
-var scenarios = []scenario{cleanScenario()}
+// scenarioQuotaRefusal is the refusal a quota scenario's first
+// implementation attempt fails with.
+type scenarioQuotaRefusal struct {
+	Window string
+	// ResetAfter is how long after the refusal the window resets: long
+	// enough to watch the park, short enough to wait out the resume.
+	ResetAfter time.Duration
+}
+
+var scenarios = []scenario{cleanScenario(), quotaParkScenario()}
 
 func cleanScenario() scenario {
 	title := "Describe the scenario repository"
@@ -53,6 +67,17 @@ func cleanScenario() scenario {
 				"This repository exists for scripted Freeside runs and holds nothing else.\n",
 		},
 	}
+}
+
+// quotaParkScenario is clean with a provider quota refusal on the first
+// implementation attempt (#2421).
+func quotaParkScenario() scenario {
+	s := cleanScenario()
+	s.Name = "quota-park"
+	s.Description = "the provider refuses the first implementation on a quota window; " +
+		"the task parks until the reset, then publishes"
+	s.QuotaRefusal = &scenarioQuotaRefusal{Window: "five_hour", ResetAfter: 2 * time.Minute}
+	return s
 }
 
 func lookupScenario(name string) (scenario, error) {

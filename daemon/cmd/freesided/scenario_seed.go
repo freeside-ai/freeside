@@ -29,7 +29,10 @@ const (
 	scenarioProjectID    = domain.ProjectID("project-scenario")
 	scenarioBaseRef      = "main"
 	scenarioIdentityID   = domain.AuthIdentityID("auth-scenario")
-	scenarioForgeToken   = "scenario-token"
+	// The quota scenario's enrollment on the scenario identity.
+	scenarioAccountBinding = "acct-scenario"
+	scenarioEnrollmentID   = domain.ClientEnrollmentID("auth-scenario/claude_code")
+	scenarioForgeToken     = "scenario-token"
 )
 
 // scenarioRecipe is the verification recipe the scenario's project image
@@ -108,7 +111,7 @@ func seedScenario(ctx context.Context, st *store.Store, dbPath string, sc scenar
 		WorkflowAuditDigest: world.Profile.WorkflowAuditDigest, Evidence: &evidence,
 		EffectiveTokenPerms: domain.TokenPermissionsReadOnly,
 	}
-	if err := seedScenarioRecords(ctx, st, world, ceiling, now); err != nil {
+	if err := seedScenarioRecords(ctx, st, sc, world, ceiling, now); err != nil {
 		return scenarioWorld{}, err
 	}
 	if err := writeScenarioSubmission(world.Dir, sc); err != nil {
@@ -120,14 +123,21 @@ func seedScenario(ctx context.Context, st *store.Store, dbPath string, sc scenar
 // seedScenarioRecords records the auth identities, project image, backend
 // conformance, and trust profile in one transaction, so a crash leaves all
 // of them or none. A store that already holds the trust profile was seeded.
+// A quota scenario also enrolls a client on the scenario identity: a pool
+// with no enrollment has no collector to own a refusal mark, so the refusal
+// would raise a failure card instead of parking.
 func seedScenarioRecords(
-	ctx context.Context, st *store.Store, world scenarioWorld, ceiling domain.CapabilitySnapshot, now time.Time,
+	ctx context.Context, st *store.Store, sc scenario, world scenarioWorld,
+	ceiling domain.CapabilitySnapshot, now time.Time,
 ) error {
 	identity := domain.AuthIdentity{
 		ID: scenarioIdentityID, Provider: "claude", AuthStoreMutationLease: true,
 		Interim: domain.InterimClientFacts{
 			AuthStoreVolume: "scenario-credentials", RefreshStrategy: domain.RefreshOnDemand,
 		},
+	}
+	if sc.QuotaRefusal != nil {
+		identity.AccountBinding = scenarioAccountBinding
 	}
 	conformance, err := domain.NewBackendConformance(domain.BackendConformanceInput{
 		Backend: domain.BackendFreshVMReadOnlyVolumeHandoff, Outcome: domain.ConformancePassed,
@@ -149,6 +159,16 @@ func seedScenarioRecords(
 		}
 		if err := tx.RecordAuthIdentity(ctx, identity, now); err != nil {
 			return err
+		}
+		if sc.QuotaRefusal != nil {
+			if err := tx.RecordClientEnrollment(ctx, domain.ClientEnrollment{
+				ID: scenarioEnrollmentID, AuthIdentityID: identity.ID,
+				HarnessClient: domain.HarnessClientClaudeCode, Route: "anthropic-subscription",
+				AuthMethod: domain.AuthMethodSetupToken, CredentialMode: domain.CredentialSubscriptionContained,
+				RefreshStrategy: domain.RefreshOnDemand, AccountBinding: identity.AccountBinding,
+			}, now); err != nil {
+				return err
+			}
 		}
 		for _, reviewer := range fake.ReviewIdentities() {
 			if err := tx.RecordUsagePool(ctx, domain.UsagePool{
