@@ -4588,3 +4588,180 @@ func testRequestLaunch(t *testing.T, source *CodexReviewSource, request exec.Rev
 	}
 	return launch
 }
+
+// startRecoveredReview starts a live review whose contradiction the tests
+// treat as recovered: its intent is started and its containers run.
+func startRecoveredReview(t *testing.T) (
+	*handoffFixture, *CodexReviewSource, *fakeCodexReviewJournal, domain.InvocationID,
+) {
+	t.Helper()
+	ctx := t.Context()
+	fx := newHandoffFixture(t)
+	seed := fx.seed(t)
+	cfg, spec := testCodexReview(t)
+	journal := &fakeCodexReviewJournal{}
+	source, err := NewCodexReviewSource(codexReviewSourceConfigForTest(
+		t, fx.codexReviewLifecycle(t), cfg, spec, journal))
+	if err != nil {
+		t.Fatal(err)
+	}
+	id := domain.InvocationID("review-recovered-contradiction")
+	if err := source.RequestReview(ctx, id, exec.ReviewRequest{
+		Admission: testReviewAdmission("run-recovered"),
+		RunID:     "run-recovered", Round: 1, Repo: seed.Seed.Base.Repo,
+		RepositoryID: seed.Seed.Base.RepositoryID, BaseRef: seed.Seed.Base.BaseRef,
+		BaseSHA: strings.Repeat("a", 40), HeadSHA: seed.Seed.Base.BaseSHA,
+		Workspace: seed.Seed.SourceDir, Verification: testReviewVerificationEvidence(),
+		Instructions: testReviewInstructionBinding(), RequestedAt: codexReviewEpoch.Add(-time.Minute),
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if intent, err := journal.GetCodexReviewIntent(ctx, string(id)); err != nil ||
+		intent.State != CodexReviewIntentStarted {
+		t.Fatalf("intent = %#v, error=%v", intent, err)
+	}
+	source.mu.Lock()
+	_, launched := source.launches[id]
+	source.mu.Unlock()
+	if containers, _ := fx.rt.ListContainers(ctx); !launched || len(containers) == 0 {
+		t.Fatalf("review is not live before the abort: launched=%v containers=%v", launched, containers)
+	}
+	return fx, source, journal, id
+}
+
+// requireRecoveredReviewReaped checks the ward's proof: the launch is closed,
+// no owned resource remains, and the outcome is ready.
+func requireRecoveredReviewReaped(
+	t *testing.T, fx *handoffFixture, source *CodexReviewSource,
+	journal *fakeCodexReviewJournal, id domain.InvocationID,
+) {
+	t.Helper()
+	source.mu.Lock()
+	_, launched := source.launches[id]
+	source.mu.Unlock()
+	if launched {
+		t.Fatal("in-process launch stayed open")
+	}
+	containers, _ := fx.rt.ListContainers(t.Context())
+	volumes, _ := fx.rt.ListVolumes(t.Context())
+	networks, _ := fx.rt.ListNetworks(t.Context())
+	if len(containers)+len(volumes)+len(networks) != 0 {
+		t.Fatalf("owned resources remain: %v %v %v", containers, volumes, networks)
+	}
+	if !journal.ready[string(id)] {
+		t.Fatal("outcome is not ready")
+	}
+}
+
+func TestAbortRecoveredReviewReapsStartedReview(t *testing.T) {
+	for _, existing := range []bool{false, true} {
+		t.Run(map[bool]string{false: "fence", true: "existing outcome"}[existing], func(t *testing.T) {
+			ctx := t.Context()
+			fx, source, journal, id := startRecoveredReview(t)
+			want := CodexReviewSourceOutcome{
+				InvocationID:  id,
+				FailureClass:  domain.ReviewFailureContradiction,
+				Failure:       "review contradiction recovered by the operator; its containers were reaped",
+				AbortRequired: true,
+			}
+			if existing {
+				want = CodexReviewSourceOutcome{
+					InvocationID: id,
+					FailureClass: domain.ReviewFailureContradiction,
+					Failure:      "inspected review topology diverged",
+				}
+				if err := journal.PutCodexReviewOutcome(ctx, string(id), want); err != nil {
+					t.Fatal(err)
+				}
+			}
+			if err := source.AbortRecoveredReview(ctx, id); err != nil {
+				t.Fatal(err)
+			}
+			requireRecoveredReviewReaped(t, fx, source, journal, id)
+			if outcome, _, err := journal.GetCodexReviewOutcome(ctx, string(id)); err != nil ||
+				!reflect.DeepEqual(outcome, want) {
+				t.Fatalf("outcome = %#v, error=%v; want %#v", outcome, err, want)
+			}
+			fx.rt.onDeleteContainer = func(string) (bool, error) {
+				t.Fatal("repeat abort touched the runtime")
+				return false, nil
+			}
+			if err := source.AbortRecoveredReview(ctx, id); err != nil {
+				t.Fatalf("repeat: %v", err)
+			}
+			if after, ready, err := journal.GetCodexReviewOutcome(ctx, string(id)); err != nil || !ready ||
+				!reflect.DeepEqual(after, want) {
+				t.Fatalf("repeat changed outcome: %#v, ready=%v, error=%v", after, ready, err)
+			}
+		})
+	}
+}
+
+// TestAbortRecoveredReviewDoesNotReraiseItsContradiction: a rejected request
+// or outcome row may be the contradiction the operator recovered. Raising it
+// again would fail every pass, so the abort reaps the review instead.
+func TestAbortRecoveredReviewDoesNotReraiseItsContradiction(t *testing.T) {
+	rejectedRequest := errors.Join(ErrCodexReviewRequestRejected, exec.ErrLegacyReviewRequest)
+	t.Run("rejected request, already reaped", func(t *testing.T) {
+		ctx := t.Context()
+		fx, source, journal, id := startRecoveredReview(t)
+		// rejectPersistedRequest reaps and marks the outcome ready before it
+		// records the contradiction.
+		if err := source.reconcileRejectedRequest(ctx, id); err != nil {
+			t.Fatal(err)
+		}
+		journal.failGetRequest = rejectedRequest
+		fx.rt.onDeleteContainer = func(string) (bool, error) {
+			t.Fatal("abort of a reaped review touched the runtime")
+			return false, nil
+		}
+		if err := source.AbortRecoveredReview(ctx, id); err != nil {
+			t.Fatal(err)
+		}
+	})
+	t.Run("rejected request, still live", func(t *testing.T) {
+		fx, source, journal, id := startRecoveredReview(t)
+		journal.failGetRequest = rejectedRequest
+		if err := source.AbortRecoveredReview(t.Context(), id); err != nil {
+			t.Fatal(err)
+		}
+		requireRecoveredReviewReaped(t, fx, source, journal, id)
+	})
+	t.Run("rejected outcome", func(t *testing.T) {
+		fx, source, journal, id := startRecoveredReview(t)
+		journal.failGetOutcome = errors.Join(ErrCodexReviewOutcomeRejected, errors.New("decode persisted outcome"))
+		if err := source.AbortRecoveredReview(t.Context(), id); err != nil {
+			t.Fatal(err)
+		}
+		requireRecoveredReviewReaped(t, fx, source, journal, id)
+	})
+}
+
+func TestAbortRecoveredReviewRetriesAnUnreadRequest(t *testing.T) {
+	_, source, journal, id := startRecoveredReview(t)
+	journal.failGetRequest = errors.New("journal unavailable")
+	err := source.AbortRecoveredReview(t.Context(), id)
+	if class := exec.ClassifyReviewSourceFailure(err); err == nil || class != domain.ReviewFailureTransient {
+		t.Fatalf("unread request = %v (%s), want a transient failure", err, class)
+	}
+	if journal.ready[string(id)] {
+		t.Fatal("an unread request was reported reaped")
+	}
+}
+
+func TestAbortRecoveredReviewDoesNotInventUnknownReview(t *testing.T) {
+	fx := newHandoffFixture(t)
+	cfg, spec := testCodexReview(t)
+	journal := &fakeCodexReviewJournal{}
+	source, err := NewCodexReviewSource(codexReviewSourceConfigForTest(t, fx.codexReviewLifecycle(t), cfg, spec, journal))
+	if err != nil {
+		t.Fatal(err)
+	}
+	id := domain.InvocationID("review-never-started")
+	if err := source.AbortRecoveredReview(t.Context(), id); !errors.Is(err, exec.ErrUnknownInvocation) {
+		t.Fatalf("unknown review = %v", err)
+	}
+	if _, _, err := journal.GetCodexReviewOutcome(t.Context(), string(id)); !errors.Is(err, ErrCodexReviewOutcomeNotFound) {
+		t.Fatalf("invented outcome for unknown review: %v", err)
+	}
+}
