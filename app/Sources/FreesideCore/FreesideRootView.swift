@@ -188,6 +188,7 @@ public struct FreesideRootView: View {
         .onChange(of: Self.routedTaskID(navigation.path, in: coordinator.unifiedList), initial: true) {
             pageMemory.reset(forRoutedTaskID: $1)
         }
+        .opensLinkedCards(from: navigation, in: pageMemory)
         .onChange(of: navigation.attentionSelection) {
             technicalDetailsRequest = technicalDetailsRequest?.retained(
                 for: navigation.attentionSelection)

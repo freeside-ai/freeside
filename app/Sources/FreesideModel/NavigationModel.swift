@@ -48,6 +48,13 @@ public final class NavigationModel {
     /// one that a cold start's cached list hasn't caught up to, and the card
     /// shows either from canonical state. Leaving the card ends it.
     public private(set) var linkedItemID: String?
+    /// How many times `route(toLinkedItem:)` has run: a notification link, a
+    /// launch that names an item, or viewing a concluded item. A link to the
+    /// card already leading changes no route, so the root watches this
+    /// count to open the card anyway, as a tap on that card does. A count
+    /// rather than `linkedItemID`, because a second link to the same item
+    /// leaves that unchanged.
+    public private(set) var linkOpenings = 0
     /// The New Task composer's presentation flag, shared by the Mac list's tools
     /// row, the iPhone's bottom bar, ⌘N, and the File > New Task menu item, so
     /// all of them open the one sheet through the same gated path.
@@ -160,6 +167,7 @@ public final class NavigationModel {
     public func route(toLinkedItem itemID: String) {
         route(to: .attentionItem(itemID))
         linkedItemID = itemID
+        linkOpenings += 1
     }
 
     /// The iOS stack as the operator drives it (a push, a pop).

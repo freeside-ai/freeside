@@ -204,6 +204,36 @@ import Testing
         #expect(navigation.linkedItemID == nil)
     }
 
+    /// Every link is counted, so the root can open its card even when the
+    /// route doesn't change. Nothing else is counted.
+    @Test func everyLinkIsCountedEvenOneThatChangesNoRoute() {
+        let launched = NavigationModel(
+            launchInputs: LaunchInputs(colorSchemeRaw: nil, selectionRaw: "item-spec_approval"))
+        #expect(launched.linkOpenings == 1)
+
+        let navigation = NavigationModel(launchInputs: .standard())
+        #expect(navigation.linkOpenings == 0)
+        navigation.route(toLinkedItem: "item-spec_approval")
+        #expect(navigation.linkOpenings == 1)
+
+        // A second link to the routed item changes no route and still counts.
+        navigation.route(toLinkedItem: "item-spec_approval")
+        #expect(navigation.linkOpenings == 2)
+        #expect(navigation.path == [.attentionItem("item-spec_approval")])
+        #expect(navigation.linkedItemID == "item-spec_approval")
+
+        // A link to another item routes as before.
+        navigation.route(toLinkedItem: "item-blocked")
+        #expect(navigation.linkOpenings == 3)
+        #expect(navigation.path == [.attentionItem("item-blocked")])
+        #expect(navigation.linkedItemID == "item-blocked")
+
+        navigation.route(to: .task(TaskFixtures.retryTaskID))
+        navigation.select(.attentionItem("item-spec_approval"))
+        navigation.setPath([])
+        #expect(navigation.linkOpenings == 3)
+    }
+
     @Test func aTaskThatLeavesTheListTakesItsRunWithIt() {
         let (store, task) = task()
         let navigation = NavigationModel(launchInputs: .standard())
