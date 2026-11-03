@@ -111,6 +111,95 @@ func TestBootstrapProjectsUsagePoolsFromTheStore(t *testing.T) {
 	}
 }
 
+// TestHeartbeatRevisionCoversPoolAndEnrollmentWrites: a pool limit change and
+// a new enrollment each change what usage_pools carries, so each raises the
+// heartbeat revision, and the bootstrap at that revision shows the change. A
+// client holding the earlier revision therefore refreshes (plan §5.14).
+func TestHeartbeatRevisionCoversPoolAndEnrollmentWrites(t *testing.T) {
+	ctx := context.Background()
+	st := storetest.Open(t, filepath.Join(t.TempDir(), "store.db"), store.Options{
+		ApprovedCredentialModes: []domain.CredentialMode{domain.CredentialSubscriptionContained},
+	})
+	t.Cleanup(func() {
+		if err := st.Close(); err != nil {
+			t.Errorf("Close: %v", err)
+		}
+	})
+	now := time.Date(2026, 1, 2, 3, 4, 5, 0, time.UTC)
+	service := signet.NewService(st, signet.WithClock(func() time.Time { return now }))
+	seedUsageEnrollment(t, st, now.Add(-time.Hour))
+	heartbeat := func() int64 {
+		t.Helper()
+		state, err := service.Revision(ctx)
+		if err != nil {
+			t.Fatalf("Revision: %v", err)
+		}
+		return state.Revision
+	}
+	// poolA reads pool-a from a bootstrap taken at the heartbeat's revision.
+	poolA := func(want int64) signet.UsagePoolUsage {
+		t.Helper()
+		bootstrap, err := service.Bootstrap(ctx)
+		if err != nil {
+			t.Fatalf("Bootstrap: %v", err)
+		}
+		if bootstrap.Revision != want {
+			t.Fatalf("bootstrap revision = %d, want %d", bootstrap.Revision, want)
+		}
+		for _, snapshot := range bootstrap.UsagePools {
+			if snapshot.Pool.ID == "pool-a" {
+				return snapshot.Pool
+			}
+		}
+		t.Fatalf("usage pools = %+v, want pool-a", bootstrap.UsagePools)
+		return signet.UsagePoolUsage{}
+	}
+	start := heartbeat()
+	if pool := poolA(start); pool.MaxParallelExecutions != 1 || len(pool.Enrollments) != 1 {
+		t.Fatalf("seeded pool-a = %+v, want limit 1 and one enrollment", pool)
+	}
+
+	if err := st.Write(ctx, func(tx *store.WriteTx) error {
+		return tx.RecordUsagePool(ctx, domain.UsagePool{
+			ID: "pool-a", Provider: "openai", MaxParallelExecutions: 3,
+		}, now)
+	}); err != nil {
+		t.Fatalf("set pool-a limit: %v", err)
+	}
+	if got := heartbeat(); got != start+1 {
+		t.Fatalf("heartbeat after limit change = %d, want %d", got, start+1)
+	}
+	if pool := poolA(start + 1); pool.MaxParallelExecutions != 3 {
+		t.Fatalf("pool-a after limit change = %+v, want limit 3", pool)
+	}
+
+	second := domain.AuthIdentity{
+		ID: "auth-usage-2", Provider: "openai", AccountBinding: "acct-usage-2",
+		UsagePool: "pool-a", AuthStoreMutationLease: true, Enabled: true,
+	}
+	if err := st.Write(ctx, func(tx *store.WriteTx) error {
+		if err := tx.RecordAuthIdentity(ctx, second, now); err != nil {
+			return err
+		}
+		return tx.RecordClientEnrollment(ctx, domain.ClientEnrollment{
+			ID: "enrollment-usage-2", AuthIdentityID: second.ID,
+			HarnessClient: domain.HarnessClientCodexCLI, Route: "openai_chatgpt_codex",
+			AuthMethod: domain.AuthMethodOAuth, CredentialMode: domain.CredentialSubscriptionContained,
+			RefreshStrategy: domain.RefreshOnDemand, SupportsReadOnlyAuthSnapshot: true,
+			AccountBinding: second.AccountBinding,
+		}, now)
+	}); err != nil {
+		t.Fatalf("enroll a second identity on pool-a: %v", err)
+	}
+	if got := heartbeat(); got != start+2 {
+		t.Fatalf("heartbeat after enrollment = %d, want %d", got, start+2)
+	}
+	pool := poolA(start + 2)
+	if len(pool.Enrollments) != 2 || pool.Enrollments[1].EnrollmentID != "enrollment-usage-2" {
+		t.Fatalf("pool-a enrollments after enrollment = %+v, want enrollment-usage-2 added", pool.Enrollments)
+	}
+}
+
 // seedUsageEnrollment records an identity on pool-a with one enrollment at its
 // first generation, and a declared pool-idle no identity meters; it returns
 // the generation a reading must name.

@@ -284,6 +284,31 @@ func TestClaudeEnrollmentBeginBindsIdentityEnrollmentAndLease(t *testing.T) {
 	}
 }
 
+// TestClaudeEnrollmentBeginRaisesTheRevision: clients see the identity, its
+// pool, and the enrollment through the bootstrap's usage_pools, so recording
+// an enrollment raises the revision a heartbeat compares (plan §5.14).
+func TestClaudeEnrollmentBeginRaisesTheRevision(t *testing.T) {
+	ctx := context.Background()
+	st, adapters := openEnrollmentStore(t)
+	revision := func() int64 {
+		t.Helper()
+		state, err := st.ServerState(ctx)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return state.Revision
+	}
+	identity, bootstrap := claudeEnrollmentFixture("claude-main", "acct-fixture-0002")
+	before := revision()
+	if _, err := adapters.Claude.Begin(ctx, identity, bootstrap, "holder-1",
+		enrollmentTestAt, enrollmentTestAt.Add(time.Minute)); err != nil {
+		t.Fatal(err)
+	}
+	if got := revision(); got != before+1 {
+		t.Fatalf("revision = %d, want %d", got, before+1)
+	}
+}
+
 // TestClaudeEnrollmentBeginRetriesAFailedBootstrap proves a bootstrap that
 // never appended a generation leaves an enrollment a retry can reuse, rather
 // than one that strands the client.

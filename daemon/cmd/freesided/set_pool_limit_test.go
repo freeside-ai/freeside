@@ -131,6 +131,44 @@ func TestSetPoolLimitRecordsOnlyTheLimit(t *testing.T) {
 	}
 }
 
+// TestSetPoolLimitRaisesTheRevision: clients sync the pool through the
+// bootstrap's usage_pools, so a new limit raises the revision a heartbeat
+// compares (plan §5.14).
+func TestSetPoolLimitRaisesTheRevision(t *testing.T) {
+	t.Parallel()
+	dbPath := filepath.Join(t.TempDir(), "freeside.db")
+	revision := func() int64 {
+		t.Helper()
+		st := storetest.Open(t, dbPath, store.Options{})
+		state, err := st.ServerState(t.Context())
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := st.Close(); err != nil {
+			t.Fatal(err)
+		}
+		return state.Revision
+	}
+	st := storetest.Open(t, dbPath, store.Options{})
+	recordSetPoolLimitIdentities(t, st, setPoolLimitIdentity("claude-writer", "claude"))
+	if err := st.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	before := revision()
+	result, err := runSetPoolLimit(t, t.Context(),
+		"-db", dbPath, "-pool", "pool-claude-writer", "-max-parallel-executions", "3")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !result.Recorded {
+		t.Fatalf("result = %#v, want a recorded limit", result)
+	}
+	if got := revision(); got != before+1 {
+		t.Fatalf("revision = %d, want %d", got, before+1)
+	}
+}
+
 // TestSetPoolLimitTakesTheIDAuthListPrints: an identity with no pool of its own
 // is limited through its derived pool, which auth list names for the operator.
 func TestSetPoolLimitTakesTheIDAuthListPrints(t *testing.T) {
