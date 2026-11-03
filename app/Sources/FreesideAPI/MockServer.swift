@@ -2386,17 +2386,23 @@ public actor MockServer {
         _ command: Components.Schemas.ClientCommand,
         _ payload: Components.Schemas.SubmitTaskPayload
     ) throws -> SubmitOutcome {
+        // The lines are checked and put in role order before the replay
+        // check, as the daemon does (signet canonicalTaskLines), so a retry
+        // listing the same lines in another order is the same request.
+        var payload = payload
+        payload.task_lines = try Self.canonicalTaskLines(payload.task_lines, commandID: command.command_id)
+        var request = command
+        request.payload = .submit_task(payload)
         let digest = MockContractValidation.sha256Digest(of: payload.source)
         if let recorded = resultsByCommandID[command.command_id] {
             // A reused command_id replays only a submit_task result for the same
-            // device, project, and source; anything else is an immutable
-            // conflict, matching the daemon's replay guard (only the optional
-            // name is ignored).
+            // device, project, source, name, and set of lines; anything else is
+            // an immutable conflict, matching the daemon's replay guard.
             guard case .submit_task(let record) = recorded.record,
                 record.device_id == command.device_id,
                 record.project_id == payload.project_id,
                 record.source_digest.value1 == digest,
-                submissionRequestsByID[command.command_id] == command
+                submissionRequestsByID[command.command_id] == request
             else {
                 throw ImmutableConflictError(commandID: command.command_id)
             }
@@ -2411,17 +2417,38 @@ public actor MockServer {
         revision += 1
         materializeSubmittedTask(
             taskID: taskID, runID: runID, campaignID: "campaign-submitted-\(suffix)",
-            projectID: payload.project_id, name: name, sourceDigest: digest)
+            projectID: payload.project_id, name: name, sourceDigest: digest,
+            lines: payload.task_lines ?? [], commandID: command.command_id)
         revision += 1
         let record = Components.Schemas.TaskSubmissionRecord(
             kind: .submit_task, command_id: command.command_id, origin: .device,
             device_id: command.device_id,
             project_id: payload.project_id, source_digest: .init(value1: digest),
-            task_id: taskID, specification_run_id: runID, name: .init(value1: name))
+            task_id: taskID, specification_run_id: runID, name: .init(value1: name),
+            task_lines: payload.task_lines)
         let result = Components.Schemas.CommandResult(record: .submit_task(record), revision: revision)
         resultsByCommandID[command.command_id] = result
-        submissionRequestsByID[command.command_id] = command
+        submissionRequestsByID[command.command_id] = request
         return .ok(commandResultTransform?(result) ?? result)
+    }
+
+    /// The daemon's task-line check for a submission (domain
+    /// CanonicalTaskLineChoices): absent stays absent; a present list names
+    /// at least one role, each once, with a valid agent name, and comes back
+    /// in TaskLineRole order.
+    private static func canonicalTaskLines(
+        _ lines: [Components.Schemas.TaskLineInput]?, commandID: String
+    ) throws -> [Components.Schemas.TaskLineInput]? {
+        guard let lines else { return nil }
+        func malformed(_ reason: String) -> MalformedCommandError {
+            MalformedCommandError(commandID: commandID, reason: reason)
+        }
+        guard !lines.isEmpty else { throw malformed("task_lines must name at least one role when present") }
+        guard Set(lines.map(\.role)).count == lines.count else { throw malformed("task_lines names a role twice") }
+        guard lines.allSatisfy({ MockContractValidation.validAgentName($0.agent) }) else {
+            throw malformed("task_lines names an invalid agent")
+        }
+        return Components.Schemas.TaskLineRole.allCases.compactMap { role in lines.first { $0.role == role } }
     }
 
     /// submittedTaskName mirrors the daemon: a trimmed operator-supplied name
@@ -2456,7 +2483,8 @@ public actor MockServer {
     /// write. The run is templated from a fixture to keep a valid shape.
     private func materializeSubmittedTask(
         taskID: String, runID: String, campaignID: String,
-        projectID: String, name: Components.Schemas.DisplayName, sourceDigest: String
+        projectID: String, name: Components.Schemas.DisplayName, sourceDigest: String,
+        lines: [Components.Schemas.TaskLineInput], commandID: String
     ) {
         let displayNames = Components.Schemas.DisplayNames(
             project: .init(text: projectID, source: .identifier), task: name)
@@ -2494,6 +2522,18 @@ public actor MockServer {
         // membership so taskTimeline agrees with the run store (mirrors the daemon
         // and TaskFixtures.defaultTasks). Without the membership and position the
         // task read is self-inconsistent and read-your-write on the timeline fails.
+        // Each operator line is version 1 of its role, set by the command when
+        // the task is created (engine SubmitTask), so a later change_task_line
+        // supersedes it.
+        let taskLines = lines.map { line in
+            let id = MockContractValidation.sha256Digest(
+                of: [taskID, line.role.rawValue, line.agent, "1", "", commandID].joined(separator: "/"))
+            let recorded = Components.Schemas.TaskLine(
+                id: id, task_id: taskID, role: line.role, agent: line.agent, version: 1, predecessor_id: nil,
+                source: .submit_task, set_by: commandID, set_at: currentTime, provenance: nil)
+            taskLineHeads[Self.taskLineKey(taskID, line.role)] = (1, id, recorded)
+            return recorded
+        }
         let task = Components.Schemas.Task(
             id: taskID, project_id: projectID, display_names: displayNames,
             created_at: currentTime, last_activity_at: currentTime,
@@ -2501,7 +2541,7 @@ public actor MockServer {
             current_position: .init(value1: .init(run_id: runID)),
             campaign_ids: [campaignID], run_ids: [runID], wip: true,
             lifecycle_facts: [.init(kind: .started, run_id: runID, recorded_at: currentTime)],
-            task_lines: [])
+            task_lines: taskLines)
         tasksByID[taskID] = .init(as_of_revision: revision, entity_version: 1, task: task)
     }
 
