@@ -66,3 +66,12 @@ func TestSiteContractDigestCoversTheContractOnly(t *testing.T) {
 		t.Fatal("a budget change moved the contract digest")
 	}
 }
+
+// The largest output cap among the real sites is the drift auditor's today,
+// so a store opened at MaxSiteOutputBytes admits every site's whole output
+// as a sample.
+func TestMaxSiteOutputBytesIsTheLargestSiteCap(t *testing.T) {
+	if got := inference.MaxSiteOutputBytes(allSites()); got != domain.MaxDriftAuditBytes {
+		t.Fatalf("MaxSiteOutputBytes = %d, want the drift auditor's %d", got, domain.MaxDriftAuditBytes)
+	}
+}

@@ -5,11 +5,13 @@ import (
 	"fmt"
 	"log/slog"
 	"maps"
+	"path/filepath"
 	"slices"
 	"strings"
 	"sync"
 	"time"
 
+	"github.com/freeside-ai/freeside/daemon/internal/advisory"
 	"github.com/freeside-ai/freeside/daemon/internal/agenttree"
 	"github.com/freeside-ai/freeside/daemon/internal/contentaddr"
 	"github.com/freeside-ai/freeside/daemon/internal/domain"
@@ -72,6 +74,13 @@ func judgmentSites(budget inference.Budget) []inference.Site {
 		inference.PublicationAuthorExplainSite(budget),
 		inference.PublicationAuthorProposeSite(budget),
 	}
+}
+
+// openAdvisoryStore opens the daemon's advisory store with a per-entry body
+// bound that admits the whole output of every site in sites, so a sampled
+// call records its answer whatever the answer's size within its site's cap.
+func openAdvisoryStore(stateDir string, sites []inference.Site) (*advisory.Store, error) {
+	return advisory.Open(filepath.Join(stateDir, "advisory.json"), 2_000, inference.MaxSiteOutputBytes(sites))
 }
 
 // judgmentRuntime is what the judgment flags compose: the driver that makes
