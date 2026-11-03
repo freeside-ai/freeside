@@ -485,7 +485,9 @@ there, so a later role does not park again on the exhausted pool. Operator
 lines stay as they are. The reset time comes from the
 refusal or from a usage reading (Section [5.4](#54-credential-modes-egress-profiles-and-concurrency), usage observation). When
 neither gives one, nothing can resume the task on its own, so the ordinary
-card is raised with retry, wait, and stop.
+card is raised with retry, wait, and stop. The park reads the pool's usage
+record only for that reset and for the window's exhausted mark: it delays
+the attempt on its line and never picks an agent, credential, or pool.
 
 Wait leaves the task parked with the same card until the operator returns to it.
 The offer is stated once here and applies on whichever card surfaces such a
@@ -1962,14 +1964,18 @@ Collection and refresh are operations (Section [10](#10-operations-and-onboardin
 follows Section [5.14](#514-client-synchronization-and-conversations).
 
 A usage observation is observation under this subsection's exclusion list,
-with one reader above admission: the router (routing policy, above). It
-informs the account usage view and the facts shown beside the agent choices
-in the clients, it may inform a proposal, and from revision 99 it may mark a
-pool's window exhausted for the router. The operator's recorded lineup line
-or task line is still what admits an agent and its credential, and admission
-never reads a reading: the router reads readings and marks and writes the
-task line, so every selection a reading influenced is a recorded fact that
-names the reading, never a silent switch. A task line the operator set by
+with two readers above admission. The router (routing policy, above) reads
+readings and marks to pick a new task's pool and writes the task line, so
+every selection a reading influenced is a recorded fact that names the
+reading, never a silent switch.
+The quota park (Section [4](#4-the-attention-model)) reads the refused window's mark, and a reading's
+reset when the refusal names none, only to decide when a parked attempt
+starts on the line it already has; it never picks an agent, credential, or
+pool. An observation also informs the account usage view and the facts
+shown beside the agent choices in the clients, it may inform a proposal, and
+from revision 99 it may mark a pool's window exhausted. The operator's recorded
+lineup line or task line is still what admits an agent and its credential,
+and admission never reads a reading. A task line the operator set by
 hand admits whatever its pool's reading shows; when the provider then
 refuses the run, that attempt fails as a provider quota failure and the task
 parks on its line until the window resets (Section [4](#4-the-attention-model); revision 103),
@@ -7144,7 +7150,7 @@ Revision 105 ("Count the VM"):
 | **Codex cloud review as a load-bearing dependency** | Realized 2026-07-31: the live-run trigger falsification (#427) showed no App-visible trigger path. The dependency is removed. Review is Freeside-invoked (Section [7](#7-review-policy)), and native review is best-effort extra evidence. |
 | Host capacity | Several accounts' limits can add up to more containers than one machine holds. Give every ward container a CPU cap and a declared memory size, and bound their memory by each instance's declared budget, with each launch reserving its declared size plus its VM's overhead, so a launch that doesn't fit waits under a visible hold instead of exhausting memory; waiting launches go oldest task first, and a size that can never fit fails at once (Section [5.4](#54-credential-modes-egress-profiles-and-concurrency), Machine Capacity). Residual: the budget can't see load outside Freeside or another instance's containers, so the operator declares it with room for interactive use and keeps the budgets of every instance on one host within what the host holds. |
 | Execution host credential copies | Every enrolled execution host holds a copy of each identity's setup token in its credential volume (Section [5.7](#57-the-ward-runners-handoff-gate-and-operating-modes), Execution Hosts). Accepted for owner-held machines on the owner's tailnet: rotation re-authors every host, and removal names the identities to rotate. Residual: a host removed while unreachable keeps its copy until the owner rotates at the vendor. Any host the owner does not hold needs `subscription_injected` through control-plane injection, under which it would receive no copy (revision 95); that mode is held (revision 103), so such a host waits and is not enrolled meanwhile. |
-| Single-provider execution capacity | Claude usage limits can stall real work. From revision 99 the hedge is a second Claude subscription under a routing policy (Section [5.4](#54-credential-modes-egress-profiles-and-concurrency), routing policy), not the Codex execution driver, which moved to Phase 2. Two subscriptions hedge a quota window, not a Claude outage or a Claude policy change; the owner accepts that residual while the Codex plan is downgraded. The router picks a subscription only at a new task's first admission, records the selection with its policy revision, and keeps every role of the task with an agent on that pool there; a quota failure parks the task until its window resets instead of moving it (Section [4](#4-the-attention-model); revision 103). A task in flight moves to another subscription only by the operator's explicit choice on the alternate-agent card or a task line change (Section [5.4](#54-credential-modes-egress-profiles-and-concurrency), Admitted Agents), never silently and never automatically. Usage remains observed telemetry (Section [8](#8-observability-and-optimization-telemetry)); an allowance observation shows the stall coming (Section [5.4](#54-credential-modes-egress-profiles-and-concurrency), usage observation) and may mark a window exhausted for the router, and admission never reads one. |
+| Single-provider execution capacity | Claude usage limits can stall real work. From revision 99 the hedge is a second Claude subscription under a routing policy (Section [5.4](#54-credential-modes-egress-profiles-and-concurrency), routing policy), not the Codex execution driver, which moved to Phase 2. Two subscriptions hedge a quota window, not a Claude outage or a Claude policy change; the owner accepts that residual while the Codex plan is downgraded. The router picks a subscription only at a new task's first admission, records the selection with its policy revision, and keeps every role of the task with an agent on that pool there; a quota failure parks the task until its window resets instead of moving it (Section [4](#4-the-attention-model); revision 103). A task in flight moves to another subscription only by the operator's explicit choice on the alternate-agent card or a task line change (Section [5.4](#54-credential-modes-egress-profiles-and-concurrency), Admitted Agents), never silently and never automatically. Usage remains observed telemetry (Section [8](#8-observability-and-optimization-telemetry)); an allowance observation shows the stall coming (Section [5.4](#54-credential-modes-egress-profiles-and-concurrency), usage observation) and may mark a window exhausted, which the router reads to pick a new task's pool and the quota park reads to time a parked task's next attempt; admission never reads one. |
 | Classifier mislabeling | Preserve immutable raw findings; require second adjudication for the safety case; enforce ceilings. |
 | Subscription-terms drift | Keep it as an explicit operating risk. Open question: whether Anthropic permits drain-first selection (the routing policy's priority with fallback, Section [5.4](#54-credential-modes-egress-profiles-and-concurrency)) across one owner's Claude subscriptions. The Consumer Terms (effective 2025-10-08) forbid "bypassing any of our systems or protective measures", and Claude Code's legal page says advertised Pro and Max limits "assume ordinary, individual usage". Current response (revision 103): the router chooses a subscription only for new tasks and pins each task to it, nothing fails over mid-task, and proxy credential injection is held. Recommended: ask Anthropic; its answer reopens revision 103. |
 | Apple container immaturity | Prove actual runner capabilities and retain honest fallback classes. |

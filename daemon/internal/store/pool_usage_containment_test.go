@@ -36,9 +36,9 @@ var poolUsageReaderFiles = []string{
 	"internal/signet/usage.go",
 	// The quota park reads the refused window's mark at dispatch, and a
 	// reading's reset when the refusal names none, to hold the next attempt
-	// on its line until the window resets (plan §4, revision 103). §5.4
-	// still names the router as the only reader above admission; #2493
-	// reconciles the two.
+	// on its line until the window resets. It is §5.4's second reader above
+	// admission beside the router, and it picks no agent, credential, or
+	// pool (plan §4, §5.4, revision 103).
 	"internal/engine/quota_park.go",
 }
 

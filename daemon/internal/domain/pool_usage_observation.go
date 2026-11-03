@@ -10,8 +10,9 @@ import (
 // Pool usage observations record what a provider reports about a subscription
 // allowance (plan §5.4, usage observation). This is the per-pool record;
 // UsageObservation is the unrelated per-invocation telemetry. The record is
-// observation, never authority: admission does not read it, and the router is
-// its one reader above admission.
+// observation, never authority: admission does not read it. Plan §5.4 names
+// two readers above admission: the router, which picks a new task's pool, and
+// the quota park, which only times a parked attempt on its line.
 
 // CollectionAttemptStatus is how the collector's last collection attempt
 // ended. The zero value is invalid by design.
