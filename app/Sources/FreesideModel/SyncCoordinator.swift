@@ -51,6 +51,13 @@ public final class SyncCoordinator {
     /// never direct adoption. Like every restored row it is only as current as
     /// `store.freshness` says.
     public private(set) var unattendedOperation: Components.Schemas.UnattendedOperationSnapshot?
+    /// The committed agent tree's agents and lineup from the last adopted
+    /// bootstrap: the agents the daemon will accept, so the only ones a
+    /// client offers. Nil until a bootstrap supplies one, or when the daemon
+    /// holds no tree. A daemon restarted on a changed tree moves no revision,
+    /// so a heartbeat whose lineup revision differs triggers another
+    /// bootstrap, never direct adoption.
+    public private(set) var agentCatalog: Components.Schemas.AgentCatalog?
     public private(set) var timelinesByRunID: [String: Components.Schemas.RunTimeline] = [:]
     public private(set) var timelineLoadStates: [String: TimelineLoadState] = [:]
     public private(set) var tasks: [Components.Schemas.TaskSnapshot] = []
@@ -202,6 +209,7 @@ public final class SyncCoordinator {
                 runs = cached.runs
                 schedules = cached.schedules
                 unattendedOperation = cached.unattendedOperation
+                agentCatalog = cached.agentCatalog
                 timelinesByRunID = cached.runTimelines.reduce(into: [:]) { timelines, timeline in
                     timelines[timeline.run_id] = timeline
                 }
@@ -380,6 +388,10 @@ public final class SyncCoordinator {
                     } else if server.unattended_operation != unattendedOperation {
                         // Backup health can change the gate without a write.
                         // Only bootstrap replaces the adopted verdict.
+                        await bootstrap()
+                    } else if server.lineup_revision?.value1 != agentCatalog?.lineup_revision {
+                        // A restart on a changed agent tree moves no
+                        // revision; only bootstrap replaces the catalog.
                         await bootstrap()
                     } else {
                         store.freshness = .fresh
@@ -815,6 +827,7 @@ public final class SyncCoordinator {
         runs = snapshot.runs
         schedules = snapshot.schedules
         unattendedOperation = snapshot.unattended_operation
+        agentCatalog = snapshot.agent_catalog?.value1
         tasks = snapshot.tasks
         // Timelines are not in the bootstrap payload, so a same-epoch
         // bootstrap can neither replace nor invalidate a cached one: keep
@@ -930,6 +943,7 @@ public final class SyncCoordinator {
         runs = []
         schedules = []
         unattendedOperation = nil
+        agentCatalog = nil
         timelinesByRunID = [:]
         timelineLoadStates = [:]
         tasks = []
@@ -972,6 +986,7 @@ public final class SyncCoordinator {
                     runs: cursors == nil ? [] : runs,
                     schedules: cursors == nil ? [] : schedules,
                     unattendedOperation: cursors == nil ? nil : unattendedOperation,
+                    agentCatalog: cursors == nil ? nil : agentCatalog,
                     runTimelines: cursors == nil
                         ? [] : timelinesByRunID.keys.sorted().compactMap { timelinesByRunID[$0] },
                     tasks: cursors == nil ? [] : tasks,
