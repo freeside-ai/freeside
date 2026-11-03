@@ -1445,6 +1445,59 @@ func TestGolden(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	// The run facts #979 records on a binding: the Claude variant again, with
+	// the harness, lineage group, and cost owner its closure held. Every
+	// binding above omits them and keeps the id it had before they existed.
+	recordedFactsBinding := *claudeAdmission.AgentBinding
+	recordedFactsBinding.HarnessClient = domain.HarnessClientClaudeCode
+	recordedFactsBinding.LineageGroup = "anthropic"
+	recordedFactsBinding.CostOwner = "platform-team"
+	recordedFactsAdmission, err := domain.NewExecutionAdmission(domain.ExecutionAdmissionInput{
+		InvocationID: "inv-6", RunID: claudeAdmission.RunID, StageID: claudeAdmission.StageID, AttemptID: "attempt-6",
+		Backend: claudeAdmission.Backend, Capabilities: claudeAdmission.Capabilities,
+		OperatingMode: claudeAdmission.OperatingMode, CredentialMode: claudeAdmission.CredentialMode,
+		EgressProfile: claudeAdmission.EgressProfile, ImageRef: claudeAdmission.ImageRef,
+		SpecDigest: claudeAdmission.SpecDigest, PolicyDigest: claudeAdmission.PolicyDigest,
+		InputDigest: claudeAdmission.InputDigest, Base: claudeAdmission.Base,
+		Workspace: claudeAdmission.Workspace, StageInputs: claudeAdmission.StageInputs,
+		AuthIdentityID: claudeAdmission.AuthIdentityID, AgentBinding: &recordedFactsBinding,
+		AdmittedAt: ts,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	recordedFactsReviewBinding := reviewAdmission.AgentBinding
+	recordedFactsReviewBinding.HarnessClient = domain.HarnessClientCodexCLI
+	recordedFactsReviewBinding.LineageGroup = reviewAdmission.LineageGroup
+	recordedFactsReviewBinding.CostOwner = "platform-team"
+	recordedFactsReview := reviewAdmission
+	recordedFactsReview.AgentBinding = recordedFactsReviewBinding
+	// The facts each kind of admission projects: a writer with every fact
+	// recorded, a binding from before #979 (no harness, lineage, or cost
+	// owner), a legacy admission with no binding, and a reviewer that
+	// differs from the implementer and has no remediator to compare with.
+	writerFacts := domain.AdmittedFactsOfExecution(recordedFactsAdmission, domain.RoleImplementer)
+	preFactsWriterFacts := domain.AdmittedFactsOfExecution(claudeAdmission, domain.RoleImplementer)
+	legacyWriterFacts := domain.AdmittedFactsOfExecution(admission, "")
+	reviewerFacts := domain.AdmittedFactsOfReview(recordedFactsReview, map[domain.RoleName]string{
+		domain.RoleImplementer: "anthropic",
+	})
+	admittedFailureItem, err := domain.NewAttentionItem(domain.AttentionItemInput{
+		ID: "item-execution-failure-admitted", ProjectID: "proj-1", Subject: subject,
+		Type: domain.AttentionExecutionFailure, Priority: domain.PriorityUrgent,
+		Reason:            "the implementation stage failed",
+		RequestedDecision: []domain.Action{domain.ActionRetry, domain.ActionStop},
+		ExecutionFailure: &domain.ExecutionFailureFacts{
+			Outcome: domain.ExecutionOutcomeFailed, Cause: domain.FailureCauseQuota,
+			Stage: domain.StageNameImplementation, InvocationID: writerFacts.InvocationID,
+			Admitted: &writerFacts,
+		},
+		ItemVersion: 1, InterruptionClass: domain.InterruptionExceptional,
+		CreatedAt: &ts, Status: domain.StatusOpen,
+	}, approved)
+	if err != nil {
+		t.Fatal(err)
+	}
 	adapterConformance := adapterConformanceRecord(t)
 
 	waivedProfileDigest := domain.Digest("sha256:trust-profile-v1")
@@ -2303,6 +2356,13 @@ func TestGolden(t *testing.T) {
 		{"execution_admission_agent_explicit_model", claudeAdmission},
 		{"review_admission", reviewAdmission},
 		{"execution_admission_task_line", taskLineAdmission},
+		{"execution_admission_recorded_facts", recordedFactsAdmission},
+		{"review_admission_recorded_facts", recordedFactsReview},
+		{"invocation_admission_facts_execution", writerFacts},
+		{"invocation_admission_facts_execution_pre_facts", preFactsWriterFacts},
+		{"invocation_admission_facts_execution_legacy", legacyWriterFacts},
+		{"invocation_admission_facts_review", reviewerFacts},
+		{"attention_item_execution_failure_admitted", admittedFailureItem},
 		{"adapter_conformance", adapterConformance},
 		{"execution_export", export},
 		{"execution_outcome_failed", domain.ExecutionOutcome{

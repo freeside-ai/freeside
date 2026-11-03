@@ -448,7 +448,9 @@ struct TaskPageView: View {
                             coordinator.runs.first { $0.run.id == current.run_id }?.run.policy_digest
                         },
                         pullRequest: completion?.pr_number ?? timeline.flatMap(TaskTimelinePresentation.pullRequest),
-                        historyLoaded: timeline != nil),
+                        historyLoaded: timeline != nil,
+                        admission: run.flatMap { coordinator.timelinesByRunID[$0.run_id] }
+                            .flatMap(RunDisplay.latestImplementerAdmission)),
                     id: \.label
                 ) { row in
                     FactRow(label: row.label, value: row.value)
@@ -1312,9 +1314,12 @@ enum TaskTimelinePresentation {
     }
 
     /// The open Task fold's facts: each one a client source can state.
+    /// `admission` is the current run's latest implementer admission, nil
+    /// until that run's timeline has loaded.
     static func taskFacts(
         _ task: Components.Schemas.Task, position: TaskDisplay.Position?, stage: Components.Schemas.StageName?,
-        run: Components.Schemas.TaskTimelineRun?, policyDigest: String?, pullRequest: Int?, historyLoaded: Bool
+        run: Components.Schemas.TaskTimelineRun?, policyDigest: String?, pullRequest: Int?, historyLoaded: Bool,
+        admission: Components.Schemas.InvocationAdmissionFacts? = nil
     ) -> [AttentionDisplay.BindingRow] {
         var rows: [AttentionDisplay.BindingRow] = [.init(label: "Project", value: TaskDisplay.projectName(task))]
         if let stage = TaskDisplay.currentPhaseAndRound(position) {
@@ -1326,6 +1331,9 @@ enum TaskTimelinePresentation {
         let agent = agentAndPool(task, stage: stage)
         if !agent.isEmpty {
             rows.append(.init(label: "Agent and Pool", value: agent.joined(separator: " · ")))
+        }
+        if let admission {
+            rows += RunDisplay.admissionRows(admission)
         }
         // Only a loaded history can say that no pull request exists yet.
         if let pullRequest {

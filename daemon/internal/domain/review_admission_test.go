@@ -165,7 +165,7 @@ func TestValidateReviewAdmissionDerivations(t *testing.T) {
 		enrollment domain.ClientEnrollment, generationEntry domain.EnrollmentGeneration,
 	) error {
 		return domain.ValidateReviewAdmissionDerivations(
-			a, agent, adapter, route, offer, launch, enrollment, generationEntry)
+			a, agent, adapter, route, offer, launch, enrollment, generationEntry, derivationIdentity(t))
 	}
 	admission, agent, adapter, route, offer, launch, enrollment, generationEntry := reviewAdmissionClosure(t)
 	if err := check(admission, agent, adapter, route, offer, launch, enrollment, generationEntry); err != nil {

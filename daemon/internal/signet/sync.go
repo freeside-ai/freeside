@@ -242,6 +242,9 @@ type RunTimeline struct {
 	Completion        *WorkUnitCompletionFacts       `json:"completion"`
 	Review            *RunReviewFacts                `json:"review"`
 	BillableCostSoFar *domain.CostSoFar              `json:"billable_cost_so_far"`
+	// Admissions is what ran each admitted invocation of the run, as its
+	// execution or review admission recorded it, in admission order (#979).
+	Admissions []domain.InvocationAdmissionFacts `json:"admissions"`
 }
 
 // ConversationSnapshot is a whole Conversation with its store-stamped sync
@@ -1010,6 +1013,10 @@ func (s *Service) GetRunTimeline(ctx context.Context, id domain.RunID) (RunTimel
 		if err != nil {
 			return asRunObservationIntegrityError(err)
 		}
+		facts.admissions, err = runAdmissionFacts(ctx, tx, id)
+		if err != nil {
+			return asRunObservationIntegrityError(err)
+		}
 		out = runTimeline(observation, state.Revision, time.Now().UTC(), facts)
 		return nil
 	})
@@ -1203,6 +1210,7 @@ func runTimeline(
 		Completion:        facts.completion,
 		Review:            facts.review,
 		BillableCostSoFar: facts.cost,
+		Admissions:        nonNilSlice(facts.admissions),
 	}
 }
 
@@ -1215,6 +1223,9 @@ type runProjectionFacts struct {
 	supersededBy *domain.RunID
 	revisesRunID *domain.RunID
 	cost         *domain.CostSoFar
+	// admissions is read only for the run timeline, beside review, so the
+	// run list never pays for it.
+	admissions []domain.InvocationAdmissionFacts
 }
 
 // runProjectionFactsFor reads the projection facts inside the same

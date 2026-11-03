@@ -319,7 +319,10 @@ import Testing
     /// leaving a value recovered from prose.
     @Test func everyTypedLeadComesFromItsOwnFactFieldAndDisappearsWithIt() {
         let expected: [Components.Schemas.AttentionType: [String]] = [
-            .execution_failure: ["Outcome", "Cause", "Stage", "Invocation"],
+            .execution_failure: [
+                "Outcome", "Cause", "Stage", "Invocation", "Harness", "Model", "Effort", "Cost Owner",
+                "Credential Mode", "Egress Profile", "Isolation Class",
+            ],
             .review_diminishing_returns: ["Cost so Far", "Diff Growth"],
             .review_dispute: ["Run", "Round", "Disputed findings", "Completion evidence"],
             .ready_for_final_review: ["Diff"],
@@ -366,7 +369,18 @@ import Testing
             AttentionDisplay.cardFacts(
                 AttentionFixtures.fixture(type: .execution_failure).item, now: now
             ).map(\.value)
-                == ["Failed", "Invalid configuration", "Implementation", "inv-execution_failure"])
+                == [
+                    "Failed", "Invalid configuration", "Implementation", "inv-execution_failure", "Claude Code",
+                    "claude-opus-5-5", "High", "platform-team", "Subscription, contained", "Provider only",
+                    "Fresh VM, read-only volume handoff",
+                ])
+        // An item raised before the daemon recorded its admission shows only
+        // the failure's own facts.
+        var unrecorded = AttentionFixtures.fixture(type: .execution_failure).item
+        unrecorded.execution_failure?.value1.admitted = nil
+        #expect(
+            AttentionDisplay.cardFacts(unrecorded, now: now).map(\.label)
+                == ["Outcome", "Cause", "Stage", "Invocation"])
         #expect(
             AttentionDisplay.cardFacts(
                 AttentionFixtures.fixture(type: .review_diminishing_returns).item, now: now
@@ -557,6 +571,8 @@ import Testing
         var canceled = AttentionFixtures.fixture(type: .execution_failure).item
         canceled.execution_failure?.value1.outcome = .canceled
         canceled.execution_failure?.value1.cause = nil
+        // The admitted rows follow and are covered by typedLeadsRenderTheirDaemonValues.
+        canceled.execution_failure?.value1.admitted = nil
         #expect(
             AttentionDisplay.cardFacts(canceled, now: now).map(\.label)
                 == ["Outcome", "Stage", "Invocation"])

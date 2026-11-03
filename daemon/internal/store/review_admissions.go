@@ -1,9 +1,11 @@
 package store
 
 import (
+	"cmp"
 	"context"
 	"encoding/json"
 	"fmt"
+	"slices"
 
 	"github.com/freeside-ai/freeside/daemon/internal/domain"
 )
@@ -64,6 +66,44 @@ func (tx *ReadTx) GetReviewAdmission(ctx context.Context, id domain.InvocationID
 		return a, err
 	}
 	return a, nil
+}
+
+// ListRunReviewAdmissions returns every review snapshot recorded for a run,
+// routed and shadow, in admission order (ties by invocation). Each row is
+// read back through GetReviewAdmission, so a listed snapshot passes the same
+// body, column, and task-line checks as a keyed read. The order is taken
+// from the decoded times: the admitted_at column trims trailing zeros, so it
+// does not sort lexically in time order.
+func (tx *ReadTx) ListRunReviewAdmissions(ctx context.Context, runID domain.RunID) ([]domain.ReviewAdmission, error) {
+	rows, err := tx.tx.QueryContext(ctx, `SELECT invocation_id FROM review_admissions
+		WHERE run_id = ?`, runID)
+	if err != nil {
+		return nil, fmt.Errorf("list review admissions for run %q: %w", runID, err)
+	}
+	defer rows.Close() //nolint:errcheck // rows.Err below reports any deferred-close failure
+	var ids []domain.InvocationID
+	for rows.Next() {
+		var id domain.InvocationID
+		if err := rows.Scan(&id); err != nil {
+			return nil, fmt.Errorf("list review admissions for run %q: %w", runID, err)
+		}
+		ids = append(ids, id)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("list review admissions for run %q: %w", runID, err)
+	}
+	admissions := make([]domain.ReviewAdmission, 0, len(ids))
+	for _, id := range ids {
+		admission, err := tx.GetReviewAdmission(ctx, id)
+		if err != nil {
+			return nil, err
+		}
+		admissions = append(admissions, admission)
+	}
+	slices.SortFunc(admissions, func(a, b domain.ReviewAdmission) int {
+		return cmp.Or(a.AdmittedAt.Compare(b.AdmittedAt), cmp.Compare(a.InvocationID, b.InvocationID))
+	})
+	return admissions, nil
 }
 
 // gateReviewTaskLine holds a snapshot's cited task line to a recorded line of

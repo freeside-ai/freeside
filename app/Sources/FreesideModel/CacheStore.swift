@@ -267,6 +267,11 @@ public struct DiskCacheStore: CacheStore {
     ///    included. The hold's detail is dropped, the shape the daemon now
     ///    serves for such a hold, in run timelines and in task timelines'
     ///    run sections.
+    /// 5. Run timelines gained the required `admissions` list (#979). A cached
+    ///    timeline without it would throw and discard the cache, ledger
+    ///    included. It is dropped rather than given an empty list, which
+    ///    would claim no invocation was admitted; the run's timeline is
+    ///    fetched again when it is opened.
     private static func migratingLegacyEncodings(_ data: Data) -> Data {
         guard var root = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any],
             var state = root["state"] as? [String: Any]
@@ -319,6 +324,11 @@ public struct DiskCacheStore: CacheStore {
 
         if var timelines = state["runTimelines"] as? [[String: Any]] {
             var timelinesChanged = false
+            let current = timelines.filter { $0["admissions"] != nil }
+            if current.count != timelines.count {
+                timelines = current
+                timelinesChanged = true
+            }
             for index in timelines.indices {
                 guard var hold = timelines[index]["hold"] as? [String: Any],
                     droppingRetiredHoldDetail(&hold)

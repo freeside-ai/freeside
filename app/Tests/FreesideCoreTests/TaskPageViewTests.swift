@@ -1148,6 +1148,18 @@ import Testing
             page.task, position: page.position, stage: .implementation, run: run, policyDigest: nil,
             pullRequest: nil, historyLoaded: false)
         #expect(!loading.map(\.label).contains("Pull Request"))
+        // The current run's implementer admission follows Agent and Pool once
+        // its timeline has loaded.
+        let admitted = TaskTimelinePresentation.taskFacts(
+            page.task, position: page.position, stage: .implementation, run: run, policyDigest: nil,
+            pullRequest: nil, historyLoaded: true,
+            admission: RunFixtures.legacyAdmission("inv-1", at: now))
+        #expect(
+            admitted.map(\.label) == [
+                "Project", "Stage", "Current Run", "Agent and Pool", "Harness", "Model", "Effort", "Cost Owner",
+                "Credential Mode", "Egress Profile", "Isolation Class", "Operating Mode", "Pull Request",
+            ])
+        #expect(admitted.first { $0.label == "Model" }?.value == RunDisplay.unavailable)
         #expect(
             TaskTimelinePresentation.taskSummary(
                 page.task, position: page.position, stage: .implementation, run: run

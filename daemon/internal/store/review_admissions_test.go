@@ -314,3 +314,61 @@ func TestReviewAdmissionResolvesTheTaskLineItCites(t *testing.T) {
 		refused(t, err)
 	})
 }
+
+// TestListRunReviewAdmissions pins the run-scoped read the run timeline's
+// admitted facts use (#979): both arms of the run in admission order, none of
+// another run's, and a row whose run column was moved fails closed instead of
+// listing under the run it was moved to.
+func TestListRunReviewAdmissions(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	st := openTemplateStoreAt(t, t.TempDir()+"/admissions.db", Options{})
+	routed := storedReviewAdmission(t, domain.RoleReviewer)
+	// Half a second later: its stored time ".5Z" sorts before the shadow's
+	// whole-second "Z" as text, so only a time order lists the shadow first.
+	routed.AdmittedAt = routed.AdmittedAt.Add(500 * time.Millisecond)
+	shadow := storedReviewAdmission(t, domain.RoleShadowReviewer)
+	shadow.InvocationID = "shadow-review-1"
+	other := storedReviewAdmission(t, domain.RoleReviewer)
+	other.InvocationID, other.RunID = "review-other", "run-2"
+	if err := st.Write(ctx, func(tx *WriteTx) error {
+		for _, id := range []domain.RunID{"run-1", "run-2"} {
+			if err := tx.PutRun(ctx, domain.Run{
+				ID: id, ProjectID: "project", SpecDigest: "sha256:spec", PolicyDigest: "sha256:policy",
+			}); err != nil {
+				return err
+			}
+		}
+		for _, a := range []domain.ReviewAdmission{routed, shadow, other} {
+			if err := tx.PutReviewAdmission(ctx, a); err != nil {
+				return err
+			}
+		}
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	list := func(runID domain.RunID) ([]domain.ReviewAdmission, error) {
+		var got []domain.ReviewAdmission
+		err := st.Read(ctx, func(tx *ReadTx) error {
+			var err error
+			got, err = tx.ListRunReviewAdmissions(ctx, runID)
+			return err
+		})
+		return got, err
+	}
+	got, err := list("run-1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 2 || !got[0].Equal(shadow) || !got[1].Equal(routed) {
+		t.Fatalf("run-1 admissions = %+v, want the shadow then the routed snapshot", got)
+	}
+	if _, err := st.db.ExecContext(ctx,
+		`UPDATE review_admissions SET run_id = 'run-2' WHERE invocation_id = ?`, routed.InvocationID); err != nil {
+		t.Fatal(err)
+	}
+	if got, err := list("run-2"); !errors.Is(err, errRowInconsistent) {
+		t.Fatalf("run-2 admissions after a moved row = %+v, %v; want %v", got, err, errRowInconsistent)
+	}
+}

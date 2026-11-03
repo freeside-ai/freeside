@@ -24,7 +24,9 @@
       "route_model_id": "fake",
       "requested_effort": "high",
       "native_effort": "review-v1",
-      "selection_source": "lineup"
+      "selection_source": "lineup",
+      "harness_client": "codex_cli",
+      "lineage_group": "fake-shadow"
     },
     "admitted_at": "2026-01-02T03:04:05Z"
   },

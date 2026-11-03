@@ -87,6 +87,11 @@ type ExecutionFailureFacts struct {
 	Stage            StageName                 `json:"stage"`
 	InvocationID     InvocationID              `json:"invocation_id"`
 	OfferedManifests []CapabilityManifestOffer `json:"offered_manifests,omitempty"`
+	// Admitted is what ran the failed invocation, read from its execution
+	// admission when the item was raised, so an alternate-agent retry (#869)
+	// can name the profile that failed. omitempty keeps an item raised before
+	// it existed byte-identical to its stored body.
+	Admitted *InvocationAdmissionFacts `json:"admitted,omitempty"`
 }
 
 func (f ExecutionFailureFacts) Validate() error {
@@ -115,6 +120,15 @@ func (f ExecutionFailureFacts) Validate() error {
 			return fmt.Errorf("execution failure manifest digest %q: %w", offer.Digest, ErrDuplicate)
 		}
 		seen[offer.Digest] = struct{}{}
+	}
+	if admitted := f.Admitted; admitted != nil {
+		if err := admitted.Validate(); err != nil {
+			return fmt.Errorf("execution failure admitted: %w", err)
+		}
+		if admitted.Kind != AdmissionKindExecution || admitted.InvocationID != f.InvocationID {
+			return fmt.Errorf("execution failure %q admitted facts of %s %q: %w",
+				f.InvocationID, admitted.Kind, admitted.InvocationID, ErrCardFactInconsistent)
+		}
 	}
 	return nil
 }

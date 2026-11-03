@@ -364,6 +364,37 @@ private func sampleState(revision: Int64 = 5) -> CachedState {
         #expect(taskHolds.allSatisfy { $0.reason == .admission_policy_refused && $0.detail == nil })
     }
 
+    @Test func aCachedRunTimelineWithoutAdmissionsIsDroppedAndTheLedgerKept() throws {
+        // Run timelines gained the required admissions list (#979). A cached
+        // timeline without it would throw on decode and discard the whole
+        // cache, ledger included. The load path drops only that timeline; an
+        // empty list would claim nothing was admitted.
+        let (store, directory) = temporaryStore()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        var state = sampleState()
+        state.runTimelines = RunFixtures.defaultTimelines()
+        state.pendingCommands = [
+            "item-a": .init(command: makeCommand(itemID: "item-a"), state: .unresolved)
+        ]
+        try store.save(state)
+
+        let file = directory.appendingPathComponent("cache.json")
+        var object = try #require(
+            try JSONSerialization.jsonObject(with: Data(contentsOf: file)) as? [String: Any])
+        var persistedState = try #require(object["state"] as? [String: Any])
+        var runTimelines = try #require(persistedState["runTimelines"] as? [[String: Any]])
+        #expect(runTimelines.count > 1)
+        let legacyRunID = try #require(runTimelines[0]["run_id"] as? String)
+        runTimelines[0].removeValue(forKey: "admissions")
+        persistedState["runTimelines"] = runTimelines
+        object["state"] = persistedState
+        try JSONSerialization.data(withJSONObject: object).write(to: file)
+
+        let migrated = try #require(store.load())
+        #expect(migrated.pendingCommands == state.pendingCommands)
+        #expect(migrated.runTimelines == state.runTimelines.filter { $0.run_id != legacyRunID })
+    }
+
     @Test func aPreTasksFormatFourCacheKeepsTheLedgerAndTelemetrySections() throws {
         // Format 4 predates task snapshots and task timelines. Its cursors
         // must not make an upgraded client consider an empty task list

@@ -640,7 +640,7 @@ func (e *Engine) admitAttempt(
 		// would refuse.
 		if err := domain.ValidateAdmissionAgentDerivations(
 			admission, agent.resolved.Definition, agent.resolved.Adapter, agent.resolved.Route,
-			agent.resolved.Offer, agent.launch, agent.stage, agent.enrollment, agent.generation,
+			agent.resolved.Offer, agent.launch, agent.stage, agent.enrollment, agent.generation, agent.identity,
 		); err != nil {
 			return domain.ExecutionAdmission{}, false, fmt.Errorf("admit invocation %q: %w", invocationID, err)
 		}

@@ -504,6 +504,7 @@ type agentAdmission struct {
 	stage      domain.StageName
 	enrollment domain.ClientEnrollment
 	generation domain.EnrollmentGeneration
+	identity   domain.AuthIdentity
 }
 
 // wardRole maps an attempt to the ward role that runs it. The implementation
@@ -643,8 +644,10 @@ func resolveAgentAdmission(
 			RouteModelID:        passes.RouteModelID, RequestedEffort: passes.RequestedEffort,
 			NativeEffort:    passes.NativeEffort,
 			SelectionSource: source, SelectionRecordID: record,
+			HarnessClient: resolved.Adapter.ClientKind, LineageGroup: resolved.Offer.LineageGroup,
+			CostOwner: agent.Identity.CostOwner,
 		},
 		resolved: resolved, launch: launch, stage: stage,
-		enrollment: enrollment, generation: generation,
+		enrollment: enrollment, generation: generation, identity: agent.Identity,
 	}, nil
 }

@@ -463,6 +463,8 @@ var (
 		"review result's admission is not the one its invocation was admitted under")
 	ErrReviewAttribution = errors.New(
 		"review record must carry an admission snapshot or its legacy attribution, never both and never neither")
+	ErrAdmissionFactsInconsistent = errors.New(
+		"invocation admission facts are not ones an admission record could carry")
 
 	// Backend-conformance failures (issues #327, #320).
 	ErrConformanceOverclaim = errors.New(

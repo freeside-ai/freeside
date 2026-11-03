@@ -136,6 +136,34 @@ func TestSignetWireGoldens(t *testing.T) {
 		}
 	}
 
+	// The run timeline's admitted facts (#979): the implementer's, every fact
+	// recorded, and a reviewer of another lineage group.
+	timelineFacts := facts
+	timelineFacts.admissions = []domain.InvocationAdmissionFacts{
+		{
+			InvocationID: invocationID, Kind: domain.AdmissionKindExecution,
+			Role: new(domain.RoleImplementer), AdmittedAt: acceptedAt,
+			AgentDigest:     new(domain.Digest("sha256:" + strings.Repeat("a", 64))),
+			SelectionSource: new(domain.AgentSelectionSourceTaskLine), Harness: new(domain.HarnessClientClaudeCode),
+			Model: new("claude-opus-5-5"), RequestedEffort: new(domain.EffortHigh), NativeEffort: new("high"),
+			CostOwner: new("platform-team"), LineageGroup: new("anthropic"),
+			CredentialMode: new(domain.CredentialSubscriptionContained), EgressProfile: new(domain.EgressProviderOnly),
+			OperatingMode: new(domain.ModeUnattended), IsolationClass: new("fresh_vm_read_only_volume_handoff"),
+		},
+		{
+			InvocationID: "review-569-1", Kind: domain.AdmissionKindReview,
+			Role: new(domain.RoleReviewer), AdmittedAt: acceptedAt.Add(time.Hour),
+			AgentDigest:     new(domain.Digest("sha256:" + strings.Repeat("b", 64))),
+			SelectionSource: new(domain.AgentSelectionSourceLineup), Harness: new(domain.HarnessClientCodexCLI),
+			Model: new("gpt-5.2-codex"), RequestedEffort: new(domain.EffortHigh), NativeEffort: new("high"),
+			CostOwner: new("platform-team"), LineageGroup: new("openai"),
+			Independence: []domain.IndependenceEntry{
+				{WritingRole: domain.RoleImplementer, Lineage: domain.LineageDiffered},
+				{WritingRole: domain.RoleRemediator, Lineage: domain.LineageUnknown},
+			},
+		},
+	}
+
 	cases := []struct {
 		name  string
 		value any
@@ -204,7 +232,7 @@ func TestSignetWireGoldens(t *testing.T) {
 				Admission: domain.UnattendedAdmissionOpen, Stops: []UnattendedStop{},
 			},
 		}},
-		{name: "run-timeline", value: runTimeline(observation, 23, acceptedAt, facts)},
+		{name: "run-timeline", value: runTimeline(observation, 23, acceptedAt, timelineFacts)},
 		{name: "task-timeline", value: taskTimelineFixture(t)},
 		{name: "pairing-facts", value: pairingFacts},
 		{

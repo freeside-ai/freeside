@@ -378,12 +378,15 @@ package enum AttentionDisplay {
         switch item._type {
         case .execution_failure:
             guard let failure = item.execution_failure?.value1 else { return [] }
-            return [
+            let rows: [FactRow] = [
                 .init("Outcome", label(failure.outcome)),
                 failure.cause.map { .init("Cause", label($0)) },
                 .init("Stage", label(failure.stage)),
                 .init("Invocation", failure.invocation_id, monospaced: true),
             ].compactMap { $0 }
+            // What ran the failed attempt, as its admission recorded it; an
+            // item raised before the daemon recorded it carries none (#979).
+            return rows + admittedFailureRows(failure.admitted?.value1)
         case .review_diminishing_returns:
             return [
                 item.billable_cost_so_far.map { .init("Cost so Far", costSoFar($0.value1)) },
@@ -794,6 +797,15 @@ package enum AttentionDisplay {
         case .propose_site: return "Emitted by the inference site"
         case .daemon_fallback: return "Daemon resolve-false fallback"
         }
+    }
+
+    /// The failure card names the profile that failed: what ran it, who
+    /// pays, and how it was contained.
+    private static func admittedFailureRows(
+        _ admitted: Components.Schemas.InvocationAdmissionFacts?
+    ) -> [FactRow] {
+        guard let admitted else { return [] }
+        return RunDisplay.profileRows(admitted).map { .init($0.label, $0.value) }
     }
 
     static func costSoFar(_ cost: Components.Schemas.CostSoFar) -> String {

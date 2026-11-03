@@ -799,6 +799,7 @@ func cloneExecutionFailureFacts(facts *ExecutionFailureFacts) *ExecutionFailureF
 	}
 	cloned := *facts
 	cloned.OfferedManifests = slices.Clone(facts.OfferedManifests)
+	cloned.Admitted = cloneAdmissionFacts(facts.Admitted)
 	return &cloned
 }
 

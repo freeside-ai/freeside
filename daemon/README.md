@@ -1086,7 +1086,7 @@ freesided inspect proposals -db <db>
 - `tasks`: every task the store holds, with `task_id`, `project_id`,
   `created_at`, and `latest_run_id` (`null` before the first run).
 
-`freesided inspect task` prints one task's record, `freeside-task-record-v12`.
+`freesided inspect task` prints one task's record, `freeside-task-record-v13`.
 Every section is read in one transaction, at the store revision
 `as_of_revision`; `as_of` is the read time. To wait for a change, read again
 and compare `as_of_revision`. A revision that hasn't moved means no recorded
@@ -1220,7 +1220,7 @@ Reading the record:
   `unapproved_recipe` says so on stderr; stdout stays one JSON line.
 - **The timeline's and the card's shapes are part of the record's version.**
   A change to the task timeline, its events, or the proposal card changes
-  `freeside-task-record-v12`.
+  `freeside-task-record-v13`.
 - **`specification_retries` names each specification retry.** A retry adds
   an iteration to the same specification run, so the run's `invocations`
   list the failed invocation and the one that repeats it. The entries are
@@ -3278,6 +3278,19 @@ at all.
   reads as `observation_gap` structurally, and elapsed time and last
   observation derive from the timeline. No percentage-complete field exists
   or can be added without a contract change.
+- **Admitted facts** ride only on the paired client's run timeline
+  (`GET /runs/{run_id}/timeline`, `admissions`; issue #979): one
+  `domain.InvocationAdmissionFacts` per execution or review admission of the
+  run, ordered by admission time, with the harness, model, effort, cost
+  owner, lineage group, credential mode, egress profile, operating mode, and
+  isolation class (the admitting backend) the admission recorded. A fact the
+  record does not carry is null, never read from the current tree, identity,
+  or configuration: a legacy admission has no binding, and a binding admitted
+  before #979 has no harness, lineage group, or cost owner. A review's facts
+  add its lineage relation to each writing role, against the latest writer
+  admitted at or before it, whose role comes from the authenticated dispatch
+  intent. An `execution_failure` item raised since carries the failed
+  attempt's facts as `admitted`.
 
 The machine-readable supervision snapshot (`freesided follow -snapshot`)
 includes the optional top-level string `hold_reason` exactly when the selected

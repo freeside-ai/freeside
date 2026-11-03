@@ -131,8 +131,16 @@ func TestProductionDeliveryRefusalRecordsStandardOutcome(t *testing.T) {
 		if !marker.Dispatched() {
 			return errors.New("delivery refusal marker remained pending")
 		}
-		_, err = tx.GetAttentionItem(ctx, domain.ItemID("execution-failure-"+string(invocationID)))
-		return err
+		item, err := tx.GetAttentionItem(ctx, domain.ItemID("execution-failure-"+string(invocationID)))
+		if err != nil {
+			return err
+		}
+		if item.ExecutionFailure == nil || item.ExecutionFailure.Admitted == nil ||
+			item.ExecutionFailure.Admitted.InvocationID != invocationID ||
+			item.ExecutionFailure.Admitted.Role == nil || *item.ExecutionFailure.Admitted.Role != domain.RoleRemediator {
+			return fmt.Errorf("delivery refusal item facts = %#v, want the remediator's admitted facts", item.ExecutionFailure)
+		}
+		return nil
 	}); err != nil {
 		t.Fatal(err)
 	}

@@ -252,8 +252,142 @@ package enum RunDisplay {
         return successorID
     }
 
-    static func spendLine(_ run: Components.Schemas.Run) -> String? {
+    package static func spendLine(_ run: Components.Schemas.Run) -> String? {
         run.billable_cost_so_far.map { AttentionDisplay.costSoFar($0.value1) }
+    }
+
+    /// The value a row shows for a fact the admission did not record. It is
+    /// never filled from current configuration (#979).
+    package static let unavailable = "Unavailable"
+
+    /// One line naming what ran an invocation: harness, model, and effort,
+    /// skipping any the admission did not record. Nil when it recorded none.
+    package static func admissionLine(_ facts: Components.Schemas.InvocationAdmissionFacts) -> String? {
+        let parts = [
+            facts.harness.map { label($0.value1) },
+            facts.model,
+            facts.requested_effort.map { "effort \(label($0.value1).lowercased())" },
+        ].compactMap { $0 }
+        return parts.isEmpty ? nil : parts.joined(separator: " · ")
+    }
+
+    /// The admission's facts as labeled rows, with each value the admission
+    /// did not record shown as unavailable: the profile, the operating mode,
+    /// and, for a review, one independence row per writing role.
+    package static func admissionRows(
+        _ facts: Components.Schemas.InvocationAdmissionFacts
+    ) -> [AttentionDisplay.BindingRow] {
+        profileRows(facts)
+            + [row("Operating Mode", facts.operating_mode.map { label($0.value1) })]
+            + (facts.independence ?? []).map { row("Independence", independence($0)) }
+    }
+
+    /// What ran an invocation, who pays for it, and how it was contained.
+    package static func profileRows(
+        _ facts: Components.Schemas.InvocationAdmissionFacts
+    ) -> [AttentionDisplay.BindingRow] {
+        [
+            row("Harness", facts.harness.map { label($0.value1) }),
+            row("Model", facts.model),
+            row("Effort", effort(facts)),
+            row("Cost Owner", facts.cost_owner),
+            row("Credential Mode", facts.credential_mode.map { label($0.value1) }),
+            row("Egress Profile", facts.egress_profile.map { label($0.value1) }),
+            row("Isolation Class", facts.isolation_class.map(isolationLabel)),
+        ]
+    }
+
+    private static func row(_ label: String, _ value: String?) -> AttentionDisplay.BindingRow {
+        .init(label: label, value: value ?? unavailable)
+    }
+
+    private static func independence(_ entry: Components.Schemas.IndependenceEntry) -> String {
+        let writer = label(entry.writing_role).lowercased()
+        return switch entry.lineage {
+        case .matched: "Matched \(writer)"
+        case .differed: "Differed from \(writer)"
+        case .unknown: "Unknown against \(writer)"
+        }
+    }
+
+    /// The requested effort, with the harness's own name for it when the two
+    /// differ, so a clamp (max passed as xhigh) is shown, never hidden.
+    private static func effort(_ facts: Components.Schemas.InvocationAdmissionFacts) -> String? {
+        guard let requested = facts.requested_effort?.value1 else { return facts.native_effort }
+        let name = label(requested)
+        guard let native = facts.native_effort, native != requested.rawValue else { return name }
+        return "\(name) (passed as \(native))"
+    }
+
+    /// The admission of one invocation of the run, nil when the run's
+    /// timeline records none for it.
+    package static func admission(
+        for invocationID: String, in timeline: Components.Schemas.RunTimeline
+    ) -> Components.Schemas.InvocationAdmissionFacts? {
+        timeline.admissions.last { $0.invocation_id == invocationID }
+    }
+
+    /// The latest implementer admission among a run's admissions, the one
+    /// the task page shows for the current run.
+    package static func latestImplementerAdmission(
+        _ timeline: Components.Schemas.RunTimeline
+    ) -> Components.Schemas.InvocationAdmissionFacts? {
+        timeline.admissions.last { $0.kind == .execution && $0.role?.value1 == .implementer }
+    }
+
+    /// The admitting backend in words. The backend is an open string on the
+    /// wire; a class this client does not know shows its daemon name, which
+    /// is what `freesided doctor` prints.
+    package static func isolationLabel(_ backend: String) -> String {
+        switch backend {
+        case "fresh_vm_read_only_volume_handoff": "Fresh VM, read-only volume handoff"
+        default: backend
+        }
+    }
+
+    package static func label(_ value: Components.Schemas.HarnessClientKind) -> String {
+        switch value {
+        case .claude_code: "Claude Code"
+        case .codex_cli: "Codex CLI"
+        }
+    }
+
+    package static func label(_ value: Components.Schemas.EffortLevel) -> String {
+        switch value {
+        case .harness_default: "Harness default"
+        case .low: "Low"
+        case .medium: "Medium"
+        case .high: "High"
+        case .max: "Max"
+        }
+    }
+
+    package static func label(_ value: Components.Schemas.CredentialMode) -> String {
+        switch value {
+        case .subscription_contained: "Subscription, contained"
+        case .api_key_isolated: "API key, isolated"
+        case .local_trusted: "Local, trusted"
+        }
+    }
+
+    package static func label(_ value: Components.Schemas.EgressProfile) -> String {
+        switch value {
+        case .provider_only: "Provider only"
+        case .provider_registry: "Provider and package registries"
+        case .provider_web_read: "Provider and web read"
+        case .clean_verification: "Clean verification"
+        }
+    }
+
+    package static func label(_ value: Components.Schemas.OperatingMode) -> String {
+        switch value {
+        case .attended_dev: "Attended"
+        case .unattended: "Unattended"
+        }
+    }
+
+    package static func label(_ value: Components.Schemas.RoleName) -> String {
+        value.rawValue.replacingOccurrences(of: "_", with: " ").capitalized
     }
 
     static func secondaryLine(

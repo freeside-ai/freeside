@@ -234,6 +234,8 @@ func (s AgentSelection) AdmitReview(
 			RouteModelID:        agent.passes.RouteModelID, RequestedEffort: agent.passes.RequestedEffort,
 			NativeEffort:    agent.passes.NativeEffort,
 			SelectionSource: source, SelectionRecordID: record,
+			HarnessClient: resolved.Adapter.ClientKind, LineageGroup: resolved.Offer.LineageGroup,
+			CostOwner: agent.Identity.CostOwner,
 		},
 		AdmittedAt: admittedAt,
 	})
@@ -244,7 +246,7 @@ func (s AgentSelection) AdmitReview(
 	// domain would refuse.
 	if err := domain.ValidateReviewAdmissionDerivations(
 		admission, definition, resolved.Adapter, resolved.Route, resolved.Offer, agent.launch,
-		agent.Enrollment, agent.Generation,
+		agent.Enrollment, agent.Generation, agent.Identity,
 	); err != nil {
 		return refuse(err)
 	}

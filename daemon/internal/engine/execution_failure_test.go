@@ -92,15 +92,19 @@ func TestExecutionFailureFactsReuseDriverOutcome(t *testing.T) {
 		var err error
 		facts, err = executionFailureFacts(
 			ctx, tx, attempt.InvocationID, exec.StatusFailed, "driver failure", "",
-			recordedAt.Add(time.Minute), domain.StageNameImplementation,
+			recordedAt.Add(time.Minute), domain.StageNameImplementation, domain.RoleImplementer,
 		)
 		return err
 	}); err != nil {
 		t.Fatalf("reuse driver outcome: %v", err)
 	}
+	// The card names what ran the failed invocation, read from its
+	// admission (#979).
+	admitted := domain.AdmittedFactsOfExecution(admission, domain.RoleImplementer)
 	want := &domain.ExecutionFailureFacts{
 		Outcome: domain.ExecutionOutcomeFailed, Cause: domain.FailureCauseUnknown,
 		Stage: domain.StageNameImplementation, InvocationID: attempt.InvocationID,
+		Admitted: &admitted,
 	}
 	if facts == nil || !reflect.DeepEqual(facts, want) {
 		t.Fatalf("facts = %#v, want %#v", facts, want)
@@ -138,7 +142,7 @@ func TestExecutionFailureFactsLeaveCompletedExportUnclassified(t *testing.T) {
 		var err error
 		facts, err = executionFailureFacts(
 			ctx, tx, attempt.InvocationID, exec.StatusFailed, "invalid completed output", "",
-			exportedAt.Add(time.Minute), domain.StageNameSpecification,
+			exportedAt.Add(time.Minute), domain.StageNameSpecification, domain.RoleSpecifier,
 		)
 		return err
 	}); err != nil {

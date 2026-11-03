@@ -53,5 +53,54 @@
     "amount": "17.5",
     "invocations": 1,
     "complete": true
-  }
+  },
+  "admissions": [
+    {
+      "invocation_id": "inv-569",
+      "kind": "execution",
+      "role": "implementer",
+      "admitted_at": "2026-08-10T12:35:56Z",
+      "agent_digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "selection_source": "task_line",
+      "harness": "claude_code",
+      "model": "claude-opus-5-5",
+      "requested_effort": "high",
+      "native_effort": "high",
+      "cost_owner": "platform-team",
+      "lineage_group": "anthropic",
+      "credential_mode": "subscription_contained",
+      "egress_profile": "provider_only",
+      "operating_mode": "unattended",
+      "isolation_class": "fresh_vm_read_only_volume_handoff",
+      "independence": null
+    },
+    {
+      "invocation_id": "review-569-1",
+      "kind": "review",
+      "role": "reviewer",
+      "admitted_at": "2026-08-10T13:35:56Z",
+      "agent_digest": "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+      "selection_source": "lineup",
+      "harness": "codex_cli",
+      "model": "gpt-5.2-codex",
+      "requested_effort": "high",
+      "native_effort": "high",
+      "cost_owner": "platform-team",
+      "lineage_group": "openai",
+      "credential_mode": null,
+      "egress_profile": null,
+      "operating_mode": null,
+      "isolation_class": null,
+      "independence": [
+        {
+          "writing_role": "implementer",
+          "lineage": "differed"
+        },
+        {
+          "writing_role": "remediator",
+          "lineage": "unknown"
+        }
+      ]
+    }
+  ]
 }
