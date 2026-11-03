@@ -374,6 +374,80 @@ func TestPoolUsageObservationExhaustedMarks(t *testing.T) {
 	}
 }
 
+func TestPoolUsageObservationRecordedExhaustedMarks(t *testing.T) {
+	t.Parallel()
+	const hour = time.Hour
+	at := func(offset time.Duration) *time.Time { return new(observationAt.Add(offset)) }
+	reading := func(window string, status domain.WindowStatus, observed time.Duration, resetsAt *time.Time) domain.WindowReading {
+		r := observationReading(window, status, resetsAt)
+		r.ObservedAt = observationAt.Add(observed)
+		return r
+	}
+	refusal := func(window string, setAt time.Duration, resetsAt *time.Time) domain.RefusalMark {
+		return domain.RefusalMark{
+			Window: window, InvocationID: "inv-" + domain.InvocationID(window), ResetsAt: resetsAt,
+			SetAt: observationAt.Add(setAt),
+		}
+	}
+	type mark struct {
+		window string
+		source domain.ExhaustedMarkSource
+		resets *time.Time
+	}
+	refused, readingMark := domain.ExhaustedMarkProviderRefusal, domain.ExhaustedMarkUsageReading
+	allowed, exhausted := domain.WindowStatusAllowed, domain.WindowStatusExhausted
+
+	observation := domain.PoolUsageObservation{
+		Pool: "pool", Collector: "enroll-a",
+		LastAttempt: &domain.CollectionAttempt{Status: domain.CollectionAttemptSucceeded, At: observationAt},
+		Windows: []domain.WindowReading{
+			// The issue's case: an exhausted reading resetting at T1, newer than
+			// a refusal resetting at T2 > T1. Both marks hold.
+			reading("a_both", exhausted, hour, at(2*hour)),
+			// An allowed reading after the refusal clears it.
+			reading("b_cleared", allowed, hour, nil),
+			// An allowed reading alone marks nothing.
+			reading("c_allowed", allowed, 0, nil),
+			// An exhausted reading with no reset keeps a nil ResetsAt.
+			reading("d_no_reset", exhausted, 0, nil),
+		},
+		RefusalMarks: []domain.RefusalMark{
+			refusal("a_both", 0, at(3*hour)),
+			refusal("b_cleared", 0, at(3*hour)),
+			// A refusal whose reset has passed by any later read stays recorded.
+			refusal("e_lapsed", -2*hour, at(-hour)),
+		},
+	}
+	if err := observation.Validate(); err != nil {
+		t.Fatalf("fixture: %v", err)
+	}
+	want := []mark{
+		{"a_both", refused, at(3 * hour)},
+		{"a_both", readingMark, at(2 * hour)},
+		{"d_no_reset", readingMark, nil},
+		{"e_lapsed", refused, at(-hour)},
+	}
+
+	got := observation.RecordedExhaustedMarks()
+	if len(got) != len(want) {
+		t.Fatalf("marks = %+v, want %+v", got, want)
+	}
+	for i, mark := range got {
+		if err := mark.Validate(); err != nil {
+			t.Fatalf("mark %d invalid: %v", i, err)
+		}
+		w := want[i]
+		if mark.Window != w.window || mark.Source != w.source {
+			t.Fatalf("mark %d = %s/%s, want %s/%s", i, mark.Window, mark.Source, w.window, w.source)
+		}
+		switch {
+		case w.resets == nil && mark.ResetsAt != nil,
+			w.resets != nil && (mark.ResetsAt == nil || !mark.ResetsAt.Equal(*w.resets)):
+			t.Fatalf("mark %d resets_at = %v, want %v", i, mark.ResetsAt, w.resets)
+		}
+	}
+}
+
 func TestPoolUsageObservationModelScope(t *testing.T) {
 	t.Parallel()
 	observation := domain.PoolUsageObservation{

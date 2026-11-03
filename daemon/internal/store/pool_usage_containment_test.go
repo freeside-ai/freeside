@@ -17,6 +17,7 @@ var poolUsageReaders = map[string]bool{
 	"ListPoolUsageObservationSnapshots": true,
 	"ExhaustedMarks":                    true,
 	"ExhaustedMarksForModel":            true,
+	"RecordedExhaustedMarks":            true,
 	"WindowsForModel":                   true,
 }
 
