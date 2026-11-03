@@ -1966,6 +1966,17 @@ func (e *Engine) recordProductionDeliveryRefusal(
 			if err != nil {
 				return err
 			}
+			// The store derives the task binding, decision surface, and
+			// recommendation on write, and delivery receipts change timing
+			// under the same version, so a rebuilt item never carries them;
+			// compare against the stored values. Every other field still
+			// fails closed.
+			if want.Subject.TaskID == nil {
+				want.Subject.TaskID = item.Subject.TaskID
+			}
+			want.DecisionSurface = item.DecisionSurface
+			want.Recommendation = item.Recommendation
+			want.Timing = item.Timing
 			if !reflect.DeepEqual(item, want) {
 				return domain.ErrImmutableTransition
 			}
