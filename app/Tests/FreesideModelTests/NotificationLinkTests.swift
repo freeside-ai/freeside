@@ -166,6 +166,23 @@ import Testing
         await never.open()
     }
 
+    /// A second link to the item already routed changes no route, so the
+    /// count is what tells the root to open its card.
+    @Test func aSecondLinkToTheRoutedItemIsCounted() async throws {
+        let session = try session(server())
+        let navigation = NavigationModel(launchInputs: .standard())
+        let link = NotificationLink.attentionItem(itemID: Self.itemID, channel: "ntfy", attempt: 1)
+
+        await session.open(link, in: navigation, receiptBound: .seconds(60))
+        #expect(navigation.path == [.attentionItem(Self.itemID)])
+        let openings = navigation.linkOpenings
+
+        await session.open(link, in: navigation, receiptBound: .seconds(60))
+        #expect(navigation.linkOpenings == openings + 1)
+        #expect(navigation.path == [.attentionItem(Self.itemID)])
+        #expect(navigation.linkedItemID == Self.itemID)
+    }
+
     /// Opens the link for `itemID` and returns once its receipt is held at
     /// the server, with later receipts free to answer. `release` lets the
     /// held one go.

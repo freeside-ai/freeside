@@ -1,4 +1,5 @@
 import Observation
+import SwiftUI
 
 /// The task page's place, held above the views that draw the page. A leading
 /// card coming or going remounts the page, which moves between the card's
@@ -69,5 +70,14 @@ final class TaskPageMemory {
             return nil
         }
         return anchor
+    }
+}
+
+extension View {
+    /// Opens the card each routed link names, as a tap on it does: the page
+    /// moves to the card even when it already leads and the route doesn't
+    /// change. The root attaches it above the page.
+    func opensLinkedCards(from navigation: NavigationModel, in memory: TaskPageMemory) -> some View {
+        onChange(of: navigation.linkOpenings) { memory.openCard() }
     }
 }

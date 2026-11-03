@@ -164,7 +164,8 @@ import Testing
     /// The Mac's task page in a window: scrolled to its Timeline, a card
     /// arrives and then resolves, and after each the Timeline's jump target
     /// sits on the pinned outline row's top, so the section starts in view
-    /// just under the row, while a Stop confirmation stays up.
+    /// just under the row, while a Stop confirmation stays up. Opening the
+    /// leading card, by a tap or a link, then moves the page to it.
     ///
     /// The page's geometry is read through its own recorder: SwiftUI builds
     /// no accessibility tree for a test host to find the section by.
@@ -178,6 +179,7 @@ import Testing
             let task: Components.Schemas.TaskSnapshot
             let memory: TaskPageMemory
             let lead: Lead
+            let navigation: NavigationModel
 
             var body: some View {
                 TaskPageHost(
@@ -190,6 +192,7 @@ import Testing
                     }
                 )
                 .taskStopConfirmation(memory, model: coordinator.taskStop, dynamicTypeSize: .large)
+                .opensLinkedCards(from: navigation, in: memory)
             }
         }
 
@@ -203,9 +206,11 @@ import Testing
             let memory = TaskPageMemory()
             memory.reset(forRoutedTaskID: task.task.id)
             let lead = Lead()
+            let navigation = NavigationModel(launchInputs: .standard())
 
             let host = NSHostingView(
-                rootView: Harness(coordinator: coordinator, task: task, memory: memory, lead: lead))
+                rootView: Harness(
+                    coordinator: coordinator, task: task, memory: memory, lead: lead, navigation: navigation))
             let window = NSWindow(
                 contentRect: CGRect(x: 0, y: 0, width: 1_000, height: 360), styleMask: [.titled],
                 backing: .buffered, defer: false)
@@ -233,14 +238,17 @@ import Testing
             }
             try await settle()
 
-            // Scroll down the way a reader does, until the Timeline is the
-            // section under the pinned row.
-            var steps = 0
-            while memory.anchor != .section(.timeline), steps < 500 {
-                try await scroll(by: 8)
-                steps += 1
+            /// Scrolls down the way a reader does, until the Timeline is the
+            /// section under the pinned row.
+            func scrollToTheTimeline() async throws {
+                var steps = 0
+                while memory.anchor != .section(.timeline), steps < 500 {
+                    try await scroll(by: 8)
+                    steps += 1
+                }
+                try #require(memory.anchor == .section(.timeline))
             }
-            try #require(memory.anchor == .section(.timeline))
+            try await scrollToTheTimeline()
             let readingOffset = try pageScroll().contentView.bounds.minY
 
             memory.confirmation = try #require(coordinator.taskStop.prepare(taskID: task.task.id))
@@ -297,6 +305,17 @@ import Testing
             #expect(memory.anchor == .section(.timeline))
             memory.openCard()
             try await settle()
+            #expect(memory.anchor == .section(.decisions))
+
+            // Back at the Timeline, a link to the card still leading moves
+            // the page to it the same way, though it changes no route.
+            try await scrollToTheTimeline()
+            memory.chosenSection = .timeline
+            let openings = memory.cardOpenings
+            navigation.route(toLinkedItem: question.item.id)
+            try await settle()
+            #expect(memory.cardOpenings == openings + 1)
+            #expect(memory.chosenSection == nil)
             #expect(memory.anchor == .section(.decisions))
         }
 
