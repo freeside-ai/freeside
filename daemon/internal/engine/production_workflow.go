@@ -2341,6 +2341,11 @@ func confirmProductionQuarantineItem(
 // class writes. The class matters, not merely lane membership: a marker
 // release must not conclude the task row's notice or the reverse.
 func productionQuarantineNoticeFor(prefix, reason string) bool {
+	if prefix == launchMemoryRefusedPrefix {
+		// Its reason carries the refused numbers or runtime version, so no
+		// fixed text names it; the prefix is this notice's alone.
+		return reason != ""
+	}
 	if prefix == productionScopeQuarantinePrefix {
 		return reason == productionQuarantineScopeConflict
 	}

@@ -14,6 +14,7 @@
     "resets_at": "2026-01-02T08:04:05Z",
     "set_at": "2026-01-02T03:05:05Z"
   },
+  "machine_capacity": null,
   "first_observed_at": "2026-01-02T03:05:05Z",
   "last_observed_at": "2026-01-02T03:06:05Z"
 }

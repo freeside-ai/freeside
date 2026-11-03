@@ -142,8 +142,15 @@ func (w *productionPublicationWorkflow) reconcileShadowReview(
 		if errors.As(err, &refusal) {
 			return w.abandonShadowReview(ctx, task, routed.Round, id, err)
 		}
-		if errors.Is(err, domain.ErrUsagePoolExhausted) {
+		if reviewCapacityRefusal(err) {
 			return w.waitForShadowReviewSlot(ctx, task, routed, id, err)
+		}
+		// The shadow arm only observes, so a launch the budget refuses for
+		// good abandons the observation rather than hold the routed gate.
+		if launchMemoryRefusal(err) {
+			return w.abandonShadowReview(ctx, task, routed.Round, id, &exec.ReviewSourceFailure{
+				Class: domain.ReviewFailureConfiguration, Err: err,
+			})
 		}
 		return false, err
 	}
@@ -328,29 +335,43 @@ func (w *productionPublicationWorkflow) reconcileShadowReview(
 	return true, w.removeReviewWorkspace(id)
 }
 
-// waitForShadowReviewSlot holds a shadow review refused for a full pool until
-// a slot frees, within the window that bounds any shadow pass: past it the
+// waitForShadowReviewSlot holds a shadow review refused for a full pool or
+// for memory until capacity frees, within the window that bounds any shadow pass: past it the
 // observation is abandoned rather than holding the routed gate longer.
 func (w *productionPublicationWorkflow) waitForShadowReviewSlot(
 	ctx context.Context, task productionPublicationTask, routed domain.ReviewRecord,
 	id domain.InvocationID, cause error,
 ) (bool, error) {
 	if w.now().Before(routed.CompletedAt.Add(shadowReviewWait)) {
-		return false, w.holdReviewForUsagePool(ctx, task.RunID, id, cause)
+		return false, w.holdReviewForCapacity(ctx, task.RunID, id, cause)
 	}
 	// A refused review has no admission to release, so this pass repeats while
 	// the run stays parked, and a write here would move the revision each time.
-	var held bool
+	var held, waiting bool
 	if err := w.store.Read(ctx, func(tx *store.ReadTx) error {
 		hold, present, err := tx.GetRunHold(ctx, task.RunID)
-		held = present && hold.Reason == domain.HoldUsagePoolExhausted
+		if err != nil {
+			return err
+		}
+		held = present && reviewCapacityWait(hold.Reason)
+		// An abandoned shadow review never launches, so it leaves the memory
+		// order rather than hold back the launches behind it.
+		waiting, err = tx.LaunchWaiting(ctx, id)
 		return err
 	}); err != nil {
 		return false, err
 	}
-	if held {
+	if held || waiting {
 		if err := w.store.Write(ctx, func(tx *store.WriteTx) error {
-			return tx.ClearRunHoldCause(ctx, task.RunID, domain.HoldUsagePoolExhausted)
+			if err := tx.LeaveLaunchWait(ctx, id); err != nil {
+				return err
+			}
+			for _, cause := range []domain.RunHoldReason{domain.HoldUsagePoolExhausted, domain.HoldMachineCapacity} {
+				if err := tx.ClearRunHoldCause(ctx, task.RunID, cause); err != nil {
+					return err
+				}
+			}
+			return nil
 		}); err != nil {
 			return false, err
 		}

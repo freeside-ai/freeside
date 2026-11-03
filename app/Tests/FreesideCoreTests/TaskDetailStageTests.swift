@@ -261,6 +261,8 @@ import Testing
         #expect(chip(TaskStageFixtures.page(.verification)) == "On Hold")
         #expect(chip(held(TaskStageFixtures.page(.specification), on: .identity_parallelism)) == "Queued")
         #expect(chip(held(TaskStageFixtures.page(.specification), on: .usage_pool_exhausted)) == "Queued")
+        // A launch waiting for machine memory is queued behind the launches ahead of it.
+        #expect(chip(held(TaskStageFixtures.page(.implementation), on: .machine_capacity)) == "Queued")
         // A refused quota window parks the task until a known reset: held, not queued.
         #expect(chip(held(TaskStageFixtures.page(.implementation), on: .quota_window_exhausted)) == "On Hold")
         #expect(chip(TaskProgressFixtures.make("Approval required")) == "Specification Approval Required")

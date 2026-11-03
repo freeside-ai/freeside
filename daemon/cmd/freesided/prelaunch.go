@@ -524,7 +524,7 @@ func checkSubmittedPolicy(policyPath string, runID domain.RunID) (domain.Resolve
 	if err != nil {
 		return domain.ResolvedPolicy{}, err
 	}
-	if _, err := ward.ResolveLaunchSizes(policy.Keys); err != nil {
+	if _, err := ward.ResolveLaunchSizes(policy.Keys, ward.LaunchBound{}); err != nil {
 		return domain.ResolvedPolicy{}, err
 	}
 	if _, err := specify.ParsePolicy(policy); err != nil {

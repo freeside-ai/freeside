@@ -316,6 +316,8 @@ func main() {
 		"operating mode: attended_dev (default) or unattended")
 	environmentFlag := flags.String("environment", string(defaultEnvironment),
 		"environment tier: prod, dev, or ephemeral (default; refuses supervised roots and ports)")
+	memoryBudget := flags.Int("memory-budget-mib", 0,
+		"memory budget in MiB every container launch reserves against; prod defaults to half of physical memory, and dev or ephemeral requires it with -driver claude")
 	prodAppAuthority := flags.Bool("prod-app-authority", false,
 		"ephemeral only: use prod's own App directories as -publication-state-dir and -publication-credentials-dir while holding the production rig lease (-rig-token-file)")
 	prodDaemon := flags.String("prod-daemon", "",
@@ -360,6 +362,11 @@ func main() {
 	execution := executionMode(*driverMode)
 	if !execution.valid() {
 		fmt.Fprintf(os.Stderr, "freesided: -driver %q is not disabled, fake, claude, or scenario\n", *driverMode)
+		os.Exit(2)
+	}
+	memoryBudgetMiB, err := resolveMemoryBudget(env, execution == executionClaude, *memoryBudget, physicalMemoryBytes)
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "freesided:", err)
 		os.Exit(2)
 	}
 	home, err := os.UserHomeDir()
@@ -469,6 +476,7 @@ func main() {
 		BackupEncryptionWaiverRepositoryID: backupEncryptionWaiverRepositoryID.Value(),
 		SeedWalkingSkeleton:                *seedWalkingSkeleton,
 		SeedFixture:                        *seedFixture,
+		MemoryBudgetMiB:                    memoryBudgetMiB,
 		Logger:                             logger,
 	}
 	mode, err := parseOperatingMode(*operatingMode)
@@ -635,6 +643,10 @@ type config struct {
 	// rein resolver and workflow-definition parsing that populate it are a later
 	// unit, so a composition (or a test) supplies them directly for now.
 	IntakeInitiators []intakeInitiator
+	// MemoryBudgetMiB bounds every ward launch's memory (resolveMemoryBudget).
+	// Zero runs unbudgeted: nothing is reserved and no launch waits for
+	// memory.
+	MemoryBudgetMiB int
 	// AttentionDeliveryInterval is how often the daemon sends the
 	// notifications it owes paired devices (#1924). Zero leaves the sender
 	// off, so a test that pairs a device neither publishes to the hosted
@@ -874,7 +886,12 @@ func run(parent context.Context, stop func(), cfg config) (_ *daemon, err error)
 			return nil, err
 		}
 	}
-	manualProjects, err := readManualSubmissionProjects(cfg.ManualSubmissionConfigPath)
+	bound, err := cfg.launchBound(parent)
+	if err != nil {
+		return nil, err
+	}
+	logLaunchBound(cfg.Logger, bound)
+	manualProjects, err := readManualSubmissionProjects(cfg.ManualSubmissionConfigPath, policySizeBound(bound))
 	if err != nil {
 		return nil, err
 	}
@@ -1174,7 +1191,7 @@ func run(parent context.Context, stop func(), cfg config) (_ *daemon, err error)
 		}),
 	)
 	if cfg.FakeDriverEnabled {
-		walkingSkeletonOptions := []engine.Option{engine.WithDaemonLock(lock)}
+		walkingSkeletonOptions := []engine.Option{engine.WithDaemonLock(lock), engine.WithMachineCapacity(bound)}
 		if cfg.Logger != nil {
 			walkingSkeletonOptions = append(walkingSkeletonOptions, engine.WithLogger(cfg.Logger))
 		}
@@ -1222,6 +1239,7 @@ func run(parent context.Context, stop func(), cfg config) (_ *daemon, err error)
 		}
 		engineOptions := []engine.Option{
 			engine.WithDaemonLock(lock),
+			engine.WithMachineCapacity(bound),
 			engine.WithAdmission(claudeWiring.backend, admissionFloor(cfg.Claude.OperatingMode),
 				claudeWiring.env, func() time.Time { return time.Now().UTC() }),
 			engine.WithAdmissionDerivation(claudeWiring.derive),
@@ -1474,7 +1492,7 @@ func run(parent context.Context, stop func(), cfg config) (_ *daemon, err error)
 			return nil, fmt.Errorf("reconcile orphaned handoffs: %w", err)
 		}
 	} else if cfg.Scenario != nil {
-		scenarioWiring, err = composeScenario(ctx, st, attention, blobs, lock, cfg)
+		scenarioWiring, err = composeScenario(ctx, st, attention, blobs, lock, cfg, bound)
 		if err != nil {
 			return nil, fmt.Errorf("compose scenario %s: %w", cfg.Scenario.Name, err)
 		}

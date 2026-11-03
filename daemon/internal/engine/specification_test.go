@@ -31,6 +31,7 @@ import (
 	specifyfake "github.com/freeside-ai/freeside/daemon/internal/specify/fake"
 	"github.com/freeside-ai/freeside/daemon/internal/store"
 	"github.com/freeside-ai/freeside/daemon/internal/store/storetest"
+	"github.com/freeside-ai/freeside/daemon/internal/ward"
 )
 
 type specificationRoundTripFunc func(*http.Request) (*http.Response, error)
@@ -211,7 +212,9 @@ func (d inspectRefusingDriver) Inspect(
 }
 
 type specificationFixture struct {
-	store                *store.Store
+	store *store.Store
+	// launchBound is the engine's memory budget; zero reserves nothing.
+	launchBound          ward.LaunchBound
 	dbPath               string
 	blobs                *signet.BlobStore
 	signet               *signet.Service
@@ -497,6 +500,7 @@ func (f specificationFixture) newEngineWithTransitionHook(
 				return nil
 			},
 		}),
+		WithMachineCapacity(f.launchBound),
 	)
 	if err != nil {
 		t.Fatal(err)

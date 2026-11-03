@@ -917,7 +917,7 @@ func TestReviewAdmissionResetsThePaceOfTheHoldItEnds(t *testing.T) {
 	}
 	id := ProductionReviewInvocationID(runID, 1)
 	refusal := &domain.UsagePoolExhaustedError{Pool: "identity:fake-review-identity", Active: 1, Limit: 1}
-	if err := w.holdReviewForUsagePool(ctx, runID, id, refusal); err != nil {
+	if err := w.holdReviewForCapacity(ctx, runID, id, refusal); err != nil {
 		t.Fatal(err)
 	}
 	if storedRunHold(t, st, runID) == nil {
@@ -929,7 +929,7 @@ func TestReviewAdmissionResetsThePaceOfTheHoldItEnds(t *testing.T) {
 	if hold := storedRunHold(t, st, runID); hold != nil {
 		t.Fatalf("the admission kept the hold: %+v", hold)
 	}
-	if err := w.holdReviewForUsagePool(ctx, runID, ProductionReviewInvocationID(runID, 2), refusal); err != nil {
+	if err := w.holdReviewForCapacity(ctx, runID, ProductionReviewInvocationID(runID, 2), refusal); err != nil {
 		t.Fatal(err)
 	}
 	if storedRunHold(t, st, runID) == nil {

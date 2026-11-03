@@ -262,13 +262,16 @@ type productionVerificationCheckpoint struct {
 }
 
 type productionPublicationWorkflow struct {
-	logger    *slog.Logger
-	store     *store.Store
-	attention attentionService
-	workDir   string
-	transport PublicationTransport
-	publisher *publish.Publisher
-	artifacts ArtifactStore
+	// launchBound is the engine's memory budget, which review admissions and
+	// verification jobs reserve against.
+	launchBound ward.LaunchBound
+	logger      *slog.Logger
+	store       *store.Store
+	attention   attentionService
+	workDir     string
+	transport   PublicationTransport
+	publisher   *publish.Publisher
+	artifacts   ArtifactStore
 	// operatorRecipes is the operator's approved-recipe set. Wherever an
 	// image's recipe or recipe-bearing evidence is gated, read the set
 	// through recipes or recipesIn, which add the repository's adopted
@@ -3790,12 +3793,24 @@ func (w *productionPublicationWorkflow) reconcileReviewGate(
 			return w.retryOrRecordReviewFailure(ctx, task, id, round,
 				binding.admission.Base.BaseSHA, task.HeadSHA, err)
 		}
-		// A full pool is a wait, not a source failure: it spends no retry
-		// budget, and a later pass asks again once a slot frees.
-		if errors.Is(err, domain.ErrUsagePoolExhausted) {
-			return productionReviewPending, w.holdReviewForUsagePool(ctx, task.RunID, id, err)
+		// A full pool or memory that does not fit yet is a wait, not a
+		// source failure: it spends no retry budget, and a later pass asks
+		// again once capacity frees.
+		if reviewCapacityRefusal(err) {
+			return productionReviewPending, w.holdReviewForCapacity(ctx, task.RunID, id, err)
+		}
+		// A launch the budget refuses for good, as under a runtime with no
+		// recorded overhead, waits under the notice for a start that fits it.
+		if launchMemoryRefusal(err) {
+			return productionReviewPending, noticeLaunchMemoryRefusal(
+				ctx, w.store, w.attention, task.RunID, task.ProjectID, err)
 		}
 		return productionReviewPending, err
+	}
+	if w.launchBound.Budgeted() {
+		if err := releaseProductionQuarantine(ctx, w.store, w.attention, launchMemoryRefusedPrefix, task.RunID); err != nil {
+			return productionReviewPending, err
+		}
 	}
 	req, requestAuthority, err := w.productionReviewRequest(
 		task, binding, checkpoint, id, round, reviewInstructions, admission,
@@ -6072,6 +6087,18 @@ func (w *productionPublicationWorkflow) recordPublicationEnvironmentHold(
 func (w *productionPublicationWorkflow) recordRetryableHold(
 	ctx context.Context, task productionPublicationTask, err error,
 ) error {
+	if launchMemoryRefusal(err) {
+		return noticeLaunchMemoryRefusal(ctx, w.store, w.attention, task.RunID, task.ProjectID, err)
+	}
+	var capacity *domain.MachineCapacityError
+	if errors.As(err, &capacity) {
+		// Recorded each retry window, which paces it, so its numbers stay
+		// current while the job waits.
+		return w.store.Write(ctx, func(tx *store.WriteTx) error {
+			return recordRunHold(ctx, tx, task.RunID, task.verificationInvocationID(),
+				domain.HoldMachineCapacity, holdDetailFor(err), w.now().UTC())
+		})
+	}
 	var pending *ImageUpkeepPendingError
 	upkeep := errors.As(err, &pending)
 	if !upkeep && !errors.Is(err, errProjectImageBuilderBusy) {
@@ -6611,6 +6638,78 @@ func (w *productionPublicationWorkflow) verificationRoomAndRecipe(
 	return w.roomAndRecipe(ctx, task, binding, binding.verificationImage())
 }
 
+// reserveVerification reserves the verification job's memory before its
+// first container, the recipe read (plan §5.4). A job takes no pool slot, so
+// the memory gate is its whole scheduling decision. One that does not fit yet
+// records its wait and hold and returns a retryable error, so the task stays
+// pending and a later pass asks again; a grant ends that hold.
+func (w *productionPublicationWorkflow) reserveVerification(
+	ctx context.Context, task productionPublicationTask, binding productionBinding,
+) error {
+	if !w.launchBound.Budgeted() {
+		return nil
+	}
+	sizes, err := ward.ResolveLaunchSizes(binding.resolvedPolicy.Keys, ward.LaunchBound{})
+	if err != nil {
+		return fmt.Errorf("resolve verification size: %w", err)
+	}
+	id := task.verificationInvocationID()
+	reservation, _, err := w.launchBound.LaunchReservation(
+		id, task.RunID, domain.ReservationVerification, sizes.Verification)
+	if launchMemoryRefusal(err) {
+		// Retryable, so the job waits under the notice for a start whose
+		// budget or runtime fits it; recordRetryableHold raises the notice.
+		return productionPublicationRetryableError(fmt.Errorf("reserve verification memory: %w", err))
+	}
+	if err != nil {
+		return err
+	}
+	now := w.now().UTC()
+	var waited bool
+	err = w.store.Write(ctx, func(tx *store.WriteTx) error {
+		if err := requireTaskExecutionOpen(ctx, &tx.ReadTx, task.RunID); err != nil {
+			return err
+		}
+		if err := tx.RequireMachineCapacity(ctx, w.launchBound.BudgetMiB, reservation, now); err != nil {
+			return err
+		}
+		hold, present, err := tx.GetRunHold(ctx, task.RunID)
+		if err != nil {
+			return err
+		}
+		waited = present && hold.Reason == domain.HoldMachineCapacity
+		return tx.ClearRunHoldCause(ctx, task.RunID, domain.HoldMachineCapacity)
+	})
+	if errors.Is(err, domain.ErrMachineCapacity) {
+		if orderErr := recordLaunchOrder(ctx, w.store, w.launchBound, task.RunID, id, err, now); orderErr != nil {
+			return errors.Join(err, orderErr)
+		}
+		return productionPublicationRetryableError(fmt.Errorf("reserve verification memory: %w", err))
+	}
+	if err != nil {
+		return err
+	}
+	if waited {
+		w.holdPace.forget("hold:" + string(task.RunID))
+	}
+	return releaseProductionQuarantine(ctx, w.store, w.attention, launchMemoryRefusedPrefix, task.RunID)
+}
+
+// releaseVerification ends the verification job's reservation once its room
+// returned with every container proved absent, which is any return but one
+// marked ward.ErrVerificationAbsenceUnproven. An unproven one keeps the
+// reservation until a later pass's room, or a confirmed task stop, proves it.
+func (w *productionPublicationWorkflow) releaseVerification(
+	ctx context.Context, task productionPublicationTask, roomErr error,
+) error {
+	if !w.launchBound.Budgeted() || errors.Is(roomErr, ward.ErrVerificationAbsenceUnproven) {
+		return nil
+	}
+	return w.store.Write(ctx, func(tx *store.WriteTx) error {
+		return tx.ReleaseVerificationReservation(ctx, task.verificationInvocationID(), w.now().UTC())
+	})
+}
+
 // roomAndRecipe constructs a networkless room from image and reads the
 // image's recipe through it, refusing a recipe that is not the one the
 // admitted image was built with.
@@ -6620,7 +6719,7 @@ func (w *productionPublicationWorkflow) roomAndRecipe(
 ) (ProductionVerificationRoom, []byte, error) {
 	// The writer start already resolved this durable policy, so a failure
 	// here means the stored policy changed under the run.
-	sizes, err := ward.ResolveLaunchSizes(binding.resolvedPolicy.Keys)
+	sizes, err := ward.ResolveLaunchSizes(binding.resolvedPolicy.Keys, ward.LaunchBound{})
 	if err != nil {
 		return nil, nil, fmt.Errorf("resolve verification size: %w", err)
 	}
@@ -6731,9 +6830,12 @@ func (w *productionPublicationWorkflow) verifyAndCheckpoint(
 			return productionVerificationCheckpoint{}, err
 		}
 	} else {
+		if err := w.reserveVerification(ctx, task, binding); err != nil {
+			return productionVerificationCheckpoint{}, err
+		}
 		room, recipe, err := w.verificationRoomAndRecipe(ctx, task, binding)
 		if err != nil {
-			return productionVerificationCheckpoint{}, err
+			return productionVerificationCheckpoint{}, errors.Join(err, w.releaseVerification(ctx, task, err))
 		}
 		verified, err = verify.Verify(ctx, checkoutDir, verify.Options{
 			HeadSHA: imported.CommitSHA, BaseSHA: binding.admission.Base.BaseSHA,
@@ -6749,6 +6851,9 @@ func (w *productionPublicationWorkflow) verifyAndCheckpoint(
 				binding.profile.ProtectedPaths.ExtraVerificationControlPatterns,
 			)},
 		})
+		if releaseErr := w.releaseVerification(ctx, task, err); releaseErr != nil {
+			return productionVerificationCheckpoint{}, errors.Join(err, releaseErr)
+		}
 		if err != nil {
 			if !productionVerificationStateContradiction(err) && !verificationMemoryLimit(err) {
 				err = productionPublicationRetryableError(err)
@@ -7895,10 +8000,12 @@ func (w *productionPublicationWorkflow) storedReviewAdmission(
 // a lineup change never replaces it. A refusal is a configuration failure of
 // the invocation, returned as a *exec.ReviewSourceFailure, and stores nothing.
 //
-// The admission takes a slot on its identity's usage pool, so the gate runs in
-// the transaction that writes the row. A full pool stores nothing and returns
-// ErrUsagePoolExhausted, for the caller to wait on; writing the admission ends
-// the wait, and with it the hold the wait recorded and that hold's pace.
+// The admission takes a slot on its identity's usage pool and, under a budget,
+// reserves the review's memory, so both gates run in the transaction that
+// writes the row. A full pool or a reservation that does not fit yet stores
+// nothing and returns ErrUsagePoolExhausted or ErrMachineCapacity, for the
+// caller to wait on; writing the admission ends the wait, and with it the
+// hold the wait recorded and that hold's pace.
 func (w *productionPublicationWorkflow) ensureReviewAdmission(
 	ctx context.Context, role domain.RoleName, runID domain.RunID, id domain.InvocationID,
 ) (domain.ReviewAdmission, error) {
@@ -7933,6 +8040,13 @@ func (w *productionPublicationWorkflow) ensureReviewAdmission(
 		if err := tx.RequireReviewUsagePoolCapacity(ctx, admission); err != nil {
 			return err
 		}
+		if reservation, reserve, err := reviewReservation(w.launchBound, runID, id); err != nil {
+			return err
+		} else if reserve {
+			if err := tx.RequireMachineCapacity(ctx, w.launchBound.BudgetMiB, reservation, w.now().UTC()); err != nil {
+				return err
+			}
+		}
 		if err := tx.PutReviewAdmission(ctx, admission); err != nil {
 			return err
 		}
@@ -7940,8 +8054,13 @@ func (w *productionPublicationWorkflow) ensureReviewAdmission(
 		if err != nil {
 			return err
 		}
-		waited = present && hold.Reason == domain.HoldUsagePoolExhausted
-		return tx.ClearRunHoldCause(ctx, runID, domain.HoldUsagePoolExhausted)
+		waited = present && reviewCapacityWait(hold.Reason)
+		for _, cause := range []domain.RunHoldReason{domain.HoldUsagePoolExhausted, domain.HoldMachineCapacity} {
+			if err := tx.ClearRunHoldCause(ctx, runID, cause); err != nil {
+				return err
+			}
+		}
+		return nil
 	}); err != nil {
 		return domain.ReviewAdmission{}, err
 	}
@@ -7952,19 +8071,39 @@ func (w *productionPublicationWorkflow) ensureReviewAdmission(
 	return admission, nil
 }
 
-// holdReviewForUsagePool records the wait of a review refused for a full pool.
-// cause is that refusal, which names the pool.
-func (w *productionPublicationWorkflow) holdReviewForUsagePool(
+// reviewCapacityWait reports whether a hold reason is a review admission's
+// capacity wait: a full pool or memory that does not fit yet.
+func reviewCapacityWait(reason domain.RunHoldReason) bool {
+	return reason == domain.HoldUsagePoolExhausted || reason == domain.HoldMachineCapacity
+}
+
+// reviewCapacityRefusal reports whether a review admission refusal is a wait
+// for capacity rather than a failure.
+func reviewCapacityRefusal(err error) bool {
+	return errors.Is(err, domain.ErrUsagePoolExhausted) || errors.Is(err, domain.ErrMachineCapacity)
+}
+
+// holdReviewForCapacity records the wait of a review refused for a full pool
+// or for memory. cause is that refusal, which names the pool or the memory
+// arithmetic; a memory refusal also places the review in the memory order.
+func (w *productionPublicationWorkflow) holdReviewForCapacity(
 	ctx context.Context, runID domain.RunID, id domain.InvocationID, cause error,
 ) error {
+	reason, ok := dispatchHoldReason(cause)
+	if !ok || !reviewCapacityWait(reason) {
+		return fmt.Errorf("review %q capacity hold: %w", id, cause)
+	}
 	detail := holdDetailFor(cause)
 	now := w.now().UTC()
+	if err := recordLaunchOrder(ctx, w.store, w.launchBound, runID, id, cause, now); err != nil {
+		return err
+	}
 	key := "hold:" + string(runID)
-	if !w.holdPace.due(key, holdPaceState(domain.HoldUsagePoolExhausted, detail), now) {
+	if !w.holdPace.due(key, holdPaceState(reason, detail), now) {
 		return nil
 	}
 	if err := w.store.Write(ctx, func(tx *store.WriteTx) error {
-		return recordRunHold(ctx, tx, runID, id, domain.HoldUsagePoolExhausted, detail, now)
+		return recordRunHold(ctx, tx, runID, id, reason, detail, now)
 	}); err != nil {
 		w.holdPace.forget(key)
 		return err

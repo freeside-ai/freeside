@@ -2069,6 +2069,39 @@
                                 .background(Color.ground))))
                 }
             }
+            // A launch waiting for machine memory (#1598): the row's capacity
+            // wait and the timeline header's callout naming it.
+            let memoryWait = HoldPresentationFixtures.make("Machine capacity")
+            var memoryTask = approvalFixture.task
+            memoryTask.task = memoryWait.task
+            let memoryCache = InMemoryCacheStore()
+            try memoryCache.save(
+                .init(
+                    cursors: .init(
+                        syncEpoch: "memory-epoch", lastFullSnapshotRevision: memoryTask.as_of_revision,
+                        highestObservedServerRevision: memoryTask.as_of_revision),
+                    attentionItems: memoryWait.items, runs: memoryWait.runs, tasks: [memoryTask],
+                    taskTimelines: [memoryWait.history].compactMap { $0 }))
+            let memoryCoordinator = SyncCoordinator(
+                client: APIClientFactory.mock(server: MockServer()), cache: memoryCache)
+            for scheme in [ColorScheme.light, .dark] {
+                surfaces.append(
+                    Surface(
+                        name: "task-hold-machine-capacity-390-\(scheme)", width: 390, colorScheme: scheme,
+                        nativeAppearance: true,
+                        view: AnyView(
+                            VStack(alignment: .leading, spacing: 28) {
+                                TaskRowView(
+                                    task: memoryWait.task, position: memoryWait.position,
+                                    now: RunFixtures.screenshotInstant)
+                                TaskPageView(
+                                    coordinator: memoryCoordinator, snapshot: memoryTask, onOpenRun: { _ in }
+                                ).header(memoryWait.history)
+                            }
+                            .padding(24)
+                            .foregroundStyle(Color.ink)
+                            .background(Color.ground))))
+            }
             // Bounded conversation messages (visual audit D04): a short
             // message, long prose, code-like lines, and a long message with
             // an attachment, each cut to six lines, then all in full. The

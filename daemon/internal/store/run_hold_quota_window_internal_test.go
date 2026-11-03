@@ -15,6 +15,7 @@ import (
 // 0118 holds.
 func rewindRunHoldQuotaWindow(t *testing.T, ctx context.Context, db *sql.DB) {
 	t.Helper()
+	rewindLaunchReservations(t, ctx, db)
 	for _, statement := range []string{
 		`ALTER TABLE run_hold_observations DROP COLUMN quota_pool`,
 		`ALTER TABLE run_hold_observations DROP COLUMN quota_window`,

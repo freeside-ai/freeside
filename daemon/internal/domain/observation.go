@@ -241,6 +241,10 @@ const (
 	// refused window resets (plan §4, §5.4). The hold names the pool, the
 	// window, the reset, and what marked it in QuotaWindowHold.
 	HoldQuotaWindowExhausted RunHoldReason = "quota_window_exhausted"
+	// HoldMachineCapacity: the launch's memory reservation does not fit the
+	// instance's budget yet, or an older task's launch waits ahead of it
+	// (plan §5.4). The hold names the numbers in MachineCapacityHold.
+	HoldMachineCapacity RunHoldReason = "machine_capacity"
 )
 
 // AllRunHoldReasons is the single registration point for hold reasons.
@@ -266,6 +270,7 @@ var AllRunHoldReasons = []RunHoldReason{
 	HoldImageUpkeepPending,
 	HoldVerificationMemoryLimit,
 	HoldQuotaWindowExhausted,
+	HoldMachineCapacity,
 }
 
 func (r RunHoldReason) valid() bool {
@@ -278,7 +283,7 @@ func (r RunHoldReason) valid() bool {
 		HoldVerificationFindings, HoldTrustBlocked, HoldBaseAdvanced,
 		HoldIdentityParallelism, HoldUsagePoolExhausted, HoldImageUpkeepPending,
 		HoldVerificationMemoryLimit,
-		HoldQuotaWindowExhausted:
+		HoldQuotaWindowExhausted, HoldMachineCapacity:
 		return true
 	default:
 		return false
@@ -744,6 +749,10 @@ type RunHoldObservation struct {
 	// explicit null). The reason is new with the field, so no older row
 	// lacks it.
 	QuotaWindow *QuotaWindowHold `json:"quota_window"`
+	// MachineCapacity is the memory arithmetic a machine_capacity hold waits
+	// on; it is present exactly beside that reason (nil renders explicit
+	// null). The reason is new with the field, so no older row lacks it.
+	MachineCapacity *MachineCapacityHold `json:"machine_capacity"`
 	// FirstObservedAt is the UTC instant the current cause was first
 	// observed; LastObservedAt the most recent.
 	FirstObservedAt time.Time `json:"first_observed_at"`
@@ -793,6 +802,15 @@ func (h RunHoldObservation) Validate() error {
 	}
 	if h.QuotaWindow != nil {
 		if err := h.QuotaWindow.Validate(); err != nil {
+			return fmt.Errorf("run hold observation %s: %w", h.RunID, err)
+		}
+	}
+	if (h.MachineCapacity != nil) != (h.Reason == HoldMachineCapacity) {
+		return fmt.Errorf("run hold observation %s machine_capacity present=%t beside reason %q: %w",
+			h.RunID, h.MachineCapacity != nil, h.Reason, ErrHoldDetailMismatch)
+	}
+	if h.MachineCapacity != nil {
+		if err := h.MachineCapacity.Validate(); err != nil {
 			return fmt.Errorf("run hold observation %s: %w", h.RunID, err)
 		}
 	}

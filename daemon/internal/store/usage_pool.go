@@ -290,23 +290,12 @@ func (tx *ReadTx) activeUsagePoolSlots(
 func (tx *ReadTx) executionSlotHolders(
 	ctx context.Context, exclude domain.InvocationID,
 ) ([]domain.AuthIdentityID, error) {
-	candidates, err := queryIDs[domain.InvocationID](ctx, tx, listSlotCandidateExecutionsSQL, exclude)
+	held, err := tx.executionSlotsHeld(ctx, exclude)
 	if err != nil {
-		return nil, fmt.Errorf("list slot-holding executions: %w", err)
-	}
-	open, err := queryIDs[domain.InvocationID](ctx, tx, listOpenHandoffHoldersSQL)
-	if err != nil {
-		return nil, fmt.Errorf("list open handoffs: %w", err)
+		return nil, err
 	}
 	var holders []domain.AuthIdentityID
-	for _, id := range candidates {
-		terminal, err := tx.executionTerminal(ctx, id)
-		if err != nil {
-			return nil, err
-		}
-		if terminal && !slices.Contains(open, id) {
-			continue
-		}
+	for _, id := range held {
 		// The body is the authority for who holds the slot; its reconstruction
 		// fails the gate closed on an indexed identity that disagrees (#731).
 		admission, err := tx.GetExecutionAdmissionRecord(ctx, id)
@@ -318,6 +307,33 @@ func (tx *ReadTx) executionSlotHolders(
 		}
 	}
 	return holders, nil
+}
+
+// executionSlotsHeld returns every execution admission holding a slot under
+// executionSlotHolders' rule, without reading whose identity holds it.
+func (tx *ReadTx) executionSlotsHeld(
+	ctx context.Context, exclude domain.InvocationID,
+) ([]domain.InvocationID, error) {
+	candidates, err := queryIDs[domain.InvocationID](ctx, tx, listSlotCandidateExecutionsSQL, exclude)
+	if err != nil {
+		return nil, fmt.Errorf("list slot-holding executions: %w", err)
+	}
+	open, err := queryIDs[domain.InvocationID](ctx, tx, listOpenHandoffHoldersSQL)
+	if err != nil {
+		return nil, fmt.Errorf("list open handoffs: %w", err)
+	}
+	var held []domain.InvocationID
+	for _, id := range candidates {
+		terminal, err := tx.executionTerminal(ctx, id)
+		if err != nil {
+			return nil, err
+		}
+		if terminal && !slices.Contains(open, id) {
+			continue
+		}
+		held = append(held, id)
+	}
+	return held, nil
 }
 
 func (tx *ReadTx) executionTerminal(ctx context.Context, id domain.InvocationID) (bool, error) {

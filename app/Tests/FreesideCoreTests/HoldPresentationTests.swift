@@ -29,6 +29,7 @@ import Testing
             .image_upkeep_pending: "Waiting for project image upkeep",
             .verification_memory_limit: "Verification ran out of memory",
             .quota_window_exhausted: "Waiting for quota window to reset",
+            .machine_capacity: "Waiting for machine capacity",
         ]
         #expect(Set(labels.keys) == Set(Components.Schemas.RunHoldReason.allCases))
         for reason in Components.Schemas.RunHoldReason.allCases {
@@ -52,6 +53,16 @@ import Testing
                     $0.label == "Hold Code" && $0.value == reason.rawValue
                 })
         }
+    }
+
+    @Test func machineCapacityGuidanceNamesTheMemoryWait() throws {
+        let position = try #require(HoldPresentationFixtures.make("Machine capacity").position)
+        #expect(position.status == "Queued")
+        #expect(position.hold == "Waiting for machine capacity")
+        #expect(
+            position.guidance
+                == "Other launches are using this machine's memory budget. This work is queued; no action is needed for this wait."
+        )
     }
 
     @Test func capacityGuidanceAgreesWithTheCurrentPositionFallback() throws {
@@ -225,6 +236,7 @@ enum HoldPresentationFixtures {
         case "Configuration unavailable": reason = .admission_policy_refused
         case "Unattended operation stopped": reason = .operation_stopped
         case "Missing cause": reason = nil
+        case "Machine capacity": reason = .machine_capacity
         default: reason = .identity_parallelism
         }
         fixture.runs[0].run.hold_reason = reason.map { .init(value1: $0) }

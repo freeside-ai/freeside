@@ -141,6 +141,17 @@ FROM export_rejections WHERE invocation_id = ?`
 // ErrImmutableConflict; a new admission under a renamed repository (same id)
 // moves the row to the new name (#1537).
 func (tx *WriteTx) RecordExecutionAdmission(ctx context.Context, admission domain.ExecutionAdmission) error {
+	return tx.RecordExecutionAdmissionReserving(ctx, admission, nil)
+}
+
+// RecordExecutionAdmissionReserving is RecordExecutionAdmission under a
+// memory budget: a new admission that takes a usage-pool slot also reserves
+// memory, gated right after the pool so a launch waiting on its slot never
+// joins the memory order, and before the dispatch reservation, which would
+// already count as holding. A nil memory reserves nothing.
+func (tx *WriteTx) RecordExecutionAdmissionReserving(
+	ctx context.Context, admission domain.ExecutionAdmission, memory *MemoryReservation,
+) error {
 	if admission.BackupEncryptionWaiver != nil {
 		return fmt.Errorf("record execution admission %q: %w",
 			admission.InvocationID, domain.ErrBackupEncryptionWaiverUnsupported)
@@ -204,6 +215,9 @@ func (tx *WriteTx) RecordExecutionAdmission(ctx context.Context, admission domai
 		return fmt.Errorf("record execution admission %q: %w", admission.InvocationID, err)
 	}
 	if err := tx.RequireUsagePoolCapacity(ctx, admission); err != nil {
+		return fmt.Errorf("record execution admission %q: %w", admission.InvocationID, err)
+	}
+	if err := tx.RequireExecutionMemory(ctx, admission, memory); err != nil {
 		return fmt.Errorf("record execution admission %q: %w", admission.InvocationID, err)
 	}
 	var identity any

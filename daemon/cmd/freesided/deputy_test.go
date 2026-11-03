@@ -362,7 +362,7 @@ func TestDeputyDaemonConfigRunsAgentsOnlyAfterAPassingCheck(t *testing.T) {
 	paths := newDeputyPaths("/deputy/daemon")
 	disabled := deputyDaemonConfig(settings, paths, deputyLaunch{}, nil)
 	if disabled.Claude != nil || disabled.Environment != environmentEphemeral || disabled.DBPath != paths.DB ||
-		disabled.DeputyLaunch == nil {
+		disabled.DeputyLaunch == nil || disabled.MemoryBudgetMiB != 8192 {
 		t.Fatalf("failed check: %+v", disabled)
 	}
 	passing := deputyDaemonConfig(settings, paths, deputyLaunch{

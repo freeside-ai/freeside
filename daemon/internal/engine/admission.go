@@ -344,9 +344,19 @@ func (e *Engine) writerEgressPolicy(ctx context.Context, run domain.Run) (domain
 	var policy domain.ResolvedPolicy
 	if err := e.store.Read(ctx, func(tx *store.ReadTx) error {
 		var err error
-		policy, err = tx.GetResolvedPolicy(ctx, run.ID)
+		policy, err = runResolvedPolicy(ctx, tx, run)
 		return err
 	}); err != nil {
+		return domain.ResolvedPolicy{}, err
+	}
+	return policy, nil
+}
+
+// runResolvedPolicy reads the policy resolved for run, refusing one whose
+// digest is not the run's.
+func runResolvedPolicy(ctx context.Context, tx *store.ReadTx, run domain.Run) (domain.ResolvedPolicy, error) {
+	policy, err := tx.GetResolvedPolicy(ctx, run.ID)
+	if err != nil {
 		return domain.ResolvedPolicy{}, err
 	}
 	if policy.Digest != run.PolicyDigest {

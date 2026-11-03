@@ -589,7 +589,9 @@ func runSubmitCommand(ctx context.Context, cfg submitCommandConfig) (submitResul
 		}
 	}
 	// Refuse a bad launch size at submission, not when the writer starts.
-	if _, err := ward.ResolveLaunchSizes(resolvedPolicy.Keys); err != nil {
+	// Submit knows no instance's memory budget; the instance refuses a size
+	// that can never fit it when the launch is admitted.
+	if _, err := ward.ResolveLaunchSizes(resolvedPolicy.Keys, ward.LaunchBound{}); err != nil {
 		return submitResult{}, fmt.Errorf("submit: %w", err)
 	}
 	policyBody, err := json.Marshal(resolvedPolicy.Keys)

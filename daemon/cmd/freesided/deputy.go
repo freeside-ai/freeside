@@ -725,6 +725,7 @@ func deputyDaemonConfig(
 	cfg := config{
 		Environment:                deputyEnvironment,
 		ManualSubmissionConfigPath: settings.ManualSubmissionConfig,
+		MemoryBudgetMiB:            settings.MemoryBudgetMiB,
 		DBPath:                     paths.DB, StateDir: paths.StateRoot,
 		ListenAddr: settings.Listen, NtfyURL: defaultNtfyURL, ReconcileInterval: defaultReconcileInterval,
 		DoctorInterval:            defaultDoctorInterval,

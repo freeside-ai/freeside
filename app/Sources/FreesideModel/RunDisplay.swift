@@ -516,6 +516,7 @@ package enum RunDisplay {
         case .image_upkeep_pending: "Waiting for project image upkeep"
         case .verification_memory_limit: "Verification ran out of memory"
         case .quota_window_exhausted: "Waiting for quota window to reset"
+        case .machine_capacity: "Waiting for machine capacity"
         }
     }
 

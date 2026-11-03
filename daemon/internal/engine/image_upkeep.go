@@ -550,7 +550,9 @@ var errImageUpkeepHostFault = errors.New("the image-upkeep host failed")
 // never what verification runs. A recipe the record does not name means
 // the record disagrees with its image, a host fault.
 func (u *ImageUpkeep) readRecipe(ctx context.Context, image domain.ProjectImage) ([]byte, error) {
-	sizes, err := ward.ResolveLaunchSizes(u.Policy.Keys)
+	// Image upkeep is operator-attended onboarding, outside the memory
+	// budget (#1598 non-goals), so its recipe read reserves nothing.
+	sizes, err := ward.ResolveLaunchSizes(u.Policy.Keys, ward.LaunchBound{})
 	if err != nil {
 		return nil, fmt.Errorf("resolve verification size: %w", err)
 	}
