@@ -206,6 +206,19 @@ type Site struct {
 	ValidateOutput  func([]byte) error
 }
 
+// MaxSiteOutputBytes returns the largest MaxOutputBytes among sites. The
+// client stores a sampled call's whole output as its audit sample, so an
+// advisory store that records samples for these sites needs at least this
+// per-entry body bound; a smaller bound refuses a large accepted answer, but
+// only on its sampled calls (#2482).
+func MaxSiteOutputBytes(sites []Site) int {
+	largest := 0
+	for _, site := range sites {
+		largest = max(largest, site.MaxOutputBytes)
+	}
+	return largest
+}
+
 // siteContractEncodingVersion tags the canonical encoding ContractDigest
 // hashes.
 const siteContractEncodingVersion = 1

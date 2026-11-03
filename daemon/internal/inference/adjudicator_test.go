@@ -4,7 +4,6 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
-	"path/filepath"
 	"slices"
 	"strings"
 	"testing"
@@ -376,37 +375,24 @@ func TestAdjudicatorLargestAcceptedOutputRoundTripsPersisted(t *testing.T) {
 	outputOfSize := func(size int) []byte {
 		return []byte(prefix + strings.Repeat("x", size-len(prefix)-len(suffix)) + suffix)
 	}
-	// testClient's advisory store caps an audit sample at 16 KiB, which would
-	// refuse every output here on its audited call; this client's cap fits the
-	// proposal bound so only the site's own limits decide.
-	adjudicate := func(output []byte) ([]domain.FindingAdjudicationEntry, error) {
+	adjudicate := func(output []byte) ([]domain.FindingAdjudicationEntry, *advisory.Store, error) {
 		driver := fake.New()
 		driver.Script(inference.AdjudicatorSiteID,
 			fake.Script{Response: inference.Response{Output: output}})
-		dir := t.TempDir()
-		now := func() time.Time { return time.Unix(100, 0).UTC() }
-		samples, err := advisory.Open(filepath.Join(dir, "advisory.json"), 100,
-			domain.MaxFindingAdjudicationProposalBytes+1, advisory.WithClock(now))
-		if err != nil {
-			t.Fatal(err)
-		}
-		site := inference.AdjudicatorSite(testBudget(10))
-		site.AuditEvery = 1
-		client, err := inference.New(inference.Config{
-			StatePath: filepath.Join(dir, "ledger.json"),
-			Roles:     fake.Roles{Provider: "fake", Model: "test", Credential: "token-value", Driver: driver},
-			Sites:     []inference.Site{site}, Advisory: samples, Now: now,
-		})
-		if err != nil {
-			t.Fatal(err)
-		}
-		return client.AdjudicateFindings(context.Background(), "project-1", "run-1", adjudicatorInput())
+		client, samples, _ := testClientWholeSamples(t, driver, 10)
+		entries, err := client.AdjudicateFindings(context.Background(), "project-1", "run-1", adjudicatorInput())
+		return entries, samples, err
 	}
 
 	output := outputOfSize(domain.MaxFindingAdjudicationProposalBytes)
-	entries, err := adjudicate(output)
+	entries, samples, err := adjudicate(output)
 	if err != nil || len(entries) != 1 {
 		t.Fatalf("AdjudicateFindings at proposal bound = %d entries, %v", len(entries), err)
+	}
+	// The call is sampled, and the sample is the whole output (#2482).
+	recorded, err := samples.List(context.Background())
+	if err != nil || len(recorded) != 1 || recorded[0].Kind != "audit_sample" || recorded[0].Body != string(output) {
+		t.Fatalf("audit samples at proposal bound = %d entries, %v", len(recorded), err)
 	}
 	allowed := domain.CompatibilityAllowed
 	engine, err := domain.NewEngineAdjudicationEntry(
@@ -434,7 +420,7 @@ func TestAdjudicatorLargestAcceptedOutputRoundTripsPersisted(t *testing.T) {
 		t.Fatalf("output-to-artifact growth = %d bytes, headroom %d", growth, domain.FindingAdjudicationEnvelopeHeadroomBytes)
 	}
 
-	entries, err = adjudicate(outputOfSize(domain.MaxFindingAdjudicationProposalBytes + 1))
+	entries, _, err = adjudicate(outputOfSize(domain.MaxFindingAdjudicationProposalBytes + 1))
 	if !errors.Is(err, inference.ErrAdjudicationNotAvailable) || entries != nil {
 		t.Fatalf("AdjudicateFindings one byte over = %#v, %v", entries, err)
 	}

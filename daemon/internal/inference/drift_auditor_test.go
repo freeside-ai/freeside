@@ -10,6 +10,7 @@ import (
 	"testing/synctest"
 	"time"
 
+	"github.com/freeside-ai/freeside/daemon/internal/advisory"
 	"github.com/freeside-ai/freeside/daemon/internal/contentaddr"
 	"github.com/freeside-ai/freeside/daemon/internal/domain"
 	"github.com/freeside-ai/freeside/daemon/internal/inference"
@@ -291,12 +292,57 @@ func TestDriftAuditorExtremeOutputsReturnTypedUnavailable(t *testing.T) {
 		t.Run(name, func(t *testing.T) {
 			driver := fake.New()
 			driver.Script(inference.DriftAuditorSiteID, fake.Script{Response: inference.Response{Output: output}})
-			client, _, _ := testClient(t, driver, 10)
+			// Whole samples, so the oversized artifact fails at the artifact
+			// bound and not at recording its audit sample.
+			client, _, _ := testClientWholeSamples(t, driver, 10)
 			audit, err := client.AuditDrift(context.Background(), "project-1", "run-1", driftAuditorInput())
 			if !errors.Is(err, inference.ErrDriftAuditNotAvailable) || !reflect.DeepEqual(audit, domain.DriftAudit{}) {
 				t.Fatalf("AuditDrift = %#v, %v", audit, err)
 			}
 		})
+	}
+}
+
+// A sampled drift audit records its whole output as the sample (#2482), so
+// whether a large answer is usable never depends on the call being sampled. An
+// output at the site's cap still fails at the artifact bound, which shares the
+// cap; the sample is recorded before the artifact is built.
+func TestDriftAuditorSampledLargeOutputRecordsWholeSample(t *testing.T) {
+	outputOfSize := func(size int) []byte {
+		const prefix, suffix = `{"verdict":"converged","confidence":"high","reversals":[],"explanation":"`, `"}`
+		return []byte(prefix + strings.Repeat("x", size-len(prefix)-len(suffix)) + suffix)
+	}
+	audit := func(output []byte) (domain.DriftAudit, []advisory.Entry, error) {
+		driver := fake.New()
+		driver.Script(inference.DriftAuditorSiteID, fake.Script{Response: inference.Response{Output: output}})
+		client, samples, _ := testClientWholeSamples(t, driver, 10)
+		audit, err := client.AuditDrift(context.Background(), "project-1", "run-1", driftAuditorInput())
+		recorded, listErr := samples.List(context.Background())
+		if listErr != nil {
+			t.Fatal(listErr)
+		}
+		return audit, recorded, err
+	}
+	wholeSample := func(recorded []advisory.Entry, output []byte) bool {
+		return len(recorded) == 1 && recorded[0].Kind == "audit_sample" && recorded[0].Body == string(output)
+	}
+
+	large := outputOfSize(domain.MaxDriftAuditBytes / 2)
+	got, recorded, err := audit(large)
+	if err != nil || got.Verdict != domain.DriftVerdictConverged || got.Validate() != nil {
+		t.Fatalf("AuditDrift at half the cap = %v, %v", got.Verdict, err)
+	}
+	if !wholeSample(recorded, large) {
+		t.Fatalf("audit samples at half the cap = %d entries", len(recorded))
+	}
+
+	atCap := outputOfSize(domain.MaxDriftAuditBytes)
+	got, recorded, err = audit(atCap)
+	if !errors.Is(err, inference.ErrDriftAuditNotAvailable) || !reflect.DeepEqual(got, domain.DriftAudit{}) {
+		t.Fatalf("AuditDrift at the cap = %v, %v", got.Verdict, err)
+	}
+	if !wholeSample(recorded, atCap) {
+		t.Fatalf("audit samples at the cap = %d entries", len(recorded))
 	}
 }
 

@@ -1210,16 +1210,6 @@ func run(parent context.Context, stop func(), cfg config) (_ *daemon, err error)
 		if claudeWiring.selectImage != nil {
 			engineOptions = append(engineOptions, engine.WithAdmissionImageSelection(claudeWiring.selectImage))
 		}
-		advisoryStore, advisoryErr := advisory.Open(
-			filepath.Join(cfg.StateDir, "advisory.json"), 2_000, 64<<10,
-		)
-		var advisoryWriter inference.AdvisoryWriter = advisoryStore
-		if advisoryErr != nil {
-			advisoryWriter = advisory.Unavailable(advisoryErr)
-			if cfg.Logger != nil {
-				cfg.Logger.Warn("inference advisory store unavailable; judgment calls will fail safe", "error", advisoryErr)
-			}
-		}
 		judgmentBudget := inference.Budget{
 			Window: 24 * time.Hour,
 			Site: inference.Limits{
@@ -1237,6 +1227,15 @@ func run(parent context.Context, stop func(), cfg config) (_ *daemon, err error)
 			// and never parks a root the ceiling still admits, whatever the
 			// mix of sites.
 			MaxCallsPerRoot: 20, MaxStarvationPerRoot: 40 * time.Minute,
+		}
+		sites := judgmentSites(judgmentBudget)
+		advisoryStore, advisoryErr := openAdvisoryStore(cfg.StateDir, sites)
+		var advisoryWriter inference.AdvisoryWriter = advisoryStore
+		if advisoryErr != nil {
+			advisoryWriter = advisory.Unavailable(advisoryErr)
+			if cfg.Logger != nil {
+				cfg.Logger.Warn("inference advisory store unavailable; judgment calls will fail safe", "error", advisoryErr)
+			}
 		}
 		judgmentRuntime, ownedJudgments, err := composeProductionJudgments(cfg.StateDir, cfg.Claude.Judgments)
 		if err != nil {
@@ -1257,7 +1256,7 @@ func run(parent context.Context, stop func(), cfg config) (_ *daemon, err error)
 					st, *cfg.Claude, ward.NewCLIRuntime(claudeWiring.containerBin), cfg.Logger),
 			},
 			Health:   judgmentHealth,
-			Sites:    judgmentSites(judgmentBudget),
+			Sites:    sites,
 			Advisory: advisoryWriter, Now: func() time.Time { return time.Now().UTC() },
 		})
 		if err != nil {

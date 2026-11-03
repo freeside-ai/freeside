@@ -33,36 +33,51 @@ func testClient(t *testing.T, driver inference.Driver, calls int64) (*inference.
 func testClientWithCredential(
 	t *testing.T, driver inference.Driver, calls int64, credential string,
 ) (*inference.Client, *advisory.Store, string) {
+	return newTestClient(t, driver, auditedTestSites(calls), credential, 16<<10)
+}
+
+// testClientWholeSamples is testClient with the production sample bound: its
+// advisory store admits an audit sample as large as any registered site's
+// output, so only the sites' own limits decide whether a large answer is
+// usable.
+func testClientWholeSamples(t *testing.T, driver inference.Driver, calls int64) (*inference.Client, *advisory.Store, string) {
+	sites := auditedTestSites(calls)
+	return newTestClient(t, driver, sites, "token-value", inference.MaxSiteOutputBytes(sites))
+}
+
+// auditedTestSites is every real site, each sampling every call.
+func auditedTestSites(calls int64) []inference.Site {
+	sites := []inference.Site{
+		inference.ClassifierSite(testBudget(calls)),
+		inference.AdjudicatorSite(testBudget(calls)),
+		inference.DriftAuditorSite(testBudget(calls)),
+		inference.DiagnosticSite(testBudget(calls)),
+		inference.DiscussionSite(testBudget(calls)),
+		inference.TaskNamerSite(testBudget(calls)),
+		inference.PublicationAuthorExplainSite(testBudget(calls)),
+		inference.PublicationAuthorProposeSite(testBudget(calls)),
+	}
+	for i := range sites {
+		sites[i].AuditEvery = 1
+	}
+	return sites
+}
+
+func newTestClient(
+	t *testing.T, driver inference.Driver, sites []inference.Site, credential string, maxSampleBytes int,
+) (*inference.Client, *advisory.Store, string) {
 	t.Helper()
 	dir := t.TempDir()
 	now := func() time.Time { return time.Unix(100, 0).UTC() }
-	store, err := advisory.Open(filepath.Join(dir, "advisory.json"), 100, 16<<10, advisory.WithClock(now))
+	store, err := advisory.Open(filepath.Join(dir, "advisory.json"), 100, maxSampleBytes, advisory.WithClock(now))
 	if err != nil {
 		t.Fatal(err)
 	}
-	classifier := inference.ClassifierSite(testBudget(calls))
-	adjudicator := inference.AdjudicatorSite(testBudget(calls))
-	driftAuditor := inference.DriftAuditorSite(testBudget(calls))
-	diagnostic := inference.DiagnosticSite(testBudget(calls))
-	discussion := inference.DiscussionSite(testBudget(calls))
-	namer := inference.TaskNamerSite(testBudget(calls))
-	explain := inference.PublicationAuthorExplainSite(testBudget(calls))
-	propose := inference.PublicationAuthorProposeSite(testBudget(calls))
-	classifier.AuditEvery = 1
-	adjudicator.AuditEvery = 1
-	driftAuditor.AuditEvery = 1
-	diagnostic.AuditEvery = 1
-	discussion.AuditEvery = 1
-	namer.AuditEvery = 1
-	explain.AuditEvery = 1
-	propose.AuditEvery = 1
 	statePath := filepath.Join(dir, "ledger.json")
 	client, err := inference.New(inference.Config{
 		StatePath: statePath,
 		Roles:     fake.Roles{Provider: "fake", Model: "test", Credential: inference.Secret(credential), Driver: driver},
-		Sites: []inference.Site{
-			classifier, adjudicator, driftAuditor, diagnostic, discussion, namer, explain, propose,
-		}, Advisory: store,
+		Sites:     sites, Advisory: store,
 		Now: now,
 	})
 	if err != nil {
