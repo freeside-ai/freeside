@@ -117,6 +117,9 @@ func TestRetireBlockedItemsMigrationClosesOpenRows(t *testing.T) {
 // records so the recorded history stays contiguous.
 func forgetRetireBlockedItems(t *testing.T, ctx context.Context, db *sql.DB) {
 	t.Helper()
+	// rewindUsagePools goes first: its chain undoes 0121, which alters
+	// routing_policies, dropped below.
+	rewindUsagePools(t, ctx, db)
 	if _, err := db.ExecContext(ctx, `ALTER TABLE manual_submissions DROP COLUMN task_lines`); err != nil {
 		t.Fatal(err)
 	}
@@ -165,7 +168,6 @@ func forgetRetireBlockedItems(t *testing.T, ctx context.Context, db *sql.DB) {
 	if _, err := db.ExecContext(ctx, `ALTER TABLE run_hold_observations DROP COLUMN upkeep_task_id`); err != nil {
 		t.Fatal(err)
 	}
-	rewindUsagePools(t, ctx, db)
 	if _, err := db.ExecContext(ctx, `DROP TABLE repository_tip_observations`); err != nil {
 		t.Fatal(err)
 	}

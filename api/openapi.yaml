@@ -1523,8 +1523,10 @@ components:
     RoutingPolicyRole:
       type: object
       description: >
-        One role's priority order: the first agent takes new tasks until its
-        pool's window is marked exhausted, then the next.
+        One role's agents: the router's candidates for the role, whose pools
+        it ranks by the drain-first account, then the soonest known weekly
+        reset, then this order, passing over a pool whose window is marked
+        exhausted.
       additionalProperties: false
       required: [role, agents]
       properties:
@@ -1542,11 +1544,12 @@ components:
     RoutingPolicy:
       type: object
       description: >
-        One revision of the routing policy: the standing rule for which agent
-        takes a new task when the operator chose none for the role. A role
-        absent from it keeps lineup behaviour. A revision is never edited.
+        One revision of the routing policy: the standing rule for which usage
+        pool a new task runs on, and so which agent takes it when the
+        operator chose none for the role. A role absent from it keeps lineup
+        behaviour. A revision is never edited.
       additionalProperties: false
-      required: [revision, roles, source, set_by, set_at, lineup_revision]
+      required: [revision, roles, source, set_by, set_at, lineup_revision, drain_first_account]
       properties:
         revision:
           type: integer
@@ -1568,6 +1571,15 @@ components:
           format: date-time
         lineup_revision:
           $ref: "#/components/schemas/Digest"
+        drain_first_account:
+          type: string
+          minLength: 1
+          nullable: true
+          description: >
+            The usage pool that takes every new task ahead of reset order,
+            when the deciding role's order holds an agent on it; null when
+            the revision names none. It was the pool of an agent of the tree
+            at lineup_revision when set.
 
     AgentCatalog:
       type: object
@@ -4218,13 +4230,17 @@ components:
       additionalProperties: false
       description: >
         Set the routing policy, as `freesided routing set` does on the daemon
-        host: one priority order per role, replacing the whole policy. Every
-        agent must be in the daemon's agent tree. expected_revision is the
+        host: one order per role and an optional drain-first account,
+        replacing the whole policy, so a null drain_first_account clears the
+        current one. Every agent must be in the daemon's agent tree, and the
+        drain-first account must be the usage pool of at least one of them.
+        A request for the orders and account the current revision holds
+        records nothing. expected_revision is the
         policy revision the client saw, null when it saw none; any other
         current revision refuses the change, so two operators cannot silently
         overwrite each other. The new revision's source is client_routing_set
         and its set_by is device:<device_id>.
-      required: [kind, roles, expected_revision]
+      required: [kind, roles, drain_first_account, expected_revision]
       properties:
         kind:
           type: string
@@ -4234,6 +4250,10 @@ components:
           minItems: 1
           items:
             $ref: "#/components/schemas/RoutingPolicyRole"
+        drain_first_account:
+          type: string
+          minLength: 1
+          nullable: true
         expected_revision:
           type: integer
           minimum: 1

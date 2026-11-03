@@ -178,6 +178,9 @@ func TestUsagePoolsMigrationReleasesAbandonedShadowAdmissions(t *testing.T) {
 		VALUES ('shadow-requested', 'd', '{}')`); err != nil {
 		t.Fatal(err)
 	}
+	// The later rewinds go first: 0121 alters routing_policies, which this
+	// list drops.
+	rewindReviewSlotReleases(t, ctx, st.db)
 	for _, statement := range []string{
 		`DROP TABLE client_command_receipts`,
 		`DELETE FROM schema_migrations WHERE name = '0118_usage_operator_contract.sql'`,
@@ -192,7 +195,6 @@ func TestUsagePoolsMigrationReleasesAbandonedShadowAdmissions(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	rewindReviewSlotReleases(t, ctx, st.db)
 	if err := migrate(ctx, st.db, migrations.FS); err != nil {
 		t.Fatal(err)
 	}

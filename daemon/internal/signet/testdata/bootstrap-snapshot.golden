@@ -472,7 +472,8 @@
       "source": "client_routing_set",
       "set_by": "device:device-569",
       "set_at": "2026-08-10T12:34:56Z",
-      "lineup_revision": "sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"
+      "lineup_revision": "sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+      "drain_first_account": null
     }
   },
   "agent_catalog": {

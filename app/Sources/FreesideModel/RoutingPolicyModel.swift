@@ -30,12 +30,16 @@ package struct RoutingPolicyFailure: Equatable {
 /// The operator's edit of the routing policy, before it is saved: one agent
 /// order per role, and the revision and epoch it started from. The command
 /// names that revision as its expected revision, which means nothing in
-/// another epoch.
+/// another epoch, and carries that revision's drain-first account.
 public struct RoutingPolicyDraft: Equatable, Sendable {
     public typealias Role = Components.Schemas.TaskLineRole
 
     /// The revision the edit started from; nil when no policy was set.
     public let baseRevision: Int?
+    /// The base revision's drain-first account. The sheet edits only the
+    /// orders, and a command without an account clears it, so a save
+    /// resends the one it started from.
+    public let drainFirstAccount: String?
     public let syncEpoch: String
     private var orders: [Role: [String]]
 
@@ -44,6 +48,7 @@ public struct RoutingPolicyDraft: Equatable, Sendable {
     /// repeated role or agent wins rather than trapping.
     public init(policy: Components.Schemas.RoutingPolicy?, syncEpoch: String) {
         baseRevision = policy?.revision
+        drainFirstAccount = policy?.drain_first_account
         self.syncEpoch = syncEpoch
         var orders: [Role: [String]] = [:]
         for role in policy?.roles ?? [] where orders[role.role] == nil {
@@ -173,7 +178,9 @@ package final class RoutingPolicyModel {
         let command = Components.Schemas.ClientCommand(
             command_id: UUID().uuidString, device_id: coordinator.store.device.deviceID,
             payload: .set_routing_policy(
-                .init(kind: .set_routing_policy, roles: draft.roles, expected_revision: draft.baseRevision)))
+                .init(
+                    kind: .set_routing_policy, roles: draft.roles, drain_first_account: draft.drainFirstAccount,
+                    expected_revision: draft.baseRevision)))
         let entry = PendingRoutingPolicyChange(command: command, syncEpoch: draft.syncEpoch)
         guard coordinator.retainRoutingPolicyChange(entry) else {
             failure = RoutingPolicyFailure(

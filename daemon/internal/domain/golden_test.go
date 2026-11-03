@@ -1283,6 +1283,20 @@ func TestGolden(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	// The same orders with a drain-first account: the pool that takes every
+	// new task ahead of reset order (revision 107).
+	drainFirstRoutingPolicy, err := domain.NewRoutingPolicy(domain.RoutingPolicyInput{
+		Roles: []domain.RoutingPolicyRole{
+			{Role: domain.RoleImplementer, Agents: []string{"claude-a", "claude-b"}},
+			{Role: domain.RoleReviewer, Agents: []string{"claude-b"}},
+		},
+		Source: domain.RoutingPolicySourceClientSet, SetBy: "device:phone",
+		LineupRevision:    domain.Digest("sha256:" + strings.Repeat("a", 64)),
+		DrainFirstAccount: new(domain.UsagePoolID("claude-owner-subscription")),
+	}, 2, ts)
+	if err != nil {
+		t.Fatal(err)
+	}
 	routerExhaustedMarkTaskLine, err := domain.NewTaskLine(domain.TaskLineInput{
 		TaskID: "task-1", Role: domain.RoleImplementer, Agent: "claude-b",
 		Source: domain.TaskLineSourceRouter, SetBy: "router:task-1",
@@ -2351,6 +2365,7 @@ func TestGolden(t *testing.T) {
 			ID: "claude-owner-subscription", Provider: "claude", MaxParallelExecutions: 2,
 		}},
 		{"routing_policy", routingPolicy},
+		{"routing_policy_drain_first", drainFirstRoutingPolicy},
 		{"pool_usage_observation", poolUsageObservation},
 		{"pool_usage_observation_unsupported", poolUsageObservationUnsupported},
 		{"pool_usage_observation_failed_keeps_readings", poolUsageObservationFailed},

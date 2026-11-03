@@ -47,6 +47,21 @@ func TestNewRoutingPolicyCanonicalizes(t *testing.T) {
 	if policy.Roles[0].Agents[0] != "claude-a" {
 		t.Fatalf("roles alias the input: %+v", policy.Roles)
 	}
+	if policy.DrainFirstAccount != nil {
+		t.Fatalf("drain_first_account = %v, want none", *policy.DrainFirstAccount)
+	}
+
+	account := domain.UsagePoolID("pool-a")
+	in := routingPolicyInput(domain.RoutingPolicyRole{Role: domain.RoleImplementer, Agents: []string{"claude-a"}})
+	in.DrainFirstAccount = &account
+	drained, err := domain.NewRoutingPolicy(in, 2, routingPolicyAt)
+	if err != nil {
+		t.Fatal(err)
+	}
+	account = "edited"
+	if drained.DrainFirstAccount == nil || *drained.DrainFirstAccount != "pool-a" {
+		t.Fatalf("drain_first_account = %v, want pool-a held apart from the input", drained.DrainFirstAccount)
+	}
 }
 
 func TestRoutingPolicySources(t *testing.T) {
@@ -125,6 +140,7 @@ func TestRoutingPolicyValidateRefusesDecodedShapes(t *testing.T) {
 		"zero set_at":     {func(p *domain.RoutingPolicy) { p.SetAt = time.Time{} }, domain.ErrMissingTimestamp},
 		"set_at not UTC":  {func(p *domain.RoutingPolicy) { p.SetAt = p.SetAt.In(time.FixedZone("x", 60)) }, domain.ErrTimestampNotUTC},
 		"lineup revision": {func(p *domain.RoutingPolicy) { p.LineupRevision = "not-a-digest" }, domain.ErrInvalidDigest},
+		"empty account":   {func(p *domain.RoutingPolicy) { p.DrainFirstAccount = new(domain.UsagePoolID) }, domain.ErrEmptyID},
 	} {
 		policy := valid()
 		tc.edit(&policy)
@@ -134,28 +150,44 @@ func TestRoutingPolicyValidateRefusesDecodedShapes(t *testing.T) {
 	}
 }
 
-func TestRoutingPolicySameOrder(t *testing.T) {
+func TestRoutingPolicySameRule(t *testing.T) {
 	t.Parallel()
-	policy, err := domain.NewRoutingPolicy(routingPolicyInput(
+	in := routingPolicyInput(
 		domain.RoutingPolicyRole{Role: domain.RoleImplementer, Agents: []string{"claude-a", "claude-b"}},
-	), 3, routingPolicyAt)
+	)
+	in.DrainFirstAccount = new(domain.UsagePoolID("pool-a"))
+	policy, err := domain.NewRoutingPolicy(in, 3, routingPolicyAt)
 	if err != nil {
 		t.Fatal(err)
 	}
+	same := []domain.RoutingPolicyRole{{Role: domain.RoleImplementer, Agents: []string{"claude-a", "claude-b"}}}
 	for name, tc := range map[string]struct {
-		roles []domain.RoutingPolicyRole
-		want  bool
+		roles   []domain.RoutingPolicyRole
+		account *domain.UsagePoolID
+		want    bool
 	}{
-		"same":           {[]domain.RoutingPolicyRole{{Role: domain.RoleImplementer, Agents: []string{"claude-a", "claude-b"}}}, true},
-		"swapped agents": {[]domain.RoutingPolicyRole{{Role: domain.RoleImplementer, Agents: []string{"claude-b", "claude-a"}}}, false},
-		"another role":   {[]domain.RoutingPolicyRole{{Role: domain.RoleSpecifier, Agents: []string{"claude-a", "claude-b"}}}, false},
+		"same":           {same, new(domain.UsagePoolID("pool-a")), true},
+		"swapped agents": {[]domain.RoutingPolicyRole{{Role: domain.RoleImplementer, Agents: []string{"claude-b", "claude-a"}}}, new(domain.UsagePoolID("pool-a")), false},
+		"another role":   {[]domain.RoutingPolicyRole{{Role: domain.RoleSpecifier, Agents: []string{"claude-a", "claude-b"}}}, new(domain.UsagePoolID("pool-a")), false},
 		"added role": {[]domain.RoutingPolicyRole{
 			{Role: domain.RoleImplementer, Agents: []string{"claude-a", "claude-b"}},
 			{Role: domain.RoleReviewer, Agents: []string{"codex"}},
-		}, false},
+		}, new(domain.UsagePoolID("pool-a")), false},
+		// The account is part of the rule: the same orders with another
+		// account, or with none, are a change.
+		"another account": {same, new(domain.UsagePoolID("pool-b")), false},
+		"account cleared": {same, nil, false},
 	} {
-		if got := policy.SameOrder(tc.roles); got != tc.want {
+		if got := policy.SameRule(tc.roles, tc.account); got != tc.want {
 			t.Errorf("%s: %t, want %t", name, got, tc.want)
 		}
+	}
+	in.DrainFirstAccount = nil
+	unset, err := domain.NewRoutingPolicy(in, 4, routingPolicyAt)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !unset.SameRule(same, nil) || unset.SameRule(same, new(domain.UsagePoolID("pool-a"))) {
+		t.Error("a policy with no account matches only a request with none")
 	}
 }

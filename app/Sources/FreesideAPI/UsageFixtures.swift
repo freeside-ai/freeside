@@ -84,7 +84,7 @@ public enum UsageFixtures {
             revision: 2,
             roles: [.init(role: .implementer, agents: ["claude-primary", "codex-primary"])],
             source: .client_routing_set, set_by: "device:\(DeviceFixtures.otherDeviceID)", set_at: date(1_200),
-            lineup_revision: lineupRevision)
+            lineup_revision: lineupRevision, drain_first_account: nil)
     }
 
     /// The mock's committed agent tree: the agents set_routing_policy accepts,

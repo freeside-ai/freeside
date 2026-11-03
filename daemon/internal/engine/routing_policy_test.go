@@ -131,3 +131,109 @@ func TestSetRoutingPolicyChecksATreeThatDroppedTheAgent(t *testing.T) {
 		t.Fatalf("set = %v, want %v", err, domain.ErrRoutingPolicyAgentUnknown)
 	}
 }
+
+// seedRoutingPolicyPools gives claude-a an enrollment on pool-a and claude-b
+// one on pool-b, and returns the tree naming them; codex keeps no enrollment.
+func seedRoutingPolicyPools(t *testing.T, st *store.Store) agenttree.Tree {
+	t.Helper()
+	ctx := context.Background()
+	if err := st.Write(ctx, func(tx *store.WriteTx) error {
+		for _, seed := range []struct{ agent, pool string }{{"claude-a", "pool-a"}, {"claude-b", "pool-b"}} {
+			identity := domain.AuthIdentity{
+				ID: domain.AuthIdentityID("auth-" + seed.agent), Provider: "openai",
+				AccountBinding: "acct-" + seed.agent, UsagePool: seed.pool,
+				AuthStoreMutationLease: true, Enabled: true,
+			}
+			if err := storetest.RecordIdentityOnPool(ctx, tx, identity, 1, routingPolicyAt.Add(-time.Hour)); err != nil {
+				return err
+			}
+			if err := tx.RecordClientEnrollment(ctx, domain.ClientEnrollment{
+				ID: domain.ClientEnrollmentID("enrollment-" + seed.agent), AuthIdentityID: identity.ID,
+				HarnessClient: domain.HarnessClientCodexCLI, Route: "openai_chatgpt_codex",
+				AuthMethod: domain.AuthMethodOAuth, CredentialMode: domain.CredentialSubscriptionContained,
+				RefreshStrategy: domain.RefreshOnDemand, SupportsReadOnlyAuthSnapshot: true,
+				AccountBinding: identity.AccountBinding,
+			}, routingPolicyAt.Add(-time.Hour)); err != nil {
+				return err
+			}
+		}
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	return agenttree.Tree{Agents: []domain.AgentSource{
+		{Name: "claude-a", Enrollment: "enrollment-claude-a"},
+		{Name: "claude-b", Enrollment: "enrollment-claude-b"},
+		{Name: "codex", Enrollment: "enrollment-codex"},
+	}}
+}
+
+// TestSetRoutingPolicyRecordsADrainFirstAccount: the account is part of the
+// rule, so naming, repeating, and clearing it behave like a change of order.
+func TestSetRoutingPolicyRecordsADrainFirstAccount(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	st := storetest.Open(t, filepath.Join(t.TempDir(), "routing.db"), store.Options{})
+	tree := seedRoutingPolicyPools(t, st)
+	set := func(account *domain.UsagePoolID) SetRoutingPolicyResult {
+		t.Helper()
+		req := routingPolicyRequest("claude-a", "claude-b")
+		req.DrainFirstAccount = account
+		result, err := SetRoutingPolicy(ctx, st, tree, routingPolicyTreeRevision, req, routingPolicyAt)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return result
+	}
+
+	set(nil)
+	// The account is claude-b's pool, though claude-b is second in the order.
+	named := set(new(domain.UsagePoolID("pool-b")))
+	if !named.Recorded || named.Policy.Revision != 2 || named.Policy.DrainFirstAccount == nil ||
+		*named.Policy.DrainFirstAccount != "pool-b" {
+		t.Fatalf("named = %+v", named)
+	}
+	_, server := routingPolicyState(t, st)
+	if repeat := set(new(domain.UsagePoolID("pool-b"))); repeat.Recorded || repeat.Policy.Revision != 2 {
+		t.Fatalf("repeat = %+v", repeat)
+	}
+	if revisions, after := routingPolicyState(t, st); len(revisions) != 2 || after != server {
+		t.Fatalf("repeat wrote: %d revisions, server revision %d to %d", len(revisions), server, after)
+	}
+	cleared := set(nil)
+	if !cleared.Recorded || cleared.Policy.Revision != 3 || cleared.Policy.DrainFirstAccount != nil {
+		t.Fatalf("cleared = %+v", cleared)
+	}
+}
+
+// TestSetRoutingPolicyRefusesAnUnknownDrainFirstAccount: an account no tree
+// agent's identity meters is refused and writes nothing, whether it names no
+// pool or a pool only an agent outside the tree is on.
+func TestSetRoutingPolicyRefusesAnUnknownDrainFirstAccount(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	st := storetest.Open(t, filepath.Join(t.TempDir(), "routing.db"), store.Options{})
+	tree := seedRoutingPolicyPools(t, st)
+	onlyA := agenttree.Tree{Agents: tree.Agents[:1]}
+	for name, tc := range map[string]struct {
+		tree    agenttree.Tree
+		account domain.UsagePoolID
+	}{
+		"no such pool":        {tree, "SECRET-TOKEN"},
+		"empty":               {tree, ""},
+		"agent left the tree": {onlyA, "pool-b"},
+	} {
+		req := routingPolicyRequest("claude-a")
+		req.DrainFirstAccount = &tc.account
+		_, err := SetRoutingPolicy(ctx, st, tc.tree, routingPolicyTreeRevision, req, routingPolicyAt)
+		if !errors.Is(err, domain.ErrRoutingPolicyDrainFirstUnknown) {
+			t.Errorf("%s: set = %v, want %v", name, err, domain.ErrRoutingPolicyDrainFirstUnknown)
+		}
+		if err != nil && strings.Contains(err.Error(), "SECRET-TOKEN") {
+			t.Errorf("%s: the error repeats the refused text: %v", name, err)
+		}
+	}
+	if revisions, _ := routingPolicyState(t, st); len(revisions) != 0 {
+		t.Fatalf("a refusal wrote %d revisions", len(revisions))
+	}
+}

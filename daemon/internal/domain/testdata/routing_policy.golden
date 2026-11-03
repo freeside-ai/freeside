@@ -18,5 +18,6 @@
   "source": "cli_routing_set",
   "set_by": "cli:operator",
   "set_at": "2026-01-02T03:04:05Z",
-  "lineup_revision": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+  "lineup_revision": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+  "drain_first_account": null
 }

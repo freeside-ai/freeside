@@ -82,4 +82,7 @@ revision. A `command_id` names one command of any kind.
   set` does. `expected_revision` is the revision the client saw, null or
   omitted when it saw none. Any other current revision is 409 with the
   current policy, so two operators can't overwrite each other. An agent
-  outside the daemon's agent tree is 400.
+  outside the daemon's agent tree is 400. `drain_first_account` names the
+  usage pool that takes every new task ahead of reset order; null or omitted
+  clears it, as a set without `-drain-first` does. A pool no agent of the
+  tree is on is 400. The same orders and account record nothing.

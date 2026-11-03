@@ -983,8 +983,10 @@ func isCommandRequestError(err error) bool {
 		store.ErrActionNotOffered, store.ErrImmutableConflict,
 		ErrInvalidSubmitTaskPayload, ErrInvalidStopTaskPayload, ErrInvalidOperatorCommandPayload,
 		// A collector must be enrolled on its pool, and a policy names only
-		// agents the daemon's tree carries: both are the client's request.
+		// agents the daemon's tree carries and a drain-first account one of
+		// them is on: each is the client's request.
 		store.ErrEnrollmentNotOnPool, domain.ErrRoutingPolicyAgentUnknown,
+		domain.ErrRoutingPolicyDrainFirstUnknown,
 		domain.ErrEmptyID, domain.ErrEmptyField, domain.ErrInvalidAction, domain.ErrInvalidAnswerRoute,
 		domain.ErrNonPositive, domain.ErrDigestsNotCanonical, domain.ErrDuplicate,
 	} {

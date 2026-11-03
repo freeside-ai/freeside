@@ -15,6 +15,7 @@ import (
 // 0119 holds.
 func rewindLaunchReservations(t *testing.T, ctx context.Context, db *sql.DB) {
 	t.Helper()
+	rewindRoutingPolicyDrainFirst(t, ctx, db)
 	for _, statement := range []string{
 		`DROP TABLE launch_waits`,
 		`DROP TABLE launch_reservations`,

@@ -170,6 +170,20 @@ import Testing
         #expect(cache.load()?.pendingRoutingPolicyChange == nil)
     }
 
+    /// The sheet edits only the orders: a command without the account would
+    /// clear it, so a save keeps the drain-first account it started from.
+    @Test func aSavedChangeKeepsTheDrainFirstAccount() async throws {
+        var policy = UsageFixtures.defaultRoutingPolicy()
+        policy.drain_first_account = UsageFixtures.unsupportedPoolID
+        let coordinator = await coordinator(MockServer(routingPolicy: policy))
+        let model = RoutingPolicyModel(coordinator: coordinator)
+        editImplementer(model)
+        #expect(model.draft?.drainFirstAccount == UsageFixtures.unsupportedPoolID)
+        await model.save()
+        #expect(coordinator.routingPolicy?.policy.revision == 3)
+        #expect(coordinator.routingPolicy?.policy.drain_first_account == UsageFixtures.unsupportedPoolID)
+    }
+
     @Test func aFirstPolicyExpectsNoRevision() async throws {
         let server = MockServer(routingPolicy: nil)
         let coordinator = await coordinator(server)

@@ -21,8 +21,12 @@ import (
 )
 
 var (
-	operatorAt       = time.Date(2026, 1, 2, 3, 4, 5, 0, time.UTC)
-	operatorTree     = agenttree.Tree{Agents: []domain.AgentSource{{Name: "claude-primary"}, {Name: "codex-primary"}}}
+	operatorAt = time.Date(2026, 1, 2, 3, 4, 5, 0, time.UTC)
+	// codex-primary runs on seedUsageEnrollment's enrollment, so pool-a is a
+	// drain-first account the tree can name.
+	operatorTree = agenttree.Tree{Agents: []domain.AgentSource{
+		{Name: "claude-primary"}, {Name: "codex-primary", Enrollment: "enrollment-usage-1"},
+	}}
 	operatorTreeRev  = domain.Digest("sha256:" + strings.Repeat("a", 64))
 	errOperatorFails = errors.New("operator failed")
 )
@@ -66,7 +70,7 @@ func engineRoutingPolicySetter(
 	ctx context.Context, tx *store.WriteTx, change signet.RoutingPolicyChange, now time.Time,
 ) (signet.RoutingPolicyOutcome, error) {
 	result, err := engine.SetRoutingPolicyTx(ctx, tx, operatorTree, operatorTreeRev, engine.SetRoutingPolicyRequest{
-		Roles: change.Roles, Source: change.Source, SetBy: change.SetBy,
+		Roles: change.Roles, DrainFirstAccount: change.DrainFirstAccount, Source: change.Source, SetBy: change.SetBy,
 	}, now)
 	return signet.RoutingPolicyOutcome{Recorded: result.Recorded, Policy: result.Policy}, err
 }
@@ -380,6 +384,16 @@ func TestSetRoutingPolicyHoldsTheExpectedRevision(t *testing.T) {
 		"unknown agent": {policyCommand("policy-unknown", new(1), "gemini"), domain.ErrRoutingPolicyAgentUnknown},
 		"no agents":     {policyCommand("policy-empty", new(1)), signet.ErrInvalidOperatorCommandPayload},
 		"zero expected": {policyCommand("policy-zero", new(0), "codex-primary"), signet.ErrInvalidOperatorCommandPayload},
+		"unknown account": {func() signet.ClientCommand {
+			in := policyCommand("policy-unknown-account", new(1), "codex-primary")
+			in.SetRoutingPolicy.DrainFirstAccount = new(domain.UsagePoolID("pool-idle"))
+			return in
+		}(), domain.ErrRoutingPolicyDrainFirstUnknown},
+		"empty account": {func() signet.ClientCommand {
+			in := policyCommand("policy-empty-account", new(1), "codex-primary")
+			in.SetRoutingPolicy.DrainFirstAccount = new(domain.UsagePoolID(""))
+			return in
+		}(), signet.ErrInvalidOperatorCommandPayload},
 		"another kind's body": {func() signet.ClientCommand {
 			in := policyCommand("policy-mixed", new(1), "codex-primary")
 			in.RefreshUsage = signet.RefreshUsagePayload{Pool: "pool-a"}
@@ -407,9 +421,33 @@ func TestSetRoutingPolicyHoldsTheExpectedRevision(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got := next.Receipt.RoutingPolicyChange.Policy; got.Revision != 2 || !got.SameOrder(
-		[]domain.RoutingPolicyRole{{Role: domain.RoleImplementer, Agents: []string{"claude-primary"}}}) {
+	if got := next.Receipt.RoutingPolicyChange.Policy; got.Revision != 2 || !got.SameRule(
+		[]domain.RoutingPolicyRole{{Role: domain.RoleImplementer, Agents: []string{"claude-primary"}}}, nil) {
 		t.Fatalf("second policy = %+v", got)
+	}
+
+	// The same orders with a drain-first account are a new revision. The
+	// account is pool-a, codex-primary's pool, though the order names only
+	// claude-primary: whether a role can use it is the router's question.
+	drained := policyCommand("policy-3", new(2), "claude-primary")
+	drained.SetRoutingPolicy.DrainFirstAccount = new(domain.UsagePoolID("pool-a"))
+	third, err := svc.Submit(t.Context(), drained)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := third.Receipt.RoutingPolicyChange; !got.Recorded || got.Policy.Revision != 3 ||
+		got.Policy.DrainFirstAccount == nil || *got.Policy.DrainFirstAccount != "pool-a" {
+		t.Fatalf("drain-first policy = %+v", got)
+	}
+	if replay, err := svc.Submit(t.Context(), drained); err != nil || !reflect.DeepEqual(replay.Receipt, third.Receipt) {
+		t.Fatalf("replay = %+v, %v, want the recorded receipt", replay.Receipt, err)
+	}
+	// The account is part of the request, so the command id with another
+	// account is another command.
+	reused := drained
+	reused.SetRoutingPolicy.DrainFirstAccount = nil
+	if _, err := svc.Submit(t.Context(), reused); !errors.Is(err, store.ErrImmutableConflict) {
+		t.Fatalf("reused id with no account = %v, want %v", err, store.ErrImmutableConflict)
 	}
 }
 
@@ -517,6 +555,16 @@ func TestOperatorCommandsHTTP(t *testing.T) {
 	code, body = post(t, command("h-stale", `{"kind":"set_routing_policy","roles":[{"role":"implementer","agents":["claude-primary"]}],"expected_revision":null}`))
 	if current, _ := body["current_policy"].(map[string]any); code != 409 || body["message"] == "" || current["revision"] != float64(1) {
 		t.Fatalf("stale policy: %d %v", code, body)
+	}
+	code, body = post(t, command("h-drain-first", `{"kind":"set_routing_policy","roles":[{"role":"implementer","agents":["codex-primary"]}],"drain_first_account":"pool-a","expected_revision":1}`))
+	if record, _ := body["record"].(map[string]any); code != 200 || record["recorded"] != true {
+		t.Fatalf("drain-first set: %d %v", code, body)
+	} else if policy, _ := record["policy"].(map[string]any); policy["drain_first_account"] != "pool-a" {
+		t.Fatalf("drain-first policy: %v", record)
+	}
+	code, body = post(t, command("h-drain-unknown", `{"kind":"set_routing_policy","roles":[{"role":"implementer","agents":["codex-primary"]}],"drain_first_account":"pool-idle","expected_revision":2}`))
+	if code != 400 {
+		t.Fatalf("unknown drain-first account: %d %v", code, body)
 	}
 	code, body = post(t, command("h-refresh", `{"kind":"refresh_usage","pool":"pool-a"}`))
 	if record, _ := body["record"].(map[string]any); code != 200 || record["kind"] != "refresh_usage" || record["pool"] != "pool-a" ||

@@ -1975,7 +1975,7 @@ public enum Components {
             case cli_routing_set = "cli_routing_set"
             case client_routing_set = "client_routing_set"
         }
-        /// One role's priority order: the first agent takes new tasks until its pool's window is marked exhausted, then the next.
+        /// One role's agents: the router's candidates for the role, whose pools it ranks by the drain-first account, then the soonest known weekly reset, then this order, passing over a pool whose window is marked exhausted.
         ///
         ///
         /// - Remark: Generated from `#/components/schemas/RoutingPolicyRole`.
@@ -2016,7 +2016,7 @@ public enum Components {
                 ])
             }
         }
-        /// One revision of the routing policy: the standing rule for which agent takes a new task when the operator chose none for the role. A role absent from it keeps lineup behaviour. A revision is never edited.
+        /// One revision of the routing policy: the standing rule for which usage pool a new task runs on, and so which agent takes it when the operator chose none for the role. A role absent from it keeps lineup behaviour. A revision is never edited.
         ///
         ///
         /// - Remark: Generated from `#/components/schemas/RoutingPolicy`.
@@ -2037,6 +2037,11 @@ public enum Components {
             public var set_at: Foundation.Date
             /// - Remark: Generated from `#/components/schemas/RoutingPolicy/lineup_revision`.
             public var lineup_revision: Components.Schemas.Digest
+            /// The usage pool that takes every new task ahead of reset order, when the deciding role's order holds an agent on it; null when the revision names none. It was the pool of an agent of the tree at lineup_revision when set.
+            ///
+            ///
+            /// - Remark: Generated from `#/components/schemas/RoutingPolicy/drain_first_account`.
+            public var drain_first_account: Swift.String?
             /// Creates a new `RoutingPolicy`.
             ///
             /// - Parameters:
@@ -2046,13 +2051,15 @@ public enum Components {
             ///   - set_by: The operator identity that set it; device:<device_id> for a client.
             ///   - set_at:
             ///   - lineup_revision:
+            ///   - drain_first_account: The usage pool that takes every new task ahead of reset order, when the deciding role's order holds an agent on it; null when the revision names none. It was the pool of an agent of the tree at lineup_revision when set.
             public init(
                 revision: Swift.Int,
                 roles: [Components.Schemas.RoutingPolicyRole],
                 source: Components.Schemas.RoutingPolicySource,
                 set_by: Swift.String,
                 set_at: Foundation.Date,
-                lineup_revision: Components.Schemas.Digest
+                lineup_revision: Components.Schemas.Digest,
+                drain_first_account: Swift.String? = nil
             ) {
                 self.revision = revision
                 self.roles = roles
@@ -2060,6 +2067,7 @@ public enum Components {
                 self.set_by = set_by
                 self.set_at = set_at
                 self.lineup_revision = lineup_revision
+                self.drain_first_account = drain_first_account
             }
             public enum CodingKeys: String, CodingKey {
                 case revision
@@ -2068,6 +2076,7 @@ public enum Components {
                 case set_by
                 case set_at
                 case lineup_revision
+                case drain_first_account
             }
             public init(from decoder: any Swift.Decoder) throws {
                 let container = try decoder.container(keyedBy: CodingKeys.self)
@@ -2095,13 +2104,18 @@ public enum Components {
                     Components.Schemas.Digest.self,
                     forKey: .lineup_revision
                 )
+                self.drain_first_account = try container.decodeIfPresent(
+                    Swift.String.self,
+                    forKey: .drain_first_account
+                )
                 try decoder.ensureNoAdditionalProperties(knownKeys: [
                     "revision",
                     "roles",
                     "source",
                     "set_by",
                     "set_at",
-                    "lineup_revision"
+                    "lineup_revision",
+                    "drain_first_account"
                 ])
             }
         }
@@ -9030,7 +9044,7 @@ public enum Components {
                 ])
             }
         }
-        /// Set the routing policy, as `freesided routing set` does on the daemon host: one priority order per role, replacing the whole policy. Every agent must be in the daemon's agent tree. expected_revision is the policy revision the client saw, null when it saw none; any other current revision refuses the change, so two operators cannot silently overwrite each other. The new revision's source is client_routing_set and its set_by is device:<device_id>.
+        /// Set the routing policy, as `freesided routing set` does on the daemon host: one order per role and an optional drain-first account, replacing the whole policy, so a null drain_first_account clears the current one. Every agent must be in the daemon's agent tree, and the drain-first account must be the usage pool of at least one of them. A request for the orders and account the current revision holds records nothing. expected_revision is the policy revision the client saw, null when it saw none; any other current revision refuses the change, so two operators cannot silently overwrite each other. The new revision's source is client_routing_set and its set_by is device:<device_id>.
         ///
         ///
         /// - Remark: Generated from `#/components/schemas/SetRoutingPolicyPayload`.
@@ -9043,6 +9057,8 @@ public enum Components {
             public var kind: Components.Schemas.SetRoutingPolicyPayload.kindPayload
             /// - Remark: Generated from `#/components/schemas/SetRoutingPolicyPayload/roles`.
             public var roles: [Components.Schemas.RoutingPolicyRole]
+            /// - Remark: Generated from `#/components/schemas/SetRoutingPolicyPayload/drain_first_account`.
+            public var drain_first_account: Swift.String?
             /// - Remark: Generated from `#/components/schemas/SetRoutingPolicyPayload/expected_revision`.
             public var expected_revision: Swift.Int?
             /// Creates a new `SetRoutingPolicyPayload`.
@@ -9050,19 +9066,23 @@ public enum Components {
             /// - Parameters:
             ///   - kind:
             ///   - roles:
+            ///   - drain_first_account:
             ///   - expected_revision:
             public init(
                 kind: Components.Schemas.SetRoutingPolicyPayload.kindPayload,
                 roles: [Components.Schemas.RoutingPolicyRole],
+                drain_first_account: Swift.String? = nil,
                 expected_revision: Swift.Int? = nil
             ) {
                 self.kind = kind
                 self.roles = roles
+                self.drain_first_account = drain_first_account
                 self.expected_revision = expected_revision
             }
             public enum CodingKeys: String, CodingKey {
                 case kind
                 case roles
+                case drain_first_account
                 case expected_revision
             }
             public init(from decoder: any Swift.Decoder) throws {
@@ -9075,6 +9095,10 @@ public enum Components {
                     [Components.Schemas.RoutingPolicyRole].self,
                     forKey: .roles
                 )
+                self.drain_first_account = try container.decodeIfPresent(
+                    Swift.String.self,
+                    forKey: .drain_first_account
+                )
                 self.expected_revision = try container.decodeIfPresent(
                     Swift.Int.self,
                     forKey: .expected_revision
@@ -9082,6 +9106,7 @@ public enum Components {
                 try decoder.ensureNoAdditionalProperties(knownKeys: [
                     "kind",
                     "roles",
+                    "drain_first_account",
                     "expected_revision"
                 ])
             }

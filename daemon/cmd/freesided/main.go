@@ -1162,7 +1162,10 @@ func run(parent context.Context, stop func(), cfg config) (_ *daemon, err error)
 			}
 			result, err := engine.SetRoutingPolicyTx(ctx, tx,
 				claudeWiring.env.Agents.Tree, claudeWiring.env.Agents.LineupRevision,
-				engine.SetRoutingPolicyRequest{Roles: change.Roles, Source: change.Source, SetBy: change.SetBy}, now)
+				engine.SetRoutingPolicyRequest{
+					Roles: change.Roles, DrainFirstAccount: change.DrainFirstAccount,
+					Source: change.Source, SetBy: change.SetBy,
+				}, now)
 			return signet.RoutingPolicyOutcome{Recorded: result.Recorded, Policy: result.Policy}, err
 		}),
 		// The catalog, like the tree it projects, exists only after the
