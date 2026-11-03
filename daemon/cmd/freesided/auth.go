@@ -16,6 +16,8 @@ import (
 // over the stores they already hold and emits the tree patch selecting them.
 // `auth refresh-usage` refreshes a pool's usage record through the running
 // daemon, and `auth set-collector` reassigns the enrollment that collects it.
+// `auth seed-exhausted` is an exit-run fixture that marks a pool's window
+// exhausted.
 func runAuthMain(args []string) {
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
@@ -27,7 +29,7 @@ func runAuthMain(args []string) {
 
 func runAuthCommand(ctx context.Context, args []string, stdin io.Reader, stdout, stderr io.Writer) error {
 	if len(args) == 0 {
-		return errors.New("usage: freesided auth add|adopt|list|refresh-usage|set-collector [flags]")
+		return errors.New("usage: freesided auth add|adopt|list|refresh-usage|seed-exhausted|set-collector [flags]")
 	}
 	switch args[0] {
 	case "add":
@@ -38,8 +40,10 @@ func runAuthCommand(ctx context.Context, args []string, stdin io.Reader, stdout,
 		return runAuthListCommand(ctx, args[1:], stdout, stderr)
 	case "refresh-usage":
 		return runAuthRefreshUsageCommand(ctx, args[1:], stdout, stderr)
+	case "seed-exhausted":
+		return runAuthSeedExhaustedCommand(ctx, args[1:], stdout, stderr)
 	case "set-collector":
 		return runAuthSetCollectorCommand(ctx, args[1:], stdout, stderr)
 	}
-	return fmt.Errorf("unknown auth command %q (want add, adopt, list, refresh-usage, or set-collector)", args[0])
+	return fmt.Errorf("unknown auth command %q (want add, adopt, list, refresh-usage, seed-exhausted, or set-collector)", args[0])
 }

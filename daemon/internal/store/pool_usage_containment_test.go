@@ -34,6 +34,9 @@ var poolUsageReaderFiles = []string{
 	"internal/store/pool_usage_observation.go",
 	"internal/usagecollect/",
 	"cmd/freesided/auth_usage.go",
+	// The exit-run fixture rewrites a pool's record to seed an exhausted
+	// reading; it is an operator command and decides no admission.
+	"cmd/freesided/auth_seed.go",
 	"internal/signet/usage.go",
 	// The quota park reads the refused window's mark at dispatch, and a
 	// reading's reset when the refusal names none, to hold the next attempt
