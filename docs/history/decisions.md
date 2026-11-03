@@ -3331,3 +3331,35 @@ The client work is #1798 to #1803.)
 
 (Owner decision of 2026-10-30 on #2433;
 [decision note](../../devlog/2026-10-30-1229-neutral-grounds.md).)
+
+## Revision 105 ("Count the VM"):
+
+1. **A launch reserves its declared memory plus one per-VM overhead.** A ward
+   stage launch or verification job reserves its declared size plus the
+   overhead of the VM its containers run in, on the instance budget and on an
+   execution host's budget alike, and every never-fits check and the runner's
+   fail-closed refusal compare that sum with the budget, naming both parts
+   (Sections [5.4](../plan.md#54-credential-modes-egress-profiles-and-concurrency), Machine Capacity, and [5.7](../plan.md#57-the-ward-runners-handoff-gate-and-operating-modes), Placement). On Apple
+   container 1.1.0 a VM that has run a build costs the host 137 to 155 MiB
+   above its declared size and keeps it until delete
+   ([ward density spike](../spikes/ward-density.md)), so reserving the
+   declared size alone undercounts every launch: half of a 32 GiB host fits
+   seven 2048 MiB writers, not eight. One overhead per launch is enough
+   because a launch's helpers and a job's command containers each run alone,
+   never beside another container VM. Rejected: reserving declared size
+   alone, which undercounts; reserving recorded peak, which overcommits
+   because freed guest memory isn't returned; and one overhead per container,
+   which would reserve for VMs that never run at once.
+2. **The overhead is a fixed control-plane policy value per runtime.** Policy
+   records it with the runtime version it was measured on: 256 MiB for Apple
+   container 1.1.0. Another runtime or version records its own before it runs
+   launches under a budget; a host without one is eligible for no launch.
+   Rejected: measuring it per runtime at conformance
+   time, because conformance probes boot idle VMs, which can't show the
+   overhead a build brings without a build-sized workload, and a reading on a
+   loaded host would make admission depend on noise. Recorded peak memory per
+   launch, and the concurrent density measurement (#2187), are the evidence
+   for revising the value.
+
+(Owner's work contract on #2188, 2026-11-02;
+[decision note](../../devlog/2026-11-02-1210-vm-overhead-reservation.md).)

@@ -72,6 +72,7 @@ why.
   - [5.12 Workflow Definition, Initiators, and Artifacts](#512-workflow-definition-initiators-and-artifacts)
   - [5.13 Deterministic Components, Judgment Calls, and the Effect Registry](#513-deterministic-components-judgment-calls-and-the-effect-registry)
     - [Daemon Judgment Calls](#daemon-judgment-calls)
+    - [Specifier Triage](#specifier-triage)
     - [The Closed Effect Registry](#the-closed-effect-registry)
   - [5.14 Client Synchronization and Conversations](#514-client-synchronization-and-conversations)
     - [Authority and Consistency](#authority-and-consistency)
@@ -481,8 +482,10 @@ moves a parked task, as a recorded handoff: with the alternate-agent retry
 opened from the parked task, or with a task-line change. Either releases the
 hold. The card's move re-pins the task: the router-sourced lines of every
 role move to the chosen agent's pool, as the router would have written them
-there, so a later role does not park again on the exhausted pool. Operator
-lines stay as they are. The reset time comes from the
+there, so a later role does not park again on the exhausted pool. A
+triage-sourced line moves with them, and an escalated specifier moves to its
+counterpart on that pool, or to the pool's standard agent when it has none,
+which the card states (revision 106). Operator lines stay as they are. The reset time comes from the
 refusal or from a usage reading (Section [5.4](#54-credential-modes-egress-profiles-and-concurrency), usage observation). When
 neither gives one, nothing can resume the task on its own, so the ordinary
 card is raised with retry, wait, and stop. The park reads the pool's usage
@@ -1399,7 +1402,18 @@ implementer's. A wardless role may carry, beside its one line, at most one
 optional shadow line naming a second agent and prompt (Section
 [5.13](#513-deterministic-components-judgment-calls-and-the-effect-registry)). A
 project lineup overrides it per role like the primary line, and a shadow line is
-never a fallback for a missing primary line. How a lineup encodes the lines
+never a fallback for a missing primary line. The specifier's line may carry
+optional **escalated lines** (revision 106). Each pairs with one agent the
+specifier can run on, its lineup agent or an agent the routing policy orders
+for it, and names that agent's escalated counterpart: an agent on the same
+enrollment and adapter, so escalation changes only the model and effort,
+never the credential or pool. They keep the line's prompt. The triager
+chooses the tier for each task (Section
+[5.13](#513-deterministic-components-judgment-calls-and-the-effect-registry),
+Specifier Triage). A project lineup overrides them like the primary line,
+and the pairing is checked on the resolved lineup, so a project that
+overrides only the primary line and inherits a counterpart on another
+enrollment is refused. No other role carries one. How a lineup encodes the lines
 belongs to the lineup contract (#1421). The role list
 is closed, so a lineup line naming an unknown role is rejected, and it grows by
 plan revision (Section
@@ -1436,14 +1450,20 @@ the one its lineup line names.
   records one line per role, and one role never borrows another's line; a
   client may still set several lines from one choice, such as one writer
   agent for the specifier, implementer, and remediator. Apart from the
-  router-sourced lines the routing policy writes (below), only an
-  authenticated operator sets a task line: at submission (`freesided submit`
+  router-sourced lines the routing policy writes (below) and the
+  triage-sourced specifier line the triager writes (Section
+  [5.13](#513-deterministic-components-judgment-calls-and-the-effect-registry),
+  Specifier Triage), only an authenticated operator sets a task line: at submission (`freesided submit`
   or `submit_task`), when starting a `task_proposal` card (Section [4](#4-the-attention-model)), or later by a recorded operator command while no attempt
   of that role is running. A change records a new line that supersedes the
   role's last one and never edits it, so the line an admission cites stays
   the choice that authorized that attempt. Intake from an issue, a label, or repository
   content never sets one, because choosing an agent chooses which credential
-  runs (Section [5.8](#58-control-plane-trust)). Each admission reads the task's current lines, so a
+  runs (Section [5.8](#58-control-plane-trust)). The triager reads issue
+  content, but its answer chooses only a tier of one role, between agents
+  paired on one enrollment, so it never chooses a credential; under a
+  routing policy the router still picks the pool (revision 106). Each
+  admission reads the task's current lines, so a
   change applies from the role's next attempt. A task line whose agent no
   longer resolves, or whose identity is disabled, fails that role's admission
   and raises the ordinary card; it never falls back to the lineup.
@@ -1474,7 +1494,15 @@ the one its lineup line names.
   usage pool, then writes a router-sourced line for every task-line role
   without an operator line, naming the agent the lineup carries for that
   role on that pool (the first in the policy order when it carries
-  several). A role whose lineup carries no agent on that pool keeps its
+  several). When the triager escalated the task, the router picks that one
+  pool by the specifier's escalated counterparts: it walks the specifier's
+  order, skips an agent with no counterpart, and reads each counterpart's
+  pool windows for the escalated model. Every other role follows the pool it
+  picks, as above, and the specifier's router line names the counterpart,
+  supersedes the triage-sourced line, and cites it. When every counterpart
+  is marked exhausted, the task parks as below and never drops to the
+  standard tier on its own (revision 106). A role whose lineup carries no
+  agent on that pool keeps its
   lineup agent, and an operator-set line always wins. Later admissions read
   the lines, so every role of the task with an agent on that pool stays on
   it until the alternate-agent card or an operator's line change supersedes
@@ -1622,7 +1650,8 @@ the admitted offer.
 
 Whether a failure blocks the run or returns a declared fail-safe is a property
 of the role, not of the launch shape. The task namer fails safe to the
-identifier fallback; a failed adjudicator call or invalid answer set sends its
+identifier fallback; the triager fails safe to the escalated tier (revision
+106); a failed adjudicator call or invalid answer set sends its
 whole batch to human attention, while valid answers are accepted per finding;
 the researcher's fail-safe hands the specifier a typed failed
 request; every other ward role's failure blocks its stage.
@@ -3977,7 +4006,7 @@ The engine, not an agent, runs deterministic policy jobs:
 - cleanup.
 
 Agents appear where judgment is the work: specifier, researcher, implementer,
-remediator, diagnostic, task namer, publication author, finding classifier, finding
+remediator, diagnostic, task namer, triager, publication author, finding classifier, finding
 adjudicator (Section [7](#7-review-policy)), drift auditor (Section [7](#7-review-policy)),
 attention discussion, reviewer, shadow reviewer, and, later, briefer.
 Attention discussion is the explain site that answers a Discuss turn on an
@@ -4076,10 +4105,13 @@ Every call site carries exactly one per-site authority contract:
 4. **Bounded choice** among daemon-authored options whose worst-case effects
    were independently bounded before the call; cross-vendor driver selection is
    not choosable (standing owner decision). That limits what a model's answer
-   may select: no answer ever picks the vendor, adapter, or agent that runs
-   anything. An operator naming a vendor's agent on a lineup line is a
-   different act, configuration reviewed as a diff, and does not conflict with
-   it.
+   may select: no answer ever picks the vendor, adapter, credential, or usage
+   pool that runs anything, and an answer picks an agent only where an
+   operator's lineup line pairs agents for the purpose: the triager's choice
+   between a specifier agent and its escalated counterpart, which share an
+   enrollment and an adapter (Specifier Triage, below; revision 106). An
+   operator naming a vendor's agent on a lineup line is a different act,
+   configuration reviewed as a diff, and does not conflict with it.
 
 Cumulative bounds compose globally: per-site budgets aggregate across sites and
 runs under project-level and global windows, attributed to root lineage.
@@ -4206,6 +4238,60 @@ screening, publication falls back to the path's deterministic text and the role
 never blocks publication. The role never writes a `Closes` or `Refs` line, skips
 CI, or carries a trailer directive; the trusted publisher writes any closing
 reference (Section [5.12](#512-workflow-definition-initiators-and-artifacts)).
+
+#### Specifier Triage
+
+The **triager** (revision 106) decides how much model a task's specification
+needs, so the deployment can keep a larger model for the work that needs it.
+Its one site is a **bounded choice** between two daemon-authored options,
+`standard` and `escalated`: the specifier's agent or its escalated
+counterpart (Section [5.4](#54-credential-modes-egress-profiles-and-concurrency), Admitted Agents). It joins the lineup like every
+judgment site. Its prompt carries the criteria for escalating, so they are
+control-plane text reviewed as a diff, and a project lineup can replace them.
+The deployment's default criteria escalate large contract changes, plan or
+architecture changes, and complex UI work, and keep everything else
+standard.
+
+- **When it runs.** Once per task, before the specifier's first admission and
+  before the router, when the specifier's lineup line carries an escalated
+  line and the specifier has no operator line. A later attempt or a
+  reattempt of the specification reads the recorded outcome and never calls
+  again.
+- **What it reads.** An allowlisted set of fields: the task's source issue
+  title, body, and labels, or the submitted task text, and the project's
+  name. The issue's repository sets the sensitivity class. The input is
+  untrusted, so the site carries sampled-audit telemetry.
+- **What it answers.** A schema-validated tier and a short reason. The reason
+  is advisory, for display only.
+- **What it records.** Each task gets one triage record: the answer, or the
+  failure or skip that stood in for one (a failed call, an invalid answer, a
+  spent budget, or a triager role with no line). It shows on the task's
+  timeline with the reason when there is one.
+- **What the outcome does.** An escalation writes a triage-sourced specifier
+  task line naming the counterpart of the specifier's lineup agent and
+  citing the task's triage record; `standard` writes nothing, so the
+  specifier runs on its lineup agent. The operator can move the specifier
+  with a task-line change while no specification attempt runs. Admission
+  re-checks a triage-sourced line against current state: the line names its
+  own task, it cites that task's triage record, the record escalated, and
+  the line's agent is the escalated counterpart the specifier's current
+  lineup line names. A line that fails a check is refused.
+- **Worst case, bounded before the call.** One task's specification runs on
+  the escalated agent, on the same enrollment and adapter, under the same
+  floors and budget as any specification. Its use draws on the pool's shared
+  usage windows, so it can bring a window to exhaustion sooner, and tasks
+  pinned to that pool then park until the reset as after any quota failure
+  (Section [4](#4-the-attention-model)). An issue written to look complex
+  buys that and nothing more; the operator accepts this (revision 106).
+- **Fail-safe.** Every failure or skip escalates. A failed call must not
+  quietly put a complex specification on the smaller model. The cost is
+  that a spent budget, or an outage on the triager's own pool, escalates
+  every task until it recovers: the budget bounds what the calls spend, not
+  how many tasks escalate, and the run of escalated records is visible on
+  the timeline. The site has a deterministic fake like every other.
+
+The triager chooses for the specifier only. The implementer, remediator, and
+reviewer keep their lineup lines, task lines, and router lines unchanged.
 
 #### The Closed Effect Registry
 
@@ -6919,7 +7005,7 @@ landing tip keeps parallel work honest.
 | **6 (1B.0): convergence and yield** | Integrated | Convergence policy and the Section [7](#7-review-policy) finding-adjudication routing (#697; the spine assigns its contract splits at wave planning); the Claude shadow arm with second adjudication and sampled classification accuracy; automatic re-review of remediation heads as a standing integration test; yield history on ready-for-final-review; the full chain on the real backlog. iOS on-device install (Section [10](#10-operations-and-onboarding)). 1B.0 exit. |
 | **7 (1B.1): the decision surface** | Parallel lanes | The decision surface closes and reads from the phone. Contract-first, positions assessed by the spine at planning (unassessed pairs serialize): the revision-40 attention-presentation cluster (the Section [4](#4-the-attention-model) recommendation shape and Section [9](#9-comprehension) typed minimum card facts, #917, which must retire `adjudicate` or reassign it to an executable `review_dispute` transaction before client adoption; decision-surface identity, #942; per-type card facts, #724; adjudication finding context, #892; per-invocation cost observations, #901), then transaction closure for the remaining Phase 1 pending actions (#918, #919, #920, #921) and the retirement of `choose_alternate_profile` (#936), then Section [5.15](#515-evidence-and-images) evidence metadata (#922), pairing identity facts (#923), readiness rendering (#982), and the Section [8](#8-observability-and-optimization-telemetry)/9 comprehension-telemetry contracts the wave-11 exit evaluation reads (#924, the first unit to slip to wave 8 if review bandwidth binds). Beside the chain: the daemon fact producers, client adoption (the provisional Swift `ActionOutcome` and mock server converge with the daemon's `discuss` and spec-approval `request_changes`), and the Section [9](#9-comprehension) summary layer (#723, stage-agent-sourced, no daemon-inference call). The adjudication-size contract (#961) is placed here or in wave 9 at planning. Deferral drain: the attention-presentation and card-fact clusters only. Exit proof: every rendered Phase 1 action executes on Mac and iPhone; no action stays pending, disabled, or decorative; every card is self-contained at its Section [9](#9-comprehension) altitude; facts stay distinct from claims. |
 | **8 (1B.1): operational closure** | Parallel lanes | Freeside runs unattended, says when it is stuck, and lets published-PR activity back in. The `effect_proposal` card, arriving with the source-issue closure proposal (Section [5.13](#513-deterministic-components-judgment-calls-and-the-effect-registry)) and reused by human-gated follow-up filing (Section [5.17](#517-follow-up-issue-filing)); the doctor credential-integrity probe (Section [10](#10-operations-and-onboarding)); the stall heartbeat (Section [5.12](#512-workflow-definition-initiators-and-artifacts)); the external daemon-liveness probe (Section [5.2](#52-the-daemon-and-its-supervisor), #510); the held-work item (#766); the review drift audit (Section [7](#7-review-policy); the #1048 contract, then #1049–#1053, floor before model site); the standing stopped-operation indicator (#980); device listing and revocation (#981); and the egress floor's first capabilities above it (Sections [5.4](#54-credential-modes-egress-profiles-and-concurrency), [5.7](#57-the-ward-runners-handoff-gate-and-operating-modes)): (a) the `provider_registry` profile, its policy field, and ward allowlist conformance, `kind:contract` because `EgressProfile` is a domain enum carried in the admission record, then (b) the policy-gated project-image rebuild in the reusable builder, `starts-after` (a) because its gate reads the registry set (a) declares; both build on merged #302 and #334. Ward container limits (#1597, revision 72) launch every ward container with a declared CPU cap and memory limit and measure real peak memory, so wave 9's memory budget reserves against recorded sizes; it has no open prerequisite and is startable at wave start. Re-entry after a ready-item invalidation (#502; the spine splits its contract half at planning) and external review ingestion on published PRs (#524) share the re-entry trigger shape and land together. Deferral drain: the operational and re-entry clusters, plus #1597. External first-round adjudication fallbacks wait for per-finding human decisions (#1989), using #1016’s executable dispute contract. Exit proof: an unattended real run completes; daemon death, crash loops, stalls, held work, a stopped state, a review loop that grows past its specification, and external review each alert without terminal patrol or manual polling. |
-| **9 (1B.1): Claude capacity** | Parallel; split-eligible | Freeside runs on two Claude subscriptions, routed by policy, and develops itself. First, the Claude quantitative usage spike, filed at planning on the #1713 harness: whether the pinned CLI, or a read under the setup token outside it, reports a used share per window, model-scoped windows included, with no token refresh and no auth-store write. Its result fixes what the account usage view shows, per window: a share, or status and reset only, or unsupported. The contract chain, positions assigned by the planner: the usage observation record per pool (#1715, extended with the exhausted mark per window and the model-to-window map); the routing policy record and the router at a task's first admission, filed at planning (Section [5.4](#54-credential-modes-egress-profiles-and-concurrency), routing policy); per-pool execution limits (#1596, `starts-after` the merged #1585); the host memory budget and machine-capacity hold (#1598; its prerequisites #898 and #1597 merged); the client contract for usage, refresh, reassignment, line changes, and the routing setting (#1719, with the sync-visibility question #1145 resolved before #1720 adopts its freshness contract); agent and run facts in the clients (#979); and the alternate-agent retry card (#869), the operator's move for a parked task (revision 103). Beside the chain: the Claude collector on the spike-proven path (#1717), collection, refresh, and reassignment (#1716), and usage state into sync (#1720); the account usage view on Mac and iPhone (#1721), usage facts beside the agent choices (#1722), the New Task agent picker (#1602, `starts-after` #979), the routing settings surface in the app, filed at planning, and the hold wording (#1599, `starts-after` #1596 and #1598); the task-line change command (#1601) and the budget command (#1595, `starts-after` #1598); and, operator-run once the wave 8 exit run completes, Freeside onboarded for `daemon/` (revision 92's trigger, above). Merged before the wave: the agent-vocabulary chain (#898, #899, #900, #1421), the shared-identity writer lease (#1585), the task-line record (#1600), and the enrollment cutover (#867). Moved to Phase 2 by revision 99: the Codex execution tail (#406, #407, #408, #873, #868, #1718) and pi (#895, #897). The planner splits this wave into 9a (records and routing) and 9b (views and onboarding) at planning if the measured chain length exceeds review bandwidth; a realized split makes those halves numbered waves through a plan revision, because a wave tracker is titled `Wave N: <Name>`. Deferral drain: the agent, capacity, and subscription-usage clusters. Exit proof, which consumes no real allowance: an unattended run on a Freeside `daemon/` issue completes with the writer's subscription chosen by the routing policy and the selection recorded with its policy revision; a fixture pass that seeds one subscription's model-scoped window as exhausted routes the next task's first admission to the other subscription, with the switch visible on the task timeline and cards, and every role of that task stays there; a quota refusal injected mid-task parks the task on its subscription with no card and resumes it at the seeded reset; the operator moves a parked task with the alternate-agent card, and the move is recorded on the timeline; on Mac and iPhone the operator reads both pools' windows, reset times, and freshness, changes the routing setting from the app, and reads the recorded change; a seeded quota failure with no known reset raises the retry card with the latest readings beside it; and cost and independence records are correct (#901). 1B.1 exit evaluation. |
+| **9 (1B.1): Claude capacity** | Parallel; split-eligible | Freeside runs on two Claude subscriptions, routed by policy, and develops itself. First, the Claude quantitative usage spike, filed at planning on the #1713 harness: whether the pinned CLI, or a read under the setup token outside it, reports a used share per window, model-scoped windows included, with no token refresh and no auth-store write. Its result fixes what the account usage view shows, per window: a share, or status and reset only, or unsupported. The contract chain, positions assigned by the planner: the usage observation record per pool (#1715, extended with the exhausted mark per window and the model-to-window map); the routing policy record and the router at a task's first admission, filed at planning (Section [5.4](#54-credential-modes-egress-profiles-and-concurrency), routing policy); per-pool execution limits (#1596, `starts-after` the merged #1585); the host memory budget and machine-capacity hold (#1598; its prerequisites #898 and #1597 merged); the client contract for usage, refresh, reassignment, line changes, and the routing setting (#1719, with the sync-visibility question #1145 resolved before #1720 adopts its freshness contract); agent and run facts in the clients (#979); and the alternate-agent retry card (#869), the operator's move for a parked task (revision 103). Beside the chain: the Claude collector on the spike-proven path (#1717), collection, refresh, and reassignment (#1716), and usage state into sync (#1720); the account usage view on Mac and iPhone (#1721), usage facts beside the agent choices (#1722), the New Task agent picker (#1602, `starts-after` #979), the routing settings surface in the app, filed at planning, and the hold wording (#1599, `starts-after` #1596 and #1598); the task-line change command (#1601) and the budget command (#1595, `starts-after` #1598); and, operator-run once the wave 8 exit run completes, Freeside onboarded for `daemon/` (revision 92's trigger, above). Specifier triage joins the wave by revision 106: the escalated-line contract (#2510), then the triage call (#2511, `starts-after` #2510, the router #2393, and the alternate-agent card #869); the exit proof does not cover it. Merged before the wave: the agent-vocabulary chain (#898, #899, #900, #1421), the shared-identity writer lease (#1585), the task-line record (#1600), and the enrollment cutover (#867). Moved to Phase 2 by revision 99: the Codex execution tail (#406, #407, #408, #873, #868, #1718) and pi (#895, #897). The planner splits this wave into 9a (records and routing) and 9b (views and onboarding) at planning if the measured chain length exceeds review bandwidth; a realized split makes those halves numbered waves through a plan revision, because a wave tracker is titled `Wave N: <Name>`. Deferral drain: the agent, capacity, and subscription-usage clusters. Exit proof, which consumes no real allowance: an unattended run on a Freeside `daemon/` issue completes with the writer's subscription chosen by the routing policy and the selection recorded with its policy revision; a fixture pass that seeds one subscription's model-scoped window as exhausted routes the next task's first admission to the other subscription, with the switch visible on the task timeline and cards, and every role of that task stays there; a quota refusal injected mid-task parks the task on its subscription with no card and resumes it at the seeded reset; the operator moves a parked task with the alternate-agent card, and the move is recorded on the timeline; on Mac and iPhone the operator reads both pools' windows, reset times, and freshness, changes the routing setting from the app, and reads the recorded change; a seeded quota failure with no known reset raises the retry card with the latest readings beside it; and cost and independence records are correct (#901). 1B.1 exit evaluation. |
 | **10 (1B.1): subscription operations** | Folded | Folded into row 9 by revision 99. No wave 10 tracker is created; rows 11 and 12 keep their numbers. |
 | **11 (1B.2): the initiative view** | Integrated | Many work units become one picture. Typed relationship kinds in the Section [5.18](#518-the-world-model-post-merge-recompute-and-frontier-projection) capture records (#884, its position assigned by the planner), the frontier projection, and the deterministic initiative view rendering the dependency graph (#885). |
 | **12 (1B.2): image upkeep** | Parallel | Freeside keeps each project's image in service with no operator step (Section [5.7](#57-the-ward-runners-handoff-gate-and-operating-modes), project-image upkeep). Contract-first, its position assigned by the planner: the admitted-image pointer per agent base, the `image_upkeep` schedule kind, the upkeep refusal record and hold facts, and daemon-origin submission (#2332). Then, each `starts-after` #2332: the upkeep job (#2333, also `starts-after` #1792); default-branch tip observation independent of bound PRs (#2334); and the daemon-submitted maintenance task for repairs (#2336, also `starts-after` #1792). Then the Go module-source gate (#2337, `starts-after` #2333). The adoption record and the card's storage (#2379, a contract unit, `starts-after` #2378, the revision 101 unit) precede the adoption card for policy-clause refusals (#2335, `starts-after` #2333 and #2379). Agent-base upkeep (#2338) stays a deferral. Exit proof: a dependency change merged outside Freeside within policy and a daemon upgrade each end in a new admitted image with no operator action; a recipe change ends in one approved adoption card and a new admitted image built at the tip under the adopted recipe; a recipe failing at the tip ends in a maintenance task's PR. 1B exit evaluation against recorded comprehension and operational evidence. |
@@ -7100,37 +7186,41 @@ Record material changes here by revision, with the decider in parentheses.
 - On first re-litigation, promote the decision to a `docs/decisions/` ADR that
   cites its history entry.
 
-Revision 105 ("Count the VM"):
+Revision 106 ("Spend Where It Counts"):
 
-1. **A launch reserves its declared memory plus one per-VM overhead.** A ward
-   stage launch or verification job reserves its declared size plus the
-   overhead of the VM its containers run in, on the instance budget and on an
-   execution host's budget alike, and every never-fits check and the runner's
-   fail-closed refusal compare that sum with the budget, naming both parts
-   (Sections [5.4](#54-credential-modes-egress-profiles-and-concurrency), Machine Capacity, and [5.7](#57-the-ward-runners-handoff-gate-and-operating-modes), Placement). On Apple
-   container 1.1.0 a VM that has run a build costs the host 137 to 155 MiB
-   above its declared size and keeps it until delete
-   ([ward density spike](spikes/ward-density.md)), so reserving the
-   declared size alone undercounts every launch: half of a 32 GiB host fits
-   seven 2048 MiB writers, not eight. One overhead per launch is enough
-   because a launch's helpers and a job's command containers each run alone,
-   never beside another container VM. Rejected: reserving declared size
-   alone, which undercounts; reserving recorded peak, which overcommits
-   because freed guest memory isn't returned; and one overhead per container,
-   which would reserve for VMs that never run at once.
-2. **The overhead is a fixed control-plane policy value per runtime.** Policy
-   records it with the runtime version it was measured on: 256 MiB for Apple
-   container 1.1.0. Another runtime or version records its own before it runs
-   launches under a budget; a host without one is eligible for no launch.
-   Rejected: measuring it per runtime at conformance
-   time, because conformance probes boot idle VMs, which can't show the
-   overhead a build brings without a build-sized workload, and a reading on a
-   loaded host would make admission depend on noise. Recorded peak memory per
-   launch, and the concurrent density measurement (#2187), are the evidence
-   for revising the value.
+1. **A triager chooses each task's specifier tier.** The specifier's lineup
+   line may carry escalated lines, each pairing a specifier agent with a
+   counterpart on its enrollment and adapter with a larger model or effort,
+   and a new wardless role, the triager, chooses the tier once per task
+   before the specifier's first admission (Section [5.13](#513-deterministic-components-judgment-calls-and-the-effect-registry), Specifier Triage). Its criteria live
+   in its prompt; the deployment's default escalates large contract changes,
+   plan or architecture changes, and complex UI work. An escalation is a
+   triage-sourced task line that admission re-checks, the router picks an
+   escalated task's pool by the counterparts' windows, and an operator line
+   always wins.
+   Rejected: one model for every specification, which spends the larger
+   model on routine work or gives complex work the smaller one; and
+   self-escalation by the specifier, which pays for two specifications of
+   every complex task.
+2. **A bounded choice may pick between two agents one lineup line offers.**
+   Section [5.13](#513-deterministic-components-judgment-calls-and-the-effect-registry)'s bounded choice said no answer ever picks the agent
+   that runs anything. It now says no answer picks the vendor, adapter,
+   credential, or usage pool, and an answer picks an agent only between the
+   two an operator's lineup line offers for the purpose. Cross-vendor driver
+   selection stays unchoosable.
+3. **Issue content may steer the tier, and a failure escalates.** The triager
+   reads untrusted issue text, so an issue written to look complex can spend
+   the escalated model's allowance on its own specification; that is the
+   whole worst case, and the operator accepts it. A failed or invalid call
+   escalates rather than putting a complex specification on the smaller
+   model.
+4. **Specifier triage joins wave 9.** The contract unit and the triage call
+   are scheduled in wave 9 beside the router and the alternate-agent card
+   they extend (Section [11](#11-roadmap-build-order-and-coordination)). The exit proof is unchanged: each unit's own
+   acceptance proves it, and the wave's chain doesn't grow.
 
-(Owner's work contract on #2188, 2026-11-02;
-[decision note](../devlog/2026-11-02-1210-vm-overhead-reservation.md).)
+(Owner decision of 2026-11-03;
+[decision note](../devlog/2026-11-03-1039-specifier-triage.md).)
 
 ## 14. Risks
 
