@@ -138,6 +138,33 @@ private func sampleState(revision: Int64 = 5) -> CachedState {
         #expect(loaded.attentionItems == state.attentionItems)
     }
 
+    @Test func aPreRoutingFormatSixCacheForcesABootstrapAndKeepsItsCommands() throws {
+        // Format 6 predates the routing policy. Keeping its cursors would let
+        // an unchanged server revision skip the bootstrap that supplies the
+        // policy, so a set policy would read as none. Unsettled stops survive.
+        let (store, directory) = temporaryStore()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        var state = sampleState()
+        state.pendingCommands = [
+            "item-a": .init(command: makeCommand(itemID: "item-a"), state: .unresolved)
+        ]
+        state.stopDaemonID = "daemon-1"
+        try store.save(state)
+
+        let file = directory.appendingPathComponent("cache.json")
+        var object = try #require(
+            try JSONSerialization.jsonObject(with: Data(contentsOf: file)) as? [String: Any])
+        object["format"] = 6
+        try JSONSerialization.data(withJSONObject: object).write(to: file)
+
+        let migrated = try #require(store.load())
+        #expect(migrated.cursors == nil)
+        #expect(migrated.attentionItems.isEmpty)
+        #expect(migrated.routingPolicy == nil)
+        #expect(migrated.pendingCommands == state.pendingCommands)
+        #expect(migrated.stopDaemonID == "daemon-1")
+    }
+
     @Test func aPreOperatingStateFormatFiveCacheForcesABootstrap() throws {
         // Format 5 predates the unattended-admission state. Keeping its
         // cursors would let an unchanged server revision skip the bootstrap

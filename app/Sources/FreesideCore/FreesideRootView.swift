@@ -232,7 +232,8 @@ public struct FreesideRootView: View {
                         // again by itself once the operator pairs.
                         if case .needsPairing = session.phase { navigation.settingsPresented = false }
                     }),
-                opensDevices: navigation.settingsOpensDevices,
+                routing: RoutingPolicyModel(coordinator: coordinator),
+                opensOn: navigation.settingsOpensOn,
                 unresolvedActionCount: pendingUnderOldPairing,
                 projects: coordinator.unifiedList.knownProjects,
                 projectFilter: coordinator.store.projectID,

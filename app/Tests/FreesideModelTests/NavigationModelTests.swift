@@ -45,17 +45,24 @@ import Testing
     @Test func theDevicesLaunchOpensSettingsOnDevicesAndTheToolbarOpensItsRows() {
         let plain = NavigationModel(launchInputs: LaunchInputs(colorSchemeRaw: nil, selectionRaw: nil))
         #expect(!plain.settingsPresented)
-        #expect(!plain.settingsOpensDevices)
+        #expect(plain.settingsOpensOn == .rows)
 
         let navigation = NavigationModel(
             launchInputs: LaunchInputs(colorSchemeRaw: nil, selectionRaw: nil, devicesPresented: true))
         #expect(navigation.settingsPresented)
-        #expect(navigation.settingsOpensDevices)
+        #expect(navigation.settingsOpensOn == .devices)
 
         navigation.settingsPresented = false
         navigation.openSettings()
         #expect(navigation.settingsPresented)
-        #expect(!navigation.settingsOpensDevices)
+        #expect(navigation.settingsOpensOn == .rows)
+    }
+
+    @Test func theRoutingLaunchOpensSettingsOnTheRoutingPolicy() {
+        let navigation = NavigationModel(
+            launchInputs: LaunchInputs(colorSchemeRaw: nil, selectionRaw: nil, routingPresented: true))
+        #expect(navigation.settingsPresented)
+        #expect(navigation.settingsOpensOn == .routing)
     }
 
     @Test func aLaunchComposerIsOfferedToItsItemUntilConsumed() {

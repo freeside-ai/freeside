@@ -63,6 +63,9 @@ public struct LaunchInputs {
     /// `-FreesideDevices YES`: the Settings sheet is open on Devices at
     /// launch, so a capture needs no click on the toolbar.
     public let devicesPresented: Bool
+    /// `-FreesideRouting YES`: the Settings sheet is open on the routing
+    /// policy at launch. `-FreesideDevices` wins when both are set.
+    public let routingPresented: Bool
 
     /// `-FreesideComposer <action>`: the selected inbox item's composer for
     /// that action is presented at launch, so a capture of the sheet needs no
@@ -77,7 +80,7 @@ public struct LaunchInputs {
         colorSchemeRaw: String?, contrastRaw: String? = nil, selectionRaw: String?,
         projectIDRaw: String? = nil, detailsExpanded: Bool = false,
         dynamicTypeSizeRaw: String? = nil, devicesPresented: Bool = false,
-        composerRaw: String? = nil
+        routingPresented: Bool = false, composerRaw: String? = nil
     ) {
         self.colorSchemeRaw = colorSchemeRaw
         contrast = Contrast(rawValue: contrastRaw ?? "")
@@ -90,6 +93,7 @@ public struct LaunchInputs {
         projectID = projectIDRaw
         self.detailsExpanded = detailsExpanded
         self.devicesPresented = devicesPresented
+        self.routingPresented = routingPresented
         switch Self.resolveComposer(composerRaw, selection: selection) {
         case .resolved(let resolved):
             composer = resolved
@@ -151,6 +155,7 @@ public struct LaunchInputs {
             detailsExpanded: defaults.bool(forKey: "FreesideDetailsExpanded"),
             dynamicTypeSizeRaw: defaults.string(forKey: "FreesideDynamicType"),
             devicesPresented: defaults.bool(forKey: "FreesideDevices"),
+            routingPresented: defaults.bool(forKey: "FreesideRouting"),
             composerRaw: defaults.string(forKey: "FreesideComposer"))
     }
 

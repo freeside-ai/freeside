@@ -60,13 +60,20 @@ public final class NavigationModel {
     /// all of them open the one sheet through the same gated path.
     public var newTaskComposerPresented = false
     public var submissionRecoveryPresented = false
+    /// A page of the Settings sheet: its rows, or a view one of them opens.
+    public enum SettingsPage: Sendable {
+        case rows
+        case devices
+        case routing
+    }
+
     /// The Settings sheet's presentation flag, shared by the toolbar buttons
-    /// and the `-FreesideDevices` launch argument.
+    /// and the `-FreesideDevices` and `-FreesideRouting` launch arguments.
     public var settingsPresented: Bool
-    /// Whether the sheet opens on Devices rather than its rows: that launch
-    /// argument alone asks for it, so a capture needs no click. `openSettings`
-    /// clears it, so a later open starts at the rows.
-    public private(set) var settingsOpensDevices: Bool
+    /// The page the sheet opens on: a launch argument alone asks for one
+    /// other than the rows, so a capture needs no click. `openSettings`
+    /// resets it, so a later open starts at the rows.
+    public private(set) var settingsOpensOn: SettingsPage
     /// The `-FreesideComposer` launch argument until the card acts on it.
     /// Held here, not in the card, because the Mac detail view is rebuilt on
     /// every selection: view state would reopen the composer each time the
@@ -76,8 +83,10 @@ public final class NavigationModel {
 
     public init(launchInputs: LaunchInputs) {
         path = []
-        settingsPresented = launchInputs.devicesPresented
-        settingsOpensDevices = launchInputs.devicesPresented
+        let opensOn: SettingsPage =
+            launchInputs.devicesPresented ? .devices : launchInputs.routingPresented ? .routing : .rows
+        settingsOpensOn = opensOn
+        settingsPresented = opensOn != .rows
         // `LaunchInputs` leaves the composer nil without an item selection.
         if case .attentionItem(let itemID)? = launchInputs.selection {
             launchComposer = launchInputs.composer.map {
@@ -128,7 +137,7 @@ public final class NavigationModel {
 
     /// The toolbar's Settings button.
     public func openSettings() {
-        settingsOpensDevices = false
+        settingsOpensOn = .rows
         settingsPresented = true
     }
 

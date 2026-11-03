@@ -1,10 +1,13 @@
 import SwiftUI
 
 /// The sheet the toolbar's Settings slot opens on both platforms (R11), where
-/// Devices now lives. Each row states what the app already holds; only
-/// Devices opens anything, because the view's own design is a later round
+/// Devices and the routing policy live. Each row states what the app already
+/// holds; only Devices and Routing open anything, because the view's own
+/// design is a later round
 /// (`devlog/2026-10-30-2010-iphone-stack-settings-sheet.md`).
 struct SettingsSheet: View {
+    typealias Page = NavigationModel.SettingsPage
+
     /// Which client draws the sheet, as a value so the screenshot suite can
     /// render the iPhone's words from a Mac host.
     enum Client {
@@ -50,6 +53,15 @@ struct SettingsSheet: View {
         }
     }
 
+    /// The Routing row: an unanswered change, or the policy's revision and
+    /// how many roles it orders.
+    @MainActor static func routingSummary(_ routing: RoutingPolicyModel) -> String {
+        if let pending = routing.pending, pending.receipt == nil { return "Unconfirmed" }
+        guard let policy = routing.policy else { return "No policy" }
+        let roles = policy.roles.count == 1 ? "1 role" : "\(policy.roles.count) roles"
+        return "Revision \(policy.revision) · \(roles)"
+    }
+
     /// The Notifications row. Only iOS holds a subscription, so the Mac names
     /// where the setup lives (`phoneNotificationSubscription`).
     static func notificationsSummary(_ subscription: DeviceNtfySubscription?, client: Client) -> String {
@@ -82,7 +94,8 @@ struct SettingsSheet: View {
     @Environment(\.dismiss) private var dismiss
     @Environment(\.dynamicTypeSize) private var dynamicTypeSize
     @State private var devices: DevicesModel
-    @State private var showsDevices: Bool
+    @State private var routing: RoutingPolicyModel
+    @State private var page: Page
     private let unresolvedActionCount: Int
     private let projects: [String]
     private let projectFilter: String?
@@ -90,15 +103,18 @@ struct SettingsSheet: View {
     private let client: Client
     private let rendersInteractiveControls: Bool
 
-    /// `opensDevices` starts on Devices, for `-FreesideDevices` and its
-    /// screenshots. `unresolvedActionCount` passes to `DevicesView`.
+    /// `opensOn` starts on a page other than the rows, for `-FreesideDevices`,
+    /// `-FreesideRouting`, and their screenshots. `unresolvedActionCount`
+    /// passes to `DevicesView`.
     init(
-        devices: DevicesModel, opensDevices: Bool = false, unresolvedActionCount: Int = 0,
+        devices: DevicesModel, routing: RoutingPolicyModel, opensOn: Page = .rows,
+        unresolvedActionCount: Int = 0,
         projects: [String], projectFilter: String?, freshness: InboxStore.Freshness,
         client: Client = .current, rendersInteractiveControls: Bool = true
     ) {
         _devices = State(initialValue: devices)
-        _showsDevices = State(initialValue: opensDevices)
+        _routing = State(initialValue: routing)
+        _page = State(initialValue: opensOn)
         self.unresolvedActionCount = unresolvedActionCount
         self.projects = projects
         self.projectFilter = projectFilter
@@ -129,19 +145,31 @@ struct SettingsSheet: View {
     }
 
     @ViewBuilder private var content: some View {
-        if showsDevices {
+        switch page {
+        case .rows:
+            rows
+        case .devices:
             VStack(alignment: .leading, spacing: 0) {
                 backRow
                 DevicesView(model: devices, unresolvedActionCount: unresolvedActionCount)
             }
-        } else {
-            rows
+        case .routing:
+            VStack(alignment: .leading, spacing: 0) {
+                backRow
+                RoutingPolicyView(model: routing, deviceNames: deviceNames)
+            }
         }
+    }
+
+    /// Paired device names by id, once the Devices list has loaded.
+    private var deviceNames: [String: String] {
+        let rows = [devices.currentDevice].compactMap(\.self) + devices.otherDevices + devices.revokedDevices
+        return Dictionary(rows.map { ($0.id, $0.name) }, uniquingKeysWith: { first, _ in first })
     }
 
     private var backRow: some View {
         Button {
-            showsDevices = false
+            page = .rows
         } label: {
             Label("Settings", systemImage: "chevron.left")
                 .font(FreesideFont.callout)
@@ -160,9 +188,16 @@ struct SettingsSheet: View {
                 eyebrow: "Settings", ask: "\(client.name) and the daemon it is paired with", askLineLimit: nil)
             VStack(alignment: .leading, spacing: 6) {
                 Button {
-                    showsDevices = true
+                    page = .devices
                 } label: {
                     row("Devices", summary: Self.devicesSummary(devices, client: client), opens: true)
+                }
+                .buttonStyle(.plain)
+                .freesideHover(cornerRadius: 8)
+                Button {
+                    page = .routing
+                } label: {
+                    row("Routing", summary: Self.routingSummary(routing), opens: true)
                 }
                 .buttonStyle(.plain)
                 .freesideHover(cornerRadius: 8)
