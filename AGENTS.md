@@ -398,10 +398,10 @@ mechanically.
 Changes to `docs/plan.md`, ADRs (`docs/decisions/`), and later the
 control-plane directories (`policy/`, `prompts/`) are reviewed like code and
 gated by **materiality** (`docs/plan.md` §9). A material change (scope,
-acceptance criteria, milestones, sequencing that affects active work,
-architecture, risk posture, commitments) is never batched silently into a
-feature PR. A wording or clarification change is recorded in the PR that
-carries it, not gated separately.
+plan-level acceptance criteria such as phase exits, milestones, sequencing
+that affects active work, architecture, risk posture, commitments) is never
+batched silently into a feature PR. A wording or clarification change is
+recorded in the PR that carries it, not gated separately.
 
 - A material plan change is its own PR, unless the plan change is the direct
   subject of the feature PR; then the PR body calls it out explicitly.
@@ -409,6 +409,39 @@ carries it, not gated separately.
   promotion is its own reviewed change.
 - The materiality rules are themselves control-plane policy (plan §9);
   changing them is a material change.
+
+### What Belongs in the Plan
+
+The plan holds what Freeside commits to; mechanism lives at its point of use.
+Decision record: `devlog/2026-11-03-1441-plan-content-rule.md`.
+
+- **The test:** would changing this sentence change what Freeside commits to,
+  or only how it does it? Only "what" belongs in the plan.
+- **In:** purpose, goals and non-goals, operating principles, safety
+  invariants and trust boundaries, authority (who owns what), component
+  responsibilities, interface shapes that bind several components, roadmap
+  and sequencing, risks, and the one-line decision log that links to notes.
+- **Out:** table and column names, record fields, hold reasons, error types,
+  reader lists for a record, test names, and per-unit acceptance details.
+  Mechanism goes to package `doc.go` comments and component READMEs,
+  per-unit acceptance to issue contracts, reasoning to decision notes.
+- **"In" wins a tie.** An "out" item that is also a safety invariant, trust
+  boundary, authority, or shape several components share stays, such as
+  which components may read a credential.
+- **Moving mechanism out is a wording change** when the commitment stays in
+  the plan. A sentence that mixes the two is split: its commitment stays.
+  The moved text lands at its destination in the same PR, unless the
+  destination already says it.
+- **Size check:** a plan section past roughly 150 lines prompts the reviewer
+  to ask what in it is mechanism. It is a review prompt, not a limit.
+- **Examples, quoted from §5.4 at revision 108.** Kept: "No GitHub write
+  credential ever enters any workspace", a safety invariant. Split: "The
+  quota park (Section 4) reads the refused window's mark, and a reading's
+  reset when the refusal names none, only to decide when a parked attempt
+  starts on the line it already has; it never picks an agent, credential,
+  or pool." PR #2496 added it to name a second reader. Which component
+  reads which field is mechanism and moves; that the park never picks an
+  agent, credential, or pool is authority and stays.
 
 ## Markdown Conventions
 
