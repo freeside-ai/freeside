@@ -226,6 +226,14 @@ func (c *Coordinator) CollectAll(ctx context.Context) error {
 	return nil
 }
 
+// RequestRefresh starts a collection that begins after the request, and
+// returns without waiting for it: the client's refresh, after its command
+// commits. A collection in flight gets another after it. During backoff it
+// starts nothing, as Refresh does not ask the collector then.
+func (c *Coordinator) RequestRefresh(pool domain.UsagePoolID) {
+	c.trigger(pool, "operator refresh", true)
+}
+
 // RateLimitEvent starts a collection for a pool whose run reported a provider
 // rate-limit event, and returns without waiting for it.
 func (c *Coordinator) RateLimitEvent(pool domain.UsagePoolID) {
@@ -311,6 +319,15 @@ func (c *Coordinator) SetCollector(
 	if err != nil || !result.Recorded {
 		return result, err
 	}
+	c.CollectorReassigned(pool)
+	return result, nil
+}
+
+// CollectorReassigned drops the old collector's backoff and reset timer and
+// starts a collection under the new one, without waiting for it. Call it
+// once a recorded reassignment has committed, never before: a collection
+// that started earlier would read the old collector.
+func (c *Coordinator) CollectorReassigned(pool domain.UsagePoolID) {
 	c.mu.Lock()
 	c.epochs[pool]++
 	delete(c.backoffs, pool)
@@ -320,7 +337,6 @@ func (c *Coordinator) SetCollector(
 	}
 	c.mu.Unlock()
 	c.trigger(pool, "collector reassigned", true)
-	return result, nil
 }
 
 // Reassignment is the outcome of a collector reassignment. Recorded is false
@@ -339,22 +355,47 @@ type Reassignment struct {
 func Reassign(
 	ctx context.Context, st *store.Store, pool domain.UsagePoolID, collector domain.ClientEnrollmentID, at time.Time,
 ) (Reassignment, error) {
-	result := Reassignment{Pool: pool, Collector: collector}
+	var (
+		result   Reassignment
+		applyErr error
+	)
 	err := st.Write(ctx, func(tx *store.WriteTx) error {
-		record, err := storedOrDefault(ctx, &tx.ReadTx, pool)
-		if err != nil {
-			return err
+		if result, applyErr = ReassignTx(ctx, tx, pool, collector, at); applyErr != nil {
+			return applyErr
 		}
-		result.PreviousCollector = record.Collector
-		if record.Collector == collector {
+		if !result.Recorded {
+			// Nothing written: roll back so the revision does not move.
 			return errUnchanged
 		}
-		return tx.RecordPoolUsageObservation(ctx, reassigned(record, collector), at)
+		return nil
 	})
 	switch {
 	case errors.Is(err, errUnchanged):
 		return result, nil
+	case applyErr != nil:
+		return Reassignment{}, applyErr
 	case err != nil:
+		return Reassignment{}, fmt.Errorf("reassign the collector of %s to %s: %w", pool, collector, err)
+	}
+	return result, nil
+}
+
+// ReassignTx is Reassign in the caller's transaction, so the record commits
+// with whatever else the caller writes. It writes nothing when the pool
+// already has collector.
+func ReassignTx(
+	ctx context.Context, tx *store.WriteTx, pool domain.UsagePoolID, collector domain.ClientEnrollmentID, at time.Time,
+) (Reassignment, error) {
+	result := Reassignment{Pool: pool, Collector: collector}
+	record, err := storedOrDefault(ctx, &tx.ReadTx, pool)
+	if err == nil {
+		result.PreviousCollector = record.Collector
+		if record.Collector == collector {
+			return result, nil
+		}
+		err = tx.RecordPoolUsageObservation(ctx, reassigned(record, collector), at)
+	}
+	if err != nil {
 		return Reassignment{}, fmt.Errorf("reassign the collector of %s to %s: %w", pool, collector, err)
 	}
 	result.Recorded = true

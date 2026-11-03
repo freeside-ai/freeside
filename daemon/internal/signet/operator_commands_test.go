@@ -28,23 +28,27 @@ var (
 )
 
 // recordingUsageOperator records each call it receives, and fails every call
-// when err is set.
+// when err is set. Every call, failed or not, returns an after-commit effect
+// that counts its runs in afters.
 type recordingUsageOperator struct {
 	refreshed []domain.UsagePoolID
 	reassigns []domain.ClientEnrollmentID
+	afters    int
 	err       error
 }
 
-func (o *recordingUsageOperator) RefreshUsage(_ context.Context, _ *store.WriteTx, pool domain.UsagePoolID, _ time.Time) error {
+func (o *recordingUsageOperator) RefreshUsage(
+	_ context.Context, _ *store.WriteTx, pool domain.UsagePoolID, _ time.Time,
+) (func(), error) {
 	o.refreshed = append(o.refreshed, pool)
-	return o.err
+	return func() { o.afters++ }, o.err
 }
 
 func (o *recordingUsageOperator) ReassignCollector(
 	_ context.Context, _ *store.WriteTx, _ domain.UsagePoolID, collector domain.ClientEnrollmentID, _ time.Time,
-) error {
+) (func(), error) {
 	o.reassigns = append(o.reassigns, collector)
-	return o.err
+	return func() { o.afters++ }, o.err
 }
 
 // engineTaskLineChanger and engineRoutingPolicySetter bind the hooks the way
@@ -226,6 +230,52 @@ func TestUsageCommandsCheckThePoolAndEnrollment(t *testing.T) {
 	}
 	if serverRevision(t, st) != before+1 {
 		t.Fatal("a failed refresh committed")
+	}
+}
+
+// The operator's after-commit effect, such as starting a collection, runs
+// once for each command that committed and for nothing else.
+func TestUsageCommandsRunTheirEffectOnlyAfterCommit(t *testing.T) {
+	operator := &recordingUsageOperator{}
+	svc, _, _ := newOperatorService(t, signet.WithUsageOperator(operator))
+	submit := func(command signet.ClientCommand) error {
+		_, err := svc.Submit(t.Context(), command)
+		return err
+	}
+	for _, step := range []struct {
+		name    string
+		command signet.ClientCommand
+		fails   bool
+		afters  int
+	}{
+		{"committed refresh", refreshCommand("r", "pool-a"), false, 1},
+		{"replayed refresh", refreshCommand("r", "pool-a"), false, 1},
+		{"another body under the id", refreshCommand("r", "pool-idle"), true, 1},
+		{"another kind under the id", reassignCommand("r", "pool-a", "enrollment-usage-1"), true, 1},
+		{"committed reassignment", reassignCommand("a", "pool-a", "enrollment-usage-1"), false, 2},
+		{"replayed reassignment", reassignCommand("a", "pool-a", "enrollment-usage-1"), false, 2},
+		{"unknown pool", refreshCommand("u", "pool-missing"), true, 2},
+		{"foreign enrollment", reassignCommand("f", "pool-idle", "enrollment-usage-1"), true, 2},
+	} {
+		if err := submit(step.command); (err != nil) != step.fails {
+			t.Fatalf("%s = %v, want failure %v", step.name, err, step.fails)
+		}
+		if operator.afters != step.afters {
+			t.Fatalf("after %s the effect ran %d times, want %d", step.name, operator.afters, step.afters)
+		}
+	}
+	// An operator that fails rolls the transaction back, so its effect never
+	// runs even though it returned one.
+	operator.err = errOperatorFails
+	for _, command := range []signet.ClientCommand{
+		refreshCommand("x", "pool-a"), reassignCommand("y", "pool-a", "enrollment-usage-1"),
+	} {
+		if err := submit(command); !errors.Is(err, errOperatorFails) {
+			t.Fatalf("failed %s = %v", command.Kind, err)
+		}
+	}
+	if operator.afters != 2 {
+		t.Fatalf("a rolled-back command ran its effect: %d runs, want 2", operator.afters)
 	}
 }
 
