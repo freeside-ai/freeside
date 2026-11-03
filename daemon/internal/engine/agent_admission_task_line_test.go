@@ -550,18 +550,101 @@ func TestTaskLineAdmissionRefusals(t *testing.T) {
 			want: "not found",
 		},
 		{
-			// Nothing writes a router line until #2393, so no record can
-			// back one and admission refuses it.
-			name: "a router line has no router to anchor to",
+			name: "a router line names another task's routing",
 			setup: func(t *testing.T, f *agentAdmissionFixture) {
 				f.addSecondAgent(t)
-				f.appendLine(t, domain.TaskLineInput{
-					TaskID: f.task(t, f.run.ID).ID, Role: domain.RoleImplementer, Agent: agentTestSecondAgent,
-					Source: domain.TaskLineSourceRouter, SetBy: "router:" + string(f.task(t, f.run.ID).ID),
-					Provenance: &domain.TaskLineProvenance{PolicyRevision: 1, Tier: domain.TaskLineSelectionPolicyOrder, Pool: "pool-a"},
-				}, f.task(t, f.run.ID).CreatedAt)
+				f.setRoutingPolicy(t, agentTestAt.Add(-time.Hour), domain.RoutingPolicyRole{
+					Role: domain.RoleImplementer, Agents: []string{agentTestSecondAgent},
+				})
+				routerLine(t, f, "router:task-other", policyOrder(1, routerSecondPool), agentTestAt)
 			},
-			want: "nothing routes a task line yet (#2393)",
+			want: "it does not name its own task's routing",
+		},
+		{
+			name: "a router line is a later version",
+			setup: func(t *testing.T, f *agentAdmissionFixture) {
+				f.addSecondAgent(t)
+				f.setRoutingPolicy(t, agentTestAt.Add(-time.Hour), domain.RoutingPolicyRole{
+					Role: domain.RoleImplementer, Agents: []string{agentTestSecondAgent},
+				})
+				f.submitLine(t, domain.RoleImplementer, agentTestWriterAgent)
+				routerLine(t, f, routerSetBy(f.task(t, f.run.ID).ID), policyOrder(1, routerSecondPool), agentTestAt)
+			},
+			want: "the router sets only a role's first version",
+		},
+		{
+			name: "a router line cites a policy revision never set",
+			setup: func(t *testing.T, f *agentAdmissionFixture) {
+				f.addSecondAgent(t)
+				routerLine(t, f, routerSetBy(f.task(t, f.run.ID).ID), policyOrder(1, routerSecondPool), agentTestAt)
+			},
+			want: "routing policy revision 1 was never set",
+		},
+		{
+			name: "a router line predates the policy revision it cites",
+			setup: func(t *testing.T, f *agentAdmissionFixture) {
+				f.addSecondAgent(t)
+				f.setRoutingPolicy(t, agentTestAt.Add(time.Second), domain.RoutingPolicyRole{
+					Role: domain.RoleImplementer, Agents: []string{agentTestSecondAgent},
+				})
+				routerLine(t, f, routerSetBy(f.task(t, f.run.ID).ID), policyOrder(1, routerSecondPool), agentTestAt)
+			},
+			want: "routing policy revision 1 was set after the line",
+		},
+		{
+			name: "the cited revision does not order the line's agent for its role",
+			setup: func(t *testing.T, f *agentAdmissionFixture) {
+				f.addSecondAgent(t)
+				f.setRoutingPolicy(t, agentTestAt.Add(-time.Hour), domain.RoutingPolicyRole{
+					Role: domain.RoleImplementer, Agents: []string{agentTestWriterAgent},
+				}, domain.RoutingPolicyRole{
+					Role: domain.RoleReviewer, Agents: []string{agentTestSecondAgent},
+				})
+				routerLine(t, f, routerSetBy(f.task(t, f.run.ID).ID), policyOrder(1, routerSecondPool), agentTestAt)
+			},
+			want: "routing policy revision 1 does not order the line's agent for its role",
+		},
+		{
+			name: "the cited revision orders no agent the line passed over",
+			setup: func(t *testing.T, f *agentAdmissionFixture) {
+				f.addSecondAgent(t)
+				f.setRoutingPolicy(t, agentTestAt.Add(-time.Hour), domain.RoutingPolicyRole{
+					Role: domain.RoleImplementer, Agents: []string{agentTestSecondAgent},
+				})
+				provenance := policyOrder(1, routerSecondPool)
+				provenance.PassedOver = &domain.TaskLinePassedOverMark{
+					Agent: agentTestPastedName, Pool: routerMainPool, Window: "five_hour",
+					Source: domain.ExhaustedMarkProviderRefusal, MarkedAt: agentTestAt.Add(-time.Minute),
+				}
+				routerLine(t, f, routerSetBy(f.task(t, f.run.ID).ID), provenance, agentTestAt)
+			},
+			want: "routing policy revision 1 orders no agent the line passed over",
+		},
+		{
+			name: "the cited revision drains no account first",
+			setup: func(t *testing.T, f *agentAdmissionFixture) {
+				f.addSecondAgent(t)
+				f.setRoutingPolicy(t, agentTestAt.Add(-time.Hour), domain.RoutingPolicyRole{
+					Role: domain.RoleImplementer, Agents: []string{agentTestSecondAgent},
+				})
+				provenance := policyOrder(1, routerSecondPool)
+				provenance.Tier = domain.TaskLineSelectionDrainFirstAccount
+				routerLine(t, f, routerSetBy(f.task(t, f.run.ID).ID), provenance, agentTestAt)
+			},
+			want: "routing policy revision 1 drains no such account first",
+		},
+		{
+			name: "the cited revision drains another account first",
+			setup: func(t *testing.T, f *agentAdmissionFixture) {
+				f.addSecondAgent(t)
+				f.setDrainingPolicy(t, agentTestAt.Add(-time.Hour), new(routerMainPool), domain.RoutingPolicyRole{
+					Role: domain.RoleImplementer, Agents: []string{agentTestSecondAgent},
+				})
+				provenance := policyOrder(1, routerSecondPool)
+				provenance.Tier = domain.TaskLineSelectionDrainFirstAccount
+				routerLine(t, f, routerSetBy(f.task(t, f.run.ID).ID), provenance, agentTestAt)
+			},
+			want: "routing policy revision 1 drains no such account first",
 		},
 	}
 	for _, tc := range cases {

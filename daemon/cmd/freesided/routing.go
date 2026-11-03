@@ -26,7 +26,7 @@ const routingPolicyRoute = "/routing-policy"
 
 // runRoutingMain is the routing policy verb (plan §5.4, routing policy):
 // `routing set` records a new revision and `routing show` prints the current
-// one. Nothing reads the policy until the router does (#2393).
+// one. The router reads the current revision at a task's first admission.
 func runRoutingMain(args []string) {
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()

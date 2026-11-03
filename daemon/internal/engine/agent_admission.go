@@ -383,10 +383,10 @@ func RunTaskLine(
 // name this task. Submission lines must be set at task creation and name the
 // agent their command recorded for the role; proposal lines must be set at
 // the recorded decision's instant; a changed line at its change's. A router
-// line is refused until its router exists (#2393). A triage line sets only
-// the specifier, cites its own task, and that task's triage record must
-// exist and have escalated; resolveLineAgent holds its agent to the
-// lineup's escalated counterpart (triageCounterpart).
+// line must hold to the policy revision it cites (anchorRouterLine). A triage
+// line sets only the specifier, cites its own task, and that task's triage
+// record must exist and have escalated; resolveLineAgent holds its agent to
+// the lineup's escalated counterpart (triageCounterpart).
 //
 // A submission or change record stores what the operator chose, so those arms
 // bind the agent. A proposal line rests on a real operator action on this
@@ -472,9 +472,7 @@ func anchorTaskLine(ctx context.Context, tx *store.ReadTx, line domain.TaskLine)
 		}
 		return nil
 	case domain.TaskLineSourceRouter:
-		// No record backs a router line yet: the router that writes one,
-		// and the anchor that holds it to its routing decision, is #2393.
-		return errors.New("nothing routes a task line yet (#2393)")
+		return anchorRouterLine(ctx, tx, line)
 	case domain.TaskLineSourceTriage:
 		if line.Role != domain.RoleSpecifier {
 			return fmt.Errorf("a triage line sets only the specifier, not the %s", line.Role)
@@ -504,6 +502,55 @@ func anchorTaskLine(ctx context.Context, tx *store.ReadTx, line domain.TaskLine)
 		return nil
 	}
 	return fmt.Errorf("source %q is not a task line source", line.Source)
+}
+
+// anchorRouterLine holds a router line to the routing that wrote it. No
+// operator action backs one, so the anchor is the policy: the line names its
+// own task's routing, it is its role's first version (a later router version
+// is the alternate-agent card's re-pin, which anchors its own, #869), the
+// policy revision it cites exists and was set no later than the line, that
+// revision orders the line's agent for its role, any agent it passed over is
+// in that revision's orders, and a line the drain-first tier chose names the
+// pool that revision drains first. The marks and readings it acted on are not
+// rechecked, because both change over time: a line routed past a mark that
+// has since cleared, or ranked by a reset since passed, is still the routing
+// that chose it.
+//
+// The refusals name no agent, as the other arms don't.
+func anchorRouterLine(ctx context.Context, tx *store.ReadTx, line domain.TaskLine) error {
+	if line.SetBy != routerSetBy(line.TaskID) {
+		return errors.New("it does not name its own task's routing")
+	}
+	if line.Version != 1 {
+		return errors.New("the router sets only a role's first version")
+	}
+	revision := line.Provenance.PolicyRevision
+	policies, err := tx.RoutingPolicyRevisions(ctx)
+	if err != nil {
+		return err
+	}
+	i := slices.IndexFunc(policies, func(policy domain.RoutingPolicy) bool { return policy.Revision == revision })
+	if i < 0 {
+		return fmt.Errorf("routing policy revision %d was never set", revision)
+	}
+	policy := policies[i]
+	if policy.SetAt.After(line.SetAt) {
+		return fmt.Errorf("routing policy revision %d was set after the line", revision)
+	}
+	if !slices.Contains(routingOrder(policy, line.Role), line.Agent) {
+		return fmt.Errorf("routing policy revision %d does not order the line's agent for its role", revision)
+	}
+	if passedOver := line.Provenance.PassedOver; passedOver != nil &&
+		!slices.ContainsFunc(policy.Roles, func(role domain.RoutingPolicyRole) bool {
+			return slices.Contains(role.Agents, passedOver.Agent)
+		}) {
+		return fmt.Errorf("routing policy revision %d orders no agent the line passed over", revision)
+	}
+	if line.Provenance.Tier == domain.TaskLineSelectionDrainFirstAccount &&
+		(policy.DrainFirstAccount == nil || *policy.DrainFirstAccount != line.Provenance.Pool) {
+		return fmt.Errorf("routing policy revision %d drains no such account first", revision)
+	}
+	return nil
 }
 
 // submittedLineBacked holds a line to the choices its submission recorded. A

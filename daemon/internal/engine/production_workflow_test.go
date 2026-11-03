@@ -516,6 +516,102 @@ func TestProductionReviewTransientCleanupFailureSchedulesSameInvocationRetry(t *
 	}
 }
 
+// TestProductionReviewWaitsOnARoutedReviewersMarkedWindow: a reviewer pinned
+// to a router line whose pool's window is marked waits under the quota-window
+// hold instead of failing the round, requests no review, and the admission
+// that follows once the window resets ends the hold (#2393).
+func TestProductionReviewWaitsOnARoutedReviewersMarkedWindow(t *testing.T) {
+	ctx := context.Background()
+	st := storetest.Open(t, filepath.Join(t.TempDir(), "freeside.db"), store.Options{})
+	runID := domain.RunID("run-review-quota-window")
+	policy, err := domain.NewResolvedPolicy(runID, []domain.PolicyKey{{
+		Key: "review.hard_round_limit", Value: "25",
+		Provenance: domain.KeyProvenance{Source: domain.ProvenancePreset, Digest: "sha256:review-policy"},
+	}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	run := domain.Run{ID: runID, ProjectID: "project-1", SpecDigest: "sha256:spec", PolicyDigest: policy.Digest}
+	if err := st.Write(ctx, func(tx *store.WriteTx) error {
+		if err := tx.PutRun(ctx, run); err != nil {
+			return err
+		}
+		return tx.PutResolvedPolicy(ctx, policy)
+	}); err != nil {
+		t.Fatal(err)
+	}
+	recordFakeReviewIdentities(t, st)
+	now := time.Date(2026, 8, 11, 12, 0, 0, 0, time.UTC)
+	reset := now.Add(time.Hour)
+	marked := &QuotaWindowExhaustedError{Hold: domain.QuotaWindowHold{
+		Pool: "identity:fake-review-identity",
+		ExhaustedMark: domain.ExhaustedMark{
+			Window: "five_hour", Source: domain.ExhaustedMarkProviderRefusal,
+			InvocationID: new(domain.InvocationID("inv-refused")), ResetsAt: &reset, SetAt: now.Add(-time.Minute),
+		},
+	}}
+	admitter := func(context.Context, domain.RoleName, domain.RunID, domain.InvocationID, time.Time) (domain.ReviewAdmission, error) {
+		return domain.ReviewAdmission{}, fmt.Errorf("admission snapshot: task line line-reviewer: %w", marked)
+	}
+	source := &transientCleanupReviewSource{cause: errors.New("unexpected inspection")}
+	configDigest := domain.Digest("sha256:" + strings.Repeat("c", 64))
+	w := &productionPublicationWorkflow{
+		store: st, now: func() time.Time { return now }, workDir: t.TempDir(),
+		reviewSource: source, reviewConfigurationDigest: configDigest,
+		reviewAdmitter:   admitter,
+		reviewRetryAfter: make(map[domain.RunID]time.Time),
+	}
+	_, instructions, err := exec.ComposeCodexReviewInstructions(exec.ReviewHostInstructionInput{}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	binding := productionBinding{
+		admission: domain.ExecutionAdmission{Base: domain.BaseRevision{
+			Repo: "owner/repo", RepositoryID: 42, BaseRef: "main", BaseSHA: strings.Repeat("a", 40),
+		}},
+		profile: domain.AutomationTrustProfile{Review: domain.ReviewSettings{
+			Mode: domain.ReviewFreesideInvoked, ConfigDigest: configDigest,
+		}},
+	}
+	state, err := w.reconcileReviewGate(
+		ctx, productionPublicationTask{RunID: runID, HeadSHA: strings.Repeat("b", 40)}, binding,
+		productionVerificationCheckpoint{Authorization: domain.CandidateAuthorization{
+			VerificationRecipeDigest: domain.Digest("sha256:" + strings.Repeat("d", 64)),
+			EvidenceSnapshotDigest:   domain.Digest("sha256:" + strings.Repeat("e", 64)),
+			VerificationOutcome:      domain.VerificationPassed,
+		}},
+		nil, instructions,
+	)
+	if err != nil || state != productionReviewPending {
+		t.Fatalf("marked reviewer window = %q, %v; want pending", state, err)
+	}
+	if source.requestCalls != 0 || source.inspectID != "" {
+		t.Fatalf("marked reviewer window reached the source: inspected %q, %d requests", source.inspectID, source.requestCalls)
+	}
+	hold := storedRunHold(t, st, runID)
+	if hold == nil || hold.Reason != domain.HoldQuotaWindowExhausted ||
+		hold.QuotaWindow == nil || !reflect.DeepEqual(*hold.QuotaWindow, marked.Hold) {
+		t.Fatalf("hold = %+v, want the marked window", hold)
+	}
+	id := ProductionReviewInvocationID(runID, 1)
+	if err := st.Read(ctx, func(tx *store.ReadTx) error {
+		if _, err := tx.GetReviewFailure(ctx, id); !errors.Is(err, store.ErrNotFound) {
+			t.Fatalf("the wait recorded a review failure: %v", err)
+		}
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	w.reviewAdmitter = fake.AdmitReview
+	if _, err := w.ensureReviewAdmission(ctx, domain.RoleReviewer, runID, id); err != nil {
+		t.Fatal(err)
+	}
+	if hold := storedRunHold(t, st, runID); hold != nil {
+		t.Fatalf("the admission kept the quota-window hold: %+v", hold)
+	}
+}
+
 func TestProductionHoldRetryPruning(t *testing.T) {
 	pendingKey := productionPublicationTaskKey("run-pending")
 	finishedKey := productionPublicationTaskKey("run-finished")
