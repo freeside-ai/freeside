@@ -14,6 +14,18 @@ const baseEnv = {
   HTTPS_PROXY: config.proxy, HTTP_PROXY: config.proxy, NO_PROXY: '',
   NODE_EXTRA_CA_CERTS: '/probe/ca.pem', SSL_CERT_FILE: '/probe/ca.pem',
 };
+// Each variant is one bounded launch. Only `turn` and `turn_seeded` may infer.
+// CLAUDE_CODE_OAUTH_SCOPES changes only the scopes the pinned CLI assumes for
+// the setup token (default `user:inference`); it mints and stores nothing.
+const variants = {
+  idle: {duplex: true, turn: false, env: {}},
+  idle_profile_scope: {duplex: true, turn: false, nonessential: true,
+    env: {CLAUDE_CODE_OAUTH_SCOPES: 'user:inference user:profile'}},
+  turn: {duplex: false, turn: true, env: {}},
+  turn_seeded: {duplex: true, turn: true,
+    env: {CLAUDE_CODE_OAUTH_SCOPES: 'user:inference user:profile'}},
+};
+const variant = variants[config.mode];
 const common = ['-p', '--output-format', 'stream-json', '--verbose',
   '--dangerously-skip-permissions', '--safe-mode',
   '--append-system-prompt-file', '/probe/instructions.txt'];
@@ -54,14 +66,19 @@ async function main() {
   if (version.status !== 0 || !/^2\.1\.220\b/.test(version.stdout)) {
     emit({failure: 'version_mismatch'}); return;
   }
+  if (!variant) { emit({failure: 'unknown_variant'}); return; }
   const args = [...common, '--session-id', 'e1c2d336-0584-43ca-936f-9c5065cb16bd'];
-  if (config.mode === 'idle') args.push('--input-format', 'stream-json');
+  if (variant.duplex) args.push('--input-format', 'stream-json');
+  const env = {...baseEnv, ...variant.env, CLAUDE_CODE_OAUTH_TOKEN: token};
+  // The pinned first-party client refuses its usage read under this switch.
+  if (variant.nonessential) delete env.CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC;
   const child = spawn('setpriv', [...drop, 'claude', ...args], {
-    cwd: root + '/work', env: {...baseEnv, CLAUDE_CODE_OAUTH_TOKEN: token},
+    cwd: root + '/work', env,
     stdio: ['pipe', 'pipe', 'pipe'], detached: true,
   });
   let output = '', pending = '', bytes = 0, timedOut = false, overflow = false;
-  let initialized = false, answered = false, malformed = false;
+  let initialized = false, answered = false, malformed = false, resulted = false;
+  const prompt = 'Reply with exactly OK. Do not use tools.';
   const requests = [];
   const send = request => { requests.push(request); child.stdin.write(JSON.stringify(request) + '\n'); };
   const stop = () => { try { process.kill(-child.pid, 'SIGKILL'); } catch {} };
@@ -78,17 +95,23 @@ async function main() {
       const line = pending.slice(0, end); pending = pending.slice(end + 1);
       if (!line.trim()) continue;
       let msg; try { msg = JSON.parse(line); } catch { malformed = true; continue; }
-      if (config.mode !== 'idle' || msg.type !== 'control_response') continue;
+      if (!variant.duplex) continue;
+      const readUsage = () => send({type: 'control_request', request_id: 'usage-read', request: {subtype: 'get_usage'}});
+      // A seeded read waits for the one turn's result, so the turn's response
+      // headers have reached the CLI before it answers.
+      if (variant.turn && msg.type === 'result' && initialized && !resulted) { resulted = true; readUsage(); }
+      if (msg.type !== 'control_response') continue;
       if (msg.response?.request_id === 'usage-init' && msg.response.subtype === 'success' && !initialized) {
         initialized = true;
-        send({type: 'control_request', request_id: 'usage-read', request: {subtype: 'get_usage'}});
+        if (variant.turn) send({type: 'user', message: {role: 'user', content: prompt}});
+        else readUsage();
       }
       if (msg.response?.request_id === 'usage-read') { answered = true; child.stdin.end(); }
     }
   });
-  if (config.mode === 'idle') {
+  if (variant.duplex) {
     send({type: 'control_request', request_id: 'usage-init', request: {subtype: 'initialize'}});
-  } else child.stdin.end('Reply with exactly OK. Do not use tools.\n');
+  } else child.stdin.end(prompt + '\n');
   const status = await new Promise(resolve => {
     child.on('error', () => resolve({code: null, signal: null, spawnFailed: true}));
     child.on('close', (code, signal) => resolve({code, signal, spawnFailed: false}));
