@@ -871,8 +871,11 @@ func claudeUsageWindows(probes []claudeUsageEvidence) map[string]string {
 
 func TestClaudeUsageObservedFixtures(t *testing.T) {
 	zero := 0
-	// idle and turn are the #1713 observations (2026-10-03).
+	// idle and turn are the #1713 observations (2026-10-03); idle_profile_scope
+	// and turn_seeded are #2389's (2026-11-03). The event names whichever window
+	// binds at run time, so the two turns name different windows.
 	unsupported := "unsupported"
+	path1 := map[string]claudeUsageEvidence{}
 	for _, tc := range []struct {
 		mode, verdict string
 		inference     int
@@ -880,7 +883,9 @@ func TestClaudeUsageObservedFixtures(t *testing.T) {
 		windows       map[string]string
 	}{
 		{"idle", "usage_unavailable", 0, nil, map[string]string{"five_hour": unsupported, "weekly": unsupported, "model_scoped": unsupported}},
+		{"idle_profile_scope", "usage_refused", 0, []string{"unsupported"}, map[string]string{"five_hour": unsupported, "weekly": unsupported, "model_scoped": unsupported}},
 		{"turn", "rate_limit_event_observed", 1, nil, map[string]string{"five_hour": "status_and_reset", "weekly": unsupported, "model_scoped": unsupported}},
+		{"turn_seeded", "usage_observed", 1, nil, map[string]string{"five_hour": unsupported, "weekly": "share", "model_scoped": unsupported}},
 	} {
 		t.Run(tc.mode, func(t *testing.T) {
 			body, err := os.ReadFile("testdata/claude_usage_observed_" + tc.mode + ".jsonl")
@@ -898,10 +903,21 @@ func TestClaudeUsageObservedFixtures(t *testing.T) {
 			if tc.mode == "turn" && (len(e.Events) != 1 || strings.Contains(string(e.Events[0]), "utilization") || !strings.Contains(string(e.Events[0]), `"overageDisabledReason":"org_level_disabled"`)) {
 				t.Fatal("event fields changed or usage invented")
 			}
+			if tc.mode == "turn_seeded" && !strings.Contains(string(e.Response), `"seven_day":{"resets_at":"2026-11-06T03:00:00.000Z","utilization":56.99999999999999}`) {
+				t.Fatalf("seeded share was lost: %s", e.Response)
+			}
 			if got := claudeUsageWindows([]claudeUsageEvidence{e}); !maps.Equal(got, tc.windows) {
 				t.Fatalf("windows = %v, want %v", got, tc.windows)
 			}
+			path1[tc.mode] = e
 		})
+	}
+	// The note's path 1 row on 2026-11-03. That day's idle answer matched
+	// #1713's fixture, and its turn event matched the one in turn_seeded, so
+	// the October turn is left out.
+	got := claudeUsageWindows([]claudeUsageEvidence{path1["idle"], path1["idle_profile_scope"], path1["turn_seeded"]})
+	if want := map[string]string{"five_hour": unsupported, "weekly": "share", "model_scoped": unsupported}; !maps.Equal(got, want) {
+		t.Fatalf("path 1 windows = %v, want %v", got, want)
 	}
 	safe, err := claudeUsageControl(json.RawMessage(`{"session":{"total_cost_usd":999,"private":"synthetic-secret"},"behaviors":{"private":"synthetic-secret"},"rate_limits_available":false,"rate_limits":null}`))
 	if err != nil || strings.Contains(string(safe), "synthetic-secret") || strings.Contains(string(safe), "999") {
@@ -1019,7 +1035,8 @@ func TestClaudeUsageProtocol(t *testing.T) {
 }
 
 // The synthetic answers are evidence checks for the path 2 classifier and
-// the window verdicts, never positive provider fixtures.
+// the window verdicts, never positive provider fixtures; the observed file
+// holds the sanitized answers #2389's live run received.
 func TestClaudeUsageReadClassification(t *testing.T) {
 	type readCase struct {
 		Name            string            `json:"name"`
@@ -1032,7 +1049,7 @@ func TestClaudeUsageReadClassification(t *testing.T) {
 		Windows         map[string]string `json:"windows"`
 	}
 	var cases []readCase
-	for _, name := range []string{"synthetic"} {
+	for _, name := range []string{"synthetic", "observed"} {
 		body, err := os.ReadFile("testdata/claude_usage_read_" + name + ".json") //nolint:gosec // name is one of two fixed fixture names
 		if err != nil {
 			t.Fatal(err)

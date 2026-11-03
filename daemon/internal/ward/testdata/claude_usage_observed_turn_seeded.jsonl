@@ -1,0 +1,4 @@
+{"type":"control_response","response":{"request_id":"usage-init","subtype":"success","response":{}}}
+{"type":"rate_limit_event","rate_limit_info":{"status":"allowed","resetsAt":1793934000,"rateLimitType":"seven_day","overageStatus":"rejected","overageDisabledReason":"org_level_disabled","isUsingOverage":false}}
+{"type":"result","subtype":"success","is_error":false}
+{"type":"control_response","response":{"request_id":"usage-read","subtype":"success","response":{"subscription_type":null,"rate_limits_available":true,"rate_limits":{"seven_day":{"utilization":56.99999999999999,"resets_at":"2026-11-06T03:00:00.000Z"}}}}}
