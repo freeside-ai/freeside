@@ -1265,7 +1265,7 @@ public enum Components {
                 ])
             }
         }
-        /// What the daemon recorded about one pool: its declaration, collector, refresh status, every enrollment on it, its readings, and the exhausted marks derived at the read. It is observation, never authority, and nothing is added across pools. A client derives no value the daemon did not record: freshness is as_of_revision and each reading's own instants, and exhausted_marks is computed by the daemon. Credential expiry, billing renewal, and reset credit are not recorded, so no field carries them.
+        /// What the daemon recorded about one pool: its declaration, collector, refresh status, every enrollment on it, its readings, and the exhausted marks the record holds. It is observation, never authority, and nothing is added across pools. A client derives no value the daemon did not record: freshness is as_of_revision and each reading's own instants, and the daemon computes recorded_exhausted_marks, which a client only lapses by each mark's resets_at. Credential expiry, billing renewal, and reset credit are not recorded, so no field carries them.
         ///
         ///
         /// - Remark: Generated from `#/components/schemas/UsagePoolUsage`.
@@ -1325,11 +1325,11 @@ public enum Components {
             ///
             /// - Remark: Generated from `#/components/schemas/UsagePoolUsage/windows`.
             public var windows: [Components.Schemas.UsageWindowReading]
-            /// The windows exhausted at the read, one mark per window, derived by the daemon. Empty does not mean allowance remains.
+            /// Every exhausted mark the pool's record holds, at most one per source per window, in window order then source order (provider_refusal, usage_reading): a window's provider refusal unless an allowed reading observed after it cleared it, and its reading when the collector reported it exhausted. The list changes only when the record is written, so it holds steady at one as_of_revision and entity_version, and it keeps marks that have lapsed. A client drops a mark once the client's own clock reaches its resets_at, and never computes a mark. A mark with a null resets_at holds until a later record write replaces or clears it. A window is exhausted while any of its marks hasn't lapsed. No live mark does not mean allowance remains.
             ///
             ///
-            /// - Remark: Generated from `#/components/schemas/UsagePoolUsage/exhausted_marks`.
-            public var exhausted_marks: [Components.Schemas.UsageExhaustedMark]
+            /// - Remark: Generated from `#/components/schemas/UsagePoolUsage/recorded_exhausted_marks`.
+            public var recorded_exhausted_marks: [Components.Schemas.UsageExhaustedMark]
             /// Creates a new `UsagePoolUsage`.
             ///
             /// - Parameters:
@@ -1342,7 +1342,7 @@ public enum Components {
             ///   - enrollments: Every enrollment whose identity meters the pool, in enrollment id order: the candidates reassign_collector accepts.
             ///   - model_windows: Which windows limit which route model ids. A window named in no entry is general and limits every model.
             ///   - windows: One reading per provider window, in window order.
-            ///   - exhausted_marks: The windows exhausted at the read, one mark per window, derived by the daemon. Empty does not mean allowance remains.
+            ///   - recorded_exhausted_marks: Every exhausted mark the pool's record holds, at most one per source per window, in window order then source order (provider_refusal, usage_reading): a window's provider refusal unless an allowed reading observed after it cleared it, and its reading when the collector reported it exhausted. The list changes only when the record is written, so it holds steady at one as_of_revision and entity_version, and it keeps marks that have lapsed. A client drops a mark once the client's own clock reaches its resets_at, and never computes a mark. A mark with a null resets_at holds until a later record write replaces or clears it. A window is exhausted while any of its marks hasn't lapsed. No live mark does not mean allowance remains.
             public init(
                 id: Swift.String,
                 provider: Swift.String,
@@ -1353,7 +1353,7 @@ public enum Components {
                 enrollments: [Components.Schemas.UsagePoolEnrollment],
                 model_windows: [Components.Schemas.UsageModelWindow],
                 windows: [Components.Schemas.UsageWindowReading],
-                exhausted_marks: [Components.Schemas.UsageExhaustedMark]
+                recorded_exhausted_marks: [Components.Schemas.UsageExhaustedMark]
             ) {
                 self.id = id
                 self.provider = provider
@@ -1364,7 +1364,7 @@ public enum Components {
                 self.enrollments = enrollments
                 self.model_windows = model_windows
                 self.windows = windows
-                self.exhausted_marks = exhausted_marks
+                self.recorded_exhausted_marks = recorded_exhausted_marks
             }
             public enum CodingKeys: String, CodingKey {
                 case id
@@ -1376,7 +1376,7 @@ public enum Components {
                 case enrollments
                 case model_windows
                 case windows
-                case exhausted_marks
+                case recorded_exhausted_marks
             }
             public init(from decoder: any Swift.Decoder) throws {
                 let container = try decoder.container(keyedBy: CodingKeys.self)
@@ -1416,9 +1416,9 @@ public enum Components {
                     [Components.Schemas.UsageWindowReading].self,
                     forKey: .windows
                 )
-                self.exhausted_marks = try container.decode(
+                self.recorded_exhausted_marks = try container.decode(
                     [Components.Schemas.UsageExhaustedMark].self,
-                    forKey: .exhausted_marks
+                    forKey: .recorded_exhausted_marks
                 )
                 try decoder.ensureNoAdditionalProperties(knownKeys: [
                     "id",
@@ -1430,7 +1430,7 @@ public enum Components {
                     "enrollments",
                     "model_windows",
                     "windows",
-                    "exhausted_marks"
+                    "recorded_exhausted_marks"
                 ])
             }
         }
@@ -1827,7 +1827,7 @@ public enum Components {
             case provider_refusal = "provider_refusal"
             case usage_reading = "usage_reading"
         }
-        /// One window exhausted at the read, and what says so. invocation_id is set exactly for provider_refusal, reading_observed_at exactly for usage_reading.
+        /// One reason the pool's record holds a window exhausted, and what says so. invocation_id is set exactly for provider_refusal, reading_observed_at exactly for usage_reading.
         ///
         ///
         /// - Remark: Generated from `#/components/schemas/UsageExhaustedMark`.
@@ -1840,6 +1840,9 @@ public enum Components {
             public var invocation_id: Swift.String?
             /// - Remark: Generated from `#/components/schemas/UsageExhaustedMark/reading_observed_at`.
             public var reading_observed_at: Foundation.Date?
+            /// When this mark lapses, judged on the client's clock; null when it holds until a later record write replaces or clears it.
+            ///
+            ///
             /// - Remark: Generated from `#/components/schemas/UsageExhaustedMark/resets_at`.
             public var resets_at: Foundation.Date?
             /// - Remark: Generated from `#/components/schemas/UsageExhaustedMark/set_at`.
@@ -1851,7 +1854,7 @@ public enum Components {
             ///   - source:
             ///   - invocation_id:
             ///   - reading_observed_at:
-            ///   - resets_at:
+            ///   - resets_at: When this mark lapses, judged on the client's clock; null when it holds until a later record write replaces or clears it.
             ///   - set_at:
             public init(
                 window: Swift.String,

@@ -448,8 +448,9 @@ func TestEffectProposalFactsProvenanceGoldensDiffer(t *testing.T) {
 
 // usagePoolsFixture projects the four pool shapes the bootstrap golden pins,
 // as of ten minutes after at with a 30-minute refresh age:
-//   - claude-a: readings, one window exhausted by its reading, a model map,
-//     and a second enrollment with no availability answer yet;
+//   - claude-a: readings, a model map, a second enrollment with no
+//     availability answer yet, and one window that holds both an older
+//     refusal and a newer exhausted reading resetting before the refusal;
 //   - claude-c: a reading two hours old with no reset, stale before the
 //     fixture clock, kept through a failed refresh;
 //   - codex-b: a collector that answered unsupported, so statuses and no
@@ -483,6 +484,10 @@ func usagePoolsFixture(t *testing.T, at time.Time) []UsagePoolSnapshot {
 			},
 			exhausted,
 		},
+		RefusalMarks: []domain.RefusalMark{{
+			Window: "seven_day_opus", InvocationID: "inv-refused",
+			ResetsAt: new(at.Add(96 * time.Hour)), SetAt: at.Add(-time.Hour),
+		}},
 	}
 	claudeC := domain.PoolUsageObservation{
 		Pool: "claude-c", Collector: "enroll-c",
@@ -533,12 +538,13 @@ func usagePoolsFixture(t *testing.T, at time.Time) []UsagePoolSnapshot {
 	}
 	snapshots := make([]UsagePoolSnapshot, 0, len(pools))
 	for _, pool := range pools {
-		snapshots = append(snapshots, projectUsagePool(pool, 23, now, refreshAge))
+		snapshots = append(snapshots, projectUsagePool(pool, 23, refreshAge))
 	}
 	// The goldens' claims, checked here so a regenerated golden can't
 	// silently drop one.
-	if marks := snapshots[0].Pool.ExhaustedMarks; len(marks) != 1 || marks[0].Source != domain.ExhaustedMarkUsageReading {
-		t.Fatalf("claude-a exhausted marks = %+v, want one usage_reading mark", marks)
+	if marks := snapshots[0].Pool.RecordedExhaustedMarks; len(marks) != 2 ||
+		marks[0].Source != domain.ExhaustedMarkProviderRefusal || marks[1].Source != domain.ExhaustedMarkUsageReading {
+		t.Fatalf("claude-a recorded exhausted marks = %+v, want provider_refusal then usage_reading", marks)
 	}
 	if staleAt := snapshots[1].Pool.Windows[0].StaleAt; staleAt == nil || !staleAt.Before(now) {
 		t.Fatalf("claude-c stale_at = %v, want before %s", staleAt, now)

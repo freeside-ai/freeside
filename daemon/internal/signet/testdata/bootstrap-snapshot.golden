@@ -338,7 +338,15 @@
             "stale_at": "2026-08-10T13:04:56Z"
           }
         ],
-        "exhausted_marks": [
+        "recorded_exhausted_marks": [
+          {
+            "window": "seven_day_opus",
+            "source": "provider_refusal",
+            "invocation_id": "inv-refused",
+            "reading_observed_at": null,
+            "resets_at": "2026-08-14T12:34:56Z",
+            "set_at": "2026-08-10T11:34:56Z"
+          },
           {
             "window": "seven_day_opus",
             "source": "usage_reading",
@@ -391,7 +399,7 @@
             "stale_at": "2026-08-10T11:04:56Z"
           }
         ],
-        "exhausted_marks": []
+        "recorded_exhausted_marks": []
       }
     },
     {
@@ -421,7 +429,7 @@
         ],
         "model_windows": [],
         "windows": [],
-        "exhausted_marks": []
+        "recorded_exhausted_marks": []
       }
     },
     {
@@ -437,7 +445,7 @@
         "enrollments": [],
         "model_windows": [],
         "windows": [],
-        "exhausted_marks": []
+        "recorded_exhausted_marks": []
       }
     }
   ],

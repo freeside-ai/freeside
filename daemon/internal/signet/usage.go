@@ -32,7 +32,7 @@ type UsagePoolSnapshot struct {
 
 // UsagePoolUsage is what the daemon recorded about one pool (plan §5.4, usage
 // observation): its declaration, its collector and refresh status, every
-// enrollment on it, and the record's readings and derived exhausted marks.
+// enrollment on it, and the record's readings and the exhausted marks it holds.
 // Nothing here is added across pools, and refusal marks stay out: each
 // exhausted mark already names its source.
 type UsagePoolUsage struct {
@@ -42,12 +42,15 @@ type UsagePoolUsage struct {
 	Plan                  *string            `json:"plan"`
 	// Collector is the record's collector, or the pool's default collector
 	// before the first record; nil when the pool has no enrollment.
-	Collector      *domain.ClientEnrollmentID `json:"collector"`
-	LastAttempt    *domain.CollectionAttempt  `json:"last_attempt"`
-	Enrollments    []UsagePoolEnrollment      `json:"enrollments"`
-	ModelWindows   []domain.ModelWindow       `json:"model_windows"`
-	Windows        []UsageWindowReading       `json:"windows"`
-	ExhaustedMarks []domain.ExhaustedMark     `json:"exhausted_marks"`
+	Collector    *domain.ClientEnrollmentID `json:"collector"`
+	LastAttempt  *domain.CollectionAttempt  `json:"last_attempt"`
+	Enrollments  []UsagePoolEnrollment      `json:"enrollments"`
+	ModelWindows []domain.ModelWindow       `json:"model_windows"`
+	Windows      []UsageWindowReading       `json:"windows"`
+	// RecordedExhaustedMarks is every mark the record holds, lapsed ones
+	// included, so it changes only with a write. The client lapses each by its
+	// own clock, as it does a reading's StaleAt.
+	RecordedExhaustedMarks []domain.ExhaustedMark `json:"recorded_exhausted_marks"`
 }
 
 // UsagePoolEnrollment is one enrollment whose identity meters the pool, with
@@ -95,9 +98,9 @@ type RoutingPolicySnapshot struct {
 	Policy        domain.RoutingPolicy `json:"policy"`
 }
 
-// usagePoolSnapshots projects every pool, in pool id order, as of now.
+// usagePoolSnapshots projects every pool, in pool id order.
 func usagePoolSnapshots(
-	ctx context.Context, tx *store.ReadTx, state store.ServerState, now time.Time, refreshAge time.Duration,
+	ctx context.Context, tx *store.ReadTx, state store.ServerState, refreshAge time.Duration,
 ) ([]UsagePoolSnapshot, error) {
 	pools, err := tx.ListUsagePools(ctx)
 	if err != nil {
@@ -132,7 +135,7 @@ func usagePoolSnapshots(
 				return nil, fmt.Errorf("usage pool %q: %w", pool.ID, err)
 			}
 		}
-		out = append(out, projectUsagePool(in, state.Revision, now, refreshAge))
+		out = append(out, projectUsagePool(in, state.Revision, refreshAge))
 	}
 	return out, nil
 }
@@ -149,16 +152,17 @@ type usagePoolInput struct {
 	enrollments []domain.ClientEnrollment
 }
 
-// projectUsagePool projects one pool as of now; revision is the snapshot's,
-// carried by a pool with no record.
-func projectUsagePool(in usagePoolInput, revision int64, now time.Time, refreshAge time.Duration) UsagePoolSnapshot {
+// projectUsagePool projects one pool from its record alone, so two reads at
+// one revision agree; revision is the snapshot's, carried by a pool with no
+// record.
+func projectUsagePool(in usagePoolInput, revision int64, refreshAge time.Duration) UsagePoolSnapshot {
 	snapshot := UsagePoolSnapshot{
 		AsOfRevision: revision,
 		Pool: UsagePoolUsage{
 			ID: in.pool.ID, Provider: in.pool.Provider, MaxParallelExecutions: in.pool.MaxParallelExecutions,
 			Collector:   in.defaultCollector,
 			Enrollments: []UsagePoolEnrollment{}, ModelWindows: []domain.ModelWindow{},
-			Windows: []UsageWindowReading{}, ExhaustedMarks: []domain.ExhaustedMark{},
+			Windows: []UsageWindowReading{}, RecordedExhaustedMarks: []domain.ExhaustedMark{},
 		},
 	}
 	var answers []domain.EnrollmentAvailability
@@ -171,7 +175,7 @@ func projectUsagePool(in usagePoolInput, revision int64, now time.Time, refreshA
 		for _, reading := range observation.Windows {
 			snapshot.Pool.Windows = append(snapshot.Pool.Windows, usageWindowReading(reading, refreshAge))
 		}
-		snapshot.Pool.ExhaustedMarks = nonNilSlice(observation.ExhaustedMarks(now))
+		snapshot.Pool.RecordedExhaustedMarks = nonNilSlice(observation.RecordedExhaustedMarks())
 		answers = observation.Enrollments
 	}
 	for _, enrollment := range in.enrollments {
