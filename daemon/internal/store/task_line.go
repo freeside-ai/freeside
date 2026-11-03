@@ -127,6 +127,47 @@ func (tx *WriteTx) RecordTaskLineChange(
 	return line, nil
 }
 
+// RecordRouterTaskLines records one routing's lines for a task, in the
+// caller's transaction, and returns them (plan §5.4, routing policy). Every
+// input must be a router line of taskID, and each must be its role's first
+// version: the router writes only for a role with no line at all, so a role
+// that gained one since the router read fails the whole routing rather than
+// stacking a router version on an operator's choice.
+//
+// Like RecordTaskLineChange, this advances the task's own version, so sync
+// serves the new task_lines.
+func (tx *WriteTx) RecordRouterTaskLines(
+	ctx context.Context, taskID domain.TaskID, inputs []domain.TaskLineInput, setAt time.Time,
+) ([]domain.TaskLine, error) {
+	if len(inputs) == 0 {
+		return nil, fmt.Errorf("record router task lines %q: no lines: %w", taskID, domain.ErrTaskLineInconsistent)
+	}
+	lines := make([]domain.TaskLine, 0, len(inputs))
+	for _, in := range inputs {
+		if in.Source != domain.TaskLineSourceRouter || in.TaskID != taskID {
+			return nil, fmt.Errorf("record router task lines %q: a %s line of task %q: %w",
+				taskID, in.Source, in.TaskID, domain.ErrTaskLineInconsistent)
+		}
+		line, err := tx.AppendTaskLine(ctx, in, setAt)
+		if err != nil {
+			return nil, err
+		}
+		if line.Version != 1 {
+			return nil, fmt.Errorf("record router task lines %q %s: the role already has a line: %w",
+				taskID, in.Role, domain.ErrTaskLineInconsistent)
+		}
+		lines = append(lines, line)
+	}
+	task, err := tx.GetTask(ctx, taskID)
+	if err != nil {
+		return nil, fmt.Errorf("record router task lines %q: %w", taskID, err)
+	}
+	if err := tx.updateTask(ctx, task); err != nil {
+		return nil, fmt.Errorf("record router task lines %q: %w", taskID, err)
+	}
+	return lines, nil
+}
+
 // GetTaskLineChange returns the change record with the given id. The decoded
 // body is the authority: it must resolve to its own id and agree with the
 // copied columns, so a row edited in place fails closed as a corrupt row.
