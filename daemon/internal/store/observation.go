@@ -45,6 +45,7 @@ const (
 			upkeep_pending, upkeep_refusal_id, upkeep_item_id, upkeep_task_id,
 			usage_pool, quota_pool, quota_window, quota_source, quota_invocation_id,
 			quota_reading_observed_at, quota_resets_at, quota_set_at,
+			capacity_reservation_mib, capacity_reserved_mib, capacity_budget_mib, capacity_ahead,
 			first_observed_at, last_observed_at
 		FROM run_hold_observations WHERE run_id = ?`
 	replaceRunHoldSQL = `INSERT INTO run_hold_observations
@@ -53,8 +54,9 @@ const (
 			upkeep_pending, upkeep_refusal_id, upkeep_item_id, upkeep_task_id,
 			usage_pool, quota_pool, quota_window, quota_source, quota_invocation_id,
 			quota_reading_observed_at, quota_resets_at, quota_set_at,
+			capacity_reservation_mib, capacity_reserved_mib, capacity_budget_mib, capacity_ahead,
 			first_observed_at, last_observed_at)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 		ON CONFLICT (run_id) DO UPDATE SET
 			invocation_id = excluded.invocation_id,
 			reason = excluded.reason,
@@ -74,6 +76,10 @@ const (
 			quota_reading_observed_at = excluded.quota_reading_observed_at,
 			quota_resets_at = excluded.quota_resets_at,
 			quota_set_at = excluded.quota_set_at,
+			capacity_reservation_mib = excluded.capacity_reservation_mib,
+			capacity_reserved_mib = excluded.capacity_reserved_mib,
+			capacity_budget_mib = excluded.capacity_budget_mib,
+			capacity_ahead = excluded.capacity_ahead,
 			first_observed_at = excluded.first_observed_at,
 			last_observed_at = excluded.last_observed_at`
 	clearRunHoldSQL      = `DELETE FROM run_hold_observations WHERE run_id = ?`
@@ -228,10 +234,16 @@ func (tx *WriteTx) RecordRunHold(ctx context.Context, h domain.RunHoldObservatio
 			quotaResetsAt = formatTime(*q.ResetsAt)
 		}
 	}
+	var capacityReservation, capacityReserved, capacityBudget, capacityAhead any
+	if c := h.MachineCapacity; c != nil {
+		capacityReservation, capacityReserved = c.ReservationMiB, c.ReservedMiB
+		capacityBudget, capacityAhead = c.BudgetMiB, c.Ahead
+	}
 	if _, err := tx.tx.ExecContext(ctx, replaceRunHoldSQL,
 		h.RunID, invocation, h.Reason, check, agent, launchStage, launchDigest,
 		pending, refusal, item, task, usagePool,
 		quotaPool, quotaWindow, quotaSource, quotaInvocation, quotaReadingAt, quotaResetsAt, quotaSetAt,
+		capacityReservation, capacityReserved, capacityBudget, capacityAhead,
 		formatTime(h.FirstObservedAt), formatTime(h.LastObservedAt)); err != nil {
 		return fmt.Errorf("record run hold %s: %w", h.RunID, err)
 	}
@@ -418,11 +430,14 @@ func (tx *ReadTx) GetRunHold(
 		quotaPool, quotaWindow, quotaSource           sql.NullString
 		quotaInvocation, quotaReadingAt               sql.NullString
 		quotaResetsAt, quotaSetAt                     sql.NullString
+		capacityReservation, capacityReserved         sql.NullInt64
+		capacityBudget, capacityAhead                 sql.NullInt64
 	)
 	err := tx.tx.QueryRowContext(ctx, selectRunHoldSQL, runID).
 		Scan(&storedRun, &invocation, &reason, &check, &agent, &stage, &launchDigest,
 			&pending, &refusal, &item, &task, &usagePool,
 			&quotaPool, &quotaWindow, &quotaSource, &quotaInvocation, &quotaReadingAt, &quotaResetsAt, &quotaSetAt,
+			&capacityReservation, &capacityReserved, &capacityBudget, &capacityAhead,
 			&first, &last)
 	switch {
 	case errors.Is(err, sql.ErrNoRows):
@@ -503,6 +518,11 @@ func (tx *ReadTx) GetRunHold(
 		return domain.RunHoldObservation{}, false, fmt.Errorf("get run hold %s: %w", runID, err)
 	}
 	h.QuotaWindow = quota
+	capacity, err := readMachineCapacityHold(capacityReservation, capacityReserved, capacityBudget, capacityAhead)
+	if err != nil {
+		return domain.RunHoldObservation{}, false, fmt.Errorf("get run hold %s: %w", runID, err)
+	}
+	h.MachineCapacity = capacity
 	if err := h.Validate(); err != nil {
 		return domain.RunHoldObservation{}, false, fmt.Errorf("get run hold %s: %w", runID, err)
 	}
@@ -559,6 +579,29 @@ func readQuotaWindowHold(
 		hold.SetAt = at
 	}
 	return hold, nil
+}
+
+// readMachineCapacityHold rebuilds a machine capacity detail from its
+// columns, which are all present or all absent. Validate on the whole hold
+// checks the numbers against each other and the reason.
+func readMachineCapacityHold(reservation, reserved, budget, ahead sql.NullInt64) (*domain.MachineCapacityHold, error) {
+	columns := []sql.NullInt64{reservation, reserved, budget, ahead}
+	present := 0
+	for _, column := range columns {
+		if column.Valid {
+			present++
+		}
+	}
+	switch present {
+	case 0:
+		return nil, nil
+	case len(columns):
+		return &domain.MachineCapacityHold{
+			ReservationMiB: int(reservation.Int64), ReservedMiB: int(reserved.Int64),
+			BudgetMiB: int(budget.Int64), Ahead: int(ahead.Int64),
+		}, nil
+	}
+	return nil, fmt.Errorf("machine capacity columns partly present: %w", domain.ErrHoldDetailMismatch)
 }
 
 // ObserveRun composes the run's observation aggregate: the milestone

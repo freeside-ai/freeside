@@ -27,6 +27,7 @@ var holdClassifiedSentinels = []error{
 	domain.ErrUnattendedOperationStopped,
 	domain.ErrBlockingSystemHealth,
 	domain.ErrUsagePoolExhausted,
+	domain.ErrMachineCapacity,
 	exec.ErrInputUnavailable,
 	exec.ErrCapabilityRefused,
 	exec.ErrPreJobRefused,
@@ -247,6 +248,36 @@ func TestUsagePoolRefusalHoldsNamingItsPool(t *testing.T) {
 	if holdPaceState(domain.HoldUsagePoolExhausted, detail) ==
 		holdPaceState(domain.HoldUsagePoolExhausted, holdDetailFor(refusal("pool-b"))) {
 		t.Fatal("two pools share one pace state")
+	}
+}
+
+// TestMachineCapacityRefusalHoldsNamingItsMemory: the store's memory refusal
+// holds its own invocation under machine_capacity with the figures it waits
+// on, and changed figures are a changed hold the pacer records at once.
+func TestMachineCapacityRefusalHoldsNamingItsMemory(t *testing.T) {
+	refusal := func(ahead int) error {
+		return fmt.Errorf("admit invocation %q: %w", "inv-1", &domain.MachineCapacityError{
+			Hold: domain.MachineCapacityHold{ReservationMiB: 2304, ReservedMiB: 2304, BudgetMiB: 4096, Ahead: ahead},
+		})
+	}
+	err := refusal(0)
+	if reason, ok := dispatchHoldReason(err); !ok || reason != domain.HoldMachineCapacity {
+		t.Fatalf("reason = %q, %t", reason, ok)
+	}
+	if !invocationDispatchHold(err) {
+		t.Fatal("the refusal does not hold its own invocation")
+	}
+	detail := holdDetailFor(err)
+	if detail.machineCapacity == nil || detail.machineCapacity.BudgetMiB != 4096 {
+		t.Fatalf("detail = %+v", detail)
+	}
+	if holdPaceState(domain.HoldMachineCapacity, detail) ==
+		holdPaceState(domain.HoldMachineCapacity, holdDetailFor(refusal(1))) {
+		t.Fatal("a launch moving in the order keeps its pace state")
+	}
+	never := &domain.LaunchNeverFitsError{SizeMiB: 8192, OverheadMiB: 256, BudgetMiB: 4096}
+	if _, ok := dispatchHoldReason(never); ok {
+		t.Fatal("a launch that can never fit holds instead of failing")
 	}
 }
 

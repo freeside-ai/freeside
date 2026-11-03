@@ -490,6 +490,10 @@ func TestEnumValidity(t *testing.T) {
 		valids["ExhaustedMarkSource"] = append(valids["ExhaustedMarkSource"], v.valid)
 	}
 	invalids["ExhaustedMarkSource"] = ExhaustedMarkSource("").valid
+	for _, v := range AllLaunchReservationKinds {
+		valids["LaunchReservationKind"] = append(valids["LaunchReservationKind"], v.valid)
+	}
+	invalids["LaunchReservationKind"] = LaunchReservationKind("").valid
 	for _, v := range AllRebuildRefusals {
 		valids["RebuildRefusal"] = append(valids["RebuildRefusal"], v.valid)
 	}

@@ -328,6 +328,14 @@ func (tx *WriteTx) AcknowledgeTaskCancellation(ctx context.Context, ack domain.T
 			return false, err
 		}
 	}
+	// A confirmed stop proved every container of the task's runs absent,
+	// verification rooms included (plan §5.4), so their memory frees with it.
+	if ack.State == domain.TaskCancellationConfirmed {
+		if _, err := tx.tx.ExecContext(ctx, releaseTaskVerificationReservationsSQL,
+			formatTime(ack.RecordedAt), task.ID); err != nil {
+			return false, err
+		}
+	}
 	_, err = tx.tx.ExecContext(ctx, `INSERT INTO task_cancellation_acknowledgements VALUES (?, ?, ?, ?)`, ack.ID, ack.RequestID, tx.asOfRevision, body)
 	if err == nil {
 		_, err = tx.tx.ExecContext(ctx, `UPDATE tasks SET entity_version = entity_version + 1, as_of_revision = ? WHERE id = ?`, tx.asOfRevision, task.ID)

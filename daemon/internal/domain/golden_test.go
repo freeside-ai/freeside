@@ -1864,6 +1864,15 @@ func TestGolden(t *testing.T) {
 		FirstObservedAt: ts.Add(time.Minute),
 		LastObservedAt:  ts.Add(2 * time.Minute),
 	}
+	machineCapacityHold := domain.RunHoldObservation{
+		RunID: "run-2", InvocationID: &obsInvocationID,
+		Reason: domain.HoldMachineCapacity,
+		MachineCapacity: &domain.MachineCapacityHold{
+			ReservationMiB: 4352, ReservedMiB: 6400, BudgetMiB: 8192, Ahead: 1,
+		},
+		FirstObservedAt: ts.Add(time.Minute),
+		LastObservedAt:  ts.Add(2 * time.Minute),
+	}
 	runObservation := domain.RunObservation{
 		RunID:      "run-1",
 		Milestones: []domain.RunMilestone{submittedMilestone, outcomeMilestone, terminalMilestone},
@@ -2413,6 +2422,7 @@ func TestGolden(t *testing.T) {
 		{"run_hold_observation_image_upkeep_adoption", adoptionHold},
 		{"run_hold_observation_image_upkeep_maintenance", maintenanceHold},
 		{"run_hold_observation_quota_window", quotaWindowHold},
+		{"run_hold_observation_machine_capacity", machineCapacityHold},
 		{"run_observation", runObservation},
 		{"work_unit_declaration", unitDeclaration},
 		{"work_unit_pr_binding", unitPRBinding},

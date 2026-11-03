@@ -1,0 +1,17 @@
+{
+  "run_id": "run-2",
+  "invocation_id": "inv-1",
+  "reason": "machine_capacity",
+  "detail": null,
+  "image_upkeep": null,
+  "usage_pool": null,
+  "quota_window": null,
+  "machine_capacity": {
+    "reservation_mib": 4352,
+    "reserved_mib": 6400,
+    "budget_mib": 8192,
+    "ahead": 1
+  },
+  "first_observed_at": "2026-01-02T03:05:05Z",
+  "last_observed_at": "2026-01-02T03:06:05Z"
+}

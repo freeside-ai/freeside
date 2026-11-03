@@ -7059,6 +7059,7 @@ public enum Components {
             case usage_pool_exhausted = "usage_pool_exhausted"
             case verification_memory_limit = "verification_memory_limit"
             case quota_window_exhausted = "quota_window_exhausted"
+            case machine_capacity = "machine_capacity"
         }
         /// What an image_upkeep_pending hold waits on, mirrored from domain.ImageUpkeepPending (plan §5.7, Project-image upkeep): the upkeep job's rebuild, an adoption card, or a maintenance task.
         ///
@@ -7168,6 +7169,69 @@ public enum Components {
                     "reading_observed_at",
                     "resets_at",
                     "set_at"
+                ])
+            }
+        }
+        /// The typed fact beside a machine_capacity hold, mirrored from domain.MachineCapacityHold: the launch's reservation (declared memory plus the runtime's per-VM overhead), what launches already hold, the instance's budget, and how many waiting launches are granted first.
+        ///
+        ///
+        /// - Remark: Generated from `#/components/schemas/MachineCapacityHold`.
+        public struct MachineCapacityHold: Codable, Hashable, Sendable {
+            /// - Remark: Generated from `#/components/schemas/MachineCapacityHold/reservation_mib`.
+            public var reservation_mib: Swift.Int
+            /// - Remark: Generated from `#/components/schemas/MachineCapacityHold/reserved_mib`.
+            public var reserved_mib: Swift.Int
+            /// - Remark: Generated from `#/components/schemas/MachineCapacityHold/budget_mib`.
+            public var budget_mib: Swift.Int
+            /// - Remark: Generated from `#/components/schemas/MachineCapacityHold/ahead`.
+            public var ahead: Swift.Int
+            /// Creates a new `MachineCapacityHold`.
+            ///
+            /// - Parameters:
+            ///   - reservation_mib:
+            ///   - reserved_mib:
+            ///   - budget_mib:
+            ///   - ahead:
+            public init(
+                reservation_mib: Swift.Int,
+                reserved_mib: Swift.Int,
+                budget_mib: Swift.Int,
+                ahead: Swift.Int
+            ) {
+                self.reservation_mib = reservation_mib
+                self.reserved_mib = reserved_mib
+                self.budget_mib = budget_mib
+                self.ahead = ahead
+            }
+            public enum CodingKeys: String, CodingKey {
+                case reservation_mib
+                case reserved_mib
+                case budget_mib
+                case ahead
+            }
+            public init(from decoder: any Swift.Decoder) throws {
+                let container = try decoder.container(keyedBy: CodingKeys.self)
+                self.reservation_mib = try container.decode(
+                    Swift.Int.self,
+                    forKey: .reservation_mib
+                )
+                self.reserved_mib = try container.decode(
+                    Swift.Int.self,
+                    forKey: .reserved_mib
+                )
+                self.budget_mib = try container.decode(
+                    Swift.Int.self,
+                    forKey: .budget_mib
+                )
+                self.ahead = try container.decode(
+                    Swift.Int.self,
+                    forKey: .ahead
+                )
+                try decoder.ensureNoAdditionalProperties(knownKeys: [
+                    "reservation_mib",
+                    "reserved_mib",
+                    "budget_mib",
+                    "ahead"
                 ])
             }
         }
@@ -7715,6 +7779,32 @@ public enum Components {
             ///
             /// - Remark: Generated from `#/components/schemas/RunHold/quota_window`.
             public var quota_window: Components.Schemas.RunHold.quota_windowPayload?
+            /// The memory a machine_capacity hold waits on; present exactly beside that reason and null beside every other.
+            ///
+            ///
+            /// - Remark: Generated from `#/components/schemas/RunHold/machine_capacity`.
+            public struct machine_capacityPayload: Codable, Hashable, Sendable {
+                /// - Remark: Generated from `#/components/schemas/RunHold/machine_capacity/value1`.
+                public var value1: Components.Schemas.MachineCapacityHold
+                /// Creates a new `machine_capacityPayload`.
+                ///
+                /// - Parameters:
+                ///   - value1:
+                public init(value1: Components.Schemas.MachineCapacityHold) {
+                    self.value1 = value1
+                }
+                public init(from decoder: any Swift.Decoder) throws {
+                    self.value1 = try .init(from: decoder)
+                }
+                public func encode(to encoder: any Swift.Encoder) throws {
+                    try self.value1.encode(to: encoder)
+                }
+            }
+            /// The memory a machine_capacity hold waits on; present exactly beside that reason and null beside every other.
+            ///
+            ///
+            /// - Remark: Generated from `#/components/schemas/RunHold/machine_capacity`.
+            public var machine_capacity: Components.Schemas.RunHold.machine_capacityPayload?
             /// - Remark: Generated from `#/components/schemas/RunHold/first_observed_at`.
             public var first_observed_at: Foundation.Date
             /// - Remark: Generated from `#/components/schemas/RunHold/last_observed_at`.
@@ -7729,6 +7819,7 @@ public enum Components {
             ///   - image_upkeep: What an image_upkeep_pending hold waits on; present exactly beside that reason and null beside every other.
             ///   - usage_pool: The full pool of a usage_pool_exhausted hold; present exactly beside that reason and null beside every other. An identity_parallelism hold, which nothing records any more, names no pool.
             ///   - quota_window: The refused window a quota_window_exhausted hold waits on; present exactly beside that reason and null beside every other.
+            ///   - machine_capacity: The memory a machine_capacity hold waits on; present exactly beside that reason and null beside every other.
             ///   - first_observed_at:
             ///   - last_observed_at:
             public init(
@@ -7739,6 +7830,7 @@ public enum Components {
                 image_upkeep: Components.Schemas.RunHold.image_upkeepPayload? = nil,
                 usage_pool: Swift.String? = nil,
                 quota_window: Components.Schemas.RunHold.quota_windowPayload? = nil,
+                machine_capacity: Components.Schemas.RunHold.machine_capacityPayload? = nil,
                 first_observed_at: Foundation.Date,
                 last_observed_at: Foundation.Date
             ) {
@@ -7749,6 +7841,7 @@ public enum Components {
                 self.image_upkeep = image_upkeep
                 self.usage_pool = usage_pool
                 self.quota_window = quota_window
+                self.machine_capacity = machine_capacity
                 self.first_observed_at = first_observed_at
                 self.last_observed_at = last_observed_at
             }
@@ -7760,6 +7853,7 @@ public enum Components {
                 case image_upkeep
                 case usage_pool
                 case quota_window
+                case machine_capacity
                 case first_observed_at
                 case last_observed_at
             }
@@ -7793,6 +7887,10 @@ public enum Components {
                     Components.Schemas.RunHold.quota_windowPayload.self,
                     forKey: .quota_window
                 )
+                self.machine_capacity = try container.decodeIfPresent(
+                    Components.Schemas.RunHold.machine_capacityPayload.self,
+                    forKey: .machine_capacity
+                )
                 self.first_observed_at = try container.decode(
                     Foundation.Date.self,
                     forKey: .first_observed_at
@@ -7809,6 +7907,7 @@ public enum Components {
                     "image_upkeep",
                     "usage_pool",
                     "quota_window",
+                    "machine_capacity",
                     "first_observed_at",
                     "last_observed_at"
                 ])

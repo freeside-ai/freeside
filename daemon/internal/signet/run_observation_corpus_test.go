@@ -988,9 +988,10 @@ func TestRunObservationCorpusValidBaselines(t *testing.T) {
 	})
 }
 
-// TestRunHoldNamesItsPoolInTheAPI: the projection carries a pool hold's pool
-// and a quota window hold's window to the wire, and a hold stored under the
-// retired reason still reads, with no pool.
+// TestRunHoldNamesItsPoolInTheAPI: the projection carries a pool hold's pool,
+// a quota window hold's window, and a machine capacity hold's memory figures
+// to the wire, and a hold stored under the retired reason still reads, with
+// no pool.
 func TestRunHoldNamesItsPoolInTheAPI(t *testing.T) {
 	ctx := context.Background()
 	pool := domain.UsagePoolID("pool-shared")
@@ -1015,6 +1016,13 @@ func TestRunHoldNamesItsPoolInTheAPI(t *testing.T) {
 			`"quota_window":{"pool":"pool-shared","window":"five_hour","source":"provider_refusal",` +
 				`"invocation_id":"inv-refused","reading_observed_at":null,"resets_at":"2026-01-02T08:04:05Z",` +
 				`"set_at":"2026-01-02T03:04:05Z"}`,
+		},
+		{
+			"machine_capacity",
+			domain.RunHoldObservation{Reason: domain.HoldMachineCapacity, MachineCapacity: &domain.MachineCapacityHold{
+				ReservationMiB: 4352, ReservedMiB: 6400, BudgetMiB: 8192, Ahead: 1,
+			}},
+			`"machine_capacity":{"reservation_mib":4352,"reserved_mib":6400,"budget_mib":8192,"ahead":1}`,
 		},
 		{
 			"stored_identity_parallelism",

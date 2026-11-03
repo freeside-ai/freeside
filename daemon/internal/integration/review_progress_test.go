@@ -131,6 +131,11 @@ func TestProductionReviewUpgradePreservesRequestTime(t *testing.T) {
 				"ALTER TABLE run_hold_observations DROP COLUMN quota_reading_observed_at",
 				"ALTER TABLE run_hold_observations DROP COLUMN quota_resets_at",
 				"ALTER TABLE run_hold_observations DROP COLUMN quota_set_at",
+				"DROP TABLE launch_waits", "DROP TABLE launch_reservations",
+				"ALTER TABLE run_hold_observations DROP COLUMN capacity_reservation_mib",
+				"ALTER TABLE run_hold_observations DROP COLUMN capacity_reserved_mib",
+				"ALTER TABLE run_hold_observations DROP COLUMN capacity_budget_mib",
+				"ALTER TABLE run_hold_observations DROP COLUMN capacity_ahead",
 				"DELETE FROM schema_migrations WHERE version >= 67",
 			} {
 				if _, err := raw.ExecContext(p.ctx, query); err != nil {

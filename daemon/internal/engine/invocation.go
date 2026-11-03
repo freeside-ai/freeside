@@ -694,6 +694,7 @@ func invocationDispatchHold(err error) bool {
 		errors.Is(err, ErrProjectImageUnserved) ||
 		workflowAdvancementFenced(err) ||
 		errors.Is(err, domain.ErrUsagePoolExhausted) ||
+		errors.Is(err, domain.ErrMachineCapacity) ||
 		errors.Is(err, ErrQuotaWindowExhausted) ||
 		errors.Is(err, ErrAgentNotAdmissible) ||
 		errors.Is(err, domain.ErrGenerationIntegrityMarked) ||
@@ -842,14 +843,14 @@ func (e *Engine) dispatchIntent(
 		if err := tx.MarkOutboxDispatched(ctx, entry.IdempotencyKey); err != nil {
 			return err
 		}
-		// A capacity, image-upkeep, or quota window hold is current
+		// A capacity, memory, image-upkeep, or quota window hold is current
 		// scheduling state, not history. Clear only those exact causes when
 		// this invocation starts; the store's predicate preserves a newer,
 		// different hold that may have replaced them. A stored identity_parallelism row clears with
 		// the pool hold that replaced its reason.
 		for _, cause := range []domain.RunHoldReason{
 			domain.HoldUsagePoolExhausted, domain.HoldIdentityParallelism,
-			domain.HoldImageUpkeepPending, domain.HoldQuotaWindowExhausted,
+			domain.HoldImageUpkeepPending, domain.HoldQuotaWindowExhausted, domain.HoldMachineCapacity,
 		} {
 			if err := tx.ClearRunHoldCause(ctx, binding.run.ID, cause); err != nil {
 				return err

@@ -203,6 +203,7 @@ import Testing
     @Test(arguments: [
         Components.Schemas.RunHoldReason.operation_stopped, .admission_policy_refused,
         .input_unavailable, .identity_parallelism, .usage_pool_exhausted, .quota_window_exhausted,
+        .machine_capacity,
     ])
     func preImplementationHoldsKeepImplementationCurrent(hold: Components.Schemas.RunHoldReason) {
         var run = RunFixtures.defaultRuns()[0].run

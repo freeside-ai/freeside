@@ -276,6 +276,7 @@
               "image_upkeep": null,
               "usage_pool": null,
               "quota_window": null,
+              "machine_capacity": null,
               "first_observed_at": "2026-09-01T14:10:00Z",
               "last_observed_at": "2026-09-01T14:20:00Z"
             },
@@ -482,6 +483,7 @@
         "image_upkeep": null,
         "usage_pool": null,
         "quota_window": null,
+        "machine_capacity": null,
         "first_observed_at": "2026-09-01T14:10:00Z",
         "last_observed_at": "2026-09-01T14:20:00Z"
       },

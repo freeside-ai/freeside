@@ -3299,6 +3299,7 @@ components:
         - usage_pool_exhausted
         - verification_memory_limit
         - quota_window_exhausted
+        - machine_capacity
 
     ImageUpkeepPending:
       type: string
@@ -3342,6 +3343,29 @@ components:
         set_at:
           type: string
           format: date-time
+
+    MachineCapacityHold:
+      type: object
+      description: >
+        The typed fact beside a machine_capacity hold, mirrored from
+        domain.MachineCapacityHold: the launch's reservation (declared memory
+        plus the runtime's per-VM overhead), what launches already hold, the
+        instance's budget, and how many waiting launches are granted first.
+      additionalProperties: false
+      required: [reservation_mib, reserved_mib, budget_mib, ahead]
+      properties:
+        reservation_mib:
+          type: integer
+          minimum: 1
+        reserved_mib:
+          type: integer
+          minimum: 0
+        budget_mib:
+          type: integer
+          minimum: 1
+        ahead:
+          type: integer
+          minimum: 0
 
     ImageUpkeepHold:
       type: object
@@ -3546,7 +3570,7 @@ components:
       type: object
       description: The daemon's current typed hold observation for one run.
       additionalProperties: false
-      required: [run_id, invocation_id, reason, detail, image_upkeep, usage_pool, quota_window, first_observed_at, last_observed_at]
+      required: [run_id, invocation_id, reason, detail, image_upkeep, usage_pool, quota_window, machine_capacity, first_observed_at, last_observed_at]
       properties:
         run_id:
           type: string
@@ -3588,6 +3612,13 @@ components:
           description: >
             The refused window a quota_window_exhausted hold waits on; present
             exactly beside that reason and null beside every other.
+        machine_capacity:
+          nullable: true
+          allOf:
+            - $ref: "#/components/schemas/MachineCapacityHold"
+          description: >
+            The memory a machine_capacity hold waits on; present exactly
+            beside that reason and null beside every other.
         first_observed_at:
           type: string
           format: date-time

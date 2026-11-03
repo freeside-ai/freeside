@@ -212,8 +212,11 @@ package enum TaskDisplay {
             run?.outcome != .failed, run?.outcome != .lost
         {
             if isCapacityWait(position.holdReason), run == nil || run?.outcome == .pending {
-                position.guidance =
-                    "The configured agent account is busy. This work is queued; no action is needed for this wait."
+                let cause =
+                    position.holdReason == .machine_capacity
+                    ? "Other launches are using this machine's memory budget."
+                    : "The configured agent account is busy."
+                position.guidance = "\(cause) This work is queued; no action is needed for this wait."
             }
             if let dispute = reviewDisputeItem(task, run: run, attentionItems: attentionItems) {
                 position.status = AttentionDisplay.title(dispute.item)
@@ -245,11 +248,11 @@ package enum TaskDisplay {
         return position
     }
 
-    /// A wait for a free execution slot: queued work, not a held run. A stored
-    /// `identity_parallelism` hold reads the same as the pool hold that
-    /// replaced it.
+    /// A wait for a free execution slot or for machine memory: queued work,
+    /// not a held run. A stored `identity_parallelism` hold reads the same as
+    /// the pool hold that replaced it.
     private static func isCapacityWait(_ reason: Components.Schemas.RunHoldReason?) -> Bool {
-        reason == .usage_pool_exhausted || reason == .identity_parallelism
+        reason == .usage_pool_exhausted || reason == .identity_parallelism || reason == .machine_capacity
     }
 
     private static func suppressesGuidanceForCancellation(_ task: Components.Schemas.Task) -> Bool {
