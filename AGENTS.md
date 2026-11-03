@@ -43,10 +43,11 @@ Agent-setup profile: High-assurance. A decision note is mandatory for:
 
 - contract and safety-policy changes;
 - material plan, architecture, or ADR decisions;
-- destructive, credential-leak, or returned-object trust-boundary work;
+- Tier A work, as Assurance Tiers classifies it;
 - adversarial audits whose findings change policy or implementation;
 - explicit owner choices that would otherwise exist only in chat.
 
+Tier B and C work needs a note only under an ordinary decision-note trigger.
 Routine implementation and coordination need no note. GitHub issues and git
 are the only sources of active work state; a note records why, never status.
 
@@ -350,12 +351,17 @@ unit, never a fix in passing (Monorepo Scope Discipline).
   the contract shapes goldens pin (a package-private persistence format is
   not one). Fixtures double as validation-positive cases. Worked example:
   `daemon/README.md`; shared helper: `daemon/internal/golden`.
-- **Trust boundaries at reconstruction/persistence:** a boundary that decodes
-  a row or accepts an exported struct re-runs the trusted policy gate against
-  current state (for example the approved-recipe set). A decoded or
-  caller-supplied trust bit (`publish_eligible`, recipe approval, a
-  provenance head) is never trusted, and the re-gate fails closed. Detail:
-  `daemon/internal/store/entities.go`, `daemon/internal/domain/artifact.go`.
+- **Trust boundaries at reconstruction/persistence:** this covers stored
+  authority bits only. A boundary that decodes a row or accepts an exported
+  struct carrying a bit that grants authority (`publish_eligible`, recipe
+  approval, a provenance head) re-runs the trusted policy gate against
+  current state (for example the approved-recipe set). The decoded or
+  caller-supplied bit is never trusted, and the re-gate fails closed. The
+  re-gate guards against a bit gone stale under current policy, not against
+  tampering with the daemon's own database. Other rows decode with plain
+  validation (Tier B) or skip and log a bad row (Tier C); see Assurance
+  Tiers. Detail: `daemon/internal/store/entities.go`,
+  `daemon/internal/domain/artifact.go`.
 - **Timer-dependent tests:** a test whose behavior depends on real stdlib
   time in the code under test (`time.Timer`, `time.Ticker`, `time.After`, a
   `context` deadline) runs inside a `testing/synctest` bubble, not a
@@ -376,6 +382,164 @@ unit, never a fix in passing (Monorepo Scope Discipline).
   repository. `scripts/check.sh daemon test` fails when a helper that skips
   it writes through an inherited `GIT_DIR`. Detail:
   `daemon/internal/gitenv/gitenv.go`.
+
+## Assurance Tiers
+
+The full assurance process applies only where authority is granted or
+untrusted input enters. Everything upstream of those gates gets ordinary
+engineering. Decision record: `devlog/2026-11-03-1442-assurance-tiers.md`.
+
+- **"Returned-object trust boundary" means Tier A work only.** That holds
+  wherever this project uses the term: the refute-first trigger (Default
+  Agent Finish Line), pre-push risk (Pull Requests and
+  `docs/agent-workflow.md` §pre-push-review), and the mandatory-note list
+  (Agent Setup). Tier B and C work is not a returned-object trust boundary,
+  even when it decodes a row. The rule lives here because the managed
+  blocks and `docs/agent-workflow.md` are refreshed from the agent-setup
+  template.
+
+### Threat Model
+
+- **Trusted:** the daemon's own database, artifact store, and binary.
+  Anything that can write them can replace the daemon.
+- **Untrusted:** agent output and workspaces, GitHub and provider API
+  responses, client requests, CI results, research fetches, and
+  repository-supplied config.
+
+### Tiers
+
+- **Tier A, authority and untrusted input.** Credential storage and
+  injection, GitHub publish, approvals and decision binding, import and
+  handoff, verification verdicts and recipe approval, ward egress and
+  runner capabilities, destructive cleanup, and migrations that rewrite
+  data. Keeps the full bar: refute-first, a fresh-context review, a
+  mandatory note, a re-check of stored authority against current policy on
+  read (a staleness guard, kept wherever a stored bit grants authority),
+  and tamper tests where the input is untrusted.
+- **Tier B, ordinary state.** Task lines, routing, pools and holds, the
+  quota park, schedules, timelines, sync projections, and operator
+  commands. Validate on write and test the behavior. Rows decode with
+  plain validation, and a bad row is a bug that fails loudly. No
+  column-versus-body cross-checks, no tamper tests, and a note only when
+  an ordinary decision-note trigger applies.
+- **Tier C, advisory.** Usage readings shown to the operator,
+  comprehension events, and metrics. Best effort: skip and log a bad row
+  rather than fail a whole listing.
+
+### Classification
+
+- **By path.** A change that touches any Tier A path below is Tier A, even
+  when most of it is Tier B. A new Tier A gate's doc comment names what it
+  re-checks, so a reviewer can see a path that skips it.
+- **An unlisted file joins the list.** Work in a file the list misses is
+  still Tier A when it does what a Tier A category names (grants
+  authority, stores or injects a credential, deletes real state, rewrites
+  data, or lets untrusted input reach any of these). That PR adds the file
+  to the list.
+- **Untrusted input that grants nothing.** Untrusted input is Tier A where
+  it can grant authority, reach a credential, or change what gets
+  published, imported, or verified. Where it only feeds scheduling or
+  display, validate it where it enters, under Tier B or C.
+- **Client authority is Tier A.** The paired-device bearer check, pairing
+  codes, and client enrollment grant a client authority over the daemon,
+  so they count as approvals and decision binding. Operator commands that
+  arrive through that check stay Tier B.
+
+### Tier A Paths
+
+All under `daemon/`:
+
+- **Runner containment, egress, and credential volumes:**
+  `internal/ward/`, `internal/wardstore/`, `internal/buildproxy/`.
+- **Credential injection, admission, and runner capabilities:**
+  `internal/engine/agent_admission.go` (choosing an agent chooses which
+  credential runs), `internal/engine/admission.go` (the runner capability
+  floor), `internal/domain/capability.go`,
+  `internal/domain/wardless_admission.go`, `cmd/freesided/claude_driver.go`
+  (`storeAdmissionAuthority`, which wires admission and import authority),
+  `internal/exec/claude/spec.go` (the credential mount),
+  `internal/exec/claude/driver.go` (`AuthStoreVolumes`),
+  `internal/exec/capability.go`, and the `CredentialMode` and
+  `EgressProfile` fields in `internal/exec/driver.go`.
+- **GitHub publish, app keys, tokens, and janitor deletes:**
+  `internal/publish/`.
+- **Publication decisions in the engine:**
+  `internal/engine/production_publication.go` (replays the import and
+  re-gates trust before publishing),
+  `internal/engine/production_reentry*.go` and
+  `internal/engine/production_unpublished_reentry.go` (re-earn readiness
+  against a new base), `internal/engine/publication_closure*.go` (the
+  source-issue closure gate), `internal/engine/publication_render_v2.go`
+  (screens agent prose before it reaches GitHub), and
+  `internal/engine/verification_report.go` (reads the verifier's bytes),
+  and `internal/store/publication_authoring.go` (the evidence gate on
+  authored prose).
+- **Import and handoff:** `internal/importer/`,
+  `internal/store/handoff_journal.go`.
+- **Verification verdicts, recipe approval, and trusted export:**
+  `internal/verify/`, `internal/export/`, `cmd/freeside-export/`,
+  `internal/store/entities.go`,
+  `internal/domain/artifact.go`.
+- **Approvals, decision binding, and trust records:**
+  `internal/store/decision_surface.go`, `internal/store/trust.go`,
+  `internal/store/shadow_review_configuration.go`,
+  `internal/domain/decision_surface.go`,
+  `internal/domain/closure_approval.go`,
+  `internal/domain/agent_decision.go`, `internal/domain/authorization.go`,
+  `internal/domain/trust_profile.go`,
+  `internal/domain/shadow_review_configuration.go`,
+  `cmd/freesided/approve_shadow_review.go`,
+  `internal/store/effect_proposal.go`,
+  `internal/store/image_policy_adoption.go`,
+  `internal/signet/image_policy_adoption.go`,
+  `internal/engine/image_upkeep_adoption.go`, and
+  `internal/projectimage/rebuild_gate.go` (repository manifests gate image
+  rebuilds).
+- **Client authority:** `internal/signet/device.go` (the paired-device
+  bearer check), `internal/signet/http.go` (where requests meet it),
+  `internal/signet/pairing.go`, `internal/signet/secret.go`,
+  `internal/store/pairing.go`, `internal/store/client_enrollment.go`,
+  `internal/domain/device.go`, `internal/domain/pairing_code.go`,
+  `internal/domain/client_enrollment.go`, `cmd/freesided/pairing_*.go`.
+- **Provider credentials and mint records:**
+  `internal/store/auth_identity.go`,
+  `internal/store/codex_reenrollment*.go`, `internal/store/mint_audit.go`,
+  `internal/store/installation_mint_audit.go`,
+  `internal/store/installation_mint_holds.go`,
+  `internal/domain/auth_identity.go`,
+  `internal/domain/codex_reenrollment_recovery.go`,
+  `internal/domain/generation_integrity.go`,
+  `internal/signet/codex_reenrollment_recovery.go`,
+  `internal/operations/credential_integrity.go`, and in `cmd/freesided/`
+  the files `auth*.go`, `credential_*.go`, `judgment_credential.go`,
+  `enroll_codex.go`, and `renew_codex.go`.
+- **Backups that carry credentials and restores that replace data:**
+  `internal/store/backup.go`, `internal/store/local_backup*.go`,
+  `internal/store/encrypted_checkpoint.go`, `internal/store/restore.go`.
+- **Migrations that rewrite data:** `internal/store/migrate.go`,
+  `internal/store/migration_*.go`, and any `migrations/*.sql` file that
+  updates, moves, or drops existing rows or rebuilds a table. A migration
+  that only adds a table, column, or index is Tier B.
+
+### Worked Examples
+
+- **Task lines and routing policy: Tier B.**
+  `internal/engine/task_line_change.go`,
+  `internal/engine/routing_policy.go`, `internal/store/task_line.go`, and
+  `internal/store/routing_policy.go` decode their rows with plain
+  validation. The Tier A check sits where the routed agent gets its
+  credential: admission in `internal/engine/agent_admission.go` and the
+  mount in `internal/exec/claude/spec.go`. The forged-row check that
+  admission runs on a task line today stays under the ratchet.
+- **Usage collector: credential handling Tier A, readings Tier C.**
+  `internal/ward/usage_collector.go` calls the provider under an
+  enrollment's credential, so it is Tier A.
+  The readings it produces, in `internal/usagecollect/`,
+  `internal/store/usage_observation.go`, and
+  `internal/store/pool_usage_observation.go`, are Tier C.
+- **Quota park: Tier B.** `internal/engine/quota_park.go` acts on
+  provider readings, but a wrong reading only delays or retries a task; it
+  grants nothing.
 
 ## Monorepo Scope Discipline
 
