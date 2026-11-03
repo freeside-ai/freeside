@@ -233,6 +233,14 @@ struct DecisionCardComposition: Equatable {
         /// the same width, so selecting something changes the content, not
         /// its shape, and a wider pane leaves the rest of itself empty.
         static let cardWidth: CGFloat = 640
+        /// The widest a line of running text draws, at any column width: a
+        /// 640pt card's line, inside its 22pt padding. The ask, the
+        /// statement or reason, claims prose, finding messages, and the
+        /// conversation thread keep it, leading in the column; fact rows,
+        /// specification and diff blocks, attachment rows, checklists, the
+        /// stage rail, comparisons, control rows, and folds take the full
+        /// column.
+        static let proseMeasure: CGFloat = 596
 
         /// The pane's margin around a card (R18): 16 all round at phone
         /// width; in the detail column 24 from each side, 20 from the top,

@@ -187,6 +187,9 @@ struct ConversationView: View {
                 replyLink(reply)
             }
         }
+        // The thread keeps the prose measure, so a message's share of it
+        // stays a line of reading length however wide the column grows.
+        .proseMeasure()
         .frame(maxWidth: .infinity, alignment: .leading)
     }
 

@@ -518,11 +518,13 @@ struct DecisionDetailView: View {
                         .font(FreesideFont.ask)
                         .foregroundStyle(Color.ink)
                         .fixedSize(horizontal: false, vertical: true)
+                        .proseMeasure()
                 } else if DecisionCardComposition.rendersAsk(for: item) {
                     Text(AttentionDisplay.ask(item))
                         .font(FreesideFont.ask)
                         .foregroundStyle(Color.ink)
                         .fixedSize(horizontal: false, vertical: true)
+                        .proseMeasure()
                 }
             }
             // The ask and the reason are one question and its answer, so
@@ -540,6 +542,7 @@ struct DecisionDetailView: View {
                     .font(FreesideFont.cardBody)
                     .foregroundStyle(Color.inkDim)
                     .fixedSize(horizontal: false, vertical: true)
+                    .proseMeasure()
                     .frame(maxWidth: .infinity, alignment: .leading)
             }
 
@@ -908,6 +911,7 @@ struct DecisionDetailView: View {
                 .font(FreesideFont.statement)
                 .foregroundStyle(Color.ink)
                 .fixedSize(horizontal: false, vertical: true)
+                .proseMeasure()
                 .accessibilityLabel(Text(binding.plain))
             }
             // effectProposalCardRows is empty for an effect kind this card
@@ -1082,6 +1086,7 @@ struct DecisionDetailView: View {
                                     DecisionSummaryText(blocks: concerns)
                                 }
                             }
+                            .proseMeasure()
                         }
                         if presentation.concernsUnknown {
                             Text(
@@ -1090,6 +1095,7 @@ struct DecisionDetailView: View {
                             .font(FreesideFont.cardBody)
                             .foregroundStyle(Color.inkDim)
                             .fixedSize(horizontal: false, vertical: true)
+                            .proseMeasure()
                         }
                         SentenceDisclosure(
                             label: isFinalReview ? "Full Report" : "Source and Original Report",
@@ -1184,6 +1190,7 @@ struct DecisionDetailView: View {
                     .font(FreesideFont.statement)
                     .foregroundStyle(Color.ink)
                     .fixedSize(horizontal: false, vertical: true)
+                    .proseMeasure()
                     .frame(maxWidth: .infinity, alignment: .leading)
             }
         }
@@ -1246,6 +1253,7 @@ struct DecisionDetailView: View {
                     .frame(maxWidth: .infinity, alignment: .leading)
             }
         }
+        .proseMeasure()
         if reason.isAgentWritten {
             QuoteBlock(
                 producer: reason.label, carriesInfo: register.carriesInfo,
@@ -1428,6 +1436,7 @@ struct DecisionDetailView: View {
                                 .foregroundStyle(Color.inkDim)
                                 .fixedSize(horizontal: false, vertical: true)
                         }
+                        .proseMeasure()
                     }
                     if !decision.options.isEmpty {
                         VStack(alignment: .leading, spacing: CardScale.moduleGap) {
@@ -1845,6 +1854,7 @@ struct DecisionDetailView: View {
     ) -> some View {
         QuoteBlock {
             claimText(text.content, mediaType: text.media_type)
+                .proseMeasure()
         }
         SentenceDisclosure(
             label: "Source and Supporting Details",
@@ -2027,11 +2037,13 @@ struct DecisionDetailView: View {
                     // message, so the body under it is not read twice.
                     findingHead(card)
                         .fixedSize(horizontal: false, vertical: true)
+                        .proseMeasure()
                         .accessibilityElement(children: .ignore)
                         .accessibilityLabel(Text(card.messageAccessibilityLabel))
                         .accessibilityAddTraits(.isHeader)
                     if !card.body.isEmpty {
                         DecisionSummaryText(blocks: card.body, size: .body)
+                            .proseMeasure()
                             .accessibilityHidden(true)
                     }
                     VStack(alignment: .leading, spacing: 4) {
@@ -2050,10 +2062,12 @@ struct DecisionDetailView: View {
                                     .font(FreesideFont.cardBody)
                                     .foregroundStyle(Color.ink)
                                     .fixedSize(horizontal: false, vertical: true)
+                                    .proseMeasure()
                                 Text(card.qualities)
                                     .font(FreesideFont.cardBody)
                                     .foregroundStyle(Color.inkDim)
                                     .fixedSize(horizontal: false, vertical: true)
+                                    .proseMeasure()
                             }
                         }
                         if let selected = alternativeSelections[card.id] {
@@ -2223,6 +2237,7 @@ struct DecisionDetailView: View {
                             .font(FreesideFont.cardBody)
                             .foregroundStyle(Color.ink)
                             .fixedSize(horizontal: false, vertical: true)
+                            .proseMeasure()
                     }
                 }
             }
@@ -2314,6 +2329,7 @@ struct DecisionDetailView: View {
             // not read twice.
             disputedFindingHead(finding, title: presentation.title)
                 .fixedSize(horizontal: false, vertical: true)
+                .proseMeasure()
                 .accessibilityElement(children: .ignore)
                 .accessibilityLabel(
                     Text("\(FindingPresentation.severityLabel(finding.severity.rawValue)), \(finding.message)")
@@ -2321,6 +2337,7 @@ struct DecisionDetailView: View {
                 .accessibilityAddTraits(.isHeader)
             if !presentation.body.isEmpty {
                 DecisionSummaryText(blocks: presentation.body, size: .body)
+                    .proseMeasure()
                     .accessibilityHidden(true)
             }
             if let source = AttentionDisplay.disputedFindingSource(finding) {
@@ -2461,6 +2478,7 @@ struct DecisionDetailView: View {
                     Text(adjudication.rationale)
                         .font(FreesideFont.cardBody)
                         .fixedSize(horizontal: false, vertical: true)
+                        .proseMeasure()
                 }
                 ForEach(
                     [
@@ -2472,12 +2490,14 @@ struct DecisionDetailView: View {
                         .font(FreesideFont.cardBody)
                         .foregroundStyle(Color.inkDim)
                         .fixedSize(horizontal: false, vertical: true)
+                        .proseMeasure()
                 }
             } else {
                 Text(AttentionDisplay.disputedFindingNoAdjudication)
                     .font(FreesideFont.cardBody)
                     .foregroundStyle(Color.inkDim)
                     .fixedSize(horizontal: false, vertical: true)
+                    .proseMeasure()
             }
             if let external = finding.external {
                 Text("\(external.reviewer_login) · \(external.thread_id)")
@@ -2772,10 +2792,12 @@ struct DecisionDetailView: View {
                 .font(FreesideFont.cardBody)
                 .foregroundStyle(Color.ink)
                 .fixedSize(horizontal: false, vertical: true)
+                .proseMeasure()
             Text(recommendation.reason)
                 .font(FreesideFont.cardBody)
                 .foregroundStyle(Color.inkDim)
                 .fixedSize(horizontal: false, vertical: true)
+                .proseMeasure()
             actionButton(
                 recommendation.action,
                 item: item,
@@ -4431,6 +4453,19 @@ extension View {
             .frame(maxWidth: CardScale.cardWidth, alignment: .topLeading)
             .padding(margin)
             .frame(maxWidth: .infinity, alignment: .topLeading)
+    }
+
+    /// Running text at the column's prose measure, leading in the space it
+    /// is offered: a wide column widens the card's modules, never a line
+    /// of prose. Only the Mac's column widens past a 640pt card; iOS keeps
+    /// its lines as they were, so the measure draws nothing there.
+    @ViewBuilder
+    func proseMeasure() -> some View {
+        #if os(macOS)
+            frame(maxWidth: CardScale.proseMeasure, alignment: .leading)
+        #else
+            self
+        #endif
     }
 
     /// The card with no seat of its own, for the task page to place.

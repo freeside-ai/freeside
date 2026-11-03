@@ -153,6 +153,7 @@ struct DecisionStopCauseModuleView: View {
                 .font(FreesideFont.statement)
                 .foregroundStyle(Color.ink)
                 .fixedSize(horizontal: false, vertical: true)
+                .proseMeasure()
             if let audit = presentation.audit {
                 VStack(alignment: .leading, spacing: DecisionCardComposition.Scale.moduleGap) {
                     KeywordLabel(text: "Drift Audit")
@@ -171,6 +172,7 @@ struct DecisionStopCauseModuleView: View {
                             .font(FreesideFont.message)
                             .foregroundStyle(Color.ink)
                             .fixedSize(horizontal: false, vertical: true)
+                            .proseMeasure()
                     }
                     ForEach(audit.visibleReversals(showingAll: false)) { reversal in
                         fix(reversal)
