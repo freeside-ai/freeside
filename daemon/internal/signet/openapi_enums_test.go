@@ -87,6 +87,11 @@ func TestOpenAPIEnumsMatchDomain(t *testing.T) {
 		"AgentSelectionSource":       enumStrings(domain.AllAgentSelectionSources),
 		"CredentialMode":             enumStrings(domain.AllCredentialModes),
 		"OperatingMode":              enumStrings(domain.AllOperatingModes),
+		"CollectionAttemptStatus":    enumStrings(domain.AllCollectionAttemptStatuses),
+		"AvailabilityAnswer":         enumStrings(domain.AllAvailabilityAnswers),
+		"WindowStatus":               enumStrings(domain.AllWindowStatuses),
+		"ExhaustedMarkSource":        enumStrings(domain.AllExhaustedMarkSources),
+		"RoutingPolicySource":        enumStrings(domain.AllRoutingPolicySources),
 	}
 	for name, expected := range want {
 		got := slices.Clone(document.Components.Schemas[name].Enum)

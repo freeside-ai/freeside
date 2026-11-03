@@ -158,6 +158,19 @@ public actor MockServer {
     private var runsByID: [String: Components.Schemas.RunSnapshot] = [:]
     private var tasksByID: [String: Components.Schemas.TaskSnapshot] = [:]
     private var schedulesByID: [String: Components.Schemas.ScheduleSnapshot] = [:]
+    /// Usage records by pool id. A pool with no record yet keeps
+    /// entity_version 0 and is stamped with the serving revision, as the
+    /// daemon projects it.
+    private var usagePoolsByID: [String: Components.Schemas.UsagePoolSnapshot] = [:]
+    /// The current routing policy revision; the daemon stamps it with the
+    /// serving revision because the policy row stores none of its own.
+    private var routingPolicy: Components.Schemas.RoutingPolicy?
+    /// Each task role's newest line version, cleared ones included, keyed by
+    /// taskLineKey: the wire TaskLine names an agent, so a clear lives only
+    /// here and as the role's absence from the task's task_lines.
+    private var taskLineHeads: [String: (version: Int, id: String, line: Components.Schemas.TaskLine?)] = [:]
+    /// Task roles with a running attempt (setTaskLineRoleRunning).
+    private var runningTaskLineRoles: Set<String> = []
     private var timelinesByRunID: [String: Components.Schemas.RunTimeline] = [:]
     // Comprehension telemetry (plan §8): the device capability contracts, the
     // derived action surfaces keyed by their digest, and the recorded events
@@ -199,6 +212,8 @@ public actor MockServer {
         schedules: [Components.Schemas.ScheduleSnapshot] = RunFixtures.defaultSchedules(),
         timelines: [Components.Schemas.RunTimeline] = RunFixtures.defaultTimelines(),
         taskTimelines: [Components.Schemas.TaskTimeline] = [],
+        usagePools: [Components.Schemas.UsagePoolSnapshot] = UsageFixtures.defaultUsagePools(),
+        routingPolicy: Components.Schemas.RoutingPolicy? = UsageFixtures.defaultRoutingPolicy(),
         approvedRecipes: Set<String> = [AttentionFixtures.approvedRecipeDigest],
         authMode: AuthMode = .permissive,
         pairingCodes: [String: PairingCodeState] = [:],
@@ -233,7 +248,15 @@ public actor MockServer {
         }
         for snapshot in tasks {
             tasksByID[snapshot.task.id] = snapshot
+            // A seeded line is its role's newest version.
+            for line in snapshot.task.task_lines {
+                taskLineHeads[Self.taskLineKey(line.task_id, line.role)] = (line.version, line.id, line)
+            }
         }
+        for snapshot in usagePools {
+            usagePoolsByID[snapshot.pool.id] = snapshot
+        }
+        self.routingPolicy = routingPolicy
         // The server revision starts at or beyond every seeded snapshot's
         // as_of_revision, so the heartbeat and the next CommandResult can
         // never run backwards relative to what this mock lists.
@@ -244,7 +267,8 @@ public actor MockServer {
             runs.map(\.as_of_revision).max() ?? 1,
             tasks.map(\.as_of_revision).max() ?? 1,
             schedules.map(\.as_of_revision).max() ?? 1,
-            timelines.map(\.as_of_revision).max() ?? 1)
+            timelines.map(\.as_of_revision).max() ?? 1,
+            usagePools.map(\.as_of_revision).max() ?? 1)
         // Seeded delivery rows exist only because the daemon's pipeline
         // would have recorded them, and that pipeline re-derives the
         // item's timing and raises its entity_version in the same write
@@ -428,6 +452,17 @@ public actor MockServer {
         runsByID[runID] = snapshot
     }
 
+    /// Advances one pool's usage record under the next revision, modeling a
+    /// daemon collection write: the write stamps the revision and raises the
+    /// record's version, so a pool with no record gains its first.
+    public func advanceUsagePool(id: String) {
+        guard var snapshot = usagePoolsByID[id] else { return }
+        revision += 1
+        snapshot.as_of_revision = revision
+        snapshot.entity_version += 1
+        usagePoolsByID[id] = snapshot
+    }
+
     public func advanceTime(to instant: Date) {
         currentTime = instant
         convergeProposalSnoozes()
@@ -455,6 +490,9 @@ public actor MockServer {
             }
             for id in schedulesByID.keys {
                 schedulesByID[id]?.as_of_revision = revision
+            }
+            for id in usagePoolsByID.keys {
+                usagePoolsByID[id]?.as_of_revision = revision
             }
             for id in timelinesByRunID.keys {
                 timelinesByRunID[id]?.as_of_revision = revision
@@ -694,8 +732,10 @@ public actor MockServer {
                 original.deviceID == deviceID
             else { return nil }
             return resultsByCommandID[command.command_id]
-        case .stop_task:
-            return nil  // Active-device authority is required even for Stop replay.
+        case .stop_task, .refresh_usage, .reassign_collector, .change_task_line, .set_routing_policy:
+            // Active-device authority is required even for Stop and operator
+            // command replay; the daemon gates the device before its replay read.
+            return nil
         case .submit_task:
             // A submit_task record carries no normalized body; its recorded
             // result replays for the same device.
@@ -713,6 +753,8 @@ public actor MockServer {
         case ok(Components.Schemas.CommandResult)
         case stale(Components.Schemas.StaleVersionRejection)
         case staleTask(Components.Schemas.StaleTaskRejection)
+        case taskLineRejected(Components.Schemas.TaskLineChangeRejection)
+        case routingPolicyRejected(Components.Schemas.RoutingPolicyRejection)
     }
 
     struct UnknownItemError: Error {
@@ -821,9 +863,29 @@ public actor MockServer {
             tasks: try listTasks(),
             conversations: conversationsByID.keys.sorted().compactMap { conversationsByID[$0] },
             schedules: listSchedules(),
-            unattended_operation: unattendedOperationSnapshot()
+            unattended_operation: unattendedOperationSnapshot(),
+            usage_pools: listUsagePools(),
+            routing_policy: routingPolicySnapshot().map { .init(value1: $0) }
         )
         return bootstrapTransform?(snapshot) ?? snapshot
+    }
+
+    /// Every pool's usage record in pool id order, a pool with no record
+    /// stamped with the serving revision (signet usagePoolSnapshots).
+    func listUsagePools() -> [Components.Schemas.UsagePoolSnapshot] {
+        usagePoolsByID.keys.sorted().compactMap { id in
+            guard var snapshot = usagePoolsByID[id] else { return nil }
+            if snapshot.entity_version == 0 { snapshot.as_of_revision = revision }
+            return snapshot
+        }
+    }
+
+    /// The current routing policy at the serving revision, its version the
+    /// policy revision (signet currentRoutingPolicySnapshot).
+    func routingPolicySnapshot() -> Components.Schemas.RoutingPolicySnapshot? {
+        routingPolicy.map {
+            .init(as_of_revision: revision, entity_version: Int64($0.revision), policy: $0)
+        }
     }
 
     /// The finding code on the notice an operator stop raises, as the
@@ -1443,6 +1505,14 @@ public actor MockServer {
             return try submitTaskCommand(command, payload)
         case .decision(let payload):
             return try submitDecisionCommand(command, payload)
+        case .refresh_usage(let payload):
+            return try submitRefreshUsageCommand(command, payload)
+        case .reassign_collector(let payload):
+            return try submitReassignCollectorCommand(command, payload)
+        case .change_task_line(let payload):
+            return try submitChangeTaskLineCommand(command, payload)
+        case .set_routing_policy(let payload):
+            return try submitSetRoutingPolicyCommand(command, payload)
         }
     }
 
@@ -2039,6 +2109,177 @@ public actor MockServer {
         let result = Components.Schemas.CommandResult(record: .stop_task(record), revision: revision)
         resultsByCommandID[command.command_id] = result
         return .ok(commandResultTransform?(result) ?? result)
+    }
+
+    // MARK: - Operator commands
+
+    /// An operator command the daemon refuses as invalid client input (400):
+    /// an enrollment not on the pool, an agent outside the daemon's tree, or
+    /// a malformed order.
+    public struct OperatorCommandRejectedError: Error {
+        public let commandID: String
+        public let reason: String
+    }
+
+    /// Marks whether an attempt of a task's role is running; while it runs,
+    /// change_task_line for that role is refused (domain.ErrTaskLineRoleRunning).
+    public func setTaskLineRoleRunning(taskID: String, role: Components.Schemas.TaskLineRole, running: Bool) {
+        if running {
+            runningTaskLineRoles.insert(Self.taskLineKey(taskID, role))
+        } else {
+            runningTaskLineRoles.remove(Self.taskLineKey(taskID, role))
+        }
+    }
+
+    private static func taskLineKey(_ taskID: String, _ role: Components.Schemas.TaskLineRole) -> String {
+        "\(taskID)/\(role.rawValue)"
+    }
+
+    /// Replays a recorded operator command, as the daemon's receipt replay
+    /// does: the recorded result for the same request, an immutable conflict
+    /// for any other body or kind under the command_id, nil when none is
+    /// recorded.
+    private func replayOperatorCommand(_ command: Components.Schemas.ClientCommand) throws -> SubmitOutcome? {
+        guard let recorded = resultsByCommandID[command.command_id] else { return nil }
+        guard CommandResultTrust.accepts(recorded, for: command) else {
+            throw ImmutableConflictError(commandID: command.command_id)
+        }
+        return .ok(commandResultTransform?(recorded) ?? recorded)
+    }
+
+    private func recordOperatorResult(
+        _ command: Components.Schemas.ClientCommand, _ record: Components.Schemas.CommandResult.recordPayload
+    ) -> SubmitOutcome {
+        let result = Components.Schemas.CommandResult(record: record, revision: revision)
+        resultsByCommandID[command.command_id] = result
+        return .ok(commandResultTransform?(result) ?? result)
+    }
+
+    /// Records a refresh request. Readings arrive through the pool's usage
+    /// record (advanceUsagePool), never through the receipt.
+    private func submitRefreshUsageCommand(
+        _ command: Components.Schemas.ClientCommand, _ payload: Components.Schemas.RefreshUsagePayload
+    ) throws -> SubmitOutcome {
+        if let replay = try replayOperatorCommand(command) { return replay }
+        guard usagePoolsByID[payload.pool] != nil else { throw UnknownItemError(itemID: payload.pool) }
+        revision += 1
+        return recordOperatorResult(
+            command,
+            .refresh_usage(
+                .init(
+                    kind: .refresh_usage, command_id: command.command_id, device_id: command.device_id,
+                    pool: payload.pool, requested_at: currentTime)))
+    }
+
+    /// Records a collector reassignment to an enrollment on the pool. The
+    /// collection lifecycle (#1720) owns its effect on the pool record.
+    private func submitReassignCollectorCommand(
+        _ command: Components.Schemas.ClientCommand, _ payload: Components.Schemas.ReassignCollectorPayload
+    ) throws -> SubmitOutcome {
+        if let replay = try replayOperatorCommand(command) { return replay }
+        guard let pool = usagePoolsByID[payload.pool] else { throw UnknownItemError(itemID: payload.pool) }
+        guard pool.pool.enrollments.contains(where: { $0.enrollment_id == payload.enrollment_id }) else {
+            throw OperatorCommandRejectedError(
+                commandID: command.command_id, reason: "enrollment is not on pool \(payload.pool)")
+        }
+        revision += 1
+        return recordOperatorResult(
+            command,
+            .reassign_collector(
+                .init(
+                    kind: .reassign_collector, command_id: command.command_id, device_id: command.device_id,
+                    pool: payload.pool, collector: payload.enrollment_id, recorded_at: currentTime)))
+    }
+
+    /// Changes or clears one role's line on a task (engine.ChangeTaskLineTx):
+    /// a role that already has the line records nothing new, and a role whose
+    /// attempt runs refuses with the current task.
+    private func submitChangeTaskLineCommand(
+        _ command: Components.Schemas.ClientCommand, _ payload: Components.Schemas.ChangeTaskLinePayload
+    ) throws -> SubmitOutcome {
+        if let replay = try replayOperatorCommand(command) { return replay }
+        guard var snapshot = try task(id: payload.task_id) else { throw UnknownItemError(itemID: payload.task_id) }
+        let key = Self.taskLineKey(payload.task_id, payload.role)
+        let head = taskLineHeads[key]
+        let same = payload.agent == head?.line?.agent
+        // The daemon answers a request for the line the role already has
+        // before it asks whether the role runs.
+        guard same || !runningTaskLineRoles.contains(key) else {
+            return .taskLineRejected(
+                .init(
+                    message: "an attempt of the role is running", reason: .role_running,
+                    replacement_task: snapshot, sync_epoch: syncEpoch))
+        }
+        revision += 1
+        if !same {
+            let version = (head?.version ?? 0) + 1
+            let setBy = MockContractValidation.sha256Digest(of: "client_line_change/\(command.command_id)")
+            let id = MockContractValidation.sha256Digest(
+                of: [
+                    payload.task_id, payload.role.rawValue, payload.agent ?? "", String(version), head?.id ?? "", setBy,
+                ]
+                .joined(separator: "/"))
+            let line = payload.agent.map { agent in
+                Components.Schemas.TaskLine(
+                    id: id, task_id: payload.task_id, role: payload.role, agent: agent, version: version,
+                    predecessor_id: head.map { .init(value1: $0.id) }, source: .client_line_change,
+                    set_by: setBy, set_at: currentTime, provenance: nil)
+            }
+            taskLineHeads[key] = (version, id, line)
+            snapshot.task.task_lines = Components.Schemas.TaskLineRole.allCases.compactMap {
+                taskLineHeads[Self.taskLineKey(payload.task_id, $0)]?.line
+            }
+            snapshot.entity_version = revision
+            snapshot.as_of_revision = revision
+            tasksByID[payload.task_id] = snapshot
+        }
+        return recordOperatorResult(
+            command,
+            .change_task_line(
+                .init(
+                    kind: .change_task_line, command_id: command.command_id, device_id: command.device_id,
+                    task_id: payload.task_id, role: payload.role, agent: payload.agent, recorded: !same,
+                    line: taskLineHeads[key]?.line.map { .init(value1: $0) })))
+    }
+
+    /// Replaces the routing policy (engine.SetRoutingPolicyTx) when the
+    /// client's expected_revision names the current one; the orders the
+    /// current revision already holds record no new revision.
+    private func submitSetRoutingPolicyCommand(
+        _ command: Components.Schemas.ClientCommand, _ payload: Components.Schemas.SetRoutingPolicyPayload
+    ) throws -> SubmitOutcome {
+        func rejected(_ reason: String) -> OperatorCommandRejectedError {
+            OperatorCommandRejectedError(commandID: command.command_id, reason: reason)
+        }
+        let roles: [Components.Schemas.RoutingPolicyRole]
+        do {
+            roles = try MockContractValidation.canonicalRoutingPolicyRoles(payload.roles)
+        } catch let shape as MockContractValidation.RoutingPolicyShapeError {
+            throw rejected(shape.reason)
+        }
+        if let replay = try replayOperatorCommand(command) { return replay }
+        guard payload.expected_revision == routingPolicy?.revision else {
+            return .routingPolicyRejected(
+                .init(message: "the routing policy changed", current_policy: routingPolicy.map { .init(value1: $0) }))
+        }
+        guard roles.allSatisfy({ $0.agents.allSatisfy(UsageFixtures.lineupAgents.contains) }) else {
+            throw rejected("routing policy names an agent outside the agent tree")
+        }
+        let recorded = routingPolicy?.roles != roles
+        revision += 1
+        if recorded {
+            routingPolicy = .init(
+                revision: (routingPolicy?.revision ?? 0) + 1, roles: roles, source: .client_routing_set,
+                set_by: "device:\(command.device_id)", set_at: currentTime,
+                lineup_revision: UsageFixtures.lineupRevision)
+        }
+        guard let policy = routingPolicy else { throw rejected("no routing policy") }
+        return recordOperatorResult(
+            command,
+            .set_routing_policy(
+                .init(
+                    kind: .set_routing_policy, command_id: command.command_id, device_id: command.device_id,
+                    expected_revision: payload.expected_revision, recorded: recorded, policy: policy)))
     }
 
     /// Creates new work for each distinct command ID and replays the original

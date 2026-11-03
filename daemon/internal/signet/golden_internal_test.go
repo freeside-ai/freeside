@@ -208,6 +208,8 @@ func TestSignetWireGoldens(t *testing.T) {
 				Schedules: []ScheduleSnapshot{
 					scheduleSnapshot(schedule, store.Snapshot{AsOfRevision: 22, EntityVersion: 1}),
 				},
+				UsagePools:    usagePoolsFixture(t, createdAt),
+				RoutingPolicy: routingPolicyFixture(t, createdAt),
 				UnattendedOperation: UnattendedOperationSnapshot{
 					Admission: domain.UnattendedAdmissionStopped,
 					Stops: []UnattendedStop{
@@ -316,6 +318,22 @@ func TestSignetWireGoldens(t *testing.T) {
 			value: imagePolicyAdoptionFactsFixture(),
 		},
 	}
+	cases = append(cases, struct {
+		name  string
+		value any
+	}{
+		// A daemon with no usage pool and no routing policy: an empty list and
+		// an explicit null, never an absent field.
+		name: "bootstrap-snapshot-empty",
+		value: BootstrapSnapshot{
+			SyncEpoch: "sync-epoch-569", Revision: 1,
+			AttentionItems: []AttentionItemSnapshot{}, AttentionDeliveries: []AttentionDeliverySnapshot{},
+			Runs: []RunSnapshot{}, Tasks: []TaskSnapshot{}, Conversations: []ConversationSnapshot{},
+			Schedules:           []ScheduleSnapshot{},
+			UnattendedOperation: UnattendedOperationSnapshot{Admission: domain.UnattendedAdmissionOpen, Stops: []UnattendedStop{}},
+			UsagePools:          []UsagePoolSnapshot{},
+		},
+	})
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			got, err := json.MarshalIndent(tc.value, "", "  ")
@@ -424,4 +442,124 @@ func TestEffectProposalFactsProvenanceGoldensDiffer(t *testing.T) {
 	if string(verified) == string(recommended) {
 		t.Fatal("verified and recommended closure facts rendered identically")
 	}
+}
+
+// usagePoolsFixture projects the four pool shapes the bootstrap golden pins,
+// as of ten minutes after at with a 30-minute refresh age:
+//   - claude-a: readings, one window exhausted by its reading, a model map,
+//     and a second enrollment with no availability answer yet;
+//   - claude-c: a reading two hours old with no reset, stale before the
+//     fixture clock, kept through a failed refresh;
+//   - codex-b: a collector that answered unsupported, so statuses and no
+//     windows;
+//   - spare: no record and no enrollment, so no collector and version 0.
+//
+// Each record is a valid domain record, so the fixtures double as
+// validation-positive cases.
+func usagePoolsFixture(t *testing.T, at time.Time) []UsagePoolSnapshot {
+	t.Helper()
+	now := at.Add(10 * time.Minute)
+	const refreshAge = 30 * time.Minute
+	enrollment := func(id domain.ClientEnrollmentID, identity domain.AuthIdentityID, client domain.HarnessClientKind) domain.ClientEnrollment {
+		return domain.ClientEnrollment{ID: id, AuthIdentityID: identity, HarnessClient: client}
+	}
+	exhausted := domain.WindowReading{
+		Window: "seven_day_opus", EnrollmentID: "enroll-a", Generation: 2, Status: domain.WindowStatusExhausted,
+		UsedPercent: new(100), ResetsAt: new(at.Add(72 * time.Hour)), Length: new(7 * 24 * time.Hour), ObservedAt: at,
+	}
+	claudeA := domain.PoolUsageObservation{
+		Pool: "claude-a", Plan: new("max"), Collector: "enroll-a",
+		LastAttempt: &domain.CollectionAttempt{Status: domain.CollectionAttemptSucceeded, At: at},
+		Enrollments: []domain.EnrollmentAvailability{
+			{EnrollmentID: "enroll-a", Answer: domain.AvailabilitySupported, ObservedAt: at},
+		},
+		ModelWindows: []domain.ModelWindow{{RouteModelID: "claude-opus", Window: "seven_day_opus"}},
+		Windows: []domain.WindowReading{
+			{
+				Window: "five_hour", EnrollmentID: "enroll-a", Generation: 2, Status: domain.WindowStatusAllowed,
+				UsedPercent: new(40), ResetsAt: new(at.Add(3 * time.Hour)), Length: new(5 * time.Hour), ObservedAt: at,
+			},
+			exhausted,
+		},
+	}
+	claudeC := domain.PoolUsageObservation{
+		Pool: "claude-c", Collector: "enroll-c",
+		LastAttempt: &domain.CollectionAttempt{Status: domain.CollectionAttemptFailed, At: at, Detail: "usage endpoint timed out"},
+		Enrollments: []domain.EnrollmentAvailability{
+			{EnrollmentID: "enroll-c", Answer: domain.AvailabilityFailed, ObservedAt: at},
+		},
+		ModelWindows: []domain.ModelWindow{},
+		Windows: []domain.WindowReading{{
+			Window: "tokens", EnrollmentID: "enroll-c", Generation: 1, Status: domain.WindowStatusAllowed,
+			Quantity: new(int64(120000)), Unit: new("tokens"), ObservedAt: at.Add(-2 * time.Hour),
+		}},
+	}
+	codexB := domain.PoolUsageObservation{
+		Pool: "codex-b", Collector: "enroll-b",
+		LastAttempt: &domain.CollectionAttempt{
+			Status: domain.CollectionAttemptUnsupported, At: at, Detail: "credential exposes no usage",
+		},
+		Enrollments: []domain.EnrollmentAvailability{
+			{EnrollmentID: "enroll-b", Answer: domain.AvailabilityUnsupported, ObservedAt: at},
+		},
+	}
+	for _, observation := range []domain.PoolUsageObservation{claudeA, claudeC, codexB} {
+		if err := observation.Validate(); err != nil {
+			t.Fatalf("fixture %s: %v", observation.Pool, err)
+		}
+	}
+	pools := []usagePoolInput{
+		{
+			pool:   domain.UsagePool{ID: "claude-a", Provider: "anthropic", MaxParallelExecutions: 2},
+			record: &store.Snapshotted[domain.PoolUsageObservation]{Value: claudeA, Snapshot: store.Snapshot{AsOfRevision: 17, EntityVersion: 4}},
+			enrollments: []domain.ClientEnrollment{
+				enrollment("enroll-a", "auth-a", domain.HarnessClientClaudeCode),
+				enrollment("enroll-a2", "auth-a2", domain.HarnessClientClaudeCode),
+			},
+		},
+		{
+			pool:        domain.UsagePool{ID: "claude-c", Provider: "anthropic", MaxParallelExecutions: 1},
+			record:      &store.Snapshotted[domain.PoolUsageObservation]{Value: claudeC, Snapshot: store.Snapshot{AsOfRevision: 15, EntityVersion: 3}},
+			enrollments: []domain.ClientEnrollment{enrollment("enroll-c", "auth-c", domain.HarnessClientClaudeCode)},
+		},
+		{
+			pool:        domain.UsagePool{ID: "codex-b", Provider: "openai", MaxParallelExecutions: 1},
+			record:      &store.Snapshotted[domain.PoolUsageObservation]{Value: codexB, Snapshot: store.Snapshot{AsOfRevision: 16, EntityVersion: 1}},
+			enrollments: []domain.ClientEnrollment{enrollment("enroll-b", "auth-b", domain.HarnessClientCodexCLI)},
+		},
+		{pool: domain.UsagePool{ID: "spare", Provider: "anthropic", MaxParallelExecutions: 1}},
+	}
+	snapshots := make([]UsagePoolSnapshot, 0, len(pools))
+	for _, pool := range pools {
+		snapshots = append(snapshots, projectUsagePool(pool, 23, now, refreshAge))
+	}
+	// The goldens' claims, checked here so a regenerated golden can't
+	// silently drop one.
+	if marks := snapshots[0].Pool.ExhaustedMarks; len(marks) != 1 || marks[0].Source != domain.ExhaustedMarkUsageReading {
+		t.Fatalf("claude-a exhausted marks = %+v, want one usage_reading mark", marks)
+	}
+	if staleAt := snapshots[1].Pool.Windows[0].StaleAt; staleAt == nil || !staleAt.Before(now) {
+		t.Fatalf("claude-c stale_at = %v, want before %s", staleAt, now)
+	}
+	if windows := snapshots[2].Pool.Windows; len(windows) != 0 {
+		t.Fatalf("codex-b windows = %+v, want none", windows)
+	}
+	return snapshots
+}
+
+// routingPolicyFixture is a client-set policy revision ordering two roles.
+func routingPolicyFixture(t *testing.T, at time.Time) *RoutingPolicySnapshot {
+	t.Helper()
+	policy, err := domain.NewRoutingPolicy(domain.RoutingPolicyInput{
+		Roles: []domain.RoutingPolicyRole{
+			{Role: domain.RoleReviewer, Agents: []string{"codex-b"}},
+			{Role: domain.RoleImplementer, Agents: []string{"claude-b", "claude-a"}},
+		},
+		Source: domain.RoutingPolicySourceClientSet, SetBy: "device:device-569",
+		LineupRevision: "sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+	}, 2, at)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return &RoutingPolicySnapshot{AsOfRevision: 23, EntityVersion: 2, Policy: policy}
 }

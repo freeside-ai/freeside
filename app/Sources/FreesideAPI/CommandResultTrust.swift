@@ -48,6 +48,38 @@ public enum CommandResultTrust {
                 && record.source_digest.value1 == MockContractValidation.sha256Digest(of: payload.source)
                 && !record.task_id.isEmpty
                 && !record.specification_run_id.isEmpty
+        case .refresh_usage(let payload):
+            guard case .refresh_usage(let record) = result.record else { return false }
+            return record.command_id == command.command_id && record.device_id == command.device_id
+                && record.pool == payload.pool
+        case .reassign_collector(let payload):
+            guard case .reassign_collector(let record) = result.record else { return false }
+            return record.command_id == command.command_id && record.device_id == command.device_id
+                && record.pool == payload.pool && record.collector == payload.enrollment_id
+        case .change_task_line(let payload):
+            // line is the role's line after the change: the named agent's, or
+            // none after a clear.
+            guard case .change_task_line(let record) = result.record else { return false }
+            let line = record.line?.value1
+            return record.command_id == command.command_id && record.device_id == command.device_id
+                && record.task_id == payload.task_id && record.role == payload.role
+                && record.agent == payload.agent
+                && line?.agent == payload.agent
+                && (line.map { $0.task_id == payload.task_id && $0.role == payload.role } ?? true)
+                && (!record.recorded || line.map { $0.source == .client_line_change } ?? true)
+        case .set_routing_policy(let payload):
+            // The policy is the revision current after the change, holding the
+            // requested orders: the one after expected_revision when recorded,
+            // expected_revision itself when it already held them.
+            guard case .set_routing_policy(let record) = result.record,
+                let roles = try? MockContractValidation.canonicalRoutingPolicyRoles(payload.roles)
+            else { return false }
+            let expected = payload.expected_revision ?? 0
+            return record.command_id == command.command_id && record.device_id == command.device_id
+                && record.expected_revision == payload.expected_revision
+                && record.policy.roles == roles
+                && record.policy.revision == (record.recorded ? expected + 1 : expected)
+                && (!record.recorded || record.policy.source == .client_routing_set)
         }
     }
 

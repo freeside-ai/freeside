@@ -1585,6 +1585,15 @@ account must be able to read it. `-agent-tree-commit` is the full commit id.
 - **`show` prints what's set.** It prints the current revision, or `null` when
   none was set. With `-revisions` it prints every revision in order, or `[]`.
 
+A paired client sets the same policy with the `set_routing_policy` command,
+and changes a task's line with `change_task_line`. The daemon checks the
+policy against the agent tree its own composition loaded, records the
+revision with source `client_routing_set` and `set_by` `device:<device_id>`,
+and refuses a change prepared against a revision that is no longer current
+(`api/README.md`, Usage and Routing Command Contract). The usage commands,
+`refresh_usage` and `reassign_collector`, fail closed until #1720 wires the
+collection lifecycle into the signet service.
+
 ### Enroll An Agent Credential
 
 `freesided auth add` enrolls one harness client (`codex_cli` or

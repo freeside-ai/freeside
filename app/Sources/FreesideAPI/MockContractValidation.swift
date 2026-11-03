@@ -1115,6 +1115,41 @@ enum MockContractValidation {
         try validateActionInput(command)
     }
 
+    struct RoutingPolicyShapeError: Error { let reason: String }
+
+    /// The daemon's agent-name rule (domain validAgentName): lowercase
+    /// letters, digits, `_`, and `-`, starting and ending alphanumeric, at most
+    /// 246 characters.
+    static func validAgentName(_ name: String) -> Bool {
+        name.utf8.count <= 246
+            && name.wholeMatch(of: /[a-z0-9]([a-z0-9_-]*[a-z0-9])?/) != nil
+    }
+
+    /// The daemon's routing-policy shape check (domain.CanonicalRoutingPolicyRoles):
+    /// at least one role, each named once with a non-empty order of distinct
+    /// agents, returned in TaskLineRole order so one policy has one form.
+    static func canonicalRoutingPolicyRoles(
+        _ roles: [Components.Schemas.RoutingPolicyRole]
+    ) throws -> [Components.Schemas.RoutingPolicyRole] {
+        guard !roles.isEmpty else { throw RoutingPolicyShapeError(reason: "routing policy names no role") }
+        guard Set(roles.map(\.role)).count == roles.count else {
+            throw RoutingPolicyShapeError(reason: "routing policy names a role twice")
+        }
+        for role in roles {
+            guard !role.agents.isEmpty else {
+                throw RoutingPolicyShapeError(reason: "routing policy role \(role.role.rawValue) orders no agent")
+            }
+            guard role.agents.allSatisfy(validAgentName) else {
+                throw RoutingPolicyShapeError(
+                    reason: "routing policy role \(role.role.rawValue) names an invalid agent")
+            }
+            guard Set(role.agents).count == role.agents.count else {
+                throw RoutingPolicyShapeError(reason: "routing policy role \(role.role.rawValue) repeats an agent")
+            }
+        }
+        return Components.Schemas.TaskLineRole.allCases.compactMap { name in roles.first { $0.role == name } }
+    }
+
     static func validateStructure(_ command: Components.Schemas.ClientCommand) throws {
         func malformed(_ reason: String) -> MockServer.MalformedCommandError {
             MockServer.MalformedCommandError(commandID: command.command_id, reason: reason)
@@ -1171,6 +1206,27 @@ enum MockContractValidation {
                     throw malformed("multiline name")
                 }
                 guard trimmed.unicodeScalars.count <= 60 else { throw malformed("name exceeds 60 characters") }
+            }
+        case .refresh_usage, .reassign_collector, .change_task_line, .set_routing_policy:
+            // An operator command binds to no entity version (api/openapi.yaml).
+            guard command.expected_entity_version == nil, command.expected_bindings == nil else {
+                throw malformed("operator command must not carry expected_entity_version or expected_bindings")
+            }
+            switch command.payload {
+            case .refresh_usage(let payload):
+                guard !payload.pool.isEmpty else { throw malformed("empty pool") }
+            case .reassign_collector(let payload):
+                guard !payload.pool.isEmpty, !payload.enrollment_id.isEmpty else {
+                    throw malformed("empty pool or enrollment")
+                }
+            case .change_task_line(let payload):
+                guard !payload.task_id.isEmpty, payload.agent.map(validAgentName) ?? true else {
+                    throw malformed("empty task or invalid agent")
+                }
+            case .set_routing_policy(let payload):
+                guard (payload.expected_revision ?? 1) >= 1 else { throw malformed("non-positive expected_revision") }
+            case .decision, .stop_task, .submit_task:
+                break
             }
         }
     }

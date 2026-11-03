@@ -14,6 +14,7 @@ import (
 // for the tests that seed an older schema and migrate forward again.
 func rewindUsagePools(t *testing.T, ctx context.Context, db *sql.DB) {
 	t.Helper()
+	rewindUsageOperatorContract(t, ctx, db)
 	rewindReviewSlotReleases(t, ctx, db)
 	for _, statement := range []string{
 		`DROP TABLE pool_usage_observations`,
@@ -23,6 +24,20 @@ func rewindUsagePools(t *testing.T, ctx context.Context, db *sql.DB) {
 		`ALTER TABLE auth_identities ADD COLUMN max_parallel_executions INTEGER NOT NULL DEFAULT 1
 			CHECK (max_parallel_executions >= 1)`,
 		`DELETE FROM schema_migrations WHERE name = '0112_usage_pools.sql'`,
+	} {
+		if _, err := db.ExecContext(ctx, statement); err != nil {
+			t.Fatal(err)
+		}
+	}
+}
+
+// rewindUsageOperatorContract undoes 0118, which a rewind past 0116 must
+// precede: it adds columns to pool_usage_observations.
+func rewindUsageOperatorContract(t *testing.T, ctx context.Context, db *sql.DB) {
+	t.Helper()
+	for _, statement := range []string{
+		`DROP TABLE client_command_receipts`,
+		`DELETE FROM schema_migrations WHERE name = '0118_usage_operator_contract.sql'`,
 	} {
 		if _, err := db.ExecContext(ctx, statement); err != nil {
 			t.Fatal(err)
@@ -163,6 +178,8 @@ func TestUsagePoolsMigrationReleasesAbandonedShadowAdmissions(t *testing.T) {
 		t.Fatal(err)
 	}
 	for _, statement := range []string{
+		`DROP TABLE client_command_receipts`,
+		`DELETE FROM schema_migrations WHERE name = '0118_usage_operator_contract.sql'`,
 		`ALTER TABLE manual_submissions DROP COLUMN task_lines`,
 		`DELETE FROM schema_migrations WHERE name = '0117_manual_submission_task_lines.sql'`,
 		`DROP TABLE pool_usage_observations`,

@@ -1,0 +1,7 @@
+{
+  "command_id": "cmd-reassign",
+  "device_id": "device-1",
+  "pool": "pool-a",
+  "collector": "enrollment-2",
+  "recorded_at": "2026-01-02T03:04:05Z"
+}

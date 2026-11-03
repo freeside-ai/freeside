@@ -65,7 +65,7 @@ func newServiceFixture(t *testing.T, seedItem bool) fixture {
 	dbPath := t.TempDir() + "/signet.db"
 	s := storetest.Open(t, dbPath, store.Options{AdmissionFloors: map[domain.OperatingMode]domain.CapabilitySnapshot{
 		domain.ModeAttendedDev: domain.NewCapabilitySnapshot(domain.CapPostExitExport),
-	}})
+	}, ApprovedCredentialModes: []domain.CredentialMode{domain.CredentialSubscriptionContained}})
 	t.Cleanup(func() {
 		if err := s.Close(); err != nil {
 			t.Errorf("Close: %v", err)

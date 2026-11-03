@@ -1543,6 +1543,20 @@ public struct Client: APIProtocol {
     /// Active-device authority is rechecked inside the transaction, including
     /// receipt replay. Acceptance is pending, never proof of termination or
     /// WIP release.
+    /// The operator commands refresh_usage, reassign_collector,
+    /// change_task_line, and set_routing_policy carry neither envelope field
+    /// and are rejected as malformed if they do. Each records a receipt in
+    /// the transaction that applies it, and a replay returns that receipt and
+    /// its revision. A request for the line or the role orders already held
+    /// records a receipt with recorded false and moves no entity. An unknown
+    /// pool, enrollment, or task is 404. An enrollment whose identity meters
+    /// another pool (reassign_collector) and an agent the daemon's agent tree
+    /// does not carry (set_routing_policy) are 400. A role whose attempt is
+    /// running (change_task_line) is 409 with the current task snapshot, and
+    /// a set_routing_policy whose expected_revision is not the current policy
+    /// revision is 409 with the current policy. Until the daemon routes
+    /// refresh_usage and reassign_collector to its collection lifecycle, it
+    /// answers them with 500 and records nothing.
     ///
     ///
     /// - Remark: HTTP `POST /commands`.

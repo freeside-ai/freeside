@@ -271,5 +271,200 @@
         "since": "2026-08-10T12:34:56Z"
       }
     ]
+  },
+  "usage_pools": [
+    {
+      "as_of_revision": 17,
+      "entity_version": 4,
+      "pool": {
+        "id": "claude-a",
+        "provider": "anthropic",
+        "max_parallel_executions": 2,
+        "plan": "max",
+        "collector": "enroll-a",
+        "last_attempt": {
+          "status": "succeeded",
+          "at": "2026-08-10T12:34:56Z",
+          "detail": ""
+        },
+        "enrollments": [
+          {
+            "enrollment_id": "enroll-a",
+            "auth_identity_id": "auth-a",
+            "harness_client": "claude_code",
+            "availability": {
+              "answer": "supported",
+              "observed_at": "2026-08-10T12:34:56Z"
+            }
+          },
+          {
+            "enrollment_id": "enroll-a2",
+            "auth_identity_id": "auth-a2",
+            "harness_client": "claude_code",
+            "availability": null
+          }
+        ],
+        "model_windows": [
+          {
+            "route_model_id": "claude-opus",
+            "window": "seven_day_opus"
+          }
+        ],
+        "windows": [
+          {
+            "window": "five_hour",
+            "enrollment_id": "enroll-a",
+            "generation": 2,
+            "status": "allowed",
+            "used_percent": 40,
+            "quantity": null,
+            "unit": null,
+            "resets_at": "2026-08-10T15:34:56Z",
+            "length_seconds": 18000,
+            "observed_at": "2026-08-10T12:34:56Z",
+            "stale_at": "2026-08-10T13:04:56Z"
+          },
+          {
+            "window": "seven_day_opus",
+            "enrollment_id": "enroll-a",
+            "generation": 2,
+            "status": "exhausted",
+            "used_percent": 100,
+            "quantity": null,
+            "unit": null,
+            "resets_at": "2026-08-13T12:34:56Z",
+            "length_seconds": 604800,
+            "observed_at": "2026-08-10T12:34:56Z",
+            "stale_at": "2026-08-10T13:04:56Z"
+          }
+        ],
+        "exhausted_marks": [
+          {
+            "window": "seven_day_opus",
+            "source": "usage_reading",
+            "invocation_id": null,
+            "reading_observed_at": "2026-08-10T12:34:56Z",
+            "resets_at": "2026-08-13T12:34:56Z",
+            "set_at": "2026-08-10T12:34:56Z"
+          }
+        ]
+      }
+    },
+    {
+      "as_of_revision": 15,
+      "entity_version": 3,
+      "pool": {
+        "id": "claude-c",
+        "provider": "anthropic",
+        "max_parallel_executions": 1,
+        "plan": null,
+        "collector": "enroll-c",
+        "last_attempt": {
+          "status": "failed",
+          "at": "2026-08-10T12:34:56Z",
+          "detail": "usage endpoint timed out"
+        },
+        "enrollments": [
+          {
+            "enrollment_id": "enroll-c",
+            "auth_identity_id": "auth-c",
+            "harness_client": "claude_code",
+            "availability": {
+              "answer": "failed",
+              "observed_at": "2026-08-10T12:34:56Z"
+            }
+          }
+        ],
+        "model_windows": [],
+        "windows": [
+          {
+            "window": "tokens",
+            "enrollment_id": "enroll-c",
+            "generation": 1,
+            "status": "allowed",
+            "used_percent": null,
+            "quantity": 120000,
+            "unit": "tokens",
+            "resets_at": null,
+            "length_seconds": null,
+            "observed_at": "2026-08-10T10:34:56Z",
+            "stale_at": "2026-08-10T11:04:56Z"
+          }
+        ],
+        "exhausted_marks": []
+      }
+    },
+    {
+      "as_of_revision": 16,
+      "entity_version": 1,
+      "pool": {
+        "id": "codex-b",
+        "provider": "openai",
+        "max_parallel_executions": 1,
+        "plan": null,
+        "collector": "enroll-b",
+        "last_attempt": {
+          "status": "unsupported",
+          "at": "2026-08-10T12:34:56Z",
+          "detail": "credential exposes no usage"
+        },
+        "enrollments": [
+          {
+            "enrollment_id": "enroll-b",
+            "auth_identity_id": "auth-b",
+            "harness_client": "codex_cli",
+            "availability": {
+              "answer": "unsupported",
+              "observed_at": "2026-08-10T12:34:56Z"
+            }
+          }
+        ],
+        "model_windows": [],
+        "windows": [],
+        "exhausted_marks": []
+      }
+    },
+    {
+      "as_of_revision": 23,
+      "entity_version": 0,
+      "pool": {
+        "id": "spare",
+        "provider": "anthropic",
+        "max_parallel_executions": 1,
+        "plan": null,
+        "collector": null,
+        "last_attempt": null,
+        "enrollments": [],
+        "model_windows": [],
+        "windows": [],
+        "exhausted_marks": []
+      }
+    }
+  ],
+  "routing_policy": {
+    "as_of_revision": 23,
+    "entity_version": 2,
+    "policy": {
+      "revision": 2,
+      "roles": [
+        {
+          "role": "implementer",
+          "agents": [
+            "claude-b",
+            "claude-a"
+          ]
+        },
+        {
+          "role": "reviewer",
+          "agents": [
+            "codex-b"
+          ]
+        }
+      ],
+      "source": "client_routing_set",
+      "set_by": "device:device-569",
+      "set_at": "2026-08-10T12:34:56Z",
+      "lineup_revision": "sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"
+    }
   }
 }

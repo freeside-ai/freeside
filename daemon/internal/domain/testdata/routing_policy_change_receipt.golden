@@ -1,0 +1,22 @@
+{
+  "command_id": "cmd-policy",
+  "device_id": "device-1",
+  "expected_revision": 1,
+  "recorded": true,
+  "policy": {
+    "revision": 2,
+    "roles": [
+      {
+        "role": "implementer",
+        "agents": [
+          "codex-primary",
+          "claude-primary"
+        ]
+      }
+    ],
+    "source": "client_routing_set",
+    "set_by": "device:device-1",
+    "set_at": "2026-01-02T03:04:05Z",
+    "lineup_revision": "sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"
+  }
+}

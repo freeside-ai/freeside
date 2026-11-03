@@ -1,0 +1,9 @@
+{
+  "command_id": "cmd-clear",
+  "device_id": "device-1",
+  "task_id": "task-1",
+  "role": "implementer",
+  "agent": null,
+  "recorded": true,
+  "line": null
+}

@@ -23,9 +23,15 @@ type ChangeTaskLineRequest struct {
 	Role   domain.RoleName
 	Agent  string
 	Clear  bool
+	// Source is the path that made the change: cli_line_change or
+	// client_line_change.
+	Source domain.TaskLineSource
 }
 
 func (r ChangeTaskLineRequest) validate() error {
+	if !r.Source.IsLineChange() {
+		return fmt.Errorf("task line change source %q: %w", r.Source, domain.ErrInvalidTaskLineSource)
+	}
 	if !r.Clear {
 		return domain.ValidateTaskLineChoices([]domain.TaskLineChoice{{Role: r.Role, Agent: r.Agent}})
 	}
@@ -72,47 +78,18 @@ type TaskLineChangeResult struct {
 func ChangeTaskLine(
 	ctx context.Context, st *store.Store, req ChangeTaskLineRequest, now time.Time,
 ) (TaskLineChangeResult, error) {
+	// A refusal opens no transaction.
 	if err := req.validate(); err != nil {
 		return TaskLineChangeResult{}, err
 	}
 	var result TaskLineChangeResult
 	err := st.Write(ctx, func(tx *store.WriteTx) error {
-		if _, err := tx.GetTask(ctx, req.TaskID); err != nil {
-			return err
-		}
-		heads, err := tx.TaskLineHeads(ctx, req.TaskID)
-		if err != nil {
-			return err
-		}
-		var replaces *domain.Digest
-		if head, ok := heads[req.Role]; ok {
-			result.Line, replaces = &head, &head.ID
-		}
-		// A version that no longer holds is not the line the role has, so
-		// asking for it again records one that does: to keep an agent, a
-		// clear first would let the lineup's credential run in between. Any
-		// failure to hold counts, since a request for another agent would
-		// supersede this head unchecked too, and admission reports the fault.
-		if req.sameLine(result.Line) && (replaces == nil || anchorTaskLine(ctx, &tx.ReadTx, *result.Line) == nil) {
+		var err error
+		result, err = ChangeTaskLineTx(ctx, tx, req, now)
+		if err == nil && !result.Recorded {
 			return errTaskLineUnchanged
 		}
-		running, err := taskRoleAttemptRunning(ctx, &tx.ReadTx, req.TaskID, req.Role)
-		if err != nil {
-			return err
-		}
-		if running {
-			return fmt.Errorf("task %s role %s: %w", req.TaskID, req.Role, domain.ErrTaskLineRoleRunning)
-		}
-		change, err := domain.NewTaskLineChange(req.TaskID, req.Role, req.Agent, req.Clear, replaces, now)
-		if err != nil {
-			return err
-		}
-		line, err := tx.RecordTaskLineChange(ctx, change)
-		if err != nil {
-			return err
-		}
-		result = TaskLineChangeResult{Recorded: true, Line: &line}
-		return nil
+		return err
 	})
 	if errors.Is(err, errTaskLineUnchanged) {
 		return result, nil
@@ -121,6 +98,56 @@ func ChangeTaskLine(
 		return TaskLineChangeResult{}, err
 	}
 	return result, nil
+}
+
+// ChangeTaskLineTx is ChangeTaskLine inside the caller's transaction, so a
+// command can commit its receipt with the change. A request for the line the
+// role already has returns Recorded false and a nil error, leaving the caller
+// to decide whether its transaction commits.
+func ChangeTaskLineTx(
+	ctx context.Context, tx *store.WriteTx, req ChangeTaskLineRequest, now time.Time,
+) (TaskLineChangeResult, error) {
+	if err := req.validate(); err != nil {
+		return TaskLineChangeResult{}, err
+	}
+	if _, err := tx.GetTask(ctx, req.TaskID); err != nil {
+		return TaskLineChangeResult{}, err
+	}
+	heads, err := tx.TaskLineHeads(ctx, req.TaskID)
+	if err != nil {
+		return TaskLineChangeResult{}, err
+	}
+	var (
+		current  *domain.TaskLine
+		replaces *domain.Digest
+	)
+	if head, ok := heads[req.Role]; ok {
+		current, replaces = &head, &head.ID
+	}
+	// A version that no longer holds is not the line the role has, so
+	// asking for it again records one that does: to keep an agent, a
+	// clear first would let the lineup's credential run in between. Any
+	// failure to hold counts, since a request for another agent would
+	// supersede this head unchecked too, and admission reports the fault.
+	if req.sameLine(current) && (replaces == nil || anchorTaskLine(ctx, &tx.ReadTx, *current) == nil) {
+		return TaskLineChangeResult{Line: current}, nil
+	}
+	running, err := taskRoleAttemptRunning(ctx, &tx.ReadTx, req.TaskID, req.Role)
+	if err != nil {
+		return TaskLineChangeResult{}, err
+	}
+	if running {
+		return TaskLineChangeResult{}, fmt.Errorf("task %s role %s: %w", req.TaskID, req.Role, domain.ErrTaskLineRoleRunning)
+	}
+	change, err := domain.NewTaskLineChange(req.TaskID, req.Role, req.Agent, req.Clear, replaces, now)
+	if err != nil {
+		return TaskLineChangeResult{}, err
+	}
+	line, err := tx.RecordTaskLineChange(ctx, change, req.Source)
+	if err != nil {
+		return TaskLineChangeResult{}, err
+	}
+	return TaskLineChangeResult{Recorded: true, Line: &line}, nil
 }
 
 // taskRoleAttemptRunning reports whether an attempt of the role runs on any

@@ -1,0 +1,20 @@
+{
+  "command_id": "cmd-line",
+  "device_id": "device-1",
+  "task_id": "task-1",
+  "role": "implementer",
+  "agent": "codex-primary",
+  "recorded": true,
+  "line": {
+    "id": "sha256:9a8da2fd430b3831325d3f4959e343f780c39a8d00e8ae4df022ebcc0c983e19",
+    "task_id": "task-1",
+    "role": "implementer",
+    "agent": "codex-primary",
+    "version": 2,
+    "predecessor_id": "sha256:2222222222222222222222222222222222222222222222222222222222222222",
+    "source": "client_line_change",
+    "set_by": "sha256:1111111111111111111111111111111111111111111111111111111111111111",
+    "set_at": "2026-01-02T03:04:05Z",
+    "provenance": null
+  }
+}

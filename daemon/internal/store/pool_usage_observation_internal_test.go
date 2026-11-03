@@ -90,7 +90,7 @@ func collectedObservation(readings ...domain.WindowReading) domain.PoolUsageObse
 
 func writeObservation(st *Store, t *testing.T, observation domain.PoolUsageObservation, at time.Time) error {
 	t.Helper()
-	return st.WriteInternal(t.Context(), func(tx *InternalTx) error {
+	return st.Write(t.Context(), func(tx *WriteTx) error {
 		return tx.RecordPoolUsageObservation(t.Context(), observation, at)
 	})
 }
@@ -119,7 +119,7 @@ func writeRefusalMark(
 	st *Store, t *testing.T, pool domain.UsagePoolID, mark domain.RefusalMark, at time.Time,
 ) error {
 	t.Helper()
-	return st.WriteInternal(t.Context(), func(tx *InternalTx) error {
+	return st.Write(t.Context(), func(tx *WriteTx) error {
 		return tx.RecordWindowRefusalMark(t.Context(), pool, mark, at)
 	})
 }
@@ -656,5 +656,99 @@ func TestGetPoolUsageObservationCrossChecksColumns(t *testing.T) {
 				t.Fatalf("read = %v, want %v", err, errRowInconsistent)
 			}
 		})
+	}
+}
+
+// Clients sync the record (#1719), so a record write and a refusal mark each
+// raise the revision on their own, stamp it into the row, and advance the
+// row's version.
+func TestPoolUsageObservationWritesRaiseRevision(t *testing.T) {
+	t.Parallel()
+	st := openObservationStore(t)
+	revision := func() int64 {
+		t.Helper()
+		state, err := st.ServerState(t.Context())
+		if err != nil {
+			t.Fatal(err)
+		}
+		return state.Revision
+	}
+	snapshot := func() Snapshot {
+		t.Helper()
+		var snapshotted Snapshotted[domain.PoolUsageObservation]
+		if err := st.Read(t.Context(), func(tx *ReadTx) error {
+			var err error
+			snapshotted, err = tx.GetPoolUsageObservationSnapshot(t.Context(), observedPool)
+			return err
+		}); err != nil {
+			t.Fatalf("read snapshot: %v", err)
+		}
+		return snapshotted.Snapshot
+	}
+
+	before := revision()
+	if err := writeObservation(st, t, collectedObservation(collectorReading("five_hour", 1)), observationAt); err != nil {
+		t.Fatalf("record: %v", err)
+	}
+	if got := revision(); got != before+1 {
+		t.Fatalf("revision after record = %d, want %d", got, before+1)
+	}
+	if got := snapshot(); got != (Snapshot{AsOfRevision: before + 1, EntityVersion: 1}) {
+		t.Fatalf("snapshot after record = %+v", got)
+	}
+
+	mark := domain.RefusalMark{Window: "five_hour", InvocationID: "inv-1", SetAt: observationAt.Add(time.Minute)}
+	if err := writeRefusalMark(st, t, observedPool, mark, observationAt.Add(time.Minute)); err != nil {
+		t.Fatalf("refusal mark: %v", err)
+	}
+	if got := revision(); got != before+2 {
+		t.Fatalf("revision after refusal mark = %d, want %d", got, before+2)
+	}
+	if got := snapshot(); got != (Snapshot{AsOfRevision: before + 2, EntityVersion: 2}) {
+		t.Fatalf("snapshot after refusal mark = %+v", got)
+	}
+}
+
+// A row with no sync metadata is one no writer produced, so it fails closed.
+func TestGetPoolUsageObservationRequiresSyncMetadata(t *testing.T) {
+	t.Parallel()
+	for name, statement := range map[string]string{
+		"as_of_revision": `UPDATE pool_usage_observations SET as_of_revision = 0`,
+		"entity_version": `UPDATE pool_usage_observations SET entity_version = 0`,
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			st := openObservationStore(t)
+			if err := writeObservation(st, t, collectedObservation(), observationAt); err != nil {
+				t.Fatalf("record: %v", err)
+			}
+			if _, err := st.db.ExecContext(t.Context(), statement); err != nil {
+				t.Fatalf("tamper: %v", err)
+			}
+			if _, err := readObservation(st, t, observedPool); !errors.Is(err, errRowInconsistent) {
+				t.Fatalf("read = %v, want %v", err, errRowInconsistent)
+			}
+		})
+	}
+}
+
+// RequireEnrollmentOnPool names the two ways a reassignment target fails.
+func TestRequireEnrollmentOnPool(t *testing.T) {
+	t.Parallel()
+	st := openObservationStore(t)
+	recordPoolEnrollment(t, st, "auth-other", "enroll-other", "pool-2", observationAt)
+	check := func(id domain.ClientEnrollmentID) error {
+		return st.Read(t.Context(), func(tx *ReadTx) error {
+			return tx.RequireEnrollmentOnPool(t.Context(), observedPool, id)
+		})
+	}
+	if err := check("enroll-1"); err != nil {
+		t.Fatalf("collector on the pool = %v", err)
+	}
+	if err := check("enroll-other"); !errors.Is(err, ErrEnrollmentNotOnPool) {
+		t.Fatalf("enrollment on another pool = %v, want %v", err, ErrEnrollmentNotOnPool)
+	}
+	if err := check("enroll-missing"); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("missing enrollment = %v, want %v", err, ErrNotFound)
 	}
 }

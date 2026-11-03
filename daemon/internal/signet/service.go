@@ -64,6 +64,15 @@ type Service struct {
 	// cannot call the engine directly.
 	taskSubmitter TaskSubmitter
 	taskStopGuard func(context.Context, domain.TaskID, func() error) error
+	// usageOperator, taskLineChanger, and routingPolicySetter apply the
+	// operator commands' effects (operator_commands.go). Nil fails the
+	// command closed, after replay.
+	usageOperator       UsageOperator
+	taskLineChanger     TaskLineChanger
+	routingPolicySetter RoutingPolicySetter
+	// usageRefreshAge bounds how long a usage reading counts as fresh in the
+	// projection (WithUsageRefreshAge); zero means only its reset does.
+	usageRefreshAge time.Duration
 	// followUpFiler is the filer an approved follow-up filing wakes
 	// (WithFollowUpFiler). Nil means no filer is bound.
 	followUpFiler func() FollowUpFiler
@@ -251,6 +260,14 @@ func (s *Service) Submit(ctx context.Context, in ClientCommand) (CommandResult, 
 		return s.stopTask(ctx, in)
 	case domain.CommandKindSubmitTask:
 		return s.submitTask(ctx, in)
+	case domain.CommandKindRefreshUsage:
+		return s.refreshUsage(ctx, in)
+	case domain.CommandKindReassignCollector:
+		return s.reassignCollector(ctx, in)
+	case domain.CommandKindChangeTaskLine:
+		return s.changeTaskLine(ctx, in)
+	case domain.CommandKindSetRoutingPolicy:
+		return s.setRoutingPolicy(ctx, in)
 	case domain.CommandKindDecision, "":
 		// The empty zero value is the intentional legacy decision default, so
 		// existing decision callers stay unchanged (ClientCommand.Kind).

@@ -1,0 +1,16 @@
+{
+  "sync_epoch": "sync-epoch-569",
+  "revision": 1,
+  "attention_items": [],
+  "attention_deliveries": [],
+  "runs": [],
+  "tasks": [],
+  "conversations": [],
+  "schedules": [],
+  "unattended_operation": {
+    "admission": "open",
+    "stops": []
+  },
+  "usage_pools": [],
+  "routing_policy": null
+}

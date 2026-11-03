@@ -28,6 +28,61 @@ import Testing
         }
     }
 
+    @Test func bootstrapCarriesEveryUsagePoolAndTheRoutingPolicy() async throws {
+        let server = MockServer()
+        let client = APIClientFactory.mock(server: server)
+        let bootstrap = try await client.getSyncBootstrap().ok.body.json
+
+        #expect(
+            bootstrap.usage_pools.map(\.pool.id) == [
+                UsageFixtures.readingPoolID, UsageFixtures.unsupportedPoolID, UsageFixtures.unrecordedPoolID,
+            ])
+        let pools = Dictionary(uniqueKeysWithValues: bootstrap.usage_pools.map { ($0.pool.id, $0) })
+        let reading = try #require(pools[UsageFixtures.readingPoolID])
+        #expect(reading.pool.collector == UsageFixtures.readingCollectorID)
+        #expect(reading.pool.exhausted_marks.map(\.source) == [.usage_reading])
+        #expect(reading.pool.enrollments.map { $0.availability == nil } == [false, true])
+        let unsupported = try #require(pools[UsageFixtures.unsupportedPoolID])
+        #expect(unsupported.pool.last_attempt?.value1.status == .unsupported)
+        #expect(unsupported.pool.windows.isEmpty)
+        // A pool with no record carries the serving revision and version 0.
+        let unrecorded = try #require(pools[UsageFixtures.unrecordedPoolID])
+        #expect(unrecorded.entity_version == 0)
+        #expect(unrecorded.as_of_revision == bootstrap.revision)
+        #expect(unrecorded.pool.collector == nil)
+
+        let policy = try #require(bootstrap.routing_policy?.value1)
+        #expect(policy.as_of_revision == bootstrap.revision)
+        #expect(policy.entity_version == Int64(policy.policy.revision))
+        #expect(policy.policy.source == .client_routing_set)
+    }
+
+    @Test func advancingAUsagePoolRaisesTheRevisionAndTheRecordVersion() async throws {
+        let server = MockServer()
+        let client = APIClientFactory.mock(server: server)
+        let before = try await client.getSyncBootstrap().ok.body.json
+
+        await server.advanceUsagePool(id: UsageFixtures.unrecordedPoolID)
+        let after = try await client.getSyncBootstrap().ok.body.json
+        let heartbeat = try await client.getSyncRevision().ok.body.json
+        #expect(after.revision == before.revision + 1)
+        #expect(heartbeat.revision == after.revision)
+        let pool = try #require(after.usage_pools.first { $0.pool.id == UsageFixtures.unrecordedPoolID })
+        #expect(pool.entity_version == 1)
+        #expect(pool.as_of_revision == after.revision)
+        // The other pools keep their records' revisions.
+        #expect(
+            after.usage_pools.filter { $0.pool.id != UsageFixtures.unrecordedPoolID }
+                == before.usage_pools.filter { $0.pool.id != UsageFixtures.unrecordedPoolID })
+    }
+
+    @Test func bootstrapWithoutARoutingPolicyCarriesNull() async throws {
+        let server = MockServer(usagePools: [], routingPolicy: nil)
+        let bootstrap = try await APIClientFactory.mock(server: server).getSyncBootstrap().ok.body.json
+        #expect(bootstrap.usage_pools.isEmpty)
+        #expect(bootstrap.routing_policy == nil)
+    }
+
     @Test func healthIsAnonymousAndTracksRestartsAndOutages() async throws {
         let server = MockServer(authMode: .enforcing)
         let client = APIClientFactory.mock(server: server)

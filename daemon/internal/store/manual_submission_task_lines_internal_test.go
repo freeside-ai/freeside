@@ -78,6 +78,10 @@ func TestManualSubmissionLinesMigrationKeepsOlderRows(t *testing.T) {
 	st := openTemplateStoreAt(t, t.TempDir()+"/manual-submission-lines.db", Options{})
 	want := seedManualSubmissionTarget(t, ctx, st)
 	for _, statement := range []string{
+		`DROP TABLE client_command_receipts`,
+		`ALTER TABLE pool_usage_observations DROP COLUMN entity_version`,
+		`ALTER TABLE pool_usage_observations DROP COLUMN as_of_revision`,
+		`DELETE FROM schema_migrations WHERE name = '0118_usage_operator_contract.sql'`,
 		`ALTER TABLE manual_submissions DROP COLUMN task_lines`,
 		`DELETE FROM schema_migrations WHERE name = '0117_manual_submission_task_lines.sql'`,
 	} {
