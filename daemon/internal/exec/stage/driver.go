@@ -346,7 +346,9 @@ func (d *Driver) handoffSpec(ctx context.Context, in intent) (ward.HandoffSpec, 
 	if err := json.Unmarshal(in.Inputs.Policy, &keys); err != nil {
 		return ward.HandoffSpec{}, fmt.Errorf("%w: decode durable policy: %w", ErrUnsupportedStart, err)
 	}
-	sizes, err := ward.ResolveLaunchSizes(keys)
+	// No bound: admission reserved this size against the budget, and a start
+	// or recovery of an admitted launch is not the place to refuse it.
+	sizes, err := ward.ResolveLaunchSizes(keys, ward.LaunchBound{})
 	if err != nil {
 		return ward.HandoffSpec{}, fmt.Errorf("%w: %w", ErrUnsupportedStart, err)
 	}

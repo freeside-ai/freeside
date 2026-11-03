@@ -33,7 +33,7 @@ func TestLaunchClassesAreValidAndSized(t *testing.T) {
 
 func TestResolveLaunchSizesDefaultsWithoutSizeKeys(t *testing.T) {
 	t.Parallel()
-	sizes, err := ResolveLaunchSizes([]domain.PolicyKey{{Key: "paths", Value: "daemon/**"}})
+	sizes, err := ResolveLaunchSizes([]domain.PolicyKey{{Key: "paths", Value: "daemon/**"}}, LaunchBound{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -51,7 +51,7 @@ func TestResolveLaunchSizesRaisesOnlyTheNamedClass(t *testing.T) {
 	sizes, err := ResolveLaunchSizes([]domain.PolicyKey{
 		{Key: PolicyWriterCPUs, Value: "6"},
 		{Key: PolicyWriterMemoryMiB, Value: "8192"},
-	})
+	}, LaunchBound{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -81,7 +81,7 @@ func TestResolveLaunchSizesRefusesMalformedOrLoweredValues(t *testing.T) {
 	} {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
-			_, err := ResolveLaunchSizes([]domain.PolicyKey{key})
+			_, err := ResolveLaunchSizes([]domain.PolicyKey{key}, LaunchBound{})
 			if !errors.Is(err, ErrLaunchSizePolicy) {
 				t.Fatalf("err = %v, want ErrLaunchSizePolicy", err)
 			}
@@ -94,7 +94,7 @@ func TestResolveLaunchSizesRefusesARepeatedKey(t *testing.T) {
 	_, err := ResolveLaunchSizes([]domain.PolicyKey{
 		{Key: PolicyWriterCPUs, Value: "8"},
 		{Key: PolicyWriterCPUs, Value: "4"},
-	})
+	}, LaunchBound{})
 	if !errors.Is(err, ErrLaunchSizePolicy) {
 		t.Fatalf("err = %v, want ErrLaunchSizePolicy", err)
 	}
@@ -162,5 +162,85 @@ func TestDecodeInspectReportsRealizedResources(t *testing.T) {
 	}}
 	if rep := omitted.toReport(); rep.ResourcesObserved || realizedSize(rep, ContainerSize{}) {
 		t.Fatalf("an omitted memory field was observed: %+v", rep)
+	}
+}
+
+// appleBound is a budget on the reference runtime, whose overhead is 256 MiB.
+func appleBound(budget int) LaunchBound {
+	return LaunchBound{BudgetMiB: budget, RuntimeVersion: "apple-container 1.1.0"}
+}
+
+func TestLaunchBoundReservesSizePlusOverhead(t *testing.T) {
+	t.Parallel()
+	size := ContainerSize{CPUs: 4, MemoryMiB: 2048}
+	if got, err := appleBound(8192).Reservation(size); err != nil || got != 2048+256 {
+		t.Fatalf("reservation = %d, %v; want %d", got, err, 2048+256)
+	}
+	if got, err := appleBound(2048 + 256).Reservation(size); err != nil || got != 2048+256 {
+		t.Fatalf("reservation at the exact budget = %d, %v", got, err)
+	}
+	if got, err := (LaunchBound{}).Reservation(size); err != nil || got != 0 {
+		t.Fatalf("no budget reserves %d, %v; want 0", got, err)
+	}
+	if got, err := (LaunchBound{BudgetMiB: 4096, RuntimeVersion: RuntimeNone}).Reservation(size); err != nil || got != 2048 {
+		t.Fatalf("a VM-less composition reserves %d, %v; want the declared size alone", got, err)
+	}
+}
+
+func TestLaunchBoundRefusesANeverFittingSizeNamingAllThreeNumbers(t *testing.T) {
+	t.Parallel()
+	_, err := appleBound(2048).Reservation(ContainerSize{CPUs: 4, MemoryMiB: 2048})
+	var never *domain.LaunchNeverFitsError
+	if !errors.As(err, &never) || *never != (domain.LaunchNeverFitsError{SizeMiB: 2048, OverheadMiB: 256, BudgetMiB: 2048}) {
+		t.Fatalf("err = %v, want a never-fits refusal naming 2048, 256, and 2048", err)
+	}
+	for _, number := range []string{"2048 MiB declared", "256 MiB per-VM overhead", "2048 MiB budget"} {
+		if !strings.Contains(err.Error(), number) {
+			t.Errorf("%q does not name %q", err, number)
+		}
+	}
+}
+
+func TestLaunchBoundRefusesAnUnrecordedRuntimeVersion(t *testing.T) {
+	t.Parallel()
+	bound := LaunchBound{BudgetMiB: 8192, RuntimeVersion: "apple-container 1.2.0"}
+	_, err := bound.Reservation(DefaultLaunchSize(LaunchReview))
+	var unknown *domain.RuntimeOverheadUnknownError
+	if !errors.As(err, &unknown) || unknown.RuntimeVersion != "apple-container 1.2.0" {
+		t.Fatalf("err = %v, want the unrecorded version named", err)
+	}
+	if _, err := (LaunchBound{RuntimeVersion: "apple-container 1.2.0"}).Reservation(testContainerSize); err != nil {
+		t.Fatalf("no budget refused an unrecorded runtime: %v", err)
+	}
+}
+
+func TestResolveLaunchSizesRefusesPolicyThatCanNeverFitTheBudget(t *testing.T) {
+	t.Parallel()
+	keys := []domain.PolicyKey{{Key: PolicyVerificationMemoryMiB, Value: "8192"}}
+	if _, err := ResolveLaunchSizes(keys, appleBound(8192+256)); err != nil {
+		t.Fatalf("a reservation equal to the budget is refused: %v", err)
+	}
+	_, err := ResolveLaunchSizes(keys, appleBound(8192))
+	if !errors.Is(err, ErrLaunchSizePolicy) || !errors.Is(err, domain.ErrLaunchNeverFits) {
+		t.Fatalf("err = %v, want a policy refusal for a size that never fits", err)
+	}
+	if !strings.Contains(err.Error(), "8192 MiB declared plus 256 MiB per-VM overhead exceeds the 8192 MiB budget") {
+		t.Fatalf("%q does not name the size, overhead, and budget", err)
+	}
+}
+
+func TestParseRuntimeVersion(t *testing.T) {
+	t.Parallel()
+	got, err := ParseRuntimeVersion([]byte("container CLI version 1.1.0 (build: release, commit: 5973b9c)\n"))
+	if err != nil || got != "apple-container 1.1.0" {
+		t.Fatalf("version = %q, %v", got, err)
+	}
+	if _, ok := VMOverheadMiB(got); !ok {
+		t.Fatalf("the reference runtime %q has no recorded overhead", got)
+	}
+	for _, out := range []string{"", "container CLI version", "1.1.0", "podman version 5.0.0"} {
+		if v, err := ParseRuntimeVersion([]byte(out)); err == nil {
+			t.Errorf("%q parsed as %q", out, v)
+		}
 	}
 }

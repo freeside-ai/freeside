@@ -120,6 +120,10 @@ type deputySettings struct {
 	} `json:"timeouts"`
 	// ManualSubmissionConfig is the client-task policy file, or "" for none.
 	ManualSubmissionConfig string `json:"manual_submission_config"`
+	// MemoryBudgetMiB bounds every container the deputy launches
+	// (-memory-budget-mib). The deputy is an ephemeral instance that launches
+	// containers, so it has no default.
+	MemoryBudgetMiB int `json:"memory_budget_mib"`
 	// Build is the project-image rebuild input; all empty disables rebuilds.
 	Build struct {
 		Proxy        string   `json:"proxy"`
@@ -254,6 +258,9 @@ func (s *loadedDeputySettings) validate() error {
 	}
 	if s.Listen == "" {
 		return errors.New("listen is required")
+	}
+	if s.MemoryBudgetMiB <= 0 {
+		return errors.New("memory_budget_mib must be positive")
 	}
 	for _, image := range []struct{ name, ref string }{
 		{"images.agent", s.Images.Agent}, {"images.exporter", s.Images.Exporter}, {"images.review", s.Images.Review},

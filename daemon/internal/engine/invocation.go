@@ -753,6 +753,35 @@ func (e *Engine) dispatchIntent(
 	ctx context.Context, entry store.QueueEntry, binding invocationBinding,
 	stage domain.Stage, invocationID domain.InvocationID,
 ) (bool, bool, error) {
+	started, hold, err := e.dispatchAdmittedIntent(ctx, entry, binding, stage, invocationID)
+	if orderErr := recordLaunchOrder(
+		ctx, e.store, e.launchBound, binding.run.ID, invocationID, err, time.Now().UTC(),
+	); orderErr != nil {
+		return started, hold, errors.Join(err, orderErr)
+	}
+	// A launch the budget refuses for good is reported on its run and
+	// skipped, so it holds back no other dispatch in this pass.
+	if launchMemoryRefusal(err) {
+		if noticeErr := noticeLaunchMemoryRefusal(
+			ctx, e.store, e.signet, binding.run.ID, binding.run.ProjectID, err,
+		); noticeErr != nil {
+			return started, hold, errors.Join(err, noticeErr)
+		}
+		return started, hold, nil
+	}
+	if err == nil && started && e.launchBound.Budgeted() {
+		// Admitted under the budget, so a notice an earlier start raised no
+		// longer describes this run.
+		return started, hold, releaseProductionQuarantine(ctx, e.store, e.signet, launchMemoryRefusedPrefix, binding.run.ID)
+	}
+	return started, hold, err
+}
+
+// dispatchAdmittedIntent admits, records, and starts one pending intent.
+func (e *Engine) dispatchAdmittedIntent(
+	ctx context.Context, entry store.QueueEntry, binding invocationBinding,
+	stage domain.Stage, invocationID domain.InvocationID,
+) (bool, bool, error) {
 	if retired, err := e.retireClosedInvocationIntent(ctx, entry, binding.run.ID, binding.invocation.ConversationID); err != nil || retired {
 		return false, false, err
 	}
@@ -1355,6 +1384,13 @@ func (e *Engine) recordAttempt(
 						if err := tx.RequireUsagePoolCapacity(ctx, stored); err != nil {
 							return fmt.Errorf("replayed invocation %q: %w", invocationID, err)
 						}
+						memory, err := e.executionMemory(ctx, &tx.ReadTx, run, stored)
+						if err != nil {
+							return fmt.Errorf("replayed invocation %q: %w", invocationID, err)
+						}
+						if err := tx.RequireExecutionMemory(ctx, stored, memory); err != nil {
+							return fmt.Errorf("replayed invocation %q: %w", invocationID, err)
+						}
 						effective, bound = stored, true
 					case e.admission == nil:
 						// No record exists, so there is no durable decision to
@@ -1399,7 +1435,11 @@ func (e *Engine) recordAttempt(
 			return err
 		}
 		if fresh != nil {
-			if err := tx.RecordExecutionAdmission(ctx, *fresh); err != nil {
+			memory, err := e.executionMemory(ctx, &tx.ReadTx, run, *fresh)
+			if err != nil {
+				return err
+			}
+			if err := tx.RecordExecutionAdmissionReserving(ctx, *fresh, memory); err != nil {
 				return err
 			}
 			// §5.7 requires a waived admission to surface its degraded

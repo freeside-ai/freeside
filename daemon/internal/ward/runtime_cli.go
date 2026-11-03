@@ -36,6 +36,31 @@ func NewCLIRuntime(binPath string) *CLIRuntime {
 
 var _ Runtime = (*CLIRuntime)(nil)
 
+// Version reads the runtime version the budget's per-VM overhead is recorded
+// against, as "apple-container <version>".
+func (c *CLIRuntime) Version(ctx context.Context) (string, error) {
+	out, err := c.run(ctx, "--version")
+	if err != nil {
+		return "", fmt.Errorf("container runtime version: %w", err)
+	}
+	return ParseRuntimeVersion(out)
+}
+
+// ParseRuntimeVersion reads `container --version` output, "container CLI
+// version 1.1.0 (build: release, commit: 5973b9c)" on 1.1.0. Output in any
+// other shape fails rather than guessing a version the overhead table might
+// match.
+func ParseRuntimeVersion(out []byte) (string, error) {
+	const prefix = "container CLI version "
+	line := strings.TrimSpace(string(out))
+	rest, ok := strings.CutPrefix(line, prefix)
+	version, _, _ := strings.Cut(rest, " ")
+	if !ok || version == "" || strings.ContainsFunc(version, unicode.IsSpace) {
+		return "", fmt.Errorf("container runtime version: unrecognized output %q", line)
+	}
+	return "apple-container " + version, nil
+}
+
 const (
 	// appleContainerIDLimit is the maximum byte length Apple container 1.1.0
 	// accepts for container, volume, and network IDs. Creation fails locally at

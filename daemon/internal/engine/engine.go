@@ -14,6 +14,7 @@ import (
 	"github.com/freeside-ai/freeside/daemon/internal/inference"
 	"github.com/freeside-ai/freeside/daemon/internal/signet"
 	"github.com/freeside-ai/freeside/daemon/internal/store"
+	"github.com/freeside-ai/freeside/daemon/internal/ward"
 )
 
 // ErrInvocationLost means a recorded attempt survived but its driver session
@@ -80,6 +81,9 @@ type Engine struct {
 	// race-free authority; this refresh keeps a repaired blocker from waiting
 	// for the scheduled doctor cadence.
 	refreshUnattendedHealth func(context.Context) error
+	// launchBound is the instance's memory budget and runtime (see
+	// WithMachineCapacity); the zero bound reserves nothing.
+	launchBound ward.LaunchBound
 	// pace bounds the per-pass observation writes (issue #394); process
 	// state only, never authority.
 	pace observationPace
@@ -183,6 +187,7 @@ func New(st *store.Store, attention *signet.Service, driver exec.StageDriver, op
 		}
 	}
 	if e.productionPublication != nil {
+		e.productionPublication.launchBound = e.launchBound
 		e.productionPublication.logger = e.logger
 		e.productionPublication.beginTaskWork = e.BeginRunWork
 		e.productionPublication.claimDispatch = e.claimRunDispatch

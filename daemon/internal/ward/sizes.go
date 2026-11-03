@@ -48,7 +48,10 @@ func (c LaunchClass) valid() bool {
 // ContainerSize is the CPU cap and memory limit ward declares for a container.
 // Apple container 1.1.0 enforces both inside the guest with a cgroup
 // (cpu.max and memory.max hold exactly these values); the VM itself gets one
-// extra CPU and roughly 100 MiB of memory on top for the guest's own use.
+// extra CPU, and once a build has touched guest memory it costs the host 137
+// to 155 MiB more than the declared size until it is deleted. The budget
+// covers that with a per-VM overhead (VMOverheadMiB; ward density spike,
+// devlog/2026-11-02-1210-vm-overhead-reservation.md).
 // The zero value is invalid: a launch with no declared size is refused rather
 // than sent with the runtime's default.
 type ContainerSize struct {
@@ -114,8 +117,10 @@ type LaunchSizes struct {
 // run's resolved policy keys. The caller authenticates the keys (a validated
 // domain.ResolvedPolicy, or a body its content digest re-checked). A missing
 // key keeps the class default. A malformed value, or one below the class
-// default, fails: policy may raise a project's size, never lower it.
-func ResolveLaunchSizes(keys []domain.PolicyKey) (LaunchSizes, error) {
+// default, fails: policy may raise a project's size, never lower it. Under a
+// budget, a size whose reservation can never fit fails too, naming the size,
+// the overhead, and the budget; a bound with no budget checks nothing.
+func ResolveLaunchSizes(keys []domain.PolicyKey, bound LaunchBound) (LaunchSizes, error) {
 	values := make(map[string]string, len(keys))
 	for _, key := range keys {
 		if _, dup := values[key.Key]; dup {
@@ -132,6 +137,11 @@ func ResolveLaunchSizes(keys []domain.PolicyKey) (LaunchSizes, error) {
 	)
 	if err != nil {
 		return LaunchSizes{}, err
+	}
+	for _, size := range []ContainerSize{writer, verification} {
+		if _, err := bound.Reservation(size); err != nil {
+			return LaunchSizes{}, fmt.Errorf("%w: %w", ErrLaunchSizePolicy, err)
+		}
 	}
 	return LaunchSizes{Writer: writer, Verification: verification}, nil
 }
@@ -163,4 +173,75 @@ func resolveClassSize(
 		*field.value = parsed
 	}
 	return size, nil
+}
+
+// RuntimeNone is the runtime version of a composition that starts no
+// container VM (disabled, fake, scenario). Its launches cost the host nothing
+// beyond their declared size, so its overhead is zero; a budget given to such
+// a composition still reserves and holds like a real one.
+const RuntimeNone = "none"
+
+// vmOverheadMiB is the per-VM overhead recorded per container runtime version
+// (plan §5.4, revision 105). It is a fixed value, never measured at
+// conformance time: the overhead appears only once a build touches guest
+// memory. Apple container 1.1.0 measured 137 to 155 MiB; 256 leaves margin for
+// images and sizes the measurement didn't build. A new runtime version records
+// its own value here before it runs launches under a budget.
+var vmOverheadMiB = map[string]int{
+	RuntimeNone:             0,
+	"apple-container 1.1.0": 256,
+}
+
+// VMOverheadMiB returns the recorded per-VM overhead of a runtime version, and
+// false when none is recorded.
+func VMOverheadMiB(runtimeVersion string) (int, bool) {
+	overhead, ok := vmOverheadMiB[runtimeVersion]
+	return overhead, ok
+}
+
+// LaunchBound is what one daemon instance bounds its launches by: its memory
+// budget and the container runtime version whose overhead every reservation
+// adds. A zero BudgetMiB means no budget, and nothing is reserved.
+type LaunchBound struct {
+	BudgetMiB      int
+	RuntimeVersion string
+}
+
+// Budgeted reports whether the bound reserves anything.
+func (b LaunchBound) Budgeted() bool { return b.BudgetMiB > 0 }
+
+// Reservation returns what a launch of size reserves under the bound: its
+// declared memory plus the runtime's per-VM overhead. With no budget it
+// reserves nothing and returns 0. It refuses a runtime version with no
+// recorded overhead (domain.RuntimeOverheadUnknownError) and a reservation
+// larger than the whole budget (domain.LaunchNeverFitsError).
+func (b LaunchBound) Reservation(size ContainerSize) (int, error) {
+	if !b.Budgeted() {
+		return 0, nil
+	}
+	overhead, ok := VMOverheadMiB(b.RuntimeVersion)
+	if !ok {
+		return 0, &domain.RuntimeOverheadUnknownError{RuntimeVersion: b.RuntimeVersion}
+	}
+	if size.MemoryMiB+overhead > b.BudgetMiB {
+		return 0, &domain.LaunchNeverFitsError{
+			SizeMiB: size.MemoryMiB, OverheadMiB: overhead, BudgetMiB: b.BudgetMiB,
+		}
+	}
+	return size.MemoryMiB + overhead, nil
+}
+
+// LaunchReservation builds the reservation record a launch of size makes
+// under the bound. ok is false with no budget, when nothing is reserved.
+func (b LaunchBound) LaunchReservation(
+	invocation domain.InvocationID, run domain.RunID, kind domain.LaunchReservationKind, size ContainerSize,
+) (domain.LaunchReservation, bool, error) {
+	total, err := b.Reservation(size)
+	if err != nil || total == 0 {
+		return domain.LaunchReservation{}, false, err
+	}
+	return domain.LaunchReservation{
+		InvocationID: invocation, RunID: run, Kind: kind,
+		MemoryMiB: size.MemoryMiB, OverheadMiB: total - size.MemoryMiB,
+	}, true, nil
 }

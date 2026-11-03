@@ -55,7 +55,7 @@ var (
 // backend's conformance record claims a containment no process here has.
 func composeScenario(
 	ctx context.Context, st *store.Store, attention *signet.Service, blobs *signet.BlobStore,
-	lock *daemonlock.Lock, cfg config,
+	lock *daemonlock.Lock, cfg config, bound ward.LaunchBound,
 ) (_ *scenarioComposition, err error) {
 	now := func() time.Time { return time.Now().UTC() }
 	sc := *cfg.Scenario
@@ -212,6 +212,7 @@ func composeScenario(
 			},
 		}),
 	}
+	options = append(options, engine.WithMachineCapacity(bound))
 	if cfg.Logger != nil {
 		options = append(options, engine.WithLogger(cfg.Logger))
 	}

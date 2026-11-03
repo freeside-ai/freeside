@@ -391,6 +391,28 @@ func TestManualSubmissionConfigRefusesAnUnresolvableLaunchSize(t *testing.T) {
 	}
 }
 
+// TestManualSubmissionConfigRefusesASizeThatCanNeverFitTheBudget: under a
+// budget, a project policy no launch could ever run under refuses the start,
+// naming the size, the overhead, and the budget.
+func TestManualSubmissionConfigRefusesASizeThatCanNeverFitTheBudget(t *testing.T) {
+	t.Parallel()
+	cfg := manualConfigFixture(t)
+	keys := cfg.Projects[0].PolicyKeys
+	sized := keys[0]
+	sized.Key, sized.Value = ward.PolicyWriterMemoryMiB, "16384"
+	cfg.Projects[0].PolicyKeys = append(slices.Clone(keys), sized)
+	path := filepath.Join(t.TempDir(), "manual.json")
+	writeManualConfig(t, path, cfg)
+	bound := ward.LaunchBound{BudgetMiB: 8192, RuntimeVersion: "apple-container 1.1.0"}
+	if _, err := readManualSubmissionProjects(path, ward.LaunchBound{}); err != nil {
+		t.Fatalf("unbudgeted load: %v", err)
+	}
+	_, err := readManualSubmissionProjects(path, bound)
+	if !errors.Is(err, domain.ErrLaunchNeverFits) || !strings.Contains(err.Error(), "16384 MiB declared plus 256 MiB") {
+		t.Fatalf("budgeted load = %v, want a never-fits refusal naming the numbers", err)
+	}
+}
+
 // Upkeep keeps one image per repository, so it needs one registry set: the
 // one the configured projects declare, none when none declares one, and a
 // refusal to start when two disagree.

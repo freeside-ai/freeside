@@ -62,6 +62,7 @@ func deputySettingsFixture(t *testing.T) map[string]any {
 		},
 		"timeouts":                 map[string]any{"writer_stop": "20m", "writer_stall": "0s"},
 		"manual_submission_config": "",
+		"memory_budget_mib":        8192,
 		"build":                    map[string]any{"proxy": "", "base_build_ref": "", "dns": []string{}},
 	}
 }
@@ -107,8 +108,12 @@ func TestLoadDeputySettingsRefusesNamingTheField(t *testing.T) {
 		"missing nested key": {func(s map[string]any) {
 			delete(s["agent_tree"].(map[string]any), "commit")
 		}, "agent_tree.commit is required"},
-		"null value":  {func(s map[string]any) { s["manual_submission_config"] = nil }, "manual_submission_config is required"},
-		"unknown key": {func(s map[string]any) { s["diagnostic_dir"] = "/tmp" }, `unknown field "diagnostic_dir"`},
+		"null value":       {func(s map[string]any) { s["manual_submission_config"] = nil }, "manual_submission_config is required"},
+		"unknown key":      {func(s map[string]any) { s["diagnostic_dir"] = "/tmp" }, `unknown field "diagnostic_dir"`},
+		"no memory budget": {func(s map[string]any) { delete(s, "memory_budget_mib") }, "memory_budget_mib is required"},
+		"zero memory budget": {func(s map[string]any) {
+			s["memory_budget_mib"] = 0
+		}, "memory_budget_mib must be positive"},
 		"unknown nested key": {func(s map[string]any) {
 			s["review"].(map[string]any)["reasoning"] = "high"
 		}, `unknown field "reasoning"`},

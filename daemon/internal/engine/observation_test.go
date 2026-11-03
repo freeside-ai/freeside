@@ -16,6 +16,7 @@ import (
 	"github.com/freeside-ai/freeside/daemon/internal/specify"
 	specifyfake "github.com/freeside-ai/freeside/daemon/internal/specify/fake"
 	"github.com/freeside-ai/freeside/daemon/internal/store"
+	"github.com/freeside-ai/freeside/daemon/internal/ward"
 )
 
 // holdClassifiedSentinels is every error the dispatch path classifies as a
@@ -278,6 +279,135 @@ func TestMachineCapacityRefusalHoldsNamingItsMemory(t *testing.T) {
 	never := &domain.LaunchNeverFitsError{SizeMiB: 8192, OverheadMiB: 256, BudgetMiB: 4096}
 	if _, ok := dispatchHoldReason(never); ok {
 		t.Fatal("a launch that can never fit holds instead of failing")
+	}
+}
+
+// TestDispatchWaitsForMachineMemory: a dispatch that does not fit the budget
+// records no admission, holds under machine_capacity naming the figures, and
+// joins the memory order; once the memory ahead of it is released it is
+// admitted and leaves both.
+func TestDispatchWaitsForMachineMemory(t *testing.T) {
+	ctx := t.Context()
+	f := newSpecificationFixture(t, false, 4)
+	f.launchBound = ward.LaunchBound{BudgetMiB: 3072, RuntimeVersion: ward.RuntimeNone}
+	driver := f.newDriver(t)
+	runID := domain.RunID("specification-run")
+	id := specificationInvocationID(runID, 1)
+	if err := specifyfake.Script(driver, id, 0, 0, specify.Output{Specification: &specify.Specification{
+		Summary: "The implementation plan is ready.", Body: "# Specification\n\nImplement.",
+		Addressals: []specify.Addressal{},
+	}}); err != nil {
+		t.Fatal(err)
+	}
+	f.submit(t)
+	engine := f.newEngine(t, driver)
+	holder := domain.LaunchReservation{
+		InvocationID: "inv-holder", RunID: runID, Kind: domain.ReservationVerification, MemoryMiB: 2048,
+	}
+	if err := f.store.Write(ctx, func(tx *store.WriteTx) error {
+		return tx.RequireMachineCapacity(ctx, 3072, holder, *f.now)
+	}); err != nil {
+		t.Fatal(err)
+	}
+	waiting := func() bool {
+		t.Helper()
+		var waiting bool
+		if err := f.store.Read(ctx, func(tx *store.ReadTx) error {
+			var err error
+			waiting, err = tx.LaunchWaiting(ctx, id)
+			return err
+		}); err != nil {
+			t.Fatal(err)
+		}
+		return waiting
+	}
+
+	if _, err := engine.Reconcile(ctx); err != nil {
+		t.Fatal(err)
+	}
+	want := domain.MachineCapacityHold{ReservationMiB: 2048, ReservedMiB: 2048, BudgetMiB: 3072}
+	if got := storedRunHold(t, f.store, runID); got == nil || got.Reason != domain.HoldMachineCapacity ||
+		got.MachineCapacity == nil || *got.MachineCapacity != want {
+		t.Fatalf("hold = %+v, want machine_capacity %+v", got, want)
+	}
+	if !waiting() {
+		t.Fatal("the refused dispatch did not join the memory order")
+	}
+
+	if err := f.store.Write(ctx, func(tx *store.WriteTx) error {
+		return tx.ReleaseVerificationReservation(ctx, holder.InvocationID, *f.now)
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := engine.Reconcile(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if got := storedRunHold(t, f.store, runID); got != nil {
+		t.Fatalf("dispatch left the hold in place: %+v", got)
+	}
+	if waiting() {
+		t.Fatal("the admitted dispatch still waits for memory")
+	}
+}
+
+// TestDispatchReportsALaunchThatCanNeverFit: a launch larger than the whole
+// budget is no wait. Its run gets the execution_failure notice naming the
+// three numbers, no hold and no place in the order, and the pass goes on.
+func TestDispatchReportsALaunchThatCanNeverFit(t *testing.T) {
+	ctx := t.Context()
+	f := newSpecificationFixture(t, false, 4)
+	f.launchBound = ward.LaunchBound{BudgetMiB: 1024, RuntimeVersion: ward.RuntimeNone}
+	driver := f.newDriver(t)
+	runID := domain.RunID("specification-run")
+	id := specificationInvocationID(runID, 1)
+	f.submit(t)
+	engine := f.newEngine(t, driver)
+	for range 2 {
+		if _, err := engine.Reconcile(ctx); err != nil {
+			t.Fatalf("a launch that can never fit stopped the pass: %v", err)
+		}
+	}
+	item, found, err := readProductionQuarantineItem(ctx, f.store,
+		productionQuarantineOccurrenceID(launchMemoryRefusedPrefix, runID, 1))
+	if err != nil || !found {
+		t.Fatalf("notice = %v, %t", err, found)
+	}
+	if item.Type != domain.AttentionExecutionFailure ||
+		!strings.Contains(item.Reason, "2048 MiB declared plus 0 MiB per-VM overhead exceeds the 1024 MiB budget") {
+		t.Fatalf("notice = %+v", item)
+	}
+	if _, found, err := readProductionQuarantineItem(ctx, f.store,
+		productionQuarantineOccurrenceID(launchMemoryRefusedPrefix, runID, 2)); err != nil || found {
+		t.Fatalf("a second pass raised a second notice: %v, %t", err, found)
+	}
+	if got := storedRunHold(t, f.store, runID); got != nil {
+		t.Fatalf("a launch that can never fit holds: %+v", got)
+	}
+	if err := f.store.Read(ctx, func(tx *store.ReadTx) error {
+		waiting, err := tx.LaunchWaiting(ctx, id)
+		if err == nil && waiting {
+			err = errors.New("a launch that can never fit waits in the order")
+		}
+		return err
+	}); err != nil {
+		t.Fatal(err)
+	}
+	// A later start whose budget fits the launch admits it and retires the
+	// notice.
+	f.launchBound = ward.LaunchBound{BudgetMiB: 4096, RuntimeVersion: ward.RuntimeNone}
+	if err := specifyfake.Script(driver, id, 0, 0, specify.Output{Specification: &specify.Specification{
+		Summary: "The implementation plan is ready.", Body: "# Specification\n\nImplement.",
+		Addressals: []specify.Addressal{},
+	}}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := f.newEngine(t, driver).Reconcile(ctx); err != nil {
+		t.Fatal(err)
+	}
+	item, _, err = readProductionQuarantineItem(ctx, f.store,
+		productionQuarantineOccurrenceID(launchMemoryRefusedPrefix, runID, 1))
+	if err != nil || item.Status == domain.StatusOpen {
+		t.Fatalf("notice after the launch fit = %+v, %v; want it retired", item.Status, err)
 	}
 }
 

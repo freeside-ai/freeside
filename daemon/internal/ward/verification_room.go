@@ -26,6 +26,12 @@ const verificationCleanupTimeout = 2 * time.Minute
 
 var errVerificationProcessUnproven = procbound.ErrQuiescenceUnproven
 
+// ErrVerificationAbsenceUnproven marks a verification call whose container
+// or runner process was not proved gone. Every other return, an error
+// included, proves the call left nothing running, which is what ends a
+// verification job's memory reservation (plan §5.4).
+var ErrVerificationAbsenceUnproven = errors.New("verification container absence is unproven")
+
 func confirmVerificationProcessExit(cmd *exec.Cmd, err error) error {
 	return errors.Join(err, procbound.ConfirmExit(cmd, procbound.DefaultWaitDelay))
 }
@@ -230,6 +236,9 @@ func (r *ProjectImageRoom) runImageCommand(
 	cancelCleanup()
 	if cleanupErr != nil {
 		result = verify.StepResult{}
+		cleanupErr = errors.Join(ErrVerificationAbsenceUnproven, cleanupErr)
+	} else if errors.Is(runErr, errVerificationProcessUnproven) {
+		cleanupErr = ErrVerificationAbsenceUnproven
 	}
 	if identityErr != nil && runErr == nil {
 		return verify.StepResult{}, errors.Join(identityErr, cleanupErr)
