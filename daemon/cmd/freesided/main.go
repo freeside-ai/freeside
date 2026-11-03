@@ -1096,6 +1096,9 @@ func run(parent context.Context, stop func(), cfg config) (_ *daemon, err error)
 	// cadence, has been missed. Collection and the bootstrap's stale_at share
 	// the age, so a client sees a reading stale exactly when collection does.
 	usageRefreshAge := 2 * cfg.DoctorInterval
+	usage := usagecollect.New(st, cfg.usageCollectors, usagecollect.Config{
+		RefreshAge: usageRefreshAge, Logger: cfg.Logger,
+	})
 	attention := signet.NewService(st,
 		signet.WithTaskStopGuard(func(stopCtx context.Context, taskID domain.TaskID, commit func() error) error {
 			if workflow == nil {
@@ -1150,6 +1153,9 @@ func run(parent context.Context, stop func(), cfg config) (_ *daemon, err error)
 		// scenario compositions that load no tree, clients see null.
 		signet.WithAgentCatalog(func() *signet.AgentCatalog { return agentCatalog }),
 		signet.WithUsageRefreshAge(usageRefreshAge),
+		// A client's refresh or reassignment starts its collection only after
+		// the command commits.
+		signet.WithUsageOperator(usageOperator{coordinator: usage}),
 		signet.WithNtfy(signet.NtfyConfig{
 			BaseURL: cfg.NtfyURL, TopicKey: topicKey,
 		}),
@@ -1561,9 +1567,7 @@ func run(parent context.Context, stop func(), cfg config) (_ *daemon, err error)
 	if claudeWiring != nil {
 		d.sessionCloser = claudeWiring.closer
 	}
-	d.usage = usagecollect.New(st, cfg.usageCollectors, usagecollect.Config{
-		RefreshAge: usageRefreshAge, Logger: cfg.Logger,
-	})
+	d.usage = usage
 	d.pairing.configure(d.readiness().APIURL, attention.MintPairingCode)
 	// The control routes approve the store's recipe set, which a scenario
 	// extends with its own recipe, and the recipes adopted for the Claude

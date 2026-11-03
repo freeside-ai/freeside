@@ -59,10 +59,16 @@ Four `/commands` kinds act on them. None carries `expected_entity_version` or
 applies it, and an exact replay of its `command_id` returns that receipt and
 revision. A `command_id` names one command of any kind.
 
-- **`refresh_usage`** asks for a pool's usage to be read now. New readings
-  arrive in the pool's usage record, never in the receipt. An unknown pool is
-  404.
-- **`reassign_collector`** names the enrollment that reads a pool's usage. An
+- **`refresh_usage`** asks for a pool's usage to be read now. Once it accepts
+  the command, the daemon starts a collection that begins after it, as
+  `freesided auth refresh-usage` does, and never waits for it: the receipt
+  comes first, and new readings arrive in the pool's usage record at a later
+  revision, never in the receipt. During a failure backoff it starts none. An
+  unknown pool is 404.
+- **`reassign_collector`** names the enrollment that reads a pool's usage, as
+  `freesided auth set-collector` does. The new collector commits with the
+  receipt, at one revision, and a collection under it starts after.
+  Naming the current collector records the receipt and nothing else. An
   enrollment not on that pool is 400.
 - **`change_task_line`** sets one role's line on a task, as `freesided
   task-line` does, or clears it when `agent` is null or omitted. The record
@@ -74,6 +80,3 @@ revision. A `command_id` names one command of any kind.
   omitted when it saw none. Any other current revision is 409 with the
   current policy, so two operators can't overwrite each other. An agent
   outside the daemon's agent tree is 400.
-
-Until #1720 wires the collection lifecycle, the daemon answers `refresh_usage`
-and `reassign_collector` with 500 and records nothing.

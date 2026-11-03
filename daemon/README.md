@@ -1602,9 +1602,13 @@ and changes a task's line with `change_task_line`. The daemon checks the
 policy against the agent tree its own composition loaded, records the
 revision with source `client_routing_set` and `set_by` `device:<device_id>`,
 and refuses a change prepared against a revision that is no longer current
-(`api/README.md`, Usage and Routing Command Contract). The usage commands,
-`refresh_usage` and `reassign_collector`, fail closed until #1720 wires the
-collection lifecycle into the signet service.
+(`api/README.md`, Usage and Routing Command Contract). A client refreshes a
+pool with `refresh_usage`, which starts a collection as `freesided auth
+refresh-usage` does but doesn't wait for it, and changes its collector with
+`reassign_collector`, which works as `freesided auth set-collector` does and
+commits the new collector with the command's receipt. Each starts its
+collection only after the command commits, so a refused or replayed command
+starts none.
 
 ### Enroll An Agent Credential
 
