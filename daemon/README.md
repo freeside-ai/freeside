@@ -1644,6 +1644,36 @@ freesided auth refresh-usage \
   -pool <usage_pool from freesided auth list>
 ```
 
+### Seed An Exhausted Window For An Exit Run
+
+`freesided auth seed-exhausted` marks one pool's window exhausted until a
+reset, so an exit run can watch the router pass the pool over without
+spending real allowance. It writes the pool's usage record the way a
+collection would: the window mapped to the route model id, an exhausted
+reading with the reset under the collector's current enrollment generation,
+and a succeeded `last_attempt` whose detail is
+`seeded by freesided auth seed-exhausted`. It prints the record as JSON. With
+the daemon running it goes through that daemon; stopped, it writes the
+database directly.
+
+```sh
+freesided auth seed-exhausted \
+  -db <state-root>/daemon/freeside.db \
+  -pool <usage_pool from freesided auth list> \
+  -window <provider window, such as five_hour> \
+  -model <route model id of the policy's first agent> \
+  -resets-at 2026-11-03T18:00:00Z
+```
+
+- **Seed the first-ranked agent's pool.** With no drain-first account and
+  no known weekly reset, that is the agent first in the role's order. Mark
+  its window, then submit the next task promptly. The router passes that
+  agent over and records its mark in the line's provenance (`passed_over`).
+- **A collection replaces the reading.** The next collection of that pool
+  writes what the provider actually reports, which clears the seeded mark.
+- **The reset must be in the future.** A reset at or before now is refused,
+  because the router ignores a reading past its reset.
+
 ### Change A Usage Pool's Collector
 
 A pool's first enrollment collects for it. `freesided auth set-collector`
@@ -1714,8 +1744,9 @@ one of `-agent` and `-clear`.
 role, the agents that may take a new task when no task line chose one, in
 fallback order, and optionally a drain-first account, the usage pool that
 takes every new task ahead of reset order (`docs/plan.md` §5.4, revision
-107). Nothing reads the policy yet: the router that
-applies it is #2393, so setting one changes no admission. Both commands work
+107). The router reads the current revision at a task's first admission
+(Route A Task To One Pool). A new revision changes only tasks the router
+hasn't yet routed. Both commands work
 with the daemon running or stopped: on a running daemon they go through that
 daemon, which holds the store. Both print JSON.
 
@@ -1773,6 +1804,61 @@ refresh-usage` does but doesn't wait for it, and changes its collector with
 commits the new collector with the command's receipt. Each starts its
 collection only after the command commits, so a refused or replayed command
 starts none.
+
+### Route A Task To One Pool
+
+The router pins a task to one usage pool at the task's first admission and
+writes the choice as task lines. Admission then reads only the lines, as it
+does for an operator's.
+
+- **It runs once per task.** It runs at the admission of a task-line role
+  (`specifier`, `implementer`, `remediator`, `reviewer`) that has no line,
+  when the current policy orders that role. It doesn't run if any role
+  already has a router line, or if a run of the task was already admitted
+  for a task-line role through the lineup. A task admitted before the policy
+  was set stays on the lineup. A role the policy doesn't order is admitted
+  through the lineup, as before.
+- **It ranks the pools in three tiers** (`docs/plan.md` §5.4, revision 107).
+  Agents on the policy's drain-first account come first, when the role's
+  order holds one. Agents on pools whose weekly allowance has a known reset
+  still ahead come next, soonest reset first, equal resets in the policy's
+  order. The rest follow in the policy's order. A reading is weekly when its
+  `length` is seven days, whatever the provider names the window. A pool
+  ranks by the weekly windows that apply to the model of its first agent in
+  the order, the soonest-resetting one when several do. An agent the tree
+  lacks, or one that doesn't resolve to an enrolled identity, is skipped. If
+  no agent in the order resolves, the router writes nothing and the task
+  stays on the lineup.
+- **It takes the first open agent.** It takes the first ranked agent whose
+  pool has no exhausted mark on the window for that agent's model. A mark
+  comes from an exhausted reading not yet past its reset, or from a
+  provider's quota refusal (Refresh A Usage Pool's Usage Record). A marked
+  pool keeps its rank and is passed over.
+- **It pins every role to that pool.** One write records a version-1 line
+  for the role being admitted and for every other unlined role the policy
+  orders, each naming that role's first agent on the chosen pool, even one
+  passed over for its own model's marked window, which then holds. A role with
+  no agent on that pool gets no line and runs on the lineup. An operator's
+  line, or a cleared line, is left alone.
+- **It records why.** Every line of the routing carries one provenance: the
+  policy revision, the `tier` that chose the pool, the `pool`, the weekly
+  readings that ranked the candidates (`ranked_by`), and, when an agent
+  ranked ahead was passed over, that agent and its mark (`passed_over`). The
+  drain-first tier passes over nothing: the account leads every pool.
+- **Every pool marked holds the task.** When every agent's pool is marked,
+  the attempt or review waits under a `quota_window_exhausted` hold that names
+  the pool and window freeing first, and routes again after it. A pool frees
+  at the latest reset among its marks; a mark with no reset doesn't hold,
+  here or for a later role. When no mark carries a reset, the router picks
+  the first ranked agent and leaves the outcome to the provider.
+- **Later roles hold rather than move.** A role on a router line whose pool's
+  window for its model is marked with a future reset waits under the same
+  hold, then admits on the same line once the mark clears. Nothing reroutes a
+  task in flight; move one with `freesided task-line` (Change A Task's Agent
+  For A Role).
+- **Dispatch clears the hold.** An attempt's hold ends when it starts. A
+  review's hold ends when its admission is written, and the review's wait
+  spends no retry budget.
 
 ### Enroll An Agent Credential
 
@@ -2645,12 +2731,19 @@ snapshot records what the line selected.
 
 Every line records its `source`: `submit_task`, `cli_submit`,
 `proposal_start`, or `cli_line_change` for an operator's choice, or `router`
-for the routing policy's choice at a task's first admission. Nothing writes a router line
-yet (#2393), and admission refuses one. A router line carries its selection
-`provenance`: the policy revision, the `tier` that chose the pool
-(`drain_first_account`, `soonest_reset`, or `policy_order`), the chosen
-`pool`, the weekly resets that ranked the candidates (`ranked_by`), and the
-exhausted mark on any agent ranked ahead of it (`passed_over`). `GET /tasks/{task_id}/timeline` shows every line version
+for the routing policy's choice at a task's first admission (Route A Task To
+One Pool). Admission holds a router line to the policy it cites: its `set_by`
+is `router:<task_id>`, it is the role's first version, its policy revision
+exists and was set no later than the line, that revision orders the line's
+agent for the role, when the line passed an agent over some role's order
+names that agent, and a line the `drain_first_account` tier chose names the
+pool that revision drains first. A router line that fails any of these
+refuses the attempt like any other line that can't be honored. A router line
+carries its selection `provenance`: the policy revision, the `tier` that
+chose the pool (`drain_first_account`, `soonest_reset`, or `policy_order`),
+the chosen `pool`, the weekly resets that ranked the candidates
+(`ranked_by`), and the exhausted mark on the first agent ranked ahead of it
+that was passed over (`passed_over`). `GET /tasks/{task_id}/timeline` shows every line version
 as a `task_line_set` event at its `set_at`, and the synced task carries each
 role's current line in `task_lines`. A version from `freesided task-line
 -clear` shows as an event with a null `agent`, and the synced task then
