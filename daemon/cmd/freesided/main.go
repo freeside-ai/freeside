@@ -1585,6 +1585,9 @@ func run(parent context.Context, stop func(), cfg config) (_ *daemon, err error)
 			ReadHeaderTimeout: 5 * time.Second,
 		},
 	}
+	// Shutdown releases open revision long-polls, so draining the server
+	// stays inside serverShutdownBudget instead of waiting out their bound.
+	d.server.RegisterOnShutdown(attention.Shutdown)
 	if claudeWiring != nil {
 		d.sessionCloser = claudeWiring.closer
 	}

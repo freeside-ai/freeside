@@ -131,10 +131,38 @@ func (h httpHandler) getBootstrap(w http.ResponseWriter, r *http.Request, _ doma
 	writeJSON(w, http.StatusOK, snapshot)
 }
 
+// getRevision serves the heartbeat, or with ?after=N its long poll
+// (RevisionAfter). The authenticated wrapper checks the credential only before
+// a wait that can last RevisionWaitBound, so the long poll re-runs the check
+// before answering: a device revoked during the wait gets 401, not state.
 func (h httpHandler) getRevision(w http.ResponseWriter, r *http.Request, _ domain.DeviceID) {
-	revision, err := h.service.Revision(r.Context())
+	raw, waits := r.URL.Query()["after"]
+	if !waits {
+		revision, err := h.service.Revision(r.Context())
+		if err != nil {
+			writeReadError(w, err)
+			return
+		}
+		writeJSON(w, http.StatusOK, revision)
+		return
+	}
+	after, err := strconv.ParseInt(raw[0], 10, 64)
+	if err != nil || after < 0 || len(raw) > 1 {
+		writeJSON(w, http.StatusBadRequest, errorResponse{Message: "after must be a non-negative integer"})
+		return
+	}
+	revision, err := h.service.RevisionAfter(r.Context(), after)
+	if r.Context().Err() != nil {
+		// The client went away during the wait; nobody reads a response.
+		return
+	}
 	if err != nil {
 		writeReadError(w, err)
+		return
+	}
+	if deviceID, ok := h.authorize(r); !ok || deviceID == "" {
+		w.Header().Set("WWW-Authenticate", "Bearer")
+		writeJSON(w, http.StatusUnauthorized, errorResponse{Message: "unauthorized"})
 		return
 	}
 	writeJSON(w, http.StatusOK, revision)

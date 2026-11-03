@@ -43,15 +43,22 @@ func bootstrapUnattended(t *testing.T, service *signet.Service) signet.Unattende
 	return bootstrap.UnattendedOperation
 }
 
-func TestRevisionTracksLiveBackupHealthWithoutRevisionChange(t *testing.T) {
-	ctx := context.Background()
-	health := domain.BackupHealth{
+func healthyBackup() domain.BackupHealth {
+	return domain.BackupHealth{
 		Encryption: domain.BackupHealthHealthy, CheckpointCurrency: domain.BackupHealthHealthy,
 		ArtifactClosure: domain.BackupHealthHealthy, RestoreTestAge: domain.BackupHealthHealthy,
 	}
+}
+
+// newBackupHealthService opens a service whose live backup health is health()
+// at every gate evaluation, with a blocking backup-encryption waiver notice
+// open, so an unhealthy encryption reading stops unattended admission without
+// any transaction.
+func newBackupHealthService(t *testing.T, health func() domain.BackupHealth) (*signet.Service, domain.AttentionItem) {
+	t.Helper()
 	s := storetest.Open(t, t.TempDir()+"/signet.db", store.Options{
 		BackupHealthSource: store.BackupHealthSourceFunc(func(context.Context, store.BackupHealthContext) (domain.BackupHealth, error) {
-			return health, nil
+			return health(), nil
 		}),
 	})
 	service := signet.NewService(s)
@@ -70,9 +77,16 @@ func TestRevisionTracksLiveBackupHealthWithoutRevisionChange(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := service.PutItem(ctx, item); err != nil {
+	if err := service.PutItem(context.Background(), item); err != nil {
 		t.Fatal(err)
 	}
+	return service, item
+}
+
+func TestRevisionTracksLiveBackupHealthWithoutRevisionChange(t *testing.T) {
+	ctx := context.Background()
+	health := healthyBackup()
+	service, item := newBackupHealthService(t, func() domain.BackupHealth { return health })
 	initial, err := service.Revision(ctx)
 	if err != nil {
 		t.Fatal(err)

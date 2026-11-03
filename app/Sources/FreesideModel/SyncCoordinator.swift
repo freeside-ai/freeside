@@ -419,6 +419,12 @@ public final class SyncCoordinator {
                         settleRoutingPolicyChange()
                     }
                 }
+            case .badRequest:
+                // Only a malformed `after` earns a 400, and this read sends
+                // none, so it is a failed read like any other status.
+                let diagnosed = await failureFreshness(status: 400)
+                guard generation == syncGeneration else { return }
+                store.freshness = diagnosed
             case .undocumented(let statusCode, _):
                 let diagnosed = await failureFreshness(status: statusCode)
                 guard generation == syncGeneration else { return }

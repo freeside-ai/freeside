@@ -217,6 +217,17 @@ public struct Client: APIProtocol {
     /// adopted `agent_catalog`'s triggers a bootstrap: a daemon restarted on
     /// a changed agent tree moves no revision.
     ///
+    /// Without `after` the read answers at once. With `after` it is a long
+    /// poll, a latency channel only (plan §5.14): the daemon holds the
+    /// request while its revision equals `after` and answers when a
+    /// client-visible commit or an epoch change wakes it, or at most 25
+    /// seconds after the request arrived. A revision above or below `after`
+    /// answers at once, so a cursor from an earlier epoch (a restore can
+    /// lower the revision) is never held. Every answer is the same
+    /// `ServerRevision`, read when the daemon answers, so a verdict or
+    /// lineup change that moves no revision reaches the client by the
+    /// 25-second bound at the latest.
+    ///
     ///
     /// - Remark: HTTP `GET /sync/revision`.
     /// - Remark: Generated from `#/paths//sync/revision/get(getSyncRevision)`.
@@ -234,6 +245,13 @@ public struct Client: APIProtocol {
                     method: .get
                 )
                 suppressMutabilityWarning(&request)
+                try converter.setQueryItemAsURI(
+                    in: &request,
+                    style: .form,
+                    explode: true,
+                    name: "after",
+                    value: input.query.after
+                )
                 converter.setAcceptHeader(
                     in: &request.headerFields,
                     contentTypes: input.headers.accept
@@ -264,6 +282,28 @@ public struct Client: APIProtocol {
                         preconditionFailure("bestContentType chose an invalid content type.")
                     }
                     return .ok(.init(body: body))
+                case 400:
+                    let contentType = converter.extractContentTypeIfPresent(in: response.headerFields)
+                    let body: Operations.getSyncRevision.Output.BadRequest.Body
+                    let chosenContentType = try converter.bestContentType(
+                        received: contentType,
+                        options: [
+                            "application/json"
+                        ]
+                    )
+                    switch chosenContentType {
+                    case "application/json":
+                        body = try await converter.getResponseBodyAsJSON(
+                            Components.Schemas._Error.self,
+                            from: responseBody,
+                            transforming: { value in
+                                .json(value)
+                            }
+                        )
+                    default:
+                        preconditionFailure("bestContentType chose an invalid content type.")
+                    }
+                    return .badRequest(.init(body: body))
                 default:
                     return .undocumented(
                         statusCode: response.status.code,

@@ -64,6 +64,17 @@ public protocol APIProtocol: Sendable {
     /// adopted `agent_catalog`'s triggers a bootstrap: a daemon restarted on
     /// a changed agent tree moves no revision.
     ///
+    /// Without `after` the read answers at once. With `after` it is a long
+    /// poll, a latency channel only (plan §5.14): the daemon holds the
+    /// request while its revision equals `after` and answers when a
+    /// client-visible commit or an epoch change wakes it, or at most 25
+    /// seconds after the request arrived. A revision above or below `after`
+    /// answers at once, so a cursor from an earlier epoch (a restore can
+    /// lower the revision) is never held. Every answer is the same
+    /// `ServerRevision`, read when the daemon answers, so a verdict or
+    /// lineup change that moves no revision reaches the client by the
+    /// 25-second bound at the latest.
+    ///
     ///
     /// - Remark: HTTP `GET /sync/revision`.
     /// - Remark: Generated from `#/paths//sync/revision/get(getSyncRevision)`.
@@ -433,11 +444,28 @@ extension APIProtocol {
     /// adopted `agent_catalog`'s triggers a bootstrap: a daemon restarted on
     /// a changed agent tree moves no revision.
     ///
+    /// Without `after` the read answers at once. With `after` it is a long
+    /// poll, a latency channel only (plan §5.14): the daemon holds the
+    /// request while its revision equals `after` and answers when a
+    /// client-visible commit or an epoch change wakes it, or at most 25
+    /// seconds after the request arrived. A revision above or below `after`
+    /// answers at once, so a cursor from an earlier epoch (a restore can
+    /// lower the revision) is never held. Every answer is the same
+    /// `ServerRevision`, read when the daemon answers, so a verdict or
+    /// lineup change that moves no revision reaches the client by the
+    /// 25-second bound at the latest.
+    ///
     ///
     /// - Remark: HTTP `GET /sync/revision`.
     /// - Remark: Generated from `#/paths//sync/revision/get(getSyncRevision)`.
-    public func getSyncRevision(headers: Operations.getSyncRevision.Input.Headers = .init()) async throws -> Operations.getSyncRevision.Output {
-        try await getSyncRevision(Operations.getSyncRevision.Input(headers: headers))
+    public func getSyncRevision(
+        query: Operations.getSyncRevision.Input.Query = .init(),
+        headers: Operations.getSyncRevision.Input.Headers = .init()
+    ) async throws -> Operations.getSyncRevision.Output {
+        try await getSyncRevision(Operations.getSyncRevision.Input(
+            query: query,
+            headers: headers
+        ))
     }
     /// List attention items
     ///
@@ -19288,12 +19316,39 @@ public enum Operations {
     /// adopted `agent_catalog`'s triggers a bootstrap: a daemon restarted on
     /// a changed agent tree moves no revision.
     ///
+    /// Without `after` the read answers at once. With `after` it is a long
+    /// poll, a latency channel only (plan §5.14): the daemon holds the
+    /// request while its revision equals `after` and answers when a
+    /// client-visible commit or an epoch change wakes it, or at most 25
+    /// seconds after the request arrived. A revision above or below `after`
+    /// answers at once, so a cursor from an earlier epoch (a restore can
+    /// lower the revision) is never held. Every answer is the same
+    /// `ServerRevision`, read when the daemon answers, so a verdict or
+    /// lineup change that moves no revision reaches the client by the
+    /// 25-second bound at the latest.
+    ///
     ///
     /// - Remark: HTTP `GET /sync/revision`.
     /// - Remark: Generated from `#/paths//sync/revision/get(getSyncRevision)`.
     public enum getSyncRevision {
         public static let id: Swift.String = "getSyncRevision"
         public struct Input: Sendable, Hashable {
+            /// - Remark: Generated from `#/paths/sync/revision/GET/query`.
+            public struct Query: Sendable, Hashable {
+                /// The client's highest observed server revision. When present, the daemon waits up to 25 seconds while its revision equals this value; absent, it answers at once.
+                ///
+                ///
+                /// - Remark: Generated from `#/paths/sync/revision/GET/query/after`.
+                public var after: Swift.Int64?
+                /// Creates a new `Query`.
+                ///
+                /// - Parameters:
+                ///   - after: The client's highest observed server revision. When present, the daemon waits up to 25 seconds while its revision equals this value; absent, it answers at once.
+                public init(after: Swift.Int64? = nil) {
+                    self.after = after
+                }
+            }
+            public var query: Operations.getSyncRevision.Input.Query
             /// - Remark: Generated from `#/paths/sync/revision/GET/header`.
             public struct Headers: Sendable, Hashable {
                 public var accept: [OpenAPIRuntime.AcceptHeaderContentType<Operations.getSyncRevision.AcceptableContentType>]
@@ -19309,8 +19364,13 @@ public enum Operations {
             /// Creates a new `Input`.
             ///
             /// - Parameters:
+            ///   - query:
             ///   - headers:
-            public init(headers: Operations.getSyncRevision.Input.Headers = .init()) {
+            public init(
+                query: Operations.getSyncRevision.Input.Query = .init(),
+                headers: Operations.getSyncRevision.Input.Headers = .init()
+            ) {
+                self.query = query
                 self.headers = headers
             }
         }
@@ -19361,6 +19421,57 @@ public enum Operations {
                     default:
                         try throwUnexpectedResponseStatus(
                             expectedStatus: "ok",
+                            response: self
+                        )
+                    }
+                }
+            }
+            public struct BadRequest: Sendable, Hashable {
+                /// - Remark: Generated from `#/paths/sync/revision/GET/responses/400/content`.
+                @frozen public enum Body: Sendable, Hashable {
+                    /// - Remark: Generated from `#/paths/sync/revision/GET/responses/400/content/application\/json`.
+                    case json(Components.Schemas._Error)
+                    /// The associated value of the enum case if `self` is `.json`.
+                    ///
+                    /// - Throws: An error if `self` is not `.json`.
+                    /// - SeeAlso: `.json`.
+                    public var json: Components.Schemas._Error {
+                        get throws {
+                            switch self {
+                            case let .json(body):
+                                return body
+                            }
+                        }
+                    }
+                }
+                /// Received HTTP response body
+                public var body: Operations.getSyncRevision.Output.BadRequest.Body
+                /// Creates a new `BadRequest`.
+                ///
+                /// - Parameters:
+                ///   - body: Received HTTP response body
+                public init(body: Operations.getSyncRevision.Output.BadRequest.Body) {
+                    self.body = body
+                }
+            }
+            /// The `after` query parameter is not a non-negative integer.
+            ///
+            /// - Remark: Generated from `#/paths//sync/revision/get(getSyncRevision)/responses/400`.
+            ///
+            /// HTTP response code: `400 badRequest`.
+            case badRequest(Operations.getSyncRevision.Output.BadRequest)
+            /// The associated value of the enum case if `self` is `.badRequest`.
+            ///
+            /// - Throws: An error if `self` is not `.badRequest`.
+            /// - SeeAlso: `.badRequest`.
+            public var badRequest: Operations.getSyncRevision.Output.BadRequest {
+                get throws {
+                    switch self {
+                    case let .badRequest(response):
+                        return response
+                    default:
+                        try throwUnexpectedResponseStatus(
+                            expectedStatus: "badRequest",
                             response: self
                         )
                     }

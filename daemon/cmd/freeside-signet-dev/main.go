@@ -244,6 +244,9 @@ func run(ctx context.Context, cfg config) (_ *harness, err error) {
 		},
 		serveErrs: make(chan error, 2),
 	}
+	// Shutdown releases open revision long-polls, so Close does not wait
+	// out their bound.
+	h.apiServer.RegisterOnShutdown(service.Shutdown)
 	go func() { h.serveErrs <- h.apiServer.Serve(apiListener) }()
 	go func() { h.serveErrs <- h.controlServer.Serve(controlListener) }()
 	success = true

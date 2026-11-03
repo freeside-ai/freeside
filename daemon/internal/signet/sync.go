@@ -500,6 +500,59 @@ func (s *Service) Revision(ctx context.Context) (ServerRevision, error) {
 	return out, nil
 }
 
+// RevisionWaitBound is the longest RevisionAfter holds a request. It sits
+// well under the app's 60-second staleness threshold, so an idle client still
+// stamps a fresh heartbeat several times before it would call itself stale,
+// and under URLSession's 60-second request timeout. Shutdown does not wait it
+// out: Shutdown releases waiters inside the daemon's 5-second drain budget.
+const RevisionWaitBound = 25 * time.Second
+
+// RevisionAfter is the heartbeat as a long poll, a latency channel only (plan
+// §5.14). It answers at once unless the revision equals after, and otherwise
+// waits until a commit moves the revision or epoch, RevisionWaitBound
+// elapses, or the service shuts down. Every answer is a fresh Revision read,
+// so a verdict or lineup change that moves no revision still reaches the
+// client by the bound. A cancelled ctx returns ctx.Err().
+func (s *Service) RevisionAfter(ctx context.Context, after int64) (ServerRevision, error) {
+	bound := time.NewTimer(RevisionWaitBound)
+	defer bound.Stop()
+	var epoch string
+	for {
+		// Taken before the read, so a commit between the read and the
+		// select still wakes this request.
+		changed := s.store.RevisionChanged()
+		out, err := s.Revision(ctx)
+		if err != nil {
+			return ServerRevision{}, err
+		}
+		if epoch == "" {
+			epoch = out.SyncEpoch
+		}
+		// A restore rotates the epoch and may leave the revision equal to
+		// after; the client must still learn of it at once.
+		if out.Revision != after || out.SyncEpoch != epoch {
+			return out, nil
+		}
+		select {
+		case <-changed:
+		case <-bound.C:
+			return s.Revision(ctx)
+		case <-s.closing:
+			return out, nil
+		case <-ctx.Done():
+			return ServerRevision{}, ctx.Err()
+		}
+	}
+}
+
+// Shutdown releases every open RevisionAfter wait with its last read, and
+// makes later ones answer at once, so stopping the HTTP server never waits
+// out RevisionWaitBound. The daemon composition registers it with
+// http.Server.RegisterOnShutdown. Safe to call more than once.
+func (s *Service) Shutdown() {
+	s.closeOnce.Do(func() { close(s.closing) })
+}
+
 // ListAttentionItems returns a partial resource fetch. Its snapshots are
 // validated against one same-transaction ServerState, but that state is not
 // included in the result and therefore cannot be mistaken for a full-cache
