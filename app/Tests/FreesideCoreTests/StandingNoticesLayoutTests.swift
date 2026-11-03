@@ -7,8 +7,8 @@
     @testable import FreesideCore
 
     /// Where the standing notices sit, and where they leave what follows
-    /// them: at the card's x and width at the top of the Mac's detail
-    /// column, and in the window's own slot everywhere else.
+    /// them: at the card's x and width at the top of the Mac's centered
+    /// detail column, and in the window's own slot everywhere else.
     @Suite(.serialized) @MainActor struct StandingNoticesLayoutTests {
         private typealias Scale = DecisionCardComposition.Scale
 
@@ -17,18 +17,22 @@
             let margin = Scale.paneMargin(compact: false)
             let notice = try #require(
                 probeFrame(paneWidth: paneWidth) { AnyView($0.standingNoticeInset(.detailColumn)) })
-            #expect(notice.minX == 24)
-            #expect(notice.minX == margin.leading)
-            #expect(notice.width == 640)
-            #expect(notice.width == Scale.cardWidth)
+            let card = try #require(cardFrame(paneWidth: paneWidth, notices: nil))
+            #expect(notice.minX == card.minX)
+            #expect(notice.width == card.width)
+            #expect(notice.midX == paneWidth / 2)
+            #expect(notice.width == min(paneWidth - 48, Scale.columnCap))
             #expect(notice.minY == Scale.moduleGap)
 
             // A pane narrower than the cap and its margins shrinks the
             // notice with the card.
             let narrow = try #require(
                 probeFrame(paneWidth: 600) { AnyView($0.standingNoticeInset(.detailColumn)) })
-            #expect(narrow.minX == notice.minX)
-            #expect(narrow.width == 600 - margin.leading - margin.trailing)
+            let narrowCard = try #require(cardFrame(paneWidth: 600, notices: nil))
+            #expect(narrow.minX == narrowCard.minX)
+            #expect(narrow.minX == margin.leading)
+            #expect(narrow.width == narrowCard.width)
+            #expect(narrow.width == 552)
         }
 
         /// The slot above the list, on an iPhone and over a collapsed Mac
@@ -48,7 +52,8 @@
         func aCardFollowsTheNoticesAModuleGapBelow(paneWidth: CGFloat) throws {
             let margin = Scale.paneMargin(compact: false)
             let alone = try #require(cardFrame(paneWidth: paneWidth, notices: nil))
-            #expect(alone.origin == CGPoint(x: margin.leading, y: margin.top))
+            #expect(alone.midX == paneWidth / 2)
+            #expect(alone.minY == margin.top)
 
             let quiet = try #require(cardFrame(paneWidth: paneWidth, notices: notices(.fresh)))
             #expect(quiet == alone)
@@ -60,7 +65,7 @@
             #expect(one.minY == margin.top + banner)
             #expect(one.minX == alone.minX)
             #expect(one.width == alone.width)
-            #expect(one.width == 640)
+            #expect(one.width == min(paneWidth - 48, Scale.columnCap))
 
             // Two notices: the freshness banner and the stopped indicator.
             let stopped = notices(.unreachable, stopped: true)

@@ -28,10 +28,10 @@ struct UnavailableStateView: View {
         /// Across the pane: a list, a reader, a sheet, a card's own body.
         case pane
         /// In the column a card takes in the detail pane (R18), at the
-        /// card's x and no wider than its cap, so a wide pane holds the
-        /// state over the place its cards draw. A pane no wider than the
-        /// card and its margins centers it across its own width, as a
-        /// phone does.
+        /// card's x and no wider than the column's cap, so a wide pane
+        /// holds the state over the place its cards draw. A pane no wider
+        /// than the column and its margins centers it across its own
+        /// width, as a phone does.
         case detailColumn
     }
 
@@ -56,9 +56,9 @@ extension View {
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
         case .detailColumn:
             padding(.vertical, 40)
-                .frame(maxWidth: DecisionCardComposition.Scale.cardWidth, maxHeight: .infinity)
+                .frame(maxWidth: DecisionCardComposition.Scale.columnCap, maxHeight: .infinity)
                 .padding(.horizontal, 24)
-                .frame(maxWidth: .infinity, alignment: .leading)
+                .frame(maxWidth: .infinity, alignment: DecisionCardComposition.Scale.columnAlignment)
         }
     }
 }

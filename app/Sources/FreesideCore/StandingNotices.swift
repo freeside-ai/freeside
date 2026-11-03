@@ -7,7 +7,8 @@ enum StandingNoticePlacement {
     /// whose sidebar is collapsed.
     case window
     /// The top of the regular-width detail column, at the card's x and
-    /// width, so the sidebar is never under a notice.
+    /// width wherever the column sits, so the sidebar is never under a
+    /// notice.
     case detailColumn
 }
 
@@ -26,11 +27,11 @@ extension View {
             padding(.horizontal, 16).padding(.vertical, 4)
         case .detailColumn:
             let margin = DecisionCardComposition.Scale.paneMargin(compact: false)
-            frame(maxWidth: DecisionCardComposition.Scale.cardWidth, alignment: .leading)
+            frame(maxWidth: DecisionCardComposition.Scale.columnCap, alignment: .leading)
                 .padding(.leading, margin.leading)
                 .padding(.trailing, margin.trailing)
                 .padding(.top, DecisionCardComposition.Scale.moduleGap)
-                .frame(maxWidth: .infinity, alignment: .leading)
+                .frame(maxWidth: .infinity, alignment: DecisionCardComposition.Scale.columnAlignment)
         }
     }
 }

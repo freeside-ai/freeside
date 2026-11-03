@@ -41,7 +41,7 @@
         private let canvasWidth: CGFloat = 960
         /// A detail column just wide enough for the one-column card at its
         /// cap (R18): the card and the pane's 24pt margins.
-        private static let detailColumnWidth = DecisionCardComposition.Scale.cardWidth + 48
+        private static let detailColumnWidth = DecisionCardComposition.Scale.columnCap + 48
         private let baselineOperatingSystemKey = "macOS-27.2"
         private let screenshotNow = AttentionFixtures.createdInstant.addingTimeInterval(18 * 3_600)
         private let screenshotTimeZone = TimeZone(identifier: "UTC") ?? .current

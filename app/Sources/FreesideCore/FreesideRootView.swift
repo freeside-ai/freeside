@@ -661,11 +661,13 @@ public struct FreesideRootView: View {
                 .help("Back to Task")
                 Spacer()
             }
-            // The detail column's x and top margin (R18): the row is the
-            // column's first line here, under any standing notice, and the
-            // run's card sits under it.
+            // The detail column's x, width, and top margin (R18): the row is
+            // the column's first line here, under any standing notice, and
+            // the run's card sits under it.
+            .frame(maxWidth: DecisionCardComposition.Scale.columnCap)
             .padding(.horizontal, 24)
             .padding(.top, topMargin ?? 20)
+            .frame(maxWidth: .infinity, alignment: DecisionCardComposition.Scale.columnAlignment)
         }
     #endif
 

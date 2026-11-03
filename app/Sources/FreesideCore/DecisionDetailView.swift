@@ -4441,18 +4441,18 @@ extension StateChip {
 
 extension View {
     /// The detail column's card (R18): the card's padding, ground, and
-    /// border, top-leading inside the pane's margin and no wider than its
-    /// cap at any pane width. The decision card, the operational summary,
-    /// and both timelines draw on it, so every detail surface starts at one
-    /// x and one y. `topMargin` replaces the pane's top margin for a card
-    /// that sits under a row of its own.
+    /// border, inside the pane's margin, no wider than the column's cap,
+    /// and seated where the column sits (centered on the Mac). The decision
+    /// card and both timelines draw on it, so every detail surface in a
+    /// pane starts at one x and one y. `topMargin` replaces the pane's top
+    /// margin for a card that sits under a row of its own.
     func detailCard(compact: Bool, topMargin: CGFloat? = nil) -> some View {
         var margin = CardScale.paneMargin(compact: compact)
         if let topMargin { margin.top = topMargin }
         return pageCard(compact: compact)
-            .frame(maxWidth: CardScale.cardWidth, alignment: .topLeading)
+            .frame(maxWidth: CardScale.columnCap, alignment: .topLeading)
             .padding(margin)
-            .frame(maxWidth: .infinity, alignment: .topLeading)
+            .frame(maxWidth: .infinity, alignment: CardScale.columnAlignment)
     }
 
     /// Running text at the column's prose measure, leading in the space it
@@ -4490,9 +4490,9 @@ extension View {
     func pageColumn(compact: Bool, topMargin: CGFloat? = nil) -> some View {
         var margin = CardScale.paneMargin(compact: compact)
         if let topMargin { margin.top = topMargin }
-        return frame(maxWidth: CardScale.cardWidth, alignment: .topLeading)
+        return frame(maxWidth: CardScale.columnCap, alignment: .topLeading)
             .padding(margin)
-            .frame(maxWidth: .infinity, alignment: .topLeading)
+            .frame(maxWidth: .infinity, alignment: CardScale.columnAlignment)
     }
 
     /// A timeline's page. At regular width it is the detail column's card,
@@ -4514,9 +4514,9 @@ extension View {
             .background {
                 if !compact { Color.clear.freesideCard(cornerRadius: CardScale.cornerRadius) }
             }
-            .frame(maxWidth: compact ? nil : CardScale.cardWidth, alignment: .topLeading)
+            .frame(maxWidth: compact ? nil : CardScale.columnCap, alignment: .topLeading)
             .padding(margin)
-            .frame(maxWidth: compact ? nil : .infinity, alignment: .topLeading)
+            .frame(maxWidth: compact ? nil : .infinity, alignment: CardScale.columnAlignment)
     }
 }
 
