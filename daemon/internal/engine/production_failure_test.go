@@ -341,6 +341,133 @@ func TestProductionDeliveryRefusalReplayStaysInert(t *testing.T) {
 	}
 }
 
+// TestProductionDeliveryRefusalReplayConvergesOnStoredItem: the store derives
+// the item's task binding and decision surface on write, so a replayed refusal
+// for the same admitted invocation must compare against those stored values
+// and leave the item untouched (#2489).
+func TestProductionDeliveryRefusalReplayConvergesOnStoredItem(t *testing.T) {
+	f := newFailedImplementationFixture(t, execfake.OutcomeFail, "unused")
+	stage, ok := findProductionStage(f.run)
+	if !ok {
+		t.Fatal("run has no production stage")
+	}
+	const summary = "rendered prompt exceeds limit"
+	if err := f.engine.recordProductionDeliveryRefusal(
+		t.Context(), f.run, stage, f.attempt.InvocationID, summary,
+	); err != nil {
+		t.Fatal(err)
+	}
+	before, _ := f.item(t, f.failureItemID())
+	if err := f.engine.recordProductionDeliveryRefusal(
+		t.Context(), f.run, stage, f.attempt.InvocationID, summary,
+	); err != nil {
+		t.Fatalf("replayed delivery refusal = %v, want nil", err)
+	}
+	after, _ := f.item(t, f.failureItemID())
+	assertSameItemJSON(t, before, after)
+}
+
+// TestProductionDeliveryRefusalReplayConvergesAfterDelivery: a delivery
+// receipt rewrites the stored item's timing without a new item version, so a
+// replay that follows it must still converge and keep that timing.
+func TestProductionDeliveryRefusalReplayConvergesAfterDelivery(t *testing.T) {
+	f := newFailedImplementationFixture(t, execfake.OutcomeFail, "unused")
+	stage, ok := findProductionStage(f.run)
+	if !ok {
+		t.Fatal("run has no production stage")
+	}
+	const summary = "rendered prompt exceeds limit"
+	if err := f.engine.recordProductionDeliveryRefusal(
+		t.Context(), f.run, stage, f.attempt.InvocationID, summary,
+	); err != nil {
+		t.Fatal(err)
+	}
+	submitted := f.now.UTC()
+	if err := f.store.Write(t.Context(), func(tx *store.WriteTx) error {
+		return tx.PutAttentionItemTiming(t.Context(), f.failureItemID(), domain.TimingSummary{
+			DeliveryCount: 1, FirstSubmittedAt: &submitted,
+		})
+	}); err != nil {
+		t.Fatal(err)
+	}
+	before, _ := f.item(t, f.failureItemID())
+	if err := f.engine.recordProductionDeliveryRefusal(
+		t.Context(), f.run, stage, f.attempt.InvocationID, summary,
+	); err != nil {
+		t.Fatalf("replayed delivery refusal after a delivery receipt = %v, want nil", err)
+	}
+	after, _ := f.item(t, f.failureItemID())
+	assertSameItemJSON(t, before, after)
+}
+
+// TestProductionDeliveryRefusalReplayConvergesOnLegacyItem: an item raised
+// before #979 carries no admitted facts. A replay drops them before comparing,
+// and must still converge on that stored body.
+func TestProductionDeliveryRefusalReplayConvergesOnLegacyItem(t *testing.T) {
+	f := newFailedImplementationFixture(t, execfake.OutcomeFail, "unused")
+	stage, ok := findProductionStage(f.run)
+	if !ok {
+		t.Fatal("run has no production stage")
+	}
+	const summary = "rendered prompt exceeds limit"
+	terminal := productionTerminalRecord{
+		InvocationID: f.attempt.InvocationID,
+		RunID:        f.run.ID,
+		StageID:      stage.ID,
+		Status:       exec.StatusFailed,
+		Summary:      "Input delivery was refused before driver start: " + summary,
+	}
+	// The store accepts an execution_failure item only once its outcome is
+	// recorded, so write the outcome the refusal itself would record first.
+	f.preRecordOutcome(t, domain.ExecutionOutcomeFailed, terminal.Summary)
+	if err := f.store.Write(t.Context(), func(tx *store.WriteTx) error {
+		names, err := tx.DisplayNamesFor(t.Context(), f.run.ProjectID, domain.Subject{
+			Type: domain.SubjectRun, ID: domain.SubjectID(f.run.ID), RunID: &f.run.ID,
+		})
+		if err != nil {
+			return err
+		}
+		item, err := productionDeliveryRefusalItem(f.run, terminal, f.now.UTC(), &domain.ExecutionFailureFacts{
+			Outcome: domain.ExecutionOutcomeFailed, Cause: domain.FailureCauseUnknown,
+			Stage: domain.StageNameImplementation, InvocationID: f.attempt.InvocationID,
+		}, names)
+		if err != nil {
+			return err
+		}
+		return tx.PutAttentionItem(t.Context(), item)
+	}); err != nil {
+		t.Fatal(err)
+	}
+	before, _ := f.item(t, f.failureItemID())
+	if before.ExecutionFailure == nil || before.ExecutionFailure.Admitted != nil {
+		t.Fatalf("seeded item execution_failure = %+v, want facts without admitted", before.ExecutionFailure)
+	}
+	if err := f.engine.recordProductionDeliveryRefusal(
+		t.Context(), f.run, stage, f.attempt.InvocationID, summary,
+	); err != nil {
+		t.Fatalf("replayed delivery refusal over a legacy item = %v, want nil", err)
+	}
+	after, _ := f.item(t, f.failureItemID())
+	assertSameItemJSON(t, before, after)
+}
+
+// assertSameItemJSON compares two items through their JSON encoding, so every
+// serialized field takes part in the comparison and a diff reads as text.
+func assertSameItemJSON(t *testing.T, want, got domain.AttentionItem) {
+	t.Helper()
+	wantJSON, err := json.Marshal(want)
+	if err != nil {
+		t.Fatal(err)
+	}
+	gotJSON, err := json.Marshal(got)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(gotJSON) != string(wantJSON) {
+		t.Fatalf("stored item changed:\n got %s\nwant %s", gotJSON, wantJSON)
+	}
+}
+
 // activeExecutionCount reads the active execution count of the identity's pool.
 func (f failedImplementationFixture) activeExecutionCount(t *testing.T, id domain.AuthIdentityID) int {
 	t.Helper()
