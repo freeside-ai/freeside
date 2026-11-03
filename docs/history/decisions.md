@@ -3433,3 +3433,23 @@ The client work is #1798 to #1803.)
 
 (Owner decision of 2026-11-03 on #2393;
 [decision note](../../devlog/2026-11-03-1111-drain-soonest-reset.md).)
+
+## Revision 108 ("An Agentic Development Environment"):
+
+1. **Freeside's category line becomes "an agentic development environment".**
+   A person using Freeside directs coding agents, approves specifications,
+   and judges results rather than editing code, and Freeside's app is where
+   that happens, so the product is the environment they develop in (Sections [1](../plan.md#1-what-freeside-is)
+   and [15](../plan.md#15-naming-and-references)). "Control plane" stays the daemon's architectural term and is
+   never the category. Freeside adopts the agentic development environment
+   (ADE) category and differs inside it: the environment keeps working while
+   you're away, and work counts as ready only on evidence, not on your
+   watching it. This replaces revision 10's category line, "an agent control
+   plane", which names the architecture rather than the product and stopped
+   differentiating once other tools used the same phrase. Rejected: keeping
+   "agent control plane", for those reasons; and coining a term such as
+   "agent supervisor" or "Agent Management Interface", which nobody searches
+   for, and whose acronym AMI already means Amazon Machine Image.
+
+(Owner decision of 2026-11-03 on #2507;
+[decision note](../../devlog/2026-11-03-1042-agentic-development-environment.md).)
