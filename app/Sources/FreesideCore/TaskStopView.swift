@@ -16,8 +16,9 @@ struct TaskStopView: View {
     /// unavailable, in flight, or done.
     var moreActions: [MoreAction] = []
     /// Where a prepared Stop confirmation goes when the caller presents it.
-    /// The task page passes one so the sheet outlives the page remounting
-    /// under it; nil keeps the confirmation here, in this view's own sheet.
+    /// The task page passes one so the sheet stays up while its lazy stack
+    /// drops this view; nil keeps the confirmation here, in this view's own
+    /// sheet.
     var presentedConfirmation: Binding<TaskStopModel.Confirmation?>? = nil
     /// The What Happened fold, held by the caller when given.
     var explanationExpanded: Binding<Bool>? = nil
@@ -241,15 +242,16 @@ struct TaskStopView: View {
 }
 
 extension View {
-    /// Presents the task page's Stop confirmation held in `memory`. The root
-    /// attaches it above the page, so the sheet stays up while the page
-    /// remounts under it.
+    /// Presents the task page's Stop confirmation held in `confirmation`.
+    /// The page attaches it outside its lazy stack, which can drop the Stop
+    /// controls while a card leaving shrinks the document under the reader.
     func taskStopConfirmation(
-        _ memory: TaskPageMemory, model: TaskStopModel, dynamicTypeSize: DynamicTypeSize
+        _ confirmation: Binding<TaskStopModel.Confirmation?>, model: TaskStopModel,
+        dynamicTypeSize: DynamicTypeSize
     ) -> some View {
-        sheet(item: Bindable(memory).confirmation) { prepared in
+        sheet(item: confirmation) { prepared in
             TaskStopConfirmationView(entry: prepared.entry) {
-                memory.confirmation = nil
+                confirmation.wrappedValue = nil
                 Task { await model.confirm(prepared) }
             }
             .dynamicTypeSize(dynamicTypeSize)
