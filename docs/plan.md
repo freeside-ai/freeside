@@ -1,8 +1,8 @@
 ---
 title: Freeside Project Plan
-revision: 94
+revision: 108
 status: active
-updated: 2026-10-22
+updated: 2026-11-03
 ---
 
 # Freeside
@@ -138,8 +138,9 @@ why.
 
 **Freeside is a local, durable workflow controller that grants agents the autonomy to turn tasks into evidence-backed pull requests and interrupts me only when judgment is required.**
 
-**Freeside is an agent control plane.** Harnesses such as Claude Code and Codex
-run the agent's inner loop. Freeside runs the outer loop. It controls:
+**Freeside is an agentic development environment (ADE).** Harnesses such as
+Claude Code and Codex run the agent's inner loop. Freeside runs the outer
+loop. It controls:
 
 - what work starts;
 - where it runs and what capabilities it receives;
@@ -147,6 +148,9 @@ run the agent's inner loop. Freeside runs the outer loop. It controls:
 - what evidence is required before the work counts as done;
 - when a human must decide; and
 - what state survives a crash.
+
+The daemon is Freeside's control plane: the part that makes those decisions
+and keeps that state, so the environment keeps working without you in it.
 
 The brand register's tagline puts it plainly: *the harness runs the agent;
 you hold the reins.*
@@ -7204,39 +7208,25 @@ Record material changes here by revision, with the decider in parentheses.
 - On first re-litigation, promote the decision to a `docs/decisions/` ADR that
   cites its history entry.
 
-Revision 107 ("Drain the Soonest Reset"):
+Revision 108 ("An Agentic Development Environment"):
 
-1. **The router drains the subscription that resets soonest.** At a new
-   task's first admission it takes, among the pools of the role's ordered
-   agents whose window for the model isn't marked exhausted, the one whose
-   weekly window resets soonest, so the allowance that expires first is
-   spent first (Section [5.4](#54-credential-modes-egress-profiles-and-concurrency), routing policy). Pinning, parking, and the
-   once-per-task choice stay as revision 103 set them. An escalated task
-   ranks the specifier's counterparts the same way, in place of revision
-   106's walk of the policy order. This is what the
-   owner asked for on 2026-10-26 and 2026-10-28 ("prefer the eligible
-   account whose weekly allowance resets soonest"); revision 103 recorded
-   it as a fixed priority order, which drains the right subscription only
-   if someone reorders it at every reset. Rejected: keeping the fixed order
-   for that reason.
-2. **The operator may name one drain-first account, ahead of reset order.**
-   It is a usage pool named in the routing policy, so setting or clearing it
-   is a new revision the router's lines cite. It takes every new task it
-   can; when its window is marked exhausted, the router passes it over
-   like any other pool. Rejected:
-   overrides on task lines only, because the owner asked for an
-   account-wide choice, and a task line moves one task.
-3. **Where no weekly reset is known, the policy's order decides.** Pools
-   with a known reset rank first, soonest first, then the rest in the
-   policy's order, so the router works before a weekly reset is observable
-   under the setup token (#2389) and drains by reset once it is. The
-   policy keeps its per-role orders: they are the only record of which
-   agent covers a role on another subscription. Rejected: retiring the
-   routing policy record, which would leave the router no candidates, and
-   falling back to the lineup, which can't pass over a marked pool.
+1. **Freeside's category line becomes "an agentic development environment".**
+   A person using Freeside directs coding agents, approves specifications,
+   and judges results rather than editing code, and Freeside's app is where
+   that happens, so the product is the environment they develop in (Sections [1](#1-what-freeside-is)
+   and [15](#15-naming-and-references)). "Control plane" stays the daemon's architectural term and is
+   never the category. Freeside adopts the agentic development environment
+   (ADE) category and differs inside it: the environment keeps working while
+   you're away, and work counts as ready only on evidence, not on your
+   watching it. This replaces revision 10's category line, "an agent control
+   plane", which names the architecture rather than the product and stopped
+   differentiating once other tools used the same phrase. Rejected: keeping
+   "agent control plane", for those reasons; and coining a term such as
+   "agent supervisor" or "Agent Management Interface", which nobody searches
+   for, and whose acronym AMI already means Amazon Machine Image.
 
-(Owner decision of 2026-11-03 on #2393;
-[decision note](../devlog/2026-11-03-1111-drain-soonest-reset.md).)
+(Owner decision of 2026-11-03 on #2507;
+[decision note](../devlog/2026-11-03-1042-agentic-development-environment.md).)
 
 ## 14. Risks
 
@@ -7279,7 +7269,8 @@ Revision 107 ("Drain the Soonest Reset"):
 | --- | --- |
 | **Freeside** | Proper noun at `freeside.ai` and `github.com/freeside-ai`. Capitalize it wherever prose permits. Lowercase it only where the medium requires, such as in URLs and the daemon name. |
 | **Free as in Bird** | The organization. |
-| **an agent control plane** | Category line. |
+| **an agentic development environment** | Category line. |
+| **control plane** | The daemon's architectural term: what decides what runs, where, with what, and what survives a crash. Never the category line. |
 | **the harness runs the agent; you hold the reins** | Tagline. |
 | **ward** | Runner, handoff, and safety boundary. |
 | **signet** | Attention and approval service. |

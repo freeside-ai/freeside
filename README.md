@@ -15,6 +15,11 @@ need to judge the result. The daemon, a local background service, keeps GitHub
 credentials outside the agent's workspace and publishes the reviewed work as
 a pull request. You review and merge it.
 
+Freeside is an agentic development environment (ADE): the place you direct
+coding agents from, rather than a tool you write code in. It keeps working
+while you're away, and work counts as ready on evidence, not on your watching
+it.
+
 *The harness runs the agent; you hold the reins.*
 
 Verification and review apply to the exact code being accepted. When that code
