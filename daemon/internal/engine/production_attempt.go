@@ -49,12 +49,30 @@ func ReattemptProductionRun(
 	if st == nil {
 		return ProductionReattempt{}, errors.New("reattempt production run: nil store")
 	}
+	var result ProductionReattempt
+	err := st.Write(ctx, func(tx *store.WriteTx) error {
+		var err error
+		result, err = reattemptProductionRunTx(ctx, tx, spec)
+		return err
+	})
+	if err != nil {
+		return ProductionReattempt{}, fmt.Errorf("reattempt production run: %w", err)
+	}
+	return result, nil
+}
+
+// reattemptProductionRunTx is ReattemptProductionRun inside a caller's
+// transaction, so a daemon-initiated retry commits with the terminal that
+// asks for it.
+func reattemptProductionRunTx(
+	ctx context.Context, tx *store.WriteTx, spec ProductionReattemptSpec,
+) (ProductionReattempt, error) {
 	reason := strings.TrimSpace(spec.Reason)
 	if reason == "" || reason != spec.Reason {
-		return ProductionReattempt{}, errors.New("reattempt production run: a non-empty trimmed reason is required")
+		return ProductionReattempt{}, errors.New("a non-empty trimmed reason is required")
 	}
 	if (spec.ParentRunID == "") == (spec.CampaignID == "") {
-		return ProductionReattempt{}, errors.New("reattempt production run: exactly one parent run or campaign is required")
+		return ProductionReattempt{}, errors.New("exactly one parent run or campaign is required")
 	}
 	operatorBindings := 0
 	if spec.OperatorCommandID != "" {
@@ -66,14 +84,14 @@ func ReattemptProductionRun(
 	if spec.CapabilityManifestDigest != "" {
 		operatorBindings++
 		if !contentaddr.Valid(string(spec.CapabilityManifestDigest)) {
-			return ProductionReattempt{}, errors.New("reattempt production run: capability manifest digest is invalid")
+			return ProductionReattempt{}, errors.New("capability manifest digest is invalid")
 		}
 	}
 	if operatorBindings != 0 && operatorBindings != 3 {
-		return ProductionReattempt{}, errors.New("reattempt production run: partial operator retry bindings")
+		return ProductionReattempt{}, errors.New("partial operator retry bindings")
 	}
 	if operatorBindings != 0 && spec.ParentRunID == "" {
-		return ProductionReattempt{}, errors.New("reattempt production run: operator retry requires a parent run")
+		return ProductionReattempt{}, errors.New("operator retry requires a parent run")
 	}
 
 	var (
@@ -87,7 +105,7 @@ func ReattemptProductionRun(
 		resumed        bool
 	)
 	var run ProductionRun
-	err := st.Write(ctx, func(tx *store.WriteTx) error {
+	err := func() error {
 		if operatorBindings != 0 {
 			command, err := tx.GetCommand(ctx, spec.OperatorCommandID)
 			if err != nil {
@@ -243,9 +261,9 @@ func ReattemptProductionRun(
 			AttemptReason: attempt.Reason, ParentRunID: attempt.ParentRunID,
 		}, nil, true)
 		return err
-	})
+	}()
 	if err != nil {
-		return ProductionReattempt{}, fmt.Errorf("reattempt production run: %w", err)
+		return ProductionReattempt{}, err
 	}
 	return ProductionReattempt{
 		Created: created || resumed, Run: run, Attempt: attempt, SourceArtifactID: sourceArtifact.ID,

@@ -198,6 +198,40 @@ func TestStartSpecFromAdmissionDetachesStageInputs(t *testing.T) {
 	}
 }
 
+func TestStageResultQuotaRefusal(t *testing.T) {
+	t.Parallel()
+	resetsAt := time.Date(2026, 1, 2, 8, 0, 0, 0, time.UTC)
+	for _, tc := range []struct {
+		name    string
+		cause   domain.FailureCause
+		refusal domain.QuotaRefusal
+		want    error
+	}{
+		{"quota with a reset", domain.FailureCauseQuota, domain.QuotaRefusal{Window: "five_hour", ResetsAt: &resetsAt}, nil},
+		{"quota without a reset", domain.FailureCauseQuota, domain.QuotaRefusal{Window: "five_hour"}, nil},
+		{
+			"beside another cause", domain.FailureCauseServiceCapacity,
+			domain.QuotaRefusal{Window: "five_hour"},
+			exec.ErrQuotaRefusalWithoutQuota,
+		},
+		{"beside no cause", "", domain.QuotaRefusal{Window: "five_hour"}, exec.ErrQuotaRefusalWithoutQuota},
+		{"empty window", domain.FailureCauseQuota, domain.QuotaRefusal{}, domain.ErrEmptyField},
+		{"non-UTC reset", domain.FailureCauseQuota, domain.QuotaRefusal{
+			Window: "five_hour", ResetsAt: new(resetsAt.In(time.FixedZone("PST", -8*3600))),
+		}, domain.ErrTimestampNotUTC},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			err := exec.StageResult{
+				InvocationID: "inv-1", Status: exec.StatusFailed, Cause: tc.cause, QuotaRefusal: &tc.refusal,
+			}.Validate()
+			if (tc.want == nil && err != nil) || (tc.want != nil && !errors.Is(err, tc.want)) {
+				t.Fatalf("Validate() = %v, want %v", err, tc.want)
+			}
+		})
+	}
+}
+
 func TestStageResultCause(t *testing.T) {
 	t.Parallel()
 	for _, tc := range []struct {

@@ -28,6 +28,7 @@ import Testing
             .usage_pool_exhausted: "Waiting for agent capacity",
             .image_upkeep_pending: "Waiting for project image upkeep",
             .verification_memory_limit: "Verification ran out of memory",
+            .quota_window_exhausted: "Waiting for quota window to reset",
         ]
         #expect(Set(labels.keys) == Set(Components.Schemas.RunHoldReason.allCases))
         for reason in Components.Schemas.RunHoldReason.allCases {

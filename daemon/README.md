@@ -863,9 +863,21 @@ under [Control Socket and Pairing Codes](#control-socket-and-pairing-codes).
 `-driver scenario -scenario NAME` plays one scripted task on the production
 engine composition, so you can watch the whole workflow without a model, a
 container, or GitHub (#1937). `freesided -list-scenarios` prints each
-scenario's name and description. The one scenario today is `clean`: one
-task runs specification, approval, implementation, verification, review,
-and publication with no findings.
+scenario's name and description:
+
+- **`clean`:** one task runs specification, approval, implementation,
+  verification, review, and publication with no findings.
+- **`quota-park`:** `clean`, except the provider refuses the first
+  implementation attempt on its `five_hour` quota window, with a reset two
+  minutes after the refusal (#2421). The refusal marks the window
+  exhausted and parks the task on its second attempt, with no
+  `execution_failure` card. While it waits, `freesided inspect task` shows
+  the first run's `terminal_recorded` at `failed` with cause `quota`, and
+  the second run held at `quota_window_exhausted` with the pool, the
+  window, and the reset. At the reset, the second attempt starts with no
+  operator step and runs on as `clean` does, so the run that publishes
+  pull request #101 is the second one. Startup enrolls a client on the
+  scenario identity, since a pool with no enrollment cannot hold the mark.
 
 The dev instance is the quickest way in:
 

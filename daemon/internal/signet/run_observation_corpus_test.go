@@ -988,11 +988,17 @@ func TestRunObservationCorpusValidBaselines(t *testing.T) {
 	})
 }
 
-// TestRunHoldNamesItsPoolInTheAPI: the projection carries a pool hold's pool to
-// the wire, and a hold stored under the retired reason still reads, with no pool.
+// TestRunHoldNamesItsPoolInTheAPI: the projection carries a pool hold's pool
+// and a quota window hold's window to the wire, and a hold stored under the
+// retired reason still reads, with no pool.
 func TestRunHoldNamesItsPoolInTheAPI(t *testing.T) {
 	ctx := context.Background()
 	pool := domain.UsagePoolID("pool-shared")
+	refusedAt := time.Date(2026, 1, 2, 3, 4, 5, 0, time.UTC)
+	quotaWindow := domain.QuotaWindowHold{Pool: pool, ExhaustedMark: domain.ExhaustedMark{
+		Window: "five_hour", Source: domain.ExhaustedMarkProviderRefusal,
+		InvocationID: new(domain.InvocationID("inv-refused")), ResetsAt: new(refusedAt.Add(5 * time.Hour)), SetAt: refusedAt,
+	}}
 	for _, tc := range []struct {
 		name string
 		hold domain.RunHoldObservation
@@ -1002,6 +1008,13 @@ func TestRunHoldNamesItsPoolInTheAPI(t *testing.T) {
 			"usage_pool_exhausted",
 			domain.RunHoldObservation{Reason: domain.HoldUsagePoolExhausted, UsagePool: &pool},
 			`"usage_pool":"pool-shared"`,
+		},
+		{
+			"quota_window_exhausted",
+			domain.RunHoldObservation{Reason: domain.HoldQuotaWindowExhausted, QuotaWindow: &quotaWindow},
+			`"quota_window":{"pool":"pool-shared","window":"five_hour","source":"provider_refusal",` +
+				`"invocation_id":"inv-refused","reading_observed_at":null,"resets_at":"2026-01-02T08:04:05Z",` +
+				`"set_at":"2026-01-02T03:04:05Z"}`,
 		},
 		{
 			"stored_identity_parallelism",

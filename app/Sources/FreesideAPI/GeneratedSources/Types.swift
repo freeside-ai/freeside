@@ -6842,6 +6842,7 @@ public enum Components {
             case image_upkeep_pending = "image_upkeep_pending"
             case usage_pool_exhausted = "usage_pool_exhausted"
             case verification_memory_limit = "verification_memory_limit"
+            case quota_window_exhausted = "quota_window_exhausted"
         }
         /// What an image_upkeep_pending hold waits on, mirrored from domain.ImageUpkeepPending (plan §5.7, Project-image upkeep): the upkeep job's rebuild, an adoption card, or a maintenance task.
         ///
@@ -6851,6 +6852,108 @@ public enum Components {
             case rebuild = "rebuild"
             case adoption_proposal = "adoption_proposal"
             case maintenance_task = "maintenance_task"
+        }
+        /// The typed fact beside a quota_window_exhausted hold, mirrored from domain.QuotaWindowHold: the pool and window a provider refused on and the mark that keeps the parked attempt waiting until its reset.
+        ///
+        ///
+        /// - Remark: Generated from `#/components/schemas/QuotaWindowHold`.
+        public struct QuotaWindowHold: Codable, Hashable, Sendable {
+            /// - Remark: Generated from `#/components/schemas/QuotaWindowHold/pool`.
+            public var pool: Swift.String
+            /// - Remark: Generated from `#/components/schemas/QuotaWindowHold/window`.
+            public var window: Swift.String
+            /// - Remark: Generated from `#/components/schemas/QuotaWindowHold/source`.
+            public var source: Components.Schemas.ExhaustedMarkSource
+            /// The refused invocation; set exactly for provider_refusal.
+            ///
+            /// - Remark: Generated from `#/components/schemas/QuotaWindowHold/invocation_id`.
+            public var invocation_id: Swift.String?
+            /// The reading that set the mark; set exactly for usage_reading.
+            ///
+            /// - Remark: Generated from `#/components/schemas/QuotaWindowHold/reading_observed_at`.
+            public var reading_observed_at: Foundation.Date?
+            /// When the window resets and the parked attempt starts.
+            ///
+            /// - Remark: Generated from `#/components/schemas/QuotaWindowHold/resets_at`.
+            public var resets_at: Foundation.Date
+            /// - Remark: Generated from `#/components/schemas/QuotaWindowHold/set_at`.
+            public var set_at: Foundation.Date
+            /// Creates a new `QuotaWindowHold`.
+            ///
+            /// - Parameters:
+            ///   - pool:
+            ///   - window:
+            ///   - source:
+            ///   - invocation_id: The refused invocation; set exactly for provider_refusal.
+            ///   - reading_observed_at: The reading that set the mark; set exactly for usage_reading.
+            ///   - resets_at: When the window resets and the parked attempt starts.
+            ///   - set_at:
+            public init(
+                pool: Swift.String,
+                window: Swift.String,
+                source: Components.Schemas.ExhaustedMarkSource,
+                invocation_id: Swift.String? = nil,
+                reading_observed_at: Foundation.Date? = nil,
+                resets_at: Foundation.Date,
+                set_at: Foundation.Date
+            ) {
+                self.pool = pool
+                self.window = window
+                self.source = source
+                self.invocation_id = invocation_id
+                self.reading_observed_at = reading_observed_at
+                self.resets_at = resets_at
+                self.set_at = set_at
+            }
+            public enum CodingKeys: String, CodingKey {
+                case pool
+                case window
+                case source
+                case invocation_id
+                case reading_observed_at
+                case resets_at
+                case set_at
+            }
+            public init(from decoder: any Swift.Decoder) throws {
+                let container = try decoder.container(keyedBy: CodingKeys.self)
+                self.pool = try container.decode(
+                    Swift.String.self,
+                    forKey: .pool
+                )
+                self.window = try container.decode(
+                    Swift.String.self,
+                    forKey: .window
+                )
+                self.source = try container.decode(
+                    Components.Schemas.ExhaustedMarkSource.self,
+                    forKey: .source
+                )
+                self.invocation_id = try container.decodeIfPresent(
+                    Swift.String.self,
+                    forKey: .invocation_id
+                )
+                self.reading_observed_at = try container.decodeIfPresent(
+                    Foundation.Date.self,
+                    forKey: .reading_observed_at
+                )
+                self.resets_at = try container.decode(
+                    Foundation.Date.self,
+                    forKey: .resets_at
+                )
+                self.set_at = try container.decode(
+                    Foundation.Date.self,
+                    forKey: .set_at
+                )
+                try decoder.ensureNoAdditionalProperties(knownKeys: [
+                    "pool",
+                    "window",
+                    "source",
+                    "invocation_id",
+                    "reading_observed_at",
+                    "resets_at",
+                    "set_at"
+                ])
+            }
         }
         /// The typed fact beside an image_upkeep_pending hold, mirrored from domain.ImageUpkeepHold: what the run waits on and, past a rebuild, the upkeep refusal record and the item or task that answers it, each by reference.
         ///
@@ -7370,6 +7473,32 @@ public enum Components {
             ///
             /// - Remark: Generated from `#/components/schemas/RunHold/usage_pool`.
             public var usage_pool: Swift.String?
+            /// The refused window a quota_window_exhausted hold waits on; present exactly beside that reason and null beside every other.
+            ///
+            ///
+            /// - Remark: Generated from `#/components/schemas/RunHold/quota_window`.
+            public struct quota_windowPayload: Codable, Hashable, Sendable {
+                /// - Remark: Generated from `#/components/schemas/RunHold/quota_window/value1`.
+                public var value1: Components.Schemas.QuotaWindowHold
+                /// Creates a new `quota_windowPayload`.
+                ///
+                /// - Parameters:
+                ///   - value1:
+                public init(value1: Components.Schemas.QuotaWindowHold) {
+                    self.value1 = value1
+                }
+                public init(from decoder: any Swift.Decoder) throws {
+                    self.value1 = try .init(from: decoder)
+                }
+                public func encode(to encoder: any Swift.Encoder) throws {
+                    try self.value1.encode(to: encoder)
+                }
+            }
+            /// The refused window a quota_window_exhausted hold waits on; present exactly beside that reason and null beside every other.
+            ///
+            ///
+            /// - Remark: Generated from `#/components/schemas/RunHold/quota_window`.
+            public var quota_window: Components.Schemas.RunHold.quota_windowPayload?
             /// - Remark: Generated from `#/components/schemas/RunHold/first_observed_at`.
             public var first_observed_at: Foundation.Date
             /// - Remark: Generated from `#/components/schemas/RunHold/last_observed_at`.
@@ -7383,6 +7512,7 @@ public enum Components {
             ///   - detail: What an admission_policy_refused hold refused; null beside every other reason, and on an admission hold recorded before the detail existed or raised outside admission.
             ///   - image_upkeep: What an image_upkeep_pending hold waits on; present exactly beside that reason and null beside every other.
             ///   - usage_pool: The full pool of a usage_pool_exhausted hold; present exactly beside that reason and null beside every other. An identity_parallelism hold, which nothing records any more, names no pool.
+            ///   - quota_window: The refused window a quota_window_exhausted hold waits on; present exactly beside that reason and null beside every other.
             ///   - first_observed_at:
             ///   - last_observed_at:
             public init(
@@ -7392,6 +7522,7 @@ public enum Components {
                 detail: Components.Schemas.RunHold.detailPayload? = nil,
                 image_upkeep: Components.Schemas.RunHold.image_upkeepPayload? = nil,
                 usage_pool: Swift.String? = nil,
+                quota_window: Components.Schemas.RunHold.quota_windowPayload? = nil,
                 first_observed_at: Foundation.Date,
                 last_observed_at: Foundation.Date
             ) {
@@ -7401,6 +7532,7 @@ public enum Components {
                 self.detail = detail
                 self.image_upkeep = image_upkeep
                 self.usage_pool = usage_pool
+                self.quota_window = quota_window
                 self.first_observed_at = first_observed_at
                 self.last_observed_at = last_observed_at
             }
@@ -7411,6 +7543,7 @@ public enum Components {
                 case detail
                 case image_upkeep
                 case usage_pool
+                case quota_window
                 case first_observed_at
                 case last_observed_at
             }
@@ -7440,6 +7573,10 @@ public enum Components {
                     Swift.String.self,
                     forKey: .usage_pool
                 )
+                self.quota_window = try container.decodeIfPresent(
+                    Components.Schemas.RunHold.quota_windowPayload.self,
+                    forKey: .quota_window
+                )
                 self.first_observed_at = try container.decode(
                     Foundation.Date.self,
                     forKey: .first_observed_at
@@ -7455,6 +7592,7 @@ public enum Components {
                     "detail",
                     "image_upkeep",
                     "usage_pool",
+                    "quota_window",
                     "first_observed_at",
                     "last_observed_at"
                 ])

@@ -515,6 +515,7 @@ package enum RunDisplay {
         case .identity_parallelism, .usage_pool_exhausted: "Waiting for agent capacity"
         case .image_upkeep_pending: "Waiting for project image upkeep"
         case .verification_memory_limit: "Verification ran out of memory"
+        case .quota_window_exhausted: "Waiting for quota window to reset"
         }
     }
 

@@ -197,6 +197,21 @@ type RefusalMark struct {
 	SetAt    time.Time  `json:"set_at"`
 }
 
+// QuotaRefusal is what a driver reports beside a quota failure: the provider
+// window that refused the run and, when the provider said, when it resets.
+type QuotaRefusal struct {
+	Window   string     `json:"window"`
+	ResetsAt *time.Time `json:"resets_at"`
+}
+
+// Validate reports whether the refusal names a window and a UTC reset.
+func (r QuotaRefusal) Validate() error {
+	if !validUsageToken(r.Window) {
+		return fmt.Errorf("quota refusal window %q: %w", r.Window, ErrEmptyField)
+	}
+	return validateObservationReset("quota refusal "+r.Window+" resets_at", r.ResetsAt)
+}
+
 // ExhaustedMark is a derived fact: one window exhausted at a query time, and
 // what says so. It is computed from the record and never stored.
 type ExhaustedMark struct {
@@ -491,6 +506,27 @@ func (o PoolUsageObservation) ExhaustedMarksForModel(routeModelID string, now ti
 	return slices.DeleteFunc(o.ExhaustedMarks(now), func(mark ExhaustedMark) bool {
 		return !o.windowApplies(mark.Window, routeModelID)
 	})
+}
+
+// ExhaustedWindowMark returns the mark ExhaustedMarks derives for one window
+// at now, if the window is exhausted then.
+func (o PoolUsageObservation) ExhaustedWindowMark(window string, now time.Time) (ExhaustedMark, bool) {
+	for _, mark := range o.ExhaustedMarks(now) {
+		if mark.Window == window {
+			return mark, true
+		}
+	}
+	return ExhaustedMark{}, false
+}
+
+// ReadingReset returns the reset the window's current reading gives, when one
+// is still ahead of now. A refusal that names no reset takes it from here.
+func (o PoolUsageObservation) ReadingReset(window string, now time.Time) *time.Time {
+	reading := o.reading(window)
+	if reading == nil || reading.ResetsAt == nil || !reading.ResetsAt.After(now) {
+		return nil
+	}
+	return new(*reading.ResetsAt)
 }
 
 // WithoutClearedMarks returns the record without the refusal marks an allowed

@@ -25,6 +25,13 @@ import (
 func cloneStageResult(r exec.StageResult) exec.StageResult {
 	r.Artifacts = slices.Clone(r.Artifacts)
 	r.Usage = slices.Clone(r.Usage)
+	if refusal := r.QuotaRefusal; refusal != nil {
+		clone := *refusal
+		if refusal.ResetsAt != nil {
+			clone.ResetsAt = new(*refusal.ResetsAt)
+		}
+		r.QuotaRefusal = &clone
+	}
 	return r
 }
 

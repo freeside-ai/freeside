@@ -46,9 +46,31 @@ func newFailedImplementationFixture(t *testing.T, outcome execfake.Outcome, summ
 // RunningInspects to model the driver reporting running before the terminal.
 func newFailedImplementationFixtureScript(t *testing.T, script execfake.StageScript) failedImplementationFixture {
 	t.Helper()
+	return newFailedImplementationFixtureCore(t, script, false)
+}
+
+// newFailedImplementationCampaignFixtureScript is the campaign variant: the
+// implementation run is attempt 1 of a campaign, as a task submission makes
+// it, so the run can have a next attempt.
+func newFailedImplementationCampaignFixtureScript(t *testing.T, script execfake.StageScript) failedImplementationFixture {
+	t.Helper()
+	return newFailedImplementationFixtureCore(t, script, true)
+}
+
+func newFailedImplementationFixtureCore(
+	t *testing.T, script execfake.StageScript, campaign bool,
+) failedImplementationFixture {
+	t.Helper()
 	f := newSpecificationFixture(t, false, 4)
 	driver := f.newDriver(t)
-	if err := specifyfake.Script(driver, specificationInvocationID("specification-run", 1), 0, 0,
+	specRunID := domain.RunID("specification-run")
+	if campaign {
+		var err error
+		if specRunID, err = SpecificationRunIDForImplementation("implementation-run"); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := specifyfake.Script(driver, specificationInvocationID(specRunID, 1), 0, 0,
 		specify.Output{Specification: &specify.Specification{
 			Summary: "The implementation plan is ready.", Body: "# Specification\n\nImplement the bounded workflow.",
 			Addressals: []specify.Addressal{},
@@ -57,7 +79,11 @@ func newFailedImplementationFixtureScript(t *testing.T, script execfake.StageScr
 	}
 	implementationID := productionInvocationID("implementation-run")
 	driver.Script(implementationID, script)
-	f.submit(t)
+	if campaign {
+		submitBlockedCampaign(t, f, specRunID)
+	} else {
+		f.submit(t)
+	}
 	engine := f.newEngine(t, driver)
 	// Pass one accepts the auto-approved specification and submits the
 	// implementation run, creating its invocation row and dispatch intent.

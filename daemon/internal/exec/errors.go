@@ -26,6 +26,9 @@ var (
 	ErrNonTerminalResult = errors.New("result status is not terminal")
 	// ErrCauseWithoutFailure: only a failed result may carry a failure cause.
 	ErrCauseWithoutFailure = errors.New("result carries a failure cause but did not fail")
+	// ErrQuotaRefusalWithoutQuota: a result names a refused quota window
+	// beside a cause other than quota.
+	ErrQuotaRefusalWithoutQuota = errors.New("result carries a quota refusal but its cause is not quota")
 	// ErrInputSourceMissing: no content-addressed store was supplied.
 	ErrInputSourceMissing = errors.New("stage input source is missing")
 	// ErrInputBodyMissing: a source reported success without returning a body.

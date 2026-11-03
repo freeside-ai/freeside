@@ -694,6 +694,7 @@ func invocationDispatchHold(err error) bool {
 		errors.Is(err, ErrProjectImageUnserved) ||
 		workflowAdvancementFenced(err) ||
 		errors.Is(err, domain.ErrUsagePoolExhausted) ||
+		errors.Is(err, ErrQuotaWindowExhausted) ||
 		errors.Is(err, ErrAgentNotAdmissible) ||
 		errors.Is(err, domain.ErrGenerationIntegrityMarked) ||
 		egressAdmissionRefusal(err)
@@ -763,6 +764,9 @@ func (e *Engine) dispatchIntent(
 	// configuration decide whether to read the record at all.
 	var fresh *domain.ExecutionAdmission
 	if !attemptRecorded(binding.run, invocationID) {
+		if err := e.requireQuotaWindowReset(ctx, binding.run, invocationID); err != nil {
+			return false, false, fmt.Errorf("intent %q: %w", entry.IdempotencyKey, err)
+		}
 		admission, admitted, err := e.admitAttempt(ctx, binding, stage, invocationID)
 		if err != nil {
 			// A backend below the floor is a typed refusal (§5.7): nothing
@@ -838,14 +842,14 @@ func (e *Engine) dispatchIntent(
 		if err := tx.MarkOutboxDispatched(ctx, entry.IdempotencyKey); err != nil {
 			return err
 		}
-		// A capacity or image-upkeep hold is current scheduling state, not
-		// history. Clear only those exact causes when this invocation starts;
-		// the store's predicate preserves a newer, different hold that may
-		// have replaced them. A stored identity_parallelism row clears with
+		// A capacity, image-upkeep, or quota window hold is current
+		// scheduling state, not history. Clear only those exact causes when
+		// this invocation starts; the store's predicate preserves a newer,
+		// different hold that may have replaced them. A stored identity_parallelism row clears with
 		// the pool hold that replaced its reason.
 		for _, cause := range []domain.RunHoldReason{
 			domain.HoldUsagePoolExhausted, domain.HoldIdentityParallelism,
-			domain.HoldImageUpkeepPending,
+			domain.HoldImageUpkeepPending, domain.HoldQuotaWindowExhausted,
 		} {
 			if err := tx.ClearRunHoldCause(ctx, binding.run.ID, cause); err != nil {
 				return err

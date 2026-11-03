@@ -44,6 +44,7 @@ func TestTaskLineChangesMigrationKeepsEveryLine(t *testing.T) {
 
 	// Return the table to the shape a daemon at 0111 holds, then store each
 	// line the way that daemon did.
+	rewindRunHoldQuotaWindow(t, ctx, st.db)
 	for _, statement := range []string{
 		`DROP TABLE client_command_receipts`,
 		`DELETE FROM schema_migrations WHERE name = '0118_usage_operator_contract.sql'`,

@@ -156,6 +156,13 @@ func TestGolden(t *testing.T) {
 			Artifacts: []domain.Digest{"sha256:transcript"},
 			Summary:   "provider refused: quota exhausted", Cause: domain.FailureCauseQuota,
 		}},
+		{"stage_result_quota_refusal", exec.StageResult{
+			InvocationID: "inv-1", Status: exec.StatusFailed,
+			Summary: "provider refused: quota exhausted", Cause: domain.FailureCauseQuota,
+			QuotaRefusal: &domain.QuotaRefusal{
+				Window: "five_hour", ResetsAt: new(time.Date(2026, 1, 2, 8, 0, 0, 0, time.UTC)),
+			},
+		}},
 		{"review_result", review},
 		{"review_request", request},
 		{"review_request_prospective_merge", mergeRequest},
