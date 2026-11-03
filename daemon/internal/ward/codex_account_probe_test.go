@@ -19,8 +19,10 @@ import (
 	"net/http/httptest"
 	"net/url"
 	"os/exec"
+	"slices"
 	"strings"
 	"sync"
+	"syscall"
 	"testing"
 	"time"
 
@@ -98,7 +100,8 @@ func codexAccountFieldsValid(c codexAccountCapture) bool {
 func codexAccountAnalyze(c codexAccountCapture, control bool, requests []string, failures int) string {
 	refresh := false
 	for _, label := range requests {
-		if label != "blocked_refresh" && label != "blocked_other" && label != "connection_closed" && label != "transport_failed" && label != "tls_failed" && label != "http_decode_failed" {
+		if label != "blocked_refresh" && label != "blocked_other" && label != "connection_closed" && label != "handshake_closed" && label != "auth_handshake_closed" &&
+			label != "transport_failed" && label != "tls_failed" && label != "http_decode_failed" {
 			return "probe_failed"
 		}
 		refresh = refresh || label == "blocked_refresh"
@@ -218,7 +221,7 @@ func (p *codexAccountProxy) record(label string) {
 	// Denying an ancillary route is the intended measurement policy. It is
 	// not a broken proxy. Missing answers and actual transport errors are
 	// assessed separately, so background traffic cannot hide a proven refresh.
-	if label == "transport_failed" || label == "tls_failed" || label == "http_decode_failed" {
+	if label == "transport_failed" || label == "tls_failed" || label == "http_decode_failed" || label == "auth_handshake_closed" {
 		p.failures++
 	}
 }
@@ -261,8 +264,21 @@ func (p *codexAccountProxy) serve(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	secure := tls.Server(conn, &tls.Config{Certificates: []tls.Certificate{p.certificate}, MinVersion: tls.VersionTLS12})
+	// The pinned CLI abandons handshakes routinely, as EOF or as a reset when
+	// the proxy's flight was still unread (devlog
+	// 2026-11-03-0829-codex-account-handshake-hangups.md). A hang-up sent no
+	// request, but on the auth host the request it meant to send could have
+	// been a refresh, so it counts against the measurement there. Any other
+	// handshake error, such as the CLI rejecting the test CA, stays tls_failed.
 	if err := secure.Handshake(); err != nil {
-		p.record("tls_failed")
+		switch {
+		case !errors.Is(err, io.EOF) && !errors.Is(err, io.ErrUnexpectedEOF) && !errors.Is(err, syscall.ECONNRESET):
+			p.record("tls_failed")
+		case r.Host == "auth.openai.com:443":
+			p.record("auth_handshake_closed")
+		default:
+			p.record("handshake_closed")
+		}
 		return
 	}
 	reader := bufio.NewReader(secure)
@@ -365,6 +381,50 @@ func TestCodexAccountProxyClosedConnection(t *testing.T) {
 	}
 }
 
+func TestCodexAccountProxyHandshake(t *testing.T) {
+	for _, tc := range []struct {
+		name, authority, sent, want string
+		reset                       bool
+		failures                    int
+	}{
+		{"hung up", "chatgpt.com:443", "", "handshake_closed", false, 0},
+		{"reset", "chatgpt.com:443", "", "handshake_closed", true, 0},
+		{"hung up on the auth host", "auth.openai.com:443", "", "auth_handshake_closed", false, 1},
+		{"reset on the auth host", "auth.openai.com:443", "", "auth_handshake_closed", true, 1},
+		{"not TLS", "chatgpt.com:443", "GET / HTTP/1.1\r\n\r\n", "tls_failed", false, 1},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			p := newCodexAccountProxy(t, "127.0.0.0/8")
+			conn, err := net.Dial("tcp", p.server.Listener.Addr().String())
+			if err != nil {
+				t.Fatal(err)
+			}
+			if _, err := io.WriteString(conn, "CONNECT "+tc.authority+" HTTP/1.1\r\nHost: "+tc.authority+"\r\n\r\n"); err != nil {
+				t.Fatal(err)
+			}
+			if _, err := http.ReadResponse(bufio.NewReader(conn), nil); err != nil {
+				t.Fatal(err)
+			}
+			if _, err := io.WriteString(conn, tc.sent); err != nil {
+				t.Fatal(err)
+			}
+			if tc.reset {
+				// Zero linger turns the close into a reset.
+				if err := conn.(*net.TCPConn).SetLinger(0); err != nil {
+					t.Fatal(err)
+				}
+			}
+			_ = conn.Close()
+			p.wg.Wait()
+			p.mu.Lock()
+			defer p.mu.Unlock()
+			if !slices.Equal(p.requests, []string{tc.want}) || p.failures != tc.failures {
+				t.Fatalf("labels %q failures %d", p.requests, p.failures)
+			}
+		})
+	}
+}
+
 func codexAccountGoodCapture() codexAccountCapture {
 	return codexAccountCapture{
 		Version: "0.147.0", Initialized: true, Answered: true, Account: true, Plan: "plus",
@@ -385,7 +445,10 @@ func TestCodexAccountVerdicts(t *testing.T) {
 		{name: "answered despite denied ancillary route", want: "pass", requests: []string{"blocked_other"}},
 		{name: "refresh", want: "fail", requests: []string{"blocked_refresh"}},
 		{name: "refresh with other transport failure", want: "fail", requests: []string{"blocked_refresh", "tls_failed"}, failures: 1},
+		{name: "read despite handshake hang-up", want: "pass", requests: []string{"blocked_other", "handshake_closed"}},
+		{name: "auth host hung up", want: "probe_failed", requests: []string{"auth_handshake_closed"}, failures: 1},
 		{name: "control", want: "pass", control: true, requests: []string{"blocked_refresh"}},
+		{name: "detector proved despite auth host hang-up", want: "pass", control: true, requests: []string{"blocked_refresh", "auth_handshake_closed"}, failures: 1},
 		{name: "detector proved with other transport failure", want: "pass", control: true, requests: []string{"blocked_refresh", "tls_failed"}, failures: 1},
 		{name: "control did not answer", want: "probe_failed", control: true, requests: []string{"blocked_refresh"}, mutate: func(c *codexAccountCapture) { c.Answered = false }},
 		{name: "missing control", want: "probe_failed", control: true},

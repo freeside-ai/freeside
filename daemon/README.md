@@ -266,14 +266,37 @@ go -C daemon test ./internal/ward -run '^TestCodexAccount' -count=1
 ```
 
 The live test needs macOS, a running Apple `container` service, and a cached
-digest-pinned Codex image with `jq`, named by
-`FREESIDE_WARD_CODEX_AGENT_IMAGE`. All three cases use synthetic access-only
-stores with made-up claims and an empty refresh token. No real credential or
-host auth store is read.
+digest-pinned Codex **0.147.0** image with `jq`, named by
+`FREESIDE_WARD_CODEX_AGENT_IMAGE`. The probe rejects any other CLI version,
+and `scripts/build-agent-codex-image.sh` now builds 0.162.1, so use the image
+from `devlog/2026-10-05-1011-codex-account-probe-spike.md`, tagged
+`127.0.0.1:5066/freeside-account-866:v1`. All three cases use synthetic
+access-only stores with made-up claims and an empty refresh token. No real
+credential or host auth store is read.
 
 ```sh
-FREESIDE_WARD_LIVE_TEST=1 go -C daemon test ./internal/ward \
-  -run '^TestLiveCodexAccountProbe$' -count=1 -v
+FREESIDE_WARD_LIVE_TEST=1 \
+FREESIDE_WARD_CODEX_AGENT_IMAGE=127.0.0.1:5066/freeside-account-866@sha256:396ff6ddddd32b274811875180d9fea131bb06b430dce58ae43844f3080fe1ed \
+  go -C daemon test ./internal/ward -run '^TestLiveCodexAccountProbe$' -count=1 -v
+```
+
+If the runtime can't resolve that digest reference although
+`container image list` shows the image (for example `Connection refused` on
+`127.0.0.1:5066`), re-seed its name@digest lookup. `container` 1.1.0 records
+that lookup only through a registry pull; the header of
+`scripts/build-agent-codex-image.sh` explains the bug. Start the pinned
+registry helper on the image's port, push the tag, pull the digest, and
+remove the registry:
+
+```sh
+container run --detach --name freeside-account-seed \
+  --publish 127.0.0.1:5066:5000 \
+  docker.io/library/registry@sha256:a3d8aaa63ed8681a604f1dea0aa03f100d5895b6a58ace528858a7b332415373
+until curl -sf http://127.0.0.1:5066/v2/ >/dev/null; do sleep 1; done
+container image push --scheme http 127.0.0.1:5066/freeside-account-866:v1
+container image pull --scheme http \
+  127.0.0.1:5066/freeside-account-866@sha256:396ff6ddddd32b274811875180d9fea131bb06b430dce58ae43844f3080fe1ed
+container delete --force freeside-account-seed
 ```
 
 The `fresh` and `near_expiry` cases send `refreshToken: false` with one hour
@@ -291,6 +314,12 @@ probe), and `probe_failed` (broken measurement) are distinct; an unproven
 refresh detector always leaves the overall result `probe_failed`.
 A control pass proves detection only. Transport errors cannot erase a refresh
 that was observed, but they always prevent a safe read pass.
+The pinned CLI routinely hangs up during the TLS handshake. On `chatgpt.com`
+the proxy labels that `handshake_closed`, which is not a transport error; on
+`auth.openai.com` it is `auth_handshake_closed` and counts, because the
+abandoned request could have been a refresh. Every other handshake error stays
+`tls_failed` and counts
+(`devlog/2026-11-03-0829-codex-account-handshake-hangups.md`).
 
 Fresh resources have random names and ownership labels. Cleanup verifies
 labels and creation dates. A private recovery manifest survives failed
