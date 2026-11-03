@@ -25,7 +25,7 @@ import (
 // store's own gates (the set-once transition, one identity per account
 // binding) still run underneath on the write.
 func recordEnrollingIdentity(
-	ctx context.Context, tx *store.InternalTx, identity domain.AuthIdentity, enable bool, now time.Time,
+	ctx context.Context, tx *store.WriteTx, identity domain.AuthIdentity, enable bool, now time.Time,
 ) error {
 	stored, err := tx.GetAuthIdentity(ctx, identity.ID)
 	if errors.Is(err, store.ErrNotFound) {
@@ -66,7 +66,7 @@ func recordEnrollingIdentity(
 		return fmt.Errorf("auth identity %s has no cost owner; name one to enroll it", identity.ID)
 	}
 	if enable {
-		if err := refuseEnablingAnEnrolledIdentity(ctx, tx, identity.ID); err != nil {
+		if err := refuseEnablingAnEnrolledIdentity(ctx, &tx.InternalTx, identity.ID); err != nil {
 			return err
 		}
 		next.Enabled = true
@@ -109,7 +109,7 @@ func refuseEnablingAnEnrolledIdentity(
 // the enrollment with no store and no way to add one. Any other existing
 // enrollment under the id refuses with ward.ErrEnrollmentExists.
 func recordEnrollmentBootstrap(
-	ctx context.Context, tx *store.InternalTx, bootstrap ward.EnrollmentBootstrap, now time.Time,
+	ctx context.Context, tx *store.WriteTx, bootstrap ward.EnrollmentBootstrap, now time.Time,
 ) error {
 	enrollment := bootstrap.Enrollment
 	if bootstrap.Binding.EnrollmentID != enrollment.ID || bootstrap.Binding.Generation != 0 {
@@ -135,9 +135,11 @@ func recordEnrollmentBootstrap(
 	return fmt.Errorf("client enrollment %s: %w", enrollment.ID, ward.ErrEnrollmentExists)
 }
 
-// ClaudeEnrollment backs ward's Claude setup-token enrollment port. Its
-// records are daemon-internal (identity, enrollment, lease, generation), so
-// every write runs on an internal transaction with no revision bump.
+// ClaudeEnrollment backs ward's Claude setup-token enrollment port. Begin
+// raises the revision: clients see the identity, its pool, and the enrollment
+// through the bootstrap's usage_pools (plan §5.14). The lease and the
+// generation are daemon-internal, so AppendGeneration runs on an internal
+// transaction with no revision bump.
 type ClaudeEnrollment struct {
 	store *store.Store
 }
@@ -153,7 +155,7 @@ func (a *ClaudeEnrollment) Begin(
 	now, expiresAt time.Time,
 ) (domain.AuthStoreMutationLease, error) {
 	var lease domain.AuthStoreMutationLease
-	err := a.store.WriteInternal(ctx, func(tx *store.InternalTx) error {
+	err := a.store.Write(ctx, func(tx *store.WriteTx) error {
 		if err := recordEnrollingIdentity(ctx, tx, identity, bootstrap.EnableIdentity, now); err != nil {
 			return err
 		}

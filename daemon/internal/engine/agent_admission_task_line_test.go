@@ -42,7 +42,7 @@ func (f *agentAdmissionFixture) addSecondAgent(t *testing.T) (domain.AuthIdentit
 	enrollment.ID, enrollment.AuthIdentityID = "claude-second/claude_code", identity.ID
 	enrollment.AccountBinding = identity.AccountBinding
 	manifest := agentTestDigest("6")
-	if err := f.store.WriteInternal(ctx, func(tx *store.InternalTx) error {
+	if err := f.store.Write(ctx, func(tx *store.WriteTx) error {
 		if err := tx.RecordAuthIdentity(ctx, identity, agentTestAt.Add(-4*time.Minute)); err != nil {
 			return err
 		}
@@ -364,7 +364,7 @@ func TestTaskLineAdmissionRefusals(t *testing.T) {
 			setup: func(t *testing.T, f *agentAdmissionFixture) {
 				identity, _ := f.addSecondAgent(t)
 				identity.Enabled = false
-				if err := f.store.WriteInternal(ctx, func(tx *store.InternalTx) error {
+				if err := f.store.Write(ctx, func(tx *store.WriteTx) error {
 					return tx.RecordAuthIdentity(ctx, identity, agentTestAt)
 				}); err != nil {
 					t.Fatal(err)

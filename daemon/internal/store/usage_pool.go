@@ -60,7 +60,10 @@ func (r usagePoolRecord) Validate() error {
 // RecordUsagePool persists a pool declaration, guarded by the domain
 // transition rule. A running daemon reads the current revision at every
 // admission, so a new limit applies to the next launch without a restart.
-func (tx *InternalTx) RecordUsagePool(ctx context.Context, pool domain.UsagePool, recordedAt time.Time) error {
+//
+// Clients sync the pool through the bootstrap's usage_pools (plan §5.14), so
+// it is written only in a revision-bumping transaction.
+func (tx *WriteTx) RecordUsagePool(ctx context.Context, pool domain.UsagePool, recordedAt time.Time) error {
 	if recordedAt.IsZero() {
 		return fmt.Errorf("record usage pool %q: zero recorded_at", pool.ID)
 	}
@@ -98,7 +101,7 @@ func (tx *InternalTx) RecordUsagePool(ctx context.Context, pool domain.UsagePool
 // starts at one. An identity characterized into a pool brings the limit of the
 // pool it leaves, and the pool takes the lower of the two. previous is nil for
 // a new identity.
-func (tx *InternalTx) settleIdentityUsagePool(
+func (tx *WriteTx) settleIdentityUsagePool(
 	ctx context.Context, previous *domain.AuthIdentity, identity domain.AuthIdentity, recordedAt time.Time,
 ) error {
 	target := identity.EffectiveUsagePool()

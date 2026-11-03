@@ -408,7 +408,7 @@ func recordDeputyIdentities(
 	if err != nil {
 		return err
 	}
-	return st.WriteInternal(ctx, func(tx *store.InternalTx) error {
+	return st.Write(ctx, func(tx *store.WriteTx) error {
 		for _, identity := range identities {
 			stored, err := tx.GetAuthIdentity(ctx, identity.ID)
 			switch {

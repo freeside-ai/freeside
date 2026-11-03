@@ -277,7 +277,7 @@ func TestUsagePoolParallelismRechecksReplayedAdmissionsAfterLimitReduction(t *te
 	if result, err := refusing.Reconcile(ctx); err != nil || result.InvocationsStarted != 0 {
 		t.Fatalf("pre-reduction reconcile = %#v, %v", result, err)
 	}
-	if err := f.store.WriteInternal(ctx, func(tx *store.InternalTx) error {
+	if err := f.store.Write(ctx, func(tx *store.WriteTx) error {
 		return tx.RecordUsagePool(ctx, domain.UsagePool{
 			ID: identity.EffectiveUsagePool(), Provider: identity.Provider, MaxParallelExecutions: 1,
 		}, admittedAt.Add(time.Hour))
@@ -439,7 +439,7 @@ func TestUsagePoolParallelismIsScopedPerIdentity(t *testing.T) {
 	secondIdentity := firstIdentity
 	secondIdentity.ID = "auth-claude-secondary"
 	secondIdentity.Interim.AuthStoreVolume = "claude-secondary-credentials"
-	if err := f.store.WriteInternal(ctx, func(tx *store.InternalTx) error {
+	if err := f.store.Write(ctx, func(tx *store.WriteTx) error {
 		return tx.RecordAuthIdentity(ctx, secondIdentity, admittedAt)
 	}); err != nil {
 		t.Fatalf("record second identity: %v", err)
@@ -479,7 +479,7 @@ func TestUsagePoolSharedByTwoIdentities(t *testing.T) {
 	pool := firstIdentity.EffectiveUsagePool()
 
 	f := openUnattendedFixtureWithPoolLimit(t, firstIdentity, 2)
-	if err := f.store.WriteInternal(ctx, func(tx *store.InternalTx) error {
+	if err := f.store.Write(ctx, func(tx *store.WriteTx) error {
 		return tx.RecordAuthIdentity(ctx, secondIdentity, admittedAt)
 	}); err != nil {
 		t.Fatalf("record second identity: %v", err)

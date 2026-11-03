@@ -1106,7 +1106,7 @@ func shadowTestDigest(seed string) domain.Digest {
 func recordFakeReviewIdentities(t *testing.T, st *store.Store) {
 	t.Helper()
 	at := time.Unix(1, 0).UTC()
-	if err := st.WriteInternal(t.Context(), func(tx *store.InternalTx) error {
+	if err := st.Write(t.Context(), func(tx *store.WriteTx) error {
 		for _, identity := range fake.ReviewIdentities() {
 			if err := storetest.RecordIdentityOnPool(t.Context(), tx, identity, 64, at); err != nil {
 				return err

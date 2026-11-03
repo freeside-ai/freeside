@@ -233,7 +233,7 @@ func TestCodexAuthAddRefusesASecondIdentityForOneAccount(t *testing.T) {
 	rig := newCodexEnrollmentRig(t, "acct-fixture-0001", &ward.CodexClientEnrollmentRequest{
 		EnrollmentID: "codex-primary/codex_cli", Route: "openai-subscription", CostOwner: "operator",
 	})
-	if err := rig.st.WriteInternal(ctx, func(tx *store.InternalTx) error {
+	if err := rig.st.Write(ctx, func(tx *store.WriteTx) error {
 		return tx.RecordAuthIdentity(ctx, domain.AuthIdentity{
 			ID: "codex-other", Provider: "openai", AccountBinding: "acct-fixture-0001",
 			AuthStoreMutationLease: true, Enabled: true, CostOwner: "operator",
@@ -281,6 +281,31 @@ func TestClaudeEnrollmentBeginBindsIdentityEnrollmentAndLease(t *testing.T) {
 		return err
 	}); err != nil {
 		t.Fatal(err)
+	}
+}
+
+// TestClaudeEnrollmentBeginRaisesTheRevision: clients see the identity, its
+// pool, and the enrollment through the bootstrap's usage_pools, so recording
+// an enrollment raises the revision a heartbeat compares (plan §5.14).
+func TestClaudeEnrollmentBeginRaisesTheRevision(t *testing.T) {
+	ctx := context.Background()
+	st, adapters := openEnrollmentStore(t)
+	revision := func() int64 {
+		t.Helper()
+		state, err := st.ServerState(ctx)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return state.Revision
+	}
+	identity, bootstrap := claudeEnrollmentFixture("claude-main", "acct-fixture-0002")
+	before := revision()
+	if _, err := adapters.Claude.Begin(ctx, identity, bootstrap, "holder-1",
+		enrollmentTestAt, enrollmentTestAt.Add(time.Minute)); err != nil {
+		t.Fatal(err)
+	}
+	if got := revision(); got != before+1 {
+		t.Fatalf("revision = %d, want %d", got, before+1)
 	}
 }
 
@@ -363,7 +388,7 @@ func TestClaudeEnrollmentBeginEnforcesIdentityBindings(t *testing.T) {
 		t.Run(name, func(t *testing.T) {
 			st, adapters := openEnrollmentStore(t)
 			if tc.seed != nil {
-				if err := st.WriteInternal(ctx, func(tx *store.InternalTx) error {
+				if err := st.Write(ctx, func(tx *store.WriteTx) error {
 					return tx.RecordAuthIdentity(ctx, *tc.seed, enrollmentTestAt)
 				}); err != nil {
 					t.Fatal(err)
@@ -401,7 +426,7 @@ func TestClaudeEnrollmentBeginBindsAnUnboundInterimIdentity(t *testing.T) {
 	st, adapters := openEnrollmentStore(t)
 	stored, _ := claudeEnrollmentFixture("claude-main", "")
 	stored.CostOwner, stored.Enabled = "", false
-	if err := st.WriteInternal(ctx, func(tx *store.InternalTx) error {
+	if err := st.Write(ctx, func(tx *store.WriteTx) error {
 		return tx.RecordAuthIdentity(ctx, stored, enrollmentTestAt)
 	}); err != nil {
 		t.Fatal(err)
@@ -444,7 +469,7 @@ func TestClaudeEnrollmentBeginEnablesAnIdentityWhenAsked(t *testing.T) {
 	} {
 		t.Run(name, func(t *testing.T) {
 			st, adapters := openEnrollmentStore(t)
-			if err := st.WriteInternal(ctx, func(tx *store.InternalTx) error {
+			if err := st.Write(ctx, func(tx *store.WriteTx) error {
 				if tc.accountHolder {
 					if err := tx.RecordAuthIdentity(ctx, domain.AuthIdentity{
 						ID: "claude-other", Provider: "claude", AccountBinding: "acct-fixture-0002",
@@ -501,7 +526,7 @@ func TestClaudeEnrollmentBeginRefusesEnablingAnEnrolledIdentity(t *testing.T) {
 	}
 	disabled := identity
 	disabled.Enabled = false
-	if err := st.WriteInternal(ctx, func(tx *store.InternalTx) error {
+	if err := st.Write(ctx, func(tx *store.WriteTx) error {
 		return tx.RecordAuthIdentity(ctx, disabled, enrollmentTestAt.Add(time.Minute))
 	}); err != nil {
 		t.Fatal(err)

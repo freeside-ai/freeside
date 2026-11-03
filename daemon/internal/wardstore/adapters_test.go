@@ -29,7 +29,7 @@ func TestAdaptersRoundTripAcrossStoreReopen(t *testing.T) {
 		ID: "auth-1", Provider: "claude", AuthStoreMutationLease: true,
 		Interim: domain.InterimClientFacts{AuthStoreVolume: "provider-cred", RefreshStrategy: domain.RefreshOnDemand},
 	}
-	if err := st.WriteInternal(ctx, func(tx *store.InternalTx) error {
+	if err := st.Write(ctx, func(tx *store.WriteTx) error {
 		return tx.RecordAuthIdentity(ctx, identity, at)
 	}); err != nil {
 		t.Fatalf("RecordAuthIdentity: %v", err)
@@ -133,7 +133,7 @@ func TestLeaserHeldMutationBlocksExpiredTakeoverUntilFilesystemMutationReturns(t
 		ID: "codex-atomic-mutation", Provider: "openai", AuthStoreMutationLease: true,
 		Interim: domain.InterimClientFacts{AuthStoreVolume: "codex-auth", RefreshStrategy: domain.RefreshOnDemand, SupportsReadOnlyAuthSnapshot: true},
 	}
-	if err := st.WriteInternal(ctx, func(tx *store.InternalTx) error {
+	if err := st.Write(ctx, func(tx *store.WriteTx) error {
 		return tx.RecordAuthIdentity(ctx, identity, at)
 	}); err != nil {
 		t.Fatal(err)
@@ -427,7 +427,7 @@ func TestLeaserExcludesConcurrentHolderAndMapsEndedWindow(t *testing.T) {
 		ID: "auth-1", Provider: "claude", AuthStoreMutationLease: true,
 		Interim: domain.InterimClientFacts{AuthStoreVolume: "provider-cred", RefreshStrategy: domain.RefreshOnDemand},
 	}
-	if err := st.WriteInternal(ctx, func(tx *store.InternalTx) error {
+	if err := st.Write(ctx, func(tx *store.WriteTx) error {
 		return tx.RecordAuthIdentity(ctx, identity, at)
 	}); err != nil {
 		t.Fatalf("RecordAuthIdentity: %v", err)
@@ -532,7 +532,7 @@ func TestEnrollmentAdapterRefusesChangedIdentityBindings(t *testing.T) {
 		ID: "codex-fixed", Provider: "openai", AuthStoreMutationLease: true,
 		Interim: domain.InterimClientFacts{AuthStoreVolume: "/private/auth/original.json", RefreshStrategy: domain.RefreshOnDemand, SupportsReadOnlyAuthSnapshot: true},
 	}
-	if err := st.WriteInternal(ctx, func(tx *store.InternalTx) error {
+	if err := st.Write(ctx, func(tx *store.WriteTx) error {
 		return tx.RecordAuthIdentity(ctx, stored, at)
 	}); err != nil {
 		t.Fatal(err)
@@ -675,7 +675,7 @@ func TestCodexAuthStateRequiresVerifiedCommandBackedRecovery(t *testing.T) {
 		ID: "run-codex-recovery", ProjectID: "project-1",
 		SpecDigest: "sha256:spec", PolicyDigest: "sha256:policy",
 	}
-	if err := st.WriteInternal(ctx, func(tx *store.InternalTx) error {
+	if err := st.Write(ctx, func(tx *store.WriteTx) error {
 		return tx.RecordAuthIdentity(ctx, identity, at)
 	}); err != nil {
 		t.Fatal(err)
@@ -819,7 +819,7 @@ func TestFailedCodexReenrollmentCannotProjectOrClearAdmission(t *testing.T) {
 		SpecDigest: "sha256:spec", PolicyDigest: "sha256:policy",
 	}
 	var rec store.CodexReenrollmentJournal
-	if err := st.WriteInternal(ctx, func(tx *store.InternalTx) error {
+	if err := st.Write(ctx, func(tx *store.WriteTx) error {
 		return tx.RecordAuthIdentity(ctx, identity, at)
 	}); err != nil {
 		t.Fatal(err)
@@ -877,7 +877,7 @@ func TestCodexReenrollmentOperationCannotCrossMarkerOccurrences(t *testing.T) {
 		ID: "run-codex-occurrence", ProjectID: "project-1",
 		SpecDigest: "sha256:spec", PolicyDigest: "sha256:policy",
 	}
-	if err := st.WriteInternal(ctx, func(tx *store.InternalTx) error {
+	if err := st.Write(ctx, func(tx *store.WriteTx) error {
 		return tx.RecordAuthIdentity(ctx, identity, at)
 	}); err != nil {
 		t.Fatal(err)
@@ -1098,7 +1098,7 @@ func TestReadHoldAdaptersShareIdentityAndExcludeTheLease(t *testing.T) {
 		ID: "auth-1", Provider: "claude", AuthStoreMutationLease: true,
 		Interim: domain.InterimClientFacts{AuthStoreVolume: "provider-cred", RefreshStrategy: domain.RefreshOnDemand},
 	}
-	if err := st.WriteInternal(ctx, func(tx *store.InternalTx) error {
+	if err := st.Write(ctx, func(tx *store.WriteTx) error {
 		return tx.RecordAuthIdentity(ctx, identity, at)
 	}); err != nil {
 		t.Fatalf("RecordAuthIdentity: %v", err)

@@ -111,7 +111,7 @@ func newAgentAdmissionFixture(t *testing.T) *agentAdmissionFixture {
 		RefreshStrategy: domain.RefreshExternal, AccountBinding: f.identity.AccountBinding,
 	}
 	manifest := agentTestDigest("5")
-	if err := st.WriteInternal(ctx, func(tx *store.InternalTx) error {
+	if err := st.Write(ctx, func(tx *store.WriteTx) error {
 		if err := tx.RecordAuthIdentity(ctx, f.identity, agentTestAt.Add(-4*time.Minute)); err != nil {
 			return err
 		}
@@ -460,7 +460,7 @@ func TestLineupAdmissionRefusals(t *testing.T) {
 			mutate: func(t *testing.T, f *agentAdmissionFixture, _ *AgentSelection) {
 				disabled := f.identity
 				disabled.Enabled = false
-				if err := f.store.WriteInternal(ctx, func(tx *store.InternalTx) error {
+				if err := f.store.Write(ctx, func(tx *store.WriteTx) error {
 					return tx.RecordAuthIdentity(ctx, disabled, agentTestAt)
 				}); err != nil {
 					t.Fatal(err)

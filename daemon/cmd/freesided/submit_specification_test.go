@@ -134,7 +134,7 @@ func testSubmitCommandSpecificationDigest(
 		}); err != nil {
 			return err
 		}
-		return storetest.RecordIdentityOnPool(t.Context(), &tx.InternalTx, domain.AuthIdentity{
+		return storetest.RecordIdentityOnPool(t.Context(), tx, domain.AuthIdentity{
 			ID: "auth-submit", Provider: "codex", AuthStoreMutationLease: true,
 			Interim: domain.InterimClientFacts{AuthStoreVolume: "provider-credentials", RefreshStrategy: domain.RefreshOnDemand},
 		}, 64, now)

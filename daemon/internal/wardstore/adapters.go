@@ -903,10 +903,10 @@ func (a *Enrollment) Begin(
 	err := a.store.Write(ctx, func(tx *store.WriteTx) error {
 		var binding *domain.LeaseGenerationBinding
 		if bootstrap != nil {
-			if err := recordEnrollingIdentity(ctx, &tx.InternalTx, identity, bootstrap.EnableIdentity, now); err != nil {
+			if err := recordEnrollingIdentity(ctx, tx, identity, bootstrap.EnableIdentity, now); err != nil {
 				return err
 			}
-			if err := recordEnrollmentBootstrap(ctx, &tx.InternalTx, *bootstrap, now); err != nil {
+			if err := recordEnrollmentBootstrap(ctx, tx, *bootstrap, now); err != nil {
 				return err
 			}
 			binding = &bootstrap.Binding

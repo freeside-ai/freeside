@@ -73,7 +73,7 @@ func openAdmittingFixture(
 			domain.ModeAttendedDev: storeFloor,
 		},
 	})
-	if err := st.WriteInternal(ctx, func(tx *store.InternalTx) error {
+	if err := st.Write(ctx, func(tx *store.WriteTx) error {
 		return storetest.RecordIdentityOnPool(ctx, tx, testIdentity, testPoolLimit, admittedAt)
 	}); err != nil {
 		t.Fatalf("record auth identity: %v", err)
@@ -227,7 +227,7 @@ func TestAdmissionConfigurationIsDetached(t *testing.T) {
 			domain.ModeAttendedDev: domain.NewCapabilitySnapshot(floor...),
 		},
 	})
-	if err := st.WriteInternal(ctx, func(tx *store.InternalTx) error {
+	if err := st.Write(ctx, func(tx *store.WriteTx) error {
 		return storetest.RecordIdentityOnPool(ctx, tx, testIdentity, testPoolLimit, admittedAt)
 	}); err != nil {
 		t.Fatalf("record auth identity: %v", err)

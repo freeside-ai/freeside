@@ -31,7 +31,7 @@ func setPoolLimitIdentity(id domain.AuthIdentityID, provider string) domain.Auth
 
 func recordSetPoolLimitIdentities(t *testing.T, st *store.Store, identities ...domain.AuthIdentity) {
 	t.Helper()
-	if err := st.WriteInternal(t.Context(), func(tx *store.InternalTx) error {
+	if err := st.Write(t.Context(), func(tx *store.WriteTx) error {
 		for _, identity := range identities {
 			if err := tx.RecordAuthIdentity(t.Context(), identity, time.Now().UTC().Add(-time.Minute)); err != nil {
 				return err
@@ -128,6 +128,44 @@ func TestSetPoolLimitRecordsOnlyTheLimit(t *testing.T) {
 		return nil
 	}); err != nil {
 		t.Fatal(err)
+	}
+}
+
+// TestSetPoolLimitRaisesTheRevision: clients sync the pool through the
+// bootstrap's usage_pools, so a new limit raises the revision a heartbeat
+// compares (plan §5.14).
+func TestSetPoolLimitRaisesTheRevision(t *testing.T) {
+	t.Parallel()
+	dbPath := filepath.Join(t.TempDir(), "freeside.db")
+	revision := func() int64 {
+		t.Helper()
+		st := storetest.Open(t, dbPath, store.Options{})
+		state, err := st.ServerState(t.Context())
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := st.Close(); err != nil {
+			t.Fatal(err)
+		}
+		return state.Revision
+	}
+	st := storetest.Open(t, dbPath, store.Options{})
+	recordSetPoolLimitIdentities(t, st, setPoolLimitIdentity("claude-writer", "claude"))
+	if err := st.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	before := revision()
+	result, err := runSetPoolLimit(t, t.Context(),
+		"-db", dbPath, "-pool", "pool-claude-writer", "-max-parallel-executions", "3")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !result.Recorded {
+		t.Fatalf("result = %#v, want a recorded limit", result)
+	}
+	if got := revision(); got != before+1 {
+		t.Fatalf("revision = %d, want %d", got, before+1)
 	}
 }
 

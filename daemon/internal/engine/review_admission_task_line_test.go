@@ -183,7 +183,7 @@ func TestReviewerLineRefusals(t *testing.T) {
 					t.Fatal(err)
 				}
 				identity.Enabled = false
-				if err := f.store.WriteInternal(ctx, func(tx *store.InternalTx) error {
+				if err := f.store.Write(ctx, func(tx *store.WriteTx) error {
 					return tx.RecordAuthIdentity(ctx, identity, agentTestAt)
 				}); err != nil {
 					t.Fatal(err)

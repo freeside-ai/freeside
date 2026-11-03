@@ -40,7 +40,7 @@ func TestProductionReviewInvocationKeepsItsFirstAdmission(t *testing.T) {
 		admission.AdmittedAt = at
 		return admission, nil
 	}
-	if err := p.store.WriteInternal(p.ctx, func(tx *store.InternalTx) error {
+	if err := p.store.Write(p.ctx, func(tx *store.WriteTx) error {
 		return tx.RecordAuthIdentity(p.ctx, domain.AuthIdentity{ID: "review-identity-1", Provider: "fake"}, p.now)
 	}); err != nil {
 		t.Fatal(err)
@@ -168,7 +168,7 @@ func TestProductionReviewWaitsForItsUsagePool(t *testing.T) {
 	blocker := engine.ProductionReviewInvocationID(p.runID, 2)
 	identity := fake.ReviewIdentities()[0]
 	pool := identity.EffectiveUsagePool()
-	if err := p.store.WriteInternal(p.ctx, func(tx *store.InternalTx) error {
+	if err := p.store.Write(p.ctx, func(tx *store.WriteTx) error {
 		return tx.RecordUsagePool(p.ctx, domain.UsagePool{
 			ID: pool, Provider: identity.Provider, MaxParallelExecutions: 1,
 		}, p.now.Add(time.Second))
@@ -274,7 +274,7 @@ func TestProductionRecoveredReviewContradictionFreesItsSlot(t *testing.T) {
 			secondID := engine.ProductionReviewInvocationID(p.runID, 2)
 			identity := fake.ReviewIdentities()[0]
 			pool := identity.EffectiveUsagePool()
-			if err := p.store.WriteInternal(p.ctx, func(tx *store.InternalTx) error {
+			if err := p.store.Write(p.ctx, func(tx *store.WriteTx) error {
 				return tx.RecordUsagePool(p.ctx, domain.UsagePool{
 					ID: pool, Provider: identity.Provider, MaxParallelExecutions: 1,
 				}, p.now.Add(time.Second))

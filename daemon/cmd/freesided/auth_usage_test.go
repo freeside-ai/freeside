@@ -41,7 +41,7 @@ func seedUsageEnrollment(
 		provider = "anthropic"
 		record.Route, record.AuthMethod, record.RefreshStrategy = "anthropic-subscription", domain.AuthMethodSetupToken, domain.RefreshExternal
 	}
-	if err := st.WriteInternal(ctx, func(tx *store.InternalTx) error {
+	if err := st.Write(ctx, func(tx *store.WriteTx) error {
 		if err := tx.RecordAuthIdentity(ctx, domain.AuthIdentity{
 			ID: identity, Provider: provider, AccountBinding: account, UsagePool: string(pool),
 			AuthStoreMutationLease: true, Enabled: true,

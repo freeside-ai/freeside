@@ -197,7 +197,11 @@ ORDER BY holder`
 // recordedAt orders revisions; it is not part of the declaration. The identity's
 // usage pool is settled in the same transaction (settleIdentityUsagePool), so
 // admission never meets an identity without a pool to count it against.
-func (tx *InternalTx) RecordAuthIdentity(ctx context.Context, identity domain.AuthIdentity, recordedAt time.Time) error {
+//
+// Clients sync identities and their pools through the bootstrap's usage_pools
+// (plan §5.14), so the identity is written only in a revision-bumping
+// transaction.
+func (tx *WriteTx) RecordAuthIdentity(ctx context.Context, identity domain.AuthIdentity, recordedAt time.Time) error {
 	if recordedAt.IsZero() {
 		return fmt.Errorf("record auth identity %q: zero recorded_at", identity.ID)
 	}

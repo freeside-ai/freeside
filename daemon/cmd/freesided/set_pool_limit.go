@@ -61,7 +61,7 @@ func runSetPoolLimitCommand(
 	}
 	defer func() { err = errors.Join(err, handle.Close()) }()
 	var result setPoolLimitResult
-	if err := handle.store.WriteInternal(ctx, func(tx *store.InternalTx) error {
+	if err := handle.store.Write(ctx, func(tx *store.WriteTx) error {
 		pool, err := tx.GetUsagePool(ctx, cfg.PoolID)
 		if err != nil {
 			return err

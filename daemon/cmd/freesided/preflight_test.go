@@ -1646,7 +1646,7 @@ func TestProductionPreflightDatabaseChecksAClaudeReviewIdentity(t *testing.T) {
 			dbPath := filepath.Join(t.TempDir(), "freeside.db")
 			st := storetest.Open(t, dbPath, store.Options{})
 			if tc.identity != nil {
-				if err := st.WriteInternal(ctx, func(tx *store.InternalTx) error {
+				if err := st.Write(ctx, func(tx *store.WriteTx) error {
 					return tx.RecordAuthIdentity(ctx, *tc.identity, time.Now().UTC())
 				}); err != nil {
 					t.Fatal(err)

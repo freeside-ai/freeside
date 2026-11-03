@@ -334,7 +334,7 @@ func retireUnadoptable(
 	}
 	// Disabled first: if a Stop then fails, the daemon holds admission on
 	// the work that is left, and a rerun records the rest.
-	err := st.WriteInternal(ctx, func(tx *store.InternalTx) error {
+	err := st.Write(ctx, func(tx *store.WriteTx) error {
 		identity, err := tx.GetAuthIdentity(ctx, entry.AuthIdentityID)
 		if err != nil || !identity.Enabled {
 			return err

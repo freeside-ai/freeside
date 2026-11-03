@@ -1107,7 +1107,7 @@ func putTestItem(t *testing.T, f fixture, item domain.AttentionItem) error {
 		if err := tx.PutAgentInvocation(t.Context(), invocation); err != nil {
 			return err
 		}
-		if err := storetest.RecordIdentityOnPool(t.Context(), &tx.InternalTx, domain.AuthIdentity{
+		if err := storetest.RecordIdentityOnPool(t.Context(), tx, domain.AuthIdentity{
 			ID: identityID, Provider: "codex", AuthStoreMutationLease: true,
 			Interim: domain.InterimClientFacts{AuthStoreVolume: "provider-credentials", RefreshStrategy: domain.RefreshOnDemand},
 		}, 8, *f.now); err != nil {

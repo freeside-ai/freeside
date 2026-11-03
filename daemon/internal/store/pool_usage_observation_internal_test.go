@@ -29,7 +29,7 @@ func recordPoolEnrollment(
 	record.ID = enrollment
 	record.AuthIdentityID = identity
 	record.AccountBinding = declared.AccountBinding
-	if err := st.WriteInternal(t.Context(), func(tx *InternalTx) error {
+	if err := st.Write(t.Context(), func(tx *WriteTx) error {
 		if err := tx.RecordAuthIdentity(t.Context(), declared, at); err != nil {
 			return err
 		}

@@ -34,7 +34,7 @@ func seedCodexReenrollmentIdentity(
 		ID: "codex-primary", Provider: "codex", AuthStoreMutationLease: true,
 		Interim: domain.InterimClientFacts{AuthStoreVolume: "codex-auth", RefreshStrategy: domain.RefreshOnDemand},
 	}
-	if err := st.WriteInternal(context.Background(), func(tx *store.InternalTx) error {
+	if err := st.Write(context.Background(), func(tx *store.WriteTx) error {
 		return tx.RecordAuthIdentity(context.Background(), identity, at)
 	}); err != nil {
 		t.Fatalf("RecordAuthIdentity: %v", err)

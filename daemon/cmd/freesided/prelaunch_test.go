@@ -95,7 +95,7 @@ func newPrelaunchFixture(t *testing.T) *prelaunchFixture {
 	if err != nil {
 		t.Fatal(err)
 	}
-	f.withStore(t, func(tx *store.InternalTx) error {
+	f.withStore(t, func(tx *store.WriteTx) error {
 		for _, identity := range identities {
 			if err := tx.RecordAuthIdentity(t.Context(), identity, prelaunchTestNow); err != nil {
 				return err
@@ -178,10 +178,10 @@ func (f *prelaunchFixture) load(t *testing.T) loadedDeputySettings {
 	return settings
 }
 
-func (f *prelaunchFixture) withStore(t *testing.T, write func(*store.InternalTx) error) {
+func (f *prelaunchFixture) withStore(t *testing.T, write func(*store.WriteTx) error) {
 	t.Helper()
 	st := storetest.Open(t, f.paths.DB, store.Options{})
-	if err := st.WriteInternal(t.Context(), write); err != nil {
+	if err := st.Write(t.Context(), write); err != nil {
 		t.Fatal(err)
 	}
 	if err := st.Close(); err != nil {
@@ -365,7 +365,7 @@ func (f *prelaunchFixture) resetStore(t *testing.T, profile bool, recipe domain.
 	if err != nil {
 		t.Fatal(err)
 	}
-	f.withStore(t, func(tx *store.InternalTx) error {
+	f.withStore(t, func(tx *store.WriteTx) error {
 		for _, identity := range identities {
 			if err := tx.RecordAuthIdentity(t.Context(), identity, prelaunchTestNow); err != nil {
 				return err

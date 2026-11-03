@@ -116,7 +116,7 @@ func bindProductionWriters(t *testing.T, p *productionPublicationHarness) {
 		RefreshStrategy: domain.RefreshExternal, AccountBinding: identity.AccountBinding,
 	}
 	manifest := productionDigest([]byte("writer auth store"))
-	if err := p.store.WriteInternal(p.ctx, func(tx *store.InternalTx) error {
+	if err := p.store.Write(p.ctx, func(tx *store.WriteTx) error {
 		if err := storetest.RecordIdentityOnPool(p.ctx, tx, identity, testPoolLimit, fakePublicationTime.Add(-4*time.Minute)); err != nil {
 			return err
 		}

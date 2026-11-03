@@ -60,7 +60,7 @@ func newFailedSpecification(t *testing.T) failedSpecification {
 	now := time.Now().UTC().Truncate(time.Second)
 	attention := signet.NewService(st, signet.WithBlobStore(blobs), signet.WithClock(func() time.Time { return now }))
 	if err := st.Write(t.Context(), func(tx *store.WriteTx) error {
-		return storetest.RecordIdentityOnPool(t.Context(), &tx.InternalTx, domain.AuthIdentity{
+		return storetest.RecordIdentityOnPool(t.Context(), tx, domain.AuthIdentity{
 			ID: "auth-retry", Provider: "codex", AuthStoreMutationLease: true,
 			Interim: domain.InterimClientFacts{AuthStoreVolume: "provider-credentials", RefreshStrategy: domain.RefreshOnDemand},
 		}, 64, now)
