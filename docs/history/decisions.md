@@ -3399,3 +3399,37 @@ The client work is #1798 to #1803.)
 
 (Owner decision of 2026-11-03;
 [decision note](../../devlog/2026-11-03-1039-specifier-triage.md).)
+
+## Revision 107 ("Drain the Soonest Reset"):
+
+1. **The router drains the subscription that resets soonest.** At a new
+   task's first admission it takes, among the pools of the role's ordered
+   agents whose window for the model isn't marked exhausted, the one whose
+   weekly window resets soonest, so the allowance that expires first is
+   spent first (Section [5.4](../plan.md#54-credential-modes-egress-profiles-and-concurrency), routing policy). Pinning, parking, and the
+   once-per-task choice stay as revision 103 set them. An escalated task
+   ranks the specifier's counterparts the same way, in place of revision
+   106's walk of the policy order. This is what the
+   owner asked for on 2026-10-26 and 2026-10-28 ("prefer the eligible
+   account whose weekly allowance resets soonest"); revision 103 recorded
+   it as a fixed priority order, which drains the right subscription only
+   if someone reorders it at every reset. Rejected: keeping the fixed order
+   for that reason.
+2. **The operator may name one drain-first account, ahead of reset order.**
+   It is a usage pool named in the routing policy, so setting or clearing it
+   is a new revision the router's lines cite. It takes every new task it
+   can; when its window is marked exhausted, the router passes it over
+   like any other pool. Rejected:
+   overrides on task lines only, because the owner asked for an
+   account-wide choice, and a task line moves one task.
+3. **Where no weekly reset is known, the policy's order decides.** Pools
+   with a known reset rank first, soonest first, then the rest in the
+   policy's order, so the router works before a weekly reset is observable
+   under the setup token (#2389) and drains by reset once it is. The
+   policy keeps its per-role orders: they are the only record of which
+   agent covers a role on another subscription. Rejected: retiring the
+   routing policy record, which would leave the router no candidates, and
+   falling back to the lineup, which can't pass over a marked pool.
+
+(Owner decision of 2026-11-03 on #2393;
+[decision note](../../devlog/2026-11-03-1111-drain-soonest-reset.md).)
