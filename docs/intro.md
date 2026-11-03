@@ -39,9 +39,11 @@ Freeside is the outer loop. It decides what work starts and inside what
 boundary, which harness and model do it, what evidence "ready" requires, what
 keeps moving while you are away, and which decisions come to you.
 
-Freeside is the layer that directs agents rather than running them. It never
-runs the model loop itself. It launches and supervises the harnesses that do:
-the harness runs the agent, and you hold the reins.
+Freeside is the layer that directs agents rather than running them. It is an
+agentic development environment (ADE): the environment you develop in once
+agents do the editing. It never runs the model loop itself. It launches and
+supervises the harnesses that do: the harness runs the agent, and you hold the
+reins.
 
 ## What Freeside Does
 
