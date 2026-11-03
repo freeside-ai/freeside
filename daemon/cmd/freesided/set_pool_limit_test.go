@@ -31,7 +31,7 @@ func setPoolLimitIdentity(id domain.AuthIdentityID, provider string) domain.Auth
 
 func recordSetPoolLimitIdentities(t *testing.T, st *store.Store, identities ...domain.AuthIdentity) {
 	t.Helper()
-	if err := st.WriteInternal(t.Context(), func(tx *store.InternalTx) error {
+	if err := st.Write(t.Context(), func(tx *store.WriteTx) error {
 		for _, identity := range identities {
 			if err := tx.RecordAuthIdentity(t.Context(), identity, time.Now().UTC().Add(-time.Minute)); err != nil {
 				return err

@@ -570,7 +570,7 @@ func TestCodexReenrollmentReconstructionRejectsUnknownAndTrailingBody(t *testing
 			}
 			markerID := domain.ItemID(CodexReenrollmentMarkerPrefix(identity.ID) + "1")
 			var rec CodexReenrollmentJournal
-			if err := st.WriteInternal(ctx, func(tx *InternalTx) error {
+			if err := st.Write(ctx, func(tx *WriteTx) error {
 				return tx.RecordAuthIdentity(ctx, identity, at)
 			}); err != nil {
 				t.Fatal(err)

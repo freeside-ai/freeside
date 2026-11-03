@@ -207,7 +207,7 @@ func (tx *WriteTx) RecordWindowRefusalMark(
 // enrollment can meet the record's gate again, and a record that fails it
 // would fail every listing. Readings return with the next collection and a
 // refusal with the next provider refusal, on the pool that identity now meters.
-func (tx *InternalTx) deletePoolUsageObservation(ctx context.Context, pool domain.UsagePoolID) error {
+func (tx *WriteTx) deletePoolUsageObservation(ctx context.Context, pool domain.UsagePoolID) error {
 	if _, err := tx.tx.ExecContext(ctx, deletePoolUsageObservationSQL, pool); err != nil {
 		return fmt.Errorf("delete pool usage observation %q: %w", pool, err)
 	}

@@ -68,7 +68,7 @@ func Copy(t testing.TB, path string) {
 // because an identity recorded alone creates its pool at one, and the limit
 // revision would then share that revision's instant.
 func RecordIdentityOnPool(
-	ctx context.Context, tx *store.InternalTx, identity domain.AuthIdentity, limit int, at time.Time,
+	ctx context.Context, tx *store.WriteTx, identity domain.AuthIdentity, limit int, at time.Time,
 ) error {
 	if err := tx.RecordUsagePool(ctx, domain.UsagePool{
 		ID: identity.EffectiveUsagePool(), Provider: identity.Provider, MaxParallelExecutions: limit,

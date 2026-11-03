@@ -131,7 +131,7 @@ func seedUsageEnrollment(t *testing.T, st *store.Store, at time.Time) int {
 	manifest := domain.Digest("sha256:" + strings.Repeat("e", 64))
 	expiry := at.Add(24 * time.Hour)
 	var generation domain.EnrollmentGeneration
-	if err := st.WriteInternal(ctx, func(tx *store.InternalTx) error {
+	if err := st.Write(ctx, func(tx *store.WriteTx) error {
 		if err := tx.RecordUsagePool(ctx, domain.UsagePool{
 			ID: "pool-idle", Provider: "anthropic", MaxParallelExecutions: 1,
 		}, at); err != nil {

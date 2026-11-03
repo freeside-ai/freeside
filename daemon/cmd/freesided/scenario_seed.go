@@ -146,7 +146,7 @@ func seedScenarioRecords(
 	if err != nil {
 		return fmt.Errorf("seed scenario conformance: %w", err)
 	}
-	err = st.WriteInternal(ctx, func(tx *store.InternalTx) error {
+	err = st.Write(ctx, func(tx *store.WriteTx) error {
 		if _, err := tx.LatestTrustProfile(ctx, scenarioRepo); err == nil {
 			return nil
 		} else if !errors.Is(err, store.ErrNotFound) {

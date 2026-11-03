@@ -62,7 +62,7 @@ func usageEngineFixture(t *testing.T, bound bool) (*Engine, domain.Run, domain.A
 	}
 	recordedAt := time.Date(2026, 1, 2, 3, 4, 5, 0, time.UTC)
 	var generation domain.EnrollmentGeneration
-	if err := st.WriteInternal(ctx, func(tx *store.InternalTx) error {
+	if err := st.Write(ctx, func(tx *store.WriteTx) error {
 		if err := tx.RecordAuthIdentity(ctx, identity, recordedAt.Add(-4*time.Minute)); err != nil {
 			return err
 		}

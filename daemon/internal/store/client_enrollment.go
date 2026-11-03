@@ -124,7 +124,10 @@ WHERE enrollment_id = ? ORDER BY ordinal DESC LIMIT 1`
 // binding is gated on the write — the identity must exist, carry an account
 // binding, and the enrollment must carry exactly that one — so an enrollment
 // can never create the second-identity-per-account state §5.4 forbids.
-func (tx *InternalTx) RecordClientEnrollment(
+//
+// Clients sync a pool's enrollments through the bootstrap's usage_pools (plan
+// §5.14), so the enrollment is written only in a revision-bumping transaction.
+func (tx *WriteTx) RecordClientEnrollment(
 	ctx context.Context, enrollment domain.ClientEnrollment, recordedAt time.Time,
 ) error {
 	if recordedAt.IsZero() {

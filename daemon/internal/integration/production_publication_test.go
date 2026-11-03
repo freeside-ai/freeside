@@ -361,7 +361,7 @@ func newProductionPublicationHarnessWithMetadata(
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := h.store.WriteInternal(h.ctx, func(tx *store.InternalTx) error {
+	if err := h.store.Write(h.ctx, func(tx *store.WriteTx) error {
 		for _, identity := range append(fake.ReviewIdentities(), testIdentity) {
 			if err := storetest.RecordIdentityOnPool(h.ctx, tx, identity, testPoolLimit, fakePublicationTime); err != nil {
 				return err

@@ -59,7 +59,7 @@
       "group": "state",
       "name": "system_health",
       "status": "passed",
-      "evidence": "no open item holds unattended admission at revision 0"
+      "evidence": "no open item holds unattended admission at revision 1"
     },
     {
       "group": "state",

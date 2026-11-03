@@ -131,7 +131,7 @@ func TestAuthIdentityFieldsCrossChecked(t *testing.T) {
 				ID: "auth-1", Provider: "claude", AuthStoreMutationLease: true,
 				Interim: domain.InterimClientFacts{AuthStoreVolume: "provider-cred", RefreshStrategy: domain.RefreshOnDemand},
 			}
-			if err := s.WriteInternal(ctx, func(tx *InternalTx) error {
+			if err := s.Write(ctx, func(tx *WriteTx) error {
 				return tx.RecordAuthIdentity(ctx, identity, time.Date(2026, 1, 2, 3, 4, 5, 0, time.UTC))
 			}); err != nil {
 				t.Fatalf("record: %v", err)

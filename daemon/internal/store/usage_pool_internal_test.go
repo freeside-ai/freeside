@@ -29,7 +29,7 @@ func openSlotStore(t *testing.T) *Store {
 
 func recordSlotIdentity(t *testing.T, st *Store, identity domain.AuthIdentity, at time.Time) {
 	t.Helper()
-	if err := st.WriteInternal(t.Context(), func(tx *InternalTx) error {
+	if err := st.Write(t.Context(), func(tx *WriteTx) error {
 		return tx.RecordAuthIdentity(t.Context(), identity, at)
 	}); err != nil {
 		t.Fatalf("record %s: %v", identity.ID, err)
@@ -53,7 +53,7 @@ func setPoolLimit(t *testing.T, st *Store, id domain.UsagePoolID, limit int, at 
 	t.Helper()
 	pool := readPool(t, st, id)
 	pool.MaxParallelExecutions = limit
-	if err := st.WriteInternal(t.Context(), func(tx *InternalTx) error {
+	if err := st.Write(t.Context(), func(tx *WriteTx) error {
 		return tx.RecordUsagePool(t.Context(), pool, at)
 	}); err != nil {
 		t.Fatalf("set pool %s limit: %v", id, err)
@@ -113,7 +113,7 @@ func TestIdentityCannotJoinAnotherProvidersPool(t *testing.T) {
 	recordSlotIdentity(t, st, slotIdentity("auth-member", "pool-shared"), slotAt)
 	other := slotIdentity("auth-other", "pool-shared")
 	other.Provider = "openai"
-	err := st.WriteInternal(t.Context(), func(tx *InternalTx) error {
+	err := st.Write(t.Context(), func(tx *WriteTx) error {
 		return tx.RecordAuthIdentity(t.Context(), other, slotAt)
 	})
 	if !errors.Is(err, domain.ErrImmutableTransition) {
@@ -141,22 +141,22 @@ func TestUsagePoolRevisionsOnlyMoveForward(t *testing.T) {
 	stale, conflicting := pool, pool
 	stale.MaxParallelExecutions = 8
 	conflicting.MaxParallelExecutions = 8
-	for name, write := range map[string]func(*InternalTx) error{
-		"older revision":    func(tx *InternalTx) error { return tx.RecordUsagePool(t.Context(), stale, slotAt.Add(time.Minute)) },
-		"same instant, new": func(tx *InternalTx) error { return tx.RecordUsagePool(t.Context(), conflicting, slotAt.Add(time.Hour)) },
+	for name, write := range map[string]func(*WriteTx) error{
+		"older revision":    func(tx *WriteTx) error { return tx.RecordUsagePool(t.Context(), stale, slotAt.Add(time.Minute)) },
+		"same instant, new": func(tx *WriteTx) error { return tx.RecordUsagePool(t.Context(), conflicting, slotAt.Add(time.Hour)) },
 	} {
-		if err := st.WriteInternal(t.Context(), write); !errors.Is(err, ErrStaleWrite) {
+		if err := st.Write(t.Context(), write); !errors.Is(err, ErrStaleWrite) {
 			t.Errorf("%s = %v, want %v", name, err, ErrStaleWrite)
 		}
 	}
-	if err := st.WriteInternal(t.Context(), func(tx *InternalTx) error {
+	if err := st.Write(t.Context(), func(tx *WriteTx) error {
 		return tx.RecordUsagePool(t.Context(), pool, slotAt.Add(time.Hour))
 	}); err != nil {
 		t.Fatalf("idempotent replay: %v", err)
 	}
 	moved := pool
 	moved.Provider = "openai"
-	if err := st.WriteInternal(t.Context(), func(tx *InternalTx) error {
+	if err := st.Write(t.Context(), func(tx *WriteTx) error {
 		return tx.RecordUsagePool(t.Context(), moved, slotAt.Add(2*time.Hour))
 	}); !errors.Is(err, ErrImmutableConflict) {
 		t.Fatalf("provider change = %v, want %v", err, ErrImmutableConflict)
@@ -200,7 +200,7 @@ func TestUsagePoolCountRefusesDivergentIndexedIdentity(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
 	s, admission := seedAdmission(t, nil)
-	if err := s.WriteInternal(ctx, func(tx *InternalTx) error {
+	if err := s.Write(ctx, func(tx *WriteTx) error {
 		if err := tx.RecordAuthIdentity(ctx, slotIdentity("auth-2", ""), admission.AdmittedAt); err != nil {
 			return err
 		}

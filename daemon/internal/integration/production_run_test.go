@@ -82,7 +82,7 @@ func openProductionFixture(t *testing.T) *workflowFixture {
 			domain.ModeAttendedDev: {},
 		},
 	})
-	if err := st.WriteInternal(ctx, func(tx *store.InternalTx) error {
+	if err := st.Write(ctx, func(tx *store.WriteTx) error {
 		return storetest.RecordIdentityOnPool(ctx, tx, testIdentity, testPoolLimit, admittedAt)
 	}); err != nil {
 		t.Fatalf("record auth identity: %v", err)

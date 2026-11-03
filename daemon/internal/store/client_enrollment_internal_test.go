@@ -61,7 +61,7 @@ func openEnrollmentStore(t *testing.T) *Store {
 func recordEnrollmentFixtures(t *testing.T, s *Store) {
 	t.Helper()
 	ctx := context.Background()
-	if err := s.WriteInternal(ctx, func(tx *InternalTx) error {
+	if err := s.Write(ctx, func(tx *WriteTx) error {
 		if err := tx.RecordAuthIdentity(ctx, enrollmentIdentity(),
 			time.Date(2026, 1, 2, 3, 0, 0, 0, time.UTC)); err != nil {
 			return err
@@ -224,7 +224,7 @@ func TestRecordClientEnrollment(t *testing.T) {
 		s := openEnrollmentStore(t)
 		unbound := enrollmentIdentity()
 		unbound.AccountBinding = ""
-		err := s.WriteInternal(ctx, func(tx *InternalTx) error {
+		err := s.Write(ctx, func(tx *WriteTx) error {
 			if err := tx.RecordAuthIdentity(ctx, unbound, recordedAt); err != nil {
 				return err
 			}
@@ -239,7 +239,7 @@ func TestRecordClientEnrollment(t *testing.T) {
 		s := openEnrollmentStore(t)
 		foreign := codexEnrollment()
 		foreign.AccountBinding = "acct-2"
-		err := s.WriteInternal(ctx, func(tx *InternalTx) error {
+		err := s.Write(ctx, func(tx *WriteTx) error {
 			if err := tx.RecordAuthIdentity(ctx, enrollmentIdentity(), recordedAt); err != nil {
 				return err
 			}
@@ -253,7 +253,7 @@ func TestRecordClientEnrollment(t *testing.T) {
 	t.Run("replay converges and a rewrite fails", func(t *testing.T) {
 		s := openEnrollmentStore(t)
 		recordEnrollmentFixtures(t, s)
-		if err := s.WriteInternal(ctx, func(tx *InternalTx) error {
+		if err := s.Write(ctx, func(tx *WriteTx) error {
 			return tx.RecordClientEnrollment(ctx, codexEnrollment(),
 				time.Date(2026, 1, 2, 3, 1, 0, 0, time.UTC))
 		}); err != nil {
@@ -261,7 +261,7 @@ func TestRecordClientEnrollment(t *testing.T) {
 		}
 		rewritten := codexEnrollment()
 		rewritten.Route = "openai_platform"
-		err := s.WriteInternal(ctx, func(tx *InternalTx) error {
+		err := s.Write(ctx, func(tx *WriteTx) error {
 			return tx.RecordClientEnrollment(ctx, rewritten, recordedAt)
 		})
 		if !errors.Is(err, ErrImmutableConflict) {
@@ -328,7 +328,7 @@ func TestListIdentitiesAndEnrollments(t *testing.T) {
 				AuthStoreVolume: "claude-auth", RefreshStrategy: domain.RefreshOnDemand,
 			},
 		}
-		if err := s.WriteInternal(ctx, func(tx *InternalTx) error {
+		if err := s.Write(ctx, func(tx *WriteTx) error {
 			return tx.RecordAuthIdentity(ctx, interim, time.Date(2026, 1, 2, 3, 0, 0, 0, time.UTC))
 		}); err != nil {
 			t.Fatalf("record interim identity: %v", err)
@@ -406,7 +406,7 @@ func TestAccountBindingUnique(t *testing.T) {
 	recordedAt := time.Date(2026, 1, 2, 3, 0, 0, 0, time.UTC)
 	second := enrollmentIdentity()
 	second.ID = "auth-2"
-	err := s.WriteInternal(ctx, func(tx *InternalTx) error {
+	err := s.Write(ctx, func(tx *WriteTx) error {
 		if err := tx.RecordAuthIdentity(ctx, enrollmentIdentity(), recordedAt); err != nil {
 			return err
 		}

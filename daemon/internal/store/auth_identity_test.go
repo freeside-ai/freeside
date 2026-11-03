@@ -25,7 +25,7 @@ func openWithIdentity(t *testing.T, identity domain.AuthIdentity) *store.Store {
 	t.Helper()
 	ctx := context.Background()
 	s := storetest.Open(t, tempDBPath(t), store.Options{})
-	if err := s.WriteInternal(ctx, func(tx *store.InternalTx) error {
+	if err := s.Write(ctx, func(tx *store.WriteTx) error {
 		return tx.RecordAuthIdentity(ctx, identity, leaseEpoch)
 	}); err != nil {
 		t.Fatalf("RecordAuthIdentity: %v", err)
@@ -54,7 +54,7 @@ func TestAuthIdentityRoundTrip(t *testing.T) {
 	// A changed provider or a dropped lease requirement is no legal successor.
 	retired := identity
 	retired.AuthStoreMutationLease = false
-	err := s.WriteInternal(ctx, func(tx *store.InternalTx) error {
+	err := s.Write(ctx, func(tx *store.WriteTx) error {
 		return tx.RecordAuthIdentity(ctx, retired, leaseEpoch.Add(2*time.Hour))
 	})
 	if !errors.Is(err, store.ErrImmutableConflict) {
@@ -63,7 +63,7 @@ func TestAuthIdentityRoundTrip(t *testing.T) {
 
 	rebound := identity
 	rebound.Interim.AuthStoreVolume = "other-provider-cred"
-	err = s.WriteInternal(ctx, func(tx *store.InternalTx) error {
+	err = s.Write(ctx, func(tx *store.WriteTx) error {
 		return tx.RecordAuthIdentity(ctx, rebound, leaseEpoch.Add(3*time.Hour))
 	})
 	if !errors.Is(err, store.ErrImmutableConflict) {
@@ -82,7 +82,7 @@ func TestAuthIdentityRevisionsOnlyMoveForward(t *testing.T) {
 
 	newer := identity
 	newer.CostOwner = "newer-owner"
-	if err := s.WriteInternal(ctx, func(tx *store.InternalTx) error {
+	if err := s.Write(ctx, func(tx *store.WriteTx) error {
 		return tx.RecordAuthIdentity(ctx, newer, leaseEpoch.Add(time.Hour))
 	}); err != nil {
 		t.Fatalf("newer revision: %v", err)
@@ -90,7 +90,7 @@ func TestAuthIdentityRevisionsOnlyMoveForward(t *testing.T) {
 
 	stale := identity
 	stale.CostOwner = "stale-owner"
-	err := s.WriteInternal(ctx, func(tx *store.InternalTx) error {
+	err := s.Write(ctx, func(tx *store.WriteTx) error {
 		return tx.RecordAuthIdentity(ctx, stale, leaseEpoch.Add(time.Minute))
 	})
 	if !errors.Is(err, store.ErrStaleWrite) {
@@ -110,7 +110,7 @@ func TestAuthIdentityRevisionsOnlyMoveForward(t *testing.T) {
 	}
 
 	// The same instant is a retry of the recorded revision, not a regression.
-	if err := s.WriteInternal(ctx, func(tx *store.InternalTx) error {
+	if err := s.Write(ctx, func(tx *store.WriteTx) error {
 		return tx.RecordAuthIdentity(ctx, newer, leaseEpoch.Add(time.Hour))
 	}); err != nil {
 		t.Fatalf("idempotent replay: %v", err)
@@ -121,7 +121,7 @@ func TestAuthIdentityRevisionsOnlyMoveForward(t *testing.T) {
 	// the gap a superseded declaration comes back through.
 	conflicting := newer
 	conflicting.CostOwner = "conflicting-owner"
-	err = s.WriteInternal(ctx, func(tx *store.InternalTx) error {
+	err = s.Write(ctx, func(tx *store.WriteTx) error {
 		return tx.RecordAuthIdentity(ctx, conflicting, leaseEpoch.Add(time.Hour))
 	})
 	if !errors.Is(err, store.ErrStaleWrite) {
@@ -537,7 +537,7 @@ func TestLeaseSurvivesReopen(t *testing.T) {
 	expires := leaseEpoch.Add(time.Minute)
 
 	s := storetest.Open(t, path, store.Options{})
-	if err := s.WriteInternal(ctx, func(tx *store.InternalTx) error {
+	if err := s.Write(ctx, func(tx *store.WriteTx) error {
 		if err := tx.RecordAuthIdentity(ctx, identity, leaseEpoch); err != nil {
 			return err
 		}

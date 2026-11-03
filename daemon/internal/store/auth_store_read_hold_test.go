@@ -247,7 +247,7 @@ func TestReadHoldSurvivesReopen(t *testing.T) {
 	path := tempDBPath(t)
 	expires := leaseEpoch.Add(time.Minute)
 	s := storetest.Open(t, path, store.Options{})
-	if err := s.WriteInternal(ctx, func(tx *store.InternalTx) error {
+	if err := s.Write(ctx, func(tx *store.WriteTx) error {
 		if err := tx.RecordAuthIdentity(ctx, testAuthIdentity(), leaseEpoch); err != nil {
 			return err
 		}

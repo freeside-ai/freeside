@@ -1003,7 +1003,7 @@ func TestMarkedWriterRoleDoesNotHoldTheLineup(t *testing.T) {
 		identity.ID, identity.AccountBinding = "claude-second", "second@example.test"
 		enrollment.ID, enrollment.AuthIdentityID = "claude-second/claude_code", identity.ID
 		enrollment.AccountBinding = identity.AccountBinding
-		if err := st.WriteInternal(ctx, func(tx *store.InternalTx) error {
+		if err := st.Write(ctx, func(tx *store.WriteTx) error {
 			if err := tx.RecordAuthIdentity(ctx, identity, at); err != nil {
 				return err
 			}

@@ -118,7 +118,7 @@ func (f *authAdoptFixture) withStore(t *testing.T, fn func(*store.Store)) {
 func (f *authAdoptFixture) recordIdentity(t *testing.T, identity domain.AuthIdentity) {
 	t.Helper()
 	f.withStore(t, func(st *store.Store) {
-		if err := st.WriteInternal(context.Background(), func(tx *store.InternalTx) error {
+		if err := st.Write(context.Background(), func(tx *store.WriteTx) error {
 			return tx.RecordAuthIdentity(context.Background(), identity, time.Now().UTC())
 		}); err != nil {
 			t.Fatal(err)
@@ -523,7 +523,7 @@ func TestAuthAdoptKeepsAnEnrolledIdentityDisabled(t *testing.T) {
 func setIdentityEnabled(t *testing.T, st *store.Store, id domain.AuthIdentityID, enabled bool) {
 	t.Helper()
 	ctx := context.Background()
-	if err := st.WriteInternal(ctx, func(tx *store.InternalTx) error {
+	if err := st.Write(ctx, func(tx *store.WriteTx) error {
 		identity, err := tx.GetAuthIdentity(ctx, id)
 		if err != nil {
 			return err
@@ -834,7 +834,7 @@ func TestAuthAdoptRefusesACostOwnerMismatchBeforeRecording(t *testing.T) {
 	f := newAuthAdoptFixture(t)
 	f.withStore(t, func(st *store.Store) {
 		ctx := context.Background()
-		if err := st.WriteInternal(ctx, func(tx *store.InternalTx) error {
+		if err := st.Write(ctx, func(tx *store.WriteTx) error {
 			identity, err := tx.GetAuthIdentity(ctx, "codex-review")
 			if err != nil {
 				return err

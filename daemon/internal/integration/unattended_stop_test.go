@@ -113,7 +113,7 @@ func openUnattendedFixtureWith(
 			}, nil
 		}),
 	})
-	if err := st.WriteInternal(ctx, func(tx *store.InternalTx) error {
+	if err := st.Write(ctx, func(tx *store.WriteTx) error {
 		if !seed {
 			return nil
 		}

@@ -37,7 +37,7 @@ func enrollQuotaPool(t *testing.T, f failedImplementationFixture) quotaPool {
 	time.Sleep(time.Second)
 	at := time.Now().UTC()
 	var pool quotaPool
-	if err := f.store.WriteInternal(ctx, func(tx *store.InternalTx) error {
+	if err := f.store.Write(ctx, func(tx *store.WriteTx) error {
 		identity, err := tx.GetAuthIdentity(ctx, "auth-1")
 		if err != nil {
 			return err

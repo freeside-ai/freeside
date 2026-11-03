@@ -43,7 +43,7 @@ func TestClaudeAdoptionRetriesAfterAFailedAppendAndReleasesItsLease(t *testing.T
 		ID: "claude-main", Provider: "claude", AuthStoreMutationLease: true,
 		Interim: domain.InterimClientFacts{AuthStoreVolume: "claude-main-auth", RefreshStrategy: domain.RefreshOnDemand},
 	}
-	if err := st.WriteInternal(ctx, func(tx *store.InternalTx) error {
+	if err := st.Write(ctx, func(tx *store.WriteTx) error {
 		return tx.RecordAuthIdentity(ctx, identity, enrollmentTestAt)
 	}); err != nil {
 		t.Fatal(err)

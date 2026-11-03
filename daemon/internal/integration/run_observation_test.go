@@ -153,7 +153,7 @@ func TestApprovedImplementationRemainsServedWhenObservationLagsExport(t *testing
 		}); err != nil {
 			return err
 		}
-		return storetest.RecordIdentityOnPool(ctx, &tx.InternalTx, domain.AuthIdentity{
+		return storetest.RecordIdentityOnPool(ctx, tx, domain.AuthIdentity{
 			ID: "auth-785", Provider: "codex", AuthStoreMutationLease: true,
 			Interim: domain.InterimClientFacts{AuthStoreVolume: "provider-credentials", RefreshStrategy: domain.RefreshOnDemand},
 		}, testPoolLimit, now)
