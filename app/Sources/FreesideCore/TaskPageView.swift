@@ -866,6 +866,9 @@ struct TaskPageView: View {
             }
             if let hold = run.hold?.value1 {
                 FactRow(label: "Recorded Hold", value: RunDisplay.label(hold.reason))
+                if let fact = RunDisplay.holdFact(hold, runID: run.run_id) {
+                    FactRow(label: "Hold Detail", value: fact)
+                }
                 FactRow(label: "Hold Code", value: hold.reason.rawValue, valueColor: .inkDim)
             }
         }
