@@ -248,6 +248,34 @@ import Testing
                 .init(record: .set_routing_policy(forged), revision: set.revision), for: setCommand))
     }
 
+    @Test func routingPolicyChangeChecksAgentsAgainstTheCatalog() async throws {
+        let server = MockServer(routingPolicy: nil)
+        let client = APIClientFactory.mock(server: server)
+        var changed = UsageFixtures.defaultAgentCatalog()
+        changed.lineup_revision = "sha256:" + String(repeating: "e", count: 64)
+        changed.agents.removeAll { $0.name == "codex-primary" }
+        await server.setAgentCatalog(changed)
+
+        // An agent the default fixtures carry but the served catalog does not.
+        let dropped = policy("dropped", expected: nil, agents: ["codex-primary"])
+        #expect(status(try await client.submitCommand(body: .json(dropped))) == 400)
+
+        let kept = policy("kept", expected: nil, agents: ["claude-secondary"])
+        let set = try await client.submitCommand(body: .json(kept)).ok.body.json
+        guard case .set_routing_policy(let record) = set.record else {
+            Issue.record("wrong receipt arm")
+            return
+        }
+        #expect(record.policy.lineup_revision == changed.lineup_revision)
+    }
+
+    @Test func routingPolicyChangeFailsClosedWithoutATree() async throws {
+        let client = APIClientFactory.mock(server: MockServer(routingPolicy: nil, agentCatalog: nil))
+        let first = policy("first", expected: nil, agents: ["claude-primary"])
+        #expect(status(try await client.submitCommand(body: .json(first))) == 500)
+        #expect(try await client.getSyncBootstrap().ok.body.json.routing_policy == nil)
+    }
+
     @Test func routingPolicyChangeFromNoPolicy() async throws {
         let client = APIClientFactory.mock(server: MockServer(routingPolicy: nil))
         let first = policy("first", expected: nil, agents: ["codex-primary"])

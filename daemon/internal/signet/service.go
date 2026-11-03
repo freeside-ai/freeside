@@ -49,9 +49,14 @@ type Service struct {
 	// (the dev CLI, the fake driver) and the gate is absent; the engine still
 	// re-derives effectiveness on every read either way.
 	effectiveReviewConfig func() domain.Digest
-	doctorSchedule        domain.ScheduleID
-	doctorAvailable       func() bool
-	now                   func() time.Time
+	// agentCatalogFunc reports the committed agent tree's catalog for the
+	// bootstrap and heartbeat. A nil func or a nil result means the daemon
+	// holds no committed tree (the fake driver, the scenario daemon), and
+	// both serve null.
+	agentCatalogFunc func() *AgentCatalog
+	doctorSchedule   domain.ScheduleID
+	doctorAvailable  func() bool
+	now              func() time.Time
 	// logger records durable diagnoses the read projections would otherwise
 	// swallow into an undifferentiated 500 (issue #767): when a listing read
 	// isolates a run whose observation rows contradict their durable authority,
@@ -170,6 +175,13 @@ func WithBlobStore(blobs *BlobStore) Option {
 // the composition can bind it before the digest is computed.
 func WithEffectiveReviewConfiguration(digest func() domain.Digest) Option {
 	return func(s *Service) { s.effectiveReviewConfig = digest }
+}
+
+// WithAgentCatalog supplies the committed agent tree's catalog. The func is
+// read at each bootstrap and heartbeat so the composition can bind it before
+// the tree is loaded; it answers nil until then.
+func WithAgentCatalog(catalog func() *AgentCatalog) Option {
+	return func(s *Service) { s.agentCatalogFunc = catalog }
 }
 
 // WithLogger supplies the process logger the read projections record a run

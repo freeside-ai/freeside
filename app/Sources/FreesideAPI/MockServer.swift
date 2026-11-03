@@ -165,6 +165,9 @@ public actor MockServer {
     /// The current routing policy revision; the daemon stamps it with the
     /// serving revision because the policy row stores none of its own.
     private var routingPolicy: Components.Schemas.RoutingPolicy?
+    /// The committed agent tree's catalog; nil models a daemon that holds no
+    /// tree (the fake driver), which serves null and refuses a policy.
+    private var agentCatalog: Components.Schemas.AgentCatalog?
     /// Each task role's newest line version, cleared ones included, keyed by
     /// taskLineKey: the wire TaskLine names an agent, so a clear lives only
     /// here and as the role's absence from the task's task_lines.
@@ -214,6 +217,7 @@ public actor MockServer {
         taskTimelines: [Components.Schemas.TaskTimeline] = [],
         usagePools: [Components.Schemas.UsagePoolSnapshot] = UsageFixtures.defaultUsagePools(),
         routingPolicy: Components.Schemas.RoutingPolicy? = UsageFixtures.defaultRoutingPolicy(),
+        agentCatalog: Components.Schemas.AgentCatalog? = UsageFixtures.defaultAgentCatalog(),
         approvedRecipes: Set<String> = [AttentionFixtures.approvedRecipeDigest],
         authMode: AuthMode = .permissive,
         pairingCodes: [String: PairingCodeState] = [:],
@@ -257,6 +261,7 @@ public actor MockServer {
             usagePoolsByID[snapshot.pool.id] = snapshot
         }
         self.routingPolicy = routingPolicy
+        self.agentCatalog = agentCatalog
         // The server revision starts at or beyond every seeded snapshot's
         // as_of_revision, so the heartbeat and the next CommandResult can
         // never run backwards relative to what this mock lists.
@@ -392,6 +397,13 @@ public actor MockServer {
     /// synchronized write or a new revision.
     public func setBackupHealthy(_ healthy: Bool) {
         backupHealthy = healthy
+    }
+
+    /// Replaces the agent catalog without a synchronized write, as a daemon
+    /// restarted on a changed agent tree serves a new catalog and lineup
+    /// revision at the same sync revision.
+    public func setAgentCatalog(_ catalog: Components.Schemas.AgentCatalog?) {
+        agentCatalog = catalog
     }
 
     /// Serves a contract digest other than this client's, so a test can
@@ -838,7 +850,8 @@ public actor MockServer {
     func serverRevision() -> Components.Schemas.ServerRevision {
         return .init(
             sync_epoch: syncEpoch, revision: revision,
-            unattended_operation: unattendedOperationSnapshot())
+            unattended_operation: unattendedOperationSnapshot(),
+            lineup_revision: agentCatalog.map { .init(value1: $0.lineup_revision) })
     }
 
     func healthStatus() throws -> Components.Schemas.HealthStatus {
@@ -865,7 +878,8 @@ public actor MockServer {
             schedules: listSchedules(),
             unattended_operation: unattendedOperationSnapshot(),
             usage_pools: listUsagePools(),
-            routing_policy: routingPolicySnapshot().map { .init(value1: $0) }
+            routing_policy: routingPolicySnapshot().map { .init(value1: $0) },
+            agent_catalog: agentCatalog.map { .init(value1: $0) }
         )
         return bootstrapTransform?(snapshot) ?? snapshot
     }
@@ -2121,6 +2135,11 @@ public actor MockServer {
         public let reason: String
     }
 
+    /// A set_routing_policy against a daemon that holds no committed agent
+    /// tree: the daemon's hook fails closed with
+    /// signet.ErrOperatorSettingUnavailable, which it answers as a 500.
+    public struct OperatorSettingUnavailableError: Error {}
+
     /// Marks whether an attempt of a task's role is running; while it runs,
     /// change_task_line for that role is refused (domain.ErrTaskLineRoleRunning).
     public func setTaskLineRoleRunning(taskID: String, role: Components.Schemas.TaskLineRole, running: Bool) {
@@ -2262,7 +2281,9 @@ public actor MockServer {
             return .routingPolicyRejected(
                 .init(message: "the routing policy changed", current_policy: routingPolicy.map { .init(value1: $0) }))
         }
-        guard roles.allSatisfy({ $0.agents.allSatisfy(UsageFixtures.lineupAgents.contains) }) else {
+        guard let agentCatalog else { throw OperatorSettingUnavailableError() }
+        let catalogAgents = Set(agentCatalog.agents.map(\.name))
+        guard roles.allSatisfy({ $0.agents.allSatisfy(catalogAgents.contains) }) else {
             throw rejected("routing policy names an agent outside the agent tree")
         }
         let recorded = routingPolicy?.roles != roles
@@ -2271,7 +2292,7 @@ public actor MockServer {
             routingPolicy = .init(
                 revision: (routingPolicy?.revision ?? 0) + 1, roles: roles, source: .client_routing_set,
                 set_by: "device:\(command.device_id)", set_at: currentTime,
-                lineup_revision: UsageFixtures.lineupRevision)
+                lineup_revision: agentCatalog.lineup_revision)
         }
         guard let policy = routingPolicy else { throw rejected("no routing policy") }
         return recordOperatorResult(

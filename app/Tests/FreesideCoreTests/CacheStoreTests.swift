@@ -106,6 +106,38 @@ private func sampleState(revision: Int64 = 5) -> CachedState {
         #expect(store.load()?.unattendedOperation == state.unattendedOperation)
     }
 
+    @Test func theAgentCatalogRoundTrips() throws {
+        let (store, directory) = temporaryStore()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        var state = sampleState()
+        state.agentCatalog = UsageFixtures.defaultAgentCatalog()
+        try store.save(state)
+
+        #expect(store.load()?.agentCatalog == UsageFixtures.defaultAgentCatalog())
+    }
+
+    @Test func aCacheWithoutTheAgentCatalogLoadsItsRowsAndNoCatalog() throws {
+        // The catalog is additive: an older cache keeps its cursors and rows,
+        // and the next heartbeat's lineup revision differs from the absent
+        // catalog's, which triggers the bootstrap that fills it.
+        let (store, directory) = temporaryStore()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let state = sampleState()
+        try store.save(state)
+
+        // A state with no catalog writes no key, the shape an older cache has.
+        let file = directory.appendingPathComponent("cache.json")
+        let object = try #require(
+            try JSONSerialization.jsonObject(with: Data(contentsOf: file)) as? [String: Any])
+        let written = try #require(object["state"] as? [String: Any])
+        #expect(written["agentCatalog"] == nil)
+
+        let loaded = try #require(store.load())
+        #expect(loaded.agentCatalog == nil)
+        #expect(loaded.cursors == state.cursors)
+        #expect(loaded.attentionItems == state.attentionItems)
+    }
+
     @Test func aPreOperatingStateFormatFiveCacheForcesABootstrap() throws {
         // Format 5 predates the unattended-admission state. Keeping its
         // cursors would let an unchanged server revision skip the bootstrap

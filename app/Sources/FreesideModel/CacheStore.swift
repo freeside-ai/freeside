@@ -49,6 +49,11 @@ public struct CachedState: Codable, Equatable, Sendable {
     /// bootstrap has supplied one, which renders no indicator rather than
     /// guessing "open".
     public var unattendedOperation: Components.Schemas.UnattendedOperationSnapshot?
+    /// The committed agent tree's catalog as of `cursors`; nil when no
+    /// bootstrap has supplied one or the daemon holds no tree. It is additive:
+    /// a cache without it loads nil, and the next heartbeat's lineup revision
+    /// triggers the bootstrap that fills it, so no format bump.
+    public var agentCatalog: Components.Schemas.AgentCatalog?
     public var runTimelines: [Components.Schemas.RunTimeline]
     public var tasks: [Components.Schemas.TaskSnapshot]
     public var taskTimelines: [Components.Schemas.TaskTimeline]
@@ -78,6 +83,7 @@ public struct CachedState: Codable, Equatable, Sendable {
         runs: [Components.Schemas.RunSnapshot] = [],
         schedules: [Components.Schemas.ScheduleSnapshot] = [],
         unattendedOperation: Components.Schemas.UnattendedOperationSnapshot? = nil,
+        agentCatalog: Components.Schemas.AgentCatalog? = nil,
         runTimelines: [Components.Schemas.RunTimeline] = [],
         tasks: [Components.Schemas.TaskSnapshot] = [],
         taskTimelines: [Components.Schemas.TaskTimeline] = [],
@@ -97,6 +103,7 @@ public struct CachedState: Codable, Equatable, Sendable {
         self.runs = runs
         self.schedules = schedules
         self.unattendedOperation = unattendedOperation
+        self.agentCatalog = agentCatalog
         self.runTimelines = runTimelines
         self.tasks = tasks
         self.taskTimelines = taskTimelines
@@ -127,6 +134,8 @@ public struct CachedState: Codable, Equatable, Sendable {
                 [Components.Schemas.ScheduleSnapshot].self, forKey: .schedules) ?? []
         unattendedOperation = try container.decodeIfPresent(
             Components.Schemas.UnattendedOperationSnapshot.self, forKey: .unattendedOperation)
+        agentCatalog = try container.decodeIfPresent(
+            Components.Schemas.AgentCatalog.self, forKey: .agentCatalog)
         runTimelines =
             try container.decodeIfPresent(
                 [Components.Schemas.RunTimeline].self, forKey: .runTimelines) ?? []

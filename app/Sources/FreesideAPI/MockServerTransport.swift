@@ -360,6 +360,10 @@ public struct MockServerTransport: ClientTransport {
             } catch let rejection as MockServer.OperatorCommandRejectedError {
                 return try Self.json(
                     status: .badRequest, body: Components.Schemas._Error(message: rejection.reason))
+            } catch is MockServer.OperatorSettingUnavailableError {
+                return try Self.json(
+                    status: .internalServerError,
+                    body: Components.Schemas._Error(message: "operator setting is not available"))
             } catch let rejection as MockServer.ActionNotOfferedError {
                 return try Self.json(
                     status: .unprocessableContent,

@@ -1,9 +1,10 @@
 import Foundation
 
-/// Deterministic usage-pool and routing-policy fixtures, mirroring the cases
-/// the daemon's bootstrap golden pins (daemon/internal/signet/
-/// golden_internal_test.go): a pool with readings and an exhausted window, a
-/// pool whose collector cannot read usage, and a pool with no record yet.
+/// Deterministic usage-pool, routing-policy, and agent-catalog fixtures,
+/// mirroring the cases the daemon's bootstrap golden pins (daemon/internal/
+/// signet/golden_internal_test.go): a pool with readings and an exhausted
+/// window, a pool whose collector cannot read usage, a pool with no record
+/// yet, and a catalog whose agents run as those pools' enrollments.
 public enum UsageFixtures {
     public static let readingPoolID = "claude-a"
     public static let unsupportedPoolID = "codex-b"
@@ -12,9 +13,6 @@ public enum UsageFixtures {
     public static let readingSecondEnrollmentID = "enrollment-claude-a-mini"
     public static let unsupportedCollectorID = "enrollment-codex-b-mac"
 
-    /// The agents the mock's lineup declares, which set_routing_policy
-    /// accepts, as the daemon checks a policy against its lineup tree.
-    public static let lineupAgents = ["claude-primary", "claude-secondary", "codex-primary"]
     public static let lineupRevision = "sha256:" + String(repeating: "a", count: 64)
 
     public static func defaultUsagePools() -> [Components.Schemas.UsagePoolSnapshot] {
@@ -82,6 +80,32 @@ public enum UsageFixtures {
             roles: [.init(role: .implementer, agents: ["claude-primary", "codex-primary"])],
             source: .client_routing_set, set_by: "device:mock-device", set_at: date(1_200),
             lineup_revision: lineupRevision)
+    }
+
+    /// The mock's committed agent tree: the agents set_routing_policy accepts,
+    /// as the daemon checks a policy against its tree. Each agent's enrollment
+    /// joins a pool fixture's enrollment, one offer declares no lineage group,
+    /// and the lineup binds every task-line role.
+    public static func defaultAgentCatalog() -> Components.Schemas.AgentCatalog {
+        .init(
+            lineup_revision: lineupRevision,
+            agents: [
+                .init(
+                    name: "claude-primary", enrollment_id: readingCollectorID, model: "claude-opus",
+                    effort: .high, lineage_group: "anthropic"),
+                .init(
+                    name: "claude-secondary", enrollment_id: readingSecondEnrollmentID, model: "claude-opus",
+                    effort: .max, lineage_group: "anthropic"),
+                .init(
+                    name: "codex-primary", enrollment_id: unsupportedCollectorID, model: "gpt-codex",
+                    effort: .harness_default, lineage_group: nil),
+            ],
+            lineup: [
+                .init(role: .specifier, agent: "claude-primary"),
+                .init(role: .implementer, agent: "claude-primary"),
+                .init(role: .remediator, agent: "claude-secondary"),
+                .init(role: .reviewer, agent: "codex-primary"),
+            ])
     }
 
     private static func date(_ offset: TimeInterval) -> Date {

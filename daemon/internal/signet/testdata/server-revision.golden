@@ -4,5 +4,6 @@
   "unattended_operation": {
     "admission": "open",
     "stops": []
-  }
+  },
+  "lineup_revision": "sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"
 }

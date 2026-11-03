@@ -55,6 +55,16 @@ import Testing
         #expect(policy.as_of_revision == bootstrap.revision)
         #expect(policy.entity_version == Int64(policy.policy.revision))
         #expect(policy.policy.source == .client_routing_set)
+
+        // The catalog's agents run as the pools' enrollments, and the
+        // heartbeat carries its revision.
+        let catalog = try #require(bootstrap.agent_catalog?.value1)
+        #expect(catalog == UsageFixtures.defaultAgentCatalog())
+        let enrollments = Set(bootstrap.usage_pools.flatMap { $0.pool.enrollments.map(\.enrollment_id) })
+        #expect(catalog.agents.allSatisfy { enrollments.contains($0.enrollment_id) })
+        #expect(catalog.lineup_revision == policy.policy.lineup_revision)
+        let heartbeat = try await client.getSyncRevision().ok.body.json
+        #expect(heartbeat.lineup_revision?.value1 == catalog.lineup_revision)
     }
 
     @Test func advancingAUsagePoolRaisesTheRevisionAndTheRecordVersion() async throws {
@@ -76,11 +86,28 @@ import Testing
                 == before.usage_pools.filter { $0.pool.id != UsageFixtures.unrecordedPoolID })
     }
 
-    @Test func bootstrapWithoutARoutingPolicyCarriesNull() async throws {
-        let server = MockServer(usagePools: [], routingPolicy: nil)
-        let bootstrap = try await APIClientFactory.mock(server: server).getSyncBootstrap().ok.body.json
+    @Test func bootstrapWithoutARoutingPolicyOrTreeCarriesNull() async throws {
+        let server = MockServer(usagePools: [], routingPolicy: nil, agentCatalog: nil)
+        let client = APIClientFactory.mock(server: server)
+        let bootstrap = try await client.getSyncBootstrap().ok.body.json
         #expect(bootstrap.usage_pools.isEmpty)
         #expect(bootstrap.routing_policy == nil)
+        #expect(bootstrap.agent_catalog == nil)
+        #expect(try await client.getSyncRevision().ok.body.json.lineup_revision == nil)
+    }
+
+    @Test func aChangedCatalogMovesTheLineupRevisionButNotTheRevision() async throws {
+        let server = MockServer()
+        let client = APIClientFactory.mock(server: server)
+        let before = try await client.getSyncRevision().ok.body.json
+
+        var changed = UsageFixtures.defaultAgentCatalog()
+        changed.lineup_revision = "sha256:" + String(repeating: "e", count: 64)
+        await server.setAgentCatalog(changed)
+        let after = try await client.getSyncRevision().ok.body.json
+        #expect(after.revision == before.revision)
+        #expect(after.lineup_revision?.value1 == changed.lineup_revision)
+        #expect(try await client.getSyncBootstrap().ok.body.json.agent_catalog?.value1 == changed)
     }
 
     @Test func healthIsAnonymousAndTracksRestartsAndOutages() async throws {

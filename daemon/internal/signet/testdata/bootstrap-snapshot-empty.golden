@@ -12,5 +12,6 @@
     "stops": []
   },
   "usage_pools": [],
-  "routing_policy": null
+  "routing_policy": null,
+  "agent_catalog": null
 }

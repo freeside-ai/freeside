@@ -1085,6 +1085,7 @@ func run(parent context.Context, stop func(), cfg config) (_ *daemon, err error)
 	var (
 		workflow              *engine.Engine
 		claudeWiring          *claudeComposition
+		agentCatalog          *signet.AgentCatalog
 		imageUpkeep           *engine.ImageUpkeep
 		upkeepTrigger         *imageUpkeepTrigger
 		scenarioWiring        *scenarioComposition
@@ -1140,6 +1141,10 @@ func run(parent context.Context, stop func(), cfg config) (_ *daemon, err error)
 				engine.SetRoutingPolicyRequest{Roles: change.Roles, Source: change.Source, SetBy: change.SetBy}, now)
 			return signet.RoutingPolicyOutcome{Recorded: result.Recorded, Policy: result.Policy}, err
 		}),
+		// The catalog, like the tree it projects, exists only after the
+		// Claude composition below; until then, and in the fake-driver and
+		// scenario compositions that load no tree, clients see null.
+		signet.WithAgentCatalog(func() *signet.AgentCatalog { return agentCatalog }),
 		// A window reading counts as fresh for one doctor interval; #1716's
 		// collection cadence decides the lasting value.
 		signet.WithUsageRefreshAge(cfg.DoctorInterval),
@@ -1197,6 +1202,12 @@ func run(parent context.Context, stop func(), cfg config) (_ *daemon, err error)
 		// later startup step has succeeded. Register their awaited cleanup
 		// immediately, while the store they need is still open.
 		startupSessionCloser = claudeWiring.closer
+		// The tree already parsed, so a projection error is a daemon bug.
+		catalog, err := signet.AgentCatalogOf(claudeWiring.env.Agents.Tree, claudeWiring.env.Agents.LineupRevision)
+		if err != nil {
+			return nil, err
+		}
+		agentCatalog = &catalog
 		stageDriver, err := claudeWiring.stageDriver(blobs)
 		if err != nil {
 			return nil, err

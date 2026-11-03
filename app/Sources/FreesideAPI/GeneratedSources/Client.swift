@@ -213,6 +213,9 @@ public struct Client: APIProtocol {
     /// the adopted snapshot also triggers a bootstrap, even without a
     /// revision gap. Live backup health can change that verdict without a
     /// transaction. The client never adopts the heartbeat's verdict directly.
+    /// Likewise, a same-epoch `lineup_revision` that differs from the
+    /// adopted `agent_catalog`'s triggers a bootstrap: a daemon restarted on
+    /// a changed agent tree moves no revision.
     ///
     ///
     /// - Remark: HTTP `GET /sync/revision`.
