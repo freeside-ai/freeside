@@ -1,0 +1,31 @@
+{
+  "id": "sha256:5d610dcbe1ab6dfb4c3b1f17d978fbc7ce9d8d44aad8d6df146256d03d3fffb2",
+  "task_id": "task-1",
+  "role": "implementer",
+  "agent": "claude-a",
+  "version": 1,
+  "predecessor_id": null,
+  "source": "router",
+  "set_by": "router:task-1",
+  "set_at": "2026-01-02T03:04:05Z",
+  "provenance": {
+    "policy_revision": 2,
+    "tier": "drain_first_account",
+    "pool": "claude-max-a",
+    "ranked_by": [
+      {
+        "pool": "claude-max-b",
+        "window": "seven_day",
+        "resets_at": "2026-01-03T09:04:05Z",
+        "observed_at": "2026-01-02T02:04:05Z"
+      },
+      {
+        "pool": "claude-max-a",
+        "window": "seven_day",
+        "resets_at": "2026-01-05T11:04:05Z",
+        "observed_at": "2026-01-02T01:04:05Z"
+      }
+    ],
+    "passed_over": null
+  }
+}

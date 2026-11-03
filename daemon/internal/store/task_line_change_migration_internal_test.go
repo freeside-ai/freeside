@@ -36,7 +36,7 @@ func TestTaskLineChangesMigrationKeepsEveryLine(t *testing.T) {
 	router, err := domain.NewTaskLine(domain.TaskLineInput{
 		TaskID: taskID, Role: domain.RoleReviewer, Agent: "claude-a",
 		Source: domain.TaskLineSourceRouter, SetBy: "router:old",
-		Provenance: &domain.TaskLineProvenance{PolicyRevision: 1, Trigger: domain.TaskLineSelectionFirstAdmission},
+		Provenance: &domain.TaskLineProvenance{PolicyRevision: 1, Tier: domain.TaskLineSelectionPolicyOrder, Pool: "pool-a"},
 	}, 1, nil, at)
 	if err != nil {
 		t.Fatal(err)
@@ -90,7 +90,7 @@ func TestTaskLineChangesMigrationKeepsEveryLine(t *testing.T) {
 	}
 	insert(operator, nil, nil)
 	insert(superseding, string(operator.ID), nil)
-	insert(router, nil, `{"policy_revision":1,"trigger":"first_admission","reading":null,"passed_over":null}`)
+	insert(router, nil, `{"policy_revision":1,"tier":"policy_order","pool":"pool-a","ranked_by":[],"passed_over":null}`)
 	if err := migrate(ctx, st.db, migrations.FS); err != nil {
 		t.Fatal(err)
 	}

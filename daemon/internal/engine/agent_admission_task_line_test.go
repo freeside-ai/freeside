@@ -558,7 +558,7 @@ func TestTaskLineAdmissionRefusals(t *testing.T) {
 				f.appendLine(t, domain.TaskLineInput{
 					TaskID: f.task(t, f.run.ID).ID, Role: domain.RoleImplementer, Agent: agentTestSecondAgent,
 					Source: domain.TaskLineSourceRouter, SetBy: "router:" + string(f.task(t, f.run.ID).ID),
-					Provenance: &domain.TaskLineProvenance{PolicyRevision: 1, Trigger: domain.TaskLineSelectionFirstAdmission},
+					Provenance: &domain.TaskLineProvenance{PolicyRevision: 1, Tier: domain.TaskLineSelectionPolicyOrder, Pool: "pool-a"},
 				}, f.task(t, f.run.ID).CreatedAt)
 			},
 			want: "nothing routes a task line yet (#2393)",

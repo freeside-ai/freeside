@@ -34,18 +34,22 @@ func taskTimelineFixture(t *testing.T) TaskTimeline {
 
 // taskTimelineFixtureLines is an operator's reviewer line set at submission
 // and a router's implementer line, written at first admission, that passed
-// over an exhausted pool. They come ordered by role, as the store reads them.
+// over a marked pool. They come ordered by role, as the store reads them.
 func taskTimelineFixtureLines(t *testing.T, task domain.Task) []domain.TaskLine {
 	t.Helper()
 	routed, err := domain.NewTaskLine(domain.TaskLineInput{
 		TaskID: task.ID, Role: domain.RoleImplementer, Agent: "claude-b",
 		Source: domain.TaskLineSourceRouter, SetBy: "router:" + string(task.ID),
 		Provenance: &domain.TaskLineProvenance{
-			PolicyRevision: 2, Trigger: domain.TaskLineSelectionExhaustedMark,
-			Reading: &domain.TaskLineSelectionReading{
-				Pool: "claude-a", Window: "seven_day_opus", ObservedAt: task.CreatedAt.Add(-time.Hour),
+			PolicyRevision: 2, Tier: domain.TaskLineSelectionSoonestReset, Pool: "pool-b",
+			RankedBy: []domain.TaskLineRankingReading{
+				{Pool: "pool-a", Window: "seven_day", ResetsAt: task.CreatedAt.Add(24 * time.Hour), ObservedAt: task.CreatedAt.Add(-time.Hour)},
+				{Pool: "pool-b", Window: "seven_day", ResetsAt: task.CreatedAt.Add(48 * time.Hour), ObservedAt: task.CreatedAt.Add(-time.Hour)},
 			},
-			PassedOver: new("claude-a"),
+			PassedOver: &domain.TaskLinePassedOverMark{
+				Agent: "claude-a", Pool: "pool-a", Window: "five_hour", Source: domain.ExhaustedMarkProviderRefusal,
+				MarkedAt: task.CreatedAt.Add(-30 * time.Minute), ResetsAt: new(task.CreatedAt.Add(2 * time.Hour)),
+			},
 		},
 	}, 1, nil, task.CreatedAt.Add(90*time.Minute))
 	if err != nil {

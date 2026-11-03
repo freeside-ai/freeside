@@ -2025,23 +2025,26 @@ components:
         source that carries provenance.
       enum: [submit_task, cli_submit, proposal_start, router, cli_line_change, client_line_change]
 
-    TaskLineSelectionTrigger:
+    TaskLineSelectionTier:
       type: string
       description: >
-        What made the router write a line. first_admission: the policy
-        order's first agent took the task, so no reading was acted on and no
-        agent passed over. exhausted_mark: the router passed over an agent
-        whose pool's window was marked exhausted. A quota refusal parks a task
-        instead of rerouting it, so it is not a trigger.
-      enum: [first_admission, exhausted_mark]
+        Which of the router's tiers chose a routing's pool (plan §5.4).
+        drain_first_account: the policy's drain-first account, which leads
+        every other pool when the deciding role's order holds an agent on it
+        and its window is not marked. soonest_reset: the candidate pool whose
+        known weekly reset for its agent's model came soonest, among those
+        not marked. policy_order: the first pool in the policy's order among
+        those with no known reset, when no pool with one was available.
+      enum: [drain_first_account, soonest_reset, policy_order]
 
-    TaskLineSelectionReading:
+    TaskLineRankingReading:
       type: object
       description: >
-        The usage mark the router acted on, cited by the usage pool and
-        window names and the observation's instant.
+        One candidate pool's known weekly reset for its agent's model, as the
+        router ranked it: the window that resets soonest, the reset, and when
+        the reading that reported it was observed.
       additionalProperties: false
-      required: [pool, window, observed_at]
+      required: [pool, window, resets_at, observed_at]
       properties:
         pool:
           type: string
@@ -2049,35 +2052,80 @@ components:
         window:
           type: string
           minLength: 1
+        resets_at:
+          type: string
+          format: date-time
         observed_at:
           type: string
           format: date-time
 
-    TaskLineProvenance:
+    TaskLinePassedOverMark:
       type: object
       description: >
-        How the router chose a line's agent: the routing policy revision it
-        applied, the trigger, and, for exhausted_mark only, the reading acted
-        on and the agent passed over. Both are null for first_admission.
+        The exhausted mark that made the router pass over an agent ranked
+        ahead of the chosen one: the agent, its pool, and the mark on that
+        pool's window for the agent's model.
       additionalProperties: false
-      required: [policy_revision, trigger, reading, passed_over]
+      required: [agent, pool, window, source, marked_at, resets_at]
       properties:
-        policy_revision:
-          type: integer
-          minimum: 1
-        trigger:
-          $ref: "#/components/schemas/TaskLineSelectionTrigger"
-        reading:
-          nullable: true
-          allOf:
-            - $ref: "#/components/schemas/TaskLineSelectionReading"
-        passed_over:
+        agent:
           type: string
           minLength: 1
           maxLength: 246
           pattern: '^[a-z0-9]([a-z0-9_-]*[a-z0-9])?$'
+        pool:
+          type: string
+          minLength: 1
+        window:
+          type: string
+          minLength: 1
+        source:
+          $ref: "#/components/schemas/ExhaustedMarkSource"
+        marked_at:
+          type: string
+          format: date-time
+        resets_at:
+          type: string
+          format: date-time
           nullable: true
-          description: The agent the policy order put ahead of the chosen one.
+          description: When the mark clears; null when no reset is known.
+
+    TaskLineProvenance:
+      type: object
+      description: >
+        How the router chose a routing's pool: the policy revision it
+        applied, the tier that chose, the pool, the resets that ranked the
+        candidates, and any exhausted mark it passed over. One routing writes
+        one provenance onto every line it writes. ranked_by holds one reading
+        per candidate pool whose weekly reset was known, in rank order
+        (ascending resets_at, ties in the policy's order, no pool twice); it
+        is empty when no reset was known. passed_over is the first agent
+        ranked ahead of the chosen pool whose pool's window was marked
+        exhausted, null when none was. The tier fixes the rest:
+        drain_first_account passes over no one; soonest_reset names a pool in
+        ranked_by, and passed_over is set when that pool is not first;
+        policy_order names a pool absent from ranked_by, and passed_over is
+        set when ranked_by is not empty. A pool passed over for a mark keeps
+        its reading in ranked_by.
+      additionalProperties: false
+      required: [policy_revision, tier, pool, ranked_by, passed_over]
+      properties:
+        policy_revision:
+          type: integer
+          minimum: 1
+        tier:
+          $ref: "#/components/schemas/TaskLineSelectionTier"
+        pool:
+          type: string
+          minLength: 1
+        ranked_by:
+          type: array
+          items:
+            $ref: "#/components/schemas/TaskLineRankingReading"
+        passed_over:
+          nullable: true
+          allOf:
+            - $ref: "#/components/schemas/TaskLinePassedOverMark"
 
     TaskLine:
       type: object

@@ -225,7 +225,7 @@
       "verification": null,
       "external_review": null,
       "line": {
-        "line_id": "sha256:7b1bfbbbae16d33faba62521a0029ef87cfb05ca8f92d31fec3458eeb77fd8eb",
+        "line_id": "sha256:b556aff69bdaae25e55a428ca8e12e984a6127ba29c833be9157b5e26b67081a",
         "role": "implementer",
         "agent": "claude-b",
         "version": 1,
@@ -233,13 +233,30 @@
         "superseded_agent": null,
         "provenance": {
           "policy_revision": 2,
-          "trigger": "exhausted_mark",
-          "reading": {
-            "pool": "claude-a",
-            "window": "seven_day_opus",
-            "observed_at": "2026-09-12T09:00:00Z"
-          },
-          "passed_over": "claude-a"
+          "tier": "soonest_reset",
+          "pool": "pool-b",
+          "ranked_by": [
+            {
+              "pool": "pool-a",
+              "window": "seven_day",
+              "resets_at": "2026-09-13T10:00:00Z",
+              "observed_at": "2026-09-12T09:00:00Z"
+            },
+            {
+              "pool": "pool-b",
+              "window": "seven_day",
+              "resets_at": "2026-09-14T10:00:00Z",
+              "observed_at": "2026-09-12T09:00:00Z"
+            }
+          ],
+          "passed_over": {
+            "agent": "claude-a",
+            "pool": "pool-a",
+            "window": "five_hour",
+            "source": "provider_refusal",
+            "marked_at": "2026-09-12T09:30:00Z",
+            "resets_at": "2026-09-12T12:00:00Z"
+          }
         }
       },
       "kind": "task_line_set",

@@ -1261,13 +1261,30 @@ func TestGolden(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	// Router lines, one per trigger: a plain first admission cites only the
-	// policy revision; an exhausted mark also cites the reading acted on and
-	// the agent passed over.
-	routerFirstAdmissionTaskLine, err := domain.NewTaskLine(domain.TaskLineInput{
+	// Router lines, one per tier (plan §5.4, revision 107). The readings rank
+	// two pools by their weekly resets: claude-max-b resets first.
+	rankedBy := []domain.TaskLineRankingReading{
+		{Pool: "claude-max-b", Window: "seven_day", ResetsAt: ts.Add(30 * time.Hour), ObservedAt: ts.Add(-time.Hour)},
+		{Pool: "claude-max-a", Window: "seven_day", ResetsAt: ts.Add(80 * time.Hour), ObservedAt: ts.Add(-2 * time.Hour)},
+	}
+	// The drain-first account takes the task whatever the resets.
+	routerDrainFirstTaskLine, err := domain.NewTaskLine(domain.TaskLineInput{
 		TaskID: "task-1", Role: domain.RoleImplementer, Agent: "claude-a",
 		Source: domain.TaskLineSourceRouter, SetBy: "router:task-1",
-		Provenance: &domain.TaskLineProvenance{PolicyRevision: 1, Trigger: domain.TaskLineSelectionFirstAdmission},
+		Provenance: &domain.TaskLineProvenance{
+			PolicyRevision: 2, Tier: domain.TaskLineSelectionDrainFirstAccount, Pool: "claude-max-a", RankedBy: rankedBy,
+		},
+	}, 1, nil, ts)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// With no account, the pool that resets soonest takes it.
+	routerSoonestResetTaskLine, err := domain.NewTaskLine(domain.TaskLineInput{
+		TaskID: "task-1", Role: domain.RoleImplementer, Agent: "claude-b",
+		Source: domain.TaskLineSourceRouter, SetBy: "router:task-1",
+		Provenance: &domain.TaskLineProvenance{
+			PolicyRevision: 1, Tier: domain.TaskLineSelectionSoonestReset, Pool: "claude-max-b", RankedBy: rankedBy,
+		},
 	}, 1, nil, ts)
 	if err != nil {
 		t.Fatal(err)
@@ -1297,13 +1314,18 @@ func TestGolden(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	routerExhaustedMarkTaskLine, err := domain.NewTaskLine(domain.TaskLineInput{
+	// No reset is known and the policy's first agent's window is marked, so
+	// the router passes over claude-a and takes the next pool in the order.
+	routerPolicyOrderTaskLine, err := domain.NewTaskLine(domain.TaskLineInput{
 		TaskID: "task-1", Role: domain.RoleImplementer, Agent: "claude-b",
 		Source: domain.TaskLineSourceRouter, SetBy: "router:task-1",
 		Provenance: &domain.TaskLineProvenance{
-			PolicyRevision: 2, Trigger: domain.TaskLineSelectionExhaustedMark,
-			Reading:    &domain.TaskLineSelectionReading{Pool: "claude-a", Window: "seven_day_opus", ObservedAt: ts.Add(-time.Hour)},
-			PassedOver: new("claude-a"),
+			PolicyRevision: 1, Tier: domain.TaskLineSelectionPolicyOrder, Pool: "claude-max-b",
+			RankedBy: []domain.TaskLineRankingReading{},
+			PassedOver: &domain.TaskLinePassedOverMark{
+				Agent: "claude-a", Pool: "claude-max-a", Window: "seven_day_opus",
+				Source: domain.ExhaustedMarkProviderRefusal, MarkedAt: ts.Add(-time.Hour), ResetsAt: new(ts.Add(50 * time.Hour)),
+			},
 		},
 	}, 1, nil, ts)
 	if err != nil {
@@ -2351,8 +2373,9 @@ func TestGolden(t *testing.T) {
 		{"task_line_change_clear", taskLineClear},
 		{"task_line_changed", changedTaskLine},
 		{"task_line_cleared", clearedTaskLine},
-		{"task_line_router_first_admission", routerFirstAdmissionTaskLine},
-		{"task_line_router_exhausted_mark", routerExhaustedMarkTaskLine},
+		{"task_line_router_drain_first", routerDrainFirstTaskLine},
+		{"task_line_router_soonest_reset", routerSoonestResetTaskLine},
+		{"task_line_router_policy_order", routerPolicyOrderTaskLine},
 		{"subject_task", domain.Subject{Type: domain.SubjectTask, ID: "task-1", TaskID: new(domain.TaskID("task-1"))}},
 		{"production_attempt", productionAttempt},
 		{"production_attempt_revision", productionRevisionAttempt},

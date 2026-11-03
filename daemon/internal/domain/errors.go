@@ -409,10 +409,10 @@ var (
 		"window reading must carry at most one of used_percent and quantity, and quantity and unit together")
 	ErrExhaustedMarkInconsistent = errors.New(
 		"exhausted mark must name exactly the invocation or the reading its source implies")
-	ErrInvalidTaskLineSelectionTrigger = errors.New(
-		"task line selection trigger is not first_admission or exhausted_mark")
+	ErrInvalidTaskLineSelectionTier = errors.New(
+		"task line selection tier is not drain_first_account, soonest_reset, or policy_order")
 	ErrTaskLineProvenanceInconsistent = errors.New(
-		"task line provenance does not fit its source or trigger")
+		"task line provenance does not fit its source, tier, or ranking")
 	ErrTaskLineReadingNotUTF8 = errors.New(
 		"task line reading pool or window is not valid UTF-8")
 	ErrTaskLineRoleRunning = errors.New(

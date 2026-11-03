@@ -2551,9 +2551,10 @@ Every line records its `source`: `submit_task`, `cli_submit`,
 `proposal_start`, or `cli_line_change` for an operator's choice, or `router`
 for the routing policy's choice at a task's first admission. Nothing writes a router line
 yet (#2393), and admission refuses one. A router line carries its selection
-`provenance`: the policy revision, the trigger (`first_admission` or
-`exhausted_mark`), and, for an exhausted mark, the reading acted on and the
-agent passed over. `GET /tasks/{task_id}/timeline` shows every line version
+`provenance`: the policy revision, the `tier` that chose the pool
+(`drain_first_account`, `soonest_reset`, or `policy_order`), the chosen
+`pool`, the weekly resets that ranked the candidates (`ranked_by`), and the
+exhausted mark on any agent ranked ahead of it (`passed_over`). `GET /tasks/{task_id}/timeline` shows every line version
 as a `task_line_set` event at its `set_at`, and the synced task carries each
 role's current line in `task_lines`. A version from `freesided task-line
 -clear` shows as an event with a null `agent`, and the synced task then

@@ -71,118 +71,234 @@ func (s TaskLineSource) IsLineChange() bool {
 	return s == TaskLineSourceCLILineChange || s == TaskLineSourceClientLineChange
 }
 
-// TaskLineSelectionTrigger is what made the router write a line (plan §5.4,
-// routing policy). There is no quota-refusal member: under revision 103 the
-// router writes lines only at a task's first admission, and a quota refusal
-// parks the task instead of rerouting it.
-type TaskLineSelectionTrigger string
+// TaskLineSelectionTier is which of the router's tiers chose a routing's
+// pool (plan §5.4, routing policy; revision 107). The router writes lines only
+// at a task's first admission (revision 103), so the tier, not an event,
+// explains the choice.
+type TaskLineSelectionTier string
 
 const (
-	// TaskLineSelectionFirstAdmission is a first admission with no window
-	// marked exhausted ahead of the chosen agent: the policy order's first
-	// agent took the task, so no reading was acted on and none passed over.
-	TaskLineSelectionFirstAdmission TaskLineSelectionTrigger = "first_admission"
-	// TaskLineSelectionExhaustedMark is a first admission that passed over an
-	// agent whose pool's window was marked exhausted.
-	TaskLineSelectionExhaustedMark TaskLineSelectionTrigger = "exhausted_mark"
+	// TaskLineSelectionDrainFirstAccount is the policy's drain-first account,
+	// which leads every other pool when the deciding role's order holds an
+	// agent on it and its window is not marked.
+	TaskLineSelectionDrainFirstAccount TaskLineSelectionTier = "drain_first_account"
+	// TaskLineSelectionSoonestReset is the candidate pool whose known weekly
+	// reset for its agent's model came soonest, among those not marked.
+	TaskLineSelectionSoonestReset TaskLineSelectionTier = "soonest_reset"
+	// TaskLineSelectionPolicyOrder is the first pool in the policy's order
+	// among those with no known reset, when no pool with one was available.
+	TaskLineSelectionPolicyOrder TaskLineSelectionTier = "policy_order"
 )
 
-// AllTaskLineSelectionTriggers lists every valid TaskLineSelectionTrigger; it
-// is the single registration point.
-var AllTaskLineSelectionTriggers = []TaskLineSelectionTrigger{
-	TaskLineSelectionFirstAdmission, TaskLineSelectionExhaustedMark,
+// AllTaskLineSelectionTiers lists every valid TaskLineSelectionTier; it is
+// the single registration point.
+var AllTaskLineSelectionTiers = []TaskLineSelectionTier{
+	TaskLineSelectionDrainFirstAccount, TaskLineSelectionSoonestReset, TaskLineSelectionPolicyOrder,
 }
 
-func (t TaskLineSelectionTrigger) valid() bool {
+func (t TaskLineSelectionTier) valid() bool {
 	switch t {
-	case TaskLineSelectionFirstAdmission, TaskLineSelectionExhaustedMark:
+	case TaskLineSelectionDrainFirstAccount, TaskLineSelectionSoonestReset, TaskLineSelectionPolicyOrder:
 		return true
 	default:
 		return false
 	}
 }
 
-// TaskLineSelectionReading cites the usage mark the router acted on. The
-// usage observation record does not exist yet (#1715), so the citation is an
-// opaque reference: the pool and window by name and the observation's
-// instant.
-type TaskLineSelectionReading struct {
-	Pool       string    `json:"pool"`
-	Window     string    `json:"window"`
-	ObservedAt time.Time `json:"observed_at"`
+// TaskLineRankingReading is one candidate pool's known weekly reset for its
+// agent's model, as the router ranked it: the window that resets soonest, the
+// reset, and when the reading that reported it was observed.
+type TaskLineRankingReading struct {
+	Pool       UsagePoolID `json:"pool"`
+	Window     string      `json:"window"`
+	ResetsAt   time.Time   `json:"resets_at"`
+	ObservedAt time.Time   `json:"observed_at"`
 }
 
-// TaskLineProvenance records how the router came to write a line: the policy
-// revision it applied, what triggered the selection, the reading it acted on,
-// and the agent it passed over (plan §5.4, routing policy).
+// TaskLinePassedOverMark is the exhausted mark that made the router pass over
+// an agent ranked ahead of the chosen one: the agent, its pool, and the mark
+// on that pool's window for the agent's model.
+type TaskLinePassedOverMark struct {
+	Agent    string              `json:"agent"`
+	Pool     UsagePoolID         `json:"pool"`
+	Window   string              `json:"window"`
+	Source   ExhaustedMarkSource `json:"source"`
+	MarkedAt time.Time           `json:"marked_at"`
+	// ResetsAt is when the mark clears, nil when no reset is known.
+	ResetsAt *time.Time `json:"resets_at"`
+}
+
+// TaskLineProvenance records how the router chose a routing's pool: the
+// policy revision it applied, the tier that chose, the pool, the resets that
+// ranked the candidates, and any exhausted mark it passed over (plan §5.4,
+// routing policy). One routing writes one provenance onto every line it
+// writes, so it names no role's agent of its own.
 type TaskLineProvenance struct {
 	// PolicyRevision is the routing policy revision applied, from 1.
-	PolicyRevision int                      `json:"policy_revision"`
-	Trigger        TaskLineSelectionTrigger `json:"trigger"`
-	// Reading is the exhausted mark acted on: set exactly when Trigger is
-	// exhausted_mark.
-	Reading *TaskLineSelectionReading `json:"reading"`
-	// PassedOver is the agent the policy order put ahead of the chosen one:
-	// set exactly when Trigger is exhausted_mark.
-	PassedOver *string `json:"passed_over"`
+	PolicyRevision int                   `json:"policy_revision"`
+	Tier           TaskLineSelectionTier `json:"tier"`
+	// Pool is the usage pool the routing chose.
+	Pool UsagePoolID `json:"pool"`
+	// RankedBy holds one reading per candidate pool whose weekly reset was
+	// known and still ahead, in rank order: ascending ResetsAt, ties in the
+	// policy's order. It is empty, never nil, when no reset was known.
+	RankedBy []TaskLineRankingReading `json:"ranked_by"`
+	// PassedOver is the first agent ranked ahead of the chosen pool whose
+	// pool's window was marked exhausted; nil when none was.
+	PassedOver *TaskLinePassedOverMark `json:"passed_over"`
 }
 
-// validate checks the provenance against the line's agent, which it may
-// not pass over.
-func (p TaskLineProvenance) validate(agent string) error {
+// validate checks the provenance's consistency. It does not compare the
+// passed-over agent with the line's agent: the provenance is shared by every
+// role's line, and another role's line may name that agent when two agents
+// on one pool run different models.
+func (p TaskLineProvenance) validate() error {
 	if p.PolicyRevision < 1 {
 		return fmt.Errorf("policy_revision %d: %w", p.PolicyRevision, ErrNonPositive)
 	}
-	if !p.Trigger.valid() {
-		return fmt.Errorf("trigger %q: %w", p.Trigger, ErrInvalidTaskLineSelectionTrigger)
+	if !p.Tier.valid() {
+		return fmt.Errorf("tier %q: %w", p.Tier, ErrInvalidTaskLineSelectionTier)
 	}
-	acted := p.Trigger == TaskLineSelectionExhaustedMark
-	if (p.Reading != nil) != acted || (p.PassedOver != nil) != acted {
-		return fmt.Errorf("trigger %s reading and passed_over: %w", p.Trigger, ErrTaskLineProvenanceInconsistent)
+	if err := validateProvenanceName("pool", string(p.Pool)); err != nil {
+		return err
 	}
-	if p.Reading != nil {
-		switch {
-		case p.Reading.Pool == "":
-			return fmt.Errorf("reading pool: %w", ErrEmptyField)
-		case p.Reading.Window == "":
-			return fmt.Errorf("reading window: %w", ErrEmptyField)
-		// JSON encoding replaces invalid UTF-8, so a name holding it would
-		// be digested in one form and decoded in another: the stored line
-		// could never read back.
-		case !utf8.ValidString(p.Reading.Pool) || !utf8.ValidString(p.Reading.Window):
-			return fmt.Errorf("reading pool or window: %w", ErrTaskLineReadingNotUTF8)
-		case p.Reading.ObservedAt.IsZero():
-			return fmt.Errorf("reading observed_at: %w", ErrMissingTimestamp)
-		// observed_at is part of the canonical encoding the line's id
-		// addresses, so one instant must have one byte form.
-		case p.Reading.ObservedAt.Location() != time.UTC:
-			return fmt.Errorf("reading observed_at: %w", ErrTimestampNotUTC)
+	// ranked_by is part of the canonical encoding the line's id addresses,
+	// so none is [] and never null: one value, one byte form.
+	if p.RankedBy == nil {
+		return fmt.Errorf("ranked_by is null: %w", ErrTaskLineProvenanceInconsistent)
+	}
+	for i, reading := range p.RankedBy {
+		if err := reading.validate(); err != nil {
+			return fmt.Errorf("ranked_by %d %w", i+1, err)
+		}
+		if i == 0 {
+			continue
+		}
+		if slices.ContainsFunc(p.RankedBy[:i], func(r TaskLineRankingReading) bool { return r.Pool == reading.Pool }) {
+			return fmt.Errorf("ranked_by %d repeats a pool: %w", i+1, ErrTaskLineProvenanceInconsistent)
+		}
+		if reading.ResetsAt.Before(p.RankedBy[i-1].ResetsAt) {
+			return fmt.Errorf("ranked_by %d resets before %d: %w", i+1, i, ErrTaskLineProvenanceInconsistent)
+		}
+	}
+	// The router takes the first ranked pool not marked, so a pool ranked
+	// ahead of the chosen one was passed over for a mark. A marked pool keeps
+	// its reading in ranked_by (its weekly reset is still known and ahead),
+	// so the chosen pool leads ranked_by only when nothing was passed over.
+	chosen := slices.IndexFunc(p.RankedBy, func(r TaskLineRankingReading) bool { return r.Pool == p.Pool })
+	switch p.Tier {
+	case TaskLineSelectionDrainFirstAccount:
+		// The account leads every candidate, so nothing ranked ahead of it.
+		if p.PassedOver != nil {
+			return fmt.Errorf("tier %s passed_over: %w", p.Tier, ErrTaskLineProvenanceInconsistent)
+		}
+	case TaskLineSelectionSoonestReset:
+		if chosen < 0 {
+			return fmt.Errorf("tier %s chose a pool ranked_by lacks: %w", p.Tier, ErrTaskLineProvenanceInconsistent)
+		}
+		if chosen > 0 && p.PassedOver == nil {
+			return fmt.Errorf("tier %s passed over ranked pools with no mark: %w",
+				p.Tier, ErrTaskLineProvenanceInconsistent)
+		}
+	case TaskLineSelectionPolicyOrder:
+		if chosen >= 0 {
+			return fmt.Errorf("tier %s chose a pool with a known reset: %w", p.Tier, ErrTaskLineProvenanceInconsistent)
+		}
+		if len(p.RankedBy) > 0 && p.PassedOver == nil {
+			return fmt.Errorf("tier %s passed over ranked pools with no mark: %w",
+				p.Tier, ErrTaskLineProvenanceInconsistent)
 		}
 	}
 	if p.PassedOver != nil {
-		if !validAgentName(*p.PassedOver) {
-			return fmt.Errorf("passed_over %q: %w", *p.PassedOver, ErrInvalidAgentName)
-		}
-		if *p.PassedOver == agent {
-			return fmt.Errorf("passed_over is the chosen agent: %w", ErrTaskLineProvenanceInconsistent)
+		if err := p.PassedOver.validate(); err != nil {
+			return fmt.Errorf("passed_over %w", err)
 		}
 	}
 	return nil
 }
 
-// clone returns a deep copy with the reading's instant in UTC, the canonical
-// byte form the line's id digests.
+func (r TaskLineRankingReading) validate() error {
+	if err := validateProvenanceName("pool", string(r.Pool)); err != nil {
+		return err
+	}
+	if err := validateProvenanceName("window", r.Window); err != nil {
+		return err
+	}
+	if err := validateProvenanceInstant("resets_at", r.ResetsAt); err != nil {
+		return err
+	}
+	return validateProvenanceInstant("observed_at", r.ObservedAt)
+}
+
+func (m TaskLinePassedOverMark) validate() error {
+	if !validAgentName(m.Agent) {
+		return fmt.Errorf("agent %q: %w", m.Agent, ErrInvalidAgentName)
+	}
+	if err := validateProvenanceName("pool", string(m.Pool)); err != nil {
+		return err
+	}
+	if err := validateProvenanceName("window", m.Window); err != nil {
+		return err
+	}
+	if !m.Source.valid() {
+		return fmt.Errorf("source %q: %w", m.Source, ErrInvalidExhaustedMarkSource)
+	}
+	if err := validateProvenanceInstant("marked_at", m.MarkedAt); err != nil {
+		return err
+	}
+	if m.ResetsAt != nil {
+		return validateProvenanceInstant("resets_at", *m.ResetsAt)
+	}
+	return nil
+}
+
+func validateProvenanceName(field, name string) error {
+	if name == "" {
+		return fmt.Errorf("%s: %w", field, ErrEmptyField)
+	}
+	// JSON encoding replaces invalid UTF-8, so a name holding it would be
+	// digested in one form and decoded in another: the stored line could
+	// never read back.
+	if !utf8.ValidString(name) {
+		return fmt.Errorf("%s: %w", field, ErrTaskLineReadingNotUTF8)
+	}
+	return nil
+}
+
+// validateProvenanceInstant requires a set UTC instant: the provenance is part
+// of the canonical encoding the line's id addresses, so one instant must have
+// one byte form.
+func validateProvenanceInstant(field string, at time.Time) error {
+	if at.IsZero() {
+		return fmt.Errorf("%s: %w", field, ErrMissingTimestamp)
+	}
+	if at.Location() != time.UTC {
+		return fmt.Errorf("%s: %w", field, ErrTimestampNotUTC)
+	}
+	return nil
+}
+
+// clone returns a deep copy in canonical byte form, the one the line's id
+// digests: every instant in UTC and no ranking as [], not null.
 func (p *TaskLineProvenance) clone() *TaskLineProvenance {
 	if p == nil {
 		return nil
 	}
 	out := *p
-	if p.Reading != nil {
-		reading := *p.Reading
+	out.RankedBy = make([]TaskLineRankingReading, len(p.RankedBy))
+	for i, reading := range p.RankedBy {
+		reading.ResetsAt = reading.ResetsAt.UTC()
 		reading.ObservedAt = reading.ObservedAt.UTC()
-		out.Reading = &reading
+		out.RankedBy[i] = reading
 	}
-	out.PassedOver = clonePtr(p.PassedOver)
+	if p.PassedOver != nil {
+		mark := *p.PassedOver
+		mark.MarkedAt = mark.MarkedAt.UTC()
+		if mark.ResetsAt != nil {
+			mark.ResetsAt = new(mark.ResetsAt.UTC())
+		}
+		out.PassedOver = &mark
+	}
 	return &out
 }
 
@@ -440,7 +556,7 @@ func (l TaskLine) Validate() error {
 			l.TaskID, l.Role, l.Source, ErrTaskLineProvenanceInconsistent)
 	}
 	if l.Provenance != nil {
-		if err := l.Provenance.validate(l.Agent); err != nil {
+		if err := l.Provenance.validate(); err != nil {
 			return fmt.Errorf("task line %s %s provenance %w", l.TaskID, l.Role, err)
 		}
 	}

@@ -146,94 +146,157 @@ func TestTaskLineValidate(t *testing.T) {
 }
 
 // TestTaskLineProvenanceValidate pins that provenance rides exactly on a
-// router line, and that each trigger carries exactly the citations it acted
-// on: a reading and a passed-over agent for an exhausted mark, neither for a
-// plain first admission.
+// router line and holds one consistent shape: the tier, the readings that
+// ranked the candidates, and the mark passed over (plan §5.4, revision 107).
 func TestTaskLineProvenanceValidate(t *testing.T) {
 	t.Parallel()
 	at := time.Date(2026, 1, 2, 3, 4, 5, 0, time.UTC)
-	passedOver := "claude-a"
+	elsewhere := time.FixedZone("x", 3600)
+	// pool-a resets first, but its five-hour window is marked, so the routing
+	// passes over claude-a and takes pool-b, the next soonest.
 	input := domain.TaskLineInput{
 		TaskID: "task-1", Role: domain.RoleImplementer, Agent: "claude-b",
 		Source: domain.TaskLineSourceRouter, SetBy: "router:task-1",
 		Provenance: &domain.TaskLineProvenance{
-			PolicyRevision: 2, Trigger: domain.TaskLineSelectionExhaustedMark,
-			Reading: &domain.TaskLineSelectionReading{
-				Pool: "claude-a", Window: "seven_day_opus", ObservedAt: at.Add(-time.Hour).In(time.FixedZone("x", 3600)),
+			PolicyRevision: 2, Tier: domain.TaskLineSelectionSoonestReset, Pool: "pool-b",
+			RankedBy: []domain.TaskLineRankingReading{
+				{Pool: "pool-a", Window: "seven_day", ResetsAt: at.Add(24 * time.Hour).In(elsewhere), ObservedAt: at.Add(-time.Hour)},
+				{Pool: "pool-b", Window: "seven_day", ResetsAt: at.Add(48 * time.Hour), ObservedAt: at.Add(-time.Hour)},
 			},
-			PassedOver: &passedOver,
+			PassedOver: &domain.TaskLinePassedOverMark{
+				Agent: "claude-a", Pool: "pool-a", Window: "five_hour", Source: domain.ExhaustedMarkProviderRefusal,
+				MarkedAt: at.Add(-30 * time.Minute).In(elsewhere), ResetsAt: new(at.Add(2 * time.Hour).In(elsewhere)),
+			},
 		},
 	}
 	routed, err := domain.NewTaskLine(input, 1, nil, at)
 	if err != nil {
 		t.Fatalf("router line: %v", err)
 	}
-	// The reading's instant is normalized, and the input stays the caller's.
-	if routed.Provenance.Reading.ObservedAt.Location() != time.UTC || routed.Provenance == input.Provenance {
-		t.Fatalf("router line provenance = %+v, want a detached UTC copy", routed.Provenance)
+	// Every instant is normalized, and the input stays the caller's.
+	got := routed.Provenance
+	if got == input.Provenance || &got.RankedBy[0] == &input.Provenance.RankedBy[0] || got.PassedOver == input.Provenance.PassedOver ||
+		got.RankedBy[0].ResetsAt.Location() != time.UTC || got.PassedOver.MarkedAt.Location() != time.UTC ||
+		got.PassedOver.ResetsAt.Location() != time.UTC {
+		t.Fatalf("router line provenance = %+v, want a detached UTC copy", got)
 	}
 	// Provenance is bound into the id.
 	plain := input
-	plain.Provenance = &domain.TaskLineProvenance{PolicyRevision: 2, Trigger: domain.TaskLineSelectionFirstAdmission}
+	plain.Provenance = &domain.TaskLineProvenance{PolicyRevision: 2, Tier: domain.TaskLineSelectionPolicyOrder, Pool: "pool-b"}
 	first, err := domain.NewTaskLine(plain, 1, nil, at)
 	if err != nil {
-		t.Fatalf("first-admission line: %v", err)
+		t.Fatalf("policy-order line: %v", err)
 	}
 	if first.ID == routed.ID {
 		t.Fatalf("provenance does not change the id %s", first.ID)
 	}
+	// No ranking is [], one byte form for the id, however the caller said it.
+	if first.Provenance.RankedBy == nil {
+		t.Fatal("a nil ranking stays nil; want []")
+	}
 
-	other := "codex"
 	for name, tc := range map[string]struct {
-		mutate func(*domain.TaskLine)
+		mutate func(*domain.TaskLineProvenance)
 		want   error
 	}{
-		"router without provenance": {func(l *domain.TaskLine) { l.Provenance = nil }, domain.ErrTaskLineProvenanceInconsistent},
-		"operator with provenance":  {func(l *domain.TaskLine) { l.Source = domain.TaskLineSourceSubmitTask }, domain.ErrTaskLineProvenanceInconsistent},
-		"zero revision":             {func(l *domain.TaskLine) { l.Provenance.PolicyRevision = 0 }, domain.ErrNonPositive},
-		"unknown trigger":           {func(l *domain.TaskLine) { l.Provenance.Trigger = "quota_refusal" }, domain.ErrInvalidTaskLineSelectionTrigger},
-		"mark without reading":      {func(l *domain.TaskLine) { l.Provenance.Reading = nil }, domain.ErrTaskLineProvenanceInconsistent},
-		"mark without passed over":  {func(l *domain.TaskLine) { l.Provenance.PassedOver = nil }, domain.ErrTaskLineProvenanceInconsistent},
-		"first admission with mark": {func(l *domain.TaskLine) { l.Provenance.Trigger = domain.TaskLineSelectionFirstAdmission }, domain.ErrTaskLineProvenanceInconsistent},
-		"empty pool":                {func(l *domain.TaskLine) { l.Provenance.Reading.Pool = "" }, domain.ErrEmptyField},
-		"empty window":              {func(l *domain.TaskLine) { l.Provenance.Reading.Window = "" }, domain.ErrEmptyField},
-		"zero observed_at":          {func(l *domain.TaskLine) { l.Provenance.Reading.ObservedAt = time.Time{} }, domain.ErrMissingTimestamp},
+		"zero revision": {func(p *domain.TaskLineProvenance) { p.PolicyRevision = 0 }, domain.ErrNonPositive},
+		"unknown tier":  {func(p *domain.TaskLineProvenance) { p.Tier = "exhausted_mark" }, domain.ErrInvalidTaskLineSelectionTier},
+		"empty pool":    {func(p *domain.TaskLineProvenance) { p.Pool = "" }, domain.ErrEmptyField},
 		// JSON would store a replacement rune the id was not computed over.
-		"non-UTF-8 pool":   {func(l *domain.TaskLine) { l.Provenance.Reading.Pool = "pool\xff" }, domain.ErrTaskLineReadingNotUTF8},
-		"non-UTF-8 window": {func(l *domain.TaskLine) { l.Provenance.Reading.Window = "window\xfe" }, domain.ErrTaskLineReadingNotUTF8},
-		"non-UTC observed_at": {func(l *domain.TaskLine) {
-			l.Provenance.Reading.ObservedAt = l.Provenance.Reading.ObservedAt.In(time.FixedZone("x", 3600))
+		"non-UTF-8 pool":    {func(p *domain.TaskLineProvenance) { p.Pool = "pool\xff" }, domain.ErrTaskLineReadingNotUTF8},
+		"null ranking":      {func(p *domain.TaskLineProvenance) { p.RankedBy = nil }, domain.ErrTaskLineProvenanceInconsistent},
+		"empty ranked pool": {func(p *domain.TaskLineProvenance) { p.RankedBy[1].Pool = "" }, domain.ErrEmptyField},
+		"empty window":      {func(p *domain.TaskLineProvenance) { p.RankedBy[0].Window = "" }, domain.ErrEmptyField},
+		"non-UTF-8 window":  {func(p *domain.TaskLineProvenance) { p.RankedBy[0].Window = "window\xfe" }, domain.ErrTaskLineReadingNotUTF8},
+		"zero resets_at":    {func(p *domain.TaskLineProvenance) { p.RankedBy[0].ResetsAt = time.Time{} }, domain.ErrMissingTimestamp},
+		"non-UTC observed_at": {func(p *domain.TaskLineProvenance) {
+			p.RankedBy[1].ObservedAt = p.RankedBy[1].ObservedAt.In(elsewhere)
 		}, domain.ErrTimestampNotUTC},
-		"bad passed over":        {func(l *domain.TaskLine) { bad := "Bad Agent"; l.Provenance.PassedOver = &bad }, domain.ErrInvalidAgentName},
-		"passed over the chosen": {func(l *domain.TaskLine) { l.Provenance.PassedOver = &l.Agent }, domain.ErrTaskLineProvenanceInconsistent},
+		"repeated pool": {func(p *domain.TaskLineProvenance) { p.RankedBy[0].Pool = "pool-b" }, domain.ErrTaskLineProvenanceInconsistent},
+		"out of reset order": {func(p *domain.TaskLineProvenance) {
+			p.RankedBy[0], p.RankedBy[1] = p.RankedBy[1], p.RankedBy[0]
+		}, domain.ErrTaskLineProvenanceInconsistent},
+		"soonest reset unranked":         {func(p *domain.TaskLineProvenance) { p.Pool = "pool-c" }, domain.ErrTaskLineProvenanceInconsistent},
+		"soonest reset no ranking":       {func(p *domain.TaskLineProvenance) { p.RankedBy = []domain.TaskLineRankingReading{} }, domain.ErrTaskLineProvenanceInconsistent},
+		"soonest reset skipped unmarked": {func(p *domain.TaskLineProvenance) { p.PassedOver = nil }, domain.ErrTaskLineProvenanceInconsistent},
+		"policy order with a known reset": {func(p *domain.TaskLineProvenance) {
+			p.Tier = domain.TaskLineSelectionPolicyOrder
+		}, domain.ErrTaskLineProvenanceInconsistent},
+		"policy order past ranked pools unmarked": {func(p *domain.TaskLineProvenance) {
+			p.Tier, p.Pool, p.PassedOver = domain.TaskLineSelectionPolicyOrder, "pool-c", nil
+		}, domain.ErrTaskLineProvenanceInconsistent},
+		"drain-first passed over": {func(p *domain.TaskLineProvenance) {
+			p.Tier = domain.TaskLineSelectionDrainFirstAccount
+		}, domain.ErrTaskLineProvenanceInconsistent},
+		"bad passed-over agent": {func(p *domain.TaskLineProvenance) { p.PassedOver.Agent = "Bad Agent" }, domain.ErrInvalidAgentName},
+		"empty mark pool":       {func(p *domain.TaskLineProvenance) { p.PassedOver.Pool = "" }, domain.ErrEmptyField},
+		"empty mark window":     {func(p *domain.TaskLineProvenance) { p.PassedOver.Window = "" }, domain.ErrEmptyField},
+		"unknown mark source":   {func(p *domain.TaskLineProvenance) { p.PassedOver.Source = "guess" }, domain.ErrInvalidExhaustedMarkSource},
+		"zero marked_at":        {func(p *domain.TaskLineProvenance) { p.PassedOver.MarkedAt = time.Time{} }, domain.ErrMissingTimestamp},
+		"non-UTC mark reset": {func(p *domain.TaskLineProvenance) {
+			p.PassedOver.ResetsAt = new(p.PassedOver.ResetsAt.In(elsewhere))
+		}, domain.ErrTimestampNotUTC},
 		// An edited provenance keeps the old id, which no longer addresses it.
-		"edited passed over": {func(l *domain.TaskLine) { l.Provenance.PassedOver = &other }, domain.ErrTaskLineInconsistent},
+		"edited passed over": {func(p *domain.TaskLineProvenance) { p.PassedOver.Agent = "codex" }, domain.ErrTaskLineInconsistent},
 	} {
 		line := routed
 		line.Provenance = cloneProvenance(routed.Provenance)
-		tc.mutate(&line)
+		tc.mutate(line.Provenance)
 		if err := line.Validate(); !errors.Is(err, tc.want) {
-			t.Fatalf("%s: err = %v, want %v", name, err, tc.want)
+			t.Errorf("%s: err = %v, want %v", name, err, tc.want)
 		}
 	}
-	firstWithReading := first
-	firstWithReading.Provenance = &domain.TaskLineProvenance{
-		PolicyRevision: 2, Trigger: domain.TaskLineSelectionFirstAdmission, PassedOver: &passedOver,
+	operator := routed
+	operator.Source = domain.TaskLineSourceSubmitTask
+	if err := operator.Validate(); !errors.Is(err, domain.ErrTaskLineProvenanceInconsistent) {
+		t.Errorf("operator with provenance: err = %v", err)
 	}
-	if err := firstWithReading.Validate(); !errors.Is(err, domain.ErrTaskLineProvenanceInconsistent) {
-		t.Fatalf("first admission with passed over: err = %v", err)
+	unrouted := routed
+	unrouted.Provenance = nil
+	if err := unrouted.Validate(); !errors.Is(err, domain.ErrTaskLineProvenanceInconsistent) {
+		t.Errorf("router without provenance: err = %v", err)
+	}
+
+	// Shapes each tier may take. The passed-over agent may be the line's own:
+	// one routing's provenance rides every role's line, and two agents on one
+	// pool may run different models.
+	for name, provenance := range map[string]domain.TaskLineProvenance{
+		"drain-first, nothing ranked": {PolicyRevision: 1, Tier: domain.TaskLineSelectionDrainFirstAccount, Pool: "pool-c"},
+		"drain-first ranked behind": {
+			PolicyRevision: 1, Tier: domain.TaskLineSelectionDrainFirstAccount, Pool: "pool-b",
+			RankedBy: input.Provenance.RankedBy,
+		},
+		"soonest reset first": {
+			PolicyRevision: 1, Tier: domain.TaskLineSelectionSoonestReset, Pool: "pool-a",
+			RankedBy: input.Provenance.RankedBy,
+		},
+		"policy order past marked pools": {
+			PolicyRevision: 1, Tier: domain.TaskLineSelectionPolicyOrder, Pool: "pool-c",
+			RankedBy: input.Provenance.RankedBy, PassedOver: input.Provenance.PassedOver,
+		},
+		"passed over the line's agent": {
+			PolicyRevision: 1, Tier: domain.TaskLineSelectionSoonestReset, Pool: "pool-b",
+			RankedBy: input.Provenance.RankedBy,
+			PassedOver: &domain.TaskLinePassedOverMark{
+				Agent: "claude-b", Pool: "pool-a", Window: "seven_day_opus",
+				Source: domain.ExhaustedMarkUsageReading, MarkedAt: at,
+			},
+		},
+	} {
+		in := input
+		in.Provenance = &provenance
+		if _, err := domain.NewTaskLine(in, 1, nil, at); err != nil {
+			t.Errorf("%s: %v", name, err)
+		}
 	}
 }
 
 func cloneProvenance(p *domain.TaskLineProvenance) *domain.TaskLineProvenance {
 	out := *p
-	if p.Reading != nil {
-		reading := *p.Reading
-		out.Reading = &reading
-	}
+	out.RankedBy = slices.Clone(p.RankedBy)
 	if p.PassedOver != nil {
-		passed := *p.PassedOver
-		out.PassedOver = &passed
+		mark := *p.PassedOver
+		out.PassedOver = &mark
 	}
 	return &out
 }

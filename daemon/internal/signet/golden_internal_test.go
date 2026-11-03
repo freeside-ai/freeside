@@ -20,14 +20,20 @@ func TestSignetWireGoldens(t *testing.T) {
 	conversationID := domain.ConversationID("conversation-569")
 	intervalSeconds := int64(3600)
 	// The task's implementer line, written by the router at first admission
-	// after it passed over an exhausted pool.
+	// on the second-soonest reset after it passed over a marked pool.
 	taskLine, err := domain.NewTaskLine(domain.TaskLineInput{
 		TaskID: taskID, Role: domain.RoleImplementer, Agent: "claude-b",
 		Source: domain.TaskLineSourceRouter, SetBy: "router:" + string(taskID),
 		Provenance: &domain.TaskLineProvenance{
-			PolicyRevision: 1, Trigger: domain.TaskLineSelectionExhaustedMark,
-			Reading:    &domain.TaskLineSelectionReading{Pool: "claude-a", Window: "seven_day_opus", ObservedAt: createdAt},
-			PassedOver: new("claude-a"),
+			PolicyRevision: 2, Tier: domain.TaskLineSelectionSoonestReset, Pool: "pool-b",
+			RankedBy: []domain.TaskLineRankingReading{
+				{Pool: "pool-a", Window: "seven_day", ResetsAt: createdAt.Add(24 * time.Hour), ObservedAt: createdAt.Add(-time.Hour)},
+				{Pool: "pool-b", Window: "seven_day", ResetsAt: createdAt.Add(48 * time.Hour), ObservedAt: createdAt.Add(-time.Hour)},
+			},
+			PassedOver: &domain.TaskLinePassedOverMark{
+				Agent: "claude-a", Pool: "pool-a", Window: "five_hour", Source: domain.ExhaustedMarkProviderRefusal,
+				MarkedAt: createdAt.Add(-30 * time.Minute), ResetsAt: new(createdAt.Add(2 * time.Hour)),
+			},
 		},
 	}, 1, nil, createdAt)
 	if err != nil {
