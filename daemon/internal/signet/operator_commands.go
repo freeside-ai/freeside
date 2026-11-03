@@ -57,14 +57,19 @@ var ErrUsageOperationUnavailable = errors.New("usage operation is not available"
 // set_routing_policy on a service composed without their hook.
 var ErrOperatorSettingUnavailable = errors.New("operator setting is not available")
 
-// UsageOperator runs a pool's refresh or collector reassignment in the
-// accepting transaction (WithUsageOperator). The collection lifecycle owns
-// what each does; the command records only that it was accepted.
+// UsageOperator runs a pool's refresh or collector reassignment
+// (WithUsageOperator). The collection lifecycle owns what each does; the
+// command records only that it was accepted. Each method runs in the
+// accepting transaction and writes there whatever must commit with the
+// receipt. It returns after, nil when there is nothing more, which signet
+// runs once after that transaction commits and never when it rolls back or
+// the command replays: an effect outside the store, such as starting a
+// collection, must not run for a command that recorded nothing.
 type UsageOperator interface {
-	RefreshUsage(ctx context.Context, tx *store.WriteTx, pool domain.UsagePoolID, now time.Time) error
+	RefreshUsage(ctx context.Context, tx *store.WriteTx, pool domain.UsagePoolID, now time.Time) (after func(), err error)
 	ReassignCollector(
 		ctx context.Context, tx *store.WriteTx, pool domain.UsagePoolID, collector domain.ClientEnrollmentID, now time.Time,
-	) error
+	) (after func(), err error)
 }
 
 // TaskLineChange is one line change for the TaskLineChanger: Agent is empty
@@ -208,7 +213,8 @@ func (s *Service) refreshUsage(ctx context.Context, in ClientCommand) (CommandRe
 	if !in.operatorArmOnly() || request.Pool == "" {
 		return CommandResult{}, fmt.Errorf("submit command %q: %w", in.CommandID, ErrInvalidOperatorCommandPayload)
 	}
-	return s.commitReceipt(ctx, in,
+	var after func()
+	result, err := s.commitReceipt(ctx, in,
 		func(old domain.CommandReceipt) bool {
 			return old.UsageRefresh != nil && old.UsageRefresh.UsageRefreshRequest == request
 		},
@@ -219,13 +225,26 @@ func (s *Service) refreshUsage(ctx context.Context, in ClientCommand) (CommandRe
 			if s.usageOperator == nil {
 				return domain.CommandReceipt{}, ErrUsageOperationUnavailable
 			}
-			if err := s.usageOperator.RefreshUsage(ctx, tx, request.Pool, now); err != nil {
+			var err error
+			if after, err = s.usageOperator.RefreshUsage(ctx, tx, request.Pool, now); err != nil {
 				return domain.CommandReceipt{}, err
 			}
 			return domain.CommandReceipt{UsageRefresh: &domain.UsageRefreshReceipt{
 				UsageRefreshRequest: request, RequestedAt: now,
 			}}, nil
 		})
+	runAfterCommit(err, after)
+	return result, err
+}
+
+// runAfterCommit runs a usage operator's after-commit effect once the command
+// committed. A replay never ran the operator, so after is nil; any error
+// means nothing committed. store.Write runs its function once, so after is
+// the one the committed transaction returned.
+func runAfterCommit(err error, after func()) {
+	if err == nil && after != nil {
+		after()
+	}
 }
 
 func (s *Service) reassignCollector(ctx context.Context, in ClientCommand) (CommandResult, error) {
@@ -236,7 +255,8 @@ func (s *Service) reassignCollector(ctx context.Context, in ClientCommand) (Comm
 	if !in.operatorArmOnly() || request.Pool == "" || request.Collector == "" {
 		return CommandResult{}, fmt.Errorf("submit command %q: %w", in.CommandID, ErrInvalidOperatorCommandPayload)
 	}
-	return s.commitReceipt(ctx, in,
+	var after func()
+	result, err := s.commitReceipt(ctx, in,
 		func(old domain.CommandReceipt) bool {
 			return old.CollectorReassignment != nil && old.CollectorReassignment.CollectorReassignmentRequest == request
 		},
@@ -252,13 +272,16 @@ func (s *Service) reassignCollector(ctx context.Context, in ClientCommand) (Comm
 			if s.usageOperator == nil {
 				return domain.CommandReceipt{}, ErrUsageOperationUnavailable
 			}
-			if err := s.usageOperator.ReassignCollector(ctx, tx, request.Pool, request.Collector, now); err != nil {
+			var err error
+			if after, err = s.usageOperator.ReassignCollector(ctx, tx, request.Pool, request.Collector, now); err != nil {
 				return domain.CommandReceipt{}, err
 			}
 			return domain.CommandReceipt{CollectorReassignment: &domain.CollectorReassignmentReceipt{
 				CollectorReassignmentRequest: request, RecordedAt: now,
 			}}, nil
 		})
+	runAfterCommit(err, after)
+	return result, err
 }
 
 func (s *Service) changeTaskLine(ctx context.Context, in ClientCommand) (CommandResult, error) {
