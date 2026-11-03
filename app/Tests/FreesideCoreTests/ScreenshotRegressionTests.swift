@@ -786,21 +786,45 @@
             let devicesModel = await DevicesScreenshots.model()
             let phoneDevicesModel = await DevicesScreenshots.model(
                 notificationSubscription: .mock, openedAt: screenshotNow.addingTimeInterval(-3600))
+            let routing = await RoutingPolicyScreenshots.model(.policy)
             for (name, width, scheme, model, client) in [
                 ("", CGFloat(380), ColorScheme.light, devicesModel, SettingsSheet.Client.mac),
                 ("-dark", CGFloat(380), ColorScheme.dark, devicesModel, SettingsSheet.Client.mac),
                 ("-phone", CGFloat(390), ColorScheme.light, phoneDevicesModel, SettingsSheet.Client.iPhone),
                 ("-phone-dark", CGFloat(390), ColorScheme.dark, phoneDevicesModel, SettingsSheet.Client.iPhone),
             ] {
-                for (surface, opensDevices) in [("settings", false), ("devices", true)] {
+                for (surface, opensOn) in [("settings", SettingsSheet.Page.rows), ("devices", .devices)] {
                     surfaces.append(
                         Surface(
                             name: surface + name, width: width, colorScheme: scheme,
                             view: AnyView(
                                 SettingsSheet(
-                                    devices: model, opensDevices: opensDevices,
+                                    devices: model, routing: routing, opensOn: opensOn,
                                     projects: ["freeside-ai/freeside", "freeside-ai/teloleo", "free-skills"],
                                     projectFilter: "free-skills", freshness: .fresh, client: client,
+                                    rendersInteractiveControls: false))))
+                }
+            }
+
+            // The routing policy open in the Settings sheet (#2394): read
+            // with a policy, with neither a policy nor an agent tree, while
+            // editing, after an unanswered change, and after a stale change
+            // the daemon refused, at Mac and phone width, by day and by dusk.
+            for state in RoutingPolicyScreenshots.State.allCases {
+                let stateModel = await RoutingPolicyScreenshots.model(state)
+                for (name, width, scheme, client) in [
+                    ("", CGFloat(380), ColorScheme.light, SettingsSheet.Client.mac),
+                    ("-dark", CGFloat(380), ColorScheme.dark, SettingsSheet.Client.mac),
+                    ("-phone", CGFloat(390), ColorScheme.light, SettingsSheet.Client.iPhone),
+                    ("-phone-dark", CGFloat(390), ColorScheme.dark, SettingsSheet.Client.iPhone),
+                ] {
+                    surfaces.append(
+                        Surface(
+                            name: state.surface + name, width: width, colorScheme: scheme,
+                            view: AnyView(
+                                SettingsSheet(
+                                    devices: devicesModel, routing: stateModel, opensOn: .routing,
+                                    projects: [], projectFilter: nil, freshness: .fresh, client: client,
                                     rendersInteractiveControls: false))))
                 }
             }

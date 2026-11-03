@@ -38,6 +38,15 @@ public final class SyncCoordinator {
     public private(set) var pendingTaskSubmissions: [String: Components.Schemas.ClientCommand] = [:]
     public private(set) var pendingTaskStops: [String: PendingTaskStop] = [:]
     @ObservationIgnored package lazy var taskStop = TaskStopModel(coordinator: self)
+    /// The routing policy change sent and not yet settled by sync; one at a
+    /// time, because each change names the revision it replaces.
+    public private(set) var pendingRoutingPolicyChange: PendingRoutingPolicyChange?
+    /// The last change sync confirmed this session, for the view's notice.
+    public private(set) var confirmedRoutingPolicyChange: Components.Schemas.RoutingPolicyChangeRecord?
+    /// Whether the change is being sent, and its refusal: here rather than
+    /// in the sheet's model, so a sheet reopened mid-send sees both.
+    package internal(set) var routingPolicySending = false
+    package internal(set) var routingPolicyFailure: RoutingPolicyFailure?
     private let submissionDaemonID: String
     public let promptHistory: TaskPromptHistory
     public private(set) var cursors: SyncCursors?
@@ -58,6 +67,9 @@ public final class SyncCoordinator {
     /// so a heartbeat whose lineup revision differs triggers another
     /// bootstrap, never direct adoption.
     public private(set) var agentCatalog: Components.Schemas.AgentCatalog?
+    /// The current routing policy; nil when none was ever set. Every change
+    /// advances the revision, so the revision check alone refreshes it.
+    public private(set) var routingPolicy: Components.Schemas.RoutingPolicySnapshot?
     public private(set) var timelinesByRunID: [String: Components.Schemas.RunTimeline] = [:]
     public private(set) var timelineLoadStates: [String: TimelineLoadState] = [:]
     public private(set) var tasks: [Components.Schemas.TaskSnapshot] = []
@@ -190,6 +202,12 @@ public final class SyncCoordinator {
                     entry.isValid(commandID: id, deviceID: device.deviceID)
                 }
             }
+            if cached.routingDaemonID == submissionDaemonID,
+                let entry = cached.pendingRoutingPolicyChange,
+                entry.isValid(deviceID: device.deviceID)
+            {
+                pendingRoutingPolicyChange = entry
+            }
             if cached.submissionDaemonID == submissionDaemonID {
                 pendingTaskSubmissions = (cached.pendingTaskSubmissions ?? [:]).filter { id, command in
                     guard case .submit_task(let payload) = command.payload else { return false }
@@ -210,6 +228,7 @@ public final class SyncCoordinator {
                 schedules = cached.schedules
                 unattendedOperation = cached.unattendedOperation
                 agentCatalog = cached.agentCatalog
+                routingPolicy = cached.routingPolicy
                 timelinesByRunID = cached.runTimelines.reduce(into: [:]) { timelines, timeline in
                     timelines[timeline.run_id] = timeline
                 }
@@ -397,6 +416,7 @@ public final class SyncCoordinator {
                         store.freshness = .fresh
                         lastUpdatedAt = .now
                         settleTaskStops()
+                        settleRoutingPolicyChange()
                     }
                 }
             case .undocumented(let statusCode, _):
@@ -828,6 +848,7 @@ public final class SyncCoordinator {
         schedules = snapshot.schedules
         unattendedOperation = snapshot.unattended_operation
         agentCatalog = snapshot.agent_catalog?.value1
+        routingPolicy = snapshot.routing_policy?.value1
         tasks = snapshot.tasks
         // Timelines are not in the bootstrap payload, so a same-epoch
         // bootstrap can neither replace nor invalidate a cached one: keep
@@ -857,6 +878,7 @@ public final class SyncCoordinator {
         store.freshness = .fresh
         lastUpdatedAt = .now
         settleTaskStops()
+        settleRoutingPolicyChange()
         persist()
         return true
     }
@@ -944,6 +966,7 @@ public final class SyncCoordinator {
         schedules = []
         unattendedOperation = nil
         agentCatalog = nil
+        routingPolicy = nil
         timelinesByRunID = [:]
         timelineLoadStates = [:]
         tasks = []
@@ -969,6 +992,7 @@ public final class SyncCoordinator {
         // a registered contract survives a relaunch with no cursors.
         guard
             cursors != nil || !pending.isEmpty || !pendingTaskSubmissions.isEmpty || !pendingTaskStops.isEmpty
+                || pendingRoutingPolicyChange != nil
                 || !comprehensionQueue.isEmpty
                 || fingerprint != nil
         else {
@@ -987,6 +1011,7 @@ public final class SyncCoordinator {
                     schedules: cursors == nil ? [] : schedules,
                     unattendedOperation: cursors == nil ? nil : unattendedOperation,
                     agentCatalog: cursors == nil ? nil : agentCatalog,
+                    routingPolicy: cursors == nil ? nil : routingPolicy,
                     runTimelines: cursors == nil
                         ? [] : timelinesByRunID.keys.sorted().compactMap { timelinesByRunID[$0] },
                     tasks: cursors == nil ? [] : tasks,
@@ -997,6 +1022,8 @@ public final class SyncCoordinator {
                     submissionDaemonID: submissionDaemonID,
                     pendingTaskStops: pendingTaskStops,
                     stopDaemonID: submissionDaemonID,
+                    pendingRoutingPolicyChange: pendingRoutingPolicyChange,
+                    routingDaemonID: submissionDaemonID,
                     comprehensionQueue: comprehensionQueue,
                     comprehensionSequence: store.comprehensionSequence,
                     registeredCapabilityFingerprint: fingerprint,
@@ -1061,6 +1088,49 @@ public final class SyncCoordinator {
             {
                 finishTaskStop(entry.command.command_id)
             }
+        }
+    }
+
+    /// Persist the exact command before sending it; a failed write rolls
+    /// back. Holds one change at a time: a different command is refused
+    /// while another is unresolved.
+    func retainRoutingPolicyChange(_ entry: PendingRoutingPolicyChange) -> Bool {
+        guard entry.isValid(deviceID: store.device.deviceID),
+            pendingRoutingPolicyChange == nil || pendingRoutingPolicyChange?.command == entry.command
+        else { return false }
+        let previous = pendingRoutingPolicyChange
+        pendingRoutingPolicyChange = entry
+        guard persist() else {
+            pendingRoutingPolicyChange = previous
+            return false
+        }
+        return true
+    }
+
+    func finishRoutingPolicyChange() {
+        let previous = pendingRoutingPolicyChange
+        pendingRoutingPolicyChange = nil
+        if !persist() { pendingRoutingPolicyChange = previous }
+    }
+
+    func clearConfirmedRoutingPolicyChange() { confirmedRoutingPolicyChange = nil }
+
+    /// A change the daemon accepted settles once fresh sync holds its
+    /// revision or a later one (another operator's later change also
+    /// settles it; the view then shows that newer policy). A new epoch
+    /// settles any change, answered or not: revisions never compare across
+    /// epochs, so a resend could overwrite a policy the operator never saw,
+    /// and the restored daemon's policy is what sync now shows.
+    func settleRoutingPolicyChange() {
+        guard store.freshness == .fresh, let cursors, let entry = pendingRoutingPolicyChange else { return }
+        if cursors.syncEpoch != entry.syncEpoch {
+            finishRoutingPolicyChange()
+            return
+        }
+        guard case .set_routing_policy(let record) = entry.receipt?.record else { return }
+        if let current = routingPolicy?.policy.revision, current >= record.policy.revision {
+            finishRoutingPolicyChange()
+            if pendingRoutingPolicyChange == nil { confirmedRoutingPolicyChange = record }
         }
     }
 }

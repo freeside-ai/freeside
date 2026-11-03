@@ -78,11 +78,12 @@ public enum UsageFixtures {
         ]
     }
 
+    /// Set from the other paired device fixture, so a client names it.
     public static func defaultRoutingPolicy() -> Components.Schemas.RoutingPolicy {
         .init(
             revision: 2,
             roles: [.init(role: .implementer, agents: ["claude-primary", "codex-primary"])],
-            source: .client_routing_set, set_by: "device:mock-device", set_at: date(1_200),
+            source: .client_routing_set, set_by: "device:\(DeviceFixtures.otherDeviceID)", set_at: date(1_200),
             lineup_revision: lineupRevision)
     }
 

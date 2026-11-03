@@ -38,6 +38,10 @@ public struct SyncCursors: Codable, Equatable, Sendable {
 public struct CachedState: Codable, Equatable, Sendable {
     public var pendingTaskStops: [String: PendingTaskStop]?
     public var stopDaemonID: String?
+    /// The unresolved routing policy change, and the daemon it was sent to,
+    /// kept like a pending Stop so its retry survives a relaunch.
+    public var pendingRoutingPolicyChange: PendingRoutingPolicyChange?
+    public var routingDaemonID: String?
     public var pendingTaskSubmissions: [String: Components.Schemas.ClientCommand]?
     public var submissionDaemonID: String?
     public var cursors: SyncCursors?
@@ -54,6 +58,8 @@ public struct CachedState: Codable, Equatable, Sendable {
     /// a cache without it loads nil, and the next heartbeat's lineup revision
     /// triggers the bootstrap that fills it, so no format bump.
     public var agentCatalog: Components.Schemas.AgentCatalog?
+    /// The routing policy as of `cursors`; nil when none was ever set.
+    public var routingPolicy: Components.Schemas.RoutingPolicySnapshot?
     public var runTimelines: [Components.Schemas.RunTimeline]
     public var tasks: [Components.Schemas.TaskSnapshot]
     public var taskTimelines: [Components.Schemas.TaskTimeline]
@@ -84,6 +90,7 @@ public struct CachedState: Codable, Equatable, Sendable {
         schedules: [Components.Schemas.ScheduleSnapshot] = [],
         unattendedOperation: Components.Schemas.UnattendedOperationSnapshot? = nil,
         agentCatalog: Components.Schemas.AgentCatalog? = nil,
+        routingPolicy: Components.Schemas.RoutingPolicySnapshot? = nil,
         runTimelines: [Components.Schemas.RunTimeline] = [],
         tasks: [Components.Schemas.TaskSnapshot] = [],
         taskTimelines: [Components.Schemas.TaskTimeline] = [],
@@ -92,6 +99,8 @@ public struct CachedState: Codable, Equatable, Sendable {
         submissionDaemonID: String? = nil,
         pendingTaskStops: [String: PendingTaskStop]? = nil,
         stopDaemonID: String? = nil,
+        pendingRoutingPolicyChange: PendingRoutingPolicyChange? = nil,
+        routingDaemonID: String? = nil,
         comprehensionQueue: [InboxStore.QueuedComprehensionEvent]? = nil,
         comprehensionSequence: Int? = nil,
         registeredCapabilityFingerprint: String? = nil,
@@ -104,6 +113,7 @@ public struct CachedState: Codable, Equatable, Sendable {
         self.schedules = schedules
         self.unattendedOperation = unattendedOperation
         self.agentCatalog = agentCatalog
+        self.routingPolicy = routingPolicy
         self.runTimelines = runTimelines
         self.tasks = tasks
         self.taskTimelines = taskTimelines
@@ -112,6 +122,8 @@ public struct CachedState: Codable, Equatable, Sendable {
         self.submissionDaemonID = submissionDaemonID
         self.pendingTaskStops = pendingTaskStops
         self.stopDaemonID = stopDaemonID
+        self.pendingRoutingPolicyChange = pendingRoutingPolicyChange
+        self.routingDaemonID = routingDaemonID
         self.comprehensionQueue = comprehensionQueue
         self.comprehensionSequence = comprehensionSequence
         self.registeredCapabilityFingerprint = registeredCapabilityFingerprint
@@ -136,6 +148,8 @@ public struct CachedState: Codable, Equatable, Sendable {
             Components.Schemas.UnattendedOperationSnapshot.self, forKey: .unattendedOperation)
         agentCatalog = try container.decodeIfPresent(
             Components.Schemas.AgentCatalog.self, forKey: .agentCatalog)
+        routingPolicy = try container.decodeIfPresent(
+            Components.Schemas.RoutingPolicySnapshot.self, forKey: .routingPolicy)
         runTimelines =
             try container.decodeIfPresent(
                 [Components.Schemas.RunTimeline].self, forKey: .runTimelines) ?? []
@@ -154,6 +168,9 @@ public struct CachedState: Codable, Equatable, Sendable {
         submissionDaemonID = try? container.decodeIfPresent(String.self, forKey: .submissionDaemonID)
         pendingTaskStops = try? container.decodeIfPresent([String: PendingTaskStop].self, forKey: .pendingTaskStops)
         stopDaemonID = try? container.decodeIfPresent(String.self, forKey: .stopDaemonID)
+        pendingRoutingPolicyChange = try? container.decodeIfPresent(
+            PendingRoutingPolicyChange.self, forKey: .pendingRoutingPolicyChange)
+        routingDaemonID = try? container.decodeIfPresent(String.self, forKey: .routingDaemonID)
         // The telemetry queue and its state degrade independently too: an
         // undecodable section loads absent, costing at most queued events.
         comprehensionQueue = try? container.decodeIfPresent(
@@ -188,17 +205,19 @@ public protocol CacheStore: Sendable {
 /// discard is `rm`; a database earns nothing here.
 public struct DiskCacheStore: CacheStore {
     /// Bumped when persisted snapshots change incompatibly. A pre-ledger
-    /// file loads absent; formats 2 to 5 preserve their independent ledger
+    /// file loads absent; formats 2 to 6 preserve their independent ledger
     /// and telemetry sections while invalidating snapshots and forcing a
     /// bootstrap. 2: cursors became optional and the pending-command ledger
     /// joined (#115). 3: run and schedule snapshots joined. 4: conversation
     /// snapshots joined. 5: task snapshots and task timelines joined. 6: the
     /// unattended-admission state joined; keeping a format 5 cursor would let
     /// an unchanged revision skip the bootstrap that supplies it, so a
-    /// stopped daemon would show no indicator. A pre-current cache cannot
-    /// claim freshness while durable rows from a newer client surface are
-    /// absent.
-    static let format = 6
+    /// stopped daemon would show no indicator. 7: the routing policy joined,
+    /// for the same reason: a format 6 cursor would skip the bootstrap that
+    /// supplies it and show no policy where one is set. A pre-current cache
+    /// cannot claim freshness while durable rows from a newer client surface
+    /// are absent.
+    static let format = 7
 
     private struct CacheFile: Codable {
         var format: Int
@@ -219,8 +238,8 @@ public struct DiskCacheStore: CacheStore {
         switch file.format {
         case Self.format:
             return file.state
-        case 2, 3, 4, 5:
-            // Formats 2 to 5 already carried retryable commands, but predate
+        case 2, 3, 4, 5, 6:
+            // Formats 2 to 6 already carried retryable commands, but predate
             // later durable read surfaces. Keep only the epoch-independent
             // client state: the ledger, because losing a command ID could
             // duplicate an operator decision after relaunch, and the
