@@ -57,6 +57,15 @@ public struct FreesideRootView: View {
         self.environment = environment
     }
 
+    /// A root that opens on the inbox-clear result, as concluding the last
+    /// open item leaves it, so a test can draw that state without
+    /// concluding one.
+    @MainActor
+    init(session: AppSession, navigation: NavigationModel, showsInboxClearResult: Bool) {
+        self.init(session: session, navigation: navigation)
+        _showsInboxClearResult = State(initialValue: showsInboxClearResult)
+    }
+
     /// Composes from launch arguments (see AppSession.fromEnvironment
     /// and LaunchInputs); an unconfigured device asks for its daemon address.
     @MainActor
@@ -634,17 +643,11 @@ public struct FreesideRootView: View {
                     glyph: .inbox, title: empty.title, description: empty.description,
                     seat: .detailColumn)
             } else {
-                OperationalSummaryView(
-                    summary: OperationalSummary(
-                        list: coordinator.unifiedList, freshness: coordinator.store.freshness),
-                    onSelectItem: openItem,
-                    onShowTasks: showWorking,
-                    topMargin: topMargin
-                )
-                // Pinned to the column's top, where the decision card
-                // it stands in for begins, instead of floating at its
-                // center.
-                .frame(maxHeight: .infinity, alignment: .top)
+                // Nothing selected says where to choose, not what the
+                // sidebar beside it already shows (#2515).
+                UnavailableStateView(
+                    glyph: .inbox, title: "Nothing open", description: "Choose an item in the sidebar.",
+                    seat: .detailColumn)
             }
         }
 

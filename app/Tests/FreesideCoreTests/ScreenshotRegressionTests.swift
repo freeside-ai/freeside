@@ -2454,53 +2454,6 @@
                                 disclosures: TaskHistoryFixtures.currentCampaignOpen(remediationScript.timeline))
                         )))
             }
-            surfaces.append(
-                Surface(
-                    name: "operational-summary",
-                    width: Self.detailColumnWidth,
-                    view: AnyView(
-                        OperationalSummaryView(
-                            summary: OperationalSummary(
-                                openSnapshots: store.openSnapshots,
-                                tasks: tasks,
-                                freshness: .fresh),
-                            onSelectItem: { _ in },
-                            onShowTasks: {},
-                            now: screenshotNow))))
-            // The summary by dusk, on its own ground, with the trailing
-            // values the fact row now right-aligns.
-            surfaces.append(
-                Surface(
-                    name: "operational-summary-dark",
-                    width: Self.detailColumnWidth,
-                    colorScheme: .dark,
-                    view: AnyView(
-                        OperationalSummaryView(
-                            summary: OperationalSummary(
-                                openSnapshots: store.openSnapshots,
-                                tasks: tasks,
-                                freshness: .fresh),
-                            onSelectItem: { _ in },
-                            onShowTasks: {},
-                            now: screenshotNow
-                        )
-                        .background(Color.ground))))
-            // The contract-mismatch state renders distinctly from fresh and
-            // the other failure states (#1265).
-            surfaces.append(
-                Surface(
-                    name: "operational-summary-contract-mismatch",
-                    width: Self.detailColumnWidth,
-                    view: AnyView(
-                        OperationalSummaryView(
-                            summary: OperationalSummary(
-                                openSnapshots: store.openSnapshots,
-                                tasks: tasks,
-                                freshness: .contractMismatch(
-                                    daemonContract: "sha256:" + String(repeating: "a", count: 64))),
-                            onSelectItem: { _ in },
-                            onShowTasks: {},
-                            now: screenshotNow))))
             guard
                 let timeline = RunFixtures.defaultTimelines().first(where: {
                     $0.run_id == activeRun.run.id
@@ -3275,7 +3228,6 @@
             for surface in surfaces
             where [
                 "pairing", "freshness-banner-stale", "freshness-banner-contract-mismatch",
-                "operational-summary-contract-mismatch",
             ].contains(surface.name) {
                 surfaces.append(
                     Surface(

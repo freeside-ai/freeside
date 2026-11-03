@@ -1050,15 +1050,6 @@ package enum AttentionDisplay {
         }
     }
 
-    package static func label(_ priority: Components.Schemas.Priority) -> String {
-        switch priority {
-        case .low: return "Low"
-        case .normal: return "Normal"
-        case .high: return "High"
-        case .urgent: return "Urgent"
-        }
-    }
-
     package static func label(_ status: Components.Schemas.ItemStatus) -> String {
         switch status {
         case .open: return "Open"

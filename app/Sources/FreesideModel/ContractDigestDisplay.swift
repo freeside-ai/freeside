@@ -1,8 +1,8 @@
 import FreesideAPI
 
 /// Compact rendering of an API contract digest for the skew surfaces (the
-/// freshness banner, the operational summary, and the Mac daemon menu),
-/// kept in one place so the three read alike.
+/// freshness banner and the Mac daemon menu), kept in one place so the two
+/// read alike.
 public enum ContractDigestDisplay {
     /// The first 12 hex characters of a `sha256:<hex>` digest: enough to
     /// distinguish two builds at a glance without showing all 64. Falls

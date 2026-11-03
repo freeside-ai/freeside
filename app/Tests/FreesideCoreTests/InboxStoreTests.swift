@@ -132,11 +132,8 @@ import Testing
         #expect(store.rows.contains { $0.item.id == resolved.item.id })
         #expect(store.openSnapshots.contains { $0.item.id == resolved.item.id })
         #expect(
-            OperationalSummary(
-                list: UnifiedList(
-                    open: store.openSnapshots, closed: [], tasks: [], projectFilter: nil),
-                freshness: .fresh
-            ).openCount == store.openSnapshots.count)
+            UnifiedList(open: store.openSnapshots, closed: [], tasks: [], projectFilter: nil)
+                .needsYou.count == store.openSnapshots.count)
         #expect(!store.closedSnapshots.contains { $0.item.id == resolved.item.id })
 
         store.replaceAll(with: Array(store.snapshotsByID.values))
