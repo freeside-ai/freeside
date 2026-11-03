@@ -1495,6 +1495,42 @@ that ran cleanly, or to 1. The
 [decision note](../devlog/2026-09-28-1220-identity-limit-rollout.md) records
 why this rollout check replaced the provider-overlap experiment.
 
+### Bound Container Memory
+
+`-memory-budget-mib` bounds the memory every container launch of this
+instance reserves (plan §5.4). `prod` without the flag takes half of physical
+memory. A `dev` or `ephemeral` instance with `-driver claude` refuses to start
+without it, before it opens its database, because only the operator knows what
+else the machine runs; `freesided deputy` reads it from `memory_budget_mib`.
+The `disabled`, `fake`, and `scenario` compositions run unbudgeted unless the
+flag is given, and with it they reserve and wait like a real one. The start
+log's `machine capacity` line names the budget, the container runtime, and its
+per-VM overhead.
+
+```sh
+freesided -environment dev -driver claude -memory-budget-mib 16384 ...
+```
+
+Each execution, review, and verification launch reserves its declared memory
+plus the runtime's per-VM overhead (256 MiB for Apple container 1.1.0) in the
+transaction that admits it, after its usage-pool slot. It holds the
+reservation until every container it started is proved absent. CPU is not
+reserved. A launch that does not fit waits under a `machine_capacity` hold
+naming its reservation, the memory already held, the budget, and how many
+waiting launches are ahead of it. Waiting launches start in task submission
+order, and a later task's launch that would fit does not pass an earlier
+one. A launch waiting for its pool slot joins that order only once the slot
+is free, and a launch nothing retries any more, such as a review that failed
+for good, leaves it five minutes after its last refusal.
+
+A launch whose reservation exceeds the whole budget never waits: its run gets
+an `execution_failure` item naming the declared size, the overhead, and the
+budget, and the launch stays pending until a start whose budget fits it, which
+retires the item. A runtime version with no recorded overhead raises the same
+item naming the version. The start refuses a budget too small for a default
+launch of any class, and a `-manual-submission-config` project whose policy
+size can never fit.
+
 ### Refresh A Usage Pool's Usage Record
 
 The daemon keeps one usage record per usage pool: what the provider reports
@@ -2684,7 +2720,7 @@ container volume, not a host path.
 
 | Group | Keys |
 | --- | --- |
-| top level | `listen`, `seed_root`, `approved_recipe`, `manual_submission_config` |
+| top level | `listen`, `seed_root`, `approved_recipe`, `manual_submission_config`, `memory_budget_mib` (positive; Bound Container Memory) |
 | `images` | `agent`, `exporter`, `review`: digest-pinned references |
 | `repository` | `repo`, `repository_id`, `base_ref`, `base_sha`, `allowed_paths`, `checkout`, `project` |
 | `prompts` | `prompt_package`, `specification_prompt_package`, `remediation_prompt_package`, `vendor_instructions` |
