@@ -63,7 +63,7 @@
                     visible[0].task.lifecycle = .active
                     visible[1].task.lifecycle = .active
                 }
-                let count = OperationalSummary(openSnapshots: [], tasks: visible, freshness: .fresh).activeTaskCount
+                let count = UnifiedList(open: [], closed: [], tasks: visible, projectFilter: nil).working.count
                 #expect(count == (legacyProjection ? 3 : 1))
                 for width in [820.0, 390.0] {
                     for scheme in [ColorScheme.light, .dark] {

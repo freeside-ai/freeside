@@ -216,6 +216,41 @@ import Testing
         #expect(active.count + finished.count == tasks.count)
     }
 
+    @Test func terminalLifecycleLabelsDoNotImplyCompletion() throws {
+        var task = try #require(TaskFixtures.defaultTasks().first { $0.task.lifecycle == .active }).task
+        #expect(TaskDisplay.lifecycleLabel(task).text == "Active")
+        #expect(TaskDisplay.lifecycleLabel(task).systemImage == "circle.dotted")
+        task.lifecycle = .finished
+        #expect(TaskDisplay.lifecycleLabel(task).text == "Finished")
+        #expect(TaskDisplay.lifecycleLabel(task).systemImage == "checkmark.circle")
+        task.lifecycle = .stopped
+        #expect(TaskDisplay.lifecycleLabel(task).text == "Stopped")
+        #expect(TaskDisplay.lifecycleLabel(task).systemImage == "stop.circle")
+        task.lifecycle = .abandoned
+        #expect(TaskDisplay.lifecycleLabel(task).text == "Abandoned")
+        #expect(TaskDisplay.lifecycleLabel(task).systemImage == "minus.circle")
+        task.lifecycle = nil
+        #expect(TaskDisplay.lifecycleLabel(task).text == "Active")
+    }
+
+    @Test func stoppedAndAbandonedTasksLeaveActiveCountsAndRemainInHistory() throws {
+        let active = try #require(TaskFixtures.defaultTasks().first { $0.task.lifecycle == .active })
+        let stopped = TaskFixtures.confirmedStopped(active)
+        let abandoned = TaskFixtures.explicitlyAbandoned(active)
+        var queued = active
+        queued.task.lifecycle = nil
+        queued.task.current_position = nil
+        queued.task.run_ids = []
+        queued.task.campaign_ids = []
+        queued.task.lifecycle_facts = []
+        queued.task.wip = false
+        let stoppedQueued = TaskFixtures.confirmedStopped(queued)
+        let tasks = [active, stopped, abandoned, queued, stoppedQueued]
+        let list = UnifiedList(open: [], closed: [], tasks: tasks, projectFilter: nil)
+        #expect(list.working.count == 2)
+        #expect(list.finished.count == 3)
+    }
+
     @Test func stageLineFollowsTheListedRunAndFallsBackToTheDaemonPosition() throws {
         let runs = RunFixtures.defaultRuns()
         let active = try #require(runs.first { $0.run.id == RunFixtures.activeRunID }).run

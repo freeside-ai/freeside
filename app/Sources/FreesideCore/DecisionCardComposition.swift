@@ -228,15 +228,36 @@ struct DecisionCardComposition: Equatable {
         /// The space between the hairline and the first fold.
         static let foldLead = ladder.foldLead
         static let cornerRadius: CGFloat = 12
-        /// The widest a card grows, at any pane width (R18). The
-        /// operational summary and both timelines draw in the same card at
-        /// the same width, so selecting something changes the content, not
-        /// its shape, and a wider pane leaves the rest of itself empty.
-        static let cardWidth: CGFloat = 640
+        #if os(macOS)
+            /// The widest the detail column grows (R18, revised 3 Nov 2026).
+            /// Every detail surface draws in one column, centered in the
+            /// pane and as wide as the pane's margins allow up to this cap,
+            /// so selecting something changes the content, not its shape,
+            /// and a wide window uses its width instead of leaving most of
+            /// the pane empty.
+            static let columnCap: CGFloat = 960
+            /// Where the column sits in a pane wider than it: centered.
+            static let columnAlignment = Alignment.top
+        #else
+            /// A regular-width iOS detail page keeps the 640pt card at the
+            /// pane's leading margin: the Mac's wider, centered column
+            /// (3 Nov 2026) left iPhone and iPad unchanged.
+            static let columnCap: CGFloat = 640
+            static let columnAlignment = Alignment.topLeading
+        #endif
+        /// The widest a line of running text draws, at any column width: a
+        /// 640pt card's line, inside its 22pt padding. The ask, the
+        /// statement or reason, claims prose, finding messages, and the
+        /// conversation thread keep it, leading in the column; fact rows,
+        /// specification and diff blocks, attachment rows, checklists, the
+        /// stage rail, comparisons, control rows, and folds take the full
+        /// column.
+        static let proseMeasure: CGFloat = 596
 
         /// The pane's margin around a card (R18): 16 all round at phone
         /// width; in the detail column 24 from each side, 20 from the top,
-        /// and 40 under the card, so every card starts at one x and one y.
+        /// and 40 under the card, so every card in a pane starts at one x and
+        /// one y.
         static func paneMargin(compact: Bool) -> EdgeInsets {
             compact
                 ? EdgeInsets(top: 16, leading: 16, bottom: 16, trailing: 16)

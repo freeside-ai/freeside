@@ -6,29 +6,31 @@
 
     @testable import FreesideCore
 
-    /// The card's place in the detail pane (R18): one x, one y, and one
-    /// width, whatever the pane's.
+    /// The card's place in the detail pane (R18, revised 3 Nov 2026): one
+    /// column, centered in the pane, as wide as the pane's margins allow up
+    /// to its cap.
     @Suite(.serialized) @MainActor struct DecisionPaneWidthTests {
-        /// Every card in the detail column starts at one x and one y and
-        /// stops at its cap at any pane width, so selecting something
-        /// changes the content and not its shape, and a wide pane never
-        /// widens a card.
+        /// Every card in the detail column is centered in the pane, starts
+        /// at the pane's top margin, and takes the pane's width less its
+        /// margins up to the column's cap, so selecting something changes
+        /// the content and not its shape.
         @Test(arguments: [CGFloat(1_000), 1_620])
-        func aCardSitsTopLeadingAndStopsAtItsCap(paneWidth: CGFloat) throws {
+        func aCardCentersInThePaneAndStopsAtTheColumnsCap(paneWidth: CGFloat) throws {
             typealias Scale = DecisionCardComposition.Scale
             let margin = Scale.paneMargin(compact: false)
 
             let wide = try #require(cardFrame(paneWidth: paneWidth))
-            #expect(wide.origin == CGPoint(x: 24, y: 20))
-            #expect(wide.origin == CGPoint(x: margin.leading, y: margin.top))
-            #expect(wide.width == 640)
-            #expect(wide.width == Scale.cardWidth)
+            #expect(wide.midX == paneWidth / 2)
+            #expect(wide.minY == 20)
+            #expect(wide.minY == margin.top)
+            #expect(wide.width == min(paneWidth - 48, 960))
+            #expect(wide.width == min(paneWidth - margin.leading - margin.trailing, Scale.columnCap))
 
             // A pane narrower than the cap and its margins shrinks the card
             // instead of cutting it.
             let narrow = try #require(cardFrame(paneWidth: 600))
-            #expect(narrow.origin == wide.origin)
-            #expect(narrow.width == 600 - margin.leading - margin.trailing)
+            #expect(narrow.origin == CGPoint(x: margin.leading, y: margin.top))
+            #expect(narrow.width == 552)
 
             // A card under a row of the column's own keeps the x and takes
             // the row's gap for its top margin.
@@ -42,13 +44,45 @@
         /// moves beside them.
         @Test func aWidePaneKeepsTheActionsUnderTheModules() throws {
             let padding = DecisionCardComposition.Scale.padding(compact: false)
-            let atCap = try #require(actionRegionFrame(paneWidth: 688))
+            let narrow = try #require(actionRegionFrame(paneWidth: 688))
             let wide = try #require(actionRegionFrame(paneWidth: 1_620))
-            #expect(wide == atCap)
+            #expect(narrow.minX == 0)
+            #expect(narrow.width == 640 - padding.leading - padding.trailing)
             #expect(wide.minX == 0)
             #expect(
                 wide.width
-                    == DecisionCardComposition.Scale.cardWidth - padding.leading - padding.trailing)
+                    == DecisionCardComposition.Scale.columnCap - padding.leading - padding.trailing)
+        }
+
+        /// Running text keeps the prose measure in a wide column, inside
+        /// the card's content, while the controls take the card's full
+        /// content width. The agent's summary stands for the card's prose:
+        /// it is the line that mounts as its own view, so its frame is the
+        /// one a test can read from the laid-out card.
+        @Test func aWideCardHoldsItsProseAtTheMeasure() throws {
+            typealias Scale = DecisionCardComposition.Scale
+            let padding = Scale.padding(compact: false)
+            let paneWidth: CGFloat = 1_620
+            let card = try #require(cardFrame(paneWidth: paneWidth))
+            let contentX = card.minX + padding.leading
+            let contentWidth = card.width - padding.leading - padding.trailing
+            #expect(contentWidth > Scale.proseMeasure)
+
+            // A summary long enough to wrap at any width this pane offers.
+            let sentence = "The run passed every check and the reviewer found nothing left to change. "
+            var snapshot = AttentionFixtures.fixture(type: .ready_for_final_review)
+            let index = try #require(snapshot.item.agent_claims.firstIndex { $0.label == "freeside.summary" })
+            snapshot.item.agent_claims[index].text = .init(
+                media_type: .text_sol_markdown, content: String(repeating: sentence, count: 4))
+            let summary = try #require(
+                mountedTextFrame(of: snapshot, paneWidth: paneWidth) { $0.hasPrefix(sentence.prefix(40)) })
+            #expect(summary.minX >= contentX)
+            #expect(summary.width <= Scale.proseMeasure)
+            // Wrapped against the measure, not short of it.
+            #expect(summary.width > Scale.proseMeasure - 40)
+
+            let controls = try #require(actionRegionFrame(paneWidth: paneWidth))
+            #expect(controls.width == contentWidth)
         }
 
         /// A timeline in a detail column takes the card's seat, and a size
@@ -134,23 +168,74 @@
             return measurement.frame
         }
 
+        /// The frame, in the pane's coordinates, of the first text mounted
+        /// as its own view whose string `matches`, in the card the decision
+        /// detail draws for `snapshot` in a pane of the given width.
+        private func mountedTextFrame(
+            of snapshot: Components.Schemas.AttentionItemSnapshot, paneWidth: CGFloat,
+            matching matches: (String) -> Bool
+        ) -> CGRect? {
+            _ = FreesideFont.registration
+            let store = InboxStore(client: APIClientFactory.mock(server: MockServer()))
+            store.replaceAll(with: [snapshot])
+            let detail = DecisionDetailView(
+                store: store,
+                itemID: snapshot.item.id,
+                loadsAttachments: false,
+                showsValidationProgress: false,
+                now: AttentionFixtures.createdInstant)
+            let card =
+                detail
+                .screenshotCard(snapshot.item, at: .large)
+                .environment(\.dynamicTypeSize, .large)
+                .frame(width: paneWidth, alignment: .topLeading)
+                .fixedSize(horizontal: false, vertical: true)
+            let host = NSHostingView(rootView: AnyView(card))
+            // Selectable text mounts its own view only inside a window.
+            let window = NSWindow(
+                contentRect: CGRect(x: 0, y: 0, width: paneWidth, height: 3_000), styleMask: [.borderless],
+                backing: .buffered, defer: false)
+            window.contentView = host
+            func find(in view: NSView) -> CGRect? {
+                let string: String?
+                if let field = view as? NSTextField {
+                    string = field.stringValue
+                } else if view.accessibilityRole() == .staticText {
+                    string = view.accessibilityValue() as? String
+                } else {
+                    string = nil
+                }
+                if let string, matches(string) { return view.convert(view.bounds, to: host) }
+                for subview in view.subviews { if let frame = find(in: subview) { return frame } }
+                return nil
+            }
+            let deadline = Date().addingTimeInterval(5)
+            var frame: CGRect?
+            repeat {
+                RunLoop.main.run(until: Date().addingTimeInterval(0.02))
+                host.layoutSubtreeIfNeeded()
+                frame = find(in: host)
+            } while frame == nil && Date() < deadline
+            return frame
+        }
+
         /// An empty state in the detail pane centers in the column a card
-        /// takes, not in the pane, so a wide pane holds it over the place
-        /// its cards draw. A pane no wider than that column centers it
-        /// across itself, and so does every other pane at any width.
+        /// takes, which on the Mac is centered in the pane, so a wide pane
+        /// holds it over the place its cards draw. A pane no wider than
+        /// that column centers it across itself, and so does every other
+        /// pane at any width.
         @Test func anEmptyStateInTheDetailPaneCentersInTheCardsColumn() throws {
-            typealias Scale = DecisionCardComposition.Scale
             func block(_ seat: UnavailableStateView.Seat, paneWidth: CGFloat) throws -> CGRect {
                 try #require(
                     probeFrame(paneWidth: paneWidth, probeWidth: 200) {
                         AnyView($0.emptyStateSeat(seat))
                     })
             }
-            let column = Scale.paneMargin(compact: false).leading + Scale.cardWidth / 2
             for paneWidth in [CGFloat(1_000), 1_620] {
                 let seated = try block(.detailColumn, paneWidth: paneWidth)
-                #expect(seated.midX == column)
-                #expect(seated.midX == 344)
+                let card = try #require(cardFrame(paneWidth: paneWidth))
+                #expect(seated.midX == card.midX)
+                #expect(seated.midX == paneWidth / 2)
                 #expect(seated.midY == 300)
 
                 let acrossPane = try block(.pane, paneWidth: paneWidth)
@@ -189,12 +274,22 @@
         private func probeFrame(
             paneWidth: CGFloat, probeWidth: CGFloat? = nil, seat: (AnyView) -> AnyView
         ) -> CGRect? {
+            measuredFrame(
+                of: AnyView(Color.clear.frame(width: probeWidth, height: 100)), paneWidth: paneWidth,
+                seat: seat)
+        }
+
+        /// The frame of `view` once `seat` has placed it in a 600pt-tall
+        /// pane of the given width, in the pane's coordinates.
+        private func measuredFrame(
+            of view: AnyView, paneWidth: CGFloat, seat: (AnyView) -> AnyView
+        ) -> CGRect? {
             final class Measurement: @unchecked Sendable {
                 var content: CGRect?
             }
             let measurement = Measurement()
-            let probe = Color.clear
-                .frame(width: probeWidth, height: 100)
+            let probe =
+                view
                 .onGeometryChange(for: CGRect.self) { geometry in
                     geometry.frame(in: .named("pane"))
                 } action: { frame in

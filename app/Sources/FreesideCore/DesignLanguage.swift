@@ -1369,8 +1369,8 @@ struct FreesideLink: View {
 /// One label-and-value fact (R9): a sans label and a mono value, both in
 /// ink, with the shared rule that decides between a trailing value and a
 /// stacked one. Used by the decision detail facts, the stop cause, the
-/// pairing details, the operational summary, and technical details, so a
-/// fact reads the same on every surface.
+/// pairing details, and technical details, so a fact reads the same on
+/// every surface.
 struct FactRow: View {
     /// A value longer than this stacks at every type size
     /// (`--fs-fact-row-stack-threshold`). A digest or an invocation id has

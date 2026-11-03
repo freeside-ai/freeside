@@ -61,6 +61,18 @@ import Testing
                 height(paragraph, expanded: [], width: 300) < height(paragraph, expanded: ["msg-probe"], width: 300))
         }
 
+        @Test func aWideColumnKeepsTheThreadAtTheProseMeasure() {
+            // A message takes at most `messageWidthFraction` of the prose
+            // measure, not of the column: a paragraph wraps in a 960pt
+            // column exactly as it does in one the measure's width, and the
+            // paragraph is long enough that a narrower one wraps it again.
+            let paragraph = thread(String(repeating: "word ", count: 120))
+            let measure = DecisionCardComposition.Scale.proseMeasure
+            let atMeasure = height(paragraph, expanded: ["msg-probe"], width: measure)
+            #expect(height(paragraph, expanded: ["msg-probe"], width: 960) == atMeasure)
+            #expect(height(paragraph, expanded: ["msg-probe"], width: measure - 100) > atMeasure)
+        }
+
         @Test func collapsedBodyIsShorterAndEachMessageExpandsOnItsOwn() {
             let snapshot = AttentionFixtures.longConversation()
             let plain = AttentionFixtures.longPlainMessageID
