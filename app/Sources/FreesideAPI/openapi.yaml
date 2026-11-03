@@ -1226,10 +1226,11 @@ components:
       description: >
         What the daemon recorded about one pool: its declaration, collector,
         refresh status, every enrollment on it, its readings, and the
-        exhausted marks derived at the read. It is observation, never
-        authority, and nothing is added across pools. A client derives no
-        value the daemon did not record: freshness is as_of_revision and each
-        reading's own instants, and exhausted_marks is computed by the daemon.
+        exhausted marks the record holds. It is observation, never authority,
+        and nothing is added across pools. A client derives no value the
+        daemon did not record: freshness is as_of_revision and each reading's
+        own instants, and the daemon computes recorded_exhausted_marks, which
+        a client only lapses by each mark's resets_at.
         Credential expiry, billing renewal, and reset credit are not recorded,
         so no field carries them.
       additionalProperties: false
@@ -1243,7 +1244,7 @@ components:
         - enrollments
         - model_windows
         - windows
-        - exhausted_marks
+        - recorded_exhausted_marks
       properties:
         id:
           type: string
@@ -1293,11 +1294,21 @@ components:
           description: One reading per provider window, in window order.
           items:
             $ref: "#/components/schemas/UsageWindowReading"
-        exhausted_marks:
+        recorded_exhausted_marks:
           type: array
           description: >
-            The windows exhausted at the read, one mark per window, derived by
-            the daemon. Empty does not mean allowance remains.
+            Every exhausted mark the pool's record holds, at most one per
+            source per window, in window order then source order
+            (provider_refusal, usage_reading): a window's provider refusal
+            unless an allowed reading observed after it cleared it, and its
+            reading when the collector reported it exhausted. The list changes
+            only when the record is written, so it holds steady at one
+            as_of_revision and entity_version, and it keeps marks that have
+            lapsed. A client drops a mark once the client's own clock reaches
+            its resets_at, and never computes a mark. A mark with a null
+            resets_at holds until a later record write replaces or clears it.
+            A window is exhausted while any of its marks hasn't lapsed. No
+            live mark does not mean allowance remains.
           items:
             $ref: "#/components/schemas/UsageExhaustedMark"
 
@@ -1454,9 +1465,9 @@ components:
     UsageExhaustedMark:
       type: object
       description: >
-        One window exhausted at the read, and what says so. invocation_id is
-        set exactly for provider_refusal, reading_observed_at exactly for
-        usage_reading.
+        One reason the pool's record holds a window exhausted, and what says
+        so. invocation_id is set exactly for provider_refusal,
+        reading_observed_at exactly for usage_reading.
       additionalProperties: false
       required: [window, source, invocation_id, reading_observed_at, resets_at, set_at]
       properties:
@@ -1477,6 +1488,9 @@ components:
           type: string
           format: date-time
           nullable: true
+          description: >
+            When this mark lapses, judged on the client's clock; null when it
+            holds until a later record write replaces or clears it.
         set_at:
           type: string
           format: date-time

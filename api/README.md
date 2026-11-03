@@ -45,7 +45,10 @@ The bootstrap carries `usage_pools`, each pool's usage record, and
 at a new revision, so the heartbeat sees it change. A pool with no record yet
 projects version 0 at the serving revision. Each window reading carries
 `stale_at`, the earlier of its reset and `observed_at` plus the daemon's
-refresh age, the same age collection uses: twice the doctor interval.
+refresh age, the same age collection uses: twice the doctor interval. Each
+pool carries `recorded_exhausted_marks`, every exhausted mark its record
+holds; a client lapses each by its `resets_at`, as it does `stale_at`, so the
+list changes only with a write.
 
 The bootstrap also carries `agent_catalog`: the committed agent tree's agents,
 each with its enrollment, model, effort, and lineage group, and the lineup's

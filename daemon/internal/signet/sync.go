@@ -361,7 +361,7 @@ func (s *Service) Bootstrap(ctx context.Context) (BootstrapSnapshot, error) {
 		if err != nil {
 			return fmt.Errorf("unattended operation gate: %w", err)
 		}
-		usagePools, err := usagePoolSnapshots(ctx, tx, state, now, s.usageRefreshAge)
+		usagePools, err := usagePoolSnapshots(ctx, tx, state, s.usageRefreshAge)
 		if err != nil {
 			return err
 		}

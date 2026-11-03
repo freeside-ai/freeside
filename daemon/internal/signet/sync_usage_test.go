@@ -3,6 +3,7 @@ package signet_test
 import (
 	"context"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -108,6 +109,81 @@ func TestBootstrapProjectsUsagePoolsFromTheStore(t *testing.T) {
 	if policy == nil || policy.EntityVersion != 1 || policy.AsOfRevision != after.Revision ||
 		policy.Policy.Source != domain.RoutingPolicySourceClientSet {
 		t.Fatalf("routing policy = %+v", policy)
+	}
+}
+
+// TestBootstrapExhaustedMarksHoldBetweenRevisions reads one revision on both
+// sides of a reset. A window holds an older refusal resetting at T2 and a newer
+// exhausted reading resetting at T1 < T2. Passing T1 writes nothing, so the
+// projected marks must not change: both stay, and the client lapses each by
+// its own resets_at.
+func TestBootstrapExhaustedMarksHoldBetweenRevisions(t *testing.T) {
+	ctx := context.Background()
+	st := storetest.Open(t, filepath.Join(t.TempDir(), "store.db"), store.Options{
+		ApprovedCredentialModes: []domain.CredentialMode{domain.CredentialSubscriptionContained},
+	})
+	t.Cleanup(func() {
+		if err := st.Close(); err != nil {
+			t.Errorf("Close: %v", err)
+		}
+	})
+	refusedAt := time.Date(2026, 1, 2, 3, 4, 5, 0, time.UTC)
+	observedAt := refusedAt.Add(10 * time.Minute)
+	readingReset, refusalReset := refusedAt.Add(2*time.Hour), refusedAt.Add(3*time.Hour)
+	now := refusedAt.Add(time.Hour)
+	service := signet.NewService(st, signet.WithClock(func() time.Time { return now }))
+	generation := seedUsageEnrollment(t, st, refusedAt.Add(-time.Hour))
+
+	if err := st.Write(ctx, func(tx *store.WriteTx) error {
+		return tx.RecordWindowRefusalMark(ctx, "pool-a", domain.RefusalMark{
+			Window: "five_hour", InvocationID: "inv-refused", ResetsAt: &refusalReset, SetAt: refusedAt,
+		}, refusedAt)
+	}); err != nil {
+		t.Fatalf("record refusal: %v", err)
+	}
+	if err := st.Write(ctx, func(tx *store.WriteTx) error {
+		observation, err := tx.GetPoolUsageObservation(ctx, "pool-a")
+		if err != nil {
+			return err
+		}
+		observation.LastAttempt = &domain.CollectionAttempt{
+			Status: domain.CollectionAttemptSucceeded, At: observedAt,
+		}
+		observation.Windows = []domain.WindowReading{{
+			Window: "five_hour", EnrollmentID: "enrollment-usage-1", Generation: generation,
+			Status: domain.WindowStatusExhausted, ResetsAt: &readingReset, ObservedAt: observedAt,
+		}}
+		return tx.RecordPoolUsageObservation(ctx, observation, observedAt)
+	}); err != nil {
+		t.Fatalf("record reading: %v", err)
+	}
+
+	before, err := service.Bootstrap(ctx)
+	if err != nil {
+		t.Fatalf("Bootstrap before T1: %v", err)
+	}
+	now = readingReset.Add(30 * time.Minute)
+	after, err := service.Bootstrap(ctx)
+	if err != nil {
+		t.Fatalf("Bootstrap after T1: %v", err)
+	}
+
+	if before.Revision != after.Revision {
+		t.Fatalf("revision %d -> %d, want one revision", before.Revision, after.Revision)
+	}
+	beforePool, afterPool := before.UsagePools[0], after.UsagePools[0]
+	if beforePool.EntityVersion != afterPool.EntityVersion {
+		t.Fatalf("entity version %d -> %d, want one", beforePool.EntityVersion, afterPool.EntityVersion)
+	}
+	if !reflect.DeepEqual(beforePool.Pool.RecordedExhaustedMarks, afterPool.Pool.RecordedExhaustedMarks) {
+		t.Fatalf("marks moved at one revision:\nbefore %+v\nafter  %+v",
+			beforePool.Pool.RecordedExhaustedMarks, afterPool.Pool.RecordedExhaustedMarks)
+	}
+	marks := afterPool.Pool.RecordedExhaustedMarks
+	if len(marks) != 2 ||
+		marks[0].Source != domain.ExhaustedMarkProviderRefusal || !marks[0].ResetsAt.Equal(refusalReset) ||
+		marks[1].Source != domain.ExhaustedMarkUsageReading || !marks[1].ResetsAt.Equal(readingReset) {
+		t.Fatalf("marks = %+v, want the refusal then the reading", marks)
 	}
 }
 

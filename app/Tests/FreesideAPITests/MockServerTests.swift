@@ -40,7 +40,7 @@ import Testing
         let pools = Dictionary(uniqueKeysWithValues: bootstrap.usage_pools.map { ($0.pool.id, $0) })
         let reading = try #require(pools[UsageFixtures.readingPoolID])
         #expect(reading.pool.collector == UsageFixtures.readingCollectorID)
-        #expect(reading.pool.exhausted_marks.map(\.source) == [.usage_reading])
+        #expect(reading.pool.recorded_exhausted_marks.map(\.source) == [.provider_refusal, .usage_reading])
         #expect(reading.pool.enrollments.map { $0.availability == nil } == [false, true])
         let unsupported = try #require(pools[UsageFixtures.unsupportedPoolID])
         #expect(unsupported.pool.last_attempt?.value1.status == .unsupported)

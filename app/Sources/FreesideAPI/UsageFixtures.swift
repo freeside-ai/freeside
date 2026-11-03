@@ -2,9 +2,10 @@ import Foundation
 
 /// Deterministic usage-pool, routing-policy, and agent-catalog fixtures,
 /// mirroring the cases the daemon's bootstrap golden pins (daemon/internal/
-/// signet/golden_internal_test.go): a pool with readings and an exhausted
-/// window, a pool whose collector cannot read usage, a pool with no record
-/// yet, and a catalog whose agents run as those pools' enrollments.
+/// signet/golden_internal_test.go): a pool with readings and a window that
+/// holds both an older refusal and a newer exhausted reading resetting first,
+/// a pool whose collector cannot read usage, a pool with no record yet, and a
+/// catalog whose agents run as those pools' enrollments.
 public enum UsageFixtures {
     public static let readingPoolID = "claude-a"
     public static let unsupportedPoolID = "codex-b"
@@ -43,10 +44,13 @@ public enum UsageFixtures {
                             status: .exhausted, used_percent: 100, resets_at: date(86_400),
                             length_seconds: 604_800, observed_at: date(2_400), stale_at: date(4_200)),
                     ],
-                    exhausted_marks: [
+                    recorded_exhausted_marks: [
+                        .init(
+                            window: "seven_day_opus", source: .provider_refusal,
+                            invocation_id: "invocation-refused", resets_at: date(172_800), set_at: date(1_800)),
                         .init(
                             window: "seven_day_opus", source: .usage_reading,
-                            reading_observed_at: date(2_400), resets_at: date(86_400), set_at: date(2_400))
+                            reading_observed_at: date(2_400), resets_at: date(86_400), set_at: date(2_400)),
                     ])),
             .init(
                 as_of_revision: 9, entity_version: 1,
@@ -63,14 +67,14 @@ public enum UsageFixtures {
                             harness_client: .codex_cli,
                             availability: .init(value1: .init(answer: .unsupported, observed_at: date(1_800))))
                     ],
-                    model_windows: [], windows: [], exhausted_marks: [])),
+                    model_windows: [], windows: [], recorded_exhausted_marks: [])),
             // No record yet: the daemon projects version 0 at the snapshot's
             // revision, and no collector because nothing is enrolled.
             .init(
                 as_of_revision: 1, entity_version: 0,
                 pool: .init(
                     id: unrecordedPoolID, provider: "anthropic", max_parallel_executions: 1,
-                    enrollments: [], model_windows: [], windows: [], exhausted_marks: [])),
+                    enrollments: [], model_windows: [], windows: [], recorded_exhausted_marks: [])),
         ]
     }
 

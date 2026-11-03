@@ -213,8 +213,9 @@ func (r QuotaRefusal) Validate() error {
 	return validateObservationReset("quota refusal "+r.Window+" resets_at", r.ResetsAt)
 }
 
-// ExhaustedMark is a derived fact: one window exhausted at a query time, and
-// what says so. It is computed from the record and never stored.
+// ExhaustedMark is a derived fact: one reason the record holds a window
+// exhausted, and what says so. It is computed from the record and never
+// stored.
 type ExhaustedMark struct {
 	Window string              `json:"window"`
 	Source ExhaustedMarkSource `json:"source"`
@@ -464,8 +465,40 @@ func (o PoolUsageObservation) observedWindows() []string {
 	return slices.Compact(windows)
 }
 
+// RecordedExhaustedMarks returns every exhausted mark the record holds, with
+// no clock: a window's refusal mark unless an allowed reading observed after
+// it cleared it, and its reading when the collector reported it exhausted.
+// One window can carry both. The marks come in window order, then in
+// AllExhaustedMarkSources order.
+//
+// The answer changes only when the record is written, so two reads of one
+// record agree whenever they run. A mark lapses once ResetsAt is reached, and a
+// mark with a nil ResetsAt holds until a write replaces or clears it; a mark
+// that has lapsed is still returned, and the reader judges lapsing by its own
+// clock. A window is exhausted while any of its marks hasn't lapsed.
+func (o PoolUsageObservation) RecordedExhaustedMarks() []ExhaustedMark {
+	var marks []ExhaustedMark
+	for _, window := range o.observedWindows() {
+		if refusal := o.refusal(window); refusal != nil && !o.refusalCleared(*refusal) {
+			marks = append(marks, ExhaustedMark{
+				Window: window, Source: ExhaustedMarkProviderRefusal,
+				InvocationID: new(refusal.InvocationID),
+				ResetsAt:     refusal.ResetsAt, SetAt: refusal.SetAt,
+			})
+		}
+		if reading := o.reading(window); reading != nil && reading.Status == WindowStatusExhausted {
+			marks = append(marks, ExhaustedMark{
+				Window: window, Source: ExhaustedMarkUsageReading,
+				ReadingObservedAt: new(reading.ObservedAt),
+				ResetsAt:          reading.ResetsAt, SetAt: reading.ObservedAt,
+			})
+		}
+	}
+	return marks
+}
+
 // ExhaustedMarks derives the windows exhausted at now, one mark per window in
-// window order.
+// window order, from RecordedExhaustedMarks.
 //
 // A refusal mark is active from SetAt until its reset, or until an allowed
 // reading observed after SetAt clears it. A reading the collector reported as
@@ -475,27 +508,20 @@ func (o PoolUsageObservation) observedWindows() []string {
 // later of the two supplies the mark, and the refusal wins a tie.
 func (o PoolUsageObservation) ExhaustedMarks(now time.Time) []ExhaustedMark {
 	var marks []ExhaustedMark
-	for _, window := range o.observedWindows() {
-		reading := o.reading(window)
-		refusal := o.refusal(window)
-		exhaustedReading := reading != nil && reading.Status == WindowStatusExhausted &&
-			!resetReached(reading.ResetsAt, now)
-		refused := refusal != nil && !refusal.SetAt.After(now) && !resetReached(refusal.ResetsAt, now) &&
-			!o.refusalCleared(*refusal)
-		switch {
-		case exhaustedReading && (!refused || reading.ObservedAt.After(refusal.SetAt)):
-			marks = append(marks, ExhaustedMark{
-				Window: window, Source: ExhaustedMarkUsageReading,
-				ReadingObservedAt: new(reading.ObservedAt),
-				ResetsAt:          reading.ResetsAt, SetAt: reading.ObservedAt,
-			})
-		case refused:
-			marks = append(marks, ExhaustedMark{
-				Window: window, Source: ExhaustedMarkProviderRefusal,
-				InvocationID: new(refusal.InvocationID),
-				ResetsAt:     refusal.ResetsAt, SetAt: refusal.SetAt,
-			})
+	for _, mark := range o.RecordedExhaustedMarks() {
+		if resetReached(mark.ResetsAt, now) ||
+			(mark.Source == ExhaustedMarkProviderRefusal && mark.SetAt.After(now)) {
+			continue
 		}
+		// A window's refusal comes before its reading, so a reading replaces the
+		// refusal only when strictly later, and the refusal keeps a tie.
+		if last := len(marks) - 1; last >= 0 && marks[last].Window == mark.Window {
+			if mark.SetAt.After(marks[last].SetAt) {
+				marks[last] = mark
+			}
+			continue
+		}
+		marks = append(marks, mark)
 	}
 	return marks
 }
