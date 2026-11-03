@@ -755,7 +755,7 @@ func (e *Engine) dispatchIntent(
 ) (bool, bool, error) {
 	started, hold, err := e.dispatchAdmittedIntent(ctx, entry, binding, stage, invocationID)
 	if orderErr := recordLaunchOrder(
-		ctx, e.store, e.launchBound, binding.run.ID, invocationID, err, time.Now().UTC(),
+		ctx, e.store, e.signet, binding.run.ID, invocationID, err, time.Now().UTC(),
 	); orderErr != nil {
 		return started, hold, errors.Join(err, orderErr)
 	}
@@ -763,15 +763,16 @@ func (e *Engine) dispatchIntent(
 	// skipped, so it holds back no other dispatch in this pass.
 	if launchMemoryRefusal(err) {
 		if noticeErr := noticeLaunchMemoryRefusal(
-			ctx, e.store, e.signet, binding.run.ID, binding.run.ProjectID, err,
+			ctx, e.store, e.signet, &e.pace, binding.run.ID, invocationID, binding.run.ProjectID, err,
 		); noticeErr != nil {
 			return started, hold, errors.Join(err, noticeErr)
 		}
 		return started, hold, nil
 	}
-	if err == nil && started && e.launchBound.Budgeted() {
-		// Admitted under the budget, so a notice an earlier start raised no
-		// longer describes this run.
+	if err == nil && started {
+		// Admitted, so a notice an earlier pass raised under a smaller budget
+		// no longer describes this run. Not gated on the startup bound: a
+		// budget recorded since may have raised the notice.
 		return started, hold, releaseProductionQuarantine(ctx, e.store, e.signet, launchMemoryRefusedPrefix, binding.run.ID)
 	}
 	return started, hold, err

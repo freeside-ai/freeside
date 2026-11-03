@@ -232,16 +232,23 @@ func (b LaunchBound) Reservation(size ContainerSize) (int, error) {
 }
 
 // LaunchReservation builds the reservation record a launch of size makes
-// under the bound. ok is false with no budget, when nothing is reserved.
+// under the bound. ok is false with no budget, when nothing is reserved. It
+// refuses a runtime version with no recorded overhead, but leaves whether the
+// reservation fits the budget to the gate (store.RequireMachineCapacity): a
+// launch that already holds its reservation passes there under a budget
+// lowered below it since.
 func (b LaunchBound) LaunchReservation(
 	invocation domain.InvocationID, run domain.RunID, kind domain.LaunchReservationKind, size ContainerSize,
 ) (domain.LaunchReservation, bool, error) {
-	total, err := b.Reservation(size)
-	if err != nil || total == 0 {
-		return domain.LaunchReservation{}, false, err
+	if !b.Budgeted() {
+		return domain.LaunchReservation{}, false, nil
+	}
+	overhead, ok := VMOverheadMiB(b.RuntimeVersion)
+	if !ok {
+		return domain.LaunchReservation{}, false, &domain.RuntimeOverheadUnknownError{RuntimeVersion: b.RuntimeVersion}
 	}
 	return domain.LaunchReservation{
 		InvocationID: invocation, RunID: run, Kind: kind,
-		MemoryMiB: size.MemoryMiB, OverheadMiB: total - size.MemoryMiB,
+		MemoryMiB: size.MemoryMiB, OverheadMiB: overhead,
 	}, true, nil
 }

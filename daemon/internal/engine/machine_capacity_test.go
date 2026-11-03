@@ -31,7 +31,6 @@ func TestLaunchOrderRefreshesAWaitOnlyWhenDue(t *testing.T) {
 	f.submit(t)
 	runID := domain.RunID("specification-run")
 	id := specificationInvocationID(runID, 1)
-	bound := ward.LaunchBound{BudgetMiB: 4096, RuntimeVersion: ward.RuntimeNone}
 	refusedAt := func() time.Time {
 		t.Helper()
 		var at time.Time
@@ -51,25 +50,25 @@ func TestLaunchOrderRefreshesAWaitOnlyWhenDue(t *testing.T) {
 		return at
 	}
 	start := time.Date(2026, 11, 3, 10, 0, 0, 0, time.UTC)
-	if err := recordLaunchOrder(ctx, f.store, bound, runID, id, memoryRefusal(0), start); err != nil {
+	if err := recordLaunchOrder(ctx, f.store, f.signet, runID, id, memoryRefusal(0), start); err != nil {
 		t.Fatal(err)
 	}
 	before := serverRevision(t, f.store)
-	if err := recordLaunchOrder(ctx, f.store, bound, runID, id, memoryRefusal(0), start.Add(30*time.Second)); err != nil {
+	if err := recordLaunchOrder(ctx, f.store, f.signet, runID, id, memoryRefusal(0), start.Add(30*time.Second)); err != nil {
 		t.Fatal(err)
 	}
 	if after := serverRevision(t, f.store); after != before || !refusedAt().Equal(start) {
 		t.Fatalf("a refusal inside the refresh moved the revision from %d to %d", before, after)
 	}
 	due := start.Add(store.LaunchWaitRefresh)
-	if err := recordLaunchOrder(ctx, f.store, bound, runID, id, memoryRefusal(0), due); err != nil {
+	if err := recordLaunchOrder(ctx, f.store, f.signet, runID, id, memoryRefusal(0), due); err != nil {
 		t.Fatal(err)
 	}
 	if got := refusedAt(); !got.Equal(due) {
 		t.Fatalf("refused_at after a due refusal = %s, want %s", got, due)
 	}
 	pool := &domain.UsagePoolExhaustedError{Pool: "identity:auth-1", Active: 1, Limit: 1}
-	if err := recordLaunchOrder(ctx, f.store, bound, runID, id, pool, due.Add(time.Second)); err != nil {
+	if err := recordLaunchOrder(ctx, f.store, f.signet, runID, id, pool, due.Add(time.Second)); err != nil {
 		t.Fatal(err)
 	}
 	if err := f.store.Read(ctx, func(tx *store.ReadTx) error {
@@ -106,7 +105,9 @@ func TestLaunchMemoryNoticeClearsAMachineCapacityHold(t *testing.T) {
 		t.Fatal(err)
 	}
 	never := &domain.LaunchNeverFitsError{SizeMiB: 8192, OverheadMiB: 256, BudgetMiB: 4096}
-	if err := noticeLaunchMemoryRefusal(ctx, f.store, f.signet, runID, run.ProjectID, never); err != nil {
+	if err := noticeLaunchMemoryRefusal(
+		ctx, f.store, f.signet, &observationPace{}, runID, specificationInvocationID(runID, 1), run.ProjectID, never,
+	); err != nil {
 		t.Fatal(err)
 	}
 	if hold := storedRunHold(t, f.store, runID); hold != nil {

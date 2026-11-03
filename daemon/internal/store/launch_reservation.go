@@ -67,7 +67,8 @@ const (
 // writes the reservation and ends the launch's wait. A launch that already
 // holds its reservation, such as an admitted execution replayed after a crash,
 // passes without a new decision, under the overhead it reserved even when the
-// runtime's has changed since: its VM may already run at that size.
+// runtime's has changed since, and under a budget lowered below it since: its
+// VM may already run at that size, and a budget limits only new reservations.
 func (tx *WriteTx) RequireMachineCapacity(
 	ctx context.Context, budgetMiB int, reservation domain.LaunchReservation, at time.Time,
 ) error {
@@ -91,12 +92,12 @@ func (tx *WriteTx) RequireMachineCapacity(
 		// Holding implies an open stored row, already counted in reserved.
 		reservation = stored
 	}
-	if reservation.TotalMiB() > budgetMiB {
-		return &domain.LaunchNeverFitsError{
-			SizeMiB: reservation.MemoryMiB, OverheadMiB: reservation.OverheadMiB, BudgetMiB: budgetMiB,
-		}
-	}
 	if !held {
+		if reservation.TotalMiB() > budgetMiB {
+			return &domain.LaunchNeverFitsError{
+				SizeMiB: reservation.MemoryMiB, OverheadMiB: reservation.OverheadMiB, BudgetMiB: budgetMiB,
+			}
+		}
 		ahead, err := tx.launchesAhead(ctx, reservation, holders, at)
 		if err != nil {
 			return fmt.Errorf("reserve launch %q memory: %w", reservation.InvocationID, err)

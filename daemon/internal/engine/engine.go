@@ -81,8 +81,9 @@ type Engine struct {
 	// race-free authority; this refresh keeps a repaired blocker from waiting
 	// for the scheduled doctor cadence.
 	refreshUnattendedHealth func(context.Context) error
-	// launchBound is the instance's memory budget and runtime (see
-	// WithMachineCapacity); the zero bound reserves nothing.
+	// launchBound is the instance's startup memory budget and runtime (see
+	// WithMachineCapacity); each launch reads the budget in force through
+	// launchBoundAt.
 	launchBound ward.LaunchBound
 	// pace bounds the per-pass observation writes (issue #394); process
 	// state only, never authority.
