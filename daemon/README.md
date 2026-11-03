@@ -1536,9 +1536,10 @@ memory. A `dev` or `ephemeral` instance with `-driver claude` refuses to start
 without it, before it opens its database, because only the operator knows what
 else the machine runs; `freesided deputy` reads it from `memory_budget_mib`.
 The `disabled`, `fake`, and `scenario` compositions run unbudgeted unless the
-flag is given, and with it they reserve and wait like a real one. The start
-log's `machine capacity` line names the budget, the container runtime, and its
-per-VM overhead.
+flag is given, and with it they reserve and wait like a real one. A budget
+recorded with `freesided set-memory-budget` (below) overrides the flag and
+`prod`'s default on every later start. The start log's `machine capacity`
+line names the budget, the container runtime, and its per-VM overhead.
 
 ```sh
 freesided -environment dev -driver claude -memory-budget-mib 16384 ...
@@ -1558,11 +1559,45 @@ for good, leaves it five minutes after its last refusal.
 
 A launch whose reservation exceeds the whole budget never waits: its run gets
 an `execution_failure` item naming the declared size, the overhead, and the
-budget, and the launch stays pending until a start whose budget fits it, which
-retires the item. A runtime version with no recorded overhead raises the same
-item naming the version. The start refuses a budget too small for a default
-launch of any class, and a `-manual-submission-config` project whose policy
-size can never fit.
+budget, and the launch stays pending until a budget that fits it, recorded
+with the command below or given to a later start, retires the item. A runtime
+version with no recorded overhead raises the same item naming the version. The
+start refuses a budget too small for a default launch of any class, and a
+`-manual-submission-config` project whose policy size can never fit.
+
+### Set An Instance's Memory Budget
+
+`freesided set-memory-budget` records the instance's memory budget, so you
+can move memory between instances on one host, such as from an idle `dev` to
+`prod`, without a restart. Each instance keeps its own budget and sees none
+of the others' containers, so keep the instances' budgets together within the
+host's memory. The command works whether `freesided` is stopped or running; a
+running daemon applies the new budget at its next admission pass. It refuses
+a budget below 1 MiB and prints the previously recorded budget (`null` when
+none was recorded), the new one, and `recorded`. Repeating the current
+recorded budget writes nothing.
+
+```sh
+freesided set-memory-budget \
+  -db <state-root>/daemon/freeside.db \
+  -memory-budget-mib 12288
+```
+
+**Lowering never stops running work.** A lower budget limits only new
+reservations; memory already reserved stays reserved until its launch ends,
+so a lower budget may sit below the memory in use for a while, and launches
+wait until it frees. A waiting launch whose reservation the new budget can
+never fit leaves its `machine_capacity` hold and its place in the order and
+gets the `execution_failure` item above; raising the budget so it fits admits
+it and retires the item. Waiting launches that fit a raised budget start at
+the next pass, oldest task first.
+
+**A recorded budget wins over the flag.** Every later start uses it instead
+of `-memory-budget-mib` or `prod`'s default, and when the two differ the start
+log says so, naming both. The start's checks run against the recorded budget,
+and a refusal it causes names this command as the fix. Nothing clears a
+recorded budget; record a new one to change it. It applies to an instance
+started without a budget too, which then reserves from its next pass.
 
 ### Refresh A Usage Pool's Usage Record
 

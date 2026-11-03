@@ -210,6 +210,9 @@ func main() {
 		case "set-pool-limit":
 			runSetPoolLimitMain(os.Args[2:])
 			return
+		case "set-memory-budget":
+			runSetMemoryBudgetMain(os.Args[2:])
+			return
 		case "task-line":
 			runTaskLineMain(os.Args[2:])
 			return
