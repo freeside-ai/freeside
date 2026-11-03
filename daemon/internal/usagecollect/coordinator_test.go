@@ -376,6 +376,97 @@ func TestSetCollectorReassigns(t *testing.T) {
 	})
 }
 
+// TestRequestRefreshDoesNotWait covers a client's refresh: it returns at
+// once, a collection in flight gets another after it, since that one may
+// have read the pool before the request, and a backoff starts nothing.
+func TestRequestRefreshDoesNotWait(t *testing.T) {
+	t.Parallel()
+	synctest.Test(t, func(t *testing.T) {
+		f := newFixture(t)
+		gate := f.collector.block()
+		f.coord.RequestRefresh(sharedPool)
+		synctest.Wait()
+		if calls := len(f.collector.requests()); calls != 1 {
+			t.Fatalf("collector called %d times, want the refresh's one blocked call", calls)
+		}
+		f.coord.RequestRefresh(sharedPool)
+		close(gate)
+		synctest.Wait()
+		if calls := len(f.collector.requests()); calls != 2 {
+			t.Fatalf("collector called %d times, want one more after the refresh in flight", calls)
+		}
+
+		f.tick()
+		f.collector.set(func(ward.UsageCollectionRequest) (ward.UsageCollection, error) {
+			return ward.UsageCollection{}, errors.New("provider unavailable")
+		})
+		if failed := f.refresh(sharedPool); failed.Outcome != OutcomeFailed {
+			t.Fatalf("outcome = %s", failed.Outcome)
+		}
+		f.coord.RequestRefresh(sharedPool)
+		synctest.Wait()
+		if calls := len(f.collector.requests()); calls != 3 {
+			t.Fatalf("collector called %d times during backoff, want 3", calls)
+		}
+	})
+}
+
+// TestReassignTxWritesInTheCallersTransaction covers the reassignment a
+// client command makes: the record commits or rolls back with the caller's
+// transaction, as Reassign's own write would.
+func TestReassignTxWritesInTheCallersTransaction(t *testing.T) {
+	t.Parallel()
+	synctest.Test(t, func(t *testing.T) {
+		f := newFixture(t)
+		f.refresh(sharedPool)
+		f.tick()
+		ctx := context.Background()
+		reassign := func(collector domain.ClientEnrollmentID, callerErr error) (Reassignment, error) {
+			var result Reassignment
+			err := f.st.Write(ctx, func(tx *store.WriteTx) error {
+				var err error
+				if result, err = ReassignTx(ctx, tx, sharedPool, collector, time.Now().UTC()); err != nil {
+					return err
+				}
+				return callerErr
+			})
+			return result, err
+		}
+
+		before := f.record(sharedPool)
+		errCaller := errors.New("caller failed")
+		if _, err := reassign(enrollSecond, errCaller); !errors.Is(err, errCaller) {
+			t.Fatalf("rolled-back reassignment = %v", err)
+		}
+		if !reflect.DeepEqual(f.record(sharedPool), before) {
+			t.Fatal("a rolled-back reassignment changed the record")
+		}
+		if _, err := reassign(enrollOther, nil); !errors.Is(err, store.ErrEnrollmentNotOnPool) {
+			t.Fatalf("reassign off the pool = %v, want ErrEnrollmentNotOnPool", err)
+		}
+
+		result, err := reassign(enrollSecond, nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if result != (Reassignment{Pool: sharedPool, PreviousCollector: enrollFirst, Collector: enrollSecond, Recorded: true}) {
+			t.Fatalf("result = %+v", result)
+		}
+		after := f.record(sharedPool)
+		if after.Collector != enrollSecond || len(after.Windows) != 0 || after.LastAttempt != nil {
+			t.Fatalf("record after reassignment = %+v", after)
+		}
+
+		f.tick()
+		if again, err := reassign(enrollSecond, nil); err != nil || again.Recorded || again.PreviousCollector != enrollSecond {
+			t.Fatalf("an unchanged collector = %+v, %v", again, err)
+		}
+		if !reflect.DeepEqual(f.record(sharedPool), after) {
+			t.Fatal("an unchanged collector wrote the record")
+		}
+	})
+}
+
 // TestReassignmentDuringACollectionDiscardsIt covers a collector changed while
 // the old one was asked: its answer is discarded and the new one collects.
 func TestReassignmentDuringACollectionDiscardsIt(t *testing.T) {
