@@ -38,11 +38,14 @@ var errNoProposalSnoozeRelease = errors.New("no proposal snooze release pending"
 // ServerRevision is the revision heartbeat payload. A changed SyncEpoch
 // invalidates every client cache; a higher Revision tells a client that it
 // missed one or more invalidations and must refetch or bootstrap. A changed
-// UnattendedOperation also requires bootstrap, even at the same revision.
+// UnattendedOperation or LineupRevision also requires bootstrap, even at the
+// same revision.
 type ServerRevision struct {
 	SyncEpoch           string                      `json:"sync_epoch"`
 	Revision            int64                       `json:"revision"`
 	UnattendedOperation UnattendedOperationSnapshot `json:"unattended_operation"`
+	// LineupRevision is nil when the daemon holds no committed tree.
+	LineupRevision *domain.Digest `json:"lineup_revision"`
 }
 
 // AttentionItemSnapshot is an AttentionItem with its store-stamped sync
@@ -307,6 +310,9 @@ type BootstrapSnapshot struct {
 	UsagePools          []UsagePoolSnapshot         `json:"usage_pools"`
 	// RoutingPolicy is nil until a policy is first set.
 	RoutingPolicy *RoutingPolicySnapshot `json:"routing_policy"`
+	// AgentCatalog is nil when the daemon holds no committed tree. It is read
+	// from the tree loaded at startup, not the store.
+	AgentCatalog *AgentCatalog `json:"agent_catalog"`
 }
 
 // Bootstrap returns the one response that advances a client's
@@ -375,6 +381,7 @@ func (s *Service) Bootstrap(ctx context.Context) (BootstrapSnapshot, error) {
 			UnattendedOperation: unattendedOperationSnapshot(gate),
 			UsagePools:          usagePools,
 			RoutingPolicy:       routingPolicy,
+			AgentCatalog:        s.agentCatalog(),
 		}
 		snoozedItems := make(map[domain.ItemID]bool)
 		for _, item := range items {
@@ -483,6 +490,7 @@ func (s *Service) Revision(ctx context.Context) (ServerRevision, error) {
 		out = ServerRevision{
 			SyncEpoch: state.SyncEpoch, Revision: state.Revision,
 			UnattendedOperation: unattendedOperationSnapshot(gate),
+			LineupRevision:      lineupRevision(s.agentCatalog()),
 		}
 		return nil
 	})

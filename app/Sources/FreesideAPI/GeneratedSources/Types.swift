@@ -60,6 +60,9 @@ public protocol APIProtocol: Sendable {
     /// the adopted snapshot also triggers a bootstrap, even without a
     /// revision gap. Live backup health can change that verdict without a
     /// transaction. The client never adopts the heartbeat's verdict directly.
+    /// Likewise, a same-epoch `lineup_revision` that differs from the
+    /// adopted `agent_catalog`'s triggers a bootstrap: a daemon restarted on
+    /// a changed agent tree moves no revision.
     ///
     ///
     /// - Remark: HTTP `GET /sync/revision`.
@@ -426,6 +429,9 @@ extension APIProtocol {
     /// the adopted snapshot also triggers a bootstrap, even without a
     /// revision gap. Live backup health can change that verdict without a
     /// transaction. The client never adopts the heartbeat's verdict directly.
+    /// Likewise, a same-epoch `lineup_revision` that differs from the
+    /// adopted `agent_catalog`'s triggers a bootstrap: a daemon restarted on
+    /// a changed agent tree moves no revision.
     ///
     ///
     /// - Remark: HTTP `GET /sync/revision`.
@@ -990,6 +996,32 @@ public enum Components {
             ///
             /// - Remark: Generated from `#/components/schemas/BootstrapSnapshot/routing_policy`.
             public var routing_policy: Components.Schemas.BootstrapSnapshot.routing_policyPayload?
+            /// The committed agent tree's agents and lineup; null when the daemon holds no committed tree.
+            ///
+            ///
+            /// - Remark: Generated from `#/components/schemas/BootstrapSnapshot/agent_catalog`.
+            public struct agent_catalogPayload: Codable, Hashable, Sendable {
+                /// - Remark: Generated from `#/components/schemas/BootstrapSnapshot/agent_catalog/value1`.
+                public var value1: Components.Schemas.AgentCatalog
+                /// Creates a new `agent_catalogPayload`.
+                ///
+                /// - Parameters:
+                ///   - value1:
+                public init(value1: Components.Schemas.AgentCatalog) {
+                    self.value1 = value1
+                }
+                public init(from decoder: any Swift.Decoder) throws {
+                    self.value1 = try .init(from: decoder)
+                }
+                public func encode(to encoder: any Swift.Encoder) throws {
+                    try self.value1.encode(to: encoder)
+                }
+            }
+            /// The committed agent tree's agents and lineup; null when the daemon holds no committed tree.
+            ///
+            ///
+            /// - Remark: Generated from `#/components/schemas/BootstrapSnapshot/agent_catalog`.
+            public var agent_catalog: Components.Schemas.BootstrapSnapshot.agent_catalogPayload?
             /// Creates a new `BootstrapSnapshot`.
             ///
             /// - Parameters:
@@ -1004,6 +1036,7 @@ public enum Components {
             ///   - unattended_operation:
             ///   - usage_pools: Every usage pool's usage record, in pool id order.
             ///   - routing_policy: The current routing policy revision; null until one is set.
+            ///   - agent_catalog: The committed agent tree's agents and lineup; null when the daemon holds no committed tree.
             public init(
                 sync_epoch: Swift.String,
                 revision: Swift.Int64,
@@ -1015,7 +1048,8 @@ public enum Components {
                 schedules: [Components.Schemas.ScheduleSnapshot],
                 unattended_operation: Components.Schemas.UnattendedOperationSnapshot,
                 usage_pools: [Components.Schemas.UsagePoolSnapshot],
-                routing_policy: Components.Schemas.BootstrapSnapshot.routing_policyPayload? = nil
+                routing_policy: Components.Schemas.BootstrapSnapshot.routing_policyPayload? = nil,
+                agent_catalog: Components.Schemas.BootstrapSnapshot.agent_catalogPayload? = nil
             ) {
                 self.sync_epoch = sync_epoch
                 self.revision = revision
@@ -1028,6 +1062,7 @@ public enum Components {
                 self.unattended_operation = unattended_operation
                 self.usage_pools = usage_pools
                 self.routing_policy = routing_policy
+                self.agent_catalog = agent_catalog
             }
             public enum CodingKeys: String, CodingKey {
                 case sync_epoch
@@ -1041,6 +1076,7 @@ public enum Components {
                 case unattended_operation
                 case usage_pools
                 case routing_policy
+                case agent_catalog
             }
         }
         /// Whether the daemon admits new unattended work, and what stops it (plan §4 stop_unattended, §5.7). It is the verdict of the one gate admission enforces at the read that produced it. Live inputs can change the verdict without moving the sync revision, so it carries no sync metadata of its own. A client renders it as a standing indicator and never infers the state from attention items: acknowledging or dismissing an item does not change it.
@@ -2063,6 +2099,183 @@ public enum Components {
                     "set_by",
                     "set_at",
                     "lineup_revision"
+                ])
+            }
+        }
+        /// The agents the daemon's committed agent tree carries, and the lineup that runs a role when no task line or routing policy names an agent (plan §5.4). The daemon admits only agents listed here. It loads the tree once at startup, so the catalog changes only when the daemon restarts on a changed tree; lineup_revision, the tree's digest and the value a RoutingPolicy records as its lineup_revision, then changes with it.
+        ///
+        ///
+        /// - Remark: Generated from `#/components/schemas/AgentCatalog`.
+        public struct AgentCatalog: Codable, Hashable, Sendable {
+            /// - Remark: Generated from `#/components/schemas/AgentCatalog/lineup_revision`.
+            public var lineup_revision: Components.Schemas.Digest
+            /// Every agent the tree carries, in name order.
+            ///
+            /// - Remark: Generated from `#/components/schemas/AgentCatalog/agents`.
+            public var agents: [Components.Schemas.AgentCatalogEntry]
+            /// One line per TaskLineRole the lineup binds, in TaskLineRole order. A role the lineup does not bind has no entry.
+            ///
+            ///
+            /// - Remark: Generated from `#/components/schemas/AgentCatalog/lineup`.
+            public var lineup: [Components.Schemas.AgentCatalogLineupLine]
+            /// Creates a new `AgentCatalog`.
+            ///
+            /// - Parameters:
+            ///   - lineup_revision:
+            ///   - agents: Every agent the tree carries, in name order.
+            ///   - lineup: One line per TaskLineRole the lineup binds, in TaskLineRole order. A role the lineup does not bind has no entry.
+            public init(
+                lineup_revision: Components.Schemas.Digest,
+                agents: [Components.Schemas.AgentCatalogEntry],
+                lineup: [Components.Schemas.AgentCatalogLineupLine]
+            ) {
+                self.lineup_revision = lineup_revision
+                self.agents = agents
+                self.lineup = lineup
+            }
+            public enum CodingKeys: String, CodingKey {
+                case lineup_revision
+                case agents
+                case lineup
+            }
+            public init(from decoder: any Swift.Decoder) throws {
+                let container = try decoder.container(keyedBy: CodingKeys.self)
+                self.lineup_revision = try container.decode(
+                    Components.Schemas.Digest.self,
+                    forKey: .lineup_revision
+                )
+                self.agents = try container.decode(
+                    [Components.Schemas.AgentCatalogEntry].self,
+                    forKey: .agents
+                )
+                self.lineup = try container.decode(
+                    [Components.Schemas.AgentCatalogLineupLine].self,
+                    forKey: .lineup
+                )
+                try decoder.ensureNoAdditionalProperties(knownKeys: [
+                    "lineup_revision",
+                    "agents",
+                    "lineup"
+                ])
+            }
+        }
+        /// One agent of the committed tree with its route offer's facts. effort is the effort the agent's source sets.
+        ///
+        ///
+        /// - Remark: Generated from `#/components/schemas/AgentCatalogEntry`.
+        public struct AgentCatalogEntry: Codable, Hashable, Sendable {
+            /// - Remark: Generated from `#/components/schemas/AgentCatalogEntry/name`.
+            public var name: Swift.String
+            /// The enrollment the agent runs as; joins UsagePoolEnrollment.enrollment_id.
+            ///
+            /// - Remark: Generated from `#/components/schemas/AgentCatalogEntry/enrollment_id`.
+            public var enrollment_id: Swift.String
+            /// The model the agent's route passes to the harness.
+            ///
+            /// - Remark: Generated from `#/components/schemas/AgentCatalogEntry/model`.
+            public var model: Swift.String
+            /// - Remark: Generated from `#/components/schemas/AgentCatalogEntry/effort`.
+            public var effort: Components.Schemas.EffortLevel
+            /// The offer's lineage group; null when the offer declares none.
+            ///
+            /// - Remark: Generated from `#/components/schemas/AgentCatalogEntry/lineage_group`.
+            public var lineage_group: Swift.String?
+            /// Creates a new `AgentCatalogEntry`.
+            ///
+            /// - Parameters:
+            ///   - name:
+            ///   - enrollment_id: The enrollment the agent runs as; joins UsagePoolEnrollment.enrollment_id.
+            ///   - model: The model the agent's route passes to the harness.
+            ///   - effort:
+            ///   - lineage_group: The offer's lineage group; null when the offer declares none.
+            public init(
+                name: Swift.String,
+                enrollment_id: Swift.String,
+                model: Swift.String,
+                effort: Components.Schemas.EffortLevel,
+                lineage_group: Swift.String? = nil
+            ) {
+                self.name = name
+                self.enrollment_id = enrollment_id
+                self.model = model
+                self.effort = effort
+                self.lineage_group = lineage_group
+            }
+            public enum CodingKeys: String, CodingKey {
+                case name
+                case enrollment_id
+                case model
+                case effort
+                case lineage_group
+            }
+            public init(from decoder: any Swift.Decoder) throws {
+                let container = try decoder.container(keyedBy: CodingKeys.self)
+                self.name = try container.decode(
+                    Swift.String.self,
+                    forKey: .name
+                )
+                self.enrollment_id = try container.decode(
+                    Swift.String.self,
+                    forKey: .enrollment_id
+                )
+                self.model = try container.decode(
+                    Swift.String.self,
+                    forKey: .model
+                )
+                self.effort = try container.decode(
+                    Components.Schemas.EffortLevel.self,
+                    forKey: .effort
+                )
+                self.lineage_group = try container.decodeIfPresent(
+                    Swift.String.self,
+                    forKey: .lineage_group
+                )
+                try decoder.ensureNoAdditionalProperties(knownKeys: [
+                    "name",
+                    "enrollment_id",
+                    "model",
+                    "effort",
+                    "lineage_group"
+                ])
+            }
+        }
+        /// The agent the lineup binds to one role.
+        ///
+        /// - Remark: Generated from `#/components/schemas/AgentCatalogLineupLine`.
+        public struct AgentCatalogLineupLine: Codable, Hashable, Sendable {
+            /// - Remark: Generated from `#/components/schemas/AgentCatalogLineupLine/role`.
+            public var role: Components.Schemas.TaskLineRole
+            /// - Remark: Generated from `#/components/schemas/AgentCatalogLineupLine/agent`.
+            public var agent: Swift.String
+            /// Creates a new `AgentCatalogLineupLine`.
+            ///
+            /// - Parameters:
+            ///   - role:
+            ///   - agent:
+            public init(
+                role: Components.Schemas.TaskLineRole,
+                agent: Swift.String
+            ) {
+                self.role = role
+                self.agent = agent
+            }
+            public enum CodingKeys: String, CodingKey {
+                case role
+                case agent
+            }
+            public init(from decoder: any Swift.Decoder) throws {
+                let container = try decoder.container(keyedBy: CodingKeys.self)
+                self.role = try container.decode(
+                    Components.Schemas.TaskLineRole.self,
+                    forKey: .role
+                )
+                self.agent = try container.decode(
+                    Swift.String.self,
+                    forKey: .agent
+                )
+                try decoder.ensureNoAdditionalProperties(knownKeys: [
+                    "role",
+                    "agent"
                 ])
             }
         }
@@ -8019,7 +8232,7 @@ public enum Components {
                 case resolution
             }
         }
-        /// The revision heartbeat's payload (plan §5.14; sync test 11): the daemon's current ServerState and unattended-admission verdict from one read transaction. A revision gap or a changed verdict tells the client to bootstrap, never to adopt state from this payload.
+        /// The revision heartbeat's payload (plan §5.14; sync test 11): the daemon's current ServerState and unattended-admission verdict from one read transaction, and the committed agent tree's revision. A revision gap, a changed verdict, or a changed lineup_revision tells the client to bootstrap, never to adopt state from this payload.
         ///
         ///
         /// - Remark: Generated from `#/components/schemas/ServerRevision`.
@@ -8035,25 +8248,55 @@ public enum Components {
             public var revision: Swift.Int64
             /// - Remark: Generated from `#/components/schemas/ServerRevision/unattended_operation`.
             public var unattended_operation: Components.Schemas.UnattendedOperationSnapshot
+            /// The committed agent tree's digest, as the bootstrap's agent_catalog carries it; null when the daemon holds no committed tree. It changes only when the daemon restarts on a changed tree.
+            ///
+            ///
+            /// - Remark: Generated from `#/components/schemas/ServerRevision/lineup_revision`.
+            public struct lineup_revisionPayload: Codable, Hashable, Sendable {
+                /// - Remark: Generated from `#/components/schemas/ServerRevision/lineup_revision/value1`.
+                public var value1: Components.Schemas.Digest
+                /// Creates a new `lineup_revisionPayload`.
+                ///
+                /// - Parameters:
+                ///   - value1:
+                public init(value1: Components.Schemas.Digest) {
+                    self.value1 = value1
+                }
+                public init(from decoder: any Swift.Decoder) throws {
+                    self.value1 = try decoder.decodeFromSingleValueContainer()
+                }
+                public func encode(to encoder: any Swift.Encoder) throws {
+                    try encoder.encodeToSingleValueContainer(self.value1)
+                }
+            }
+            /// The committed agent tree's digest, as the bootstrap's agent_catalog carries it; null when the daemon holds no committed tree. It changes only when the daemon restarts on a changed tree.
+            ///
+            ///
+            /// - Remark: Generated from `#/components/schemas/ServerRevision/lineup_revision`.
+            public var lineup_revision: Components.Schemas.ServerRevision.lineup_revisionPayload?
             /// Creates a new `ServerRevision`.
             ///
             /// - Parameters:
             ///   - sync_epoch: The daemon's sync epoch at the moment of the read; a change (only ever a restore) invalidates every client cache.
             ///   - revision: The server revision at the moment of the read.
             ///   - unattended_operation:
+            ///   - lineup_revision: The committed agent tree's digest, as the bootstrap's agent_catalog carries it; null when the daemon holds no committed tree. It changes only when the daemon restarts on a changed tree.
             public init(
                 sync_epoch: Swift.String,
                 revision: Swift.Int64,
-                unattended_operation: Components.Schemas.UnattendedOperationSnapshot
+                unattended_operation: Components.Schemas.UnattendedOperationSnapshot,
+                lineup_revision: Components.Schemas.ServerRevision.lineup_revisionPayload? = nil
             ) {
                 self.sync_epoch = sync_epoch
                 self.revision = revision
                 self.unattended_operation = unattended_operation
+                self.lineup_revision = lineup_revision
             }
             public enum CodingKeys: String, CodingKey {
                 case sync_epoch
                 case revision
                 case unattended_operation
+                case lineup_revision
             }
             public init(from decoder: any Swift.Decoder) throws {
                 let container = try decoder.container(keyedBy: CodingKeys.self)
@@ -8069,10 +8312,15 @@ public enum Components {
                     Components.Schemas.UnattendedOperationSnapshot.self,
                     forKey: .unattended_operation
                 )
+                self.lineup_revision = try container.decodeIfPresent(
+                    Components.Schemas.ServerRevision.lineup_revisionPayload.self,
+                    forKey: .lineup_revision
+                )
                 try decoder.ensureNoAdditionalProperties(knownKeys: [
                     "sync_epoch",
                     "revision",
-                    "unattended_operation"
+                    "unattended_operation",
+                    "lineup_revision"
                 ])
             }
         }
@@ -18801,6 +19049,9 @@ public enum Operations {
     /// the adopted snapshot also triggers a bootstrap, even without a
     /// revision gap. Live backup health can change that verdict without a
     /// transaction. The client never adopts the heartbeat's verdict directly.
+    /// Likewise, a same-epoch `lineup_revision` that differs from the
+    /// adopted `agent_catalog`'s triggers a bootstrap: a daemon restarted on
+    /// a changed agent tree moves no revision.
     ///
     ///
     /// - Remark: HTTP `GET /sync/revision`.

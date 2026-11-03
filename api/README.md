@@ -47,6 +47,13 @@ projects version 0 at the serving revision. Each window reading carries
 `stale_at`, the earlier of its reset and `observed_at` plus the daemon's
 refresh age.
 
+The bootstrap also carries `agent_catalog`: the committed agent tree's agents,
+each with its enrollment, model, effort, and lineage group, and the lineup's
+agent per bound role; null when the daemon holds no committed tree. A client
+offers only these agents. The heartbeat carries the tree's `lineup_revision`.
+It changes only when the daemon restarts on a changed tree, which moves no
+revision, so a client bootstraps when it differs from the adopted catalog's.
+
 Four `/commands` kinds act on them. None carries `expected_entity_version` or
 `expected_bindings`. Each records an immutable receipt in the transaction that
 applies it, and an exact replay of its `command_id` returns that receipt and

@@ -210,6 +210,7 @@ func TestSignetWireGoldens(t *testing.T) {
 				},
 				UsagePools:    usagePoolsFixture(t, createdAt),
 				RoutingPolicy: routingPolicyFixture(t, createdAt),
+				AgentCatalog:  agentCatalogFixture(t),
 				UnattendedOperation: UnattendedOperationSnapshot{
 					Admission: domain.UnattendedAdmissionStopped,
 					Stops: []UnattendedStop{
@@ -233,6 +234,7 @@ func TestSignetWireGoldens(t *testing.T) {
 			UnattendedOperation: UnattendedOperationSnapshot{
 				Admission: domain.UnattendedAdmissionOpen, Stops: []UnattendedStop{},
 			},
+			LineupRevision: lineupRevision(agentCatalogFixture(t)),
 		}},
 		{name: "run-timeline", value: runTimeline(observation, 23, acceptedAt, timelineFacts)},
 		{name: "task-timeline", value: taskTimelineFixture(t)},
@@ -322,8 +324,8 @@ func TestSignetWireGoldens(t *testing.T) {
 		name  string
 		value any
 	}{
-		// A daemon with no usage pool and no routing policy: an empty list and
-		// an explicit null, never an absent field.
+		// A daemon with no usage pool, no routing policy, and no committed
+		// agent tree: an empty list and explicit nulls, never an absent field.
 		name: "bootstrap-snapshot-empty",
 		value: BootstrapSnapshot{
 			SyncEpoch: "sync-epoch-569", Revision: 1,

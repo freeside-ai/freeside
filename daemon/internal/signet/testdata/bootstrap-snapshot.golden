@@ -466,5 +466,41 @@
       "set_at": "2026-08-10T12:34:56Z",
       "lineup_revision": "sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"
     }
+  },
+  "agent_catalog": {
+    "lineup_revision": "sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+    "agents": [
+      {
+        "name": "claude-a",
+        "enrollment_id": "anthropic-a/claude_code",
+        "model": "claude-opus-5-5",
+        "effort": "high",
+        "lineage_group": "anthropic"
+      },
+      {
+        "name": "claude-b",
+        "enrollment_id": "anthropic-b/claude_code",
+        "model": "claude-opus-5-5",
+        "effort": "max",
+        "lineage_group": "anthropic"
+      },
+      {
+        "name": "claude-c",
+        "enrollment_id": "anthropic-b/claude_code",
+        "model": "claude-preview",
+        "effort": "harness_default",
+        "lineage_group": null
+      }
+    ],
+    "lineup": [
+      {
+        "role": "implementer",
+        "agent": "claude-a"
+      },
+      {
+        "role": "reviewer",
+        "agent": "claude-c"
+      }
+    ]
   }
 }
