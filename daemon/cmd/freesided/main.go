@@ -1092,6 +1092,10 @@ func run(parent context.Context, stop func(), cfg config) (_ *daemon, err error)
 		doctorConvergenceLock sync.Mutex
 		doctorAvailable       atomic.Bool
 	)
+	// A reading is stale once one scheduled doctor pass, the collection's
+	// cadence, has been missed. Collection and the bootstrap's stale_at share
+	// the age, so a client sees a reading stale exactly when collection does.
+	usageRefreshAge := 2 * cfg.DoctorInterval
 	attention := signet.NewService(st,
 		signet.WithTaskStopGuard(func(stopCtx context.Context, taskID domain.TaskID, commit func() error) error {
 			if workflow == nil {
@@ -1145,9 +1149,7 @@ func run(parent context.Context, stop func(), cfg config) (_ *daemon, err error)
 		// Claude composition below; until then, and in the fake-driver and
 		// scenario compositions that load no tree, clients see null.
 		signet.WithAgentCatalog(func() *signet.AgentCatalog { return agentCatalog }),
-		// A window reading counts as fresh for one doctor interval; #1716's
-		// collection cadence decides the lasting value.
-		signet.WithUsageRefreshAge(cfg.DoctorInterval),
+		signet.WithUsageRefreshAge(usageRefreshAge),
 		signet.WithNtfy(signet.NtfyConfig{
 			BaseURL: cfg.NtfyURL, TopicKey: topicKey,
 		}),
@@ -1559,10 +1561,8 @@ func run(parent context.Context, stop func(), cfg config) (_ *daemon, err error)
 	if claudeWiring != nil {
 		d.sessionCloser = claudeWiring.closer
 	}
-	// A reading is stale once one scheduled doctor pass, the collection's
-	// cadence, has been missed.
 	d.usage = usagecollect.New(st, cfg.usageCollectors, usagecollect.Config{
-		RefreshAge: 2 * cfg.DoctorInterval, Logger: cfg.Logger,
+		RefreshAge: usageRefreshAge, Logger: cfg.Logger,
 	})
 	d.pairing.configure(d.readiness().APIURL, attention.MintPairingCode)
 	// The control routes approve the store's recipe set, which a scenario
