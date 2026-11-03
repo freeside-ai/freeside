@@ -1478,35 +1478,52 @@ the one its lineup line names.
 - **A routing policy** (revision 99) is the standing rule for which usage
   pool a new task runs on, and so which of the agents the lineup admits for
   each role a task line names, when the operator has not chosen one. It is an
-  operator setting of the deployment, not a lineup line: it orders agents
-  the lineup already carries for the role and never adds one. Its one mode
-  is a priority order with fallback (revision 103), and different reset
-  dates are what make it useful: the first
-  agent in the order takes every new task until its pool's window for the
-  model of the task's first role is marked exhausted, and the next agent in
-  the order takes new tasks until that window resets. Tasks already running
+  operator setting of the deployment, not a lineup line: it orders, per
+  role, the agents of the committed tree that the router may choose among,
+  and never adds one. Its one mode is drain-first by reset
+  (revision 107): a new task goes to the pool whose weekly window resets
+  soonest, so the allowance that expires first is spent first. Different
+  reset dates are what make it useful, and a fixed order can't follow
+  them: with two weekly windows a few days apart, which one resets next
+  changes twice a week. The deciding role is the task's first task-line
+  role that has no operator line, and its candidates are the pools of the
+  agents the policy orders for it, each read for its own agent's model.
+  The router ranks the candidates in three tiers and takes the first whose
+  window for that model is not marked exhausted:
+  1. the drain-first account, a usage pool the operator may name in the
+     policy, which takes every new task whatever the reset dates when the
+     deciding role's order holds an agent on it, and is skipped otherwise;
+  2. pools whose weekly reset for the model they are read for is known from a
+     reading and still ahead, soonest first (the earliest, when several
+     weekly windows limit the model), with equal resets in the policy's
+     order;
+  3. pools with no such reset, in the policy's order.
+
+  So with no drain-first account and no observable weekly reset, routing
+  is the priority order with fallback that revision 103 kept, and a
+  marked pool is passed over until its window resets. Tasks already running
   stay where they are. A window is marked exhausted by a provider refusal (a
   quota failure, Section [4](#4-the-attention-model)) or by a usage observation the collector
   reports as exhausted (usage observation, below), and the mark clears at
   the window's reset time or on a fresh reading that says otherwise. The
-  router chooses once per task (revision 103). At the first admission of
-  the task's first task-line role that has no operator line, it picks one
-  usage pool, then writes a router-sourced line for every task-line role
-  without an operator line, naming the agent the lineup carries for that
-  role on that pool (the first in the policy order when it carries
-  several). When the triager escalated the task, the router picks that one
-  pool by the specifier's escalated counterparts: it walks the specifier's
-  order, skips an agent with no counterpart, and reads each counterpart's
-  pool windows for the escalated model. Every other role follows the pool it
-  picks, as above, and the specifier's router line names the counterpart,
-  supersedes the triage-sourced line, and cites it. When every counterpart
-  is marked exhausted, the task parks as below and never drops to the
-  standard tier on its own (revision 106). A role whose lineup carries no
-  agent on that pool keeps its
-  lineup agent, and an operator-set line always wins. Later admissions read
+  router chooses once per task (revision 103). At the deciding role's
+  first admission it picks one usage pool, then writes a router-sourced line for every task-line role
+  without an operator line, naming the agent the policy orders for that
+  role on that pool (the first in the order when it orders several). When
+  the triager escalated the task, the candidates are instead the pools of
+  the specifier's ordered agents that have an escalated counterpart, each
+  read for the counterpart's model; an agent with no counterpart is
+  skipped. The same tiers rank them, and the drain-first account leads
+  only when it holds a counterpart. Every other role follows the pool it
+  picks, as above, and the specifier's router line names the counterpart
+  of the first ordered agent on that pool that has one, supersedes the triage-sourced line, and cites it. When every candidate
+  pool is marked exhausted, the task parks as below and never drops to the
+  standard tier on its own (revision 106). A
+  role whose order holds no agent on that pool keeps its lineup agent, and
+  an operator-set line always wins. Later admissions read
   the lines, so every role of the task with an agent on that pool stays on
   it until the alternate-agent card or an operator's line change supersedes
-  it. When every agent in the order is marked exhausted at a task's first
+  it. When every candidate pool is marked exhausted at a task's first
   admission, the router picks none: the role parks until the earliest reset
   and the router then chooses as above, and with no known reset the
   ordinary quota card is raised (Section [4](#4-the-attention-model)). Choosing
@@ -1514,7 +1531,8 @@ the one its lineup line names.
   used up the other. A later role whose model window on the pinned pool is
   exhausted parks until that window resets, as a quota failure does
   (Section [4](#4-the-attention-model)), and never reroutes. Every selection the router writes
-  cites the policy revision, the mark or reading it acted on, and the agent
+  cites the policy revision, which tier chose the pool, the readings whose
+  resets ranked the candidates, and any mark it passed over with the agent
   it passed over, and shows on the task's timeline and cards. An
   authenticated operator sets the policy from a client or the CLI, and each
   change is a new revision that supersedes the last and never edits it, as
@@ -1996,7 +2014,7 @@ A usage observation is observation under this subsection's exclusion list,
 with two readers above admission. The router (routing policy, above) reads
 readings and marks to pick a new task's pool and writes the task line, so
 every selection a reading influenced is a recorded fact that names the
-reading, never a silent switch.
+readings, never a silent switch.
 The quota park (Section [4](#4-the-attention-model)) reads the refused window's mark, and a reading's
 reset when the refusal names none, only to decide when a parked attempt
 starts on the line it already has; it never picks an agent, credential, or
@@ -5953,7 +5971,7 @@ the two by pool and time; it never derives one from the other.
 
 Routing policy sits above the harness. Usage-limit-driven switching between
 subscriptions is the first routing it absorbs (Section [5.4](#54-credential-modes-egress-profiles-and-concurrency), routing
-policy; revisions 99 and 103), for new tasks only: the provider balancing I
+policy; revisions 99, 103, and 107), for new tasks only: the provider balancing I
 did by hand was attention work. A quota failure parks the task until its
 window resets (Section [4](#4-the-attention-model)), and parked time counts in the attention
 accounting only when the operator acts on it or a card is raised because no
@@ -7005,7 +7023,7 @@ landing tip keeps parallel work honest.
 | **6 (1B.0): convergence and yield** | Integrated | Convergence policy and the Section [7](#7-review-policy) finding-adjudication routing (#697; the spine assigns its contract splits at wave planning); the Claude shadow arm with second adjudication and sampled classification accuracy; automatic re-review of remediation heads as a standing integration test; yield history on ready-for-final-review; the full chain on the real backlog. iOS on-device install (Section [10](#10-operations-and-onboarding)). 1B.0 exit. |
 | **7 (1B.1): the decision surface** | Parallel lanes | The decision surface closes and reads from the phone. Contract-first, positions assessed by the spine at planning (unassessed pairs serialize): the revision-40 attention-presentation cluster (the Section [4](#4-the-attention-model) recommendation shape and Section [9](#9-comprehension) typed minimum card facts, #917, which must retire `adjudicate` or reassign it to an executable `review_dispute` transaction before client adoption; decision-surface identity, #942; per-type card facts, #724; adjudication finding context, #892; per-invocation cost observations, #901), then transaction closure for the remaining Phase 1 pending actions (#918, #919, #920, #921) and the retirement of `choose_alternate_profile` (#936), then Section [5.15](#515-evidence-and-images) evidence metadata (#922), pairing identity facts (#923), readiness rendering (#982), and the Section [8](#8-observability-and-optimization-telemetry)/9 comprehension-telemetry contracts the wave-11 exit evaluation reads (#924, the first unit to slip to wave 8 if review bandwidth binds). Beside the chain: the daemon fact producers, client adoption (the provisional Swift `ActionOutcome` and mock server converge with the daemon's `discuss` and spec-approval `request_changes`), and the Section [9](#9-comprehension) summary layer (#723, stage-agent-sourced, no daemon-inference call). The adjudication-size contract (#961) is placed here or in wave 9 at planning. Deferral drain: the attention-presentation and card-fact clusters only. Exit proof: every rendered Phase 1 action executes on Mac and iPhone; no action stays pending, disabled, or decorative; every card is self-contained at its Section [9](#9-comprehension) altitude; facts stay distinct from claims. |
 | **8 (1B.1): operational closure** | Parallel lanes | Freeside runs unattended, says when it is stuck, and lets published-PR activity back in. The `effect_proposal` card, arriving with the source-issue closure proposal (Section [5.13](#513-deterministic-components-judgment-calls-and-the-effect-registry)) and reused by human-gated follow-up filing (Section [5.17](#517-follow-up-issue-filing)); the doctor credential-integrity probe (Section [10](#10-operations-and-onboarding)); the stall heartbeat (Section [5.12](#512-workflow-definition-initiators-and-artifacts)); the external daemon-liveness probe (Section [5.2](#52-the-daemon-and-its-supervisor), #510); the held-work item (#766); the review drift audit (Section [7](#7-review-policy); the #1048 contract, then #1049–#1053, floor before model site); the standing stopped-operation indicator (#980); device listing and revocation (#981); and the egress floor's first capabilities above it (Sections [5.4](#54-credential-modes-egress-profiles-and-concurrency), [5.7](#57-the-ward-runners-handoff-gate-and-operating-modes)): (a) the `provider_registry` profile, its policy field, and ward allowlist conformance, `kind:contract` because `EgressProfile` is a domain enum carried in the admission record, then (b) the policy-gated project-image rebuild in the reusable builder, `starts-after` (a) because its gate reads the registry set (a) declares; both build on merged #302 and #334. Ward container limits (#1597, revision 72) launch every ward container with a declared CPU cap and memory limit and measure real peak memory, so wave 9's memory budget reserves against recorded sizes; it has no open prerequisite and is startable at wave start. Re-entry after a ready-item invalidation (#502; the spine splits its contract half at planning) and external review ingestion on published PRs (#524) share the re-entry trigger shape and land together. Deferral drain: the operational and re-entry clusters, plus #1597. External first-round adjudication fallbacks wait for per-finding human decisions (#1989), using #1016’s executable dispute contract. Exit proof: an unattended real run completes; daemon death, crash loops, stalls, held work, a stopped state, a review loop that grows past its specification, and external review each alert without terminal patrol or manual polling. |
-| **9 (1B.1): Claude capacity** | Parallel; split-eligible | Freeside runs on two Claude subscriptions, routed by policy, and develops itself. First, the Claude quantitative usage spike, filed at planning on the #1713 harness: whether the pinned CLI, or a read under the setup token outside it, reports a used share per window, model-scoped windows included, with no token refresh and no auth-store write. Its result fixes what the account usage view shows, per window: a share, or status and reset only, or unsupported. The contract chain, positions assigned by the planner: the usage observation record per pool (#1715, extended with the exhausted mark per window and the model-to-window map); the routing policy record and the router at a task's first admission, filed at planning (Section [5.4](#54-credential-modes-egress-profiles-and-concurrency), routing policy); per-pool execution limits (#1596, `starts-after` the merged #1585); the host memory budget and machine-capacity hold (#1598; its prerequisites #898 and #1597 merged); the client contract for usage, refresh, reassignment, line changes, and the routing setting (#1719, with the sync-visibility question #1145 resolved before #1720 adopts its freshness contract); agent and run facts in the clients (#979); and the alternate-agent retry card (#869), the operator's move for a parked task (revision 103). Beside the chain: the Claude collector on the spike-proven path (#1717), collection, refresh, and reassignment (#1716), and usage state into sync (#1720); the account usage view on Mac and iPhone (#1721), usage facts beside the agent choices (#1722), the New Task agent picker (#1602, `starts-after` #979), the routing settings surface in the app, filed at planning, and the hold wording (#1599, `starts-after` #1596 and #1598); the task-line change command (#1601) and the budget command (#1595, `starts-after` #1598); and, operator-run once the wave 8 exit run completes, Freeside onboarded for `daemon/` (revision 92's trigger, above). Specifier triage joins the wave by revision 106: the escalated-line contract (#2510), then the triage call (#2511, `starts-after` #2510, the router #2393, and the alternate-agent card #869); the exit proof does not cover it. Merged before the wave: the agent-vocabulary chain (#898, #899, #900, #1421), the shared-identity writer lease (#1585), the task-line record (#1600), and the enrollment cutover (#867). Moved to Phase 2 by revision 99: the Codex execution tail (#406, #407, #408, #873, #868, #1718) and pi (#895, #897). The planner splits this wave into 9a (records and routing) and 9b (views and onboarding) at planning if the measured chain length exceeds review bandwidth; a realized split makes those halves numbered waves through a plan revision, because a wave tracker is titled `Wave N: <Name>`. Deferral drain: the agent, capacity, and subscription-usage clusters. Exit proof, which consumes no real allowance: an unattended run on a Freeside `daemon/` issue completes with the writer's subscription chosen by the routing policy and the selection recorded with its policy revision; a fixture pass that seeds one subscription's model-scoped window as exhausted routes the next task's first admission to the other subscription, with the switch visible on the task timeline and cards, and every role of that task stays there; a quota refusal injected mid-task parks the task on its subscription with no card and resumes it at the seeded reset; the operator moves a parked task with the alternate-agent card, and the move is recorded on the timeline; on Mac and iPhone the operator reads both pools' windows, reset times, and freshness, changes the routing setting from the app, and reads the recorded change; a seeded quota failure with no known reset raises the retry card with the latest readings beside it; and cost and independence records are correct (#901). 1B.1 exit evaluation. |
+| **9 (1B.1): Claude capacity** | Parallel; split-eligible | Freeside runs on two Claude subscriptions, routed by policy, and develops itself. First, the Claude quantitative usage spike, filed at planning on the #1713 harness: whether the pinned CLI, or a read under the setup token outside it, reports a used share per window, model-scoped windows included, with no token refresh and no auth-store write. Its result fixes what the account usage view shows, per window: a share, or status and reset only, or unsupported. The contract chain, positions assigned by the planner: the usage observation record per pool (#1715, extended with the exhausted mark per window and the model-to-window map); the routing policy record and the router at a task's first admission, filed at planning (Section [5.4](#54-credential-modes-egress-profiles-and-concurrency), routing policy); revision 107's routing contract, the drain-first account and the tier and resets a selection cites, before the router (#2516); per-pool execution limits (#1596, `starts-after` the merged #1585); the host memory budget and machine-capacity hold (#1598; its prerequisites #898 and #1597 merged); the client contract for usage, refresh, reassignment, line changes, and the routing setting (#1719, with the sync-visibility question #1145 resolved before #1720 adopts its freshness contract); agent and run facts in the clients (#979); and the alternate-agent retry card (#869), the operator's move for a parked task (revision 103). Beside the chain: the Claude collector on the spike-proven path (#1717), collection, refresh, and reassignment (#1716), and usage state into sync (#1720); the account usage view on Mac and iPhone (#1721), usage facts beside the agent choices (#1722), the New Task agent picker (#1602, `starts-after` #979), the routing settings surface in the app, filed at planning, and the hold wording (#1599, `starts-after` #1596 and #1598); the task-line change command (#1601) and the budget command (#1595, `starts-after` #1598); and, operator-run once the wave 8 exit run completes, Freeside onboarded for `daemon/` (revision 92's trigger, above). Specifier triage joins the wave by revision 106: the escalated-line contract (#2510), then the triage call (#2511, `starts-after` #2510, the router #2393, and the alternate-agent card #869); the exit proof does not cover it. Merged before the wave: the agent-vocabulary chain (#898, #899, #900, #1421), the shared-identity writer lease (#1585), the task-line record (#1600), and the enrollment cutover (#867). Moved to Phase 2 by revision 99: the Codex execution tail (#406, #407, #408, #873, #868, #1718) and pi (#895, #897). The planner splits this wave into 9a (records and routing) and 9b (views and onboarding) at planning if the measured chain length exceeds review bandwidth; a realized split makes those halves numbered waves through a plan revision, because a wave tracker is titled `Wave N: <Name>`. Deferral drain: the agent, capacity, and subscription-usage clusters. Exit proof, which consumes no real allowance: an unattended run on a Freeside `daemon/` issue completes with the writer's subscription chosen by the routing policy and the selection recorded with its policy revision; a fixture pass that seeds one subscription's model-scoped window as exhausted routes the next task's first admission to the other subscription, with the switch visible on the task timeline and cards, and every role of that task stays there; a fixture pass that seeds both pools' weekly resets routes a new task to the pool that resets sooner, and a named drain-first account takes it instead; a quota refusal injected mid-task parks the task on its subscription with no card and resumes it at the seeded reset; the operator moves a parked task with the alternate-agent card, and the move is recorded on the timeline; on Mac and iPhone the operator reads both pools' windows, reset times, and freshness, changes the routing setting from the app, and reads the recorded change; a seeded quota failure with no known reset raises the retry card with the latest readings beside it; and cost and independence records are correct (#901). 1B.1 exit evaluation. |
 | **10 (1B.1): subscription operations** | Folded | Folded into row 9 by revision 99. No wave 10 tracker is created; rows 11 and 12 keep their numbers. |
 | **11 (1B.2): the initiative view** | Integrated | Many work units become one picture. Typed relationship kinds in the Section [5.18](#518-the-world-model-post-merge-recompute-and-frontier-projection) capture records (#884, its position assigned by the planner), the frontier projection, and the deterministic initiative view rendering the dependency graph (#885). |
 | **12 (1B.2): image upkeep** | Parallel | Freeside keeps each project's image in service with no operator step (Section [5.7](#57-the-ward-runners-handoff-gate-and-operating-modes), project-image upkeep). Contract-first, its position assigned by the planner: the admitted-image pointer per agent base, the `image_upkeep` schedule kind, the upkeep refusal record and hold facts, and daemon-origin submission (#2332). Then, each `starts-after` #2332: the upkeep job (#2333, also `starts-after` #1792); default-branch tip observation independent of bound PRs (#2334); and the daemon-submitted maintenance task for repairs (#2336, also `starts-after` #1792). Then the Go module-source gate (#2337, `starts-after` #2333). The adoption record and the card's storage (#2379, a contract unit, `starts-after` #2378, the revision 101 unit) precede the adoption card for policy-clause refusals (#2335, `starts-after` #2333 and #2379). Agent-base upkeep (#2338) stays a deferral. Exit proof: a dependency change merged outside Freeside within policy and a daemon upgrade each end in a new admitted image with no operator action; a recipe change ends in one approved adoption card and a new admitted image built at the tip under the adopted recipe; a recipe failing at the tip ends in a maintenance task's PR. 1B exit evaluation against recorded comprehension and operational evidence. |
@@ -7186,41 +7204,39 @@ Record material changes here by revision, with the decider in parentheses.
 - On first re-litigation, promote the decision to a `docs/decisions/` ADR that
   cites its history entry.
 
-Revision 106 ("Spend Where It Counts"):
+Revision 107 ("Drain the Soonest Reset"):
 
-1. **A triager chooses each task's specifier tier.** The specifier's lineup
-   line may carry escalated lines, each pairing a specifier agent with a
-   counterpart on its enrollment and adapter with a larger model or effort,
-   and a new wardless role, the triager, chooses the tier once per task
-   before the specifier's first admission (Section [5.13](#513-deterministic-components-judgment-calls-and-the-effect-registry), Specifier Triage). Its criteria live
-   in its prompt; the deployment's default escalates large contract changes,
-   plan or architecture changes, and complex UI work. An escalation is a
-   triage-sourced task line that admission re-checks, the router picks an
-   escalated task's pool by the counterparts' windows, and an operator line
-   always wins.
-   Rejected: one model for every specification, which spends the larger
-   model on routine work or gives complex work the smaller one; and
-   self-escalation by the specifier, which pays for two specifications of
-   every complex task.
-2. **A bounded choice may pick between two agents one lineup line offers.**
-   Section [5.13](#513-deterministic-components-judgment-calls-and-the-effect-registry)'s bounded choice said no answer ever picks the agent
-   that runs anything. It now says no answer picks the vendor, adapter,
-   credential, or usage pool, and an answer picks an agent only between the
-   two an operator's lineup line offers for the purpose. Cross-vendor driver
-   selection stays unchoosable.
-3. **Issue content may steer the tier, and a failure escalates.** The triager
-   reads untrusted issue text, so an issue written to look complex can spend
-   the escalated model's allowance on its own specification; that is the
-   whole worst case, and the operator accepts it. A failed or invalid call
-   escalates rather than putting a complex specification on the smaller
-   model.
-4. **Specifier triage joins wave 9.** The contract unit and the triage call
-   are scheduled in wave 9 beside the router and the alternate-agent card
-   they extend (Section [11](#11-roadmap-build-order-and-coordination)). The exit proof is unchanged: each unit's own
-   acceptance proves it, and the wave's chain doesn't grow.
+1. **The router drains the subscription that resets soonest.** At a new
+   task's first admission it takes, among the pools of the role's ordered
+   agents whose window for the model isn't marked exhausted, the one whose
+   weekly window resets soonest, so the allowance that expires first is
+   spent first (Section [5.4](#54-credential-modes-egress-profiles-and-concurrency), routing policy). Pinning, parking, and the
+   once-per-task choice stay as revision 103 set them. An escalated task
+   ranks the specifier's counterparts the same way, in place of revision
+   106's walk of the policy order. This is what the
+   owner asked for on 2026-10-26 and 2026-10-28 ("prefer the eligible
+   account whose weekly allowance resets soonest"); revision 103 recorded
+   it as a fixed priority order, which drains the right subscription only
+   if someone reorders it at every reset. Rejected: keeping the fixed order
+   for that reason.
+2. **The operator may name one drain-first account, ahead of reset order.**
+   It is a usage pool named in the routing policy, so setting or clearing it
+   is a new revision the router's lines cite. It takes every new task it
+   can; when its window is marked exhausted, the router passes it over
+   like any other pool. Rejected:
+   overrides on task lines only, because the owner asked for an
+   account-wide choice, and a task line moves one task.
+3. **Where no weekly reset is known, the policy's order decides.** Pools
+   with a known reset rank first, soonest first, then the rest in the
+   policy's order, so the router works before a weekly reset is observable
+   under the setup token (#2389) and drains by reset once it is. The
+   policy keeps its per-role orders: they are the only record of which
+   agent covers a role on another subscription. Rejected: retiring the
+   routing policy record, which would leave the router no candidates, and
+   falling back to the lineup, which can't pass over a marked pool.
 
-(Owner decision of 2026-11-03;
-[decision note](../devlog/2026-11-03-1039-specifier-triage.md).)
+(Owner decision of 2026-11-03 on #2393;
+[decision note](../devlog/2026-11-03-1111-drain-soonest-reset.md).)
 
 ## 14. Risks
 
@@ -7240,9 +7256,9 @@ Revision 106 ("Spend Where It Counts"):
 | **Codex cloud review as a load-bearing dependency** | Realized 2026-07-31: the live-run trigger falsification (#427) showed no App-visible trigger path. The dependency is removed. Review is Freeside-invoked (Section [7](#7-review-policy)), and native review is best-effort extra evidence. |
 | Host capacity | Several accounts' limits can add up to more containers than one machine holds. Give every ward container a CPU cap and a declared memory size, and bound their memory by each instance's declared budget, with each launch reserving its declared size plus its VM's overhead, so a launch that doesn't fit waits under a visible hold instead of exhausting memory; waiting launches go oldest task first, and a size that can never fit fails at once (Section [5.4](#54-credential-modes-egress-profiles-and-concurrency), Machine Capacity). Residual: the budget can't see load outside Freeside or another instance's containers, so the operator declares it with room for interactive use and keeps the budgets of every instance on one host within what the host holds. |
 | Execution host credential copies | Every enrolled execution host holds a copy of each identity's setup token in its credential volume (Section [5.7](#57-the-ward-runners-handoff-gate-and-operating-modes), Execution Hosts). Accepted for owner-held machines on the owner's tailnet: rotation re-authors every host, and removal names the identities to rotate. Residual: a host removed while unreachable keeps its copy until the owner rotates at the vendor. Any host the owner does not hold needs `subscription_injected` through control-plane injection, under which it would receive no copy (revision 95); that mode is held (revision 103), so such a host waits and is not enrolled meanwhile. |
-| Single-provider execution capacity | Claude usage limits can stall real work. From revision 99 the hedge is a second Claude subscription under a routing policy (Section [5.4](#54-credential-modes-egress-profiles-and-concurrency), routing policy), not the Codex execution driver, which moved to Phase 2. Two subscriptions hedge a quota window, not a Claude outage or a Claude policy change; the owner accepts that residual while the Codex plan is downgraded. The router picks a subscription only at a new task's first admission, records the selection with its policy revision, and keeps every role of the task with an agent on that pool there; a quota failure parks the task until its window resets instead of moving it (Section [4](#4-the-attention-model); revision 103). A task in flight moves to another subscription only by the operator's explicit choice on the alternate-agent card or a task line change (Section [5.4](#54-credential-modes-egress-profiles-and-concurrency), Admitted Agents), never silently and never automatically. Usage remains observed telemetry (Section [8](#8-observability-and-optimization-telemetry)); an allowance observation shows the stall coming (Section [5.4](#54-credential-modes-egress-profiles-and-concurrency), usage observation) and may mark a window exhausted, which the router reads to pick a new task's pool and the quota park reads to time a parked task's next attempt; admission never reads one. |
+| Single-provider execution capacity | Claude usage limits can stall real work. From revision 99 the hedge is a second Claude subscription under a routing policy (Section [5.4](#54-credential-modes-egress-profiles-and-concurrency), routing policy), not the Codex execution driver, which moved to Phase 2. Two subscriptions hedge a quota window, not a Claude outage or a Claude policy change; the owner accepts that residual while the Codex plan is downgraded. The router picks a subscription only at a new task's first admission, records the selection with its policy revision, and keeps every role of the task with an agent on that pool there; a quota failure parks the task until its window resets instead of moving it (Section [4](#4-the-attention-model); revision 103). A task in flight moves to another subscription only by the operator's explicit choice on the alternate-agent card or a task line change (Section [5.4](#54-credential-modes-egress-profiles-and-concurrency), Admitted Agents), never silently and never automatically. Usage remains observed telemetry (Section [8](#8-observability-and-optimization-telemetry)); an allowance observation shows the stall coming (Section [5.4](#54-credential-modes-egress-profiles-and-concurrency), usage observation) and may mark a window exhausted or report its weekly reset, which the router reads to rank and pick a new task's pool and the quota park reads to time a parked task's next attempt; admission never reads one. |
 | Classifier mislabeling | Preserve immutable raw findings; require second adjudication for the safety case; enforce ceilings. |
-| Subscription-terms drift | Keep it as an explicit operating risk. Open question: whether Anthropic permits drain-first selection (the routing policy's priority with fallback, Section [5.4](#54-credential-modes-egress-profiles-and-concurrency)) across one owner's Claude subscriptions. The Consumer Terms (effective 2025-10-08) forbid "bypassing any of our systems or protective measures", and Claude Code's legal page says advertised Pro and Max limits "assume ordinary, individual usage". Current response (revision 103): the router chooses a subscription only for new tasks and pins each task to it, nothing fails over mid-task, and proxy credential injection is held. Recommended: ask Anthropic; its answer reopens revision 103. |
+| Subscription-terms drift | Keep it as an explicit operating risk. Open question: whether Anthropic permits choosing among one owner's Claude subscriptions to spend each before its reset (the routing policy's drain-first by reset, Section [5.4](#54-credential-modes-egress-profiles-and-concurrency)). The Consumer Terms (effective 2025-10-08) forbid "bypassing any of our systems or protective measures", and Claude Code's legal page says advertised Pro and Max limits "assume ordinary, individual usage". Current response (revisions 103 and 107): the router chooses a subscription only for new tasks, ranking by reset, and pins each task to it, nothing fails over mid-task, and proxy credential injection is held. Recommended: ask Anthropic; its answer reopens revisions 103 and 107. |
 | Apple container immaturity | Prove actual runner capabilities and retain honest fallback classes. |
 | Vendor CLI churn | Pin tooling in golden images and verify its contracts. |
 | Review saturation | Bound work by review bandwidth and use yield policy; the Section [7](#7-review-policy) drift audit stops a loop that converges finding by finding into an over-built change. |

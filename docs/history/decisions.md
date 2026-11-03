@@ -3363,3 +3363,39 @@ The client work is #1798 to #1803.)
 
 (Owner's work contract on #2188, 2026-11-02;
 [decision note](../../devlog/2026-11-02-1210-vm-overhead-reservation.md).)
+
+## Revision 106 ("Spend Where It Counts"):
+
+1. **A triager chooses each task's specifier tier.** The specifier's lineup
+   line may carry escalated lines, each pairing a specifier agent with a
+   counterpart on its enrollment and adapter with a larger model or effort,
+   and a new wardless role, the triager, chooses the tier once per task
+   before the specifier's first admission (Section [5.13](../plan.md#513-deterministic-components-judgment-calls-and-the-effect-registry), Specifier Triage). Its criteria live
+   in its prompt; the deployment's default escalates large contract changes,
+   plan or architecture changes, and complex UI work. An escalation is a
+   triage-sourced task line that admission re-checks, the router picks an
+   escalated task's pool by the counterparts' windows, and an operator line
+   always wins.
+   Rejected: one model for every specification, which spends the larger
+   model on routine work or gives complex work the smaller one; and
+   self-escalation by the specifier, which pays for two specifications of
+   every complex task.
+2. **A bounded choice may pick between two agents one lineup line offers.**
+   Section [5.13](../plan.md#513-deterministic-components-judgment-calls-and-the-effect-registry)'s bounded choice said no answer ever picks the agent
+   that runs anything. It now says no answer picks the vendor, adapter,
+   credential, or usage pool, and an answer picks an agent only between the
+   two an operator's lineup line offers for the purpose. Cross-vendor driver
+   selection stays unchoosable.
+3. **Issue content may steer the tier, and a failure escalates.** The triager
+   reads untrusted issue text, so an issue written to look complex can spend
+   the escalated model's allowance on its own specification; that is the
+   whole worst case, and the operator accepts it. A failed or invalid call
+   escalates rather than putting a complex specification on the smaller
+   model.
+4. **Specifier triage joins wave 9.** The contract unit and the triage call
+   are scheduled in wave 9 beside the router and the alternate-agent card
+   they extend (Section [11](../plan.md#11-roadmap-build-order-and-coordination)). The exit proof is unchanged: each unit's own
+   acceptance proves it, and the wave's chain doesn't grow.
+
+(Owner decision of 2026-11-03;
+[decision note](../../devlog/2026-11-03-1039-specifier-triage.md).)
