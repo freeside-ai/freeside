@@ -2,6 +2,7 @@ package main
 
 import (
 	"fmt"
+	"maps"
 	"slices"
 	"strings"
 
@@ -28,7 +29,7 @@ type manualSubmissionProject struct {
 // authority; production still authenticates the claimed author and admits the
 // policy before execution. A restart changes only future task creation.
 func loadManualSubmissionConfig(path string) (func(domain.ProjectID) (engine.ManualInitiator, bool), error) {
-	projects, err := readManualSubmissionProjects(path, ward.LaunchBound{})
+	projects, err := readManualSubmissionProjects(path)
 	if err != nil {
 		return nil, err
 	}
@@ -36,9 +37,10 @@ func loadManualSubmissionConfig(path string) (func(domain.ProjectID) (engine.Man
 }
 
 // readManualSubmissionProjects reads and validates the config's projects. No
-// path is no projects. Each project's launch sizes must fit bound, so a
-// policy no launch could ever run under refuses the start.
-func readManualSubmissionProjects(path string, bound ward.LaunchBound) (map[domain.ProjectID]engine.ManualInitiator, error) {
+// path is no projects. Whether their sizes fit the memory budget waits for
+// the budget the start resolves once its store is open
+// (requireManualProjectsFit).
+func readManualSubmissionProjects(path string) (map[domain.ProjectID]engine.ManualInitiator, error) {
 	projects := make(map[domain.ProjectID]engine.ManualInitiator)
 	if path != "" {
 		file, err := readSubmissionFile(path)
@@ -77,7 +79,7 @@ func readManualSubmissionProjects(path string, bound ward.LaunchBound) (map[doma
 				return nil, fmt.Errorf("manual submission config project %d: %w", index, err)
 			}
 			// A bad size would otherwise surface only when a writer starts.
-			if _, err := ward.ResolveLaunchSizes(policy.Keys, bound); err != nil {
+			if _, err := ward.ResolveLaunchSizes(policy.Keys, ward.LaunchBound{}); err != nil {
 				return nil, fmt.Errorf("manual submission config project %d: %w", index, err)
 			}
 			if err := project.CommitAuthor.Validate(); err != nil {
@@ -87,6 +89,18 @@ func readManualSubmissionProjects(path string, bound ward.LaunchBound) (map[doma
 		}
 	}
 	return projects, nil
+}
+
+// requireManualProjectsFit refuses a configured project whose launch sizes
+// can never fit bound, so a policy no launch could ever run under refuses the
+// start instead of raising an item at its first launch.
+func requireManualProjectsFit(projects map[domain.ProjectID]engine.ManualInitiator, bound ward.LaunchBound) error {
+	for _, id := range slices.Sorted(maps.Keys(projects)) {
+		if _, err := ward.ResolveLaunchSizes(projects[id].PolicyKeys, policySizeBound(bound)); err != nil {
+			return fmt.Errorf("manual submission config project %q: %w", id, err)
+		}
+	}
+	return nil
 }
 
 func manualInitiatorLookup(

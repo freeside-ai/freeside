@@ -404,12 +404,16 @@ func TestManualSubmissionConfigRefusesASizeThatCanNeverFitTheBudget(t *testing.T
 	path := filepath.Join(t.TempDir(), "manual.json")
 	writeManualConfig(t, path, cfg)
 	bound := ward.LaunchBound{BudgetMiB: 8192, RuntimeVersion: "apple-container 1.1.0"}
-	if _, err := readManualSubmissionProjects(path, ward.LaunchBound{}); err != nil {
-		t.Fatalf("unbudgeted load: %v", err)
+	projects, err := readManualSubmissionProjects(path)
+	if err != nil {
+		t.Fatalf("load: %v", err)
 	}
-	_, err := readManualSubmissionProjects(path, bound)
+	if err := requireManualProjectsFit(projects, ward.LaunchBound{}); err != nil {
+		t.Fatalf("unbudgeted fit: %v", err)
+	}
+	err = requireManualProjectsFit(projects, bound)
 	if !errors.Is(err, domain.ErrLaunchNeverFits) || !strings.Contains(err.Error(), "16384 MiB declared plus 256 MiB") {
-		t.Fatalf("budgeted load = %v, want a never-fits refusal naming the numbers", err)
+		t.Fatalf("budgeted fit = %v, want a never-fits refusal naming the numbers", err)
 	}
 }
 
