@@ -1540,7 +1540,7 @@ func authenticateRemediationInput(
 func loadRemediationInput(
 	artifacts ArtifactStore, digest domain.Digest,
 ) (remediationInput, []byte, error) {
-	body, err := loadFakePublicationBlob(artifacts, digest)
+	body, err := loadArtifactBlob(artifacts, digest)
 	if err != nil {
 		return remediationInput{}, nil, classifyRemediationMarkerError(err)
 	}

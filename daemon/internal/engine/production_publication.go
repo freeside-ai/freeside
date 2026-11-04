@@ -2122,7 +2122,7 @@ func (w *productionPublicationWorkflow) reconcile(ctx context.Context) (producti
 			w.deferHeldTask(task)
 			continue
 		}
-		release, err := acquireFakePublicationLock(ctx, lockDir, entry.IdempotencyKey)
+		release, err := acquirePublicationLock(ctx, lockDir, entry.IdempotencyKey)
 		if err != nil {
 			if obsErr := w.recordPublicationEnvironmentHold(ctx, task); obsErr != nil {
 				joined = errors.Join(joined, fmt.Errorf("task %q: %w", entry.IdempotencyKey, obsErr))
@@ -2416,7 +2416,7 @@ func (w *productionPublicationWorkflow) loadBinding(
 	if err != nil {
 		return productionBinding{}, fmt.Errorf("load production publication authority: %w", err)
 	}
-	binding.spec, err = loadFakePublicationBlob(w.artifacts, binding.run.SpecDigest)
+	binding.spec, err = loadArtifactBlob(w.artifacts, binding.run.SpecDigest)
 	if err != nil {
 		return productionBinding{}, fmt.Errorf("load approved specification: %w", err)
 	}
@@ -4414,7 +4414,7 @@ func (w *productionPublicationWorkflow) loadPublicationOutcome(
 	candidate publish.Candidate,
 	verify publish.OutcomeVerifier,
 ) (publish.Result, bool, error) {
-	identity, err := fakePublicationIdentity(candidate)
+	identity, err := publicationIdentity(candidate)
 	if err != nil {
 		return publish.Result{}, false, err
 	}
@@ -4667,7 +4667,7 @@ func (w *productionPublicationWorkflow) materializeReplay(
 		return fmt.Errorf("replay carries evidence without a manifest digest: %w", domain.ErrParentKeyMismatch)
 	}
 	if replay.CommitPlanDigest != nil {
-		body, err := loadFakePublicationBlob(w.artifacts, *replay.CommitPlanDigest)
+		body, err := loadArtifactBlob(w.artifacts, *replay.CommitPlanDigest)
 		if err != nil {
 			return fmt.Errorf("load durable replay commit plan: %w",
 				errors.Join(err, domain.ErrParentKeyMismatch))
@@ -4684,7 +4684,7 @@ func (w *productionPublicationWorkflow) materializeBlob(digest domain.Digest, di
 	if !ok {
 		return fmt.Errorf("invalid blob digest %q", digest)
 	}
-	body, err := loadFakePublicationBlob(w.artifacts, digest)
+	body, err := loadArtifactBlob(w.artifacts, digest)
 	if err != nil {
 		return fmt.Errorf("load durable replay blob %s: %w", digest,
 			errors.Join(err, domain.ErrParentKeyMismatch))
@@ -4847,7 +4847,7 @@ func (w *productionPublicationWorkflow) storeVerificationEvidence(
 		if _, err := w.artifacts.Put(item.Artifact.Digest, bytes.NewReader(item.Content)); err != nil {
 			return nil, err
 		}
-		if err := verifyFakePublicationBlob(w.artifacts, item.Artifact); err != nil {
+		if err := verifyArtifactBlob(w.artifacts, item.Artifact); err != nil {
 			return nil, err
 		}
 	}
@@ -5142,7 +5142,7 @@ func (w *productionPublicationWorkflow) loadCheckpoint(
 		}
 	}
 	for _, artifact := range checkpoint.Artifacts {
-		if err := verifyFakePublicationBlob(w.artifacts, artifact); err != nil {
+		if err := verifyArtifactBlob(w.artifacts, artifact); err != nil {
 			// A transient blob fault stays retryable; only a digest mismatch or
 			// an absent blob is a durable checkpoint contradiction. Forcing every
 			// fault terminal would stop a valid run on a transient I/O blip.
@@ -5305,7 +5305,7 @@ func (w *productionPublicationWorkflow) loadRemediationSourceTree(
 		return "", errors.Join(errRemediationSourceIdentity, domain.ErrParentKeyMismatch)
 	}
 	for _, artifact := range checkpoint.Artifacts {
-		if err := verifyFakePublicationBlob(w.artifacts, artifact); err != nil {
+		if err := verifyArtifactBlob(w.artifacts, artifact); err != nil {
 			// A transient open/read/close fault on a checkpoint blob is
 			// operational and must stay retryable; only a digest mismatch or an
 			// absent blob is a durable source-identity contradiction. Classify
@@ -5396,7 +5396,7 @@ func (w *productionPublicationWorkflow) loadReentryRemediationSourceTree(
 		return "", errors.Join(errRemediationSourceIdentity, domain.ErrParentKeyMismatch)
 	}
 	for _, artifact := range checkpoint.Artifacts {
-		if err := verifyFakePublicationBlob(w.artifacts, artifact); err != nil {
+		if err := verifyArtifactBlob(w.artifacts, artifact); err != nil {
 			return "", fmt.Errorf("verify re-entry remediation source checkpoint artifact: %w",
 				retryableOrTerminal(ctx, err, errRemediationSourceIdentity))
 		}

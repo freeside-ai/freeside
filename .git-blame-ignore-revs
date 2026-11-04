@@ -46,3 +46,9 @@ c5e65942551bb0ec863b0c882bc8904036ecccb5
 
 # Move OCI archive verification out of the Apple backend (#562)
 2c3c10021f2951a30c25c8ddfaecb20d7ad65baf
+
+# Move the publication core out of the fake-named files (#559)
+296b9bac0a716412723cba4a9d9f560b521d6175
+
+# Drop "fake" from the four publication core names (#559)
+9d01aee0f3daea0806d97c89cbc84f69b6bdb94e

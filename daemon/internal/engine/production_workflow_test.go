@@ -1056,7 +1056,7 @@ func TestRemediationSourceSQLiteReadFailureRemainsRetryable(t *testing.T) {
 // daemon-authored checkpoint blob stays retryable and untagged, while a digest
 // mismatch terminalizes with the caller's durable sentinel. Both the remediation
 // source-tree and durable production-checkpoint authenticators route their
-// verifyFakePublicationBlob failures through retryableOrTerminal, so a transient
+// verifyArtifactBlob failures through retryableOrTerminal, so a transient
 // I/O blip no longer converts an otherwise valid run into a permanent dispute.
 func TestCheckpointArtifactVerifyRetryableUnlessDeterministic(t *testing.T) {
 	t.Parallel()
@@ -1068,7 +1068,7 @@ func TestCheckpointArtifactVerifyRetryableUnlessDeterministic(t *testing.T) {
 	transientOpen := &os.PathError{Op: "open", Path: "checkpoint-blob", Err: errors.New("input/output error")}
 
 	for _, sentinel := range []error{errRemediationSourceIdentity, domain.ErrParentKeyMismatch} {
-		operational := verifyFakePublicationBlob(remediationArtifactStore{openErr: transientOpen}, artifact)
+		operational := verifyArtifactBlob(remediationArtifactStore{openErr: transientOpen}, artifact)
 		if operational == nil {
 			t.Fatal("expected an operational blob-open failure")
 		}
@@ -1077,7 +1077,7 @@ func TestCheckpointArtifactVerifyRetryableUnlessDeterministic(t *testing.T) {
 			t.Fatalf("transient open (sentinel %v) = %v, want untagged retryable", sentinel, classified)
 		}
 
-		deterministic := verifyFakePublicationBlob(remediationArtifactStore{body: []byte("mismatched content")}, artifact)
+		deterministic := verifyArtifactBlob(remediationArtifactStore{body: []byte("mismatched content")}, artifact)
 		if deterministic == nil {
 			t.Fatal("expected a digest-mismatch failure")
 		}
@@ -1090,7 +1090,7 @@ func TestCheckpointArtifactVerifyRetryableUnlessDeterministic(t *testing.T) {
 	// A canceled context is preserved, never terminalized as a contradiction.
 	canceled, cancel := context.WithCancel(ctx)
 	cancel()
-	deterministic := verifyFakePublicationBlob(remediationArtifactStore{body: []byte("mismatched content")}, artifact)
+	deterministic := verifyArtifactBlob(remediationArtifactStore{body: []byte("mismatched content")}, artifact)
 	if got := retryableOrTerminal(canceled, deterministic, errRemediationSourceIdentity); !errors.Is(got, context.Canceled) ||
 		errors.Is(got, errRemediationSourceIdentity) {
 		t.Fatalf("canceled context = %v, want untagged context.Canceled", got)

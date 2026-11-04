@@ -285,13 +285,6 @@ func feedbackStageID(runID domain.RunID) domain.StageID {
 	return domain.StageID("feedback-" + string(runID))
 }
 
-func boolCount(v bool) int {
-	if v {
-		return 1
-	}
-	return 0
-}
-
 func sameWorkflowItem(got, want domain.AttentionItem) bool {
 	return got.ID == want.ID && got.ProjectID == want.ProjectID &&
 		got.Subject.Type == want.Subject.Type && got.Subject.ID == want.Subject.ID &&

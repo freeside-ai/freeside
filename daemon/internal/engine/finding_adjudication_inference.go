@@ -74,11 +74,11 @@ func (a *productionFindingAdjudicator) Adjudicate(
 		policy.Digest != request.ResolvedPolicyDigest {
 		return nil, errors.Join(inference.ErrAdjudicationNotAvailable, domain.ErrParentKeyMismatch)
 	}
-	specification, err := loadFakePublicationBlob(a.artifacts, request.ApprovedSpecDigest)
+	specification, err := loadArtifactBlob(a.artifacts, request.ApprovedSpecDigest)
 	if err != nil {
 		return nil, fmt.Errorf("load approved specification for adjudication: %w", err)
 	}
-	instructions, err := loadFakePublicationBlob(a.artifacts, request.InstructionSnapshotDigest)
+	instructions, err := loadArtifactBlob(a.artifacts, request.InstructionSnapshotDigest)
 	if err != nil {
 		return nil, fmt.Errorf("load instruction snapshot for adjudication: %w", err)
 	}

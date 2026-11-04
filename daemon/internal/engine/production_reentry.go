@@ -1246,7 +1246,7 @@ func (w *productionPublicationWorkflow) loadReentryCheckpoint(
 		}
 	}
 	for _, artifact := range checkpoint.Artifacts {
-		if err := verifyFakePublicationBlob(w.artifacts, artifact); err != nil {
+		if err := verifyArtifactBlob(w.artifacts, artifact); err != nil {
 			return productionReentryCheckpoint{}, false, fmt.Errorf(
 				"verify durable production re-entry checkpoint artifact: %w",
 				retryableOrTerminal(ctx, err, domain.ErrParentKeyMismatch))
