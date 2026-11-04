@@ -158,6 +158,20 @@ func TestExtractUsageCapture(t *testing.T) {
 		// No turn finished: the null answer seeds nothing.
 		{"claude_usage_observed_idle.jsonl", nil},
 		{"claude_usage_error.jsonl", nil},
+		// The pinned 2.1.282 CLI under the driver against a loopback mock API
+		// that sent both windows' headers: its answer adds session and
+		// behaviors fields and its event adds unifiedWindows, all ignored.
+		{"claude_usage_loopback_turn.jsonl", &exec.ClaudeUsageCapture{
+			ObservedAt: observedAt.UTC(),
+			Windows: []exec.ClaudeUsageWindow{
+				{Window: "five_hour", UsedPercent: 4, ResetsAt: new(time.Date(2026, 11, 4, 16, 28, 26, 0, time.UTC))},
+				{Window: "seven_day", UsedPercent: 57, ResetsAt: new(time.Date(2026, 11, 5, 15, 28, 26, 0, time.UTC))},
+			},
+			Events: []exec.ClaudeRateLimitEvent{{Window: "seven_day", Status: "allowed", ResetsAt: new(time.Unix(1793892506, 0).UTC())}},
+		}},
+		// The same launch whose turn the mock refused: a null share and no
+		// event.
+		{"claude_usage_loopback_error.jsonl", nil},
 	} {
 		t.Run(tc.fixture, func(t *testing.T) {
 			t.Parallel()
