@@ -5,6 +5,7 @@ import Security
 import Testing
 
 @testable import FreesideCore
+@testable import FreesideModel
 
 private func temporaryStore() -> (DiskCacheStore, URL) {
     let directory = FileManager.default.temporaryDirectory
@@ -136,6 +137,55 @@ private func sampleState(revision: Int64 = 5) -> CachedState {
         #expect(loaded.agentCatalog == nil)
         #expect(loaded.cursors == state.cursors)
         #expect(loaded.attentionItems == state.attentionItems)
+    }
+
+    @Test func roundTripsTheUsagePools() throws {
+        let (store, directory) = temporaryStore()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        var state = sampleState()
+        state.usagePools = UsageFixtures.defaultUsagePools()
+        try store.save(state)
+        #expect(store.load()?.usagePools == UsageFixtures.defaultUsagePools())
+    }
+
+    @Test func aPreUsageFormatSevenCacheForcesABootstrapAndKeepsItsRoutingChange() throws {
+        // Format 7 predates the usage pools. Keeping its cursors would let an
+        // unchanged server revision skip the bootstrap that supplies them,
+        // so the pools would read as none. An unsettled routing change
+        // survives, as the other saved commands do.
+        let (store, directory) = temporaryStore()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        var state = sampleState()
+        state.pendingCommands = [
+            "item-a": .init(command: makeCommand(itemID: "item-a"), state: .unresolved)
+        ]
+        state.pendingRoutingPolicyChange = PendingRoutingPolicyChange(
+            command: .init(
+                command_id: "routing-1", device_id: "device-1",
+                payload: .set_routing_policy(
+                    .init(
+                        kind: .set_routing_policy, roles: [.init(role: .implementer, agents: ["codex-primary"])],
+                        expected_revision: 2))),
+            syncEpoch: "epoch-1")
+        state.routingDaemonID = "daemon-1"
+        try store.save(state)
+
+        let file = directory.appendingPathComponent("cache.json")
+        var object = try #require(
+            try JSONSerialization.jsonObject(with: Data(contentsOf: file)) as? [String: Any])
+        var legacyState = try #require(object["state"] as? [String: Any])
+        legacyState.removeValue(forKey: "usagePools")
+        object["format"] = 7
+        object["state"] = legacyState
+        try JSONSerialization.data(withJSONObject: object).write(to: file)
+
+        let migrated = try #require(store.load())
+        #expect(migrated.cursors == nil)
+        #expect(migrated.attentionItems.isEmpty)
+        #expect(migrated.usagePools.isEmpty)
+        #expect(migrated.pendingCommands == state.pendingCommands)
+        #expect(migrated.pendingRoutingPolicyChange == state.pendingRoutingPolicyChange)
+        #expect(migrated.routingDaemonID == "daemon-1")
     }
 
     @Test func aPreRoutingFormatSixCacheForcesABootstrapAndKeepsItsCommands() throws {

@@ -72,6 +72,10 @@ public final class SyncCoordinator {
     /// The current routing policy; nil when none was ever set. Every change
     /// advances the revision, so the revision check alone refreshes it.
     public private(set) var routingPolicy: Components.Schemas.RoutingPolicySnapshot?
+    /// Every usage pool's record from the last adopted bootstrap, in the
+    /// order the daemon lists them. Every record write is a client-visible
+    /// transaction, so the revision check alone brings a new reading.
+    public private(set) var usagePools: [Components.Schemas.UsagePoolSnapshot] = []
     public private(set) var timelinesByRunID: [String: Components.Schemas.RunTimeline] = [:]
     public private(set) var timelineLoadStates: [String: TimelineLoadState] = [:]
     public private(set) var tasks: [Components.Schemas.TaskSnapshot] = []
@@ -231,6 +235,7 @@ public final class SyncCoordinator {
                 unattendedOperation = cached.unattendedOperation
                 agentCatalog = cached.agentCatalog
                 routingPolicy = cached.routingPolicy
+                usagePools = cached.usagePools
                 timelinesByRunID = cached.runTimelines.reduce(into: [:]) { timelines, timeline in
                     timelines[timeline.run_id] = timeline
                 }
@@ -907,6 +912,7 @@ public final class SyncCoordinator {
         unattendedOperation = snapshot.unattended_operation
         agentCatalog = snapshot.agent_catalog?.value1
         routingPolicy = snapshot.routing_policy?.value1
+        usagePools = snapshot.usage_pools
         tasks = snapshot.tasks
         // Timelines are not in the bootstrap payload, so a same-epoch
         // bootstrap can neither replace nor invalidate a cached one: keep
@@ -1025,6 +1031,7 @@ public final class SyncCoordinator {
         unattendedOperation = nil
         agentCatalog = nil
         routingPolicy = nil
+        usagePools = []
         timelinesByRunID = [:]
         timelineLoadStates = [:]
         tasks = []
@@ -1070,6 +1077,7 @@ public final class SyncCoordinator {
                     unattendedOperation: cursors == nil ? nil : unattendedOperation,
                     agentCatalog: cursors == nil ? nil : agentCatalog,
                     routingPolicy: cursors == nil ? nil : routingPolicy,
+                    usagePools: cursors == nil ? [] : usagePools,
                     runTimelines: cursors == nil
                         ? [] : timelinesByRunID.keys.sorted().compactMap { timelinesByRunID[$0] },
                     tasks: cursors == nil ? [] : tasks,

@@ -60,6 +60,8 @@ public struct CachedState: Codable, Equatable, Sendable {
     public var agentCatalog: Components.Schemas.AgentCatalog?
     /// The routing policy as of `cursors`; nil when none was ever set.
     public var routingPolicy: Components.Schemas.RoutingPolicySnapshot?
+    /// Every usage pool's record as of `cursors`.
+    public var usagePools: [Components.Schemas.UsagePoolSnapshot]
     public var runTimelines: [Components.Schemas.RunTimeline]
     public var tasks: [Components.Schemas.TaskSnapshot]
     public var taskTimelines: [Components.Schemas.TaskTimeline]
@@ -91,6 +93,7 @@ public struct CachedState: Codable, Equatable, Sendable {
         unattendedOperation: Components.Schemas.UnattendedOperationSnapshot? = nil,
         agentCatalog: Components.Schemas.AgentCatalog? = nil,
         routingPolicy: Components.Schemas.RoutingPolicySnapshot? = nil,
+        usagePools: [Components.Schemas.UsagePoolSnapshot] = [],
         runTimelines: [Components.Schemas.RunTimeline] = [],
         tasks: [Components.Schemas.TaskSnapshot] = [],
         taskTimelines: [Components.Schemas.TaskTimeline] = [],
@@ -114,6 +117,7 @@ public struct CachedState: Codable, Equatable, Sendable {
         self.unattendedOperation = unattendedOperation
         self.agentCatalog = agentCatalog
         self.routingPolicy = routingPolicy
+        self.usagePools = usagePools
         self.runTimelines = runTimelines
         self.tasks = tasks
         self.taskTimelines = taskTimelines
@@ -150,6 +154,9 @@ public struct CachedState: Codable, Equatable, Sendable {
             Components.Schemas.AgentCatalog.self, forKey: .agentCatalog)
         routingPolicy = try container.decodeIfPresent(
             Components.Schemas.RoutingPolicySnapshot.self, forKey: .routingPolicy)
+        usagePools =
+            try container.decodeIfPresent(
+                [Components.Schemas.UsagePoolSnapshot].self, forKey: .usagePools) ?? []
         runTimelines =
             try container.decodeIfPresent(
                 [Components.Schemas.RunTimeline].self, forKey: .runTimelines) ?? []
@@ -214,10 +221,11 @@ public struct DiskCacheStore: CacheStore {
     /// an unchanged revision skip the bootstrap that supplies it, so a
     /// stopped daemon would show no indicator. 7: the routing policy joined,
     /// for the same reason: a format 6 cursor would skip the bootstrap that
-    /// supplies it and show no policy where one is set. A pre-current cache
-    /// cannot claim freshness while durable rows from a newer client surface
-    /// are absent.
-    static let format = 7
+    /// supplies it and show no policy where one is set. 8: the usage pools
+    /// joined, for the same reason: a format 7 cursor would show no pools
+    /// until a write moved the revision. A pre-current cache cannot claim
+    /// freshness while durable rows from a newer client surface are absent.
+    static let format = 8
 
     private struct CacheFile: Codable {
         var format: Int
@@ -238,16 +246,17 @@ public struct DiskCacheStore: CacheStore {
         switch file.format {
         case Self.format:
             return file.state
-        case 2, 3, 4, 5, 6:
-            // Formats 2 to 6 already carried retryable commands, but predate
+        case 2, 3, 4, 5, 6, 7:
+            // Formats 2 to 7 already carried retryable commands, but predate
             // later durable read surfaces. Keep only the epoch-independent
             // client state: the ledger, because losing a command ID could
             // duplicate an operator decision after relaunch, and the
             // telemetry queue and its registration (absent before format 4),
             // because a queued event should drain rather than vanish. A
             // format 5 file may also hold unsettled task submissions and
-            // stops, which are the same kind of state. Their cursors cannot
-            // scope an incomplete cache.
+            // stops, and a format 7 file an unsettled routing change, which
+            // are the same kind of state. Their cursors cannot scope an
+            // incomplete cache.
             return CachedState(
                 cursors: nil,
                 attentionItems: [],
@@ -256,6 +265,8 @@ public struct DiskCacheStore: CacheStore {
                 submissionDaemonID: file.state.submissionDaemonID,
                 pendingTaskStops: file.state.pendingTaskStops,
                 stopDaemonID: file.state.stopDaemonID,
+                pendingRoutingPolicyChange: file.state.pendingRoutingPolicyChange,
+                routingDaemonID: file.state.routingDaemonID,
                 comprehensionQueue: file.state.comprehensionQueue,
                 comprehensionSequence: file.state.comprehensionSequence,
                 registeredCapabilityFingerprint: file.state.registeredCapabilityFingerprint,
