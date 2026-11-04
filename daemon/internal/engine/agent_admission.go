@@ -218,6 +218,14 @@ func resolveLineAgent(
 	if err != nil {
 		return RoleAgent{}, err
 	}
+	var counterpart *domain.LineupSelection
+	if taskLine.Source == domain.TaskLineSourceTriage {
+		escalated, err := triageCounterpart(tree, line, taskLine)
+		if err != nil {
+			return RoleAgent{}, fmt.Errorf("task line %s: %w", taskLine.ID, err)
+		}
+		counterpart = &escalated
+	}
 	// Refuse by the line's id, never the name it holds. That name is text an
 	// operator typed, and a credential pasted there can pass the name grammar.
 	// Once the tree holds the agent, the name is the tree's own, so later
@@ -229,6 +237,12 @@ func resolveLineAgent(
 	if err != nil {
 		return RoleAgent{}, fmt.Errorf("task line %s: %w", taskLine.ID, err)
 	}
+	// The escalated line pins the counterpart's digest as the primary line
+	// pins its agent's, and the triage line's authority is that line's.
+	if counterpart != nil && counterpart.AgentDigest != agent.Resolved.Definition.Digest {
+		return RoleAgent{}, fmt.Errorf("task line %s: the escalated line selects agent digest %s, the tree resolves %s",
+			taskLine.ID, counterpart.AgentDigest, agent.Resolved.Definition.Digest)
+	}
 	// A task line names no digest to match (step 2, selected): it names the
 	// agent, and the binding records the digest the tree resolves now.
 	line.AgentName, line.AgentDigest = taskLine.Agent, agent.Resolved.Definition.Digest
@@ -237,6 +251,36 @@ func resolveLineAgent(
 		return RoleAgent{}, err
 	}
 	return agent, nil
+}
+
+// triageCounterpart is the Tier A half of a triage line's anchor that needs
+// the tree: the line's agent must be the escalated counterpart the current
+// lineup names for the specifier's lineup agent. It is re-read from the
+// lineup at every admission, never trusted from the row, so a lineup edit
+// that drops or changes the counterpart refuses a line written before it.
+// The other half, the line's own task and its triage record, is
+// anchorTaskLine's. The router's walk (#2393) is not built, so the lineup
+// agent's counterpart is the only one checked; the triage unit (#2511)
+// extends this to the routed agent.
+func triageCounterpart(
+	tree agenttree.Tree, line domain.LineupSelection, taskLine domain.TaskLine,
+) (domain.LineupSelection, error) {
+	lineup, err := tree.ResolveLineup()
+	if err != nil {
+		return domain.LineupSelection{}, err
+	}
+	counterpart, ok := lineup.EscalatedCounterpart(taskLine.Role, line.AgentName)
+	if !ok {
+		return domain.LineupSelection{}, fmt.Errorf("the lineup names no escalated counterpart for %s's agent %s",
+			taskLine.Role, line.AgentName)
+	}
+	// The refusal names neither agent the row holds: a refusal is stored,
+	// and only the tree's names are safe to print.
+	if counterpart.AgentName != taskLine.Agent {
+		return domain.LineupSelection{}, fmt.Errorf("it names an agent other than %s, the escalated counterpart of %s",
+			counterpart.AgentName, line.AgentName)
+	}
+	return counterpart, nil
 }
 
 // Selection is the selection source that chose the agent and the record an
@@ -339,7 +383,10 @@ func RunTaskLine(
 // name this task. Submission lines must be set at task creation and name the
 // agent their command recorded for the role; proposal lines must be set at
 // the recorded decision's instant; a changed line at its change's. A router
-// line is refused until its router exists (#2393).
+// line is refused until its router exists (#2393). A triage line sets only
+// the specifier, cites its own task, and that task's triage record must
+// exist and have escalated; resolveLineAgent holds its agent to the
+// lineup's escalated counterpart (triageCounterpart).
 //
 // A submission or change record stores what the operator chose, so those arms
 // bind the agent. A proposal line rests on a real operator action on this
@@ -429,9 +476,23 @@ func anchorTaskLine(ctx context.Context, tx *store.ReadTx, line domain.TaskLine)
 		// and the anchor that holds it to its routing decision, is #2393.
 		return errors.New("nothing routes a task line yet (#2393)")
 	case domain.TaskLineSourceTriage:
-		// Refused until admission anchors a triage line to its task's
-		// triage record and the lineup's escalated counterpart.
-		return errors.New("triage lines are not anchored yet")
+		if line.Role != domain.RoleSpecifier {
+			return fmt.Errorf("a triage line sets only the specifier, not the %s", line.Role)
+		}
+		if line.SetBy != string(line.TaskID) {
+			return errors.New("a triage line cites its own task's triage record, and this one cites another")
+		}
+		record, found, err := tx.GetTaskTriage(ctx, line.TaskID)
+		if err != nil {
+			return err
+		}
+		if !found {
+			return errors.New("its task has no triage record")
+		}
+		if !record.Escalated {
+			return errors.New("its task's triage record did not escalate")
+		}
+		return nil
 	case domain.TaskLineSourceCLILineChange, domain.TaskLineSourceClientLineChange:
 		change, err := tx.GetTaskLineChange(ctx, domain.Digest(line.SetBy))
 		if err != nil {
