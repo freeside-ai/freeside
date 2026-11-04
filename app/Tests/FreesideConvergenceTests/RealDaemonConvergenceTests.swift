@@ -82,7 +82,7 @@ struct RealDaemonConvergenceTests {
         }
 
         // The same lines in another order are the same request; changed
-        // lines under the command id are refused, as the mock does.
+        // lines under the command id are refused 400, as the mock does.
         let replay = try await device.client.submitCommand(body: .json(command(lines.reversed()))).ok.body.json
         #expect(replay.record == created.record)
         let changed = lines.map { Components.Schemas.TaskLineInput(role: $0.role, agent: "claude-primary") }
@@ -91,7 +91,7 @@ struct RealDaemonConvergenceTests {
             Issue.record("expected changed lines to be refused")
             return
         }
-        #expect((400..<500).contains(status))
+        #expect(status == 400)
     }
 
     @Test func stopTaskAcceptanceReplayAndStaleBinding() async throws {
