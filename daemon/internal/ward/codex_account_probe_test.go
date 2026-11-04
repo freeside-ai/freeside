@@ -100,8 +100,8 @@ func codexAccountFieldsValid(c codexAccountCapture) bool {
 func codexAccountAnalyze(c codexAccountCapture, control bool, requests []string, failures int) string {
 	refresh := false
 	for _, label := range requests {
-		if label != "blocked_refresh" && label != "blocked_other" && label != "connection_closed" && label != "handshake_closed" && label != "auth_handshake_closed" &&
-			label != "transport_failed" && label != "tls_failed" && label != "http_decode_failed" {
+		if label != "blocked_refresh" && label != "blocked_other" && label != "connection_closed" && label != "auth_connection_closed" &&
+			label != "handshake_closed" && label != "auth_handshake_closed" && label != "transport_failed" && label != "tls_failed" && label != "http_decode_failed" {
 			return "probe_failed"
 		}
 		refresh = refresh || label == "blocked_refresh"
@@ -221,7 +221,8 @@ func (p *codexAccountProxy) record(label string) {
 	// Denying an ancillary route is the intended measurement policy. It is
 	// not a broken proxy. Missing answers and actual transport errors are
 	// assessed separately, so background traffic cannot hide a proven refresh.
-	if label == "transport_failed" || label == "tls_failed" || label == "http_decode_failed" || label == "auth_handshake_closed" {
+	if label == "transport_failed" || label == "tls_failed" || label == "http_decode_failed" ||
+		label == "auth_handshake_closed" || label == "auth_connection_closed" {
 		p.failures++
 	}
 }
@@ -265,19 +266,24 @@ func (p *codexAccountProxy) serve(w http.ResponseWriter, r *http.Request) {
 	}
 	secure := tls.Server(conn, &tls.Config{Certificates: []tls.Certificate{p.certificate}, MinVersion: tls.VersionTLS12})
 	// The pinned CLI abandons handshakes routinely, as EOF or as a reset when
-	// the proxy's flight was still unread (devlog
-	// 2026-11-03-0829-codex-account-handshake-hangups.md). A hang-up sent no
-	// request, but on the auth host the request it meant to send could have
-	// been a refresh, so it counts against the measurement there. Any other
-	// handshake error, such as the CLI rejecting the test CA, stays tls_failed.
+	// the proxy's flight was still unread, and it can close an established
+	// tunnel without sending anything (devlog
+	// 2026-11-03-0829-codex-account-handshake-hangups.md). Either close sent
+	// no request, but on the auth host the request it meant to send could
+	// have been a refresh, so it counts against the measurement there, as in
+	// the usage probe. Any other handshake error, such as the CLI rejecting
+	// the test CA, stays tls_failed.
+	closed := func(label string) {
+		if r.Host == "auth.openai.com:443" {
+			label = "auth_" + label
+		}
+		p.record(label)
+	}
 	if err := secure.Handshake(); err != nil {
-		switch {
-		case !errors.Is(err, io.EOF) && !errors.Is(err, io.ErrUnexpectedEOF) && !errors.Is(err, syscall.ECONNRESET):
+		if errors.Is(err, io.EOF) || errors.Is(err, io.ErrUnexpectedEOF) || errors.Is(err, syscall.ECONNRESET) {
+			closed("handshake_closed")
+		} else {
 			p.record("tls_failed")
-		case r.Host == "auth.openai.com:443":
-			p.record("auth_handshake_closed")
-		default:
-			p.record("handshake_closed")
 		}
 		return
 	}
@@ -286,7 +292,7 @@ func (p *codexAccountProxy) serve(w http.ResponseWriter, r *http.Request) {
 	// return EOF after consuming an unterminated first line; that is a broken
 	// measurement, not an idle connection.
 	if _, err := reader.Peek(1); errors.Is(err, io.EOF) {
-		p.record("connection_closed")
+		closed("connection_closed")
 		return
 	}
 	request, err := http.ReadRequest(reader)
@@ -341,15 +347,23 @@ func TestCodexAccountProxy(t *testing.T) {
 }
 
 func TestCodexAccountProxyClosedConnection(t *testing.T) {
-	for _, fragment := range []string{"", "POST /oauth/", strings.Repeat("P", 8192)} {
-		t.Run(map[bool]string{false: "idle", true: "partial request"}[fragment != ""], func(t *testing.T) {
+	for _, tc := range []struct {
+		name, authority, fragment, want string
+		failures                        int
+	}{
+		{"idle", "chatgpt.com:443", "", "connection_closed", 0},
+		{"idle on the auth host", "auth.openai.com:443", "", "auth_connection_closed", 1},
+		{"partial request", "chatgpt.com:443", "POST /oauth/", "http_decode_failed", 1},
+		{"partial long request", "chatgpt.com:443", strings.Repeat("P", 8192), "http_decode_failed", 1},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
 			p := newCodexAccountProxy(t, "127.0.0.0/8")
 			conn, err := net.Dial("tcp", p.server.Listener.Addr().String())
 			if err != nil {
 				t.Fatal(err)
 			}
 			defer func() { _ = conn.Close() }()
-			if _, err := io.WriteString(conn, "CONNECT chatgpt.com:443 HTTP/1.1\r\nHost: chatgpt.com:443\r\n\r\n"); err != nil {
+			if _, err := io.WriteString(conn, "CONNECT "+tc.authority+" HTTP/1.1\r\nHost: "+tc.authority+"\r\n\r\n"); err != nil {
 				t.Fatal(err)
 			}
 			if _, err := http.ReadResponse(bufio.NewReader(conn), nil); err != nil {
@@ -357,25 +371,23 @@ func TestCodexAccountProxyClosedConnection(t *testing.T) {
 			}
 			roots := x509.NewCertPool()
 			roots.AppendCertsFromPEM(p.ca)
-			secure := tls.Client(conn, &tls.Config{RootCAs: roots, ServerName: "chatgpt.com", MinVersion: tls.VersionTLS12})
+			host, _, err := net.SplitHostPort(tc.authority)
+			if err != nil {
+				t.Fatal(err)
+			}
+			secure := tls.Client(conn, &tls.Config{RootCAs: roots, ServerName: host, MinVersion: tls.VersionTLS12})
 			if err := secure.Handshake(); err != nil {
 				t.Fatal(err)
 			}
-			if fragment != "" {
-				if _, err := io.WriteString(secure, fragment); err != nil {
-					t.Fatal(err)
-				}
+			if _, err := io.WriteString(secure, tc.fragment); err != nil {
+				t.Fatal(err)
 			}
 			_ = secure.Close()
 			p.wg.Wait()
 			p.mu.Lock()
 			defer p.mu.Unlock()
-			want, wantFailures := "connection_closed", 0
-			if fragment != "" {
-				want, wantFailures = "http_decode_failed", 1
-			}
-			if len(p.requests) != 1 || p.requests[0] != want || p.failures != wantFailures {
-				t.Fatal("idle close and partial request were conflated")
+			if !slices.Equal(p.requests, []string{tc.want}) || p.failures != tc.failures {
+				t.Fatalf("labels %q failures %d", p.requests, p.failures)
 			}
 		})
 	}
@@ -447,8 +459,11 @@ func TestCodexAccountVerdicts(t *testing.T) {
 		{name: "refresh with other transport failure", want: "fail", requests: []string{"blocked_refresh", "tls_failed"}, failures: 1},
 		{name: "read despite handshake hang-up", want: "pass", requests: []string{"blocked_other", "handshake_closed"}},
 		{name: "auth host hung up", want: "probe_failed", requests: []string{"auth_handshake_closed"}, failures: 1},
+		{name: "read despite idle close", want: "pass", requests: []string{"blocked_other", "connection_closed"}},
+		{name: "auth host closed idle", want: "probe_failed", requests: []string{"auth_connection_closed"}, failures: 1},
 		{name: "control", want: "pass", control: true, requests: []string{"blocked_refresh"}},
 		{name: "detector proved despite auth host hang-up", want: "pass", control: true, requests: []string{"blocked_refresh", "auth_handshake_closed"}, failures: 1},
+		{name: "detector proved despite auth host idle close", want: "pass", control: true, requests: []string{"blocked_refresh", "auth_connection_closed"}, failures: 1},
 		{name: "detector proved with other transport failure", want: "pass", control: true, requests: []string{"blocked_refresh", "tls_failed"}, failures: 1},
 		{name: "control did not answer", want: "probe_failed", control: true, requests: []string{"blocked_refresh"}, mutate: func(c *codexAccountCapture) { c.Answered = false }},
 		{name: "missing control", want: "probe_failed", control: true},

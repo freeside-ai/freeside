@@ -352,7 +352,11 @@ the proxy labels that `handshake_closed`, which is not a transport error; on
 `auth.openai.com` it is `auth_handshake_closed` and counts, because the
 abandoned request could have been a refresh. Every other handshake error stays
 `tls_failed` and counts
-(`devlog/2026-11-03-0829-codex-account-handshake-hangups.md`).
+(`devlog/2026-11-03-0829-codex-account-handshake-hangups.md`). An idle close
+after the handshake, with no request sent, follows the same split:
+`connection_closed` on `chatgpt.com` doesn't count, and
+`auth_connection_closed` on `auth.openai.com` counts for the same reason
+(`devlog/2026-11-04-0928-codex-account-auth-idle-close.md`).
 
 Fresh resources have random names and ownership labels. Cleanup verifies
 labels and creation dates. A private recovery manifest survives failed
