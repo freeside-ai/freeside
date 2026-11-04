@@ -65,10 +65,12 @@ public final class NavigationModel {
         case rows
         case devices
         case routing
+        case usage
     }
 
     /// The Settings sheet's presentation flag, shared by the toolbar buttons
-    /// and the `-FreesideDevices` and `-FreesideRouting` launch arguments.
+    /// and the `-FreesideDevices`, `-FreesideRouting`, and `-FreesideUsage`
+    /// launch arguments.
     public var settingsPresented: Bool
     /// The page the sheet opens on: a launch argument alone asks for one
     /// other than the rows, so a capture needs no click. `openSettings`
@@ -84,7 +86,9 @@ public final class NavigationModel {
     public init(launchInputs: LaunchInputs) {
         path = []
         let opensOn: SettingsPage =
-            launchInputs.devicesPresented ? .devices : launchInputs.routingPresented ? .routing : .rows
+            launchInputs.devicesPresented
+            ? .devices
+            : launchInputs.routingPresented ? .routing : launchInputs.usagePresented ? .usage : .rows
         settingsOpensOn = opensOn
         settingsPresented = opensOn != .rows
         // `LaunchInputs` leaves the composer nil without an item selection.

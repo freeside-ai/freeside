@@ -66,6 +66,9 @@ public struct LaunchInputs {
     /// `-FreesideRouting YES`: the Settings sheet is open on the routing
     /// policy at launch. `-FreesideDevices` wins when both are set.
     public let routingPresented: Bool
+    /// `-FreesideUsage YES`: the Settings sheet is open on account usage at
+    /// launch. `-FreesideDevices` and `-FreesideRouting` win when set.
+    public let usagePresented: Bool
 
     /// `-FreesideComposer <action>`: the selected inbox item's composer for
     /// that action is presented at launch, so a capture of the sheet needs no
@@ -80,7 +83,7 @@ public struct LaunchInputs {
         colorSchemeRaw: String?, contrastRaw: String? = nil, selectionRaw: String?,
         projectIDRaw: String? = nil, detailsExpanded: Bool = false,
         dynamicTypeSizeRaw: String? = nil, devicesPresented: Bool = false,
-        routingPresented: Bool = false, composerRaw: String? = nil
+        routingPresented: Bool = false, usagePresented: Bool = false, composerRaw: String? = nil
     ) {
         self.colorSchemeRaw = colorSchemeRaw
         contrast = Contrast(rawValue: contrastRaw ?? "")
@@ -94,6 +97,7 @@ public struct LaunchInputs {
         self.detailsExpanded = detailsExpanded
         self.devicesPresented = devicesPresented
         self.routingPresented = routingPresented
+        self.usagePresented = usagePresented
         switch Self.resolveComposer(composerRaw, selection: selection) {
         case .resolved(let resolved):
             composer = resolved
@@ -156,6 +160,7 @@ public struct LaunchInputs {
             dynamicTypeSizeRaw: defaults.string(forKey: "FreesideDynamicType"),
             devicesPresented: defaults.bool(forKey: "FreesideDevices"),
             routingPresented: defaults.bool(forKey: "FreesideRouting"),
+            usagePresented: defaults.bool(forKey: "FreesideUsage"),
             composerRaw: defaults.string(forKey: "FreesideComposer"))
     }
 

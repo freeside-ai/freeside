@@ -233,6 +233,7 @@ public struct FreesideRootView: View {
                         if case .needsPairing = session.phase { navigation.settingsPresented = false }
                     }),
                 routing: RoutingPolicyModel(coordinator: coordinator),
+                usage: AccountUsageModel(coordinator: coordinator),
                 opensOn: navigation.settingsOpensOn,
                 unresolvedActionCount: pendingUnderOldPairing,
                 projects: coordinator.unifiedList.knownProjects,

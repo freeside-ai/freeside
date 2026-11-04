@@ -65,6 +65,18 @@ import Testing
         #expect(navigation.settingsOpensOn == .routing)
     }
 
+    @Test func theUsageLaunchOpensSettingsOnAccountUsageUnlessAnotherPageIsAsked() {
+        let navigation = NavigationModel(
+            launchInputs: LaunchInputs(colorSchemeRaw: nil, selectionRaw: nil, usagePresented: true))
+        #expect(navigation.settingsPresented)
+        #expect(navigation.settingsOpensOn == .usage)
+
+        let routing = NavigationModel(
+            launchInputs: LaunchInputs(
+                colorSchemeRaw: nil, selectionRaw: nil, routingPresented: true, usagePresented: true))
+        #expect(routing.settingsOpensOn == .routing)
+    }
+
     @Test func aLaunchComposerIsOfferedToItsItemUntilConsumed() {
         let navigation = NavigationModel(
             launchInputs: LaunchInputs(

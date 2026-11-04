@@ -43,6 +43,19 @@ import Testing
         #expect(try pool(coordinator, UsageFixtures.readingPoolID).entity_version == before.entity_version + 1)
     }
 
+    @Test func theSettingsRowSummarizesThePoolsOrAnUnansweredCommand() async throws {
+        let server = MockServer()
+        let model = AccountUsageModel(coordinator: await coordinator(server))
+        #expect(SettingsSheet.usageSummary(model) == "3 pools")
+        let empty = AccountUsageModel(coordinator: await coordinator(MockServer(usagePools: [])))
+        #expect(SettingsSheet.usageSummary(empty) == "No pools")
+        await server.setBeforeRespond { operation in
+            if operation == "submitCommand" { throw MockServer.ForcedStatus(503) }
+        }
+        await model.refresh(pool: UsageFixtures.readingPoolID)
+        #expect(SettingsSheet.usageSummary(model) == "Unconfirmed")
+    }
+
     // MARK: Refresh
 
     @Test func anAcceptedRefreshSaysItWasRequestedAndReadingsArriveThroughSync() async throws {
@@ -366,6 +379,43 @@ import Testing
         // After a reassignment the refusal outlives the readings.
         pool.windows = []
         #expect(UsageDisplay.windows(pool) == ["seven_day_opus"])
+    }
+
+    @Test func aMarkShowsItsResetUnlessTheReadingAlreadyDoes() throws {
+        var pool = try #require(UsageFixtures.defaultUsagePools().first).pool
+        let reset = Self.base.addingTimeInterval(600)
+        pool.windows = [reading("seven_day", status: .exhausted)]
+        pool.windows[0].resets_at = reset
+        let derived = Components.Schemas.UsageExhaustedMark(
+            window: "seven_day", source: .usage_reading, reading_observed_at: Self.base, resets_at: reset,
+            set_at: Self.base)
+        let refusal = Components.Schemas.UsageExhaustedMark(
+            window: "seven_day", source: .provider_refusal, invocation_id: "invocation",
+            resets_at: Self.base.addingTimeInterval(1_200), set_at: Self.base)
+        pool.recorded_exhausted_marks = [derived, refusal]
+        // The derived mark repeats the reading's reset; the refusal's is later.
+        #expect(UsageDisplay.uncoveredMarks(window: "seven_day", in: pool, now: Self.base) == [refusal])
+        // A reading with no reset covers neither.
+        pool.windows[0].resets_at = nil
+        #expect(UsageDisplay.uncoveredMarks(window: "seven_day", in: pool, now: Self.base) == [derived, refusal])
+        // A lapsed mark is not shown, and with no reading every live mark is.
+        #expect(UsageDisplay.uncoveredMarks(window: "seven_day", in: pool, now: reset) == [refusal])
+        pool.windows = []
+        #expect(UsageDisplay.uncoveredMarks(window: "seven_day", in: pool, now: Self.base) == [derived, refusal])
+    }
+
+    @Test func aNoticeNamesTheCommandRetryResends() async throws {
+        let server = MockServer()
+        let coordinator = await coordinator(server)
+        let model = AccountUsageModel(coordinator: coordinator)
+        await server.setBeforeRespond { operation in
+            if operation == "submitCommand" { throw MockServer.ForcedStatus(503) }
+        }
+        await model.reassign(pool: UsageFixtures.readingPoolID, to: UsageFixtures.readingSecondEnrollmentID)
+        let pending = try #require(model.pending)
+        #expect(
+            AccountUsageView.describe(pending)
+                == "making \(UsageFixtures.readingSecondEnrollmentID) the collector for \(UsageFixtures.readingPoolID)")
     }
 
     @Test func knownWindowsHaveWordsAndOthersShowTheirId() {

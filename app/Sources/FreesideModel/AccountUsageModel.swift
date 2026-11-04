@@ -184,6 +184,20 @@ package enum UsageDisplay {
         marks.contains { $0.window == window && ($0.resets_at.map { now < $0 } ?? true) }
     }
 
+    /// The window's live marks whose reset the reading doesn't already show:
+    /// a refusal can outlive the readings (a reassignment clears them), or
+    /// name a reset the reading lacks or has passed, and then its own reset
+    /// is the one the record holds.
+    package static func uncoveredMarks(
+        window: String, in pool: Components.Schemas.UsagePoolUsage, now: Date
+    ) -> [Components.Schemas.UsageExhaustedMark] {
+        let reading = pool.windows.first { $0.window == window }
+        return pool.recorded_exhausted_marks.filter { mark in
+            mark.window == window && isExhausted(window: window, marks: [mark], now: now)
+                && !(reading != nil && mark.resets_at == reading?.resets_at)
+        }
+    }
+
     /// Every window the record names, by a reading or a mark, in window
     /// order: a refusal can mark a window the collector hasn't read.
     package static func windows(_ pool: Components.Schemas.UsagePoolUsage) -> [String] {
