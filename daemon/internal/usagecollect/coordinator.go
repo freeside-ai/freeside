@@ -382,7 +382,8 @@ func Reassign(
 
 // ReassignTx is Reassign in the caller's transaction, so the record commits
 // with whatever else the caller writes. It writes nothing when the pool
-// already has collector.
+// already has collector, and refuses an enrollment not on the pool with
+// store.ErrEnrollmentNotOnPool whatever the stored record's stamp.
 func ReassignTx(
 	ctx context.Context, tx *store.WriteTx, pool domain.UsagePoolID, collector domain.ClientEnrollmentID, at time.Time,
 ) (Reassignment, error) {
@@ -393,6 +394,12 @@ func ReassignTx(
 		if record.Collector == collector {
 			return result, nil
 		}
+		// Membership first: the write checks revision order before it
+		// reaches its own membership check, so a newer stored record would
+		// report a stale write in place of the real refusal.
+		err = tx.RequireEnrollmentOnPool(ctx, pool, collector)
+	}
+	if err == nil {
 		err = tx.RecordPoolUsageObservation(ctx, reassigned(record, collector), at)
 	}
 	if err != nil {

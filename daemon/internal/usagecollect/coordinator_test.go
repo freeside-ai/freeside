@@ -467,6 +467,26 @@ func TestReassignTxWritesInTheCallersTransaction(t *testing.T) {
 	})
 }
 
+// TestReassignOffThePoolIsRefusedBeforeTheRevisionCheck covers an
+// enrollment on another pool named with a stamp older than the stored
+// record: the refusal names the pool, not a stale write, and the record
+// stays as it was.
+func TestReassignOffThePoolIsRefusedBeforeTheRevisionCheck(t *testing.T) {
+	t.Parallel()
+	synctest.Test(t, func(t *testing.T) {
+		f := newFixture(t)
+		f.refresh(sharedPool)
+
+		earlier := time.Now().UTC().Add(-time.Second)
+		if _, err := Reassign(context.Background(), f.st, sharedPool, enrollOther, earlier); !errors.Is(err, store.ErrEnrollmentNotOnPool) {
+			t.Fatalf("reassign off the pool with an earlier stamp = %v, want ErrEnrollmentNotOnPool", err)
+		}
+		if record := f.record(sharedPool); record.Collector != enrollFirst {
+			t.Fatalf("collector after the refusal = %s, want %s", record.Collector, enrollFirst)
+		}
+	})
+}
+
 // TestReassignmentDuringACollectionDiscardsIt covers a collector changed while
 // the old one was asked: its answer is discarded and the new one collects.
 func TestReassignmentDuringACollectionDiscardsIt(t *testing.T) {
