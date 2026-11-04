@@ -1969,14 +1969,19 @@ func (e *Engine) recordProductionDeliveryRefusal(
 			// The store derives the task binding, decision surface, and
 			// recommendation on write, and delivery receipts change timing
 			// under the same version, so a rebuilt item never carries them;
-			// compare against the stored values. Every other field still
-			// fails closed.
+			// compare against the stored values. The display names are
+			// derived too: the store keeps the item's stored project label
+			// when a repository rename or a late projects row changes the
+			// current one (#1535, #1537, #2495). The task label already
+			// agrees, because reads project the current task name. Every
+			// other field still fails closed.
 			if want.Subject.TaskID == nil {
 				want.Subject.TaskID = item.Subject.TaskID
 			}
 			want.DecisionSurface = item.DecisionSurface
 			want.Recommendation = item.Recommendation
 			want.Timing = item.Timing
+			want.DisplayNames = item.DisplayNames
 			if !reflect.DeepEqual(item, want) {
 				return domain.ErrImmutableTransition
 			}

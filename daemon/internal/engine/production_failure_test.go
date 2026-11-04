@@ -46,7 +46,19 @@ func newFailedImplementationFixture(t *testing.T, outcome execfake.Outcome, summ
 // RunningInspects to model the driver reporting running before the terminal.
 func newFailedImplementationFixtureScript(t *testing.T, script execfake.StageScript) failedImplementationFixture {
 	t.Helper()
-	return newFailedImplementationFixtureCore(t, script, false)
+	return newFailedImplementationFixtureCore(t, script, false, failedImplementationSpecification)
+}
+
+// newUntitledFailedImplementationFixture is newFailedImplementationFixture
+// with a specification body that has no leading title. Such a body gives the
+// task no permanent specification-sourced name, so SetTaskName can still
+// rename it.
+func newUntitledFailedImplementationFixture(t *testing.T, outcome execfake.Outcome, summary string) failedImplementationFixture {
+	t.Helper()
+	return newFailedImplementationFixtureCore(t, execfake.StageScript{
+		Outcome: outcome,
+		Result:  exec.StageResult{Summary: summary},
+	}, false, "Implement the bounded workflow.")
 }
 
 // newFailedImplementationCampaignFixtureScript is the campaign variant: the
@@ -54,11 +66,15 @@ func newFailedImplementationFixtureScript(t *testing.T, script execfake.StageScr
 // it, so the run can have a next attempt.
 func newFailedImplementationCampaignFixtureScript(t *testing.T, script execfake.StageScript) failedImplementationFixture {
 	t.Helper()
-	return newFailedImplementationFixtureCore(t, script, true)
+	return newFailedImplementationFixtureCore(t, script, true, failedImplementationSpecification)
 }
 
+// failedImplementationSpecification is the fixtures' default specification
+// body. Its leading heading names the task permanently.
+const failedImplementationSpecification = "# Specification\n\nImplement the bounded workflow."
+
 func newFailedImplementationFixtureCore(
-	t *testing.T, script execfake.StageScript, campaign bool,
+	t *testing.T, script execfake.StageScript, campaign bool, specification string,
 ) failedImplementationFixture {
 	t.Helper()
 	f := newSpecificationFixture(t, false, 4)
@@ -72,7 +88,7 @@ func newFailedImplementationFixtureCore(
 	}
 	if err := specifyfake.Script(driver, specificationInvocationID(specRunID, 1), 0, 0,
 		specify.Output{Specification: &specify.Specification{
-			Summary: "The implementation plan is ready.", Body: "# Specification\n\nImplement the bounded workflow.",
+			Summary: "The implementation plan is ready.", Body: specification,
 			Addressals: []specify.Addressal{},
 		}}); err != nil {
 		t.Fatal(err)
@@ -449,6 +465,138 @@ func TestProductionDeliveryRefusalReplayConvergesOnLegacyItem(t *testing.T) {
 	}
 	after, _ := f.item(t, f.failureItemID())
 	assertSameItemJSON(t, before, after)
+}
+
+// TestProductionDeliveryRefusalReplayConvergesAfterProjectRename: the store
+// keeps an item's stored project label when a repository rename changes the
+// projects row (#1537), so a replay that rebuilds the item under the new name
+// must still converge on the stored body (#2495).
+func TestProductionDeliveryRefusalReplayConvergesAfterProjectRename(t *testing.T) {
+	f := newFailedImplementationFixture(t, execfake.OutcomeFail, "unused")
+	stage, ok := findProductionStage(f.run)
+	if !ok {
+		t.Fatal("run has no production stage")
+	}
+	const summary = "rendered prompt exceeds limit"
+	if err := f.engine.recordProductionDeliveryRefusal(
+		t.Context(), f.run, stage, f.attempt.InvocationID, summary,
+	); err != nil {
+		t.Fatal(err)
+	}
+	before, _ := f.item(t, f.failureItemID())
+	renameRunProject(t, f)
+	if err := f.engine.recordProductionDeliveryRefusal(
+		t.Context(), f.run, stage, f.attempt.InvocationID, summary,
+	); err != nil {
+		t.Fatalf("replayed delivery refusal after a project rename = %v, want nil", err)
+	}
+	after, _ := f.item(t, f.failureItemID())
+	assertSameItemJSON(t, before, after)
+}
+
+// TestProductionDeliveryRefusalReplayConvergesAfterTaskRename: a task rename
+// changes the derived task label after the item is written. The store
+// projects the current name on read, so a replay must still converge (#2495).
+func TestProductionDeliveryRefusalReplayConvergesAfterTaskRename(t *testing.T) {
+	f := newUntitledFailedImplementationFixture(t, execfake.OutcomeFail, "unused")
+	stage, ok := findProductionStage(f.run)
+	if !ok {
+		t.Fatal("run has no production stage")
+	}
+	const summary = "rendered prompt exceeds limit"
+	if err := f.engine.recordProductionDeliveryRefusal(
+		t.Context(), f.run, stage, f.attempt.InvocationID, summary,
+	); err != nil {
+		t.Fatal(err)
+	}
+	renameRunTask(t, f.store, f.run.ID)
+	before, _ := f.item(t, f.failureItemID())
+	if err := f.engine.recordProductionDeliveryRefusal(
+		t.Context(), f.run, stage, f.attempt.InvocationID, summary,
+	); err != nil {
+		t.Fatalf("replayed delivery refusal after a task rename = %v, want nil", err)
+	}
+	after, _ := f.item(t, f.failureItemID())
+	assertSameItemJSON(t, before, after)
+}
+
+// TestProductionDeliveryRefusalReplayFailsClosedOnChangedReason: normalizing
+// the derived labels must not hide a difference in any other field. A stored
+// item whose reason differs from the replay's still refuses the replay, even
+// when its project label differs too.
+func TestProductionDeliveryRefusalReplayFailsClosedOnChangedReason(t *testing.T) {
+	f := newFailedImplementationFixture(t, execfake.OutcomeFail, "unused")
+	stage, ok := findProductionStage(f.run)
+	if !ok {
+		t.Fatal("run has no production stage")
+	}
+	const summary = "rendered prompt exceeds limit"
+	terminal := productionTerminalRecord{
+		InvocationID: f.attempt.InvocationID,
+		RunID:        f.run.ID,
+		StageID:      stage.ID,
+		Status:       exec.StatusFailed,
+		Summary:      "Input delivery was refused before driver start: " + summary,
+	}
+	// Record the outcome the replay itself would record, so the replay passes
+	// the outcome comparison and reaches the item comparison.
+	f.preRecordOutcome(t, domain.ExecutionOutcomeFailed, terminal.Summary)
+	stale := terminal
+	stale.Summary = "Input delivery was refused before driver start: a different reason"
+	if err := f.store.Write(t.Context(), func(tx *store.WriteTx) error {
+		names, err := tx.DisplayNamesFor(t.Context(), f.run.ProjectID, domain.Subject{
+			Type: domain.SubjectRun, ID: domain.SubjectID(f.run.ID), RunID: &f.run.ID,
+		})
+		if err != nil {
+			return err
+		}
+		// No admitted facts, which the replay drops to match, so the reason is
+		// the only field that differs.
+		item, err := productionDeliveryRefusalItem(f.run, stale, f.now.UTC(), &domain.ExecutionFailureFacts{
+			Outcome: domain.ExecutionOutcomeFailed, Cause: domain.FailureCauseUnknown,
+			Stage: domain.StageNameImplementation, InvocationID: f.attempt.InvocationID,
+		}, names)
+		if err != nil {
+			return err
+		}
+		return tx.PutAttentionItem(t.Context(), item)
+	}); err != nil {
+		t.Fatal(err)
+	}
+	before, _ := f.item(t, f.failureItemID())
+	renameRunProject(t, f)
+	err := f.engine.recordProductionDeliveryRefusal(
+		t.Context(), f.run, stage, f.attempt.InvocationID, summary,
+	)
+	if !errors.Is(err, domain.ErrImmutableTransition) {
+		t.Fatalf("replayed delivery refusal over a changed reason = %v, want ErrImmutableTransition", err)
+	}
+	after, _ := f.item(t, f.failureItemID())
+	assertSameItemJSON(t, before, after)
+}
+
+// renameRunProject renames the run's repository under the same repository id,
+// the way a GitHub rename reaches the projects row, and fails the test unless
+// the new name took.
+func renameRunProject(t *testing.T, f failedImplementationFixture) {
+	t.Helper()
+	if err := f.store.Write(t.Context(), func(tx *store.WriteTx) error {
+		project, err := tx.GetProject(t.Context(), f.run.ProjectID)
+		if err != nil {
+			return err
+		}
+		project.Repo += "-renamed"
+		if err := tx.RegisterProject(t.Context(), project); err != nil {
+			return err
+		}
+		renamed, err := tx.GetProject(t.Context(), f.run.ProjectID)
+		if err == nil && renamed.Repo != project.Repo {
+			t.Fatalf("project repo after rename = %q, want %q", renamed.Repo, project.Repo)
+		}
+		return err
+	}); err != nil {
+		t.Fatal(err)
+	}
 }
 
 // assertSameItemJSON compares two items through their JSON encoding, so every
