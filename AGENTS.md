@@ -482,7 +482,8 @@ All under `daemon/`:
   `internal/store/publication_authoring.go` (the evidence gate on
   authored prose).
 - **Import and handoff:** `internal/importer/`,
-  `internal/store/handoff_journal.go`.
+  `internal/store/handoff_journal.go`, `internal/exportscan/` (the export
+  credential scan that refuses a handoff).
 - **Verification verdicts, recipe approval, and trusted export:**
   `internal/verify/`, `internal/export/`, `cmd/freeside-export/`,
   `internal/store/entities.go`,

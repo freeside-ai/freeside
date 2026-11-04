@@ -30,6 +30,7 @@ import (
 	"github.com/freeside-ai/freeside/daemon/internal/exec"
 	"github.com/freeside-ai/freeside/daemon/internal/exec/claude"
 	"github.com/freeside-ai/freeside/daemon/internal/export"
+	"github.com/freeside-ai/freeside/daemon/internal/exportscan"
 	"github.com/freeside-ai/freeside/daemon/internal/importer"
 	"github.com/freeside-ai/freeside/daemon/internal/projectimage"
 	"github.com/freeside-ai/freeside/daemon/internal/publish"
@@ -1706,7 +1707,7 @@ func composeClaudeDriver(
 		// Zero leaves ward's own default in place (config.withDefaults).
 		WriterStopTimeout: cfg.WriterStopTimeout,
 		StallInterval:     cfg.WriterStallInterval,
-		Scanner:           credentialScanner{},
+		Scanner:           exportscan.Scanner{},
 		AuthStoreLeaser:   conformanceLeaser,
 		Journal:           adapters.Journal,
 		Logger:            logger,
