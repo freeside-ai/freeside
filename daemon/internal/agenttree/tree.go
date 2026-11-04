@@ -65,7 +65,8 @@ type Offer struct {
 }
 
 // LineupLine is one line of the lineup file. Key is the part after
-// domain.LineupRoleKeyPrefix: a role name, or "<role>.shadow.<name>".
+// domain.LineupRoleKeyPrefix: a role name, "<role>.shadow.<name>", or
+// "specifier.escalated.<agent>".
 type LineupLine struct {
 	Key       string
 	Selection domain.LineupSelection
@@ -248,7 +249,9 @@ func (t Tree) Agent(name string) (domain.AgentSource, bool) {
 	return domain.AgentSource{}, false
 }
 
-// ResolveLineup applies the lineup contract's key rules to the lineup file.
+// ResolveLineup applies the lineup contract's key rules to the lineup file,
+// then holds every escalated line to the pairing rule against this tree's
+// agents.
 func (t Tree) ResolveLineup() (domain.Lineup, error) {
 	keys := make([]domain.PolicyKey, 0, len(t.Lineup))
 	for _, line := range t.Lineup {
@@ -257,6 +260,9 @@ func (t Tree) ResolveLineup() (domain.Lineup, error) {
 		})
 	}
 	lineup, err := domain.ResolveLineup(keys)
+	if err == nil {
+		err = lineup.CheckEscalatedPairs(t.Agent)
+	}
 	if err != nil {
 		return domain.Lineup{}, fmt.Errorf("lineup: %w", errors.Join(ErrMalformed, err))
 	}
