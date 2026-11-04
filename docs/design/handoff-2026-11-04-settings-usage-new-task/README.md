@@ -60,11 +60,28 @@ Screenshot digests re-recorded per PR for the surfaces it names, both appearance
 
 ## ◆ Gate
 
-Nothing behind a ◆ lands until the owner marks it decided here. Three open; defaults drawn:
+Nothing behind a ◆ lands until the owner marks it decided here. All three decided on 4 Nov; defaults drawn:
 
-1. **General pane** — none drawn. The app stores no preferences today beyond per-device section state (`ListSectionPreferences`, `DecisionSectionPreferences`, `TaskTimelineDisclosurePreferences`). If the owner wants appearance, confirmation or list preferences, they are a separate unit; the source list gains `General` at the top.
-2. **Rename…** — out of scope. The API has no task-rename command; the task namer owns names. If wanted, a contract unit adds the command and `Rename…` joins the task page's More Actions above `Copy all identifiers`.
-3. **iPhone composer presentation** — a sheet with `Cancel` in its bar, as drawn. Alternative: the composer as an editable row at the head of the list (UI Variations I, 3·B).
+1. **General pane** — none drawn. The app stores no preferences today beyond per-device section state (`ListSectionPreferences`, `DecisionSectionPreferences`, `TaskTimelineDisclosurePreferences`). If the owner wants appearance, confirmation or list preferences, they are a separate unit; the source list gains `General` at the top. **Decided 4 Nov (owner):** build it. The General pane holds the one preference the app stores today, the Decision Flow toggle that the Mac's current `⌘,` Settings scene shows (`DecisionFlowSettingsView`, `DecisionFlowPreferences`), so the window keeps it. The source list gains `General` at the top.
+2. **Rename…** — out of scope. The API has no task-rename command; the task namer owns names. If wanted, a contract unit adds the command and `Rename…` joins the task page's More Actions above `Copy all identifiers`. **Decided 4 Nov (owner):** not built. No task-rename command exists and none is filed.
+3. **iPhone composer presentation** — a sheet with `Cancel` in its bar, as drawn. Alternative: the composer as an editable row at the head of the list (UI Variations I, 3·B). **Decided 4 Nov (owner): as drawn.** A sheet with `Cancel` and `Submit` in its bar.
+
+## Decided 4 Nov, after the export
+
+Owner decisions of 4 Nov that are not ◆ items. Each qualifies the text above; the text above is left as exported.
+
+- **Drain-first account.** PR #2563 (closes #2528) adds a drain-first account control to the Routing page; the canvas predates it and does not draw it. The Agents pane carries it as a third row in the Routing group: a popup over the accepted pools, saved through the same path as the role popups.
+- **Agents chip wording.** The chip reads the verb form, `claude-opus writes · codex reviews`, and `AgentChoiceDisplay.summary` changes to it everywhere it is read, including the recovery sheet. Today it returns `Writer claude-opus · Reviewer codex`, so "the writer summary rule is unchanged" under Client behaviour holds for which agents it names, not its wording.
+- **A reading without a percent.** A window whose reading has a quantity and unit but no `used_percent` draws its name and value with no meter.
+
+## Values sync lacks
+
+The canvas draws four things the client does not hold. The Scope line's "every value drawn is one the client already holds" is qualified by this list. None is built by the ledger's units; each is owned as named.
+
+- **The sub-cap share** (` · up to N% of weekly` and the 2pt tick). No field in the API's `UsageWindowReading` carries one window's share of another, and the daemon reads none from a provider. Not built; an open owner question, no unit filed.
+- **The parked count on a used-up window** (` · N runs parked`). It needs the pool of a `usage_pool_exhausted` hold on the synced run. Today that pool lives only in the task timeline (`holdFacts.usage_pool`), which the client loads per task (`SyncCoordinator.taskTimelinesByTaskID`), so the Usage pane cannot count across tasks. #2578 (contract) carries it on the synced run; #2583 draws it.
+- **The daemon's version and start time on iPhone.** They come from the Mac's menu-bar model (`DaemonMenuPanel`), which iPhone lacks, so the iPhone's Daemon pane shows neither.
+- **Notification setup on the Mac.** A device's ntfy subscription is its own credential and only iOS holds one, so the Mac's Notifications pane says setup lives on the iPhone, as today's row does (`SettingsSheet.notificationsSummary`).
 
 ## Still the owner's (do not settle)
 
