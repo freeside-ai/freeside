@@ -84,7 +84,7 @@ func runAuthSetCollectorCommand(ctx context.Context, args []string, stdout, stde
 	if usage := runningUsageCollection(ctx); usage != nil {
 		result, err = usage.SetCollector(ctx, cfg.Pool, cfg.Enrollment)
 	} else {
-		result, err = usagecollect.Reassign(ctx, handle.store, cfg.Pool, cfg.Enrollment, time.Now().UTC())
+		result, err = usagecollect.Reassign(ctx, handle.store, cfg.Pool, cfg.Enrollment, time.Now)
 	}
 	if err != nil {
 		return err

@@ -477,7 +477,7 @@ func TestReassignOffThePoolIsRefusedBeforeTheRevisionCheck(t *testing.T) {
 		f := newFixture(t)
 		f.refresh(sharedPool)
 
-		earlier := time.Now().UTC().Add(-time.Second)
+		earlier := func() time.Time { return time.Now().UTC().Add(-time.Second) }
 		if _, err := Reassign(context.Background(), f.st, sharedPool, enrollOther, earlier); !errors.Is(err, store.ErrEnrollmentNotOnPool) {
 			t.Fatalf("reassign off the pool with an earlier stamp = %v, want ErrEnrollmentNotOnPool", err)
 		}
@@ -505,7 +505,7 @@ func TestReassignmentDuringACollectionDiscardsIt(t *testing.T) {
 		go func() { done <- f.refresh(sharedPool) }()
 		synctest.Wait()
 		f.tick()
-		if _, err := Reassign(context.Background(), f.st, sharedPool, enrollSecond, time.Now().UTC()); err != nil {
+		if _, err := Reassign(context.Background(), f.st, sharedPool, enrollSecond, time.Now); err != nil {
 			t.Fatal(err)
 		}
 		close(gate)
