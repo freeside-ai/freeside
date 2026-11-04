@@ -95,7 +95,7 @@ func (b *Backend) acceptAuthStoreReadHold(
 	st *runState,
 ) error {
 	if err := hold.Validate(); err != nil {
-		return failf(CheckAuthStoreMutationLease, "acquired read hold for identity %q is malformed: %v", claim.AuthIdentityID, err)
+		return failw(CheckAuthStoreMutationLease, err, "acquired read hold for identity %q is malformed: %v", claim.AuthIdentityID, err)
 	}
 	if hold.AuthIdentityID != claim.AuthIdentityID || hold.Holder != claim.Holder {
 		return failf(CheckAuthStoreMutationLease,
@@ -143,7 +143,7 @@ func (b *Backend) verifyAuthStoreReadHoldLive(ctx context.Context, st *runState)
 		return fmt.Errorf("re-verify auth store read hold for identity %q: %w", st.readHold.AuthIdentityID, err)
 	}
 	if verr := current.Validate(); verr != nil {
-		return failf(CheckAuthStoreMutationLease,
+		return failw(CheckAuthStoreMutationLease, verr,
 			"re-read read hold for identity %q is malformed: %v", st.readHold.AuthIdentityID, verr)
 	}
 	if !sameReadWindow(current, st.readHold) {

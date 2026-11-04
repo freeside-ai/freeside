@@ -302,8 +302,8 @@ func (b *CodexReviewLifecycle) codexReview(
 		}
 	} else if !errors.Is(getErr, ErrCodexReviewIntentNotFound) {
 		if errors.Is(getErr, ErrConformance) {
-			return nil, failf(
-				CheckControlPlaneIsolation, "load Codex review launch intent: %v", getErr)
+			return nil, failw(
+				CheckControlPlaneIsolation, getErr, "load Codex review launch intent: %v", getErr)
 		}
 		return nil, codexReviewOperationalCheckf(
 			CheckControlPlaneIsolation, "load Codex review launch intent: %v", getErr,
@@ -362,7 +362,7 @@ func (b *CodexReviewLifecycle) codexReview(
 	)
 	if err != nil {
 		if errors.Is(err, ErrCodexReviewVolumeLeaseForeignOwner) {
-			return nil, failf(CheckControlPlaneIsolation, "acquire Codex review volume lifecycle lease: %v", err)
+			return nil, failw(CheckControlPlaneIsolation, err, "acquire Codex review volume lifecycle lease: %v", err)
 		}
 		return nil, codexReviewOperationalCheckf(
 			CheckControlPlaneIsolation, "acquire Codex review volume lifecycle lease: %v", err,
@@ -393,8 +393,8 @@ func (b *CodexReviewLifecycle) codexReview(
 	)
 	if err != nil {
 		if errors.Is(err, ErrConformance) {
-			return nil, failf(
-				CheckObservedBaseIdentity, "load Codex review workspace provenance: %v", err)
+			return nil, failw(
+				CheckObservedBaseIdentity, err, "load Codex review workspace provenance: %v", err)
 		}
 		return nil, codexReviewOperationalCheckf(
 			CheckObservedBaseIdentity, "load Codex review workspace provenance: %v", err,
@@ -471,7 +471,7 @@ func (b *CodexReviewLifecycle) codexReview(
 			))
 		}
 		if cleanupErr := errors.Join(cleanupErrs...); cleanupErr != nil {
-			retErr = errors.Join(retErr, failf(CheckTeardown, "Codex review preparation cleanup: %v", cleanupErr))
+			retErr = errors.Join(retErr, failw(CheckTeardown, cleanupErr, "Codex review preparation cleanup: %v", cleanupErr))
 		}
 	}()
 	if err := b.rt.CreateVolume(
@@ -493,7 +493,7 @@ func (b *CodexReviewLifecycle) codexReview(
 		shadowReport.CreationDate, shadowReport.Labels, shadowReport.LabelsObserved, owner,
 	)
 	if err != nil {
-		return nil, failf(CheckControlPlaneIsolation, "authenticate Codex review shadow: %v", err)
+		return nil, failw(CheckControlPlaneIsolation, err, "authenticate Codex review shadow: %v", err)
 	}
 	if err := cfg.Journal.MarkCodexReviewIntentResource(ctx, launch.RunID,
 		CodexReviewIntentResource{Name: shadowName, OwnershipToken: owner.Value, Fingerprint: shadowClaim.fingerprint}); err != nil {
@@ -533,7 +533,7 @@ func (b *CodexReviewLifecycle) codexReview(
 		snapshotReport.CreationDate, snapshotReport.Labels, snapshotReport.LabelsObserved, owner,
 	)
 	if err != nil {
-		return nil, failf(CheckCredentialSeparation, "authenticate Codex review snapshot: %v", err)
+		return nil, failw(CheckCredentialSeparation, err, "authenticate Codex review snapshot: %v", err)
 	}
 	if err := cfg.Journal.MarkCodexReviewIntentResource(ctx, launch.RunID,
 		CodexReviewIntentResource{Name: snapshotName, OwnershipToken: owner.Value, Fingerprint: snapshotClaim.fingerprint}); err != nil {
@@ -568,7 +568,7 @@ func (b *CodexReviewLifecycle) codexReview(
 		networkReport.CreationDate, networkReport.Labels, networkReport.LabelsObserved, owner,
 	)
 	if err != nil {
-		return nil, failf(CheckAgentEgress, "authenticate Codex review network: %v", err)
+		return nil, failw(CheckAgentEgress, err, "authenticate Codex review network: %v", err)
 	}
 	if err := cfg.Journal.MarkCodexReviewIntentResource(ctx, launch.RunID,
 		CodexReviewIntentResource{Name: networkName, OwnershipToken: owner.Value, Fingerprint: networkClaim.fingerprint}); err != nil {
@@ -624,7 +624,7 @@ func (b *CodexReviewLifecycle) codexReview(
 		containerReport.CreationDate, containerReport.Labels, containerReport.LabelsObserved, owner,
 	)
 	if err != nil {
-		return nil, failf(CheckControlPlaneIsolation, "authenticate Codex review container: %v", err)
+		return nil, failw(CheckControlPlaneIsolation, err, "authenticate Codex review container: %v", err)
 	}
 	if err := verifyAgentAllowlist(containerReport, spec); err != nil {
 		return nil, err
@@ -659,8 +659,8 @@ func (b *CodexReviewLifecycle) codexReview(
 	persisted, err := cfg.Journal.GetCodexReviewBinding(ctx, launch.RunID)
 	if err != nil {
 		if errors.Is(err, ErrConformance) {
-			return nil, failf(
-				CheckControlPlaneIsolation, "reload Codex review binding: %v", err)
+			return nil, failw(
+				CheckControlPlaneIsolation, err, "reload Codex review binding: %v", err)
 		}
 		return nil, codexReviewOperationalCheckf(
 			CheckControlPlaneIsolation, "reload Codex review binding: %v", err,
@@ -770,7 +770,7 @@ func codexReviewOutcomeFence(ctx context.Context, provider reviewProvider, journ
 	}
 	if err != nil {
 		if errors.Is(err, ErrCodexReviewOutcomeRejected) || errors.Is(err, ErrConformance) {
-			return failf(CheckControlPlaneIsolation, "load Codex review outcome fence: %v", err)
+			return failw(CheckControlPlaneIsolation, err, "load Codex review outcome fence: %v", err)
 		}
 		return codexReviewOperationalCheckf(
 			CheckControlPlaneIsolation, "load Codex review outcome fence: %v", err)
@@ -1002,7 +1002,7 @@ func (b *CodexReviewLifecycle) RecoverCodexReview(
 	intent, err := cfg.Journal.GetCodexReviewIntent(ctx, launch.RunID)
 	if err != nil {
 		if errors.Is(err, ErrConformance) {
-			return failf(CheckControlPlaneIsolation, "load Codex review recovery intent: %v", err)
+			return failw(CheckControlPlaneIsolation, err, "load Codex review recovery intent: %v", err)
 		}
 		return codexReviewOperationalCheckf(
 			CheckControlPlaneIsolation, "load Codex review recovery intent: %v", err)
@@ -1075,7 +1075,7 @@ func (b *CodexReviewLifecycle) recoverCodexReviewIntent(
 			return codexReviewOperationalCheckf(
 				CheckTeardown, "Codex review pre-lease preparation recovery: %v", err)
 		}
-		return failf(CheckTeardown, "Codex review pre-lease preparation recovery: %v", err)
+		return failw(CheckTeardown, err, "Codex review pre-lease preparation recovery: %v", err)
 	}
 	leaseVolumes := codexReviewLeaseVolumes(launch.WorkspaceVolume, intent.ShadowVolume, intent.SnapshotVolume)
 	lease, transfer, err := cfg.VolumeLifecycleLeaser.RecoverCodexReviewVolumeLease(
@@ -1084,7 +1084,7 @@ func (b *CodexReviewLifecycle) recoverCodexReviewIntent(
 	if err != nil {
 		if !errors.Is(err, ErrCodexReviewVolumeLeaseTransferred) {
 			if errors.Is(err, ErrCodexReviewVolumeLeaseForeignOwner) {
-				return failf(CheckControlPlaneIsolation,
+				return failw(CheckControlPlaneIsolation, err,
 					"acquire Codex review recovery lease: %v", err)
 			}
 			return codexReviewOperationalCheckf(
@@ -1104,7 +1104,7 @@ func (b *CodexReviewLifecycle) recoverCodexReviewIntent(
 		if err != nil {
 			if errors.Is(err, ErrCodexReviewVolumeLeaseForeignOwner) ||
 				errors.Is(err, ErrCodexReviewVolumeLeaseTransferred) {
-				return failf(CheckControlPlaneIsolation,
+				return failw(CheckControlPlaneIsolation, err,
 					"reacquire Codex review recovery lease after reaping a transferred attachment: %v", err)
 			}
 			return codexReviewOperationalCheckf(CheckControlPlaneIsolation,
@@ -1201,7 +1201,7 @@ func (b *CodexReviewLifecycle) recoverCodexReviewIntent(
 			return codexReviewOperationalCheckf(
 				CheckTeardown, "Codex review pre-start recovery: %v", err)
 		}
-		return failf(CheckTeardown, "Codex review pre-start recovery: %v", err)
+		return failw(CheckTeardown, err, "Codex review pre-start recovery: %v", err)
 	}
 	cleanupCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), b.cfg.TeardownTimeout)
 	defer cancel()
@@ -1217,7 +1217,7 @@ func (b *CodexReviewLifecycle) recoverCodexReviewIntent(
 	}
 	if err := cfg.Journal.CloseCodexReviewIntent(ctx, launch.RunID); err != nil {
 		if errors.Is(err, ErrConformance) {
-			return failf(CheckControlPlaneIsolation, "close recovered Codex review intent: %v", err)
+			return failw(CheckControlPlaneIsolation, err, "close recovered Codex review intent: %v", err)
 		}
 		return codexReviewOperationalCheckf(
 			CheckControlPlaneIsolation, "close recovered Codex review intent: %v", err)
@@ -1630,7 +1630,7 @@ func (b *CodexReviewLifecycle) reapCodexReviewTransferredAttachment(
 			return codexReviewOperationalCheckf(CheckControlPlaneIsolation,
 				"reap transferred Codex review container: %v", err)
 		}
-		return failf(CheckControlPlaneIsolation, "reap transferred Codex review container: %v", err)
+		return failw(CheckControlPlaneIsolation, err, "reap transferred Codex review container: %v", err)
 	}
 	return nil
 }
@@ -1766,8 +1766,8 @@ func (b *CodexReviewLifecycle) initializeCodexReviewShadow(
 		cleanupCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), b.cfg.TeardownTimeout)
 		defer cancel()
 		if cleanupErr := b.reapUnlistedContainer(cleanupCtx, spec.Name, claim, owner); cleanupErr != nil {
-			retErr = errors.Join(retErr, failf(
-				CheckControlPlaneIsolation, "Codex review shadow initializer cleanup: %v", cleanupErr,
+			retErr = errors.Join(retErr, failw(
+				CheckControlPlaneIsolation, cleanupErr, "Codex review shadow initializer cleanup: %v", cleanupErr,
 			))
 		}
 	}()
@@ -1792,7 +1792,7 @@ func (b *CodexReviewLifecycle) initializeCodexReviewShadow(
 		rep.CreationDate, rep.Labels, rep.LabelsObserved, owner,
 	)
 	if err != nil {
-		return failf(CheckControlPlaneIsolation, "authenticate Codex review shadow initializer: %v", err)
+		return failw(CheckControlPlaneIsolation, err, "authenticate Codex review shadow initializer: %v", err)
 	}
 	if err := mark(CodexReviewIntentResource{Name: spec.Name, Fingerprint: claim.fingerprint}); err != nil {
 		return codexReviewJournalCheckf(
@@ -1957,8 +1957,8 @@ func (b *CodexReviewLifecycle) seedCodexReviewSnapshot(
 		cleanupCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), b.cfg.TeardownTimeout)
 		defer cancel()
 		if cleanupErr := b.reapUnlistedContainer(cleanupCtx, spec.Name, claim, owner); cleanupErr != nil {
-			retErr = errors.Join(retErr, failf(
-				CheckCredentialSeparation, "Codex review snapshot seeder cleanup: %v", cleanupErr,
+			retErr = errors.Join(retErr, failw(
+				CheckCredentialSeparation, cleanupErr, "Codex review snapshot seeder cleanup: %v", cleanupErr,
 			))
 		}
 	}()
@@ -1975,7 +1975,7 @@ func (b *CodexReviewLifecycle) seedCodexReviewSnapshot(
 	}
 	claim.fingerprint, err = ownedFingerprint(rep.CreationDate, rep.Labels, rep.LabelsObserved, owner)
 	if err != nil {
-		return failf(CheckCredentialSeparation, "authenticate Codex review snapshot seeder: %v", err)
+		return failw(CheckCredentialSeparation, err, "authenticate Codex review snapshot seeder: %v", err)
 	}
 	if err := mark(CodexReviewIntentResource{Name: spec.Name, Fingerprint: claim.fingerprint}); err != nil {
 		return codexReviewJournalCheckf(CheckCredentialSeparation, "journal Codex review snapshot seeder: %v", err)
@@ -2015,7 +2015,7 @@ func (b *CodexReviewLifecycle) observeCodexReviewSnapshot(
 	provider := b.reviewProvider()
 	observerOwner, err := newOwnershipLabel()
 	if err != nil {
-		return CodexReviewSnapshotObservation{}, failf(CheckCredentialSeparation,
+		return CodexReviewSnapshotObservation{}, failw(CheckCredentialSeparation, err,
 			"mint Codex review snapshot observer ownership: %v", err)
 	}
 	spec, err := buildReviewSnapshotObserverSpec(provider, cfg, runID, volume, observerOwner)
@@ -2052,7 +2052,7 @@ func (b *CodexReviewLifecycle) observeCodexReviewWorkspace(
 ) (CodexReviewWorkspaceObservation, error) {
 	observerOwner, err := newOwnershipLabel()
 	if err != nil {
-		return CodexReviewWorkspaceObservation{}, failf(CheckObservedBaseIdentity,
+		return CodexReviewWorkspaceObservation{}, failw(CheckObservedBaseIdentity, err,
 			"mint Codex review workspace observer ownership: %v", err)
 	}
 	spec, err := buildReviewWorkspaceObserverSpec(
@@ -2094,7 +2094,7 @@ func (b *CodexReviewLifecycle) observeCodexReviewShadow(
 ) (CodexReviewShadowObservation, error) {
 	observerOwner, err := newOwnershipLabel()
 	if err != nil {
-		return CodexReviewShadowObservation{}, failf(CheckControlPlaneIsolation,
+		return CodexReviewShadowObservation{}, failw(CheckControlPlaneIsolation, err,
 			"mint Codex review shadow observer ownership: %v", err)
 	}
 	spec, err := BuildCodexReviewShadowObserverSpec(cfg, runID, volume, observerOwner)
@@ -2134,7 +2134,7 @@ func (b *CodexReviewLifecycle) runCodexReviewObserver(
 			cleanupCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), b.cfg.TeardownTimeout)
 			defer cancel()
 			if cleanupErr := b.reapUnlistedContainer(cleanupCtx, spec.Name, claim, owner); cleanupErr != nil {
-				retErr = errors.Join(retErr, failf(check, "observer cleanup: %v", cleanupErr))
+				retErr = errors.Join(retErr, failw(check, cleanupErr, "observer cleanup: %v", cleanupErr))
 			}
 		}
 	}()
@@ -2148,13 +2148,13 @@ func (b *CodexReviewLifecycle) runCodexReviewObserver(
 	}
 	claim.fingerprint, err = ownedFingerprint(pre.CreationDate, pre.Labels, pre.LabelsObserved, owner)
 	if err != nil {
-		return InspectReport{}, nil, failf(check, "observer ownership before start: %v", err)
+		return InspectReport{}, nil, failw(check, err, "observer ownership before start: %v", err)
 	}
 	if err := mark(CodexReviewIntentResource{Name: spec.Name, Fingerprint: claim.fingerprint}); err != nil {
 		return InspectReport{}, nil, codexReviewJournalCheckf(check, "journal observer: %v", err)
 	}
 	if err := verify(pre); err != nil {
-		return InspectReport{}, nil, failf(check, "observer shape before start: %v", err)
+		return InspectReport{}, nil, failw(check, err, "observer shape before start: %v", err)
 	}
 	if err := b.rt.StartContainer(ctx, spec.Name); err != nil {
 		return InspectReport{}, nil, codexReviewOperationalCheckf(check, "start observer: %v", err)
@@ -2170,7 +2170,7 @@ func (b *CodexReviewLifecycle) runCodexReviewObserver(
 		return InspectReport{}, nil, codexReviewOperationalCheckf(check, "inspect stopped observer: %v", err)
 	}
 	if err := verify(report); err != nil {
-		return InspectReport{}, nil, failf(check, "stopped observer shape: %v", err)
+		return InspectReport{}, nil, failw(check, err, "stopped observer shape: %v", err)
 	}
 	proof, err := b.readCodexReviewProof(ctx, spec.Name, proofPath, check)
 	if err != nil {
@@ -2221,7 +2221,7 @@ func (b *CodexReviewLifecycle) reapCodexReviewContainer(
 func (b *CodexReviewLifecycle) readCodexReviewProof(ctx context.Context, id, proofPath string, check Check) ([]byte, error) {
 	dir, err := os.MkdirTemp("", "freeside-codex-review-proof-")
 	if err != nil {
-		return nil, failf(check, "create observer proof directory: %v", err)
+		return nil, failw(check, err, "create observer proof directory: %v", err)
 	}
 	defer os.RemoveAll(dir) //nolint:errcheck // best-effort cleanup of gate-owned scratch
 	tarPath := filepath.Join(dir, "observer.tar")
@@ -2230,12 +2230,12 @@ func (b *CodexReviewLifecycle) readCodexReviewProof(ctx context.Context, id, pro
 	}
 	f, err := os.Open(tarPath) //nolint:gosec // gate-owned path under a fresh temp directory
 	if err != nil {
-		return nil, failf(check, "open observer proof archive: %v", err)
+		return nil, failw(check, err, "open observer proof archive: %v", err)
 	}
 	defer f.Close() //nolint:errcheck // read-only temp handle
 	proof, found, err := extractArchiveRegularFile(f, proofPath, maxBaseProofBytes)
 	if err != nil {
-		return nil, failf(check, "read observer proof: %v", err)
+		return nil, failw(check, err, "read observer proof: %v", err)
 	}
 	if !found {
 		return nil, failf(check, "observer produced no proof")
@@ -2436,7 +2436,7 @@ func (b *CodexReviewLifecycle) deleteCodexReviewVolume(
 	}
 	_, found, err := uniqueVolume(volumes, name)
 	if err != nil {
-		return failf(CheckTeardown, "%v", err)
+		return failw(CheckTeardown, err, "%v", err)
 	}
 	if !found {
 		return nil
@@ -2459,7 +2459,7 @@ func (b *CodexReviewLifecycle) deleteCodexReviewVolume(
 		}
 		remaining, found, err := uniqueVolume(volumes, name)
 		if err != nil {
-			return failf(CheckTeardown, "%v", err)
+			return failw(CheckTeardown, err, "%v", err)
 		}
 		if !found {
 			return nil

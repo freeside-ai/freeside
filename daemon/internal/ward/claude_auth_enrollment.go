@@ -433,12 +433,12 @@ func (a *credentialVolumeAuthor) runSeeder(
 	b := a.backend
 	claim.attempted = true
 	if err := b.rt.CreateContainer(ctx, cloneContainerSpec(spec)); err != nil {
-		return failf(CheckControlPlaneIsolation, "create credential seeder: %v", err)
+		return failw(CheckControlPlaneIsolation, err, "create credential seeder: %v", err)
 	}
 	claim.owned = true
 	rep, err := b.rt.Inspect(ctx, spec.Name)
 	if err != nil {
-		return failf(CheckControlPlaneIsolation, "inspect credential seeder: %v", err)
+		return failw(CheckControlPlaneIsolation, err, "inspect credential seeder: %v", err)
 	}
 	if err := verifySeedRoleAllowlist(rep, spec, a.cfg.Volume, claudeCredentialVolumeTarget,
 		CheckControlPlaneIsolation); err != nil {
@@ -446,10 +446,10 @@ func (a *credentialVolumeAuthor) runSeeder(
 	}
 	claim.fingerprint, err = ownedFingerprint(rep.CreationDate, rep.Labels, rep.LabelsObserved, a.owner)
 	if err != nil {
-		return failf(CheckControlPlaneIsolation, "credential seeder ownership: %v", err)
+		return failw(CheckControlPlaneIsolation, err, "credential seeder ownership: %v", err)
 	}
 	if err := b.rt.StartContainer(ctx, spec.Name); err != nil {
-		return failf(CheckControlPlaneIsolation, "start credential seeder: %v", err)
+		return failw(CheckControlPlaneIsolation, err, "start credential seeder: %v", err)
 	}
 	for _, copy := range []struct{ source, target string }{
 		{input, claudeCredentialStageDir}, {ready, claudeCredentialReadyDir},
@@ -459,17 +459,17 @@ func (a *credentialVolumeAuthor) runSeeder(
 		cancel()
 		if err != nil {
 			// The runtime's error names paths, never file contents.
-			return failf(CheckControlPlaneIsolation, "copy credential input: %v", err)
+			return failw(CheckControlPlaneIsolation, err, "copy credential input: %v", err)
 		}
 	}
 	if err := b.waitStopped(ctx, spec.Name, *claim, a.owner, b.cfg.SeedTimeout); err != nil {
-		return failf(CheckControlPlaneIsolation, "credential seeder: %v", err)
+		return failw(CheckControlPlaneIsolation, err, "credential seeder: %v", err)
 	}
 	if err := b.helperStopped(ctx, LaunchConformance, spec.Size, spec.Name); err != nil {
 		return err
 	}
 	if err := b.rt.DeleteContainer(ctx, spec.Name); err != nil {
-		return failf(CheckControlPlaneIsolation, "delete credential seeder: %v", err)
+		return failw(CheckControlPlaneIsolation, err, "delete credential seeder: %v", err)
 	}
 	if err := b.verifyContainerAbsent(ctx, spec.Name, *claim, a.owner, CheckControlPlaneIsolation); err != nil {
 		return err

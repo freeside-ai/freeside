@@ -680,7 +680,7 @@ func (b *Backend) Handoff(ctx context.Context, hs HandoffSpec) (result *HandoffR
 	}
 	registrySetDigest, err := hs.registrySetDigest()
 	if err != nil {
-		return nil, failf(CheckAgentEgress, "digest the declared registry set: %v", err)
+		return nil, failw(CheckAgentEgress, err, "digest the declared registry set: %v", err)
 	}
 	// Checks 1-2 plus provider_only: the generated writer spec is re-verified,
 	// not trusted, after the runtime supplies the host-only gateway the proxy
@@ -702,7 +702,7 @@ func (b *Backend) Handoff(ctx context.Context, hs HandoffSpec) (result *HandoffR
 	st.agent.owned = true
 	agentRep, err := b.rt.Inspect(ctx, names.Agent)
 	if err != nil {
-		return nil, failf(CheckControlPlaneIsolation, "inspect agent before execution: %v", err)
+		return nil, failw(CheckControlPlaneIsolation, err, "inspect agent before execution: %v", err)
 	}
 	// Capture the fingerprint only after the allowlist verified the report's
 	// identity (rep.ID against the generated name): a fingerprint bound to
@@ -712,7 +712,7 @@ func (b *Backend) Handoff(ctx context.Context, hs HandoffSpec) (result *HandoffR
 	}
 	currentNetwork, err := b.rt.InspectNetwork(ctx, names.Network)
 	if err != nil {
-		return nil, failf(CheckAgentEgress, "re-inspect provider network before writer execution: %v", err)
+		return nil, failw(CheckAgentEgress, err, "re-inspect provider network before writer execution: %v", err)
 	}
 	if currentNetwork.Name != networkReport.Name ||
 		currentNetwork.Mode != NetworkHostOnly ||
@@ -735,7 +735,7 @@ func (b *Backend) Handoff(ctx context.Context, hs HandoffSpec) (result *HandoffR
 	}
 	st.agent.fingerprint, err = ownedFingerprint(agentRep.CreationDate, agentRep.Labels, agentRep.LabelsObserved, ownershipLabel)
 	if err != nil {
-		return nil, failf(CheckControlPlaneIsolation, "agent container %q: %v", names.Agent, err)
+		return nil, failw(CheckControlPlaneIsolation, err, "agent container %q: %v", names.Agent, err)
 	}
 	if err := b.verifyPreparedLaunchState(ctx, hs, names, st); err != nil {
 		return nil, err
@@ -768,7 +768,7 @@ func (b *Backend) Handoff(ctx context.Context, hs HandoffSpec) (result *HandoffR
 		ctx, names.Agent, st.agent, st.ownershipLabel, b.cfg.WriterStopTimeout, st.stall.poll,
 	)
 	if err != nil {
-		return nil, failf(CheckWriterTermination, "agent: %v", err)
+		return nil, failw(CheckWriterTermination, err, "agent: %v", err)
 	}
 	st.stall.finish()
 	st.stall = nil
@@ -783,7 +783,7 @@ func (b *Backend) Handoff(ctx context.Context, hs HandoffSpec) (result *HandoffR
 		}
 	}
 	if err := b.rt.DeleteContainer(ctx, names.Agent); err != nil {
-		return nil, failf(CheckWriterTermination, "delete stopped agent: %v", err)
+		return nil, failw(CheckWriterTermination, err, "delete stopped agent: %v", err)
 	}
 	// This invocation's own delete succeeded, so the object it created is
 	// gone; whatever answers to the deterministic name from here on is
@@ -795,7 +795,7 @@ func (b *Backend) Handoff(ctx context.Context, hs HandoffSpec) (result *HandoffR
 	}
 	st.agent = objectClaim{}
 	if err := st.proxy.Close(); err != nil {
-		return nil, failf(CheckAgentEgress, "provider proxy failed while the writer ran: %v", err)
+		return nil, failw(CheckAgentEgress, err, "provider proxy failed while the writer ran: %v", err)
 	}
 	st.proxy = nil
 	if hs.Agent.OutcomeMarkerPath != "" {
@@ -950,25 +950,25 @@ func (b *Backend) observeCredentialProof(
 	}
 	claim.attempted = true
 	if err := b.rt.CreateContainer(ctx, cloneContainerSpec(spec)); err != nil {
-		return fail(failf(CheckAuthStoreMutationLease, "create credential observer container from image %s: %v", spec.Image, err))
+		return fail(failw(CheckAuthStoreMutationLease, err, "create credential observer container from image %s: %v", spec.Image, err))
 	}
 	claim.owned = true
 	rep, err := b.rt.Inspect(ctx, name)
 	if err != nil {
-		return fail(failf(CheckAuthStoreMutationLease, "inspect credential observer before execution: %v", err))
+		return fail(failw(CheckAuthStoreMutationLease, err, "inspect credential observer before execution: %v", err))
 	}
 	if err := verifyCredentialObserverAllowlist(rep, spec); err != nil {
 		return fail(err)
 	}
 	claim.fingerprint, err = ownedFingerprint(rep.CreationDate, rep.Labels, rep.LabelsObserved, st.ownershipLabel)
 	if err != nil {
-		return fail(failf(CheckAuthStoreMutationLease, "credential observer container %q: %v", name, err))
+		return fail(failw(CheckAuthStoreMutationLease, err, "credential observer container %q: %v", name, err))
 	}
 	if err := b.rt.StartContainer(ctx, name); err != nil {
-		return fail(failf(CheckAuthStoreMutationLease, "start credential observer container: %v", err))
+		return fail(failw(CheckAuthStoreMutationLease, err, "start credential observer container: %v", err))
 	}
 	if err := b.waitStopped(ctx, name, *claim, st.ownershipLabel, b.cfg.SeedTimeout); err != nil {
-		return fail(failf(CheckAuthStoreMutationLease, "credential observer: %v", err))
+		return fail(failw(CheckAuthStoreMutationLease, err, "credential observer: %v", err))
 	}
 	if err := b.helperStopped(ctx, hs.Class, hs.Size, name); err != nil {
 		return fail(err)
@@ -987,7 +987,7 @@ func (b *Backend) observeCredentialProof(
 	}
 
 	if err := b.rt.DeleteContainer(ctx, name); err != nil {
-		return fail(failf(CheckAuthStoreMutationLease, "delete stopped credential observer: %v", err))
+		return fail(failw(CheckAuthStoreMutationLease, err, "delete stopped credential observer: %v", err))
 	}
 	if err := b.verifyContainerAbsent(ctx, name, *claim, st.ownershipLabel, CheckAuthStoreMutationLease); err != nil {
 		return fail(err)
@@ -1028,7 +1028,7 @@ func (b *Backend) readCredProof(
 	fail := func(err error) (credProof, SetupToken, error) { return credProof{}, SetupToken{}, err }
 	dir, err := os.MkdirTemp("", "freeside-handoff-"+runID+"-cred-")
 	if err != nil {
-		return fail(failf(CheckAuthStoreMutationLease, "create credential proof directory: %v", err))
+		return fail(failw(CheckAuthStoreMutationLease, err, "create credential proof directory: %v", err))
 	}
 	st.credArchiveDir = dir
 	defer func() {
@@ -1036,7 +1036,7 @@ func (b *Backend) readCredProof(
 		// An archive that held a token and was not removed fails the read.
 		if rmErr := os.RemoveAll(dir); rmErr != nil && observer == credObserverTokenRead {
 			proof, token = credProof{}, SetupToken{}
-			err = errors.Join(err, failf(CheckAuthStoreMutationLease, "remove credential archive directory: %v", rmErr))
+			err = errors.Join(err, failw(CheckAuthStoreMutationLease, rmErr, "remove credential archive directory: %v", rmErr))
 		}
 		st.credArchiveDir = ""
 	}()
@@ -1044,7 +1044,7 @@ func (b *Backend) readCredProof(
 	exportCtx := ctx
 	if observer == credObserverTokenRead {
 		if err := ctx.Err(); err != nil {
-			return fail(failf(CheckAuthStoreMutationLease, "export stopped container rootfs: %v", err))
+			return fail(failw(CheckAuthStoreMutationLease, err, "export stopped container rootfs: %v", err))
 		}
 		var cancel context.CancelFunc
 		exportCtx, cancel = context.WithTimeout(context.WithoutCancel(ctx), credTokenExportTimeout)
@@ -1054,16 +1054,16 @@ func (b *Backend) readCredProof(
 		return fail(err)
 	}
 	if err := ctx.Err(); err != nil {
-		return fail(failf(CheckAuthStoreMutationLease, "read credential proof: %v", err))
+		return fail(failw(CheckAuthStoreMutationLease, err, "read credential proof: %v", err))
 	}
 	f, err := os.Open(tarPath) //nolint:gosec // gate-owned path under a fresh temp directory
 	if err != nil {
-		return fail(failf(CheckAuthStoreMutationLease, "open credential proof archive: %v", err))
+		return fail(failw(CheckAuthStoreMutationLease, err, "open credential proof archive: %v", err))
 	}
 	defer f.Close() //nolint:errcheck // read-only handle on a temp file removed above
 	data, found, err := extractArchiveRegularFile(f, b.cfg.CredProofPath, maxBaseProofBytes)
 	if err != nil {
-		return fail(failf(CheckAuthStoreMutationLease, "read credential proof from observer rootfs: %v", err))
+		return fail(failw(CheckAuthStoreMutationLease, err, "read credential proof from observer rootfs: %v", err))
 	}
 	if !found {
 		return fail(failf(CheckAuthStoreMutationLease, "credential observer produced no proof"))
@@ -1078,7 +1078,7 @@ func (b *Backend) readCredProof(
 		return proof, SetupToken{}, err
 	}
 	if _, err := f.Seek(0, io.SeekStart); err != nil {
-		return fail(failf(CheckAuthStoreMutationLease, "reread credential proof archive: %v", err))
+		return fail(failw(CheckAuthStoreMutationLease, err, "reread credential proof archive: %v", err))
 	}
 	token, err = readCredTokenCopy(f, credTokenCopyPath(b.cfg), proof.tokenDigest)
 	if err != nil {
@@ -1121,7 +1121,7 @@ func (b *Backend) materializeExport(ctx context.Context, hs HandoffSpec, names h
 	st.exporter.owned = true
 	rep, err := b.rt.Inspect(ctx, names.Exporter)
 	if err != nil {
-		return "", failf(CheckExporterAllowlist, "inspect exporter before execution: %v", err)
+		return "", failw(CheckExporterAllowlist, err, "inspect exporter before execution: %v", err)
 	}
 	// As with the agent: the allowlist's identity check runs before the
 	// fingerprint is captured from the same report.
@@ -1130,13 +1130,13 @@ func (b *Backend) materializeExport(ctx context.Context, hs HandoffSpec, names h
 	}
 	st.exporter.fingerprint, err = ownedFingerprint(rep.CreationDate, rep.Labels, rep.LabelsObserved, st.ownershipLabel)
 	if err != nil {
-		return "", failf(CheckExporterAllowlist, "exporter container %q: %v", names.Exporter, err)
+		return "", failw(CheckExporterAllowlist, err, "exporter container %q: %v", names.Exporter, err)
 	}
 	if err := b.rt.StartContainer(ctx, names.Exporter); err != nil {
 		return "", fmt.Errorf("start exporter container: %w", err)
 	}
 	if err := b.waitStopped(ctx, names.Exporter, st.exporter, st.ownershipLabel, b.cfg.ExporterTimeout); err != nil {
-		return "", failf(CheckExportVerification, "exporter: %v", err)
+		return "", failw(CheckExportVerification, err, "exporter: %v", err)
 	}
 	if err := b.helperStopped(ctx, hs.Class, hs.Size, names.Exporter); err != nil {
 		return "", err
@@ -1209,7 +1209,7 @@ func (w *archiveCapWriter) Write(p []byte) (int, error) {
 func (b runtimeOps) materializeRootFS(ctx context.Context, id, tarPath string, c Check) error {
 	f, err := os.OpenFile(tarPath, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0o600) //nolint:gosec // gate-owned path under a fresh temp directory
 	if err != nil {
-		return failf(c, "create bounded rootfs archive: %v", err)
+		return failw(c, err, "create bounded rootfs archive: %v", err)
 	}
 	w := &archiveCapWriter{dest: f, remaining: b.cfg.MaxArchiveBytes}
 	exportErr := b.rt.ExportRootFS(ctx, id, w, b.cfg.MaxArchiveBytes)
@@ -1218,10 +1218,10 @@ func (b runtimeOps) materializeRootFS(ctx context.Context, id, tarPath string, c
 		return failf(c, "exported rootfs archive exceeds the byte cap")
 	}
 	if exportErr != nil {
-		return failf(c, "export stopped container rootfs: %v", exportErr)
+		return failw(c, exportErr, "export stopped container rootfs: %v", exportErr)
 	}
 	if closeErr != nil {
-		return failf(c, "close bounded rootfs archive: %v", closeErr)
+		return failw(c, closeErr, "close bounded rootfs archive: %v", closeErr)
 	}
 	return nil
 }
@@ -1343,7 +1343,7 @@ func (b *Backend) acceptAuthStoreLease(
 	// same-holder re-acquire converges on an existing window without
 	// extending it, so a reused holder ID with a shorter window lands here.
 	if err := lease.Validate(); err != nil {
-		return failf(CheckAuthStoreMutationLease, "acquired lease for identity %q is malformed: %v", claim.AuthIdentityID, err)
+		return failw(CheckAuthStoreMutationLease, err, "acquired lease for identity %q is malformed: %v", claim.AuthIdentityID, err)
 	}
 	if lease.AuthIdentityID != claim.AuthIdentityID || lease.Holder != claim.Holder {
 		return failf(CheckAuthStoreMutationLease,
@@ -1400,7 +1400,7 @@ func (b *Backend) verifyAuthStoreLeaseLive(ctx context.Context, st *runState) er
 		return fmt.Errorf("re-verify auth store mutation lease for identity %q: %w", st.lease.AuthIdentityID, err)
 	}
 	if verr := current.Validate(); verr != nil {
-		return failf(CheckAuthStoreMutationLease,
+		return failw(CheckAuthStoreMutationLease, verr,
 			"re-read lease for identity %q is malformed: %v", st.lease.AuthIdentityID, verr)
 	}
 	if current.AuthIdentityID != st.lease.AuthIdentityID {
@@ -1573,18 +1573,18 @@ func (b runtimeOps) waitStoppedObserving(
 func (b runtimeOps) verifyContainerAbsent(ctx context.Context, id string, claim objectClaim, ownershipLabel Label, c Check) error {
 	ctrs, err := b.rt.ListContainers(ctx)
 	if err != nil {
-		return failf(c, "list containers to verify %q absent: %v", id, err)
+		return failw(c, err, "list containers to verify %q absent: %v", id, err)
 	}
 	candidate, found, ferr := uniqueContainer(ctrs, id)
 	if ferr != nil {
-		return failf(c, "verify %q absent: %v", id, ferr)
+		return failw(c, ferr, "verify %q absent: %v", id, ferr)
 	}
 	if !found {
 		return nil
 	}
 	ev, eerr := b.containerEvidence(ctx, candidate, claim, ownershipLabel)
 	if eerr != nil {
-		return failf(c, "verify %q absent: %v", id, eerr)
+		return failw(c, eerr, "verify %q absent: %v", id, eerr)
 	}
 	switch ev {
 	case evidenceOurs:

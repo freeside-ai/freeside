@@ -862,7 +862,7 @@ func (r *suiteRun) verifyReaped(ctx context.Context) error {
 	defer cancel()
 	ctrs, err := r.s.b.rt.ListContainers(cctx)
 	if err != nil {
-		return failf(CheckTeardown, "verify suite containers reaped: %v", err)
+		return failw(CheckTeardown, err, "verify suite containers reaped: %v", err)
 	}
 	for name, claim := range r.containers {
 		if !claim.attempted {
@@ -883,7 +883,7 @@ func (r *suiteRun) verifyReaped(ctx context.Context) error {
 		}
 		candidate, found, ferr := uniqueContainer(ctrs, name)
 		if ferr != nil {
-			return failf(CheckTeardown, "verify suite container %q: %v", name, ferr)
+			return failw(CheckTeardown, ferr, "verify suite container %q: %v", name, ferr)
 		}
 		if found {
 			ev, eerr := r.s.b.containerEvidence(cctx, candidate, claim, r.ownershipLabel)
@@ -894,7 +894,7 @@ func (r *suiteRun) verifyReaped(ctx context.Context) error {
 	}
 	vols, err := r.s.b.rt.ListVolumes(cctx)
 	if err != nil {
-		return failf(CheckTeardown, "verify suite volumes reaped: %v", err)
+		return failw(CheckTeardown, err, "verify suite volumes reaped: %v", err)
 	}
 	for name, claim := range r.volumes {
 		if !claim.attempted {
@@ -915,7 +915,7 @@ func (r *suiteRun) verifyReaped(ctx context.Context) error {
 		}
 		candidate, found, ferr := uniqueVolume(vols, name)
 		if ferr != nil {
-			return failf(CheckTeardown, "verify suite volume %q: %v", name, ferr)
+			return failw(CheckTeardown, ferr, "verify suite volume %q: %v", name, ferr)
 		}
 		if found {
 			ev, eerr := r.s.b.volumeEvidence(cctx, candidate, claim, r.ownershipLabel)
@@ -1361,7 +1361,7 @@ func (s *Suite) preJob(ctx context.Context) (err error) {
 	}
 	// Runtime reachable (cheap, no VM): a listing round-trips.
 	if _, err := s.b.rt.ListVolumes(ctx); err != nil {
-		return failf(CheckPreJobProbe, "runtime unreachable: %v", err)
+		return failw(CheckPreJobProbe, err, "runtime unreachable: %v", err)
 	}
 	// Liveness (create→inspect→delete, no start): the runtime can realize,
 	// observe, and reap a container from the fixture image, and create realizes
@@ -1405,14 +1405,14 @@ func (s *Suite) proveNoEagerStart(ctx context.Context, run *suiteRun, spec Conta
 	var err error
 	spec, err = run.createContainer(ctx, spec)
 	if err != nil {
-		return failf(check, "runtime cannot create a container: %v", err)
+		return failw(check, err, "runtime cannot create a container: %v", err)
 	}
 	rep, err := s.b.rt.Inspect(ctx, name)
 	if err != nil {
-		return failf(check, "runtime cannot inspect a container: %v", err)
+		return failw(check, err, "runtime cannot inspect a container: %v", err)
 	}
 	if err := run.observeContainer(name, rep); err != nil {
-		return failf(check, "liveness inspection could not bind the created container: %v", err)
+		return failw(check, err, "liveness inspection could not bind the created container: %v", err)
 	}
 	// The stopped-state proof is only meaningful if the container realized the
 	// probe's spec: a runtime that dropped the mounts or changed the long-lived
@@ -1426,7 +1426,7 @@ func (s *Suite) proveNoEagerStart(ctx context.Context, run *suiteRun, spec Conta
 		return failf(check, "container is not stopped after create (state %q); the runtime executed it before inspection", rep.State)
 	}
 	if err := s.b.rt.DeleteContainer(ctx, name); err != nil {
-		return failf(check, "runtime cannot delete a container: %v", err)
+		return failw(check, err, "runtime cannot delete a container: %v", err)
 	}
 	return nil
 }
@@ -1474,7 +1474,7 @@ func (s *Suite) probeNetworklessExport(ctx context.Context, run *suiteRun) error
 	defer run.reapVolume(ctx, livenessVolume)
 	defer run.reapContainer(ctx, livenessName)
 	if err := run.createVolume(ctx, livenessVolume, s.fx.WorkspaceSizeMB); err != nil {
-		return failf(CheckNetworklessExport, "create networkless liveness workspace volume: %v", err)
+		return failw(CheckNetworklessExport, err, "create networkless liveness workspace volume: %v", err)
 	}
 	if err := s.proveNoEagerStart(ctx, run, ContainerSpec{
 		Size:            DefaultLaunchSize(LaunchConformance),
@@ -1500,28 +1500,28 @@ func (s *Suite) probeNetworklessExport(ctx context.Context, run *suiteRun) error
 	var err error
 	spec, err = run.createContainer(ctx, spec)
 	if err != nil {
-		return failf(CheckNetworklessExport, "create networkless exporter probe: %v", err)
+		return failw(CheckNetworklessExport, err, "create networkless exporter probe: %v", err)
 	}
 	rep, err := s.b.rt.Inspect(ctx, name)
 	if err != nil {
-		return failf(CheckNetworklessExport, "inspect networkless exporter probe: %v", err)
+		return failw(CheckNetworklessExport, err, "inspect networkless exporter probe: %v", err)
 	}
 	if err := run.observeContainer(name, rep); err != nil {
-		return failf(CheckNetworklessExport, "networkless exporter identity is unproven: %v", err)
+		return failw(CheckNetworklessExport, err, "networkless exporter identity is unproven: %v", err)
 	}
 	if !probeSpecMatches(rep, spec) || rep.State != StateStopped {
 		return failf(CheckNetworklessExport, "networkless exporter did not realize the stopped suite-owned probe spec with zero observed network attachments")
 	}
 	if err := s.b.rt.StartContainer(ctx, name); err != nil {
-		return failf(CheckNetworklessExport, "start networkless exporter probe: %v", err)
+		return failw(CheckNetworklessExport, err, "start networkless exporter probe: %v", err)
 	}
 	if err := s.b.waitStopped(ctx, name, run.containers[name], run.ownershipLabel, probeStopTimeout); err != nil {
-		return failf(CheckNetworklessExport, "networkless exporter probe did not stop: %v", err)
+		return failw(CheckNetworklessExport, err, "networkless exporter probe did not stop: %v", err)
 	}
 
 	archive, err := os.CreateTemp("", "freeside-ward-networkless-"+s.fx.RunID+"-*.tar")
 	if err != nil {
-		return failf(CheckNetworklessExport, "create networkless exporter archive: %v", err)
+		return failw(CheckNetworklessExport, err, "create networkless exporter archive: %v", err)
 	}
 	archivePath := archive.Name()
 	defer func() {
@@ -1534,18 +1534,18 @@ func (s *Suite) probeNetworklessExport(ctx context.Context, run *suiteRun) error
 		return failf(CheckNetworklessExport, "networkless exporter rootfs exceeds the byte cap")
 	}
 	if exportErr != nil {
-		return failf(CheckNetworklessExport, "export networkless exporter rootfs: %v", exportErr)
+		return failw(CheckNetworklessExport, exportErr, "export networkless exporter rootfs: %v", exportErr)
 	}
 	if err := archive.Close(); err != nil {
-		return failf(CheckNetworklessExport, "close networkless exporter rootfs archive: %v", err)
+		return failw(CheckNetworklessExport, err, "close networkless exporter rootfs archive: %v", err)
 	}
 	archive, err = os.Open(archivePath) //nolint:gosec // suite-generated temp path
 	if err != nil {
-		return failf(CheckNetworklessExport, "open networkless exporter rootfs archive: %v", err)
+		return failw(CheckNetworklessExport, err, "open networkless exporter rootfs archive: %v", err)
 	}
 	found, err := archiveHasRegularFile(archive, networklessProofPath(owner), networklessProofContent(owner))
 	if err != nil {
-		return failf(CheckNetworklessExport, "validate networkless exporter proof: %v", err)
+		return failw(CheckNetworklessExport, err, "validate networkless exporter proof: %v", err)
 	}
 	if !found {
 		return failf(CheckNetworklessExport, "DNS and direct-connect attempts did not both report blocked")
@@ -1565,7 +1565,7 @@ func (s *Suite) probeInExporterVerification(ctx context.Context, run *suiteRun) 
 	volume := s.conformanceName(inExporterVolumeProbeSuffix)
 	defer run.reapVolume(ctx, volume)
 	if err := run.createVolume(ctx, volume, s.fx.WorkspaceSizeMB); err != nil {
-		return failf(CheckInExporterVerification, "create in-exporter probe workspace volume: %v", err)
+		return failw(CheckInExporterVerification, err, "create in-exporter probe workspace volume: %v", err)
 	}
 	mounts := []Mount{{Type: MountVolume, Source: volume, Target: s.b.cfg.WorkspaceTarget, ReadOnly: true}}
 
@@ -1594,28 +1594,28 @@ func (s *Suite) probeInExporterVerification(ctx context.Context, run *suiteRun) 
 	var err error
 	spec, err = run.createContainer(ctx, spec)
 	if err != nil {
-		return failf(CheckInExporterVerification, "create in-exporter probe: %v", err)
+		return failw(CheckInExporterVerification, err, "create in-exporter probe: %v", err)
 	}
 	rep, err := s.b.rt.Inspect(ctx, name)
 	if err != nil {
-		return failf(CheckInExporterVerification, "inspect in-exporter probe: %v", err)
+		return failw(CheckInExporterVerification, err, "inspect in-exporter probe: %v", err)
 	}
 	if err := run.observeContainer(name, rep); err != nil {
-		return failf(CheckInExporterVerification, "in-exporter probe identity is unproven: %v", err)
+		return failw(CheckInExporterVerification, err, "in-exporter probe identity is unproven: %v", err)
 	}
 	if !probeSpecMatches(rep, spec) || rep.State != StateStopped {
 		return failf(CheckInExporterVerification, "in-exporter probe did not realize the stopped suite-owned probe spec")
 	}
 	if err := s.b.rt.StartContainer(ctx, name); err != nil {
-		return failf(CheckInExporterVerification, "start in-exporter probe: %v", err)
+		return failw(CheckInExporterVerification, err, "start in-exporter probe: %v", err)
 	}
 	if err := s.b.waitStopped(ctx, name, run.containers[name], run.ownershipLabel, probeStopTimeout); err != nil {
-		return failf(CheckInExporterVerification, "in-exporter probe did not stop: %v", err)
+		return failw(CheckInExporterVerification, err, "in-exporter probe did not stop: %v", err)
 	}
 
 	archive, err := os.CreateTemp("", "freeside-ward-inexporter-"+s.fx.RunID+"-*.tar")
 	if err != nil {
-		return failf(CheckInExporterVerification, "create in-exporter probe archive: %v", err)
+		return failw(CheckInExporterVerification, err, "create in-exporter probe archive: %v", err)
 	}
 	archivePath := archive.Name()
 	defer func() {
@@ -1628,18 +1628,18 @@ func (s *Suite) probeInExporterVerification(ctx context.Context, run *suiteRun) 
 		return failf(CheckInExporterVerification, "in-exporter probe rootfs exceeds the byte cap")
 	}
 	if exportErr != nil {
-		return failf(CheckInExporterVerification, "export in-exporter probe rootfs: %v", exportErr)
+		return failw(CheckInExporterVerification, exportErr, "export in-exporter probe rootfs: %v", exportErr)
 	}
 	if err := archive.Close(); err != nil {
-		return failf(CheckInExporterVerification, "close in-exporter probe rootfs archive: %v", err)
+		return failw(CheckInExporterVerification, err, "close in-exporter probe rootfs archive: %v", err)
 	}
 	archive, err = os.Open(archivePath) //nolint:gosec // suite-generated temp path
 	if err != nil {
-		return failf(CheckInExporterVerification, "open in-exporter probe rootfs archive: %v", err)
+		return failw(CheckInExporterVerification, err, "open in-exporter probe rootfs archive: %v", err)
 	}
 	proof, found, err := extractArchiveRegularFile(archive, s.b.cfg.ProofPath, maxProofBytes)
 	if err != nil {
-		return failf(CheckInExporterVerification, "read in-exporter proof: %v", err)
+		return failw(CheckInExporterVerification, err, "read in-exporter proof: %v", err)
 	}
 	if !found {
 		return failf(CheckInExporterVerification, "in-exporter probe wrote no proof at %s", s.b.cfg.ProofPath)
@@ -1726,7 +1726,7 @@ func (s *Suite) probeCredentialContainment(ctx context.Context, run *suiteRun, c
 	var err error
 	spec, err = run.createContainer(ctx, spec)
 	if err != nil {
-		return failf(CheckCredentialContainment, "create credential-audit container: %v", err)
+		return failw(CheckCredentialContainment, err, "create credential-audit container: %v", err)
 	}
 	// Confirm the runtime realized this run's credential volume read-only at the
 	// credential target before trusting the token: a runtime that mounted a
@@ -1738,19 +1738,19 @@ func (s *Suite) probeCredentialContainment(ctx context.Context, run *suiteRun, c
 	// expected allowlist a mutating runtime cannot have rewritten.
 	arep, err := s.b.rt.Inspect(ctx, name)
 	if err != nil {
-		return failf(CheckCredentialContainment, "inspect credential-audit container: %v", err)
+		return failw(CheckCredentialContainment, err, "inspect credential-audit container: %v", err)
 	}
 	if err := run.observeContainer(name, arep); err != nil {
-		return failf(CheckCredentialContainment, "credential-audit container identity is unproven: %v", err)
+		return failw(CheckCredentialContainment, err, "credential-audit container identity is unproven: %v", err)
 	}
 	if !probeSpecMatches(arep, spec) || arep.State != StateStopped {
 		return failf(CheckCredentialContainment, "credential-audit container did not realize the stopped suite-owned probe spec")
 	}
 	if err := s.b.rt.StartContainer(ctx, name); err != nil {
-		return failf(CheckCredentialContainment, "start credential-audit container: %v", err)
+		return failw(CheckCredentialContainment, err, "start credential-audit container: %v", err)
 	}
 	if err := s.b.waitStopped(ctx, name, run.containers[name], run.ownershipLabel, probeStopTimeout); err != nil {
-		return failf(CheckCredentialContainment, "credential-audit container did not stop: %v", err)
+		return failw(CheckCredentialContainment, err, "credential-audit container did not stop: %v", err)
 	}
 	// The mounted volume's contents are not in the container's own rootfs
 	// export (that is exactly why the gate's exporter cannot leak them); the
@@ -1765,7 +1765,7 @@ func (s *Suite) probeCredentialContainment(ctx context.Context, run *suiteRun, c
 	// accept a malformed archive, a tar header, or an unrelated file.
 	archive, err := os.CreateTemp("", "freeside-ward-audit-"+s.fx.RunID+"-*.tar")
 	if err != nil {
-		return failf(CheckCredentialContainment, "create credential-audit archive: %v", err)
+		return failw(CheckCredentialContainment, err, "create credential-audit archive: %v", err)
 	}
 	archivePath := archive.Name()
 	defer func() {
@@ -1781,18 +1781,18 @@ func (s *Suite) probeCredentialContainment(ctx context.Context, run *suiteRun, c
 		return failf(CheckCredentialContainment, "audit rootfs export exceeds the byte cap")
 	}
 	if exportErr != nil {
-		return failf(CheckCredentialContainment, "export credential-audit rootfs: %v", exportErr)
+		return failw(CheckCredentialContainment, exportErr, "export credential-audit rootfs: %v", exportErr)
 	}
 	if err := archive.Close(); err != nil {
-		return failf(CheckCredentialContainment, "close credential-audit rootfs archive: %v", err)
+		return failw(CheckCredentialContainment, err, "close credential-audit rootfs archive: %v", err)
 	}
 	archive, err = os.Open(archivePath) //nolint:gosec // suite-generated temp path
 	if err != nil {
-		return failf(CheckCredentialContainment, "open credential-audit rootfs archive: %v", err)
+		return failw(CheckCredentialContainment, err, "open credential-audit rootfs archive: %v", err)
 	}
 	found, err := archiveHasRegularFile(archive, auditMarkerPath(s.fx.RunID), auditSentinel(s.fx.RunID)+"\n")
 	if err != nil {
-		return failf(CheckCredentialContainment, "validate credential-audit rootfs archive: %v", err)
+		return failw(CheckCredentialContainment, err, "validate credential-audit rootfs archive: %v", err)
 	}
 	if !found {
 		return failf(CheckCredentialContainment, "credential marker not readable from the detached credential volume")
@@ -1921,7 +1921,7 @@ func (s *Suite) probeWriterVolumeExclusion(ctx context.Context, run *suiteRun) e
 	defer run.reapContainer(ctx, writer)
 
 	if err := run.createVolume(ctx, volume, s.fx.WorkspaceSizeMB); err != nil {
-		return failf(CheckWriterVolumeExclusion, "create exclusion workspace volume: %v", err)
+		return failw(CheckWriterVolumeExclusion, err, "create exclusion workspace volume: %v", err)
 	}
 
 	// A long-lived writer holds the volume read-write and stays live while the
@@ -1937,7 +1937,7 @@ func (s *Suite) probeWriterVolumeExclusion(ctx context.Context, run *suiteRun) e
 	var err error
 	writerSpec, err = run.createContainer(ctx, writerSpec)
 	if err != nil {
-		return failf(CheckWriterVolumeExclusion, "create exclusion writer: %v", err)
+		return failw(CheckWriterVolumeExclusion, err, "create exclusion writer: %v", err)
 	}
 	// Bind and verify the exact stopped object before starting by name. Without
 	// this pre-start trust gate, a same-name replacement between create and
@@ -1946,26 +1946,26 @@ func (s *Suite) probeWriterVolumeExclusion(ctx context.Context, run *suiteRun) e
 	// self-masking as stopped.
 	wrep, err := s.b.rt.Inspect(ctx, writer)
 	if err != nil {
-		return failf(CheckWriterVolumeExclusion, "inspect stopped exclusion writer: %v", err)
+		return failw(CheckWriterVolumeExclusion, err, "inspect stopped exclusion writer: %v", err)
 	}
 	if err := run.observeContainer(writer, wrep); err != nil {
-		return failf(CheckWriterVolumeExclusion, "exclusion writer identity is unproven before start: %v", err)
+		return failw(CheckWriterVolumeExclusion, err, "exclusion writer identity is unproven before start: %v", err)
 	}
 	if !probeSpecMatches(wrep, writerSpec) || wrep.State != StateStopped {
 		return failf(CheckWriterVolumeExclusion, "exclusion writer did not realize the stopped suite-owned writer spec")
 	}
 	if err := s.b.rt.StartContainer(ctx, writer); err != nil {
-		return failf(CheckWriterVolumeExclusion, "start exclusion writer: %v", err)
+		return failw(CheckWriterVolumeExclusion, err, "start exclusion writer: %v", err)
 	}
 	// The exclusion is only meaningful while the writer is actually live and
 	// holding the volume; a writer that never booted would let the second
 	// attach succeed for the wrong reason. Confirm it is observed running.
 	wrep, err = s.b.rt.Inspect(ctx, writer)
 	if err != nil {
-		return failf(CheckWriterVolumeExclusion, "inspect exclusion writer: %v", err)
+		return failw(CheckWriterVolumeExclusion, err, "inspect exclusion writer: %v", err)
 	}
 	if err := run.verifyContainerObservation(writer, wrep); err != nil {
-		return failf(CheckWriterVolumeExclusion, "exclusion writer ownership changed after start: %v", err)
+		return failw(CheckWriterVolumeExclusion, err, "exclusion writer ownership changed after start: %v", err)
 	}
 	if !probeSpecMatches(wrep, writerSpec) || wrep.State != StateRunning {
 		return failf(CheckWriterVolumeExclusion, "exclusion writer not observed running before the second attach")
@@ -1990,17 +1990,17 @@ func (s *Suite) probeWriterVolumeExclusion(ctx context.Context, run *suiteRun) e
 	}
 	secondSpec, err = run.createContainer(ctx, secondSpec)
 	if err != nil {
-		return failf(CheckWriterVolumeExclusion, "create exclusion second container: %v", err)
+		return failw(CheckWriterVolumeExclusion, err, "create exclusion second container: %v", err)
 	}
 	// Confirm the second realized the intended read-only exporter mount before
 	// start, so a start refusal is about the writer-held volume and not some other
 	// mount the runtime dropped or changed.
 	srep, err := s.b.rt.Inspect(ctx, second)
 	if err != nil {
-		return failf(CheckWriterVolumeExclusion, "inspect exclusion second container: %v", err)
+		return failw(CheckWriterVolumeExclusion, err, "inspect exclusion second container: %v", err)
 	}
 	if err := run.observeContainer(second, srep); err != nil {
-		return failf(CheckWriterVolumeExclusion, "exclusion second-container identity is unproven: %v", err)
+		return failw(CheckWriterVolumeExclusion, err, "exclusion second-container identity is unproven: %v", err)
 	}
 	if !probeSpecMatches(srep, secondSpec) || srep.State != StateStopped {
 		return failf(CheckWriterVolumeExclusion, "exclusion second container did not realize the stopped exporter-shaped probe spec")
@@ -2023,13 +2023,13 @@ func (s *Suite) probeWriterVolumeExclusion(ctx context.Context, run *suiteRun) e
 	// actually running behind a transient runtime failure.
 	srep2, ierr := s.b.rt.Inspect(ctx, second)
 	if ierr != nil {
-		return failf(CheckWriterVolumeExclusion, "could not confirm the second container's state after the attachment error: %v", ierr)
+		return failw(CheckWriterVolumeExclusion, ierr, "could not confirm the second container's state after the attachment error: %v", ierr)
 	}
 	if srep2.ID != second {
 		return failf(CheckWriterVolumeExclusion, "second-container inspection after the attachment error identified the wrong container")
 	}
 	if err := run.verifyContainerObservation(second, srep2); err != nil {
-		return failf(CheckWriterVolumeExclusion, "second-container ownership changed after the attachment error: %v", err)
+		return failw(CheckWriterVolumeExclusion, err, "second-container ownership changed after the attachment error: %v", err)
 	}
 	if srep2.State == StateRunning {
 		return failf(CheckWriterVolumeExclusion, "second container is running despite the attachment error; the volume was not excluded")
@@ -2049,13 +2049,13 @@ func (s *Suite) probeWriterVolumeExclusion(ctx context.Context, run *suiteRun) e
 	// rw mount before passing.
 	wrep2, werr := s.b.rt.Inspect(ctx, writer)
 	if werr != nil {
-		return failf(CheckWriterVolumeExclusion, "could not re-confirm the exclusion writer after the attachment error: %v", werr)
+		return failw(CheckWriterVolumeExclusion, werr, "could not re-confirm the exclusion writer after the attachment error: %v", werr)
 	}
 	if !probeSpecMatches(wrep2, writerSpec) || wrep2.State != StateRunning {
 		return failf(CheckWriterVolumeExclusion, "exclusion writer no longer holds the read-write mount after the refusal; the runtime may have resolved the conflict by evicting the holder")
 	}
 	if err := run.verifyContainerObservation(writer, wrep2); err != nil {
-		return failf(CheckWriterVolumeExclusion, "exclusion-writer ownership changed after the attachment error: %v", err)
+		return failw(CheckWriterVolumeExclusion, err, "exclusion-writer ownership changed after the attachment error: %v", err)
 	}
 	return nil
 }

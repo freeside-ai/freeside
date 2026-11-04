@@ -535,8 +535,8 @@ func ObserveCodexReviewShadow(
 		volumeReport.CreationDate, volumeReport.Labels, volumeReport.LabelsObserved, volumeOwnershipLabel,
 	)
 	if err != nil {
-		return CodexReviewShadowObservation{}, failf(
-			CheckControlPlaneIsolation, "Codex review shadow ownership: %v", err,
+		return CodexReviewShadowObservation{}, failw(
+			CheckControlPlaneIsolation, err, "Codex review shadow ownership: %v", err,
 		)
 	}
 	if err := verifyCodexReviewShadowObserverAllowlist(observerReport, spec); err != nil {
@@ -660,8 +660,8 @@ func observeReviewSnapshot(
 		volumeReport.CreationDate, volumeReport.Labels, volumeReport.LabelsObserved, volumeOwnershipLabel,
 	)
 	if err != nil {
-		return CodexReviewSnapshotObservation{}, failf(
-			CheckCredentialSeparation, "Codex review snapshot ownership: %v", err,
+		return CodexReviewSnapshotObservation{}, failw(
+			CheckCredentialSeparation, err, "Codex review snapshot ownership: %v", err,
 		)
 	}
 	if err := verifySeedRoleAllowlist(

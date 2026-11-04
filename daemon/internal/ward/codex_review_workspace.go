@@ -110,7 +110,7 @@ func (b *CodexReviewLifecycle) PrepareCodexReviewWorkspace(
 		view.CreationDate, view.Labels, view.LabelsObserved, owner,
 	)
 	if err != nil {
-		return CodexReviewWorkspaceBinding{}, failf(CheckWorkspaceSeeding,
+		return CodexReviewWorkspaceBinding{}, failw(CheckWorkspaceSeeding, err,
 			"authenticate Codex review workspace: %v", err)
 	}
 	if err := b.seedWorkspace(ctx, hs, names, st); err != nil {

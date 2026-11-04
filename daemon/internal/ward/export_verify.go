@@ -87,7 +87,7 @@ func (b *Backend) verifyExport(ctx context.Context, tarPath, destDir string) (*e
 		return nil, err
 	}
 	if err := syncMaterializedExport(destDir); err != nil {
-		return nil, failf(CheckExportVerification, "make verified export durable: %v", err)
+		return nil, failw(CheckExportVerification, err, "make verified export durable: %v", err)
 	}
 	return out, nil
 }
@@ -228,7 +228,7 @@ func (b *Backend) verifyCommitPlan(destDir string) (bool, error) {
 func (b *Backend) extractHandoff(tarPath, destDir string) error {
 	f, err := os.Open(tarPath) //nolint:gosec // gate-generated temp path, never external input
 	if err != nil {
-		return failf(CheckExportVerification, "open exported archive: %v", err)
+		return failw(CheckExportVerification, err, "open exported archive: %v", err)
 	}
 	defer f.Close() //nolint:errcheck // read-only handle
 
@@ -248,7 +248,7 @@ func (b *Backend) extractHandoff(tarPath, destDir string) error {
 			break
 		}
 		if err != nil {
-			return failf(CheckExportVerification, "read exported archive: %v", err)
+			return failw(CheckExportVerification, err, "read exported archive: %v", err)
 		}
 		if len(hdr.Name) > maxArchivePathBytes {
 			return evidencef(CheckExportVerification, "archive entry path exceeds the length cap")
@@ -301,7 +301,7 @@ func (b *Backend) extractHandoff(tarPath, destDir string) error {
 				if errors.Is(err, errExtractionCap) {
 					return evidencef(CheckExportVerification, "extract entry %s: %v", redactPath(name), err)
 				}
-				return failf(CheckExportVerification, "extract entry %s: %v", redactPath(name), err)
+				return failw(CheckExportVerification, err, "extract entry %s: %v", redactPath(name), err)
 			}
 		default:
 			// A symlink, hardlink, or device inside the handoff output
@@ -363,7 +363,7 @@ func (b *Backend) verifyManifest(destDir string) (export.Manifest, map[string]bo
 		if errors.Is(err, os.ErrNotExist) {
 			return manifest, nil, evidencef(CheckExportVerification, "manifest is missing")
 		}
-		return manifest, nil, failf(CheckExportVerification, "read manifest: %v", err)
+		return manifest, nil, failw(CheckExportVerification, err, "read manifest: %v", err)
 	}
 	defer mf.Close() //nolint:errcheck // read-only handle
 	// A hostile manifest can fill the whole per-file extraction budget, so
@@ -372,7 +372,7 @@ func (b *Backend) verifyManifest(destDir string) (export.Manifest, map[string]bo
 	// over-cap one.
 	raw, err := io.ReadAll(io.LimitReader(mf, b.cfg.MaxManifestBytes+1))
 	if err != nil {
-		return manifest, nil, failf(CheckExportVerification, "read manifest: %v", err)
+		return manifest, nil, failw(CheckExportVerification, err, "read manifest: %v", err)
 	}
 	if int64(len(raw)) > b.cfg.MaxManifestBytes {
 		return manifest, nil, evidencef(CheckExportVerification, "manifest exceeds the %d-byte cap", b.cfg.MaxManifestBytes)
@@ -426,7 +426,7 @@ func (b *Backend) verifyManifest(destDir string) (export.Manifest, map[string]bo
 		verified[key] = true
 		if err := verifyBlob(filepath.Join(destDir, filepath.FromSlash(rel)), hexDigest, *e.Size); err != nil {
 			if !errors.Is(err, errBlobMismatch) {
-				return manifest, nil, failf(CheckExportVerification, "blob %s read failed: %v", redactPath(hexDigest), err)
+				return manifest, nil, failw(CheckExportVerification, err, "blob %s read failed: %v", redactPath(hexDigest), err)
 			}
 			// hexDigest is manifest-derived (attacker-influenced) and a regular
 			// entry's digest field could encode a credential as 64 hex chars;
@@ -453,12 +453,12 @@ func (b *Backend) verifyEvidence(destDir string) (export.EvidenceManifest, bool,
 		if errors.Is(err, os.ErrNotExist) {
 			return em, false, nil, nil
 		}
-		return em, false, nil, failf(CheckExportVerification, "read evidence manifest: %v", err)
+		return em, false, nil, failw(CheckExportVerification, err, "read evidence manifest: %v", err)
 	}
 	defer ef.Close() //nolint:errcheck // read-only handle
 	raw, err := io.ReadAll(io.LimitReader(ef, b.cfg.MaxManifestBytes+1))
 	if err != nil {
-		return em, false, nil, failf(CheckExportVerification, "read evidence manifest: %v", err)
+		return em, false, nil, failw(CheckExportVerification, err, "read evidence manifest: %v", err)
 	}
 	if int64(len(raw)) > b.cfg.MaxManifestBytes {
 		return em, false, nil, evidencef(CheckExportVerification, "evidence manifest exceeds the %d-byte cap", b.cfg.MaxManifestBytes)
@@ -484,7 +484,7 @@ func (b *Backend) verifyEvidence(destDir string) (export.EvidenceManifest, bool,
 		verified[key] = true
 		if err := verifyBlob(filepath.Join(destDir, filepath.FromSlash(rel)), hexDigest, e.Size); err != nil {
 			if !errors.Is(err, errBlobMismatch) {
-				return export.EvidenceManifest{}, false, nil, failf(CheckExportVerification, "evidence blob %s read failed: %v", redactPath(hexDigest), err)
+				return export.EvidenceManifest{}, false, nil, failw(CheckExportVerification, err, "evidence blob %s read failed: %v", redactPath(hexDigest), err)
 			}
 			return export.EvidenceManifest{}, false, nil, evidencef(CheckExportVerification, "evidence blob %s failed verification: %v", redactPath(hexDigest), err)
 		}

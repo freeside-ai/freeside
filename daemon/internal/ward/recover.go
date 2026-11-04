@@ -918,18 +918,18 @@ func validateMaterializedExportPath(exportRoot, runID, dir string) error {
 func (b *Backend) workspaceOurs(ctx context.Context, name string, st *runState) (bool, error) {
 	vols, err := b.rt.ListVolumes(ctx)
 	if err != nil {
-		return false, failf(CheckRecovery, "list volumes: %v", err)
+		return false, failw(CheckRecovery, err, "list volumes: %v", err)
 	}
 	v, found, ferr := uniqueVolume(vols, name)
 	if ferr != nil {
-		return false, failf(CheckRecovery, "%v", ferr)
+		return false, failw(CheckRecovery, ferr, "%v", ferr)
 	}
 	if !found {
 		return false, nil
 	}
 	ev, eerr := b.volumeEvidence(ctx, v, st.workspace, st.ownershipLabel)
 	if eerr != nil {
-		return false, failf(CheckRecovery, "%v", eerr)
+		return false, failw(CheckRecovery, eerr, "%v", eerr)
 	}
 	switch ev {
 	case evidenceOurs:
@@ -951,18 +951,18 @@ func (b *Backend) workspaceOurs(ctx context.Context, name string, st *runState) 
 func (b *Backend) verifyRecordedWriterAbsent(ctx context.Context, id string, claim objectClaim, ownershipLabel Label) error {
 	ctrs, err := b.rt.ListContainers(ctx)
 	if err != nil {
-		return failf(CheckRecovery, "list containers: %v", err)
+		return failw(CheckRecovery, err, "list containers: %v", err)
 	}
 	candidate, found, ferr := uniqueContainer(ctrs, id)
 	if ferr != nil {
-		return failf(CheckRecovery, "%v", ferr)
+		return failw(CheckRecovery, ferr, "%v", ferr)
 	}
 	if !found {
 		return nil
 	}
 	ev, eerr := b.containerEvidence(ctx, candidate, claim, ownershipLabel)
 	if eerr != nil {
-		return failf(CheckRecovery, "%v", eerr)
+		return failw(CheckRecovery, eerr, "%v", eerr)
 	}
 	switch ev {
 	case evidenceOurs:
@@ -1015,11 +1015,11 @@ func (b *Backend) reapRecovered(
 ) error {
 	ctrs, err := b.rt.ListContainers(ctx)
 	if err != nil {
-		return failf(CheckRecovery, "list containers: %v", err)
+		return failw(CheckRecovery, err, "list containers: %v", err)
 	}
 	candidate, found, ferr := uniqueContainer(ctrs, id)
 	if ferr != nil {
-		return failf(CheckRecovery, "%v", ferr)
+		return failw(CheckRecovery, ferr, "%v", ferr)
 	}
 	if !found {
 		*claim = objectClaim{}
@@ -1027,7 +1027,7 @@ func (b *Backend) reapRecovered(
 	}
 	ev, eerr := b.containerEvidence(ctx, candidate, *claim, ownershipLabel)
 	if eerr != nil {
-		return failf(CheckRecovery, "%v", eerr)
+		return failw(CheckRecovery, eerr, "%v", eerr)
 	}
 	switch ev {
 	case evidenceOurs:
@@ -1037,7 +1037,7 @@ func (b *Backend) reapRecovered(
 			}
 		}
 		if rerr := b.reapContainer(ctx, candidate); rerr != nil {
-			return failf(CheckRecovery, "remove leftover %q: %v", id, rerr)
+			return failw(CheckRecovery, rerr, "remove leftover %q: %v", id, rerr)
 		}
 		if aerr := b.verifyContainerAbsent(ctx, id, *claim, ownershipLabel, CheckRecovery); aerr != nil {
 			return aerr
@@ -1063,7 +1063,7 @@ func (b *Backend) reapRecovered(
 func (b *Backend) verifyNoTokenStrayContainers(ctx context.Context, ownershipLabel Label) error {
 	ctrs, err := b.rt.ListContainers(ctx)
 	if err != nil {
-		return failf(CheckRecovery, "list containers: %v", err)
+		return failw(CheckRecovery, err, "list containers: %v", err)
 	}
 	for _, c := range ctrs {
 		labels, observed := c.Labels, c.LabelsObserved

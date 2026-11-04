@@ -684,12 +684,12 @@ func (b *Backend) prepareProviderEgress(ctx context.Context, hs HandoffSpec, nam
 	st.network.attempted = true
 	labels := append(runLabels(hs.RunID), st.ownershipLabel)
 	if err := b.rt.CreateNetwork(ctx, names.Network, slices.Clone(labels)); err != nil {
-		return NetworkReport{}, "", nil, failf(CheckAgentEgress, "create provider network: %v", err)
+		return NetworkReport{}, "", nil, failw(CheckAgentEgress, err, "create provider network: %v", err)
 	}
 	st.network.owned = true
 	report, err := b.rt.InspectNetwork(ctx, names.Network)
 	if err != nil {
-		return NetworkReport{}, "", nil, failf(CheckAgentEgress, "inspect provider network: %v", err)
+		return NetworkReport{}, "", nil, failw(CheckAgentEgress, err, "inspect provider network: %v", err)
 	}
 	if report.Name != names.Network {
 		return NetworkReport{}, "", nil, failf(CheckAgentEgress, "provider network inspection identified the wrong network")
@@ -699,7 +699,7 @@ func (b *Backend) prepareProviderEgress(ctx context.Context, hs HandoffSpec, nam
 	}
 	st.network.fingerprint, err = ownedFingerprint(report.CreationDate, report.Labels, report.LabelsObserved, st.ownershipLabel)
 	if err != nil {
-		return NetworkReport{}, "", nil, failf(CheckAgentEgress, "provider network ownership is unproven: %v", err)
+		return NetworkReport{}, "", nil, failw(CheckAgentEgress, err, "provider network ownership is unproven: %v", err)
 	}
 	proxy, err := startRegistryConnectProxy(
 		ctx,
@@ -716,12 +716,12 @@ func (b *Backend) prepareProviderEgress(ctx context.Context, hs HandoffSpec, nam
 		b.cfg.listenEgressProxy,
 	)
 	if err != nil {
-		return NetworkReport{}, "", nil, failf(CheckAgentEgress, "start provider proxy: %v", err)
+		return NetworkReport{}, "", nil, failw(CheckAgentEgress, err, "start provider proxy: %v", err)
 	}
 	st.proxy = proxy
 	allowlist, err := b.realizedAllowlist(hs, proxy)
 	if err != nil {
-		return NetworkReport{}, "", nil, failf(CheckAgentEgress, "realized proxy allowlist: %v", err)
+		return NetworkReport{}, "", nil, failw(CheckAgentEgress, err, "realized proxy allowlist: %v", err)
 	}
 	return report, proxy.URL(), allowlist, nil
 }
