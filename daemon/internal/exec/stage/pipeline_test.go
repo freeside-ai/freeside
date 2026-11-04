@@ -5,6 +5,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"log/slog"
@@ -135,12 +136,74 @@ func TestUsageExtractorReceivesAuthenticatedEvidence(t *testing.T) {
 		}
 		return want, nil
 	}}
-	got := d.extractUsage(intent{InvocationID: testInvoke}, exportOutcome{
+	got, _ := d.extractUsage(intent{InvocationID: testInvoke}, exportOutcome{
 		dir: dir, evidence: evidence, evidencePresent: true,
 	}, fixedNow)
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("usage = %#v, want %#v", got, want)
 	}
+}
+
+// testClaudeUsage is a valid writer capture a test provider hands back.
+func testClaudeUsage() *exec.ClaudeUsageCapture {
+	resets := time.Date(2026, 11, 6, 3, 0, 0, 0, time.UTC)
+	return &exec.ClaudeUsageCapture{
+		ObservedAt: fixedNow,
+		Windows:    []exec.ClaudeUsageWindow{{Window: "seven_day", UsedPercent: 57, ResetsAt: &resets}},
+		Events:     []exec.ClaudeRateLimitEvent{{Window: "seven_day", Status: "allowed", ResetsAt: &resets}},
+	}
+}
+
+// TestStoredIntentKeepsTheClaudeUsage pins that a committed result survives
+// the driver's private intent file with and without a capture, and that a
+// stored capture is still validated when the record is decoded.
+func TestStoredIntentKeepsTheClaudeUsage(t *testing.T) {
+	t.Parallel()
+	d := newTestDriver(t, &stubGate{}, newStubExports())
+	for name, capture := range map[string]*exec.ClaudeUsageCapture{
+		"without a capture": nil,
+		"with a capture":    testClaudeUsage(),
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			in := testHandoffIntent(t, d)
+			in.Phase = phaseCommitted
+			in.Result = &exec.StageResult{
+				InvocationID: in.InvocationID, Status: exec.StatusCompleted, ClaudeUsage: capture,
+			}
+			body, err := json.Marshal(in)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if capture == nil && strings.Contains(string(body), "claude_usage") {
+				t.Fatalf("a result without a capture encodes the field: %s", body)
+			}
+			restored, err := decodeIntent(body)
+			if err != nil {
+				t.Fatalf("decodeIntent: %v", err)
+			}
+			if !reflect.DeepEqual(restored.Result, in.Result) {
+				t.Fatalf("restored result = %#v, want %#v", restored.Result, in.Result)
+			}
+		})
+	}
+	t.Run("out-of-range share", func(t *testing.T) {
+		t.Parallel()
+		in := testHandoffIntent(t, d)
+		in.Phase = phaseCommitted
+		capture := testClaudeUsage()
+		capture.Windows[0].UsedPercent = 140
+		in.Result = &exec.StageResult{
+			InvocationID: in.InvocationID, Status: exec.StatusCompleted, ClaudeUsage: capture,
+		}
+		body, err := json.Marshal(in)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := decodeIntent(body); !errors.Is(err, exec.ErrInvalidClaudeUsage) {
+			t.Fatalf("decodeIntent = %v, want ErrInvalidClaudeUsage", err)
+		}
+	})
 }
 
 func TestUsageExtractorFailureDoesNotFailTheStage(t *testing.T) {
@@ -151,10 +214,10 @@ func TestUsageExtractorFailureDoesNotFailTheStage(t *testing.T) {
 	) ([]exec.UsageMeasurement, error) {
 		return nil, errors.New("telemetry unreadable")
 	}}
-	if got := d.extractUsage(intent{InvocationID: testInvoke}, exportOutcome{
+	if got, capture := d.extractUsage(intent{InvocationID: testInvoke}, exportOutcome{
 		dir: t.TempDir(), evidencePresent: true,
-	}, fixedNow); got != nil {
-		t.Fatalf("usage = %#v, want nil after optional extraction failure", got)
+	}, fixedNow); got != nil || capture != nil {
+		t.Fatalf("usage = %#v, capture = %#v; want nil after optional extraction failure", got, capture)
 	}
 }
 
@@ -189,7 +252,7 @@ func TestCompletedExportHandsItsUsageToTheRecorder(t *testing.T) {
 			Source: domain.UsageSourceAdapterTranscript, Kind: domain.UsageMeasurementReportedUsage,
 			Metric: "input_tokens", Unit: "tokens", Quantity: 12, Sequence: 1, ObservedAt: observedAt,
 		}}, nil
-	}}
+	}, usageCapture: testClaudeUsage()}
 	want := []exec.UsageMeasurement{{
 		Source: domain.UsageSourceAdapterTranscript, Kind: domain.UsageMeasurementReportedUsage,
 		Metric: "input_tokens", Unit: "tokens", Quantity: 12, Sequence: 1, ObservedAt: pinned,
@@ -223,6 +286,9 @@ func TestCompletedExportHandsItsUsageToTheRecorder(t *testing.T) {
 		if !reflect.DeepEqual(result.Usage, want) {
 			t.Fatalf("attempt %d result usage = %#v, want %#v", attempt, result.Usage, want)
 		}
+		if !reflect.DeepEqual(result.ClaudeUsage, testClaudeUsage()) {
+			t.Fatalf("attempt %d result capture = %#v, want the extracted capture", attempt, result.ClaudeUsage)
+		}
 		if got := exports.replays[testInvoke].Usage; !reflect.DeepEqual(got, want) {
 			t.Fatalf("attempt %d recorded usage = %#v, want %#v", attempt, got, want)
 		}
@@ -245,8 +311,8 @@ func TestExportWithoutUsageIsLogged(t *testing.T) {
 			d := newTestDriver(t, &stubGate{}, newStubExports())
 			handler := &captureHandler{}
 			d.logger = slog.New(handler)
-			if got := d.extractUsage(in, out, fixedNow); got != nil {
-				t.Fatalf("usage = %#v, want none", got)
+			if got, capture := d.extractUsage(in, out, fixedNow); got != nil || capture != nil {
+				t.Fatalf("usage = %#v, capture = %#v; want none", got, capture)
 			}
 			records := handler.snapshot()
 			if len(records) != 1 || records[0].level != slog.LevelWarn ||
@@ -832,7 +898,8 @@ func TestCommitRejectionWritesOutcomeThenDetail(t *testing.T) {
 		Metric: "input_tokens", Unit: "tokens", Quantity: 12,
 		Sequence: 1, ObservedAt: fixedNow,
 	}}
-	if err := d.commitRejection(ctx, d.logger, in, exec.StatusFailed, rej, wantUsage); err != nil {
+	wantCapture := testClaudeUsage()
+	if err := d.commitRejection(ctx, d.logger, in, exec.StatusFailed, rej, wantUsage, wantCapture); err != nil {
 		t.Fatalf("commitRejection: %v", err)
 	}
 
@@ -854,6 +921,9 @@ func TestCommitRejectionWritesOutcomeThenDetail(t *testing.T) {
 	if !reflect.DeepEqual(collected.Usage, wantUsage) {
 		t.Fatalf("collected rejected usage = %#v, want %#v", collected.Usage, wantUsage)
 	}
+	if !reflect.DeepEqual(collected.ClaudeUsage, wantCapture) {
+		t.Fatalf("collected rejected capture = %#v, want %#v", collected.ClaudeUsage, wantCapture)
+	}
 }
 
 // TestCommitRejectionOutcomeSurvivesDetailFailure proves the terminal is
@@ -872,7 +942,7 @@ func TestCommitRejectionOutcomeSurvivesDetailFailure(t *testing.T) {
 		ObservedBaseSHA: testBase.BaseSHA,
 	})
 	rej := newDefinitiveRejection([]importer.Finding{{Kind: importer.FindingSecret, Path: "config.yaml"}}, nil)
-	if err := d.commitRejection(ctx, d.logger, in, exec.StatusFailed, rej, nil); err != nil {
+	if err := d.commitRejection(ctx, d.logger, in, exec.StatusFailed, rej, nil, nil); err != nil {
 		t.Fatalf("commitRejection: %v", err)
 	}
 
@@ -904,7 +974,7 @@ func TestCommitRejectionDetailSurvivesCanceledRunContext(t *testing.T) {
 	cancel() // the run context is already canceled (daemon shutdown)
 	rej := newDefinitiveRejection([]importer.Finding{{Kind: importer.FindingSecret, Path: "config.yaml"}}, nil)
 
-	if err := d.commitRejection(runCtx, d.logger, in, exec.StatusCanceled, rej, nil); err != nil {
+	if err := d.commitRejection(runCtx, d.logger, in, exec.StatusCanceled, rej, nil, nil); err != nil {
 		t.Fatalf("commitRejection: %v", err)
 	}
 

@@ -71,13 +71,14 @@ func (d PromptDelivery) usesPromptFile() bool {
 }
 
 // UsageExtractor is the optional provider hook for numbers-only telemetry in
-// an already authenticated and imported evidence channel.
+// an already authenticated and imported evidence channel. A Claude provider
+// also returns its writer's usage capture; any other provider returns nil.
 type UsageExtractor interface {
 	ExtractUsage(
 		evidenceDir string,
 		evidence export.EvidenceManifest,
 		observedAt time.Time,
-	) ([]exec.UsageMeasurement, error)
+	) ([]exec.UsageMeasurement, *exec.ClaudeUsageCapture, error)
 }
 
 // ProviderHandoffInput is the durable input needed to render one provider's

@@ -124,7 +124,7 @@ func (d *Driver) runPipeline(ctx context.Context, in intent) {
 	if errors.As(err, &rej) {
 		// The live session retains a failed terminal write for Inspect/Collect,
 		// so a returned error only needs logging here, matching d.commit.
-		if commitErr := d.commitRejection(ctx, log, in, status, rej, result.Usage); commitErr != nil {
+		if commitErr := d.commitRejection(ctx, log, in, status, rej, result.Usage, result.ClaudeUsage); commitErr != nil {
 			log.Error("terminal result write failed; retained for retry",
 				"status", string(status), "error", commitErr)
 		}
@@ -138,6 +138,7 @@ func (d *Driver) runPipeline(ctx context.Context, in intent) {
 	d.commit(log, in.InvocationID, exec.StageResult{
 		InvocationID: in.InvocationID, Status: status,
 		Summary: truncateFailureSummary(err.Error()), Cause: cause, Usage: result.Usage, Artifacts: result.Artifacts,
+		ClaudeUsage: result.ClaudeUsage,
 	})
 }
 
@@ -192,11 +193,11 @@ const rejectionDetailWriteTimeout = 15 * time.Second
 // store cannot hold shutdown open on an expendable write.
 func (d *Driver) commitRejection(
 	ctx context.Context, log *slog.Logger, in intent, status exec.Status, rej *definitiveRejection,
-	usage []exec.UsageMeasurement,
+	usage []exec.UsageMeasurement, capture *exec.ClaudeUsageCapture,
 ) error {
 	if err := d.commitResult(in.InvocationID, exec.StageResult{
 		InvocationID: in.InvocationID, Status: status,
-		Summary: truncateFailureSummary(rej.Error()), Usage: usage,
+		Summary: truncateFailureSummary(rej.Error()), Usage: usage, ClaudeUsage: capture,
 	}); err != nil {
 		return err
 	}
@@ -592,34 +593,37 @@ func (d *Driver) finishBlocked(
 	}, nil
 }
 
-// extractUsage reads the export's usage telemetry. Missing telemetry never
-// fails the export, but it leaves the run's billable cost incomplete, so each
-// way of finding none is logged rather than dropped silently.
+// extractUsage reads the export's usage telemetry and, from a Claude writer,
+// its usage capture. Missing telemetry never fails the export, but it leaves
+// the run's billable cost incomplete, so each way of finding none is logged
+// rather than dropped silently. A missing capture is not logged: only a
+// file_v6 writer asks for the usage answer, and any other Claude transcript
+// gives at most its rate-limit events.
 func (d *Driver) extractUsage(
 	in intent, out exportOutcome, observedAt time.Time,
-) []exec.UsageMeasurement {
+) ([]exec.UsageMeasurement, *exec.ClaudeUsageCapture) {
 	attrs := []any{"invocation", string(in.InvocationID), "run", in.RunID}
 	if !out.evidencePresent {
 		d.logger.Warn("export has no evidence channel; recording no usage", attrs...)
-		return nil
+		return nil, nil
 	}
 	extractor, ok := d.provider.(UsageExtractor)
 	if !ok {
 		d.logger.Warn("provider extracts no usage; recording no usage", attrs...)
-		return nil
+		return nil, nil
 	}
-	usage, err := extractor.ExtractUsage(
+	usage, capture, err := extractor.ExtractUsage(
 		filepath.Join(out.dir, export.EvidenceBlobsDirname), out.evidence, observedAt,
 	)
 	if err != nil {
 		d.logger.Warn("usage extraction failed; continuing without measurements",
 			append(attrs, "error", err)...)
-		return nil
+		return nil, nil
 	}
 	if len(usage) == 0 {
 		d.logger.Warn("export evidence carries no usage; recording no usage", attrs...)
 	}
-	return usage
+	return usage, capture
 }
 
 // completeReleasedExport owns the cleanup decision after the current-policy
@@ -676,11 +680,15 @@ func (d *Driver) completeReleasedExportWithOptions(
 	// time is the pinned export stamp, not the clock: a crash after the export
 	// write replays this import, and the usage rows written with the export
 	// must converge rather than conflict on a fresh observed_at.
-	usage := d.extractUsage(in, out, in.exportRecordedAt())
+	usage, capture := d.extractUsage(in, out, in.exportRecordedAt())
 	result, err := d.finish(ctx, in, out, importOptions, usage)
 	if err != nil {
 		result.Usage = usage
 	}
+	// The capture rides on every result this export yields, completed,
+	// blocked, or failed: the writer's turn happened either way, and the
+	// capture decides nothing about the stage.
+	result.ClaudeUsage = capture
 	return classifyExportCompletion(out.dir, result, err)
 }
 
@@ -2066,7 +2074,7 @@ func (d *Driver) recoverRunning(ctx context.Context, in intent) error {
 			if errors.As(err, &rej) {
 				if commitErr := d.commitRejection(ctx,
 					d.logger.With("invocation", string(in.InvocationID), "run", in.RunID),
-					in, status, rej, result.Usage); commitErr != nil {
+					in, status, rej, result.Usage, result.ClaudeUsage); commitErr != nil {
 					return fmt.Errorf("%w: commit recovery result: %w",
 						ErrRecoveryRetryable, commitErr)
 				}
@@ -2075,6 +2083,7 @@ func (d *Driver) recoverRunning(ctx context.Context, in intent) error {
 			if commitErr := d.commitResult(in.InvocationID, exec.StageResult{
 				InvocationID: in.InvocationID, Status: status,
 				Summary: truncateFailureSummary(err.Error()), Usage: result.Usage,
+				ClaudeUsage: result.ClaudeUsage,
 			}); commitErr != nil {
 				return fmt.Errorf("%w: commit recovery result: %w",
 					ErrRecoveryRetryable, commitErr)
@@ -2269,7 +2278,7 @@ func (d *Driver) recoverExported(ctx context.Context, in intent) error {
 			if errors.As(err, &rej) {
 				if commitErr := d.commitRejection(ctx,
 					d.logger.With("invocation", string(in.InvocationID), "run", in.RunID),
-					in, exec.StatusFailed, rej, result.Usage); commitErr != nil {
+					in, exec.StatusFailed, rej, result.Usage, result.ClaudeUsage); commitErr != nil {
 					// No live session retains a failed recovery write, so propagate
 					// it as retryable instead of returning success and letting the
 					// next pass record the rejected attempt as lost.
