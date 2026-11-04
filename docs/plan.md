@@ -980,18 +980,14 @@ Every run declares and records one credential mode:
 lives as a single read-only file on a per-identity credential volume. A
 daemon-owned enrollment transaction authors or replaces that volume while no
 execution can use the identity. Phase 1A mounts no per-identity writable Claude
-state. Ward instead supplies a read-only clean `CLAUDE_CONFIG_DIR`, a narrow
-per-invocation continuity mount, and per-launch scratch state ([§5.8](#58-control-plane-trust)); none is
-credential state, and none is reusable by a different invocation. Serializing
-writers on one shared directory would not work: it would not isolate a later
-invocation from settings or hooks an earlier writer persisted.
-
-The launcher command the daemon supplies as argv reads the token file into the
-vendor's environment variable at exec. The writer's spec environment carries no
-credential, and the driver's fixed environment rides the launcher, not the spec.
-The token value never appears in argv text, inspect reports, ward journals, or
-driver state; the credential mount path and the launcher text are the only
-durable traces.
+state. The configuration, continuity, and scratch state ward supplies instead
+([§5.8](#58-control-plane-trust)) is not credential state, and none of it is
+reusable by a different invocation. The writer's spec environment carries no
+credential, and the token value never appears in argv text, inspect reports,
+ward journals, or driver state; the credential mount path and the launcher text are
+the only durable traces. Mechanism: the daemon-supplied launcher reads the
+token at exec
+([`daemon/internal/exec/claude/spec.go`](../daemon/internal/exec/claude/spec.go)).
 
 The credential stays ambient in the writer process tree (children inherit it,
 and the mounted file is readable at agent privilege). That is the documented
@@ -1005,41 +1001,35 @@ search runs, on the provider's servers or inside the ward, is one of them
 **Credential delivery under `subscription_injected`.** This paragraph
 describes held design (revision 103): nothing runs it until a revision lifts
 the hold. The writer receives a
-placeholder minted at handoff in the shape and place the vendor CLI expects
-(the launcher's environment variable; for Codex, an `auth.json` snapshot whose
-access token is well formed, carries the identity's claims, and bears a void
-signature, because the CLI parses the claims locally), plus a per-run CA
-certificate on a read-only mount named through each CLI's additive trust
-variable (`NODE_EXTRA_CA_CERTS`, `CODEX_CA_CERTIFICATE`). The replacing
-variables (`SSL_CERT_FILE` and its peers) are never set: git and libcurl read
-them as the whole store, and registry egress under `provider_registry` must
-keep the system roots. The run's proxy, the same daemon-host proxy that
-enforces `supports_enforced_provider_egress`, terminates TLS for the declared
-provider authorities under that CA, verifies the provider's own certificate
-against the system roots with the server name pinned, and forwards a request
-only when it carries exactly this run's placeholder as its bearer and names a
-path the profile declares for the identity: inference and the CLI's metadata
-paths, never token refresh, rotation, or account endpoints, which the proxy
-refuses as the Codex review profile already refuses its refresh endpoint. On a
-forwarded request it substitutes the identity's token for the placeholder,
-pins any account header the CLI sends to the identity, and refuses a request
-that carries credential shape anywhere else (another bearer, an API-key
-header, a cookie, a query parameter), so a credential the writer finds in a
-workspace never reaches the provider. Registry authorities stay opaque
-tunnels. Every substitution is recorded on the handoff result beside the
-realized allowlist (run, identity, authority, method, path, status, size,
-timing), never bodies or token values. The CA and the placeholder mapping
+per-run placeholder minted at handoff in the shape and place the vendor CLI
+expects (the launcher's environment variable; for Codex, an `auth.json`
+snapshot whose access token is well formed, carries the identity's claims,
+and bears a void signature, because the CLI parses the claims locally), and a
+per-run CA it trusts through each CLI's additive trust
+variable, never one that replaces the system roots. The run's proxy, the same
+daemon-host proxy that enforces `supports_enforced_provider_egress`,
+terminates TLS for the declared provider authorities under that CA, verifies
+the provider's own certificate against the system roots with the server name
+pinned, and forwards a request only when it carries
+exactly this run's placeholder as its bearer and names a path the profile
+declares for the identity: inference and the CLI's metadata paths, never
+token refresh, rotation, or account endpoints. On a forwarded request it
+substitutes the identity's token for the placeholder, pins any account header
+the CLI sends to the identity, and refuses a request that carries credential
+shape anywhere else, so a credential the writer finds in a workspace never
+reaches the provider. Registry authorities stay opaque tunnels. Every
+substitution is recorded on the handoff result beside the realized
+allowlist, never bodies or token values. The CA and the placeholder mapping
 exist only for the run: a placeholder presented to another run's proxy, or to
-anything else, authorizes nothing. The identity's token stays on the
-credential volume on the daemon host; the proxy reads it once per handoff,
-through the exporter observer a judgment call uses, and holds it in memory
-for the run. An injected run mounts no credential volume, and no execution
-host receives one. The mode is a stronger class than
-`subscription_contained`, never a silent downgrade of it, and admission
-records which one a run had. The image is unchanged: both pinned CLIs trust
-an operator CA through the variables above and pin no provider certificate,
-which the usage spike's terminating fake already drives live and the
-per-bump probe set re-proves (Section [5.8](#58-control-plane-trust)).
+anything else, authorizes nothing. The identity's token stays on the daemon
+host. An injected run mounts no credential volume, and no execution host
+receives one. The mode is a stronger class than `subscription_contained`,
+never a silent downgrade of it, and admission records which one a run had.
+The image is unchanged, and the per-bump probe set re-proves that both pinned
+CLIs accept the run's CA (Section [5.8](#58-control-plane-trust)). Mechanism
+(the trust variables and why the replacing ones are never set, what a
+substitution record holds, and how the proxy reads the token):
+[`devlog/2026-10-22-1100-proxy-credential-injection.md`](../devlog/2026-10-22-1100-proxy-credential-injection.md).
 What the owner gives up is listed under Section [14](#14-risks).
 
 Secret scanning is **best effort**, deliberately. It covers supported text
@@ -1052,7 +1042,7 @@ sit above the credential-mode floor and represent different risk classes:
 
 | Profile | Access and risk |
 | --- | --- |
-| `provider_only` | Default. The writer has one host-only network: no direct external path and no guest DNS, and the provider API is reachable only through the daemon's allowlisting proxy. The host gateway remains a network neighbor. The production API is isolated by its loopback-or-Tailscale-owned listener gate; a Tailscale-bound daemon also opens the loopback half of that gate at the same port for same-host clients, which admits no caller the gate refuses. Every other host service needs its own declared binding policy, and the ward proxy is the one intentional agent-reachable exception. The profile does not by itself withhold a web search that runs on the provider's servers, as the pinned Claude CLI's does (#1620); the launch decides which roles get that tool (research for the specifier, below). |
+| `provider_only` | Default. The writer has one host-only network: no direct external path and no guest DNS, and the provider API is reachable only through the daemon's allowlisting proxy. The host gateway remains a network neighbor. The production API is isolated by its loopback-or-Tailscale-owned listener gate (Section [5.2](#52-the-daemon-and-its-supervisor) states its loopback half). Every other host service needs its own declared binding policy, and the ward proxy is the one intentional agent-reachable exception. The profile does not by itself withhold a web search that runs on the provider's servers, as the pinned Claude CLI's does (#1620); the launch decides which roles get that tool (research for the specifier, below). |
 | `provider_registry` | Opt-in per project policy; `provider_only` stays the default, and the rules follow the table. |
 | `provider_web_read` | Materially wider credential-exfiltration exposure. Read-only HTTP can still exfiltrate through URLs, headers, bodies, redirects, and DNS while the provider credential shares the trust domain. It requires an explicit record of the wider exposure and a small trusted-domain allowlist. |
 | Clean verification | No network access. |
@@ -1127,11 +1117,11 @@ The researcher's rules:
   text into them, and they leave as search queries. The bounds and the scan
   narrow that channel and do not close it (Section [14](#14-risks)).
 - **It runs under `provider_only` with search as its only tool.** This gives
-  the researcher no network access the profile didn't already allow. In the
-  #1620 spike, on the Claude CLI build the agent image pinned, the search ran
-  on the provider's servers and the ward connected only to the provider.
-  That is one build's observed behavior, re-proved on every CLI version
-  bump. The researcher cannot read a full
+  the researcher no network access the profile didn't already allow. That the
+  search runs on the provider's servers is a pinned-CLI empirical contract,
+  re-proved on every CLI version bump
+  ([#1620 note](../devlog/2026-09-30-1020-claude-web-tools-under-provider-only.md)).
+  The researcher cannot read a full
   page: for each search it gets the result URLs and titles and the summary
   the provider writes from the pages. Fetching a page from inside the ward
   would be a `provider_web_read` decision with that profile's explicit
@@ -1144,9 +1134,8 @@ The researcher's rules:
   cannot direct it, as with fetched research. The daemon validates the report
   against its schema and stores it under its digest with the questions it
   answers and the researcher's admission. Each finding lists its source URLs
-  and an observation time. The observation time is when the harness received
-  the search result, not when a source was retrieved: neither Claude CLI web
-  tool records a retrieval time (#1620). Unlike a fetched page, a report cannot be reproduced from
+  and an observation time, never a claimed retrieval time
+  ([researcher note](../devlog/2026-09-30-1830-researcher-role.md)). Unlike a fetched page, a report cannot be reproduced from
   its sources, so the stored report is the record. A source URL in a report
   is data. It never widens the research allowlist, and the daemon fetches it
   only through an ordinary fetch request the allowlist admits.
@@ -1156,11 +1145,10 @@ The researcher's rules:
   specifier invocation that issued it counted against
   `specification.max_iterations`, and so does the one that reads the report.
   A research launch's active time and usage are the task's, like other stage
-  work. The search limit is checked after the launch ends. The count the
-  daemon trusts is the harness's per-model usage record (`modelUsage` under
-  the Claude CLI, where `usage.server_tool_use` reads zero even when a
-  search ran), and that record exists only after the launch. So the limit
-  does not stop a running launch. A launch over the limit is a failed
+  work. The search limit is checked after the launch ends, against the
+  harness's per-model usage record, which exists only after the launch
+  ([researcher note](../devlog/2026-09-30-1830-researcher-role.md)). So the
+  limit does not stop a running launch. A launch over the limit is a failed
   request and its report is discarded. The searches it made stay spent and
   are charged to the task. The stage's active-time budget is the only thing
   that stops a running launch. Research requests from
@@ -1175,34 +1163,25 @@ The researcher's rules:
   failure also raises a `system_health` item naming the role, so missing
   research is never silent (Admission).
 
-The `specification.research` policy key selects the path. `daemon_fetched`,
-the default, admits fetch requests only. `researcher` also admits research
-requests, and it asks work from the researcher role, so the role then needs
-a lineup line (Admitted Agents).
+The `specification.research` policy key selects the path (Section
+[5.12](#512-workflow-definition-initiators-and-artifacts)). Its `researcher`
+value asks work from the researcher role, so the role then needs a lineup line
+(Admitted Agents).
 
 This keeps the broadest credential-exfiltration surface away from the
-injection-exposed stage. Two rejected alternatives: search in the daemon
-fetcher (each refinement would reinvoke the whole specifier), and
-`provider_web_read` for the specifier (open web access beside its credential
-and the task).
+injection-exposed stage. The rejected alternatives are in the
+[researcher note](../devlog/2026-09-30-1830-researcher-role.md).
 
-Provider concurrency has two independent controls:
-
-`AuthIdentity {account_binding, usage_pool, budget,
-auth_store_mutation_lease, enabled, cost_owner}`
-
-`UsagePool {id, provider, max_parallel_executions}`
-
-`ClientEnrollment {auth_identity_id, harness_client, route, auth_method,
-credential_mode, refresh_strategy, supports_read_only_auth_snapshot,
-generations[]}`, each generation carrying the exact store locator
-(`auth_store_volume`), the store manifest digest, the lease fence, the
-account binding, and the token expiry where the auth method exposes one
-(admitted agents, below).
+Provider concurrency has two independent controls, one on the identity and
+one on its usage pool. The records that carry them, `AuthIdentity`,
+`UsagePool`, and `ClientEnrollment` with its generations, are defined in
+[`daemon/internal/domain/`](../daemon/internal/domain/) (`auth_identity.go`,
+`usage_pool.go`, `client_enrollment.go`).
 
 1. Auth-store mutation, including refresh, login state, configuration writes,
    and store replacement, is serialized per identity: the one lease fences
-   every enrollment's store. An execution never holds this lease for its
+   every enrollment's store, and every fence names the enrollment id,
+   generation, exact store locator, and store manifest digest. An execution never holds this lease for its
    whole run, because the parallelism limit below could then never admit a
    second execution. A mutation still excludes or fences every running
    execution (#1585).
@@ -1216,9 +1195,7 @@ account binding, and the token expiry where the auth method exposes one
    its memory reservation also ends (Machine Capacity): the specifier,
    researcher, implementer, remediator, reviewer, and shadow reviewer alike.
    A research launch starts only after the specifier invocation that asked
-   for it has ended, so a specification run holds one slot at a time. A recorded
-   outcome alone doesn't free the slot, because a cancelled launch records
-   its outcome before its containers stop. A call launch takes no
+   for it has ended, so a specification run holds one slot at a time. A call launch takes no
    slot, because a one-turn call queued behind hour-long stage runs would
    stall adjudication and naming. Each Section [5.13](#513-deterministic-components-judgment-calls-and-the-effect-registry) site runs at most one
    call at a time, so calls can exceed a pool's limit by at most one request
@@ -1227,10 +1204,8 @@ account binding, and the token expiry where the auth method exposes one
    pool (`prod` and `dev` on one subscription) split its limit between the
    limits they record, and the operator keeps their sum within what the
    provider tolerates. There is no coordinator across instances, for the
-   reason Machine Capacity gives. Routine concurrent use of
-   the same subscription outside Freeside is enough evidence to raise it,
-   checked by a staged rollout under normal work; this replaces the
-   experimental proof 1B first required (#730).
+   reason Machine Capacity gives. Setting and raising a limit:
+   [`daemon/README.md`, Set A Usage Pool's Parallel Limit](../daemon/README.md#set-a-usage-pools-parallel-limit).
 
 If only one execution is safe, scheduling shows that constraint instead of
 hiding it in a lock. The `api_key_isolated` escape, an explicit mode and never
@@ -1253,9 +1228,8 @@ far more than one machine holds.
   short helpers (seeders, observers, the exporter) inside that reservation,
   because they run one after another within the launch. A verification job
   declares one size for its command containers, which also run one at a time.
-  So no launch or job ever runs two container VMs at once: a writer's agent is
-  deleted before its post-writer helpers start, a review's helpers run only
-  before its review container starts, and a job's containers run in turn.
+  So no launch or job ever runs two container VMs at once (the order:
+  [VM overhead note](../devlog/2026-11-02-1210-vm-overhead-reservation.md)).
   Sizes are control-plane policy per launch class, and project policy may
   raise a project's writer and verification sizes for heavy builds.
 - **A memory budget bounds them; CPU is only capped.** Each daemon instance
@@ -1263,15 +1237,13 @@ far more than one machine holds.
   job starts, the daemon reserves its declared memory plus one per-VM overhead
   against the budget, in the same transaction that takes the launch's pool
   slot when it has one (verification draws on no pool); this sum is the
-  launch's reservation (revision 105). Once a build has touched the guest, a
-  container's VM costs the host more than its declared size (137 to 155 MiB
-  more on Apple container 1.1.0), and it keeps that memory until the
-  container is deleted, because freed guest memory isn't returned. So the
-  full declared size stays reserved, never a recorded peak, and one overhead
-  per launch covers it because its containers run one at a time. CPU caps
-  are not reserved and may add up past the host's cores: an agent spends
-  most of its run waiting on the model, and CPU contention slows a run while
-  running out of memory breaks the host.
+  launch's reservation (revision 105). The full declared size stays reserved,
+  never a recorded peak, because a container's VM keeps the memory a build
+  touched until the container is deleted, and one overhead per launch covers
+  it because its containers run one at a time. CPU caps are not reserved and
+  may add up past the host's cores: an agent spends most of its run waiting
+  on the model, and CPU contention slows a run while running out of memory
+  breaks the host.
   The reservation ends once the daemon proves every container of the launch
   or job absent. Cleanup that fails after that (clean roots and volumes,
   Section [5.8](#58-control-plane-trust)) stays open for recovery on its own and holds no capacity. A
@@ -1306,22 +1278,20 @@ far more than one machine holds.
   with `prod` and two defaults of half would already fill it. Control-plane policy
   holds a starting size per launch class. Each launch records its declared
   size, how it ended, and its peak memory where the runtime reports it, so
-  sizes are tuned from recorded runs, not guessed.
+  sizes are tuned from recorded runs, not guessed. Setting the budget:
+  [`daemon/README.md`, Bound Container Memory](../daemon/README.md#bound-container-memory).
 - **The per-VM overhead is a fixed policy value per runtime.** Control-plane
   policy holds one overhead per container runtime, recorded with the runtime
-  version it was measured on. For Apple container 1.1.0 it is 256 MiB, which
-  leaves margin over the measured 137 to 155 MiB for images and sizes the
-  measurement didn't build. Another runtime, or a new version of this one,
+  version it was measured on, and never measured at conformance time.
+  Another runtime, or a new version of this one,
   records its own value before it runs launches under a budget. A host whose
   runtime and version have no recorded overhead is eligible for no launch,
   rather than reserving a guess, and a launch that this leaves with no
   eligible host raises an `execution_failure` item naming the unrecorded
-  runtime version. The value is
-  not measured at conformance time: conformance probes boot idle VMs, and the
-  overhead that matters appears only once a build has touched guest memory,
-  so a probe can't see it without a build-sized workload; and a reading taken
-  on a loaded host would make admission depend on noise. Recorded peak memory
-  per launch is the evidence for revising the value.
+  runtime version. Recorded peak memory
+  per launch is the evidence for revising the value. The measured overhead,
+  the value chosen, and why it is fixed:
+  [VM overhead note](../devlog/2026-11-02-1210-vm-overhead-reservation.md).
 - **Waiting on the operator costs nothing.** Every container belongs to one
   stage invocation and is deleted when that invocation ends; none stays alive
   while a task waits on a human (revision 1 item 6). So open tasks are not
@@ -1368,9 +1338,8 @@ second scheduler.
 
 Freeside admits what an agent consumes by digest: the
 base commit, the prompt package, the vendor instructions, the policy, the
-input artifacts (Sections [5.8](#58-control-plane-trust), [5.9](#59-durability-effectively-once), [5.12](#512-workflow-definition-initiators-and-artifacts)). Until this revision, the agent's
-own configuration was the one major input not admitted that way. An
-**agent** is one operator-authored document in the control-plane tree,
+input artifacts (Sections [5.8](#58-control-plane-trust), [5.9](#59-durability-effectively-once), [5.12](#512-workflow-definition-initiators-and-artifacts)), and the agent's own
+configuration. An **agent** is one operator-authored document in the control-plane tree,
 reviewed as a diff, with four lines and no role:
 
 ```text
@@ -1486,63 +1455,56 @@ the one its lineup line names.
   role, the agents of the committed tree that the router may choose among,
   and never adds one. Its one mode is drain-first by reset
   (revision 107): a new task goes to the pool whose weekly window resets
-  soonest, so the allowance that expires first is spent first. Different
-  reset dates are what make it useful, and a fixed order can't follow
-  them: with two weekly windows a few days apart, which one resets next
-  changes twice a week. The deciding role is the task's first task-line
-  role that has no operator line, and its candidates are the pools of the
-  agents the policy orders for it, each read for its own agent's model.
-  The router ranks the candidates in three tiers and takes the first whose
-  window for that model is not marked exhausted:
-  1. the drain-first account, a usage pool the operator may name in the
-     policy, which takes every new task whatever the reset dates when the
-     deciding role's order holds an agent on it, and is skipped otherwise;
-  2. pools whose weekly reset for the model they are read for is known from a
-     reading and still ahead, soonest first (the earliest, when several
-     weekly windows limit the model), with equal resets in the policy's
-     order;
-  3. pools with no such reset, in the policy's order.
-
-  So with no drain-first account and no observable weekly reset, routing
-  is the priority order with fallback that revision 103 kept, and a
-  marked pool is passed over until its window resets. Tasks already running
-  stay where they are. A window is marked exhausted by a provider refusal (a
+  soonest, so the allowance that expires first is spent first, unless the
+  operator names a drain-first account in the policy, which takes every new
+  task it can serve. The router ranks a role's candidate pools in three
+  tiers (the drain-first account, then pools with a known weekly reset,
+  soonest first, then the policy's order) and passes over a pool whose
+  window for the model it is read for is marked exhausted.
+  A window is marked exhausted by a provider refusal (a
   quota failure, Section [4](#4-the-attention-model)) or by a usage observation the collector
   reports as exhausted (usage observation, below), and the mark clears at
-  the window's reset time or on a fresh reading that says otherwise. The
-  router chooses once per task (revision 103). At the deciding role's
-  first admission it picks one usage pool, then writes a router-sourced line for every task-line role
-  without an operator line, naming the agent the policy orders for that
-  role on that pool (the first in the order when it orders several). When
-  the triager escalated the task, the candidates are instead the pools of
-  the specifier's ordered agents that have an escalated counterpart, each
-  read for the counterpart's model; an agent with no counterpart is
-  skipped. The same tiers rank them, and the drain-first account leads
-  only when it holds a counterpart. Every other role follows the pool it
-  picks, as above, and the specifier's router line names the counterpart
-  of the first ordered agent on that pool that has one, supersedes the triage-sourced line, and cites it. When every candidate
-  pool is marked exhausted, the task parks as below and never drops to the
-  standard tier on its own (revision 106). A
-  role whose order holds no agent on that pool keeps its lineup agent, and
-  an operator-set line always wins. Later admissions read
-  the lines, so every role of the task with an agent on that pool stays on
-  it until the alternate-agent card or an operator's line change supersedes
-  it. When every candidate pool is marked exhausted at a task's first
-  admission, the router picks none: the role parks until the earliest reset
-  and the router then chooses as above, and with no known reset the
-  ordinary quota card is raised (Section [4](#4-the-attention-model)). Choosing
+  the window's reset time or on a fresh reading that says otherwise.
+
+  The router chooses once per task (revision 103). At the first admission
+  of the task's first task-line role that has no operator line, it picks
+  one usage pool, then writes a router-sourced line for every task-line
+  role without an operator line, naming the agent the policy orders for
+  that role on that pool. A role whose order holds no agent on that pool
+  keeps its lineup agent, and an operator-set line always wins. Choosing
   per role would let review run on one subscription after implementation
-  used up the other. A later role whose model window on the pinned pool is
-  exhausted parks until that window resets, as a quota failure does
-  (Section [4](#4-the-attention-model)), and never reroutes. Every selection the router writes
-  cites the policy revision, which tier chose the pool, the readings whose
-  resets ranked the candidates, and any mark it passed over with the agent
-  it passed over, and shows on the task's timeline and cards. An
-  authenticated operator sets the policy from a client or the CLI, and each
-  change is a new revision that supersedes the last and never edits it, as
-  a task line is. The policy is an operator setting rather than
-  control-plane configuration for the reason a task line is: it chooses
-  among credentials the committed lineup already approved and approves none.
+  used up the other. A task the triager escalated (Section
+  [5.13](#513-deterministic-components-judgment-calls-and-the-effect-registry),
+  Specifier Triage) is routed only among pools that hold an escalated
+  counterpart, and never drops to the standard tier on its own (revision
+  106). Every other role follows the pool the router picks, and the specifier's
+  router line names the counterpart of the first ordered agent on that pool
+  that has one, supersedes the triage-sourced line, and cites it. When every candidate pool is marked exhausted at a task's first
+  admission, the router picks none: the role parks until the earliest reset
+  and the router then chooses, and with no known reset the ordinary quota
+  card is raised (Section [4](#4-the-attention-model)).
+
+  Tasks already running stay where they are. Later admissions read the
+  lines, so every role of the task with an agent on that pool stays on it
+  until the alternate-agent card or an operator's line change supersedes
+  it. A later role whose model window on the pinned pool is exhausted parks
+  until that window resets, as a quota failure does (Section
+  [4](#4-the-attention-model)), and never reroutes. Section
+  [14](#14-risks) (subscription-terms drift) gives the terms-risk reason
+  for pinning a task and never failing over. Every selection the router
+  writes cites the policy revision, which tier chose the pool, the
+  readings whose resets ranked the candidates, and any mark it passed over
+  with the agent it passed over, and shows on the task's timeline and
+  cards. An authenticated operator sets the policy from a client or the
+  CLI, and each change is a new revision that supersedes the last and never
+  edits it, as a task line is. The policy is an operator setting rather
+  than control-plane configuration for the reason a task line is: it
+  chooses among credentials the committed lineup already approved and
+  approves none. Mechanism: the full ranking rules and the escalated-task
+  candidates are in #2393's contract and the
+  [drain-soonest note](../devlog/2026-11-03-1111-drain-soonest-reset.md);
+  the commands are in
+  [`daemon/README.md`, Set The Routing Policy](../daemon/README.md#set-the-routing-policy).
 
 The lines:
 
@@ -1563,34 +1525,31 @@ The lines:
   immutable generation entry (lease fence, store manifest digest, account
   binding, token expiry) under the enrollment and changes no agent; admission
   records the generation it mounted. The stage receives a daemon-owned,
-  single-route store, never a harness's multi-provider home.
-
-  `AuthIdentity` keeps the account binding, the usage pool, the account budget,
-  the one conservative mutation lease that fences every store mutation with
-  enrollment id, generation, exact locator, and manifest digest, and two
-  operator fields, `enabled` and `cost_owner`. The concurrency limit lives on
-  the usage pool, not the identity (revision 72). The exact store
-  locator, refresh strategy, and snapshot support that the identity carried
-  before this revision are client facts; they move to the enrollment and its
-  generations.
-- `route` is a content-addressed fragment with a stable logical id: service
-  operator, protocol, inference authorities, billing mode, fallback policy,
-  and a dated terms basis. Editing an endpoint or the terms changes the
-  route digest and every agent naming it, never the enrollment.
+  single-route store, never a harness's multi-provider home. The identity
+  keeps the account binding, the usage pool, the budget, the mutation lease,
+  and the operator's `enabled` and `cost_owner`; client facts belong to the
+  enrollment and its generations
+  ([`daemon/internal/domain/auth_identity.go`](../daemon/internal/domain/auth_identity.go),
+  [`client_enrollment.go`](../daemon/internal/domain/client_enrollment.go)).
+- `route` is a content-addressed fragment with a stable logical id that
+  carries the service, its endpoints, and a dated terms basis. Editing an
+  endpoint or the terms changes the route digest and every agent naming it,
+  never the enrollment.
 - `adapter` is a content-addressed fragment. It names the Freeside adapter
   build and the exact harness build it pins, and it declares the launch
-  capabilities it honours in a closed vocabulary of its own (read tools,
-  mutation tools, exact resume, instruction delivery, structured output,
-  context severance, auxiliary-inference control, store contract per
-  route, and the call launch below). `AgentVendor`, the instruction mechanism, is derived from the
-  adapter and never selected by policy.
+  capabilities it honours in a closed vocabulary of its own, the call launch
+  below among them. The instruction mechanism is derived from the adapter
+  and never selected by policy.
 - `offer` is a content-addressed fragment: one route's offer of one model,
-  with its route model id, lineage group, `identity_stability` (pinned,
-  rolling, or opaque), allowed effort levels, pricing revision, and an
-  authored `not_after`. The same model through two routes is two offers.
+  with its lineage group, its `identity_stability`, the effort levels it
+  allows, and an authored `not_after`. The same model through two routes is
+  two offers.
 - `effort` is a value the offer allows. The adapter translates it, and the
   run records both the requested value and the effective native value. A
   clamp is rendered as `max → xhigh`, never silently.
+
+The fragments' fields:
+[`daemon/internal/domain/agent_fragment.go`](../daemon/internal/domain/agent_fragment.go).
 
 Fragments are operator-authored authority, so they are configuration in the
 tree. Identities, enrollments, generations, admissions, and observations are
@@ -1702,22 +1661,24 @@ every other input:
    allowlist.
 4. *Credentialed.* The enrollment has a valid generation: its current one, not
    retired, revoked, or marked by the credential-integrity probe. The
-   enrollment's auth method says whether expiry is observable. Where it is (the
-   Codex and pi OAuth tokens), the generation records the expiry, and the expiry
+   enrollment's auth method says whether expiry is observable
+   ([`client_enrollment.go`](../daemon/internal/domain/client_enrollment.go)).
+   Where it is, the generation records the expiry, and the expiry
    must cover the attempt deadline plus margin; otherwise the daemon refreshes
    first. This rule, not trust in the harness, is what contains a harness that
-   fails against a read-only store at refresh time; pi is such a harness. Where
-   expiry is not observable (the Claude setup token), the generation records no
+   fails against a read-only store at refresh time. Where
+   expiry is not observable, the generation records no
    expiry and no refresh exists; an authentication failure at use fails the
-   attempt closed and raises the existing revoked-identity marker. The Claude
-   baseline cuts over under that admission.
+   attempt closed and raises the existing revoked-identity marker.
 5. *Snapshot.* `ExecutionAdmission` records the agent digest, the launch digest,
    the lineup revision, the selection source (the lineup, a task line, or the
    alternate-agent card, with the id of the task line or card record that
    chose the agent; revision 73), the route model and the requested and
    native effort the launch passes, the enrollment id and generation, the
-   store manifest digest, and the effective egress allowlist. Whether the
-   attempt ran attended is a fact of its operating mode (Section [5.7](#57-the-ward-runners-handoff-gate-and-operating-modes)), not
+   store manifest digest, and the effective egress allowlist
+   (`AdmissionAgentBinding`,
+   [`daemon/internal/domain/execution.go`](../daemon/internal/domain/execution.go)).
+   Whether the attempt ran attended is a fact of its operating mode (Section [5.7](#57-the-ward-runners-handoff-gate-and-operating-modes)), not
    a field of its own (revision 97).
    It derives its existing fields (identity, image, credential mode, endpoints,
    instruction delivery) from them. Reconstruction reads by digest and rechecks
@@ -1725,12 +1686,9 @@ every other input:
 
 An agent that passes those five steps runs under the deployment's operating
 mode (Section [5.7](#57-the-ward-runners-handoff-gate-and-operating-modes)) from its first launch. There is no attended
-first run and no unattended-eligible mark. Revision 97 removed the rule, from
-the admitted-agent contract (#894), that a new agent × launch pair runs
-attended until an operator, having looked at a run, marks it in the tree:
-under the lineup every model or effort edit is a new pair, so the rule turned
-each one-step experiment into an attended run, while a call never had it
-(below). The operator's look is after the fact, where it already was for a
+first run and no unattended-eligible mark (revision 97; why:
+[drop-attended-first-run note](../devlog/2026-10-24-0927-drop-attended-first-run.md)).
+The operator's look is after the fact, where it already was for a
 call: the admission snapshot names the agent, the launch, the model and
 effort, and what selected them, and the run record shows what the agent did.
 What bounds a bad new agent is what bounded it under the mark: the ward
@@ -1786,10 +1744,8 @@ ward-only parts fall away or change hands, and nothing else does:
   (the record paragraph below).
 
 A call has no gate before first use either, and the plan does not pretend the
-audit is one. (Revision 65 said so of calls while a stage pair still ran
-attended first, because a call lasting seconds inside the daemon has no
-attended mode for an operator to sit in; revision 97 removed that run, so the
-two admission classes agree.) What bounds a bad new agent or prompt is what
+audit is one; the two admission classes agree (revisions 65 and 97,
+[`docs/history/decisions.md`](history/decisions.md)). What bounds a bad new agent or prompt is what
 bounds any answer: the site's authority contract, its ceilings, and its
 fail-safe. Where a site
 carries a sampled audit (Section [5.13](#513-deterministic-components-judgment-calls-and-the-effect-registry)), that audit is the operator's look
@@ -1822,9 +1778,9 @@ snapshot), and what was observed (effective model and serving operator with
 provenance, usage redacted and sourced, auxiliary inference, routing). Observed
 facts never authorise a future selection; they are authoritative history. A
 versioned **treatment digest** groups runs for comparison (Section [8](#8-observability-and-optimization-telemetry)). It
-covers route behaviour, adapter, launch, offer behaviour, and requested and
-effective effort, and it excludes enrollment, generation, cost owner,
-pricing, terms, deprecation, and labels. The agent digest stays the audit
+covers only what should change behaviour; what it covers and excludes is
+`canonicalTreatment` in
+[`daemon/internal/domain/agent.go`](../daemon/internal/domain/agent.go). The agent digest stays the audit
 key. The treatment digest leaves out the prompt, so the prompt digest is its
 own comparison key beside it.
 
@@ -1838,10 +1794,9 @@ digest is computed like a run's, with the call launch's digest in the launch
 position. That digest is one per proved call launch version and the same at
 every site, so the site stays a separate key and two agents compare at one
 site on equal terms. The site-contract digest covers the site's fixed
-instruction and its output contract. Both sit outside the prompt digest, and
-the call launch's digest cannot tell one site's instruction from another's, so
-without it calls from before and after an instruction change would group
-together. Comparison is paired, not randomized: a shadow and the
+instruction and its output contract
+([`daemon/internal/inference/contract.go`](../daemon/internal/inference/contract.go)).
+Comparison is paired, not randomized: a shadow and the
 call it shadows share one input digest, and a workspace role is compared
 before and after a lineup change by treatment and prompt digest.
 
@@ -1850,10 +1805,9 @@ Review independence (Section [7](#7-review-policy)) is a recorded fact, never an
 judging and writing roles whose pairing is recorded. The record reads the
 offers' lineage groups. A
 group is derived per vendor family and curated conservatively; the same weights
-through any route are one group; unknown lineage is recorded as unknown. This supersedes the earlier default, under
-which the review offer's lineage group had to differ from the implementation
-offer's unless a project lineup relaxed the rule with a stated reason, and
-unknown lineage failed closed.
+through any route are one group; unknown lineage is recorded as unknown.
+The earlier lineage gate this replaced is in
+[`docs/history/decisions.md`](history/decisions.md) (revision 65).
 
 The `ProviderProfile` of revision 36 is superseded. Its approval role moved to
 agents and lineups in the tree, and its remaining facts, `enabled` and
@@ -1870,7 +1824,9 @@ commits it. Selection activates and queued inputs are rewritten to agent
 digests. The baseline lineup lists every role that policy
 asks work from by role name, judgment roles included, and never a stage name,
 so the first real lineup needs no key migration. The flags, the judgment and
-review flags among them, are removed once every such role admits.
+review flags among them, are removed once every such role admits
+([`daemon/README.md`, Select Agents Through The
+Lineup](../daemon/README.md#select-agents-through-the-lineup)).
 
 The baseline is honest: each writer agent's offer names the exact Claude model
 its launch passes and the agent asks the effort it passes, both given to
@@ -1958,19 +1914,17 @@ enrollment records, the tree, and the resolved policy. A probe that observes a n
 plan, or spare capacity produces a card or a proposed offer diff in the tree,
 never a changed selection.
 
-**Codex account facts come from the snapshot (revision 80).** The daemon
-decodes the stored ID token's account and plan claims locally; it does not
-launch the app-server for those facts. Present them as advisory claims "from
-the stored ID token", using that token's own issuance time when available;
-unknown age stays unknown. The auth store's `last_refresh` is not their
-freshness timestamp: a credential refresh can retain the previous ID token.
-Missing or malformed claims stay unknown. Account facts require a verified
-match between the decoded account ID and the identity or generation's fixed
-account binding; missing, unverifiable, or mismatched bindings leave those
-facts unknown without altering admission, credentials, or enrollment.
-The access token supplies its own expiry; the ID token's expiry is not a
-substitute. This path cannot detect a revocation or plan change since those
-claims were issued and must not report either as freshly checked.
+**Codex account facts come from the snapshot (revision 80).** They are
+advisory claims decoded from the stored ID token, never reported fresher than
+that token. They require a verified match between the decoded account ID and
+the identity or generation's fixed account binding; missing, unverifiable, or
+mismatched bindings leave those facts unknown without altering admission,
+credentials, or enrollment. The access token supplies its own expiry; the ID
+token's expiry is not a substitute. This path cannot detect a revocation or
+plan change since those claims were issued and must not report either as
+freshly checked. How they are decoded and dated:
+[ADR 0004](decisions/0004-read-codex-account-facts-locally.md) and the
+[Codex observation note](../devlog/2026-10-05-1145-codex-observation-boundary.md).
 
 What a network probe can report remains a pinned-CLI empirical contract. The
 pinned Claude CLI offers a
@@ -1984,23 +1938,21 @@ proven floor is integrity plus authentication, not account state.
 provider reports about a subscription allowance. It is one record per usage
 pool carrying the plan where known. A pool names exactly one of its
 enrollments as its collector: only that enrollment collects for the pool,
-the pool's window readings come from it alone, and its last collection
-attempt's status and time are the pool's refresh status. The collector
+and the pool's window readings come from it alone. The collector
 defaults to the pool's first enrollment and changes only by an explicit
 operator reassignment. Collection never fails over on its own: a collector
 whose answer is unsupported or whose refreshes fail shows that status, with
 readings kept or absent under the stale and failed rules of Section [10](#10-operations-and-onboarding),
 and never switches to another enrollment silently (the no-silent-fallback
-rule of Section [4](#4-the-attention-model)). Beside the collector's status, each enrollment on the
-pool may record the provider's availability answer under its own credential
-(supported, unsupported, or failed), because that is what tells the operator
-which enrollment could be assigned as collector. Beneath those, one reading
-per provider window (a five-hour window, a weekly window, or a model-scoped
-window where the provider limits one model separately) carries the used
-share or the quantity and unit the provider reports, the reset time and
-window length when given, and its own observation time. A pool whose
+rule of Section [4](#4-the-attention-model)). The record holds one reading
+per provider window, each with its own observation time. A pool whose
 collector reports unsupported, or whose refreshes never got an answer, holds
-the statuses and no window readings, never a synthetic window. The record
+the statuses and no window readings, never a synthetic window. The record's
+fields, including each enrollment's availability answer:
+[`daemon/internal/domain/pool_usage_observation.go`](../daemon/internal/domain/pool_usage_observation.go);
+the commands:
+[`daemon/README.md`, Refresh A Usage Pool's Usage Record](../daemon/README.md#refresh-a-usage-pools-usage-record)
+and [Change A Usage Pool's Collector](../daemon/README.md#change-a-usage-pools-collector). The record
 attaches to the usage pool, not the identity, because the
 provider meters the pool: two enrollments on one subscription observe one
 allowance, and no display may add them up or show a pooled share across
@@ -2014,17 +1966,17 @@ consumption (what one invocation drew, Section [8](#8-observability-and-optimiza
 Collection and refresh are operations (Section [10](#10-operations-and-onboarding)); delivery to the clients
 follows Section [5.14](#514-client-synchronization-and-conversations).
 
-A usage observation is observation under this subsection's exclusion list,
-with two readers above admission. The router (routing policy, above) reads
-readings and marks to pick a new task's pool and writes the task line, so
-every selection a reading influenced is a recorded fact that names the
-readings, never a silent switch.
-The quota park (Section [4](#4-the-attention-model)) reads the refused window's mark, and a reading's
-reset when the refusal names none, only to decide when a parked attempt
-starts on the line it already has; it never picks an agent, credential, or
-pool. An observation also informs the account usage view and the facts
-shown beside the agent choices in the clients, it may inform a proposal, and
-from revision 99 it may mark a pool's window exhausted. The operator's recorded
+A usage observation is observation under this subsection's exclusion list.
+Above admission, a reading picks a pool only through the router's recorded
+first-admission choice (routing policy, above), so every selection a reading
+influenced is a recorded fact that names the readings, never a silent switch.
+The quota park (Section [4](#4-the-attention-model)) uses readings only to
+decide when a parked attempt starts on the line it already has; it never
+picks an agent, credential, or pool. What it reads:
+[`daemon/internal/engine/quota_park.go`](../daemon/internal/engine/quota_park.go). An observation also informs the account
+usage view and the facts shown beside the agent choices in the clients, it
+may inform a proposal, and from revision 99 it may mark a pool's window
+exhausted. The operator's recorded
 lineup line or task line is still what admits an agent and its credential,
 and admission never reads a reading. A task line the operator set by
 hand admits whatever its pool's reading shows; when the provider then
