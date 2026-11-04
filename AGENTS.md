@@ -466,6 +466,8 @@ All under `daemon/`:
 - **Publication decisions in the engine:**
   `internal/engine/production_publication.go` (replays the import and
   re-gates trust before publishing),
+  `internal/engine/production_review_gate.go` (decides whether a reviewed
+  candidate may reach publication),
   `internal/engine/production_reentry*.go` and
   `internal/engine/production_unpublished_reentry.go` (re-earn readiness
   against a new base), `internal/engine/publication_closure*.go` (the

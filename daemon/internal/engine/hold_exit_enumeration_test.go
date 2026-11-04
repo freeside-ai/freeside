@@ -108,7 +108,7 @@ const (
 var unclassifiedPauseExits = map[string]string{
 	"production_publication.go:productionPublicationWorkflow.recordPublicationEnvironmentHold": "a cancelled " +
 		"context is the daemon shutting down, not a cause an operator can act on",
-	"production_publication.go:productionPublicationWorkflow.reconcileReviewGate": "the review gate's " +
+	"production_review_gate.go:productionPublicationWorkflow.reconcileReviewGate": "the review gate's " +
 		"pending round shows its own review state; no reason code fits",
 	"finding_adjudication.go:productionPublicationWorkflow.reconcileFindingAdjudication": "finding " +
 		"adjudication waits on its open attention item; no reason code fits",
