@@ -207,6 +207,7 @@ func (p *pairingControl) registerControlRoutes(
 	command(routingPolicyRoute, runRoutingCommand)
 	command("/auth/list", runAuthListCommand)
 	command("/auth/usage/refresh", runAuthRefreshUsageCommand)
+	command("/auth/usage/seed-exhausted", runAuthSeedExhaustedCommand)
 	command("/auth/collector", runAuthSetCollectorCommand)
 	command("/doctor", runDoctorCommand)
 	p.handle(mux, "/snapshot", func(ctx context.Context, body json.RawMessage) (any, error) {

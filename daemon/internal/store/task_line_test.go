@@ -640,3 +640,73 @@ func TestGetTaskLineChangeFailsClosedOnAnEditedRow(t *testing.T) {
 		})
 	}
 }
+
+// TestRecordRouterTaskLinesAdvancesTheTask: one routing's lines land as each
+// role's first version and advance the task, so sync serves them. A role that
+// already has a line, or an input that is not a router line of the task,
+// fails the routing and writes nothing.
+func TestRecordRouterTaskLinesAdvancesTheTask(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	s := openStoreAt(t, filepath.Join(t.TempDir(), "task-lines.db"), store.Options{})
+	taskID, _ := seedTaskSubmissionTarget(t, ctx, s)
+	snapshot := func() store.Snapshot {
+		t.Helper()
+		var snapshot store.Snapshot
+		if err := s.Read(ctx, func(tx *store.ReadTx) error {
+			got, err := tx.GetTaskSnapshot(ctx, taskID)
+			snapshot = got.Snapshot
+			return err
+		}); err != nil {
+			t.Fatal(err)
+		}
+		return snapshot
+	}
+	record := func(inputs ...domain.TaskLineInput) ([]domain.TaskLine, error) {
+		var lines []domain.TaskLine
+		err := s.Write(ctx, func(tx *store.WriteTx) error {
+			var err error
+			lines, err = tx.RecordRouterTaskLines(ctx, taskID, inputs, taskLineSetAt)
+			return err
+		})
+		return lines, err
+	}
+	implementer := routerTaskLineInput(taskID)
+	reviewer := implementer
+	reviewer.Role, reviewer.Agent = domain.RoleReviewer, "codex-b"
+
+	before := snapshot()
+	lines, err := record(implementer, reviewer)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(lines) != 2 || lines[0].Version != 1 || lines[1].Version != 1 ||
+		lines[0].Role != domain.RoleImplementer || lines[1].Role != domain.RoleReviewer {
+		t.Fatalf("lines = %+v, want each role's first version", lines)
+	}
+	if after := snapshot(); after.EntityVersion != before.EntityVersion+1 || after.AsOfRevision <= before.AsOfRevision {
+		t.Fatalf("task snapshot = %+v after %+v, want it advanced", after, before)
+	}
+
+	operator := implementer
+	operator.Source, operator.SetBy, operator.Provenance = domain.TaskLineSourceSubmitTask, "cmd-1", nil
+	otherTask := implementer
+	otherTask.TaskID, otherTask.Role = "task-other", domain.RoleSpecifier
+	specifier := implementer
+	specifier.Role = domain.RoleSpecifier
+	for name, inputs := range map[string][]domain.TaskLineInput{
+		"no lines":               nil,
+		"an operator line":       {operator},
+		"a line of another task": {otherTask},
+		"a role that has a line": {specifier, implementer},
+		"a role named twice":     {specifier, specifier},
+	} {
+		if _, err := record(inputs...); !errors.Is(err, domain.ErrTaskLineInconsistent) {
+			t.Errorf("%s: err = %v, want %v", name, err, domain.ErrTaskLineInconsistent)
+		}
+	}
+	all, _, err := readTaskLines(t, s, taskID)
+	if err != nil || !reflect.DeepEqual(all, lines) {
+		t.Fatalf("lines after refusals = %+v, %v; want only the routing's %+v", all, err, lines)
+	}
+}

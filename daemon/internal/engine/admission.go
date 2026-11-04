@@ -601,6 +601,12 @@ func (e *Engine) admitAttempt(
 				}
 			}
 		}
+		// The router writes the task's lines at its first routable
+		// admission, and a routed line's marked pool holds the attempt
+		// (plan §5.4, routing policy). Admission then reads the line.
+		if err := env.Agents.routeBeforeAdmission(ctx, e.store, binding.run.ID, role, admittedAt); err != nil {
+			return domain.ExecutionAdmission{}, false, fmt.Errorf("admit invocation %q: %w", invocationID, err)
+		}
 		resolved, err := resolveAgentAdmission(
 			ctx, e.store, *env.Agents, binding.run.ID, role, promptPackageDigest, admittedAt,
 		)

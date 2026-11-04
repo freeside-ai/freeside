@@ -205,6 +205,12 @@ func (s AgentSelection) AdmitReview(
 	if runID == "" {
 		return refuse(errors.New("a review is admitted for a run"))
 	}
+	// As for a writer stage: route the task at its first routable admission,
+	// and hold a routed reviewer whose pool is marked. A hold returns as a
+	// QuotaWindowExhaustedError, not a refusal.
+	if err := s.routeBeforeAdmission(ctx, st, runID, spec.Role, admittedAt); err != nil {
+		return domain.ReviewAdmission{}, fmt.Errorf("admission snapshot: %w", err)
+	}
 	agent, err := CheckReviewRole(ctx, st, s.Tree, s.Launch, spec, runID, admittedAt)
 	if err != nil {
 		return domain.ReviewAdmission{}, err

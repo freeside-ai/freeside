@@ -623,9 +623,10 @@ func (w *productionPublicationWorkflow) reconcileReviewGate(
 			return w.retryOrRecordReviewFailure(ctx, task, id, round,
 				binding.admission.Base.BaseSHA, task.HeadSHA, err)
 		}
-		// A full pool or memory that does not fit yet is a wait, not a
-		// source failure: it spends no retry budget, and a later pass asks
-		// again once capacity frees.
+		// A full pool, memory that does not fit yet, or a routed reviewer's
+		// marked window is a wait, not a source failure: it spends no retry
+		// budget, and a later pass asks again once capacity frees or the
+		// window resets.
 		if reviewCapacityRefusal(err) {
 			return productionReviewPending, w.holdReviewForCapacity(ctx, task.RunID, id, err)
 		}
@@ -1990,8 +1991,9 @@ func (w *productionPublicationWorkflow) storedReviewAdmission(
 // reserves the review's memory, so both gates run in the transaction that
 // writes the row. A full pool or a reservation that does not fit yet stores
 // nothing and returns ErrUsagePoolExhausted or ErrMachineCapacity, for the
-// caller to wait on; writing the admission ends the wait, and with it the
-// hold the wait recorded and that hold's pace.
+// caller to wait on, and so does a routed reviewer whose pool's window is
+// marked, with ErrQuotaWindowExhausted; writing the admission ends the wait,
+// and with it the hold the wait recorded and that hold's pace.
 func (w *productionPublicationWorkflow) ensureReviewAdmission(
 	ctx context.Context, role domain.RoleName, runID domain.RunID, id domain.InvocationID,
 ) (domain.ReviewAdmission, error) {
@@ -2003,6 +2005,9 @@ func (w *productionPublicationWorkflow) ensureReviewAdmission(
 		return domain.ReviewAdmission{}, errors.New("review admission is not configured")
 	}
 	admission, err := w.reviewAdmitter(ctx, role, runID, id, w.now().UTC())
+	if errors.Is(err, ErrQuotaWindowExhausted) {
+		return domain.ReviewAdmission{}, err
+	}
 	if err != nil {
 		return domain.ReviewAdmission{}, &exec.ReviewSourceFailure{
 			Class: domain.ReviewFailureConfiguration, Err: err,
@@ -2045,7 +2050,9 @@ func (w *productionPublicationWorkflow) ensureReviewAdmission(
 			return err
 		}
 		waited = present && reviewCapacityWait(hold.Reason)
-		for _, cause := range []domain.RunHoldReason{domain.HoldUsagePoolExhausted, domain.HoldMachineCapacity} {
+		for _, cause := range []domain.RunHoldReason{
+			domain.HoldUsagePoolExhausted, domain.HoldMachineCapacity, domain.HoldQuotaWindowExhausted,
+		} {
 			if err := tx.ClearRunHoldCause(ctx, runID, cause); err != nil {
 				return err
 			}
@@ -2062,20 +2069,24 @@ func (w *productionPublicationWorkflow) ensureReviewAdmission(
 }
 
 // reviewCapacityWait reports whether a hold reason is a review admission's
-// capacity wait: a full pool or memory that does not fit yet.
+// capacity wait: a full pool, memory that does not fit yet, or a routed
+// reviewer's marked quota window.
 func reviewCapacityWait(reason domain.RunHoldReason) bool {
-	return reason == domain.HoldUsagePoolExhausted || reason == domain.HoldMachineCapacity
+	return reason == domain.HoldUsagePoolExhausted || reason == domain.HoldMachineCapacity ||
+		reason == domain.HoldQuotaWindowExhausted
 }
 
 // reviewCapacityRefusal reports whether a review admission refusal is a wait
 // for capacity rather than a failure.
 func reviewCapacityRefusal(err error) bool {
-	return errors.Is(err, domain.ErrUsagePoolExhausted) || errors.Is(err, domain.ErrMachineCapacity)
+	return errors.Is(err, domain.ErrUsagePoolExhausted) || errors.Is(err, domain.ErrMachineCapacity) ||
+		errors.Is(err, ErrQuotaWindowExhausted)
 }
 
-// holdReviewForCapacity records the wait of a review refused for a full pool
-// or for memory. cause is that refusal, which names the pool or the memory
-// arithmetic; a memory refusal also places the review in the memory order.
+// holdReviewForCapacity records the wait of a review refused for a full pool,
+// for memory, or for a routed reviewer's marked window. cause is that
+// refusal, which names the pool, the memory arithmetic, or the window; a
+// memory refusal also places the review in the memory order.
 func (w *productionPublicationWorkflow) holdReviewForCapacity(
 	ctx context.Context, runID domain.RunID, id domain.InvocationID, cause error,
 ) error {

@@ -34,6 +34,9 @@ var poolUsageReaderFiles = []string{
 	"internal/store/pool_usage_observation.go",
 	"internal/usagecollect/",
 	"cmd/freesided/auth_usage.go",
+	// The exit-run fixture rewrites a pool's record to seed an exhausted
+	// reading; it is an operator command and decides no admission.
+	"cmd/freesided/auth_seed.go",
 	"internal/signet/usage.go",
 	// The quota park reads the refused window's mark at dispatch, and a
 	// reading's reset when the refusal names none, to hold the next attempt
@@ -41,6 +44,11 @@ var poolUsageReaderFiles = []string{
 	// admission beside the router, and it picks no agent, credential, or
 	// pool (plan §4, §5.4, revision 103).
 	"internal/engine/quota_park.go",
+	// The router reads a pool's marks for an agent's model at a task's first
+	// admission to pass a marked pool over, and before a routed role's
+	// admission to hold it on its own pool's marked window (plan §5.4,
+	// routing policy). Admission itself still reads only the task line.
+	"internal/engine/router.go",
 }
 
 func TestOnlyAllowlistedFilesReadPoolUsageObservations(t *testing.T) {
