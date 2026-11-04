@@ -364,10 +364,10 @@ public struct MockServerTransport: ClientTransport {
                         message: "no item exists under \(missing.itemID)")
                 )
             } catch let rejection as MockServer.ImmutableConflictError {
-                let status: HTTPResponse.Status =
-                    Self.answersMalformedAsBadRequest(command.payload) ? .badRequest : .unprocessableContent
+                // The daemon answers a request-error refusal 400
+                // (isCommandRequestError); its command path never answers 422.
                 return try Self.json(
-                    status: status,
+                    status: .badRequest,
                     body: Components.Schemas._Error(
                         message: "command \(rejection.commandID) reused with a different body")
                 )
@@ -379,26 +379,26 @@ public struct MockServerTransport: ClientTransport {
                     status: .internalServerError,
                     body: Components.Schemas._Error(message: "operator setting is not available"))
             } catch let rejection as MockServer.ActionNotOfferedError {
+                // Mirrors store.ErrActionNotOffered, which the daemon answers 400.
                 return try Self.json(
-                    status: .unprocessableContent,
+                    status: .badRequest,
                     body: Components.Schemas._Error(
                         message:
                             "action \(rejection.action.rawValue) not offered by item \(rejection.itemID)"
                     )
                 )
             } catch let rejection as MockServer.UnsupportedActionError {
+                // Mirrors ErrUnsupportedAction, which the daemon answers 400.
                 return try Self.json(
-                    status: .unprocessableContent,
+                    status: .badRequest,
                     body: Components.Schemas._Error(
                         message:
                             "action \(rejection.action.rawValue) is not acceptable yet; its transaction belongs to a later unit"
                     )
                 )
             } catch let rejection as MockServer.MalformedCommandError {
-                let status: HTTPResponse.Status =
-                    Self.answersMalformedAsBadRequest(command.payload) ? .badRequest : .unprocessableContent
                 return try Self.json(
-                    status: status,
+                    status: .badRequest,
                     body: Components.Schemas._Error(
                         message: "malformed command: \(rejection.reason)")
                 )
@@ -686,17 +686,6 @@ public struct MockServerTransport: ClientTransport {
         encoder.dateEncodingStrategy = .iso8601
         return encoder
     }()
-
-    /// The daemon answers a malformed or reused-id Stop or operator command
-    /// 400 (isCommandRequestError); the mock's decision and submission paths
-    /// keep 422.
-    private static func answersMalformedAsBadRequest(_ payload: Components.Schemas.ClientCommand.payloadPayload) -> Bool
-    {
-        switch payload {
-        case .stop_task, .refresh_usage, .reassign_collector, .change_task_line, .set_routing_policy: true
-        case .decision, .submit_task: false
-        }
-    }
 
     private static let decoder: JSONDecoder = {
         let decoder = JSONDecoder()

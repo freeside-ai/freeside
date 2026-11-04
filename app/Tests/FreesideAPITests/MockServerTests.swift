@@ -507,7 +507,7 @@ import Testing
             Issue.record("expected an authoritative rejection, got \(output)")
             return
         }
-        #expect(statusCode == 422)
+        #expect(statusCode == 400)
         #expect(try await client.getSyncRevision().ok.body.json.revision == revisionBefore)
         let after = try await client.getAttentionItem(
             path: .init(item_id: before.item.id)
@@ -770,7 +770,7 @@ import Testing
                             )
                             continue
                         }
-                        #expect(statusCode == 422)
+                        #expect(statusCode == 400)
                     }
                 }
             }
@@ -864,7 +864,7 @@ import Testing
             Issue.record("expected an authoritative rejection, got \(output)")
             return
         }
-        #expect(statusCode == 422)
+        #expect(statusCode == 400)
     }
 
     @Test func malformedCommandIsRejectedBeforeReplayOrStaleHandling() async throws {
@@ -888,11 +888,11 @@ import Testing
             Issue.record("expected a malformed rejection, got \(replayed)")
             return
         }
-        #expect(statusCode == 422)
+        #expect(statusCode == 400)
 
         // Malformed also outranks staleness: the empty digest entry both
         // malforms the command and mismatches the bindings, and the
-        // rejection is 422, not a 409 replacement — with no effect.
+        // rejection is 400, not a 409 replacement — with no effect.
         var emptyDigest = Self.command(id: "cmd-empty-digest", against: before)
         emptyDigest.payload.asDecision.artifact_digests.append("")
         let rejected = try await client.submitCommand(body: .json(emptyDigest))
@@ -900,7 +900,7 @@ import Testing
             Issue.record("expected a malformed rejection, got \(rejected)")
             return
         }
-        #expect(emptyStatus == 422)
+        #expect(emptyStatus == 400)
         let after =
             try await client
             .getAttentionItem(path: .init(item_id: "item-spec_approval")).ok.body.json
@@ -923,7 +923,7 @@ import Testing
             Issue.record("expected a malformed rejection, got \(output)")
             return
         }
-        #expect(statusCode == 422)
+        #expect(statusCode == 400)
 
         let after =
             try await client
@@ -1006,7 +1006,7 @@ import Testing
             Issue.record("expected an authoritative rejection, got \(output)")
             return
         }
-        #expect(statusCode == 422)
+        #expect(statusCode == 400)
         let data = try await Data(collecting: body, upTo: 1 << 20)
         let message = try JSONDecoder().decode(Components.Schemas._Error.self, from: data).message
         #expect(message.contains("reused"))
@@ -1253,7 +1253,7 @@ import Testing
             Issue.record("expected an authoritative rejection, got \(output)")
             return
         }
-        #expect(statusCode == 422)
+        #expect(statusCode == 400)
 
         let after =
             try await client
@@ -1433,7 +1433,7 @@ import Testing
             Issue.record("expected an authoritative rejection, got \(output)")
             return
         }
-        #expect(statusCode == 422)
+        #expect(statusCode == 400)
 
         // No effect: the same prepared state still applies cleanly.
         let after =
@@ -1463,7 +1463,7 @@ import Testing
                 Issue.record("expected missing-message rejection, got \(rejected)")
                 continue
             }
-            #expect(statusCode == 422)
+            #expect(statusCode == 400)
 
             missing.payload.asDecision.message = "Operator feedback"
             if action == .answer_and_retry {
@@ -1620,7 +1620,7 @@ import Testing
                 Issue.record("invalid finding routes were accepted")
                 continue
             }
-            #expect(status == (index == 0 || index == 2 ? 422 : 400))
+            #expect(status == 400)
             #expect(await server.snapshot(itemID: seed.item.id)?.item.status == .open)
         }
         var overlong = Self.command(id: String(repeating: "c", count: 257), against: seed, action: .adjudicate_findings)
@@ -1630,7 +1630,7 @@ import Testing
             Issue.record("overlong adjudication command id was accepted")
             return
         }
-        #expect(status == 422)
+        #expect(status == 400)
         #expect(await server.snapshot(itemID: seed.item.id)?.item.status == .open)
 
         var command = Self.command(id: "human-decision", against: seed, action: .adjudicate_findings)
@@ -1832,7 +1832,7 @@ extension MockServerTests {
             Issue.record("expected missing-route rejection, got \(missing)")
             return
         }
-        #expect(missingStatus == 422)
+        #expect(missingStatus == 400)
 
         // A route on any other command is refused while the item is still
         // open, before the accepted answer supersedes it.
@@ -1843,7 +1843,7 @@ extension MockServerTests {
             Issue.record("expected a routed stop to be rejected, got \(stopped)")
             return
         }
-        #expect(stopStatus == 422)
+        #expect(stopStatus == 400)
 
         // revise_specification is now accepted (#1083): it files the answer as
         // feedback, supersedes the question, and a revised spec_approval names
@@ -1961,7 +1961,7 @@ extension MockServerTests {
             Issue.record("expected an undocumented conflict status")
             return
         }
-        #expect(status == 422)
+        #expect(status == 400)
     }
 
     @Test func submitTaskConflictsOnACrossDeviceReplay() async throws {
@@ -1981,7 +1981,7 @@ extension MockServerTests {
             Issue.record("expected an undocumented conflict status")
             return
         }
-        #expect(status == 422)
+        #expect(status == 400)
     }
 
     private func submitTaskCommand(
@@ -1993,11 +1993,14 @@ extension MockServerTests {
                 .init(kind: .submit_task, project_id: "project-1", source: "Add retries.", task_lines: lines)))
     }
 
-    /// Whether the command was refused as a client error. The daemon answers
-    /// 400 for these refusals and the mock 422, so the new tests pin neither.
-    private func isRefused(_ output: Operations.submitCommand.Output) -> Bool {
-        guard case .undocumented(let status, _) = output else { return false }
-        return (400..<500).contains(status)
+    /// The status of an undocumented response (a refusal), or nil for a
+    /// documented one such as an acceptance or a stale 409. The mock answers
+    /// a refused command 400, as the daemon does.
+    private func refusalStatus(_ client: Client, _ command: Components.Schemas.ClientCommand) async throws -> Int? {
+        guard case .undocumented(let status, _) = try await client.submitCommand(body: .json(command)) else {
+            return nil
+        }
+        return status
     }
 
     @Test func submitTaskRecordsItsLinesOnTheTask() async throws {
@@ -2128,21 +2131,19 @@ extension MockServerTests {
         let changed: [Components.Schemas.TaskLineInput] = [
             .init(role: .implementer, agent: "claude-primary"), .init(role: .reviewer, agent: "codex-primary"),
         ]
-        #expect(isRefused(try await client.submitCommand(body: .json(submitTaskCommand("cmd-1", lines: changed)))))
-        #expect(isRefused(try await client.submitCommand(body: .json(submitTaskCommand("cmd-1", lines: nil)))))
+        #expect(try await refusalStatus(client, submitTaskCommand("cmd-1", lines: changed)) == 400)
+        #expect(try await refusalStatus(client, submitTaskCommand("cmd-1", lines: nil)) == 400)
     }
 
     @Test func submitTaskRejectsAnEmptyRepeatedOrMisnamedLineList() async throws {
         let client = APIClientFactory.mock(server: MockServer())
-        #expect(isRefused(try await client.submitCommand(body: .json(submitTaskCommand("cmd-empty", lines: [])))))
+        #expect(try await refusalStatus(client, submitTaskCommand("cmd-empty", lines: [])) == 400)
         let repeated: [Components.Schemas.TaskLineInput] = [
             .init(role: .reviewer, agent: "codex-primary"), .init(role: .reviewer, agent: "claude-primary"),
         ]
-        #expect(
-            isRefused(try await client.submitCommand(body: .json(submitTaskCommand("cmd-repeat", lines: repeated)))))
+        #expect(try await refusalStatus(client, submitTaskCommand("cmd-repeat", lines: repeated)) == 400)
         let misnamed: [Components.Schemas.TaskLineInput] = [.init(role: .reviewer, agent: "Codex Primary")]
-        #expect(
-            isRefused(try await client.submitCommand(body: .json(submitTaskCommand("cmd-misnamed", lines: misnamed)))))
+        #expect(try await refusalStatus(client, submitTaskCommand("cmd-misnamed", lines: misnamed)) == 400)
         let bootstrap = try await client.getSyncBootstrap().ok.body.json
         #expect(!bootstrap.tasks.contains { $0.task.id.hasPrefix("task-submitted-") })
     }

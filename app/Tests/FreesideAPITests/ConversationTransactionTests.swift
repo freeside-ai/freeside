@@ -210,7 +210,7 @@ import Testing
             return
         }
 
-        #expect(status == 422)
+        #expect(status == 400)
     }
 
     private static func command(
