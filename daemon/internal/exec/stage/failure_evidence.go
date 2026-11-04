@@ -30,7 +30,7 @@ func (d *Driver) failedWriterResult(
 	// live path and a restart before the result commits name it alike.
 	if recovered.MemoryLimitKill {
 		result.Cause = domain.FailureCauseMemoryLimit
-		result.Summary = truncateSummary(fmt.Sprintf(
+		result.Summary = truncateFailureSummary(fmt.Sprintf(
 			"Writer container was killed at its memory limit (%s). %s", size, result.Summary))
 	}
 	if recovered.FailureStatus < 1 || recovered.FailureStatus > 255 || recovered.Outcome != ward.RecoveryFailed ||

@@ -662,7 +662,7 @@ func (d *Driver) regateWithCurrentPolicy(
 	if promptErr != nil {
 		if i.Phase != phaseCommitted || i.Result == nil ||
 			i.Result.Status != exec.StatusFailed || i.Prompt != "" ||
-			i.Result.Summary != truncateSummary(promptErr.Error()) {
+			!isPromptRefusalSummary(i.Result.Summary, promptErr) {
 			return fmt.Errorf("%w: intent %s does not carry the authenticated refusal",
 				ErrUnsupportedStart, i.InvocationID)
 		}
@@ -782,6 +782,18 @@ func (d *Driver) saveIntent(in intent) error {
 		return fmt.Errorf("save driver intent %s: %w", in.InvocationID, err)
 	}
 	return nil
+}
+
+// isPromptRefusalSummary reports whether summary is the one Start commits
+// for a prompt refusal, which it bounds with truncateFailureSummary. A
+// refusal committed before failure summaries kept their tail stored the
+// head-only exec.TruncateSummary form instead, and the two differ for an
+// over-cap error. Both are derived from the same re-rendered error, so
+// accepting either authenticates the same refusal; refusing the old form
+// would leave such an intent unreconstructable after an upgrade.
+func isPromptRefusalSummary(summary string, promptErr error) bool {
+	text := promptErr.Error()
+	return summary == truncateFailureSummary(text) || summary == exec.TruncateSummary(text)
 }
 
 // listIntents returns every durable intent, for restart reconciliation.

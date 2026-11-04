@@ -38,22 +38,25 @@ func writeEvidenceBlob(t *testing.T, dir string, body []byte) domain.Digest {
 	return domain.Digest("sha256:" + hexDigits)
 }
 
-func TestTruncateSummaryPreservesUTF8WithinTheByteCap(t *testing.T) {
+func TestTruncateFailureSummaryPreservesUTF8WithinTheByteCap(t *testing.T) {
 	t.Parallel()
 	input := strings.Repeat("a", maxSummaryBytes-4) + "€-tail"
-	got := truncateSummary(input)
+	got := truncateFailureSummary(input)
 	if !utf8.ValidString(got) {
 		t.Fatalf("truncated summary is not valid UTF-8: %q", got)
 	}
 	if len(got) > maxSummaryBytes {
 		t.Fatalf("truncated summary is %d bytes, cap is %d", len(got), maxSummaryBytes)
 	}
-	if !strings.HasSuffix(got, "…") {
-		t.Fatalf("truncated summary %q has no ellipsis", got)
+	if !strings.Contains(got, "…") {
+		t.Fatalf("truncated summary %q has no elision marker", got)
+	}
+	if !strings.HasSuffix(got, "€-tail") {
+		t.Fatalf("truncated summary %q lost the tail of the failure", got)
 	}
 
 	invalid := strings.Repeat("a", maxSummaryBytes) + string([]byte{0xff})
-	if got := truncateSummary(invalid); !utf8.ValidString(got) || len(got) > maxSummaryBytes {
+	if got := truncateFailureSummary(invalid); !utf8.ValidString(got) || len(got) > maxSummaryBytes {
 		t.Fatalf("normalized summary = %q (%d bytes), want valid UTF-8 within cap", got, len(got))
 	}
 }

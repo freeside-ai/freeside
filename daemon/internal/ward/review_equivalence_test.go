@@ -119,7 +119,7 @@ func oldNormalizeCollection(
 		}
 		// #2110 records the provider's terminal message with the failure.
 		if terminalMessage != "" {
-			failure += ": " + exec.TruncateSummary(terminalMessage)
+			failure += ": " + exec.TruncateFailureSummary(terminalMessage)
 		}
 		return CodexReviewSourceOutcome{
 			InvocationID: id,
