@@ -14,8 +14,8 @@ public struct FreesideRootView: View {
     @State private var showsInboxClearResult: Bool
     @State private var connectionAddress = ""
     @State private var stopRecoveryPresented = false
-    /// The routed task page's place and unsent Stop, kept across the page
-    /// remounting when a leading card comes or goes.
+    /// The routed task page's place, kept for the page mounting again when
+    /// the Mac detail column returns from a run, and the cards opened on it.
     @State private var pageMemory = TaskPageMemory()
     @State private var rePairConfirmationPresented = false
     @State private var rePairFailure: String?
@@ -241,12 +241,6 @@ public struct FreesideRootView: View {
             )
             .dynamicTypeSize(launchDynamicTypeSize ?? systemDynamicTypeSize)
         }
-        // The task page's Stop confirmation, above the navigation containers
-        // so it stays up while the page remounts under it.
-        .taskStopConfirmation(
-            pageMemory, model: coordinator.taskStop,
-            dynamicTypeSize: launchDynamicTypeSize ?? systemDynamicTypeSize
-        )
         // Offered once after a pairing, on the iPhone only.
         .sheet(
             isPresented: Binding(
@@ -415,10 +409,10 @@ public struct FreesideRootView: View {
         #endif
     }
 
-    /// A decision card, alone in the pane or seated in `page`.
+    /// A decision card, alone in the pane or seated in a task page.
     private func decisionCard(
         _ itemID: String, coordinator: SyncCoordinator, topMargin: CGFloat? = nil,
-        page: DecisionDetailView.Page? = nil
+        seat: DecisionDetailView.PageSeat? = nil
     ) -> DecisionDetailView {
         DecisionDetailView(
             store: coordinator.store,
@@ -429,7 +423,7 @@ public struct FreesideRootView: View {
             launchComposer: navigation.launchComposer(for: itemID),
             onConsumeLaunchComposer: navigation.consumeLaunchComposer,
             topMargin: topMargin,
-            page: page,
+            seat: seat,
             onSelectItem: openItem,
             tasks: coordinator.tasks,
             onSelectTask: { navigation.route(to: .task($0)) },
@@ -447,7 +441,7 @@ public struct FreesideRootView: View {
             memory: pageMemory,
             onOpenRun: { navigation.openRun(taskID: task.task.id, runID: $0) },
             onOpenItem: openItem,
-            card: { itemID, page in decisionCard(itemID, coordinator: coordinator, page: page) })
+            card: { itemID, seat in decisionCard(itemID, coordinator: coordinator, seat: seat) })
     }
 
     private func unifiedList(_ coordinator: SyncCoordinator) -> some View {
@@ -560,7 +554,10 @@ public struct FreesideRootView: View {
                 decisionCard(itemID, coordinator: coordinator)
             case .taskPage(let taskID, let leadingItemID):
                 if let task = coordinator.tasks.first(where: { $0.task.id == taskID }) {
+                    // The stack keeps a destination's identity when a route
+                    // replaces it in place, so another task's page starts fresh.
                     taskPage(task, leadingItemID: leadingItemID, coordinator: coordinator)
+                        .id(taskID)
                 } else {
                     unavailableDetail
                 }

@@ -44,14 +44,17 @@ enum DecisionLaunchComposerGate {
 /// and exactly the item's requested actions. Actions stay disabled until
 /// the model's revalidation of current state succeeds.
 struct DecisionDetailView: View {
-    /// The task page around the card, drawn inside this view's scroll view
-    /// so the card keeps its sheets, keyboard commands, sticky footer, and
-    /// scroll targets while the page scrolls with it. `content` takes the
-    /// seated card and the scroll view's proxy.
-    struct Page {
-        let title: String
-        let content: (AnyView, ScrollViewProxy) -> AnyView
+    /// The card's seat in the task page, which owns the scroll view: the
+    /// card draws none of its own, reveals its technical details through
+    /// the page's proxy, and on iOS hands its sticky recommended action up
+    /// to the page (`TaskPageFooterKey`).
+    struct PageSeat {
+        let scrollProxy: ScrollViewProxy
     }
+
+    /// The scroll view the recommendation's visibility is measured against:
+    /// the card's own, or the task page's when the card is seated there.
+    static let scrollSpace = "decision-card-scroll"
 
     private enum ScrollTarget: Hashable {
         case technicalDetails
@@ -126,7 +129,7 @@ struct DecisionDetailView: View {
     /// keeps the pane's own margin.
     private let topMargin: CGFloat?
     /// Seats the card in the task page. Nil is the card alone in the pane.
-    private let page: Page?
+    private let seat: PageSeat?
     /// Room for the task page's pinned outline row above a scroll target.
     @ScaledMetric(relativeTo: .caption) private var pinnedClearance: CGFloat = 44
     private let onSelectItem: (String) -> Void
@@ -154,7 +157,7 @@ struct DecisionDetailView: View {
         now: Date = .now,
         sectionPreferences: DecisionSectionPreferences? = nil,
         topMargin: CGFloat? = nil,
-        page: Page? = nil,
+        seat: PageSeat? = nil,
         onSelectItem: @escaping (String) -> Void = { _ in },
         tasks: [Components.Schemas.TaskSnapshot] = [],
         onSelectTask: @escaping (String) -> Void = { _ in },
@@ -186,7 +189,7 @@ struct DecisionDetailView: View {
         self.launchComposer = launchComposer
         self.onConsumeLaunchComposer = onConsumeLaunchComposer
         self.topMargin = topMargin
-        self.page = page
+        self.seat = seat
         self.onSelectItem = onSelectItem
         self.tasks = tasks
         self.onSelectTask = onSelectTask
@@ -200,39 +203,45 @@ struct DecisionDetailView: View {
         platformBody {
             Group {
                 if let snapshot = model.snapshot {
-                    ScrollViewReader { scrollProxy in
-                        ScrollView {
-                            let drawn = card(
-                                snapshot.item,
-                                proposalFacts: model.proposalFacts,
-                                effectProposalFacts: model.effectProposalFacts,
-                                accessibilityLayout: isAccessibilityLayout,
-                                compactLayout: horizontalSizeClass == .compact
-                            )
-                            if let page {
-                                page.content(
-                                    AnyView(
-                                        takesRecommendationOnReturn(
-                                            drawn.pageCard(compact: horizontalSizeClass == .compact))),
-                                    scrollProxy)
-                            } else {
+                    let drawn = card(
+                        snapshot.item,
+                        proposalFacts: model.proposalFacts,
+                        effectProposalFacts: model.effectProposalFacts,
+                        accessibilityLayout: isAccessibilityLayout,
+                        compactLayout: horizontalSizeClass == .compact
+                    )
+                    if let seat {
+                        // The page draws the scroll view and its title.
+                        takesRecommendationOnReturn(drawn.pageCard(compact: horizontalSizeClass == .compact))
+                            .onChange(of: detailsRevealRequest) {
+                                revealTechnicalDetailsIfRequested(using: seat.scrollProxy)
+                            }
+                            .onAppear {
+                                revealTechnicalDetailsIfRequested(using: seat.scrollProxy)
+                            }
+                    } else {
+                        ScrollViewReader { scrollProxy in
+                            ScrollView {
                                 drawn.detailCard(
                                     compact: horizontalSizeClass == .compact, topMargin: topMargin)
                             }
+                            .coordinateSpace(name: Self.scrollSpace)
+                            .onChange(of: detailsRevealRequest) {
+                                revealTechnicalDetailsIfRequested(using: scrollProxy)
+                            }
+                            .onAppear {
+                                revealTechnicalDetailsIfRequested(using: scrollProxy)
+                            }
                         }
-                        .coordinateSpace(name: "decision-card-scroll")
-                        .onChange(of: detailsRevealRequest) {
-                            revealTechnicalDetailsIfRequested(using: scrollProxy)
-                        }
-                        .onAppear {
-                            revealTechnicalDetailsIfRequested(using: scrollProxy)
-                        }
+                        .navigationTitle(AttentionDisplay.title(snapshot.item))
                     }
-                } else {
+                } else if seat == nil {
                     UnavailableStateView(
                         glyph: .inbox, title: "Item unavailable",
                         description: "This attention item is not in the list.",
-                        seat: .detailColumn)
+                        seat: .detailColumn
+                    )
+                    .navigationTitle("Decision")
                 }
             }
             // Re-validate on open and whenever the cache is evicted for a new
@@ -361,9 +370,6 @@ struct DecisionDetailView: View {
                     specApprovalReaderSheet(reader, item: item)
                 }
             }
-            .navigationTitle(
-                page?.title ?? model.snapshot.map { AttentionDisplay.title($0.item) } ?? "Decision"
-            )
             .sheet(item: $pendingConfirmation) { confirmation in
                 ConsequenceSheet(
                     action: confirmation.action,
@@ -399,7 +405,7 @@ struct DecisionDetailView: View {
                 // On a task page the handler sits on the card alone: Return
                 // on a one-line row or a task control must not decide this
                 // card.
-                .onKeyPress(.return) { page == nil ? takeRecommendationOnReturn() : .ignored }
+                .onKeyPress(.return) { seat == nil ? takeRecommendationOnReturn() : .ignored }
             #endif
         }
     }
@@ -443,34 +449,43 @@ struct DecisionDetailView: View {
         @ViewBuilder _ content: @escaping () -> Content
     ) -> some View {
         #if os(iOS)
-            content().safeAreaInset(edge: .bottom, spacing: 0) {
-                // The same ranking gate the card's own recommendation block
-                // uses: the served action surface decides what this client may
-                // submit, so a stored recommendation the surface no longer
-                // ranks must not reappear as a footer button once the block
-                // itself has stopped rendering (#1107 review).
-                if let item = model.snapshot?.item,
-                    let recommendation = DecisionRecommendationPresentation.of(item),
-                    actionRanking(item).recommended == recommendation.action,
-                    !recommendationVisible
-                {
-                    actionButton(
-                        recommendation.action,
-                        item: item,
-                        tone: AttentionDisplay.confirmationConsequence(
-                            recommendation.action,
-                            for: item) == nil ? .primary : .destructive,
-                        showsIcon: false
-                    )
-                    .padding(.horizontal)
-                    .padding(.vertical, 10)
-                    .background(.bar)
-                }
+            if seat == nil {
+                content().safeAreaInset(edge: .bottom, spacing: 0) { stickyRecommendation }
+            } else {
+                content().preference(key: TaskPageFooterKey.self, value: stickyRecommendation)
             }
         #else
             content()
         #endif
     }
+
+    #if os(iOS)
+        /// The recommended action pinned under the scroll view while its own
+        /// button is scrolled away. The same ranking gate the card's own
+        /// recommendation block uses: the served action surface decides what
+        /// this client may submit, so a stored recommendation the surface no
+        /// longer ranks must not reappear as a footer button once the block
+        /// itself has stopped rendering (#1107 review).
+        private var stickyRecommendation: AnyView? {
+            guard let item = model.snapshot?.item,
+                let recommendation = DecisionRecommendationPresentation.of(item),
+                actionRanking(item).recommended == recommendation.action,
+                !recommendationVisible
+            else { return nil }
+            return AnyView(
+                actionButton(
+                    recommendation.action,
+                    item: item,
+                    tone: AttentionDisplay.confirmationConsequence(
+                        recommendation.action,
+                        for: item) == nil ? .primary : .destructive,
+                    showsIcon: false
+                )
+                .padding(.horizontal)
+                .padding(.vertical, 10)
+                .background(.bar))
+        }
+    #endif
 
     private var isAccessibilityLayout: Bool {
         dynamicTypeSize >= .accessibility1
@@ -809,9 +824,9 @@ struct DecisionDetailView: View {
         // target stands clear of it. The card alone pins nothing.
         .background(alignment: .top) {
             Color.clear
-                .frame(height: page == nil ? 0 : pinnedClearance)
+                .frame(height: seat == nil ? 0 : pinnedClearance)
                 .id(ScrollTarget.technicalDetails)
-                .padding(.top, page == nil ? 0 : -pinnedClearance)
+                .padding(.top, seat == nil ? 0 : -pinnedClearance)
         }
         .foregroundStyle(Color.inkDim)
         .textSelection(.enabled)
@@ -2810,8 +2825,8 @@ struct DecisionDetailView: View {
             // the measurement is the button's own, not the block's.
             .onGeometryChange(for: Bool.self) { geometry in
                 Self.recommendationActionVisible(
-                    frame: geometry.frame(in: .named("decision-card-scroll")),
-                    viewportHeight: geometry.bounds(of: .named("decision-card-scroll"))?.height)
+                    frame: geometry.frame(in: .named(Self.scrollSpace)),
+                    viewportHeight: geometry.bounds(of: .named(Self.scrollSpace))?.height)
             } action: { visible in
                 recommendationVisible = visible
             }

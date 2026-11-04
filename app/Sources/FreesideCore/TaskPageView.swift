@@ -10,8 +10,8 @@ import SwiftUI
 /// newest-first order; unlike the run rail, nothing here is reversed or
 /// sorted by timestamp.
 ///
-/// This view is the page's content. `TaskPageHost` gives it a scroll view:
-/// `DecisionDetailView`'s when a card leads, its own otherwise.
+/// This view is the page's content. `TaskPageHost` gives it its one scroll
+/// view, which a leading card arriving or leaving doesn't replace.
 struct TaskPageView: View {
     /// Keys the timeline refetch task, as `RunTimelineView.TimelineRequestKey`
     /// does: the task's own revision plus the epoch, full-snapshot revision,
@@ -71,27 +71,52 @@ struct TaskPageView: View {
     /// open item, Task otherwise.
     @State private var chosenSection: TaskPageSection?
     @State private var outlineHeight: CGFloat = 0
-    /// Holds the reader's place and the controls' unsent state across a
-    /// remount. Nil in a screenshot and in tests that don't exercise it.
+    /// The Stop confirmation and the What Happened fold, held here because
+    /// the lazy stack can drop the Stop controls, and their state with them,
+    /// while a card leaving shrinks the document under the reader.
+    @State private var stopConfirmation: TaskStopModel.Confirmation?
+    @State private var showsStopExplanation = false
+    /// Keeps the reader's place for a page mounting again for this task,
+    /// and counts the cards the operator opens. Nil in a screenshot and in
+    /// tests that don't exercise it.
     private let memory: TaskPageMemory?
     @State private var place = PlaceTracker()
 
-    /// The jump targets' latest tops in the scroll view, kept off the view's
-    /// observed state so scrolling doesn't redraw the page every frame.
+    /// The reader's place and the jump targets' latest tops in the scroll
+    /// view, kept off the view's observed state so scrolling doesn't redraw
+    /// the page every frame.
     @MainActor private final class PlaceTracker {
         var targetTops: [TaskPageAnchor: CGFloat] = [:]
         var rowTop: CGFloat = 0
-        /// Set once the mount has returned to the held place. Until then
-        /// the page records nothing, so its first position, the top it
-        /// mounts at, doesn't overwrite the place it is returning to. A page
-        /// that reappears from under a run keeps its own offset, so it
-        /// restores once.
+        /// The section or run the reader has under the pinned outline row.
+        /// Nil while the header is in view.
+        var anchor: TaskPageAnchor?
+        /// Set once the mount has returned to the place the memory held.
+        /// Until then the page records nothing, so its first position, the
+        /// top it mounts at, doesn't overwrite the place it is returning to.
+        /// A page that reappears from under a run keeps its own offset, so
+        /// it restores once.
         var restored = false
         /// The open items the recorded layout drew.
         var itemIDs: Set<String> = []
-        /// Set while a change in the open items lays out.
-        var paused = false
+        /// Whether a card leads the page as last drawn, for a move that
+        /// runs after the view it was scheduled from has been replaced.
+        var leadsWithCard = false
+        /// A move waiting for a change to lay out. The page records nothing
+        /// meanwhile, so the layout the change first draws, with the
+        /// reader's section pushed down or pulled up, isn't their place.
+        var pendingMove: PendingMove?
     }
+
+    private enum PendingMove {
+        /// Back to the reader's place, after an open item arrived or left.
+        case toPlace
+        /// To the leading card, which the operator opened.
+        case toCard
+    }
+
+    /// The page's top, where a Decisions place with no card left returns.
+    private enum PageTop: Hashable { case top }
 
     init(
         coordinator: SyncCoordinator, snapshot: Components.Schemas.TaskSnapshot,
@@ -178,9 +203,21 @@ struct TaskPageView: View {
                 }
             }
             .pageColumn(compact: compact, topMargin: topMargin)
+            .id(PageTop.top)
             .task { await restorePlace() }
             .onChange(of: chosenSection) { held?.chosenSection = chosenSection }
-            .onChange(of: memory?.cardOpenings) { openLeadingCard() }
+            .onChange(of: memory?.cardOpenings) { moveToOpenedCard() }
+            // `repairSelection` moves the lead only off a card that closed,
+            // so a move off one still open is the operator choosing another.
+            .onChange(of: leadingItemID) { previous, _ in
+                // An open the memory counted has already started the move.
+                if let previous, openItemIDs.contains(previous), place.pendingMove != .toCard {
+                    moveToOpenedCard()
+                }
+            }
+            .onChange(of: leadingCard != nil, initial: true) { place.leadsWithCard = leadingCard != nil }
+            .taskStopConfirmation(
+                $stopConfirmation, model: coordinator.taskStop, dynamicTypeSize: dynamicTypeSize)
         }
     }
 
@@ -263,43 +300,94 @@ struct TaskPageView: View {
         memory?.taskID == snapshot.task.id ? memory : nil
     }
 
-    /// Writes the reader's place to the memory when it changes.
+    private var openItemIDs: Set<String> { Set(openItems.map(\.item.id)) }
+
+    /// Records the reader's place when it changes, and writes it through to
+    /// the memory for a later mount. When the open items change, it moves
+    /// back to the place instead.
     private func recordPlace() {
-        guard let held, place.restored, !place.paused else { return }
-        // A card coming or going first draws in the page it leaves, which
-        // the remount then replaces, so that layout isn't the reader's
-        // place. The route's repair follows the store change in a later
-        // transaction, so recording waits as long as a restore does.
-        let itemIDs = Set(openItems.map(\.item.id))
-        if itemIDs != place.itemIDs {
-            place.itemIDs = itemIDs
-            place.paused = true
-            Task { @MainActor [place] in
-                try? await Task.sleep(for: .milliseconds(120))
-                place.paused = false
-            }
+        guard place.restored, place.pendingMove == nil else { return }
+        if openItemIDs != place.itemIDs {
+            returnToPlace()
             return
         }
         let anchor = TaskPageAnchor.reading(offsets: place.targetTops.mapValues { $0 - place.rowTop })
-        if held.anchor != anchor { held.anchor = anchor }
+        guard anchor != place.anchor else { return }
+        place.anchor = anchor
+        held?.anchor = anchor
     }
 
-    /// Moves to the leading card when the operator opens it while it already
-    /// leads: routing then changes nothing, so the page doesn't remount.
-    private func openLeadingCard() {
-        guard leadingCard != nil else { return }
-        chosenSection = nil
-        jump(to: .section(.decisions))
+    /// Returns the page to the reader's place after an open item arrives or
+    /// leaves. A card arriving above the reader's section pushes it down
+    /// and one leaving pulls it up; the page itself stays mounted. The
+    /// route's repair, which seats or drops the card, follows the store
+    /// change in a later transaction, so the move waits the beat a restore
+    /// does. A Decisions place with no card left goes to the top.
+    private func returnToPlace() {
+        place.pendingMove = .toPlace
+        Task { @MainActor [place, scrollProxy] in
+            try? await Task.sleep(for: .milliseconds(120))
+            // An opened card wins: the operator chose where to go.
+            guard place.pendingMove == .toPlace else { return }
+            if let anchor = place.anchor {
+                if anchor == .section(.decisions), !place.leadsWithCard {
+                    scrollProxy?.scrollTo(PageTop.top, anchor: .top)
+                    place.anchor = nil
+                    held?.anchor = nil
+                    chosenSection = nil
+                } else {
+                    await drawTarget(anchor)
+                    scrollProxy?.scrollTo(anchor, anchor: .top)
+                }
+            }
+            place.itemIDs = openItemIDs
+            place.pendingMove = nil
+        }
     }
 
-    /// Returns a fresh mount to the place the page held before a card came
-    /// or went, and to the chip last chosen.
+    /// Moves to the leading card when the operator opens one: a one-line
+    /// row, the Decisions popup, a timeline row link, the header's
+    /// guidance, or a notification link, including to the card that
+    /// already leads, or a lead moving off a card that is still open, as a
+    /// sidebar task row does. The route seats a card it changes in a later
+    /// transaction, so the move waits the same beat.
+    private func moveToOpenedCard() {
+        place.pendingMove = .toCard
+        Task { @MainActor [place] in
+            try? await Task.sleep(for: .milliseconds(120))
+            guard place.pendingMove == .toCard else { return }
+            chosenSection = nil
+            await drawTarget(.section(.decisions))
+            jump(to: .section(.decisions))
+            place.itemIDs = openItemIDs
+            // Opening forgot the memory's place; the next record after the
+            // jump writes the new one through.
+            place.anchor = nil
+            place.pendingMove = nil
+        }
+    }
+
+    /// Brings back the page's body when `target` isn't drawn, so a jump to
+    /// it lands. A card leaving or a shorter one taking the lead shrinks the
+    /// document under a reader near its end, past which the lazy stack drops
+    /// the body and every jump target in it; the top draws it again.
+    private func drawTarget(_ target: TaskPageAnchor) async {
+        guard place.targetTops[target] == nil else { return }
+        scrollProxy?.scrollTo(PageTop.top, anchor: .top)
+        try? await Task.sleep(for: .milliseconds(50))
+    }
+
+    /// Returns a fresh mount to the place the memory holds for this task,
+    /// and to the chip last chosen: the Mac detail column replaces the page
+    /// with a run, so Back to Task mounts it again.
     private func restorePlace() async {
-        guard let memory, !place.restored else { return }
+        guard !place.restored else { return }
         defer { place.restored = true }
-        place.itemIDs = Set(openItems.map(\.item.id))
-        let target = memory.restore(taskID: snapshot.task.id, leadingItemID: leadingItemID, openItemIDs: place.itemIDs)
+        place.itemIDs = openItemIDs
+        guard let memory else { return }
+        let target = memory.restore(taskID: snapshot.task.id, leadsWithCard: leadingCard != nil)
         chosenSection = memory.chosenSection
+        place.anchor = target
         guard let target else { return }
         // The page lays out over a later commit, as `jump(toRun:)` waits for.
         guard (try? await Task.sleep(for: .milliseconds(120))) != nil else { return }
@@ -461,19 +549,16 @@ struct TaskPageView: View {
         }
     }
 
-    /// The controls keep their unsent state in the memory, which the root
-    /// presents the Stop confirmation from, so both outlast a remount.
     private func controls(_ timeline: Components.Schemas.TaskTimeline?) -> some View {
-        let held = held
-        return TaskStopView(
+        TaskStopView(
             coordinator: coordinator, taskID: snapshot.task.id,
             moreActions: timeline.map { timeline in
                 let text = TaskTimelinePresentation.allIdentifiersText(
                     TaskTimelinePresentation.identifierGroups(timeline, taskID: snapshot.task.id))
                 return [.init(title: "Copy all identifiers") { Clipboard.copy(text) }]
             } ?? [],
-            presentedConfirmation: held.map { Bindable($0).confirmation },
-            explanationExpanded: held.map { Bindable($0).showsStopExplanation })
+            presentedConfirmation: $stopConfirmation,
+            explanationExpanded: $showsStopExplanation)
     }
 
     /// Every conversation the task's items name, read-only: a reply goes
@@ -886,8 +971,8 @@ struct TaskPageView: View {
     }
 }
 
-/// Where a jump lands, and the place the page keeps across a remount: a
-/// section, or a run inside the Timeline.
+/// Where a jump lands, and the reader's place the page keeps: a section, or
+/// a run inside the Timeline.
 enum TaskPageAnchor: Hashable {
     case section(TaskPageSection)
     case run(String)
@@ -905,11 +990,10 @@ enum TaskPageAnchor: Hashable {
     }
 }
 
-/// Hosts the page in a scroll view and keeps its history fresh. A leading
-/// card's `DecisionDetailView` owns the scroll view, so the card keeps its
-/// sheets, keyboard commands, and sticky footer; the page draws inside it.
-/// A card coming or going swaps the scroll view and remounts the page, so
-/// `memory` carries the page's place across.
+/// Hosts the page in its one scroll view and keeps its history fresh. The
+/// leading card is content in the page, seated without a scroll view of its
+/// own, so a card arriving, leaving, or handing the lead to another leaves
+/// the page mounted; only the card is replaced.
 struct TaskPageHost: View {
     let coordinator: SyncCoordinator
     let snapshot: Components.Schemas.TaskSnapshot
@@ -918,28 +1002,36 @@ struct TaskPageHost: View {
     var memory: TaskPageMemory? = nil
     let onOpenRun: (String) -> Void
     let onOpenItem: (String) -> Void
-    /// Builds the leading item's card, seated in the page it's given.
-    let card: (String, DecisionDetailView.Page) -> DecisionDetailView
+    /// Builds the leading item's card, seated in the page's scroll view.
+    let card: (String, DecisionDetailView.PageSeat) -> DecisionDetailView
+    #if os(iOS)
+        @State private var footerHeight: CGFloat = 0
+    #endif
 
     private var title: String { TaskDisplay.projectName(snapshot.task) }
 
     var body: some View {
-        Group {
-            if let leadingItemID {
-                card(
-                    leadingItemID,
-                    .init(title: title) { card, proxy in
-                        AnyView(page(card: card, proxy: proxy))
-                    }
-                )
-                .id(leadingItemID)
-            } else {
-                ScrollViewReader { proxy in
-                    ScrollView { page(card: nil, proxy: proxy) }
-                }
-                .navigationTitle(title)
+        ScrollViewReader { proxy in
+            ScrollView {
+                TaskPageView(
+                    coordinator: coordinator, snapshot: snapshot, onOpenRun: onOpenRun, onOpenItem: onOpenItem,
+                    leadingItemID: leadingItemID,
+                    leadingCard: leadingItemID.map { AnyView(card($0, .init(scrollProxy: proxy)).id($0)) },
+                    scrollProxy: proxy, topMargin: topMargin, memory: memory)
             }
+            .coordinateSpace(name: DecisionDetailView.scrollSpace)
+            #if os(iOS)
+                // The seated card's sticky recommended action, drawn over
+                // room the scroll view leaves for it, as the card alone
+                // draws its own in a safe-area inset.
+                .safeAreaInset(edge: .bottom, spacing: 0) { Color.clear.frame(height: footerHeight) }
+                .overlayPreferenceValue(TaskPageFooterKey.self, alignment: .bottom) { footer in
+                    VStack(spacing: 0) { footer }
+                    .onGeometryChange(for: CGFloat.self, of: \.size.height) { footerHeight = $0 }
+                }
+            #endif
         }
+        .navigationTitle(title)
         .task(
             id: TaskPageView.TimelineRequestKey(
                 snapshot: snapshot, cursors: coordinator.cursors, cacheGeneration: coordinator.cacheGeneration)
@@ -950,14 +1042,21 @@ struct TaskPageHost: View {
             await coordinator.refreshTaskReviews(for: snapshot.task.id, revision: snapshot.as_of_revision)
         }
     }
-
-    private func page(card: AnyView?, proxy: ScrollViewProxy) -> TaskPageView {
-        TaskPageView(
-            coordinator: coordinator, snapshot: snapshot, onOpenRun: onOpenRun, onOpenItem: onOpenItem,
-            leadingItemID: leadingItemID, leadingCard: card, scrollProxy: proxy, topMargin: topMargin,
-            memory: memory)
-    }
 }
+
+#if os(iOS)
+    /// The sticky recommended action a seated card hands up to the task page
+    /// (`DecisionDetailView.PageSeat`), or nil while its own button shows.
+    /// The page reads it with each card update, so the button it draws is
+    /// never a stale copy.
+    struct TaskPageFooterKey: PreferenceKey {
+        static var defaultValue: AnyView? { nil }
+
+        static func reduce(value: inout AnyView?, nextValue: () -> AnyView?) {
+            value = value ?? nextValue()
+        }
+    }
+#endif
 
 /// Current projections retain daemon ordering. Legacy cached projections
 /// recover their nested events in newest-first order.
