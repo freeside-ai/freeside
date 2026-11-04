@@ -259,27 +259,18 @@ ORDER BY command_id`, actionSet)
 // through the entity's shared scan function (passed as a method expression,
 // so the List cannot skip a gate the Get runs).
 func listSnapshotted[T any](ctx context.Context, tx *ReadTx, query string, scan func(*ReadTx, scanner) (T, Snapshot, error)) ([]Snapshotted[T], error) {
-	rows, err := tx.tx.QueryContext(ctx, query)
+	out, err := queryAll(ctx, tx.tx, func(s scanner) (Snapshotted[T], error) {
+		value, snap, err := scan(tx, s)
+		return Snapshotted[T]{Value: value, Snapshot: snap}, err
+	}, query)
 	if err != nil {
 		return nil, err
 	}
-	defer func() { _ = rows.Close() }()
 	// Empty enumerations are empty, never nil: the results feed a wire
 	// projection, where a nil slice marshals as JSON null while the sync
 	// schemas require arrays.
-	out := []Snapshotted[T]{}
-	for rows.Next() {
-		value, snap, err := scan(tx, rows)
-		if err != nil {
-			// The scan functions return bare errors; the enumeration position
-			// (1-based, stable under the documented key order) locates the
-			// corrupt row, which a whole-table read has no single key to name.
-			return nil, fmt.Errorf("row %d: %w", len(out)+1, err)
-		}
-		out = append(out, Snapshotted[T]{Value: value, Snapshot: snap})
-	}
-	if err := rows.Err(); err != nil {
-		return nil, err
+	if out == nil {
+		return []Snapshotted[T]{}, nil
 	}
 	return out, nil
 }

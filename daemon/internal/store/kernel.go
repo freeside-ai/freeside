@@ -196,6 +196,36 @@ func decode[T validator](body []byte) (T, error) {
 // be missed on the other.
 type scanner interface{ Scan(dest ...any) error }
 
+// queryAll runs one query and returns scan's result for each row, in query
+// order; zero rows give a nil slice. scan runs while the rows are open, so a
+// scan that issues follow-up reads on tx behaves as it would inside a
+// hand-written loop. The rows are closed before queryAll returns, so no
+// cursor outlives the read while the caller runs follow-up queries on tx,
+// and a close failure is reported rather than dropped. A query error comes
+// back unchanged. A scan error is
+// wrapped with its 1-based row position, which is stable under the query's
+// ORDER BY and locates the corrupt row when a whole-table read has no single
+// key to name; errors.Is and errors.As still match through the wrap.
+func queryAll[T any](ctx context.Context, tx *sql.Tx, scan func(scanner) (T, error), query string, args ...any) ([]T, error) {
+	rows, err := tx.QueryContext(ctx, query, args...)
+	if err != nil {
+		return nil, err
+	}
+	var out []T
+	for rows.Next() {
+		value, err := scan(rows)
+		if err != nil {
+			_ = rows.Close()
+			return nil, fmt.Errorf("row %d: %w", len(out)+1, err)
+		}
+		out = append(out, value)
+	}
+	if err := errors.Join(rows.Err(), rows.Close()); err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 // putImmutable inserts a write-once row (INSERT ... ON CONFLICT DO NOTHING),
 // tolerating only a byte-identical replay of an existing key: canonical
 // json.Marshal is deterministic, so a retried Put of the same value converges
