@@ -2,7 +2,22 @@
 // ReviewSource interfaces every driver implements (plan §5.3) and the
 // RunnerBackend capability model (§5.7). It is spine-owned and changes only
 // through kind:contract work units. It is interfaces, contract types, and
-// validation only: no provider code, no I/O, no persistence. Real drivers
+// validation: no provider code, no I/O, no persistence. Three files are
+// stated exceptions, each with the reason it lives here:
+//
+//   - review_instruction.go: ComposeCodexReviewInstructions builds Codex's
+//     review-instruction bundle (provider code). The review contract carries
+//     its ReviewInstructionBinding, and the engine, the ward, and freesided
+//     preflight must produce the same bytes and digest.
+//   - usage_claude.go: ExtractClaudeUsage parses Claude's transcript result
+//     envelope (provider code), shared by exec/claude and the ward's review
+//     sources.
+//   - materialize.go: Materializer reads stage inputs through the injected
+//     InputSource (I/O), because MaterializingStageDriver is the one
+//     production start seam: it verifies input digests before a real driver
+//     commits an invocation intent.
+//
+// Moving any of these out of exec is a kind:contract change. Real drivers
 // (Claude, CodexGitHubReview) and runner backends land in their own lanes;
 // the permanent scripted fakes live in exec/fake.
 //
@@ -15,12 +30,16 @@
 //
 // Layout, by concept:
 //
-//   - status.go      the shared invocation Status vocabulary
-//   - driver.go      StageDriver and its StartSpec/StageResult contract (§5.3)
-//   - materialize.go digest-verified immutable stage inputs
-//   - review.go      ReviewSource and its ReviewRequest/ReviewResult contract (§5.3)
-//   - capability.go  Capability, RunnerBackend, CheckCapabilities (§5.7)
-//   - errors.go      sentinel errors (wrapped with %w)
+//   - status.go             the shared invocation Status vocabulary
+//   - driver.go             StageDriver and its StartSpec/StageResult contract (§5.3)
+//   - materialize.go        digest-verified immutable stage inputs
+//   - review.go             ReviewSource and its ReviewRequest/ReviewResult contract (§5.3)
+//   - review_instruction.go the review-instruction binding and Codex bundle composition
+//   - summary.go            the bounded StageResult summary (TruncateSummary)
+//   - usage.go              UsageMeasurement, the numbers-only usage report
+//   - usage_claude.go       Claude transcript usage extraction (ExtractClaudeUsage)
+//   - capability.go         Capability, RunnerBackend, CheckCapabilities (§5.7)
+//   - errors.go             sentinel errors (wrapped with %w)
 //
 // See docs/plan.md §5.3 (execution and review operation sets, the
 // at-most-one-accepted-result guarantee, session durability) and §5.7 (the
