@@ -450,7 +450,10 @@ engineering. Decision record: `devlog/2026-11-03-1442-assurance-tiers.md`.
 All under `daemon/`:
 
 - **Runner containment, egress, and credential volumes:**
-  `internal/ward/`, `internal/wardstore/`, `internal/buildproxy/`.
+  `internal/ward/`, `internal/wardstore/`, `internal/buildproxy/`,
+  `internal/projectimage/apple.go` (the host-side image provenance and
+  allowlist gates), and `internal/projectimage/oci_evidence.go` (decodes
+  and verifies the untrusted image archive).
 - **Credential injection, admission, and runner capabilities:**
   `internal/engine/agent_admission.go` (choosing an agent chooses which
   credential runs), `internal/engine/admission.go` (the runner capability
