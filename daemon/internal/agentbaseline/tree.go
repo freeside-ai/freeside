@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 	"slices"
+	"strings"
 	"time"
 
 	"github.com/freeside-ai/freeside/daemon/internal/agenttree"
@@ -45,6 +46,13 @@ type TreeInput struct {
 	// native-default id leaves the role on whatever the pinned CLI defaults
 	// to, which the operator can neither see in the tree nor pin.
 	Writers map[domain.RoleName]Selection
+	// SpecifierEscalated is the model and effort of the specifier's
+	// escalated counterpart (plan §5.13, Specifier Triage), or nil for none.
+	// When set, the tree carries one more writer agent on the Claude
+	// enrollment and ward adapter, with a pinned offer of its own, and an
+	// escalated line pairing the specifier's agent with it. It must differ
+	// from the specifier's own selection, or escalation would change nothing.
+	SpecifierEscalated *Selection
 	// ReviewModel is the route model id of the review offer, and
 	// ReviewEffort the effort the review agent asks. A review launch always
 	// passes both, so a tree with a review enrollment needs an effort other
@@ -141,6 +149,11 @@ func Tree(in TreeInput) (agenttree.Tree, error) {
 	if err != nil {
 		return agenttree.Tree{}, err
 	}
+	if in.SpecifierEscalated != nil {
+		if err := addClaudeSpecifierEscalated(&tree, in); err != nil {
+			return agenttree.Tree{}, err
+		}
+	}
 	for _, entry := range reviewRoleAgents {
 		wardRoleAgents = append(wardRoleAgents, roleAgent{entry.role, entry.agent})
 	}
@@ -194,6 +207,18 @@ func Tree(in TreeInput) (agenttree.Tree, error) {
 				AgentName: agent, AgentDigest: digest, PromptName: prompt.Name, PromptDigest: prompt.Digest,
 			},
 		})
+		if entry.role == domain.RoleSpecifier && in.SpecifierEscalated != nil {
+			line, err := escalatedSpecifierLine(agent, digests[ClaudeSpecifierEscalatedAgentName], prompt)
+			if err != nil {
+				return agenttree.Tree{}, err
+			}
+			tree.Lineup = append(tree.Lineup, line)
+		}
+	}
+	if in.SpecifierEscalated != nil {
+		if _, ok := in.Prompts[domain.RoleSpecifier]; !ok {
+			return agenttree.Tree{}, errors.New("baseline tree: an escalated specifier needs the specifier's prompt")
+		}
 	}
 	for _, role := range JudgmentRoles() {
 		prompt, ok := in.Prompts[role]
@@ -270,6 +295,59 @@ func addClaudeWriters(tree *agenttree.Tree, in TreeInput) ([]roleAgent, error) {
 		lines = append(lines, roleAgent{role, name})
 	}
 	return lines, nil
+}
+
+// addClaudeSpecifierEscalated adds the specifier's escalated counterpart and
+// the offer only it names. It shares the writer agents' enrollment, route,
+// and adapter, as the pairing rule requires: escalation changes the model
+// and effort, never the credential or the launch.
+func addClaudeSpecifierEscalated(tree *agenttree.Tree, in TreeInput) error {
+	selection := *in.SpecifierEscalated
+	if selection.Model == "" || selection.Model == domain.ClaudeCodeNativeDefaultRouteModelID {
+		return fmt.Errorf("baseline tree: escalated specifier model %q names no model", selection.Model)
+	}
+	if err := explicitEffort("escalated specifier", selection.Effort); err != nil {
+		return err
+	}
+	if selection == in.Writers[domain.RoleSpecifier] {
+		return fmt.Errorf("baseline tree: escalated specifier %s at %s is the specifier's own selection",
+			selection.Model, selection.Effort)
+	}
+	offer, err := sealOffer(domain.OfferFragment{
+		EncodingVersion: domain.AgentFragmentEncodingVersion,
+		RouteModelID:    selection.Model, LineageGroup: "anthropic",
+		IdentityStability: domain.IdentityPinned,
+		AllowedEfforts:    []domain.EffortLevel{selection.Effort},
+		PricingRevision:   in.PricingRevision, NotAfter: in.OfferNotAfter.UTC(),
+	})
+	if err != nil {
+		return err
+	}
+	tree.Agents = append(tree.Agents, domain.AgentSource{
+		Name: ClaudeSpecifierEscalatedAgentName, Enrollment: string(in.ClaudeEnrollment.ID),
+		Route: in.ClaudeEnrollment.Route, Adapter: ClaudeAdapterName,
+		Offer: ClaudeSpecifierEscalatedAgentName, Effort: selection.Effort,
+	})
+	tree.Offers = append(tree.Offers, agenttree.Offer{
+		Route: in.ClaudeEnrollment.Route, Name: ClaudeSpecifierEscalatedAgentName, Fragment: offer,
+	})
+	return nil
+}
+
+// escalatedSpecifierLine is the lineup row pairing the specifier's agent with
+// its escalated counterpart, under the specifier line's prompt.
+func escalatedSpecifierLine(specifierAgent string, digest domain.Digest, prompt Prompt) (agenttree.LineupLine, error) {
+	key, err := domain.LineupEscalatedKey(domain.RoleSpecifier, specifierAgent)
+	if err != nil {
+		return agenttree.LineupLine{}, err
+	}
+	return agenttree.LineupLine{
+		Key: strings.TrimPrefix(key, domain.LineupRoleKeyPrefix),
+		Selection: domain.LineupSelection{
+			AgentName: ClaudeSpecifierEscalatedAgentName, AgentDigest: digest,
+			PromptName: prompt.Name, PromptDigest: prompt.Digest,
+		},
+	}, nil
 }
 
 // addClaudeCall adds the call agent with the offer and adapter only it

@@ -198,6 +198,65 @@ func TestBaselineTreeRendersTheRecordedFiles(t *testing.T) {
 	golden.Assert(t, "baseline_tree", renderedTree(t, input(true)))
 }
 
+const escalatedSpecifierModel = "claude-specifier-escalated-test"
+
+// With an escalated specifier pair, adoption adds the escalated agent on the
+// Claude enrollment and ward adapter with a pinned offer of its own, and the
+// escalated line pairing the specifier's agent with it under the specifier's
+// prompt. The rest of the tree is the one adoption emits without the pair.
+func TestBaselineTreeEmitsTheEscalatedSpecifier(t *testing.T) {
+	in := input(true)
+	in.SpecifierEscalated = &agentbaseline.Selection{Model: escalatedSpecifierModel, Effort: domain.EffortMax}
+	golden.Assert(t, "baseline_tree_escalated", renderedTree(t, in))
+
+	tree := must(agenttree.Parse(must(agenttree.Render(must(agentbaseline.Tree(in))))))
+	claudeEnrollment, claudeIdentity := claudeRecords()
+	specifierName := agentbaseline.WriterAgentName(domain.RoleSpecifier)
+	specifier := must(tree.ResolveAgent(specifierName, claudeEnrollment, claudeIdentity))
+	escalated := must(tree.ResolveAgent(agentbaseline.ClaudeSpecifierEscalatedAgentName, claudeEnrollment, claudeIdentity))
+	if escalated.Adapter.Digest != specifier.Adapter.Digest ||
+		escalated.Definition.EnrollmentID != specifier.Definition.EnrollmentID ||
+		escalated.Offer.IdentityStability != domain.IdentityPinned {
+		t.Fatalf("escalated agent = %+v on offer %+v", escalated.Definition, escalated.Offer)
+	}
+	selection := must(domain.DeriveAgentLaunchSelection(escalated.Definition, escalated.Adapter, escalated.Offer))
+	if selection.RouteModelID != escalatedSpecifierModel || selection.RequestedEffort != domain.EffortMax {
+		t.Fatalf("escalated agent launches %+v", selection)
+	}
+	lineup := must(tree.ResolveLineup())
+	line, _ := lineup.Line(domain.RoleSpecifier)
+	counterpart, ok := lineup.EscalatedCounterpart(domain.RoleSpecifier, specifierName)
+	if !ok || counterpart.AgentName != agentbaseline.ClaudeSpecifierEscalatedAgentName ||
+		counterpart.AgentDigest != escalated.Definition.Digest || counterpart.PromptDigest != line.PromptDigest ||
+		line.AgentName != specifierName {
+		t.Fatalf("escalated line = %+v, %t beside the specifier line %+v", counterpart, ok, line)
+	}
+}
+
+func TestBaselineTreeRefusesAnEscalatedSpecifierThatChangesNothing(t *testing.T) {
+	own := writers()[domain.RoleSpecifier]
+	noPrompt := input(true)
+	delete(noPrompt.Prompts, domain.RoleSpecifier)
+	for name, tc := range map[string]struct {
+		in        agentbaseline.TreeInput
+		selection agentbaseline.Selection
+	}{
+		"the specifier's own pair": {input(true), own},
+		"no model":                 {input(true), agentbaseline.Selection{Effort: domain.EffortMax}},
+		"the native default":       {input(true), agentbaseline.Selection{Model: domain.ClaudeCodeNativeDefaultRouteModelID, Effort: domain.EffortMax}},
+		"no effort":                {input(true), agentbaseline.Selection{Model: escalatedSpecifierModel, Effort: domain.EffortHarnessDefault}},
+		"no specifier prompt":      {noPrompt, agentbaseline.Selection{Model: escalatedSpecifierModel, Effort: domain.EffortMax}},
+	} {
+		t.Run(name, func(t *testing.T) {
+			in := tc.in
+			in.SpecifierEscalated = &tc.selection
+			if _, err := agentbaseline.Tree(in); err == nil {
+				t.Fatal("Tree accepted the escalated specifier")
+			}
+		})
+	}
+}
+
 // Writer roles that ask one model and effort share one agent, named for the
 // first of them, with one pinned offer; a role asking
 // another pair gets its own. The native-default writer agent is gone: no
