@@ -315,7 +315,7 @@ func (c *Coordinator) ApplyPartial(
 func (c *Coordinator) SetCollector(
 	ctx context.Context, pool domain.UsagePoolID, collector domain.ClientEnrollmentID,
 ) (Reassignment, error) {
-	result, err := Reassign(ctx, c.store, pool, collector, c.cfg.Now())
+	result, err := Reassign(ctx, c.store, pool, collector, c.cfg.Now)
 	if err != nil || !result.Recorded {
 		return result, err
 	}
@@ -348,19 +348,22 @@ type Reassignment struct {
 	Recorded          bool                      `json:"recorded"`
 }
 
-// Reassign records collector as the pool's collector at at, as a new record
-// revision, without starting a collection: the operator's explicit action
-// and the only way the collector changes. An enrollment not on the pool fails
-// with store.ErrEnrollmentNotOnPool.
+// Reassign records collector as the pool's collector, stamped by now inside
+// the write, as a new record revision, without starting a collection: the
+// operator's explicit action and the only way the collector changes. An
+// enrollment not on the pool fails with store.ErrEnrollmentNotOnPool.
 func Reassign(
-	ctx context.Context, st *store.Store, pool domain.UsagePoolID, collector domain.ClientEnrollmentID, at time.Time,
+	ctx context.Context, st *store.Store, pool domain.UsagePoolID, collector domain.ClientEnrollmentID,
+	now func() time.Time,
 ) (Reassignment, error) {
 	var (
 		result   Reassignment
 		applyErr error
 	)
 	err := st.Write(ctx, func(tx *store.WriteTx) error {
-		if result, applyErr = ReassignTx(ctx, tx, pool, collector, at); applyErr != nil {
+		// Stamped inside the transaction, so no writer that committed first
+		// holds a later instant.
+		if result, applyErr = ReassignTx(ctx, tx, pool, collector, now()); applyErr != nil {
 			return applyErr
 		}
 		if !result.Recorded {
@@ -382,7 +385,8 @@ func Reassign(
 
 // ReassignTx is Reassign in the caller's transaction, so the record commits
 // with whatever else the caller writes. It writes nothing when the pool
-// already has collector.
+// already has collector, and refuses an enrollment not on the pool with
+// store.ErrEnrollmentNotOnPool whatever the stored record's stamp.
 func ReassignTx(
 	ctx context.Context, tx *store.WriteTx, pool domain.UsagePoolID, collector domain.ClientEnrollmentID, at time.Time,
 ) (Reassignment, error) {
@@ -393,6 +397,12 @@ func ReassignTx(
 		if record.Collector == collector {
 			return result, nil
 		}
+		// Membership first: the write checks revision order before it
+		// reaches its own membership check, so a newer stored record would
+		// report a stale write in place of the real refusal.
+		err = tx.RequireEnrollmentOnPool(ctx, pool, collector)
+	}
+	if err == nil {
 		err = tx.RecordPoolUsageObservation(ctx, reassigned(record, collector), at)
 	}
 	if err != nil {
