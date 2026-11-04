@@ -477,7 +477,9 @@ All under `daemon/`:
   source-issue closure gate), `internal/engine/publication_render_v2.go`
   (screens agent prose before it reaches GitHub), and
   `internal/engine/verification_report.go` (reads the verifier's bytes),
-  and `internal/store/publication_authoring.go` (the evidence gate on
+  `internal/engine/publication_core.go` (the git publish transport, the
+  publication lock, and candidate identity), and
+  `internal/store/publication_authoring.go` (the evidence gate on
   authored prose).
 - **Import and handoff:** `internal/importer/`,
   `internal/store/handoff_journal.go`.
