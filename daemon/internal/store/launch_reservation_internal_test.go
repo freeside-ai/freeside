@@ -197,6 +197,39 @@ func TestMachineCapacityReplaysAHeldReservation(t *testing.T) {
 	}
 }
 
+// TestMachineCapacityLowerBudgetKeepsAHeldReservation: a budget lowered below
+// a reservation already held limits only new launches. The held one replays
+// without a refusal and still counts, and a new launch of the same size can
+// never fit.
+func TestMachineCapacityLowerBudgetKeepsAHeldReservation(t *testing.T) {
+	t.Parallel()
+	ctx := t.Context()
+	st := openSlotStore(t)
+	seedCapacityRuns(t, st, "1-held", "2-new")
+	held := verificationLaunch("1-held", 2048)
+	if err := reserve(t, st, held); err != nil {
+		t.Fatal(err)
+	}
+	const loweredMiB = 1024
+	reserveUnder := func(r domain.LaunchReservation) error {
+		return st.Write(ctx, func(tx *WriteTx) error {
+			return tx.RequireMachineCapacity(ctx, loweredMiB, r, slotAt.Add(time.Second))
+		})
+	}
+	if err := reserveUnder(held); err != nil {
+		t.Fatalf("replay of a held reservation under a lower budget: %v", err)
+	}
+	var never *domain.LaunchNeverFitsError
+	if err := reserveUnder(verificationLaunch("2-new", 2048)); !errors.As(err, &never) || never.BudgetMiB != loweredMiB {
+		t.Fatalf("new launch under the lower budget = %v, want a never-fits refusal", err)
+	}
+	var refusal *domain.MachineCapacityError
+	if err := reserveUnder(verificationLaunch("2-new", 512)); !errors.As(err, &refusal) ||
+		refusal.Hold.ReservedMiB != held.TotalMiB() {
+		t.Fatalf("small launch beside the held one = %v, want a wait counting its %d MiB", err, held.TotalMiB())
+	}
+}
+
 // TestMachineCapacityDropsTheWaitOfARunThatCannotLaunch: a run whose task was
 // stopped while it waited leaves the order, so it blocks nobody behind it.
 func TestMachineCapacityDropsTheWaitOfARunThatCannotLaunch(t *testing.T) {

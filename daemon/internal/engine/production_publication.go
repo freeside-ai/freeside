@@ -262,8 +262,8 @@ type productionVerificationCheckpoint struct {
 }
 
 type productionPublicationWorkflow struct {
-	// launchBound is the engine's memory budget, which review admissions and
-	// verification jobs reserve against.
+	// launchBound is the engine's startup memory bound; review admissions and
+	// verification jobs reserve against the budget in force, launchBoundAt.
 	launchBound ward.LaunchBound
 	logger      *slog.Logger
 	store       *store.Store
@@ -3800,17 +3800,18 @@ func (w *productionPublicationWorkflow) reconcileReviewGate(
 			return productionReviewPending, w.holdReviewForCapacity(ctx, task.RunID, id, err)
 		}
 		// A launch the budget refuses for good, as under a runtime with no
-		// recorded overhead, waits under the notice for a start that fits it.
+		// recorded overhead or a budget lowered below it, waits under the
+		// notice for a budget or start that fits it.
 		if launchMemoryRefusal(err) {
 			return productionReviewPending, noticeLaunchMemoryRefusal(
-				ctx, w.store, w.attention, task.RunID, task.ProjectID, err)
+				ctx, w.store, w.attention, &w.holdPace, task.RunID, id, task.ProjectID, err)
 		}
 		return productionReviewPending, err
 	}
-	if w.launchBound.Budgeted() {
-		if err := releaseProductionQuarantine(ctx, w.store, w.attention, launchMemoryRefusedPrefix, task.RunID); err != nil {
-			return productionReviewPending, err
-		}
+	// Not gated on the startup bound: a budget recorded since may have raised
+	// the notice.
+	if err := releaseProductionQuarantine(ctx, w.store, w.attention, launchMemoryRefusedPrefix, task.RunID); err != nil {
+		return productionReviewPending, err
 	}
 	req, requestAuthority, err := w.productionReviewRequest(
 		task, binding, checkpoint, id, round, reviewInstructions, admission,
@@ -6088,7 +6089,8 @@ func (w *productionPublicationWorkflow) recordRetryableHold(
 	ctx context.Context, task productionPublicationTask, err error,
 ) error {
 	if launchMemoryRefusal(err) {
-		return noticeLaunchMemoryRefusal(ctx, w.store, w.attention, task.RunID, task.ProjectID, err)
+		return noticeLaunchMemoryRefusal(
+			ctx, w.store, w.attention, &w.holdPace, task.RunID, task.verificationInvocationID(), task.ProjectID, err)
 	}
 	var capacity *domain.MachineCapacityError
 	if errors.As(err, &capacity) {
@@ -6642,48 +6644,56 @@ func (w *productionPublicationWorkflow) verificationRoomAndRecipe(
 // first container, the recipe read (plan §5.4). A job takes no pool slot, so
 // the memory gate is its whole scheduling decision. One that does not fit yet
 // records its wait and hold and returns a retryable error, so the task stays
-// pending and a later pass asks again; a grant ends that hold.
+// pending and a later pass asks again; a grant ends that hold. One the budget
+// refuses for good is retryable too, so the job waits under the notice
+// recordRetryableHold raises.
 func (w *productionPublicationWorkflow) reserveVerification(
 	ctx context.Context, task productionPublicationTask, binding productionBinding,
 ) error {
-	if !w.launchBound.Budgeted() {
-		return nil
+	// Read before the gate's write, so an unbudgeted job writes nothing. No
+	// command clears a recorded budget, so a budget read here still applies
+	// in the gate. The gate reads the budget again in its own transaction, so
+	// one lowered between the two reads still bounds this reservation.
+	bound, err := currentLaunchBound(ctx, w.store, w.launchBound)
+	if err != nil || !bound.Budgeted() {
+		return err
 	}
 	sizes, err := ward.ResolveLaunchSizes(binding.resolvedPolicy.Keys, ward.LaunchBound{})
 	if err != nil {
 		return fmt.Errorf("resolve verification size: %w", err)
 	}
 	id := task.verificationInvocationID()
-	reservation, _, err := w.launchBound.LaunchReservation(
-		id, task.RunID, domain.ReservationVerification, sizes.Verification)
-	if launchMemoryRefusal(err) {
-		// Retryable, so the job waits under the notice for a start whose
-		// budget or runtime fits it; recordRetryableHold raises the notice.
-		return productionPublicationRetryableError(fmt.Errorf("reserve verification memory: %w", err))
-	}
-	if err != nil {
-		return err
-	}
 	now := w.now().UTC()
+	reservation, _, err := bound.LaunchReservation(
+		id, task.RunID, domain.ReservationVerification, sizes.Verification)
 	var waited bool
-	err = w.store.Write(ctx, func(tx *store.WriteTx) error {
-		if err := requireTaskExecutionOpen(ctx, &tx.ReadTx, task.RunID); err != nil {
-			return err
-		}
-		if err := tx.RequireMachineCapacity(ctx, w.launchBound.BudgetMiB, reservation, now); err != nil {
-			return err
-		}
-		hold, present, err := tx.GetRunHold(ctx, task.RunID)
-		if err != nil {
-			return err
-		}
-		waited = present && hold.Reason == domain.HoldMachineCapacity
-		return tx.ClearRunHoldCause(ctx, task.RunID, domain.HoldMachineCapacity)
-	})
+	if err == nil {
+		err = w.store.Write(ctx, func(tx *store.WriteTx) error {
+			if err := requireTaskExecutionOpen(ctx, &tx.ReadTx, task.RunID); err != nil {
+				return err
+			}
+			gate, err := launchBoundAt(ctx, &tx.ReadTx, w.launchBound)
+			if err != nil {
+				return err
+			}
+			if err := tx.RequireMachineCapacity(ctx, gate.BudgetMiB, reservation, now); err != nil {
+				return err
+			}
+			hold, present, err := tx.GetRunHold(ctx, task.RunID)
+			if err != nil {
+				return err
+			}
+			waited = present && hold.Reason == domain.HoldMachineCapacity
+			return tx.ClearRunHoldCause(ctx, task.RunID, domain.HoldMachineCapacity)
+		})
+	}
 	if errors.Is(err, domain.ErrMachineCapacity) {
-		if orderErr := recordLaunchOrder(ctx, w.store, w.launchBound, task.RunID, id, err, now); orderErr != nil {
+		if orderErr := recordLaunchOrder(ctx, w.store, w.attention, task.RunID, id, err, now); orderErr != nil {
 			return errors.Join(err, orderErr)
 		}
+		return productionPublicationRetryableError(fmt.Errorf("reserve verification memory: %w", err))
+	}
+	if launchMemoryRefusal(err) {
 		return productionPublicationRetryableError(fmt.Errorf("reserve verification memory: %w", err))
 	}
 	if err != nil {
@@ -6702,8 +6712,12 @@ func (w *productionPublicationWorkflow) reserveVerification(
 func (w *productionPublicationWorkflow) releaseVerification(
 	ctx context.Context, task productionPublicationTask, roomErr error,
 ) error {
-	if !w.launchBound.Budgeted() || errors.Is(roomErr, ward.ErrVerificationAbsenceUnproven) {
+	if errors.Is(roomErr, ward.ErrVerificationAbsenceUnproven) {
 		return nil
+	}
+	bound, err := currentLaunchBound(ctx, w.store, w.launchBound)
+	if err != nil || !bound.Budgeted() {
+		return err
 	}
 	return w.store.Write(ctx, func(tx *store.WriteTx) error {
 		return tx.ReleaseVerificationReservation(ctx, task.verificationInvocationID(), w.now().UTC())
@@ -8040,10 +8054,14 @@ func (w *productionPublicationWorkflow) ensureReviewAdmission(
 		if err := tx.RequireReviewUsagePoolCapacity(ctx, admission); err != nil {
 			return err
 		}
-		if reservation, reserve, err := reviewReservation(w.launchBound, runID, id); err != nil {
+		bound, err := launchBoundAt(ctx, &tx.ReadTx, w.launchBound)
+		if err != nil {
+			return err
+		}
+		if reservation, reserve, err := reviewReservation(bound, runID, id); err != nil {
 			return err
 		} else if reserve {
-			if err := tx.RequireMachineCapacity(ctx, w.launchBound.BudgetMiB, reservation, w.now().UTC()); err != nil {
+			if err := tx.RequireMachineCapacity(ctx, bound.BudgetMiB, reservation, w.now().UTC()); err != nil {
 				return err
 			}
 		}
@@ -8095,7 +8113,7 @@ func (w *productionPublicationWorkflow) holdReviewForCapacity(
 	}
 	detail := holdDetailFor(cause)
 	now := w.now().UTC()
-	if err := recordLaunchOrder(ctx, w.store, w.launchBound, runID, id, cause, now); err != nil {
+	if err := recordLaunchOrder(ctx, w.store, w.attention, runID, id, cause, now); err != nil {
 		return err
 	}
 	key := "hold:" + string(runID)

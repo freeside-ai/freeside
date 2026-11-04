@@ -13,6 +13,7 @@ import (
 // at 0120 holds.
 func rewindRoutingPolicyDrainFirst(t *testing.T, ctx context.Context, db *sql.DB) {
 	t.Helper()
+	rewindMemoryBudget(t, ctx, db)
 	for _, statement := range []string{
 		`ALTER TABLE routing_policies DROP COLUMN drain_first_account`,
 		`DELETE FROM schema_migrations WHERE name = '0121_routing_policy_drain_first.sql'`,

@@ -210,6 +210,9 @@ func main() {
 		case "set-pool-limit":
 			runSetPoolLimitMain(os.Args[2:])
 			return
+		case "set-memory-budget":
+			runSetMemoryBudgetMain(os.Args[2:])
+			return
 		case "task-line":
 			runTaskLineMain(os.Args[2:])
 			return
@@ -643,8 +646,10 @@ type config struct {
 	// rein resolver and workflow-definition parsing that populate it are a later
 	// unit, so a composition (or a test) supplies them directly for now.
 	IntakeInitiators []intakeInitiator
-	// MemoryBudgetMiB bounds every ward launch's memory (resolveMemoryBudget).
-	// Zero runs unbudgeted: nothing is reserved and no launch waits for
+	// MemoryBudgetMiB is the declared budget for every ward launch's memory
+	// (resolveMemoryBudget). A budget recorded with freesided
+	// set-memory-budget wins over it (startupLaunchBound). Zero, with none
+	// recorded, runs unbudgeted: nothing is reserved and no launch waits for
 	// memory.
 	MemoryBudgetMiB int
 	// AttentionDeliveryInterval is how often the daemon sends the
@@ -886,12 +891,7 @@ func run(parent context.Context, stop func(), cfg config) (_ *daemon, err error)
 			return nil, err
 		}
 	}
-	bound, err := cfg.launchBound(parent)
-	if err != nil {
-		return nil, err
-	}
-	logLaunchBound(cfg.Logger, bound)
-	manualProjects, err := readManualSubmissionProjects(cfg.ManualSubmissionConfigPath, policySizeBound(bound))
+	manualProjects, err := readManualSubmissionProjects(cfg.ManualSubmissionConfigPath)
 	if err != nil {
 		return nil, err
 	}
@@ -1038,6 +1038,13 @@ func run(parent context.Context, stop func(), cfg config) (_ *daemon, err error)
 			_ = st.Close()
 		}
 	}()
+	// The budget's checks wait for the store, because a budget recorded there
+	// wins over the declared one.
+	bound, err := cfg.startupLaunchBound(parent, st, manualProjects)
+	if err != nil {
+		return nil, err
+	}
+	logLaunchBound(cfg.Logger, bound)
 	var startupSessionCloser sessionCloser
 	defer func() {
 		err = errors.Join(err, closeStartupSessions(success, startupSessionCloser, stop))

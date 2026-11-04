@@ -19,6 +19,7 @@ import (
 	"github.com/freeside-ai/freeside/daemon/internal/signet"
 	"github.com/freeside-ai/freeside/daemon/internal/store"
 	"github.com/freeside-ai/freeside/daemon/internal/store/storetest"
+	"github.com/freeside-ai/freeside/daemon/internal/ward"
 )
 
 type immediateShadowSource struct {
@@ -897,6 +898,59 @@ func TestShadowReviewWaitsForAPoolSlotWithinItsWindow(t *testing.T) {
 	}
 	if after := serverRevision(t, st); after != before {
 		t.Fatalf("repeat past the window moved the revision from %d to %d", before, after)
+	}
+}
+
+// TestShadowReviewRefusedForGoodLeavesItsMemoryWait: a shadow review waiting
+// for memory that a lowered budget can no longer fit is abandoned, and leaves
+// the memory order and its hold, so it holds back no launch behind it.
+func TestShadowReviewRefusedForGoodLeavesItsMemoryWait(t *testing.T) {
+	ctx := t.Context()
+	st := storetest.Open(t, filepath.Join(t.TempDir(), "freeside.db"), store.Options{})
+	runID := domain.RunID("run-shadow-memory")
+	run := domain.Run{ID: runID, ProjectID: "project-shadow", SpecDigest: shadowTestDigest("3"), PolicyDigest: shadowTestDigest("2")}
+	if err := st.Write(ctx, func(tx *store.WriteTx) error { return tx.PutRun(ctx, run) }); err != nil {
+		t.Fatal(err)
+	}
+	recordFakeReviewIdentities(t, st)
+	completedAt := time.Date(2026, 11, 3, 10, 0, 0, 0, time.UTC)
+	current := completedAt.Add(time.Minute)
+	abandoned := 0
+	size := ward.DefaultLaunchSize(ward.LaunchReview).MemoryMiB
+	budget := size + 512
+	w := &productionPublicationWorkflow{
+		store: st, workDir: t.TempDir(), reviewAdmitter: fake.AdmitReview,
+		now:                 func() time.Time { return current },
+		launchBound:         ward.LaunchBound{BudgetMiB: budget, RuntimeVersion: ward.RuntimeNone},
+		shadowReviewFailure: func(domain.RunID, int, domain.ReviewFailureClass, error) { abandoned++ },
+	}
+	task := productionPublicationTask{RunID: runID, ProjectID: run.ProjectID}
+	routed := domain.ReviewRecord{RunID: runID, Round: 1, CompletedAt: completedAt}
+	id := ProductionShadowReviewInvocationID(runID, 1)
+	fillMemory(t, st, runID, budget, 1024, current)
+
+	_, err := w.ensureReviewAdmission(ctx, domain.RoleShadowReviewer, runID, id)
+	if complete, err := w.refuseShadowReviewAdmission(ctx, task, routed, id, err); err != nil || complete {
+		t.Fatalf("waiting for memory = complete %t, %v", complete, err)
+	}
+	if hold := storedRunHold(t, st, runID); hold == nil || hold.Reason != domain.HoldMachineCapacity ||
+		!launchWaiting(t, st, id) {
+		t.Fatalf("hold = %+v, want the shadow review waiting for memory", hold)
+	}
+
+	recordBudget(t, st, size-1)
+	_, err = w.ensureReviewAdmission(ctx, domain.RoleShadowReviewer, runID, id)
+	if !launchMemoryRefusal(err) || reviewCapacityRefusal(err) {
+		t.Fatalf("admission under the lowered budget = %v, want a refusal for good", err)
+	}
+	if complete, err := w.refuseShadowReviewAdmission(ctx, task, routed, id, err); err != nil || !complete || abandoned != 1 {
+		t.Fatalf("refused for good = complete %t, abandoned %d, %v", complete, abandoned, err)
+	}
+	if hold := storedRunHold(t, st, runID); hold != nil {
+		t.Fatalf("the abandoned shadow review left its hold: %+v", hold)
+	}
+	if launchWaiting(t, st, id) {
+		t.Fatal("the abandoned shadow review still holds a place in the memory order")
 	}
 }
 

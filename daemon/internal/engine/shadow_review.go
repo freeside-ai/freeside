@@ -138,21 +138,7 @@ func (w *productionPublicationWorkflow) reconcileShadowReview(
 	// observation as a source failure and never touches the routed gate.
 	admission, err := w.ensureReviewAdmission(ctx, domain.RoleShadowReviewer, task.RunID, id)
 	if err != nil {
-		var refusal *exec.ReviewSourceFailure
-		if errors.As(err, &refusal) {
-			return w.abandonShadowReview(ctx, task, routed.Round, id, err)
-		}
-		if reviewCapacityRefusal(err) {
-			return w.waitForShadowReviewSlot(ctx, task, routed, id, err)
-		}
-		// The shadow arm only observes, so a launch the budget refuses for
-		// good abandons the observation rather than hold the routed gate.
-		if launchMemoryRefusal(err) {
-			return w.abandonShadowReview(ctx, task, routed.Round, id, &exec.ReviewSourceFailure{
-				Class: domain.ReviewFailureConfiguration, Err: err,
-			})
-		}
-		return false, err
+		return w.refuseShadowReviewAdmission(ctx, task, routed, id, err)
 	}
 	req, authority, err := w.productionReviewRequest(
 		task, binding, checkpoint, id, routed.Round, instructions, admission,
@@ -335,6 +321,31 @@ func (w *productionPublicationWorkflow) reconcileShadowReview(
 	return true, w.removeReviewWorkspace(id)
 }
 
+// refuseShadowReviewAdmission handles a shadow admission the gate refused. A
+// source failure abandons the observation, and a full pool or memory waits
+// within the shadow window. The shadow arm only observes, so a launch the
+// budget refuses for good abandons the observation rather than hold the
+// routed gate; it may have waited for memory under a higher budget, so it
+// leaves the order and its hold as an expired wait does.
+func (w *productionPublicationWorkflow) refuseShadowReviewAdmission(
+	ctx context.Context, task productionPublicationTask, routed domain.ReviewRecord,
+	id domain.InvocationID, err error,
+) (bool, error) {
+	var refusal *exec.ReviewSourceFailure
+	if errors.As(err, &refusal) {
+		return w.abandonShadowReview(ctx, task, routed.Round, id, err)
+	}
+	if reviewCapacityRefusal(err) {
+		return w.waitForShadowReviewSlot(ctx, task, routed, id, err)
+	}
+	if launchMemoryRefusal(err) {
+		return w.abandonWaitingShadowReview(ctx, task, routed.Round, id, &exec.ReviewSourceFailure{
+			Class: domain.ReviewFailureConfiguration, Err: err,
+		})
+	}
+	return false, err
+}
+
 // waitForShadowReviewSlot holds a shadow review refused for a full pool or
 // for memory until capacity frees, within the window that bounds any shadow pass: past it the
 // observation is abandoned rather than holding the routed gate longer.
@@ -345,6 +356,16 @@ func (w *productionPublicationWorkflow) waitForShadowReviewSlot(
 	if w.now().Before(routed.CompletedAt.Add(shadowReviewWait)) {
 		return false, w.holdReviewForCapacity(ctx, task.RunID, id, cause)
 	}
+	return w.abandonWaitingShadowReview(ctx, task, routed.Round, id, cause)
+}
+
+// abandonWaitingShadowReview abandons a shadow review that may have waited for
+// a pool slot or memory: it first leaves the memory order and clears the run's
+// capacity hold, so an observation that will never launch holds back no
+// launch behind it.
+func (w *productionPublicationWorkflow) abandonWaitingShadowReview(
+	ctx context.Context, task productionPublicationTask, round int, id domain.InvocationID, cause error,
+) (bool, error) {
 	// A refused review has no admission to release, so this pass repeats while
 	// the run stays parked, and a write here would move the revision each time.
 	var held, waiting bool
@@ -354,8 +375,6 @@ func (w *productionPublicationWorkflow) waitForShadowReviewSlot(
 			return err
 		}
 		held = present && reviewCapacityWait(hold.Reason)
-		// An abandoned shadow review never launches, so it leaves the memory
-		// order rather than hold back the launches behind it.
 		waiting, err = tx.LaunchWaiting(ctx, id)
 		return err
 	}); err != nil {
@@ -377,7 +396,7 @@ func (w *productionPublicationWorkflow) waitForShadowReviewSlot(
 		}
 		w.holdPace.forget("hold:" + string(task.RunID))
 	}
-	return w.abandonShadowReview(ctx, task, routed.Round, id, cause)
+	return w.abandonShadowReview(ctx, task, round, id, cause)
 }
 
 // abandonShadowReview ends the observation. The shadow arm leaves no durable

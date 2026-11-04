@@ -362,7 +362,8 @@ FROM client_enrollment_generations`
 			entry.Name() == "0118_usage_operator_contract.sql" ||
 			entry.Name() == "0119_run_hold_quota_window.sql" ||
 			entry.Name() == "0120_launch_reservations.sql" ||
-			entry.Name() == "0121_routing_policy_drain_first.sql" || entry.IsDir() {
+			entry.Name() == "0121_routing_policy_drain_first.sql" ||
+			entry.Name() == "0122_memory_budget.sql" || entry.IsDir() {
 			continue
 		}
 		body, err := fs.ReadFile(migrations.FS, entry.Name())

@@ -1,11 +1,18 @@
 package main
 
 import (
+	"bytes"
 	"errors"
+	"log/slog"
+	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/freeside-ai/freeside/daemon/internal/domain"
+	"github.com/freeside-ai/freeside/daemon/internal/engine"
+	"github.com/freeside-ai/freeside/daemon/internal/store"
+	"github.com/freeside-ai/freeside/daemon/internal/store/storetest"
 	"github.com/freeside-ai/freeside/daemon/internal/ward"
 )
 
@@ -71,6 +78,12 @@ func TestLaunchBoundOfAComposition(t *testing.T) {
 	if _, err := (config{MemoryBudgetMiB: 1024}).launchBound(t.Context()); !errors.Is(err, domain.ErrLaunchNeverFits) {
 		t.Fatalf("1024 MiB bound = %v, want a never-fits refusal", err)
 	}
+	// An unbudgeted composition that starts no VM still names its runtime,
+	// so a budget recorded while it runs reserves with no overhead.
+	bound, err = config{}.launchBound(t.Context())
+	if err != nil || bound != (ward.LaunchBound{RuntimeVersion: ward.RuntimeNone}) {
+		t.Fatalf("unbudgeted scenario bound = %+v, %v", bound, err)
+	}
 	// A Claude composition with no budget never runs the container binary,
 	// which does not exist here.
 	bound, err = config{Claude: &claudeDriverConfig{ContainerBin: "/nonexistent/container"}}.launchBound(t.Context())
@@ -90,5 +103,93 @@ func TestPolicySizeBoundSkipsAnUnrecordedRuntime(t *testing.T) {
 	}
 	if got := policySizeBound(ward.LaunchBound{BudgetMiB: 4096, RuntimeVersion: "apple-container 9.9.9"}); got.Budgeted() {
 		t.Fatalf("unrecorded runtime bound = %+v, want none", got)
+	}
+}
+
+// TestStartupLaunchBoundPrefersTheRecordedBudget: a budget recorded with
+// set-memory-budget wins over the declared one, the start logs both, and the
+// start's checks run against it, naming the command when it refuses.
+func TestStartupLaunchBoundPrefersTheRecordedBudget(t *testing.T) {
+	t.Parallel()
+	st := storetest.Open(t, filepath.Join(t.TempDir(), "freeside.db"), store.Options{})
+	declared := config{MemoryBudgetMiB: 4096}
+	bound, err := declared.startupLaunchBound(t.Context(), st, nil)
+	if err != nil || bound.BudgetMiB != 4096 {
+		t.Fatalf("bound with none recorded = %+v, %v; want the declared 4096", bound, err)
+	}
+	recordBudget := func(budgetMiB int) {
+		t.Helper()
+		if err := st.WriteInternal(t.Context(), func(tx *store.InternalTx) error {
+			return tx.RecordMemoryBudget(t.Context(), budgetMiB, time.Now().UTC())
+		}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	recordBudget(8192)
+	var logs bytes.Buffer
+	declared.Logger = slog.New(slog.NewTextHandler(&logs, nil))
+	bound, err = declared.startupLaunchBound(t.Context(), st, nil)
+	if err != nil || bound != (ward.LaunchBound{BudgetMiB: 8192, RuntimeVersion: ward.RuntimeNone}) {
+		t.Fatalf("bound = %+v, %v; want the recorded 8192", bound, err)
+	}
+	if line := logs.String(); !strings.Contains(line, "recorded_budget_mib=8192") ||
+		!strings.Contains(line, "declared_budget_mib=4096") {
+		t.Fatalf("start log = %q, want both budgets", line)
+	}
+	// An unbudgeted composition takes a recorded budget too.
+	if bound, err := (config{}).startupLaunchBound(t.Context(), st, nil); err != nil || bound.BudgetMiB != 8192 {
+		t.Fatalf("unbudgeted start bound = %+v, %v; want the recorded 8192", bound, err)
+	}
+
+	// A recorded budget no default launch fits refuses the start, naming the
+	// command, even when the declared one would fit.
+	recordBudget(1024)
+	_, err = declared.startupLaunchBound(t.Context(), st, nil)
+	if !errors.Is(err, domain.ErrLaunchNeverFits) || !strings.Contains(err.Error(), "freesided set-memory-budget") {
+		t.Fatalf("recorded 1024 MiB start = %v, want a never-fits refusal naming the command", err)
+	}
+	// So does a configured project's size under the recorded budget.
+	recordBudget(4096)
+	projects := map[domain.ProjectID]engine.ManualInitiator{
+		"project-big": {PolicyKeys: []domain.PolicyKey{{Key: ward.PolicyWriterMemoryMiB, Value: "8192"}}},
+	}
+	_, err = (config{MemoryBudgetMiB: 16384}).startupLaunchBound(t.Context(), st, projects)
+	if !errors.Is(err, domain.ErrLaunchNeverFits) || !strings.Contains(err.Error(), "freesided set-memory-budget") ||
+		!strings.Contains(err.Error(), "project-big") {
+		t.Fatalf("recorded 4096 MiB start with an 8192 MiB project = %v", err)
+	}
+}
+
+// TestRunRefusesARecordedBudgetNoLaunchFits: the daemon's start reads the
+// recorded budget from its store, so a restart keeps it over the flag.
+func TestRunRefusesARecordedBudgetNoLaunchFits(t *testing.T) {
+	dbPath := filepath.Join(t.TempDir(), "freeside.db")
+	first, err := run(t.Context(), nil, config{
+		Environment: environmentEphemeral, DBPath: dbPath, ListenAddr: "127.0.0.1:0", MemoryBudgetMiB: 8192,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := first.Close(); err != nil {
+		t.Fatal(err)
+	}
+	st := storetest.Open(t, dbPath, store.Options{})
+	if err := st.WriteInternal(t.Context(), func(tx *store.InternalTx) error {
+		return tx.RecordMemoryBudget(t.Context(), 1024, time.Now().UTC())
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := st.Close(); err != nil {
+		t.Fatal(err)
+	}
+	h, err := run(t.Context(), nil, config{
+		Environment: environmentEphemeral, DBPath: dbPath, ListenAddr: "127.0.0.1:0", MemoryBudgetMiB: 8192,
+	})
+	if err == nil {
+		_ = h.Close()
+		t.Fatal("a start under a recorded budget no launch fits succeeded")
+	}
+	if !errors.Is(err, domain.ErrLaunchNeverFits) || !strings.Contains(err.Error(), "freesided set-memory-budget") {
+		t.Fatalf("start = %v, want a never-fits refusal naming the command", err)
 	}
 }
