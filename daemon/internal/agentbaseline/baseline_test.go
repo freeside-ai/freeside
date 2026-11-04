@@ -524,6 +524,7 @@ func TestBaselineTreeNamesTheCallAgentForJudgmentRoles(t *testing.T) {
 // while nothing can ask.
 var rolesOff = map[domain.RoleName]string{
 	domain.RoleBriefer: "no judgment site is built, so nothing asks for its work",
+	domain.RoleTriager: "no judgment site is built, so nothing asks for its work",
 }
 
 // With every optional input supplied, each role in the closed list has a

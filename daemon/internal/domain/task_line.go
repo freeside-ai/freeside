@@ -316,7 +316,7 @@ func (r RoleName) TaskLineEligible() bool {
 		return true
 	case RoleShadowReviewer, RoleDiagnostic, RoleTaskNamer, RolePublicationAuthor,
 		RoleFindingClassifier, RoleFindingAdjudicator, RoleDriftAuditor,
-		RoleAttentionDiscussion, RoleBriefer:
+		RoleAttentionDiscussion, RoleBriefer, RoleTriager:
 		return false
 	}
 	return false

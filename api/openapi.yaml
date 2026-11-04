@@ -6138,6 +6138,7 @@ components:
         - drift_auditor
         - attention_discussion
         - briefer
+        - triager
 
     LineageRelation:
       type: string

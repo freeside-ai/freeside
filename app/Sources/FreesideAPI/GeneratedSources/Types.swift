@@ -13694,6 +13694,7 @@ public enum Components {
             case drift_auditor = "drift_auditor"
             case attention_discussion = "attention_discussion"
             case briefer = "briefer"
+            case triager = "triager"
         }
         /// A judging role's lineage group against a writing role's. unknown when either side records no lineage group or no writer was admitted.
         ///
