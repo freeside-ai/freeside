@@ -1,0 +1,235 @@
+import Foundation
+import FreesideAPI
+import Observation
+
+/// A usage command (`refresh_usage` or `reassign_collector`) saved before it
+/// was sent: the exact command an explicit Retry resends, and its receipt
+/// once the daemon accepted it. Local delivery evidence, never an authority
+/// for the pool's record.
+public struct PendingUsageCommand: Codable, Equatable, Sendable {
+    public let command: Components.Schemas.ClientCommand
+    /// The epoch the command was made in. A receipt from another epoch can't
+    /// be compared with the record sync shows.
+    public let syncEpoch: String
+    public var receipt: Components.Schemas.CommandResult?
+
+    func isValid(deviceID: String) -> Bool {
+        switch command.payload {
+        case .refresh_usage, .reassign_collector: break
+        case .decision, .stop_task, .submit_task, .change_task_line, .set_routing_policy: return false
+        }
+        if let receipt, !CommandResultTrust.accepts(receipt, for: command) { return false }
+        return !command.command_id.isEmpty && !deviceID.isEmpty && command.device_id == deviceID
+            && !syncEpoch.isEmpty && command.expected_entity_version == nil && command.expected_bindings == nil
+    }
+
+    /// The pool the command names.
+    public var pool: String? {
+        switch command.payload {
+        case .refresh_usage(let payload): payload.pool
+        case .reassign_collector(let payload): payload.pool
+        case .decision, .stop_task, .submit_task, .change_task_line, .set_routing_policy: nil
+        }
+    }
+}
+
+/// Reads the usage pools sync adopted and sends the operator's refresh or
+/// collector reassignment as a saved command (plan §5.4 usage observation),
+/// modeled on `RoutingPolicyModel`: the command persists before it is sent,
+/// an unanswered send is retried only by an explicit Retry that resends it
+/// unchanged, and nothing here changes a pool's record; new readings and a
+/// new collector arrive through sync. The saved command, whether it is being
+/// sent, and its refusal live in the coordinator, where a reopened sheet
+/// finds them.
+@MainActor @Observable
+package final class AccountUsageModel {
+    private let coordinator: SyncCoordinator
+
+    package init(coordinator: SyncCoordinator) { self.coordinator = coordinator }
+
+    package var pools: [Components.Schemas.UsagePoolSnapshot] { coordinator.usagePools }
+    package var pending: PendingUsageCommand? { coordinator.pendingUsageCommand }
+    package var sending: Bool { coordinator.usageCommandSending }
+    package var failure: String? {
+        get { coordinator.usageCommandFailure }
+        set { coordinator.usageCommandFailure = newValue }
+    }
+
+    /// The command this session settled: a refresh once the daemon accepted
+    /// it, and a reassignment while sync still shows its collector, so
+    /// another device's later reassignment replaces the notice.
+    package var settled: Components.Schemas.CommandResult? {
+        guard let receipt = coordinator.settledUsageCommand else { return nil }
+        guard case .reassign_collector(let record) = receipt.record else { return receipt }
+        return pools.first { $0.pool.id == record.pool }?.pool.collector == record.collector ? receipt : nil
+    }
+
+    /// Why no usage command can be sent now, or nil when one can.
+    package var unavailableReason: String? {
+        switch coordinator.store.freshness {
+        case .fresh, .unvalidated:
+            return coordinator.cursors == nil ? "Refresh before changing usage collection." : nil
+        case .unauthenticated: return "Pair this device again before changing usage collection."
+        case .unreachable: return "Offline. Connect to the daemon before changing usage collection."
+        case .syncFailing, .contractMismatch: return "Usage isn't current. Refresh before changing collection."
+        }
+    }
+
+    /// One usage command is pending at a time, so a second waits for the
+    /// first to settle.
+    package var canSend: Bool { unavailableReason == nil && pending == nil && !sending }
+
+    package func refresh(pool: String) async {
+        await submit(.refresh_usage(.init(kind: .refresh_usage, pool: pool)))
+    }
+
+    package func reassign(pool: String, to enrollmentID: String) async {
+        await submit(.reassign_collector(.init(kind: .reassign_collector, pool: pool, enrollment_id: enrollmentID)))
+    }
+
+    /// Explicit retry only: resends the saved command unchanged, and only in
+    /// the epoch it was made in (sync settles it in any other).
+    package func retry() async {
+        guard let entry = pending, entry.receipt == nil, entry.syncEpoch == coordinator.cursors?.syncEpoch,
+            coordinator.store.freshness != .unauthenticated
+        else { return }
+        await send(entry)
+    }
+
+    private func submit(_ payload: Components.Schemas.ClientCommand.payloadPayload) async {
+        guard canSend, let epoch = coordinator.cursors?.syncEpoch else { return }
+        let command = Components.Schemas.ClientCommand(
+            command_id: UUID().uuidString, device_id: coordinator.store.device.deviceID, payload: payload)
+        let entry = PendingUsageCommand(command: command, syncEpoch: epoch)
+        coordinator.clearSettledUsageCommand()
+        guard coordinator.retainUsageCommand(entry) else {
+            failure = "The command couldn't be saved on this device. Nothing was sent. Try again."
+            return
+        }
+        await send(entry)
+    }
+
+    private func send(_ entry: PendingUsageCommand) async {
+        guard !sending else { return }
+        coordinator.usageCommandSending = true
+        failure = nil
+        defer { coordinator.usageCommandSending = false }
+        do {
+            switch try await coordinator.store.client.submitCommand(body: .json(entry.command)) {
+            case .ok(let ok):
+                let receipt = try ok.body.json
+                guard CommandResultTrust.accepts(receipt, for: entry.command) else { return }
+                var accepted = entry
+                accepted.receipt = receipt
+                // If this save fails, the unanswered command stays retryable.
+                guard coordinator.retainUsageCommand(accepted) else { return }
+                // A refresh settles on its receipt; a reassignment once sync
+                // shows the revision it was recorded at.
+                coordinator.settleUsageCommand()
+                await coordinator.refreshAfterCommit()
+                coordinator.settleUsageCommand()
+            case .conflict:
+                // No usage command refuses with a conflict; an unexpected one
+                // leaves the saved command unresolved.
+                break
+            case .undocumented(let status, _):
+                switch status {
+                case 400, 404:
+                    // The daemon refused the command before accepting it.
+                    coordinator.finishUsageCommand()
+                    let refused = if case .refresh_usage = entry.command.payload { "refresh" } else { "reassignment" }
+                    failure = "The daemon rejected the \(refused) (status \(status)). Nothing was changed."
+                    await coordinator.refreshAfterCommit()
+                case 401, 403: coordinator.store.freshness = .unauthenticated
+                default: break
+                }
+            }
+        } catch {
+            // A missing or malformed answer leaves the saved command unresolved.
+        }
+    }
+}
+
+/// What the usage view draws for a pool's record, as pure functions of the
+/// record and the client's clock. None computes a value the daemon didn't
+/// record: a share is the reading's own number, staleness and exhaustion
+/// compare the record's own instants with `now`, and nothing adds across
+/// pools.
+package enum UsageDisplay {
+    /// The reading's used share in the form the provider reported it, or nil
+    /// for a reading with a status alone.
+    package static func share(_ reading: Components.Schemas.UsageWindowReading) -> String? {
+        if let percent = reading.used_percent { return "\(percent)%" }
+        if let quantity = reading.quantity, let unit = reading.unit { return "\(quantity) \(unit)" }
+        return nil
+    }
+
+    /// The reading's share, or its status alone when it carries none.
+    package static func value(_ reading: Components.Schemas.UsageWindowReading) -> String {
+        share(reading) ?? (reading.status == .exhausted ? "Exhausted" : "Allowed")
+    }
+
+    /// Whether the client's clock has carried the reading past the daemon's
+    /// `stale_at`. A stale reading is shown as stale, never as replenished.
+    package static func isStale(_ reading: Components.Schemas.UsageWindowReading, now: Date) -> Bool {
+        reading.stale_at.map { now >= $0 } ?? false
+    }
+
+    /// Whether any of the window's recorded marks hasn't lapsed: a mark
+    /// lapses once `now` reaches its `resets_at`, and one without a reset
+    /// holds until the record changes.
+    package static func isExhausted(
+        window: String, marks: [Components.Schemas.UsageExhaustedMark], now: Date
+    ) -> Bool {
+        marks.contains { $0.window == window && ($0.resets_at.map { now < $0 } ?? true) }
+    }
+
+    /// The window's live marks whose reset the reading doesn't already show:
+    /// a refusal can outlive the readings (a reassignment clears them), or
+    /// name a reset the reading lacks or has passed, and then its own reset
+    /// is the one the record holds.
+    package static func uncoveredMarks(
+        window: String, in pool: Components.Schemas.UsagePoolUsage, now: Date
+    ) -> [Components.Schemas.UsageExhaustedMark] {
+        let reading = pool.windows.first { $0.window == window }
+        return pool.recorded_exhausted_marks.filter { mark in
+            mark.window == window && isExhausted(window: window, marks: [mark], now: now)
+                && !(reading != nil && mark.resets_at == reading?.resets_at)
+        }
+    }
+
+    /// Every window the record names, by a reading or a mark, in window
+    /// order: a refusal can mark a window the collector hasn't read.
+    package static func windows(_ pool: Components.Schemas.UsagePoolUsage) -> [String] {
+        Array(Set(pool.windows.map(\.window) + pool.recorded_exhausted_marks.map(\.window))).sorted()
+    }
+
+    /// The route models a window limits; empty for a general window.
+    package static func models(limitedBy window: String, in pool: Components.Schemas.UsagePoolUsage) -> [String] {
+        pool.model_windows.filter { $0.window == window }.map(\.route_model_id)
+    }
+
+    /// Words for the window ids the collectors report; nil for any other id,
+    /// which the view shows as itself.
+    package static func label(_ window: String) -> String? {
+        switch window {
+        case "five_hour": "5-hour"
+        case "seven_day": "Weekly"
+        case "seven_day_opus": "Weekly Opus"
+        case "seven_day_sonnet": "Weekly Sonnet"
+        default: nil
+        }
+    }
+
+    /// The time left until `instant`, to the minute: `in 45m`, `in 2h 30m`,
+    /// `in 3d 4h`, or `passed` once it is reached.
+    package static func countdown(to instant: Date, now: Date) -> String {
+        let seconds = Int(instant.timeIntervalSince(now))
+        guard seconds > 0 else { return "passed" }
+        let minutes = max(1, seconds / 60)
+        if minutes < 60 { return "in \(minutes)m" }
+        let hours = minutes / 60
+        if hours < 24 { return minutes % 60 == 0 ? "in \(hours)h" : "in \(hours)h \(minutes % 60)m" }
+        return hours % 24 == 0 ? "in \(hours / 24)d" : "in \(hours / 24)d \(hours % 24)h"
+    }
+}

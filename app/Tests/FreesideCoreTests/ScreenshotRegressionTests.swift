@@ -835,6 +835,7 @@
             let phoneDevicesModel = await DevicesScreenshots.model(
                 notificationSubscription: .mock, openedAt: screenshotNow.addingTimeInterval(-3600))
             let routing = await RoutingPolicyScreenshots.model(.policy)
+            let usage = await AccountUsageScreenshots.model(.usage)
             for (name, width, scheme, model, client) in [
                 ("", CGFloat(380), ColorScheme.light, devicesModel, SettingsSheet.Client.mac),
                 ("-dark", CGFloat(380), ColorScheme.dark, devicesModel, SettingsSheet.Client.mac),
@@ -847,7 +848,7 @@
                             name: surface + name, width: width, colorScheme: scheme,
                             view: AnyView(
                                 SettingsSheet(
-                                    devices: model, routing: routing, opensOn: opensOn,
+                                    devices: model, routing: routing, usage: usage, opensOn: opensOn,
                                     projects: ["freeside-ai/freeside", "freeside-ai/teloleo", "free-skills"],
                                     projectFilter: "free-skills", freshness: .fresh, client: client,
                                     rendersInteractiveControls: false))))
@@ -871,9 +872,38 @@
                             name: state.surface + name, width: width, colorScheme: scheme,
                             view: AnyView(
                                 SettingsSheet(
-                                    devices: devicesModel, routing: stateModel, opensOn: .routing,
+                                    devices: devicesModel, routing: stateModel, usage: usage, opensOn: .routing,
                                     projects: [], projectFilter: nil, freshness: .fresh, client: client,
                                     rendersInteractiveControls: false))))
+                }
+            }
+
+            // Account usage open in the Settings sheet (#1721): the default
+            // pools (readings, an unsupported collector, a pool with no
+            // reading, and the collector choice with each enrollment's
+            // answer), the same pools once their readings go stale, the
+            // #2389 Claude shape, an unanswered refresh, a refused
+            // reassignment, and a confirmed one, at Mac and phone width, by
+            // day and by dusk. Each state pins its own clock against the
+            // usage fixtures' instants.
+            for state in AccountUsageScreenshots.State.allCases {
+                let stateModel = await AccountUsageScreenshots.model(state)
+                for (name, width, scheme, client) in [
+                    ("", CGFloat(380), ColorScheme.light, SettingsSheet.Client.mac),
+                    ("-dark", CGFloat(380), ColorScheme.dark, SettingsSheet.Client.mac),
+                    ("-phone", CGFloat(390), ColorScheme.light, SettingsSheet.Client.iPhone),
+                    ("-phone-dark", CGFloat(390), ColorScheme.dark, SettingsSheet.Client.iPhone),
+                ] {
+                    surfaces.append(
+                        Surface(
+                            name: state.surface + name, width: width, colorScheme: scheme,
+                            view: AnyView(
+                                SettingsSheet(
+                                    devices: devicesModel, routing: routing, usage: stateModel, opensOn: .usage,
+                                    projects: [], projectFilter: nil, freshness: .fresh, client: client,
+                                    rendersInteractiveControls: false
+                                )
+                                .environment(\.pinnedNow, state.now))))
                 }
             }
 

@@ -1,9 +1,9 @@
 import SwiftUI
 
 /// The sheet the toolbar's Settings slot opens on both platforms (R11), where
-/// Devices and the routing policy live. Each row states what the app already
-/// holds; only Devices and Routing open anything, because the view's own
-/// design is a later round
+/// Devices, the routing policy, and account usage live. Each row states what
+/// the app already holds; only Devices, Routing, and Usage open anything,
+/// because the view's own design is a later round
 /// (`devlog/2026-10-30-2010-iphone-stack-settings-sheet.md`).
 struct SettingsSheet: View {
     typealias Page = NavigationModel.SettingsPage
@@ -62,6 +62,16 @@ struct SettingsSheet: View {
         return "Revision \(policy.revision) · \(roles)"
     }
 
+    /// The Usage row: an unanswered command, or how many pools sync holds.
+    @MainActor static func usageSummary(_ usage: AccountUsageModel) -> String {
+        if let pending = usage.pending, pending.receipt == nil { return "Unconfirmed" }
+        switch usage.pools.count {
+        case 0: return "No pools"
+        case 1: return "1 pool"
+        case let count: return "\(count) pools"
+        }
+    }
+
     /// The Notifications row. Only iOS holds a subscription, so the Mac names
     /// where the setup lives (`phoneNotificationSubscription`).
     static func notificationsSummary(_ subscription: DeviceNtfySubscription?, client: Client) -> String {
@@ -95,6 +105,7 @@ struct SettingsSheet: View {
     @Environment(\.dynamicTypeSize) private var dynamicTypeSize
     @State private var devices: DevicesModel
     @State private var routing: RoutingPolicyModel
+    @State private var usage: AccountUsageModel
     @State private var page: Page
     private let unresolvedActionCount: Int
     private let projects: [String]
@@ -104,16 +115,17 @@ struct SettingsSheet: View {
     private let rendersInteractiveControls: Bool
 
     /// `opensOn` starts on a page other than the rows, for `-FreesideDevices`,
-    /// `-FreesideRouting`, and their screenshots. `unresolvedActionCount`
+    /// `-FreesideRouting`, `-FreesideUsage`, and their screenshots. `unresolvedActionCount`
     /// passes to `DevicesView`.
     init(
-        devices: DevicesModel, routing: RoutingPolicyModel, opensOn: Page = .rows,
+        devices: DevicesModel, routing: RoutingPolicyModel, usage: AccountUsageModel, opensOn: Page = .rows,
         unresolvedActionCount: Int = 0,
         projects: [String], projectFilter: String?, freshness: InboxStore.Freshness,
         client: Client = .current, rendersInteractiveControls: Bool = true
     ) {
         _devices = State(initialValue: devices)
         _routing = State(initialValue: routing)
+        _usage = State(initialValue: usage)
         _page = State(initialValue: opensOn)
         self.unresolvedActionCount = unresolvedActionCount
         self.projects = projects
@@ -158,6 +170,11 @@ struct SettingsSheet: View {
                 backRow
                 RoutingPolicyView(model: routing, deviceNames: deviceNames)
             }
+        case .usage:
+            VStack(alignment: .leading, spacing: 0) {
+                backRow
+                AccountUsageView(model: usage)
+            }
         }
     }
 
@@ -198,6 +215,13 @@ struct SettingsSheet: View {
                     page = .routing
                 } label: {
                     row("Routing", summary: Self.routingSummary(routing), opens: true)
+                }
+                .buttonStyle(.plain)
+                .freesideHover(cornerRadius: 8)
+                Button {
+                    page = .usage
+                } label: {
+                    row("Usage", summary: Self.usageSummary(usage), opens: true)
                 }
                 .buttonStyle(.plain)
                 .freesideHover(cornerRadius: 8)

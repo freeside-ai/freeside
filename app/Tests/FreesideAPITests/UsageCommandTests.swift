@@ -68,6 +68,40 @@ import Testing
         #expect(status(try await client.submitCommand(body: .json(crossKind))) == 400)
     }
 
+    /// The mock commits the reassignment's record as the daemon's
+    /// usagecollect.reassigned does, in the receipt's revision.
+    @Test func reassignmentRecordsTheNewCollectorAndClearsTheOldReadings() async throws {
+        let client = APIClientFactory.mock(server: MockServer())
+        func readingPool() async throws -> Components.Schemas.UsagePoolSnapshot {
+            let bootstrap = try await client.getSyncBootstrap().ok.body.json
+            return try #require(bootstrap.usage_pools.first { $0.pool.id == UsageFixtures.readingPoolID })
+        }
+        let before = try await readingPool()
+
+        let moved = reassign(
+            "move", pool: UsageFixtures.readingPoolID, enrollment: UsageFixtures.readingSecondEnrollmentID)
+        let receipt = try await client.submitCommand(body: .json(moved)).ok.body.json
+        let after = try await readingPool()
+        #expect(after.as_of_revision == receipt.revision)
+        #expect(after.entity_version == before.entity_version + 1)
+        #expect(after.pool.collector == UsageFixtures.readingSecondEnrollmentID)
+        #expect(after.pool.plan == nil)
+        #expect(after.pool.last_attempt == nil)
+        #expect(after.pool.model_windows.isEmpty)
+        #expect(after.pool.windows.isEmpty)
+        #expect(after.pool.enrollments == before.pool.enrollments)
+        #expect(
+            after.pool.recorded_exhausted_marks
+                == before.pool.recorded_exhausted_marks.filter { $0.source == .provider_refusal })
+
+        // Naming the current collector records the receipt and no record.
+        let again = reassign(
+            "again", pool: UsageFixtures.readingPoolID, enrollment: UsageFixtures.readingSecondEnrollmentID)
+        let unchanged = try await client.submitCommand(body: .json(again)).ok.body.json
+        #expect(unchanged.revision == receipt.revision + 1)
+        #expect(try await readingPool() == after)
+    }
+
     @Test func usageCommandsRefuseAnUnknownPoolAndAForeignEnrollment() async throws {
         let client = APIClientFactory.mock(server: MockServer())
         let before = try await client.getSyncRevision().ok.body.json.revision

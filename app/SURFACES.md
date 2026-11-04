@@ -19,7 +19,7 @@ Mac and iOS match on every line unless a line says otherwise.
 
 - **Done:** first-launch daemon address entry (no implicit sample data), pairing,
   the unified list, decision detail, task page, run timeline,
-  freshness banner, the Settings sheet with Devices and the routing policy in it, Mac menu bar, the sync
+  freshness banner, the Settings sheet with Devices, the routing policy, and account usage in it, Mac menu bar, the sync
   and command-retry machinery, and the task-proposal card with its
   "start with changes" and snooze sheets (its full-artifact view is not),
   plus the shared ask-first decision shell, the contract recommendation
@@ -37,7 +37,7 @@ Mac and iOS match on every line unless a line says otherwise.
   shell; five additional types compose card-specific orderings from the shared
   graphic module set.
 - **Not yet:** conversation attachments, the evidence
-  packet viewer, proposal batches, the account usage view, the
+  packet viewer, proposal batches, usage beside the agent choices, the
   initiative view, push notifications.
 - **Open:** seven placement questions, listed at the end.
 - **Layout:** one list and one task page on both clients (decision page:
@@ -66,7 +66,8 @@ Mac and iOS match on every line unless a line says otherwise.
 | Proposal batch | Not yet | Several proposals decided one by one in one place. Plan §4. |
 | Initiative view | Not yet | Phase 1B.2. Plan §5.18, §11. |
 | Project detail, past-work history, schedules page, consent grants | Later | Explicitly after 1B. Plan §11. |
-| Account usage | Not yet | Phase 1B.1, wave 10 (plan §5.4 usage observation, §10, §11): each identity's usage pool and plan, every window's used share, local reset time and countdown, observation time and refresh status, a manual refresh, collector reassignment, and the same facts beside the agent choices in New Task, the task-line change control, and the alternate-agent retry card. |
+| Account usage | Done | Plan §5.4 (usage observation), #1721. Usage opens from the Settings sheet on both platforms and reads the pools sync adopts (`usage_pools`), in the daemon's order, under the `Usage` eyebrow and the ask "How much of each account is used". Each pool is a bordered card: its id, provider, and plan; the refresh status from the collector's last attempt (`Refreshed`, a wax `Refresh failed`, or a wax `Unsupported`, with its time and detail), or `No reading yet.`; and one row per window the record names, by its words (`5-hour`, `Weekly`, `Weekly Opus`, `Weekly Sonnet`) or its id in mono. A row shows the reading's used share (a percent, or a quantity with its unit) or its status alone (`Allowed`, `Exhausted`), the route models a model-scoped window limits, its reset as a local time with a countdown, and its observation time. A wax `Stale` marks a reading the client's clock has carried past its `stale_at`, never shown as replenished, and a wax `Used up` marks a window while any of its recorded exhausted marks hasn't lapsed by its `resets_at`; a refusal that outlives the readings shows its own reset. A window the record doesn't hold is absent, never drawn as unsupported, and nothing is computed or added across pools. Refresh sends `refresh_usage`; the Collector section lists the pool's enrollments with identity, harness client, and availability answer with its observation time (or `No answer recorded`), marks the one that `Collects`, and offers Make Collector (`reassign_collector`) on the others. A pool no enrollment meters says so and offers no Refresh. Both are saved commands, one at a time: persisted before they are sent and never sent when saving fails, an unanswered send shows an accent `Unconfirmed` notice whose Retry resends the same command, an accepted refresh shows a neutral `Requested` notice saying new readings arrive through sync, and an accepted reassignment settles into a neutral `Recorded` notice once sync shows its revision. A refusal is a wax `Failed` notice saying nothing changed. `-FreesideUsage YES` opens the sheet on Usage at launch. |
+| Usage beside agent choices | Not yet | #1722 (plan §5.4 usage observation): the account usage facts beside the agent choices in New Task, the task-line change control, and the alternate-agent retry card. |
 | Briefings, WIP views, ACP attachment | Later | Phase 3. |
 | Widgets, App Intents, Live Activities | Later | Phase 4. |
 | Settings editor | Never | Configuration changes arrive as approval cards, not forms. Plan §11. The exception is an operator setting that only chooses among what the committed agent tree already approved (plan revision 99): the routing policy above is built on that ground, and anything that adds an agent or changes the lineup still arrives through the tree. |

@@ -2254,18 +2254,34 @@ public actor MockServer {
                     pool: payload.pool, requested_at: currentTime)))
     }
 
-    /// Records a collector reassignment to an enrollment on the pool. The
-    /// collection lifecycle (#1720) owns its effect on the pool record.
+    /// Records a collector reassignment to an enrollment on the pool and, in
+    /// the same revision, the pool record it leaves, as the daemon's
+    /// `usagecollect.ReassignTx` does: the new collector, with the old
+    /// collector's readings, plan, model map, and refresh status cleared.
+    /// Availability answers and refusal marks stay, because they describe the
+    /// pool; a reading's exhausted mark goes with its reading. Naming the
+    /// current collector records only the receipt.
     private func submitReassignCollectorCommand(
         _ command: Components.Schemas.ClientCommand, _ payload: Components.Schemas.ReassignCollectorPayload
     ) throws -> SubmitOutcome {
         if let replay = try replayOperatorCommand(command) { return replay }
-        guard let pool = usagePoolsByID[payload.pool] else { throw UnknownItemError(itemID: payload.pool) }
-        guard pool.pool.enrollments.contains(where: { $0.enrollment_id == payload.enrollment_id }) else {
+        guard var snapshot = usagePoolsByID[payload.pool] else { throw UnknownItemError(itemID: payload.pool) }
+        guard snapshot.pool.enrollments.contains(where: { $0.enrollment_id == payload.enrollment_id }) else {
             throw OperatorCommandRejectedError(
                 commandID: command.command_id, reason: "enrollment is not on pool \(payload.pool)")
         }
         revision += 1
+        if snapshot.pool.collector != payload.enrollment_id {
+            snapshot.pool.collector = payload.enrollment_id
+            snapshot.pool.plan = nil
+            snapshot.pool.last_attempt = nil
+            snapshot.pool.model_windows = []
+            snapshot.pool.windows = []
+            snapshot.pool.recorded_exhausted_marks.removeAll { $0.source == .usage_reading }
+            snapshot.as_of_revision = revision
+            snapshot.entity_version += 1
+            usagePoolsByID[payload.pool] = snapshot
+        }
         return recordOperatorResult(
             command,
             .reassign_collector(
