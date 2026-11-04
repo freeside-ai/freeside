@@ -96,6 +96,10 @@ type deputySettings struct {
 		Specifier   deputyWriterSelection `json:"specifier"`
 		Implementer deputyWriterSelection `json:"implementer"`
 		Remediator  deputyWriterSelection `json:"remediator"`
+		// SpecifierEscalated is the specifier's optional escalated
+		// counterpart (plan §5.13, Specifier Triage); absent writes no
+		// escalated line.
+		SpecifierEscalated *deputyWriterSelection `json:"specifier_escalated,omitempty"`
 	} `json:"writers"`
 	// Judgment is all empty (subscription judgments off) or all set.
 	Judgment struct {
@@ -243,8 +247,12 @@ func requireEveryKey(body []byte, t reflect.Type, prefix string) error {
 		if !ok || string(raw) == "null" {
 			return fmt.Errorf("%s%s is required", prefix, name)
 		}
-		if field.Type.Kind() == reflect.Struct {
-			if err := requireEveryKey(raw, field.Type, prefix+name+"."); err != nil {
+		nested := field.Type
+		if nested.Kind() == reflect.Pointer {
+			nested = nested.Elem()
+		}
+		if nested.Kind() == reflect.Struct {
+			if err := requireEveryKey(raw, nested, prefix+name+"."); err != nil {
 				return err
 			}
 		}
@@ -331,6 +339,16 @@ func (s *loadedDeputySettings) validate() error {
 	for _, writer := range s.writerSelections() {
 		if writer.selection.Model == "" || writer.selection.Effort == "" {
 			return fmt.Errorf("writers.%s.model and writers.%s.effort are required", writer.role, writer.role)
+		}
+	}
+	// Auth adopt holds the escalated pair to the rest of its rules; the
+	// settings file refuses here only what it can name in its own terms.
+	if escalated := s.Writers.SpecifierEscalated; escalated != nil {
+		if escalated.Model == "" || escalated.Effort == "" {
+			return errors.New("writers.specifier_escalated.model and writers.specifier_escalated.effort are required")
+		}
+		if *escalated == s.Writers.Specifier {
+			return errors.New("writers.specifier_escalated equals writers.specifier: escalation would change nothing")
 		}
 	}
 	judgment := []string{

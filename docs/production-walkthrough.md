@@ -409,6 +409,7 @@ derived from a real run's:
 | `listen`, `seed_root` | Of its own |
 | `manual_submission_config` | `""` |
 | `writers.specifier`, `writers.implementer`, `writers.remediator` | `claude-haiku-5-5` at `low` |
+| `writers.specifier_escalated` | Absent, or a model and effort that differ from `writers.specifier` |
 | `review.model`, `review.effort` | `gpt-6-luna` at `low` |
 | `review.auth_mode` | `subscription` |
 | `agent_tree.review_harness` | `codex_cli`, or absent |
@@ -632,6 +633,8 @@ The first start always stops this way, because no commit holds the tree yet:
 Later fresh roots reuse that commit. The emitted tree depends on the identity
 ids, the route names, each writer role's model and effort (`writers.<role>`;
 an effort is a Freeside level: `low`, `medium`, `high`, or `max`), the
+specifier's escalated model and effort when `writers.specifier_escalated` is
+set, the
 review model and effort (`review.model`, `review.effort`), the three prompt
 packages, the three dated inputs, and, when the run has subscription
 judgments on, `judgment.model`, `judgment.effort`, and

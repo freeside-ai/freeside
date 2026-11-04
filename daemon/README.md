@@ -1903,6 +1903,16 @@ Each agent names the model and the effort its launch passes:
   that names no model: a writer launch passes `--model` and `--effort` when
   its agent names them, so a tree that left either out would run whatever
   the CLI defaults to.
+- **`-specifier-escalated-model` and `-specifier-escalated-effort`** are
+  optional and set together. They add the specifier's escalated
+  counterpart (plan §5.13, Specifier Triage): an agent
+  `claude-code-specifier-escalated` under the implementation identity, on a
+  pinned offer of the same name, and the lineup line
+  `lineup.role.specifier.escalated.<specifier-agent>` that names it with the
+  specifier's prompt. The pair must differ from the specifier's own model and
+  effort, since an escalation to the same launch would change nothing.
+  Without them the tree has no escalated line, so triage never runs and the
+  specifier runs on its lineup agent.
 - **`-review-model` and `-review-effort`** are required with the review
   identity. The review agent `codex-review-default` is on an offer whose
   `route_model_id` is the model, and asks the effort.

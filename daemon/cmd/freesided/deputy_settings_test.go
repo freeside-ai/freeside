@@ -176,6 +176,18 @@ func TestLoadDeputySettingsRefusesNamingTheField(t *testing.T) {
 		"no implementer key": {func(s map[string]any) {
 			delete(s["writers"].(map[string]any), "implementer")
 		}, "writers.implementer is required"},
+		"escalated specifier without effort": {func(s map[string]any) {
+			s["writers"].(map[string]any)["specifier_escalated"] = map[string]any{"model": "claude-opus"}
+		}, "writers.specifier_escalated.effort is required"},
+		"escalated specifier with empty model": {func(s map[string]any) {
+			s["writers"].(map[string]any)["specifier_escalated"] = map[string]any{"model": "", "effort": "high"}
+		}, "writers.specifier_escalated.model and writers.specifier_escalated.effort are required"},
+		"null escalated specifier": {func(s map[string]any) {
+			s["writers"].(map[string]any)["specifier_escalated"] = nil
+		}, "writers.specifier_escalated is required"},
+		"escalated specifier equal to the specifier": {func(s map[string]any) {
+			s["writers"].(map[string]any)["specifier_escalated"] = map[string]any{"model": "claude-fable", "effort": "high"}
+		}, "writers.specifier_escalated equals writers.specifier"},
 		"judgment effort alone": {func(s map[string]any) {
 			s["judgment"].(map[string]any)["effort"] = "medium"
 		}, "judgment fields must be all empty or all set"},
@@ -311,6 +323,44 @@ func TestLoadDeputySettingsReviewHarness(t *testing.T) {
 			}
 			if _, err := parseAuthAdoptConfig(args, io.Discard, time.Now()); err != nil {
 				t.Fatalf("auth adopt refuses the deputy's args: %v", err)
+			}
+		})
+	}
+}
+
+func TestLoadDeputySettingsPassesTheEscalatedSpecifierToAdoption(t *testing.T) {
+	t.Parallel()
+	for name, escalated := range map[string]map[string]any{
+		"absent":  nil,
+		"present": {"model": "claude-opus", "effort": "max"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			settings := deputySettingsFixture(t)
+			if escalated != nil {
+				settings["writers"].(map[string]any)["specifier_escalated"] = escalated
+			}
+			path, _ := writeDeputySettings(t, settings, 0o600)
+			loaded, err := loadDeputySettings(path)
+			if err != nil {
+				t.Fatal(err)
+			}
+			args := deputyAdoptArgs(loaded, newDeputyPaths(t.TempDir()))
+			model := slices.Index(args, "-specifier-escalated-model")
+			effort := slices.Index(args, "-specifier-escalated-effort")
+			if escalated == nil {
+				if model >= 0 || effort >= 0 {
+					t.Fatalf("adopt args = %v, want no escalated flags", args)
+				}
+			} else if model < 0 || args[model+1] != escalated["model"] || effort < 0 || args[effort+1] != escalated["effort"] {
+				t.Fatalf("adopt args = %v, want the escalated pair", args)
+			}
+			config, err := parseAuthAdoptConfig(args, io.Discard, time.Now())
+			if err != nil {
+				t.Fatalf("auth adopt refuses the deputy's args: %v", err)
+			}
+			if got := config.SpecifierEscalatedModel; (escalated == nil) != (got == "") {
+				t.Fatalf("auth adopt specifier escalated model = %q", got)
 			}
 		})
 	}
