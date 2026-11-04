@@ -26,12 +26,12 @@ func (b *Backend) observeWriterOutcome(
 	spec := buildWriterOutcomeObserverSpec(b.cfg, hs, names, st.ownershipLabel)
 	st.writerObserver.attempted = true
 	if err := b.rt.CreateContainer(ctx, cloneContainerSpec(spec)); err != nil {
-		return 0, failf(CheckWriterTermination, "create writer-outcome observer: %v", err)
+		return 0, failw(CheckWriterTermination, err, "create writer-outcome observer: %v", err)
 	}
 	st.writerObserver.owned = true
 	rep, err := b.rt.Inspect(ctx, names.WriterObserver)
 	if err != nil {
-		return 0, failf(CheckWriterTermination, "inspect writer-outcome observer: %v", err)
+		return 0, failw(CheckWriterTermination, err, "inspect writer-outcome observer: %v", err)
 	}
 	if err := verifySeedRoleAllowlist(
 		rep, spec, names.Workspace, b.cfg.WorkspaceTarget, CheckWriterTermination,
@@ -42,10 +42,10 @@ func (b *Backend) observeWriterOutcome(
 		rep.CreationDate, rep.Labels, rep.LabelsObserved, st.ownershipLabel,
 	)
 	if err != nil {
-		return 0, failf(CheckWriterTermination, "writer-outcome observer: %v", err)
+		return 0, failw(CheckWriterTermination, err, "writer-outcome observer: %v", err)
 	}
 	if err := b.rt.StartContainer(ctx, names.WriterObserver); err != nil {
-		return 0, failf(CheckWriterTermination, "start writer-outcome observer: %v", err)
+		return 0, failw(CheckWriterTermination, err, "start writer-outcome observer: %v", err)
 	}
 	if err := b.waitStopped(
 		ctx,
@@ -54,7 +54,7 @@ func (b *Backend) observeWriterOutcome(
 		st.ownershipLabel,
 		b.cfg.SeedTimeout,
 	); err != nil {
-		return 0, failf(CheckWriterTermination, "writer-outcome observer: %v", err)
+		return 0, failw(CheckWriterTermination, err, "writer-outcome observer: %v", err)
 	}
 	if err := b.helperStopped(ctx, hs.Class, hs.Size, names.WriterObserver); err != nil {
 		return 0, err
@@ -76,7 +76,7 @@ func (b *Backend) observeWriterOutcome(
 		st.writerFailureStatus = &status
 	}
 	if err := b.rt.DeleteContainer(ctx, names.WriterObserver); err != nil {
-		return 0, writerObservationError(status, failf(CheckWriterTermination, "delete writer-outcome observer: %v", err))
+		return 0, writerObservationError(status, failw(CheckWriterTermination, err, "delete writer-outcome observer: %v", err))
 	}
 	if err := b.verifyContainerAbsent(
 		ctx,
@@ -106,7 +106,7 @@ func (b *Backend) readWriterOutcomeProof(
 ) (int, error) {
 	dir, err := os.MkdirTemp("", "freeside-handoff-"+hs.RunID+"-writer-")
 	if err != nil {
-		return 0, failf(CheckWriterTermination, "create writer-outcome proof directory: %v", err)
+		return 0, failw(CheckWriterTermination, err, "create writer-outcome proof directory: %v", err)
 	}
 	st.writerArchiveDir = dir
 	defer func() {
@@ -119,14 +119,14 @@ func (b *Backend) readWriterOutcomeProof(
 	}
 	f, err := os.Open(tarPath) //nolint:gosec // gate-owned fresh temp path
 	if err != nil {
-		return 0, failf(CheckWriterTermination, "open writer-outcome proof: %v", err)
+		return 0, failw(CheckWriterTermination, err, "open writer-outcome proof: %v", err)
 	}
 	defer f.Close() //nolint:errcheck // read-only temp handle
 	data, found, err := extractArchiveRegularFile(
 		f, writerOutcomeProofPath, maxWriterOutcomeProofBytes,
 	)
 	if err != nil {
-		return 0, failf(CheckWriterTermination, "read writer-outcome proof: %v", err)
+		return 0, failw(CheckWriterTermination, err, "read writer-outcome proof: %v", err)
 	}
 	if !found {
 		return 0, failf(CheckWriterTermination, "writer produced no outcome marker")

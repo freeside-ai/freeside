@@ -897,7 +897,7 @@ func (b runtimeOps) seedWorkspace(
 	// was copied through that anchored handle before this runtime boundary.
 	snapshot, err := os.MkdirTemp("", "freeside-handoff-"+hs.RunID+"-seed-")
 	if err != nil {
-		return failf(CheckWorkspaceSeeding, "create seed snapshot directory: %v", err)
+		return failw(CheckWorkspaceSeeding, err, "create seed snapshot directory: %v", err)
 	}
 	st.seedSnapshotDir = snapshot
 	seedCfg := b.cfg.seedConfig()
@@ -920,14 +920,14 @@ func (b runtimeOps) seedWorkspace(
 	st.seedTreeDigest = digest
 	readyDir, err := os.MkdirTemp("", "freeside-handoff-"+hs.RunID+"-ready-")
 	if err != nil {
-		return failf(CheckWorkspaceSeeding, "create seed sentinel directory: %v", err)
+		return failw(CheckWorkspaceSeeding, err, "create seed sentinel directory: %v", err)
 	}
 	// The sentinel directory is the gate's own, made fresh under the host temp
 	// root, so it needs no containment check; it carries one file the gate
 	// wrote.
 	defer os.RemoveAll(readyDir) //nolint:errcheck // best-effort cleanup of a host scratch dir holding no run output
 	if err := os.WriteFile(filepath.Join(readyDir, seedReadyFile), []byte("ready\n"), 0o600); err != nil {
-		return failf(CheckWorkspaceSeeding, "write seed sentinel: %v", err)
+		return failw(CheckWorkspaceSeeding, err, "write seed sentinel: %v", err)
 	}
 
 	spec := buildSeederSpec(seedCfg, hs, names, st.ownershipLabel)
@@ -936,12 +936,12 @@ func (b runtimeOps) seedWorkspace(
 	}
 	st.seeder.attempted = true
 	if err := b.rt.CreateContainer(ctx, cloneContainerSpec(spec)); err != nil {
-		return failf(CheckWorkspaceSeeding, "create seeder container: %v", err)
+		return failw(CheckWorkspaceSeeding, err, "create seeder container: %v", err)
 	}
 	st.seeder.owned = true
 	rep, err := b.rt.Inspect(ctx, names.Seeder)
 	if err != nil {
-		return failf(CheckWorkspaceSeeding, "inspect seeder before execution: %v", err)
+		return failw(CheckWorkspaceSeeding, err, "inspect seeder before execution: %v", err)
 	}
 	// The fingerprint is captured only after the allowlist verified the
 	// report's identity, as for the agent and exporter: a fingerprint bound to
@@ -953,10 +953,10 @@ func (b runtimeOps) seedWorkspace(
 	}
 	st.seeder.fingerprint, err = ownedFingerprint(rep.CreationDate, rep.Labels, rep.LabelsObserved, st.ownershipLabel)
 	if err != nil {
-		return failf(CheckWorkspaceSeeding, "seeder container %q: %v", names.Seeder, err)
+		return failw(CheckWorkspaceSeeding, err, "seeder container %q: %v", names.Seeder, err)
 	}
 	if err := b.rt.StartContainer(ctx, names.Seeder); err != nil {
-		return failf(CheckWorkspaceSeeding, "start seeder container: %v", err)
+		return failw(CheckWorkspaceSeeding, err, "start seeder container: %v", err)
 	}
 
 	// Each copy is bounded on its own so a wedged transfer cannot consume the
@@ -974,13 +974,13 @@ func (b runtimeOps) seedWorkspace(
 	}
 
 	if err := b.waitStopped(ctx, names.Seeder, st.seeder, st.ownershipLabel, b.cfg.SeedTimeout); err != nil {
-		return failf(CheckWorkspaceSeeding, "seeder: %v", err)
+		return failw(CheckWorkspaceSeeding, err, "seeder: %v", err)
 	}
 	if err := b.helperStopped(ctx, hs.Class, hs.Size, names.Seeder); err != nil {
 		return err
 	}
 	if err := b.rt.DeleteContainer(ctx, names.Seeder); err != nil {
-		return failf(CheckWorkspaceSeeding, "delete stopped seeder: %v", err)
+		return failw(CheckWorkspaceSeeding, err, "delete stopped seeder: %v", err)
 	}
 	if err := b.verifyContainerAbsent(ctx, names.Seeder, st.seeder, st.ownershipLabel, CheckWorkspaceSeeding); err != nil {
 		return err
@@ -1011,12 +1011,12 @@ func (b runtimeOps) observeSeededBase(
 	spec := buildObserverSpec(b.cfg.seedConfig(), hs, names, st.ownershipLabel)
 	st.observer.attempted = true
 	if err := b.rt.CreateContainer(ctx, cloneContainerSpec(spec)); err != nil {
-		return "", failf(CheckObservedBaseIdentity, "create base observer container: %v", err)
+		return "", failw(CheckObservedBaseIdentity, err, "create base observer container: %v", err)
 	}
 	st.observer.owned = true
 	rep, err := b.rt.Inspect(ctx, names.Observer)
 	if err != nil {
-		return "", failf(CheckObservedBaseIdentity, "inspect base observer before execution: %v", err)
+		return "", failw(CheckObservedBaseIdentity, err, "inspect base observer before execution: %v", err)
 	}
 	if err := verifySeedRoleAllowlist(
 		rep, spec, names.Workspace, b.cfg.WorkspaceTarget, CheckObservedBaseIdentity,
@@ -1025,13 +1025,13 @@ func (b runtimeOps) observeSeededBase(
 	}
 	st.observer.fingerprint, err = ownedFingerprint(rep.CreationDate, rep.Labels, rep.LabelsObserved, st.ownershipLabel)
 	if err != nil {
-		return "", failf(CheckObservedBaseIdentity, "base observer container %q: %v", names.Observer, err)
+		return "", failw(CheckObservedBaseIdentity, err, "base observer container %q: %v", names.Observer, err)
 	}
 	if err := b.rt.StartContainer(ctx, names.Observer); err != nil {
-		return "", failf(CheckObservedBaseIdentity, "start base observer container: %v", err)
+		return "", failw(CheckObservedBaseIdentity, err, "start base observer container: %v", err)
 	}
 	if err := b.waitStopped(ctx, names.Observer, st.observer, st.ownershipLabel, b.cfg.SeedTimeout); err != nil {
-		return "", failf(CheckObservedBaseIdentity, "base observer: %v", err)
+		return "", failw(CheckObservedBaseIdentity, err, "base observer: %v", err)
 	}
 	if err := b.helperStopped(ctx, hs.Class, hs.Size, names.Observer); err != nil {
 		return "", err
@@ -1047,7 +1047,7 @@ func (b runtimeOps) observeSeededBase(
 	}
 
 	if err := b.rt.DeleteContainer(ctx, names.Observer); err != nil {
-		return "", failf(CheckObservedBaseIdentity, "delete stopped base observer: %v", err)
+		return "", failw(CheckObservedBaseIdentity, err, "delete stopped base observer: %v", err)
 	}
 	if err := b.verifyContainerAbsent(ctx, names.Observer, st.observer, st.ownershipLabel, CheckObservedBaseIdentity); err != nil {
 		return "", err
@@ -1069,7 +1069,7 @@ func (b runtimeOps) observeSeededBase(
 func (b runtimeOps) readBaseProof(ctx context.Context, runID, id string, st *runState) (string, error) {
 	dir, err := os.MkdirTemp("", "freeside-handoff-"+runID+"-base-")
 	if err != nil {
-		return "", failf(CheckObservedBaseIdentity, "create base proof directory: %v", err)
+		return "", failw(CheckObservedBaseIdentity, err, "create base proof directory: %v", err)
 	}
 	st.baseArchiveDir = dir
 	defer func() {
@@ -1082,12 +1082,12 @@ func (b runtimeOps) readBaseProof(ctx context.Context, runID, id string, st *run
 	}
 	f, err := os.Open(tarPath) //nolint:gosec // gate-owned path under a fresh temp directory
 	if err != nil {
-		return "", failf(CheckObservedBaseIdentity, "open base proof archive: %v", err)
+		return "", failw(CheckObservedBaseIdentity, err, "open base proof archive: %v", err)
 	}
 	defer f.Close() //nolint:errcheck // read-only handle on a temp file removed above
 	data, found, err := extractArchiveRegularFile(f, b.cfg.BaseProofPath, maxBaseProofBytes)
 	if err != nil {
-		return "", failf(CheckObservedBaseIdentity, "read base proof from observer rootfs: %v", err)
+		return "", failw(CheckObservedBaseIdentity, err, "read base proof from observer rootfs: %v", err)
 	}
 	if !found {
 		return "", failf(CheckObservedBaseIdentity, "base observer produced no proof")
@@ -1106,7 +1106,7 @@ func (b runtimeOps) copyIntoSeeder(ctx context.Context, id, hostDir, targetDir s
 	if err := b.rt.CopyIntoContainer(ctx, id, hostDir, targetDir); err != nil {
 		// The reason names the destination, which is gate-generated
 		// configuration, and never the host source path.
-		return failf(CheckWorkspaceSeeding, "copy into seeder at %s: %v", targetDir, err)
+		return failw(CheckWorkspaceSeeding, err, "copy into seeder at %s: %v", targetDir, err)
 	}
 	return nil
 }

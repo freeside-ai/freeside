@@ -123,12 +123,12 @@ func (b *Backend) createStateVolume(
 	claim.attempted = true
 	labels := append(runLabels(runID), st.ownershipLabel)
 	if err := b.rt.CreateVolume(ctx, name, sizeMB, labels); err != nil {
-		return failf(CheckControlPlaneIsolation, "create launch-state volume %q: %v", name, err)
+		return failw(CheckControlPlaneIsolation, err, "create launch-state volume %q: %v", name, err)
 	}
 	claim.owned = true
 	view, err := b.rt.InspectVolume(ctx, name)
 	if err != nil {
-		return failf(CheckControlPlaneIsolation, "inspect launch-state volume %q: %v", name, err)
+		return failw(CheckControlPlaneIsolation, err, "inspect launch-state volume %q: %v", name, err)
 	}
 	if view.Name != name {
 		return failf(CheckControlPlaneIsolation, "launch-state volume inspection returned the wrong identity")
@@ -137,7 +137,7 @@ func (b *Backend) createStateVolume(
 		view.CreationDate, view.Labels, view.LabelsObserved, st.ownershipLabel,
 	)
 	if err != nil {
-		return failf(CheckControlPlaneIsolation, "launch-state volume %q: %v", name, err)
+		return failw(CheckControlPlaneIsolation, err, "launch-state volume %q: %v", name, err)
 	}
 	return nil
 }
@@ -164,12 +164,12 @@ func (b *Backend) seedLaunchStateVolume(
 	}
 	st.configRootSeeder.attempted = true
 	if err := b.rt.CreateContainer(ctx, cloneContainerSpec(spec)); err != nil {
-		return failf(CheckControlPlaneIsolation, "create launch-state seeder: %v", err)
+		return failw(CheckControlPlaneIsolation, err, "create launch-state seeder: %v", err)
 	}
 	st.configRootSeeder.owned = true
 	rep, err := b.rt.Inspect(ctx, seederName)
 	if err != nil {
-		return failf(CheckControlPlaneIsolation, "inspect launch-state seeder: %v", err)
+		return failw(CheckControlPlaneIsolation, err, "inspect launch-state seeder: %v", err)
 	}
 	if err := verifySeedRoleAllowlist(
 		rep, spec, volume, target,
@@ -181,22 +181,22 @@ func (b *Backend) seedLaunchStateVolume(
 		rep.CreationDate, rep.Labels, rep.LabelsObserved, st.ownershipLabel,
 	)
 	if err != nil {
-		return failf(CheckControlPlaneIsolation, "launch-state seeder ownership: %v", err)
+		return failw(CheckControlPlaneIsolation, err, "launch-state seeder ownership: %v", err)
 	}
 	if err := b.rt.StartContainer(ctx, seederName); err != nil {
-		return failf(CheckControlPlaneIsolation, "start launch-state seeder: %v", err)
+		return failw(CheckControlPlaneIsolation, err, "start launch-state seeder: %v", err)
 	}
 	if err := b.waitStopped(
 		ctx, seederName, st.configRootSeeder,
 		st.ownershipLabel, b.cfg.SeedTimeout,
 	); err != nil {
-		return failf(CheckControlPlaneIsolation, "launch-state seeder: %v", err)
+		return failw(CheckControlPlaneIsolation, err, "launch-state seeder: %v", err)
 	}
 	if err := b.helperStopped(ctx, class, size, seederName); err != nil {
 		return err
 	}
 	if err := b.rt.DeleteContainer(ctx, seederName); err != nil {
-		return failf(CheckControlPlaneIsolation, "delete launch-state seeder: %v", err)
+		return failw(CheckControlPlaneIsolation, err, "delete launch-state seeder: %v", err)
 	}
 	if err := b.verifyContainerAbsent(
 		ctx, seederName, st.configRootSeeder,
@@ -292,12 +292,12 @@ func (b *Backend) observeStateVolume(
 	)
 	claim.attempted = true
 	if err := b.rt.CreateContainer(ctx, cloneContainerSpec(spec)); err != nil {
-		return "", failf(CheckControlPlaneIsolation, "create state observer: %v", err)
+		return "", failw(CheckControlPlaneIsolation, err, "create state observer: %v", err)
 	}
 	claim.owned = true
 	rep, err := b.rt.Inspect(ctx, name)
 	if err != nil {
-		return "", failf(CheckControlPlaneIsolation, "inspect state observer: %v", err)
+		return "", failw(CheckControlPlaneIsolation, err, "inspect state observer: %v", err)
 	}
 	if err := verifySeedRoleAllowlist(
 		rep, spec, volume, stateObserverVolumeTarget, CheckControlPlaneIsolation,
@@ -308,15 +308,15 @@ func (b *Backend) observeStateVolume(
 		rep.CreationDate, rep.Labels, rep.LabelsObserved, st.ownershipLabel,
 	)
 	if err != nil {
-		return "", failf(CheckControlPlaneIsolation, "state observer ownership: %v", err)
+		return "", failw(CheckControlPlaneIsolation, err, "state observer ownership: %v", err)
 	}
 	if err := b.rt.StartContainer(ctx, name); err != nil {
-		return "", failf(CheckControlPlaneIsolation, "start state observer: %v", err)
+		return "", failw(CheckControlPlaneIsolation, err, "start state observer: %v", err)
 	}
 	if err := b.waitStopped(
 		ctx, name, *claim, st.ownershipLabel, b.cfg.SeedTimeout,
 	); err != nil {
-		return "", failf(CheckControlPlaneIsolation, "state observer: %v", err)
+		return "", failw(CheckControlPlaneIsolation, err, "state observer: %v", err)
 	}
 	if err := b.helperStopped(ctx, class, size, name); err != nil {
 		return "", err
@@ -330,7 +330,7 @@ func (b *Backend) observeStateVolume(
 		return "", err
 	}
 	if err := b.rt.DeleteContainer(ctx, name); err != nil {
-		return "", failf(CheckControlPlaneIsolation, "delete state observer: %v", err)
+		return "", failw(CheckControlPlaneIsolation, err, "delete state observer: %v", err)
 	}
 	if err := b.verifyContainerAbsent(
 		ctx, name, *claim, st.ownershipLabel, CheckControlPlaneIsolation,
@@ -348,7 +348,7 @@ func (b *Backend) readStateProof(
 ) ([]byte, error) {
 	dir, err := os.MkdirTemp("", "freeside-handoff-"+runID+"-state-proof-")
 	if err != nil {
-		return nil, failf(CheckControlPlaneIsolation, "create state proof directory: %v", err)
+		return nil, failw(CheckControlPlaneIsolation, err, "create state proof directory: %v", err)
 	}
 	st.stateArchiveDir = dir
 	defer func() {
@@ -363,14 +363,14 @@ func (b *Backend) readStateProof(
 	}
 	file, err := os.Open(tarPath) //nolint:gosec // gate-owned temp path
 	if err != nil {
-		return nil, failf(CheckControlPlaneIsolation, "open state proof archive: %v", err)
+		return nil, failw(CheckControlPlaneIsolation, err, "open state proof archive: %v", err)
 	}
 	defer file.Close() //nolint:errcheck // read-only gate-owned temp
 	data, found, err := extractArchiveRegularFile(
 		file, stateProofPath, maxStateProofBytes,
 	)
 	if err != nil {
-		return nil, failf(CheckControlPlaneIsolation, "read state proof: %v", err)
+		return nil, failw(CheckControlPlaneIsolation, err, "read state proof: %v", err)
 	}
 	if !found {
 		return nil, failf(CheckControlPlaneIsolation, "state observer produced no proof")
@@ -435,8 +435,8 @@ func (b *Backend) verifyPreparedLaunchState(
 	if st.journalOpen {
 		rec, err := b.cfg.Journal.Get(ctx, hs.RunID)
 		if err != nil {
-			return failf(
-				CheckControlPlaneIsolation,
+			return failw(
+				CheckControlPlaneIsolation, err,
 				"reload prepared launch bindings: %v",
 				err,
 			)
@@ -474,7 +474,7 @@ func (b *Backend) verifyPreparedLaunchState(
 	for _, volume := range volumes {
 		view, err := b.rt.InspectVolume(ctx, volume.name)
 		if err != nil {
-			return failf(CheckControlPlaneIsolation, "re-inspect state volume %q: %v", volume.name, err)
+			return failw(CheckControlPlaneIsolation, err, "re-inspect state volume %q: %v", volume.name, err)
 		}
 		if view.Name != volume.name || volume.claim.fingerprint != volume.fingerprint {
 			return failf(CheckControlPlaneIsolation, "state volume binding changed before launch")

@@ -57,7 +57,7 @@ func ReadSetupToken(
 func readCredTokenCopy(archive io.Reader, copyPath, tokenDigest string) (SetupToken, error) {
 	raw, found, err := extractArchiveRegularFile(archive, copyPath, maxStoredSetupTokenBytes)
 	if err != nil {
-		return SetupToken{}, failf(CheckAuthStoreMutationLease, "read stored token from observer rootfs: %v", err)
+		return SetupToken{}, failw(CheckAuthStoreMutationLease, err, "read stored token from observer rootfs: %v", err)
 	}
 	if !found {
 		return SetupToken{}, failf(CheckAuthStoreMutationLease, "credential observer produced no token copy")
@@ -68,7 +68,7 @@ func readCredTokenCopy(archive io.Reader, copyPath, tokenDigest string) (SetupTo
 	}
 	token, err := NewSetupToken(bytes.TrimRight(raw, "\n"))
 	if err != nil {
-		return SetupToken{}, failf(CheckAuthStoreMutationLease, "stored credential is not a setup token: %v", err)
+		return SetupToken{}, failw(CheckAuthStoreMutationLease, err, "stored credential is not a setup token: %v", err)
 	}
 	return token, nil
 }

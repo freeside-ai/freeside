@@ -90,7 +90,7 @@ func (b *Backend) preparePrompt(ctx context.Context, hs HandoffSpec, names hando
 		err := b.rt.CopyIntoContainer(copyCtx, seeder.Name, copy.source, copy.target)
 		cancel()
 		if err != nil {
-			return failf(CheckControlPlaneIsolation, "copy prompt input: %v", err)
+			return failw(CheckControlPlaneIsolation, err, "copy prompt input: %v", err)
 		}
 	}
 	if err := b.waitStopped(ctx, seeder.Name, st.promptSeeder, st.ownershipLabel, b.cfg.SeedTimeout); err != nil {
@@ -127,7 +127,7 @@ func (b *Backend) preparePrompt(ctx context.Context, hs HandoffSpec, names hando
 func (b *Backend) startPromptRole(ctx context.Context, spec ContainerSpec, volume string, claim *objectClaim, st *runState) error {
 	claim.attempted = true
 	if err := b.rt.CreateContainer(ctx, cloneContainerSpec(spec)); err != nil {
-		return failf(CheckControlPlaneIsolation, "create prompt role: %v", err)
+		return failw(CheckControlPlaneIsolation, err, "create prompt role: %v", err)
 	}
 	claim.owned = true
 	rep, err := b.rt.Inspect(ctx, spec.Name)

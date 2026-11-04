@@ -178,6 +178,19 @@ type ConformanceFailure struct {
 	// ContentEvidence marks a refusal that derives deterministically from
 	// the verified content itself; see errContentEvidence.
 	ContentEvidence bool
+	// Err is the error that caused the failure, when there is one; failw
+	// sets it. Unwrap deliberately doesn't return it: ward's classifiers
+	// (classifyCodexLaunchFailure, classifyCodexObservationFailure,
+	// classifyCodexInstructionMaterializationFailure,
+	// codexReviewInstructionOpenIsOperational, recovery's errContentEvidence
+	// check) and engine's productionPublicationRetryableFailure walk the
+	// error chain for sentinels and *fs.PathError, so a reachable cause
+	// could turn a contradiction into a retry or an unmarked failure into a
+	// committed loss. Code that needs the cause asks for it explicitly:
+	// errors.As(err, &cf), then cf.Err. Unlike Reason, Err isn't held to
+	// the no-credential rule: its concrete value can carry fields its text
+	// omits, so never serialize or render it beyond Error().
+	Err error
 }
 
 func (e *ConformanceFailure) Error() string {
@@ -195,7 +208,8 @@ func (e *ConformanceFailure) Error() string {
 var errContentEvidence = errors.New("content evidence")
 
 // Unwrap makes errors.Is(err, ErrConformance) match the failure class, and
-// errors.Is(err, errContentEvidence) match the evidence-marked subset.
+// errors.Is(err, errContentEvidence) match the evidence-marked subset. It
+// excludes Err on purpose; see the field.
 func (e *ConformanceFailure) Unwrap() []error {
 	if e.ContentEvidence {
 		return []error{ErrConformance, errContentEvidence}
@@ -204,11 +218,25 @@ func (e *ConformanceFailure) Unwrap() []error {
 }
 
 // failf builds a ConformanceFailure for check c with a formatted reason.
+// When the failure has an error cause, use failw.
 func failf(c Check, format string, args ...any) error {
 	return &ConformanceFailure{
 		Backend: BackendName,
 		Check:   c,
 		Reason:  fmt.Sprintf(format, args...),
+	}
+}
+
+// failw is failf plus the cause, recorded in Err. The caller keeps
+// formatting the cause into the reason, so the failure's text is the one
+// failf would build; Err only makes the typed cause reachable through
+// errors.As(err, &cf) and cf.Err, never through the error chain.
+func failw(c Check, cause error, format string, args ...any) error {
+	return &ConformanceFailure{
+		Backend: BackendName,
+		Check:   c,
+		Reason:  fmt.Sprintf(format, args...),
+		Err:     cause,
 	}
 }
 

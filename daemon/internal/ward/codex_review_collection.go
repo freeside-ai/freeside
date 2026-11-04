@@ -194,7 +194,7 @@ func (b *CodexReviewLifecycle) authenticateCodexReviewContainerWithImage(
 	if err != nil {
 		if errors.Is(err, ErrCodexReviewIntentNotFound) || errors.Is(err, ErrConformance) {
 			return CodexReviewLaunchIntent{}, CodexReviewJournalBinding{}, InspectReport{},
-				failf(CheckControlPlaneIsolation, "Codex review launch intent is invalid: %v", err)
+				failw(CheckControlPlaneIsolation, err, "Codex review launch intent is invalid: %v", err)
 		}
 		return CodexReviewLaunchIntent{}, CodexReviewJournalBinding{}, InspectReport{},
 			codexReviewOperationalf("load Codex review launch intent: %v", err)
@@ -209,7 +209,7 @@ func (b *CodexReviewLifecycle) authenticateCodexReviewContainerWithImage(
 	if err != nil {
 		if errors.Is(err, ErrCodexReviewBindingNotFound) || errors.Is(err, ErrConformance) {
 			return CodexReviewLaunchIntent{}, CodexReviewJournalBinding{}, InspectReport{},
-				failf(CheckControlPlaneIsolation, "Codex review durable binding is invalid: %v", err)
+				failw(CheckControlPlaneIsolation, err, "Codex review durable binding is invalid: %v", err)
 		}
 		return CodexReviewLaunchIntent{}, CodexReviewJournalBinding{}, InspectReport{},
 			codexReviewOperationalf("load Codex review durable binding: %v", err)
@@ -283,7 +283,7 @@ func (b *CodexReviewLifecycle) cleanupCodexReview(
 			return failf(CheckTeardown, "Codex review launch intent is missing")
 		}
 		if errors.Is(err, ErrConformance) {
-			return failf(CheckControlPlaneIsolation, "Codex review launch intent is invalid: %v", err)
+			return failw(CheckControlPlaneIsolation, err, "Codex review launch intent is invalid: %v", err)
 		}
 		return codexReviewOperationalf("load Codex review launch intent: %v", err)
 	}
@@ -304,7 +304,7 @@ func (b *CodexReviewLifecycle) cleanupCodexReview(
 			return failf(CheckControlPlaneIsolation, "Codex review durable binding is missing")
 		}
 		if errors.Is(err, ErrConformance) {
-			return failf(CheckControlPlaneIsolation, "Codex review durable binding is invalid: %v", err)
+			return failw(CheckControlPlaneIsolation, err, "Codex review durable binding is invalid: %v", err)
 		}
 		return codexReviewOperationalf("load Codex review durable binding: %v", err)
 	}
@@ -323,7 +323,7 @@ func (b *CodexReviewLifecycle) cleanupCodexReview(
 	}
 	container, found, err := uniqueContainer(containers, intent.ReviewContainer)
 	if err != nil {
-		return failf(CheckTeardown, "%v", err)
+		return failw(CheckTeardown, err, "%v", err)
 	}
 	if found {
 		_, _, report, authErr := b.authenticateCodexReviewContainerForProviderCleanup(
@@ -344,7 +344,7 @@ func (b *CodexReviewLifecycle) cleanupCodexReview(
 			if errors.Is(err, ErrCodexReviewOperational) {
 				return err
 			}
-			return failf(CheckTeardown, "reap Codex review container: %v", err)
+			return failw(CheckTeardown, err, "reap Codex review container: %v", err)
 		}
 	}
 	if err := b.verifyCodexReviewContainerAbsent(ctx, intent.ReviewContainer, containerClaim, owner); err != nil {
@@ -361,7 +361,7 @@ func (b *CodexReviewLifecycle) cleanupCodexReview(
 		// silently forever instead of failing loudly.
 		if errors.Is(err, ErrCodexReviewVolumeLeaseForeignOwner) ||
 			errors.Is(err, ErrCodexReviewVolumeLeaseTransferred) {
-			return failf(CheckControlPlaneIsolation,
+			return failw(CheckControlPlaneIsolation, err,
 				"recover terminal Codex review volume lease: %v", err)
 		}
 		return codexReviewOperationalf("recover terminal Codex review volume lease: %v", err)
@@ -394,7 +394,7 @@ func (b *CodexReviewLifecycle) cleanupCodexReview(
 			return failf(CheckTeardown, "Codex review workspace ownership is missing")
 		}
 		if errors.Is(err, ErrConformance) {
-			return failf(CheckTeardown, "Codex review workspace ownership is invalid: %v", err)
+			return failw(CheckTeardown, err, "Codex review workspace ownership is invalid: %v", err)
 		}
 		return codexReviewOperationalf("load Codex review workspace ownership: %v", err)
 	}
@@ -432,7 +432,7 @@ func codexReviewOperationalCheckf(check Check, format string, args ...any) error
 
 func codexReviewJournalCheckf(check Check, format string, err error) error {
 	if errors.Is(err, ErrConformance) {
-		return failf(check, format, err)
+		return failw(check, err, format, err)
 	}
 	return codexReviewOperationalCheckf(check, format, err)
 }
@@ -446,7 +446,7 @@ func (b *CodexReviewLifecycle) verifyCodexReviewContainerAbsent(
 	}
 	candidate, found, err := uniqueContainer(containers, id)
 	if err != nil {
-		return failf(CheckTeardown, "verify %q absent: %v", id, err)
+		return failw(CheckTeardown, err, "verify %q absent: %v", id, err)
 	}
 	if !found {
 		return nil
@@ -477,7 +477,7 @@ func (b *CodexReviewLifecycle) teardownCodexReviewNetwork(
 	}
 	candidate, found, err := uniqueNetwork(networks, name)
 	if err != nil {
-		return failf(CheckTeardown, "%v", err)
+		return failw(CheckTeardown, err, "%v", err)
 	}
 	if !found {
 		return nil
@@ -498,7 +498,7 @@ func (b *CodexReviewLifecycle) teardownCodexReviewNetwork(
 	}
 	candidate, found, err = uniqueNetwork(networks, name)
 	if err != nil {
-		return failf(CheckTeardown, "%v", err)
+		return failw(CheckTeardown, err, "%v", err)
 	}
 	if !found || classifyEvidence(claim, owner, candidate.CreationDate, candidate.Labels, candidate.LabelsObserved) == evidenceForeign {
 		return nil

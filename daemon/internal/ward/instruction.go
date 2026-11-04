@@ -68,8 +68,8 @@ func composeClaudeInstructions(
 	}
 	snapshotRoot, err := os.OpenRoot(st.seedSnapshotDir)
 	if err != nil {
-		return nil, HandoffJournalInstructions{}, failf(
-			CheckControlPlaneIsolation, "open trusted-base snapshot: %v", err,
+		return nil, HandoffJournalInstructions{}, failw(
+			CheckControlPlaneIsolation, err, "open trusted-base snapshot: %v", err,
 		)
 	}
 	defer snapshotRoot.Close() //nolint:errcheck // read-only snapshot handle
@@ -110,8 +110,8 @@ func composeClaudeInstructions(
 		return false, nil
 	})
 	if err != nil {
-		return nil, HandoffJournalInstructions{}, failf(
-			CheckControlPlaneIsolation,
+		return nil, HandoffJournalInstructions{}, failw(
+			CheckControlPlaneIsolation, err,
 			"read trusted-base repository instructions: %v",
 			err,
 		)
@@ -355,7 +355,7 @@ func (b *Backend) seedVendorInstructions(
 	}
 	snapshot, err := os.MkdirTemp("", "freeside-handoff-"+hs.RunID+"-instructions-")
 	if err != nil {
-		return failf(CheckControlPlaneIsolation,
+		return failw(CheckControlPlaneIsolation, err,
 			"create vendor-instruction snapshot directory: %v", err)
 	}
 	st.instructionSnapshotDir = snapshot
@@ -365,33 +365,33 @@ func (b *Backend) seedVendorInstructions(
 			body,
 			0o600,
 		); err != nil {
-			return failf(CheckControlPlaneIsolation,
+			return failw(CheckControlPlaneIsolation, err,
 				"write vendor-instruction snapshot: %v", err)
 		}
 	}
 	readyDir, err := os.MkdirTemp("", "freeside-handoff-"+hs.RunID+"-instruction-ready-")
 	if err != nil {
-		return failf(CheckControlPlaneIsolation,
+		return failw(CheckControlPlaneIsolation, err,
 			"create vendor-instruction sentinel directory: %v", err)
 	}
 	defer os.RemoveAll(readyDir) //nolint:errcheck // best-effort gate-owned scratch cleanup
 	if err := os.WriteFile(
 		filepath.Join(readyDir, seedReadyFile), []byte("ready\n"), 0o600,
 	); err != nil {
-		return failf(CheckControlPlaneIsolation,
+		return failw(CheckControlPlaneIsolation, err,
 			"write vendor-instruction sentinel: %v", err)
 	}
 
 	spec := buildInstructionSeederSpec(b.cfg, hs, names, st.ownershipLabel)
 	st.instructionSeeder.attempted = true
 	if err := b.rt.CreateContainer(ctx, cloneContainerSpec(spec)); err != nil {
-		return failf(CheckControlPlaneIsolation,
+		return failw(CheckControlPlaneIsolation, err,
 			"create vendor-instruction seeder: %v", err)
 	}
 	st.instructionSeeder.owned = true
 	rep, err := b.rt.Inspect(ctx, names.InstructionSeeder)
 	if err != nil {
-		return failf(CheckControlPlaneIsolation,
+		return failw(CheckControlPlaneIsolation, err,
 			"inspect vendor-instruction seeder before execution: %v", err)
 	}
 	if err := verifySeedRoleAllowlist(
@@ -407,11 +407,11 @@ func (b *Backend) seedVendorInstructions(
 		rep.CreationDate, rep.Labels, rep.LabelsObserved, st.ownershipLabel,
 	)
 	if err != nil {
-		return failf(CheckControlPlaneIsolation,
+		return failw(CheckControlPlaneIsolation, err,
 			"vendor-instruction seeder %q: %v", names.InstructionSeeder, err)
 	}
 	if err := b.rt.StartContainer(ctx, names.InstructionSeeder); err != nil {
-		return failf(CheckControlPlaneIsolation,
+		return failw(CheckControlPlaneIsolation, err,
 			"start vendor-instruction seeder: %v", err)
 	}
 	if err := b.copyInstructionInput(
@@ -431,14 +431,14 @@ func (b *Backend) seedVendorInstructions(
 		st.ownershipLabel,
 		b.cfg.SeedTimeout,
 	); err != nil {
-		return failf(CheckControlPlaneIsolation,
+		return failw(CheckControlPlaneIsolation, err,
 			"vendor-instruction seeder: %v", err)
 	}
 	if err := b.helperStopped(ctx, hs.Class, hs.Size, names.InstructionSeeder); err != nil {
 		return err
 	}
 	if err := b.rt.DeleteContainer(ctx, names.InstructionSeeder); err != nil {
-		return failf(CheckControlPlaneIsolation,
+		return failw(CheckControlPlaneIsolation, err,
 			"delete stopped vendor-instruction seeder: %v", err)
 	}
 	if err := b.verifyContainerAbsent(
@@ -460,7 +460,7 @@ func (b *Backend) copyInstructionInput(
 	ctx, cancel := context.WithTimeout(ctx, b.cfg.SeedTimeout)
 	defer cancel()
 	if err := b.rt.CopyIntoContainer(ctx, id, hostDir, targetDir); err != nil {
-		return failf(CheckControlPlaneIsolation,
+		return failw(CheckControlPlaneIsolation, err,
 			"copy vendor-instruction input at %s: %v", targetDir, err)
 	}
 	return nil
@@ -476,13 +476,13 @@ func (b *Backend) observeVendorInstructions(
 	spec := buildInstructionObserverSpec(b.cfg, hs, names, st.ownershipLabel)
 	st.instructionObserver.attempted = true
 	if err := b.rt.CreateContainer(ctx, cloneContainerSpec(spec)); err != nil {
-		return failf(CheckControlPlaneIsolation,
+		return failw(CheckControlPlaneIsolation, err,
 			"create vendor-instruction observer: %v", err)
 	}
 	st.instructionObserver.owned = true
 	rep, err := b.rt.Inspect(ctx, names.InstructionObserver)
 	if err != nil {
-		return failf(CheckControlPlaneIsolation,
+		return failw(CheckControlPlaneIsolation, err,
 			"inspect vendor-instruction observer before execution: %v", err)
 	}
 	if err := verifySeedRoleAllowlist(
@@ -498,11 +498,11 @@ func (b *Backend) observeVendorInstructions(
 		rep.CreationDate, rep.Labels, rep.LabelsObserved, st.ownershipLabel,
 	)
 	if err != nil {
-		return failf(CheckControlPlaneIsolation,
+		return failw(CheckControlPlaneIsolation, err,
 			"vendor-instruction observer %q: %v", names.InstructionObserver, err)
 	}
 	if err := b.rt.StartContainer(ctx, names.InstructionObserver); err != nil {
-		return failf(CheckControlPlaneIsolation,
+		return failw(CheckControlPlaneIsolation, err,
 			"start vendor-instruction observer: %v", err)
 	}
 	if err := b.waitStopped(
@@ -512,7 +512,7 @@ func (b *Backend) observeVendorInstructions(
 		st.ownershipLabel,
 		b.cfg.SeedTimeout,
 	); err != nil {
-		return failf(CheckControlPlaneIsolation,
+		return failw(CheckControlPlaneIsolation, err,
 			"vendor-instruction observer: %v", err)
 	}
 	if err := b.helperStopped(ctx, hs.Class, hs.Size, names.InstructionObserver); err != nil {
@@ -531,15 +531,15 @@ func (b *Backend) observeVendorInstructions(
 		if err := b.cfg.Journal.MarkInstructionsPrepared(
 			ctx, hs.RunID, *st.preparedInstructions,
 		); err != nil {
-			return failf(
-				CheckControlPlaneIsolation,
+			return failw(
+				CheckControlPlaneIsolation, err,
 				"journal prepared instructions: %v",
 				err,
 			)
 		}
 	}
 	if err := b.rt.DeleteContainer(ctx, names.InstructionObserver); err != nil {
-		return failf(CheckControlPlaneIsolation,
+		return failw(CheckControlPlaneIsolation, err,
 			"delete stopped vendor-instruction observer: %v", err)
 	}
 	if err := b.verifyContainerAbsent(
@@ -578,7 +578,7 @@ func (b *Backend) readInstructionProof(
 ) ([]byte, error) {
 	dir, err := os.MkdirTemp("", "freeside-handoff-"+runID+"-instruction-proof-")
 	if err != nil {
-		return nil, failf(CheckControlPlaneIsolation,
+		return nil, failw(CheckControlPlaneIsolation, err,
 			"create vendor-instruction proof directory: %v", err)
 	}
 	st.instructionArchiveDir = dir
@@ -594,7 +594,7 @@ func (b *Backend) readInstructionProof(
 	}
 	file, err := os.Open(tarPath) //nolint:gosec // gate-owned path under a fresh temp directory
 	if err != nil {
-		return nil, failf(CheckControlPlaneIsolation,
+		return nil, failw(CheckControlPlaneIsolation, err,
 			"open vendor-instruction proof archive: %v", err)
 	}
 	defer file.Close() //nolint:errcheck // read-only temp file removed above
@@ -602,7 +602,7 @@ func (b *Backend) readInstructionProof(
 		file, instructionProofPath, maxInstructionProofBytes,
 	)
 	if err != nil {
-		return nil, failf(CheckControlPlaneIsolation,
+		return nil, failw(CheckControlPlaneIsolation, err,
 			"read vendor-instruction proof: %v", err)
 	}
 	if !found {
