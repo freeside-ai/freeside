@@ -72,6 +72,11 @@ type authAdoptConfig struct {
 	// role is required, because a writer launch passes both and the tree
 	// refuses a line that would leave either to the CLI.
 	Writers map[domain.RoleName]agentbaseline.Selection
+	// SpecifierEscalatedModel and SpecifierEscalatedEffort are the
+	// specifier's escalated counterpart (plan §5.13, Specifier Triage), both
+	// or neither; empty leaves the tree without an escalated agent or line.
+	SpecifierEscalatedModel  string
+	SpecifierEscalatedEffort domain.EffortLevel
 	// JudgmentModel is the exact Claude model id the call offer names, and
 	// JudgmentEffort the effort every judgment call asks. The daemon has no
 	// flag for either: a judgment call launches with what its lineup line's
@@ -269,12 +274,19 @@ func runAuthAdoptCommand(
 		)
 	}
 
+	var specifierEscalated *agentbaseline.Selection
+	if cfg.SpecifierEscalatedModel != "" {
+		specifierEscalated = &agentbaseline.Selection{
+			Model: cfg.SpecifierEscalatedModel, Effort: cfg.SpecifierEscalatedEffort,
+		}
+	}
 	tree, err := agentbaseline.Tree(agentbaseline.TreeInput{
 		ClaudeEnrollment: claude.Enrollment, CodexEnrollment: codexEnrollment,
 		ClaudeReviewEnrollment: claudeReviewEnrollment,
 		ReviewModel:            cfg.ReviewModel, ReviewEffort: cfg.ReviewEffort,
 		ShadowReviewModel: cfg.ShadowReviewModel, ShadowReviewEffort: cfg.ShadowReviewEffort,
-		Writers: cfg.Writers, JudgmentModel: cfg.JudgmentModel, JudgmentEffort: cfg.JudgmentEffort,
+		Writers: cfg.Writers, SpecifierEscalated: specifierEscalated,
+		JudgmentModel: cfg.JudgmentModel, JudgmentEffort: cfg.JudgmentEffort,
 		TermsBasisDate: cfg.TermsBasisDate, PricingRevision: cfg.PricingRevision,
 		OfferNotAfter: notAfter, Prompts: prompts,
 	})
@@ -510,6 +522,12 @@ func parseAuthAdoptConfig(args []string, stderr io.Writer, now time.Time) (authA
 				return nil
 			})
 	}
+	flags.StringVar(&cfg.SpecifierEscalatedModel, "specifier-escalated-model", "",
+		"exact Claude model id the specifier's escalated counterpart's offer names "+
+			"(optional; set with -specifier-escalated-effort)")
+	flags.StringVar((*string)(&cfg.SpecifierEscalatedEffort), "specifier-escalated-effort", "",
+		fmt.Sprintf("effort the specifier's escalated counterpart asks, one of %v; set with -specifier-escalated-model",
+			explicitEfforts))
 	flags.StringVar((*string)(&cfg.ReviewHarness), "review-harness", string(domain.HarnessClientCodexCLI),
 		"harness the reviewer runs: codex_cli adopts the review identity's Codex store, "+
 			"claude_code its setup-token volume")
@@ -576,6 +594,11 @@ func parseAuthAdoptConfig(args []string, stderr io.Writer, now time.Time) (authA
 		return authAdoptConfig{}, err
 	}
 	if err := validateWriterSelections(cfg.Writers); err != nil {
+		return authAdoptConfig{}, err
+	}
+	if err := validateSpecifierEscalatedSelection(
+		cfg.SpecifierEscalatedModel, cfg.SpecifierEscalatedEffort, cfg.Writers[domain.RoleSpecifier],
+	); err != nil {
 		return authAdoptConfig{}, err
 	}
 	if cfg.ReviewEffort != "" {
@@ -694,6 +717,36 @@ func validateWriterSelections(writers map[domain.RoleName]agentbaseline.Selectio
 		if err := validateExplicitEffort(string(role)+"-effort", selection.Effort); err != nil {
 			return err
 		}
+	}
+	return nil
+}
+
+// validateSpecifierEscalatedSelection holds the specifier's escalated pair to
+// the writer rules: both or neither, an explicit effort, and a real model the
+// writer launch can pass. A pair equal to the specifier's own would escalate
+// to the same model and effort, so it is refused. The deputy's settings run
+// the same check on writers.specifier_escalated.
+func validateSpecifierEscalatedSelection(
+	model string, effort domain.EffortLevel, specifier agentbaseline.Selection,
+) error {
+	if model == "" && effort == "" {
+		return nil
+	}
+	if model == "" || effort == "" {
+		return errors.New("-specifier-escalated-model and -specifier-escalated-effort are set together or not at all")
+	}
+	if err := validateExplicitEffort("specifier-escalated-effort", effort); err != nil {
+		return err
+	}
+	if model == domain.ClaudeCodeNativeDefaultRouteModelID {
+		return fmt.Errorf("-specifier-escalated-model %s names no model: give the exact Claude model id", model)
+	}
+	if !validClaudeLaunchModel(model) {
+		return errors.New("-specifier-escalated-model cannot be passed to the writer launch as one option value")
+	}
+	if (agentbaseline.Selection{Model: model, Effort: effort}) == specifier {
+		return errors.New(
+			"-specifier-escalated-model and -specifier-escalated-effort equal the specifier's own: escalation would change nothing")
 	}
 	return nil
 }
