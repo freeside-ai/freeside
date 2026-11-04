@@ -43,3 +43,6 @@ c5e65942551bb0ec863b0c882bc8904036ecccb5
 
 # Move the review gate out of production_publication.go (#558)
 3aaac6416723b82c336f9606861d9973c2ac7f15
+
+# Move OCI archive verification out of the Apple backend (#562)
+2c3c10021f2951a30c25c8ddfaecb20d7ad65baf
