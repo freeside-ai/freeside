@@ -419,6 +419,12 @@ var (
 		"an attempt of the role is running")
 	ErrTaskLineInconsistent = errors.New(
 		"task line id or predecessor does not match its content")
+	ErrInvalidTriageOutcome = errors.New(
+		"triage outcome is not a member of the closed list")
+	ErrInvalidTriageTier = errors.New(
+		"triage tier is not a member of the closed list")
+	ErrTaskTriageInconsistent = errors.New(
+		"task triage tier, reason, or escalated bit does not fit its outcome")
 	ErrRoutingPolicyNoRoles = errors.New(
 		"routing policy orders no role")
 	ErrRoutingPolicyRoleRepeated = errors.New(
@@ -446,6 +452,12 @@ var (
 		"lineup shadow line names a ward role; only a wardless role takes one")
 	ErrLineupShadowLimit = errors.New(
 		"lineup carries more than one shadow line for a role")
+	ErrLineupEscalatedRole = errors.New(
+		"lineup escalated line names a role other than the specifier")
+	ErrLineupEscalatedPrompt = errors.New(
+		"lineup escalated line's prompt is not its role's line's prompt")
+	ErrLineupEscalatedPair = errors.New(
+		"lineup escalated line does not pair two tree agents on one enrollment and adapter")
 	ErrRoleNotWardless = errors.New(
 		"role is not a wardless role")
 	ErrLineupSelectionMismatch = errors.New(

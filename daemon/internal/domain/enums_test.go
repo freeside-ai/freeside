@@ -76,6 +76,14 @@ func TestEnumValidity(t *testing.T) {
 		valids["TaskLineSelectionTier"] = append(valids["TaskLineSelectionTier"], v.valid)
 	}
 	invalids["TaskLineSelectionTier"] = TaskLineSelectionTier("").valid
+	for _, v := range AllTriageOutcomes {
+		valids["TriageOutcome"] = append(valids["TriageOutcome"], v.valid)
+	}
+	invalids["TriageOutcome"] = TriageOutcome("").valid
+	for _, v := range AllTriageTiers {
+		valids["TriageTier"] = append(valids["TriageTier"], v.valid)
+	}
+	invalids["TriageTier"] = TriageTier("").valid
 	for _, v := range AllAgentSelectionSources {
 		valids["AgentSelectionSource"] = append(valids["AgentSelectionSource"], v.valid)
 	}

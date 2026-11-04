@@ -393,6 +393,16 @@ import Testing
                 ] + published)
     }
 
+    @Test func aTriageLineReadsAsSetByTriage() {
+        let digest = "sha256:" + String(repeating: "a", count: 64)
+        let escalated = Components.Schemas.TaskEventTaskLine(
+            line_id: digest, role: .specifier, agent: "claude-code-specifier-escalated", version: 1,
+            source: .triage)
+        #expect(
+            TaskTimelinePresentation.label(escalated)
+                == "Specifying agent set by triage · claude-code-specifier-escalated")
+    }
+
     @Test func aClearedLineReadsAsBackToTheLineup() {
         let digest = "sha256:" + String(repeating: "a", count: 64)
         let cleared = Components.Schemas.TaskEventTaskLine(

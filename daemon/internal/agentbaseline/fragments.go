@@ -47,6 +47,11 @@ const (
 	ClaudeShadowReviewAgentName = "claude-shadow-review-default"
 	ClaudeReviewAgentName       = "claude-review-default"
 	CodexReviewAgentName        = "codex-review-default"
+
+	// ClaudeSpecifierEscalatedAgentName is the specifier's escalated
+	// counterpart, emitted only when adoption is given its model and effort.
+	ClaudeSpecifierEscalatedAgentName = "claude-code-specifier-escalated"
+
 	ClaudeAdapterName           = ClaudeWardAdapterBuild
 	ClaudeCallAdapterName       = ClaudeCallAdapterBuild
 	CodexAdapterName            = CodexReviewAdapterBuild

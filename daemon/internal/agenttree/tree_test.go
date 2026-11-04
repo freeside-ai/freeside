@@ -8,6 +8,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"reflect"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -202,6 +203,66 @@ func TestParseFailsClosed(t *testing.T) {
 				t.Fatalf("Parse = %v, want %v", err, tc.want)
 			}
 		})
+	}
+}
+
+// escalatedTree adds to the fixture a counterpart agent on the given
+// enrollment, a specifier line on the fixture agent, and the escalated line
+// pairing the two.
+func escalatedTree(t *testing.T, counterpartEnrollment string) agenttree.Tree {
+	t.Helper()
+	tree := fixtureTree(t)
+	counterpart := tree.Agents[0]
+	counterpart.Name, counterpart.Enrollment, counterpart.Effort = "sol-high", counterpartEnrollment, domain.EffortHigh
+	tree.Agents = append(tree.Agents, counterpart)
+	slices.SortFunc(tree.Agents, func(a, b domain.AgentSource) int { return strings.Compare(a.Name, b.Name) })
+	specifier := domain.LineupSelection{
+		AgentName: agentName, AgentDigest: must(tree.AgentDigest(agentName)),
+		PromptName: "specifier", PromptDigest: digestOf("specifier"),
+	}
+	escalated := specifier
+	escalated.AgentName, escalated.AgentDigest = "sol-high", must(tree.AgentDigest("sol-high"))
+	tree.Lineup = append(tree.Lineup,
+		agenttree.LineupLine{Key: string(domain.RoleSpecifier), Selection: specifier},
+		agenttree.LineupLine{Key: "specifier.escalated." + agentName, Selection: escalated},
+	)
+	return tree
+}
+
+// An escalated line survives the round trip when its pair shares an
+// enrollment and adapter, and the tree refuses it when the counterpart runs
+// under another enrollment, whether it is rendered that way or the lineup
+// file is edited to name such an agent.
+func TestEscalatedLineFollowsThePairingRule(t *testing.T) {
+	tree := escalatedTree(t, "openai-chatgpt-a/codex_cli")
+	files := must(agenttree.Render(tree))
+	parsed := must(agenttree.Parse(files))
+	if !reflect.DeepEqual(parsed, tree) {
+		t.Fatalf("Parse(Render(tree)) =\n%+v\nwant\n%+v", parsed, tree)
+	}
+	lineup := must(parsed.ResolveLineup())
+	if counterpart, ok := lineup.EscalatedCounterpart(domain.RoleSpecifier, agentName); !ok || counterpart.AgentName != "sol-high" {
+		t.Fatalf("EscalatedCounterpart = %+v, %t", counterpart, ok)
+	}
+
+	if _, err := agenttree.Render(escalatedTree(t, "openai-chatgpt-b/codex_cli")); !errors.Is(err, domain.ErrLineupEscalatedPair) {
+		t.Fatalf("Render with a counterpart on another enrollment = %v", err)
+	}
+
+	// A tree that holds an agent on another enrollment passes until the
+	// lineup names it as the counterpart.
+	other := escalatedTree(t, "openai-chatgpt-a/codex_cli")
+	stranger := other.Agents[0]
+	stranger.Name, stranger.Enrollment = "sol-elsewhere", "openai-chatgpt-b/codex_cli"
+	other.Agents = append(other.Agents, stranger)
+	slices.SortFunc(other.Agents, func(a, b domain.AgentSource) int { return strings.Compare(a.Name, b.Name) })
+	edited := must(agenttree.Render(other))
+	edited["lineup"] = bytes.Replace(edited["lineup"],
+		[]byte(" sol-high@"+string(must(other.AgentDigest("sol-high")))),
+		[]byte(" sol-elsewhere@"+string(must(other.AgentDigest("sol-elsewhere")))), 1)
+	_, err := agenttree.Parse(edited)
+	if !errors.Is(err, domain.ErrLineupEscalatedPair) || !errors.Is(err, agenttree.ErrMalformed) {
+		t.Fatalf("Parse with the counterpart edited onto another enrollment = %v", err)
 	}
 }
 

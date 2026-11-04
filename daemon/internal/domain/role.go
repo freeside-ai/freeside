@@ -18,7 +18,7 @@ func (r RoleName) LaunchShape() LaunchShape {
 	case RoleSpecifier, RoleImplementer, RoleRemediator, RoleReviewer, RoleShadowReviewer:
 		return LaunchShapeWard
 	case RoleDiagnostic, RoleTaskNamer, RolePublicationAuthor, RoleFindingClassifier,
-		RoleFindingAdjudicator, RoleDriftAuditor, RoleAttentionDiscussion, RoleBriefer:
+		RoleFindingAdjudicator, RoleDriftAuditor, RoleAttentionDiscussion, RoleBriefer, RoleTriager:
 		return LaunchShapeWardless
 	}
 	return ""
@@ -35,7 +35,7 @@ func (r RoleName) Stage() (StageName, bool) {
 	case RoleReviewer, RoleShadowReviewer:
 		return StageNameReview, true
 	case RoleDiagnostic, RoleTaskNamer, RolePublicationAuthor, RoleFindingClassifier,
-		RoleFindingAdjudicator, RoleDriftAuditor, RoleAttentionDiscussion, RoleBriefer:
+		RoleFindingAdjudicator, RoleDriftAuditor, RoleAttentionDiscussion, RoleBriefer, RoleTriager:
 		return "", false
 	}
 	return "", false
@@ -44,8 +44,8 @@ func (r RoleName) Stage() (StageName, bool) {
 // Sites returns the ids of the judgment sites a wardless role answers, as
 // daemon/internal/inference registers them; domain cannot import that
 // package, and a test there holds the two lists together. A ward role has
-// none. The briefer's site is not built, so that role has none yet and the unit
-// that builds the site adds it.
+// none. The briefer's and the triager's sites are not built, so those roles
+// have none yet and the unit that builds each site adds it.
 func (r RoleName) Sites() []string {
 	switch r {
 	case RoleDiagnostic:
@@ -62,7 +62,7 @@ func (r RoleName) Sites() []string {
 		return []string{"attention_discussion"}
 	case RoleDriftAuditor:
 		return []string{"drift_auditor"}
-	case RoleBriefer:
+	case RoleBriefer, RoleTriager:
 		return nil
 	case RoleSpecifier, RoleImplementer, RoleRemediator, RoleReviewer, RoleShadowReviewer:
 		return nil
@@ -93,7 +93,7 @@ func (r RoleName) JudgesWrittenWork() bool {
 		return true
 	case RoleSpecifier, RoleImplementer, RoleRemediator, RoleShadowReviewer,
 		RoleDiagnostic, RoleTaskNamer, RolePublicationAuthor, RoleFindingClassifier,
-		RoleAttentionDiscussion, RoleBriefer:
+		RoleAttentionDiscussion, RoleBriefer, RoleTriager:
 		return false
 	}
 	return false

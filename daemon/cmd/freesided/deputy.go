@@ -598,6 +598,11 @@ func deputyAdoptArgs(settings loadedDeputySettings, paths deputyPaths) []string 
 			"-"+string(writer.role)+"-model", writer.selection.Model,
 			"-"+string(writer.role)+"-effort", string(writer.selection.Effort))
 	}
+	if escalated := settings.Writers.SpecifierEscalated; escalated != nil {
+		args = append(args,
+			"-specifier-escalated-model", escalated.Model,
+			"-specifier-escalated-effort", string(escalated.Effort))
+	}
 	if settings.Judgment.Model != "" {
 		args = append(args,
 			"-judgment-model", settings.Judgment.Model,

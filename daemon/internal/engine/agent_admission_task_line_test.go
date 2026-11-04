@@ -874,3 +874,250 @@ func TestLinelessAdmissionSelectsFromTheLineup(t *testing.T) {
 		t.Fatalf("lineless binding = %+v, want the lineup-only resolution %+v", *admission.AgentBinding, lineupOnly)
 	}
 }
+
+// agentTestEscalatedAgent is the specifier's escalated counterpart the
+// triage tests add to the tree.
+const agentTestEscalatedAgent = "claude-escalated"
+
+// addEscalatedSpecifier adds to the tree an escalated counterpart of the
+// specifier's lineup agent, on the same enrollment and adapter with an offer
+// of its own, and, when withLine, the escalated line pairing the two.
+func (f *agentAdmissionFixture) addEscalatedSpecifier(t *testing.T, withLine bool) {
+	t.Helper()
+	tree := f.selection.Tree
+	specifierAgent := agentbaseline.WriterAgentName(domain.RoleSpecifier)
+	specifier, ok := tree.Agent(specifierAgent)
+	if !ok {
+		t.Fatalf("the tree has no specifier agent %s", specifierAgent)
+	}
+	offers := slices.Clone(tree.Offers)
+	i := slices.IndexFunc(offers, func(o agenttree.Offer) bool { return o.Name == specifier.Offer })
+	if i < 0 {
+		t.Fatalf("the tree has no offer %s", specifier.Offer)
+	}
+	offer := offers[i]
+	offer.Name = agentTestEscalatedAgent
+	offer.Fragment.RouteModelID = "claude-escalated-test"
+	var err error
+	if offer.Fragment.Digest, err = offer.Fragment.ComputeDigest(); err != nil {
+		t.Fatal(err)
+	}
+	tree.Offers = append(offers, offer)
+	escalated := specifier
+	escalated.Name, escalated.Offer = agentTestEscalatedAgent, offer.Name
+	tree.Agents = append(slices.Clone(tree.Agents), escalated)
+	tree.Sort()
+	if withLine {
+		line, err := lineupLine(tree, domain.RoleSpecifier)
+		if err != nil {
+			t.Fatal(err)
+		}
+		line.AgentName = agentTestEscalatedAgent
+		if line.AgentDigest, err = tree.AgentDigest(agentTestEscalatedAgent); err != nil {
+			t.Fatal(err)
+		}
+		key, err := domain.LineupEscalatedKey(domain.RoleSpecifier, specifierAgent)
+		if err != nil {
+			t.Fatal(err)
+		}
+		tree.Lineup = append(slices.Clone(tree.Lineup), agenttree.LineupLine{
+			Key: strings.TrimPrefix(key, domain.LineupRoleKeyPrefix), Selection: line,
+		})
+	}
+	f.useTree(t, tree)
+}
+
+// staleEscalatedDigest repins the escalated line to the specifier agent's
+// digest, as if the counterpart's definition changed after the line pinned
+// it. The tree still parses: nothing but admission compares the two.
+func (f *agentAdmissionFixture) staleEscalatedDigest(t *testing.T) {
+	t.Helper()
+	tree := f.selection.Tree
+	specifierAgent := agentbaseline.WriterAgentName(domain.RoleSpecifier)
+	stale, err := tree.AgentDigest(specifierAgent)
+	if err != nil {
+		t.Fatal(err)
+	}
+	key, err := domain.LineupEscalatedKey(domain.RoleSpecifier, specifierAgent)
+	if err != nil {
+		t.Fatal(err)
+	}
+	tree.Lineup = slices.Clone(tree.Lineup)
+	i := slices.IndexFunc(tree.Lineup, func(l agenttree.LineupLine) bool {
+		return l.Key == strings.TrimPrefix(key, domain.LineupRoleKeyPrefix)
+	})
+	if i < 0 {
+		t.Fatal("the tree has no escalated line")
+	}
+	tree.Lineup[i].Selection.AgentDigest = stale
+	f.useTree(t, tree)
+}
+
+// useTree renders and reparses tree and makes it the admission's agents.
+func (f *agentAdmissionFixture) useTree(t *testing.T, tree agenttree.Tree) {
+	t.Helper()
+	files, err := agenttree.Render(tree)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if f.selection.LineupRevision, err = agenttree.Revision(files); err != nil {
+		t.Fatal(err)
+	}
+	if f.selection.Tree, err = agenttree.Parse(files); err != nil {
+		t.Fatal(err)
+	}
+	selection := f.selection
+	f.engine.admission.environment.Agents = &selection
+}
+
+// recordTriage stores the fixture task's triage record.
+func (f *agentAdmissionFixture) recordTriage(t *testing.T, record domain.TaskTriage) {
+	t.Helper()
+	if err := f.store.Write(t.Context(), func(tx *store.WriteTx) error {
+		return tx.RecordTaskTriage(t.Context(), record)
+	}); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func (f *agentAdmissionFixture) admitRole(t *testing.T, role domain.RoleName) (agentAdmission, error) {
+	t.Helper()
+	return resolveAgentAdmission(t.Context(), f.store, f.selection, f.run.ID, role,
+		agentTestPrompts[role].Digest, agentTestAt)
+}
+
+// A triage line admits the specifier on the escalated counterpart the
+// lineup names for its lineup agent, on that agent's enrollment, and the
+// admission cites the line.
+func TestTriageTaskLineAdmitsTheEscalatedSpecifier(t *testing.T) {
+	f := newAgentAdmissionFixture(t)
+	f.addEscalatedSpecifier(t, true)
+	task := f.task(t, f.run.ID)
+	f.recordTriage(t, domain.TaskTriage{
+		TaskID: task.ID, Outcome: domain.TriageOutcomeCallFailed, Escalated: true, RecordedAt: agentTestAt,
+	})
+	line := f.appendLine(t, domain.TaskLineInput{
+		TaskID: task.ID, Role: domain.RoleSpecifier, Agent: agentTestEscalatedAgent,
+		Source: domain.TaskLineSourceTriage, SetBy: string(task.ID),
+	}, agentTestAt)
+
+	admission, err := f.admitRole(t, domain.RoleSpecifier)
+	if err != nil {
+		t.Fatal(err)
+	}
+	digest, err := f.selection.Tree.AgentDigest(agentTestEscalatedAgent)
+	if err != nil {
+		t.Fatal(err)
+	}
+	binding := admission.binding
+	if binding.SelectionSource != domain.AgentSelectionSourceTaskLine || binding.SelectionRecordID != line.ID ||
+		binding.AgentDigest != digest || binding.EnrollmentID != f.enrollment.ID {
+		t.Fatalf("binding = %+v, want the triage line on %s under %s", binding, digest, f.enrollment.ID)
+	}
+}
+
+// Each check of a triage line's anchor refuses on its own, and a refused
+// line never falls back to the lineup's agent.
+func TestTriageTaskLineAnchorRefusals(t *testing.T) {
+	escalated := domain.TaskTriage{Outcome: domain.TriageOutcomeBudgetSpent, Escalated: true, RecordedAt: agentTestAt}
+	standard := domain.TaskTriage{
+		Outcome: domain.TriageOutcomeAnswered, Tier: new(domain.TriageTierStandard), RecordedAt: agentTestAt,
+	}
+	for _, tc := range []struct {
+		name   string
+		role   domain.RoleName
+		agent  string
+		setBy  string // empty: the line's own task
+		record *domain.TaskTriage
+		noLine bool // the lineup carries no escalated line
+		stale  bool // the escalated line pins a stale counterpart digest
+		want   string
+	}{
+		{
+			name: "another role", role: domain.RoleImplementer, agent: agentTestEscalatedAgent, record: &escalated,
+			want: "sets only the specifier",
+		},
+		{
+			name: "another task", role: domain.RoleSpecifier, agent: agentTestEscalatedAgent, setBy: "task-other",
+			record: &escalated, want: "cites another",
+		},
+		{
+			name: "no triage record", role: domain.RoleSpecifier, agent: agentTestEscalatedAgent,
+			want: "no triage record",
+		},
+		{
+			name: "record did not escalate", role: domain.RoleSpecifier, agent: agentTestEscalatedAgent,
+			record: &standard, want: "did not escalate",
+		},
+		{
+			name: "not the counterpart", role: domain.RoleSpecifier, agent: agentTestSecondAgent, record: &escalated,
+			want: "an agent other than " + agentTestEscalatedAgent,
+		},
+		{
+			name: "no escalated line", role: domain.RoleSpecifier, agent: agentTestEscalatedAgent, record: &escalated,
+			noLine: true, want: "no escalated counterpart",
+		},
+		{
+			name: "stale counterpart digest", role: domain.RoleSpecifier, agent: agentTestEscalatedAgent,
+			record: &escalated, stale: true, want: "the escalated line selects agent digest",
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			f := newAgentAdmissionFixture(t)
+			f.addSecondAgent(t)
+			f.addEscalatedSpecifier(t, !tc.noLine)
+			if tc.stale {
+				f.staleEscalatedDigest(t)
+			}
+			task := f.task(t, f.run.ID)
+			if tc.record != nil {
+				record := *tc.record
+				record.TaskID = task.ID
+				f.recordTriage(t, record)
+			}
+			setBy := tc.setBy
+			if setBy == "" {
+				setBy = string(task.ID)
+			}
+			f.appendLine(t, domain.TaskLineInput{
+				TaskID: task.ID, Role: tc.role, Agent: tc.agent, Source: domain.TaskLineSourceTriage, SetBy: setBy,
+			}, agentTestAt)
+			admission, err := f.admitRole(t, tc.role)
+			if !errors.Is(err, ErrAgentNotAdmissible) || !strings.Contains(err.Error(), tc.want) ||
+				admission.binding.AgentDigest != "" {
+				t.Fatalf("admission = %+v, %v; want refusal naming %q", admission.binding, err, tc.want)
+			}
+		})
+	}
+}
+
+// Until the triager exists, the operator escalates a task by hand: a
+// cli_line_change line naming the escalated agent admits the specifier on
+// it, with no triage record behind it.
+func TestOperatorLineEscalatesTheSpecifierByHand(t *testing.T) {
+	f := newAgentAdmissionFixture(t)
+	f.addEscalatedSpecifier(t, true)
+	task := f.task(t, f.run.ID)
+	change, err := domain.NewTaskLineChange(task.ID, domain.RoleSpecifier, agentTestEscalatedAgent, false, nil, agentTestAt)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var line domain.TaskLine
+	if err := f.store.Write(t.Context(), func(tx *store.WriteTx) error {
+		line, err = tx.RecordTaskLineChange(t.Context(), change, domain.TaskLineSourceCLILineChange)
+		return err
+	}); err != nil {
+		t.Fatal(err)
+	}
+	admission, err := f.admitRole(t, domain.RoleSpecifier)
+	if err != nil {
+		t.Fatal(err)
+	}
+	digest, err := f.selection.Tree.AgentDigest(agentTestEscalatedAgent)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if admission.binding.SelectionRecordID != line.ID || admission.binding.AgentDigest != digest {
+		t.Fatalf("binding = %+v, want the operator's line on the escalated agent", admission.binding)
+	}
+}

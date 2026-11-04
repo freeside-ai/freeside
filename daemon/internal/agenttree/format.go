@@ -110,7 +110,8 @@ func renderAgent(source domain.AgentSource) ([]byte, error) {
 }
 
 // parseLineup reads the lineup file: one "<key> <selection>" line for each
-// role, where the key is the role name (or "<role>.shadow.<name>") and the
+// role, where the key is the role name (or "<role>.shadow.<name>", or
+// "specifier.escalated.<agent>") and the
 // selection is the lineup contract's value. Which keys are legal is
 // domain.ResolveLineup's rule, applied once the tree is whole.
 func parseLineup(body []byte) ([]LineupLine, error) {

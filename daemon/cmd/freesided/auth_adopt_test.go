@@ -577,6 +577,82 @@ func TestAuthAdoptShadowArm(t *testing.T) {
 	}
 }
 
+// With the escalated specifier pair, adoption emits the escalated agent on
+// the Claude enrollment and ward adapter, its pinned offer, and the
+// escalated line right after the specifier's.
+func TestAuthAdoptEscalatedSpecifier(t *testing.T) {
+	f := newAuthAdoptFixture(t)
+	_, patch, err := f.run(t, f.args(
+		"-specifier-escalated-model", "claude-specifier-escalated", "-specifier-escalated-effort", "max"))
+	if err != nil {
+		t.Fatalf("auth adopt: %v", err)
+	}
+	tree := loadAdoptedPatch(t, patch)
+	specifier := agentbaseline.WriterAgentName(domain.RoleSpecifier)
+	roles := lineupRoles(tree)
+	if len(roles) < 2 || roles[0] != "specifier="+specifier ||
+		roles[1] != "specifier.escalated."+specifier+"="+agentbaseline.ClaudeSpecifierEscalatedAgentName {
+		t.Fatalf("lineup = %v", roles)
+	}
+	agent, ok := tree.Agent(agentbaseline.ClaudeSpecifierEscalatedAgentName)
+	writer, _ := tree.Agent(specifier)
+	if !ok || agent.Offer != agentbaseline.ClaudeSpecifierEscalatedAgentName || agent.Effort != domain.EffortMax ||
+		agent.Adapter != writer.Adapter || agent.Enrollment != writer.Enrollment {
+		t.Fatalf("escalated agent = %+v beside the specifier's %+v", agent, writer)
+	}
+	offer := slices.IndexFunc(tree.Offers, func(o agenttree.Offer) bool {
+		return o.Name == agentbaseline.ClaudeSpecifierEscalatedAgentName
+	})
+	if offer < 0 || tree.Offers[offer].Fragment.RouteModelID != "claude-specifier-escalated" ||
+		tree.Offers[offer].Fragment.IdentityStability != domain.IdentityPinned {
+		t.Fatalf("offers = %+v", tree.Offers)
+	}
+}
+
+// An escalated pair with one flag, or equal to the specifier's own pair, is
+// refused before anything is recorded.
+func TestAuthAdoptRefusesAnEscalatedSpecifierItCannotWrite(t *testing.T) {
+	f := newAuthAdoptFixture(t)
+	for name, tc := range map[string]struct {
+		extra []string
+		want  string
+	}{
+		"only the model": {
+			[]string{"-specifier-escalated-model", "claude-specifier-escalated"}, "set together or not at all",
+		},
+		"only the effort": {[]string{"-specifier-escalated-effort", "max"}, "set together or not at all"},
+		"the specifier's own pair": {
+			[]string{"-specifier-escalated-model", adoptSpecifierModel, "-specifier-escalated-effort", "high"},
+			"escalation would change nothing",
+		},
+		"the native-default id": {
+			[]string{"-specifier-escalated-model", domain.ClaudeCodeNativeDefaultRouteModelID, "-specifier-escalated-effort", "max"},
+			"names no model",
+		},
+		"an effort the launch cannot pass": {
+			[]string{"-specifier-escalated-model", "claude-specifier-escalated", "-specifier-escalated-effort", "harness_default"},
+			`-specifier-escalated-effort "harness_default" is not an effort`,
+		},
+		"a value with a CLI delimiter": {
+			[]string{"-specifier-escalated-model", "claude,opus", "-specifier-escalated-effort", "max"},
+			"-specifier-escalated-model cannot be passed",
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			_, patch, err := f.run(t, f.args(tc.extra...))
+			if err == nil || !strings.Contains(err.Error(), tc.want) {
+				t.Fatalf("auth adopt = %v, want an error containing %q", err, tc.want)
+			}
+			if len(patch) != 0 {
+				t.Fatalf("a refused adoption emitted a patch:\n%s", patch)
+			}
+			if snap := f.snapshot(t); len(snap.Enrollments) != 0 {
+				t.Fatalf("a refused adoption recorded %+v", snap.Enrollments)
+			}
+		})
+	}
+}
+
 // TestAuthAdoptRefusesAWriterSelectionItCannotWrite covers the refusals that
 // keep adoption from writing a writer agent that would run on the CLI's own
 // default or that the daemon would refuse to launch: a writer launch passes

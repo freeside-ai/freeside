@@ -696,7 +696,8 @@ func (n StageName) valid() bool {
 // Shapes). The list grows only by plan revision. Verification is an engine
 // job and never a role, so it is not a member. The researcher (plan revision
 // 76) joins through #1656; until then a researcher lineup key fails closed
-// like any unknown role.
+// like any unknown role. The triager (plan revision 106) is a member with no
+// site until the triage unit builds one.
 type RoleName string
 
 const (
@@ -713,6 +714,7 @@ const (
 	RoleDriftAuditor        RoleName = "drift_auditor"
 	RoleAttentionDiscussion RoleName = "attention_discussion"
 	RoleBriefer             RoleName = "briefer"
+	RoleTriager             RoleName = "triager"
 )
 
 // AllRoleNames lists every valid RoleName; it is the single registration
@@ -721,13 +723,14 @@ var AllRoleNames = []RoleName{
 	RoleSpecifier, RoleImplementer, RoleRemediator, RoleReviewer, RoleShadowReviewer,
 	RoleDiagnostic, RoleTaskNamer, RolePublicationAuthor, RoleFindingClassifier,
 	RoleFindingAdjudicator, RoleDriftAuditor, RoleAttentionDiscussion, RoleBriefer,
+	RoleTriager,
 }
 
 func (r RoleName) valid() bool {
 	switch r {
 	case RoleSpecifier, RoleImplementer, RoleRemediator, RoleReviewer, RoleShadowReviewer,
 		RoleDiagnostic, RoleTaskNamer, RolePublicationAuthor, RoleFindingClassifier,
-		RoleFindingAdjudicator, RoleDriftAuditor, RoleAttentionDiscussion, RoleBriefer:
+		RoleFindingAdjudicator, RoleDriftAuditor, RoleAttentionDiscussion, RoleBriefer, RoleTriager:
 		return true
 	default:
 		return false

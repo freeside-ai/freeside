@@ -1,0 +1,8 @@
+{
+  "task_id": "task-1",
+  "outcome": "answered",
+  "tier": "escalated",
+  "reason": "A contract change across three components.",
+  "escalated": true,
+  "recorded_at": "2026-11-03T12:00:00Z"
+}

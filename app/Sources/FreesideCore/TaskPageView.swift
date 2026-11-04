@@ -1976,7 +1976,12 @@ enum TaskTimelinePresentation {
         guard let agent = line.agent else {
             return "\(subject) back to lineup" + (line.superseded_agent.map { " · \($0)" } ?? "")
         }
-        let actor = line.source == .router ? " by router" : ""
+        let actor =
+            switch line.source {
+            case .router: " by router"
+            case .triage: " by triage"
+            default: ""
+            }
         if let superseded = line.superseded_agent {
             return "\(subject) changed\(actor) · \(superseded) → \(agent)"
         }

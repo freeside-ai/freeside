@@ -14,6 +14,7 @@ import (
 // holds.
 func rewindMemoryBudget(t *testing.T, ctx context.Context, db *sql.DB) {
 	t.Helper()
+	rewindTaskTriages(t, ctx, db)
 	for _, statement := range []string{
 		`DROP TABLE memory_budget`,
 		`DELETE FROM schema_migrations WHERE name = '0122_memory_budget.sql'`,

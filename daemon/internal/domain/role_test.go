@@ -19,8 +19,8 @@ func TestRoleShapeAndPlace(t *testing.T) {
 		domain.RoleReviewer:       domain.StageNameReview,
 		domain.RoleShadowReviewer: domain.StageNameReview,
 	}
-	if len(domain.AllRoleNames) != 13 {
-		t.Fatalf("role list has %d members, want the 13 of plan revision 65", len(domain.AllRoleNames))
+	if len(domain.AllRoleNames) != 14 {
+		t.Fatalf("role list has %d members, want the 14 of plan revision 106", len(domain.AllRoleNames))
 	}
 	owners := map[string]domain.RoleName{}
 	for _, role := range domain.AllRoleNames {
@@ -55,8 +55,18 @@ func TestRoleShapeAndPlace(t *testing.T) {
 	if got := domain.RoleDriftAuditor.Sites(); !slices.Equal(got, []string{"drift_auditor"}) {
 		t.Fatalf("drift auditor sites = %v", got)
 	}
-	if got := domain.RoleBriefer.Sites(); len(got) != 0 {
-		t.Fatalf("briefer names sites %v before its site exists", got)
+	for _, unbuilt := range []domain.RoleName{domain.RoleBriefer, domain.RoleTriager} {
+		if got := unbuilt.Sites(); len(got) != 0 {
+			t.Fatalf("%s names sites %v before its site exists", unbuilt, got)
+		}
+	}
+	if domain.RoleTriager.LaunchShape() != domain.LaunchShapeWardless || domain.RoleTriager.TaskLineEligible() {
+		t.Fatal("the triager is a wardless role no task line may choose")
+	}
+	if lineup, err := domain.ResolveLineup([]domain.PolicyKey{lineupKey("lineup.role.triager")}); err != nil {
+		t.Fatalf("a triager lineup line = %v", err)
+	} else if line, present := lineup.Line(domain.RoleTriager); !present || line.AgentName == "" {
+		t.Fatalf("the triager's line did not resolve: %+v, %t", line, present)
 	}
 	for _, notRole := range []domain.RoleName{"", "verification", "researcher", "implementation"} {
 		_, inStage := notRole.Stage()
