@@ -30,7 +30,8 @@ type RequestAuthorizer func(*http.Request) (domain.DeviceID, bool)
 // NewHTTPHandler serves the currently implemented OpenAPI surface. Listener
 // placement stays with daemon composition, which must bind only to loopback
 // or the configured Tailscale address (plan §5.2). A nil authorizer denies
-// every authenticated route; there is no fallback around those checks.
+// every authenticated route; there is no fallback around those checks. JSON
+// responses are gzipped for clients that accept it; attachments never are.
 func NewHTTPHandler(service *Service, authorize RequestAuthorizer, configuredHealth ...HealthResponse) http.Handler {
 	health := HealthResponse{Status: "ok", Version: "devel", StartedAt: time.Now().UTC()}
 	if len(configuredHealth) > 0 {
@@ -76,7 +77,7 @@ func NewHTTPHandler(service *Service, authorize RequestAuthorizer, configuredHea
 	mux.Handle("PUT /devices/{device_id}/capability-contract", h.authenticated(h.registerCapabilityContract))
 	mux.Handle("GET /attention/items/{item_id}/action-surface", h.authenticated(h.getActionSurface))
 	mux.Handle("PUT /telemetry/comprehension/{event_id}", h.authenticated(h.recordComprehensionEvent))
-	return mux
+	return compressJSON(mux)
 }
 
 type httpHandler struct {
