@@ -27,6 +27,11 @@
 // This is the pattern internal/verify/procroom.go established under a
 // refute-first pass; the helper exists because five more call sites need
 // it. Unix only, as the daemon already is.
+//
+// TailBuffer bounds what such a child writes to its captured output. It
+// lives here because every caller that needs it is bounding a child
+// process: the bound and the lifetime are the two halves of not letting a
+// subprocess exhaust the daemon.
 package procbound
 
 import (
