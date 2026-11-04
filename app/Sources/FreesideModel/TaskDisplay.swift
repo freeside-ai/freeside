@@ -32,6 +32,11 @@ package enum TaskDisplay {
         let rail: DecisionStageRailPresentation
         let holdReason: Components.Schemas.RunHoldReason?
         package var hold: String? { holdReason.map(RunDisplay.label) }
+        /// The current run's recorded hold from the loaded task timeline,
+        /// kept only when it names that run and `holdReason`: a stale
+        /// observation for a reason the run has left would name the wrong
+        /// cause. Nil while the timeline isn't loaded.
+        var holdFacts: Components.Schemas.RunHold? = nil
         var qualification: String? = nil
         package var status: String? = nil
         var guidance: String = Position.defaultGuidance
@@ -202,6 +207,7 @@ package enum TaskDisplay {
                 task, runs: runs, attentionItems: attentionItems, history: history, stage: stage)
         else { return nil }
         let run = runs.first { $0.run.id == current.run_id }?.run
+        position.holdFacts = recordedHold(task, runID: current.run_id, reason: position.holdReason, history: history)
         let status = statusAndTone(task, run: run)
         position.status = status.text
         position.statusIsHistorical = status.isHistorical
@@ -212,10 +218,16 @@ package enum TaskDisplay {
             run?.outcome != .failed, run?.outcome != .lost
         {
             if isCapacityWait(position.holdReason), run == nil || run?.outcome == .pending {
+                // A pool wait names its pool once the timeline supplies it;
+                // a stored `identity_parallelism` hold never names one. A
+                // memory wait is either a launch that doesn't fit or one
+                // behind older launches, so its sentence fits both.
+                let pool = position.holdReason == .usage_pool_exhausted ? position.holdFacts?.usage_pool : nil
                 let cause =
                     position.holdReason == .machine_capacity
-                    ? "Other launches are using this machine's memory budget."
-                    : "The configured agent account is busy."
+                    ? "This machine's memory budget can't take this launch yet."
+                    : pool.map { "Pool \($0) is at its limit of parallel runs." }
+                        ?? "The configured agent account is busy."
                 position.guidance = "\(cause) This work is queued; no action is needed for this wait."
             }
             if let dispute = reviewDisputeItem(task, run: run, attentionItems: attentionItems) {
@@ -253,6 +265,20 @@ package enum TaskDisplay {
     /// the pool hold that replaced it.
     private static func isCapacityWait(_ reason: Components.Schemas.RunHoldReason?) -> Bool {
         reason == .usage_pool_exhausted || reason == .identity_parallelism || reason == .machine_capacity
+    }
+
+    /// The hold the task's own timeline recorded for `runID`, when it records
+    /// the reason the position holds on. The task and project match is the
+    /// one `specificationApproval` applies to the same timeline.
+    private static func recordedHold(
+        _ task: Components.Schemas.Task, runID: String, reason: Components.Schemas.RunHoldReason?,
+        history: Components.Schemas.TaskTimeline?
+    ) -> Components.Schemas.RunHold? {
+        guard let reason, let history, history.task_id == task.id, history.project_id == task.project_id,
+            let hold = history.sections.flatMap(\.runs).first(where: { $0.run_id == runID })?.hold?.value1,
+            hold.run_id == runID, hold.reason == reason
+        else { return nil }
+        return hold
     }
 
     private static func suppressesGuidanceForCancellation(_ task: Components.Schemas.Task) -> Bool {

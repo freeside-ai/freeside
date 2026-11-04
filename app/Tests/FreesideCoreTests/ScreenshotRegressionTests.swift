@@ -2093,38 +2093,44 @@
                                 .background(Color.ground))))
                 }
             }
-            // A launch waiting for machine memory (#1598): the row's capacity
-            // wait and the timeline header's callout naming it.
-            let memoryWait = HoldPresentationFixtures.make("Machine capacity")
-            var memoryTask = approvalFixture.task
-            memoryTask.task = memoryWait.task
-            let memoryCache = InMemoryCacheStore()
-            try memoryCache.save(
-                .init(
-                    cursors: .init(
-                        syncEpoch: "memory-epoch", lastFullSnapshotRevision: memoryTask.as_of_revision,
-                        highestObservedServerRevision: memoryTask.as_of_revision),
-                    attentionItems: memoryWait.items, runs: memoryWait.runs, tasks: [memoryTask],
-                    taskTimelines: [memoryWait.history].compactMap { $0 }))
-            let memoryCoordinator = SyncCoordinator(
-                client: APIClientFactory.mock(server: MockServer()), cache: memoryCache)
-            for scheme in [ColorScheme.light, .dark] {
-                surfaces.append(
-                    Surface(
-                        name: "task-hold-machine-capacity-390-\(scheme)", width: 390, colorScheme: scheme,
-                        nativeAppearance: true,
-                        view: AnyView(
-                            VStack(alignment: .leading, spacing: 28) {
-                                TaskRowView(
-                                    task: memoryWait.task, position: memoryWait.position,
-                                    now: RunFixtures.screenshotInstant)
-                                TaskPageView(
-                                    coordinator: memoryCoordinator, snapshot: memoryTask, onOpenRun: { _ in }
-                                ).header(memoryWait.history)
-                            }
-                            .padding(24)
-                            .foregroundStyle(Color.ink)
-                            .background(Color.ground))))
+            // A launch waiting for machine memory (#1598) and one waiting on
+            // a full usage pool (#1596): the row's capacity wait and the
+            // timeline header's callout, each guidance sentence naming its
+            // cause from the recorded hold (#1599).
+            for (name, slug) in [("Machine capacity", "machine-capacity"), ("Usage pool", "usage-pool")] {
+                let wait = HoldPresentationFixtures.make(name)
+                var waitTask = approvalFixture.task
+                waitTask.task = wait.task
+                let waitCache = InMemoryCacheStore()
+                try waitCache.save(
+                    .init(
+                        cursors: .init(
+                            syncEpoch: "\(slug)-epoch", lastFullSnapshotRevision: waitTask.as_of_revision,
+                            highestObservedServerRevision: waitTask.as_of_revision),
+                        attentionItems: wait.items, runs: wait.runs, tasks: [waitTask],
+                        taskTimelines: [wait.history].compactMap { $0 }))
+                let waitCoordinator = SyncCoordinator(
+                    client: APIClientFactory.mock(server: MockServer()), cache: waitCache)
+                for width in [CGFloat(390), CGFloat(820)] {
+                    for scheme in [ColorScheme.light, .dark] {
+                        surfaces.append(
+                            Surface(
+                                name: "task-hold-\(slug)-\(Int(width))-\(scheme)", width: width,
+                                colorScheme: scheme, nativeAppearance: true,
+                                view: AnyView(
+                                    VStack(alignment: .leading, spacing: 28) {
+                                        TaskRowView(
+                                            task: wait.task, position: wait.position,
+                                            now: RunFixtures.screenshotInstant)
+                                        TaskPageView(
+                                            coordinator: waitCoordinator, snapshot: waitTask, onOpenRun: { _ in }
+                                        ).header(wait.history)
+                                    }
+                                    .padding(24)
+                                    .foregroundStyle(Color.ink)
+                                    .background(Color.ground))))
+                    }
+                }
             }
             // Bounded conversation messages (visual audit D04): a short
             // message, long prose, code-like lines, and a long message with
@@ -2517,6 +2523,32 @@
                         RunTimelineView(coordinator: coordinator, snapshot: activeRun, expandsTechnicalDetails: true)
                             .screenshotContent(timeline)
                     )))
+            // The run timeline's hold callout with each capacity hold's
+            // recorded fact (#1599): the full pool, the machine's memory
+            // reservations, and a stored identity_parallelism hold, which
+            // names no pool and so states no fact.
+            for (name, slug) in [
+                ("Usage pool", "usage-pool"), ("Machine capacity", "machine-capacity"), ("Capacity", "identity"),
+            ] {
+                guard let hold = HoldPresentationFixtures.hold(name, runID: activeRun.run.id) else {
+                    preconditionFailure("\(name) has no recorded hold fixture")
+                }
+                var heldRun = activeRun
+                heldRun.run.hold_reason = .init(value1: hold.reason)
+                var heldTimeline = timeline
+                heldTimeline.hold = .init(value1: hold)
+                for width in [CGFloat(390), CGFloat(820)] {
+                    for scheme in [ColorScheme.light, .dark] {
+                        surfaces.append(
+                            Surface(
+                                name: "run-timeline-hold-\(slug)-\(Int(width))-\(scheme)", width: width,
+                                colorScheme: scheme, nativeAppearance: true,
+                                view: AnyView(
+                                    RunTimelineView(coordinator: coordinator, snapshot: heldRun)
+                                        .screenshotContent(heldTimeline))))
+                    }
+                }
+            }
             // Attempt-ordered history (#1263): two early attempts re-observed
             // after a later completed attempt, plus a review round, so the
             // ordering does not follow observation time.

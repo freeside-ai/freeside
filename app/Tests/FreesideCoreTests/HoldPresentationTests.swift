@@ -61,8 +61,81 @@ import Testing
         #expect(position.hold == "Waiting for machine capacity")
         #expect(
             position.guidance
-                == "Other launches are using this machine's memory budget. This work is queued; no action is needed for this wait."
+                == "This machine's memory budget can't take this launch yet. This work is queued; no action is needed for this wait."
         )
+        #expect(position.holdFacts?.machine_capacity?.value1.ahead == 1)
+    }
+
+    @Test func holdFactWordsOnlyTheFactThatBelongsToTheHold() throws {
+        func fact(_ name: String) throws -> Components.Schemas.RunHold {
+            try #require(HoldPresentationFixtures.hold(name, runID: "run"))
+        }
+        let pool = try fact("Usage pool")
+        #expect(RunDisplay.holdFact(pool, runID: "run") == "Pool claude-max at its limit of parallel runs")
+        var memory = try fact("Machine capacity")
+        #expect(
+            RunDisplay.holdFact(memory, runID: "run")
+                == "7.0 GiB of 8.0 GiB reserved · 2.5 GiB for this launch · 1 launch ahead")
+        memory.machine_capacity?.value1.ahead = 3
+        #expect(
+            RunDisplay.holdFact(memory, runID: "run")
+                == "7.0 GiB of 8.0 GiB reserved · 2.5 GiB for this launch · 3 launches ahead")
+        memory.machine_capacity?.value1.ahead = 0
+        #expect(RunDisplay.holdFact(memory, runID: "run") == "7.0 GiB of 8.0 GiB reserved · 2.5 GiB for this launch")
+
+        // A stored identity_parallelism hold names no pool, and a hold with
+        // its fact missing has nothing to say.
+        #expect(RunDisplay.holdFact(try fact("Capacity"), runID: "run") == nil)
+        var bare = pool
+        bare.usage_pool = nil
+        #expect(RunDisplay.holdFact(bare, runID: "run") == nil)
+        memory.machine_capacity = nil
+        #expect(RunDisplay.holdFact(memory, runID: "run") == nil)
+
+        // Another run's hold, or a fact beside a reason it doesn't belong
+        // to, is ignored.
+        #expect(RunDisplay.holdFact(pool, runID: "other") == nil)
+        var misplaced = pool
+        misplaced.reason = .identity_parallelism
+        #expect(RunDisplay.holdFact(misplaced, runID: "run") == nil)
+        misplaced.reason = .machine_capacity
+        #expect(RunDisplay.holdFact(misplaced, runID: "run") == nil)
+    }
+
+    @Test func poolGuidanceNamesThePoolOnlyFromTheCurrentHold() throws {
+        let busy = "The configured agent account is busy. This work is queued; no action is needed for this wait."
+        let named =
+            "Pool claude-max is at its limit of parallel runs. This work is queued; no action is needed for this wait."
+        let loaded = HoldPresentationFixtures.make("Usage pool")
+        #expect(loaded.position?.hold == "Waiting for agent capacity")
+        #expect(loaded.position?.guidance == named)
+        #expect(HoldPresentationFixtures.make("Usage pool without facts").position?.guidance == busy)
+        // The stored identity_parallelism hold carries its record but no pool.
+        let stored = HoldPresentationFixtures.make("Capacity")
+        #expect(stored.position?.holdFacts?.reason == .identity_parallelism)
+        #expect(stored.position?.guidance == busy)
+
+        var unloaded = loaded
+        unloaded.history = nil
+        #expect(unloaded.position?.holdFacts == nil)
+        #expect(unloaded.position?.guidance == busy)
+
+        // A recorded hold that disagrees with the position (another run,
+        // another reason, another task's timeline) is ignored.
+        let runID = loaded.runs[0].run.id
+        let index = try #require(
+            loaded.history?.sections.firstIndex { $0.runs.contains { $0.run_id == runID } })
+        let runIndex = try #require(loaded.history?.sections[index].runs.firstIndex { $0.run_id == runID })
+        var otherRun = loaded
+        otherRun.history?.sections[index].runs[runIndex].hold?.value1.run_id = "other"
+        var otherReason = loaded
+        otherReason.history?.sections[index].runs[runIndex].hold?.value1.reason = .machine_capacity
+        var otherTask = loaded
+        otherTask.history?.task_id = "other"
+        for fixture in [otherRun, otherReason, otherTask] {
+            #expect(fixture.position?.holdFacts == nil)
+            #expect(fixture.position?.guidance == busy)
+        }
     }
 
     @Test func capacityGuidanceAgreesWithTheCurrentPositionFallback() throws {
@@ -187,6 +260,9 @@ import Testing
             "Historical capacity": nil,
             "Missing cause": nil,
             "Failed beside capacity": nil,
+            "Usage pool": "Hold: Waiting for agent capacity",
+            "Usage pool without facts": "Hold: Waiting for agent capacity",
+            "Machine capacity": "Hold: Waiting for machine capacity",
         ]
         #expect(Set(holds.keys) == Set(HoldPresentationFixtures.groups.joined()))
         for (name, hold) in holds {
@@ -216,6 +292,7 @@ enum HoldPresentationFixtures {
             "Stop failed beside capacity",
         ],
         ["Stopped beside capacity", "Historical capacity", "Missing cause", "Failed beside capacity"],
+        ["Usage pool", "Usage pool without facts", "Machine capacity"],
     ]
 
     static func make(_ name: String) -> TaskProgressFixtures.Case {
@@ -237,11 +314,47 @@ enum HoldPresentationFixtures {
         case "Unattended operation stopped": reason = .operation_stopped
         case "Missing cause": reason = nil
         case "Machine capacity": reason = .machine_capacity
+        case "Usage pool", "Usage pool without facts": reason = .usage_pool_exhausted
         default: reason = .identity_parallelism
         }
         fixture.runs[0].run.hold_reason = reason.map { .init(value1: $0) }
         fixture.task.current_position?.value1.hold_reason = reason.map { .init(value1: $0) }
+        let runID = fixture.runs[0].run.id
+        if let hold = hold(name, runID: runID) {
+            guard
+                let section = fixture.history?.sections.firstIndex(where: {
+                    $0.runs.contains { $0.run_id == runID }
+                }),
+                let index = fixture.history?.sections[section].runs.firstIndex(where: { $0.run_id == runID })
+            else { preconditionFailure("Hold fixtures require the current run in the task timeline") }
+            fixture.history?.sections[section].runs[index].hold = .init(value1: hold)
+        }
         if name == "Capacity without run" { fixture.runs = [] }
         return fixture
+    }
+
+    /// The hold the daemon recorded beside each capacity case, with the fact
+    /// that belongs to its reason: a pool, the memory reservations, and a
+    /// stored `identity_parallelism` hold, which names no pool. The run
+    /// timeline surfaces draw the same holds.
+    static func hold(_ name: String, runID: String) -> Components.Schemas.RunHold? {
+        let observed = RunFixtures.screenshotInstant
+        switch name {
+        case "Capacity":
+            return .init(
+                run_id: runID, reason: .identity_parallelism, first_observed_at: observed, last_observed_at: observed)
+        case "Usage pool":
+            return .init(
+                run_id: runID, reason: .usage_pool_exhausted, usage_pool: "claude-max", first_observed_at: observed,
+                last_observed_at: observed)
+        case "Machine capacity":
+            return .init(
+                run_id: runID, reason: .machine_capacity,
+                machine_capacity: .init(
+                    value1: .init(reservation_mib: 2560, reserved_mib: 7168, budget_mib: 8192, ahead: 1)),
+                first_observed_at: observed, last_observed_at: observed)
+        default:
+            return nil
+        }
     }
 }

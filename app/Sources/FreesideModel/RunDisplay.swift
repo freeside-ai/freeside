@@ -520,6 +520,39 @@ package enum RunDisplay {
         }
     }
 
+    /// A capacity hold's typed fact in words, beside the hold's label, which
+    /// stays one short phrase per reason. Reads only the fact that belongs to
+    /// the hold's reason, and only when the hold is `runID`'s: another run's
+    /// hold, another reason, or a missing fact (a stored
+    /// `identity_parallelism` hold names no pool) has none. The words carry
+    /// no tense, because a finished run's hold is a past observation. The
+    /// memory figures are the reservations the hold recorded, not live use.
+    package static func holdFact(_ hold: Components.Schemas.RunHold, runID: String) -> String? {
+        guard hold.run_id == runID else { return nil }
+        switch hold.reason {
+        case .usage_pool_exhausted:
+            return hold.usage_pool.map { "Pool \($0) at its limit of parallel runs" }
+        case .machine_capacity:
+            guard let memory = hold.machine_capacity?.value1 else { return nil }
+            let reserved =
+                "\(gibibytes(memory.reserved_mib)) of \(gibibytes(memory.budget_mib)) reserved"
+                + " · \(gibibytes(memory.reservation_mib)) for this launch"
+            switch memory.ahead {
+            case ..<1: return reserved
+            case 1: return reserved + " · 1 launch ahead"
+            default: return reserved + " · \(memory.ahead) launches ahead"
+            }
+        default:
+            return nil
+        }
+    }
+
+    /// MiB as GiB with one decimal. `String(format:)` ignores the device
+    /// locale, so the figure and its screenshots read the same everywhere.
+    private static func gibibytes(_ mib: Int) -> String {
+        String(format: "%.1f GiB", Double(mib) / 1024)
+    }
+
     package static func label(_ value: Components.Schemas.ScheduleKind) -> String {
         switch value {
         case .pr_checks_deadline: "Checks"

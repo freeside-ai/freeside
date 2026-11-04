@@ -357,6 +357,10 @@ struct RunTimelineView: View {
             }
             Text(RunTimelineView.holdSentence(hold, run: snapshot.run))
                 .font(FreesideFont.statement)
+            if let fact = RunDisplay.holdFact(hold, runID: snapshot.run.id) {
+                Text(fact)
+                    .font(FreesideFont.cardBody)
+            }
             Text(
                 "Observed \(shortTime(hold.first_observed_at)) to "
                     + hold.last_observed_at.formatted(
