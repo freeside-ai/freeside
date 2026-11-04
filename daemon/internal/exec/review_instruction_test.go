@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"encoding/json"
 	"errors"
+	"reflect"
 	"slices"
 	"strings"
 	"testing"
@@ -162,35 +163,96 @@ func TestReviewRequestAuthorityBindsRepositoryAndInstructions(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	mutations := []func(*ReviewRequest){
-		func(r *ReviewRequest) { r.Repo = "other/repo" },
-		func(r *ReviewRequest) { r.BaseSHA = strings.Repeat("e", 40) },
-		func(r *ReviewRequest) { r.EvaluatedSHA = strings.Repeat("9", 40) },
-		func(r *ReviewRequest) {
-			r.Instructions.RepositorySources[0].Digest = domain.Digest("sha256:" + strings.Repeat("f", 64))
+	digest := func(fill string) domain.Digest { return domain.Digest("sha256:" + strings.Repeat(fill, 64)) }
+	// Every ReviewRequest field is either authority, with at least one valid
+	// mutation that must change the digest, or exempt, with its reason. The
+	// coverage check below fails on a field in neither map, so a new request
+	// field can't pass unexamined.
+	mutations := map[string][]func(*ReviewRequest){
+		// Validate requires the admission to name the request's run, so this
+		// mutation changes Admission too. It would still pass with top-level
+		// RunID dropped from the digest; RunID stays bound through
+		// Admission.RunID, which Validate keeps equal to it.
+		"RunID": {func(r *ReviewRequest) {
+			r.RunID = "run-2"
+			r.Admission = testReviewAdmission("run-2")
+		}},
+		"Round":        {func(r *ReviewRequest) { r.Round = 2 }},
+		"Repo":         {func(r *ReviewRequest) { r.Repo = "other/repo" }},
+		"RepositoryID": {func(r *ReviewRequest) { r.RepositoryID = 43 }},
+		"BaseRef":      {func(r *ReviewRequest) { r.BaseRef = "release" }},
+		"BaseSHA":      {func(r *ReviewRequest) { r.BaseSHA = strings.Repeat("e", 40) }},
+		"HeadSHA":      {func(r *ReviewRequest) { r.HeadSHA = strings.Repeat("8", 40) }},
+		"EvaluatedSHA": {func(r *ReviewRequest) { r.EvaluatedSHA = strings.Repeat("9", 40) }},
+		"Workspace":    {func(r *ReviewRequest) { r.Workspace = "/other-candidate" }},
+		"Verification": {
+			func(r *ReviewRequest) { r.Verification.RecipeDigest = digest("3") },
+			func(r *ReviewRequest) { r.Verification.EvidenceSnapshotDigest = digest("4") },
+			func(r *ReviewRequest) { r.Verification.ArtifactDigests = []domain.Digest{digest("5")} },
 		},
-		func(r *ReviewRequest) {
-			r.Instructions.ResultDigest = domain.Digest("sha256:" + strings.Repeat("1", 64))
+		"Instructions": {
+			func(r *ReviewRequest) { r.Instructions.RepositorySources[0].Digest = digest("f") },
+			func(r *ReviewRequest) { r.Instructions.ResultDigest = digest("1") },
 		},
 		// The admitted agent is authority too: a request rewritten to name
 		// another agent, identity, or launch value is another request.
-		func(r *ReviewRequest) { r.Admission.AuthIdentityID = "auth-other" },
-		func(r *ReviewRequest) {
-			r.Admission.AgentBinding.AgentDigest = domain.Digest("sha256:" + strings.Repeat("2", 64))
+		"Admission": {
+			func(r *ReviewRequest) { r.Admission.AuthIdentityID = "auth-other" },
+			func(r *ReviewRequest) { r.Admission.AgentBinding.AgentDigest = digest("2") },
+			func(r *ReviewRequest) { r.Admission.AgentBinding.RouteModelID = "other-model" },
+			func(r *ReviewRequest) { r.Admission.LineageGroup = "other" },
 		},
-		func(r *ReviewRequest) { r.Admission.AgentBinding.RouteModelID = "other-model" },
-		func(r *ReviewRequest) { r.Admission.LineageGroup = "other" },
 	}
-	for i, mutate := range mutations {
+	exempt := map[string]func(*ReviewRequest){
+		// Request time is an operational observation, not delegated authority.
+		"RequestedAt": func(r *ReviewRequest) { r.RequestedAt = r.RequestedAt.Add(time.Hour) },
+	}
+
+	fields := map[string]bool{}
+	for field := range reflect.TypeFor[ReviewRequest]().Fields() {
+		fields[field.Name] = true
+		_, mutated := mutations[field.Name]
+		_, exempted := exempt[field.Name]
+		switch {
+		case !mutated && !exempted:
+			t.Errorf("ReviewRequest.%s has no authority mutation and no exemption", field.Name)
+		case mutated && exempted:
+			t.Errorf("ReviewRequest.%s is both mutated and exempt", field.Name)
+		}
+	}
+	for name := range mutations {
+		if !fields[name] {
+			t.Errorf("mutation names unknown ReviewRequest field %s", name)
+		}
+	}
+	for name := range exempt {
+		if !fields[name] {
+			t.Errorf("exemption names unknown ReviewRequest field %s", name)
+		}
+	}
+
+	mutated := func(mutate func(*ReviewRequest)) (domain.Digest, error) {
 		changed := request
 		changed.Instructions.RepositorySources = slices.Clone(request.Instructions.RepositorySources)
 		mutate(&changed)
-		got, err := changed.AuthorityDigest()
-		if err != nil {
-			t.Fatalf("mutation %d invalid: %v", i, err)
+		return changed.AuthorityDigest()
+	}
+	for name, fieldMutations := range mutations {
+		for i, mutate := range fieldMutations {
+			got, err := mutated(mutate)
+			if err != nil {
+				t.Errorf("%s mutation %d invalid: %v", name, i, err)
+			} else if got == want {
+				t.Errorf("%s mutation %d did not change request authority", name, i)
+			}
 		}
-		if got == want {
-			t.Fatalf("mutation %d did not change request authority", i)
+	}
+	for name, mutate := range exempt {
+		got, err := mutated(mutate)
+		if err != nil {
+			t.Errorf("%s exemption mutation invalid: %v", name, err)
+		} else if got != want {
+			t.Errorf("exempt %s changed request authority", name)
 		}
 	}
 }

@@ -1394,22 +1394,7 @@ func (a *Journal) MarkStatePrepared(
 	state ward.HandoffJournalState,
 ) error {
 	return a.store.WriteInternal(ctx, func(tx *store.InternalTx) error {
-		return tx.MarkHandoffStatePrepared(ctx, runID, store.HandoffJournalState{
-			ConfigRootFingerprint:     state.ConfigRootFingerprint,
-			ContinuityFingerprint:     state.ContinuityFingerprint,
-			SessionScratchFingerprint: state.SessionScratchFingerprint,
-			ConfigRootTarget:          state.ConfigRootTarget,
-			ContinuityTarget:          state.ContinuityTarget,
-			SessionScratchTarget:      state.SessionScratchTarget,
-			ConfigRootReadOnly:        state.ConfigRootReadOnly,
-			ContinuityReadOnly:        state.ContinuityReadOnly,
-			SessionScratchReadOnly:    state.SessionScratchReadOnly,
-			ConfigRootDigest:          state.ConfigRootDigest,
-			ContinuityDigest:          state.ContinuityDigest,
-			SessionScratchDigest:      state.SessionScratchDigest,
-			PromptFingerprint:         state.PromptFingerprint,
-			PromptDigest:              state.PromptDigest,
-		})
+		return tx.MarkHandoffStatePrepared(ctx, runID, toStoreJournalState(state))
 	})
 }
 
@@ -1420,16 +1405,7 @@ func (a *Journal) MarkInstructionsPrepared(
 	instructions ward.HandoffJournalInstructions,
 ) error {
 	return a.store.WriteInternal(ctx, func(tx *store.InternalTx) error {
-		return tx.MarkHandoffInstructionsPrepared(
-			ctx,
-			runID,
-			store.HandoffJournalInstructions{
-				CompositionVersion:       instructions.CompositionVersion,
-				HostDigest:               instructions.HostDigest,
-				RepositoryManifestDigest: instructions.RepositoryManifestDigest,
-				BundleDigest:             instructions.BundleDigest,
-			},
-		)
+		return tx.MarkHandoffInstructionsPrepared(ctx, runID, toStoreJournalInstructions(instructions))
 	})
 }
 
@@ -1518,30 +1494,12 @@ func toStoreRecord(rec ward.HandoffJournalRecord) store.HandoffJournalRecord {
 		}
 	}
 	if rec.State != nil {
-		converted.State = &store.HandoffJournalState{
-			ConfigRootFingerprint:     rec.State.ConfigRootFingerprint,
-			ContinuityFingerprint:     rec.State.ContinuityFingerprint,
-			SessionScratchFingerprint: rec.State.SessionScratchFingerprint,
-			ConfigRootTarget:          rec.State.ConfigRootTarget,
-			ContinuityTarget:          rec.State.ContinuityTarget,
-			SessionScratchTarget:      rec.State.SessionScratchTarget,
-			ConfigRootReadOnly:        rec.State.ConfigRootReadOnly,
-			ContinuityReadOnly:        rec.State.ContinuityReadOnly,
-			SessionScratchReadOnly:    rec.State.SessionScratchReadOnly,
-			ConfigRootDigest:          rec.State.ConfigRootDigest,
-			ContinuityDigest:          rec.State.ContinuityDigest,
-			SessionScratchDigest:      rec.State.SessionScratchDigest,
-			PromptFingerprint:         rec.State.PromptFingerprint,
-			PromptDigest:              rec.State.PromptDigest,
-		}
+		state := toStoreJournalState(*rec.State)
+		converted.State = &state
 	}
 	if rec.Instructions != nil {
-		converted.Instructions = &store.HandoffJournalInstructions{
-			CompositionVersion:       rec.Instructions.CompositionVersion,
-			HostDigest:               rec.Instructions.HostDigest,
-			RepositoryManifestDigest: rec.Instructions.RepositoryManifestDigest,
-			BundleDigest:             rec.Instructions.BundleDigest,
-		}
+		instructions := toStoreJournalInstructions(*rec.Instructions)
+		converted.Instructions = &instructions
 	}
 	if rec.Outcome != nil {
 		outcome := store.HandoffJournalOutcome(*rec.Outcome)
@@ -1584,36 +1542,74 @@ func fromStoreRecord(rec store.HandoffJournalRecord) ward.HandoffJournalRecord {
 		}
 	}
 	if rec.State != nil {
-		converted.State = &ward.HandoffJournalState{
-			ConfigRootFingerprint:     rec.State.ConfigRootFingerprint,
-			ContinuityFingerprint:     rec.State.ContinuityFingerprint,
-			SessionScratchFingerprint: rec.State.SessionScratchFingerprint,
-			ConfigRootTarget:          rec.State.ConfigRootTarget,
-			ContinuityTarget:          rec.State.ContinuityTarget,
-			SessionScratchTarget:      rec.State.SessionScratchTarget,
-			ConfigRootReadOnly:        rec.State.ConfigRootReadOnly,
-			ContinuityReadOnly:        rec.State.ContinuityReadOnly,
-			SessionScratchReadOnly:    rec.State.SessionScratchReadOnly,
-			ConfigRootDigest:          rec.State.ConfigRootDigest,
-			ContinuityDigest:          rec.State.ContinuityDigest,
-			SessionScratchDigest:      rec.State.SessionScratchDigest,
-			PromptFingerprint:         rec.State.PromptFingerprint,
-			PromptDigest:              rec.State.PromptDigest,
-		}
+		state := fromStoreJournalState(*rec.State)
+		converted.State = &state
 	}
 	if rec.Instructions != nil {
-		converted.Instructions = &ward.HandoffJournalInstructions{
-			CompositionVersion:       rec.Instructions.CompositionVersion,
-			HostDigest:               rec.Instructions.HostDigest,
-			RepositoryManifestDigest: rec.Instructions.RepositoryManifestDigest,
-			BundleDigest:             rec.Instructions.BundleDigest,
-		}
+		instructions := fromStoreJournalInstructions(*rec.Instructions)
+		converted.Instructions = &instructions
 	}
 	if rec.Outcome != nil {
 		outcome := ward.HandoffJournalOutcome(*rec.Outcome)
 		converted.Outcome = &outcome
 	}
 	return converted
+}
+
+func toStoreJournalState(state ward.HandoffJournalState) store.HandoffJournalState {
+	return store.HandoffJournalState{
+		ConfigRootFingerprint:     state.ConfigRootFingerprint,
+		ContinuityFingerprint:     state.ContinuityFingerprint,
+		SessionScratchFingerprint: state.SessionScratchFingerprint,
+		ConfigRootTarget:          state.ConfigRootTarget,
+		ContinuityTarget:          state.ContinuityTarget,
+		SessionScratchTarget:      state.SessionScratchTarget,
+		ConfigRootReadOnly:        state.ConfigRootReadOnly,
+		ContinuityReadOnly:        state.ContinuityReadOnly,
+		SessionScratchReadOnly:    state.SessionScratchReadOnly,
+		ConfigRootDigest:          state.ConfigRootDigest,
+		ContinuityDigest:          state.ContinuityDigest,
+		SessionScratchDigest:      state.SessionScratchDigest,
+		PromptFingerprint:         state.PromptFingerprint,
+		PromptDigest:              state.PromptDigest,
+	}
+}
+
+func fromStoreJournalState(state store.HandoffJournalState) ward.HandoffJournalState {
+	return ward.HandoffJournalState{
+		ConfigRootFingerprint:     state.ConfigRootFingerprint,
+		ContinuityFingerprint:     state.ContinuityFingerprint,
+		SessionScratchFingerprint: state.SessionScratchFingerprint,
+		ConfigRootTarget:          state.ConfigRootTarget,
+		ContinuityTarget:          state.ContinuityTarget,
+		SessionScratchTarget:      state.SessionScratchTarget,
+		ConfigRootReadOnly:        state.ConfigRootReadOnly,
+		ContinuityReadOnly:        state.ContinuityReadOnly,
+		SessionScratchReadOnly:    state.SessionScratchReadOnly,
+		ConfigRootDigest:          state.ConfigRootDigest,
+		ContinuityDigest:          state.ContinuityDigest,
+		SessionScratchDigest:      state.SessionScratchDigest,
+		PromptFingerprint:         state.PromptFingerprint,
+		PromptDigest:              state.PromptDigest,
+	}
+}
+
+func toStoreJournalInstructions(instructions ward.HandoffJournalInstructions) store.HandoffJournalInstructions {
+	return store.HandoffJournalInstructions{
+		CompositionVersion:       instructions.CompositionVersion,
+		HostDigest:               instructions.HostDigest,
+		RepositoryManifestDigest: instructions.RepositoryManifestDigest,
+		BundleDigest:             instructions.BundleDigest,
+	}
+}
+
+func fromStoreJournalInstructions(instructions store.HandoffJournalInstructions) ward.HandoffJournalInstructions {
+	return ward.HandoffJournalInstructions{
+		CompositionVersion:       instructions.CompositionVersion,
+		HostDigest:               instructions.HostDigest,
+		RepositoryManifestDigest: instructions.RepositoryManifestDigest,
+		BundleDigest:             instructions.BundleDigest,
+	}
 }
 
 var (
