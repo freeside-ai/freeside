@@ -734,6 +734,20 @@ local pass can miss a helper; CI's uncached shards run every default test.
 
 A bare `go test` uses none of the git change, the run limit, or the decoy.
 
+Other programs on the Mac can send requests to a test's loopback server. T3
+Code (Beta) sent `GET /` with `User-Agent: node` to listening `127.0.0.1`
+ports (#2465). A test fake that counts, records, or refuses every request then
+fails with an error such as `unexpected forge request GET /` or `unexpected
+request /`, or sees one notification too many; CI doesn't run T3 Code, so it
+never fails this way (#2451). Every `httptest` server in `daemon/` wraps its
+handler in `strayrequest.Ignore`, which answers exactly an origin-form `GET /`
+(any query string) with 404, so no setting needs changing. Wrap a new fake the
+same way (`internal/strayrequest`). If a local run fails on another stray
+request, log its method, path, `User-Agent`, and `RemoteAddr` before widening
+the filter. Name the sender with `lsof -nP -iTCP@127.0.0.1:<remote port>`,
+which only works while the connection is open, so hold the handler for a
+moment first.
+
 ## Measuring Local Test Time
 
 Run the operator report from the repository root:
