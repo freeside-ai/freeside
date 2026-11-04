@@ -322,6 +322,9 @@ import Testing
         #expect(failure.currentPolicy?.revision == 3)
         #expect(failure.currentPolicy?.roles == [.init(role: .implementer, agents: ["codex-primary"])])
         #expect(failure.currentPolicy?.drain_first_account == UsageFixtures.unsupportedPoolID)
+        #expect(
+            RoutingPolicyView.policyLine(try #require(failure.currentPolicy))
+                == "Revision 3 · Implementer: codex-primary · Drain first: codex-b")
         #expect(coordinator.pendingRoutingPolicyChange == nil)
         #expect(cache.load()?.pendingRoutingPolicyChange == nil)
         // The refusal's policy reaches state only through sync.

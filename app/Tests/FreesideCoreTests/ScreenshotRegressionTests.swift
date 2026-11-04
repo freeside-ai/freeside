@@ -855,9 +855,10 @@
                 }
             }
 
-            // The routing policy open in the Settings sheet (#2394): read
-            // with a policy, with neither a policy nor an agent tree, while
-            // editing, after an unanswered change, and after a stale change
+            // The routing policy open in the Settings sheet (#2394, #2528):
+            // read with a policy, with a drain-first account, with neither a
+            // policy nor an agent tree, while editing the orders and the
+            // account, after an unanswered change, and after a stale change
             // the daemon refused, at Mac and phone width, by day and by dusk.
             for state in RoutingPolicyScreenshots.State.allCases {
                 let stateModel = await RoutingPolicyScreenshots.model(state)
