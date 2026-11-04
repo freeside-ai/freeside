@@ -1,6 +1,7 @@
 package claude
 
 import (
+	"bytes"
 	"crypto/sha256"
 	"encoding/hex"
 	"fmt"
@@ -14,6 +15,7 @@ import (
 	"github.com/freeside-ai/freeside/daemon/internal/agentbaseline"
 	"github.com/freeside-ai/freeside/daemon/internal/domain"
 	"github.com/freeside-ai/freeside/daemon/internal/export"
+	"github.com/freeside-ai/freeside/daemon/internal/specify"
 	"github.com/freeside-ai/freeside/daemon/internal/ward"
 )
 
@@ -197,5 +199,44 @@ func TestConformanceHandoffUsesWriterLaunch(t *testing.T) {
 	}
 	if hs.Class != ward.LaunchConformance || hs.Size != ward.DefaultLaunchSize(ward.LaunchConformance) {
 		t.Fatal("conformance launch lacks its declared resource budget")
+	}
+}
+
+// duplexTranscript wraps a transcript in the control records a file_v6
+// launch adds: the initialize answer first, an event, and the get_usage
+// answer last.
+func duplexTranscript(body []byte) []byte {
+	return slices.Concat(
+		[]byte(`{"type":"control_response","response":{"request_id":"usage-init","subtype":"success","response":{}}}`+"\n"),
+		[]byte(`{"type":"rate_limit_event","rate_limit_info":{"status":"allowed","resetsAt":1793934000,"rateLimitType":"seven_day"}}`+"\n"),
+		body,
+		[]byte(`{"type":"control_response","response":{"request_id":"usage-read","subtype":"success","response":{"rate_limits_available":true,"rate_limits":{"seven_day":{"utilization":57,"resets_at":"2026-11-06T03:00:00.000Z"}}}}}`+"\n"),
+	)
+}
+
+// The conformance launch is the writer launch, so its judge reads a duplex
+// transcript under file_v6 and must ignore the control records.
+func TestConformanceJudgeReadsADuplexTranscript(t *testing.T) {
+	t.Parallel()
+	severed, completed, err := judgeConformanceTranscript(
+		duplexTranscript(conformanceTestTranscript("[]")), sessionIDFor(conformanceTestID))
+	if err != nil || !severed || !completed {
+		t.Fatalf("judge = severed %t, completed %t, %v; want both", severed, completed, err)
+	}
+}
+
+// The specification stage keeps file_v5's command, so the specifier never
+// reads a duplex transcript; this pins that it would still decode one.
+func TestSpecifierDecodesADuplexTranscript(t *testing.T) {
+	t.Parallel()
+	reply := "No change is needed."
+	want := specify.Output{Reply: &reply}
+	body, err := specify.EncodeTranscript(want)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got, err := specify.DecodeTranscript(bytes.NewReader(duplexTranscript(body)))
+	if err != nil || !reflect.DeepEqual(got, want) {
+		t.Fatalf("DecodeTranscript = %#v, %v; want %#v", got, err, want)
 	}
 }

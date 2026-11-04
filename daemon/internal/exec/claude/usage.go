@@ -27,6 +27,12 @@ func ExtractUsage(transcript []byte, observedAt time.Time) []exec.UsageMeasureme
 	)
 }
 
+// ExtractUsageCapture reads the writer turn's provider windows from a
+// transcript. Missing, refused, or malformed answers return nil.
+func ExtractUsageCapture(transcript []byte, observedAt time.Time) *exec.ClaudeUsageCapture {
+	return exec.ExtractClaudeUsageCapture(transcript, observedAt, ward.RejectDuplicateJSONKeys)
+}
+
 func (claudeProvider) ExtractUsage(
 	evidenceDir string,
 	evidence export.EvidenceManifest,
