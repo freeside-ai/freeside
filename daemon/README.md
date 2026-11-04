@@ -186,6 +186,33 @@ The probe registers one fresh container under the held rig, then verifies
 ownership before cleanup. Do not borrow an active exercise's rig without
 authorization. Its token stays in process memory and must not be printed.
 
+`TestPinnedClaudeUsageDriverLive` runs the production `file_v6` agent line,
+driver included, the same way and under the same variables, with
+`FREESIDE_USAGE_DRIVER_LIVE=1` in place of `FREESIDE_PROMPT_STDIN_LIVE=1`. It
+checks the image's CLI is the pinned build, that the turn makes exactly one
+`POST /v1/messages` with the prompt as one exact user text block, that the
+`get_usage` request is answered, and that the driver exits 0 well before its
+answer timeout. It reports the routes the CLI tried besides inference:
+
+```sh
+go test ./internal/exec/claude -run '^TestPinnedClaudeUsageDriverLive$' -count=1 -v
+```
+
+`TestLiveClaudeWriterUsage` makes one real writer turn, the conformance launch
+on `file_v6`, under the setup token in `CLAUDE_CODE_OAUTH_TOKEN`, enrolled into
+a disposable credential volume as `TestLiveClaudeAdapterConformance` does. It
+spends real subscription usage, so run it only with the owner's consent. It
+fails unless the transcript yields a capture with a `seven_day` window, and
+unless the credential volume's tree digest is the same before and after the
+turn, which rules out an auth-store write and a refresh:
+
+```sh
+FREESIDE_CLAUDE_USAGE_LIVE=1 \
+FREESIDE_WARD_CLAUDE_AGENT_IMAGE='<registry>/freeside-agent-claude@sha256:<digest>' \
+FREESIDE_WARD_EXPORTER_IMAGE='<registry>/freeside-exporter@sha256:<digest>' \
+go -C daemon test ./internal/exec/claude -run '^TestLiveClaudeWriterUsage$' -count=1 -v
+```
+
 - **Toolchain:** Go (single static binary, supervised by launchd/systemd, dedicated user). Module `github.com/freeside-ai/freeside/daemon`, pinned in `go.mod`; build/test/run commands are in `AGENTS.md`.
 - **Scope boundary:** daemon-side code only. The daemon/client contract is defined in `api/`; server-side code implementing it lives here, never hand-authored to diverge from the spec.
 - **Status:** every lane in `internal/` holds real, tested Go code, not placeholders, and the daemon builds as `freesided` (`cmd/freesided`). Per-wave implementation progress lives in the open wave tracker (`Wave N: <Name>`), resolved by the plan's [wave-tracker rule](../docs/plan.md#implementation-coordination-building-freeside-with-agents).
