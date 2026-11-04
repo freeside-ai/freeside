@@ -132,7 +132,7 @@ selected components can keep `required` running longer.
 
 ## Protected Prompt Delivery
 
-New Claude stage intents select `file_v5`. The renderer accepts at most 1 MiB
+New Claude stage intents select `file_v6`. The renderer accepts at most 1 MiB
 of complete UTF-8 input. Ward verifies its digest on a separate protected
 volume before writer creation, journals the volume binding with launch state,
 and supplies the root-opened file as Claude's user stdin. `file_v2` delivers
@@ -150,11 +150,24 @@ longer fails the stage, and the decoder still gates every byte of it. `file_v5`
 also explicitly disables the pinned CLI's bundled `agents-md` plugin through
 `--settings`: `--safe-mode` leaves built-in plugins enabled, and this plugin
 can load repository instructions outside the daemon's instruction bundle.
-The conformance transcript must still report no plugins. Existing
-intents retain the protocol they started under: `file_v1` through `file_v4`
-their launch commands, and argument delivery its original 31-KiB limit. This
-changes transport; it neither retries a failed invocation nor grants successor
-publication.
+The conformance transcript must still report no plugins. `file_v6` delivers
+it as `file_v5` does and, off a specification run's stage, also asks the CLI
+for its usage answer after the turn (#2543). The root shell installs a small
+Node driver, `usage_driver.cjs`, in a root-owned, world-readable directory
+outside the workspace and the launch directory, and starts it under the same
+privilege drop in front of the CLI, which now takes `--input-format
+stream-json` and `CLAUDE_CODE_OAUTH_SCOPES='user:inference user:profile'`
+beside the unchanged token. The driver sends the prompt bytes as one user
+message, sends one `get_usage` after the turn's result, closes the CLI's stdin
+on the answer or after 15 seconds, and exits with the CLI's status; the CLI's
+stdout is the transcript, unchanged. The stage pipeline reads the answer from
+the transcript into the stage result's `claude_usage`, nil whenever any part
+of it is in doubt, and nothing about the stage's outcome depends on it. On a
+specification run's stage the command is `file_v5`'s. Conformance launches
+use `file_v6` too. Existing intents retain the protocol they started under:
+`file_v1` through `file_v5` their launch commands, and argument delivery its
+original 31-KiB limit. This changes transport; it neither retries a failed
+invocation nor grants successor publication.
 
 The optional `TestPinnedClaudePromptStdinLive` probe uses a cached, pinned
 Claude image, synthetic text larger than the argument limit, and a mock

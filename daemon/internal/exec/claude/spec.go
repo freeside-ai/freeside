@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"crypto/sha256"
+	_ "embed"
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
@@ -99,7 +100,7 @@ func (claudeProvider) RenderPrompt(inputs stage.ProviderPromptInputs) (string, e
 
 // launchDelivery is the protocol every new Claude launch selects. Stored
 // intents keep the member they were started under.
-const launchDelivery = stage.PromptFileV5
+const launchDelivery = stage.PromptFileV6
 
 func (claudeProvider) PromptDelivery() stage.PromptDelivery { return launchDelivery }
 
@@ -172,6 +173,28 @@ const (
 	launchStderrPath     = launchDir + "/agent-stderr.log"
 )
 
+// usageDriverScript is the file_v6 writer's in-container driver: it sends the
+// prompt over the CLI's stream-json input and asks for the CLI's usage
+// answer after the turn. The launch command inlines it, and recovery
+// rebuilds that command byte for byte, so a change to it needs a new
+// stage.PromptDelivery member.
+//
+//go:embed usage_driver.cjs
+var usageDriverScript string
+
+// usageDriverDir holds the driver while the agent runs. Like launchDir it
+// sits outside every mount, but it is world-readable, so the dropped agent
+// user can run the script, and root-owned, so that user cannot change it.
+const (
+	usageDriverDir  = "/var/lib/freeside-driver"
+	usageDriverPath = usageDriverDir + "/usage-driver.cjs"
+	// usageOAuthScopes is what the CLI assumes the setup token holds. The
+	// profile scope unlocks get_usage and its seed from the turn's headers;
+	// it mints nothing, and the provider still enforces the token's real
+	// scopes (devlog/2026-11-03-1457-claude-usage-share-spike.md).
+	usageOAuthScopes = "user:inference user:profile"
+)
+
 // agentCommand is the pinned CLI's unattended argv. The workspace is the
 // working directory, and the transcript ends in the §5.6 evidence subtree,
 // which the repo walk skips. The root launcher, never the agent, declares
@@ -209,14 +232,22 @@ func agentCommandWithInput(
 	promptInput, sessionID string, invocationID domain.InvocationID, prepare []string, model, effort string,
 	outputSchema string, files launcherFiles,
 ) []string {
-	return agentCommandWithSettings(promptInput, sessionID, invocationID, prepare, model, effort, outputSchema, "", files)
+	return agentCommandWithSettings(
+		promptInput, sessionID, invocationID, prepare, model, effort, outputSchema, "", files, false)
 }
 
 // Settings are part of the versioned command. Older protocols pass none so
 // their recovery digests remain unchanged.
+//
+// usageDriver is the file_v6 writer launch. The root prefix writes the
+// embedded driver where the agent can run but not change it, the launch adds
+// the scope override beside the token, and the CLI runs under the driver
+// with --input-format stream-json. The driver runs after the drop, so no
+// root process parses agent output; stdin, stdout, and stderr redirect as
+// before. False leaves every older command byte-identical.
 func agentCommandWithSettings(
 	promptInput, sessionID string, invocationID domain.InvocationID, prepare []string, model, effort string,
-	outputSchema, settings string, files launcherFiles,
+	outputSchema, settings string, files launcherFiles, usageDriver bool,
 ) []string {
 	selection := ""
 	if settings != "" {
@@ -225,11 +256,25 @@ func agentCommandWithSettings(
 	if outputSchema != "" {
 		selection += "--json-schema " + shellQuote(outputSchema) + " "
 	}
+	// Duplex input sits before the route's selection, so the model and
+	// effort flags stay the last arguments on every delivery.
+	if usageDriver {
+		selection += "--input-format stream-json "
+	}
 	if model != "" {
 		selection += "--model " + shellQuote(model) + " "
 	}
 	if effort != "" {
 		selection += "--effort " + shellQuote(effort) + " "
+	}
+	installDriver, scopes, runner := "", "", ""
+	if usageDriver {
+		installDriver = "rm -rf " + shellQuote(usageDriverDir) + "; mkdir " + shellQuote(usageDriverDir) +
+			"; chown 0:0 " + shellQuote(usageDriverDir) + "; chmod 0755 " + shellQuote(usageDriverDir) +
+			"; printf '%s' " + shellQuote(usageDriverScript) + " > " + shellQuote(usageDriverPath) +
+			"; chown 0:0 " + shellQuote(usageDriverPath) + "; chmod 0444 " + shellQuote(usageDriverPath) + "; "
+		scopes = "CLAUDE_CODE_OAUTH_SCOPES=" + shellQuote(usageOAuthScopes) + " "
+		runner = "node " + shellQuote(usageDriverPath) + " "
 	}
 	transcriptSource := export.EvidenceSource{
 		Label: "agent-transcript", MediaType: "application/jsonl",
@@ -372,17 +417,17 @@ func agentCommandWithSettings(
 			"chown 0:0 %s; chmod 1777 %s; "+
 			"mkdir -p %s; chown 0:0 %s; chmod 1777 %s; "+
 			"mkdir -p %s; chown 0:0 %s; chmod %s %s; "+
-			"%s"+
+			"%s%s"+
 			"chown %s:%s %s %s; chmod 0700 %s %s; "+
 			"cd %s; status=86; "+
 			"%s[ -s %s ] && token=$(cat %s); then "+
 			"set +e; HOME=/root CLAUDE_CONFIG_DIR=%s DISABLE_AUTOUPDATER=1 "+
 			"DISABLE_TELEMETRY=1 DISABLE_ERROR_REPORTING=1 "+
 			"CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC=1 IS_SANDBOX=1 "+
-			"CLAUDE_CODE_OAUTH_TOKEN=\"$token\" "+
+			"CLAUDE_CODE_OAUTH_TOKEN=\"$token\" %s"+
 			"setpriv --reuid=%s --regid=%s --clear-groups "+
 			"--inh-caps=-all --ambient-caps=-all --bounding-set=-all "+
-			"--no-new-privs claude -p %s "+
+			"--no-new-privs %sclaude -p %s "+
 			"--output-format stream-json --verbose --dangerously-skip-permissions "+
 			"--safe-mode --session-id %s --append-system-prompt-file %s %s"+
 			"%s; status=$?; set -e; unset token; fi; "+
@@ -395,14 +440,14 @@ func agentCommandWithSettings(
 		shellQuote(workspaceDir), shellQuote(workspaceDir),
 		shellQuote(evidenceDir), shellQuote(evidenceDir), shellQuote(evidenceDir),
 		shellQuote(controlDir), shellQuote(controlDir), controlMode, shellQuote(controlDir),
-		beforeAgent,
+		beforeAgent, installDriver,
 		agentUID, agentGID,
 		shellQuote(ward.ClaudeContinuityTarget), shellQuote(ward.ClaudeSessionScratchTarget),
 		shellQuote(ward.ClaudeContinuityTarget), shellQuote(ward.ClaudeSessionScratchTarget),
 		shellQuote(workspaceDir),
 		guardPrefix,
 		shellQuote(credentialTokenPath), shellQuote(credentialTokenPath),
-		shellQuote(ward.ClaudeConfigRootTarget), agentUID, agentGID, promptInput,
+		shellQuote(ward.ClaudeConfigRootTarget), scopes, agentUID, agentGID, runner, promptInput,
 		shellQuote(sessionID), shellQuote(instructionBundlePath), selection,
 		redirect,
 		afterAgent,
@@ -536,7 +581,8 @@ func promptByteLimit(delivery stage.PromptDelivery) (int, error) {
 	switch delivery {
 	case "", stage.PromptArgument:
 		return maxPromptBytes, nil
-	case stage.PromptFileV1, stage.PromptFileV2, stage.PromptFileV3, stage.PromptFileV4, stage.PromptFileV5:
+	case stage.PromptFileV1, stage.PromptFileV2, stage.PromptFileV3, stage.PromptFileV4, stage.PromptFileV5,
+		stage.PromptFileV6:
 		return ward.MaxPromptFileBytes, nil
 	}
 	return 0, fmt.Errorf("%w: unknown prompt delivery %q", ErrUnsupportedStart, delivery)
@@ -665,21 +711,26 @@ func (p claudeProvider) HandoffSpec(
 		// run's stage, so a model's prose preamble cannot fail the stage
 		// (#2314). Both fields are in the durable intent, so recovery rebuilds
 		// the same command; on any other stage the command is file_v3's.
+		specification := spec.StageID == domain.SpecificationStageID(spec.RunID)
 		outputSchema := ""
-		if (in.PromptDelivery == stage.PromptFileV4 || in.PromptDelivery == stage.PromptFileV5) && spec.StageID == domain.SpecificationStageID(spec.RunID) {
+		if (in.PromptDelivery == stage.PromptFileV4 || in.PromptDelivery == stage.PromptFileV5 ||
+			in.PromptDelivery == stage.PromptFileV6) && specification {
 			outputSchema = specify.OutputJSONSchema
 		}
 		settings := ""
-		if in.PromptDelivery == stage.PromptFileV5 {
+		if in.PromptDelivery == stage.PromptFileV5 || in.PromptDelivery == stage.PromptFileV6 {
 			// The pinned CLI's safe mode excludes installed plugins, but its
 			// bundled agents-md plugin can still load repository instructions.
 			settings = `{"enabledPlugins":{"agents-md@builtin":false}}`
 		}
+		// file_v6 runs the usage driver only off a specification stage, so the
+		// specifier's command, transcript, and structured_output stay file_v5's.
+		usageDriver := in.PromptDelivery == stage.PromptFileV6 && !specification
 		// The root shell opens stdin before setpriv drops privileges. Prompt
 		// bytes never enter argv, and remain user input rather than instructions.
 		hs.Agent.Command = agentCommandWithSettings(
 			"< "+shellQuote(ward.PromptFilePath), sessionIDFor(id), id, in.Preparation,
-			spec.RouteModelID, spec.NativeEffort, outputSchema, settings, files)
+			spec.RouteModelID, spec.NativeEffort, outputSchema, settings, files, usageDriver)
 		return hs, nil
 	}
 	switch in.PromptDelivery {
@@ -692,7 +743,7 @@ func (p claudeProvider) HandoffSpec(
 		return withPromptFile(launcherFilesInWorkspace)
 	case stage.PromptFileV2:
 		return withPromptFile(launcherFilesDeferred)
-	case stage.PromptFileV3, stage.PromptFileV4, stage.PromptFileV5:
+	case stage.PromptFileV3, stage.PromptFileV4, stage.PromptFileV5, stage.PromptFileV6:
 		return withPromptFile(launcherFilesDeferredStderr)
 	}
 	return ward.HandoffSpec{}, fmt.Errorf("%w: unknown prompt delivery", ErrUnsupportedStart)
