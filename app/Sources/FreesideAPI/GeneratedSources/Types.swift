@@ -3399,7 +3399,7 @@ public enum Components {
                 ])
             }
         }
-        /// The path that set a task line (plan §5.4). submit_task, cli_submit, proposal_start, cli_line_change, and client_line_change are authenticated operator actions; cli_line_change is a later change on the daemon host and client_line_change the same change from a paired client's change_task_line command, and they are the only sources that may clear a line. router is the routing policy's choice at a task's first admission for a role with no operator line, and is the only source that carries provenance.
+        /// The path that set a task line (plan §5.4). submit_task, cli_submit, proposal_start, cli_line_change, and client_line_change are authenticated operator actions; cli_line_change is a later change on the daemon host and client_line_change the same change from a paired client's change_task_line command, and they are the only sources that may clear a line. router is the routing policy's choice at a task's first admission for a role with no operator line, and is the only source that carries provenance. triage is the triager's escalation of the specifier to its escalated counterpart (plan §5.13), citing the task's triage record; it carries no provenance.
         ///
         ///
         /// - Remark: Generated from `#/components/schemas/TaskLineSource`.
@@ -3410,6 +3410,7 @@ public enum Components {
             case router = "router"
             case cli_line_change = "cli_line_change"
             case client_line_change = "client_line_change"
+            case triage = "triage"
         }
         /// Which of the router's tiers chose a routing's pool (plan §5.4). drain_first_account: the policy's drain-first account, which leads every other pool when the deciding role's order holds an agent on it and its window is not marked. soonest_reset: the candidate pool whose known weekly reset for its agent's model came soonest, among those not marked. policy_order: the first pool in the policy's order among those with no known reset, when no pool with one was available.
         ///

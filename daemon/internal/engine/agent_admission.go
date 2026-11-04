@@ -428,6 +428,10 @@ func anchorTaskLine(ctx context.Context, tx *store.ReadTx, line domain.TaskLine)
 		// No record backs a router line yet: the router that writes one,
 		// and the anchor that holds it to its routing decision, is #2393.
 		return errors.New("nothing routes a task line yet (#2393)")
+	case domain.TaskLineSourceTriage:
+		// Refused until admission anchors a triage line to its task's
+		// triage record and the lineup's escalated counterpart.
+		return errors.New("triage lines are not anchored yet")
 	case domain.TaskLineSourceCLILineChange, domain.TaskLineSourceClientLineChange:
 		change, err := tx.GetTaskLineChange(ctx, domain.Digest(line.SetBy))
 		if err != nil {

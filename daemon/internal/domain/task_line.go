@@ -16,9 +16,10 @@ import (
 const taskLineEncodingVersion = "freeside.task_line/v1"
 
 // TaskLineSource is the path that set a task line (plan §5.4, Admitted
-// Agents). Every member but the router is an authenticated operator action,
-// and the router chooses only among agents the committed lineup already
-// approved. Intake from an issue, a label, or repository content never sets a
+// Agents). Every member but the router and the triager is an authenticated
+// operator action; the router chooses only among agents the committed lineup
+// already approved, and the triager only the escalated counterpart the
+// lineup names for the specifier. Intake from an issue, a label, or repository content never sets a
 // line, because choosing an agent chooses which credential runs (§5.8). There
 // is deliberately no intake member, so a line claiming one fails validation.
 type TaskLineSource string
@@ -36,6 +37,11 @@ const (
 	// admission for a role with no operator line (plan §5.4, routing policy;
 	// revision 103). It is the only source that carries a TaskLineProvenance.
 	TaskLineSourceRouter TaskLineSource = "router"
+	// TaskLineSourceTriage is the triager's escalation of a task's specifier
+	// to its escalated counterpart (plan §5.13, Specifier Triage; revision
+	// 106). SetBy is the line's own task id: the record it cites is that
+	// task's triage record, keyed by the task. It carries no provenance.
+	TaskLineSourceTriage TaskLineSource = "triage"
 	// TaskLineSourceCLILineChange is `freesided task-line` on the daemon host:
 	// a change to a task's line after the task exists, while no attempt of
 	// the role runs. SetBy names its TaskLineChange. It and
@@ -53,12 +59,14 @@ const (
 var AllTaskLineSources = []TaskLineSource{
 	TaskLineSourceSubmitTask, TaskLineSourceCLISubmit, TaskLineSourceProposalStart,
 	TaskLineSourceRouter, TaskLineSourceCLILineChange, TaskLineSourceClientLineChange,
+	TaskLineSourceTriage,
 }
 
 func (s TaskLineSource) valid() bool {
 	switch s {
 	case TaskLineSourceSubmitTask, TaskLineSourceCLISubmit, TaskLineSourceProposalStart,
-		TaskLineSourceRouter, TaskLineSourceCLILineChange, TaskLineSourceClientLineChange:
+		TaskLineSourceRouter, TaskLineSourceCLILineChange, TaskLineSourceClientLineChange,
+		TaskLineSourceTriage:
 		return true
 	default:
 		return false

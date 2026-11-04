@@ -2051,8 +2051,10 @@ components:
         client's change_task_line command, and they are the only sources that
         may clear a line. router is the routing policy's choice at a task's
         first admission for a role with no operator line, and is the only
-        source that carries provenance.
-      enum: [submit_task, cli_submit, proposal_start, router, cli_line_change, client_line_change]
+        source that carries provenance. triage is the triager's escalation of
+        the specifier to its escalated counterpart (plan §5.13), citing the
+        task's triage record; it carries no provenance.
+      enum: [submit_task, cli_submit, proposal_start, router, cli_line_change, client_line_change, triage]
 
     TaskLineSelectionTier:
       type: string
