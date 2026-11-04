@@ -419,6 +419,12 @@ var (
 		"an attempt of the role is running")
 	ErrTaskLineInconsistent = errors.New(
 		"task line id or predecessor does not match its content")
+	ErrInvalidTriageOutcome = errors.New(
+		"triage outcome is not a member of the closed list")
+	ErrInvalidTriageTier = errors.New(
+		"triage tier is not a member of the closed list")
+	ErrTaskTriageInconsistent = errors.New(
+		"task triage tier, reason, or escalated bit does not fit its outcome")
 	ErrRoutingPolicyNoRoles = errors.New(
 		"routing policy orders no role")
 	ErrRoutingPolicyRoleRepeated = errors.New(
