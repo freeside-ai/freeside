@@ -40,19 +40,9 @@ func (tx *ReadTx) CountActiveProjectRuns(ctx context.Context, projectID domain.P
 // the result set before returning, so the caller can issue the per-run
 // observation queries on the same transaction.
 func (tx *ReadTx) projectRunIDs(ctx context.Context, projectID domain.ProjectID) ([]domain.RunID, error) {
-	rows, err := tx.tx.QueryContext(ctx,
-		`SELECT id FROM runs WHERE project_id = ? ORDER BY id`, string(projectID))
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close() //nolint:errcheck // read-only query
-	var ids []domain.RunID
-	for rows.Next() {
+	return queryAll(ctx, tx.tx, func(row scanner) (domain.RunID, error) {
 		var id string
-		if err := rows.Scan(&id); err != nil {
-			return nil, err
-		}
-		ids = append(ids, domain.RunID(id))
-	}
-	return ids, rows.Err()
+		err := row.Scan(&id)
+		return domain.RunID(id), err
+	}, `SELECT id FROM runs WHERE project_id = ? ORDER BY id`, string(projectID))
 }

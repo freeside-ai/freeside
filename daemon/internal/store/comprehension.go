@@ -261,24 +261,14 @@ func (s *Store) ReadComprehension(ctx context.Context, fn func(*ComprehensionRea
 // ListComprehensionEvents lists every recorded event, ordered by item then
 // occurrence, for the §9 measures.
 func (tx *ComprehensionReadTx) ListComprehensionEvents(ctx context.Context) ([]domain.ComprehensionEvent, error) {
-	rows, err := tx.tx.QueryContext(ctx, listComprehensionEventsSQL)
-	if err != nil {
-		return nil, fmt.Errorf("list comprehension events: %w", err)
-	}
-	defer func() { _ = rows.Close() }()
-	var events []domain.ComprehensionEvent
-	for rows.Next() {
+	events, err := queryAll(ctx, tx.tx, func(row scanner) (domain.ComprehensionEvent, error) {
 		var body []byte
-		if err := rows.Scan(&body); err != nil {
-			return nil, fmt.Errorf("list comprehension events: %w", err)
+		if err := row.Scan(&body); err != nil {
+			return domain.ComprehensionEvent{}, err
 		}
-		event, err := decode[domain.ComprehensionEvent](body)
-		if err != nil {
-			return nil, fmt.Errorf("list comprehension events: %w", err)
-		}
-		events = append(events, event)
-	}
-	if err := rows.Err(); err != nil {
+		return decode[domain.ComprehensionEvent](body)
+	}, listComprehensionEventsSQL)
+	if err != nil {
 		return nil, fmt.Errorf("list comprehension events: %w", err)
 	}
 	return events, nil
@@ -286,24 +276,14 @@ func (tx *ComprehensionReadTx) ListComprehensionEvents(ctx context.Context) ([]d
 
 // ListDecisionActionSurfaces lists every derived action surface.
 func (tx *ComprehensionReadTx) ListDecisionActionSurfaces(ctx context.Context) ([]domain.DecisionActionSurface, error) {
-	rows, err := tx.tx.QueryContext(ctx, listDecisionActionSurfacesSQL)
-	if err != nil {
-		return nil, fmt.Errorf("list decision action surfaces: %w", err)
-	}
-	defer func() { _ = rows.Close() }()
-	var surfaces []domain.DecisionActionSurface
-	for rows.Next() {
+	surfaces, err := queryAll(ctx, tx.tx, func(row scanner) (domain.DecisionActionSurface, error) {
 		var body []byte
-		if err := rows.Scan(&body); err != nil {
-			return nil, fmt.Errorf("list decision action surfaces: %w", err)
+		if err := row.Scan(&body); err != nil {
+			return domain.DecisionActionSurface{}, err
 		}
-		surface, err := decode[domain.DecisionActionSurface](body)
-		if err != nil {
-			return nil, fmt.Errorf("list decision action surfaces: %w", err)
-		}
-		surfaces = append(surfaces, surface)
-	}
-	if err := rows.Err(); err != nil {
+		return decode[domain.DecisionActionSurface](body)
+	}, listDecisionActionSurfacesSQL)
+	if err != nil {
 		return nil, fmt.Errorf("list decision action surfaces: %w", err)
 	}
 	return surfaces, nil
@@ -311,31 +291,25 @@ func (tx *ComprehensionReadTx) ListDecisionActionSurfaces(ctx context.Context) (
 
 // ListComprehensionDefects lists every operator-recorded defect.
 func (tx *ComprehensionReadTx) ListComprehensionDefects(ctx context.Context) ([]domain.ComprehensionDefect, error) {
-	rows, err := tx.tx.QueryContext(ctx, listComprehensionDefectsSQL)
-	if err != nil {
-		return nil, fmt.Errorf("list comprehension defects: %w", err)
-	}
-	defer func() { _ = rows.Close() }()
-	var defects []domain.ComprehensionDefect
-	for rows.Next() {
+	defects, err := queryAll(ctx, tx.tx, func(row scanner) (domain.ComprehensionDefect, error) {
 		var itemID, claimDigest, recordedAt, reason string
-		if err := rows.Scan(&itemID, &claimDigest, &recordedAt, &reason); err != nil {
-			return nil, fmt.Errorf("list comprehension defects: %w", err)
+		if err := row.Scan(&itemID, &claimDigest, &recordedAt, &reason); err != nil {
+			return domain.ComprehensionDefect{}, err
 		}
 		parsed, err := parseTime(recordedAt)
 		if err != nil {
-			return nil, fmt.Errorf("list comprehension defects: %w", err)
+			return domain.ComprehensionDefect{}, err
 		}
 		defect := domain.ComprehensionDefect{
 			ItemID: domain.ItemID(itemID), ClaimDigest: domain.Digest(claimDigest),
 			RecordedAt: parsed, Reason: reason,
 		}
 		if err := defect.Validate(); err != nil {
-			return nil, fmt.Errorf("list comprehension defects: %w", err)
+			return domain.ComprehensionDefect{}, err
 		}
-		defects = append(defects, defect)
-	}
-	if err := rows.Err(); err != nil {
+		return defect, nil
+	}, listComprehensionDefectsSQL)
+	if err != nil {
 		return nil, fmt.Errorf("list comprehension defects: %w", err)
 	}
 	return defects, nil
@@ -345,25 +319,19 @@ func (tx *ComprehensionReadTx) ListComprehensionDefects(ctx context.Context) ([]
 // decided_at, and subject run, for the §9 open-to-decision, reversal, and
 // override measures.
 func (tx *ComprehensionReadTx) ListDecidedCommands(ctx context.Context) ([]DecidedCommand, error) {
-	rows, err := tx.tx.QueryContext(ctx, listDecidedCommandsSQL)
-	if err != nil {
-		return nil, fmt.Errorf("list decided commands: %w", err)
-	}
-	defer func() { _ = rows.Close() }()
-	var decided []DecidedCommand
-	for rows.Next() {
+	decided, err := queryAll(ctx, tx.tx, func(s scanner) (DecidedCommand, error) {
 		var (
 			body       []byte
 			itemType   string
 			decidedAt  sql.NullString
 			subjectRun sql.NullString
 		)
-		if err := rows.Scan(&body, &itemType, &decidedAt, &subjectRun); err != nil {
-			return nil, fmt.Errorf("list decided commands: %w", err)
+		if err := s.Scan(&body, &itemType, &decidedAt, &subjectRun); err != nil {
+			return DecidedCommand{}, err
 		}
 		command, _, _, err := decodeStoredCommand(body)
 		if err != nil {
-			return nil, fmt.Errorf("list decided commands: %w", err)
+			return DecidedCommand{}, err
 		}
 		row := DecidedCommand{
 			Command:      command,
@@ -373,13 +341,13 @@ func (tx *ComprehensionReadTx) ListDecidedCommands(ctx context.Context) ([]Decid
 		if decidedAt.Valid && decidedAt.String != "" {
 			parsed, err := parseTime(decidedAt.String)
 			if err != nil {
-				return nil, fmt.Errorf("list decided commands: %w", err)
+				return DecidedCommand{}, err
 			}
 			row.DecidedAt = parsed
 		}
-		decided = append(decided, row)
-	}
-	if err := rows.Err(); err != nil {
+		return row, nil
+	}, listDecidedCommandsSQL)
+	if err != nil {
 		return nil, fmt.Errorf("list decided commands: %w", err)
 	}
 	return decided, nil

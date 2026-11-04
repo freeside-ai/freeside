@@ -229,47 +229,41 @@ func (tx *ReadTx) GetTaskLine(ctx context.Context, id domain.Digest) (domain.Tas
 // on each: the row is rebuilt from its columns and must resolve to its own
 // id, so an edited column fails closed as a corrupt row.
 func (tx *ReadTx) queryTaskLines(ctx context.Context, query string, args ...any) ([]domain.TaskLine, error) {
-	rows, err := tx.tx.QueryContext(ctx, query, args...)
+	return queryAll(ctx, tx.tx, scanTaskLine, query, args...)
+}
+
+func scanTaskLine(row scanner) (domain.TaskLine, error) {
+	var (
+		line        domain.TaskLine
+		agent       sql.NullString
+		predecessor sql.NullString
+		setAt       string
+		provenance  sql.NullString
+	)
+	if err := row.Scan(&line.TaskID, &line.Role, &line.Version, &line.ID, &agent,
+		&predecessor, &line.Source, &line.SetBy, &setAt, &provenance, &line.Cleared); err != nil {
+		return domain.TaskLine{}, err
+	}
+	line.Agent = agent.String
+	if provenance.Valid {
+		line.Provenance = new(domain.TaskLineProvenance)
+		if err := json.Unmarshal([]byte(provenance.String), line.Provenance); err != nil {
+			return domain.TaskLine{}, errRowInconsistent
+		}
+	}
+	if predecessor.Valid {
+		id := domain.Digest(predecessor.String)
+		line.PredecessorID = &id
+	}
+	setAtTime, err := parseTime(setAt)
 	if err != nil {
-		return nil, err
+		return domain.TaskLine{}, errRowInconsistent
 	}
-	defer func() { _ = rows.Close() }()
-	var lines []domain.TaskLine
-	for rows.Next() {
-		var (
-			line        domain.TaskLine
-			agent       sql.NullString
-			predecessor sql.NullString
-			setAt       string
-			provenance  sql.NullString
-		)
-		if err := rows.Scan(&line.TaskID, &line.Role, &line.Version, &line.ID, &agent,
-			&predecessor, &line.Source, &line.SetBy, &setAt, &provenance, &line.Cleared); err != nil {
-			return nil, err
-		}
-		line.Agent = agent.String
-		if provenance.Valid {
-			line.Provenance = new(domain.TaskLineProvenance)
-			if err := json.Unmarshal([]byte(provenance.String), line.Provenance); err != nil {
-				return nil, errRowInconsistent
-			}
-		}
-		if predecessor.Valid {
-			id := domain.Digest(predecessor.String)
-			line.PredecessorID = &id
-		}
-		if line.SetAt, err = parseTime(setAt); err != nil {
-			return nil, errRowInconsistent
-		}
-		if err := line.Validate(); err != nil {
-			return nil, errRowInconsistent
-		}
-		lines = append(lines, line)
+	line.SetAt = setAtTime
+	if err := line.Validate(); err != nil {
+		return domain.TaskLine{}, errRowInconsistent
 	}
-	if err := rows.Err(); err != nil {
-		return nil, err
-	}
-	return lines, nil
+	return line, nil
 }
 
 // validateTaskLineChains checks what one row's validation cannot: within a

@@ -245,47 +245,46 @@ WHERE s.status = 'armed' AND t.next_nominal_fire_at <= ? ORDER BY s.id`
 // not match the aggregate is skipped: it is a stale clock a re-arm is about
 // to replace, not a due fire.
 func (tx *ReadTx) ListDueSchedules(ctx context.Context, now time.Time) ([]DueSchedule, error) {
-	var due []DueSchedule
-	rows, err := tx.tx.QueryContext(ctx, listDueOneShotSQL, now.UTC().UnixNano())
-	if err != nil {
-		return nil, fmt.Errorf("list due schedules: %w", err)
-	}
-	defer func() { _ = rows.Close() }()
-	for rows.Next() {
-		schedule, _, err := tx.scanScheduleSnapshot(rows)
+	due, err := queryAll(ctx, tx.tx, func(s scanner) (DueSchedule, error) {
+		schedule, _, err := tx.scanScheduleSnapshot(s)
 		if err != nil {
-			return nil, fmt.Errorf("list due schedules: %w", err)
+			return DueSchedule{}, err
 		}
-		due = append(due, DueSchedule{Schedule: schedule, NominalFireAt: *schedule.FireAt})
-	}
-	if err := rows.Err(); err != nil {
+		return DueSchedule{Schedule: schedule, NominalFireAt: *schedule.FireAt}, nil
+	}, listDueOneShotSQL, now.UTC().UnixNano())
+	if err != nil {
 		return nil, fmt.Errorf("list due schedules: %w", err)
 	}
 
-	recurring, err := tx.tx.QueryContext(ctx, listDueRecurringSQL, now.UTC().UnixNano())
-	if err != nil {
-		return nil, fmt.Errorf("list due schedules: %w", err)
+	type dueTimer struct {
+		due             DueSchedule
+		timerGeneration int64
 	}
-	defer func() { _ = recurring.Close() }()
-	for recurring.Next() {
+	timers, err := queryAll(ctx, tx.tx, func(s scanner) (dueTimer, error) {
 		var timerGeneration, nextNominal int64
 		schedule, _, err := tx.scanScheduleSnapshot(joinedRow{
-			rows:  recurring,
+			rows:  s,
 			extra: []any{&timerGeneration, &nextNominal},
 		})
 		if err != nil {
-			return nil, fmt.Errorf("list due schedules: %w", err)
+			return dueTimer{}, err
 		}
-		if timerGeneration != schedule.Generation {
+		return dueTimer{
+			due: DueSchedule{
+				Schedule:      schedule,
+				NominalFireAt: time.Unix(0, nextNominal).UTC(),
+			},
+			timerGeneration: timerGeneration,
+		}, nil
+	}, listDueRecurringSQL, now.UTC().UnixNano())
+	if err != nil {
+		return nil, fmt.Errorf("list due schedules: %w", err)
+	}
+	for _, timer := range timers {
+		if timer.timerGeneration != timer.due.Schedule.Generation {
 			continue
 		}
-		due = append(due, DueSchedule{
-			Schedule:      schedule,
-			NominalFireAt: time.Unix(0, nextNominal).UTC(),
-		})
-	}
-	if err := recurring.Err(); err != nil {
-		return nil, fmt.Errorf("list due schedules: %w", err)
+		due = append(due, timer.due)
 	}
 	return due, nil
 }
@@ -295,7 +294,7 @@ func (tx *ReadTx) ListDueSchedules(ctx context.Context, now time.Time) ([]DueSch
 // columns' order and types for the joined read too. A future column-type
 // change surfaces as a sql.Rows.Scan error, never a panic.
 type joinedRow struct {
-	rows  *sql.Rows
+	rows  scanner
 	extra []any
 }
 
@@ -467,20 +466,8 @@ FROM schedule_occurrences WHERE status = 'pending' ORDER BY id`
 // creation order: the redelivery scan after a restart or a failed
 // consumption (§5.16).
 func (tx *ReadTx) ListPendingScheduleOccurrences(ctx context.Context) ([]domain.ScheduleOccurrence, error) {
-	rows, err := tx.tx.QueryContext(ctx, listPendingOccurrencesSQL)
+	out, err := queryAll(ctx, tx.tx, scanOccurrence, listPendingOccurrencesSQL)
 	if err != nil {
-		return nil, fmt.Errorf("list pending schedule occurrences: %w", err)
-	}
-	defer func() { _ = rows.Close() }()
-	var out []domain.ScheduleOccurrence
-	for rows.Next() {
-		occ, err := scanOccurrence(rows)
-		if err != nil {
-			return nil, fmt.Errorf("list pending schedule occurrences: %w", err)
-		}
-		out = append(out, occ)
-	}
-	if err := rows.Err(); err != nil {
 		return nil, fmt.Errorf("list pending schedule occurrences: %w", err)
 	}
 	return out, nil

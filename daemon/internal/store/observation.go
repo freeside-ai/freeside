@@ -293,25 +293,18 @@ func (tx *ReadTx) ListRunMilestones(
 	if runID == "" {
 		return nil, fmt.Errorf("list run milestones: %w", domain.ErrEmptyID)
 	}
-	rows, err := tx.tx.QueryContext(ctx, listRunMilestonesSQL, runID)
-	if err != nil {
-		return nil, fmt.Errorf("list run milestones %s: %w", runID, err)
-	}
-	defer func() { _ = rows.Close() }()
-	var milestones []domain.RunMilestone
-	for rows.Next() {
+	milestones, err := queryAll(ctx, tx.tx, func(row scanner) (domain.RunMilestone, error) {
 		var (
 			storedRun, kind, recordedAt          string
 			invocation, terminal, outcome, cause sql.NullString
 		)
-		if err := rows.Scan(&storedRun, &kind, &invocation, &terminal,
+		if err := row.Scan(&storedRun, &kind, &invocation, &terminal,
 			&outcome, &cause, &recordedAt); err != nil {
-			return nil, fmt.Errorf("list run milestones %s: %w", runID, err)
+			return domain.RunMilestone{}, err
 		}
 		at, err := parseTime(recordedAt)
 		if err != nil {
-			return nil, fmt.Errorf("list run milestones %s recorded_at %q: %w",
-				runID, recordedAt, err)
+			return domain.RunMilestone{}, fmt.Errorf("recorded_at %q: %w", recordedAt, err)
 		}
 		m := domain.RunMilestone{
 			RunID:      domain.RunID(storedRun),
@@ -335,15 +328,15 @@ func (tx *ReadTx) ListRunMilestones(
 			m.Reason = &reason
 		}
 		if err := m.Validate(); err != nil {
-			return nil, fmt.Errorf("list run milestones %s: %w", runID, err)
+			return domain.RunMilestone{}, err
 		}
 		if m.RunID != runID {
-			return nil, fmt.Errorf("list run milestones %s: row names run %q: %w",
-				runID, m.RunID, domain.ErrParentKeyMismatch)
+			return domain.RunMilestone{}, fmt.Errorf("row names run %q: %w",
+				m.RunID, domain.ErrParentKeyMismatch)
 		}
-		milestones = append(milestones, m)
-	}
-	if err := rows.Err(); err != nil {
+		return m, nil
+	}, listRunMilestonesSQL, runID)
+	if err != nil {
 		return nil, fmt.Errorf("list run milestones %s: %w", runID, err)
 	}
 	return milestones, nil
@@ -357,24 +350,18 @@ func (tx *ReadTx) ListInvocationObservations(
 	if runID == "" {
 		return nil, fmt.Errorf("list invocation observations: %w", domain.ErrEmptyID)
 	}
-	rows, err := tx.tx.QueryContext(ctx, listInvocationObservationsSQL, runID)
-	if err != nil {
-		return nil, fmt.Errorf("list invocation observations %s: %w", runID, err)
-	}
-	defer func() { _ = rows.Close() }()
-	var observations []domain.InvocationObservation
-	for rows.Next() {
-		o, err := scanInvocationObservation(rows)
+	observations, err := queryAll(ctx, tx.tx, func(row scanner) (domain.InvocationObservation, error) {
+		o, err := scanInvocationObservation(row)
 		if err != nil {
-			return nil, fmt.Errorf("list invocation observations %s: %w", runID, err)
+			return domain.InvocationObservation{}, err
 		}
 		if o.RunID != runID {
-			return nil, fmt.Errorf("list invocation observations %s: row names run %q: %w",
-				runID, o.RunID, domain.ErrParentKeyMismatch)
+			return domain.InvocationObservation{}, fmt.Errorf("row names run %q: %w",
+				o.RunID, domain.ErrParentKeyMismatch)
 		}
-		observations = append(observations, o)
-	}
-	if err := rows.Err(); err != nil {
+		return o, nil
+	}, listInvocationObservationsSQL, runID)
+	if err != nil {
 		return nil, fmt.Errorf("list invocation observations %s: %w", runID, err)
 	}
 	return observations, nil
