@@ -761,7 +761,7 @@ public struct MockServerTransport: ClientTransport {
         if var run = object["run"] as? [String: Any] {
             for key in [
                 "created_at", "last_activity_at", "campaign_id", "attempt_number",
-                "attempt_reason", "parent_run_id", "revises_run_id",
+                "attempt_reason", "parent_run_id", "revises_run_id", "hold_usage_pool",
             ] where !run.keys.contains(key) {
                 run[key] = NSNull()
             }

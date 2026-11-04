@@ -170,6 +170,13 @@ enum MockContractValidation {
         default:
             return "inconsistent production attempt lineage"
         }
+        // Mirrors domain.RunHoldObservation.Validate, whose pool the daemon
+        // copies onto the synced run: present exactly beside
+        // usage_pool_exhausted, and never empty.
+        if (run.hold_usage_pool != nil) != (run.hold_reason?.value1 == .usage_pool_exhausted) {
+            return "hold_usage_pool does not match hold_reason"
+        }
+        if run.hold_usage_pool?.isEmpty == true { return "empty hold_usage_pool" }
         var stageIDs = Set<String>()
         var invocationIDs = Set<String>()
         for stage in run.stages {
