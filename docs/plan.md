@@ -1,6 +1,6 @@
 ---
 title: Freeside Project Plan
-revision: 108
+revision: 109
 status: active
 updated: 2026-11-03
 ---
@@ -6190,6 +6190,15 @@ Plan changes are gated by materiality:
 - Material changes require the plan-change gate.
 - The materiality rules are themselves control-plane policy.
 
+The plan records what Freeside commits to, not how it does it. Mechanism
+such as record fields, reader lists, and per-unit acceptance lives at its
+point of use: package documentation, component READMEs, issue contracts, and
+decision notes. Moving mechanism out while the commitment stays in the plan
+is a wording change, and the moved text lands at its destination in the same
+change unless the destination already says it. The test, the full in and out lists, and the size check are in
+[AGENTS.md](../AGENTS.md) (Document Gating, What Belongs in the Plan); the
+plan doesn't restate them, so the two can't drift.
+
 Decision notes are selective and mandatory only for the classes listed in
 `AGENTS.md`. The issue tracker, not decision notes, owns active work state.
 Briefings and querying are deferred to Phase 3 and added only if demanded.
@@ -7208,25 +7217,28 @@ Record material changes here by revision, with the decider in parentheses.
 - On first re-litigation, promote the decision to a `docs/decisions/` ADR that
   cites its history entry.
 
-Revision 108 ("An Agentic Development Environment"):
+Revision 109 ("Commitments in the Plan, Mechanism at Its Point of Use"):
 
-1. **Freeside's category line becomes "an agentic development environment".**
-   A person using Freeside directs coding agents, approves specifications,
-   and judges results rather than editing code, and Freeside's app is where
-   that happens, so the product is the environment they develop in (Sections [1](#1-what-freeside-is)
-   and [15](#15-naming-and-references)). "Control plane" stays the daemon's architectural term and is
-   never the category. Freeside adopts the agentic development environment
-   (ADE) category and differs inside it: the environment keeps working while
-   you're away, and work counts as ready only on evidence, not on your
-   watching it. This replaces revision 10's category line, "an agent control
-   plane", which names the architecture rather than the product and stopped
-   differentiating once other tools used the same phrase. Rejected: keeping
-   "agent control plane", for those reasons; and coining a term such as
-   "agent supervisor" or "Agent Management Interface", which nobody searches
-   for, and whose acronym AMI already means Amazon Machine Image.
+1. **The plan holds what Freeside commits to; mechanism lives where it is
+   used.** A sentence belongs in the plan only if changing it would change
+   what Freeside commits to, not only how it does it. Purpose, goals,
+   principles, safety invariants and trust boundaries, authority, component
+   responsibilities, interface shapes that bind several components, roadmap,
+   risks, and this log stay. Record fields, hold reasons, error types, reader
+   lists, test names, and per-unit acceptance move to package documentation,
+   component READMEs, issue contracts, and decision notes. Moving mechanism
+   out while the commitment stays is a wording change, and the moved text
+   lands at its destination in the same change unless it is already there;
+   "acceptance criteria" in AGENTS.md's materiality list means plan-level
+   criteria such as phase exits. A section past roughly 150 lines prompts a review
+   question about its mechanism, not a limit. Section [9](#9-comprehension) states the rule and AGENTS.md (Document Gating)
+   carries the full lists. Rejected: leaving the plan as is, because routine
+   implementation keeps churning it (PR #2496 changed it only to name a
+   record's second reader); and splitting it into many files with no content
+   rule, which spreads the same churn across more places.
 
-(Owner decision of 2026-11-03 on #2507;
-[decision note](../devlog/2026-11-03-1042-agentic-development-environment.md).)
+(Owner decision of 2026-11-03 on #2520;
+[decision note](../devlog/2026-11-03-1441-plan-content-rule.md).)
 
 ## 14. Risks
 
