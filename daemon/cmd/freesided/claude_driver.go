@@ -1447,57 +1447,6 @@ type claudeComposition struct {
 	issueReadTokens publish.TokenSource
 }
 
-// ErrProjectImageComposition marks an unattended composition whose configured
-// agent image cannot be bound to a matching immutable project-image record.
-// Refusing at startup turns the run-482 misconfiguration (a base the pinned
-// image was never built from) into a daemon-start failure instead of a run
-// that spends implementation before publication binding rejects it.
-var ErrProjectImageComposition = errors.New("configured agent image has no matching project-image record")
-
-// resolveProjectImagePreparation binds the configured agent image to the
-// immutable project_images provenance production publication already treats as
-// authority (engine.productionPublicationWorkflow.loadBinding), and returns the
-// workspace-hydration argv the launch command must run. It refuses when no
-// record names the image; when its recorded repository or repository ID
-// disagrees with the configured repository; or when the decoded preparation
-// command is not the fixed image-owned helper the builder and onboarding
-// policy admit (projectimage.PreparationPath). Each refusal names its
-// mismatch.
-//
-// These are the checks the record alone decides, so they run before anything
-// reaches the network. Whether an image may serve the configured base is
-// writer selection's question (claudeImageSelector), which can need the base
-// tree; a base no image serves holds attempts instead of refusing the start.
-//
-// The command re-gate is the reconstruction trust boundary (AGENTS.md daemon
-// conventions): PreparationCommand is a store field decoded here, so a
-// corrupted or tampered row that is otherwise self-consistent must not reach
-// the root launch argv. Validate only rejects empty/NUL commands and
-// shell-quoting only prevents injection, so neither bounds *which* command
-// runs; onboarding gates the same field to the identical fixed value, and this
-// boundary re-runs that gate rather than trusting the decoded argv.
-func resolveProjectImagePreparation(
-	image domain.ProjectImage, found bool, cfg claudeDriverConfig,
-) ([]string, error) {
-	switch {
-	case !found:
-		return nil, fmt.Errorf("agent image %q: %w", cfg.AgentImage, ErrProjectImageComposition)
-	case image.Repository != cfg.Repo:
-		return nil, fmt.Errorf(
-			"project-image repository %q disagrees with configured %q: %w",
-			image.Repository, cfg.Repo, ErrProjectImageComposition)
-	case image.RepositoryID != cfg.RepositoryID:
-		return nil, fmt.Errorf(
-			"project-image repository id %d disagrees with configured %d: %w",
-			image.RepositoryID, cfg.RepositoryID, ErrProjectImageComposition)
-	case !slices.Equal(image.PreparationCommand, []string{projectimage.PreparationPath}):
-		return nil, fmt.Errorf(
-			"project-image preparation command %q is not the approved %q: %w",
-			image.PreparationCommand, projectimage.PreparationPath, ErrProjectImageComposition)
-	}
-	return slices.Clone(image.PreparationCommand), nil
-}
-
 // seedAdmittedImagePointer makes the configured agent image the pointer's
 // seed (plan §5.7, Project-image upkeep): a repository with no pointer for
 // the Claude agent base gets one naming the configured image, whether or not
@@ -1643,7 +1592,7 @@ func composeClaudeDriver(
 		}); readErr != nil {
 			return nil, fmt.Errorf("resolve project image: %w", readErr)
 		}
-		if preparation, err = resolveProjectImagePreparation(image, found, cfg); err != nil {
+		if preparation, err = projectimage.ResolvePreparation(image, found, cfg.AgentImage, cfg.Repo, cfg.RepositoryID); err != nil {
 			return nil, err
 		}
 	}

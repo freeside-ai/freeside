@@ -500,9 +500,10 @@ All under `daemon/`:
   `internal/store/effect_proposal.go`,
   `internal/store/image_policy_adoption.go`,
   `internal/signet/image_policy_adoption.go`,
-  `internal/engine/image_upkeep_adoption.go`, and
+  `internal/engine/image_upkeep_adoption.go`,
   `internal/projectimage/rebuild_gate.go` (repository manifests gate image
-  rebuilds).
+  rebuilds), and `internal/projectimage/preparation_gate.go` (re-gates a
+  decoded preparation command before it reaches the root launch argv).
 - **Client authority:** `internal/signet/device.go` (the paired-device
   bearer check), `internal/signet/http.go` (where requests meet it),
   `internal/signet/pairing.go`, `internal/signet/secret.go`,

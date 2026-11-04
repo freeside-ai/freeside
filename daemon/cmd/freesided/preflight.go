@@ -1008,7 +1008,7 @@ func validateCompositionRepositoryBase(cfg preflightConfig) error {
 // ward starts on while writer attempts hold (startupWriterImage).
 //
 // It first runs the record-only refusals the daemon's start runs on the
-// -agent-image seed (resolveProjectImagePreparation). With no pointer
+// -agent-image seed (projectimage.ResolvePreparation). With no pointer
 // recorded the seed stands in for it, as an unattended start seeds the
 // pointer with it (seedAdmittedImagePointer). The base tree is read from
 // cfg.RepositoryCheckout; a base it cannot read is exec.ErrInputUnavailable,
@@ -1021,12 +1021,10 @@ func selectPreflightWriterImage(
 	ctx context.Context, database databaseInspection, cfg preflightConfig,
 ) (image domain.ProjectImage, serves bool, err error) {
 	if database.ProjectImageError != nil {
-		return domain.ProjectImage{}, false, errors.Join(ErrProjectImageComposition, database.ProjectImageError)
+		return domain.ProjectImage{}, false, errors.Join(projectimage.ErrComposition, database.ProjectImageError)
 	}
-	if _, err := resolveProjectImagePreparation(database.ProjectImage, database.ProjectImageFound, claudeDriverConfig{
-		AgentImage: domain.ImageRef(cfg.AgentImage), Repo: cfg.Repo,
-		RepositoryID: cfg.RepositoryID,
-	}); err != nil {
+	if _, err := projectimage.ResolvePreparation(database.ProjectImage, database.ProjectImageFound,
+		domain.ImageRef(cfg.AgentImage), cfg.Repo, cfg.RepositoryID); err != nil {
 		return domain.ProjectImage{}, false, err
 	}
 	pointed := database.ProjectImage
@@ -1046,7 +1044,7 @@ func selectPreflightWriterImage(
 	}
 	if image.RecipeDigest != cfg.ApprovedRecipe {
 		return domain.ProjectImage{}, false, fmt.Errorf("project-image recipe %s disagrees with approved recipe %s: %w",
-			image.RecipeDigest, cfg.ApprovedRecipe, ErrProjectImageComposition)
+			image.RecipeDigest, cfg.ApprovedRecipe, projectimage.ErrComposition)
 	}
 	return image, serves, nil
 }
