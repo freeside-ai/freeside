@@ -28,18 +28,18 @@ package struct RoutingPolicyFailure: Equatable {
 }
 
 /// The operator's edit of the routing policy, before it is saved: one agent
-/// order per role, and the revision and epoch it started from. The command
-/// names that revision as its expected revision, which means nothing in
-/// another epoch, and carries that revision's drain-first account.
+/// order per role, the drain-first account, and the revision and epoch it
+/// started from. The command names that revision as its expected revision,
+/// which means nothing in another epoch.
 public struct RoutingPolicyDraft: Equatable, Sendable {
     public typealias Role = Components.Schemas.TaskLineRole
 
     /// The revision the edit started from; nil when no policy was set.
     public let baseRevision: Int?
-    /// The base revision's drain-first account. The sheet edits only the
-    /// orders, and a command without an account clears it, so a save
-    /// resends the one it started from.
-    public let drainFirstAccount: String?
+    /// The usage pool to drain first, or nil for none. It starts as the base
+    /// revision's: the command replaces the whole policy, so an edit of the
+    /// orders alone resends it, and nil clears it.
+    public var drainFirstAccount: String?
     public let syncEpoch: String
     private var orders: [Role: [String]]
 
@@ -95,6 +95,12 @@ public struct RoutingPolicyDraft: Equatable, Sendable {
     }
 }
 
+/// A usage pool the operator may drain first, with the catalog agents on it.
+package struct RoutingDrainFirstPool: Equatable {
+    package let pool: Components.Schemas.UsagePoolUsage
+    package let agents: [String]
+}
+
 /// Reads the routing policy sync adopted and sends the operator's change as a
 /// saved command (plan §5.4, routing policy), modeled on `TaskStopModel`: the
 /// command persists before it is sent, an unanswered send is retried only by
@@ -128,6 +134,34 @@ package final class RoutingPolicyModel {
     }
     package var currentDeviceID: String { coordinator.store.device.deviceID }
 
+    /// The pools the operator may drain first, in sync order.
+    package var drainFirstPools: [RoutingDrainFirstPool] {
+        Self.drainFirstPools(coordinator.usagePools, catalog: catalog)
+    }
+
+    /// The synced usage pool with this id, whether or not it can be drained
+    /// first, so the view can name a stale account's provider and plan.
+    package func usagePool(_ id: String) -> Components.Schemas.UsagePoolUsage? {
+        coordinator.usagePools.first { $0.pool.id == id }?.pool
+    }
+
+    /// The pools at least one catalog agent's enrollment sits on, each with
+    /// those agents. It mirrors the daemon's rule (`checkDrainFirstAccount`
+    /// in daemon/internal/engine/routing_policy.go), which refuses any other
+    /// pool: the daemon resolves each tree agent's enrollment to its
+    /// identity's pool, and sync lists every pool's enrollments. Empty
+    /// without a catalog.
+    package static func drainFirstPools(
+        _ pools: [Components.Schemas.UsagePoolSnapshot], catalog: Components.Schemas.AgentCatalog?
+    ) -> [RoutingDrainFirstPool] {
+        guard let catalog else { return [] }
+        return pools.compactMap { snapshot in
+            let enrollments = Set(snapshot.pool.enrollments.map(\.enrollment_id))
+            let agents = catalog.agents.filter { enrollments.contains($0.enrollment_id) }.map(\.name)
+            return agents.isEmpty ? nil : RoutingDrainFirstPool(pool: snapshot.pool, agents: agents)
+        }
+    }
+
     /// The agent the lineup runs the role with when the policy leaves it out.
     package func lineupAgent(for role: RoutingPolicyDraft.Role) -> String? {
         catalog?.lineup.first { $0.role == role }?.agent
@@ -159,8 +193,15 @@ package final class RoutingPolicyModel {
         if draft.roles.contains(where: { !$0.agents.allSatisfy(known.contains) }) {
             return "Remove the agents the daemon's agent tree doesn't carry."
         }
+        if let account = draft.drainFirstAccount, !drainFirstPools.contains(where: { $0.pool.id == account }) {
+            return "No agent in the tree is on \(account) any more. Clear the drain-first account or pick another."
+        }
+        // The schema requires a role, so an account alone can't make a
+        // first policy.
         if draft.roles.isEmpty { return "Order at least one agent for a role." }
-        if draft.roles == policy?.roles { return "No change to save." }
+        if draft.roles == policy?.roles && draft.drainFirstAccount == policy?.drain_first_account {
+            return "No change to save."
+        }
         return nil
     }
 

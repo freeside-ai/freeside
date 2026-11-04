@@ -4,8 +4,9 @@ import SwiftUI
 /// The routing policy (plan §5.4): which agent takes a new task for each role
 /// when the operator chose none, read from sync and changed as a saved
 /// command. `SettingsSheet` hosts it on both platforms, as it hosts Devices.
-/// It edits only the order among agents the daemon's catalog lists; the
-/// lineup itself still changes through the committed agent tree.
+/// It edits the order among agents the daemon's catalog lists and the
+/// drain-first account among the pools those agents sit on; the lineup
+/// itself still changes through the committed agent tree.
 struct RoutingPolicyView: View {
     @Environment(\.locale) private var locale
     @Environment(\.timeZone) private var timeZone
@@ -24,7 +25,7 @@ struct RoutingPolicyView: View {
                 // ranked by the soonest weekly reset, and the order itself
                 // decides only where no reset is known or resets tie.
                 consequence:
-                    "A new task goes to the role's agent whose weekly usage resets soonest, or to the first in this order when no reset is known. Used-up agents are skipped, and running tasks stay where they are.",
+                    "A new task goes to the role's agent whose weekly usage resets soonest, or to the first in this order when no reset is known. A drain-first account takes it ahead of reset order when the role's order has an agent on it. Used-up agents are skipped, and running tasks stay where they are.",
                 askLineLimit: nil)
             VStack(alignment: .leading, spacing: 16) {
                 notices
@@ -75,7 +76,7 @@ struct RoutingPolicyView: View {
                 tone: .neutral, keyword: "Recorded",
                 sentence: confirmed.recorded
                     ? "Revision \(confirmed.policy.revision) is the policy now."
-                    : "Revision \(confirmed.policy.revision) already held this order."
+                    : "Revision \(confirmed.policy.revision) already held this policy."
             )
             .accessibilityElement(children: .combine)
         }
@@ -85,6 +86,7 @@ struct RoutingPolicyView: View {
 
     @ViewBuilder private var reading: some View {
         facts
+        drainFirstCard { drainFirstReading }
         ForEach(RoutingPolicyDraft.Role.allCases, id: \.self) { role in
             roleCard(role) {
                 let agents = model.policy?.roles.first { $0.role == role }?.agents ?? []
@@ -103,7 +105,7 @@ struct RoutingPolicyView: View {
                 .foregroundStyle(Color.inkDim)
                 .fixedSize(horizontal: false, vertical: true)
         } else {
-            Button("Change Order") { model.beginEditing() }
+            Button("Change Policy") { model.beginEditing() }
                 .buttonStyle(FreesideActionButtonStyle(tone: .secondary))
                 .disabled(!model.canEdit)
         }
@@ -132,6 +134,14 @@ struct RoutingPolicyView: View {
     // MARK: Editing
 
     @ViewBuilder private func editor(_ draft: RoutingPolicyDraft) -> some View {
+        drainFirstCard {
+            ChoiceList(
+                accessibilityLabel: "Drain-first account",
+                options: drainFirstOptions(current: draft.drainFirstAccount),
+                selection: Binding(
+                    get: { model.draft?.drainFirstAccount },
+                    set: { model.draft?.drainFirstAccount = $0 }))
+        }
         ForEach(RoutingPolicyDraft.Role.allCases, id: \.self) { role in
             roleCard(role) {
                 let agents = draft.agents(for: role)
@@ -202,13 +212,78 @@ struct RoutingPolicyView: View {
         .help(label)
     }
 
+    /// None, then each pool the daemon would accept. A current account it
+    /// wouldn't stays listed, so the selection and the save blocker that
+    /// explains it stay visible.
+    private func drainFirstOptions(current: String?) -> [ChoiceList<String?>.Option] {
+        let pools = model.drainFirstPools
+        var options: [ChoiceList<String?>.Option] = [
+            .init(value: nil, label: "None", consequence: "Reset order alone decides.", register: .item)
+        ]
+        options += pools.map { offered in
+            .init(
+                value: offered.pool.id, label: offered.pool.id,
+                consequence: "\(Self.poolDetail(offered.pool))\nAgents: \(offered.agents.joined(separator: ", "))",
+                register: .item)
+        }
+        if let current, !pools.contains(where: { $0.pool.id == current }) {
+            options.append(.init(value: current, label: current, consequence: Self.staleAccount, register: .item))
+        }
+        return options
+    }
+
+    // MARK: Drain first
+
+    private static let staleAccount = "No agent in the tree is on this account."
+
+    @ViewBuilder private var drainFirstReading: some View {
+        if let account = model.policy?.drain_first_account {
+            VStack(alignment: .leading, spacing: 3) {
+                Text(account)
+                    .font(FreesideFont.monoValue)
+                    .foregroundStyle(Color.ink)
+                if let pool = model.usagePool(account) {
+                    Text(Self.poolDetail(pool))
+                        .font(FreesideFont.monoValue)
+                        .foregroundStyle(Color.inkDim)
+                }
+                // Without a catalog the app can't tell which pools agents
+                // sit on, so it doesn't call the account stale.
+                if model.catalog != nil, !model.drainFirstPools.contains(where: { $0.pool.id == account }) {
+                    Text(Self.staleAccount)
+                        .font(FreesideFont.cardBody)
+                        .foregroundStyle(Color.waxText)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+            }
+            .accessibilityElement(children: .combine)
+        } else {
+            Text("None")
+                .font(FreesideFont.monoValue)
+                .foregroundStyle(Color.inkDim)
+        }
+    }
+
+    private func drainFirstCard(@ViewBuilder content: () -> some View) -> some View {
+        card(title: "Drain first", content: content)
+    }
+
+    /// The pool's provider and plan, as Account usage heads its card.
+    static func poolDetail(_ pool: Components.Schemas.UsagePoolUsage) -> String {
+        [pool.provider, pool.plan].compactMap(\.self).joined(separator: " · ")
+    }
+
     // MARK: Shared pieces
 
     private func roleCard(
         _ role: RoutingPolicyDraft.Role, @ViewBuilder content: () -> some View
     ) -> some View {
+        card(title: Self.roleName(role), content: content)
+    }
+
+    private func card(title: String, @ViewBuilder content: () -> some View) -> some View {
         VStack(alignment: .leading, spacing: 8) {
-            KeywordLabel(text: Self.roleName(role))
+            KeywordLabel(text: title)
                 .accessibilityAddTraits(.isHeader)
             content()
         }
@@ -267,6 +342,7 @@ struct RoutingPolicyView: View {
     /// refusal carries.
     static func policyLine(_ policy: Components.Schemas.RoutingPolicy) -> String {
         let roles = policy.roles.map { "\(roleName($0.role)): \($0.agents.joined(separator: ", "))" }
-        return (["Revision \(policy.revision)"] + roles).joined(separator: " · ")
+        let drainFirst = policy.drain_first_account.map { ["Drain first: \($0)"] } ?? []
+        return (["Revision \(policy.revision)"] + roles + drainFirst).joined(separator: " · ")
     }
 }

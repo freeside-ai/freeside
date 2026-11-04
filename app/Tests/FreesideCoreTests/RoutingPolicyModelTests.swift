@@ -80,13 +80,30 @@ import Testing
     }
 
     @Test func withoutACatalogThePolicyReadsButCannotChange() async throws {
-        let coordinator = await coordinator(MockServer(agentCatalog: nil))
+        var policy = UsageFixtures.defaultRoutingPolicy()
+        policy.drain_first_account = UsageFixtures.readingPoolID
+        let coordinator = await coordinator(MockServer(routingPolicy: policy, agentCatalog: nil))
         let model = RoutingPolicyModel(coordinator: coordinator)
-        #expect(model.policy == UsageFixtures.defaultRoutingPolicy())
+        #expect(model.policy == policy)
+        #expect(model.policy?.drain_first_account == UsageFixtures.readingPoolID)
+        #expect(model.drainFirstPools.isEmpty)
         #expect(model.unavailableReason?.contains("no agent tree") == true)
         #expect(!model.canEdit)
         model.beginEditing()
         #expect(model.draft == nil)
+    }
+
+    /// The daemon accepts only a pool a tree agent's enrollment sits on, so
+    /// the edit offers no other; `spare` has no enrollment.
+    @Test func drainFirstOffersOnlyPoolsACatalogAgentIsOn() async throws {
+        let model = RoutingPolicyModel(coordinator: await coordinator())
+        #expect(
+            model.drainFirstPools.map(\.pool.id) == [UsageFixtures.readingPoolID, UsageFixtures.unsupportedPoolID])
+        #expect(model.drainFirstPools.first?.agents == ["claude-primary", "claude-secondary"])
+        #expect(model.drainFirstPools.last?.agents == ["codex-primary"])
+        #expect(RoutingPolicyModel.drainFirstPools(UsageFixtures.defaultUsagePools(), catalog: nil).isEmpty)
+        let withoutTree = RoutingPolicyModel(coordinator: await coordinator(MockServer(agentCatalog: nil)))
+        #expect(withoutTree.drainFirstPools.isEmpty)
     }
 
     @Test func draftEditsKeepTheCommandShape() {
@@ -142,6 +159,14 @@ import Testing
         #expect(model.saveBlocker?.contains("doesn't carry") == true)
         model.cancelEditing()
 
+        // Either half alone is a change; the pair as it was is not.
+        model.beginEditing()
+        model.draft?.drainFirstAccount = UsageFixtures.readingPoolID
+        #expect(model.saveBlocker == nil)
+        model.draft?.drainFirstAccount = nil
+        #expect(model.saveBlocker == "No change to save.")
+        model.cancelEditing()
+
         // Another operator's change, adopted mid-edit, blocks the stale draft.
         editImplementer(model)
         #expect(model.saveBlocker == nil)
@@ -182,6 +207,43 @@ import Testing
         await model.save()
         #expect(coordinator.routingPolicy?.policy.revision == 3)
         #expect(coordinator.routingPolicy?.policy.drain_first_account == UsageFixtures.unsupportedPoolID)
+    }
+
+    @Test func aSavedAccountIsSetChangedAndCleared() async throws {
+        let server = MockServer()
+        let coordinator = await coordinator(server)
+        let model = RoutingPolicyModel(coordinator: coordinator)
+        let roles = UsageFixtures.defaultRoutingPolicy().roles
+        for (account, revision) in [
+            (UsageFixtures.readingPoolID, 3), (UsageFixtures.unsupportedPoolID, 4), (nil, 5),
+        ] {
+            model.beginEditing()
+            model.draft?.drainFirstAccount = account
+            await model.save()
+            #expect(coordinator.routingPolicy?.policy.revision == revision)
+            #expect(coordinator.routingPolicy?.policy.drain_first_account == account)
+            // An account-only change sends the orders unchanged.
+            #expect(coordinator.routingPolicy?.policy.roles == roles)
+            #expect(model.confirmed?.recorded == true)
+        }
+    }
+
+    /// A pool no catalog agent sits on any more blocks Save, as an agent the
+    /// tree dropped does. The mock's tree here drops codex-primary, the only
+    /// agent on codex-b.
+    @Test func aStaleAccountBlocksSave() async throws {
+        var policy = UsageFixtures.defaultRoutingPolicy()
+        policy.drain_first_account = UsageFixtures.unsupportedPoolID
+        var catalog = UsageFixtures.defaultAgentCatalog()
+        catalog.agents.removeAll { $0.name == "codex-primary" }
+        policy.roles = [.init(role: .implementer, agents: ["claude-primary"])]
+        let model = RoutingPolicyModel(
+            coordinator: await coordinator(MockServer(routingPolicy: policy, agentCatalog: catalog)))
+        #expect(!model.drainFirstPools.contains { $0.pool.id == UsageFixtures.unsupportedPoolID })
+        editImplementer(model)
+        #expect(model.saveBlocker?.contains("Clear the drain-first account or pick another") == true)
+        model.draft?.drainFirstAccount = nil
+        #expect(model.saveBlocker == nil)
     }
 
     @Test func aFirstPolicyExpectsNoRevision() async throws {
@@ -253,11 +315,16 @@ import Testing
         let model = RoutingPolicyModel(coordinator: coordinator)
         editImplementer(model)
         // Another operator changes the policy after this device last synced.
-        try await submitFromAnotherDevice(server, coordinator, agents: ["codex-primary"], expected: 2)
+        try await submitFromAnotherDevice(
+            server, coordinator, agents: ["codex-primary"], drainFirst: UsageFixtures.unsupportedPoolID, expected: 2)
         await model.save()
         let failure = try #require(model.failure)
         #expect(failure.currentPolicy?.revision == 3)
         #expect(failure.currentPolicy?.roles == [.init(role: .implementer, agents: ["codex-primary"])])
+        #expect(failure.currentPolicy?.drain_first_account == UsageFixtures.unsupportedPoolID)
+        #expect(
+            RoutingPolicyView.policyLine(try #require(failure.currentPolicy))
+                == "Revision 3 · Implementer: codex-primary · Drain first: codex-b")
         #expect(coordinator.pendingRoutingPolicyChange == nil)
         #expect(cache.load()?.pendingRoutingPolicyChange == nil)
         // The refusal's policy reaches state only through sync.
@@ -394,14 +461,15 @@ import Testing
 
     /// Sets the implementer order as another paired device would.
     private func submitFromAnotherDevice(
-        _ server: MockServer, _ coordinator: SyncCoordinator, agents: [String], expected: Int?
+        _ server: MockServer, _ coordinator: SyncCoordinator, agents: [String], drainFirst: String? = nil,
+        expected: Int?
     ) async throws {
         let command = Components.Schemas.ClientCommand(
             command_id: UUID().uuidString, device_id: DeviceFixtures.otherDeviceID,
             payload: .set_routing_policy(
                 .init(
                     kind: .set_routing_policy, roles: [.init(role: .implementer, agents: agents)],
-                    expected_revision: expected)))
+                    drain_first_account: drainFirst, expected_revision: expected)))
         _ = try await coordinator.store.client.submitCommand(body: .json(command)).ok
     }
 }
