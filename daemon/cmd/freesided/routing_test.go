@@ -136,6 +136,83 @@ func TestRoutingSetRefusesAnAgentTheTreeLacks(t *testing.T) {
 	}
 }
 
+// TestRoutingSetRecordsADrainFirstAccount: -drain-first names a pool an
+// agent of the tree is on, a set without it clears the account as a new
+// revision, and an account no agent is on is refused and writes nothing.
+func TestRoutingSetRecordsADrainFirstAccount(t *testing.T) {
+	t.Parallel()
+	ctx := t.Context()
+	// The adopt fixture's store holds the enrollments the adopted tree's
+	// agents name, which the account check reads.
+	f := newAuthAdoptFixture(t)
+	report, patch, err := f.run(t, f.args())
+	if err != nil {
+		t.Fatalf("auth adopt: %v", err)
+	}
+	checkout, commit := commitAdoptedPatch(t, patch)
+	agent := loadAdoptedPatch(t, patch).Agents[0]
+	var pool domain.UsagePoolID
+	st := storetest.Open(t, f.dbPath, store.Options{})
+	if err := st.Read(ctx, func(tx *store.ReadTx) error {
+		enrollment, err := tx.GetClientEnrollment(ctx, domain.ClientEnrollmentID(agent.Enrollment))
+		if err != nil {
+			return err
+		}
+		identity, err := tx.GetAuthIdentity(ctx, enrollment.AuthIdentityID)
+		pool = identity.EffectiveUsagePool()
+		return err
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := st.Close(); err != nil {
+		t.Fatal(err)
+	}
+	set := func(extra ...string) (string, error) {
+		return runRouting(ctx, append([]string{
+			"set", "-db", f.dbPath, "-agent-tree", checkout,
+			"-agent-tree-commit", commit, "-order", "implementer=" + agent.Name,
+		}, extra...)...)
+	}
+
+	output, err := set("-drain-first", string(pool))
+	if err != nil {
+		t.Fatal(err)
+	}
+	named := decodeRoutingSet(t, output)
+	if !named.Recorded || named.Policy.Revision != 1 || named.Policy.LineupRevision != report.LineupRevision ||
+		named.Policy.DrainFirstAccount == nil || *named.Policy.DrainFirstAccount != pool {
+		t.Fatalf("named = %+v", named)
+	}
+	if output, err = set("-drain-first", string(pool)); err != nil {
+		t.Fatal(err)
+	}
+	if repeat := decodeRoutingSet(t, output); repeat.Recorded || repeat.Policy.Revision != 1 {
+		t.Fatalf("repeat = %+v", repeat)
+	}
+	if _, err := set("-drain-first", "pool-nobody-is-on"); !errors.Is(err, domain.ErrRoutingPolicyDrainFirstUnknown) {
+		t.Fatalf("unknown account = %v, want %v", err, domain.ErrRoutingPolicyDrainFirstUnknown)
+	}
+	if output, err = set(); err != nil {
+		t.Fatal(err)
+	}
+	if cleared := decodeRoutingSet(t, output); !cleared.Recorded || cleared.Policy.Revision != 2 ||
+		cleared.Policy.DrainFirstAccount != nil {
+		t.Fatalf("cleared = %+v", cleared)
+	}
+
+	output, err = runRouting(ctx, "show", "-db", f.dbPath, "-revisions")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var revisions []domain.RoutingPolicy
+	if err := json.Unmarshal([]byte(output), &revisions); err != nil {
+		t.Fatalf("decode %q: %v", output, err)
+	}
+	if len(revisions) != 2 || revisions[0].DrainFirstAccount == nil || revisions[1].DrainFirstAccount != nil {
+		t.Fatalf("show -revisions = %+v", revisions)
+	}
+}
+
 func TestRoutingCommandRefusals(t *testing.T) {
 	t.Parallel()
 	ctx := t.Context()

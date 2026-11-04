@@ -38,10 +38,12 @@ type ChangeTaskLinePayload struct {
 }
 
 // SetRoutingPolicyPayload mirrors the API's SetRoutingPolicyPayload; a nil
-// ExpectedRevision says the client saw no policy.
+// ExpectedRevision says the client saw no policy, and a nil
+// DrainFirstAccount names none, clearing any the current policy names.
 type SetRoutingPolicyPayload struct {
-	Roles            []domain.RoutingPolicyRole `json:"roles"`
-	ExpectedRevision *int                       `json:"expected_revision"`
+	Roles             []domain.RoutingPolicyRole `json:"roles"`
+	DrainFirstAccount *domain.UsagePoolID        `json:"drain_first_account"`
+	ExpectedRevision  *int                       `json:"expected_revision"`
 }
 
 // ErrInvalidOperatorCommandPayload rejects a malformed operator command, or
@@ -97,13 +99,14 @@ type TaskLineChanger func(ctx context.Context, tx *store.WriteTx, change TaskLin
 
 // RoutingPolicyChange is one policy change for the RoutingPolicySetter.
 type RoutingPolicyChange struct {
-	Roles  []domain.RoutingPolicyRole
-	Source domain.RoutingPolicySource
-	SetBy  string
+	Roles             []domain.RoutingPolicyRole
+	DrainFirstAccount *domain.UsagePoolID
+	Source            domain.RoutingPolicySource
+	SetBy             string
 }
 
 // RoutingPolicyOutcome is the policy current after the change. Recorded is
-// false when it already held the orders.
+// false when it already held the orders and account.
 type RoutingPolicyOutcome struct {
 	Recorded bool
 	Policy   domain.RoutingPolicy
@@ -353,7 +356,8 @@ func (s *Service) setRoutingPolicy(ctx context.Context, in ClientCommand) (Comma
 		CommandIdentity:  domain.CommandIdentity{CommandID: in.CommandID, DeviceID: in.DeviceID},
 		ExpectedRevision: p.ExpectedRevision,
 	}
-	if !in.operatorArmOnly() || p.ExpectedRevision != nil && *p.ExpectedRevision < 1 {
+	if !in.operatorArmOnly() || p.ExpectedRevision != nil && *p.ExpectedRevision < 1 ||
+		p.DrainFirstAccount != nil && *p.DrainFirstAccount == "" {
 		return CommandResult{}, fmt.Errorf("submit command %q: %w", in.CommandID, ErrInvalidOperatorCommandPayload)
 	}
 	roles, err := domain.CanonicalRoutingPolicyRoles(p.Roles)
@@ -362,7 +366,7 @@ func (s *Service) setRoutingPolicy(ctx context.Context, in ClientCommand) (Comma
 	}
 	return s.commitReceipt(ctx, in,
 		func(old domain.CommandReceipt) bool {
-			return old.RoutingPolicyChange != nil && old.RoutingPolicyChange.SameRequest(request, roles)
+			return old.RoutingPolicyChange != nil && old.RoutingPolicyChange.SameRequest(request, roles, p.DrainFirstAccount)
 		},
 		func(tx *store.WriteTx, now time.Time) (domain.CommandReceipt, error) {
 			if s.routingPolicySetter == nil {
@@ -379,7 +383,8 @@ func (s *Service) setRoutingPolicy(ctx context.Context, in ClientCommand) (Comma
 				return domain.CommandReceipt{}, &RoutingPolicyRejectionError{CurrentPolicy: current}
 			}
 			outcome, err := s.routingPolicySetter(ctx, tx, RoutingPolicyChange{
-				Roles: roles, Source: domain.RoutingPolicySourceClientSet, SetBy: "device:" + string(in.DeviceID),
+				Roles: roles, DrainFirstAccount: p.DrainFirstAccount,
+				Source: domain.RoutingPolicySourceClientSet, SetBy: "device:" + string(in.DeviceID),
 			}, now)
 			if err != nil {
 				return domain.CommandReceipt{}, err

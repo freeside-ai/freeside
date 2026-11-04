@@ -73,19 +73,26 @@ func TestRoutingPolicyRevisionsSupersede(t *testing.T) {
 	t.Parallel()
 	s := storetest.Open(t, filepath.Join(t.TempDir(), "routing.db"), store.Options{})
 	first := appendRoutingPolicy(t, s, routingPolicyInput("claude-a", "claude-b"), routingPolicySetAt)
-	second := appendRoutingPolicy(t, s, routingPolicyInput("claude-b", "claude-a"), routingPolicySetAt.Add(time.Hour))
-	if first.Revision != 1 || second.Revision != 2 {
-		t.Fatalf("revisions = %d, %d, want 1, 2", first.Revision, second.Revision)
+	drained := routingPolicyInput("claude-b", "claude-a")
+	drained.DrainFirstAccount = new(domain.UsagePoolID("pool-a"))
+	second := appendRoutingPolicy(t, s, drained, routingPolicySetAt.Add(time.Hour))
+	third := appendRoutingPolicy(t, s, routingPolicyInput("claude-b", "claude-a"), routingPolicySetAt.Add(2*time.Hour))
+	if first.Revision != 1 || second.Revision != 2 || third.Revision != 3 {
+		t.Fatalf("revisions = %d, %d, %d, want 1, 2, 3", first.Revision, second.Revision, third.Revision)
 	}
 	current, revisions, currentErr, listErr := readRoutingPolicies(t, s)
 	if currentErr != nil || listErr != nil {
 		t.Fatalf("read: %v, %v", currentErr, listErr)
 	}
-	if !reflect.DeepEqual(current, second) {
-		t.Fatalf("current = %+v, want %+v", current, second)
+	if !reflect.DeepEqual(current, third) {
+		t.Fatalf("current = %+v, want %+v", current, third)
 	}
-	if !reflect.DeepEqual(revisions, []domain.RoutingPolicy{first, second}) {
+	if !reflect.DeepEqual(revisions, []domain.RoutingPolicy{first, second, third}) {
 		t.Fatalf("revisions = %+v", revisions)
+	}
+	if revisions[1].DrainFirstAccount == nil || *revisions[1].DrainFirstAccount != "pool-a" ||
+		revisions[2].DrainFirstAccount != nil {
+		t.Fatalf("accounts = %v, %v, want pool-a then none", revisions[1].DrainFirstAccount, revisions[2].DrainFirstAccount)
 	}
 }
 
@@ -109,26 +116,37 @@ func TestAppendRoutingPolicyRefusesAnInvalidPolicy(t *testing.T) {
 // against the body, so an edit to either fails both reads.
 func TestRoutingPolicyRowEditedInPlaceFailsTheRead(t *testing.T) {
 	t.Parallel()
-	for name, statement := range map[string]string{
-		"edited body":     `UPDATE routing_policies SET body = replace(body, '"cli:operator"', '"cli:other"')`,
-		"unparsable body": `UPDATE routing_policies SET body = 'not json'`,
-		"edited revision": `UPDATE routing_policies SET revision = 9`,
-		"edited source":   `UPDATE routing_policies SET source = 'other'`,
-		"edited set_by":   `UPDATE routing_policies SET set_by = 'cli:other'`,
-		"edited set_at":   `UPDATE routing_policies SET set_at = '2027-01-01T00:00:00Z'`,
-		"edited lineup":   `UPDATE routing_policies SET lineup_revision = 'sha256:other'`,
+	for name, tc := range map[string]struct {
+		statement string
+		account   *domain.UsagePoolID
+	}{
+		"edited body":     {`UPDATE routing_policies SET body = replace(body, '"cli:operator"', '"cli:other"')`, nil},
+		"unparsable body": {`UPDATE routing_policies SET body = 'not json'`, nil},
+		"edited revision": {`UPDATE routing_policies SET revision = 9`, nil},
+		"edited source":   {`UPDATE routing_policies SET source = 'other'`, nil},
+		"edited set_by":   {`UPDATE routing_policies SET set_by = 'cli:other'`, nil},
+		"edited set_at":   {`UPDATE routing_policies SET set_at = '2027-01-01T00:00:00Z'`, nil},
+		"edited lineup":   {`UPDATE routing_policies SET lineup_revision = 'sha256:other'`, nil},
+		"account added":   {`UPDATE routing_policies SET drain_first_account = 'pool-a'`, nil},
+		"edited account":  {`UPDATE routing_policies SET drain_first_account = 'pool-b'`, new(domain.UsagePoolID("pool-a"))},
+		"account dropped": {`UPDATE routing_policies SET drain_first_account = NULL`, new(domain.UsagePoolID("pool-a"))},
+		"body account": {
+			`UPDATE routing_policies SET body = replace(body, '"pool-a"', '"pool-b"')`, new(domain.UsagePoolID("pool-a")),
+		},
 	} {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
 			path := filepath.Join(t.TempDir(), "routing.db")
 			s := storetest.Open(t, path, store.Options{})
-			appendRoutingPolicy(t, s, routingPolicyInput("claude-a"), routingPolicySetAt)
+			in := routingPolicyInput("claude-a")
+			in.DrainFirstAccount = tc.account
+			appendRoutingPolicy(t, s, in, routingPolicySetAt)
 			db, err := sql.Open("sqlite", path)
 			if err != nil {
 				t.Fatal(err)
 			}
 			defer func() { _ = db.Close() }()
-			if _, err := db.ExecContext(t.Context(), statement); err != nil {
+			if _, err := db.ExecContext(t.Context(), tc.statement); err != nil {
 				t.Fatal(err)
 			}
 			if _, _, currentErr, listErr := readRoutingPolicies(t, s); currentErr == nil || listErr == nil ||

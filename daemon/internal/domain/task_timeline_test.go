@@ -31,9 +31,12 @@ func TestTaskEventDetailContract(t *testing.T) {
 		LineID: Digest("sha256:" + strings.Repeat("a", 64)), Role: RoleImplementer, Agent: ptr("claude-b"), Version: 1,
 		Source: TaskLineSourceRouter,
 		Provenance: &TaskLineProvenance{
-			PolicyRevision: 1, Trigger: TaskLineSelectionExhaustedMark,
-			Reading:    &TaskLineSelectionReading{Pool: "claude-a", Window: "seven_day_opus", ObservedAt: at},
-			PassedOver: ptr("claude-a"),
+			PolicyRevision: 1, Tier: TaskLineSelectionPolicyOrder, Pool: "pool-b",
+			RankedBy: []TaskLineRankingReading{},
+			PassedOver: &TaskLinePassedOverMark{
+				Agent: "claude-a", Pool: "pool-a", Window: "seven_day_opus",
+				Source: ExhaustedMarkProviderRefusal, MarkedAt: at,
+			},
 		},
 	}
 	fixtures := []TaskEvent{
@@ -139,7 +142,10 @@ func TestTaskEventDetailContract(t *testing.T) {
 			l.Agent, l.Provenance, l.Version, l.Source = nil, nil, 2, TaskLineSourceCLISubmit
 		},
 		"invalid provenance": func(l *TaskEventTaskLine) {
-			l.Provenance = &TaskLineProvenance{PolicyRevision: 1, Trigger: TaskLineSelectionFirstAdmission, PassedOver: ptr("claude-a")}
+			l.Provenance = &TaskLineProvenance{
+				PolicyRevision: 1, Tier: TaskLineSelectionDrainFirstAccount, Pool: "pool-b",
+				RankedBy: []TaskLineRankingReading{}, PassedOver: line.Provenance.PassedOver,
+			}
 		},
 	} {
 		detail := line

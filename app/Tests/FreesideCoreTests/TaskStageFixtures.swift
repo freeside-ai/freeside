@@ -270,20 +270,18 @@ enum TaskStageFixtures {
         return snapshot
     }
 
-    /// The task line a page's status line names for `role`.
+    /// The task line a page's status line names for `role`: the router's,
+    /// choosing `pool` by policy order, or an operator's when `pool` is nil,
+    /// since only a router line names a pool.
     static func line(
         _ role: Components.Schemas.TaskLineRole, agent: String, pool: String?
     ) -> Components.Schemas.TaskLine {
-        let observed = Date(timeIntervalSince1970: 0)
-        return .init(
+        .init(
             id: "sha256:\(String(repeating: "c", count: 64))", task_id: taskID, role: role, agent: agent, version: 1,
-            source: .router, set_by: "daemon", set_at: observed,
-            provenance: .init(
-                value1: .init(
-                    policy_revision: 1, trigger: .first_admission,
-                    reading: pool.map {
-                        .init(value1: .init(pool: $0, window: "5h", observed_at: observed))
-                    })))
+            source: pool == nil ? .cli_submit : .router, set_by: "daemon", set_at: Date(timeIntervalSince1970: 0),
+            provenance: pool.map {
+                .init(value1: .init(policy_revision: 1, tier: .policy_order, pool: $0, ranked_by: []))
+            })
     }
 
     static func history(_ scenario: Scenario) -> Components.Schemas.TaskTimeline {

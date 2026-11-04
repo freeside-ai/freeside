@@ -201,7 +201,7 @@ func TestTaskTimelineShowsStoredTaskLines(t *testing.T) {
 		line, err = tx.AppendTaskLine(ctx, domain.TaskLineInput{
 			TaskID: task.ID, Role: domain.RoleImplementer, Agent: "claude-b",
 			Source: domain.TaskLineSourceRouter, SetBy: "router:" + string(task.ID),
-			Provenance: &domain.TaskLineProvenance{PolicyRevision: 1, Trigger: domain.TaskLineSelectionFirstAdmission},
+			Provenance: &domain.TaskLineProvenance{PolicyRevision: 1, Tier: domain.TaskLineSelectionPolicyOrder, Pool: "pool-a"},
 		}, task.CreatedAt.Add(time.Minute))
 		return err
 	}); err != nil {
@@ -213,7 +213,7 @@ func TestTaskTimelineShowsStoredTaskLines(t *testing.T) {
 	}
 	if len(got.Events) != 2 || got.Events[0].Kind != domain.TaskEventTaskLineSet || got.Events[0].Line == nil ||
 		got.Events[0].Line.LineID != line.ID || got.Events[0].Line.Provenance == nil ||
-		got.Events[0].Line.Provenance.Trigger != domain.TaskLineSelectionFirstAdmission {
+		got.Events[0].Line.Provenance.Tier != domain.TaskLineSelectionPolicyOrder {
 		t.Fatalf("timeline events = %+v, want the router line above task_created", got.Events)
 	}
 }

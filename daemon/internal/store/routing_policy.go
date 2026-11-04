@@ -2,6 +2,7 @@ package store
 
 import (
 	"context"
+	"database/sql"
 	"fmt"
 	"time"
 
@@ -10,9 +11,9 @@ import (
 
 const (
 	insertRoutingPolicySQL = `
-INSERT INTO routing_policies (revision, source, set_by, set_at, lineup_revision, body)
-VALUES (?, ?, ?, ?, ?, ?)`
-	routingPolicyColumns = `revision, source, set_by, set_at, lineup_revision, body`
+INSERT INTO routing_policies (revision, source, set_by, set_at, lineup_revision, drain_first_account, body)
+VALUES (?, ?, ?, ?, ?, ?, ?)`
+	routingPolicyColumns = `revision, source, set_by, set_at, lineup_revision, drain_first_account, body`
 )
 
 // AppendRoutingPolicy records the next routing policy revision. The store
@@ -35,8 +36,12 @@ func (tx *WriteTx) AppendRoutingPolicy(
 	if err != nil {
 		return domain.RoutingPolicy{}, fmt.Errorf("append routing policy: %w", err)
 	}
+	var drainFirst sql.NullString
+	if policy.DrainFirstAccount != nil {
+		drainFirst = sql.NullString{String: string(*policy.DrainFirstAccount), Valid: true}
+	}
 	if _, err := tx.tx.ExecContext(ctx, insertRoutingPolicySQL, policy.Revision, policy.Source, policy.SetBy,
-		formatTime(policy.SetAt), policy.LineupRevision, body); err != nil {
+		formatTime(policy.SetAt), policy.LineupRevision, drainFirst, body); err != nil {
 		return domain.RoutingPolicy{}, fmt.Errorf("append routing policy: %w", err)
 	}
 	return policy, nil
@@ -81,9 +86,10 @@ func scanRoutingPolicy(row scanner) (domain.RoutingPolicy, error) {
 	var (
 		revision                     int
 		source, setBy, setAt, lineup string
+		drainFirst                   sql.NullString
 		body                         []byte
 	)
-	if err := row.Scan(&revision, &source, &setBy, &setAt, &lineup, &body); err != nil {
+	if err := row.Scan(&revision, &source, &setBy, &setAt, &lineup, &drainFirst, &body); err != nil {
 		return domain.RoutingPolicy{}, err
 	}
 	policy, err := decode[domain.RoutingPolicy](body)
@@ -91,7 +97,9 @@ func scanRoutingPolicy(row scanner) (domain.RoutingPolicy, error) {
 		return domain.RoutingPolicy{}, err
 	}
 	if policy.Revision != revision || string(policy.Source) != source || policy.SetBy != setBy ||
-		!timeColumnEqual(setAt, policy.SetAt) || string(policy.LineupRevision) != lineup {
+		!timeColumnEqual(setAt, policy.SetAt) || string(policy.LineupRevision) != lineup ||
+		drainFirst.Valid != (policy.DrainFirstAccount != nil) ||
+		drainFirst.Valid && drainFirst.String != string(*policy.DrainFirstAccount) {
 		return domain.RoutingPolicy{}, errRowInconsistent
 	}
 	return policy, nil

@@ -118,7 +118,7 @@ type TaskEventExternalReview struct {
 // Agent is nil on a cleared version. SupersededAgent is the agent of the
 // version this one supersedes, nil for version 1 and after a cleared version,
 // which names none. Provenance is the router's citation, nil for an operator
-// line; its passed-over agent is the agent a first admission left.
+// line; its passed-over mark names the agent a first admission passed over.
 type TaskEventTaskLine struct {
 	LineID          Digest              `json:"line_id"`
 	Role            RoleName            `json:"role"`
@@ -137,7 +137,7 @@ func (l TaskEventTaskLine) validate() error {
 	}
 	if l.Agent == nil {
 		// A cleared version, which only a line change writes and never as
-		// the first of its chain. The router's check below needs an agent.
+		// the first of its chain.
 		if !l.Source.IsLineChange() || l.Version == 1 {
 			return ErrTaskEventDetailMismatch
 		}
@@ -148,7 +148,7 @@ func (l TaskEventTaskLine) validate() error {
 		return ErrTaskEventDetailMismatch
 	}
 	if l.Provenance != nil {
-		if err := l.Provenance.validate(*l.Agent); err != nil {
+		if err := l.Provenance.validate(); err != nil {
 			return fmt.Errorf("task event line provenance: %w: %w", ErrTaskEventDetailMismatch, err)
 		}
 	}

@@ -2286,13 +2286,25 @@ public actor MockServer {
         guard roles.allSatisfy({ $0.agents.allSatisfy(catalogAgents.contains) }) else {
             throw rejected("routing policy names an agent outside the agent tree")
         }
-        let recorded = routingPolicy?.roles != roles
+        // As the daemon resolves each tree agent's pool through its enrollment,
+        // the mock joins the catalog's enrollments to the pools' enrollments.
+        if let account = payload.drain_first_account {
+            let catalogEnrollments = Set(agentCatalog.agents.map(\.enrollment_id))
+            guard
+                let pool = usagePoolsByID[account],
+                pool.pool.enrollments.contains(where: { catalogEnrollments.contains($0.enrollment_id) })
+            else {
+                throw rejected("routing policy drain-first account is no agent's usage pool")
+            }
+        }
+        let recorded =
+            routingPolicy?.roles != roles || routingPolicy?.drain_first_account != payload.drain_first_account
         revision += 1
         if recorded {
             routingPolicy = .init(
                 revision: (routingPolicy?.revision ?? 0) + 1, roles: roles, source: .client_routing_set,
                 set_by: "device:\(command.device_id)", set_at: currentTime,
-                lineup_revision: agentCatalog.lineup_revision)
+                lineup_revision: agentCatalog.lineup_revision, drain_first_account: payload.drain_first_account)
         }
         guard let policy = routingPolicy else { throw rejected("no routing policy") }
         return recordOperatorResult(

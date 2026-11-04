@@ -409,10 +409,10 @@ var (
 		"window reading must carry at most one of used_percent and quantity, and quantity and unit together")
 	ErrExhaustedMarkInconsistent = errors.New(
 		"exhausted mark must name exactly the invocation or the reading its source implies")
-	ErrInvalidTaskLineSelectionTrigger = errors.New(
-		"task line selection trigger is not first_admission or exhausted_mark")
+	ErrInvalidTaskLineSelectionTier = errors.New(
+		"task line selection tier is not drain_first_account, soonest_reset, or policy_order")
 	ErrTaskLineProvenanceInconsistent = errors.New(
-		"task line provenance does not fit its source or trigger")
+		"task line provenance does not fit its source, tier, or ranking")
 	ErrTaskLineReadingNotUTF8 = errors.New(
 		"task line reading pool or window is not valid UTF-8")
 	ErrTaskLineRoleRunning = errors.New(
@@ -433,6 +433,8 @@ var (
 		"routing policy source is not a path that may set a policy")
 	ErrRoutingPolicyAgentUnknown = errors.New(
 		"routing policy agent is not in the committed agent tree")
+	ErrRoutingPolicyDrainFirstUnknown = errors.New(
+		"routing policy drain-first account is no agent's usage pool in the committed agent tree")
 	// ErrTaskLinesNotCanonical marks a submission record whose lines are
 	// present but empty or out of role order.
 	ErrTaskLinesNotCanonical       = errors.New("recorded task lines are empty or out of role order")

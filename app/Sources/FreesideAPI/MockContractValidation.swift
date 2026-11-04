@@ -1225,6 +1225,9 @@ enum MockContractValidation {
                 }
             case .set_routing_policy(let payload):
                 guard (payload.expected_revision ?? 1) >= 1 else { throw malformed("non-positive expected_revision") }
+                guard payload.drain_first_account.map({ !$0.isEmpty }) ?? true else {
+                    throw malformed("empty drain_first_account")
+                }
             case .decision, .stop_task, .submit_task:
                 break
             }

@@ -69,8 +69,9 @@ public enum CommandResultTrust {
                 && (!record.recorded || line.map { $0.source == .client_line_change } ?? true)
         case .set_routing_policy(let payload):
             // The policy is the revision current after the change, holding the
-            // requested orders: the one after expected_revision when recorded,
-            // expected_revision itself when it already held them.
+            // requested orders and drain-first account: the one after
+            // expected_revision when recorded, expected_revision itself when it
+            // already held them.
             guard case .set_routing_policy(let record) = result.record,
                 let roles = try? MockContractValidation.canonicalRoutingPolicyRoles(payload.roles)
             else { return false }
@@ -78,6 +79,7 @@ public enum CommandResultTrust {
             return record.command_id == command.command_id && record.device_id == command.device_id
                 && record.expected_revision == payload.expected_revision
                 && record.policy.roles == roles
+                && record.policy.drain_first_account == payload.drain_first_account
                 && record.policy.revision == (record.recorded ? expected + 1 : expected)
                 && (!record.recorded || record.policy.source == .client_routing_set)
         }

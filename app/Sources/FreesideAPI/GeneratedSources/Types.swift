@@ -1975,7 +1975,7 @@ public enum Components {
             case cli_routing_set = "cli_routing_set"
             case client_routing_set = "client_routing_set"
         }
-        /// One role's priority order: the first agent takes new tasks until its pool's window is marked exhausted, then the next.
+        /// One role's agents: the router's candidates for the role, whose pools it ranks by the drain-first account, then the soonest known weekly reset, then this order, passing over a pool whose window is marked exhausted.
         ///
         ///
         /// - Remark: Generated from `#/components/schemas/RoutingPolicyRole`.
@@ -2016,7 +2016,7 @@ public enum Components {
                 ])
             }
         }
-        /// One revision of the routing policy: the standing rule for which agent takes a new task when the operator chose none for the role. A role absent from it keeps lineup behaviour. A revision is never edited.
+        /// One revision of the routing policy: the standing rule for which usage pool a new task runs on, and so which agent takes it when the operator chose none for the role. A role absent from it keeps lineup behaviour. A revision is never edited.
         ///
         ///
         /// - Remark: Generated from `#/components/schemas/RoutingPolicy`.
@@ -2037,6 +2037,11 @@ public enum Components {
             public var set_at: Foundation.Date
             /// - Remark: Generated from `#/components/schemas/RoutingPolicy/lineup_revision`.
             public var lineup_revision: Components.Schemas.Digest
+            /// The usage pool that takes every new task ahead of reset order, when the deciding role's order holds an agent on it; null when the revision names none. It was the pool of an agent of the tree at lineup_revision when set.
+            ///
+            ///
+            /// - Remark: Generated from `#/components/schemas/RoutingPolicy/drain_first_account`.
+            public var drain_first_account: Swift.String?
             /// Creates a new `RoutingPolicy`.
             ///
             /// - Parameters:
@@ -2046,13 +2051,15 @@ public enum Components {
             ///   - set_by: The operator identity that set it; device:<device_id> for a client.
             ///   - set_at:
             ///   - lineup_revision:
+            ///   - drain_first_account: The usage pool that takes every new task ahead of reset order, when the deciding role's order holds an agent on it; null when the revision names none. It was the pool of an agent of the tree at lineup_revision when set.
             public init(
                 revision: Swift.Int,
                 roles: [Components.Schemas.RoutingPolicyRole],
                 source: Components.Schemas.RoutingPolicySource,
                 set_by: Swift.String,
                 set_at: Foundation.Date,
-                lineup_revision: Components.Schemas.Digest
+                lineup_revision: Components.Schemas.Digest,
+                drain_first_account: Swift.String? = nil
             ) {
                 self.revision = revision
                 self.roles = roles
@@ -2060,6 +2067,7 @@ public enum Components {
                 self.set_by = set_by
                 self.set_at = set_at
                 self.lineup_revision = lineup_revision
+                self.drain_first_account = drain_first_account
             }
             public enum CodingKeys: String, CodingKey {
                 case revision
@@ -2068,6 +2076,7 @@ public enum Components {
                 case set_by
                 case set_at
                 case lineup_revision
+                case drain_first_account
             }
             public init(from decoder: any Swift.Decoder) throws {
                 let container = try decoder.container(keyedBy: CodingKeys.self)
@@ -2095,13 +2104,18 @@ public enum Components {
                     Components.Schemas.Digest.self,
                     forKey: .lineup_revision
                 )
+                self.drain_first_account = try container.decodeIfPresent(
+                    Swift.String.self,
+                    forKey: .drain_first_account
+                )
                 try decoder.ensureNoAdditionalProperties(knownKeys: [
                     "revision",
                     "roles",
                     "source",
                     "set_by",
                     "set_at",
-                    "lineup_revision"
+                    "lineup_revision",
+                    "drain_first_account"
                 ])
             }
         }
@@ -3369,43 +3383,50 @@ public enum Components {
             case cli_line_change = "cli_line_change"
             case client_line_change = "client_line_change"
         }
-        /// What made the router write a line. first_admission: the policy order's first agent took the task, so no reading was acted on and no agent passed over. exhausted_mark: the router passed over an agent whose pool's window was marked exhausted. A quota refusal parks a task instead of rerouting it, so it is not a trigger.
+        /// Which of the router's tiers chose a routing's pool (plan §5.4). drain_first_account: the policy's drain-first account, which leads every other pool when the deciding role's order holds an agent on it and its window is not marked. soonest_reset: the candidate pool whose known weekly reset for its agent's model came soonest, among those not marked. policy_order: the first pool in the policy's order among those with no known reset, when no pool with one was available.
         ///
         ///
-        /// - Remark: Generated from `#/components/schemas/TaskLineSelectionTrigger`.
-        @frozen public enum TaskLineSelectionTrigger: String, Codable, Hashable, Sendable, CaseIterable {
-            case first_admission = "first_admission"
-            case exhausted_mark = "exhausted_mark"
+        /// - Remark: Generated from `#/components/schemas/TaskLineSelectionTier`.
+        @frozen public enum TaskLineSelectionTier: String, Codable, Hashable, Sendable, CaseIterable {
+            case drain_first_account = "drain_first_account"
+            case soonest_reset = "soonest_reset"
+            case policy_order = "policy_order"
         }
-        /// The usage mark the router acted on, cited by the usage pool and window names and the observation's instant.
+        /// One candidate pool's known weekly reset for its agent's model, as the router ranked it: the window that resets soonest, the reset, and when the reading that reported it was observed.
         ///
         ///
-        /// - Remark: Generated from `#/components/schemas/TaskLineSelectionReading`.
-        public struct TaskLineSelectionReading: Codable, Hashable, Sendable {
-            /// - Remark: Generated from `#/components/schemas/TaskLineSelectionReading/pool`.
+        /// - Remark: Generated from `#/components/schemas/TaskLineRankingReading`.
+        public struct TaskLineRankingReading: Codable, Hashable, Sendable {
+            /// - Remark: Generated from `#/components/schemas/TaskLineRankingReading/pool`.
             public var pool: Swift.String
-            /// - Remark: Generated from `#/components/schemas/TaskLineSelectionReading/window`.
+            /// - Remark: Generated from `#/components/schemas/TaskLineRankingReading/window`.
             public var window: Swift.String
-            /// - Remark: Generated from `#/components/schemas/TaskLineSelectionReading/observed_at`.
+            /// - Remark: Generated from `#/components/schemas/TaskLineRankingReading/resets_at`.
+            public var resets_at: Foundation.Date
+            /// - Remark: Generated from `#/components/schemas/TaskLineRankingReading/observed_at`.
             public var observed_at: Foundation.Date
-            /// Creates a new `TaskLineSelectionReading`.
+            /// Creates a new `TaskLineRankingReading`.
             ///
             /// - Parameters:
             ///   - pool:
             ///   - window:
+            ///   - resets_at:
             ///   - observed_at:
             public init(
                 pool: Swift.String,
                 window: Swift.String,
+                resets_at: Foundation.Date,
                 observed_at: Foundation.Date
             ) {
                 self.pool = pool
                 self.window = window
+                self.resets_at = resets_at
                 self.observed_at = observed_at
             }
             public enum CodingKeys: String, CodingKey {
                 case pool
                 case window
+                case resets_at
                 case observed_at
             }
             public init(from decoder: any Swift.Decoder) throws {
@@ -3418,6 +3439,10 @@ public enum Components {
                     Swift.String.self,
                     forKey: .window
                 )
+                self.resets_at = try container.decode(
+                    Foundation.Date.self,
+                    forKey: .resets_at
+                )
                 self.observed_at = try container.decode(
                     Foundation.Date.self,
                     forKey: .observed_at
@@ -3425,28 +3450,120 @@ public enum Components {
                 try decoder.ensureNoAdditionalProperties(knownKeys: [
                     "pool",
                     "window",
+                    "resets_at",
                     "observed_at"
                 ])
             }
         }
-        /// How the router chose a line's agent: the routing policy revision it applied, the trigger, and, for exhausted_mark only, the reading acted on and the agent passed over. Both are null for first_admission.
+        /// The exhausted mark that made the router pass over an agent ranked ahead of the chosen one: the agent, its pool, and the mark on that pool's window for the agent's model.
+        ///
+        ///
+        /// - Remark: Generated from `#/components/schemas/TaskLinePassedOverMark`.
+        public struct TaskLinePassedOverMark: Codable, Hashable, Sendable {
+            /// - Remark: Generated from `#/components/schemas/TaskLinePassedOverMark/agent`.
+            public var agent: Swift.String
+            /// - Remark: Generated from `#/components/schemas/TaskLinePassedOverMark/pool`.
+            public var pool: Swift.String
+            /// - Remark: Generated from `#/components/schemas/TaskLinePassedOverMark/window`.
+            public var window: Swift.String
+            /// - Remark: Generated from `#/components/schemas/TaskLinePassedOverMark/source`.
+            public var source: Components.Schemas.ExhaustedMarkSource
+            /// - Remark: Generated from `#/components/schemas/TaskLinePassedOverMark/marked_at`.
+            public var marked_at: Foundation.Date
+            /// When the mark clears; null when no reset is known.
+            ///
+            /// - Remark: Generated from `#/components/schemas/TaskLinePassedOverMark/resets_at`.
+            public var resets_at: Foundation.Date?
+            /// Creates a new `TaskLinePassedOverMark`.
+            ///
+            /// - Parameters:
+            ///   - agent:
+            ///   - pool:
+            ///   - window:
+            ///   - source:
+            ///   - marked_at:
+            ///   - resets_at: When the mark clears; null when no reset is known.
+            public init(
+                agent: Swift.String,
+                pool: Swift.String,
+                window: Swift.String,
+                source: Components.Schemas.ExhaustedMarkSource,
+                marked_at: Foundation.Date,
+                resets_at: Foundation.Date? = nil
+            ) {
+                self.agent = agent
+                self.pool = pool
+                self.window = window
+                self.source = source
+                self.marked_at = marked_at
+                self.resets_at = resets_at
+            }
+            public enum CodingKeys: String, CodingKey {
+                case agent
+                case pool
+                case window
+                case source
+                case marked_at
+                case resets_at
+            }
+            public init(from decoder: any Swift.Decoder) throws {
+                let container = try decoder.container(keyedBy: CodingKeys.self)
+                self.agent = try container.decode(
+                    Swift.String.self,
+                    forKey: .agent
+                )
+                self.pool = try container.decode(
+                    Swift.String.self,
+                    forKey: .pool
+                )
+                self.window = try container.decode(
+                    Swift.String.self,
+                    forKey: .window
+                )
+                self.source = try container.decode(
+                    Components.Schemas.ExhaustedMarkSource.self,
+                    forKey: .source
+                )
+                self.marked_at = try container.decode(
+                    Foundation.Date.self,
+                    forKey: .marked_at
+                )
+                self.resets_at = try container.decodeIfPresent(
+                    Foundation.Date.self,
+                    forKey: .resets_at
+                )
+                try decoder.ensureNoAdditionalProperties(knownKeys: [
+                    "agent",
+                    "pool",
+                    "window",
+                    "source",
+                    "marked_at",
+                    "resets_at"
+                ])
+            }
+        }
+        /// How the router chose a routing's pool: the policy revision it applied, the tier that chose, the pool, the resets that ranked the candidates, and any exhausted mark it passed over. One routing writes one provenance onto every line it writes. ranked_by holds one reading per candidate pool whose weekly reset was known, in rank order (ascending resets_at, ties in the policy's order, no pool twice); it is empty when no reset was known. passed_over is the first agent ranked ahead of the chosen pool whose pool's window was marked exhausted, null when none was. The tier fixes the rest: drain_first_account passes over no one; soonest_reset names a pool in ranked_by, and passed_over is set when that pool is not first; policy_order names a pool absent from ranked_by, and passed_over is set when ranked_by is not empty. A pool passed over for a mark keeps its reading in ranked_by.
         ///
         ///
         /// - Remark: Generated from `#/components/schemas/TaskLineProvenance`.
         public struct TaskLineProvenance: Codable, Hashable, Sendable {
             /// - Remark: Generated from `#/components/schemas/TaskLineProvenance/policy_revision`.
             public var policy_revision: Swift.Int
-            /// - Remark: Generated from `#/components/schemas/TaskLineProvenance/trigger`.
-            public var trigger: Components.Schemas.TaskLineSelectionTrigger
-            /// - Remark: Generated from `#/components/schemas/TaskLineProvenance/reading`.
-            public struct readingPayload: Codable, Hashable, Sendable {
-                /// - Remark: Generated from `#/components/schemas/TaskLineProvenance/reading/value1`.
-                public var value1: Components.Schemas.TaskLineSelectionReading
-                /// Creates a new `readingPayload`.
+            /// - Remark: Generated from `#/components/schemas/TaskLineProvenance/tier`.
+            public var tier: Components.Schemas.TaskLineSelectionTier
+            /// - Remark: Generated from `#/components/schemas/TaskLineProvenance/pool`.
+            public var pool: Swift.String
+            /// - Remark: Generated from `#/components/schemas/TaskLineProvenance/ranked_by`.
+            public var ranked_by: [Components.Schemas.TaskLineRankingReading]
+            /// - Remark: Generated from `#/components/schemas/TaskLineProvenance/passed_over`.
+            public struct passed_overPayload: Codable, Hashable, Sendable {
+                /// - Remark: Generated from `#/components/schemas/TaskLineProvenance/passed_over/value1`.
+                public var value1: Components.Schemas.TaskLinePassedOverMark
+                /// Creates a new `passed_overPayload`.
                 ///
                 /// - Parameters:
                 ///   - value1:
-                public init(value1: Components.Schemas.TaskLineSelectionReading) {
+                public init(value1: Components.Schemas.TaskLinePassedOverMark) {
                     self.value1 = value1
                 }
                 public init(from decoder: any Swift.Decoder) throws {
@@ -3456,34 +3573,34 @@ public enum Components {
                     try self.value1.encode(to: encoder)
                 }
             }
-            /// - Remark: Generated from `#/components/schemas/TaskLineProvenance/reading`.
-            public var reading: Components.Schemas.TaskLineProvenance.readingPayload?
-            /// The agent the policy order put ahead of the chosen one.
-            ///
             /// - Remark: Generated from `#/components/schemas/TaskLineProvenance/passed_over`.
-            public var passed_over: Swift.String?
+            public var passed_over: Components.Schemas.TaskLineProvenance.passed_overPayload?
             /// Creates a new `TaskLineProvenance`.
             ///
             /// - Parameters:
             ///   - policy_revision:
-            ///   - trigger:
-            ///   - reading:
-            ///   - passed_over: The agent the policy order put ahead of the chosen one.
+            ///   - tier:
+            ///   - pool:
+            ///   - ranked_by:
+            ///   - passed_over:
             public init(
                 policy_revision: Swift.Int,
-                trigger: Components.Schemas.TaskLineSelectionTrigger,
-                reading: Components.Schemas.TaskLineProvenance.readingPayload? = nil,
-                passed_over: Swift.String? = nil
+                tier: Components.Schemas.TaskLineSelectionTier,
+                pool: Swift.String,
+                ranked_by: [Components.Schemas.TaskLineRankingReading],
+                passed_over: Components.Schemas.TaskLineProvenance.passed_overPayload? = nil
             ) {
                 self.policy_revision = policy_revision
-                self.trigger = trigger
-                self.reading = reading
+                self.tier = tier
+                self.pool = pool
+                self.ranked_by = ranked_by
                 self.passed_over = passed_over
             }
             public enum CodingKeys: String, CodingKey {
                 case policy_revision
-                case trigger
-                case reading
+                case tier
+                case pool
+                case ranked_by
                 case passed_over
             }
             public init(from decoder: any Swift.Decoder) throws {
@@ -3492,22 +3609,27 @@ public enum Components {
                     Swift.Int.self,
                     forKey: .policy_revision
                 )
-                self.trigger = try container.decode(
-                    Components.Schemas.TaskLineSelectionTrigger.self,
-                    forKey: .trigger
+                self.tier = try container.decode(
+                    Components.Schemas.TaskLineSelectionTier.self,
+                    forKey: .tier
                 )
-                self.reading = try container.decodeIfPresent(
-                    Components.Schemas.TaskLineProvenance.readingPayload.self,
-                    forKey: .reading
+                self.pool = try container.decode(
+                    Swift.String.self,
+                    forKey: .pool
+                )
+                self.ranked_by = try container.decode(
+                    [Components.Schemas.TaskLineRankingReading].self,
+                    forKey: .ranked_by
                 )
                 self.passed_over = try container.decodeIfPresent(
-                    Swift.String.self,
+                    Components.Schemas.TaskLineProvenance.passed_overPayload.self,
                     forKey: .passed_over
                 )
                 try decoder.ensureNoAdditionalProperties(knownKeys: [
                     "policy_revision",
-                    "trigger",
-                    "reading",
+                    "tier",
+                    "pool",
+                    "ranked_by",
                     "passed_over"
                 ])
             }
@@ -9030,7 +9152,7 @@ public enum Components {
                 ])
             }
         }
-        /// Set the routing policy, as `freesided routing set` does on the daemon host: one priority order per role, replacing the whole policy. Every agent must be in the daemon's agent tree. expected_revision is the policy revision the client saw, null when it saw none; any other current revision refuses the change, so two operators cannot silently overwrite each other. The new revision's source is client_routing_set and its set_by is device:<device_id>.
+        /// Set the routing policy, as `freesided routing set` does on the daemon host: one order per role and an optional drain-first account, replacing the whole policy, so a null drain_first_account clears the current one. Every agent must be in the daemon's agent tree, and the drain-first account must be the usage pool of at least one of them. A request for the orders and account the current revision holds records nothing. expected_revision is the policy revision the client saw, null when it saw none; any other current revision refuses the change, so two operators cannot silently overwrite each other. The new revision's source is client_routing_set and its set_by is device:<device_id>.
         ///
         ///
         /// - Remark: Generated from `#/components/schemas/SetRoutingPolicyPayload`.
@@ -9043,6 +9165,8 @@ public enum Components {
             public var kind: Components.Schemas.SetRoutingPolicyPayload.kindPayload
             /// - Remark: Generated from `#/components/schemas/SetRoutingPolicyPayload/roles`.
             public var roles: [Components.Schemas.RoutingPolicyRole]
+            /// - Remark: Generated from `#/components/schemas/SetRoutingPolicyPayload/drain_first_account`.
+            public var drain_first_account: Swift.String?
             /// - Remark: Generated from `#/components/schemas/SetRoutingPolicyPayload/expected_revision`.
             public var expected_revision: Swift.Int?
             /// Creates a new `SetRoutingPolicyPayload`.
@@ -9050,19 +9174,23 @@ public enum Components {
             /// - Parameters:
             ///   - kind:
             ///   - roles:
+            ///   - drain_first_account:
             ///   - expected_revision:
             public init(
                 kind: Components.Schemas.SetRoutingPolicyPayload.kindPayload,
                 roles: [Components.Schemas.RoutingPolicyRole],
+                drain_first_account: Swift.String? = nil,
                 expected_revision: Swift.Int? = nil
             ) {
                 self.kind = kind
                 self.roles = roles
+                self.drain_first_account = drain_first_account
                 self.expected_revision = expected_revision
             }
             public enum CodingKeys: String, CodingKey {
                 case kind
                 case roles
+                case drain_first_account
                 case expected_revision
             }
             public init(from decoder: any Swift.Decoder) throws {
@@ -9075,6 +9203,10 @@ public enum Components {
                     [Components.Schemas.RoutingPolicyRole].self,
                     forKey: .roles
                 )
+                self.drain_first_account = try container.decodeIfPresent(
+                    Swift.String.self,
+                    forKey: .drain_first_account
+                )
                 self.expected_revision = try container.decodeIfPresent(
                     Swift.Int.self,
                     forKey: .expected_revision
@@ -9082,6 +9214,7 @@ public enum Components {
                 try decoder.ensureNoAdditionalProperties(knownKeys: [
                     "kind",
                     "roles",
+                    "drain_first_account",
                     "expected_revision"
                 ])
             }

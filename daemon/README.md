@@ -1625,8 +1625,10 @@ one of `-agent` and `-clear`.
 ### Set The Routing Policy
 
 `freesided routing` sets and shows the deployment's routing policy: for each
-role, the agents that take a new task in priority order when no task line
-chose one (`docs/plan.md` §5.4). Nothing reads the policy yet: the router that
+role, the agents that may take a new task when no task line chose one, in
+fallback order, and optionally a drain-first account, the usage pool that
+takes every new task ahead of reset order (`docs/plan.md` §5.4, revision
+107). Nothing reads the policy yet: the router that
 applies it is #2393, so setting one changes no admission. Both commands work
 with the daemon running or stopped: on a running daemon they go through that
 daemon, which holds the store. Both print JSON.
@@ -1634,7 +1636,8 @@ daemon, which holds the store. Both print JSON.
 ```sh
 freesided routing set -db "$DB" \
   -agent-tree "$CHECKOUT" -agent-tree-commit "$COMMIT" \
-  -order implementer=claude-a,claude-b -order reviewer=claude-b
+  -order implementer=claude-a,claude-b -order reviewer=claude-b \
+  -drain-first claude-owner-subscription
 freesided routing show -db "$DB"
 freesided routing show -db "$DB" -revisions
 ```
@@ -1644,21 +1647,31 @@ is `specifier`, `implementer`, `remediator`, or `reviewer`. `-agent-tree` is
 an absolute path to a checkout holding the tree under `policy/`, because a
 running daemon resolves it from its own working directory, and that daemon's
 account must be able to read it. `-agent-tree-commit` is the full commit id.
+`-drain-first` is optional and takes a usage pool id, as `freesided auth list`
+prints it.
 
 - **Each `set` replaces the whole policy.** A role left out of it keeps
-  lineup behaviour, whatever an earlier revision said. There's no command yet
-  that returns the deployment to no policy at all.
+  lineup behaviour, and a `set` without `-drain-first` clears the account,
+  whatever an earlier revision said. There's no command yet that returns the
+  deployment to no policy at all.
 - **Each change is a new revision.** The command appends the next revision
-  and leaves earlier ones alone. A revision records the orders, who set it
-  and when, and the tree revision it was checked against.
+  and leaves earlier ones alone. A revision records the orders, the
+  drain-first account or `null`, who set it and when, and the tree revision
+  it was checked against.
 - **Every agent must be in the tree.** `set` reads the tree at that commit
   through git, never the working tree, and refuses an agent the tree doesn't
   carry, naming the role and the agent. It exits non-zero and records nothing.
   The check is membership only: an agent the tree carries but can't run, or
   one a later commit drops, is the router's to handle at admission.
-- **The same orders record nothing.** Setting what the current revision holds
-  prints `"recorded": false` and that revision, even from a newer tree. The
-  tree is still checked first.
+- **The drain-first account must be an agent's pool.** `set` refuses an
+  account that isn't the usage pool of at least one agent of the tree,
+  through that agent's enrollment and identity in the store; it exits
+  non-zero and records nothing. The account need not hold an agent for every
+  ordered role: the router skips it for a role whose order has no agent on
+  it.
+- **The same rule records nothing.** Setting the orders and account the
+  current revision holds prints `"recorded": false` and that revision, even
+  from a newer tree. The tree and the account are still checked first.
 - **`show` prints what's set.** It prints the current revision, or `null` when
   none was set. With `-revisions` it prints every revision in order, or `[]`.
 
@@ -2538,9 +2551,10 @@ Every line records its `source`: `submit_task`, `cli_submit`,
 `proposal_start`, or `cli_line_change` for an operator's choice, or `router`
 for the routing policy's choice at a task's first admission. Nothing writes a router line
 yet (#2393), and admission refuses one. A router line carries its selection
-`provenance`: the policy revision, the trigger (`first_admission` or
-`exhausted_mark`), and, for an exhausted mark, the reading acted on and the
-agent passed over. `GET /tasks/{task_id}/timeline` shows every line version
+`provenance`: the policy revision, the `tier` that chose the pool
+(`drain_first_account`, `soonest_reset`, or `policy_order`), the chosen
+`pool`, the weekly resets that ranked the candidates (`ranked_by`), and the
+exhausted mark on any agent ranked ahead of it (`passed_over`). `GET /tasks/{task_id}/timeline` shows every line version
 as a `task_line_set` event at its `set_at`, and the synced task carries each
 role's current line in `task_lines`. A version from `freesided task-line
 -clear` shows as an event with a null `agent`, and the synced task then

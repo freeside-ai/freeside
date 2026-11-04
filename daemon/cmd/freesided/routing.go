@@ -69,10 +69,12 @@ type routingSetConfig struct {
 	AgentTreeCheckout string
 	AgentTreeCommit   string
 	Orders            routingOrderFlag
+	// DrainFirst is the drain-first account's usage pool; empty names none.
+	DrainFirst string
 }
 
 // routingSetResult reports the request. Recorded is false when the current
-// revision already held the orders, so nothing was written. Policy is the
+// revision already held the orders and account, so nothing was written. Policy is the
 // current revision after the request.
 type routingSetResult struct {
 	Recorded bool                 `json:"recorded"`
@@ -104,8 +106,15 @@ func runRoutingSetCommand(ctx context.Context, args []string, stdout, stderr io.
 	if err != nil {
 		return fmt.Errorf("current account: %w", err)
 	}
+	// Every set is the whole policy, so a set without -drain-first clears
+	// any account the current revision names.
+	var drainFirst *domain.UsagePoolID
+	if cfg.DrainFirst != "" {
+		drainFirst = new(domain.UsagePoolID(cfg.DrainFirst))
+	}
 	set, err := engine.SetRoutingPolicy(ctx, handle.store, tree, revision, engine.SetRoutingPolicyRequest{
-		Roles: cfg.Orders, Source: domain.RoutingPolicySourceCLISet, SetBy: "cli:" + account.Username,
+		Roles: cfg.Orders, DrainFirstAccount: drainFirst,
+		Source: domain.RoutingPolicySourceCLISet, SetBy: "cli:" + account.Username,
 	}, time.Now().UTC())
 	if err != nil {
 		return err
@@ -124,7 +133,10 @@ func parseRoutingSetConfig(args []string, output io.Writer) (routingSetConfig, e
 	flags.StringVar(&cfg.AgentTreeCheckout, "agent-tree", "",
 		"absolute path of a local checkout holding the admitted-agent tree under policy/ (required)")
 	flags.StringVar(&cfg.AgentTreeCommit, "agent-tree-commit", "", "exact commit of -agent-tree whose tree is read (required)")
-	flags.Var(&cfg.Orders, "order", "role=agent1,agent2: the role's agents in priority order; repeat per role (required)")
+	flags.Var(&cfg.Orders, "order", "role=agent1,agent2: the role's agents in fallback order; repeat per role (required)")
+	flags.StringVar(&cfg.DrainFirst, "drain-first", "",
+		"usage pool that takes every new task ahead of reset order; an agent of the tree must be on it "+
+			"(optional; omitting it clears the current account)")
 	if err := flags.Parse(args); err != nil {
 		return routingSetConfig{}, err
 	}

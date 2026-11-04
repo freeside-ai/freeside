@@ -171,9 +171,15 @@ enum TaskHistoryFixtures {
         let digest = "sha256:" + String(repeating: "a", count: 64)
         var timeline = history(.published)
         let exhausted = Components.Schemas.TaskLineProvenance(
-            policy_revision: 2, trigger: .exhausted_mark,
-            reading: .init(value1: .init(pool: "claude-a", window: "seven_day_opus", observed_at: at(-60))),
-            passed_over: "claude-a")
+            policy_revision: 2, tier: .soonest_reset, pool: "claude-max-b",
+            ranked_by: [
+                .init(pool: "claude-max-a", window: "seven_day_opus", resets_at: at(600), observed_at: at(-60)),
+                .init(pool: "claude-max-b", window: "seven_day_opus", resets_at: at(1200), observed_at: at(-60)),
+            ],
+            passed_over: .init(
+                value1: .init(
+                    agent: "claude-a", pool: "claude-max-a", window: "five_hour", source: .usage_reading,
+                    marked_at: at(-60), resets_at: at(120))))
         let events: [Components.Schemas.TaskEvent] = [
             .init(
                 line: .init(
@@ -197,7 +203,9 @@ enum TaskHistoryFixtures {
                 line: .init(
                     value1: .init(
                         line_id: digest, role: .specifier, agent: "claude-b", version: 1, source: .router,
-                        provenance: .init(value1: .init(policy_revision: 2, trigger: .first_admission)))),
+                        provenance: .init(
+                            value1: .init(
+                                policy_revision: 2, tier: .policy_order, pool: "claude-max-b", ranked_by: [])))),
                 kind: .task_line_set, recorded_at: at(-6)),
             .init(
                 line: .init(

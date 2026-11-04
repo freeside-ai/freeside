@@ -33,10 +33,11 @@ func (s RoutingPolicySource) valid() bool {
 	}
 }
 
-// RoutingPolicyRole is one role's priority order: the first agent takes new
-// tasks until its pool's window is marked exhausted, then the next (plan §5.4,
-// revision 103). It stores agent names only; the router reads each agent's
-// pool through its enrollment.
+// RoutingPolicyRole is one role's agents: the router's candidates for the
+// role, whose pools it ranks by the drain-first account, then the soonest
+// known weekly reset, then this order (plan §5.4, revision 107). It stores
+// agent names only; the router reads each agent's pool through its
+// enrollment.
 type RoutingPolicyRole struct {
 	Role   RoleName `json:"role"`
 	Agents []string `json:"agents"`
@@ -102,16 +103,21 @@ type RoutingPolicyInput struct {
 	// LineupRevision is the agent tree's revision the roles were validated
 	// against.
 	LineupRevision Digest
+	// DrainFirstAccount is the usage pool that takes every new task ahead of
+	// reset order; nil when none.
+	DrainFirstAccount *UsagePoolID
 }
 
 // RoutingPolicy is one revision of the deployment's routing policy (plan §5.4,
-// revisions 99 and 103): the standing rule for which agent takes a new task
-// when the operator chose none for the role. It orders agents the committed
-// tree already carries and never adds one. A role absent from it keeps lineup
-// behaviour. A change is a new revision and a revision is never edited, so the
+// revisions 99, 103, and 107): the standing rule for which usage pool a new
+// task runs on, and so which agent takes it when the operator chose none for
+// the role. It orders agents the committed tree already carries and never adds
+// one; the orders are the router's candidates and its fallback order. A role
+// absent from it keeps lineup behaviour. The router ranks the candidates'
+// pools drain-first account, then soonest known weekly reset, then the
+// order. A change is a new revision and a revision is never edited, so the
 // revision a task line cites (TaskLineProvenance.PolicyRevision) stays the
-// rule that chose its agent. Priority with fallback is the only mode, so there
-// is no mode field; a later revision that adds a mode adds the field.
+// rule that chose its agent.
 type RoutingPolicy struct {
 	// Revision counts the deployment's policies from 1.
 	Revision int `json:"revision"`
@@ -124,6 +130,12 @@ type RoutingPolicy struct {
 	// roles were validated against. A later tree may drop an agent, so the
 	// router must still resolve each one at admission.
 	LineupRevision Digest `json:"lineup_revision"`
+	// DrainFirstAccount is the usage pool that takes every new task ahead of
+	// reset order, when the deciding role's order holds an agent on it; nil
+	// when the revision names none. The setter accepted it as the effective
+	// pool of an agent of the tree at LineupRevision; a later tree may move
+	// that agent, so the router still resolves pools at admission.
+	DrainFirstAccount *UsagePoolID `json:"drain_first_account"`
 }
 
 // NewRoutingPolicy builds a validated revision in canonical form: the roles
@@ -137,6 +149,7 @@ func NewRoutingPolicy(in RoutingPolicyInput, revision int, setAt time.Time) (Rou
 	policy := RoutingPolicy{
 		Revision: revision, Roles: roles, Source: in.Source, SetBy: in.SetBy,
 		SetAt: setAt.UTC(), LineupRevision: in.LineupRevision,
+		DrainFirstAccount: clonePtr(in.DrainFirstAccount),
 	}
 	if err := policy.Validate(); err != nil {
 		return RoutingPolicy{}, err
@@ -144,11 +157,13 @@ func NewRoutingPolicy(in RoutingPolicyInput, revision int, setAt time.Time) (Rou
 	return policy, nil
 }
 
-// SameOrder reports whether the revision already holds these roles, which
-// must be canonical. It compares the orders alone: who set a revision, and
+// SameRule reports whether the revision already holds these roles, which
+// must be canonical, and this drain-first account. Who set a revision, and
 // against which tree, is not part of the rule.
-func (p RoutingPolicy) SameOrder(roles []RoutingPolicyRole) bool {
-	return sameRoutingPolicyRoles(p.Roles, roles)
+func (p RoutingPolicy) SameRule(roles []RoutingPolicyRole, drainFirst *UsagePoolID) bool {
+	sameAccount := (p.DrainFirstAccount == nil) == (drainFirst == nil) &&
+		(drainFirst == nil || *p.DrainFirstAccount == *drainFirst)
+	return sameAccount && sameRoutingPolicyRoles(p.Roles, roles)
 }
 
 // Validate reports whether the revision is well-formed. The store re-runs it
@@ -178,6 +193,9 @@ func (p RoutingPolicy) Validate() error {
 	}
 	if !contentaddr.Valid(string(p.LineupRevision)) {
 		return fmt.Errorf("routing policy revision %d lineup_revision %q: %w", p.Revision, p.LineupRevision, ErrInvalidDigest)
+	}
+	if p.DrainFirstAccount != nil && *p.DrainFirstAccount == "" {
+		return fmt.Errorf("routing policy revision %d drain_first_account: %w", p.Revision, ErrEmptyID)
 	}
 	return nil
 }

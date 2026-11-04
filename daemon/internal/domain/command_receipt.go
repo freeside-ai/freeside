@@ -208,7 +208,8 @@ func (r TaskLineChangeReceipt) Validate() error {
 }
 
 // RoutingPolicyChangeRequest is a set_routing_policy command as accepted,
-// less its roles: the receipt's policy holds them in canonical form.
+// less its roles and drain-first account: the receipt's policy holds them,
+// the roles in canonical form.
 // ExpectedRevision is nil when the client saw no policy.
 type RoutingPolicyChangeRequest struct {
 	CommandIdentity
@@ -216,20 +217,22 @@ type RoutingPolicyChangeRequest struct {
 }
 
 // RoutingPolicyChangeReceipt records a routing policy change. Recorded is
-// false when the policy already held the orders asked for; either way Policy
-// is the revision current after the request and holds those orders.
+// false when the policy already held the rule asked for; either way Policy
+// is the revision current after the request and holds that rule.
 type RoutingPolicyChangeReceipt struct {
 	RoutingPolicyChangeRequest
 	Recorded bool          `json:"recorded"`
 	Policy   RoutingPolicy `json:"policy"`
 }
 
-// SameRequest reports whether a request with these canonical roles is the
-// one this receipt records.
-func (r RoutingPolicyChangeReceipt) SameRequest(request RoutingPolicyChangeRequest, roles []RoutingPolicyRole) bool {
+// SameRequest reports whether a request with these canonical roles and this
+// drain-first account is the one this receipt records.
+func (r RoutingPolicyChangeReceipt) SameRequest(
+	request RoutingPolicyChangeRequest, roles []RoutingPolicyRole, drainFirst *UsagePoolID,
+) bool {
 	sameExpected := (r.ExpectedRevision == nil) == (request.ExpectedRevision == nil) &&
 		(r.ExpectedRevision == nil || *r.ExpectedRevision == *request.ExpectedRevision)
-	return r.CommandIdentity == request.CommandIdentity && sameExpected && r.Policy.SameOrder(roles)
+	return r.CommandIdentity == request.CommandIdentity && sameExpected && r.Policy.SameRule(roles, drainFirst)
 }
 
 func (r RoutingPolicyChangeReceipt) Validate() error {

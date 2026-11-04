@@ -228,18 +228,23 @@ func TestTaskLinesFailClosedOnEditedRow(t *testing.T) {
 	}
 }
 
-// routerTaskLineInput is a router line that passed over an exhausted pool:
-// the provenance shape that carries every optional citation.
+// routerTaskLineInput is a router line that took the second-soonest reset
+// after passing over a marked pool: the provenance shape that carries every
+// citation.
 func routerTaskLineInput(taskID domain.TaskID) domain.TaskLineInput {
 	return domain.TaskLineInput{
 		TaskID: taskID, Role: domain.RoleImplementer, Agent: "claude-b",
 		Source: domain.TaskLineSourceRouter, SetBy: "router:" + string(taskID),
 		Provenance: &domain.TaskLineProvenance{
-			PolicyRevision: 2, Trigger: domain.TaskLineSelectionExhaustedMark,
-			Reading: &domain.TaskLineSelectionReading{
-				Pool: "claude-a", Window: "seven_day_opus", ObservedAt: taskLineSetAt.Add(-time.Hour),
+			PolicyRevision: 2, Tier: domain.TaskLineSelectionSoonestReset, Pool: "pool-b",
+			RankedBy: []domain.TaskLineRankingReading{
+				{Pool: "pool-a", Window: "seven_day", ResetsAt: taskLineSetAt.Add(24 * time.Hour), ObservedAt: taskLineSetAt.Add(-time.Hour)},
+				{Pool: "pool-b", Window: "seven_day", ResetsAt: taskLineSetAt.Add(48 * time.Hour), ObservedAt: taskLineSetAt.Add(-time.Hour)},
 			},
-			PassedOver: new("claude-a"),
+			PassedOver: &domain.TaskLinePassedOverMark{
+				Agent: "claude-a", Pool: "pool-a", Window: "five_hour", Source: domain.ExhaustedMarkProviderRefusal,
+				MarkedAt: taskLineSetAt.Add(-30 * time.Minute), ResetsAt: new(taskLineSetAt.Add(2 * time.Hour)),
+			},
 		},
 	}
 }

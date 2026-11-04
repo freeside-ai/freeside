@@ -1261,8 +1261,8 @@ enum TaskTimelinePresentation {
     /// The agent the task's line for `stage` names, and its pool. The line
     /// is what the next admission reads: the wire names no agent for a run
     /// in progress, so this is the nearest fact, and a remediation reads as
-    /// its stage's implementer. The daemon records a pool only where the
-    /// router read a usage mark.
+    /// its stage's implementer. The daemon records a pool only on a router
+    /// line, as the pool its routing chose.
     private static func agentAndPool(
         _ task: Components.Schemas.Task, stage: Components.Schemas.StageName?
     ) -> [String] {
@@ -1273,7 +1273,7 @@ enum TaskTimelinePresentation {
             case .implementation, .verification, nil: .implementer
             }
         guard let line = task.task_lines.first(where: { $0.role == role }) else { return [] }
-        return [line.agent] + [line.provenance?.value1.reading?.value1.pool].compactMap { $0.map { "pool \($0)" } }
+        return [line.agent] + [line.provenance?.value1.pool].compactMap { $0.map { "pool \($0)" } }
     }
 
     /// The header's one status line, which reads the same words the task's
@@ -1881,7 +1881,7 @@ enum TaskTimelinePresentation {
         if let superseded = line.superseded_agent {
             return "\(subject) changed\(actor) · \(superseded) → \(agent)"
         }
-        let fallback = line.provenance?.value1.passed_over.map { " instead of \($0)" } ?? ""
+        let fallback = line.provenance?.value1.passed_over.map { " instead of \($0.value1.agent)" } ?? ""
         return "\(subject) set\(actor) · \(agent)\(fallback)"
     }
 }
