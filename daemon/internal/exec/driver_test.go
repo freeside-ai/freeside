@@ -1,7 +1,9 @@
 package exec_test
 
 import (
+	"encoding/json"
 	"errors"
+	"fmt"
 	"reflect"
 	"strings"
 	"testing"
@@ -227,6 +229,133 @@ func TestStageResultQuotaRefusal(t *testing.T) {
 			}.Validate()
 			if (tc.want == nil && err != nil) || (tc.want != nil && !errors.Is(err, tc.want)) {
 				t.Fatalf("Validate() = %v, want %v", err, tc.want)
+			}
+		})
+	}
+}
+
+func TestStageResultClaudeUsage(t *testing.T) {
+	t.Parallel()
+	at := time.Date(2026, 11, 4, 9, 0, 0, 0, time.UTC)
+	resets := time.Date(2026, 11, 6, 3, 0, 0, 0, time.UTC)
+	local := resets.In(time.FixedZone("PST", -8*3600))
+	window := exec.ClaudeUsageWindow{Window: "seven_day", UsedPercent: 57, ResetsAt: &resets}
+	event := exec.ClaudeRateLimitEvent{Window: "seven_day", Status: "allowed", ResetsAt: &resets}
+	valid := exec.ClaudeUsageCapture{ObservedAt: at, Windows: []exec.ClaudeUsageWindow{window}}
+	for _, tc := range []struct {
+		name    string
+		capture func(exec.ClaudeUsageCapture) exec.ClaudeUsageCapture
+		valid   bool
+	}{
+		{"one window", func(c exec.ClaudeUsageCapture) exec.ClaudeUsageCapture { return c }, true},
+		{"event only", func(c exec.ClaudeUsageCapture) exec.ClaudeUsageCapture {
+			c.Windows, c.Events = nil, []exec.ClaudeRateLimitEvent{event}
+			return c
+		}, true},
+		{"no reset", func(c exec.ClaudeUsageCapture) exec.ClaudeUsageCapture {
+			c.Windows = []exec.ClaudeUsageWindow{{Window: "seven_day", UsedPercent: 100}}
+			return c
+		}, true},
+		{"nothing captured", func(c exec.ClaudeUsageCapture) exec.ClaudeUsageCapture {
+			c.Windows = nil
+			return c
+		}, false},
+		{"zero observed_at", func(c exec.ClaudeUsageCapture) exec.ClaudeUsageCapture {
+			c.ObservedAt = time.Time{}
+			return c
+		}, false},
+		{"local observed_at", func(c exec.ClaudeUsageCapture) exec.ClaudeUsageCapture {
+			c.ObservedAt = local
+			return c
+		}, false},
+		{"share above 100", func(c exec.ClaudeUsageCapture) exec.ClaudeUsageCapture {
+			c.Windows = []exec.ClaudeUsageWindow{{Window: "seven_day", UsedPercent: 101}}
+			return c
+		}, false},
+		{"negative share", func(c exec.ClaudeUsageCapture) exec.ClaudeUsageCapture {
+			c.Windows = []exec.ClaudeUsageWindow{{Window: "seven_day", UsedPercent: -1}}
+			return c
+		}, false},
+		{"uppercase window", func(c exec.ClaudeUsageCapture) exec.ClaudeUsageCapture {
+			c.Windows = []exec.ClaudeUsageWindow{{Window: "Seven_day"}}
+			return c
+		}, false},
+		{"unsorted windows", func(c exec.ClaudeUsageCapture) exec.ClaudeUsageCapture {
+			c.Windows = []exec.ClaudeUsageWindow{{Window: "seven_day"}, {Window: "five_hour"}}
+			return c
+		}, false},
+		{"duplicate window", func(c exec.ClaudeUsageCapture) exec.ClaudeUsageCapture {
+			c.Windows = []exec.ClaudeUsageWindow{{Window: "seven_day"}, {Window: "seven_day"}}
+			return c
+		}, false},
+		{"local window reset", func(c exec.ClaudeUsageCapture) exec.ClaudeUsageCapture {
+			c.Windows = []exec.ClaudeUsageWindow{{Window: "seven_day", ResetsAt: &local}}
+			return c
+		}, false},
+		{"empty event status", func(c exec.ClaudeUsageCapture) exec.ClaudeUsageCapture {
+			c.Events = []exec.ClaudeRateLimitEvent{{Window: "seven_day"}}
+			return c
+		}, false},
+		{"event status with a space", func(c exec.ClaudeUsageCapture) exec.ClaudeUsageCapture {
+			c.Events = []exec.ClaudeRateLimitEvent{{Window: "seven_day", Status: "allowed warning"}}
+			return c
+		}, false},
+		{"local event reset", func(c exec.ClaudeUsageCapture) exec.ClaudeUsageCapture {
+			c.Events = []exec.ClaudeRateLimitEvent{{Window: "seven_day", Status: "allowed", ResetsAt: &local}}
+			return c
+		}, false},
+		// A reset JSON cannot encode would make the result unwritable.
+		{"last encodable reset", func(c exec.ClaudeUsageCapture) exec.ClaudeUsageCapture {
+			c.Windows = []exec.ClaudeUsageWindow{{Window: "seven_day", ResetsAt: new(time.Date(9999, 12, 31, 23, 59, 59, 0, time.UTC))}}
+			return c
+		}, true},
+		{"window reset in year 10000", func(c exec.ClaudeUsageCapture) exec.ClaudeUsageCapture {
+			c.Windows = []exec.ClaudeUsageWindow{{Window: "seven_day", ResetsAt: new(time.Date(10000, 1, 1, 0, 0, 0, 0, time.UTC))}}
+			return c
+		}, false},
+		{"event reset in year -1", func(c exec.ClaudeUsageCapture) exec.ClaudeUsageCapture {
+			c.Events = []exec.ClaudeRateLimitEvent{{Window: "seven_day", Status: "allowed", ResetsAt: new(time.Date(-1, 12, 31, 0, 0, 0, 0, time.UTC))}}
+			return c
+		}, false},
+		{"unsorted events", func(c exec.ClaudeUsageCapture) exec.ClaudeUsageCapture {
+			c.Events = []exec.ClaudeRateLimitEvent{{Window: "seven_day", Status: "allowed"}, {Window: "five_hour", Status: "allowed"}}
+			return c
+		}, false},
+		{"duplicate event", func(c exec.ClaudeUsageCapture) exec.ClaudeUsageCapture {
+			c.Events = []exec.ClaudeRateLimitEvent{event, event}
+			return c
+		}, false},
+		{"sixteen windows and events", func(c exec.ClaudeUsageCapture) exec.ClaudeUsageCapture {
+			c.Windows, c.Events = nil, nil
+			for i := range 16 {
+				name := fmt.Sprintf("w%02d", i)
+				c.Windows = append(c.Windows, exec.ClaudeUsageWindow{Window: name})
+				c.Events = append(c.Events, exec.ClaudeRateLimitEvent{Window: name, Status: "allowed"})
+			}
+			return c
+		}, true},
+		{"seventeen events", func(c exec.ClaudeUsageCapture) exec.ClaudeUsageCapture {
+			c.Events = nil
+			for i := range 17 {
+				c.Events = append(c.Events, exec.ClaudeRateLimitEvent{Window: fmt.Sprintf("w%02d", i), Status: "allowed"})
+			}
+			return c
+		}, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			capture := tc.capture(valid)
+			err := exec.StageResult{
+				InvocationID: "inv-1", Status: exec.StatusCompleted, ClaudeUsage: &capture,
+			}.Validate()
+			if tc.valid && err != nil {
+				t.Fatalf("Validate() = %v, want nil", err)
+			}
+			if _, marshalErr := json.Marshal(capture); tc.valid && marshalErr != nil {
+				t.Fatalf("a valid capture does not marshal: %v", marshalErr)
+			}
+			if !tc.valid && !errors.Is(err, exec.ErrInvalidClaudeUsage) {
+				t.Fatalf("Validate() = %v, want ErrInvalidClaudeUsage", err)
 			}
 		})
 	}

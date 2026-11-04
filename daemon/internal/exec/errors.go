@@ -29,6 +29,8 @@ var (
 	// ErrQuotaRefusalWithoutQuota: a result names a refused quota window
 	// beside a cause other than quota.
 	ErrQuotaRefusalWithoutQuota = errors.New("result carries a quota refusal but its cause is not quota")
+	// ErrInvalidClaudeUsage: a result's Claude usage capture is malformed.
+	ErrInvalidClaudeUsage = errors.New("invalid Claude usage capture")
 	// ErrInputSourceMissing: no content-addressed store was supplied.
 	ErrInputSourceMissing = errors.New("stage input source is missing")
 	// ErrInputBodyMissing: a source reported success without returning a body.

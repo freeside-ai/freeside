@@ -222,6 +222,11 @@ type StageResult struct {
 	QuotaRefusal *domain.QuotaRefusal `json:"quota_refusal,omitempty"`
 	// Usage carries numbers-only route telemetry. Nil means not observed.
 	Usage []UsageMeasurement `json:"usage"`
+	// ClaudeUsage is what the Claude writer's own turn told the pinned CLI
+	// about the token's provider windows, read from the agent-side transcript.
+	// Nil means nothing was captured. Untrusted input: validated where it is
+	// parsed, and it grants nothing.
+	ClaudeUsage *ClaudeUsageCapture `json:"claude_usage,omitempty"`
 }
 
 // Validate reports whether the result is well-formed: a result must be
@@ -263,6 +268,11 @@ func (r StageResult) Validate() error {
 	for i, measurement := range r.Usage {
 		if err := measurement.Validate(); err != nil {
 			return fmt.Errorf("stage result usage[%d]: %w", i, err)
+		}
+	}
+	if r.ClaudeUsage != nil {
+		if err := r.ClaudeUsage.Validate(); err != nil {
+			return fmt.Errorf("stage result: %w", err)
 		}
 	}
 	return nil
