@@ -720,10 +720,11 @@
             }
 
             // The New Task composer (#1330): the project picker trigger, the
-            // source field, and the optional name, on Mac and phone. Empty
-            // and filled are each drawn by day and by dusk, so the fill rule
-            // shows in both appearances: Submit takes the disabled recipe on
-            // the empty form and its fill on the valid one.
+            // source field, the optional name, and the agent choices (#1602),
+            // on Mac and phone. Empty and filled are each drawn by day and by
+            // dusk, so the fill rule shows in both appearances: Submit takes
+            // the disabled recipe on the empty form and its fill on the valid
+            // one.
             // ImageRenderer draws the static stand-ins, not the live
             // TextEditor or Picker; the toolbar action and open sheet are in
             // the PR's real-app screenshots.
@@ -731,9 +732,21 @@
             // The composer only opens on a settled sync, so the goldens depict
             // that state: a fresh coordinator keeps the filled surface's Submit
             // enabled (the action is gated on `.fresh`).
-            let newTaskCoordinator = SyncCoordinator(client: client, cache: InMemoryCacheStore())
+            // A synced coordinator carries the mock's agent catalog and
+            // routing policy, which the agent choices list and label. Its
+            // own server keeps the sync round off the one the other
+            // surfaces share.
+            let newTaskCoordinator = SyncCoordinator(
+                client: APIClientFactory.mock(server: MockServer()), cache: InMemoryCacheStore())
+            await newTaskCoordinator.refresh()
             newTaskCoordinator.store.freshness = .fresh
             let newTaskModel = TaskSubmissionModel(coordinator: newTaskCoordinator)
+            let noTreeCoordinator = SyncCoordinator(
+                client: APIClientFactory.mock(server: MockServer(routingPolicy: nil, agentCatalog: nil)),
+                cache: InMemoryCacheStore())
+            await noTreeCoordinator.refresh()
+            noTreeCoordinator.store.freshness = .fresh
+            let noTreeModel = TaskSubmissionModel(coordinator: noTreeCoordinator)
             let filledSource =
                 "Add a /health endpoint returning the daemon version and uptime, with a test."
             for (name, width, scheme, draftSource, draftName) in [
@@ -759,6 +772,41 @@
                                 rendersInteractiveControls: false,
                                 initialSource: draftSource,
                                 initialName: draftName))))
+            }
+            // The agent choices: a writer and reviewer chosen, each with
+            // its facts; a daemon with no agent tree; and a writer the
+            // catalog no longer carries, which blocks Submit.
+            for (name, width, scheme, model, writer, reviewer) in [
+                (
+                    "new-task-sheet-agents", CGFloat(380), ColorScheme.light, newTaskModel, "claude-secondary",
+                    "claude-primary"
+                ),
+                (
+                    "new-task-sheet-agents-dark", CGFloat(380), ColorScheme.dark, newTaskModel, "claude-secondary",
+                    "claude-primary"
+                ),
+                (
+                    "new-task-sheet-phone-agents", CGFloat(390), ColorScheme.light, newTaskModel, "claude-secondary",
+                    "claude-primary"
+                ),
+                (
+                    "new-task-sheet-phone-agents-dark", CGFloat(390), ColorScheme.dark, newTaskModel,
+                    "claude-secondary", "claude-primary"
+                ),
+                ("new-task-sheet-no-catalog", CGFloat(380), ColorScheme.light, noTreeModel, nil, nil),
+                ("new-task-sheet-no-catalog-dark", CGFloat(380), ColorScheme.dark, noTreeModel, nil, nil),
+                ("new-task-sheet-phone-no-catalog", CGFloat(390), ColorScheme.light, noTreeModel, nil, nil),
+                ("new-task-sheet-phone-no-catalog-dark", CGFloat(390), ColorScheme.dark, noTreeModel, nil, nil),
+                ("new-task-sheet-agent-missing", CGFloat(380), ColorScheme.light, newTaskModel, "claude-retired", nil),
+            ] as [(String, CGFloat, ColorScheme, TaskSubmissionModel, String?, String?)] {
+                surfaces.append(
+                    Surface(
+                        name: name, width: width, colorScheme: scheme,
+                        view: AnyView(
+                            NewTaskSheet(
+                                projects: newTaskProjects, model: model, onSubmitted: { _ in },
+                                rendersInteractiveControls: false, initialSource: filledSource,
+                                initialWriter: writer, initialReviewer: reviewer))))
             }
 
             let recoveryModel = try TaskSubmissionRecoveryScreenshots.model(client: client)
