@@ -1,3 +1,8 @@
+// This file reads and verifies an OCI image-layout archive from any source:
+// the index, manifest, and config it names, each layer's diff ID, and the
+// files the provenance check asks for. It reads a tar file on disk and does
+// not depend on how that file was exported.
+
 package projectimage
 
 import (

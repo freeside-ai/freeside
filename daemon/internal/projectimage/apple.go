@@ -1090,6 +1090,10 @@ func (a appleBackend) findRetainedRegistry(
 	return inspected.ID, token, true, nil
 }
 
+// readOCIEvidence is the only Apple-specific step of evidence reading: it
+// exports ref with `container image save` to a temporary archive and hands
+// that archive to the package function readOCIEvidence, which decodes and
+// verifies it without regard to which runtime produced it.
 func (a appleBackend) readOCIEvidence(
 	ctx context.Context,
 	ref string,
