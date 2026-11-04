@@ -482,7 +482,8 @@ All under `daemon/`:
   `internal/store/publication_authoring.go` (the evidence gate on
   authored prose).
 - **Import and handoff:** `internal/importer/`,
-  `internal/store/handoff_journal.go`.
+  `internal/store/handoff_journal.go`, `internal/exportscan/` (the export
+  credential scan that refuses a handoff).
 - **Verification verdicts, recipe approval, and trusted export:**
   `internal/verify/`, `internal/export/`, `cmd/freeside-export/`,
   `internal/store/entities.go`,
@@ -499,9 +500,10 @@ All under `daemon/`:
   `internal/store/effect_proposal.go`,
   `internal/store/image_policy_adoption.go`,
   `internal/signet/image_policy_adoption.go`,
-  `internal/engine/image_upkeep_adoption.go`, and
+  `internal/engine/image_upkeep_adoption.go`,
   `internal/projectimage/rebuild_gate.go` (repository manifests gate image
-  rebuilds).
+  rebuilds), and `internal/projectimage/preparation_gate.go` (re-gates a
+  decoded preparation command before it reaches the root launch argv).
 - **Client authority:** `internal/signet/device.go` (the paired-device
   bearer check), `internal/signet/http.go` (where requests meet it),
   `internal/signet/pairing.go`, `internal/signet/secret.go`,
