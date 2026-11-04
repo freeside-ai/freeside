@@ -21,8 +21,14 @@ import (
 	"github.com/freeside-ai/freeside/daemon/internal/strictjson"
 )
 
-// The statements below are deliberately spelled out per entity, as constants:
-// no SQL is ever assembled at runtime. Two write shapes, chosen by the domain
+// The statements below are deliberately spelled out per entity, as constants.
+// The store builds SQL from runtime values in two places. restore.go's generic
+// table copy quotes table names read from sqlite_master and checked by
+// safeTableName, because SQLite can't bind an identifier, and it drops guard
+// triggers by their constant names. store.go's openWritableDB and
+// openReadOnlyDB format the configured busy timeout as an integer into the
+// busy_timeout pragma the driver runs on each connection.
+// Two write shapes, chosen by the domain
 // contract: current-state aggregates (Run, Conversation, AttentionItem,
 // AttentionDelivery) upsert, keeping the extracted key columns in sync with
 // the body, incrementing entity_version, and stamping the enclosing
