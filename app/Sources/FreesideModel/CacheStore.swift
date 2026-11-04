@@ -42,6 +42,10 @@ public struct CachedState: Codable, Equatable, Sendable {
     /// kept like a pending Stop so its retry survives a relaunch.
     public var pendingRoutingPolicyChange: PendingRoutingPolicyChange?
     public var routingDaemonID: String?
+    /// The unresolved usage command, and the daemon it was sent to, kept
+    /// the same way. Additive: a cache without it loads none.
+    public var pendingUsageCommand: PendingUsageCommand?
+    public var usageDaemonID: String?
     public var pendingTaskSubmissions: [String: Components.Schemas.ClientCommand]?
     public var submissionDaemonID: String?
     public var cursors: SyncCursors?
@@ -104,6 +108,8 @@ public struct CachedState: Codable, Equatable, Sendable {
         stopDaemonID: String? = nil,
         pendingRoutingPolicyChange: PendingRoutingPolicyChange? = nil,
         routingDaemonID: String? = nil,
+        pendingUsageCommand: PendingUsageCommand? = nil,
+        usageDaemonID: String? = nil,
         comprehensionQueue: [InboxStore.QueuedComprehensionEvent]? = nil,
         comprehensionSequence: Int? = nil,
         registeredCapabilityFingerprint: String? = nil,
@@ -128,6 +134,8 @@ public struct CachedState: Codable, Equatable, Sendable {
         self.stopDaemonID = stopDaemonID
         self.pendingRoutingPolicyChange = pendingRoutingPolicyChange
         self.routingDaemonID = routingDaemonID
+        self.pendingUsageCommand = pendingUsageCommand
+        self.usageDaemonID = usageDaemonID
         self.comprehensionQueue = comprehensionQueue
         self.comprehensionSequence = comprehensionSequence
         self.registeredCapabilityFingerprint = registeredCapabilityFingerprint
@@ -178,6 +186,9 @@ public struct CachedState: Codable, Equatable, Sendable {
         pendingRoutingPolicyChange = try? container.decodeIfPresent(
             PendingRoutingPolicyChange.self, forKey: .pendingRoutingPolicyChange)
         routingDaemonID = try? container.decodeIfPresent(String.self, forKey: .routingDaemonID)
+        pendingUsageCommand = try? container.decodeIfPresent(
+            PendingUsageCommand.self, forKey: .pendingUsageCommand)
+        usageDaemonID = try? container.decodeIfPresent(String.self, forKey: .usageDaemonID)
         // The telemetry queue and its state degrade independently too: an
         // undecodable section loads absent, costing at most queued events.
         comprehensionQueue = try? container.decodeIfPresent(

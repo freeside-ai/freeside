@@ -49,6 +49,14 @@ public final class SyncCoordinator {
     /// in the sheet's model, so a sheet reopened mid-send sees both.
     package internal(set) var routingPolicySending = false
     package internal(set) var routingPolicyFailure: RoutingPolicyFailure?
+    /// The usage command (a refresh or a collector reassignment) sent and not
+    /// yet settled by sync; one at a time, so a reopened sheet finds it.
+    public private(set) var pendingUsageCommand: PendingUsageCommand?
+    /// The receipt of the last usage command settled this session, for the
+    /// view's notice.
+    public private(set) var settledUsageCommand: Components.Schemas.CommandResult?
+    package internal(set) var usageCommandSending = false
+    package internal(set) var usageCommandFailure: String?
     private let submissionDaemonID: String
     public let promptHistory: TaskPromptHistory
     public private(set) var cursors: SyncCursors?
@@ -213,6 +221,11 @@ public final class SyncCoordinator {
                 entry.isValid(deviceID: device.deviceID)
             {
                 pendingRoutingPolicyChange = entry
+            }
+            if cached.usageDaemonID == submissionDaemonID, let entry = cached.pendingUsageCommand,
+                entry.isValid(deviceID: device.deviceID)
+            {
+                pendingUsageCommand = entry
             }
             if cached.submissionDaemonID == submissionDaemonID {
                 pendingTaskSubmissions = (cached.pendingTaskSubmissions ?? [:]).filter { id, command in
@@ -424,6 +437,7 @@ public final class SyncCoordinator {
                         lastUpdatedAt = .now
                         settleTaskStops()
                         settleRoutingPolicyChange()
+                        settleUsageCommand()
                     }
                 }
             case .badRequest:
@@ -943,6 +957,7 @@ public final class SyncCoordinator {
         lastUpdatedAt = .now
         settleTaskStops()
         settleRoutingPolicyChange()
+        settleUsageCommand()
         persist()
         return true
     }
@@ -1057,7 +1072,7 @@ public final class SyncCoordinator {
         // a registered contract survives a relaunch with no cursors.
         guard
             cursors != nil || !pending.isEmpty || !pendingTaskSubmissions.isEmpty || !pendingTaskStops.isEmpty
-                || pendingRoutingPolicyChange != nil
+                || pendingRoutingPolicyChange != nil || pendingUsageCommand != nil
                 || !comprehensionQueue.isEmpty
                 || fingerprint != nil
         else {
@@ -1090,6 +1105,8 @@ public final class SyncCoordinator {
                     stopDaemonID: submissionDaemonID,
                     pendingRoutingPolicyChange: pendingRoutingPolicyChange,
                     routingDaemonID: submissionDaemonID,
+                    pendingUsageCommand: pendingUsageCommand,
+                    usageDaemonID: submissionDaemonID,
                     comprehensionQueue: comprehensionQueue,
                     comprehensionSequence: store.comprehensionSequence,
                     registeredCapabilityFingerprint: fingerprint,
@@ -1198,5 +1215,54 @@ public final class SyncCoordinator {
             finishRoutingPolicyChange()
             if pendingRoutingPolicyChange == nil { confirmedRoutingPolicyChange = record }
         }
+    }
+
+    /// Persist the exact command before sending it; a failed write rolls
+    /// back. Holds one usage command at a time: a different command is
+    /// refused while another is unresolved.
+    func retainUsageCommand(_ entry: PendingUsageCommand) -> Bool {
+        guard entry.isValid(deviceID: store.device.deviceID),
+            pendingUsageCommand == nil || pendingUsageCommand?.command == entry.command
+        else { return false }
+        let previous = pendingUsageCommand
+        pendingUsageCommand = entry
+        guard persist() else {
+            pendingUsageCommand = previous
+            return false
+        }
+        return true
+    }
+
+    func finishUsageCommand() {
+        let previous = pendingUsageCommand
+        pendingUsageCommand = nil
+        if !persist() { pendingUsageCommand = previous }
+    }
+
+    func clearSettledUsageCommand() { settledUsageCommand = nil }
+
+    /// A refresh settles once the daemon accepted it: its readings may never
+    /// come (a backoff or a failed read), and whenever they do they arrive
+    /// through sync. A reassignment settles once fresh sync's full snapshot
+    /// is at or past the receipt's revision, the one the daemon recorded the
+    /// new collector at, or recorded nothing at when that enrollment already
+    /// collected; a later reassignment from anywhere settles it too. A new
+    /// epoch settles either, answered or not, as it settles a routing
+    /// change: the restored daemon's record is what sync now shows.
+    func settleUsageCommand() {
+        guard let entry = pendingUsageCommand else { return }
+        if let receipt = entry.receipt, case .refresh_usage = receipt.record {
+            finishUsageCommand()
+            if pendingUsageCommand == nil { settledUsageCommand = receipt }
+            return
+        }
+        guard store.freshness == .fresh, let cursors else { return }
+        if cursors.syncEpoch != entry.syncEpoch {
+            finishUsageCommand()
+            return
+        }
+        guard let receipt = entry.receipt, cursors.lastFullSnapshotRevision >= receipt.revision else { return }
+        finishUsageCommand()
+        if pendingUsageCommand == nil { settledUsageCommand = receipt }
     }
 }
