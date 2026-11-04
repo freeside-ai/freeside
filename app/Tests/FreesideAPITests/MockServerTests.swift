@@ -1983,6 +1983,89 @@ extension MockServerTests {
         }
         #expect(status == 422)
     }
+
+    private func submitTaskCommand(
+        _ commandID: String, lines: [Components.Schemas.TaskLineInput]?
+    ) -> Components.Schemas.ClientCommand {
+        .init(
+            command_id: commandID, device_id: "device-1",
+            payload: .submit_task(
+                .init(kind: .submit_task, project_id: "project-1", source: "Add retries.", task_lines: lines)))
+    }
+
+    /// Whether the command was refused as a client error. The daemon answers
+    /// 400 for these refusals and the mock 422, so the new tests pin neither.
+    private func isRefused(_ output: Operations.submitCommand.Output) -> Bool {
+        guard case .undocumented(let status, _) = output else { return false }
+        return (400..<500).contains(status)
+    }
+
+    @Test func submitTaskRecordsItsLinesOnTheTask() async throws {
+        let client = APIClientFactory.mock(server: MockServer())
+        let lines: [Components.Schemas.TaskLineInput] = [
+            .init(role: .reviewer, agent: "codex-primary"), .init(role: .implementer, agent: "claude-secondary"),
+        ]
+        let result = try await client.submitCommand(body: .json(submitTaskCommand("cmd-lines", lines: lines)))
+            .ok.body.json
+        let record = result.record.asSubmitTask
+        // The record and the task carry the lines in TaskLineRole order, as
+        // the daemon canonicalizes them.
+        #expect(record.task_lines?.map(\.role) == [.implementer, .reviewer])
+        let bootstrap = try await client.getSyncBootstrap().ok.body.json
+        let task = try #require(bootstrap.tasks.first { $0.task.id == record.task_id }?.task)
+        #expect(task.task_lines.map(\.agent) == ["claude-secondary", "codex-primary"])
+        for line in task.task_lines {
+            #expect(line.source == .submit_task && line.set_by == "cmd-lines" && line.version == 1)
+            #expect(line.predecessor_id == nil && line.provenance == nil)
+        }
+
+        // A later change supersedes the submitted version.
+        let change = Components.Schemas.ClientCommand(
+            command_id: "cmd-change", device_id: "device-1",
+            payload: .change_task_line(
+                .init(kind: .change_task_line, task_id: record.task_id, role: .implementer, agent: "claude-primary")))
+        let changed = try await client.submitCommand(body: .json(change)).ok.body.json
+        guard case .change_task_line(let changeRecord) = changed.record, let line = changeRecord.line?.value1 else {
+            Issue.record("expected a change_task_line record")
+            return
+        }
+        #expect(line.version == 2)
+        #expect(line.predecessor_id?.value1 == task.task_lines.first?.id)
+    }
+
+    @Test func submitTaskReplaysReorderedLinesAndConflictsOnChangedOnes() async throws {
+        let client = APIClientFactory.mock(server: MockServer())
+        let lines: [Components.Schemas.TaskLineInput] = [
+            .init(role: .implementer, agent: "claude-secondary"), .init(role: .reviewer, agent: "codex-primary"),
+        ]
+        let first = try await client.submitCommand(body: .json(submitTaskCommand("cmd-1", lines: lines)))
+            .ok.body.json
+        let replay = try await client.submitCommand(
+            body: .json(submitTaskCommand("cmd-1", lines: lines.reversed()))
+        ).ok.body.json
+        #expect(replay == first)
+
+        let changed: [Components.Schemas.TaskLineInput] = [
+            .init(role: .implementer, agent: "claude-primary"), .init(role: .reviewer, agent: "codex-primary"),
+        ]
+        #expect(isRefused(try await client.submitCommand(body: .json(submitTaskCommand("cmd-1", lines: changed)))))
+        #expect(isRefused(try await client.submitCommand(body: .json(submitTaskCommand("cmd-1", lines: nil)))))
+    }
+
+    @Test func submitTaskRejectsAnEmptyRepeatedOrMisnamedLineList() async throws {
+        let client = APIClientFactory.mock(server: MockServer())
+        #expect(isRefused(try await client.submitCommand(body: .json(submitTaskCommand("cmd-empty", lines: [])))))
+        let repeated: [Components.Schemas.TaskLineInput] = [
+            .init(role: .reviewer, agent: "codex-primary"), .init(role: .reviewer, agent: "claude-primary"),
+        ]
+        #expect(
+            isRefused(try await client.submitCommand(body: .json(submitTaskCommand("cmd-repeat", lines: repeated)))))
+        let misnamed: [Components.Schemas.TaskLineInput] = [.init(role: .reviewer, agent: "Codex Primary")]
+        #expect(
+            isRefused(try await client.submitCommand(body: .json(submitTaskCommand("cmd-misnamed", lines: misnamed)))))
+        let bootstrap = try await client.getSyncBootstrap().ok.body.json
+        #expect(!bootstrap.tasks.contains { $0.task.id.hasPrefix("task-submitted-") })
+    }
 }
 
 extension Components.Schemas.CommandResult.recordPayload {

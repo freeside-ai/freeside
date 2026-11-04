@@ -244,6 +244,60 @@ import Testing
         #expect(coordinator.store.freshness == .unauthenticated)
     }
 
+    @Test func chosenAgentsReachTheTaskAsSubmitLines() async throws {
+        let coordinator = coordinator()
+        let model = TaskSubmissionModel(coordinator: coordinator)
+        let lines = AgentChoiceDisplay.taskLines(writer: "claude-secondary", reviewer: "codex-primary")
+        let taskID = try #require(
+            await model.submit(projectID: "project-1", source: "Add a health endpoint.", taskLines: lines))
+        let task = try #require(coordinator.tasks.first { $0.task.id == taskID }?.task)
+        #expect(task.task_lines.map(\.role) == [.specifier, .implementer, .remediator, .reviewer])
+        #expect(
+            task.task_lines.map(\.agent) == [
+                "claude-secondary", "claude-secondary", "claude-secondary", "codex-primary",
+            ])
+        #expect(task.task_lines.allSatisfy { $0.source == .submit_task && $0.version == 1 })
+    }
+
+    @Test func noChoiceSendsNoTaskLinesField() async throws {
+        let server = MockServer()
+        let coordinator = coordinator(server: server)
+        let model = TaskSubmissionModel(coordinator: coordinator)
+        // An unanswered send keeps the saved command inspectable.
+        await server.setBeforeRespond { operationID in
+            if operationID == "submitCommand" { throw MockServer.ForcedStatus(503) }
+        }
+        await model.submit(projectID: "project-1", source: "Add a health endpoint.")
+        let command = try #require(model.pendingSubmissions.first)
+        // The daemon rejects a present but empty list, so no choice omits the key.
+        let json = try #require(String(data: JSONEncoder().encode(command), encoding: .utf8))
+        #expect(!json.contains("task_lines"))
+    }
+
+    @Test func retryResendsTheSavedLinesUnchanged() async throws {
+        let server = MockServer()
+        let coordinator = coordinator(server: server)
+        let model = TaskSubmissionModel(coordinator: coordinator)
+        let lost = InjectedFailures(times: 1)
+        await server.setAfterRespond { operationID in
+            if operationID == "submitCommand" { try await lost.consume() }
+        }
+        let lines = AgentChoiceDisplay.taskLines(writer: nil, reviewer: "claude-primary")
+        #expect(
+            await model.submit(projectID: "project-1", source: "Add a health endpoint.", taskLines: lines) == nil)
+        let saved = try #require(model.pendingSubmissions.first)
+        guard case .submit_task(let payload) = saved.payload else {
+            Issue.record("expected a submit_task command")
+            return
+        }
+        #expect(payload.task_lines == lines)
+
+        let taskID = try #require(await model.retry())
+        let task = try #require(coordinator.tasks.first { $0.task.id == taskID }?.task)
+        #expect(task.task_lines.map(\.agent) == ["claude-primary"])
+        #expect(task.task_lines.first?.set_by == saved.command_id)
+    }
+
     @Test func canComposeUnlessSyncIsFailing() {
         // `.unvalidated` stays open: submit validates with its own round.
         #expect(TaskSubmissionModel.canCompose(freshness: .fresh))

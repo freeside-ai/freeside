@@ -4,9 +4,9 @@ import SwiftUI
 /// The New Task composer (plan §5.11): an operator starts work from the app
 /// instead of the daemon host's CLI. Shaped like the discuss composer
 /// (`MessageComposerSheet`): an inline serif title over a project picker, a
-/// multi-line source field, and an optional name, each under its keyword
-/// label, and a Cancel/Submit footer that Return and Escape drive, with no
-/// navigation bar. The draft lives in this sheet's own state and no failure
+/// multi-line source field, an optional name, and optional writer and
+/// reviewer agents, each under its keyword label, and a Cancel/Submit
+/// footer that Return and Escape drive, with no navigation bar. The draft lives in this sheet's own state and no failure
 /// clears it: a lost response keeps the text and points to separate recovery,
 /// a daemon rejection keeps the text and shows the reason inline. The sheet
 /// expects a sentence or a paragraph, not a document; the follow-up
@@ -36,6 +36,10 @@ struct NewTaskSheet: View {
     @State private var source: String
     @State private var promptBrowse = TaskPromptBrowseState()
     @State private var name: String
+    /// The chosen agents; nil leaves the roles to the daemon. A choice a
+    /// newer catalog drops stays chosen and blocks Submit until changed.
+    @State private var writer: String?
+    @State private var reviewer: String?
     @State private var isSubmitting = false
     /// The in-flight submit, held so dismissing the sheet cancels it
     /// and suppresses the completion's navigation (the submission itself may
@@ -49,7 +53,9 @@ struct NewTaskSheet: View {
         rendersInteractiveControls: Bool = true,
         initialProjectID: String? = nil,
         initialSource: String = "",
-        initialName: String = ""
+        initialName: String = "",
+        initialWriter: String? = nil,
+        initialReviewer: String? = nil
     ) {
         self.projects = projects
         _model = State(initialValue: model)
@@ -58,6 +64,8 @@ struct NewTaskSheet: View {
         _projectID = State(initialValue: initialProjectID ?? projects.first ?? "")
         _source = State(initialValue: initialSource)
         _name = State(initialValue: initialName)
+        _writer = State(initialValue: initialWriter)
+        _reviewer = State(initialValue: initialReviewer)
     }
 
     static let sourcePlaceholder = "Describe the task…"
@@ -108,6 +116,11 @@ struct NewTaskSheet: View {
         !trimmedSource.isEmpty && !projectID.isEmpty && projects.contains(projectID)
             && !isSubmitting && !isLost
             && TaskSubmissionModel.canCompose(freshness: model.freshness)
+            && missingAgents.isEmpty
+    }
+
+    private var missingAgents: [String] {
+        AgentChoiceDisplay.missingAgents(writer: writer, reviewer: reviewer, catalog: model.agentCatalog)
     }
 
     var body: some View {
@@ -155,6 +168,7 @@ struct NewTaskSheet: View {
                     labeled("Project") { projectPicker }
                     labeled("Work to do") { sourceField }
                     labeled("Name (optional)") { nameField }
+                    labeled("Agents (optional)") { agentChoices }
                 }
                 .disabled(isLost || isSubmitting)
                 status
@@ -286,6 +300,89 @@ struct NewTaskSheet: View {
         }
     }
 
+    static let noTreeText = "The daemon has no agent tree, so it picks every agent."
+
+    /// The writer and reviewer choices. With no catalog there is nothing to
+    /// offer, unless a choice made against an earlier catalog is still set:
+    /// its trigger stays so the operator can see and clear it.
+    @ViewBuilder private var agentChoices: some View {
+        let catalog = model.agentCatalog
+        VStack(alignment: .leading, spacing: 10) {
+            if catalog != nil || writer != nil || reviewer != nil {
+                agentChoice(
+                    "Writer · specifies, implements, and remediates", accessibility: "Writer agent",
+                    roles: AgentChoiceDisplay.writerRoles, selection: $writer)
+                agentChoice(
+                    "Reviewer", accessibility: "Reviewer agent", roles: [.reviewer], selection: $reviewer)
+            }
+            if catalog == nil {
+                Text(Self.noTreeText)
+                    .font(FreesideFont.cardBody)
+                    .foregroundStyle(Color.inkDim)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+        }
+    }
+
+    /// One choice: its caption, a menu trigger over the default and the
+    /// catalog's agents, and beneath it the chosen agent's facts or why the
+    /// choice blocks Submit.
+    private func agentChoice(
+        _ caption: String, accessibility: String, roles: [AgentChoiceDisplay.Role], selection: Binding<String?>
+    ) -> some View {
+        let catalog = model.agentCatalog
+        let agents = catalog?.agents ?? []
+        let defaultLabel = AgentChoiceDisplay.defaultLabel(
+            roles: roles, policy: model.routingPolicy, catalog: catalog)
+        let chosen = selection.wrappedValue
+        let title = chosen ?? defaultLabel
+        let entry = chosen.flatMap { name in agents.first { $0.name == name } }
+        return VStack(alignment: .leading, spacing: 4) {
+            Text(caption)
+                .font(FreesideFont.cardBody)
+                .foregroundStyle(Color.inkDim)
+                .accessibilityHidden(true)
+            // Only the trigger is Freeside's; the list stays system chrome,
+            // as the project picker's does.
+            if rendersInteractiveControls {
+                Menu {
+                    Picker(accessibility, selection: selection) {
+                        Text(defaultLabel).tag(String?.none)
+                        ForEach(agents, id: \.name) { agent in
+                            Text("\(agent.name) · \(AgentChoiceDisplay.facts(agent))").tag(Optional(agent.name))
+                        }
+                        // A stale choice keeps a matching tag, so the picker
+                        // shows it selected instead of no entry at all.
+                        if let chosen, entry == nil {
+                            Text("\(chosen) · not in the agent tree").tag(Optional(chosen)).disabled(true)
+                        }
+                    }
+                    .pickerStyle(.inline)
+                } label: {
+                    FreesideMenuTriggerLabel(title: title)
+                }
+                .menuStyle(.button)
+                .buttonStyle(.plain)
+                .menuIndicator(.hidden)
+                .accessibilityLabel(accessibility)
+                .accessibilityValue(title)
+                .accessibilityHint(caption)
+            } else {
+                FreesideMenuTriggerLabel(title: title)
+            }
+            if let entry {
+                Text(AgentChoiceDisplay.facts(entry))
+                    .font(FreesideFont.cardBody)
+                    .foregroundStyle(Color.inkDim)
+            } else if let chosen {
+                Text("\(chosen) isn't in the daemon's agent tree. Choose another agent or Default to submit.")
+                    .font(FreesideFont.cardBody)
+                    .foregroundStyle(Color.waxText)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+        }
+    }
+
     @ViewBuilder private var status: some View {
         switch model.state {
         case .lost:
@@ -307,7 +404,9 @@ struct NewTaskSheet: View {
         isSubmitting = true
         submitTask = Task {
             let draft = Self.submission(source: source, name: name)
-            let taskID = await model.submit(projectID: projectID, source: draft.source, name: draft.name)
+            let taskID = await model.submit(
+                projectID: projectID, source: draft.source, name: draft.name,
+                taskLines: AgentChoiceDisplay.taskLines(writer: writer, reviewer: reviewer))
             isSubmitting = false
             guard !Task.isCancelled else { return }
             if let taskID {

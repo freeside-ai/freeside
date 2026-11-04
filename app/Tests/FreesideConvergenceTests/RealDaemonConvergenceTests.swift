@@ -53,6 +53,47 @@ struct RealDaemonConvergenceTests {
         #expect(original.task.campaign_ids != next.task.campaign_ids)
     }
 
+    @Test func submittedAgentChoicesBecomeTheTasksLinesAndReplayInAnyOrder() async throws {
+        let device = try await ConvergenceHarness.pairDevice(displayName: "Agent choice")
+        let coordinator = ConvergenceHarness.coordinator(for: device)
+        let lines = try #require(AgentChoiceDisplay.taskLines(writer: "claude-secondary", reviewer: "codex-primary"))
+        let commandID = UUID().uuidString
+        func command(_ lines: [Components.Schemas.TaskLineInput]) -> Components.Schemas.ClientCommand {
+            .init(
+                command_id: commandID, device_id: device.identity.deviceID,
+                payload: .submit_task(
+                    .init(
+                        kind: .submit_task, project_id: "submission-convergence", source: "# Agent choice fixture",
+                        task_lines: lines)))
+        }
+        let created = try await device.client.submitCommand(body: .json(command(lines))).ok.body.json
+        guard case .submit_task(let record) = created.record else {
+            Issue.record("expected a submit_task record")
+            return
+        }
+        #expect(record.task_lines == lines)
+        await coordinator.refresh()
+        let task = try #require(coordinator.tasks.first { $0.task.id == record.task_id }?.task)
+        #expect(task.task_lines.map(\.role) == [.specifier, .implementer, .remediator, .reviewer])
+        #expect(task.task_lines.map(\.agent) == lines.map(\.agent))
+        for line in task.task_lines {
+            #expect(line.source == .submit_task && line.set_by == commandID && line.version == 1)
+            #expect(line.predecessor_id == nil && line.provenance == nil)
+        }
+
+        // The same lines in another order are the same request; changed
+        // lines under the command id are refused, as the mock does.
+        let replay = try await device.client.submitCommand(body: .json(command(lines.reversed()))).ok.body.json
+        #expect(replay.record == created.record)
+        let changed = lines.map { Components.Schemas.TaskLineInput(role: $0.role, agent: "claude-primary") }
+        guard case .undocumented(let status, _) = try await device.client.submitCommand(body: .json(command(changed)))
+        else {
+            Issue.record("expected changed lines to be refused")
+            return
+        }
+        #expect((400..<500).contains(status))
+    }
+
     @Test func stopTaskAcceptanceReplayAndStaleBinding() async throws {
         let device = try await ConvergenceHarness.pairDevice(displayName: "Task Stop")
         let submission = Components.Schemas.ClientCommand(

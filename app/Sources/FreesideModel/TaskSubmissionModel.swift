@@ -80,6 +80,12 @@ public final class TaskSubmissionModel {
     /// composes.
     public var freshness: InboxStore.Freshness { coordinator.store.freshness }
     public var promptHistory: TaskPromptHistory { coordinator.promptHistory }
+    /// The agents the form offers, observed so a newer catalog reaches an
+    /// open sheet; nil when the daemon holds no agent tree.
+    public var agentCatalog: Components.Schemas.AgentCatalog? { coordinator.agentCatalog }
+    /// The routing policy, which picks a role's agent when the operator
+    /// chooses none and the policy lists the role.
+    public var routingPolicy: Components.Schemas.RoutingPolicy? { coordinator.routingPolicy?.policy }
 
     public var pendingSubmissions: [Components.Schemas.ClientCommand] {
         coordinator.pendingTaskSubmissions.values.sorted { $0.command_id < $1.command_id }
@@ -96,11 +102,16 @@ public final class TaskSubmissionModel {
     }
 
     /// Submits `source` under `projectID` with an optional operator name and
-    /// returns the submitted task id, or nil on failure (state carries
-    /// the outcome). Each call mints a fresh command id; `retry` reuses the
-    /// last one. A submit_task command carries no decision envelope.
+    /// agent lines and returns the submitted task id, or nil on failure
+    /// (state carries the outcome). Each call mints a fresh command id;
+    /// `retry` reuses the last one, lines included. A submit_task command
+    /// carries no decision envelope. `taskLines` is nil for no choice: the
+    /// daemon rejects an empty list.
     @discardableResult
-    public func submit(projectID: String, source: String, name: String? = nil) async -> String? {
+    public func submit(
+        projectID: String, source: String, name: String? = nil,
+        taskLines: [Components.Schemas.TaskLineInput]? = nil
+    ) async -> String? {
         state = .submitting
         // The operator composed against the cache as it stood, and a stale
         // epoch would carry an out-of-date project selection. A round whose
@@ -122,7 +133,7 @@ public final class TaskSubmissionModel {
             command_id: UUID().uuidString,
             device_id: coordinator.store.device.deviceID,
             payload: .submit_task(
-                .init(kind: .submit_task, project_id: projectID, source: source, name: name))
+                .init(kind: .submit_task, project_id: projectID, source: source, name: name, task_lines: taskLines))
         )
         lastCommand = command
         return await send(command)

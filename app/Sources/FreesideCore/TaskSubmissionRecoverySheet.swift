@@ -80,7 +80,8 @@ struct TaskSubmissionRecoverySheet: View {
     }
 
     /// One saved request as a bordered item (R3): what it is and where it
-    /// runs, its optional name, the work it asks for, and its own Retry.
+    /// runs, its optional name and agents, the work it asks for, and its own
+    /// Retry.
     private func request(
         _ payload: Components.Schemas.SubmitTaskPayload, index: Int, commandID: String
     ) -> some View {
@@ -91,6 +92,12 @@ struct TaskSubmissionRecoverySheet: View {
                     .foregroundStyle(Color.ink)
                 if let name = payload.name, !name.isEmpty {
                     Text(name)
+                        .font(FreesideFont.cardBody)
+                        .foregroundStyle(Color.inkDim)
+                }
+                // Retry resends these lines unchanged, so show them.
+                if let agents = AgentChoiceDisplay.summary(payload.task_lines) {
+                    Text(agents)
                         .font(FreesideFont.cardBody)
                         .foregroundStyle(Color.inkDim)
                 }
