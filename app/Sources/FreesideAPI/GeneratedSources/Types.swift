@@ -17258,6 +17258,11 @@ public enum Components {
             }
             /// - Remark: Generated from `#/components/schemas/Run/hold_reason`.
             public var hold_reason: Components.Schemas.Run.hold_reasonPayload?
+            /// The full pool of a usage_pool_exhausted hold, the same pool the run's timeline RunHold.usage_pool names; present exactly beside that hold_reason and null beside every other reason and when the run has no hold. Lets a client count the usage_pool_exhausted runs on each pool from sync alone; a quota_window_exhausted hold's pool stays on the timeline's RunHold.quota_window.
+            ///
+            ///
+            /// - Remark: Generated from `#/components/schemas/Run/hold_usage_pool`.
+            public var hold_usage_pool: Swift.String?
             /// - Remark: Generated from `#/components/schemas/Run/lifecycle`.
             public var lifecycle: Components.Schemas.RunLifecycle
             /// The id of the run that now owns this run's work: a later implementation attempt that retried it, the implementation run taking over an approved specification run's work in the same campaign attempt, or the specification run of a revision campaign that revises this blocked run. Null when no successor exists.
@@ -17337,6 +17342,7 @@ public enum Components {
             ///   - latest_milestone:
             ///   - outcome:
             ///   - hold_reason:
+            ///   - hold_usage_pool: The full pool of a usage_pool_exhausted hold, the same pool the run's timeline RunHold.usage_pool names; present exactly beside that hold_reason and null beside every other reason and when the run has no hold. Lets a client count the usage_pool_exhausted runs on each pool from sync alone; a quota_window_exhausted hold's pool stays on the timeline's RunHold.quota_window.
             ///   - lifecycle:
             ///   - superseded_by: The id of the run that now owns this run's work: a later implementation attempt that retried it, the implementation run taking over an approved specification run's work in the same campaign attempt, or the specification run of a revision campaign that revises this blocked run. Null when no successor exists.
             ///   - completion: The work unit's completion facts once the outcome is completed; null otherwise.
@@ -17359,6 +17365,7 @@ public enum Components {
                 latest_milestone: Components.Schemas.Run.latest_milestonePayload? = nil,
                 outcome: Components.Schemas.RunOutcome,
                 hold_reason: Components.Schemas.Run.hold_reasonPayload? = nil,
+                hold_usage_pool: Swift.String? = nil,
                 lifecycle: Components.Schemas.RunLifecycle,
                 superseded_by: Swift.String? = nil,
                 completion: Components.Schemas.Run.completionPayload? = nil,
@@ -17381,6 +17388,7 @@ public enum Components {
                 self.latest_milestone = latest_milestone
                 self.outcome = outcome
                 self.hold_reason = hold_reason
+                self.hold_usage_pool = hold_usage_pool
                 self.lifecycle = lifecycle
                 self.superseded_by = superseded_by
                 self.completion = completion
@@ -17404,6 +17412,7 @@ public enum Components {
                 case latest_milestone
                 case outcome
                 case hold_reason
+                case hold_usage_pool
                 case lifecycle
                 case superseded_by
                 case completion

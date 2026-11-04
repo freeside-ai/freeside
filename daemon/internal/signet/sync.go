@@ -200,6 +200,11 @@ type Run struct {
 	LatestMilestone *domain.RunMilestoneKind `json:"latest_milestone"`
 	Outcome         domain.RunOutcome        `json:"outcome"`
 	HoldReason      *domain.RunHoldReason    `json:"hold_reason"`
+	// HoldUsagePool names the pool of a usage_pool_exhausted hold, read from
+	// the same hold row the timeline's RunHold.usage_pool reads, so the two
+	// surfaces never disagree; nil renders explicit null beside every other
+	// reason and when there is no hold.
+	HoldUsagePool *domain.UsagePoolID `json:"hold_usage_pool"`
 	// Lifecycle splits the runs list into active and finished (#1134); it
 	// is derived from Outcome and SupersededBy, never stored. A superseded run
 	// reads finished whatever its outcome, which is how a bound specification
@@ -1265,6 +1270,9 @@ func runSnapshot(
 	if observation.Hold != nil {
 		reason := observation.Hold.Reason
 		projection.HoldReason = &reason
+		// RunHoldObservation.Validate owns the rule that a pool is present
+		// exactly beside usage_pool_exhausted; copying it carries the rule.
+		projection.HoldUsagePool = observation.Hold.UsagePool
 	}
 	return RunSnapshot{
 		AsOfRevision: asOfRevision, EntityVersion: snapshot.EntityVersion, Run: projection,

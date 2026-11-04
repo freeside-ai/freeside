@@ -991,7 +991,8 @@ func TestRunObservationCorpusValidBaselines(t *testing.T) {
 // TestRunHoldNamesItsPoolInTheAPI: the projection carries a pool hold's pool,
 // a quota window hold's window, and a machine capacity hold's memory figures
 // to the wire, and a hold stored under the retired reason still reads, with
-// no pool.
+// no pool. The synced run names the same pool in hold_usage_pool, and null
+// beside every other reason.
 func TestRunHoldNamesItsPoolInTheAPI(t *testing.T) {
 	ctx := context.Background()
 	pool := domain.UsagePoolID("pool-shared")
@@ -1060,6 +1061,27 @@ func TestRunHoldNamesItsPoolInTheAPI(t *testing.T) {
 			}
 			if !strings.Contains(string(body), tc.want) {
 				t.Fatalf("hold body = %s, want %s", body, tc.want)
+			}
+			runs, err := f.service.ListRuns(ctx)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if len(runs) != 1 || runs[0].Run.ID != runID {
+				t.Fatalf("ListRuns = %#v, want one run %s", runs, runID)
+			}
+			if runs[0].Run.HoldReason == nil || *runs[0].Run.HoldReason != hold.Reason {
+				t.Fatalf("synced hold_reason = %v, want %s", runs[0].Run.HoldReason, hold.Reason)
+			}
+			got, err := json.Marshal(runs[0].Run.HoldUsagePool)
+			if err != nil {
+				t.Fatal(err)
+			}
+			want, err := json.Marshal(hold.UsagePool)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if string(got) != string(want) {
+				t.Fatalf("synced hold_usage_pool = %s, want %s", got, want)
 			}
 		})
 	}

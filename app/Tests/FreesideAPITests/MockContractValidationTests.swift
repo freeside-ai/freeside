@@ -200,6 +200,39 @@ import Testing
                 == "invalid stage attempt")
     }
 
+    @Test func runHoldUsagePoolIsPresentExactlyBesidePoolExhaustion() {
+        let held = RunFixtures.defaultRuns().first {
+            $0.run.id == RunFixtures.activeRunID
+        }!
+        #expect(held.run.hold_reason?.value1 == .verification_findings)
+        #expect(held.run.hold_usage_pool == nil)
+
+        var otherReasonWithPool = held
+        otherReasonWithPool.run.hold_usage_pool = "pool-shared"
+        #expect(
+            MockContractValidation.runSnapshotBreach(otherReasonWithPool, serverRevision: 12)
+                == "hold_usage_pool does not match hold_reason")
+
+        var noHoldWithPool = held
+        noHoldWithPool.run.hold_reason = nil
+        noHoldWithPool.run.hold_usage_pool = "pool-shared"
+        #expect(
+            MockContractValidation.runSnapshotBreach(noHoldWithPool, serverRevision: 12)
+                == "hold_usage_pool does not match hold_reason")
+
+        var parked = held
+        parked.run.hold_reason = .init(value1: .usage_pool_exhausted)
+        #expect(
+            MockContractValidation.runSnapshotBreach(parked, serverRevision: 12)
+                == "hold_usage_pool does not match hold_reason")
+        parked.run.hold_usage_pool = "pool-shared"
+        #expect(MockContractValidation.runSnapshotBreach(parked, serverRevision: 12) == nil)
+        parked.run.hold_usage_pool = ""
+        #expect(
+            MockContractValidation.runSnapshotBreach(parked, serverRevision: 12)
+                == "empty hold_usage_pool")
+    }
+
     // MARK: - itemValidityBreach
 
     @Test func validItemHasNoBreach() {

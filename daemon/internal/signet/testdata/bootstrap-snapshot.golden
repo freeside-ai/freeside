@@ -121,6 +121,7 @@
         "latest_milestone": "work_unit_completed",
         "outcome": "completed",
         "hold_reason": null,
+        "hold_usage_pool": null,
         "lifecycle": "finished",
         "superseded_by": null,
         "completion": {
