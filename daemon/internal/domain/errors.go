@@ -446,6 +446,12 @@ var (
 		"lineup shadow line names a ward role; only a wardless role takes one")
 	ErrLineupShadowLimit = errors.New(
 		"lineup carries more than one shadow line for a role")
+	ErrLineupEscalatedRole = errors.New(
+		"lineup escalated line names a role other than the specifier")
+	ErrLineupEscalatedPrompt = errors.New(
+		"lineup escalated line's prompt is not its role's line's prompt")
+	ErrLineupEscalatedPair = errors.New(
+		"lineup escalated line does not pair two tree agents on one enrollment and adapter")
 	ErrRoleNotWardless = errors.New(
 		"role is not a wardless role")
 	ErrLineupSelectionMismatch = errors.New(

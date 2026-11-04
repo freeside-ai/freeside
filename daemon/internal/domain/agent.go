@@ -3,6 +3,7 @@ package domain
 import (
 	"encoding/json"
 	"fmt"
+	"maps"
 	"slices"
 	"strings"
 	"time"
@@ -306,13 +307,20 @@ func ValidateOfferCoversDeadline(offer OfferFragment, deadline time.Time) error 
 // standing selection). A role's line is one key, lineup.role.<role>, so a
 // project lineup overrides a whole line and never half of one. A wardless
 // role's optional shadow line is a second key under the same role,
-// lineup.role.<role>.shadow.<shadow-name>. One provenance entry per line
-// rides the PolicyKey it lands on.
+// lineup.role.<role>.shadow.<shadow-name>. The specifier's optional escalated
+// lines are keys lineup.role.specifier.escalated.<agent-name>, one for each
+// agent the specifier may run on that has an escalated counterpart (§5.13,
+// Specifier Triage). One provenance entry per line rides the PolicyKey it
+// lands on.
 const LineupRoleKeyPrefix = "lineup.role."
 
 // lineupShadowSegment separates the role from the shadow name in a shadow
 // line's key. Role names carry no '.', so the key parses one way only.
 const lineupShadowSegment = "shadow"
+
+// lineupEscalatedSegment separates the role from the agent name in an
+// escalated line's key.
+const lineupEscalatedSegment = "escalated"
 
 // LineupSelection is one parsed lineup value: the agent and the prompt the
 // line binds for its role, each as a tree name and the exact digest. The
@@ -331,6 +339,17 @@ type LineupSelection struct {
 // without changing a key that already exists.
 type LineupShadowLine struct {
 	Name      string
+	Selection LineupSelection
+}
+
+// LineupEscalatedLine is one of the specifier's optional escalated lines:
+// Agent is an agent the specifier may run on, and Selection names that
+// agent's escalated counterpart with the specifier line's own prompt. The
+// triager escalates a task by moving the specifier from Agent to the
+// counterpart, so the two must share an enrollment and an adapter
+// (Lineup.CheckEscalatedPairs).
+type LineupEscalatedLine struct {
+	Agent     string
 	Selection LineupSelection
 }
 
@@ -358,6 +377,22 @@ func LineupShadowKey(role RoleName, shadowName string) (string, error) {
 		return "", fmt.Errorf("lineup shadow name %q: %w", shadowName, ErrInvalidAgentName)
 	}
 	return key + "." + lineupShadowSegment + "." + shadowName, nil
+}
+
+// LineupEscalatedKey returns the policy key for the escalated line of one
+// agent the role may run on. Only the specifier takes escalated lines.
+func LineupEscalatedKey(role RoleName, agentName string) (string, error) {
+	key, err := LineupRoleKey(role)
+	if err != nil {
+		return "", err
+	}
+	if role != RoleSpecifier {
+		return "", fmt.Errorf("lineup escalated line for role %q: %w", role, ErrLineupEscalatedRole)
+	}
+	if !validAgentName(agentName) {
+		return "", fmt.Errorf("lineup escalated agent %q: %w", agentName, ErrInvalidAgentName)
+	}
+	return key + "." + lineupEscalatedSegment + "." + agentName, nil
 }
 
 // ParseLineupSelection parses a lineup line's value,
@@ -423,8 +458,9 @@ func validAgentName(name string) bool {
 // name: nothing here fills a missing line from another role's line or from a
 // shadow line.
 type Lineup struct {
-	lines   map[RoleName]LineupSelection
-	shadows map[RoleName]LineupShadowLine
+	lines     map[RoleName]LineupSelection
+	shadows   map[RoleName]LineupShadowLine
+	escalated map[RoleName]map[string]LineupSelection
 }
 
 // ResolveLineup is the namespaced key validator applied at policy resolution
@@ -433,12 +469,22 @@ type Lineup struct {
 // list and carry a parseable agent-and-prompt selection. A stage name that is
 // not a role name, "verification", and an unknown role each fail closed; so
 // do a shadow line on a ward role and a second shadow line on one role (one
-// shadow per role is a cost limit, owner decision 2026-09-19). Nothing here
-// compares lineage groups: review independence is a recorded fact, never a
-// gate (plan revision 65). Keys outside the namespace pass through untouched,
-// so submit's free-form policy keys keep working.
+// shadow per role is a cost limit, owner decision 2026-09-19). An escalated
+// line fails closed on any role but the specifier, as a second key for one
+// agent, and when its prompt is not its role's line's prompt, name and
+// digest, because escalation changes the agent and keeps the prompt; a role
+// with escalated lines and no line of its own has no prompt to match. Whether
+// an escalated pair shares an enrollment and adapter needs the agents, which
+// the keys don't carry: CheckEscalatedPairs runs that rule where a tree
+// supplies them. Nothing here compares lineage groups: review independence
+// is a recorded fact, never a gate (plan revision 65). Keys outside the
+// namespace pass through untouched, so submit's free-form policy keys keep
+// working.
 func ResolveLineup(keys []PolicyKey) (Lineup, error) {
-	lineup := Lineup{lines: map[RoleName]LineupSelection{}, shadows: map[RoleName]LineupShadowLine{}}
+	lineup := Lineup{
+		lines: map[RoleName]LineupSelection{}, shadows: map[RoleName]LineupShadowLine{},
+		escalated: map[RoleName]map[string]LineupSelection{},
+	}
 	for _, key := range keys {
 		rest, ok := strings.CutPrefix(key.Key, LineupRoleKeyPrefix)
 		if !ok {
@@ -460,10 +506,27 @@ func ResolveLineup(keys []PolicyKey) (Lineup, error) {
 			lineup.lines[role] = selection
 			continue
 		}
-		segment, shadowName, _ := strings.Cut(tail, ".")
-		if segment != lineupShadowSegment || !validAgentName(shadowName) {
+		segment, name, _ := strings.Cut(tail, ".")
+		if !validAgentName(name) {
 			return Lineup{}, fmt.Errorf("lineup key %q: %w", key.Key, ErrInvalidLineupKey)
 		}
+		if segment == lineupEscalatedSegment {
+			if role != RoleSpecifier {
+				return Lineup{}, fmt.Errorf("lineup key %q: %w", key.Key, ErrLineupEscalatedRole)
+			}
+			if _, dup := lineup.escalated[role][name]; dup {
+				return Lineup{}, fmt.Errorf("lineup key %q: %w", key.Key, ErrDuplicate)
+			}
+			if lineup.escalated[role] == nil {
+				lineup.escalated[role] = map[string]LineupSelection{}
+			}
+			lineup.escalated[role][name] = selection
+			continue
+		}
+		if segment != lineupShadowSegment {
+			return Lineup{}, fmt.Errorf("lineup key %q: %w", key.Key, ErrInvalidLineupKey)
+		}
+		shadowName := name
 		if role.LaunchShape() != LaunchShapeWardless {
 			return Lineup{}, fmt.Errorf("lineup key %q: %w", key.Key, ErrLineupShadowOnWardRole)
 		}
@@ -472,7 +535,42 @@ func ResolveLineup(keys []PolicyKey) (Lineup, error) {
 		}
 		lineup.shadows[role] = LineupShadowLine{Name: shadowName, Selection: selection}
 	}
+	for role, escalated := range lineup.escalated {
+		primary, bound := lineup.lines[role]
+		for agent, selection := range escalated {
+			if !bound || selection.PromptName != primary.PromptName || selection.PromptDigest != primary.PromptDigest {
+				return Lineup{}, fmt.Errorf("lineup escalated line %s for %s prompt %s@%s: %w",
+					agent, role, selection.PromptName, selection.PromptDigest, ErrLineupEscalatedPrompt)
+			}
+		}
+	}
 	return lineup, nil
+}
+
+// CheckEscalatedPairs holds every escalated line to the pairing rule: the
+// agent its key names and the counterpart its value names are both agents
+// lookup resolves, on one enrollment and one adapter. Escalation moves a task
+// to a stronger model under the same subscription and launch, never to
+// another account or another harness (§5.13). It runs on the whole resolved
+// key set, so whatever layer produced the keys inherits the rule.
+func (l Lineup) CheckEscalatedPairs(lookup func(name string) (AgentSource, bool)) error {
+	for _, role := range slices.Sorted(maps.Keys(l.escalated)) {
+		for _, agentName := range slices.Sorted(maps.Keys(l.escalated[role])) {
+			counterpartName := l.escalated[role][agentName].AgentName
+			agent, agentFound := lookup(agentName)
+			counterpart, counterpartFound := lookup(counterpartName)
+			switch {
+			case !agentFound || !counterpartFound:
+				return fmt.Errorf("lineup escalated line %s for %s names %s, and the tree lacks one of them: %w",
+					agentName, role, counterpartName, ErrLineupEscalatedPair)
+			case agent.Enrollment != counterpart.Enrollment || agent.Adapter != counterpart.Adapter:
+				return fmt.Errorf("lineup escalated line %s for %s names %s on enrollment %s and adapter %s, not %s and %s: %w",
+					agentName, role, counterpartName, counterpart.Enrollment, counterpart.Adapter,
+					agent.Enrollment, agent.Adapter, ErrLineupEscalatedPair)
+			}
+		}
+	}
+	return nil
 }
 
 // ValidateLineupPolicyKeys reports whether the lineup keys resolve; see
@@ -495,6 +593,13 @@ func (l Lineup) Line(role RoleName) (LineupSelection, bool) {
 func (l Lineup) ShadowLine(role RoleName) (LineupShadowLine, bool) {
 	shadow, present := l.shadows[role]
 	return shadow, present
+}
+
+// EscalatedCounterpart returns the escalated counterpart the role's lineup
+// names for one agent it may run on, and whether it names one.
+func (l Lineup) EscalatedCounterpart(role RoleName, agentName string) (LineupSelection, bool) {
+	selection, present := l.escalated[role][agentName]
+	return selection, present
 }
 
 // UnboundRoles returns, in the order asked, the roles policy asks work from
