@@ -185,6 +185,11 @@ public actor MockServer {
     /// taskLineKey: the wire TaskLine names an agent, so a clear lives only
     /// here and as the role's absence from the task's task_lines.
     private var taskLineHeads: [String: (version: Int, id: String, line: Components.Schemas.TaskLine?)] = [:]
+    /// The task_line_set events for the line versions this mock wrote, keyed
+    /// by task ID: taskLineHeads keeps only the newest version, and the wire
+    /// Task carries no history. Seeded lines add none, since the mock can't
+    /// name a seeded line's predecessor.
+    private var taskLineEvents: [String: [Components.Schemas.TaskEvent]] = [:]
     /// Task roles with a running attempt (setTaskLineRoleRunning).
     private var runningTaskLineRoles: Set<String> = []
     private var timelinesByRunID: [String: Components.Schemas.RunTimeline] = [:]
@@ -1093,7 +1098,7 @@ public actor MockServer {
         }
         return TaskFixtures.timeline(
             for: snapshot.task, runs: runs, timelines: timelinesByRunID,
-            revision: revision, asOf: currentTime)
+            revision: revision, asOf: currentTime, lineEvents: taskLineEvents[id] ?? [])
     }
 
     func listSchedules() -> [Components.Schemas.ScheduleSnapshot] {
@@ -2324,6 +2329,9 @@ public actor MockServer {
                     predecessor_id: head.map { .init(value1: $0.id) }, source: .client_line_change,
                     set_by: setBy, set_at: currentTime, provenance: nil)
             }
+            recordTaskLineEvent(
+                taskID: payload.task_id, lineID: id, role: payload.role, agent: payload.agent, version: version,
+                source: .client_line_change, supersededAgent: head?.line?.agent)
             taskLineHeads[key] = (version, id, line)
             snapshot.task.task_lines = Components.Schemas.TaskLineRole.allCases.compactMap {
                 taskLineHeads[Self.taskLineKey(payload.task_id, $0)]?.line
@@ -2339,6 +2347,23 @@ public actor MockServer {
                     kind: .change_task_line, command_id: command.command_id, device_id: command.device_id,
                     task_id: payload.task_id, role: payload.role, agent: payload.agent, recorded: !same,
                     line: taskLineHeads[key]?.line.map { .init(value1: $0) })))
+    }
+
+    /// Records the task_line_set event for a line version this mock wrote,
+    /// as the daemon's taskHistoryEvents builds it: agent is nil on a cleared
+    /// version, and supersededAgent is the previous version's agent, nil for
+    /// version 1 or after a cleared version.
+    private func recordTaskLineEvent(
+        taskID: String, lineID: String, role: Components.Schemas.TaskLineRole, agent: String?, version: Int,
+        source: Components.Schemas.TaskLineSource, supersededAgent: String?
+    ) {
+        taskLineEvents[taskID, default: []].append(
+            .init(
+                line: .init(
+                    value1: .init(
+                        line_id: lineID, role: role, agent: agent, version: version, source: source,
+                        superseded_agent: supersededAgent, provenance: nil)),
+                kind: .task_line_set, recorded_at: currentTime))
     }
 
     /// Replaces the routing policy (engine.SetRoutingPolicyTx) when the
@@ -2548,6 +2573,9 @@ public actor MockServer {
                 id: id, task_id: taskID, role: line.role, agent: line.agent, version: 1, predecessor_id: nil,
                 source: .submit_task, set_by: commandID, set_at: currentTime, provenance: nil)
             taskLineHeads[Self.taskLineKey(taskID, line.role)] = (1, id, recorded)
+            recordTaskLineEvent(
+                taskID: taskID, lineID: id, role: line.role, agent: line.agent, version: 1, source: .submit_task,
+                supersededAgent: nil)
             return recorded
         }
         let task = Components.Schemas.Task(

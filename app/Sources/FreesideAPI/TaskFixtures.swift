@@ -89,9 +89,12 @@ public enum TaskFixtures {
         }
     }
 
+    /// `lineEvents` carries the task's `task_line_set` events: the wire Task
+    /// holds only each role's newest line, so its history comes from the caller.
     static func timeline(
         for task: Components.Schemas.Task, runs: [Components.Schemas.Run],
-        timelines: [String: Components.Schemas.RunTimeline], revision: Int64, asOf: Date
+        timelines: [String: Components.Schemas.RunTimeline], revision: Int64, asOf: Date,
+        lineEvents: [Components.Schemas.TaskEvent] = []
     ) -> Components.Schemas.TaskTimeline {
         let campaignRuns = Dictionary(grouping: runs.filter { $0.task_id == task.id }, by: { $0.campaign_id ?? "" })
         func sectionInstant(_ campaign: String) -> Date {
@@ -190,6 +193,7 @@ public enum TaskFixtures {
                 }
             }
         }
+        events += lineEvents
         events.sort { $0.recorded_at > $1.recorded_at }
         return .init(
             as_of_revision: revision, as_of: asOf,
