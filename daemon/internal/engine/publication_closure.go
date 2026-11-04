@@ -470,7 +470,7 @@ func (w *productionPublicationWorkflow) publicationClosureMerge(
 	checkpoint productionVerificationCheckpoint,
 ) (domain.ProspectiveMerge, error) {
 	recipe := binding.image.RecipeDigest
-	identity, err := fakePublicationIdentity(publish.Candidate{
+	identity, err := publicationIdentity(publish.Candidate{
 		Repo: binding.admission.Base.Repo, BaseRef: binding.admission.Base.BaseRef,
 		HeadSHA: task.HeadSHA, Artifacts: checkpoint.Artifacts, RecipeDigest: &recipe,
 	})

@@ -1110,7 +1110,7 @@ func (w *fakePublicationWorkflow) acquireTaskLock(
 	if err := os.MkdirAll(lockDir, 0o700); err != nil {
 		return nil, fmt.Errorf("create publication task lock directory: %w", err)
 	}
-	return acquireFakePublicationLock(ctx, lockDir, taskKey)
+	return acquirePublicationLock(ctx, lockDir, taskKey)
 }
 
 type taskOutcome struct {
@@ -1247,7 +1247,7 @@ func (w *fakePublicationWorkflow) reconcileTask(
 	}
 	defer delete(w.candidates, task.PublicationInvocationID)
 
-	identity, err := fakePublicationIdentity(candidate)
+	identity, err := publicationIdentity(candidate)
 	if err != nil {
 		return taskOutcome{}, err
 	}
@@ -1255,7 +1255,7 @@ func (w *fakePublicationWorkflow) reconcileTask(
 	if err := os.MkdirAll(identityLockDir, 0o700); err != nil {
 		return taskOutcome{}, fmt.Errorf("create publication identity lock directory: %w", err)
 	}
-	releaseIdentity, err := acquireFakePublicationLock(
+	releaseIdentity, err := acquirePublicationLock(
 		ctx, identityLockDir, string(identity.Digest()),
 	)
 	if err != nil {
@@ -1404,7 +1404,7 @@ func (w *fakePublicationWorkflow) loadPublicationOutcome(
 	ctx context.Context,
 	candidate publish.Candidate,
 ) (publish.Result, bool, error) {
-	identity, err := fakePublicationIdentity(candidate)
+	identity, err := publicationIdentity(candidate)
 	if err != nil {
 		return publish.Result{}, false, err
 	}
@@ -1748,7 +1748,7 @@ func (w *fakePublicationWorkflow) buildCandidateCheckpoint(
 			return fakePublicationCandidateCheckpoint{}, fmt.Errorf(
 				"persist evidence artifact %s: %w", item.Artifact.ID, err)
 		}
-		if err := verifyFakePublicationBlob(w.artifacts, item.Artifact); err != nil {
+		if err := verifyArtifactBlob(w.artifacts, item.Artifact); err != nil {
 			return fakePublicationCandidateCheckpoint{}, err
 		}
 	}
@@ -1910,7 +1910,7 @@ func (w *fakePublicationWorkflow) loadCandidateCheckpoint(
 			*provenance.VerificationRecipeDigest != task.RecipeDigest {
 			return fakePublicationCandidateCheckpoint{}, false, domain.ErrEvidenceHeadMismatch
 		}
-		if err := verifyFakePublicationBlob(w.artifacts, artifact); err != nil {
+		if err := verifyArtifactBlob(w.artifacts, artifact); err != nil {
 			return fakePublicationCandidateCheckpoint{}, false, err
 		}
 	}
@@ -2183,7 +2183,7 @@ func (w *fakePublicationWorkflow) recoverTerminalTask(
 		)
 	}
 	for _, artifact := range item.EvidenceSnapshot {
-		if err := verifyFakePublicationBlob(w.artifacts, artifact); err != nil {
+		if err := verifyArtifactBlob(w.artifacts, artifact); err != nil {
 			return taskOutcome{}, false, fmt.Errorf(
 				"terminal item %q evidence: %w", item.ID, err,
 			)
@@ -2854,7 +2854,7 @@ func loadFakePublicationRecipe(
 	artifacts ArtifactStore,
 	digest domain.Digest,
 ) ([]byte, error) {
-	body, err := loadFakePublicationBlob(artifacts, digest)
+	body, err := loadArtifactBlob(artifacts, digest)
 	if err != nil {
 		return nil, fmt.Errorf("load trusted recipe %s: %w", digest, err)
 	}

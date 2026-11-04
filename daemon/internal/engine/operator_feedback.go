@@ -1390,7 +1390,7 @@ func (e *Engine) authenticateOperatorFeedbackInput(
 	}); err != nil {
 		return classifyOperatorFeedbackMarkerError(err)
 	}
-	body, err := loadFakePublicationBlob(
+	body, err := loadArtifactBlob(
 		e.productionPublication.artifacts, request.InputArtifactDigest)
 	if err != nil {
 		return classifyOperatorFeedbackMarkerError(err)

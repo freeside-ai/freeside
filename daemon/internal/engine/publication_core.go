@@ -285,7 +285,7 @@ func validatePublicationCheckoutBinding(
 	return requested, nil
 }
 
-func acquireFakePublicationLock(
+func acquirePublicationLock(
 	ctx context.Context,
 	lockDir, key string,
 ) (func() error, error) {
@@ -317,7 +317,7 @@ func acquireFakePublicationLock(
 	}
 }
 
-func fakePublicationIdentity(candidate publish.Candidate) (publish.Identity, error) {
+func publicationIdentity(candidate publish.Candidate) (publish.Identity, error) {
 	digests := make([]domain.Digest, len(candidate.Artifacts))
 	for i, artifact := range candidate.Artifacts {
 		digests[i] = artifact.Digest
@@ -477,7 +477,7 @@ func validCommitSHA(sha string) bool {
 	return true
 }
 
-func verifyFakePublicationBlob(store ArtifactStore, artifact domain.Artifact) error {
+func verifyArtifactBlob(store ArtifactStore, artifact domain.Artifact) error {
 	body, err := store.Open(artifact.Digest)
 	if err != nil {
 		return fmt.Errorf("open candidate checkpoint artifact %s: %w", artifact.ID, err)
@@ -498,7 +498,7 @@ func verifyFakePublicationBlob(store ArtifactStore, artifact domain.Artifact) er
 	return nil
 }
 
-func loadFakePublicationBlob(
+func loadArtifactBlob(
 	store ArtifactStore,
 	digest domain.Digest,
 ) ([]byte, error) {

@@ -443,11 +443,11 @@ func (w *productionPublicationWorkflow) driftAuditorInput(
 		return "", inference.DriftAuditorInput{}, fmt.Errorf(
 			"%w: %s: %w", errDriftAuditInputUnavailable, what, err)
 	}
-	specification, err := loadFakePublicationBlob(w.artifacts, run.SpecDigest)
+	specification, err := loadArtifactBlob(w.artifacts, run.SpecDigest)
 	if err != nil {
 		return unavailable("approved specification", err)
 	}
-	instructions, err := loadFakePublicationBlob(w.artifacts, record.InstructionDigest)
+	instructions, err := loadArtifactBlob(w.artifacts, record.InstructionDigest)
 	if err != nil {
 		return unavailable("instruction snapshot", err)
 	}

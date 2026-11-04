@@ -452,7 +452,7 @@ func TestBlockedImplementationAnswerRetriesImplementer(t *testing.T) {
 		request.CommandID != "answer-implementation" || request.HeadSHA != "" {
 		t.Fatalf("operator feedback request = %#v, %v", request, err)
 	}
-	body, err := loadFakePublicationBlob(f.blobs, request.InputArtifactDigest)
+	body, err := loadArtifactBlob(f.blobs, request.InputArtifactDigest)
 	if err != nil {
 		t.Fatal(err)
 	}
