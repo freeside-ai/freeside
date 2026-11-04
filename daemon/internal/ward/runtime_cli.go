@@ -82,14 +82,14 @@ const (
 // fails closed if the command produced more than the cap rather than decoding a
 // truncated stream.
 func (c *CLIRuntime) run(ctx context.Context, args ...string) ([]byte, error) {
-	stdout := &capWriter{max: maxRuntimeOutput}
+	stdout := procbound.NewTailBuffer(maxRuntimeOutput)
 	if err := c.runTo(ctx, stdout, false, args...); err != nil {
 		return nil, err
 	}
-	if stdout.truncated {
+	if stdout.Truncated() {
 		return nil, fmt.Errorf("container %s: stdout exceeded the %d-byte cap", args[0], maxRuntimeOutput)
 	}
-	return stdout.buf.Bytes(), nil
+	return stdout.Bytes(), nil
 }
 
 // runDiscard executes a CLI call whose stdout is ignored, draining it to
@@ -109,30 +109,11 @@ func (c *CLIRuntime) runTo(ctx context.Context, stdout io.Writer, reportStderr b
 	return runPrepared(cmd, stdout, reportStderr, args[0])
 }
 
-// capWriter buffers at most max bytes and drops the rest, so a noisy or wedged
-// runtime (or its XPC service) cannot grow the captured stderr without bound
-// before the call fails closed.
-type capWriter struct {
-	buf       bytes.Buffer
-	max       int
-	truncated bool
-}
-
-func (w *capWriter) Write(p []byte) (int, error) {
-	if room := w.max - w.buf.Len(); room > 0 {
-		if len(p) <= room {
-			w.buf.Write(p)
-		} else {
-			w.buf.Write(p[:room])
-			w.truncated = true
-		}
-	} else if len(p) > 0 {
-		w.truncated = true
-	}
-	// Always report full consumption so os/exec's copier never blocks the child
-	// on a short write once the cap is reached.
-	return len(p), nil
-}
+// errStderrTruncated marks a runtime error whose reported stderr lost its
+// start to the bound. A caller that classifies the runtime's message by its
+// first, top-level line must treat such an error as inconclusive: what is
+// left may begin with a nested error instead.
+var errStderrTruncated = errors.New("stderr truncated")
 
 func runPrepared(cmd *osexec.Cmd, stdout io.Writer, reportStderr bool, operation string) error {
 	cmd.Stdout = stdout
@@ -147,12 +128,14 @@ func runPrepared(cmd *osexec.Cmd, stdout io.Writer, reportStderr bool, operation
 		return nil
 	}
 	const maxStderr = 512
-	stderr := &capWriter{max: maxStderr}
+	// The bound keeps stderr's end, where the runtime prints why the call
+	// failed, so a noisy or wedged runtime cannot grow it without limit.
+	stderr := procbound.NewTailBuffer(maxStderr)
 	cmd.Stderr = stderr
 	if err := procbound.Run(cmd, procbound.DefaultWaitDelay); err != nil {
-		msg := strings.TrimSpace(stderr.buf.String())
-		if stderr.truncated {
-			msg += "..."
+		msg := strings.TrimSpace(string(stderr.Bytes()))
+		if stderr.Truncated() {
+			return fmt.Errorf("container %s: %w: %w: ...%s", operation, err, errStderrTruncated, msg)
 		}
 		return fmt.Errorf("container %s: %w: %s", operation, err, msg)
 	}

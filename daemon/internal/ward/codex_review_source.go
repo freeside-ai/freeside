@@ -1118,8 +1118,9 @@ func (s *CodexReviewSource) normalizeCollection(
 		// The provider's own message is the only record of why the review
 		// failed that reaches review_failures.reason and the parked item, so
 		// it travels with the failure, bounded because the provider writes it.
+		// The failure bound keeps the message's end, where its cause sits.
 		if terminalMessage != "" {
-			message += ": " + exec.TruncateSummary(terminalMessage)
+			message += ": " + exec.TruncateFailureSummary(terminalMessage)
 		}
 		return failure(class, message)
 	}

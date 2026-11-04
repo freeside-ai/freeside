@@ -2090,6 +2090,9 @@ func TestIsAttachmentExclusion(t *testing.T) {
 		{"vz code 2 in a nested vzerrordomain, not the first", errors.New("VZErrorDomain Code=7: attachment failed; underlying VZErrorDomain Code=2"), false},
 		{"storage-device wording cannot rescue a non-2 vz code", errors.New("VZErrorDomain Code=20: storage device attachment failed"), false},
 		{"vz domain attachment no code", errors.New("VZErrorDomain: attachment rejected"), false},
+		{"truncated stderr whose first remaining code is nested", fmt.Errorf(
+			"container start: exit status 1: %w: ...VZErrorDomain Code=2: The storage device attachment is invalid",
+			errStderrTruncated), false},
 		{"unrelated vz attachment code", errors.New("VZErrorDomain Code=7: network attachment failed"), false},
 		{"unrelated vz error", errors.New("VZErrorDomain Code=5: virtual machine failed to start"), false},
 		{"lone attachment word", errors.New("email attachment too large"), false},

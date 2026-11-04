@@ -3201,13 +3201,17 @@ func TestCodexReviewSourceNamesInContainerRefreshAttempt(t *testing.T) {
 		t.Fatalf("unfinished turn without a message normalized as %#v", outcome)
 	}
 
-	long := strings.Repeat("x", 4*exec.MaxSummaryBytes)
+	const cause = "stream disconnected before completion"
+	long := strings.Repeat("x", 4*exec.MaxSummaryBytes) + " " + cause
 	outcome = source.normalizeCollection("review-run-1-6", exec.ReviewRequest{}, CodexReviewCollection{
 		Events:     []byte(`{"type":"turn.failed","error":{"message":"` + long + `"}}`),
 		ExitStatus: 1,
 	})
-	if want := "Codex review exited with status 1: " + exec.TruncateSummary(long); outcome.Failure != want {
+	if want := "Codex review exited with status 1: " + exec.TruncateFailureSummary(long); outcome.Failure != want {
 		t.Fatalf("long terminal message recorded as %d bytes, want %d", len(outcome.Failure), len(want))
+	}
+	if !strings.HasSuffix(outcome.Failure, cause) {
+		t.Fatalf("long terminal message %q lost its cause", outcome.Failure)
 	}
 }
 

@@ -758,6 +758,89 @@ func TestOversizedRenderedPromptCommitsFailureWithoutWedgingDispatch(t *testing.
 	}
 }
 
+// refusingProvider refuses every prompt with a fixed error, so a test can
+// choose the refusal's length and where its cause sits.
+type refusingProvider struct {
+	testProvider
+	refusal error
+}
+
+func (p refusingProvider) RenderPrompt(ProviderPromptInputs) (string, error) {
+	return "", p.refusal
+}
+
+// A prompt refusal longer than the summary cap keeps its cause in the
+// committed summary, and an intent an older daemon committed with the
+// head-only summary of the same refusal still reconstructs: reconstruction
+// re-renders the prompt and accepts either bound of its error, and nothing
+// else.
+func TestOverCapPromptRefusalKeepsItsCauseAndReconstructsTheHeadOnlyForm(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	records := newStubExports()
+	d := newTestDriver(t, &stubGate{}, records)
+	const cause = "prior artifact 3 is not valid UTF-8"
+	refusal := fmt.Errorf("%w: render part %s: %s",
+		ErrUnsupportedStart, strings.Repeat("p", 600), cause)
+	d.provider = refusingProvider{
+		testProvider: testProvider{volumes: stubVolumes{volume: testAuthVol}},
+		refusal:      refusal,
+	}
+	spec := testStartSpec()
+	inputs := stageInputsWithBodies(
+		t, &spec, []byte("spec"), []byte("prompt"),
+		[]byte(`[{"key":"paths","value":"daemon/**"}]`),
+	)
+	load := func(context.Context) (exec.StageInputs, error) { return inputs, nil }
+
+	if err := d.StartWithInputs(ctx, testInvoke, spec, load); err != nil {
+		t.Fatalf("refused start must commit a terminal failure, got %v", err)
+	}
+	result, err := d.Collect(ctx, testInvoke)
+	if err != nil {
+		t.Fatalf("collect terminal refusal: %v", err)
+	}
+	if result.Summary != exec.TruncateFailureSummary(refusal.Error()) ||
+		!strings.HasSuffix(result.Summary, cause) {
+		t.Fatalf("summary = %q, want the failure bound keeping %q", result.Summary, cause)
+	}
+
+	legacy := exec.TruncateSummary(refusal.Error())
+	if legacy == result.Summary || strings.Contains(legacy, cause) {
+		t.Fatal("fixture must make the head-only form differ and drop the cause")
+	}
+	commitSummary := func(summary string) {
+		t.Helper()
+		in, err := d.loadIntent(ctx, testInvoke)
+		if err != nil {
+			t.Fatalf("load committed refusal: %v", err)
+		}
+		in.Result.Summary = summary
+		if err := d.saveIntent(in); err != nil {
+			t.Fatalf("save refusal intent: %v", err)
+		}
+		records.mu.Lock()
+		outcome := records.outcomes[testInvoke]
+		outcome.Summary = summary
+		records.outcomes[testInvoke] = outcome
+		records.mu.Unlock()
+	}
+
+	commitSummary(legacy)
+	in, err := d.loadIntent(ctx, testInvoke)
+	if err != nil {
+		t.Fatalf("head-only refusal summary from an older daemon failed reconstruction: %v", err)
+	}
+	if in.Result.Summary != legacy {
+		t.Fatalf("reconstructed summary = %q, want the stored head-only form", in.Result.Summary)
+	}
+
+	commitSummary(legacy + "x")
+	if _, err := d.loadIntent(ctx, testInvoke); !errors.Is(err, ErrUnsupportedStart) {
+		t.Fatalf("summary derived from neither bound loaded with err %v, want ErrUnsupportedStart", err)
+	}
+}
+
 // errStubClaimConflict is the fake's write-once conflict, mirroring the store's
 // ErrImmutableConflict so the shared RecordClaims contract binds the fake and the
 // production adapter to the same differing-set rejection.

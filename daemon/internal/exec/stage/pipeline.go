@@ -137,7 +137,7 @@ func (d *Driver) runPipeline(ctx context.Context, in intent) {
 	}
 	d.commit(log, in.InvocationID, exec.StageResult{
 		InvocationID: in.InvocationID, Status: status,
-		Summary: truncateSummary(err.Error()), Cause: cause, Usage: result.Usage, Artifacts: result.Artifacts,
+		Summary: truncateFailureSummary(err.Error()), Cause: cause, Usage: result.Usage, Artifacts: result.Artifacts,
 	})
 }
 
@@ -196,7 +196,7 @@ func (d *Driver) commitRejection(
 ) error {
 	if err := d.commitResult(in.InvocationID, exec.StageResult{
 		InvocationID: in.InvocationID, Status: status,
-		Summary: truncateSummary(rej.Error()), Usage: usage,
+		Summary: truncateFailureSummary(rej.Error()), Usage: usage,
 	}); err != nil {
 		return err
 	}
@@ -850,7 +850,7 @@ func domainRejectionFindings(findings []importer.Finding) []domain.ExportRejecti
 
 // maxSummaryFindings bounds how many kind:path pairs the rejection summary
 // folds in; the durable record holds all of them, and the summary column is
-// capped anyway (truncateSummary).
+// capped anyway (truncateFailureSummary).
 const maxSummaryFindings = 5
 
 // persistsRepositoryChannel reports whether this import's repo-channel blobs
@@ -1817,7 +1817,7 @@ func (d *Driver) reconcileIntent(ctx context.Context, in intent) error {
 		// handoff refuses this transition until ward proves export or loss.
 		if commitErr := d.commitResult(in.InvocationID, exec.StageResult{
 			InvocationID: in.InvocationID, Status: exec.StatusFailed,
-			Summary: truncateSummary("recovery failed: " + err.Error()),
+			Summary: truncateFailureSummary("recovery failed: " + err.Error()),
 		}); commitErr != nil {
 			return fmt.Errorf("%w: commit recovery failure: %w",
 				ErrRecoveryRetryable, commitErr)
@@ -1876,7 +1876,7 @@ func (d *Driver) deferExportRecovery(in intent, cause error) error {
 	// measurements. Absent authenticated usage the abandoned outcome carries
 	// none; the freed slot and failure card do not depend on it.
 	dir := in.Export.outcome().dir
-	summary := truncateSummary(fmt.Sprintf(
+	summary := truncateFailureSummary(fmt.Sprintf(
 		"recovery of the released export failed for %s: %s; export retained at %s",
 		elapsed, cause.Error(), dir,
 	))
@@ -2074,7 +2074,7 @@ func (d *Driver) recoverRunning(ctx context.Context, in intent) error {
 			}
 			if commitErr := d.commitResult(in.InvocationID, exec.StageResult{
 				InvocationID: in.InvocationID, Status: status,
-				Summary: truncateSummary(err.Error()), Usage: result.Usage,
+				Summary: truncateFailureSummary(err.Error()), Usage: result.Usage,
 			}); commitErr != nil {
 				return fmt.Errorf("%w: commit recovery result: %w",
 					ErrRecoveryRetryable, commitErr)
@@ -2156,9 +2156,12 @@ func fileDigest(path string) (domain.Digest, error) {
 // this driver commits is held to.
 const maxSummaryBytes = exec.MaxSummaryBytes
 
-// truncateSummary bounds a terminal summary; see exec.TruncateSummary.
-func truncateSummary(s string) string {
-	return exec.TruncateSummary(s)
+// truncateFailureSummary bounds a failure summary, keeping the head and
+// the tail where a wrapped error's cause sits; see
+// exec.TruncateFailureSummary. Agent questions are bounded by
+// exec.TruncateSummary instead, which keeps the head.
+func truncateFailureSummary(s string) string {
+	return exec.TruncateFailureSummary(s)
 }
 
 // resume restarts a pipeline for an intent whose external effects had not

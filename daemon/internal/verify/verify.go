@@ -3,12 +3,14 @@ package verify
 import (
 	"context"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"strconv"
 	"strings"
 
 	"github.com/freeside-ai/freeside/daemon/internal/domain"
+	"github.com/freeside-ai/freeside/daemon/internal/procbound"
 )
 
 // Result is one verification's account: the exact binding (head and
@@ -113,9 +115,9 @@ func Verify(ctx context.Context, checkoutDir string, opts Options) (Result, erro
 		Outcome:             outcome,
 		Steps:               steps,
 		Findings:            findings,
-		TranscriptTruncated: transcript.truncated,
+		TranscriptTruncated: transcript.Truncated(),
 	}
-	evidence, err := buildEvidence(opts, recipeDigest, rep, transcript.buf.Bytes())
+	evidence, err := buildEvidence(opts, recipeDigest, rep, transcript.Bytes())
 	if err != nil {
 		return Result{}, err
 	}
@@ -126,7 +128,7 @@ func Verify(ctx context.Context, checkoutDir string, opts Options) (Result, erro
 		Outcome:             outcome,
 		Steps:               steps,
 		Findings:            findings,
-		TranscriptTruncated: transcript.truncated,
+		TranscriptTruncated: transcript.Truncated(),
 		Evidence:            evidence,
 	}, nil
 }
@@ -195,9 +197,9 @@ func (g *gitRunner) isTreeSymlink(ctx context.Context, commitSHA, path string) (
 // checkout per command makes each command provably run against the head
 // (the clean-room model, §6); recipe commands are therefore independent
 // checks and cannot pass workspace state between one another.
-func runRecipe(ctx context.Context, g *gitRunner, opts Options, recipe Recipe, scratch string) ([]Step, *boundedBuffer, Outcome, error) {
+func runRecipe(ctx context.Context, g *gitRunner, opts Options, recipe Recipe, scratch string) ([]Step, *procbound.TailBuffer, Outcome, error) {
 	steps := make([]Step, 0, len(recipe.Commands))
-	transcript := &boundedBuffer{max: opts.Policy.MaxTranscriptBytes}
+	transcript := procbound.NewTailBuffer(opts.Policy.MaxTranscriptBytes)
 	outcome := OutcomePassed
 	for i, argv := range recipe.Commands {
 		workspace := filepath.Join(scratch, fmt.Sprintf("workspace-%d", i))
@@ -233,7 +235,7 @@ func runStep(ctx context.Context, opts Options, workspace string, argv []string)
 }
 
 // writeTranscriptStep appends one step's record to the transcript.
-func writeTranscriptStep(w *boundedBuffer, argv []string, res StepResult) {
+func writeTranscriptStep(w io.Writer, argv []string, res StepResult) {
 	_, _ = w.Write([]byte("$ " + renderArgv(argv) + "\n"))
 	_, _ = w.Write(res.Output)
 	suffix := ""

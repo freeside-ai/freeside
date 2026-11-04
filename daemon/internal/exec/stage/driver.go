@@ -678,7 +678,7 @@ func (d *Driver) StartWithInputs(
 		in.Phase = phaseCommitted
 		in.Result = &exec.StageResult{
 			InvocationID: id, Status: exec.StatusFailed,
-			Summary: truncateSummary(err.Error()),
+			Summary: truncateFailureSummary(err.Error()),
 		}
 		if promptErr != nil {
 			// Prompt refusals have their own reconstruction gate. Registry

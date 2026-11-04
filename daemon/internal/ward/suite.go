@@ -2083,6 +2083,11 @@ func isAttachmentExclusion(err error) bool {
 	if err == nil {
 		return false
 	}
+	// A truncated stderr kept only its end, so the first code left in it
+	// may be a nested one rather than the top-level code this requires.
+	if errors.Is(err, errStderrTruncated) {
+		return false
+	}
 	msg := strings.ToLower(err.Error())
 	if !strings.Contains(msg, "attachment") {
 		return false
