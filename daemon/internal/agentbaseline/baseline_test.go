@@ -2,6 +2,7 @@ package agentbaseline_test
 
 import (
 	"errors"
+	"maps"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -15,6 +16,7 @@ import (
 	"github.com/freeside-ai/freeside/daemon/internal/agenttree"
 	"github.com/freeside-ai/freeside/daemon/internal/contentaddr"
 	"github.com/freeside-ai/freeside/daemon/internal/domain"
+	"github.com/freeside-ai/freeside/daemon/internal/golden"
 )
 
 func must[T any](value T, err error) T {
@@ -173,6 +175,27 @@ func TestBaselineTreeRoundTripsAndResolves(t *testing.T) {
 			t.Fatalf("lineup line for %s = %+v, %v; want agent %s", role, line, ok, digest)
 		}
 	}
+}
+
+// renderedTree concatenates a rendered tree's files in path order, each
+// under a header naming its path, so one golden pins every byte adoption
+// writes.
+func renderedTree(t *testing.T, in agentbaseline.TreeInput) []byte {
+	t.Helper()
+	files := must(agenttree.Render(must(agentbaseline.Tree(in))))
+	var out strings.Builder
+	for _, path := range slices.Sorted(maps.Keys(files)) {
+		out.WriteString("=== " + path + "\n")
+		out.Write(files[path])
+	}
+	return []byte(out.String())
+}
+
+// The baseline fixture renders the same bytes it rendered before escalated
+// specifier lines existed: adoption without an escalated pair emits today's
+// tree. The golden was recorded before that change.
+func TestBaselineTreeRendersTheRecordedFiles(t *testing.T) {
+	golden.Assert(t, "baseline_tree", renderedTree(t, input(true)))
 }
 
 // Writer roles that ask one model and effort share one agent, named for the
