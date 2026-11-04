@@ -61,21 +61,13 @@ func (tx *ReadTx) CurrentRoutingPolicy(ctx context.Context) (domain.RoutingPolic
 // RoutingPolicyRevisions reconstructs every revision in order; one
 // inconsistent row fails the whole listing. None set is an empty listing.
 func (tx *ReadTx) RoutingPolicyRevisions(ctx context.Context) ([]domain.RoutingPolicy, error) {
-	rows, err := tx.tx.QueryContext(ctx, `SELECT `+routingPolicyColumns+` FROM routing_policies ORDER BY revision`)
+	policies, err := queryAll(ctx, tx.tx, scanRoutingPolicy,
+		`SELECT `+routingPolicyColumns+` FROM routing_policies ORDER BY revision`)
 	if err != nil {
 		return nil, fmt.Errorf("list routing policies: %w", err)
 	}
-	defer func() { _ = rows.Close() }()
-	policies := []domain.RoutingPolicy{}
-	for rows.Next() {
-		policy, err := scanRoutingPolicy(rows)
-		if err != nil {
-			return nil, fmt.Errorf("list routing policies: %w", err)
-		}
-		policies = append(policies, policy)
-	}
-	if err := rows.Err(); err != nil {
-		return nil, fmt.Errorf("list routing policies: %w", err)
+	if policies == nil {
+		return []domain.RoutingPolicy{}, nil
 	}
 	return policies, nil
 }

@@ -110,16 +110,10 @@ type AttentionItemRow struct {
 // the query's own failure; any error while reconstructing a row, a database
 // error inside one of its gates included, is that row's Err.
 func (tx *ReadTx) ListAttentionItemRows(ctx context.Context) ([]AttentionItemRow, error) {
-	rows, err := tx.tx.QueryContext(ctx, listAttentionItemsSQL)
-	if err != nil {
-		return nil, fmt.Errorf("list attention item rows: %w", err)
-	}
-	defer func() { _ = rows.Close() }()
-	out := []AttentionItemRow{}
-	for rows.Next() {
-		columns, err := scanAttentionItemColumns(rows)
+	out, err := queryAll(ctx, tx.tx, func(s scanner) (AttentionItemRow, error) {
+		columns, err := scanAttentionItemColumns(s)
 		if err != nil {
-			return nil, fmt.Errorf("list attention item rows: row %d: %w", len(out)+1, err)
+			return AttentionItemRow{}, err
 		}
 		row := AttentionItemRow{ID: domain.ItemID(columns.id)}
 		item, snap, err := tx.reconstructAttentionItemSnapshot(ctx, columns)
@@ -135,10 +129,13 @@ func (tx *ReadTx) ListAttentionItemRows(ctx context.Context) ([]AttentionItemRow
 			row.Item, row.Snapshot = &item, snap
 			row.SubjectTaskID, row.SubjectRunID = item.Subject.TaskID, item.Subject.RunID
 		}
-		out = append(out, row)
-	}
-	if err := rows.Err(); err != nil {
+		return row, nil
+	}, listAttentionItemsSQL)
+	if err != nil {
 		return nil, fmt.Errorf("list attention item rows: %w", err)
+	}
+	if out == nil {
+		return []AttentionItemRow{}, nil
 	}
 	return out, nil
 }
@@ -164,24 +161,9 @@ func (tx *ReadTx) ListCommandsForItem(ctx context.Context, itemID domain.ItemID)
 	if itemID == "" {
 		return nil, fmt.Errorf("list commands for item: %w", domain.ErrEmptyID)
 	}
-	rows, err := tx.tx.QueryContext(ctx,
+	ids, err := queryAll(ctx, tx.tx, scanCommandID,
 		`SELECT command_id FROM commands WHERE item_id = ? ORDER BY command_id`, itemID)
 	if err != nil {
-		return nil, fmt.Errorf("list commands for item %q: %w", itemID, err)
-	}
-	defer func() { _ = rows.Close() }()
-	ids := []string{}
-	for rows.Next() {
-		var id string
-		if err := rows.Scan(&id); err != nil {
-			return nil, fmt.Errorf("list commands for item %q: %w", itemID, err)
-		}
-		ids = append(ids, id)
-	}
-	if err := rows.Err(); err != nil {
-		return nil, fmt.Errorf("list commands for item %q: %w", itemID, err)
-	}
-	if err := rows.Close(); err != nil {
 		return nil, fmt.Errorf("list commands for item %q: %w", itemID, err)
 	}
 	commands := make([]domain.Command, 0, len(ids))
@@ -197,6 +179,14 @@ func (tx *ReadTx) ListCommandsForItem(ctx context.Context, itemID domain.ItemID)
 		commands = append(commands, command)
 	}
 	return commands, nil
+}
+
+// scanCommandID reads the bare command id the command-list queries select;
+// each id then reconstructs through GetCommand.
+func scanCommandID(s scanner) (string, error) {
+	var id string
+	err := s.Scan(&id)
+	return id, err
 }
 
 // ListCommandsForActions returns every immutable accepted command whose
@@ -218,26 +208,11 @@ func (tx *ReadTx) ListCommandsForActions(
 	if err != nil {
 		return nil, fmt.Errorf("list commands for actions: %w", err)
 	}
-	rows, err := tx.tx.QueryContext(ctx, `
+	ids, err := queryAll(ctx, tx.tx, scanCommandID, `
 SELECT command_id FROM commands
 WHERE action IN (SELECT value FROM json_each(?))
 ORDER BY command_id`, actionSet)
 	if err != nil {
-		return nil, fmt.Errorf("list commands for actions: %w", err)
-	}
-	defer func() { _ = rows.Close() }()
-	ids := []string{}
-	for rows.Next() {
-		var id string
-		if err := rows.Scan(&id); err != nil {
-			return nil, fmt.Errorf("list commands for actions: %w", err)
-		}
-		ids = append(ids, id)
-	}
-	if err := rows.Err(); err != nil {
-		return nil, fmt.Errorf("list commands for actions: %w", err)
-	}
-	if err := rows.Close(); err != nil {
 		return nil, fmt.Errorf("list commands for actions: %w", err)
 	}
 	commands := make([]domain.Command, 0, len(ids))

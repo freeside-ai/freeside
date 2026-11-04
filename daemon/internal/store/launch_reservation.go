@@ -244,25 +244,19 @@ func (tx *WriteTx) reservedMemory(ctx context.Context, at time.Time) (int, []dom
 }
 
 func (tx *ReadTx) openLaunchReservations(ctx context.Context) ([]domain.LaunchReservation, error) {
-	rows, err := tx.tx.QueryContext(ctx, listOpenLaunchReservationsSQL)
-	if err != nil {
-		return nil, fmt.Errorf("list launch reservations: %w", err)
-	}
-	defer rows.Close() //nolint:errcheck // read-only cursor; rows.Err reports failures
-	var open []domain.LaunchReservation
-	for rows.Next() {
+	open, err := queryAll(ctx, tx.tx, func(row scanner) (domain.LaunchReservation, error) {
 		var r domain.LaunchReservation
-		if err := rows.Scan(&r.InvocationID, &r.RunID, &r.Kind, &r.MemoryMiB, &r.OverheadMiB); err != nil {
-			return nil, fmt.Errorf("list launch reservations: %w", err)
+		if err := row.Scan(&r.InvocationID, &r.RunID, &r.Kind, &r.MemoryMiB, &r.OverheadMiB); err != nil {
+			return domain.LaunchReservation{}, err
 		}
 		// A row that does not validate fails the gate closed rather than
 		// counting a size no launch declared.
 		if err := r.Validate(); err != nil {
-			return nil, fmt.Errorf("list launch reservations: %w", err)
+			return domain.LaunchReservation{}, err
 		}
-		open = append(open, r)
-	}
-	if err := rows.Err(); err != nil {
+		return r, nil
+	}, listOpenLaunchReservationsSQL)
+	if err != nil {
 		return nil, fmt.Errorf("list launch reservations: %w", err)
 	}
 	return open, nil
@@ -327,29 +321,24 @@ func (tx *WriteTx) launchesAhead(
 }
 
 func (tx *ReadTx) listLaunchWaits(ctx context.Context) ([]launchWait, error) {
-	rows, err := tx.tx.QueryContext(ctx, listLaunchWaitsSQL)
-	if err != nil {
-		return nil, fmt.Errorf("list launch waits: %w", err)
-	}
-	defer rows.Close() //nolint:errcheck // read-only cursor; rows.Err reports failures
-	var waits []launchWait
-	for rows.Next() {
+	waits, err := queryAll(ctx, tx.tx, func(row scanner) (launchWait, error) {
 		var (
 			wait                 launchWait
 			createdAt, refusedAt string
+			err                  error
 		)
-		if err := rows.Scan(&wait.invocation, &wait.run, &createdAt, &refusedAt); err != nil {
-			return nil, fmt.Errorf("list launch waits: %w", err)
+		if err := row.Scan(&wait.invocation, &wait.run, &createdAt, &refusedAt); err != nil {
+			return launchWait{}, err
 		}
 		if wait.taskCreatedAt, err = parseTime(createdAt); err != nil {
-			return nil, fmt.Errorf("launch wait %q task_created_at: %w", wait.invocation, err)
+			return launchWait{}, fmt.Errorf("launch wait %q task_created_at: %w", wait.invocation, err)
 		}
 		if wait.refusedAt, err = parseTime(refusedAt); err != nil {
-			return nil, fmt.Errorf("launch wait %q refused_at: %w", wait.invocation, err)
+			return launchWait{}, fmt.Errorf("launch wait %q refused_at: %w", wait.invocation, err)
 		}
-		waits = append(waits, wait)
-	}
-	if err := rows.Err(); err != nil {
+		return wait, nil
+	}, listLaunchWaitsSQL)
+	if err != nil {
 		return nil, fmt.Errorf("list launch waits: %w", err)
 	}
 	return waits, nil

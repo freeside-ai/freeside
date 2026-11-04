@@ -197,21 +197,9 @@ func (tx *ReadTx) GetReviewRoundDiffMetrics(
 func (tx *ReadTx) ListReviewRoundDiffMetrics(
 	ctx context.Context, runID domain.RunID,
 ) (map[int]domain.ReviewRoundDiffMetrics, error) {
-	rows, err := tx.tx.QueryContext(ctx, `SELECT run_id, round, body_digest, body
+	raw, err := queryAll(ctx, tx.tx, scanReviewRoundDiffMetricsRow, `SELECT run_id, round, body_digest, body
 		FROM review_round_diff_metrics ORDER BY run_id, round`)
 	if err != nil {
-		return nil, fmt.Errorf("list review round diff metrics %q: %w", runID, err)
-	}
-	var raw []reviewRoundDiffMetricsRow
-	for rows.Next() {
-		row, err := scanReviewRoundDiffMetricsRow(rows)
-		if err != nil {
-			_ = rows.Close()
-			return nil, fmt.Errorf("list review round diff metrics %q row %d: %w", runID, len(raw)+1, err)
-		}
-		raw = append(raw, row)
-	}
-	if err := errors.Join(rows.Err(), rows.Close()); err != nil {
 		return nil, fmt.Errorf("list review round diff metrics %q: %w", runID, err)
 	}
 	out := make(map[int]domain.ReviewRoundDiffMetrics)

@@ -30,13 +30,9 @@ type runBillableCost struct {
 func (tx *ReadTx) projectRunBillableCost(
 	ctx context.Context, runID domain.RunID,
 ) (runBillableCost, error) {
-	rows, err := tx.tx.QueryContext(ctx, listRunUsageObservationsSQL, runID)
+	observations, err := queryAll(ctx, tx.tx, scanUsageObservation, listRunUsageObservationsSQL, runID)
 	if err != nil {
 		return runBillableCost{}, fmt.Errorf("list run usage observations %q: %w", runID, err)
-	}
-	observations, err := scanUsageObservations(rows, fmt.Sprintf("list run usage observations %q", runID))
-	if err != nil {
-		return runBillableCost{}, err
 	}
 	totals, err := domain.ProjectRunUsage(observations)
 	if err != nil {
@@ -298,11 +294,11 @@ type UsageReadTx struct {
 func (tx *UsageReadTx) ListRunUsageObservations(
 	ctx context.Context, runID domain.RunID,
 ) ([]domain.UsageObservation, error) {
-	rows, err := tx.tx.QueryContext(ctx, listRunUsageObservationsSQL, runID)
+	observations, err := queryAll(ctx, tx.tx, scanUsageObservation, listRunUsageObservationsSQL, runID)
 	if err != nil {
 		return nil, fmt.Errorf("list run usage observations %q: %w", runID, err)
 	}
-	return scanUsageObservations(rows, fmt.Sprintf("list run usage observations %q", runID))
+	return observations, nil
 }
 
 // ListUsageObservationsByTreatment lists all observations in primary-key
@@ -310,41 +306,33 @@ func (tx *UsageReadTx) ListRunUsageObservations(
 func (tx *UsageReadTx) ListUsageObservationsByTreatment(
 	ctx context.Context,
 ) ([]domain.UsageObservation, error) {
-	rows, err := tx.tx.QueryContext(ctx, listUsageObservationsByTreatmentSQL)
+	observations, err := queryAll(ctx, tx.tx, scanUsageObservation, listUsageObservationsByTreatmentSQL)
 	if err != nil {
 		return nil, fmt.Errorf("list usage observations by treatment: %w", err)
 	}
-	return scanUsageObservations(rows, "list usage observations by treatment")
+	return observations, nil
 }
 
-func scanUsageObservations(rows *sql.Rows, operation string) ([]domain.UsageObservation, error) {
-	defer func() { _ = rows.Close() }()
-	var observations []domain.UsageObservation
-	for rows.Next() {
-		var observation domain.UsageObservation
-		var observedAt string
-		if err := rows.Scan(
-			&observation.InvocationID, &observation.RunID,
-			&observation.AgentDigest, &observation.LaunchDigest,
-			&observation.TreatmentDigest, &observation.PricingRevision,
-			&observation.Source, &observation.Kind, &observation.Metric,
-			&observation.Unit, &observation.Quantity, &observation.Sequence,
-			&observedAt,
-		); err != nil {
-			return nil, fmt.Errorf("%s: %w", operation, err)
-		}
-		parsed, err := parseTime(observedAt)
-		if err != nil {
-			return nil, fmt.Errorf("%s: %w", operation, err)
-		}
-		observation.ObservedAt = parsed
-		if err := observation.Validate(); err != nil {
-			return nil, fmt.Errorf("%s: %w", operation, err)
-		}
-		observations = append(observations, observation)
+func scanUsageObservation(row scanner) (domain.UsageObservation, error) {
+	var observation domain.UsageObservation
+	var observedAt string
+	if err := row.Scan(
+		&observation.InvocationID, &observation.RunID,
+		&observation.AgentDigest, &observation.LaunchDigest,
+		&observation.TreatmentDigest, &observation.PricingRevision,
+		&observation.Source, &observation.Kind, &observation.Metric,
+		&observation.Unit, &observation.Quantity, &observation.Sequence,
+		&observedAt,
+	); err != nil {
+		return domain.UsageObservation{}, err
 	}
-	if err := rows.Err(); err != nil {
-		return nil, fmt.Errorf("%s: %w", operation, err)
+	parsed, err := parseTime(observedAt)
+	if err != nil {
+		return domain.UsageObservation{}, err
 	}
-	return observations, nil
+	observation.ObservedAt = parsed
+	if err := observation.Validate(); err != nil {
+		return domain.UsageObservation{}, err
+	}
+	return observation, nil
 }
