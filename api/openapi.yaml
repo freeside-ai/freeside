@@ -7849,7 +7849,7 @@ components:
         [id, project_id, task_id, display_names, created_at, last_activity_at, spec_digest,
          policy_digest, campaign_id, attempt_number, attempt_reason,
          parent_run_id, revises_run_id, stages, latest_milestone, outcome, hold_reason,
-         lifecycle, superseded_by, completion, billable_cost_so_far]
+         hold_usage_pool, lifecycle, superseded_by, completion, billable_cost_so_far]
       properties:
         id:
           type: string
@@ -7928,6 +7928,17 @@ components:
           nullable: true
           allOf:
             - $ref: "#/components/schemas/RunHoldReason"
+        hold_usage_pool:
+          type: string
+          minLength: 1
+          nullable: true
+          description: >
+            The full pool of a usage_pool_exhausted hold, the same pool the
+            run's timeline RunHold.usage_pool names; present exactly beside
+            that hold_reason and null beside every other reason and when the
+            run has no hold. Lets a client count the usage_pool_exhausted
+            runs on each pool from sync alone; a quota_window_exhausted
+            hold's pool stays on the timeline's RunHold.quota_window.
         lifecycle:
           $ref: "#/components/schemas/RunLifecycle"
         superseded_by:
@@ -7973,6 +7984,7 @@ components:
         latest_milestone: "invocation_started"
         outcome: "pending"
         hold_reason: null
+        hold_usage_pool: null
         lifecycle: "active"
         superseded_by: null
         completion: null
