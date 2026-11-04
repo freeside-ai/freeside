@@ -47,7 +47,10 @@ func TestLiveClaudeUsage(t *testing.T) {
 		t.Fatal(err)
 	}
 	rt := NewCLIRuntime(bin)
-	for _, mode := range []string{"idle", "turn"} {
+	// Evidence from the variants that ran, for the per-path window verdicts.
+	// Subtests run in order, never in parallel.
+	ran := map[string]claudeUsageEvidence{}
+	for _, mode := range claudeUsageVariants {
 		t.Run(mode, func(t *testing.T) {
 			var random [16]byte
 			if _, err := rand.Read(random[:]); err != nil {
@@ -188,7 +191,11 @@ func TestLiveClaudeUsage(t *testing.T) {
 			if err := os.WriteFile(filepath.Join(config, ".credentials.json"), []byte("{}"), 0o444); err != nil { //nolint:gosec // empty, non-secret auth-store sentinel on a read-only mount
 				t.Fatal(err)
 			}
-			fixture, err := os.ReadFile("testdata/claude_usage_probe.cjs")
+			driver, source := "probe.cjs", "testdata/claude_usage_probe.cjs"
+			if mode == "read" {
+				driver, source = "read.cjs", "testdata/claude_usage_read.cjs"
+			}
+			fixture, err := os.ReadFile(source)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -196,7 +203,7 @@ func TestLiveClaudeUsage(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			for path, body := range map[string][]byte{"probe.cjs": fixture, "config.json": settings, "ca.pem": proxy.ca, "instructions.txt": []byte("Do not use tools. Reply with OK.")} {
+			for path, body := range map[string][]byte{driver: fixture, "config.json": settings, "ca.pem": proxy.ca, "instructions.txt": []byte("Do not use tools. Reply with OK.")} {
 				if err := os.WriteFile(filepath.Join(input, path), body, 0o644); err != nil { //nolint:gosec // fixed non-secret fixtures readable by the dropped UID
 					t.Fatal(err)
 				}
@@ -273,7 +280,7 @@ func TestLiveClaudeUsage(t *testing.T) {
 			mounts := []Mount{{Type: MountVolume, Source: volume, Target: "/probe", ReadOnly: true}}
 			spec := ContainerSpec{
 				Name: name, Image: image, Network: network, Labels: labels, Mounts: mounts,
-				Size: DefaultLaunchSize(LaunchConformance), Command: []string{"sh", "-c", "node /probe/probe.cjs; touch /completed; sleep 90"},
+				Size: DefaultLaunchSize(LaunchConformance), Command: []string{"sh", "-c", "node /probe/" + driver + "; touch /completed; sleep 90"},
 			}
 			create(spec)
 			if err := rt.StartContainer(ctx, name); err != nil {
@@ -326,9 +333,17 @@ func TestLiveClaudeUsage(t *testing.T) {
 			proxy.server.Close()
 			proxy.wg.Wait()
 			proxy.mu.Lock()
-			evidence := claudeUsageAnalyze(result, proxy.inference, proxy.refresh, proxy.failures)
+			evidence := claudeUsageAnalyze(result, proxy.inference, proxy.refresh, proxy.failures, proxy.usageVerdicts)
+			if mode == "read" {
+				evidence = claudeUsageReadAnalyze(result, proxy.refresh, proxy.failures, proxy.usageStatuses)
+			}
+			ran[mode] = evidence
 			t.Logf("capture flags: version=%t auth_unchanged=%t malformed=%t overflow=%t spawn_failed=%t signal=%t driver_failure=%t", result.Version == "2.1.220", result.AuthUnchanged, result.Malformed, result.Overflow, result.SpawnFailed, result.Signal != nil, result.Failure != "")
 			t.Logf("sanitized request trace: %v", proxy.requests)
+			t.Logf("usage read statuses: %v, verdicts: %v; seed headers present on inference: %v", proxy.usageStatuses, proxy.usageVerdicts, proxy.seedHeaders)
+			if mode == "read" {
+				t.Log("direct read target: GET https://api.anthropic.com/api/oauth/usage; egress provider_only: api.anthropic.com:443, one route; no refresh token in the snapshot")
+			}
 			safe, err := json.Marshal(struct {
 				Image     string              `json:"image"`
 				Mode      string              `json:"mode"`
@@ -344,9 +359,21 @@ func TestLiveClaudeUsage(t *testing.T) {
 				t.Fatal("encode sanitized evidence")
 			}
 			t.Log(string(safe))
-			if evidence.Verdict == "probe_failed" {
+			t.Logf("window verdicts for this variant: %v", claudeUsageWindows([]claudeUsageEvidence{evidence}))
+			if evidence.Verdict == "probe_failed" || strings.HasPrefix(evidence.Verdict, "failed") {
 				t.Fatal("probe failed; this is not an unsupported verdict")
 			}
 		})
+	}
+	// A path's verdict covers only the variants that ran; a skipped variant,
+	// such as a withheld turn, is named so it is never read as unsupported.
+	for _, direct := range []bool{false, true} {
+		probes, names := []claudeUsageEvidence{}, []string{}
+		for _, variant := range claudeUsageVariants {
+			if evidence, ok := ran[variant]; ok && (variant == "read") == direct {
+				probes, names = append(probes, evidence), append(names, variant)
+			}
+		}
+		t.Logf("path %d window verdicts over %v: %v", map[bool]int{false: 1, true: 2}[direct], names, claudeUsageWindows(probes))
 	}
 }

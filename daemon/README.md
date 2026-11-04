@@ -180,11 +180,20 @@ authorization. Its token stays in process memory and must not be printed.
 ## Claude Subscription Usage Spike
 
 `TestLiveClaudeUsage` tests Claude **2.1.220** with only a setup token. It
-runs two separate, bounded invocations: an idle `get_usage` control request
-after `initialize`, adding `--input-format stream-json`, and a minimal
-inference turn using the writer's `-p --output-format stream-json --verbose`
-mode. The idle variant sends no user message. This is test-only evidence for
-#1713; synthetic fixtures are not evidence of provider support.
+runs five separate, bounded variants, each in its own containers:
+
+| Variant | Path | What it does |
+| --- | --- | --- |
+| `idle` | 1 | `get_usage` after `initialize`, adding `--input-format stream-json`; no user message |
+| `idle_profile_scope` | 1 | As `idle`, with `CLAUDE_CODE_OAUTH_SCOPES='user:inference user:profile'` and nonessential traffic allowed, so the CLI sends its own usage read; no user message |
+| `turn` | 1 | One minimal inference turn in the writer's `-p --output-format stream-json --verbose` mode |
+| `turn_seeded` | 1 | Duplex: the scope override, one user turn, then `get_usage`, which the CLI may seed from the turn's rate-limit response headers |
+| `read` | 2 | One direct `GET https://api.anthropic.com/api/oauth/usage` with the setup token as bearer, outside the CLI |
+
+The scope override is a launch change, not a credential change: the token,
+its grant and its storage are unchanged. Only `turn` and `turn_seeded` may
+infer. This is test-only evidence for #1713 and #2389; synthetic fixtures are
+not evidence of provider support.
 
 Run the offline evidence checks first, from the repository root:
 
@@ -193,9 +202,12 @@ go -C daemon test ./internal/ward -run '^TestClaudeUsage' -count=1
 ```
 
 The live test requires macOS, Apple `container`, its running service, a
-cached digest-pinned Claude image in `FREESIDE_WARD_CLAUDE_AGENT_IMAGE`,
+digest-pinned Claude 2.1.220 image in `FREESIDE_WARD_CLAUDE_AGENT_IMAGE`, and
 `CLAUDE_CODE_OAUTH_TOKEN` supplied through the existing private secret-input
-convention. This standalone ephemeral probe starts no Freeside daemon and
+convention. If the local store no longer holds the image, rebuild it with
+`scripts/build-agent-claude-image.sh --claude-version 2.1.220
+--local-registry-port PORT`; Apple `container` resolves a digest reference
+only after that seeding, and the new digest is what the test then pins. This standalone ephemeral probe starts no Freeside daemon and
 uses no GitHub App publication authority. It needs no production rig lease;
 leave supervised production and dev instances alone.
 
@@ -223,7 +235,21 @@ and alternate backends. Ordinary scratch is disposable.
 
 A test-only TLS proxy observes method/path counters before forwarding to
 the provider. It verifies upstream TLS, blocks refresh requests and blocks
-inference during the idle case. The isolated CLI trusts an ephemeral test CA;
+inference outside the two turn variants. In `idle_profile_scope` it also
+blocks the CLI's named nonessential routes (bootstrap, penguin mode, MCP
+registry) without failing the run. In `read` it admits only
+`api.anthropic.com:443` and only the usage route, so the second holder of the
+token can reach nothing else. The read driver sends the headers the proxy
+observed on the CLI's own read of that route (`User-Agent: claude-cli/2.1.220
+(external, sdk-cli)`, `anthropic-beta: oauth-2025-04-20`, axios's default
+`Accept`) and never refreshes. One rule classifies both that read and the
+CLI's: a 401, or a refusal naming an expired, revoked or invalid token, is
+`failed:auth`; a remaining scope refusal is `unsupported`; any other refusal
+or throttle is `failed:unreviewed`. In `idle_profile_scope` the CLI folds a
+refused read into a null answer, so that variant counts only with exactly one
+classified read: a supported read keeps the CLI's answer unless the CLI
+dropped it, a scope refusal makes it `usage_refused`, and anything else is
+`probe_failed`. The isolated CLI trusts an ephemeral test CA;
 no host trust store changes. These are measurement deviations from the writer
 launch, alongside the fixed minimal prompt and session ID. The test fails if
 its observed topology differs from the declared host-only network and mounts.
@@ -238,7 +264,14 @@ usage fields fail capture instead of being silently discarded. Do not upload
 temporary captures or credentials. Review sanitized
 examples before committing them. No event in one successful turn means only
 `event_not_observed`; auth, transport, timeout and parsing failures mean
-`probe_failed`, never `unsupported`.
+`probe_failed`, never `unsupported`. A `get_usage` answer is
+`usage_unavailable` when the CLI reports allowance unavailable,
+`usage_withheld` when it reports it available but returns null, and
+`usage_observed` when it returns windows. The test then maps each window kind
+(`five_hour`; `weekly` from `seven_day`; `model_scoped` from
+`seven_day_opus` and `seven_day_sonnet`) to `share`, `status_and_reset` or
+`unsupported` over the variants that ran, and gives no window verdict when any
+of them failed.
 
 For private schema diagnosis, `FREESIDE_WARD_USAGE_PRIVATE_CAPTURE_DIR` may
 name a new, empty, owner-only directory. It receives bounded raw captures,

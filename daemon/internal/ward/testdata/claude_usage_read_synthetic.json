@@ -1,0 +1,23 @@
+[
+  {"name": "full answer", "status": 200, "body": "{\"five_hour\":{\"utilization\":12.5,\"resets_at\":\"2026-10-03T06:00:00Z\"},\"seven_day\":{\"utilization\":null,\"resets_at\":\"2026-10-08T00:00:00Z\"},\"seven_day_opus\":null,\"extra_usage\":{\"is_enabled\":false,\"monthly_limit\":null,\"used_credits\":null,\"utilization\":null}}", "want": "supported", "windows": {"five_hour": "share", "weekly": "status_and_reset", "model_scoped": "unsupported"}},
+  {"name": "null windows", "status": 200, "body": "{\"five_hour\":null,\"seven_day\":null,\"seven_day_opus\":null,\"seven_day_sonnet\":null}", "want": "supported", "windows": {"five_hour": "unsupported", "weekly": "unsupported", "model_scoped": "unsupported"}},
+  {"name": "absent fields", "status": 200, "body": "{\"seven_day_sonnet\":{\"utilization\":3}}", "want": "supported", "windows": {"five_hour": "unsupported", "weekly": "unsupported", "model_scoped": "share"}},
+  {"name": "unreviewed field", "status": 200, "body": "{\"five_hour\":null,\"account_uuid\":\"synthetic-secret\"}", "want": "failed:unreviewed"},
+  {"name": "malformed", "status": 200, "body": "{\"five_hour\":", "want": "failed:unreviewed"},
+  {"name": "not an object", "status": 200, "body": "null", "want": "failed:unreviewed"},
+  {"name": "invalid token", "status": 401, "body": "{\"type\":\"error\",\"error\":{\"type\":\"authentication_error\",\"message\":\"Invalid bearer token\"}}", "want": "failed:auth"},
+  {"name": "scope refusal", "status": 403, "body": "{\"type\":\"error\",\"error\":{\"type\":\"permission_error\",\"message\":\"OAuth token does not meet scope requirement user:profile\"}}", "want": "unsupported"},
+  {"name": "scope refusal without envelope type", "status": 403, "body": "{\"error\":{\"type\":\"permission_error\",\"message\":\"OAuth token does not meet scope requirement user:profile\"}}", "want": "unsupported", "errorType": "permission_error"},
+  {"name": "invalid-token throttle", "status": 429, "body": "{\n  \"error\": {\n    \"type\": \"rate_limit_error\",\n    \"message\": \"Rate limited. Please try again later.\"\n  }\n}", "want": "failed:unreviewed", "errorType": "rate_limit_error"},
+  {"name": "unreviewed error type", "status": 403, "body": "{\"error\":{\"type\":\"synthetic-secret\",\"message\":\"scope\"}}", "want": "failed:unreviewed", "errorType": ""},
+  {"name": "revoked token", "status": 403, "body": "{\"type\":\"error\",\"error\":{\"type\":\"permission_error\",\"message\":\"OAuth token has been revoked. Please obtain a new token.\"}}", "want": "failed:auth"},
+  {"name": "expired token naming a scope", "status": 403, "body": "{\"error\":{\"type\":\"permission_error\",\"message\":\"OAuth token has expired or lacks the required scope\"}}", "want": "failed:auth", "errorType": "permission_error"},
+  {"name": "unscoped permission refusal", "status": 403, "body": "{\"type\":\"error\",\"error\":{\"type\":\"permission_error\",\"message\":\"synthetic-secret\"}}", "want": "failed:unreviewed"},
+  {"name": "non-JSON refusal", "status": 403, "body": "scope", "want": "failed:unreviewed"},
+  {"name": "throttled", "status": 429, "body": "{\"type\":\"error\",\"error\":{\"type\":\"rate_limit_error\",\"message\":\"scope\"}}", "want": "failed:unreviewed"},
+  {"name": "missing route", "status": 404, "body": "{\"type\":\"error\",\"error\":{\"type\":\"not_found_error\",\"message\":\"scope\"}}", "want": "failed:unreviewed"},
+  {"name": "server error", "status": 500, "body": "{\"type\":\"error\",\"error\":{\"type\":\"api_error\",\"message\":\"scope\"}}", "want": "failed:unreviewed"},
+  {"name": "timeout", "timedOut": true, "want": "failed:timeout"},
+  {"name": "transport", "transportFailed": true, "want": "failed:transport"},
+  {"name": "no status", "want": "failed:transport"}
+]

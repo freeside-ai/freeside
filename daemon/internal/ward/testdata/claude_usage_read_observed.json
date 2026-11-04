@@ -1,0 +1,4 @@
+[
+  {"name": "observed scope refusal (2026-11-03, request_id removed)", "status": 403, "body": "{\"type\":\"error\",\"error\":{\"type\":\"permission_error\",\"message\":\"OAuth token does not meet scope requirement user:profile\",\"details\":{\"required_scopes\":[\"user:profile\"],\"match\":\"any\",\"error_visibility\":\"user_facing\",\"error_code\":\"oauth_scope_insufficient\"}}}", "want": "unsupported", "errorType": "permission_error", "windows": {"five_hour": "unsupported", "weekly": "unsupported", "model_scoped": "unsupported"}},
+  {"name": "observed throttle (2026-11-03)", "status": 429, "body": "{\n  \"error\": {\n    \"type\": \"rate_limit_error\",\n    \"message\": \"Rate limited. Please try again later.\"\n  }\n}", "want": "failed:unreviewed", "errorType": "rate_limit_error"}
+]
