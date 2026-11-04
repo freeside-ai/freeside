@@ -158,6 +158,7 @@ func (s *Store) Write(ctx context.Context, fn func(*WriteTx) error) error {
 	if err := tx.Commit(); err != nil {
 		return fmt.Errorf("commit: %w", err)
 	}
+	s.signalRevisionChanged()
 	if wtx.readyItemCreated {
 		select {
 		case s.readyItemCreated <- struct{}{}:
@@ -301,6 +302,7 @@ func (s *Store) NewEpoch(ctx context.Context) (ServerState, error) {
 		`UPDATE server_state SET sync_epoch = ? WHERE id = 1`, epoch); err != nil {
 		return ServerState{}, fmt.Errorf("set sync_epoch: %w", err)
 	}
+	s.signalRevisionChanged()
 	return s.ServerState(ctx)
 }
 

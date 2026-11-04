@@ -7,6 +7,7 @@ import (
 	"maps"
 	"net/url"
 	"slices"
+	"sync"
 	"time"
 
 	// The pure-Go SQLite driver: keeps the daemon a single static binary
@@ -107,6 +108,12 @@ type Store struct {
 	// ready-for-final-review item commits. Durable reconciliation remains the
 	// source of truth, so one pending wake is sufficient.
 	readyItemCreated chan struct{}
+	// revisionChanged is the process-local broadcast behind RevisionChanged:
+	// closed (and cleared) whenever a commit could move what the revision
+	// heartbeat reports, created lazily by the next waiter. The zero value is
+	// ready to use, so a Store built without Open still signals.
+	revisionMu      sync.Mutex
+	revisionChanged chan struct{}
 	// approvedRecipes is the operator's recipe set (see Options.ApprovedRecipes),
 	// snapshotted at Open and threaded into every transaction. Read-only after
 	// Open, so it is safe to share across concurrent transactions.
@@ -352,6 +359,31 @@ func resolveVerificationFloorRegistryGeneration(configured, compiled uint64) (ui
 		return 0, fmt.Errorf("verification floor registry generation: %w", domain.ErrVerificationFloorRegressed)
 	}
 	return configured, nil
+}
+
+// RevisionChanged returns a channel that closes at the next commit that moves
+// the sync revision or epoch in this process: every Write, NewEpoch, and
+// Restore. It is a latency signal for the revision long-poll (plan §5.14),
+// never a source of truth. A waiter takes the channel before it reads the
+// revision, so a commit between that read and the wait still wakes it.
+func (s *Store) RevisionChanged() <-chan struct{} {
+	s.revisionMu.Lock()
+	defer s.revisionMu.Unlock()
+	if s.revisionChanged == nil {
+		s.revisionChanged = make(chan struct{})
+	}
+	return s.revisionChanged
+}
+
+// signalRevisionChanged wakes every current RevisionChanged waiter. It runs
+// after a commit, never inside a transaction.
+func (s *Store) signalRevisionChanged() {
+	s.revisionMu.Lock()
+	defer s.revisionMu.Unlock()
+	if s.revisionChanged != nil {
+		close(s.revisionChanged)
+		s.revisionChanged = nil
+	}
 }
 
 // ReadyItemCreated reports that a new open ready-for-final-review item

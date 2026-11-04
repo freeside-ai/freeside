@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"log/slog"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/freeside-ai/freeside/daemon/internal/domain"
@@ -84,6 +85,10 @@ type Service struct {
 	// imageUpkeepWake asks image upkeep for a pass after an approved
 	// adoption card commits (WithImageUpkeepWake). Nil means none is bound.
 	imageUpkeepWake func()
+	// closing releases every open revision long-poll (RevisionAfter) when the
+	// daemon shuts down; closeOnce makes Shutdown idempotent.
+	closing   chan struct{}
+	closeOnce sync.Once
 }
 
 // FollowUpFiler is the dispatcher that files approved follow-up issues. It is
@@ -204,7 +209,10 @@ func WithTaskSubmitter(submitter TaskSubmitter) Option {
 }
 
 func NewService(st *store.Store, opts ...Option) *Service {
-	s := &Service{store: st, now: time.Now, logger: slog.New(slog.DiscardHandler)}
+	s := &Service{
+		store: st, now: time.Now, logger: slog.New(slog.DiscardHandler),
+		closing: make(chan struct{}),
+	}
 	for _, opt := range opts {
 		opt(s)
 	}

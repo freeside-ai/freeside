@@ -109,8 +109,21 @@ public actor MockServer {
     /// for the daemon's durable transition log, whose latest row wins.
     private var operatorStop: (commandID: String, since: Date)?
     private var currentTime = Date(timeIntervalSince1970: 1_786_502_645)
-    private var revision: Int64 = 1
-    private var syncEpoch = "mock-epoch"
+    private var revision: Int64 = 1 {
+        didSet { if revision != oldValue { releaseRevisionWaiters() } }
+    }
+    private var syncEpoch = "mock-epoch" {
+        didSet { if syncEpoch != oldValue { releaseRevisionWaiters() } }
+    }
+    /// Open `getSyncRevision` long polls, each released by a revision or
+    /// epoch move, its bound, or its task's cancellation, as the daemon's
+    /// `RevisionAfter` is.
+    private var revisionWaiters: [UUID: CheckedContinuation<Void, Never>] = [:]
+    private var revisionWaiterArrivals: [(count: Int, waiter: CheckedContinuation<Void, Never>)] = []
+    private var revisionWaitBound: Duration = .seconds(25)
+    /// Every `after` a `getSyncRevision` request carried, nil for the
+    /// immediate form, in arrival order.
+    public private(set) var receivedRevisionAfters: [Int64?] = []
     private var epochGeneration = 1
     private var healthVersion = "mock"
     private var healthStartedAt = Date(timeIntervalSince1970: 1_725_184_800)
@@ -404,6 +417,19 @@ public actor MockServer {
     /// revision at the same sync revision.
     public func setAgentCatalog(_ catalog: Components.Schemas.AgentCatalog?) {
         agentCatalog = catalog
+    }
+
+    /// Shortens how long a `getSyncRevision` long poll waits with no change
+    /// (the daemon's is 25 seconds), so a test can reach the bound.
+    public func setRevisionWaitBound(_ bound: Duration) {
+        revisionWaitBound = bound
+    }
+
+    /// Returns once at least `count` `getSyncRevision` long polls are held,
+    /// so a test can act during a wait without sleeping.
+    public func waitForHeldRevisionRequests(_ count: Int) async {
+        if revisionWaiters.count >= count { return }
+        await withCheckedContinuation { revisionWaiterArrivals.append((count, $0)) }
     }
 
     /// Serves a contract digest other than this client's, so a test can
@@ -852,6 +878,44 @@ public actor MockServer {
             sync_epoch: syncEpoch, revision: revision,
             unattended_operation: unattendedOperationSnapshot(),
             lineup_revision: agentCatalog.map { .init(value1: $0.lineup_revision) })
+    }
+
+    /// The heartbeat with the daemon's long-poll rule: a request whose
+    /// `after` equals the revision is held until the revision or epoch
+    /// moves, the wait bound elapses, or the request is cancelled; any other
+    /// request answers at once. Every answer is read when it is sent.
+    func serverRevision(after: Int64?) async -> Components.Schemas.ServerRevision {
+        receivedRevisionAfters.append(after)
+        guard let after, after == revision else { return serverRevision() }
+        let id = UUID()
+        let bound = revisionWaitBound
+        let timeout = Task { [weak self] in
+            try? await Task.sleep(for: bound)
+            await self?.releaseRevisionWaiter(id)
+        }
+        await withTaskCancellationHandler {
+            await withCheckedContinuation {
+                revisionWaiters[id] = $0
+                let held = revisionWaiters.count
+                let arrived = revisionWaiterArrivals.filter { $0.count <= held }
+                revisionWaiterArrivals.removeAll { $0.count <= held }
+                for arrival in arrived { arrival.waiter.resume() }
+            }
+        } onCancel: {
+            Task { await self.releaseRevisionWaiter(id) }
+        }
+        timeout.cancel()
+        return serverRevision()
+    }
+
+    private func releaseRevisionWaiter(_ id: UUID) {
+        revisionWaiters.removeValue(forKey: id)?.resume()
+    }
+
+    private func releaseRevisionWaiters() {
+        let waiters = revisionWaiters.values
+        revisionWaiters.removeAll()
+        for waiter in waiters { waiter.resume() }
     }
 
     func healthStatus() throws -> Components.Schemas.HealthStatus {

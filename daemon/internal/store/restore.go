@@ -305,6 +305,7 @@ func (s *Store) restoreFromSource(
 		return ServerState{}, fmt.Errorf("restore: commit: %w", err)
 	}
 	committed = true
+	s.signalRevisionChanged()
 	return state, nil
 }
 
@@ -403,6 +404,7 @@ func (s *Store) restoreFromDatabase(
 		return ServerState{}, fmt.Errorf("restore: commit: %w", err)
 	}
 	committed = true
+	s.signalRevisionChanged()
 	return state, nil
 }
 

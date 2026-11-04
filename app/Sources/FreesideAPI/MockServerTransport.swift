@@ -76,7 +76,21 @@ public struct MockServerTransport: ClientTransport {
         case "getHealth":
             return try Self.json(status: .ok, body: await server.healthStatus())
         case "getSyncRevision":
-            return try Self.json(status: .ok, body: await server.serverRevision())
+            // The daemon's query rule: absent waits for nothing, and a value
+            // that is not a non-negative integer is a 400.
+            let afters =
+                URLComponents(string: request.path ?? "")?.queryItems?
+                .filter { $0.name == "after" } ?? []
+            var after: Int64?
+            if !afters.isEmpty {
+                guard afters.count == 1, let value = afters[0].value.flatMap({ Int64($0) }), value >= 0 else {
+                    return try Self.json(
+                        status: .badRequest,
+                        body: Components.Schemas._Error(message: "after must be a non-negative integer"))
+                }
+                after = value
+            }
+            return try Self.json(status: .ok, body: await server.serverRevision(after: after))
         case "getSyncBootstrap":
             do {
                 return try Self.json(

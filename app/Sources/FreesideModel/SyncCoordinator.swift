@@ -16,14 +16,16 @@ import OpenAPIRuntime
 @MainActor
 @Observable
 public final class SyncCoordinator {
-    /// The foreground refresh cadence and the age at which the last
-    /// successful refresh is called stale, declared together because the
-    /// cadence must stay well under the threshold: both apps' heartbeat
-    /// loops run every `heartbeatInterval`, while the banner waits
-    /// `stalenessThreshold`, so a Stale banner means several consecutive
-    /// rounds all ended without reaching a stamp (`performHeartbeat` or the
-    /// bootstrap `adopt`), not a single missed beat. `SyncCoordinatorTests`
-    /// pins the ordering between the two.
+    /// The heartbeat loop's pacing and the age at which the last successful
+    /// refresh is called stale, declared together because the cadence must
+    /// stay well under the threshold. Between rounds the loop long-polls the
+    /// daemon's revision, which answers on a change or at the daemon's
+    /// 25-second bound, and each answer starts a round; `heartbeatInterval`
+    /// is the floor between rounds when a round fails or a long poll answers
+    /// nothing new. So a Stale banner means several consecutive rounds all
+    /// ended without reaching a stamp (`performHeartbeat` or the bootstrap
+    /// `adopt`), not a single missed beat. `SyncCoordinatorTests` pins the
+    /// ordering between the two.
     public static let stalenessThreshold: TimeInterval = 60
     public static let heartbeatInterval: Duration = .seconds(15)
 
@@ -419,6 +421,12 @@ public final class SyncCoordinator {
                         settleRoutingPolicyChange()
                     }
                 }
+            case .badRequest:
+                // Only a malformed `after` earns a 400, and this read sends
+                // none, so it is a failed read like any other status.
+                let diagnosed = await failureFreshness(status: 400)
+                guard generation == syncGeneration else { return }
+                store.freshness = diagnosed
             case .undocumented(let statusCode, _):
                 let diagnosed = await failureFreshness(status: statusCode)
                 guard generation == syncGeneration else { return }
@@ -433,16 +441,66 @@ public final class SyncCoordinator {
     }
 
     /// Heartbeats until cancelled; failures already degrade to the
-    /// banner, so the loop itself never exits early.
-    public func heartbeatLoop(every interval: Duration) async {
+    /// banner, so the loop itself never exits early. After a round that ends
+    /// fresh, the loop long-polls the revision so a change starts the next
+    /// round in about a second; otherwise it waits `interval`.
+    ///
+    /// `waitLimit` caps one long poll at the daemon's 25-second bound plus
+    /// slack: a connection that died silently (a network handoff, an app
+    /// suspended in the background) would otherwise hold the loop until
+    /// URLSession's 60-second timeout. `changeFloor` is the least time from a
+    /// long poll's start to the round its change starts, so a burst of
+    /// daemon commits costs one round, not one per commit.
+    public func heartbeatLoop(
+        every interval: Duration, waitLimit: Duration = .seconds(35), changeFloor: Duration = .seconds(1)
+    ) async {
         while !Task.isCancelled {
             // Periodic, manual, foreground, and reachability refreshes share
             // one operation. Otherwise a periodic heartbeat can invalidate
             // the manual round's generation while that round still reports
             // completion to its caller.
             await periodicRefresh()
-            try? await Task.sleep(for: interval)
+            if store.freshness == .fresh, let cursors {
+                await awaitRevisionChange(
+                    after: cursors.highestObservedServerRevision, epoch: cursors.syncEpoch,
+                    limit: waitLimit, changeFloor: changeFloor, unchangedFloor: interval)
+            } else {
+                try? await Task.sleep(for: interval)
+            }
         }
+    }
+
+    /// Holds the daemon's revision long poll open until it answers (plan
+    /// §5.14: a latency channel only). The answer is never adopted: it only
+    /// ends the wait, and the caller's next round reads and judges the state
+    /// as every round does. So the wait stays outside `heartbeat()` and the
+    /// shared refresh task, and a manual refresh never joins it.
+    ///
+    /// An answer that moved nothing arrives at the daemon's bound; a failed,
+    /// cut-off, or unchanged answer that came sooner (a transport failure, or
+    /// a daemon too old to wait) is held to `unchangedFloor` so it cannot spin.
+    private func awaitRevisionChange(
+        after: Int64, epoch: String, limit: Duration, changeFloor: Duration, unchangedFloor: Duration
+    ) async {
+        let clock = ContinuousClock()
+        let start = clock.now
+        let client = store.client
+        let changed = await withTaskGroup(of: Bool.self) { group in
+            group.addTask {
+                guard let output = try? await client.getSyncRevision(query: .init(after: after)),
+                    case .ok(let ok) = output, let server = try? ok.body.json
+                else { return false }
+                return server.revision != after || server.sync_epoch != epoch
+            }
+            group.addTask {
+                try? await Task.sleep(for: limit)
+                return false
+            }
+            let first = await group.next() ?? false
+            group.cancelAll()
+            return first
+        }
+        try? await Task.sleep(until: start + (changed ? changeFloor : unchangedFloor), clock: clock)
     }
 
     func periodicRefresh() async {
