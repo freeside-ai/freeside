@@ -2033,6 +2033,86 @@ extension MockServerTests {
         #expect(line.predecessor_id?.value1 == task.task_lines.first?.id)
     }
 
+    @Test func taskTimelineRecordsEachLineVersionTheMockWrites() async throws {
+        let client = APIClientFactory.mock(server: MockServer())
+        let lines: [Components.Schemas.TaskLineInput] = [
+            .init(role: .implementer, agent: "claude-secondary"), .init(role: .reviewer, agent: "codex-primary"),
+        ]
+        let submit = submitTaskCommand("cmd-lines", lines: lines)
+        let taskID = try await client.submitCommand(body: .json(submit)).ok.body.json.record.asSubmitTask.task_id
+        func lineEvents() async throws -> [Components.Schemas.TaskEvent] {
+            try await client.getTaskTimeline(path: .init(task_id: taskID)).ok.body.json.events
+                .filter { $0.kind == .task_line_set }
+        }
+        // The whole event is compared, so every detail the daemon leaves null
+        // (run_id, campaign_id, and the rest) must be null here too.
+        func expected(
+            lineID: String, role: Components.Schemas.TaskLineRole, agent: String?, version: Int,
+            source: Components.Schemas.TaskLineSource, superseded: String?, at: Date
+        ) -> Components.Schemas.TaskEvent {
+            .init(
+                line: .init(
+                    value1: .init(
+                        line_id: lineID, role: role, agent: agent, version: version, source: source,
+                        superseded_agent: superseded, provenance: nil)),
+                kind: .task_line_set, recorded_at: at)
+        }
+        func change(_ commandID: String, agent: String?) async throws -> Components.Schemas.TaskLine? {
+            let command = Components.Schemas.ClientCommand(
+                command_id: commandID, device_id: "device-1",
+                payload: .change_task_line(
+                    .init(kind: .change_task_line, task_id: taskID, role: .implementer, agent: agent)))
+            let result = try await client.submitCommand(body: .json(command)).ok.body.json
+            guard case .change_task_line(let record) = result.record else {
+                Issue.record("expected a change_task_line record")
+                return nil
+            }
+            return record.line?.value1
+        }
+
+        // Events at one instant have no promised order, so match by role.
+        let task = try #require(
+            try await client.getSyncBootstrap().ok.body.json.tasks.first { $0.task.id == taskID }?.task)
+        let submitted = try await lineEvents()
+        #expect(submitted.count == 2)
+        for line in task.task_lines {
+            #expect(
+                submitted.contains(
+                    expected(
+                        lineID: line.id, role: line.role, agent: line.agent, version: 1, source: .submit_task,
+                        superseded: nil, at: line.set_at)))
+        }
+
+        // A change records version 2, superseding the submitted agent.
+        let v2 = try #require(try await change("cmd-v2", agent: "claude-primary"))
+        var events = try await lineEvents()
+        #expect(events.count == 3)
+        #expect(
+            events.contains(
+                expected(
+                    lineID: v2.id, role: .implementer, agent: "claude-primary", version: 2,
+                    source: .client_line_change, superseded: "claude-secondary", at: v2.set_at)))
+
+        // A clear records a version with no agent; setting the role again
+        // supersedes nothing.
+        #expect(try await change("cmd-v3", agent: nil) == nil)
+        #expect(try await change("cmd-v4", agent: "claude-secondary") != nil)
+        events = try await lineEvents()
+        let implementer = events.compactMap { $0.line?.value1 }.filter { $0.role == .implementer }
+            .sorted { $0.version < $1.version }
+        try #require(implementer.map(\.version) == [1, 2, 3, 4])
+        #expect(implementer[2].agent == nil && implementer[2].superseded_agent == "claude-primary")
+        #expect(implementer[3].agent == "claude-secondary" && implementer[3].superseded_agent == nil)
+
+        // The line the role already has, a replayed change, and a replayed
+        // submit record nothing.
+        _ = try await change("cmd-same", agent: "claude-secondary")
+        _ = try await change("cmd-v2", agent: "claude-primary")
+        _ = try await client.submitCommand(body: .json(submit))
+        let after = try await lineEvents()
+        #expect(after.count == events.count && Set(after) == Set(events))
+    }
+
     @Test func submitTaskReplaysReorderedLinesAndConflictsOnChangedOnes() async throws {
         let client = APIClientFactory.mock(server: MockServer())
         let lines: [Components.Schemas.TaskLineInput] = [
