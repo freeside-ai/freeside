@@ -45,8 +45,10 @@ func TestProcRoomCapturesAndBoundsOutput(t *testing.T) {
 	if err != nil {
 		t.Fatalf("bounded echo: %v", err)
 	}
-	if !bytes.Equal(res.Output, []byte("hell")) || !res.Truncated {
-		t.Fatalf("bounded result %+v, want 4 bytes and Truncated", res)
+	// The room keeps the end of the output, where a failing command
+	// prints its diagnosis.
+	if !bytes.Equal(res.Output, []byte("rld\n")) || !res.Truncated {
+		t.Fatalf("bounded result %+v, want the last 4 bytes and Truncated", res)
 	}
 }
 

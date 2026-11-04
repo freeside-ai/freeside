@@ -1,6 +1,7 @@
 package verify
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"os"
@@ -294,6 +295,36 @@ func TestVerifyTranscriptCapIsHonest(t *testing.T) {
 	}
 	if !strings.Contains(string(res.Evidence[0].Content), `"transcript_truncated": true`) {
 		t.Error("report does not record the transcript truncation")
+	}
+}
+
+// TestVerifyTranscriptKeepsTheFailingStep pins which end of an over-cap
+// transcript survives: a noisy first step must not push a later failing
+// step's output and exit line out of the record.
+func TestVerifyTranscriptKeepsTheFailingStep(t *testing.T) {
+	checkout, opts, room := verifyFixture(t, map[string]string{"main.go": "package main\n"}, nil)
+	const failure = "main.go:1: vet: unreachable code\n"
+	room.results = map[string]StepResult{
+		"go test ./...": {Output: bytes.Repeat([]byte("=== RUN   TestNoise\n"), 64)},
+		"go vet ./...":  {Output: []byte(failure), ExitCode: 1},
+	}
+	opts.Policy.MaxTranscriptBytes = 256
+	res, err := Verify(context.Background(), checkout, opts)
+	if err != nil {
+		t.Fatalf("Verify: %v", err)
+	}
+	if res.Outcome != OutcomeFailed {
+		t.Errorf("outcome = %s, want failed", res.Outcome)
+	}
+	if !res.TranscriptTruncated {
+		t.Error("the flood passed the transcript cap but TranscriptTruncated is false")
+	}
+	transcript := string(res.Evidence[1].Content)
+	if want := "$ go vet ./...\n" + failure + "exit 1\n\n"; !strings.HasSuffix(transcript, want) {
+		t.Errorf("transcript lost the failing step; ends %q, want suffix %q", transcript, want)
+	}
+	if len(transcript) > 256 {
+		t.Errorf("transcript is %d bytes, cap 256", len(transcript))
 	}
 }
 

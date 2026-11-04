@@ -1,7 +1,6 @@
 package verify
 
 import (
-	"bytes"
 	"context"
 	"errors"
 	"fmt"
@@ -9,6 +8,8 @@ import (
 	"os/exec"
 	"syscall"
 	"time"
+
+	"github.com/freeside-ai/freeside/daemon/internal/procbound"
 )
 
 // DefaultMaxRoomOutputBytes bounds the combined output one command may
@@ -110,7 +111,7 @@ func (r *ProcRoom) Run(ctx context.Context, workdir string, argv []string) (Step
 		}
 		return syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL)
 	}
-	out := &boundedBuffer{max: maxBytes}
+	out := procbound.NewTailBuffer(maxBytes)
 	cmd.Stdout, cmd.Stderr = out, out
 	r.Invocations = append(r.Invocations, Invocation{Argv: argv, Dir: workdir, Env: env})
 	err := cmd.Run()
@@ -118,7 +119,7 @@ func (r *ProcRoom) Run(ctx context.Context, workdir string, argv []string) (Step
 		// Best-effort group reap; ESRCH just means nothing lingered.
 		_ = syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL)
 	}
-	res := StepResult{Output: out.buf.Bytes(), Truncated: out.truncated}
+	res := StepResult{Output: out.Bytes(), Truncated: out.Truncated()}
 	if err == nil {
 		return res, nil
 	}
@@ -135,26 +136,4 @@ func (r *ProcRoom) Run(ctx context.Context, workdir string, argv []string) (Step
 		return res, nil
 	}
 	return StepResult{}, fmt.Errorf("room could not execute %q: %w", argv[0], err)
-}
-
-// boundedBuffer keeps the first max bytes and drops the rest, reporting
-// the writes as fully consumed so the child never blocks on a full pipe.
-type boundedBuffer struct {
-	buf       bytes.Buffer
-	max       int64
-	truncated bool
-}
-
-func (b *boundedBuffer) Write(p []byte) (int, error) {
-	if remaining := b.max - int64(b.buf.Len()); remaining > 0 {
-		keep := p
-		if int64(len(keep)) > remaining {
-			keep = keep[:remaining]
-			b.truncated = true
-		}
-		b.buf.Write(keep)
-	} else if len(p) > 0 {
-		b.truncated = true
-	}
-	return len(p), nil
 }

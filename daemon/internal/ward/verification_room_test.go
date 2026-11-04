@@ -227,13 +227,29 @@ func TestProjectImageRoomRecipeCancellationStillReapsOwnedContainer(t *testing.T
 	}
 }
 
-func TestVerificationOutputIsBounded(t *testing.T) {
-	output := &verificationOutput{max: 8}
-	if _, err := output.Write([]byte("0123456789abcdef")); err != nil {
-		t.Fatal(err)
+// A verification command's output keeps its end, where a failing command
+// prints its diagnosis, and the truncation is reported.
+func TestVerificationOutputKeepsItsTail(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "runtime")
+	execfixture.Write(t, path, []byte("#!/bin/sh\nprintf 'noise-'\nprintf 'FAIL\\n' >&2\nexit 1\n"), 0o700)
+	result, err := runVerificationCommand(t.Context(), path, nil, 5)
+	if err != nil || result.ExitCode != 1 || string(result.Output) != "FAIL\n" || !result.Truncated {
+		t.Fatalf("runVerificationCommand = %#v, %v; want the last 5 bytes, truncated, exit 1", result, err)
 	}
-	if got := output.buf.String(); got != "01234567" || !output.truncated {
-		t.Fatalf("bounded output = %q, truncated=%t", got, output.truncated)
+}
+
+// Recipe extraction still fails closed on output past its cap, whichever
+// end the bound keeps.
+func TestRecipeReadCommandFailsClosedOnTruncation(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "runtime")
+	execfixture.Write(t, path, []byte("#!/bin/sh\nprintf '0123456789'\n"), 0o700)
+	result, err := runRecipeReadCommand(t.Context(), path, nil, 4)
+	if err != nil || !result.Truncated {
+		t.Fatalf("over-cap recipe stdout = %#v, %v; want Truncated for ReadRecipe to refuse", result, err)
+	}
+	execfixture.Write(t, path, []byte("#!/bin/sh\nprintf '0123456789' >&2\n"), 0o700)
+	if _, err := runRecipeReadCommand(t.Context(), path, nil, 4); err == nil {
+		t.Fatal("over-cap recipe extraction diagnostics were accepted")
 	}
 }
 

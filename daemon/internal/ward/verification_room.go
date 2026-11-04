@@ -300,10 +300,10 @@ func runVerificationCommand(
 	maxOutput int64,
 ) (verify.StepResult, error) {
 	cmd := exec.CommandContext(ctx, path, args...) //nolint:gosec // executable resolved at construction; argv is trusted recipe/project-image data
-	output := &verificationOutput{max: maxOutput}
+	output := procbound.NewTailBuffer(maxOutput)
 	cmd.Stdout, cmd.Stderr = output, output
 	err := confirmVerificationProcessExit(cmd, procbound.Run(cmd, procbound.DefaultWaitDelay))
-	result := verify.StepResult{Output: output.buf.Bytes(), Truncated: output.truncated}
+	result := verify.StepResult{Output: output.Bytes(), Truncated: output.Truncated()}
 	if errors.Is(err, errVerificationProcessUnproven) {
 		return result, err
 	}
@@ -344,18 +344,18 @@ func runRecipeReadCommand(
 	maxOutput int64,
 ) (verify.StepResult, error) {
 	cmd := exec.CommandContext(ctx, path, args...) //nolint:gosec // executable and fixed extraction argv are resolved by the room
-	stdout := &verificationOutput{max: maxOutput}
-	stderr := &verificationOutput{max: maxOutput}
+	stdout := procbound.NewTailBuffer(maxOutput)
+	stderr := procbound.NewTailBuffer(maxOutput)
 	cmd.Stdout = stdout
 	cmd.Stderr = stderr
 	err := confirmVerificationProcessExit(cmd, procbound.Run(cmd, procbound.DefaultWaitDelay))
 	if errors.Is(err, errVerificationProcessUnproven) {
 		return verify.StepResult{}, err
 	}
-	if stderr.truncated {
+	if stderr.Truncated() {
 		return verify.StepResult{}, fmt.Errorf("recipe extraction diagnostics exceeded the %d-byte cap", maxOutput)
 	}
-	result := verify.StepResult{Output: stdout.buf.Bytes(), Truncated: stdout.truncated}
+	result := verify.StepResult{Output: stdout.Bytes(), Truncated: stdout.Truncated()}
 	if err == nil {
 		return result, nil
 	}
@@ -454,24 +454,4 @@ func validVerificationContainerID(id string) bool {
 				(r < 'A' || r > 'Z') &&
 				(r < '0' || r > '9') && r != '-' && r != '_' && r != '.'
 		}) == -1
-}
-
-type verificationOutput struct {
-	buf       bytes.Buffer
-	max       int64
-	truncated bool
-}
-
-func (o *verificationOutput) Write(body []byte) (int, error) {
-	if remaining := o.max - int64(o.buf.Len()); remaining > 0 {
-		keep := body
-		if int64(len(keep)) > remaining {
-			keep = keep[:remaining]
-			o.truncated = true
-		}
-		_, _ = o.buf.Write(keep)
-	} else if len(body) > 0 {
-		o.truncated = true
-	}
-	return len(body), nil
 }

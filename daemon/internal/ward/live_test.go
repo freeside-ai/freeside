@@ -40,6 +40,7 @@ import (
 	"github.com/freeside-ai/freeside/daemon/internal/export"
 	"github.com/freeside-ai/freeside/daemon/internal/gitenv"
 	"github.com/freeside-ai/freeside/daemon/internal/importer"
+	"github.com/freeside-ai/freeside/daemon/internal/procbound"
 	"github.com/freeside-ai/freeside/daemon/internal/strayrequest"
 )
 
@@ -88,18 +89,18 @@ func requireExporterGit(t *testing.T, bin, ref string) {
 	//nolint:gosec // resolved CLI path, fixed args around the probed reference
 	cmd := osexec.CommandContext(ctx, bin,
 		"run", "--rm", "--network", "none", "--", ref, "sh", "-c", "git --version")
-	// The runtime package's capWriter, for the same noisy-runtime case it
-	// exists for: a probe of a not-yet-validated image must bound what it
-	// retains, or a flooding entrypoint defeats the time bound through
-	// memory. One writer for both streams; os/exec serializes writes to an
-	// identical Stdout/Stderr value.
-	capped := &capWriter{max: 64 << 10}
+	// The bounded output writer the runtime uses, for the same noisy-runtime
+	// case it exists for: a probe of a not-yet-validated image must bound
+	// what it retains, or a flooding entrypoint defeats the time bound
+	// through memory. One writer for both streams; os/exec serializes
+	// writes to an identical Stdout/Stderr value.
+	capped := procbound.NewTailBuffer(64 << 10)
 	cmd.Stdout = capped
 	cmd.Stderr = capped
 	err := cmd.Run()
-	out := capped.buf.String()
-	if capped.truncated {
-		out += " [output truncated at cap]"
+	out := string(capped.Bytes())
+	if capped.Truncated() {
+		out = "[output truncated at cap] " + out
 	}
 	if ctx.Err() != nil {
 		t.Fatalf("git preflight timed out in the exporter image: %v: %s", ctx.Err(), out)

@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -751,36 +752,35 @@ func TestListInspectExportWithholdStderr(t *testing.T) {
 	}
 }
 
-// TestCapWriter proves the stderr capture is bounded: writes past the cap are
-// dropped (not buffered) and flagged, so a noisy or wedged runtime cannot grow
-// the buffer without limit before the call fails.
-func TestCapWriter(t *testing.T) {
-	w := &capWriter{max: 8}
-	// A single oversized write keeps only the cap and reports full consumption.
-	if n, err := w.Write([]byte("0123456789abcdef")); n != 16 || err != nil {
-		t.Fatalf("Write = (%d, %v), want (16, nil)", n, err)
-	}
-	if w.buf.Len() != 8 || w.buf.String() != "01234567" {
-		t.Errorf("buffered %q (len %d), want the first 8 bytes", w.buf.String(), w.buf.Len())
-	}
-	if !w.truncated {
-		t.Error("truncated not set after an over-cap write")
-	}
-	// Further writes stay dropped and never grow the buffer.
-	if _, err := w.Write([]byte("more")); err != nil {
-		t.Fatalf("Write after cap = %v", err)
-	}
-	if w.buf.Len() != 8 {
-		t.Errorf("buffer grew past the cap to %d", w.buf.Len())
-	}
+// TestRuntimeStderrKeepsItsTail proves the stderr a mutation reports is
+// bounded and keeps its end, where the runtime prints why the call failed,
+// marking the dropped head.
+func TestRuntimeStderrKeepsItsTail(t *testing.T) {
+	bin := filepath.Join(t.TempDir(), "container-fixture")
+	const cause = "Error: volume quota exceeded"
+	script := "#!/bin/sh\n" +
+		"head -c 4096 /dev/zero | tr '\\0' n >&2\n" +
+		"echo '" + cause + "' >&2\n" +
+		"exit 3\n"
+	execfixture.Write(t, bin, []byte(script), 0o700)
 
-	// An under-cap write is kept whole and never flags truncation.
-	small := &capWriter{max: 8}
-	if _, err := small.Write([]byte("abc")); err != nil {
-		t.Fatal(err)
+	err := NewCLIRuntime(bin).CreateVolume(context.Background(), "fixture-volume", 64, nil)
+	if err == nil {
+		t.Fatal("CreateVolume succeeded against a failing runtime")
 	}
-	if small.buf.String() != "abc" || small.truncated {
-		t.Errorf("under-cap write = {%q, truncated:%t}, want {abc, false}", small.buf.String(), small.truncated)
+	if !errors.Is(err, errStderrTruncated) {
+		t.Errorf("error %v does not mark its stderr truncated", err)
+	}
+	msg := err.Error()
+	if !strings.Contains(msg, "exit status 3") {
+		t.Errorf("error %q lost the exit status", msg)
+	}
+	_, reported, marked := strings.Cut(msg, ": ...")
+	if !marked || !strings.HasPrefix(reported, "n") || !strings.HasSuffix(reported, cause) {
+		t.Fatalf("error %q does not keep stderr's tail behind a truncation marker", msg)
+	}
+	if len(reported) > 512 {
+		t.Errorf("error reports %d bytes of stderr, bound 512", len(reported))
 	}
 }
 
