@@ -59,6 +59,8 @@
 //   - paths.go    structural path gates (git-component injection,
 //     file/directory conflicts)
 //   - blobs.go    blob store audit and content verification
+//   - open.go     no-follow, non-blocking opens of handoff files and
+//     directories, relative to a pinned directory descriptor
 //   - change.go   ChangeKind enum and the derived Change shapes
 //   - gitrunner.go  importer methods over internal/gitrun's hardened process
 //     seam; no hooks, no user/system/workspace config, scratch index, pinned
@@ -74,6 +76,8 @@
 //   - importer.go the Import orchestrator and Result
 //   - policy.go   §5.5/§5.8 path classes, the declared-scope
 //     allowlist, and size policy over the change set
+//   - trustconfig.go Policy.WithProtectedPaths: widening by the repository's
+//     trust-anchored protected-path configuration
 //   - collision.go  case- and Unicode-normalization-fold collisions on
 //     a case-insensitive checkout (the reference deployment is APFS)
 //   - secrets.go  best-effort secret scan of added/modified textual

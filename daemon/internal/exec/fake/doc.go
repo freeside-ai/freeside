@@ -51,4 +51,8 @@
 //   - reviewsource.go   fake.ReviewSource and its ReviewScript
 //   - persist.go        the shared durable-state load/atomic-write helpers
 //   - runnerbackend.go  fake.RunnerBackend, a capability-declaring value
+//   - clone.go          slice and location clones that keep every redelivered
+//     result a value-identical snapshot
+//   - reviewadmission.go the fixed, valid review admission snapshot and the
+//     AdmitReview hook that stamps it on every review invocation
 package fake

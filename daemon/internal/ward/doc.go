@@ -201,17 +201,41 @@
 //   - seed.go          workspace seeding: host-side source verification, the
 //     seeder lifecycle, and the read-only base attestation
 //   - runtime_cli.go   CLIRuntime, the os/exec-backed Apple container
-//     implementation (the package's only os/exec importer)
+//     implementation (one of the package's two os/exec importers, with
+//     verification_room.go)
+//   - runtime_ops.go   runtimeOps, the runtime and configuration primitives
+//     the handoff gate and the review lifecycle share
+//   - launch_record.go the one structured record per launch that sizes are
+//     tuned from, how the launch ended, memory-limit kill detection, and the
+//     stopped-helper check
+//   - rootwalk.go      walkRoot, raw relative-name traversal under an os.Root
 //   - egress.go        the host-only network lifecycle and exact CONNECT
 //     allowlist proxy
 //   - config.go        Backend configuration and validation
+//   - spec.go          HandoffSpec and its validation: pinned image refs,
+//     credential mounts and manifest policy, launch-state policy, and the
+//     observer tool registry
+//   - sizes.go         launch classes and the CPU and memory each declares
 //   - backend.go       the exec.RunnerBackend implementation and its frozen
 //     capability declaration
 //   - conformance.go   pure verifiers for checks 1, 2, 4, and 5, the seeding
 //     roles' allowlist, and the seeded-base proof
 //   - handoff.go       the gate lifecycle: seeding, checks 3-5 sequencing,
 //     the lease lifecycle and credential-store observation, and teardown
+//   - state.go         per-launch state volumes (config root, continuity,
+//     scratch): creation, seeding, and the observed proof
+//   - prompt.go        PromptFile, the bounded user prompt delivered as a file
+//   - instruction.go   the Claude instruction bundle composed from the
+//     exact-base snapshot, its seeding, and its observation from another VM
+//   - stall.go         stallWatch, the running writer's stall heartbeat (§5.12)
+//   - writer_outcome.go the writer's exit-status marker proof and ErrWriterFailed
+//   - failure_evidence.go bounded diagnostic output from a failed launch
+//   - read_hold.go     shared auth-store read holds for a read-only handoff
 //   - journal.go       the durable handoff record and HandoffJournal seam
+//   - cancellation_coverage.go CancellationCoverage, the tasks that predate
+//     runtime ownership journaling
+//   - task_judgments.go TaskJudgments, the task-owned journal under advisory
+//     inference calls
 //   - recover.go       restart-safe recovery: adopt-or-loss, the orphan
 //     audit, and the committed outcome
 //   - export_verify.go check 7: safe archive extraction, manifest and digest
@@ -219,6 +243,50 @@
 //   - suite.go         the invocable conformance suite: Full (checks 1-5, 7,
 //     agent egress probes, two handoff negative probes, and networkless
 //     export) plus PreJob
+//   - lineup_probe.go  one lineup probe call through an image, and the
+//     credentials a probe container reads
+//   - auth_enrollment.go EnrollmentBootstrap, a harness client's first
+//     enrollment (§5.4)
+//   - auth_adoption.go adopting a flag-era identity's existing store as an
+//     enrollment
+//   - claude_auth_enrollment.go, claude_auth_probe.go
+//     the redacting Claude SetupToken and the enrollment probe's verdict
+//   - codex_auth_enrollment.go, codex_auth_refresh.go, codex_auth_renewal.go
+//     Codex login enrollment, the host-only refresh transaction and
+//     re-enrollment marker, and operator renewal under the same lifetime gates
+//   - credential_manifest.go, credential_integrity.go, credential_read.go
+//     networkless, read-only observers over credential stores: the volume
+//     manifest proof, the integrity observation, and the setup-token read
+//   - review_credential.go ReviewCredential, a redacting holder of the
+//     credential one review launch delivers
+//   - review_provider.go the reviewProvider and credentialStrategy seams, and
+//     the Codex provider
+//   - claude_review.go the Claude review provider and its setup-token
+//     credential strategy
+//   - codex_review.go, codex_review_lifecycle.go, codex_review_lifecycle_owner.go
+//     the review topology request and its refusals, the durable launch
+//     journal and intent states, and CodexReviewLifecycle, the runtime owner
+//   - codex_review_workspace.go the candidate checkout snapshot into a
+//     ward-owned volume, its HEAD and tree proof, and its cleanup
+//   - codex_review_access.go the sandboxed probe that the review can read the
+//     candidate
+//   - codex_review_volume_lease.go serialized review-volume attachment leases
+//   - codex_review_collection.go inspect, collect, clean up, and abort a
+//     stopped review
+//   - codex_review_source.go the review source's configuration, instruction
+//     artifacts, and the persisted outcome and its re-gates
+//   - codex_review_usage.go usage measurements from a Codex transcript
+//   - codex_review_rig_recovery.go RecoverCodexReviewResources, journal
+//     reconciliation scoped to one runtime namespace
+//   - review_evidence.go decoding a retained review journal at the read-only
+//     client boundary
+//   - usage_collector.go, claude_usage_collector.go
+//     the UsageCollector port (§10) and the Claude collector that answers
+//     from writer-turn captures
+//   - verification_room.go ProjectImageRoom, networkless recipe runs in the
+//     admitted project image (the second os/exec importer)
+//   - verification_ownership.go task-bound verification launch ownership and
+//     StopRun's owned cleanup
 //
 // The full-lifecycle integration test and the conformance suite's
 // reference-runtime members (Suite.Full/PreJob end to end, and the
