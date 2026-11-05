@@ -308,7 +308,7 @@ func (r *judgmentCredentialRig) enroll(
 func withJudgmentCredentialRig(t *testing.T, fn func(r *judgmentCredentialRig)) {
 	t.Helper()
 	f := newAuthAdoptFixture(t)
-	_, patch, err := f.run(t, f.args())
+	_, patch, err := f.run(t, f.args(adoptEscalatedArgs()...))
 	if err != nil {
 		t.Fatalf("auth adopt: %v", err)
 	}

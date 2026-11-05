@@ -56,6 +56,7 @@ func auditedTestSites(calls int64) []inference.Site {
 		inference.TaskNamerSite(testBudget(calls)),
 		inference.PublicationAuthorExplainSite(testBudget(calls)),
 		inference.PublicationAuthorProposeSite(testBudget(calls)),
+		inference.TriagerSite(testBudget(calls)),
 	}
 	for i := range sites {
 		sites[i].AuditEvery = 1
@@ -102,6 +103,7 @@ func TestClientReportsRegisteredSites(t *testing.T) {
 		inference.DiagnosticSiteID,
 		inference.AttentionDiscussionSiteID,
 		inference.TaskNamerSiteID,
+		inference.TriagerSiteID,
 	} {
 		if !client.SupportsSite(siteID) {
 			t.Fatalf("SupportsSite(%q) = false", siteID)

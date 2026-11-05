@@ -10,7 +10,8 @@ import (
 
 // Every role with a built site has exactly one prompt source: the daemon's,
 // or the operator's file for the publication author. A role with no site has
-// neither.
+// neither. Only the triager's code-owned body carries text: its default
+// criteria.
 func TestRolePromptSources(t *testing.T) {
 	for _, role := range domain.AllRoleNames {
 		prompt, owned := inference.CodeOwnedRolePrompt(role)
@@ -21,8 +22,8 @@ func TestRolePromptSources(t *testing.T) {
 		if !owned {
 			continue
 		}
-		if prompt.Name != string(role)+"_v1" || len(prompt.Body) != 0 ||
-			string(prompt.Digest) != contentaddr.Sum(nil) {
+		if prompt.Name != string(role)+"_v1" || string(prompt.Digest) != contentaddr.Sum(prompt.Body) ||
+			(len(prompt.Body) != 0) != (role == domain.RoleTriager) {
 			t.Fatalf("CodeOwnedRolePrompt(%s) = %+v", role, prompt)
 		}
 	}

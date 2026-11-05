@@ -123,7 +123,9 @@ func TestJudgmentSitesReadTheAdoptedLineup(t *testing.T) {
 	if err := os.WriteFile(authorPath, authorBody, 0o600); err != nil {
 		t.Fatal(err)
 	}
-	_, patch, err := f.run(t, f.args("-judgment-publication-author-prompt", authorPath))
+	// The escalated specifier asks for the triager's work, so every judgment
+	// role is asked for.
+	_, patch, err := f.run(t, f.args(append([]string{"-judgment-publication-author-prompt", authorPath}, adoptEscalatedArgs()...)...))
 	if err != nil {
 		t.Fatalf("auth adopt: %v", err)
 	}
@@ -209,13 +211,15 @@ func TestJudgmentSitesReadTheAdoptedLineup(t *testing.T) {
 				t.Fatalf("judgment role %s made no call on the adopted lineup", role)
 			}
 		}
+		// Every other role is sent an empty prompt.
+		triagerPrompt, _ := inference.CodeOwnedRolePrompt(domain.RoleTriager)
+		prompts := map[domain.RoleName]string{
+			domain.RolePublicationAuthor: string(authorBody),
+			domain.RoleTriager:           string(triagerPrompt.Body),
+		}
 		for _, request := range requests {
 			role, _ := domain.RoleForSite(request.SiteID)
-			want := ""
-			if role == domain.RolePublicationAuthor {
-				want = string(authorBody)
-			}
-			if string(request.RolePrompt) != want {
+			if want := prompts[role]; string(request.RolePrompt) != want {
 				t.Fatalf("%s was sent role prompt %q, want %q", request.SiteID, request.RolePrompt, want)
 			}
 		}
@@ -282,6 +286,30 @@ func TestJudgmentSitesReadTheAdoptedLineup(t *testing.T) {
 		}
 		if items := judgmentRoleItems(t, st); len(items) != 0 {
 			t.Fatalf("items after every role admits = %+v", items)
+		}
+
+		// With no escalated specifier line nothing asks for the triager's
+		// work: it is off even with no line of its own, and nothing is raised.
+		unescalated := without(adopted, domain.RoleTriager)
+		unescalated.Lineup = slices.DeleteFunc(slices.Clone(unescalated.Lineup), func(line agenttree.LineupLine) bool {
+			return strings.HasPrefix(line.Key, string(domain.RoleSpecifier)+".escalated.")
+		})
+		triager := sites[slices.IndexFunc(sites, func(site inference.Site) bool { return site.ID == inference.TriagerSiteID })]
+		if result := call(newClient(unescalated, runtime, health), triager); !result.Fallback || result.Reason != inference.FallbackRoleOff {
+			t.Fatalf("triager with no escalated specifier = %+v", result)
+		}
+		// With the escalated line, a missing triager line is unbound.
+		if result := call(newClient(without(adopted, domain.RoleTriager), runtime, health), triager); result.Reason != unbound {
+			t.Fatalf("triager with no line under an escalated specifier = %+v", result)
+		}
+		if items := judgmentRoleItems(t, st); len(items) != 1 {
+			t.Fatalf("items with the triager unbound = %+v", items)
+		}
+		if result := call(whole, triager); result.Identity == nil {
+			t.Fatalf("triager on the adopted lineup = %+v", result)
+		}
+		if items := judgmentRoleItems(t, st); len(items) != 0 {
+			t.Fatalf("items after the triager admits = %+v", items)
 		}
 
 		// The publication author with no prompt file is off: both sites fail
@@ -498,7 +526,7 @@ func TestJudgmentLineOnAnOfferThatNamesNoModelIsUnbound(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
 	f := newAuthAdoptFixture(t)
-	_, patch, err := f.run(t, f.args())
+	_, patch, err := f.run(t, f.args(adoptEscalatedArgs()...))
 	if err != nil {
 		t.Fatalf("auth adopt: %v", err)
 	}
@@ -563,7 +591,7 @@ func TestJudgmentLinesAdmitOnEachAuditedCallAdapter(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
 	f := newAuthAdoptFixture(t)
-	_, patch, err := f.run(t, f.args())
+	_, patch, err := f.run(t, f.args(adoptEscalatedArgs()...))
 	if err != nil {
 		t.Fatalf("auth adopt: %v", err)
 	}

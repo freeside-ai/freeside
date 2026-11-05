@@ -504,7 +504,7 @@ func TestBaselineTreeNamesTheCallAgentForJudgmentRoles(t *testing.T) {
 	want := []domain.RoleName{
 		domain.RoleDiagnostic, domain.RoleTaskNamer, domain.RolePublicationAuthor,
 		domain.RoleFindingClassifier, domain.RoleFindingAdjudicator, domain.RoleDriftAuditor,
-		domain.RoleAttentionDiscussion,
+		domain.RoleAttentionDiscussion, domain.RoleTriager,
 	}
 	if !slices.Equal(roles, want) {
 		t.Fatalf("judgment roles = %v, want %v", roles, want)
@@ -583,7 +583,6 @@ func TestBaselineTreeNamesTheCallAgentForJudgmentRoles(t *testing.T) {
 // while nothing can ask.
 var rolesOff = map[domain.RoleName]string{
 	domain.RoleBriefer: "no judgment site is built, so nothing asks for its work",
-	domain.RoleTriager: "no judgment site is built, so nothing asks for its work",
 }
 
 // With every optional input supplied, each role in the closed list has a

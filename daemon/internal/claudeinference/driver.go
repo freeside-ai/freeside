@@ -400,6 +400,8 @@ func siteFor(id string) (inference.Site, bool) {
 		return inference.PublicationAuthorExplainSite(inference.Budget{}), true
 	case inference.PublicationAuthorProposeSiteID:
 		return inference.PublicationAuthorProposeSite(inference.Budget{}), true
+	case inference.TriagerSiteID:
+		return inference.TriagerSite(inference.Budget{}), true
 	default:
 		return inference.Site{}, false
 	}

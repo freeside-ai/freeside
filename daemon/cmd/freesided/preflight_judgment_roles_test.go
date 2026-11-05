@@ -111,7 +111,7 @@ func TestPreflightJudgmentRoleCheckReadsTheAdoptedLineup(t *testing.T) {
 	if err := os.WriteFile(authorPath, authorBody, 0o600); err != nil {
 		t.Fatal(err)
 	}
-	_, patch, err := f.run(t, f.args("-judgment-publication-author-prompt", authorPath))
+	_, patch, err := f.run(t, f.args(append([]string{"-judgment-publication-author-prompt", authorPath}, adoptEscalatedArgs()...)...))
 	if err != nil {
 		t.Fatalf("auth adopt: %v", err)
 	}
@@ -144,7 +144,7 @@ func TestPreflightJudgmentRoleCheckReadsTheAdoptedLineup(t *testing.T) {
 		}
 
 		manifest := evaluate(adopted, judgmentRuntime{Driver: driver, AuthorPrompt: authorBody})
-		if got := statuses(manifest); manifest.Status != compositionPassed || len(got) != 7 {
+		if got := statuses(manifest); manifest.Status != compositionPassed || len(got) != 8 {
 			t.Fatalf("adopted lineup: status = %s, roles = %+v", manifest.Status, manifest.JudgmentRoles)
 		}
 		for _, role := range manifest.JudgmentRoles {
@@ -171,7 +171,7 @@ func TestPreflightJudgmentRoleCheckReadsTheAdoptedLineup(t *testing.T) {
 		// the check fails naming it.
 		manifest = evaluate(adoptedBeforeTheCallOffer(t, adopted), judgmentRuntime{Driver: driver, AuthorPrompt: authorBody})
 		if manifest.Status != compositionFailed || manifest.Checks[0].Status != compositionFailed ||
-			len(manifest.JudgmentRoles) != 7 {
+			len(manifest.JudgmentRoles) != 8 {
 			t.Fatalf("lines on an offer that names no model: manifest = %+v", manifest)
 		}
 		for _, role := range manifest.JudgmentRoles {
@@ -189,7 +189,7 @@ func TestPreflightJudgmentRoleCheckReadsTheAdoptedLineup(t *testing.T) {
 				return ward.SetupToken{}, errors.New("credential volume \"freeside-claude-main-auth\": absent")
 			}, nil)
 		manifest = evaluate(adopted, judgmentRuntime{Driver: driver, AuthorPrompt: authorBody})
-		if manifest.Status != compositionFailed || len(manifest.JudgmentRoles) != 7 ||
+		if manifest.Status != compositionFailed || len(manifest.JudgmentRoles) != 8 ||
 			!strings.Contains(manifest.Checks[0].Remediation, "credential volume") {
 			t.Fatalf("unreadable credential: manifest = %+v", manifest)
 		}

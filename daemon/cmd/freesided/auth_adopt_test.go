@@ -207,6 +207,13 @@ func adoptWriterArgs() []string {
 	}
 }
 
+// adoptEscalatedArgs give the specifier an escalated counterpart, which is
+// what asks for the triager's work: a test that expects every judgment role
+// admitted adopts with them.
+func adoptEscalatedArgs() []string {
+	return []string{"-specifier-escalated-model", "claude-specifier-escalated", "-specifier-escalated-effort", "max"}
+}
+
 // adoptWriterLines are the lineup lines the writer flags produce: the
 // remediator shares the implementer's agent.
 func adoptWriterLines() []string {
