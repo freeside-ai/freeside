@@ -865,24 +865,57 @@ import Testing
             ])
     }
 
+    /// Every producer labels its route with the same fixed keyword; a model's
+    /// judgment carries "(unverified)" and draws as a quote, and a compact
+    /// mark names who proposed it, with the full producer sentence kept for
+    /// hover help and VoiceOver, and the confidence the mark draws said
+    /// aloud too (#2608).
     @Test(arguments: [
-        (Components.Schemas.AdjudicationProducer.engine, "Daemon recommendation", false),
-        (Components.Schemas.AdjudicationProducer.model, "Model proposal (unverified)", true),
         (
-            Components.Schemas.AdjudicationProducer.engine_model,
-            "Model judgment with engine-authorized remediation",
-            true
+            Components.Schemas.AdjudicationProducer.model,
+            Components.Schemas.AdjudicationConfidence?.some(.high),
+            "Proposed route (unverified)", "Agent · high", true, "Model proposal (unverified)",
+            String?.some("high confidence")
         ),
+        (
+            .model, .some(.medium),
+            "Proposed route (unverified)", "Agent · medium", true, "Model proposal (unverified)",
+            "medium confidence"
+        ),
+        (
+            .model, .some(.low),
+            "Proposed route (unverified)", "Agent · low", true, "Model proposal (unverified)",
+            "low confidence"
+        ),
+        (
+            .model, nil, "Proposed route (unverified)", "Agent", true,
+            "Model proposal (unverified)", nil
+        ),
+        (
+            .engine_model, .some(.high),
+            "Proposed route (unverified)", "Agent · engine may fix", true,
+            "Model judgment with engine-authorized remediation", nil
+        ),
+        (.engine, .some(.high), "Proposed route", "Daemon", false, "Daemon recommendation", nil),
+        (.human, nil, "Proposed route", "Human", false, "Human decision", nil),
     ])
-    func findingAdjudicationProducerLabelsDistinguishProvenance(
+    func findingAdjudicationProducersMapToKeywordMarkRegisterAndSentence(
         producer: Components.Schemas.AdjudicationProducer,
-        label: String,
-        modelBacked: Bool
+        confidence: Components.Schemas.AdjudicationConfidence?,
+        keyword: String,
+        mark: String,
+        modelBacked: Bool,
+        sentence: String,
+        spokenConfidence: String?
     ) {
-        let presentation = AttentionDisplay.adjudicationProducerPresentation(producer)
+        let presentation = AttentionDisplay.adjudicationProducerPresentation(
+            producer, confidence: confidence)
 
-        #expect(presentation.label == label)
+        #expect(presentation.spokenKeyword == keyword)
+        #expect(presentation.mark == mark)
         #expect(presentation.modelBacked == modelBacked)
+        #expect(presentation.sentence == sentence)
+        #expect(presentation.spokenConfidence == spokenConfidence)
     }
 
     @Test func readyClassesRenderDistinctlyWithTheirEvaluationSet() {

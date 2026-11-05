@@ -119,6 +119,9 @@ struct DecisionDetailView: View {
     /// a finding_adjudication card leads with collapsed rows so its actions
     /// stay in the first viewport (#1107).
     @State private var expandedFindings: Set<String>
+    /// Which findings' clamped reasons are expanded, remembered on this
+    /// device per item and finding id (#2608).
+    @State private var findingReasonPreferences: FindingReasonPreferences
     @State private var expandedSummaryReports: Set<DecisionSummaryIdentity> = []
     @State private var expandedDisclosures: Set<DecisionDisclosure>
     private let expandsSummaryReports: Bool
@@ -161,6 +164,7 @@ struct DecisionDetailView: View {
         showsValidationProgress: Bool = true,
         now: Date = .now,
         sectionPreferences: DecisionSectionPreferences? = nil,
+        findingReasonPreferences: FindingReasonPreferences? = nil,
         topMargin: CGFloat? = nil,
         seat: PageSeat? = nil,
         onSelectItem: @escaping (String) -> Void = { _ in },
@@ -183,6 +187,11 @@ struct DecisionDetailView: View {
                 ?? DecisionSectionPreferences(
                     detailsExpandedOverride: revealsTechnicalDetails ? true : nil))
         _expandedFindings = State(initialValue: expandedFindings)
+        // Nil keeps the reasons in memory, so a screenshot or test neither
+        // reads this device's state nor leaves any behind; the app passes
+        // `.shared`.
+        _findingReasonPreferences = State(
+            initialValue: findingReasonPreferences ?? FindingReasonPreferences(defaults: nil))
         _alternativeSelections = State(initialValue: alternativeSelections)
         _findingReasons = State(initialValue: findingReasons)
         _expandedDisclosures = State(initialValue: expandedDisclosures)
@@ -2114,9 +2123,10 @@ struct DecisionDetailView: View {
     }
 
     // One item per finding (plan §9 revision 78, visual audit D09, handoff
-    // frame 7.1). An item shows its finding's exact message, who proposed
-    // the route, and the route; everything else about that finding, the
-    // route list included, sits in the item's own disclosure. Nothing drawn
+    // frame 7.1). An item shows its finding's exact message, the route
+    // under its keyword with who proposed it, and the reason, clamped
+    // (#2608); everything else about that finding, the route list
+    // included, sits in the item's own disclosure. Nothing drawn
     // from a proposal renders outside its item, so a route list can only
     // belong to the finding it sits under, and no content spans the action
     // region. A held alternative shows on the face, so closing an item
@@ -2131,10 +2141,11 @@ struct DecisionDetailView: View {
         _ binding: Components.Schemas.FindingAdjudicationBinding,
         register: UnverifiedRegister
     ) -> some View {
-        // The first producer label that says "(unverified)" carries the
+        // The first route keyword that says "(unverified)" carries the
         // card's explanation control; the rest draw the keyword alone.
-        let infoCardID = FindingCardPresentation.cards(binding)
-            .first { $0.producerUnverifiedKeyword != nil }?.id
+        let infoCardID = FindingCardPresentation.cards(binding).first(where: \.modelBacked)?.id
+        let reasonLineLimit = FindingCardPresentation.reasonLineLimit(
+            findingCount: binding.proposals.count)
         // The findings are one module, so they stand a module gap apart
         // rather than a section gap, which keeps two realistic findings
         // above the actions in the first viewport (#1141).
@@ -2142,7 +2153,6 @@ struct DecisionDetailView: View {
             ForEach(Array(binding.proposals.enumerated()), id: \.element.finding_id) {
                 index, proposal in
                 let card = FindingCardPresentation(proposal, number: index + 1, binding: binding)
-                let isExpanded = expandedFindings.contains(card.id)
                 VStack(alignment: .leading, spacing: 8) {
                     // The heading runs in with the message's title instead of
                     // standing on a line of its own: a line per finding is
@@ -2161,28 +2171,24 @@ struct DecisionDetailView: View {
                             .accessibilityHidden(true)
                     }
                     VStack(alignment: .leading, spacing: 4) {
-                        findingProducerLabel(
-                            card, register: card.id == infoCardID ? register : register.withoutInfo)
-                        // An open disclosure joins the rationale and its
-                        // qualities to the route: one statement by one producer.
+                        // The keyword, the route, and its reason are one
+                        // statement by one producer, so they share its voice.
                         findingVoice(card) {
+                            findingRouteLabel(
+                                card,
+                                register: card.id == infoCardID ? register : register.withoutInfo)
                             Text(card.route)
                                 .font(FreesideFont.optionLabel)
                                 .foregroundStyle(Color.ink)
                                 .fixedSize(horizontal: false, vertical: true)
                                 .accessibilityLabel(Text(card.routeAccessibilityLabel))
-                            if isExpanded {
-                                Text(card.rationale)
-                                    .font(FreesideFont.cardBody)
-                                    .foregroundStyle(Color.ink)
-                                    .fixedSize(horizontal: false, vertical: true)
-                                    .proseMeasure()
-                                Text(card.qualities)
-                                    .font(FreesideFont.cardBody)
-                                    .foregroundStyle(Color.inkDim)
-                                    .fixedSize(horizontal: false, vertical: true)
-                                    .proseMeasure()
-                            }
+                            ClampedText(
+                                text: card.rationale, font: FreesideFont.cardBody,
+                                lineLimit: reasonLineLimit,
+                                isExpanded: findingReasonExpansion(card.id, itemID: itemID),
+                                spokenName: card.reasonSpokenName
+                            )
+                            .proseMeasure()
                         }
                         if let selected = alternativeSelections[card.id] {
                             Text(FindingCardPresentation.selectionNotice(selected))
@@ -2195,6 +2201,7 @@ struct DecisionDetailView: View {
                     }
                     SentenceDisclosure(
                         label: FindingCardPresentation.disclosureTitle,
+                        summary: card.disclosureSummary,
                         spokenLabel: card.disclosureAccessibilityLabel,
                         isExpanded: findingExpansion(card.id)
                     ) {
@@ -2229,19 +2236,39 @@ struct DecisionDetailView: View {
             .foregroundStyle(Color.ink)
     }
 
-    /// The producer label, in the unverified register where the label
-    /// carries the word (visual audit D03).
+    /// The route's fixed keyword, in the unverified register where a model
+    /// judged (visual audit D03), with who proposed it trailing as a compact
+    /// mark (R21) while the line holds both, and under it where it does not.
+    /// The mark's hover help is the full producer sentence, which the route
+    /// also speaks.
     @ViewBuilder
-    private func findingProducerLabel(
+    private func findingRouteLabel(
         _ card: FindingCardPresentation,
         register: UnverifiedRegister
     ) -> some View {
-        if let keyword = card.producerUnverifiedKeyword {
-            UnverifiedLabel(
-                text: keyword, carriesInfo: register.carriesInfo,
-                rendersInteractiveControls: register.rendersInteractiveControls)
-        } else {
-            KeywordLabel(text: card.producerLabel)
+        let keyword = Group {
+            if card.modelBacked {
+                UnverifiedLabel(
+                    text: AttentionDisplay.AdjudicationProducerPresentation.keyword,
+                    carriesInfo: register.carriesInfo,
+                    rendersInteractiveControls: register.rendersInteractiveControls)
+            } else {
+                KeywordLabel(text: AttentionDisplay.AdjudicationProducerPresentation.keyword)
+            }
+        }
+        let mark = CompactMark(text: card.producer.mark)
+            .help(card.producer.sentence)
+            .accessibilityHidden(true)
+        ViewThatFits(in: .horizontal) {
+            HStack(alignment: .firstTextBaseline, spacing: 12) {
+                keyword
+                Spacer(minLength: 0)
+                mark
+            }
+            VStack(alignment: .leading, spacing: 4) {
+                keyword
+                mark
+            }
         }
     }
 
@@ -2272,6 +2299,16 @@ struct DecisionDetailView: View {
         rendersInteractiveControls: Bool
     ) -> some View {
         VStack(alignment: .leading, spacing: 14) {
+            // The proposal's own assessment of itself, so a model's stays in
+            // its quote, as it did beside the rationale before the rationale
+            // moved to the face.
+            findingVoice(card) {
+                Text(card.qualities)
+                    .font(FreesideFont.cardBody)
+                    .foregroundStyle(Color.inkDim)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .proseMeasure()
+            }
             findingStatements(
                 "Evidence", card.evidence, card: card,
                 rendersInteractiveControls: rendersInteractiveControls)
@@ -2357,6 +2394,12 @@ struct DecisionDetailView: View {
             }
             .frame(maxWidth: .infinity, alignment: .leading)
         }
+    }
+
+    private func findingReasonExpansion(_ findingID: String, itemID: String) -> Binding<Bool> {
+        Binding(
+            get: { findingReasonPreferences.isExpanded(findingID: findingID, itemID: itemID) },
+            set: { findingReasonPreferences.setExpanded($0, findingID: findingID, itemID: itemID) })
     }
 
     private func findingExpansion(_ findingID: String) -> Binding<Bool> {

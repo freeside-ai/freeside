@@ -1519,18 +1519,59 @@ package enum AttentionDisplay {
         return "\(location.path):\(location.start_line)-\(location.end_line)"
     }
 
-    /// `unverifiedKeyword` is the label without its "(unverified)" word, for
-    /// a producer whose label carries one, so a card can draw the word
-    /// through `UnverifiedLabel` with its explanation (visual audit D03).
+    /// How a finding's proposed route is labeled (#2608): one fixed keyword,
+    /// a compact mark (R21) naming who proposed the route, and the full
+    /// producer sentence, which the mark carries as hover help and the route
+    /// carries aloud. A fixed keyword replaced the sentence as the label,
+    /// because the sentence's length, not its "(unverified)" word, made the
+    /// labels hard to read.
+    package struct AdjudicationProducerPresentation: Equatable {
+        package static let keyword = "Proposed route"
+
+        /// Whether a model judged the route. Its words are then a quote
+        /// under the keyword with "(unverified)"; the daemon's or a human's
+        /// draw as plain text under the keyword alone.
+        package let modelBacked: Bool
+        package let mark: String
+        package let sentence: String
+        /// The confidence a model's mark draws, as VoiceOver says it, since
+        /// the mark itself is drawn only; nil where the mark names none.
+        package let spokenConfidence: String?
+
+        /// The keyword as drawn and spoken, with the unverified word where a
+        /// model judged.
+        package var spokenKeyword: String {
+            modelBacked ? "\(Self.keyword) (unverified)" : Self.keyword
+        }
+    }
+
+    /// `confidence` is the proposal's own, which a model's mark names; the
+    /// mark reads "Agent" alone when the adjudicator recorded none.
     package static func adjudicationProducerPresentation(
-        _ producer: Components.Schemas.AdjudicationProducer
-    ) -> (label: String, modelBacked: Bool, unverifiedKeyword: String?) {
+        _ producer: Components.Schemas.AdjudicationProducer,
+        confidence: Components.Schemas.AdjudicationConfidence?
+    ) -> AdjudicationProducerPresentation {
         switch producer {
-        case .engine: return ("Daemon recommendation", false, nil)
-        case .human: return ("Human decision", false, nil)
-        case .model: return ("Model proposal (unverified)", true, "Model proposal")
+        case .engine:
+            return .init(
+                modelBacked: false, mark: "Daemon", sentence: "Daemon recommendation",
+                spokenConfidence: nil)
+        case .human:
+            return .init(
+                modelBacked: false, mark: "Human", sentence: "Human decision",
+                spokenConfidence: nil)
+        case .model:
+            let confidence = confidence.map { label($0).lowercased() }
+            return .init(
+                modelBacked: true,
+                mark: confidence.map { "Agent · \($0)" } ?? "Agent",
+                sentence: "Model proposal (unverified)",
+                spokenConfidence: confidence.map { "\($0) confidence" })
         case .engine_model:
-            return ("Model judgment with engine-authorized remediation", true, nil)
+            return .init(
+                modelBacked: true, mark: "Agent · engine may fix",
+                sentence: "Model judgment with engine-authorized remediation",
+                spokenConfidence: nil)
         }
     }
 

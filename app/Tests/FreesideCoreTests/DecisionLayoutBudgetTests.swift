@@ -43,6 +43,27 @@
             #expect(offset <= actionRowBudget)
         }
 
+        /// Six findings cannot fit `actionRowBudget` (planning measured 977 to
+        /// 1130pt before each reason drew under its route), so their budget
+        /// is recorded from the render, as the routed dispute's is: with
+        /// every reason clamped to one line and the Evidence fold above the
+        /// actions (#2607), six realistic findings put the action region at
+        /// 1290.5pt at 560pt width (measured 2026-11-05), rounded up to the
+        /// next 10pt (#2608).
+        private let sixFindingsActionRowBudget: CGFloat = 1300
+
+        @Test func sixFindingsWithRealisticMessagesKeepTheirRecordedBudget() throws {
+            let snapshot = AttentionFixtures.findingAdjudicationSixFindings()
+            let proposals = snapshot.item.finding_adjudication?.value1.proposals ?? []
+            #expect(proposals.count == 6)
+            #expect(Set(proposals.map(\.finding_id)).count == 6)
+            #expect(proposals.allSatisfy { $0.finding_message.count >= realisticMessageLength })
+
+            let offset = try actionRegionOffset(snapshot, expandedFindings: [])
+
+            #expect(offset <= sixFindingsActionRowBudget)
+        }
+
         /// Expanding a finding opens its reason, coordinates, and alternatives
         /// inside its own card above the actions, which is what "in place"
         /// means here: the action region moves down by the opened content

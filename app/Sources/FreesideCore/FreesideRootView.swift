@@ -414,6 +414,7 @@ public struct FreesideRootView: View {
             onConsumeDetailsRevealRequest: consumeTechnicalDetailsRequest,
             launchComposer: navigation.launchComposer(for: itemID),
             onConsumeLaunchComposer: navigation.consumeLaunchComposer,
+            findingReasonPreferences: .shared,
             topMargin: topMargin,
             seat: seat,
             onSelectItem: openItem,
