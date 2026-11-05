@@ -1346,9 +1346,13 @@ enum TaskTimelinePresentation {
     /// (devlog/2026-10-11-1140-task-stage-timeline.md). Walking oldest to
     /// newest, a run's submission enters its role's stage and a review
     /// request enters Review, and a verification result or a publication
-    /// milestone enters Verification; each draws a start point directly
-    /// under itself when that changes where the task stands. Verification's
-    /// start therefore carries the time of the first event that moved the
+    /// milestone enters Verification. When that changes where the task
+    /// stands, the event's own row becomes the start point: one row with
+    /// the start marker, the stage first and the event's words after it
+    /// (`Review started · Round 1 requested`), at the event's time and with
+    /// its item link. A submission's words drop their own `started`
+    /// (`Implementation started · Attempt 1`). Verification's start
+    /// therefore carries the time of the first event that moved the
     /// task there, which trails the real start by the daemon's own
     /// verification (devlog/2026-10-23-0856-verification-start-point.md).
     /// No other event moves the stage: an attempt's result can be recorded
@@ -1358,9 +1362,10 @@ enum TaskTimelinePresentation {
     /// A remediation is a return to Implementation. `reviewRounds` holds
     /// each run's review rounds by run id; a round whose findings went to a
     /// remediator names its invocation. That invocation's start draws
-    /// "Remediation started" with an Implementation start point under it,
-    /// and the decision that sent the findings there directly under both,
-    /// at the decision's own time. Until the remediator starts, the
+    /// "Remediation started", or `Implementation started · Remediation`
+    /// as a start point when it returns the task there, and the decision
+    /// that sent the findings there directly under it, at the decision's
+    /// own time. Until the remediator starts, the
     /// decision sits where its time falls. The remediator's result reads as the
     /// remediation's and is not counted as a pass of the attempt.
     ///
@@ -1435,16 +1440,13 @@ enum TaskTimelinePresentation {
                 else { continue }
                 oldestFirst.append(decidedRow(round, remediation, items: items))
                 let next = StagePosition(stage: .implementation, campaignID: source?.campaignID)
-                if next != position {
-                    oldestFirst.append(
-                        TimelineRail.Row(
-                            kind: .stageStart(.implementation), label: "Implementation started",
-                            recordedAt: event.recorded_at))
-                }
+                let starts = next != position
                 position = next
                 oldestFirst.append(
                     TimelineRail.Row(
-                        kind: .event, label: "Remediation started · Round \(round.round)",
+                        kind: starts ? .stageStart(.implementation) : .event,
+                        label: (starts ? "Implementation started · Remediation" : "Remediation started")
+                            + " · Round \(round.round)",
                         recordedAt: event.recorded_at))
                 continue
             case (.campaign_allocated, _):
@@ -1484,22 +1486,18 @@ enum TaskTimelinePresentation {
             default:
                 break
             }
-            if let start {
-                oldestFirst.append(
-                    TimelineRail.Row(
-                        kind: .stageStart(start), label: "\(AttentionDisplay.label(start)) started",
-                        recordedAt: event.recorded_at))
-            }
+            // A start event names nothing that failed (`recordsFailure`), so
+            // the merged row never needs the failure kind.
+            let words = rowLabel(event, run: source?.run, pass: pass, startsStage: start != nil)
             oldestFirst.append(
                 TimelineRail.Row(
-                    kind: recordsFailure(event) ? .failure : .event,
-                    label: rowLabel(event, run: source?.run, pass: pass), recordedAt: event.recorded_at,
-                    itemID: linkedItemID(event, items: items)))
+                    kind: start.map { .stageStart($0) } ?? (recordsFailure(event) ? .failure : .event),
+                    label: start.map { "\(AttentionDisplay.label($0)) started · \(words)" } ?? words,
+                    recordedAt: event.recorded_at, itemID: linkedItemID(event, items: items)))
         }
         oldestFirst += unstarted.map { decidedRow($0.round, $0.remediation, items: items) }
         var rows = Array(oldestFirst.reversed())
         if !rows.isEmpty { rows[0].isNewest = true }
-        if rows.count > 1, case .stageStart = rows[1].kind { rows[1].isNewest = true }
         return rows
     }
 
@@ -1854,12 +1852,16 @@ enum TaskTimelinePresentation {
     /// no attempt number keeps the label it had, since there is nothing to
     /// name it by. `pass` counts the run's work results, oldest first: a
     /// fix-up pass records a second one for the same attempt.
+    ///
+    /// `startsStage` drops the submission's own `started`, which the merged
+    /// stage start already says: `Implementation started · Attempt 1`.
     private static func rowLabel(
-        _ event: Components.Schemas.TaskEvent, run: Components.Schemas.TaskTimelineRun?, pass: Int
+        _ event: Components.Schemas.TaskEvent, run: Components.Schemas.TaskTimelineRun?, pass: Int,
+        startsStage: Bool = false
     ) -> String {
         let attempt = run?.role == nil ? nil : run?.attempt_number
         if let milestone = event.milestone?.value1, let attempt {
-            if milestone.kind == .run_submitted { return "Attempt \(attempt) started" }
+            if milestone.kind == .run_submitted { return "Attempt \(attempt)" + (startsStage ? "" : " started") }
             if milestone.kind == .terminal_recorded, let word = terminalWord(milestone) {
                 return "Attempt \(attempt)" + (pass > 1 ? ", pass \(pass)" : "") + " \(word)"
             }

@@ -29,8 +29,7 @@ import Testing
     private let specificationPhase = [
         "Specification approved",
         "Attempt 1 completed",
-        "Attempt 1 started",
-        "> Specification started",
+        "> Specification started · Attempt 1",
         "Task started",
         "Task created",
     ]
@@ -46,13 +45,10 @@ import Testing
                     "Attempt 1 completed *",
                     "Publication Blocked · Recorded hold: Verification findings block publication"
                         + " (verification_findings)",
-                    "Verification recorded · Degraded",
-                    "> Verification started",
+                    "> Verification started · Verification recorded · Degraded",
                     "Round 1 completed · Clean",
-                    "Round 1 requested",
-                    "> Review started",
-                    "Attempt 1 started",
-                    "> Implementation started",
+                    "> Review started · Round 1 requested",
+                    "> Implementation started · Attempt 1",
                 ] + specificationPhase)
         #expect(TaskTimelinePresentation.newestStage(TaskTimelinePresentation.rows(timeline)) == .verification)
     }
@@ -65,16 +61,12 @@ import Testing
             lines(timeline) == [
                 "PR opened · #110 *",
                 "Publication Ready",
-                "Verification recorded · Clean",
-                "> Verification started",
+                "> Verification started · Verification recorded · Clean",
                 "Round 1 completed · Clean",
-                "Round 1 requested",
-                "> Review started",
-                "Attempt 1 started",
-                "> Implementation started",
+                "> Review started · Round 1 requested",
+                "> Implementation started · Attempt 1",
                 "Specification approved",
-                "Attempt 1 started",
-                "> Specification started",
+                "> Specification started · Attempt 1",
                 "Task started",
                 "Task created",
             ])
@@ -90,8 +82,9 @@ import Testing
         script.wait(6)
         script.milestone(TaskStageFixtures.implementationRun, .publication_ready)
         #expect(
-            Array(lines(script.timeline).prefix(4)) == [
-                "Publication Ready *", "> Verification started *", "Round 1 completed · Clean", "Round 1 requested",
+            Array(lines(script.timeline).prefix(3)) == [
+                "> Verification started · Publication Ready *", "Round 1 completed · Clean",
+                "> Review started · Round 1 requested",
             ])
     }
 
@@ -109,13 +102,10 @@ import Testing
             lines(script.timeline)
                 == [
                     "Verification recorded · Degraded *",
-                    "Verification recorded · Clean",
-                    "> Verification started",
+                    "> Verification started · Verification recorded · Clean",
                     "Round 1 completed · Clean",
-                    "Round 1 requested",
-                    "> Review started",
-                    "Attempt 1 started",
-                    "> Implementation started",
+                    "> Review started · Round 1 requested",
+                    "> Implementation started · Attempt 1",
                 ] + specificationPhase)
     }
 
@@ -125,8 +115,7 @@ import Testing
                 == [
                     "Attempt 2 started *",
                     "! Attempt 1 failed",
-                    "Attempt 1 started",
-                    "> Implementation started",
+                    "> Implementation started · Attempt 1",
                 ] + specificationPhase)
     }
 
@@ -136,17 +125,14 @@ import Testing
         #expect(
             lines(TaskStageFixtures.history(.returned))
                 == [
-                    "Attempt 2 started *",
-                    "> Implementation started *",
+                    "> Implementation started · Attempt 2 *",
                     "Attempt 1, pass 2 completed",
                     "Attempt 1 completed",
                     "Round 2 completed · Findings",
                     "Round 2 requested",
                     "! Round 1 failed",
-                    "Round 1 requested",
-                    "> Review started",
-                    "Attempt 1 started",
-                    "> Implementation started",
+                    "> Review started · Round 1 requested",
+                    "> Implementation started · Attempt 1",
                 ] + specificationPhase)
     }
 
@@ -154,10 +140,8 @@ import Testing
         #expect(
             lines(TaskStageFixtures.history(.secondCampaign))
                 == [
-                    "Attempt 1 started *",
-                    "> Specification started *",
-                    "Attempt 1 started",
-                    "> Implementation started",
+                    "> Specification started · Attempt 1 *",
+                    "> Implementation started · Attempt 1",
                 ] + specificationPhase)
         // A campaign that never left Specification is still followed by a
         // new start point: the campaign changed, though the stage did not.
@@ -169,16 +153,14 @@ import Testing
         script.submit("spec-2", role: .specification, attempt: 1, campaign: "second")
         #expect(
             lines(script.timeline) == [
-                "Attempt 1 started *", "> Specification started *", "Attempt 1 started", "> Specification started",
+                "> Specification started · Attempt 1 *", "> Specification started · Attempt 1",
             ])
     }
 
     private let firstReview = [
         "Round 1 completed · Findings",
-        "Round 1 requested",
-        "> Review started",
-        "Attempt 1 started",
-        "> Implementation started",
+        "> Review started · Round 1 requested",
+        "> Implementation started · Attempt 1",
     ]
 
     private func lines(_ script: TaskStageFixtures.Script) -> [String] {
@@ -191,14 +173,13 @@ import Testing
         #expect(
             lines(script)
                 == [
-                    "Remediation started · Round 1 *",
-                    "> Implementation started *",
+                    "> Implementation started · Remediation · Round 1 *",
                     "Round 1 findings decided · 2 to remediation · 1 declined",
                 ] + firstReview + specificationPhase)
         let rows = TaskTimelinePresentation.rows(script.timeline, reviewRounds: script.reviewRounds)
         #expect(TaskTimelinePresentation.newestStage(rows) == .implementation)
         #expect(
-            rows[2].recordedAt
+            rows[1].recordedAt
                 == script.reviewRounds[TaskStageFixtures.implementationRun]?.first?.remediation?.value1.decided_at)
         // The remediator's result is the remediation's, not a second pass
         // of the attempt, and the re-review returns to Review.
@@ -211,11 +192,9 @@ import Testing
         #expect(
             lines(script)
                 == [
-                    "Round 2 requested *",
-                    "> Review started *",
+                    "> Review started · Round 2 requested *",
                     "Remediation completed",
-                    "Remediation started · Round 1",
-                    "> Implementation started",
+                    "> Implementation started · Remediation · Round 1",
                     "Round 1 findings decided · 2 to remediation · 1 declined",
                 ] + firstReview + specificationPhase)
         // With no review facts loaded the rail reads as it did before them:
@@ -232,8 +211,8 @@ import Testing
             TaskStageFixtures.implementationRun, .terminal_recorded, invocation: TaskStageFixtures.remediator,
             terminal: .failed)
         #expect(
-            lines(script).prefix(3) == [
-                "! Remediation failed *", "Remediation started · Round 1", "> Implementation started",
+            lines(script).prefix(2) == [
+                "! Remediation failed *", "> Implementation started · Remediation · Round 1",
             ])
     }
 
@@ -295,15 +274,12 @@ import Testing
         #expect(
             lines(script)
                 == [
-                    "Remediation started · Round 2 *",
-                    "> Implementation started *",
+                    "> Implementation started · Remediation · Round 2 *",
                     "Round 2 findings decided · 1 to remediation",
                     "Round 2 completed · Findings",
-                    "Round 2 requested",
-                    "> Review started",
+                    "> Review started · Round 2 requested",
                     "Remediation completed",
-                    "Remediation started · Round 1",
-                    "> Implementation started",
+                    "> Implementation started · Remediation · Round 1",
                     "Round 1 findings decided · 2 to remediation · 1 declined",
                 ] + firstReview + specificationPhase)
     }
@@ -341,19 +317,15 @@ import Testing
         script.milestone("second-impl", .invocation_started, invocation: "second-remediation")
         let campaign = [
             "Round 1 completed · Findings",
-            "Round 1 requested",
-            "> Review started",
-            "Attempt 1 started",
-            "> Implementation started",
+            "> Review started · Round 1 requested",
+            "> Implementation started · Attempt 1",
             "Specification approved",
-            "Attempt 1 started",
-            "> Specification started",
+            "> Specification started · Attempt 1",
         ]
         #expect(
             lines(script)
                 == [
-                    "Remediation started · Round 1 *",
-                    "> Implementation started *",
+                    "> Implementation started · Remediation · Round 1 *",
                     "Round 1 findings decided · 1 to remediation · 1 declined",
                 ] + campaign + campaign)
     }
@@ -366,11 +338,11 @@ import Testing
         }
         #expect(
             lines(TaskHistoryFixtures.externallyReviewed(requested: false))
-                == ["External review by @maintainer on #110 · Round 2 *", "> Review started *"] + published)
+                == ["> Review started · External review by @maintainer on #110 · Round 2 *"] + published)
         #expect(
             lines(TaskHistoryFixtures.externallyReviewed(requested: true))
                 == [
-                    "Round 2 requested *", "External review by @maintainer on #110 · Round 2", "> Review started",
+                    "Round 2 requested *", "> Review started · External review by @maintainer on #110 · Round 2",
                 ] + published)
         #expect(
             TaskTimelinePresentation.newestReviewRound(TaskHistoryFixtures.externallyReviewed(requested: false)) == 2)
@@ -418,8 +390,7 @@ import Testing
         // Its review is still a stage the events name.
         #expect(
             lines(TaskStageFixtures.history(.noRole)) == [
-                "Round 1 requested *",
-                "> Review started *",
+                "> Review started · Round 1 requested *",
                 "Invocation Ended · Completed",
                 "Run Submitted",
                 "Task started",
@@ -427,23 +398,79 @@ import Testing
             ])
     }
 
-    @Test func aStartPointDrawnFromTheNewestEventReadsAsNewestToo() throws {
+    @Test func aStartPointDrawnFromTheNewestEventIsThatEventsRow() throws {
         for (scenario, stage) in [
             (TaskStageFixtures.Scenario.specification, Components.Schemas.StageName.specification),
             (.implementation, .implementation), (.review, .review),
         ] {
-            let rows = TaskTimelinePresentation.rows(TaskStageFixtures.history(scenario))
-            #expect(rows[0].kind == .event)
-            #expect(rows[1].kind == .stageStart(stage))
-            #expect(rows.map(\.isNewest) == [true, true] + Array(repeating: false, count: rows.count - 2))
-            // The start point takes the time of the event it is drawn from.
-            #expect(rows[1].recordedAt == rows[0].recordedAt)
+            let timeline = TaskStageFixtures.history(scenario)
+            let rows = TaskTimelinePresentation.rows(timeline)
+            #expect(rows[0].kind == .stageStart(stage))
+            #expect(rows.map(\.isNewest) == [true] + Array(repeating: false, count: rows.count - 1))
+            // The start point is the event's own row, at its time. The
+            // invocation's start after a submission is machinery.
+            let source = timeline.events.first { $0.milestone?.value1.kind != .invocation_started }
+            #expect(rows[0].recordedAt == source?.recorded_at)
             #expect(TaskTimelinePresentation.newestStage(rows) == stage)
         }
         let retry = TaskTimelinePresentation.rows(TaskStageFixtures.history(.retry))
         #expect(retry.map(\.isNewest).filter { $0 }.count == 1)
         #expect(TaskTimelinePresentation.newestStage(retry) == .implementation)
         #expect(TaskTimelinePresentation.newestStage(TaskTimelinePresentation.rows(history([]))) == nil)
+    }
+
+    /// Each stage start is the row of the event it is read from: the stage
+    /// first, the event's words after, its time and item link, and no
+    /// separate start row. Covers a run's submission, a review request, a
+    /// verification record, and a remediator's start.
+    @Test func eachStageStartMergesIntoTheEventItIsReadFrom() throws {
+        let run = TaskStageFixtures.implementationRun
+        var script = TaskStageFixtures.script(.remediation)
+        script.wait(20)
+        script.milestone(run, .terminal_recorded, invocation: TaskStageFixtures.remediator, terminal: .completed)
+        script.wait(2)
+        script.review(run, round: 2, .review_requested)
+        script.wait(9)
+        script.review(run, round: 2, .review_completed, outcome: .clean)
+        script.wait(6)
+        script.verify(run, clean: true)
+        let held = TaskStageFixtures.item(.ready_for_final_review, id: "\(run)-ready", hoursOld: 0).item
+        let rows = TaskTimelinePresentation.rows(script.timeline, reviewRounds: script.reviewRounds, items: [held])
+        let starts = rows.filter(\.isStageStart)
+        #expect(
+            starts.map(\.label) == [
+                "Verification started · Verification recorded · Clean",
+                "Review started · Round 2 requested",
+                "Implementation started · Remediation · Round 1",
+                "Review started · Round 1 requested",
+                "Implementation started · Attempt 1",
+                "Specification started · Attempt 1",
+            ])
+        #expect(
+            starts.map(\.kind) == [
+                .stageStart(.verification), .stageStart(.review), .stageStart(.implementation),
+                .stageStart(.review), .stageStart(.implementation), .stageStart(.specification),
+            ])
+        // No row states a start on its own, and no event row repeats one.
+        let bare = ["Specification", "Implementation", "Review", "Verification"].map { "\($0) started" }
+        #expect(!rows.contains { bare.contains($0.label) })
+        #expect(!rows.contains { ["Round 1 requested", "Round 2 requested", "Attempt 1 started"].contains($0.label) })
+        // Each start carries its event's time and its event's link.
+        let events = script.timeline.events
+        let verification = try #require(events.first { $0.kind == .verification_recorded })
+        let request = try #require(events.first { $0.kind == .review_requested && $0.review?.value1.round == 2 })
+        let remediator = try #require(
+            events.first {
+                $0.milestone?.value1.kind == .invocation_started
+                    && $0.milestone?.value1.invocation_id == TaskStageFixtures.remediator
+            })
+        let submission = try #require(
+            events.first { $0.milestone?.value1.kind == .run_submitted && $0.milestone?.value1.run_id == run })
+        #expect(starts[0].recordedAt == verification.recorded_at)
+        #expect(starts[0].itemID == "\(run)-ready")
+        #expect(starts[1].recordedAt == request.recorded_at)
+        #expect(starts[2].recordedAt == remediator.recorded_at)
+        #expect(starts[4].recordedAt == submission.recorded_at)
     }
 
     @Test func rowsKeepTheDaemonsOrderAtOneInstant() {
@@ -457,7 +484,7 @@ import Testing
         for index in timeline.events.indices { timeline.events[index].recorded_at = RunFixtures.screenshotInstant }
         #expect(
             lines(timeline) == [
-                "Attempt 1 started *", "> Implementation started *", "Specification approved", "Task created",
+                "> Implementation started · Attempt 1 *", "Specification approved", "Task created",
             ])
     }
 
@@ -475,8 +502,8 @@ import Testing
         let rows = TaskTimelinePresentation.rows(script.timeline)
         #expect(
             lines(script.timeline) == [
-                "PR merged · #110 *", "! Stop failed", "Stop requested", "PR opened · #110", "Attempt 3 started",
-                "> Implementation started",
+                "PR merged · #110 *", "! Stop failed", "Stop requested", "PR opened · #110",
+                "> Implementation started · Attempt 3",
             ])
         // No row carries a run, campaign, or invocation id.
         for row in rows {
