@@ -205,6 +205,14 @@ import Testing
         #expect(list.knownProjects == ["alpha", "beta", "gamma"])
     }
 
+    @Test func projectRepositoriesComeFromNamedProjectDisplayNames() {
+        var named = task("task-a", project: "alpha")
+        named.task.display_names.project = .init(text: "freeside-ai/freeside", source: .name)
+        var fallback = task("task-b", project: "beta")
+        fallback.task.display_names.project = .init(text: "beta", source: .identifier)
+        #expect(TaskDisplay.projectRepositories(in: [named, fallback]) == ["alpha": "freeside-ai/freeside"])
+    }
+
     @Test func nextItemSkipsTheConcludedItemAndOneConcludedLocally() {
         var concluded = taskItem("concluded", task: "task-a", created: 30)
         concluded.item.status = .resolved

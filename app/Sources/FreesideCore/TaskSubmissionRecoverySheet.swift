@@ -98,11 +98,21 @@ struct TaskSubmissionRecoverySheet: View {
                         .font(FreesideFont.cardBody)
                         .foregroundStyle(Color.inkDim)
                 }
-                ForEach(Array((payload.attachments ?? []).enumerated()), id: \.offset) { _, attachment in
-                    Label(attachment.name, systemImage: "paperclip")
-                        .font(FreesideFont.cardBody)
-                        .foregroundStyle(Color.inkDim)
-                        .accessibilityLabel("Attachment \(attachment.name)")
+                // A folder is one line with its file count (#2591).
+                ForEach(AttachmentGroup.grouped(payload.attachments ?? [], name: \.name)) { group in
+                    switch group {
+                    case .file(let name, _):
+                        Label(name, systemImage: "paperclip")
+                            .font(FreesideFont.cardBody)
+                            .foregroundStyle(Color.inkDim)
+                            .accessibilityLabel("Attachment \(name)")
+                    case .folder(let name, let files):
+                        let count = "\(files.count.formatted()) \(files.count == 1 ? "file" : "files")"
+                        Label("\(name) · \(count)", systemImage: "folder")
+                            .font(FreesideFont.cardBody)
+                            .foregroundStyle(Color.inkDim)
+                            .accessibilityLabel("Folder \(name), \(count)")
+                    }
                 }
                 Text(payload.source)
                     .font(FreesideFont.cardBody)

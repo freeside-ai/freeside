@@ -24,6 +24,11 @@ import UniformTypeIdentifiers
 /// reason under the composer. The text stays required: attachments alone
 /// can't submit.
 ///
+/// On the Mac the same routes take a folder (#2591). A folder outside the
+/// project's repository attaches as one chip holding all its files; a
+/// folder inside it adds its repository path to the text instead, since the
+/// agent already has the checkout.
+///
 /// The draft lives in this sheet's own state and no failure clears it: a
 /// lost response keeps the text and points to separate recovery, a daemon
 /// rejection keeps the text and shows the reason under the composer. The
@@ -36,6 +41,10 @@ struct NewTaskSheet: View {
     /// The projects the picker offers: the sorted unique ids of the synced
     /// tasks (`TaskDisplay.knownProjects`), the same set the Tasks filter uses.
     let projects: [String]
+    /// Each project's `owner/repo`, where the client knows it
+    /// (`TaskDisplay.projectRepositories`), to tell a dropped folder inside
+    /// the project's repository.
+    let projectRepositories: [String: String]
     /// Sheet-owned so the idempotency key survives a parent recompose. The
     /// presenter builds this inside the `.sheet` content closure, which re-runs
     /// on every observed `coordinator` change (an iOS heartbeat or a foreground
@@ -83,6 +92,7 @@ struct NewTaskSheet: View {
 
     init(
         projects: [String],
+        projectRepositories: [String: String] = [:],
         model: TaskSubmissionModel,
         onSubmitted: @escaping (String) -> Void,
         rendersInteractiveControls: Bool = true,
@@ -94,6 +104,7 @@ struct NewTaskSheet: View {
         initialRefusals: [String] = []
     ) {
         self.projects = projects
+        self.projectRepositories = projectRepositories
         _model = State(initialValue: model)
         self.onSubmitted = onSubmitted
         self.rendersInteractiveControls = rendersInteractiveControls
@@ -265,7 +276,11 @@ struct NewTaskSheet: View {
             // the Mac text view routes its own drops the same way.
             .onDrop(of: [.fileURL, .image], isTargeted: nil) { providers in
                 guard rendersInteractiveControls, !isFrozen else { return false }
-                attach { await ComposerAttachmentIntake.items(from: providers, origin: .pasted) }
+                let (repository, held) = (projectRepositories[projectID], attachments.usage)
+                attach {
+                    await ComposerAttachmentIntake.items(
+                        from: providers, origin: .pasted, repository: repository, held: held)
+                }
                 return true
             }
             status
@@ -443,12 +458,21 @@ struct NewTaskSheet: View {
 
     // MARK: Attachments
 
-    /// One chip per attachment, in the order added.
+    /// One chip per file and one per folder, in the order added.
     private var attachmentChips: some View {
         WrappingHStack(horizontalSpacing: 6, verticalSpacing: 6) {
-            ForEach(attachments.items) { item in
-                ComposerAttachmentChip(attachment: item, thumbnail: thumbnails[item.digest]) {
-                    remove(item)
+            ForEach(attachments.chips) { chip in
+                switch chip {
+                case .file(_, let item):
+                    ComposerAttachmentChip(attachment: item, thumbnail: thumbnails[item.digest]) {
+                        remove(item)
+                    }
+                case .folder(let name, let items):
+                    ComposerFolderChip(
+                        name: name, fileCount: items.count, totalBytes: items.reduce(0) { $0 + $1.sizeBytes }
+                    ) {
+                        removeFolder(name)
+                    }
                 }
             }
         }
@@ -483,7 +507,11 @@ struct NewTaskSheet: View {
                     Button("Photos", systemImage: "photo.on.rectangle") { showsPhotoPicker = true }
                     Button("Files", systemImage: "folder") { showsFileImporter = true }
                     PasteButton(supportedContentTypes: [.image, .fileURL]) { providers in
-                        attach { await ComposerAttachmentIntake.items(from: providers, origin: .pasted) }
+                        let held = attachments.usage
+                        attach {
+                            await ComposerAttachmentIntake.items(
+                                from: providers, origin: .pasted, repository: nil, held: held)
+                        }
                     }
                 } label: {
                     chip
@@ -499,8 +527,8 @@ struct NewTaskSheet: View {
                     chip
                 }
                 .buttonStyle(.plain)
-                .help("Attach files. You can also drop or paste them.")
-                .accessibilityLabel("Attach files")
+                .help("Attach files or folders. You can also drop or paste them.")
+                .accessibilityLabel("Attach files or folders")
             #endif
         } else {
             chip
@@ -529,14 +557,41 @@ struct NewTaskSheet: View {
                     case .refused(let sentence):
                         batchRefusals.append(sentence)
                     }
+                case .folder(let name, let files, let links):
+                    switch attachments.addFolder(name: name, files: files) {
+                    // A folder's chip draws no thumbnails, so none are
+                    // decoded for its files.
+                    case .added(let folder, _):
+                        if let sentence = ComposerAttachmentIntake.skippedLinksSentence(folder: folder, links: links) {
+                            batchRefusals.append(sentence)
+                        }
+                    case .refused(let sentence):
+                        batchRefusals.append(sentence)
+                    }
+                case .repositoryPath(let path):
+                    source = Self.appendingPath(path, to: source)
                 }
             }
             refusals = batchRefusals
         }
     }
 
+    /// The draft with a repository path added at its end, after a space
+    /// when the draft isn't empty and doesn't already end in whitespace.
+    static func appendingPath(_ path: String, to draft: String) -> String {
+        guard let last = draft.last, !last.isWhitespace else { return draft + path }
+        return draft + " " + path
+    }
+
+    /// Reads the files off the main actor, deciding a folder against the
+    /// project and draft as they stand when the operator added it.
     private func attach(files urls: [URL]) {
-        attach { await Task.detached { urls.map(ComposerAttachmentIntake.file(at:)) }.value }
+        let (repository, held) = (projectRepositories[projectID], attachments.usage)
+        attach {
+            await Task.detached {
+                ComposerAttachmentIntake.files(at: urls, repository: repository, held: held)
+            }.value
+        }
     }
 
     private func attach(pasted: ComposerAttachmentIntake.Pasted) {
@@ -550,22 +605,38 @@ struct NewTaskSheet: View {
 
     private func remove(_ item: DraftAttachment) {
         attachments.remove(name: item.name)
-        if !attachments.items.contains(where: { $0.digest == item.digest }) {
-            thumbnails[item.digest] = nil
-        }
+        dropUnheldThumbnails()
+    }
+
+    private func removeFolder(_ name: String) {
+        attachments.removeFolder(name: name)
+        dropUnheldThumbnails()
+    }
+
+    /// Drops the thumbnails of digests no remaining item holds.
+    private func dropUnheldThumbnails() {
+        let held = Set(attachments.items.map(\.digest))
+        thumbnails = thumbnails.filter { held.contains($0.key) }
     }
 
     /// The pickers the Attach chip opens, kept off the static goldens.
     private struct AttachmentPickers: ViewModifier {
         let sheet: NewTaskSheet
 
+        #if os(macOS)
+            static let pickableTypes: [UTType] = [.data, .folder]
+        #else
+            static let pickableTypes: [UTType] = [.data]
+        #endif
+
         func body(content: Content) -> some View {
             if sheet.rendersInteractiveControls {
                 content
-                    // `.data` leaves out folders and packages, which #2591
-                    // owns; a dropped folder is refused by name.
+                    // `.data` leaves out folders and packages. The Mac also
+                    // takes folders (#2591); iPhone refuses a dropped or
+                    // pasted folder by name.
                     .fileImporter(
-                        isPresented: sheet.$showsFileImporter, allowedContentTypes: [.data],
+                        isPresented: sheet.$showsFileImporter, allowedContentTypes: Self.pickableTypes,
                         allowsMultipleSelection: true
                     ) { result in
                         if case .success(let urls) = result { sheet.attach(files: urls) }
