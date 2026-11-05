@@ -8,6 +8,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -219,6 +220,15 @@ func seedRunPolicy(t *testing.T, st *store.Store, run domain.Run, values map[str
 			return err
 		}
 		return tx.PutResolvedPolicy(t.Context(), policy)
+	}); err != nil {
+		t.Fatal(err)
+	}
+	// Return the run as the store holds it, bound to its task, as admission
+	// reads it.
+	if err := st.Read(t.Context(), func(tx *store.ReadTx) error {
+		var err error
+		run, err = tx.GetRun(t.Context(), run.ID)
+		return err
 	}); err != nil {
 		t.Fatal(err)
 	}
@@ -566,7 +576,11 @@ func TestAdmitAttemptResolvesInvocationArtifactsIntoStageRoles(t *testing.T) {
 	}); err != nil {
 		t.Fatal(err)
 	}
-	attachmentDigest := digest("6")
+	attachmentBody := []byte("\x89PNG\r\n\x1a\nscreenshot")
+	attachmentDigest := digestBytes(attachmentBody)
+	if _, err := blobs.Put(attachmentDigest, bytes.NewReader(attachmentBody)); err != nil {
+		t.Fatal(err)
+	}
 	message, err := domain.NewMessage(
 		"message-1", "conversation-1", domain.AuthorUser, "please implement",
 		[]domain.Digest{attachmentDigest},
@@ -635,10 +649,13 @@ func TestAdmitAttemptResolvesInvocationArtifactsIntoStageRoles(t *testing.T) {
 	if !admitted || admission.StageInputs == nil {
 		t.Fatalf("admitted = %t, stage inputs = %v", admitted, admission.StageInputs)
 	}
-	if got := admission.StageInputs.PriorArtifactDigests; len(got) != 2 ||
-		got[0] != prior.Digest || got[1] != attachmentDigest {
-		t.Fatalf("prior artifact digests = %v, want [%s %s]",
-			got, prior.Digest, attachmentDigest)
+	// A message attachment is never an opaque prior artifact, and a stage
+	// that runs no Ward writer receives no operator input files.
+	if got := admission.StageInputs.PriorArtifactDigests; len(got) != 1 || got[0] != prior.Digest {
+		t.Fatalf("prior artifact digests = %v, want [%s]", got, prior.Digest)
+	}
+	if got := admission.StageInputs.Attachments; len(got) != 0 {
+		t.Fatalf("non-Ward stage received input files: %+v", got)
 	}
 	if got := admission.StageInputs.ImageInputDigests; len(got) != 1 || got[0] != image.Digest {
 		t.Fatalf("image input digests = %v, want [%s]", got, image.Digest)
@@ -668,6 +685,12 @@ func TestAdmitAttemptResolvesInvocationArtifactsIntoStageRoles(t *testing.T) {
 	}
 	if got := specificationAdmission.StageInputs.ImageInputDigests; len(got) != 0 {
 		t.Fatalf("specification image inputs claim unsupported attachment delivery: %v", got)
+	}
+	if got, want := specificationAdmission.StageInputs.Attachments, []domain.StageInputAttachment{{
+		Digest: attachmentDigest, Name: "discussion/1/1.png", MediaType: domain.TaskAttachmentMediaPNG,
+		SizeBytes: int64(len(attachmentBody)),
+	}}; !slices.Equal(got, want) {
+		t.Fatalf("specification input files = %+v, want %+v", got, want)
 	}
 	remediationID := domain.InvocationID("inv-remediate-1-run-1")
 	remediationInvocation, err := domain.NewAgentInvocation(

@@ -986,9 +986,12 @@ func (e *Engine) validateOperatorFeedbackDelivery(
 	}
 	snapshot, err := e.stageInputSnapshotWithArtifacts(
 		ctx, invocationBinding{run: run, invocation: invocation}, inputDigest,
-		e.productionPublication.remediationPromptPackage, false,
+		e.productionPublication.remediationPromptPackage, false, true,
 		map[domain.ArtifactID]domain.Artifact{artifact.ID: artifact},
 	)
+	if errors.Is(err, errOperatorInputsUndeliverable) {
+		return errors.Join(ErrProductionInputUndeliverable, err)
+	}
 	if err != nil {
 		return err
 	}
