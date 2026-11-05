@@ -111,6 +111,8 @@
 //     re-enrollment recovery (§5.4)
 //   - usage_pool.go, usage_observation.go, pool_usage_observation.go
 //     provider quota pools, usage measurements, and collected pool readings
+//   - discovered_model_catalog.go the models and efforts an enrollment's
+//     harness reported it can run
 //   - schedule.go     the durable scheduler's kinds, aggregate, and events (§5.16)
 //   - work_unit.go    the §5.18 capture records: declarations, bindings, observed facts
 //   - follow_up_filing.go, follow_up_filing_ledger.go

@@ -15,6 +15,7 @@ import (
 // holds: no handoff checks.
 func rewindHandoffChecks(t *testing.T, ctx context.Context, db *sql.DB) {
 	t.Helper()
+	rewindDiscoveredModelCatalogs(t, ctx, db)
 	for _, statement := range []string{
 		`DROP TABLE publication_handoff_checks`,
 		`DELETE FROM schema_migrations WHERE name = '0126_publication_handoff_checks.sql'`,

@@ -678,6 +678,9 @@ type config struct {
 	// leaves it nil and gets Claude's, which answers from writer turns'
 	// usage captures; tests set a fake, and then no capture is recorded.
 	usageCollectors map[domain.HarnessClientKind]ward.UsageCollector
+	// claudeModelDiscoverer runs the startup model discovery. Production
+	// leaves it nil and launches the initialize probe; tests set a fake.
+	claudeModelDiscoverer claudeModelDiscoverer
 	// now is the attention service clock. Production leaves it nil for the
 	// wall clock; tests can advance startup across pairing-code expiry.
 	now func() time.Time
@@ -1706,6 +1709,17 @@ func run(parent context.Context, stop func(), cfg config) (_ *daemon, err error)
 		defer d.wg.Done()
 		d.usage.Wait()
 	}()
+	// Model discovery observes like usage collection: it runs once in the
+	// background, one container at a time, and nothing it meets stops the
+	// daemon.
+	if claudeWiring != nil {
+		refresh := newModelCatalogRefresh(st, *cfg.Claude, claudeWiring.containerBin, cfg.claudeModelDiscoverer, logger)
+		d.wg.Add(1)
+		go func() {
+			defer d.wg.Done()
+			refresh.run(ctx)
+		}()
+	}
 	d.wg.Add(2)
 	go func() {
 		defer d.wg.Done()

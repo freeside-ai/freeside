@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"time"
 
 	"golang.org/x/term"
 
@@ -18,16 +19,22 @@ import (
 )
 
 // authAddDeps are the side-effecting collaborators a test replaces: the Codex
-// token endpoint and the container runtime.
+// token endpoint, the container runtime, and the model discovery that runs on
+// it.
 type authAddDeps struct {
 	codexRefresher ward.CodexAuthRefresher
 	runtime        func(containerBin string) ward.Runtime
+	modelDiscovery func(runtime ward.Runtime) claudeModelDiscoverer
 }
 
 func productionAuthAddDeps() authAddDeps {
 	return authAddDeps{
 		codexRefresher: ward.NewCodexAuthHTTPRefresher(),
 		runtime:        func(bin string) ward.Runtime { return ward.NewCLIRuntime(bin) },
+		// auth add authorizes no rig resources, as its enrollment probe doesn't.
+		modelDiscovery: func(runtime ward.Runtime) claudeModelDiscoverer {
+			return productionClaudeModelDiscoverer(runtime, nil)
+		},
 	}
 }
 
@@ -99,13 +106,17 @@ func runAuthAddCommand(
 			AuthRefresher: deps.codexRefresher,
 		})
 	case domain.HarnessClientClaudeCode:
+		runtime := deps.runtime(cfg.ContainerBin)
 		result, err = ward.EnrollClaudeSetupToken(ctx, ward.ClaudeAuthEnrollmentConfig{
 			Token: token, AuthIdentityID: identityID, EnrollmentID: enrollmentID,
 			Route: cfg.Route, CostOwner: cfg.CostOwner, AccountBinding: cfg.Account,
-			Volume: cfg.AuthVolume, Runtime: deps.runtime(cfg.ContainerBin),
+			Volume: cfg.AuthVolume, Runtime: runtime,
 			ExporterImage: cfg.ExporterImage, AgentImage: cfg.AgentImage,
 			Store: adapters.Claude, AuthStoreLeaser: adapters.Leaser,
 		})
+		if err == nil {
+			discoverAfterEnrollment(ctx, st, deps.modelDiscovery(runtime), cfg.AgentImage, token, enrollmentID, stderr)
+		}
 	}
 	if err != nil {
 		if errors.Is(err, domain.ErrUnapprovedRecipe) {
@@ -219,4 +230,18 @@ func readSetupToken(stdin io.Reader, stderr io.Writer) (ward.SetupToken, error) 
 		}
 	}
 	return ward.NewSetupToken(payload)
+}
+
+// discoverAfterEnrollment records a new enrollment's model catalog. It never
+// fails the enrollment: a failed discovery prints one warning and the next
+// daemon start tries again.
+func discoverAfterEnrollment(
+	ctx context.Context, st *store.Store, discover claudeModelDiscoverer, image string, token ward.SetupToken,
+	enrollment domain.ClientEnrollmentID, stderr io.Writer,
+) {
+	if _, err := recordClaudeModelCatalog(ctx, st, discover, image, token, enrollment,
+		func() time.Time { return time.Now().UTC() }); err != nil {
+		_, _ = fmt.Fprintf(stderr, "warning: model discovery for %s failed; the next daemon start retries it: %v\n",
+			enrollment, err)
+	}
 }

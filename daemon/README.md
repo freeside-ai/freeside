@@ -2065,6 +2065,19 @@ mint a new one with `claude setup-token`; an unreachable provider or another
 provider error tells you to rerun. Both refuse enrollment and delete the
 new volume, as does a runtime failure that prevents the probe from running.
 
+After a Claude enrollment succeeds, the command asks the enrollment's CLI
+which models and effort levels it can run: one more contained call in
+`-agent-image` that sends the control protocol's `initialize` request instead
+of a prompt, so no turn runs. Every daemon start repeats the discovery for
+each enabled Claude setup-token enrollment, one container at a time in the
+background. `freesided auth list` prints the result per enrollment as
+`model_catalog` (the CLI build, when it was observed, and each model's id,
+resolved model, display name, and effort levels), or null before the first
+discovery succeeds. A failed discovery keeps the last catalog: `auth add`
+prints a warning and still succeeds, and the daemon logs one warning per
+enrollment. The CLI's `default` entry, a pointer at its own default model, is
+not recorded.
+
 `auth add` cannot enroll a Claude identity whose volume already exists;
 `auth adopt` (below) enrolls an identity
 over the volume it already holds. An enrollment runs nothing until an agent in
