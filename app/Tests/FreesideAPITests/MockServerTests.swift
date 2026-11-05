@@ -1935,6 +1935,30 @@ extension MockServerTests {
         #expect(other.record.asSubmitTask.task_id != record.task_id)
     }
 
+    /// As the daemon does, a submission stores its source in the blob store
+    /// and names it as the task's work-item artifact, so the synced task's
+    /// digest reads back the submitted text (#2612).
+    @Test func submitTaskSyncsAWorkItemArtifactSourceTheAttachmentsReadServes() async throws {
+        let client = APIClientFactory.mock(server: MockServer())
+        let source = "# Health endpoint\n\nAdd a health endpoint.\n"
+        let result = try await client.submitCommand(
+            body: .json(submitTaskCommand("cmd-1", project: "project-1", source: source))
+        ).ok.body.json
+        let record = result.record.asSubmitTask
+
+        let bootstrap = try await client.getSyncBootstrap().ok.body.json
+        let synced = try #require(bootstrap.tasks.first { $0.task.id == record.task_id })
+        guard case .work_item_artifact(let artifact)? = synced.task.source?.value1 else {
+            Issue.record("a submitted task must sync on the work_item_artifact arm")
+            return
+        }
+        #expect(artifact.work_item_artifact_digest.value1 == record.source_digest.value1)
+        let body = try await client.getAttachment(
+            path: .init(digest: artifact.work_item_artifact_digest.value1)
+        ).ok.body.binary
+        #expect(try await Data(collecting: body, upTo: 1 << 20) == Data(source.utf8))
+    }
+
     @Test func submitTaskRecordsTrimmedOperatorName() async throws {
         let client = APIClientFactory.mock(server: MockServer())
         // A padded operator name is recorded trimmed, mirroring the daemon's

@@ -2573,9 +2573,15 @@ public actor MockServer {
         let taskID = "task-submitted-\(suffix)"
         let runID = "run-submitted-\(suffix)"
         let name = Self.submittedTaskName(operatorName: payload.name, source: payload.source, fallback: taskID)
+        // The daemon puts the source in the blob store before it records the
+        // task (signet task_submission), and the task names it as its
+        // work-item artifact, so the read endpoints can serve the text by
+        // the digest the task carries. Stored only for a fresh submission.
+        attachmentsByDigest[digest] = Data(payload.source.utf8)
         revision += 1
         materializeSubmittedTask(
             taskID: taskID, runID: runID, campaignID: "campaign-submitted-\(suffix)",
+            artifactID: "artifact-submitted-\(suffix)",
             projectID: payload.project_id, name: name, sourceDigest: digest,
             lines: payload.task_lines ?? [], attachments: attachments, commandID: command.command_id)
         revision += 1
@@ -2698,7 +2704,7 @@ public actor MockServer {
     /// visible to the read endpoints so a submission is followed by read-your-
     /// write. The run is templated from a fixture to keep a valid shape.
     private func materializeSubmittedTask(
-        taskID: String, runID: String, campaignID: String,
+        taskID: String, runID: String, campaignID: String, artifactID: String,
         projectID: String, name: Components.Schemas.DisplayName, sourceDigest: String,
         lines: [Components.Schemas.TaskLineInput], attachments: [Components.Schemas.TaskAttachment],
         commandID: String
@@ -2756,6 +2762,11 @@ public actor MockServer {
         }
         let task = Components.Schemas.Task(
             id: taskID, project_id: projectID, display_names: displayNames,
+            source: .init(
+                value1: .work_item_artifact(
+                    .init(
+                        kind: .work_item_artifact, work_item_artifact_id: artifactID,
+                        work_item_artifact_digest: .init(value1: sourceDigest)))),
             created_at: currentTime, last_activity_at: currentTime,
             lifecycle: .active,
             current_position: .init(value1: .init(run_id: runID)),

@@ -88,7 +88,7 @@ struct TaskPageView: View {
     @State private var showsStopExplanation = false
     /// The specification the documents line opened, presented outside the
     /// lazy stack for the same reason.
-    @State private var specificationRequest: TaskSpecificationRequest?
+    @State private var documentRequest: TaskDocumentRequest?
     /// Keeps the reader's place for a page mounting again for this task,
     /// and counts the cards the operator opens. Nil in a screenshot and in
     /// tests that don't exercise it.
@@ -248,8 +248,8 @@ struct TaskPageView: View {
             .taskStopConfirmation(
                 $stopConfirmation, model: coordinator.taskStop, dynamicTypeSize: dynamicTypeSize
             )
-            .sheet(item: $specificationRequest) { request in
-                TaskSpecificationReaderSheet(request: request, attachments: coordinator.store.attachments)
+            .sheet(item: $documentRequest) { request in
+                TaskDocumentReaderSheet(request: request, attachments: coordinator.store.attachments)
                     .dynamicTypeSize(dynamicTypeSize)
             }
             #if os(iOS)
@@ -614,9 +614,9 @@ struct TaskPageView: View {
                 Link(destination: url) { label }
                     .accessibilityLabel(link.spokenTitle)
                     .accessibilityHint(hint)
-            case .specification(let request):
+            case .prompt, .specification:
                 Button {
-                    specificationRequest = request
+                    documentRequest = link.readerRequest
                 } label: {
                     label.contentShape(Rectangle())
                 }
@@ -1571,10 +1571,13 @@ enum TaskTimelinePresentation {
     enum DocumentLink: Equatable {
         /// The intake issue, linked when its repository names a GitHub URL.
         case issue(number: Int, url: URL?)
+        /// The text a typed task was submitted with, by its work-item
+        /// artifact's digest.
+        case prompt(digest: String)
         /// The current campaign's approved specification, by the digest
         /// its approval recorded; the revision only when a held approval
         /// names that digest.
-        case specification(TaskSpecificationRequest)
+        case specification(digest: String, revision: Int?)
         /// The task's PR, linked only when a held item names its repository.
         case pullRequest(number: Int, url: URL?)
         /// A loaded history that records no PR.
@@ -1584,7 +1587,8 @@ enum TaskTimelinePresentation {
         var title: String {
             switch self {
             case .issue(let number, _): "Issue #\(number)"
-            case .specification(let request): request.revision.map { "Specification rev \($0)" } ?? "Specification"
+            case .prompt: "Prompt"
+            case .specification(_, let revision): revision.map { "Specification rev \($0)" } ?? "Specification"
             case .pullRequest(let number, _): "Pull request #\(number)"
             case .noPullRequest: "No pull request yet"
             }
@@ -1594,8 +1598,9 @@ enum TaskTimelinePresentation {
         var spokenTitle: String {
             switch self {
             case .issue(let number, _): "Issue \(number)"
-            case .specification(let request):
-                request.revision.map { "Specification revision \($0)" } ?? "Specification"
+            case .prompt: title
+            case .specification(_, let revision):
+                revision.map { "Specification revision \($0)" } ?? "Specification"
             case .pullRequest(let number, _): "Pull request \(number)"
             case .noPullRequest: title
             }
@@ -1606,14 +1611,26 @@ enum TaskTimelinePresentation {
         var accessibilityHint: String? {
             switch self {
             case .issue(_, let url), .pullRequest(_, let url): url == nil ? nil : "Opens on GitHub"
+            case .prompt: "Opens the prompt reader"
             case .specification: "Opens the specification reader"
             case .noPullRequest: nil
+            }
+        }
+
+        /// The reader the part opens, nil for a part that opens none.
+        var readerRequest: TaskDocumentRequest? {
+            switch self {
+            case .prompt(let digest): .init(digest: digest, document: .prompt)
+            case .specification(let digest, let revision):
+                .init(digest: digest, document: .specification(revision: revision))
+            case .issue, .pullRequest, .noPullRequest: nil
             }
         }
     }
 
     /// The documents line under the header's status: Issue for an
-    /// issue-sourced task, the approved Specification, and the Pull Request.
+    /// issue-sourced task or Prompt for a typed one, the approved
+    /// Specification, and the Pull Request.
     /// The PR is the Task fold's (the run's completion, else the history's
     /// `pr_opened`). The task names no repository, so the PR's link comes
     /// from an item held under the task whose `pr_reference` has its number;
@@ -1624,17 +1641,22 @@ enum TaskTimelinePresentation {
         completion: Components.Schemas.WorkUnitCompletionFacts?, items: [Components.Schemas.AttentionItem]
     ) -> [DocumentLink] {
         var links: [DocumentLink] = []
-        if case .issue_subject(let source)? = task.source?.value1 {
+        switch task.source?.value1 {
+        case .issue_subject(let source)?:
             links.append(
                 .issue(
                     number: source.issue_subject.issue_number,
                     url: DecisionModel.issueURL(for: source.issue_subject)))
+        case .work_item_artifact(let source)?:
+            links.append(.prompt(digest: source.work_item_artifact_digest.value1))
+        case nil:
+            break
         }
         if let digest = approvedSpecificationDigest(task, in: timeline) {
             let revision = items.first { item in
                 item._type == .spec_approval && DecisionDetailView.specificationClaim(in: item)?.digest == digest
             }.flatMap(DecisionDetailView.specificationRevisionIteration(in:))
-            links.append(.specification(.init(digest: digest, revision: revision)))
+            links.append(.specification(digest: digest, revision: revision))
         }
         if let number = completion?.pr_number ?? timeline.flatMap(pullRequest) {
             let reference = items.lazy.compactMap { $0.pr_reference?.value1 }.first { $0.number == number }

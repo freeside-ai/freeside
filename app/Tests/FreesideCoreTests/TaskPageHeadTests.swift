@@ -8,9 +8,11 @@ import Testing
 @testable import FreesideModel
 
 /// The task page's head (#2609): the documents line under the status, the
-/// outline row's chips, and the specification reader the line opens.
+/// outline row's chips, and the specification and prompt readers the line
+/// opens (#2612).
 @Suite @MainActor struct TaskPageHeadTests {
     private let approvedDigest = "sha256:" + String(repeating: "c", count: 64)
+    private let promptDigest = "sha256:" + String(repeating: "e", count: 64)
     private let repo = "freeside-ai/freeside"
 
     private func links(
@@ -53,22 +55,32 @@ import Testing
         #expect(
             links(page, history: page.history, completion: completion(pr: 2431)) == [
                 .issue(number: issue, url: issueURL(issue)),
-                .specification(.init(digest: approvedDigest, revision: nil)),
+                .specification(digest: approvedDigest, revision: nil),
                 .pullRequest(number: 2431, url: URL(string: "https://github.com/\(repo)/pull/2431")),
             ])
     }
 
-    @Test func aTypedTaskWithAnApprovedSpecificationAndNoPullRequest() {
+    @Test func aTypedTaskLeadsWithItsPromptThenTheSpecificationAndNoPullRequest() {
         var page = TaskStageFixtures.page(.implementation)
         page.task.source = .init(
             value1: .work_item_artifact(
                 .init(
                     kind: .work_item_artifact, work_item_artifact_id: "source-1",
-                    work_item_artifact_digest: .init(value1: "sha256:" + String(repeating: "e", count: 64)))))
+                    work_item_artifact_digest: .init(value1: promptDigest))))
         page.items = []
         #expect(
             links(page, history: page.history) == [
-                .specification(.init(digest: approvedDigest, revision: nil)), .noPullRequest,
+                .prompt(digest: promptDigest), .specification(digest: approvedDigest, revision: nil), .noPullRequest,
+            ])
+    }
+
+    @Test func aTaskWithNoSourceHasNeitherIssueNorPrompt() {
+        var page = TaskStageFixtures.page(.implementation)
+        page.task.source = nil
+        page.items = []
+        #expect(
+            links(page, history: page.history) == [
+                .specification(digest: approvedDigest, revision: nil), .noPullRequest,
             ])
     }
 
@@ -126,11 +138,11 @@ import Testing
         page.items = [matching]
         #expect(
             links(page, history: page.history).contains(
-                .specification(.init(digest: approvedDigest, revision: revision))))
+                .specification(digest: approvedDigest, revision: revision)))
 
         page.items = [try approval(binding: "sha256:" + String(repeating: "d", count: 64))]
         #expect(
-            links(page, history: page.history).contains(.specification(.init(digest: approvedDigest, revision: nil))))
+            links(page, history: page.history).contains(.specification(digest: approvedDigest, revision: nil)))
         #expect(SpecApprovalReader.revisionChip(nil) == nil)
         #expect(SpecApprovalReader.revisionChip(revision)?.label == "Revision \(revision)")
     }
@@ -139,15 +151,15 @@ import Testing
     /// where it goes; a part with nowhere to go is plain text.
     @Test func eachDocumentLinkSaysWhereItGoes() {
         let url = URL(string: "https://github.com/\(repo)/issues/712")
-        let request = TaskSpecificationRequest(digest: approvedDigest, revision: 2)
         let cases: [(TaskTimelinePresentation.DocumentLink, String, String, String?)] = [
             (.issue(number: 712, url: url), "Issue #712", "Issue 712", "Opens on GitHub"),
+            (.prompt(digest: promptDigest), "Prompt", "Prompt", "Opens the prompt reader"),
             (
-                .specification(request), "Specification rev 2", "Specification revision 2",
+                .specification(digest: approvedDigest, revision: 2), "Specification rev 2", "Specification revision 2",
                 "Opens the specification reader"
             ),
             (
-                .specification(.init(digest: approvedDigest, revision: nil)), "Specification", "Specification",
+                .specification(digest: approvedDigest, revision: nil), "Specification", "Specification",
                 "Opens the specification reader"
             ),
             (.pullRequest(number: 2431, url: url), "Pull request #2431", "Pull request 2431", "Opens on GitHub"),
@@ -159,6 +171,21 @@ import Testing
             #expect(link.spokenTitle == spoken)
             #expect(link.accessibilityHint == hint)
         }
+    }
+
+    /// The two reader parts open their reader through the same link-trait
+    /// button; the GitHub and plain parts open none.
+    @Test func eachReaderPartOpensItsOwnDocument() {
+        #expect(
+            TaskTimelinePresentation.DocumentLink.prompt(digest: promptDigest).readerRequest
+                == .init(digest: promptDigest, document: .prompt))
+        #expect(
+            TaskTimelinePresentation.DocumentLink.specification(digest: approvedDigest, revision: 2).readerRequest
+                == .init(digest: approvedDigest, document: .specification(revision: 2)))
+        let none: [TaskTimelinePresentation.DocumentLink] = [
+            .issue(number: 712, url: nil), .pullRequest(number: 2431, url: nil), .noPullRequest,
+        ]
+        #expect(none.allSatisfy { $0.readerRequest == nil })
     }
 
     // MARK: Outline and Task Actions
@@ -186,19 +213,19 @@ import Testing
             ])
     }
 
-    // MARK: Specification reader
+    // MARK: Readers
 
     @Test func theReaderLoadsTheApprovedBytesAndNamesTheDigestWhenItCannot() async {
         let bytes = Data("# Specification\n\nStore first, then API.\n".utf8)
         let loaded = AttachmentLoader(
             client: APIClientFactory.mock(server: MockServer(attachments: [approvedDigest: bytes])))
         #expect(
-            await TaskSpecificationReaderSheet.load(approvedDigest) { await loaded.nonImageBytes(for: $0) }
+            await TaskDocumentReaderSheet.load(approvedDigest) { await loaded.nonImageBytes(for: $0) }
                 == .loaded(bytes))
 
         let missing = AttachmentLoader(client: APIClientFactory.mock(server: MockServer(attachments: [:])))
         #expect(
-            await TaskSpecificationReaderSheet.load(approvedDigest) { await missing.nonImageBytes(for: $0) }
+            await TaskDocumentReaderSheet.load(approvedDigest) { await missing.nonImageBytes(for: $0) }
                 == .unavailable)
 
         let server = MockServer(attachments: [approvedDigest: bytes])
@@ -207,7 +234,61 @@ import Testing
         }
         let failing = AttachmentLoader(client: APIClientFactory.mock(server: server))
         #expect(
-            await TaskSpecificationReaderSheet.load(approvedDigest) { await failing.nonImageBytes(for: $0) }
+            await TaskDocumentReaderSheet.load(approvedDigest) { await failing.nonImageBytes(for: $0) }
                 == .unavailable)
+    }
+
+    /// The prompt reader reads the bytes a server serves under the
+    /// prompt's digest, and a missing or failed read is the unavailable
+    /// state, which names the digest under the prompt's row. MockServerTests
+    /// covers a submission storing those bytes.
+    @Test func thePromptReaderLoadsTheSubmittedBytesAndNamesTheDigestWhenItCannot() async {
+        let bytes = Data("Add a health endpoint.\n\nKeep the old route for one release.\n".utf8)
+        let loaded = AttachmentLoader(
+            client: APIClientFactory.mock(server: MockServer(attachments: [promptDigest: bytes])))
+        #expect(
+            await TaskDocumentReaderSheet.load(promptDigest) { await loaded.nonImageBytes(for: $0) } == .loaded(bytes))
+
+        let missing = AttachmentLoader(client: APIClientFactory.mock(server: MockServer(attachments: [:])))
+        #expect(
+            await TaskDocumentReaderSheet.load(promptDigest) { await missing.nonImageBytes(for: $0) } == .unavailable)
+
+        let server = MockServer(attachments: [promptDigest: bytes])
+        await server.setBeforeRespond { operationID in
+            if operationID == "getAttachment" { throw InjectedFailure() }
+        }
+        let failing = AttachmentLoader(client: APIClientFactory.mock(server: server))
+        #expect(
+            await TaskDocumentReaderSheet.load(promptDigest) { await failing.nonImageBytes(for: $0) } == .unavailable)
+
+        let prompt = TaskDocumentRequest.Document.prompt
+        #expect(prompt.eyebrow == "Prompt reader")
+        #expect(prompt.title == "Prompt")
+        #expect(prompt.chip == nil)
+        #expect(prompt.unavailableTitle == "Prompt unavailable")
+        #expect(prompt.unavailableDescription == "Freeside could not read the submitted prompt from the daemon.")
+        #expect(prompt.framing.keyword == "Prompt")
+        #expect(prompt.framing.digestLabel == "Prompt Digest")
+    }
+
+    /// An operator-typed prompt is not a claim: no `(unverified)` label and
+    /// the plain card. The specification reader keeps both, on the task
+    /// page and on a `spec_approval` card, which takes the default framing.
+    @Test func thePromptIsNotAClaimWhileTheSpecificationIs() {
+        let prompt = TaskDocumentRequest.Document.prompt.framing
+        #expect(!prompt.keyword.contains("unverified"))
+        #expect(!prompt.dashedFrame)
+
+        let specification = TaskDocumentRequest.Document.specification(revision: 2)
+        #expect(specification.framing == .specification)
+        #expect(specification.framing.keyword == "Specification (unverified)")
+        #expect(specification.framing.dashedFrame)
+        #expect(specification.framing.digestLabel == "Daemon-Bound Digest")
+        #expect(specification.eyebrow == "Specification reader")
+        #expect(specification.title == "Specification")
+        #expect(specification.chip?.label == "Revision 2")
+        #expect(
+            SpecificationReaderView(text: "# Spec", mediaType: .text_sol_markdown, digest: approvedDigest).framing
+                == .specification)
     }
 }

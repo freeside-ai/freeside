@@ -24,39 +24,126 @@ extension SpecApprovalReader {
     }
 }
 
-/// What the task page's Specification link opens: the digest the current
-/// campaign's approval recorded and, when a held approval names that
-/// digest, its revision.
-struct TaskSpecificationRequest: Identifiable, Equatable {
+/// What a task page documents link opens: the bytes the daemon keeps under
+/// `digest` in the blob store `GET /attachments/{digest}` serves, and which
+/// document they are.
+struct TaskDocumentRequest: Identifiable, Equatable {
+    enum Document: Equatable {
+        /// The current campaign's approved specification; the revision only
+        /// when a held approval names its digest.
+        case specification(revision: Int?)
+        /// The text an operator submitted the task with (#2612).
+        case prompt
+    }
+
     let digest: String
-    let revision: Int?
-    var id: String { digest }
+    let document: Document
+    var id: String { "\(document.title) \(digest)" }
 }
 
-/// The specification reader opened from the task page's documents line
-/// (◆D, 4 Nov handoff): the same sheet a `spec_approval` card opens, over the
-/// bytes the daemon bound to the campaign's approval. The daemon keeps those
-/// bytes in the blob store `GET /attachments/{digest}` serves, so the sheet
-/// reads them by digest; a missing or failed read names the digest instead.
-struct TaskSpecificationReaderSheet: View {
+extension TaskDocumentRequest.Document {
+    /// The sheet header's ask.
+    var title: String {
+        switch self {
+        case .specification: "Specification"
+        case .prompt: "Prompt"
+        }
+    }
+
+    /// The sheet header's eyebrow.
+    var eyebrow: String {
+        switch self {
+        case .specification: SpecApprovalReader.specification.keyword
+        case .prompt: "Prompt reader"
+        }
+    }
+
+    /// The header's revision chip; a prompt has no revision.
+    var chip: StateChip? {
+        switch self {
+        case .specification(let revision): SpecApprovalReader.revisionChip(revision)
+        case .prompt: nil
+        }
+    }
+
+    var loadingText: String {
+        switch self {
+        case .specification: "Loading specification…"
+        case .prompt: "Loading prompt…"
+        }
+    }
+
+    var unavailableTitle: String {
+        switch self {
+        case .specification: "Specification unavailable"
+        case .prompt: "Prompt unavailable"
+        }
+    }
+
+    var unavailableDescription: String {
+        switch self {
+        case .specification: "Freeside could not read the approved specification from the daemon."
+        case .prompt: "Freeside could not read the submitted prompt from the daemon."
+        }
+    }
+
+    var framing: ReaderFraming {
+        switch self {
+        case .specification: .specification
+        case .prompt: .prompt
+        }
+    }
+}
+
+/// The words and frame `SpecificationReaderView` draws around a document's
+/// text. An agent-written specification is a claim, so it carries the
+/// `(unverified)` keyword and the dashed claim frame. An operator-typed
+/// prompt is not a claim and draws in the plain card: no path makes
+/// agent-written text a task source (`signet.TaskSubmissionInput` is built
+/// only from a device's submit_task), so there is no unverified prompt.
+struct ReaderFraming: Equatable {
+    /// The statement that says why this is the text to read.
+    let lead: String
+    /// The keyword over the text.
+    let keyword: String
+    /// The document's noun in the not-text notice.
+    let noun: String
+    let dashedFrame: Bool
+    /// The Identifiers row naming the digest.
+    let digestLabel: String
+
+    static let specification = ReaderFraming(
+        lead: "Bound by the daemon to this approval", keyword: "Specification (unverified)",
+        noun: "specification", dashedFrame: true, digestLabel: "Daemon-Bound Digest")
+
+    static let prompt = ReaderFraming(
+        lead: "The text this task was submitted with", keyword: "Prompt", noun: "prompt",
+        dashedFrame: false, digestLabel: "Prompt Digest")
+}
+
+/// The reader a task page documents link opens (◆D, 4 Nov handoff): the
+/// approved specification, in the same sheet a `spec_approval` card opens,
+/// or the submitted prompt. The sheet reads the document's bytes by digest;
+/// a missing or failed read names the digest instead.
+struct TaskDocumentReaderSheet: View {
     enum Content: Equatable {
         case loading
         case loaded(Data)
         case unavailable
     }
 
-    let request: TaskSpecificationRequest
+    let request: TaskDocumentRequest
     let attachments: AttachmentLoader
     @State private var content: Content
     @Environment(\.dismiss) private var dismiss
 
-    init(request: TaskSpecificationRequest, attachments: AttachmentLoader, content: Content = .loading) {
+    init(request: TaskDocumentRequest, attachments: AttachmentLoader, content: Content = .loading) {
         self.request = request
         self.attachments = attachments
         _content = State(initialValue: content)
     }
 
-    /// Reads the specification's bytes by digest. Nil from the read, a
+    /// Reads the document's bytes by digest. Nil from the read, a
     /// missing blob or a failed fetch alike, is the unavailable state.
     static func load(_ digest: String, read: (String) async -> Data?) async -> Content {
         await read(digest).map(Content.loaded) ?? .unavailable
@@ -95,36 +182,35 @@ struct TaskSpecificationReaderSheet: View {
 
     private var header: some View {
         FreesideSheetHeader(
-            eyebrow: SpecApprovalReader.specification.keyword,
-            chip: SpecApprovalReader.revisionChip(request.revision),
-            ask: "Specification")
+            eyebrow: request.document.eyebrow, chip: request.document.chip, ask: request.document.title)
     }
 
     @ViewBuilder
     private func reader(rendersScrollableContent: Bool) -> some View {
         switch content {
         case .loading:
-            ProgressView("Loading specification…")
+            ProgressView(request.document.loadingText)
                 .tint(.waterText)
                 .font(FreesideFont.cardBody)
                 .foregroundStyle(Color.inkDim)
                 .frame(maxWidth: .infinity, minHeight: 180)
         case .loaded(let bytes):
-            // The daemon accepts a specification only as Markdown.
+            // The daemon accepts a specification only as Markdown; a prompt
+            // reads through the same inert Markdown rendering.
             SpecificationReaderView(
                 bytes: bytes, mediaType: .text_sol_markdown, digest: request.digest,
-                rendersScrollableContent: rendersScrollableContent)
+                framing: request.document.framing, rendersScrollableContent: rendersScrollableContent)
         case .unavailable:
             VStack(alignment: .leading, spacing: 18) {
                 UnavailableStateView(
-                    glyph: .inbox, title: "Specification unavailable",
-                    description: "Freeside could not read the approved specification from the daemon.")
+                    glyph: .inbox, title: request.document.unavailableTitle,
+                    description: request.document.unavailableDescription)
                 Rectangle()
                     .fill(Color.rule)
                     .frame(height: 1)
                     .accessibilityHidden(true)
                 TechnicalDetailsSection(
-                    rows: [.init(label: "Daemon-Bound Digest", value: request.digest)],
+                    rows: [.init(label: request.document.framing.digestLabel, value: request.digest)],
                     rendersInteractiveControls: rendersScrollableContent,
                     startsExpanded: true)
             }
@@ -150,6 +236,7 @@ struct SpecApprovalReaderViewport<Content: View>: View {
 struct SpecificationReaderView: View {
     let preview: DecisionDetailView.NonImagePreview
     let digest: String
+    let framing: ReaderFraming
     let rendersScrollableContent: Bool
     /// A screenshot surface opens the technical details to capture that state;
     /// live use starts collapsed, matching the timeline sections (#1379).
@@ -158,11 +245,11 @@ struct SpecificationReaderView: View {
 
     init(
         text: String, mediaType: Components.Schemas.ClaimText.media_typePayload,
-        digest: String, rendersScrollableContent: Bool = true,
+        digest: String, framing: ReaderFraming = .specification, rendersScrollableContent: Bool = true,
         expandsTechnicalDetails: Bool = false
     ) {
         self.init(
-            bytes: Data(text.utf8), mediaType: mediaType, digest: digest,
+            bytes: Data(text.utf8), mediaType: mediaType, digest: digest, framing: framing,
             rendersScrollableContent: rendersScrollableContent, expandsTechnicalDetails: expandsTechnicalDetails)
     }
 
@@ -170,11 +257,12 @@ struct SpecificationReaderView: View {
     /// limit, so the truncation notice can show.
     init(
         bytes: Data, mediaType: Components.Schemas.ClaimText.media_typePayload,
-        digest: String, rendersScrollableContent: Bool = true,
+        digest: String, framing: ReaderFraming = .specification, rendersScrollableContent: Bool = true,
         expandsTechnicalDetails: Bool = false
     ) {
         preview = DecisionDetailView.NonImagePreview(bytes: bytes)
         self.digest = digest
+        self.framing = framing
         self.rendersScrollableContent = rendersScrollableContent
         self.expandsTechnicalDetails = expandsTechnicalDetails
         blocks = Self.blocks(for: preview.text ?? "", mediaType: mediaType)
@@ -190,9 +278,10 @@ struct SpecificationReaderView: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 22) {
-            // What makes this text the one under review: the daemon bound
-            // its digest to the approval (the Identifiers row).
-            Text("Bound by the daemon to this approval")
+            // What makes this text the one to read: for a specification,
+            // the daemon bound its digest to the approval (the Identifiers
+            // row).
+            Text(framing.lead)
                 .font(FreesideFont.statement)
                 .foregroundStyle(Color.ink)
                 .fixedSize(horizontal: false, vertical: true)
@@ -208,7 +297,7 @@ struct SpecificationReaderView: View {
 
             if preview.text != nil {
                 VStack(alignment: .leading, spacing: 10) {
-                    KeywordLabel(text: "Specification (unverified)")
+                    KeywordLabel(text: framing.keyword)
                         .accessibilityAddTraits(.isHeader)
                     Group {
                         if rendersScrollableContent {
@@ -218,12 +307,12 @@ struct SpecificationReaderView: View {
                         }
                     }
                     .padding()
-                    .freesideCard(dashed: true)
+                    .freesideCard(dashed: framing.dashedFrame)
                 }
             } else {
                 UnavailableStateView(
                     glyph: .inbox, title: "Preview unavailable",
-                    description: "This \(byteCount(preview.byteCount)) specification is not text.")
+                    description: "This \(byteCount(preview.byteCount)) \(framing.noun) is not text.")
             }
 
             // The reader's one hairline (R26), above its fold.
@@ -233,7 +322,7 @@ struct SpecificationReaderView: View {
                     .frame(height: 1)
                     .accessibilityHidden(true)
                 TechnicalDetailsSection(
-                    rows: [.init(label: "Daemon-Bound Digest", value: digest)],
+                    rows: [.init(label: framing.digestLabel, value: digest)],
                     startsExpanded: expandsTechnicalDetails)
             }
         }
