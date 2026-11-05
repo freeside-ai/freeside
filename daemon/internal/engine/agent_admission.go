@@ -436,9 +436,10 @@ func RunTaskLine(
 // agent their command recorded for the role; proposal lines must be set at
 // the recorded decision's instant; a changed line at its change's. A router
 // line must hold to the policy revision it cites (anchorRouterLine). A triage
-// line sets only the specifier, cites its own task, and that task's triage
-// record must exist and have escalated; resolveLineAgent holds its agent to
-// the lineup's escalated counterpart (triageCounterpart).
+// line sets only the specifier's first version, cites its own task, and was
+// set at the instant of that task's triage record, which must exist and have
+// escalated; resolveLineAgent holds its agent to the lineup's escalated
+// counterpart (triageCounterpart).
 //
 // A submission or change record stores what the operator chose, so those arms
 // bind the agent. A proposal line rests on a real operator action on this
@@ -543,6 +544,14 @@ func anchorTaskLine(ctx context.Context, tx *store.ReadTx, line domain.TaskLine)
 		}
 		if !record.Escalated {
 			return errors.New("its task's triage record did not escalate")
+		}
+		// Triage writes the specifier's first version at its record's
+		// instant, in the transaction that records it.
+		if line.Version != 1 {
+			return errors.New("triage sets only the specifier's first version")
+		}
+		if !line.SetAt.Equal(record.RecordedAt) {
+			return errors.New("the line was not set at its task's triage instant")
 		}
 		return nil
 	case domain.TaskLineSourceCLILineChange, domain.TaskLineSourceClientLineChange:
