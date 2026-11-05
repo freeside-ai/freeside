@@ -466,6 +466,165 @@ import Testing
         #expect(coordinator.routingPolicy?.policy == UsageFixtures.defaultRoutingPolicy())
     }
 
+    // MARK: Popups
+
+    /// The canvas's shape: the three writer roles share one order, the
+    /// reviewer has its own, and a drain-first account is set.
+    private func agreeingPolicy() -> Components.Schemas.RoutingPolicy {
+        var policy = UsageFixtures.defaultRoutingPolicy()
+        let writers = ["claude-primary", "codex-primary"]
+        policy.roles = [
+            .init(role: .specifier, agents: writers), .init(role: .implementer, agents: writers),
+            .init(role: .remediator, agents: writers), .init(role: .reviewer, agents: ["codex-primary"]),
+        ]
+        policy.drain_first_account = UsageFixtures.readingPoolID
+        return policy
+    }
+
+    @Test func aWriterChoicePutsTheAgentFirstInTheSharedOrder() async throws {
+        let coordinator = await coordinator(MockServer(routingPolicy: agreeingPolicy()))
+        let model = RoutingPolicyModel(coordinator: coordinator)
+        #expect(model.sharedOrder(.writer) == ["claude-primary", "codex-primary"])
+        await model.choose("claude-secondary", for: .writer)
+        let policy = try #require(coordinator.routingPolicy?.policy)
+        #expect(policy.revision == 3)
+        let writers = ["claude-secondary", "claude-primary", "codex-primary"]
+        #expect(
+            policy.roles == [
+                .init(role: .specifier, agents: writers), .init(role: .implementer, agents: writers),
+                .init(role: .remediator, agents: writers), .init(role: .reviewer, agents: ["codex-primary"]),
+            ])
+        #expect(policy.drain_first_account == UsageFixtures.readingPoolID)
+        #expect(model.confirmed?.policy.revision == 3)
+        #expect(model.draft == nil)
+    }
+
+    /// The default policy orders only the implementer, so the writer roles
+    /// differ and a choice leaves each of them on the agent alone.
+    @Test func aWriterChoiceOverDifferingOrdersLeavesTheAgentAlone() async throws {
+        let coordinator = await coordinator()
+        let model = RoutingPolicyModel(coordinator: coordinator)
+        #expect(model.sharedOrder(.writer) == nil)
+        await model.choose("codex-primary", for: .writer)
+        #expect(
+            coordinator.routingPolicy?.policy.roles == [
+                .init(role: .specifier, agents: ["codex-primary"]),
+                .init(role: .implementer, agents: ["codex-primary"]),
+                .init(role: .remediator, agents: ["codex-primary"]),
+            ])
+    }
+
+    @Test func aReviewerChoiceSetsOnlyTheReviewer() async throws {
+        let coordinator = await coordinator()
+        let model = RoutingPolicyModel(coordinator: coordinator)
+        #expect(model.sharedOrder(.reviewer) == [])
+        await model.choose("claude-primary", for: .reviewer)
+        #expect(
+            coordinator.routingPolicy?.policy.roles == [
+                .init(role: .implementer, agents: ["claude-primary", "codex-primary"]),
+                .init(role: .reviewer, agents: ["claude-primary"]),
+            ])
+        #expect(coordinator.routingPolicy?.policy.drain_first_account == nil)
+    }
+
+    @Test func aDrainFirstChoiceKeepsTheOrders() async throws {
+        let coordinator = await coordinator(MockServer(routingPolicy: agreeingPolicy()))
+        let model = RoutingPolicyModel(coordinator: coordinator)
+        await model.chooseDrainFirst(UsageFixtures.unsupportedPoolID)
+        #expect(coordinator.routingPolicy?.policy.drain_first_account == UsageFixtures.unsupportedPoolID)
+        #expect(coordinator.routingPolicy?.policy.roles == agreeingPolicy().roles)
+        await model.chooseDrainFirst(nil)
+        #expect(coordinator.routingPolicy?.policy.revision == 4)
+        #expect(coordinator.routingPolicy?.policy.drain_first_account == nil)
+    }
+
+    @Test func aChoiceWhileAChangeIsUnansweredSendsNothing() async throws {
+        let server = MockServer()
+        let coordinator = await coordinator(server)
+        let model = RoutingPolicyModel(coordinator: coordinator)
+        await server.setBeforeRespond { operation in
+            if operation == "submitCommand" { throw MockServer.ForcedStatus(503) }
+        }
+        editImplementer(model)
+        await model.save()
+        let pending = try #require(model.pending)
+        let operations = OperationLog()
+        await server.setBeforeRespond { await operations.record($0) }
+        await model.choose("codex-primary", for: .reviewer)
+        await model.chooseDrainFirst(UsageFixtures.readingPoolID)
+        #expect(await !operations.operations.contains("submitCommand"))
+        #expect(model.pending == pending)
+        #expect(model.draft == nil)
+    }
+
+    @Test func aChoiceWhileTheEditorIsOpenSendsNothing() async throws {
+        let server = MockServer()
+        let coordinator = await coordinator(server)
+        let model = RoutingPolicyModel(coordinator: coordinator)
+        editImplementer(model)
+        let draft = try #require(model.draft)
+        let operations = OperationLog()
+        await server.setBeforeRespond { await operations.record($0) }
+        await model.choose("codex-primary", for: .reviewer)
+        #expect(await !operations.operations.contains("submitCommand"))
+        #expect(model.draft == draft)
+        #expect(model.pending == nil)
+    }
+
+    /// The tree dropped codex-primary while the reviewer still orders it, so
+    /// a Writer choice would resend it and Save's check refuses it.
+    @Test func aChoiceSaveWouldRefuseSendsNothingAndSaysWhy() async throws {
+        var policy = UsageFixtures.defaultRoutingPolicy()
+        policy.roles = [
+            .init(role: .implementer, agents: ["claude-primary"]),
+            .init(role: .reviewer, agents: ["codex-primary"]),
+        ]
+        var catalog = UsageFixtures.defaultAgentCatalog()
+        catalog.agents.removeAll { $0.name == "codex-primary" }
+        let server = MockServer(routingPolicy: policy, agentCatalog: catalog)
+        let model = RoutingPolicyModel(coordinator: await coordinator(server))
+        let operations = OperationLog()
+        await server.setBeforeRespond { await operations.record($0) }
+        await model.choose("claude-secondary", for: .writer)
+        #expect(await !operations.operations.contains("submitCommand"))
+        #expect(model.draft == nil)
+        #expect(model.pending == nil)
+        #expect(model.choiceBlocker == "Remove the agents the daemon's agent tree doesn't carry.")
+        // The next edit starts clean.
+        model.beginEditing()
+        #expect(model.choiceBlocker == nil)
+    }
+
+    /// A choice whose command can't be stored sends nothing and leaves no
+    /// draft behind, so the editor's sheet doesn't open on it.
+    @Test func aChoiceThatCannotBeSavedOnTheDeviceLeavesNoDraft() async throws {
+        let server = MockServer()
+        let model = RoutingPolicyModel(coordinator: await coordinator(server, cache: RefusingCache()))
+        let operations = OperationLog()
+        await server.setBeforeRespond { await operations.record($0) }
+        await model.choose("claude-primary", for: .reviewer)
+        #expect(await !operations.operations.contains("submitCommand"))
+        #expect(model.failure?.message.contains("couldn't be saved on this device") == true)
+        #expect(model.draft == nil)
+        #expect(model.pending == nil)
+    }
+
+    @Test func eachTreeAgentNamesThePoolItsEnrollmentSitsOn() async throws {
+        let model = RoutingPolicyModel(coordinator: await coordinator())
+        let agents = try #require(model.catalog?.agents)
+        let pools = Dictionary(uniqueKeysWithValues: agents.map { ($0.name, model.pool(for: $0)) })
+        #expect(pools["claude-primary"] == UsageFixtures.readingPoolID)
+        #expect(pools["claude-secondary"] == UsageFixtures.readingPoolID)
+        #expect(pools["codex-primary"] == UsageFixtures.unsupportedPoolID)
+    }
+
+    @Test func replaceSetsTheWholeOrderAndEmptyLeavesTheLineup() {
+        var draft = RoutingPolicyDraft(policy: UsageFixtures.defaultRoutingPolicy(), syncEpoch: "epoch")
+        draft.replace(["codex-primary", "claude-primary", "codex-primary"], for: .reviewer)
+        draft.replace([], for: .implementer)
+        #expect(draft.roles == [.init(role: .reviewer, agents: ["codex-primary", "claude-primary"])])
+    }
+
     // MARK: Helpers
 
     /// Sets the implementer order as another paired device would.

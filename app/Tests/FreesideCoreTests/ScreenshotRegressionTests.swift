@@ -918,14 +918,26 @@
                 }
             }
 
-            // The Agents pane, which hosts the routing policy (#2394, #2528)
-            // until #2582 redraws it: read with a policy, with a drain-first
-            // account, with neither a policy nor an agent tree, while editing
-            // the orders and the account, after an unanswered change, and
-            // after a stale change the daemon refused.
+            // The Agents pane (#2582), the routing policy (#2394, #2528) as a
+            // popup per role over the agent tree: read with the canvas's
+            // policy, with the default one whose writer roles differ, with a
+            // drain-first account, with neither a policy nor an agent tree,
+            // after an unanswered change, and after a stale change the daemon
+            // refused. An edit of the orders and the account draws in the
+            // Change order sheet, which the suite can't present, so those
+            // states render the editor alone at a sheet's width.
             for state in RoutingPolicyScreenshots.State.allCases {
                 let stateModel = await RoutingPolicyScreenshots.model(state)
                 for (suffix, scheme) in [("", ColorScheme.light), ("-dark", ColorScheme.dark)] {
+                    if state.isEditing {
+                        for (platform, width) in [("", CGFloat(480)), ("-phone", 390)] {
+                            surfaces.append(
+                                Surface(
+                                    name: state.surface + platform + suffix, width: width, colorScheme: scheme,
+                                    view: AnyView(RoutingPolicyEditor(model: stateModel).background(Color.ground))))
+                        }
+                        continue
+                    }
                     surfaces.append(
                         Surface(
                             name: state.surface + suffix, width: 760, colorScheme: scheme,
