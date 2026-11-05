@@ -1,50 +1,33 @@
 # Freeside
 
-**Freeside runs coding-agent workflows on your machine, turning tasks into
-pull requests and asking you when your judgment is needed.**
+Freeside is an agentic development environment (ADE) where you direct coding
+agents through a task from its first description to a pull request ready for
+your approval.
 
-Freeside is intended for small fixes as well as larger changes. The goal is
-useful, correct work that's worth the attention, maintenance, money, and risk
-it costs. Agents can keep working without constant supervision while you
-approve specifications and judge results. The agent works in your preferred
-harness, such as Claude Code or Codex. You keep your existing subscriptions.
+Tell Freeside what you want to do. It drafts a specification and, once you
+approve it, an agent gets to work implementing it on your Mac in the harness
+you already use.
 
-In the intended workflow, Freeside controls when work is ready: it runs
-approved checks, arranges independent review, and collects the evidence you
-need to judge the result. The daemon, a local background service, keeps GitHub
-credentials outside the agent's workspace and publishes the reviewed work as
-a pull request. You review and merge it.
+You can step away while the work is underway. If a decision needs you,
+Freeside sends a card to your phone or Mac. It asks the question directly,
+distinguishes the facts from the agent's interpretation, and shows you the
+evidence so you can make your own call.
 
-Freeside is an agentic development environment (ADE): the place you direct
-coding agents from, rather than a tool you write code in. It keeps working
-while you're away, and work counts as ready on evidence, not on your watching
-it.
-
-*The harness runs the agent; you hold the reins.*
-
-Verification and review apply to the exact code being accepted. When that code
-or the branch it will merge into changes, Freeside repeats the review and any
-checks affected by the change. Your decisions survive retries and restarts,
-but an approval applies only to the versions you approved. If its inputs
-change, it no longer applies.
-Read the [introduction](docs/intro.md) for the core ideas and the intended
-experience.
+Before the change reaches you as a pull request, Freeside runs the checks and
+arranges an independent review. The pull request includes the evidence and
+tells you what happened to each finding, whether it was fixed, declined, or
+left for later. If the code changes or the target branch moves, Freeside runs
+the checks and review again. That way, when you decide whether to merge, you
+know the evidence applies to the change in front of you.
 
 **Freeside is still under development. Expect rough edges.** The pinned wave
-tracker in [GitHub Issues](https://github.com/freeside-ai/freeside/issues)
-records implementation progress.
+tracker shows what's landed and what's coming next. You can find it in
+[GitHub Issues](https://github.com/freeside-ai/freeside/issues).
 
-| I Want To… | Start Here | What To Expect |
-| --- | --- | --- |
-| Explore the interface | [Try the app](#try-the-app-with-sample-data) | Sample decisions in memory, with no daemon or agent accounts. |
-| Install a local client and daemon | [Install on Mac](docs/getting-started.md#install-on-mac) | A signed app, background service, and device pairing. Agent execution stays disabled until configured. |
-| Run agents on a repository | [Prepare a real run](docs/getting-started.md#prepare-a-real-repository-run) | GitHub App setup, agent credentials, container images, and explicit execution policy. |
-| Use an iPhone as a client | [Connect an iPhone](docs/getting-started.md#connect-an-iphone) | A source-built app paired with a reachable daemon on your Mac. |
+## Try It With Sample Data
 
-## Try the App With Sample Data
-
-This is the shortest path to seeing how Freeside works. It needs Xcode, but no
-Apple signing identity, Go, daemon, GitHub App, or agent credentials.
+The quickest way to try Freeside is to open the Mac app with sample data. All
+you need is Xcode. From the root of the repository, run:
 
 ```sh
 xcodebuild -project app/Freeside.xcodeproj -scheme FreesideMac \
@@ -54,24 +37,42 @@ open -n /tmp/freeside-preview/Build/Products/Debug/FreesideMac.app \
   --args -FreesideMock YES
 ```
 
-The app opens with sample attention items. Select a card to read its context,
-inspect details, and try its offered actions. These actions change mock state
-only; they do not run agents, edit repositories, or publish pull requests.
-Quit the preview before opening the installed app below.
+Open a card in the sample inbox to see what needs your attention. Try one of
+its actions to see how the inbox responds. Anything you do here affects only
+the sample data.
 
-## Development and Further Reading
+## Getting Started
 
-- **Project goals:** [Introduction](docs/intro.md).
-- **Architecture and roadmap:** [Project plan](docs/plan.md). Live phase and
-  wave status comes from the open wave tracker (`Wave N: <Name>`, labeled
-  `tracker` with a milestone) in
-  [GitHub Issues](https://github.com/freeside-ai/freeside/issues), using the
-  plan's [wave-tracker resolution rule](docs/plan.md#implementation-coordination-building-freeside-with-agents).
-- **Component guides:** [App](app/README.md), [daemon](daemon/README.md),
-  [API](api/README.md), and [images](images/README.md).
-- **Contributing:** [CONTRIBUTING.md](CONTRIBUTING.md) and [repository conventions](AGENTS.md).
-  Run `bash scripts/check.sh --list` for available checks, then
-  `bash scripts/check.sh <component>` for the component you changed.
+Once you install the Mac app and pair it with the daemon, Freeside keeps your
+state and backups. Your inbox will be empty until you give Freeside real work.
+
+For your first run, pick a small repository and a task you feel comfortable
+reviewing yourself. The [getting started guide](docs/getting-started.md)
+walks you through the setup, from installing the app and daemon to
+configuring a GitHub App for publishing, setting up agent credentials and
+container images, and connecting your repository. It tells you what to
+expect at each step.
+
+| I want to… | Read |
+| --- | --- |
+| Install the Mac app and daemon | [Install on Mac](docs/getting-started.md#install-on-mac) |
+| Run agents on a repository | [Prepare a Real Repository Run](docs/getting-started.md#prepare-a-real-repository-run) |
+| Use an iPhone as a second client | [Connect an iPhone](docs/getting-started.md#connect-an-iphone) |
+
+## Documentation
+
+- [Introduction](docs/intro.md) explains what Freeside is for and the
+  thinking behind its design.
+- [Plan](docs/plan.md) covers the architecture, decisions, and roadmap. Its
+  [wave-tracker rule](docs/plan.md#implementation-coordination-building-freeside-with-agents)
+  explains how to find the current wave's tracker.
+- The component guides cover the [app](app/README.md),
+  [daemon](daemon/README.md), [API](api/README.md), and
+  [images](images/README.md).
+- To contribute, start with the [contributing guide](CONTRIBUTING.md) and
+  [repository conventions](AGENTS.md). Run `bash scripts/check.sh --list` to
+  see the available checks, then `bash scripts/check.sh <component>` to check
+  the component you changed.
 
 ## License
 
