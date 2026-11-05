@@ -40,28 +40,6 @@ enum ConversationPresentation {
     }
 }
 
-/// Offers its content the height of its probe, so a `ViewThatFits` inside
-/// can ask whether the whole message fits the collapsed line limit. The
-/// answer comes from the layout pass itself, at the real width and text
-/// size, with no measured state to arrive a frame late; a body is bounded
-/// exactly when the limit would cut it, so the control never reveals
-/// nothing. The content keeps whatever height it then needs.
-private struct ProbeBoundedLayout: Layout {
-    func sizeThatFits(proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) -> CGSize {
-        subviews[1].sizeThatFits(bounded(width: proposal.width, subviews))
-    }
-
-    func placeSubviews(in bounds: CGRect, proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) {
-        subviews[0].place(at: bounds.origin, proposal: ProposedViewSize(width: bounds.width, height: nil))
-        subviews[1].place(at: bounds.origin, proposal: bounded(width: bounds.width, subviews))
-    }
-
-    private func bounded(width: CGFloat?, _ subviews: Subviews) -> ProposedViewSize {
-        let probe = subviews[0].sizeThatFits(ProposedViewSize(width: width, height: nil))
-        return ProposedViewSize(width: width, height: probe.height)
-    }
-}
-
 /// One message's row in the thread: the message hugs its text up to
 /// `messageWidthFraction` of the row and sits on its author's side.
 private struct MessageRowLayout: Layout {

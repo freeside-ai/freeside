@@ -114,6 +114,27 @@ package struct DecisionRecommendationPresentation: Equatable {
         return "\(actor) recommends \(Self.actionPhrase(action, for: item))\(confidence)."
     }
 
+    /// The reason on the block's face, which plan §9 has every card lead
+    /// with; nil on `finding_adjudication`, whose reason lists each finding
+    /// and its route by id ("Decline review-finding-17. …"). There the
+    /// finding items and the card's `Accepting` line already say it ahead
+    /// of the actions, so it moves to the first Provenance row, still on
+    /// the card (#2608).
+    package func faceReason(for item: Components.Schemas.AttentionItem) -> String? {
+        Self.foldsReason(item) ? nil : reason
+    }
+
+    /// The reason as the Provenance fold's first row, a sentence ahead of
+    /// the facts that revalidate the recommendation, exactly where the face
+    /// does not draw it.
+    package func provenanceReason(for item: Components.Schemas.AttentionItem) -> String? {
+        Self.foldsReason(item) ? reason : nil
+    }
+
+    private static func foldsReason(_ item: Components.Schemas.AttentionItem) -> Bool {
+        item._type == .finding_adjudication
+    }
+
     /// The action as the sentence names it: the control's own label, so the
     /// sentence and the filled button under it say the same words. Accepting
     /// a finding item's routes says what the one command covers instead,

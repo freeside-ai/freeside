@@ -1631,7 +1631,41 @@ public enum AttentionFixtures {
             "The change adds a retry path to the command handler, but no regression test covers "
             + "a resend after a lost response, so the write-once identity can break again "
             + "without any check failing."
+        // Reasons of the length an adjudicator writes, so the budget and the
+        // screenshots draw them clamped (#2608).
+        binding.proposals[0].rationale =
+            "The finding assumes the handler should retry with a fresh command identity. The "
+            + "approved specification makes command identity write-once at the daemon boundary: a "
+            + "retry re-sends the same identity, and the store rejects a second write. The path "
+            + "the reviewer cites is the client's resend, which already keeps the identity."
+        binding.proposals[1].rationale =
+            "The finding is inside the goal: the change adds the retry path, so the test that "
+            + "pins it belongs to the same work unit. The daemon checked that a fix touches only "
+            + "the handler and its tests, which are inside the declared paths, so the remediator "
+            + "can add the case without widening the run's authority."
         snapshot.item.finding_adjudication = .init(value1: binding)
+        return snapshot
+    }
+
+    /// The realistic card binding six findings, each with a distinct id,
+    /// for the layout budget at a count where every reason clamps to one
+    /// line (#2608).
+    public static func findingAdjudicationSixFindings()
+        -> Components.Schemas.AttentionItemSnapshot
+    {
+        var snapshot = findingAdjudicationRealisticMessages()
+        snapshot.item.id = "item-finding-six-findings"
+        guard let binding = snapshot.item.finding_adjudication?.value1 else {
+            preconditionFailure("finding_adjudication fixture does not bind a proposal")
+        }
+        let pair = binding.proposals
+        var proposals: [Components.Schemas.FindingAdjudicationProposal] = []
+        for index in 0..<6 {
+            var proposal = pair[index % pair.count]
+            proposal.finding_id = "review-finding-\(17 + index)"
+            proposals.append(proposal)
+        }
+        snapshot.item.finding_adjudication?.value1.proposals = proposals
         return snapshot
     }
 

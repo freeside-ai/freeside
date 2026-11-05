@@ -1512,7 +1512,8 @@ import Testing
     }
 
     /// Before anything is opened, a card shows the finding's exact message,
-    /// the proposed route, and who proposed it (plan §9 revision 78).
+    /// the proposed route, who proposed it, and the reason (plan §9
+    /// revision 78, #2608).
     @Test func aFindingCardShowsItsMessageRouteAndProducerBeforeAnythingOpens() throws {
         let binding = try #require(
             AttentionFixtures.fixture(type: .finding_adjudication).item
@@ -1523,16 +1524,20 @@ import Testing
 
         #expect(model.message == binding.proposals[0].finding_message)
         #expect(model.route == "Decline the finding")
-        #expect(model.producerLabel == "Model proposal (unverified)")
-        // The word stays in the label; `UnverifiedLabel` draws it with the
+        #expect(model.rationale == binding.proposals[0].rationale)
+        // The word stays in the keyword; `UnverifiedLabel` draws it with the
         // button that explains it (visual audit D03).
-        #expect(model.producerUnverifiedKeyword == "Model proposal")
+        #expect(model.producer.spokenKeyword == "Proposed route (unverified)")
+        #expect(model.producer.mark == "Agent · high")
+        #expect(model.producer.sentence == "Model proposal (unverified)")
 
         #expect(engineModel.message == binding.proposals[1].finding_message)
         #expect(engineModel.route == "Fix in this PR")
+        // A model judged the engine-authorized route, so it is unverified too.
+        #expect(engineModel.producer.spokenKeyword == "Proposed route (unverified)")
+        #expect(engineModel.producer.mark == "Agent · engine may fix")
         #expect(
-            engineModel.producerLabel == "Model judgment with engine-authorized remediation")
-        #expect(engineModel.producerUnverifiedKeyword == nil)
+            engineModel.producer.sentence == "Model judgment with engine-authorized remediation")
     }
 
     /// The head runs the message's title in with the heading, and the rest
@@ -1626,8 +1631,8 @@ import Testing
         #expect(card.heading == "Finding 1")
         #expect(card.message.isEmpty)
         #expect(card.messageAccessibilityLabel == "Finding 1")
-        #expect(card.producerLabel == "Daemon recommendation")
-        #expect(card.producerUnverifiedKeyword == nil)
+        #expect(card.producer.spokenKeyword == "Proposed route")
+        #expect(card.producer.mark == "Daemon")
         #expect(!card.modelBacked)
         #expect(!card.qualities.contains("confidence"))
         #expect(card.daemonFacts.map(\.label) == ["Finding", "Run", "Round"])
@@ -1636,11 +1641,88 @@ import Testing
         #expect(card.citedRules.isEmpty)
         #expect(card.routeOptions.isEmpty)
         #expect(card.gatingQuestions.isEmpty)
+        #expect(card.disclosureSummary == nil)
     }
 
-    /// The spoken card names the finding, who proposed its route, and the
-    /// route, so a model-proposed route is never heard as a daemon fact, and
-    /// each card's identically titled disclosure says whose it is.
+    /// The fold keeps what the operator checks: renamed now that the reason
+    /// sits above it, with a summary counting its evidence, routes, and
+    /// questions and naming only those present. Daemon Facts, cited rules,
+    /// and assumptions are inside but not counted, which keeps the summary
+    /// on its label's line within the first-viewport budget.
+    @Test func theFindingFoldIsRenamedAndCountsWhatItHolds() throws {
+        var binding = try #require(
+            AttentionFixtures.fixture(type: .finding_adjudication).item
+                .finding_adjudication?.value1)
+        let cards = FindingCardPresentation.cards(binding)
+
+        #expect(FindingCardPresentation.disclosureTitle == "Evidence and Alternatives")
+        #expect(cards.first?.disclosureSummary == "2 evidence · 2 routes · 1 question")
+        #expect(cards.last?.disclosureSummary == "1 evidence")
+
+        binding.proposals[0].offered_alternatives += [
+            .init(route: .park_separate_work, consequence: "Park the run.")
+        ]
+        binding.proposals[0].evidence = ["service.go:214 re-derives the command id"]
+        binding.proposals[0].open_questions = []
+        #expect(
+            FindingCardPresentation.cards(binding).first?.disclosureSummary
+                == "1 evidence · 3 routes")
+    }
+
+    /// A finding's reason draws two lines on a card with one finding and
+    /// one line once the card binds two or more, which keeps two realistic
+    /// findings inside the first-viewport budget (#1141, #2608).
+    @Test func aFindingsReasonClampsByHowManyFindingsTheCardBinds() {
+        #expect(FindingCardPresentation.reasonLineLimit(findingCount: 1) == 2)
+        #expect(FindingCardPresentation.reasonLineLimit(findingCount: 2) == 1)
+        #expect(FindingCardPresentation.reasonLineLimit(findingCount: 6) == 1)
+    }
+
+    /// The clamp's control is More until it expands and Less after, and
+    /// the same word names its accessibility action. Spoken, it says whose
+    /// reason it opens, since every finding has one.
+    @Test func theClampControlIsNamedForItsStateAndItsFinding() throws {
+        let binding = try #require(
+            AttentionFixtures.fixture(type: .finding_adjudication).item
+                .finding_adjudication?.value1)
+        let card = try #require(FindingCardPresentation.cards(binding).first)
+
+        #expect(ClampedText.controlTitle(isExpanded: false) == "More")
+        #expect(ClampedText.controlTitle(isExpanded: true) == "Less")
+        #expect(
+            ClampedText.controlAccessibilityLabel(isExpanded: false, spokenName: card.reasonSpokenName)
+                == "More, reason for Finding 1")
+        #expect(
+            ClampedText.controlAccessibilityLabel(isExpanded: true, spokenName: card.reasonSpokenName)
+                == "Less, reason for Finding 1")
+    }
+
+    /// On `finding_adjudication` the recommendation's reason restates the
+    /// finding items by id, so it leaves the face for the first Provenance
+    /// row; every other card keeps it on the face (#2608).
+    @Test func theRecommendationReasonIsTheFirstProvenanceRowOnlyOnFindingAdjudication() throws {
+        let findings = AttentionFixtures.fixture(type: .finding_adjudication).item
+        let findingRecommendation = try #require(DecisionRecommendationPresentation.of(findings))
+        #expect(findingRecommendation.faceReason(for: findings) == nil)
+        #expect(
+            findingRecommendation.provenanceReason(for: findings)
+                == "Decline review-finding-17. Fix review-finding-18 in this PR.")
+
+        // The same recommendation on any other type keeps its reason on
+        // the face and its Provenance as the source facts alone.
+        for type in AttentionFixtures.phase1Types where type != .finding_adjudication {
+            var item = AttentionFixtures.fixture(type: type).item
+            item.recommendation = findings.recommendation
+            let recommendation = try #require(DecisionRecommendationPresentation.of(item))
+            #expect(recommendation.faceReason(for: item) == recommendation.reason)
+            #expect(recommendation.provenanceReason(for: item) == nil)
+        }
+    }
+
+    /// The spoken card names the finding, the route's keyword, who proposed
+    /// it with the confidence its mark draws, and the route, so a model-proposed route is never heard as a
+    /// daemon fact, and each card's identically titled disclosure says
+    /// whose it is.
     @Test func aFindingCardIsSpokenWithItsFindingProducerAndRoute() throws {
         let binding = try #require(
             AttentionFixtures.fixture(type: .finding_adjudication).item
@@ -1653,8 +1735,11 @@ import Testing
                 + "command identity.")
         #expect(
             card.routeAccessibilityLabel
-                == "Finding 1 proposed route, Model proposal (unverified): Decline the finding")
-        #expect(card.disclosureAccessibilityLabel == "Reason and Alternatives, Finding 1")
+                == "Finding 1 Proposed route (unverified), Model proposal (unverified), "
+                + "high confidence: Decline the finding")
+        #expect(
+            card.disclosureAccessibilityLabel
+                == "Evidence and Alternatives, Finding 1, 2 evidence · 2 routes · 1 question")
     }
 
     /// A held alternative is named on the card's face, where a closed

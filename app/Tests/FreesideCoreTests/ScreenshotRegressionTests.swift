@@ -3714,6 +3714,36 @@
                     view: AnyView(
                         selectedAlternativeDetail.screenshotCard(
                             realisticFindings, at: dynamicTypeSize))))
+            // The first finding's reason expanded in place with Less, the
+            // second still clamped with More (#2608), on both platforms and
+            // in both appearances.
+            let expandedReason = FindingReasonPreferences(defaults: nil)
+            expandedReason.setExpanded(
+                true, findingID: "review-finding-17", itemID: realisticFindings.id)
+            let expandedReasonDetail = DecisionDetailView(
+                store: store,
+                itemID: realisticFindings.id,
+                loadsAttachments: false,
+                showsValidationProgress: false,
+                now: screenshotNow,
+                findingReasonPreferences: expandedReason)
+            for (suffix, colorScheme) in [("", ColorScheme.light), ("-dark", .dark)] {
+                surfaces.append(
+                    Surface(
+                        name: "decision-finding_adjudication-reason-expanded\(suffix)",
+                        colorScheme: colorScheme,
+                        view: AnyView(
+                            expandedReasonDetail.screenshotCard(
+                                realisticFindings, at: dynamicTypeSize))))
+                surfaces.append(
+                    Surface(
+                        name: "decision-finding_adjudication-reason-expanded-phone\(suffix)",
+                        width: 390,
+                        colorScheme: colorScheme,
+                        view: AnyView(
+                            expandedReasonDetail.screenshotCard(
+                                realisticFindings, at: dynamicTypeSize, compactLayout: true))))
+            }
             // Needs you with nothing open (R13): the glyph, the statement, and
             // Working one line below. Drawn last: ahead of another surface it
             // moves that surface's glyph antialiasing (#1698).

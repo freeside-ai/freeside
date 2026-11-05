@@ -678,7 +678,7 @@ struct DecisionCardComposition: Equatable {
             if item.review_dispute?.value1.findings?.isEmpty == false { return true }
             guard let binding = item.finding_adjudication?.value1 else { return false }
             return FindingCardPresentation.cards(binding)
-                .contains { $0.producerUnverifiedKeyword != nil }
+                .contains(where: \.modelBacked)
         case .factBlock:
             return context.hasChangeSummary
         case .summary:
@@ -1086,11 +1086,11 @@ struct DecisionFactPlacement: Equatable {
 
 /// One finding's card on `finding_adjudication` (plan §9 revision 78, visual
 /// audit D09): what the card shows before anything is opened, and what its
-/// "Reason and Alternatives" disclosure holds, in render order. Kept apart
+/// "Evidence and Alternatives" disclosure holds, in render order. Kept apart
 /// from the view so the destination of each proposal and binding field is
 /// testable without rendering.
 struct FindingCardPresentation: Equatable, Identifiable {
-    static let disclosureTitle = "Reason and Alternatives"
+    static let disclosureTitle = "Evidence and Alternatives"
 
     /// One route the operator may send for this finding.
     struct RouteOption: Equatable {
@@ -1118,24 +1118,25 @@ struct FindingCardPresentation: Equatable, Identifiable {
     /// the rest of one paragraph.
     let title: AttributedString?
     let body: [SpecificationBlock]
-    let producerLabel: String
-    /// The producer label without its "(unverified)" word, where the label
-    /// carries one; `UnverifiedLabel` draws the word with its explanation.
-    let producerUnverifiedKeyword: String?
+    /// The route's keyword, the compact mark naming who proposed it, and
+    /// the full producer sentence (#2608).
+    let producer: AttentionDisplay.AdjudicationProducerPresentation
     let route: String
+    /// The proposal's reason, drawn clamped under the route in the same
+    /// voice: the rationale is what accepting rests on, so it is read where
+    /// the route is (#2608).
+    let rationale: String
 
     /// Whether a model wrote the proposal. Its rationale, evidence, cited
     /// rules, assumptions, and questions are then the model's words, drawn
     /// as quotes under unverified keywords; the daemon's fast path wrote
     /// them otherwise, and they draw as its own text.
-    let modelBacked: Bool
+    var modelBacked: Bool { producer.modelBacked }
 
-    // An open disclosure joins the rationale and its qualities to the route
-    // (one statement by one producer), then draws, in render order: the
-    // evidence, the daemon's coordinates in their own register, what the
-    // proposal cites and assumes, the routes the operator may send, and
-    // what the proposal left open.
-    let rationale: String
+    // An open disclosure draws, in render order: the proposal's qualities,
+    // the evidence, the daemon's coordinates in their own register, what
+    // the proposal cites and assumes, the routes the operator may send,
+    // and what the proposal left open.
     /// The proposal's goal relationship, confidence, and work-unit
     /// compatibility on one line.
     let qualities: String
@@ -1161,18 +1162,15 @@ struct FindingCardPresentation: Equatable, Identifiable {
         number: Int,
         binding: Components.Schemas.FindingAdjudicationBinding
     ) {
-        let producer = AttentionDisplay.adjudicationProducerPresentation(proposal.producer)
         id = proposal.finding_id
         heading = "Finding \(number)"
         message = proposal.finding_message
         let finding = FindingPresentation(message: proposal.finding_message)
         title = finding.title
         body = finding.body
-        producerLabel = producer.label
-        producerUnverifiedKeyword = producer.unverifiedKeyword
+        producer = AttentionDisplay.adjudicationProducerPresentation(
+            proposal.producer, confidence: proposal.confidence?.value1)
         route = AttentionDisplay.label(proposal.route)
-
-        modelBacked = producer.modelBacked
         rationale = proposal.rationale
         // An adjudicator that recorded no confidence gets no word for it,
         // rather than a quality with nothing in it.
@@ -1252,17 +1250,58 @@ struct FindingCardPresentation: Equatable, Identifiable {
         message.isEmpty ? heading : "\(heading). \(message)"
     }
 
-    /// The route spoken with the finding it belongs to and who proposed it,
-    /// so a model-proposed route is never heard as a fact the daemon
-    /// established, wherever VoiceOver lands first.
+    /// The route spoken with the finding it belongs to, its keyword, and
+    /// the full sentence naming who proposed it, so a model-proposed route
+    /// is never heard as a fact the daemon established, wherever VoiceOver
+    /// lands first. The keyword and mark are drawn only, so this says both,
+    /// with the confidence a model's mark draws.
     var routeAccessibilityLabel: String {
-        "\(heading) proposed route, \(producerLabel): \(route)"
+        let producer = [producer.spokenKeyword, producer.sentence, producer.spokenConfidence]
+            .compactMap(\.self)
+            .joined(separator: ", ")
+        return "\(heading) \(producer): \(route)"
     }
 
-    /// Every card's disclosure reads "Reason and Alternatives", so the
-    /// spoken control says whose it is.
+    /// The reason's clamp control, said with the finding it belongs to.
+    var reasonSpokenName: String { "reason for \(heading)" }
+
+    /// Every card's disclosure reads "Evidence and Alternatives", so the
+    /// spoken control says whose it is, then what it holds: the spoken
+    /// label replaces the drawn one, summary included.
     var disclosureAccessibilityLabel: String {
-        "\(Self.disclosureTitle), \(heading)"
+        [Self.disclosureTitle, heading, disclosureSummary].compactMap(\.self)
+            .joined(separator: ", ")
+    }
+
+    /// What the closed disclosure holds, counted so it says so before it is
+    /// opened: evidence, routes, and questions, naming only those present.
+    /// Cited rules and assumptions stay inside uncounted: with all five,
+    /// a full finding's summary wraps under its label on a 560pt Mac card,
+    /// a line more before the actions (#1141), so the owner chose the three counts the canvas draws (#2608). Daemon
+    /// Facts are always inside, so they are not counted. Nil when there is
+    /// nothing to count.
+    var disclosureSummary: String? {
+        let counts = [
+            Self.count(evidence.count, "evidence", "evidence"),
+            Self.count(routeOptions.count, "route", "routes"),
+            Self.count(gatingQuestions.count, "question", "questions"),
+        ]
+        .compactMap(\.self)
+        return counts.isEmpty ? nil : counts.joined(separator: " · ")
+    }
+
+    private static func count(_ count: Int, _ singular: String, _ plural: String) -> String? {
+        count == 0 ? nil : "\(count) \(count == 1 ? singular : plural)"
+    }
+
+    /// How many lines a finding's reason draws before More: two on a card
+    /// with one finding, one once the card binds two or more, so two
+    /// realistic findings hold their recorded budget to the actions
+    /// (`DecisionLayoutBudgetTests`; the first viewport is 520pt, #1141).
+    /// Two lines there measured 526pt at planning, before the Evidence fold
+    /// moved above the actions (#2607, #2608).
+    static func reasonLineLimit(findingCount: Int) -> Int {
+        findingCount <= 1 ? 2 : 1
     }
 
     /// A held alternative, said on the card's face. The route list sits inside
