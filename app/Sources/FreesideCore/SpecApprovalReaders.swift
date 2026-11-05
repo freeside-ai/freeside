@@ -24,6 +24,114 @@ extension SpecApprovalReader {
     }
 }
 
+/// What the task page's Specification link opens: the digest the current
+/// campaign's approval recorded and, when a held approval names that
+/// digest, its revision.
+struct TaskSpecificationRequest: Identifiable, Equatable {
+    let digest: String
+    let revision: Int?
+    var id: String { digest }
+}
+
+/// The specification reader opened from the task page's documents line
+/// (◆D, 4 Nov handoff): the same sheet a `spec_approval` card opens, over the
+/// bytes the daemon bound to the campaign's approval. The daemon keeps those
+/// bytes in the blob store `GET /attachments/{digest}` serves, so the sheet
+/// reads them by digest; a missing or failed read names the digest instead.
+struct TaskSpecificationReaderSheet: View {
+    enum Content: Equatable {
+        case loading
+        case loaded(Data)
+        case unavailable
+    }
+
+    let request: TaskSpecificationRequest
+    let attachments: AttachmentLoader
+    @State private var content: Content
+    @Environment(\.dismiss) private var dismiss
+
+    init(request: TaskSpecificationRequest, attachments: AttachmentLoader, content: Content = .loading) {
+        self.request = request
+        self.attachments = attachments
+        _content = State(initialValue: content)
+    }
+
+    /// Reads the specification's bytes by digest. Nil from the read, a
+    /// missing blob or a failed fetch alike, is the unavailable state.
+    static func load(_ digest: String, read: (String) async -> Data?) async -> Content {
+        await read(digest).map(Content.loaded) ?? .unavailable
+    }
+
+    var body: some View {
+        VStack(spacing: 0) {
+            header
+            SpecApprovalReaderViewport { reader(rendersScrollableContent: true) }
+            FreesideSheetActionRow.done { dismiss() }
+        }
+        .background(Color.ground2)
+        .freesideSheetPresentation()
+        #if os(macOS)
+            // The card's reader sheet takes the same frame, for the same
+            // reason: the reader's scroll view has no ideal size.
+            .frame(minWidth: 480, idealWidth: 720, minHeight: 420, idealHeight: 640)
+        #endif
+        .task(id: request.digest) {
+            content = await Self.load(request.digest) { await attachments.nonImageBytes(for: $0) }
+        }
+    }
+
+    /// The sheet laid out in place of its scroll view, for the screenshot
+    /// suite.
+    var screenshotContent: some View {
+        VStack(spacing: 0) {
+            header
+            reader(rendersScrollableContent: false)
+                .padding()
+                .frame(maxWidth: .infinity, alignment: .topLeading)
+            FreesideSheetActionRow.done {}
+        }
+        .background(Color.ground2)
+    }
+
+    private var header: some View {
+        FreesideSheetHeader(
+            eyebrow: SpecApprovalReader.specification.keyword,
+            chip: SpecApprovalReader.revisionChip(request.revision),
+            ask: "Specification")
+    }
+
+    @ViewBuilder
+    private func reader(rendersScrollableContent: Bool) -> some View {
+        switch content {
+        case .loading:
+            ProgressView("Loading specification…")
+                .tint(.waterText)
+                .font(FreesideFont.cardBody)
+                .foregroundStyle(Color.inkDim)
+                .frame(maxWidth: .infinity, minHeight: 180)
+        case .loaded(let bytes):
+            // The daemon accepts a specification only as Markdown.
+            SpecificationReaderView(
+                bytes: bytes, mediaType: .text_sol_markdown, digest: request.digest,
+                rendersScrollableContent: rendersScrollableContent)
+        case .unavailable:
+            VStack(alignment: .leading, spacing: 18) {
+                UnavailableStateView(
+                    glyph: .inbox, title: "Specification unavailable",
+                    description: "Freeside could not read the approved specification from the daemon.")
+                Rectangle()
+                    .fill(Color.rule)
+                    .frame(height: 1)
+                    .accessibilityHidden(true)
+                TechnicalDetailsSection(
+                    rows: [.init(label: "Daemon-Bound Digest", value: request.digest)],
+                    rendersInteractiveControls: rendersScrollableContent,
+                    startsExpanded: true)
+            }
+        }
+    }
+}
+
 /// The pane or sheet owns vertical scrolling, including notices and digests.
 /// Reader bodies retain only their independent horizontal overflow regions.
 struct SpecApprovalReaderViewport<Content: View>: View {
@@ -53,7 +161,19 @@ struct SpecificationReaderView: View {
         digest: String, rendersScrollableContent: Bool = true,
         expandsTechnicalDetails: Bool = false
     ) {
-        preview = DecisionDetailView.NonImagePreview(bytes: Data(text.utf8))
+        self.init(
+            bytes: Data(text.utf8), mediaType: mediaType, digest: digest,
+            rendersScrollableContent: rendersScrollableContent, expandsTechnicalDetails: expandsTechnicalDetails)
+    }
+
+    /// The reader over fetched bytes, which may run past the preview's
+    /// limit, so the truncation notice can show.
+    init(
+        bytes: Data, mediaType: Components.Schemas.ClaimText.media_typePayload,
+        digest: String, rendersScrollableContent: Bool = true,
+        expandsTechnicalDetails: Bool = false
+    ) {
+        preview = DecisionDetailView.NonImagePreview(bytes: bytes)
         self.digest = digest
         self.rendersScrollableContent = rendersScrollableContent
         self.expandsTechnicalDetails = expandsTechnicalDetails
