@@ -6194,7 +6194,11 @@ usage observations (Section [5.4](#54-credential-modes-egress-profiles-and-concu
 exposes them to the enrollment's credential. Each provider's collection path
 is a pinned-build empirical contract that its usage spike settles before its
 collector ships, and a provider that cannot be observed with the supported
-credential reports `unsupported`, never a guess. Collection runs on the
+credential reports `unsupported`, never a guess. Claude's spike found no
+separate read under the setup token, so Claude's readings come from the
+writer turn's own usage answer under the collector's enrollment: its collector
+makes no request of its own, and a pool's readings are as current as its
+collector's last writer turn. Collection runs on the
 doctor's schedule, after a run reports a provider rate-limit event, on an
 operator's manual refresh from `freesided auth doctor` or a client, and once
 after a window's expected reset. Reassigning a pool's collector is likewise an
