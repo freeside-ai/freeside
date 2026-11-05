@@ -2,18 +2,21 @@ import Foundation
 
 /// The mock's mirror of the daemon's task-attachment rules (domain
 /// task_attachment.go, owner decision 2026-11-04), so a client developed
-/// against the mock meets the refusals the daemon gives.
-enum TaskAttachmentLimits {
-    static let maxImageBytes = 10 << 20
-    static let maxFileBytes = 32 << 20
-    static let maxTotalBytes = 100 << 20
-    static let maxCount = 1000
-    static let maxSegmentBytes = 255
+/// against the mock meets the refusals the daemon gives. The New Task
+/// composer reuses the public members to refuse an attachment before
+/// uploading it; that check only saves a wasted upload, and the daemon
+/// stays the enforcer of every rule.
+public enum TaskAttachmentLimits {
+    public static let maxImageBytes = 10 << 20
+    public static let maxFileBytes = 32 << 20
+    public static let maxTotalBytes = 100 << 20
+    public static let maxCount = 1000
+    public static let maxSegmentBytes = 255
     static let maxNameBytes = 1024
     static let maxClaimBytes = 255
 
     /// A sha256 digest in the daemon's strict form.
-    static func validDigest(_ digest: String) -> Bool {
+    public static func validDigest(_ digest: String) -> Bool {
         guard digest.hasPrefix("sha256:") else { return false }
         let hex = digest.utf8.dropFirst("sha256:".count)
         return hex.count == 64 && hex.allSatisfy { (0x30...0x39).contains($0) || (0x61...0x66).contains($0) }
@@ -24,7 +27,7 @@ enum TaskAttachmentLimits {
     /// daemon's unicode.IsControl is the Cc category), each segment at most 255
     /// bytes. It works on UTF-8 bytes, as the daemon does: a Character can
     /// join "/" to a combining mark, which would hide the separator.
-    static func validName(_ name: String) -> Bool {
+    public static func validName(_ name: String) -> Bool {
         let bytes = Array(name.utf8)
         guard !bytes.isEmpty, bytes.count <= maxNameBytes, bytes.first != slash else { return false }
         guard !name.unicodeScalars.contains(where: { $0.properties.generalCategory == .control }) else {
@@ -53,7 +56,7 @@ enum TaskAttachmentLimits {
 
     /// A lowercase type/subtype pair of RFC 2045 token characters with no
     /// parameters, at most 255 bytes.
-    static func validClaim(_ claim: String) -> Bool {
+    public static func validClaim(_ claim: String) -> Bool {
         guard claim.utf8.count <= maxClaimBytes else { return false }
         let parts = claim.split(separator: "/", omittingEmptySubsequences: false)
         let specials = Set("()<>@,;:\\\"/[]?=".utf8)
@@ -68,7 +71,7 @@ enum TaskAttachmentLimits {
 
     /// The daemon's media type from leading bytes: the four image
     /// signatures net/http.DetectContentType recognizes, else octet-stream.
-    static func sniff(_ bytes: Data) -> Components.Schemas.TaskAttachmentMediaType {
+    public static func sniff(_ bytes: Data) -> Components.Schemas.TaskAttachmentMediaType {
         let head = [UInt8](bytes.prefix(14))
         func starts(_ prefix: [UInt8]) -> Bool { head.starts(with: prefix) }
         if starts([0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A]) { return .image_sol_png }
