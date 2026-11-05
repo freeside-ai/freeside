@@ -47,7 +47,7 @@ func TestBootstrapProjectsStoredTaskAndNewestRun(t *testing.T) {
 	if snapshot.AsOfRevision != bootstrap.Revision || snapshot.EntityVersion != bootstrap.Revision {
 		t.Fatalf("task revision = %+v, bootstrap=%d", snapshot, bootstrap.Revision)
 	}
-	if got.ID != task.ID || got.ProjectID != task.ProjectID || got.DisplayNames.Task.Text != "Durable task name" || got.Source == nil || got.Source.IssueSubject.IssueNumber != 42 {
+	if got.ID != task.ID || got.ProjectID != task.ProjectID || got.DisplayNames.Task.Text != "Durable task name" || got.Source == nil || got.Source.IssueSubject.IssueNumber != 42 || got.Source.WorkItemArtifactDigest != nil {
 		t.Fatalf("stored task projection = %+v", got)
 	}
 	if !slices.Equal(got.RunIDs, []domain.RunID{"run-earlier", "run-current"}) || len(got.CampaignIDs) != 0 || got.LastActivityAt.Before(got.CreatedAt) {

@@ -216,6 +216,21 @@ public enum TaskFixtures {
         "task-campaign-freeside-completed": 80,
     ]
 
+    /// `snapshot` re-sourced from a submitted work item. The mock rejects the
+    /// task unless its `attachments` hold bytes under `digest`, as the daemon's
+    /// blob store holds every submitted source.
+    public static func artifactSourced(
+        _ snapshot: Components.Schemas.TaskSnapshot, artifactID: String, digest: String
+    ) -> Components.Schemas.TaskSnapshot {
+        var sourced = snapshot
+        sourced.task.source = .init(
+            value1: .work_item_artifact(
+                .init(
+                    kind: .work_item_artifact, work_item_artifact_id: artifactID,
+                    work_item_artifact_digest: .init(value1: digest))))
+        return sourced
+    }
+
     public static func defaultTaskIDs() -> [String] {
         defaultTasks().map(\.task.id)
     }

@@ -4854,6 +4854,32 @@ public enum Components {
             public var kind: Components.Schemas.ArtifactSpecificationSource.kindPayload
             /// - Remark: Generated from `#/components/schemas/ArtifactSpecificationSource/work_item_artifact_id`.
             public var work_item_artifact_id: Swift.String
+            /// The digest of the source artifact's bytes (the text the task was submitted from), read from the artifact row the id names. Fetch the bytes with GET /attachments/{digest}.
+            ///
+            ///
+            /// - Remark: Generated from `#/components/schemas/ArtifactSpecificationSource/work_item_artifact_digest`.
+            public struct work_item_artifact_digestPayload: Codable, Hashable, Sendable {
+                /// - Remark: Generated from `#/components/schemas/ArtifactSpecificationSource/work_item_artifact_digest/value1`.
+                public var value1: Components.Schemas.Digest
+                /// Creates a new `work_item_artifact_digestPayload`.
+                ///
+                /// - Parameters:
+                ///   - value1:
+                public init(value1: Components.Schemas.Digest) {
+                    self.value1 = value1
+                }
+                public init(from decoder: any Swift.Decoder) throws {
+                    self.value1 = try decoder.decodeFromSingleValueContainer()
+                }
+                public func encode(to encoder: any Swift.Encoder) throws {
+                    try encoder.encodeToSingleValueContainer(self.value1)
+                }
+            }
+            /// The digest of the source artifact's bytes (the text the task was submitted from), read from the artifact row the id names. Fetch the bytes with GET /attachments/{digest}.
+            ///
+            ///
+            /// - Remark: Generated from `#/components/schemas/ArtifactSpecificationSource/work_item_artifact_digest`.
+            public var work_item_artifact_digest: Components.Schemas.ArtifactSpecificationSource.work_item_artifact_digestPayload
             /// - Remark: Generated from `#/components/schemas/ArtifactSpecificationSource/issue_subject`.
             public var issue_subject: OpenAPIRuntime.OpenAPIValueContainer?
             /// Creates a new `ArtifactSpecificationSource`.
@@ -4861,19 +4887,23 @@ public enum Components {
             /// - Parameters:
             ///   - kind:
             ///   - work_item_artifact_id:
+            ///   - work_item_artifact_digest: The digest of the source artifact's bytes (the text the task was submitted from), read from the artifact row the id names. Fetch the bytes with GET /attachments/{digest}.
             ///   - issue_subject:
             public init(
                 kind: Components.Schemas.ArtifactSpecificationSource.kindPayload,
                 work_item_artifact_id: Swift.String,
+                work_item_artifact_digest: Components.Schemas.ArtifactSpecificationSource.work_item_artifact_digestPayload,
                 issue_subject: OpenAPIRuntime.OpenAPIValueContainer? = nil
             ) {
                 self.kind = kind
                 self.work_item_artifact_id = work_item_artifact_id
+                self.work_item_artifact_digest = work_item_artifact_digest
                 self.issue_subject = issue_subject
             }
             public enum CodingKeys: String, CodingKey {
                 case kind
                 case work_item_artifact_id
+                case work_item_artifact_digest
                 case issue_subject
             }
             public init(from decoder: any Swift.Decoder) throws {
@@ -4886,6 +4916,10 @@ public enum Components {
                     Swift.String.self,
                     forKey: .work_item_artifact_id
                 )
+                self.work_item_artifact_digest = try container.decode(
+                    Components.Schemas.ArtifactSpecificationSource.work_item_artifact_digestPayload.self,
+                    forKey: .work_item_artifact_digest
+                )
                 self.issue_subject = try container.decodeIfPresent(
                     OpenAPIRuntime.OpenAPIValueContainer.self,
                     forKey: .issue_subject
@@ -4893,6 +4927,7 @@ public enum Components {
                 try decoder.ensureNoAdditionalProperties(knownKeys: [
                     "kind",
                     "work_item_artifact_id",
+                    "work_item_artifact_digest",
                     "issue_subject"
                 ])
             }
@@ -4909,6 +4944,8 @@ public enum Components {
             public var kind: Components.Schemas.IssueSpecificationSource.kindPayload
             /// - Remark: Generated from `#/components/schemas/IssueSpecificationSource/work_item_artifact_id`.
             public var work_item_artifact_id: OpenAPIRuntime.OpenAPIValueContainer?
+            /// - Remark: Generated from `#/components/schemas/IssueSpecificationSource/work_item_artifact_digest`.
+            public var work_item_artifact_digest: OpenAPIRuntime.OpenAPIValueContainer?
             /// - Remark: Generated from `#/components/schemas/IssueSpecificationSource/issue_subject`.
             public var issue_subject: Components.Schemas.IssueSubjectRef
             /// Creates a new `IssueSpecificationSource`.
@@ -4916,19 +4953,23 @@ public enum Components {
             /// - Parameters:
             ///   - kind:
             ///   - work_item_artifact_id:
+            ///   - work_item_artifact_digest:
             ///   - issue_subject:
             public init(
                 kind: Components.Schemas.IssueSpecificationSource.kindPayload,
                 work_item_artifact_id: OpenAPIRuntime.OpenAPIValueContainer? = nil,
+                work_item_artifact_digest: OpenAPIRuntime.OpenAPIValueContainer? = nil,
                 issue_subject: Components.Schemas.IssueSubjectRef
             ) {
                 self.kind = kind
                 self.work_item_artifact_id = work_item_artifact_id
+                self.work_item_artifact_digest = work_item_artifact_digest
                 self.issue_subject = issue_subject
             }
             public enum CodingKeys: String, CodingKey {
                 case kind
                 case work_item_artifact_id
+                case work_item_artifact_digest
                 case issue_subject
             }
             public init(from decoder: any Swift.Decoder) throws {
@@ -4941,6 +4982,10 @@ public enum Components {
                     OpenAPIRuntime.OpenAPIValueContainer.self,
                     forKey: .work_item_artifact_id
                 )
+                self.work_item_artifact_digest = try container.decodeIfPresent(
+                    OpenAPIRuntime.OpenAPIValueContainer.self,
+                    forKey: .work_item_artifact_digest
+                )
                 self.issue_subject = try container.decode(
                     Components.Schemas.IssueSubjectRef.self,
                     forKey: .issue_subject
@@ -4948,6 +4993,7 @@ public enum Components {
                 try decoder.ensureNoAdditionalProperties(knownKeys: [
                     "kind",
                     "work_item_artifact_id",
+                    "work_item_artifact_digest",
                     "issue_subject"
                 ])
             }

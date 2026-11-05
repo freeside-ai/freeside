@@ -13,38 +13,62 @@ import Testing
 @Suite struct MockContractValidationTests {
     @Test func taskIdentityNameHistoryAndSourcesMatchDaemon() throws {
         let baseline = try #require(TaskFixtures.defaultTasks().first)
+        // No default task is artifact-sourced, so none needs a served digest.
         for task in TaskFixtures.defaultTasks() {
-            #expect(MockContractValidation.taskSnapshotBreach(task, serverRevision: 12) == nil)
+            #expect(MockContractValidation.taskSnapshotBreach(task, serverRevision: 12, servedDigests: []) == nil)
         }
+        let served: Set<String> = ["sha256:source-1"]
         var malformed = baseline
         malformed.task.display_names.task.source = .name
-        #expect(MockContractValidation.taskSnapshotBreach(malformed, serverRevision: 12) == "invalid task name source")
+        #expect(
+            MockContractValidation.taskSnapshotBreach(malformed, serverRevision: 12, servedDigests: [])
+                == "invalid task name source")
         malformed = baseline
         malformed.task.run_ids.append(malformed.task.run_ids[0])
-        #expect(MockContractValidation.taskSnapshotBreach(malformed, serverRevision: 12) == "invalid task run history")
+        #expect(
+            MockContractValidation.taskSnapshotBreach(malformed, serverRevision: 12, servedDigests: [])
+                == "invalid task run history")
         malformed = baseline
         malformed.task.current_position?.value1.run_id = "other-run"
-        #expect(MockContractValidation.taskSnapshotBreach(malformed, serverRevision: 12) == "invalid task position")
-        malformed = baseline
-        malformed.task.source = .init(
-            value1: .work_item_artifact(.init(kind: .work_item_artifact, work_item_artifact_id: "source-1")))
-        #expect(MockContractValidation.taskSnapshotBreach(malformed, serverRevision: 12) == nil)
-        malformed.task.source = .init(
-            value1: .work_item_artifact(.init(kind: .work_item_artifact, work_item_artifact_id: "")))
         #expect(
-            MockContractValidation.taskSnapshotBreach(malformed, serverRevision: 12) == "empty task source artifact")
+            MockContractValidation.taskSnapshotBreach(malformed, serverRevision: 12, servedDigests: [])
+                == "invalid task position")
+        malformed = TaskFixtures.artifactSourced(baseline, artifactID: "source-1", digest: "sha256:source-1")
+        #expect(MockContractValidation.taskSnapshotBreach(malformed, serverRevision: 12, servedDigests: served) == nil)
+        malformed = TaskFixtures.artifactSourced(baseline, artifactID: "", digest: "sha256:source-1")
+        #expect(
+            MockContractValidation.taskSnapshotBreach(malformed, serverRevision: 12, servedDigests: served)
+                == "empty task source artifact")
+        malformed = TaskFixtures.artifactSourced(baseline, artifactID: "source-1", digest: "")
+        #expect(
+            MockContractValidation.taskSnapshotBreach(malformed, serverRevision: 12, servedDigests: served)
+                == "empty task source digest")
+        malformed = TaskFixtures.artifactSourced(baseline, artifactID: "source-1", digest: "sha256:unserved")
+        #expect(
+            MockContractValidation.taskSnapshotBreach(malformed, serverRevision: 12, servedDigests: served)
+                == "task source digest not served")
+        malformed.task.source = .init(
+            value1: .issue_subject(
+                .init(
+                    kind: .issue_subject, work_item_artifact_digest: "sha256:source-1",
+                    issue_subject: .init(repo: "owner/repo", repository_id: 123, issue_number: 42))))
+        #expect(
+            MockContractValidation.taskSnapshotBreach(malformed, serverRevision: 12, servedDigests: served)
+                == "mixed task source arms")
         malformed.task.source = .init(
             value1: .issue_subject(
                 .init(
                     kind: .issue_subject, issue_subject: .init(repo: "owner/repo", repository_id: 123, issue_number: 42)
                 )))
-        #expect(MockContractValidation.taskSnapshotBreach(malformed, serverRevision: 12) == nil)
+        #expect(MockContractValidation.taskSnapshotBreach(malformed, serverRevision: 12, servedDigests: []) == nil)
         malformed.task.source = .init(
             value1: .issue_subject(
                 .init(
                     kind: .issue_subject, issue_subject: .init(repo: "owner/repo", repository_id: 0, issue_number: 42)))
         )
-        #expect(MockContractValidation.taskSnapshotBreach(malformed, serverRevision: 12) == "invalid task issue source")
+        #expect(
+            MockContractValidation.taskSnapshotBreach(malformed, serverRevision: 12, servedDigests: [])
+                == "invalid task issue source")
     }
 
     @Test func taskSubjectBindsItsIdentity() {
@@ -148,7 +172,9 @@ import Testing
     @Test func taskCreationInstantMatchesDaemonValidation() throws {
         var invalid = try #require(TaskFixtures.defaultTasks().first)
         invalid.task.created_at = daemonZeroInstant
-        #expect(MockContractValidation.taskSnapshotBreach(invalid, serverRevision: 12) == "zero task creation instant")
+        #expect(
+            MockContractValidation.taskSnapshotBreach(invalid, serverRevision: 12, servedDigests: [])
+                == "zero task creation instant")
     }
 
     @Test func runSubjectRequiresTaskIdentityEvenWithoutRedundantRunID() {

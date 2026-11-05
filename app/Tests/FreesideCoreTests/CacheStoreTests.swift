@@ -473,6 +473,53 @@ private func sampleState(revision: Int64 = 5) -> CachedState {
         #expect(taskHolds.allSatisfy { $0.reason == .admission_policy_refused && $0.detail == nil })
     }
 
+    @Test func anArtifactSourcedTaskRoundTripsItsSourceDigest() throws {
+        let (store, directory) = temporaryStore()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        var state = sampleState()
+        let baseline = try #require(state.tasks.first)
+        state.tasks[0] = TaskFixtures.artifactSourced(baseline, artifactID: "artifact-1", digest: "sha256:prompt")
+        try store.save(state)
+        #expect(store.load()?.tasks == state.tasks)
+    }
+
+    @Test func aPreSourceDigestFormatEightCacheForcesABootstrapAndKeepsItsLedger() throws {
+        // Format 8 predates the artifact-sourced task's required digest
+        // (#2610). Its artifact-sourced task would throw on decode and
+        // discard the whole cache, ledger included, so the load path drops
+        // it; the format bump discards the remaining snapshots and cursors so
+        // the bootstrap restores the task with its digest.
+        let (store, directory) = temporaryStore()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        var state = sampleState()
+        let baseline = try #require(state.tasks.first)
+        state.tasks[0] = TaskFixtures.artifactSourced(baseline, artifactID: "artifact-1", digest: "sha256:prompt")
+        state.pendingCommands = [
+            "item-a": .init(command: makeCommand(itemID: "item-a"), state: .unresolved)
+        ]
+        try store.save(state)
+
+        let file = directory.appendingPathComponent("cache.json")
+        var object = try #require(
+            try JSONSerialization.jsonObject(with: Data(contentsOf: file)) as? [String: Any])
+        var legacyState = try #require(object["state"] as? [String: Any])
+        var tasks = try #require(legacyState["tasks"] as? [[String: Any]])
+        var task = try #require(tasks[0]["task"] as? [String: Any])
+        var source = try #require(task["source"] as? [String: Any])
+        #expect(source.removeValue(forKey: "work_item_artifact_digest") != nil)
+        task["source"] = source
+        tasks[0]["task"] = task
+        legacyState["tasks"] = tasks
+        object["format"] = 8
+        object["state"] = legacyState
+        try JSONSerialization.data(withJSONObject: object).write(to: file)
+
+        let migrated = try #require(store.load())
+        #expect(migrated.cursors == nil)
+        #expect(migrated.tasks.isEmpty)
+        #expect(migrated.pendingCommands == state.pendingCommands)
+    }
+
     @Test func aCachedRunTimelineWithoutAdmissionsIsDroppedAndTheLedgerKept() throws {
         // Run timelines gained the required admissions list (#979). A cached
         // timeline without it would throw on decode and discard the whole

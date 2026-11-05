@@ -1041,7 +1041,9 @@ public actor MockServer {
 
     func task(id: String) throws -> Components.Schemas.TaskSnapshot? {
         guard var snapshot = tasksByID[id] else { return nil }
-        if let reason = MockContractValidation.taskSnapshotBreach(snapshot, serverRevision: revision) {
+        if let reason = MockContractValidation.taskSnapshotBreach(
+            snapshot, serverRevision: revision, servedDigests: Set(attachmentsByDigest.keys))
+        {
             throw InvalidTaskError(taskID: id, reason: reason)
         }
         snapshot.entity_version = revision

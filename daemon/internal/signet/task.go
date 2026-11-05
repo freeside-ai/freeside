@@ -67,10 +67,13 @@ type TaskPosition struct {
 
 // TaskSource renders both union arms explicitly, including their null fields.
 // The stored domain union retains its existing persistence encoding.
+// WorkItemArtifactDigest is the artifact row's digest, so a client can fetch
+// the submitted text from the attachments read; projectTaskSnapshot fills it.
 type TaskSource struct {
-	Kind               domain.SpecificationSourceKind `json:"kind"`
-	WorkItemArtifactID *domain.ArtifactID             `json:"work_item_artifact_id"`
-	IssueSubject       *domain.IssueSubjectRef        `json:"issue_subject"`
+	Kind                   domain.SpecificationSourceKind `json:"kind"`
+	WorkItemArtifactID     *domain.ArtifactID             `json:"work_item_artifact_id"`
+	WorkItemArtifactDigest *domain.Digest                 `json:"work_item_artifact_digest"`
+	IssueSubject           *domain.IssueSubjectRef        `json:"issue_subject"`
 }
 
 func projectTaskSource(source *domain.SpecificationSource) *TaskSource {
@@ -97,6 +100,19 @@ func projectTaskSnapshot(ctx context.Context, tx *store.ReadTx, state store.Serv
 		ID: task.ID, ProjectID: task.ProjectID, DisplayNames: *names, Source: projectTaskSource(task.Source),
 		CreatedAt: task.CreatedAt, LastActivityAt: task.CreatedAt, CampaignIDs: task.CampaignIDs, RunIDs: ids,
 		WIP: domain.TaskWIP(task), LifecycleFacts: projectTaskLifecycleFacts(task.LifecycleFacts), Cancellation: task.Cancellation,
+	}
+	if value.Source != nil && value.Source.WorkItemArtifactID != nil {
+		// Task creation read this row (taskIntakeKey), so a missing or
+		// inconsistent row marks this one task inconsistent rather than
+		// failing the whole listing; any other error fails the read.
+		artifact, err := tx.GetArtifact(ctx, *value.Source.WorkItemArtifactID)
+		if err != nil {
+			if errors.Is(err, store.ErrNotFound) || errors.Is(err, store.ErrRowInconsistent) {
+				return TaskSnapshot{}, fmt.Errorf("task %s source: %w: %w", task.ID, ErrRunObservationIntegrity, err)
+			}
+			return TaskSnapshot{}, err
+		}
+		value.Source.WorkItemArtifactDigest = &artifact.Digest
 	}
 	current, err := tx.CurrentTaskLines(ctx, task.ID)
 	if err != nil {

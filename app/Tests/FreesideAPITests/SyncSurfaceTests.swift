@@ -8,6 +8,34 @@ import Testing
 /// full-cache read, the heartbeat is the loss detector, and an epoch
 /// rotation simulates a daemon restore.
 @Suite struct SyncSurfaceTests {
+    @Test func artifactSourcedTaskSyncsADigestTheAttachmentsReadServes() async throws {
+        let baseline = try #require(TaskFixtures.defaultTasks().first)
+        let digest = "sha256:submitted-work-item"
+        let prompt = Data("Add a health endpoint.\n".utf8)
+        let task = TaskFixtures.artifactSourced(baseline, artifactID: "artifact-1", digest: digest)
+
+        let client = APIClientFactory.mock(server: MockServer(tasks: [task], attachments: [digest: prompt]))
+        let bootstrap = try await client.getSyncBootstrap().ok.body.json
+        let synced = try #require(bootstrap.tasks.first { $0.task.id == task.task.id })
+        guard case .work_item_artifact(let source)? = synced.task.source?.value1 else {
+            Issue.record("Artifact-sourced task must sync on the work_item_artifact arm")
+            return
+        }
+        #expect(source.work_item_artifact_digest.value1 == digest)
+        let body = try await client.getAttachment(path: .init(digest: digest)).ok.body.binary
+        #expect(try await Data(collecting: body, upTo: 1 << 20) == prompt)
+
+        // Without the bytes, the mock refuses the task as the daemon could
+        // never sync it: its blob store holds every submitted source.
+        let unserved = APIClientFactory.mock(server: MockServer(tasks: [task], attachments: [:]))
+        let output = try await unserved.getTaskTimeline(path: .init(task_id: task.task.id))
+        guard case .undocumented(let status, _) = output else {
+            Issue.record("Artifact-sourced task without served bytes must fail reconstruction")
+            return
+        }
+        #expect(status == 500)
+    }
+
     @Test func taskTimelineRoutePreservesGroupingAndObservations() async throws {
         let server = MockServer()
         let client = APIClientFactory.mock(server: server)
