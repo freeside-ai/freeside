@@ -9,6 +9,7 @@ import (
 	"github.com/freeside-ai/freeside/daemon/internal/operations"
 	"github.com/freeside-ai/freeside/daemon/internal/signet"
 	"github.com/freeside-ai/freeside/daemon/internal/store"
+	"github.com/freeside-ai/freeside/daemon/internal/store/storetest"
 )
 
 // An upkeep host fault files one advisory item, so unattended admission keeps
@@ -16,11 +17,7 @@ import (
 // updates it, and the next pass that reaches a verdict clears it.
 func TestDoctorConvergesTheImageUpkeepHostFaultAsAdvisory(t *testing.T) {
 	ctx := context.Background()
-	st, err := store.Open(ctx, t.TempDir()+"/freeside.db", store.Options{})
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer st.Close() //nolint:errcheck // Test cleanup cannot affect the assertion.
+	st := storetest.Open(t, t.TempDir()+"/freeside.db", store.Options{})
 	attention := signet.NewService(st)
 	doctor := operations.Doctor{Store: st, Attention: attention, ProjectID: "project-system"}
 	openItems := func() []domain.AttentionItem {

@@ -2,7 +2,6 @@ package specify
 
 import (
 	"bytes"
-	"context"
 	"encoding/base64"
 	"encoding/json"
 	"io"
@@ -13,6 +12,7 @@ import (
 	"github.com/freeside-ai/freeside/daemon/internal/exec"
 	"github.com/freeside-ai/freeside/daemon/internal/signet"
 	"github.com/freeside-ai/freeside/daemon/internal/store"
+	"github.com/freeside-ai/freeside/daemon/internal/store/storetest"
 )
 
 type boundaryRoundTrip func(*http.Request) (*http.Response, error)
@@ -25,11 +25,7 @@ func TestFetcherAcceptsExactProductionInputBoundary(t *testing.T) {
 	const rawURL = "https://docs.example/exact"
 	body, contentType := exactBoundaryEnvelopeBody(t, rawURL)
 	root := t.TempDir()
-	st, err := store.Open(context.Background(), root+"/state.db", store.Options{})
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { _ = st.Close() })
+	st := storetest.Open(t, root+"/state.db", store.Options{})
 	blobs, err := signet.NewBlobStore(root + "/blobs")
 	if err != nil {
 		t.Fatal(err)

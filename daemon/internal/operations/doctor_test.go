@@ -11,6 +11,7 @@ import (
 	"github.com/freeside-ai/freeside/daemon/internal/operations"
 	"github.com/freeside-ai/freeside/daemon/internal/signet"
 	"github.com/freeside-ai/freeside/daemon/internal/store"
+	"github.com/freeside-ai/freeside/daemon/internal/store/storetest"
 )
 
 type mutableBackupHealth struct{ health domain.BackupHealth }
@@ -27,11 +28,7 @@ func TestDoctorConvergesAndClearsSystemHealthItems(t *testing.T) {
 		Encryption: domain.BackupHealthUnhealthy, CheckpointCurrency: domain.BackupHealthUnhealthy,
 		ArtifactClosure: domain.BackupHealthUnhealthy, RestoreTestAge: domain.BackupHealthUnhealthy,
 	}}
-	st, err := store.Open(ctx, t.TempDir()+"/freeside.db", store.Options{BackupHealthSource: source})
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer st.Close() //nolint:errcheck // Test cleanup cannot affect the assertion.
+	st := storetest.Open(t, t.TempDir()+"/freeside.db", store.Options{BackupHealthSource: source})
 	attention := signet.NewService(st)
 	doctor := operations.Doctor{
 		Store: st, Attention: attention, ProjectID: "project-system",
@@ -141,11 +138,7 @@ func TestDoctorReportsActivatedReviewConfigurationDrift(t *testing.T) {
 		ArtifactClosure: domain.BackupHealthHealthy, RestoreTestAge: domain.BackupHealthHealthy,
 	}}
 	dbPath := t.TempDir() + "/freeside.db"
-	st, err := store.Open(ctx, dbPath, store.Options{BackupHealthSource: source})
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { _ = st.Close() })
+	st := storetest.Open(t, dbPath, store.Options{BackupHealthSource: source})
 	attention := signet.NewService(st)
 	backendDigest := domain.Digest("sha256:" + strings.Repeat("a", 64))
 	effective := domain.Digest("sha256:" + strings.Repeat("b", 64))

@@ -15,6 +15,7 @@ import (
 	"github.com/freeside-ai/freeside/daemon/internal/projectimage"
 	"github.com/freeside-ai/freeside/daemon/internal/publish"
 	"github.com/freeside-ai/freeside/daemon/internal/store"
+	"github.com/freeside-ai/freeside/daemon/internal/store/storetest"
 	"github.com/freeside-ai/freeside/daemon/internal/verify"
 )
 
@@ -153,11 +154,7 @@ func (g *mutableInstallationGate) PendingReady(
 
 func TestOnboardRoundTripsPlanPreferredIntoActivatedProfile(t *testing.T) {
 	ctx := t.Context()
-	st, err := store.Open(ctx, t.TempDir()+"/freeside.db", store.Options{})
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { _ = st.Close() })
+	st := storetest.Open(t, t.TempDir()+"/freeside.db", store.Options{})
 	evidence, err := domain.NewWorkflowAuditEvidence([]byte(
 		`{"version":"freeside-workflow-audit/v2","repo":"example/repo","workflows":[]}`,
 	))
@@ -252,11 +249,7 @@ func TestOnboardRoundTripsPlanPreferredIntoActivatedProfile(t *testing.T) {
 // approved profile becomes the active one the admission check reads.
 func TestOnboardReRunAdmitsExternalReviewers(t *testing.T) {
 	ctx := t.Context()
-	st, err := store.Open(ctx, t.TempDir()+"/freeside.db", store.Options{})
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { _ = st.Close() })
+	st := storetest.Open(t, t.TempDir()+"/freeside.db", store.Options{})
 	evidence, err := domain.NewWorkflowAuditEvidence([]byte(
 		`{"version":"freeside-workflow-audit/v2","repo":"example/repo","workflows":[]}`,
 	))
@@ -364,11 +357,7 @@ func TestOnboardReRunAdmitsExternalReviewers(t *testing.T) {
 // it, and an approval digest issued without it does not admit it.
 func TestOnboardReRunBindsProtectedPaths(t *testing.T) {
 	ctx := t.Context()
-	st, err := store.Open(ctx, t.TempDir()+"/freeside.db", store.Options{})
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { _ = st.Close() })
+	st := storetest.Open(t, t.TempDir()+"/freeside.db", store.Options{})
 	evidence, err := domain.NewWorkflowAuditEvidence([]byte(
 		`{"version":"freeside-workflow-audit/v2","repo":"example/repo","workflows":[]}`,
 	))
@@ -485,11 +474,7 @@ func TestOnboardReRunBindsProtectedPaths(t *testing.T) {
 
 func TestOnboardRequiresOneDigestBoundReviewBeforeBuildAndActivation(t *testing.T) {
 	ctx := context.Background()
-	st, err := store.Open(ctx, t.TempDir()+"/freeside.db", store.Options{})
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer st.Close() //nolint:errcheck // Test cleanup cannot affect the assertion.
+	st := storetest.Open(t, t.TempDir()+"/freeside.db", store.Options{})
 	evidence, err := domain.NewWorkflowAuditEvidence([]byte(
 		`{"version":"freeside-workflow-audit/v2","repo":"example/repo","workflows":[]}`,
 	))
@@ -735,11 +720,7 @@ func TestOnboardRequiresOneDigestBoundReviewBeforeBuildAndActivation(t *testing.
 
 func TestOnboardPromotesPendingInstallationOnlyAfterApproval(t *testing.T) {
 	ctx := context.Background()
-	st, err := store.Open(ctx, t.TempDir()+"/freeside.db", store.Options{})
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer st.Close() //nolint:errcheck // Test cleanup cannot affect the assertion.
+	st := storetest.Open(t, t.TempDir()+"/freeside.db", store.Options{})
 	evidence, err := domain.NewWorkflowAuditEvidence([]byte(
 		`{"version":"freeside-workflow-audit/v2","repo":"example/repo","workflows":[]}`,
 	))
