@@ -1415,11 +1415,13 @@
                                     proposalFacts: proposalFacts))))
 
                     // The approval card's summary (#1461): the observed
-                    // one-paragraph shape and the specifier's headings, by
-                    // day and by dusk at both widths, closed and opened.
+                    // one-paragraph shape, the specifier's headings, and the
+                    // handoff-report shape (#2614), by day and by dusk at
+                    // both widths, closed and opened.
                     for (name, content) in [
                         ("legacy", DecisionSummaryFixtures.specificationLegacy),
                         ("structured", DecisionSummaryFixtures.specificationStructured),
+                        ("aligned-specifier", DecisionSummaryFixtures.alignedSpecifier),
                     ] {
                         let summarySnapshot = DecisionSummaryFixtures.snapshot(
                             content: content, type: .spec_approval)
@@ -1602,13 +1604,15 @@
                         ("legacy", Optional(DecisionSummaryFixtures.legacy)),
                         ("short", Optional(DecisionSummaryFixtures.change)),
                         ("wrapped", Optional(DecisionSummaryFixtures.wrapped)),
+                        ("aligned-implementer", Optional(DecisionSummaryFixtures.alignedImplementer)),
                         ("artifact-only", nil),
                     ] {
                         let summarySnapshot = DecisionSummaryFixtures.snapshot(content: content)
-                        // The wrapped report is short, so its closed card
-                        // already shows all of it.
+                        // The wrapped and aligned-implementer reports are
+                        // short, so their closed cards already show all of
+                        // them.
                         for expanded in [false, true]
-                        where !expanded || (content != nil && name != "wrapped") {
+                        where !expanded || (content != nil && name != "wrapped" && name != "aligned-implementer") {
                             let summaryDetail = DecisionDetailView(
                                 store: store, itemID: summarySnapshot.item.id,
                                 expandsSummaryReports: expanded, loadsAttachments: false,
