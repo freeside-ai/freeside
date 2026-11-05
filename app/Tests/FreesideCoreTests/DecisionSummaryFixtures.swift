@@ -65,6 +65,65 @@ enum DecisionSummaryFixtures {
         - \(specificationStructuredLastConcern)
         """
 
+    /// The specification summary in the handoff-report shape (#2614):
+    /// the plan-work-unit report's parts, hard-wrapped.
+    static let alignedSpecifierLastConcern =
+        "The host's documented limit and the limit observed in the failing run differ. The specification uses the documented value as an assumption."
+    static let alignedSpecifier = """
+        ## Result
+
+        Refuse an oversized image before reading it. The upload command checks
+        each file's size from its metadata and stops the batch with a message
+        naming the limit and the file, so the user gets a clear refusal instead
+        of a timeout. The limit stays in the existing configuration file.
+
+        ## Your call
+
+        - Stop the batch at the first oversized image, or skip it and go on?
+          The specification stops, because a partial batch leaves captions that
+          point at missing images.
+        - Whether animated images should be exempt is **not decided**.
+
+        ## Not verified
+
+        - \(alignedSpecifierLastConcern)
+        """
+
+    /// The completion report in the handoff-report shape (#2614): the
+    /// handoff report's parts, hard-wrapped, one of them prose.
+    static let alignedImplementerLastConcern =
+        "The project's own lint and format commands could not be run in the workspace, so style conformance is unchecked."
+    static let alignedImplementer = """
+        ## Result
+
+        The upload command now refuses an oversized image before reading it,
+        with a message that names the limit and the file. The limit comes from
+        the existing configuration file.
+
+        ## Your call
+
+        Animated images are refused like any other image. Exempting them would
+        need a second limit in the configuration file.
+
+        ## Left for you
+
+        - Check the final upload on a real account before merging.
+
+        ## Skipped
+
+        - \(alignedImplementerLastConcern)
+        """
+
+    /// The aligned shape leaves out a part with nothing in it, so a report
+    /// with only a result lists no concerns.
+    static let alignedResultOnly = "## Result\n\n\(change)"
+    static let alignedDetails = "## Result\n\n\(change)\n\n## Your call\n\n\(concern)\n\n## Details\n\n\(details)"
+    /// Long reports under headings the parser must not split: one set's
+    /// first heading with the other set's part, and an unknown first
+    /// heading.
+    static let mixedHeadings = "## Result\n\n\(change)\n\n\(details)\n\n## Remaining concerns\n\n\(concern)"
+    static let unknownFirstHeading = "## Summary\n\n\(change)\n\n\(details)\n\n## Your call\n\n\(concern)"
+
     /// A card of `type` whose summary claim carries `content`. A
     /// specification approval's reason repeats the summary, as
     /// `acceptSpecification` writes both from the same bytes.

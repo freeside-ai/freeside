@@ -9,7 +9,8 @@ import Testing
         let presentation = DecisionSummaryPresentation(.init(media_type: .text_sol_markdown, content: source))
         #expect(presentation.original == source)
         #expect(presentation.lead == DecisionSummaryFixtures.change)
-        #expect(presentation.concerns == DecisionSummaryFixtures.concern)
+        #expect(presentation.concerns?.map(\.label) == ["Remaining concerns"])
+        #expect(presentation.concerns?.map(\.text) == [DecisionSummaryFixtures.concern])
         #expect(!presentation.concernsUnknown)
         #expect(!presentation.lead.contains(DecisionSummaryFixtures.details))
     }
@@ -40,7 +41,7 @@ import Testing
             .init(
                 media_type: .text_sol_markdown,
                 content: "## Change\nLead\n## Remaining concerns\n\(concerns)"))
-        #expect(presentation.concerns == concerns)
+        #expect(presentation.concerns?.map(\.text) == [concerns])
         #expect(presentation.concernCount == count)
     }
 
@@ -73,6 +74,14 @@ import Testing
         "## Change\nLead\n## Remaining concerns\nQuestion\n## Unknown\nText",
         "## Change\nLead\n## Remaining concerns\n\n## Details\nText",
         "## Change\nChanged docs.\n## Remaining concerns\nMigration remains untested.\n\n    ## Details\n    example\n\nProduction migration still needs review.",
+        "## Result\nLead\n## Your call\n\n## Skipped\nText",
+        "## Result\n\n## Your call\nQuestion",
+        "## Result\nLead\n## Your call\nFirst\n## Your call\nLast",
+        "## Your call\nQuestion\n## Result\nLead",
+        "## Details\nText\n## Result\nLead",
+        "## Change\nLead\n## Remaining concerns\nQuestion\n## Your call\nText",
+        "## Result\nLead\n## Change\nText",
+        "## Result\nLead\n```\n## Your call\nNot a heading\n```",
     ])
     func ambiguousLongReportsKeepUnknownConcernsVisible(source: String) {
         let source = source + "\n" + DecisionSummaryFixtures.details
@@ -82,6 +91,101 @@ import Testing
         #expect(presentation.concernsUnknown)
     }
 
+    /// The handoff-report shape (#2614): `## Result` is the lead, and every
+    /// other part but `## Details` draws under its own heading, in source
+    /// order.
+    @Test func handoffReportPartsDrawUnderTheirOwnLabels() {
+        let specifier = DecisionSummaryPresentation(
+            .init(media_type: .text_sol_markdown, content: DecisionSummaryFixtures.alignedSpecifier))
+        #expect(specifier.lead.hasPrefix("Refuse an oversized image before reading it."))
+        #expect(specifier.lead.hasSuffix("The limit stays in the existing configuration file."))
+        #expect(specifier.concerns?.map(\.label) == ["Your call", "Not verified"])
+        #expect(specifier.concerns?.last?.text == "- \(DecisionSummaryFixtures.alignedSpecifierLastConcern)")
+        #expect(!specifier.isExcerpt)
+        #expect(!specifier.concernsUnknown)
+        #expect(specifier.concernCount == 3)
+
+        let implementer = DecisionSummaryPresentation(
+            .init(media_type: .text_sol_markdown, content: DecisionSummaryFixtures.alignedImplementer))
+        #expect(implementer.lead.hasPrefix("The upload command now refuses an oversized image"))
+        #expect(implementer.concerns?.map(\.label) == ["Your call", "Left for you", "Skipped"])
+        let texts = implementer.concerns?.map(\.text) ?? []
+        #expect(texts.first?.hasPrefix("Animated images are refused like any other image.") == true)
+        #expect(
+            texts.dropFirst() == [
+                "- Check the final upload on a real account before merging.",
+                "- \(DecisionSummaryFixtures.alignedImplementerLastConcern)",
+            ])
+        #expect(!implementer.isExcerpt)
+        #expect(!implementer.concernsUnknown)
+        // One part is prose, so the report does not count its concerns.
+        #expect(implementer.concernCount == nil)
+    }
+
+    /// The aligned prompts leave out a part with nothing in it, so a
+    /// report with only a result lists no concerns; it does not hide any.
+    @Test func aResultOnlyReportListsNoConcernsRatherThanUnknownOnes() {
+        let presentation = DecisionSummaryPresentation(
+            .init(media_type: .text_sol_markdown, content: DecisionSummaryFixtures.alignedResultOnly))
+        #expect(presentation.lead == DecisionSummaryFixtures.change)
+        #expect(presentation.concerns == [])
+        #expect(!presentation.isExcerpt)
+        #expect(!presentation.concernsUnknown)
+        #expect(presentation.concernCount == nil)
+    }
+
+    @Test func alignedPartsKeepSourceOrderWithoutDetails() {
+        let tail = DecisionSummaryPresentation(
+            .init(media_type: .text_sol_markdown, content: DecisionSummaryFixtures.alignedDetails))
+        #expect(tail.lead == DecisionSummaryFixtures.change)
+        #expect(tail.concerns?.map(\.label) == ["Your call"])
+        #expect(tail.concerns?.map(\.text) == [DecisionSummaryFixtures.concern])
+        #expect(!tail.isExcerpt)
+        #expect(!tail.concernsUnknown)
+
+        let middle = DecisionSummaryPresentation(
+            .init(
+                media_type: .text_sol_markdown,
+                content: "## Result\nLead\n## Details\nSupport\n## Skipped\n- One"))
+        #expect(middle.lead == "Lead")
+        #expect(middle.concerns?.map(\.label) == ["Skipped"])
+        #expect(middle.concerns?.map(\.text) == ["- One"])
+
+        // Source order, not the order the prompts list the parts in.
+        let reordered = DecisionSummaryPresentation(
+            .init(
+                media_type: .text_sol_markdown,
+                content: "## Result\nLead\n## Skipped\n- A\n## Your call\n- B"))
+        #expect(reordered.concerns?.map(\.label) == ["Skipped", "Your call"])
+    }
+
+    /// One set's first heading with the other set's part, or a first
+    /// heading neither set opens: the boundaries are not the convention's,
+    /// so the long report stays an excerpt with unknown concerns.
+    @Test(arguments: [DecisionSummaryFixtures.mixedHeadings, DecisionSummaryFixtures.unknownFirstHeading])
+    func mixedOrUnknownHeadingsFallBackToTheExcerpt(source: String) {
+        let presentation = DecisionSummaryPresentation(.init(media_type: .text_sol_markdown, content: source))
+        #expect(source.hasPrefix(presentation.lead))
+        #expect(presentation.concerns == nil)
+        #expect(presentation.isExcerpt)
+        #expect(presentation.concernsUnknown)
+    }
+
+    /// The count spans the drawn parts, and only when each one lists its
+    /// concerns: one prose part, or no parts at all, leaves no count.
+    @Test(arguments: [
+        ("## Result\nLead\n## Your call\n- A\n## Skipped\n- B\n- C", Optional(3)),
+        ("## Result\nLead\n## Your call\n- A\n## Details\nProse.\n## Skipped\n1. B", Optional(2)),
+        ("## Result\nLead\n## Your call\n- A\n## Not verified\nProse.", nil),
+        ("## Result\nLead", nil),
+        ("## Result\nLead\n## Details\n- A", nil),
+    ])
+    func concernsAreCountedAcrossPartsOnlyWhenEveryPartListsThem(source: String, count: Int?) {
+        let presentation = DecisionSummaryPresentation(.init(media_type: .text_sol_markdown, content: source))
+        #expect(presentation.concerns != nil)
+        #expect(presentation.concernCount == count)
+    }
+
     @Test func concernsHaveNoLengthLimitAndUnicodeExcerptIsASourcePrefix() {
         let concerns = String(repeating: "Unresolved 🐦. ", count: 200)
         let change = String(repeating: "é🐦", count: 500)
@@ -89,7 +193,7 @@ import Testing
         let presentation = DecisionSummaryPresentation(.init(media_type: .text_sol_markdown, content: source))
         #expect(change.hasPrefix(presentation.lead))
         #expect(presentation.isExcerpt)
-        #expect(presentation.concerns == concerns)
+        #expect(presentation.concerns?.map(\.text) == [concerns])
         #expect(!presentation.concernsUnknown)
     }
 
@@ -118,7 +222,7 @@ import Testing
         let presentation = DecisionSummaryPresentation(.init(media_type: .text_sol_markdown, content: source))
         #expect(presentation.isExcerpt)
         #expect(presentation.concernsUnknown)
-        #expect(presentation.concernBlocks == nil)
+        #expect(presentation.concerns == nil)
         let lead = presentation.leadBlocks.map(drawn).joined(separator: "\n")
         #expect(lead.count <= 800)
         #expect(source.hasPrefix(lead))
@@ -128,14 +232,16 @@ import Testing
                 .map(drawn).joined().hasSuffix(DecisionSummaryFixtures.specificationLastConcern))
     }
 
-    /// The specifier's headings: the hard-wrapped paragraph reflows, and
-    /// every concern is a list item on the closed card, the last included.
+    /// The specifier's headings, current and aligned: the hard-wrapped
+    /// paragraph reflows, and every concern is a list item on the closed
+    /// card, the last included.
     @Test(arguments: [
         (
             DecisionSummaryFixtures.specificationStructured,
             DecisionSummaryFixtures.specificationStructuredLastConcern, 3
         ),
         (DecisionSummaryFixtures.wrapped, DecisionSummaryFixtures.wrappedLastConcern, 2),
+        (DecisionSummaryFixtures.alignedSpecifier, DecisionSummaryFixtures.alignedSpecifierLastConcern, 3),
     ])
     func wrappedParagraphsReflowAndConcernsDrawAsItems(source: String, lastConcern: String, count: Int) throws {
         let presentation = DecisionSummaryPresentation(.init(media_type: .text_sol_markdown, content: source))
@@ -153,7 +259,7 @@ import Testing
         #expect(!drawn(lead).contains("\n"))
         #expect(drawn(lead) == presentation.lead.replacingOccurrences(of: "\n", with: " "))
 
-        let concerns = try #require(presentation.concernBlocks)
+        let concerns = try #require(presentation.concerns).flatMap(\.blocks)
         #expect(concerns.count == count)
         #expect(concerns.allSatisfy(isListItem))
         #expect(concerns.last.map(drawn) == lastConcern)
@@ -239,7 +345,7 @@ import Testing
             .init(
                 media_type: .text_sol_markdown,
                 content: "## Change\n\nDid it.\n\n## Remaining concerns\n\n\(concerns)"))
-        #expect(structured.concernBlocks == [.plainText(concerns)])
+        #expect(structured.concerns?.map(\.blocks) == [[.plainText(concerns)]])
         #expect(structured.concernCount == 2)
 
         let unstructured = "Did it. Tests pass.\n\n[Caveat]: unverified-on-CI"
@@ -297,7 +403,7 @@ import Testing
                 media_type: .text_sol_markdown,
                 content: "## Change\n\n Did it,\nmostly.\n\n## Remaining concerns\n\n>quoted\nlazy"))
         #expect(structured.leadBlocks.map(drawn) == ["Did it, mostly."])
-        #expect(try #require(structured.concernBlocks).map(drawn) == ["quoted lazy"])
+        #expect(try #require(structured.concerns).flatMap(\.blocks).map(drawn) == ["quoted lazy"])
     }
 
     /// The concerns are never bounded: a list far past the lead's bound
@@ -308,7 +414,7 @@ import Testing
             .init(
                 media_type: .text_sol_markdown,
                 content: "## Change\nLead\n## Remaining concerns\n" + items.joined(separator: "\n")))
-        let concerns = try #require(presentation.concernBlocks)
+        let concerns = try #require(presentation.concerns).flatMap(\.blocks)
         #expect(concerns.count == 40)
         #expect(concerns.allSatisfy(isListItem))
         #expect(concerns.map(drawn).joined(separator: "\n").count > 800)

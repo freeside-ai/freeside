@@ -2,34 +2,50 @@ import Foundation
 import FreesideAPI
 
 /// Source slices for a card's agent summary, never a new claim or a factual
-/// summary. Only the small advisory heading convention is recognized.
-/// Ambiguous input stays an explicitly incomplete excerpt with unknown
-/// omitted concerns.
+/// summary. Only two small advisory heading conventions are recognized: the
+/// current shape (`## Change`, `## Remaining concerns`) that stored
+/// summaries carry, and the handoff-report shape (`## Result` and its parts,
+/// #2614). Ambiguous input stays an explicitly incomplete excerpt with
+/// unknown omitted concerns.
 struct DecisionSummaryPresentation {
+    /// One part of the report the card draws under the lead, under its own
+    /// heading.
+    struct ConcernPart: Equatable {
+        /// The part's heading without its `## ` marker.
+        let label: String
+        let text: String
+        /// The part as the card draws it. Never cut.
+        let blocks: [SpecificationBlock]
+    }
+
     let original: String
     /// The source prefix that bounds the lead.
     let lead: String
-    let concerns: String?
+    /// The report's parts after the lead, in source order, without
+    /// `## Details`. Nil when they were not extracted; empty when the
+    /// report lists none.
+    let concerns: [ConcernPart]?
     /// Whether the drawn lead leaves out text the report holds.
     let isExcerpt: Bool
     let concernsUnknown: Bool
-    /// The lead and the concerns as the card draws them: Markdown as its
-    /// blocks, plain text as written. The same source, formatted; no text
-    /// the report does not hold. The concerns are never cut.
+    /// The lead as the card draws it: Markdown as its blocks, plain text as
+    /// written. The same source, formatted; no text the report does not
+    /// hold.
     let leadBlocks: [SpecificationBlock]
-    let concernBlocks: [SpecificationBlock]?
 
     init(_ text: Components.Schemas.ClaimText) {
         original = text.content
         if text.media_type == .text_sol_markdown,
             let sections = Self.sections(text.content)
         {
-            let change = sections["## Change"] ?? ""
-            lead = Self.excerpt(change)
-            concerns = sections["## Remaining concerns"]
-            (leadBlocks, isExcerpt) = Self.leadBlocks(of: change, lead: lead)
+            lead = Self.excerpt(sections.lead)
+            concerns = sections.parts.map {
+                ConcernPart(
+                    label: String($0.heading.dropFirst("## ".count)), text: $0.body,
+                    blocks: Self.blocks(.init(media_type: .text_sol_markdown, content: $0.body)))
+            }
+            (leadBlocks, isExcerpt) = Self.leadBlocks(of: sections.lead, lead: lead)
             concernsUnknown = false
-            concernBlocks = concerns.map { Self.blocks(.init(media_type: .text_sol_markdown, content: $0)) }
         } else {
             lead = Self.excerpt(text.content)
             concerns = nil
@@ -38,7 +54,6 @@ struct DecisionSummaryPresentation {
                 ? Self.leadBlocks(of: text.content, lead: lead)
                 : ([.plainText(lead)], lead != text.content)
             concernsUnknown = isExcerpt
-            concernBlocks = nil
         }
     }
 
@@ -109,19 +124,28 @@ struct DecisionSummaryPresentation {
     /// much too, so the bound holds whatever the blocks are.
     private static let blockBreakCost = 3
 
-    /// How many concerns the report lists, when its concerns section is a
-    /// flat Markdown list and so counts itself. Prose is not counted: a
-    /// number the source does not state would be a new claim.
+    /// How many concerns the report lists, when every part it draws under
+    /// the lead is a flat Markdown list and so counts itself. Prose is not
+    /// counted: a number the source does not state would be a new claim.
     var concernCount: Int? {
-        guard let concerns else { return nil }
+        guard let concerns, !concerns.isEmpty else { return nil }
+        var total = 0
+        for part in concerns {
+            guard let count = Self.listItemCount(part.text) else { return nil }
+            total += count
+        }
+        return total
+    }
+
+    private static func listItemCount(_ text: String) -> Int? {
         var count = 0
-        for line in concerns.split(separator: "\n", omittingEmptySubsequences: true) {
+        for line in text.split(separator: "\n", omittingEmptySubsequences: true) {
             guard !line.allSatisfy(\.isWhitespace) else { continue }
             if line.first?.isWhitespace == true {
                 // A continuation of the item above; before any item it is
                 // prose.
                 guard count > 0 else { return nil }
-            } else if Self.startsListItem(line) {
+            } else if startsListItem(line) {
                 count += 1
             } else {
                 return nil
@@ -152,10 +176,33 @@ struct DecisionSummaryPresentation {
         return String(prefix)
     }
 
-    private static func sections(_ source: String) -> [String: String]? {
-        let allowed: Set<String> = ["## Change", "## Remaining concerns", "## Details"]
-        var result: [String: String] = [:]
-        var heading: String?
+    /// A heading convention: the heading that opens it, the other headings
+    /// it allows, and the parts it cannot leave out.
+    private struct HeadingSet {
+        let lead: String
+        let parts: Set<String>
+        let required: Set<String>
+    }
+
+    /// The first heading picks the set. `## Details` is supporting text,
+    /// allowed in both and drawn in neither the lead nor the concerns. The
+    /// presentation sees only the claim text, not the stage that wrote it,
+    /// so the aligned set takes every stage's parts together.
+    private static let headingSets = [
+        HeadingSet(
+            lead: "## Change", parts: ["## Remaining concerns", "## Details"],
+            required: ["## Remaining concerns"]),
+        HeadingSet(
+            lead: "## Result",
+            parts: ["## Your call", "## Not verified", "## Left for you", "## Skipped", "## Details"],
+            required: []),
+    ]
+
+    private static func sections(
+        _ source: String
+    ) -> (lead: String, parts: [(heading: String, body: String)])? {
+        var headingSet: HeadingSet?
+        var sections: [(heading: String, body: String)] = []
         // Keep line endings and body bytes intact. A fenced block, unknown
         // heading, or repeated heading makes section boundaries ambiguous.
         for line in source.split(separator: "\n", omittingEmptySubsequences: false) {
@@ -163,21 +210,29 @@ struct DecisionSummaryPresentation {
             guard !trimmed.hasPrefix("```"), !trimmed.hasPrefix("~~~") else { return nil }
             if trimmed.hasPrefix("#") {
                 guard !line.hasPrefix(" "), !line.hasPrefix("\t") else { return nil }
-                guard allowed.contains(trimmed), result[trimmed] == nil else { return nil }
-                if heading == nil, trimmed != "## Change" { return nil }
-                heading = trimmed
-                result[trimmed] = ""
-            } else if let heading {
-                result[heading, default: ""] += String(line) + "\n"
+                if let headingSet {
+                    guard headingSet.parts.contains(trimmed), !sections.contains(where: { $0.heading == trimmed })
+                    else { return nil }
+                } else {
+                    guard let opened = headingSets.first(where: { $0.lead == trimmed }) else { return nil }
+                    headingSet = opened
+                }
+                sections.append((trimmed, ""))
+            } else if !sections.isEmpty {
+                sections[sections.count - 1].body += String(line) + "\n"
             } else if !trimmed.isEmpty {
                 return nil
             }
         }
-        guard let change = result["## Change"], let concerns = result["## Remaining concerns"],
-            !change.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
-            !concerns.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        guard let headingSet, let lead = sections.first else { return nil }
+        let parts = sections.dropFirst().filter { $0.heading != "## Details" }
+        // An empty lead or part reads as nothing to report, which the
+        // source does not say.
+        guard ([lead] + parts).allSatisfy({ !$0.body.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }),
+            headingSet.required.isSubset(of: parts.map(\.heading))
         else { return nil }
-        return result.mapValues { $0.trimmingCharacters(in: .newlines) }
+        let trim = { (body: String) in body.trimmingCharacters(in: .newlines) }
+        return (trim(lead.body), parts.map { ($0.heading, trim($0.body)) })
     }
 }
 

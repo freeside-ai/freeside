@@ -1096,9 +1096,10 @@ struct DecisionDetailView: View {
                                         .font(FreesideFont.summary())
                                         .accessibilityLabel("Excerpt ends here")
                                 }
-                                if let concerns = presentation.concernBlocks {
-                                    KeywordLabel(text: "Remaining concerns")
-                                    DecisionSummaryText(blocks: concerns)
+                                // Headings never repeat in a recognized report.
+                                ForEach(presentation.concerns ?? [], id: \.label) { part in
+                                    KeywordLabel(text: part.label)
+                                    DecisionSummaryText(blocks: part.blocks)
                                 }
                             }
                             .proseMeasure()
