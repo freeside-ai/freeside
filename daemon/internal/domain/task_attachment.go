@@ -211,12 +211,18 @@ func (a TaskAttachment) Validate() error {
 	if err := ValidateTaskAttachmentClaim(a.ClaimedMediaType); err != nil {
 		return err
 	}
+	return validateTaskAttachmentSize(a.MediaType, a.SizeBytes)
+}
+
+// validateTaskAttachmentSize checks a size against the per-image or per-file
+// limit the media type selects.
+func validateTaskAttachmentSize(m TaskAttachmentMediaType, size int64) error {
 	limit := MaxTaskAttachmentFileBytes
-	if a.MediaType.IsImage() {
+	if m.IsImage() {
 		limit = MaxTaskAttachmentImageBytes
 	}
-	if a.SizeBytes < 0 || a.SizeBytes > limit {
-		return fmt.Errorf("%d bytes, limit %d: %w", a.SizeBytes, limit, ErrTaskAttachmentTooLarge)
+	if size < 0 || size > limit {
+		return fmt.Errorf("%d bytes, limit %d: %w", size, limit, ErrTaskAttachmentTooLarge)
 	}
 	return nil
 }
@@ -230,31 +236,44 @@ func (a TaskAttachment) Validate() error {
 // they would collide. The list's order is the submitted order and is kept as
 // given.
 func ValidateTaskAttachments(list []TaskAttachment) error {
-	if len(list) > MaxTaskAttachments {
-		return fmt.Errorf("%d attachments, limit %d: %w", len(list), MaxTaskAttachments, ErrTooManyTaskAttachments)
+	return validateAttachmentList(len(list), func(i int) (TaskAttachmentName, int64, error) {
+		return list[i].Name, list[i].SizeBytes, list[i].Validate()
+	})
+}
+
+// validateAttachmentList applies the list rules ValidateTaskAttachments
+// documents to n entries, in that order; entry(i) validates entry i on its
+// own and returns its name and size. A task's list and a stage's snapshot
+// list both use it, so a list submit accepted is a list delivery can write.
+// Errors name positions, never names.
+func validateAttachmentList(n int, entry func(int) (TaskAttachmentName, int64, error)) error {
+	if n > MaxTaskAttachments {
+		return fmt.Errorf("%d attachments, limit %d: %w", n, MaxTaskAttachments, ErrTooManyTaskAttachments)
 	}
-	names := make(map[TaskAttachmentName]struct{}, len(list))
+	names := make(map[TaskAttachmentName]struct{}, n)
+	ordered := make([]TaskAttachmentName, n)
 	var total int64
-	for i, a := range list {
-		if err := a.Validate(); err != nil {
+	for i := range n {
+		name, size, err := entry(i)
+		if err != nil {
 			return fmt.Errorf("attachment %d: %w", i, err)
 		}
-		if _, dup := names[a.Name]; dup {
+		if _, dup := names[name]; dup {
 			return fmt.Errorf("attachment %d: name repeats an earlier one: %w", i, ErrTaskAttachmentNameConflict)
 		}
-		names[a.Name] = struct{}{}
-		total += a.SizeBytes
+		names[name] = struct{}{}
+		ordered[i] = name
+		total += size
 	}
 	if total > MaxTaskAttachmentsTotalBytes {
 		return fmt.Errorf("attachments total %d bytes, limit %d: %w", total, MaxTaskAttachmentsTotalBytes, ErrTaskAttachmentsTooLarge)
 	}
-	for i, a := range list {
-		name := string(a.Name)
+	for i, name := range ordered {
 		for end := range len(name) {
 			if name[end] != '/' {
 				continue
 			}
-			if _, clash := names[TaskAttachmentName(name[:end])]; clash {
+			if _, clash := names[name[:end]]; clash {
 				return fmt.Errorf("attachment %d: another attachment's name is one of its directories: %w", i, ErrTaskAttachmentNameConflict)
 			}
 		}

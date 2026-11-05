@@ -204,6 +204,12 @@ func TestValidateTaskAttachments(t *testing.T) {
 		"count":     {overCount, domain.ErrTooManyTaskAttachments},
 		"budget":    {overBudget, domain.ErrTaskAttachmentsTooLarge},
 		"duplicate": {[]domain.TaskAttachment{ok[0], ok[0]}, domain.ErrTaskAttachmentNameConflict},
+		// A repeated name is reported at its position, ahead of a later
+		// entry's own fault.
+		"duplicate before a bad entry": {[]domain.TaskAttachment{
+			ok[0], ok[0],
+			attachment("big.bin", domain.TaskAttachmentMediaOctetStream, domain.MaxTaskAttachmentFileBytes+1),
+		}, domain.ErrTaskAttachmentNameConflict},
 		"file is a directory of another": {[]domain.TaskAttachment{
 			attachment("a/c/d.txt", domain.TaskAttachmentMediaOctetStream, 1),
 			attachment("a/c", domain.TaskAttachmentMediaOctetStream, 1),
