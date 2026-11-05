@@ -52,6 +52,10 @@ const (
 	lineupProbeStderr    = lineupProbeOutDir + "/stderr"
 	lineupProbeStatus    = lineupProbeOutDir + "/status"
 	lineupProbeOutputCap = 64 << 10
+	// lineupProbeInitializeOutputCap bounds an initialize probe's outputs.
+	// The CLI's answer lists its commands and agents beside its models, about
+	// 23 KiB under --safe-mode and twice that without, so it gets room to grow.
+	lineupProbeInitializeOutputCap = 1 << 20
 	// lineupProbeReadyTicks bounds, in one-second ticks, the container's wait
 	// for the host's two copies. lineupProbeTimeout bounds the whole run from
 	// start to stop: the copies, --version, and one provider call, whose
@@ -70,6 +74,13 @@ const (
 	lineupProbeCodexExpiryFloor = 10 * time.Minute
 	// LineupProbePrompt is the probe's one message.
 	LineupProbePrompt = "Reply with the single word OK."
+	// lineupProbeInitializeRequest is the one stdin line of an initialize
+	// probe: the control protocol's initialize request, which the CLI answers
+	// with its models, among other things, without running a turn. The CLI
+	// still contacts the provider while it starts.
+	lineupProbeInitializeRequest = `{"type":"control_request","request_id":"` + lineupProbeInitializeRequestID +
+		`","request":{"subtype":"initialize"}}`
+	lineupProbeInitializeRequestID = "freeside-model-discovery"
 )
 
 // LineupProbeCredential is the credential one probe container reads. Build
@@ -128,7 +139,11 @@ type LineupProbe struct {
 	// NativeEffort is the effort as the CLI takes it
 	// (domain.TranslateEffort); empty sends none.
 	NativeEffort string
-	Credential   LineupProbeCredential
+	// Initialize sends the control protocol's initialize request in place of
+	// the prompt, so the CLI reports what it can run instead of running a
+	// turn (Claude only; no Model or NativeEffort).
+	Initialize bool
+	Credential LineupProbeCredential
 }
 
 // LineupProbeOutput is what a probe printed, unjudged. Version is the CLI's
@@ -154,6 +169,10 @@ func (p LineupProbe) validate() error {
 		return errors.New("lineup probe image is not digest-pinned")
 	case p.Harness == domain.HarnessClientCodexCLI && p.Model == "":
 		return errors.New("a Codex lineup probe needs a model")
+	case p.Initialize && p.Harness != domain.HarnessClientClaudeCode:
+		return fmt.Errorf("no initialize probe for harness %q", p.Harness)
+	case p.Initialize && (p.Model != "" || p.NativeEffort != ""):
+		return errors.New("an initialize probe sends no model or effort")
 	case !lineupProbeValue(p.Model) || !lineupProbeValue(p.NativeEffort):
 		return errors.New("lineup probe model or effort is not a single option value")
 	case len(p.Credential.body) == 0 || !provider.acceptsAuthMode(p.Credential.mode):
@@ -179,10 +198,20 @@ func lineupProbeProvider(harness domain.HarnessClientKind) (reviewProvider, erro
 	return nil, fmt.Errorf("no lineup probe for harness %q", harness)
 }
 
+// outputCap bounds each output file the probe's export carries.
+func (p LineupProbe) outputCap() int64 {
+	if p.Initialize {
+		return lineupProbeInitializeOutputCap
+	}
+	return lineupProbeOutputCap
+}
+
 // lineupProbeCommand is the container's whole program. It waits for the
 // host's ready copy, takes the credential out of the stage, prints the CLI
 // build, runs one call with the launch's flags, and records the call's exit
-// status. The prompt is a positional argument, never shell text.
+// status. The prompt is a positional argument, never shell text; an
+// initialize probe pipes a fixed request instead, and no caller text reaches
+// the shell either way.
 func lineupProbeCommand(p LineupProbe, homeTarget, configTarget string) []string {
 	stagedCredential := shellQuote(lineupProbeStageDir + "/" + lineupProbeCredName)
 	prologue := "set -e; mkdir -p " + shellQuote(homeTarget) + " " + shellQuote(configTarget) + " " +
@@ -195,13 +224,21 @@ func lineupProbeCommand(p LineupProbe, homeTarget, configTarget string) []string
 	case domain.HarnessClientClaudeCode:
 		// The flags are claudeinference's judgment launch (commandArgs) and
 		// the review's --safe-mode; a writer's launch takes the same model
-		// and effort options.
+		// and effort options. An initialize probe reads its request from a
+		// pipe as stream-json and answers it at end of input; sh's $? after
+		// the pipe is the CLI's status.
+		invocation := "CLAUDE_CODE_OAUTH_TOKEN=\"$token\" claude -p \"$1\" --output-format json" +
+			lineupProbeOption("--model", p.Model) + lineupProbeOption("--effort", p.NativeEffort)
+		stdio := outputs
+		if p.Initialize {
+			invocation = "printf '%s\\n' " + shellQuote(lineupProbeInitializeRequest) + " | " +
+				"CLAUDE_CODE_OAUTH_TOKEN=\"$token\" claude -p --input-format stream-json --output-format stream-json --verbose"
+			stdio = strings.TrimPrefix(outputs, " < /dev/null")
+		}
 		call = "token=\"$(cat " + stagedCredential + ")\"; rm -rf " + shellQuote(lineupProbeStageDir) + "; set +e; " +
-			"claude --version > " + shellQuote(lineupProbeVersion) + " 2>&1; " +
-			"CLAUDE_CODE_OAUTH_TOKEN=\"$token\" claude -p \"$1\" --output-format json" +
-			lineupProbeOption("--model", p.Model) + lineupProbeOption("--effort", p.NativeEffort) +
+			"claude --version > " + shellQuote(lineupProbeVersion) + " 2>&1; " + invocation +
 			" --safe-mode --tools '' --strict-mcp-config --mcp-config " + shellQuote(`{"mcpServers":{}}`) +
-			" --no-session-persistence --max-turns 1" + outputs +
+			" --no-session-persistence --max-turns 1" + stdio +
 			"status=$?; unset token; "
 	case domain.HarnessClientCodexCLI:
 		// The flags are codexReviewCommand's, without the review's schema,
@@ -354,7 +391,7 @@ func (r *lineupProbeRun) probe(ctx context.Context, p LineupProbe) (LineupProbeO
 	if err := r.ops.waitStopped(ctx, r.name, r.container, r.owner, lineupProbeTimeout); err != nil {
 		return LineupProbeOutput{}, fmt.Errorf("lineup probe container: %w", err)
 	}
-	out, err := r.collect(ctx)
+	out, err := r.collect(ctx, p.outputCap())
 	if err != nil {
 		return LineupProbeOutput{}, err
 	}
@@ -408,8 +445,9 @@ func (r *lineupProbeRun) deliver(ctx context.Context, credential LineupProbeCred
 	return nil
 }
 
-// collect exports the stopped container and reads its four output files.
-func (r *lineupProbeRun) collect(ctx context.Context) (out LineupProbeOutput, retErr error) {
+// collect exports the stopped container and reads its four output files,
+// each within outputCap.
+func (r *lineupProbeRun) collect(ctx context.Context, outputCap int64) (out LineupProbeOutput, retErr error) {
 	dir, err := os.MkdirTemp("", "freeside-lineup-probe-export-")
 	if err != nil {
 		return LineupProbeOutput{}, errors.New("create lineup probe export directory")
@@ -436,16 +474,16 @@ func (r *lineupProbeRun) collect(ctx context.Context) (out LineupProbeOutput, re
 		return LineupProbeOutput{}, errors.New("open lineup probe export")
 	}
 	defer func() { _ = f.Close() }() // Read-only descriptor.
-	return readLineupProbeArchive(f)
+	return readLineupProbeArchive(f, outputCap)
 }
 
 // readLineupProbeArchive walks the export once. It returns the four output
 // files and refuses an archive that still holds the staged credential or
 // CODEX_HOME, a duplicate output entry, or an output that is not a
-// regular file within the cap. A missing version, stdout, or stderr reads
+// regular file within outputCap. A missing version, stdout, or stderr reads
 // as empty; a missing or malformed status fails, since without it the probe
 // never ran to its end.
-func readLineupProbeArchive(r io.Reader) (LineupProbeOutput, error) {
+func readLineupProbeArchive(r io.Reader, outputCap int64) (LineupProbeOutput, error) {
 	want := map[string]*[]byte{}
 	var out LineupProbeOutput
 	var status []byte
@@ -485,11 +523,11 @@ func readLineupProbeArchive(r io.Reader) (LineupProbeOutput, error) {
 			return LineupProbeOutput{}, fmt.Errorf("lineup probe export carries %s twice", name)
 		}
 		seen[name] = true
-		if hdr.Typeflag != tar.TypeReg || hdr.Size > lineupProbeOutputCap {
+		if hdr.Typeflag != tar.TypeReg || hdr.Size > outputCap {
 			return LineupProbeOutput{}, fmt.Errorf("lineup probe output %s is not a regular file within the cap", name)
 		}
-		body, err := io.ReadAll(io.LimitReader(tr, lineupProbeOutputCap+1))
-		if err != nil || len(body) > lineupProbeOutputCap {
+		body, err := io.ReadAll(io.LimitReader(tr, outputCap+1))
+		if err != nil || int64(len(body)) > outputCap {
 			return LineupProbeOutput{}, fmt.Errorf("read lineup probe output %s", name)
 		}
 		*dst = body

@@ -6,6 +6,13 @@
     "freeside-lineup-probe",
     "Reply with the single word OK."
   ],
+  "claude_code_initialize": [
+    "sh",
+    "-c",
+    "set -e; mkdir -p '/var/lib/freeside/claude-review-home' '/var/lib/freeside/claude-review-config' '/var/lib/freeside/lineup-probe/out'; cd '/var/lib/freeside/claude-review-home'; n=0; while [ ! -f '/lineup-probe-ready/ready' ]; do n=$((n+1)); [ \"$n\" -le 60 ] || exit 1; sleep 1; done; token=\"$(cat '/lineup-probe-stage/credential')\"; rm -rf '/lineup-probe-stage'; set +e; claude --version > '/var/lib/freeside/lineup-probe/out/version' 2>&1; printf '%s\\n' '{\"type\":\"control_request\",\"request_id\":\"freeside-model-discovery\",\"request\":{\"subtype\":\"initialize\"}}' | CLAUDE_CODE_OAUTH_TOKEN=\"$token\" claude -p --input-format stream-json --output-format stream-json --verbose --safe-mode --tools '' --strict-mcp-config --mcp-config '{\"mcpServers\":{}}' --no-session-persistence --max-turns 1 > '/var/lib/freeside/lineup-probe/out/stdout' 2> '/var/lib/freeside/lineup-probe/out/stderr'; status=$?; unset token; printf '%s\\n' \"$status\" > '/var/lib/freeside/lineup-probe/out/status'; sync; exit 0",
+    "freeside-lineup-probe",
+    "Reply with the single word OK."
+  ],
   "codex_cli": [
     "sh",
     "-c",

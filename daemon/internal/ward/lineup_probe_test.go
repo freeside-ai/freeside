@@ -48,6 +48,14 @@ func claudeWriterProbe(t *testing.T) LineupProbe {
 	}
 }
 
+func claudeInitializeProbe(t *testing.T) LineupProbe {
+	t.Helper()
+	return LineupProbe{
+		Harness: domain.HarnessClientClaudeCode, Image: lineupProbeTestAgentImage, Initialize: true,
+		Credential: SetupTokenProbeCredential(lineupProbeTestToken(t)),
+	}
+}
+
 func codexReviewerProbe() LineupProbe {
 	return LineupProbe{
 		Harness: domain.HarnessClientCodexCLI, Image: lineupProbeTestReviewImage,
@@ -56,15 +64,18 @@ func codexReviewerProbe() LineupProbe {
 	}
 }
 
-// TestLineupProbeCommandGolden pins both probe programs: the flags each CLI
-// launches with, the credential's removal before any output is written, and
-// the prompt as a positional argument.
+// TestLineupProbeCommandGolden pins the probe programs: the flags each CLI
+// launches with, the credential's removal before any output is written, the
+// prompt as a positional argument, and the initialize probe's fixed request
+// on stdin.
 func TestLineupProbeCommandGolden(t *testing.T) {
 	claude := claudeWriterProbe(t)
 	codex := codexReviewerProbe()
 	commands := map[string][]string{
 		"claude_code": lineupProbeCommand(claude, claudeReviewProvider{}.homeTarget(), claudeReviewProvider{}.configHomeTarget()),
-		"codex_cli":   lineupProbeCommand(codex, codexReviewProvider{}.homeTarget(), codexReviewProvider{}.configHomeTarget()),
+		"claude_code_initialize": lineupProbeCommand(claudeInitializeProbe(t),
+			claudeReviewProvider{}.homeTarget(), claudeReviewProvider{}.configHomeTarget()),
+		"codex_cli": lineupProbeCommand(codex, codexReviewProvider{}.homeTarget(), codexReviewProvider{}.configHomeTarget()),
 	}
 	var body bytes.Buffer
 	enc := json.NewEncoder(&body)
@@ -462,13 +473,19 @@ func TestProbeLineupImageRefusesAnExportWithoutAStatus(t *testing.T) {
 
 func TestProbeLineupImageRefusesBeforeCreatingAnything(t *testing.T) {
 	for name, change := range map[string]func(*LineupProbe){
-		"tag-only image":        func(p *LineupProbe) { p.Image = "registry.example/agent:latest" },
-		"option-shaped model":   func(p *LineupProbe) { p.Model = "--dangerously-skip-permissions" },
-		"spaced effort":         func(p *LineupProbe) { p.NativeEffort = "high --x" },
-		"codex credential":      func(p *LineupProbe) { p.Credential = codexReviewerProbe().Credential },
-		"no credential":         func(p *LineupProbe) { p.Credential = LineupProbeCredential{} },
-		"unknown harness":       func(p *LineupProbe) { p.Harness = "gemini_cli" },
-		"codex without a model": func(p *LineupProbe) { *p = codexReviewerProbe(); p.Model = "" },
+		"tag-only image":          func(p *LineupProbe) { p.Image = "registry.example/agent:latest" },
+		"option-shaped model":     func(p *LineupProbe) { p.Model = "--dangerously-skip-permissions" },
+		"spaced effort":           func(p *LineupProbe) { p.NativeEffort = "high --x" },
+		"codex credential":        func(p *LineupProbe) { p.Credential = codexReviewerProbe().Credential },
+		"no credential":           func(p *LineupProbe) { p.Credential = LineupProbeCredential{} },
+		"unknown harness":         func(p *LineupProbe) { p.Harness = "gemini_cli" },
+		"codex without a model":   func(p *LineupProbe) { *p = codexReviewerProbe(); p.Model = "" },
+		"initialize with a model": func(p *LineupProbe) { p.Initialize = true; p.NativeEffort = "" },
+		"initialize with an effort": func(p *LineupProbe) {
+			*p = claudeInitializeProbe(t)
+			p.NativeEffort = "high"
+		},
+		"codex initialize": func(p *LineupProbe) { *p = codexReviewerProbe(); p.Initialize = true },
 	} {
 		t.Run(name, func(t *testing.T) {
 			p := claudeWriterProbe(t)

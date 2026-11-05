@@ -249,6 +249,8 @@
 //     export) plus PreJob
 //   - lineup_probe.go  one lineup probe call through an image, and the
 //     credentials a probe container reads
+//   - claude_model_discovery.go the initialize probe's model report, decoded
+//     into an enrollment's discovered model catalog
 //   - auth_enrollment.go EnrollmentBootstrap, a harness client's first
 //     enrollment (§5.4)
 //   - auth_adoption.go adopting a flag-era identity's existing store as an
