@@ -197,12 +197,15 @@ import Testing
     @Test func taskActionsSitWherePinnedAndHoldTodaysItems() {
         #expect(TaskPageView.TaskActionsSlot(compact: false) == .outlineRow)
         #expect(TaskPageView.TaskActionsSlot(compact: true) == .navigationBar)
-        #expect(TaskPageView.taskActions(nil, taskID: "task-1").isEmpty)
+        #expect(TaskPageView.taskActions(nil, task: .init(taskID: "task-1")).isEmpty)
         #expect(
-            TaskPageView.taskActions(nil, taskID: "task-1", decision: [.init(label: "Item", value: "item-1")])
-                .map(\.title) == ["Copy all identifiers"])
+            TaskPageView.taskActions(
+                nil, task: .init(taskID: "task-1"), decision: [.init(label: "Item", value: "item-1")]
+            )
+            .map(\.title) == ["Copy all identifiers"])
         let history = TaskStageFixtures.page(.review).history
-        #expect(TaskPageView.taskActions(history, taskID: "task-1").map(\.title) == ["Copy all identifiers"])
+        #expect(
+            TaskPageView.taskActions(history, task: .init(taskID: "task-1")).map(\.title) == ["Copy all identifiers"])
     }
 
     @Test func theConversationChipDrawsFromOneMessage() {

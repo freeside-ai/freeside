@@ -250,12 +250,14 @@ import Testing
                 #expect(theScroll.documentView === theDocument, step)
             }
 
-            /// Scrolls down the way a reader does, until the Timeline is the
-            /// section under the pinned row.
+            /// Scrolls the way a reader does, until the Timeline is the
+            /// section under the pinned row: down from above it, and up from
+            /// a run, since every run's card sits under the Timeline's rail.
             func scrollToTheTimeline() async throws {
                 var steps = 0
+                let step: CGFloat = if case .run = memory.anchor { -8 } else { 8 }
                 while memory.anchor != .section(.timeline), steps < 500 {
-                    try await scroll(by: 8)
+                    try await scroll(by: step)
                     steps += 1
                 }
                 try #require(memory.anchor == .section(.timeline))

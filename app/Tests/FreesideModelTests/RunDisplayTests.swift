@@ -433,16 +433,20 @@ import Testing
         #expect(RunDisplay.admissionRows(facts).first { $0.label == "Effort" }?.value == "xhigh")
     }
 
-    @Test func theLatestImplementerAdmissionSkipsReviewsAndOtherRoles() throws {
+    @Test func theLatestExecutionAdmissionSkipsReviewsAndOtherRoles() throws {
         let active = try #require(RunFixtures.defaultTimelines().first { $0.run_id == RunFixtures.activeRunID })
-        #expect(RunDisplay.latestImplementerAdmission(active)?.invocation_id == "inv-\(RunFixtures.activeRunID)-2")
+        #expect(
+            RunDisplay.latestExecutionAdmission(active, role: .implementer)?.invocation_id
+                == "inv-\(RunFixtures.activeRunID)-2")
+        #expect(RunDisplay.latestExecutionAdmission(active, role: .specifier) == nil)
         #expect(RunDisplay.admission(for: "review-\(RunFixtures.activeRunID)-1", in: active)?.kind == .review)
         var reviewsOnly = active
         reviewsOnly.admissions.removeAll { $0.kind == .execution }
-        #expect(RunDisplay.latestImplementerAdmission(reviewsOnly) == nil)
+        #expect(RunDisplay.latestExecutionAdmission(reviewsOnly, role: .implementer) == nil)
         let refreshed = RunFixtures.refreshedHistoryTimeline()
         #expect(
-            RunDisplay.latestImplementerAdmission(refreshed)?.invocation_id == "inv-\(RunFixtures.refreshedRunID)-2")
+            RunDisplay.latestExecutionAdmission(refreshed, role: .implementer)?.invocation_id
+                == "inv-\(RunFixtures.refreshedRunID)-2")
     }
 
     @Test func outcomeVocabularyStaysUnchanged() {

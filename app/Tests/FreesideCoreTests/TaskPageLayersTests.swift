@@ -13,22 +13,16 @@ import Testing
     @Test func sectionSummariesCountRunsAndNameTheStart() throws {
         let history = TaskHistoryFixtures.history(.revised)
         #expect(history.sections.count == 2)
-        let current = try #require(history.sections.first)
         let earlier = try #require(history.sections.last)
-        let start = try #require(TaskTimelinePresentation.sectionStart(current))
+        let start = try #require(TaskTimelinePresentation.sectionStart(earlier))
         let now = start.addingTimeInterval(86_400)
-        let from = FreesideFormat.shortDate(start, now: now, locale: enUS, timeZone: utc)
-        let attempts = current.runs.count == 1 ? "1 attempt" : "\(current.runs.count) attempts"
-        #expect(
-            TaskTimelinePresentation.sectionSummary(
-                current, isCurrent: true, now: now, locale: enUS, timeZone: utc)
-                == "current · \(attempts) · from \(from)")
+        let on = FreesideFormat.shortDate(start, now: now, locale: enUS, timeZone: utc)
+        let runs = earlier.runs.count == 1 ? "1 run" : "\(earlier.runs.count) runs"
         // An earlier campaign says how many runs and when, never why it
         // ended: no recorded fact carries that.
         let earlierSummary = TaskTimelinePresentation.sectionSummary(
-            earlier, isCurrent: false, now: now, locale: enUS, timeZone: utc)
-        #expect(earlierSummary.hasPrefix(earlier.runs.count == 1 ? "1 run" : "\(earlier.runs.count) runs"))
-        #expect(!earlierSummary.contains("current"))
+            earlier, now: now, locale: enUS, timeZone: utc)
+        #expect(earlierSummary == "\(runs) · \(on)")
         #expect(!earlierSummary.contains("superseded"))
     }
 
@@ -44,8 +38,7 @@ import Testing
         empty.runs = []
         empty.events = []
         #expect(TaskTimelinePresentation.sectionStart(empty) == nil)
-        #expect(
-            TaskTimelinePresentation.sectionSummary(empty, isCurrent: true, now: .now) == "current · 0 attempts")
+        #expect(TaskTimelinePresentation.sectionSummary(empty, now: .now) == "0 runs")
     }
 
     @Test func runDetailsSummaryJoinsRoleReasonAndHold() throws {
@@ -144,6 +137,31 @@ import Testing
         #expect(stored?["task-a"] != nil)
     }
 
+    /// Acceptance 6 (#2611): the Task fold is gone and the current
+    /// campaign never folds: a device that stored either open keeps the
+    /// value, and the page reads neither, while an earlier campaign's
+    /// stored fold still opens it.
+    @Test func aStoredCurrentCampaignFoldIsIgnoredAndAnEarlierOneKept() throws {
+        let page = TaskStageFixtures.page(.secondCampaign)
+        let history = try #require(page.history)
+        let currentCampaign = try #require(history.sections.first?.campaign_id)
+        let earlierCampaign = try #require(history.sections.last?.campaign_id)
+        let suite = "TaskPageLayersTests-\(UUID().uuidString)"
+        let defaults = try #require(UserDefaults(suiteName: suite))
+        defer { defaults.removePersistentDomain(forName: suite) }
+        defaults.set(
+            [page.task.id: ["task", "campaign:\(currentCampaign)", "campaign:\(earlierCampaign)"]],
+            forKey: "FreesideTaskTimelineExpandedSections")
+
+        // The page asks only after the earlier campaigns' folds: the
+        // current campaign's stored state is never read, and the earlier
+        // campaign's opens as it was left.
+        let store = TaskTimelineDisclosurePreferences(defaults: defaults)
+        let folded = TaskTimelinePresentation.earlierSections(page.task, in: history)
+        #expect(folded.map(\.campaign_id) == [earlierCampaign])
+        #expect(folded.allSatisfy { store.isExpanded(.campaign($0.campaign_id), taskID: page.task.id) })
+    }
+
     /// The Task Events fold is gone: a device that stored it open keeps the
     /// value, and it opens nothing.
     @Test func aStoredFoldForTheOldEventsDisclosureOpensNothing() throws {
@@ -210,12 +228,166 @@ import Testing
                 != TaskTimelineDisclosurePreferences.Section.campaign("outside-campaign").id)
     }
 
-    /// A rail row keeps its milestone's instant, which the rail shortens
-    /// and offers exactly, in the page's own clock and time zone.
-    @Test func milestoneRowsCarryTheirExactInstant() throws {
-        let run = try #require(TaskHistoryFixtures.history(.retry).sections.first?.runs.first)
-        let rows = TaskTimelinePresentation.milestoneRows(run)
-        #expect(rows.map(\.recordedAt) == run.milestones.map { Optional($0.recorded_at) })
+    /// Acceptance 1 (#2611): an active task's Current Run holds its current
+    /// run at every stage, the run's line, its Review only once a round
+    /// exists, and the current campaign's other runs as earlier attempts.
+    @Test(arguments: [
+        TaskStageFixtures.Scenario.specification, .implementation, .review, .verification, .retry, .returned,
+        .remediation,
+    ])
+    func currentRunHoldsTheTasksRunAtEachStage(scenario: TaskStageFixtures.Scenario) throws {
+        var page = TaskStageFixtures.page(scenario)
+        page.task.task_lines = [
+            TaskStageFixtures.line(.specifier, agent: "codex", pool: "S"),
+            TaskStageFixtures.line(.implementer, agent: "claude", pool: "A"),
+        ]
+        let history = try #require(page.history)
+        let runTimelines = Dictionary(
+            uniqueKeysWithValues: TaskStageFixtures.script(scenario).runTimelines.map { ($0.run_id, $0) })
+        let current = try #require(
+            TaskTimelinePresentation.currentRunSection(
+                page.task, timeline: history, runTimelines: runTimelines, schedules: []))
+
+        #expect(current.run.run_id == page.task.current_position?.value1.run_id)
+        let specifies = scenario == .specification
+        #expect(current.run.role?.value1 == (specifies ? .specification : .implementation))
+        #expect(current.line == (specifies ? "codex · pool S" : "claude · pool A"))
+        #expect(current.earlierAttempts.map(\.run_id) == history.sections[0].runs.dropFirst().map(\.run_id))
+        #expect(current.schedules.isEmpty)
+
+        // Review draws only once the run's timeline holds a round, and
+        // never for a specification run. The scripts record rounds only
+        // for a decided review, so the review stage gains its Review once
+        // its round is in the run's timeline, below.
+        let recorded = runTimelines[current.run.run_id]?.review?.value1.rounds.isEmpty == false
+        #expect(current.showsReview == (recorded && !specifies))
+        #expect(recorded == (scenario == .remediation))
+        let reviewed = Components.Schemas.RunTimeline(
+            as_of_revision: 1, as_of: RunFixtures.screenshotInstant, run_id: current.run.run_id, milestones: [],
+            invocations: [], review: .init(value1: .init(rounds: [RunFixtures.reviewRound(.running)])),
+            admissions: [])
+        let withRound = try #require(
+            TaskTimelinePresentation.currentRunSection(
+                page.task, timeline: history, runTimelines: [current.run.run_id: reviewed], schedules: []))
+        #expect(withRound.showsReview == !specifies)
+    }
+
+    /// A finished task, or a history not yet loaded, has no Current Run.
+    @Test func aFinishedTaskHasNoCurrentRun() throws {
+        var page = TaskStageFixtures.page(.verification)
+        let history = try #require(page.history)
+        #expect(
+            TaskTimelinePresentation.currentRunSection(page.task, timeline: nil, runTimelines: [:], schedules: [])
+                == nil)
+        for lifecycle in [Components.Schemas.Task.lifecyclePayload.finished, .stopped, .abandoned] {
+            page.task.lifecycle = lifecycle
+            #expect(
+                TaskTimelinePresentation.currentRunSection(
+                    page.task, timeline: history, runTimelines: [:], schedules: []) == nil)
+        }
+        // Its page draws the rail, then the earlier campaigns, with no
+        // run of the newest drawn as a card.
+        let newest = try #require(history.sections.first).runs.map { TaskTimelinePresentation.Entry.run($0.run_id) }
+        #expect(
+            !TaskTimelinePresentation.entries(history, task: page.task).contains {
+                newest.contains($0)
+            })
+    }
+
+    /// Acceptance 3 (#2611): the Timeline has no fold around the current
+    /// campaign, so it draws open with nothing stored; each earlier
+    /// campaign folds below the rail, closed until opened, by its id.
+    @Test func onlyEarlierCampaignsFoldAndEachIsRememberedByItsId() throws {
+        let page = TaskStageFixtures.page(.secondCampaign)
+        let history = try #require(page.history)
+        #expect(history.sections.count == 2)
+        let earlier = TaskTimelinePresentation.earlierSections(page.task, in: history)
+        #expect(earlier.map(\.campaign_id) == [history.sections[1].campaign_id])
+
+        let store = TaskTimelineDisclosurePreferences(defaults: nil)
+        #expect(!store.isExpanded(.campaign(earlier[0].campaign_id), taskID: page.task.id))
+        store.setExpanded(true, .campaign(earlier[0].campaign_id), taskID: page.task.id)
+        #expect(store.isExpanded(.campaign(earlier[0].campaign_id), taskID: page.task.id))
+
+        // The current campaign is the section holding the current run,
+        // wherever it sits, else the history's first.
+        var moved = page.task
+        moved.current_position?.value1.run_id = try #require(history.sections[1].runs.first?.run_id)
+        #expect(
+            TaskTimelinePresentation.earlierSections(moved, in: history).map(\.campaign_id)
+                == [history.sections[0].campaign_id])
+        moved.current_position = nil
+        #expect(
+            TaskTimelinePresentation.earlierSections(moved, in: history).map(\.campaign_id)
+                == [history.sections[1].campaign_id])
+    }
+
+    /// Acceptance 5 (#2611): the task's armed schedules sit in Current
+    /// Run's Run Details, whose summary names the soonest to fire.
+    @Test func runDetailsCarryTheTasksArmedSchedules() throws {
+        let page = TaskStageFixtures.page(.implementation)
+        let runID = try #require(page.task.current_position?.value1.run_id)
+        var checks = try #require(RunFixtures.defaultSchedules().first { $0.schedule.kind == .pr_checks_deadline })
+        checks.schedule.run_id = runID
+        var later = checks
+        later.schedule.id = "schedule-later"
+        later.schedule.kind = .review_wait_threshold
+        later.schedule.fire_at = checks.schedule.fire_at?.addingTimeInterval(3_600)
+        var fired = checks
+        fired.schedule.id = "schedule-fired"
+        fired.schedule.status = .fired
+        var elsewhere = checks
+        elsewhere.schedule.id = "schedule-elsewhere"
+        elsewhere.schedule.run_id = "run-of-another-task"
+
+        let current = try #require(
+            TaskTimelinePresentation.currentRunSection(
+                page.task, timeline: page.history, runTimelines: [:], schedules: [later, fired, checks, elsewhere]))
+        #expect(current.schedules.map(\.schedule.id) == ["schedule-later", checks.schedule.id])
+        let fireAt = try #require(checks.schedule.fire_at)
+        let time = FreesideFormat.shortTime(fireAt, now: fireAt, locale: enUS, timeZone: utc)
+        let summary = try #require(
+            TaskTimelinePresentation.runDetailsSummary(
+                current.run, schedules: current.schedules, now: fireAt, locale: enUS, timeZone: utc))
+        #expect(summary.hasSuffix("next checks \(time)"))
+
+        var bare = current.run
+        bare.role = nil
+        bare.attempt_reason = nil
+        bare.hold = nil
+        bare.parent_run_id = nil
+        bare.superseded_by = nil
+        #expect(!TaskTimelinePresentation.hasRunDetails(bare))
+        #expect(TaskTimelinePresentation.hasRunDetails(bare, schedules: current.schedules))
+    }
+
+    /// Acceptance 7 (#2611): the Runs chip goes to the run's card where the
+    /// page draws one, opening the folds around it, else to its run page.
+    @Test func theRunsChipGoesWhereTheRunIsDrawn() throws {
+        let page = TaskStageFixtures.page(.secondCampaign)
+        let history = try #require(page.history)
+        let currentID = try #require(page.task.current_position?.value1.run_id)
+        let target = { TaskTimelinePresentation.runTarget($0, task: page.task, timeline: history) }
+        #expect(target(currentID) == .currentRun)
+        let earlierCampaign = try #require(history.sections[1].runs.first)
+        #expect(target(earlierCampaign.run_id) == .earlierCampaign(history.sections[1].campaign_id))
+        #expect(target("run-not-in-the-history") == .runPage)
+
+        let implementation = TaskStageFixtures.page(.retry)
+        let attempts = try #require(implementation.history?.sections.first?.runs)
+        #expect(attempts.count > 1)
+        #expect(
+            TaskTimelinePresentation.runTarget(
+                attempts[1].run_id, task: implementation.task, timeline: try #require(implementation.history))
+                == .earlierAttempt)
+
+        // A finished task draws no card for its newest campaign's runs.
+        var finished = page.task
+        finished.lifecycle = .finished
+        #expect(TaskTimelinePresentation.runTarget(currentID, task: finished, timeline: history) == .runPage)
+        #expect(
+            TaskTimelinePresentation.runTarget(earlierCampaign.run_id, task: finished, timeline: history)
+                == .earlierCampaign(history.sections[1].campaign_id))
     }
 
     /// The guidance link leads to the very item whose lookup produced it.

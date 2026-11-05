@@ -2451,10 +2451,10 @@
                                 ).screenshotContent(history))))
                 }
             }
-            // The two-campaign history with folds open: the current campaign
-            // alone, then every fold (each campaign, each prior run, and each
-            // run's details), so the folded content is covered too.
-            let currentOpen = TaskHistoryFixtures.currentCampaignOpen(revisedHistory)
+            // The two-campaign history with every fold open (the earlier
+            // campaign, each prior run, and each run's details), so the
+            // folded content is covered too. The current campaign has no
+            // fold, so the history's closed surface above is its open one.
             let everythingOpen = TaskTimelineDisclosurePreferences(defaults: nil)
             for section in revisedHistory.sections {
                 everythingOpen.setExpanded(true, .campaign(section.campaign_id), taskID: revisedHistory.task_id)
@@ -2479,16 +2479,14 @@
                                 snapshot: TaskHistoryFixtures.snapshot(revisedHistory), onOpenRun: { _ in }
                             ).screenshotContent(revisedHistory))))
             }
-            for (name, disclosures) in [("current-open", currentOpen), ("all-open", everythingOpen)] {
-                surfaces.append(
-                    Surface(
-                        name: "task-history-revised-\(name)-820-light", width: 820, nativeAppearance: true,
-                        view: AnyView(
-                            TaskPageView(
-                                coordinator: revisedCoordinator,
-                                snapshot: TaskHistoryFixtures.snapshot(revisedHistory), onOpenRun: { _ in }
-                            ).screenshotContent(revisedHistory, disclosures: disclosures))))
-            }
+            surfaces.append(
+                Surface(
+                    name: "task-history-revised-all-open-820-light", width: 820, nativeAppearance: true,
+                    view: AnyView(
+                        TaskPageView(
+                            coordinator: revisedCoordinator,
+                            snapshot: TaskHistoryFixtures.snapshot(revisedHistory), onOpenRun: { _ in }
+                        ).screenshotContent(revisedHistory, disclosures: everythingOpen))))
             // A task in each stage the page names (#1923): the stage on the
             // chip, on the hold callout at Verification, and at the newest
             // start point of the rail.
@@ -2553,9 +2551,7 @@
                                 TaskPageView(
                                     coordinator: publishedCoordinator, snapshot: publishedTask, onOpenRun: { _ in }
                                 )
-                                .screenshotContent(
-                                    publishedHistory,
-                                    disclosures: TaskHistoryFixtures.currentCampaignOpen(publishedHistory)))))
+                                .screenshotContent(publishedHistory))))
                 }
             }
             let legacyTask = try #require(tasks.first { $0.task.id == TaskFixtures.legacyTaskID })
@@ -2578,8 +2574,7 @@
                             TaskPageView(
                                 coordinator: legacyCoordinator, snapshot: legacyTask, onOpenRun: { _ in }
                             )
-                            .screenshotContent(
-                                legacyHistory, disclosures: TaskHistoryFixtures.currentCampaignOpen(legacyHistory)))))
+                            .screenshotContent(legacyHistory))))
             }
             surfaces.append(
                 Surface(
@@ -2598,7 +2593,7 @@
                     )))
             // The page's Identifiers footer expanded (#1379, #2117): the
             // exact task, campaign, and run ids grouped by owner, with their
-            // copy controls, and the current campaign open over it.
+            // copy controls.
             surfaces.append(
                 Surface(
                     name: "task-page-details",
@@ -2606,8 +2601,7 @@
                         TaskPageView(coordinator: coordinator, snapshot: retryTask, onOpenRun: { _ in })
                             .screenshotContent(
                                 retryTimeline,
-                                disclosures: TaskHistoryFixtures.currentCampaignOpen(
-                                    retryTimeline, identifiersOpen: true))
+                                disclosures: TaskHistoryFixtures.identifiersOpen(retryTimeline))
                     )))
             surfaces.append(
                 Surface(
@@ -2617,27 +2611,12 @@
                         TaskPageView(coordinator: coordinator, snapshot: retryTask, onOpenRun: { _ in })
                             .screenshotContent(
                                 retryTimeline,
-                                disclosures: TaskHistoryFixtures.currentCampaignOpen(
-                                    retryTimeline, identifiersOpen: true))
+                                disclosures: TaskHistoryFixtures.identifiersOpen(retryTimeline))
                     )))
-            // The Task fold open (#979): the current run's latest implementer
-            // admission follows Agent and Pool, as that admission recorded it.
-            for (name, width) in [("task-page-task-fold", CGFloat?.none), ("task-page-task-fold-390", 390)] {
-                let disclosures = TaskHistoryFixtures.currentCampaignOpen(retryTimeline)
-                disclosures.setExpanded(true, .task, taskID: retryTimeline.task_id)
-                surfaces.append(
-                    Surface(
-                        name: name,
-                        width: width,
-                        view: AnyView(
-                            TaskPageView(coordinator: coordinator, snapshot: retryTask, onOpenRun: { _ in })
-                                .screenshotContent(retryTimeline, disclosures: disclosures)
-                        )))
-            }
             // A remediation under way (#2100): the task's events return to
             // Implementation at the remediator's start, under the decision
-            // that sent the findings there, and the open run card draws the
-            // same decision in its own Milestones rail.
+            // that sent the findings there, and Current Run draws the review
+            // round that found them.
             let remediationScript = TaskStageFixtures.script(.remediation)
             let remediation = try TaskStageFixtures.coordinator(
                 TaskStageFixtures.page(.remediation), runTimelines: remediationScript.runTimelines)
@@ -2650,9 +2629,7 @@
                             TaskPageView(
                                 coordinator: remediation.coordinator, snapshot: remediation.task, onOpenRun: { _ in }
                             )
-                            .screenshotContent(
-                                remediationScript.timeline,
-                                disclosures: TaskHistoryFixtures.currentCampaignOpen(remediationScript.timeline))
+                            .screenshotContent(remediationScript.timeline)
                         )))
             }
             guard

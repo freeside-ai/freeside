@@ -568,22 +568,6 @@ enum RunHistoryPresentation {
         return "Remediation for Review \(round.round)"
     }
 
-    /// The attempt the review facts prove for an invocation: a remediator,
-    /// or the producer a round's subject names. Nil when no round names it.
-    static func roleContext(
-        invocationID: String?, reviewRounds: [Components.Schemas.RunReviewRound],
-        stages: [Components.Schemas.Stage] = []
-    ) -> String? {
-        if let remediation = remediationContext(invocationID: invocationID, reviewRounds: reviewRounds) {
-            return remediation
-        }
-        guard let invocationID,
-            let subject = reviewRounds.lazy.compactMap({ $0.subject?.value1 })
-                .first(where: { $0.invocation_id == invocationID })
-        else { return nil }
-        return attemptLabel(for: subject, reviewRounds: reviewRounds, stages: stages)
-    }
-
     /// The label for the attempt a review subject names, as the run rail
     /// labels that attempt's milestones (`Implementation · Pass 1 · Round 2`,
     /// `Remediation for Review 1`), else by its kind when the run's stages
