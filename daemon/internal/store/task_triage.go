@@ -75,3 +75,49 @@ func (tx *ReadTx) GetTaskTriage(ctx context.Context, taskID domain.TaskID) (doma
 	}
 	return record, true, nil
 }
+
+// RecordSpecifierTriage stores the task's triage record and, when the record
+// escalates, the specifier's triage line naming counterpart, in the caller's
+// transaction (plan §5.13, Specifier Triage). The line is set at the record's
+// instant and must be the specifier's first version: triage runs only for a
+// specifier with no line, so a role that gained one since the engine read
+// fails the whole write rather than stacking a triage version on an
+// operator's choice. A record that does not escalate takes no counterpart
+// and writes no line.
+//
+// Every outcome advances the task's own version, so sync serves the task and
+// its timeline afresh. It returns the line, or nil when none was written.
+func (tx *WriteTx) RecordSpecifierTriage(
+	ctx context.Context, record domain.TaskTriage, counterpart string,
+) (*domain.TaskLine, error) {
+	if record.Escalated != (counterpart != "") {
+		return nil, fmt.Errorf("record specifier triage %q: escalated %t with counterpart %q: %w",
+			record.TaskID, record.Escalated, counterpart, domain.ErrTaskTriageInconsistent)
+	}
+	if err := tx.RecordTaskTriage(ctx, record); err != nil {
+		return nil, err
+	}
+	var line *domain.TaskLine
+	if record.Escalated {
+		appended, err := tx.AppendTaskLine(ctx, domain.TaskLineInput{
+			TaskID: record.TaskID, Role: domain.RoleSpecifier, Agent: counterpart,
+			Source: domain.TaskLineSourceTriage, SetBy: string(record.TaskID),
+		}, record.RecordedAt)
+		if err != nil {
+			return nil, err
+		}
+		if appended.Version != 1 {
+			return nil, fmt.Errorf("record specifier triage %q: the specifier already has a line: %w",
+				record.TaskID, domain.ErrTaskLineInconsistent)
+		}
+		line = &appended
+	}
+	task, err := tx.GetTask(ctx, record.TaskID)
+	if err != nil {
+		return nil, fmt.Errorf("record specifier triage %q: %w", record.TaskID, err)
+	}
+	if err := tx.updateTask(ctx, task); err != nil {
+		return nil, fmt.Errorf("record specifier triage %q: %w", record.TaskID, err)
+	}
+	return line, nil
+}

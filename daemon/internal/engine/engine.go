@@ -61,6 +61,9 @@ type Engine struct {
 	cancellation                taskCancellationCoordinator
 	taskExecutionMu             sync.Mutex
 	taskExecutions              map[domain.TaskID]*taskExecution
+
+	// triageMu serializes specifier triage calls (triageSpecifier).
+	triageMu sync.Mutex
 	// artifacts reads persisted agent evidence by digest (a blocked
 	// implementer's decisions). It is the blob store the configured
 	// workflows already share; the first workflow option that carries one

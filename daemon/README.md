@@ -3827,6 +3827,37 @@ delay reconciliation. Its 32-entry in-memory queue keeps the identifier
 fallback when full or lost on restart. Diagnostic and
 Discussion sites continue to use their fallback outputs with this adapter.
 
+The triager (`specifier_triage`, plan §5.13 Specifier Triage) chooses, once
+per task, whether its specification runs on the specifier's lineup agent
+(`standard`) or on the escalated counterpart the lineup names for it
+(`escalated`). It runs in the specifier's first admission, before the router,
+only when the specifier's lineup line has an escalated counterpart, the task
+has no triage record and no specifier line (an operator's line, even a
+cleared one, skips it), and no run of the task has admitted its specifier.
+It sends the project's repository name and the task's source as the task
+namer reads it: the issue's title, body, and label names, or the submitted
+text. Its default criteria are code-owned (`internal/inference/triager_prompt.md`).
+The task's timeline shows every outcome. A failed call, an unreadable
+source, a refused answer, a spent budget, and a lineup with no triager line
+each escalate, so an unavailable triager costs quota on the larger model,
+never a complex task on the smaller one. An escalation writes the
+specifier's first line, a `triage` line naming the counterpart, in the same
+write as the record. Admission accepts that line only for its task's
+escalated record, at the record's instant, naming the counterpart the
+current lineup pins.
+
+- **The triager is off without an escalated line.** It is off, not unbound,
+  while the specifier's lineup line names no escalated counterpart, so a tree
+  adopted before triage raises no `judgment_role_unbound` item.
+- **One judgment at a time.** Triage calls run one at a time. A triage call
+  that overlaps a classifier, adjudicator, or drift-auditor call fails at
+  once on the shared slot and is recorded as `call_failed`, so that task
+  escalates.
+- **A failure is final.** A task whose source fetch or call failed stays
+  escalated; triage never runs for it again.
+- **Admission waits for the call.** The call runs inside the specifier's
+  admission, for up to the site's 30-second timeout.
+
 One further optional flag configures the publication-author role's two sites
 (`publication_author_explain` and `publication_author_propose`):
 
