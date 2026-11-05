@@ -91,11 +91,18 @@ struct TaskSubmissionRecoverySheet: View {
                 Text("New task · \(payload.project_id)")
                     .font(FreesideFont.factLabel)
                     .foregroundStyle(Color.ink)
-                // Retry resends these lines unchanged, so show them.
+                // Retry resends these lines and attachments unchanged, so
+                // show them.
                 if let agents = AgentChoiceDisplay.summary(payload.task_lines) {
                     Text(agents)
                         .font(FreesideFont.cardBody)
                         .foregroundStyle(Color.inkDim)
+                }
+                ForEach(Array((payload.attachments ?? []).enumerated()), id: \.offset) { _, attachment in
+                    Label(attachment.name, systemImage: "paperclip")
+                        .font(FreesideFont.cardBody)
+                        .foregroundStyle(Color.inkDim)
+                        .accessibilityLabel("Attachment \(attachment.name)")
                 }
                 Text(payload.source)
                     .font(FreesideFont.cardBody)
