@@ -26,6 +26,7 @@ public final class AppSession {
         let client: any APIProtocol
         let credentials: any DeviceCredentialStore
         let cache: any CacheStore
+        let submissionAttachments: any SubmissionAttachmentStore
         let deploymentURL: URL?
         let displayName: String?
     }
@@ -81,6 +82,9 @@ public final class AppSession {
         client: any APIProtocol,
         credentials: any DeviceCredentialStore,
         cache: any CacheStore,
+        // Kept with the cache, so a session whose cache is in memory never
+        // reads or sweeps a disk directory.
+        submissionAttachments: any SubmissionAttachmentStore = InMemorySubmissionAttachmentStore(),
         pairingCode: String = "",
         displayName: String? = nil,
         deploymentURL: URL? = nil,
@@ -94,6 +98,7 @@ public final class AppSession {
     ) {
         self.connection = Connection(
             client: client, credentials: credentials, cache: cache,
+            submissionAttachments: submissionAttachments,
             deploymentURL: deploymentURL, displayName: displayName)
         self.persistServerURL = persistServerURL
         self.localDaemonURL = localDaemonURL
@@ -105,8 +110,8 @@ public final class AppSession {
         if let credential = try? credentials.load() {
             phase = .ready(
                 Self.coordinator(
-                    client: client, cache: cache, credential: credential, deploymentURL: deploymentURL,
-                    cacheRoot: cacheRoot))
+                    client: client, cache: cache, submissionAttachments: submissionAttachments,
+                    credential: credential, deploymentURL: deploymentURL, cacheRoot: cacheRoot))
             // A live session already holding a credential enters `.ready`
             // here without pairing, so this is its only chance to record the
             // deployment URL for a later unadorned relaunch: `completePairing`
@@ -142,7 +147,8 @@ public final class AppSession {
         }
         phase = .ready(
             Self.coordinator(
-                client: connection.client, cache: connection.cache, credential: credential,
+                client: connection.client, cache: connection.cache,
+                submissionAttachments: connection.submissionAttachments, credential: credential,
                 deploymentURL: connection.deploymentURL, cacheRoot: cacheRoot))
         offersNotificationSetup = true
     }
@@ -319,8 +325,8 @@ public final class AppSession {
     }
 
     private static func coordinator(
-        client: any APIProtocol, cache: any CacheStore, credential: DeviceCredential, deploymentURL: URL?,
-        cacheRoot: URL?
+        client: any APIProtocol, cache: any CacheStore, submissionAttachments: any SubmissionAttachmentStore,
+        credential: DeviceCredential, deploymentURL: URL?, cacheRoot: URL?
     ) -> SyncCoordinator {
         SyncCoordinator(
             client: client,
@@ -330,7 +336,8 @@ public final class AppSession {
             promptHistory: TaskPromptHistory(
                 deploymentID: deploymentURL.map { deploymentKey(for: $0) } ?? "mock",
                 deviceID: credential.deviceID,
-                directory: deploymentURL.flatMap { url in cacheRoot.map { cacheDirectory(for: url, in: $0) } })
+                directory: deploymentURL.flatMap { url in cacheRoot.map { cacheDirectory(for: url, in: $0) } }),
+            submissionAttachments: submissionAttachments
         )
     }
 
@@ -648,13 +655,15 @@ public final class AppSession {
         persistServerURL: @escaping (URL) -> Void = AppSession.persistServerURLToDefaults
     ) -> AppSession {
         let credentials = credentialStore(serverURL)
+        let directory = cacheRoot.map { cacheDirectory(for: serverURL, in: $0) }
         return AppSession(
             client: APIClientFactory.live(serverURL: serverURL) {
                 (try? credentials.load())?.token
             },
             credentials: credentials,
-            cache: cacheRoot.map { DiskCacheStore(directory: cacheDirectory(for: serverURL, in: $0)) }
-                ?? InMemoryCacheStore(),
+            cache: directory.map { DiskCacheStore(directory: $0) } ?? InMemoryCacheStore(),
+            submissionAttachments: directory.map { DiskSubmissionAttachmentStore(directory: $0) }
+                ?? InMemorySubmissionAttachmentStore(),
             pairingCode: pairingCode,
             deploymentURL: serverURL,
             localDaemonURL: localDaemonURL,
