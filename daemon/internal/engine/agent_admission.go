@@ -112,6 +112,32 @@ func ResolveRole(
 	return agent, nil
 }
 
+// ResolveAgent resolves one agent by name, with no role line in view: the
+// agent's fragments, enrollment, and enabled identity join, and the
+// enrollment holds an unmarked store generation, read in one transaction.
+// It is read-only and admits nothing; preflight uses it to find the volume
+// an agent the lineup does not name would mount, such as a second writer
+// subscription's (#2653). Admission still runs every step for a launch.
+func ResolveAgent(
+	ctx context.Context, st *store.Store, tree agenttree.Tree, name string,
+) (RoleAgent, error) {
+	var agent RoleAgent
+	err := st.Read(ctx, func(tx *store.ReadTx) error {
+		var err error
+		if agent, err = resolveAgent(ctx, tx, tree, name); err != nil {
+			return err
+		}
+		if err := agent.readGeneration(ctx, tx); err != nil {
+			return err
+		}
+		return agent.requireUnmarked(ctx, tx)
+	})
+	if err != nil {
+		return RoleAgent{}, fmt.Errorf("agent %s: %w", name, errors.Join(ErrAgentNotAdmissible, err))
+	}
+	return agent, nil
+}
+
 // RoleHarnessClient is the harness client the role's lineup line runs. It
 // runs ResolveRole's steps except the generation's integrity mark, and
 // returns no agent, so nothing launches on it: it picks the review source the
