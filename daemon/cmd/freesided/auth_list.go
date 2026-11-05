@@ -47,6 +47,15 @@ type authListEnrollment struct {
 	Generation  *int       `json:"generation"`
 	TokenExpiry *time.Time `json:"token_expiry"`
 	RecordedAt  *time.Time `json:"recorded_at"`
+	// ModelCatalog is what the enrollment's harness last reported it can
+	// run; null until a discovery succeeds.
+	ModelCatalog *authListModelCatalog `json:"model_catalog"`
+}
+
+type authListModelCatalog struct {
+	HarnessBuild string                   `json:"harness_build"`
+	ObservedAt   time.Time                `json:"observed_at"`
+	Models       []domain.DiscoveredModel `json:"models"`
 }
 
 // runAuthListCommand prints every identity with its enrollments. It reads
@@ -121,6 +130,15 @@ func readAuthList(ctx context.Context, tx *store.ReadTx) (authListOutput, error)
 				entry.Generation = &generation.Ordinal
 				entry.TokenExpiry = generation.TokenExpiry
 				entry.RecordedAt = &generation.RecordedAt
+			case !errors.Is(err, store.ErrNotFound):
+				return authListOutput{}, err
+			}
+			catalog, err := tx.GetDiscoveredModelCatalog(ctx, enrollment.ID)
+			switch {
+			case err == nil:
+				entry.ModelCatalog = &authListModelCatalog{
+					HarnessBuild: catalog.HarnessBuild, ObservedAt: catalog.ObservedAt, Models: catalog.Models,
+				}
 			case !errors.Is(err, store.ErrNotFound):
 				return authListOutput{}, err
 			}
