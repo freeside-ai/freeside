@@ -35,6 +35,28 @@
 // access, so it is for tests and bring-up, never a silent substitute
 // where ward isolation is required.
 //
+// Layout, by concept:
+//
+//   - errors.go       fail-closed sentinels for recipe, checkout, and git failures
+//   - options.go      Options and their defaults: recipe path, caps, timeouts
+//   - recipe.go       the recipe format and its capture modes (§5.15)
+//   - source.go       base and evaluated-commit bindings, trusted recipe
+//     loading (§5.8), and recipe divergence
+//   - recipe_at_commit.go CommitReader and the bounded recipe read at one
+//     exact commit
+//   - gitrunner.go    git plumbing over internal/gitrun with verifier-only pins
+//   - materialize.go  the head binding and the fresh, proven workspace
+//     materialization
+//   - exact.go        MaterializeExact, a commit tree as exact object bytes
+//   - room.go         the Room seam and a step's observed result
+//   - procroom.go     ProcRoom, the weaker process-level room for tests and
+//     bring-up
+//   - finding.go      FindingKind and the risk-flag findings
+//   - flag.go         the verification-control path class and its flagging
+//     (§5.6)
+//   - evidence.go     the verifier-authored report and transcript artifacts
+//   - verify.go       the Verify orchestrator and Result
+//
 // Lane: gauntlet. See docs/plan.md §5.6 (workspace handoff, import, and
 // clean verification), §5.8 (trusted config), and §5.15 (evidence and
 // images); decision note devlog/2026-07-17-0035-clean-verifier.md.
