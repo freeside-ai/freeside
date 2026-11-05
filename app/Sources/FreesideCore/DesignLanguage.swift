@@ -456,6 +456,9 @@ enum FreesideFont {
     private static let ladder = FreesideLadder.current
     static let keywordSize = ladder.keyword
     static let chipSize = ladder.chip
+    /// The statement face's ladder size, for an AppKit text view that
+    /// draws in it; macOS has no Dynamic Type to scale it by.
+    static let statementSize = ladder.statement
     /// 0.08em at the keyword's size.
     static let keywordTracking: CGFloat = 0.08 * keywordSize
     /// 0.04em at the chip's size.
