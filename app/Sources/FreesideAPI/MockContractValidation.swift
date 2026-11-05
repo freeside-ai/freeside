@@ -1580,7 +1580,11 @@ enum MockContractValidation {
     /// domain.ClaimText.ComputeDigest, and the single derivation path the
     /// fixtures and the validation mirror share.
     static func sha256Digest(of content: String) -> String {
-        "sha256:" + SHA256.hash(data: Data(content.utf8)).map { String(format: "%02x", $0) }.joined()
+        sha256Digest(of: Data(content.utf8))
+    }
+
+    static func sha256Digest(of bytes: Data) -> String {
+        "sha256:" + SHA256.hash(data: bytes).map { String(format: "%02x", $0) }.joined()
     }
 
     /// Mirrors CapabilityManifest.ComputeDigest's versioned Go struct

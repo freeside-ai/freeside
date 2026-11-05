@@ -2036,6 +2036,151 @@ extension MockServerTests {
         #expect(line.predecessor_id?.value1 == task.task_lines.first?.id)
     }
 
+    /// Uploads bytes whose digest the caller states (the test target has no
+    /// hashing dependency); the mock refuses a digest the bytes don't match.
+    private func upload(_ client: Client, _ bytes: Data, digest: String) async throws -> String {
+        let response = try await client.uploadAttachment(path: .init(digest: digest), body: .binary(HTTPBody(bytes)))
+        switch response {
+        case .created, .ok: return digest
+        default:
+            Issue.record("upload refused: \(response)")
+            return digest
+        }
+    }
+
+    private func submitTaskCommand(
+        _ commandID: String, attachments: [Components.Schemas.TaskAttachmentInput]?
+    ) -> Components.Schemas.ClientCommand {
+        .init(
+            command_id: commandID, device_id: "device-1",
+            payload: .submit_task(
+                .init(kind: .submit_task, project_id: "project-1", source: "Add retries.", attachments: attachments)))
+    }
+
+    @Test func submitTaskRecordsItsAttachmentsInOrder() async throws {
+        let client = APIClientFactory.mock(server: MockServer())
+        let png = Data([0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A]) + Data("pixels".utf8)
+        let notes = Data("notes".utf8)
+        let pngDigest = try await upload(
+            client, png, digest: "sha256:4624836652c450f26fc11e7e372a59af7963ea7613e59ce92186c60c22301c97")
+        let notesDigest = try await upload(
+            client, notes, digest: "sha256:ab5aa97074c454a0632057e704220d9a6678fbf773a0a5806fc09b8173b07309")
+        // A re-upload converges on the stored bytes.
+        guard
+            case .ok = try await client.uploadAttachment(
+                path: .init(digest: notesDigest), body: .binary(HTTPBody(notes)))
+        else {
+            Issue.record("expected a converged re-upload")
+            return
+        }
+        let attachments: [Components.Schemas.TaskAttachmentInput] = [
+            .init(digest: notesDigest, name: "docs/notes.md", media_type: "text/markdown"),
+            .init(digest: pngDigest, name: "screenshot.png", media_type: "text/plain"),
+        ]
+        let command = submitTaskCommand("cmd-attach", attachments: attachments)
+        let result = try await client.submitCommand(body: .json(command)).ok.body.json
+        let taskID = result.record.asSubmitTask.task_id
+        let bootstrap = try await client.getSyncBootstrap().ok.body.json
+        let task = try #require(bootstrap.tasks.first { $0.task.id == taskID }?.task)
+        // Submitted order, the size of the stored bytes, and the media type
+        // the bytes' signature decides, whatever the client claimed.
+        #expect(
+            task.attachments == [
+                .init(
+                    digest: notesDigest, name: "docs/notes.md", media_type: .application_sol_octet_hyphen_stream,
+                    claimed_media_type: "text/markdown", size_bytes: Int64(notes.count)),
+                .init(
+                    digest: pngDigest, name: "screenshot.png", media_type: .image_sol_png,
+                    claimed_media_type: "text/plain", size_bytes: Int64(png.count)),
+            ])
+        // An exact retry replays; a reordered list under the same id is refused.
+        let replay = try await client.submitCommand(body: .json(command)).ok.body.json
+        #expect(replay.record.asSubmitTask.task_id == taskID)
+        let reordered = submitTaskCommand("cmd-attach", attachments: attachments.reversed())
+        #expect(try await refusalStatus(client, reordered) == 400)
+        // A task submitted without attachments shows none.
+        let plain = try await client.submitCommand(body: .json(submitTaskCommand("cmd-plain", attachments: nil)))
+            .ok.body.json.record.asSubmitTask.task_id
+        let refreshed = try await client.getSyncBootstrap().ok.body.json
+        #expect(refreshed.tasks.first { $0.task.id == plain }?.task.attachments == [])
+    }
+
+    @Test func submitTaskRefusesMalformedAttachments() async throws {
+        let client = APIClientFactory.mock(server: MockServer())
+        let stored = try await upload(
+            client, Data("stored".utf8),
+            digest: "sha256:87b04e58961f9a99d853d4046a0b5b793e7c3e4bbd21f5aca8fb17c20cdb1d8b")
+        let bigImage = try await upload(
+            client, Data([0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A]) + Data(count: 10 << 20),
+            digest: "sha256:164d472e443d1ec943a4a2a972fb5c068f3d4f111364a3435735a449aecde518")
+        func entry(
+            _ name: String, digest: String? = nil, claim: String = "text/plain"
+        )
+            -> Components.Schemas.TaskAttachmentInput
+        {
+            .init(digest: digest ?? stored, name: name, media_type: claim)
+        }
+        let unstored = "sha256:" + String(repeating: "0", count: 64)
+        let cases: [String: [Components.Schemas.TaskAttachmentInput]] = [
+            "empty list": [],
+            "unstored digest": [entry("a.txt", digest: unstored)],
+            "malformed digest": [entry("a.txt", digest: "sha256:ABC")],
+            "traversal": [entry("a/../../etc/passwd")],
+            "absolute": [entry("/etc/passwd")],
+            "empty segment": [entry("a//b")],
+            "control character": [entry("a\u{0}b")],
+            "long segment": [entry(String(repeating: "a", count: 256))],
+            "long name": [entry(String(repeating: "a/", count: 512) + "a")],
+            // A combining mark after "/" joins it in one Character; the
+            // separator still counts, as it does in the daemon.
+            "absolute behind a mark": [entry("/\u{0301}x")],
+            "dot-dot behind a mark": [entry("../\u{0301}")],
+            "duplicate name": [entry("a.txt"), entry("a.txt")],
+            "name is a directory": [entry("docs"), entry("docs/a.txt")],
+            "claim with parameters": [entry("a.txt", claim: "text/plain; charset=utf-8")],
+            "uppercase claim": [entry("a.txt", claim: "Text/Plain")],
+            "image over its limit": [entry("big.png", digest: bigImage, claim: "image/png")],
+            "too many": (0...1000).map { entry("f\($0).txt") },
+        ]
+        for (name, list) in cases {
+            let status = try await refusalStatus(client, submitTaskCommand("cmd-\(name)", attachments: list))
+            #expect(status == 400, "\(name)")
+        }
+        let bootstrap = try await client.getSyncBootstrap().ok.body.json
+        #expect(bootstrap.tasks.allSatisfy { $0.task.attachments.isEmpty })
+    }
+
+    @Test func submitTaskComparesAttachmentNamesByBytes() async throws {
+        let client = APIClientFactory.mock(server: MockServer())
+        let notes = try await upload(
+            client, Data("notes".utf8),
+            digest: "sha256:ab5aa97074c454a0632057e704220d9a6678fbf773a0a5806fc09b8173b07309")
+        // The composed and decomposed forms of one name are distinct bytes, so
+        // the daemon takes them as two names; Swift String equality would not.
+        let both: [Components.Schemas.TaskAttachmentInput] = [
+            .init(digest: notes, name: "\u{E9}.txt", media_type: "text/plain"),
+            .init(digest: notes, name: "e\u{0301}.txt", media_type: "text/plain"),
+        ]
+        let command = submitTaskCommand("cmd-forms", attachments: both)
+        _ = try await client.submitCommand(body: .json(command)).ok.body.json
+        // Swapping the two forms changes the request's bytes, so the replay
+        // conflicts as it does in the daemon.
+        #expect(try await refusalStatus(client, submitTaskCommand("cmd-forms", attachments: both.reversed())) == 400)
+        #expect(try await client.submitCommand(body: .json(command)).ok.body.json.record.asSubmitTask.task_id != "")
+    }
+
+    @Test func uploadAttachmentRefusesABodyThatDoesNotHashToItsDigest() async throws {
+        let client = APIClientFactory.mock(server: MockServer())
+        let digest = "sha256:" + String(repeating: "0", count: 64)
+        guard
+            case .unprocessableContent = try await client.uploadAttachment(
+                path: .init(digest: digest), body: .binary(HTTPBody(Data("other".utf8))))
+        else {
+            Issue.record("expected 422 for a mismatched body")
+            return
+        }
+    }
+
     @Test func taskTimelineRecordsEachLineVersionTheMockWrites() async throws {
         let client = APIClientFactory.mock(server: MockServer())
         let lines: [Components.Schemas.TaskLineInput] = [

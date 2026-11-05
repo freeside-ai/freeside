@@ -160,9 +160,10 @@ public actor MockServer {
     private let pairingDeviceToken: String?
     /// The digest-addressed artifact bytes `getAttachment` serves
     /// (plan §4: cards render image attachments directly from the
-    /// artifact store by digest). Content is immutable per digest, so
-    /// the table only seeds; nothing rewrites an entry.
-    private let attachmentsByDigest: [String: Data]
+    /// artifact store by digest). Content is immutable per digest: an
+    /// upload adds a digest that is absent and converges on one that is
+    /// present, and nothing rewrites an entry.
+    private var attachmentsByDigest: [String: Data]
     /// Delivery rows the receipt surface serves and advances, keyed by
     /// the attempt's full identity as the daemon's composite key is.
     /// Rows only seed through init; the one mutation is the opened
@@ -367,6 +368,21 @@ public actor MockServer {
 
     func attachmentBytes(digest: String) -> Data? {
         attachmentsByDigest[digest]
+    }
+
+    /// The outcome of a digest-addressed upload (`uploadAttachment`).
+    enum AttachmentUpload: Equatable {
+        case created, converged, digestMismatch
+    }
+
+    /// Stores uploaded bytes under their digest, as the daemon's blob store
+    /// does: the body must hash to the path digest, and a re-upload of a
+    /// stored digest converges without rewriting it.
+    func storeAttachment(digest: String, bytes: Data) -> AttachmentUpload {
+        guard MockContractValidation.sha256Digest(of: bytes) == digest else { return .digestMismatch }
+        guard attachmentsByDigest[digest] == nil else { return .converged }
+        attachmentsByDigest[digest] = bytes
+        return .created
     }
 
     public func setBeforeRespond(_ hook: BeforeRespond?) {
@@ -2434,6 +2450,10 @@ public actor MockServer {
         // listing the same lines in another order is the same request.
         var payload = payload
         payload.task_lines = try Self.canonicalTaskLines(payload.task_lines, commandID: command.command_id)
+        // Attachments are resolved before the replay check too, as the daemon
+        // does (signet ResolveTaskAttachments); their order is part of the
+        // request, so the stored request below compares it.
+        let attachments = try resolveTaskAttachments(payload.attachments, commandID: command.command_id)
         var request = command
         request.payload = .submit_task(payload)
         let digest = MockContractValidation.sha256Digest(of: payload.source)
@@ -2445,7 +2465,9 @@ public actor MockServer {
                 record.device_id == command.device_id,
                 record.project_id == payload.project_id,
                 record.source_digest.value1 == digest,
-                submissionRequestsByID[command.command_id] == request
+                submissionRequestsByID[command.command_id] == request,
+                Self.attachmentNameBytes(submissionRequestsByID[command.command_id])
+                    == Self.attachmentNameBytes(request)
             else {
                 throw ImmutableConflictError(commandID: command.command_id)
             }
@@ -2461,7 +2483,7 @@ public actor MockServer {
         materializeSubmittedTask(
             taskID: taskID, runID: runID, campaignID: "campaign-submitted-\(suffix)",
             projectID: payload.project_id, name: name, sourceDigest: digest,
-            lines: payload.task_lines ?? [], commandID: command.command_id)
+            lines: payload.task_lines ?? [], attachments: attachments, commandID: command.command_id)
         revision += 1
         let record = Components.Schemas.TaskSubmissionRecord(
             kind: .submit_task, command_id: command.command_id, origin: .device,
@@ -2492,6 +2514,63 @@ public actor MockServer {
             throw malformed("task_lines names an invalid agent")
         }
         return Components.Schemas.TaskLineRole.allCases.compactMap { role in lines.first { $0.role == role } }
+    }
+
+    /// The daemon's attachment check for a submission (signet
+    /// ResolveTaskAttachments and domain ValidateTaskAttachments): absent is
+    /// none; a present list is non-empty, every name and claim is well formed,
+    /// every digest is stored, and the sizes, count, and names fit the task's
+    /// limits. Each attachment takes its media type from its bytes' leading
+    /// signature and its size from the stored bytes, in submitted order.
+    private func resolveTaskAttachments(
+        _ inputs: [Components.Schemas.TaskAttachmentInput]?, commandID: String
+    ) throws -> [Components.Schemas.TaskAttachment] {
+        guard let inputs else { return [] }
+        func malformed(_ reason: String) -> MalformedCommandError {
+            MalformedCommandError(commandID: commandID, reason: reason)
+        }
+        guard !inputs.isEmpty else { throw malformed("attachments must name at least one file when present") }
+        guard inputs.count <= TaskAttachmentLimits.maxCount else { throw malformed("too many attachments") }
+        for (index, input) in inputs.enumerated() {
+            guard TaskAttachmentLimits.validDigest(input.digest) else {
+                throw malformed("attachment \(index) has a malformed digest")
+            }
+            guard TaskAttachmentLimits.validName(input.name) else {
+                throw malformed("attachment \(index) has an invalid name")
+            }
+            guard TaskAttachmentLimits.validClaim(input.media_type) else {
+                throw malformed("attachment \(index) has a malformed claimed media type")
+            }
+        }
+        var total = 0
+        let resolved = try inputs.enumerated().map { index, input in
+            guard let bytes = attachmentsByDigest[input.digest] else {
+                throw malformed("attachment \(index) is not stored")
+            }
+            let mediaType = TaskAttachmentLimits.sniff(bytes)
+            let limit =
+                mediaType == .application_sol_octet_hyphen_stream
+                ? TaskAttachmentLimits.maxFileBytes : TaskAttachmentLimits.maxImageBytes
+            guard bytes.count <= limit else { throw malformed("attachment \(index) exceeds its size limit") }
+            total += bytes.count
+            return Components.Schemas.TaskAttachment(
+                digest: input.digest, name: input.name, media_type: mediaType,
+                claimed_media_type: input.media_type, size_bytes: Int64(bytes.count))
+        }
+        guard total <= TaskAttachmentLimits.maxTotalBytes else { throw malformed("attachments exceed the task budget") }
+        guard !TaskAttachmentLimits.namesConflict(resolved.map(\.name)) else {
+            throw malformed("attachment names repeat, or one is a directory of another")
+        }
+        return resolved
+    }
+
+    /// The attachment names of a stored submit_task request as UTF-8 bytes.
+    /// The request comparison above uses String equality, which is canonical
+    /// equivalence; the daemon's request digest tells an NFC name from its
+    /// NFD form, so a replay renamed that way conflicts there and here.
+    private static func attachmentNameBytes(_ command: Components.Schemas.ClientCommand?) -> [[UInt8]]? {
+        guard case .submit_task(let payload)? = command?.payload else { return nil }
+        return payload.attachments?.map { Array($0.name.utf8) }
     }
 
     /// submittedTaskName mirrors the daemon: a trimmed operator-supplied name
@@ -2527,7 +2606,8 @@ public actor MockServer {
     private func materializeSubmittedTask(
         taskID: String, runID: String, campaignID: String,
         projectID: String, name: Components.Schemas.DisplayName, sourceDigest: String,
-        lines: [Components.Schemas.TaskLineInput], commandID: String
+        lines: [Components.Schemas.TaskLineInput], attachments: [Components.Schemas.TaskAttachment],
+        commandID: String
     ) {
         let displayNames = Components.Schemas.DisplayNames(
             project: .init(text: projectID, source: .identifier), task: name)
@@ -2587,7 +2667,7 @@ public actor MockServer {
             current_position: .init(value1: .init(run_id: runID)),
             campaign_ids: [campaignID], run_ids: [runID], wip: true,
             lifecycle_facts: [.init(kind: .started, run_id: runID, recorded_at: currentTime)],
-            task_lines: taskLines, attachments: [])
+            task_lines: taskLines, attachments: attachments)
         tasksByID[taskID] = .init(as_of_revision: revision, entity_version: 1, task: task)
     }
 
