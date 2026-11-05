@@ -3829,8 +3829,9 @@ Additional rules:
   resolves uncertainty about acceptance; it never restarts execution. The composer offers the
   projects the client already knows from synced entities. A project's first
   task comes from `freesided submit` on the host until the configured-project
-  list lands in `/sync/bootstrap` (#1332). Attachments on submission wait
-  until the composer can upload them. (#1328; the composer is #1330.)
+  list lands in `/sync/bootstrap` (#1332). A submission may carry
+  attachments the client uploaded first, keyed by digest (#2587); the
+  composer's upload is #2590.
 - **The daemon may submit a maintenance task.** When project-image upkeep
   (Section [5.7](#57-the-ward-runners-handoff-gate-and-operating-modes)) meets a refusal that needs a repository repair, the daemon
   submits a task through the same acceptance primitives as `freesided submit`
