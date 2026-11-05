@@ -657,3 +657,18 @@ own additions to that format.
   owner picks which tracker to unpin. The plan-wave skill's artifact check
   catches an interrupted wave-planning run: it stops for resume-or-repair
   direction rather than creating a second wave tracker.
+
+## Repository Skills
+
+The repository's `exit-run`, `plan-wave`, and `review-wave` skills are
+available to both Claude Code and Codex. Edit their shared source in
+`.claude/skills/`; `.agents/skills/` contains relative symlinks to those same
+folders, including their supporting references. When adding a skill, add its
+matching link under `.agents/skills/` too.
+
+In Codex, invoke them as `$exit-run`, `$plan-wave`, or `$review-wave`, followed
+by the inputs the skill needs. Claude Code uses `/exit-run`, `/plan-wave`, and
+`/review-wave`. For example, `$plan-wave 8` and `/plan-wave 8` select the same
+workflow. Codex supports these repository-local symlinks through its
+[skill discovery](https://learn.chatgpt.com/docs/build-skills#where-codex-loads-local-skills).
+If a skill does not appear after updating the checkout, restart Codex.
