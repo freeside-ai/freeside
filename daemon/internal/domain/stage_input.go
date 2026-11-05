@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"slices"
 
 	"github.com/freeside-ai/freeside/daemon/internal/contentaddr"
 )
@@ -85,6 +86,10 @@ func (s VendorInstructionSnapshot) clone() VendorInstructionSnapshot {
 // ID is computed by NewStageInputSnapshot and rechecked by Validate. The
 // content bytes live in the artifact store; this record is the admitted map
 // from roles to content addresses that restart recovery replays.
+//
+// Attachments are optional. An empty list is absent from the record and from
+// every canonical encoding, so snapshots admitted before attachments existed
+// keep their bytes and IDs, and nil is the one canonical empty form.
 type StageInputSnapshot struct {
 	ID                   Digest                     `json:"id"`
 	InputDigest          Digest                     `json:"input_digest"`
@@ -95,6 +100,7 @@ type StageInputSnapshot struct {
 	ConversationDigest   *Digest                    `json:"conversation_digest,omitempty"`
 	PriorArtifactDigests []Digest                   `json:"prior_artifact_digests"`
 	ImageInputDigests    []Digest                   `json:"image_input_digests"`
+	Attachments          []StageInputAttachment     `json:"attachments,omitempty"`
 }
 
 // StageInputSnapshotInput carries the caller-supplied fields. It has no ID:
@@ -108,6 +114,48 @@ type StageInputSnapshotInput struct {
 	ConversationDigest   *Digest
 	PriorArtifactDigests []Digest
 	ImageInputDigests    []Digest
+	Attachments          []StageInputAttachment
+}
+
+// StageInputAttachment is one named file a stage carries to its agent: the
+// content address, the relative-path name the agent is shown, the daemon's
+// media type, and the byte size. It has no claimed media type: the client's
+// display hint stays on the task and never reaches an agent. The whole entry
+// enters the snapshot's identity, because the name and type are part of what
+// the agent receives.
+type StageInputAttachment struct {
+	Digest    Digest                  `json:"digest"`
+	Name      TaskAttachmentName      `json:"name"`
+	MediaType TaskAttachmentMediaType `json:"media_type"`
+	SizeBytes int64                   `json:"size_bytes"`
+}
+
+// Validate applies the task-attachment rules to one entry: a sha256 digest, a
+// valid name, a media type from the closed set, and a size within the
+// per-image or per-file limit the media type selects.
+func (a StageInputAttachment) Validate() error {
+	if !contentaddr.Valid(string(a.Digest)) {
+		return fmt.Errorf("digest: %w", ErrInvalidTaskAttachmentDigest)
+	}
+	if err := a.Name.Validate(); err != nil {
+		return err
+	}
+	if !a.MediaType.valid() {
+		return fmt.Errorf("media type: %w", ErrInvalidTaskAttachmentMediaType)
+	}
+	return validateTaskAttachmentSize(a.MediaType, a.SizeBytes)
+}
+
+// validateStageInputAttachments holds a snapshot's list to the same count,
+// budget, and name-coexistence rules ValidateTaskAttachments holds a task's.
+func validateStageInputAttachments(list []StageInputAttachment) error {
+	err := validateAttachmentList(len(list), func(i int) (TaskAttachmentName, int64, error) {
+		return list[i].Name, list[i].SizeBytes, list[i].Validate()
+	})
+	if err != nil {
+		return fmt.Errorf("stage input snapshot attachments: %w", err)
+	}
+	return nil
 }
 
 type canonicalStageInputSnapshot struct {
@@ -119,6 +167,9 @@ type canonicalStageInputSnapshot struct {
 	ConversationDigest   *Digest  `json:"conversation_digest,omitempty"`
 	PriorArtifactDigests []Digest `json:"prior_artifact_digests"`
 	ImageInputDigests    []Digest `json:"image_input_digests"`
+	// Attachments is omitted when empty so pre-attachment snapshots keep
+	// their IDs; see StageInputSnapshot.
+	Attachments []StageInputAttachment `json:"attachments,omitempty"`
 }
 
 type canonicalVendorStageInputSnapshot struct {
@@ -131,6 +182,7 @@ type canonicalVendorStageInputSnapshot struct {
 	ConversationDigest   *Digest                   `json:"conversation_digest,omitempty"`
 	PriorArtifactDigests []Digest                  `json:"prior_artifact_digests"`
 	ImageInputDigests    []Digest                  `json:"image_input_digests"`
+	Attachments          []StageInputAttachment    `json:"attachments,omitempty"`
 }
 
 type canonicalBoundVendorStageInputSnapshot struct {
@@ -143,11 +195,13 @@ type canonicalBoundVendorStageInputSnapshot struct {
 	ConversationDigest   *Digest                   `json:"conversation_digest,omitempty"`
 	PriorArtifactDigests []Digest                  `json:"prior_artifact_digests"`
 	ImageInputDigests    []Digest                  `json:"image_input_digests"`
+	Attachments          []StageInputAttachment    `json:"attachments,omitempty"`
 }
 
 // NewStageInputSnapshot builds the canonical, detached snapshot admitted for a
-// stage. Empty collections become non-nil arrays so one semantic input set has
-// one serialized form and therefore one identity.
+// stage. Empty digest collections become non-nil arrays and an empty
+// attachment list becomes nil, so one semantic input set has one serialized
+// form and therefore one identity.
 func NewStageInputSnapshot(in StageInputSnapshotInput) (StageInputSnapshot, error) {
 	s := StageInputSnapshot{
 		InputDigest:          in.InputDigest,
@@ -158,6 +212,9 @@ func NewStageInputSnapshot(in StageInputSnapshotInput) (StageInputSnapshot, erro
 		ConversationDigest:   clonePtr(in.ConversationDigest),
 		PriorArtifactDigests: append([]Digest{}, in.PriorArtifactDigests...),
 		ImageInputDigests:    append([]Digest{}, in.ImageInputDigests...),
+	}
+	if len(in.Attachments) > 0 {
+		s.Attachments = slices.Clone(in.Attachments)
 	}
 	id, err := s.ComputeID()
 	if err != nil {
@@ -185,6 +242,7 @@ func (s StageInputSnapshot) ComputeID() (Digest, error) {
 			ConversationDigest:   clonePtr(s.ConversationDigest),
 			PriorArtifactDigests: s.PriorArtifactDigests,
 			ImageInputDigests:    s.ImageInputDigests,
+			Attachments:          s.Attachments,
 		}
 	} else if s.VendorInstructions.Delivery == "" {
 		canonical = canonicalVendorStageInputSnapshot{
@@ -197,6 +255,7 @@ func (s StageInputSnapshot) ComputeID() (Digest, error) {
 			ConversationDigest:   clonePtr(s.ConversationDigest),
 			PriorArtifactDigests: s.PriorArtifactDigests,
 			ImageInputDigests:    s.ImageInputDigests,
+			Attachments:          s.Attachments,
 		}
 	} else {
 		canonical = canonicalBoundVendorStageInputSnapshot{
@@ -209,6 +268,7 @@ func (s StageInputSnapshot) ComputeID() (Digest, error) {
 			ConversationDigest:   clonePtr(s.ConversationDigest),
 			PriorArtifactDigests: s.PriorArtifactDigests,
 			ImageInputDigests:    s.ImageInputDigests,
+			Attachments:          s.Attachments,
 		}
 	}
 	body, err := json.Marshal(canonical)
@@ -257,6 +317,9 @@ func (s StageInputSnapshot) Validate() error {
 	if err := validateStageInputDigests("image_input_digests", s.ImageInputDigests); err != nil {
 		return err
 	}
+	if err := validateStageInputAttachments(s.Attachments); err != nil {
+		return err
+	}
 	if s.ID == "" {
 		return fmt.Errorf("stage input snapshot id: %w", ErrEmptyID)
 	}
@@ -289,6 +352,7 @@ func (s StageInputSnapshot) clone() StageInputSnapshot {
 	s.ConversationDigest = clonePtr(s.ConversationDigest)
 	s.PriorArtifactDigests = append([]Digest{}, s.PriorArtifactDigests...)
 	s.ImageInputDigests = append([]Digest{}, s.ImageInputDigests...)
+	s.Attachments = slices.Clone(s.Attachments)
 	return s
 }
 
