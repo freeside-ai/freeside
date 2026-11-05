@@ -206,8 +206,8 @@ func TestSubmitFingerprintWithoutLinesIsUnchanged(t *testing.T) {
 	}
 	if journal, err := os.ReadFile(submissionJournalPath(cfg.DBPath, cfg.SubmissionID)); err != nil {
 		t.Fatal(err)
-	} else if strings.Contains(string(journal), "TaskLines") {
-		t.Fatalf("line-less journal names the task-lines field: %s", journal)
+	} else if strings.Contains(string(journal), "TaskLines") || strings.Contains(string(journal), "Attachments") {
+		t.Fatalf("line-less journal names the task-lines or attachments field: %s", journal)
 	}
 }
 

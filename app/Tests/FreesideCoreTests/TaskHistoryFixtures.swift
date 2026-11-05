@@ -253,7 +253,7 @@ enum TaskHistoryFixtures {
                             recorded_at: creation.recorded_at.addingTimeInterval(5 * 60))
                     ]
                 } ?? [],
-                task_lines: []))
+                task_lines: [], attachments: []))
     }
 
     @MainActor

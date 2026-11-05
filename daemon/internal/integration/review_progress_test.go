@@ -101,6 +101,7 @@ func TestProductionReviewUpgradePreservesRequestTime(t *testing.T) {
 				"ALTER TABLE attention_items DROP COLUMN subject_task_id", "ALTER TABLE runs DROP COLUMN task_id",
 				"DROP TABLE task_lifecycle_facts",
 				"DROP TABLE task_submission_commands", "DROP TABLE manual_submissions",
+				"DROP TABLE task_attachments",
 				"DROP TABLE task_triages", "DROP TABLE task_lines",
 				"DROP TABLE task_runs", "DROP TABLE task_intake_keys", "DROP TABLE tasks",
 				"DROP TABLE review_requests", "DROP TABLE publication_authorings",

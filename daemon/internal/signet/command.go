@@ -65,6 +65,23 @@ type SubmitTaskPayload struct {
 	// keeps the request digest it had before the field existed and a
 	// recorded one still replays.
 	TaskLines []domain.TaskLineChoice `json:",omitempty"`
+	// Attachments are the files the submission carries, in submitted order:
+	// each names a digest the client uploaded first. Nil means none; a
+	// present, empty list is malformed. Order is part of the request, so a
+	// reordered list is a different submission. The tag omits the field when
+	// there are none, so a submission without attachments keeps the request
+	// digest it had before the field existed.
+	Attachments []TaskAttachmentInput `json:",omitempty"`
+}
+
+// TaskAttachmentInput mirrors the API contract's TaskAttachmentInput: an
+// uploaded digest, the relative-path name to bind it to, and the client's
+// claimed media type. The daemon determines the recorded media type and size
+// from the stored bytes (ResolveTaskAttachments).
+type TaskAttachmentInput struct {
+	Digest    domain.Digest             `json:"digest"`
+	Name      domain.TaskAttachmentName `json:"name"`
+	MediaType string                    `json:"media_type"`
 }
 
 // DecisionPayload mirrors the API contract's DecisionPayload: the decision and

@@ -2041,6 +2041,87 @@ components:
           pattern: '^[a-z0-9]([a-z0-9_-]*[a-z0-9])?$'
           description: The agent's name in the control-plane tree.
 
+    TaskAttachmentInput:
+      type: object
+      description: >
+        One file a submit_task command attaches: a digest the client uploaded
+        first through PUT /attachments/{digest}, the relative-path name to
+        bind it to, and the client's claimed media type. The daemon, not the
+        client, enforces every rule: the name is a relative path of
+        "/"-separated segments with no empty, ".", or ".." segment, no leading
+        "/", no control character, valid UTF-8, at most 1,024 bytes in all,
+        and each segment at most 255 bytes. The claim is a lowercase
+        type/subtype token with no parameters, at most 255 bytes; it is kept
+        for display and decides nothing.
+      additionalProperties: false
+      required: [digest, name, media_type]
+      properties:
+        digest:
+          type: string
+          pattern: '^sha256:[0-9a-f]{64}$'
+          description: The uploaded blob's digest; it must already be stored.
+        name:
+          type: string
+          minLength: 1
+          maxLength: 1024
+          description: >
+            The relative-path name, such as screenshot.png or
+            design_handoff/tokens/colors.json. Unique within the task, and no
+            name may be a directory of another (docs beside docs/a.md).
+        media_type:
+          type: string
+          minLength: 3
+          maxLength: 255
+          description: The client's claimed media type, such as image/png.
+
+    TaskAttachmentMediaType:
+      type: string
+      enum: [image/png, image/jpeg, image/gif, image/webp, application/octet-stream]
+      description: >
+        The daemon's determination of an attachment's type from its leading
+        bytes. The set is closed: a format with no reliable signature, SVG
+        among them, is application/octet-stream.
+
+    TaskAttachment:
+      type: object
+      description: >
+        One attachment recorded on a task, as its submission carried it.
+        Attachments are operator input, never evidence: they are not
+        artifacts and never enter an evidence_snapshot (plan §5.15). Size
+        limits: an image (an image media_type) at most 10 MiB, any other
+        file at most 32 MiB, and per task at most 100 MiB in total and
+        1,000 attachments.
+      additionalProperties: false
+      required: [digest, name, media_type, claimed_media_type, size_bytes]
+      properties:
+        digest:
+          type: string
+          pattern: '^sha256:[0-9a-f]{64}$'
+          description: The blob's digest, fetchable at GET /attachments/{digest}.
+        name:
+          type: string
+          minLength: 1
+          maxLength: 1024
+          description: The relative-path name the submission bound it to.
+        media_type:
+          $ref: "#/components/schemas/TaskAttachmentMediaType"
+        claimed_media_type:
+          type: string
+          minLength: 3
+          maxLength: 255
+          description: The client's claimed media type, a display hint only.
+        size_bytes:
+          type: integer
+          format: int64
+          minimum: 0
+          description: The stored blob's size in bytes.
+      example:
+        digest: "sha256:2222222222222222222222222222222222222222222222222222222222222222"
+        name: "design_handoff/screens/home.png"
+        media_type: "image/png"
+        claimed_media_type: "image/png"
+        size_bytes: 48213
+
     TaskLineSource:
       type: string
       description: >
@@ -2340,7 +2421,7 @@ components:
       additionalProperties: false
       required: [id, project_id, display_names, source, created_at, last_activity_at,
                  lifecycle, current_position, campaign_ids, run_ids, wip, lifecycle_facts, cancellation,
-                 task_lines]
+                 task_lines, attachments]
       properties:
         id:
           type: string
@@ -2417,6 +2498,13 @@ components:
             takes its agent from the lineup and is absent.
           items:
             $ref: "#/components/schemas/TaskLine"
+        attachments:
+          type: array
+          description: >
+            The files the task's submission carried, in submitted order; an
+            empty array for a task with none.
+          items:
+            $ref: "#/components/schemas/TaskAttachment"
 
     TaskCancellationState:
       type: string
@@ -4681,9 +4769,10 @@ components:
         create distinct tasks, specification runs and campaigns even with
         identical inputs. Manual Retry reuses the saved exact command and
         returns its original result and revision. New records reject changed
-        device, project, source, submitted optional name or task lines under
-        the same ID; equivalent JSON formatting and a different order of the
-        same task lines are allowed. Historical records preserve their
+        device, project, source, submitted optional name, task lines, or
+        attachments under the same ID; equivalent JSON formatting and a
+        different order of the same task lines are allowed, but attachment
+        order is part of the submission, so a reordered list is rejected. Historical records preserve their
         original name-insensitive replay checks. Source content is
         provenance, never a duplicate-work key.
       required: [kind, project_id, source]
@@ -4726,11 +4815,33 @@ components:
             command creates the task. Admission does not read task lines yet:
             until it does, a line is recorded and the lineup still selects
             every agent.
+        attachments:
+          type: array
+          minItems: 1
+          maxItems: 1000
+          items:
+            $ref: "#/components/schemas/TaskAttachmentInput"
+          description: >
+            Optional files for the new task, in the order the operator gave
+            them; upload each first through PUT /attachments/{digest}. The
+            list is part of the command's identity: the same command_id with
+            an entry changed, added, removed, or reordered is rejected with
+            400, and a historical record without a request digest rejects a
+            retry that carries attachments. An absent field behaves as before
+            the field existed. An empty list, a digest that is not stored, a
+            name that breaks a rule or repeats, a malformed claim, or a breach
+            of any size or count limit (TaskAttachment) is rejected with 400
+            and nothing is written. The daemon records each attachment with
+            the media type it determines from the bytes and the stored size.
       example:
         kind: "submit_task"
         project_id: "project-1"
         source: "Add a health endpoint to the API."
         name: "Health endpoint"
+        attachments:
+          - digest: "sha256:2222222222222222222222222222222222222222222222222222222222222222"
+            name: "design_handoff/screens/home.png"
+            media_type: "image/png"
 
     CommandRecord:
       type: object

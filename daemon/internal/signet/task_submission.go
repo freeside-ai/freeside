@@ -40,6 +40,10 @@ type TaskSubmissionInput struct {
 	// TaskLines are validated and in canonical role order; the submitter
 	// records one line per entry on the task it creates.
 	TaskLines []domain.TaskLineChoice
+	// Attachments are resolved against the blob store and validated as a
+	// list (ResolveTaskAttachments), in submitted order; the submitter
+	// records them on the task it creates.
+	Attachments []domain.TaskAttachment
 }
 
 // TaskSubmissionResult identifies the created task, its specification run,
@@ -78,6 +82,16 @@ func (s *Service) submitTask(ctx context.Context, in ClientCommand) (CommandResu
 		return CommandResult{}, fmt.Errorf("submit command %q: %w: %w", in.CommandID, ErrInvalidSubmitTaskPayload, err)
 	}
 	p.TaskLines = lines
+	// Attachments are resolved before the transaction opens: the blob store
+	// sits outside SQLite, and a stored blob never changes or goes away, so
+	// what is stored now is stored when the rows commit.
+	if p.Attachments != nil && len(p.Attachments) == 0 {
+		return CommandResult{}, fmt.Errorf("submit command %q: %w: %w", in.CommandID, ErrInvalidSubmitTaskPayload, errEmptyAttachments)
+	}
+	attachments, err := ResolveTaskAttachments(s.blobs, p.Attachments)
+	if err != nil {
+		return CommandResult{}, fmt.Errorf("submit command %q: %w", in.CommandID, err)
+	}
 	source := []byte(p.Source)
 	digest := domain.Digest(contentaddr.Sum(source))
 	requestBytes, err := json.Marshal(struct {
@@ -105,9 +119,9 @@ func (s *Service) submitTask(ctx context.Context, in ClientCommand) (CommandResu
 		// device, project, source, optional name, and task lines must match
 		// this request.
 		// Historical rows lack the requested-name fingerprint and retain their
-		// original name-insensitive replay check. Such a row predates task lines,
-		// so a retry that carries any is a different request, not a replay that
-		// would return success and record none. This mirrors the decision path,
+		// original name-insensitive replay check. Such a row predates task lines
+		// and attachments, so a retry that carries either is a different
+		// request, not a replay that would return success and record none. This mirrors the decision path,
 		// where a changed body under an occupied command_id surfaces
 		// store.ErrImmutableConflict from PutCommand (service.go); the fast replay
 		// here returns before PutTaskSubmission would catch it, so the check lives
@@ -122,7 +136,7 @@ func (s *Service) submitTask(ctx context.Context, in ClientCommand) (CommandResu
 			if recorded.Origin != domain.TaskSubmissionOriginDevice || recorded.DeviceID == nil ||
 				*recorded.DeviceID != in.DeviceID || recorded.ProjectID != p.ProjectID ||
 				recorded.SourceDigest != digest || (original != "" && original != requestDigest) ||
-				(original == "" && len(p.TaskLines) != 0) {
+				(original == "" && (len(p.TaskLines) != 0 || len(p.Attachments) != 0)) {
 				return fmt.Errorf("submit command %q: %w", in.CommandID, store.ErrImmutableConflict)
 			}
 			record := recorded
@@ -139,7 +153,7 @@ func (s *Service) submitTask(ctx context.Context, in ClientCommand) (CommandResu
 		outcome, err := s.taskSubmitter.SubmitTask(ctx, tx, TaskSubmissionInput{
 			CommandID: in.CommandID, Origin: domain.TaskSubmissionOriginDevice, RequestDigest: requestDigest,
 			ProjectID: p.ProjectID, Source: source, SourceDigest: digest, OperatorName: p.Name,
-			TaskLines: p.TaskLines,
+			TaskLines: p.TaskLines, Attachments: attachments,
 		})
 		if err != nil {
 			return err
@@ -333,4 +347,76 @@ func canonicalTaskLines(lines []domain.TaskLineChoice) ([]domain.TaskLineChoice,
 		return nil, errEmptyTaskLines
 	}
 	return domain.CanonicalTaskLineChoices(lines)
+}
+
+// errEmptyAttachments rejects an attachments list that is present but empty:
+// the contract's minItems, which the decoder does not enforce.
+var errEmptyAttachments = errors.New("attachments must name at least one file when present")
+
+// ResolveTaskAttachments turns a submission's attachment references into the
+// list the task records: each digest's stored size and the media type the
+// daemon sniffs from its bytes, with the client's claim kept as a hint. Every
+// rule is checked before any row can be written. The cheap shape checks
+// (CheckTaskAttachmentInputs) run before the blob store is touched, then
+// each digest is described, then the whole list is held to the size limits
+// and the name-conflict rule. Nil in, nil out.
+//
+// A well-formed digest with nothing stored is ErrAttachmentNotStored; every
+// other refusal wraps ErrInvalidSubmitTaskPayload.
+// With no blob store composed it fails closed with ErrAttachmentsUnavailable.
+// A refusal reaches the client and names the entry by position; it quotes no
+// refused name, claim, or malformed digest.
+func ResolveTaskAttachments(blobs *BlobStore, inputs []TaskAttachmentInput) ([]domain.TaskAttachment, error) {
+	if inputs == nil {
+		return nil, nil
+	}
+	if err := CheckTaskAttachmentInputs(inputs); err != nil {
+		return nil, err
+	}
+	if blobs == nil {
+		return nil, ErrAttachmentsUnavailable
+	}
+	list := make([]domain.TaskAttachment, len(inputs))
+	for i, in := range inputs {
+		size, head, err := blobs.Describe(in.Digest)
+		if errors.Is(err, ErrBlobNotFound) {
+			return nil, fmt.Errorf("attachment %d digest %s: %w", i, in.Digest, ErrAttachmentNotStored)
+		}
+		if err != nil {
+			return nil, fmt.Errorf("attachment %d: %w", i, err)
+		}
+		list[i] = domain.TaskAttachment{
+			Digest: in.Digest, Name: in.Name, MediaType: domain.SniffTaskAttachmentMediaType(head),
+			ClaimedMediaType: in.MediaType, SizeBytes: size,
+		}
+	}
+	if err := domain.ValidateTaskAttachments(list); err != nil {
+		return nil, fmt.Errorf("%w: %w", ErrInvalidSubmitTaskPayload, err)
+	}
+	return list, nil
+}
+
+// CheckTaskAttachmentInputs applies the rules a reference list can meet
+// without its bytes: the count, and each entry's digest form, name, and
+// claim. Each refusal wraps ErrInvalidSubmitTaskPayload and names the entry
+// by position only.
+func CheckTaskAttachmentInputs(inputs []TaskAttachmentInput) error {
+	if len(inputs) > domain.MaxTaskAttachments {
+		return fmt.Errorf("%w: %d attachments, limit %d: %w",
+			ErrInvalidSubmitTaskPayload, len(inputs), domain.MaxTaskAttachments, domain.ErrTooManyTaskAttachments)
+	}
+	for i, in := range inputs {
+		// The digest's form is checked here, not left to the blob store,
+		// whose refusal would quote it.
+		if !contentaddr.Valid(string(in.Digest)) {
+			return fmt.Errorf("%w: attachment %d digest: %w", ErrInvalidSubmitTaskPayload, i, domain.ErrInvalidTaskAttachmentDigest)
+		}
+		if err := in.Name.Validate(); err != nil {
+			return fmt.Errorf("%w: attachment %d: %w", ErrInvalidSubmitTaskPayload, i, err)
+		}
+		if err := domain.ValidateTaskAttachmentClaim(in.MediaType); err != nil {
+			return fmt.Errorf("%w: attachment %d: %w", ErrInvalidSubmitTaskPayload, i, err)
+		}
+	}
+	return nil
 }

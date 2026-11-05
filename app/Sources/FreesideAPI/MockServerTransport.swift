@@ -533,6 +533,41 @@ public struct MockServerTransport: ClientTransport {
                 headerFields: [.contentType: "application/octet-stream"]
             )
             return (response, HTTPBody(bytes))
+        case "uploadAttachment":
+            // Digest-addressed upload, as the daemon's PUT /attachments:
+            // the body must hash to the path digest (422 otherwise), a first
+            // store is 201, and a re-upload converges with 200. The cap is
+            // the daemon's 32 MiB.
+            guard let digest = Self.lastPathComponent(request.path), TaskAttachmentLimits.validDigest(digest)
+            else {
+                return try Self.json(
+                    status: .badRequest,
+                    body: Components.Schemas._Error(message: "attachment digest is not sha256:<64 lowercase hex>"))
+            }
+            guard let body else {
+                return try Self.json(
+                    status: .badRequest,
+                    body: Components.Schemas._Error(message: "request body is required"))
+            }
+            let bytes: Data
+            do {
+                bytes = try await Data(collecting: body, upTo: TaskAttachmentLimits.maxFileBytes)
+            } catch {
+                return try Self.json(
+                    status: .contentTooLarge,
+                    body: Components.Schemas._Error(message: "attachment body is too large"))
+            }
+            let receipt = Components.Schemas.AttachmentReceipt(digest: digest)
+            switch await server.storeAttachment(digest: digest, bytes: bytes) {
+            case .created:
+                return try Self.json(status: .created, body: receipt)
+            case .converged:
+                return try Self.json(status: .ok, body: receipt)
+            case .digestMismatch:
+                return try Self.json(
+                    status: .unprocessableContent,
+                    body: Components.Schemas._Error(message: "attachment body does not hash to the path digest"))
+            }
         case "registerCapabilityContract":
             guard let deviceID = Self.deviceID(inCapabilityPath: request.path),
                 deviceID == authenticatedDevice
