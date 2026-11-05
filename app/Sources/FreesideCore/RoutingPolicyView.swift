@@ -1,12 +1,14 @@
 import FreesideAPI
 import SwiftUI
 
-/// The routing policy (plan §5.4): which agent takes a new task for each role
-/// when the operator chose none, read from sync and changed as a saved
-/// command. It is Settings' Agents pane on both platforms (`SettingsPaneView`).
-/// It edits the order among agents the daemon's catalog lists and the
-/// drain-first account among the pools those agents sit on; the lineup
-/// itself still changes through the committed agent tree.
+/// Settings' Agents pane on both platforms (`SettingsPaneView`), drawn as
+/// the 4 Nov 2026 handoff's "Settings Agents" frame: the routing policy
+/// (plan §5.4), which agent takes a new task for each role when the operator
+/// chose none, read from sync and changed as a saved command, then the
+/// daemon's agent tree, read-only. A popup per role puts the chosen agent
+/// first and saves at once; `Change order…` opens `RoutingPolicyEditor` as a
+/// sheet. The drain-first popup picks among the pools catalog agents sit
+/// on. The lineup itself still changes through the committed agent tree.
 struct RoutingPolicyView: View {
     @Environment(\.locale) private var locale
     @Environment(\.timeZone) private var timeZone
@@ -15,44 +17,278 @@ struct RoutingPolicyView: View {
     /// Paired device names by device id, so a policy a client set names
     /// that device rather than its id.
     let deviceNames: [String: String]
+    var client: SettingsClient = .current
+    /// False in the screenshot suite, which can't draw a `Menu` or a
+    /// sheet: each popup then draws its label alone.
+    var rendersInteractiveControls = true
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 0) {
-            FreesideSheetHeader(
-                eyebrow: "Routing",
-                ask: "Which agent takes new tasks",
-                // Plan revision 107: the order is the router's candidate set,
-                // ranked by the soonest weekly reset, and the order itself
-                // decides only where no reset is known or resets tie.
-                consequence:
-                    "A new task goes to the role's agent whose weekly usage resets soonest, or to the first in this order when no reset is known. A drain-first account takes it ahead of reset order when the role's order has an agent on it. Used-up agents are skipped, and running tasks stay where they are.",
-                askLineLimit: nil)
-            VStack(alignment: .leading, spacing: 16) {
-                notices
-                if let draft = model.draft {
-                    editor(draft)
-                } else {
-                    reading
-                }
-            }
-            .padding(.horizontal, 16)
-            .padding(.bottom, 16)
+        VStack(alignment: .leading, spacing: SettingsPaneInsets.sectionSpacing(client)) {
+            // Plan revision 107: the order is the router's candidate set,
+            // ranked by the soonest weekly reset, and the order itself
+            // decides only where no reset is known or resets tie.
+            SettingsPaneHead(
+                title: "Agents",
+                line:
+                    "A new task goes to the role's agent whose weekly usage resets soonest; the order decides when no reset is known."
+            )
+            routing
+            agentTree
+        }
+        .sheet(isPresented: editing) {
+            ScrollView { RoutingPolicyEditor(model: model) }
+                #if os(macOS)
+                    .frame(width: 480, height: 560)
+                #endif
+                .background(Color.ground)
         }
     }
 
-    // MARK: Notices
+    /// The sheet is open while a draft is; closing it without Save drops
+    /// the draft. Save clears the draft itself, so the setter's
+    /// `cancelEditing` then finds nothing to drop.
+    private var editing: Binding<Bool> {
+        Binding(get: { model.draft != nil }, set: { if !$0 { model.cancelEditing() } })
+    }
 
-    @ViewBuilder private var notices: some View {
+    // MARK: Routing
+
+    private enum RoutingRow: Hashable {
+        case popup(RoutingPopup)
+        case setBy
+        case drainFirst
+    }
+
+    private var routingRows: [RoutingRow] {
+        RoutingPopup.allCases.map(RoutingRow.popup) + (model.policy == nil ? [] : [.setBy]) + [.drainFirst]
+    }
+
+    private var routing: some View {
+        SettingsSection(keyword: model.policy.map { "Routing · revision \($0.revision)" } ?? "Routing · no policy") {
+            SettingsGroup(routingRows) { row in
+                routingRow(row)
+            }
+            RoutingPolicyNotices(model: model)
+            // Why the policy can't change outranks the last refusal, which
+            // may predate it.
+            if let line = model.unavailableReason ?? model.choiceBlocker {
+                Text(line)
+                    .font(FreesideFont.cardBody)
+                    .foregroundStyle(Color.inkDim)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+        }
+    }
+
+    @ViewBuilder private func routingRow(_ row: RoutingRow) -> some View {
+        switch row {
+        case .popup(let popup):
+            let shared = model.sharedOrder(popup)
+            let text = popupText(popup, shared: shared)
+            SettingsRow(label: popup.title, line: popupLine(popup, shared: shared), warning: missingAgents(popup)) {
+                popupControl(text: text, accessibilityLabel: popup == .writer ? "Writer agents" : "Reviewer agent") {
+                    ForEach(model.catalog?.agents ?? [], id: \.name) { agent in
+                        Button(agent.name) { Task { await model.choose(agent.name, for: popup) } }
+                    }
+                    Divider()
+                    Button("Change order…") { model.beginEditing() }
+                }
+            }
+        case .setBy:
+            if let policy = model.policy {
+                SettingsRow(
+                    label: "Set by",
+                    line: Self.setBy(policy, deviceNames: deviceNames) + " · "
+                        + FreesideFormat.shortTime(
+                            policy.set_at, now: pinnedNow ?? .now, locale: locale, timeZone: timeZone)
+                )
+                .exactInstant(policy.set_at)
+            }
+        case .drainFirst:
+            let account = model.policy?.drain_first_account
+            // Without a catalog the app can't tell which pools agents sit
+            // on, so it doesn't call the account stale.
+            let stale =
+                account.map { account in
+                    model.catalog != nil && !model.drainFirstPools.contains { $0.pool.id == account }
+                } ?? false
+            SettingsRow(
+                label: "Drain first", line: account.flatMap(model.usagePool).map(Self.poolDetail),
+                warning: stale ? Self.staleAccount : nil
+            ) {
+                popupControl(text: account ?? "None", accessibilityLabel: "Drain-first account") {
+                    Button("None") { Task { await model.chooseDrainFirst(nil) } }
+                    ForEach(model.drainFirstPools, id: \.pool.id) { offered in
+                        Button(offered.pool.id) { Task { await model.chooseDrainFirst(offered.pool.id) } }
+                    }
+                }
+            }
+        }
+    }
+
+    /// The popup's label inside its menu, or the label alone where the
+    /// suite can't draw a `Menu`. Disabled while the policy can't change.
+    @ViewBuilder private func popupControl(
+        text: String, accessibilityLabel: String, @ViewBuilder entries: () -> some View
+    ) -> some View {
+        let label = SettingsPopupLabel(text: text)
+        Group {
+            if rendersInteractiveControls {
+                Menu {
+                    entries()
+                } label: {
+                    label
+                }
+                .menuStyle(.button)
+                .buttonStyle(.plain)
+                .menuIndicator(.hidden)
+                .accessibilityLabel(accessibilityLabel)
+                .accessibilityValue(text)
+            } else {
+                label
+            }
+        }
+        .disabled(!model.canEdit)
+        // On the Mac the order takes its width before the label's dim line
+        // does, as the canvas draws it, up to the label's cap. At phone
+        // width that would leave the label a word wide, so the two share.
+        .layoutPriority(client == .mac ? 1 : 0)
+    }
+
+    /// The trigger: the shared order, the lineup when every role is on it,
+    /// or `Differs by role`.
+    private func popupText(_ popup: RoutingPopup, shared: [String]?) -> String {
+        guard let shared else { return "Differs by role" }
+        guard shared.isEmpty else { return Self.orderText(shared) }
+        // The roles may sit on different lineup agents; name one only when
+        // they share it.
+        let lineups = Set(popup.roles.map(model.lineupAgent(for:)))
+        return Self.lineupText(lineups.count == 1 ? lineups.first ?? nil : nil)
+    }
+
+    /// Writer's dim line names its roles, or each role's order when they
+    /// differ; Reviewer has none.
+    private func popupLine(_ popup: RoutingPopup, shared: [String]?) -> String? {
+        switch popup {
+        case .writer:
+            guard shared == nil else { return "Specifies, implements and remediates." }
+            return popup.roles.map { role in
+                let order = model.policy?.roles.first { $0.role == role }?.agents ?? []
+                let text = order.isEmpty ? Self.lineupText(model.lineupAgent(for: role)) : Self.orderText(order)
+                return "\(Self.roleName(role)) · \(text)"
+            }
+            .joined(separator: "\n")
+        case .reviewer:
+            return nil
+        }
+    }
+
+    /// The agents the popup's roles order that the catalog no longer
+    /// carries, each once. Without a catalog none is called missing.
+    private func missingAgents(_ popup: RoutingPopup) -> String? {
+        guard let catalog = model.catalog else { return nil }
+        let known = Set(catalog.agents.map(\.name))
+        var seen = Set<String>()
+        let missing = popup.roles
+            .flatMap { role in model.policy?.roles.first { $0.role == role }?.agents ?? [] }
+            .filter { !known.contains($0) && seen.insert($0).inserted }
+        return missing.isEmpty ? nil : "\(missing.joined(separator: ", ")) not in the agent tree"
+    }
+
+    // MARK: Agent tree
+
+    @ViewBuilder private var agentTree: some View {
+        SettingsSection(keyword: "Agent tree") {
+            if let catalog = model.catalog {
+                SettingsGroup(elements: catalog.agents, id: \.name) { entry in
+                    SettingsRow(label: entry.name, line: AgentChoiceDisplay.facts(entry)) {
+                        if let pool = model.pool(for: entry) {
+                            Text(pool)
+                                .font(FreesideFont.monoValue)
+                                .foregroundStyle(Color.inkDim)
+                                .accessibilityLabel("Pool \(pool)")
+                        }
+                    }
+                }
+            } else {
+                dimLine("The daemon has no agent tree.")
+            }
+        }
+        if model.catalog != nil {
+            dimLine("The tree itself changes through the committed agent tree, not here.")
+        }
+    }
+
+    private func dimLine(_ text: String) -> some View {
+        Text(text)
+            .font(FreesideFont.cardBody)
+            .foregroundStyle(Color.inkDim)
+            .fixedSize(horizontal: false, vertical: true)
+    }
+
+    // MARK: Shared words
+
+    static let staleAccount = "No agent in the tree is on this account."
+
+    /// The pool's provider and plan, as Account usage heads its card.
+    static func poolDetail(_ pool: Components.Schemas.UsagePoolUsage) -> String {
+        [pool.provider, pool.plan].compactMap(\.self).joined(separator: " · ")
+    }
+
+    /// An order as the canvas reads it: `claude-opus, then codex`.
+    static func orderText(_ agents: [String]) -> String {
+        agents.joined(separator: ", then ")
+    }
+
+    static func roleName(_ role: RoutingPolicyDraft.Role) -> String {
+        role.rawValue.prefix(1).uppercased() + role.rawValue.dropFirst()
+    }
+
+    /// A role the policy leaves out runs on the lineup's agent; without a
+    /// catalog, or when the lineup binds no agent to it, the name is unknown.
+    static func lineupText(_ agent: String?) -> String {
+        agent.map { "Lineup: \($0)" } ?? "Lineup"
+    }
+
+    /// Who set the policy: a paired device by its name, `freesided routing
+    /// set` by the host identity it records.
+    static func setBy(_ policy: Components.Schemas.RoutingPolicy, deviceNames: [String: String]) -> String {
+        switch policy.source {
+        case .client_routing_set:
+            let id = policy.set_by.hasPrefix("device:") ? String(policy.set_by.dropFirst(7)) : policy.set_by
+            return deviceNames[id] ?? policy.set_by
+        case .cli_routing_set:
+            return "\(policy.set_by) on the daemon host"
+        }
+    }
+
+    /// One line for a policy the pane doesn't otherwise draw: the one a
+    /// refusal carries.
+    static func policyLine(_ policy: Components.Schemas.RoutingPolicy) -> String {
+        let roles = policy.roles.map { "\(roleName($0.role)): \($0.agents.joined(separator: ", "))" }
+        let drainFirst = policy.drain_first_account.map { ["Drain first: \($0)"] } ?? []
+        return (["Revision \(policy.revision)"] + roles + drainFirst).joined(separator: " · ")
+    }
+}
+
+/// The saved change's R14 notices: a refusal with the policy it carries, an
+/// unanswered change with Retry, an accepted one waiting for sync, and one
+/// sync recorded. The pane draws them under its Routing group; the editor
+/// draws them above its cards.
+struct RoutingPolicyNotices: View {
+    let model: RoutingPolicyModel
+
+    var body: some View {
         if let failure = model.failure {
             VStack(alignment: .leading, spacing: 8) {
                 Notice(tone: .wax, keyword: "Failed", sentence: failure.message)
                     .accessibilityElement(children: .combine)
                 if let current = failure.currentPolicy {
-                    Text(Self.policyLine(current))
+                    Text(RoutingPolicyView.policyLine(current))
                         .font(FreesideFont.monoValue)
                         .foregroundStyle(Color.inkDim)
                         .fixedSize(horizontal: false, vertical: true)
-                        .accessibilityLabel("The daemon holds \(Self.policyLine(current))")
+                        .accessibilityLabel("The daemon holds \(RoutingPolicyView.policyLine(current))")
                 }
             }
         }
@@ -81,60 +317,31 @@ struct RoutingPolicyView: View {
             .accessibilityElement(children: .combine)
         }
     }
+}
 
-    // MARK: Reading
+/// The `Change order…` sheet: the full routing edit, for orders of more than
+/// two names. One order per role among the catalog's agents, and the
+/// drain-first account among the pools they sit on, saved as one command.
+struct RoutingPolicyEditor: View {
+    let model: RoutingPolicyModel
 
-    @ViewBuilder private var reading: some View {
-        facts
-        drainFirstCard { drainFirstReading }
-        ForEach(RoutingPolicyDraft.Role.allCases, id: \.self) { role in
-            roleCard(role) {
-                let agents = model.policy?.roles.first { $0.role == role }?.agents ?? []
-                if agents.isEmpty {
-                    lineupLine(role)
-                } else {
-                    ForEach(Array(agents.enumerated()), id: \.offset) { index, agent in
-                        orderedAgent(index: index, name: agent)
-                    }
+    var body: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            FreesideSheetHeader(eyebrow: "Routing", ask: "Change the order")
+            VStack(alignment: .leading, spacing: 16) {
+                RoutingPolicyNotices(model: model)
+                if let draft = model.draft {
+                    editor(draft)
                 }
             }
+            .padding(.horizontal, 16)
+            .padding(.bottom, 16)
         }
-        if let reason = model.unavailableReason {
-            Text(reason)
-                .font(FreesideFont.cardBody)
-                .foregroundStyle(Color.inkDim)
-                .fixedSize(horizontal: false, vertical: true)
-        } else {
-            Button("Change Policy") { model.beginEditing() }
-                .buttonStyle(FreesideActionButtonStyle(tone: .secondary))
-                .disabled(!model.canEdit)
-        }
+        .frame(maxWidth: .infinity, alignment: .leading)
     }
-
-    @ViewBuilder private var facts: some View {
-        if let policy = model.policy {
-            VStack(alignment: .leading, spacing: 8) {
-                FactRow(label: "Revision", value: "\(policy.revision)")
-                FactRow(label: "Set by", value: Self.setBy(policy, deviceNames: deviceNames))
-                FactRow(
-                    label: "Set",
-                    value: FreesideFormat.shortTime(
-                        policy.set_at, now: pinnedNow ?? .now, locale: locale, timeZone: timeZone)
-                )
-                .exactInstant(policy.set_at)
-            }
-            .accessibilityElement(children: .combine)
-        } else {
-            Text("No policy. Every role uses its lineup agent.")
-                .font(FreesideFont.cardBody)
-                .foregroundStyle(Color.inkDim)
-        }
-    }
-
-    // MARK: Editing
 
     @ViewBuilder private func editor(_ draft: RoutingPolicyDraft) -> some View {
-        drainFirstCard {
+        card(title: "Drain first") {
             ChoiceList(
                 accessibilityLabel: "Drain-first account",
                 options: drainFirstOptions(current: draft.drainFirstAccount),
@@ -143,7 +350,7 @@ struct RoutingPolicyView: View {
                     set: { model.draft?.drainFirstAccount = $0 }))
         }
         ForEach(RoutingPolicyDraft.Role.allCases, id: \.self) { role in
-            roleCard(role) {
+            card(title: RoutingPolicyView.roleName(role)) {
                 let agents = draft.agents(for: role)
                 if agents.isEmpty { lineupLine(role) }
                 ForEach(Array(agents.enumerated()), id: \.element) { index, agent in
@@ -156,7 +363,7 @@ struct RoutingPolicyView: View {
                             ForEach(offered, id: \.self) { agent in
                                 Button("+ \(agent)") { model.draft?.add(agent, to: role) }
                                     .buttonStyle(FreesideActionButtonStyle(tone: .tertiary))
-                                    .accessibilityLabel("Add \(agent) to \(Self.roleName(role))")
+                                    .accessibilityLabel("Add \(agent) to \(RoutingPolicyView.roleName(role))")
                             }
                         }
                     }
@@ -172,6 +379,7 @@ struct RoutingPolicyView: View {
         HStack(spacing: 8) {
             Button("Cancel") { model.cancelEditing() }
                 .buttonStyle(FreesideActionButtonStyle(tone: .secondary))
+                .keyboardShortcut(.cancelAction)
             Button("Save") { Task { await model.save() } }
                 .buttonStyle(FreesideActionButtonStyle(tone: .primary))
                 .disabled(model.saveBlocker != nil || model.sending)
@@ -179,7 +387,7 @@ struct RoutingPolicyView: View {
     }
 
     private func editableAgent(_ agent: String, role: RoutingPolicyDraft.Role, index: Int, count: Int) -> some View {
-        let roleName = Self.roleName(role)
+        let roleName = RoutingPolicyView.roleName(role)
         let known = model.catalog?.agents.contains { $0.name == agent } ?? false
         return HStack(spacing: 6) {
             orderedAgent(index: index, name: agent, known: known)
@@ -223,62 +431,15 @@ struct RoutingPolicyView: View {
         options += pools.map { offered in
             .init(
                 value: offered.pool.id, label: offered.pool.id,
-                consequence: "\(Self.poolDetail(offered.pool))\nAgents: \(offered.agents.joined(separator: ", "))",
+                consequence:
+                    "\(RoutingPolicyView.poolDetail(offered.pool))\nAgents: \(offered.agents.joined(separator: ", "))",
                 register: .item)
         }
         if let current, !pools.contains(where: { $0.pool.id == current }) {
-            options.append(.init(value: current, label: current, consequence: Self.staleAccount, register: .item))
+            options.append(
+                .init(value: current, label: current, consequence: RoutingPolicyView.staleAccount, register: .item))
         }
         return options
-    }
-
-    // MARK: Drain first
-
-    private static let staleAccount = "No agent in the tree is on this account."
-
-    @ViewBuilder private var drainFirstReading: some View {
-        if let account = model.policy?.drain_first_account {
-            VStack(alignment: .leading, spacing: 3) {
-                Text(account)
-                    .font(FreesideFont.monoValue)
-                    .foregroundStyle(Color.ink)
-                if let pool = model.usagePool(account) {
-                    Text(Self.poolDetail(pool))
-                        .font(FreesideFont.monoValue)
-                        .foregroundStyle(Color.inkDim)
-                }
-                // Without a catalog the app can't tell which pools agents
-                // sit on, so it doesn't call the account stale.
-                if model.catalog != nil, !model.drainFirstPools.contains(where: { $0.pool.id == account }) {
-                    Text(Self.staleAccount)
-                        .font(FreesideFont.cardBody)
-                        .foregroundStyle(Color.waxText)
-                        .fixedSize(horizontal: false, vertical: true)
-                }
-            }
-            .accessibilityElement(children: .combine)
-        } else {
-            Text("None")
-                .font(FreesideFont.monoValue)
-                .foregroundStyle(Color.inkDim)
-        }
-    }
-
-    private func drainFirstCard(@ViewBuilder content: () -> some View) -> some View {
-        card(title: "Drain first", content: content)
-    }
-
-    /// The pool's provider and plan, as Account usage heads its card.
-    static func poolDetail(_ pool: Components.Schemas.UsagePoolUsage) -> String {
-        [pool.provider, pool.plan].compactMap(\.self).joined(separator: " · ")
-    }
-
-    // MARK: Shared pieces
-
-    private func roleCard(
-        _ role: RoutingPolicyDraft.Role, @ViewBuilder content: () -> some View
-    ) -> some View {
-        card(title: Self.roleName(role), content: content)
     }
 
     private func card(title: String, @ViewBuilder content: () -> some View) -> some View {
@@ -293,7 +454,7 @@ struct RoutingPolicyView: View {
         .overlay(RoundedRectangle(cornerRadius: 8).strokeBorder(Color.itemBorder, lineWidth: 1))
     }
 
-    private func orderedAgent(index: Int, name: String, known: Bool = true) -> some View {
+    private func orderedAgent(index: Int, name: String, known: Bool) -> some View {
         HStack(alignment: .firstTextBaseline, spacing: 8) {
             Text("\(index + 1).")
                 .font(FreesideFont.monoValue)
@@ -311,38 +472,8 @@ struct RoutingPolicyView: View {
     }
 
     private func lineupLine(_ role: RoutingPolicyDraft.Role) -> some View {
-        Text(Self.lineupText(model.lineupAgent(for: role)))
+        Text(RoutingPolicyView.lineupText(model.lineupAgent(for: role)))
             .font(FreesideFont.monoValue)
             .foregroundStyle(Color.inkDim)
-    }
-
-    static func roleName(_ role: RoutingPolicyDraft.Role) -> String {
-        role.rawValue.prefix(1).uppercased() + role.rawValue.dropFirst()
-    }
-
-    /// A role the policy leaves out runs on the lineup's agent; without a
-    /// catalog, or when the lineup binds no agent to it, the name is unknown.
-    static func lineupText(_ agent: String?) -> String {
-        agent.map { "Lineup: \($0)" } ?? "Lineup"
-    }
-
-    /// Who set the policy: a paired device by its name, `freesided routing
-    /// set` by the host identity it records.
-    static func setBy(_ policy: Components.Schemas.RoutingPolicy, deviceNames: [String: String]) -> String {
-        switch policy.source {
-        case .client_routing_set:
-            let id = policy.set_by.hasPrefix("device:") ? String(policy.set_by.dropFirst(7)) : policy.set_by
-            return deviceNames[id] ?? policy.set_by
-        case .cli_routing_set:
-            return "\(policy.set_by) on the daemon host"
-        }
-    }
-
-    /// One line for a policy the view doesn't otherwise draw: the one a
-    /// refusal carries.
-    static func policyLine(_ policy: Components.Schemas.RoutingPolicy) -> String {
-        let roles = policy.roles.map { "\(roleName($0.role)): \($0.agents.joined(separator: ", "))" }
-        let drainFirst = policy.drain_first_account.map { ["Drain first: \($0)"] } ?? []
-        return (["Revision \(policy.revision)"] + roles + drainFirst).joined(separator: " · ")
     }
 }

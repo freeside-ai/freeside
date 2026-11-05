@@ -210,11 +210,13 @@ extension SettingsGroup where Element: Hashable, ID == Element {
 }
 
 /// One row of a group: the label in the fact-label face with one dim line
-/// under it, and the control at the value. At the accessibility sizes the
-/// control drops under the label, so a long label never squeezes it.
+/// under it, an optional wax warning under that, and the control at the
+/// value. At the accessibility sizes the control drops under the label, so
+/// a long label never squeezes it.
 struct SettingsRow<Control: View>: View {
     let label: String
     var line: String? = nil
+    var warning: String? = nil
     @ViewBuilder let control: Control
     @Environment(\.dynamicTypeSize) private var dynamicTypeSize
 
@@ -249,14 +251,50 @@ struct SettingsRow<Control: View>: View {
                     .foregroundStyle(Color.inkDim)
                     .fixedSize(horizontal: false, vertical: true)
             }
+            if let warning {
+                Text(warning)
+                    .font(FreesideFont.cardBody)
+                    .foregroundStyle(Color.waxText)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
         }
         .accessibilityElement(children: .combine)
     }
 }
 
 extension SettingsRow where Control == EmptyView {
-    init(label: String, line: String? = nil) {
-        self.init(label: label, line: line) { EmptyView() }
+    init(label: String, line: String? = nil, warning: String? = nil) {
+        self.init(label: label, line: line, warning: warning) { EmptyView() }
+    }
+}
+
+/// A popup's trigger (the canvas's `popupCtl`): the value in the sans
+/// medium, then a dim `⌃⌄`, on ground-2 in a box with the window border. A
+/// label, not a control: a pane puts it inside its `Menu`, which
+/// `ImageRenderer` can't draw, so the goldens show the label. The value
+/// wraps past 280 points, so a long one never takes the whole row.
+struct SettingsPopupLabel: View {
+    let text: String
+    @Environment(\.isEnabled) private var isEnabled
+
+    var body: some View {
+        HStack(spacing: 8) {
+            CappedWidth(maxWidth: 280) {
+                Text(text)
+                    .font(FreesideFont.actionLabel)
+                    .foregroundStyle(isEnabled ? Color.ink : Color.inkFaint)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+            Text("⌃⌄")
+                .font(FreesideFont.disclosureGlyph)
+                .foregroundStyle(Color.inkDim)
+                .accessibilityHidden(true)
+        }
+        .padding(.vertical, 4)
+        .padding(.leading, 10)
+        .padding(.trailing, 8)
+        .background(Color.ground2, in: RoundedRectangle(cornerRadius: 6))
+        .overlay(RoundedRectangle(cornerRadius: 6).strokeBorder(Color.secondaryBorder, lineWidth: 1))
     }
 }
 
@@ -281,6 +319,25 @@ enum SettingsPaneInsets {
     /// The space between a pane's sections.
     static func sectionSpacing(_ client: SettingsClient) -> CGFloat {
         client == .mac ? 18 : 20
+    }
+}
+
+/// Proposes at most `maxWidth` to its one subview and takes the subview's
+/// own size, so a long text wraps at the cap while a short one keeps its
+/// width. A `frame(maxWidth:)` would take the whole cap whenever offered it.
+private struct CappedWidth: Layout {
+    let maxWidth: CGFloat
+
+    func sizeThatFits(proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) -> CGSize {
+        subviews.first?.sizeThatFits(capped(proposal)) ?? .zero
+    }
+
+    func placeSubviews(in bounds: CGRect, proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) {
+        subviews.first?.place(at: bounds.origin, proposal: ProposedViewSize(bounds.size))
+    }
+
+    private func capped(_ proposal: ProposedViewSize) -> ProposedViewSize {
+        ProposedViewSize(width: min(proposal.width ?? .infinity, maxWidth), height: proposal.height)
     }
 }
 
@@ -360,10 +417,11 @@ struct SettingsPaneView: View {
             .padding(SettingsPaneInsets.grammar(client))
         case .agents:
             if let sync {
-                // #2582 redraws this pane; until then the routing view's own
-                // header stands in for the pane title.
-                RoutingPolicyView(model: sync.routing, deviceNames: sync.deviceNames)
-                    .padding(SettingsPaneInsets.hosted(client))
+                RoutingPolicyView(
+                    model: sync.routing, deviceNames: sync.deviceNames, client: client,
+                    rendersInteractiveControls: rendersInteractiveControls
+                )
+                .padding(SettingsPaneInsets.grammar(client))
             } else {
                 unpaired
             }
