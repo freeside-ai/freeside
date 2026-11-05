@@ -3399,6 +3399,158 @@ public enum Components {
                 ])
             }
         }
+        /// One file a submit_task command attaches: a digest the client uploaded first through PUT /attachments/{digest}, the relative-path name to bind it to, and the client's claimed media type. The daemon, not the client, enforces every rule: the name is a relative path of "/"-separated segments with no empty, ".", or ".." segment, no leading "/", no control character, valid UTF-8, at most 1,024 bytes in all, and each segment at most 255 bytes. The claim is a lowercase type/subtype token with no parameters, at most 255 bytes; it is kept for display and decides nothing.
+        ///
+        ///
+        /// - Remark: Generated from `#/components/schemas/TaskAttachmentInput`.
+        public struct TaskAttachmentInput: Codable, Hashable, Sendable {
+            /// The uploaded blob's digest; it must already be stored.
+            ///
+            /// - Remark: Generated from `#/components/schemas/TaskAttachmentInput/digest`.
+            public var digest: Swift.String
+            /// The relative-path name, such as screenshot.png or design_handoff/tokens/colors.json. Unique within the task, and no name may be a directory of another (docs beside docs/a.md).
+            ///
+            ///
+            /// - Remark: Generated from `#/components/schemas/TaskAttachmentInput/name`.
+            public var name: Swift.String
+            /// The client's claimed media type, such as image/png.
+            ///
+            /// - Remark: Generated from `#/components/schemas/TaskAttachmentInput/media_type`.
+            public var media_type: Swift.String
+            /// Creates a new `TaskAttachmentInput`.
+            ///
+            /// - Parameters:
+            ///   - digest: The uploaded blob's digest; it must already be stored.
+            ///   - name: The relative-path name, such as screenshot.png or design_handoff/tokens/colors.json. Unique within the task, and no name may be a directory of another (docs beside docs/a.md).
+            ///   - media_type: The client's claimed media type, such as image/png.
+            public init(
+                digest: Swift.String,
+                name: Swift.String,
+                media_type: Swift.String
+            ) {
+                self.digest = digest
+                self.name = name
+                self.media_type = media_type
+            }
+            public enum CodingKeys: String, CodingKey {
+                case digest
+                case name
+                case media_type
+            }
+            public init(from decoder: any Swift.Decoder) throws {
+                let container = try decoder.container(keyedBy: CodingKeys.self)
+                self.digest = try container.decode(
+                    Swift.String.self,
+                    forKey: .digest
+                )
+                self.name = try container.decode(
+                    Swift.String.self,
+                    forKey: .name
+                )
+                self.media_type = try container.decode(
+                    Swift.String.self,
+                    forKey: .media_type
+                )
+                try decoder.ensureNoAdditionalProperties(knownKeys: [
+                    "digest",
+                    "name",
+                    "media_type"
+                ])
+            }
+        }
+        /// The daemon's determination of an attachment's type from its leading bytes. The set is closed: a format with no reliable signature, SVG among them, is application/octet-stream.
+        ///
+        ///
+        /// - Remark: Generated from `#/components/schemas/TaskAttachmentMediaType`.
+        @frozen public enum TaskAttachmentMediaType: String, Codable, Hashable, Sendable, CaseIterable {
+            case image_sol_png = "image/png"
+            case image_sol_jpeg = "image/jpeg"
+            case image_sol_gif = "image/gif"
+            case image_sol_webp = "image/webp"
+            case application_sol_octet_hyphen_stream = "application/octet-stream"
+        }
+        /// One attachment recorded on a task, as its submission carried it. Attachments are operator input, never evidence: they are not artifacts and never enter an evidence_snapshot (plan §5.15). Size limits: an image (an image media_type) at most 10 MiB, any other file at most 32 MiB, and per task at most 100 MiB in total and 1,000 attachments.
+        ///
+        ///
+        /// - Remark: Generated from `#/components/schemas/TaskAttachment`.
+        public struct TaskAttachment: Codable, Hashable, Sendable {
+            /// The blob's digest, fetchable at GET /attachments/{digest}.
+            ///
+            /// - Remark: Generated from `#/components/schemas/TaskAttachment/digest`.
+            public var digest: Swift.String
+            /// The relative-path name the submission bound it to.
+            ///
+            /// - Remark: Generated from `#/components/schemas/TaskAttachment/name`.
+            public var name: Swift.String
+            /// - Remark: Generated from `#/components/schemas/TaskAttachment/media_type`.
+            public var media_type: Components.Schemas.TaskAttachmentMediaType
+            /// The client's claimed media type, a display hint only.
+            ///
+            /// - Remark: Generated from `#/components/schemas/TaskAttachment/claimed_media_type`.
+            public var claimed_media_type: Swift.String
+            /// The stored blob's size in bytes.
+            ///
+            /// - Remark: Generated from `#/components/schemas/TaskAttachment/size_bytes`.
+            public var size_bytes: Swift.Int64
+            /// Creates a new `TaskAttachment`.
+            ///
+            /// - Parameters:
+            ///   - digest: The blob's digest, fetchable at GET /attachments/{digest}.
+            ///   - name: The relative-path name the submission bound it to.
+            ///   - media_type:
+            ///   - claimed_media_type: The client's claimed media type, a display hint only.
+            ///   - size_bytes: The stored blob's size in bytes.
+            public init(
+                digest: Swift.String,
+                name: Swift.String,
+                media_type: Components.Schemas.TaskAttachmentMediaType,
+                claimed_media_type: Swift.String,
+                size_bytes: Swift.Int64
+            ) {
+                self.digest = digest
+                self.name = name
+                self.media_type = media_type
+                self.claimed_media_type = claimed_media_type
+                self.size_bytes = size_bytes
+            }
+            public enum CodingKeys: String, CodingKey {
+                case digest
+                case name
+                case media_type
+                case claimed_media_type
+                case size_bytes
+            }
+            public init(from decoder: any Swift.Decoder) throws {
+                let container = try decoder.container(keyedBy: CodingKeys.self)
+                self.digest = try container.decode(
+                    Swift.String.self,
+                    forKey: .digest
+                )
+                self.name = try container.decode(
+                    Swift.String.self,
+                    forKey: .name
+                )
+                self.media_type = try container.decode(
+                    Components.Schemas.TaskAttachmentMediaType.self,
+                    forKey: .media_type
+                )
+                self.claimed_media_type = try container.decode(
+                    Swift.String.self,
+                    forKey: .claimed_media_type
+                )
+                self.size_bytes = try container.decode(
+                    Swift.Int64.self,
+                    forKey: .size_bytes
+                )
+                try decoder.ensureNoAdditionalProperties(knownKeys: [
+                    "digest",
+                    "name",
+                    "media_type",
+                    "claimed_media_type",
+                    "size_bytes"
+                ])
+            }
+        }
         /// The path that set a task line (plan §5.4). submit_task, cli_submit, proposal_start, cli_line_change, and client_line_change are authenticated operator actions; cli_line_change is a later change on the daemon host and client_line_change the same change from a paired client's change_task_line command, and they are the only sources that may clear a line. router is the routing policy's choice at a task's first admission for a role with no operator line, and is the only source that carries provenance. triage is the triager's escalation of the specifier to its escalated counterpart (plan §5.13), citing the task's triage record; it carries no provenance.
         ///
         ///
@@ -4189,6 +4341,11 @@ public enum Components {
             ///
             /// - Remark: Generated from `#/components/schemas/Task/task_lines`.
             public var task_lines: [Components.Schemas.TaskLine]
+            /// The files the task's submission carried, in submitted order; an empty array for a task with none.
+            ///
+            ///
+            /// - Remark: Generated from `#/components/schemas/Task/attachments`.
+            public var attachments: [Components.Schemas.TaskAttachment]
             /// Creates a new `Task`.
             ///
             /// - Parameters:
@@ -4206,6 +4363,7 @@ public enum Components {
             ///   - lifecycle_facts: The task's recorded lifecycle log in order: admitted starts, work-unit completions, and explicit abandonments. A display record; wip is the derived slot state clients should read.
             ///   - cancellation: Null when no Stop was accepted; acceptance alone remains requested.
             ///   - task_lines: Each role's current line, in TaskLineRole order: the lines the task's next admission of that role reads. A role with no line takes its agent from the lineup and is absent.
+            ///   - attachments: The files the task's submission carried, in submitted order; an empty array for a task with none.
             public init(
                 id: Swift.String,
                 project_id: Swift.String,
@@ -4220,7 +4378,8 @@ public enum Components {
                 wip: Swift.Bool,
                 lifecycle_facts: [Components.Schemas.TaskLifecycleFact],
                 cancellation: Components.Schemas.Task.cancellationPayload? = nil,
-                task_lines: [Components.Schemas.TaskLine]
+                task_lines: [Components.Schemas.TaskLine],
+                attachments: [Components.Schemas.TaskAttachment]
             ) {
                 self.id = id
                 self.project_id = project_id
@@ -4236,6 +4395,7 @@ public enum Components {
                 self.lifecycle_facts = lifecycle_facts
                 self.cancellation = cancellation
                 self.task_lines = task_lines
+                self.attachments = attachments
             }
             public enum CodingKeys: String, CodingKey {
                 case id
@@ -4252,6 +4412,7 @@ public enum Components {
                 case lifecycle_facts
                 case cancellation
                 case task_lines
+                case attachments
             }
             public init(from decoder: any Swift.Decoder) throws {
                 let container = try decoder.container(keyedBy: CodingKeys.self)
@@ -4311,6 +4472,10 @@ public enum Components {
                     [Components.Schemas.TaskLine].self,
                     forKey: .task_lines
                 )
+                self.attachments = try container.decode(
+                    [Components.Schemas.TaskAttachment].self,
+                    forKey: .attachments
+                )
                 try decoder.ensureNoAdditionalProperties(knownKeys: [
                     "id",
                     "project_id",
@@ -4325,7 +4490,8 @@ public enum Components {
                     "wip",
                     "lifecycle_facts",
                     "cancellation",
-                    "task_lines"
+                    "task_lines",
+                    "attachments"
                 ])
             }
         }
@@ -10248,7 +10414,7 @@ public enum Components {
                 ])
             }
         }
-        /// The payload of a submit_task command (plan §5.11): the project to submit into, the source text of the task, and an optional operator name. It binds to no attention item and to no other entity, so it carries no expected_entity_version and no expected_bindings. The command_id identifies one deliberate submission. Distinct command IDs create distinct tasks, specification runs and campaigns even with identical inputs. Manual Retry reuses the saved exact command and returns its original result and revision. New records reject changed device, project, source, submitted optional name or task lines under the same ID; equivalent JSON formatting and a different order of the same task lines are allowed. Historical records preserve their original name-insensitive replay checks. Source content is provenance, never a duplicate-work key.
+        /// The payload of a submit_task command (plan §5.11): the project to submit into, the source text of the task, and an optional operator name. It binds to no attention item and to no other entity, so it carries no expected_entity_version and no expected_bindings. The command_id identifies one deliberate submission. Distinct command IDs create distinct tasks, specification runs and campaigns even with identical inputs. Manual Retry reuses the saved exact command and returns its original result and revision. New records reject changed device, project, source, submitted optional name, task lines, or attachments under the same ID; equivalent JSON formatting and a different order of the same task lines are allowed, but attachment order is part of the submission, so a reordered list is rejected. Historical records preserve their original name-insensitive replay checks. Source content is provenance, never a duplicate-work key.
         ///
         ///
         /// - Remark: Generated from `#/components/schemas/SubmitTaskPayload`.
@@ -10277,6 +10443,11 @@ public enum Components {
             ///
             /// - Remark: Generated from `#/components/schemas/SubmitTaskPayload/task_lines`.
             public var task_lines: [Components.Schemas.TaskLineInput]?
+            /// Optional files for the new task, in the order the operator gave them; upload each first through PUT /attachments/{digest}. The list is part of the command's identity: the same command_id with an entry changed, added, removed, or reordered is rejected with 400, and a historical record without a request digest rejects a retry that carries attachments. An absent field behaves as before the field existed. An empty list, a digest that is not stored, a name that breaks a rule or repeats, a malformed claim, or a breach of any size or count limit (TaskAttachment) is rejected with 400 and nothing is written. The daemon records each attachment with the media type it determines from the bytes and the stored size.
+            ///
+            ///
+            /// - Remark: Generated from `#/components/schemas/SubmitTaskPayload/attachments`.
+            public var attachments: [Components.Schemas.TaskAttachmentInput]?
             /// Creates a new `SubmitTaskPayload`.
             ///
             /// - Parameters:
@@ -10285,18 +10456,21 @@ public enum Components {
             ///   - source: The task's source text, registered as a digest-addressed artifact.
             ///   - name: Optional operator-chosen task name, stored with source operator so the namer never runs for it. The daemon trims surrounding whitespace, then requires one line of 1 to 60 characters (Unicode code points), valid UTF-8, with no credential-shaped token. A name that fails after trimming is rejected with 400 and nothing is written; the daemon never truncates it or drops it. The name is applied only when the command creates the task and is ignored, but still validated, when the command fetches an existing task.
             ///   - task_lines: Optional per-role agent choices for the new task; at most one line per role. A role with no line takes its agent from the lineup. An empty list, a repeated role, or a malformed agent name is rejected with 400 and nothing is written. The lines are recorded when the command creates the task. Admission does not read task lines yet: until it does, a line is recorded and the lineup still selects every agent.
+            ///   - attachments: Optional files for the new task, in the order the operator gave them; upload each first through PUT /attachments/{digest}. The list is part of the command's identity: the same command_id with an entry changed, added, removed, or reordered is rejected with 400, and a historical record without a request digest rejects a retry that carries attachments. An absent field behaves as before the field existed. An empty list, a digest that is not stored, a name that breaks a rule or repeats, a malformed claim, or a breach of any size or count limit (TaskAttachment) is rejected with 400 and nothing is written. The daemon records each attachment with the media type it determines from the bytes and the stored size.
             public init(
                 kind: Components.Schemas.SubmitTaskPayload.kindPayload,
                 project_id: Swift.String,
                 source: Swift.String,
                 name: Swift.String? = nil,
-                task_lines: [Components.Schemas.TaskLineInput]? = nil
+                task_lines: [Components.Schemas.TaskLineInput]? = nil,
+                attachments: [Components.Schemas.TaskAttachmentInput]? = nil
             ) {
                 self.kind = kind
                 self.project_id = project_id
                 self.source = source
                 self.name = name
                 self.task_lines = task_lines
+                self.attachments = attachments
             }
             public enum CodingKeys: String, CodingKey {
                 case kind
@@ -10304,6 +10478,7 @@ public enum Components {
                 case source
                 case name
                 case task_lines
+                case attachments
             }
             public init(from decoder: any Swift.Decoder) throws {
                 let container = try decoder.container(keyedBy: CodingKeys.self)
@@ -10327,12 +10502,17 @@ public enum Components {
                     [Components.Schemas.TaskLineInput].self,
                     forKey: .task_lines
                 )
+                self.attachments = try container.decodeIfPresent(
+                    [Components.Schemas.TaskAttachmentInput].self,
+                    forKey: .attachments
+                )
                 try decoder.ensureNoAdditionalProperties(knownKeys: [
                     "kind",
                     "project_id",
                     "source",
                     "name",
-                    "task_lines"
+                    "task_lines",
+                    "attachments"
                 ])
             }
         }

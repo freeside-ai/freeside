@@ -39,6 +39,9 @@ type Task struct {
 	// the lines the task's next admission of that role reads. A role with
 	// no line stays on the lineup and is absent; no lines is an empty array.
 	TaskLines []domain.TaskLine `json:"task_lines"`
+	// Attachments are the files the task's submission carried, in submitted
+	// order; none is an empty array.
+	Attachments []domain.TaskAttachment `json:"attachments"`
 }
 
 // TaskLifecycleFact renders one recorded lifecycle event for display. The
@@ -127,6 +130,14 @@ func projectTaskSnapshot(ctx context.Context, tx *store.ReadTx, state store.Serv
 			value.TaskLines = append(value.TaskLines, line)
 		}
 	}
+	attachments, err := tx.TaskAttachments(ctx, task.ID)
+	if err != nil {
+		if errors.Is(err, store.ErrRowInconsistent) {
+			return TaskSnapshot{}, fmt.Errorf("task %s attachments: %w: %w", task.ID, ErrRunObservationIntegrity, err)
+		}
+		return TaskSnapshot{}, err
+	}
+	value.Attachments = append(make([]domain.TaskAttachment, 0, len(attachments)), attachments...)
 	campaigns := []domain.CampaignID{}
 	for _, id := range ids {
 		run, ok := runs[id]

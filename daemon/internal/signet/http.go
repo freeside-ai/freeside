@@ -432,6 +432,9 @@ type submitTaskPayloadRequest struct {
 	// TaskLines is nil when absent and empty when the client sent an empty
 	// list; the service refuses the empty list, so the two stay distinct.
 	TaskLines []domain.TaskLineChoice `json:"task_lines"`
+	// Attachments is nil when absent and empty when the client sent an
+	// empty list, as TaskLines is; the service refuses the empty list.
+	Attachments []TaskAttachmentInput `json:"attachments"`
 }
 
 func (h httpHandler) submitCommand(w http.ResponseWriter, r *http.Request, authenticatedDevice domain.DeviceID) {
@@ -624,8 +627,11 @@ func (h httpHandler) submitTaskCommand(w http.ResponseWriter, r *http.Request, r
 	}
 	result, err := h.service.Submit(r.Context(), ClientCommand{
 		CommandID: request.CommandID, DeviceID: request.DeviceID,
-		Kind:       domain.CommandKindSubmitTask,
-		SubmitTask: SubmitTaskPayload{ProjectID: arm.ProjectID, Source: arm.Source, Name: name, TaskLines: arm.TaskLines},
+		Kind: domain.CommandKindSubmitTask,
+		SubmitTask: SubmitTaskPayload{
+			ProjectID: arm.ProjectID, Source: arm.Source, Name: name,
+			TaskLines: arm.TaskLines, Attachments: arm.Attachments,
+		},
 	})
 	if err != nil {
 		writeCommandError(w, h.service.blobs, err)

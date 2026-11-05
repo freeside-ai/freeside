@@ -249,6 +249,36 @@ func (b *BlobStore) Has(digest domain.Digest) (bool, error) {
 	return true, nil
 }
 
+// Describe returns a stored blob's byte size and up to
+// domain.SniffTaskAttachmentHeadBytes of its leading bytes, without reading
+// the rest, so a caller can size and sniff a digest. ErrBlobNotFound when
+// nothing is stored under it. Content is immutable per digest and the store
+// never deletes, so the answer holds for as long as the caller acts on it.
+func (b *BlobStore) Describe(digest domain.Digest) (size int64, head []byte, err error) {
+	path, err := b.blobPath(digest)
+	if err != nil {
+		return 0, nil, err
+	}
+	f, err := os.Open(path) //nolint:gosec // path derives from the strict digest form blobPath enforces
+	if errors.Is(err, os.ErrNotExist) {
+		return 0, nil, fmt.Errorf("attachment %q: %w", digest, ErrBlobNotFound)
+	}
+	if err != nil {
+		return 0, nil, fmt.Errorf("attachment %q: %w", digest, err)
+	}
+	defer func() { err = errors.Join(err, f.Close()) }()
+	// The size is the opened file's own, not a second lookup by path.
+	info, err := f.Stat()
+	if err != nil {
+		return 0, nil, fmt.Errorf("attachment %q: %w", digest, err)
+	}
+	head, err = io.ReadAll(io.LimitReader(f, domain.SniffTaskAttachmentHeadBytes))
+	if err != nil {
+		return 0, nil, fmt.Errorf("attachment %q: %w", digest, err)
+	}
+	return info.Size(), head, nil
+}
+
 // Verify reports whether the stored bytes exist and hash to digest. Backup
 // closure uses this stronger check: a digest-named path is not evidence that
 // the bytes survived intact.

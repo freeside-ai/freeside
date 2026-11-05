@@ -190,6 +190,11 @@ func (t *TaskSubmitter) submit(ctx context.Context, tx *store.WriteTx, in signet
 			return signet.TaskSubmissionResult{}, fmt.Errorf("record task line: %w", err)
 		}
 	}
+	// The attachments land in the same transaction for the same reason; the
+	// store refuses a second list, and a replay never reaches here.
+	if err := tx.PutTaskAttachments(ctx, task.ID, in.Attachments); err != nil {
+		return signet.TaskSubmissionResult{}, fmt.Errorf("record task attachments: %w", err)
+	}
 	return signet.TaskSubmissionResult{TaskID: task.ID, SpecificationRunID: submitted.Run.ID, Name: task.Name}, nil
 }
 

@@ -199,6 +199,11 @@ func TestSignetWireGoldens(t *testing.T) {
 						{Kind: domain.TaskLifecycleCompleted, RunID: runID, BindingUnitID: new(domain.WorkUnitIDForRun(runID)), RecordedAt: mergedAt},
 					},
 					TaskLines: []domain.TaskLine{taskLine},
+					Attachments: []domain.TaskAttachment{{
+						Digest:    "sha256:2222222222222222222222222222222222222222222222222222222222222222",
+						Name:      "design_handoff/screens/home.png",
+						MediaType: domain.TaskAttachmentMediaPNG, ClaimedMediaType: "image/png", SizeBytes: 48213,
+					}},
 				}}},
 				Runs: []RunSnapshot{
 					runSnapshot(
