@@ -488,7 +488,11 @@ All under `daemon/`:
   candidate may reach publication),
   `internal/engine/production_reentry*.go` and
   `internal/engine/production_unpublished_reentry.go` (re-earn readiness
-  against a new base), `internal/engine/publication_closure*.go` (the
+  against a new base), `internal/engine/production_handoff.go` (verifies
+  the merge into a moved tip and decides whether the handoff may publish),
+  `internal/engine/production_rebuild.go` (binds the image that verifies a
+  candidate and writes a refused rebuild's failed verification),
+  `internal/engine/publication_closure*.go` (the
   source-issue closure gate), `internal/engine/publication_render_v2.go`
   (screens agent prose before it reaches GitHub), and
   `internal/engine/verification_report.go` (reads the verifier's bytes),
