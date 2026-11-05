@@ -10,7 +10,8 @@ import (
 // volume. A network-disabled seeder waits for host-staged files copied into
 // its root filesystem and writes them onto the volume; a separate observer
 // mounts the volume read-only and writes only a nonce-bound proof, which
-// verify checks before the writer can exist.
+// verify checks before the writer can exist. The prompt file and the operator
+// input directory share this handshake.
 type stagedVolume struct {
 	label         string
 	volume        string

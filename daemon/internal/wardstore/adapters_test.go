@@ -62,6 +62,7 @@ func TestAdaptersRoundTripAcrossStoreReopen(t *testing.T) {
 		ConfigRootReadOnly: true, ConfigRootDigest: strings.Repeat("ab", 32),
 		ContinuityDigest: strings.Repeat("cd", 32), SessionScratchDigest: strings.Repeat("ef", 32),
 		PromptFingerprint: "prompt", PromptDigest: strings.Repeat("12", 32),
+		InputsFingerprint: "inputs", InputsDigest: strings.Repeat("34", 32),
 	}
 	if err := adapters.Journal.MarkStatePrepared(ctx, rec.RunID, state); err != nil {
 		t.Fatal(err)

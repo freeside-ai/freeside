@@ -286,6 +286,10 @@ type Config struct {
 	// It is required only by handoffs whose spec carries an AuthStoreLease
 	// claim; a leased handoff under a nil leaser fails closed.
 	AuthStoreLeaser AuthStoreLeaser
+	// InputBlobs supplies the bytes of a handoff's operator input files.
+	// It is required only by handoffs whose spec carries Agent.Inputs; such a
+	// handoff under a nil source fails closed before any runtime object.
+	InputBlobs InputBlobSource
 	// Journal durably records each handoff for restart-safe recovery. Nil
 	// preserves the one-shot semantics exactly: nothing is recorded, a
 	// crash strands objects as before, and Recover has nothing to work

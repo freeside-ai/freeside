@@ -129,6 +129,7 @@ func promptMounts(names handoffNames, present bool) []Mount {
 
 func clonePromptSpec(hs HandoffSpec) HandoffSpec {
 	hs.Agent.PromptFile = hs.Agent.PromptFile.Clone()
+	hs.Agent.Inputs = slices.Clone(hs.Agent.Inputs)
 	if hs.Agent.FailureTranscript != nil {
 		copy := *hs.Agent.FailureTranscript
 		hs.Agent.FailureTranscript = &copy
@@ -138,8 +139,11 @@ func clonePromptSpec(hs HandoffSpec) HandoffSpec {
 
 // promptResourceNames is included only where the current invocation may use
 // file delivery; historical conformance fixtures retain their old namespace.
+// The operator input directory rides only on file delivery, so its objects
+// join the same namespace.
 func promptResourceNames(names handoffNames, resources RuntimeResourceNames) RuntimeResourceNames {
-	resources.Containers = append(slices.Clone(resources.Containers), names.PromptSeeder, names.PromptObserver)
-	resources.Volumes = append(slices.Clone(resources.Volumes), names.Prompt)
+	resources.Containers = append(slices.Clone(resources.Containers),
+		names.PromptSeeder, names.PromptObserver, names.InputsSeeder, names.InputsObserver)
+	resources.Volumes = append(slices.Clone(resources.Volumes), names.Prompt, names.Inputs)
 	return resources
 }

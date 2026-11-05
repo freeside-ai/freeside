@@ -126,12 +126,20 @@ type HandoffJournalState struct {
 	SessionScratchDigest      string `json:"session_scratch_digest"`
 	PromptFingerprint         string `json:"prompt_fingerprint,omitempty"`
 	PromptDigest              string `json:"prompt_digest,omitempty"`
+	// InputsFingerprint and InputsDigest bind the operator input volume and
+	// its observed listing digest; both are absent without input files.
+	InputsFingerprint string `json:"inputs_fingerprint,omitempty"`
+	InputsDigest      string `json:"inputs_digest,omitempty"`
 }
 
 func (s HandoffJournalState) validate() error {
 	if (s.PromptFingerprint == "") != (s.PromptDigest == "") ||
 		(s.PromptDigest != "" && !sha256HexPattern.MatchString(s.PromptDigest)) {
 		return errors.New("handoff journal prompt binding is invalid")
+	}
+	if (s.InputsFingerprint == "") != (s.InputsDigest == "") ||
+		(s.InputsDigest != "" && !sha256HexPattern.MatchString(s.InputsDigest)) {
+		return errors.New("handoff journal input binding is invalid")
 	}
 	if s.ConfigRootFingerprint == "" || s.ContinuityFingerprint == "" ||
 		s.SessionScratchFingerprint == "" {

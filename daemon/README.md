@@ -198,6 +198,18 @@ answer timeout. It reports the routes the CLI tried besides inference:
 go test ./internal/exec/claude -run '^TestPinnedClaudeUsageDriverLive$' -count=1 -v
 ```
 
+`TestExporterInputScriptsLive` proves Ward's input seeder and observer
+scripts against the exporter image's BusyBox tools. It cross-compiles the
+ward tests and runs the input script test as root inside the image, on a
+case-sensitive filesystem. Set `FREESIDE_INPUT_SCRIPT_LIVE=1`,
+`FREESIDE_WARD_EXPORTER_IMAGE`, and the rig variables above
+(`FREESIDE_RIG_ACQUISITION` and `FREESIDE_STATE_DIR`), and rerun it when the
+exporter image's base changes:
+
+```sh
+go test ./internal/ward -run '^TestExporterInputScriptsLive$' -count=1 -v
+```
+
 `TestLiveClaudeWriterUsage` makes one real writer turn, the conformance launch
 on `file_v6`, under the setup token in `CLAUDE_CODE_OAUTH_TOKEN`, enrolled into
 a disposable credential volume as `TestLiveClaudeAdapterConformance` does. It

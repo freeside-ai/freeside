@@ -263,7 +263,7 @@ func TestPromptMountCannotBeRedirectedOrMadeWritable(t *testing.T) {
 				}
 				break
 			}
-			if validateAgentSpec(testConfig(), spec, names, "", false, hs.Agent.LaunchState, true) == nil {
+			if validateAgentSpec(testConfig(), spec, names, "", false, hs.Agent.LaunchState, true, false) == nil {
 				t.Fatal("invalid prompt mount accepted")
 			}
 		})

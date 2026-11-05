@@ -1572,6 +1572,8 @@ func toStoreJournalState(state ward.HandoffJournalState) store.HandoffJournalSta
 		SessionScratchDigest:      state.SessionScratchDigest,
 		PromptFingerprint:         state.PromptFingerprint,
 		PromptDigest:              state.PromptDigest,
+		InputsFingerprint:         state.InputsFingerprint,
+		InputsDigest:              state.InputsDigest,
 	}
 }
 
@@ -1591,6 +1593,8 @@ func fromStoreJournalState(state store.HandoffJournalState) ward.HandoffJournalS
 		SessionScratchDigest:      state.SessionScratchDigest,
 		PromptFingerprint:         state.PromptFingerprint,
 		PromptDigest:              state.PromptDigest,
+		InputsFingerprint:         state.InputsFingerprint,
+		InputsDigest:              state.InputsDigest,
 	}
 }
 

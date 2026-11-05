@@ -12,6 +12,7 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -108,6 +109,10 @@ type fakeRuntime struct {
 	// the admitted empty overlay.
 	instructionState map[string][]byte
 	promptState      map[string][]byte
+	// inputListing holds, per input volume, the listing lines the input
+	// observer would print for the tree the seeder extracted from the staged
+	// archive. Tests edit it to model a tree changed after seeding.
+	inputListing map[string][]string
 	// stateManifest records config roots the state seeder prepared. Volumes
 	// absent from this map remain freshly empty.
 	stateManifest map[string]stateManifestKind
@@ -229,6 +234,7 @@ func newFakeRuntime(t *testing.T) *fakeRuntime {
 		snapshotFiles:          map[string]map[string][]byte{},
 		instructionState:       map[string][]byte{},
 		promptState:            map[string][]byte{},
+		inputListing:           map[string][]string{},
 		stateManifest:          map[string]stateManifestKind{},
 		staged:                 map[string]string{},
 		baseProofPath:          "/handoff-base.txt",
@@ -887,6 +893,10 @@ func (f *fakeRuntime) CopyIntoContainer(ctx context.Context, id, hostDir, target
 		f.snapshotFiles[vol] = files
 		return nil
 	}
+	if c.spec.Mounts[0].Target == inputVolumeTarget {
+		f.inputListing[vol] = inputListingOfArchive(f.t, filepath.Join(src, inputArchiveName))
+		return nil
+	}
 	if c.spec.Mounts[0].Target == promptVolumeTarget {
 		body, err := os.ReadFile(filepath.Join(src, "prompt.txt")) //nolint:gosec // test-owned snapshot
 		if err == nil {
@@ -914,6 +924,43 @@ func (f *fakeRuntime) CopyIntoContainer(ctx context.Context, id, hostDir, target
 	f.volTree[vol] = digestOfDir(f.t, src)
 	f.volAgents[vol] = agentsEntryOfDir(src)
 	return nil
+}
+
+// inputListingOfArchive reads the staged archive the way the seeder extracts
+// it and returns the lines the observer prints for the resulting tree: the
+// root, each directory, each regular file with the hash of its archived
+// bytes, and an "x" line for any other entry type.
+func inputListingOfArchive(t *testing.T, path string) []string {
+	t.Helper()
+	archive, err := os.Open(path) //nolint:gosec // test-owned snapshot
+	if err != nil {
+		t.Fatalf("open staged input archive: %v", err)
+	}
+	defer archive.Close() //nolint:errcheck // read-only test fixture
+	lines := []string{"d ."}
+	tr := tar.NewReader(archive)
+	for {
+		hdr, err := tr.Next()
+		if errors.Is(err, io.EOF) {
+			return lines
+		}
+		if err != nil {
+			t.Fatalf("read staged input archive: %v", err)
+		}
+		name := "./" + strings.TrimSuffix(hdr.Name, "/")
+		switch hdr.Typeflag {
+		case tar.TypeDir:
+			lines = append(lines, "d "+name)
+		case tar.TypeReg:
+			hash := sha256.New()
+			if _, err := io.Copy(hash, tr); err != nil { //nolint:gosec // archive the test's own gate staged
+				t.Fatalf("read staged input %s: %v", hdr.Name, err)
+			}
+			lines = append(lines, fmt.Sprintf("f %x %s", hash.Sum(nil), name))
+		default:
+			lines = append(lines, "x "+name)
+		}
+	}
 }
 
 // agentsEntryOfDir classifies a staged fixture's root .agents entry exactly
@@ -1056,6 +1103,18 @@ func (f *fakeRuntime) ExportRootFS(ctx context.Context, id string, dest io.Write
 		return writeProofTar(dest, instructionProofPath, proof)
 	}
 	if vol, isStateObserver := c.observedVolume(stateProofPath); isStateObserver {
+		if c.spec.Mounts[0].Target == inputVolumeTarget {
+			var proof []byte
+			if lines, ok := f.inputListing[vol]; ok {
+				sorted := slices.Sorted(slices.Values(lines))
+				sum := sha256.Sum256([]byte(strings.Join(sorted, "\n") + "\n"))
+				proof = fmt.Appendf(nil, "%s %x\n", c.ownershipToken(), sum)
+			}
+			if f.observerProof != nil {
+				proof = f.observerProof(id, proof)
+			}
+			return writeProofTar(dest, stateProofPath, proof)
+		}
 		if c.spec.Mounts[0].Target == promptVolumeTarget {
 			var proof []byte
 			if body, ok := f.promptState[vol]; ok {

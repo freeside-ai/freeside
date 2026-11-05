@@ -38,6 +38,9 @@ func (b *Backend) prepareLaunchState(
 	if err := b.preparePrompt(ctx, hs, names, st); err != nil {
 		return err
 	}
+	if err := b.prepareInputs(ctx, hs, names, st); err != nil {
+		return err
+	}
 	for _, volume := range []struct {
 		name   string
 		sizeMB int64
@@ -103,6 +106,10 @@ func (b *Backend) prepareLaunchState(
 	if hs.Agent.PromptFile != nil {
 		prepared.PromptFingerprint = st.prompt.fingerprint
 		prepared.PromptDigest = contentaddr.Hex(string(hs.Agent.PromptFile.Digest))
+	}
+	if len(hs.Agent.Inputs) > 0 {
+		prepared.InputsFingerprint = st.inputs.fingerprint
+		prepared.InputsDigest = inputListingDigest(hs.Agent.Inputs)
 	}
 	st.preparedState = &prepared
 	if st.journalOpen {
@@ -470,6 +477,16 @@ func (b *Backend) verifyPreparedLaunchState(
 			fingerprint string
 			claim       objectClaim
 		}{names.Prompt, st.preparedState.PromptFingerprint, st.prompt})
+	}
+	if len(hs.Agent.Inputs) > 0 {
+		if st.preparedState.InputsDigest != inputListingDigest(hs.Agent.Inputs) || st.preparedState.InputsFingerprint == "" {
+			return failf(CheckControlPlaneIsolation, "prepared input binding changed")
+		}
+		volumes = append(volumes, struct {
+			name        string
+			fingerprint string
+			claim       objectClaim
+		}{names.Inputs, st.preparedState.InputsFingerprint, st.inputs})
 	}
 	for _, volume := range volumes {
 		view, err := b.rt.InspectVolume(ctx, volume.name)
