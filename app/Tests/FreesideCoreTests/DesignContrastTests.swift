@@ -198,6 +198,23 @@ import Testing
         border(
             "quoteRule", FreesidePalette.quoteRule, on: "quoteWash", FreesidePalette.quoteWash),
 
+        // The capacity meter (R32): what is left fills the ground-3 track
+        // in the accent, or in wax when low. A used-up window's 1.5pt wax
+        // rim is the same colour on the same track, so the wax pair counts
+        // it. Both also clear the text floor above, as the value's colour.
+        fill("accentText", FreesidePalette.accentText, on: "ground3", FreesidePalette.ground3),
+        fill("waxText", FreesidePalette.waxText, on: "ground3", FreesidePalette.ground3),
+
+        // The composer and role chips (R33). Closed, a chip sits on
+        // ground-2, where inkDim (the role keyword and `Default`) and inkFaint
+        // (the keyword with no agent chosen) are already pinned above; the
+        // faint keyword never carries the state alone, since `Default`
+        // beside it says it in inkDim. Open or active, the chip takes the
+        // accent wash.
+        text("ink", FreesidePalette.ink, on: "accentWash", FreesidePalette.accentWash),
+        disabledText(
+            "inkFaint", FreesidePalette.inkFaint, on: "accentWash", FreesidePalette.accentWash),
+
         // itemBorder is intentionally absent, as rule and secondaryBorder
         // are: a structural hairline that relies on the Increased Contrast
         // promotion to ruleStrong, asserted above.
@@ -229,6 +246,17 @@ import Testing
     }
 
     private static func border(
+        _ foregroundName: String, _ foreground: FreesideColorCuts,
+        on backgroundName: String, _ background: FreesideColorCuts
+    ) -> Pair {
+        Pair(
+            foregroundName: foregroundName, foreground: foreground,
+            backgroundName: backgroundName, background: background, minimum: 3)
+    }
+
+    /// A fill that carries meaning, such as a meter's: the 3:1 non-text
+    /// minimum against the track it sits on, as a border has.
+    private static func fill(
         _ foregroundName: String, _ foreground: FreesideColorCuts,
         on backgroundName: String, _ background: FreesideColorCuts
     ) -> Pair {

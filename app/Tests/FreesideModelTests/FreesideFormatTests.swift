@@ -80,6 +80,22 @@ import Testing
         #expect(!text.contains("2026"))
     }
 
+    /// A reset within the week (R32): the abbreviated weekday and the
+    /// shortened time, no date, in the locale's order and clock and in the
+    /// display time zone.
+    @Test func theWeekdayTimeNamesTheDayAndTheClock() throws {
+        let date = try instant("2026-11-12T21:00:00Z")
+        let expected = ["en_US": "Thu 9:00 PM", "en_GB": "Thu 21:00", "de_DE": "Do. 21:00"]
+        for (identifier, text) in expected {
+            let weekday = FreesideFormat.weekdayTime(date, locale: Locale(identifier: identifier), timeZone: utc)
+            #expect(weekday.replacing("\u{202F}", with: " ") == text, "locale \(identifier)")
+        }
+        let tokyo = try #require(TimeZone(identifier: "Asia/Tokyo"))
+        #expect(
+            FreesideFormat.weekdayTime(date, locale: enUS, timeZone: tokyo).replacing("\u{202F}", with: " ")
+                == "Fri 6:00 AM")
+    }
+
     /// What `shortTime` drops stays recoverable: the exact stamp keeps the
     /// seconds and the year, in UTC whatever the display zone.
     @Test func theExactTimeKeepsTheSecondsAndTheYear() throws {

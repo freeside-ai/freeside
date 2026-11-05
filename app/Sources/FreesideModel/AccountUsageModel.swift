@@ -164,11 +164,6 @@ package enum UsageDisplay {
         return nil
     }
 
-    /// The reading's share, or its status alone when it carries none.
-    package static func value(_ reading: Components.Schemas.UsageWindowReading) -> String {
-        share(reading) ?? (reading.status == .exhausted ? "Exhausted" : "Allowed")
-    }
-
     /// Whether the client's clock has carried the reading past the daemon's
     /// `stale_at`. A stale reading is shown as stale, never as replenished.
     package static func isStale(_ reading: Components.Schemas.UsageWindowReading, now: Date) -> Bool {
@@ -184,29 +179,10 @@ package enum UsageDisplay {
         marks.contains { $0.window == window && ($0.resets_at.map { now < $0 } ?? true) }
     }
 
-    /// The window's live marks whose reset the reading doesn't already show:
-    /// a refusal can outlive the readings (a reassignment clears them), or
-    /// name a reset the reading lacks or has passed, and then its own reset
-    /// is the one the record holds.
-    package static func uncoveredMarks(
-        window: String, in pool: Components.Schemas.UsagePoolUsage, now: Date
-    ) -> [Components.Schemas.UsageExhaustedMark] {
-        let reading = pool.windows.first { $0.window == window }
-        return pool.recorded_exhausted_marks.filter { mark in
-            mark.window == window && isExhausted(window: window, marks: [mark], now: now)
-                && !(reading != nil && mark.resets_at == reading?.resets_at)
-        }
-    }
-
     /// Every window the record names, by a reading or a mark, in window
     /// order: a refusal can mark a window the collector hasn't read.
     package static func windows(_ pool: Components.Schemas.UsagePoolUsage) -> [String] {
         Array(Set(pool.windows.map(\.window) + pool.recorded_exhausted_marks.map(\.window))).sorted()
-    }
-
-    /// The route models a window limits; empty for a general window.
-    package static func models(limitedBy window: String, in pool: Components.Schemas.UsagePoolUsage) -> [String] {
-        pool.model_windows.filter { $0.window == window }.map(\.route_model_id)
     }
 
     /// Words for the window ids the collectors report; nil for any other id,
@@ -231,5 +207,135 @@ package enum UsageDisplay {
         let hours = minutes / 60
         if hours < 24 { return minutes % 60 == 0 ? "in \(hours)h" : "in \(hours)h \(minutes % 60)m" }
         return hours % 24 == 0 ? "in \(hours / 24)d" : "in \(hours / 24)d \(hours % 24)h"
+    }
+
+    // MARK: Capacity (R32)
+
+    /// One window as the capacity block draws it: what is left of it, in
+    /// the reading's own terms.
+    package struct WindowCapacity: Equatable, Sendable {
+        package enum Level: Equatable, Sendable {
+            /// More than the low line is left.
+            case fine
+            /// At or under `lowLine` percent is left.
+            case low
+            /// Nothing is left: an exhausted reading or a live mark.
+            case usedUp
+            /// No reading, and every mark has lapsed.
+            case noReading
+        }
+
+        /// The window id the record names.
+        package let window: String
+        /// The window's words, or its id when it has none.
+        package let name: String
+        package let value: String
+        /// The percent left, which the meter fills; nil draws no meter.
+        package let left: Int?
+        package let level: Level
+        /// When the window next has capacity, if the record says.
+        package let resetsAt: Date?
+
+        /// Whether `name` is the bare window id, which reads as an id.
+        package var nameIsWindowID: Bool { name == window }
+    }
+
+    /// The percent left at or under which a window reads low.
+    package static let lowLine = 15
+
+    /// What the reading leaves of the window, in percent; nil for a
+    /// reading with no percent.
+    package static func left(_ reading: Components.Schemas.UsageWindowReading) -> Int? {
+        reading.used_percent.map { min(100, max(0, 100 - $0)) }
+    }
+
+    /// The window's capacity at `now`. It is used up while its reading is
+    /// exhausted or any of its marks is live, and stays used up until the
+    /// last of those causes lapses: its reset is the latest among them, and
+    /// none when any cause names none. A used-up window draws an empty
+    /// meter whatever unit its reading has, since nothing is left in any.
+    package static func capacity(
+        window: String, in pool: Components.Schemas.UsagePoolUsage, now: Date
+    ) -> WindowCapacity {
+        let name = label(window) ?? window
+        let reading = pool.windows.first { $0.window == window }
+        let liveMarks = pool.recorded_exhausted_marks.filter {
+            $0.window == window && isExhausted(window: window, marks: [$0], now: now)
+        }
+        let exhaustedReading = reading?.status == .exhausted ? reading : nil
+        if exhaustedReading != nil || !liveMarks.isEmpty {
+            let causes = (exhaustedReading.map { [$0.resets_at] } ?? []) + liveMarks.map(\.resets_at)
+            let resetsAt = causes.contains(nil) ? nil : causes.compactMap(\.self).max()
+            return .init(
+                window: window, name: name, value: "Used up", left: 0, level: .usedUp, resetsAt: resetsAt)
+        }
+        guard let reading else {
+            return .init(window: window, name: name, value: "No reading", left: nil, level: .noReading, resetsAt: nil)
+        }
+        let left = left(reading)
+        return .init(
+            window: window, name: name,
+            value: left.map { "\($0)% left" } ?? share(reading) ?? "Allowed",
+            left: left, level: left.map { $0 <= lowLine } == true ? .low : .fine,
+            resetsAt: reading.resets_at)
+    }
+
+    /// The reset in words: a countdown under a day (`Resets in 41m`), the
+    /// weekday and clock within the week (`Resets Thu 9:00 PM`), and
+    /// `shortTime` from a week on, or when the reset falls on today's
+    /// weekday, where a weekday would name the wrong week: a weekly window
+    /// that has just rolled over resets on the same weekday next week, and
+    /// `Resets Wed 2:39 AM` read on a Wednesday says a minute ago. A reset
+    /// the clock has passed reads `Resets passed` until the daemon's next
+    /// reading replaces it.
+    package static func resetLine(
+        to instant: Date, now: Date, locale: Locale = .current, timeZone: TimeZone = .current
+    ) -> String {
+        let day: TimeInterval = 86_400
+        let interval = instant.timeIntervalSince(now)
+        if interval < day { return "Resets \(countdown(to: instant, now: now))" }
+        var calendar = Calendar(identifier: .gregorian)
+        calendar.timeZone = timeZone
+        let sameWeekday = calendar.component(.weekday, from: instant) == calendar.component(.weekday, from: now)
+        if interval < 7 * day, !sameWeekday {
+            return "Resets \(FreesideFormat.weekdayTime(instant, locale: locale, timeZone: timeZone))"
+        }
+        return "Resets \(FreesideFormat.shortTime(instant, now: now, locale: locale, timeZone: timeZone))"
+    }
+
+    /// The earliest `stale_at` among the pool's readings that the client's
+    /// clock has reached (`isStale`); nil while none has.
+    package static func staleSince(_ pool: Components.Schemas.UsagePoolUsage, now: Date) -> Date? {
+        pool.windows.filter { isStale($0, now: now) }.compactMap(\.stale_at).min()
+    }
+
+    /// The pool band's trailing line: the collector's last attempt, or
+    /// that the readings went stale, which outranks it. Wax marks a line
+    /// that says the readings can't be trusted as current.
+    package struct AttemptLine: Equatable, Sendable {
+        package let text: String
+        package let isWax: Bool
+        /// The instant the line names, for the exact-instant hover (R8).
+        package let instant: Date?
+    }
+
+    package static func attemptLine(
+        _ pool: Components.Schemas.UsagePoolUsage, now: Date, locale: Locale = .current,
+        timeZone: TimeZone = .current
+    ) -> AttemptLine {
+        func time(_ date: Date) -> String {
+            FreesideFormat.shortTime(date, now: now, locale: locale, timeZone: timeZone)
+        }
+        if let stale = staleSince(pool, now: now) {
+            return .init(text: "stale since \(time(stale))", isWax: true, instant: stale)
+        }
+        guard let attempt = pool.last_attempt?.value1 else {
+            return .init(text: "no reading", isWax: false, instant: nil)
+        }
+        switch attempt.status {
+        case .succeeded: return .init(text: "read \(time(attempt.at))", isWax: false, instant: attempt.at)
+        case .failed: return .init(text: "refresh failed \(time(attempt.at))", isWax: true, instant: attempt.at)
+        case .unsupported: return .init(text: "unsupported \(time(attempt.at))", isWax: true, instant: attempt.at)
+        }
     }
 }

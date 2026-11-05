@@ -44,6 +44,22 @@ package enum FreesideFormat {
         return date.formatted(sameYear ? style : style.year())
     }
 
+    /// The abbreviated weekday and the shortened time (`Thu 9:00 PM`), in
+    /// the locale's own order, for an instant within the coming week: the
+    /// weekday names it without a date, and a later instant takes
+    /// `shortTime`, whose date can't be mistaken for this week's day.
+    package static func weekdayTime(
+        _ date: Date,
+        locale: Locale = .current,
+        timeZone: TimeZone = .current
+    ) -> String {
+        var calendar = locale.calendar
+        calendar.timeZone = timeZone
+        let style = Date.FormatStyle(locale: locale, calendar: calendar, timeZone: timeZone)
+            .weekday(.abbreviated).hour().minute()
+        return date.formatted(style)
+    }
+
     /// The instant `shortTime` abbreviates, to the second and with its
     /// year: the ISO 8601 stamp the task row's and pairing's hover carry.
     package static func exactTime(_ date: Date) -> String {

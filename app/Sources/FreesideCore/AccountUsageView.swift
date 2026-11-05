@@ -1,17 +1,23 @@
 import FreesideAPI
 import SwiftUI
 
-/// Account usage (plan §5.4 usage observation): per usage pool, what the
-/// daemon recorded about it, read from sync, with a manual refresh and
-/// collector reassignment sent as saved commands. `SettingsSheet` hosts it on
-/// both platforms, as it hosts Routing. It draws only what the record holds:
-/// a window the collector didn't report is absent, never drawn as
-/// unsupported, and nothing is computed or added across pools.
+/// Account usage (plan §5.4 usage observation): one card per usage pool,
+/// grouped under its provider, saying what is left of each window the
+/// daemon recorded, read from sync, with a manual refresh and collector
+/// reassignment sent as saved commands. `SettingsSheet` hosts it on both
+/// platforms, as it hosts Routing. It draws only what the record holds: a
+/// window the collector didn't report is absent, never drawn as
+/// unsupported, and nothing is computed or added across pools. The 4 Nov
+/// 2026 handoff draws it (`docs/design/handoff-2026-11-04-settings-usage-new-task/`,
+/// canvas band 2).
 struct AccountUsageView: View {
     @Environment(\.locale) private var locale
     @Environment(\.timeZone) private var timeZone
     @Environment(\.pinnedNow) private var pinnedNow
     let model: AccountUsageModel
+    /// The pools whose Collectors fold is open. Nothing persists it: the
+    /// fold opens closed.
+    @State private var openCollectors: Set<String> = []
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
@@ -33,8 +39,8 @@ struct AccountUsageView: View {
                     if model.pools.isEmpty {
                         dimLine("The daemon declares no usage pools.")
                     }
-                    ForEach(model.pools, id: \.pool.id) { snapshot in
-                        poolCard(snapshot, now: now)
+                    ForEach(Self.providerGroups(model.pools), id: \.provider) { group in
+                        providerGroup(group.provider, pools: group.pools, now: now)
                     }
                 }
             }
@@ -88,140 +94,192 @@ struct AccountUsageView: View {
         }
     }
 
+    // MARK: Providers
+
+    /// The pools under one keyword per provider, in the order each provider
+    /// first appears in the daemon's pool order. The keyword is the record's
+    /// provider id; no name is mapped onto it.
+    static func providerGroups(
+        _ pools: [Components.Schemas.UsagePoolSnapshot]
+    ) -> [(provider: String, pools: [Components.Schemas.UsagePoolUsage])] {
+        var groups: [(provider: String, pools: [Components.Schemas.UsagePoolUsage])] = []
+        for pool in pools.map(\.pool) {
+            if let index = groups.firstIndex(where: { $0.provider == pool.provider }) {
+                groups[index].pools.append(pool)
+            } else {
+                groups.append((pool.provider, [pool]))
+            }
+        }
+        return groups
+    }
+
+    private func providerGroup(
+        _ provider: String, pools: [Components.Schemas.UsagePoolUsage], now: Date
+    ) -> some View {
+        VStack(alignment: .leading, spacing: FreesideLadder.current.moduleGap) {
+            KeywordLabel(text: provider)
+                .accessibilityAddTraits(.isHeader)
+            VStack(alignment: .leading, spacing: 10) {
+                ForEach(pools, id: \.id) { pool in
+                    poolCard(pool, now: now)
+                }
+            }
+        }
+    }
+
     // MARK: Pool
 
-    private func poolCard(_ snapshot: Components.Schemas.UsagePoolSnapshot, now: Date) -> some View {
-        let pool = snapshot.pool
+    /// One pool: the band, a capacity block (R32) per window the record
+    /// names, and the foot with its collectors and Refresh.
+    private func poolCard(_ pool: Components.Schemas.UsagePoolUsage, now: Date) -> some View {
         let windows = UsageDisplay.windows(pool)
-        return VStack(alignment: .leading, spacing: 10) {
-            VStack(alignment: .leading, spacing: 3) {
-                KeywordLabel(text: pool.id)
-                    .accessibilityAddTraits(.isHeader)
-                Text([pool.provider, pool.plan].compactMap(\.self).joined(separator: " · "))
-                    .font(FreesideFont.monoValue)
-                    .foregroundStyle(Color.ink)
+        let detail = pool.last_attempt?.value1.detail ?? ""
+        return VStack(alignment: .leading, spacing: 0) {
+            band(pool, now: now)
+            VStack(alignment: .leading, spacing: 14) {
+                if !detail.isEmpty {
+                    dimLine(detail)
+                } else if windows.isEmpty {
+                    // So no card is empty.
+                    dimLine("No reading yet.")
+                }
+                ForEach(windows, id: \.self) { window in
+                    let capacity = UsageDisplay.capacity(window: window, in: pool, now: now)
+                    CapacityBlock(
+                        capacity: capacity,
+                        resetLine: capacity.resetsAt.map {
+                            UsageDisplay.resetLine(to: $0, now: now, locale: locale, timeZone: timeZone)
+                        })
+                }
+                foot(pool, now: now)
             }
-            .accessibilityElement(children: .combine)
-            refreshStatus(snapshot, now: now)
-            ForEach(windows, id: \.self) { window in
-                windowRow(window, pool: pool, now: now)
+            .padding(.top, 14)
+            .padding(.horizontal, 18)
+            .padding(.bottom, 16)
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .clipShape(RoundedRectangle(cornerRadius: 8))
+        .overlay(RoundedRectangle(cornerRadius: 8).strokeBorder(Color.itemBorder, lineWidth: 1))
+    }
+
+    /// The pool's name row on ground-3: its id, its plan, and the
+    /// collector's last attempt, or `stale since` in wax once a reading
+    /// went stale. Stale is said here once, never on a window. One VoiceOver
+    /// element.
+    private func band(_ pool: Components.Schemas.UsagePoolUsage, now: Date) -> some View {
+        let line = UsageDisplay.attemptLine(pool, now: now, locale: locale, timeZone: timeZone)
+        return ViewThatFits(in: .horizontal) {
+            HStack(alignment: .firstTextBaseline, spacing: 12) {
+                poolIdentity(pool)
+                Spacer(minLength: 0)
+                attemptText(line)
+            }
+            VStack(alignment: .leading, spacing: 3) {
+                poolIdentity(pool)
+                attemptText(line)
+            }
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(.top, 9)
+        .padding(.horizontal, 18)
+        .padding(.bottom, 10)
+        .background(Color.ground3)
+        .overlay(alignment: .bottom) { Color.rule.frame(height: 1) }
+        .accessibilityElement(children: .combine)
+    }
+
+    private func poolIdentity(_ pool: Components.Schemas.UsagePoolUsage) -> some View {
+        HStack(alignment: .firstTextBaseline, spacing: 8) {
+            Text(pool.id)
+                .font(FreesideFont.statement)
+                .foregroundStyle(Color.ink)
+            if let plan = pool.plan {
+                Text(plan)
+                    .font(FreesideFont.trailingSummary)
+                    .foregroundStyle(Color.inkDim)
+            }
+        }
+    }
+
+    @ViewBuilder private func attemptText(_ line: UsageDisplay.AttemptLine) -> some View {
+        let text = Text(line.text)
+            .font(FreesideFont.attachmentFact)
+            .foregroundStyle(line.isWax ? Color.waxText : Color.inkFaint)
+        if let instant = line.instant {
+            text.exactInstant(instant)
+        } else {
+            text
+        }
+    }
+
+    // MARK: Collectors
+
+    /// The card's last row: the Collectors fold leading and Refresh
+    /// trailing, or Refresh under the fold where the two don't fit one line.
+    /// Refresh stays per pool because `refresh_usage` names one pool. The
+    /// fold's rows draw under the row at the card's full width, so an open
+    /// fold doesn't squeeze them beside the button. The collector is one of
+    /// the enrollments, so a pool with none has neither control.
+    @ViewBuilder private func foot(_ pool: Components.Schemas.UsagePoolUsage, now: Date) -> some View {
+        VStack(alignment: .leading, spacing: FreesideLadder.current.moduleGap) {
+            if !pool.enrollments.isEmpty {
+                ViewThatFits(in: .horizontal) {
+                    HStack(alignment: .center, spacing: 12) {
+                        collectorsToggle(pool)
+                        refreshButton(pool)
+                    }
+                    VStack(alignment: .leading, spacing: FreesideLadder.current.moduleGap) {
+                        collectorsToggle(pool)
+                        refreshButton(pool)
+                    }
+                }
             }
             if pool.collector == nil {
                 // Nothing would collect a refresh it asked for.
                 dimLine("No enrollment meters this pool, so nothing collects its usage.")
-            } else {
-                Button("Refresh") { Task { await model.refresh(pool: pool.id) } }
-                    .buttonStyle(FreesideActionButtonStyle(tone: .secondary))
-                    .disabled(!model.canSend)
-                    .accessibilityLabel("Refresh usage for \(pool.id)")
             }
-            if !pool.enrollments.isEmpty {
-                collector(pool, now: now)
-            }
-        }
-        .padding(.horizontal, 14)
-        .padding(.vertical, 12)
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .overlay(RoundedRectangle(cornerRadius: 8).strokeBorder(Color.itemBorder, lineWidth: 1))
-    }
-
-    /// The collector's last attempt, or that the pool has no reading.
-    @ViewBuilder private func refreshStatus(
-        _ snapshot: Components.Schemas.UsagePoolSnapshot, now: Date
-    ) -> some View {
-        if let attempt = snapshot.pool.last_attempt?.value1 {
-            let (keyword, color) = Self.attemptKeyword(attempt.status)
-            VStack(alignment: .leading, spacing: 3) {
-                HStack(alignment: .firstTextBaseline, spacing: 8) {
-                    KeywordLabel(text: keyword, color: color)
-                    Text(time(attempt.at, now: now))
-                        .font(FreesideFont.monoValue)
-                        .foregroundStyle(Color.inkDim)
-                        .exactInstant(attempt.at)
-                }
-                if !attempt.detail.isEmpty {
-                    dimLine(attempt.detail)
+            if openCollectors.contains(pool.id) {
+                VStack(alignment: .leading, spacing: 10) {
+                    ForEach(pool.enrollments, id: \.enrollment_id) { enrollment in
+                        enrollmentRow(enrollment, pool: pool, now: now)
+                    }
                 }
             }
-            .accessibilityElement(children: .combine)
-        } else {
-            dimLine("No reading yet.")
         }
     }
 
-    // MARK: Window
-
-    /// One window as one VoiceOver element: label, share or status, stale,
-    /// used up, reset, and observation, in that order.
-    @ViewBuilder private func windowRow(
-        _ window: String, pool: Components.Schemas.UsagePoolUsage, now: Date
-    ) -> some View {
-        let reading = pool.windows.first { $0.window == window }
-        let stale = reading.map { UsageDisplay.isStale($0, now: now) } ?? false
-        let exhausted = UsageDisplay.isExhausted(window: window, marks: pool.recorded_exhausted_marks, now: now)
-        let models = UsageDisplay.models(limitedBy: window, in: pool)
-        VStack(alignment: .leading, spacing: 3) {
-            HStack(alignment: .firstTextBaseline, spacing: 8) {
-                windowName(window)
-                Spacer(minLength: 0)
-                if stale { KeywordLabel(text: "Stale", color: .waxText) }
-                if exhausted { KeywordLabel(text: "Used up", color: .waxText) }
-                Text(reading.map(UsageDisplay.value) ?? "No reading")
-                    .font(FreesideFont.monoValue)
-                    .foregroundStyle(reading == nil ? Color.inkDim : Color.ink)
-            }
-            if !models.isEmpty {
-                monoLine("Limits \(models.joined(separator: ", "))")
-            }
-            if let resets = reading?.resets_at {
-                monoLine("Resets \(time(resets, now: now)) · \(UsageDisplay.countdown(to: resets, now: now))")
-                    .exactInstant(resets)
-            }
-            ForEach(
-                Array(UsageDisplay.uncoveredMarks(window: window, in: pool, now: now).enumerated()), id: \.offset
-            ) { _, mark in
-                markLine(mark, now: now)
-            }
-            if let reading {
-                monoLine("Observed \(time(reading.observed_at, now: now))")
-                    .exactInstant(reading.observed_at)
-            }
-        }
-        .accessibilityElement(children: .combine)
-    }
-
-    @ViewBuilder private func markLine(_ mark: Components.Schemas.UsageExhaustedMark, now: Date) -> some View {
-        let source = mark.source == .provider_refusal ? "Refused" : "Read exhausted"
-        if let resets = mark.resets_at {
-            monoLine("\(source) until \(time(resets, now: now)) · \(UsageDisplay.countdown(to: resets, now: now))")
-                .exactInstant(resets)
-        } else {
-            monoLine("\(source), no reset recorded")
+    /// The fold's toggle alone: its rows draw under the whole row (`foot`).
+    /// Every card has one, so its spoken label names the pool, and keeps
+    /// the count it replaces.
+    private func collectorsToggle(_ pool: Components.Schemas.UsagePoolUsage) -> some View {
+        let count = Self.enrollmentCount(pool.enrollments.count)
+        return SentenceDisclosure(
+            label: "Collectors", summary: count, spokenLabel: "Collectors for \(pool.id), \(count)",
+            isExpanded: collectorsBinding(pool.id)
+        ) {
+            EmptyView()
         }
     }
 
-    @ViewBuilder private func windowName(_ window: String) -> some View {
-        if let label = UsageDisplay.label(window) {
-            Text(label)
-                .font(FreesideFont.factLabel)
-                .foregroundStyle(Color.ink)
-        } else {
-            Text(window)
-                .font(FreesideFont.monoValue)
-                .foregroundStyle(Color.ink)
+    @ViewBuilder private func refreshButton(_ pool: Components.Schemas.UsagePoolUsage) -> some View {
+        if pool.collector != nil {
+            Button("Refresh") { Task { await model.refresh(pool: pool.id) } }
+                .buttonStyle(FreesideActionButtonStyle(tone: .secondary, expands: false))
+                .disabled(!model.canSend)
+                .accessibilityLabel("Refresh usage for \(pool.id)")
         }
     }
 
-    // MARK: Collector
+    static func enrollmentCount(_ count: Int) -> String {
+        count == 1 ? "1 enrollment" : "\(count) enrollments"
+    }
 
-    private func collector(_ pool: Components.Schemas.UsagePoolUsage, now: Date) -> some View {
-        VStack(alignment: .leading, spacing: 8) {
-            KeywordLabel(text: "Collector")
-                .accessibilityAddTraits(.isHeader)
-            ForEach(pool.enrollments, id: \.enrollment_id) { enrollment in
-                enrollmentRow(enrollment, pool: pool, now: now)
-            }
-        }
+    private func collectorsBinding(_ pool: String) -> Binding<Bool> {
+        Binding(
+            get: { openCollectors.contains(pool) },
+            set: { isOpen in
+                if isOpen { openCollectors.insert(pool) } else { openCollectors.remove(pool) }
+            })
     }
 
     private func enrollmentRow(
@@ -284,14 +342,6 @@ struct AccountUsageView: View {
         case .refresh_usage(let payload): "the refresh of \(payload.pool)"
         case .reassign_collector(let payload): "making \(payload.enrollment_id) the collector for \(payload.pool)"
         case .decision, .stop_task, .submit_task, .change_task_line, .set_routing_policy: "the usage command"
-        }
-    }
-
-    static func attemptKeyword(_ status: Components.Schemas.CollectionAttemptStatus) -> (String, Color) {
-        switch status {
-        case .succeeded: ("Refreshed", .inkDim)
-        case .failed: ("Refresh failed", .waxText)
-        case .unsupported: ("Unsupported", .waxText)
         }
     }
 
