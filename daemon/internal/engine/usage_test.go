@@ -25,6 +25,20 @@ const (
 
 func usageEngineFixture(t *testing.T, bound bool) (*Engine, domain.Run, domain.Attempt) {
 	t.Helper()
+	return usageEngineFixtureWith(t, usageFixtureConfig{bound: bound})
+}
+
+// usageFixtureConfig varies usageEngineFixture: whether the admission carries
+// an agent binding, whether its identity is a Claude subscription, and a
+// ClaudeUsage capture for the scripted result.
+type usageFixtureConfig struct {
+	bound       bool
+	claude      bool
+	claudeUsage *exec.ClaudeUsageCapture
+}
+
+func usageEngineFixtureWith(t *testing.T, cfg usageFixtureConfig) (*Engine, domain.Run, domain.Attempt) {
+	t.Helper()
 	ctx := context.Background()
 	st := storetest.Open(t, filepath.Join(t.TempDir(), "store.db"), store.Options{
 		AdmissionFloors: map[domain.OperatingMode]domain.CapabilitySnapshot{
@@ -60,6 +74,11 @@ func usageEngineFixture(t *testing.T, bound bool) (*Engine, domain.Run, domain.A
 		RefreshStrategy: domain.RefreshOnDemand, SupportsReadOnlyAuthSnapshot: true,
 		AccountBinding: identity.AccountBinding,
 	}
+	if cfg.claude {
+		identity.Provider = "anthropic"
+		enrollment.HarnessClient, enrollment.Route = domain.HarnessClientClaudeCode, "anthropic-subscription"
+		enrollment.AuthMethod, enrollment.RefreshStrategy = domain.AuthMethodSetupToken, domain.RefreshExternal
+	}
 	recordedAt := time.Date(2026, 1, 2, 3, 4, 5, 0, time.UTC)
 	var generation domain.EnrollmentGeneration
 	if err := st.Write(ctx, func(tx *store.WriteTx) error {
@@ -77,11 +96,14 @@ func usageEngineFixture(t *testing.T, bound bool) (*Engine, domain.Run, domain.A
 		if err != nil {
 			return err
 		}
-		expiry := recordedAt.Add(24 * time.Hour)
+		var expiry *time.Time
+		if !cfg.claude {
+			expiry = new(recordedAt.Add(24 * time.Hour))
+		}
 		generation, err = tx.AppendEnrollmentGeneration(ctx, domain.EnrollmentGeneration{
 			EnrollmentID: enrollment.ID, AuthStoreVolume: "codex-usage-store",
 			StoreManifestDigest: usageTestManifest, LeaseFence: lease.Fence,
-			AccountBinding: identity.AccountBinding, TokenExpiry: &expiry, RecordedAt: recordedAt,
+			AccountBinding: identity.AccountBinding, TokenExpiry: expiry, RecordedAt: recordedAt,
 		}, recordedAt.Add(-time.Minute))
 		return err
 	}); err != nil {
@@ -108,7 +130,7 @@ func usageEngineFixture(t *testing.T, bound bool) (*Engine, domain.Run, domain.A
 		StoreManifestDigest: generation.StoreManifestDigest,
 		EffectiveEgress:     []string{"chatgpt.com"},
 	}
-	if !bound {
+	if !cfg.bound {
 		binding = nil
 	}
 	identityID := identity.ID
@@ -140,7 +162,7 @@ func usageEngineFixture(t *testing.T, bound bool) (*Engine, domain.Run, domain.A
 		Result: exec.StageResult{Usage: []exec.UsageMeasurement{{
 			Source: domain.UsageSourceAdapterTranscript, Kind: domain.UsageMeasurementReportedUsage,
 			Metric: "input_tokens", Unit: "tokens", Quantity: 17, Sequence: 1, ObservedAt: recordedAt,
-		}}},
+		}}, ClaudeUsage: cfg.claudeUsage},
 	})
 	if err := driver.Start(ctx, attempt.InvocationID, exec.StartSpec{}); err != nil {
 		t.Fatal(err)

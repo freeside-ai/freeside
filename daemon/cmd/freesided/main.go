@@ -674,9 +674,9 @@ type config struct {
 	// beforeStoreClose is a test seam for observing failed-start cleanup at
 	// the store-close boundary. Production leaves it nil.
 	beforeStoreClose func()
-	// usageCollectors are the usage collectors by harness client. None ships
-	// yet (#1717 adds Claude's), so production collects nothing; tests set a
-	// fake.
+	// usageCollectors are the usage collectors by harness client. Production
+	// leaves it nil and gets Claude's, which answers from writer turns'
+	// usage captures; tests set a fake, and then no capture is recorded.
 	usageCollectors map[domain.HarnessClientKind]ward.UsageCollector
 	// now is the attention service clock. Production leaves it nil for the
 	// wall clock; tests can advance startup across pairing-code expiry.
@@ -1120,7 +1120,8 @@ func run(parent context.Context, stop func(), cfg config) (_ *daemon, err error)
 	// cadence, has been missed. Collection and the bootstrap's stale_at share
 	// the age, so a client sees a reading stale exactly when collection does.
 	usageRefreshAge := 2 * cfg.DoctorInterval
-	usage := usagecollect.New(st, cfg.usageCollectors, usagecollect.Config{
+	usageCollectors, claudeUsage := usageCollectorsFor(cfg.usageCollectors)
+	usage := usagecollect.New(st, usageCollectors, usagecollect.Config{
 		RefreshAge: usageRefreshAge, Logger: cfg.Logger,
 	})
 	attention := signet.NewService(st,
@@ -1469,6 +1470,11 @@ func run(parent context.Context, stop func(), cfg config) (_ *daemon, err error)
 		}
 		if cfg.Logger != nil {
 			engineOptions = append(engineOptions, engine.WithLogger(cfg.Logger))
+		}
+		if claudeUsage != nil {
+			engineOptions = append(engineOptions, engine.WithClaudeUsageSink(claudeUsageSink{
+				collector: claudeUsage, usage: usage,
+			}))
 		}
 		workflow, err = engine.New(st, attention, stageDriver, engineOptions...)
 		if err != nil {

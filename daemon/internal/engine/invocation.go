@@ -1147,6 +1147,7 @@ func (e *Engine) collectWorkflowTerminal(ctx context.Context, runID domain.RunID
 	if err := appendUsageObservations(ctx, e.store, attempt.InvocationID, result.Usage); err != nil {
 		return exec.StageResult{}, false, err
 	}
+	e.reportClaudeUsage(ctx, attempt.InvocationID, result.ClaudeUsage)
 	return result, true, nil
 }
 
