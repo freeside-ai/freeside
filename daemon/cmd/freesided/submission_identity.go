@@ -30,12 +30,15 @@ func prepareSubmission(cfg submitCommandConfig) (submitCommandConfig, error) {
 		if len(cfg.TaskLines) != 0 {
 			return cfg, errors.New("submit: --run-id is lookup-only and takes no --task-line")
 		}
+		if len(cfg.AttachPaths) != 0 {
+			return cfg, errors.New("submit: --run-id is lookup-only and takes no --attach")
+		}
 		return cfg, nil
 	}
 	if cfg.RetrySubmissionID != "" {
 		if cfg.SubmissionID != "" || cfg.TaskPath != "" || cfg.PolicyPath != "" || cfg.PublicationPath != "" ||
 			cfg.WorkUnitPath != "" || cfg.CompositionPath != "" || cfg.ProjectID != "" || cfg.RequireComposition ||
-			len(cfg.TaskLines) != 0 {
+			len(cfg.TaskLines) != 0 || len(cfg.AttachPaths) != 0 {
 			return cfg, errors.New("submit: manual retry takes only --db and --retry-submission-id; it uses the saved inputs")
 		}
 		if !validSubmissionID(cfg.RetrySubmissionID) {
@@ -74,11 +77,22 @@ func prepareSubmission(cfg submitCommandConfig) (submitCommandConfig, error) {
 		}
 		cfg.SavedInputs[role] = input.body
 	}
+	files, err := readAttachmentFiles(cfg.AttachPaths)
+	if err != nil {
+		return cfg, fmt.Errorf("submit: --attach: %w", err)
+	}
+	cfg.Attachments, cfg.attachmentFiles = attachmentInputs(files), files
 	saved, err := matchingRetainedSubmission(cfg)
 	if errors.Is(err, os.ErrNotExist) {
 		return cfg, nil
 	}
-	return saved, err
+	if err != nil {
+		return cfg, err
+	}
+	// The journal matched these files' references, so their bytes are the
+	// ones it names; storing them again converges.
+	saved.attachmentFiles = files
+	return saved, nil
 }
 
 // retainSubmission publishes the validated snapshot before database acceptance.
@@ -136,6 +150,7 @@ func matchingRetainedSubmission(cfg submitCommandConfig) (submitCommandConfig, e
 	}
 	if saved.DBPath != cfg.DBPath || saved.SubmissionID != cfg.SubmissionID || saved.ProjectID != cfg.ProjectID ||
 		saved.RequireComposition != cfg.RequireComposition || !slices.Equal(saved.TaskLines, cfg.TaskLines) ||
+		!slices.Equal(saved.Attachments, cfg.Attachments) ||
 		!sameSubmissionInputs(saved.SavedInputs, cfg.SavedInputs) {
 		return cfg, fmt.Errorf("submit: saved submission inputs changed: %w", store.ErrImmutableConflict)
 	}

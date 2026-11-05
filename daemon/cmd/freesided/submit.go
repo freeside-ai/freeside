@@ -134,6 +134,10 @@ func runSubmitMain(args []string) {
 	flags.Var(&taskLines, "task-line", "choose this task's agent for one role, as role=agent (repeatable; roles: "+
 		taskLineRoleList()+"); a line that cannot be honored refuses the attempt and never falls back to the lineup; "+
 		"a reviewer line must name the agent the review source runs, or the task's review is refused")
+	var attachPaths attachFlag
+	flags.Var(&attachPaths, "attach", "attach this file to the task under its base name (repeatable; files only, "+
+		"an image at most 10 MiB, any other file at most 32 MiB, 100 MiB and 1,000 files per task); "+
+		"the bytes go to the blob store beside -db, so run submit as the daemon's user with the daemon's database path")
 	// Validated here, at the run-creation boundary, so a malformed, out-of-range,
 	// or unsatisfiable writer budget fails before a durable run exists rather
 	// than stranding one when the daemon later parses the same flag. The daemon
@@ -159,7 +163,7 @@ func runSubmitMain(args []string) {
 		CompositionPath:    *compositionPath,
 		RequireComposition: *requireComposition,
 		ProjectID:          domain.ProjectID(*projectID), RunID: domain.RunID(*runID),
-		TaskLines: taskLines,
+		TaskLines: taskLines, AttachPaths: attachPaths,
 	})
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "freesided:", err)
@@ -190,6 +194,17 @@ type submitCommandConfig struct {
 	// saved choice; the tag omits the field when there are none, which keeps
 	// a line-less journal the bytes it was before the field existed.
 	TaskLines []domain.TaskLineChoice `json:",omitempty"`
+	// AttachPaths are the --attach files. prepareSubmission reads and checks
+	// them; the journal keeps only the references in Attachments.
+	AttachPaths []string `json:"-"`
+	// Attachments reference the --attach files by digest, in the given
+	// order, so a manual retry resubmits the same list from the journal. The
+	// tag omits the field when there are none, which keeps an
+	// attachment-less journal the bytes it was before the field existed.
+	Attachments []signet.TaskAttachmentInput `json:",omitempty"`
+	// attachmentFiles hold the --attach bytes of a new submission until they
+	// are stored, before the journal is written.
+	attachmentFiles []attachmentFile
 }
 
 // taskLineFlag collects repeated --task-line role=agent values. It checks
@@ -355,6 +370,9 @@ type submitApplyRequest struct {
 	// bytes a daemon that predates the field accepts; that daemon's strict
 	// decode refuses a request that carries lines and never drops them.
 	TaskLines []domain.TaskLineChoice `json:",omitempty"`
+	// Attachments reference blobs already stored beside the database, in
+	// submitted order; omitted when there are none, like TaskLines.
+	Attachments []signet.TaskAttachmentInput `json:",omitempty"`
 }
 
 // readSubmissionFile hashes one input file under the size cap. The digest is
@@ -609,6 +627,11 @@ func runSubmitCommand(ctx context.Context, cfg submitCommandConfig) (submitResul
 			}
 		}
 	}
+	// Bytes land before the journal that names them, so a manual retry from
+	// the journal finds every attachment it references.
+	if err := storeAttachmentFiles(cfg.DBPath, cfg.attachmentFiles); err != nil {
+		return submitResult{}, fmt.Errorf("submit: store attachment bytes: %w", err)
+	}
 	retained, err := retainSubmission(cfg)
 	if err != nil {
 		return submitResult{}, err
@@ -628,7 +651,7 @@ func runSubmitCommand(ctx context.Context, cfg submitCommandConfig) (submitResul
 		Keys: keys, WorkUnit: workUnit, ResolvedPolicy: resolvedPolicy,
 		ImplementationRunID: implementationRunID, SpecificationRunID: specificationRunID,
 		CampaignID: campaignID, CompositionDigest: composition.digest,
-		TaskLines: cfg.TaskLines,
+		TaskLines: cfg.TaskLines, Attachments: cfg.Attachments,
 	}
 	handle, client, err := openCommandStore(ctx, cfg.DBPath, store.Options{}, storeMigrating)
 	if err != nil {
@@ -737,15 +760,20 @@ func applyLaunchSubmission(
 
 	var manual *domain.ManualSubmission
 	if cfg.RunID == "" {
-		// The task lines join the fingerprint so a submission identity names
-		// one choice of agents. They are omitted when there are none, which
-		// keeps a line-less submission's digest what it was before the field
-		// existed, so one recorded then still replays.
+		// The task lines and attachments join the fingerprint so a submission
+		// identity names one choice of agents and one list of files. Each is
+		// omitted when empty, which keeps a submission without them at the
+		// digest it had before the field existed, so one recorded then still
+		// replays.
 		fingerprint, err := json.Marshal(struct {
 			Project                                            domain.ProjectID
 			Source, Policy, Publication, WorkUnit, Composition domain.Digest
-			TaskLines                                          []domain.TaskLineChoice `json:",omitempty"`
-		}{cfg.ProjectID, spec.digest, policyDigest, publicationFile.digest, workUnitDigest, composition.digest, req.TaskLines})
+			TaskLines                                          []domain.TaskLineChoice      `json:",omitempty"`
+			Attachments                                        []signet.TaskAttachmentInput `json:",omitempty"`
+		}{
+			cfg.ProjectID, spec.digest, policyDigest, publicationFile.digest, workUnitDigest, composition.digest,
+			req.TaskLines, req.Attachments,
+		})
 		if err != nil {
 			return submitResult{}, err
 		}
@@ -804,6 +832,14 @@ func applyLaunchSubmission(
 	if workUnit == nil && manual != nil && !acceptedManual {
 		return submitResult{}, fmt.Errorf("submit: %w", errWorkUnitRequired)
 	}
+	// The attachments are resolved against the blob store before the write
+	// transaction: every reference must be stored and the sniffed list must
+	// meet the limits, or the submission writes nothing. A lookup carries
+	// none (validateSubmitApply).
+	attachments, err := signet.ResolveTaskAttachments(blobs, req.Attachments)
+	if err != nil {
+		return submitResult{}, fmt.Errorf("submit: %w", err)
+	}
 	// Bytes land before metadata: an artifact row must never name a digest
 	// the blob store cannot serve, since admission materializes stage inputs
 	// by digest.
@@ -858,10 +894,16 @@ func applyLaunchSubmission(
 		if submitErr != nil {
 			return submitErr
 		}
-		// Only the submission that creates the task records its lines, in the
-		// same transaction: a replay returned above, so a retry appends no
-		// second version.
-		return recordSubmittedTaskLines(ctx, tx, submitted.Run.TaskID, req.TaskLines, "cli:"+cfg.SubmissionID)
+		// Only the submission that creates the task records its lines and
+		// attachments, in the same transaction: a replay returned above, so a
+		// retry appends no second version.
+		if err := recordSubmittedTaskLines(ctx, tx, submitted.Run.TaskID, req.TaskLines, "cli:"+cfg.SubmissionID); err != nil {
+			return err
+		}
+		if err := tx.PutTaskAttachments(ctx, submitted.Run.TaskID, attachments); err != nil {
+			return fmt.Errorf("record task attachments: %w", err)
+		}
+		return nil
 	})
 	if err != nil && !errors.Is(err, lookupComplete) {
 		return submitResult{}, fmt.Errorf("submit: %w", err)
@@ -931,6 +973,14 @@ func validateSubmitApply(req submitApplyRequest) error {
 	}
 	if req.LegacyRunID != "" && len(req.TaskLines) != 0 {
 		return errors.New("a legacy run lookup carries no task lines")
+	}
+	// The attachment references' shape is checked here too; their bytes are
+	// checked when applyLaunchSubmission resolves them.
+	if err := signet.CheckTaskAttachmentInputs(req.Attachments); err != nil {
+		return err
+	}
+	if req.LegacyRunID != "" && len(req.Attachments) != 0 {
+		return errors.New("a legacy run lookup carries no attachments")
 	}
 	if len(req.SpecBody) == 0 || len(req.SpecBody) > maxSubmissionFileBytes ||
 		len(req.PolicyBody) == 0 || len(req.PolicyBody) > maxSubmissionFileBytes ||

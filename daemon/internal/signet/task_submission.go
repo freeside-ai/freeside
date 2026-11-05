@@ -356,8 +356,8 @@ var errEmptyAttachments = errors.New("attachments must name at least one file wh
 // ResolveTaskAttachments turns a submission's attachment references into the
 // list the task records: each digest's stored size and the media type the
 // daemon sniffs from its bytes, with the client's claim kept as a hint. Every
-// rule is checked before any row can be written. The cheap shape checks (the
-// count, each name, each claim) run before the blob store is touched, then
+// rule is checked before any row can be written. The cheap shape checks
+// (CheckTaskAttachmentInputs) run before the blob store is touched, then
 // each digest is described, then the whole list is held to the size limits
 // and the name-conflict rule. Nil in, nil out.
 //
@@ -370,22 +370,8 @@ func ResolveTaskAttachments(blobs *BlobStore, inputs []TaskAttachmentInput) ([]d
 	if inputs == nil {
 		return nil, nil
 	}
-	if len(inputs) > domain.MaxTaskAttachments {
-		return nil, fmt.Errorf("%w: %d attachments, limit %d: %w",
-			ErrInvalidSubmitTaskPayload, len(inputs), domain.MaxTaskAttachments, domain.ErrTooManyTaskAttachments)
-	}
-	for i, in := range inputs {
-		// The digest's form is checked here, not left to the blob store,
-		// whose refusal would quote it.
-		if !contentaddr.Valid(string(in.Digest)) {
-			return nil, fmt.Errorf("%w: attachment %d digest: %w", ErrInvalidSubmitTaskPayload, i, domain.ErrInvalidTaskAttachmentDigest)
-		}
-		if err := in.Name.Validate(); err != nil {
-			return nil, fmt.Errorf("%w: attachment %d: %w", ErrInvalidSubmitTaskPayload, i, err)
-		}
-		if err := domain.ValidateTaskAttachmentClaim(in.MediaType); err != nil {
-			return nil, fmt.Errorf("%w: attachment %d: %w", ErrInvalidSubmitTaskPayload, i, err)
-		}
+	if err := CheckTaskAttachmentInputs(inputs); err != nil {
+		return nil, err
 	}
 	if blobs == nil {
 		return nil, ErrAttachmentsUnavailable
@@ -408,4 +394,29 @@ func ResolveTaskAttachments(blobs *BlobStore, inputs []TaskAttachmentInput) ([]d
 		return nil, fmt.Errorf("%w: %w", ErrInvalidSubmitTaskPayload, err)
 	}
 	return list, nil
+}
+
+// CheckTaskAttachmentInputs applies the rules a reference list can meet
+// without its bytes: the count, and each entry's digest form, name, and
+// claim. Each refusal wraps ErrInvalidSubmitTaskPayload and names the entry
+// by position only.
+func CheckTaskAttachmentInputs(inputs []TaskAttachmentInput) error {
+	if len(inputs) > domain.MaxTaskAttachments {
+		return fmt.Errorf("%w: %d attachments, limit %d: %w",
+			ErrInvalidSubmitTaskPayload, len(inputs), domain.MaxTaskAttachments, domain.ErrTooManyTaskAttachments)
+	}
+	for i, in := range inputs {
+		// The digest's form is checked here, not left to the blob store,
+		// whose refusal would quote it.
+		if !contentaddr.Valid(string(in.Digest)) {
+			return fmt.Errorf("%w: attachment %d digest: %w", ErrInvalidSubmitTaskPayload, i, domain.ErrInvalidTaskAttachmentDigest)
+		}
+		if err := in.Name.Validate(); err != nil {
+			return fmt.Errorf("%w: attachment %d: %w", ErrInvalidSubmitTaskPayload, i, err)
+		}
+		if err := domain.ValidateTaskAttachmentClaim(in.MediaType); err != nil {
+			return fmt.Errorf("%w: attachment %d: %w", ErrInvalidSubmitTaskPayload, i, err)
+		}
+	}
+	return nil
 }
