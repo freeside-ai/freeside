@@ -3,8 +3,9 @@
 This is the plain-language companion to the project: the goals and the core
 ideas, without the plan's implementation detail. It is **not normative**: it
 sets no rules and settles no disputes. It describes the intended product.
-For what you can run today, read the [README](../README.md); for what has
-landed, follow the wave tracker under "Where To Go Next".
+For what you can run today, read the [README](../README.md) and the
+[getting started guide](getting-started.md); for what has landed, follow the
+wave tracker under "Where To Go Next".
 
 The source of truth is [`docs/plan.md`](plan.md). Where the two disagree, the
 plan wins, and nothing should cite this document as authority.
@@ -306,8 +307,10 @@ passing them is worth it.
 
 ## Where To Go Next
 
-- [`README.md`](../README.md) says what you can run today and how to set it
-  up. This document says what the product is meant to be.
+- [`README.md`](../README.md) says what Freeside is and how to see it with
+  sample data, and [`docs/getting-started.md`](getting-started.md) says how
+  to install it and set up a real run. This document says what the product
+  is meant to be.
 - [`docs/github-app-postures.md`](github-app-postures.md) explains the default
   public GitHub App posture (who owns the GitHub App identity Freeside acts
   under), its residual risks, and when the private work-account posture is
