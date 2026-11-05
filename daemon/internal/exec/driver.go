@@ -179,6 +179,7 @@ func cloneStageInputSnapshot(in *domain.StageInputSnapshot) *domain.StageInputSn
 	}
 	cloned.PriorArtifactDigests = slices.Clone(in.PriorArtifactDigests)
 	cloned.ImageInputDigests = slices.Clone(in.ImageInputDigests)
+	cloned.Attachments = slices.Clone(in.Attachments)
 	return &cloned
 }
 

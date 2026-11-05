@@ -389,3 +389,26 @@ func TestStageResultCause(t *testing.T) {
 		})
 	}
 }
+
+func TestStartSpecCloneDetachesAttachments(t *testing.T) {
+	identity := domain.AuthIdentityID("auth-1")
+	admission := fullAdmission(t, &identity, domain.EgressProviderOnly, agentBinding())
+	in := domain.StageInputSnapshotInput{
+		InputDigest: admission.StageInputs.InputDigest, SpecificationDigest: admission.StageInputs.SpecificationDigest,
+		PromptPackageDigest: admission.StageInputs.PromptPackageDigest, PolicyDigest: admission.StageInputs.PolicyDigest,
+		Attachments: []domain.StageInputAttachment{{
+			Digest: execStageDigest("e"), Name: "notes/readme.md",
+			MediaType: domain.TaskAttachmentMediaOctetStream, SizeBytes: 3,
+		}},
+	}
+	snapshot, err := domain.NewStageInputSnapshot(in)
+	if err != nil {
+		t.Fatal(err)
+	}
+	spec := exec.StartSpec{StageInputs: &snapshot}
+	cloned := spec.Clone()
+	snapshot.Attachments[0].Name = "changed.md"
+	if cloned.StageInputs.Attachments[0].Name != "notes/readme.md" {
+		t.Fatal("StartSpec.Clone shared the snapshot's attachment slice")
+	}
+}

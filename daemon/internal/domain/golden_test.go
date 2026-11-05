@@ -1206,6 +1206,26 @@ func TestGolden(t *testing.T) {
 	if err := codexStageInput.Validate(); err != nil {
 		t.Fatal(err)
 	}
+	// The same inputs with a named image and a nested file, in presentation
+	// order: the only shape whose encoding carries the attachments key.
+	attachmentsStageInput := stageInputs
+	attachmentsStageInput.Attachments = []domain.StageInputAttachment{
+		{
+			Digest: stageDigest("9"), Name: "screenshot.png",
+			MediaType: domain.TaskAttachmentMediaPNG, SizeBytes: 48213,
+		},
+		{
+			Digest: stageDigest("a"), Name: "design_handoff/tokens/colors.json",
+			MediaType: domain.TaskAttachmentMediaOctetStream, SizeBytes: 1290,
+		},
+	}
+	attachmentsStageInput.ID, err = attachmentsStageInput.ComputeID()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := attachmentsStageInput.Validate(); err != nil {
+		t.Fatal(err)
+	}
 	admission, err := domain.NewExecutionAdmission(domain.ExecutionAdmissionInput{
 		InvocationID: "inv-1", RunID: "run-1", StageID: "stage-1", AttemptID: "attempt-1",
 		Backend: "fresh_vm_read_only_volume_handoff",
@@ -2486,6 +2506,7 @@ func TestGolden(t *testing.T) {
 		{"agent_definition", goldenAgent},
 		{"stage_input_snapshot", stageInputs},
 		{"stage_input_snapshot_codex", codexStageInput},
+		{"stage_input_snapshot_attachments", attachmentsStageInput},
 		{"execution_admission", admission},
 		{"execution_admission_registry", registryAdmission},
 		{"registry_set", registrySetDeclaration},

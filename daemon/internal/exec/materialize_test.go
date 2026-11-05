@@ -644,3 +644,114 @@ func TestMaterializingStageDriverSerializesDuplicateBeforeInputIO(t *testing.T) 
 		t.Fatalf("source opens = %d, want one materialization (%d)", got, want)
 	}
 }
+
+// withAttachments re-admits the fixture's snapshot with a small nested image,
+// a file larger than both prompt-role limits of newTestMaterializer, so the
+// test shows attachments are outside that budget, and an empty file. sizeDelta skews the
+// file's admitted size from its true length.
+func withAttachments(t *testing.T, fixture *materializeFixture, sizeDelta int64) []domain.StageInputAttachment {
+	t.Helper()
+	image := []byte{0x89, 'P', 'N', 'G', '\r', '\n', 0x1a, '\n', 'a', 't', 't'}
+	large := bytes.Repeat([]byte("design handoff\n"), (5<<20)/15+1)
+	fixture.bodies["attachment image"] = image
+	fixture.bodies["attachment file"] = large
+	fixture.source[contentDigest(image)] = slices.Clone(image)
+	fixture.source[contentDigest(large)] = slices.Clone(large)
+	fixture.bodies["attachment empty"] = []byte{}
+	fixture.source[contentDigest(nil)] = []byte{}
+	attachments := []domain.StageInputAttachment{
+		{
+			Digest: contentDigest(image), Name: "design_handoff/screenshot.png",
+			MediaType: domain.TaskAttachmentMediaPNG, SizeBytes: int64(len(image)),
+		},
+		{
+			Digest: contentDigest(large), Name: "design_handoff/tokens/colors.json",
+			MediaType: domain.TaskAttachmentMediaOctetStream, SizeBytes: int64(len(large)) + sizeDelta,
+		},
+		{
+			Digest: contentDigest(nil), Name: "design_handoff/.keep",
+			MediaType: domain.TaskAttachmentMediaOctetStream, SizeBytes: 0,
+		},
+	}
+	stored := fixture.spec.StageInputs
+	snapshot, err := domain.NewStageInputSnapshot(domain.StageInputSnapshotInput{
+		InputDigest: stored.InputDigest, SpecificationDigest: stored.SpecificationDigest,
+		PromptPackageDigest: stored.PromptPackageDigest, PolicyDigest: stored.PolicyDigest,
+		VendorInstructions: stored.VendorInstructions, ConversationDigest: stored.ConversationDigest,
+		PriorArtifactDigests: stored.PriorArtifactDigests, ImageInputDigests: stored.ImageInputDigests,
+		Attachments: attachments,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	fixture.spec.StageInputs = &snapshot
+	return attachments
+}
+
+func TestMaterializeAttachments(t *testing.T) {
+	fixture := newMaterializeFixture(t)
+	admitted := withAttachments(t, &fixture, 0)
+	if int64(len(fixture.bodies["attachment file"])) <= 4<<20 {
+		t.Fatal("fixture file must exceed the materializer's total prompt-role budget")
+	}
+	bundle, err := newTestMaterializer(t, fixture.source).Materialize(t.Context(), fixture.spec)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := bundle.Attachments()
+	if len(got) != len(admitted) {
+		t.Fatalf("attachments = %d, want %d", len(got), len(admitted))
+	}
+	for i, want := range []string{"attachment image", "attachment file", "attachment empty"} {
+		if got[i].Name() != admitted[i].Name || got[i].MediaType() != admitted[i].MediaType ||
+			got[i].SizeBytes() != admitted[i].SizeBytes ||
+			got[i].Content().Digest() != admitted[i].Digest ||
+			!bytes.Equal(got[i].Content().Bytes(), fixture.bodies[want]) {
+			t.Fatalf("attachment %d does not match its admitted entry", i)
+		}
+	}
+	got[0] = exec.MaterializedAttachment{}
+	if bundle.Attachments()[0].Name() != admitted[0].Name {
+		t.Fatal("Attachments exposed mutable bundle storage")
+	}
+
+	plain := newMaterializeFixture(t)
+	bundle, err = newTestMaterializer(t, plain.source).Materialize(t.Context(), plain.spec)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := bundle.Attachments(); len(got) != 0 {
+		t.Fatalf("snapshot without attachments materialized %d", len(got))
+	}
+}
+
+func TestMaterializeAttachmentFailsClosed(t *testing.T) {
+	cases := map[string]struct {
+		sizeDelta int64
+		edit      func(materializeFixture, []domain.StageInputAttachment)
+		want      error
+	}{
+		"missing blob": {0, func(f materializeFixture, a []domain.StageInputAttachment) {
+			delete(f.source, a[1].Digest)
+		}, errInputMissing},
+		"digest mismatch": {0, func(f materializeFixture, a []domain.StageInputAttachment) {
+			f.source[a[0].Digest] = bytes.Repeat([]byte{'x'}, int(a[0].SizeBytes))
+		}, exec.ErrInputDigestMismatch},
+		"longer than admitted":  {-1, func(materializeFixture, []domain.StageInputAttachment) {}, exec.ErrInputTooLarge},
+		"shorter than admitted": {1, func(materializeFixture, []domain.StageInputAttachment) {}, exec.ErrInputDigestMismatch},
+	}
+	for name, tc := range cases {
+		t.Run(name, func(t *testing.T) {
+			fixture := newMaterializeFixture(t)
+			attachments := withAttachments(t, &fixture, tc.sizeDelta)
+			tc.edit(fixture, attachments)
+			bundle, err := newTestMaterializer(t, fixture.source).Materialize(t.Context(), fixture.spec)
+			if !errors.Is(err, tc.want) {
+				t.Fatalf("Materialize = %v, want %v", err, tc.want)
+			}
+			if bundle.Digest() != "" || bundle.Attachments() != nil {
+				t.Fatal("a failed materialization returned a bundle")
+			}
+		})
+	}
+}

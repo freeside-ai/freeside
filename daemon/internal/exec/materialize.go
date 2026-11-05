@@ -19,8 +19,11 @@ type InputSource interface {
 	OpenContext(context.Context, domain.Digest) (io.ReadCloser, error)
 }
 
-// MaterializerOptions bounds one input and the complete admitted bundle.
-// Callers must choose limits deliberately for their execution class.
+// MaterializerOptions bounds one prompt-role input and the prompt-role
+// bundle. Attachments count against neither: each is bounded by the size the
+// snapshot records for it, and the whole list by the snapshot's validated
+// attachment budget. Callers must choose limits deliberately for their
+// execution class.
 type MaterializerOptions struct {
 	MaxInputBytes int64
 	MaxTotalBytes int64
@@ -172,7 +175,30 @@ type StageInputs struct {
 	conversation       *MaterializedContent
 	priorArtifacts     []MaterializedContent
 	imageInputs        []MaterializedContent
+	attachments        []MaterializedAttachment
 }
+
+// MaterializedAttachment is one verified attachment with the name and media
+// type the snapshot admitted for it.
+type MaterializedAttachment struct {
+	name      domain.TaskAttachmentName
+	mediaType domain.TaskAttachmentMediaType
+	content   MaterializedContent
+}
+
+// Name returns the relative-path name the agent is shown.
+func (a MaterializedAttachment) Name() domain.TaskAttachmentName { return a.name }
+
+// MediaType returns the daemon's media type for the attachment.
+func (a MaterializedAttachment) MediaType() domain.TaskAttachmentMediaType {
+	return a.mediaType
+}
+
+// SizeBytes returns the verified body length, which equals the admitted size.
+func (a MaterializedAttachment) SizeBytes() int64 { return int64(len(a.content.body)) }
+
+// Content returns the verified attachment bytes.
+func (a MaterializedAttachment) Content() MaterializedContent { return a.content }
 
 // MaterializedVendorInstructions is the verified vendor-native instruction
 // input for one admitted execution. A nil content value is the explicit
@@ -253,10 +279,16 @@ func (s StageInputs) ImageInputs() []MaterializedContent {
 	return slices.Clone(s.imageInputs)
 }
 
+// Attachments returns the verified attachments in admitted order.
+func (s StageInputs) Attachments() []MaterializedAttachment {
+	return slices.Clone(s.attachments)
+}
+
 // Materialize resolves exactly the snapshot admitted in spec. Every body is
 // hashed while read and compared with its frozen digest. Missing content,
 // corruption, cancellation, or size overflow returns before any StageInputs
-// value is exposed.
+// value is exposed. Prompt-role inputs share the MaterializerOptions limits;
+// each attachment must be exactly its admitted size.
 func (m *Materializer) Materialize(ctx context.Context, spec StartSpec) (StageInputs, error) {
 	if spec.StageInputs == nil {
 		return StageInputs{}, ErrStageInputsMissing
@@ -276,6 +308,7 @@ func (m *Materializer) Materialize(ctx context.Context, spec StartSpec) (StageIn
 	}
 	snapshot.PriorArtifactDigests = slices.Clone(spec.StageInputs.PriorArtifactDigests)
 	snapshot.ImageInputDigests = slices.Clone(spec.StageInputs.ImageInputDigests)
+	snapshot.Attachments = slices.Clone(spec.StageInputs.Attachments)
 	if err := snapshot.Validate(); err != nil {
 		return StageInputs{}, fmt.Errorf("materialize stage inputs: %w", err)
 	}
@@ -288,7 +321,7 @@ func (m *Materializer) Materialize(ctx context.Context, spec StartSpec) (StageIn
 
 	remaining := m.opts.MaxTotalBytes
 	load := func(role string, digest domain.Digest) (MaterializedContent, error) {
-		content, err := m.load(ctx, role, digest, remaining)
+		content, err := m.load(ctx, role, digest, min(m.opts.MaxInputBytes, remaining))
 		if err != nil {
 			return MaterializedContent{}, err
 		}
@@ -343,11 +376,43 @@ func (m *Materializer) Materialize(ctx context.Context, spec StartSpec) (StageIn
 	if err != nil {
 		return StageInputs{}, err
 	}
+	attachments, err := m.loadAttachments(ctx, snapshot.Attachments)
+	if err != nil {
+		return StageInputs{}, err
+	}
 	return StageInputs{
 		digest: snapshot.ID, specification: specification, promptPackage: prompt,
 		policy: policy, vendorInstructions: vendorInstructions, conversation: conversation,
-		priorArtifacts: prior, imageInputs: images,
+		priorArtifacts: prior, imageInputs: images, attachments: attachments,
 	}, nil
+}
+
+// loadAttachments reads each attachment up to its admitted size, outside the
+// prompt-role budget. Errors name the index, never the attachment's name.
+func (m *Materializer) loadAttachments(
+	ctx context.Context, list []domain.StageInputAttachment,
+) ([]MaterializedAttachment, error) {
+	if len(list) == 0 {
+		return nil, nil
+	}
+	out := make([]MaterializedAttachment, 0, len(list))
+	for i, a := range list {
+		role := fmt.Sprintf("attachment[%d]", i)
+		content, err := m.load(ctx, role, a.Digest, a.SizeBytes)
+		if err != nil {
+			return nil, err
+		}
+		// A body that matches its digest but is shorter than recorded means
+		// the admitted record is wrong about the content it names.
+		if got := int64(len(content.body)); got != a.SizeBytes {
+			return nil, fmt.Errorf("materialize %s %s: body is %d bytes, admitted %d: %w",
+				role, a.Digest, got, a.SizeBytes, ErrInputDigestMismatch)
+		}
+		out = append(out, MaterializedAttachment{
+			name: a.Name, mediaType: a.MediaType, content: content,
+		})
+	}
+	return out, nil
 }
 
 func materializeMany(
@@ -367,7 +432,7 @@ func materializeMany(
 }
 
 func (m *Materializer) load(
-	ctx context.Context, role string, digest domain.Digest, totalRemaining int64,
+	ctx context.Context, role string, digest domain.Digest, limit int64,
 ) (MaterializedContent, error) {
 	if !contentaddr.Valid(string(digest)) {
 		return MaterializedContent{}, fmt.Errorf("materialize %s digest %q: %w",
@@ -386,7 +451,6 @@ func (m *Materializer) load(
 		return MaterializedContent{}, fmt.Errorf("materialize %s %s: %w",
 			role, digest, errors.Join(ErrInputUnavailable, err, closeErr))
 	}
-	limit := min(m.opts.MaxInputBytes, totalRemaining)
 	content, readErr := io.ReadAll(io.LimitReader(contextReader{ctx: ctx, reader: body}, limit+1))
 	closeErr := body.Close()
 	if err := errors.Join(readErr, closeErr); err != nil {
