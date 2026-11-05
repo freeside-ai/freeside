@@ -3457,6 +3457,7 @@
 
             surfaces.append(contentsOf: try taskStopSurfaces())
             surfaces.append(contentsOf: try taskPageSurfaces(at: dynamicTypeSize))
+            surfaces.append(contentsOf: taskSpecificationReaderSurfaces())
             surfaces.append(contentsOf: taskStyleSurfaces())
             surfaces.append(contentsOf: cardStyleSurfaces())
             surfaces.append(contentsOf: choiceListSurfaces())
@@ -4264,6 +4265,42 @@
             return surfaces
         }
 
+        /// The specification reader the task page's documents line opens:
+        /// the approved bytes, and the unavailable state that names the
+        /// digest when the daemon has none.
+        private func taskSpecificationReaderSurfaces() -> [Surface] {
+            let digest = "sha256:" + String(repeating: "c", count: 64)
+            let loader = AttachmentLoader(client: APIClientFactory.mock(server: MockServer(attachments: [:])))
+            let bytes = Data(
+                """
+                # Specification
+
+                Store first, then API. Existing rows migrate before any client can read them.
+
+                ## Acceptance
+
+                - The API keeps the old shape for one release.
+                """.utf8)
+            var surfaces: [Surface] = []
+            for (name, revision, content) in [
+                ("task-specification-reader", 2, TaskSpecificationReaderSheet.Content.loaded(bytes)),
+                ("task-specification-reader-unavailable", nil, .unavailable),
+            ] {
+                let sheet = TaskSpecificationReaderSheet(
+                    request: .init(digest: digest, revision: revision), attachments: loader, content: content)
+                for scheme in [ColorScheme.light, .dark] {
+                    let suffix = scheme == .dark ? "-dark" : ""
+                    for (width, tail) in [(CGFloat(720), ""), (390, "-phone")] {
+                        surfaces.append(
+                            Surface(
+                                name: name + tail + suffix, width: width, colorScheme: scheme,
+                                view: AnyView(sheet.screenshotContent)))
+                    }
+                }
+            }
+            return surfaces
+        }
+
         private func taskStopSurfaces() throws -> [Surface] {
             var surfaces: [Surface] = []
             let original = try #require(TaskFixtures.defaultTasks().first)
@@ -4316,6 +4353,11 @@
                                 VStack(alignment: .leading, spacing: 16) {
                                     Text(snapshot.task.display_names.task.text).font(FreesideFont.title)
                                     Text(TaskDisplay.projectName(snapshot.task)).font(FreesideFont.callout)
+                                    // The menu as the outline row draws it,
+                                    // so each state shows its enablement.
+                                    TaskActionsMenu(
+                                        coordinator: coordinator, taskID: snapshot.task.id,
+                                        confirmation: .constant(nil), rendersInteractiveControls: false)
                                     TaskStopView(coordinator: coordinator, taskID: snapshot.task.id)
                                 }.padding(24).foregroundStyle(Color.ink).background(Color.ground))))
                     if state == "queued", let confirmation = coordinator.taskStop.prepare(taskID: snapshot.task.id) {

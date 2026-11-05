@@ -111,11 +111,11 @@ public final class DecisionModel {
         self.onConclusion = onConclusion
     }
 
-    static func pullRequestURL(for reference: Components.Schemas.PRReference) -> URL? {
+    package static func pullRequestURL(for reference: Components.Schemas.PRReference) -> URL? {
         forgeURL(repo: reference.repo, kind: "pull", number: reference.number)
     }
 
-    nonisolated static func issueURL(for issue: Components.Schemas.IssueSubjectRef) -> URL? {
+    package nonisolated static func issueURL(for issue: Components.Schemas.IssueSubjectRef) -> URL? {
         forgeURL(repo: issue.repo, kind: "issues", number: issue.issue_number)
     }
 

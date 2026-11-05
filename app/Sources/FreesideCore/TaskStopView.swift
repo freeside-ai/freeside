@@ -1,28 +1,15 @@
 import FreesideAPI
 import SwiftUI
 
-/// Shared Mac/iPhone control. Synced cancellation always outranks a receipt.
+/// What a task's Stop states say, shared by Mac and iPhone: the synced
+/// cancellation, a request in flight or unanswered, and the acts that
+/// recover one. Synced cancellation always outranks a receipt. Stop itself
+/// starts from `TaskActionsMenu`, so nothing here starts one.
 struct TaskStopView: View {
-    /// A page's own item in the More Actions menu, drawn above Stop.
-    struct MoreAction {
-        let title: String
-        let perform: () -> Void
-    }
-
     let coordinator: SyncCoordinator
     let taskID: String
-    /// Offered in every Stop state: a page's own item needs no daemon, so
-    /// the menu holding one stays on the page, and enabled, while Stop is
-    /// unavailable, in flight, or done.
-    var moreActions: [MoreAction] = []
-    /// Where a prepared Stop confirmation goes when the caller presents it.
-    /// The task page passes one so the sheet stays up while its lazy stack
-    /// drops this view; nil keeps the confirmation here, in this view's own
-    /// sheet.
-    var presentedConfirmation: Binding<TaskStopModel.Confirmation?>? = nil
     /// The What Happened fold, held by the caller when given.
     var explanationExpanded: Binding<Bool>? = nil
-    @State private var confirmation: TaskStopModel.Confirmation?
     @State private var showsExplanation = false
 
     private var model: TaskStopModel { coordinator.taskStop }
@@ -30,10 +17,10 @@ struct TaskStopView: View {
         coordinator.tasks.first { $0.task.id == taskID }
     }
 
-    /// True while the control is the More Actions menu alone, with no
-    /// sentence or second button: Stop is offered and nothing about it is
-    /// in flight.
-    var showsOnlyTheStopButton: Bool {
+    /// True while there is no Stop state to state: no cancellation, nothing
+    /// in flight, and no reason or message. The task page leaves the view
+    /// out then, so a quiet task keeps no gap for it.
+    var isQuiet: Bool {
         snapshot?.task.cancellation == nil && !model.sending.contains(taskID)
             && !model.confirming.contains(taskID)
             && model.pending(for: taskID) == nil && model.unavailableReason == nil
@@ -81,9 +68,6 @@ struct TaskStopView: View {
                     .accessibilityElement(children: .combine)
                 }
             }
-            if drawsMoreActionsMenu {
-                moreActionsMenu
-            }
             if let reason = model.unavailableReason { note(reason) }
             if let message = model.messages[taskID] { note(message, color: .ink) }
             if let explanation {
@@ -107,73 +91,6 @@ struct TaskStopView: View {
             }
         }
         .fixedSize(horizontal: false, vertical: true)
-        .sheet(item: presentsConfirmation ? $confirmation : .constant(nil)) { prepared in
-            TaskStopConfirmationView(entry: prepared.entry) {
-                confirmation = nil
-                Task { await model.confirm(prepared) }
-            }
-        }
-    }
-
-    /// Whether this view presents the Stop confirmation itself.
-    var presentsConfirmation: Bool { presentedConfirmation == nil }
-
-    /// Stop Task…: prepares the confirmation where it is presented.
-    func requestStop() {
-        let prepared = model.prepare(taskID: taskID)
-        if let presentedConfirmation {
-            presentedConfirmation.wrappedValue = prepared
-        } else {
-            confirmation = prepared
-        }
-    }
-
-    /// Whether the menu offers Stop: no Stop is in flight and the task
-    /// carries no cancellation. Every other Stop state speaks in place.
-    var offersStop: Bool {
-        snapshot?.task.cancellation == nil && !model.sending.contains(taskID)
-            && !model.confirming.contains(taskID) && model.pending(for: taskID) == nil
-    }
-
-    private var stopIsUnavailable: Bool { model.unavailableReason != nil || snapshot == nil }
-
-    var drawsMoreActionsMenu: Bool { offersStop || !moreActions.isEmpty }
-
-    /// Disabled, never hidden, while it would hold an unavailable Stop
-    /// alone.
-    var moreActionsMenuIsDisabled: Bool { moreActions.isEmpty && stopIsUnavailable }
-
-    /// Stop is the page's one consequential action, so it sits behind the
-    /// overflow menu the decision card uses, never as a standing button
-    /// beside the task's name (5.6). Only the offer folds away: every Stop
-    /// state stays on the page. While a Stop is in flight or the task is
-    /// cancelled the menu holds the page's own items alone, so a second
-    /// Stop cannot start beside the first.
-    private var moreActionsMenu: some View {
-        Menu {
-            ForEach(Array(moreActions.enumerated()), id: \.offset) { _, action in
-                Button(action.title, action: action.perform)
-            }
-            if offersStop {
-                if !moreActions.isEmpty { Divider() }
-                Button("Stop Task…", role: .destructive, action: requestStop)
-                    .disabled(stopIsUnavailable)
-            }
-        } label: {
-            Text("More Actions \u{25BE}")
-        }
-        .menuStyle(.button)
-        .buttonStyle(FreesideActionButtonStyle(tone: .tertiary))
-        .disabled(moreActionsMenuIsDisabled)
-        .accessibilityLabel("More task actions")
-        .accessibilityHint(menuHint)
-    }
-
-    private var menuHint: String {
-        let items =
-            moreActions.map(\.title)
-            + (offersStop ? ["Stop Task, which reviews what stopping this task will do"] : [])
-        return "Holds \(items.formatted(.list(type: .and)))"
     }
 
     /// The Stop the daemon never answered: the request Retry resends.
@@ -238,6 +155,107 @@ struct TaskStopView: View {
         case .failed_to_stop: "The task did not stop. Execution may continue."
         case .confirmed: "Stop confirmed by the daemon. Existing history and PRs remain available."
         }
+    }
+}
+
+/// The task's one menu, `Task Actions ▾` (◆B, 4 Nov handoff): the page's own
+/// items, then Stop Task… under a divider. The page pins it in the outline
+/// row, or the iPhone's navigation bar, so Stop stays in reach while the page
+/// scrolls; the Stop states it leads to speak in `TaskStopView`, in the body.
+struct TaskActionsMenu: View {
+    /// A page's own item, drawn above Stop.
+    struct Action {
+        let title: String
+        let perform: () -> Void
+    }
+
+    let coordinator: SyncCoordinator
+    let taskID: String
+    /// Offered in every Stop state: a page's own item needs no daemon, so
+    /// the menu holding one stays, and enabled, while Stop is unavailable,
+    /// in flight, or done.
+    var actions: [Action] = []
+    /// Where Stop Task… puts its prepared confirmation. The page presents it
+    /// outside its lazy stack, which can drop the row this menu sits in.
+    let confirmation: Binding<TaskStopModel.Confirmation?>
+    /// False draws the label alone, for a renderer that can't draw a menu.
+    var rendersInteractiveControls = true
+
+    private var model: TaskStopModel { coordinator.taskStop }
+    private var snapshot: Components.Schemas.TaskSnapshot? {
+        coordinator.tasks.first { $0.task.id == taskID }
+    }
+
+    /// Whether the menu offers Stop: no Stop is in flight and the task
+    /// carries no cancellation. Every other Stop state speaks in the body.
+    var offersStop: Bool {
+        snapshot?.task.cancellation == nil && !model.sending.contains(taskID)
+            && !model.confirming.contains(taskID) && model.pending(for: taskID) == nil
+    }
+
+    var stopIsUnavailable: Bool { model.unavailableReason != nil || snapshot == nil }
+
+    /// Whether there is anything to hold: the page's own items or Stop.
+    var drawsMenu: Bool { offersStop || !actions.isEmpty }
+
+    /// Disabled, never hidden, while it would hold an unavailable Stop
+    /// alone.
+    var isDisabled: Bool { actions.isEmpty && stopIsUnavailable }
+
+    /// Stop Task…: prepares the confirmation where the page presents it.
+    func requestStop() {
+        confirmation.wrappedValue = model.prepare(taskID: taskID)
+    }
+
+    /// Stop is the page's one consequential action, so it sits behind this
+    /// menu, never as a standing button beside the task's name (5.6). Only
+    /// the offer folds away: every Stop state stays on the page. While a
+    /// Stop is in flight or the task is cancelled the menu holds the page's
+    /// own items alone, so a second Stop cannot start beside the first.
+    @ViewBuilder var body: some View {
+        if drawsMenu {
+            if rendersInteractiveControls {
+                Menu {
+                    ForEach(Array(actions.enumerated()), id: \.offset) { _, action in
+                        Button(action.title, action: action.perform)
+                    }
+                    if offersStop {
+                        if !actions.isEmpty { Divider() }
+                        Button("Stop Task…", role: .destructive, action: requestStop)
+                            .disabled(stopIsUnavailable)
+                    }
+                } label: {
+                    label
+                }
+                .menuStyle(.button)
+                .buttonStyle(.plain)
+                .menuIndicator(.hidden)
+                .fixedSize()
+                .freesideFocusRing(cornerRadius: 4)
+                .disabled(isDisabled)
+                .accessibilityLabel("Task actions")
+                .accessibilityHint(hint)
+            } else {
+                label
+            }
+        }
+    }
+
+    /// Dim at keyword weight, as the canvas's outline draws it (`.tmenu`).
+    private var label: some View {
+        Text("Task Actions \u{25BE}")
+            .font(FreesideFont.noticeAction)
+            .foregroundStyle(isDisabled ? Color.inkFaint : Color.inkDim)
+            .padding(.horizontal, 8)
+            .padding(.vertical, 5)
+            .contentShape(Rectangle())
+    }
+
+    private var hint: String {
+        let items =
+            actions.map(\.title)
+            + (offersStop ? ["Stop Task, which reviews what stopping this task will do"] : [])
+        return "Holds \(items.formatted(.list(type: .and)))"
     }
 }
 

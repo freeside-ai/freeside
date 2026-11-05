@@ -3,7 +3,7 @@ import SwiftUI
 
 /// One page per task, in every state: the header, the pinned outline, the
 /// leading card and the other open items, then the body (the Task fold, the
-/// controls, Conversation, and the Timeline). The body's history is as the
+/// Stop states, Conversation, and the Timeline). The body's history is as the
 /// daemon computes it (`GET /tasks/{id}/timeline`): the task's events as one
 /// open rail that marks where each stage began, then every campaign folds
 /// its runs and detailed milestones. Every list keeps the daemon's
@@ -86,6 +86,9 @@ struct TaskPageView: View {
     /// while a card leaving shrinks the document under the reader.
     @State private var stopConfirmation: TaskStopModel.Confirmation?
     @State private var showsStopExplanation = false
+    /// The specification the documents line opened, presented outside the
+    /// lazy stack for the same reason.
+    @State private var specificationRequest: TaskSpecificationRequest?
     /// Keeps the reader's place for a page mounting again for this task,
     /// and counts the cards the operator opens. Nil in a screenshot and in
     /// tests that don't exercise it.
@@ -191,6 +194,10 @@ struct TaskPageView: View {
         TaskTimelinePresentation.conversations(taskItems.map(\.item)) { coordinator.store.conversationsByID[$0] }
     }
 
+    private static func messageCount(_ conversations: [Components.Schemas.ConversationSnapshot]) -> Int {
+        conversations.reduce(0) { $0 + $1.conversation.messages.count }
+    }
+
     /// The gap between the page's parts: header, outline row, card, one-line
     /// rows, and body.
     private static let contentGap: CGFloat = 16
@@ -239,7 +246,19 @@ struct TaskPageView: View {
             .onChange(of: leadingCard != nil, initial: true) { place.leadsWithCard = leadingCard != nil }
             .onChange(of: identifiersReveals) { revealIdentifiers() }
             .taskStopConfirmation(
-                $stopConfirmation, model: coordinator.taskStop, dynamicTypeSize: dynamicTypeSize)
+                $stopConfirmation, model: coordinator.taskStop, dynamicTypeSize: dynamicTypeSize
+            )
+            .sheet(item: $specificationRequest) { request in
+                TaskSpecificationReaderSheet(request: request, attachments: coordinator.store.attachments)
+                    .dynamicTypeSize(dynamicTypeSize)
+            }
+            #if os(iOS)
+                .toolbar {
+                    ToolbarItem(placement: .topBarTrailing) {
+                        if TaskActionsSlot(compact: compact) == .navigationBar { taskActionsMenu(timeline) }
+                    }
+                }
+            #endif
         }
     }
 
@@ -264,13 +283,18 @@ struct TaskPageView: View {
                     }
                 }
             }
+            let conversations = conversations
             VStack(alignment: .leading, spacing: 22) {
                 taskFold(timeline)
                     .background(alignment: .top) { jumpTarget(.section(.task)) }
-                controls(timeline)
+                stopStates
                 schedules
-                conversationSection
-                    .background(alignment: .top) { jumpTarget(.section(.conversation)) }
+                // Absent at zero, as Decisions is: the outline drops its
+                // chip then too.
+                if Self.messageCount(conversations) > 0 {
+                    conversationSection(conversations)
+                        .background(alignment: .top) { jumpTarget(.section(.conversation)) }
+                }
                 timelineSection(timeline)
                     .background(alignment: .top) { jumpTarget(.section(.timeline)) }
                 // Outside the timeline, so a seated card's identifiers,
@@ -508,6 +532,7 @@ struct TaskPageView: View {
                 lineLimit: 3),
             status: status
         ) {
+            documentsLine(timeline)
             // A parked status line already names the hold.
             if let hold = TaskDisplay.holdCallout(task, position: position, stage: stage),
                 position?.hold.map(status.hasSuffix) != true
@@ -548,12 +573,77 @@ struct TaskPageView: View {
         }
     }
 
+    /// The documents line (◆D): accent link words at body size with faint
+    /// dots between them, no keyword or box. It wraps where the column
+    /// can't hold it, which on a phone puts it under the title. A dot
+    /// rides the end of the part before it, so a wrapped line starts with
+    /// a word.
+    @ViewBuilder
+    private func documentsLine(_ timeline: Components.Schemas.TaskTimeline?) -> some View {
+        let links = TaskTimelinePresentation.documentLinks(
+            snapshot.task, timeline: timeline,
+            completion: TaskTimelinePresentation.completion(snapshot.task, runs: coordinator.runs),
+            items: taskItems.map(\.item))
+        if !links.isEmpty {
+            WrappingHStack(horizontalSpacing: 8, verticalSpacing: 4) {
+                ForEach(Array(links.enumerated()), id: \.offset) { index, link in
+                    HStack(spacing: 8) {
+                        documentLink(link)
+                        if index < links.count - 1 {
+                            Text("·")
+                                .font(FreesideFont.cardBody)
+                                .foregroundStyle(Color.inkFaint)
+                                .accessibilityHidden(true)
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    /// A part with somewhere to go is a link: `Link` for GitHub, which
+    /// VoiceOver reads as a link, and a link-trait button for the reader.
+    /// Without one it is the same words in dim plain text, since link
+    /// styling promises somewhere to go.
+    @ViewBuilder
+    private func documentLink(_ link: TaskTimelinePresentation.DocumentLink) -> some View {
+        let label = FreesideLink(title: link.title, face: FreesideFont.noticeAction)
+        if let hint = link.accessibilityHint, screenshotTimeline == nil {
+            switch link {
+            case .issue(_, let url?), .pullRequest(_, let url?):
+                Link(destination: url) { label }
+                    .accessibilityLabel(link.spokenTitle)
+                    .accessibilityHint(hint)
+            case .specification(let request):
+                Button {
+                    specificationRequest = request
+                } label: {
+                    label.contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+                .accessibilityLabel(link.spokenTitle)
+                // Read as a link only, as the GitHub parts beside it are.
+                .accessibilityRemoveTraits(.isButton)
+                .accessibilityAddTraits(.isLink)
+                .accessibilityHint(hint)
+            case .issue, .pullRequest, .noPullRequest:
+                EmptyView()
+            }
+        } else if link.accessibilityHint != nil {
+            label
+        } else {
+            Text(link.title)
+                .font(FreesideFont.cardBody)
+                .foregroundStyle(Color.inkDim)
+        }
+    }
+
     private func outlineRow(_ timeline: Components.Schemas.TaskTimeline?) -> some View {
         let open = openItems
         return OutlineRow(
             decisions: open.map { .init(id: $0.item.id, title: AttentionDisplay.ask($0.item)) },
             leadingItemID: leadingItemID,
-            conversationMessages: conversations.reduce(0) { $0 + $1.conversation.messages.count },
+            conversationMessages: Self.messageCount(conversations),
             runs: (timeline?.sections.flatMap(\.runs) ?? []).map {
                 .init(id: $0.run_id, title: TaskTimelinePresentation.runTitle($0))
             },
@@ -565,8 +655,44 @@ struct TaskPageView: View {
                 jump(to: .section(section == .runs ? .timeline : section))
             },
             onChooseDecision: { onOpenItem?($0) },
-            onChooseRun: { jump(toRun: $0, in: timeline) }
+            onChooseRun: { jump(toRun: $0, in: timeline) },
+            trailing: {
+                if TaskActionsSlot(compact: compact) == .outlineRow { taskActionsMenu(timeline) }
+            }
         )
+    }
+
+    /// Where the task's menu draws. Both are pinned, so Stop stays in reach
+    /// while the page scrolls.
+    enum TaskActionsSlot {
+        /// The outline row's trailing slot, outside its chips' scroll.
+        case outlineRow
+        /// The navigation bar's trailing slot: a phone's row has no room.
+        case navigationBar
+
+        init(compact: Bool) { self = compact ? .navigationBar : .outlineRow }
+    }
+
+    /// The page's own items in the task's menu: copying every identifier
+    /// the Identifiers footer holds, offered while the footer draws (once
+    /// the history loads, or while the leading decision names some).
+    static func taskActions(
+        _ timeline: Components.Schemas.TaskTimeline?, taskID: String,
+        decision: [AttentionDisplay.BindingRow] = []
+    ) -> [TaskActionsMenu.Action] {
+        guard timeline != nil || !decision.isEmpty else { return [] }
+        let text = TaskTimelinePresentation.allIdentifiersText(
+            TaskTimelinePresentation.identifierGroups(timeline, taskID: taskID, decision: decision))
+        return [.init(title: "Copy all identifiers") { Clipboard.copy(text) }]
+    }
+
+    /// The task's one menu (◆B): its own items, then Stop.
+    private func taskActionsMenu(_ timeline: Components.Schemas.TaskTimeline?) -> TaskActionsMenu {
+        TaskActionsMenu(
+            coordinator: coordinator, taskID: snapshot.task.id,
+            actions: Self.taskActions(timeline, taskID: snapshot.task.id, decision: decisionIdentifiers),
+            confirmation: $stopConfirmation,
+            rendersInteractiveControls: screenshotTimeline == nil)
     }
 
     // MARK: Body
@@ -605,36 +731,18 @@ struct TaskPageView: View {
         }
     }
 
-    private func controls(_ timeline: Components.Schemas.TaskTimeline?) -> some View {
-        TaskStopView(
-            coordinator: coordinator, taskID: snapshot.task.id,
-            moreActions: hasIdentifiersFooter(timeline)
-                ? [
-                    .init(title: "Copy all identifiers") {
-                        Clipboard.copy(
-                            TaskTimelinePresentation.allIdentifiersText(
-                                TaskTimelinePresentation.identifierGroups(
-                                    timeline, taskID: snapshot.task.id, decision: decisionIdentifiers)))
-                    }
-                ] : [],
-            presentedConfirmation: $stopConfirmation,
-            explanationExpanded: $showsStopExplanation)
+    /// What the task's Stop says, drawn only while there is a Stop state
+    /// to state; Stop itself starts from the Task Actions menu.
+    @ViewBuilder private var stopStates: some View {
+        let stop = TaskStopView(
+            coordinator: coordinator, taskID: snapshot.task.id, explanationExpanded: $showsStopExplanation)
+        if !stop.isQuiet { stop }
     }
 
     /// Every conversation the task's items name, read-only: a reply goes
     /// through the leading card, which is what the thread's item asks.
-    @ViewBuilder private var conversationSection: some View {
-        let conversations = conversations
+    private func conversationSection(_ conversations: [Components.Schemas.ConversationSnapshot]) -> some View {
         VStack(alignment: .leading, spacing: 22) {
-            if conversations.isEmpty {
-                VStack(alignment: .leading, spacing: 12) {
-                    KeywordLabel(text: "Conversation")
-                        .accessibilityAddTraits(.isHeader)
-                    Text("No messages on this task.")
-                        .font(FreesideFont.cardBody)
-                        .foregroundStyle(Color.inkDim)
-                }
-            }
             ForEach(conversations, id: \.conversation.id) { conversation in
                 ConversationView(
                     snapshot: conversation,
@@ -1457,6 +1565,96 @@ enum TaskTimelinePresentation {
     /// The pull request the task opened, by the history's newest record of it.
     static func pullRequest(_ timeline: Components.Schemas.TaskTimeline) -> Int? {
         events(timeline).first { $0.kind == .pr_opened }?.pr_number
+    }
+
+    /// One part of the header's documents line (◆D), in the order it draws.
+    enum DocumentLink: Equatable {
+        /// The intake issue, linked when its repository names a GitHub URL.
+        case issue(number: Int, url: URL?)
+        /// The current campaign's approved specification, by the digest
+        /// its approval recorded; the revision only when a held approval
+        /// names that digest.
+        case specification(TaskSpecificationRequest)
+        /// The task's PR, linked only when a held item names its repository.
+        case pullRequest(number: Int, url: URL?)
+        /// A loaded history that records no PR.
+        case noPullRequest
+
+        /// The words the line draws.
+        var title: String {
+            switch self {
+            case .issue(let number, _): "Issue #\(number)"
+            case .specification(let request): request.revision.map { "Specification rev \($0)" } ?? "Specification"
+            case .pullRequest(let number, _): "Pull request #\(number)"
+            case .noPullRequest: "No pull request yet"
+            }
+        }
+
+        /// What VoiceOver reads for the words, without the number sign.
+        var spokenTitle: String {
+            switch self {
+            case .issue(let number, _): "Issue \(number)"
+            case .specification(let request):
+                request.revision.map { "Specification revision \($0)" } ?? "Specification"
+            case .pullRequest(let number, _): "Pull request \(number)"
+            case .noPullRequest: title
+            }
+        }
+
+        /// Where the link goes, as VoiceOver's hint. Nil for plain text:
+        /// a part with nowhere to go is not a link.
+        var accessibilityHint: String? {
+            switch self {
+            case .issue(_, let url), .pullRequest(_, let url): url == nil ? nil : "Opens on GitHub"
+            case .specification: "Opens the specification reader"
+            case .noPullRequest: nil
+            }
+        }
+    }
+
+    /// The documents line under the header's status: Issue for an
+    /// issue-sourced task, the approved Specification, and the Pull Request.
+    /// The PR is the Task fold's (the run's completion, else the history's
+    /// `pr_opened`). The task names no repository, so the PR's link comes
+    /// from an item held under the task whose `pr_reference` has its number;
+    /// with none it is plain text. Before the history loads, a part the
+    /// history decides is left out rather than guessed.
+    @MainActor static func documentLinks(
+        _ task: Components.Schemas.Task, timeline: Components.Schemas.TaskTimeline?,
+        completion: Components.Schemas.WorkUnitCompletionFacts?, items: [Components.Schemas.AttentionItem]
+    ) -> [DocumentLink] {
+        var links: [DocumentLink] = []
+        if case .issue_subject(let source)? = task.source?.value1 {
+            links.append(
+                .issue(
+                    number: source.issue_subject.issue_number,
+                    url: DecisionModel.issueURL(for: source.issue_subject)))
+        }
+        if let digest = approvedSpecificationDigest(task, in: timeline) {
+            let revision = items.first { item in
+                item._type == .spec_approval && DecisionDetailView.specificationClaim(in: item)?.digest == digest
+            }.flatMap(DecisionDetailView.specificationRevisionIteration(in:))
+            links.append(.specification(.init(digest: digest, revision: revision)))
+        }
+        if let number = completion?.pr_number ?? timeline.flatMap(pullRequest) {
+            let reference = items.lazy.compactMap { $0.pr_reference?.value1 }.first { $0.number == number }
+            links.append(.pullRequest(number: number, url: reference.flatMap(DecisionModel.pullRequestURL(for:))))
+        } else if timeline != nil {
+            links.append(.noPullRequest)
+        }
+        return links
+    }
+
+    /// The digest the current campaign's approval recorded: the
+    /// `specification_approved` event in the section holding the current
+    /// run. Nil until that campaign's specification is approved.
+    static func approvedSpecificationDigest(
+        _ task: Components.Schemas.Task, in timeline: Components.Schemas.TaskTimeline?
+    ) -> String? {
+        guard let timeline, let run = currentRun(task, in: timeline),
+            let section = timeline.sections.first(where: { $0.runs.contains { $0.run_id == run.run_id } })
+        else { return nil }
+        return section.events.first { $0.kind == .specification_approved }?.approved_spec_digest?.value1
     }
 
     /// The merge a finished task's run records.

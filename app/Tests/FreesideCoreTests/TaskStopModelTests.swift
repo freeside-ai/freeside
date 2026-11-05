@@ -282,13 +282,13 @@ import Testing
         #expect(nextPayload.expected_sync_epoch != payload.expected_sync_epoch)
     }
 
-    @Test func confirmMovesOffTheBareStopButtonThroughSendingAndAccepted() async throws {
+    @Test func confirmLeavesTheQuietStateThroughSendingAndAccepted() async throws {
         let server = MockServer()
         let coordinator = await coordinator(server)
         let prepared = try preparation(coordinator)
         let taskID = prepared.entry.taskID
-        // Before confirm the control is the bare Stop button.
-        #expect(TaskStopView(coordinator: coordinator, taskID: taskID).showsOnlyTheStopButton)
+        // Before confirm there is no Stop state to state.
+        #expect(TaskStopView(coordinator: coordinator, taskID: taskID).isQuiet)
         let entered = AsyncGate()
         let release = AsyncGate()
         await server.setBeforeRespond { operation in
@@ -299,36 +299,39 @@ import Testing
         }
         let sending = Task { await coordinator.taskStop.confirm(prepared) }
         await entered.wait()
-        // Sending: the control speaks, never the bare button.
+        // Sending: the control speaks.
         #expect(coordinator.taskStop.sending.contains(taskID))
-        #expect(!TaskStopView(coordinator: coordinator, taskID: taskID).showsOnlyTheStopButton)
+        #expect(!TaskStopView(coordinator: coordinator, taskID: taskID).isQuiet)
         await release.open()
         await sending.value
-        // Accepted: the synced cancellation keeps the control off the bare button.
+        // Accepted: the synced cancellation keeps the control speaking.
         #expect(coordinator.tasks.first { $0.task.id == taskID }?.task.cancellation?.value1.state == .requested)
-        #expect(!TaskStopView(coordinator: coordinator, taskID: taskID).showsOnlyTheStopButton)
+        #expect(!TaskStopView(coordinator: coordinator, taskID: taskID).isQuiet)
         // The menu no longer offers Stop; it stays only for a page's own items.
-        #expect(!TaskStopView(coordinator: coordinator, taskID: taskID).drawsMoreActionsMenu)
-        let copying = TaskStopView(coordinator: coordinator, taskID: taskID, moreActions: [.init(title: "Copy") {}])
+        #expect(!TaskActionsMenu(coordinator: coordinator, taskID: taskID, confirmation: .constant(nil)).drawsMenu)
+        let copying = TaskActionsMenu(
+            coordinator: coordinator, taskID: taskID, actions: [.init(title: "Copy") {}], confirmation: .constant(nil))
         #expect(!copying.offersStop)
-        #expect(copying.drawsMoreActionsMenu)
-        #expect(!copying.moreActionsMenuIsDisabled)
+        #expect(copying.drawsMenu)
+        #expect(!copying.isDisabled)
     }
 
     @Test func aPagesOwnItemsKeepTheMenuEnabledWhileStopIsUnavailable() async {
         let coordinator = await coordinator(MockServer())
         // No snapshot for the task: Stop cannot be prepared.
-        let stopOnly = TaskStopView(coordinator: coordinator, taskID: "task-missing")
-        #expect(stopOnly.drawsMoreActionsMenu)
-        #expect(stopOnly.moreActionsMenuIsDisabled)
-        let copying = TaskStopView(
-            coordinator: coordinator, taskID: "task-missing", moreActions: [.init(title: "Copy") {}])
+        let stopOnly = TaskActionsMenu(coordinator: coordinator, taskID: "task-missing", confirmation: .constant(nil))
+        #expect(stopOnly.drawsMenu)
+        #expect(stopOnly.isDisabled)
+        #expect(stopOnly.stopIsUnavailable)
+        let copying = TaskActionsMenu(
+            coordinator: coordinator, taskID: "task-missing", actions: [.init(title: "Copy") {}],
+            confirmation: .constant(nil))
         #expect(copying.offersStop)
-        #expect(!copying.moreActionsMenuIsDisabled)
+        #expect(!copying.isDisabled)
     }
 
     @Test(arguments: [(503, false), (404, true)])
-    func uncertainOrRejectedConfirmNeverLeavesTheBareStopButton(status: Int, definitive: Bool) async throws {
+    func uncertainOrRejectedConfirmNeverReturnsToQuiet(status: Int, definitive: Bool) async throws {
         let server = MockServer()
         let coordinator = await coordinator(server)
         let prepared = try preparation(coordinator)
@@ -338,14 +341,14 @@ import Testing
         }
         await coordinator.taskStop.confirm(prepared)
         if definitive {
-            // Rejected: the request is cleared but a message replaces the bare button.
+            // Rejected: the request is cleared but a message speaks.
             #expect(coordinator.pendingTaskStops.isEmpty)
             #expect(coordinator.taskStop.messages[taskID] != nil)
         } else {
-            // Uncertain: the retryable pending entry replaces the bare button.
+            // Uncertain: the retryable pending entry speaks.
             #expect(coordinator.pendingTaskStops[prepared.id]?.receipt == nil)
         }
-        #expect(!TaskStopView(coordinator: coordinator, taskID: taskID).showsOnlyTheStopButton)
+        #expect(!TaskStopView(coordinator: coordinator, taskID: taskID).isQuiet)
     }
 
     @Test(arguments: [400, 404], [false, true])
@@ -496,7 +499,7 @@ import Testing
         await runAheadOfSnapshot(coordinator, server)
         let prepared = try preparation(coordinator)
         let taskID = prepared.entry.taskID
-        #expect(TaskStopView(coordinator: coordinator, taskID: taskID).showsOnlyTheStopButton)
+        #expect(TaskStopView(coordinator: coordinator, taskID: taskID).isQuiet)
         let order = OperationLog()
         await server.setBeforeRespond { await order.record($0) }
         await coordinator.taskStop.confirm(prepared)
@@ -537,7 +540,7 @@ import Testing
         #expect(coordinator.pendingTaskStops.isEmpty)
         #expect(coordinator.taskStop.messages[taskID]?.contains("Nothing was sent") == true)
         #expect(coordinator.taskStop.confirming.isEmpty)
-        #expect(!TaskStopView(coordinator: coordinator, taskID: taskID).showsOnlyTheStopButton)
+        #expect(!TaskStopView(coordinator: coordinator, taskID: taskID).isQuiet)
         await server.setBeforeRespond(nil)
         #expect(coordinator.tasks.first { $0.task.id == taskID }?.task.cancellation == nil)
     }
@@ -622,10 +625,10 @@ import Testing
         }
         let confirming = Task { await coordinator.taskStop.confirm(prepared) }
         await entered.wait()
-        // Checking: nothing is saved yet, and the control is not the bare button.
+        // Checking: nothing is saved yet, and the control is not quiet.
         #expect(coordinator.taskStop.confirming == [taskID])
         #expect(coordinator.pendingTaskStops.isEmpty)
-        #expect(!TaskStopView(coordinator: coordinator, taskID: taskID).showsOnlyTheStopButton)
+        #expect(!TaskStopView(coordinator: coordinator, taskID: taskID).isQuiet)
         #expect(coordinator.taskStop.prepare(taskID: taskID) == nil)
         await coordinator.taskStop.confirm(prepared)
         #expect(await sent.count == 0)
