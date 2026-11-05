@@ -38,6 +38,8 @@
 //   - summary.go            the bounded StageResult summary (TruncateSummary)
 //   - usage.go              UsageMeasurement, the numbers-only usage report
 //   - usage_claude.go       Claude transcript usage extraction (ExtractClaudeUsage)
+//   - usage_capture.go      ClaudeUsageCapture, the writer's post-turn provider windows
+//     and rate-limit events, and its shape validation
 //   - capability.go         Capability, RunnerBackend, CheckCapabilities (§5.7)
 //   - errors.go             sentinel errors (wrapped with %w)
 //

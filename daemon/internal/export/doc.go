@@ -22,7 +22,14 @@
 //   - walk.go      read-only workspace walk and entry classification
 //   - blob.go      digest-addressed blob writing
 //   - commit_plan.go opaque reserved-path lift
+//   - evidence.go  evidence-channel schema v1: the manifest, producer classes,
+//     head binding, and Validate
+//   - evidence_source.go the reserved workspace evidence subtree, the
+//     agent-authored descriptor, and the launcher-declared sources
+//   - evidence_emit.go descriptor intake, symlink-safe capped source
+//     resolution, and evidence.json plus blob emission
 //   - export.go    the Export orchestrator the helper binary calls
+//   - helper.go    the helper binary's contracted path, mounts, and fixed argv
 //
 // See docs/plan.md §5.6 (the gauntlet), §5.7/§5.8 (why non-regular and
 // control-plane changes are publish-blocking downstream), and
