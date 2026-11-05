@@ -6,6 +6,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"errors"
+	"flag"
 	"fmt"
 	"io"
 	"net/http"
@@ -27,6 +28,9 @@ import (
 )
 
 const killTestCommandID = "discuss-kill-recovery"
+
+// killTestDaemonEnv tells a re-executed test binary to run as the daemon.
+const killTestDaemonEnv = "FREESIDE_KILL_TEST_DAEMON"
 
 // processWaitBound is the single wall-clock ceiling for every wait on the
 // spawned kill-test daemon: readiness, the item/result/marker polls, and the
@@ -50,8 +54,11 @@ type processFixture struct {
 
 // TestDaemonRecoversAcrossSIGKILL is #41's real-process recovery matrix. The
 // in-process engine tests prove the same durable states; this fixture proves
-// those states survive abrupt OS process death with the real freesided binary,
-// one SQLite store, and one file-backed permanent fake.
+// those states survive abrupt OS process death with the real freesided main,
+// one SQLite store, and one file-backed permanent fake. The daemon is this
+// test binary re-executed with killTestDaemonEnv set, which runs main() with
+// the checkpoint hook installed; building the command took most of the test's
+// time (#2666).
 //
 // It is also the proof that the freesided command starts the notification
 // sender (#1924): every other sender test composes the daemon in process and
@@ -59,8 +66,11 @@ type processFixture struct {
 // notification has reached the provider, so the recovery matrix runs with a
 // delivery recorded on the item the engine binds its intent to.
 func TestDaemonRecoversAcrossSIGKILL(t *testing.T) {
+	if os.Getenv(killTestDaemonEnv) == "1" {
+		runKillTestDaemon()
+		return
+	}
 	t.Parallel()
-	binary := buildKillTestDaemon(t)
 
 	tests := []struct {
 		name               string
@@ -78,7 +88,7 @@ func TestDaemonRecoversAcrossSIGKILL(t *testing.T) {
 			ntfy := newNtfySink(t, http.StatusOK)
 			marker := filepath.Join(root, "kill-checkpoint")
 			seedKillRecoveryReadiness(t, filepath.Join(root, "freeside.db"))
-			first := startProcessFixture(t, binary, root, ntfy.URL, tc.checkpoint, marker)
+			first := startProcessFixture(t, root, ntfy.URL, tc.checkpoint, marker)
 			client := pairProcessDevice(t, first.ready)
 			approval := client.waitForItem(t, domain.ItemID("approval-"+string(defaultFakeRunID)))
 			client.submit(t, "approve-kill-recovery", approval, domain.ActionApprove, "")
@@ -89,7 +99,7 @@ func TestDaemonRecoversAcrossSIGKILL(t *testing.T) {
 			waitForMarker(t, marker, tc.checkpoint)
 			first.kill(t)
 
-			restarted := startProcessFixture(t, binary, root, ntfy.URL, "", "")
+			restarted := startProcessFixture(t, root, ntfy.URL, "", "")
 			client.baseURL = restarted.ready.APIURL
 			if tc.restartDurableStop {
 				waitForDurableStop(t, root)
@@ -237,34 +247,22 @@ func assertKillRecoveryReadiness(t *testing.T, path string) {
 	}
 }
 
-func buildKillTestDaemon(t *testing.T) string {
-	t.Helper()
-	// go test runs a package with its directory as the working directory;
-	// under -trimpath, runtime.Caller returns import paths, not file paths.
-	packageDir, err := os.Getwd()
-	if err != nil {
-		t.Fatal(err)
-	}
-	moduleRoot := filepath.Clean(filepath.Join(packageDir, "..", ".."))
-	binary := filepath.Join(t.TempDir(), "freesided-kill-test")
-	args := []string{"build", "-tags=freeside_kill_test", "-o", binary}
-	args = append(args, raceBuildFlags()...)
-	args = append(args, "./cmd/freesided")
-	t.Logf("build kill-test freesided: go %q", args)
-	cmd := osexec.Command("go", args...) //nolint:gosec // fixed tool and test-owned output
-	cmd.Dir = moduleRoot
-	if output, err := cmd.CombinedOutput(); err != nil {
-		t.Fatalf("build kill-test freesided: %v\n%s", err, output)
-	}
-	return binary
+// runKillTestDaemon runs freesided's main with the daemon flags that follow
+// "--" on the test binary's command line. A SIGINT stop returns from main, so
+// the test passes and the process exits 0, as processFixture.stop expects.
+func runKillTestDaemon() {
+	killTestCheckpoint = markKillTestCheckpoint
+	os.Args = append([]string{"freesided"}, flag.Args()...)
+	main()
 }
 
 func startProcessFixture(
 	t *testing.T,
-	binary, root, ntfyURL, checkpoint, marker string,
+	root, ntfyURL, checkpoint, marker string,
 ) *processFixture {
 	t.Helper()
 	args := []string{
+		"-test.run=^TestDaemonRecoversAcrossSIGKILL$", "--",
 		"-driver", "fake",
 		"-db", filepath.Join(root, "freeside.db"),
 		"-fake-driver-dir", filepath.Join(root, "driver"),
@@ -277,11 +275,12 @@ func startProcessFixture(
 		"-seed-walking-skeleton",
 	}
 	p := &processFixture{
-		cmd:  osexec.Command(binary, args...), //nolint:gosec // test-built binary with fixed arguments
+		// The test re-executes its own binary with a fixed -test.run filter.
+		cmd:  osexec.Command(os.Args[0], args...), //nolint:gosec // G204: fixed arguments and test temp paths
 		done: make(chan struct{}),
 	}
 	p.cmd.Stderr = &p.stderr
-	p.cmd.Env = os.Environ()
+	p.cmd.Env = append(os.Environ(), killTestDaemonEnv+"=1")
 	if checkpoint != "" {
 		p.cmd.Env = append(p.cmd.Env,
 			killTestCheckpointEnv+"="+checkpoint,
