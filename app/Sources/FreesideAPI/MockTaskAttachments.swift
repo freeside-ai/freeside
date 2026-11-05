@@ -12,7 +12,7 @@ public enum TaskAttachmentLimits {
     public static let maxTotalBytes = 100 << 20
     public static let maxCount = 1000
     public static let maxSegmentBytes = 255
-    static let maxNameBytes = 1024
+    public static let maxNameBytes = 1024
     static let maxClaimBytes = 255
 
     /// A sha256 digest in the daemon's strict form.
