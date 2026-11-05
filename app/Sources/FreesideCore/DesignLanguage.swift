@@ -1854,14 +1854,18 @@ struct CapacityGaugeStyle: GaugeStyle {
 /// One usage window (R32): its name in the fact-label face (a bare id in
 /// mono) with the value trailing in mono, the reset on its own dim line,
 /// and the meter. The value reads wax when the window is low or used up,
-/// so the colour always carries a word. VoiceOver reads the block as one
-/// element: name, value, reset.
+/// so the colour always carries a word. A used-up window's reset line ends
+/// with ` · 2 runs parked`, the clause in wax and the dot in the line's dim
+/// ink, or reads the clause alone when the reset is unknown. VoiceOver reads
+/// the block as one element: name, value, reset, parked.
 ///
 /// The caller formats `resetLine`, since the locale, time zone, and pinned
-/// clock are its environment's; nil draws no line.
+/// clock are its environment's, and `parked` (`UsageDisplay.parkedClause`);
+/// with both nil no line is drawn.
 struct CapacityBlock: View {
     let capacity: UsageDisplay.WindowCapacity
     let resetLine: String?
+    var parked: String? = nil
 
     var body: some View {
         VStack(alignment: .leading, spacing: 6) {
@@ -1876,8 +1880,8 @@ struct CapacityBlock: View {
                     value
                 }
             }
-            if let resetLine {
-                reset(resetLine)
+            if resetLine != nil || parked != nil {
+                reset
             }
             if let left = capacity.left {
                 // The value line already says it; the meter adds nothing
@@ -1902,16 +1906,26 @@ struct CapacityBlock: View {
             .foregroundStyle(valueColor)
     }
 
-    @ViewBuilder private func reset(_ line: String) -> some View {
-        let text = Text(line)
+    @ViewBuilder private var reset: some View {
+        let text =
+            resetText
             .font(FreesideFont.trailingSummary)
-            .foregroundStyle(Color.inkDim)
             .fixedSize(horizontal: false, vertical: true)
+            // A comma, not the drawn dot, between the reset and the clause.
+            .accessibilityLabel([resetLine, parked].compactMap(\.self).joined(separator: ", "))
         if let resetsAt = capacity.resetsAt {
             text.exactInstant(resetsAt)
         } else {
             text
         }
+    }
+
+    private var resetText: Text {
+        let reset = resetLine.map { Text($0).foregroundStyle(Color.inkDim) }
+        guard let parked else { return reset ?? Text(verbatim: "") }
+        let clause = Text(parked).foregroundStyle(Color.waxText)
+        guard let reset else { return clause }
+        return reset + Text(verbatim: " · ").foregroundStyle(Color.inkDim) + clause
     }
 
     private var valueColor: Color {
