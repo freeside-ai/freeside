@@ -15,6 +15,9 @@
         var onSubmit: (() -> Bool)?
         /// The text's laid-out height, insets included.
         var contentHeight: Binding<CGFloat>?
+        /// Takes pasted or dropped files and images instead of inserting
+        /// them. Nil keeps paste and drop native.
+        var onAttach: ((ComposerAttachmentIntake.Pasted) -> Void)?
         @Environment(\.isEnabled) private var isEnabled
 
         /// The serif statement face the composer's text area draws in.
@@ -55,6 +58,7 @@
             editor.browse = browse
             editor.history = history
             editor.onSubmit = onSubmit
+            editor.onAttach = onAttach
             editor.setAccessibilityHelp(
                 (onSubmit == nil ? "" : "Return submits and Shift-Return starts a new line. ")
                     + "Press Up on the first line to recall recent prompts. Down restores your draft.")
@@ -88,6 +92,7 @@
         /// would lag a keystroke behind SwiftUI's next update.
         var onSubmit: (() -> Bool)?
         var onContentHeightChange: ((CGFloat) -> Void)?
+        var onAttach: ((ComposerAttachmentIntake.Pasted) -> Void)?
         private var isRecalling = false
         private var reportedHeight: CGFloat?
 
@@ -163,6 +168,63 @@
                     self?.onSubmit?() ?? false
                 }
             ]
+        }
+
+        // MARK: Attachments
+
+        /// What `pasteboard` holds to attach rather than insert: file URLs,
+        /// or image data. On a paste, text beside an image wins, so a copy
+        /// that carries both (a rich-text snippet with a rendered preview)
+        /// still pastes as text. On a drag the image wins, since a browser's
+        /// image drag carries its address as text too.
+        static func attachment(
+            from pasteboard: NSPasteboard, textWins: Bool = true
+        ) -> ComposerAttachmentIntake.Pasted? {
+            let urls =
+                pasteboard.readObjects(forClasses: [NSURL.self], options: [.urlReadingFileURLsOnly: true])
+                as? [URL] ?? []
+            if !urls.isEmpty { return .files(urls) }
+            if textWins, pasteboard.string(forType: .string) != nil { return nil }
+            for type in [NSPasteboard.PasteboardType.png, .tiff] {
+                if let data = pasteboard.data(forType: type) { return .image(data) }
+            }
+            return nil
+        }
+
+        override func paste(_ sender: Any?) {
+            if let onAttach, isEditable, let pasted = Self.attachment(from: .general) {
+                onAttach(pasted)
+            } else {
+                super.paste(sender)
+            }
+        }
+
+        override var readablePasteboardTypes: [NSPasteboard.PasteboardType] {
+            onAttach == nil ? super.readablePasteboardTypes : super.readablePasteboardTypes + [.fileURL, .png, .tiff]
+        }
+
+        override var acceptableDragTypes: [NSPasteboard.PasteboardType] {
+            onAttach == nil ? super.acceptableDragTypes : super.acceptableDragTypes + [.fileURL, .png, .tiff]
+        }
+
+        override func draggingEntered(_ sender: any NSDraggingInfo) -> NSDragOperation {
+            onAttach != nil && isEditable && Self.attachment(from: sender.draggingPasteboard, textWins: false) != nil
+                ? .copy : super.draggingEntered(sender)
+        }
+
+        override func draggingUpdated(_ sender: any NSDraggingInfo) -> NSDragOperation {
+            onAttach != nil && isEditable && Self.attachment(from: sender.draggingPasteboard, textWins: false) != nil
+                ? .copy : super.draggingUpdated(sender)
+        }
+
+        override func performDragOperation(_ sender: any NSDraggingInfo) -> Bool {
+            guard let onAttach, isEditable,
+                let pasted = Self.attachment(from: sender.draggingPasteboard, textWins: false)
+            else {
+                return super.performDragOperation(sender)
+            }
+            onAttach(pasted)
+            return true
         }
 
         var isOnFirstVisualLine: Bool {

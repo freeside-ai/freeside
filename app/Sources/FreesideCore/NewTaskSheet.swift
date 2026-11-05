@@ -261,7 +261,8 @@ struct NewTaskSheet: View {
             .background(Color.ground2, in: RoundedRectangle(cornerRadius: 12))
             .clipShape(RoundedRectangle(cornerRadius: 12))
             .overlay(RoundedRectangle(cornerRadius: 12).strokeBorder(Color.itemBorder))
-            // A file or image dropped anywhere on the composer attaches.
+            // A file or image dropped anywhere on the composer attaches;
+            // the Mac text view routes its own drops the same way.
             .onDrop(of: [.fileURL, .image], isTargeted: nil) { providers in
                 guard rendersInteractiveControls, !isFrozen else { return false }
                 attach { await ComposerAttachmentIntake.items(from: providers, origin: .pasted) }
@@ -338,7 +339,7 @@ struct NewTaskSheet: View {
         #if os(macOS)
             TaskPromptEditor(
                 text: $source, history: model.promptHistory.prompts(for: projectID), browse: promptBrowse,
-                onSubmit: performSubmit, contentHeight: $textHeight
+                onSubmit: performSubmit, contentHeight: $textHeight, onAttach: attach(pasted:)
             )
             .frame(height: min(max(textHeight, TaskPromptEditor.height(lines: 4)), cap))
         #else
@@ -536,6 +537,15 @@ struct NewTaskSheet: View {
 
     private func attach(files urls: [URL]) {
         attach { await Task.detached { urls.map(ComposerAttachmentIntake.file(at:)) }.value }
+    }
+
+    private func attach(pasted: ComposerAttachmentIntake.Pasted) {
+        switch pasted {
+        case .files(let urls):
+            attach(files: urls)
+        case .image(let data):
+            attach { [ComposerAttachmentIntake.image(data, origin: .pasted)] }
+        }
     }
 
     private func remove(_ item: DraftAttachment) {

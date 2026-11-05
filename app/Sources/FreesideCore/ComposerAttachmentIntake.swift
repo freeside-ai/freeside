@@ -20,6 +20,13 @@ enum ComposerAttachmentIntake {
         case refused(String)
     }
 
+    /// What the Mac text view hands over from a paste or a drop instead of
+    /// inserting it as text.
+    enum Pasted: Equatable {
+        case files([URL])
+        case image(Data)
+    }
+
     /// Where an unnamed image came from, which names it.
     enum ImageOrigin: Sendable {
         case pasted

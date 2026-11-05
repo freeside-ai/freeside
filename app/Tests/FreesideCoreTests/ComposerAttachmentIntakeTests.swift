@@ -8,6 +8,10 @@ import UniformTypeIdentifiers
 
 @testable import FreesideCore
 
+#if os(macOS)
+    import AppKit
+#endif
+
 @Suite struct ComposerAttachmentIntakeTests {
     private func temporaryDirectory() throws -> URL {
         let url = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
@@ -122,4 +126,37 @@ import UniformTypeIdentifiers
             ComposerAttachmentIntake.image(Data("not an image".utf8), origin: .pasted)
                 == .refused("The pasted image couldn't be read as an image."))
     }
+
+    #if os(macOS)
+        @Test @MainActor func textOnThePasteboardStillPastesAsText() throws {
+            let pasteboard = NSPasteboard(name: .init(UUID().uuidString))
+            defer { pasteboard.releaseGlobally() }
+            pasteboard.clearContents()
+            pasteboard.setString("plain words", forType: .string)
+            #expect(PromptTextView.attachment(from: pasteboard) == nil)
+
+            // Text beside an image, as a rich-text copy carries, is text.
+            let png = try image(.png)
+            pasteboard.setData(png, forType: .png)
+            #expect(PromptTextView.attachment(from: pasteboard) == nil)
+
+            // A drag of the same is the image: a browser's image drag
+            // carries its address as text.
+            #expect(PromptTextView.attachment(from: pasteboard, textWins: false) == .image(png))
+        }
+
+        @Test @MainActor func anImageOrFileOnThePasteboardAttaches() throws {
+            let pasteboard = NSPasteboard(name: .init(UUID().uuidString))
+            defer { pasteboard.releaseGlobally() }
+            pasteboard.clearContents()
+            let png = try image(.png)
+            pasteboard.setData(png, forType: .png)
+            #expect(PromptTextView.attachment(from: pasteboard) == .image(png))
+
+            pasteboard.clearContents()
+            let file = URL(fileURLWithPath: "/tmp/crash.log")
+            pasteboard.writeObjects([file as NSURL])
+            #expect(PromptTextView.attachment(from: pasteboard) == .files([file]))
+        }
+    #endif
 }
