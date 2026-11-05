@@ -3453,3 +3453,26 @@ The client work is #1798 to #1803.)
 
 (Owner decision of 2026-11-03 on #2507;
 [decision note](../../devlog/2026-11-03-1042-agentic-development-environment.md).)
+
+## Revision 109 ("Commitments in the Plan, Mechanism at Its Point of Use"):
+
+1. **The plan holds what Freeside commits to; mechanism lives where it is
+   used.** A sentence belongs in the plan only if changing it would change
+   what Freeside commits to, not only how it does it. Purpose, goals,
+   principles, safety invariants and trust boundaries, authority, component
+   responsibilities, interface shapes that bind several components, roadmap,
+   risks, and this log stay. Record fields, hold reasons, error types, reader
+   lists, test names, and per-unit acceptance move to package documentation,
+   component READMEs, issue contracts, and decision notes. Moving mechanism
+   out while the commitment stays is a wording change, and the moved text
+   lands at its destination in the same change unless it is already there;
+   "acceptance criteria" in AGENTS.md's materiality list means plan-level
+   criteria such as phase exits. A section past roughly 150 lines prompts a review
+   question about its mechanism, not a limit. Section [9](../plan.md#9-comprehension) states the rule and AGENTS.md (Document Gating)
+   carries the full lists. Rejected: leaving the plan as is, because routine
+   implementation keeps churning it (PR #2496 changed it only to name a
+   record's second reader); and splitting it into many files with no content
+   rule, which spreads the same churn across more places.
+
+(Owner decision of 2026-11-03 on #2520;
+[decision note](../../devlog/2026-11-03-1441-plan-content-rule.md).)
