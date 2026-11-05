@@ -10,6 +10,7 @@ import (
 // holds.
 func rewindTaskTriages(t *testing.T, ctx context.Context, db *sql.DB) {
 	t.Helper()
+	rewindTaskAttachments(t, ctx, db)
 	for _, statement := range []string{
 		`DROP TABLE task_triages`,
 		`DELETE FROM schema_migrations WHERE name = '0123_task_triages.sql'`,
