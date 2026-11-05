@@ -1,6 +1,6 @@
 ---
 title: Freeside Project Plan
-revision: 110
+revision: 111
 status: active
 updated: 2026-11-05
 ---
@@ -434,7 +434,7 @@ Approval is not a universal action.
 | `finding_adjudication` | Accept the recommended route, choose an offered alternative, discuss, or stop (added with the Section [7](#7-review-policy) adjudication routing, 1B). Acceptance binds to the adjudication artifact digest and the item version; a Discuss response re-invokes adjudication against the same version bindings, and the new artifact supersedes the item. Stop leaves the run parked. |
 | `review_contradiction` | Recover only the exact persisted contradiction named by the card, or leave it parked. The card renders the bound run, invocation, round, base SHA, head SHA, and immutable failure-body digest; recovery preserves the original failure evidence. |
 | `review_configuration` | Adopt the review configuration (`adopt_review_configuration`), discuss, or stop. The run is parked, not terminal. Adopting authorizes one operator-approved profile supersession, limited to review configuration, for exactly the parked failure the card's binding names. The superseding profile is resolved at decision time as the repository's currently activated revision and re-gated on every read. Stop concludes the run as a configuration failure, as it always did. The card renders the same bound coordinates as `review_contradiction` plus the digest of the superseded profile. |
-| `execution_failure` | Retry; retry with a predefined policy-allowed capability manifest; discuss; or stop. When the failure is classified as provider quota, credential expiry, or capacity, the card also offers retry under a qualified alternate agent, or wait (see the explicit alternate-agent retry below). When a container was killed at its memory limit, the card also offers a retry at the next larger size policy allows (Section [5.4](#54-credential-modes-egress-profiles-and-concurrency), Machine Capacity). |
+| `execution_failure` | Retry; retry with a predefined policy-allowed capability manifest; discuss; or stop. When the failure is classified as provider quota, credential expiry, or capacity, the card also offers retry under a qualified alternate selection, or wait (see the explicit alternate-agent retry below). When a container was killed at its memory limit, the card also offers a retry at the next larger size policy allows (Section [5.4](#54-credential-modes-egress-profiles-and-concurrency), Machine Capacity). |
 | `agent_question` | Answer and retry, answer without retry, or stop. |
 | `publish_blocked` | Rerun trust evaluation, inspect the trust failure, or stop. When the held run's pull request already exists, the item carries its `pr_reference` and the card also offers viewing the PR (navigation, not resolution); a hold opened before publication gains the reference once and never changes it. Which publication path a repository uses is repository configuration, never a per-item choice (revision 44). |
 | `ready_for_final_review` | Bound to the task. View the PR (navigation, not resolution), return work to the agent with feedback, `mark_seen`, dismiss, or stop. It stays active until Freeside observes merge or close, work is returned, or the item is dismissed. Returning published work starts a new feedback invocation in the same run and supersedes this item; any later final-review item has a new publication identity and exact head binding. Evidence and approvals retain their exact run, artifact-digest, and PR-head bindings. |
@@ -466,10 +466,10 @@ layers below.
 **Explicit alternate-agent retry.** A credential expiry or capacity failure,
 or a provider quota failure with no known reset (below), offers three
 resolutions beyond discuss: retry under a
-qualified alternate agent (Section [5.4](#54-credential-modes-egress-profiles-and-concurrency)), wait, or stop. Qualified is
+qualified alternate selection (Section [5.4](#54-credential-modes-egress-profiles-and-concurrency)), wait, or stop. Qualified is
 failure-specific, read from recorded facts:
 
-- A quota failure needs an agent on a different usage pool (two harness clients
+- A quota failure needs an enrollment on a different usage pool (two harness clients
   on one subscription share one, so that switch is an experiment, never a
   hedge).
 - An expiry or revocation needs an enrollment with a valid generation.
@@ -485,34 +485,34 @@ a task's first admission (Section [5.4](#54-credential-modes-egress-profiles-and
 moves a parked task, as a recorded handoff: with the alternate-agent retry
 opened from the parked task, or with a task-line change. Either releases the
 hold. The card's move re-pins the task: the router-sourced lines of every
-role move to the chosen agent's pool, as the router would have written them
+role move to the chosen enrollment's pool, as the router would have written them
 there, so a later role does not park again on the exhausted pool. A
 triage-sourced line moves with them, and an escalated specifier moves to its
-counterpart on that pool, or to the pool's standard agent when it has none,
-which the card states (revision 106). Operator lines stay as they are. The reset time comes from the
+escalated counterpart on that pool, or to the standard selection there when
+the pool has none, which the card states (revision 106). Operator lines stay as they are. The reset time comes from the
 refusal or from a usage reading (Section [5.4](#54-credential-modes-egress-profiles-and-concurrency), usage observation). When
 neither gives one, nothing can resume the task on its own, so the ordinary
 card is raised with retry, wait, and stop. The park reads the pool's usage
 record only for that reset and for the window's exhausted mark: it delays
-the attempt on its line and never picks an agent, credential, or pool.
+the attempt on its line and never picks a selection, credential, or pool.
 
 Wait leaves the task parked with the same card until the operator returns to it.
 The offer is stated once here and applies on whichever card surfaces such a
 failure, including a review-side quota or expiry failure; it never widens a
 card's other actions.
 
-Each explicit agent-switch retry creates a new run of the same task. It preserves the
+Each explicit alternate-selection retry creates a new run of the same task. It preserves the
 original failure and its evidence, re-evaluates cost owner and the Section [7](#7-review-policy) review-independence record
-against the new agent, and continues provider state only where the adapter
+against the new selection, and continues provider state only where the adapter
 proves compatibility (Section [5.8](#58-control-plane-trust); a different adapter is a fresh invocation).
 
 By default the operator chooses from the card. A project lineup may instead name
-the switch per failure class; it then happens and is carded, a recorded choice
+the switch, an alternate enrollment, per failure class; it then happens and is carded, a recorded choice
 like any other. That switch covers expiry and capacity failures only. A quota
 failure parks the task as above, because a switch named for it would move a
-task in flight automatically (revision 103). Freeside never learns a preferred agent from past switches, and
+task in flight automatically (revision 103). Freeside never learns a preferred selection from past switches, and
 a switch is never silent (Section [2](#2-goals-and-non-goals) item 5; Section [14](#14-risks), single-provider
-execution capacity). Switching the review agent opens a new convergence segment
+execution capacity). Switching the review selection opens a new convergence segment
 (Section [7](#7-review-policy)): the new reviewer's first pass is not the old reviewer's next round.
 
 **Recommendation authority.** An item may carry at most one
@@ -1108,7 +1108,7 @@ The researcher's rules:
 - **It sees only the questions.** Its launch receives the research questions
   and nothing else: no task text, no repository, no task files, no owner
   answers, and no forge or write credential. It holds the provider
-  credential of its own agent's enrollment, which may be the specifier's.
+  credential of its own selection's enrollment, which may be the specifier's.
   The daemon bounds the questions' count and size and secret-scans them
   before the launch, because they are the one thing that crosses from the
   specifier's ward to the researcher's. A leak from the researcher's ward
@@ -1339,31 +1339,44 @@ second scheduler.
 Freeside admits what an agent consumes by digest: the
 base commit, the prompt package, the vendor instructions, the policy, the
 input artifacts (Sections [5.8](#58-control-plane-trust), [5.9](#59-durability-effectively-once), [5.12](#512-workflow-definition-initiators-and-artifacts)), and the agent's own
-configuration. An **agent** is one operator-authored document in the control-plane tree,
-reviewed as a diff, with four lines and no role:
+configuration: which credential, harness, model, and effort it runs. An
+**agent selection** is the tuple `{enrollment, model, effort}`, with no role
+(revision 111):
 
-```text
-agent sol-via-pi
-  who      enrollment  openai-chatgpt-A/pi    # this account, this client, this route
-  through  route       openai_chatgpt_codex   # hosts, protocol, terms basis
-  running  adapter     pi_json_v1@<build>     # Freeside adapter; pins the harness build
-  asking   offer       gpt-5.6-sol, effort max
-```
+- The **enrollment** is the credential an authenticated operator chooses
+  (below). It carries the account, the harness client kind,
+  the route, and the auth method, so it fixes the harness and the usage pool.
+- The **model** is one the enrollment's harness reports.
+- The **effort** is one of the levels the harness reports for that model.
 
-The source uses names. The canonical body, which is what gets hashed, holds the
-resolved enrollment id, the route, adapter, and offer digests, and the effort
-value. Names live in the tree's name-to-digest map and are never part of a
-digest. Resolution validates the join: the enrollment's route and client kind
-are the agent's route and the adapter's client kind; the effort is one the offer
-allows and the adapter can send; and the enrollment's identity is enabled.
+Models and their effort levels are discovered from each harness and stored
+per enrollment as daemon state, a record and not configuration. The daemon
+runs discovery itself, never from what a task's ward run reports, and
+validates the catalog when it writes it. The committed
+tree keeps what is authority over them: an adapter pin per client kind, each
+route's terms basis, and an optional allow or deny list over discovered
+models. A new combination of enrollment, model, and effort therefore needs no
+tree edit and no daemon restart. Discovery only makes a combination
+selectable; it never selects one.
 
-"Harness, model, effort" is how a client renders an agent. A **lineup** is a
-policy's map of roles to agents and prompts: each line names one role, the
-agent that performs it, and the prompt it runs, and resolves both to digests. A
-**role** is one agent activity, finer than a stage (Roles and Launch Shapes,
-below). The agent is the whole document above, so the harness comes with it: a
-GPT role may run through Codex or pi, and a Claude role through Claude Code.
-Harness is never a setting apart from the agent.
+A selection's source uses names: the enrollment's name, the model id, and the
+effort level. The canonical body, which is what gets hashed, holds the
+resolved enrollment id, the model id, the effort level, and the adapter pin
+the enrollment's client kind resolves to, so a changed pin is a changed
+digest. Names are never part of a digest. Resolution validates the join: the
+model is one the enrollment's harness reported and the tree's list allows;
+the effort is one that model reports and the adapter can send; the tree
+carries the enrollment's route and an adapter pin for its client kind; and
+the enrollment's identity is enabled.
+
+"Harness, model, effort" is how a client renders a selection. A **lineup** is a
+policy's map of roles to selections and prompts: each line names one role, its
+default selection by names, and the prompt it runs. The prompt resolves to a
+digest when the tree loads; the selection resolves at admission, against the
+enrollment's current catalog. A **role** is one agent activity, finer than a
+stage (Roles and Launch Shapes, below). The harness comes with the enrollment:
+a GPT role may run through Codex or pi, and a Claude role through Claude Code.
+Harness is never a setting apart from the enrollment.
 
 The deployment lineup holds the defaults: one line for every role that policy
 asks work from. A project lineup overrides single roles. A role needs a line
@@ -1372,21 +1385,22 @@ the shadow reviewer at a zero shadow rate, the drift auditor with its key unset,
 and a role whose work is not built yet are off, not unbound. One role never
 falls back to another role's line: a remediator with no line does not borrow the
 implementer's. A wardless role may carry, beside its one line, at most one
-optional shadow line naming a second agent and prompt (Section
+optional shadow line naming a second selection and prompt (Section
 [5.13](#513-deterministic-components-judgment-calls-and-the-effect-registry)). A
 project lineup overrides it per role like the primary line, and a shadow line is
 never a fallback for a missing primary line. The specifier's line may carry
-optional **escalated lines** (revision 106). Each pairs with one agent the
-specifier can run on, its lineup agent or an agent the routing policy orders
-for it, and names that agent's escalated counterpart: an agent on the same
-enrollment and adapter, so escalation changes only the model and effort,
-never the credential or pool. They keep the line's prompt. The triager
+optional **escalated lines** (revision 106). Each names one enrollment the
+specifier can run on, its lineup enrollment or one the routing policy orders
+for it, and the model and effort it escalates to on that same enrollment.
+That pair is the line's **escalated counterpart**: the same enrollment, so the
+same adapter, credential, and pool, and escalation changes only the model and
+effort. They keep the line's prompt. The triager
 chooses the tier for each task (Section
 [5.13](#513-deterministic-components-judgment-calls-and-the-effect-registry),
 Specifier Triage). A project lineup overrides them like the primary line,
-and the pairing is checked on the resolved lineup, so a project that
-overrides only the primary line and inherits a counterpart on another
-enrollment is refused. No other role carries one. How a lineup encodes the lines
+and the pairing is checked on the resolved lineup: when the specifier
+carries escalated lines, a project that overrides only the primary line onto
+an enrollment that no inherited escalated line names is refused. No other role carries one. How a lineup encodes the lines
 belongs to the lineup contract (#1421). The role list
 is closed, so a lineup line naming an unknown role is rejected, and it grows by
 plan revision (Section
@@ -1401,28 +1415,29 @@ harness-specific text already has a carrier, the vendor instructions (Section
 [5.8](#58-control-plane-trust)). A call has no such carrier: nothing harness-specific reaches it but
 its prompt, so a call prompt that must differ by harness is a second named
 prompt. A site's fixed output-shape instruction (Section [5.13](#513-deterministic-components-judgment-calls-and-the-effect-registry)) is the
-daemon's and belongs to the site. It is the same under every agent and lineup
-line, so it is not an overlay. An overlay would make one prompt name mean
-different text under different agents, which breaks the prompt digest as a
-comparison key.
+daemon's and belongs to the site. It is the same under every selection and
+lineup line, so it is not an overlay. An overlay would make one prompt name
+mean different text under different selections, which breaks the prompt digest
+as a comparison key.
 
 The project lineup, or the deployment lineup beneath it, is the only standing
-selection and the only approval. Two narrower selections choose among agents
-resolved from the same tree. Neither approves an agent the tree does not carry
-or changes the lineup, and each selects an agent only: the role's prompt stays
-the one its lineup line names.
+selection. Two narrower selections choose a tuple for less than a role's
+standing default. Every selection, standing or narrow, resolves against the
+same tree, so none can run a harness build the tree does not pin or a model
+its list refuses. Neither narrower selection changes the lineup, and each
+selects a tuple only: the role's prompt stays the one its lineup line names.
 
-- **A task line** picks the agent for one ward role in one task (revision
+- **A task line** picks the selection for one ward role in one task (revision
   73), so the operator can run one task on Codex and the next on a second
   Claude subscription without editing a lineup. It covers the specifier,
   implementer, remediator, and reviewer. The shadow reviewer and every
   wardless role stay on the lineup, because their comparisons key on the
-  lineup line (Section [5.13](#513-deterministic-components-judgment-calls-and-the-effect-registry)) and a per-task agent would split them.
+  lineup line (Section [5.13](#513-deterministic-components-judgment-calls-and-the-effect-registry)) and a per-task selection would split them.
   The researcher stays on the lineup too (revision 76), for a different
-  reason: no task has needed its own researcher agent yet. A task
+  reason: no task has needed its own researcher selection yet. A task
   records one line per role, and one role never borrows another's line; a
   client may still set several lines from one choice, such as one writer
-  agent for the specifier, implementer, and remediator. Apart from the
+  selection for the specifier, implementer, and remediator. Apart from the
   router-sourced lines the routing policy writes (below) and the
   triage-sourced specifier line the triager writes (Section
   [5.13](#513-deterministic-components-judgment-calls-and-the-effect-registry),
@@ -1431,14 +1446,15 @@ the one its lineup line names.
   of that role is running. A change records a new line that supersedes the
   role's last one and never edits it, so the line an admission cites stays
   the choice that authorized that attempt. Intake from an issue, a label, or repository
-  content never sets one, because choosing an agent chooses which credential
+  content never sets one, because choosing a selection chooses which credential
   runs (Section [5.8](#58-control-plane-trust)). The triager reads issue
-  content, but its answer chooses only a tier of one role, between agents
+  content, but its answer chooses only a tier of one role, between selections
   paired on one enrollment, so it never chooses a credential; under a
   routing policy the router still picks the pool (revision 106). Each
   admission reads the task's current lines, so a
-  change applies from the role's next attempt. A task line whose agent no
-  longer resolves, or whose identity is disabled, fails that role's admission
+  change applies from the role's next attempt. A task line whose selection no
+  longer resolves (its model left the harness's catalog or the tree's list
+  refuses it), or whose identity is disabled, fails that role's admission
   and raises the ordinary card; it never falls back to the lineup.
 - **The Section [4](#4-the-attention-model) alternate-agent card** is the one per-attempt selection:
   a recorded choice for one attempt, for a stage attempt and for a call
@@ -1447,13 +1463,18 @@ the one its lineup line names.
   (Section [4](#4-the-attention-model); revision 103). It never selects
   the researcher: a failed research request fails safe and blocks no stage
   (Roles and Launch Shapes), so there is no blocked attempt for the card to
-  retry and only the lineup picks that agent.
+  retry and only the lineup picks that selection.
 - **A routing policy** (revision 99) is the standing rule for which usage
-  pool a new task runs on, and so which of the agents the lineup admits for
-  each role a task line names, when the operator has not chosen one. It is an
+  pool a new task runs on, and so which enrollment each role's task line
+  names, when the operator has not chosen one. It is an
   operator setting of the deployment, not a lineup line: it orders, per
-  role, the agents of the committed tree that the router may choose among,
-  and never adds one. Its one mode is drain-first by reset
+  role, the enrollments the router may choose among. A router-sourced line
+  keeps the model and effort of the role's lineup line and changes only the
+  enrollment, and an enrollment whose catalog cannot serve that model and
+  effort is not a candidate for the role. This is narrower than an order of
+  agents, which could put a different model on each pool (revision 111):
+  routing moves a task between credentials, and a different model for one
+  task stays the operator's task line or card choice. Its one mode is drain-first by reset
   (revision 107): a new task goes to the pool whose weekly window resets
   soonest, so the allowance that expires first is spent first, unless the
   operator names a drain-first account in the policy, which takes every new
@@ -1469,23 +1490,25 @@ the one its lineup line names.
   The router chooses once per task (revision 103). At the first admission
   of the task's first task-line role that has no operator line, it picks
   one usage pool, then writes a router-sourced line for every task-line
-  role without an operator line, naming the agent the policy orders for
-  that role on that pool. A role whose order holds no agent on that pool
-  keeps its lineup agent, and an operator-set line always wins. Choosing
+  role without an operator line, naming the enrollment the policy orders
+  for that role on that pool. A role whose order holds no candidate
+  enrollment on that pool keeps its lineup selection, and an operator-set
+  line always wins. Choosing
   per role would let review run on one subscription after implementation
   used up the other. A task the triager escalated (Section
   [5.13](#513-deterministic-components-judgment-calls-and-the-effect-registry),
   Specifier Triage) is routed only among pools that hold an escalated
   counterpart, and never drops to the standard tier on its own (revision
   106). Every other role follows the pool the router picks, and the specifier's
-  router line names the counterpart of the first ordered agent on that pool
-  that has one, supersedes the triage-sourced line, and cites it. When every candidate pool is marked exhausted at a task's first
+  router line names the escalated counterpart of the first ordered
+  enrollment on that pool that has one, supersedes the triage-sourced line,
+  and cites it. When every candidate pool is marked exhausted at a task's first
   admission, the router picks none: the role parks until the earliest reset
   and the router then chooses, and with no known reset the ordinary quota
   card is raised (Section [4](#4-the-attention-model)).
 
   Tasks already running stay where they are. Later admissions read the
-  lines, so every role of the task with an agent on that pool stays on it
+  lines, so every role of the task with a selection on that pool stays on it
   until the alternate-agent card or an operator's line change supersedes
   it. A later role whose model window on the pinned pool is exhausted parks
   until that window resets, as a quota failure does (Section
@@ -1494,22 +1517,23 @@ the one its lineup line names.
   for pinning a task and never failing over. Every selection the router
   writes cites the policy revision, which tier chose the pool, the
   readings whose resets ranked the candidates, and any mark it passed over
-  with the agent it passed over, and shows on the task's timeline and
+  with the enrollment it passed over, and shows on the task's timeline and
   cards. An authenticated operator sets the policy from a client or the
   CLI, and each change is a new revision that supersedes the last and never
   edits it, as a task line is. The policy is an operator setting rather
   than control-plane configuration for the reason a task line is: it
-  chooses among credentials the committed lineup already approved and
-  approves none. Mechanism: the full ranking rules and the escalated-task
+  chooses among enrolled credentials, within what the committed tree
+  allows, and approves none. Mechanism: the full ranking rules and the escalated-task
   candidates are in #2393's contract and the
   [drain-soonest note](../devlog/2026-11-03-1111-drain-soonest-reset.md);
   the commands are in
   [`daemon/README.md`, Set The Routing Policy](../daemon/README.md#set-the-routing-policy).
 
-The lines:
+The enrollment, the tree's fragments, and the discovered catalog:
 
-- `who` names a record, a `ClientEnrollment`: one `AuthIdentity` × one harness
-  client × one route × one auth method, carrying `credential_mode`. One identity
+- **The enrollment** is a record, a `ClientEnrollment`: one `AuthIdentity` ×
+  one harness client × one route × one auth method, carrying
+  `credential_mode`. One identity
   has many enrollments (pi and the Codex CLI on one ChatGPT subscription are one
   identity, one lease, one budget, and two enrollments with distinct sanitized
   stores).
@@ -1523,7 +1547,7 @@ The lines:
 
   Every successful store mutation (login, refresh, re-enrollment) appends an
   immutable generation entry (lease fence, store manifest digest, account
-  binding, token expiry) under the enrollment and changes no agent; admission
+  binding, token expiry) under the enrollment and changes no selection; admission
   records the generation it mounted. The stage receives a daemon-owned,
   single-route store, never a harness's multi-provider home. The identity
   keeps the account binding, the usage pool, the budget, the mutation lease,
@@ -1531,30 +1555,36 @@ The lines:
   enrollment and its generations
   ([`daemon/internal/domain/auth_identity.go`](../daemon/internal/domain/auth_identity.go),
   [`client_enrollment.go`](../daemon/internal/domain/client_enrollment.go)).
-- `route` is a content-addressed fragment with a stable logical id that
-  carries the service, its endpoints, and a dated terms basis. Editing an
-  endpoint or the terms changes the route digest and every agent naming it,
-  never the enrollment.
-- `adapter` is a content-addressed fragment. It names the Freeside adapter
-  build and the exact harness build it pins, and it declares the launch
-  capabilities it honours in a closed vocabulary of its own, the call launch
-  below among them. The instruction mechanism is derived from the adapter
-  and never selected by policy.
-- `offer` is a content-addressed fragment: one route's offer of one model,
-  with its lineage group, its `identity_stability`, the effort levels it
-  allows, and an authored `not_after`. The same model through two routes is
-  two offers.
-- `effort` is a value the offer allows. The adapter translates it, and the
+- **A route** is a content-addressed fragment in the tree with a stable
+  logical id that carries the service, its endpoints, and a dated terms
+  basis. An enrollment names its route; editing an endpoint or the terms
+  changes the route digest, never the enrollment.
+- **An adapter** is a content-addressed fragment in the tree, pinned per
+  client kind: each enrollment's client kind resolves to one adapter pin. It
+  names the Freeside adapter build and the exact harness build it pins, and
+  it declares the launch capabilities it honours in a closed vocabulary of
+  its own, the call launch below among them. The instruction mechanism is
+  derived from the adapter and never selected by policy.
+- **The discovered catalog** is the models an enrollment's harness reports
+  and, for each model, the effort levels it accepts (for example, the Claude
+  CLI's init record lists its models, and the Codex app server answers
+  `model/list`). The effort vocabulary is these per-model levels, not one
+  fixed list across vendors. The tree's optional allow or deny list over
+  discovered models is its only say over them. A model the harness stops
+  reporting leaves the catalog at the next discovery, which withdraws it
+  from new selection. The adapter translates the requested effort, and the
   run records both the requested value and the effective native value. A
   clamp is rendered as `max → xhigh`, never silently.
 
 The fragments' fields:
 [`daemon/internal/domain/agent_fragment.go`](../daemon/internal/domain/agent_fragment.go).
 
-Fragments are operator-authored authority, so they are configuration in the
-tree. Identities, enrollments, generations, admissions, and observations are
-facts, so they are records. A record of a past selection is never upgraded
-through current configuration.
+Fragments and the model list are operator-authored authority, so they are
+configuration in the tree. Identities, enrollments, generations, discovered
+catalogs, admissions, and observations are facts, so they are records. A
+record of a past selection is never upgraded through current configuration,
+and a selection stays a choice among records that the tree bounds, never
+configuration itself.
 
 #### The Stage Owns the Launch
 
@@ -1564,13 +1594,13 @@ mode, and an auxiliary-inference policy (`forbidden`, `declared`, or
 `observed`). Specification also defines a second, narrower launch for its
 researcher, the research launch (Roles and Launch Shapes). The adapter maps
 the launch to harness-native controls or declares that it cannot. So any stage runs on any adapter whose proved
-capabilities cover its launch, and an agent carries no role. Review requires
+capabilities cover its launch, and a selection carries no role. Review requires
 `forbidden`; the Claude baseline runs `observed`.
-An agent narrows behaviour inside a stage. It never waives or widens the
+A selection narrows behaviour inside a stage. It never waives or widens the
 stage's floors: no GitHub write credential in a workspace, publication
 credentials withheld, review's fresh context and read-only workspace,
 head invalidation, and the role capability ceilings all hold whatever
-the agent.
+the selection.
 
 #### Roles and Launch Shapes
 
@@ -1627,7 +1657,7 @@ it unchanged.
 The Claude CLI's search is a side request (#1620), so two things are
 decided when the adapter is built and tested (#1657): the launch's
 auxiliary-inference policy, and whether that request's model can contradict
-the admitted offer.
+the admitted model.
 
 Whether a failure blocks the run or returns a declared fail-safe is a property
 of the role, not of the launch shape. The task namer fails safe to the
@@ -1639,17 +1669,18 @@ request; every other ward role's failure blocks its stage.
 
 #### Admission
 
-Admission puts an agent through the five steps admission already applies to
+Admission puts a selection through the five steps admission already applies to
 every other input:
 
-1. *Resolve.* Resolve the name and every fragment against one control-plane
-   revision, build and hash the canonical body, and validate the join. An agent
-   resolves only if its closure is present in the current approved revision.
-   Removing an agent from the tree withdraws it from new selection; its history
-   keeps its closure by digest. An offer whose authored `not_after` precedes the
-   attempt deadline does not resolve. A proposal binds `(name, digest)` and goes
-   stale if either moves.
-2. *Selected.* The lineup names that digest for the role, a task line names
+1. *Resolve.* Resolve the enrollment and the adapter pin its client kind
+   resolves to, and the model list, against one control-plane revision;
+   resolve the model and effort against the enrollment's current discovered
+   catalog; build and hash the canonical body; and validate the join. A model
+   the catalog no longer carries, or the list refuses, withdraws the
+   selection from new admission; its history keeps the tuple by digest. A
+   proposal binds the selection and its digest and goes stale if either
+   moves.
+2. *Selected.* The role's lineup line names the selection, a task line names
    it for this task's role, or the Section [4](#4-the-attention-model) alternate-agent card records it as
    this attempt's choice. The admission snapshot says which.
 3. *Proved.* Runner conformance holds (Section [5.7](#57-the-ward-runners-handoff-gate-and-operating-modes), unchanged), and the adapter
@@ -1670,10 +1701,10 @@ every other input:
    expiry is not observable, the generation records no
    expiry and no refresh exists; an authentication failure at use fails the
    attempt closed and raises the existing revoked-identity marker.
-5. *Snapshot.* `ExecutionAdmission` records the agent digest, the launch digest,
+5. *Snapshot.* `ExecutionAdmission` records the selection digest, the launch digest,
    the lineup revision, the selection source (the lineup, a task line, or the
    alternate-agent card, with the id of the task line or card record that
-   chose the agent; revision 73), the route model and the requested and
+   chose the selection; revision 73), the model id and the requested and
    native effort the launch passes, the enrollment id and generation, the
    store manifest digest, and the effective egress allowlist
    (`AdmissionAgentBinding`,
@@ -1684,14 +1715,14 @@ every other input:
    instruction delivery) from them. Reconstruction reads by digest and rechecks
    the derivations.
 
-An agent that passes those five steps runs under the deployment's operating
+A selection that passes those five steps runs under the deployment's operating
 mode (Section [5.7](#57-the-ward-runners-handoff-gate-and-operating-modes)) from its first launch. There is no attended
 first run and no unattended-eligible mark (revision 97; why:
 [drop-attended-first-run note](../devlog/2026-10-24-0927-drop-attended-first-run.md)).
 The operator's look is after the fact, where it already was for a
-call: the admission snapshot names the agent, the launch, the model and
-effort, and what selected them, and the run record shows what the agent did.
-What bounds a bad new agent is what bounded it under the mark: the ward
+call: the admission snapshot names the selection, the launch, and what
+selected them, and the run record shows what the agent did.
+What bounds a bad new selection is what bounded it under the mark: the ward
 boundary, the hostile import, verification, review, and the human merge gate.
 An operator who wants the look first runs the deployment in `attended_dev`,
 or runs a new reviewer or judgment line as a shadow first (Section
@@ -1701,8 +1732,7 @@ Harness × model is not pre-proved: a request works or fails closed against
 the stage's output validation. An observed model, serving
 operator, or route that contradicts a pinned admitted value fails the attempt as
 a durable contradiction, never a log line. Pre-proving a rolling upstream would
-be fiction; offers say so with `identity_stability`, and records claim only what
-the route exposed.
+be fiction, so records claim only what the route exposed.
 
 A wardless role is admitted through the same five steps, as one **wardless
 admission class** shared by every judgment role (revision 64 introduced it for
@@ -1734,8 +1764,8 @@ ward-only parts fall away or change hands, and nothing else does:
   hand audit, for the harness build that audit covered and no other, until its
   adapter carries the record. No second call driver joins on a hand audit
   (Section [5.13](#513-deterministic-components-judgment-calls-and-the-effect-registry)).
-- *Credentialed* holds unchanged. A judgment role's agent names an enrollment
-  on its `who` line like any other agent, the generation rules apply, and the
+- *Credentialed* holds unchanged. A judgment role's selection names an
+  enrollment like any other selection, the generation rules apply, and the
   call draws on that identity's budget and usage pool, though it holds no
   execution slot on the pool (revision 72). The judgment calls'
   borrowed review credential is the interim flag path and ends at the cutover
@@ -1745,7 +1775,7 @@ ward-only parts fall away or change hands, and nothing else does:
 
 A call has no gate before first use either, and the plan does not pretend the
 audit is one; the two admission classes agree (revisions 65 and 97,
-[`docs/history/decisions.md`](history/decisions.md)). What bounds a bad new agent or prompt is what
+[`docs/history/decisions.md`](history/decisions.md)). What bounds a bad new selection or prompt is what
 bounds any answer: the site's authority contract, its ceilings, and its
 fail-safe. Where a site
 carries a sampled audit (Section [5.13](#513-deterministic-components-judgment-calls-and-the-effect-registry)), that audit is the operator's look
@@ -1772,7 +1802,7 @@ The researcher is the one ward role with a fail-safe (revision 76), so it
 follows the wardless rule: a missing line or a failed admission returns its
 failed request and raises the `system_health` item.
 
-Every run records what was requested (agent and prompt, each by name and bound
+Every run records what was requested (selection and prompt, each by name and bound
 digest, one provenance entry per role), what was admitted (the step 5
 snapshot), and what was observed (effective model and serving operator with
 provenance, usage redacted and sourced, auxiliary inference, routing). Observed
@@ -1780,19 +1810,19 @@ facts never authorise a future selection; they are authoritative history. A
 versioned **treatment digest** groups runs for comparison (Section [8](#8-observability-and-optimization-telemetry)). It
 covers only what should change behaviour; what it covers and excludes is
 `canonicalTreatment` in
-[`daemon/internal/domain/agent.go`](../daemon/internal/domain/agent.go). The agent digest stays the audit
+[`daemon/internal/domain/agent.go`](../daemon/internal/domain/agent.go). The selection digest stays the audit
 key. The treatment digest leaves out the prompt, so the prompt digest is its
 own comparison key beside it.
 
 Every judgment call records the same three layers at call grain: its role and
-site; the agent digest, prompt digest, treatment digest, and site-contract
+site; the selection digest, prompt digest, treatment digest, and site-contract
 digest; the lineup
 revision and the enrollment generation it used; what was observed (effective
 model, serving operator, and usage, as a run records them); the call it
 shadows, if any; and the Section [5.13](#513-deterministic-components-judgment-calls-and-the-effect-registry) input digests it already records. A call's treatment
 digest is computed like a run's, with the call launch's digest in the launch
 position. That digest is one per proved call launch version and the same at
-every site, so the site stays a separate key and two agents compare at one
+every site, so the site stays a separate key and two selections compare at one
 site on equal terms. The site-contract digest covers the site's fixed
 instruction and its output contract
 ([`daemon/internal/inference/contract.go`](../daemon/internal/inference/contract.go)).
@@ -1802,15 +1832,16 @@ before and after a lineup change by treatment and prompt digest.
 
 Review independence (Section [7](#7-review-policy)) is a recorded fact, never an admission gate
 (owner decision, revision 65); that section holds the rule and names the
-judging and writing roles whose pairing is recorded. The record reads the
-offers' lineage groups. A
+judging and writing roles whose pairing is recorded. The record derives each
+selection's lineage group from its enrollment's client kind and its model id. A
 group is derived per vendor family and curated conservatively; the same weights
 through any route are one group; unknown lineage is recorded as unknown.
 The earlier lineage gate this replaced is in
 [`docs/history/decisions.md`](history/decisions.md) (revision 65).
 
 The `ProviderProfile` of revision 36 is superseded. Its approval role moved to
-agents and lineups in the tree, and its remaining facts, `enabled` and
+the tree (revision 39), now its adapter pins, routes, and model list
+(revision 111), and its remaining facts, `enabled` and
 `cost_owner`, are identity fields. `freesided auth` keeps the profile name for
 the operator.
 
@@ -1828,11 +1859,15 @@ review flags among them, are removed once every such role admits
 ([`daemon/README.md`, Select Agents Through The
 Lineup](../daemon/README.md#select-agents-through-the-lineup)).
 
-The baseline is honest: each writer agent's offer names the exact Claude model
-its launch passes and the agent asks the effort it passes, both given to
-adoption per writer role, so no baseline agent sits on
-`claude-code-native-default`, the offer that leaves the model to the CLI.
-Making the writers explicit was a change, not migration (#1616).
+The baseline was honest: adoption gave each writer role the exact Claude
+model and effort its launch passes, so no baseline agent sat on
+`claude-code-native-default`, the offer that left the model to the CLI.
+Making the writers explicit was a change, not migration (#1616). A selection
+always names its model, so that state cannot recur. The move from agent
+documents to selections is its own cutover, add then migrate then remove
+(#2596, #2597, #2599), under the rule that a record of a past selection is
+never upgraded through current configuration: a record admitted under an
+agent digest keeps it and is never re-resolved as a selection.
 
 The cutover rules of revision 36 carry forward unchanged. A nonterminal run or
 admission that carries an `auth_identity_id` but no agent digest is read under a
@@ -1847,13 +1882,15 @@ or retire fails closed.
 This section fixes the principle, the objects, the cardinalities, and the
 admission steps. The field-level schema, the canonical encodings, the adapter
 capability vocabulary, and the lifecycle command set are settled by the
-admitted-agent contract unit and the enrollment unit (#867), not listed here.
+admitted-agent contract unit, the enrollment unit (#867), and the selection
+units of revision 111 (#2596), not listed here.
 Deliberately not built:
 
 - A qualification ledger with projections and supersession (one proof
   suffices, the adapter suite per build; a stage is bounded by its output
   validation and the ward's gates, a call by its site's authority contract).
-- Alias and withdrawal machinery (the tree is the active set and git is its
+- Alias and withdrawal machinery (the discovered catalog under the tree's
+  model list is the active set, and git and the admission records are its
   history).
 - Stored projections beyond the treatment digest.
 - Percentage and cohort experiment arms. At one operator's volume, a few dozen
@@ -1870,11 +1907,11 @@ Deliberately not built:
 #### Multi-Subscription per Provider
 
 Two identities of one provider (a work
-and a personal subscription), each with its own enrollments and agents, are
+and a personal subscription), each with its own enrollments, are
 a supported shape. Selection among them is a lineup line, a task line, or a
 carded per-attempt choice, never silent: no default is inferred from enrollment
 order, recency, or availability. Cost owner is read from the selected
-agent's identity on every selection and recorded with it, so one project can
+enrollment's identity on every selection and recorded with it, so one project can
 attribute a review to one subscription and an implementation to another.
 Parallelism limits count per usage pool, not per identity, so two identities
 on one pool share its limit, and two pools of one provider add their limits
@@ -1910,9 +1947,16 @@ markers keep their own postures.
 The gate is an exclusion list: no probe value is read by preflight, by
 scheduling, by the `max_parallel_executions` limit, or by any driver. Those
 consumers read only the operator's explicit identity, usage pool, and
-enrollment records, the tree, and the resolved policy. A probe that observes a newer model, a lapsed
-plan, or spare capacity produces a card or a proposed offer diff in the tree,
-never a changed selection.
+enrollment records, the tree, and the resolved policy. A probe that observes a lapsed
+plan or spare capacity produces a card or a proposal, never a changed
+selection. The discovered catalog is not probe output under this gate: it is
+the harness's own report of what it can run, and it has two readers.
+Admission reads it to check that a selection someone made names a model and
+effort the harness reports, and the router reads it to drop an enrollment
+that cannot serve a role's lineup model from that role's candidates. Neither
+is authority: the catalog, under the tree's list, bounds what may be chosen,
+and only an operator's line, card choice, or ordered routing policy chooses.
+A newer model it reports becomes selectable, never selected.
 
 **Codex account facts come from the snapshot (revision 80).** They are
 advisory claims decoded from the stored ID token, never reported fresher than
@@ -1978,12 +2022,12 @@ first-admission choice (routing policy, above), so every selection a reading
 influenced is a recorded fact that names the readings, never a silent switch.
 The quota park (Section [4](#4-the-attention-model)) uses readings only to
 decide when a parked attempt starts on the line it already has; it never
-picks an agent, credential, or pool. What it reads:
+picks a selection, credential, or pool. What it reads:
 [`daemon/internal/engine/quota_park.go`](../daemon/internal/engine/quota_park.go). An observation also informs the account
-usage view and the facts shown beside the agent choices in the clients, it
+usage view and the facts shown beside the selection choices in the clients, it
 may inform a proposal, and from revision 99 it may mark a pool's window
 exhausted. The operator's recorded
-lineup line or task line is still what admits an agent and its credential,
+lineup line or task line is still what admits a selection and so its credential,
 and admission never reads a reading. A task line the operator set by
 hand admits whatever its pool's reading shows; when the provider then
 refuses the run, that attempt fails as a provider quota failure and the task
@@ -3119,13 +3163,13 @@ The fork is what makes this work. On an ordinary resume, the pinned CLI kept the
 predecessor's system prompt. A fork accepted the fresh explicit bundle and still
 preserved conversation continuity.
 
-Resume is bound to one agent (Section [5.4](#54-credential-modes-egress-profiles-and-concurrency)) as well as to one invocation. A
+Resume is bound to one selection (Section [5.4](#54-credential-modes-egress-profiles-and-concurrency)) as well as to one invocation. A
 Section [4](#4-the-attention-model) alternate-agent retry defaults to a fresh invocation with no
 continuity remount, and the Section [5.7](#57-the-ward-runners-handoff-gate-and-operating-modes) operating modes do not relax this. The
-adapter decides whether a successor agent may remount a predecessor's
-continuity volume. It decides over the two agents' process facts: adapter
+adapter decides whether a successor selection may remount a predecessor's
+continuity volume. It decides over the two selections' process facts: adapter
 build, session format, launch, and, where the harness binds them, the
-session-bound route and offer facts. A different adapter is always a fresh
+session-bound route and model facts. A different adapter is always a fresh
 invocation. Missing expected session state is a typed failure, never a silently
 created session. That comparison is its own tracked unit (#873), and #408
 merges after it.
@@ -3998,15 +4042,16 @@ Discuss response to a `finding_adjudication` item triggers; that is the finding
 adjudicator's site and runs on the adjudicator's line.
 
 Each of these is a **role**, and this list is the closed role list of Section
-[5.4](#54-credential-modes-egress-profiles-and-concurrency): every role takes its prompt from the lineup, and its agent too unless a
-narrower selection picks one. A task line may pick the agent for the
+[5.4](#54-credential-modes-egress-profiles-and-concurrency): every role takes its prompt from the lineup, and its selection of
+enrollment, model, and effort too unless a narrower selection picks one. A
+task line may pick the selection for the
 specifier, implementer, remediator, or reviewer of one task, and the
 alternate-agent card may pick it for one attempt (Section [5.4](#54-credential-modes-egress-profiles-and-concurrency), Admitted
-Agents; revision 73). Neither picks the researcher's agent, which only the
+Agents; revision 73). Neither picks the researcher's selection, which only the
 lineup names (revision 76). The specifier, researcher, implementer,
 remediator, reviewer, and shadow reviewer are ward roles. The rest are
 wardless roles whose work is the judgment calls below. The researcher has a
-lineup line of its own, so it can run a cheaper agent than the specifier: a
+lineup line of its own, so it can run a cheaper model than the specifier: a
 task line can put one task's specifier on a larger model while its research
 stays on the lineup's. Research fetching, above, stays an engine job: the
 fetcher still serves allowlisted sources, and the researcher adds web search
@@ -4034,7 +4079,7 @@ explain sites and audit telemetry, lives in an advisory store that policy
 evaluation structurally cannot reach. That store stays separate from the
 Section [8](#8-observability-and-optimization-telemetry) policy-input telemetry.
 
-Every site belongs to exactly one role, and the role's agent and prompt come
+Every site belongs to exactly one role, and the role's selection and prompt come
 from the lineup (Section [5.4](#54-credential-modes-egress-profiles-and-concurrency), Roles and Launch Shapes). No site is pinned to a
 deployment-wide model binding. The role decides who answers and with what
 prompt; the site still decides what an answer may do. A lineup line changes
@@ -4042,9 +4087,10 @@ neither a site's authority mode nor its outbound fields, budget, ceilings, or
 fail-safe.
 
 A call may run as a **shadow** of another call: the same site and the same
-input, under a different agent or prompt that the lineup names on the role's
-shadow line. Any agent may shadow any other: another model, another effort
-level, another harness, or another provider, from the primary's lineage or not
+input, under a different selection or prompt that the lineup names on the role's
+shadow line. Any selection may shadow any other: another model, another effort
+level, or another enrollment and so another harness or provider, from the
+primary's lineage or not
 (owner decision, revision 65). A shadow line is optional, and the shadow is
 admitted like any call. A shadow's output goes only to the advisory store, whatever the site's
 authority mode. It never annotates, proposes, or chooses, and nothing reads it
@@ -4056,9 +4102,9 @@ short, is skipped, never the primary. A shadow line's failure is the shadow's
 alone: it never makes its role unbound (Section [5.4](#54-credential-modes-egress-profiles-and-concurrency), Admission). How each
 bound is partitioned is the building unit's to settle (#1429), not this
 section's. A vendor's usage pool is outside Freeside's metering: a shadow whose
-agent shares its primary's usage pool still draws on that pool, and an operator
-who wants isolation there names a shadow agent on a different usage pool. A shadow sends the site's
-allowlisted fields to a second agent's route, so the site's sensitivity and
+enrollment shares its primary's usage pool still draws on that pool, and an operator
+who wants isolation there names a shadow enrollment on a different usage pool. A shadow sends the site's
+allowlisted fields to a second enrollment's route, so the site's sensitivity and
 redaction rules bind the shadow's route as they bind the primary's. Label roles compare the two labels with each other and with the
 human's eventual decision; prose roles show the operator both outputs on a
 sample. This borrows the pattern of the Section [7](#7-review-policy) shadow review and replaces
@@ -4087,12 +4133,14 @@ Every call site carries exactly one per-site authority contract:
    were independently bounded before the call; cross-vendor driver selection is
    not choosable (standing owner decision). That limits what a model's answer
    may select: no answer ever picks the vendor, adapter, credential, or usage
-   pool that runs anything, and an answer picks an agent only where an
-   operator's lineup line pairs agents for the purpose: the triager's choice
-   between a specifier agent and its escalated counterpart, which share an
-   enrollment and an adapter (Specifier Triage, below; revision 106). An
-   operator naming a vendor's agent on a lineup line is a different act,
-   configuration reviewed as a diff, and does not conflict with it.
+   pool that runs anything, and an answer picks a selection only where an
+   operator's lineup line pairs two selections on one enrollment for the
+   purpose: the triager's choice between the specifier's selection and its
+   escalated counterpart, which differ only in model and effort (Specifier
+   Triage, below; revision 106). An operator naming a vendor's enrollment
+   and model on a lineup line, configuration reviewed as a diff, or on a task
+   line, an authenticated operator's recorded choice, is a different act and
+   does not conflict with it.
 
 Cumulative bounds compose globally: per-site budgets aggregate across sites and
 runs under project-level and global windows, attributed to root lineage.
@@ -4138,25 +4186,26 @@ Daemon-side inference is its own contract, not a reuse of `provider_only`. It
 covers outbound field selection (an explicit allowlist per site), input
 sensitivity classification, redaction, provider identity, retention, size
 limits, and the input digests recorded per call. Driver binding and credential
-handling come from the role's admitted agent: the adapter is the driver, proved
-for the call launch, and the agent's enrollment is the credential (Section
+handling come from the role's admitted selection: the adapter its enrollment's
+client kind pins is the driver, proved for the call launch, and the enrollment
+is the credential (Section
 [5.4](#54-credential-modes-egress-profiles-and-concurrency), Admission). No tools, no workspace, no ward container.
 
 The publication author is a judgment role, not a pinned site. Like the
 specifier, implementer, remediator and reviewer, it carries a refinable prompt
-and per-role agent and effort selection through the admitted-agent lineup, so
-its prompt, agent and effort are tuned and compared like any other role. It runs
+and a per-role selection of enrollment, model, and effort through the lineup,
+so its prompt and selection are tuned and compared like any other role. It runs
 without a workspace, tools or a ward container: it only reads trusted inputs and
 emits advisory output. The call reuses the daemon-side inference contract above
 for outbound field selection, redaction, sensitivity classification and
-retention, but its agent, model and effort come from the lineup, not a
+retention, but its enrollment, model, and effort come from the lineup, not a
 deployment-pinned binding; that requires lineup keys to accept role names, not
 only stage names, which is itself a contract change. By owner decision on
 2026-09-20, the author ships first on the deployment-pinned `inference.Binding`,
 the same interim flag path Section
 [5.4](#54-credential-modes-egress-profiles-and-concurrency) describes for the
 other judgment calls; #1425 moves it to the lineup with every other judgment
-site, and until then nobody can tune the author's agent or prompt per role.
+site, and until then nobody can tune the author's selection or prompt per role.
 Because it runs without a
 ward, it is admitted through a daemon-side judgment admission class, not the
 runner and ward-conformance proof the execution roles use: its launch proof is
@@ -4225,8 +4274,8 @@ reference (Section [5.12](#512-workflow-definition-initiators-and-artifacts)).
 The **triager** (revision 106) decides how much model a task's specification
 needs, so the deployment can keep a larger model for the work that needs it.
 Its one site is a **bounded choice** between two daemon-authored options,
-`standard` and `escalated`: the specifier's agent or its escalated
-counterpart (Section [5.4](#54-credential-modes-egress-profiles-and-concurrency), Admitted Agents). It joins the lineup like every
+`standard` and `escalated`: the specifier's selection or its escalated
+counterpart, the same enrollment with another model and effort (Section [5.4](#54-credential-modes-egress-profiles-and-concurrency), Admitted Agents). It joins the lineup like every
 judgment site. Its prompt carries the criteria for escalating, so they are
 control-plane text reviewed as a diff, and a project lineup can replace them.
 The deployment's default criteria escalate large contract changes, plan or
@@ -4249,16 +4298,17 @@ standard.
   spent budget, or a triager role with no line). It shows on the task's
   timeline with the reason when there is one.
 - **What the outcome does.** An escalation writes a triage-sourced specifier
-  task line naming the counterpart of the specifier's lineup agent and
-  citing the task's triage record; `standard` writes nothing, so the
-  specifier runs on its lineup agent. The operator can move the specifier
+  task line naming the escalated counterpart of the specifier's lineup
+  selection and citing the task's triage record; `standard` writes nothing,
+  so the specifier runs on its lineup selection. The operator can move the specifier
   with a task-line change while no specification attempt runs. Admission
   re-checks a triage-sourced line against current state: the line names its
   own task, it cites that task's triage record, the record escalated, and
-  the line's agent is the escalated counterpart the specifier's current
-  lineup line names. A line that fails a check is refused.
+  the line's selection is the escalated counterpart the specifier's current
+  lineup line names for the line's enrollment. A line that fails a check is
+  refused.
 - **Worst case, bounded before the call.** One task's specification runs on
-  the escalated agent, on the same enrollment and adapter, under the same
+  the escalated model and effort, on the same enrollment and adapter, under the same
   floors and budget as any specification. Its use draws on the pool's shared
   usage windows, so it can bring a window to exhaustion sooner, and tasks
   pinned to that pool then park until the reset as after any quota failure
@@ -5345,9 +5395,9 @@ policy no longer gates #397.
 Independence is a preference the operator expresses in the lineup or a task
 line and a fact Freeside records. It is never a gate (owner decision, revision 65). Any
 combination of providers may serve any combination of roles, and the
-implementer and the reviewer may be the same agent, because Freeside has to
-keep working when one provider is out of usage or down. Once agents are
-admitted (Section [5.4](#54-credential-modes-egress-profiles-and-concurrency)), the record reads the selected agents' offers, role by
+implementer and the reviewer may run the same selection, because Freeside has to
+keep working when one provider is out of usage or down. Once selections are
+admitted (Section [5.4](#54-credential-modes-egress-profiles-and-concurrency)), the record reads each admitted selection's lineage group, role by
 role. The writing roles are the implementer and the remediator. The judging
 roles are the reviewer, the finding adjudicator, and the drift auditor. For
 each judging role, every card and record says whether it shared a lineage group
@@ -5872,7 +5922,7 @@ Each run records:
 
 - stage and all governing digests;
 - per-key rein preset or override provenance;
-- per role, the admitted agent, prompt, and launch digests, the treatment
+- per role, the admitted selection, prompt, and launch digests, the treatment
   digest, and the requested, admitted, and observed selection facts (Section
   [5.4](#54-credential-modes-egress-profiles-and-concurrency));
 - driver, credential mode, egress profile, and operating mode;
@@ -6910,7 +6960,7 @@ operation keeps working as dependencies and the daemon change. This extends
 1B's scope by owner decision (revision 98).
 
 Clients edit one class of setting directly: an operator setting, which
-chooses among what the committed lineup already approved and approves
+chooses within what the committed tree allows and approves
 nothing (the routing policy and task lines, Section [5.4](#54-credential-modes-egress-profiles-and-concurrency); revision 99).
 Every other configuration change passes Section [5.8](#58-control-plane-trust)'s control-plane gate
 through an operator-authored PR; for recurring preferences, the Section
@@ -7160,36 +7210,37 @@ Record material changes here by revision, with the decider in parentheses.
 - On first re-litigation, promote the decision to a `docs/decisions/` ADR that
   cites its history entry.
 
-Revision 110 ("Verify at Handoff, Not on a Base Move"):
+Revision 111 ("Select by Enrollment, Model, and Effort"):
 
-1. **Freeside verifies a pull request at handoff and again whenever its
-   head changes, never because the target branch moved.** Handoff is
-   publication, first or successor. At handoff the daemon checks the
-   unchanged head against the target tip current then: when the tip differs
-   from the base the head's proofs name, it verifies the prospective merge of the
-   head into that tip, records the tip and merge, and publishes; review is
-   not rerun. A conflict, textual or a failed verification of the merge, is
-   resolved before handoff by a remediation at the current tip, whose new
-   head is verified and reviewed again; until that remediation exists, a
-   conflict ends the run with `publish_blocked`. A changed head after
-   handoff is verified, reviewed, and handed off again. A base advance alone
-   reruns no check or review and re-enters no run, and nothing in Freeside
-   checks the PR against the latest target branch between handoff and merge:
-   only the merge-time checks the target repository enforces cover that, and
-   Freeside neither requires nor verifies them, until Freeside has a landing
-   step (Sections [6](#6-verification) and [7](#7-review-policy)). The Section [5.16](#516-the-durable-scheduler) base-advance staleness watch and the
-   base-freshness fact go; the ready card shows the tip its handoff checked.
-   This overturns revision 89's pre-publication base-advance re-entry (#2058),
-   the successor base-advance re-entry (#2111), and the base-advance half of
-   #502's readiness re-entry; the head-change half stays. Rejected: auditing
-   at handoff without verifying the merge, because the owner's rule says
-   verify at handoff; re-reviewing the merge at handoff, because review
-   covers the head and the merge adds nothing Freeside wrote; and keeping
-   the watch as information, which would mark every ready card stale after
-   each merge to the target branch, against Section [3.2](#32-the-interruption-budget)'s interruption budget.
+1. **An agent selection is the tuple `{enrollment, model, effort}`, chosen
+   ad hoc by an authenticated operator, in place of the named agent
+   document.** Models and their per-model effort levels are discovered from
+   each enrollment's harness and stored as daemon records; the fixed effort
+   vocabulary becomes the levels each model reports. The committed tree keeps
+   what is authority: an adapter pin per client kind, each route's terms
+   basis, and an optional allow or deny list over discovered models. Offers
+   as authored fragments go away, and with them `identity_stability` and
+   `not_after`: a contradicting observation still fails the attempt, and a
+   model the harness stops reporting is withdrawn from new selection.
+   Admission still canonicalizes and hashes the resolved tuple (enrollment
+   id, model id, effort level, and the adapter pin), so run records and the
+   comparison keys of shadow and wardless roles keep a digest. The lineup
+   stays in the tree and names each role's default tuple, resolved at
+   admission; review independence derives lineage from the enrollment's
+   client kind and the model; the routing policy orders enrollments per role
+   and keeps the lineup's model and effort, so it no longer puts a different
+   model on each pool (Sections [4](#4-the-attention-model), [5.4](#54-credential-modes-egress-profiles-and-concurrency), [5.13](#513-deterministic-components-judgment-calls-and-the-effect-registry), and [7](#7-review-policy)). Only an operator chooses the
+   enrollment; intake still sets nothing. This overturns revision 39's "one
+   atomic agent document over per-axis policy keys", whose premise, that a
+   reviewed document per combination would be cheap, did not hold: each new
+   combination cost an offer, an agent, two lock entries, a lineup line, a
+   commit, and a restart. Rejected: keeping offers as a hand-maintained
+   model allowlist, which keeps that friction; and fetching a model manifest
+   from a remote branch at runtime, as T3 Code does, which would be an
+   unreviewed remote input to a control-plane decision.
 
-(Owner decision of 2026-11-04 on #2629;
-[decision note](../devlog/2026-11-05-0951-verify-at-handoff-not-on-base-advance.md).)
+(Owner decision of 2026-11-04 on #2593;
+[decision note](../devlog/2026-11-05-1035-select-by-enrollment-model-effort.md).)
 
 ## 14. Risks
 
@@ -7203,13 +7254,13 @@ Revision 110 ("Verify at Handoff, Not on a Base Move"):
 | **Rendered agent Markdown in a public PR** | Recipe v2 (Section [5.15](#515-evidence-and-images)) renders authored prose as live Markdown only through a screen at least as strict as v1's: it rejects closing and automation directives at the body source, rejects secrets and control characters, neutralizes cross-reference, bare-URL, commit-reference and mention autolinks, renders raw HTML inert, and resolves links and images only to existing publishable (`publish_eligible`) evidence artifacts. The author's evidence inputs are likewise restricted to policy-approved publishable evidence, so it cannot paraphrase sensitive evidence past the publication gate. On any screen or inference failure it falls back to frozen v1 escaped-text rendering, adding no new publication block. The author's control-plane inputs (the target repository's template and AGENTS.md) resolve from the trusted base, never the candidate head (Section [5.8](#58-control-plane-trust)). The publisher, not agent text, writes any close directive; the closure is an effect proposal whose digest-bound approval is recorded by the project's policy actor, or by the `effect_proposal` action when policy keeps the human gate on, before any `Closes` is written; a same-repository client-supplied source URL is approved as a recommendation whose provenance is recorded on the proposal and shown on the human-gate card. |
 | **Agent text in a public issue comment** | The approved-specification comment (Section [5.11](#511-github-integration-reconciliation-plus-intake)) posts only a human-approved, digest-bound public plan inside a daemon-written frame, screened under `github-issue-comment/1`, which rejects directives, secrets, mentions, and command shapes. The workflow audit gates it on `issue_comment` triggers, and only the daemon's publisher holds the `issues: write` token. The workflow set, with a content digest of each workflow and its local dependencies, is rechecked at the default-branch tip before each post. Residual: a remote action or reusable workflow named by a mutable ref, a script a listed workflow runs from the checkout, or a workflow chained by `workflow_run` can change unseen by the digests. Also residual: a webhook-driven App that reacts to any comment or to a plain phrase cannot be enumerated, and a comment resets stale-issue timers; each sees one screened comment per approval. |
 | **Maintenance tasks Freeside opens for itself** | Project-image upkeep submits a task only for a refusal that needs a repository repair, through the ordinary submission primitive with a daemon origin and the refusal record as its source (Section [5.12](#512-workflow-definition-initiators-and-artifacts)). It passes the ordinary specification approval and the full publication gate like any operator-submitted task, never files an issue, and opens at most one task per refusal record. Residual: operator attention on a task nobody asked for, bounded by the refusal classes that may open one (Section [5.7](#57-the-ward-runners-handoff-gate-and-operating-modes)). |
-| **Wardless roles on the host** | A judgment role runs outside the ward, so nothing sandboxes it and no egress proxy sits in front of its harness. Its safety rests on the call launch, which an adapter proves per build against the real harness; Section [5.4](#54-credential-modes-egress-profiles-and-concurrency), Admission, holds the launch's clauses, the interim hand-audit exception, and credential handling on the host. The answer is schema-validated and bounded by its site's authority contract, the model sees only the site's allowlisted, redacted fields, and a shadow's output reaches only the advisory store. Residual: a harness update can change what a launch flag means, which is why the proof is per pinned build and not per harness; a host administrator policy file that no launch flag switches off is outside that per-build proof (Section [5.4](#54-credential-modes-egress-profiles-and-concurrency)); and a shadow whose agent shares its primary's usage pool draws on a vendor quota that Freeside does not meter (Section [5.13](#513-deterministic-components-judgment-calls-and-the-effect-registry)). |
+| **Wardless roles on the host** | A judgment role runs outside the ward, so nothing sandboxes it and no egress proxy sits in front of its harness. Its safety rests on the call launch, which an adapter proves per build against the real harness; Section [5.4](#54-credential-modes-egress-profiles-and-concurrency), Admission, holds the launch's clauses, the interim hand-audit exception, and credential handling on the host. The answer is schema-validated and bounded by its site's authority contract, the model sees only the site's allowlisted, redacted fields, and a shadow's output reaches only the advisory store. Residual: a harness update can change what a launch flag means, which is why the proof is per pinned build and not per harness; a host administrator policy file that no launch flag switches off is outside that per-build proof (Section [5.4](#54-credential-modes-egress-profiles-and-concurrency)); and a shadow whose enrollment shares its primary's usage pool draws on a vendor quota that Freeside does not meter (Section [5.13](#513-deterministic-components-judgment-calls-and-the-effect-registry)). |
 | **Host-side macOS verification** | The executor holds no credential and runs no agent; a network-denying sandbox profile plus per-uid packet-filter rules, write confinement to the job directory, a digest-keyed offline dependency cache, and a home reset confine each job, each conformance-proven and probed live before the recipe runs (Section [5.7](#57-the-ward-runners-handoff-gate-and-operating-modes), macOS Execution). Residual: candidate test code runs as a pooled uid on the operator's host, so a sandbox or kernel escape reaches the host, with the operator's state behind uid separation and `0700` modes; placing the executor on a second Mac enrolled as an execution host shrinks the blast radius. |
 | **Workspace-handoff uncertainty** | Resolved by the workspace-handoff spike: the strong class is declared and conformance-gated (Section [5.7](#57-the-ward-runners-handoff-gate-and-operating-modes)); the same-VM fallback is refuted by execution, never implemented or declared. |
 | **Codex cloud review as a load-bearing dependency** | Realized 2026-07-31: the live-run trigger falsification (#427) showed no App-visible trigger path. The dependency is removed. Review is Freeside-invoked (Section [7](#7-review-policy)), and native review is best-effort extra evidence. |
 | Host capacity | Several accounts' limits can add up to more containers than one machine holds. Give every ward container a CPU cap and a declared memory size, and bound their memory by each instance's declared budget, with each launch reserving its declared size plus its VM's overhead, so a launch that doesn't fit waits under a visible hold instead of exhausting memory; waiting launches go oldest task first, and a size that can never fit fails at once (Section [5.4](#54-credential-modes-egress-profiles-and-concurrency), Machine Capacity). Residual: the budget can't see load outside Freeside or another instance's containers, so the operator declares it with room for interactive use and keeps the budgets of every instance on one host within what the host holds. |
 | Execution host credential copies | Every enrolled execution host holds a copy of each identity's setup token in its credential volume (Section [5.7](#57-the-ward-runners-handoff-gate-and-operating-modes), Execution Hosts). Accepted for owner-held machines on the owner's tailnet: rotation re-authors every host, and removal names the identities to rotate. Residual: a host removed while unreachable keeps its copy until the owner rotates at the vendor. Any host the owner does not hold needs `subscription_injected` through control-plane injection, under which it would receive no copy (revision 95); that mode is held (revision 103), so such a host waits and is not enrolled meanwhile. |
-| Single-provider execution capacity | Claude usage limits can stall real work. From revision 99 the hedge is a second Claude subscription under a routing policy (Section [5.4](#54-credential-modes-egress-profiles-and-concurrency), routing policy), not the Codex execution driver, which moved to Phase 2. Two subscriptions hedge a quota window, not a Claude outage or a Claude policy change; the owner accepts that residual while the Codex plan is downgraded. The router picks a subscription only at a new task's first admission, records the selection with its policy revision, and keeps every role of the task with an agent on that pool there; a quota failure parks the task until its window resets instead of moving it (Section [4](#4-the-attention-model); revision 103). A task in flight moves to another subscription only by the operator's explicit choice on the alternate-agent card or a task line change (Section [5.4](#54-credential-modes-egress-profiles-and-concurrency), Admitted Agents), never silently and never automatically. Usage remains observed telemetry (Section [8](#8-observability-and-optimization-telemetry)); an allowance observation shows the stall coming (Section [5.4](#54-credential-modes-egress-profiles-and-concurrency), usage observation) and may mark a window exhausted or report its weekly reset, which the router reads to rank and pick a new task's pool and the quota park reads to time a parked task's next attempt; admission never reads one. |
+| Single-provider execution capacity | Claude usage limits can stall real work. From revision 99 the hedge is a second Claude subscription under a routing policy (Section [5.4](#54-credential-modes-egress-profiles-and-concurrency), routing policy), not the Codex execution driver, which moved to Phase 2. Two subscriptions hedge a quota window, not a Claude outage or a Claude policy change; the owner accepts that residual while the Codex plan is downgraded. The router picks a subscription only at a new task's first admission, records the selection with its policy revision, and keeps every role of the task with a selection on that pool there; a quota failure parks the task until its window resets instead of moving it (Section [4](#4-the-attention-model); revision 103). A task in flight moves to another subscription only by the operator's explicit choice on the alternate-agent card or a task line change (Section [5.4](#54-credential-modes-egress-profiles-and-concurrency), Admitted Agents), never silently and never automatically. Usage remains observed telemetry (Section [8](#8-observability-and-optimization-telemetry)); an allowance observation shows the stall coming (Section [5.4](#54-credential-modes-egress-profiles-and-concurrency), usage observation) and may mark a window exhausted or report its weekly reset, which the router reads to rank and pick a new task's pool and the quota park reads to time a parked task's next attempt; admission never reads one. |
 | Classifier mislabeling | Preserve immutable raw findings; require second adjudication for the safety case; enforce ceilings. |
 | Subscription-terms drift | Keep it as an explicit operating risk. Open question: whether Anthropic permits choosing among one owner's Claude subscriptions to spend each before its reset (the routing policy's drain-first by reset, Section [5.4](#54-credential-modes-egress-profiles-and-concurrency)). The Consumer Terms (effective 2025-10-08) forbid "bypassing any of our systems or protective measures", and Claude Code's legal page says advertised Pro and Max limits "assume ordinary, individual usage". Current response (revisions 103 and 107): the router chooses a subscription only for new tasks, ranking by reset, and pins each task to it, nothing fails over mid-task, and proxy credential injection is held. Recommended: ask Anthropic; its answer reopens revisions 103 and 107. |
 | Apple container immaturity | Prove actual runner capabilities and retain honest fallback classes. |

@@ -3476,3 +3476,34 @@ The client work is #1798 to #1803.)
 
 (Owner decision of 2026-11-03 on #2520;
 [decision note](../../devlog/2026-11-03-1441-plan-content-rule.md).)
+
+## Revision 110 ("Verify at Handoff, Not on a Base Move"):
+
+1. **Freeside verifies a pull request at handoff and again whenever its
+   head changes, never because the target branch moved.** Handoff is
+   publication, first or successor. At handoff the daemon checks the
+   unchanged head against the target tip current then: when the tip differs
+   from the base the head's proofs name, it verifies the prospective merge of the
+   head into that tip, records the tip and merge, and publishes; review is
+   not rerun. A conflict, textual or a failed verification of the merge, is
+   resolved before handoff by a remediation at the current tip, whose new
+   head is verified and reviewed again; until that remediation exists, a
+   conflict ends the run with `publish_blocked`. A changed head after
+   handoff is verified, reviewed, and handed off again. A base advance alone
+   reruns no check or review and re-enters no run, and nothing in Freeside
+   checks the PR against the latest target branch between handoff and merge:
+   only the merge-time checks the target repository enforces cover that, and
+   Freeside neither requires nor verifies them, until Freeside has a landing
+   step (Sections [6](../plan.md#6-verification) and [7](../plan.md#7-review-policy)). The Section [5.16](../plan.md#516-the-durable-scheduler) base-advance staleness watch and the
+   base-freshness fact go; the ready card shows the tip its handoff checked.
+   This overturns revision 89's pre-publication base-advance re-entry (#2058),
+   the successor base-advance re-entry (#2111), and the base-advance half of
+   #502's readiness re-entry; the head-change half stays. Rejected: auditing
+   at handoff without verifying the merge, because the owner's rule says
+   verify at handoff; re-reviewing the merge at handoff, because review
+   covers the head and the merge adds nothing Freeside wrote; and keeping
+   the watch as information, which would mark every ready card stale after
+   each merge to the target branch, against Section [3.2](../plan.md#32-the-interruption-budget)'s interruption budget.
+
+(Owner decision of 2026-11-04 on #2629;
+[decision note](../../devlog/2026-11-05-0951-verify-at-handoff-not-on-base-advance.md).)
