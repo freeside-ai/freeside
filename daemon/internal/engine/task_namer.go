@@ -121,81 +121,18 @@ func (e *Engine) nameTaskIfUnnamed(ctx context.Context, run domain.Run) error {
 	if task.Name.Source != domain.DisplayNameSourceIdentifier || task.Source == nil {
 		return nil
 	}
+	source, err := e.readTaskSource(ctx, run, task, domain.InvocationID("task-namer-"+string(task.ID)),
+		"Name the task from the issue's requested outcome")
+	if err != nil {
+		return err
+	}
 	input := inference.TaskNamerInput{
 		Project: string(run.ProjectID), RootLineage: string(run.ID), SourceKind: string(task.Source.Kind),
+		Repository: source.Repository, IssueNumber: source.IssueNumber,
+		SourceText: source.Text, IssueTitle: source.IssueTitle, IssueBody: source.IssueBody,
 	}
-	switch task.Source.Kind {
-	case domain.SpecificationSourceWorkItemArtifact:
-		var artifact domain.Artifact
-		if err := e.store.Read(ctx, func(tx *store.ReadTx) error {
-			var err error
-			artifact, err = tx.GetArtifact(ctx, task.Source.WorkItemArtifactID)
-			return err
-		}); err != nil {
-			return err
-		}
-		body, err := readBoundedArtifactBlob(e.specification.blobs, artifact.Digest, exec.ProductionMaxInputBytes)
-		if err != nil {
-			return err
-		}
-		input.SourceText = string(body)
-	case domain.SpecificationSourceIssueSubject:
-		var resolved domain.ResolvedPolicy
-		var scope specify.ManagedRepository
-		if err := e.store.Read(ctx, func(tx *store.ReadTx) error {
-			var err error
-			if resolved, err = tx.GetResolvedPolicy(ctx, run.ID); err != nil {
-				return err
-			}
-			scope, err = researchScope(ctx, tx, run.ProjectID)
-			return err
-		}); err != nil {
-			return err
-		}
-		settings, err := specify.ParsePolicy(resolved)
-		if err != nil {
-			return err
-		}
-		issue := task.Source.IssueSubject
-		input.Repository, input.IssueNumber = issue.Repo, strconv.Itoa(issue.IssueNumber)
-		artifact, err := e.specification.fetcher.Fetch(ctx, domain.InvocationID("task-namer-"+string(task.ID)), 1,
-			specify.FetchRequest{
-				URL:     fmt.Sprintf("https://api.github.com/repositories/%d/issues/%d", issue.RepositoryID, issue.IssueNumber),
-				Purpose: "Name the task from the issue's requested outcome",
-			}, scope, settings.ResearchAllowlist, settings.ResearchMaxBytes)
-		if err != nil {
-			return err
-		}
-		body, err := readBoundedArtifactBlob(e.specification.blobs, artifact.Artifact.Digest, exec.ProductionMaxInputBytes)
-		if err != nil {
-			return err
-		}
-		evidence, err := specify.DecodeResearchEvidence(body)
-		if err != nil {
-			return err
-		}
-		var content struct {
-			Title string `json:"title"`
-			Body  string `json:"body"`
-		}
-		if err := json.Unmarshal([]byte(evidence.Body), &content); err != nil {
-			return fmt.Errorf("decode task naming research: %w", err)
-		}
-		input.IssueTitle, input.IssueBody = content.Title, content.Body
-	}
-	// JSON can expand each input byte to six bytes. Reserve room for field
-	// names and coordinates, then preserve a UTF-8 prefix of the source text.
-	remaining := inference.TaskNamerSite(inference.Budget{}).MaxInputBytes/6 - 1024
-	for _, field := range []*string{&input.IssueTitle, &input.SourceText, &input.IssueBody} {
-		if len(*field) > remaining {
-			end := remaining
-			for end > 0 && !utf8.RuneStart((*field)[end]) {
-				end--
-			}
-			*field = (*field)[:end]
-		}
-		remaining -= len(*field)
-	}
+	truncateForSite(inference.TaskNamerSite(inference.Budget{}).MaxInputBytes,
+		&input.IssueTitle, &input.SourceText, &input.IssueBody)
 	if err := e.claimRunDispatch(ctx, run.ID); err != nil {
 		if workflowAdvancementFenced(err) {
 			return nil
@@ -217,4 +154,117 @@ func (e *Engine) nameTaskIfUnnamed(ctx context.Context, run domain.Run) error {
 		return nil
 	}
 	return err
+}
+
+// taskSource is a task's source as a judgment site reads it: the work item's
+// text, or the source issue's coordinates, title, body, and label names. A
+// task with no source, or of another kind, reads as empty.
+type taskSource struct {
+	Text        string
+	Repository  string
+	IssueNumber string
+	IssueTitle  string
+	IssueBody   string
+	IssueLabels []string
+}
+
+// errTaskSourceUnavailable marks a source the daemon could not read or
+// fetch: the work item's blob, or the issue from GitHub. A failed store read
+// is returned unmarked.
+var errTaskSourceUnavailable = errors.New("task source unavailable")
+
+// readTaskSource reads the task's source for a judgment site. An issue is
+// fetched through the specification's research fetcher under invocation and
+// purpose, inside the run's research allowlist and byte bound.
+func (e *Engine) readTaskSource(
+	ctx context.Context, run domain.Run, task domain.Task, invocation domain.InvocationID, purpose string,
+) (taskSource, error) {
+	var source taskSource
+	if task.Source == nil {
+		return source, nil
+	}
+	switch task.Source.Kind {
+	case domain.SpecificationSourceWorkItemArtifact:
+		var artifact domain.Artifact
+		if err := e.store.Read(ctx, func(tx *store.ReadTx) error {
+			var err error
+			artifact, err = tx.GetArtifact(ctx, task.Source.WorkItemArtifactID)
+			return err
+		}); err != nil {
+			return taskSource{}, err
+		}
+		body, err := readBoundedArtifactBlob(e.specification.blobs, artifact.Digest, exec.ProductionMaxInputBytes)
+		if err != nil {
+			return taskSource{}, fmt.Errorf("%w: %w", errTaskSourceUnavailable, err)
+		}
+		source.Text = string(body)
+	case domain.SpecificationSourceIssueSubject:
+		var resolved domain.ResolvedPolicy
+		var scope specify.ManagedRepository
+		if err := e.store.Read(ctx, func(tx *store.ReadTx) error {
+			var err error
+			if resolved, err = tx.GetResolvedPolicy(ctx, run.ID); err != nil {
+				return err
+			}
+			scope, err = researchScope(ctx, tx, run.ProjectID)
+			return err
+		}); err != nil {
+			return taskSource{}, err
+		}
+		settings, err := specify.ParsePolicy(resolved)
+		if err != nil {
+			return taskSource{}, err
+		}
+		issue := task.Source.IssueSubject
+		source.Repository, source.IssueNumber = issue.Repo, strconv.Itoa(issue.IssueNumber)
+		artifact, err := e.specification.fetcher.Fetch(ctx, invocation, 1,
+			specify.FetchRequest{
+				URL:     fmt.Sprintf("https://api.github.com/repositories/%d/issues/%d", issue.RepositoryID, issue.IssueNumber),
+				Purpose: purpose,
+			}, scope, settings.ResearchAllowlist, settings.ResearchMaxBytes)
+		if err != nil {
+			return taskSource{}, fmt.Errorf("%w: %w", errTaskSourceUnavailable, err)
+		}
+		body, err := readBoundedArtifactBlob(e.specification.blobs, artifact.Artifact.Digest, exec.ProductionMaxInputBytes)
+		if err != nil {
+			return taskSource{}, fmt.Errorf("%w: %w", errTaskSourceUnavailable, err)
+		}
+		evidence, err := specify.DecodeResearchEvidence(body)
+		if err != nil {
+			return taskSource{}, fmt.Errorf("%w: %w", errTaskSourceUnavailable, err)
+		}
+		var content struct {
+			Title  string `json:"title"`
+			Body   string `json:"body"`
+			Labels []struct {
+				Name string `json:"name"`
+			} `json:"labels"`
+		}
+		if err := json.Unmarshal([]byte(evidence.Body), &content); err != nil {
+			return taskSource{}, fmt.Errorf("%w: decode issue research: %w", errTaskSourceUnavailable, err)
+		}
+		source.IssueTitle, source.IssueBody = content.Title, content.Body
+		for _, label := range content.Labels {
+			source.IssueLabels = append(source.IssueLabels, label.Name)
+		}
+	}
+	return source, nil
+}
+
+// truncateForSite cuts the fields, in order, to UTF-8 prefixes that fit a
+// site's input bound. JSON can expand each input byte to six bytes, so it
+// reserves room for field names and coordinates and shares the rest out in
+// the order given.
+func truncateForSite(maxInputBytes int, fields ...*string) {
+	remaining := maxInputBytes/6 - 1024
+	for _, field := range fields {
+		if len(*field) > remaining {
+			end := remaining
+			for end > 0 && !utf8.RuneStart((*field)[end]) {
+				end--
+			}
+			*field = (*field)[:end]
+		}
+		remaining -= len(*field)
+	}
 }
