@@ -434,6 +434,181 @@ import Testing
         #expect(UsageDisplay.countdown(to: now, now: now) == "passed")
     }
 
+    // MARK: Capacity (R32)
+
+    private func mark(_ window: String, resetsAt: Date?) -> Components.Schemas.UsageExhaustedMark {
+        .init(
+            window: window, source: .provider_refusal, invocation_id: "invocation", resets_at: resetsAt,
+            set_at: Self.base)
+    }
+
+    private func emptyPool() throws -> Components.Schemas.UsagePoolUsage {
+        var pool = try #require(UsageFixtures.defaultUsagePools().first).pool
+        pool.windows = []
+        pool.recorded_exhausted_marks = []
+        return pool
+    }
+
+    @Test func whatIsLeftIsWhatTheReadingsPercentLeaves() {
+        #expect(UsageDisplay.left(reading("seven_day", percent: 42)) == 58)
+        #expect(UsageDisplay.left(reading("seven_day", percent: 100)) == 0)
+        // The schema sets no ceiling, and nothing reads as less than none left.
+        #expect(UsageDisplay.left(reading("seven_day", percent: 120)) == 0)
+        #expect(UsageDisplay.left(reading("credits", quantity: 1_200, unit: "credits")) == nil)
+        #expect(UsageDisplay.left(reading("five_hour", status: .exhausted)) == nil)
+    }
+
+    /// The fixture's two windows: `five_hour` has room, and `seven_day_opus`
+    /// is used up until its refusal lapses, a day after its reading resets.
+    @Test func theFixturesWindowsReadAsWhatIsLeft() throws {
+        let pool = try #require(UsageFixtures.defaultUsagePools().first).pool
+        let now = Self.base.addingTimeInterval(3_000)
+        #expect(
+            UsageDisplay.capacity(window: "five_hour", in: pool, now: now)
+                == .init(
+                    window: "five_hour", name: "5-hour", value: "58% left", left: 58, level: .fine,
+                    resetsAt: Self.base.addingTimeInterval(9_000)))
+        #expect(
+            UsageDisplay.capacity(window: "seven_day_opus", in: pool, now: now)
+                == .init(
+                    window: "seven_day_opus", name: "Weekly Opus", value: "Used up", left: 0, level: .usedUp,
+                    resetsAt: Self.base.addingTimeInterval(172_800)))
+    }
+
+    @Test func aWindowIsLowAtFifteenLeftAndNotAtSixteen() throws {
+        var pool = try emptyPool()
+        pool.windows = [reading("seven_day", percent: 85), reading("five_hour", percent: 84)]
+        let low = UsageDisplay.capacity(window: "seven_day", in: pool, now: Self.base)
+        #expect(low.level == .low)
+        #expect(low.value == "15% left")
+        let fine = UsageDisplay.capacity(window: "five_hour", in: pool, now: Self.base)
+        #expect(fine.level == .fine)
+        #expect(fine.left == 16)
+    }
+
+    /// Nothing is left in any unit once a window is used up, so it takes the
+    /// empty meter whether its reading has a percent, a quantity, or nothing.
+    @Test func anExhaustedStatusOrALiveMarkIsUsedUpWithNothingLeft() throws {
+        var pool = try emptyPool()
+        pool.windows = [reading("five_hour", status: .exhausted)]
+        pool.recorded_exhausted_marks = [mark("seven_day_opus", resetsAt: Self.base.addingTimeInterval(600))]
+        for window in ["five_hour", "seven_day_opus"] {
+            let capacity = UsageDisplay.capacity(window: window, in: pool, now: Self.base)
+            #expect(capacity.level == .usedUp, "\(window)")
+            #expect(capacity.left == 0, "\(window)")
+            #expect(capacity.value == "Used up", "\(window)")
+        }
+        // The mark-only window resets when its mark does.
+        #expect(
+            UsageDisplay.capacity(window: "seven_day_opus", in: pool, now: Self.base).resetsAt
+                == Self.base.addingTimeInterval(600))
+        // A quantity reading with a live mark is used up too.
+        pool.windows = [reading("credits", quantity: 1_200, unit: "credits")]
+        pool.recorded_exhausted_marks = [mark("credits", resetsAt: nil)]
+        #expect(UsageDisplay.capacity(window: "credits", in: pool, now: Self.base).left == 0)
+    }
+
+    @Test func aReadingWithNoPercentDrawsItsValueAndNoMeter() throws {
+        var pool = try emptyPool()
+        pool.windows = [reading("credits", quantity: 1_200, unit: "credits"), reading("five_hour")]
+        let quantity = UsageDisplay.capacity(window: "credits", in: pool, now: Self.base)
+        #expect(quantity.value == "1200 credits")
+        #expect(quantity.left == nil)
+        #expect(quantity.level == .fine)
+        #expect(quantity.nameIsWindowID)
+        let status = UsageDisplay.capacity(window: "five_hour", in: pool, now: Self.base)
+        #expect(status.value == "Allowed")
+        #expect(status.left == nil)
+        #expect(!status.nameIsWindowID)
+    }
+
+    @Test func aWindowWhoseMarksHaveAllLapsedHasNoReading() throws {
+        var pool = try emptyPool()
+        let reset = Self.base.addingTimeInterval(600)
+        pool.recorded_exhausted_marks = [mark("seven_day_opus", resetsAt: reset)]
+        #expect(
+            UsageDisplay.capacity(window: "seven_day_opus", in: pool, now: reset)
+                == .init(
+                    window: "seven_day_opus", name: "Weekly Opus", value: "No reading", left: nil,
+                    level: .noReading, resetsAt: nil))
+    }
+
+    /// A used-up window has room again only once its last live cause lapses.
+    @Test func aUsedUpWindowResetsWithItsLastLiveCause() throws {
+        var pool = try emptyPool()
+        // A live mark makes the reading used up, and a reading with no reset
+        // of its own takes the mark's.
+        pool.windows = [reading("seven_day", percent: 40)]
+        pool.recorded_exhausted_marks = [mark("seven_day", resetsAt: Self.base.addingTimeInterval(1_200))]
+        #expect(
+            UsageDisplay.capacity(window: "seven_day", in: pool, now: Self.base).resetsAt
+                == Self.base.addingTimeInterval(1_200))
+        // An exhausted reading that outlasts the mark sets the reset.
+        pool.windows[0].status = .exhausted
+        pool.windows[0].resets_at = Self.base.addingTimeInterval(3_600)
+        #expect(
+            UsageDisplay.capacity(window: "seven_day", in: pool, now: Self.base).resetsAt
+                == Self.base.addingTimeInterval(3_600))
+        // A lapsed mark is no cause.
+        pool.recorded_exhausted_marks.append(mark("seven_day", resetsAt: Self.base.addingTimeInterval(7_200)))
+        #expect(
+            UsageDisplay.capacity(window: "seven_day", in: pool, now: Self.base.addingTimeInterval(7_200)).resetsAt
+                == Self.base.addingTimeInterval(3_600))
+        // A live cause with no reset leaves none to state.
+        pool.recorded_exhausted_marks.append(mark("seven_day", resetsAt: nil))
+        #expect(UsageDisplay.capacity(window: "seven_day", in: pool, now: Self.base).resetsAt == nil)
+    }
+
+    @Test func theResetLineCountsDownThenNamesTheWeekdayThenTheDate() {
+        let now = Self.base  // Wed Aug 12 2026, 02:40 UTC
+        func line(_ offset: TimeInterval) -> String {
+            UsageDisplay.resetLine(
+                to: now.addingTimeInterval(offset), now: now, locale: Locale(identifier: "en_US"), timeZone: .gmt
+            ).replacing("\u{202F}", with: " ")
+        }
+        #expect(line(41 * 60) == "Resets in 41m")
+        #expect(line(86_400 - 60) == "Resets in 23h 59m")
+        #expect(line(86_400) == "Resets Thu 2:40 AM")
+        #expect(line(6 * 86_400) == "Resets Tue 2:40 AM")
+        // Today's weekday a week on would read as earlier today.
+        #expect(line(7 * 86_400 - 60) == "Resets Aug 19, 2:39 AM")
+        #expect(line(7 * 86_400) == "Resets Aug 19, 2:40 AM")
+        #expect(line(0) == "Resets passed")
+    }
+
+    @Test func staleSinceIsTheEarliestStaleAtTheClockHasPassed() throws {
+        var pool = try emptyPool()
+        pool.windows = [
+            reading("seven_day", percent: 10, staleAt: Self.base.addingTimeInterval(120)),
+            reading("five_hour", percent: 10, staleAt: Self.base.addingTimeInterval(60)),
+            reading("credits", quantity: 5, unit: "credits"),
+        ]
+        #expect(UsageDisplay.staleSince(pool, now: Self.base) == nil)
+        #expect(
+            UsageDisplay.staleSince(pool, now: Self.base.addingTimeInterval(60)) == Self.base.addingTimeInterval(60))
+        #expect(UsageDisplay.staleSince(pool, now: .distantFuture) == Self.base.addingTimeInterval(60))
+    }
+
+    @Test func theAttemptLineSaysWhatTheCollectorLastDidUnlessTheReadingsAreStale() throws {
+        var pool = try emptyPool()
+        let at = Self.base.addingTimeInterval(-3_600)  // Wed Aug 12, 1:40 AM UTC
+        func line(now: Date = Self.base) -> UsageDisplay.AttemptLine {
+            let line = UsageDisplay.attemptLine(pool, now: now, locale: Locale(identifier: "en_US"), timeZone: .gmt)
+            return .init(text: line.text.replacing("\u{202F}", with: " "), isWax: line.isWax, instant: line.instant)
+        }
+        pool.last_attempt = nil
+        #expect(line() == .init(text: "no reading", isWax: false, instant: nil))
+        pool.last_attempt = .init(value1: .init(status: .succeeded, at: at, detail: ""))
+        #expect(line() == .init(text: "read Aug 12, 1:40 AM", isWax: false, instant: at))
+        pool.last_attempt = .init(value1: .init(status: .failed, at: at, detail: "timed out"))
+        #expect(line() == .init(text: "refresh failed Aug 12, 1:40 AM", isWax: true, instant: at))
+        pool.last_attempt = .init(value1: .init(status: .unsupported, at: at, detail: ""))
+        #expect(line() == .init(text: "unsupported Aug 12, 1:40 AM", isWax: true, instant: at))
+        // A stale reading outranks the attempt.
+        pool.windows = [reading("seven_day", percent: 10, staleAt: Self.base)]
+        #expect(line() == .init(text: "stale since Aug 12, 2:40 AM", isWax: true, instant: Self.base))
+    }
+
     // MARK: Helpers
 
     private func revision(_ coordinator: SyncCoordinator) async throws -> Int64 {
