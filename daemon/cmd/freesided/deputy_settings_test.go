@@ -191,6 +191,39 @@ func TestLoadDeputySettingsRefusesNamingTheField(t *testing.T) {
 		"judgment effort alone": {func(s map[string]any) {
 			s["judgment"].(map[string]any)["effort"] = "medium"
 		}, "judgment fields must be all empty or all set"},
+		"second writer without a volume key": {func(s map[string]any) {
+			second := secondWriterFixture()
+			delete(second, "auth_volume")
+			s["agent_tree"].(map[string]any)["second_writer"] = second
+		}, "agent_tree.second_writer.auth_volume is required"},
+		"second writer with an empty account": {func(s map[string]any) {
+			second := secondWriterFixture()
+			second["claude_account"] = ""
+			s["agent_tree"].(map[string]any)["second_writer"] = second
+		}, "agent_tree.second_writer.claude_account is required"},
+		"null second writer": {func(s map[string]any) {
+			s["agent_tree"].(map[string]any)["second_writer"] = nil
+		}, "agent_tree.second_writer is required"},
+		"second writer on the writer identity": {func(s map[string]any) {
+			second := secondWriterFixture()
+			second["auth_identity"] = "claude-1"
+			s["agent_tree"].(map[string]any)["second_writer"] = second
+		}, "agent_tree.second_writer.auth_identity must differ from agent_tree.auth_identity"},
+		"second writer on the review identity": {func(s map[string]any) {
+			second := secondWriterFixture()
+			second["auth_identity"] = "codex-1"
+			s["agent_tree"].(map[string]any)["second_writer"] = second
+		}, "agent_tree.second_writer.auth_identity must differ from agent_tree.review_auth_identity"},
+		"second writer on the writer volume": {func(s map[string]any) {
+			second := secondWriterFixture()
+			second["auth_volume"] = "claude-auth"
+			s["agent_tree"].(map[string]any)["second_writer"] = second
+		}, "agent_tree.second_writer.auth_volume must differ from agent_tree.auth_volume"},
+		"second writer on the writer account": {func(s map[string]any) {
+			second := secondWriterFixture()
+			second["claude_account"] = "me@example.test"
+			s["agent_tree"].(map[string]any)["second_writer"] = second
+		}, "agent_tree.second_writer.claude_account must differ from agent_tree.claude_account"},
 	}
 	for _, field := range []string{
 		"seed_root", "repository.checkout",
@@ -323,6 +356,51 @@ func TestLoadDeputySettingsReviewHarness(t *testing.T) {
 			}
 			if _, err := parseAuthAdoptConfig(args, io.Discard, time.Now()); err != nil {
 				t.Fatalf("auth adopt refuses the deputy's args: %v", err)
+			}
+		})
+	}
+}
+
+// secondWriterFixture is a valid agent_tree.second_writer object.
+func secondWriterFixture() map[string]any {
+	return map[string]any{
+		"auth_identity": "claude-2", "auth_volume": "claude-auth-second",
+		"claude_account": "second@example.test", "cost_owner": "owner",
+	}
+}
+
+// The second writer is optional under the same settings revision: a file
+// without it loads with none, and a file with it passes its three flags to
+// auth adopt, which accepts them.
+func TestLoadDeputySettingsPassesTheSecondWriterToAdoption(t *testing.T) {
+	t.Parallel()
+	for name, second := range map[string]map[string]any{"absent": nil, "present": secondWriterFixture()} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			settings := deputySettingsFixture(t)
+			if second != nil {
+				settings["agent_tree"].(map[string]any)["second_writer"] = second
+			}
+			path, _ := writeDeputySettings(t, settings, 0o600)
+			loaded, err := loadDeputySettings(path)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if (loaded.AgentTree.SecondWriter == nil) != (second == nil) {
+				t.Fatalf("second writer = %+v", loaded.AgentTree.SecondWriter)
+			}
+			args := deputyAdoptArgs(loaded, newDeputyPaths(t.TempDir()))
+			config, err := parseAuthAdoptConfig(args, io.Discard, time.Now())
+			if err != nil {
+				t.Fatalf("auth adopt refuses the deputy's args: %v", err)
+			}
+			got := []string{config.SecondAuthIdentityID, config.SecondCostOwner, config.SecondClaudeAccount}
+			want := []string{"", "", ""}
+			if second != nil {
+				want = []string{"claude-2", "owner", "second@example.test"}
+			}
+			if !slices.Equal(got, want) {
+				t.Fatalf("auth adopt second writer = %v, want %v", got, want)
 			}
 		})
 	}

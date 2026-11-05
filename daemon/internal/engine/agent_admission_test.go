@@ -947,3 +947,41 @@ func TestMarkAfterResolutionHoldsTheInvocation(t *testing.T) {
 		t.Fatalf("hold reason = %q, %t, want %q", reason, ok, domain.HoldAdmissionPolicyRefused)
 	}
 }
+
+// ResolveAgent resolves an agent by name, with no role line in view, to the
+// generation its enrollment would mount, and refuses a marked generation and
+// a name the tree lacks as not admissible.
+func TestResolveAgentByName(t *testing.T) {
+	ctx := context.Background()
+	f := newAgentAdmissionFixture(t)
+	line, err := lineupLine(f.selection.Tree, domain.RoleImplementer)
+	if err != nil {
+		t.Fatal(err)
+	}
+	agent, err := ResolveAgent(ctx, f.store, f.selection.Tree, line.AgentName)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if agent.Identity.ID != f.identity.ID || agent.Enrollment.ID != f.enrollment.ID ||
+		agent.Generation.Ordinal != f.generation.Ordinal ||
+		agent.Generation.AuthStoreVolume != agentTestGenerationVolume ||
+		agent.Resolved.Definition.Digest != line.AgentDigest {
+		t.Fatalf("ResolveAgent = %+v", agent)
+	}
+	if _, err := ResolveAgent(ctx, f.store, f.selection.Tree, "agent-the-tree-lacks"); !errors.Is(err, ErrAgentNotAdmissible) {
+		t.Fatalf("ResolveAgent of an unknown agent = %v, want %v", err, ErrAgentNotAdmissible)
+	}
+	if err := f.store.WriteInternal(ctx, func(tx *store.InternalTx) error {
+		_, err := tx.RecordGenerationIntegrityMark(ctx, domain.GenerationIntegrityMark{
+			EnrollmentID: f.enrollment.ID, Ordinal: f.generation.Ordinal,
+			Finding: domain.AllCredentialIntegrityFindings[0], ObservedAt: agentTestAt.Add(-30 * time.Second),
+		})
+		return err
+	}); err != nil {
+		t.Fatal(err)
+	}
+	_, err = ResolveAgent(ctx, f.store, f.selection.Tree, line.AgentName)
+	if !errors.Is(err, ErrAgentNotAdmissible) || !errors.Is(err, domain.ErrGenerationIntegrityMarked) {
+		t.Fatalf("ResolveAgent of a marked generation = %v", err)
+	}
+}

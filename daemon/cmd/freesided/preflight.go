@@ -159,6 +159,9 @@ type compositionManifest struct {
 	AgentLineupRevision domain.Digest       `json:"agent_lineup_revision,omitempty"`
 	ClaudeAuthVolume    string              `json:"claude_auth_volume"`
 	Identity            compositionIdentity `json:"identity"`
+	// ClaudeSecondAuthVolume is the second writer subscription's volume
+	// (#2653), absent without one.
+	ClaudeSecondAuthVolume string `json:"claude_second_auth_volume,omitempty"`
 	// SettingsDigest, Project, and PublicationAuthor are set only on a
 	// launch manifest, which deputy writes once for a run that serves many
 	// submissions: the settings revision the run was composed from, the one
@@ -203,6 +206,11 @@ type preflightConfig struct {
 	ShadowReviewAuthSnapshot    string
 	ShadowReviewWorkspaceSizeMB int64
 	ShadowReviewRate            float64
+	// SecondAuthIdentityID and SecondAuthVolume are a second Claude writer
+	// subscription (#2653), both or neither: its agents carry no lineup line,
+	// so the second_claude_credentials check finds them by enrollment.
+	SecondAuthIdentityID domain.AuthIdentityID
+	SecondAuthVolume     string
 	// Agents is what the lineup resolved; zero until the rig names the
 	// database the roles are resolved against.
 	Agents            preflightAgentSelection
@@ -234,6 +242,7 @@ type databaseInspection struct {
 	ShadowReviewError       error
 	ShadowReviewAuthorized  bool
 	CredentialError         error
+	SecondCredentialError   error
 	ReviewCredentialError   error
 	ReviewReenrollmentError error
 	ReviewAuthStoreVolume   string
@@ -272,6 +281,11 @@ type preflightAgentSelection struct {
 	LineupRevision domain.Digest
 	AuthIdentityID domain.AuthIdentityID
 	AuthVolume     string
+	// SecondAuthVolume is the one volume every agent on the configured
+	// second writer identity mounts, and SecondAuthError why there is none.
+	// Both stay zero without a second writer.
+	SecondAuthVolume string
+	SecondAuthError  error
 	// ReviewProvider is the routed review provider the reviewer line's
 	// harness selects (#397).
 	ReviewProvider              ward.RoutedReviewProvider
@@ -472,6 +486,10 @@ func parsePreflightConfig(args []string, stderr io.Writer) (preflightConfig, err
 	flags.StringVar(&cfg.AgentTreeCheckout, "agent-tree", "", "local checkout holding the admitted-agent tree under policy/ (required)")
 	flags.StringVar(&cfg.AgentTreeCommit, "agent-tree-commit", "", "exact commit of -agent-tree whose tree is read (required)")
 	flags.StringVar(&cfg.AuthVolume, "auth-volume", "", "Claude credential volume the writer roles' enrollment mounts (required)")
+	flags.StringVar((*string)(&cfg.SecondAuthIdentityID), "second-auth-identity", "",
+		"a second Claude writer identity whose agents the tree carries (optional; set with -second-auth-volume)")
+	flags.StringVar(&cfg.SecondAuthVolume, "second-auth-volume", "",
+		"Claude credential volume the second writer identity's agents mount; set with -second-auth-identity")
 	flags.StringVar(&cfg.ReviewInputRoot, "review-input-root", "", "private review input root (required)")
 	flags.StringVar((*string)(&cfg.ReviewAuthMode), "review-auth-mode", "", "review auth mode (required)")
 	flags.StringVar(&cfg.ReviewAuthSnapshot, "review-auth-snapshot", "", "review auth snapshot under input root (required)")
@@ -524,6 +542,12 @@ func parsePreflightConfig(args []string, stderr io.Writer) (preflightConfig, err
 	if cfg.ShadowReviewImage == "" && cfg.ShadowReviewAuthSnapshot != "" {
 		return preflightConfig{}, errors.New("-shadow-review-image is required when shadow review fields are set")
 	}
+	if (cfg.SecondAuthIdentityID == "") != (cfg.SecondAuthVolume == "") {
+		return preflightConfig{}, errors.New("-second-auth-identity and -second-auth-volume are set together or not at all")
+	}
+	if cfg.SecondAuthVolume != "" && cfg.SecondAuthVolume == cfg.AuthVolume {
+		return preflightConfig{}, errors.New("-second-auth-volume must differ from -auth-volume")
+	}
 	return cfg, nil
 }
 
@@ -535,6 +559,9 @@ func newCompositionManifest(cfg preflightConfig, daemonBuild string, now time.Ti
 		"publication_authority",
 		"exporter_image", "implementer_image", "reviewer_image", "claude_credentials",
 		"codex_credentials", "build_egress_configuration", "build_egress_reachability",
+	}
+	if cfg.SecondAuthIdentityID != "" {
+		names = append(names, secondClaudeCredentialCheck)
 	}
 	if cfg.ShadowReviewImage != "" {
 		names = append(names, "shadow_reviewer_image")
@@ -557,7 +584,7 @@ func newCompositionManifest(cfg preflightConfig, daemonBuild string, now time.Ti
 	if cfg.ShadowReviewImage != "" {
 		images = append(images, compositionImage{Role: "shadow_reviewer", Requested: cfg.ShadowReviewImage})
 	}
-	return compositionManifest{
+	manifest := compositionManifest{
 		Version: compositionManifestVersion, Status: compositionPassed,
 		DaemonBuild: daemonBuild, ServerURL: cfg.ServerURL,
 		Repository: cfg.Repo, RepositoryID: cfg.RepositoryID, BaseRef: cfg.BaseRef, BaseSHA: cfg.BaseSHA,
@@ -569,6 +596,8 @@ func newCompositionManifest(cfg preflightConfig, daemonBuild string, now time.Ti
 		Images:            images,
 		Checks:            checks,
 	}
+	manifest.ClaudeSecondAuthVolume = cfg.SecondAuthVolume
+	return manifest
 }
 
 // launchProject is the project a launch manifest binds; a per-submission
@@ -941,6 +970,11 @@ func evaluateComposition(
 		passCheck(manifest, "claude_credentials", "Claude auth identity and setup-token credential manifest are ready")
 	}
 
+	if cfg.SecondAuthIdentityID != "" {
+		evaluateSecondClaudeCredentials(ctx, manifest, cfg, environment, database,
+			shadowReviewProtectedAccessBlocked, agentsErr)
+	}
+
 	reviewAuthCheck := "codex_credentials"
 	if cfg.Agents.ReviewProvider.Vendor == domain.AgentVendorClaude {
 		reviewAuthCheck = claudeReviewCredentialCheck
@@ -983,6 +1017,48 @@ func evaluateComposition(
 	}
 	notRunCheck(manifest, "build_egress_reachability", "live build-egress reachability is intentionally not exercised by this read-only preflight")
 	return shadowReviewProtectedAccessBlocked
+}
+
+// secondClaudeCredentialCheck is the second writer subscription's check,
+// in the manifest only when one is configured.
+const secondClaudeCredentialCheck = "second_claude_credentials"
+
+// evaluateSecondClaudeCredentials checks the second writer subscription the
+// way claude_credentials checks the first: its agents resolve to one
+// unmarked generation, that generation mounts the configured volume under a
+// lease-enabled Claude identity, and the volume holds a valid setup-token
+// manifest. Every failure names the volume, which is the operator's own
+// setting.
+func evaluateSecondClaudeCredentials(
+	ctx context.Context, manifest *compositionManifest, cfg preflightConfig, environment preflightEnvironment,
+	database databaseInspection, shadowReviewProtectedAccessBlocked bool, agentsErr error,
+) {
+	const adopt = "adopt the second writer with freesided auth adopt -second-auth-identity, commit the patch, and pass that commit as the agent tree commit"
+	switch {
+	case shadowReviewProtectedAccessBlocked:
+		notRunCheck(manifest, secondClaudeCredentialCheck,
+			"approved shadow review configuration is required before credential probing")
+	case cfg.DBPath == "" || database.OpenError != nil:
+		notRunCheck(manifest, secondClaudeCredentialCheck, "database inspection did not complete")
+	case agentsErr != nil:
+		notRunCheck(manifest, secondClaudeCredentialCheck, "the lineup did not resolve, so no agent tree was read")
+	case cfg.Agents.SecondAuthError != nil:
+		failCheck(manifest, secondClaudeCredentialCheck, fmt.Sprintf(
+			"the agent tree's agents on second writer identity %s do not all resolve to one unmarked generation, so none is known to mount volume %s",
+			cfg.SecondAuthIdentityID, cfg.SecondAuthVolume), adopt)
+	case database.SecondCredentialError != nil:
+		failCheck(manifest, secondClaudeCredentialCheck, fmt.Sprintf(
+			"second writer identity %s is not a lease-enabled Claude identity whose agents mount volume %s",
+			cfg.SecondAuthIdentityID, cfg.SecondAuthVolume), adopt)
+	case environment.CheckAuthVolume(ctx, cfg.ContainerBin, cfg.SecondAuthVolume, cfg.ExporterImage,
+		productionRigRuntimeAuthorizer(manifest.Rig.Resources.StateRoot, cfg.RigTokenFile)) != nil:
+		failCheck(manifest, secondClaudeCredentialCheck, fmt.Sprintf(
+			"second writer setup-token volume %s is absent or its credential manifest is invalid", cfg.SecondAuthVolume),
+			"create the volume once with freesided auth add -client claude_code; see daemon/README.md, Enroll An Agent Credential")
+	default:
+		passCheck(manifest, secondClaudeCredentialCheck, fmt.Sprintf(
+			"second writer identity %s and setup-token volume %s are ready", cfg.SecondAuthIdentityID, cfg.SecondAuthVolume))
+	}
 }
 
 func validateCompositionRepositoryBase(cfg preflightConfig) error {
@@ -1635,8 +1711,47 @@ func (productionPreflightEnvironment) ResolveAgentSelection(
 		return preflightAgentSelection{}, err
 	}
 	defer st.Close() //nolint:errcheck // the resolution result is reported independently
-	return resolvePreflightAgents(
+	selection, err := resolvePreflightAgents(
 		ctx, st, agents.Tree, agents.LineupRevision, cfg.ReviewAuthMode, cfg.ShadowReviewImage != "", now)
+	if err != nil || cfg.SecondAuthIdentityID == "" {
+		return selection, err
+	}
+	selection.SecondAuthVolume, selection.SecondAuthError = resolvePreflightSecondWriter(
+		ctx, st, agents.Tree, cfg.SecondAuthIdentityID)
+	return selection, nil
+}
+
+// resolvePreflightSecondWriter resolves every tree agent on the second writer
+// identity's claude_code enrollment, which adoption names
+// <identity>/claude_code, and returns the one volume they all mount. Those
+// agents have no lineup line for resolvePreflightAgents to reach. A tree with
+// none, or with two volumes among them, is refused: preflight probes one
+// second volume.
+func resolvePreflightSecondWriter(
+	ctx context.Context, st *store.Store, tree agenttree.Tree, identity domain.AuthIdentityID,
+) (string, error) {
+	enrollment := string(identity) + "/" + string(domain.HarnessClientClaudeCode)
+	var volume string
+	for _, source := range tree.Agents {
+		if source.Enrollment != enrollment {
+			continue
+		}
+		agent, err := engine.ResolveAgent(ctx, st, tree, source.Name)
+		if err != nil {
+			return "", err
+		}
+		if volume == "" {
+			volume = agent.Generation.AuthStoreVolume
+		}
+		if agent.Generation.AuthStoreVolume != volume {
+			return "", fmt.Errorf("agent %s mounts another credential volume than the second writer's other agents",
+				source.Name)
+		}
+	}
+	if volume == "" {
+		return "", fmt.Errorf("the agent tree has no agent on enrollment %s", enrollment)
+	}
+	return volume, nil
 }
 
 // CheckJudgmentRoles admits every judgment role as the daemon's startup check
@@ -1834,6 +1949,16 @@ func (productionPreflightEnvironment) InspectDatabase(
 		if err != nil || identity.Provider != "claude" || cfg.Agents.AuthVolume != cfg.AuthVolume ||
 			!identity.AuthStoreMutationLease {
 			inspection.CredentialError = errors.Join(err, errors.New("identity cannot support the leased Claude auth store"))
+		}
+		// The second writer is held to the same rule against the volume its
+		// agents' generation mounts.
+		if cfg.SecondAuthIdentityID != "" {
+			second, err := tx.GetAuthIdentity(ctx, cfg.SecondAuthIdentityID)
+			if err != nil || second.Provider != "claude" || cfg.Agents.SecondAuthVolume != cfg.SecondAuthVolume ||
+				!second.AuthStoreMutationLease {
+				inspection.SecondCredentialError = errors.Join(
+					err, errors.New("second writer identity cannot support the leased Claude auth store"))
+			}
 		}
 		switch cfg.ReviewAuthMode {
 		case ward.CodexAuthSubscription:

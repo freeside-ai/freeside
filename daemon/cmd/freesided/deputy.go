@@ -401,6 +401,13 @@ func withDeputyStore(
 // A Claude reviewer's identity is not recorded here: its setup-token volume
 // and account come from auth add, so the operator enrolls it before the
 // first run, and adoption reuses that enrollment (#397).
+//
+// It also refuses a root whose store holds an enabled Claude identity with a
+// credential volume that the settings name as neither writer nor the
+// reviewer (#2653). A writer identity the settings changed or dropped keeps
+// its enrollment. No agent runs on it, since the committed tree must match
+// adoption's, but the scheduled usage collection still calls the provider
+// under its credential, which the operator no longer means to use.
 func recordDeputyIdentities(
 	ctx context.Context, st *store.Store, settings loadedDeputySettings, now func() time.Time,
 ) error {
@@ -408,7 +415,22 @@ func recordDeputyIdentities(
 	if err != nil {
 		return err
 	}
+	named := map[domain.AuthIdentityID]bool{domain.AuthIdentityID(settings.AgentTree.ReviewAuthIdentity): true}
+	for _, identity := range identities {
+		named[identity.ID] = true
+	}
 	return st.Write(ctx, func(tx *store.WriteTx) error {
+		recorded, err := tx.ListAuthIdentities(ctx)
+		if err != nil {
+			return err
+		}
+		for _, identity := range recorded {
+			if identity.Enabled && identity.Provider == "claude" && identity.Interim.AuthStoreVolume != "" &&
+				!named[identity.ID] {
+				return fmt.Errorf("recorded Claude auth identity %s is neither writer nor the reviewer in the settings: "+
+					"name it in agent_tree, or start on a fresh root", identity.ID)
+			}
+		}
 		for _, identity := range identities {
 			stored, err := tx.GetAuthIdentity(ctx, identity.ID)
 			switch {
@@ -428,16 +450,20 @@ func recordDeputyIdentities(
 	})
 }
 
-// deputyIdentities are the writer and, with a Codex reviewer, the reviewer
-// identities the settings bind.
+// deputyIdentities are the writer, any second writer, and, with a Codex
+// reviewer, the reviewer identities the settings bind.
 func deputyIdentities(settings loadedDeputySettings) ([]domain.AuthIdentity, error) {
-	identities := []domain.AuthIdentity{{
-		ID: domain.AuthIdentityID(settings.AgentTree.AuthIdentity), Provider: "claude",
-		AuthStoreMutationLease: true, Enabled: true,
-		Interim: domain.InterimClientFacts{
-			AuthStoreVolume: settings.AgentTree.AuthVolume, RefreshStrategy: domain.RefreshOnDemand,
-		},
-	}}
+	writer := func(id, volume string) domain.AuthIdentity {
+		return domain.AuthIdentity{
+			ID: domain.AuthIdentityID(id), Provider: "claude",
+			AuthStoreMutationLease: true, Enabled: true,
+			Interim: domain.InterimClientFacts{AuthStoreVolume: volume, RefreshStrategy: domain.RefreshOnDemand},
+		}
+	}
+	identities := []domain.AuthIdentity{writer(settings.AgentTree.AuthIdentity, settings.AgentTree.AuthVolume)}
+	if second := settings.AgentTree.SecondWriter; second != nil {
+		identities = append(identities, writer(second.AuthIdentity, second.AuthVolume))
+	}
 	if settings.reviewHarness() == domain.HarnessClientCodexCLI {
 		reviewSnapshot, err := filepath.EvalSymlinks(settings.Review.AuthSnapshot)
 		if err != nil {
@@ -603,6 +629,12 @@ func deputyAdoptArgs(settings loadedDeputySettings, paths deputyPaths) []string 
 			"-specifier-escalated-model", escalated.Model,
 			"-specifier-escalated-effort", string(escalated.Effort))
 	}
+	if second := settings.AgentTree.SecondWriter; second != nil {
+		args = append(args,
+			"-second-auth-identity", second.AuthIdentity,
+			"-second-cost-owner", second.CostOwner,
+			"-second-claude-account", second.ClaudeAccount)
+	}
 	if settings.Judgment.Model != "" {
 		args = append(args,
 			"-judgment-model", settings.Judgment.Model,
@@ -680,6 +712,10 @@ func deputyPreflightConfig(
 		AllowedPaths:              settings.Repository.AllowedPaths,
 		Launch:                    true,
 		SettingsDigest:            settings.Digest,
+	}
+	if second := settings.AgentTree.SecondWriter; second != nil {
+		cfg.SecondAuthIdentityID = domain.AuthIdentityID(second.AuthIdentity)
+		cfg.SecondAuthVolume = second.AuthVolume
 	}
 	cfg.Judgments = deputyJudgments(settings, "")
 	return cfg

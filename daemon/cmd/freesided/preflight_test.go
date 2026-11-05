@@ -67,6 +67,15 @@ type fakePreflightEnvironment struct {
 	judgmentRoles      []inference.RoleCheck
 	judgmentRolesError error
 	judgmentRolesCalls int
+
+	// authVolumes are the volumes CheckAuthVolume probed, in order, and
+	// authVolumeErrors fail a probe of the named volume.
+	authVolumes      []string
+	authVolumeErrors map[string]error
+	// secondAuthVolume and secondAuthError are what the second writer's
+	// agents resolve to when the configuration names a second writer.
+	secondAuthVolume string
+	secondAuthError  error
 }
 
 func (e *fakePreflightEnvironment) CheckJudgmentRoles(
@@ -101,6 +110,9 @@ func (e *fakePreflightEnvironment) ResolveAgentSelection(
 	}
 	if e.reviewHarness != "" {
 		agents.ReviewProvider = mustRoutedReviewProvider(e.reviewHarness)
+	}
+	if cfg.SecondAuthIdentityID != "" {
+		agents.SecondAuthVolume, agents.SecondAuthError = e.secondAuthVolume, e.secondAuthError
 	}
 	if cfg.ShadowReviewImage == "" {
 		agents.ShadowReviewAuthIdentityID, agents.ShadowReviewCostOwner = "", ""
@@ -182,10 +194,14 @@ func (e *fakePreflightEnvironment) InspectRepositoryAuthority(
 }
 
 func (e *fakePreflightEnvironment) CheckAuthVolume(
-	_ context.Context, _, _, _ string, authorize ward.RuntimeResourceAuthorizer,
+	_ context.Context, _, volume, _ string, authorize ward.RuntimeResourceAuthorizer,
 ) error {
 	e.authVolumeCalls++
+	e.authVolumes = append(e.authVolumes, volume)
 	e.authVolumeAuthorizer = authorize
+	if err := e.authVolumeErrors[volume]; err != nil {
+		return err
+	}
 	return e.authVolumeError
 }
 
@@ -1169,6 +1185,158 @@ func TestGitHubRemoteMatchesRepository(t *testing.T) {
 		t.Run(tt.remote, func(t *testing.T) {
 			if got := githubRemoteMatchesRepository(tt.remote, "owner/repo"); got != tt.want {
 				t.Fatalf("githubRemoteMatchesRepository(%q) = %t, want %t", tt.remote, got, tt.want)
+			}
+		})
+	}
+}
+
+// TestPreflightChecksTheSecondWriterVolume pins #2653's preflight: with a
+// second writer the composition probes both writer volumes, names the
+// second in the manifest, and fails second_claude_credentials, naming the
+// volume, when the volume is missing, no tree agent resolves on the second
+// identity, or the identity's agents mount another volume. Without one the
+// check is absent.
+func TestPreflightChecksTheSecondWriterVolume(t *testing.T) {
+	const second = "claude-auth-second"
+	run := func(t *testing.T, mutate func(*fakePreflightEnvironment), extra ...string) (compositionManifest, *fakePreflightEnvironment, error) {
+		t.Helper()
+		args, environment := preflightFixture(t)
+		environment.secondAuthVolume = second
+		if mutate != nil {
+			mutate(environment)
+		}
+		var stdout bytes.Buffer
+		err := runPreflightCommandWithEnvironment(
+			t.Context(), append(args, extra...), &stdout, &bytes.Buffer{}, environment,
+			time.Date(2026, 8, 17, 12, 0, 0, 0, time.UTC), "2dce6570ee23",
+		)
+		var manifest compositionManifest
+		if decodeErr := json.Unmarshal(stdout.Bytes(), &manifest); decodeErr != nil {
+			t.Fatalf("decode manifest: %v (preflight: %v)", decodeErr, err)
+		}
+		return manifest, environment, err
+	}
+	secondFlags := []string{"-second-auth-identity", "claude-2", "-second-auth-volume", second}
+
+	t.Run("absent", func(t *testing.T) {
+		manifest, environment, err := run(t, nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if status := checkStatus(manifest, secondClaudeCredentialCheck); status != "" ||
+			manifest.ClaudeSecondAuthVolume != "" || slices.Contains(environment.authVolumes, second) {
+			t.Fatalf("one writer: check %q, manifest volume %q, probed %v", status,
+				manifest.ClaudeSecondAuthVolume, environment.authVolumes)
+		}
+	})
+	t.Run("ready", func(t *testing.T) {
+		manifest, environment, err := run(t, nil, secondFlags...)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if status := checkStatus(manifest, secondClaudeCredentialCheck); status != compositionPassed {
+			t.Fatalf("%s = %s, want passed", secondClaudeCredentialCheck, status)
+		}
+		if manifest.ClaudeSecondAuthVolume != second {
+			t.Fatalf("manifest second volume %q", manifest.ClaudeSecondAuthVolume)
+		}
+		if !slices.Contains(environment.authVolumes, "claude-auth-volume") || !slices.Contains(environment.authVolumes, second) {
+			t.Fatalf("probed volumes %v, want both writer volumes", environment.authVolumes)
+		}
+	})
+	for name, mutate := range map[string]func(*fakePreflightEnvironment){
+		"missing volume": func(e *fakePreflightEnvironment) {
+			e.authVolumeErrors = map[string]error{second: errors.New("no such volume")}
+		},
+		"no agent on the second identity": func(e *fakePreflightEnvironment) {
+			e.secondAuthError = errors.New("the agent tree has no agent on enrollment claude-2/claude_code")
+		},
+		"agents mount another volume": func(e *fakePreflightEnvironment) {
+			e.database.SecondCredentialError = errors.New("agents mount claude-auth-other")
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			manifest, _, err := run(t, mutate, secondFlags...)
+			if !errors.Is(err, errCompositionPreflight) {
+				t.Fatalf("error = %v, want composition refusal", err)
+			}
+			for _, check := range manifest.Checks {
+				if check.Name != secondClaudeCredentialCheck {
+					continue
+				}
+				if check.Status != compositionFailed || !strings.Contains(check.Evidence, second) {
+					t.Fatalf("%s = %s with evidence %q, want failed naming %s", check.Name, check.Status, check.Evidence, second)
+				}
+				if status := checkStatus(manifest, "claude_credentials"); status != compositionPassed {
+					t.Fatalf("claude_credentials = %s, want the first writer unaffected", status)
+				}
+				return
+			}
+			t.Fatalf("manifest lacks %s", secondClaudeCredentialCheck)
+		})
+	}
+	for name, flags := range map[string][]string{
+		"identity alone":      {"-second-auth-identity", "claude-2"},
+		"volume alone":        {"-second-auth-volume", second},
+		"the writer's volume": {"-second-auth-identity", "claude-2", "-second-auth-volume", "claude-auth-volume"},
+	} {
+		t.Run("flags "+name, func(t *testing.T) {
+			args, _ := preflightFixture(t)
+			if _, err := parsePreflightConfig(append(args, flags...), io.Discard); err == nil ||
+				!strings.Contains(err.Error(), "-second-auth-volume") {
+				t.Fatalf("parse = %v, want a second-writer flag refusal", err)
+			}
+		})
+	}
+}
+
+// TestProductionPreflightResolvesTheAdoptedSecondWriter runs the production
+// second-writer path against an adopted two-writer tree and its store: the
+// second identity's agents resolve to its own volume, an identity with no
+// agent in the tree is refused, and the database inspection fails when the
+// resolved volume is not the configured one or the identity is unknown.
+func TestProductionPreflightResolvesTheAdoptedSecondWriter(t *testing.T) {
+	ctx := t.Context()
+	f := newAuthAdoptFixture(t)
+	f.recordSecondWriter(t, adoptSecondVolume)
+	_, patch, err := f.run(t, f.secondWriterArgs())
+	if err != nil {
+		t.Fatalf("auth adopt: %v", err)
+	}
+	tree := loadAdoptedPatch(t, patch)
+	f.withStore(t, func(st *store.Store) {
+		for identity, want := range map[domain.AuthIdentityID]string{
+			"claude-second": adoptSecondVolume, "claude-main": adoptClaudeVolume,
+		} {
+			if volume, err := resolvePreflightSecondWriter(ctx, st, tree, identity); err != nil || volume != want {
+				t.Fatalf("%s resolves to %q, %v; want %s", identity, volume, err, want)
+			}
+		}
+		if _, err := resolvePreflightSecondWriter(ctx, st, tree, "claude-absent"); err == nil ||
+			!strings.Contains(err.Error(), "the agent tree has no agent on enrollment claude-absent/claude_code") {
+			t.Fatalf("an identity with no agent: %v", err)
+		}
+	})
+	for name, tc := range map[string]struct {
+		identity domain.AuthIdentityID
+		resolved string
+		fails    bool
+	}{
+		"ready":            {"claude-second", adoptSecondVolume, false},
+		"another volume":   {"claude-second", adoptClaudeVolume, true},
+		"unknown identity": {"claude-absent", adoptSecondVolume, true},
+	} {
+		t.Run(name, func(t *testing.T) {
+			cfg := preflightConfig{
+				DBPath: f.dbPath, SecondAuthIdentityID: tc.identity, SecondAuthVolume: adoptSecondVolume,
+			}
+			cfg.Agents.SecondAuthVolume = tc.resolved
+			inspection := (productionPreflightEnvironment{}).InspectDatabase(ctx, cfg, "")
+			if inspection.OpenError != nil {
+				t.Fatal(inspection.OpenError)
+			}
+			if (inspection.SecondCredentialError != nil) != tc.fails {
+				t.Fatalf("second credential error = %v, want failure %t", inspection.SecondCredentialError, tc.fails)
 			}
 		})
 	}
