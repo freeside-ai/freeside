@@ -1664,9 +1664,23 @@ about the pool's allowance, read under one enrollment's credential, the pool's
 collector. Each scheduled doctor pass starts a collection for every pool, and
 a pool also collects once after a window's reported reset. Collection only
 reads: it never redeems a reset credit, refreshes a token, or writes an auth
-store. **No collector ships yet**, so the daemon collects nothing until the
-Claude collector lands (#1717); until then `refresh-usage` reports that the
-pool has no collector.
+store.
+
+Claude's collector reads memory, not the provider. Each writer turn ends with
+the CLI's own usage answer and rate-limit events (`claude_usage` on the stage
+result); when the turn ran under the pool's collector enrollment at its
+current generation, the daemon keeps that answer and collects the pool at
+once, even during a backoff. A turn with rate-limit events and no answer,
+such as a specification turn, is not kept: a collection replaces the pool's
+window set, and events alone would drop the weekly reading. A collection maps `five_hour` (5 hours) and
+`seven_day` (7 days) to readings with their length, reset, and used share; a
+`rejected` rate-limit event reads exhausted. The answers live in memory only,
+so after a daemon restart every Claude pool's collection fails with "no
+writer turn has reported usage under enrollment ... since the daemon started"
+until a writer turn runs under its collector. That failure keeps the stored
+readings, and `refresh-usage` reports it rather than asking the provider. A
+turn under another enrollment on the pool starts no collection; the pool
+waits for its collector's own turn.
 
 `freesided auth refresh-usage` asks the running daemon to collect a pool now,
 joining a collection already in flight, and prints the record as JSON with
