@@ -146,6 +146,22 @@ func (s *Service) PutStageInput(
 	return ctx.Err()
 }
 
+// DescribeAttachment returns a stored attachment blob's size and leading
+// bytes (BlobStore.Describe), so admission can name, sniff, and budget a
+// discussion attachment without reading it. It does not verify the content:
+// the materializer and Ward each hash every byte before a writer sees it.
+func (s *Service) DescribeAttachment(
+	ctx context.Context, digest domain.Digest,
+) (size int64, head []byte, err error) {
+	if s.blobs == nil {
+		return 0, nil, ErrAttachmentsUnavailable
+	}
+	if err := ctx.Err(); err != nil {
+		return 0, nil, err
+	}
+	return s.blobs.Describe(digest)
+}
+
 func (b *BlobStore) put(
 	digest domain.Digest,
 	r io.Reader,
