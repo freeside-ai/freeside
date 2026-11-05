@@ -107,10 +107,6 @@ func (d *storePublicationDecision) prepare(
 		if err := validateSuccessorCandidate(ctx, &tx.ReadTx, c, producingInvocationID); err != nil {
 			return err
 		}
-		reentry, err := unpublishedReentryAuthority(ctx, &tx.ReadTx, c, producingInvocationID)
-		if err != nil {
-			return err
-		}
 		if err := validateCurrentScopeDecision(ctx, &tx.ReadTx, c); err != nil {
 			return err
 		}
@@ -214,25 +210,17 @@ func (d *storePublicationDecision) prepare(
 				decisionErr = err
 				return nil
 			}
-			// A newly settled execution publication must be fresh against the
-			// exact target tip observed by this audit. An already-committed
-			// intent may continue after a base advance: effects may have begun,
-			// and recovery must converge them instead of stranding a branch.
-			// An unpublished or successor re-entry publishes against its
-			// authority's base, the tip an earlier audit observed, and is
-			// held to the same rule.
-			requiredBase := auth.BaseSHA
-			if reentry != nil {
-				requiredBase, err = reentryPublicationBase(*reentry, c)
-				if err != nil {
-					decisionErr = err
-					return nil
-				}
-			}
+			// A newly settled execution publication must carry a satisfied
+			// handoff check: the tip its handoff resolved, and for a tip that
+			// moved past the evidence base, the verified merge into it. An
+			// already-committed intent may continue after a base advance:
+			// effects may have begun, and recovery must converge them instead
+			// of stranding a branch.
 			if reservationState == invocationReserved {
-				// A first publication a later re-entry replaced may no longer
-				// commit an intent: its cycle sealed against the reservation
-				// this one would settle.
+				// A first publication a stored unpublished re-entry (v5, now
+				// read-only legacy) replaced may no longer commit an intent:
+				// that cycle sealed against the reservation this one would
+				// settle.
 				current, err := tx.CurrentPublicationSuccessor(ctx, c.RunID)
 				if err != nil {
 					return fmt.Errorf("read current publication successor: %w", err)
@@ -243,11 +231,8 @@ func (d *storePublicationDecision) prepare(
 						c.InvocationID, current.PublicationID(), ErrUnauthorizedPublication)
 					return nil
 				}
-				if audit.AuditedCommitSHA != requiredBase {
-					decisionErr = fmt.Errorf(
-						"fresh target %s is %s, execution was admitted at %s: %w",
-						c.BaseRef, audit.AuditedCommitSHA, requiredBase, ErrTargetBaseAdvanced,
-					)
+				if err := validateHandoffCheck(ctx, &tx.ReadTx, c, auth); err != nil {
+					decisionErr = err
 					return nil
 				}
 			}

@@ -83,7 +83,7 @@ func testTaskPublicationBoundaryOrder(t *testing.T, workflowClosure bool) {
 			p := storeBackedPublisher(t, st, gh, fixedWorkflowAuditor{audit: executionWorkflowAudit(t)})
 			candidate := testCandidate(t)
 			candidate.RunID = reservation.RunID
-			candidate.DispositionHistory = testDispositionHistory(t, st, candidate)
+			withTestHandoff(t, st, &candidate)
 			stopped := false
 			stop := func() {
 				if !stopped {
@@ -184,7 +184,7 @@ func testTaskFenceDraftMutationAfterContentPatch(t *testing.T, workflowClosure b
 	p := storeBackedPublisher(t, st, gh, fixedWorkflowAuditor{audit: executionWorkflowAudit(t)})
 	candidate := testCandidate(t)
 	candidate.RunID = reservation.RunID
-	candidate.DispositionHistory = testDispositionHistory(t, st, candidate)
+	withTestHandoff(t, st, &candidate)
 	identity := testCandidateIdentity(t)
 
 	// A stale, still-draft owned PR: convergePR patches content, then a managed
@@ -261,7 +261,7 @@ func TestTaskWorkflowClosureUnsettledByForeignPR(t *testing.T) {
 	p := storeBackedPublisher(t, st, gh, fixedWorkflowAuditor{audit: executionWorkflowAudit(t)})
 	candidate := testCandidate(t)
 	candidate.RunID = reservation.RunID
-	candidate.DispositionHistory = testDispositionHistory(t, st, candidate)
+	withTestHandoff(t, st, &candidate)
 	// Close the workflow after the intent commits and before any forge write,
 	// leaving the intent pending with nothing of its own on the branch.
 	if _, err := p.PublishExecutionAfterGateAndFinalize(t.Context(), publish.ExecutionCandidate{Candidate: candidate, ProducingInvocationID: testProducingInvocationID}, testApprovedRecipes(), func(context.Context, publish.GatedHead) error {
@@ -309,7 +309,7 @@ func testTaskFenceObservesUnrecordedPublishedPR(t *testing.T, workflowClosure bo
 	p := storeBackedPublisher(t, st, gh, fixedWorkflowAuditor{audit: executionWorkflowAudit(t)})
 	candidate := testCandidate(t)
 	candidate.RunID = reservation.RunID
-	candidate.DispositionHistory = testDispositionHistory(t, st, candidate)
+	withTestHandoff(t, st, &candidate)
 	// Leave the successful external effect's local outbox entry pending, as
 	// when the daemon exits before recording the returned PR identity.
 	result, err := p.PublishExecution(t.Context(), publish.ExecutionCandidate{Candidate: candidate, ProducingInvocationID: testProducingInvocationID}, testApprovedRecipes())

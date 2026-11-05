@@ -40,13 +40,12 @@ type Candidate struct {
 	// wrong value can only withhold a close, never mint one. Empty withholds any
 	// close (the merge fails validation).
 	BaseSHA string
-	// ProspectiveMergeSHA names the merge of HeadSHA into an unpublished
-	// re-entry's base that the cycle verified and reviewed (issue #2058). It
-	// is an engine-supplied pointer, never authority: the disposition history
-	// accepts it only when the store's re-entry authority admits that merge
-	// for its own base and head, and the readiness proofs it names must
-	// already be persisted. Empty for every other candidate.
-	ProspectiveMergeSHA string
+	// HandoffCheck is the publication's sealed handoff check, whose tip is
+	// BaseSHA. It is an engine-supplied pointer, never authority: the
+	// publication decision reads the sealed row by run and publication,
+	// requires it to equal this one, and re-checks its merge proof. Nil for
+	// attended and legacy publications.
+	HandoffCheck *domain.HandoffCheck
 	// Branch is the operator-declared head branch; empty selects the identity default.
 	Branch string
 	// HeadSHA is the candidate commit; it must already exist in the

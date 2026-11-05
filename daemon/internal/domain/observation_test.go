@@ -631,10 +631,15 @@ func TestDefinitivePublicationBlockReason(t *testing.T) {
 		PublicationBlockTrust:         HoldTrustBlocked,
 		PublicationBlockBaseAdvanced:  HoldBaseAdvanced,
 
+		PublicationBlockHandoffConflict:         HoldBaseAdvanced,
+		PublicationBlockHandoffVerification:     HoldBaseAdvanced,
+		PublicationBlockReentryRetired:          HoldBaseAdvanced,
+		PublicationBlockVerificationMemoryLimit: HoldVerificationMemoryLimit,
+
+		// Legacy texts a stored block may still carry.
 		PublicationBlockBaseAdvancedConflict:     HoldBaseAdvanced,
 		PublicationBlockBaseAdvancedVerification: HoldBaseAdvanced,
 		PublicationBlockBaseAdvancedRoundLimit:   HoldBaseAdvanced,
-		PublicationBlockVerificationMemoryLimit:  HoldVerificationMemoryLimit,
 	} {
 		got, ok := DefinitivePublicationBlockReason(reason)
 		if !ok || got != want {

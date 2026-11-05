@@ -16,6 +16,7 @@ import (
 // at 0124 holds: task_lines rebuilt with 0113's router-only provenance check.
 func rewindAlternateAgentRetries(t *testing.T, ctx context.Context, db *sql.DB) {
 	t.Helper()
+	rewindHandoffChecks(t, ctx, db)
 	for _, statement := range []string{
 		`ALTER TABLE run_hold_observations DROP COLUMN quota_alternate_agents`,
 		`DROP TABLE alternate_agent_retries`,

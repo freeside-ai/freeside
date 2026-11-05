@@ -284,19 +284,19 @@ func TestRetireOpenClosureProposalsNeverPredatesTheCard(t *testing.T) {
 // sentence, and that a replayed seal retires nothing further.
 func TestRecordPublicationSuccessorRetiresClosureCardOnFirstSeal(t *testing.T) {
 	ctx := context.Background()
-	f := seedUnpublishedReentry(t, publicationReservationKind)
+	f := seedReentry(t, domain.ReadinessInvalidationBaseAdvanced, reentryOptions{})
 	var proposal domain.EffectProposal
 	if err := f.st.Write(ctx, func(tx *WriteTx) error {
 		if err := tx.RegisterProject(ctx, domain.Project{ID: "project-1", Repo: "owner/repo", RepositoryID: 424242}); err != nil {
 			return err
 		}
-		policy, err := tx.GetResolvedPolicy(ctx, f.runID)
+		policy, err := tx.GetResolvedPolicy(ctx, f.run.ID)
 		if err != nil {
 			return err
 		}
 		declaration, err := domain.NewWorkUnitDeclaration(domain.WorkUnitDeclarationInput{
 			CompletionCriterion: domain.CompletionBoundPRMerged,
-		}, f.runID, "project-1", reentryAt.Add(-time.Hour))
+		}, f.run.ID, "project-1", reentryAt.Add(-time.Hour))
 		if err != nil {
 			return err
 		}
@@ -304,7 +304,7 @@ func TestRecordPublicationSuccessorRetiresClosureCardOnFirstSeal(t *testing.T) {
 			return err
 		}
 		proposal, err = domain.NewEffectProposal(domain.EffectSourceIssueClosure, domain.SourceIssueClosureInput{
-			SubjectHandle: domain.OpaqueSubjectHandle(domain.WorkUnitIDForRun(f.runID)),
+			SubjectHandle: domain.OpaqueSubjectHandle(domain.WorkUnitIDForRun(f.run.ID)),
 			Source: domain.ClosableSource{
 				Present: true, Provenance: domain.ClosureProvenanceRecommended, Repo: "owner/repo", RepositoryID: 424242,
 			},
@@ -321,9 +321,8 @@ func TestRecordPublicationSuccessorRetiresClosureCardOnFirstSeal(t *testing.T) {
 	}
 	replaced := openClosureCard(t, ctx, f.st, "project-1", allocateClosure(t, ctx, f.st, proposal, "event-first"), merge)
 
-	f.audit(t, "owner/repo", reentryBase2)
-	authority := f.authority(domain.ProductionReadyItemID(f.runID), f.prior, reentryBase2)
-	if err := f.record(authority); err != nil {
+	authority := f.authority
+	if err := f.record(t, authority); err != nil {
 		t.Fatalf("seal the re-entry: %v", err)
 	}
 	read := func(id domain.ItemID) domain.AttentionItem {
@@ -338,7 +337,7 @@ func TestRecordPublicationSuccessorRetiresClosureCardOnFirstSeal(t *testing.T) {
 		}
 		return item
 	}
-	want, _ := closureRetirementReason(domain.PublicationSuccessorUnpublishedBaseAdvance)
+	want, _ := closureRetirementReason(domain.PublicationSuccessorReadinessInvalidation)
 	if item := read(replaced.ID); item.Status != domain.StatusSuperseded || item.Conclusion == nil ||
 		item.Conclusion.Reason != want {
 		t.Fatalf("replaced card = status %q conclusion %+v, want superseded with %q", item.Status, item.Conclusion, want)
@@ -348,7 +347,7 @@ func TestRecordPublicationSuccessorRetiresClosureCardOnFirstSeal(t *testing.T) {
 	// replayed seal must leave it open.
 	merge.BaseSHA = reentryBase2
 	current := openClosureCard(t, ctx, f.st, "project-1", allocateClosure(t, ctx, f.st, proposal, "event-second"), merge)
-	if err := f.record(authority); err != nil {
+	if err := f.record(t, authority); err != nil {
 		t.Fatalf("replay the seal: %v", err)
 	}
 	if item := read(current.ID); item.Status != domain.StatusOpen || item.ItemVersion != 1 {

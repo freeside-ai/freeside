@@ -462,7 +462,7 @@ func (w *productionPublicationWorkflow) reconcileReentryTask(
 	if err := w.resolveVerificationImage(ctx, &binding, reentryWorkspaceSHA(task, binding)); err != nil {
 		return productionTaskOutcome{}, err
 	}
-	stored, found, err := w.loadReentryCheckpoint(ctx, task, binding)
+	stored, found, err := w.loadReentryCheckpoint(ctx, task.reentryCheckpointKey(), task, binding)
 	if err != nil {
 		return productionTaskOutcome{}, err
 	}
@@ -487,7 +487,7 @@ func (w *productionPublicationWorkflow) reconcileReentryTask(
 			domain.HoldRecipeRevoked)
 	}
 	if !found {
-		stored, err = w.verifyReentry(ctx, task, binding, checkoutDir)
+		stored, err = w.verifyReentry(ctx, task.reentryCheckpointKey(), task, binding, checkoutDir)
 		if reason, stop := reentryUnverifiableTreeReason(task, base.BaseSHA, err); stop {
 			return w.stopReentryCycle(ctx, task, reason, nil)
 		}
@@ -810,9 +810,11 @@ func reentryWorkspaceSHA(task productionPublicationTask, binding productionBindi
 }
 
 // verifyReentry verifies the cycle's workspace commit in the networkless room
-// and persists the result. The checkout already holds every commit involved.
+// and persists the result under checkpointKey. The checkout already holds
+// every commit involved. A handoff verifies its merge with it too.
 func (w *productionPublicationWorkflow) verifyReentry(
 	ctx context.Context,
+	checkpointKey string,
 	task productionPublicationTask,
 	binding productionBinding,
 	checkoutDir string,
@@ -928,7 +930,7 @@ func (w *productionPublicationWorkflow) verifyReentry(
 		DurableTransitionVerificationEvidence, DurableTransitionBefore); err != nil {
 		return productionReentryCheckpoint{}, err
 	}
-	if err := w.persistReentryCheckpoint(ctx, task, checkpoint); err != nil {
+	if err := w.persistReentryCheckpoint(ctx, checkpointKey, checkpoint); err != nil {
 		return productionReentryCheckpoint{}, err
 	}
 	if err := runDurableTransitionHook(w.transitionHook,
@@ -1153,7 +1155,7 @@ func parseNameStatus(out []byte) ([]importer.Change, error) {
 
 func (w *productionPublicationWorkflow) persistReentryCheckpoint(
 	ctx context.Context,
-	task productionPublicationTask,
+	checkpointKey string,
 	checkpoint productionReentryCheckpoint,
 ) error {
 	payload, err := json.Marshal(checkpoint)
@@ -1167,7 +1169,7 @@ func (w *productionPublicationWorkflow) persistReentryCheckpoint(
 			}
 		}
 		entry, _, err := tx.RecordInbox(
-			ctx, task.reentryCheckpointKey(), productionReentryCheckpointKind, payload)
+			ctx, checkpointKey, productionReentryCheckpointKind, payload)
 		if err != nil {
 			return err
 		}
@@ -1179,19 +1181,20 @@ func (w *productionPublicationWorkflow) persistReentryCheckpoint(
 	})
 }
 
-// loadReentryCheckpoint reads the cycle's checkpoint and re-binds it to the
-// task and to the commits this pass resolved. The evaluated commit is the
+// loadReentryCheckpoint reads the cycle's checkpoint at checkpointKey and
+// re-binds it to the task and to the commits this pass resolved. The evaluated commit is the
 // merge the caller just rebuilt, so a recorded merge that the same base and
 // head no longer reproduce is a contradiction, never reused evidence.
 func (w *productionPublicationWorkflow) loadReentryCheckpoint(
 	ctx context.Context,
+	checkpointKey string,
 	task productionPublicationTask,
 	binding productionBinding,
 ) (productionReentryCheckpoint, bool, error) {
 	var entry store.QueueEntry
 	err := w.store.Read(ctx, func(tx *store.ReadTx) error {
 		var err error
-		entry, err = tx.GetInbox(ctx, task.reentryCheckpointKey())
+		entry, err = tx.GetInbox(ctx, checkpointKey)
 		return err
 	})
 	if errors.Is(err, store.ErrNotFound) {

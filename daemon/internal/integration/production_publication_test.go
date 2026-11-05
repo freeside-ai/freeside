@@ -224,7 +224,11 @@ type productionPublicationHarness struct {
 	*publicationHarness
 	// preparationDigest, when set, is the builder-source digest the next
 	// engine reports as its own: a daemon upgraded since the image was built.
-	preparationDigest         domain.Digest
+	preparationDigest domain.Digest
+	// liveAudit, when set, makes the next engine's auditor read p.audit at
+	// each audit instead of the value it held when the engine was built, so
+	// a test can move the target in the middle of a pass.
+	liveAudit                 bool
 	runID                     domain.RunID
 	projectID                 domain.ProjectID
 	image                     domain.ProjectImage
@@ -755,10 +759,21 @@ func (p *productionPublicationHarness) newPublisher(t *testing.T) *publish.Publi
 	if tokens == nil {
 		tokens = integrationTokenSource()
 	}
+	var auditor publish.WorkflowAuditor = fakeforge.Auditor{Result: p.audit}
+	if p.liveAudit {
+		auditor = liveHarnessAuditor{p}
+	}
 	return publish.NewPublisher(
 		tokens, p.server.Client(), p.server.URL,
-		fakeforge.Auditor{Result: p.audit}, ledger, trust, authorizations,
+		auditor, ledger, trust, authorizations,
 	)
+}
+
+// liveHarnessAuditor reports the harness's audit as it stands at each call.
+type liveHarnessAuditor struct{ p *productionPublicationHarness }
+
+func (a liveHarnessAuditor) Audit(context.Context, string, string) (domain.WorkflowAudit, error) {
+	return a.p.audit, nil
 }
 
 // reconcileLanes makes one pass over both loops a daemon runs for this engine:
@@ -7050,28 +7065,27 @@ func TestProductionVerificationAndHeadMismatchNeverReachExternalEffects(t *testi
 	})
 	t.Run("target base advanced before publication", func(t *testing.T) {
 		t.Parallel()
-		// The audited tip is not on the fetched branch, so the re-entry the
-		// refusal seals cannot merge the head into it and stops there.
+		// The audited tip is not on the fetched branch. The pass that seals
+		// it retries, since the tip may postdate its fetch; the next pass
+		// fetches again, still lacks it, and ends the run there.
 		p := newProductionPublicationHarness(t, "")
 		p.audit.AuditedCommitSHA = strings.Repeat("9", 40)
 		p.workflow = p.newEngine(t, productionCrashSeams{}, true)
 		p.startAndRecordExport(t)
-		result, err := p.reconcileLanes()
-		if err != nil {
-			t.Fatal(err)
+		var total engine.ReconcileResult
+		for range 3 {
+			p.now = p.now.Add(time.Minute)
+			result, err := p.reconcileLanes()
+			if err != nil {
+				t.Fatal(err)
+			}
+			total.BlockedItemsCreated += result.BlockedItemsCreated
+			total.ReadyItemsCreated += result.ReadyItemsCreated
 		}
-		if result.BlockedItemsCreated != 0 || result.ReadyItemsCreated != 0 {
-			t.Fatalf("advanced-base result = %#v", result)
+		if total.BlockedItemsCreated != 1 || total.ReadyItemsCreated != 0 {
+			t.Fatalf("advanced-base result = %#v", total)
 		}
-		result, err = p.reconcileLanes()
-		if err != nil {
-			t.Fatal(err)
-		}
-		if result.ResultsAccepted != 1 || result.BlockedItemsCreated != 1 || result.ReadyItemsCreated != 0 {
-			t.Fatalf("advanced-base re-entry result = %#v", result)
-		}
-		successor := p.unpublishedReentry(t, strings.Repeat("9", 40))
-		blocked, err := p.attention.GetAttentionItem(p.ctx, successor.BlockedItemID())
+		blocked, err := p.attention.GetAttentionItem(p.ctx, domain.ProductionBlockedItemID(p.runID))
 		if err != nil {
 			t.Fatal(err)
 		}

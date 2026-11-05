@@ -2,6 +2,7 @@ package engine
 
 import (
 	"context"
+	"encoding/json"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -287,39 +288,21 @@ func (f *closureSequenceFixture) requireRetired(t *testing.T, step string, publi
 }
 
 // TestClosureCardsRetireAcrossTheExitRunSequence drives the Wave 8 exit-run
-// shape (#2112): each publication admits its own closure proposal, and every
-// event that replaces or refuses a publication retires its open card, so at
-// most one card is open and it names the current publication's merge.
+// shape (#2112) under the handoff check (#2644): each publication admits its
+// own closure proposal, the first one at the handoff tip its base advanced
+// to, and every event that replaces or refuses a publication retires its open
+// card, so at most one card is open and it names the current publication's
+// merge.
 func TestClosureCardsRetireAcrossTheExitRunSequence(t *testing.T) {
 	ctx := context.Background()
 	f := seedClosureSequence(t)
 	runID := f.policy.RunID
 
-	first := f.publish(t, domain.ProductionPublicationInvocationID(runID), closureSequenceHead1, closureSequenceBase1)
+	// The target base advanced before the first publication's handoff: the
+	// publication binds its close to the merge into the tip, not the
+	// admitted base.
+	first := f.publish(t, domain.ProductionPublicationInvocationID(runID), closureSequenceHead1, closureSequenceBase2)
 	f.requireOpen(t, "first publication", &first)
-
-	// The target base advances before the first publication commits an
-	// intent; the re-entry seals through the store's real gates.
-	f.audit(t, closureSequenceBase2)
-	reentry := domain.PublicationSuccessor{
-		Version: domain.PublicationUnpublishedReentryVersion, Origin: domain.PublicationSuccessorUnpublishedBaseAdvance,
-		RunID: runID, PredecessorItemID: domain.ProductionReadyItemID(runID),
-		PriorReviewInvocationID: f.prior.InvocationID, ReviewRound: f.prior.Round + 1,
-		Reentry: &domain.PublicationSuccessorReentry{
-			Reason: domain.ReadinessInvalidationBaseAdvanced, BaseSHA: closureSequenceBase2, HeadSHA: closureSequenceHead1,
-		},
-	}
-	if err := f.st.Write(ctx, func(tx *store.WriteTx) error {
-		return tx.RecordPublicationSuccessor(ctx, reentry)
-	}); err != nil {
-		t.Fatalf("seal the unpublished re-entry: %v", err)
-	}
-	f.requireOpen(t, "unpublished re-entry", nil)
-	f.requireRetired(t, "unpublished re-entry", 0,
-		"Superseded because the target base advanced; the re-entered publication proposes closure again.")
-
-	second := f.publish(t, reentry.PublicationID(), closureSequenceHead1, closureSequenceBase2)
-	f.requireOpen(t, "re-entered publication", &second)
 
 	// Return to Agent retires the card in the feedback request's transaction
 	// (TestReturnToAgentRecordsFeedbackAndCandidatePatchForResumedWork covers
@@ -331,7 +314,7 @@ func TestClosureCardsRetireAcrossTheExitRunSequence(t *testing.T) {
 		t.Fatal(err)
 	}
 	f.requireOpen(t, "return to agent", nil)
-	f.requireRetired(t, "return to agent", 1, closureReturnedToAgentReason)
+	f.requireRetired(t, "return to agent", 0, closureReturnedToAgentReason)
 
 	third := f.publish(t, "publication-feedback-successor-3", closureSequenceHead2, closureSequenceBase2)
 	f.requireOpen(t, "successor publication", &third)
@@ -343,7 +326,7 @@ func TestClosureCardsRetireAcrossTheExitRunSequence(t *testing.T) {
 		t.Fatal(err)
 	}
 	f.requireOpen(t, "refused publication", nil)
-	f.requireRetired(t, "refused publication", 2, closureBlockedReason)
+	f.requireRetired(t, "refused publication", 1, closureBlockedReason)
 }
 
 // TestClosureAdmissionRetiresTheEarlierPublicationsCard proves a later
@@ -363,8 +346,9 @@ func TestClosureAdmissionRetiresTheEarlierPublicationsCard(t *testing.T) {
 
 // TestProductionPublicationClosureBeforeFirstPublication proves the task
 // record's closure read follows the current cycle while no cycle has
-// published: after an unpublished base-advance re-entry it returns the
-// re-entered publication's answer, not the first one's.
+// published: after an unpublished base-advance re-entry a daemon before
+// #2644 sealed, it returns the re-entered publication's answer, not the
+// first one's.
 func TestProductionPublicationClosureBeforeFirstPublication(t *testing.T) {
 	ctx := context.Background()
 	f := seedClosureSequence(t)
@@ -395,10 +379,18 @@ func TestProductionPublicationClosureBeforeFirstPublication(t *testing.T) {
 			Reason: domain.ReadinessInvalidationBaseAdvanced, BaseSHA: closureSequenceBase2, HeadSHA: closureSequenceHead1,
 		},
 	}
-	if err := f.st.Write(ctx, func(tx *store.WriteTx) error {
-		return tx.RecordPublicationSuccessor(ctx, reentry)
+	// No new v5 successor is sealed; store the one an earlier daemon wrote.
+	body, err := json.Marshal(reentry)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := f.st.WriteInternal(ctx, func(tx *store.InternalTx) error {
+		if _, _, err := tx.EnqueueOutbox(ctx, reentry.Key(), domain.PublicationSuccessorKind, body); err != nil {
+			return err
+		}
+		return tx.MarkOutboxDispatched(ctx, reentry.Key())
 	}); err != nil {
-		t.Fatalf("seal the unpublished re-entry: %v", err)
+		t.Fatalf("store the unpublished re-entry: %v", err)
 	}
 	// The re-entered cycle's closure step falls back.
 	task := productionPublicationTask{

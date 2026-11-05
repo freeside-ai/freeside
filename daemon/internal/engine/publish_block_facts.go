@@ -11,7 +11,7 @@ func publishBlockFacts(cause domain.RunHoldReason, err error) *domain.PublishBlo
 	switch {
 	case errors.Is(err, publish.ErrTrustProfileDrift):
 		return publishBlockTrustRule(domain.TrustRuleTrustProfileDrift)
-	case errors.Is(err, publish.ErrTargetBaseAdvanced):
+	case errors.Is(err, publish.ErrHandoffCheckUnsatisfied):
 		return publishBlockTrustRule(domain.TrustRuleTargetBaseAdvanced)
 	default:
 		return publishBlockHoldReason(cause)
@@ -34,8 +34,10 @@ func definitivePublishBlockFacts(reason string) (*domain.PublishBlockFacts, erro
 		return publishBlockTrustRule(domain.TrustRuleVerificationFailed), nil
 	case productionBlockTrust:
 		return publishBlockTrustRule(domain.TrustRuleTrustProfileDrift), nil
-	case productionBlockBaseAdvanced, productionBlockReentryConflict,
-		productionBlockReentryVerification, productionBlockReentryRoundLimit:
+	case productionBlockBaseAdvanced, productionBlockHandoffConflict,
+		productionBlockHandoffVerification, productionBlockReentryRetired,
+		productionBlockReentryConflict, productionBlockReentryVerification,
+		productionBlockReentryRoundLimit:
 		return publishBlockTrustRule(domain.TrustRuleTargetBaseAdvanced), nil
 	case productionBlockMemoryLimit:
 		return publishBlockHoldReason(domain.HoldVerificationMemoryLimit), nil

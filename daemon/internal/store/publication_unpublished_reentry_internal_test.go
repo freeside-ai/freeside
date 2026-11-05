@@ -2,6 +2,7 @@ package store
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"path/filepath"
 	"strings"
@@ -143,38 +144,68 @@ func (f unpublishedReentryFixture) validate(authority domain.PublicationSuccesso
 	return f.st.Read(ctx, func(tx *ReadTx) error { return tx.validatePublicationSuccessor(ctx, authority) })
 }
 
-func TestUnpublishedReentrySealsAtTheLatestAuditTip(t *testing.T) {
-	f := seedUnpublishedReentry(t, publicationReservationKind)
-	f.audit(t, "owner/repo", reentryBase2)
-	authority := f.authority(domain.ProductionReadyItemID(f.runID), f.prior, reentryBase2)
-	if err := f.record(authority); err != nil {
-		t.Fatalf("seal at the latest audit tip: %v", err)
-	}
+// storeLegacy writes authority as a daemon before issue #2644 sealed it,
+// past the seal that now refuses a new v5 successor, so the read gates are
+// exercised against stored history.
+func (f unpublishedReentryFixture) storeLegacy(t *testing.T, authority domain.PublicationSuccessor) {
+	t.Helper()
 	ctx := context.Background()
-	if err := f.st.Read(ctx, func(tx *ReadTx) error {
-		got, err := tx.CurrentPublicationSuccessor(ctx, f.runID)
-		if err == nil && (got == nil || got.PublicationID() != authority.PublicationID()) {
-			t.Fatalf("current successor = %+v, want %s", got, authority.PublicationID())
+	body, err := json.Marshal(authority)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := f.st.WriteInternal(ctx, func(tx *InternalTx) error {
+		if _, _, err := tx.EnqueueOutbox(ctx, authority.Key(), domain.PublicationSuccessorKind, body); err != nil {
+			return err
 		}
-		return err
+		return tx.MarkOutboxDispatched(ctx, authority.Key())
 	}); err != nil {
 		t.Fatal(err)
 	}
 }
 
-// The seal takes its base only from the daemon's latest audit: a tip an
-// older audit observed is history the every-read gate accepts, never a base
-// a new cycle may start toward.
-func TestUnpublishedReentryRefusesABaseThatIsNotTheLatestAuditTip(t *testing.T) {
+func (f unpublishedReentryFixture) current(t *testing.T) *domain.PublicationSuccessor {
+	t.Helper()
+	ctx := context.Background()
+	var current *domain.PublicationSuccessor
+	if err := f.st.Read(ctx, func(tx *ReadTx) error {
+		var err error
+		current, err = tx.CurrentPublicationSuccessor(ctx, f.runID)
+		return err
+	}); err != nil {
+		t.Fatal(err)
+	}
+	return current
+}
+
+// No cycle re-enters an unpublished head after issue #2644: the seal refuses
+// a new v5 successor and records nothing, while one an earlier daemon sealed
+// still reads as the run's current successor.
+func TestUnpublishedReentrySealIsRetired(t *testing.T) {
+	f := seedUnpublishedReentry(t, publicationReservationKind)
+	f.audit(t, "owner/repo", reentryBase2)
+	authority := f.authority(domain.ProductionReadyItemID(f.runID), f.prior, reentryBase2)
+	if err := f.record(authority); !errors.Is(err, domain.ErrParentKeyMismatch) {
+		t.Fatalf("seal of a v5 re-entry = %v, want ErrParentKeyMismatch", err)
+	}
+	if current := f.current(t); current != nil {
+		t.Fatalf("refused seal recorded successor %s", current.PublicationID())
+	}
+	f.storeLegacy(t, authority)
+	if current := f.current(t); current == nil || current.PublicationID() != authority.PublicationID() {
+		t.Fatalf("current successor = %+v, want stored %s", current, authority.PublicationID())
+	}
+}
+
+// The every-read gate accepts a tip any recorded audit of the run's
+// repository observed, not only the latest.
+func TestUnpublishedReentryReadsAnOlderAuditTip(t *testing.T) {
 	f := seedUnpublishedReentry(t, publicationReservationKind)
 	f.audit(t, "owner/repo", reentryBase2)
 	f.audit(t, "owner/repo", reentryBase3)
 	authority := f.authority(domain.ProductionReadyItemID(f.runID), f.prior, reentryBase2)
 	if err := f.validate(authority); err != nil {
 		t.Fatalf("every-read gate refused a recorded audit tip: %v", err)
-	}
-	if err := f.record(authority); !errors.Is(err, domain.ErrParentKeyMismatch) {
-		t.Fatalf("seal at an older audit tip = %v, want ErrParentKeyMismatch", err)
 	}
 }
 
@@ -187,57 +218,21 @@ func TestUnpublishedReentryRefusesAnUnauditedBase(t *testing.T) {
 	if err := f.validate(authority); !errors.Is(err, domain.ErrParentKeyMismatch) {
 		t.Fatalf("every-read gate on an unaudited base = %v, want ErrParentKeyMismatch", err)
 	}
-	if err := f.record(authority); !errors.Is(err, domain.ErrParentKeyMismatch) {
-		t.Fatalf("seal at an unaudited base = %v, want ErrParentKeyMismatch", err)
-	}
 }
 
-func TestUnpublishedReentryRefusesTheReviewedBase(t *testing.T) {
-	f := seedUnpublishedReentry(t, publicationReservationKind)
-	authority := f.authority(domain.ProductionReadyItemID(f.runID), f.prior, reentryBase1)
-	if err := f.record(authority); !errors.Is(err, domain.ErrParentKeyMismatch) {
-		t.Fatalf("seal at the base the prior round reviewed = %v, want ErrParentKeyMismatch", err)
-	}
-}
-
-// An intent that committed may already have reached the forge; recovery
-// converges it, and no re-entry may replace it with a second publication.
-func TestUnpublishedReentryRefusesACommittedIntent(t *testing.T) {
-	for name, kind := range map[string]string{
-		"committed intent": readyPublicationIntentKind,
-		"no reservation":   "",
-	} {
-		t.Run(name, func(t *testing.T) {
-			f := seedUnpublishedReentry(t, kind)
-			f.audit(t, "owner/repo", reentryBase2)
-			authority := f.authority(domain.ProductionReadyItemID(f.runID), f.prior, reentryBase2)
-			if err := f.record(authority); !errors.Is(err, domain.ErrParentKeyMismatch) {
-				t.Fatalf("seal over %s = %v, want ErrParentKeyMismatch", name, err)
-			}
-		})
-	}
-}
-
-// A second advance extends the chain from its tip, replacing the first
-// re-entry's publication. A second successor of the root would branch the
-// chain; its identity is the first's, so the seal refuses it as a rewrite.
-func TestUnpublishedReentryExtendsOnlyTheChainTip(t *testing.T) {
+// A stored chain of v5 re-entries still reads: its tip is the run's current
+// successor.
+func TestStoredUnpublishedReentryChainReads(t *testing.T) {
 	f := seedUnpublishedReentry(t, publicationReservationKind)
 	f.audit(t, "owner/repo", reentryBase2)
 	first := f.authority(domain.ProductionReadyItemID(f.runID), f.prior, reentryBase2)
-	if err := f.record(first); err != nil {
-		t.Fatal(err)
-	}
+	f.storeLegacy(t, first)
 	second := putReentryReview(t, f.st, f.runID, 2, reentryBase2, reentryHead1)
 	f.audit(t, "owner/repo", reentryBase3)
-	f.reserve(t, first.PublicationID(), publicationReservationKind)
-
-	branch := f.authority(domain.ProductionReadyItemID(f.runID), second, reentryBase3)
-	if err := f.record(branch); !errors.Is(err, domain.ErrImmutableTransition) {
-		t.Fatalf("seal from the root after a sealed re-entry = %v, want ErrImmutableTransition", err)
-	}
-	if err := f.record(f.authority(first.ReadyItemID(), second, reentryBase3)); err != nil {
-		t.Fatalf("seal from the chain tip: %v", err)
+	tip := f.authority(first.ReadyItemID(), second, reentryBase3)
+	f.storeLegacy(t, tip)
+	if current := f.current(t); current == nil || current.PublicationID() != tip.PublicationID() {
+		t.Fatalf("current successor = %+v, want chain tip %s", current, tip.PublicationID())
 	}
 }
 

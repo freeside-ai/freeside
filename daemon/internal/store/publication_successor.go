@@ -52,8 +52,12 @@ func (tx *WriteTx) RecordPublicationSuccessor(ctx context.Context, successor dom
 		if err := tx.requireCurrentExternalReviewAdmission(ctx, successor); err != nil {
 			return err
 		}
-		if err := tx.requireCurrentUnpublishedReentry(ctx, successor); err != nil {
-			return err
+		// No cycle re-enters an unpublished head any more: the handoff
+		// verifies a moved tip instead (issue #2644). Stored v5 and v6
+		// authorities stay readable; a new one is never sealed.
+		if successor.ReentersUnpublishedHead() {
+			return fmt.Errorf("seal retired base-advance re-entry %s: %w",
+				successor.PublicationID(), domain.ErrParentKeyMismatch)
 		}
 		// A successor that replaces the publication's merge retires the
 		// replaced card here, once, at the seal; a cycle that publishes admits
@@ -340,49 +344,6 @@ func (tx *ReadTx) validateSuccessorReentrySuccessor(ctx context.Context, success
 		return record.Audit.AuditedCommitSHA == reentry.BaseSHA
 	}) {
 		return fmt.Errorf("re-entry base %s is no recorded audit tip: %w", reentry.BaseSHA, domain.ErrParentKeyMismatch)
-	}
-	return nil
-}
-
-// requireCurrentUnpublishedReentry is the seal-time half of the unpublished
-// and successor re-entry gates. A new cycle may start only from the run's
-// current chain tip, only toward the tip the daemon's latest audit of the
-// repository observed, and only while the publication it replaces still
-// holds its reservation and no committed intent: an intent may already have
-// reached the forge, and recovery must converge it instead of opening a
-// second pull request or pushing a second head.
-func (tx *ReadTx) requireCurrentUnpublishedReentry(ctx context.Context, successor domain.PublicationSuccessor) error {
-	if !successor.ReentersUnpublishedHead() {
-		return nil
-	}
-	chain, err := tx.PublicationSuccessorChain(ctx, successor.RunID)
-	if err != nil {
-		return err
-	}
-	current := domain.ProductionReadyItemID(successor.RunID)
-	replaced := domain.ProductionPublicationInvocationID(successor.RunID)
-	for _, sealed := range chain {
-		if sealed.PublicationID() == successor.PublicationID() {
-			continue
-		}
-		current, replaced = sealed.ReadyItemID(), sealed.PublicationID()
-	}
-	if current != successor.PredecessorItemID {
-		return domain.ErrParentKeyMismatch
-	}
-	tip, err := tx.LatestRunWorkflowAuditTip(ctx, successor.RunID)
-	if err != nil || tip != successor.Reentry.BaseSHA {
-		return fmt.Errorf("re-entry base %s is not the latest audit tip: %w",
-			successor.Reentry.BaseSHA, errors.Join(err, domain.ErrParentKeyMismatch))
-	}
-	key, err := publicationrecord.IntentKey(replaced, readyPublicationIntentKind)
-	if err != nil {
-		return err
-	}
-	slot, err := tx.GetOutbox(ctx, key)
-	if err != nil || slot.Kind != publicationReservationKind {
-		return fmt.Errorf("publication %s holds no open reservation: %w",
-			replaced, errors.Join(err, domain.ErrParentKeyMismatch))
 	}
 	return nil
 }
