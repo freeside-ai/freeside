@@ -1801,6 +1801,204 @@ struct FreesideSheetActionRow: View {
     }
 }
 
+/// The capacity meter (R32): a 10pt track on ground-3 filled from the left
+/// with what is left, in the accent; wax when low; and, used up, an empty
+/// track with a 1.5pt wax rim. No hatch or texture: a stale reading is said
+/// once, in the pool's band.
+///
+/// It is a `Gauge` under `CapacityGaugeStyle`, never a `ProgressView`. The
+/// custom style is required, not a preference: `ImageRenderer`, which draws
+/// every screenshot, renders the built-in `.linearCapacity` style as the
+/// system's unsupported placeholder, and draws a custom style's track,
+/// fill, and rim (planner's probe, 4 Nov 2026).
+struct CapacityMeter: View {
+    let left: Int
+    let level: UsageDisplay.WindowCapacity.Level
+
+    var body: some View {
+        Gauge(value: Double(left), in: 0...100) {
+            Text("Left")
+        } currentValueLabel: {
+            Text(level == .usedUp ? "Used up" : "\(left)% left")
+        }
+        .gaugeStyle(CapacityGaugeStyle(level: level))
+    }
+}
+
+/// Draws `CapacityMeter`'s track, fill, and rim, and nothing else: the
+/// gauge's labels are for VoiceOver.
+struct CapacityGaugeStyle: GaugeStyle {
+    let level: UsageDisplay.WindowCapacity.Level
+
+    func makeBody(configuration: Configuration) -> some View {
+        Capsule()
+            .fill(Color.ground3)
+            .overlay(alignment: .leading) {
+                if level != .usedUp {
+                    GeometryReader { proxy in
+                        Capsule()
+                            .fill(level == .low ? Color.waxText : Color.accentText)
+                            .frame(width: proxy.size.width * configuration.value)
+                    }
+                }
+            }
+            .overlay {
+                if level == .usedUp {
+                    Capsule().strokeBorder(Color.waxText, lineWidth: 1.5)
+                }
+            }
+            .frame(height: 10)
+    }
+}
+
+/// One usage window (R32): its name in the fact-label face (a bare id in
+/// mono) with the value trailing in mono, the reset on its own dim line,
+/// and the meter. The value reads wax when the window is low or used up,
+/// so the colour always carries a word. VoiceOver reads the block as one
+/// element: name, value, reset.
+///
+/// The caller formats `resetLine`, since the locale, time zone, and pinned
+/// clock are its environment's; nil draws no line.
+struct CapacityBlock: View {
+    let capacity: UsageDisplay.WindowCapacity
+    let resetLine: String?
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            ViewThatFits(in: .horizontal) {
+                HStack(alignment: .firstTextBaseline, spacing: 12) {
+                    name
+                    Spacer(minLength: 0)
+                    value
+                }
+                VStack(alignment: .leading, spacing: 3) {
+                    name
+                    value
+                }
+            }
+            if let resetLine {
+                reset(resetLine)
+            }
+            if let left = capacity.left {
+                // The value line already says it; the meter adds nothing
+                // to read.
+                CapacityMeter(left: left, level: capacity.level)
+                    .accessibilityHidden(true)
+            }
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .accessibilityElement(children: .combine)
+    }
+
+    private var name: some View {
+        Text(capacity.name)
+            .font(capacity.nameIsWindowID ? FreesideFont.monoValue : FreesideFont.factLabel)
+            .foregroundStyle(Color.ink)
+    }
+
+    private var value: some View {
+        Text(capacity.value)
+            .font(FreesideFont.monoValue)
+            .foregroundStyle(valueColor)
+    }
+
+    @ViewBuilder private func reset(_ line: String) -> some View {
+        let text = Text(line)
+            .font(FreesideFont.trailingSummary)
+            .foregroundStyle(Color.inkDim)
+            .fixedSize(horizontal: false, vertical: true)
+        if let resetsAt = capacity.resetsAt {
+            text.exactInstant(resetsAt)
+        } else {
+            text
+        }
+    }
+
+    private var valueColor: Color {
+        switch capacity.level {
+        case .low, .usedUp: .waxText
+        case .noReading: .inkDim
+        case .fine: .ink
+        }
+    }
+}
+
+/// The composer chip (R33): a pill on ground-2 with the window border
+/// holding a dim glyph, the text, and a 9pt chevron; open, it takes the
+/// accent wash and border and the chevron points up. A label, not a control: the New Task composer
+/// (#2581) puts it inside the menu or button that opens it.
+struct ComposerChip: View {
+    let glyph: String
+    let text: String
+    var isOpen = false
+
+    var body: some View {
+        HStack(alignment: .firstTextBaseline, spacing: 6) {
+            Text(glyph)
+                .font(FreesideFont.trailingSummary)
+                .foregroundStyle(Color.inkDim)
+                .accessibilityHidden(true)
+            Text(text)
+                .font(FreesideFont.trailingSummary)
+                .foregroundStyle(Color.ink)
+            ComposerChevron(pointsUp: isOpen)
+        }
+        .padding(.vertical, 3)
+        .padding(.leading, 8)
+        .padding(.trailing, 10)
+        .composerPill(isActive: isOpen)
+        .accessibilityElement(children: .combine)
+    }
+}
+
+/// A role chip (R33): the task-line role as a keyword, then the chosen
+/// agent, or `Default` in dim with the keyword faint when none is chosen,
+/// and the chevron. The keyword draws at the ladder's keyword size, not the
+/// canvas's 10pt, since nothing draws under the floor (R10). Active, it
+/// takes the accent wash and border. A label, not a control: #2581 wires
+/// each chip's menu.
+struct RoleChip: View {
+    let role: String
+    let value: String?
+    var isActive = false
+
+    var body: some View {
+        HStack(alignment: .firstTextBaseline, spacing: 6) {
+            KeywordLabel(text: role, color: value == nil ? .inkFaint : .inkDim)
+            Text(value ?? "Default")
+                .font(FreesideFont.trailingSummary)
+                .foregroundStyle(value == nil ? Color.inkDim : Color.ink)
+            ComposerChevron()
+        }
+        .padding(.vertical, 3)
+        .padding(.horizontal, 10)
+        .composerPill(isActive: isActive)
+        .accessibilityElement(children: .combine)
+    }
+}
+
+/// R33's 9pt chevron: a mark, not text, so the floor doesn't bind it. It
+/// points up on an open composer chip, whose choices show above it.
+private struct ComposerChevron: View {
+    var pointsUp = false
+
+    var body: some View {
+        Image(systemName: pointsUp ? "chevron.up" : "chevron.down")
+            .font(.system(size: 9, weight: .semibold))
+            .foregroundStyle(Color.inkDim)
+            .accessibilityHidden(true)
+    }
+}
+
+extension View {
+    /// R33's pill: ground-2 inside the window border, or the accent wash
+    /// inside the accent border while the chip is open or active.
+    fileprivate func composerPill(isActive: Bool) -> some View {
+        background(Capsule().fill(isActive ? Color.accentWash : Color.ground2))
+            .overlay(Capsule().strokeBorder(isActive ? Color.accentBorder : Color.secondaryBorder, lineWidth: 1))
+    }
+}
+
 extension View {
     /// The iOS sheet chrome the design language keeps: a visible drag
     /// indicator. A no-op on macOS, where a sheet has none.
