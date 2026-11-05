@@ -53,11 +53,14 @@
         /// The routed review dispute's budget, recorded from the render
         /// rather than held to `actionRowBudget`: with every offered route and
         /// its consequence drawn (R29), two realistic findings put the action
-        /// region at 800.5pt at 560pt width (measured 2026-10-18), rounded up
-        /// to the next 10pt. The owner chose to record a measured value over
-        /// dropping the consequence lines, because the route list is the
-        /// control the operator must use on every finding (#2068).
-        private let disputeActionRowBudget: CGFloat = 810
+        /// region at 800.5pt at 560pt width (measured 2026-10-18). The owner
+        /// chose to record a measured value over dropping the consequence
+        /// lines, because the route list is the control the operator must
+        /// use on every finding (#2068). Evidence moved above the actions
+        /// (#2607) puts it at 836pt (measured 2026-11-04), rounded up to the
+        /// next 10pt; the owner chose to record it over keeping Evidence
+        /// below the actions on this card alone.
+        private let disputeActionRowBudget: CGFloat = 840
 
         @Test func twoRoutedDisputeFindingsWithRealisticMessagesKeepTheirRecordedBudget() throws {
             let snapshot = AttentionFixtures.routedReviewDisputeRealisticMessages()
