@@ -566,10 +566,13 @@ func TestPhase1ASummaryPromptContracts(t *testing.T) {
 		t.Error("implementer prompt still carries the interim untyped stop protocol")
 	}
 	for _, required := range []string{
-		// The summary's advisory shape (#1461): the writer's headings, the
-		// word target, and every concern listed whatever the length.
-		"Under `## Change`, the proposal and why", "80–120 words",
-		"under `## Remaining concerns`, list every key question, open decision, uncertainty, and dissent",
+		// The summary's advisory shape (#1461, aligned with the plan-work-unit
+		// report in #2615): the writer's headings, the word target, and every
+		// concern listed whatever the length.
+		"Under `## Result`, what the change does once built", "80–120 words",
+		"under `## Your call`, each assumption or work-item disagreement, with its default",
+		"under `## Not verified`, claims read but not run, and other uncertainty",
+		"Omit an empty part",
 		"drop none for length",
 		"Never claim verification",
 		// The needs_decision form (#990) and the limits the decoder pins.
@@ -601,12 +604,14 @@ func TestPhase1ASummaryPromptContracts(t *testing.T) {
 	// These assertions pin writing guidance, not a guarantee of model behavior.
 	for name, prompt := range map[string][]byte{"implementer": implementer, "remediator": remediator} {
 		for _, required := range []string{
-			"`## Change`", "`## Remaining concerns`", "`## Details`",
+			"`## Result`", "`## Your call`", "`## Left for you`", "`## Skipped`", "`## Details`",
+			"Leave out a part with nothing in it.",
+			"including an uncertainty only they can settle or a finding you could not resolve",
 			"80–120 words", "never omit a concern to meet that target",
 			"uncertainty, unresolved questions, dissent, and unfinished obligations",
 			"a flat list, one concern per item, most important first",
 			"advisory writing guidance, not a required format",
-			"retained artifacts and the full Result report",
+			"retained artifacts and your final report",
 		} {
 			if !bytes.Contains(prompt, []byte(required)) {
 				t.Errorf("%s prompt omits summary guidance %q", name, required)
@@ -661,6 +666,32 @@ func TestPhase1ASummaryPromptContracts(t *testing.T) {
 		}
 		if !bytes.Contains(remediator, []byte("`"+string(kind)+"`")) {
 			t.Errorf("remediator prompt omits blocked kind %q", kind)
+		}
+	}
+	// The summary parts mirror the development workflow's reports (#2615):
+	// the plan-work-unit report for the specifier and the handoff report for
+	// the implementer and remediator, each without Status. The prompts name
+	// the parts in the reports' order, and the retired #1461 headings are
+	// gone so a writer is never offered both shapes.
+	partOrder := map[string][]string{
+		"specifier":   {"`## Result`", "`## Your call`", "`## Not verified`", "`## Details`"},
+		"implementer": {"`## Result`", "`## Your call`", "`## Left for you`", "`## Skipped`", "`## Details`"},
+		"remediator":  {"`## Result`", "`## Your call`", "`## Left for you`", "`## Skipped`", "`## Details`"},
+	}
+	prompts := map[string][]byte{"specifier": specifier, "implementer": implementer, "remediator": remediator}
+	for name, parts := range partOrder {
+		previous := -1
+		for _, part := range parts {
+			at := bytes.Index(prompts[name], []byte(part))
+			if at <= previous {
+				t.Errorf("%s prompt names summary part %s out of order (at %d, after %d)", name, part, at, previous)
+			}
+			previous = at
+		}
+		for _, retired := range []string{"`## Change`", "`## Remaining concerns`"} {
+			if bytes.Contains(prompts[name], []byte(retired)) {
+				t.Errorf("%s prompt still names retired summary heading %s", name, retired)
+			}
 		}
 	}
 	if summaryFixtureConforms("All tests pass.") {
