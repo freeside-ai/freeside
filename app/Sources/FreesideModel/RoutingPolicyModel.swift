@@ -77,6 +77,15 @@ public struct RoutingPolicyDraft: Equatable, Sendable {
         if orders[role]?.isEmpty == true { orders[role] = nil }
     }
 
+    /// Sets the role's whole order, keeping the first of a repeated agent.
+    /// An empty list leaves the role to the lineup, as removing its last
+    /// agent does.
+    public mutating func replace(_ agents: [String], for role: Role) {
+        var seen = Set<String>()
+        let unique = agents.filter { seen.insert($0).inserted }
+        orders[role] = unique.isEmpty ? nil : unique
+    }
+
     /// Moves the agent one place earlier (`offset` -1) or later (+1).
     public mutating func move(_ agent: String, in role: Role, by offset: Int) {
         guard var list = orders[role], let index = list.firstIndex(of: agent),
@@ -101,6 +110,28 @@ package struct RoutingDrainFirstPool: Equatable {
     package let agents: [String]
 }
 
+/// One of the Agents pane's routing popups. Writer reads and sets the three
+/// roles that write the change together, as the New Task Writer did;
+/// Reviewer sets the reviewer.
+package enum RoutingPopup: CaseIterable, Hashable {
+    case writer
+    case reviewer
+
+    package var roles: [RoutingPolicyDraft.Role] {
+        switch self {
+        case .writer: AgentChoiceDisplay.writerRoles
+        case .reviewer: [.reviewer]
+        }
+    }
+
+    package var title: String {
+        switch self {
+        case .writer: "Writer"
+        case .reviewer: "Reviewer"
+        }
+    }
+}
+
 /// Reads the routing policy sync adopted and sends the operator's change as a
 /// saved command (plan §5.4, routing policy), modeled on `TaskStopModel`: the
 /// command persists before it is sent, an unanswered send is retried only by
@@ -113,6 +144,10 @@ package struct RoutingDrainFirstPool: Equatable {
 package final class RoutingPolicyModel {
     private let coordinator: SyncCoordinator
     package var draft: RoutingPolicyDraft?
+
+    /// Why the last popup choice sent nothing, until the next choice or
+    /// edit.
+    package private(set) var choiceBlocker: String?
 
     package init(coordinator: SyncCoordinator) { self.coordinator = coordinator }
 
@@ -162,6 +197,23 @@ package final class RoutingPolicyModel {
         }
     }
 
+    /// The synced usage pool the catalog agent's enrollment sits on, by the
+    /// join `drainFirstPools` uses, or nil when no synced pool carries it.
+    package func pool(for entry: Components.Schemas.AgentCatalogEntry) -> String? {
+        coordinator.usagePools.first { snapshot in
+            snapshot.pool.enrollments.contains { $0.enrollment_id == entry.enrollment_id }
+        }?.pool.id
+    }
+
+    /// The one order every role of the popup has in the policy, read as a
+    /// draft reads it; `[]` when all of them are on the lineup, nil when
+    /// they differ.
+    package func sharedOrder(_ popup: RoutingPopup) -> [String]? {
+        let current = RoutingPolicyDraft(policy: policy, syncEpoch: "")
+        let orders = popup.roles.map(current.agents(for:))
+        return orders.allSatisfy { $0 == orders.first } ? orders.first : nil
+    }
+
     /// The agent the lineup runs the role with when the policy leaves it out.
     package func lineupAgent(for role: RoutingPolicyDraft.Role) -> String? {
         catalog?.lineup.first { $0.role == role }?.agent
@@ -206,10 +258,52 @@ package final class RoutingPolicyModel {
     }
 
     package func beginEditing() {
-        guard canEdit, let epoch = coordinator.cursors?.syncEpoch else { return }
+        guard let fresh = freshDraft() else { return }
+        draft = fresh
+    }
+
+    /// A popup's choice: the agent first, then the order the popup's roles
+    /// shared, or the agent alone when they differed. It saves at once.
+    package func choose(_ agent: String, for popup: RoutingPopup) async {
+        let rest = (sharedOrder(popup) ?? []).filter { $0 != agent }
+        await saveChoice { draft in
+            for role in popup.roles { draft.replace([agent] + rest, for: role) }
+        }
+    }
+
+    /// The drain-first popup's choice, nil for None, saved at once.
+    package func chooseDrainFirst(_ account: String?) async {
+        await saveChoice { $0.drainFirstAccount = account }
+    }
+
+    /// A choice is a one-shot save: a fresh draft from the current policy
+    /// with the change applied, checked as Save checks the editor's. A
+    /// refused choice sends nothing and leaves no draft, so the editor
+    /// doesn't open; its reason stays in `choiceBlocker`.
+    private func saveChoice(_ change: (inout RoutingPolicyDraft) -> Void) async {
+        guard var fresh = freshDraft() else { return }
+        change(&fresh)
+        draft = fresh
+        if let blocker = saveBlocker {
+            draft = nil
+            choiceBlocker = blocker
+            return
+        }
+        await save()
+        // Save keeps the draft only when the command couldn't be stored on
+        // this device; a choice has no editor to return to, so its failure
+        // notice stands alone.
+        draft = nil
+    }
+
+    /// A draft from the current policy, clearing the last refusal, choice
+    /// blocker, and confirmation; nil when the policy can't be changed now.
+    private func freshDraft() -> RoutingPolicyDraft? {
+        guard canEdit, let epoch = coordinator.cursors?.syncEpoch else { return nil }
         failure = nil
+        choiceBlocker = nil
         coordinator.clearConfirmedRoutingPolicyChange()
-        draft = RoutingPolicyDraft(policy: policy, syncEpoch: epoch)
+        return RoutingPolicyDraft(policy: policy, syncEpoch: epoch)
     }
 
     package func cancelEditing() { draft = nil }
