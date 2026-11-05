@@ -216,7 +216,7 @@ func TestDrainExecutionIntentReauthenticatesRecordedExport(t *testing.T) {
 	)
 	candidate := testCandidate(t)
 	candidate.RunID = reservation.RunID
-	candidate.DispositionHistory = testDispositionHistory(t, s, candidate)
+	withTestHandoff(t, s, &candidate)
 	execution := publish.ExecutionCandidate{
 		Candidate:             candidate,
 		ProducingInvocationID: testProducingInvocationID,

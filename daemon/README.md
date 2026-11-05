@@ -3338,7 +3338,8 @@ proposal that answers its refusal, or the open maintenance task for the
 image its refusal was measured from), and under
 `admission_policy_refused`, with no check detail, once it has none; they
 start once an image serves the base. A readiness re-entry onto a newer
-base its run's image cannot serve verifies under the first recorded image
+base, or a handoff's merge into a moved tip, that its run's image cannot
+serve verifies under the first recorded image
 that serves both that base and the commit it verifies, holds under
 `image_upkeep_pending` while upkeep has a resolution pending, and stops
 as before otherwise. A publication rebuild that finds the builder busy
@@ -3411,8 +3412,9 @@ module's `go.mod` or `go.sum`, cannot verify in the image onboarding
 approved, because that image bakes the old dependencies. Production driver mode rebuilds the image itself when the change
 stays inside the project's declared policy (`docs/plan.md` §5.7,
 **Policy-gated rebuild**), and blocks publication otherwise. The gate runs in
-the publication lane immediately before verification, on first publication
-and on every re-entered cycle. A head that keeps the manifests the image
+the publication lane immediately before verification: on first publication,
+on a handoff that verifies the head merged into a moved tip, and on every
+re-entered cycle. A head that keeps the manifests the image
 baked takes no gate.
 
 **A Go image admits a pinned module change from the declared proxy.** The
@@ -3539,6 +3541,8 @@ depends on the cycle:
   `Project image rebuild refused: <clause>.` and says what failed the clause.
   The item's reason text is the shared verification-failure reason, because a
   per-clause reason is a contract change this lane does not make.
+- **Handoff at a moved tip:** The run blocks on `publish_blocked` with the
+  shared base-advanced reason. The clause is not yet named on the item.
 - **Re-entered cycle:** The cycle stops, and the stop item's reason names the
   clause and the commit.
 

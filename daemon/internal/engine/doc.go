@@ -100,10 +100,12 @@
 //   - publish_block_facts.go the facts a publish-block card carries
 //   - publication_continuation.go, publication_successor.go
 //     publication re-evaluation and successor candidates
-//   - production_reentry.go, production_reentry_rebase.go,
-//     production_unpublished_reentry.go, readiness_reentry.go
+//   - production_handoff.go the handoff check: sealing the target's tip,
+//     verifying the head's merge into a moved tip, and retiring queued
+//     pre-publication re-entries
+//   - production_reentry.go, production_reentry_rebase.go, readiness_reentry.go
 //     re-earning readiness against a new base: cycles, rebase proofs, and
-//     unpublished and ready-item re-entry
+//     ready-item re-entry
 //   - verification_report.go reading the verifier's immutable report bytes
 //   - image_selection.go, image_upkeep.go, image_upkeep_adoption.go, image_repair_task.go
 //     project image selection, upkeep at the tip, policy adoption cards, and

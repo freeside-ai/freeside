@@ -210,7 +210,7 @@ func TestReentryCheckpointLoaderAcceptsAPreUpgradeRow(t *testing.T) {
 			w := &productionPublicationWorkflow{store: st, artifacts: &findingAdjudicationArtifactStore{
 				bodies: map[domain.Digest][]byte{artifacts[0].Digest: raw},
 			}}
-			got, found, err := w.loadReentryCheckpoint(ctx, task, binding)
+			got, found, err := w.loadReentryCheckpoint(ctx, task.reentryCheckpointKey(), task, binding)
 			if !errors.Is(err, tc.want) {
 				t.Fatalf("loadReentryCheckpoint = %v, want %v", err, tc.want)
 			}
@@ -467,5 +467,39 @@ func TestReentryDiffDescribesTheEvaluatedCommit(t *testing.T) {
 	if stats.BaseSHA != base || stats.HeadSHA != head || stats.FilesChanged != 1 ||
 		stats.Additions != 2 || stats.Deletions != 0 {
 		t.Fatalf("diff stats = %#v", stats)
+	}
+}
+
+// TestHandoffStopsOnATipTheImageCannotServe: plan §5.7 at handoff. An image
+// that cannot serve the moved tip, with nothing pending in image upkeep, ends
+// the handoff on an item; while upkeep has a resolution pending, the error
+// the verifier returns is the lane's retryable hold, which is no stop. Neither
+// is a lane failure.
+func TestHandoffStopsOnATipTheImageCannotServe(t *testing.T) {
+	t.Parallel()
+	task := newReentryTask("project-handoff", reentrySuccessorForTest(
+		productionReadyItemID("run-reentry"), domain.ReadinessInvalidationBaseAdvanced))
+	tip := strings.Repeat("e", 40)
+	image, err := domain.NewProjectImage(domain.ProjectImageInput{
+		Repository: "freeside-ai/fixture", RepositoryID: 1,
+		CommitSHA:          strings.Repeat("a", 40),
+		RecipeDigest:       domain.Digest("sha256:" + strings.Repeat("b", 64)),
+		PreparationCommand: []string{"/usr/local/bin/freeside-project-prepare"},
+		BaseImageRef:       domain.ImageRef("127.0.0.1:5100/agent@sha256:" + strings.Repeat("c", 64)),
+		ImageRef:           domain.ImageRef("127.0.0.1:5100/project@sha256:" + strings.Repeat("d", 64)),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	refusal := fmt.Errorf("verify: %w", image.AdmissibleAt(domain.ProjectImageBaseInputs{CommitSHA: tip}, ""))
+	if !handoffVerifyStop(task, tip, refusal) {
+		t.Errorf("an image that cannot serve the tip did not stop the handoff: %v", refusal)
+	}
+	pending := productionPublicationRetryableError(fmt.Errorf("no recorded project image serves %s: %w",
+		tip, &ImageUpkeepPendingError{}))
+	for _, cause := range []error{nil, pending, verify.ErrGitPlumbing, context.Canceled} {
+		if handoffVerifyStop(task, tip, cause) {
+			t.Errorf("%v stopped the handoff; want a hold or a lane error", cause)
+		}
 	}
 }

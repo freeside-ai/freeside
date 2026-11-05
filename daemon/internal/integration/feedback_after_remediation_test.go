@@ -1,7 +1,6 @@
 package integration_test
 
 import (
-	"errors"
 	"strings"
 	"testing"
 	"time"
@@ -17,31 +16,27 @@ import (
 // TestReturnToAgentAfterARemediationPublishes: feedback returned on a head a
 // remediation produced is newer than that remediation, so the run's active
 // remediation marker must authenticate it as a later producer rather than
-// quarantine the run. The re-entry case is the one the Wave 8 exit run hit
-// (#2101): the remediated head published through a pre-publication re-entry.
-// The feedback then works at the admitted base, which the published pull
-// request has left behind, so its cycle re-enters at the newer base and
-// updates that pull request (#2111).
+// quarantine the run. The moved-tip case is the one the Wave 8 exit run hit
+// (#2101): the target advanced before the remediated head published. The
+// feedback then works at the admitted base, which the published pull request
+// has left behind, so its cycle's handoff verifies the merge into the tip and
+// updates that pull request without another review round (issue #2644).
 func TestReturnToAgentAfterARemediationPublishes(t *testing.T) {
 	t.Parallel()
-	for _, reentry := range []bool{false, true} {
+	for _, advance := range []bool{false, true} {
 		name := "published"
-		if reentry {
-			name = "reentered-before-publication"
+		if advance {
+			name = "handed-off-at-a-moved-tip"
 		}
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
-			testReturnToAgentAfterRemediation(t, reentry)
+			testReturnToAgentAfterRemediation(t, advance)
 		})
 	}
 }
 
-func testReturnToAgentAfterRemediation(t *testing.T, reentry bool) {
-	p, advanced, round, reviews := returnToAgentAfterRemediation(t, reentry)
-	if reentry {
-		p.scriptCleanReview(round+1, advanced, p.replay.HeadSHA)
-	}
-
+func testReturnToAgentAfterRemediation(t *testing.T, advance bool) {
+	p, advanced, round, reviews := returnToAgentAfterRemediation(t, advance)
 	var completed engine.ReconcileResult
 	for range 8 {
 		result, err := p.reconcileLanes()
@@ -75,79 +70,27 @@ func testReturnToAgentAfterRemediation(t *testing.T, reentry bool) {
 		}
 		t.Fatalf("feedback successor did not publish: %#v", completed)
 	}
-	if reentry {
-		assertSuccessorReentryPublished(t, p, advanced, round+1)
-	}
-}
-
-// TestSuccessorReentryRefusedAgainReentersAgain: the base advances once more
-// while a successor re-entry (#2111) is in its cycle, so the publisher refuses
-// it too. It seals the next successor re-entry at the newer base after itself,
-// which reviews the kept head there and updates the pull request.
-func TestSuccessorReentryRefusedAgainReentersAgain(t *testing.T) {
-	t.Parallel()
-	p, advanced, round, _ := returnToAgentAfterRemediation(t, true)
-	p.scriptCleanReview(round+1, advanced, p.replay.HeadSHA)
-	// Advance the base again in the pass after the first re-entry is sealed,
-	// before its cycle audits the target.
-	var first *domain.PublicationSuccessor
-	var further string
-	for pass := 1; first == nil; pass++ {
-		if pass > 8 {
-			t.Fatal("no successor re-entry was sealed")
-		}
-		p.now = p.now.Add(time.Minute)
-		if _, err := p.reconcileLanes(); err != nil {
-			t.Fatal(err)
-		}
-		if err := p.store.Read(p.ctx, func(tx *store.ReadTx) error {
-			current, err := tx.CurrentPublicationSuccessor(p.ctx, p.runID)
-			if err == nil && current != nil && current.Version == domain.PublicationSuccessorReentryVersion {
-				first = current
-			}
-			return err
-		}); err != nil {
-			t.Fatal(err)
-		}
-	}
-	if prs := p.forge.PullRequests(); len(prs) != 1 || prs[0].HeadSHA == p.replay.HeadSHA {
-		t.Fatalf("the first re-entry published before the further advance: %#v", prs)
-	}
-	further, _ = p.advanceBaseBeforePublication(t, "FURTHER.md", "further upstream change\n")
-	p.scriptCleanReview(round+2, further, p.replay.HeadSHA)
-	p.reconcileUntilReady(t, 12)
-	if first == nil || first.Reentry.BaseSHA != advanced {
-		t.Fatalf("first successor re-entry = %#v, want one at %s", first, advanced)
-	}
-	assertSuccessorReentryPublished(t, p, further, round+2)
-	if current := p.successorReentry(t, further, round+2); current.PredecessorItemID != first.ReadyItemID() {
-		t.Fatalf("re-entry predecessor = %s, want the refused re-entry's %s",
-			current.PredecessorItemID, first.ReadyItemID())
+	if advance {
+		assertFeedbackHandoffPublished(t, p, advanced, round)
 	}
 }
 
 // returnToAgentAfterRemediation publishes a remediated head, through a
-// pre-publication re-entry at advanced when reentry is set, returns its ready
+// handoff at the moved tip advanced when advance is set, returns its ready
 // item to the agent, and records the feedback's export at the admitted base.
 // The feedback cycle's clean review is scripted for round, at that base; the
 // cycle itself has not run.
 func returnToAgentAfterRemediation(
-	t *testing.T, reentry bool,
+	t *testing.T, advance bool,
 ) (p *productionPublicationHarness, advanced string, round int, reviews *reviewedTree) {
 	t.Helper()
 	p, _ = prepareDispatchedRemediationPublicationTask(t)
-	readyID := domain.ProductionReadyItemID(p.runID)
 	round = 3
-	if reentry {
+	if advance {
 		advanced, reviews = p.advanceBaseBeforePublication(t, "UPSTREAM.md", "upstream change\n")
-		p.scriptCleanReview(3, advanced, p.replay.HeadSHA)
-		p.reconcileUntilReady(t, 8)
-		readyID = p.unpublishedReentry(t, advanced).ReadyItemID()
-		round = 4
-	} else {
-		p.reconcileUntilReady(t, 8)
 	}
-	ready, err := p.attention.GetAttentionItem(p.ctx, readyID)
+	p.reconcileUntilReady(t, 8)
+	ready, err := p.attention.GetAttentionItem(p.ctx, p.currentReadyItem(t).ID)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -206,7 +149,7 @@ func returnToAgentAfterRemediation(
 	}); err != nil {
 		t.Fatal(err)
 	}
-	if reentry {
+	if advance {
 		// The feedback works at the base the run was admitted at, as the
 		// exit run's did; the builder exports from the base checkout.
 		runGit(t, p.baseDir, "checkout", "-q", "--detach", p.baseSHA)
@@ -235,10 +178,11 @@ func returnToAgentAfterRemediation(
 	return p, advanced, round, reviews
 }
 
-// assertSuccessorReentryPublished checks that the run's current cycle is a
-// successor re-entry at baseSHA, sealed for review round, and that it updated
-// the run's one pull request to the head it kept.
-func assertSuccessorReentryPublished(t *testing.T, p *productionPublicationHarness, baseSHA string, round int) {
+// assertFeedbackHandoffPublished checks that the run's current cycle is the
+// feedback successor, still at review round, whose handoff verified the
+// merge of the returned head into tip and updated the run's one pull request
+// to that head.
+func assertFeedbackHandoffPublished(t *testing.T, p *productionPublicationHarness, tip string, round int) {
 	t.Helper()
 	var successor *domain.PublicationSuccessor
 	if err := p.store.Read(p.ctx, func(tx *store.ReadTx) error {
@@ -248,19 +192,23 @@ func assertSuccessorReentryPublished(t *testing.T, p *productionPublicationHarne
 		}
 		published, err := tx.PublishedPublicationInvocationID(p.ctx, p.runID)
 		if err == nil && successor != nil && published != successor.PublicationID() {
-			t.Errorf("published invocation = %s, want the successor re-entry's %s",
+			t.Errorf("published invocation = %s, want the feedback cycle's %s",
 				published, successor.PublicationID())
+		}
+		review, err := tx.LatestReviewRecord(p.ctx, p.runID)
+		if err == nil && (review.Round != round || review.BaseSHA != p.baseSHA) {
+			t.Errorf("latest review = round %d at %s, want round %d at the admitted base",
+				review.Round, review.BaseSHA, round)
 		}
 		return err
 	}); err != nil {
 		t.Fatal(err)
 	}
-	if successor == nil || successor.Version != domain.PublicationSuccessorReentryVersion ||
-		successor.Origin != domain.PublicationSuccessorBaseAdvance || successor.Reentry == nil ||
-		successor.Reentry.BaseSHA != baseSHA || successor.Reentry.HeadSHA != p.replay.HeadSHA ||
+	if successor == nil || successor.EffectiveOrigin() != domain.PublicationSuccessorFeedback ||
 		successor.ReviewRound != round {
-		t.Fatalf("current successor = %#v, want a successor re-entry at %s for round %d", successor, baseSHA, round)
+		t.Fatalf("current successor = %#v, want the feedback cycle for round %d", successor, round)
 	}
+	p.assertHandoffVerified(t, tip)
 	if ready := p.currentReadyItem(t); ready.ID != successor.ReadyItemID() || ready.PRHeadSHA != p.replay.HeadSHA {
 		t.Fatalf("ready item = %s at %s, want %s at %s", ready.ID, ready.PRHeadSHA,
 			successor.ReadyItemID(), p.replay.HeadSHA)
@@ -271,16 +219,14 @@ func assertSuccessorReentryPublished(t *testing.T, p *productionPublicationHarne
 	}
 }
 
-// TestRerunOfAReevaluatedBaseAdvanceBlockNeedsANewProfile: a rerun re-enters
-// at a newer base only from its cycle's own base-advance block (#2111). A
-// block a rerun's reevaluation recorded at an advanced base names that rerun's
-// verification, which a re-entry does not reuse, so Signet still refuses its
-// rerun under the trust profile that already evaluated the head, and the item
-// stays open for a rerun under a new profile.
-func TestRerunOfAReevaluatedBaseAdvanceBlockNeedsANewProfile(t *testing.T) {
+// TestRerunOfAFeedbackBlockPublishesThroughTheHandoff: a feedback cycle that
+// blocked on its own verification at the admitted base is rerun under a new
+// trust profile. The rerun's publication meets the moved tip at its handoff,
+// verifies the merge into it, and updates the pull request; it never
+// re-enters the run (issue #2644).
+func TestRerunOfAFeedbackBlockPublishesThroughTheHandoff(t *testing.T) {
 	t.Parallel()
-	p, _, _, _ := returnToAgentAfterRemediation(t, true)
-	// The feedback cycle first blocks on a rerunnable refusal of its own.
+	p, advanced, _, _ := returnToAgentAfterRemediation(t, true)
 	p.room.fail = true
 	p.reconcileUntilBlocked(t, 8)
 	var feedback *domain.PublicationSuccessor
@@ -298,78 +244,28 @@ func TestRerunOfAReevaluatedBaseAdvanceBlockNeedsANewProfile(t *testing.T) {
 	p.room.fail = false
 	repairPublicationTrustProfile(t, p)
 	submitPublicationRerun(t, p, first, "rerun-at-admitted-base")
-	p.reconcileUntilBlocked(t, 8)
-	blocked, err := p.attention.GetAttentionItem(p.ctx,
-		signet.ReevaluatedBlockedItemID(p.runID, "rerun-at-admitted-base"))
-	if err != nil {
-		t.Fatal(err)
+	for pass := 0; ; pass++ {
+		if pass == 8 {
+			t.Fatal("the rerun did not update the pull request")
+		}
+		p.now = p.now.Add(time.Minute)
+		if _, err := p.reconcileLanes(); err != nil {
+			t.Fatal(err)
+		}
+		if prs := p.forge.PullRequests(); len(prs) == 1 && prs[0].HeadSHA == p.replay.HeadSHA {
+			break
+		}
 	}
-	if blocked.Item.Reason != domain.PublicationBlockBaseAdvanced || blocked.Item.Status != domain.StatusOpen ||
-		!blocked.Item.Offers(domain.ActionRerunTrustEvaluation) {
-		t.Fatalf("reevaluated block = %s %s offering %v, want an open base_advanced block with Rerun",
-			blocked.Item.Status, blocked.Item.Reason, blocked.Item.RequestedDecision)
-	}
-
-	const deviceID = domain.DeviceID("device-rerun-after-base-advance")
-	if err := p.store.Write(p.ctx, func(tx *store.WriteTx) error {
-		return tx.PutDevice(p.ctx, domain.Device{
-			ID: deviceID, DisplayName: "Publication reevaluation device",
-			Status: domain.DeviceActive, PairedAt: p.now,
-		})
-	}); err != nil {
-		t.Fatal(err)
-	}
-	_, err = p.attention.Submit(p.ctx, signet.ClientCommand{
-		CommandID: "rerun-after-base-advance", DeviceID: deviceID,
-		ExpectedEntityVersion: blocked.EntityVersion,
-		Payload: signet.DecisionPayload{
-			ItemID: blocked.Item.ID, ItemVersion: blocked.Item.ItemVersion,
-			PRHeadSHA: blocked.Item.PRHeadSHA, ArtifactDigests: blocked.Item.ArtifactDigests,
-			Action: domain.ActionRerunTrustEvaluation,
-		},
-	})
-	if !errors.Is(err, domain.ErrDuplicate) {
-		t.Fatalf("rerun under the evaluating profile = %v, want ErrDuplicate", err)
-	}
-	after, err := p.attention.GetAttentionItem(p.ctx, blocked.Item.ID)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if after.Item.Status != domain.StatusOpen || after.Item.ItemVersion != blocked.Item.ItemVersion {
-		t.Fatalf("refused rerun moved the block to %s version %d", after.Item.Status, after.Item.ItemVersion)
-	}
+	p.assertHandoffVerified(t, advanced)
 	if err := p.store.Read(p.ctx, func(tx *store.ReadTx) error {
 		current, err := tx.CurrentPublicationSuccessor(p.ctx, p.runID)
 		if err == nil && current.PublicationID() != feedback.PublicationID() {
-			t.Errorf("refused rerun changed the cycle to %s", current.PublicationID())
+			t.Errorf("rerun changed the cycle to %s", current.PublicationID())
 		}
 		return err
 	}); err != nil {
 		t.Fatal(err)
 	}
-}
-
-// successorReentry reads the run's current successor and requires it to be a
-// successor re-entry at baseSHA, sealed for review round.
-func (p *productionPublicationHarness) successorReentry(
-	t *testing.T, baseSHA string, round int,
-) domain.PublicationSuccessor {
-	t.Helper()
-	var successor *domain.PublicationSuccessor
-	if err := p.store.Read(p.ctx, func(tx *store.ReadTx) error {
-		var err error
-		successor, err = tx.CurrentPublicationSuccessor(p.ctx, p.runID)
-		return err
-	}); err != nil {
-		t.Fatal(err)
-	}
-	if successor == nil || successor.Version != domain.PublicationSuccessorReentryVersion ||
-		successor.Origin != domain.PublicationSuccessorBaseAdvance || successor.Reentry == nil ||
-		successor.Reentry.BaseSHA != baseSHA || successor.Reentry.HeadSHA != p.replay.HeadSHA ||
-		successor.ReviewRound != round {
-		t.Fatalf("current successor = %#v, want a successor re-entry at %s for round %d", successor, baseSHA, round)
-	}
-	return *successor
 }
 
 // reconcileUntilBlocked runs lane passes until one creates a blocked item,

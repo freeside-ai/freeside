@@ -401,11 +401,9 @@ func (w *productionPublicationWorkflow) reconcileReviewGate(
 			}
 		} else if latestAdmitted && latestRecord.InstructionDigest == reviewInstructions.ResultDigest {
 			var remediationOutcome remediationReviewOutcome
-			// A re-entry before publication reviews its head at a newer base;
-			// the remediation that produced the head was reviewed at the old one.
 			if _, remediated := remediationRoundForInvocation(
 				task.RunID, task.ProducingInvocationID,
-			); remediated && !task.reentersBeforePublication() {
+			); remediated {
 				findings, err := w.reviewRecordFindings(ctx, *latestRecord)
 				if err != nil {
 					return productionReviewPending, err
@@ -895,13 +893,10 @@ func (w *productionPublicationWorkflow) reconcileReviewGate(
 	if err != nil {
 		return productionReviewPending, err
 	}
-	var remediationOutcome remediationReviewOutcome
-	if !task.reentersBeforePublication() {
-		remediationOutcome, err = w.reconcileRemediationReview(
-			ctx, task, record, result.Findings, checkpoint.Imported.Claims)
-		if err != nil {
-			return productionReviewPending, err
-		}
+	remediationOutcome, err := w.reconcileRemediationReview(
+		ctx, task, record, result.Findings, checkpoint.Imported.Claims)
+	if err != nil {
+		return productionReviewPending, err
 	}
 	diffMetrics, err := w.reviewRoundDiffMetrics(ctx, task, binding, reviewWorkspace, record)
 	if err != nil {

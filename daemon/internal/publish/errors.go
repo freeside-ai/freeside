@@ -174,11 +174,13 @@ var ErrExecutionExportMissing = errors.New("publication source has no execution 
 // producing invocation's durable ExecutionExport.
 var ErrExecutionExportHeadMismatch = errors.New("publication source head does not match the execution export")
 
-// ErrTargetBaseAdvanced is returned when the fresh workflow audit observes a
-// different target-branch tip than the immutable base authorized for a new
-// execution publication. The candidate must be rerun and reverified; recovery
-// of an already-committed publication intent remains allowed to converge.
-var ErrTargetBaseAdvanced = errors.New("publication target base advanced after execution admission")
+// ErrHandoffCheckUnsatisfied is returned when a new execution publication's
+// handoff check (domain.HandoffCheck, plan §6, revision 110) is missing,
+// names another publication, head, or tip than the candidate, or names no
+// verified merge for a tip that moved past the base the evidence binds.
+// Recovery of an already-committed publication intent remains allowed to
+// converge.
+var ErrHandoffCheckUnsatisfied = errors.New("publication handoff check is not satisfied")
 
 // ErrPublicationConflict is returned when an existing external
 // resource under this publication's deterministic identity disagrees

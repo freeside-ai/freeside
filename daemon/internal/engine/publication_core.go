@@ -523,7 +523,7 @@ func loadArtifactBlob(
 
 func isDefinitiveTrustRefusal(err error) bool {
 	return errors.Is(err, publish.ErrTrustProfileDrift) ||
-		errors.Is(err, publish.ErrTargetBaseAdvanced)
+		errors.Is(err, publish.ErrHandoffCheckUnsatisfied)
 }
 
 func boolCount(v bool) int {

@@ -57,65 +57,6 @@ func validateSuccessorCandidate(ctx context.Context, tx *store.ReadTx, candidate
 	return nil
 }
 
-// unpublishedReentryAuthority returns the authority a candidate publishes
-// under when its invocation re-enters an unpublished head at a newer base:
-// an unpublished re-entry's first publication (issue #2058), or a successor
-// re-entry's update of the existing pull request (issue #2111). It is nil for
-// any other candidate. The authority is read through the store's gate by the
-// candidate's invocation, never taken from the candidate, so the base it
-// names is the daemon's own audit tip. The candidate must be the run's
-// current cycle, its producer one the authority admits, and its head the
-// latest review's; a first publication must be under v5 and an update under
-// v6.
-func unpublishedReentryAuthority(
-	ctx context.Context, tx *store.ReadTx, c Candidate, producer *domain.InvocationID,
-) (*domain.PublicationSuccessor, error) {
-	if producer == nil {
-		return nil, nil
-	}
-	successor, err := tx.GetPublicationSuccessor(ctx, c.RunID, c.InvocationID)
-	if errors.Is(err, store.ErrNotFound) && c.Successor == nil {
-		return nil, nil
-	}
-	if err != nil {
-		return nil, errors.Join(err, ErrUnauthorizedPublication)
-	}
-	if !successor.ReentersUnpublishedHead() {
-		if c.Successor != nil {
-			return nil, nil
-		}
-		return nil, ErrUnauthorizedPublication
-	}
-	if (c.Successor == nil) != successor.RepublishesUnpublished() || c.DispositionHistory == nil {
-		return nil, ErrUnauthorizedPublication
-	}
-	if err := tx.AuthenticateSuccessorProducer(ctx, successor, *producer); err != nil {
-		return nil, errors.Join(err, ErrUnauthorizedPublication)
-	}
-	current, err := tx.CurrentPublicationSuccessor(ctx, c.RunID)
-	if err != nil || current == nil || current.PublicationID() != c.InvocationID {
-		return nil, errors.Join(err, ErrUnauthorizedPublication)
-	}
-	review, err := tx.LatestReviewRecord(ctx, c.RunID)
-	if err != nil || review.Round < successor.ReviewRound || review.HeadSHA != c.HeadSHA {
-		return nil, errors.Join(err, ErrUnauthorizedPublication)
-	}
-	return &successor, nil
-}
-
-// reentryPublicationBase is the base an unpublished re-entry's candidate
-// publishes against: the authority's. The head the cycle kept was authorized
-// at the superseded base, which is why that authorization's base does not
-// decide here. The cycle admits no remediation, so a candidate at any other
-// head is not its own.
-func reentryPublicationBase(successor domain.PublicationSuccessor, c Candidate) (string, error) {
-	if c.HeadSHA != successor.Reentry.HeadSHA {
-		return "", fmt.Errorf("candidate head %s is not the re-entry head %s: %w",
-			c.HeadSHA, successor.Reentry.HeadSHA, ErrUnauthorizedPublication)
-	}
-	return successor.Reentry.BaseSHA, nil
-}
-
 // PublishSuccessorAfterGateAndFinalize updates the one predecessor PR. It uses
 // the same candidate/readiness/trust gates as initial publication, but never
 // grants ordinary create-only transport authority to replace a branch.

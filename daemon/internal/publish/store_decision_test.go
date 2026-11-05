@@ -474,7 +474,7 @@ func TestPublishExecutionHoldsSourceHeadAgainstRecordedExport(t *testing.T) {
 			)
 			candidate := testCandidate(t)
 			candidate.RunID = reservation.RunID
-			candidate.DispositionHistory = testDispositionHistory(t, s, candidate)
+			withTestHandoff(t, s, &candidate)
 
 			result, err := p.PublishExecution(
 				t.Context(),
@@ -576,47 +576,222 @@ func TestPublishExecutionHoldsSourceHeadAgainstRecordedExport(t *testing.T) {
 	}
 }
 
-func TestPublishExecutionRefusesAdvancedTargetBeforeIntent(t *testing.T) {
-	t.Parallel()
-	head := testHeadSHA
-	s := newExecutionBoundStore(t, executionChainOptions{exportHead: &head})
-	seedDecisionRecords(t, s)
-	reservation := seedExecutionPublicationChain(
-		t, s, executionChainOptions{exportHead: &head},
-	)
-	audit := executionWorkflowAudit(t)
-	audit.AuditedCommitSHA = testOtherSHA
-	gh := newFakeGitHub(t)
-	p := storeBackedPublisher(t, s, gh, fixedWorkflowAuditor{audit: audit})
-	candidate := testCandidate(t)
-	candidate.RunID = reservation.RunID
-	candidate.DispositionHistory = testDispositionHistory(t, s, candidate)
+// testMergeSHA names the merge of testHeadSHA into the moved tip
+// testOtherSHA that the handoff gate tests verify.
+const testMergeSHA = "2222222222222222222222222222222222222222"
 
-	_, err := p.PublishExecution(t.Context(), publish.ExecutionCandidate{
-		Candidate: candidate, ProducingInvocationID: testProducingInvocationID,
-	}, testApprovedRecipes())
-	if !errors.Is(err, publish.ErrTargetBaseAdvanced) {
-		t.Fatalf("PublishExecution error = %v, want ErrTargetBaseAdvanced", err)
+// sealMovedHandoff seals the candidate's handoff at the moved tip
+// testOtherSHA. With prove set, it also records a passed clean-verification
+// proof of the merge into that tip as the handoff's merge, bound to the
+// candidate's repository and base ref after prove alters that revision.
+func sealMovedHandoff(
+	t *testing.T, s *store.Store, candidate *publish.Candidate, prove func(*domain.BaseRevision),
+) {
+	t.Helper()
+	candidate.DispositionHistory = testDispositionHistory(t, s, *candidate)
+	var cleanVerification domain.RequirementResolution
+	for _, resolution := range testProductionResolutions(t, s, candidate.RunID) {
+		if resolution.CheckClass == domain.CheckClassCleanVerification {
+			cleanVerification = resolution
+		}
 	}
-	assertDecisionRows(t, s, 1, 0)
-	if requests := gh.requestLog(); len(requests) != 0 {
-		t.Fatalf("advanced target reached forge: %v", requests)
+	check := domain.HandoffCheck{
+		RunID: candidate.RunID, PublicationID: candidate.InvocationID,
+		HeadSHA: candidate.HeadSHA, TipSHA: testOtherSHA,
 	}
-	key, err := reservation.Key()
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := s.Read(t.Context(), func(tx *store.ReadTx) error {
-		entry, err := tx.GetOutbox(t.Context(), key)
+	if err := s.WriteInternal(t.Context(), func(tx *store.InternalTx) error {
+		auth, err := tx.GetCandidateAuthorization(t.Context(), *candidate.AuthorizationID)
 		if err != nil {
 			return err
 		}
-		if entry.Kind != publish.IntentKindReservation {
-			t.Errorf("advanced target changed reservation to %q", entry.Kind)
+		check.EvidenceBaseSHA = auth.BaseSHA
+		if err := tx.SealHandoffTip(t.Context(), check, fixtureTime); err != nil {
+			return err
 		}
-		return nil
+		if prove == nil {
+			return nil
+		}
+		profile, err := tx.LatestTrustProfile(t.Context(), candidate.Repo)
+		if err != nil {
+			return err
+		}
+		tip := domain.BaseRevision{
+			Repo: candidate.Repo, RepositoryID: profile.RepositoryID,
+			BaseRef: candidate.BaseRef, BaseSHA: check.TipSHA,
+		}
+		prove(&tip)
+		proof, err := domain.NewProspectiveMergeCheckProof(cleanVerification, domain.ProspectiveMergeIdentity{
+			BaseSHA: check.TipSHA, HeadSHA: check.HeadSHA, MergeSHA: testMergeSHA,
+		}, tip, *candidate.RecipeDigest)
+		if err != nil {
+			return err
+		}
+		if err := tx.RecordCheckProof(t.Context(), proof); err != nil {
+			return err
+		}
+		check.Merge = &domain.HandoffMerge{MergeSHA: testMergeSHA, VerificationProofDigest: proof.Digest}
+		return tx.ProveHandoffMerge(t.Context(), check.RunID, check.PublicationID, *check.Merge, fixtureTime)
 	}); err != nil {
-		t.Fatal(err)
+		t.Fatalf("seal moved handoff: %v", err)
+	}
+	candidate.BaseSHA = check.TipSHA
+	candidate.HandoffCheck = &check
+}
+
+// TestPublishExecutionHandoffGate pins the publication decision's handoff
+// gate (issue #2644): a new execution publication publishes only under the
+// sealed handoff check of its own run and publication, and a tip that moved
+// past the evidence base only with a verified merge of the head into it. The
+// tip is never re-resolved: an advance after the seal publishes.
+func TestPublishExecutionHandoffGate(t *testing.T) {
+	t.Parallel()
+	for name, test := range map[string]struct {
+		prepare func(t *testing.T, s *store.Store, candidate *publish.Candidate)
+		wantErr error
+	}{
+		"advance after an unchanged seal": {
+			prepare: func(t *testing.T, s *store.Store, candidate *publish.Candidate) {
+				withTestHandoff(t, s, candidate)
+			},
+		},
+		"moved tip with a verified merge": {
+			prepare: func(t *testing.T, s *store.Store, candidate *publish.Candidate) {
+				sealMovedHandoff(t, s, candidate, func(*domain.BaseRevision) {})
+			},
+		},
+		"moved tip without a merge": {
+			prepare: func(t *testing.T, s *store.Store, candidate *publish.Candidate) {
+				sealMovedHandoff(t, s, candidate, nil)
+			},
+			wantErr: publish.ErrHandoffCheckUnsatisfied,
+		},
+		"merge proved for another repository": {
+			prepare: func(t *testing.T, s *store.Store, candidate *publish.Candidate) {
+				sealMovedHandoff(t, s, candidate, func(tip *domain.BaseRevision) {
+					tip.Repo = "freeside-ai/other-repo"
+				})
+			},
+			wantErr: publish.ErrHandoffCheckUnsatisfied,
+		},
+		"merge proved into another base ref": {
+			prepare: func(t *testing.T, s *store.Store, candidate *publish.Candidate) {
+				sealMovedHandoff(t, s, candidate, func(tip *domain.BaseRevision) {
+					tip.BaseRef = "release"
+				})
+			},
+			wantErr: publish.ErrHandoffCheckUnsatisfied,
+		},
+		"sealed over another evidence base": {
+			prepare: func(t *testing.T, s *store.Store, candidate *publish.Candidate) {
+				candidate.DispositionHistory = testDispositionHistory(t, s, *candidate)
+				check := domain.HandoffCheck{
+					RunID: candidate.RunID, PublicationID: candidate.InvocationID,
+					HeadSHA: candidate.HeadSHA, EvidenceBaseSHA: testOtherSHA, TipSHA: testOtherSHA,
+				}
+				if err := s.WriteInternal(t.Context(), func(tx *store.InternalTx) error {
+					return tx.SealHandoffTip(t.Context(), check, fixtureTime)
+				}); err != nil {
+					t.Fatal(err)
+				}
+				candidate.BaseSHA, candidate.HandoffCheck = check.TipSHA, &check
+			},
+			wantErr: publish.ErrHandoffCheckUnsatisfied,
+		},
+		"candidate names no check": {
+			prepare: func(t *testing.T, s *store.Store, candidate *publish.Candidate) {
+				withTestHandoff(t, s, candidate)
+				candidate.HandoffCheck = nil
+			},
+			wantErr: publish.ErrHandoffCheckUnsatisfied,
+		},
+		"no sealed tip": {
+			prepare: func(t *testing.T, s *store.Store, candidate *publish.Candidate) {
+				candidate.DispositionHistory = testDispositionHistory(t, s, *candidate)
+				candidate.BaseSHA = testBaseSHA
+				candidate.HandoffCheck = &domain.HandoffCheck{
+					RunID: candidate.RunID, PublicationID: candidate.InvocationID,
+					HeadSHA: candidate.HeadSHA, EvidenceBaseSHA: testBaseSHA, TipSHA: testBaseSHA,
+				}
+			},
+			wantErr: publish.ErrHandoffCheckUnsatisfied,
+		},
+		"check of another publication": {
+			prepare: func(t *testing.T, s *store.Store, candidate *publish.Candidate) {
+				own := candidate.InvocationID
+				candidate.InvocationID = "inv-other"
+				withTestHandoff(t, s, candidate)
+				candidate.InvocationID = own
+			},
+			wantErr: publish.ErrHandoffCheckUnsatisfied,
+		},
+		"copy names another tip": {
+			prepare: func(t *testing.T, s *store.Store, candidate *publish.Candidate) {
+				withTestHandoff(t, s, candidate)
+				forged := *candidate.HandoffCheck
+				forged.TipSHA = testOtherSHA
+				candidate.BaseSHA, candidate.HandoffCheck = testOtherSHA, &forged
+			},
+			wantErr: publish.ErrHandoffCheckUnsatisfied,
+		},
+		"base is not the sealed tip": {
+			prepare: func(t *testing.T, s *store.Store, candidate *publish.Candidate) {
+				withTestHandoff(t, s, candidate)
+				candidate.BaseSHA = testOtherSHA
+			},
+			wantErr: publish.ErrHandoffCheckUnsatisfied,
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			head := testHeadSHA
+			s := newExecutionBoundStore(t, executionChainOptions{exportHead: &head})
+			seedDecisionRecords(t, s)
+			reservation := seedExecutionPublicationChain(
+				t, s, executionChainOptions{exportHead: &head},
+			)
+			// The live audit always reports a further advance: the decision
+			// must not re-resolve the sealed tip from it.
+			audit := executionWorkflowAudit(t)
+			audit.AuditedCommitSHA = "3333333333333333333333333333333333333333"
+			gh := newFakeGitHub(t)
+			p := storeBackedPublisher(t, s, gh, fixedWorkflowAuditor{audit: audit})
+			candidate := testCandidate(t)
+			candidate.RunID = reservation.RunID
+			test.prepare(t, s, &candidate)
+
+			_, err := p.PublishExecution(t.Context(), publish.ExecutionCandidate{
+				Candidate: candidate, ProducingInvocationID: testProducingInvocationID,
+			}, testApprovedRecipes())
+			if test.wantErr == nil {
+				if err != nil {
+					t.Fatalf("PublishExecution: %v", err)
+				}
+				return
+			}
+			if !errors.Is(err, test.wantErr) {
+				t.Fatalf("PublishExecution error = %v, want %v", err, test.wantErr)
+			}
+			assertDecisionRows(t, s, 1, 0)
+			if requests := gh.requestLog(); len(requests) != 0 {
+				t.Fatalf("refused handoff reached forge: %v", requests)
+			}
+			key, err := reservation.Key()
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := s.Read(t.Context(), func(tx *store.ReadTx) error {
+				entry, err := tx.GetOutbox(t.Context(), key)
+				if err != nil {
+					return err
+				}
+				if entry.Kind != publish.IntentKindReservation {
+					t.Errorf("refused handoff changed reservation to %q", entry.Kind)
+				}
+				return nil
+			}); err != nil {
+				t.Fatal(err)
+			}
+		})
 	}
 }
 
@@ -664,7 +839,7 @@ func TestPublishExecutionReauthenticatesDispositionHistoryInDecisionTransaction(
 	)
 	candidate := testCandidate(t)
 	candidate.RunID = reservation.RunID
-	candidate.DispositionHistory = testDispositionHistory(t, s, candidate)
+	withTestHandoff(t, s, &candidate)
 	failure := domain.ReviewFailure{
 		InvocationID: "review-failure-after-snapshot", RunID: candidate.RunID, Round: 2,
 		BaseSHA: testOtherSHA, HeadSHA: candidate.HeadSHA,
@@ -702,7 +877,7 @@ func TestPublishExecutionRejectsForeignReviewInstructionsAtDecision(t *testing.T
 	)
 	candidate := testCandidate(t)
 	candidate.RunID = reservation.RunID
-	candidate.DispositionHistory = testDispositionHistory(t, s, candidate)
+	withTestHandoff(t, s, &candidate)
 	foreign, err := domain.NewReviewRecord(domain.ReviewRecord{
 		InvocationID: "review-foreign-instructions", RunID: candidate.RunID, Round: 2,
 		Admission:           fake.RecordAdmission(domain.RoleReviewer, candidate.RunID, "review-foreign-instructions"),
@@ -747,7 +922,7 @@ func TestPublishExecutionReportsReviewConfigurationMismatchAtDecision(t *testing
 	)
 	candidate := testCandidate(t)
 	candidate.RunID = reservation.RunID
-	candidate.DispositionHistory = testDispositionHistory(t, s, candidate)
+	withTestHandoff(t, s, &candidate)
 	drifted := domain.Digest("sha256:" + strings.Repeat("7", 64))
 	record, err := domain.NewReviewRecord(domain.ReviewRecord{
 		InvocationID: "review-drifted-configuration", RunID: candidate.RunID, Round: 2,
@@ -795,7 +970,7 @@ func TestPublishExecutionRecoversCommittedIntentAfterTargetAdvances(t *testing.T
 	p := storeBackedPublisher(t, s, gh, auditor)
 	candidate := testCandidate(t)
 	candidate.RunID = reservation.RunID
-	candidate.DispositionHistory = testDispositionHistory(t, s, candidate)
+	withTestHandoff(t, s, &candidate)
 	execution := publish.ExecutionCandidate{
 		Candidate: candidate, ProducingInvocationID: testProducingInvocationID,
 	}
@@ -860,7 +1035,7 @@ func TestPublishExecutionRevalidatesReadinessProofsOnCommittedRetry(t *testing.T
 	)
 	candidate := testCandidate(t)
 	candidate.RunID = reservation.RunID
-	candidate.DispositionHistory = testDispositionHistory(t, s, candidate)
+	withTestHandoff(t, s, &candidate)
 	execution := publish.ExecutionCandidate{
 		Candidate: candidate, ProducingInvocationID: testProducingInvocationID,
 	}
@@ -939,7 +1114,7 @@ func TestValidateIntentDispositionHistoryRejectsCurrentFormatWithoutDigest(t *te
 	)
 	candidate := testCandidate(t)
 	candidate.RunID = reservation.RunID
-	candidate.DispositionHistory = testDispositionHistory(t, s, candidate)
+	withTestHandoff(t, s, &candidate)
 	intent := publish.Intent{FormatVersion: publish.IntentFormatCurrent}
 	if err := publish.ValidateIntentDispositionHistory(intent, candidate); !errors.Is(err, publish.ErrPublicationConflict) {
 		t.Fatalf("current intent without disposition digest = %v, want ErrPublicationConflict", err)
@@ -965,7 +1140,7 @@ func testPublishExecutionRejectsModernIntentMutation(t *testing.T, mutation, wan
 	)
 	candidate := testCandidate(t)
 	candidate.RunID = reservation.RunID
-	candidate.DispositionHistory = testDispositionHistory(t, s, candidate)
+	withTestHandoff(t, s, &candidate)
 	execution := publish.ExecutionCandidate{
 		Candidate: candidate, ProducingInvocationID: testProducingInvocationID,
 	}
@@ -1059,7 +1234,7 @@ func TestPublishExecutionAuthenticatesFrozenAdmissionAndExport(t *testing.T) {
 	)
 	candidate := testCandidate(t)
 	candidate.RunID = reservation.RunID
-	candidate.DispositionHistory = testDispositionHistory(t, current, candidate)
+	withTestHandoff(t, current, &candidate)
 	if _, err := p.PublishExecution(
 		t.Context(),
 		publish.ExecutionCandidate{

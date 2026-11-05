@@ -33,8 +33,9 @@ func TestCheckpointHealthReconstructsWorkflowKinds(t *testing.T) {
 		CommandID: feedback.CommandID, FeedbackInvocationID: feedback.InvocationID,
 		PredecessorItemID: feedback.ItemID, PriorReviewInvocationID: "review", ReviewRound: 2,
 	}
-	// A run whose base advanced before its first publication seals this
-	// commandless authority (issue #2058).
+	// An earlier daemon sealed this commandless authority for a run whose
+	// base advanced before its first publication (issue #2058). None is
+	// sealed now (issue #2644), but a backup taken then still carries it.
 	unpublished := domain.PublicationSuccessor{
 		Version: domain.PublicationUnpublishedReentryVersion, Origin: domain.PublicationSuccessorUnpublishedBaseAdvance,
 		RunID: "run", PredecessorItemID: domain.ProductionReadyItemID("run"), PriorReviewInvocationID: "review", ReviewRound: 2,

@@ -374,18 +374,10 @@ func dispositionReentryContext(
 		if !successor.ReentersUnpublishedHead() || successor.PublicationID() != c.InvocationID {
 			continue
 		}
+		// A stored re-entry's own publication (read-only legacy) evaluated a
+		// merge no candidate names any more, so its readiness no longer
+		// covers it and the history fails closed.
 		evaluation.BaseSHA = successor.Reentry.BaseSHA
-		if c.HeadSHA == successor.Reentry.HeadSHA {
-			evaluation.MergeSHA = c.ProspectiveMergeSHA
-			if !successor.AllowsProspectiveMerge(evaluation) {
-				return evaluation, nil, fmt.Errorf("re-entry authority does not admit merge %q: %w",
-					c.ProspectiveMergeSHA, domain.ErrParentKeyMismatch)
-			}
-		}
-	}
-	if evaluation.MergeSHA == "" && c.ProspectiveMergeSHA != "" {
-		return evaluation, nil, fmt.Errorf("candidate names a prospective merge no re-entry admits: %w",
-			domain.ErrParentKeyMismatch)
 	}
 	return evaluation, segments, nil
 }

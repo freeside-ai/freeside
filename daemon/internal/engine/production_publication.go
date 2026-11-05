@@ -58,6 +58,9 @@ const (
 	productionBlockVerification          = domain.PublicationBlockVerification
 	productionBlockTrust                 = domain.PublicationBlockTrust
 	productionBlockBaseAdvanced          = domain.PublicationBlockBaseAdvanced
+	productionBlockHandoffConflict       = domain.PublicationBlockHandoffConflict
+	productionBlockHandoffVerification   = domain.PublicationBlockHandoffVerification
+	productionBlockReentryRetired        = domain.PublicationBlockReentryRetired
 	productionBlockReentryConflict       = domain.PublicationBlockBaseAdvancedConflict
 	productionBlockReentryVerification   = domain.PublicationBlockBaseAdvancedVerification
 	productionBlockReentryRoundLimit     = domain.PublicationBlockBaseAdvancedRoundLimit
@@ -226,11 +229,10 @@ type productionPublicationTask struct {
 	Summary               string                       `json:"summary,omitempty"`
 	Successor             *domain.PublicationSuccessor `json:"successor,omitempty"`
 	// AuthorizingTaskKey names the task whose verification checkpoint holds
-	// this task's candidate authorization. Only a task that re-enters before
-	// publication sets it (reentersBeforePublication): it publishes the head
-	// an earlier task verified, under that task's checkpoint and stored
-	// authorization, and its own key differs. It selects which checkpoint to
-	// read; the checkpoint is still held to the stored authorization.
+	// this task's candidate authorization. Only a legacy task that re-enters
+	// before publication sets it (reentersBeforePublication). Such tasks are
+	// no longer created (issue #2644); the field stays so a queued one still
+	// decodes and is retired.
 	AuthorizingTaskKey string `json:"authorizing_task_key,omitempty"`
 	// reevaluation is reconstructed from a signet intent. It is never part of
 	// the original publication task row, whose bytes remain immutable.
@@ -2654,8 +2656,8 @@ func (w *productionPublicationWorkflow) reconcileTask(
 	if err := releaseProductionQuarantine(ctx, w.store, w.attention, productionScopeQuarantinePrefix, task.RunID); err != nil {
 		return productionTaskOutcome{}, err
 	}
-	if outcome, handled, err := w.reenterRerunBaseAdvance(ctx, task, binding); err != nil || handled {
-		return outcome, err
+	if task.Successor != nil && task.Successor.ReentersUnpublishedHead() {
+		return w.retireReentryTask(ctx, task, binding)
 	}
 	scratch, err := os.MkdirTemp(w.workDir, ".production-publication-")
 	if err != nil {
@@ -2697,22 +2699,16 @@ func (w *productionPublicationWorkflow) reconcileTask(
 	}
 	// FetchBase deliberately leaves the import worktree empty. Discover
 	// instructions in a separate materialization of its pinned base, before
-	// importing any candidate-controlled files into the original checkout. A
-	// re-entry before publication reviews at a newer base and composes them
-	// there instead.
-	var reviewInstructions exec.ReviewInstructionBinding
-	if !task.reentersBeforePublication() {
-		var held *productionTaskOutcome
-		reviewInstructions, held, err = w.exactBaseReviewInstructions(
-			ctx, task, checkout, filepath.Join(scratch, "base-instructions"),
-			binding.admission.Base.BaseSHA,
-		)
-		if err != nil || held != nil {
-			if held != nil {
-				return *held, nil
-			}
-			return productionTaskOutcome{}, err
+	// importing any candidate-controlled files into the original checkout.
+	reviewInstructions, held, err := w.exactBaseReviewInstructions(
+		ctx, task, checkout, filepath.Join(scratch, "base-instructions"),
+		binding.admission.Base.BaseSHA,
+	)
+	if err != nil || held != nil {
+		if held != nil {
+			return *held, nil
 		}
+		return productionTaskOutcome{}, err
 	}
 	handoffDir := filepath.Join(scratch, "handoff")
 	if err := w.materializeReplay(binding.replay, handoffDir); err != nil {
@@ -2752,10 +2748,6 @@ func (w *productionPublicationWorkflow) reconcileTask(
 	}
 	if task.continuation != nil {
 		return w.startPublicationContinuation(ctx, task, checkoutDir)
-	}
-	if task.reentersBeforePublication() {
-		return w.reconcileUnpublishedReentry(ctx, task, binding, checkout, checkoutDir, imported,
-			filepath.Join(scratch, "base-instructions"))
 	}
 	if binding.remediation != nil {
 		sourceTree, err := w.loadRemediationSourceTree(ctx, task, binding, checkoutDir)
@@ -2839,6 +2831,9 @@ func (w *productionPublicationWorkflow) reconcileTask(
 			candidate, err := w.productionCandidate(ctx, task, binding, checkpoint, adoptedProfile, nil, report)
 			if err != nil {
 				return w.holdPublicMetadataTask(ctx, task, checkpoint.Imported, err)
+			}
+			if err := w.applySealedHandoffCheck(ctx, task, &candidate); err != nil {
+				return productionTaskOutcome{}, err
 			}
 			if err := w.bindSuccessorCandidate(ctx, task, &candidate); err != nil {
 				return productionTaskOutcome{}, err
@@ -3006,6 +3001,13 @@ func (w *productionPublicationWorkflow) reconcileTask(
 	if err := persistReadiness(ctx); err != nil {
 		return productionTaskOutcome{}, err
 	}
+	// Handoff (plan §6, §7, revision 110): resolve the target's tip and, when
+	// it moved past the evidence base, verify the head merged into it. No
+	// review runs here; the head is the one review passed.
+	handoff, heldHandoff, err := w.reconcileHandoff(ctx, task, binding, checkout, checkoutDir, checkpoint)
+	if err != nil || heldHandoff != nil {
+		return derefOutcome(heldHandoff), err
+	}
 	adoptedProfile, adoptedErr := w.adoptedReviewProfileDigest(ctx, binding)
 	if adoptedErr != nil {
 		return productionTaskOutcome{}, adoptedErr
@@ -3024,11 +3026,13 @@ func (w *productionPublicationWorkflow) reconcileTask(
 		return productionTaskOutcome{}, productionPublicationRetryableError(err)
 	}
 	// Admit the source-issue-closure proposal for this reviewed candidate and
-	// bind the merge observed now, right after the author run where the author
-	// input is available (§7 order). It is idempotent and never blocks: a source
-	// that is not closable records a durable no-close answer (issue #1419 Part D).
+	// bind the merge into the tip the handoff checked, right after the author
+	// run where the author input is available (§7 order). It is idempotent and
+	// never blocks: a source that is not closable records a durable no-close
+	// answer (issue #1419 Part D). An approval bound to an earlier base never
+	// authorizes a Closes against the checked tip.
 	if err := w.reconcilePublicationClosure(
-		ctx, task, binding, binding.admission.Base.BaseSHA, checkpoint, reviewInstructions, checkoutDir, report,
+		ctx, task, binding, handoff.TipSHA, checkpoint, reviewInstructions, checkoutDir, report,
 	); err != nil {
 		return productionTaskOutcome{}, productionPublicationRetryableError(err)
 	}
@@ -3036,6 +3040,8 @@ func (w *productionPublicationWorkflow) reconcileTask(
 	if err != nil {
 		return w.holdPublicMetadataTask(ctx, task, checkpoint.Imported, err)
 	}
+	candidate.BaseSHA = handoff.TipSHA
+	candidate.HandoffCheck = &handoff
 	if err := w.bindSuccessorCandidate(ctx, task, &candidate); err != nil {
 		return productionTaskOutcome{}, err
 	}
@@ -3112,15 +3118,11 @@ func (w *productionPublicationWorkflow) reconcileTask(
 					domain.HoldTrustBlocked,
 				)
 			}
+			// An unsatisfied handoff check here is the daemon contradicting
+			// its own seal, never a moved tip: the handoff above verified the
+			// tip it sealed. It blocks with the base-advance rule all the same.
 			reason := productionBlockTrust
-			if errors.Is(err, publish.ErrTargetBaseAdvanced) {
-				outcome, handled, sealErr := w.sealUnpublishedReentry(ctx, task, binding.run, checkpoint)
-				if sealErr != nil {
-					return productionTaskOutcome{}, errors.Join(err, sealErr)
-				}
-				if handled {
-					return outcome, nil
-				}
+			if errors.Is(err, publish.ErrHandoffCheckUnsatisfied) {
 				reason = productionBlockBaseAdvanced
 			}
 			outcome, blockErr := w.completeBlockedTask(
@@ -5749,6 +5751,9 @@ func (w *productionPublicationWorkflow) recoverDefinitiveBlockedTask(
 		productionBlockVerification,
 		productionBlockTrust,
 		productionBlockBaseAdvanced,
+		productionBlockHandoffConflict,
+		productionBlockHandoffVerification,
+		productionBlockReentryRetired,
 		productionBlockReentryConflict,
 		productionBlockReentryVerification,
 		productionBlockReentryRoundLimit,
@@ -5768,8 +5773,21 @@ func (w *productionPublicationWorkflow) recoverDefinitiveBlockedTask(
 				current.ID, domain.ErrParentKeyMismatch)
 		}
 		artifacts = checkpoint.Artifacts
-	case productionBlockTrust, productionBlockBaseAdvanced, productionBlockReentryConflict,
-		productionBlockReentryVerification, productionBlockReentryRoundLimit:
+	case productionBlockReentryRetired:
+		// A retired re-entry is ended before any checkpoint is read, with no
+		// evidence.
+	case productionBlockHandoffVerification:
+		if !checkpointFound || !checkpoint.Authorization.AuthorizesPublication {
+			return nil, fmt.Errorf("production blocked item %q has an impossible handoff reason: %w",
+				current.ID, domain.ErrParentKeyMismatch)
+		}
+		handoffArtifacts, err := w.handoffBlockArtifacts(ctx, task, binding)
+		if err != nil {
+			return nil, err
+		}
+		artifacts = handoffArtifacts
+	case productionBlockTrust, productionBlockBaseAdvanced, productionBlockHandoffConflict,
+		productionBlockReentryConflict, productionBlockReentryVerification, productionBlockReentryRoundLimit:
 		if !checkpointFound || !checkpoint.Authorization.AuthorizesPublication {
 			return nil, fmt.Errorf("production blocked item %q has an impossible publication reason: %w",
 				current.ID, domain.ErrParentKeyMismatch)

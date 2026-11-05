@@ -905,33 +905,7 @@ func testDispositionHistory(
 	}); err != nil {
 		t.Fatal(err)
 	}
-	var run domain.Run
-	if err := st.Read(t.Context(), func(tx *store.ReadTx) error {
-		var err error
-		run, err = tx.GetRun(t.Context(), runID)
-		return err
-	}); err != nil {
-		t.Fatal(err)
-	}
-	generation := st.VerificationFloorRegistryGeneration()
-	setDigest, err := domain.ProductionRequirementSetDigest(generation)
-	if err != nil {
-		t.Fatal(err)
-	}
-	definitions := domain.ProductionRequirementDefinitions()
-	resolutions := make([]domain.RequirementResolution, 0, len(definitions))
-	for _, definition := range definitions {
-		resolution, err := domain.NewRequirementResolution(domain.RequirementResolutionInput{
-			RequirementKey: definition.Key, CheckClass: definition.Class,
-			Kind: definition.Kind, Applicable: definition.Applicable,
-			BaseDependent: definition.BaseDependent, RequirementSetDigest: setDigest,
-			FloorRegistryGeneration: generation, ResolvedPolicyDigest: run.PolicyDigest,
-		})
-		if err != nil {
-			t.Fatal(err)
-		}
-		resolutions = append(resolutions, resolution)
-	}
+	resolutions := testProductionResolutions(t, st, runID)
 	base := domain.BaseRevision{
 		Repo: candidate.Repo, RepositoryID: profile.RepositoryID,
 		BaseRef: candidate.BaseRef, BaseSHA: auth.BaseSHA,
@@ -977,6 +951,65 @@ func testDispositionHistory(
 		t.Fatal(err)
 	}
 	return &history
+}
+
+// testProductionResolutions are the run's production readiness
+// requirements, resolved as the engine resolves them.
+func testProductionResolutions(t *testing.T, st *store.Store, runID domain.RunID) []domain.RequirementResolution {
+	t.Helper()
+	var run domain.Run
+	if err := st.Read(t.Context(), func(tx *store.ReadTx) error {
+		var err error
+		run, err = tx.GetRun(t.Context(), runID)
+		return err
+	}); err != nil {
+		t.Fatal(err)
+	}
+	generation := st.VerificationFloorRegistryGeneration()
+	setDigest, err := domain.ProductionRequirementSetDigest(generation)
+	if err != nil {
+		t.Fatal(err)
+	}
+	definitions := domain.ProductionRequirementDefinitions()
+	resolutions := make([]domain.RequirementResolution, 0, len(definitions))
+	for _, definition := range definitions {
+		resolution, err := domain.NewRequirementResolution(domain.RequirementResolutionInput{
+			RequirementKey: definition.Key, CheckClass: definition.Class,
+			Kind: definition.Kind, Applicable: definition.Applicable,
+			BaseDependent: definition.BaseDependent, RequirementSetDigest: setDigest,
+			FloorRegistryGeneration: generation, ResolvedPolicyDigest: run.PolicyDigest,
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		resolutions = append(resolutions, resolution)
+	}
+	return resolutions
+}
+
+// withTestHandoff gives an execution candidate its disposition history and
+// seals its handoff at an unchanged tip: the base its authorization binds.
+func withTestHandoff(t *testing.T, st *store.Store, candidate *publish.Candidate) {
+	t.Helper()
+	candidate.DispositionHistory = testDispositionHistory(t, st, *candidate)
+	if candidate.AuthorizationID == nil {
+		t.Fatal("test handoff candidate has no authorization")
+	}
+	check := domain.HandoffCheck{
+		RunID: candidate.RunID, PublicationID: candidate.InvocationID, HeadSHA: candidate.HeadSHA,
+	}
+	if err := st.WriteInternal(t.Context(), func(tx *store.InternalTx) error {
+		auth, err := tx.GetCandidateAuthorization(t.Context(), *candidate.AuthorizationID)
+		if err != nil {
+			return err
+		}
+		check.EvidenceBaseSHA, check.TipSHA = auth.BaseSHA, auth.BaseSHA
+		return tx.SealHandoffTip(t.Context(), check, fixtureTime)
+	}); err != nil {
+		t.Fatalf("seal test handoff: %v", err)
+	}
+	candidate.BaseSHA = check.TipSHA
+	candidate.HandoffCheck = &check
 }
 
 // newTestPublisher wires a publisher whose drift gate passes for
@@ -1975,7 +2008,7 @@ func TestConvergeOutcomeRepairsExactDispositionHistoryWithoutCreating(t *testing
 	seedDecisionRecords(t, st)
 	candidate := testCandidate(t)
 	candidate.RunID = "run-converge-history"
-	candidate.DispositionHistory = testDispositionHistory(t, st, candidate)
+	withTestHandoff(t, st, &candidate)
 	seedRepairIntent(t, st, candidate)
 	identity := testCandidateIdentity(t)
 	outcome := fixtureOutcome()
@@ -2039,7 +2072,7 @@ func TestConvergeOutcomeRefusesTrustDriftBeforeRepair(t *testing.T) {
 	seedDecisionRecords(t, st)
 	candidate := testCandidate(t)
 	candidate.RunID = "run-converge-trust-drift"
-	candidate.DispositionHistory = testDispositionHistory(t, st, candidate)
+	withTestHandoff(t, st, &candidate)
 	seedRepairIntent(t, st, candidate)
 	identity := testCandidateIdentity(t)
 	outcome := fixtureOutcome()
@@ -2120,7 +2153,7 @@ func TestConvergeOutcomeRevalidatesDispositionHistoryBeforeRepair(t *testing.T) 
 	seedDecisionRecords(t, st)
 	candidate := testCandidate(t)
 	candidate.RunID = "run-converge-late-review"
-	candidate.DispositionHistory = testDispositionHistory(t, st, candidate)
+	withTestHandoff(t, st, &candidate)
 	seedRepairIntent(t, st, candidate)
 	identity := testCandidateIdentity(t)
 	outcome := fixtureOutcome()
@@ -2169,7 +2202,7 @@ func TestConvergeOutcomeRevalidatesPersistedReadinessProofsBeforeRepair(t *testi
 	seedDecisionRecords(t, st)
 	candidate := testCandidate(t)
 	candidate.RunID = "run-converge-missing-proof"
-	candidate.DispositionHistory = testDispositionHistory(t, st, candidate)
+	withTestHandoff(t, st, &candidate)
 	seedRepairIntent(t, st, candidate)
 	identity := testCandidateIdentity(t)
 	outcome := fixtureOutcome()

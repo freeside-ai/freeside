@@ -3,7 +3,6 @@ package integration_test
 import (
 	"encoding/json"
 	"fmt"
-	"strings"
 	"testing"
 	"time"
 
@@ -16,20 +15,20 @@ import (
 // newClosureGateHarness is a candidate for issue #82 under the closure human
 // gate, its export recorded and nothing published yet. Each publication cycle
 // asks both author sites once, so the sites are scripted for two cycles.
-func newClosureGateHarness(t *testing.T, extraKeys ...domain.PolicyKey) *productionPublicationHarness {
+func newClosureGateHarness(t *testing.T) *productionPublicationHarness {
 	t.Helper()
 	metadata := productionPublicationMetadata()
 	metadata.Title, metadata.Body = "", ""
 	metadata.Recipe = "freeside.client-publication/v2"
 	metadata.SourceIssue = "https://github.com/" + fakePublicationRepo + "/issues/82"
-	// The production manifests let the re-entry re-verify on the advanced base.
+	// The production manifests let the handoff verify the merge into an advanced tip.
 	h := newPublicationHarnessWithBaseFiles(
 		t, []byte(`{"commands":[["/usr/bin/true"]],"capture":"none"}`), productionBaseManifests())
-	keys := append([]domain.PolicyKey{{
+	keys := []domain.PolicyKey{{
 		Key: "gates.source_issue_closure", Value: "true", Provenance: domain.KeyProvenance{
 			Source: domain.ProvenanceOverride, Digest: submissionDigest("closure-gate", "policy-source"),
 		},
-	}}, extraKeys...)
+	}}
 	p := newAuthoredMetadataHarnessFromBase(t, h, metadata, keys, nil)
 	p.replay = withPublicAccount(t, p, p.replay, publicAccount)
 	explain := inferencefake.Script{Response: inference.Response{Output: []byte(authoredExplainOutput), ComputeUnits: 5}}
@@ -94,41 +93,14 @@ func (p *productionPublicationHarness) openClosureMerge(t *testing.T, publicatio
 	return *merge
 }
 
-// requireRetiredClosure checks the run's only closed closure card was
-// superseded by the daemon with a reason containing want.
-func requireRetiredClosure(t *testing.T, closed []domain.AttentionItem, want string) {
-	t.Helper()
-	if len(closed) != 1 {
-		t.Fatalf("closed closure cards = %d, want 1", len(closed))
-	}
-	conclusion := closed[0].Conclusion
-	if closed[0].Status != domain.StatusSuperseded || conclusion == nil ||
-		conclusion.Cause != domain.ConcludedBySupersession || !strings.Contains(conclusion.Reason, want) {
-		t.Fatalf("retired closure card = %s %+v, want superseded naming %q", closed[0].Status, conclusion, want)
-	}
-}
-
-// TestBaseAdvanceRetiresTheReplacedClosureCard: the first publication opens
-// its closure card at the admitted base, the publisher refuses the advanced
-// base, and the re-entry seal retires that card. The re-entry then opens its
-// own card at the advanced base, so one card is open, naming the current
-// merge.
-func TestBaseAdvanceRetiresTheReplacedClosureCard(t *testing.T) {
+// TestHandoffOpensTheClosureCardAtTheTip: a target that advanced before the
+// first publication's handoff never re-enters, so no card is retired: the
+// publication opens its one card binding the head's merge into the tip.
+func TestHandoffOpensTheClosureCardAtTheTip(t *testing.T) {
 	t.Parallel()
 	p := newClosureGateHarness(t)
 	advanced, _ := p.advanceBaseBeforePublication(t, "UPSTREAM.md", "upstream change\n")
-	p.scriptCleanReview(2, advanced, p.replay.HeadSHA)
-
-	if _, err := p.reconcileLanes(); err != nil {
-		t.Fatal(err)
-	}
-	successor := p.unpublishedReentry(t, advanced)
 	open, closed := p.closureCards(t)
-	if len(open) != 0 {
-		t.Fatalf("open closure cards after the re-entry seal = %d, want 0", len(open))
-	}
-	requireRetiredClosure(t, closed, "target base advanced")
-
 	for pass := 0; pass < 6 && len(open) == 0; pass++ {
 		p.now = p.now.Add(time.Minute)
 		if _, err := p.reconcileLanes(); err != nil {
@@ -136,40 +108,34 @@ func TestBaseAdvanceRetiresTheReplacedClosureCard(t *testing.T) {
 		}
 		open, closed = p.closureCards(t)
 	}
-	if len(open) != 1 || len(closed) != 1 {
-		t.Fatalf("closure cards after the re-entry published = %d open, %d closed, want 1 and 1",
-			len(open), len(closed))
+	if len(open) != 1 || len(closed) != 0 {
+		t.Fatalf("closure cards after the handoff = %d open, %d closed, want 1 and 0", len(open), len(closed))
 	}
-	merge := p.openClosureMerge(t, successor.PublicationID())
+	merge := p.openClosureMerge(t, domain.ProductionPublicationInvocationID(p.runID))
 	if merge.BaseSHA != advanced || merge.CandidateHeadSHA != p.replay.HeadSHA {
 		t.Fatalf("open closure card binds %+v, want head %s into %s", merge, p.replay.HeadSHA, advanced)
 	}
 }
 
-// TestBlockedPublicationRetiresItsClosureCard: a run with no review round
-// left cannot re-enter after the base advance, so its publication completes
-// blocked and the card it opened is retired with the blocked reason.
-func TestBlockedPublicationRetiresItsClosureCard(t *testing.T) {
+// TestHandoffBlockOpensNoClosureCard: the handoff runs before the
+// publication proposes its close, so a head that conflicts with the tip ends
+// the run blocked with no card opened against a merge that does not exist.
+func TestHandoffBlockOpensNoClosureCard(t *testing.T) {
 	t.Parallel()
-	p := newClosureGateHarness(t, domain.PolicyKey{
-		Key: "review.hard_round_limit", Value: "1",
-		Provenance: domain.KeyProvenance{
-			Source: domain.ProvenanceOverride,
-			Digest: submissionDigest("run-production-publication", "review-hard-round-limit"),
-		},
-	})
-	p.advanceBaseBeforePublication(t, "UPSTREAM.md", "upstream change\n")
-
-	result, err := p.reconcileLanes()
-	if err != nil {
-		t.Fatal(err)
+	p := newClosureGateHarness(t)
+	p.advanceBaseBeforePublication(t, "README.md", "conflicting upstream change\n")
+	blocked := 0
+	for range 3 {
+		result, err := p.reconcileLanes()
+		if err != nil {
+			t.Fatal(err)
+		}
+		blocked += result.BlockedItemsCreated
 	}
-	if result.BlockedItemsCreated != 1 {
-		t.Fatalf("round-limit result = %#v, want one blocked item", result)
+	if blocked != 1 {
+		t.Fatalf("conflicting handoff created %d blocked items, want 1", blocked)
 	}
-	open, closed := p.closureCards(t)
-	if len(open) != 0 {
-		t.Fatalf("open closure cards after the blocked publication = %d, want 0", len(open))
+	if open, closed := p.closureCards(t); len(open) != 0 || len(closed) != 0 {
+		t.Fatalf("closure cards after the blocked handoff = %d open, %d closed, want none", len(open), len(closed))
 	}
-	requireRetiredClosure(t, closed, "the publication was blocked")
 }
