@@ -2635,13 +2635,16 @@ struct DecisionDetailView: View {
     private func detailRows(
         _ item: Components.Schemas.AttentionItem
     ) -> [AttentionDisplay.BindingRow] {
-        var rows = AttentionDisplay.detailBindingRows(
+        var rows = AttentionDisplay.detailIdentifierRows(
             item,
             priorProposalDigest: model.proposalFacts?.supersedes?.value1.proposal_digest
                 ?? model.effectProposalFacts?.supersedes?.value1.proposal_digest,
             proposalDigest: model.proposalFacts?.proposal_digest
                 ?? model.effectProposalFacts?.proposal_digest
         )
+        // The reading rows draw after the identifiers until the card's foot
+        // gives them a place of their own.
+        rows += AttentionDisplay.detailReadingRows(item)
         // The card's "Bound to" row abbreviates the head and base to eight
         // characters, but the approval authorizes this exact prospective
         // merge, so Details keeps the full head, base ref and SHA, and

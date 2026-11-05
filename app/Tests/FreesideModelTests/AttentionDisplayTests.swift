@@ -416,16 +416,16 @@ import Testing
         #expect(AttentionDisplay.cardFacts(blocked, now: now)[1] == .init("Blocked on", "PR checks"))
 
         // The card reads the wait as a duration in the register the inbox row
-        // uses; the exact instant stays among the technical bindings.
+        // uses; the exact instant stays among the identifiers.
         #expect(AttentionDisplay.cardFacts(blocked, now: now)[0].value == "18h")
         #expect(
-            AttentionDisplay.detailBindingRows(blocked)
+            AttentionDisplay.detailIdentifierRows(blocked)
                 .contains { $0.label == "Waiting Since" && $0.value.hasPrefix("2026-") })
     }
 
     /// Survey frame 5.5: a blocked card leads with the wait its typed facts
     /// name and links to the item the run waits on. That item's id is a
-    /// binding, so Details keep it (R17).
+    /// binding, so the Identifiers keep it (R17).
     @Test func aBlockedCardLeadsWithItsTypedWaitAndLinksTheBlockingItem() throws {
         let now = AttentionFixtures.createdInstant.addingTimeInterval(18 * 3_600)
         var blocked = AttentionFixtures.fixture(type: .blocked).item
@@ -439,7 +439,7 @@ import Testing
                     .init("Blocked on", "Specification approval", linkingItem: blockingItem),
                 ])
         #expect(
-            AttentionDisplay.detailBindingRows(blocked)
+            AttentionDisplay.detailIdentifierRows(blocked)
                 .contains(.init(label: "Blocking Item", value: blockingItem)))
 
         blocked.blocked_on = nil
@@ -694,65 +694,67 @@ import Testing
         #expect(digests == item.evidence_snapshot.dropLast().map(\.digest))
     }
 
-    @Test func detailBindingsIncludeEveryPresentPosture() {
+    /// The posture reads in words, so it sits with the reading rows.
+    @Test func detailReadingRowsIncludeEveryPresentPosture() {
         var item = AttentionFixtures.fixture(type: .system_health).item
         for (posture, label): (Components.Schemas.HealthPosture, String) in [
             (.advisory, "Advisory"), (.blocking, "Blocking"),
         ] {
             item.posture = .init(value1: posture)
             #expect(
-                AttentionDisplay.detailBindingRows(item)
+                AttentionDisplay.detailReadingRows(item)
                     .filter { $0.label == "Posture" } == [.init(label: "Posture", value: label)])
+            #expect(!AttentionDisplay.detailIdentifierRows(item).contains { $0.label == "Posture" })
         }
         item.posture = nil
-        #expect(!AttentionDisplay.detailBindingRows(item).contains { $0.label == "Posture" })
+        #expect(!AttentionDisplay.detailReadingRows(item).contains { $0.label == "Posture" })
     }
 
-    @Test func detailBindingsKeepDistinctLabelsThatShareAValue() {
+    @Test func detailIdentifiersKeepDistinctLabelsThatShareAValue() {
         let item = AttentionFixtures.fixture(type: .review_contradiction).item
 
-        let rows = AttentionDisplay.detailBindingRows(item)
+        let rows = AttentionDisplay.detailIdentifierRows(item)
 
         #expect(rows.contains(.init(label: "PR Head", value: "cafebabe")))
         #expect(rows.contains(.init(label: "Head", value: "cafebabe")))
     }
 
-    /// The diff's base and head are audit coordinates, so Details carries them
+    /// The diff's base and head are audit coordinates, so the Identifiers carry them
     /// whatever the readiness shape. The card renders Diff alone (#1107), and
     /// the checklist's "Bound to" row needs `readiness_detail`, which the
     /// schema lets a legacy or fake-mode item omit, so without these rows a
     /// legacy item renders its diff's base nowhere at all.
-    @Test func detailBindingsCarryTheDiffBaseAndHead() {
+    @Test func detailIdentifiersCarryTheDiffBaseAndHead() {
         let item = AttentionFixtures.fixture(type: .ready_for_final_review).item
 
-        let rows = AttentionDisplay.detailBindingRows(item)
+        let rows = AttentionDisplay.detailIdentifierRows(item)
 
         #expect(rows.contains(.init(label: "Diff Base", value: "deadbeef")))
         #expect(rows.contains(.init(label: "Diff Head", value: "cafebabe")))
 
         var legacy = item
         legacy.readiness_detail = nil
-        let legacyRows = AttentionDisplay.detailBindingRows(legacy)
+        let legacyRows = AttentionDisplay.detailIdentifierRows(legacy)
 
         #expect(legacyRows.contains(.init(label: "Diff Base", value: "deadbeef")))
         #expect(legacyRows.contains(.init(label: "Diff Head", value: "cafebabe")))
         #expect(!legacyRows.contains { $0.label == "Bound Base" })
     }
 
-    @Test func detailBindingsExposeExactCreatedAndDueTimestamps() {
+    @Test func detailIdentifiersExposeExactCreatedAndDueTimestamps() {
         var item = AttentionFixtures.fixture(type: .blocked).item
         item.expires_when = item.created_at?.addingTimeInterval(7_200)
 
-        let rows = AttentionDisplay.detailBindingRows(item)
+        let rows = AttentionDisplay.detailIdentifierRows(item)
 
         #expect(rows.contains(.init(label: "Created", value: "2026-01-02T03:04:05Z")))
         #expect(rows.contains(.init(label: "Due", value: "2026-01-02T05:04:05Z")))
     }
 
-    @Test func detailBindingsPreserveUnscopedSubjectIdentifiers() {
+    @Test func detailIdentifiersPreserveUnscopedSubjectIdentifiers() {
         let item = AttentionFixtures.fixture(type: .system_health).item
 
-        let rows = AttentionDisplay.detailBindingRows(item)
+        let rows = AttentionDisplay.detailIdentifierRows(item)
 
         #expect(rows.contains(.init(label: "Subject", value: "system")))
     }
@@ -761,7 +763,7 @@ import Testing
         let item = AttentionFixtures.fixture(type: .task_proposal).item
         let digest = item.artifact_digests[0]
 
-        let rows = AttentionDisplay.detailBindingRows(item, proposalDigest: digest)
+        let rows = AttentionDisplay.detailIdentifierRows(item, proposalDigest: digest)
 
         #expect(rows.contains { $0.value == digest && $0.label.hasSuffix("Digest") })
         #expect(rows.contains(.init(label: "Proposal", value: digest)))
@@ -890,11 +892,14 @@ import Testing
         #expect(AttentionDisplay.title(clean) == "Ready for Final Review")
         #expect(AttentionDisplay.title(degraded) == "Ready for Final Review (Degraded)")
         #expect(
-            AttentionDisplay.readinessSummaryRows(clean) == [
-                .init(label: "Readiness", value: "Clean"),
+            AttentionDisplay.readinessIdentifierRows(clean) == [
                 .init(label: "Evaluation Set", value: "sha256:evaluation-clean"),
                 .init(label: "Bound Head", value: "cafebabe"),
                 .init(label: "Bound Base", value: "main@deadbeef"),
+            ])
+        #expect(
+            AttentionDisplay.readinessReadingRows(clean) == [
+                .init(label: "Readiness", value: "Clean"),
                 .init(
                     label: "Requirement clean-verification",
                     value: "Clean verification, Required, Passed, proof sha256:recipe"),
@@ -902,12 +907,11 @@ import Testing
                     label: "Requirement independent-review",
                     value: "Independent review, Required, Passed, proof sha256:review-config"),
             ])
-        let degradedRows = AttentionDisplay.readinessSummaryRows(degraded)
         #expect(
-            degradedRows.prefix(2) == [
-                .init(label: "Readiness", value: "Degraded"),
-                .init(label: "Evaluation Set", value: "sha256:evaluation-degraded"),
-            ])
+            AttentionDisplay.readinessIdentifierRows(degraded).first
+                == .init(label: "Evaluation Set", value: "sha256:evaluation-degraded"))
+        let degradedRows = AttentionDisplay.readinessReadingRows(degraded)
+        #expect(degradedRows.first == .init(label: "Readiness", value: "Degraded"))
         #expect(
             degradedRows.contains(
                 .init(
@@ -926,7 +930,12 @@ import Testing
 
         var legacy = clean
         legacy.readiness_detail = nil
-        #expect(AttentionDisplay.readinessSummaryRows(legacy).count == 2)
+        #expect(
+            AttentionDisplay.readinessIdentifierRows(legacy)
+                == [.init(label: "Evaluation Set", value: "sha256:evaluation-clean")])
+        #expect(
+            AttentionDisplay.readinessReadingRows(legacy)
+                == [.init(label: "Readiness", value: "Clean")])
     }
 
     @Test func readyReviewYieldRendersEveryRoundAndTerminalOutcome() {
@@ -998,10 +1007,10 @@ import Testing
     @Test func driftAuditItemsNameTheirAuditDigestInDetails() {
         let drift = AttentionFixtures.reviewDiminishing(cause: .drift_audit, verdict: .stuck).item
         #expect(
-            AttentionDisplay.detailBindingRows(drift).contains(
+            AttentionDisplay.detailIdentifierRows(drift).contains(
                 .init(label: "Drift Audit", value: "sha256:drift-audit-stuck")))
         #expect(
-            !AttentionDisplay.detailBindingRows(
+            !AttentionDisplay.detailIdentifierRows(
                 AttentionFixtures.fixture(type: .review_diminishing_returns).item
             ).contains { $0.label == "Drift Audit" })
     }
