@@ -794,3 +794,137 @@ func TestBaselineTreeRefusesAClaudeReviewerItCannotLaunch(t *testing.T) {
 		})
 	}
 }
+
+// secondClaudeRecords is a second writer subscription: another identity on
+// its own volume and account, enrolled on the writer's route.
+func secondClaudeRecords() (domain.ClientEnrollment, domain.AuthIdentity) {
+	enrollment, identity := claudeRecords()
+	enrollment.ID, enrollment.AuthIdentityID = "claude-b/claude_code", "claude-b"
+	enrollment.AccountBinding = "second@example.com"
+	identity.ID, identity.AccountBinding = "claude-b", "second@example.com"
+	identity.Interim.AuthStoreVolume = "claude-cred-second"
+	return enrollment, identity
+}
+
+func secondWriterInput(escalated bool) agentbaseline.TreeInput {
+	in := input(true)
+	second, _ := secondClaudeRecords()
+	in.SecondClaudeEnrollment = &second
+	if escalated {
+		in.SpecifierEscalated = &agentbaseline.Selection{Model: escalatedSpecifierModel, Effort: domain.EffortMax}
+	}
+	return in
+}
+
+// renderedFiles is a rendered tree's files by path.
+func renderedFiles(in agentbaseline.TreeInput) agenttree.Files {
+	return must(agenttree.Render(must(agentbaseline.Tree(in))))
+}
+
+// A second writer subscription adds a -second copy of each writer agent on
+// its own enrollment, with an offer of the same name, and nothing else: every
+// file of the one-writer tree but agents.lock and lineup is byte-identical,
+// and those two only gain lines. So a tree adopted before the second writer
+// keeps its lines, and the routing revisions and approvals that name them
+// stand. With an escalated specifier the second specifier gets an escalated
+// counterpart of its own and the one line that pairs them.
+func TestBaselineTreeAddsTheSecondWriterBesideTheFirst(t *testing.T) {
+	for name, tc := range map[string]struct {
+		escalated bool
+		golden    string
+	}{
+		"plain":     {false, "baseline_tree_second_writer"},
+		"escalated": {true, "baseline_tree_second_writer_escalated"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			in := secondWriterInput(tc.escalated)
+			golden.Assert(t, tc.golden, renderedTree(t, in))
+
+			one := in
+			one.SecondClaudeEnrollment = nil
+			first, both := renderedFiles(one), renderedFiles(in)
+			for path, body := range first {
+				switch path {
+				case "agents.lock", "lineup":
+					for _, line := range strings.SplitAfter(string(body), "\n") {
+						if line != "" && !strings.Contains(string(both[path]), line) {
+							t.Fatalf("%s lost the one-writer tree's line %q", path, line)
+						}
+					}
+				default:
+					if string(both[path]) != string(body) {
+						t.Fatalf("%s differs from the one-writer tree's:\n%s\n%s", path, both[path], body)
+					}
+				}
+			}
+
+			tree := must(agenttree.Parse(both))
+			secondEnrollment, secondIdentity := secondClaudeRecords()
+			firstEnrollment, firstIdentity := claudeRecords()
+			names := []string{
+				agentbaseline.WriterAgentName(domain.RoleSpecifier),
+				agentbaseline.WriterAgentName(domain.RoleImplementer),
+			}
+			if tc.escalated {
+				names = append(names, agentbaseline.ClaudeSpecifierEscalatedAgentName)
+			}
+			for _, name := range names {
+				firstAgent := must(tree.ResolveAgent(name, firstEnrollment, firstIdentity))
+				secondAgent := must(tree.ResolveAgent(
+					name+agentbaseline.SecondWriterAgentSuffix, secondEnrollment, secondIdentity))
+				if secondAgent.Definition.EnrollmentID != secondEnrollment.ID ||
+					secondAgent.Adapter.Digest != firstAgent.Adapter.Digest ||
+					secondAgent.Offer.Digest != firstAgent.Offer.Digest ||
+					secondAgent.Definition.Effort != firstAgent.Definition.Effort {
+					t.Fatalf("second agent %s = %+v on offer %+v, beside %+v", secondAgent.Definition.Name,
+						secondAgent.Definition, secondAgent.Offer, firstAgent.Definition)
+				}
+				// Each agent resolves only under its own identity's records.
+				if _, err := tree.ResolveAgent(
+					name+agentbaseline.SecondWriterAgentSuffix, firstEnrollment, firstIdentity); err == nil {
+					t.Fatalf("second agent %s resolved under the first enrollment", name)
+				}
+			}
+
+			lineup := must(tree.ResolveLineup())
+			secondSpecifier := agentbaseline.WriterAgentName(domain.RoleSpecifier) + agentbaseline.SecondWriterAgentSuffix
+			counterpart, ok := lineup.EscalatedCounterpart(domain.RoleSpecifier, secondSpecifier)
+			if ok != tc.escalated {
+				t.Fatalf("second specifier's escalated counterpart = %+v, %t", counterpart, ok)
+			}
+			if tc.escalated {
+				line, _ := lineup.Line(domain.RoleSpecifier)
+				if counterpart.AgentName != agentbaseline.ClaudeSpecifierEscalatedAgentName+agentbaseline.SecondWriterAgentSuffix ||
+					counterpart.PromptDigest != line.PromptDigest {
+					t.Fatalf("second escalated line = %+v beside the specifier line %+v", counterpart, line)
+				}
+			}
+			for _, role := range agentbaseline.WriterRoles {
+				if line, _ := lineup.Line(role); strings.HasSuffix(line.AgentName, agentbaseline.SecondWriterAgentSuffix) {
+					t.Fatalf("role %s line names the second writer's agent %s", role, line.AgentName)
+				}
+			}
+		})
+	}
+}
+
+func TestBaselineTreeRefusesASecondWriterThatIsNotASecondSubscription(t *testing.T) {
+	first, _ := claudeRecords()
+	codex, _ := codexRecords()
+	for name, edit := range map[string]func(*domain.ClientEnrollment){
+		"the first enrollment": func(e *domain.ClientEnrollment) { *e = first },
+		"the first identity":   func(e *domain.ClientEnrollment) { e.AuthIdentityID = first.AuthIdentityID },
+		"a codex enrollment":   func(e *domain.ClientEnrollment) { *e = codex },
+		"another route":        func(e *domain.ClientEnrollment) { e.Route = "anthropic_other" },
+	} {
+		t.Run(name, func(t *testing.T) {
+			in := secondWriterInput(false)
+			second := *in.SecondClaudeEnrollment
+			edit(&second)
+			in.SecondClaudeEnrollment = &second
+			if _, err := agentbaseline.Tree(in); err == nil {
+				t.Fatal("Tree accepted the second enrollment")
+			}
+		})
+	}
+}

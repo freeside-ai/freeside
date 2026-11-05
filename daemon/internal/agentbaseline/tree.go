@@ -53,6 +53,15 @@ type TreeInput struct {
 	// escalated line pairing the specifier's agent with it. It must differ
 	// from the specifier's own selection, or escalation would change nothing.
 	SpecifierEscalated *Selection
+	// SecondClaudeEnrollment is a second writer subscription's claude_code
+	// enrollment (#2653), or nil for none. When set, the tree carries a
+	// second copy of every writer agent on it, named with
+	// SecondWriterAgentSuffix, each with an offer of the same name, and,
+	// with SpecifierEscalated, a second escalated counterpart and its line.
+	// The second copies get no role lines: the routing policy reaches them
+	// through task lines. It must be another identity's enrollment on the
+	// first one's route.
+	SecondClaudeEnrollment *domain.ClientEnrollment
 	// ReviewModel is the route model id of the review offer, and
 	// ReviewEffort the effort the review agent asks. A review launch always
 	// passes both, so a tree with a review enrollment needs an effort other
@@ -95,6 +104,11 @@ func WriterAgentName(role domain.RoleName) string {
 	return "claude-code-" + string(role)
 }
 
+// SecondWriterAgentSuffix ends the name of each writer agent the second
+// writer subscription runs: the first identity's agent name plus this, such
+// as claude-code-implementer-second.
+const SecondWriterAgentSuffix = "-second"
+
 // reviewRoleAgents fixes which baseline agent runs each review role, in
 // lineup order after the writer roles. The shadow reviewer has its own agent
 // on the Claude enrollment: the shadow arm runs under the implementation
@@ -127,6 +141,9 @@ func Tree(in TreeInput) (agenttree.Tree, error) {
 	if in.ClaudeEnrollment.HarnessClient != domain.HarnessClientClaudeCode {
 		return agenttree.Tree{}, errors.New("baseline tree: the Claude enrollment is not a claude_code enrollment")
 	}
+	if err := checkSecondClaudeEnrollment(in); err != nil {
+		return agenttree.Tree{}, err
+	}
 	claudeAdapter, err := ClaudeWardAdapter()
 	if err != nil {
 		return agenttree.Tree{}, err
@@ -145,13 +162,35 @@ func Tree(in TreeInput) (agenttree.Tree, error) {
 		Routes:   []agenttree.Route{{Name: in.ClaudeEnrollment.Route, Fragment: claudeRoute}},
 		Adapters: []agenttree.Adapter{{Name: ClaudeAdapterName, Fragment: claudeAdapter}},
 	}
-	wardRoleAgents, err := addClaudeWriters(&tree, in)
+	wardRoleAgents, err := addClaudeWriters(&tree, in, in.ClaudeEnrollment, "")
 	if err != nil {
 		return agenttree.Tree{}, err
 	}
 	if in.SpecifierEscalated != nil {
-		if err := addClaudeSpecifierEscalated(&tree, in); err != nil {
+		if err := addClaudeSpecifierEscalated(&tree, in, in.ClaudeEnrollment, ""); err != nil {
 			return agenttree.Tree{}, err
+		}
+	}
+	// The second identity's writer agents exist for the routing policy to
+	// name; only its specifier's escalated pair gets a line, because the
+	// escalated line is how the lineup pairs an agent with its counterpart.
+	var secondSpecifier string
+	if in.SecondClaudeEnrollment != nil {
+		second, err := addClaudeWriters(&tree, in, *in.SecondClaudeEnrollment, SecondWriterAgentSuffix)
+		if err != nil {
+			return agenttree.Tree{}, err
+		}
+		for _, entry := range second {
+			if entry.role == domain.RoleSpecifier {
+				secondSpecifier = entry.agent
+			}
+		}
+		if in.SpecifierEscalated != nil {
+			if err := addClaudeSpecifierEscalated(
+				&tree, in, *in.SecondClaudeEnrollment, SecondWriterAgentSuffix,
+			); err != nil {
+				return agenttree.Tree{}, err
+			}
 		}
 	}
 	for _, entry := range reviewRoleAgents {
@@ -208,11 +247,19 @@ func Tree(in TreeInput) (agenttree.Tree, error) {
 			},
 		})
 		if entry.role == domain.RoleSpecifier && in.SpecifierEscalated != nil {
-			line, err := escalatedSpecifierLine(agent, digests[ClaudeSpecifierEscalatedAgentName], prompt)
+			line, err := escalatedSpecifierLine(agent, ClaudeSpecifierEscalatedAgentName, digests, prompt)
 			if err != nil {
 				return agenttree.Tree{}, err
 			}
 			tree.Lineup = append(tree.Lineup, line)
+			if secondSpecifier != "" {
+				line, err := escalatedSpecifierLine(secondSpecifier,
+					ClaudeSpecifierEscalatedAgentName+SecondWriterAgentSuffix, digests, prompt)
+				if err != nil {
+					return agenttree.Tree{}, err
+				}
+				tree.Lineup = append(tree.Lineup, line)
+			}
 		}
 	}
 	if in.SpecifierEscalated != nil {
@@ -253,13 +300,36 @@ type roleAgent struct {
 	agent string
 }
 
+// checkSecondClaudeEnrollment refuses a second writer enrollment that is not
+// another identity's claude_code enrollment on the first one's route. One
+// identity under both would be one usage pool under two names, and adoption
+// gives every Claude enrollment one route.
+func checkSecondClaudeEnrollment(in TreeInput) error {
+	second := in.SecondClaudeEnrollment
+	switch {
+	case second == nil:
+		return nil
+	case second.HarnessClient != domain.HarnessClientClaudeCode:
+		return errors.New("baseline tree: the second Claude enrollment is not a claude_code enrollment")
+	case second.ID == in.ClaudeEnrollment.ID || second.AuthIdentityID == in.ClaudeEnrollment.AuthIdentityID:
+		return fmt.Errorf("baseline tree: the second Claude enrollment %s is the first writer's identity", second.ID)
+	case second.Route != in.ClaudeEnrollment.Route:
+		return fmt.Errorf("baseline tree: the second Claude enrollment names route %q, not the writer's %q",
+			second.Route, in.ClaudeEnrollment.Route)
+	}
+	return nil
+}
+
 // addClaudeWriters adds one writer agent per distinct model and effort the
-// writer roles ask, each on the Claude ward adapter and a pinned offer of its
-// own, and returns which agent each writer role's line names. The ward
+// writer roles ask, each on the enrollment, the Claude ward adapter, and a
+// pinned offer of its own, and returns which agent each writer role's line
+// names. Each agent and offer is named WriterAgentName plus suffix. The ward
 // launch passes the offer's model and the agent's effort (#1618), so a
 // selection that names neither is refused here rather than written as a
 // line the daemon then runs on the CLI's default.
-func addClaudeWriters(tree *agenttree.Tree, in TreeInput) ([]roleAgent, error) {
+func addClaudeWriters(
+	tree *agenttree.Tree, in TreeInput, enrollment domain.ClientEnrollment, suffix string,
+) ([]roleAgent, error) {
 	agents := map[Selection]string{}
 	var lines []roleAgent
 	for _, role := range WriterRoles {
@@ -274,7 +344,7 @@ func addClaudeWriters(tree *agenttree.Tree, in TreeInput) ([]roleAgent, error) {
 			lines = append(lines, roleAgent{role, name})
 			continue
 		}
-		name := WriterAgentName(role)
+		name := WriterAgentName(role) + suffix
 		offer, err := sealOffer(domain.OfferFragment{
 			EncodingVersion: domain.AgentFragmentEncodingVersion,
 			RouteModelID:    selection.Model, LineageGroup: "anthropic",
@@ -286,22 +356,25 @@ func addClaudeWriters(tree *agenttree.Tree, in TreeInput) ([]roleAgent, error) {
 			return nil, err
 		}
 		tree.Agents = append(tree.Agents, domain.AgentSource{
-			Name: name, Enrollment: string(in.ClaudeEnrollment.ID),
-			Route: in.ClaudeEnrollment.Route, Adapter: ClaudeAdapterName,
+			Name: name, Enrollment: string(enrollment.ID),
+			Route: enrollment.Route, Adapter: ClaudeAdapterName,
 			Offer: name, Effort: selection.Effort,
 		})
-		tree.Offers = append(tree.Offers, agenttree.Offer{Route: in.ClaudeEnrollment.Route, Name: name, Fragment: offer})
+		tree.Offers = append(tree.Offers, agenttree.Offer{Route: enrollment.Route, Name: name, Fragment: offer})
 		agents[selection] = name
 		lines = append(lines, roleAgent{role, name})
 	}
 	return lines, nil
 }
 
-// addClaudeSpecifierEscalated adds the specifier's escalated counterpart and
-// the offer only it names. It shares the writer agents' enrollment, route,
-// and adapter, as the pairing rule requires: escalation changes the model
-// and effort, never the credential or the launch.
-func addClaudeSpecifierEscalated(tree *agenttree.Tree, in TreeInput) error {
+// addClaudeSpecifierEscalated adds the specifier's escalated counterpart on
+// the enrollment and the offer only it names, both named
+// ClaudeSpecifierEscalatedAgentName plus suffix. It shares the enrollment's
+// writer agents' route and adapter, as the pairing rule requires: escalation
+// changes the model and effort, never the credential or the launch.
+func addClaudeSpecifierEscalated(
+	tree *agenttree.Tree, in TreeInput, enrollment domain.ClientEnrollment, suffix string,
+) error {
 	selection := *in.SpecifierEscalated
 	if selection.Model == "" || selection.Model == domain.ClaudeCodeNativeDefaultRouteModelID {
 		return fmt.Errorf("baseline tree: escalated specifier model %q names no model", selection.Model)
@@ -323,20 +396,23 @@ func addClaudeSpecifierEscalated(tree *agenttree.Tree, in TreeInput) error {
 	if err != nil {
 		return err
 	}
+	name := ClaudeSpecifierEscalatedAgentName + suffix
 	tree.Agents = append(tree.Agents, domain.AgentSource{
-		Name: ClaudeSpecifierEscalatedAgentName, Enrollment: string(in.ClaudeEnrollment.ID),
-		Route: in.ClaudeEnrollment.Route, Adapter: ClaudeAdapterName,
-		Offer: ClaudeSpecifierEscalatedAgentName, Effort: selection.Effort,
+		Name: name, Enrollment: string(enrollment.ID),
+		Route: enrollment.Route, Adapter: ClaudeAdapterName,
+		Offer: name, Effort: selection.Effort,
 	})
 	tree.Offers = append(tree.Offers, agenttree.Offer{
-		Route: in.ClaudeEnrollment.Route, Name: ClaudeSpecifierEscalatedAgentName, Fragment: offer,
+		Route: enrollment.Route, Name: name, Fragment: offer,
 	})
 	return nil
 }
 
 // escalatedSpecifierLine is the lineup row pairing the specifier's agent with
 // its escalated counterpart, under the specifier line's prompt.
-func escalatedSpecifierLine(specifierAgent string, digest domain.Digest, prompt Prompt) (agenttree.LineupLine, error) {
+func escalatedSpecifierLine(
+	specifierAgent, escalatedAgent string, digests map[string]domain.Digest, prompt Prompt,
+) (agenttree.LineupLine, error) {
 	key, err := domain.LineupEscalatedKey(domain.RoleSpecifier, specifierAgent)
 	if err != nil {
 		return agenttree.LineupLine{}, err
@@ -344,7 +420,7 @@ func escalatedSpecifierLine(specifierAgent string, digest domain.Digest, prompt 
 	return agenttree.LineupLine{
 		Key: strings.TrimPrefix(key, domain.LineupRoleKeyPrefix),
 		Selection: domain.LineupSelection{
-			AgentName: ClaudeSpecifierEscalatedAgentName, AgentDigest: digest,
+			AgentName: escalatedAgent, AgentDigest: digests[escalatedAgent],
 			PromptName: prompt.Name, PromptDigest: prompt.Digest,
 		},
 	}, nil
