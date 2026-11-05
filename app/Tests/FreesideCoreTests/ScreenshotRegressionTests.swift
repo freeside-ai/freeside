@@ -3458,6 +3458,7 @@
             surfaces.append(contentsOf: try taskStopSurfaces())
             surfaces.append(contentsOf: try taskPageSurfaces(at: dynamicTypeSize))
             surfaces.append(contentsOf: taskSpecificationReaderSurfaces())
+            surfaces.append(contentsOf: taskPromptReaderSurfaces())
             surfaces.append(contentsOf: taskStyleSurfaces())
             surfaces.append(contentsOf: cardStyleSurfaces())
             surfaces.append(contentsOf: choiceListSurfaces())
@@ -4235,7 +4236,13 @@
             open.items = [question]
             var several = open
             several.items = [question, approval, adjudication]
+            // A typed task, so the documents line leads with Prompt (#2612).
             var working = TaskStageFixtures.page(.implementation)
+            working.task.source = .init(
+                value1: .work_item_artifact(
+                    .init(
+                        kind: .work_item_artifact, work_item_artifact_id: "artifact-working",
+                        work_item_artifact_digest: .init(value1: "sha256:" + String(repeating: "e", count: 64)))))
             working.task.task_lines = lines
             var finished = TaskStageFixtures.page(.review)
             finished.task.task_lines = lines
@@ -4313,11 +4320,44 @@
                 """.utf8)
             var surfaces: [Surface] = []
             for (name, revision, content) in [
-                ("task-specification-reader", 2, TaskSpecificationReaderSheet.Content.loaded(bytes)),
+                ("task-specification-reader", 2, TaskDocumentReaderSheet.Content.loaded(bytes)),
                 ("task-specification-reader-unavailable", nil, .unavailable),
             ] {
-                let sheet = TaskSpecificationReaderSheet(
-                    request: .init(digest: digest, revision: revision), attachments: loader, content: content)
+                let sheet = TaskDocumentReaderSheet(
+                    request: .init(digest: digest, document: .specification(revision: revision)), attachments: loader,
+                    content: content)
+                for scheme in [ColorScheme.light, .dark] {
+                    let suffix = scheme == .dark ? "-dark" : ""
+                    for (width, tail) in [(CGFloat(720), ""), (390, "-phone")] {
+                        surfaces.append(
+                            Surface(
+                                name: name + tail + suffix, width: width, colorScheme: scheme,
+                                view: AnyView(sheet.screenshotContent)))
+                    }
+                }
+            }
+            return surfaces
+        }
+
+        /// The prompt reader a typed task's documents line opens (#2612):
+        /// the submitted text in the plain card, and the unavailable state
+        /// that names the digest when the daemon has none.
+        private func taskPromptReaderSurfaces() -> [Surface] {
+            let digest = "sha256:" + String(repeating: "e", count: 64)
+            let loader = AttachmentLoader(client: APIClientFactory.mock(server: MockServer(attachments: [:])))
+            let bytes = Data(
+                """
+                Add a health endpoint to the daemon's API so the app can tell a stopped daemon from a slow one.
+
+                Keep the old status route for one release, and say so in the README.
+                """.utf8)
+            var surfaces: [Surface] = []
+            for (name, content) in [
+                ("task-prompt-reader", TaskDocumentReaderSheet.Content.loaded(bytes)),
+                ("task-prompt-reader-unavailable", .unavailable),
+            ] {
+                let sheet = TaskDocumentReaderSheet(
+                    request: .init(digest: digest, document: .prompt), attachments: loader, content: content)
                 for scheme in [ColorScheme.light, .dark] {
                     let suffix = scheme == .dark ? "-dark" : ""
                     for (width, tail) in [(CGFloat(720), ""), (390, "-phone")] {
