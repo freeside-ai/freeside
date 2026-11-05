@@ -27,4 +27,11 @@ import Testing
         #expect(TaskPageView.taskActions(history, taskID: "task-1").map(\.title) == ["Copy all identifiers"])
     }
 
+    @Test func theConversationChipDrawsFromOneMessage() {
+        #expect(TaskPageSection.outline(decisions: 0, conversationMessages: 0) == [.task, .timeline, .runs])
+        #expect(
+            TaskPageSection.outline(decisions: 2, conversationMessages: 1) == [
+                .decisions, .task, .conversation, .timeline, .runs,
+            ])
+    }
 }

@@ -31,12 +31,18 @@ enum TaskPageSection: Hashable {
     case timeline
     case runs
 
+    /// The outline row's chips, in page order. Decisions and Conversation
+    /// draw only when their sections hold something, as the body does.
+    static func outline(decisions: Int, conversationMessages: Int) -> [TaskPageSection] {
+        (decisions > 0 ? [.decisions] : []) + [.task]
+            + (conversationMessages > 0 ? [.conversation] : []) + [.timeline, .runs]
+    }
 }
 
 /// The page's one pinned element: a row of keyword chips over a hairline.
 /// Selection records the last chip chosen and doesn't follow scrolling.
-/// Decisions draws at one open item or more, and Decisions and Runs are
-/// native popups when they hold several.
+/// Decisions draws at one open item or more, Conversation at one message or
+/// more, and Decisions and Runs are native popups when they hold several.
 /// One line at every text size: the chips scroll sideways where the column
 /// can't hold them, and the trailing slot (the task's menu) stays put.
 struct OutlineRow<Trailing: View>: View {
@@ -96,15 +102,21 @@ struct OutlineRow<Trailing: View>: View {
 
     private var chips: some View {
         HStack(spacing: 4) {
-            if !decisions.isEmpty {
-                menuChip(
-                    "Decisions", section: .decisions, entries: decisions, checked: leadingItemID,
-                    choose: onChooseDecision)
+            ForEach(
+                TaskPageSection.outline(decisions: decisions.count, conversationMessages: conversationMessages),
+                id: \.self
+            ) { section in
+                switch section {
+                case .decisions:
+                    menuChip(
+                        "Decisions", section: .decisions, entries: decisions, checked: leadingItemID,
+                        choose: onChooseDecision)
+                case .task: chip("Task", section: .task)
+                case .conversation: chip("Conversation", count: conversationMessages, section: .conversation)
+                case .timeline: chip("Timeline", section: .timeline)
+                case .runs: menuChip("Runs", section: .runs, entries: runs, checked: nil, choose: onChooseRun)
+                }
             }
-            chip("Task", section: .task)
-            chip("Conversation", count: conversationMessages, section: .conversation)
-            chip("Timeline", section: .timeline)
-            menuChip("Runs", section: .runs, entries: runs, checked: nil, choose: onChooseRun)
         }
     }
 

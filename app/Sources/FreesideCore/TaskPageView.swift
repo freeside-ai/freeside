@@ -191,6 +191,10 @@ struct TaskPageView: View {
         TaskTimelinePresentation.conversations(taskItems.map(\.item)) { coordinator.store.conversationsByID[$0] }
     }
 
+    private static func messageCount(_ conversations: [Components.Schemas.ConversationSnapshot]) -> Int {
+        conversations.reduce(0) { $0 + $1.conversation.messages.count }
+    }
+
     /// The gap between the page's parts: header, outline row, card, one-line
     /// rows, and body.
     private static let contentGap: CGFloat = 16
@@ -272,13 +276,18 @@ struct TaskPageView: View {
                     }
                 }
             }
+            let conversations = conversations
             VStack(alignment: .leading, spacing: 22) {
                 taskFold(timeline)
                     .background(alignment: .top) { jumpTarget(.section(.task)) }
                 stopStates
                 schedules
-                conversationSection
-                    .background(alignment: .top) { jumpTarget(.section(.conversation)) }
+                // Absent at zero, as Decisions is: the outline drops its
+                // chip then too.
+                if Self.messageCount(conversations) > 0 {
+                    conversationSection(conversations)
+                        .background(alignment: .top) { jumpTarget(.section(.conversation)) }
+                }
                 timelineSection(timeline)
                     .background(alignment: .top) { jumpTarget(.section(.timeline)) }
                 // Outside the timeline, so a seated card's identifiers,
@@ -561,7 +570,7 @@ struct TaskPageView: View {
         return OutlineRow(
             decisions: open.map { .init(id: $0.item.id, title: AttentionDisplay.ask($0.item)) },
             leadingItemID: leadingItemID,
-            conversationMessages: conversations.reduce(0) { $0 + $1.conversation.messages.count },
+            conversationMessages: Self.messageCount(conversations),
             runs: (timeline?.sections.flatMap(\.runs) ?? []).map {
                 .init(id: $0.run_id, title: TaskTimelinePresentation.runTitle($0))
             },
@@ -659,18 +668,8 @@ struct TaskPageView: View {
 
     /// Every conversation the task's items name, read-only: a reply goes
     /// through the leading card, which is what the thread's item asks.
-    @ViewBuilder private var conversationSection: some View {
-        let conversations = conversations
+    private func conversationSection(_ conversations: [Components.Schemas.ConversationSnapshot]) -> some View {
         VStack(alignment: .leading, spacing: 22) {
-            if conversations.isEmpty {
-                VStack(alignment: .leading, spacing: 12) {
-                    KeywordLabel(text: "Conversation")
-                        .accessibilityAddTraits(.isHeader)
-                    Text("No messages on this task.")
-                        .font(FreesideFont.cardBody)
-                        .foregroundStyle(Color.inkDim)
-                }
-            }
             ForEach(conversations, id: \.conversation.id) { conversation in
                 ConversationView(
                     snapshot: conversation,
