@@ -15,6 +15,7 @@ import (
 
 	"github.com/freeside-ai/freeside/daemon/internal/domain"
 	"github.com/freeside-ai/freeside/daemon/internal/gitenv"
+	"github.com/freeside-ai/freeside/daemon/internal/repotemplate"
 )
 
 // testIdentityInput is a valid candidate identity input for push
@@ -104,30 +105,43 @@ func newLocalRemote(t *testing.T) *localRemote {
 	return newLocalRemoteForRepo(t, "owner/example")
 }
 
+// localRemoteTemplates holds one built remote and work tree per repo name, so
+// each test copies the fixture instead of running six git commands for it.
+var localRemoteTemplates repotemplate.Cache[string]
+
 // newLocalRemoteForRepo builds the fixture under a caller-chosen
 // owner/name, so a test composing the transport with fixtures keyed to
 // another repository (the publisher's forge fake, its trust profile) can
-// have all of them name the same one.
+// have all of them name the same one. Each call gets its own copy of the
+// bare remote and work tree; every copy for one repo name shares baseSHA.
 func newLocalRemoteForRepo(t *testing.T, repo string) *localRemote {
 	t.Helper()
-	root := t.TempDir()
 	owner, name, ok := strings.Cut(repo, "/")
 	if !ok {
 		t.Fatalf("fixture repo %q is not owner/name", repo)
 	}
-	bare := filepath.Join(root, owner, name+".git")
-	if err := os.MkdirAll(filepath.Dir(bare), 0o750); err != nil {
-		t.Fatal(err)
-	}
-	gitOut(t, "", "init", "--bare", "--initial-branch=main", bare)
-	work := t.TempDir()
-	gitOut(t, "", "init", "--initial-branch=main", work)
-	if err := os.WriteFile(filepath.Join(work, "a.txt"), []byte("one\n"), 0o600); err != nil {
-		t.Fatal(err)
-	}
-	gitOut(t, work, "add", "a.txt")
-	gitOut(t, work, "commit", "-m", "one")
-	gitOut(t, work, "push", bare, "main:main")
+	bareRel := filepath.Join("remote", owner, name+".git")
+	dir, baseSHA := localRemoteTemplates.Copy(t, repo, func() (string, string) {
+		dir := t.TempDir()
+		bare := filepath.Join(dir, bareRel)
+		if err := os.MkdirAll(filepath.Dir(bare), 0o750); err != nil {
+			t.Fatal(err)
+		}
+		// gitOut disables automatic maintenance, which the cache requires.
+		gitOut(t, "", "init", "--bare", "--initial-branch=main", bare)
+		work := filepath.Join(dir, "work")
+		gitOut(t, "", "init", "--initial-branch=main", work)
+		if err := os.WriteFile(filepath.Join(work, "a.txt"), []byte("one\n"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		gitOut(t, work, "add", "a.txt")
+		gitOut(t, work, "commit", "-m", "one")
+		// A path argument, not a configured remote, so the template's
+		// .git/config holds no absolute path.
+		gitOut(t, work, "push", bare, "main:main")
+		return dir, gitOut(t, work, "rev-parse", "HEAD")
+	})
+	root := filepath.Join(dir, "remote")
 	return &localRemote{
 		transport: &Transport{
 			tokens:     staticTokenSource{tok: stubToken()},
@@ -136,9 +150,9 @@ func newLocalRemoteForRepo(t *testing.T, repo string) *localRemote {
 			scheme:     "file",
 		},
 		repo:    repo,
-		bare:    bare,
-		baseSHA: gitOut(t, work, "rev-parse", "HEAD"),
-		work:    work,
+		bare:    filepath.Join(dir, bareRel),
+		baseSHA: baseSHA,
+		work:    filepath.Join(dir, "work"),
 	}
 }
 
