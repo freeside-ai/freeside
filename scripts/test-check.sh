@@ -185,6 +185,51 @@ case $OUT in
   *) pass=$((pass + 1)) ;;
 esac
 
+# Each stand-in appends the GOFLAGS it inherits, so the receipt shows what
+# every go invocation and the linter saw. uname reports Linux so the test
+# step keeps PATH's git instead of resolving xcrun's.
+mkdir "$TMP/goflags-tools"
+printf '#!/bin/bash\necho Linux\n' >"$TMP/goflags-tools/uname"
+cat >"$TMP/goflags-tools/go" <<'STUB'
+#!/bin/bash
+printf 'go %s|%s\n' "$1" "${GOFLAGS-unset}" >>"$GOFLAGS_RECORD"
+STUB
+cat >"$TMP/goflags-tools/golangci-lint" <<'STUB'
+#!/bin/bash
+printf 'lint|%s\n' "${GOFLAGS-unset}" >>"$GOFLAGS_RECORD"
+STUB
+chmod +x "$TMP/goflags-tools/"*
+assert_goflags() { # <expected-flags>
+  local expected
+  expected=$(printf 'go %s|%s\n' build "$1" build "$1" test "$1" vet "$1")
+  expected+=$'\n'"lint|$1"
+  if [ "$(cat "$TMP/goflags.receipt")" = "$expected" ]; then
+    pass=$((pass + 1))
+  else
+    # Keep check.sh's output, and survive a receipt no stand-in wrote.
+    OUT+=$'\n'"receipt: $(cat "$TMP/goflags.receipt" 2>/dev/null || echo missing)"
+    report_failure "a daemon step received unexpected GOFLAGS"
+  fi
+}
+
+begin_case "daemon steps hand go and the linter -trimpath when GOFLAGS is unset"
+rm -f "$TMP/goflags.receipt"
+set +e
+OUT=$(env -u GOFLAGS PATH="$TMP/goflags-tools:$PATH" \
+  GOLANGCI_LINT="$TMP/goflags-tools/golangci-lint" \
+  GOFLAGS_RECORD="$TMP/goflags.receipt" "$CHECK" daemon build test vet lint 2>&1)
+RC=$?
+set -e
+assert_rc 0
+assert_goflags '-trimpath'
+
+begin_case "daemon steps append -trimpath to a caller's GOFLAGS"
+rm -f "$TMP/goflags.receipt"
+PATH=$TMP/goflags-tools:$PATH GOLANGCI_LINT=$TMP/goflags-tools/golangci-lint \
+  GOFLAGS_RECORD=$TMP/goflags.receipt GOFLAGS=-p=2 run_check daemon build test vet lint
+assert_rc 0
+assert_goflags '-p=2 -trimpath'
+
 begin_case "scripts shellcheck covers scripts, app scripts, and hooks"
 stub=$(make_stub shellcheck 0)
 SHELLCHECK=$stub run_check scripts shellcheck

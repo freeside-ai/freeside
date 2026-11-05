@@ -29,6 +29,19 @@
 #   VACUUM         command for the OpenAPI linter (default: `go run`
 #                  of the pinned vacuum module, ~7 minutes cold)
 #
+# Daemon Go flags:
+#   Every daemon step appends -trimpath to GOFLAGS: unset becomes
+#   -trimpath, and GOFLAGS=-p=2 becomes "-p=2 -trimpath". Without it Go
+#   hashes each package's absolute directory into its cache keys, so
+#   checkouts at different paths share none of the daemon module's
+#   compiled packages or test results. The environment variable shadows a
+#   GOFLAGS set only with `go env -w`, so pass extra flags in the
+#   environment. A bare `go test` without the flag shares no daemon
+#   package entries with these steps. Under -trimpath, runtime.Caller
+#   returns import paths, not file paths, so tests find repository files
+#   from the working directory, which go test sets to the package
+#   directory.
+#
 # Local daemon lint runs:
 #   GOLANGCI_LINT_CACHE  defaults to
 #     ${XDG_CACHE_HOME:-$HOME/.cache}/freeside/golangci-lint<absolute checkout root>
@@ -58,7 +71,12 @@
 # test unchanged; a change that sanitizes it would disarm this guard. A test
 # result cached by any earlier run, decoy or not, does not rerun, and opt-in
 # live suites skip, so only an uncached run (CI's shards) covers every default
-# test.
+# test. The earlier run can be in another checkout of the same source, so a
+# new checkout no longer guarantees a first real run. Go rechecks files a
+# test read inside daemon/ by their absolute path, so those tests rerun per
+# checkout, but it never rechecks files outside daemon/: a test that reads
+# api/openapi.yaml or prompts/ can replay a pass recorded before that file
+# changed.
 # CI shard runs require all of DAEMON_TEST_SHARD_KIND (rest, integration, or
 # darwin), DAEMON_TEST_SHARD_INDEX, DAEMON_TEST_SHARD_COUNT,
 # DAEMON_TEST_INTEGRATION_SHARDS, and DAEMON_TEST_EVIDENCE_DIR. Indices are
@@ -482,6 +500,12 @@ for step in "$@"; do
       ;;
   esac
 done
+
+if [ "$component" = daemon ]; then
+  # Shares compiled packages and test results across checkouts; see the
+  # header. Appending keeps a caller's flags, such as a ward recipe's -p=2.
+  export GOFLAGS="${GOFLAGS:+$GOFLAGS }-trimpath"
+fi
 
 for step in "$@"; do
   echo "== $component $step" >&2

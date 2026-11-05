@@ -370,7 +370,9 @@ jobs:
         run: bash scripts/check.sh daemon build
       - name: Compile every test binary
         working-directory: daemon
-        run: go test -count=1 -run '^$' ./...
+        # -trimpath matches the GOFLAGS check.sh exports, so the test steps
+        # reuse these binaries and the saved cache holds the ones they use.
+        run: go test -trimpath -count=1 -run '^$' ./...
       - name: test, rest 1/1 (scripts/check.sh)
         env:
           DAEMON_TEST_SHARD_KIND: rest

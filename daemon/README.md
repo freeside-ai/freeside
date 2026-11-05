@@ -798,6 +798,20 @@ whatever the global git config says. A test result cached by any earlier run,
 under the decoy or not, does not rerun, and opt-in live suites skip, so a
 local pass can miss a helper; CI's uncached shards run every default test.
 
+The daemon steps build with `-trimpath`, appended to any `GOFLAGS` you set
+(`GOFLAGS=-p=2` becomes `-p=2 -trimpath`). Without it, Go hashes each
+package's absolute directory into its cache keys, so a checkout at a new path
+compiles every daemon package again and shares no test results. With it,
+checkouts of the same source share compiled packages and test results, so a
+cached pass can come from another checkout, and a new checkout no longer
+guarantees a first real run. Go records the files a test reads inside
+`daemon/` by absolute path, so such a test still reruns per checkout, but it
+never rechecks files outside `daemon/`: a test that reads `api/openapi.yaml`
+or `prompts/` can replay a pass recorded before that file changed. Under
+`-trimpath`, `runtime.Caller` returns import paths, not file paths, so a test
+finds repository files from its working directory, which `go test` sets to
+the package directory.
+
 While iterating, run only the packages you're changing, then run the full
 `bash scripts/check.sh daemon` once before push:
 
@@ -811,9 +825,10 @@ flags alone test `daemon/` itself, which has no Go files. A narrow run keeps
 the run limit, the git change, and the decoy, and its `PASS:` line names the
 selection. Under the default limit of one it holds the same slot, and so the
 same decoy path, every time, which lets a repeated run reuse Go's cached
-results. A bare `go test` gets none of the git change, the run limit, or the
-decoy, and its different `PATH` and `GIT_DIR` can keep it from reusing results
-cached by `check.sh` runs.
+results. A bare `go test` gets none of the git change, the run limit, the
+decoy, or `-trimpath`; without the flag it shares no daemon package entries
+with `check.sh` runs, and its different `PATH` and `GIT_DIR` can also keep it
+from reusing their results.
 
 Other programs on the Mac can send requests to a test's loopback server. T3
 Code (Beta) sent `GET /` with `User-Agent: node` to listening `127.0.0.1`
