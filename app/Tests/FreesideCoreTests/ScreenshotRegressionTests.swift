@@ -4316,6 +4316,11 @@
                                 VStack(alignment: .leading, spacing: 16) {
                                     Text(snapshot.task.display_names.task.text).font(FreesideFont.title)
                                     Text(TaskDisplay.projectName(snapshot.task)).font(FreesideFont.callout)
+                                    // The menu as the outline row draws it,
+                                    // so each state shows its enablement.
+                                    TaskActionsMenu(
+                                        coordinator: coordinator, taskID: snapshot.task.id,
+                                        confirmation: .constant(nil), rendersInteractiveControls: false)
                                     TaskStopView(coordinator: coordinator, taskID: snapshot.task.id)
                                 }.padding(24).foregroundStyle(Color.ink).background(Color.ground))))
                     if state == "queued", let confirmation = coordinator.taskStop.prepare(taskID: snapshot.task.id) {

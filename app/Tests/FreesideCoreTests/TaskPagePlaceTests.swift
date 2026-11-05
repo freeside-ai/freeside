@@ -118,20 +118,20 @@ import Testing
 
     // MARK: Stop
 
-    @Test func aStopViewGivenBindingsHandsItsConfirmationToTheCaller() throws {
+    /// Stop Task… hands its confirmation to the page, which presents it
+    /// outside the lazy stack that can drop the row the menu sits in.
+    @Test func taskActionsHandItsStopConfirmationToThePage() throws {
         let (coordinator, _) = try TaskStageFixtures.coordinator(TaskStageFixtures.page(.implementation))
         var held: TaskStopModel.Confirmation?
-        var expanded = false
-        let view = TaskStopView(
-            coordinator: coordinator, taskID: taskID,
-            presentedConfirmation: Binding(get: { held }, set: { held = $0 }),
-            explanationExpanded: Binding(get: { expanded }, set: { expanded = $0 }))
-        #expect(!view.presentsConfirmation)
-        view.requestStop()
+        let menu = TaskActionsMenu(
+            coordinator: coordinator, taskID: taskID, confirmation: Binding(get: { held }, set: { held = $0 }))
+        #expect(menu.offersStop)
+        #expect(!menu.isDisabled)
+        menu.requestStop()
         let prepared = try #require(held)
         #expect(prepared.entry.taskID == taskID)
-
-        #expect(TaskStopView(coordinator: coordinator, taskID: taskID).presentsConfirmation)
+        // A quiet task's body draws no Stop view, so it leaves no gap.
+        #expect(TaskStopView(coordinator: coordinator, taskID: taskID).isQuiet)
     }
 }
 

@@ -3,7 +3,7 @@ import SwiftUI
 
 /// One page per task, in every state: the header, the pinned outline, the
 /// leading card and the other open items, then the body (the Task fold, the
-/// controls, Conversation, and the Timeline). The body's history is as the
+/// Stop states, Conversation, and the Timeline). The body's history is as the
 /// daemon computes it (`GET /tasks/{id}/timeline`): the task's events as one
 /// open rail that marks where each stage began, then every campaign folds
 /// its runs and detailed milestones. Every list keeps the daemon's
@@ -239,7 +239,15 @@ struct TaskPageView: View {
             .onChange(of: leadingCard != nil, initial: true) { place.leadsWithCard = leadingCard != nil }
             .onChange(of: identifiersReveals) { revealIdentifiers() }
             .taskStopConfirmation(
-                $stopConfirmation, model: coordinator.taskStop, dynamicTypeSize: dynamicTypeSize)
+                $stopConfirmation, model: coordinator.taskStop, dynamicTypeSize: dynamicTypeSize
+            )
+            #if os(iOS)
+                .toolbar {
+                    ToolbarItem(placement: .topBarTrailing) {
+                        if TaskActionsSlot(compact: compact) == .navigationBar { taskActionsMenu(timeline) }
+                    }
+                }
+            #endif
         }
     }
 
@@ -267,7 +275,7 @@ struct TaskPageView: View {
             VStack(alignment: .leading, spacing: 22) {
                 taskFold(timeline)
                     .background(alignment: .top) { jumpTarget(.section(.task)) }
-                controls(timeline)
+                stopStates
                 schedules
                 conversationSection
                     .background(alignment: .top) { jumpTarget(.section(.conversation)) }
@@ -565,8 +573,44 @@ struct TaskPageView: View {
                 jump(to: .section(section == .runs ? .timeline : section))
             },
             onChooseDecision: { onOpenItem?($0) },
-            onChooseRun: { jump(toRun: $0, in: timeline) }
+            onChooseRun: { jump(toRun: $0, in: timeline) },
+            trailing: {
+                if TaskActionsSlot(compact: compact) == .outlineRow { taskActionsMenu(timeline) }
+            }
         )
+    }
+
+    /// Where the task's menu draws. Both are pinned, so Stop stays in reach
+    /// while the page scrolls.
+    enum TaskActionsSlot {
+        /// The outline row's trailing slot, outside its chips' scroll.
+        case outlineRow
+        /// The navigation bar's trailing slot: a phone's row has no room.
+        case navigationBar
+
+        init(compact: Bool) { self = compact ? .navigationBar : .outlineRow }
+    }
+
+    /// The page's own items in the task's menu: copying every identifier
+    /// the Identifiers footer holds, offered while the footer draws (once
+    /// the history loads, or while the leading decision names some).
+    static func taskActions(
+        _ timeline: Components.Schemas.TaskTimeline?, taskID: String,
+        decision: [AttentionDisplay.BindingRow] = []
+    ) -> [TaskActionsMenu.Action] {
+        guard timeline != nil || !decision.isEmpty else { return [] }
+        let text = TaskTimelinePresentation.allIdentifiersText(
+            TaskTimelinePresentation.identifierGroups(timeline, taskID: taskID, decision: decision))
+        return [.init(title: "Copy all identifiers") { Clipboard.copy(text) }]
+    }
+
+    /// The task's one menu (◆B): its own items, then Stop.
+    private func taskActionsMenu(_ timeline: Components.Schemas.TaskTimeline?) -> TaskActionsMenu {
+        TaskActionsMenu(
+            coordinator: coordinator, taskID: snapshot.task.id,
+            actions: Self.taskActions(timeline, taskID: snapshot.task.id, decision: decisionIdentifiers),
+            confirmation: $stopConfirmation,
+            rendersInteractiveControls: screenshotTimeline == nil)
     }
 
     // MARK: Body
@@ -605,20 +649,12 @@ struct TaskPageView: View {
         }
     }
 
-    private func controls(_ timeline: Components.Schemas.TaskTimeline?) -> some View {
-        TaskStopView(
-            coordinator: coordinator, taskID: snapshot.task.id,
-            moreActions: hasIdentifiersFooter(timeline)
-                ? [
-                    .init(title: "Copy all identifiers") {
-                        Clipboard.copy(
-                            TaskTimelinePresentation.allIdentifiersText(
-                                TaskTimelinePresentation.identifierGroups(
-                                    timeline, taskID: snapshot.task.id, decision: decisionIdentifiers)))
-                    }
-                ] : [],
-            presentedConfirmation: $stopConfirmation,
-            explanationExpanded: $showsStopExplanation)
+    /// What the task's Stop says, drawn only while there is a Stop state
+    /// to state; Stop itself starts from the Task Actions menu.
+    @ViewBuilder private var stopStates: some View {
+        let stop = TaskStopView(
+            coordinator: coordinator, taskID: snapshot.task.id, explanationExpanded: $showsStopExplanation)
+        if !stop.isQuiet { stop }
     }
 
     /// Every conversation the task's items name, read-only: a reply goes

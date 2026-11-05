@@ -30,14 +30,16 @@ enum TaskPageSection: Hashable {
     case conversation
     case timeline
     case runs
+
 }
 
 /// The page's one pinned element: a row of keyword chips over a hairline.
 /// Selection records the last chip chosen and doesn't follow scrolling.
 /// Decisions draws at one open item or more, and Decisions and Runs are
-/// native popups when they hold several. One line at every text size: the
-/// row scrolls sideways where the column can't hold it.
-struct OutlineRow: View {
+/// native popups when they hold several.
+/// One line at every text size: the chips scroll sideways where the column
+/// can't hold them, and the trailing slot (the task's menu) stays put.
+struct OutlineRow<Trailing: View>: View {
     struct Entry: Identifiable, Equatable {
         let id: String
         let title: String
@@ -53,25 +55,30 @@ struct OutlineRow: View {
     let onSelect: (TaskPageSection) -> Void
     let onChooseDecision: (String) -> Void
     let onChooseRun: (String) -> Void
+    /// Drawn at the row's end, outside the chips' sideways scroll.
+    @ViewBuilder let trailing: () -> Trailing
 
     var body: some View {
-        Group {
-            if rendersInteractiveControls {
-                ViewThatFits(in: .horizontal) {
+        HStack(spacing: 8) {
+            Group {
+                if rendersInteractiveControls {
+                    ViewThatFits(in: .horizontal) {
+                        chips
+                        ScrollView(.horizontal, showsIndicators: false) { chips }
+                    }
+                } else {
+                    // A renderer can't draw a scroll view: the drawn row clips
+                    // where the live row scrolls.
                     chips
-                    ScrollView(.horizontal, showsIndicators: false) { chips }
+                        .fixedSize(horizontal: true, vertical: false)
+                        // No minimum, so the column can't grow to fit the chips.
+                        .frame(minWidth: 0, maxWidth: .infinity, alignment: .leading)
+                        .clipped()
                 }
-            } else {
-                // A renderer can't draw a scroll view: the drawn row clips
-                // where the live row scrolls.
-                chips
-                    .fixedSize(horizontal: true, vertical: false)
-                    // No minimum, so the column can't grow to fit the chips.
-                    .frame(minWidth: 0, maxWidth: .infinity, alignment: .leading)
-                    .clipped()
             }
+            .frame(maxWidth: .infinity, alignment: .leading)
+            trailing()
         }
-        .frame(maxWidth: .infinity, alignment: .leading)
         .padding(.horizontal, Self.bleed)
         .padding(.vertical, 6)
         .background(Color.ground)
@@ -85,7 +92,7 @@ struct OutlineRow: View {
 
     /// How far the ground and hairline reach past the column, so a card
     /// scrolling under the pinned row never shows at its edges.
-    private static let bleed: CGFloat = 8
+    private static var bleed: CGFloat { 8 }
 
     private var chips: some View {
         HStack(spacing: 4) {
