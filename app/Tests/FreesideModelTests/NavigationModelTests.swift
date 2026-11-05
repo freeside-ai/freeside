@@ -42,39 +42,122 @@ import Testing
         #expect(navigation.attentionSelection == nil)
     }
 
-    @Test func theDevicesLaunchOpensSettingsOnDevicesAndTheToolbarOpensItsRows() {
-        let plain = NavigationModel(launchInputs: LaunchInputs(colorSchemeRaw: nil, selectionRaw: nil))
-        #expect(!plain.settingsPresented)
-        #expect(plain.settingsOpensOn == .rows)
-
-        let navigation = NavigationModel(
-            launchInputs: LaunchInputs(colorSchemeRaw: nil, selectionRaw: nil, devicesPresented: true))
-        #expect(navigation.settingsPresented)
-        #expect(navigation.settingsOpensOn == .devices)
-
-        navigation.settingsPresented = false
-        navigation.openSettings()
-        #expect(navigation.settingsPresented)
-        #expect(navigation.settingsOpensOn == .rows)
-    }
-
-    @Test func theRoutingLaunchOpensSettingsOnTheRoutingPolicy() {
-        let navigation = NavigationModel(
-            launchInputs: LaunchInputs(colorSchemeRaw: nil, selectionRaw: nil, routingPresented: true))
-        #expect(navigation.settingsPresented)
-        #expect(navigation.settingsOpensOn == .routing)
-    }
-
-    @Test func theUsageLaunchOpensSettingsOnAccountUsageUnlessAnotherPageIsAsked() {
-        let navigation = NavigationModel(
-            launchInputs: LaunchInputs(colorSchemeRaw: nil, selectionRaw: nil, usagePresented: true))
-        #expect(navigation.settingsPresented)
-        #expect(navigation.settingsOpensOn == .usage)
-
-        let routing = NavigationModel(
+    private func launch(
+        devices: Bool = false, routing: Bool = false, usage: Bool = false, selection: String? = nil
+    ) -> NavigationModel {
+        NavigationModel(
             launchInputs: LaunchInputs(
-                colorSchemeRaw: nil, selectionRaw: nil, routingPresented: true, usagePresented: true))
-        #expect(routing.settingsOpensOn == .routing)
+                colorSchemeRaw: nil, selectionRaw: selection, devicesPresented: devices,
+                routingPresented: routing, usagePresented: usage))
+    }
+
+    @Test func aPlainLaunchSelectsGeneralAndAsksForNoSettings() {
+        let plain = launch()
+        #expect(plain.settingsPane == .general)
+        #expect(plain.settingsRoute.isEmpty)
+        #expect(!plain.settingsWindowRequested)
+    }
+
+    @Test func eachSettingsLaunchSelectsItsPanePushesItAndAsksForTheWindow() {
+        for (navigation, pane) in [
+            (launch(devices: true), NavigationModel.SettingsPage.devices),
+            (launch(routing: true), .agents),
+            (launch(usage: true), .usage),
+        ] {
+            #expect(navigation.settingsPane == pane)
+            #expect(navigation.settingsRoute == [.list, .pane(pane)])
+            #expect(navigation.settingsWindowRequested)
+        }
+    }
+
+    @Test func devicesBeatsRoutingBeatsUsageAtLaunch() {
+        #expect(launch(devices: true, routing: true, usage: true).settingsPane == .devices)
+        #expect(launch(devices: true, usage: true).settingsPane == .devices)
+        #expect(launch(routing: true, usage: true).settingsPane == .agents)
+    }
+
+    @Test func aSettingsLaunchOpensOverItsSelection() {
+        let navigation = launch(devices: true, selection: TaskFixtures.retryTaskID)
+        #expect(navigation.path == [.task(TaskFixtures.retryTaskID)])
+        #expect(navigation.settingsRoute == [.list, .pane(.devices)])
+    }
+
+    @Test func openingSettingsAfterALaunchKeepsTheSelectedPane() {
+        let navigation = launch(devices: true)
+        navigation.consumeSettingsWindowRequest()
+        #expect(!navigation.settingsWindowRequested)
+
+        navigation.setSettingsRoute([])
+        navigation.openSettings()
+        #expect(navigation.settingsRoute == [.list])
+        #expect(navigation.settingsPane == .devices)
+    }
+
+    @Test func aPaneRowPushesItsPaneAndAPopKeepsIt() {
+        let navigation = launch()
+        navigation.openSettings()
+        navigation.pushSettingsPane(.daemon)
+        #expect(navigation.settingsRoute == [.list, .pane(.daemon)])
+        #expect(navigation.settingsPane == .daemon)
+
+        navigation.setSettingsRoute([.list])
+        #expect(navigation.settingsRoute == [.list])
+        #expect(navigation.settingsPane == .daemon)
+
+        navigation.setSettingsRoute([])
+        #expect(navigation.settingsRoute.isEmpty)
+        #expect(navigation.settingsPane == .daemon)
+    }
+
+    @Test func theSourceListSelectsAPaneWithoutPushingOne() {
+        let navigation = launch()
+        navigation.selectSettingsPane(.notifications)
+        #expect(navigation.settingsPane == .notifications)
+        #expect(navigation.settingsRoute.isEmpty)
+    }
+
+    @Test func settingsStaysOffTheTaskRoute() {
+        let navigation = launch(selection: TaskFixtures.retryTaskID)
+        navigation.openSettings()
+        navigation.pushSettingsPane(.usage)
+        #expect(navigation.path == [.task(TaskFixtures.retryTaskID)])
+        #expect(navigation.taskSelection == TaskFixtures.retryTaskID)
+
+        navigation.closeSettings()
+        #expect(navigation.settingsRoute.isEmpty)
+        #expect(navigation.path == [.task(TaskFixtures.retryTaskID)])
+    }
+
+    @Test func aRouteLeavesTheSettingsPath() {
+        let navigation = launch()
+        navigation.pushSettingsPane(.devices)
+        navigation.route(toLinkedItem: "item-a")
+        #expect(navigation.path == [.attentionItem("item-a")])
+        #expect(navigation.settingsRoute.isEmpty)
+        #expect(navigation.settingsPane == .devices)
+    }
+
+    @Test func theOneStackCarriesTheTaskRouteThenTheSettingsPath() {
+        let navigation = launch()
+        // A list row pushes its destination as a phone route.
+        navigation.setPhoneRoute([.destination(.task(TaskFixtures.retryTaskID))])
+        #expect(navigation.path == [.task(TaskFixtures.retryTaskID)])
+
+        navigation.openSettings()
+        navigation.pushSettingsPane(.devices)
+        #expect(
+            navigation.phoneRoute == [
+                .destination(.task(TaskFixtures.retryTaskID)), .settings(.list), .settings(.pane(.devices)),
+            ])
+
+        // Back from the pane, then back from the list: the task stays.
+        navigation.setPhoneRoute(Array(navigation.phoneRoute.dropLast()))
+        #expect(navigation.settingsRoute == [.list])
+        #expect(navigation.path == [.task(TaskFixtures.retryTaskID)])
+        navigation.setPhoneRoute(Array(navigation.phoneRoute.dropLast()))
+        #expect(navigation.settingsRoute.isEmpty)
+        #expect(navigation.path == [.task(TaskFixtures.retryTaskID)])
+        #expect(navigation.settingsPane == .devices)
     }
 
     @Test func aLaunchComposerIsOfferedToItsItemUntilConsumed() {
@@ -461,6 +544,26 @@ import Testing
                 advancesToNextItem: false,
                 list: list(store)) == .cancelled)
         #expect(navigation.taskSelection == TaskFixtures.retryTaskID)
+    }
+
+    @Test func openingSettingsDuringTheDelayCancelsTheConclusionAdvance() async {
+        let server = MockServer()
+        let store = await makeStore(server: server)
+        let navigation = NavigationModel(
+            launchInputs: LaunchInputs(
+                colorSchemeRaw: nil,
+                selectionRaw: "item-spec_approval"))
+
+        let expectedRevision = navigation.operatorNavigationRevision
+        navigation.openSettings()
+        #expect(
+            navigation.advanceAfterConclusion(
+                itemID: "item-spec_approval",
+                expectedOperatorNavigationRevision: expectedRevision,
+                advancesToNextItem: true,
+                list: list(store)) == .cancelled)
+        #expect(navigation.settingsRoute == [.list])
+        #expect(navigation.attentionSelection == "item-spec_approval")
     }
 
     @Test func macSelectionSynchronizesItsPathBeforeConclusionAdvance() async {

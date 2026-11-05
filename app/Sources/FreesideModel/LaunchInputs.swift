@@ -60,14 +60,15 @@ public struct LaunchInputs {
     public let projectID: String?
     public let detailsExpanded: Bool
 
-    /// `-FreesideDevices YES`: the Settings sheet is open on Devices at
+    /// `-FreesideDevices YES`: Settings opens on the Devices pane at
     /// launch, so a capture needs no click on the toolbar.
     public let devicesPresented: Bool
-    /// `-FreesideRouting YES`: the Settings sheet is open on the routing
-    /// policy at launch. `-FreesideDevices` wins when both are set.
+    /// `-FreesideRouting YES`: Settings opens on the Agents pane, which
+    /// holds the routing policy, at launch. `-FreesideDevices` wins when both
+    /// are set.
     public let routingPresented: Bool
-    /// `-FreesideUsage YES`: the Settings sheet is open on account usage at
-    /// launch. `-FreesideDevices` and `-FreesideRouting` win when set.
+    /// `-FreesideUsage YES`: Settings opens on the Usage pane at launch.
+    /// `-FreesideDevices` and `-FreesideRouting` win when set.
     public let usagePresented: Bool
 
     /// `-FreesideComposer <action>`: the selected inbox item's composer for

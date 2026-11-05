@@ -1,33 +1,29 @@
-import Foundation
-import Observation
 import SwiftUI
 
-public struct DecisionFlowSettingsView: View {
-    private let preferences: DecisionFlowPreferences
+/// The General pane's body: the Decision Flow toggle, the one preference
+/// the app stores (◆1 of the 4 Nov 2026 handoff).
+struct DecisionFlowSettingsView: View {
+    let preferences: DecisionFlowPreferences
+    var rendersInteractiveControls = true
 
-    public init(preferences: DecisionFlowPreferences) {
-        self.preferences = preferences
-    }
-
-    public var body: some View {
+    var body: some View {
         @Bindable var preferences = preferences
-        Form {
-            Section("Decision Flow") {
-                Toggle(
-                    "Advance to the next item",
-                    isOn: $preferences.advancesToNextItem)
-                Text(
-                    "After a decision is applied, open the next item that needs you instead of returning to the list."
-                )
-                .font(.callout)
-                .foregroundStyle(.secondary)
+        SettingsSection(keyword: "Decision flow") {
+            SettingsGroup(["advance"]) { _ in
+                SettingsRow(
+                    label: "Advance to the next item",
+                    line:
+                        "After a decision is applied, open the next item that needs you instead of returning to the list."
+                ) {
+                    if rendersInteractiveControls {
+                        Toggle("Advance to the next item", isOn: $preferences.advancesToNextItem)
+                            .labelsHidden()
+                            .toggleStyle(.switch)
+                    } else {
+                        SettingsToggleStandIn(isOn: preferences.advancesToNextItem)
+                    }
+                }
             }
         }
-        .formStyle(.grouped)
-        // The Settings scene sits outside FreesideRootView, so the window
-        // root's copyable-text default doesn't reach this form.
-        .textSelection(.enabled)
-        .padding()
-        .frame(width: 440)
     }
 }

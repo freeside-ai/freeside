@@ -19,6 +19,12 @@ extension View {
         exactStamp("\(FreesideFormat.exactTime(start)) to \(FreesideFormat.exactTime(end))")
     }
 
+    /// The same for a line that shortens several labelled instants
+    /// ("Paired … · last seen …"): each, exactly, under its label.
+    func exactInstants(_ labelled: [(label: String, date: Date)]) -> some View {
+        exactStamp(labelled.map { "\($0.label) \(FreesideFormat.exactTime($0.date))" }.joined(separator: " · "))
+    }
+
     @ViewBuilder
     private func exactStamp(_ exact: String) -> some View {
         #if os(macOS)

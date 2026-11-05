@@ -46,14 +46,14 @@ import Testing
     @Test func theSettingsRowSummarizesThePoolsOrAnUnansweredCommand() async throws {
         let server = MockServer()
         let model = AccountUsageModel(coordinator: await coordinator(server))
-        #expect(SettingsSheet.usageSummary(model) == "3 pools")
+        #expect(SettingsSummary.usage(model) == "3 pools")
         let empty = AccountUsageModel(coordinator: await coordinator(MockServer(usagePools: [])))
-        #expect(SettingsSheet.usageSummary(empty) == "No pools")
+        #expect(SettingsSummary.usage(empty) == "No pools")
         await server.setBeforeRespond { operation in
             if operation == "submitCommand" { throw MockServer.ForcedStatus(503) }
         }
         await model.refresh(pool: UsageFixtures.readingPoolID)
-        #expect(SettingsSheet.usageSummary(model) == "Unconfirmed")
+        #expect(SettingsSummary.usage(model) == "Unconfirmed")
     }
 
     // MARK: Refresh

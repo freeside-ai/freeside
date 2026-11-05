@@ -308,7 +308,7 @@ struct UnifiedListView: View {
         ForEach(rows) { row in
             Group {
                 #if os(iOS)
-                    NavigationLink(value: row.destination) {
+                    NavigationLink(value: NavigationModel.PhoneRoute.destination(row.destination)) {
                         rowView(row, ambiguousTaskIDs: ambiguousTaskIDs)
                     }
                 #else
