@@ -14,10 +14,11 @@
         enum State: CaseIterable {
             /// The default pools: one with readings and refusal marks and two
             /// enrollments to collect, one whose collector can't read usage,
-            /// and one with no reading yet.
+            /// and one with no reading yet. Two runs are parked on the first,
+            /// so its used-up window says so.
             case usage
             /// The same pools once the client's clock passes the readings'
-            /// `stale_at`.
+            /// `stale_at`, with no run parked.
             case stale
             /// The #2389 shape for Claude under a setup token: a weekly share
             /// with its reset, and a five-hour window with a status alone.
@@ -58,7 +59,13 @@
                 switch state {
                 case .claudeVerdict: MockServer(usagePools: [claudeVerdictPool()])
                 case .low: MockServer(usagePools: [lowPool()])
-                case .usage, .stale, .unconfirmed, .failed, .reassigned: MockServer()
+                case .usage:
+                    MockServer(
+                        runs: RunFixtures.defaultRuns() + [
+                            ParkedRunFixtures.run("run-parked-1", on: UsageFixtures.readingPoolID),
+                            ParkedRunFixtures.run("run-parked-2", on: UsageFixtures.readingPoolID),
+                        ])
+                case .stale, .unconfirmed, .failed, .reassigned: MockServer()
                 }
             let coordinator = SyncCoordinator(
                 client: APIClientFactory.mock(server: server), cache: InMemoryCacheStore())

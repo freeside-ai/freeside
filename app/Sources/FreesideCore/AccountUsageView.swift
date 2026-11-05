@@ -134,6 +134,7 @@ struct AccountUsageView: View {
     private func poolCard(_ pool: Components.Schemas.UsagePoolUsage, now: Date) -> some View {
         let windows = UsageDisplay.windows(pool)
         let detail = pool.last_attempt?.value1.detail ?? ""
+        let parkedRuns = model.parkedRuns(on: pool.id)
         return VStack(alignment: .leading, spacing: 0) {
             band(pool, now: now)
             VStack(alignment: .leading, spacing: 14) {
@@ -149,7 +150,8 @@ struct AccountUsageView: View {
                         capacity: capacity,
                         resetLine: capacity.resetsAt.map {
                             UsageDisplay.resetLine(to: $0, now: now, locale: locale, timeZone: timeZone)
-                        })
+                        },
+                        parked: UsageDisplay.parkedClause(count: parkedRuns, level: capacity.level))
                 }
                 foot(pool, now: now)
             }
