@@ -31,9 +31,9 @@ struct TimelineRail: View {
         /// the label. The task's events name their attempt in the label and
         /// carry none.
         var context: String?
-        /// The newest entry, and on the task's events the stage start drawn
-        /// from it: the two share one instant, so both read as the head of
-        /// the rail.
+        /// The newest entry, which reads as the head of the rail. On the
+        /// task's events a stage start merges into the event it is read
+        /// from, so the newest entry can be a stage start.
         var isNewest = false
         /// The attention item the entry records a decision on, which opens
         /// its card. Nil where the client holds no such item.
@@ -133,10 +133,10 @@ struct TimelineRail: View {
             .frame(width: 2, height: Self.connectorReach)
     }
 
-    /// The newest entry and the stage start drawn from it are semibold. A
-    /// failure reads in wax and a stage start in full ink wherever they
-    /// sit; an older event is dimmed. The context, when there is one, sits
-    /// under the label in the mono a trailing summary uses.
+    /// The newest entry is semibold. A failure reads in wax and a stage
+    /// start in full ink wherever they sit; an older event is dimmed. The
+    /// context, when there is one, sits under the label in the mono a
+    /// trailing summary uses.
     private func label(_ row: Row) -> some View {
         VStack(alignment: .leading, spacing: 2) {
             if let itemID = row.itemID, let onOpenItem {

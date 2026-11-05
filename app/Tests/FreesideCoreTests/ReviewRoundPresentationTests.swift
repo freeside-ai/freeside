@@ -175,6 +175,20 @@ import Testing
         #expect(ReviewRoundPresentation.bindingLine(head: "abc", base: "") == "Head abc · Base ")
     }
 
+    /// Current Run draws the round before the newest as its own line and
+    /// folds the rest; the run page folds every earlier round.
+    @Test func previousRoundLineSplitsTheRoundBeforeTheNewest() {
+        let rounds = (1...3).reversed().map { RunFixtures.reviewRound(.completed, round: $0) }
+        let line = ReviewRoundPresentation.split(rounds, previousRoundLine: true)
+        #expect(line.previous?.round == 3)
+        #expect(line.folded.map(\.round) == [2, 1])
+        let folded = ReviewRoundPresentation.split(rounds, previousRoundLine: false)
+        #expect(folded.previous == nil)
+        #expect(folded.folded.map(\.round) == [3, 2, 1])
+        let none = ReviewRoundPresentation.split([], previousRoundLine: true)
+        #expect(none.previous == nil && none.folded.isEmpty)
+    }
+
     @Test func priorSummaryNamesTheRoundsNewestFirst() {
         let two = [RunFixtures.reviewRound(.completed, round: 2), RunFixtures.reviewRound(.completed, round: 1)]
         #expect(

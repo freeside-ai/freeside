@@ -419,16 +419,26 @@ import Testing
     @Test(arguments: TaskHistoryFixtures.Scenario.allCases)
     func completeHistoryRetainsEveryPartition(scenario: TaskHistoryFixtures.Scenario) throws {
         let history = TaskHistoryFixtures.history(scenario)
-        let entries = TaskTimelinePresentation.entries(history)
+        let task = TaskHistoryFixtures.snapshot(history).task
+        let entries = TaskTimelinePresentation.entries(history, task: task)
         #expect(history.events.last?.kind == .task_created)
-        // The event rail leads the page and ends at the task's creation;
-        // every campaign follows it.
+        // The event rail leads and ends at the task's creation; Current
+        // Run and its campaign's other attempts follow an active task's
+        // rail; every earlier campaign follows them.
         let rows = TaskTimelinePresentation.rows(history)
         #expect(Array(entries.prefix(rows.count)) == rows.map { .row($0.label) })
         #expect(rows.last?.label == "Task created")
+        let current = TaskTimelinePresentation.currentRunSection(
+            task, timeline: history, runTimelines: [:], schedules: [])
+        let following: [TaskTimelinePresentation.Entry] =
+            current.map { ([$0.run] + $0.earlierAttempts).map { .run($0.run_id) } } ?? []
+        #expect(Array(entries.dropFirst(rows.count).prefix(following.count)) == following)
         #expect(entries.dropFirst(rows.count).allSatisfy { if case .row = $0 { false } else { true } })
+        // Every run is drawn once: in Current Run or in its campaign's fold.
         let runs = history.sections.flatMap(\.runs)
-        #expect(entries.compactMap { if case .run(let id) = $0 { id } else { nil } } == runs.map(\.run_id))
+        #expect(
+            entries.compactMap { if case .run(let id) = $0 { id } else { nil } }.sorted()
+                == runs.map(\.run_id).sorted())
         #expect(TaskHistoryFixtures.snapshot(history).task.run_ids.count == runs.count)
         for section in history.sections {
             for event in section.events where event.kind == .specification_approved {
@@ -596,15 +606,16 @@ import Testing
 
     @Test func entriesLeadWithEventsAndKeepTheDaemonsOrder() {
         let timeline = Self.timeline()
+        let task = TaskHistoryFixtures.snapshot(timeline).task
 
+        // The rail leads; the current campaign (the newest, holding the
+        // current run) follows as Current Run with its earlier attempt;
+        // the earlier campaign folds below it.
         #expect(
-            TaskTimelinePresentation.entries(timeline) == [
+            TaskTimelinePresentation.entries(timeline, task: task) == [
                 .row("Task created"),
                 .row("Specification approved"),
-                .section(campaignID: "campaign-a"),
                 .run("run-1"),
-                .milestone(runID: "run-1", kind: .run_submitted),
-                .milestone(runID: "run-1", kind: .invocation_started),
                 .run("run-2"),
                 .section(campaignID: nil),
                 .run("run-0"),
@@ -616,61 +627,15 @@ import Testing
         reversed.events.reverse()
         reversed.sections.reverse()
         reversed.sections[1].runs.reverse()
-        reversed.sections[1].runs[1].milestones.reverse()
         #expect(
-            TaskTimelinePresentation.entries(reversed) == [
+            TaskTimelinePresentation.entries(reversed, task: task) == [
                 .row("Specification approved"),
                 .row("Task created"),
-                .section(campaignID: nil),
                 .run("run-0"),
                 .section(campaignID: "campaign-a"),
                 .run("run-2"),
                 .run("run-1"),
-                .milestone(runID: "run-1", kind: .invocation_started),
-                .milestone(runID: "run-1", kind: .run_submitted),
             ])
-    }
-
-    @Test func milestoneRowsLeadWithTheFirstReceivedAsNewest() {
-        let run = Self.timeline().sections[0].runs[0]
-
-        let rows = TaskTimelinePresentation.milestoneRows(run)
-
-        #expect(rows.map(\.label) == ["Run Submitted", "Invocation Started"])
-        #expect(rows.map(\.isNewest) == [true, false])
-        // The submission is a stage start, as on the run's own page.
-        #expect(rows.map(\.kind) == [.stageStart(nil), .event])
-        #expect(TaskTimelinePresentation.milestoneRows(Self.timeline().sections[0].runs[1]).isEmpty)
-    }
-
-    @Test(arguments: [Components.Schemas.ReviewProgressState.running, .completed])
-    func milestoneRowsNameEachInvocationsRole(state: Components.Schemas.ReviewProgressState) {
-        var run = Self.timeline().sections[0].runs[0]
-        run.milestones = RemediationFixtures.milestones(remediatorStarted: true).reversed()
-        let rounds = [RemediationFixtures.findingsRound(), RemediationFixtures.reReview(state)]
-
-        let rows = TaskTimelinePresentation.milestoneRows(
-            run, reviewRounds: rounds, stages: RemediationFixtures.stages)
-
-        // The implementer reads as the attempt the review round's title names.
-        let implementer = "Implementation · Pass 1 · Round 2"
-        #expect(
-            rows.map(\.context) == [
-                "Remediation for Review 1", "Remediation for Review 1", nil, implementer, implementer, implementer,
-            ])
-        // Before the run's snapshot syncs, the implementer is named by kind.
-        #expect(
-            TaskTimelinePresentation.milestoneRows(run, reviewRounds: rounds).map(\.context).last
-                == "Implementation")
-        #expect(rows[2].label == "Findings Adjudicated · Remediate 1 finding from Review 1")
-        // The remediator's start is a stage start; the rest are entries.
-        #expect(rows.map(\.kind) == [.stageStart(.implementation)] + Array(repeating: .event, count: 5))
-        #expect(rows.map(\.isNewest) == [true] + Array(repeating: false, count: 5))
-        // Without the run timeline the rail reads as before, and the
-        // remediator's start is an ordinary entry.
-        let unloaded = TaskTimelinePresentation.milestoneRows(run)
-        #expect(unloaded.map(\.context).allSatisfy { $0 == nil })
-        #expect(unloaded.allSatisfy { $0.kind == .event })
     }
 
     @Test func retryTaskTimelineListsBothAttemptsNewestFirst() throws {
@@ -720,8 +685,8 @@ import Testing
         ]
         // The rail names a result in words: no run or campaign id, no commit.
         let rows = TaskTimelinePresentation.rows(timeline)
-        #expect(rows.map(\.label) == ["Round 2 failed", "Verification recorded · Degraded", "Verification started"])
-        #expect(rows.map(\.kind) == [.failure, .event, .stageStart(.verification)])
+        #expect(rows.map(\.label) == ["Round 2 failed", "Verification started · Verification recorded · Degraded"])
+        #expect(rows.map(\.kind) == [.failure, .stageStart(.verification)])
         for value in ["run-old", "campaign-old", "old-head", "old-base", "ready-old", "review-old"] {
             #expect(!rows.contains { $0.label.contains(value) })
         }
@@ -870,7 +835,7 @@ import Testing
                 "Verified Base",
             ])
         #expect(runRows.map(\.value) == [runID, parentID, successorID, "item-ready", "h", "b"])
-        #expect(TaskTimelinePresentation.technicalRows(taskID: "task-x").map(\.value) == ["task-x"])
+        #expect(TaskTimelinePresentation.technicalRows(task: .init(taskID: "task-x")).map(\.value) == ["task-x"])
     }
 
     /// The footer holds the rows each card held, grouped by owner in page
@@ -892,20 +857,22 @@ import Testing
                 .init(campaign_id: "campaign-old", events: [], runs: []),
                 .init(events: [], runs: [.init(run_id: "run-legacy", milestones: [], events: [])]),
             ])
-        let groups = TaskTimelinePresentation.identifierGroups(timeline, taskID: "task-x")
+        let groups = TaskTimelinePresentation.identifierGroups(timeline, task: .init(taskID: "task-x"))
 
         #expect(
             groups.map(\.owner) == [
                 "Task", "Campaign campaign-new", "Attempt 2", "Attempt 1", "Campaign campaign-old", "Run run-legacy",
             ])
-        #expect(groups[0].rows == TaskTimelinePresentation.technicalRows(taskID: "task-x"))
+        #expect(groups[0].rows == TaskTimelinePresentation.technicalRows(task: .init(taskID: "task-x")))
         #expect(groups[1].rows == TaskTimelinePresentation.technicalRows(section: timeline.sections[0]))
         #expect(
             groups[2].rows == TaskTimelinePresentation.technicalRows(run: timeline.sections[0].runs[0], in: timeline))
         // The section outside a campaign records no id of its own, so only
         // its run appears.
         #expect(!groups.map(\.owner).contains("Outside a Campaign"))
-        #expect(TaskTimelinePresentation.identifiersSummary(timeline) == "task · 2 campaigns · 3 runs")
+        #expect(
+            TaskTimelinePresentation.identifiersSummary(timeline, task: .init(taskID: "task-x"))
+                == "task · 2 campaigns · 3 runs")
 
         let single = Components.Schemas.TaskTimeline(
             as_of_revision: 1, as_of: t[0], task_id: "task-x", project_id: "p",
@@ -914,9 +881,11 @@ import Testing
                 .init(campaign_id: "campaign-a", events: [], runs: [.init(run_id: "run-a", milestones: [], events: [])])
             ])
         #expect(
-            TaskTimelinePresentation.identifierGroups(single, taskID: "task-x").map(\.owner)
+            TaskTimelinePresentation.identifierGroups(single, task: .init(taskID: "task-x")).map(\.owner)
                 == ["Task", "Campaign", "Run run-a"])
-        #expect(TaskTimelinePresentation.identifiersSummary(single) == "task · campaign · 1 run")
+        #expect(
+            TaskTimelinePresentation.identifiersSummary(single, task: .init(taskID: "task-x"))
+                == "task · campaign · 1 run")
     }
 
     /// Acceptance 3 (#2607): a seated card's identifiers join the footer as
@@ -935,21 +904,25 @@ import Testing
             .init(label: "Item Version", value: "2"), .init(label: "PR Head", value: "cafebabe"),
         ]
 
-        let groups = TaskTimelinePresentation.identifierGroups(timeline, taskID: "task-x", decision: decision)
+        let groups = TaskTimelinePresentation.identifierGroups(
+            timeline, task: .init(taskID: "task-x"), decision: decision)
         #expect(groups.map(\.owner) == ["Task", "Decision", "Campaign", "Run run-a"])
         #expect(groups[1].rows == decision)
         #expect(
-            TaskTimelinePresentation.identifiersSummary(timeline, hasDecision: true)
+            TaskTimelinePresentation.identifiersSummary(timeline, task: .init(taskID: "task-x"), hasDecision: true)
                 == "task · decision · campaign · 1 run")
         #expect(
             TaskTimelinePresentation.allIdentifiersText(Array(groups.prefix(2)))
                 == "Task\nTask ID: task-x\n\nDecision\nItem Version: 2\nPR Head: cafebabe")
 
-        let beforeTimeline = TaskTimelinePresentation.identifierGroups(nil, taskID: "task-x", decision: decision)
+        let beforeTimeline = TaskTimelinePresentation.identifierGroups(
+            nil, task: .init(taskID: "task-x"), decision: decision)
         #expect(beforeTimeline.map(\.owner) == ["Task", "Decision"])
-        #expect(TaskTimelinePresentation.identifiersSummary(nil, hasDecision: true) == "task · decision")
+        #expect(
+            TaskTimelinePresentation.identifiersSummary(nil, task: .init(taskID: "task-x"), hasDecision: true)
+                == "task · decision")
         // Without a seated card the footer is the task's and its runs' alone.
-        let withoutCard = TaskTimelinePresentation.identifierGroups(timeline, taskID: "task-x")
+        let withoutCard = TaskTimelinePresentation.identifierGroups(timeline, task: .init(taskID: "task-x"))
         #expect(!withoutCard.map(\.owner).contains("Decision"))
     }
 
@@ -973,7 +946,7 @@ import Testing
                     campaign_id: "campaign-old", events: [],
                     runs: [run("run-a2", .implementation, attempt: 2), run("run-a1", .implementation, attempt: 1)]),
             ])
-        let owners = TaskTimelinePresentation.identifierGroups(timeline, taskID: "task-x").map(\.owner)
+        let owners = TaskTimelinePresentation.identifierGroups(timeline, task: .init(taskID: "task-x")).map(\.owner)
 
         #expect(
             owners == [
@@ -1162,42 +1135,82 @@ import Testing
         #expect(line.hasPrefix("Merged as PR #2431 · "))
     }
 
-    /// Nothing is invented for a fact no client source holds: Isolation and
-    /// Branch stay out, and a pull request reads as not yet opened.
-    @Test func theTaskFoldStatesOnlyWhatTheClientHolds() {
+    /// Acceptance 1 (#2611): Current Run's mono line reads the run's latest
+    /// execution admission for its own role, then that role's pool, then
+    /// the operating mode, skipping what the admission did not record.
+    /// Before the run's timeline loads it is the task line's agent and pool.
+    @Test func currentRunsLineReadsTheAdmissionThenThePool() throws {
         var page = TaskStageFixtures.page(.implementation)
-        page.task.task_lines = [TaskStageFixtures.line(.implementer, agent: "claude", pool: "A")]
-        let run = TaskTimelinePresentation.currentRun(page.task, in: page.history)
-        let facts = TaskTimelinePresentation.taskFacts(
-            page.task, position: page.position, stage: .implementation, run: run,
-            policyDigest: "sha256:\(String(repeating: "a", count: 64))", pullRequest: nil, historyLoaded: true)
+        page.task.task_lines = [
+            TaskStageFixtures.line(.specifier, agent: "codex", pool: "S"),
+            TaskStageFixtures.line(.implementer, agent: "claude", pool: "A"),
+        ]
+        let run = try #require(TaskTimelinePresentation.currentRun(page.task, in: page.history))
+        #expect(run.role?.value1 == .implementation)
+        #expect(TaskTimelinePresentation.currentRunLine(page.task, run: run, runTimeline: nil) == "claude · pool A")
 
+        var timeline = Components.Schemas.RunTimeline(
+            as_of_revision: 1, as_of: now, run_id: run.run_id, milestones: [], invocations: [], admissions: [])
+        // An admission for another role, or a review's, is not this run's.
+        timeline.admissions = [RunFixtures.writerAdmission("inv-spec", role: .specifier, at: now)]
         #expect(
-            facts.map(\.label)
-                == ["Project", "Stage", "Current Run", "Agent and Pool", "Pull Request", "Policy Digest"])
-        #expect(facts.first { $0.label == "Agent and Pool" }?.value == "claude · pool A")
-        #expect(facts.first { $0.label == "Pull Request" }?.value == "None yet")
-        // A history still loading can't say that no pull request exists.
-        let loading = TaskTimelinePresentation.taskFacts(
-            page.task, position: page.position, stage: .implementation, run: run, policyDigest: nil,
-            pullRequest: nil, historyLoaded: false)
-        #expect(!loading.map(\.label).contains("Pull Request"))
-        // The current run's implementer admission follows Agent and Pool once
-        // its timeline has loaded.
-        let admitted = TaskTimelinePresentation.taskFacts(
-            page.task, position: page.position, stage: .implementation, run: run, policyDigest: nil,
-            pullRequest: nil, historyLoaded: true,
-            admission: RunFixtures.legacyAdmission("inv-1", at: now))
+            TaskTimelinePresentation.currentRunLine(page.task, run: run, runTimeline: timeline) == "claude · pool A")
+        timeline.admissions.append(RunFixtures.writerAdmission("inv-impl", at: now))
         #expect(
-            admitted.map(\.label) == [
-                "Project", "Stage", "Current Run", "Agent and Pool", "Harness", "Model", "Effort", "Cost Owner",
-                "Credential Mode", "Egress Profile", "Isolation Class", "Operating Mode", "Pull Request",
-            ])
-        #expect(admitted.first { $0.label == "Model" }?.value == RunDisplay.unavailable)
+            TaskTimelinePresentation.currentRunLine(page.task, run: run, runTimeline: timeline)
+                == "Claude Code · claude-opus-5-5 · effort high · pool A · unattended")
+        // A fact the admission did not record is skipped, not shown as
+        // unavailable.
+        var bare = RunFixtures.writerAdmission("inv-bare", at: now)
+        bare.harness = nil
+        bare.model = nil
+        bare.requested_effort = nil
+        bare.operating_mode = nil
+        timeline.admissions.append(bare)
+        #expect(TaskTimelinePresentation.currentRunLine(page.task, run: run, runTimeline: timeline) == "pool A")
+
+        // A specification run reads the specifier's admission and line.
+        let specification = try #require(
+            TaskTimelinePresentation.currentRun(
+                page.task, in: TaskStageFixtures.page(.specification).history))
         #expect(
-            TaskTimelinePresentation.taskSummary(
-                page.task, position: page.position, stage: .implementation, run: run
-            ).hasSuffix("run 1 · claude · pool A"))
+            TaskTimelinePresentation.currentRunLine(page.task, run: specification, runTimeline: nil)
+                == "codex · pool S")
+        #expect(
+            TaskTimelinePresentation.currentRunLine(page.task, run: specification, runTimeline: timeline)
+                == "Claude Code · claude-opus-5-5 · effort high · pool S · unattended")
+        page.task.task_lines = []
+        #expect(TaskTimelinePresentation.currentRunLine(page.task, run: run, runTimeline: nil) == nil)
+    }
+
+    /// Acceptance 4 (#2611): the dissolved Task fold's repository and
+    /// policy digest join the Identifiers footer's Task group, and its
+    /// summary says so. Only an issue-sourced task names a repository.
+    @Test func theTaskGroupHoldsTheRepositoryAndPolicyDigest() throws {
+        let retry = try #require(
+            TaskFixtures.defaultTasks().first { $0.task.id == TaskFixtures.retryTaskID }
+        ).task
+        let digest = "sha256:\(String(repeating: "a", count: 64))"
+        let task = TaskTimelinePresentation.TaskIdentifiers(retry, policyDigest: digest)
+        #expect(task.repository == "freeside-ai/freeside")
+        #expect(
+            TaskTimelinePresentation.technicalRows(task: task).map(\.label)
+                == ["Task ID", "Repository", "Policy Digest"])
+        // The digest is the whole value, never a shortened one.
+        #expect(TaskTimelinePresentation.technicalRows(task: task).last?.value == digest)
+        let history = TaskHistoryFixtures.history(.approved)
+        let groups = TaskTimelinePresentation.identifierGroups(history, task: task)
+        #expect(groups.first?.owner == "Task")
+        #expect(groups.first?.rows == TaskTimelinePresentation.technicalRows(task: task))
+        #expect(
+            TaskTimelinePresentation.identifiersSummary(history, task: task).hasPrefix("task · repo · policy · "))
+
+        let legacy = try #require(
+            TaskFixtures.defaultTasks().first { $0.task.id == TaskFixtures.legacyTaskID }
+        ).task
+        let bare = TaskTimelinePresentation.TaskIdentifiers(legacy, policyDigest: nil)
+        #expect(bare.repository == nil)
+        #expect(TaskTimelinePresentation.technicalRows(task: bare).map(\.label) == ["Task ID"])
     }
 
     @Test func eachNamedConversationDrawsOnceNewestFirst() {

@@ -327,12 +327,13 @@ package enum RunDisplay {
         timeline.admissions.last { $0.invocation_id == invocationID }
     }
 
-    /// The latest implementer admission among a run's admissions, the one
-    /// the task page shows for the current run.
-    package static func latestImplementerAdmission(
-        _ timeline: Components.Schemas.RunTimeline
+    /// The latest execution admission for `role` among a run's admissions:
+    /// the one the task page's Current Run reads, skipping reviews and the
+    /// run's other roles.
+    package static func latestExecutionAdmission(
+        _ timeline: Components.Schemas.RunTimeline, role: Components.Schemas.RoleName
     ) -> Components.Schemas.InvocationAdmissionFacts? {
-        timeline.admissions.last { $0.kind == .execution && $0.role?.value1 == .implementer }
+        timeline.admissions.last { $0.kind == .execution && $0.role?.value1 == role }
     }
 
     /// The admitting backend in words. The backend is an open string on the

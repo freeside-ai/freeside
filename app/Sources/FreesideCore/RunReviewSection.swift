@@ -64,17 +64,23 @@ struct RunReviewSection: View {
         let priorRounds: Binding<Bool>
     }
     private let folds: Folds?
+    /// Whether the round before the newest stands as its own line with its
+    /// reviewer output, ahead of the fold: the task page's Current Run,
+    /// where the last verdict is what the reader checks the running round
+    /// against. The run page folds every earlier round.
+    private let previousRoundLine: Bool
 
     init(
         coordinator: SyncCoordinator, runID: String, facts: Components.Schemas.RunReviewFacts?,
         stages: [Components.Schemas.Stage] = [], hasTimeline: Bool = true, startsExpanded: Bool = false,
-        folds: Folds? = nil
+        previousRoundLine: Bool = false, folds: Folds? = nil
     ) {
         self.coordinator = coordinator
         self.runID = runID
         self.facts = facts
         self.stages = stages
         self.hasTimeline = hasTimeline
+        self.previousRoundLine = previousRoundLine
         self.folds = folds
         // A screenshot captures the open state by starting there; live use
         // starts every fold collapsed.
@@ -125,16 +131,22 @@ struct RunReviewSection: View {
     }
 
     /// The rounds, set apart by spacing alone (6.3, R26): the newest round's
-    /// verdict and facts, then every earlier round folded to a single
+    /// verdict and facts, then, with `previousRoundLine`, the round before
+    /// it as one line, then every earlier round folded to a single
     /// hollow-marker line.
     private func roundsBlock(
-        current: Components.Schemas.RunReviewRound, prior: [Components.Schemas.RunReviewRound],
+        current: Components.Schemas.RunReviewRound, prior allPrior: [Components.Schemas.RunReviewRound],
         all: [Components.Schemas.RunReviewRound], now: Date
     ) -> some View {
         let attention = ReviewRoundPresentation.hasOpenAdjudication(
             runID: runID, in: coordinator.store.orderedSnapshots)
+        let split = ReviewRoundPresentation.split(allPrior, previousRoundLine: previousRoundLine)
+        let prior = split.folded
         return VStack(alignment: .leading, spacing: 11) {
             roundRows(current, isCurrent: true, attention: attention, in: all, now: now)
+            if let previous = split.previous {
+                previousRow(previous, in: all)
+            }
             if !prior.isEmpty {
                 let showsPriorRounds = folds?.priorRounds ?? $showsPriorRounds
                 Button {
@@ -159,6 +171,27 @@ struct RunReviewSection: View {
             }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
+    }
+
+    /// The round before the newest as one hollow-marker line: its summary,
+    /// then its reviewer output, or the note saying why there is none.
+    private func previousRow(
+        _ round: Components.Schemas.RunReviewRound, in all: [Components.Schemas.RunReviewRound]
+    ) -> some View {
+        markedRow(isCurrent: false, time: ReviewRoundPresentation.time(round)) {
+            WrappingHStack(horizontalSpacing: 8, verticalSpacing: 4) {
+                Text(ReviewRoundPresentation.priorSummary([round], in: all, stages: stages))
+                    .font(FreesideFont.callout)
+                    .foregroundStyle(Color.inkDim)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .multilineTextAlignment(.leading)
+                if let note = ReviewRoundPresentation.evidenceNote(round) {
+                    evidenceNote(note)
+                } else if round.evidence.availability == .available {
+                    evidenceLink("Inspect reviewer output", round: round)
+                }
+            }
+        }
     }
 
     @ViewBuilder
@@ -519,6 +552,16 @@ enum ReviewRoundPresentation {
 
     static func factsSummary(_ round: Components.Schemas.RunReviewRound) -> String {
         "\(bindingLine(head: round.head_sha, base: round.base_sha)) · \(sourceSummary(round.source.kind))"
+    }
+
+    /// The rounds after the newest, split for drawing: with
+    /// `previousRoundLine` the first stands alone and the rest fold;
+    /// otherwise all of them fold.
+    static func split(
+        _ prior: [Components.Schemas.RunReviewRound], previousRoundLine: Bool
+    ) -> (previous: Components.Schemas.RunReviewRound?, folded: [Components.Schemas.RunReviewRound]) {
+        guard previousRoundLine, let previous = prior.first else { return (nil, prior) }
+        return (previous, Array(prior.dropFirst()))
     }
 
     /// The instant a round's row carries: when it completed, else when it
