@@ -1913,6 +1913,16 @@ does for an operator's.
 - **Dispatch clears the hold.** An attempt's hold ends when it starts. A
   review's hold ends when its admission is written, and the review's wait
   spends no retry budget.
+- **An escalated specifier routes among counterparts.** When triage
+  escalated a task (Subscription-Backed Daemon Judgments), its specifier's
+  order is the escalated counterpart the lineup names for each agent of the
+  policy's specifier order, skipping agents with none. Those counterparts'
+  windows for the escalated model rank and pick the pool, and the
+  specifier's router line, version 2 over its triage line, names the chosen
+  counterpart. Every other role is pinned to that pool as usual. When every
+  counterpart is marked, the specifier holds. When none resolves, the router
+  writes nothing at the specifier's admission and the triage line keeps the
+  specifier escalated; the later roles route at their first admission.
 
 ### Retry Or Move A Task To Another Agent
 

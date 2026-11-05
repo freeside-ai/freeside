@@ -253,3 +253,78 @@ func TestRecordSpecifierTriageRefusals(t *testing.T) {
 		})
 	}
 }
+
+// An escalated specifier's router line lands as version 2 over the task's
+// triage line. Every other second version stays refused: a router line over
+// an operator's line, a second routing over the router's own line, and any
+// role but the specifier.
+func TestRecordRouterTaskLinesOverTriage(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	routeAt := triageRecordedAt.Add(time.Second)
+	record := func(s *store.Store, taskID domain.TaskID, inputs ...domain.TaskLineInput) ([]domain.TaskLine, error) {
+		var lines []domain.TaskLine
+		err := s.Write(ctx, func(tx *store.WriteTx) error {
+			var err error
+			lines, err = tx.RecordRouterTaskLines(ctx, taskID, inputs, routeAt)
+			return err
+		})
+		return lines, err
+	}
+	escalate := func(t *testing.T, s *store.Store, taskID domain.TaskID) *domain.TaskLine {
+		t.Helper()
+		line, err := recordSpecifierTriage(ctx, s, domain.TaskTriage{
+			TaskID: taskID, Outcome: domain.TriageOutcomeCallFailed, Escalated: true, RecordedAt: triageRecordedAt,
+		}, "claude-escalated")
+		if err != nil {
+			t.Fatal(err)
+		}
+		return line
+	}
+
+	s := openStore(t, store.Options{})
+	taskID, _ := seedTaskSubmissionTarget(t, ctx, s)
+	triage := escalate(t, s, taskID)
+	specifier := routerTaskLineInput(taskID)
+	specifier.Role, specifier.Agent = domain.RoleSpecifier, "claude-escalated-b"
+	implementer := routerTaskLineInput(taskID)
+	lines, err := record(s, taskID, specifier, implementer)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(lines) != 2 || lines[0].Version != 2 || lines[0].PredecessorID == nil ||
+		*lines[0].PredecessorID != triage.ID || lines[1].Version != 1 {
+		t.Fatalf("lines = %+v, want the specifier's second version over %s", lines, triage.ID)
+	}
+	if _, err := record(s, taskID, specifier); !errors.Is(err, domain.ErrTaskLineInconsistent) {
+		t.Fatalf("a routing over the router's line: err = %v, want %v", err, domain.ErrTaskLineInconsistent)
+	}
+
+	operator := openStore(t, store.Options{})
+	operatorTask, _ := seedTaskSubmissionTarget(t, ctx, operator)
+	if _, err := recordTaskLineChange(t, operator, operatorTask, domain.RoleSpecifier, "claude-a", false, nil, triageRecordedAt); err != nil {
+		t.Fatal(err)
+	}
+	specifier.TaskID, specifier.SetBy = operatorTask, "router:"+string(operatorTask)
+	if _, err := record(operator, operatorTask, specifier); !errors.Is(err, domain.ErrTaskLineInconsistent) {
+		t.Fatalf("a routing over an operator's line: err = %v, want %v", err, domain.ErrTaskLineInconsistent)
+	}
+
+	// A triage-sourced line on another role is one no triage writes (the
+	// store's own append takes it; admission's anchor refuses it).
+	other := openStore(t, store.Options{})
+	otherTask, _ := seedTaskSubmissionTarget(t, ctx, other)
+	if err := other.Write(ctx, func(tx *store.WriteTx) error {
+		_, err := tx.AppendTaskLine(ctx, domain.TaskLineInput{
+			TaskID: otherTask, Role: domain.RoleImplementer, Agent: "claude-a",
+			Source: domain.TaskLineSourceTriage, SetBy: string(otherTask),
+		}, triageRecordedAt)
+		return err
+	}); err != nil {
+		t.Fatal(err)
+	}
+	implementer.TaskID, implementer.SetBy = otherTask, "router:"+string(otherTask)
+	if _, err := record(other, otherTask, implementer); !errors.Is(err, domain.ErrTaskLineInconsistent) {
+		t.Fatalf("an implementer over a triage line: err = %v, want %v", err, domain.ErrTaskLineInconsistent)
+	}
+}

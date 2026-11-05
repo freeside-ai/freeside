@@ -79,6 +79,12 @@ func (s AgentSelection) routeBeforeAdmission(
 // when no mark gives a reset, picks the first ranked agent and lets the
 // provider decide. With no resolvable agent it writes nothing, and the task
 // stays on the lineup.
+//
+// An escalated task's specifier (its head line is the triage line and its
+// record escalated) routes over that line among the counterparts of its
+// order (escalatedOrder), so the counterparts' windows pick the pool, and its
+// router line is version 2. With no resolvable counterpart it writes
+// nothing, and the triage line keeps the specifier escalated.
 func (s AgentSelection) routeTask(
 	ctx context.Context, st *store.Store, runID domain.RunID, role domain.RoleName, now time.Time,
 ) error {
@@ -121,11 +127,25 @@ func (s AgentSelection) planRoute(
 		return nil, err
 	}
 	lined := make(map[domain.RoleName]bool, len(lines))
+	var specifierHead domain.TaskLine
 	for _, line := range lines {
 		if line.Source == domain.TaskLineSourceRouter {
 			return nil, nil
 		}
 		lined[line.Role] = true
+		// Lines come ordered by role, then version: the last is the head.
+		if line.Role == domain.RoleSpecifier {
+			specifierHead = line
+		}
+	}
+	escalated := false
+	if role == domain.RoleSpecifier && specifierHead.Source == domain.TaskLineSourceTriage {
+		if escalated, err = taskEscalated(ctx, tx, run.TaskID); err != nil {
+			return nil, err
+		}
+		// The triage line names the tier, not a pool: the router may still
+		// route the specifier, among the counterparts (escalatedOrder).
+		lined[role] = !escalated
 	}
 	if lined[role] {
 		return nil, nil
@@ -144,6 +164,11 @@ func (s AgentSelection) planRoute(
 	candidates, err := s.routeCandidates(ctx, tx, policy)
 	if err != nil {
 		return nil, err
+	}
+	if escalated {
+		if order, err = s.escalatedOrder(ctx, tx, order, candidates); err != nil || len(order) == 0 {
+			return nil, err
+		}
 	}
 	choice, err := pickRoute(ctx, tx, policy, order, candidates, now)
 	if err != nil || choice == nil {
@@ -166,6 +191,48 @@ func (s AgentSelection) planRoute(
 		})
 	}
 	return inputs, nil
+}
+
+// taskEscalated reports whether the task's triage record escalated its
+// specifier.
+func taskEscalated(ctx context.Context, tx *store.ReadTx, taskID domain.TaskID) (bool, error) {
+	record, found, err := tx.GetTaskTriage(ctx, taskID)
+	return found && record.Escalated, err
+}
+
+// escalatedOrder is an escalated specifier's order (plan §5.13, Specifier
+// Triage): the escalated counterpart the lineup names for each agent of the
+// policy's specifier order, in that order. An agent with no counterpart, a
+// counterpart that does not resolve, and a repeat are skipped; each
+// resolvable counterpart joins candidates, so its pool's windows for the
+// escalated model rank it. A lineup that does not resolve has none, and
+// admission refuses it.
+func (s AgentSelection) escalatedOrder(
+	ctx context.Context, tx *store.ReadTx, order []string, candidates map[string]routeCandidate,
+) ([]string, error) {
+	lineup, err := s.Tree.ResolveLineup()
+	if err != nil {
+		return nil, nil
+	}
+	var counterparts []string
+	for _, name := range order {
+		counterpart, ok := lineup.EscalatedCounterpart(domain.RoleSpecifier, name)
+		if !ok || slices.Contains(counterparts, counterpart.AgentName) {
+			continue
+		}
+		if _, ok := candidates[counterpart.AgentName]; !ok {
+			candidate, ok, err := s.routeCandidate(ctx, tx, counterpart.AgentName)
+			if err != nil {
+				return nil, err
+			}
+			if !ok {
+				continue
+			}
+			candidates[counterpart.AgentName] = candidate
+		}
+		counterparts = append(counterparts, counterpart.AgentName)
+	}
+	return counterparts, nil
 }
 
 // policyInEffect returns the revision in effect at now: the current one, or,
