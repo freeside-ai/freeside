@@ -880,7 +880,7 @@ struct DecisionDetailView: View {
                 AttachmentRow(
                     label: artifact._type.rawValue,
                     digest: artifact.digest,
-                    metadata: artifact.metadata,
+                    reference: AttachmentReference(artifact.metadata),
                     attachments: attachments,
                     loadsAttachments: loadsAttachments,
                     rendersInteractiveControls: register.rendersInteractiveControls,
@@ -1300,7 +1300,8 @@ struct DecisionDetailView: View {
             Text("Source: agent invocation `\(Self.producerInvocationID(claim))`")
                 .font(FreesideFont.cardBody).textSelection(.enabled)
             AttachmentRow(
-                label: "Original report", digest: claim.digest, metadata: claim.metadata, attachments: attachments,
+                label: "Original report", digest: claim.digest, reference: AttachmentReference(claim.metadata),
+                attachments: attachments,
                 loadsAttachments: false, text: claim.text, drawsTextAsSummary: true,
                 rendersInteractiveControls: rendersInteractiveControls)
         }
@@ -1745,7 +1746,7 @@ struct DecisionDetailView: View {
                         AttachmentRow(
                             label: title,
                             digest: specification.digest,
-                            metadata: specification.metadata,
+                            reference: AttachmentReference(specification.metadata),
                             attachments: attachments,
                             loadsAttachments: loadsAttachments,
                             rendersInteractiveControls: rendersInteractiveControls)
@@ -1957,7 +1958,7 @@ struct DecisionDetailView: View {
                 // and their retry are that row's own.
                 AttachmentRow(
                     label: claim.label, digest: claim.digest,
-                    metadata: claim.metadata,
+                    reference: AttachmentReference(claim.metadata),
                     attachments: attachments,
                     loadsAttachments: loadsAttachments,
                     text: claim.text,
@@ -3335,11 +3336,13 @@ struct DecisionDetailView: View {
     struct AttachmentRow: View {
         let label: String
         let digest: String
-        /// The reference's daemon-validated §5.15 metadata. Nil only for a
-        /// conversation message attachment, which the wire carries as a bare
-        /// digest with no metadata; that row falls back to fetch-and-inspect
-        /// and shows no typed media/size caption.
-        var metadata: Components.Schemas.EvidenceMetadata? = nil
+        /// The reference's daemon-validated media type, size, and
+        /// availability: an evidence reference's §5.15 metadata, or a task
+        /// attachment's record. Nil only for a conversation message
+        /// attachment, which the wire carries as a bare digest with no
+        /// metadata; that row falls back to fetch-and-inspect and shows no
+        /// typed media/size caption.
+        var reference: AttachmentReference? = nil
         let attachments: AttachmentLoader
         let loadsAttachments: Bool
         var text: Components.Schemas.ClaimText? = nil
@@ -3381,7 +3384,6 @@ struct DecisionDetailView: View {
                         .textSelection(.enabled)
                         .frame(maxWidth: .infinity, alignment: .leading)
                 } else {
-                    let reference = metadata.map(AttachmentReference.init)
                     fetchedAttachment
                         // Keyed on availability as well as the digest: the
                         // contract lets a refresh flip availability for the same
@@ -3400,8 +3402,8 @@ struct DecisionDetailView: View {
                                 await attachments.load(digest)
                             }
                         }
-                    if let metadata {
-                        metadataCaption(metadata)
+                    if let reference {
+                        metadataCaption(reference)
                     }
                 }
                 digestCaption
@@ -3601,16 +3603,14 @@ struct DecisionDetailView: View {
 
         /// The daemon-validated media type and size (plan §5.15), read from
         /// the reference's typed metadata rather than inferred from a fetch.
-        private func metadataCaption(
-            _ metadata: Components.Schemas.EvidenceMetadata
-        ) -> some View {
-            Text("\(metadata.media_type.rawValue) · \(byteCount(Int(metadata.size_bytes)))")
+        private func metadataCaption(_ reference: AttachmentReference) -> some View {
+            Text("\(reference.mediaType) · \(byteCount(reference.sizeBytes))")
                 .font(FreesideFont.attachmentFact)
                 .foregroundStyle(Color.inkDim)
                 .lineLimit(1)
                 .textSelection(.enabled)
                 .accessibilityLabel(
-                    "\(label): \(metadata.media_type.rawValue), \(byteCount(Int(metadata.size_bytes)))"
+                    "\(label): \(reference.mediaType), \(byteCount(reference.sizeBytes))"
                 )
         }
 
@@ -3656,7 +3656,7 @@ struct DecisionDetailView: View {
 
         private func retryFetch() {
             let requestedDigest = digest
-            let reference = metadata.map(AttachmentReference.init)
+            let reference = reference
             Task {
                 if let reference {
                     await attachments.load(requestedDigest, reference: reference)
