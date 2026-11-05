@@ -112,7 +112,7 @@ Signing needs an `Apple Development` identity, which Xcode mints from the free p
 
 ## New Task Prompt History
 
-On Mac, press **Up** in **Work to do** on the first visual line with no
+On Mac, press **Up** in New Task's text area on the first visual line with no
 selection to recall the selected project's most recent confirmed prompt.
 Further Up/Down presses browse older/newer prompts; Down past the newest
 restores your exact draft. Editing a recalled prompt makes it the current
@@ -123,7 +123,7 @@ The live app retains up to 50 prompt entries locally across restarts, scoped
 to the deployment and paired device. Consecutive identical prompts for a
 project are coalesced; the oldest entries are evicted first. Mock and ephemeral
 sessions keep history only in memory. Recall changes neither the project nor
-the optional name and sends nothing. Only a confirmed submission (including
+the agent choices and sends nothing. Only a confirmed submission (including
 a successful recovery) enters history. A history-save failure reports a
 notice without changing task success.
 

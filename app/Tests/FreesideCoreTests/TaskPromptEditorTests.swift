@@ -24,6 +24,111 @@
                     keyCode: up ? 126 : 125))
         }
 
+        private func returnKey(modifiers: NSEvent.ModifierFlags = [], keypad: Bool = false) throws -> NSEvent {
+            try #require(
+                NSEvent.keyEvent(
+                    with: .keyDown, location: .zero, modifierFlags: modifiers, timestamp: 0, windowNumber: 0,
+                    context: nil, characters: keypad ? "\u{3}" : "\r",
+                    charactersIgnoringModifiers: keypad ? "\u{3}" : "\r", isARepeat: false,
+                    keyCode: keypad ? 76 : 36))
+        }
+
+        /// What the sheet's submit does: it sends only while the draft can.
+        private final class Sheet {
+            var canSubmit: Bool
+            var submits = 0
+            init(canSubmit: Bool) { self.canSubmit = canSubmit }
+            func submit() -> Bool {
+                guard canSubmit else { return false }
+                submits += 1
+                return true
+            }
+        }
+
+        /// An editor wired to a sheet's submit, its caret at the end.
+        private func submittingEditor(_ text: String, canSubmit: Bool) -> (PromptTextView, Sheet) {
+            let view = editor(text)
+            view.setSelectedRange(NSRange(location: (text as NSString).length, length: 0))
+            let sheet = Sheet(canSubmit: canSubmit)
+            view.onSubmit = sheet.submit
+            return (view, sheet)
+        }
+
+        @Test func returnSubmitsWithoutInsertingALine() throws {
+            let (view, sheet) = submittingEditor("draft", canSubmit: true)
+            view.keyDown(with: try returnKey())
+            #expect(sheet.submits == 1)
+            #expect(view.string == "draft")
+            view.keyDown(with: try returnKey(keypad: true))
+            #expect(sheet.submits == 2)
+            #expect(view.string == "draft")
+        }
+
+        @Test func arrowsStillRecallWhileReturnSubmits() throws {
+            let (view, sheet) = submittingEditor("", canSubmit: true)
+            view.keyDown(with: try arrow(true))
+            #expect(view.string == "new prompt")
+            view.keyDown(with: try arrow(false))
+            #expect(view.string == "")
+            view.keyDown(with: try arrow(true))
+            view.keyDown(with: try returnKey())
+            #expect(sheet.submits == 1)
+            #expect(view.string == "new prompt")
+        }
+
+        @Test func returnWhileTheDraftCannotSendDoesNothing() throws {
+            let (view, sheet) = submittingEditor("draft", canSubmit: false)
+            view.keyDown(with: try returnKey())
+            #expect(sheet.submits == 0)
+            #expect(view.string == "draft")
+        }
+
+        @Test func shiftReturnInsertsALineAndDoesNotSubmit() throws {
+            let (view, sheet) = submittingEditor("draft", canSubmit: true)
+            view.keyDown(with: try returnKey(modifiers: .shift))
+            #expect(sheet.submits == 0)
+            #expect(view.string == "draft\n")
+        }
+
+        @Test func returnCommitsACompositionInsteadOfSubmitting() throws {
+            let (view, sheet) = submittingEditor("", canSubmit: true)
+            view.setMarkedText(
+                "かな", selectedRange: NSRange(location: 2, length: 0),
+                replacementRange: NSRange(location: NSNotFound, length: 0))
+            view.keyDown(with: try returnKey())
+            #expect(sheet.submits == 0)
+        }
+
+        @Test func withNoSubmitWiredReturnInsertsALine() throws {
+            let view = editor("draft")
+            view.setSelectedRange(NSRange(location: 5, length: 0))
+            view.keyDown(with: try returnKey())
+            #expect(view.string == "draft\n")
+        }
+
+        @Test func voiceOverSubmitActionSubmitsOnlyWhenTheDraftCanSend() throws {
+            let (view, sheet) = submittingEditor("draft", canSubmit: false)
+            let action = try #require(view.accessibilityCustomActions()?.first)
+            #expect(action.name == "Submit")
+            #expect(action.handler?() == false)
+            #expect(sheet.submits == 0)
+            sheet.canSubmit = true
+            #expect(action.handler?() == true)
+            #expect(sheet.submits == 1)
+        }
+
+        @Test func contentHeightGrowsWithTheDraftAndReportsOnlyChanges() throws {
+            let view = editor()
+            var heights: [CGFloat] = []
+            view.onContentHeightChange = { heights.append($0) }
+            view.insertText("one", replacementRange: NSRange(location: 0, length: 0))
+            view.insertText("two", replacementRange: NSRange(location: 3, length: 0))
+            #expect(heights.count == 1)
+            view.insertText("\nthree", replacementRange: NSRange(location: 6, length: 0))
+            #expect(heights.count == 2)
+            #expect(heights[1] > heights[0])
+        }
+
         @Test func deliveredArrowsBrowseAndRestoreExactDraft() throws {
             let view = editor("  draft\n\n")
             var updates: [String] = []

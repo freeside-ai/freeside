@@ -719,15 +719,12 @@
                                 submit: { _, _ in true }))))
             }
 
-            // The New Task composer (#1330): the project picker trigger, the
-            // source field, the optional name, and the agent choices (#1602),
-            // on Mac and phone. Empty and filled are each drawn by day and by
-            // dusk, so the fill rule shows in both appearances: Submit takes
-            // the disabled recipe on the empty form and its fill on the valid
-            // one.
+            // The New Task composer (#1330, #2581): the text area over the
+            // project chip and the Agents chip (#1602), on Mac and phone,
+            // empty and filled, each by day and by dusk.
             // ImageRenderer draws the static stand-ins, not the live
-            // TextEditor or Picker; the toolbar action and open sheet are in
-            // the PR's real-app screenshots.
+            // TextEditor, Menu, or the iPhone's navigation bar; the toolbar
+            // action and open sheet are in the PR's real-app screenshots.
             let newTaskProjects = TaskDisplay.knownProjects(in: TaskFixtures.defaultTasks())
             // The composer only opens on a settled sync, so the goldens depict
             // that state: a fresh coordinator keeps the filled surface's Submit
@@ -749,15 +746,15 @@
             let noTreeModel = TaskSubmissionModel(coordinator: noTreeCoordinator)
             let filledSource =
                 "Add a /health endpoint returning the daemon version and uptime, with a test."
-            for (name, width, scheme, draftSource, draftName) in [
-                ("new-task-sheet", CGFloat(380), ColorScheme.light, "", ""),
-                ("new-task-sheet-filled-dark", CGFloat(380), ColorScheme.dark, filledSource, "Health endpoint"),
-                ("new-task-sheet-phone", CGFloat(390), ColorScheme.light, "", ""),
-                ("new-task-sheet-phone-filled-dark", CGFloat(390), ColorScheme.dark, filledSource, "Health endpoint"),
-                ("new-task-sheet-dark", CGFloat(380), ColorScheme.dark, "", ""),
-                ("new-task-sheet-filled", CGFloat(380), ColorScheme.light, filledSource, "Health endpoint"),
-                ("new-task-sheet-phone-dark", CGFloat(390), ColorScheme.dark, "", ""),
-                ("new-task-sheet-phone-filled", CGFloat(390), ColorScheme.light, filledSource, "Health endpoint"),
+            for (name, width, scheme, draftSource) in [
+                ("new-task-sheet", CGFloat(380), ColorScheme.light, ""),
+                ("new-task-sheet-filled-dark", CGFloat(380), ColorScheme.dark, filledSource),
+                ("new-task-sheet-phone", CGFloat(390), ColorScheme.light, ""),
+                ("new-task-sheet-phone-filled-dark", CGFloat(390), ColorScheme.dark, filledSource),
+                ("new-task-sheet-dark", CGFloat(380), ColorScheme.dark, ""),
+                ("new-task-sheet-filled", CGFloat(380), ColorScheme.light, filledSource),
+                ("new-task-sheet-phone-dark", CGFloat(390), ColorScheme.dark, ""),
+                ("new-task-sheet-phone-filled", CGFloat(390), ColorScheme.light, filledSource),
             ] {
                 surfaces.append(
                     Surface(
@@ -770,35 +767,31 @@
                                 model: newTaskModel,
                                 onSubmitted: { _ in },
                                 rendersInteractiveControls: false,
-                                initialSource: draftSource,
-                                initialName: draftName))))
+                                initialSource: draftSource))))
             }
-            // The agent choices: a writer and reviewer chosen, each with
-            // its facts; a daemon with no agent tree; and a writer the
-            // catalog no longer carries, which blocks Submit.
-            for (name, width, scheme, model, writer, reviewer) in [
+            // The agent choices: one writer and a reviewer chosen, so the
+            // open composer draws the four role chips; a daemon with no
+            // agent tree, so the Agents chip is disabled; and an implementer
+            // the catalog no longer carries, which blocks Submit.
+            let writerAndReviewer: [NewTaskSheet.Role: String] = [
+                .specifier: "claude-secondary", .implementer: "claude-secondary", .remediator: "claude-secondary",
+                .reviewer: "claude-primary",
+            ]
+            let staleImplementer: [NewTaskSheet.Role: String] = [.implementer: "claude-retired"]
+            for (name, width, scheme, model, choices, open) in [
+                ("new-task-sheet-agents", CGFloat(380), ColorScheme.light, newTaskModel, writerAndReviewer, true),
+                ("new-task-sheet-agents-dark", CGFloat(380), ColorScheme.dark, newTaskModel, writerAndReviewer, true),
+                ("new-task-sheet-phone-agents", CGFloat(390), ColorScheme.light, newTaskModel, writerAndReviewer, true),
                 (
-                    "new-task-sheet-agents", CGFloat(380), ColorScheme.light, newTaskModel, "claude-secondary",
-                    "claude-primary"
+                    "new-task-sheet-phone-agents-dark", CGFloat(390), ColorScheme.dark, newTaskModel, writerAndReviewer,
+                    true
                 ),
-                (
-                    "new-task-sheet-agents-dark", CGFloat(380), ColorScheme.dark, newTaskModel, "claude-secondary",
-                    "claude-primary"
-                ),
-                (
-                    "new-task-sheet-phone-agents", CGFloat(390), ColorScheme.light, newTaskModel, "claude-secondary",
-                    "claude-primary"
-                ),
-                (
-                    "new-task-sheet-phone-agents-dark", CGFloat(390), ColorScheme.dark, newTaskModel,
-                    "claude-secondary", "claude-primary"
-                ),
-                ("new-task-sheet-no-catalog", CGFloat(380), ColorScheme.light, noTreeModel, nil, nil),
-                ("new-task-sheet-no-catalog-dark", CGFloat(380), ColorScheme.dark, noTreeModel, nil, nil),
-                ("new-task-sheet-phone-no-catalog", CGFloat(390), ColorScheme.light, noTreeModel, nil, nil),
-                ("new-task-sheet-phone-no-catalog-dark", CGFloat(390), ColorScheme.dark, noTreeModel, nil, nil),
-                ("new-task-sheet-agent-missing", CGFloat(380), ColorScheme.light, newTaskModel, "claude-retired", nil),
-            ] as [(String, CGFloat, ColorScheme, TaskSubmissionModel, String?, String?)] {
+                ("new-task-sheet-no-catalog", CGFloat(380), ColorScheme.light, noTreeModel, [:], false),
+                ("new-task-sheet-no-catalog-dark", CGFloat(380), ColorScheme.dark, noTreeModel, [:], false),
+                ("new-task-sheet-phone-no-catalog", CGFloat(390), ColorScheme.light, noTreeModel, [:], false),
+                ("new-task-sheet-phone-no-catalog-dark", CGFloat(390), ColorScheme.dark, noTreeModel, [:], false),
+                ("new-task-sheet-agent-missing", CGFloat(380), ColorScheme.light, newTaskModel, staleImplementer, true),
+            ] as [(String, CGFloat, ColorScheme, TaskSubmissionModel, [NewTaskSheet.Role: String], Bool)] {
                 surfaces.append(
                     Surface(
                         name: name, width: width, colorScheme: scheme,
@@ -806,7 +799,29 @@
                             NewTaskSheet(
                                 projects: newTaskProjects, model: model, onSubmitted: { _ in },
                                 rendersInteractiveControls: false, initialSource: filledSource,
-                                initialWriter: writer, initialReviewer: reviewer))))
+                                initialChoices: choices, initialAgentsOpen: open))))
+            }
+            // A long draft grows the text area to its cap; the foot stays
+            // under it, and the closed Agents chip reads the choices.
+            let grownSource =
+                "Make the acceptance rig recover a stale lease an older-schema build left, and cover it with the "
+                + "convergence suite. Keep the lease's schema version in the record so a future build can tell its "
+                + "own leases from the older ones, and make the recovery idempotent: a second pass over an "
+                + "already-recovered lease is a no-op with a log line. Add the two convergence cases from #2451 and "
+                + "the one from the 30 Oct exit run.\n\nThe rig should also say which build left the lease when it "
+                + "recovers one, so the exit run's report can name it, and the recovery should never touch a lease "
+                + "a live build still holds: check the holder's heartbeat first and leave a fresh one alone. When "
+                + "the heartbeat is stale but the build is still running, log both and recover nothing. Note the "
+                + "recovery in the task's timeline so the operator can see it happened."
+            for (name, scheme) in [("new-task-sheet-grown", ColorScheme.light), ("new-task-sheet-grown-dark", .dark)] {
+                surfaces.append(
+                    Surface(
+                        name: name, width: 380, colorScheme: scheme,
+                        view: AnyView(
+                            NewTaskSheet(
+                                projects: newTaskProjects, model: newTaskModel, onSubmitted: { _ in },
+                                rendersInteractiveControls: false, initialSource: grownSource,
+                                initialChoices: writerAndReviewer))))
             }
 
             let recoveryModel = try TaskSubmissionRecoveryScreenshots.model(client: client)
