@@ -563,13 +563,46 @@ func refusedRebuildVerification(
 	refusal rebuildRefusal,
 	approvedRecipes map[domain.Digest]bool,
 ) (verify.Result, error) {
-	content := []byte(fmt.Sprintf(
-		"Project image rebuild refused: %s\n\n"+
+	content := fmt.Sprintf(
+		"%s\n\n"+
 			"Freeside did not verify candidate %s. Its dependency manifests differ from the ones project image %s was built with, and Freeside rebuilds an image without a person only for a change inside the project's policy. No verification command ran.\n",
-		refusal.account(), headSHA, binding.image.ImageRef))
-	digest := domain.Digest(contentaddr.Sum(content))
+		rebuildRefusedLine(refusal), headSHA, binding.image.ImageRef)
 	recipe := binding.image.RecipeDigest
-	invocation := task.verificationInvocationID()
+	// The stable per-verification time a room's evidence carries, so a
+	// replayed refusal converges on the same artifact.
+	evidence, err := daemonVerificationEvidence(task.verificationInvocationID(), headSHA, recipe,
+		content, binding.export.RecordedAt, approvedRecipes)
+	if err != nil {
+		return verify.Result{}, err
+	}
+	return verify.Result{
+		HeadSHA: headSHA, RecipeDigest: recipe, Outcome: verify.OutcomeFailed,
+		Evidence: []verify.Evidence{evidence},
+	}, nil
+}
+
+// rebuildRefusedLine is the first line of the evidence a rebuild refusal
+// shows, on a first publication and at a handoff alike, so a reader finds the
+// clause in the same place.
+func rebuildRefusedLine(refusal rebuildRefusal) string {
+	return "Project image rebuild refused: " + refusal.account()
+}
+
+// daemonVerificationEvidence is one plain-text evidence artifact the daemon
+// writes in place of a verifier's, under invocation and bound to headSHA.
+// createdAt must be stable for the verification it stands in for: the
+// artifact is content-addressed and write-once, so a replay must reproduce
+// it.
+func daemonVerificationEvidence(
+	invocation domain.InvocationID,
+	headSHA string,
+	recipe domain.Digest,
+	content string,
+	createdAt time.Time,
+	approvedRecipes map[domain.Digest]bool,
+) (verify.Evidence, error) {
+	body := []byte(content)
+	digest := domain.Digest(contentaddr.Sum(body))
 	artifact, err := domain.NewArtifact(domain.ArtifactInput{
 		ID:     domain.ArtifactID(string(domain.ArtifactKindEvidence) + ":" + string(invocation) + ":" + string(digest)),
 		Type:   domain.ArtifactKindEvidence,
@@ -580,20 +613,15 @@ func refusedRebuildVerification(
 			VerificationRecipeDigest: &recipe, SensitivityClass: domain.SensitivityNormal,
 		},
 		Metadata: domain.EvidenceMetadata{
-			MediaType: domain.EvidenceMediaTextPlain, SizeBytes: int64(len(content)),
-			// The stable per-verification time a room's evidence carries, so a
-			// replayed refusal converges on the same artifact.
-			CreatedAt: binding.export.RecordedAt,
+			MediaType: domain.EvidenceMediaTextPlain, SizeBytes: int64(len(body)),
+			CreatedAt: createdAt,
 			Source:    domain.EvidenceSourceRun, Availability: domain.EvidenceAvailable,
 		},
 	}, approvedRecipes)
 	if err != nil {
-		return verify.Result{}, err
+		return verify.Evidence{}, err
 	}
-	return verify.Result{
-		HeadSHA: headSHA, RecipeDigest: recipe, Outcome: verify.OutcomeFailed,
-		Evidence: []verify.Evidence{{Artifact: artifact, Content: content}},
-	}, nil
+	return verify.Evidence{Artifact: artifact, Content: body}, nil
 }
 
 // reentryRebuildRefusal carries a refused gate out of a re-entry's
