@@ -1,8 +1,8 @@
 import SwiftUI
 
 /// How this iPhone gets its notifications: the steps that subscribe the ntfy
-/// app to this device's topic. The Devices sheet shows it on this device's
-/// own card. The last line says whether a notification's link has been
+/// app to this device's topic. Settings' Notifications pane shows it on the
+/// iPhone. The last line says whether a notification's link has been
 /// opened on this phone since it paired. That is the one sign on the phone
 /// that setup worked, and it is an observation: any app can open such a
 /// link, and so can a notification sent before the phone paired again.
@@ -102,8 +102,8 @@ struct PhoneNotificationSetup: View {
 
 /// The setup steps as their own sheet, which the iPhone offers once after a
 /// pairing (`AppSession.offersNotificationSetup`): the operator has just
-/// been given a topic, and nothing else would lead them to the Devices card
-/// that holds it.
+/// been given a topic, and nothing else would lead them to the Notifications
+/// pane that holds it.
 struct PhoneNotificationSetupSheet: View {
     @Environment(\.dismiss) private var dismiss
     let subscription: DeviceNtfySubscription
@@ -130,7 +130,7 @@ struct PhoneNotificationSetupSheet: View {
                 eyebrow: "Notifications",
                 ask: "Get notified on this phone",
                 consequence:
-                    "Freeside notifies this phone through the ntfy app when an item needs you. These steps stay on this device's card in Devices.",
+                    "Freeside notifies this phone through the ntfy app when an item needs you. These steps stay in Settings, under Notifications.",
                 askLineLimit: nil)
             // Read here, when the sheet draws, so a test notification tapped
             // while it is open shows at once.

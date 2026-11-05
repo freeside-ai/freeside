@@ -127,7 +127,9 @@ struct FreesideMacApp: App {
         .menuBarExtraStyle(.window)
 
         Settings {
-            DecisionFlowSettingsView(preferences: flowPreferences)
+            SettingsWindow(
+                session: session, navigation: navigation, daemon: daemon, flowPreferences: flowPreferences,
+                launchInputs: launchInputs)
         }
     }
 

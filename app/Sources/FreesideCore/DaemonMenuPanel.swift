@@ -70,11 +70,6 @@
             case quit
         }
 
-        private enum Control {
-            case start
-            case stop
-        }
-
         let state: DaemonMenuState
         let actionError: String?
         let needsYou: NeedsYouCount?
@@ -301,50 +296,28 @@
             .padding(.bottom, 8)
         }
 
-        private var stateChip: StateChip {
-            switch state {
-            case .checking: StateChip(label: "Checking…", cut: .faint)
-            case .running: StateChip(label: "Running", cut: .ink)
-            case .stopped: StateChip(label: "Stopped", cut: .attention)
-            case .needsApproval: StateChip(label: "Approval Needed", cut: .attention)
-            case .unavailable: StateChip(label: "LaunchAgent Unavailable", color: .waxText)
-            case .unreachable: StateChip(label: "Unreachable", color: .waxText)
-            case .unsupervised: StateChip(label: "No Supervised Daemon", cut: .faint)
-            }
-        }
+        private var stateChip: StateChip { state.chip }
 
         /// The explanation under the state line: the version and start
         /// time while running, otherwise what the state means for the
-        /// operator. Unavailable has nothing to add; checking is transient.
+        /// operator.
         private var stateSecondaryLine: Text? {
-            switch state {
-            case .running(let health, _):
+            if case .running(let health, _) = state {
                 // The one short time format: the year appears only when
                 // the daemon has been up since another year.
-                Text(
+                return Text(
                     "v\(health.version) · from "
                         + FreesideFormat.shortTime(
                             health.startedAt, now: pinnedNow ?? Date(), locale: locale, timeZone: timeZone)
                 )
                 .font(FreesideFont.trailingSummary)
                 .foregroundStyle(Color.inkDim)
-            case .stopped:
-                callout("Actions in the app are disabled until it starts.")
-            case .needsApproval:
-                callout("Allow Freeside in Login Items to start the daemon.")
-            case .unreachable:
-                callout("launchd is keeping the service enabled, but health is not answering.")
-            case .unsupervised:
-                callout("This ephemeral app doesn't start or stop a daemon.")
-            case .checking, .unavailable:
-                nil
             }
-        }
-
-        private func callout(_ string: String) -> Text {
-            Text(string)
-                .font(FreesideFont.cardBody)
-                .foregroundStyle(Color.inkDim)
+            return state.explanation.map {
+                Text($0)
+                    .font(FreesideFont.cardBody)
+                    .foregroundStyle(Color.inkDim)
+            }
         }
 
         /// What VoiceOver reads for the state: the sentence the chip and
@@ -390,15 +363,9 @@
 
         /// One lifecycle control, never both: Start leads as the filled
         /// primary only when the daemon is down; Stop stays secondary.
-        private var control: Control? {
-            switch state {
-            case .running, .unreachable, .needsApproval: .stop
-            case .stopped, .unavailable: .start
-            case .checking, .unsupervised: nil
-            }
-        }
+        private var control: DaemonMenuState.LifecycleControl? { state.lifecycleControl }
 
-        private func controlButton(_ control: Control) -> some View {
+        private func controlButton(_ control: DaemonMenuState.LifecycleControl) -> some View {
             let label: String
             let tone: FreesideActionButtonStyle.Tone
             let action: () -> Void
@@ -508,7 +475,50 @@
         }
     }
 
+    /// The daemon's state as the menu-bar panel and Settings' Daemon pane
+    /// both draw it, so the two say the same thing.
     extension DaemonMenuState {
+        /// The one status mark (R4).
+        @MainActor var chip: StateChip {
+            switch self {
+            case .checking: StateChip(label: "Checking…", cut: .faint)
+            case .running: StateChip(label: "Running", cut: .ink)
+            case .stopped: StateChip(label: "Stopped", cut: .attention)
+            case .needsApproval: StateChip(label: "Approval Needed", cut: .attention)
+            case .unavailable: StateChip(label: "LaunchAgent Unavailable", color: .waxText)
+            case .unreachable: StateChip(label: "Unreachable", color: .waxText)
+            case .unsupervised: StateChip(label: "No Supervised Daemon", cut: .faint)
+            }
+        }
+
+        /// What the state means for the operator. Nil while running, whose
+        /// line states the version and start time; unavailable has nothing to
+        /// add, and checking is transient.
+        var explanation: String? {
+            switch self {
+            case .stopped: "Actions in the app are disabled until it starts."
+            case .needsApproval: "Allow Freeside in Login Items to start the daemon."
+            case .unreachable: "launchd is keeping the service enabled, but health is not answering."
+            case .unsupervised: "This ephemeral app doesn't start or stop a daemon."
+            case .running, .checking, .unavailable: nil
+            }
+        }
+
+        enum LifecycleControl {
+            case start
+            case stop
+        }
+
+        /// One lifecycle control, never both: Start when the daemon is down,
+        /// Stop otherwise, none while checking or with no supervised daemon.
+        var lifecycleControl: LifecycleControl? {
+            switch self {
+            case .running, .unreachable, .needsApproval: .stop
+            case .stopped, .unavailable: .start
+            case .checking, .unsupervised: nil
+            }
+        }
+
         /// The status dot on the menu-bar mark. The bar draws on the
         /// system's own ground, so the day cut serves both appearances; a
         /// healthy running daemon, a check in progress, and an app with no

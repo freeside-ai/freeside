@@ -4,6 +4,13 @@ import SwiftUI
 public struct FreesideRootView: View {
     @Environment(\.dynamicTypeSize) private var systemDynamicTypeSize
     @Environment(\.scenePhase) private var scenePhase
+    #if os(macOS)
+        @Environment(\.openSettings) private var openSettings
+    #else
+        /// The Settings models for the paired coordinator, shared by the
+        /// list's summaries and the pane it pushes.
+        @State private var settingsModels = SettingsModelCache()
+    #endif
     @State private var session: AppSession
     @State private var navigation: NavigationModel
     @State private var feedback: DecisionFeedbackModel
@@ -217,31 +224,15 @@ public struct FreesideRootView: View {
                 rePairConfirmationPresented = false
             }
         }
-        // One sheet for both platforms, above the navigation containers, so
-        // the Mac toolbar and the iPhone stack open the same one.
-        .sheet(isPresented: $navigation.settingsPresented) {
-            SettingsSheet(
-                devices: DevicesModel(
-                    coordinator: coordinator,
-                    notificationSubscription: phoneNotificationSubscription,
-                    notificationOpens: notificationOpens,
-                    signOut: {
-                        try session.rePair(endingPairingOf: coordinator)
-                        // The sheet leaves with the synced surface, but the
-                        // flag outlives it: left set, the sheet would open
-                        // again by itself once the operator pairs.
-                        if case .needsPairing = session.phase { navigation.settingsPresented = false }
-                    }),
-                routing: RoutingPolicyModel(coordinator: coordinator),
-                usage: AccountUsageModel(coordinator: coordinator),
-                opensOn: navigation.settingsOpensOn,
-                unresolvedActionCount: pendingUnderOldPairing,
-                projects: coordinator.unifiedList.knownProjects,
-                projectFilter: coordinator.store.projectID,
-                freshness: coordinator.store.freshness
-            )
-            .dynamicTypeSize(launchDynamicTypeSize ?? systemDynamicTypeSize)
-        }
+        #if os(macOS)
+            // A launch argument asked for a Settings pane. Consumed before
+            // the window opens, so a rebuilt root never opens it twice.
+            .task(id: navigation.settingsWindowRequested) {
+                guard navigation.settingsWindowRequested else { return }
+                navigation.consumeSettingsWindowRequest()
+                openSettings()
+            }
+        #endif
         // Offered once after a pairing, on the iPhone only.
         .sheet(
             isPresented: Binding(
@@ -322,7 +313,7 @@ public struct FreesideRootView: View {
             + taskStops.filter { $0.receipt == nil }.count
     }
 
-    /// The Devices sheet shows this subscription on the iPhone only: the
+    /// Settings shows this subscription on the iPhone only: the
     /// notification's link opens the iPhone app, and the Mac app registers
     /// no link scheme, so a topic shown there would invite a subscription
     /// whose notifications open nothing.
@@ -465,10 +456,15 @@ public struct FreesideRootView: View {
             onRevealTechnicalDetails: revealTechnicalDetails)
     }
 
-    /// The slot Devices held on both toolbars.
+    /// The gear on both toolbars: the Settings window on the Mac, on the pane
+    /// it last showed; the pushed list on iPhone.
     private var settingsButton: some View {
         Button {
-            navigation.openSettings()
+            #if os(macOS)
+                openSettings()
+            #else
+                navigation.openSettings()
+            #endif
         } label: {
             Label("Settings", systemImage: "gearshape")
         }
@@ -504,9 +500,7 @@ public struct FreesideRootView: View {
         private func listStack(_ coordinator: SyncCoordinator) -> some View {
             VStack(spacing: 0) {
                 DecisionFeedbackBanner(feedback: feedback, onView: viewConcludedItem)
-                NavigationStack(
-                    path: Binding(get: { navigation.path }, set: { navigation.setPath($0) })
-                ) {
+                NavigationStack(path: phoneRoute) {
                     unifiedList(coordinator)
                         .safeAreaInset(edge: .top, spacing: 0) { recoveryRow(coordinator) }
                         // The toolbar and sheets ride the stack's root content,
@@ -539,11 +533,68 @@ public struct FreesideRootView: View {
                         .sheet(isPresented: Bindable(navigation).submissionRecoveryPresented) {
                             submissionRecoverySheet(coordinator)
                         }
-                        .navigationDestination(for: NavigationModel.Destination.self) { destination in
-                            phoneDetail(destination, coordinator: coordinator)
+                        .navigationDestination(for: NavigationModel.PhoneRoute.self) { route in
+                            switch route {
+                            case .destination(let destination):
+                                phoneDetail(destination, coordinator: coordinator)
+                            case .settings(.list):
+                                SettingsList(
+                                    navigation: navigation, sync: settingsSync(coordinator),
+                                    flowPreferences: flowPreferences,
+                                    host: SettingsHost.line(session.serverURL))
+                            case .settings(.pane(let page)):
+                                let sync = settingsSync(coordinator)
+                                ScrollView {
+                                    SettingsPaneView(
+                                        page: page, sync: sync, flowPreferences: flowPreferences,
+                                        host: SettingsHost.line(session.serverURL))
+                                }
+                                .background(Color.ground)
+                                // The list's load ends when a pane covers it, and
+                                // a launch pushes the pane before the list ever
+                                // appears: Devices and Agents read these rows.
+                                .task(id: sync.devices.observedRevision) {
+                                    await sync.devices.loadIfStale()
+                                }
+                            }
                         }
                 }
             }
+        }
+
+        private var phoneRoute: Binding<[NavigationModel.PhoneRoute]> {
+            Binding(get: { navigation.phoneRoute }, set: { navigation.setPhoneRoute($0) })
+        }
+
+        /// What the Settings list and panes read, from the models built once
+        /// for this coordinator.
+        private func settingsSync(_ coordinator: SyncCoordinator) -> SettingsSync {
+            let models = settingsModels.models(for: coordinator) {
+                SettingsModelCache.Models(
+                    devices: DevicesModel(
+                        coordinator: coordinator,
+                        notificationSubscription: phoneNotificationSubscription,
+                        notificationOpens: notificationOpens,
+                        signOut: {
+                            try session.rePair(endingPairingOf: coordinator)
+                            // The path leaves with the synced surface, but
+                            // the route outlives it: left set, Settings would
+                            // push again by itself once the operator pairs.
+                            if case .needsPairing = session.phase { navigation.closeSettings() }
+                        }),
+                    routing: RoutingPolicyModel(coordinator: coordinator),
+                    usage: AccountUsageModel(coordinator: coordinator))
+            }
+            return SettingsSync(
+                devices: models.devices, routing: models.routing, usage: models.usage,
+                freshness: coordinator.store.freshness, lastUpdatedAt: coordinator.lastUpdatedAt,
+                revision: coordinator.cursors?.highestObservedServerRevision,
+                projects: coordinator.unifiedList.knownProjects,
+                deviceID: coordinator.store.device.deviceID,
+                unresolvedActionCount: Self.unsentActionCount(
+                    pendingCommands: coordinator.store.pendingCommandsByItemID.count,
+                    pendingTaskSubmissions: coordinator.pendingTaskSubmissions.count,
+                    taskStops: coordinator.pendingTaskStops.values))
         }
 
         @ViewBuilder
@@ -774,3 +825,29 @@ struct RevokedPane: View {
         .emptyStateSeat(.detailColumn)
     }
 }
+
+#if os(iOS)
+    /// The iPhone's Settings models, built once per coordinator so the list's
+    /// summaries and the pane it pushes read the same state, and a new
+    /// pairing starts afresh. A plain reference held in `@State`: filling it
+    /// while the body draws changes nothing the view observes.
+    @MainActor
+    final class SettingsModelCache {
+        struct Models {
+            let devices: DevicesModel
+            let routing: RoutingPolicyModel
+            let usage: AccountUsageModel
+        }
+
+        private var coordinatorID: ObjectIdentifier?
+        private var cached: Models?
+
+        func models(for coordinator: SyncCoordinator, make: () -> Models) -> Models {
+            if let cached, coordinatorID == ObjectIdentifier(coordinator) { return cached }
+            let models = make()
+            coordinatorID = ObjectIdentifier(coordinator)
+            cached = models
+            return models
+        }
+    }
+#endif

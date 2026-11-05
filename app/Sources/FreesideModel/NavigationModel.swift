@@ -60,22 +60,57 @@ public final class NavigationModel {
     /// all of them open the one sheet through the same gated path.
     public var newTaskComposerPresented = false
     public var submissionRecoveryPresented = false
-    /// A page of the Settings sheet: its rows, or a view one of them opens.
-    public enum SettingsPage: Sendable {
-        case rows
-        case devices
-        case routing
+    /// A pane of Settings, in the Mac source list's order, which the
+    /// iPhone's grouped list follows.
+    public enum SettingsPage: String, CaseIterable, Hashable, Sendable {
+        case general
+        case agents
         case usage
+        case devices
+        case notifications
+        case daemon
+
+        public var title: String {
+            switch self {
+            case .general: "General"
+            case .agents: "Agents"
+            case .usage: "Usage"
+            case .devices: "Devices"
+            case .notifications: "Notifications"
+            case .daemon: "Daemon"
+            }
+        }
     }
 
-    /// The Settings sheet's presentation flag, shared by the toolbar buttons
-    /// and the `-FreesideDevices`, `-FreesideRouting`, and `-FreesideUsage`
-    /// launch arguments.
-    public var settingsPresented: Bool
-    /// The page the sheet opens on: a launch argument alone asks for one
-    /// other than the rows, so a capture needs no click. `openSettings`
-    /// resets it, so a later open starts at the rows.
-    public private(set) var settingsOpensOn: SettingsPage
+    /// One step of the iPhone's pushed Settings path: the grouped list, then
+    /// the pane one of its rows opens.
+    public enum SettingsRoute: Hashable, Sendable {
+        case list
+        case pane(SettingsPage)
+    }
+
+    /// One element of the iPhone's one stack: the task route, then the
+    /// Settings path above it. The stack binds `phoneRoute`, and every push
+    /// onto it, a list row's included, carries this type.
+    public enum PhoneRoute: Hashable {
+        case destination(Destination)
+        case settings(SettingsRoute)
+    }
+
+    /// The selected Settings pane, kept across opens: the Mac window's
+    /// source list selection and the pane an iPhone row last pushed. The
+    /// `-FreesideDevices`, `-FreesideRouting`, and `-FreesideUsage` launch
+    /// arguments choose it, so a capture needs no click.
+    public private(set) var settingsPane: SettingsPage = .general
+    /// The iPhone's pushed Settings path above the task route: empty, the
+    /// list, or the list and one pane. The Mac draws Settings in its own
+    /// window and never reads it. Kept apart from `path`, whose first
+    /// element means the selected task or item.
+    public private(set) var settingsRoute: [SettingsRoute] = []
+    /// A launch argument asked for the Mac's Settings window. The root opens
+    /// the window once and consumes it, so a rebuilt root never opens it
+    /// again.
+    public private(set) var settingsWindowRequested = false
     /// The `-FreesideComposer` launch argument until the card acts on it.
     /// Held here, not in the card, because the Mac detail view is rebuilt on
     /// every selection: view state would reopen the composer each time the
@@ -85,12 +120,6 @@ public final class NavigationModel {
 
     public init(launchInputs: LaunchInputs) {
         path = []
-        let opensOn: SettingsPage =
-            launchInputs.devicesPresented
-            ? .devices
-            : launchInputs.routingPresented ? .routing : launchInputs.usagePresented ? .usage : .rows
-        settingsOpensOn = opensOn
-        settingsPresented = opensOn != .rows
         // `LaunchInputs` leaves the composer nil without an item selection.
         if case .attentionItem(let itemID)? = launchInputs.selection {
             launchComposer = launchInputs.composer.map {
@@ -101,6 +130,17 @@ public final class NavigationModel {
             route(toLinkedItem: itemID)
         } else if let selection = launchInputs.selection {
             route(to: selection)
+        }
+        // After the route, which clears the Settings path: a launch that
+        // names both opens Settings over the selection.
+        let launchPane: SettingsPage? =
+            launchInputs.devicesPresented
+            ? .devices
+            : launchInputs.routingPresented ? .agents : launchInputs.usagePresented ? .usage : nil
+        if let launchPane {
+            settingsPane = launchPane
+            settingsRoute = [.list, .pane(launchPane)]
+            settingsWindowRequested = true
         }
     }
 
@@ -139,10 +179,58 @@ public final class NavigationModel {
         path.last.map { Self.surface(for: $0, in: list) }
     }
 
-    /// The toolbar's Settings button.
+    /// The iPhone stack's whole path: `path`, then `settingsRoute`.
+    public var phoneRoute: [PhoneRoute] {
+        path.map(PhoneRoute.destination) + settingsRoute.map(PhoneRoute.settings)
+    }
+
+    /// The iPhone stack as the operator drives it (a push, a pop). The task
+    /// route is the leading run of destinations; whatever follows is the
+    /// Settings path, so a pop from a pane never touches the selection.
+    public func setPhoneRoute(_ route: [PhoneRoute]) {
+        let destinations = route.prefix { if case .destination = $0 { true } else { false } }
+        setPath(destinations.compactMap { if case .destination(let d) = $0 { d } else { nil } })
+        setSettingsRoute(
+            route.dropFirst(destinations.count).compactMap {
+                if case .settings(let step) = $0 { step } else { nil }
+            })
+    }
+
+    /// The iPhone's Settings button: pushes the grouped list and keeps the
+    /// selected pane for the next row it opens. The Mac's button opens the
+    /// window through the environment's `openSettings` action instead.
+    /// Every iPhone Settings move is operator navigation, so a pending
+    /// conclusion advance never pops Settings or rewrites the route under it.
     public func openSettings() {
-        settingsOpensOn = .rows
-        settingsPresented = true
+        setSettingsRoute([.list])
+    }
+
+    /// The Mac source list's selection.
+    public func selectSettingsPane(_ page: SettingsPage) {
+        settingsPane = page
+    }
+
+    /// An iPhone list row: push its pane over the list.
+    public func pushSettingsPane(_ page: SettingsPage) {
+        setSettingsRoute([.list, .pane(page)])
+    }
+
+    /// The iPhone stack's Settings path as the operator drives it (a push,
+    /// a pop). A pop keeps the selected pane.
+    public func setSettingsRoute(_ route: [SettingsRoute]) {
+        guard settingsRoute != route else { return }
+        operatorNavigationRevision += 1
+        settingsRoute = route
+        if case .pane(let page)? = route.last { settingsPane = page }
+    }
+
+    /// Leave the iPhone's Settings path, as signing out from Devices does.
+    public func closeSettings() {
+        setSettingsRoute([])
+    }
+
+    public func consumeSettingsWindowRequest() {
+        settingsWindowRequested = false
     }
 
     /// The launch's composer for this item's card, or nil for any other item
@@ -161,6 +249,9 @@ public final class NavigationModel {
         // rendered item (for example, Reveal Technical Details).
         operatorNavigationRevision += 1
         path = Self.route(to: destination)
+        // A link or launch that routes on iPhone shows its destination, not
+        // the Settings path pushed above it.
+        settingsRoute = []
     }
 
     private static func route(to destination: Destination) -> [Destination] {

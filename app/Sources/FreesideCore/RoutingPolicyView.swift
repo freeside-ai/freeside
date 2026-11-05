@@ -3,7 +3,7 @@ import SwiftUI
 
 /// The routing policy (plan §5.4): which agent takes a new task for each role
 /// when the operator chose none, read from sync and changed as a saved
-/// command. `SettingsSheet` hosts it on both platforms, as it hosts Devices.
+/// command. It is Settings' Agents pane on both platforms (`SettingsPaneView`).
 /// It edits the order among agents the daemon's catalog lists and the
 /// drain-first account among the pools those agents sit on; the lineup
 /// itself still changes through the committed agent tree.

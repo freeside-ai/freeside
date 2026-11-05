@@ -4,8 +4,8 @@ import SwiftUI
 /// Account usage (plan §5.4 usage observation): one card per usage pool,
 /// grouped under its provider, saying what is left of each window the
 /// daemon recorded, read from sync, with a manual refresh and collector
-/// reassignment sent as saved commands. `SettingsSheet` hosts it on both
-/// platforms, as it hosts Routing. It draws only what the record holds: a
+/// reassignment sent as saved commands. It is Settings' Usage pane on both
+/// platforms (`SettingsPaneView`). It draws only what the record holds: a
 /// window the collector didn't report is absent, never drawn as
 /// unsupported, and nothing is computed or added across pools. The 4 Nov
 /// 2026 handoff draws it (`docs/design/handoff-2026-11-04-settings-usage-new-task/`,

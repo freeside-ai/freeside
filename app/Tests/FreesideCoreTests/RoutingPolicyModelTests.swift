@@ -62,9 +62,18 @@ import Testing
 
     @Test func theSettingsRowSummarizesThePolicy() async throws {
         let withPolicy = await coordinator()
-        #expect(SettingsSheet.routingSummary(RoutingPolicyModel(coordinator: withPolicy)) == "Revision 2 · 1 role")
+        #expect(SettingsSummary.agents(RoutingPolicyModel(coordinator: withPolicy)) == "claude-primary · codex-primary")
         let without = await coordinator(MockServer(routingPolicy: nil))
-        #expect(SettingsSheet.routingSummary(RoutingPolicyModel(coordinator: without)) == "No policy")
+        #expect(SettingsSummary.agents(RoutingPolicyModel(coordinator: without)) == "No policy")
+        // Each agent once, in role order, however many roles order it.
+        var policy = UsageFixtures.defaultRoutingPolicy()
+        policy.roles = [
+            .init(role: .implementer, agents: ["codex-primary", "claude-primary"]),
+            .init(role: .reviewer, agents: ["claude-primary"]),
+        ]
+        let shared = await coordinator(MockServer(routingPolicy: policy))
+        #expect(
+            SettingsSummary.agents(RoutingPolicyModel(coordinator: shared)) == "codex-primary · claude-primary")
     }
 
     // MARK: Offering
@@ -348,7 +357,7 @@ import Testing
         await firstModel.save()
         let saved = try #require(first.pendingRoutingPolicyChange)
         #expect(saved.receipt == nil)
-        #expect(SettingsSheet.routingSummary(firstModel) == "Unconfirmed")
+        #expect(SettingsSummary.agents(firstModel) == "Unconfirmed")
         let applied = try await revision(first)
 
         let restored = SyncCoordinator(

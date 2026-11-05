@@ -840,86 +840,125 @@
                                 rendersInteractiveControls: false))))
             }
 
-            // The Settings sheet (#2446), then Devices open in it (#981) with
-            // every state it renders: this device, another active one, and a
-            // revoked one never seen.
-            // The phone's own card also shows how to set its notifications
-            // up (#1924): here on a server that is not ntfy's own, after a
-            // notification was opened.
+            // Settings (#2580), as canvas band 1 of the 4 Nov 2026 handoff
+            // draws it: the Mac window at 760 with each pane selected, and
+            // the iPhone's list and pushed panes at 390, by day and by dusk.
+            // Devices shows this device, another active one, and a revoked
+            // one never seen (#981); the phone's Notifications pane also
+            // shows how to set its notifications up (#1924), here on a
+            // server that is not ntfy's own, after a notification was opened.
             let devicesModel = await DevicesScreenshots.model()
             let phoneDevicesModel = await DevicesScreenshots.model(
                 notificationSubscription: .mock, openedAt: screenshotNow.addingTimeInterval(-3600))
             let routing = await RoutingPolicyScreenshots.model(.policy)
             let usage = await AccountUsageScreenshots.model(.usage)
-            for (name, width, scheme, model, client) in [
-                ("", CGFloat(380), ColorScheme.light, devicesModel, SettingsSheet.Client.mac),
-                ("-dark", CGFloat(380), ColorScheme.dark, devicesModel, SettingsSheet.Client.mac),
-                ("-phone", CGFloat(390), ColorScheme.light, phoneDevicesModel, SettingsSheet.Client.iPhone),
-                ("-phone-dark", CGFloat(390), ColorScheme.dark, phoneDevicesModel, SettingsSheet.Client.iPhone),
-            ] {
-                for (surface, opensOn) in [("settings", SettingsSheet.Page.rows), ("devices", .devices)] {
-                    surfaces.append(
-                        Surface(
-                            name: surface + name, width: width, colorScheme: scheme,
-                            view: AnyView(
-                                SettingsSheet(
-                                    devices: model, routing: routing, usage: usage, opensOn: opensOn,
-                                    projects: ["freeside-ai/freeside", "freeside-ai/teloleo", "free-skills"],
-                                    projectFilter: "free-skills", freshness: .fresh, client: client,
-                                    rendersInteractiveControls: false))))
-                }
+            let settingsDefaults = try #require(
+                UserDefaults(suiteName: "FreesideScreenshotSettings-\(UUID().uuidString)"))
+            let flowPreferences = DecisionFlowPreferences(defaults: settingsDefaults)
+            flowPreferences.advancesToNextItem = true
+            let settingsDaemon = DaemonPane.MacDaemon(
+                state: .running(
+                    DaemonHealth(version: "1.0.0", startedAt: AttentionFixtures.createdInstant),
+                    restartObserved: false),
+                actionError: nil, start: {}, stop: {}, openApprovalSettings: {})
+            func settingsSync(
+                _ devices: DevicesModel, routing: RoutingPolicyModel = routing, usage: AccountUsageModel = usage
+            ) -> SettingsSync {
+                SettingsSync(
+                    devices: devices, routing: routing, usage: usage, freshness: .fresh,
+                    lastUpdatedAt: screenshotNow.addingTimeInterval(-120), revision: 4812,
+                    projects: ["freeside-ai/freeside", "freeside-ai/teloleo", "free-skills"],
+                    deviceID: DeviceIdentity.mock.deviceID, unresolvedActionCount: 0)
             }
-
-            // The routing policy open in the Settings sheet (#2394, #2528):
-            // read with a policy, with a drain-first account, with neither a
-            // policy nor an agent tree, while editing the orders and the
-            // account, after an unanswered change, and after a stale change
-            // the daemon refused, at Mac and phone width, by day and by dusk.
-            for state in RoutingPolicyScreenshots.State.allCases {
-                let stateModel = await RoutingPolicyScreenshots.model(state)
-                for (name, width, scheme, client) in [
-                    ("", CGFloat(380), ColorScheme.light, SettingsSheet.Client.mac),
-                    ("-dark", CGFloat(380), ColorScheme.dark, SettingsSheet.Client.mac),
-                    ("-phone", CGFloat(390), ColorScheme.light, SettingsSheet.Client.iPhone),
-                    ("-phone-dark", CGFloat(390), ColorScheme.dark, SettingsSheet.Client.iPhone),
+            func settingsWindow(_ page: NavigationModel.SettingsPage, sync: SettingsSync) -> AnyView {
+                let navigation = NavigationModel(launchInputs: LaunchInputs(colorSchemeRaw: nil, selectionRaw: nil))
+                navigation.selectSettingsPane(page)
+                return AnyView(
+                    SettingsWindowContent(
+                        navigation: navigation, sync: sync, flowPreferences: flowPreferences,
+                        host: "studio.local", daemon: settingsDaemon, rendersInteractiveControls: false))
+            }
+            func phonePane(_ page: NavigationModel.SettingsPage, sync: SettingsSync) -> AnyView {
+                AnyView(
+                    SettingsPaneView(
+                        page: page, sync: sync, flowPreferences: flowPreferences, host: "studio.local",
+                        client: .iPhone, rendersInteractiveControls: false
+                    )
+                    .background(Color.ground))
+            }
+            let macSync = settingsSync(devicesModel)
+            let phoneSync = settingsSync(phoneDevicesModel)
+            for (suffix, scheme) in [("", ColorScheme.light), ("-dark", ColorScheme.dark)] {
+                for (surface, page) in [
+                    ("settings", NavigationModel.SettingsPage.general), ("devices", .devices),
+                    ("notifications", .notifications), ("daemon", .daemon),
                 ] {
                     surfaces.append(
                         Surface(
-                            name: state.surface + name, width: width, colorScheme: scheme,
-                            view: AnyView(
-                                SettingsSheet(
-                                    devices: devicesModel, routing: stateModel, usage: usage, opensOn: .routing,
-                                    projects: [], projectFilter: nil, freshness: .fresh, client: client,
-                                    rendersInteractiveControls: false))))
+                            name: surface + suffix, width: 760, colorScheme: scheme,
+                            view: settingsWindow(page, sync: macSync)))
+                }
+                surfaces.append(
+                    Surface(
+                        name: "settings-phone" + suffix, width: 390, colorScheme: scheme,
+                        view: AnyView(
+                            SettingsList(
+                                navigation: NavigationModel(
+                                    launchInputs: LaunchInputs(colorSchemeRaw: nil, selectionRaw: nil)),
+                                sync: phoneSync, flowPreferences: flowPreferences, host: "studio.local",
+                                client: .iPhone, rendersInteractiveControls: false))))
+                for (surface, page) in [
+                    ("general-phone", NavigationModel.SettingsPage.general), ("devices-phone", .devices),
+                    ("notifications-phone", .notifications), ("daemon-phone", .daemon),
+                ] {
+                    surfaces.append(
+                        Surface(
+                            name: surface + suffix, width: 390, colorScheme: scheme,
+                            view: phonePane(page, sync: phoneSync)))
                 }
             }
 
-            // Account usage open in the Settings sheet (#1721), drawn as
+            // The Agents pane, which hosts the routing policy (#2394, #2528)
+            // until #2582 redraws it: read with a policy, with a drain-first
+            // account, with neither a policy nor an agent tree, while editing
+            // the orders and the account, after an unanswered change, and
+            // after a stale change the daemon refused.
+            for state in RoutingPolicyScreenshots.State.allCases {
+                let stateModel = await RoutingPolicyScreenshots.model(state)
+                for (suffix, scheme) in [("", ColorScheme.light), ("-dark", ColorScheme.dark)] {
+                    surfaces.append(
+                        Surface(
+                            name: state.surface + suffix, width: 760, colorScheme: scheme,
+                            view: settingsWindow(.agents, sync: settingsSync(devicesModel, routing: stateModel))))
+                    surfaces.append(
+                        Surface(
+                            name: state.surface + "-phone" + suffix, width: 390, colorScheme: scheme,
+                            view: phonePane(.agents, sync: settingsSync(devicesModel, routing: stateModel))))
+                }
+            }
+
+            // The Usage pane, which hosts account usage (#1721) drawn as
             // capacity cards (#2579): the default pools (readings and a
             // used-up window, an unsupported collector, and a pool with no
             // reading), the same pools once their readings go stale, the
             // #2389 Claude shape, a pool at R32's low line, an unanswered
-            // refresh, a refused reassignment, and a confirmed one, at Mac
-            // and phone width, by day and by dusk. Each state pins its own
-            // clock against the usage fixtures' instants.
+            // refresh, a refused reassignment, and a confirmed one. Each
+            // state pins its own clock against the usage fixtures' instants.
             for state in AccountUsageScreenshots.State.allCases {
                 let stateModel = await AccountUsageScreenshots.model(state)
-                for (name, width, scheme, client) in [
-                    ("", CGFloat(380), ColorScheme.light, SettingsSheet.Client.mac),
-                    ("-dark", CGFloat(380), ColorScheme.dark, SettingsSheet.Client.mac),
-                    ("-phone", CGFloat(390), ColorScheme.light, SettingsSheet.Client.iPhone),
-                    ("-phone-dark", CGFloat(390), ColorScheme.dark, SettingsSheet.Client.iPhone),
-                ] {
+                for (suffix, scheme) in [("", ColorScheme.light), ("-dark", ColorScheme.dark)] {
                     surfaces.append(
                         Surface(
-                            name: state.surface + name, width: width, colorScheme: scheme,
+                            name: state.surface + suffix, width: 760, colorScheme: scheme,
                             view: AnyView(
-                                SettingsSheet(
-                                    devices: devicesModel, routing: routing, usage: stateModel, opensOn: .usage,
-                                    projects: [], projectFilter: nil, freshness: .fresh, client: client,
-                                    rendersInteractiveControls: false
-                                )
-                                .environment(\.pinnedNow, state.now))))
+                                settingsWindow(.usage, sync: settingsSync(devicesModel, usage: stateModel))
+                                    .environment(\.pinnedNow, state.now))))
+                    surfaces.append(
+                        Surface(
+                            name: state.surface + "-phone" + suffix, width: 390, colorScheme: scheme,
+                            view: AnyView(
+                                phonePane(.usage, sync: settingsSync(devicesModel, usage: stateModel))
+                                    .environment(\.pinnedNow, state.now))))
                 }
             }
 
