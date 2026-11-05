@@ -2081,7 +2081,17 @@ not recorded.
 `auth add` cannot enroll a Claude identity whose volume already exists;
 `auth adopt` (below) enrolls an identity
 over the volume it already holds. An enrollment runs nothing until an agent in
-the admitted-agent tree names it and a lineup line selects that agent.
+the admitted-agent tree names it and a lineup line or the routing policy
+selects that agent.
+
+**A second writer subscription.** Create its volume once, with `auth add
+-client claude_code` under its own identity, `-account`, and
+`-auth-volume`. Any database works, including a scratch one: the volume
+outlives it. Every deputy root after that names the identity and volume in
+`agent_tree.second_writer` (Run Real Work With The Deputy), records the
+identity over that volume at start, and adopts it with no new token. Running
+`auth add` on the deputy's own root before its first start works too, since
+it records the same interim facts the deputy checks.
 
 ### Select Agents Through The Lineup
 
@@ -2167,6 +2177,25 @@ Each agent names the model and the effort its launch passes:
   effort, since an escalation to the same launch would change nothing.
   Without them the tree has no escalated line, so triage never runs and the
   specifier runs on its lineup agent.
+- **`-second-auth-identity`, `-second-cost-owner`, and
+  `-second-claude-account`** are optional and set together. They adopt a
+  second writer subscription over the volume its identity already records,
+  bound to its own account, and list it third in the report. The tree gains
+  a copy of each writer agent on the second identity's `claude_code`
+  enrollment, named with the suffix `-second`
+  (`claude-code-implementer-second`), each on a pinned offer of the same name
+  with the first agent's model, effort, and adapter. The copies get no lineup
+  line: the lineup still selects the first identity's agents, and the
+  routing policy reaches the copies, as in
+  `routing set -order implementer=claude-code-implementer,claude-code-implementer-second`
+  (Set The Routing Policy). With the escalated pair, the tree also carries
+  `claude-code-specifier-escalated-second` on the second enrollment and one
+  added line, `lineup.role.specifier.escalated.claude-code-specifier-second`,
+  so a specifier routed to the second identity escalates on it. The second
+  identity must differ from both other identities, and its account from
+  `-claude-account`. A second identity that records the first's volume is
+  refused before anything is recorded; one whose account is already bound
+  to another identity is reported `unadoptable`, and no patch is emitted.
 - **`-review-model` and `-review-effort`** are required with the review
   identity. The review agent `codex-review-default` is on an offer whose
   `route_model_id` is the model, and asks the effort.
@@ -3055,18 +3084,36 @@ freesided submit -db <state-root>/daemon/freeside.db --require-composition ...
 
 **Settings.** `<state-root>/daemon/settings.json` is required, mode `0600`
 and owned by the running user, version `freeside-deputy-settings-v1`. Every
-key but `agent_tree.review_harness` is required (an unused one is `""`), an unknown or repeated key is
+key but `agent_tree.review_harness` and `agent_tree.second_writer` is required (an unused one is `""`), an unknown or repeated key is
 refused, and each refusal is one line naming the field. The SHA-256 of the
 file bytes is the settings revision, printed at start and recorded in the
 composition manifest.
 
-`agent_tree.review_harness` is the one key that may be absent: absent means
+`agent_tree.review_harness` may be absent: absent means
 `codex_cli`, so a settings file written before it keeps its revision.
 `claude_code` adopts a Claude reviewer (Select Agents Through The Lineup) and
 requires `review.auth_mode` `setup_token`, with `review.auth_snapshot` naming
 the review identity's setup token. The deputy records the Codex review
 identity itself but not a Claude one: enroll `agent_tree.review_auth_identity`
 with `auth add -client claude_code` before the first run.
+
+`agent_tree.second_writer` may be absent too, with the same effect on the
+revision. When present it is an object whose four keys are all required:
+`auth_identity`, `auth_volume`, `claude_account`, and `cost_owner`, the
+second writer subscription's identity, its existing volume, the account it
+attests, and its cost owner. Each must differ from the first writer's, and
+the identity from `review_auth_identity`. Create the volume once before the
+first run (Enroll An Agent Credential). The start records the identity over
+it, adopts it with `auth adopt -second-auth-identity` (Select Agents Through
+The Lineup), and preflight checks the volume as `second_claude_credentials`.
+
+The start refuses a root whose store holds an enabled Claude identity with a
+recorded volume that the settings name as neither writer nor the reviewer,
+naming the identity. A writer identity the settings changed or dropped
+keeps its enrollment. No agent runs on it, because the committed tree must
+match adoption's, but the scheduled usage collection still calls the provider
+under its credential. Name it in `agent_tree` again, or start on a fresh
+root.
 
 Configured filesystem paths must be absolute and clean: no `.` or `..`
 components, repeated separators, or trailing separator. `prompts.vendor_instructions` cannot be
@@ -3080,7 +3127,7 @@ container volume, not a host path.
 | `images` | `agent`, `exporter`, `review`: digest-pinned references |
 | `repository` | `repo`, `repository_id`, `base_ref`, `base_sha`, `allowed_paths`, `checkout`, `project` |
 | `prompts` | `prompt_package`, `specification_prompt_package`, `remediation_prompt_package`, `vendor_instructions` |
-| `agent_tree` | `checkout` and `commit` (the policy tree adoption must reproduce), and the `auth adopt` inputs: `auth_identity`, `review_auth_identity`, `cost_owner`, `review_cost_owner`, `claude_account`, `terms_basis_date`, `pricing_revision`, `offer_not_after`, `auth_volume`, and the optional `review_harness` |
+| `agent_tree` | `checkout` and `commit` (the policy tree adoption must reproduce), and the `auth adopt` inputs: `auth_identity`, `review_auth_identity`, `cost_owner`, `review_cost_owner`, `claude_account`, `terms_basis_date`, `pricing_revision`, `offer_not_after`, `auth_volume`, and the optional `review_harness` and `second_writer` |
 | `review` | `input_root`, `auth_mode` (`subscription` with a Codex reviewer, `setup_token` with a Claude one; API-key enrollment awaits #1677), `auth_snapshot`, `instructions`, `model`, `effort` |
 | `judgment` | `claude_bin`, `claude_sha256`, `model`, `publication_author_prompt`: all empty or all set |
 | `prod` | `app_state_dir`, `app_credentials_dir`, `installed_daemon` |
