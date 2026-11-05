@@ -12,7 +12,6 @@ import (
 	"os"
 	osexec "os/exec"
 	"path/filepath"
-	"runtime"
 	"slices"
 	"strings"
 	"testing"
@@ -240,11 +239,13 @@ func assertKillRecoveryReadiness(t *testing.T, path string) {
 
 func buildKillTestDaemon(t *testing.T) string {
 	t.Helper()
-	_, source, _, ok := runtime.Caller(0)
-	if !ok {
-		t.Fatal("resolve kill-test source path")
+	// go test runs a package with its directory as the working directory;
+	// under -trimpath, runtime.Caller returns import paths, not file paths.
+	packageDir, err := os.Getwd()
+	if err != nil {
+		t.Fatal(err)
 	}
-	moduleRoot := filepath.Clean(filepath.Join(filepath.Dir(source), "..", ".."))
+	moduleRoot := filepath.Clean(filepath.Join(packageDir, "..", ".."))
 	binary := filepath.Join(t.TempDir(), "freesided-kill-test")
 	args := []string{"build", "-tags=freeside_kill_test", "-o", binary}
 	args = append(args, raceBuildFlags()...)

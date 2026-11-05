@@ -29,7 +29,6 @@ import (
 	"os"
 	osexec "os/exec"
 	"path/filepath"
-	"runtime"
 	"slices"
 	"strconv"
 	"strings"
@@ -159,11 +158,13 @@ func (p *liveFreesided) assertRunning(t *testing.T) {
 // would prove the daemon API escaped the loopback gate.
 func startLiveFreesided(t *testing.T) *liveFreesided {
 	t.Helper()
-	_, source, _, ok := runtime.Caller(0)
-	if !ok {
-		t.Fatal("resolve ward live-test source path")
+	// go test runs a package with its directory as the working directory;
+	// under -trimpath, runtime.Caller returns import paths, not file paths.
+	packageDir, err := os.Getwd()
+	if err != nil {
+		t.Fatal(err)
 	}
-	moduleRoot := filepath.Clean(filepath.Join(filepath.Dir(source), "..", ".."))
+	moduleRoot := filepath.Clean(filepath.Join(packageDir, "..", ".."))
 	binary := filepath.Join(t.TempDir(), "freesided-live-listener")
 	build := osexec.Command("go", "build", "-o", binary, "./cmd/freesided") //nolint:gosec // fixed tool and test-owned output
 	build.Dir = moduleRoot

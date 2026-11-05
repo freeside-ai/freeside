@@ -8,7 +8,6 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
-	"runtime"
 	"strconv"
 	"strings"
 	"testing"
@@ -217,14 +216,15 @@ func isJSONDecoderReceiver(
 }
 
 func TestStrictJSONDecodingIsCentralized(t *testing.T) {
-	_, sourceFile, _, ok := runtime.Caller(0)
-	if !ok {
-		t.Fatal("locate ratchet test source")
+	// go test runs a package with its directory as the working directory;
+	// under -trimpath, runtime.Caller returns import paths, not file paths.
+	strictJSONDir, err := os.Getwd()
+	if err != nil {
+		t.Fatal(err)
 	}
-	daemonRoot := filepath.Clean(filepath.Join(filepath.Dir(sourceFile), "..", ".."))
-	strictJSONDir := filepath.Dir(sourceFile)
+	daemonRoot := filepath.Clean(filepath.Join(strictJSONDir, "..", ".."))
 
-	err := filepath.WalkDir(daemonRoot, func(path string, entry fs.DirEntry, walkErr error) error {
+	err = filepath.WalkDir(daemonRoot, func(path string, entry fs.DirEntry, walkErr error) error {
 		if walkErr != nil {
 			return walkErr
 		}
