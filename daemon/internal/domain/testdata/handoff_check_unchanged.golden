@@ -1,0 +1,8 @@
+{
+  "run_id": "run-1",
+  "publication_id": "publish-run-1",
+  "head_sha": "head-1",
+  "evidence_base_sha": "base-1",
+  "tip_sha": "base-1",
+  "merge": null
+}

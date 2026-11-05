@@ -1,0 +1,11 @@
+{
+  "run_id": "run-1",
+  "publication_id": "publish-run-1",
+  "head_sha": "head-1",
+  "evidence_base_sha": "base-1",
+  "tip_sha": "base-2",
+  "merge": {
+    "merge_sha": "merge-1",
+    "verification_proof_digest": "sha256:proof"
+  }
+}

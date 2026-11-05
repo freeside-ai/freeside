@@ -129,6 +129,7 @@
 //   - workflow_audit_evidence.go the canonical workflow-audit evidence body
 //   - authorization.go candidate authorization and finding classes (§5.6, §5.8)
 //   - readiness.go    readiness requirements, check proofs, and waivers
+//   - handoff_check.go a publication's sealed handoff tip and merge proof
 //   - publication_authoring.go, publication_continuation.go, publication_successor.go
 //     authored publication prose, publication re-evaluation, and successor
 //     re-entry shapes
