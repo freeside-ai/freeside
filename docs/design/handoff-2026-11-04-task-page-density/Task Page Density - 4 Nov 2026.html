@@ -1,0 +1,421 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Task Page Density - 4 Nov 2026</title>
+</head>
+<body>
+  <link href="https://fonts.googleapis.com/css2?family=Source+Serif+Pro:ital,wght@0,400;0,500;1,400&amp;family=IBM+Plex+Sans:wght@400;500;600&amp;family=IBM+Plex+Mono:wght@400;500;600&amp;display=swap" rel="stylesheet" />
+  <style>
+    body { margin: 0; background: #DAD3BF; }
+    a { color: #8F6B14; } a:hover { color: #B99A4A; }
+    code { font-family: 'IBM Plex Mono', monospace; font-size: 0.92em; }
+    /* Page chrome (the handoff page itself) */
+    .page-title { font-family: 'Source Serif Pro', serif; font-weight: 500; font-size: 28px; color: #2B2416; }
+    .page-intro { max-width: 900px; font-size: 13.5px; line-height: 1.6; color: #4A4234; font-family: 'IBM Plex Sans', sans-serif; text-wrap: pretty; }
+    .note { width: 460px; flex: none; display: flex; flex-direction: column; gap: 10px; background: #F3EEE1; border: 1px solid #C9BFA2; border-radius: 8px; padding: 18px 20px; box-sizing: border-box; }
+    .note-k { font-family: 'IBM Plex Mono', monospace; font-size: 11px; letter-spacing: 0.12em; text-transform: uppercase; color: #6E6450; }
+    .note-b { font-size: 13px; line-height: 1.6; color: #2B2416; font-family: 'IBM Plex Sans', sans-serif; text-wrap: pretty; }
+    .sec-title { font-family: 'Source Serif Pro', serif; font-weight: 500; font-size: 20px; color: #2B2416; }
+    .sec-sub { font-size: 12.5px; line-height: 1.55; color: #4A4234; font-family: 'IBM Plex Sans', sans-serif; max-width: 760px; }
+    .frame-label { font-family: 'IBM Plex Mono', monospace; font-size: 11px; letter-spacing: 0.12em; text-transform: uppercase; color: #6E6450; }
+    .frame-note { font-size: 12px; line-height: 1.55; color: #4A4234; font-family: 'IBM Plex Sans', sans-serif; width: 880px; text-wrap: pretty; }
+    .frame-note b { color: #2B2416; }
+    .diamond { color: #8A2D1C; font-weight: 600; }
+    /* Overcast ground, Mac ladder */
+    .pane { width: 880px; flex: none; background: #EEEEEB; border: 1px solid #C8C8C3; border-radius: 10px; padding: 22px 24px 24px; box-sizing: border-box; display: flex; flex-direction: column; gap: 14px; font-family: 'IBM Plex Sans', sans-serif; color: #212120; }
+    .eyebrow { font-family: 'IBM Plex Mono', monospace; font-size: 11px; letter-spacing: 0.1em; text-transform: uppercase; color: #5C5C58; }
+    .kw { font-family: 'IBM Plex Mono', monospace; font-size: 11px; letter-spacing: 0.1em; text-transform: uppercase; color: #5C5C58; }
+    .ask { font-family: 'Source Serif Pro', serif; font-weight: 500; font-size: 20px; color: #212120; line-height: 1.3; }
+    .stmt { font-family: 'Source Serif Pro', serif; font-weight: 400; font-size: 15px; color: #212120; line-height: 1.45; }
+    .body { font-size: 13px; line-height: 1.5; color: #212120; }
+    .dim { color: #5C5C58; }
+    .mono { font-family: 'IBM Plex Mono', monospace; font-size: 12px; color: #212120; }
+    .mono.dim { color: #5C5C58; }
+    .status { font-size: 13px; color: #5C5C58; }
+    .outline { display: flex; gap: 14px; align-items: center; padding-bottom: 12px; border-bottom: 1px solid #D5D5D1; }
+    .chip { font-family: 'IBM Plex Mono', monospace; font-size: 11px; letter-spacing: 0.1em; text-transform: uppercase; color: #5C5C58; padding: 4px 6px; border-radius: 4px; }
+    .chip.on { background: #E4E4E0; color: #212120; }
+    .card { background: #FAFAF8; border: 1px solid #D5D5D1; border-radius: 10px; padding: 18px 22px 16px; display: flex; flex-direction: column; gap: 12px; }
+    .row { display: flex; justify-content: space-between; align-items: baseline; gap: 12px; }
+    .row .l { font-size: 13px; color: #212120; }
+    .row .v { font-family: 'IBM Plex Mono', monospace; font-size: 12px; color: #212120; text-align: right; }
+    .btns { display: flex; gap: 10px; }
+    .btn { flex: 1; height: 28px; border: 1px solid #7B7B76; border-radius: 6px; display: flex; align-items: center; justify-content: center; font-size: 13px; color: #212120; background: transparent; }
+    .btn.fill { background: #7A5A0C; border-color: #7A5A0C; color: #FAFAF8; }
+    .more { text-align: center; font-size: 13px; color: #5C5C58; }
+    .hair { height: 1px; background: #D5D5D1; }
+    .fold { display: flex; align-items: baseline; gap: 10px; font-size: 13px; color: #212120; }
+    .fold .tri { color: #7A5A0C; font-size: 10px; width: 10px; }
+    .fold .sum { font-family: 'IBM Plex Mono', monospace; font-size: 12px; color: #5C5C58; }
+    .callout { background: #EDE4CD; border-left: 3px solid #7A5A0C; padding: 10px 14px; display: flex; flex-direction: column; gap: 3px; }
+    .quote { background: #F1ECDD; border-left: 3px solid #8F6B14; padding: 10px 14px; display: flex; flex-direction: column; gap: 4px; }
+    .quote.dashed { border-left: 3px dashed #8F6B14; }
+    .item { border: 1px solid #D5D5D1; border-radius: 8px; padding: 14px 16px; display: flex; flex-direction: column; gap: 10px; background: #FAFAF8; }
+    .tag { font-family: 'IBM Plex Mono', monospace; font-size: 11px; color: #5C5C58; border: 1px solid #C8C8C3; border-radius: 4px; padding: 2px 6px; white-space: nowrap; }
+    .tag.accent { color: #7A5A0C; border-color: #8F6B14; }
+    .ev { display: flex; gap: 12px; align-items: baseline; }
+    .ev .dot { width: 8px; height: 8px; border-radius: 50%; border: 1.5px solid #7B7B76; flex: none; position: relative; top: 1px; }
+    .ev .dot.on { background: #212120; border-color: #212120; }
+    .ev .t { flex: 1; font-size: 13px; color: #212120; }
+    .ev .when { font-family: 'IBM Plex Mono', monospace; font-size: 12px; color: #5C5C58; white-space: nowrap; }
+    .ev .link { font-size: 12px; color: #7A5A0C; white-space: nowrap; }
+    .pair { display: flex; gap: 28px; align-items: flex-start; }
+    .col { display: flex; flex-direction: column; gap: 8px; }
+    .count { display: inline-flex; gap: 6px; align-items: baseline; font-family: 'IBM Plex Mono', monospace; font-size: 11px; color: #6E6450; }
+    .count b { font-size: 13px; color: #2B2416; font-weight: 600; }
+    .menu { background: #FAFAF8; border: 1px solid #C8C8C3; border-radius: 8px; padding: 5px; box-shadow: 0 10px 30px rgba(0,0,0,0.18); font-family: -apple-system, 'SF Pro Text', 'Helvetica Neue', sans-serif; font-size: 13px; display: flex; flex-direction: column; gap: 2px; width: 300px; }
+    .menu .mi { padding: 5px 10px; color: #212120; display: flex; justify-content: space-between; border-radius: 5px; }
+    .menu .mi.sel { background: #7A5A0C; color: #FAFAF8; }
+    .menu .mi .sc { color: inherit; opacity: 0.7; }
+    .menu .sep { height: 1px; background: #D5D5D1; margin: 3px 6px; }
+    table.tally { border-collapse: collapse; font-family: 'IBM Plex Sans', sans-serif; font-size: 13px; color: #2B2416; }
+    table.tally th { text-align: left; font-family: 'IBM Plex Mono', monospace; font-size: 11px; letter-spacing: 0.1em; text-transform: uppercase; color: #6E6450; font-weight: 500; padding: 6px 18px 6px 0; border-bottom: 1px solid #C9BFA2; }
+    table.tally td { padding: 7px 18px 7px 0; border-bottom: 1px solid #E3DCC8; vertical-align: top; }
+    table.tally td.n { font-family: 'IBM Plex Mono', monospace; font-size: 12.5px; }
+  </style>
+<section id="turn1" style="box-sizing: border-box; padding: 48px 48px 120px; display: flex; flex-direction: column; gap: 96px; font-family: 'IBM Plex Sans', sans-serif; color: #2B2416; min-width: 0; overflow-x: auto;">
+
+  <div style="display: flex; flex-direction: column; gap: 10px;">
+    <div class="page-title">Task page density · 4 Nov 2026</div>
+    <div class="page-intro">Five paired frames, each the task page or a seated card as built on 4 Nov (left) beside the same surface with the forensic layer demoted (right). Nothing is removed from the app: every fact, id and label on the left is still reachable on the right, one disclosure or one switch away. The vocabulary, ladder and grounds are unchanged; what changes is which altitude each thing draws at by default.</div>
+  </div>
+
+  <div style="display: flex; gap: 24px; align-items: flex-start; flex-wrap: wrap;">
+    <div class="note"><div class="note-k">What this page is</div><div class="note-b">A proposal for the <b>task page</b> (<code>TaskPageView</code>) and the <b>cards it seats</b> (<code>DecisionCardComposition</code>). The left frames are redrawn from the 4 Nov as-built page and the 8 Oct refined cards; the right frames apply three rules, below. Each ◆ is a decision the owner has to make; the rest is drawing.</div></div>
+    <div class="note"><div class="note-k">The three rules</div><div class="note-b"><b>1 · Three altitudes.</b> Glance (title, one status line, hold, the ask and its actions); read (the body, the current run and round); forensic (ids, digests, admission facts, hold codes, the event log). <b>2 · One affordance per altitude.</b> The forensic layer is one closed <b>Details</b> fold at the foot of a card or section, never five differently named folds, plus one app-wide switch that opens all of them. <b>3 · Say each fact once, at the altitude it is decided at.</b> A hash the operator never decides on is never in the reading path.</div></div>
+    <div class="note"><div class="note-k">What the rules do not touch</div><div class="note-b">Plan §9's labeling rule (agent-written text is visibly a claim) holds on every frame: each quoted block keeps its dashed frame and the card keeps the word <i>(unverified)</i> once, at the top. R6 (one filled control, only with a recommendation), the consequence sheet, the R9 fact row, both ladders and the outline row are unchanged. Frames are Mac, day; the phone takes the same order on its ladder.</div></div>
+  </div>
+
+  <!-- ===================== 1 · The seated card's foot ===================== -->
+  <div style="display: flex; flex-direction: column; gap: 22px;">
+    <div style="display: flex; flex-direction: column; gap: 6px;">
+      <div class="sec-title">1 · The seated card's foot: five folds become one Details</div>
+      <div class="sec-sub">The review-diminishing-returns card as the 4 Nov page draws it, then with its foot collapsed into one line. The body above the hairline is the same on both sides; this frame is only about what sits under the actions.</div>
+    </div>
+    <div class="pair">
+      <div class="col">
+        <div class="frame-label">As built · card seated on the task page · R0 R7 R26</div>
+        <div class="pane">
+          <div class="eyebrow">freeside · #724 · review</div>
+          <div class="ask">Repair the acceptance rig</div>
+          <div class="status">Waiting on you since 6h · 2 open decisions</div>
+          <div class="outline"><span class="chip on">Decisions 2 ▾</span><span class="chip">Task</span><span class="chip">Conversation 2</span><span class="chip">Timeline</span><span class="chip">Runs 2 ▾</span></div>
+          <div class="card">
+            <div class="eyebrow">Review diminishing returns</div>
+            <div class="ask">Review has reached diminishing returns. Finish now?</div>
+            <div class="stmt">Round 3 found no new blocking finding; the two it raised are advisory and the diff grew by 14 lines.</div>
+            <div class="kw">Yield</div>
+            <div class="row"><span class="l">Cost so far</span><span class="v">3 rounds · 41 min</span></div>
+            <div class="row"><span class="l">Diff growth</span><span class="v"><span style="color:#357040">+120</span> <span style="color:#A83D2C">−8</span> → <span style="color:#357040">+134</span> <span style="color:#A83D2C">−11</span></span></div>
+            <div class="body dim">Continue Under Policy runs one more ordinary round that will not undo the listed fixes.</div>
+            <div class="btns"><div class="btn">Finish Now</div><div class="btn">Apply Then Finish</div><div class="btn">Discuss</div></div>
+            <div class="more">More Actions ▾</div>
+            <div class="hair"></div>
+            <div class="fold"><span class="tri">▶</span>Recorded Context</div>
+            <div class="fold"><span class="tri">▶</span>Details <span class="sum">audit digest · run · round</span></div>
+            <div class="fold"><span class="tri">▶</span>Claims <span class="sum">1 agent claim</span></div>
+            <div class="fold"><span class="tri">▶</span>Evidence <span class="sum">2 attachments · digests</span></div>
+            <div class="fold"><span class="tri">▶</span>Technical Bindings <span class="sum">item · task · run · digest</span></div>
+          </div>
+          <div class="card" style="padding: 12px 16px; flex-direction: row; justify-content: space-between; align-items: center;"><span class="stmt" style="font-size: 14px;">Approve the proposed dispositions for these findings?</span><span class="tag accent">Finding adjudication</span></div>
+          <div class="card" style="padding: 12px 16px;"><div class="fold"><span class="tri">▶</span>Task <span class="sum">freeside · review · round 3 · run 2 · claude-opus · pool A</span></div></div>
+        </div>
+        <div class="frame-note">Under the actions the card draws five folds at equal weight, each with its own mono summary: 10 text runs for a region the operator opens on a small minority of cards. Four of the five hold ids, digests or bindings; Claims and Evidence hold the one thing the operator might actually read, and nothing on the row says so.</div>
+      </div>
+      <div class="col">
+        <div class="frame-label">Proposed · the same card · one Details fold, evidence promoted into the body · <span class="diamond">◆ 1</span></div>
+        <div class="pane">
+          <div class="eyebrow">freeside · #724 · review</div>
+          <div class="ask">Repair the acceptance rig</div>
+          <div class="status">Waiting on you since 6h · 2 open decisions</div>
+          <div class="outline"><span class="chip on">Decisions 2 ▾</span><span class="chip">Task</span><span class="chip">Conversation 2</span><span class="chip">Timeline</span><span class="chip">Runs 2 ▾</span></div>
+          <div class="card">
+            <div class="eyebrow">Review diminishing returns</div>
+            <div class="ask">Review has reached diminishing returns. Finish now?</div>
+            <div class="stmt">Round 3 found no new blocking finding; the two it raised are advisory and the diff grew by 14 lines.</div>
+            <div class="kw">Yield</div>
+            <div class="row"><span class="l">Cost so far</span><span class="v">3 rounds · 41 min</span></div>
+            <div class="row"><span class="l">Diff growth</span><span class="v"><span style="color:#357040">+120</span> <span style="color:#A83D2C">−8</span> → <span style="color:#357040">+134</span> <span style="color:#A83D2C">−11</span></span></div>
+            <div class="fold"><span class="tri">▶</span>Evidence <span class="sum">1 claim · 2 attachments</span></div>
+            <div class="body dim">Continue Under Policy runs one more ordinary round that will not undo the listed fixes.</div>
+            <div class="btns"><div class="btn">Finish Now</div><div class="btn">Apply Then Finish</div><div class="btn">Discuss</div></div>
+            <div class="more">More Actions ▾</div>
+            <div class="hair"></div>
+            <div class="fold"><span class="tri">▶</span>Details <span class="sum">context · audit 7f3a9c21 · run 2 · round 3 · bindings</span></div>
+          </div>
+          <div class="card" style="padding: 12px 16px; flex-direction: row; justify-content: space-between; align-items: center;"><span class="stmt" style="font-size: 14px;">Approve the proposed dispositions for these findings?</span><span class="tag accent">Finding adjudication</span></div>
+          <div class="card" style="padding: 12px 16px;"><div class="fold"><span class="tri">▶</span>Task <span class="sum">freeside · review · round 3 · run 2 · claude-opus · pool A</span></div></div>
+        </div>
+        <div class="frame-note">One fold under the hairline, named <b>Details</b> on every card and every section of the page, whose mono summary names what it holds. Recorded Context, the audit digest, run and round, and the technical bindings open together inside it, in that order, as the R26 Identifiers footer already does for the page. <b>Evidence</b> (the claim and the attachments) is the one thing an operator reads before deciding, so it moves above the actions as a fold in the body, where plan §9's plan-altitude lead already puts the agent's summary. The card loses four rows and two mono summaries without losing a fact. <span class="diamond">◆ 1</span> Does Recorded Context stay a named sub-fold inside Details, or just the first block in it?</div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ===================== 2 · The switch ===================== -->
+  <div style="display: flex; flex-direction: column; gap: 22px;">
+    <div style="display: flex; flex-direction: column; gap: 6px;">
+      <div class="sec-title">2 · One switch opens every Details at once</div>
+      <div class="sec-sub">The cases that need the forensic layer are debugging cases, and in those you want all of it on every card and section, not one fold at a time. A View menu item (⌥⌘D) and the same toggle in the iPhone's More Actions open every Details fold on the page and keep them open on this device until switched off. It replaces nothing; the folds still open one at a time by hand.</div>
+    </div>
+    <div class="pair">
+      <div class="col">
+        <div class="frame-label">Proposed · View menu, Mac</div>
+        <div class="menu">
+          <div class="mi"><span>Show Sidebar</span><span class="sc">⌃⌘S</span></div>
+          <div class="mi"><span>Refresh</span><span class="sc">⌘R</span></div>
+          <div class="sep"></div>
+          <div class="mi sel"><span>Show Technical Detail</span><span class="sc">⌥⌘D</span></div>
+          <div class="mi"><span>Show Exact Times</span><span class="sc">⌥⌘T</span></div>
+        </div>
+        <div class="frame-note" style="width: 300px;">Checked, every Details fold on the current page is open and fact rows carry their exact value (full digest, ISO instant) in place of the short form. Unchecked, the folds return to the per-device state they had. <b>Show Exact Times</b> is the same idea for the hover-and-long-press time pattern the app already uses; it is listed here as a sibling, not proposed.</div>
+      </div>
+      <div class="col">
+        <div class="frame-label">Proposed · a fact row and a Details fold, switch off → on</div>
+        <div class="pane" style="width: 560px; gap: 18px;">
+          <div style="display: flex; flex-direction: column; gap: 10px;">
+            <div class="kw">Switch off</div>
+            <div class="row"><span class="l">Policy digest</span><span class="v">7f3a9c21</span></div>
+            <div class="row"><span class="l">Recorded</span><span class="v">Oct 28, 4:12 PM</span></div>
+            <div class="fold"><span class="tri">▶</span>Details <span class="sum">context · audit 7f3a9c21 · run 2 · round 3 · bindings</span></div>
+          </div>
+          <div class="hair"></div>
+          <div style="display: flex; flex-direction: column; gap: 10px;">
+            <div class="kw">Switch on</div>
+            <div class="row"><span class="l">Policy digest</span><span class="v">7f3a9c21e04b8d7a9c3f1b2e5d6a7c8f · rein: standard</span></div>
+            <div class="row"><span class="l">Recorded</span><span class="v">2026-10-28T16:12:07Z</span></div>
+            <div class="fold"><span class="tri">▼</span>Details</div>
+            <div style="padding-left: 20px; display: flex; flex-direction: column; gap: 8px;">
+              <div class="kw">Recorded context</div>
+              <div class="body dim">The daemon stopped review after round 3 because the last two rounds raised only advisory findings and the diff grew under the policy's 2% bound.</div>
+              <div class="kw">Bindings</div>
+              <div class="row"><span class="l">Item</span><span class="v">att-9c21f0e3 · v4</span></div>
+              <div class="row"><span class="l">Task</span><span class="v">task-4be1d0a7</span></div>
+              <div class="row"><span class="l">Run</span><span class="v">run-7f3a · attempt 2</span></div>
+              <div class="row"><span class="l">Audit</span><span class="v">7f3a9c21 · drift: none</span></div>
+              <div class="row"><span class="l">Hold code</span><span class="v">review_diminishing_returns</span></div>
+            </div>
+          </div>
+        </div>
+        <div class="frame-note" style="width: 560px;">The switch is the only new control on the page. It is per device like the fold preferences it drives (<code>TaskTimelineDisclosurePreferences</code>), so a Mac used for debugging can stay on while the phone stays quiet. <span class="diamond">◆ 2</span> Does the switch also change the list rows (short ids beside names), or only the detail column?</div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ===================== 3 · Task fold ===================== -->
+  <div style="display: flex; flex-direction: column; gap: 22px;">
+    <div style="display: flex; flex-direction: column; gap: 6px;">
+      <div class="sec-title">3 · The Task fold: five facts the operator uses, the rest in Details</div>
+      <div class="sec-sub">A working task parked on a usage pool, Task fold open, as the 4 Nov page draws it and as proposed. The header is identical; the difference is the fourteen rows.</div>
+    </div>
+    <div class="pair">
+      <div class="col">
+        <div class="frame-label">As built · Task fold open · R9 R18</div>
+        <div class="pane">
+          <div class="eyebrow">freeside · #740 · implementation</div>
+          <div class="ask">Scheduler occurrence drift</div>
+          <div class="status">Parked · Pool A is at its limit of parallel runs</div>
+          <div class="callout"><span class="body">Implementation</span><span class="stmt">Hold: Usage pool exhausted · pool A</span></div>
+          <div class="body dim">Pool A is at its limit of parallel runs. This work is queued; no action is needed for this wait.</div>
+          <div class="outline"><span class="chip on">Task</span><span class="chip">Conversation 1</span><span class="chip">Timeline</span><span class="chip">Runs 2 ▾</span></div>
+          <div class="card">
+            <div class="fold"><span class="tri">▼</span>Task</div>
+            <div class="mono dim" style="padding-left: 20px;">freeside · implementation · run 2 · parked · claude-opus · pool A</div>
+            <div class="row"><span class="l">Project</span><span class="v">freeside · freeside-ai/freeside</span></div>
+            <div class="row"><span class="l">Stage</span><span class="v">Review · Round 2</span></div>
+            <div class="row"><span class="l">Current run</span><span class="v">Attempt 2 · Freeside-invoked</span></div>
+            <div class="row"><span class="l">Agent and pool</span><span class="v">claude-opus · pool A</span></div>
+            <div class="row"><span class="l">Harness</span><span class="v">Claude Code</span></div>
+            <div class="row"><span class="l">Model</span><span class="v">claude-opus-5-5</span></div>
+            <div class="row"><span class="l">Effort</span><span class="v">high</span></div>
+            <div class="row"><span class="l">Cost owner</span><span class="v">operator</span></div>
+            <div class="row"><span class="l">Credential mode</span><span class="v">standard</span></div>
+            <div class="row"><span class="l">Egress profile</span><span class="v">GitHub only</span></div>
+            <div class="row"><span class="l">Isolation class</span><span class="v">container</span></div>
+            <div class="row"><span class="l">Operating mode</span><span class="v">unattended</span></div>
+            <div class="row"><span class="l">Pull request</span><span class="v">none yet</span></div>
+            <div class="row"><span class="l">Policy digest</span><span class="v">7f3a9c21 · rein: standard</span></div>
+            <div class="body dim">More Actions ▾</div>
+          </div>
+        </div>
+        <div class="frame-note">Fourteen rows at one weight. Seven are the run's admission (#979), which answer "under what terms did this run launch", a question asked when something has gone wrong, not when reading where a task stands. The closed fold's mono line already says five of the other seven.</div>
+      </div>
+      <div class="col">
+        <div class="frame-label">Proposed · the same fold · five rows, then Details</div>
+        <div class="pane">
+          <div class="eyebrow">freeside · #740 · implementation</div>
+          <div class="ask">Scheduler occurrence drift</div>
+          <div class="status">Parked · Pool A is at its limit of parallel runs</div>
+          <div class="callout"><span class="body">Implementation</span><span class="stmt">Hold: Usage pool exhausted · pool A</span></div>
+          <div class="body dim">Pool A is at its limit of parallel runs. This work is queued; no action is needed for this wait.</div>
+          <div class="outline"><span class="chip on">Task</span><span class="chip">Conversation 1</span><span class="chip">Timeline</span><span class="chip">Runs 2 ▾</span></div>
+          <div class="card">
+            <div class="fold"><span class="tri">▼</span>Task</div>
+            <div class="row"><span class="l">Project</span><span class="v">freeside · freeside-ai/freeside</span></div>
+            <div class="row"><span class="l">Stage</span><span class="v">Review · Round 2</span></div>
+            <div class="row"><span class="l">Current run</span><span class="v">Attempt 2 · Freeside-invoked · <span style="color:#7A5A0C">Open ›</span></span></div>
+            <div class="row"><span class="l">Agent</span><span class="v">claude-opus · pool A · unattended</span></div>
+            <div class="row"><span class="l">Pull request</span><span class="v">none yet</span></div>
+            <div class="hair"></div>
+            <div class="fold"><span class="tri">▶</span>Details <span class="sum">admission · Claude Code · claude-opus-5-5 · high · policy 7f3a9c21</span></div>
+            <div class="body dim">More Actions ▾</div>
+          </div>
+        </div>
+        <div class="frame-note">Five rows: the ones a reader of the page acts on (which project, which stage, which run to open, which agent is on it, whether there is a PR yet). Operating mode joins the agent row because "unattended" is a property of how the agent is being run. The admission's seven facts and the policy digest are the fold's Details, with the three an operator most often wants to glance at (harness, model, effort) in its mono summary so the fold rarely needs opening. Nothing in <code>taskFacts</code> changes except which rows the fold shows before its hairline.</div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ===================== 4 · Timeline ===================== -->
+  <div style="display: flex; flex-direction: column; gap: 22px;">
+    <div style="display: flex; flex-direction: column; gap: 6px;">
+      <div class="sec-title">4 · The timeline: transitions on the rail, bookkeeping in the log</div>
+      <div class="sec-sub">A finished task's history as the 4 Nov page draws it (Task Events, then each campaign folding its attempts, each attempt its milestones, each review round its facts) and as one rail of the things that changed the task's state, with the daemon's full event log one fold away.</div>
+    </div>
+    <div class="pair">
+      <div class="col">
+        <div class="frame-label">As built · Timeline section · R15 R18 R26</div>
+        <div class="pane">
+          <div class="eyebrow">freeside · #718 · published</div>
+          <div class="ask">Write-once command identity</div>
+          <div class="status">Merged as PR #2431 · Oct 28, 4:12 PM</div>
+          <div class="outline"><span class="chip">Task</span><span class="chip">Conversation 1</span><span class="chip on">Timeline</span><span class="chip">Runs 2 ▾</span></div>
+          <div class="kw">Task events</div>
+          <div class="ev"><span class="dot on"></span><span class="t"><b>PR merged</b> · #2431</span><span class="when">Oct 28, 4:12 PM</span></div>
+          <div class="ev"><span class="dot"></span><span class="t">Verification recorded · Clean</span><span class="when">Oct 28, 2:40 PM</span></div>
+          <div class="ev"><span class="dot"></span><span class="t">Round 2 completed · Clean</span><span class="when">Oct 28, 2:31 PM</span></div>
+          <div class="ev"><span class="dot"></span><span class="t">Implementation started</span><span class="when">Oct 27, 6:11 PM</span></div>
+          <div class="ev"><span class="dot"></span><span class="t">Task created</span><span class="when">Oct 27, 9:02 AM</span></div>
+          <div class="fold" style="margin-top: 6px;"><span class="tri">▼</span>Campaign <span class="sum">current · 2 attempts · from Oct 28</span></div>
+          <div class="card" style="gap: 10px;">
+            <div class="row"><span class="stmt" style="font-size: 15px;">Attempt 2 <span class="tag">Published</span></span><span style="font-size: 13px; color: #7A5A0C;">Open run history ›</span></div>
+            <div class="kw">Milestones</div>
+            <div class="ev"><span class="dot on"></span><span class="t"><b>Review</b> · Round 2</span><span class="when">Oct 30, 10:10 AM</span></div>
+            <div class="fold" style="padding-left: 20px;"><span class="tri">▶</span>Round facts <span class="sum">Head cccccccc · Base aaaaaaaa · Freeside-invoked</span></div>
+            <div class="ev"><span class="dot"></span><span class="t">Implementation · Round 1</span><span class="when">Oct 30, 10:01 AM</span></div>
+            <div class="ev"><span class="dot"></span><span class="t">Invocation Admitted</span><span class="when">Oct 30, 10:00 AM</span></div>
+            <div class="ev"><span class="dot"></span><span class="t">Execution Export Recorded</span><span class="when">Oct 30, 9:58 AM</span></div>
+            <div class="ev"><span class="dot"></span><span class="t">Invocation Started</span><span class="when">Oct 30, 9:57 AM</span></div>
+            <div class="fold"><span class="tri">▶</span>Run details <span class="sum">role · reason · hold</span></div>
+          </div>
+          <div class="fold"><span class="tri">▶</span>Attempt 1 <span class="sum">failed · retried · Oct 28</span></div>
+          <div class="hair"></div>
+          <div class="fold"><span class="tri">▶</span>Identifiers <span class="sum">task · campaign · runs</span></div>
+        </div>
+        <div class="frame-note">Three nested containers (events, campaign, attempt) and four fold kinds for one task with two attempts. The attempt card repeats the rail's rows at a second depth (Review · Round 2 appears above as "Round 2 completed"), and the milestone list mixes state changes with the daemon's own records of admitting and exporting an invocation.</div>
+      </div>
+      <div class="col">
+        <div class="frame-label">Proposed · one rail of transitions, the log in Details · <span class="diamond">◆ 3</span></div>
+        <div class="pane">
+          <div class="eyebrow">freeside · #718 · published</div>
+          <div class="ask">Write-once command identity</div>
+          <div class="status">Merged as PR #2431 · Oct 28, 4:12 PM</div>
+          <div class="outline"><span class="chip">Task</span><span class="chip">Conversation 1</span><span class="chip on">Timeline</span><span class="chip">Runs 2 ▾</span></div>
+          <div class="kw">History</div>
+          <div class="ev"><span class="dot on"></span><span class="t"><b>PR merged</b> · #2431</span><span class="when">Oct 28, 4:12 PM</span></div>
+          <div class="ev"><span class="dot"></span><span class="t">Verification clean</span><span class="when">Oct 28, 2:40 PM</span></div>
+          <div class="ev"><span class="dot"></span><span class="t">Review round 2 · clean</span><span class="when">Oct 28, 2:31 PM</span></div>
+          <div class="ev"><span class="dot"></span><span class="t">Review round 1 · 2 findings, both fixed</span><span class="when">Oct 28, 11:05 AM</span></div>
+          <div class="ev"><span class="dot"></span><span class="t">Implementation · attempt 2 · claude-opus</span><span class="link">Open run ›</span><span class="when">Oct 27, 6:11 PM</span></div>
+          <div class="ev"><span class="dot"></span><span class="t">Attempt 1 failed · retried</span><span class="link">Open run ›</span><span class="when">Oct 27, 4:50 PM</span></div>
+          <div class="ev"><span class="dot"></span><span class="t">Specification approved · on this Mac</span><span class="when">Oct 27, 10:14 AM</span></div>
+          <div class="ev"><span class="dot"></span><span class="t">Task created · from freeside-ai/freeside#718</span><span class="when">Oct 27, 9:02 AM</span></div>
+          <div class="hair"></div>
+          <div class="fold"><span class="tri">▶</span>Details <span class="sum">all 19 events · admissions · exports · holds · identifiers</span></div>
+        </div>
+        <div class="frame-note">One rail, newest first, of the events that moved the task between stages, rounds, attempts and holds, each one sentence with the facts that identify it (the attempt's agent, a round's finding count, who approved). A run's row is the link to its run timeline; the attempt card and its milestones live there, where they were already drawn in full. The campaign boundary is not a row: a retry is. Everything the rail does not show (admitted, started, export recorded, each round's head and base, run details, the Identifiers footer) is the section's Details, in the daemon's order. <span class="diamond">◆ 3</span> Which event kinds are transitions? Proposed: stage start, round open and close, attempt start and end, hold set and cleared, specification and effect decisions, PR events. Everything else is log.</div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ===================== 5 · Provenance register ===================== -->
+  <div style="display: flex; flex-direction: column; gap: 22px;">
+    <div style="display: flex; flex-direction: column; gap: 6px;">
+      <div class="sec-title">5 · Provenance as a register, not a sentence per block</div>
+      <div class="sec-sub">The finding-adjudication card, its first finding folded, as the 8 Oct refined page draws it and with the claim labels moved into one register: the word (unverified) once at the top of the card, the dashed frame on every agent-written block, and who proposed what as a short tag with the long form on hover and in Details.</div>
+    </div>
+    <div class="pair">
+      <div class="col">
+        <div class="frame-label">As built · finding adjudication, folded · R3 R5 R7 R25</div>
+        <div class="pane">
+          <div class="card">
+            <div class="eyebrow">Finding adjudication</div>
+            <div class="ask">Approve the proposed dispositions for these findings?</div>
+            <div class="body dim">Accepting applies each proposed route and the run continues to publication.</div>
+            <div class="item">
+              <div class="row" style="justify-content: flex-start;"><span class="kw">Finding 1</span><span class="stmt">Command handler retries without preserving the write-once command identity.</span></div>
+              <div class="kw">Model proposal (unverified) ⓘ</div>
+              <div class="quote dashed"><span class="stmt">Decline the finding</span><span class="body dim">The finding assumes a retry guarantee the approved work-unit contract explicitly rejects.</span><span class="mono dim">Contradicts the goal · High confidence</span></div>
+              <div class="body dim">Chosen: Fix in this PR — Accept All Dispositions does not send it.</div>
+              <div class="fold"><span class="tri">▶</span>Reason and Alternatives</div>
+            </div>
+            <div class="item">
+              <div class="row" style="justify-content: flex-start;"><span class="kw">Finding 2</span><span class="stmt">Review-level observation: the change lacks a regression test.</span></div>
+              <div class="kw">Model judgment with engine-authorized remediation (unverified)</div>
+              <div class="quote dashed"><span class="stmt">Fix in this PR</span></div>
+              <div class="fold"><span class="tri">▶</span>Reason and Alternatives</div>
+            </div>
+            <div class="kw">Recommendation (unverified)</div>
+            <div class="body">The agent recommends accepting the proposed dispositions for all 2 findings, with high confidence.</div>
+            <div class="body dim">The proposals resolve both findings without reopening the specification; the remediation stays inside the run's allowed paths.</div>
+            <div class="btns"><div class="btn fill">Accept All Dispositions</div><div class="btn">Choose Another Route</div><div class="btn">Discuss</div></div>
+            <div class="more">More Actions ▾</div>
+            <div class="hair"></div>
+            <div class="fold"><span class="tri">▶</span>Recorded Context</div>
+            <div class="fold"><span class="tri">▶</span>Details <span class="sum">audit digest · run · round</span></div>
+          </div>
+        </div>
+        <div class="frame-note">Three mono-caps provenance lines (one per finding, one for the recommendation), each a sentence, each carrying "(unverified)", at the same weight as the card's eyebrow and its section keywords. On a card with five findings that is six such lines before the actions. The reader has to parse "model judgment with engine-authorized remediation" to learn that the agent proposed the route and the engine is allowed to carry it out.</div>
+      </div>
+      <div class="col">
+        <div class="frame-label">Proposed · the same card · one claim statement, tags for source · <span class="diamond">◆ 4</span></div>
+        <div class="pane">
+          <div class="card">
+            <div class="row"><span class="eyebrow">Finding adjudication</span><span class="kw">Routes and reasons: agent-written, unverified ⓘ</span></div>
+            <div class="ask">Approve the proposed dispositions for these findings?</div>
+            <div class="body dim">Accepting applies each proposed route and the run continues to publication.</div>
+            <div class="item">
+              <div class="row" style="justify-content: flex-start;"><span class="kw">Finding 1</span><span class="stmt">Command handler retries without preserving the write-once command identity.</span></div>
+              <div class="row" style="align-items: stretch;"><div class="quote dashed" style="flex: 1;"><span class="stmt">Decline the finding</span><span class="body dim">The finding assumes a retry guarantee the approved work-unit contract explicitly rejects.</span></div><span class="tag" style="align-self: flex-start;">Agent · high</span></div>
+              <div class="body dim">You chose <b>Fix in this PR</b> instead; Accept All Dispositions keeps that choice.</div>
+              <div class="fold"><span class="tri">▶</span>Reason and alternatives <span class="sum">2 evidence · 3 routes · 1 question</span></div>
+            </div>
+            <div class="item">
+              <div class="row" style="justify-content: flex-start;"><span class="kw">Finding 2</span><span class="stmt">Review-level observation: the change lacks a regression test.</span></div>
+              <div class="row" style="align-items: stretch;"><div class="quote dashed" style="flex: 1;"><span class="stmt">Fix in this PR</span></div><span class="tag" style="align-self: flex-start;">Agent · engine may fix</span></div>
+              <div class="fold"><span class="tri">▶</span>Reason and alternatives <span class="sum">1 evidence · 3 routes</span></div>
+            </div>
+            <div class="quote dashed"><span class="body"><b>Recommended · agent, high confidence.</b> Accept both: the proposals resolve the findings without reopening the specification, and the remediation stays inside the run's allowed paths.</span></div>
+            <div class="btns"><div class="btn fill">Accept All Dispositions</div><div class="btn">Choose Another Route</div><div class="btn">Discuss</div></div>
+            <div class="more">More Actions ▾</div>
+            <div class="hair"></div>
+            <div class="fold"><span class="tri">▶</span>Details <span class="sum">context · provenance · audit 7f3a9c21 · run 2 · round 3</span></div>
+          </div>
+        </div>
+        <div class="frame-note">The card says once, in its eyebrow row, that the routes and reasons below are agent-written and unverified; the ⓘ is the card's one explanation control (R7, R25). Every agent-written block keeps the dashed frame, so the register is still visible on each one. Who proposed the route becomes a tag on the block: <b>Agent · high</b>, <b>Agent · engine may fix</b>, <b>Daemon</b>, <b>Project policy</b>; hovering a tag shows the full provenance sentence, and Details lists it per finding. The recommendation is one dashed block in the body face, so its register matches the other claims instead of a fourth keyword line. <span class="diamond">◆ 4</span> SURFACES.md records that every label "keeps the word (unverified)"; this frame keeps it once per card. That is a plan §9 revision and needs a decision note before it is built.</div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ===================== 6 · Tally ===================== -->
+  <div style="display: flex; flex-direction: column; gap: 22px;">
+    <div style="display: flex; flex-direction: column; gap: 6px;">
+      <div class="sec-title">6 · What the frames add up to</div>
+      <div class="sec-sub">Distinct text runs an operator can read without scrolling, counted on the frames above (a fact row is two, a fold with a summary is two, a button is one). The count is a proxy for attention spent, not a target.</div>
+    </div>
+    <div style="display: flex; gap: 48px; align-items: flex-start;">
+      <table class="tally">
+        <tr><th>Frame</th><th>As built</th><th>Proposed</th><th>Where the difference went</th></tr>
+        <tr><td>1 · Card foot</td><td class="n">10 runs under the hairline</td><td class="n">2</td><td>Into one Details fold; Evidence promoted into the body</td></tr>
+        <tr><td>3 · Task fold open</td><td class="n">29</td><td class="n">13</td><td>Admission and policy digest into Details; its summary keeps harness, model, effort</td></tr>
+        <tr><td>4 · Timeline</td><td class="n">34 in three containers</td><td class="n">19 in one rail</td><td>Milestones and round facts to the run timeline; the log into Details</td></tr>
+        <tr><td>5 · Finding card</td><td class="n">3 provenance sentences</td><td class="n">1 statement, 2 tags</td><td>Into hover and Details, under a plan §9 revision (◆ 4)</td></tr>
+      </table>
+      <div class="note" style="width: 520px;"><div class="note-k">Order of work</div><div class="note-b"><b>First</b> frames 1, 3 and 4: they change which rows draw before a hairline and need no rule change, only a note for the Details naming and the screenshot rebaseline. <b>Second</b> frame 2, the switch, one new control. <b>Last</b> frame 5, after ◆ 4 is decided, because it revises a plan §9 rule and touches every card's label register at once.</div></div>
+    </div>
+  </div>
+
+</section>
+</body>
+</html>
