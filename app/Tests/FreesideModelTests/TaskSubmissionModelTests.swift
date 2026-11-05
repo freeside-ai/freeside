@@ -247,7 +247,10 @@ import Testing
     @Test func chosenAgentsReachTheTaskAsSubmitLines() async throws {
         let coordinator = coordinator()
         let model = TaskSubmissionModel(coordinator: coordinator)
-        let lines = AgentChoiceDisplay.taskLines(writer: "claude-secondary", reviewer: "codex-primary")
+        let lines = AgentChoiceDisplay.taskLines(choices: [
+            .specifier: "claude-secondary", .implementer: "claude-secondary", .remediator: "claude-secondary",
+            .reviewer: "codex-primary",
+        ])
         let taskID = try #require(
             await model.submit(projectID: "project-1", source: "Add a health endpoint.", taskLines: lines))
         let task = try #require(coordinator.tasks.first { $0.task.id == taskID }?.task)
@@ -282,7 +285,7 @@ import Testing
         await server.setAfterRespond { operationID in
             if operationID == "submitCommand" { try await lost.consume() }
         }
-        let lines = AgentChoiceDisplay.taskLines(writer: nil, reviewer: "claude-primary")
+        let lines = AgentChoiceDisplay.taskLines(choices: [.reviewer: "claude-primary"])
         #expect(
             await model.submit(projectID: "project-1", source: "Add a health endpoint.", taskLines: lines) == nil)
         let saved = try #require(model.pendingSubmissions.first)

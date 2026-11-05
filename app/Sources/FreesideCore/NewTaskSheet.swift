@@ -120,7 +120,16 @@ struct NewTaskSheet: View {
     }
 
     private var missingAgents: [String] {
-        AgentChoiceDisplay.missingAgents(writer: writer, reviewer: reviewer, catalog: model.agentCatalog)
+        AgentChoiceDisplay.missingAgents(choices: choices, catalog: model.agentCatalog)
+    }
+
+    /// The choices as per-role lines take them: a writer sets the three
+    /// writer roles, a reviewer the reviewer role.
+    private var choices: [AgentChoiceDisplay.Role: String] {
+        var choices: [AgentChoiceDisplay.Role: String] = [:]
+        if let writer { for role in AgentChoiceDisplay.writerRoles { choices[role] = writer } }
+        choices[.reviewer] = reviewer
+        return choices
     }
 
     var body: some View {
@@ -406,7 +415,7 @@ struct NewTaskSheet: View {
             let draft = Self.submission(source: source, name: name)
             let taskID = await model.submit(
                 projectID: projectID, source: draft.source, name: draft.name,
-                taskLines: AgentChoiceDisplay.taskLines(writer: writer, reviewer: reviewer))
+                taskLines: AgentChoiceDisplay.taskLines(choices: choices))
             isSubmitting = false
             guard !Task.isCancelled else { return }
             if let taskID {

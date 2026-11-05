@@ -15,47 +15,60 @@ import Testing
 
     // MARK: Lines
 
-    @Test func writerSetsTheThreeWriterRoles() {
+    @Test func oneAgentForTheWriterRolesAndAReviewerSendsTheOldWriterAndReviewerLines() {
+        // The old Writer and Reviewer triggers sent exactly these four lines,
+        // in this order, for writer claude-secondary and reviewer codex-primary.
+        let choices: [AgentChoiceDisplay.Role: String] = [
+            .reviewer: "codex-primary", .remediator: "claude-secondary",
+            .implementer: "claude-secondary", .specifier: "claude-secondary",
+        ]
         #expect(
-            AgentChoiceDisplay.taskLines(writer: "claude-secondary", reviewer: nil) == [
+            AgentChoiceDisplay.taskLines(choices: choices) == [
                 Line(role: .specifier, agent: "claude-secondary"),
                 Line(role: .implementer, agent: "claude-secondary"),
                 Line(role: .remediator, agent: "claude-secondary"),
+                Line(role: .reviewer, agent: "codex-primary"),
             ])
     }
 
-    @Test func reviewerSetsTheReviewerRole() {
+    @Test func eachChosenRoleSendsOneLineInRoleOrder() {
         #expect(
-            AgentChoiceDisplay.taskLines(writer: nil, reviewer: "codex-primary") == [
-                Line(role: .reviewer, agent: "codex-primary")
+            AgentChoiceDisplay.taskLines(choices: [.reviewer: "codex-primary", .implementer: "claude-primary"]) == [
+                Line(role: .implementer, agent: "claude-primary"),
+                Line(role: .reviewer, agent: "codex-primary"),
             ])
-    }
-
-    @Test func writerAndReviewerSetFourLines() {
-        let lines = AgentChoiceDisplay.taskLines(writer: "claude-secondary", reviewer: "codex-primary")
-        #expect(lines?.map(\.role) == [.specifier, .implementer, .remediator, .reviewer])
-        #expect(lines?.last?.agent == "codex-primary")
+        #expect(AgentChoiceDisplay.roleOrder == Components.Schemas.TaskLineRole.allCases)
     }
 
     @Test func noChoiceSendsNoLinesRatherThanAnEmptyList() {
-        #expect(AgentChoiceDisplay.taskLines(writer: nil, reviewer: nil) == nil)
+        #expect(AgentChoiceDisplay.taskLines(choices: [:]) == nil)
     }
 
     // MARK: Stale choices
 
     @Test func aChoiceTheCatalogDroppedIsMissing() {
-        #expect(AgentChoiceDisplay.missingAgents(writer: "claude-primary", reviewer: nil, catalog: catalog).isEmpty)
+        #expect(AgentChoiceDisplay.missingAgents(choices: [.implementer: "claude-primary"], catalog: catalog).isEmpty)
         #expect(
-            AgentChoiceDisplay.missingAgents(writer: "claude-retired", reviewer: "codex-primary", catalog: catalog)
+            AgentChoiceDisplay.missingAgents(
+                choices: [.implementer: "claude-retired", .reviewer: "codex-primary"], catalog: catalog)
                 == ["claude-retired"])
         #expect(
-            AgentChoiceDisplay.missingAgents(writer: "gone", reviewer: "gone", catalog: catalog) == ["gone"])
+            AgentChoiceDisplay.missingAgents(choices: [.specifier: "gone", .reviewer: "gone"], catalog: catalog)
+                == ["gone"])
+    }
+
+    @Test func missingAgentsFollowRoleOrder() {
+        #expect(
+            AgentChoiceDisplay.missingAgents(
+                choices: [.reviewer: "old-reviewer", .remediator: "old-remediator", .specifier: "old-specifier"],
+                catalog: catalog) == ["old-specifier", "old-remediator", "old-reviewer"])
     }
 
     @Test func withNoCatalogEveryChoiceIsMissing() {
-        #expect(AgentChoiceDisplay.missingAgents(writer: nil, reviewer: nil, catalog: nil).isEmpty)
+        #expect(AgentChoiceDisplay.missingAgents(choices: [:], catalog: nil).isEmpty)
         #expect(
-            AgentChoiceDisplay.missingAgents(writer: "claude-primary", reviewer: "codex-primary", catalog: nil)
+            AgentChoiceDisplay.missingAgents(
+                choices: [.specifier: "claude-primary", .reviewer: "codex-primary"], catalog: nil)
                 == ["claude-primary", "codex-primary"])
     }
 
@@ -83,17 +96,47 @@ import Testing
         #expect(AgentChoiceDisplay.defaultLabel(roles: [.reviewer], policy: nil, catalog: nil) == "Default · lineup")
     }
 
-    // MARK: Saved requests
+    // MARK: Summary
 
-    @Test func summaryNamesOneWriterOrEachRole() {
-        #expect(AgentChoiceDisplay.summary(nil) == nil)
+    @Test func summaryReadsTheWriterOnceWhenTheThreeWriterLinesAgree() {
         #expect(
             AgentChoiceDisplay.summary(
-                AgentChoiceDisplay.taskLines(writer: "claude-secondary", reviewer: "codex-primary"))
-                == "Writer claude-secondary · Reviewer codex-primary")
+                AgentChoiceDisplay.taskLines(choices: [
+                    .specifier: "claude-opus", .implementer: "claude-opus", .remediator: "claude-opus",
+                    .reviewer: "codex",
+                ])) == "claude-opus writes · codex reviews")
+        #expect(
+            AgentChoiceDisplay.summary(
+                AgentChoiceDisplay.taskLines(choices: [
+                    .specifier: "claude-opus", .implementer: "claude-opus", .remediator: "claude-opus",
+                ])) == "claude-opus writes")
+    }
+
+    @Test func summaryReadsEachRoleWhenTheWriterLinesDiffer() {
+        #expect(
+            AgentChoiceDisplay.summary([
+                Line(role: .specifier, agent: "claude-opus"), Line(role: .implementer, agent: "codex"),
+                Line(role: .remediator, agent: "codex"),
+            ]) == "claude-opus specifies · codex implements and remediates")
+        // Saved lines may come in any order; the summary reads role order.
         #expect(
             AgentChoiceDisplay.summary([
                 Line(role: .reviewer, agent: "codex-primary"), Line(role: .implementer, agent: "claude-primary"),
-            ]) == "Implementer claude-primary · Reviewer codex-primary")
+            ]) == "claude-primary implements · codex-primary reviews")
+        #expect(
+            AgentChoiceDisplay.summary([Line(role: .reviewer, agent: "codex-primary")]) == "codex-primary reviews")
+    }
+
+    @Test func summaryWithNoLinesIsNilSoTheChipReadsDefaultAgents() {
+        #expect(AgentChoiceDisplay.summary(nil) == nil)
+        #expect(AgentChoiceDisplay.summary([]) == nil)
+        #expect(AgentChoiceDisplay.summary(AgentChoiceDisplay.taskLines(choices: [:])) == nil)
+    }
+
+    @Test func titlesNameEachRole() {
+        #expect(
+            AgentChoiceDisplay.roleOrder.map(AgentChoiceDisplay.title(for:)) == [
+                "Specifier", "Implementer", "Remediator", "Reviewer",
+            ])
     }
 }

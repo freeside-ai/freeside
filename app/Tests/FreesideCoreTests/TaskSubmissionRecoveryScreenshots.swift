@@ -11,7 +11,13 @@
             // The second request chose agents, so its item shows its lines.
             for (id, lines) in [
                 ("saved-first", nil),
-                ("saved-second", AgentChoiceDisplay.taskLines(writer: "claude-secondary", reviewer: "codex-primary")),
+                (
+                    "saved-second",
+                    AgentChoiceDisplay.taskLines(choices: [
+                        .specifier: "claude-secondary", .implementer: "claude-secondary",
+                        .remediator: "claude-secondary", .reviewer: "codex-primary",
+                    ])
+                ),
             ] {
                 let command = Components.Schemas.ClientCommand(
                     command_id: id, device_id: "device-mock",

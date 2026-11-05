@@ -56,7 +56,11 @@ struct RealDaemonConvergenceTests {
     @Test func submittedAgentChoicesBecomeTheTasksLinesAndReplayInAnyOrder() async throws {
         let device = try await ConvergenceHarness.pairDevice(displayName: "Agent choice")
         let coordinator = ConvergenceHarness.coordinator(for: device)
-        let lines = try #require(AgentChoiceDisplay.taskLines(writer: "claude-secondary", reviewer: "codex-primary"))
+        let lines = try #require(
+            AgentChoiceDisplay.taskLines(choices: [
+                .specifier: "claude-secondary", .implementer: "claude-secondary",
+                .remediator: "claude-secondary", .reviewer: "codex-primary",
+            ]))
         let commandID = UUID().uuidString
         func command(_ lines: [Components.Schemas.TaskLineInput]) -> Components.Schemas.ClientCommand {
             .init(
