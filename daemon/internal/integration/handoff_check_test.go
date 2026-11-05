@@ -17,6 +17,7 @@ import (
 	inferencefake "github.com/freeside-ai/freeside/daemon/internal/inference/fake"
 	"github.com/freeside-ai/freeside/daemon/internal/publish"
 	"github.com/freeside-ai/freeside/daemon/internal/store"
+	"github.com/freeside-ai/freeside/daemon/internal/verify"
 	"github.com/freeside-ai/freeside/daemon/internal/ward"
 )
 
@@ -328,6 +329,127 @@ func TestHandoffVerificationFailureBlocks(t *testing.T) {
 	}
 	if check := p.handoffCheck(t); check.Merge != nil {
 		t.Fatalf("failed handoff recorded merge %#v", check.Merge)
+	}
+}
+
+// assertHandoffStopEvidence checks a handoff the tip stopped: it blocked on
+// the handoff-verification reason, recorded no merge, and its one evidence
+// artifact begins with firstLine and names the head and the tip. It returns
+// the evidence text.
+func (p *productionPublicationHarness) assertHandoffStopEvidence(t *testing.T, tip, firstLine string) string {
+	t.Helper()
+	p.assertHandoffBlocked(t, domain.PublicationBlockHandoffVerification)
+	_, text := p.blockedEvidenceText(t, domain.ProductionBlockedItemID(p.runID))
+	if !strings.HasPrefix(text, firstLine) || !strings.Contains(text, tip) ||
+		!strings.Contains(text, p.replay.HeadSHA) {
+		t.Fatalf("handoff stop evidence = %q, want it to begin %q and name head %s and tip %s",
+			text, firstLine, p.replay.HeadSHA, tip)
+	}
+	if check := p.handoffCheck(t); check.Merge != nil {
+		t.Fatalf("stopped handoff recorded merge %#v", check.Merge)
+	}
+	return text
+}
+
+// TestHandoffStopsOnATipTheImageCannotServe: plan §5.7 at handoff. An upstream
+// change to the dependency manifests leaves the admitted image unable to
+// serve the tip, and no recorded image serves it with nothing pending in
+// image upkeep. The run blocks as a failed merge verification does, and its
+// evidence names the tip the image cannot serve. No room is built.
+func TestHandoffStopsOnATipTheImageCannotServe(t *testing.T) {
+	t.Parallel()
+	p := newProductionPublicationHarness(t, "")
+	p.startAndRecordExport(t)
+	tip, _ := p.advanceBaseBeforePublication(t, "package.json", `{"name":"fixture","private":true,"dependencies":{"upstream":"^1.0.0"}}`+"\n")
+	for range 3 {
+		if _, err := p.reconcileLanes(); err != nil {
+			t.Fatal(err)
+		}
+	}
+	p.assertHandoffStopEvidence(t, tip, "Project image cannot serve target tip "+tip+" (")
+	if p.room.runs != 1 {
+		t.Fatalf("unservable handoff verified %d times, want only the run's own", p.room.runs)
+	}
+}
+
+// TestHandoffStopsOnAMergeTheRoomCannotMaterialize: a merged tree that does
+// not materialize faithfully in the room is the tip's cause, not the lane's.
+// The run blocks on the handoff-verification reason with evidence that names
+// the cause.
+func TestHandoffStopsOnAMergeTheRoomCannotMaterialize(t *testing.T) {
+	t.Parallel()
+	p := newProductionPublicationHarness(t, "")
+	p.startAndRecordExport(t)
+	tip, _ := p.advanceBaseBeforePublication(t, "UPSTREAM.md", "upstream change\n")
+	p.failHandoffVerification(t, func(room *productionRoom) {
+		room.runErr = fmt.Errorf("compare materialized workspace: %w", verify.ErrWorkspaceMismatch)
+	})
+	for range 3 {
+		if _, err := p.reconcileLanes(); err != nil {
+			t.Fatal(err)
+		}
+	}
+	p.assertHandoffStopEvidence(t, tip,
+		"Handoff merge cannot be verified: its tree did not materialize faithfully on this host (")
+	if p.room.runs != 2 {
+		t.Fatalf("unmaterializable handoff verified %d times, want 2", p.room.runs)
+	}
+}
+
+// TestHandoffStopRecoversWithoutVerifyingAgain: a daemon lost after the stop
+// row, or after the item, converges on the same item from the row, and never
+// verifies the merge again.
+func TestHandoffStopRecoversWithoutVerifyingAgain(t *testing.T) {
+	t.Parallel()
+	for _, crash := range []string{"after the stop row", "after the item"} {
+		t.Run(crash, func(t *testing.T) {
+			t.Parallel()
+			p := newProductionPublicationHarness(t, "")
+			p.startAndRecordExport(t)
+			tip, _ := p.advanceBaseBeforePublication(t, "UPSTREAM.md", "upstream change\n")
+			fail := func(room *productionRoom) {
+				room.runErr = fmt.Errorf("compare materialized workspace: %w", verify.ErrWorkspaceMismatch)
+			}
+			seams := productionCrashSeams{afterVerification: func() error {
+				fail(p.room)
+				return nil
+			}}
+			lost := errors.New("process lost")
+			if crash == "after the stop row" {
+				// The run's own evidence is written before the handoff's.
+				seams.transitionHook = func(transition engine.DurableTransition, side engine.DurableTransitionSide) error {
+					if transition == engine.DurableTransitionVerificationEvidence &&
+						side == engine.DurableTransitionAfter && p.room.runs == 2 {
+						return lost
+					}
+					return nil
+				}
+			} else {
+				seams.afterBlocked = func() error { return lost }
+			}
+			p.workflow = p.newEngine(t, seams, true)
+			if result, err := p.reconcileLanes(); !errors.Is(err, lost) {
+				t.Fatalf("crash seam did not interrupt the handoff stop: %#v, %v", result, err)
+			}
+			p.workflow = p.newEngine(t, productionCrashSeams{}, true)
+			for range 2 {
+				if _, err := p.reconcileLanes(); err != nil {
+					t.Fatal(err)
+				}
+			}
+			p.assertHandoffStopEvidence(t, tip,
+				"Handoff merge cannot be verified: its tree did not materialize faithfully on this host (")
+			if p.room.runs != 2 {
+				t.Fatalf("recovered handoff stop verified %d times, want 2", p.room.runs)
+			}
+			blocked, err := p.attention.GetAttentionItem(p.ctx, domain.ProductionBlockedItemID(p.runID))
+			if err != nil {
+				t.Fatal(err)
+			}
+			if blocked.Item.ItemVersion != 1 {
+				t.Fatalf("recovered handoff stop item version = %d, want 1", blocked.Item.ItemVersion)
+			}
+		})
 	}
 }
 

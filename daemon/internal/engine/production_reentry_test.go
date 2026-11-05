@@ -14,6 +14,7 @@ import (
 	"github.com/freeside-ai/freeside/daemon/internal/contentaddr"
 	"github.com/freeside-ai/freeside/daemon/internal/domain"
 	"github.com/freeside-ai/freeside/daemon/internal/importer"
+	"github.com/freeside-ai/freeside/daemon/internal/projectimage"
 	"github.com/freeside-ai/freeside/daemon/internal/store"
 	"github.com/freeside-ai/freeside/daemon/internal/store/storetest"
 	"github.com/freeside-ai/freeside/daemon/internal/verify"
@@ -449,16 +450,18 @@ func TestReentryDiffDescribesTheEvaluatedCommit(t *testing.T) {
 	}
 }
 
-// TestHandoffStopsOnATipTheImageCannotServe: plan §5.7 at handoff. An image
-// that cannot serve the moved tip, with nothing pending in image upkeep, ends
-// the handoff on an item; while upkeep has a resolution pending, the error
-// the verifier returns is the lane's retryable hold, which is no stop. Neither
-// is a lane failure.
-func TestHandoffStopsOnATipTheImageCannotServe(t *testing.T) {
+// TestHandoffStopsOnCausesTheTipDecides: plan §5.7 at handoff. A rebuild
+// trust refuses, a merged tree the image cannot materialize, and an image that
+// cannot serve the moved tip with nothing pending in image upkeep each end the
+// handoff, with evidence whose fixed first line names the cause and whose
+// body names the head and the tip. While upkeep has a resolution pending, the
+// error the verifier returns is the lane's retryable hold, which is no stop.
+// None is a lane failure.
+func TestHandoffStopsOnCausesTheTipDecides(t *testing.T) {
 	t.Parallel()
 	task := newReentryTask("project-handoff", reentrySuccessorForTest(
 		productionReadyItemID("run-reentry"), domain.ReadinessInvalidationBaseAdvanced))
-	tip := strings.Repeat("e", 40)
+	tip, merge := strings.Repeat("e", 40), strings.Repeat("f", 40)
 	image, err := domain.NewProjectImage(domain.ProjectImageInput{
 		Repository: "freeside-ai/fixture", RepositoryID: 1,
 		CommitSHA:          strings.Repeat("a", 40),
@@ -470,15 +473,51 @@ func TestHandoffStopsOnATipTheImageCannotServe(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	refusal := fmt.Errorf("verify: %w", image.AdmissibleAt(domain.ProjectImageBaseInputs{CommitSHA: tip}, ""))
-	if !handoffVerifyStop(task, tip, refusal) {
-		t.Errorf("an image that cannot serve the tip did not stop the handoff: %v", refusal)
+	refusal := rebuildRefusal{clause: projectimage.RebuildRefusalUnpinnedSource, detail: `"left-pad"`}
+	longPath := fmt.Sprintf("path %q\n%s", "scripts/verify.sh", strings.Repeat("p", 4096))
+	for _, stop := range []struct {
+		name      string
+		err       error
+		firstLine string
+	}{
+		{
+			"rebuild refused", fmt.Errorf("verify: %w", &reentryRebuildRefusal{refusal: refusal}),
+			"Project image rebuild refused: " + refusal.account(),
+		},
+		{
+			"symlinked entrypoint", fmt.Errorf("clean re-entry verification: %s: %w", longPath, verify.ErrSymlinkEntrypoint),
+			"Handoff merge cannot be verified: a verification command's entrypoint is a symbolic link in its tree (",
+		},
+		{
+			"malformed tree", fmt.Errorf("clean re-entry verification: %w", verify.ErrMalformedTree),
+			"Handoff merge cannot be verified: its tree holds paths that cannot be materialized safely (",
+		},
+		{
+			"workspace mismatch", fmt.Errorf("clean re-entry verification: %w", verify.ErrWorkspaceMismatch),
+			"Handoff merge cannot be verified: its tree did not materialize faithfully on this host (",
+		},
+		{
+			"unservable tip", fmt.Errorf("verify: %w", image.AdmissibleAt(domain.ProjectImageBaseInputs{CommitSHA: tip}, "")),
+			"Project image cannot serve target tip " + tip + " (",
+		},
+	} {
+		account, stopped := handoffStopAccount(task, tip, merge, image.ImageRef, stop.err)
+		first, _, _ := strings.Cut(account, "\n")
+		if !stopped || !strings.HasPrefix(first, stop.firstLine) ||
+			!strings.Contains(account, task.HeadSHA) || !strings.Contains(account, tip) ||
+			!strings.Contains(account, merge) || len(account) > 4*reentryQuotedTextLimit+2048 {
+			t.Errorf("%s: stop = %t, account (%d bytes) = %q", stop.name, stopped, len(account), account)
+		}
+	}
+	if account, _ := handoffStopAccount(task, tip, merge, image.ImageRef,
+		fmt.Errorf("verify: %w", &reentryRebuildRefusal{refusal: refusal})); !strings.Contains(account, string(image.ImageRef)) {
+		t.Errorf("rebuild refusal account does not name the admitted image: %q", account)
 	}
 	pending := productionPublicationRetryableError(fmt.Errorf("no recorded project image serves %s: %w",
 		tip, &ImageUpkeepPendingError{}))
 	for _, cause := range []error{nil, pending, verify.ErrGitPlumbing, context.Canceled} {
-		if handoffVerifyStop(task, tip, cause) {
-			t.Errorf("%v stopped the handoff; want a hold or a lane error", cause)
+		if account, stopped := handoffStopAccount(task, tip, merge, image.ImageRef, cause); stopped || account != "" {
+			t.Errorf("%v stopped the handoff with %q; want a hold or a lane error", cause, account)
 		}
 	}
 }
