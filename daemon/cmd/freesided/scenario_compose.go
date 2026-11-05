@@ -221,7 +221,7 @@ func composeScenario(
 		return nil, err
 	}
 	sched, err := scheduler.New(st, domain.ModeUnattended, now,
-		publicationWatchRegistrations(st, staticBaseObserver, mergeCapture{}))
+		publicationWatchRegistrations(st))
 	if err != nil {
 		return nil, err
 	}

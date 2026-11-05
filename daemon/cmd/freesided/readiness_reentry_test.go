@@ -10,14 +10,12 @@ import (
 	"github.com/freeside-ai/freeside/daemon/internal/engine"
 	"github.com/freeside-ai/freeside/daemon/internal/exec/fake"
 	"github.com/freeside-ai/freeside/daemon/internal/publish"
-	"github.com/freeside-ai/freeside/daemon/internal/scheduler"
 	"github.com/freeside-ai/freeside/daemon/internal/store"
 )
 
 var (
 	reentryTestBase     = strings.Repeat("b", 40)
 	reentryTestHead     = strings.Repeat("a", 40)
-	reentryTestNewBase  = strings.Repeat("c", 40)
 	reentryTestNewHead  = strings.Repeat("d", 40)
 	reentryTestReviewID = domain.InvocationID("review-reentry-round-1")
 )
@@ -137,43 +135,6 @@ func assertNoReentry(t *testing.T, st *store.Store, runID domain.RunID) {
 	if successor, queued := readReentry(t, st, runID); successor != nil || queued {
 		t.Fatalf("re-entry = authority %+v, task queued %t; want neither", successor, queued)
 	}
-}
-
-// TestBaseAdvanceWatchStartsReadinessReentry proves the base watch records the
-// re-entry authority and its task in the transaction that supersedes the ready
-// item, with the observed tip as the cycle's base and the bound head kept
-// (issue #502).
-func TestBaseAdvanceWatchStartsReadinessReentry(t *testing.T) {
-	ctx := context.Background()
-	st := schedTestStore(t)
-	item := reentryReadyItem(t, st, "run-reentry-base")
-	sched := watchSchedule(t, item)
-	now := sched.CreatedAt
-	s, err := scheduler.New(st, domain.ModeAttendedDev,
-		func() time.Time { return now },
-		map[domain.ScheduleKind]scheduler.Registration{
-			domain.ScheduleBaseAdvanceWatch: baseAdvanceRegistration(st,
-				func(context.Context, domain.ScheduleBaseWatch) (string, error) {
-					return reentryTestNewBase, nil
-				}, mergeCapture{}),
-		})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := s.Arm(ctx, sched, sched.CreatedAt.Add(time.Minute)); err != nil {
-		t.Fatal(err)
-	}
-	now = sched.CreatedAt.Add(61 * time.Second)
-	if err := s.RunOnce(ctx); err != nil {
-		t.Fatal(err)
-	}
-	got := readActiveItem(t, st, item.ID)
-	if got.Status != domain.StatusSuperseded || got.ReadinessInvalidation == nil ||
-		got.ReadinessInvalidation.Reason != domain.ReadinessInvalidationBaseAdvanced {
-		t.Fatalf("advanced item = status %s invalidation %+v", got.Status, got.ReadinessInvalidation)
-	}
-	assertReentryStarted(t, st, item,
-		domain.ReadinessInvalidationBaseAdvanced, reentryTestNewBase, reentryTestHead)
 }
 
 // TestActiveResourceReconcileStartsReadinessReentry proves the reconciler

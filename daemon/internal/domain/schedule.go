@@ -29,10 +29,6 @@ const (
 	// fires when no concluding decision arrived within the review-wait
 	// threshold.
 	ScheduleReviewWaitThreshold ScheduleKind = "review_wait_threshold"
-	// ScheduleBaseAdvanceWatch: recurring staleness watch over a
-	// ready_for_final_review item's target base; its consumer is the
-	// base-freshness fact on the item, maintained until merge or close.
-	ScheduleBaseAdvanceWatch ScheduleKind = "base_advance_watch"
 	// ScheduleInstallationPoll: recurring poll bound to a pending
 	// installation-or-expansion intent (§5.5, §10), expiring with the
 	// envelope. Its handler observes readiness only; promotion stays an
@@ -53,7 +49,6 @@ const (
 var AllScheduleKinds = []ScheduleKind{
 	SchedulePRChecksDeadline,
 	ScheduleReviewWaitThreshold,
-	ScheduleBaseAdvanceWatch,
 	ScheduleInstallationPoll,
 	ScheduleDoctor,
 	ScheduleJanitor,
@@ -63,7 +58,7 @@ var AllScheduleKinds = []ScheduleKind{
 func (k ScheduleKind) valid() bool {
 	switch k {
 	case SchedulePRChecksDeadline, ScheduleReviewWaitThreshold,
-		ScheduleBaseAdvanceWatch, ScheduleInstallationPoll,
+		ScheduleInstallationPoll,
 		ScheduleDoctor, ScheduleJanitor, ScheduleImageUpkeep:
 		return true
 	default:
@@ -80,7 +75,7 @@ func (k ScheduleKind) TrustedConfigJob() bool {
 	case ScheduleDoctor, ScheduleJanitor, ScheduleImageUpkeep:
 		return true
 	case SchedulePRChecksDeadline, ScheduleReviewWaitThreshold,
-		ScheduleBaseAdvanceWatch, ScheduleInstallationPoll:
+		ScheduleInstallationPoll:
 		return false
 	}
 	return false // invalid zero value
@@ -93,7 +88,7 @@ func (k ScheduleKind) OneShot() bool {
 	switch k {
 	case SchedulePRChecksDeadline, ScheduleReviewWaitThreshold:
 		return true
-	case ScheduleBaseAdvanceWatch, ScheduleInstallationPoll,
+	case ScheduleInstallationPoll,
 		ScheduleDoctor, ScheduleJanitor, ScheduleImageUpkeep:
 		return false
 	}
@@ -118,7 +113,7 @@ func (k ScheduleKind) EligibleIn(mode OperatingMode) bool {
 	case ScheduleDoctor, ScheduleJanitor, ScheduleImageUpkeep:
 		return true
 	case SchedulePRChecksDeadline, ScheduleReviewWaitThreshold,
-		ScheduleBaseAdvanceWatch, ScheduleInstallationPoll:
+		ScheduleInstallationPoll:
 		return true
 	}
 	return false // invalid zero value
@@ -128,8 +123,7 @@ func (k ScheduleKind) EligibleIn(mode OperatingMode) bool {
 // default so a new kind must declare its subject contract.
 func (k ScheduleKind) subjectType() ScheduleSubjectType {
 	switch k {
-	case SchedulePRChecksDeadline, ScheduleReviewWaitThreshold,
-		ScheduleBaseAdvanceWatch:
+	case SchedulePRChecksDeadline, ScheduleReviewWaitThreshold:
 		return ScheduleSubjectAttentionItem
 	case ScheduleInstallationPoll:
 		return ScheduleSubjectInstallationIntent
@@ -357,28 +351,6 @@ func (s ScheduleSubject) Validate() error {
 	return fmt.Errorf("schedule subject type %q: %w", s.Type, ErrInvalidScheduleSubjectType)
 }
 
-// ScheduleBaseWatch is the kind-scoped detail of a base_advance_watch: the
-// repository, target base ref, and the base tip the publication was
-// admitted against, all daemon-recorded from the trusted authorization,
-// never caller text.
-type ScheduleBaseWatch struct {
-	Repo            string `json:"repo"`
-	BaseRef         string `json:"base_ref"`
-	AdmittedBaseSHA string `json:"admitted_base_sha"`
-}
-
-// Validate reports whether the detail is structurally sound.
-func (b ScheduleBaseWatch) Validate() error {
-	for name, v := range map[string]string{
-		"repo": b.Repo, "base_ref": b.BaseRef, "admitted_base_sha": b.AdmittedBaseSHA,
-	} {
-		if v == "" {
-			return fmt.Errorf("schedule base watch %s: %w", name, ErrEmptyField)
-		}
-	}
-	return nil
-}
-
 // Schedule is one durable deferred check (§5.16): the synced aggregate
 // carrying the binding, cadence or deadline, expiry, and terminal
 // resolution. The rolling next-nominal-fire instant for recurring kinds and
@@ -408,13 +380,10 @@ type Schedule struct {
 	// recurring kinds, positive.
 	IntervalSeconds *int64 `json:"interval_seconds"`
 	// ExpiresAt bounds the schedule's validity: required for
-	// installation_poll (the envelope's expiry), optional for recurring
-	// workload watches, and forbidden for one-shot deadlines and permanent
-	// trusted-config jobs.
-	ExpiresAt *time.Time `json:"expires_at"`
-	// BaseWatch is present exactly for base_advance_watch.
-	BaseWatch *ScheduleBaseWatch `json:"base_watch"`
-	Status    ScheduleStatus     `json:"status"`
+	// installation_poll (the envelope's expiry), and forbidden for one-shot
+	// deadlines and permanent trusted-config jobs.
+	ExpiresAt *time.Time     `json:"expires_at"`
+	Status    ScheduleStatus `json:"status"`
 	// Resolution is present exactly when Status is terminal.
 	Resolution *ScheduleResolution `json:"resolution"`
 }
@@ -435,7 +404,6 @@ type ScheduleInput struct {
 	FireAt          *time.Time
 	IntervalSeconds *int64
 	ExpiresAt       *time.Time
-	BaseWatch       *ScheduleBaseWatch
 }
 
 // NewSchedule builds a validated, armed, generation-one Schedule,
@@ -454,7 +422,6 @@ func NewSchedule(in ScheduleInput) (Schedule, error) {
 		FireAt:          cloneUTC(in.FireAt),
 		IntervalSeconds: clonePtr(in.IntervalSeconds),
 		ExpiresAt:       cloneUTC(in.ExpiresAt),
-		BaseWatch:       clonePtr(in.BaseWatch),
 		Status:          ScheduleArmed,
 	}
 	if err := s.Validate(); err != nil {
@@ -526,7 +493,7 @@ func (s Schedule) Validate() error {
 	}
 	requiresPolicy := false
 	switch s.Kind {
-	case SchedulePRChecksDeadline, ScheduleReviewWaitThreshold, ScheduleBaseAdvanceWatch:
+	case SchedulePRChecksDeadline, ScheduleReviewWaitThreshold:
 		requiresPolicy = true
 	case ScheduleInstallationPoll, ScheduleDoctor, ScheduleJanitor, ScheduleImageUpkeep:
 		requiresPolicy = false
@@ -580,14 +547,6 @@ func (s Schedule) Validate() error {
 	if s.IntervalSeconds != nil && *s.IntervalSeconds <= 0 {
 		return fmt.Errorf("schedule %s interval_seconds %d: %w", s.ID, *s.IntervalSeconds, ErrNonPositive)
 	}
-	if err := requireDetail("base_watch", s.BaseWatch != nil, s.Kind == ScheduleBaseAdvanceWatch); err != nil {
-		return err
-	}
-	if s.BaseWatch != nil {
-		if err := s.BaseWatch.Validate(); err != nil {
-			return fmt.Errorf("schedule %s: %w", s.ID, err)
-		}
-	}
 	switch s.Kind {
 	case ScheduleInstallationPoll:
 		if s.ExpiresAt == nil {
@@ -603,9 +562,6 @@ func (s Schedule) Validate() error {
 			return fmt.Errorf("schedule %s permanent trusted-config job carries expires_at: %w",
 				s.ID, ErrScheduleDetailMismatch)
 		}
-	case ScheduleBaseAdvanceWatch:
-		// A recurring workload watch may carry a validity bound; absent one,
-		// it lives until its subject concludes.
 	}
 	if s.Status.Terminal() != (s.Resolution != nil) {
 		return fmt.Errorf("schedule %s status %s resolution presence: %w",
@@ -693,7 +649,6 @@ func schedulesEqual(a, b Schedule) bool {
 		timePtrEqual(a.FireAt, b.FireAt) &&
 		int64PtrEqual(a.IntervalSeconds, b.IntervalSeconds) &&
 		timePtrEqual(a.ExpiresAt, b.ExpiresAt) &&
-		baseWatchEqual(a.BaseWatch, b.BaseWatch) &&
 		a.Status == b.Status && resolutionEqual(a.Resolution, b.Resolution)
 }
 
@@ -720,8 +675,6 @@ func timePtrEqual(a, b *time.Time) bool {
 	}
 	return a == nil || a.Equal(*b)
 }
-
-func baseWatchEqual(a, b *ScheduleBaseWatch) bool { return ptrEqual(a, b) }
 
 func resolutionEqual(a, b *ScheduleResolution) bool {
 	if (a == nil) != (b == nil) {

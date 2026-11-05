@@ -2068,22 +2068,6 @@ func TestGolden(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	watchInterval := int64(900)
-	watchSchedule, err := domain.NewSchedule(domain.ScheduleInput{
-		ID: "schedule-base_advance_watch-item-1", ProjectID: "project-1",
-		Kind: domain.ScheduleBaseAdvanceWatch,
-		Subject: domain.ScheduleSubject{
-			Type: domain.ScheduleSubjectAttentionItem, ItemID: &itemID, ItemVersion: &itemVersion,
-		},
-		RunID: &scheduleRunID, PolicyDigest: &schedulePolicyDigest,
-		CreatedAt: ts, IntervalSeconds: &watchInterval,
-		BaseWatch: &domain.ScheduleBaseWatch{
-			Repo: "owner/repo", BaseRef: "main", AdmittedBaseSHA: "cafebabe",
-		},
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
 	registrationID := int64(4385298)
 	activeEpoch := int64(1)
 	intentRevision := int64(2)
@@ -2332,7 +2316,6 @@ func TestGolden(t *testing.T) {
 		{"attention_item_readiness_invalidation", invalidatedItem},
 		{"attention_item_identity_changed", identityInvalidatedItem},
 		{"schedule_deadline", deadlineSchedule},
-		{"schedule_base_advance_watch", watchSchedule},
 		{"schedule_installation_poll", pollSchedule},
 		{"schedule_janitor", janitorSchedule},
 		{"schedule_image_upkeep", imageUpkeepSchedule},

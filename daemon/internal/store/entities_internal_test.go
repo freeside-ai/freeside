@@ -230,32 +230,10 @@ func TestMigrateLegacyTrustProfileRunPolicyIsExact(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	interval := int64(60)
-	expiresAt := fireAt.Add(time.Hour)
-	watch, err := domain.NewSchedule(domain.ScheduleInput{
-		ID: "schedule-expired", ProjectID: legacy.ProjectID,
-		Kind: domain.ScheduleBaseAdvanceWatch,
-		Subject: domain.ScheduleSubject{
-			Type:   domain.ScheduleSubjectAttentionItem,
-			ItemID: &itemID, ItemVersion: &itemVersion,
-		},
-		RunID: &legacy.ID, PolicyDigest: &legacy.PolicyDigest,
-		CreatedAt: fireAt.Add(-time.Minute), IntervalSeconds: &interval,
-		ExpiresAt: &expiresAt,
-		BaseWatch: &domain.ScheduleBaseWatch{
-			Repo: "freeside-ai/freeside", BaseRef: "main", AdmittedBaseSHA: "base-sha",
-		},
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	expired, err := watch.Concluded(
-		domain.ScheduleExpired, domain.ResolutionIntentExpired, expiresAt,
-	)
-	if err != nil {
-		t.Fatal(err)
-	}
-	schedules := []domain.Schedule{armed, fired, resolved, expired}
+	// No run-bound kind expires since the base-advance watch retired (plan
+	// revision 110), so the terminal statuses a run-bound schedule can carry
+	// are fired and resolved.
+	schedules := []domain.Schedule{armed, fired, resolved}
 	if err := st.Write(ctx, func(tx *WriteTx) error {
 		if err := tx.AssignTask(ctx, &legacy, nil); err != nil {
 			return err
@@ -398,7 +376,7 @@ UPDATE schedules SET policy_digest = ?, body = ? WHERE id = ?`,
 		}
 		wantStatuses := map[domain.ScheduleStatus]bool{
 			domain.ScheduleArmed: false, domain.ScheduleFired: false,
-			domain.ScheduleResolved: false, domain.ScheduleExpired: false,
+			domain.ScheduleResolved: false,
 		}
 		for _, snapshot := range stored {
 			schedule := snapshot.Value

@@ -651,34 +651,6 @@ func TestReadinessReentryStopsOnMergeConflict(t *testing.T) {
 	}
 }
 
-// baseWatchBase returns the base an armed base watch on itemID was admitted
-// against.
-func (p *productionPublicationHarness) baseWatchBase(t *testing.T, itemID domain.ItemID) string {
-	t.Helper()
-	var bases []string
-	if err := p.store.Read(p.ctx, func(tx *store.ReadTx) error {
-		schedules, err := tx.ListSchedules(p.ctx)
-		if err != nil {
-			return err
-		}
-		for _, snapshot := range schedules {
-			schedule := snapshot.Value
-			if schedule.BaseWatch == nil || schedule.Subject.ItemID == nil ||
-				*schedule.Subject.ItemID != itemID || schedule.Status != domain.ScheduleArmed {
-				continue
-			}
-			bases = append(bases, schedule.BaseWatch.AdmittedBaseSHA)
-		}
-		return nil
-	}); err != nil {
-		t.Fatal(err)
-	}
-	if len(bases) != 1 {
-		t.Fatalf("armed base watches on %s = %v, want one", itemID, bases)
-	}
-	return bases[0]
-}
-
 // reconcileUntilReady runs lane passes until the run's current ready item is
 // open, and fails after maxPasses.
 func (p *productionPublicationHarness) reconcileUntilReady(t *testing.T, maxPasses int) {
@@ -708,42 +680,6 @@ func (p *productionPublicationHarness) reconcileUntilReady(t *testing.T, maxPass
 		}
 	}
 	t.Fatalf("no open ready item within %d passes", maxPasses)
-}
-
-// TestReadinessReentersThreeTimesAndWatchesTheCycleBase: the re-entered item's base
-// watch is admitted against the cycle's base, so it stays quiet until the
-// base moves again, and three advances in a row each re-enter from the item
-// the previous cycle produced.
-func TestReadinessReentersThreeTimesAndWatchesTheCycleBase(t *testing.T) {
-	t.Parallel()
-	p := newProductionPublicationHarness(t, "")
-	first := p.publishReady(t)
-	if got := p.baseWatchBase(t, first.ID); got != p.baseSHA {
-		t.Fatalf("first watch base = %s, want admission base %s", got, p.baseSHA)
-	}
-	bound := p.baseSHA
-	for cycle := 1; cycle <= 3; cycle++ {
-		advanced := p.advanceBase(t, fmt.Sprintf("UPSTREAM-%d.md", cycle), "upstream change\n")
-		superseded, started := p.invalidateReady(t, domain.ReadinessInvalidation{
-			Reason: domain.ReadinessInvalidationBaseAdvanced, Bound: bound, Observed: advanced,
-		})
-		if !started {
-			t.Fatalf("advance %d started no re-entry", cycle)
-		}
-		p.scriptCleanReview(cycle+1, advanced, p.replay.HeadSHA)
-		if result, err := p.reconcileLanes(); err != nil || result.ReadyItemsCreated != 1 {
-			t.Fatalf("advance %d result = %#v, %v", cycle, result, err)
-		}
-		ready := p.assertReentered(t, superseded, cycle+1, advanced, p.replay.HeadSHA)
-		if got := p.baseWatchBase(t, ready.ID); got != advanced {
-			t.Fatalf("advance %d watch base = %s, want cycle base %s", cycle, got, advanced)
-		}
-		bound = advanced
-	}
-	if p.room.runs != 4 || p.transport.MergeCount() != 3 {
-		t.Fatalf("verification runs = %d, merges = %d, want 4 and 3",
-			p.room.runs, p.transport.MergeCount())
-	}
 }
 
 // TestReadinessReentryConvergesAcrossRestarts interrupts a base-advance cycle
@@ -803,9 +739,6 @@ func TestReadinessReentryConvergesAcrossRestarts(t *testing.T) {
 				p.workflow = p.newEngine(t, productionCrashSeams{}, true)
 				p.reconcileUntilReady(t, 3)
 				ready := p.assertReentered(t, superseded, round, advanced, p.replay.HeadSHA)
-				if got := p.baseWatchBase(t, ready.ID); got != advanced {
-					t.Fatalf("watch base = %s, want cycle base %s", got, advanced)
-				}
 				p.restartDurableState(t)
 				p.workflow = p.newEngine(t, productionCrashSeams{}, true)
 				for range 2 {

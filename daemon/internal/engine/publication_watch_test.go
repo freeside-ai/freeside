@@ -70,8 +70,9 @@ func watchTestItem(t *testing.T, st *store.Store, status domain.ItemStatus) doma
 	return item
 }
 
-// TestArmPublicationWatches: a live ready item arms exactly the three
-// §5.16 watch kinds bound to the item and its version, the ensure is
+// TestArmPublicationWatches: a live ready item arms exactly the two
+// §5.16 deadline kinds bound to the item and its version (nothing watches
+// the target branch after handoff, plan revision 110), the ensure is
 // convergent across reconcile passes (a later pass with a fresh clock must
 // not re-derive an armed deadline), and a concluded item arms nothing.
 func TestArmPublicationWatches(t *testing.T) {
@@ -80,7 +81,7 @@ func TestArmPublicationWatches(t *testing.T) {
 	item := watchTestItem(t, st, domain.StatusOpen)
 	now := time.Date(2026, 2, 3, 4, 0, 0, 0, time.UTC)
 
-	if err := armPublicationWatches(ctx, st, item, "owner/repo", "main", "cafebabe", now); err != nil {
+	if err := armPublicationWatches(ctx, st, item, now); err != nil {
 		t.Fatal(err)
 	}
 	var schedules []store.Snapshotted[domain.Schedule]
@@ -95,7 +96,7 @@ func TestArmPublicationWatches(t *testing.T) {
 		}
 	}
 	readAll()
-	if len(schedules) != 3 {
+	if len(schedules) != 2 {
 		t.Fatalf("schedules = %d", len(schedules))
 	}
 	byKind := map[domain.ScheduleKind]domain.Schedule{}
@@ -113,15 +114,10 @@ func TestArmPublicationWatches(t *testing.T) {
 	if !review.FireAt.Equal(now.Add(DefaultReviewWaitThreshold)) {
 		t.Fatalf("review threshold = %s", review.FireAt)
 	}
-	watch := byKind[domain.ScheduleBaseAdvanceWatch]
-	if watch.BaseWatch == nil || watch.BaseWatch.AdmittedBaseSHA != "cafebabe" ||
-		*watch.IntervalSeconds != int64(DefaultBaseAdvanceInterval/time.Second) {
-		t.Fatalf("base watch = %+v", watch)
-	}
 
 	// A later reconcile pass re-ensures with a fresh clock: the armed
 	// deadlines keep their original instants.
-	if err := armPublicationWatches(ctx, st, item, "owner/repo", "main", "cafebabe", now.Add(time.Hour)); err != nil {
+	if err := armPublicationWatches(ctx, st, item, now.Add(time.Hour)); err != nil {
 		t.Fatal(err)
 	}
 	readAll()
@@ -139,7 +135,7 @@ func TestArmPublicationWatchesSkipsConcludedItem(t *testing.T) {
 	ctx := context.Background()
 	st := watchTestStore(t)
 	item := watchTestItem(t, st, domain.StatusResolved)
-	if err := armPublicationWatches(ctx, st, item, "owner/repo", "main", "cafebabe",
+	if err := armPublicationWatches(ctx, st, item,
 		time.Date(2026, 2, 3, 4, 0, 0, 0, time.UTC)); err != nil {
 		t.Fatal(err)
 	}

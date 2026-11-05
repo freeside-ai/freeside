@@ -14,13 +14,6 @@
     }
   },
   {
-    "kind": "base_advance_watch",
-    "eligible": {
-      "attended_dev": true,
-      "unattended": true
-    }
-  },
-  {
     "kind": "installation_poll",
     "eligible": {
       "attended_dev": true,

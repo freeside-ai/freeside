@@ -545,8 +545,8 @@ func (r *activeResourceReconciler) Reconcile(
 
 // observeRepositoryTip records the watched branch's tip and hands a tip
 // upkeep has not handled yet to upkeepTipAdvance. It compares the read SHA
-// with the stored row instead of trusting a 304, because the base-advance
-// watch shares the ref cache: a tip it read first comes back NotModified
+// with the stored row instead of trusting a 304, because image upkeep's tip
+// read shares the ref cache: a tip it read first comes back NotModified
 // here. UpkeepTipSHA advances only after the entry point succeeds, so every
 // failure leaves the tip pending and the next pass retries it; a crash
 // between that success and the write repeats one call.
@@ -1369,10 +1369,10 @@ func (r activeResourceReconciler) commit(ctx context.Context, observation active
 				if err := tx.PutAttentionItem(ctx, item); err != nil {
 					return err
 				}
-				// A base advance or head change re-enters verification and
-				// review in this transaction (issue #502); any other
-				// invalidation, and a unit this pass just completed, starts
-				// nothing and stays with a person.
+				// A head change re-enters verification and review in this
+				// transaction (issue #502); any other invalidation, and a unit
+				// this pass just completed, starts nothing and stays with a
+				// person.
 				if _, err := engine.StartReadinessReentry(ctx, tx, item); err != nil {
 					return err
 				}
@@ -1445,7 +1445,6 @@ func publicationScheduleIDs(itemID domain.ItemID) []domain.ScheduleID {
 	return []domain.ScheduleID{
 		engine.PublicationWatchScheduleID(domain.SchedulePRChecksDeadline, itemID),
 		engine.PublicationWatchScheduleID(domain.ScheduleReviewWaitThreshold, itemID),
-		engine.PublicationWatchScheduleID(domain.ScheduleBaseAdvanceWatch, itemID),
 	}
 }
 

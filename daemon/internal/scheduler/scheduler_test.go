@@ -658,7 +658,6 @@ func TestResolvedPolicyValidatedBeforeEventConstruction(t *testing.T) {
 	for _, kind := range []domain.ScheduleKind{
 		domain.SchedulePRChecksDeadline,
 		domain.ScheduleReviewWaitThreshold,
-		domain.ScheduleBaseAdvanceWatch,
 	} {
 		for _, tc := range cases {
 			t.Run(string(kind)+"/"+tc.name, func(t *testing.T) {
@@ -666,32 +665,8 @@ func TestResolvedPolicyValidatedBeforeEventConstruction(t *testing.T) {
 				path := filepath.Join(t.TempDir(), "store.db")
 				st := openStoreAt(t, path)
 				item := openItem(t, st, "item-1", "project-1")
-				var sched domain.Schedule
-				if kind.OneShot() {
-					sched = deadlineSchedule(item, epoch)
-					sched.Kind = kind
-				} else {
-					interval := int64(60)
-					itemID, version := item.ID, item.ItemVersion
-					policy := testResolvedPolicy(*item.Subject.RunID)
-					var err error
-					sched, err = domain.NewSchedule(domain.ScheduleInput{
-						ID: "schedule-base_advance_watch-item-1", ProjectID: item.ProjectID,
-						Kind: kind, CreatedAt: epoch,
-						Subject: domain.ScheduleSubject{
-							Type:   domain.ScheduleSubjectAttentionItem,
-							ItemID: &itemID, ItemVersion: &version,
-						},
-						RunID: item.Subject.RunID, PolicyDigest: &policy.Digest,
-						IntervalSeconds: &interval,
-						BaseWatch: &domain.ScheduleBaseWatch{
-							Repo: "owner/repo", BaseRef: "main", AdmittedBaseSHA: "cafebabe",
-						},
-					})
-					if err != nil {
-						t.Fatal(err)
-					}
-				}
+				sched := deadlineSchedule(item, epoch)
+				sched.Kind = kind
 				if tc.mutate != nil {
 					db, err := sql.Open("sqlite", path)
 					if err != nil {

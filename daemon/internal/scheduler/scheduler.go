@@ -199,7 +199,6 @@ func Converge(ctx context.Context, tx *store.WriteTx, desired domain.Schedule, f
 	}
 	reArmed.IntervalSeconds = desired.IntervalSeconds
 	reArmed.ExpiresAt = desired.ExpiresAt
-	reArmed.BaseWatch = desired.BaseWatch
 	if err := reArmed.Validate(); err != nil {
 		return err
 	}
@@ -479,8 +478,7 @@ func (s *Scheduler) fire(
 func (s *Scheduler) validateFireAuthority(ctx context.Context, schedule domain.Schedule) error {
 	switch schedule.Kind {
 	case domain.SchedulePRChecksDeadline,
-		domain.ScheduleReviewWaitThreshold,
-		domain.ScheduleBaseAdvanceWatch:
+		domain.ScheduleReviewWaitThreshold:
 		return s.validateResolvedPolicy(ctx, schedule)
 	case domain.ScheduleInstallationPoll:
 		// subjectLive will revalidate the pending envelope's registration,

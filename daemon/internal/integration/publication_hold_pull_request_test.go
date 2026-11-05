@@ -313,7 +313,7 @@ func TestReviewRecordHoldRecoversToReadinessWithItsPullRequest(t *testing.T) {
 			return err
 		}
 		for _, kind := range []domain.ScheduleKind{
-			domain.SchedulePRChecksDeadline, domain.ScheduleReviewWaitThreshold, domain.ScheduleBaseAdvanceWatch,
+			domain.SchedulePRChecksDeadline, domain.ScheduleReviewWaitThreshold,
 		} {
 			_, err := tx.GetSchedule(p.ctx, engine.PublicationWatchScheduleID(kind, ready.ID))
 			switch {

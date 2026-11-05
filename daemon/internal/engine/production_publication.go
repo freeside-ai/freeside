@@ -3520,7 +3520,7 @@ func (w *productionPublicationWorkflow) completePublishedTask(
 	}
 	// The §5.16 publication watches converge beside the item on every pass
 	// through here, so a crash between the item and its watches heals.
-	if err := w.armReadyItemWatches(ctx, task, binding); err != nil {
+	if err := w.armReadyItemWatches(ctx, task); err != nil {
 		return productionTaskOutcome{}, err
 	}
 	// The ready milestone converges once the ready item durably exists; a
@@ -4382,7 +4382,7 @@ func (w *productionPublicationWorkflow) holdPublicationRepairRefusal(
 }
 
 func (w *productionPublicationWorkflow) armReadyItemWatches(
-	ctx context.Context, task productionPublicationTask, binding productionBinding,
+	ctx context.Context, task productionPublicationTask,
 ) error {
 	var item domain.AttentionItem
 	if err := w.store.Read(ctx, func(tx *store.ReadTx) error {
@@ -4392,9 +4392,7 @@ func (w *productionPublicationWorkflow) armReadyItemWatches(
 	}); err != nil {
 		return fmt.Errorf("arm publication watches: %w", err)
 	}
-	return armPublicationWatches(ctx, w.store, item,
-		binding.admission.Base.Repo, binding.admission.Base.BaseRef,
-		binding.admission.Base.BaseSHA, w.now())
+	return armPublicationWatches(ctx, w.store, item, w.now())
 }
 
 func (w *productionPublicationWorkflow) hasReadyItemRecord(

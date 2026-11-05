@@ -1389,10 +1389,7 @@ func (w *productionPublicationWorkflow) completeReentryTask(
 		ctx, task, binding.admission.Base, cycle.predecessor.PRNumber); err != nil {
 		return productionTaskOutcome{}, err
 	}
-	// The binding's admission carries the cycle's base, so the base watch is
-	// armed with the base this cycle evaluated and does not fire until that
-	// base moves again.
-	if err := w.armReadyItemWatches(ctx, task, binding); err != nil {
+	if err := w.armReadyItemWatches(ctx, task); err != nil {
 		return productionTaskOutcome{}, err
 	}
 	if err := w.appendPublicationMilestone(ctx, task, domain.MilestonePublicationReady, nil); err != nil {
