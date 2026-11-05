@@ -79,21 +79,18 @@ import Testing
         #expect(AgentChoiceDisplay.facts(catalog.agents[2]) == "gpt-codex · Harness default · No lineage group")
     }
 
-    @Test func defaultLabelSaysWhatPicksTheAgent() {
+    @Test func defaultLabelSaysWhatPicksTheRolesAgent() {
         let policy = UsageFixtures.defaultRoutingPolicy()
         #expect(
-            AgentChoiceDisplay.defaultLabel(roles: [.reviewer], policy: policy, catalog: catalog)
+            AgentChoiceDisplay.defaultLabel(role: .reviewer, policy: policy, catalog: catalog)
                 == "Default · lineup codex-primary")
         #expect(
-            AgentChoiceDisplay.defaultLabel(roles: [.implementer], policy: policy, catalog: catalog)
+            AgentChoiceDisplay.defaultLabel(role: .implementer, policy: policy, catalog: catalog)
                 == "Default · lineup claude-primary or routing policy")
         #expect(
-            AgentChoiceDisplay.defaultLabel(roles: AgentChoiceDisplay.writerRoles, policy: policy, catalog: catalog)
-                == "Default · lineup or routing policy")
-        #expect(
-            AgentChoiceDisplay.defaultLabel(roles: AgentChoiceDisplay.writerRoles, policy: nil, catalog: catalog)
-                == "Default · lineup")
-        #expect(AgentChoiceDisplay.defaultLabel(roles: [.reviewer], policy: nil, catalog: nil) == "Default · lineup")
+            AgentChoiceDisplay.defaultLabel(role: .remediator, policy: nil, catalog: catalog)
+                == "Default · lineup claude-secondary")
+        #expect(AgentChoiceDisplay.defaultLabel(role: .reviewer, policy: nil, catalog: nil) == "Default · lineup")
     }
 
     // MARK: Summary

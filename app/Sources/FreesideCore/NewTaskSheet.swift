@@ -2,16 +2,23 @@ import FreesideAPI
 import SwiftUI
 
 /// The New Task composer (plan §5.11): an operator starts work from the app
-/// instead of the daemon host's CLI. Shaped like the discuss composer
-/// (`MessageComposerSheet`): an inline serif title over a project picker, a
-/// multi-line source field, an optional name, and optional writer and
-/// reviewer agents, each under its keyword label, and a Cancel/Submit
-/// footer that Return and Escape drive, with no navigation bar. The draft lives in this sheet's own state and no failure
-/// clears it: a lost response keeps the text and points to separate recovery,
-/// a daemon rejection keeps the text and shows the reason inline. The sheet
-/// expects a sentence or a paragraph, not a document; the follow-up
+/// instead of the daemon host's CLI. Drawn as the 4 Nov 2026 handoff's
+/// canvas band 3 (`docs/design/handoff-2026-11-04-settings-usage-new-task/`):
+/// a serif text area whose placeholder is the ask, over a foot holding the
+/// project chip and the Agents chip (R33). Open, the Agents chip shows one
+/// role chip per task-line role above the foot, each a menu over the agent
+/// catalog. The daemon's task namer names the task, so the composer asks
+/// for no name. On the Mac, Return submits, Shift-Return starts a line, and
+/// Escape cancels; on iPhone, Cancel and Submit sit in the sheet's bar.
+///
+/// The draft lives in this sheet's own state and no failure clears it: a
+/// lost response keeps the text and points to separate recovery, a daemon
+/// rejection keeps the text and shows the reason under the composer. The
+/// sheet expects a sentence or a paragraph, not a document; the follow-up
 /// conversation happens on the task's cards.
 struct NewTaskSheet: View {
+    typealias Role = AgentChoiceDisplay.Role
+
     @Environment(\.dismiss) private var dismiss
     /// The projects the picker offers: the sorted unique ids of the synced
     /// tasks (`TaskDisplay.knownProjects`), the same set the Tasks filter uses.
@@ -28,18 +35,21 @@ struct NewTaskSheet: View {
     /// host routes to its detail.
     let onSubmitted: (String) -> Void
     /// False for the screenshot goldens: `ImageRenderer` cannot draw a
-    /// `TextEditor`, a `Picker`, or a system control, so those render as static
-    /// stand-ins that still show the draft.
+    /// `TextEditor`, a `Menu`, or a navigation bar, so those render as static
+    /// stand-ins that still show the draft and the chips.
     var rendersInteractiveControls = true
 
     @State private var projectID: String
     @State private var source: String
     @State private var promptBrowse = TaskPromptBrowseState()
-    @State private var name: String
-    /// The chosen agents; nil leaves the roles to the daemon. A choice a
-    /// newer catalog drops stays chosen and blocks Submit until changed.
-    @State private var writer: String?
-    @State private var reviewer: String?
+    /// The chosen agent per role; a role left out goes to the daemon. A
+    /// choice a newer catalog drops stays chosen and blocks Submit until
+    /// changed.
+    @State private var choices: [Role: String]
+    /// Whether the Agents chip shows the role chips.
+    @State private var agentsOpen: Bool
+    /// The Mac text view's laid-out height, which the text area grows to.
+    @State private var textHeight: CGFloat = 0
     @State private var isSubmitting = false
     /// The in-flight submit, held so dismissing the sheet cancels it
     /// and suppresses the completion's navigation (the submission itself may
@@ -53,9 +63,8 @@ struct NewTaskSheet: View {
         rendersInteractiveControls: Bool = true,
         initialProjectID: String? = nil,
         initialSource: String = "",
-        initialName: String = "",
-        initialWriter: String? = nil,
-        initialReviewer: String? = nil
+        initialChoices: [Role: String] = [:],
+        initialAgentsOpen: Bool = false
     ) {
         self.projects = projects
         _model = State(initialValue: model)
@@ -63,20 +72,18 @@ struct NewTaskSheet: View {
         self.rendersInteractiveControls = rendersInteractiveControls
         _projectID = State(initialValue: initialProjectID ?? projects.first ?? "")
         _source = State(initialValue: initialSource)
-        _name = State(initialValue: initialName)
-        _writer = State(initialValue: initialWriter)
-        _reviewer = State(initialValue: initialReviewer)
+        _choices = State(initialValue: initialChoices)
+        _agentsOpen = State(initialValue: initialAgentsOpen)
     }
 
-    static let sourcePlaceholder = "Describe the task…"
-    static let namePlaceholder = "Name (optional)"
+    static let sourcePlaceholder = "What should the agent work on?"
 
-    /// What a field draws: the muted placeholder while the draft holds no
-    /// characters, otherwise the draft exactly as typed. Whitespace is typed
-    /// text, so it hides the placeholder as it hides the native name
-    /// field's prompt; `submission` is what trims it away. Typed text that
-    /// happens to read like the placeholder is still a value (visual audit
-    /// D05: an empty field looks empty, and a placeholder is never content).
+    /// What the text area draws: the muted placeholder while the draft holds
+    /// no characters, otherwise the draft exactly as typed. Whitespace is
+    /// typed text, so it hides the placeholder; `submission` is what trims
+    /// it away. Typed text that happens to read like the placeholder is
+    /// still a value (visual audit D05: an empty field looks empty, and a
+    /// placeholder is never content).
     enum FieldDisplay: Equatable {
         case placeholder(String)
         case value(String)
@@ -86,23 +93,30 @@ struct NewTaskSheet: View {
         draft.isEmpty ? .placeholder(placeholder) : .value(draft)
     }
 
-    /// What Submit sends for a draft: both fields trimmed, and no name at
-    /// all when the optional field holds nothing.
+    /// What Submit sends for a draft: the trimmed source and nothing else.
     struct Submission: Equatable {
         let source: String
-        let name: String?
     }
 
-    static func submission(source: String, name: String) -> Submission {
-        let name = name.trimmingCharacters(in: .whitespacesAndNewlines)
-        return Submission(
-            source: source.trimmingCharacters(in: .whitespacesAndNewlines),
-            name: name.isEmpty ? nil : name)
+    static func submission(source: String) -> Submission {
+        Submission(source: source.trimmingCharacters(in: .whitespacesAndNewlines))
     }
 
-    private var trimmedSource: String {
-        Self.submission(source: source, name: name).source
+    /// Sends a draft with the per-role lines and no name: the daemon's task
+    /// namer names the task.
+    static func send(
+        _ submission: Submission, projectID: String, choices: [Role: String], through model: TaskSubmissionModel
+    ) async -> String? {
+        await model.submit(
+            projectID: projectID, source: submission.source,
+            taskLines: AgentChoiceDisplay.taskLines(choices: choices))
     }
+
+    /// The Mac text area's ceiling: 60% of a 600pt sheet. A macOS sheet
+    /// sizes to its content, so it has no height of its own to take 60% of.
+    static let macTextCap: CGFloat = 0.6 * 600
+    /// The iPhone text area's share of the sheet's measured height.
+    static let phoneTextShare: CGFloat = 0.6
 
     /// A lost response may have committed a task server-side, so the sheet
     /// cannot submit the same draft again. Recovery belongs to the separate
@@ -113,7 +127,7 @@ struct NewTaskSheet: View {
     }
 
     private var canSubmit: Bool {
-        !trimmedSource.isEmpty && !projectID.isEmpty && projects.contains(projectID)
+        !Self.submission(source: source).source.isEmpty && !projectID.isEmpty && projects.contains(projectID)
             && !isSubmitting && !isLost
             && TaskSubmissionModel.canCompose(freshness: model.freshness)
             && missingAgents.isEmpty
@@ -123,79 +137,133 @@ struct NewTaskSheet: View {
         AgentChoiceDisplay.missingAgents(choices: choices, catalog: model.agentCatalog)
     }
 
-    /// The choices as per-role lines take them: a writer sets the three
-    /// writer roles, a reviewer the reviewer role.
-    private var choices: [AgentChoiceDisplay.Role: String] {
-        var choices: [AgentChoiceDisplay.Role: String] = [:]
-        if let writer { for role in AgentChoiceDisplay.writerRoles { choices[role] = writer } }
-        choices[.reviewer] = reviewer
-        return choices
-    }
-
     var body: some View {
-        VStack(spacing: 0) {
-            if rendersInteractiveControls {
-                ScrollView { composerContent }
-            } else {
-                composerContent
+        sheet
+            .freesideSheetPresentation()
+            // Canceling, Escape, or an interactive dismiss ends the
+            // presentation while a submit is still in flight; cancel the task
+            // so its completion does not route the operator to a task they
+            // navigated away from.
+            .onDisappear { submitTask?.cancel() }
+            .onChange(of: projectID) {
+                if let draft = promptBrowse.end() { source = draft }
             }
+    }
 
-            // The submit lives in the sheet body, not a toolbar, so it carries
-            // the design language's primary recipe and the row's Return and
-            // Escape bindings (matching the discuss composer).
-            FreesideSheetActionRow(
-                submitLabel: "Submit",
-                isSubmitEnabled: canSubmit,
-                submit: performSubmit,
-                cancel: { dismiss() })
-        }
-        .background(Color.ground2)
-        .freesideSheetPresentation()
-        .frame(minWidth: 380, minHeight: 320)
-        // Canceling, Escape, or an interactive dismiss ends the presentation
-        // while a submit is still in flight; cancel the task so its completion
-        // does not route the operator to a task they navigated away from.
-        .onDisappear { submitTask?.cancel() }
-        .onChange(of: projectID) {
-            if let draft = promptBrowse.end() { source = draft }
+    @ViewBuilder private var sheet: some View {
+        if rendersInteractiveControls {
+            #if os(iOS)
+                // ◆3 (4 Nov 2026): the one sheet with a navigation bar, the
+                // iOS form idiom for Cancel and Submit.
+                NavigationStack {
+                    GeometryReader { proxy in
+                        ScrollView {
+                            composer(textCap: Self.phoneTextShare * proxy.size.height)
+                                .padding(.horizontal, 12)
+                                .padding(.vertical, 8)
+                        }
+                    }
+                    .background(Color.ground)
+                    .navigationTitle("New Task")
+                    .navigationBarTitleDisplayMode(.inline)
+                    .toolbar {
+                        ToolbarItem(placement: .cancellationAction) {
+                            Button("Cancel") { dismiss() }
+                        }
+                        ToolbarItem(placement: .confirmationAction) {
+                            Button("Submit") { performSubmit() }
+                                .fontWeight(.semibold)
+                                .disabled(!canSubmit)
+                        }
+                    }
+                }
+            #else
+                composer(textCap: Self.macTextCap)
+                    .padding(12)
+                    .frame(minWidth: 380, idealWidth: 560, alignment: .top)
+                    .background(Color.ground)
+                    // No button draws: Return reaches the text view, which
+                    // submits, so nothing in the sheet may bind the default
+                    // action. Escape cancels through a button that exists
+                    // for its shortcut alone.
+                    .background(
+                        Button("", action: { dismiss() })
+                            .buttonStyle(.plain)
+                            .keyboardShortcut(.cancelAction)
+                            .frame(width: 0, height: 0)
+                            .opacity(0)
+                            .accessibilityHidden(true)
+                    )
+            #endif
+        } else {
+            composer(textCap: Self.macTextCap)
+                .padding(12)
+                .frame(maxWidth: .infinity, alignment: .top)
+                .background(Color.ground)
         }
     }
 
-    // Keep the form scrollable at large text sizes, with fixed actions.
-    private var composerContent: some View {
-        VStack(spacing: 0) {
-            FreesideSheetHeader(
-                eyebrow: "New task",
-                ask: "What should the agent work on?",
-                consequence:
-                    "Describe the work in a sentence or a paragraph. The agent asks before it specifies when the source is a sketch."
-            )
-            VStack(alignment: .leading, spacing: 12) {
+    /// The composer box, then the lost or rejected notice under it.
+    private func composer(textCap: CGFloat) -> some View {
+        VStack(alignment: .leading, spacing: 10) {
+            VStack(alignment: .leading, spacing: 0) {
                 // Freeze an uncertain submission so editing cannot imply
                 // that another Submit would retry the saved request.
                 Group {
-                    labeled("Project") { projectPicker }
-                    labeled("Work to do") { sourceField }
-                    labeled("Name (optional)") { nameField }
-                    labeled("Agents (optional)") { agentChoices }
+                    textArea(cap: textCap)
+                    if agentsOpen { roleChips }
+                    missingAgentNotice
+                    foot
                 }
                 .disabled(isLost || isSubmitting)
-                status
             }
-            .padding(.horizontal, 16)
-            .padding(.bottom, 16)
-            .frame(maxWidth: .infinity, alignment: .topLeading)
-
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .background(Color.ground2, in: RoundedRectangle(cornerRadius: 12))
+            .clipShape(RoundedRectangle(cornerRadius: 12))
+            .overlay(RoundedRectangle(cornerRadius: 12).strokeBorder(Color.itemBorder))
+            status
         }
     }
 
-    /// A field under its visible label. Each control carries the same words
-    /// as its accessibility label, so VoiceOver reads the label once.
-    private func labeled(_ label: String, @ViewBuilder field: () -> some View) -> some View {
-        VStack(alignment: .leading, spacing: 6) {
-            KeywordLabel(text: label)
-                .accessibilityHidden(true)
-            field()
+    // MARK: Text area
+
+    /// Four lines of the statement face: the text area's floor.
+    private static var fourLines: some View {
+        Text("A\nA\nA\nA").font(FreesideFont.statement)
+    }
+
+    @ViewBuilder private func textArea(cap: CGFloat) -> some View {
+        if rendersInteractiveControls {
+            sourceEditor(cap: cap)
+                // A text editor has no prompt of its own. This one is drawn
+                // over the empty editor, never written into `source`, and
+                // leaves clicks and VoiceOver to the editor beneath it.
+                .overlay(alignment: .topLeading) {
+                    if case .placeholder(let placeholder) = Self.fieldDisplay(
+                        source, placeholder: Self.sourcePlaceholder)
+                    {
+                        Text(placeholder)
+                            .font(FreesideFont.statement)
+                            .foregroundStyle(Color.inkDim)
+                            .padding(Self.editorTextInsets)
+                            .allowsHitTesting(false)
+                            .accessibilityHidden(true)
+                    }
+                }
+                .padding(.vertical, 14 - Self.editorTextInsets.top)
+                .padding(.horizontal, 16 - Self.editorTextInsets.leading)
+        } else {
+            // The goldens' stand-in: the draft at its full height, clipped at
+            // the cap as the editor would scroll it.
+            ZStack(alignment: .topLeading) {
+                Self.fourLines.hidden()
+                staticFieldText(source, placeholder: Self.sourcePlaceholder)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+            .frame(maxWidth: .infinity, maxHeight: cap, alignment: .topLeading)
+            .clipped()
+            .padding(.vertical, 14)
+            .padding(.horizontal, 16)
         }
     }
 
@@ -208,21 +276,139 @@ struct NewTaskSheet: View {
             case .value(let text): Text(text).foregroundStyle(Color.ink)
             }
         }
-        .font(FreesideFont.callout)
+        .font(FreesideFont.statement)
     }
 
-    // Where a TextEditor draws its first character inside the field's own
-    // padding: both platforms inset a line by 5pt, and UITextView adds 8pt
-    // above the text.
+    // Where each platform's editor draws its first character inside its own
+    // frame: the line fragment's 5pt padding, and UITextView's 8pt above
+    // the text.
     #if os(iOS)
-        private static let sourcePlaceholderInsets = EdgeInsets(top: 16, leading: 13, bottom: 8, trailing: 13)
+        private static let editorTextInsets = EdgeInsets(top: 8, leading: 5, bottom: 8, trailing: 5)
     #else
-        private static let sourcePlaceholderInsets = EdgeInsets(top: 8, leading: 13, bottom: 8, trailing: 13)
+        private static let editorTextInsets = EdgeInsets(top: 0, leading: 5, bottom: 0, trailing: 5)
     #endif
 
-    @ViewBuilder private var projectPicker: some View {
-        // Only the trigger is Freeside's; the popup list stays system chrome,
-        // which `ImageRenderer` cannot draw, so the goldens show the trigger.
+    @ViewBuilder private func sourceEditor(cap: CGFloat) -> some View {
+        #if os(macOS)
+            TaskPromptEditor(
+                text: $source, history: model.promptHistory.prompts(for: projectID), browse: promptBrowse,
+                onSubmit: performSubmit, contentHeight: $textHeight
+            )
+            .frame(height: min(max(textHeight, TaskPromptEditor.height(lines: 4)), cap))
+        #else
+            // A hidden copy of the draft sizes the editor: four lines at
+            // least, the draft's height as it grows, the cap at most, past
+            // which the editor scrolls inside.
+            ZStack(alignment: .topLeading) {
+                Self.fourLines
+                // A trailing newline's empty line takes no height in a Text.
+                Text(source.hasSuffix("\n") ? source + " " : source)
+                    .font(FreesideFont.statement)
+            }
+            .padding(Self.editorTextInsets)
+            .hidden()
+            .frame(maxWidth: .infinity, maxHeight: cap, alignment: .topLeading)
+            .overlay {
+                TextEditor(text: $source)
+                    .font(FreesideFont.statement)
+                    .scrollContentBackground(.hidden)
+                    .accessibilityLabel("Work to do")
+                    .accessibilityAction(named: "Submit") { performSubmit() }
+            }
+        #endif
+    }
+
+    // MARK: Agents
+
+    static let noTreeText = "The daemon has no agent tree, so it picks every agent."
+
+    /// One chip per task-line role, in role order, each a menu over the
+    /// catalog.
+    private var roleChips: some View {
+        WrappingHStack(horizontalSpacing: 6, verticalSpacing: 6) {
+            ForEach(AgentChoiceDisplay.roleOrder, id: \.self) { role in
+                roleChip(role)
+            }
+        }
+        .padding(.horizontal, 10)
+        .padding(.bottom, 8)
+        .frame(maxWidth: .infinity, alignment: .leading)
+    }
+
+    @ViewBuilder private func roleChip(_ role: Role) -> some View {
+        let title = AgentChoiceDisplay.title(for: role)
+        let chosen = choices[role]
+        let chip = RoleChip(role: title, value: chosen)
+        // Only the chip is Freeside's; the list stays system chrome, which
+        // `ImageRenderer` cannot draw, so the goldens show the chip.
+        if rendersInteractiveControls {
+            let catalog = model.agentCatalog
+            let agents = catalog?.agents ?? []
+            let defaultLabel = AgentChoiceDisplay.defaultLabel(
+                role: role, policy: model.routingPolicy, catalog: catalog)
+            Menu {
+                Picker("\(title) agent", selection: choice(for: role)) {
+                    Text(defaultLabel).tag(String?.none)
+                    ForEach(agents, id: \.name) { agent in
+                        Text("\(agent.name) · \(AgentChoiceDisplay.facts(agent))").tag(Optional(agent.name))
+                    }
+                    // A stale choice keeps a matching tag, so the picker
+                    // shows it selected instead of no entry at all.
+                    if let chosen, !agents.contains(where: { $0.name == chosen }) {
+                        Text("\(chosen) · not in the agent tree").tag(Optional(chosen)).disabled(true)
+                    }
+                }
+                .pickerStyle(.inline)
+            } label: {
+                chip
+            }
+            .menuStyle(.button)
+            .buttonStyle(.plain)
+            .menuIndicator(.hidden)
+            .accessibilityLabel("\(title) agent")
+            .accessibilityValue(chosen ?? defaultLabel)
+        } else {
+            chip
+        }
+    }
+
+    private func choice(for role: Role) -> Binding<String?> {
+        Binding(get: { choices[role] }, set: { choices[role] = $0 })
+    }
+
+    /// Why a stale choice blocks Submit, one sentence per agent the catalog
+    /// dropped. It draws whether or not the role chips show, so Submit is
+    /// never blocked without a reason on screen.
+    @ViewBuilder private var missingAgentNotice: some View {
+        if !missingAgents.isEmpty {
+            VStack(alignment: .leading, spacing: 4) {
+                ForEach(missingAgents, id: \.self) { agent in
+                    Text("\(agent) isn't in the daemon's agent tree. Choose another agent or Default to submit.")
+                        .font(FreesideFont.cardBody)
+                        .foregroundStyle(Color.waxText)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+            }
+            .padding(.horizontal, 12)
+            .padding(.bottom, 8)
+        }
+    }
+
+    // MARK: Foot
+
+    private var foot: some View {
+        WrappingHStack(horizontalSpacing: 6, verticalSpacing: 6) {
+            projectChip
+            agentsChip
+        }
+        .padding(.top, 8)
+        .padding(.horizontal, 10)
+        .padding(.bottom, 10)
+        .frame(maxWidth: .infinity, alignment: .leading)
+    }
+
+    @ViewBuilder private var projectChip: some View {
+        let chip = ComposerChip(glyph: "▣", text: projectLabel)
         if rendersInteractiveControls {
             Menu {
                 Picker("Project", selection: $projectID) {
@@ -232,7 +418,7 @@ struct NewTaskSheet: View {
                 }
                 .pickerStyle(.inline)
             } label: {
-                FreesideMenuTriggerLabel(title: projectLabel)
+                chip
             }
             .menuStyle(.button)
             .buttonStyle(.plain)
@@ -240,7 +426,7 @@ struct NewTaskSheet: View {
             .accessibilityLabel("Project")
             .accessibilityValue(projectLabel)
         } else {
-            FreesideMenuTriggerLabel(title: projectLabel)
+            chip
         }
     }
 
@@ -248,149 +434,34 @@ struct NewTaskSheet: View {
         projectID.isEmpty ? "No project" : projectID
     }
 
-    @ViewBuilder private var sourceField: some View {
+    /// Closed, the chip reads the choices as one sentence; open, it reads
+    /// `Agents` over the role chips. With no catalog there is nothing to
+    /// choose, unless a choice made against an earlier catalog is still set:
+    /// the chip stays enabled so the operator can see and clear it.
+    @ViewBuilder private var agentsChip: some View {
+        let summary = AgentChoiceDisplay.summary(AgentChoiceDisplay.taskLines(choices: choices)) ?? "Default agents"
+        // An open chip stays enabled so it can close, even once clearing
+        // the last stale choice leaves nothing to choose.
+        let unavailable = model.agentCatalog == nil && choices.isEmpty && !agentsOpen
+        let chip = ComposerChip(glyph: "◆", text: agentsOpen ? "Agents" : summary, isOpen: agentsOpen)
         if rendersInteractiveControls {
-            sourceEditor
-                .font(FreesideFont.callout)
-                .scrollContentBackground(.hidden)
-                .padding(8)
-                .frame(minHeight: 150)
-                .background(Color.ground, in: RoundedRectangle(cornerRadius: 8))
-                .overlay(RoundedRectangle(cornerRadius: 8).stroke(Color.rule))
-                // A TextEditor has no prompt of its own. This one is drawn
-                // over the empty editor, never written into `source`, and
-                // leaves clicks and VoiceOver to the editor beneath it.
-                .overlay(alignment: .topLeading) {
-                    if case .placeholder(let placeholder) = Self.fieldDisplay(
-                        source, placeholder: Self.sourcePlaceholder)
-                    {
-                        Text(placeholder)
-                            .font(FreesideFont.callout)
-                            .foregroundStyle(Color.inkDim)
-                            .padding(Self.sourcePlaceholderInsets)
-                            .allowsHitTesting(false)
-                            .accessibilityHidden(true)
-                    }
-                }
-                .accessibilityLabel("Work to do")
+            Button {
+                agentsOpen.toggle()
+            } label: {
+                chip
+            }
+            .buttonStyle(.plain)
+            .disabled(unavailable)
+            .help(unavailable ? Self.noTreeText : "")
+            .accessibilityLabel("Agents")
+            .accessibilityValue(summary)
+            .accessibilityHint(unavailable ? Self.noTreeText : "")
         } else {
-            staticFieldText(source, placeholder: Self.sourcePlaceholder)
-                .padding(8)
-                .frame(maxWidth: .infinity, minHeight: 150, alignment: .topLeading)
-                .background(Color.ground, in: RoundedRectangle(cornerRadius: 8))
-                .overlay(RoundedRectangle(cornerRadius: 8).stroke(Color.rule))
+            chip.disabled(unavailable)
         }
     }
 
-    @ViewBuilder private var sourceEditor: some View {
-        #if os(macOS)
-            TaskPromptEditor(
-                text: $source, history: model.promptHistory.prompts(for: projectID), browse: promptBrowse)
-        #else
-            TextEditor(text: $source)
-        #endif
-    }
-
-    @ViewBuilder private var nameField: some View {
-        if rendersInteractiveControls {
-            TextField(Self.namePlaceholder, text: $name)
-                .textFieldStyle(.plain)
-                .font(FreesideFont.callout)
-                .padding(8)
-                .background(Color.ground, in: RoundedRectangle(cornerRadius: 8))
-                .overlay(RoundedRectangle(cornerRadius: 8).stroke(Color.rule))
-                .accessibilityLabel("Name (optional)")
-        } else {
-            staticFieldText(name, placeholder: Self.namePlaceholder)
-                .padding(8)
-                .frame(maxWidth: .infinity, alignment: .leading)
-                .background(Color.ground, in: RoundedRectangle(cornerRadius: 8))
-                .overlay(RoundedRectangle(cornerRadius: 8).stroke(Color.rule))
-        }
-    }
-
-    static let noTreeText = "The daemon has no agent tree, so it picks every agent."
-
-    /// The writer and reviewer choices. With no catalog there is nothing to
-    /// offer, unless a choice made against an earlier catalog is still set:
-    /// its trigger stays so the operator can see and clear it.
-    @ViewBuilder private var agentChoices: some View {
-        let catalog = model.agentCatalog
-        VStack(alignment: .leading, spacing: 10) {
-            if catalog != nil || writer != nil || reviewer != nil {
-                agentChoice(
-                    "Writer · specifies, implements, and remediates", accessibility: "Writer agent",
-                    roles: AgentChoiceDisplay.writerRoles, selection: $writer)
-                agentChoice(
-                    "Reviewer", accessibility: "Reviewer agent", roles: [.reviewer], selection: $reviewer)
-            }
-            if catalog == nil {
-                Text(Self.noTreeText)
-                    .font(FreesideFont.cardBody)
-                    .foregroundStyle(Color.inkDim)
-                    .fixedSize(horizontal: false, vertical: true)
-            }
-        }
-    }
-
-    /// One choice: its caption, a menu trigger over the default and the
-    /// catalog's agents, and beneath it the chosen agent's facts or why the
-    /// choice blocks Submit.
-    private func agentChoice(
-        _ caption: String, accessibility: String, roles: [AgentChoiceDisplay.Role], selection: Binding<String?>
-    ) -> some View {
-        let catalog = model.agentCatalog
-        let agents = catalog?.agents ?? []
-        let defaultLabel = AgentChoiceDisplay.defaultLabel(
-            roles: roles, policy: model.routingPolicy, catalog: catalog)
-        let chosen = selection.wrappedValue
-        let title = chosen ?? defaultLabel
-        let entry = chosen.flatMap { name in agents.first { $0.name == name } }
-        return VStack(alignment: .leading, spacing: 4) {
-            Text(caption)
-                .font(FreesideFont.cardBody)
-                .foregroundStyle(Color.inkDim)
-                .accessibilityHidden(true)
-            // Only the trigger is Freeside's; the list stays system chrome,
-            // as the project picker's does.
-            if rendersInteractiveControls {
-                Menu {
-                    Picker(accessibility, selection: selection) {
-                        Text(defaultLabel).tag(String?.none)
-                        ForEach(agents, id: \.name) { agent in
-                            Text("\(agent.name) · \(AgentChoiceDisplay.facts(agent))").tag(Optional(agent.name))
-                        }
-                        // A stale choice keeps a matching tag, so the picker
-                        // shows it selected instead of no entry at all.
-                        if let chosen, entry == nil {
-                            Text("\(chosen) · not in the agent tree").tag(Optional(chosen)).disabled(true)
-                        }
-                    }
-                    .pickerStyle(.inline)
-                } label: {
-                    FreesideMenuTriggerLabel(title: title)
-                }
-                .menuStyle(.button)
-                .buttonStyle(.plain)
-                .menuIndicator(.hidden)
-                .accessibilityLabel(accessibility)
-                .accessibilityValue(title)
-                .accessibilityHint(caption)
-            } else {
-                FreesideMenuTriggerLabel(title: title)
-            }
-            if let entry {
-                Text(AgentChoiceDisplay.facts(entry))
-                    .font(FreesideFont.cardBody)
-                    .foregroundStyle(Color.inkDim)
-            } else if let chosen {
-                Text("\(chosen) isn't in the daemon's agent tree. Choose another agent or Default to submit.")
-                    .font(FreesideFont.cardBody)
-                    .foregroundStyle(Color.waxText)
-                    .fixedSize(horizontal: false, vertical: true)
-            }
-        }
-    }
+    // MARK: Status and submit
 
     @ViewBuilder private var status: some View {
         switch model.state {
@@ -409,13 +480,14 @@ struct NewTaskSheet: View {
         }
     }
 
-    private func performSubmit() {
+    /// Submits when the draft can send and says whether it did; the Mac
+    /// text view asks on Return and VoiceOver's Submit action.
+    @discardableResult private func performSubmit() -> Bool {
+        guard canSubmit else { return false }
         isSubmitting = true
         submitTask = Task {
-            let draft = Self.submission(source: source, name: name)
-            let taskID = await model.submit(
-                projectID: projectID, source: draft.source, name: draft.name,
-                taskLines: AgentChoiceDisplay.taskLines(choices: choices))
+            let taskID = await Self.send(
+                Self.submission(source: source), projectID: projectID, choices: choices, through: model)
             isSubmitting = false
             guard !Task.isCancelled else { return }
             if let taskID {
@@ -423,5 +495,6 @@ struct NewTaskSheet: View {
                 dismiss()
             }
         }
+        return true
     }
 }

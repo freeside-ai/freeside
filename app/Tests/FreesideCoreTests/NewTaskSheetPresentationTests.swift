@@ -1,58 +1,68 @@
+import FreesideAPI
 import Testing
 
 @testable import FreesideCore
+@testable import FreesideModel
 
-/// The New task form's fields (visual audit D05): an empty field shows a
-/// placeholder that is never its value and never submitted.
+/// The New Task composer's text and what it sends (visual audit D05): an
+/// empty text area shows a placeholder that is never its value and never
+/// submitted, and a submission carries the trimmed draft and no name.
 @MainActor
 @Suite struct NewTaskSheetPresentationTests {
-    private let placeholders = [NewTaskSheet.sourcePlaceholder, NewTaskSheet.namePlaceholder]
+    private let placeholder = NewTaskSheet.sourcePlaceholder
 
-    @Test func emptyDraftShowsPlaceholdersAndSubmitsNoName() {
-        #expect(placeholders == ["Describe the task…", "Name (optional)"])
-        for placeholder in placeholders {
-            #expect(NewTaskSheet.fieldDisplay("", placeholder: placeholder) == .placeholder(placeholder))
-        }
-        let empty = NewTaskSheet.submission(source: "", name: "")
-        #expect(empty.source.isEmpty)
-        #expect(empty.name == nil)
+    @Test func emptyDraftShowsThePlaceholderAndSubmitsNothing() {
+        #expect(placeholder == "What should the agent work on?")
+        #expect(NewTaskSheet.fieldDisplay("", placeholder: placeholder) == .placeholder(placeholder))
+        #expect(NewTaskSheet.submission(source: "").source.isEmpty)
     }
 
-    /// One rule for the editor's drawn placeholder, the name field's native
-    /// prompt, and the static render: any typed character hides it. The
-    /// whitespace is still not submitted.
+    /// One rule for the editor's drawn placeholder and the static render:
+    /// any typed character hides it. The whitespace is still not submitted.
     @Test func whitespaceOnlyDraftHidesThePlaceholderAndSubmitsNothing() {
-        for placeholder in placeholders {
-            for blank in ["  ", "\n\t"] {
-                #expect(NewTaskSheet.fieldDisplay(blank, placeholder: placeholder) == .value(blank))
-            }
+        for blank in ["  ", "\n\t"] {
+            #expect(NewTaskSheet.fieldDisplay(blank, placeholder: placeholder) == .value(blank))
         }
-        let blank = NewTaskSheet.submission(source: " \n", name: " \n")
-        #expect(blank == .init(source: "", name: nil))
+        #expect(NewTaskSheet.submission(source: " \n") == .init(source: ""))
     }
 
     @Test func typedTextIsAValueEvenWhenItReadsLikeThePlaceholder() {
-        for placeholder in placeholders {
-            #expect(
-                NewTaskSheet.fieldDisplay("Fix the flaky rig", placeholder: placeholder)
-                    == .value("Fix the flaky rig"))
-            // The operator typed these words, so they are the draft.
-            #expect(NewTaskSheet.fieldDisplay(placeholder, placeholder: placeholder) == .value(placeholder))
-        }
-        let typed = NewTaskSheet.submission(
-            source: NewTaskSheet.sourcePlaceholder, name: NewTaskSheet.namePlaceholder)
-        #expect(typed.source == NewTaskSheet.sourcePlaceholder)
-        #expect(typed.name == NewTaskSheet.namePlaceholder)
+        #expect(
+            NewTaskSheet.fieldDisplay("Fix the flaky rig", placeholder: placeholder) == .value("Fix the flaky rig"))
+        // The operator typed these words, so they are the draft.
+        #expect(NewTaskSheet.fieldDisplay(placeholder, placeholder: placeholder) == .value(placeholder))
+        #expect(NewTaskSheet.submission(source: placeholder).source == placeholder)
     }
 
     @Test func submissionCarriesOnlyTheTrimmedDraft() {
-        let draft = NewTaskSheet.submission(source: "  Repair the acceptance rig\n", name: " rig ")
-        #expect(draft == .init(source: "Repair the acceptance rig", name: "rig"))
-        // A field left blank sends nothing in its place, least of all the
-        // placeholder it showed.
-        let blank = NewTaskSheet.submission(source: "", name: "")
-        #expect(blank == .init(source: "", name: nil))
-        let unnamed = NewTaskSheet.submission(source: "Repair the acceptance rig", name: "")
-        #expect(unnamed == .init(source: "Repair the acceptance rig", name: nil))
+        let draft = NewTaskSheet.submission(source: "  Repair the acceptance rig\n")
+        #expect(draft == .init(source: "Repair the acceptance rig"))
+    }
+
+    /// What the sheet sends: the trimmed source and the per-role lines, and
+    /// never a name, which the daemon's task namer supplies.
+    @Test func sendCarriesTheLinesAndNoName() async throws {
+        let server = MockServer()
+        let coordinator = SyncCoordinator(client: APIClientFactory.mock(server: server), cache: InMemoryCacheStore())
+        let model = TaskSubmissionModel(coordinator: coordinator)
+        // An unanswered send keeps the saved command inspectable.
+        await server.setBeforeRespond { operationID in
+            if operationID == "submitCommand" { throw MockServer.ForcedStatus(503) }
+        }
+        let choices: [NewTaskSheet.Role: String] = [
+            .specifier: "claude-secondary", .implementer: "claude-secondary", .remediator: "claude-secondary",
+            .reviewer: "codex-primary",
+        ]
+        _ = await NewTaskSheet.send(
+            NewTaskSheet.submission(source: " Add a health endpoint.\n"), projectID: "project-1", choices: choices,
+            through: model)
+        let command = try #require(model.pendingSubmissions.first)
+        guard case .submit_task(let payload) = command.payload else {
+            Issue.record("expected a submit_task command")
+            return
+        }
+        #expect(payload.source == "Add a health endpoint.")
+        #expect(payload.name == nil)
+        #expect(payload.task_lines == AgentChoiceDisplay.taskLines(choices: choices))
     }
 }

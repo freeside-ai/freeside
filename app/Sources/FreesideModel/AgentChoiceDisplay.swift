@@ -50,16 +50,14 @@ public enum AgentChoiceDisplay {
     }
 
     /// The default entry's label: what picks the agent when the operator
-    /// chooses none for `roles`. The lineup names its agent when it binds one
-    /// agent to every role; "or routing policy" follows when the policy lists
-    /// one of the roles.
+    /// chooses none for `role`. The lineup names its agent for the role;
+    /// "or routing policy" follows when the policy lists the role.
     public static func defaultLabel(
-        roles: [Role], policy: Components.Schemas.RoutingPolicy?, catalog: Components.Schemas.AgentCatalog?
+        role: Role, policy: Components.Schemas.RoutingPolicy?, catalog: Components.Schemas.AgentCatalog?
     ) -> String {
-        let lineupAgents = unique(roles.compactMap { role in catalog?.lineup.first { $0.role == role }?.agent })
-        let lineup = lineupAgents.count == 1 ? "lineup \(lineupAgents[0])" : "lineup"
-        let policyListsARole = roles.contains { role in policy?.roles.contains { $0.role == role } == true }
-        return "Default · \(lineup)" + (policyListsARole ? " or routing policy" : "")
+        let lineup = catalog?.lineup.first { $0.role == role }.map { "lineup \($0.agent)" } ?? "lineup"
+        let policyListsTheRole = policy?.roles.contains { $0.role == role } == true
+        return "Default · \(lineup)" + (policyListsTheRole ? " or routing policy" : "")
     }
 
     private static func unique(_ names: [String]) -> [String] {

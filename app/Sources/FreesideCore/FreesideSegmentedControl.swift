@@ -170,28 +170,3 @@ private struct SegmentStyle: ButtonStyle {
         return isHovered ? .hover : .clear
     }
 }
-
-/// The secondary-tone trigger a `Menu` opens from: the current choice with
-/// the up-down chevron, on ground-2 inside the secondary border. The popup
-/// list the menu shows stays system chrome; only the trigger is Freeside's.
-struct FreesideMenuTriggerLabel: View {
-    let title: String
-
-    var body: some View {
-        HStack(spacing: 8) {
-            Text(title)
-                .font(FreesideFont.sans(.subheadline, weight: .medium))
-                .foregroundStyle(Color.ink)
-                .lineLimit(1)
-            Spacer(minLength: 8)
-            Image(systemName: "chevron.up.chevron.down")
-                .font(FreesideFont.caption)
-                .foregroundStyle(Color.inkDim)
-        }
-        .padding(.horizontal, 10)
-        .frame(maxWidth: .infinity, minHeight: 28)
-        .background(RoundedRectangle(cornerRadius: 6).fill(Color.ground2))
-        .overlay(RoundedRectangle(cornerRadius: 6).strokeBorder(Color.secondaryBorder, lineWidth: 1))
-        .contentShape(RoundedRectangle(cornerRadius: 6))
-    }
-}

@@ -1942,12 +1942,14 @@ struct CapacityBlock: View {
 
 /// The composer chip (R33): a pill on ground-2 with the window border
 /// holding a dim glyph, the text, and a 9pt chevron; open, it takes the
-/// accent wash and border and the chevron points up. A label, not a control: the New Task composer
-/// (#2581) puts it inside the menu or button that opens it.
+/// accent wash and border and the chevron points up. Disabled, its text
+/// reads faint, as a disabled control's does. A label, not a control: the
+/// New Task composer puts it inside the menu or button that opens it.
 struct ComposerChip: View {
     let glyph: String
     let text: String
     var isOpen = false
+    @Environment(\.isEnabled) private var isEnabled
 
     var body: some View {
         HStack(alignment: .firstTextBaseline, spacing: 6) {
@@ -1957,7 +1959,7 @@ struct ComposerChip: View {
                 .accessibilityHidden(true)
             Text(text)
                 .font(FreesideFont.trailingSummary)
-                .foregroundStyle(Color.ink)
+                .foregroundStyle(isEnabled ? Color.ink : Color.inkFaint)
             ComposerChevron(pointsUp: isOpen)
         }
         .padding(.vertical, 3)
@@ -1972,25 +1974,44 @@ struct ComposerChip: View {
 /// agent, or `Default` in dim with the keyword faint when none is chosen,
 /// and the chevron. The keyword draws at the ladder's keyword size, not the
 /// canvas's 10pt, since nothing draws under the floor (R10). Active, it
-/// takes the accent wash and border. A label, not a control: #2581 wires
-/// each chip's menu.
+/// takes the accent wash and border. A label, not a control: the New Task
+/// composer puts each chip inside its role's menu.
 struct RoleChip: View {
     let role: String
     let value: String?
     var isActive = false
 
     var body: some View {
-        HStack(alignment: .firstTextBaseline, spacing: 6) {
-            KeywordLabel(text: role, color: value == nil ? .inkFaint : .inkDim)
-            Text(value ?? "Default")
-                .font(FreesideFont.trailingSummary)
-                .foregroundStyle(value == nil ? Color.inkDim : Color.ink)
-            ComposerChevron()
+        // One line where it fits; at the accessibility sizes the keyword
+        // sits over the agent's name, so neither breaks inside a word.
+        ViewThatFits(in: .horizontal) {
+            HStack(alignment: .firstTextBaseline, spacing: 6) {
+                keyword
+                valueText
+                ComposerChevron()
+            }
+            HStack(alignment: .lastTextBaseline, spacing: 6) {
+                VStack(alignment: .leading, spacing: 2) {
+                    keyword
+                    valueText
+                }
+                ComposerChevron()
+            }
         }
         .padding(.vertical, 3)
         .padding(.horizontal, 10)
         .composerPill(isActive: isActive)
         .accessibilityElement(children: .combine)
+    }
+
+    private var keyword: some View {
+        KeywordLabel(text: role, color: value == nil ? .inkFaint : .inkDim)
+    }
+
+    private var valueText: some View {
+        Text(value ?? "Default")
+            .font(FreesideFont.trailingSummary)
+            .foregroundStyle(value == nil ? Color.inkDim : Color.ink)
     }
 }
 
