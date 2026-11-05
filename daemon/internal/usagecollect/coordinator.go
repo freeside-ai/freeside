@@ -110,6 +110,9 @@ type collection struct {
 	err    error
 	// again asks for another collection after this one; guarded by c.mu.
 	again bool
+	// againPastBackoff makes that next collection start even when this one
+	// fails into backoff; guarded by c.mu. Only CaptureArrived sets it.
+	againPastBackoff bool
 	// epoch is the pool's reassignment count when this collection started.
 	epoch int
 }
@@ -238,6 +241,51 @@ func (c *Coordinator) RequestRefresh(pool domain.UsagePoolID) {
 // rate-limit event, and returns without waiting for it.
 func (c *Coordinator) RateLimitEvent(pool domain.UsagePoolID) {
 	c.trigger(pool, "rate-limit event", false)
+}
+
+// CaptureArrived starts a collection for a pool whose collector now holds a
+// new answer in memory: the writer turn's usage capture that a Claude
+// collector keeps (ward.ClaudeUsageCollector). It does nothing unless
+// enrollment is the pool's collector at its current generation, since only
+// that capture can reach the record. It returns without waiting for the
+// collection.
+//
+// Unlike every other trigger it starts the collection during backoff, and a
+// collection in flight gets another after it even if that one fails into
+// backoff. Backoff spares a provider repeated requests; asking a collector
+// that answers from memory costs the provider nothing, and the backoff an
+// empty memory built up after a restart would otherwise hold the first
+// capture for hours. A collector that calls the provider must not be fed by
+// this trigger.
+func (c *Coordinator) CaptureArrived(
+	ctx context.Context, pool domain.UsagePoolID, enrollment domain.ClientEnrollmentID, generation int,
+) error {
+	var collects bool
+	if err := c.store.Read(ctx, func(tx *store.ReadTx) error {
+		record, err := storedOrDefault(ctx, tx, pool)
+		if errors.Is(err, store.ErrNotFound) {
+			return nil
+		}
+		if err != nil || record.Collector != enrollment {
+			return err
+		}
+		current, err := currentGeneration(ctx, tx, enrollment)
+		collects = current == generation
+		return err
+	}); err != nil {
+		return fmt.Errorf("usage capture for %s: %w", pool, err)
+	}
+	if !collects {
+		return nil
+	}
+	c.mu.Lock()
+	delete(c.backoffs, pool)
+	if running := c.inflight[pool]; running != nil {
+		running.againPastBackoff = true
+	}
+	c.mu.Unlock()
+	c.trigger(pool, "usage capture", true)
+	return nil
 }
 
 // Refresh joins the pool's collection in flight, or starts one, and returns
@@ -456,6 +504,9 @@ func (c *Coordinator) start(pool domain.UsagePoolID, fresh bool) (*collection, t
 		delete(c.inflight, pool)
 		c.settle(pool, running, report, retryAfter)
 		again := running.again
+		if running.againPastBackoff {
+			delete(c.backoffs, pool)
+		}
 		c.mu.Unlock()
 		running.report, running.err = report, err
 		close(running.done)
