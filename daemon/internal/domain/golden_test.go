@@ -2344,6 +2344,13 @@ func TestGolden(t *testing.T) {
 			SpecificationRunID: "run-2",
 			Name:               domain.DisplayName{Text: "Repair the npm lockfile", Source: domain.DisplayNameSourceName},
 		}},
+		{"task_attachment", domain.TaskAttachment{
+			Digest:           "sha256:2222222222222222222222222222222222222222222222222222222222222222",
+			Name:             "design_handoff/screens/home.png",
+			MediaType:        domain.TaskAttachmentMediaPNG,
+			ClaimedMediaType: "image/png",
+			SizeBytes:        48213,
+		}},
 		{"conversation", conversation},
 		{"message", msg},
 		{"agent_invocation", invocation},

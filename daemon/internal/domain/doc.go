@@ -21,6 +21,7 @@
 //   - execution.go    the durable admission and export records (§5.3, §5.7)
 //   - failure.go      the failure cause and disposition axes, and the pure disposition rule (§4)
 //   - task_line.go    the per-task agent choice and its line versions (§5.4)
+//   - task_attachment.go the operator-supplied files a submission carries (§5.15)
 //   - auth_identity.go provider identities and the mutation lease (§5.4)
 //   - schedule.go     the durable scheduler's kinds, aggregate, and events (§5.16)
 //   - work_unit.go    the §5.18 capture records: declarations, bindings, observed facts
