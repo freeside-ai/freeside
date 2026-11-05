@@ -1957,8 +1957,11 @@ agent on its own. There's no `freesided` command for either path.
   attempt starts on the new line. The lines' provenance names the agent
   left, with its mark, as `passed_over` when the policy orders it. Other roles the policy orders an agent on
   that pool for move with it; a role an operator set, or one the policy
-  can't pin there, keeps its line. Offers here come only from the routing
-  policy, so a task with no policy in effect is offered nothing.
+  can't pin there, keeps its line. An escalated specifier moves to the
+  counterpart of the policy's first specifier agent on that pool, or to the
+  pool's standard agent when the pool has no counterpart. Offers here come
+  only from the routing policy, so a task with no policy in effect is
+  offered nothing.
 - **Admission checks the choice again.** Before a card's agent runs,
   admission refuses it unless it isn't the failed agent, it draws on the pool
   the operator chose, and it still escapes the failed invocation's cause
