@@ -36,17 +36,25 @@ import Testing
         for state in [Components.Schemas.TaskCancellationState.requested, .failed_to_stop] {
             var forged = confirmed
             forged.task.cancellation?.value1.state = state
-            #expect(MockContractValidation.taskSnapshotBreach(forged, serverRevision: forged.as_of_revision) != nil)
+            #expect(
+                MockContractValidation.taskSnapshotBreach(
+                    forged, serverRevision: forged.as_of_revision, servedDigests: []) != nil)
         }
         var fabricated = confirmed
         fabricated.task.cancellation = nil
-        #expect(MockContractValidation.taskSnapshotBreach(fabricated, serverRevision: fabricated.as_of_revision) != nil)
+        #expect(
+            MockContractValidation.taskSnapshotBreach(
+                fabricated, serverRevision: fabricated.as_of_revision, servedDigests: []) != nil)
         fabricated = queued
         fabricated.task.lifecycle = .abandoned
-        #expect(MockContractValidation.taskSnapshotBreach(fabricated, serverRevision: fabricated.as_of_revision) != nil)
+        #expect(
+            MockContractValidation.taskSnapshotBreach(
+                fabricated, serverRevision: fabricated.as_of_revision, servedDigests: []) != nil)
         fabricated = confirmed
         fabricated.task.wip = true
-        #expect(MockContractValidation.taskSnapshotBreach(fabricated, serverRevision: fabricated.as_of_revision) != nil)
+        #expect(
+            MockContractValidation.taskSnapshotBreach(
+                fabricated, serverRevision: fabricated.as_of_revision, servedDigests: []) != nil)
     }
 
     @Test func pendingAndFailedCancellationDoNotFabricateStoppedProjection() async throws {

@@ -2575,7 +2575,7 @@ components:
       type: object
       description: A digest-addressed, registered submission artifact.
       additionalProperties: false
-      required: [kind, work_item_artifact_id, issue_subject]
+      required: [kind, work_item_artifact_id, work_item_artifact_digest, issue_subject]
       properties:
         kind:
           type: string
@@ -2583,6 +2583,13 @@ components:
         work_item_artifact_id:
           type: string
           minLength: 1
+        work_item_artifact_digest:
+          allOf:
+            - $ref: "#/components/schemas/Digest"
+          description: >
+            The digest of the source artifact's bytes (the text the task
+            was submitted from), read from the artifact row the id names.
+            Fetch the bytes with GET /attachments/{digest}.
         issue_subject:
           nullable: true
           enum: [null]
@@ -2591,12 +2598,15 @@ components:
       type: object
       description: An issue subject identified independently of its observed title and body.
       additionalProperties: false
-      required: [kind, work_item_artifact_id, issue_subject]
+      required: [kind, work_item_artifact_id, work_item_artifact_digest, issue_subject]
       properties:
         kind:
           type: string
           enum: [issue_subject]
         work_item_artifact_id:
+          nullable: true
+          enum: [null]
+        work_item_artifact_digest:
           nullable: true
           enum: [null]
         issue_subject:

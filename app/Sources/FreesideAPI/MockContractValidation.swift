@@ -39,8 +39,10 @@ enum MockContractValidation {
         return nil
     }
 
+    /// `servedDigests` is the mock's attachment store: an artifact-sourced
+    /// task names a digest a client fetches, so the mock must hold its bytes.
     static func taskSnapshotBreach(
-        _ snapshot: Components.Schemas.TaskSnapshot, serverRevision: Int64
+        _ snapshot: Components.Schemas.TaskSnapshot, serverRevision: Int64, servedDigests: Set<String>
     ) -> String? {
         if snapshot.entity_version < 1 { return "non-positive entity_version" }
         if snapshot.as_of_revision < 1 || snapshot.as_of_revision > serverRevision {
@@ -90,8 +92,13 @@ enum MockContractValidation {
             case .work_item_artifact(let artifact):
                 if artifact.issue_subject != nil { return "mixed task source arms" }
                 if artifact.work_item_artifact_id.isEmpty { return "empty task source artifact" }
+                let digest = artifact.work_item_artifact_digest.value1
+                if digest.isEmpty { return "empty task source digest" }
+                if !servedDigests.contains(digest) { return "task source digest not served" }
             case .issue_subject(let source):
-                if source.work_item_artifact_id != nil { return "mixed task source arms" }
+                if source.work_item_artifact_id != nil || source.work_item_artifact_digest != nil {
+                    return "mixed task source arms"
+                }
                 let issue = source.issue_subject
                 if issue.repo.isEmpty || issue.repository_id < 1 || issue.issue_number < 1 {
                     return "invalid task issue source"

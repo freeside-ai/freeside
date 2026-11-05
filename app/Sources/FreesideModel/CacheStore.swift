@@ -234,9 +234,12 @@ public struct DiskCacheStore: CacheStore {
     /// for the same reason: a format 6 cursor would skip the bootstrap that
     /// supplies it and show no policy where one is set. 8: the usage pools
     /// joined, for the same reason: a format 7 cursor would show no pools
-    /// until a write moved the revision. A pre-current cache cannot claim
+    /// until a write moved the revision. 9: an artifact-sourced task's
+    /// source joined its required work-item digest; a format 8 file's
+    /// artifact-sourced tasks lack it, and its cursor would skip the
+    /// bootstrap that supplies them. A pre-current cache cannot claim
     /// freshness while durable rows from a newer client surface are absent.
-    static let format = 8
+    static let format = 9
 
     private struct CacheFile: Codable {
         var format: Int
@@ -257,8 +260,8 @@ public struct DiskCacheStore: CacheStore {
         switch file.format {
         case Self.format:
             return file.state
-        case 2, 3, 4, 5, 6, 7:
-            // Formats 2 to 7 already carried retryable commands, but predate
+        case 2, 3, 4, 5, 6, 7, 8:
+            // Formats 2 to 8 already carried retryable commands, but predate
             // later durable read surfaces. Keep only the epoch-independent
             // client state: the ledger, because losing a command ID could
             // duplicate an operator decision after relaunch, and the
@@ -322,6 +325,11 @@ public struct DiskCacheStore: CacheStore {
     ///    included. It is dropped rather than given an empty list, which
     ///    would claim no invocation was admitted; the run's timeline is
     ///    fetched again when it is opened.
+    /// 6. Artifact-sourced task sources gained the required
+    ///    `work_item_artifact_digest` (#2610). A format 8 cached task on that
+    ///    arm would throw and discard the cache, ledger included. The task is
+    ///    dropped; the format bump discards the rest of that file's snapshots
+    ///    and its cursors, so the bootstrap restores it with its digest.
     private static func migratingLegacyEncodings(_ data: Data) -> Data {
         guard var root = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any],
             var state = root["state"] as? [String: Any]
@@ -418,6 +426,20 @@ public struct DiskCacheStore: CacheStore {
             }
             if timelinesChanged {
                 state["taskTimelines"] = timelines
+                changed = true
+            }
+        }
+
+        if let tasks = state["tasks"] as? [[String: Any]] {
+            let current = tasks.filter { snapshot in
+                guard let task = snapshot["task"] as? [String: Any],
+                    let source = task["source"] as? [String: Any],
+                    source["kind"] as? String == "work_item_artifact"
+                else { return true }
+                return source["work_item_artifact_digest"] != nil
+            }
+            if current.count != tasks.count {
+                state["tasks"] = current
                 changed = true
             }
         }
