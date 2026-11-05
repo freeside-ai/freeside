@@ -369,13 +369,9 @@ func compatibleTerminalItem(expected, current domain.AttentionItem) bool {
 	normalized.DecidedAt = expected.DecidedAt
 	normalized.Conclusion = expected.Conclusion
 	normalized.Timing = expected.Timing
-	// The base-advance watch maintains this fact after creation (§5.16), so
-	// like status and timing it never disqualifies an otherwise matching
-	// item during recovery.
-	normalized.BaseFreshness = expected.BaseFreshness
-	// Readiness invalidation is likewise recorded after creation, in the same
-	// transition that supersedes the item (§7, issue #496): the active-resource
-	// reconciler or the base-advance watch can set it during a crash seam before
+	// Readiness invalidation is recorded after creation, in the same
+	// transition that supersedes the item (§7, issue #496): the
+	// active-resource reconciler can set it during a crash seam before
 	// finishTask runs. Recovery must accept the resulting terminal item as
 	// compatible with the freshly derived ready shape rather than failing with
 	// "disagrees" and stranding the publication task; the transition check below

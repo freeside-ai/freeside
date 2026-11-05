@@ -2007,18 +2007,6 @@ func TestGolden(t *testing.T) {
 		},
 	}
 
-	// A ready item carrying the base-advance watch's maintained fact
-	// (§5.16): the api AttentionItem example's base_freshness branch.
-	freshItem := item
-	freshItem.ItemVersion = item.ItemVersion + 1
-	freshItem.BaseFreshness = &domain.BaseFreshness{
-		BaseRef: "main", AdmittedBaseSHA: "cafebabe", ObservedBaseSHA: "deadbeef",
-		Advanced: true, ObservedAt: ts.Add(45 * time.Minute),
-	}
-	if err := freshItem.Validate(); err != nil {
-		t.Fatal(err)
-	}
-
 	// A ready item superseded because its earned-against head moved (§7, issue
 	// #496): the daemon records the readiness_invalidation fact in the same
 	// transition that supersedes it, so the api example's
@@ -2312,7 +2300,6 @@ func TestGolden(t *testing.T) {
 		{"intake_occurrence_admitted", intakeAdmittedOccurrence},
 		{"specification_source_work_item", intakeSpecSource},
 		{"specification_source_issue", intakeIssueSource},
-		{"attention_item_base_freshness", freshItem},
 		{"attention_item_readiness_invalidation", invalidatedItem},
 		{"attention_item_identity_changed", identityInvalidatedItem},
 		{"schedule_deadline", deadlineSchedule},

@@ -53,11 +53,11 @@ type nativeReviewObserver func(ctx context.Context, repo string, number int) (pu
 
 // deadlineRegistration wires a one-shot publication deadline
 // (pr_checks_deadline, review_wait_threshold). The handler first rechecks
-// the event's expected subject version (§5.16): a stale expectation — the
-// base-advance watch's fact write, say, bumped the item — re-arms under a
-// new generation with the corrected binding and the same nominal deadline,
-// so the elapsed wall time is never postponed and the deadline fires again
-// on the next pass against the current binding. A matching, still-open item
+// the event's expected subject version (§5.16): a stale expectation (a later
+// item write bumped the version) re-arms under a new generation with the
+// corrected binding and the same nominal deadline, so the elapsed wall time
+// is never postponed and the deadline fires again on the next pass against
+// the current binding. A matching, still-open item
 // terminates fired-and-handled with deadline_elapsed on the synced
 // aggregate. Richer consumers (surfacing the elapsed deadline as attention,
 // binding to observed check runs) arrive with the §7 review stage (#427).

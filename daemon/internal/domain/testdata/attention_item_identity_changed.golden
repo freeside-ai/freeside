@@ -142,7 +142,6 @@
   },
   "commit_plan_notice": "present_but_not_honored",
   "scope_decision": null,
-  "base_freshness": null,
   "readiness_invalidation": {
     "reason": "identity_changed",
     "bound": "84958515#450",

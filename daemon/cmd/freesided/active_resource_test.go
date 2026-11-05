@@ -1191,10 +1191,6 @@ func TestActiveResourceReconcileRecoversSupersededCompletion(t *testing.T) {
 	item := capturedRun(t, st)
 	item.Status = domain.StatusSuperseded
 	item.ItemVersion++
-	item.BaseFreshness = &domain.BaseFreshness{
-		BaseRef: "main", AdmittedBaseSHA: "cafebabe", ObservedBaseSHA: "deadbeef",
-		Advanced: true, ObservedAt: activeResourceTestTime,
-	}
 	item.ReadinessInvalidation = &domain.ReadinessInvalidation{
 		Reason: domain.ReadinessInvalidationBaseAdvanced,
 		Bound:  "cafebabe", Observed: "deadbeef", ObservedAt: activeResourceTestTime,

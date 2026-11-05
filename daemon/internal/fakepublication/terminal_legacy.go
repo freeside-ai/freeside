@@ -28,26 +28,28 @@ type terminalNamesBeforeTasks struct {
 }
 
 type terminalItemBeforeTasks struct {
-	ID                               domain.ItemID                              `json:"id"`
-	ProjectID                        domain.ProjectID                           `json:"project_id"`
-	Subject                          terminalSubjectBeforeTasks                 `json:"subject"`
-	Type                             domain.AttentionType                       `json:"type"`
-	Priority                         domain.Priority                            `json:"priority"`
-	Reason                           string                                     `json:"reason"`
-	RequestedDecision                []domain.Action                            `json:"requested_decision"`
-	Recommendation                   *domain.Recommendation                     `json:"recommendation"`
-	DecisionSurface                  domain.DecisionSurfaceRef                  `json:"decision_surface"`
-	EvidenceSnapshot                 []domain.Artifact                          `json:"evidence_snapshot"`
-	AgentClaims                      []domain.AgentClaim                        `json:"agent_claims"`
-	ArtifactDigests                  []domain.Digest                            `json:"artifact_digests"`
-	PRHeadSHA                        string                                     `json:"pr_head_sha"`
-	PRReference                      *domain.PRReference                        `json:"pr_reference"`
-	Readiness                        *domain.ReadinessSummary                   `json:"readiness"`
-	ReadinessDetail                  *domain.ReadinessDetail                    `json:"readiness_detail"`
-	YieldHistory                     *domain.ReviewYieldHistory                 `json:"yield_history"`
-	CommitPlanNotice                 *domain.CommitPlanNoticeReason             `json:"commit_plan_notice"`
-	ScopeDecision                    *domain.ScopeDecisionFacts                 `json:"scope_decision"`
-	BaseFreshness                    *domain.BaseFreshness                      `json:"base_freshness"`
+	ID                domain.ItemID                  `json:"id"`
+	ProjectID         domain.ProjectID               `json:"project_id"`
+	Subject           terminalSubjectBeforeTasks     `json:"subject"`
+	Type              domain.AttentionType           `json:"type"`
+	Priority          domain.Priority                `json:"priority"`
+	Reason            string                         `json:"reason"`
+	RequestedDecision []domain.Action                `json:"requested_decision"`
+	Recommendation    *domain.Recommendation         `json:"recommendation"`
+	DecisionSurface   domain.DecisionSurfaceRef      `json:"decision_surface"`
+	EvidenceSnapshot  []domain.Artifact              `json:"evidence_snapshot"`
+	AgentClaims       []domain.AgentClaim            `json:"agent_claims"`
+	ArtifactDigests   []domain.Digest                `json:"artifact_digests"`
+	PRHeadSHA         string                         `json:"pr_head_sha"`
+	PRReference       *domain.PRReference            `json:"pr_reference"`
+	Readiness         *domain.ReadinessSummary       `json:"readiness"`
+	ReadinessDetail   *domain.ReadinessDetail        `json:"readiness_detail"`
+	YieldHistory      *domain.ReviewYieldHistory     `json:"yield_history"`
+	CommitPlanNotice  *domain.CommitPlanNoticeReason `json:"commit_plan_notice"`
+	ScopeDecision     *domain.ScopeDecisionFacts     `json:"scope_decision"`
+	// BaseFreshness is retired (#2645) and stays nil, keeping the frozen
+	// explicit null in place.
+	BaseFreshness                    *struct{}                                  `json:"base_freshness"`
 	ReadinessInvalidation            *domain.ReadinessInvalidation              `json:"readiness_invalidation"`
 	ReviewRecoveryBinding            *domain.ReviewRecoveryBinding              `json:"review_recovery_binding"`
 	CodexReenrollmentRecoveryBinding *domain.CodexReenrollmentRecoveryBinding   `json:"codex_reenrollment_recovery_binding"`
@@ -109,7 +111,6 @@ func TerminalDigestBeforeTasks(task Task, item domain.AttentionItem) (domain.Dig
 		YieldHistory:                     item.YieldHistory,
 		CommitPlanNotice:                 item.CommitPlanNotice,
 		ScopeDecision:                    item.ScopeDecision,
-		BaseFreshness:                    item.BaseFreshness,
 		ReadinessInvalidation:            item.ReadinessInvalidation,
 		ReviewRecoveryBinding:            item.ReviewRecoveryBinding,
 		CodexReenrollmentRecoveryBinding: item.CodexReenrollmentRecoveryBinding,

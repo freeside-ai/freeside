@@ -96,12 +96,6 @@ func (p *productionPublicationHarness) invalidateReady(
 	}
 	fact.ObservedAt = p.now.UTC()
 	item.ReadinessInvalidation = &fact
-	if fact.Reason == domain.ReadinessInvalidationBaseAdvanced {
-		item.BaseFreshness = &domain.BaseFreshness{
-			BaseRef: "main", AdmittedBaseSHA: fact.Bound, ObservedBaseSHA: fact.Observed,
-			Advanced: true, ObservedAt: fact.ObservedAt,
-		}
-	}
 	item.Status = domain.StatusSuperseded
 	item.ItemVersion++
 	started := false

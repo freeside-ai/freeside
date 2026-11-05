@@ -153,29 +153,6 @@ func TestArmPublicationWatchesSkipsConcludedItem(t *testing.T) {
 	}
 }
 
-// TestCompatibleTerminalItemIgnoresBaseFreshness: the base-advance watch
-// maintains its fact after the ready item commits, so terminal-item
-// recovery must not reject an otherwise matching item that gained (or
-// advanced) the fact while the daemon was down.
-func TestCompatibleTerminalItemIgnoresBaseFreshness(t *testing.T) {
-	st := watchTestStore(t)
-	expected := watchTestItem(t, st, domain.StatusOpen)
-	current := expected
-	current.ItemVersion = expected.ItemVersion + 1
-	current.BaseFreshness = &domain.BaseFreshness{
-		BaseRef: "main", AdmittedBaseSHA: "cafebabe", ObservedBaseSHA: "deadbeef",
-		Advanced: true, ObservedAt: time.Date(2026, 2, 3, 5, 0, 0, 0, time.UTC),
-	}
-	if !compatibleTerminalItem(expected, current) {
-		t.Fatal("fact-bearing item rejected during recovery compatibility")
-	}
-	foreign := current
-	foreign.Reason = "a different item"
-	if compatibleTerminalItem(expected, foreign) {
-		t.Fatal("genuinely different item accepted")
-	}
-}
-
 // TestCompatibleTerminalItemIgnoresTiming: a delivery or an opened receipt
 // changes a stored item's timing and leaves its item_version alone (#1946),
 // so the stored item is neither a byte-for-byte replay of the rebuilt one nor

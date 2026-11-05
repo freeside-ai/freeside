@@ -4,6 +4,7 @@
 package fakepublication
 
 import (
+	"bytes"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
@@ -262,10 +263,18 @@ func TerminalDigest(task Task, item domain.AttentionItem) (domain.Digest, error)
 	// to open, and an item bound before the field existed keeps its digest.
 	// The shadowing fields win over the embedded item's and are always
 	// omitted; every other key keeps its place.
+	itemBody, err := json.Marshal(terminalDigestItem{AttentionItem: item})
+	if err != nil {
+		return "", fmt.Errorf("encode terminal binding: %w", err)
+	}
+	itemBody, err = withRetiredBaseFreshness(itemBody)
+	if err != nil {
+		return "", fmt.Errorf("encode terminal binding: %w", err)
+	}
 	payload, err := json.Marshal(struct {
-		Task Task               `json:"task"`
-		Item terminalDigestItem `json:"item"`
-	}{Task: task, Item: terminalDigestItem{AttentionItem: item}})
+		Task Task            `json:"task"`
+		Item json.RawMessage `json:"item"`
+	}{Task: task, Item: itemBody})
 	if err != nil {
 		return "", fmt.Errorf("encode terminal binding: %w", err)
 	}
@@ -273,23 +282,44 @@ func TerminalDigest(task Task, item domain.AttentionItem) (domain.Digest, error)
 	return domain.Digest(contentaddr.Format(sum[:])), nil
 }
 
+// retiredBaseFreshnessAnchor is the key the retired base_freshness member
+// preceded in every item encoding that carried it.
+var retiredBaseFreshnessAnchor = []byte(`,"readiness_invalidation":`)
+
+// withRetiredBaseFreshness puts the retired base_freshness member back, as the
+// explicit null every terminal item carried at binding (#2645): the
+// base-advance watch set it only after creation, and the commitment resets
+// to the created shape. Without it every stored binding would stop
+// authenticating. Inside a JSON string a quote is always escaped, so the
+// anchor matches only an object key, and only the item itself has this one;
+// an encoding without exactly one is refused rather than digested.
+func withRetiredBaseFreshness(itemBody []byte) ([]byte, error) {
+	if n := bytes.Count(itemBody, retiredBaseFreshnessAnchor); n != 1 {
+		return nil, fmt.Errorf("item encoding has %d readiness_invalidation keys, want 1", n)
+	}
+	return bytes.Replace(itemBody, retiredBaseFreshnessAnchor,
+		[]byte(`,"base_freshness":null`+string(retiredBaseFreshnessAnchor)), 1), nil
+}
+
 // TerminalDigestBeforePRReference reproduces the immutable item shape used by
 // fake-publication v1 before AttentionItem gained pr_reference.
 func TerminalDigestBeforePRReference(task Task, item domain.AttentionItem) (domain.Digest, error) {
 	type legacyAttentionItem struct {
-		ID                          domain.ItemID                              `json:"id"`
-		ProjectID                   domain.ProjectID                           `json:"project_id"`
-		Subject                     terminalSubjectBeforeTasks                 `json:"subject"`
-		Type                        domain.AttentionType                       `json:"type"`
-		Priority                    domain.Priority                            `json:"priority"`
-		Reason                      string                                     `json:"reason"`
-		RequestedDecision           []domain.Action                            `json:"requested_decision"`
-		EvidenceSnapshot            []domain.Artifact                          `json:"evidence_snapshot"`
-		AgentClaims                 []domain.AgentClaim                        `json:"agent_claims"`
-		ArtifactDigests             []domain.Digest                            `json:"artifact_digests"`
-		PRHeadSHA                   string                                     `json:"pr_head_sha"`
-		CommitPlanNotice            *domain.CommitPlanNoticeReason             `json:"commit_plan_notice"`
-		BaseFreshness               *domain.BaseFreshness                      `json:"base_freshness"`
+		ID                domain.ItemID                  `json:"id"`
+		ProjectID         domain.ProjectID               `json:"project_id"`
+		Subject           terminalSubjectBeforeTasks     `json:"subject"`
+		Type              domain.AttentionType           `json:"type"`
+		Priority          domain.Priority                `json:"priority"`
+		Reason            string                         `json:"reason"`
+		RequestedDecision []domain.Action                `json:"requested_decision"`
+		EvidenceSnapshot  []domain.Artifact              `json:"evidence_snapshot"`
+		AgentClaims       []domain.AgentClaim            `json:"agent_claims"`
+		ArtifactDigests   []domain.Digest                `json:"artifact_digests"`
+		PRHeadSHA         string                         `json:"pr_head_sha"`
+		CommitPlanNotice  *domain.CommitPlanNoticeReason `json:"commit_plan_notice"`
+		// BaseFreshness is retired (#2645) and stays nil, keeping the
+		// frozen explicit null in place.
+		BaseFreshness               *struct{}                                  `json:"base_freshness"`
 		ReadinessInvalidation       *domain.ReadinessInvalidation              `json:"readiness_invalidation"`
 		ReviewRecoveryBinding       *domain.ReviewRecoveryBinding              `json:"review_recovery_binding"`
 		ReviewConfigurationRecovery *domain.ReviewConfigurationRecoveryBinding `json:"review_configuration_recovery"`
@@ -312,7 +342,7 @@ func TerminalDigestBeforePRReference(task Task, item domain.AttentionItem) (doma
 		Priority: item.Priority, Reason: item.Reason, RequestedDecision: item.RequestedDecision,
 		EvidenceSnapshot: item.EvidenceSnapshot, AgentClaims: item.AgentClaims,
 		ArtifactDigests: item.ArtifactDigests, PRHeadSHA: item.PRHeadSHA,
-		CommitPlanNotice: item.CommitPlanNotice, BaseFreshness: item.BaseFreshness,
+		CommitPlanNotice:            item.CommitPlanNotice,
 		ReadinessInvalidation:       item.ReadinessInvalidation,
 		ReviewRecoveryBinding:       item.ReviewRecoveryBinding,
 		ReviewConfigurationRecovery: item.ReviewConfigurationRecovery,

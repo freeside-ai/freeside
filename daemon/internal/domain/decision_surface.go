@@ -34,8 +34,8 @@ import (
 // the identity of a prospective epoch before the artifact that opens it is
 // finalized (NextDecisionSurface). Nothing else advances the epoch: timing,
 // status, decided_at, expires_when, item_version, entity_version, readiness,
-// base freshness, the PR reference, recovery bindings, and eligibility changes
-// among source records are all non-surface, so a once-authoritative record is
+// the PR reference, recovery bindings, and eligibility changes among source
+// records are all non-surface, so a once-authoritative record is
 // never stranded by telemetry or by a sibling source joining or leaving.
 type DecisionSurface struct {
 	ItemID ItemID `json:"item_id"`
