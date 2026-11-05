@@ -33,24 +33,34 @@ const quotaParkReattemptReason = "Provider quota window exhausted; resume after 
 func quotaRefusalPool(
 	ctx context.Context, tx *store.ReadTx, invocationID domain.InvocationID,
 ) (domain.UsagePoolID, bool, error) {
-	admission, err := tx.GetExecutionAdmissionRecord(ctx, invocationID)
+	_, pool, found, err := admittedPool(ctx, tx, invocationID)
+	return pool, found, err
+}
+
+// admittedPool returns an invocation's admission and the usage pool its
+// admitted identity meters. found is false when the invocation has no
+// admission, the admission no identity, or the identity is gone.
+func admittedPool(
+	ctx context.Context, tx *store.ReadTx, invocationID domain.InvocationID,
+) (admission domain.ExecutionAdmission, pool domain.UsagePoolID, found bool, err error) {
+	admission, err = tx.GetExecutionAdmissionRecord(ctx, invocationID)
 	if errors.Is(err, store.ErrNotFound) {
-		return "", false, nil
+		return domain.ExecutionAdmission{}, "", false, nil
 	}
 	if err != nil {
-		return "", false, err
+		return domain.ExecutionAdmission{}, "", false, err
 	}
 	if admission.AuthIdentityID == nil {
-		return "", false, nil
+		return admission, "", false, nil
 	}
 	identity, err := tx.GetAuthIdentity(ctx, *admission.AuthIdentityID)
 	if errors.Is(err, store.ErrNotFound) {
-		return "", false, nil
+		return admission, "", false, nil
 	}
 	if err != nil {
-		return "", false, err
+		return domain.ExecutionAdmission{}, "", false, err
 	}
-	return identity.EffectiveUsagePool(), true, nil
+	return admission, identity.EffectiveUsagePool(), true, nil
 }
 
 // quotaParkHold marks the refused window and returns the hold its next

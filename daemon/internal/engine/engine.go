@@ -88,6 +88,9 @@ type Engine struct {
 	// pace bounds the per-pass observation writes (issue #394); process
 	// state only, never authority.
 	pace observationPace
+	// claudeUsage receives a writer turn's usage capture (see
+	// WithClaudeUsageSink); nil drops it.
+	claudeUsage ClaudeUsageSink
 	// logger reports what the reconcile loops do. Never nil after New, so
 	// the loops log without checking.
 	logger *slog.Logger
