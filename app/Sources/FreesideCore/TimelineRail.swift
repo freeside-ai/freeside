@@ -27,9 +27,9 @@ struct TimelineRail: View {
         /// Nil when the record holds no instant for the entry; the row then
         /// draws no time.
         let recordedAt: Date?
-        /// The attempt the entry belongs to, drawn as a dim sub line under
-        /// the label. The task's events name their attempt in the label and
-        /// carry none.
+        /// A dim sub line under the label: the attempt the entry belongs
+        /// to on a run's rail. The task's events name their attempt in the
+        /// label; only a triage event carries one, its advisory reason.
         var context: String?
         /// The newest entry, which reads as the head of the rail. On the
         /// task's events a stage start merges into the event it is read

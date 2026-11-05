@@ -102,30 +102,38 @@ func (t TaskTriage) Validate() error {
 	if t.TaskID == "" {
 		return fmt.Errorf("task triage task_id: %w", ErrEmptyID)
 	}
-	if !t.Outcome.valid() {
-		return fmt.Errorf("task triage %s outcome %q: %w", t.TaskID, t.Outcome, ErrInvalidTriageOutcome)
-	}
-	if (t.Tier != nil) != (t.Outcome == TriageOutcomeAnswered) {
-		return fmt.Errorf("task triage %s outcome %s tier: %w", t.TaskID, t.Outcome, ErrTaskTriageInconsistent)
-	}
-	if t.Tier != nil && !t.Tier.valid() {
-		return fmt.Errorf("task triage %s tier %q: %w", t.TaskID, *t.Tier, ErrInvalidTriageTier)
-	}
-	if t.Escalated != TriageEscalates(t.Outcome, t.Tier) {
-		return fmt.Errorf("task triage %s outcome %s escalated %t: %w",
-			t.TaskID, t.Outcome, t.Escalated, ErrTaskTriageInconsistent)
-	}
-	if t.Reason != nil {
-		reason := *t.Reason
-		if strings.TrimSpace(reason) == "" || !utf8.ValidString(reason) || len(reason) > maxTriageReasonBytes {
-			return fmt.Errorf("task triage %s reason: %w", t.TaskID, ErrTaskTriageInconsistent)
-		}
+	if err := validateTriageOutcome(t.Outcome, t.Tier, t.Reason, t.Escalated); err != nil {
+		return fmt.Errorf("task triage %s %w", t.TaskID, err)
 	}
 	if t.RecordedAt.IsZero() {
 		return fmt.Errorf("task triage %s recorded_at: %w", t.TaskID, ErrMissingTimestamp)
 	}
 	if t.RecordedAt.Location() != time.UTC {
 		return fmt.Errorf("task triage %s recorded_at: %w", t.TaskID, ErrTimestampNotUTC)
+	}
+	return nil
+}
+
+// validateTriageOutcome holds a triage's outcome, tier, reason, and escalated
+// bit to one another. The record and the timeline event that shows it share
+// it, so the event can never show a combination the record refuses.
+func validateTriageOutcome(outcome TriageOutcome, tier *TriageTier, reason *string, escalated bool) error {
+	if !outcome.valid() {
+		return fmt.Errorf("outcome %q: %w", outcome, ErrInvalidTriageOutcome)
+	}
+	if (tier != nil) != (outcome == TriageOutcomeAnswered) {
+		return fmt.Errorf("outcome %s tier: %w", outcome, ErrTaskTriageInconsistent)
+	}
+	if tier != nil && !tier.valid() {
+		return fmt.Errorf("tier %q: %w", *tier, ErrInvalidTriageTier)
+	}
+	if escalated != TriageEscalates(outcome, tier) {
+		return fmt.Errorf("outcome %s escalated %t: %w", outcome, escalated, ErrTaskTriageInconsistent)
+	}
+	if reason != nil {
+		if strings.TrimSpace(*reason) == "" || !utf8.ValidString(*reason) || len(*reason) > maxTriageReasonBytes {
+			return fmt.Errorf("reason: %w", ErrTaskTriageInconsistent)
+		}
 	}
 	return nil
 }

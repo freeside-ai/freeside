@@ -2802,6 +2802,7 @@ components:
             verification: null
             external_review: null
             line: null
+            triage: null
         sections: []
 
     TaskTimelineSection:
@@ -2914,9 +2915,12 @@ components:
         task_line_set requires line and no run_id: one task line version, at
         its set_at. A switch is the event whose line names the agent left
         (superseded_agent, or provenance.passed_over) and the agent taken.
+        specifier_triaged requires triage and no run_id: the task's one
+        triage record (plan §5.13), at its recorded_at. Its reason is
+        advisory, for display only.
         All other details are null. Events are observations, never authority.
       additionalProperties: false
-      required: [kind, recorded_at, campaign_id, run_id, approved_spec_digest, specification_run_id, pr_number, merge_commit_sha, milestone, review, verification, external_review, line]
+      required: [kind, recorded_at, campaign_id, run_id, approved_spec_digest, specification_run_id, pr_number, merge_commit_sha, milestone, review, verification, external_review, line, triage]
       properties:
         milestone:
           nullable: true
@@ -2938,6 +2942,10 @@ components:
           nullable: true
           allOf:
             - $ref: "#/components/schemas/TaskEventTaskLine"
+        triage:
+          nullable: true
+          allOf:
+            - $ref: "#/components/schemas/TaskEventTriage"
         kind:
           $ref: "#/components/schemas/TaskEventKind"
         recorded_at:
@@ -2981,6 +2989,7 @@ components:
         verification: null
         external_review: null
         line: null
+        triage: null
 
     TaskEventReview:
       type: object
@@ -3090,10 +3099,52 @@ components:
           allOf:
             - $ref: "#/components/schemas/TaskLineProvenance"
 
+    TaskEventTriage:
+      type: object
+      description: >
+        A task's triage record as the timeline shows it (plan §5.13,
+        Specifier Triage). tier is the triager's answer, present exactly when
+        outcome is answered. Every outcome but an answered standard
+        escalates, and escalated says whether this one did. reason is the
+        triager's reason, or the daemon's fallback code for a failure, and
+        null when there is none; it is advisory and never a decision.
+      additionalProperties: false
+      required: [outcome, tier, reason, escalated]
+      properties:
+        outcome:
+          $ref: "#/components/schemas/TriageOutcome"
+        tier:
+          nullable: true
+          allOf:
+            - $ref: "#/components/schemas/TriageTier"
+        reason:
+          type: string
+          minLength: 1
+          maxLength: 1024
+          nullable: true
+        escalated:
+          type: boolean
+
+    TriageOutcome:
+      type: string
+      description: >
+        What the triager's one call for a task came to: answered, or the
+        failure or skip that stood in for an answer (call_failed,
+        invalid_answer, budget_spent, no_triager_line).
+      enum: [answered, call_failed, invalid_answer, budget_spent, no_triager_line]
+
+    TriageTier:
+      type: string
+      description: >
+        The triager's bounded choice: standard keeps the specifier on its
+        lineup agent; escalated moves it to that agent's escalated
+        counterpart.
+      enum: [standard, escalated]
+
     TaskEventKind:
       type: string
       description: Closed vocabulary of recorded task-wide milestone history.
-      enum: [task_created, task_started, task_completed, task_abandoned, stop_requested, task_stopped, stop_failed, run_milestone, review_requested, review_completed, review_failed, verification_recorded, campaign_allocated, specification_approved, pr_opened, pr_merged, external_review_reentered, task_line_set]
+      enum: [task_created, task_started, task_completed, task_abandoned, stop_requested, task_stopped, stop_failed, run_milestone, review_requested, review_completed, review_failed, verification_recorded, campaign_allocated, specification_approved, pr_opened, pr_merged, external_review_reentered, task_line_set, specifier_triaged]
       example: task_created
 
     TaskRunRole:

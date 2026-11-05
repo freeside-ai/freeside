@@ -47,6 +47,8 @@ func TestOpenAPIEnumsMatchDomain(t *testing.T) {
 		"TaskLineRole":               enumStrings(domain.TaskLineRoles),
 		"TaskLineSource":             enumStrings(domain.AllTaskLineSources),
 		"TaskLineSelectionTier":      enumStrings(domain.AllTaskLineSelectionTiers),
+		"TriageOutcome":              enumStrings(domain.AllTriageOutcomes),
+		"TriageTier":                 enumStrings(domain.AllTriageTiers),
 		"BlockedWaitKind":            enumStrings(domain.AllBlockedWaitKinds),
 		"BlockedKind":                enumStrings(domain.AllBlockedKinds),
 		"AnswerRoute":                enumStrings(domain.AllAnswerRoutes),

@@ -39,6 +39,9 @@ func TestTaskEventDetailContract(t *testing.T) {
 			},
 		},
 	}
+	triage := TaskEventTriage{
+		Outcome: TriageOutcomeAnswered, Tier: ptr(TriageTierEscalated), Reason: ptr("A contract change."), Escalated: true,
+	}
 	fixtures := []TaskEvent{
 		{Kind: TaskEventCreated, RecordedAt: at},
 		{Kind: TaskEventCampaignAllocated, RecordedAt: at, CampaignID: ptr(CampaignID("campaign-1")), SpecificationRunID: ptr(RunID("spec-1"))},
@@ -47,6 +50,7 @@ func TestTaskEventDetailContract(t *testing.T) {
 		{Kind: TaskEventPRMerged, RecordedAt: at, RunID: ptr(RunID("impl-1")), PRNumber: ptr(42), MergeCommitSHA: ptr("abc123")},
 		{Kind: TaskEventExternalReviewReentered, RecordedAt: at, RunID: ptr(RunID("impl-1")), PRNumber: ptr(42), ExternalReview: &externalReview},
 		{Kind: TaskEventTaskLineSet, RecordedAt: at, Line: &line},
+		{Kind: TaskEventSpecifierTriaged, RecordedAt: at, Triage: &triage},
 	}
 	for _, event := range fixtures {
 		t.Run(string(event.Kind), func(t *testing.T) {
@@ -64,6 +68,7 @@ func TestTaskEventDetailContract(t *testing.T) {
 				func(e *TaskEvent) { e.MergeCommitSHA = toggled(e.MergeCommitSHA, "abc123") },
 				func(e *TaskEvent) { e.ExternalReview = toggled(e.ExternalReview, externalReview) },
 				func(e *TaskEvent) { e.Line = toggled(e.Line, line) },
+				func(e *TaskEvent) { e.Triage = toggled(e.Triage, triage) },
 			} {
 				invalid := event
 				change(&invalid)
@@ -157,6 +162,49 @@ func TestTaskEventDetailContract(t *testing.T) {
 	}
 }
 
+// A triage detail holds to the record's own rules: a tier exactly when the
+// triager answered, an escalated bit that follows from the outcome and tier,
+// and a bounded, non-blank UTF-8 reason.
+func TestTaskEventTriageDetail(t *testing.T) {
+	at := time.Date(2026, 11, 5, 12, 0, 0, 0, time.UTC)
+	for name, detail := range map[string]TaskEventTriage{
+		"answered standard":  {Outcome: TriageOutcomeAnswered, Tier: ptr(TriageTierStandard), Reason: ptr("Small fix.")},
+		"answered escalated": {Outcome: TriageOutcomeAnswered, Tier: ptr(TriageTierEscalated), Escalated: true},
+		"call failed":        {Outcome: TriageOutcomeCallFailed, Reason: ptr("driver_failed"), Escalated: true},
+		"invalid answer":     {Outcome: TriageOutcomeInvalidAnswer, Escalated: true},
+		"budget spent":       {Outcome: TriageOutcomeBudgetSpent, Escalated: true},
+		"no triager line":    {Outcome: TriageOutcomeNoTriagerLine, Escalated: true},
+		"longest reason":     {Outcome: TriageOutcomeCallFailed, Reason: ptr(strings.Repeat("界", 341)), Escalated: true},
+	} {
+		if err := (TaskEvent{Kind: TaskEventSpecifierTriaged, RecordedAt: at, Triage: &detail}).Validate(); err != nil {
+			t.Errorf("%s: %v", name, err)
+		}
+	}
+	for name, detail := range map[string]TaskEventTriage{
+		"unknown outcome":       {Outcome: "skipped", Escalated: true},
+		"answer without tier":   {Outcome: TriageOutcomeAnswered, Escalated: true},
+		"failure with tier":     {Outcome: TriageOutcomeCallFailed, Tier: ptr(TriageTierEscalated), Escalated: true},
+		"unknown tier":          {Outcome: TriageOutcomeAnswered, Tier: ptr(TriageTier("large")), Escalated: true},
+		"standard escalated":    {Outcome: TriageOutcomeAnswered, Tier: ptr(TriageTierStandard), Escalated: true},
+		"escalated not flagged": {Outcome: TriageOutcomeAnswered, Tier: ptr(TriageTierEscalated)},
+		"failure not escalated": {Outcome: TriageOutcomeBudgetSpent},
+		"blank reason":          {Outcome: TriageOutcomeCallFailed, Reason: ptr(" \n"), Escalated: true},
+		"invalid utf-8 reason":  {Outcome: TriageOutcomeCallFailed, Reason: ptr("\xff"), Escalated: true},
+		"oversized reason":      {Outcome: TriageOutcomeCallFailed, Reason: ptr(strings.Repeat("a", 1025)), Escalated: true},
+	} {
+		invalid := TaskEvent{Kind: TaskEventSpecifierTriaged, RecordedAt: at, Triage: &detail}
+		if err := invalid.Validate(); !errors.Is(err, ErrTaskEventDetailMismatch) {
+			t.Errorf("%s: %v", name, err)
+		}
+	}
+	// The event is task-scoped: it names no run.
+	detail := TaskEventTriage{Outcome: TriageOutcomeNoTriagerLine, Escalated: true}
+	run := RunID("spec-1")
+	if err := (TaskEvent{Kind: TaskEventSpecifierTriaged, RecordedAt: at, RunID: &run, Triage: &detail}).Validate(); !errors.Is(err, ErrTaskEventDetailMismatch) {
+		t.Fatalf("triage event naming a run: %v", err)
+	}
+}
+
 func toggled[T any](value *T, replacement T) *T {
 	if value != nil {
 		return nil
@@ -185,7 +233,7 @@ func TestTaskHistoryEventDetails(t *testing.T) {
 		{Kind: TaskEventReviewFailed, RecordedAt: at, RunID: &run, Review: &failed},
 		{Kind: TaskEventVerificationRecorded, RecordedAt: at, RunID: &run, Verification: &TaskEventVerification{ItemID: "ready", Class: ReadinessReadyClean, HeadSHA: "head", BaseSHA: "base"}},
 	}
-	if len(fixtures)+7 != len(AllTaskEventKinds) {
+	if len(fixtures)+8 != len(AllTaskEventKinds) {
 		t.Fatal("new event kinds need detail fixtures")
 	}
 	for _, e := range fixtures {

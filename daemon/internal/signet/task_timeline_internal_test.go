@@ -25,7 +25,16 @@ func taskTimelineFixture(t *testing.T) TaskTimeline {
 		}
 	}
 	lines := taskTimelineFixtureLines(t, task)
-	timeline, err := taskTimeline(task, lines, inputs, 42, task.CreatedAt.Add(8*time.Hour))
+	// The triager escalated the task before the router's first admission.
+	triage := &domain.TaskTriage{
+		TaskID: task.ID, Outcome: domain.TriageOutcomeAnswered, Tier: new(domain.TriageTierEscalated),
+		Reason: new("Changes the API schema and its generated clients."), Escalated: true,
+		RecordedAt: task.CreatedAt.Add(80 * time.Minute),
+	}
+	if err := triage.Validate(); err != nil {
+		t.Fatal(err)
+	}
+	timeline, err := taskTimeline(task, lines, triage, inputs, 42, task.CreatedAt.Add(8*time.Hour))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -178,7 +187,7 @@ func TestTaskTimelineRejectsContradictoryMembershipAndMissingAllocation(t *testi
 		t.Run(name, func(t *testing.T) {
 			task, inputs := taskTimelineFixtureInputs()
 			change(&task, inputs)
-			if _, err := taskTimeline(task, nil, inputs, 42, task.CreatedAt); !errors.Is(err, ErrRunObservationIntegrity) {
+			if _, err := taskTimeline(task, nil, nil, inputs, 42, task.CreatedAt); !errors.Is(err, ErrRunObservationIntegrity) {
 				t.Fatalf("error = %v, want ErrRunObservationIntegrity", err)
 			}
 		})
@@ -188,7 +197,7 @@ func TestTaskTimelineRejectsContradictoryMembershipAndMissingAllocation(t *testi
 func TestTaskTimelineLegacyAndEmptyHistory(t *testing.T) {
 	task, _ := taskTimelineFixtureInputs()
 	task.CampaignIDs = []domain.CampaignID{}
-	empty, err := taskTimeline(task, nil, nil, 42, task.CreatedAt)
+	empty, err := taskTimeline(task, nil, nil, nil, 42, task.CreatedAt)
 	if err != nil || empty.Sections == nil || len(empty.Sections) != 0 || len(empty.Events) != 1 {
 		t.Fatalf("empty history = %+v, %v", empty, err)
 	}
@@ -196,7 +205,7 @@ func TestTaskTimelineLegacyAndEmptyHistory(t *testing.T) {
 		run:         domain.Run{ID: "legacy", TaskID: task.ID, ProjectID: task.ProjectID},
 		observation: domain.RunObservation{RunID: "legacy"},
 	}
-	got, err := taskTimeline(task, nil, []taskTimelineInput{legacy}, 42, task.CreatedAt)
+	got, err := taskTimeline(task, nil, nil, []taskTimelineInput{legacy}, 42, task.CreatedAt)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -223,7 +232,7 @@ func TestTaskTimelineEmitsOneEventPerLineVersion(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	got, err := taskTimeline(task, []domain.TaskLine{routed, operator, changed}, nil, 42, task.CreatedAt)
+	got, err := taskTimeline(task, []domain.TaskLine{routed, operator, changed}, nil, nil, 42, task.CreatedAt)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -270,7 +279,7 @@ func TestTaskTimelineShowsAClearAndTheLineAfterIt(t *testing.T) {
 	}
 	cleared := line(domain.TaskLineInput{Cleared: true}, 2, first, 2*time.Hour)
 	again := line(domain.TaskLineInput{Agent: "claude-a"}, 3, cleared, 3*time.Hour)
-	got, err := taskTimeline(task, []domain.TaskLine{first, cleared, again}, nil, 42, task.CreatedAt)
+	got, err := taskTimeline(task, []domain.TaskLine{first, cleared, again}, nil, nil, 42, task.CreatedAt)
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -155,6 +155,32 @@ func TestTaskTimelineSpecificationOnly(t *testing.T) {
 	if err := json.Unmarshal(response.Body.Bytes(), &decoded); err != nil || decoded.TaskID != task.ID || decoded.AsOfRevision != timeline.AsOfRevision {
 		t.Fatalf("HTTP timeline = %+v: %v", decoded, err)
 	}
+
+	// The task's triage record shows as one task-scoped event at its
+	// instant, with the record's outcome, tier, reason, and escalated bit.
+	reason := "Changes the API schema."
+	record := domain.TaskTriage{
+		TaskID: task.ID, Outcome: domain.TriageOutcomeAnswered, Tier: new(domain.TriageTierEscalated),
+		Reason: &reason, Escalated: true, RecordedAt: at.Add(30 * time.Second),
+	}
+	if err := f.store.Write(ctx, func(tx *store.WriteTx) error { return tx.RecordTaskTriage(ctx, record) }); err != nil {
+		t.Fatal(err)
+	}
+	triaged, err := f.service.GetTaskTimeline(ctx, task.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var events []domain.TaskEvent
+	for _, event := range triaged.Events {
+		if event.Kind == domain.TaskEventSpecifierTriaged {
+			events = append(events, event)
+		}
+	}
+	want := domain.TaskEventTriage{Outcome: record.Outcome, Tier: record.Tier, Reason: record.Reason, Escalated: true}
+	if len(triaged.Events) != 5 || len(events) != 1 || !events[0].RecordedAt.Equal(record.RecordedAt) ||
+		events[0].RunID != nil || events[0].Triage == nil || !reflect.DeepEqual(*events[0].Triage, want) {
+		t.Fatalf("triage events = %+v in %+v", events, triaged.Events)
+	}
 }
 
 func TestTaskTimelineUnknownAndEmptyTask(t *testing.T) {

@@ -1218,7 +1218,7 @@ freesided inspect proposals -db <db>
 - `tasks`: every task the store holds, with `task_id`, `project_id`,
   `created_at`, and `latest_run_id` (`null` before the first run).
 
-`freesided inspect task` prints one task's record, `freeside-task-record-v13`.
+`freesided inspect task` prints one task's record, `freeside-task-record-v14`.
 Every section is read in one transaction, at the store revision
 `as_of_revision`; `as_of` is the read time. To wait for a change, read again
 and compare `as_of_revision`. A revision that hasn't moved means no recorded
@@ -1352,7 +1352,7 @@ Reading the record:
   `unapproved_recipe` says so on stderr; stdout stays one JSON line.
 - **The timeline's and the card's shapes are part of the record's version.**
   A change to the task timeline, its events, or the proposal card changes
-  `freeside-task-record-v13`.
+  `freeside-task-record-v14`.
 - **`specification_retries` names each specification retry.** A retry adds
   an iteration to the same specification run, so the run's `invocations`
   list the failed invocation and the one that repeats it. The entries are
@@ -2847,7 +2847,10 @@ that was passed over (`passed_over`). `GET /tasks/{task_id}/timeline` shows ever
 as a `task_line_set` event at its `set_at`, and the synced task carries each
 role's current line in `task_lines`. A version from `freesided task-line
 -clear` shows as an event with a null `agent`, and the synced task then
-carries no line for that role.
+carries no line for that role. A task's specifier triage shows as one
+`specifier_triaged` event at its `recorded_at`, with a `triage` detail:
+the outcome, the tier and reason of an answer (or the daemon's fallback
+code as the reason of a failure), and whether the specifier escalates.
 
 For a preflight-bound submission, choose one `--submission-id <identity>` and
 pass it to both `preflight` and `submit`. Reusing it with different input

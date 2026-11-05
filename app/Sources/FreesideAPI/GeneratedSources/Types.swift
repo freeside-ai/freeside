@@ -5577,7 +5577,7 @@ public enum Components {
                 ])
             }
         }
-        /// A recorded fact and its instant, with kind-scoped details. task_created has no details. campaign_allocated requires campaign_id and specification_run_id. specification_approved also requires run_id (the initial implementation) and approved_spec_digest; its instant is that run's submission, committed with approval. Retries reuse approval and emit no new approval event. pr_opened requires run_id and pr_number and uses the daemon's PR binding instant. pr_merged also requires merge_commit_sha and uses the re-gated completion record's instant. task_started, task_completed and task_abandoned require the recorded run_id and retain campaign_id when the lifecycle fact has one. stop_requested, task_stopped and stop_failed have no details; request acceptance and confirmed stopping are distinct events, including for queued tasks with no run. run_milestone requires run_id and milestone, with matching run and timestamp. review_requested, review_completed and review_failed require run_id and review; outcome is present only for completed, failure only for failed. verification_recorded requires run_id and verification, referring to a dated readiness decision with detailed results. It never establishes current readiness. external_review_reentered requires run_id, pr_number and external_review: an admitted external reviewer's finding withdrew the run's ready card and opened another review round. Its instant is the card's conclusion. It reads the recorded finding, not current admission, so a later trust-profile change does not hide it. task_line_set requires line and no run_id: one task line version, at its set_at. A switch is the event whose line names the agent left (superseded_agent, or provenance.passed_over) and the agent taken. All other details are null. Events are observations, never authority.
+        /// A recorded fact and its instant, with kind-scoped details. task_created has no details. campaign_allocated requires campaign_id and specification_run_id. specification_approved also requires run_id (the initial implementation) and approved_spec_digest; its instant is that run's submission, committed with approval. Retries reuse approval and emit no new approval event. pr_opened requires run_id and pr_number and uses the daemon's PR binding instant. pr_merged also requires merge_commit_sha and uses the re-gated completion record's instant. task_started, task_completed and task_abandoned require the recorded run_id and retain campaign_id when the lifecycle fact has one. stop_requested, task_stopped and stop_failed have no details; request acceptance and confirmed stopping are distinct events, including for queued tasks with no run. run_milestone requires run_id and milestone, with matching run and timestamp. review_requested, review_completed and review_failed require run_id and review; outcome is present only for completed, failure only for failed. verification_recorded requires run_id and verification, referring to a dated readiness decision with detailed results. It never establishes current readiness. external_review_reentered requires run_id, pr_number and external_review: an admitted external reviewer's finding withdrew the run's ready card and opened another review round. Its instant is the card's conclusion. It reads the recorded finding, not current admission, so a later trust-profile change does not hide it. task_line_set requires line and no run_id: one task line version, at its set_at. A switch is the event whose line names the agent left (superseded_agent, or provenance.passed_over) and the agent taken. specifier_triaged requires triage and no run_id: the task's one triage record (plan §5.13), at its recorded_at. Its reason is advisory, for display only. All other details are null. Events are observations, never authority.
         ///
         ///
         /// - Remark: Generated from `#/components/schemas/TaskEvent`.
@@ -5682,6 +5682,26 @@ public enum Components {
             }
             /// - Remark: Generated from `#/components/schemas/TaskEvent/line`.
             public var line: Components.Schemas.TaskEvent.linePayload?
+            /// - Remark: Generated from `#/components/schemas/TaskEvent/triage`.
+            public struct triagePayload: Codable, Hashable, Sendable {
+                /// - Remark: Generated from `#/components/schemas/TaskEvent/triage/value1`.
+                public var value1: Components.Schemas.TaskEventTriage
+                /// Creates a new `triagePayload`.
+                ///
+                /// - Parameters:
+                ///   - value1:
+                public init(value1: Components.Schemas.TaskEventTriage) {
+                    self.value1 = value1
+                }
+                public init(from decoder: any Swift.Decoder) throws {
+                    self.value1 = try .init(from: decoder)
+                }
+                public func encode(to encoder: any Swift.Encoder) throws {
+                    try self.value1.encode(to: encoder)
+                }
+            }
+            /// - Remark: Generated from `#/components/schemas/TaskEvent/triage`.
+            public var triage: Components.Schemas.TaskEvent.triagePayload?
             /// - Remark: Generated from `#/components/schemas/TaskEvent/kind`.
             public var kind: Components.Schemas.TaskEventKind
             /// - Remark: Generated from `#/components/schemas/TaskEvent/recorded_at`.
@@ -5724,6 +5744,7 @@ public enum Components {
             ///   - verification:
             ///   - external_review:
             ///   - line:
+            ///   - triage:
             ///   - kind:
             ///   - recorded_at:
             ///   - campaign_id:
@@ -5738,6 +5759,7 @@ public enum Components {
                 verification: Components.Schemas.TaskEvent.verificationPayload? = nil,
                 external_review: Components.Schemas.TaskEvent.external_reviewPayload? = nil,
                 line: Components.Schemas.TaskEvent.linePayload? = nil,
+                triage: Components.Schemas.TaskEvent.triagePayload? = nil,
                 kind: Components.Schemas.TaskEventKind,
                 recorded_at: Foundation.Date,
                 campaign_id: Swift.String? = nil,
@@ -5752,6 +5774,7 @@ public enum Components {
                 self.verification = verification
                 self.external_review = external_review
                 self.line = line
+                self.triage = triage
                 self.kind = kind
                 self.recorded_at = recorded_at
                 self.campaign_id = campaign_id
@@ -5767,6 +5790,7 @@ public enum Components {
                 case verification
                 case external_review
                 case line
+                case triage
                 case kind
                 case recorded_at
                 case campaign_id
@@ -5797,6 +5821,10 @@ public enum Components {
                 self.line = try container.decodeIfPresent(
                     Components.Schemas.TaskEvent.linePayload.self,
                     forKey: .line
+                )
+                self.triage = try container.decodeIfPresent(
+                    Components.Schemas.TaskEvent.triagePayload.self,
+                    forKey: .triage
                 )
                 self.kind = try container.decode(
                     Components.Schemas.TaskEventKind.self,
@@ -5836,6 +5864,7 @@ public enum Components {
                     "verification",
                     "external_review",
                     "line",
+                    "triage",
                     "kind",
                     "recorded_at",
                     "campaign_id",
@@ -6204,6 +6233,106 @@ public enum Components {
                 ])
             }
         }
+        /// A task's triage record as the timeline shows it (plan §5.13, Specifier Triage). tier is the triager's answer, present exactly when outcome is answered. Every outcome but an answered standard escalates, and escalated says whether this one did. reason is the triager's reason, or the daemon's fallback code for a failure, and null when there is none; it is advisory and never a decision.
+        ///
+        ///
+        /// - Remark: Generated from `#/components/schemas/TaskEventTriage`.
+        public struct TaskEventTriage: Codable, Hashable, Sendable {
+            /// - Remark: Generated from `#/components/schemas/TaskEventTriage/outcome`.
+            public var outcome: Components.Schemas.TriageOutcome
+            /// - Remark: Generated from `#/components/schemas/TaskEventTriage/tier`.
+            public struct tierPayload: Codable, Hashable, Sendable {
+                /// - Remark: Generated from `#/components/schemas/TaskEventTriage/tier/value1`.
+                public var value1: Components.Schemas.TriageTier
+                /// Creates a new `tierPayload`.
+                ///
+                /// - Parameters:
+                ///   - value1:
+                public init(value1: Components.Schemas.TriageTier) {
+                    self.value1 = value1
+                }
+                public init(from decoder: any Swift.Decoder) throws {
+                    self.value1 = try decoder.decodeFromSingleValueContainer()
+                }
+                public func encode(to encoder: any Swift.Encoder) throws {
+                    try encoder.encodeToSingleValueContainer(self.value1)
+                }
+            }
+            /// - Remark: Generated from `#/components/schemas/TaskEventTriage/tier`.
+            public var tier: Components.Schemas.TaskEventTriage.tierPayload?
+            /// - Remark: Generated from `#/components/schemas/TaskEventTriage/reason`.
+            public var reason: Swift.String?
+            /// - Remark: Generated from `#/components/schemas/TaskEventTriage/escalated`.
+            public var escalated: Swift.Bool
+            /// Creates a new `TaskEventTriage`.
+            ///
+            /// - Parameters:
+            ///   - outcome:
+            ///   - tier:
+            ///   - reason:
+            ///   - escalated:
+            public init(
+                outcome: Components.Schemas.TriageOutcome,
+                tier: Components.Schemas.TaskEventTriage.tierPayload? = nil,
+                reason: Swift.String? = nil,
+                escalated: Swift.Bool
+            ) {
+                self.outcome = outcome
+                self.tier = tier
+                self.reason = reason
+                self.escalated = escalated
+            }
+            public enum CodingKeys: String, CodingKey {
+                case outcome
+                case tier
+                case reason
+                case escalated
+            }
+            public init(from decoder: any Swift.Decoder) throws {
+                let container = try decoder.container(keyedBy: CodingKeys.self)
+                self.outcome = try container.decode(
+                    Components.Schemas.TriageOutcome.self,
+                    forKey: .outcome
+                )
+                self.tier = try container.decodeIfPresent(
+                    Components.Schemas.TaskEventTriage.tierPayload.self,
+                    forKey: .tier
+                )
+                self.reason = try container.decodeIfPresent(
+                    Swift.String.self,
+                    forKey: .reason
+                )
+                self.escalated = try container.decode(
+                    Swift.Bool.self,
+                    forKey: .escalated
+                )
+                try decoder.ensureNoAdditionalProperties(knownKeys: [
+                    "outcome",
+                    "tier",
+                    "reason",
+                    "escalated"
+                ])
+            }
+        }
+        /// What the triager's one call for a task came to: answered, or the failure or skip that stood in for an answer (call_failed, invalid_answer, budget_spent, no_triager_line).
+        ///
+        ///
+        /// - Remark: Generated from `#/components/schemas/TriageOutcome`.
+        @frozen public enum TriageOutcome: String, Codable, Hashable, Sendable, CaseIterable {
+            case answered = "answered"
+            case call_failed = "call_failed"
+            case invalid_answer = "invalid_answer"
+            case budget_spent = "budget_spent"
+            case no_triager_line = "no_triager_line"
+        }
+        /// The triager's bounded choice: standard keeps the specifier on its lineup agent; escalated moves it to that agent's escalated counterpart.
+        ///
+        ///
+        /// - Remark: Generated from `#/components/schemas/TriageTier`.
+        @frozen public enum TriageTier: String, Codable, Hashable, Sendable, CaseIterable {
+            case standard = "standard"
+            case escalated = "escalated"
+        }
         /// Closed vocabulary of recorded task-wide milestone history.
         ///
         /// - Remark: Generated from `#/components/schemas/TaskEventKind`.
@@ -6226,6 +6355,7 @@ public enum Components {
             case pr_merged = "pr_merged"
             case external_review_reentered = "external_review_reentered"
             case task_line_set = "task_line_set"
+            case specifier_triaged = "specifier_triaged"
         }
         /// The run's role in its production attempt.
         ///

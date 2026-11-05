@@ -53,6 +53,11 @@ enum TaskStageFixtures {
             oldestFirst.append(.init(kind: kind, recorded_at: now, run_id: run, pr_number: pr))
         }
 
+        /// The task's one triage record, which names no run.
+        mutating func triage(_ triage: Components.Schemas.TaskEventTriage) {
+            oldestFirst.append(.init(triage: .init(value1: triage), kind: .specifier_triaged, recorded_at: now))
+        }
+
         mutating func campaign(_ id: String, specification run: String) {
             sections.insert(.init(campaign_id: id, events: [], runs: []), at: 0)
             section(
@@ -303,6 +308,13 @@ enum TaskStageFixtures {
         }
         script.event(.task_started, run: specificationRun)
         script.campaign(campaign, specification: specificationRun)
+        if scenario == .specification {
+            // The triager escalated the specifier before its first admission.
+            script.triage(
+                .init(
+                    outcome: .answered, tier: .init(value1: .escalated),
+                    reason: "Changes the API schema and its generated clients.", escalated: true))
+        }
         script.wait(1)
         script.submit(specificationRun, role: .specification, attempt: 1, campaign: campaign)
         if scenario == .specification { return script }
