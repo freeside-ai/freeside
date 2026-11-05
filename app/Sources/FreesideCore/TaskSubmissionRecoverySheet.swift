@@ -80,8 +80,9 @@ struct TaskSubmissionRecoverySheet: View {
     }
 
     /// One saved request as a bordered item (R3): what it is and where it
-    /// runs, its optional name and agents, the work it asks for, and its own
-    /// Retry.
+    /// runs, its agents, the work it asks for, and its own Retry. A request
+    /// an older build saved may carry a name; the composer no longer asks
+    /// for one, so the item doesn't show it.
     private func request(
         _ payload: Components.Schemas.SubmitTaskPayload, index: Int, commandID: String
     ) -> some View {
@@ -90,11 +91,6 @@ struct TaskSubmissionRecoverySheet: View {
                 Text("New task · \(payload.project_id)")
                     .font(FreesideFont.factLabel)
                     .foregroundStyle(Color.ink)
-                if let name = payload.name, !name.isEmpty {
-                    Text(name)
-                        .font(FreesideFont.cardBody)
-                        .foregroundStyle(Color.inkDim)
-                }
                 // Retry resends these lines unchanged, so show them.
                 if let agents = AgentChoiceDisplay.summary(payload.task_lines) {
                     Text(agents)
