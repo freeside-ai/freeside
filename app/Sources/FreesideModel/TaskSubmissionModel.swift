@@ -1,6 +1,7 @@
 import Foundation
 import FreesideAPI
 import Observation
+import OpenAPIRuntime
 
 /// Submits a task from source text (plan §5.11) and lands on it, driving the
 /// New Task composer and the separate recovery screen. It builds a
@@ -14,6 +15,11 @@ import Observation
 /// `retry` can resend the identical command id; the daemon converges a repeat
 /// of the same command on one task. A daemon answer that authoritatively
 /// rejects the submission is a `.rejected` typed reason, not a retry.
+///
+/// Attachments (#2590) are saved beside the command, then uploaded by digest
+/// before the command is sent, on submit and on retry alike: the command
+/// names only digests, so the daemon must hold every one first. A re-upload
+/// of a stored digest is the daemon's no-op.
 @MainActor
 @Observable
 public final class TaskSubmissionModel {
@@ -101,16 +107,17 @@ public final class TaskSubmissionModel {
         return payload
     }
 
-    /// Submits `source` under `projectID` with an optional operator name and
-    /// agent lines and returns the submitted task id, or nil on failure
-    /// (state carries the outcome). Each call mints a fresh command id;
-    /// `retry` reuses the last one, lines included. A submit_task command
-    /// carries no decision envelope. `taskLines` is nil for no choice: the
-    /// daemon rejects an empty list.
+    /// Submits `source` under `projectID` with an optional operator name,
+    /// agent lines, and attachments, and returns the submitted task id, or
+    /// nil on failure (state carries the outcome). Each call mints a fresh
+    /// command id; `retry` reuses the last one, lines and attachments
+    /// included. A submit_task command carries no decision envelope.
+    /// `taskLines` is nil for no choice: the daemon rejects an empty list.
     @discardableResult
     public func submit(
         projectID: String, source: String, name: String? = nil,
-        taskLines: [Components.Schemas.TaskLineInput]? = nil
+        taskLines: [Components.Schemas.TaskLineInput]? = nil,
+        attachments: TaskAttachmentDraft = TaskAttachmentDraft()
     ) async -> String? {
         state = .submitting
         // The operator composed against the cache as it stood, and a stale
@@ -133,10 +140,12 @@ public final class TaskSubmissionModel {
             command_id: UUID().uuidString,
             device_id: coordinator.store.device.deviceID,
             payload: .submit_task(
-                .init(kind: .submit_task, project_id: projectID, source: source, name: name, task_lines: taskLines))
+                .init(
+                    kind: .submit_task, project_id: projectID, source: source, name: name, task_lines: taskLines,
+                    attachments: attachments.inputs))
         )
         lastCommand = command
-        return await send(command)
+        return await send(command, attachmentBytes: attachments.bytesByDigest)
     }
 
     /// Resends the last built command with its original command id, so a lost
@@ -148,14 +157,17 @@ public final class TaskSubmissionModel {
         return await send(command)
     }
 
-    private func send(_ command: Components.Schemas.ClientCommand) async -> String? {
-        guard coordinator.retainTaskSubmission(command) else {
+    private func send(
+        _ command: Components.Schemas.ClientCommand, attachmentBytes: [String: Data] = [:]
+    ) async -> String? {
+        guard coordinator.retainTaskSubmission(command, attachmentBytes: attachmentBytes) else {
             state = .rejected(
                 "The submission could not be saved. Nothing was sent. Try again when storage is available.")
             return nil
         }
         state = .submitting
         do {
+            guard try await uploadAttachments(of: command) else { return nil }
             let output = try await coordinator.store.client.submitCommand(body: .json(command))
             switch output {
             case .ok(let ok):
@@ -216,5 +228,45 @@ public final class TaskSubmissionModel {
             state = .lost
             return nil
         }
+    }
+
+    /// Uploads, in order, the saved bytes of every attachment `command`
+    /// names, and says whether the command may be sent. When it may not, it
+    /// has set `state`: a 422 (the bytes no longer hash to the digest) or
+    /// another non-authentication 4xx is final, so the submission finishes
+    /// as rejected; authentication or a 5xx leaves it saved and lost. A
+    /// throw is a transport failure, which the caller treats as lost. A
+    /// digest with no saved bytes is skipped: the daemon answers the command
+    /// with a 400 if it doesn't hold the digest, which already finishes the
+    /// submission as rejected.
+    private func uploadAttachments(of command: Components.Schemas.ClientCommand) async throws -> Bool {
+        guard case .submit_task(let payload) = command.payload else { return true }
+        for attachment in payload.attachments ?? [] {
+            guard let bytes = coordinator.submissionAttachmentBytes(digest: attachment.digest) else { continue }
+            let output = try await coordinator.store.client.uploadAttachment(
+                path: .init(digest: attachment.digest), body: .binary(HTTPBody(bytes)))
+            switch output {
+            case .created, .ok:
+                continue
+            case .unprocessableContent:
+                coordinator.finishTaskSubmission(command.command_id)
+                state = .rejected("\(attachment.name) changed after it was saved, so nothing was submitted.")
+                return false
+            case .undocumented(let statusCode, _):
+                switch statusCode {
+                case 401, 403:
+                    coordinator.store.freshness = .unauthenticated
+                    state = .lost
+                case 400..<500:
+                    coordinator.finishTaskSubmission(command.command_id)
+                    state = .rejected(
+                        "the daemon refused \(attachment.name) (status \(statusCode)), so nothing was submitted")
+                default:
+                    state = .lost
+                }
+                return false
+            }
+        }
+        return true
     }
 }

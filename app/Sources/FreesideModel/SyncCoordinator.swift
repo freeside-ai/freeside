@@ -98,6 +98,9 @@ public final class SyncCoordinator {
     public private(set) var lastUpdatedAt: Date?
 
     private let cache: CacheStore
+    /// The bytes of the attachments `pendingTaskSubmissions` name, so a
+    /// retry can upload them again.
+    private let submissionAttachments: any SubmissionAttachmentStore
     /// Overlapping sync rounds resolve by recency, as the store's
     /// refresh and validation generations do: only the newest round may
     /// adopt a snapshot or write freshness, so a bootstrap response
@@ -210,9 +213,11 @@ public final class SyncCoordinator {
         cache: CacheStore,
         submissionDaemonID: String = "mock",
         promptHistory: TaskPromptHistory? = nil,
+        submissionAttachments: any SubmissionAttachmentStore = InMemorySubmissionAttachmentStore(),
     ) {
         store = InboxStore(client: client, device: device)
         self.cache = cache
+        self.submissionAttachments = submissionAttachments
         self.submissionDaemonID = submissionDaemonID
         self.promptHistory =
             promptHistory ?? TaskPromptHistory(deploymentID: submissionDaemonID, deviceID: device.deviceID)
@@ -282,6 +287,13 @@ public final class SyncCoordinator {
                 sequence: cached.comprehensionSequence ?? 0,
                 fingerprint: cached.registeredCapabilityFingerprint,
                 owningDeviceID: cached.comprehensionDeviceID)
+            // Bytes no restored submission names belong to a submission
+            // that finished, that the filter above dropped (another device
+            // or daemon), or that a crash left between the bytes and the
+            // command. Only a cache that loaded can say so: one that can't
+            // be read yet (an iPhone launched before first unlock) may
+            // still hold the submissions that name them.
+            releaseSubmissionAttachments(submissionAttachments.storedDigests())
         }
         // Freshness stays .unvalidated until a round-trip settles it:
         // the cached view renders immediately, but nothing claims it is
@@ -1136,23 +1148,59 @@ public final class SyncCoordinator {
     }
 
     /// Durability is a precondition for sending, including a manual retry.
-    func retainTaskSubmission(_ command: Components.Schemas.ClientCommand) -> Bool {
+    /// The attachment bytes are saved before the command, so a saved
+    /// command never names bytes that were not written; a retry passes
+    /// none, since its bytes are already saved. A failed write keeps no
+    /// bytes that no other saved submission names.
+    func retainTaskSubmission(
+        _ command: Components.Schemas.ClientCommand, attachmentBytes: [String: Data] = [:]
+    ) -> Bool {
         guard command.device_id == store.device.deviceID,
             case .submit_task = command.payload
         else { return false }
         let previous = pendingTaskSubmissions[command.command_id]
         guard previous == nil || previous == command else { return false }
+        do {
+            for (digest, bytes) in attachmentBytes {
+                try submissionAttachments.save(digest: digest, bytes: bytes)
+            }
+        } catch {
+            releaseSubmissionAttachments(Set(attachmentBytes.keys))
+            return false
+        }
         pendingTaskSubmissions[command.command_id] = command
         guard persist() else {
             pendingTaskSubmissions[command.command_id] = previous
+            releaseSubmissionAttachments(Set(attachmentBytes.keys))
             return false
         }
         return true
     }
 
     func finishTaskSubmission(_ commandID: String) {
-        pendingTaskSubmissions.removeValue(forKey: commandID)
+        let finished = pendingTaskSubmissions.removeValue(forKey: commandID)
         persist()
+        releaseSubmissionAttachments(Self.attachmentDigests(of: finished))
+    }
+
+    /// The saved bytes of an attachment a saved submission names.
+    func submissionAttachmentBytes(digest: String) -> Data? {
+        submissionAttachments.load(digest: digest)
+    }
+
+    /// Deletes each of `digests` that no saved submission names.
+    private func releaseSubmissionAttachments(_ digests: Set<String>) {
+        let named = pendingTaskSubmissions.values.reduce(into: Set<String>()) {
+            $0.formUnion(Self.attachmentDigests(of: $1))
+        }
+        for digest in digests.subtracting(named) {
+            submissionAttachments.delete(digest: digest)
+        }
+    }
+
+    private static func attachmentDigests(of command: Components.Schemas.ClientCommand?) -> Set<String> {
+        guard case .submit_task(let payload)? = command?.payload else { return [] }
+        return Set((payload.attachments ?? []).map(\.digest))
     }
 
     /// Persist exact retry identity before sending; failed writes roll back.

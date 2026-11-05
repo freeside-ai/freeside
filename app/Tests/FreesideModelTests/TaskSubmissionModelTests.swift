@@ -328,7 +328,7 @@ import Testing
 }
 
 /// The daemon operations a test observed, in issue order.
-private actor OperationLog {
+actor OperationLog {
     private(set) var ids: [String] = []
 
     func append(_ id: String) {

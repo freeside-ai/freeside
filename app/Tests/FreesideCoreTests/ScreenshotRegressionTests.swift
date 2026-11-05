@@ -824,6 +824,34 @@
                                 initialChoices: writerAndReviewer))))
             }
 
+            // Attachments in the composer (#2590): an image chip with its
+            // thumbnail, a numbered repeat, and a file chip; one surface also
+            // shows the refusal notice for an image over its limit.
+            var composerAttachments = TaskAttachmentDraft()
+            for (name, claim, bytes) in [
+                ("Layout bug.png", "image/png", AttentionFixtures.fixtureImagePNG),
+                ("Layout bug.png", "image/png", AttentionFixtures.fixtureImagePNG + Data([0])),
+                ("crash.log", "text/plain", Data(repeating: 0x61, count: 48_213)),
+            ] {
+                _ = composerAttachments.add(name: name, claimedMediaType: claim, bytes: bytes)
+            }
+            let imageRefusal = "Screen recording.png is 12.4 MiB; an image can be at most 10 MiB."
+            for (name, width, scheme, refusals) in [
+                ("new-task-sheet-attachments", CGFloat(380), ColorScheme.light, [imageRefusal]),
+                ("new-task-sheet-attachments-dark", CGFloat(380), ColorScheme.dark, []),
+                ("new-task-sheet-phone-attachments", CGFloat(390), ColorScheme.light, []),
+                ("new-task-sheet-phone-attachments-dark", CGFloat(390), ColorScheme.dark, [imageRefusal]),
+            ] as [(String, CGFloat, ColorScheme, [String])] {
+                surfaces.append(
+                    Surface(
+                        name: name, width: width, colorScheme: scheme,
+                        view: AnyView(
+                            NewTaskSheet(
+                                projects: newTaskProjects, model: newTaskModel, onSubmitted: { _ in },
+                                rendersInteractiveControls: false, initialSource: filledSource,
+                                initialAttachments: composerAttachments, initialRefusals: refusals))))
+            }
+
             let recoveryModel = try TaskSubmissionRecoveryScreenshots.model(client: client)
             for (name, width, scheme) in [
                 ("new-task-recovery", CGFloat(380), ColorScheme.light),
@@ -2613,6 +2641,41 @@
                                 retryTimeline,
                                 disclosures: TaskHistoryFixtures.identifiersOpen(retryTimeline))
                     )))
+            // The task's attachments (#2590): an image renders inline and a
+            // file shows its type and size, each in its own box. A separate
+            // coordinator holds the preloaded image, so no other surface's
+            // loader changes.
+            var attachedTask = retryTask
+            attachedTask.task.attachments = [
+                .init(
+                    digest: "sha256:img-spec_approval", name: "Layout bug.png", media_type: .image_sol_png,
+                    claimed_media_type: "image/png", size_bytes: Int64(AttentionFixtures.fixtureImagePNG.count)),
+                .init(
+                    digest: "sha256:log-spec_approval", name: "crash.log",
+                    media_type: .application_sol_octet_hyphen_stream, claimed_media_type: "text/plain",
+                    size_bytes: 48_213),
+            ]
+            let attachedCoordinator = SyncCoordinator(client: client, cache: cache)
+            for attachment in attachedTask.task.attachments {
+                await attachedCoordinator.store.attachments.load(
+                    attachment.digest,
+                    reference: AttachmentReference(
+                        mediaType: attachment.media_type.rawValue, sizeBytes: Int(attachment.size_bytes),
+                        availability: .available))
+            }
+            guard case .image = attachedCoordinator.store.attachments.phase(for: "sha256:img-spec_approval") else {
+                throw ScreenshotError.missingSeededImage
+            }
+            for (name, width) in [("task-page-attachments", CGFloat?.none), ("task-page-attachments-390", 390)] {
+                surfaces.append(
+                    Surface(
+                        name: name,
+                        width: width,
+                        view: AnyView(
+                            TaskPageView(coordinator: attachedCoordinator, snapshot: attachedTask, onOpenRun: { _ in })
+                                .screenshotContent(retryTimeline)
+                        )))
+            }
             // A remediation under way (#2100): the task's events return to
             // Implementation at the remediator's start, under the decision
             // that sent the findings there, and Current Run draws the review

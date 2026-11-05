@@ -1,5 +1,10 @@
 import FreesideAPI
 import SwiftUI
+import UniformTypeIdentifiers
+
+#if os(iOS)
+    import PhotosUI
+#endif
 
 /// The New Task composer (plan §5.11): an operator starts work from the app
 /// instead of the daemon host's CLI. Drawn as the 4 Nov 2026 handoff's
@@ -10,6 +15,14 @@ import SwiftUI
 /// catalog. The daemon's task namer names the task, so the composer asks
 /// for no name. On the Mac, Return submits, Shift-Return starts a line, and
 /// Escape cancels; on iPhone, Cancel and Submit sit in the sheet's bar.
+///
+/// The Attach chip adds files and images (#2590): on the Mac through a
+/// file picker, a drop on the composer, or a paste into the text area; on
+/// iPhone through a menu of Photos, Files, and Paste. Each shows as a chip
+/// above the foot with its size and a remove control. Whatever the daemon's
+/// limits or name rules would refuse is refused before upload, with the
+/// reason under the composer. The text stays required: attachments alone
+/// can't submit.
 ///
 /// The draft lives in this sheet's own state and no failure clears it: a
 /// lost response keeps the text and points to separate recovery, a daemon
@@ -48,6 +61,18 @@ struct NewTaskSheet: View {
     @State private var choices: [Role: String]
     /// Whether the Agents chip shows the role chips.
     @State private var agentsOpen: Bool
+    @State private var attachments: TaskAttachmentDraft
+    /// Each image attachment's chip thumbnail, by digest, decoded once when
+    /// it is added.
+    @State private var thumbnails: [String: CGImage]
+    /// Why the latest items the operator added were refused; the next add
+    /// replaces them.
+    @State private var refusals: [String]
+    @State private var showsFileImporter = false
+    #if os(iOS)
+        @State private var showsPhotoPicker = false
+        @State private var photoSelection: [PhotosPickerItem] = []
+    #endif
     /// The Mac text view's laid-out height, which the text area grows to.
     @State private var textHeight: CGFloat = 0
     @State private var isSubmitting = false
@@ -64,7 +89,9 @@ struct NewTaskSheet: View {
         initialProjectID: String? = nil,
         initialSource: String = "",
         initialChoices: [Role: String] = [:],
-        initialAgentsOpen: Bool = false
+        initialAgentsOpen: Bool = false,
+        initialAttachments: TaskAttachmentDraft = TaskAttachmentDraft(),
+        initialRefusals: [String] = []
     ) {
         self.projects = projects
         _model = State(initialValue: model)
@@ -74,6 +101,12 @@ struct NewTaskSheet: View {
         _source = State(initialValue: initialSource)
         _choices = State(initialValue: initialChoices)
         _agentsOpen = State(initialValue: initialAgentsOpen)
+        _attachments = State(initialValue: initialAttachments)
+        _thumbnails = State(
+            initialValue: initialAttachments.items.reduce(into: [:]) { thumbnails, item in
+                if item.isImage { thumbnails[item.digest] = ComposerAttachmentIntake.thumbnail(item.bytes) }
+            })
+        _refusals = State(initialValue: initialRefusals)
     }
 
     static let sourcePlaceholder = "What should the agent work on?"
@@ -102,14 +135,15 @@ struct NewTaskSheet: View {
         Submission(source: source.trimmingCharacters(in: .whitespacesAndNewlines))
     }
 
-    /// Sends a draft with the per-role lines and no name: the daemon's task
-    /// namer names the task.
+    /// Sends a draft with the per-role lines, the attachments, and no name:
+    /// the daemon's task namer names the task.
     static func send(
-        _ submission: Submission, projectID: String, choices: [Role: String], through model: TaskSubmissionModel
+        _ submission: Submission, projectID: String, choices: [Role: String],
+        attachments: TaskAttachmentDraft = TaskAttachmentDraft(), through model: TaskSubmissionModel
     ) async -> String? {
         await model.submit(
             projectID: projectID, source: submission.source,
-            taskLines: AgentChoiceDisplay.taskLines(choices: choices))
+            taskLines: AgentChoiceDisplay.taskLines(choices: choices), attachments: attachments)
     }
 
     /// The Mac text area's ceiling: 60% of a 600pt sheet. A macOS sheet
@@ -125,6 +159,9 @@ struct NewTaskSheet: View {
         if case .lost = model.state { return true }
         return false
     }
+
+    /// An uncertain or in-flight submission freezes the composer.
+    private var isFrozen: Bool { isLost || isSubmitting }
 
     private var canSubmit: Bool {
         !Self.submission(source: source).source.isEmpty && !projectID.isEmpty && projects.contains(projectID)
@@ -148,6 +185,7 @@ struct NewTaskSheet: View {
             .onChange(of: projectID) {
                 if let draft = promptBrowse.end() { source = draft }
             }
+            .modifier(AttachmentPickers(sheet: self))
     }
 
     @ViewBuilder private var sheet: some View {
@@ -211,16 +249,25 @@ struct NewTaskSheet: View {
                 // that another Submit would retry the saved request.
                 Group {
                     textArea(cap: textCap)
+                    if !attachments.isEmpty { attachmentChips }
                     if agentsOpen { roleChips }
                     missingAgentNotice
+                    refusalNotice
                     foot
                 }
-                .disabled(isLost || isSubmitting)
+                .disabled(isFrozen)
             }
             .frame(maxWidth: .infinity, alignment: .leading)
             .background(Color.ground2, in: RoundedRectangle(cornerRadius: 12))
             .clipShape(RoundedRectangle(cornerRadius: 12))
             .overlay(RoundedRectangle(cornerRadius: 12).strokeBorder(Color.itemBorder))
+            // A file or image dropped anywhere on the composer attaches;
+            // the Mac text view routes its own drops the same way.
+            .onDrop(of: [.fileURL, .image], isTargeted: nil) { providers in
+                guard rendersInteractiveControls, !isFrozen else { return false }
+                attach { await ComposerAttachmentIntake.items(from: providers, origin: .pasted) }
+                return true
+            }
             status
         }
     }
@@ -292,7 +339,7 @@ struct NewTaskSheet: View {
         #if os(macOS)
             TaskPromptEditor(
                 text: $source, history: model.promptHistory.prompts(for: projectID), browse: promptBrowse,
-                onSubmit: performSubmit, contentHeight: $textHeight
+                onSubmit: performSubmit, contentHeight: $textHeight, onAttach: attach(pasted:)
             )
             .frame(height: min(max(textHeight, TaskPromptEditor.height(lines: 4)), cap))
         #else
@@ -394,12 +441,170 @@ struct NewTaskSheet: View {
         }
     }
 
+    // MARK: Attachments
+
+    /// One chip per attachment, in the order added.
+    private var attachmentChips: some View {
+        WrappingHStack(horizontalSpacing: 6, verticalSpacing: 6) {
+            ForEach(attachments.items) { item in
+                ComposerAttachmentChip(attachment: item, thumbnail: thumbnails[item.digest]) {
+                    remove(item)
+                }
+            }
+        }
+        .padding(.horizontal, 10)
+        .padding(.bottom, 8)
+        .frame(maxWidth: .infinity, alignment: .leading)
+    }
+
+    /// Why the latest items weren't attached, one sentence each, in wax
+    /// like the missing-agent notice.
+    @ViewBuilder private var refusalNotice: some View {
+        if !refusals.isEmpty {
+            VStack(alignment: .leading, spacing: 4) {
+                ForEach(Array(refusals.enumerated()), id: \.offset) { _, refusal in
+                    Text(refusal)
+                        .font(FreesideFont.cardBody)
+                        .foregroundStyle(Color.waxText)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+            }
+            .padding(.horizontal, 12)
+            .padding(.bottom, 8)
+            .accessibilityElement(children: .combine)
+        }
+    }
+
+    @ViewBuilder private var attachChip: some View {
+        let chip = ComposerChip(glyph: "+", text: "Attach")
+        if rendersInteractiveControls {
+            #if os(iOS)
+                Menu {
+                    Button("Photos", systemImage: "photo.on.rectangle") { showsPhotoPicker = true }
+                    Button("Files", systemImage: "folder") { showsFileImporter = true }
+                    PasteButton(supportedContentTypes: [.image, .fileURL]) { providers in
+                        attach { await ComposerAttachmentIntake.items(from: providers, origin: .pasted) }
+                    }
+                } label: {
+                    chip
+                }
+                .menuStyle(.button)
+                .buttonStyle(.plain)
+                .menuIndicator(.hidden)
+                .accessibilityLabel("Attach")
+            #else
+                Button {
+                    showsFileImporter = true
+                } label: {
+                    chip
+                }
+                .buttonStyle(.plain)
+                .help("Attach files. You can also drop or paste them.")
+                .accessibilityLabel("Attach files")
+            #endif
+        } else {
+            chip
+        }
+    }
+
+    /// Reads what `load` returns, off the main actor where it reads files,
+    /// and adds each item in order. The batch's refusals replace the last.
+    private func attach(_ load: @escaping @Sendable () async -> [ComposerAttachmentIntake.Item]) {
+        guard !isFrozen else { return }
+        Task {
+            let items = await load()
+            // A submit that started while the items loaded owns the draft now.
+            guard !isFrozen else { return }
+            var batchRefusals: [String] = []
+            for item in items {
+                switch item {
+                case .refused(let sentence):
+                    batchRefusals.append(sentence)
+                case .attachment(let name, let claim, let bytes):
+                    switch attachments.add(name: name, claimedMediaType: claim, bytes: bytes) {
+                    case .added(let added):
+                        if added.isImage, thumbnails[added.digest] == nil {
+                            thumbnails[added.digest] = ComposerAttachmentIntake.thumbnail(bytes)
+                        }
+                    case .refused(let sentence):
+                        batchRefusals.append(sentence)
+                    }
+                }
+            }
+            refusals = batchRefusals
+        }
+    }
+
+    private func attach(files urls: [URL]) {
+        attach { await Task.detached { urls.map(ComposerAttachmentIntake.file(at:)) }.value }
+    }
+
+    private func attach(pasted: ComposerAttachmentIntake.Pasted) {
+        switch pasted {
+        case .files(let urls):
+            attach(files: urls)
+        case .image(let data):
+            attach { [ComposerAttachmentIntake.image(data, origin: .pasted)] }
+        }
+    }
+
+    private func remove(_ item: DraftAttachment) {
+        attachments.remove(name: item.name)
+        if !attachments.items.contains(where: { $0.digest == item.digest }) {
+            thumbnails[item.digest] = nil
+        }
+    }
+
+    /// The pickers the Attach chip opens, kept off the static goldens.
+    private struct AttachmentPickers: ViewModifier {
+        let sheet: NewTaskSheet
+
+        func body(content: Content) -> some View {
+            if sheet.rendersInteractiveControls {
+                content
+                    // `.data` leaves out folders and packages, which #2591
+                    // owns; a dropped folder is refused by name.
+                    .fileImporter(
+                        isPresented: sheet.$showsFileImporter, allowedContentTypes: [.data],
+                        allowsMultipleSelection: true
+                    ) { result in
+                        if case .success(let urls) = result { sheet.attach(files: urls) }
+                    }
+                    #if os(iOS)
+                        .photosPicker(
+                            isPresented: sheet.$showsPhotoPicker, selection: sheet.$photoSelection,
+                            matching: .images
+                        )
+                        .onChange(of: sheet.photoSelection) {
+                            let picked = sheet.photoSelection
+                            guard !picked.isEmpty else { return }
+                            sheet.photoSelection = []
+                            sheet.attach {
+                                var items: [ComposerAttachmentIntake.Item] = []
+                                for item in picked {
+                                    if let data = try? await item.loadTransferable(type: Data.self) {
+                                        items.append(ComposerAttachmentIntake.image(data, origin: .photo))
+                                    } else {
+                                        items.append(.refused("A photo couldn't be loaded."))
+                                    }
+                                }
+                                return items
+                            }
+                        }
+                    #endif
+            } else {
+                content
+            }
+        }
+    }
+
     // MARK: Foot
 
     private var foot: some View {
         WrappingHStack(horizontalSpacing: 6, verticalSpacing: 6) {
             projectChip
             agentsChip
+            attachChip
         }
         .padding(.top, 8)
         .padding(.horizontal, 10)
@@ -468,8 +673,7 @@ struct NewTaskSheet: View {
         case .lost:
             Notice(
                 tone: .accent, keyword: "Unconfirmed",
-                sentence:
-                    "The result couldn't be confirmed. Your request is saved in Unconfirmed submissions in Tasks."
+                sentence: Self.unconfirmedSentence
             )
             .accessibilityElement(children: .combine)
         case .rejected(let reason):
@@ -480,6 +684,11 @@ struct NewTaskSheet: View {
         }
     }
 
+    /// True whether the response was lost or an attachment's upload was:
+    /// either way the request is saved for Retry.
+    static let unconfirmedSentence =
+        "Freeside couldn't confirm this request. It's saved in Unconfirmed submissions in Tasks."
+
     /// Submits when the draft can send and says whether it did; the Mac
     /// text view asks on Return and VoiceOver's Submit action.
     @discardableResult private func performSubmit() -> Bool {
@@ -487,7 +696,8 @@ struct NewTaskSheet: View {
         isSubmitting = true
         submitTask = Task {
             let taskID = await Self.send(
-                Self.submission(source: source), projectID: projectID, choices: choices, through: model)
+                Self.submission(source: source), projectID: projectID, choices: choices, attachments: attachments,
+                through: model)
             isSubmitting = false
             guard !Task.isCancelled else { return }
             if let taskID {

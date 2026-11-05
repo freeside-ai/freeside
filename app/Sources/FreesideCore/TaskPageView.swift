@@ -285,6 +285,7 @@ struct TaskPageView: View {
             }
             let conversations = conversations
             VStack(alignment: .leading, spacing: 22) {
+                attachmentsSection
                 stopStates
                 // Absent at zero, as Decisions is: the outline drops its
                 // chip then too.
@@ -831,6 +832,33 @@ struct TaskPageView: View {
             .font(FreesideFont.cardBody)
             .foregroundStyle(Color.inkDim)
             .fixedSize(horizontal: false, vertical: true)
+    }
+
+    /// The files and images the operator attached when submitting (#2590),
+    /// in submitted order; absent when there are none. Images render inline
+    /// through the attachment loader. The daemon never deletes task
+    /// attachment bytes, so each reference is available.
+    @ViewBuilder private var attachmentsSection: some View {
+        let attachments = snapshot.task.attachments
+        if !attachments.isEmpty {
+            VStack(alignment: .leading, spacing: 11) {
+                KeywordLabel(text: "Attachments")
+                ForEach(attachments, id: \.name) { attachment in
+                    DecisionDetailView.AttachmentRow(
+                        label: attachment.name,
+                        digest: attachment.digest,
+                        reference: AttachmentReference(
+                            mediaType: attachment.media_type.rawValue,
+                            sizeBytes: Int(clamping: attachment.size_bytes),
+                            availability: .available),
+                        attachments: coordinator.store.attachments,
+                        loadsAttachments: screenshotTimeline == nil,
+                        rendersInteractiveControls: screenshotTimeline == nil,
+                        boxed: true)
+                }
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+        }
     }
 
     /// The Timeline is the task's events, always open: the rail that says
