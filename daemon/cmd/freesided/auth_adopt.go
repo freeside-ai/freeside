@@ -53,6 +53,11 @@ type authAdoptConfig struct {
 
 	ClaudeAccount, ContainerBin, ExporterImage string
 	AuthStoreRoot                              string
+	// SecondAuthIdentityID, SecondCostOwner, and SecondClaudeAccount are a
+	// second Claude writer subscription (#2653), all three or none: an
+	// identity adopted over its own volume with its own attested account,
+	// whose writer agents the tree adds beside the first identity's.
+	SecondAuthIdentityID, SecondCostOwner, SecondClaudeAccount string
 
 	ClaudeRoute, CodexRoute, ReviewModel string
 	// ReviewHarness is the harness the reviewer line's agent runs (#397):
@@ -181,6 +186,16 @@ func runAuthAdoptCommand(
 			return err
 		}
 	}
+	secondID := domain.AuthIdentityID(cfg.SecondAuthIdentityID)
+	var secondIdentity domain.AuthIdentity
+	if secondID != "" {
+		if secondIdentity, err = adoptableIdentity(ctx, adapters, secondID, cfg.SecondCostOwner); err != nil {
+			return err
+		}
+		if err := refuseSharedVolume(ctx, st, secondIdentity); err != nil {
+			return err
+		}
+	}
 
 	shared := func(identity domain.AuthIdentity, client domain.HarnessClientKind, route, owner string) ward.AuthAdoptionConfig {
 		return ward.AuthAdoptionConfig{
@@ -265,12 +280,40 @@ func runAuthAdoptCommand(
 		// startup check names the role when policy still asks review from ward.
 		prompts[domain.RoleReviewer] = reviewPrompt()
 	}
+	// The second writer is reported after the review identity, so the first
+	// two entries keep the indexes retireUnadoptable reads.
+	var secondEnrollment *domain.ClientEnrollment
+	var secondErr error
+	if secondID != "" {
+		var second ward.AuthAdoptionResult
+		second, secondErr = ward.AdoptClaudeAuth(ctx, ward.ClaudeAuthAdoptionConfig{
+			AuthAdoptionConfig: shared(secondIdentity, domain.HarnessClientClaudeCode, cfg.ClaudeRoute, cfg.SecondCostOwner),
+			AccountBinding:     cfg.SecondClaudeAccount,
+			ObserveVolume:      deps.observeVolume(cfg.ContainerBin, cfg.ExporterImage),
+		})
+		entry, err := adoptReportEntry(secondIdentity, domain.HarnessClientClaudeCode, second, secondErr)
+		if err != nil {
+			return errors.Join(err, writeAdoptReport(reportOut, report))
+		}
+		report.Identities = append(report.Identities, entry)
+		if secondErr == nil {
+			secondEnrollment = &second.Enrollment
+		}
+	}
 	if claudeErr != nil {
 		// Every baseline writer role runs the Claude agent, so there is no
 		// tree to emit without it.
 		return errors.Join(
 			writeAdoptReport(reportOut, report),
 			fmt.Errorf("auth identity %s is unadoptable, so no tree patch was emitted", claudeID),
+		)
+	}
+	if secondErr != nil {
+		// A tree without the second writer's agents would pass for one the
+		// operator asked for two subscriptions in.
+		return errors.Join(
+			writeAdoptReport(reportOut, report),
+			fmt.Errorf("auth identity %s is unadoptable, so no tree patch was emitted", secondID),
 		)
 	}
 
@@ -283,6 +326,7 @@ func runAuthAdoptCommand(
 	tree, err := agentbaseline.Tree(agentbaseline.TreeInput{
 		ClaudeEnrollment: claude.Enrollment, CodexEnrollment: codexEnrollment,
 		ClaudeReviewEnrollment: claudeReviewEnrollment,
+		SecondClaudeEnrollment: secondEnrollment,
 		ReviewModel:            cfg.ReviewModel, ReviewEffort: cfg.ReviewEffort,
 		ShadowReviewModel: cfg.ShadowReviewModel, ShadowReviewEffort: cfg.ShadowReviewEffort,
 		Writers: cfg.Writers, SpecifierEscalated: specifierEscalated,
@@ -367,6 +411,30 @@ func retireUnadoptable(
 
 // adoptableIdentity reads a flag-era identity and refuses a cost owner that
 // disagrees with the one it already has.
+// refuseSharedVolume refuses a second writer whose recorded volume another
+// enabled identity also records, the first writer or a Claude reviewer
+// among them: two identities over one volume would be one subscription
+// counted as two pools, and the second writer's agents would mount the
+// other identity's credential.
+func refuseSharedVolume(ctx context.Context, st *store.Store, identity domain.AuthIdentity) error {
+	volume := identity.Interim.AuthStoreVolume
+	if volume == "" {
+		return nil
+	}
+	return st.Read(ctx, func(tx *store.ReadTx) error {
+		identities, err := tx.ListAuthIdentities(ctx)
+		if err != nil {
+			return err
+		}
+		for _, other := range identities {
+			if other.ID != identity.ID && other.Enabled && other.Interim.AuthStoreVolume == volume {
+				return fmt.Errorf("auth identity %s records the volume auth identity %s does", identity.ID, other.ID)
+			}
+		}
+		return nil
+	})
+}
+
 func adoptableIdentity(
 	ctx context.Context, adapters *wardstore.Adapters, id domain.AuthIdentityID, costOwner string,
 ) (domain.AuthIdentity, error) {
@@ -498,6 +566,12 @@ func parseAuthAdoptConfig(args []string, stderr io.Writer, now time.Time) (authA
 		"the flag-era -shadow-review-cost-owner; set exactly while the shadow arm is on")
 	flags.StringVar(&cfg.ClaudeAccount, "claude-account", "",
 		"operator-attested subscription account the Claude setup token belongs to")
+	flags.StringVar(&cfg.SecondAuthIdentityID, "second-auth-identity", "",
+		"a second Claude writer identity, adopted over its own volume (optional; set with -second-cost-owner and -second-claude-account)")
+	flags.StringVar(&cfg.SecondCostOwner, "second-cost-owner", "",
+		"who pays for the second writer identity's usage; set with -second-auth-identity")
+	flags.StringVar(&cfg.SecondClaudeAccount, "second-claude-account", "",
+		"operator-attested subscription account the second identity's setup token belongs to; set with -second-auth-identity")
 	flags.StringVar(&cfg.ContainerBin, "container-bin", "container", "Apple container CLI path")
 	flags.StringVar(&cfg.ExporterImage, "exporter-image", "", "digest-pinned exporter image (required)")
 	flags.StringVar(&cfg.AuthStoreRoot, "auth-store-root", "",
@@ -593,6 +667,9 @@ func parseAuthAdoptConfig(args []string, stderr io.Writer, now time.Time) (authA
 	if err := validateReviewHarness(cfg, oneIdentity); err != nil {
 		return authAdoptConfig{}, err
 	}
+	if err := validateSecondWriter(cfg); err != nil {
+		return authAdoptConfig{}, err
+	}
 	if err := validateWriterSelections(cfg.Writers); err != nil {
 		return authAdoptConfig{}, err
 	}
@@ -678,6 +755,32 @@ func validateReviewHarness(cfg authAdoptConfig, oneIdentity bool) error {
 		return nil
 	}
 	return fmt.Errorf("-review-harness %q is not codex_cli or claude_code", cfg.ReviewHarness)
+}
+
+// validateSecondWriter holds the second writer flags to a second
+// subscription: all three or none, an identity that is neither the writer
+// nor the reviewer, and an account other than the writer's. A shared volume
+// is refused once both identities are read.
+func validateSecondWriter(cfg authAdoptConfig) error {
+	set := 0
+	for _, value := range []string{cfg.SecondAuthIdentityID, cfg.SecondCostOwner, cfg.SecondClaudeAccount} {
+		if value != "" {
+			set++
+		}
+	}
+	switch {
+	case set == 0:
+		return nil
+	case set != 3:
+		return errors.New("-second-auth-identity, -second-cost-owner, and -second-claude-account are set together or not at all")
+	case cfg.SecondAuthIdentityID == cfg.AuthIdentityID:
+		return errors.New("-second-auth-identity must differ from -auth-identity")
+	case cfg.SecondAuthIdentityID == cfg.ReviewAuthIdentityID:
+		return errors.New("-second-auth-identity must differ from -review-auth-identity")
+	case cfg.SecondClaudeAccount == cfg.ClaudeAccount:
+		return errors.New("-second-claude-account must differ from -claude-account")
+	}
+	return nil
 }
 
 // explicitEfforts are the efforts a baseline agent can ask: every Freeside

@@ -1411,3 +1411,166 @@ func TestAuthAdoptRefusesAClaudeReviewSelectionItCannotWrite(t *testing.T) {
 		})
 	}
 }
+
+const (
+	adoptSecondVolume  = "freeside-claude-second-auth"
+	adoptSecondAccount = "acct-fixture-claude-second"
+)
+
+// recordSecondWriter records the second writer subscription's flag-era
+// identity, as the deputy records it over its existing volume.
+func (f *authAdoptFixture) recordSecondWriter(t *testing.T, volume string) {
+	t.Helper()
+	f.recordIdentity(t, domain.AuthIdentity{
+		ID: "claude-second", Provider: "claude", AuthStoreMutationLease: true, Enabled: true,
+		Interim: domain.InterimClientFacts{AuthStoreVolume: volume, RefreshStrategy: domain.RefreshOnDemand},
+	})
+}
+
+// secondWriterArgs is args with the second writer subscription.
+func (f *authAdoptFixture) secondWriterArgs(extra ...string) []string {
+	return f.args(append([]string{
+		"-second-auth-identity", "claude-second", "-second-cost-owner", "second-operator",
+		"-second-claude-account", adoptSecondAccount,
+	}, extra...)...)
+}
+
+// The second writer is adopted over its own volume with its own account and
+// reported third. The tree gains a -second copy of each writer agent on its
+// enrollment and keeps the one-writer tree's lineup lines, each -second
+// agent resolves to the second volume, a rerun reuses all three
+// enrollments, and the routing policy accepts an order across both
+// identities' implementers.
+func TestAuthAdoptSecondWriter(t *testing.T) {
+	ctx := t.Context()
+	f := newAuthAdoptFixture(t)
+	f.recordSecondWriter(t, adoptSecondVolume)
+	report, patch, err := f.run(t, f.secondWriterArgs())
+	if err != nil {
+		t.Fatalf("auth adopt: %v", err)
+	}
+	if len(report.Identities) != 3 {
+		t.Fatalf("report = %+v", report)
+	}
+	second := report.Identities[2]
+	if second.AuthIdentityID != "claude-second" || second.Status != authAdoptAdopted ||
+		second.EnrollmentID != "claude-second/claude_code" || second.Generation != 1 {
+		t.Fatalf("second writer report = %+v", second)
+	}
+	snap := f.snapshot(t)
+	if identity := snap.identity(t, "claude-second"); identity.AccountBinding != adoptSecondAccount ||
+		identity.CostOwner != "second-operator" {
+		t.Fatalf("second identity = %+v", identity)
+	}
+
+	tree := loadAdoptedPatch(t, patch)
+	oneWriter := newAuthAdoptFixture(t)
+	_, onePatch, err := oneWriter.run(t, oneWriter.args())
+	if err != nil {
+		t.Fatalf("one-writer auth adopt: %v", err)
+	}
+	if got, want := lineupRoles(tree), lineupRoles(loadAdoptedPatch(t, onePatch)); !slices.Equal(got, want) {
+		t.Fatalf("lineup = %v, want the one-writer lineup %v", got, want)
+	}
+	f.withStore(t, func(st *store.Store) {
+		for _, role := range []domain.RoleName{domain.RoleSpecifier, domain.RoleImplementer} {
+			name := agentbaseline.WriterAgentName(role) + agentbaseline.SecondWriterAgentSuffix
+			agent, err := engine.ResolveAgent(ctx, st, tree, name)
+			if err != nil {
+				t.Fatalf("resolve %s: %v", name, err)
+			}
+			if agent.Identity.ID != "claude-second" || agent.Generation.AuthStoreVolume != adoptSecondVolume {
+				t.Fatalf("%s runs %s on %s", name, agent.Identity.ID, agent.Generation.AuthStoreVolume)
+			}
+		}
+	})
+
+	observed := f.observed
+	rerun, _, err := f.run(t, f.secondWriterArgs())
+	if err != nil {
+		t.Fatalf("second adopt: %v", err)
+	}
+	for _, identity := range rerun.Identities {
+		if identity.Status != authAdoptReused {
+			t.Fatalf("second adopt reported %+v", identity)
+		}
+	}
+	if !reflect.DeepEqual(snap, f.snapshot(t)) || f.observed != observed {
+		t.Fatal("second adopt changed the store or observed a volume")
+	}
+
+	checkout, commit := commitAdoptedPatch(t, patch)
+	order := "implementer=" + agentbaseline.WriterAgentName(domain.RoleImplementer) + "," +
+		agentbaseline.WriterAgentName(domain.RoleImplementer) + agentbaseline.SecondWriterAgentSuffix
+	output, err := runRouting(ctx, "set", "-db", f.dbPath, "-agent-tree", checkout, "-agent-tree-commit", commit,
+		"-order", order, "-drain-first", string(snap.identity(t, "claude-second").EffectiveUsagePool()))
+	if err != nil {
+		t.Fatalf("routing set %s: %v", order, err)
+	}
+	if set := decodeRoutingSet(t, output); !set.Recorded || set.Policy.LineupRevision != report.LineupRevision {
+		t.Fatalf("routing set = %+v", set)
+	}
+}
+
+// Second writer flags that are not a second subscription are refused before
+// anything is recorded.
+func TestAuthAdoptRefusesASecondWriterThatIsNotASecondSubscription(t *testing.T) {
+	for name, tc := range map[string]struct {
+		volume string
+		extra  []string
+		want   string
+	}{
+		"identity alone": {
+			adoptSecondVolume,
+			[]string{"-second-cost-owner", "", "-second-claude-account", ""},
+			"set together or not at all",
+		},
+		"no account":            {adoptSecondVolume, []string{"-second-claude-account", ""}, "set together or not at all"},
+		"the writer identity":   {adoptSecondVolume, []string{"-second-auth-identity", "claude-main"}, "must differ from -auth-identity"},
+		"the reviewer identity": {adoptSecondVolume, []string{"-second-auth-identity", "codex-review"}, "must differ from -review-auth-identity"},
+		"the writer account": {
+			adoptSecondVolume,
+			[]string{"-second-claude-account", adoptClaudeAccount},
+			"-second-claude-account must differ from -claude-account",
+		},
+		"the writer volume": {adoptClaudeVolume, nil, "records the volume auth identity claude-main does"},
+		"another Claude identity's volume": {
+			"freeside-claude-review-auth", nil,
+			"records the volume auth identity claude-review does",
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			f := newAuthAdoptFixture(t)
+			// A Claude reviewer recorded by auth add, on a volume of its own.
+			f.recordIdentity(t, domain.AuthIdentity{
+				ID: "claude-review", Provider: "claude", AuthStoreMutationLease: true, Enabled: true,
+				Interim: domain.InterimClientFacts{
+					AuthStoreVolume: "freeside-claude-review-auth", RefreshStrategy: domain.RefreshOnDemand,
+				},
+			})
+			f.recordSecondWriter(t, tc.volume)
+			before := f.snapshot(t)
+			if _, _, err := f.run(t, f.secondWriterArgs(tc.extra...)); err == nil || !strings.Contains(err.Error(), tc.want) {
+				t.Fatalf("auth adopt = %v, want %q", err, tc.want)
+			}
+			if after := f.snapshot(t); !reflect.DeepEqual(before, after) || f.observed != 0 {
+				t.Fatal("a refused adoption recorded something or observed a volume")
+			}
+		})
+	}
+}
+
+// A second writer that cannot be adopted, here because its account is the
+// reviewer's, is reported third and emits no patch, as the first does.
+func TestAuthAdoptUnadoptableSecondWriterEmitsNoPatch(t *testing.T) {
+	f := newAuthAdoptFixture(t)
+	f.recordSecondWriter(t, adoptSecondVolume)
+	report, patch, err := f.run(t, f.secondWriterArgs("-second-claude-account", adoptCodexAccount))
+	if err == nil || !strings.Contains(err.Error(), "auth identity claude-second is unadoptable, so no tree patch was emitted") {
+		t.Fatalf("auth adopt = %v", err)
+	}
+	if len(patch) != 0 || report.Patch != "" || len(report.Identities) != 3 ||
+		report.Identities[0].Status != authAdoptAdopted || report.Identities[2].Status != authAdoptUnadoptable {
+		t.Fatalf("report = %+v, patch %d bytes", report, len(patch))
+	}
+}
