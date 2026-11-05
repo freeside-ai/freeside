@@ -2251,7 +2251,12 @@
             // a full usage pool (#1596): the row's capacity wait and the
             // timeline header's callout, each guidance sentence naming its
             // cause from the recorded hold (#1599).
-            for (name, slug) in [("Machine capacity", "machine-capacity"), ("Usage pool", "usage-pool")] {
+            // A park on an exhausted quota window that offers another agent
+            // draws its move menu under the callout (#869).
+            for (name, slug) in [
+                ("Machine capacity", "machine-capacity"), ("Usage pool", "usage-pool"),
+                ("Quota window", "quota-window"),
+            ] {
                 let wait = HoldPresentationFixtures.make(name)
                 var waitTask = approvalFixture.task
                 waitTask.task = wait.task

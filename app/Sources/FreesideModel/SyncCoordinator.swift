@@ -57,6 +57,12 @@ public final class SyncCoordinator {
     public private(set) var settledUsageCommand: Components.Schemas.CommandResult?
     package internal(set) var usageCommandSending = false
     package internal(set) var usageCommandFailure: String?
+    /// The move of a parked task sent and not yet settled by sync; one at a
+    /// time, so the task page finds it after a relaunch.
+    public private(set) var pendingParkedTaskMove: PendingParkedTaskMove?
+    package internal(set) var parkedTaskMoveSending = false
+    package internal(set) var parkedTaskMoveFailure: String?
+    @ObservationIgnored package lazy var parkedTaskMove = ParkedTaskMoveModel(coordinator: self)
     private let submissionDaemonID: String
     public let promptHistory: TaskPromptHistory
     public private(set) var cursors: SyncCursors?
@@ -226,6 +232,11 @@ public final class SyncCoordinator {
                 entry.isValid(deviceID: device.deviceID)
             {
                 pendingUsageCommand = entry
+            }
+            if cached.moveDaemonID == submissionDaemonID, let entry = cached.pendingParkedTaskMove,
+                entry.isValid(deviceID: device.deviceID)
+            {
+                pendingParkedTaskMove = entry
             }
             if cached.submissionDaemonID == submissionDaemonID {
                 pendingTaskSubmissions = (cached.pendingTaskSubmissions ?? [:]).filter { id, command in
@@ -438,6 +449,7 @@ public final class SyncCoordinator {
                         settleTaskStops()
                         settleRoutingPolicyChange()
                         settleUsageCommand()
+                        settleParkedTaskMove()
                     }
                 }
             case .badRequest:
@@ -958,6 +970,7 @@ public final class SyncCoordinator {
         settleTaskStops()
         settleRoutingPolicyChange()
         settleUsageCommand()
+        settleParkedTaskMove()
         persist()
         return true
     }
@@ -1073,6 +1086,7 @@ public final class SyncCoordinator {
         guard
             cursors != nil || !pending.isEmpty || !pendingTaskSubmissions.isEmpty || !pendingTaskStops.isEmpty
                 || pendingRoutingPolicyChange != nil || pendingUsageCommand != nil
+                || pendingParkedTaskMove != nil
                 || !comprehensionQueue.isEmpty
                 || fingerprint != nil
         else {
@@ -1107,6 +1121,8 @@ public final class SyncCoordinator {
                     routingDaemonID: submissionDaemonID,
                     pendingUsageCommand: pendingUsageCommand,
                     usageDaemonID: submissionDaemonID,
+                    pendingParkedTaskMove: pendingParkedTaskMove,
+                    moveDaemonID: submissionDaemonID,
                     comprehensionQueue: comprehensionQueue,
                     comprehensionSequence: store.comprehensionSequence,
                     registeredCapabilityFingerprint: fingerprint,
@@ -1264,5 +1280,42 @@ public final class SyncCoordinator {
         guard let receipt = entry.receipt, cursors.lastFullSnapshotRevision >= receipt.revision else { return }
         finishUsageCommand()
         if pendingUsageCommand == nil { settledUsageCommand = receipt }
+    }
+
+    /// Persist the exact command before sending it; a failed write rolls
+    /// back. Holds one move at a time: a different command is refused while
+    /// another is unresolved.
+    func retainParkedTaskMove(_ entry: PendingParkedTaskMove) -> Bool {
+        guard entry.isValid(deviceID: store.device.deviceID),
+            pendingParkedTaskMove == nil || pendingParkedTaskMove?.command == entry.command
+        else { return false }
+        let previous = pendingParkedTaskMove
+        pendingParkedTaskMove = entry
+        guard persist() else {
+            pendingParkedTaskMove = previous
+            return false
+        }
+        return true
+    }
+
+    func finishParkedTaskMove() {
+        let previous = pendingParkedTaskMove
+        pendingParkedTaskMove = nil
+        if !persist() { pendingParkedTaskMove = previous }
+    }
+
+    /// An accepted move settles once fresh sync's full snapshot is at or past
+    /// the receipt's revision, where the task's new lines are recorded. A new
+    /// epoch settles any move, answered or not: the restored daemon's park
+    /// is what sync now shows, and a resend could move a task the operator
+    /// never saw parked.
+    func settleParkedTaskMove() {
+        guard store.freshness == .fresh, let cursors, let entry = pendingParkedTaskMove else { return }
+        if cursors.syncEpoch != entry.syncEpoch {
+            finishParkedTaskMove()
+            return
+        }
+        guard let receipt = entry.receipt, cursors.lastFullSnapshotRevision >= receipt.revision else { return }
+        finishParkedTaskMove()
     }
 }

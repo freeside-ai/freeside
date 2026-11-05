@@ -46,6 +46,10 @@ public struct CachedState: Codable, Equatable, Sendable {
     /// the same way. Additive: a cache without it loads none.
     public var pendingUsageCommand: PendingUsageCommand?
     public var usageDaemonID: String?
+    /// The unresolved move of a parked task, and the daemon it was sent to,
+    /// kept the same way. Additive: a cache without it loads none.
+    public var pendingParkedTaskMove: PendingParkedTaskMove?
+    public var moveDaemonID: String?
     public var pendingTaskSubmissions: [String: Components.Schemas.ClientCommand]?
     public var submissionDaemonID: String?
     public var cursors: SyncCursors?
@@ -110,6 +114,8 @@ public struct CachedState: Codable, Equatable, Sendable {
         routingDaemonID: String? = nil,
         pendingUsageCommand: PendingUsageCommand? = nil,
         usageDaemonID: String? = nil,
+        pendingParkedTaskMove: PendingParkedTaskMove? = nil,
+        moveDaemonID: String? = nil,
         comprehensionQueue: [InboxStore.QueuedComprehensionEvent]? = nil,
         comprehensionSequence: Int? = nil,
         registeredCapabilityFingerprint: String? = nil,
@@ -136,6 +142,8 @@ public struct CachedState: Codable, Equatable, Sendable {
         self.routingDaemonID = routingDaemonID
         self.pendingUsageCommand = pendingUsageCommand
         self.usageDaemonID = usageDaemonID
+        self.pendingParkedTaskMove = pendingParkedTaskMove
+        self.moveDaemonID = moveDaemonID
         self.comprehensionQueue = comprehensionQueue
         self.comprehensionSequence = comprehensionSequence
         self.registeredCapabilityFingerprint = registeredCapabilityFingerprint
@@ -189,6 +197,9 @@ public struct CachedState: Codable, Equatable, Sendable {
         pendingUsageCommand = try? container.decodeIfPresent(
             PendingUsageCommand.self, forKey: .pendingUsageCommand)
         usageDaemonID = try? container.decodeIfPresent(String.self, forKey: .usageDaemonID)
+        pendingParkedTaskMove = try? container.decodeIfPresent(
+            PendingParkedTaskMove.self, forKey: .pendingParkedTaskMove)
+        moveDaemonID = try? container.decodeIfPresent(String.self, forKey: .moveDaemonID)
         // The telemetry queue and its state degrade independently too: an
         // undecodable section loads absent, costing at most queued events.
         comprehensionQueue = try? container.decodeIfPresent(

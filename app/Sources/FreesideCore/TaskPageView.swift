@@ -514,6 +514,12 @@ struct TaskPageView: View {
             {
                 holdCallout(hold)
             }
+            // A quota-window park may offer agents on other pools; moving
+            // to one is the operator's choice, never a fallback.
+            let offers = TaskDisplay.moveOffers(position)
+            if !offers.isEmpty {
+                ParkedTaskMoveView(model: coordinator.parkedTaskMove, taskID: task.id, offers: offers)
+            }
             switch lines.visibleGuidance(attention: position?.attention == true) {
             case .link(let title):
                 // The card the guidance names is on the page, so it says
