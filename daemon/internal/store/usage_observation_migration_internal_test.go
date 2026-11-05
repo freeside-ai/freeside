@@ -14,8 +14,7 @@ import (
 func TestUsageObservationsReviewMigrationKeepsRows(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
-	db := openRaw(t)
-	migrateThrough(t, ctx, db, "0102_")
+	db := openRawThrough(t, "0102_")
 
 	const row = `'inv-1', 'run-1', 'sha256:agent', 'sha256:launch', 'sha256:treatment',
 		'pricing-1', 'adapter_transcript', 'reported_usage', 'input_tokens', 'tokens',

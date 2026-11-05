@@ -74,8 +74,7 @@ func readinessWaiverOptions(grant domain.Digest) Options {
 func TestVerificationReadinessMigrationAppliesFromHead(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
-	db := openRaw(t)
-	migrateThrough(t, ctx, db, "0038_")
+	db := openRawThrough(t, "0038_")
 	if got := rawVersion(t, db); got != 37 {
 		t.Fatalf("prior version = %d, want 37", got)
 	}

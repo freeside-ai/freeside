@@ -15,9 +15,7 @@ import (
 // the table's own constraints, not a missing parent row, can reject an insert.
 func TestEffectProposalPolicyApprovalsMigrationCreatesTable(t *testing.T) {
 	ctx := context.Background()
-	db := openRaw(t)
-
-	migrateThrough(t, ctx, db, "0080_")
+	db := openRawThrough(t, "0080_")
 	if got := rawVersion(t, db); got != 79 {
 		t.Fatalf("schema version before head = %d, want 79", got)
 	}

@@ -16,8 +16,7 @@ import (
 func TestFindingDispositionMigrationAppliesFromHead(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
-	db := openRaw(t)
-	migrateThrough(t, ctx, db, "0037_")
+	db := openRawThrough(t, "0037_")
 	if got := rawVersion(t, db); got != 36 {
 		t.Fatalf("prior schema version = %d, want 36", got)
 	}

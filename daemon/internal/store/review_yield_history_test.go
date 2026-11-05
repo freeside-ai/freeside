@@ -13,8 +13,7 @@ import (
 func TestAttentionYieldHistoryMigrationAppliesFromPriorHead(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
-	db := openRaw(t)
-	migrateThrough(t, ctx, db, "0055_")
+	db := openRawThrough(t, "0055_")
 	if got := rawVersion(t, db); got != 54 {
 		t.Fatalf("prior schema version = %d, want 54", got)
 	}

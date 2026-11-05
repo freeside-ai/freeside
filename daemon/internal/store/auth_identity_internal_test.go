@@ -45,8 +45,7 @@ func migrateThrough(t *testing.T, ctx context.Context, db *sql.DB, before string
 func TestAuthIdentityMigrationAppliesFromHead(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
-	db := openRaw(t)
-	migrateThrough(t, ctx, db, "0013_")
+	db := openRawThrough(t, "0013_")
 
 	// A run recorded under the old schema must survive untouched: the
 	// migration adds tables and rewrites nothing.

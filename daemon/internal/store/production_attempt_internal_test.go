@@ -37,8 +37,7 @@ func TestProductionAttemptApprovalDecisionSetAcceptsHistoricalAndCurrentShapes(t
 func TestProductionAttemptMigrationAppliesFromHead(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
-	db := openRaw(t)
-	migrateThrough(t, ctx, db, "0048_")
+	db := openRawThrough(t, "0048_")
 	if got := rawVersion(t, db); got != 47 {
 		t.Fatalf("prior schema version = %d, want 47", got)
 	}

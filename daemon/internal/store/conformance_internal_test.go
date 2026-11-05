@@ -94,8 +94,7 @@ func TestTamperedConformanceRowFailsClosed(t *testing.T) {
 func TestConformanceConfigurationMigrationPreservesLegacyRowsAsUnbound(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
-	db := openRaw(t)
-	migrateThrough(t, ctx, db, "0020_")
+	db := openRawThrough(t, "0020_")
 	if _, err := db.ExecContext(ctx, `
 INSERT INTO backend_conformance_records
     (backend, outcome, capabilities, proved_at)

@@ -19,12 +19,10 @@ import (
 // and effect-proposal instance all still reconstruct.
 func TestTaskProposalVocabularyMigrationAppliesFromHead(t *testing.T) {
 	ctx := context.Background()
-	db := openRaw(t)
-
 	// The fixture is dumped against the schema immediately before 0070; load it
 	// there, then bring it to the real head just before 0074 to read the
 	// pre-rename state, exactly as the fixture's other migration tests do.
-	migrateThrough(t, ctx, db, "0070_")
+	db := openRawThrough(t, "0070_")
 	dump, err := os.ReadFile(filepath.Join("testdata", "pre_tasks_started_label_intake.sql"))
 	if err != nil {
 		t.Fatal(err)

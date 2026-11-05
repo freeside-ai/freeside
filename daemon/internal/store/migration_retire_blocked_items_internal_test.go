@@ -347,11 +347,11 @@ func TestOpenBlockedItemSurvivesTheDecodingBackfills(t *testing.T) {
 			t.Parallel()
 			ctx := context.Background()
 			path := filepath.Join(t.TempDir(), "store.db")
+			copySnapshotThrough(t, path, tc.before)
 			db, err := openDB(path, Options{})
 			if err != nil {
 				t.Fatalf("openDB: %v", err)
 			}
-			migrateThrough(t, ctx, db, tc.before)
 			if err := seedEpoch(ctx, db); err != nil {
 				t.Fatal(err)
 			}

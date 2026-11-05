@@ -73,8 +73,7 @@ func attentionItemWithEvidence(
 func TestAttentionSubjectRunBindingMigrationAppliesFromHead(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
-	db := openRaw(t)
-	migrateThrough(t, ctx, db, "0050_")
+	db := openRawThrough(t, "0050_")
 	if got := rawVersion(t, db); got != 49 {
 		t.Fatalf("prior schema version = %d, want 49", got)
 	}

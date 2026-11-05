@@ -13,8 +13,7 @@ import (
 func TestSuccessorPublicationMigrationPreservesHistory(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
-	db := openRaw(t)
-	migrateThrough(t, ctx, db, "0062_")
+	db := openRawThrough(t, "0062_")
 	if err := seedEpoch(ctx, db); err != nil {
 		t.Fatal(err)
 	}

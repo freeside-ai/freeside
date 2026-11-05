@@ -15,8 +15,7 @@ import (
 
 func TestEffectProposalMigrationAppliesFromHead(t *testing.T) {
 	ctx := context.Background()
-	db := openRaw(t)
-	migrateThrough(t, ctx, db, "0040_")
+	db := openRawThrough(t, "0040_")
 	if err := migrate(ctx, db, migrations.FS); err != nil {
 		t.Fatal(err)
 	}

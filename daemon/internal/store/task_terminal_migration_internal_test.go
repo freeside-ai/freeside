@@ -14,8 +14,7 @@ func TestTaskMigrationRebindsOnlyAuthenticatedFakeTerminals(t *testing.T) {
 	for _, scenario := range []string{"ready", "blocked", "v1", "reason", "label", "task", "surface"} {
 		t.Run(scenario, func(t *testing.T) {
 			ctx := t.Context()
-			db := openRaw(t)
-			migrateThrough(t, ctx, db, "0070_")
+			db := openRawThrough(t, "0070_")
 			f := newLegacyFakePRFixture(t)
 			item := f.item
 			item.DisplayNames = &domain.DisplayNames{

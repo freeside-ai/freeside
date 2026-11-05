@@ -16,8 +16,7 @@ import (
 // the prior schema and creates the authoring table at schema version 78.
 func TestPublicationAuthoringMigrationAppliesFromHead(t *testing.T) {
 	ctx := context.Background()
-	db := openRaw(t)
-	migrateThrough(t, ctx, db, "0077_")
+	db := openRawThrough(t, "0077_")
 	if err := migrate(ctx, db, migrations.FS); err != nil {
 		t.Fatal(err)
 	}

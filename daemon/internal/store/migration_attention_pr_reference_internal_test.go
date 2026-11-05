@@ -44,8 +44,7 @@ func TestAuthenticateLegacyFakePRReferenceRefutesCorruptHistory(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			ctx := context.Background()
-			db := openRaw(t)
-			migrateThrough(t, ctx, db, "0036_")
+			db := openRawThrough(t, "0036_")
 			fixture := newLegacyFakePRFixture(t)
 			if tc.mutate != nil {
 				tc.mutate(&fixture)
