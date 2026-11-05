@@ -162,11 +162,13 @@ import Testing
             let lead: Lead
             let navigation: NavigationModel
             let preferences: DecisionSectionPreferences
+            let disclosures: TaskTimelineDisclosurePreferences
 
             var body: some View {
                 TaskPageHost(
                     coordinator: coordinator, snapshot: task, leadingItemID: lead.itemID, memory: memory,
                     onOpenRun: { _ in }, onOpenItem: { _ in },
+                    disclosures: disclosures,
                     card: { itemID, seat in
                         DecisionDetailView(
                             store: coordinator.store, itemID: itemID,
@@ -197,11 +199,12 @@ import Testing
             let suite = "FreesideTaskPagePlace-\(UUID().uuidString)"
             let defaults = try #require(UserDefaults(suiteName: suite))
             defer { defaults.removePersistentDomain(forName: suite) }
+            let disclosures = TaskTimelineDisclosurePreferences(defaults: defaults)
 
             let host = NSHostingView(
                 rootView: Harness(
                     coordinator: coordinator, task: task, memory: memory, lead: lead, navigation: navigation,
-                    preferences: DecisionSectionPreferences(defaults: defaults)))
+                    preferences: DecisionSectionPreferences(defaults: defaults), disclosures: disclosures))
             let window = NSWindow(
                 contentRect: CGRect(x: 0, y: 0, width: 1_000, height: 360), styleMask: [.titled],
                 backing: .buffered, defer: false)
@@ -303,12 +306,17 @@ import Testing
             try expectNoRemount("after the lead passes to the sibling")
             try await expectTimelineAtTheRow("after the lead passes to the sibling")
 
-            // A reveal request scrolls the page to the seated card's technical
-            // details, which sit in the Decisions section.
+            // A reveal request opens the page's Identifiers footer, which
+            // holds the seated card's identifiers (#2607), and scrolls the
+            // page down to it, past the Timeline rather than up to the card.
+            #expect(!disclosures.isExpanded(.identifiers, taskID: task.task.id))
+            let beforeReveal = offset
             lead.reveal = .init(itemID: sibling.item.id, nonce: UUID())
-            try await settle { lead.reveal == nil }
+            try await settle { lead.reveal == nil && offset > beforeReveal }
             #expect(lead.reveal == nil)
-            #expect(memory.anchor == .section(.decisions))
+            #expect(disclosures.isExpanded(.identifiers, taskID: task.task.id))
+            #expect(offset > beforeReveal)
+            #expect(memory.anchor != .section(.decisions))
 
             // The operator opens the card that leads: routing changes nothing,
             // and the page moves to the card.

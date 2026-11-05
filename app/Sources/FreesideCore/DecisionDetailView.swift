@@ -45,11 +45,17 @@ enum DecisionLaunchComposerGate {
 /// the model's revalidation of current state succeeds.
 struct DecisionDetailView: View {
     /// The card's seat in the task page, which owns the scroll view: the
-    /// card draws none of its own, reveals its technical details through
-    /// the page's proxy, and on iOS hands its sticky recommended action up
-    /// to the page (`TaskPageFooterKey`).
+    /// card draws none of its own, and on iOS hands its sticky recommended
+    /// action up to the page (`TaskPageFooterKey`). Its identifier rows join
+    /// the page's Identifiers footer rather than a fold of its own (#2607).
     struct PageSeat {
         let scrollProxy: ScrollViewProxy
+        /// Hands the card's identifier rows, keyed by item id, to the page.
+        /// Only the card can build them, from facts its model fetches, and
+        /// the page's footer is drawn by the page, not the card.
+        var publishIdentifiers: (String, [AttentionDisplay.BindingRow]) -> Void = { _, _ in }
+        /// Opens the page's Identifiers footer and scrolls to it.
+        var revealIdentifiers: () -> Void = {}
     }
 
     /// The scroll view the recommendation's visibility is measured against:
@@ -57,7 +63,7 @@ struct DecisionDetailView: View {
     static let scrollSpace = "decision-card-scroll"
 
     private enum ScrollTarget: Hashable {
-        case technicalDetails
+        case identifiers
     }
 
     /// A consequential action awaiting its seal. Identified by action and
@@ -130,8 +136,6 @@ struct DecisionDetailView: View {
     private let topMargin: CGFloat?
     /// Seats the card in the task page. Nil is the card alone in the pane.
     private let seat: PageSeat?
-    /// Room for the task page's pinned outline row above a scroll target.
-    @ScaledMetric(relativeTo: .caption) private var pinnedClearance: CGFloat = 44
     private let onSelectItem: (String) -> Void
     /// The tasks a closed card's timeline link resolves its item against.
     private let tasks: [Components.Schemas.TaskSnapshot]
@@ -208,16 +212,25 @@ struct DecisionDetailView: View {
                         proposalFacts: model.proposalFacts,
                         effectProposalFacts: model.effectProposalFacts,
                         accessibilityLayout: isAccessibilityLayout,
-                        compactLayout: horizontalSizeClass == .compact
+                        compactLayout: horizontalSizeClass == .compact,
+                        onPage: seat != nil
                     )
                     if let seat {
                         // The page draws the scroll view and its title.
+                        let identifiers = Self.identifierRows(
+                            snapshot.item, proposalFacts: model.proposalFacts,
+                            effectProposalFacts: model.effectProposalFacts)
                         takesRecommendationOnReturn(drawn.pageCard(compact: horizontalSizeClass == .compact))
+                            // A late facts fetch or a new item version
+                            // changes the rows, so the footer follows them.
+                            .onChange(of: identifiers, initial: true) {
+                                seat.publishIdentifiers(itemID, identifiers)
+                            }
                             .onChange(of: detailsRevealRequest) {
-                                revealTechnicalDetailsIfRequested(using: seat.scrollProxy)
+                                revealIdentifiersIfRequested(using: seat.scrollProxy)
                             }
                             .onAppear {
-                                revealTechnicalDetailsIfRequested(using: seat.scrollProxy)
+                                revealIdentifiersIfRequested(using: seat.scrollProxy)
                             }
                     } else {
                         ScrollViewReader { scrollProxy in
@@ -227,10 +240,10 @@ struct DecisionDetailView: View {
                             }
                             .coordinateSpace(name: Self.scrollSpace)
                             .onChange(of: detailsRevealRequest) {
-                                revealTechnicalDetailsIfRequested(using: scrollProxy)
+                                revealIdentifiersIfRequested(using: scrollProxy)
                             }
                             .onAppear {
-                                revealTechnicalDetailsIfRequested(using: scrollProxy)
+                                revealIdentifiersIfRequested(using: scrollProxy)
                             }
                         }
                         .navigationTitle(AttentionDisplay.title(snapshot.item))
@@ -432,11 +445,17 @@ struct DecisionDetailView: View {
         }
     }
 
-    private func revealTechnicalDetailsIfRequested(using scrollProxy: ScrollViewProxy) {
+    /// Opens the card's identifiers where they draw: the page's footer for
+    /// a seated card, the card's own Identifiers fold otherwise.
+    private func revealIdentifiersIfRequested(using scrollProxy: ScrollViewProxy) {
         guard let detailsRevealRequest, detailsRevealRequest.itemID == itemID else { return }
-        detailsExpanded.wrappedValue = true
-        withAnimation {
-            scrollProxy.scrollTo(ScrollTarget.technicalDetails, anchor: .top)
+        if let seat {
+            seat.revealIdentifiers()
+        } else {
+            detailsExpanded.wrappedValue = true
+            withAnimation {
+                scrollProxy.scrollTo(ScrollTarget.identifiers, anchor: .top)
+            }
         }
         model.emitDetailsOpenedBeforeActing()
         consumeDetailsRevealRequest(detailsRevealRequest.nonce)
@@ -507,13 +526,13 @@ struct DecisionDetailView: View {
         rendersInteractiveControls: Bool = true,
         accessibilityLayout: Bool,
         compactLayout: Bool,
+        onPage: Bool,
         actionRegionFrameChanged: ((CGRect) -> Void)? = nil
     ) -> some View {
         let composition = DecisionCardComposition.forType(item._type)
         let register = unverified(
             item,
             effectProposalFacts: effectProposalFacts,
-            accessibilityLayout: accessibilityLayout,
             rendersInteractiveControls: rendersInteractiveControls)
         let modules = CardModules(
             item: item,
@@ -521,7 +540,8 @@ struct DecisionDetailView: View {
             proposalFacts: proposalFacts,
             effectProposalFacts: effectProposalFacts,
             register: register,
-            accessibilityLayout: accessibilityLayout)
+            accessibilityLayout: accessibilityLayout,
+            onPage: onPage)
         VStack(alignment: .leading, spacing: CardScale.sectionGap) {
             VStack(alignment: .leading, spacing: CardScale.headGap) {
                 eyebrow(item, register: register, accessibilityLayout: accessibilityLayout)
@@ -596,11 +616,9 @@ struct DecisionDetailView: View {
             }
 
             let stackedLayout = accessibilityLayout || compactLayout
-            let foldsReason = reasonPlacement == .recordedContext
             cardColumn(
                 modules,
                 stackedLayout: stackedLayout,
-                foldsReason: foldsReason,
                 actionRegionFrameChanged: actionRegionFrameChanged)
         }
         // The card's own space, so a measurement reads from the card's top
@@ -616,6 +634,10 @@ struct DecisionDetailView: View {
         let effectProposalFacts: Components.Schemas.EffectProposalFactsSnapshot?
         let register: UnverifiedRegister
         let accessibilityLayout: Bool
+        /// Whether the card sits on a task page, whose Identifiers footer
+        /// takes the card's identifier rows. Explicit rather than read from
+        /// the seat, because a screenshot draws the page's card with none.
+        let onPage: Bool
     }
 
     private func cardModules(_ range: Range<Int>, _ modules: CardModules) -> some View {
@@ -634,22 +656,40 @@ struct DecisionDetailView: View {
     }
 
     /// The card's one column, at any pane width: the modules a decision
-    /// rests on, the control group, the folds, and then the supporting
-    /// modules.
+    /// rests on, the Evidence fold, the control group, and the hairline's
+    /// folds (#2607).
     @ViewBuilder
     private func cardColumn(
         _ modules: CardModules,
         stackedLayout: Bool,
-        foldsReason: Bool,
         actionRegionFrameChanged: ((CGRect) -> Void)?
     ) -> some View {
+        let item = modules.item
+        let evidenceClaims = modules.composition.evidenceClaims(
+            from: item.agent_claims, prominentClaimIndex: graphics.prominentClaimIndex,
+            on: DecisionCardComposition.UnverifiedContext.currentPlatform)
+        let identifierRows = Self.identifierRows(
+            item, proposalFacts: modules.proposalFacts,
+            effectProposalFacts: modules.effectProposalFacts)
+        let recordedContext = recordedContext(modules)
+        let foot = DecisionCardFoot(
+            evidenceClaims: evidenceClaims,
+            attachments: item.evidence_snapshot.count,
+            recordedContext: recordedContext,
+            identifierRows: identifierRows,
+            onPage: modules.onPage)
         cardModules(modules.composition.leadModules, modules)
+        if foot.aboveActions.contains(.evidence) {
+            evidenceFold(modules, claims: evidenceClaims)
+        }
         controlGroup(
             modules,
             stackedLayout: stackedLayout,
             actionRegionFrameChanged: actionRegionFrameChanged)
-        folds(modules, foldsReason: foldsReason)
-        cardModules(modules.composition.supportingModules, modules)
+        if !foot.underHairline.isEmpty {
+            hairlineFolds(
+                modules, foot: foot, recordedContext: recordedContext, identifierRows: identifierRows)
+        }
     }
 
     /// The reviewing action and the action region are one control group
@@ -749,18 +789,28 @@ struct DecisionDetailView: View {
         return item
     }
 
-    /// The card's one hairline (R26) and the folds under it: the folded
-    /// modules, Recorded Context, and then what the card's foot holds on
-    /// every card (`footFolds`).
-    @ViewBuilder
-    private func folds(_ modules: CardModules, foldsReason: Bool) -> some View {
-        let foldsReason = foldsReason && DecisionCardComposition.reason(for: modules.item) != nil
+    /// The card's one hairline (R26) and the folds under it: Recorded
+    /// Context and, on a card with no page, its own Identifiers.
+    private func hairlineFolds(
+        _ modules: CardModules,
+        foot: DecisionCardFoot,
+        recordedContext: DecisionRecordedContext,
+        identifierRows: [AttentionDisplay.BindingRow]
+    ) -> some View {
         VStack(alignment: .leading, spacing: CardScale.foldGap) {
-            cardModules(modules.composition.foldedModules, modules)
-            if foldsReason {
-                recordedContext(modules.item, register: modules.register)
+            if foot.underHairline.contains(.recordedContext) {
+                recordedContextFold(modules, content: recordedContext)
             }
-            footFolds(modules)
+            if foot.underHairline.contains(.identifiers) {
+                TechnicalDetailsSection(
+                    rows: identifierRows,
+                    summary: Self.identifiersSummary(modules.item, rows: identifierRows),
+                    rendersInteractiveControls: modules.register.rendersInteractiveControls,
+                    isExpanded: detailsExpanded,
+                    rowIndent: FootScale.rowIndent
+                )
+                .id(ScrollTarget.identifiers)
+            }
         }
         .padding(.top, CardScale.foldLead)
         .overlay(alignment: .top) {
@@ -768,68 +818,109 @@ struct DecisionDetailView: View {
         }
     }
 
-    /// The card's foot, closed by default on both platforms: the attachment
-    /// claims, the evidence packet, and the technical bindings. The rest of
-    /// the card carries the Section 9 facts and the authenticated proposal,
-    /// so these hold only what it omits. Each is a disclosure, so none of
-    /// their labels carries the card's explanation control.
-    @ViewBuilder
-    private func footFolds(_ modules: CardModules) -> some View {
+    /// The agent's claims and the evidence packet, closed by default,
+    /// directly above the control group: what the decision rests on, one
+    /// disclosure away. A fold that holds claims keeps the unverified
+    /// register as its first line and says it aloud, since the sentence
+    /// label carries none.
+    private func evidenceFold(
+        _ modules: CardModules, claims: [Components.Schemas.AgentClaim]
+    ) -> some View {
         let item = modules.item
         let register = modules.register.withoutInfo
-        let rendersInteractiveControls = register.rendersInteractiveControls
-        let footClaims = modules.composition.footClaims(
-            from: item.agent_claims, prominentClaimIndex: graphics.prominentClaimIndex)
-        if !footClaims.isEmpty {
-            footFold(
-                "Claims",
-                summary: Self.footClaimsSummary(count: footClaims.count),
-                spokenLabel: Self.footClaimsSpokenLabel(count: footClaims.count),
-                isExpanded: claimsExpanded,
-                unverified: register
-            ) {
-                claimRows(footClaims, unverified: register, boxed: true)
-            }
-        }
-        if !item.evidence_snapshot.isEmpty {
-            footFold(
-                "Evidence",
-                summary: Self.footEvidenceSummary(count: item.evidence_snapshot.count),
-                isExpanded: evidenceExpanded
-            ) {
-                ForEach(item.evidence_snapshot, id: \.id) { artifact in
-                    AttachmentRow(
-                        label: artifact._type.rawValue,
-                        digest: artifact.digest,
-                        metadata: artifact.metadata,
-                        attachments: attachments,
-                        loadsAttachments: loadsAttachments,
-                        rendersInteractiveControls: rendersInteractiveControls,
-                        boxed: true)
-                }
-            }
-        }
-        let rows = detailRows(item)
-        footFold(
-            "Technical Bindings",
-            summary: Self.footBindingsSummary(rows),
-            isExpanded: detailsExpanded
+        let attachmentCount = item.evidence_snapshot.count
+        return footFold(
+            "Evidence",
+            summary: Self.evidenceSummary(claims: claims.count, attachments: attachmentCount),
+            spokenLabel: Self.evidenceSpokenLabel(claims: claims.count, attachments: attachmentCount),
+            isExpanded: evidenceExpanded,
+            unverified: claims.isEmpty ? nil : register
         ) {
-            detailsReason(item, register: register)
-            ForEach(Array(rows.enumerated()), id: \.offset) { _, row in
-                TechnicalDetailRow(row: row, rendersInteractiveControls: rendersInteractiveControls)
+            claimRows(claims, unverified: register, boxed: true)
+            ForEach(item.evidence_snapshot, id: \.id) { artifact in
+                AttachmentRow(
+                    label: artifact._type.rawValue,
+                    digest: artifact.digest,
+                    metadata: artifact.metadata,
+                    attachments: attachments,
+                    loadsAttachments: loadsAttachments,
+                    rendersInteractiveControls: register.rendersInteractiveControls,
+                    boxed: true)
             }
-        }
-        // A task page pins its outline row over the scroll view's top, so the
-        // target stands clear of it. The card alone pins nothing.
-        .background(alignment: .top) {
-            Color.clear
-                .frame(height: seat == nil ? 0 : pinnedClearance)
-                .id(ScrollTarget.technicalDetails)
-                .padding(.top, seat == nil ? 0 : -pinnedClearance)
         }
         .foregroundStyle(Color.inkDim)
         .textSelection(.enabled)
+    }
+
+    /// What the card's Recorded Context holds, read from the same inputs
+    /// its modules draw from.
+    private func recordedContext(_ modules: CardModules) -> DecisionRecordedContext {
+        let item = modules.item
+        let composition = modules.composition
+        func places(_ module: DecisionCardModule, in range: Range<Int>) -> Bool {
+            composition.modules[range].contains(module)
+        }
+        let summaries = composition.summaries(from: item.agent_claims)
+        let summaryFolds = places(.summary, in: composition.supportingModules)
+        return DecisionRecordedContext(
+            hasReason: DecisionCardComposition.reason(for: item) != nil,
+            hasRunDetails: places(.foldedFacts, in: composition.foldedModules)
+                && !DecisionFactPlacement(item, includesCommitPlan: false, now: now).folded.isEmpty,
+            hasReviewYield: places(.yieldChart, in: composition.foldedModules)
+                && (graphics.diminishingYield != nil || DecisionYieldPresentation(item) != nil),
+            readingRows: Self.readingRows(item, unavailable: actionRanking(item).unavailable),
+            hasFactBlock: places(.factBlock, in: composition.supportingModules) && drawsFactBlock,
+            hasAgentSummary: summaryFolds
+                && (item._type == .ready_for_final_review || !summaries.isEmpty),
+            hasReport: summaryFolds && !summaries.isEmpty)
+    }
+
+    /// Whether the fact block module has anything to draw.
+    private var drawsFactBlock: Bool {
+        graphics.changeSummary != nil || graphics.attemptTimings != nil
+            || graphics.comparison?.verifiableFacts.isEmpty == false
+    }
+
+    /// The card's one reading fold under the hairline, flat, with no fold
+    /// inside it but a summary's report: the daemon's reason in full on
+    /// every type (plan §9 has the card's details carry it, wherever the
+    /// face draws it), the folded modules, the reading rows, and the
+    /// modules that support the decision from below the actions.
+    private func recordedContextFold(
+        _ modules: CardModules, content: DecisionRecordedContext
+    ) -> some View {
+        let item = modules.item
+        let register = modules.register.withoutInfo
+        // No module in here takes the card's explanation control, so on a
+        // card with nowhere else to carry it the fold explains itself when
+        // it holds agent words.
+        let holdsAgentWords =
+            DecisionCardComposition.reason(for: item)?.isAgentWritten == true
+            || content.hasAgentSummary
+            || (content.hasFactBlock && graphics.changeSummary != nil)
+        return footFold(
+            "Recorded Context",
+            summary: content.summary,
+            isExpanded: disclosure(.recordedContext),
+            spacing: CardScale.moduleGap
+        ) {
+            if holdsAgentWords {
+                foldedUnverifiedSentence(register)
+            }
+            detailsReason(item, register: register)
+            cardModules(modules.composition.foldedModules, modules)
+            if !content.readingRows.isEmpty {
+                VStack(alignment: .leading, spacing: 6) {
+                    ForEach(Array(content.readingRows.enumerated()), id: \.offset) { _, row in
+                        factRow(row.label, value: row.value)
+                    }
+                }
+                .font(FreesideFont.callout)
+                .foregroundStyle(Color.ink)
+                .textSelection(.enabled)
+            }
+            cardModules(modules.composition.supportingModules, modules)
+        }
     }
 
     /// Whether the card has a control group to draw: an action
@@ -897,8 +988,17 @@ struct DecisionDetailView: View {
         let rendersInteractiveControls = register.rendersInteractiveControls
         switch module {
         case .foldedFacts:
-            foldedFacts(
-                DecisionFactPlacement(item, includesCommitPlan: false, now: now), summarized: true)
+            // Drawn inside Recorded Context, which is already the fold, so
+            // the rows sit under their keyword rather than a fold of their
+            // own (#2607).
+            let placement = DecisionFactPlacement(item, includesCommitPlan: false, now: now)
+            if !placement.folded.isEmpty {
+                keywordSection(DecisionFactPlacement.foldedTitle) {
+                    ForEach(placement.folded) { fact in
+                        factRow(fact)
+                    }
+                }
+            }
         case .facts:
             factsSection(
                 item,
@@ -995,9 +1095,7 @@ struct DecisionDetailView: View {
             if let presentation = graphics.diminishingYield ?? DecisionYieldPresentation(item) {
                 DecisionYieldChartModuleView(
                     presentation: presentation,
-                    showsBars: graphics.diminishingYield != nil,
-                    isExpanded: item._type == .ready_for_final_review
-                        ? disclosure(.reviewYield) : nil)
+                    showsBars: graphics.diminishingYield != nil)
             }
         case .stopCause:
             if let presentation = DecisionStopCausePresentation(item) {
@@ -1022,19 +1120,21 @@ struct DecisionDetailView: View {
         case .summary:
             agentSummary(item, register: register)
         case .claims:
-            claims(
-                composition.claimsInCard(
-                    from: item.agent_claims,
-                    at: moduleIndex,
-                    prominentClaimIndex: graphics.prominentClaimIndex,
-                    on: DecisionCardComposition.UnverifiedContext.currentPlatform),
-                title: composition.claimsAreProminent(at: moduleIndex)
-                    ? DecisionCardComposition.leadClaimsKeyword(for: item._type) : "Agent Claims",
-                accessibilityLayout: accessibilityLayout,
-                prominent: composition.claimsAreProminent(at: moduleIndex),
-                unverified: register)
+            // A claims module under the actions lists its claims in the
+            // Evidence fold instead (`evidenceClaims`).
+            if composition.claimsAreProminent(at: moduleIndex) {
+                claims(
+                    composition.claimsInCard(
+                        from: item.agent_claims,
+                        at: moduleIndex,
+                        prominentClaimIndex: graphics.prominentClaimIndex,
+                        on: DecisionCardComposition.UnverifiedContext.currentPlatform),
+                    title: DecisionCardComposition.leadClaimsKeyword(for: item._type),
+                    unverified: register)
+            }
         case .evidence, .details:
-            // The card's foot draws these on both platforms (`footFolds`).
+            // The card's foot draws these on both platforms: Evidence above
+            // the actions, the identifiers in Identifiers.
             EmptyView()
         }
     }
@@ -1212,24 +1312,9 @@ struct DecisionDetailView: View {
         }
     }
 
-    /// The reason one disclosure away, below the actions, on a card whose
-    /// lead already says what the operator is deciding.
-    @ViewBuilder
-    private func recordedContext(
-        _ item: Components.Schemas.AttentionItem, register: UnverifiedRegister
-    ) -> some View {
-        if let reason = DecisionCardComposition.reason(for: item) {
-            SentenceDisclosure(
-                label: "Recorded Context", isExpanded: disclosure(.recordedContext)
-            ) {
-                reasonText(reason, color: .ink, register: register.withoutInfo)
-                    .padding(.top, 8)
-            }
-        }
-    }
-
-    /// The reason in Details, which carry it in full on every type whether
-    /// or not the card draws it anywhere else (plan §9 revision 82).
+    /// The reason in Recorded Context, which carries it in full on every
+    /// type whether or not the card draws it anywhere else (plan §9
+    /// revision 82).
     @ViewBuilder
     private func detailsReason(
         _ item: Components.Schemas.AttentionItem, register: UnverifiedRegister
@@ -1248,8 +1333,9 @@ struct DecisionDetailView: View {
     }
 
     /// `isSummary` marks a reason that is the agent's Markdown summary (a
-    /// specification approval's), which Details draw as the card draws the
-    /// summary and in full; every other reason is a sentence as written.
+    /// specification approval's), which Recorded Context draws as the card
+    /// draws the summary and in full; every other reason is a sentence as
+    /// written.
     @ViewBuilder
     private func reasonText(
         _ reason: DecisionCardComposition.Reason, color: Color, register: UnverifiedRegister,
@@ -1325,19 +1411,16 @@ struct DecisionDetailView: View {
             }
         }
         if drawsFold {
-            foldedFacts(placement, summarized: false)
+            foldedFacts(placement)
         }
     }
 
-    /// The routine facts behind their disclosure. Under the actions the
-    /// closed fold names what it holds (R2); above them it stays the bare
-    /// label.
+    /// The routine facts behind their disclosure, above the actions.
     @ViewBuilder
-    private func foldedFacts(_ placement: DecisionFactPlacement, summarized: Bool) -> some View {
+    private func foldedFacts(_ placement: DecisionFactPlacement) -> some View {
         if !placement.folded.isEmpty {
             SentenceDisclosure(
                 label: DecisionFactPlacement.foldedTitle,
-                summary: summarized ? placement.foldedSummary : nil,
                 isExpanded: disclosure(.runDetails)
             ) {
                 VStack(alignment: .leading, spacing: 8) {
@@ -1807,24 +1890,11 @@ struct DecisionDetailView: View {
     private func claims(
         _ claims: [Components.Schemas.AgentClaim],
         title: String,
-        accessibilityLayout: Bool,
-        prominent: Bool,
         unverified: UnverifiedRegister
     ) -> some View {
         if !claims.isEmpty {
-            if prominent {
-                cardSection(title, unverified: unverified) {
-                    claimRows(claims, unverified: unverified)
-                }
-            } else {
-                lowerSection(
-                    title,
-                    isExpanded: claimsExpanded,
-                    accessibilityLayout: accessibilityLayout,
-                    unverified: unverified
-                ) {
-                    claimRows(claims, unverified: unverified)
-                }
+            cardSection(title, unverified: unverified) {
+                claimRows(claims, unverified: unverified)
             }
         }
     }
@@ -1910,10 +1980,6 @@ struct DecisionDetailView: View {
         factRow("Control Plane", value: facts.scope.touches_control_plane ? "Yes" : "No")
     }
 
-    private var claimsExpanded: Binding<Bool> {
-        preferenceBinding(\.claimsExpanded)
-    }
-
     private var evidenceExpanded: Binding<Bool> {
         preferenceBinding(\.evidenceExpanded)
     }
@@ -1945,7 +2011,8 @@ struct DecisionDetailView: View {
             effectProposalFacts: nil,
             rendersInteractiveControls: false,
             accessibilityLayout: dynamicTypeSize >= .accessibility1,
-            compactLayout: compactLayout
+            compactLayout: compactLayout,
+            onPage: true
         )
         .pageCard(compact: compactLayout)
     }
@@ -1966,6 +2033,7 @@ struct DecisionDetailView: View {
             rendersInteractiveControls: false,
             accessibilityLayout: dynamicTypeSize >= .accessibility1,
             compactLayout: compactLayout,
+            onPage: false,
             actionRegionFrameChanged: actionRegionFrameChanged
         )
         .detailCard(compact: compactLayout, topMargin: topMargin)
@@ -2632,36 +2700,44 @@ struct DecisionDetailView: View {
         return !selectedAlternatives(binding).isEmpty
     }
 
-    private func detailRows(
-        _ item: Components.Schemas.AttentionItem
+    /// The card's identifier rows (#2607): `detailIdentifierRows` and the
+    /// effect proposal's own exact values. The card's "Bound to" row
+    /// abbreviates the head and base to eight characters, but the approval
+    /// authorizes this exact prospective merge, so the identifiers keep the
+    /// full head, base ref and SHA, and publication identity for audit and
+    /// copy (two bases sharing an eight-character prefix are otherwise
+    /// indistinguishable).
+    static func identifierRows(
+        _ item: Components.Schemas.AttentionItem,
+        proposalFacts: Components.Schemas.TaskProposalFactsSnapshot?,
+        effectProposalFacts: Components.Schemas.EffectProposalFactsSnapshot?
     ) -> [AttentionDisplay.BindingRow] {
         var rows = AttentionDisplay.detailIdentifierRows(
             item,
-            priorProposalDigest: model.proposalFacts?.supersedes?.value1.proposal_digest
-                ?? model.effectProposalFacts?.supersedes?.value1.proposal_digest,
-            proposalDigest: model.proposalFacts?.proposal_digest
-                ?? model.effectProposalFacts?.proposal_digest
+            priorProposalDigest: proposalFacts?.supersedes?.value1.proposal_digest
+                ?? effectProposalFacts?.supersedes?.value1.proposal_digest,
+            proposalDigest: proposalFacts?.proposal_digest ?? effectProposalFacts?.proposal_digest
         )
-        // The reading rows draw after the identifiers until the card's foot
-        // gives them a place of their own.
-        rows += AttentionDisplay.detailReadingRows(item)
-        // The card's "Bound to" row abbreviates the head and base to eight
-        // characters, but the approval authorizes this exact prospective
-        // merge, so Details keeps the full head, base ref and SHA, and
-        // publication identity for audit and copy (two bases sharing an
-        // eight-character prefix are otherwise indistinguishable).
-        if let merge = model.effectProposalFacts?.source_issue_closure?.value1.merge {
+        if let merge = effectProposalFacts?.source_issue_closure?.value1.merge {
             rows.append(.init(label: "Bound Head", value: merge.candidate_head_sha))
             rows.append(.init(label: "Bound Base", value: "\(merge.base_ref)@\(merge.base_sha)"))
             rows.append(.init(label: "Publication Identity", value: merge.publication_identity))
         }
-        if let facts = model.effectProposalFacts {
-            rows.append(contentsOf: AttentionDisplay.followUpFilingDetailRows(facts))
-            rows.append(contentsOf: AttentionDisplay.imagePolicyAdoptionDetailRows(facts))
+        if let effectProposalFacts {
+            rows.append(contentsOf: AttentionDisplay.followUpFilingDetailRows(effectProposalFacts))
+            rows.append(contentsOf: AttentionDisplay.imagePolicyAdoptionDetailRows(effectProposalFacts))
         }
-        rows.append(
-            contentsOf: AttentionDisplay.unavailableActionRows(actionRanking(item).unavailable))
         return rows
+    }
+
+    /// The card's reading rows, which Recorded Context draws under the
+    /// reason: `detailReadingRows`, then each requested action this surface
+    /// can't offer.
+    static func readingRows(
+        _ item: Components.Schemas.AttentionItem,
+        unavailable: [Components.Schemas.Action]
+    ) -> [AttentionDisplay.BindingRow] {
+        AttentionDisplay.detailReadingRows(item) + AttentionDisplay.unavailableActionRows(unavailable)
     }
 
     @ViewBuilder
@@ -2693,6 +2769,37 @@ struct DecisionDetailView: View {
         ) {
             headerBadges(item, accessibilityLayout: accessibilityLayout)
         }
+        // The card's exact handles one secondary click away, as the task
+        // eyebrow and each run header offer theirs (#2607).
+        .copyMenu {
+            ForEach(Self.eyebrowCopyItems(item), id: \.title) { copyItem in
+                if let value = copyItem.values.first, copyItem.values.count == 1 {
+                    Button(copyItem.title) { Clipboard.copy(value) }
+                } else {
+                    Menu(copyItem.title) {
+                        ForEach(copyItem.values, id: \.self) { value in
+                            Button(value) { Clipboard.copy(value) }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    /// One entry of the eyebrow's Copy menu: a single value is a button; a
+    /// title with several values opens a menu that lists each.
+    struct EyebrowCopyItem: Equatable {
+        let title: String
+        let values: [String]
+    }
+
+    /// The eyebrow's Copy menu, in the order the item row's context menu
+    /// lists the same values: the item ID, then the evidence digest, one
+    /// item per digest when there are several and none when there are none.
+    static func eyebrowCopyItems(_ item: Components.Schemas.AttentionItem) -> [EyebrowCopyItem] {
+        let digests = AttentionDisplay.uniqueEvidenceDigests(item)
+        return [EyebrowCopyItem(title: "Copy item ID", values: [item.id])]
+            + (digests.isEmpty ? [] : [EyebrowCopyItem(title: "Copy evidence digest", values: digests)])
     }
 
     @ViewBuilder
@@ -2902,11 +3009,9 @@ struct DecisionDetailView: View {
     private func unverified(
         _ item: Components.Schemas.AttentionItem,
         effectProposalFacts: Components.Schemas.EffectProposalFactsSnapshot?,
-        accessibilityLayout: Bool,
         rendersInteractiveControls: Bool
     ) -> UnverifiedRegister {
         let context = DecisionCardComposition.UnverifiedContext(
-            accessibilityLayout: accessibilityLayout,
             drawsUnverifiedRecommendation: drawnRecommendation(item)?.register.isUnverifiedClaim
                 == true,
             hasChangeSummary: graphics.changeSummary != nil,
@@ -3030,50 +3135,6 @@ struct DecisionDetailView: View {
         .frame(maxWidth: .infinity, alignment: .leading)
     }
 
-    @ViewBuilder
-    private func lowerSection<Content: View>(
-        _ title: String,
-        isExpanded: Binding<Bool>,
-        accessibilityLayout: Bool,
-        unverified: UnverifiedRegister? = nil,
-        @ViewBuilder content: @escaping () -> Content
-    ) -> some View {
-        if accessibilityLayout {
-            // The sentence disclosure every other fold on the card uses
-            // (R2). Its label carries no unverified
-            // register, so a section of agent claims draws the register as
-            // its first line and says it aloud on the disclosure.
-            let disclosure = SentenceDisclosure(
-                label: title,
-                spokenLabel: unverified == nil ? nil : Self.unverifiedDisclosureSpokenLabel(title),
-                isExpanded: isExpanded
-            ) {
-                VStack(alignment: .leading, spacing: 8) {
-                    if let unverified {
-                        UnverifiedLabel(
-                            text: title, carriesInfo: false,
-                            rendersInteractiveControls: unverified.rendersInteractiveControls)
-                    }
-                    foldedUnverifiedSentence(unverified)
-                    content()
-                }
-                .frame(maxWidth: .infinity, alignment: .leading)
-            }
-            if unverified != nil {
-                disclosure.frame(maxWidth: .infinity, alignment: .leading)
-            } else {
-                disclosure
-                    .padding(12)
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                    .freesideCard()
-            }
-        } else {
-            cardSection(title, unverified: unverified) {
-                content()
-            }
-        }
-    }
-
     /// The card foot's measures.
     private enum FootScale {
         /// A fold's rows start under its label's text, past the glyph.
@@ -3081,33 +3142,38 @@ struct DecisionDetailView: View {
         static let rowGap: CGFloat = 8
     }
 
-    /// What VoiceOver calls a one-pane card's folded section of agent
-    /// claims, whose drawn label is the section's title alone.
-    static func unverifiedDisclosureSpokenLabel(_ title: String) -> String {
-        "\(title), unverified"
+    /// The closed Evidence fold's mono line: the counts it holds.
+    static func evidenceSummary(claims: Int, attachments: Int) -> String {
+        [
+            claims == 0 ? nil : claims == 1 ? "1 agent claim" : "\(claims) agent claims",
+            attachments == 0 ? nil : attachments == 1 ? "1 attachment" : "\(attachments) attachments",
+        ].compactMap { $0 }.joined(separator: " · ")
     }
 
-    /// What VoiceOver calls the foot's Claims fold. The drawn label is
-    /// `Claims` and the unverified mark draws inside the fold, so the closed
-    /// disclosure has to say whose claims they are.
-    static func footClaimsSpokenLabel(count: Int) -> String {
-        "Claims, \(count), unverified agent claims"
+    /// What VoiceOver calls the Evidence fold when it holds claims. The
+    /// unverified mark draws inside the fold, so the closed disclosure has
+    /// to say whose claims they are. Nil speaks the label and summary as
+    /// drawn.
+    static func evidenceSpokenLabel(claims: Int, attachments: Int) -> String? {
+        guard claims > 0 else { return nil }
+        let claimsPart = claims == 1 ? "1 unverified agent claim" : "\(claims) unverified agent claims"
+        let attachmentsPart =
+            attachments == 0 ? nil : attachments == 1 ? "1 attachment" : "\(attachments) attachments"
+        return (["Evidence", claimsPart, attachmentsPart] as [String?]).compactMap { $0 }
+            .joined(separator: ", ")
     }
 
-    /// The closed Claims fold's mono line.
-    static func footClaimsSummary(count: Int) -> String {
-        count == 1 ? "1 agent claim" : "\(count) agent claims"
-    }
-
-    /// The closed Evidence fold's mono line.
-    static func footEvidenceSummary(count: Int) -> String {
-        "\(count == 1 ? "1 attachment" : "\(count) attachments") · digests"
-    }
-
-    /// The closed Technical Bindings fold's mono line: what the first few
-    /// rows name, in their own order.
-    static func footBindingsSummary(_ rows: [AttentionDisplay.BindingRow]) -> String {
-        rows.prefix(4).map { $0.label.lowercased() }.joined(separator: " · ")
+    /// The closed Identifiers fold's mono line: values, not field names, so
+    /// the item's version and head read without opening it.
+    static func identifiersSummary(
+        _ item: Components.Schemas.AttentionItem, rows: [AttentionDisplay.BindingRow]
+    ) -> String {
+        let digests = rows.filter { $0.label.hasSuffix("Digest") }.count
+        return [
+            "item v\(item.item_version)",
+            item.pr_head_sha.isEmpty ? nil : "pr head \(AttentionDisplay.shortRevision(item.pr_head_sha))",
+            digests == 0 ? nil : digests == 1 ? "1 digest" : "\(digests) digests",
+        ].compactMap { $0 }.joined(separator: " · ")
     }
 
     /// One fold of the card's foot (R2): a sentence disclosure with its mono
@@ -3120,6 +3186,7 @@ struct DecisionDetailView: View {
         spokenLabel: String? = nil,
         isExpanded: Binding<Bool>,
         unverified: UnverifiedRegister? = nil,
+        spacing: CGFloat = FootScale.rowGap,
         @ViewBuilder content: @escaping () -> Content
     ) -> some View {
         SentenceDisclosure(
@@ -3128,7 +3195,7 @@ struct DecisionDetailView: View {
             spokenLabel: spokenLabel,
             isExpanded: isExpanded
         ) {
-            VStack(alignment: .leading, spacing: FootScale.rowGap) {
+            VStack(alignment: .leading, spacing: spacing) {
                 if let unverified {
                     UnverifiedLabel(
                         text: "Agent claims", carriesInfo: false,
@@ -4012,7 +4079,8 @@ struct DecisionDetailView: View {
     ) {
         switch action {
         case .inspect_trust_failure:
-            detailsExpanded.wrappedValue = true
+            // The reveal opens whichever fold holds the identifiers: the
+            // card's own, or on a page the footer's.
             actionDetailsRevealRequest = .init(itemID: itemID, nonce: UUID())
         case .discuss:
             messageEditor = .discuss

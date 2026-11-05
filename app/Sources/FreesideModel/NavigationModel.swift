@@ -246,7 +246,7 @@ public final class NavigationModel {
     /// Replace the stack with the destination's canonical route.
     public func route(to destination: Destination) {
         // Routing is operator intent even when it targets the currently
-        // rendered item (for example, Reveal Technical Details).
+        // rendered item (for example, Reveal in Identifiers).
         operatorNavigationRevision += 1
         path = Self.route(to: destination)
         // A link or launch that routes on iPhone shows its destination, not

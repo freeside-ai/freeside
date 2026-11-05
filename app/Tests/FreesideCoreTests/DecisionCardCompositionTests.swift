@@ -218,12 +218,8 @@ import Testing
 
     private static let unverifiedContexts: [DecisionCardComposition.UnverifiedContext] =
         DecisionCardComposition.UnverifiedContext.Platform.allCases.flatMap { platform in
-            [false, true].flatMap { accessibilityLayout in
-                [false, true].map { recommended in
-                    .init(
-                        platform: platform, accessibilityLayout: accessibilityLayout,
-                        drawsUnverifiedRecommendation: recommended)
-                }
+            [false, true].map { recommended in
+                .init(platform: platform, drawsUnverifiedRecommendation: recommended)
             }
         }
 
@@ -293,21 +289,21 @@ import Testing
     /// A card whose only unverified keyword is a disclosure's own label has
     /// no label to carry the control, so it names no slot and the section
     /// explains itself when opened. The health card's one claim is an
-    /// attachment, which both platforms list in the foot; a readable claim
-    /// stays in a phone's module, which folds at an accessibility size.
+    /// attachment, which both platforms list in the Evidence fold; a
+    /// readable claim joins it there on a phone (#2607), so it names no slot
+    /// either, while the Mac lists it beside the actions.
     @Test func aCardWithOnlyFoldedUnverifiedKeywordsNamesNoSlot() throws {
         var item = AttentionFixtures.fixture(type: .system_health).item
         let composition = DecisionCardComposition.forType(.system_health)
         let claims = try #require(composition.modules.firstIndex(of: .claims))
+        #expect(claims >= composition.actionInsertionIndex)
 
         #expect(composition.infoSlot(for: item, in: .init(platform: .phone)) == nil)
         #expect(composition.infoSlot(for: item, in: .init(platform: .mac)) == nil)
 
         item.agent_claims[0].text = .init(media_type: .text_sol_plain, content: "The daemon restarted cleanly.")
-        #expect(composition.infoSlot(for: item, in: .init(platform: .phone)) == .module(claims))
-        #expect(
-            composition.infoSlot(
-                for: item, in: .init(platform: .phone, accessibilityLayout: true)) == nil)
+        #expect(composition.infoSlot(for: item, in: .init(platform: .phone)) == nil)
+        #expect(composition.infoSlot(for: item, in: .init(platform: .mac)) == .actionRegion)
     }
 
     /// An agent-written reason under the ask is the first thing the agent
@@ -958,30 +954,6 @@ import Testing
         #expect(Array(folded) == expected)
     }
 
-    /// The closed fold names what it holds: the folded rows' values in row
-    /// order. A type that folds no routine fact has nothing to name.
-    @Test func foldedFactsSummaryJoinsTheFoldedValues() {
-        let question = AttentionFixtures.fixture(type: .agent_question).item
-        let placement = DecisionFactPlacement(question, includesCommitPlan: false, now: .now)
-        #expect(placement.foldedSummary == "Implementation \u{00B7} Owner decision")
-        let review = AttentionFixtures.fixture(type: .ready_for_final_review).item
-        #expect(DecisionFactPlacement(review, includesCommitPlan: false, now: .now).foldedSummary == nil)
-    }
-
-    @Test func reviewYieldFoldSaysHowManyRoundsRanAndHowTheLastEnded() throws {
-        let item = AttentionFixtures.fixture(type: .ready_for_final_review).item
-        let history = try #require(item.yield_history?.value1)
-        let presentation = try #require(DecisionYieldPresentation(item))
-        let rounds = history.rounds.count == 1 ? "1 round" : "\(history.rounds.count) rounds"
-        let last =
-            switch history.terminal_outcome {
-            case .clean: "last clean"
-            case .findings: "last had findings"
-            }
-        #expect(presentation.foldSummary == "\(rounds) · \(last)")
-        #expect(DecisionYieldPresentation(rounds: []).foldSummary == "0 rounds")
-    }
-
     /// R28: a change row reads its counts aloud in words, since the plus
     /// and minus signs carry the meaning only on screen.
     @Test func changeRowSpeaksItsCountsInWords() throws {
@@ -1587,7 +1559,7 @@ import Testing
     /// own disclosure, so removing the rendering below the actions lost
     /// nothing. The daemon's coordinates sit under their own title, apart
     /// from the producer's statements, and the binding digest stays with the
-    /// binding in Technical Details. The route list leads with the proposed
+    /// binding in Identifiers. The route list leads with the proposed
     /// route, which states no consequence of its own.
     @Test func everyOtherFindingFieldHasADestinationInItsCardsDisclosure() throws {
         let binding = try #require(
@@ -1765,31 +1737,42 @@ import Testing
     }
 
     /// The closed foot's mono lines say what each fold holds in the
-    /// operator's words.
+    /// operator's words (#2607): Evidence counts claims and attachments,
+    /// and Identifiers names the item's version and head by value.
     @MainActor @Test func theFootSummariesCountWhatEachFoldHolds() {
-        #expect(DecisionDetailView.footClaimsSummary(count: 1) == "1 agent claim")
-        #expect(DecisionDetailView.footClaimsSummary(count: 3) == "3 agent claims")
-        #expect(DecisionDetailView.footEvidenceSummary(count: 1) == "1 attachment · digests")
-        #expect(DecisionDetailView.footEvidenceSummary(count: 2) == "2 attachments · digests")
+        #expect(DecisionDetailView.evidenceSummary(claims: 1, attachments: 0) == "1 agent claim")
+        #expect(DecisionDetailView.evidenceSummary(claims: 0, attachments: 2) == "2 attachments")
         #expect(
-            DecisionDetailView.footBindingsSummary([
-                .init(label: "Item", value: "a"), .init(label: "Task", value: "b"),
-                .init(label: "Run", value: "c"), .init(label: "Digest", value: "d"),
-                .init(label: "Policy", value: "e"),
-            ]) == "item · task · run · digest")
+            DecisionDetailView.evidenceSummary(claims: 2, attachments: 1)
+                == "2 agent claims · 1 attachment")
+
+        var item = AttentionFixtures.fixture(type: .ready_for_final_review).item
+        item.item_version = 3
+        item.pr_head_sha = "cafebabe1234567890"
+        let rows: [AttentionDisplay.BindingRow] = [
+            .init(label: "Item Version", value: "3"),
+            .init(label: "Artifact Digest", value: "sha256:a"),
+            .init(label: "Recipe Digest", value: "sha256:b"),
+        ]
+        #expect(
+            DecisionDetailView.identifiersSummary(item, rows: rows)
+                == "item v3 · pr head \(AttentionDisplay.shortRevision(item.pr_head_sha)) · 2 digests")
+        item.pr_head_sha = ""
+        #expect(DecisionDetailView.identifiersSummary(item, rows: Array(rows.prefix(2))) == "item v3 · 1 digest")
     }
 
     /// A sentence disclosure's label carries no unverified register. The
-    /// foot's `Claims` and a one-pane card's folded `Agent Claims`
-    /// draw the mark inside the section, so the closed disclosure says
-    /// aloud that the claims are the agent's and unverified.
-    @Test func aClaimsDisclosureSaysTheClaimsAreUnverified() {
+    /// Evidence fold draws the mark inside, so when it holds claims the
+    /// closed disclosure says aloud that they are the agent's and
+    /// unverified; attachments alone need no such word.
+    @MainActor @Test func anEvidenceFoldWithClaimsSaysTheyAreUnverified() {
         #expect(
-            DecisionDetailView.footClaimsSpokenLabel(count: 2)
-                == "Claims, 2, unverified agent claims")
+            DecisionDetailView.evidenceSpokenLabel(claims: 2, attachments: 1)
+                == "Evidence, 2 unverified agent claims, 1 attachment")
         #expect(
-            DecisionDetailView.unverifiedDisclosureSpokenLabel("Agent Claims")
-                == "Agent Claims, unverified")
+            DecisionDetailView.evidenceSpokenLabel(claims: 1, attachments: 0)
+                == "Evidence, 1 unverified agent claim")
+        #expect(DecisionDetailView.evidenceSpokenLabel(claims: 0, attachments: 3) == nil)
     }
 
     /// The "Scope kept" row names the exact paths the operator left unchanged,

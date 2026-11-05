@@ -1328,15 +1328,15 @@
                     snapshot.item._type)
                 {
                     // The decision-first cards fold their run coordinates,
-                    // the recorded reason, and the final review's yield; this
-                    // pins what the folds hold.
+                    // the recorded reason, and the final review's yield into
+                    // Recorded Context; this pins what the fold holds.
                     let openDetail = DecisionDetailView(
                         store: store,
                         itemID: snapshot.item.id,
                         // The summary's report is its own fold (#1461).
                         expandsSummaryReports: true,
                         expandedDisclosures: Set(
-                            [.runDetails, .recordedContext, .reviewYield]
+                            [.runDetails, .recordedContext]
                                 + snapshot.item.agent_claims.map { .claimSource($0) }),
                         graphics: graphics,
                         loadsAttachments: false,
@@ -1506,10 +1506,12 @@
                             }
                         }
                         if name == "structured" {
-                            // Details carry the approval's reason, which is
-                            // the same summary, in full and drawn the same.
+                            // Recorded Context carries the approval's reason,
+                            // which is the same summary, in full and drawn the
+                            // same.
                             let reasonDetail = DecisionDetailView(
-                                store: store, itemID: summarySnapshot.item.id, detailsExpanded: true,
+                                store: store, itemID: summarySnapshot.item.id,
+                                expandedDisclosures: [.recordedContext],
                                 loadsAttachments: false, showsValidationProgress: false)
                             surfaces.append(
                                 Surface(
@@ -1705,12 +1707,12 @@
                     }
                     defer { readyDefaults.removePersistentDomain(forName: readyPreferencesSuite) }
                     let readyPreferences = DecisionSectionPreferences(defaults: readyDefaults)
-                    readyPreferences.claimsExpanded = true
                     readyPreferences.evidenceExpanded = true
                     readyPreferences.detailsExpanded = true
                     let readyFoot = DecisionDetailView(
                         store: store,
                         itemID: snapshot.item.id,
+                        expandedDisclosures: [.recordedContext],
                         graphics: graphics,
                         loadsAttachments: false,
                         showsValidationProgress: false,
@@ -1836,9 +1838,12 @@
                     let footPreferences = DecisionSectionPreferences(
                         defaults: preferencesDefaults)
                     footPreferences.detailsExpanded = true
+                    // Recorded Context open too: the reason and the review
+                    // rounds read there (#2607).
                     let footDetail = DecisionDetailView(
                         store: store,
                         itemID: snapshot.item.id,
+                        expandedDisclosures: [.recordedContext],
                         graphics: graphics,
                         loadsAttachments: false,
                         showsValidationProgress: false,
@@ -1870,12 +1875,12 @@
             }
             defer { preferencesDefaults.removePersistentDomain(forName: preferencesSuite) }
             let footPreferences = DecisionSectionPreferences(defaults: preferencesDefaults)
-            footPreferences.claimsExpanded = true
             footPreferences.evidenceExpanded = true
             footPreferences.detailsExpanded = true
             let footDetail = DecisionDetailView(
                 store: store,
                 itemID: adjudication.id,
+                expandedDisclosures: [.recordedContext],
                 showsValidationProgress: false,
                 sectionPreferences: footPreferences)
             // The same surface without the item's recommendation: every
@@ -3616,12 +3621,12 @@
                 }
                 defer { defaults.removePersistentDomain(forName: suite) }
                 let preferences = DecisionSectionPreferences(defaults: defaults)
-                preferences.claimsExpanded = true
                 preferences.evidenceExpanded = true
                 preferences.detailsExpanded = true
                 let foot = DecisionDetailView(
                     store: store,
                     itemID: item.id,
+                    expandedDisclosures: [.recordedContext],
                     graphics: graphicPresentations(for: item),
                     loadsAttachments: false,
                     showsValidationProgress: false,
@@ -3713,8 +3718,8 @@
             }
             // The finding card's foot by day and by dusk, with three
             // attachments and two attachment claims so both counts have
-            // something to count, Evidence and Technical Bindings open and
-            // Claims closed.
+            // something to count, Evidence and Identifiers open and
+            // Recorded Context closed.
             // Drawn last, for the reason given above (#1698).
             var framed = adjudication
             var report = try #require(framed.evidence_snapshot.first)
@@ -4196,16 +4201,22 @@
                     recorded_at: Date(timeIntervalSince1970: 1_786_500_000)))
 
             var surfaces: [Surface] = []
-            for (name, page, leading, pinned) in [
-                ("task-page-open", open, Optional(question), false),
-                ("task-page-several", several, Optional(question), false),
-                ("task-page-working", working, nil, false),
-                ("task-page-finished", finished, nil, false),
-                ("task-page-pinned", several, Optional(question), true),
+            // `task-page-open-identifiers` opens the page's Identifiers
+            // footer, which holds the seated card's identifiers as a
+            // Decision group after the task's (#2607).
+            for (name, page, leading, pinned, identifiersOpen) in [
+                ("task-page-open", open, Optional(question), false, false),
+                ("task-page-open-identifiers", open, Optional(question), false, true),
+                ("task-page-several", several, Optional(question), false, false),
+                ("task-page-working", working, nil, false, false),
+                ("task-page-finished", finished, nil, false, false),
+                ("task-page-pinned", several, Optional(question), true, false),
             ] {
                 let (coordinator, task) = try TaskStageFixtures.coordinator(
                     page, conversations: AttentionFixtures.defaultConversations())
                 let timeline = try #require(page.history)
+                let disclosures = TaskTimelineDisclosurePreferences(defaults: nil)
+                disclosures.setExpanded(identifiersOpen, .identifiers, taskID: timeline.task_id)
                 let view = TaskPageView(coordinator: coordinator, snapshot: task, onOpenRun: { _ in })
                 let card = DecisionDetailView(
                     store: coordinator.store, itemID: question.item.id, loadsAttachments: false,
@@ -4219,12 +4230,16 @@
                                 nativeAppearance: true,
                                 view: AnyView(
                                     view.screenshotContent(
-                                        timeline, leadingItemID: leading?.item.id,
+                                        timeline, disclosures: disclosures, leadingItemID: leading?.item.id,
                                         leadingCard: leading.map {
                                             AnyView(
                                                 card.screenshotPageCard(
                                                     $0.item, at: dynamicTypeSize, compactLayout: compact))
                                         },
+                                        decisionIdentifiers: leading.map {
+                                            DecisionDetailView.identifierRows(
+                                                $0.item, proposalFacts: nil, effectProposalFacts: nil)
+                                        } ?? [],
                                         pinned: pinned))))
                     }
                 }
