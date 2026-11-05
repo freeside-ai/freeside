@@ -53,6 +53,67 @@ func TestLiveClaudeAdapterConformance(t *testing.T) {
 	if os.Getenv("FREESIDE_WARD_LIVE_TEST") != "1" {
 		t.Skip("set FREESIDE_WARD_LIVE_TEST=1, FREESIDE_WARD_CLAUDE_AGENT_IMAGE, FREESIDE_WARD_EXPORTER_IMAGE, and CLAUDE_CODE_OAUTH_TOKEN; see daemon/README.md")
 	}
+	ctx, cancel := context.WithTimeout(t.Context(), 10*time.Minute)
+	defer cancel()
+	launch := newLiveClaudeLaunch(ctx, t)
+	result := launch.run(ctx, t)
+	defer func() { _ = os.RemoveAll(result.ExportDir) }()
+	task, id := launch.task, launch.id
+	observed, err := JudgeConformance(result, task, id, []string{"api.anthropic.com:443"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	adapter, err := agentbaseline.ClaudeWardAdapter()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !slices.Equal(observed, adapter.LaunchCapabilities) {
+		// Report schema facts only, never transcript content or credentials.
+		for _, entry := range result.Evidence.Entries {
+			if entry.Label != "agent-transcript" {
+				continue
+			}
+			body, readErr := conformanceBlob(result.ExportDir, export.EvidenceBlobsDirname, entry.Digest, entry.Size)
+			if readErr != nil {
+				t.Fatal(readErr)
+			}
+			for _, line := range bytes.Split(body, []byte("\n")) {
+				var record map[string]json.RawMessage
+				if json.Unmarshal(line, &record) != nil || string(record["type"]) != `"system"` || string(record["subtype"]) != `"init"` {
+					continue
+				}
+				var keys []string
+				for key := range record {
+					keys = append(keys, key)
+				}
+				slices.Sort(keys)
+				var session string
+				_ = json.Unmarshal(record["session_id"], &session)
+				var servers, plugins []json.RawMessage
+				serverErr, pluginErr := json.Unmarshal(record["mcp_servers"], &servers), json.Unmarshal(record["plugins"], &plugins)
+				t.Logf("init keys=%v; session matches=%t; MCP array=%t count=%d; plugin array=%t count=%d", keys, session == sessionIDFor(id), serverErr == nil && servers != nil, len(servers), pluginErr == nil && plugins != nil, len(plugins))
+			}
+		}
+		t.Fatalf("observed %v, require %v", observed, adapter.LaunchCapabilities)
+	}
+}
+
+// liveClaudeLaunch is one conformance launch, prepared but not yet run, on a
+// disposable setup-token volume enrolled from CLAUDE_CODE_OAUTH_TOKEN. The
+// launch is the production writer's: ConformanceHandoff selects
+// launchDelivery.
+type liveClaudeLaunch struct {
+	runtime  ward.Runtime
+	exporter string
+	volume   string
+	backend  *ward.Backend
+	spec     ward.HandoffSpec
+	task     ConformanceTask
+	id       domain.InvocationID
+}
+
+func newLiveClaudeLaunch(ctx context.Context, t *testing.T) liveClaudeLaunch {
+	t.Helper()
 	image, exporter := os.Getenv("FREESIDE_WARD_CLAUDE_AGENT_IMAGE"), os.Getenv("FREESIDE_WARD_EXPORTER_IMAGE")
 	if !strings.Contains(image, "@sha256:") || !strings.Contains(exporter, "@sha256:") {
 		t.Fatal("both live-test images must be digest pinned")
@@ -65,8 +126,6 @@ func TestLiveClaudeAdapterConformance(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	ctx, cancel := context.WithTimeout(t.Context(), 10*time.Minute)
-	defer cancel()
 	runtime := ward.NewCLIRuntime(bin)
 	var nonce [8]byte
 	if _, err := rand.Read(nonce[:]); err != nil {
@@ -137,46 +196,17 @@ func TestLiveClaudeAdapterConformance(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	result, err := backend.Handoff(ctx, spec)
+	return liveClaudeLaunch{
+		runtime: runtime, exporter: exporter, volume: name, backend: backend, spec: spec, task: task, id: id,
+	}
+}
+
+// run makes the launch's one provider-backed turn.
+func (l liveClaudeLaunch) run(ctx context.Context, t *testing.T) *ward.HandoffResult {
+	t.Helper()
+	result, err := l.backend.Handoff(ctx, l.spec)
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer func() { _ = os.RemoveAll(result.ExportDir) }()
-	observed, err := JudgeConformance(result, task, id, []string{"api.anthropic.com:443"})
-	if err != nil {
-		t.Fatal(err)
-	}
-	adapter, err := agentbaseline.ClaudeWardAdapter()
-	if err != nil {
-		t.Fatal(err)
-	}
-	if !slices.Equal(observed, adapter.LaunchCapabilities) {
-		// Report schema facts only, never transcript content or credentials.
-		for _, entry := range result.Evidence.Entries {
-			if entry.Label != "agent-transcript" {
-				continue
-			}
-			body, readErr := conformanceBlob(result.ExportDir, export.EvidenceBlobsDirname, entry.Digest, entry.Size)
-			if readErr != nil {
-				t.Fatal(readErr)
-			}
-			for _, line := range bytes.Split(body, []byte("\n")) {
-				var record map[string]json.RawMessage
-				if json.Unmarshal(line, &record) != nil || string(record["type"]) != `"system"` || string(record["subtype"]) != `"init"` {
-					continue
-				}
-				var keys []string
-				for key := range record {
-					keys = append(keys, key)
-				}
-				slices.Sort(keys)
-				var session string
-				_ = json.Unmarshal(record["session_id"], &session)
-				var servers, plugins []json.RawMessage
-				serverErr, pluginErr := json.Unmarshal(record["mcp_servers"], &servers), json.Unmarshal(record["plugins"], &plugins)
-				t.Logf("init keys=%v; session matches=%t; MCP array=%t count=%d; plugin array=%t count=%d", keys, session == sessionIDFor(id), serverErr == nil && servers != nil, len(servers), pluginErr == nil && plugins != nil, len(plugins))
-			}
-		}
-		t.Fatalf("observed %v, require %v", observed, adapter.LaunchCapabilities)
-	}
+	return result
 }

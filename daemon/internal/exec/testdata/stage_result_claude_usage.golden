@@ -1,0 +1,27 @@
+{
+  "invocation_id": "inv-1",
+  "status": "completed",
+  "head_sha": "abc123",
+  "artifacts": [
+    "sha256:transcript"
+  ],
+  "summary": "Imported candidate abc123 over base deadbeef.",
+  "usage": null,
+  "claude_usage": {
+    "observed_at": "2026-11-04T09:00:00Z",
+    "windows": [
+      {
+        "window": "seven_day",
+        "used_percent": 57,
+        "resets_at": "2026-11-06T03:00:00Z"
+      }
+    ],
+    "events": [
+      {
+        "window": "seven_day",
+        "status": "allowed",
+        "resets_at": "2026-11-06T03:00:00Z"
+      }
+    ]
+  }
+}

@@ -163,6 +163,22 @@ func TestGolden(t *testing.T) {
 				Window: "five_hour", ResetsAt: new(time.Date(2026, 1, 2, 8, 0, 0, 0, time.UTC)),
 			},
 		}},
+		{"stage_result_claude_usage", exec.StageResult{
+			InvocationID: "inv-1", Status: exec.StatusCompleted,
+			HeadSHA: "abc123", Artifacts: []domain.Digest{"sha256:transcript"},
+			Summary: "Imported candidate abc123 over base deadbeef.",
+			ClaudeUsage: &exec.ClaudeUsageCapture{
+				ObservedAt: time.Date(2026, 11, 4, 9, 0, 0, 0, time.UTC),
+				Windows: []exec.ClaudeUsageWindow{{
+					Window: "seven_day", UsedPercent: 57,
+					ResetsAt: new(time.Date(2026, 11, 6, 3, 0, 0, 0, time.UTC)),
+				}},
+				Events: []exec.ClaudeRateLimitEvent{{
+					Window: "seven_day", Status: "allowed",
+					ResetsAt: new(time.Date(2026, 11, 6, 3, 0, 0, 0, time.UTC)),
+				}},
+			},
+		}},
 		{"review_result", review},
 		{"review_request", request},
 		{"review_request_prospective_merge", mergeRequest},

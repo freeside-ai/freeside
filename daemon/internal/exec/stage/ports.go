@@ -35,7 +35,10 @@ type Provider interface {
 // stderr. PromptFileV4 carries it as PromptFileV3 does and differs only in
 // passing the specifier output schema to the CLI on a specification stage.
 // PromptFileV5 also disables Claude's bundled agents-md plugin explicitly;
-// safe mode alone leaves built-in plugins enabled.
+// safe mode alone leaves built-in plugins enabled. PromptFileV6 carries the
+// prompt as PromptFileV5 does and differs only in the Claude launch command
+// off a specification stage: an in-container driver sends the prompt over
+// the CLI's stream-json input and asks for its usage answer after the turn.
 type PromptDelivery string
 
 const (
@@ -45,13 +48,16 @@ const (
 	PromptFileV3   PromptDelivery = "file_v3"
 	PromptFileV4   PromptDelivery = "file_v4"
 	PromptFileV5   PromptDelivery = "file_v5"
+	PromptFileV6   PromptDelivery = "file_v6"
 )
 
-var AllPromptDeliveries = []PromptDelivery{PromptArgument, PromptFileV1, PromptFileV2, PromptFileV3, PromptFileV4, PromptFileV5}
+var AllPromptDeliveries = []PromptDelivery{
+	PromptArgument, PromptFileV1, PromptFileV2, PromptFileV3, PromptFileV4, PromptFileV5, PromptFileV6,
+}
 
 func (d PromptDelivery) valid() bool {
 	switch d {
-	case PromptArgument, PromptFileV1, PromptFileV2, PromptFileV3, PromptFileV4, PromptFileV5:
+	case PromptArgument, PromptFileV1, PromptFileV2, PromptFileV3, PromptFileV4, PromptFileV5, PromptFileV6:
 		return true
 	default:
 		return false
@@ -62,7 +68,7 @@ func (d PromptDelivery) valid() bool {
 // ward's protected prompt file instead of the launch argv.
 func (d PromptDelivery) usesPromptFile() bool {
 	switch d {
-	case PromptFileV1, PromptFileV2, PromptFileV3, PromptFileV4, PromptFileV5:
+	case PromptFileV1, PromptFileV2, PromptFileV3, PromptFileV4, PromptFileV5, PromptFileV6:
 		return true
 	case PromptArgument:
 		return false
@@ -71,13 +77,14 @@ func (d PromptDelivery) usesPromptFile() bool {
 }
 
 // UsageExtractor is the optional provider hook for numbers-only telemetry in
-// an already authenticated and imported evidence channel.
+// an already authenticated and imported evidence channel. A Claude provider
+// also returns its writer's usage capture; any other provider returns nil.
 type UsageExtractor interface {
 	ExtractUsage(
 		evidenceDir string,
 		evidence export.EvidenceManifest,
 		observedAt time.Time,
-	) ([]exec.UsageMeasurement, error)
+	) ([]exec.UsageMeasurement, *exec.ClaudeUsageCapture, error)
 }
 
 // ProviderHandoffInput is the durable input needed to render one provider's

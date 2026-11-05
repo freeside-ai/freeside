@@ -223,6 +223,10 @@ var handoffCommandCases = []handoffCommandCase{
 	{"file-v5-prepare", stage.PromptFileV5, []string{"/usr/local/bin/freeside-project-prepare"}, deferredStderrRedirect, false},
 	{"file-v5-specification", stage.PromptFileV5, nil, deferredStderrRedirect, true},
 	{"file-v5-specification-prepare", stage.PromptFileV5, []string{"/usr/local/bin/freeside-project-prepare"}, deferredStderrRedirect, true},
+	{"file-v6", stage.PromptFileV6, nil, deferredStderrRedirect, false},
+	{"file-v6-prepare", stage.PromptFileV6, []string{"/usr/local/bin/freeside-project-prepare"}, deferredStderrRedirect, false},
+	{"file-v6-specification", stage.PromptFileV6, nil, deferredStderrRedirect, true},
+	{"file-v6-specification-prepare", stage.PromptFileV6, []string{"/usr/local/bin/freeside-project-prepare"}, deferredStderrRedirect, true},
 }
 
 var (
@@ -302,7 +306,8 @@ func TestHandoffSpecSchemaOnlyOnFileV4Specification(t *testing.T) {
 func TestHandoffSpecFileV5DisablesBuiltinInstructions(t *testing.T) {
 	t.Parallel()
 	provider := claudeProvider{volumes: testAuthStoreVolumes{volume: "provider-volume"}}
-	if provider.PromptDelivery() != stage.PromptFileV5 {
+	// file_v6 keeps file_v5's plugin setting (TestHandoffSpecFileV6AddsOnlyTheUsageDriver).
+	if provider.PromptDelivery() != stage.PromptFileV6 {
 		t.Fatal("new launches do not select the severed protocol")
 	}
 	const settings = `--settings '{"enabledPlugins":{"agents-md@builtin":false}}' `
@@ -397,6 +402,75 @@ func TestHandoffSpecShellQuotesModelAndEffort(t *testing.T) {
 	}
 }
 
+// TestHandoffSpecFileV6AddsOnlyTheUsageDriver proves file_v6 differs from
+// file_v5 only off a specification stage, and there only by the driver it
+// installs, the scope override beside the unchanged token, the driver in
+// front of the CLI, and duplex input. On a specification stage the command
+// is file_v5's: the schema and no driver.
+func TestHandoffSpecFileV6AddsOnlyTheUsageDriver(t *testing.T) {
+	t.Parallel()
+	provider := claudeProvider{volumes: testAuthStoreVolumes{volume: "provider-volume"}}
+	command := func(t *testing.T, tc handoffCommandCase) string {
+		t.Helper()
+		hs, err := provider.HandoffSpec(context.Background(), tc.input())
+		if err != nil {
+			t.Fatalf("HandoffSpec: %v", err)
+		}
+		return hs.Agent.Command[2]
+	}
+	install := "rm -rf '/var/lib/freeside-driver'; mkdir '/var/lib/freeside-driver'; " +
+		"chown 0:0 '/var/lib/freeside-driver'; chmod 0755 '/var/lib/freeside-driver'; " +
+		"printf '%s' " + shellQuote(usageDriverScript) + " > '/var/lib/freeside-driver/usage-driver.cjs'; " +
+		"chown 0:0 '/var/lib/freeside-driver/usage-driver.cjs'; chmod 0444 '/var/lib/freeside-driver/usage-driver.cjs'; "
+	for _, prepare := range [][]string{nil, {"/usr/local/bin/freeside-project-prepare"}} {
+		v5 := command(t, handoffCommandCase{delivery: stage.PromptFileV5, prepare: prepare})
+		want := strings.NewReplacer(
+			"chown 1001:1001 ", install+"chown 1001:1001 ",
+			`CLAUDE_CODE_OAUTH_TOKEN="$token" `, `CLAUDE_CODE_OAUTH_TOKEN="$token" CLAUDE_CODE_OAUTH_SCOPES='user:inference user:profile' `,
+			"--no-new-privs claude -p ", "--no-new-privs node '/var/lib/freeside-driver/usage-driver.cjs' claude -p ",
+			deferredStderrRedirect, "--input-format stream-json "+deferredStderrRedirect,
+		).Replace(v5)
+		if strings.Count(v5, "chown 1001:1001 ") != 1 || strings.Count(v5, deferredStderrRedirect) != 1 {
+			t.Fatal("file_v5 anchors moved")
+		}
+		if got := command(t, handoffCommandCase{delivery: stage.PromptFileV6, prepare: prepare}); got != want {
+			t.Errorf("file_v6 command:\n got %s\nwant %s", got, want)
+		}
+		specification := handoffCommandCase{delivery: stage.PromptFileV5, prepare: prepare, specification: true}
+		v5Specification := command(t, specification)
+		specification.delivery = stage.PromptFileV6
+		if got := command(t, specification); got != v5Specification {
+			t.Errorf("file_v6 specification command differs from file_v5's:\n got %s\nwant %s", got, v5Specification)
+		}
+		for _, delivery := range []stage.PromptDelivery{
+			stage.PromptArgument, stage.PromptFileV1, stage.PromptFileV2, stage.PromptFileV3, stage.PromptFileV4, stage.PromptFileV5,
+		} {
+			for _, specification := range []bool{false, true} {
+				got := command(t, handoffCommandCase{delivery: delivery, prepare: prepare, specification: specification})
+				if strings.Contains(got, "freeside-driver") || strings.Contains(got, "CLAUDE_CODE_OAUTH_SCOPES") ||
+					strings.Contains(got, "--input-format") {
+					t.Errorf("%s gained the usage driver", delivery)
+				}
+			}
+		}
+	}
+}
+
+// The driver must ask under the request id the transcript reader matches, and
+// the driver path must stay out of the workspace and the root-only launchDir.
+func TestUsageDriverMatchesTheTranscriptReader(t *testing.T) {
+	t.Parallel()
+	if !strings.Contains(usageDriverScript, "const USAGE_ID = '"+exec.ClaudeUsageRequestID+"';") {
+		t.Fatal("driver request id differs from exec.ClaudeUsageRequestID")
+	}
+	if strings.HasPrefix(usageDriverPath, workspaceDir+"/") || strings.HasPrefix(usageDriverPath, launchDir+"/") {
+		t.Fatalf("driver path %s is in the workspace or launchDir", usageDriverPath)
+	}
+	if strings.Contains(usageDriverScript, ward.WriterNoncePlaceholder) {
+		t.Fatal("driver carries the writer nonce placeholder ward substitutes")
+	}
+}
+
 func TestPromptLimitLeavesLinuxArgumentHeadroom(t *testing.T) {
 	t.Parallel()
 	// Apostrophes are shellQuote's worst case: each input byte expands to the
@@ -410,6 +484,16 @@ func TestPromptLimitLeavesLinuxArgumentHeadroom(t *testing.T) {
 	if len(command) >= linuxMaxArgumentBytes {
 		t.Fatalf("max prompt produces %d-byte sh argument, Linux limit is %d",
 			len(command), linuxMaxArgumentBytes)
+	}
+	// The file_v6 command inlines the driver; with every optional flag it
+	// must stay well under the limit, at a quarter of it.
+	longest := agentCommandWithSettings(
+		"< "+shellQuote(ward.PromptFilePath), "00000000-0000-4000-8000-000000000000", "inv-headroom",
+		[]string{"/usr/local/bin/freeside-project-prepare"}, strings.Repeat("'", 256), strings.Repeat("'", 64),
+		specify.OutputJSONSchema, `{"enabledPlugins":{"agents-md@builtin":false}}`,
+		launcherFilesDeferredStderr, true)[2]
+	if len(longest) >= linuxMaxArgumentBytes/4 {
+		t.Fatalf("file_v6 command is %d bytes, want under %d", len(longest), linuxMaxArgumentBytes/4)
 	}
 }
 

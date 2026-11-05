@@ -25,6 +25,41 @@ func TestPinnedClaudePromptStdinLive(t *testing.T) {
 	if os.Getenv("FREESIDE_PROMPT_STDIN_LIVE") != "1" {
 		t.Skip("set FREESIDE_PROMPT_STDIN_LIVE=1, FREESIDE_PROMPT_IMAGE, FREESIDE_RIG_ACQUISITION and FREESIDE_STATE_DIR; requires a held rig and a cached image at the pinned Claude version")
 	}
+	fixture, err := os.ReadFile("testdata/prompt_stdin_probe.cjs")
+	if err != nil {
+		t.Fatal(err)
+	}
+	prompt := []byte(strings.Repeat("Synthetic UTF-8 α ' $() \\n\n", 2500) + "end")
+	sum := sha256.Sum256(prompt)
+	command := agentCommandWithInput("< '/probe/prompt.txt'", "24a8a5f8-fc85-439f-bf98-002ea19ca53e", domain.InvocationID("inv-prompt-probe"), nil, "", "", "", launcherFilesDeferredStderr)[2]
+	_, command, ok := strings.Cut(command, "setpriv --reuid=")
+	if !ok {
+		t.Fatal("production privilege drop missing")
+	}
+	command, _, ok = strings.Cut(command, "> "+shellQuote(launchTranscriptPath))
+	if !ok {
+		t.Fatal("production transcript redirect missing")
+	}
+	command = "setpriv --reuid=" + strings.ReplaceAll(command, shellQuote(instructionBundlePath), "'/probe/instructions.txt'")
+	config, err := json.Marshal(struct {
+		Digest  string `json:"digest"`
+		Command string `json:"command"`
+	}{hex.EncodeToString(sum[:]), command})
+	if err != nil {
+		t.Fatal(err)
+	}
+	output := runNetworklessClaudeProbe(t, map[string][]byte{"probe.cjs": fixture, "prompt.txt": prompt, "config.json": config})
+	if !strings.Contains(string(output), `"passed":true`) {
+		t.Fatalf("synthetic probe failed: %s", output)
+	}
+	t.Log(strings.TrimSpace(string(output)))
+}
+
+// runNetworklessClaudeProbe runs node /probe/probe.cjs in one networkless
+// container of FREESIDE_PROMPT_IMAGE with input copied to /probe, registered
+// with the caller's held rig, and returns the container's log.
+func runNetworklessClaudeProbe(t *testing.T, input map[string][]byte) []byte {
+	t.Helper()
 	image := os.Getenv("FREESIDE_PROMPT_IMAGE")
 	if !strings.Contains(image, "@sha256:") {
 		t.Fatal("a cached digest-pinned image is required")
@@ -114,32 +149,9 @@ func TestPinnedClaudePromptStdinLive(t *testing.T) {
 	if !before.AllowlistFieldsObserved || !before.NetworksObserved || before.NetworkAttachmentCount != 0 || len(before.Mounts) != 0 || before.SSH || len(before.PublishedPorts) != 0 || len(before.PublishedSockets) != 0 {
 		t.Fatal("probe must have no network, mounts, forwarding or publication")
 	}
-	input, ready := t.TempDir(), t.TempDir()
-	fixture, err := os.ReadFile("testdata/prompt_stdin_probe.cjs")
-	if err != nil {
-		t.Fatal(err)
-	}
-	prompt := []byte(strings.Repeat("Synthetic UTF-8 α ' $() \\n\n", 2500) + "end")
-	sum := sha256.Sum256(prompt)
-	command := agentCommandWithInput("< '/probe/prompt.txt'", "24a8a5f8-fc85-439f-bf98-002ea19ca53e", domain.InvocationID("inv-prompt-probe"), nil, "", "", "", launcherFilesDeferredStderr)[2]
-	_, command, ok := strings.Cut(command, "setpriv --reuid=")
-	if !ok {
-		t.Fatal("production privilege drop missing")
-	}
-	command, _, ok = strings.Cut(command, "> "+shellQuote(launchTranscriptPath))
-	if !ok {
-		t.Fatal("production transcript redirect missing")
-	}
-	command = "setpriv --reuid=" + strings.ReplaceAll(command, shellQuote(instructionBundlePath), "'/probe/instructions.txt'")
-	config, err := json.Marshal(struct {
-		Digest  string `json:"digest"`
-		Command string `json:"command"`
-	}{hex.EncodeToString(sum[:]), command})
-	if err != nil {
-		t.Fatal(err)
-	}
-	for name, body := range map[string][]byte{"probe.cjs": fixture, "prompt.txt": prompt, "config.json": config} {
-		if err := os.WriteFile(filepath.Join(input, name), body, 0o600); err != nil {
+	inputDir, ready := t.TempDir(), t.TempDir()
+	for name, body := range input {
+		if err := os.WriteFile(filepath.Join(inputDir, name), body, 0o600); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -149,7 +161,7 @@ func TestPinnedClaudePromptStdinLive(t *testing.T) {
 	if err := rt.StartContainer(ctx, name); err != nil {
 		t.Fatal(err)
 	}
-	if err := rt.CopyIntoContainer(ctx, name, input, "/probe"); err != nil {
+	if err := rt.CopyIntoContainer(ctx, name, inputDir, "/probe"); err != nil {
 		t.Fatal(err)
 	}
 	if err := rt.CopyIntoContainer(ctx, name, ready, "/probe-ready"); err != nil {
@@ -181,8 +193,5 @@ func TestPinnedClaudePromptStdinLive(t *testing.T) {
 	if err != nil {
 		t.Fatalf("read synthetic probe: %v", err)
 	}
-	if !strings.Contains(string(output), `"passed":true`) {
-		t.Fatalf("synthetic probe failed: %s", output)
-	}
-	t.Log(strings.TrimSpace(string(output)))
+	return output
 }

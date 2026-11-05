@@ -61,15 +61,22 @@ type testProvider struct {
 	runIDFor           func(domain.InvocationID) string
 	workspaceFor       func(domain.InvocationID) string
 	usageExtractor     func(string, export.EvidenceManifest, time.Time) ([]exec.UsageMeasurement, error)
+	// usageCapture is returned beside a successful usageExtractor answer, or
+	// alone when usageExtractor is nil.
+	usageCapture *exec.ClaudeUsageCapture
 }
 
 func (p testProvider) ExtractUsage(
 	evidenceDir string, evidence export.EvidenceManifest, observedAt time.Time,
-) ([]exec.UsageMeasurement, error) {
+) ([]exec.UsageMeasurement, *exec.ClaudeUsageCapture, error) {
 	if p.usageExtractor == nil {
-		return nil, nil
+		return nil, p.usageCapture, nil
 	}
-	return p.usageExtractor(evidenceDir, evidence, observedAt)
+	usage, err := p.usageExtractor(evidenceDir, evidence, observedAt)
+	if err != nil {
+		return nil, nil, err
+	}
+	return usage, p.usageCapture, nil
 }
 
 func testRunIDFor(id domain.InvocationID) string {

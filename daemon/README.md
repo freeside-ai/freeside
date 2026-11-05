@@ -132,7 +132,7 @@ selected components can keep `required` running longer.
 
 ## Protected Prompt Delivery
 
-New Claude stage intents select `file_v5`. The renderer accepts at most 1 MiB
+New Claude stage intents select `file_v6`. The renderer accepts at most 1 MiB
 of complete UTF-8 input. Ward verifies its digest on a separate protected
 volume before writer creation, journals the volume binding with launch state,
 and supplies the root-opened file as Claude's user stdin. `file_v2` delivers
@@ -150,11 +150,24 @@ longer fails the stage, and the decoder still gates every byte of it. `file_v5`
 also explicitly disables the pinned CLI's bundled `agents-md` plugin through
 `--settings`: `--safe-mode` leaves built-in plugins enabled, and this plugin
 can load repository instructions outside the daemon's instruction bundle.
-The conformance transcript must still report no plugins. Existing
-intents retain the protocol they started under: `file_v1` through `file_v4`
-their launch commands, and argument delivery its original 31-KiB limit. This
-changes transport; it neither retries a failed invocation nor grants successor
-publication.
+The conformance transcript must still report no plugins. `file_v6` delivers
+it as `file_v5` does and, off a specification run's stage, also asks the CLI
+for its usage answer after the turn (#2543). The root shell installs a small
+Node driver, `usage_driver.cjs`, in a root-owned, world-readable directory
+outside the workspace and the launch directory, and starts it under the same
+privilege drop in front of the CLI, which now takes `--input-format
+stream-json` and `CLAUDE_CODE_OAUTH_SCOPES='user:inference user:profile'`
+beside the unchanged token. The driver sends the prompt bytes as one user
+message, sends one `get_usage` after the turn's result, closes the CLI's stdin
+on the answer or after 15 seconds, and exits with the CLI's status; the CLI's
+stdout is the transcript, unchanged. The stage pipeline reads the answer from
+the transcript into the stage result's `claude_usage`, nil whenever any part
+of it is in doubt, and nothing about the stage's outcome depends on it. On a
+specification run's stage the command is `file_v5`'s. Conformance launches
+use `file_v6` too. Existing intents retain the protocol they started under:
+`file_v1` through `file_v5` their launch commands, and argument delivery its
+original 31-KiB limit. This changes transport; it neither retries a failed
+invocation nor grants successor publication.
 
 The optional `TestPinnedClaudePromptStdinLive` probe uses a cached, pinned
 Claude image, synthetic text larger than the argument limit, and a mock
@@ -172,6 +185,33 @@ go test ./internal/exec/claude -run '^TestPinnedClaudePromptStdinLive$' -count=1
 The probe registers one fresh container under the held rig, then verifies
 ownership before cleanup. Do not borrow an active exercise's rig without
 authorization. Its token stays in process memory and must not be printed.
+
+`TestPinnedClaudeUsageDriverLive` runs the production `file_v6` agent line,
+driver included, the same way and under the same variables, with
+`FREESIDE_USAGE_DRIVER_LIVE=1` in place of `FREESIDE_PROMPT_STDIN_LIVE=1`. It
+checks the image's CLI is the pinned build, that the turn makes exactly one
+`POST /v1/messages` with the prompt as one exact user text block, that the
+`get_usage` request is answered, and that the driver exits 0 well before its
+answer timeout. It reports the routes the CLI tried besides inference:
+
+```sh
+go test ./internal/exec/claude -run '^TestPinnedClaudeUsageDriverLive$' -count=1 -v
+```
+
+`TestLiveClaudeWriterUsage` makes one real writer turn, the conformance launch
+on `file_v6`, under the setup token in `CLAUDE_CODE_OAUTH_TOKEN`, enrolled into
+a disposable credential volume as `TestLiveClaudeAdapterConformance` does. It
+spends real subscription usage, so run it only with the owner's consent. It
+fails unless the transcript yields a capture with a `seven_day` window, and
+unless the credential volume's tree digest is the same before and after the
+turn, which rules out an auth-store write and a refresh:
+
+```sh
+FREESIDE_CLAUDE_USAGE_LIVE=1 \
+FREESIDE_WARD_CLAUDE_AGENT_IMAGE='<registry>/freeside-agent-claude@sha256:<digest>' \
+FREESIDE_WARD_EXPORTER_IMAGE='<registry>/freeside-exporter@sha256:<digest>' \
+go -C daemon test ./internal/exec/claude -run '^TestLiveClaudeWriterUsage$' -count=1 -v
+```
 
 - **Toolchain:** Go (single static binary, supervised by launchd/systemd, dedicated user). Module `github.com/freeside-ai/freeside/daemon`, pinned in `go.mod`; build/test/run commands are in `AGENTS.md`.
 - **Scope boundary:** daemon-side code only. The daemon/client contract is defined in `api/`; server-side code implementing it lives here, never hand-authored to diverge from the spec.
