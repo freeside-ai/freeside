@@ -10,7 +10,7 @@ import (
 // taskHistoryEvents summarizes already authenticated records. It never derives
 // an event from a current status, and does not create a second persistence log.
 // The lines arrive ordered by role and then version, as the store reads them.
-func taskHistoryEvents(task domain.Task, lines []domain.TaskLine, inputs []taskTimelineInput, sections []TaskTimelineSection) ([]domain.TaskEvent, error) {
+func taskHistoryEvents(task domain.Task, lines []domain.TaskLine, triage *domain.TaskTriage, inputs []taskTimelineInput, sections []TaskTimelineSection) ([]domain.TaskEvent, error) {
 	events := []domain.TaskEvent{{Kind: domain.TaskEventCreated, RecordedAt: task.CreatedAt}}
 	for i, line := range lines {
 		detail := domain.TaskEventTaskLine{
@@ -26,6 +26,14 @@ func taskHistoryEvents(task domain.Task, lines []domain.TaskLine, inputs []taskT
 			detail.SupersededAgent = &lines[i-1].Agent
 		}
 		events = append(events, domain.TaskEvent{Kind: domain.TaskEventTaskLineSet, RecordedAt: line.SetAt, Line: &detail})
+	}
+	if triage != nil {
+		events = append(events, domain.TaskEvent{
+			Kind: domain.TaskEventSpecifierTriaged, RecordedAt: triage.RecordedAt,
+			Triage: &domain.TaskEventTriage{
+				Outcome: triage.Outcome, Tier: triage.Tier, Reason: triage.Reason, Escalated: triage.Escalated,
+			},
+		})
 	}
 	for _, fact := range task.LifecycleFacts {
 		var kind domain.TaskEventKind

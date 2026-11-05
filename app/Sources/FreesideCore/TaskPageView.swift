@@ -1547,7 +1547,8 @@ enum TaskTimelinePresentation {
                 TimelineRail.Row(
                     kind: start.map { .stageStart($0) } ?? (recordsFailure(event) ? .failure : .event),
                     label: start.map { "\(AttentionDisplay.label($0)) started · \(words)" } ?? words,
-                    recordedAt: event.recorded_at, itemID: linkedItemID(event, items: items)))
+                    recordedAt: event.recorded_at, context: event.triage?.value1.reason,
+                    itemID: linkedItemID(event, items: items)))
         }
         oldestFirst += unstarted.map { decidedRow($0.round, $0.remediation, items: items) }
         var rows = Array(oldestFirst.reversed())
@@ -2417,6 +2418,7 @@ enum TaskTimelinePresentation {
         case .pr_merged: "PR merged"
         case .external_review_reentered: "External review re-entered"
         case .task_line_set: "Agent set"
+        case .specifier_triaged: "Specifying tier chosen"
         }
     }
 
@@ -2432,7 +2434,32 @@ enum TaskTimelinePresentation {
         if let line = event.line?.value1 {
             return label(line)
         }
+        if let triage = event.triage?.value1 {
+            return label(triage)
+        }
         return label(event.kind)
+    }
+
+    // An answer names the tier the triager chose. A failure or skip names
+    // what stood in for an answer, after the escalation it always causes, so
+    // the row never reads as the triager's choice. The task proceeds either
+    // way, so the row is an event, not a failure.
+    static func label(_ triage: Components.Schemas.TaskEventTriage) -> String {
+        if let tier = triage.tier?.value1 {
+            switch tier {
+            case .standard: return "Specifying tier · Standard"
+            case .escalated: return "Specifying tier · Escalated"
+            }
+        }
+        let cause =
+            switch triage.outcome {
+            case .answered: "answered"
+            case .call_failed: "call failed"
+            case .invalid_answer: "invalid answer"
+            case .budget_spent: "budget spent"
+            case .no_triager_line: "no triager line"
+            }
+        return "Specifying tier escalated · \(cause)"
     }
 
     static func label(_ role: Components.Schemas.TaskLineRole) -> String {

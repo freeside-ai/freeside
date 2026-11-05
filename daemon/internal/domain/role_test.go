@@ -55,10 +55,11 @@ func TestRoleShapeAndPlace(t *testing.T) {
 	if got := domain.RoleDriftAuditor.Sites(); !slices.Equal(got, []string{"drift_auditor"}) {
 		t.Fatalf("drift auditor sites = %v", got)
 	}
-	for _, unbuilt := range []domain.RoleName{domain.RoleBriefer, domain.RoleTriager} {
-		if got := unbuilt.Sites(); len(got) != 0 {
-			t.Fatalf("%s names sites %v before its site exists", unbuilt, got)
-		}
+	if got := domain.RoleTriager.Sites(); !slices.Equal(got, []string{"specifier_triage"}) {
+		t.Fatalf("triager sites = %v", got)
+	}
+	if got := domain.RoleBriefer.Sites(); len(got) != 0 {
+		t.Fatalf("briefer names sites %v before its site exists", got)
 	}
 	if domain.RoleTriager.LaunchShape() != domain.LaunchShapeWardless || domain.RoleTriager.TaskLineEligible() {
 		t.Fatal("the triager is a wardless role no task line may choose")

@@ -72,7 +72,8 @@
         "finding_adjudicator",
         "drift_auditor",
         "task_namer",
-        "publication_author"
+        "publication_author",
+        "triager"
       ],
       "surface": "judgment_binary",
       "harness": "claude_code",

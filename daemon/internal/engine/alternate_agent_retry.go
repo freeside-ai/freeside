@@ -258,6 +258,12 @@ func (s AgentSelection) movedPastMark(
 // policy in effect at the policy-order tier on the record's pool, and names
 // passedOver, the agent the move left (movedPastMark), as the router names
 // the agent it passed over.
+//
+// An escalated specifier (its task's triage record escalated and its newest
+// line is the triage line or one with a provenance) moves to the counterpart
+// of the first agent the policy orders for the specifier on the record's
+// pool (poolCounterpart), so the move keeps the tier; on a pool with no
+// counterpart it takes the pool's standard agent, as any other role does.
 func (s AgentSelection) moveLines(
 	ctx context.Context, tx *store.ReadTx, policy domain.RoutingPolicy, record domain.AlternateAgentRetry,
 	passedOver *domain.TaskLinePassedOverMark,
@@ -280,6 +286,22 @@ func (s AgentSelection) moveLines(
 	for name, candidate := range candidates {
 		pools[name] = candidate.pool
 	}
+	counterpart := ""
+	if head, ok := heads[domain.RoleSpecifier]; ok && record.Role != domain.RoleSpecifier &&
+		(head.Source == domain.TaskLineSourceTriage || head.Source.CarriesProvenance()) {
+		escalated, err := taskEscalated(ctx, tx, record.TaskID)
+		if err != nil {
+			return nil, err
+		}
+		if escalated {
+			if counterpart, err = s.poolCounterpart(ctx, tx, policy, record.Pool, pools); err != nil {
+				return nil, err
+			}
+			// With a counterpart the specifier's line is written below;
+			// without one it takes the pool's standard agent.
+			skip[domain.RoleSpecifier] = counterpart != ""
+		}
+	}
 	provenance := &domain.TaskLineProvenance{
 		PolicyRevision: policy.Revision, Tier: domain.TaskLineSelectionPolicyOrder, Pool: record.Pool,
 		RankedBy: []domain.TaskLineRankingReading{}, PassedOver: passedOver,
@@ -291,10 +313,44 @@ func (s AgentSelection) moveLines(
 		}
 	}
 	inputs := []domain.TaskLineInput{line(record.Role, record.Agent)}
+	if counterpart != "" {
+		inputs = append(inputs, line(domain.RoleSpecifier, counterpart))
+	}
 	for _, choice := range routerLinesForPool(policy, record.Pool, pools, skip) {
 		inputs = append(inputs, line(choice.Role, choice.Agent))
 	}
 	return inputs, nil
+}
+
+// poolCounterpart returns the escalated counterpart the lineup names for the
+// first agent of the policy's specifier order on pool (by pools, which holds
+// only resolvable agents) that has one resolving on the same pool, or empty
+// when none does. A lineup that does not resolve has none.
+func (s AgentSelection) poolCounterpart(
+	ctx context.Context, tx *store.ReadTx, policy domain.RoutingPolicy, pool domain.UsagePoolID,
+	pools map[string]domain.UsagePoolID,
+) (string, error) {
+	lineup, err := s.Tree.ResolveLineup()
+	if err != nil {
+		return "", nil
+	}
+	for _, name := range routingOrder(policy, domain.RoleSpecifier) {
+		if agentPool, ok := pools[name]; !ok || agentPool != pool {
+			continue
+		}
+		counterpart, ok := lineup.EscalatedCounterpart(domain.RoleSpecifier, name)
+		if !ok {
+			continue
+		}
+		candidate, ok, err := s.routeCandidate(ctx, tx, counterpart.AgentName)
+		if err != nil {
+			return "", err
+		}
+		if ok && candidate.pool == pool {
+			return counterpart.AgentName, nil
+		}
+	}
+	return "", nil
 }
 
 // parkedRun returns the task's attempt that is parked on its implementer's

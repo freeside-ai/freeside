@@ -71,7 +71,7 @@ func TestEverySiteBelongsToExactlyOneRole(t *testing.T) {
 		inference.AdjudicatorSiteID, inference.AttentionDiscussionSiteID,
 		inference.ClassifierSiteID, inference.DiagnosticSiteID, inference.DriftAuditorSiteID,
 		inference.PublicationAuthorExplainSiteID, inference.PublicationAuthorProposeSiteID,
-		inference.TaskNamerSiteID,
+		inference.TaskNamerSiteID, inference.TriagerSiteID,
 	}
 	slices.Sort(registered)
 	if declared := declaredSiteIDs(t); !slices.Equal(declared, registered) {

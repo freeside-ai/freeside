@@ -1114,6 +1114,8 @@ func TestTriageTaskLineAnchorRefusals(t *testing.T) {
 		record *domain.TaskTriage
 		noLine bool // the lineup carries no escalated line
 		stale  bool // the escalated line pins a stale counterpart digest
+		prior  bool // a triage line already holds the specifier's first version
+		setAt  time.Time
 		want   string
 	}{
 		{
@@ -1144,6 +1146,14 @@ func TestTriageTaskLineAnchorRefusals(t *testing.T) {
 			name: "stale counterpart digest", role: domain.RoleSpecifier, agent: agentTestEscalatedAgent,
 			record: &escalated, stale: true, want: "the escalated line selects agent digest",
 		},
+		{
+			name: "not the first version", role: domain.RoleSpecifier, agent: agentTestEscalatedAgent,
+			record: &escalated, prior: true, want: "only the specifier's first version",
+		},
+		{
+			name: "not the triage instant", role: domain.RoleSpecifier, agent: agentTestEscalatedAgent,
+			record: &escalated, setAt: agentTestAt.Add(time.Second), want: "not set at its task's triage instant",
+		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			f := newAgentAdmissionFixture(t)
@@ -1162,9 +1172,17 @@ func TestTriageTaskLineAnchorRefusals(t *testing.T) {
 			if setBy == "" {
 				setBy = string(task.ID)
 			}
-			f.appendLine(t, domain.TaskLineInput{
+			in := domain.TaskLineInput{
 				TaskID: task.ID, Role: tc.role, Agent: tc.agent, Source: domain.TaskLineSourceTriage, SetBy: setBy,
-			}, agentTestAt)
+			}
+			if tc.prior {
+				f.appendLine(t, in, agentTestAt)
+			}
+			setAt := agentTestAt
+			if !tc.setAt.IsZero() {
+				setAt = tc.setAt
+			}
+			f.appendLine(t, in, setAt)
 			admission, err := f.admitRole(t, tc.role)
 			if !errors.Is(err, ErrAgentNotAdmissible) || !strings.Contains(err.Error(), tc.want) ||
 				admission.binding.AgentDigest != "" {

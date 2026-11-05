@@ -73,6 +73,7 @@ func judgmentSites(budget inference.Budget) []inference.Site {
 		inference.TaskNamerSite(budget),
 		inference.PublicationAuthorExplainSite(budget),
 		inference.PublicationAuthorProposeSite(budget),
+		inference.TriagerSite(budget),
 	}
 }
 
@@ -128,7 +129,7 @@ func (j judgmentRoles) ResolveRole(ctx context.Context, role domain.RoleName) (i
 		return inference.RoleCall{}, inference.ErrRoleOff
 	}
 	prompt, ok := judgmentRolePrompt(role, j.runtime.AuthorPrompt)
-	if !ok {
+	if !ok || (role == domain.RoleTriager && !triagerAsked(j.tree)) {
 		return inference.RoleCall{}, inference.ErrRoleOff
 	}
 	agent, err := engine.ResolveRole(ctx, j.st, j.tree, role)
@@ -155,6 +156,25 @@ func (j judgmentRoles) ResolveRole(ctx context.Context, role domain.RoleName) (i
 		}
 	}
 	return call, nil
+}
+
+// triagerAsked reports whether policy asks for the triager's work: whether
+// the specifier's lineup line names an escalated counterpart for its own
+// agent (plan §5.13, Specifier Triage). Without one every task specifies on
+// the lineup agent and nothing calls the triager, so a tree with no triager
+// line leaves it off, not unbound, and raises no item. A lineup that does not
+// resolve reports true, so the role's resolution reports that error.
+func triagerAsked(tree agenttree.Tree) bool {
+	lineup, err := tree.ResolveLineup()
+	if err != nil {
+		return true
+	}
+	line, ok := lineup.Line(domain.RoleSpecifier)
+	if !ok {
+		return false
+	}
+	_, escalated := lineup.EscalatedCounterpart(domain.RoleSpecifier, line.AgentName)
+	return escalated
 }
 
 // writerLineage is the lineage group of the offer a writing role's line

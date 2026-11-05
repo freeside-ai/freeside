@@ -236,9 +236,13 @@ func resolveLineAgent(
 	if err != nil {
 		return RoleAgent{}, err
 	}
+	bases, basis, err := counterpartBases(ctx, tx, line, taskLine)
+	if err != nil {
+		return RoleAgent{}, fmt.Errorf("task line %s: %w", taskLine.ID, err)
+	}
 	var counterpart *domain.LineupSelection
-	if taskLine.Source == domain.TaskLineSourceTriage {
-		escalated, err := triageCounterpart(tree, line, taskLine)
+	if bases != nil {
+		escalated, err := triageCounterpart(tree, taskLine, bases, basis)
 		if err != nil {
 			return RoleAgent{}, fmt.Errorf("task line %s: %w", taskLine.ID, err)
 		}
@@ -302,34 +306,68 @@ func resolveCardAgent(
 	return agent, nil
 }
 
-// triageCounterpart is the Tier A half of a triage line's anchor that needs
-// the tree: the line's agent must be the escalated counterpart the current
-// lineup names for the specifier's lineup agent. It is re-read from the
-// lineup at every admission, never trusted from the row, so a lineup edit
-// that drops or changes the counterpart refuses a line written before it.
-// The other half, the line's own task and its triage record, is
-// anchorTaskLine's. The router's walk (#2393) is not built, so the lineup
-// agent's counterpart is the only one checked; the triage unit (#2511)
-// extends this to the routed agent.
+// counterpartBases returns the agents whose escalated counterpart a task
+// line must name, and a description of them that is safe to print, or nil
+// when the line need not name a counterpart. A triage line names the
+// counterpart of the specifier's lineup agent. A specifier router or move
+// line whose agent its cited revision does not order names the counterpart
+// of an agent that revision orders for the specifier: the router routes an
+// escalated specifier among those (escalatedOrder), and a move re-pins it
+// the same way. anchorLinePolicy admits such an agent only for a task whose
+// triage record escalated.
+func counterpartBases(
+	ctx context.Context, tx *store.ReadTx, line domain.LineupSelection, taskLine domain.TaskLine,
+) ([]string, string, error) {
+	if taskLine.Source == domain.TaskLineSourceTriage {
+		return []string{line.AgentName}, "lineup agent " + line.AgentName, nil
+	}
+	if taskLine.Role != domain.RoleSpecifier || !taskLine.Source.CarriesProvenance() {
+		return nil, "", nil
+	}
+	policy, err := routingPolicyRevision(ctx, tx, taskLine.Provenance.PolicyRevision)
+	if err != nil {
+		return nil, "", err
+	}
+	order := routingOrder(policy, taskLine.Role)
+	if slices.Contains(order, taskLine.Agent) {
+		return nil, "", nil
+	}
+	return order, fmt.Sprintf("an agent routing policy revision %d orders", policy.Revision), nil
+}
+
+// triageCounterpart is the Tier A half of an escalated line's anchor that
+// needs the tree: the line's agent must be the escalated counterpart the
+// current lineup names for one of bases (counterpartBases), described by
+// basis. It is re-read from the lineup at every admission, never trusted from
+// the row, so a lineup edit that drops or changes the counterpart refuses a
+// line written before it. The other half, the line's own task and its
+// triage record, is anchorTaskLine's.
 func triageCounterpart(
-	tree agenttree.Tree, line domain.LineupSelection, taskLine domain.TaskLine,
+	tree agenttree.Tree, taskLine domain.TaskLine, bases []string, basis string,
 ) (domain.LineupSelection, error) {
 	lineup, err := tree.ResolveLineup()
 	if err != nil {
 		return domain.LineupSelection{}, err
 	}
-	counterpart, ok := lineup.EscalatedCounterpart(taskLine.Role, line.AgentName)
-	if !ok {
-		return domain.LineupSelection{}, fmt.Errorf("the lineup names no escalated counterpart for %s's agent %s",
-			taskLine.Role, line.AgentName)
+	var named []string
+	for _, base := range bases {
+		counterpart, ok := lineup.EscalatedCounterpart(taskLine.Role, base)
+		if !ok {
+			continue
+		}
+		if counterpart.AgentName == taskLine.Agent {
+			return counterpart, nil
+		}
+		named = append(named, counterpart.AgentName)
+	}
+	if len(named) == 0 {
+		return domain.LineupSelection{}, fmt.Errorf("the lineup names no escalated counterpart for %s's %s",
+			taskLine.Role, basis)
 	}
 	// The refusal names neither agent the row holds: a refusal is stored,
 	// and only the tree's names are safe to print.
-	if counterpart.AgentName != taskLine.Agent {
-		return domain.LineupSelection{}, fmt.Errorf("it names an agent other than %s, the escalated counterpart of %s",
-			counterpart.AgentName, line.AgentName)
-	}
-	return counterpart, nil
+	return domain.LineupSelection{}, fmt.Errorf("it names an agent other than %s, the escalated counterpart of %s",
+		strings.Join(named, " or "), basis)
 }
 
 // Selection is the selection source that chose the agent and the record an
@@ -436,9 +474,10 @@ func RunTaskLine(
 // agent their command recorded for the role; proposal lines must be set at
 // the recorded decision's instant; a changed line at its change's. A router
 // line must hold to the policy revision it cites (anchorRouterLine). A triage
-// line sets only the specifier, cites its own task, and that task's triage
-// record must exist and have escalated; resolveLineAgent holds its agent to
-// the lineup's escalated counterpart (triageCounterpart).
+// line sets only the specifier's first version, cites its own task, and was
+// set at the instant of that task's triage record, which must exist and have
+// escalated; resolveLineAgent holds its agent to the lineup's escalated
+// counterpart (triageCounterpart).
 //
 // A submission or change record stores what the operator chose, so those arms
 // bind the agent. A proposal line rests on a real operator action on this
@@ -544,6 +583,14 @@ func anchorTaskLine(ctx context.Context, tx *store.ReadTx, line domain.TaskLine)
 		if !record.Escalated {
 			return errors.New("its task's triage record did not escalate")
 		}
+		// Triage writes the specifier's first version at its record's
+		// instant, in the transaction that records it.
+		if line.Version != 1 {
+			return errors.New("triage sets only the specifier's first version")
+		}
+		if !line.SetAt.Equal(record.RecordedAt) {
+			return errors.New("the line was not set at its task's triage instant")
+		}
 		return nil
 	case domain.TaskLineSourceCLILineChange, domain.TaskLineSourceClientLineChange:
 		change, err := tx.GetTaskLineChange(ctx, domain.Digest(line.SetBy))
@@ -562,7 +609,9 @@ func anchorTaskLine(ctx context.Context, tx *store.ReadTx, line domain.TaskLine)
 // operator action backs one, so the anchor is the policy: the line names its
 // own task's routing, it is its role's first version (a later version that
 // re-pins a moved task is an alternate_agent_move line, which anchors to its
-// record), and it holds to its policy revision (anchorLinePolicy).
+// record), and it holds to its policy revision (anchorLinePolicy). The one
+// later version is an escalated specifier's second, over its task's triage
+// line (plan §5.13, Specifier Triage).
 //
 // The refusals name no agent, as the other arms don't.
 func anchorRouterLine(ctx context.Context, tx *store.ReadTx, line domain.TaskLine) error {
@@ -570,7 +619,17 @@ func anchorRouterLine(ctx context.Context, tx *store.ReadTx, line domain.TaskLin
 		return errors.New("it does not name its own task's routing")
 	}
 	if line.Version != 1 {
-		return errors.New("the router sets only a role's first version")
+		if line.Role != domain.RoleSpecifier || line.Version != 2 || line.PredecessorID == nil {
+			return errors.New("the router sets only a role's first version, or an escalated specifier's second")
+		}
+		// A predecessor is its own task's line (the store's chain check).
+		predecessor, err := tx.GetTaskLine(ctx, *line.PredecessorID)
+		if err != nil {
+			return err
+		}
+		if predecessor.Source != domain.TaskLineSourceTriage {
+			return errors.New("the router sets a specifier's second version only over its triage line")
+		}
 	}
 	return anchorLinePolicy(ctx, tx, line)
 }
@@ -614,27 +673,37 @@ func anchorAlternateAgentMoveLine(ctx context.Context, tx *store.ReadTx, line do
 // rechecked, because both change over time: a line routed past a mark that
 // has since cleared, or ranked by a reset since passed, is still the routing
 // that chose it.
+//
+// A task whose triage record escalated routes its specifier among
+// counterparts the revision need not order (escalatedOrder). For that task
+// only, the specifier's line may name an agent the revision does not order,
+// which resolveLineAgent then holds to the lineup's counterpart of an agent
+// it does (counterpartBases), and any of its lines may cite a passed-over
+// agent outside the orders: that one is history and selects nothing.
 func anchorLinePolicy(ctx context.Context, tx *store.ReadTx, line domain.TaskLine) error {
 	revision := line.Provenance.PolicyRevision
-	policies, err := tx.RoutingPolicyRevisions(ctx)
+	policy, err := routingPolicyRevision(ctx, tx, revision)
 	if err != nil {
 		return err
 	}
-	i := slices.IndexFunc(policies, func(policy domain.RoutingPolicy) bool { return policy.Revision == revision })
-	if i < 0 {
-		return fmt.Errorf("routing policy revision %d was never set", revision)
-	}
-	policy := policies[i]
 	if policy.SetAt.After(line.SetAt) {
 		return fmt.Errorf("routing policy revision %d was set after the line", revision)
 	}
-	if !slices.Contains(routingOrder(policy, line.Role), line.Agent) {
+	ordered := slices.Contains(routingOrder(policy, line.Role), line.Agent)
+	passedOver := line.Provenance.PassedOver
+	passedOverOrdered := passedOver == nil || slices.ContainsFunc(policy.Roles, func(role domain.RoutingPolicyRole) bool {
+		return slices.Contains(role.Agents, passedOver.Agent)
+	})
+	escalated := false
+	if !ordered || !passedOverOrdered {
+		if escalated, err = taskEscalated(ctx, tx, line.TaskID); err != nil {
+			return err
+		}
+	}
+	if !ordered && (line.Role != domain.RoleSpecifier || !escalated) {
 		return fmt.Errorf("routing policy revision %d does not order the line's agent for its role", revision)
 	}
-	if passedOver := line.Provenance.PassedOver; passedOver != nil &&
-		!slices.ContainsFunc(policy.Roles, func(role domain.RoutingPolicyRole) bool {
-			return slices.Contains(role.Agents, passedOver.Agent)
-		}) {
+	if !passedOverOrdered && !escalated {
 		return fmt.Errorf("routing policy revision %d orders no agent the line passed over", revision)
 	}
 	if line.Provenance.Tier == domain.TaskLineSelectionDrainFirstAccount &&
@@ -642,6 +711,19 @@ func anchorLinePolicy(ctx context.Context, tx *store.ReadTx, line domain.TaskLin
 		return fmt.Errorf("routing policy revision %d drains no such account first", revision)
 	}
 	return nil
+}
+
+// routingPolicyRevision returns the routing policy revision a line cites.
+func routingPolicyRevision(ctx context.Context, tx *store.ReadTx, revision int) (domain.RoutingPolicy, error) {
+	policies, err := tx.RoutingPolicyRevisions(ctx)
+	if err != nil {
+		return domain.RoutingPolicy{}, err
+	}
+	i := slices.IndexFunc(policies, func(policy domain.RoutingPolicy) bool { return policy.Revision == revision })
+	if i < 0 {
+		return domain.RoutingPolicy{}, fmt.Errorf("routing policy revision %d was never set", revision)
+	}
+	return policies[i], nil
 }
 
 // submittedLineBacked holds a line to the choices its submission recorded. A

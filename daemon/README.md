@@ -1218,7 +1218,7 @@ freesided inspect proposals -db <db>
 - `tasks`: every task the store holds, with `task_id`, `project_id`,
   `created_at`, and `latest_run_id` (`null` before the first run).
 
-`freesided inspect task` prints one task's record, `freeside-task-record-v13`.
+`freesided inspect task` prints one task's record, `freeside-task-record-v14`.
 Every section is read in one transaction, at the store revision
 `as_of_revision`; `as_of` is the read time. To wait for a change, read again
 and compare `as_of_revision`. A revision that hasn't moved means no recorded
@@ -1352,7 +1352,7 @@ Reading the record:
   `unapproved_recipe` says so on stderr; stdout stays one JSON line.
 - **The timeline's and the card's shapes are part of the record's version.**
   A change to the task timeline, its events, or the proposal card changes
-  `freeside-task-record-v13`.
+  `freeside-task-record-v14`.
 - **`specification_retries` names each specification retry.** A retry adds
   an iteration to the same specification run, so the run's `invocations`
   list the failed invocation and the one that repeats it. The entries are
@@ -1913,6 +1913,16 @@ does for an operator's.
 - **Dispatch clears the hold.** An attempt's hold ends when it starts. A
   review's hold ends when its admission is written, and the review's wait
   spends no retry budget.
+- **An escalated specifier routes among counterparts.** When triage
+  escalated a task (Subscription-Backed Daemon Judgments), its specifier's
+  order is the escalated counterpart the lineup names for each agent of the
+  policy's specifier order, skipping agents with none. Those counterparts'
+  windows for the escalated model rank and pick the pool, and the
+  specifier's router line, version 2 over its triage line, names the chosen
+  counterpart. Every other role is pinned to that pool as usual. When every
+  counterpart is marked, the specifier holds. When none resolves, the router
+  writes nothing at the specifier's admission and the triage line keeps the
+  specifier escalated; the later roles route at their first admission.
 
 ### Retry Or Move A Task To Another Agent
 
@@ -1947,8 +1957,11 @@ agent on its own. There's no `freesided` command for either path.
   attempt starts on the new line. The lines' provenance names the agent
   left, with its mark, as `passed_over` when the policy orders it. Other roles the policy orders an agent on
   that pool for move with it; a role an operator set, or one the policy
-  can't pin there, keeps its line. Offers here come only from the routing
-  policy, so a task with no policy in effect is offered nothing.
+  can't pin there, keeps its line. An escalated specifier moves to the
+  counterpart of the policy's first specifier agent on that pool, or to the
+  pool's standard agent when the pool has no counterpart. Offers here come
+  only from the routing policy, so a task with no policy in effect is
+  offered nothing.
 - **Admission checks the choice again.** Before a card's agent runs,
   admission refuses it unless it isn't the failed agent, it draws on the pool
   the operator chose, and it still escapes the failed invocation's cause
@@ -2847,7 +2860,10 @@ that was passed over (`passed_over`). `GET /tasks/{task_id}/timeline` shows ever
 as a `task_line_set` event at its `set_at`, and the synced task carries each
 role's current line in `task_lines`. A version from `freesided task-line
 -clear` shows as an event with a null `agent`, and the synced task then
-carries no line for that role.
+carries no line for that role. A task's specifier triage shows as one
+`specifier_triaged` event at its `recorded_at`, with a `triage` detail:
+the outcome, the tier and reason of an answer (or the daemon's fallback
+code as the reason of a failure), and whether the specifier escalates.
 
 For a preflight-bound submission, choose one `--submission-id <identity>` and
 pass it to both `preflight` and `submit`. Reusing it with different input
@@ -3823,6 +3839,37 @@ separate serial worker after durable dispatch, so a slow provider does not
 delay reconciliation. Its 32-entry in-memory queue keeps the identifier
 fallback when full or lost on restart. Diagnostic and
 Discussion sites continue to use their fallback outputs with this adapter.
+
+The triager (`specifier_triage`, plan §5.13 Specifier Triage) chooses, once
+per task, whether its specification runs on the specifier's lineup agent
+(`standard`) or on the escalated counterpart the lineup names for it
+(`escalated`). It runs in the specifier's first admission, before the router,
+only when the specifier's lineup line has an escalated counterpart, the task
+has no triage record and no specifier line (an operator's line, even a
+cleared one, skips it), and no run of the task has admitted its specifier.
+It sends the project's repository name and the task's source as the task
+namer reads it: the issue's title, body, and label names, or the submitted
+text. Its default criteria are code-owned (`internal/inference/triager_prompt.md`).
+The task's timeline shows every outcome. A failed call, an unreadable
+source, a refused answer, a spent budget, and a lineup with no triager line
+each escalate, so an unavailable triager costs quota on the larger model,
+never a complex task on the smaller one. An escalation writes the
+specifier's first line, a `triage` line naming the counterpart, in the same
+write as the record. Admission accepts that line only for its task's
+escalated record, at the record's instant, naming the counterpart the
+current lineup pins.
+
+- **The triager is off without an escalated line.** It is off, not unbound,
+  while the specifier's lineup line names no escalated counterpart, so a tree
+  adopted before triage raises no `judgment_role_unbound` item.
+- **One judgment at a time.** Triage calls run one at a time. A triage call
+  that overlaps a classifier, adjudicator, or drift-auditor call fails at
+  once on the shared slot and is recorded as `call_failed`, so that task
+  escalates.
+- **A failure is final.** A task whose source fetch or call failed stays
+  escalated; triage never runs for it again.
+- **Admission waits for the call.** The call runs inside the specifier's
+  admission, for up to the site's 30-second timeout.
 
 One further optional flag configures the publication-author role's two sites
 (`publication_author_explain` and `publication_author_propose`):

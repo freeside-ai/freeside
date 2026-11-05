@@ -132,7 +132,10 @@ func (tx *WriteTx) RecordTaskLineChange(
 // input must be a router line of taskID, and each must be its role's first
 // version: the router writes only for a role with no line at all, so a role
 // that gained one since the router read fails the whole routing rather than
-// stacking a router version on an operator's choice.
+// stacking a router version on an operator's choice. The one exception is an
+// escalated specifier (plan §5.13, Specifier Triage): its router line is
+// version 2 over the task's own triage line, which routing never replaces
+// with anything but a counterpart (the engine's router decides which).
 //
 // Like RecordTaskLineChange, this advances the task's own version, so sync
 // serves the new task_lines.
@@ -153,8 +156,14 @@ func (tx *WriteTx) RecordRouterTaskLines(
 			return nil, err
 		}
 		if line.Version != 1 {
-			return nil, fmt.Errorf("record router task lines %q %s: the role already has a line: %w",
-				taskID, in.Role, domain.ErrTaskLineInconsistent)
+			overTriage, err := tx.routesOverTriage(ctx, line)
+			if err != nil {
+				return nil, fmt.Errorf("record router task lines %q %s: %w", taskID, in.Role, err)
+			}
+			if !overTriage {
+				return nil, fmt.Errorf("record router task lines %q %s: the role already has a line: %w",
+					taskID, in.Role, domain.ErrTaskLineInconsistent)
+			}
 		}
 		lines = append(lines, line)
 	}
@@ -166,6 +175,20 @@ func (tx *WriteTx) RecordRouterTaskLines(
 		return nil, fmt.Errorf("record router task lines %q: %w", taskID, err)
 	}
 	return lines, nil
+}
+
+// routesOverTriage reports whether a router line is the specifier's second
+// version over a triage line. A predecessor is always its own task's line
+// (validateTaskLineChains), so the source alone names the task's triage.
+func (tx *WriteTx) routesOverTriage(ctx context.Context, line domain.TaskLine) (bool, error) {
+	if line.Role != domain.RoleSpecifier || line.Version != 2 || line.PredecessorID == nil {
+		return false, nil
+	}
+	predecessor, err := tx.GetTaskLine(ctx, *line.PredecessorID)
+	if err != nil {
+		return false, err
+	}
+	return predecessor.Source == domain.TaskLineSourceTriage, nil
 }
 
 // GetTaskLineChange returns the change record with the given id. The decoded

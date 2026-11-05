@@ -124,6 +124,13 @@ func loadedTaskTimeline(
 	if err != nil {
 		return TaskTimeline{}, asRunObservationIntegrityError(err)
 	}
+	// The store validates the record, so a bad row fails this read too.
+	var triage *domain.TaskTriage
+	if record, found, err := tx.GetTaskTriage(ctx, id); err != nil {
+		return TaskTimeline{}, asRunObservationIntegrityError(err)
+	} else if found {
+		triage = &record
+	}
 	ids, err := tx.TaskRunIDs(ctx, id)
 	if err != nil {
 		return TaskTimeline{}, err
@@ -218,7 +225,7 @@ func loadedTaskTimeline(
 		}
 		inputs = append(inputs, input)
 	}
-	return taskTimeline(task, lines, inputs, state.Revision, asOf)
+	return taskTimeline(task, lines, triage, inputs, state.Revision, asOf)
 }
 
 func taskTimelineReadinessBinding(ctx context.Context, tx *store.ReadTx, runID domain.RunID, itemID domain.ItemID) (bool, error) {
@@ -335,7 +342,7 @@ func taskTimelinePRBinding(ctx context.Context, tx *store.ReadTx, runID domain.R
 	return &binding, nil
 }
 
-func taskTimeline(task domain.Task, lines []domain.TaskLine, inputs []taskTimelineInput, revision int64, asOf time.Time) (TaskTimeline, error) {
+func taskTimeline(task domain.Task, lines []domain.TaskLine, triage *domain.TaskTriage, inputs []taskTimelineInput, revision int64, asOf time.Time) (TaskTimeline, error) {
 	out := TaskTimeline{
 		AsOfRevision: revision, AsOf: asOf, TaskID: task.ID, ProjectID: task.ProjectID, Name: task.Name,
 		Events:   []domain.TaskEvent{{Kind: domain.TaskEventCreated, RecordedAt: task.CreatedAt}},
@@ -445,7 +452,7 @@ func taskTimeline(task domain.Task, lines []domain.TaskLine, inputs []taskTimeli
 		}
 		return cmp.Or(allocated[bID].Compare(allocated[aID]), cmp.Compare(bID, aID))
 	})
-	events, err := taskHistoryEvents(task, lines, inputs, out.Sections)
+	events, err := taskHistoryEvents(task, lines, triage, inputs, out.Sections)
 	if err != nil {
 		return TaskTimeline{}, err
 	}

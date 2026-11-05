@@ -67,6 +67,7 @@ func budgetedSites() []inference.Site {
 		inference.PublicationAuthorExplainSite(budget), inference.PublicationAuthorProposeSite(budget),
 		inference.ClassifierSite(budget), inference.AdjudicatorSite(budget),
 		inference.DriftAuditorSite(budget), inference.DiscussionSite(budget),
+		inference.TriagerSite(budget),
 	}
 }
 
@@ -811,8 +812,8 @@ func TestCheckRolesReportsWithoutCalling(t *testing.T) {
 	for _, check := range client.CheckRoles(context.Background()) {
 		results[check.Role] = check
 	}
-	if len(results) != 7 {
-		t.Fatalf("checked %d roles, want the seven with a site: %+v", len(results), results)
+	if len(results) != 8 {
+		t.Fatalf("checked %d roles, want the eight with a site: %+v", len(results), results)
 	}
 	for role, check := range results {
 		switch role {

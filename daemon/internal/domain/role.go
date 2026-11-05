@@ -44,8 +44,8 @@ func (r RoleName) Stage() (StageName, bool) {
 // Sites returns the ids of the judgment sites a wardless role answers, as
 // daemon/internal/inference registers them; domain cannot import that
 // package, and a test there holds the two lists together. A ward role has
-// none. The briefer's and the triager's sites are not built, so those roles
-// have none yet and the unit that builds each site adds it.
+// none. The briefer's site is not built, so that role has none yet and the
+// unit that builds its site adds it.
 func (r RoleName) Sites() []string {
 	switch r {
 	case RoleDiagnostic:
@@ -62,7 +62,9 @@ func (r RoleName) Sites() []string {
 		return []string{"attention_discussion"}
 	case RoleDriftAuditor:
 		return []string{"drift_auditor"}
-	case RoleBriefer, RoleTriager:
+	case RoleTriager:
+		return []string{"specifier_triage"}
+	case RoleBriefer:
 		return nil
 	case RoleSpecifier, RoleImplementer, RoleRemediator, RoleReviewer, RoleShadowReviewer:
 		return nil

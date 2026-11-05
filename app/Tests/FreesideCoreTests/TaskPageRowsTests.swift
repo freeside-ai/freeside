@@ -375,6 +375,31 @@ import Testing
                 == "Specifying agent set by triage · claude-code-specifier-escalated")
     }
 
+    @Test func aTriageEventNamesTheTierOrTheFailureAndItsReason() throws {
+        // The task proceeds whatever the outcome, so the row is an event, and
+        // the triager's advisory reason is its sub line.
+        let rows = TaskTimelinePresentation.rows(TaskStageFixtures.history(.specification))
+        let row = try #require(rows.first { $0.label.hasPrefix("Specifying tier") })
+        #expect(row.label == "Specifying tier · Escalated")
+        #expect(row.kind == .event)
+        #expect(row.context == "Changes the API schema and its generated clients.")
+        #expect(rows.filter { $0.context != nil }.count == 1)
+        func label(
+            _ outcome: Components.Schemas.TriageOutcome, _ tier: Components.Schemas.TriageTier? = nil
+        ) -> String {
+            TaskTimelinePresentation.label(
+                Components.Schemas.TaskEventTriage(
+                    outcome: outcome, tier: tier.map { .init(value1: $0) }, escalated: tier != .standard))
+        }
+        #expect(label(.answered, .standard) == "Specifying tier · Standard")
+        #expect(label(.answered, .escalated) == "Specifying tier · Escalated")
+        #expect(label(.call_failed) == "Specifying tier escalated · call failed")
+        #expect(label(.invalid_answer) == "Specifying tier escalated · invalid answer")
+        #expect(label(.budget_spent) == "Specifying tier escalated · budget spent")
+        #expect(label(.no_triager_line) == "Specifying tier escalated · no triager line")
+        #expect(TaskTimelinePresentation.label(.specifier_triaged) == "Specifying tier chosen")
+    }
+
     @Test func aClearedLineReadsAsBackToTheLineup() {
         let digest = "sha256:" + String(repeating: "a", count: 64)
         let cleared = Components.Schemas.TaskEventTaskLine(

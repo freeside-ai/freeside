@@ -579,8 +579,10 @@ func (e *Engine) admitAttempt(
 			)
 		}
 	}
-	admittedAt := e.admission.now()
 	var agent *agentAdmission
+	// admittedAt is read only after triage, so the lines the router writes
+	// and the admission's anchor follow the triage record in time.
+	var admittedAt time.Time
 	if env.Agents != nil {
 		role, ok := wardRole(binding.run, stage, invocationID)
 		if !ok {
@@ -601,6 +603,14 @@ func (e *Engine) admitAttempt(
 				}
 			}
 		}
+		// The triager chooses the specifier's tier before its first
+		// admission and before the router (plan §5.13, Specifier Triage).
+		if role == domain.RoleSpecifier {
+			if err := e.triageSpecifier(ctx, *env.Agents, binding.run.ID, e.admission.now); err != nil {
+				return domain.ExecutionAdmission{}, false, fmt.Errorf("admit invocation %q: triage: %w", invocationID, err)
+			}
+		}
+		admittedAt = e.admission.now()
 		// The router writes the task's lines at its first routable
 		// admission, and a routed line's marked pool holds the attempt
 		// (plan §5.4, routing policy). Admission then reads the line.
@@ -616,6 +626,8 @@ func (e *Engine) admitAttempt(
 		agent = &resolved
 		identity := resolved.enrollment.AuthIdentityID
 		env.AuthIdentityID, env.CredentialMode = &identity, resolved.enrollment.CredentialMode
+	} else {
+		admittedAt = e.admission.now()
 	}
 	var agentBinding *domain.AdmissionAgentBinding
 	if agent != nil {

@@ -37,6 +37,11 @@ const (
 	// selection's provenance. A switch is the event whose detail names both
 	// the agent left and the agent taken.
 	TaskEventTaskLineSet TaskEventKind = "task_line_set"
+	// TaskEventSpecifierTriaged marks a task's one triage record: the tier
+	// the triager chose, or the failure or skip that stood in for an
+	// answer, and whether the task escalated (plan §5.13, Specifier
+	// Triage). It is an observation; the record's reason is advisory.
+	TaskEventSpecifierTriaged TaskEventKind = "specifier_triaged"
 )
 
 var AllTaskEventKinds = []TaskEventKind{
@@ -45,7 +50,7 @@ var AllTaskEventKinds = []TaskEventKind{
 	TaskEventReviewRequested, TaskEventReviewCompleted, TaskEventReviewFailed, TaskEventVerificationRecorded,
 	TaskEventCampaignAllocated, TaskEventSpecificationApproved,
 	TaskEventPROpened, TaskEventPRMerged, TaskEventExternalReviewReentered,
-	TaskEventTaskLineSet,
+	TaskEventTaskLineSet, TaskEventSpecifierTriaged,
 }
 
 func (k TaskEventKind) valid() bool {
@@ -55,7 +60,7 @@ func (k TaskEventKind) valid() bool {
 		TaskEventReviewRequested, TaskEventReviewCompleted, TaskEventReviewFailed, TaskEventVerificationRecorded,
 		TaskEventCampaignAllocated, TaskEventSpecificationApproved,
 		TaskEventPROpened, TaskEventPRMerged, TaskEventExternalReviewReentered,
-		TaskEventTaskLineSet:
+		TaskEventTaskLineSet, TaskEventSpecifierTriaged:
 		return true
 	default:
 		return false
@@ -155,6 +160,23 @@ func (l TaskEventTaskLine) validate() error {
 	return nil
 }
 
+// TaskEventTriage is a task's triage record as the timeline shows it. Tier is
+// set exactly when the triager answered; Reason is the triager's or the
+// failure's, advisory and for display only.
+type TaskEventTriage struct {
+	Outcome   TriageOutcome `json:"outcome"`
+	Tier      *TriageTier   `json:"tier"`
+	Reason    *string       `json:"reason"`
+	Escalated bool          `json:"escalated"`
+}
+
+func (t TaskEventTriage) validate() error {
+	if err := validateTriageOutcome(t.Outcome, t.Tier, t.Reason, t.Escalated); err != nil {
+		return fmt.Errorf("task event triage: %w: %w", ErrTaskEventDetailMismatch, err)
+	}
+	return nil
+}
+
 // TaskEvent is a kind-scoped fact with explicit-null details. Campaign
 // allocation names its specification run; approval also names the bound
 // implementation run. PR events name their run, including legacy runs, and
@@ -166,6 +188,7 @@ type TaskEvent struct {
 	Verification       *TaskEventVerification   `json:"verification"`
 	ExternalReview     *TaskEventExternalReview `json:"external_review"`
 	Line               *TaskEventTaskLine       `json:"line"`
+	Triage             *TaskEventTriage         `json:"triage"`
 	Kind               TaskEventKind            `json:"kind"`
 	RecordedAt         time.Time                `json:"recorded_at"`
 	CampaignID         *CampaignID              `json:"campaign_id"`
@@ -206,7 +229,8 @@ func (e TaskEvent) Validate() error {
 		(e.Review != nil) != (e.Kind == TaskEventReviewRequested || e.Kind == TaskEventReviewCompleted || e.Kind == TaskEventReviewFailed) ||
 		(e.Verification != nil) != (e.Kind == TaskEventVerificationRecorded) ||
 		(e.ExternalReview != nil) != (e.Kind == TaskEventExternalReviewReentered) ||
-		(e.Line != nil) != (e.Kind == TaskEventTaskLineSet) {
+		(e.Line != nil) != (e.Kind == TaskEventTaskLineSet) ||
+		(e.Triage != nil) != (e.Kind == TaskEventSpecifierTriaged) {
 		return ErrTaskEventDetailMismatch
 	}
 	switch e.Kind {
@@ -260,6 +284,11 @@ func (e TaskEvent) Validate() error {
 		return check(false, true, false, false, true, false)
 	case TaskEventTaskLineSet:
 		if err := e.Line.validate(); err != nil {
+			return err
+		}
+		return check(false, false, false, false, false, false)
+	case TaskEventSpecifierTriaged:
+		if err := e.Triage.validate(); err != nil {
 			return err
 		}
 		return check(false, false, false, false, false, false)
