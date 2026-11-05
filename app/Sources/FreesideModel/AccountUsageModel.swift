@@ -164,11 +164,6 @@ package enum UsageDisplay {
         return nil
     }
 
-    /// The reading's share, or its status alone when it carries none.
-    package static func value(_ reading: Components.Schemas.UsageWindowReading) -> String {
-        share(reading) ?? (reading.status == .exhausted ? "Exhausted" : "Allowed")
-    }
-
     /// Whether the client's clock has carried the reading past the daemon's
     /// `stale_at`. A stale reading is shown as stale, never as replenished.
     package static func isStale(_ reading: Components.Schemas.UsageWindowReading, now: Date) -> Bool {
@@ -184,29 +179,10 @@ package enum UsageDisplay {
         marks.contains { $0.window == window && ($0.resets_at.map { now < $0 } ?? true) }
     }
 
-    /// The window's live marks whose reset the reading doesn't already show:
-    /// a refusal can outlive the readings (a reassignment clears them), or
-    /// name a reset the reading lacks or has passed, and then its own reset
-    /// is the one the record holds.
-    package static func uncoveredMarks(
-        window: String, in pool: Components.Schemas.UsagePoolUsage, now: Date
-    ) -> [Components.Schemas.UsageExhaustedMark] {
-        let reading = pool.windows.first { $0.window == window }
-        return pool.recorded_exhausted_marks.filter { mark in
-            mark.window == window && isExhausted(window: window, marks: [mark], now: now)
-                && !(reading != nil && mark.resets_at == reading?.resets_at)
-        }
-    }
-
     /// Every window the record names, by a reading or a mark, in window
     /// order: a refusal can mark a window the collector hasn't read.
     package static func windows(_ pool: Components.Schemas.UsagePoolUsage) -> [String] {
         Array(Set(pool.windows.map(\.window) + pool.recorded_exhausted_marks.map(\.window))).sorted()
-    }
-
-    /// The route models a window limits; empty for a general window.
-    package static func models(limitedBy window: String, in pool: Components.Schemas.UsagePoolUsage) -> [String] {
-        pool.model_windows.filter { $0.window == window }.map(\.route_model_id)
     }
 
     /// Words for the window ids the collectors report; nil for any other id,

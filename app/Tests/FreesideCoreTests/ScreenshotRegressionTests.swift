@@ -879,14 +879,14 @@
                 }
             }
 
-            // Account usage open in the Settings sheet (#1721): the default
-            // pools (readings, an unsupported collector, a pool with no
-            // reading, and the collector choice with each enrollment's
-            // answer), the same pools once their readings go stale, the
-            // #2389 Claude shape, an unanswered refresh, a refused
-            // reassignment, and a confirmed one, at Mac and phone width, by
-            // day and by dusk. Each state pins its own clock against the
-            // usage fixtures' instants.
+            // Account usage open in the Settings sheet (#1721), drawn as
+            // capacity cards (#2579): the default pools (readings and a
+            // used-up window, an unsupported collector, and a pool with no
+            // reading), the same pools once their readings go stale, the
+            // #2389 Claude shape, a pool at R32's low line, an unanswered
+            // refresh, a refused reassignment, and a confirmed one, at Mac
+            // and phone width, by day and by dusk. Each state pins its own
+            // clock against the usage fixtures' instants.
             for state in AccountUsageScreenshots.State.allCases {
                 let stateModel = await AccountUsageScreenshots.model(state)
                 for (name, width, scheme, client) in [

@@ -346,8 +346,6 @@ import Testing
         #expect(UsageDisplay.share(reading("seven_day", percent: 42)) == "42%")
         #expect(UsageDisplay.share(reading("credits", quantity: 1_200, unit: "credits")) == "1200 credits")
         #expect(UsageDisplay.share(reading("five_hour", status: .exhausted)) == nil)
-        #expect(UsageDisplay.value(reading("five_hour", status: .exhausted)) == "Exhausted")
-        #expect(UsageDisplay.value(reading("five_hour")) == "Allowed")
     }
 
     @Test func aReadingIsStaleOnceTheClockReachesItsStaleAt() {
@@ -374,34 +372,9 @@ import Testing
     @Test func theWindowsAreEveryReadingAndMarkInWindowOrder() throws {
         var pool = try #require(UsageFixtures.defaultUsagePools().first).pool
         #expect(UsageDisplay.windows(pool) == ["five_hour", "seven_day_opus"])
-        #expect(UsageDisplay.models(limitedBy: "seven_day_opus", in: pool) == ["claude-opus"])
-        #expect(UsageDisplay.models(limitedBy: "five_hour", in: pool).isEmpty)
         // After a reassignment the refusal outlives the readings.
         pool.windows = []
         #expect(UsageDisplay.windows(pool) == ["seven_day_opus"])
-    }
-
-    @Test func aMarkShowsItsResetUnlessTheReadingAlreadyDoes() throws {
-        var pool = try #require(UsageFixtures.defaultUsagePools().first).pool
-        let reset = Self.base.addingTimeInterval(600)
-        pool.windows = [reading("seven_day", status: .exhausted)]
-        pool.windows[0].resets_at = reset
-        let derived = Components.Schemas.UsageExhaustedMark(
-            window: "seven_day", source: .usage_reading, reading_observed_at: Self.base, resets_at: reset,
-            set_at: Self.base)
-        let refusal = Components.Schemas.UsageExhaustedMark(
-            window: "seven_day", source: .provider_refusal, invocation_id: "invocation",
-            resets_at: Self.base.addingTimeInterval(1_200), set_at: Self.base)
-        pool.recorded_exhausted_marks = [derived, refusal]
-        // The derived mark repeats the reading's reset; the refusal's is later.
-        #expect(UsageDisplay.uncoveredMarks(window: "seven_day", in: pool, now: Self.base) == [refusal])
-        // A reading with no reset covers neither.
-        pool.windows[0].resets_at = nil
-        #expect(UsageDisplay.uncoveredMarks(window: "seven_day", in: pool, now: Self.base) == [derived, refusal])
-        // A lapsed mark is not shown, and with no reading every live mark is.
-        #expect(UsageDisplay.uncoveredMarks(window: "seven_day", in: pool, now: reset) == [refusal])
-        pool.windows = []
-        #expect(UsageDisplay.uncoveredMarks(window: "seven_day", in: pool, now: Self.base) == [derived, refusal])
     }
 
     @Test func aNoticeNamesTheCommandRetryResends() async throws {
@@ -416,6 +389,18 @@ import Testing
         #expect(
             AccountUsageView.describe(pending)
                 == "making \(UsageFixtures.readingSecondEnrollmentID) the collector for \(UsageFixtures.readingPoolID)")
+    }
+
+    /// Each provider keyword heads its pools in the daemon's pool order,
+    /// providers in the order each first appears.
+    @Test func thePoolsGroupUnderTheirProviderInFirstAppearanceOrder() {
+        let groups = AccountUsageView.providerGroups(UsageFixtures.defaultUsagePools())
+        #expect(groups.map(\.provider) == ["anthropic", "openai"])
+        #expect(
+            groups.map { $0.pools.map(\.id) }
+                == [
+                    [UsageFixtures.readingPoolID, UsageFixtures.unrecordedPoolID], [UsageFixtures.unsupportedPoolID],
+                ])
     }
 
     @Test func knownWindowsHaveWordsAndOthersShowTheirId() {
