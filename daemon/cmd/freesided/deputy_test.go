@@ -16,6 +16,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/freeside-ai/freeside/daemon/internal/contentaddr"
 	"github.com/freeside-ai/freeside/daemon/internal/daemonlock"
 	"github.com/freeside-ai/freeside/daemon/internal/domain"
 	"github.com/freeside-ai/freeside/daemon/internal/exec/claude"
@@ -292,6 +293,216 @@ func TestRecordDeputyIdentitiesRecordsOnceAndRefusesDrift(t *testing.T) {
 		!strings.Contains(err.Error(), "recorded auth identity claude-1 differs from the settings") {
 		t.Fatalf("drifted settings: %v", err)
 	}
+}
+
+// secondWriterDeputySettings is the daemon settings fixture with a second
+// writer subscription on its own volume and a Codex reviewer whose store is
+// a real file, so auth adopt can enroll every identity.
+func secondWriterDeputySettings(t *testing.T) loadedDeputySettings {
+	t.Helper()
+	settings := deputyDaemonSettingsFixture(t)
+	review, err := filepath.EvalSymlinks(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	review = filepath.Join(review, "review")
+	if err := os.Mkdir(review, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	var auth map[string]any
+	if err := json.Unmarshal(commandCodexAuth("operator-refresh"), &auth); err != nil {
+		t.Fatal(err)
+	}
+	auth["tokens"].(map[string]any)["account_id"] = "acct-deputy-codex"
+	body, err := json.Marshal(auth)
+	if err != nil {
+		t.Fatal(err)
+	}
+	settings.Review.InputRoot, settings.Review.AuthSnapshot = review, filepath.Join(review, "auth.json")
+	if err := os.WriteFile(settings.Review.AuthSnapshot, body, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	settings.AgentTree.SecondWriter = &deputySecondWriter{
+		AuthIdentity: "claude-2", AuthVolume: "claude-auth-second",
+		ClaudeAccount: "second@example.test", CostOwner: "owner",
+	}
+	return settings
+}
+
+// TestDeputyStartAdoptsASecondWriterOverItsExistingVolume pins #2653's
+// fresh-root start: both writer identities are recorded on their own
+// usage pools over volumes the start only observes, auth adopt enrolls
+// both, the committed patch matches, and auth list shows both enrollments
+// at generation 1.
+func TestDeputyStartAdoptsASecondWriterOverItsExistingVolume(t *testing.T) {
+	ctx := t.Context()
+	host, paths, _ := deputyLeaseFixture(t)
+	settings := secondWriterDeputySettings(t)
+	seedTemplateStore(t, paths.DB)
+	checkout := t.TempDir()
+	deputyTestGit(t, checkout, "init", "-q")
+	deputyTestGit(t, checkout, "commit", "-q", "--allow-empty", "-m", "empty")
+	settings.AgentTree.Checkout = checkout
+	settings.AgentTree.Commit = deputyTestGit(t, checkout, "rev-parse", "HEAD")
+	var observed []string
+	host.inspectImage = func(context.Context, string) error { return nil }
+	host.adopt = authAdoptDeps{
+		observeVolume: func(string, string) func(context.Context, string) (domain.Digest, error) {
+			return func(_ context.Context, volume string) (domain.Digest, error) {
+				observed = append(observed, volume)
+				return domain.Digest(contentaddr.Sum([]byte("tree of " + volume))), nil
+			}
+		},
+		now: func() time.Time { return time.Now().UTC() },
+	}
+
+	if err := withDeputyTestStore(ctx, paths.DB, func(st *store.Store) error {
+		return recordDeputyIdentities(ctx, st, settings, deputyTestNow)
+	}); err != nil {
+		t.Fatal(err)
+	}
+	// The start before the tree is committed emits the patch and refuses.
+	if result, ok := adoptDeputyAgentTree(ctx, host, paths, settings); ok ||
+		!strings.Contains(result.Remediation, "is not the tree auth adopt emitted") {
+		log, _ := os.ReadFile(paths.AdoptLog)
+		t.Fatalf("uncommitted tree: %+v, %t\n%s", result, ok, log)
+	}
+	deputyTestGit(t, checkout, "apply", paths.Patch)
+	deputyTestGit(t, checkout, "add", ".")
+	deputyTestGit(t, checkout, "commit", "-q", "-m", "agent tree")
+	settings.AgentTree.Commit = deputyTestGit(t, checkout, "rev-parse", "HEAD")
+	if err := withDeputyTestStore(ctx, paths.DB, func(st *store.Store) error {
+		return recordDeputyIdentities(ctx, st, settings, deputyTestNow)
+	}); err != nil {
+		t.Fatalf("the restart records nothing new: %v", err)
+	}
+	if result, ok := adoptDeputyAgentTree(ctx, host, paths, settings); !ok {
+		t.Fatalf("committed tree: %+v", result)
+	}
+	lock := deputyTestGit(t, checkout, "show", "HEAD:policy/agents.lock")
+	for _, name := range []string{"claude-code-implementer", "claude-code-implementer-second"} {
+		if !strings.Contains(lock, "agent "+name+" ") {
+			t.Fatalf("committed agents.lock lacks agent %s:\n%s", name, lock)
+		}
+	}
+
+	slices.Sort(observed)
+	if got := slices.Compact(observed); !slices.Equal(got, []string{"claude-auth", "claude-auth-second"}) {
+		t.Fatalf("observed volumes %v, want both writer volumes", got)
+	}
+	listed := runAuthListForTest(t, paths.DB)
+	pools := map[domain.UsagePoolID]bool{}
+	for _, id := range []domain.AuthIdentityID{"claude-1", "claude-2"} {
+		i := slices.IndexFunc(listed.Identities, func(identity authListIdentity) bool { return identity.ID == id })
+		if i < 0 {
+			t.Fatalf("auth list lacks %s: %+v", id, listed)
+		}
+		identity := listed.Identities[i]
+		if len(identity.Enrollments) != 1 || identity.Enrollments[0].Generation == nil ||
+			*identity.Enrollments[0].Generation != 1 {
+			t.Fatalf("identity %s enrollments %+v, want one at generation 1", id, identity.Enrollments)
+		}
+		pools[identity.UsagePool] = true
+	}
+	if len(pools) != 2 {
+		t.Fatalf("writer usage pools %v, want two", pools)
+	}
+}
+
+// The deputy passes the second writer's identity and volume to preflight,
+// so a deputy start runs second_claude_credentials; without one it passes
+// neither.
+func TestDeputyPreflightConfigCarriesTheSecondWriter(t *testing.T) {
+	host, paths, leaseSettings := deputyLeaseFixture(t)
+	settings := secondWriterDeputySettings(t)
+	settings.Listen, settings.SeedRoot = leaseSettings.Listen, leaseSettings.SeedRoot
+	lease, interrupted, err := acquireDeputyLease(t.Context(), host, paths, settings, io.Discard)
+	if err != nil || interrupted != nil {
+		t.Fatalf("acquire lease: %v, %+v", err, interrupted)
+	}
+	defer func() { _ = lease.Close() }()
+	cfg := deputyPreflightConfig(settings, paths, lease)
+	if cfg.SecondAuthIdentityID != "claude-2" || cfg.SecondAuthVolume != "claude-auth-second" {
+		t.Fatalf("preflight second writer = %q on %q", cfg.SecondAuthIdentityID, cfg.SecondAuthVolume)
+	}
+	settings.AgentTree.SecondWriter = nil
+	if cfg := deputyPreflightConfig(settings, paths, lease); cfg.SecondAuthIdentityID != "" || cfg.SecondAuthVolume != "" {
+		t.Fatalf("one writer: preflight second writer = %q on %q", cfg.SecondAuthIdentityID, cfg.SecondAuthVolume)
+	}
+}
+
+// withDeputyTestStore runs fn on the store at dbPath and closes it, so a
+// later in-process command opens the database alone.
+func withDeputyTestStore(ctx context.Context, dbPath string, fn func(*store.Store) error) error {
+	st, _, err := openStoreWithTopicKey(ctx, dbPath, store.Options{})
+	if err != nil {
+		return err
+	}
+	defer func() { _ = st.Close() }()
+	return fn(st)
+}
+
+// TestRecordDeputyIdentitiesRefusesAStrayClaudeIdentity pins #2653's
+// refusal: an enabled Claude identity on a volume that the settings name
+// as neither writer nor the reviewer refuses the start, by name, whether
+// the second writer changed or was dropped or the first writer changed. A
+// Claude reviewer the settings name is not stray.
+func TestRecordDeputyIdentitiesRefusesAStrayClaudeIdentity(t *testing.T) {
+	ctx := context.Background()
+	base := secondWriterDeputySettings(t)
+	for name, tc := range map[string]struct {
+		edit  func(*loadedDeputySettings)
+		stray string
+	}{
+		"second identity changed": {func(s *loadedDeputySettings) {
+			changed := *s.AgentTree.SecondWriter
+			changed.AuthIdentity, changed.AuthVolume = "claude-3", "claude-auth-third"
+			s.AgentTree.SecondWriter = &changed
+		}, "claude-2"},
+		"second writer dropped": {func(s *loadedDeputySettings) { s.AgentTree.SecondWriter = nil }, "claude-2"},
+		"first identity changed": {func(s *loadedDeputySettings) {
+			s.AgentTree.AuthIdentity, s.AgentTree.AuthVolume = "claude-9", "claude-auth-ninth"
+		}, "claude-1"},
+		"unchanged": {func(*loadedDeputySettings) {}, ""},
+	} {
+		t.Run(name, func(t *testing.T) {
+			st := openDeputyTestStore(t)
+			if err := recordDeputyIdentities(ctx, st, base, deputyTestNow); err != nil {
+				t.Fatal(err)
+			}
+			settings := base
+			tc.edit(&settings)
+			err := recordDeputyIdentities(ctx, st, settings, deputyTestNow)
+			if tc.stray == "" {
+				if err != nil {
+					t.Fatalf("unchanged settings: %v", err)
+				}
+				return
+			}
+			want := "recorded Claude auth identity " + tc.stray + " is neither writer nor the reviewer"
+			if err == nil || !strings.Contains(err.Error(), want) {
+				t.Fatalf("err = %v, want %q", err, want)
+			}
+		})
+	}
+
+	t.Run("named claude reviewer", func(t *testing.T) {
+		st := openDeputyTestStore(t)
+		if err := st.Write(ctx, func(tx *store.WriteTx) error {
+			return tx.RecordAuthIdentity(ctx, domain.AuthIdentity{
+				ID: "claude-review", Provider: "claude", AuthStoreMutationLease: true, Enabled: true,
+				Interim: domain.InterimClientFacts{AuthStoreVolume: "claude-review-auth", RefreshStrategy: domain.RefreshOnDemand},
+			}, deputyTestNow())
+		}); err != nil {
+			t.Fatal(err)
+		}
+		settings := base
+		settings.AgentTree.ReviewHarness = domain.HarnessClientClaudeCode
+		settings.AgentTree.ReviewAuthIdentity = "claude-review"
+		if err := recordDeputyIdentities(ctx, st, settings, deputyTestNow); err != nil {
+			t.Fatalf("a Claude reviewer the settings name: %v", err)
+		}
+	})
 }
 
 func deputyTestGit(t *testing.T, dir string, args ...string) string {

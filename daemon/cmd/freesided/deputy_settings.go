@@ -31,9 +31,12 @@ const (
 // lands in a durable admission record, so nothing here has a default: a key
 // that is absent refuses the launch rather than letting the record attest to
 // a value nobody wrote. An empty string is a value only where the field says
-// so (judgment, manual_submission_config, build). The one key that may be
-// absent is agent_tree.review_harness, tagged omitempty: every file written
-// before it existed ran a Codex reviewer, so its absence means codex_cli.
+// so (judgment, manual_submission_config, build). The keys that may be absent
+// are tagged omitempty, and each absence keeps a file written before the key
+// existed at its revision: agent_tree.review_harness, whose absence means
+// codex_cli because every such file ran a Codex reviewer;
+// agent_tree.second_writer, whose absence means one writer subscription; and
+// writers.specifier_escalated, whose absence means no escalated line.
 type deputySettings struct {
 	Version string `json:"version"`
 	// Listen is the leased listener paired clients reach the run at.
@@ -80,6 +83,10 @@ type deputySettings struct {
 		// codex_cli, the meaning of an absent key, or claude_code. It picks
 		// the review identity's adoption and the review.auth_mode it takes.
 		ReviewHarness domain.HarnessClientKind `json:"review_harness,omitempty"`
+		// SecondWriter is a second Claude writer subscription (#2653): its
+		// identity, volume, attested account, and cost owner, every key
+		// required when the object is present. Absent, the run has one.
+		SecondWriter *deputySecondWriter `json:"second_writer,omitempty"`
 	} `json:"agent_tree"`
 	Review struct {
 		InputRoot    string             `json:"input_root"`
@@ -206,6 +213,16 @@ func readOwnerOnlyFile(path string) ([]byte, error) {
 	return body, nil
 }
 
+// deputySecondWriter binds a second Claude writer identity the way
+// agent_tree binds the first: the deputy records it over a volume that
+// already exists, and adoption enrolls it with the attested account.
+type deputySecondWriter struct {
+	AuthIdentity  string `json:"auth_identity"`
+	AuthVolume    string `json:"auth_volume"`
+	ClaudeAccount string `json:"claude_account"`
+	CostOwner     string `json:"cost_owner"`
+}
+
 // deputyWriterSelection is one writer role's model and effort.
 type deputyWriterSelection struct {
 	Model  string             `json:"model"`
@@ -329,6 +346,9 @@ func (s *loadedDeputySettings) validate() error {
 	}
 	if s.AgentTree.AuthIdentity == s.AgentTree.ReviewAuthIdentity {
 		return errors.New("agent_tree.review_auth_identity must differ from agent_tree.auth_identity")
+	}
+	if err := validateDeputySecondWriter(s.deputySettings); err != nil {
+		return err
 	}
 	if err := validateDeputyReviewHarness(s.deputySettings); err != nil {
 		return err
@@ -466,4 +486,36 @@ func validateDeputyReviewHarness(s deputySettings) error {
 		return nil
 	}
 	return fmt.Errorf("agent_tree.review_harness %q is not codex_cli or claude_code", s.AgentTree.ReviewHarness)
+}
+
+// validateDeputySecondWriter refuses a second writer that is not a second
+// subscription: one that shares the first writer's or the reviewer's
+// identity, the first writer's volume, or its attested account. Each would
+// put two agents meant for two pools on one credential.
+func validateDeputySecondWriter(s deputySettings) error {
+	second := s.AgentTree.SecondWriter
+	if second == nil {
+		return nil
+	}
+	for _, value := range []struct{ name, value string }{
+		{"agent_tree.second_writer.auth_identity", second.AuthIdentity},
+		{"agent_tree.second_writer.auth_volume", second.AuthVolume},
+		{"agent_tree.second_writer.claude_account", second.ClaudeAccount},
+		{"agent_tree.second_writer.cost_owner", second.CostOwner},
+	} {
+		if value.value == "" {
+			return fmt.Errorf("%s is required", value.name)
+		}
+	}
+	switch {
+	case second.AuthIdentity == s.AgentTree.AuthIdentity:
+		return errors.New("agent_tree.second_writer.auth_identity must differ from agent_tree.auth_identity")
+	case second.AuthIdentity == s.AgentTree.ReviewAuthIdentity:
+		return errors.New("agent_tree.second_writer.auth_identity must differ from agent_tree.review_auth_identity")
+	case second.AuthVolume == s.AgentTree.AuthVolume:
+		return errors.New("agent_tree.second_writer.auth_volume must differ from agent_tree.auth_volume")
+	case second.ClaudeAccount == s.AgentTree.ClaudeAccount:
+		return errors.New("agent_tree.second_writer.claude_account must differ from agent_tree.claude_account")
+	}
+	return nil
 }
