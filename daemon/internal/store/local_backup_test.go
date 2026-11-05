@@ -187,13 +187,11 @@ func TestLocalCheckpointHealthEvaluatesEveryDimension(t *testing.T) {
 	}
 }
 
-func TestLocalCheckpointHealthIncludesEveryStageInputRole(t *testing.T) {
-	t.Parallel()
-	ctx := context.Background()
-	root := t.TempDir()
-	dbPath := filepath.Join(root, "freeside.db")
-	checkpointPath := filepath.Join(root, "checkpoint.db")
-	now := time.Date(2026, 7, 27, 4, 0, 0, 0, time.UTC)
+// stageInputAdmissionFixture builds an admission whose stage-input snapshot
+// names a distinct digest in every role the backup closure collects, and
+// returns the digests that closure must contain for it.
+func stageInputAdmissionFixture(t *testing.T) (admissionFixture, []domain.Digest) {
+	t.Helper()
 	digest := func(char string) domain.Digest {
 		return domain.Digest("sha256:" + strings.Repeat(char, 64))
 	}
@@ -205,6 +203,7 @@ func TestLocalCheckpointHealthIncludesEveryStageInputRole(t *testing.T) {
 	priorDigest := digest("6")
 	imageDigest := digest("7")
 	vendorDigest := digest("8")
+	attachmentDigest := digest("9")
 	stageInputs, err := domain.NewStageInputSnapshot(domain.StageInputSnapshotInput{
 		InputDigest:         inputDigest,
 		SpecificationDigest: specDigest,
@@ -218,31 +217,54 @@ func TestLocalCheckpointHealthIncludesEveryStageInputRole(t *testing.T) {
 		ConversationDigest:   &conversationDigest,
 		PriorArtifactDigests: []domain.Digest{priorDigest},
 		ImageInputDigests:    []domain.Digest{imageDigest},
+		Attachments: []domain.StageInputAttachment{{
+			Digest: attachmentDigest, Name: "screenshot.png",
+			MediaType: domain.TaskAttachmentMediaPNG, SizeBytes: 4096,
+		}},
 	})
 	if err != nil {
 		t.Fatalf("NewStageInputSnapshot: %v", err)
 	}
-	f := newAdmissionFixture(t, nil)
+	f := newAdmissionFixture(t, func(in *domain.ExecutionAdmissionInput) {
+		in.SpecDigest = specDigest
+		in.PolicyDigest = policyDigest
+		in.InputDigest = inputDigest
+		in.StageInputs = &stageInputs
+	})
 	f.run.SpecDigest = specDigest
 	f.run.PolicyDigest = policyDigest
-	f.admission, err = domain.NewExecutionAdmission(domain.ExecutionAdmissionInput{
-		InvocationID: f.admission.InvocationID, RunID: f.admission.RunID,
-		StageID: f.admission.StageID, AttemptID: f.admission.AttemptID,
-		Backend: f.admission.Backend, Capabilities: f.admission.Capabilities,
-		OperatingMode: f.admission.OperatingMode, CredentialMode: f.admission.CredentialMode,
-		EgressProfile: f.admission.EgressProfile, ImageRef: f.admission.ImageRef,
-		SpecDigest: specDigest, PolicyDigest: policyDigest, InputDigest: inputDigest,
-		StageInputs: &stageInputs, Base: f.admission.Base, Workspace: f.admission.Workspace,
-		AuthIdentityID: f.admission.AuthIdentityID, AdmittedAt: f.admission.AdmittedAt,
-	})
-	if err != nil {
-		t.Fatalf("NewExecutionAdmission: %v", err)
-	}
-
-	stageInputDigests := []domain.Digest{
+	return f, []domain.Digest{
 		specDigest, promptDigest, policyDigest, vendorDigest,
-		conversationDigest, priorDigest, imageDigest,
+		conversationDigest, priorDigest, imageDigest, attachmentDigest,
 	}
+}
+
+// recordStageInputAdmission seeds the admission's run and identity, then
+// records the admission itself.
+func recordStageInputAdmission(t *testing.T, s *store.Store, f admissionFixture) {
+	t.Helper()
+	ctx := context.Background()
+	if err := s.Write(ctx, func(tx *store.WriteTx) error {
+		if err := tx.PutRun(ctx, f.run); err != nil {
+			return err
+		}
+		return tx.RecordAuthIdentity(ctx, f.identity, admissionEpoch)
+	}); err != nil {
+		t.Fatalf("seed admission parents: %v", err)
+	}
+	if err := recordAdmission(t, s, f.admission); err != nil {
+		t.Fatalf("record admission: %v", err)
+	}
+}
+
+func TestLocalCheckpointHealthIncludesEveryStageInputRole(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	root := t.TempDir()
+	dbPath := filepath.Join(root, "freeside.db")
+	checkpointPath := filepath.Join(root, "checkpoint.db")
+	now := time.Date(2026, 7, 27, 4, 0, 0, 0, time.UTC)
+	f, stageInputDigests := stageInputAdmissionFixture(t)
 	artifacts := backupArtifactSet{}
 	for _, stageInputDigest := range stageInputDigests {
 		artifacts[stageInputDigest] = true
@@ -260,29 +282,30 @@ func TestLocalCheckpointHealthIncludesEveryStageInputRole(t *testing.T) {
 		AdmissionFloors: attendedFloors(), ApprovedRecipes: approvedFixtureRecipes(),
 		BackupHealthSource: source,
 	})
-	if err := s.Write(ctx, func(tx *store.WriteTx) error {
-		if err := tx.PutRun(ctx, f.run); err != nil {
-			return err
-		}
-		return tx.RecordAuthIdentity(ctx, f.identity, admissionEpoch)
-	}); err != nil {
-		t.Fatalf("seed admission parents: %v", err)
-	}
-	if err := recordAdmission(t, s, f.admission); err != nil {
-		t.Fatalf("record admission: %v", err)
-	}
+	recordStageInputAdmission(t, s, f)
 	if err := s.Checkpoint(ctx, checkpointPath); err != nil {
 		t.Fatalf("Checkpoint: %v", err)
 	}
 	writeCheckpointGeneratedAt(t, checkpointPath, now)
 
-	for _, missing := range stageInputDigests {
+	assertClosureNamesEachDigest(t, s, artifacts, stageInputDigests)
+}
+
+// assertClosureNamesEachDigest proves the closure is healthy with every digest
+// present and unhealthy with each one missing in turn, so each digest is
+// shown to be in the closure rather than merely tolerated.
+func assertClosureNamesEachDigest(
+	t *testing.T, s *store.Store, artifacts backupArtifactSet, digests []domain.Digest,
+) {
+	t.Helper()
+	ctx := context.Background()
+	for _, missing := range digests {
 		health, err := s.BackupHealth(ctx)
 		if err != nil {
-			t.Fatalf("BackupHealth with complete stage inputs: %v", err)
+			t.Fatalf("BackupHealth with every blob present: %v", err)
 		}
 		if health.ArtifactClosure != domain.BackupHealthHealthy {
-			t.Fatalf("complete stage input closure = %q, want healthy", health.ArtifactClosure)
+			t.Fatalf("complete closure = %q, want healthy", health.ArtifactClosure)
 		}
 		artifacts[missing] = false
 		health, err = s.BackupHealth(ctx)
@@ -295,6 +318,77 @@ func TestLocalCheckpointHealthIncludesEveryStageInputRole(t *testing.T) {
 		}
 		artifacts[missing] = true
 	}
+}
+
+// A task's attachments are operator input stored beside the task, not
+// artifacts, so the closure has to name them itself; and because the rows
+// are state this store owns, a row that fails validation fails the scan
+// rather than dropping out of it.
+func TestLocalCheckpointHealthIncludesTaskAttachments(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	now := time.Date(2026, 7, 27, 4, 0, 0, 0, time.UTC)
+	attachments := sampleTaskAttachments()
+	artifacts := backupArtifactSet{}
+	digests := make([]domain.Digest, 0, len(attachments))
+	for _, attachment := range attachments {
+		artifacts[attachment.Digest] = true
+		digests = append(digests, attachment.Digest)
+	}
+	open := func(t *testing.T) (*store.Store, string, string) {
+		t.Helper()
+		root := t.TempDir()
+		dbPath := filepath.Join(root, "freeside.db")
+		checkpointPath := filepath.Join(root, "checkpoint.db")
+		source, err := store.NewLocalCheckpointHealthSource(store.LocalCheckpointHealthOptions{
+			CheckpointPath:  checkpointPath,
+			RestoreTestPath: filepath.Join(root, "restore-test.db"),
+			Artifacts:       artifacts,
+			Now:             func() time.Time { return now },
+		})
+		if err != nil {
+			t.Fatalf("NewLocalCheckpointHealthSource: %v", err)
+		}
+		s := openStoreAt(t, dbPath, store.Options{BackupHealthSource: source})
+		taskID, _ := seedTaskSubmissionTarget(t, ctx, s)
+		if err := putTaskAttachments(ctx, s, taskID, attachments); err != nil {
+			t.Fatalf("PutTaskAttachments: %v", err)
+		}
+		return s, dbPath, checkpointPath
+	}
+	checkpoint := func(t *testing.T, s *store.Store, checkpointPath string) {
+		t.Helper()
+		if err := s.Checkpoint(ctx, checkpointPath); err != nil {
+			t.Fatalf("Checkpoint: %v", err)
+		}
+		writeCheckpointGeneratedAt(t, checkpointPath, now)
+	}
+
+	t.Run("every blob", func(t *testing.T) {
+		s, _, checkpointPath := open(t)
+		checkpoint(t, s, checkpointPath)
+		assertClosureNamesEachDigest(t, s, artifacts, digests)
+	})
+
+	// The tamper leaves every digest valid and present: a scan that read the
+	// digest column alone would report this closure healthy.
+	t.Run("invalid row", func(t *testing.T) {
+		s, dbPath, checkpointPath := open(t)
+		db, err := sql.Open("sqlite", dbPath)
+		if err != nil {
+			t.Fatal(err)
+		}
+		_, execErr := db.ExecContext(ctx,
+			`UPDATE task_attachments SET name = '../escape' WHERE position = 0`)
+		if err := errors.Join(execErr, db.Close()); err != nil {
+			t.Fatalf("tamper task attachment: %v", err)
+		}
+		checkpoint(t, s, checkpointPath)
+		if health, err := s.BackupHealth(ctx); !errors.Is(err, store.ErrRowInconsistent) {
+			t.Fatalf("BackupHealth with an invalid task attachment = %+v, %v; want %v",
+				health, err, store.ErrRowInconsistent)
+		}
+	})
 }
 
 func TestLocalCheckpointHealthDoesNotTrustCheckpointModTime(t *testing.T) {

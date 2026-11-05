@@ -3,9 +3,11 @@ package store_test
 import (
 	"bytes"
 	"context"
+	"database/sql"
 	"errors"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 
@@ -133,6 +135,163 @@ func TestEncryptedCheckpointRoundTripAndPlaintextProbe(t *testing.T) {
 	}
 	if got, found := readMintHold(t, s, mintHold.InstallationID); !found || !mintHoldEqual(got, mintHold) {
 		t.Fatalf("restored mint hold = %+v, %v; want %+v", got, found, mintHold)
+	}
+}
+
+// Restore proves every attachment blob before it overwrites a store, from both
+// places an attachment is named: the task that carried it and the stage-input
+// snapshot an admission records.
+func TestRestoreChecksEveryAttachmentBlob(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	dbPath := filepath.Join(t.TempDir(), "freeside.db")
+	f, stageInputDigests := stageInputAdmissionFixture(t)
+	snapshotAttachments := f.admission.StageInputs.Attachments
+	// Distinct from every stage-input digest, so a missing task attachment
+	// is not also a missing snapshot role.
+	taskAttachments := sampleTaskAttachments()
+	taskAttachments[0].Digest = domain.Digest("sha256:" + strings.Repeat("a", 64))
+	taskAttachments[1].Digest = domain.Digest("sha256:" + strings.Repeat("b", 64))
+	artifacts := backupArtifactSet{}
+	for _, digest := range stageInputDigests {
+		artifacts[digest] = true
+	}
+	for _, attachment := range taskAttachments {
+		artifacts[attachment.Digest] = true
+	}
+
+	files, err := store.NewDefaultLocalBackupFiles(dbPath)
+	if err != nil {
+		t.Fatalf("NewDefaultLocalBackupFiles: %v", err)
+	}
+	source, err := files.NewCheckpointHealthSource(artifacts, approvedFixtureRecipes(), nil)
+	if err != nil {
+		t.Fatalf("NewCheckpointHealthSource: %v", err)
+	}
+	s := openStoreAt(t, dbPath, store.Options{
+		AdmissionFloors: attendedFloors(), ApprovedRecipes: approvedFixtureRecipes(),
+		BackupHealthSource: source,
+	})
+	taskID, _ := seedTaskSubmissionTarget(t, ctx, s)
+	if err := putTaskAttachments(ctx, s, taskID, taskAttachments); err != nil {
+		t.Fatalf("PutTaskAttachments: %v", err)
+	}
+	recordStageInputAdmission(t, s, f)
+	producer, err := files.NewProducer(s)
+	if err != nil {
+		t.Fatalf("NewProducer: %v", err)
+	}
+	if err := producer.Maintain(ctx); err != nil {
+		t.Fatalf("Maintain: %v", err)
+	}
+	// A row written after the checkpoint shows whether a restore replaced
+	// the live store.
+	if err := s.Write(ctx, func(tx *store.WriteTx) error {
+		return tx.PutAttentionItem(ctx, newItem(t, "post-checkpoint-row", nil, 1))
+	}); err != nil {
+		t.Fatalf("advance live state: %v", err)
+	}
+	liveRowSurvives := func() bool {
+		t.Helper()
+		err := s.Read(ctx, func(tx *store.ReadTx) error {
+			_, err := tx.GetAttentionItem(ctx, "post-checkpoint-row")
+			return err
+		})
+		return err == nil
+	}
+
+	for _, missing := range []domain.Digest{
+		taskAttachments[0].Digest, taskAttachments[1].Digest, snapshotAttachments[0].Digest,
+	} {
+		artifacts[missing] = false
+		if _, _, err := files.RestoreCheckpoint(ctx, s); !errors.Is(
+			err, domain.ErrArtifactClosureIncomplete,
+		) {
+			t.Fatalf("RestoreCheckpoint missing %s = %v, want %v",
+				missing, err, domain.ErrArtifactClosureIncomplete)
+		}
+		if !liveRowSurvives() {
+			t.Fatalf("a refused restore missing %s replaced the live store", missing)
+		}
+		artifacts[missing] = true
+	}
+
+	if _, _, err := files.RestoreCheckpoint(ctx, s); err != nil {
+		t.Fatalf("RestoreCheckpoint with every blob present: %v", err)
+	}
+	if liveRowSurvives() {
+		t.Fatal("post-checkpoint row survived restore")
+	}
+	gotTask, err := readTaskAttachments(ctx, s, taskID)
+	if err != nil {
+		t.Fatalf("restored task attachments: %v", err)
+	}
+	if !slices.Equal(gotTask, taskAttachments) {
+		t.Fatalf("restored task attachments = %+v, want %+v", gotTask, taskAttachments)
+	}
+	var restored domain.ExecutionAdmission
+	if err := s.Read(ctx, func(tx *store.ReadTx) error {
+		var err error
+		restored, err = tx.GetExecutionAdmission(ctx, f.admission.InvocationID)
+		return err
+	}); err != nil {
+		t.Fatalf("restored admission: %v", err)
+	}
+	if restored.StageInputs == nil ||
+		!slices.Equal(restored.StageInputs.Attachments, snapshotAttachments) {
+		t.Fatalf("restored snapshot attachments = %+v, want %+v",
+			restored.StageInputs, snapshotAttachments)
+	}
+}
+
+// The producer seals what the closure scan reads, so a task attachment row
+// that fails validation stops the pass with a hard error, not a closure gap:
+// Run keeps going past a gap, but this row is state the store owns, not a
+// payload another binary wrote, and no checkpoint may be sealed over it.
+func TestProducerFailsLoudlyOnAnInvalidTaskAttachment(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	dbPath := filepath.Join(t.TempDir(), "freeside.db")
+	artifacts := backupArtifactSet{}
+	for _, attachment := range sampleTaskAttachments() {
+		artifacts[attachment.Digest] = true
+	}
+	files, err := store.NewDefaultLocalBackupFiles(dbPath)
+	if err != nil {
+		t.Fatalf("NewDefaultLocalBackupFiles: %v", err)
+	}
+	source, err := files.NewCheckpointHealthSource(artifacts, nil, nil)
+	if err != nil {
+		t.Fatalf("NewCheckpointHealthSource: %v", err)
+	}
+	s := openStoreAt(t, dbPath, store.Options{BackupHealthSource: source})
+	taskID, _ := seedTaskSubmissionTarget(t, ctx, s)
+	if err := putTaskAttachments(ctx, s, taskID, sampleTaskAttachments()); err != nil {
+		t.Fatalf("PutTaskAttachments: %v", err)
+	}
+	db, err := sql.Open("sqlite", dbPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, execErr := db.ExecContext(ctx,
+		`UPDATE task_attachments SET name = '../escape' WHERE position = 0`)
+	if err := errors.Join(execErr, db.Close()); err != nil {
+		t.Fatalf("tamper task attachment: %v", err)
+	}
+
+	producer, err := files.NewProducer(s)
+	if err != nil {
+		t.Fatalf("NewProducer: %v", err)
+	}
+	err = producer.Maintain(ctx)
+	if !errors.Is(err, store.ErrRowInconsistent) {
+		t.Fatalf("Maintain = %v, want %v", err, store.ErrRowInconsistent)
+	}
+	if errors.Is(err, store.ErrBackupClosureIncomplete) {
+		t.Fatalf("Maintain = %v, want a hard failure, not a closure gap", err)
+	}
+	if _, err := os.Stat(dbPath + ".checkpoints/latest.backup"); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("checkpoint after a failed pass: stat err = %v, want not exist", err)
 	}
 }
 
